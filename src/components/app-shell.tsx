@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
@@ -61,6 +61,7 @@ export function AppShell({
   children,
 }: AppShellProps) {
   const pathname = usePathname();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
     <div className="flex min-h-full flex-col md:flex-row">
@@ -99,18 +100,25 @@ export function AppShell({
             <p className="text-sm font-semibold">TBBT</p>
             <p className="text-xs text-muted-foreground">{businessName}</p>
           </div>
-          <Sheet>
-            <SheetTrigger asChild>
-              <Button variant="outline" size="icon" aria-label="Open menu">
-                <Menu className="size-4" />
-              </Button>
+          <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+            <SheetTrigger
+              aria-label="Open menu"
+              className="inline-flex size-8 items-center justify-center rounded-lg border border-border bg-background"
+            >
+              <Menu className="size-4" />
             </SheetTrigger>
-            <SheetContent side="left" className="w-72">
+            <SheetContent
+              side="left"
+              className="inset-y-0 left-0 h-full w-72 border-r bg-background"
+            >
               <SheetHeader>
                 <SheetTitle>TBBT</SheetTitle>
               </SheetHeader>
               <div className="px-2">
-                <NavLinks pathname={pathname} />
+                <NavLinks
+                  pathname={pathname}
+                  onNavigate={() => setMenuOpen(false)}
+                />
                 <Separator className="my-4" />
                 <p className="text-sm font-medium">{userName}</p>
                 <p className="text-xs text-muted-foreground">{role}</p>
