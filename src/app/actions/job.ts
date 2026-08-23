@@ -16,9 +16,6 @@ export async function createJobFromEstimate(
   const estimate = access.assertOwned(
     await prisma.estimate.findFirst({
       where: { id: estimateId, ...access.scope },
-      include: {
-        serviceRequest: { select: { propertyId: true } },
-      },
     }),
   );
 
@@ -38,11 +35,22 @@ export async function createJobFromEstimate(
     redirect(`/jobs/${existing.id}`);
   }
 
+  let propertyId: string | null = null;
+  if (estimate.serviceRequestId) {
+    const serviceRequest = access.assertOwned(
+      await prisma.serviceRequest.findFirst({
+        where: { id: estimate.serviceRequestId, ...access.scope },
+        select: { id: true, businessId: true, propertyId: true },
+      }),
+    );
+    propertyId = serviceRequest.propertyId;
+  }
+
   const job = await prisma.job.create({
     data: {
       businessId: access.businessId,
       customerId: estimate.customerId,
-      propertyId: estimate.serviceRequest?.propertyId ?? null,
+      propertyId,
       estimateId: estimate.id,
       status: "UNSCHEDULED",
     },
