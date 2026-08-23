@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AddCatalogLineForm } from "@/components/estimates/add-catalog-line-form";
 import { AddCustomLineForm } from "@/components/estimates/add-custom-line-form";
+import { CreateJobButton } from "@/components/jobs/create-job-button";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -29,6 +32,7 @@ export default async function EstimateBuilderPage({
     include: {
       customer: { select: { name: true } },
       serviceRequest: { select: { description: true } },
+      jobs: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
       lineItems: { orderBy: { createdAt: "asc" } },
     },
   });
@@ -57,6 +61,15 @@ export default async function EstimateBuilderPage({
         {estimate.serviceRequest?.description ? (
           <p className="mt-2 text-sm">{estimate.serviceRequest.description}</p>
         ) : null}
+        <div className="mt-3">
+          {estimate.jobs[0] ? (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/jobs/${estimate.jobs[0].id}`}>Open job</Link>
+            </Button>
+          ) : estimate.status === "APPROVED" ? (
+            <CreateJobButton estimateId={estimate.id} />
+          ) : null}
+        </div>
       </div>
 
       <Card>
