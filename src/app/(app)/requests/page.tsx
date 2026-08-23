@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { CreateEstimateButton } from "@/components/estimates/create-estimate-button";
+import { Button } from "@/components/ui/button";
 import { requireBusinessAccess } from "@/lib/access";
 import { prisma } from "@/lib/prisma";
 import {
@@ -20,6 +23,11 @@ export default async function RequestsPage() {
     include: {
       customer: { select: { name: true, email: true, phone: true } },
       property: { select: { addressLine1: true } },
+      estimates: {
+        select: { id: true },
+        orderBy: { createdAt: "asc" },
+        take: 1,
+      },
     },
     orderBy: { createdAt: "desc" },
   });
@@ -60,6 +68,17 @@ export default async function RequestsPage() {
                     {request.property.addressLine1}
                   </p>
                 ) : null}
+                <div className="pt-2">
+                  {request.estimates[0] ? (
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/estimates/${request.estimates[0].id}`}>
+                        Open estimate
+                      </Link>
+                    </Button>
+                  ) : (
+                    <CreateEstimateButton serviceRequestId={request.id} />
+                  )}
+                </div>
               </CardContent>
             </Card>
           ))}
