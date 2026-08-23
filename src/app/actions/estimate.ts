@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
@@ -76,6 +77,7 @@ export async function createEstimate(serviceRequestId: string) {
       serviceRequestId: request.id,
       customerId: request.customerId,
       total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
     },
   });
 

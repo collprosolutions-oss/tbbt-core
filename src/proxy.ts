@@ -14,6 +14,10 @@ function isPublicIntake(pathname: string) {
   return pathname.startsWith("/r/");
 }
 
+function isPublicEstimate(pathname: string) {
+  return pathname.startsWith("/e/");
+}
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
@@ -24,7 +28,7 @@ export function proxy(request: NextRequest) {
     );
   }
 
-  if (isPublicIntake(pathname)) {
+  if (isPublicIntake(pathname) || isPublicEstimate(pathname)) {
     return NextResponse.next();
   }
 

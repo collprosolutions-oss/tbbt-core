@@ -51,6 +51,9 @@ export default async function EstimateBuilderPage({
           {estimate.customer?.name ?? "Customer"} · {estimate.status} · Total{" "}
           {estimate.total.toString()}
         </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Customer view: /e/{estimate.publicToken}
+        </p>
         {estimate.serviceRequest?.description ? (
           <p className="mt-2 text-sm">{estimate.serviceRequest.description}</p>
         ) : null}
