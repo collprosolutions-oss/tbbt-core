@@ -59,3 +59,31 @@ export async function createJobFromEstimate(
   revalidatePath(`/estimates/${estimate.id}`);
   redirect(`/jobs/${job.id}`);
 }
+
+export async function scheduleJob(
+  jobId: string,
+  scheduledAt: string,
+): Promise<JobActionState> {
+  const access = await requireBusinessAccess();
+  const job = access.assertOwned(
+    await prisma.job.findFirst({
+      where: { id: jobId, ...access.scope },
+    }),
+  );
+
+  const when = new Date(scheduledAt);
+  if (!scheduledAt.trim() || Number.isNaN(when.getTime())) {
+    return { error: "Choose a valid date and time." };
+  }
+
+  await prisma.job.update({
+    where: { id: job.id },
+    data: {
+      scheduledAt: when,
+      status: "SCHEDULED",
+    },
+  });
+
+  revalidatePath(`/jobs/${job.id}`);
+  return {};
+}

@@ -8,8 +8,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
 import { requireBusinessAccess } from "@/lib/access";
 import { prisma } from "@/lib/prisma";
+
+function toDateTimeLocal(value: Date) {
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
+}
 
 export const metadata: Metadata = {
   title: "Job",
@@ -41,7 +47,25 @@ export default async function JobPage({
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Job</h1>
         <p className="mt-1 text-sm text-muted-foreground">Status: {job.status}</p>
+        {job.scheduledAt ? (
+          <p className="mt-1 text-sm text-muted-foreground">
+            Scheduled: {job.scheduledAt.toLocaleString()}
+          </p>
+        ) : null}
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Schedule</CardTitle>
+          <CardDescription>Save or replace the job date and time.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ScheduleJobForm
+            jobId={job.id}
+            scheduledAt={job.scheduledAt ? toDateTimeLocal(job.scheduledAt) : ""}
+          />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
