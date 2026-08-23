@@ -2,14 +2,21 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/cookies";
 
-const PUBLIC_PATHS = ["/sign-in", "/sign-up"];
+const AUTH_PATHS = ["/sign-in", "/sign-up"];
+
+function isAuthPath(pathname: string) {
+  return AUTH_PATHS.some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`),
+  );
+}
+
+function isPublicIntake(pathname: string) {
+  return pathname.startsWith("/r/");
+}
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
-  const isPublic = PUBLIC_PATHS.some(
-    (path) => pathname === path || pathname.startsWith(`${path}/`),
-  );
 
   if (pathname === "/") {
     return NextResponse.redirect(
@@ -17,11 +24,15 @@ export function proxy(request: NextRequest) {
     );
   }
 
-  if (!hasSession && !isPublic) {
+  if (isPublicIntake(pathname)) {
+    return NextResponse.next();
+  }
+
+  if (!hasSession && !isAuthPath(pathname)) {
     return NextResponse.redirect(new URL("/sign-in", request.url));
   }
 
-  if (hasSession && isPublic) {
+  if (hasSession && isAuthPath(pathname)) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 

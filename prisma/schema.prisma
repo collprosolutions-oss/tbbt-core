@@ -44,6 +44,7 @@ model Session {
 model Business {
   id        String   @id @default(cuid())
   name      String
+  slug      String   @unique
   /// App-level trade code. Only HANDYMAN is active in Phase 1.
   tradeCode String   @default("HANDYMAN")
   createdAt DateTime @default(now())
@@ -134,9 +135,10 @@ model ServiceRequest {
   businessId String
   customerId String?
   propertyId String?
-  status     String   @default("OPEN")
-  summary    String?
-  createdAt  DateTime @default(now())
+  status      String   @default("OPEN")
+  summary     String?
+  description String?
+  createdAt   DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)

@@ -9,6 +9,7 @@ import {
   verifyPassword,
 } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { allocateBusinessSlug } from "@/lib/slug";
 import { DEFAULT_TRADE } from "@/lib/trades";
 
 export type AuthFormState = {
@@ -56,6 +57,7 @@ export async function signUpAction(
     const business = await tx.business.create({
       data: {
         name: businessName,
+        slug: await allocateBusinessSlug(businessName, tx),
         tradeCode: DEFAULT_TRADE,
       },
     });
