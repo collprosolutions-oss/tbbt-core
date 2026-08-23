@@ -9,13 +9,6 @@ import { APP_NAV } from "@/lib/nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
 type AppShellProps = {
@@ -100,36 +93,46 @@ export function AppShell({
             <p className="text-sm font-semibold">TBBT</p>
             <p className="text-xs text-muted-foreground">{businessName}</p>
           </div>
-          <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-            <SheetTrigger
-              aria-label="Open menu"
-              className="inline-flex size-8 items-center justify-center rounded-lg border border-border bg-background"
-            >
-              <Menu className="size-4" />
-            </SheetTrigger>
-            <SheetContent
-              side="left"
-              className="inset-y-0 left-0 h-full w-72 border-r bg-background"
-            >
-              <SheetHeader>
-                <SheetTitle>TBBT</SheetTitle>
-              </SheetHeader>
-              <div className="px-2">
-                <NavLinks
-                  pathname={pathname}
-                  onNavigate={() => setMenuOpen(false)}
-                />
-                <Separator className="my-4" />
-                <p className="text-sm font-medium">{userName}</p>
-                <p className="text-xs text-muted-foreground">{role}</p>
-                <form action={signOutAction} className="mt-4">
-                  <Button type="submit" variant="outline" size="sm" className="w-full">
-                    Sign out
-                  </Button>
-                </form>
-              </div>
-            </SheetContent>
-          </Sheet>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            aria-label="Open menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen(true)}
+          >
+            <Menu className="size-4" />
+          </Button>
+          {menuOpen ? (
+            <div className="fixed inset-0 z-50 md:hidden">
+              <button
+                type="button"
+                className="absolute inset-0 bg-black/40"
+                aria-label="Close menu"
+                onClick={() => setMenuOpen(false)}
+              />
+              <aside className="absolute inset-y-0 left-0 flex w-72 flex-col border-r bg-background shadow-lg">
+                <div className="px-4 py-4">
+                  <p className="text-base font-semibold">TBBT</p>
+                </div>
+                <div className="flex-1 px-2">
+                  <NavLinks
+                    pathname={pathname}
+                    onNavigate={() => setMenuOpen(false)}
+                  />
+                </div>
+                <div className="space-y-2 border-t px-4 py-4">
+                  <p className="text-sm font-medium">{userName}</p>
+                  <p className="text-xs text-muted-foreground">{role}</p>
+                  <form action={signOutAction}>
+                    <Button type="submit" variant="outline" size="sm" className="w-full">
+                      Sign out
+                    </Button>
+                  </form>
+                </div>
+              </aside>
+            </div>
+          ) : null}
         </header>
 
         <main className="flex-1 px-4 py-6 md:px-8">{children}</main>
