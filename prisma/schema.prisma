@@ -121,6 +121,8 @@ model ServiceCatalogItem {
   businessId  String
   name        String
   description String?
+  price       Decimal
+  active      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
