@@ -57,6 +57,7 @@ model Business {
   estimates       Estimate[]
   jobs            Job[]
   invoices        Invoice[]
+  lineItems       LineItem[]
 }
 
 model Membership {
@@ -122,7 +123,8 @@ model ServiceCatalogItem {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  lineItems LineItem[]
 
   @@index([businessId])
 }
@@ -158,6 +160,7 @@ model Estimate {
   customer       Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
   serviceRequest ServiceRequest? @relation(fields: [serviceRequestId], references: [id], onDelete: SetNull)
   jobs           Job[]
+  lineItems      LineItem[]
 
   @@index([businessId])
 }
@@ -176,8 +179,9 @@ model Job {
   business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
   customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
   property Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
-  estimate Estimate? @relation(fields: [estimateId], references: [id], onDelete: SetNull)
-  invoices Invoice[]
+  estimate  Estimate?  @relation(fields: [estimateId], references: [id], onDelete: SetNull)
+  invoices  Invoice[]
+  lineItems LineItem[]
 
   @@index([businessId])
 }
@@ -193,7 +197,35 @@ model Invoice {
 
   business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
   customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  job      Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  job       Job?       @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  lineItems LineItem[]
 
   @@index([businessId])
+}
+
+model LineItem {
+  id                   String   @id @default(cuid())
+  businessId           String
+  serviceCatalogItemId String?
+  estimateId           String?
+  jobId                String?
+  invoiceId            String?
+  /// Snapshot fields. Catalog price changes must not rewrite these.
+  description          String
+  quantity             Decimal
+  unitPrice            Decimal
+  total                Decimal
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  business           Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  serviceCatalogItem ServiceCatalogItem? @relation(fields: [serviceCatalogItemId], references: [id], onDelete: SetNull)
+  estimate           Estimate?           @relation(fields: [estimateId], references: [id], onDelete: SetNull)
+  job                Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  invoice            Invoice?            @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([estimateId])
+  @@index([jobId])
+  @@index([invoiceId])
 }
