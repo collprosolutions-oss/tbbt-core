@@ -1,0 +1,17 @@
+{
+  "name": "TBBT — The Better Business Tool",
+  "short_name": "TBBT",
+  "description": "Business workspace for trade operators. Handyman is the first live trade.",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#171717",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

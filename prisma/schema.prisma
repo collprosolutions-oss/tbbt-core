@@ -1,0 +1,199 @@
+// TBBT Step 1 foundation schema.
+// Every business-owned record carries businessId and must be queried
+// through the authenticated user's membership. Do not add unscoped lists.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships Membership[]
+  sessions    Session[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Business {
+  id        String   @id @default(cuid())
+  name      String
+  /// App-level trade code. Only HANDYMAN is active in Phase 1.
+  tradeCode String   @default("HANDYMAN")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships     Membership[]
+  customers       Customer[]
+  properties      Property[]
+  catalogItems    ServiceCatalogItem[]
+  serviceRequests ServiceRequest[]
+  estimates       Estimate[]
+  jobs            Job[]
+  invoices        Invoice[]
+}
+
+model Membership {
+  id         String          @id @default(cuid())
+  userId     String
+  businessId String
+  role       MembershipRole
+  createdAt  DateTime        @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, businessId])
+  @@index([businessId])
+}
+
+model Customer {
+  id         String   @id @default(cuid())
+  businessId String
+  name       String
+  email      String?
+  phone      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business        Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  properties      Property[]
+  serviceRequests ServiceRequest[]
+  estimates       Estimate[]
+  jobs            Job[]
+  invoices        Invoice[]
+
+  @@index([businessId])
+}
+
+model Property {
+  id           String   @id @default(cuid())
+  businessId   String
+  customerId   String
+  label        String?
+  addressLine1 String
+  addressLine2 String?
+  city         String?
+  region       String?
+  postalCode   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  business        Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer        Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  serviceRequests ServiceRequest[]
+  jobs            Job[]
+
+  @@index([businessId])
+  @@index([customerId])
+}
+
+model ServiceCatalogItem {
+  id          String   @id @default(cuid())
+  businessId  String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+}
+
+model ServiceRequest {
+  id         String   @id @default(cuid())
+  businessId String
+  customerId String?
+  propertyId String?
+  status     String   @default("OPEN")
+  summary    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer  Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  property  Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  estimates Estimate[]
+
+  @@index([businessId])
+}
+
+model Estimate {
+  id               String   @id @default(cuid())
+  businessId       String
+  customerId       String?
+  serviceRequestId String?
+  status           String   @default("DRAFT")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  business       Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer       Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  serviceRequest ServiceRequest? @relation(fields: [serviceRequestId], references: [id], onDelete: SetNull)
+  jobs           Job[]
+
+  @@index([businessId])
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  businessId  String
+  customerId  String?
+  propertyId  String?
+  estimateId  String?
+  status      String    @default("SCHEDULED")
+  scheduledAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  property Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  estimate Estimate? @relation(fields: [estimateId], references: [id], onDelete: SetNull)
+  invoices Invoice[]
+
+  @@index([businessId])
+}
+
+model Invoice {
+  id         String   @id @default(cuid())
+  businessId String
+  customerId String?
+  jobId      String?
+  status     String   @default("DRAFT")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  job      Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+}
