@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { MarkInvoicePaidButton } from "@/components/invoices/mark-invoice-paid-button";
+import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -39,9 +41,22 @@ export default async function InvoicePage({
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Invoice</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Status: {invoice.status}
-        </p>
+        {invoice.status === "PAID" ? (
+          <p className="mt-2">
+            <Badge className="h-6 px-3 text-sm font-semibold tracking-wide">
+              PAID
+            </Badge>
+          </p>
+        ) : (
+          <p className="mt-1 text-sm text-muted-foreground">
+            Status: {invoice.status}
+          </p>
+        )}
+        {invoice.status !== "PAID" ? (
+          <div className="mt-3">
+            <MarkInvoicePaidButton invoiceId={invoice.id} />
+          </div>
+        ) : null}
       </div>
 
       <Card>

@@ -57,3 +57,26 @@ export async function createInvoiceFromJob(
   revalidatePath(`/jobs/${job.id}`);
   redirect(`/invoices/${invoice.id}`);
 }
+
+export async function markInvoicePaid(
+  invoiceId: string,
+): Promise<InvoiceActionState> {
+  const access = await requireBusinessAccess();
+  const invoice = access.assertOwned(
+    await prisma.invoice.findFirst({
+      where: { id: invoiceId, ...access.scope },
+    }),
+  );
+
+  if (invoice.status === "PAID") {
+    return {};
+  }
+
+  await prisma.invoice.update({
+    where: { id: invoice.id },
+    data: { status: "PAID" },
+  });
+
+  revalidatePath(`/invoices/${invoice.id}`);
+  return {};
+}
