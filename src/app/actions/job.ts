@@ -87,3 +87,20 @@ export async function scheduleJob(
   revalidatePath(`/jobs/${job.id}`);
   return {};
 }
+
+export async function markJobComplete(jobId: string): Promise<JobActionState> {
+  const access = await requireBusinessAccess();
+  const job = access.assertOwned(
+    await prisma.job.findFirst({
+      where: { id: jobId, ...access.scope },
+    }),
+  );
+
+  await prisma.job.update({
+    where: { id: job.id },
+    data: { status: "COMPLETED" },
+  });
+
+  revalidatePath(`/jobs/${job.id}`);
+  return {};
+}

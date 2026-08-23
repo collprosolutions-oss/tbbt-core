@@ -198,6 +198,7 @@ model Invoice {
   customerId String?
   jobId      String?
   status     String   @default("DRAFT")
+  total      Decimal  @default(0)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 

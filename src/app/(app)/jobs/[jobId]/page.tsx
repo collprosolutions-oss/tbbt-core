@@ -8,7 +8,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
+import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
+import { Button } from "@/components/ui/button";
 import { requireBusinessAccess } from "@/lib/access";
 import { prisma } from "@/lib/prisma";
 
@@ -34,6 +37,7 @@ export default async function JobPage({
       customer: { select: { name: true } },
       property: { select: { addressLine1: true } },
       estimate: { select: { id: true, status: true, total: true } },
+      invoices: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
     },
   });
 
@@ -52,6 +56,19 @@ export default async function JobPage({
             Scheduled: {job.scheduledAt.toLocaleString()}
           </p>
         ) : null}
+        <div className="mt-3">
+          {job.status === "SCHEDULED" ? (
+            <MarkJobCompleteButton jobId={job.id} />
+          ) : null}
+          {job.status === "COMPLETED" && job.invoices[0] ? (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/invoices/${job.invoices[0].id}`}>Open invoice</Link>
+            </Button>
+          ) : null}
+          {job.status === "COMPLETED" && !job.invoices[0] ? (
+            <CreateInvoiceButton jobId={job.id} />
+          ) : null}
+        </div>
       </div>
 
       <Card>
