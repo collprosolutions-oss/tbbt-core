@@ -24,6 +24,20 @@ export function AddCustomLineForm({ estimateId }: { estimateId: string }) {
       ) : null}
       <input type="hidden" name="estimateId" value={estimateId} />
       <div className="space-y-2">
+        <Label htmlFor="custom-type">Type</Label>
+        <select
+          id="custom-type"
+          name="type"
+          defaultValue="LABOR"
+          required
+          className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+        >
+          <option value="LABOR">Labor</option>
+          <option value="MATERIAL">Material</option>
+          <option value="OTHER">Other</option>
+        </select>
+      </div>
+      <div className="space-y-2">
         <Label htmlFor="custom-description">Description</Label>
         <Input id="custom-description" name="description" required />
       </div>

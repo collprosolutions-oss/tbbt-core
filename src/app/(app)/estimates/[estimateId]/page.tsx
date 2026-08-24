@@ -47,10 +47,15 @@ export default async function EstimateBuilderPage({
   }
   access.assertOwned(estimate);
 
-  const laborSubtotal = estimate.lineItems.reduce(
-    (sum, item) => sum.add(item.total),
-    new Prisma.Decimal(0),
-  );
+  const laborSubtotal = estimate.lineItems
+    .filter((item) => item.type === "LABOR")
+    .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0));
+  const materialSubtotal = estimate.lineItems
+    .filter((item) => item.type === "MATERIAL")
+    .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0));
+  const otherSubtotal = estimate.lineItems
+    .filter((item) => item.type === "OTHER")
+    .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0));
   const business = access.workspace.business;
   const isDraft = estimate.status === "DRAFT";
 
@@ -109,7 +114,12 @@ export default async function EstimateBuilderPage({
               {estimate.lineItems.map((item) => (
                 <li key={item.id} className="flex justify-between gap-3">
                   <span>
-                    {item.description} × {item.quantity.toString()} @{" "}
+                    {item.type === "LABOR"
+                      ? "Labor"
+                      : item.type === "MATERIAL"
+                        ? "Material"
+                        : "Other"}
+                    : {item.description} × {item.quantity.toString()} @{" "}
                     {formatMoney(item.unitPrice)}
                   </span>
                   <span>{formatMoney(item.total)}</span>
@@ -119,6 +129,12 @@ export default async function EstimateBuilderPage({
           )}
           <div className="mt-4 space-y-1 text-sm">
             <p>Labor subtotal: {formatMoney(laborSubtotal)}</p>
+            {materialSubtotal.gt(0) ? (
+              <p>Materials: {formatMoney(materialSubtotal)}</p>
+            ) : null}
+            {otherSubtotal.gt(0) ? (
+              <p>Other: {formatMoney(otherSubtotal)}</p>
+            ) : null}
             {isDraft &&
             business.laborMinimumEnabled &&
             business.laborMinimumAmount ? (
@@ -177,6 +193,10 @@ export default async function EstimateBuilderPage({
       <Card>
         <CardHeader>
           <CardTitle>Add custom item</CardTitle>
+          <CardDescription>
+            Choose Labor, Material, or Other. The labor minimum uses labor
+            lines only.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <AddCustomLineForm estimateId={estimate.id} />

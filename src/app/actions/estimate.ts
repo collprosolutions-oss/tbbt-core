@@ -113,6 +113,7 @@ export async function addCatalogLineItem(
         quantity,
         unitPrice,
         total,
+        type: "LABOR",
       },
     });
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
@@ -131,9 +132,14 @@ export async function addCustomLineItem(
   const description = readString(formData, "description");
   const quantity = parseDecimal(readString(formData, "quantity"));
   const unitPrice = parseDecimal(readString(formData, "unitPrice"), true);
+  const type = readString(formData, "type");
 
   if (!estimateId || !description || !quantity || !unitPrice) {
     return { error: "Description, quantity, and unit price are required." };
+  }
+
+  if (type !== "LABOR" && type !== "MATERIAL" && type !== "OTHER") {
+    return { error: "Choose Labor, Material, or Other." };
   }
 
   const estimate = access.assertOwned(
@@ -157,6 +163,7 @@ export async function addCustomLineItem(
         quantity,
         unitPrice,
         total,
+        type,
       },
     });
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
