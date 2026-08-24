@@ -30,12 +30,17 @@ export function CreateCatalogItemForm() {
         <Input id="name" name="name" required />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="price">Price</Label>
+        <Label htmlFor="price">Starting price</Label>
         <Input id="price" name="price" inputMode="decimal" required />
       </div>
       <div className="space-y-2">
         <Label htmlFor="description">Description (optional)</Label>
-        <Input id="description" name="description" />
+        <textarea
+          id="description"
+          name="description"
+          rows={4}
+          className="min-h-20 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base outline-none md:text-sm"
+        />
       </div>
       <Button type="submit" disabled={pending}>
         {pending ? "Saving…" : "Add service"}

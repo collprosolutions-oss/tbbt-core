@@ -18,6 +18,7 @@ type CatalogItemRowProps = {
   id: string;
   name: string;
   price: string;
+  displayPrice: string;
   description: string;
   active: boolean;
 };
@@ -26,6 +27,7 @@ export function CatalogItemRow({
   id,
   name,
   price,
+  displayPrice,
   description,
   active,
 }: CatalogItemRowProps) {
@@ -39,7 +41,9 @@ export function CatalogItemRow({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="font-medium">{name}</p>
-          <p className="text-sm text-muted-foreground">{price}</p>
+          <p className="text-sm text-muted-foreground">
+            Starting price {displayPrice}
+          </p>
         </div>
         <Badge variant={active ? "secondary" : "outline"}>
           {active ? "Active" : "Inactive"}
@@ -59,7 +63,7 @@ export function CatalogItemRow({
           <Input id={`name-${id}`} name="name" defaultValue={name} required />
         </div>
         <div className="space-y-2">
-          <Label htmlFor={`price-${id}`}>Price</Label>
+          <Label htmlFor={`price-${id}`}>Starting price</Label>
           <Input
             id={`price-${id}`}
             name="price"
@@ -70,10 +74,12 @@ export function CatalogItemRow({
         </div>
         <div className="space-y-2">
           <Label htmlFor={`description-${id}`}>Description (optional)</Label>
-          <Input
+          <textarea
             id={`description-${id}`}
             name="description"
             defaultValue={description}
+            rows={4}
+            className="min-h-20 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base outline-none md:text-sm"
           />
         </div>
         <Button type="submit" variant="outline" disabled={pending}>

@@ -117,6 +117,10 @@ export default async function EstimateBuilderPage({
       <Card>
         <CardHeader>
           <CardTitle>Add catalog item</CardTitle>
+          <CardDescription>
+            Uses the current starting price. The line is saved as a snapshot
+            and will not change if the catalog price is edited later.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <AddCatalogLineForm
@@ -124,7 +128,7 @@ export default async function EstimateBuilderPage({
             items={catalogItems.map((item) => ({
               id: item.id,
               name: item.name,
-              price: item.price.toString(),
+              price: formatMoney(item.price),
             }))}
           />
         </CardContent>
