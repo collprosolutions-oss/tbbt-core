@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 43217",
-    "build": "next build",
+    "build": "prisma generate && prisma migrate deploy && next build",
     "start": "next start --port 43217",
     "lint": "eslint",
     "postinstall": "prisma generate",
