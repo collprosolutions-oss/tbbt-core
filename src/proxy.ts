@@ -18,6 +18,10 @@ function isPublicEstimate(pathname: string) {
   return pathname.startsWith("/e/");
 }
 
+function isPublicHire(pathname: string) {
+  return pathname.startsWith("/hire/");
+}
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
@@ -28,7 +32,11 @@ export function proxy(request: NextRequest) {
     );
   }
 
-  if (isPublicIntake(pathname) || isPublicEstimate(pathname)) {
+  if (
+    isPublicIntake(pathname) ||
+    isPublicEstimate(pathname) ||
+    isPublicHire(pathname)
+  ) {
     return NextResponse.next();
   }
 
