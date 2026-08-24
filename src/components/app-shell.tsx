@@ -20,11 +20,15 @@ type AppShellProps = {
   children: ReactNode;
 };
 
+function isNavActive(pathname: string, href: string) {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
 function NavLinks({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
   return (
     <nav className="flex flex-col gap-1">
       {APP_NAV.map((item) => {
-        const active = pathname === item.href;
+        const active = isNavActive(pathname, item.href);
         return (
           <Link
             key={item.href}
@@ -63,10 +67,9 @@ export function AppShell({
           <p className="text-xs font-medium tracking-wide text-muted-foreground">
             TBBT
           </p>
-          <p className="mt-1 text-base font-semibold">The Better Business Tool</p>
+          <p className="mt-1 text-base font-semibold">{businessName}</p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Badge variant="secondary">{tradeLabel}</Badge>
-            <span className="text-xs text-muted-foreground">Available</span>
           </div>
         </div>
         <Separator />
@@ -75,8 +78,7 @@ export function AppShell({
         </div>
         <Separator />
         <div className="space-y-2 px-4 py-4">
-          <p className="truncate text-sm font-medium">{businessName}</p>
-          <p className="truncate text-xs text-muted-foreground">{userName}</p>
+          <p className="truncate text-sm font-medium">{userName}</p>
           <p className="truncate text-xs text-muted-foreground">{userEmail}</p>
           <p className="text-xs text-muted-foreground">Role: {role}</p>
           <form action={signOutAction}>
@@ -90,8 +92,8 @@ export function AppShell({
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between gap-3 border-b bg-background px-4 py-3 md:hidden">
           <div>
-            <p className="text-sm font-semibold">TBBT</p>
-            <p className="text-xs text-muted-foreground">{businessName}</p>
+            <p className="text-sm font-semibold">{businessName}</p>
+            <p className="text-xs text-muted-foreground">TBBT</p>
           </div>
           <Button
             type="button"
@@ -113,7 +115,10 @@ export function AppShell({
               />
               <aside className="absolute inset-y-0 left-0 flex w-72 flex-col border-r bg-background shadow-lg">
                 <div className="px-4 py-4">
-                  <p className="text-base font-semibold">TBBT</p>
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground">
+                    TBBT
+                  </p>
+                  <p className="mt-1 text-base font-semibold">{businessName}</p>
                 </div>
                 <div className="flex-1 px-2">
                   <NavLinks

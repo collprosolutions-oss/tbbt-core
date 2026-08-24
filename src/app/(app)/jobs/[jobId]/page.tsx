@@ -10,9 +10,12 @@ import {
 } from "@/components/ui/card";
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
+import { PageHeader } from "@/components/page-header";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
+import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { requireBusinessAccess } from "@/lib/access";
+import { formatDateTime, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
 function toDateTimeLocal(value: Date) {
@@ -47,29 +50,31 @@ export default async function JobPage({
   access.assertOwned(job);
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Job</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Status: {job.status}</p>
-        {job.scheduledAt ? (
-          <p className="mt-1 text-sm text-muted-foreground">
-            Scheduled: {job.scheduledAt.toLocaleString()}
-          </p>
+    <div className="mx-auto max-w-3xl space-y-6">
+      <PageHeader
+        title={job.customer?.name ?? "Customer"}
+        description={
+          <div className="flex flex-wrap items-center gap-2">
+            <span>Job</span>
+            <StatusBadge status={job.status} />
+            {job.scheduledAt ? (
+              <span>{formatDateTime(job.scheduledAt)}</span>
+            ) : null}
+          </div>
+        }
+      >
+        {job.status === "SCHEDULED" ? (
+          <MarkJobCompleteButton jobId={job.id} />
         ) : null}
-        <div className="mt-3">
-          {job.status === "SCHEDULED" ? (
-            <MarkJobCompleteButton jobId={job.id} />
-          ) : null}
-          {job.status === "COMPLETED" && job.invoices[0] ? (
-            <Button asChild size="sm" variant="outline">
-              <Link href={`/invoices/${job.invoices[0].id}`}>Open invoice</Link>
-            </Button>
-          ) : null}
-          {job.status === "COMPLETED" && !job.invoices[0] ? (
-            <CreateInvoiceButton jobId={job.id} />
-          ) : null}
-        </div>
-      </div>
+        {job.status === "COMPLETED" && job.invoices[0] ? (
+          <Button asChild size="sm" variant="outline">
+            <Link href={`/invoices/${job.invoices[0].id}`}>Open invoice</Link>
+          </Button>
+        ) : null}
+        {job.status === "COMPLETED" && !job.invoices[0] ? (
+          <CreateInvoiceButton jobId={job.id} />
+        ) : null}
+      </PageHeader>
 
       <Card>
         <CardHeader>
@@ -86,10 +91,7 @@ export default async function JobPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>Conversion</CardTitle>
-          <CardDescription>
-            Created from an approved estimate. No schedule yet.
-          </CardDescription>
+          <CardTitle>Details</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           <p>Customer: {job.customer?.name ?? "None"}</p>
@@ -100,7 +102,7 @@ export default async function JobPage({
                 href={`/estimates/${job.estimate.id}`}
                 className="underline underline-offset-4"
               >
-                {job.estimate.status} · {job.estimate.total.toString()}
+                {job.estimate.status} · {formatMoney(job.estimate.total)}
               </Link>
             ) : (
               "None"

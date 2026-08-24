@@ -1,8 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CreateEstimateButton } from "@/components/estimates/create-estimate-button";
+import { PageHeader } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { requireBusinessAccess } from "@/lib/access";
+import { formatDateTime } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import {
   Card,
@@ -33,14 +36,11 @@ export default async function RequestsPage() {
   });
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Requests</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Service requests for {access.workspace.business.name}. Public form:
-          /r/{access.workspace.business.slug}
-        </p>
-      </div>
+    <div className="mx-auto max-w-3xl space-y-6">
+      <PageHeader
+        title="Requests"
+        description={`Service requests for ${access.workspace.business.name}.`}
+      />
 
       {requests.length === 0 ? (
         <Card>
@@ -58,10 +58,11 @@ export default async function RequestsPage() {
               <CardHeader>
                 <CardTitle>{request.customer?.name ?? "Customer"}</CardTitle>
                 <CardDescription>
-                  {request.createdAt.toLocaleString()}
+                  {formatDateTime(request.createdAt)}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-1 text-sm">
+              <CardContent className="space-y-2 text-sm">
+                <StatusBadge status={request.status} />
                 <p>{request.description || "No description"}</p>
                 {request.property?.addressLine1 ? (
                   <p className="text-muted-foreground">

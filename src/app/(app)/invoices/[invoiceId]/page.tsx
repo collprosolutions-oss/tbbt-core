@@ -2,15 +2,16 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { MarkInvoicePaidButton } from "@/components/invoices/mark-invoice-paid-button";
-import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import { requireBusinessAccess } from "@/lib/access";
+import { formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -38,36 +39,29 @@ export default async function InvoicePage({
   access.assertOwned(invoice);
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Invoice</h1>
-        {invoice.status === "PAID" ? (
-          <p className="mt-2">
-            <Badge className="h-6 px-3 text-sm font-semibold tracking-wide">
-              PAID
-            </Badge>
-          </p>
-        ) : (
-          <p className="mt-1 text-sm text-muted-foreground">
-            Status: {invoice.status}
-          </p>
-        )}
-        {invoice.status !== "PAID" ? (
-          <div className="mt-3">
-            <MarkInvoicePaidButton invoiceId={invoice.id} />
+    <div className="mx-auto max-w-3xl space-y-6">
+      <PageHeader
+        title={invoice.customer?.name ?? "Customer"}
+        description={
+          <div className="flex flex-wrap items-center gap-2">
+            <span>Invoice</span>
+            <StatusBadge status={invoice.status} />
           </div>
+        }
+      >
+        {invoice.status !== "PAID" ? (
+          <MarkInvoicePaidButton invoiceId={invoice.id} />
         ) : null}
-      </div>
+      </PageHeader>
 
       <Card>
         <CardHeader>
           <CardTitle>Amount</CardTitle>
-          <CardDescription>Copied from the linked estimate.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           <p>Customer: {invoice.customer?.name ?? "None"}</p>
-          <p>Invoice total: {invoice.total.toString()}</p>
-          <p>Amount due: {invoice.total.toString()}</p>
+          <p>Invoice total: {formatMoney(invoice.total)}</p>
+          <p>Amount due: {formatMoney(invoice.total)}</p>
           <p>
             Job:{" "}
             {invoice.job ? (

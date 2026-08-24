@@ -4,6 +4,8 @@ import { notFound } from "next/navigation";
 import { AddCatalogLineForm } from "@/components/estimates/add-catalog-line-form";
 import { AddCustomLineForm } from "@/components/estimates/add-custom-line-form";
 import { CreateJobButton } from "@/components/jobs/create-job-button";
+import { PageHeader } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -13,6 +15,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireBusinessAccess } from "@/lib/access";
+import { formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -48,18 +51,30 @@ export default async function EstimateBuilderPage({
   });
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Estimate</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {estimate.customer?.name ?? "Customer"} · {estimate.status} · Total{" "}
-          {estimate.total.toString()}
-        </p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Customer view: /e/{estimate.publicToken}
+    <div className="mx-auto max-w-3xl space-y-6">
+      <PageHeader
+        title={estimate.customer?.name ?? "Customer"}
+        description={
+          <div className="flex flex-wrap items-center gap-2">
+            <span>Estimate</span>
+            <StatusBadge status={estimate.status} />
+            <span>{formatMoney(estimate.total)}</span>
+          </div>
+        }
+      >
+        <p className="text-sm text-muted-foreground">
+          Customer view:{" "}
+          <Link
+            href={`/e/${estimate.publicToken}`}
+            className="underline underline-offset-4"
+          >
+            /e/{estimate.publicToken}
+          </Link>
         </p>
         {estimate.serviceRequest?.description ? (
-          <p className="mt-2 text-sm">{estimate.serviceRequest.description}</p>
+          <p className="mt-2 text-sm text-foreground">
+            {estimate.serviceRequest.description}
+          </p>
         ) : null}
         <div className="mt-3">
           {estimate.jobs[0] ? (
@@ -70,7 +85,7 @@ export default async function EstimateBuilderPage({
             <CreateJobButton estimateId={estimate.id} />
           ) : null}
         </div>
-      </div>
+      </PageHeader>
 
       <Card>
         <CardHeader>
@@ -86,15 +101,15 @@ export default async function EstimateBuilderPage({
                 <li key={item.id} className="flex justify-between gap-3">
                   <span>
                     {item.description} × {item.quantity.toString()} @{" "}
-                    {item.unitPrice.toString()}
+                    {formatMoney(item.unitPrice)}
                   </span>
-                  <span>{item.total.toString()}</span>
+                  <span>{formatMoney(item.total)}</span>
                 </li>
               ))}
             </ul>
           )}
           <p className="mt-4 text-sm font-medium">
-            Estimate total: {estimate.total.toString()}
+            Estimate total: {formatMoney(estimate.total)}
           </p>
         </CardContent>
       </Card>
