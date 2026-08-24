@@ -1,0 +1,4 @@
+CREATE TYPE "LineItemType" AS ENUM ('LABOR', 'MATERIAL', 'OTHER');
+
+ALTER TABLE "LineItem"
+ADD COLUMN "type" "LineItemType" NOT NULL DEFAULT 'LABOR';
