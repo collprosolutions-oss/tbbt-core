@@ -7,6 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -25,6 +26,7 @@ export default async function PublicEstimatePage({
       publicToken: true,
       status: true,
       total: true,
+      laborMinimumAdjustment: true,
       lineItems: {
         orderBy: { createdAt: "asc" },
         select: {
@@ -55,7 +57,7 @@ export default async function PublicEstimatePage({
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle>Estimate</CardTitle>
-          <CardDescription>Total {estimate.total.toString()}</CardDescription>
+          <CardDescription>Total {formatMoney(estimate.total)}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {estimate.lineItems.length === 0 ? (
@@ -66,15 +68,21 @@ export default async function PublicEstimatePage({
                 <li key={index} className="flex justify-between gap-3">
                   <span>
                     {item.description} × {item.quantity.toString()} @{" "}
-                    {item.unitPrice.toString()}
+                    {formatMoney(item.unitPrice)}
                   </span>
-                  <span>{item.total.toString()}</span>
+                  <span>{formatMoney(item.total)}</span>
                 </li>
               ))}
             </ul>
           )}
+          {estimate.laborMinimumAdjustment.gt(0) ? (
+            <p className="text-sm">
+              Labor Minimum Service Fee Adjustment —{" "}
+              {formatMoney(estimate.laborMinimumAdjustment)}
+            </p>
+          ) : null}
           <p className="text-sm font-medium">
-            Estimate total: {estimate.total.toString()}
+            Estimate total: {formatMoney(estimate.total)}
           </p>
           <ApproveEstimateButton
             publicToken={estimate.publicToken}

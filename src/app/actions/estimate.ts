@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
 import { requireBusinessAccess } from "@/lib/access";
+import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import { prisma } from "@/lib/prisma";
 
 export type EstimateActionState = {
@@ -29,25 +30,6 @@ function parseDecimal(raw: string, allowZero = false) {
   } catch {
     return null;
   }
-}
-
-async function persistEstimateTotal(
-  tx: Prisma.TransactionClient,
-  estimateId: string,
-  businessId: string,
-) {
-  const items = await tx.lineItem.findMany({
-    where: { estimateId, businessId },
-    select: { total: true },
-  });
-  const total = items.reduce(
-    (sum, item) => sum.add(item.total),
-    new Prisma.Decimal(0),
-  );
-  await tx.estimate.update({
-    where: { id: estimateId },
-    data: { total },
-  });
 }
 
 export async function createEstimate(serviceRequestId: string) {
@@ -104,6 +86,10 @@ export async function addCatalogLineItem(
     }),
   );
 
+  if (estimate.status !== "DRAFT") {
+    return { error: "Only a draft estimate can be changed." };
+  }
+
   const catalogItem = access.assertOwned(
     await prisma.serviceCatalogItem.findFirst({
       where: { id: catalogItemId, ...access.scope },
@@ -129,7 +115,7 @@ export async function addCatalogLineItem(
         total,
       },
     });
-    await persistEstimateTotal(tx, estimate.id, access.businessId);
+    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
   });
 
   revalidatePath(`/estimates/${estimate.id}`);
@@ -156,6 +142,10 @@ export async function addCustomLineItem(
     }),
   );
 
+  if (estimate.status !== "DRAFT") {
+    return { error: "Only a draft estimate can be changed." };
+  }
+
   const total = quantity.mul(unitPrice);
 
   await prisma.$transaction(async (tx) => {
@@ -169,7 +159,34 @@ export async function addCustomLineItem(
         total,
       },
     });
-    await persistEstimateTotal(tx, estimate.id, access.businessId);
+    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
+  });
+
+  revalidatePath(`/estimates/${estimate.id}`);
+  return {};
+}
+
+export async function setEstimateLaborMinimumWaived(
+  estimateId: string,
+  waived: boolean,
+): Promise<EstimateActionState> {
+  const access = await requireBusinessAccess();
+  const estimate = access.assertOwned(
+    await prisma.estimate.findFirst({
+      where: { id: estimateId, ...access.scope },
+    }),
+  );
+
+  if (estimate.status !== "DRAFT") {
+    return { error: "Only a draft estimate can be changed." };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.estimate.update({
+      where: { id: estimate.id },
+      data: { laborMinimumWaived: waived },
+    });
+    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
   });
 
   revalidatePath(`/estimates/${estimate.id}`);

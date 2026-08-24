@@ -47,6 +47,8 @@ model Business {
   slug      String   @unique
   /// App-level trade code. Only HANDYMAN is active in Phase 1.
   tradeCode String   @default("HANDYMAN")
+  laborMinimumEnabled Boolean @default(false)
+  laborMinimumAmount  Decimal?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -158,6 +160,8 @@ model Estimate {
   serviceRequestId String?
   status           String   @default("DRAFT")
   total            Decimal  @default(0)
+  laborMinimumWaived     Boolean @default(false)
+  laborMinimumAdjustment Decimal @default(0)
   publicToken      String   @unique
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt

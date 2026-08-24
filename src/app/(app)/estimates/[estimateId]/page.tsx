@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Prisma } from "@prisma/client";
 import { AddCatalogLineForm } from "@/components/estimates/add-catalog-line-form";
 import { AddCustomLineForm } from "@/components/estimates/add-custom-line-form";
+import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
 import { CreateJobButton } from "@/components/jobs/create-job-button";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
@@ -44,6 +46,13 @@ export default async function EstimateBuilderPage({
     notFound();
   }
   access.assertOwned(estimate);
+
+  const laborSubtotal = estimate.lineItems.reduce(
+    (sum, item) => sum.add(item.total),
+    new Prisma.Decimal(0),
+  );
+  const business = access.workspace.business;
+  const isDraft = estimate.status === "DRAFT";
 
   const catalogItems = await prisma.serviceCatalogItem.findMany({
     where: { ...access.scope, active: true },
@@ -108,12 +117,43 @@ export default async function EstimateBuilderPage({
               ))}
             </ul>
           )}
-          <p className="mt-4 text-sm font-medium">
-            Estimate total: {formatMoney(estimate.total)}
-          </p>
+          <div className="mt-4 space-y-1 text-sm">
+            <p>Labor subtotal: {formatMoney(laborSubtotal)}</p>
+            {isDraft &&
+            business.laborMinimumEnabled &&
+            business.laborMinimumAmount ? (
+              <p>
+                Minimum required: {formatMoney(business.laborMinimumAmount)}
+              </p>
+            ) : null}
+            {estimate.laborMinimumWaived ? (
+              <p>Labor minimum waived for this estimate.</p>
+            ) : null}
+            {estimate.laborMinimumAdjustment.gt(0) ? (
+              <p>
+                Labor Minimum Service Fee Adjustment —{" "}
+                {formatMoney(estimate.laborMinimumAdjustment)}
+              </p>
+            ) : (
+              <p>Minimum adjustment: {formatMoney(0)}</p>
+            )}
+            <p className="font-medium">
+              Estimate total: {formatMoney(estimate.total)}
+            </p>
+          </div>
+          {isDraft ? (
+            <div className="mt-4">
+              <WaiveLaborMinimumButton
+                estimateId={estimate.id}
+                waived={estimate.laborMinimumWaived}
+              />
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
+      {isDraft ? (
+        <>
       <Card>
         <CardHeader>
           <CardTitle>Add catalog item</CardTitle>
@@ -142,6 +182,8 @@ export default async function EstimateBuilderPage({
           <AddCustomLineForm estimateId={estimate.id} />
         </CardContent>
       </Card>
+        </>
+      ) : null}
     </div>
   );
 }
