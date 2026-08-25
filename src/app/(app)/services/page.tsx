@@ -126,19 +126,29 @@ export default async function ServicesPage() {
         </CardContent>
       </Card>
 
-      {items.length === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>No services yet</CardTitle>
-            <CardDescription>
-              Add a service to start this workspace price list. Active services
-              can be added to estimates.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {groupedItems.map((group) => (
+      <div className="space-y-3">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">
+            Your Services & Pricing
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            These are the services and prices your business currently uses. You
+            can edit pricing, descriptions, pricing mode, and active status at
+            any time.
+          </p>
+        </div>
+        {items.length === 0 ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>No services yet</CardTitle>
+              <CardDescription>
+                Add a service to start this workspace price list. Active
+                services can be added to estimates.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        ) : (
+          groupedItems.map((group) => (
             <ServiceCategoryGroup
               key={group.category}
               category={group.category}
@@ -163,9 +173,9 @@ export default async function ServicesPage() {
                 </Card>
               ))}
             </ServiceCategoryGroup>
-          ))}
-        </div>
-      )}
+          ))
+        )}
+      </div>
     </div>
   );
 }

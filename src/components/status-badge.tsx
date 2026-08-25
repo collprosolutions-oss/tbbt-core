@@ -10,6 +10,7 @@ const VARIANTS: Record<
   APPROVED: "secondary",
   UNSCHEDULED: "outline",
   SCHEDULED: "default",
+  IN_PROGRESS: "default",
   COMPLETED: "secondary",
   PAID: "default",
 };

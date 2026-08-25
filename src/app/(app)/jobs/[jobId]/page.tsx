@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
+import { StartJobButton } from "@/components/jobs/start-job-button";
 import { PageHeader } from "@/components/page-header";
 import { RecordNav } from "@/components/record-nav";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
@@ -78,6 +79,8 @@ export default async function JobPage({
 
   const isScheduled = Boolean(job.scheduledAt);
   const isCompleted = job.status === "COMPLETED";
+  const isInProgress = job.status === "IN_PROGRESS";
+  const invoice = job.invoices[0] ?? null;
   const durationPreset = durationPresetForMinutes(
     job.scheduledDurationMinutes,
   );
@@ -103,31 +106,56 @@ export default async function JobPage({
         }
       >
         <div className="flex flex-wrap items-center gap-2">
-          {job.status === "SCHEDULED" ? (
-            <MarkJobCompleteButton jobId={job.id} />
+          {!isCompleted && !isInProgress ? (
+            <StartJobButton jobId={job.id} />
           ) : null}
-          {job.status === "COMPLETED" && job.invoices[0] ? (
-            <Button asChild size="sm" variant="outline">
-              <Link href={`/invoices/${job.invoices[0].id}`}>Open invoice</Link>
+          {isInProgress ? <MarkJobCompleteButton jobId={job.id} /> : null}
+          {isCompleted && invoice ? (
+            <Button asChild size="sm">
+              <Link href={`/invoices/${invoice.id}`}>Open Invoice</Link>
             </Button>
           ) : null}
-          {job.status === "COMPLETED" && !job.invoices[0] ? (
+          {isCompleted && !invoice ? (
             <CreateInvoiceButton jobId={job.id} />
           ) : null}
           <RecordNav
             customerId={job.customerId}
             backHref="/jobs"
-            backLabel="Back to Schedule / Jobs"
+            backLabel="Back to Jobs"
           />
         </div>
       </PageHeader>
 
+      {isCompleted ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Continue to Invoice</CardTitle>
+            <CardDescription>
+              {invoice
+                ? "This job already has an invoice. Opening it will not create another one."
+                : "Create one invoice from this completed job. A job cannot have two invoices."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {invoice ? (
+              <Button asChild size="sm">
+                <Link href={`/invoices/${invoice.id}`}>Open Invoice</Link>
+              </Button>
+            ) : (
+              <CreateInvoiceButton jobId={job.id} />
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
-          <CardTitle>{isScheduled ? "Appointment" : "Schedule Job"}</CardTitle>
+          <CardTitle>
+            {isCompleted || isScheduled ? "Appointment" : "Schedule Job"}
+          </CardTitle>
           <CardDescription>
             {isCompleted
-              ? "Completed jobs keep their saved appointment."
+              ? "Completed jobs keep their saved appointment and cannot be rescheduled."
               : isScheduled
                 ? "Reschedule this job without creating another job."
                 : "Choose a date, start time, and optional duration."}
@@ -163,7 +191,13 @@ export default async function JobPage({
                 {job.property ? formatAddress(job.property) : "None selected"}
               </p>
             </div>
-          ) : null}
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              {isCompleted
+                ? "This job was not scheduled."
+                : "No appointment yet."}
+            </p>
+          )}
           {isCompleted ? null : (
             <ScheduleJobForm
               jobId={job.id}
@@ -182,7 +216,18 @@ export default async function JobPage({
           <CardTitle>Details</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
+          <p>
+            Status: <StatusBadge status={job.status} />
+          </p>
           <p>Customer: {job.customer?.name ?? "None"}</p>
+          <p>
+            Service address:{" "}
+            {job.property ? formatAddress(job.property) : "None selected"}
+          </p>
+          <p>
+            Scheduled:{" "}
+            {job.scheduledAt ? formatDateTime(job.scheduledAt) : "Unscheduled"}
+          </p>
           <p>
             Estimate:{" "}
             {job.estimate ? (
@@ -197,8 +242,19 @@ export default async function JobPage({
             )}
           </p>
           <p>
-            Service address:{" "}
-            {job.property ? formatAddress(job.property) : "None selected"}
+            Invoice:{" "}
+            {invoice ? (
+              <Link
+                href={`/invoices/${invoice.id}`}
+                className="underline underline-offset-4"
+              >
+                Open Invoice
+              </Link>
+            ) : isCompleted ? (
+              "None yet"
+            ) : (
+              "Created after the job is completed"
+            )}
           </p>
         </CardContent>
       </Card>

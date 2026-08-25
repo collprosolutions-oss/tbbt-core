@@ -170,7 +170,7 @@ export async function scheduleJob(
     data: {
       scheduledAt: start,
       scheduledDurationMinutes: duration.minutes,
-      status: "SCHEDULED",
+      ...(job.status === "UNSCHEDULED" ? { status: "SCHEDULED" } : {}),
     },
   });
 
@@ -180,13 +180,66 @@ export async function scheduleJob(
   return {};
 }
 
-export async function markJobComplete(jobId: string): Promise<JobActionState> {
+export async function startJob(
+  _prev: JobActionState,
+  formData: FormData,
+): Promise<JobActionState> {
   const access = await requireBusinessAccess();
+  const jobId = readString(formData, "jobId");
+
+  if (!jobId) {
+    return { error: "That job could not be started." };
+  }
+
   const job = access.assertOwned(
     await prisma.job.findFirst({
       where: { id: jobId, ...access.scope },
     }),
   );
+
+  if (job.status === "COMPLETED") {
+    return { error: "A completed job cannot be started." };
+  }
+
+  if (job.status === "IN_PROGRESS") {
+    return {};
+  }
+
+  await prisma.job.update({
+    where: { id: job.id },
+    data: { status: "IN_PROGRESS" },
+  });
+
+  revalidatePath("/jobs");
+  revalidatePath("/dashboard");
+  revalidatePath(`/jobs/${job.id}`);
+  return {};
+}
+
+export async function markJobComplete(
+  _prev: JobActionState,
+  formData: FormData,
+): Promise<JobActionState> {
+  const access = await requireBusinessAccess();
+  const jobId = readString(formData, "jobId");
+
+  if (!jobId) {
+    return { error: "That job could not be completed." };
+  }
+
+  const job = access.assertOwned(
+    await prisma.job.findFirst({
+      where: { id: jobId, ...access.scope },
+    }),
+  );
+
+  if (job.status === "COMPLETED") {
+    return {};
+  }
+
+  if (job.status !== "IN_PROGRESS") {
+    return { error: "Start the job before completing it." };
+  }
 
   await prisma.job.update({
     where: { id: job.id },

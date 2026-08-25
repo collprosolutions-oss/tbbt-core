@@ -194,6 +194,8 @@ model Job {
   customerId  String?
   propertyId  String?
   estimateId  String?
+  /// Lifecycle: UNSCHEDULED | SCHEDULED → IN_PROGRESS → COMPLETED.
+  /// String values, not a Prisma enum. No extra fields for completion notes.
   status      String    @default("SCHEDULED")
   scheduledAt DateTime?
   /// Expected duration in minutes. Null means duration is not set.
