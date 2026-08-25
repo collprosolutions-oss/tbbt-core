@@ -12,7 +12,10 @@ import {
 } from "@/components/ui/card";
 import { requireBusinessAccess } from "@/lib/access";
 import { formatMoney } from "@/lib/format";
-import { planStarterCatalogInstall } from "@/lib/handyman-starter-catalog";
+import {
+  groupServicesByStarterCategory,
+  planStarterCatalogInstall,
+} from "@/lib/handyman-starter-catalog";
 import { prisma } from "@/lib/prisma";
 import { isActiveTrade } from "@/lib/trades";
 
@@ -30,6 +33,7 @@ export default async function ServicesPage() {
   const starterPlan = showStarterCatalog
     ? planStarterCatalogInstall(items.map((item) => item.name))
     : null;
+  const groupedItems = groupServicesByStarterCategory(items);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -119,19 +123,37 @@ export default async function ServicesPage() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {items.map((item) => (
-            <Card key={item.id}>
-              <CardContent className="pt-4">
-                <CatalogItemRow
-                  id={item.id}
-                  name={item.name}
-                  price={item.price.toString()}
-                  displayPrice={formatMoney(item.price)}
-                  description={item.description ?? ""}
-                  active={item.active}
-                />
-              </CardContent>
-            </Card>
+          {groupedItems.map((group) => (
+            <details
+              key={group.category}
+              className="rounded-xl border bg-card text-card-foreground shadow-sm"
+            >
+              <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+                <span className="inline-flex w-[calc(100%-1.25rem)] items-center justify-between gap-3 align-middle">
+                  <span>{group.category}</span>
+                  <span className="shrink-0 font-normal text-muted-foreground">
+                    {group.items.length}{" "}
+                    {group.items.length === 1 ? "service" : "services"}
+                  </span>
+                </span>
+              </summary>
+              <div className="space-y-3 border-t px-4 py-3">
+                {group.items.map((item) => (
+                  <Card key={item.id} className="shadow-none">
+                    <CardContent className="pt-4">
+                      <CatalogItemRow
+                        id={item.id}
+                        name={item.name}
+                        price={item.price.toString()}
+                        displayPrice={formatMoney(item.price)}
+                        description={item.description ?? ""}
+                        active={item.active}
+                      />
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </details>
           ))}
         </div>
       )}

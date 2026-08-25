@@ -559,3 +559,44 @@ export function planStarterCatalogInstall(existingNames: string[]) {
     pending: pendingStarterServices(),
   };
 }
+
+export const OTHER_SERVICES_CATEGORY = "Other Services";
+
+export function starterCategoryForName(name: string) {
+  const key = catalogNameKey(name);
+  const match = HANDYMAN_STARTER_SERVICES.find(
+    (service) => catalogNameKey(service.name) === key,
+  );
+  return match?.category ?? OTHER_SERVICES_CATEGORY;
+}
+
+export function groupServicesByStarterCategory<T extends { name: string }>(
+  items: T[],
+) {
+  const groups = new Map<string, T[]>();
+
+  for (const item of items) {
+    const category = starterCategoryForName(item.name);
+    const current = groups.get(category);
+    if (current) {
+      current.push(item);
+    } else {
+      groups.set(category, [item]);
+    }
+  }
+
+  const ordered: Array<{ category: string; items: T[] }> = [];
+  for (const category of HANDYMAN_CATALOG_CATEGORIES) {
+    const grouped = groups.get(category);
+    if (grouped?.length) {
+      ordered.push({ category, items: grouped });
+    }
+  }
+
+  const other = groups.get(OTHER_SERVICES_CATEGORY);
+  if (other?.length) {
+    ordered.push({ category: OTHER_SERVICES_CATEGORY, items: other });
+  }
+
+  return ordered;
+}
