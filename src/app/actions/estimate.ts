@@ -199,3 +199,85 @@ export async function setEstimateLaborMinimumWaived(
   revalidatePath(`/estimates/${estimate.id}`);
   return {};
 }
+
+export async function removeEstimateLineItem(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  const access = await requireBusinessAccess();
+  const estimateId = readString(formData, "estimateId");
+  const lineItemId = readString(formData, "lineItemId");
+
+  if (!estimateId || !lineItemId) {
+    return { error: "That line item could not be removed." };
+  }
+
+  const estimate = access.assertOwned(
+    await prisma.estimate.findFirst({
+      where: { id: estimateId, ...access.scope },
+    }),
+  );
+
+  if (estimate.status !== "DRAFT") {
+    return { error: "Only a draft estimate can be changed." };
+  }
+
+  const lineItem = access.assertOwned(
+    await prisma.lineItem.findFirst({
+      where: {
+        id: lineItemId,
+        estimateId: estimate.id,
+        ...access.scope,
+      },
+    }),
+  );
+
+  await prisma.$transaction(async (tx) => {
+    await tx.lineItem.deleteMany({
+      where: {
+        id: lineItem.id,
+        estimateId: estimate.id,
+        businessId: access.businessId,
+      },
+    });
+    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
+  });
+
+  revalidatePath(`/estimates/${estimate.id}`);
+  return {};
+}
+
+export async function clearDraftEstimate(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  const access = await requireBusinessAccess();
+  const estimateId = readString(formData, "estimateId");
+
+  if (!estimateId) {
+    return { error: "That estimate could not be cleared." };
+  }
+
+  const estimate = access.assertOwned(
+    await prisma.estimate.findFirst({
+      where: { id: estimateId, ...access.scope },
+    }),
+  );
+
+  if (estimate.status !== "DRAFT") {
+    return { error: "Only a draft estimate can be changed." };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.lineItem.deleteMany({
+      where: {
+        estimateId: estimate.id,
+        businessId: access.businessId,
+      },
+    });
+    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
+  });
+
+  revalidatePath(`/estimates/${estimate.id}`);
+  return {};
+}

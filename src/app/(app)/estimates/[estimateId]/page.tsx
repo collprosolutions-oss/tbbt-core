@@ -4,6 +4,8 @@ import { notFound } from "next/navigation";
 import { Prisma } from "@prisma/client";
 import { AddCatalogLineForm } from "@/components/estimates/add-catalog-line-form";
 import { AddCustomLineForm } from "@/components/estimates/add-custom-line-form";
+import { ClearDraftEstimateButton } from "@/components/estimates/clear-draft-estimate-button";
+import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
 import { CreateJobButton } from "@/components/jobs/create-job-button";
 import { PageHeader } from "@/components/page-header";
@@ -112,7 +114,10 @@ export default async function EstimateBuilderPage({
           ) : (
             <ul className="space-y-2 text-sm">
               {estimate.lineItems.map((item) => (
-                <li key={item.id} className="flex justify-between gap-3">
+                <li
+                  key={item.id}
+                  className="flex items-start justify-between gap-3"
+                >
                   <span>
                     {item.type === "LABOR"
                       ? "Labor"
@@ -122,7 +127,15 @@ export default async function EstimateBuilderPage({
                     : {item.description} × {item.quantity.toString()} @{" "}
                     {formatMoney(item.unitPrice)}
                   </span>
-                  <span>{formatMoney(item.total)}</span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span>{formatMoney(item.total)}</span>
+                    {isDraft ? (
+                      <RemoveLineItemButton
+                        estimateId={estimate.id}
+                        lineItemId={item.id}
+                      />
+                    ) : null}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -158,11 +171,14 @@ export default async function EstimateBuilderPage({
             </p>
           </div>
           {isDraft ? (
-            <div className="mt-4">
+            <div className="mt-4 flex flex-wrap items-center gap-3">
               <WaiveLaborMinimumButton
                 estimateId={estimate.id}
                 waived={estimate.laborMinimumWaived}
               />
+              {estimate.lineItems.length > 0 ? (
+                <ClearDraftEstimateButton estimateId={estimate.id} />
+              ) : null}
             </div>
           ) : null}
         </CardContent>
