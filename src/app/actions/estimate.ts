@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireBusinessAccess, type BusinessAccess } from "@/lib/access";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import { prisma } from "@/lib/prisma";
 
@@ -58,6 +58,7 @@ export async function createEstimate(serviceRequestId: string) {
       businessId: access.businessId,
       serviceRequestId: request.id,
       customerId: request.customerId,
+      propertyId: request.propertyId,
       total: new Prisma.Decimal(0),
       publicToken: randomUUID(),
     },
@@ -97,6 +98,54 @@ async function findReusableCustomer(
   return null;
 }
 
+async function resolveManualEstimateProperty({
+  access,
+  customerId,
+  propertyChoice,
+  address,
+}: {
+  access: BusinessAccess;
+  customerId: string;
+  propertyChoice: string;
+  address: string;
+}): Promise<{ ok: true; id: string | null } | { ok: false; error: string }> {
+  if (!propertyChoice || propertyChoice === "none") {
+    return { ok: true, id: null };
+  }
+
+  if (propertyChoice === "new") {
+    if (!address) {
+      return { ok: false, error: "Enter a service address." };
+    }
+
+    const created = await prisma.property.create({
+      data: {
+        businessId: access.businessId,
+        customerId,
+        addressLine1: address,
+      },
+    });
+    return { ok: true, id: created.id };
+  }
+
+  const property = await prisma.property.findFirst({
+    where: {
+      id: propertyChoice,
+      customerId,
+      ...access.scope,
+    },
+  });
+  if (!property) {
+    return {
+      ok: false,
+      error: "That service address is not available for this customer.",
+    };
+  }
+  access.assertOwned(property);
+
+  return { ok: true, id: property.id };
+}
+
 export async function createManualEstimate(
   _prev: EstimateActionState,
   formData: FormData,
@@ -120,16 +169,30 @@ export async function createManualEstimate(
       }),
     );
 
+    const propertyChoice = readString(formData, "propertyChoice");
+    const address = readString(formData, "address");
+    const property = await resolveManualEstimateProperty({
+      access,
+      customerId: customer.id,
+      propertyChoice,
+      address,
+    });
+    if (!property.ok) {
+      return { error: property.error };
+    }
+
     const estimate = await prisma.estimate.create({
       data: {
         businessId: access.businessId,
         customerId: customer.id,
+        propertyId: property.id,
         total: new Prisma.Decimal(0),
         publicToken: randomUUID(),
       },
     });
 
     revalidatePath("/estimates");
+    revalidatePath("/customers");
     redirect(`/estimates/${estimate.id}`);
   }
 
@@ -160,20 +223,23 @@ export async function createManualEstimate(
           },
         });
 
+    let propertyId: string | null = null;
     if (address) {
-      await tx.property.create({
+      const createdProperty = await tx.property.create({
         data: {
           businessId: access.businessId,
           customerId: customer.id,
           addressLine1: address,
         },
       });
+      propertyId = createdProperty.id;
     }
 
     return tx.estimate.create({
       data: {
         businessId: access.businessId,
         customerId: customer.id,
+        propertyId,
         total: new Prisma.Decimal(0),
         publicToken: randomUUID(),
       },

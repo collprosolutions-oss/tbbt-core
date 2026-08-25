@@ -118,6 +118,7 @@ model Property {
   business        Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
   customer        Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
   serviceRequests ServiceRequest[]
+  estimates       Estimate[]
   jobs            Job[]
 
   @@index([businessId])
@@ -163,6 +164,7 @@ model Estimate {
   id               String   @id @default(cuid())
   businessId       String
   customerId       String?
+  propertyId       String?
   serviceRequestId String?
   status           String   @default("DRAFT")
   total            Decimal  @default(0)
@@ -174,11 +176,13 @@ model Estimate {
 
   business       Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
   customer       Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  property       Property?       @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   serviceRequest ServiceRequest? @relation(fields: [serviceRequestId], references: [id], onDelete: SetNull)
   jobs           Job[]
   lineItems      LineItem[]
 
   @@index([businessId])
+  @@index([propertyId])
 }
 
 model Job {

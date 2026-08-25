@@ -20,7 +20,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireBusinessAccess } from "@/lib/access";
-import { formatMoney } from "@/lib/format";
+import { formatAddress, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -39,6 +39,15 @@ export default async function EstimateBuilderPage({
     where: { id: estimateId, ...access.scope },
     include: {
       customer: { select: { name: true } },
+      property: {
+        select: {
+          addressLine1: true,
+          addressLine2: true,
+          city: true,
+          region: true,
+          postalCode: true,
+        },
+      },
       serviceRequest: { select: { description: true } },
       jobs: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
       lineItems: { orderBy: { createdAt: "asc" } },
@@ -97,6 +106,12 @@ export default async function EstimateBuilderPage({
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">Manual estimate</p>
         )}
+        <p className="mt-2 text-sm text-muted-foreground">
+          Service address:{" "}
+          {estimate.property
+            ? formatAddress(estimate.property)
+            : "None selected"}
+        </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {estimate.jobs[0] ? (
             <Button asChild size="sm" variant="outline">

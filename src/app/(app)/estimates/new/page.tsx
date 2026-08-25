@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireBusinessAccess } from "@/lib/access";
+import { formatAddress } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -26,6 +27,17 @@ export default async function NewManualEstimatePage() {
       name: true,
       phone: true,
       email: true,
+      properties: {
+        select: {
+          id: true,
+          addressLine1: true,
+          addressLine2: true,
+          city: true,
+          region: true,
+          postalCode: true,
+        },
+        orderBy: { createdAt: "asc" },
+      },
     },
     orderBy: { name: "asc" },
   });
@@ -46,11 +58,24 @@ export default async function NewManualEstimatePage() {
           <CardTitle>Customer</CardTitle>
           <CardDescription>
             Choose a customer in this workspace or add one. Matching email or
-            phone reuses the existing customer. A request is not created.
+            phone reuses the existing customer. Pick the service address that
+            should be used if this estimate becomes a job. A request is not
+            created.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <CreateManualEstimateForm customers={customers} />
+          <CreateManualEstimateForm
+            customers={customers.map((customer) => ({
+              id: customer.id,
+              name: customer.name,
+              phone: customer.phone,
+              email: customer.email,
+              properties: customer.properties.map((property) => ({
+                id: property.id,
+                label: formatAddress(property),
+              })),
+            }))}
+          />
         </CardContent>
       </Card>
     </div>

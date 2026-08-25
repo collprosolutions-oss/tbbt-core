@@ -7,7 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { formatMoney } from "@/lib/format";
+import { formatAddress, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -27,6 +27,15 @@ export default async function PublicEstimatePage({
       status: true,
       total: true,
       laborMinimumAdjustment: true,
+      property: {
+        select: {
+          addressLine1: true,
+          addressLine2: true,
+          city: true,
+          region: true,
+          postalCode: true,
+        },
+      },
       lineItems: {
         orderBy: { createdAt: "asc" },
         select: {
@@ -79,6 +88,11 @@ export default async function PublicEstimatePage({
             <p className="text-sm">
               Labor Minimum Service Fee Adjustment —{" "}
               {formatMoney(estimate.laborMinimumAdjustment)}
+            </p>
+          ) : null}
+          {estimate.property ? (
+            <p className="text-sm">
+              Service address: {formatAddress(estimate.property)}
             </p>
           ) : null}
           <p className="text-sm font-medium">

@@ -36,7 +36,19 @@ export async function createJobFromEstimate(
   }
 
   let propertyId: string | null = null;
-  if (estimate.serviceRequestId) {
+  if (estimate.propertyId) {
+    const property = await prisma.property.findFirst({
+      where: {
+        id: estimate.propertyId,
+        ...access.scope,
+        ...(estimate.customerId ? { customerId: estimate.customerId } : {}),
+      },
+    });
+    if (property) {
+      access.assertOwned(property);
+      propertyId = property.id;
+    }
+  } else if (estimate.serviceRequestId) {
     const serviceRequest = access.assertOwned(
       await prisma.serviceRequest.findFirst({
         where: { id: estimate.serviceRequestId, ...access.scope },
@@ -44,19 +56,6 @@ export async function createJobFromEstimate(
       }),
     );
     propertyId = serviceRequest.propertyId;
-  } else if (estimate.customerId) {
-    const property = await prisma.property.findFirst({
-      where: {
-        customerId: estimate.customerId,
-        ...access.scope,
-      },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, businessId: true },
-    });
-    if (property) {
-      access.assertOwned(property);
-      propertyId = property.id;
-    }
   }
 
   const job = await prisma.job.create({
