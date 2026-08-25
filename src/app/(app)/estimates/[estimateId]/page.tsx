@@ -9,6 +9,7 @@ import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-bu
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
 import { CreateJobButton } from "@/components/jobs/create-job-button";
 import { PageHeader } from "@/components/page-header";
+import { RecordNav } from "@/components/record-nav";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -96,7 +97,7 @@ export default async function EstimateBuilderPage({
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">Manual estimate</p>
         )}
-        <div className="mt-3">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           {estimate.jobs[0] ? (
             <Button asChild size="sm" variant="outline">
               <Link href={`/jobs/${estimate.jobs[0].id}`}>Open job</Link>
@@ -104,6 +105,11 @@ export default async function EstimateBuilderPage({
           ) : estimate.status === "APPROVED" ? (
             <CreateJobButton estimateId={estimate.id} />
           ) : null}
+          <RecordNav
+            customerId={estimate.customerId}
+            backHref="/estimates"
+            backLabel="Back to Estimates"
+          />
         </div>
       </PageHeader>
 

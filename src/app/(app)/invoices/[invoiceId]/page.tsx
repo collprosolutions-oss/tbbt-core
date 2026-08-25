@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { MarkInvoicePaidButton } from "@/components/invoices/mark-invoice-paid-button";
 import { PageHeader } from "@/components/page-header";
+import { RecordNav } from "@/components/record-nav";
 import { StatusBadge } from "@/components/status-badge";
 import {
   Card,
@@ -49,9 +50,16 @@ export default async function InvoicePage({
           </div>
         }
       >
-        {invoice.status !== "PAID" ? (
-          <MarkInvoicePaidButton invoiceId={invoice.id} />
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {invoice.status !== "PAID" ? (
+            <MarkInvoicePaidButton invoiceId={invoice.id} />
+          ) : null}
+          <RecordNav
+            customerId={invoice.customerId}
+            backHref="/invoices"
+            backLabel="Back to Invoices"
+          />
+        </div>
       </PageHeader>
 
       <Card>

@@ -11,6 +11,7 @@ import {
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
 import { PageHeader } from "@/components/page-header";
+import { RecordNav } from "@/components/record-nav";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -63,17 +64,24 @@ export default async function JobPage({
           </div>
         }
       >
-        {job.status === "SCHEDULED" ? (
-          <MarkJobCompleteButton jobId={job.id} />
-        ) : null}
-        {job.status === "COMPLETED" && job.invoices[0] ? (
-          <Button asChild size="sm" variant="outline">
-            <Link href={`/invoices/${job.invoices[0].id}`}>Open invoice</Link>
-          </Button>
-        ) : null}
-        {job.status === "COMPLETED" && !job.invoices[0] ? (
-          <CreateInvoiceButton jobId={job.id} />
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {job.status === "SCHEDULED" ? (
+            <MarkJobCompleteButton jobId={job.id} />
+          ) : null}
+          {job.status === "COMPLETED" && job.invoices[0] ? (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/invoices/${job.invoices[0].id}`}>Open invoice</Link>
+            </Button>
+          ) : null}
+          {job.status === "COMPLETED" && !job.invoices[0] ? (
+            <CreateInvoiceButton jobId={job.id} />
+          ) : null}
+          <RecordNav
+            customerId={job.customerId}
+            backHref="/jobs"
+            backLabel="Back to Schedule / Jobs"
+          />
+        </div>
       </PageHeader>
 
       <Card>
