@@ -5,7 +5,10 @@ import { Prisma } from "@prisma/client";
 import { AddCatalogLineForm } from "@/components/estimates/add-catalog-line-form";
 import { AddCustomLineForm } from "@/components/estimates/add-custom-line-form";
 import { ClearDraftEstimateButton } from "@/components/estimates/clear-draft-estimate-button";
+import { CopyEstimateLinkButton } from "@/components/estimates/copy-estimate-link-button";
+import { EditEstimateButton } from "@/components/estimates/edit-estimate-button";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
+import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
 import { CreateJobButton } from "@/components/jobs/create-job-button";
 import { PageHeader } from "@/components/page-header";
@@ -70,6 +73,8 @@ export default async function EstimateBuilderPage({
     .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0));
   const business = access.workspace.business;
   const isDraft = estimate.status === "DRAFT";
+  const isSent = estimate.status === "SENT";
+  const isApproved = estimate.status === "APPROVED";
 
   const catalogItems = await prisma.serviceCatalogItem.findMany({
     where: { ...access.scope, active: true },
@@ -88,15 +93,32 @@ export default async function EstimateBuilderPage({
           </div>
         }
       >
-        <p className="text-sm text-muted-foreground">
-          Customer view:{" "}
-          <Link
-            href={`/e/${estimate.publicToken}`}
-            className="underline underline-offset-4"
-          >
-            /e/{estimate.publicToken}
-          </Link>
-        </p>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <p>
+            Customer view:{" "}
+            <Link
+              href={`/e/${estimate.publicToken}`}
+              className="underline underline-offset-4"
+            >
+              /e/{estimate.publicToken}
+            </Link>
+          </p>
+          {isSent || isApproved ? (
+            <CopyEstimateLinkButton publicToken={estimate.publicToken} />
+          ) : null}
+        </div>
+        {isSent ? (
+          <p className="mt-2 text-sm text-foreground">
+            This is the estimate currently presented to the customer. Editing
+            returns it to draft, and you must send it again before they can
+            approve.
+          </p>
+        ) : null}
+        {isApproved ? (
+          <p className="mt-2 text-sm text-muted-foreground">
+            This estimate is approved and cannot be edited.
+          </p>
+        ) : null}
         {estimate.serviceRequestId ? (
           estimate.serviceRequest?.description ? (
             <p className="mt-2 text-sm text-foreground">
@@ -113,11 +135,18 @@ export default async function EstimateBuilderPage({
             : "None selected"}
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
+          {isDraft ? (
+            <SendEstimateButton
+              estimateId={estimate.id}
+              disabled={estimate.lineItems.length === 0}
+            />
+          ) : null}
+          {isSent ? <EditEstimateButton estimateId={estimate.id} /> : null}
           {estimate.jobs[0] ? (
             <Button asChild size="sm" variant="outline">
               <Link href={`/jobs/${estimate.jobs[0].id}`}>Open job</Link>
             </Button>
-          ) : estimate.status === "APPROVED" ? (
+          ) : isApproved ? (
             <CreateJobButton estimateId={estimate.id} />
           ) : null}
           <RecordNav

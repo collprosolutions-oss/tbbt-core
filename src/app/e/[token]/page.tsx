@@ -66,7 +66,9 @@ export default async function PublicEstimatePage({
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle>Estimate</CardTitle>
-          <CardDescription>Total {formatMoney(estimate.total)}</CardDescription>
+          <CardDescription>
+            Status {estimate.status} · Total {formatMoney(estimate.total)}
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {estimate.lineItems.length === 0 ? (

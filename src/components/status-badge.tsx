@@ -6,6 +6,7 @@ const VARIANTS: Record<
 > = {
   OPEN: "secondary",
   DRAFT: "outline",
+  SENT: "default",
   APPROVED: "secondary",
   UNSCHEDULED: "outline",
   SCHEDULED: "default",

@@ -16,9 +16,20 @@ export function ApproveEstimateButton({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
-  if (currentStatus !== "DRAFT") {
+  if (currentStatus === "APPROVED") {
     return (
-      <p className="text-sm font-medium">Status: {currentStatus}</p>
+      <p className="text-sm font-medium">Status: APPROVED</p>
+    );
+  }
+
+  if (currentStatus !== "SENT") {
+    return (
+      <div className="space-y-2">
+        <p className="text-sm font-medium">Status: {currentStatus}</p>
+        <p className="text-sm text-muted-foreground">
+          This estimate is not ready to approve.
+        </p>
+      </div>
     );
   }
 
@@ -43,7 +54,7 @@ export function ApproveEstimateButton({
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
-      <p className="mb-3 text-sm">Status: {currentStatus}</p>
+      <p className="mb-3 text-sm">Status: SENT</p>
       <Button type="submit" className="w-full" disabled={pending}>
         {pending ? "Approving…" : "Approve"}
       </Button>

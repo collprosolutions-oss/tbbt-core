@@ -465,3 +465,111 @@ export async function clearDraftEstimate(
   revalidatePath(`/estimates/${estimate.id}`);
   return {};
 }
+
+export async function sendEstimate(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  const access = await requireBusinessAccess();
+  const estimateId = readString(formData, "estimateId");
+
+  if (!estimateId) {
+    return { error: "That estimate could not be sent." };
+  }
+
+  const estimate = access.assertOwned(
+    await prisma.estimate.findFirst({
+      where: { id: estimateId, ...access.scope },
+      include: { lineItems: { select: { id: true } } },
+    }),
+  );
+
+  if (estimate.status !== "DRAFT") {
+    return { error: "Only a draft estimate can be sent." };
+  }
+
+  if (estimate.lineItems.length === 0) {
+    return { error: "Add at least one line item before sending." };
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const current = await tx.estimate.findFirst({
+      where: { id: estimate.id, businessId: access.businessId },
+      include: { lineItems: { select: { id: true } } },
+    });
+
+    if (!current || current.status !== "DRAFT") {
+      return { error: "Only a draft estimate can be sent." };
+    }
+
+    if (current.lineItems.length === 0) {
+      return { error: "Add at least one line item before sending." };
+    }
+
+    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
+
+    const updated = await tx.estimate.updateMany({
+      where: {
+        id: estimate.id,
+        businessId: access.businessId,
+        status: "DRAFT",
+      },
+      data: { status: "SENT" },
+    });
+
+    if (updated.count !== 1) {
+      return { error: "Only a draft estimate can be sent." };
+    }
+
+    return {};
+  });
+
+  if (result.error) {
+    return result;
+  }
+
+  revalidatePath("/estimates");
+  revalidatePath(`/estimates/${estimate.id}`);
+  revalidatePath(`/e/${estimate.publicToken}`);
+  return {};
+}
+
+export async function returnEstimateToDraft(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  const access = await requireBusinessAccess();
+  const estimateId = readString(formData, "estimateId");
+
+  if (!estimateId) {
+    return { error: "That estimate could not be returned to draft." };
+  }
+
+  const estimate = access.assertOwned(
+    await prisma.estimate.findFirst({
+      where: { id: estimateId, ...access.scope },
+    }),
+  );
+
+  if (estimate.status !== "SENT") {
+    return { error: "Only a sent estimate can be returned to draft." };
+  }
+
+  const updated = await prisma.estimate.updateMany({
+    where: {
+      id: estimate.id,
+      businessId: access.businessId,
+      status: "SENT",
+    },
+    data: { status: "DRAFT" },
+  });
+
+  if (updated.count !== 1) {
+    return { error: "Only a sent estimate can be returned to draft." };
+  }
+
+  revalidatePath("/estimates");
+  revalidatePath(`/estimates/${estimate.id}`);
+  revalidatePath(`/e/${estimate.publicToken}`);
+  return {};
+}

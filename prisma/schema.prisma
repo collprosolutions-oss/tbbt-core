@@ -166,6 +166,7 @@ model Estimate {
   customerId       String?
   propertyId       String?
   serviceRequestId String?
+  /// Lifecycle: DRAFT → SENT → APPROVED. String values, not a Prisma enum.
   status           String   @default("DRAFT")
   total            Decimal  @default(0)
   laborMinimumWaived     Boolean @default(false)

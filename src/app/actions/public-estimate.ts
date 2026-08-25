@@ -9,6 +9,7 @@ export type ApproveEstimateResult = {
 };
 
 const GENERIC_ERROR = "This estimate is not available.";
+const NOT_READY_ERROR = "This estimate is not ready to approve.";
 
 export async function approveEstimate(
   publicToken: string,
@@ -27,16 +28,30 @@ export async function approveEstimate(
     return { error: GENERIC_ERROR };
   }
 
-  if (estimate.status !== "DRAFT") {
+  if (estimate.status === "APPROVED") {
     return { status: estimate.status };
   }
 
-  const updated = await prisma.estimate.update({
-    where: { publicToken: token },
+  if (estimate.status !== "SENT") {
+    return { error: NOT_READY_ERROR };
+  }
+
+  const updated = await prisma.estimate.updateMany({
+    where: { publicToken: token, status: "SENT" },
     data: { status: "APPROVED" },
-    select: { status: true },
   });
 
+  if (updated.count !== 1) {
+    const current = await prisma.estimate.findUnique({
+      where: { publicToken: token },
+      select: { status: true },
+    });
+    if (current?.status === "APPROVED") {
+      return { status: current.status };
+    }
+    return { error: NOT_READY_ERROR };
+  }
+
   revalidatePath(`/e/${token}`);
-  return { status: updated.status };
+  return { status: "APPROVED" };
 }
