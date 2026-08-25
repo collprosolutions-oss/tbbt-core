@@ -16,12 +16,30 @@ import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { requireBusinessAccess } from "@/lib/access";
-import { formatDateTime, formatMoney } from "@/lib/format";
+import {
+  formatAddress,
+  formatDate,
+  formatDateTime,
+  formatMoney,
+  formatTime,
+} from "@/lib/format";
+import {
+  durationPresetForMinutes,
+  expectedEnd,
+  formatDurationMinutes,
+} from "@/lib/job-schedule";
 import { prisma } from "@/lib/prisma";
 
-function toDateTimeLocal(value: Date) {
-  const pad = (part: number) => String(part).padStart(2, "0");
-  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
+function pad(part: number) {
+  return String(part).padStart(2, "0");
+}
+
+function toDateInput(value: Date) {
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
+
+function toTimeInput(value: Date) {
+  return `${pad(value.getHours())}:${pad(value.getMinutes())}`;
 }
 
 export const metadata: Metadata = {
@@ -39,7 +57,15 @@ export default async function JobPage({
     where: { id: jobId, ...access.scope },
     include: {
       customer: { select: { name: true } },
-      property: { select: { addressLine1: true } },
+      property: {
+        select: {
+          addressLine1: true,
+          addressLine2: true,
+          city: true,
+          region: true,
+          postalCode: true,
+        },
+      },
       estimate: { select: { id: true, status: true, total: true } },
       invoices: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
     },
@@ -49,6 +75,16 @@ export default async function JobPage({
     notFound();
   }
   access.assertOwned(job);
+
+  const isScheduled = Boolean(job.scheduledAt);
+  const isCompleted = job.status === "COMPLETED";
+  const durationPreset = durationPresetForMinutes(
+    job.scheduledDurationMinutes,
+  );
+  const customHours =
+    durationPreset === "custom" && job.scheduledDurationMinutes
+      ? (job.scheduledDurationMinutes / 60).toString()
+      : "";
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -60,7 +96,9 @@ export default async function JobPage({
             <StatusBadge status={job.status} />
             {job.scheduledAt ? (
               <span>{formatDateTime(job.scheduledAt)}</span>
-            ) : null}
+            ) : (
+              <span>Unscheduled</span>
+            )}
           </div>
         }
       >
@@ -86,14 +124,56 @@ export default async function JobPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>Schedule</CardTitle>
-          <CardDescription>Save or replace the job date and time.</CardDescription>
+          <CardTitle>{isScheduled ? "Appointment" : "Schedule Job"}</CardTitle>
+          <CardDescription>
+            {isCompleted
+              ? "Completed jobs keep their saved appointment."
+              : isScheduled
+                ? "Reschedule this job without creating another job."
+                : "Choose a date, start time, and optional duration."}
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <ScheduleJobForm
-            jobId={job.id}
-            scheduledAt={job.scheduledAt ? toDateTimeLocal(job.scheduledAt) : ""}
-          />
+        <CardContent className="space-y-4">
+          {job.scheduledAt ? (
+            <div className="space-y-1 text-sm">
+              <p>Date: {formatDate(job.scheduledAt)}</p>
+              <p>Start time: {formatTime(job.scheduledAt)}</p>
+              {job.scheduledDurationMinutes ? (
+                <>
+                  <p>
+                    Expected duration:{" "}
+                    {formatDurationMinutes(job.scheduledDurationMinutes)}
+                  </p>
+                  <p>
+                    Expected end:{" "}
+                    {formatTime(
+                      expectedEnd(
+                        job.scheduledAt,
+                        job.scheduledDurationMinutes,
+                      ),
+                    )}
+                  </p>
+                </>
+              ) : (
+                <p>Expected duration: Not set</p>
+              )}
+              <p>Customer: {job.customer?.name ?? "None"}</p>
+              <p>
+                Service address:{" "}
+                {job.property ? formatAddress(job.property) : "None selected"}
+              </p>
+            </div>
+          ) : null}
+          {isCompleted ? null : (
+            <ScheduleJobForm
+              jobId={job.id}
+              date={job.scheduledAt ? toDateInput(job.scheduledAt) : ""}
+              time={job.scheduledAt ? toTimeInput(job.scheduledAt) : ""}
+              durationPreset={durationPreset}
+              customHours={customHours}
+              isScheduled={isScheduled}
+            />
+          )}
         </CardContent>
       </Card>
 
@@ -116,7 +196,10 @@ export default async function JobPage({
               "None"
             )}
           </p>
-          <p>Address: {job.property?.addressLine1 ?? "None"}</p>
+          <p>
+            Service address:{" "}
+            {job.property ? formatAddress(job.property) : "None selected"}
+          </p>
         </CardContent>
       </Card>
     </div>

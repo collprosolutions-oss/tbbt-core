@@ -27,6 +27,13 @@ export function formatDateTime(value: Date) {
   });
 }
 
+export function formatTime(value: Date) {
+  return value.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 export function formatAddress(property: {
   addressLine1: string;
   addressLine2?: string | null;

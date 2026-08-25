@@ -194,6 +194,8 @@ model Job {
   estimateId  String?
   status      String    @default("SCHEDULED")
   scheduledAt DateTime?
+  /// Expected duration in minutes. Null means duration is not set.
+  scheduledDurationMinutes Int?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
