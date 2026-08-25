@@ -596,11 +596,6 @@ export async function emailSentEstimate(
     return { error: "That estimate could not be emailed." };
   }
 
-  const config = getMailConfig();
-  if ("error" in config) {
-    return { error: config.error };
-  }
-
   const estimate = access.assertOwned(
     await prisma.estimate.findFirst({
       where: { id: estimateId, ...access.scope },
@@ -629,6 +624,11 @@ export async function emailSentEstimate(
       error:
         "No customer email on file. Add/copy the estimate link manually.",
     };
+  }
+
+  const config = getMailConfig();
+  if ("error" in config) {
+    return { error: config.error };
   }
 
   const email = buildEstimateReadyEmail({
