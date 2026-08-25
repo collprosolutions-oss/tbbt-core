@@ -5,11 +5,22 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
 import { requireBusinessAccess, type BusinessAccess } from "@/lib/access";
+import {
+  buildEstimateReadyEmail,
+  formatEstimateServiceAddress,
+} from "@/lib/estimate-mail";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
+import {
+  getMailConfig,
+  isUsableEmail,
+  senderFrom,
+  sendTransactionalEmail,
+} from "@/lib/mail";
 import { prisma } from "@/lib/prisma";
 
 export type EstimateActionState = {
   error?: string;
+  message?: string;
 };
 
 function readString(formData: FormData, key: string) {
@@ -572,4 +583,76 @@ export async function returnEstimateToDraft(
   revalidatePath(`/estimates/${estimate.id}`);
   revalidatePath(`/e/${estimate.publicToken}`);
   return {};
+}
+
+export async function emailSentEstimate(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  const access = await requireBusinessAccess();
+  const estimateId = readString(formData, "estimateId");
+
+  if (!estimateId) {
+    return { error: "That estimate could not be emailed." };
+  }
+
+  const config = getMailConfig();
+  if ("error" in config) {
+    return { error: config.error };
+  }
+
+  const estimate = access.assertOwned(
+    await prisma.estimate.findFirst({
+      where: { id: estimateId, ...access.scope },
+      include: {
+        customer: { select: { name: true, email: true } },
+        property: {
+          select: {
+            addressLine1: true,
+            addressLine2: true,
+            city: true,
+            region: true,
+            postalCode: true,
+          },
+        },
+      },
+    }),
+  );
+
+  if (estimate.status !== "SENT") {
+    return { error: "Only a sent estimate can be emailed." };
+  }
+
+  const recipient = estimate.customer?.email?.trim() ?? "";
+  if (!isUsableEmail(recipient)) {
+    return {
+      error:
+        "No customer email on file. Add/copy the estimate link manually.",
+    };
+  }
+
+  const email = buildEstimateReadyEmail({
+    businessName: access.workspace.business.name,
+    customerName: estimate.customer?.name ?? null,
+    total: estimate.total,
+    address: formatEstimateServiceAddress(estimate.property),
+    approveUrl: `${config.appUrl}/e/${estimate.publicToken}`,
+  });
+
+  const sent = await sendTransactionalEmail({
+    apiKey: config.apiKey,
+    from: senderFrom(access.workspace.business.name, config.fromAddress),
+    to: recipient,
+    subject: email.subject,
+    html: email.html,
+    text: email.text,
+    idempotencyKey: `estimate-ready/${estimate.id}/${randomUUID()}`,
+  });
+
+  if (sent.error) {
+    return { error: sent.error };
+  }
+
+  revalidatePath(`/estimates/${estimate.id}`);
+  return { message: `Estimate emailed to ${recipient}` };
 }

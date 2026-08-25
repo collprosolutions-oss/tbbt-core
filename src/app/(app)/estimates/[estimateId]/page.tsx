@@ -7,6 +7,7 @@ import { AddCustomLineForm } from "@/components/estimates/add-custom-line-form";
 import { ClearDraftEstimateButton } from "@/components/estimates/clear-draft-estimate-button";
 import { CopyEstimateLinkButton } from "@/components/estimates/copy-estimate-link-button";
 import { EditEstimateButton } from "@/components/estimates/edit-estimate-button";
+import { EmailEstimateButton } from "@/components/estimates/email-estimate-button";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
@@ -24,6 +25,7 @@ import {
 } from "@/components/ui/card";
 import { requireBusinessAccess } from "@/lib/access";
 import { formatAddress, formatMoney } from "@/lib/format";
+import { isUsableEmail } from "@/lib/mail";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -41,7 +43,7 @@ export default async function EstimateBuilderPage({
   const estimate = await prisma.estimate.findFirst({
     where: { id: estimateId, ...access.scope },
     include: {
-      customer: { select: { name: true } },
+      customer: { select: { name: true, email: true } },
       property: {
         select: {
           addressLine1: true,
@@ -75,6 +77,8 @@ export default async function EstimateBuilderPage({
   const isDraft = estimate.status === "DRAFT";
   const isSent = estimate.status === "SENT";
   const isApproved = estimate.status === "APPROVED";
+  const customerEmail = estimate.customer?.email ?? "";
+  const hasCustomerEmail = isUsableEmail(customerEmail);
 
   const catalogItems = await prisma.serviceCatalogItem.findMany({
     where: { ...access.scope, active: true },
@@ -142,6 +146,14 @@ export default async function EstimateBuilderPage({
             />
           ) : null}
           {isSent ? <EditEstimateButton estimateId={estimate.id} /> : null}
+          {isSent && hasCustomerEmail ? (
+            <EmailEstimateButton estimateId={estimate.id} />
+          ) : null}
+          {isSent && !hasCustomerEmail ? (
+            <p className="text-sm text-muted-foreground">
+              No customer email on file. Add/copy the estimate link manually.
+            </p>
+          ) : null}
           {estimate.jobs[0] ? (
             <Button asChild size="sm" variant="outline">
               <Link href={`/jobs/${estimate.jobs[0].id}`}>Open job</Link>
