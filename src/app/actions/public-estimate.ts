@@ -12,9 +12,11 @@ const GENERIC_ERROR = "This estimate is not available.";
 const NOT_READY_ERROR = "This estimate is not ready to approve.";
 
 export async function approveEstimate(
-  publicToken: string,
+  _prev: ApproveEstimateResult,
+  formData: FormData,
 ): Promise<ApproveEstimateResult> {
-  const token = publicToken.trim();
+  const raw = formData.get("publicToken");
+  const token = typeof raw === "string" ? raw.trim() : "";
   if (!token) {
     return { error: GENERIC_ERROR };
   }

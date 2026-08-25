@@ -1,9 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { approveEstimate } from "@/app/actions/public-estimate";
+import { useActionState } from "react";
+import {
+  approveEstimate,
+  type ApproveEstimateResult,
+} from "@/app/actions/public-estimate";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+
+const initialState: ApproveEstimateResult = {};
 
 export function ApproveEstimateButton({
   publicToken,
@@ -12,14 +17,14 @@ export function ApproveEstimateButton({
   publicToken: string;
   status: string;
 }) {
-  const [currentStatus, setCurrentStatus] = useState(status);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+  const [state, formAction, pending] = useActionState(
+    approveEstimate,
+    initialState,
+  );
+  const currentStatus = state.status ?? status;
 
   if (currentStatus === "APPROVED") {
-    return (
-      <p className="text-sm font-medium">Status: APPROVED</p>
-    );
+    return <p className="text-sm font-medium">Status: APPROVED</p>;
   }
 
   if (currentStatus !== "SENT") {
@@ -34,24 +39,11 @@ export function ApproveEstimateButton({
   }
 
   return (
-    <form
-      action={async () => {
-        setPending(true);
-        setError(null);
-        const result = await approveEstimate(publicToken);
-        setPending(false);
-        if (result.error) {
-          setError(result.error);
-          return;
-        }
-        if (result.status) {
-          setCurrentStatus(result.status);
-        }
-      }}
-    >
-      {error ? (
+    <form action={formAction}>
+      <input type="hidden" name="publicToken" value={publicToken} />
+      {state.error ? (
         <Alert variant="destructive" className="mb-3">
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{state.error}</AlertDescription>
         </Alert>
       ) : null}
       <p className="mb-3 text-sm">Status: SENT</p>

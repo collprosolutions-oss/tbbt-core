@@ -10,9 +10,19 @@ export type JobActionState = {
 };
 
 export async function createJobFromEstimate(
-  estimateId: string,
+  _prev: JobActionState,
+  formData: FormData,
 ): Promise<JobActionState> {
   const access = await requireBusinessAccess();
+  const estimateId =
+    typeof formData.get("estimateId") === "string"
+      ? formData.get("estimateId")!.toString().trim()
+      : "";
+
+  if (!estimateId) {
+    return { error: "That estimate could not become a job." };
+  }
+
   const estimate = access.assertOwned(
     await prisma.estimate.findFirst({
       where: { id: estimateId, ...access.scope },

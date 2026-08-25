@@ -17,15 +17,15 @@ export function EditEstimateButton({ estimateId }: { estimateId: string }) {
 
   return (
     <form
-      action={(formData) => {
+      action={formAction}
+      onSubmit={(event) => {
         if (
           !window.confirm(
             "Edit this estimate? It will return to draft. You must send it again before the customer can approve it.",
           )
         ) {
-          return;
+          event.preventDefault();
         }
-        formAction(formData);
       }}
     >
       <input type="hidden" name="estimateId" value={estimateId} />
