@@ -87,11 +87,15 @@ export default async function EstimateBuilderPage({
             /e/{estimate.publicToken}
           </Link>
         </p>
-        {estimate.serviceRequest?.description ? (
-          <p className="mt-2 text-sm text-foreground">
-            {estimate.serviceRequest.description}
-          </p>
-        ) : null}
+        {estimate.serviceRequestId ? (
+          estimate.serviceRequest?.description ? (
+            <p className="mt-2 text-sm text-foreground">
+              {estimate.serviceRequest.description}
+            </p>
+          ) : null
+        ) : (
+          <p className="mt-2 text-sm text-muted-foreground">Manual estimate</p>
+        )}
         <div className="mt-3">
           {estimate.jobs[0] ? (
             <Button asChild size="sm" variant="outline">

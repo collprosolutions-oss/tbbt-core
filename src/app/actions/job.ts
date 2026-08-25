@@ -44,6 +44,19 @@ export async function createJobFromEstimate(
       }),
     );
     propertyId = serviceRequest.propertyId;
+  } else if (estimate.customerId) {
+    const property = await prisma.property.findFirst({
+      where: {
+        customerId: estimate.customerId,
+        ...access.scope,
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, businessId: true },
+    });
+    if (property) {
+      access.assertOwned(property);
+      propertyId = property.id;
+    }
   }
 
   const job = await prisma.job.create({

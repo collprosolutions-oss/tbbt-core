@@ -33,18 +33,26 @@ export default async function EstimatesPage() {
       <PageHeader
         title="Estimates"
         description={`Estimates for ${access.workspace.business.name}.`}
-      />
+      >
+        <Button asChild size="sm">
+          <Link href="/estimates/new">Create Estimate</Link>
+        </Button>
+      </PageHeader>
 
       {estimates.length === 0 ? (
         <Card>
           <CardHeader>
             <CardTitle>No estimates yet</CardTitle>
             <CardDescription>
-              Open a service request and create an estimate from there.
+              Create a manual draft, or open a service request and estimate from
+              there.
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-wrap gap-2">
             <Button asChild size="sm">
+              <Link href="/estimates/new">Create Estimate</Link>
+            </Button>
+            <Button asChild size="sm" variant="outline">
               <Link href="/requests">Open requests</Link>
             </Button>
           </CardContent>
@@ -61,6 +69,9 @@ export default async function EstimatesPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusBadge status={estimate.status} />
                   <span>{formatMoney(estimate.total)}</span>
+                  {estimate.serviceRequestId ? null : (
+                    <span className="text-muted-foreground">Manual estimate</span>
+                  )}
                 </div>
                 <Button asChild size="sm" variant="outline">
                   <Link href={`/estimates/${estimate.id}`}>Open</Link>

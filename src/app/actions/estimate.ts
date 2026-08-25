@@ -67,6 +67,124 @@ export async function createEstimate(serviceRequestId: string) {
   redirect(`/estimates/${estimate.id}`);
 }
 
+async function findReusableCustomer(
+  db: {
+    customer: {
+      findFirst: (args: {
+        where: { businessId: string; email?: string; phone?: string };
+      }) => Promise<{ id: string; businessId: string } | null>;
+    };
+  },
+  businessId: string,
+  email: string,
+  phone: string,
+) {
+  if (email) {
+    const byEmail = await db.customer.findFirst({
+      where: { businessId, email },
+    });
+    if (byEmail) {
+      return byEmail;
+    }
+  }
+
+  if (phone) {
+    return db.customer.findFirst({
+      where: { businessId, phone },
+    });
+  }
+
+  return null;
+}
+
+export async function createManualEstimate(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  const access = await requireBusinessAccess();
+  const mode = readString(formData, "mode");
+
+  if (mode !== "existing" && mode !== "new") {
+    return { error: "Choose an existing customer or enter a new customer." };
+  }
+
+  if (mode === "existing") {
+    const selectedId = readString(formData, "customerId");
+    if (!selectedId) {
+      return { error: "Choose a customer." };
+    }
+
+    const customer = access.assertOwned(
+      await prisma.customer.findFirst({
+        where: { id: selectedId, ...access.scope },
+      }),
+    );
+
+    const estimate = await prisma.estimate.create({
+      data: {
+        businessId: access.businessId,
+        customerId: customer.id,
+        total: new Prisma.Decimal(0),
+        publicToken: randomUUID(),
+      },
+    });
+
+    revalidatePath("/estimates");
+    redirect(`/estimates/${estimate.id}`);
+  }
+
+  const name = readString(formData, "name");
+  const email = readString(formData, "email").toLowerCase();
+  const phone = readString(formData, "phone");
+  const address = readString(formData, "address");
+
+  if (!name) {
+    return { error: "Customer name is required." };
+  }
+
+  const estimate = await prisma.$transaction(async (tx) => {
+    const existing = await findReusableCustomer(
+      tx,
+      access.businessId,
+      email,
+      phone,
+    );
+    const customer = existing
+      ? access.assertOwned(existing)
+      : await tx.customer.create({
+          data: {
+            businessId: access.businessId,
+            name,
+            email: email || null,
+            phone: phone || null,
+          },
+        });
+
+    if (address) {
+      await tx.property.create({
+        data: {
+          businessId: access.businessId,
+          customerId: customer.id,
+          addressLine1: address,
+        },
+      });
+    }
+
+    return tx.estimate.create({
+      data: {
+        businessId: access.businessId,
+        customerId: customer.id,
+        total: new Prisma.Decimal(0),
+        publicToken: randomUUID(),
+      },
+    });
+  });
+
+  revalidatePath("/estimates");
+  revalidatePath("/customers");
+  redirect(`/estimates/${estimate.id}`);
+}
+
 export async function addCatalogLineItem(
   _prev: EstimateActionState,
   formData: FormData,
