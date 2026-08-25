@@ -115,9 +115,6 @@ export default async function JobPage({
               <Link href={`/invoices/${invoice.id}`}>Open Invoice</Link>
             </Button>
           ) : null}
-          {isCompleted && !invoice ? (
-            <CreateInvoiceButton jobId={job.id} />
-          ) : null}
           <RecordNav
             customerId={job.customerId}
             backHref="/jobs"
