@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { requireBusinessAccess } from "@/lib/access";
-import { planStarterCatalogInstall } from "@/lib/handyman-starter-catalog";
+import {
+  planStarterCatalogInstall,
+  starterPricingMode,
+} from "@/lib/handyman-starter-catalog";
+import { parsePricingMode } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
 import { isActiveTrade } from "@/lib/trades";
 
@@ -25,13 +29,27 @@ function parsePrice(raw: string) {
   }
   try {
     const price = new Prisma.Decimal(raw);
-    if (price.isNaN() || price.lt(0)) {
+    if (price.isNaN() || price.lte(0)) {
       return null;
     }
     return price;
   } catch {
     return null;
   }
+}
+
+function catalogPriceForMode(mode: string, rawPrice: string) {
+  if (mode === "CUSTOM_QUOTE") {
+    return { ok: true as const, price: null };
+  }
+  const price = parsePrice(rawPrice);
+  if (!price) {
+    return {
+      ok: false as const,
+      error: "Enter a valid price for this pricing mode.",
+    };
+  }
+  return { ok: true as const, price };
 }
 
 export async function createServiceCatalogItem(
@@ -41,17 +59,25 @@ export async function createServiceCatalogItem(
   const access = await requireBusinessAccess();
   const name = readString(formData, "name");
   const description = readString(formData, "description");
-  const price = parsePrice(readString(formData, "price"));
+  const pricingMode = parsePricingMode(readString(formData, "pricingMode"));
+  const priced = catalogPriceForMode(
+    pricingMode ?? "",
+    readString(formData, "price"),
+  );
 
-  if (!name || !price) {
-    return { error: "Name and a valid price are required." };
+  if (!name || !pricingMode) {
+    return { error: "Name and pricing mode are required." };
+  }
+  if (!priced.ok) {
+    return { error: priced.error };
   }
 
   await prisma.serviceCatalogItem.create({
     data: {
       businessId: access.businessId,
       name,
-      price,
+      pricingMode,
+      price: priced.price,
       description: description || null,
     },
   });
@@ -68,10 +94,17 @@ export async function updateServiceCatalogItem(
   const id = readString(formData, "id");
   const name = readString(formData, "name");
   const description = readString(formData, "description");
-  const price = parsePrice(readString(formData, "price"));
+  const pricingMode = parsePricingMode(readString(formData, "pricingMode"));
+  const priced = catalogPriceForMode(
+    pricingMode ?? "",
+    readString(formData, "price"),
+  );
 
-  if (!id || !name || !price) {
-    return { error: "Name and a valid price are required." };
+  if (!id || !name || !pricingMode) {
+    return { error: "Name and pricing mode are required." };
+  }
+  if (!priced.ok) {
+    return { error: priced.error };
   }
 
   const item = access.assertOwned(
@@ -84,7 +117,8 @@ export async function updateServiceCatalogItem(
     where: { id: item.id },
     data: {
       name,
-      price,
+      pricingMode,
+      price: priced.price,
       description: description || null,
     },
   });
@@ -137,7 +171,11 @@ export async function installHandymanStarterCatalog(): Promise<CatalogActionStat
             businessId: access.businessId,
             name: service.name,
             description: service.description,
-            price: new Prisma.Decimal(service.startingPrice),
+            pricingMode: starterPricingMode(service),
+            price:
+              service.startingPrice == null
+                ? null
+                : new Prisma.Decimal(service.startingPrice),
             active: true,
           },
         }),

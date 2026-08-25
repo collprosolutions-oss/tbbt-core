@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { CatalogItemRow } from "@/components/catalog/catalog-item-row";
 import { CreateCatalogItemForm } from "@/components/catalog/create-catalog-item-form";
 import { InstallStarterCatalogForm } from "@/components/catalog/install-starter-catalog-form";
+import { ServiceCategoryGroup } from "@/components/catalog/service-category-group";
 import { PageHeader } from "@/components/page-header";
 import {
   Card,
@@ -11,11 +12,14 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireBusinessAccess } from "@/lib/access";
-import { formatMoney } from "@/lib/format";
 import {
   groupServicesByStarterCategory,
+  HANDYMAN_STARTER_SERVICES,
+  isImportableStarterService,
   planStarterCatalogInstall,
+  starterPricingMode,
 } from "@/lib/handyman-starter-catalog";
+import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
 import { isActiveTrade } from "@/lib/trades";
 
@@ -34,12 +38,21 @@ export default async function ServicesPage() {
     ? planStarterCatalogInstall(items.map((item) => item.name))
     : null;
   const groupedItems = groupServicesByStarterCategory(items);
+  const groupedStarter = showStarterCatalog
+    ? groupServicesByStarterCategory(HANDYMAN_STARTER_SERVICES)
+    : [];
+  const skipKeys = new Set(
+    (starterPlan?.skip ?? []).map((service) => service.templateKey),
+  );
+  const pendingKeys = new Set(
+    (starterPlan?.pending ?? []).map((service) => service.templateKey),
+  );
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <PageHeader
         title="Services"
-        description={`Handyman price list for ${access.workspace.business.name}. These are starting prices. An estimate can still be adjusted for the actual job.`}
+        description={`Handyman price list for ${access.workspace.business.name}. Each service can be a fixed price, a starting price, or a custom quote.`}
       />
 
       {starterPlan ? (
@@ -47,51 +60,52 @@ export default async function ServicesPage() {
           <CardHeader>
             <CardTitle>Handyman starter catalog</CardTitle>
             <CardDescription>
-              Copies starter services into this business only. Existing services
-              are left unchanged. Catalog prices later do not change estimates
-              already written.
+              Template recommendations for this business only. Import copies
+              them once. Re-importing skips names already on your list and does
+              not change your prices, pricing mode, descriptions, or active
+              status.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
-            <div>
-              <p className="font-medium">Will be added</p>
-              {starterPlan.add.length === 0 ? (
-                <p className="text-muted-foreground">
-                  No new priced starter services to add.
-                </p>
-              ) : (
-                <ul className="mt-1 list-disc space-y-1 pl-5">
-                  {starterPlan.add.map((service) => (
-                    <li key={service.templateKey}>
-                      {service.name} — {formatMoney(service.startingPrice)}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div>
-              <p className="font-medium">Already on your list (skipped)</p>
-              {starterPlan.skip.length === 0 ? (
-                <p className="text-muted-foreground">None yet.</p>
-              ) : (
-                <ul className="mt-1 list-disc space-y-1 pl-5">
-                  {starterPlan.skip.map((service) => (
-                    <li key={service.templateKey}>{service.name}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div>
-              <p className="font-medium">Not imported yet</p>
-              <p className="text-muted-foreground">
-                No approved starting price. These stay in the template until a
-                price is set.
-              </p>
-              <ul className="mt-1 list-disc space-y-1 pl-5">
-                {starterPlan.pending.map((service) => (
-                  <li key={service.templateKey}>{service.name}</li>
-                ))}
-              </ul>
+            <p>
+              {starterPlan.add.length} will be added. {starterPlan.skip.length}{" "}
+              already on your list.
+              {starterPlan.pending.length > 0
+                ? ` ${starterPlan.pending.length} are not importable yet.`
+                : null}
+            </p>
+            <div className="space-y-3">
+              {groupedStarter.map((group) => (
+                <ServiceCategoryGroup
+                  key={`starter-${group.category}`}
+                  category={group.category}
+                  count={group.items.length}
+                >
+                  <ul className="space-y-2">
+                    {group.items.map((service) => {
+                      const status = skipKeys.has(service.templateKey)
+                        ? "Already on your list"
+                        : pendingKeys.has(service.templateKey) ||
+                            !isImportableStarterService(service)
+                          ? "Not imported yet"
+                          : "Will be added";
+                      return (
+                        <li key={service.templateKey}>
+                          <p className="font-medium">{service.name}</p>
+                          <p className="text-muted-foreground">
+                            {formatCatalogPriceLabel(
+                              starterPricingMode(service),
+                              service.startingPrice,
+                            )}
+                            {" · "}
+                            {status}
+                          </p>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </ServiceCategoryGroup>
+              ))}
             </div>
             <InstallStarterCatalogForm />
           </CardContent>
@@ -102,8 +116,9 @@ export default async function ServicesPage() {
         <CardHeader>
           <CardTitle>Add service</CardTitle>
           <CardDescription>
-            Name and starting price are required. Changing a price later does
-            not change amounts already on estimates, jobs, or invoices.
+            Choose Fixed, Starting at, or Custom Quote. Changing a saved service
+            later does not change amounts already on estimates, jobs, or
+            invoices.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -124,36 +139,30 @@ export default async function ServicesPage() {
       ) : (
         <div className="space-y-3">
           {groupedItems.map((group) => (
-            <details
+            <ServiceCategoryGroup
               key={group.category}
-              className="rounded-xl border bg-card text-card-foreground shadow-sm"
+              category={group.category}
+              count={group.items.length}
             >
-              <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-                <span className="inline-flex w-[calc(100%-1.25rem)] items-center justify-between gap-3 align-middle">
-                  <span>{group.category}</span>
-                  <span className="shrink-0 font-normal text-muted-foreground">
-                    {group.items.length}{" "}
-                    {group.items.length === 1 ? "service" : "services"}
-                  </span>
-                </span>
-              </summary>
-              <div className="space-y-3 border-t px-4 py-3">
-                {group.items.map((item) => (
-                  <Card key={item.id} className="shadow-none">
-                    <CardContent className="pt-4">
-                      <CatalogItemRow
-                        id={item.id}
-                        name={item.name}
-                        price={item.price.toString()}
-                        displayPrice={formatMoney(item.price)}
-                        description={item.description ?? ""}
-                        active={item.active}
-                      />
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </details>
+              {group.items.map((item) => (
+                <Card key={item.id} className="shadow-none">
+                  <CardContent className="pt-4">
+                    <CatalogItemRow
+                      id={item.id}
+                      name={item.name}
+                      pricingMode={item.pricingMode}
+                      price={item.price?.toString() ?? ""}
+                      displayPrice={formatCatalogPriceLabel(
+                        item.pricingMode,
+                        item.price,
+                      )}
+                      description={item.description ?? ""}
+                      active={item.active}
+                    />
+                  </CardContent>
+                </Card>
+              ))}
+            </ServiceCategoryGroup>
           ))}
         </div>
       )}

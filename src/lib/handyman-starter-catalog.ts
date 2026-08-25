@@ -1,24 +1,22 @@
 /**
  * Handyman starter catalog templates.
  * These are per-business copies after import, not a shared live price list.
- * Services without an approved startingPrice are listed but not imported.
- * Prices are starting labor only, not hourly rates and not materials.
+ * Starter prices are templates only. CUSTOM_QUOTE services import with no
+ * dollar amount. Prices are labor recommendations, not hourly rates or materials.
  */
 
 export const HANDYMAN_CATALOG_CATEGORIES = [
   "Doors & Locks",
-  "Walls & Drywall",
   "Mounting & Hanging",
-  "Fans & Fixtures",
-  "Furniture & Assembly",
+  "Walls & Drywall",
   "Trim & Carpentry",
-  "Exterior Repairs",
   "Bathroom / Caulking / Accessories",
+  "Furniture & Assembly",
+  "Exterior Repairs",
   "Cabinets / Kitchen",
-  "Caulking & Sealing",
-  "General Home Repairs",
-  "Safety / Accessibility",
+  "Fans & Fixtures",
   "Punch Lists / Small Jobs",
+  "General Home Repairs",
 ] as const;
 
 export type HandymanCatalogCategory =
@@ -30,6 +28,7 @@ export type HandymanStarterService = {
   name: string;
   description: string;
   startingPrice: number | null;
+  pricingMode?: "FIXED" | "STARTING_AT" | "CUSTOM_QUOTE";
 };
 
 export const HANDYMAN_STARTER_SERVICES: HandymanStarterService[] = [
@@ -248,6 +247,24 @@ export const HANDYMAN_STARTER_SERVICES: HandymanStarterService[] = [
     startingPrice: 125,
     description:
       "Repair a small section of interior molding. Long runs, custom profiles, or finish matching may increase the price.",
+  },
+  {
+    templateKey: "decorative-wall-paneling-finish-carpentry",
+    category: "Trim & Carpentry",
+    name: "Decorative Wall Paneling & Finish Carpentry",
+    startingPrice: null,
+    pricingMode: "CUSTOM_QUOTE",
+    description:
+      "Installation of decorative wall paneling, accent panels, trim, casing, build-outs, gable sections, transitions, and related finish carpentry. Pricing depends on wall dimensions, openings, material type and thickness, trim layout, access, preparation, cuts, and overall project complexity.",
+  },
+  {
+    templateKey: "interior-trim-finish-carpentry",
+    category: "Trim & Carpentry",
+    name: "Interior Trim & Finish Carpentry",
+    startingPrice: null,
+    pricingMode: "CUSTOM_QUOTE",
+    description:
+      "Custom trim installation and repair including casing, baseboard, panel trim, transitions, build-ups, finish details, and other small custom carpentry projects. Final pricing depends on dimensions, materials, existing conditions, access, and finish complexity.",
   },
   {
     templateKey: "tub-shower-recaulk",
@@ -527,23 +544,34 @@ export function catalogNameKey(name: string) {
   return name.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-export function importableStarterServices() {
-  return HANDYMAN_STARTER_SERVICES.filter(
-    (service): service is HandymanStarterService & { startingPrice: number } =>
-      service.startingPrice != null,
+export function starterPricingMode(service: HandymanStarterService) {
+  if (service.pricingMode) {
+    return service.pricingMode;
+  }
+  return service.startingPrice == null ? "CUSTOM_QUOTE" : "STARTING_AT";
+}
+
+export function isImportableStarterService(service: HandymanStarterService) {
+  return (
+    starterPricingMode(service) === "CUSTOM_QUOTE" ||
+    service.startingPrice != null
   );
+}
+
+export function importableStarterServices() {
+  return HANDYMAN_STARTER_SERVICES.filter(isImportableStarterService);
 }
 
 export function pendingStarterServices() {
   return HANDYMAN_STARTER_SERVICES.filter(
-    (service) => service.startingPrice == null,
+    (service) => !isImportableStarterService(service),
   );
 }
 
 export function planStarterCatalogInstall(existingNames: string[]) {
   const existing = new Set(existingNames.map(catalogNameKey));
-  const add: Array<HandymanStarterService & { startingPrice: number }> = [];
-  const skip: Array<HandymanStarterService & { startingPrice: number }> = [];
+  const add: HandymanStarterService[] = [];
+  const skip: HandymanStarterService[] = [];
 
   for (const service of importableStarterServices()) {
     if (existing.has(catalogNameKey(service.name))) {
@@ -570,12 +598,18 @@ export function starterCategoryForName(name: string) {
   return match?.category ?? OTHER_SERVICES_CATEGORY;
 }
 
-export function groupServicesByStarterCategory<T extends { name: string }>(
-  items: T[],
-) {
+export function groupServicesByStarterCategory<
+  T extends { name: string; id?: string; templateKey?: string },
+>(items: T[]) {
   const groups = new Map<string, T[]>();
+  const seen = new Set<string>();
 
   for (const item of items) {
+    const dedupeKey = item.id ?? item.templateKey ?? catalogNameKey(item.name);
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
     const category = starterCategoryForName(item.name);
     const current = groups.get(category);
     if (current) {

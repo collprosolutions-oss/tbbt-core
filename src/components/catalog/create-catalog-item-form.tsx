@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import {
   createServiceCatalogItem,
   type CatalogActionState,
@@ -17,6 +17,7 @@ export function CreateCatalogItemForm() {
     createServiceCatalogItem,
     initialState,
   );
+  const [mode, setMode] = useState("STARTING_AT");
 
   return (
     <form action={action} className="space-y-3">
@@ -30,9 +31,25 @@ export function CreateCatalogItemForm() {
         <Input id="name" name="name" required />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="price">Starting price</Label>
-        <Input id="price" name="price" inputMode="decimal" required />
+        <Label htmlFor="pricingMode">Pricing mode</Label>
+        <select
+          id="pricingMode"
+          name="pricingMode"
+          value={mode}
+          onChange={(event) => setMode(event.target.value)}
+          className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+        >
+          <option value="STARTING_AT">Starting at</option>
+          <option value="FIXED">Fixed</option>
+          <option value="CUSTOM_QUOTE">Custom Quote</option>
+        </select>
       </div>
+      {mode === "CUSTOM_QUOTE" ? null : (
+        <div className="space-y-2">
+          <Label htmlFor="price">Price</Label>
+          <Input id="price" name="price" inputMode="decimal" required />
+        </div>
+      )}
       <div className="space-y-2">
         <Label htmlFor="description">Description (optional)</Label>
         <textarea

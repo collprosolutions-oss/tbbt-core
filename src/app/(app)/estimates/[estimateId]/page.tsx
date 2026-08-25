@@ -26,6 +26,7 @@ import {
 import { requireBusinessAccess } from "@/lib/access";
 import { formatAddress, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
+import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -256,8 +257,9 @@ export default async function EstimateBuilderPage({
         <CardHeader>
           <CardTitle>Add catalog item</CardTitle>
           <CardDescription>
-            Uses the current starting price. The line is saved as a snapshot
-            and will not change if the catalog price is edited later.
+            Uses the current catalog price. Custom Quote services need a job
+            price when added. The line is saved as a snapshot and will not
+            change if the catalog is edited later.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -266,7 +268,8 @@ export default async function EstimateBuilderPage({
             items={catalogItems.map((item) => ({
               id: item.id,
               name: item.name,
-              price: formatMoney(item.price),
+              pricingMode: item.pricingMode,
+              priceLabel: formatCatalogPriceLabel(item.pricingMode, item.price),
             }))}
           />
         </CardContent>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import {
   addCatalogLineItem,
   type EstimateActionState,
@@ -15,7 +15,8 @@ const initialState: EstimateActionState = {};
 type CatalogOption = {
   id: string;
   name: string;
-  price: string;
+  pricingMode: string;
+  priceLabel: string;
 };
 
 export function AddCatalogLineForm({
@@ -26,6 +27,12 @@ export function AddCatalogLineForm({
   items: CatalogOption[];
 }) {
   const [state, action, pending] = useActionState(addCatalogLineItem, initialState);
+  const [selectedId, setSelectedId] = useState(items[0]?.id ?? "");
+  const selected = useMemo(
+    () => items.find((item) => item.id === selectedId) ?? items[0],
+    [items, selectedId],
+  );
+  const needsJobPrice = selected?.pricingMode === "CUSTOM_QUOTE";
 
   if (items.length === 0) {
     return (
@@ -49,15 +56,28 @@ export function AddCatalogLineForm({
           id="catalogItemId"
           name="catalogItemId"
           required
+          value={selectedId}
+          onChange={(event) => setSelectedId(event.target.value)}
           className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
         >
           {items.map((item) => (
             <option key={item.id} value={item.id}>
-              {item.name} — {item.price}
+              {item.name} — {item.priceLabel}
             </option>
           ))}
         </select>
       </div>
+      {needsJobPrice ? (
+        <div className="space-y-2">
+          <Label htmlFor="catalog-unitPrice">Price for this job</Label>
+          <Input
+            id="catalog-unitPrice"
+            name="unitPrice"
+            inputMode="decimal"
+            required
+          />
+        </div>
+      ) : null}
       <div className="space-y-2">
         <Label htmlFor="catalog-quantity">Quantity</Label>
         <Input

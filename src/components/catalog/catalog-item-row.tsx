@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import {
   setServiceCatalogItemActive,
   updateServiceCatalogItem,
@@ -17,6 +17,7 @@ const initialState: CatalogActionState = {};
 type CatalogItemRowProps = {
   id: string;
   name: string;
+  pricingMode: string;
   price: string;
   displayPrice: string;
   description: string;
@@ -26,6 +27,7 @@ type CatalogItemRowProps = {
 export function CatalogItemRow({
   id,
   name,
+  pricingMode,
   price,
   displayPrice,
   description,
@@ -35,15 +37,14 @@ export function CatalogItemRow({
     updateServiceCatalogItem,
     initialState,
   );
+  const [mode, setMode] = useState(pricingMode);
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="font-medium">{name}</p>
-          <p className="text-sm text-muted-foreground">
-            Starting price {displayPrice}
-          </p>
+          <p className="text-sm text-muted-foreground">{displayPrice}</p>
         </div>
         <Badge variant={active ? "secondary" : "outline"}>
           {active ? "Active" : "Inactive"}
@@ -63,17 +64,33 @@ export function CatalogItemRow({
           <Input id={`name-${id}`} name="name" defaultValue={name} required />
         </div>
         <div className="space-y-2">
-          <Label htmlFor={`price-${id}`}>Starting price</Label>
-          <Input
-            id={`price-${id}`}
-            name="price"
-            inputMode="decimal"
-            defaultValue={price}
-            required
-          />
+          <Label htmlFor={`pricingMode-${id}`}>Pricing mode</Label>
+          <select
+            id={`pricingMode-${id}`}
+            name="pricingMode"
+            value={mode}
+            onChange={(event) => setMode(event.target.value)}
+            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+          >
+            <option value="STARTING_AT">Starting at</option>
+            <option value="FIXED">Fixed</option>
+            <option value="CUSTOM_QUOTE">Custom Quote</option>
+          </select>
         </div>
+        {mode === "CUSTOM_QUOTE" ? null : (
+          <div className="space-y-2">
+            <Label htmlFor={`price-${id}`}>Price</Label>
+            <Input
+              id={`price-${id}`}
+              name="price"
+              inputMode="decimal"
+              defaultValue={price}
+              required
+            />
+          </div>
+        )}
         <div className="space-y-2">
-          <Label htmlFor={`description-${id}`}>Description (optional)</Label>
+          <Label htmlFor={`description-${id}`}>Description</Label>
           <textarea
             id={`description-${id}`}
             name="description"

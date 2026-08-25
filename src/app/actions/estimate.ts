@@ -295,7 +295,16 @@ export async function addCatalogLineItem(
     return { error: "That service is not active." };
   }
 
-  const unitPrice = catalogItem.price;
+  let unitPrice = catalogItem.price;
+  if (catalogItem.pricingMode === "CUSTOM_QUOTE") {
+    unitPrice = parseDecimal(readString(formData, "unitPrice"));
+    if (!unitPrice) {
+      return { error: "Enter the price for this job." };
+    }
+  } else if (!unitPrice || unitPrice.lte(0)) {
+    return { error: "That service has no saved price." };
+  }
+
   const total = quantity.mul(unitPrice);
 
   await prisma.$transaction(async (tx) => {

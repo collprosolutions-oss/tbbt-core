@@ -130,7 +130,9 @@ model ServiceCatalogItem {
   businessId  String
   name        String
   description String?
-  price       Decimal
+  /// FIXED | STARTING_AT | CUSTOM_QUOTE. Existing rows default to STARTING_AT.
+  pricingMode String   @default("STARTING_AT")
+  price       Decimal?
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
