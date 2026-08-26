@@ -12,50 +12,56 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireBusinessAccess } from "@/lib/access";
-import { formatMoney } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
   title: "Dashboard",
 };
 
-const COUNT_CARDS = [
-  { key: "openRequests", label: "Open requests", href: "/requests" },
-  { key: "draftEstimates", label: "Draft estimates", href: "/estimates" },
-  { key: "approvedEstimates", label: "Approved estimates", href: "/estimates" },
-  { key: "unscheduledJobs", label: "Unscheduled jobs", href: "/jobs" },
-  { key: "scheduledJobs", label: "Scheduled jobs", href: "/jobs" },
-  { key: "completedJobs", label: "Completed jobs", href: "/jobs" },
-  { key: "draftInvoices", label: "Draft invoices", href: "/invoices" },
-  { key: "paidInvoices", label: "Paid invoices", href: "/invoices" },
-] as const;
+type CountCard = {
+  key: string;
+  label: string;
+  href: string;
+  value: number | string;
+};
 
 export default async function DashboardPage() {
   const access = await requireBusinessAccess();
   const [
     openRequests,
     draftEstimates,
-    approvedEstimates,
+    sentEstimates,
     unscheduledJobs,
     scheduledJobs,
-    completedJobs,
+    inProgressJobs,
     draftInvoices,
-    paidInvoices,
+    sentInvoices,
+    outstandingInvoices,
     requestsWithoutEstimate,
     attentionDraftEstimates,
     attentionUnscheduledJobs,
     attentionUnpaidInvoices,
+    recentCustomers,
+    recentJobs,
+    recentRequests,
   ] = await Promise.all([
     prisma.serviceRequest.count({
       where: { ...access.scope, status: "OPEN" },
     }),
     prisma.estimate.count({ where: { ...access.scope, status: "DRAFT" } }),
-    prisma.estimate.count({ where: { ...access.scope, status: "APPROVED" } }),
+    prisma.estimate.count({ where: { ...access.scope, status: "SENT" } }),
     prisma.job.count({ where: { ...access.scope, status: "UNSCHEDULED" } }),
     prisma.job.count({ where: { ...access.scope, status: "SCHEDULED" } }),
-    prisma.job.count({ where: { ...access.scope, status: "COMPLETED" } }),
+    prisma.job.count({ where: { ...access.scope, status: "IN_PROGRESS" } }),
     prisma.invoice.count({ where: { ...access.scope, status: "DRAFT" } }),
-    prisma.invoice.count({ where: { ...access.scope, status: "PAID" } }),
+    prisma.invoice.count({ where: { ...access.scope, status: "SENT" } }),
+    // Outstanding uses the invoice's own stored total, never a recomputed
+    // estimate/catalog price, and only SENT invoices (never DRAFT or PAID).
+    prisma.invoice.aggregate({
+      where: { ...access.scope, status: "SENT" },
+      _sum: { total: true },
+    }),
     prisma.serviceRequest.findMany({
       where: { ...access.scope, estimates: { none: {} } },
       select: {
@@ -95,24 +101,80 @@ export default async function DashboardPage() {
       orderBy: { createdAt: "desc" },
       take: 5,
     }),
+    prisma.customer.findMany({
+      where: access.scope,
+      select: { id: true, name: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+    }),
+    prisma.job.findMany({
+      where: access.scope,
+      select: {
+        id: true,
+        status: true,
+        createdAt: true,
+        customer: { select: { name: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+    }),
+    prisma.serviceRequest.findMany({
+      where: access.scope,
+      select: {
+        id: true,
+        createdAt: true,
+        customer: { select: { name: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+    }),
   ]);
 
-  const counts = {
-    openRequests,
-    draftEstimates,
-    approvedEstimates,
-    unscheduledJobs,
-    scheduledJobs,
-    completedJobs,
-    draftInvoices,
-    paidInvoices,
-  };
+  const outstandingTotal = outstandingInvoices._sum.total ?? 0;
+
+  const requestCards: CountCard[] = [
+    { key: "openRequests", label: "Open requests", href: "/requests", value: openRequests },
+  ];
+  const estimateCards: CountCard[] = [
+    { key: "draftEstimates", label: "Draft estimates", href: "/estimates", value: draftEstimates },
+    {
+      key: "sentEstimates",
+      label: "Sent, awaiting approval",
+      href: "/estimates",
+      value: sentEstimates,
+    },
+  ];
+  const jobCards: CountCard[] = [
+    { key: "unscheduledJobs", label: "Unscheduled jobs", href: "/jobs", value: unscheduledJobs },
+    {
+      key: "scheduledJobs",
+      label: "Upcoming scheduled jobs",
+      href: "/jobs",
+      value: scheduledJobs,
+    },
+    { key: "inProgressJobs", label: "Jobs in progress", href: "/jobs", value: inProgressJobs },
+  ];
+  const invoiceCards: CountCard[] = [
+    { key: "draftInvoices", label: "Draft invoices", href: "/invoices", value: draftInvoices },
+    { key: "sentInvoices", label: "Sent, unpaid", href: "/invoices", value: sentInvoices },
+    {
+      key: "outstandingTotal",
+      label: "Outstanding (sent, unpaid)",
+      href: "/invoices",
+      value: formatMoney(outstandingTotal),
+    },
+  ];
 
   const hasAttention =
     requestsWithoutEstimate.length > 0 ||
     attentionDraftEstimates.length > 0 ||
     attentionUnscheduledJobs.length > 0 ||
     attentionUnpaidInvoices.length > 0;
+
+  const hasRecentActivity =
+    recentCustomers.length > 0 ||
+    recentJobs.length > 0 ||
+    recentRequests.length > 0;
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -121,20 +183,10 @@ export default async function DashboardPage() {
         description={`Work for ${access.workspace.business.name}.`}
       />
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        {COUNT_CARDS.map((card) => (
-          <Link key={card.key} href={card.href} className="block">
-            <Card className="h-full transition-colors hover:bg-muted/40">
-              <CardHeader>
-                <CardDescription>{card.label}</CardDescription>
-                <CardTitle className="text-3xl tabular-nums">
-                  {counts[card.key]}
-                </CardTitle>
-              </CardHeader>
-            </Card>
-          </Link>
-        ))}
-      </div>
+      <DashboardSection title="Requests" cards={requestCards} />
+      <DashboardSection title="Estimates" cards={estimateCards} />
+      <DashboardSection title="Jobs" cards={jobCards} />
+      <DashboardSection title="Invoices" cards={invoiceCards} />
 
       <Card>
         <CardHeader>
@@ -205,6 +257,93 @@ export default async function DashboardPage() {
           )}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent activity</CardTitle>
+          <CardDescription>
+            The most recently added customers, jobs, and requests.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {!hasRecentActivity ? (
+            <p className="text-sm text-muted-foreground">
+              No activity yet.
+            </p>
+          ) : (
+            <>
+              {recentCustomers.length > 0 ? (
+                <AttentionGroup title="Recent customers">
+                  {recentCustomers.map((customer) => (
+                    <AttentionRow
+                      key={customer.id}
+                      name={customer.name}
+                      meta={formatDate(customer.createdAt)}
+                      href={`/customers/${customer.id}`}
+                      action="Open"
+                    />
+                  ))}
+                </AttentionGroup>
+              ) : null}
+              {recentJobs.length > 0 ? (
+                <AttentionGroup title="Recent jobs">
+                  {recentJobs.map((job) => (
+                    <AttentionRow
+                      key={job.id}
+                      name={job.customer?.name ?? "Customer"}
+                      meta={formatDateTime(job.createdAt)}
+                      status={job.status}
+                      href={`/jobs/${job.id}`}
+                      action="Open"
+                    />
+                  ))}
+                </AttentionGroup>
+              ) : null}
+              {recentRequests.length > 0 ? (
+                <AttentionGroup title="Recent requests">
+                  {recentRequests.map((request) => (
+                    <AttentionRow
+                      key={request.id}
+                      name={request.customer?.name ?? "Customer"}
+                      meta={formatDateTime(request.createdAt)}
+                      href="/requests"
+                      action="Open requests"
+                    />
+                  ))}
+                </AttentionGroup>
+              ) : null}
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function DashboardSection({
+  title,
+  cards,
+}: {
+  title: string;
+  cards: CountCard[];
+}) {
+  return (
+    <div className="space-y-2">
+      <h2 className="text-sm font-medium text-muted-foreground">{title}</h2>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {cards.map((card) => (
+          <Link key={card.key} href={card.href} className="block">
+            <Card className="h-full transition-colors hover:bg-muted/40">
+              <CardHeader>
+                <CardDescription>{card.label}</CardDescription>
+                <CardTitle className="text-2xl tabular-nums">
+                  {card.value}
+                </CardTitle>
+              </CardHeader>
+            </Card>
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }
