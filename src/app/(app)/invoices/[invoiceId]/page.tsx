@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { MarkInvoicePaidButton } from "@/components/invoices/mark-invoice-paid-button";
+import { MarkInvoicePaidForm } from "@/components/invoices/mark-invoice-paid-form";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
 import { PageHeader } from "@/components/page-header";
 import { RecordNav } from "@/components/record-nav";
@@ -13,7 +13,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireBusinessAccess } from "@/lib/access";
-import { formatMoney } from "@/lib/format";
+import { formatDateTime, formatMoney } from "@/lib/format";
+import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -57,7 +58,7 @@ export default async function InvoicePage({
       >
         <div className="flex flex-wrap items-center gap-2">
           {isDraft ? <MarkInvoiceSentButton invoiceId={invoice.id} /> : null}
-          {isSent ? <MarkInvoicePaidButton invoiceId={invoice.id} /> : null}
+          {isSent ? <MarkInvoicePaidForm invoiceId={invoice.id} /> : null}
           <RecordNav
             customerId={invoice.customerId}
             backHref="/invoices"
@@ -73,10 +74,23 @@ export default async function InvoicePage({
         <CardContent className="space-y-2 text-sm">
           <p>Customer: {invoice.customer?.name ?? "None"}</p>
           <p>Invoice total: {formatMoney(invoice.total)}</p>
-          <p>
-            {isPaid ? "Payment received:" : "Amount due:"}{" "}
-            {formatMoney(invoice.total)}
-          </p>
+          <p>Amount due: {isPaid ? formatMoney(0) : formatMoney(invoice.total)}</p>
+          {isPaid ? (
+            <>
+              <p>Paid: Yes</p>
+              <p>
+                Paid date/time:{" "}
+                {invoice.paidAt ? formatDateTime(invoice.paidAt) : "Unknown"}
+              </p>
+              <p>
+                Payment method:{" "}
+                {paymentMethodLabel(invoice.paymentMethod) ?? "Unknown"}
+              </p>
+              {invoice.paymentReference ? (
+                <p>Payment reference: {invoice.paymentReference}</p>
+              ) : null}
+            </>
+          ) : null}
           <p>
             {isDraft
               ? "Mark this invoice sent once you've delivered it to the customer."

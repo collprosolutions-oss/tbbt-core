@@ -220,6 +220,12 @@ model Invoice {
   jobId      String?
   status     String   @default("DRAFT")
   total      Decimal  @default(0)
+  /// Set exactly once, when status transitions SENT -> PAID. Never overwritten afterward.
+  paidAt DateTime?
+  /// Owner-facing only: CASH | CHECK | ZELLE_BANK_TRANSFER | CARD_EXTERNAL | OTHER. Free-form string, not an enum.
+  paymentMethod String?
+  /// Owner-facing only optional note (e.g. check number). Never shown on public/customer pages.
+  paymentReference String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 

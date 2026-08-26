@@ -3,11 +3,17 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
+import { isPaymentMethodValue } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
 
 export type InvoiceActionState = {
   error?: string;
 };
+
+function readString(formData: FormData, key: string) {
+  const value = formData.get(key);
+  return typeof value === "string" ? value.trim() : "";
+}
 
 export async function createInvoiceFromJob(
   jobId: string,
@@ -95,15 +101,26 @@ export async function markInvoiceSent(
 }
 
 export async function markInvoicePaid(
-  invoiceId: string,
+  _prev: InvoiceActionState,
+  formData: FormData,
 ): Promise<InvoiceActionState> {
   const access = await requireBusinessAccess();
+  const invoiceId = readString(formData, "invoiceId");
+  const paymentMethod = readString(formData, "paymentMethod");
+  const paymentReference = readString(formData, "paymentReference");
+
+  if (!invoiceId) {
+    return { error: "That invoice could not be marked paid." };
+  }
+
   const invoice = access.assertOwned(
     await prisma.invoice.findFirst({
       where: { id: invoiceId, ...access.scope },
     }),
   );
 
+  // Already paid: no second payment action, and never overwrite the
+  // recorded paidAt/method/reference.
   if (invoice.status === "PAID") {
     return {};
   }
@@ -112,13 +129,22 @@ export async function markInvoicePaid(
     return { error: "Send the invoice before marking it paid." };
   }
 
+  if (!isPaymentMethodValue(paymentMethod)) {
+    return { error: "Choose a payment method." };
+  }
+
   const updated = await prisma.invoice.updateMany({
     where: {
       id: invoice.id,
       businessId: access.businessId,
       status: "SENT",
     },
-    data: { status: "PAID" },
+    data: {
+      status: "PAID",
+      paidAt: new Date(),
+      paymentMethod,
+      paymentReference: paymentReference || null,
+    },
   });
 
   if (updated.count !== 1) {

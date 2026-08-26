@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import { requireBusinessAccess } from "@/lib/access";
 import { formatDate, formatMoney } from "@/lib/format";
+import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -61,6 +62,11 @@ export default async function InvoicesPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusBadge status={invoice.status} />
                   <span>{formatMoney(invoice.total)}</span>
+                  {invoice.status === "PAID" ? (
+                    <span className="text-muted-foreground">
+                      {paymentMethodLabel(invoice.paymentMethod) ?? "Unknown"}
+                    </span>
+                  ) : null}
                 </div>
                 <Button asChild size="sm" variant="outline">
                   <Link href={`/invoices/${invoice.id}`}>Open</Link>
