@@ -5,6 +5,7 @@ const VARIANTS: Record<
   "default" | "secondary" | "outline"
 > = {
   OPEN: "secondary",
+  CONVERTED: "outline",
   DRAFT: "outline",
   SENT: "default",
   APPROVED: "secondary",

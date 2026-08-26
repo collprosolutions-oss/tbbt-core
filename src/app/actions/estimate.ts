@@ -64,18 +64,32 @@ export async function createEstimate(serviceRequestId: string) {
     redirect(`/estimates/${existing.id}`);
   }
 
-  const estimate = await prisma.estimate.create({
-    data: {
-      businessId: access.businessId,
-      serviceRequestId: request.id,
-      customerId: request.customerId,
-      propertyId: request.propertyId,
-      total: new Prisma.Decimal(0),
-      publicToken: randomUUID(),
-    },
+  const estimate = await prisma.$transaction(async (tx) => {
+    const created = await tx.estimate.create({
+      data: {
+        businessId: access.businessId,
+        serviceRequestId: request.id,
+        customerId: request.customerId,
+        propertyId: request.propertyId,
+        total: new Prisma.Decimal(0),
+        publicToken: randomUUID(),
+      },
+    });
+
+    // An OPEN request that has become an estimate is no longer waiting on
+    // the owner to act on it, so it should stop counting as "open".
+    if (request.status === "OPEN") {
+      await tx.serviceRequest.update({
+        where: { id: request.id },
+        data: { status: "CONVERTED" },
+      });
+    }
+
+    return created;
   });
 
   revalidatePath("/requests");
+  revalidatePath("/dashboard");
   redirect(`/estimates/${estimate.id}`);
 }
 

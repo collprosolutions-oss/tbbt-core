@@ -1,5 +1,6 @@
 "use server";
 
+import { OTHER_SERVICE_VALUE } from "@/lib/intake";
 import { prisma } from "@/lib/prisma";
 
 export type IntakeResult = {
@@ -8,7 +9,6 @@ export type IntakeResult = {
 };
 
 const GENERIC_ERROR = "This request could not be submitted.";
-export const OTHER_SERVICE_VALUE = "other";
 
 function readString(formData: FormData, key: string) {
   const value = formData.get(key);

@@ -1,22 +1,31 @@
 /**
  * Proves business-owned records cannot be read across workspaces
  * when queries are scoped by businessId.
+ *
+ * Runs against a disposable sibling Postgres database (created by
+ * `prisma db push` and dropped afterward) derived from the configured
+ * DATABASE_URL, since the schema's datasource is Postgres-only.
  */
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
-import { existsSync, unlinkSync } from "node:fs";
-import path from "node:path";
 
-const testDb = path.join(process.cwd(), "prisma", "isolation-test.db");
-process.env.DATABASE_URL = `file:${testDb}`;
+const baseUrl = process.env.DATABASE_URL;
+if (!baseUrl) {
+  console.error(
+    "DATABASE_URL must be set (pointing at a reachable Postgres server) to run the isolation check.",
+  );
+  process.exit(1);
+}
 
-if (existsSync(testDb)) unlinkSync(testDb);
-if (existsSync(`${testDb}-journal`)) unlinkSync(`${testDb}-journal`);
+const testDbName = "tbbt_isolation_test";
+const parsed = new URL(baseUrl);
+parsed.pathname = `/${testDbName}`;
+const testUrl = parsed.toString();
 
 const push = spawnSync(
   "npx",
   ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: process.env },
+  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
 );
 
 if (push.status !== 0) {
@@ -42,14 +51,14 @@ function assertBusinessRecord(record, businessId) {
   return record;
 }
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ datasourceUrl: testUrl });
 
 try {
   const businessA = await prisma.business.create({
-    data: { name: "Alpha Handyman", tradeCode: "HANDYMAN" },
+    data: { name: "Alpha Handyman", slug: "alpha-handyman", tradeCode: "HANDYMAN" },
   });
   const businessB = await prisma.business.create({
-    data: { name: "Beta Handyman", tradeCode: "HANDYMAN" },
+    data: { name: "Beta Handyman", slug: "beta-handyman", tradeCode: "HANDYMAN" },
   });
 
   const customerA = await prisma.customer.create({
@@ -93,6 +102,10 @@ try {
   console.log("Isolation check passed: business-scoped queries do not cross workspaces.");
 } finally {
   await prisma.$disconnect();
-  if (existsSync(testDb)) unlinkSync(testDb);
-  if (existsSync(`${testDb}-journal`)) unlinkSync(`${testDb}-journal`);
+  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await cleanup.$disconnect();
+  }
 }

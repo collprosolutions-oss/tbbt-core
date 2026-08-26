@@ -1,14 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import {
-  OTHER_SERVICE_VALUE,
-  submitServiceRequest,
-} from "@/app/actions/intake";
+import { submitServiceRequest } from "@/app/actions/intake";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { OTHER_SERVICE_VALUE } from "@/lib/intake";
 
 type ServiceOption = { id: string; name: string };
 type ServiceGroup = { category: string; items: ServiceOption[] };
