@@ -23,6 +23,12 @@ enum LineItemType {
   OTHER
 }
 
+enum JobPhotoStage {
+  BEFORE
+  DURING
+  AFTER
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -67,6 +73,7 @@ model Business {
   jobs            Job[]
   invoices        Invoice[]
   lineItems       LineItem[]
+  jobPhotos       JobPhoto[]
 }
 
 model Membership {
@@ -214,8 +221,27 @@ model Job {
   estimate  Estimate?  @relation(fields: [estimateId], references: [id], onDelete: SetNull)
   invoices  Invoice[]
   lineItems LineItem[]
+  photos    JobPhoto[]
 
   @@index([businessId])
+}
+
+/// Private, owner-facing job documentation. Never surfaced on any public or
+/// customer-facing page. Stores only a storage URL/key, never image bytes.
+model JobPhoto {
+  id         String        @id @default(cuid())
+  businessId String
+  jobId      String
+  stage      JobPhotoStage
+  url        String
+  caption    String?
+  createdAt  DateTime      @default(now())
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job      Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([jobId])
 }
 
 model Invoice {

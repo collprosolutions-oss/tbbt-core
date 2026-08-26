@@ -9,6 +9,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
+import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
+import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
 import { StartJobButton } from "@/components/jobs/start-job-button";
 import { PageHeader } from "@/components/page-header";
@@ -69,6 +71,10 @@ export default async function JobPage({
       },
       estimate: { select: { id: true, status: true, total: true } },
       invoices: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
+      photos: {
+        select: { id: true, stage: true, url: true, caption: true, createdAt: true },
+        orderBy: { createdAt: "asc" },
+      },
     },
   });
 
@@ -88,6 +94,15 @@ export default async function JobPage({
     durationPreset === "custom" && job.scheduledDurationMinutes
       ? (job.scheduledDurationMinutes / 60).toString()
       : "";
+
+  const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
+    BEFORE: [],
+    DURING: [],
+    AFTER: [],
+  };
+  for (const photo of job.photos) {
+    photosByStage[photo.stage].push(photo);
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -255,6 +270,47 @@ export default async function JobPage({
           </p>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Job Photos</CardTitle>
+          <CardDescription>
+            Private to this business. Never shown to the customer or
+            published anywhere.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <PhotoStageGroup title="Before" photos={photosByStage.BEFORE} />
+          <PhotoStageGroup title="During" photos={photosByStage.DURING} />
+          <PhotoStageGroup title="After" photos={photosByStage.AFTER} />
+          <AddJobPhotoForm jobId={job.id} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function PhotoStageGroup({
+  title,
+  photos,
+}: {
+  title: string;
+  photos: JobPhotoDetails[];
+}) {
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-medium">
+        {title} ({photos.length})
+      </p>
+      {photos.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No photos yet.</p>
+      ) : (
+        <ul className="flex flex-wrap gap-3">
+          {photos.map((photo) => (
+            <JobPhotoItem key={photo.id} photo={photo} />
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
