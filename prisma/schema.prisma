@@ -137,8 +137,9 @@ model ServiceCatalogItem {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  lineItems LineItem[]
+  business        Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  lineItems       LineItem[]
+  serviceRequests ServiceRequest[]
 
   @@index([businessId])
 }
@@ -154,9 +155,13 @@ model ServiceRequest {
   createdAt   DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  /// Selected catalog service at intake time, if any. "Other / Not sure" leaves this null.
+  serviceCatalogItemId String?
+
   business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
   customer  Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
   property  Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  serviceCatalogItem ServiceCatalogItem? @relation(fields: [serviceCatalogItemId], references: [id], onDelete: SetNull)
   estimates Estimate[]
 
   @@index([businessId])

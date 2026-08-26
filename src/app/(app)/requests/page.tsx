@@ -26,6 +26,7 @@ export default async function RequestsPage() {
     include: {
       customer: { select: { name: true, email: true, phone: true } },
       property: { select: { addressLine1: true } },
+      serviceCatalogItem: { select: { name: true } },
       estimates: {
         select: { id: true },
         orderBy: { createdAt: "asc" },
@@ -63,6 +64,11 @@ export default async function RequestsPage() {
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
                 <StatusBadge status={request.status} />
+                {request.serviceCatalogItem ? (
+                  <p className="font-medium">
+                    {request.serviceCatalogItem.name}
+                  </p>
+                ) : null}
                 <p>{request.description || "No description"}</p>
                 {request.property?.addressLine1 ? (
                   <p className="text-muted-foreground">

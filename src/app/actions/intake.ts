@@ -8,10 +8,15 @@ export type IntakeResult = {
 };
 
 const GENERIC_ERROR = "This request could not be submitted.";
+export const OTHER_SERVICE_VALUE = "other";
 
 function readString(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeAddress(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 export async function submitServiceRequest(
@@ -28,6 +33,11 @@ export async function submitServiceRequest(
   const phone = readString(formData, "phone");
   const address = readString(formData, "address");
   const description = readString(formData, "description");
+  const serviceCatalogItemIdRaw = readString(formData, "serviceCatalogItemId");
+  const serviceCatalogItemId =
+    !serviceCatalogItemIdRaw || serviceCatalogItemIdRaw === OTHER_SERVICE_VALUE
+      ? null
+      : serviceCatalogItemIdRaw;
 
   if (!name || !description) {
     return { error: "Name and job description are required." };
@@ -40,6 +50,23 @@ export async function submitServiceRequest(
 
   if (!business) {
     return { error: GENERIC_ERROR };
+  }
+
+  // A submitted catalog item id must be an ACTIVE item that belongs to this
+  // same resolved business, so a public user can never point a tampered form
+  // field at another business's (or an inactive) service.
+  if (serviceCatalogItemId) {
+    const catalogItem = await prisma.serviceCatalogItem.findFirst({
+      where: {
+        id: serviceCatalogItemId,
+        businessId: business.id,
+        active: true,
+      },
+      select: { id: true },
+    });
+    if (!catalogItem) {
+      return { error: GENERIC_ERROR };
+    }
   }
 
   try {
@@ -68,22 +95,38 @@ export async function submitServiceRequest(
         });
       }
 
-      const property = address
-        ? await tx.property.create({
+      let propertyId: string | null = null;
+      if (address) {
+        const normalized = normalizeAddress(address);
+        const existingProperties = await tx.property.findMany({
+          where: { businessId: business.id, customerId: customer.id },
+          select: { id: true, addressLine1: true },
+        });
+        const reusable = existingProperties.find(
+          (property) => normalizeAddress(property.addressLine1) === normalized,
+        );
+
+        if (reusable) {
+          propertyId = reusable.id;
+        } else {
+          const property = await tx.property.create({
             data: {
               businessId: business.id,
               customerId: customer.id,
               addressLine1: address,
             },
-          })
-        : null;
+          });
+          propertyId = property.id;
+        }
+      }
 
       await tx.serviceRequest.create({
         data: {
           businessId: business.id,
           customerId: customer.id,
-          propertyId: property?.id,
+          propertyId,
           description,
+          serviceCatalogItemId,
         },
       });
     });

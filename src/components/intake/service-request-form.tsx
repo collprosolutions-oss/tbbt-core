@@ -1,18 +1,33 @@
 "use client";
 
 import { useState } from "react";
-import { submitServiceRequest } from "@/app/actions/intake";
+import {
+  OTHER_SERVICE_VALUE,
+  submitServiceRequest,
+} from "@/app/actions/intake";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export function ServiceRequestForm({ slug }: { slug: string }) {
+type ServiceOption = { id: string; name: string };
+type ServiceGroup = { category: string; items: ServiceOption[] };
+
+export function ServiceRequestForm({
+  slug,
+  businessName,
+  groupedServices,
+}: {
+  slug: string;
+  businessName: string;
+  groupedServices: ServiceGroup[];
+}) {
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
   const [pending, setPending] = useState(false);
 
   async function onSubmit(formData: FormData) {
+    if (pending) return;
     setPending(true);
     setError(null);
     const result = await submitServiceRequest(slug, formData);
@@ -28,7 +43,8 @@ export function ServiceRequestForm({ slug }: { slug: string }) {
     return (
       <Alert>
         <AlertDescription>
-          Request received. The business will follow up.
+          <p className="font-medium">Request received</p>
+          <p>Your request has been sent to {businessName}.</p>
         </AlertDescription>
       </Alert>
     );
@@ -48,18 +64,39 @@ export function ServiceRequestForm({ slug }: { slug: string }) {
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="email">Email</Label>
+        <Label htmlFor="email">Email (optional)</Label>
         <Input id="email" name="email" type="email" autoComplete="email" />
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="phone">Phone</Label>
+        <Label htmlFor="phone">Phone (optional)</Label>
         <Input id="phone" name="phone" type="tel" autoComplete="tel" />
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="address">Address (optional)</Label>
+        <Label htmlFor="address">Service address (optional)</Label>
         <Input id="address" name="address" autoComplete="street-address" />
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="serviceCatalogItemId">What do you need done?</Label>
+        <select
+          id="serviceCatalogItemId"
+          name="serviceCatalogItemId"
+          defaultValue={OTHER_SERVICE_VALUE}
+          className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+        >
+          <option value={OTHER_SERVICE_VALUE}>Other / Not sure</option>
+          {groupedServices.map((group) => (
+            <optgroup key={group.category} label={group.category}>
+              {group.items.map((service) => (
+                <option key={service.id} value={service.id}>
+                  {service.name}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
       </div>
 
       <div className="space-y-2">
