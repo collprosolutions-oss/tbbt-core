@@ -42,8 +42,8 @@ export function CatalogItemRow({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="font-medium">{name}</p>
+        <div className="min-w-0">
+          <p className="break-words font-medium">{name}</p>
           <p className="text-sm text-muted-foreground">{displayPrice}</p>
         </div>
         <Badge variant={active ? "secondary" : "outline"}>

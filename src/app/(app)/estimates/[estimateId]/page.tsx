@@ -185,7 +185,7 @@ export default async function EstimateBuilderPage({
                   key={item.id}
                   className="flex items-start justify-between gap-3"
                 >
-                  <span>
+                  <span className="min-w-0 flex-1 break-words">
                     {item.type === "LABOR"
                       ? "Labor"
                       : item.type === "MATERIAL"
