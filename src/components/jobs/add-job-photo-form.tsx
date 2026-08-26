@@ -56,18 +56,17 @@ export function AddJobPhotoForm({ jobId }: { jobId: string }) {
         </select>
       </div>
       <div className="space-y-2">
-        <Label htmlFor="photo-url">Photo URL</Label>
+        <Label htmlFor="photo-file">Photo</Label>
         <Input
-          id="photo-url"
-          name="url"
-          type="url"
-          inputMode="url"
-          placeholder="https://..."
+          id="photo-file"
+          name="file"
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,image/*"
           required
         />
         <p className="text-xs text-muted-foreground">
-          Paste a link to an already-hosted photo. Direct upload from your
-          phone isn&apos;t connected yet.
+          Choose Photo or Take Photo from your device. JPEG, PNG, WebP, GIF,
+          or HEIC, up to 4 MB.
         </p>
       </div>
       <div className="space-y-2">
