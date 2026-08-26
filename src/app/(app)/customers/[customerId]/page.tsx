@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { EditCustomerForm } from "@/components/customers/edit-customer-form";
 import { PageHeader } from "@/components/page-header";
+import { AddPropertyForm } from "@/components/properties/add-property-form";
+import { PropertyItem } from "@/components/properties/property-item";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,7 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireBusinessAccess } from "@/lib/access";
-import { formatAddress, formatDate, formatDateTime, formatMoney } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -45,7 +48,7 @@ export default async function CustomerProfilePage({
     <div className="mx-auto max-w-3xl space-y-6">
       <PageHeader
         title={customer.name}
-        description="Customer"
+        description="Customer profile"
       >
         <Button asChild size="sm" variant="outline">
           <Link href="/customers">Back to customers</Link>
@@ -54,32 +57,35 @@ export default async function CustomerProfilePage({
 
       <Card>
         <CardHeader>
-          <CardTitle>Customer information</CardTitle>
+          <CardTitle>Contact information</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          <p>Name: {customer.name}</p>
-          <p>Phone: {customer.phone || "None"}</p>
-          <p>Email: {customer.email || "None"}</p>
+        <CardContent>
+          <EditCustomerForm
+            customer={{
+              id: customer.id,
+              name: customer.name,
+              email: customer.email,
+              phone: customer.phone,
+            }}
+          />
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Properties / service addresses</CardTitle>
+          <CardTitle>Service addresses</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           {customer.properties.length === 0 ? (
             <p className="text-sm text-muted-foreground">No addresses on file.</p>
           ) : (
-            <ul className="space-y-2 text-sm">
+            <ul className="space-y-3 text-sm">
               {customer.properties.map((property) => (
-                <li key={property.id}>
-                  {property.label ? `${property.label}: ` : null}
-                  {formatAddress(property)}
-                </li>
+                <PropertyItem key={property.id} property={property} />
               ))}
             </ul>
           )}
+          <AddPropertyForm customerId={customer.id} />
         </CardContent>
       </Card>
 
