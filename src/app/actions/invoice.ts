@@ -58,6 +58,42 @@ export async function createInvoiceFromJob(
   redirect(`/invoices/${invoice.id}`);
 }
 
+export async function markInvoiceSent(
+  invoiceId: string,
+): Promise<InvoiceActionState> {
+  const access = await requireBusinessAccess();
+  const invoice = access.assertOwned(
+    await prisma.invoice.findFirst({
+      where: { id: invoiceId, ...access.scope },
+    }),
+  );
+
+  if (invoice.status === "SENT" || invoice.status === "PAID") {
+    return {};
+  }
+
+  if (invoice.status !== "DRAFT") {
+    return { error: "Only a draft invoice can be sent." };
+  }
+
+  const updated = await prisma.invoice.updateMany({
+    where: {
+      id: invoice.id,
+      businessId: access.businessId,
+      status: "DRAFT",
+    },
+    data: { status: "SENT" },
+  });
+
+  if (updated.count !== 1) {
+    return { error: "Only a draft invoice can be sent." };
+  }
+
+  revalidatePath("/invoices");
+  revalidatePath(`/invoices/${invoice.id}`);
+  return {};
+}
+
 export async function markInvoicePaid(
   invoiceId: string,
 ): Promise<InvoiceActionState> {
@@ -72,11 +108,24 @@ export async function markInvoicePaid(
     return {};
   }
 
-  await prisma.invoice.update({
-    where: { id: invoice.id },
+  if (invoice.status !== "SENT") {
+    return { error: "Send the invoice before marking it paid." };
+  }
+
+  const updated = await prisma.invoice.updateMany({
+    where: {
+      id: invoice.id,
+      businessId: access.businessId,
+      status: "SENT",
+    },
     data: { status: "PAID" },
   });
 
+  if (updated.count !== 1) {
+    return { error: "Send the invoice before marking it paid." };
+  }
+
+  revalidatePath("/invoices");
   revalidatePath(`/invoices/${invoice.id}`);
   return {};
 }

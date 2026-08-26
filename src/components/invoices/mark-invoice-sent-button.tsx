@@ -1,10 +1,10 @@
 "use client";
 
 import { useTransition } from "react";
-import { markInvoicePaid } from "@/app/actions/invoice";
+import { markInvoiceSent } from "@/app/actions/invoice";
 import { Button } from "@/components/ui/button";
 
-export function MarkInvoicePaidButton({ invoiceId }: { invoiceId: string }) {
+export function MarkInvoiceSentButton({ invoiceId }: { invoiceId: string }) {
   const [isPending, startTransition] = useTransition();
 
   return (
@@ -12,12 +12,12 @@ export function MarkInvoicePaidButton({ invoiceId }: { invoiceId: string }) {
       action={() => {
         if (isPending) return;
         startTransition(async () => {
-          await markInvoicePaid(invoiceId);
+          await markInvoiceSent(invoiceId);
         });
       }}
     >
-      <Button type="submit" size="sm" disabled={isPending}>
-        {isPending ? "Marking paid…" : "Mark Paid"}
+      <Button type="submit" size="sm" variant="outline" disabled={isPending}>
+        {isPending ? "Marking sent…" : "Mark Sent"}
       </Button>
     </form>
   );
