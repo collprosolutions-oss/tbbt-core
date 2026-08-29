@@ -29,6 +29,17 @@ enum JobPhotoStage {
   AFTER
 }
 
+/// Who originated an AdditionalWorkRequest. CUSTOMER is the only source with
+/// a built UI today (see /p/[token]'s "+ Request Additional Work"). EMPLOYEE
+/// exists now, unused, so a future Employee Field Workflow can report
+/// "customer requested more work" against this same model without a schema
+/// change -- see the note on AdditionalWorkRequest below. Do not build
+/// EMPLOYEE-facing UI yet.
+enum AdditionalWorkRequestSource {
+  CUSTOMER
+  EMPLOYEE
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -76,6 +87,8 @@ model Business {
   invoices                 Invoice[]
   lineItems                LineItem[]
   jobPhotos                JobPhoto[]
+  changeOrders             ChangeOrder[]
+  additionalWorkRequests   AdditionalWorkRequest[]
 }
 
 model Membership {
@@ -328,6 +341,11 @@ model Job {
   invoices                Invoice[]
   lineItems               LineItem[]
   photos                  JobPhoto[]
+  /// Post-approval scope/pricing changes for this Job. See ChangeOrder below
+  /// -- the original approvedEstimateVersion above is never rewritten by
+  /// these; they are additive, separately-approved records.
+  changeOrders            ChangeOrder[]
+  additionalWorkRequests  AdditionalWorkRequest[]
 
   @@index([businessId])
 }
@@ -381,6 +399,15 @@ model LineItem {
   estimateId           String?
   jobId                String?
   invoiceId            String?
+  /// Attaches this line item to a ChangeOrder's own commercial terms (see
+  /// ChangeOrder below). A ChangeOrder line item lives here -- the same
+  /// description/quantity/unitPrice/total/type shape already used for
+  /// Estimate and Invoice line items -- rather than in a new parallel model.
+  /// Only the dedicated change-order server actions
+  /// (src/app/actions/change-order.ts) ever read/write rows scoped by this
+  /// column, and only while the parent ChangeOrder is still DRAFT; once
+  /// SENT, no code path mutates them again (see ChangeOrder.status below).
+  changeOrderId        String?
   /// Snapshot fields. Catalog price changes must not rewrite these.
   description          String
   quantity             Decimal
@@ -395,9 +422,102 @@ model LineItem {
   estimate           Estimate?           @relation(fields: [estimateId], references: [id], onDelete: SetNull)
   job                Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
   invoice            Invoice?            @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  changeOrder        ChangeOrder?        @relation(fields: [changeOrderId], references: [id], onDelete: SetNull)
 
   @@index([businessId])
   @@index([estimateId])
   @@index([jobId])
   @@index([invoiceId])
+  @@index([changeOrderId])
+}
+
+/// A separately-approved, post-contract scope/pricing change on a Job,
+/// distinct from the original approved Estimate/EstimateVersion (which this
+/// never rewrites). Lifecycle: DRAFT -> SENT -> APPROVED, with DECLINED (the
+/// customer said no) and CANCELLED (the owner/admin withdrew it before the
+/// customer responded) as the only other real states. String status, not a
+/// Prisma enum, matching Estimate/Job/Invoice.
+///
+/// Immutability model: this record's own line items (LineItem rows attached
+/// via LineItem.changeOrderId) and `title`/`total` may only be edited by
+/// application code while status is DRAFT (enforced in
+/// src/app/actions/change-order.ts). Once SENT, no code path updates any of
+/// those fields again for the rest of this row's life -- there is no
+/// "return to draft" for a Change Order. If a correction is needed after
+/// Send, the owner/admin cancels this one (status -> CANCELLED, a terminal
+/// state) and creates a new DRAFT ChangeOrder instead. This is deliberately
+/// simpler than EstimateVersion's snapshot-on-every-send model: because this
+/// row is never mutated again after Send, the row itself already IS the
+/// immutable sent snapshot, so a customer approving a SENT ChangeOrder is
+/// always approving exactly what is on this record -- there is no staleness
+/// window to defend against.
+model ChangeOrder {
+  id         String   @id @default(cuid())
+  businessId String
+  jobId      String
+  /// Lifecycle: DRAFT -> SENT -> APPROVED | DECLINED | CANCELLED.
+  status     String   @default("DRAFT")
+  /// Short customer-facing label for the additional work covered by this
+  /// change order, e.g. "Additional tile work in guest bathroom".
+  title      String
+  /// Sum of this ChangeOrder's own LineItem rows. Recomputed by application
+  /// code on every line item add/remove while DRAFT (see
+  /// persistChangeOrderTotal in src/lib/change-order.ts); frozen once SENT.
+  total      Decimal  @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  /// Set exactly once, on the guarded DRAFT -> SENT transition.
+  sentAt     DateTime?
+  /// Set exactly once, on the guarded SENT -> APPROVED transition (customer
+  /// action, token-scoped -- see src/app/actions/customer-change-order.ts).
+  approvedAt DateTime?
+  /// Set exactly once, on the guarded SENT -> DECLINED transition (customer
+  /// action).
+  declinedAt DateTime?
+  /// Set exactly once, on the guarded DRAFT|SENT -> CANCELLED transition
+  /// (owner/admin action). Never set on an APPROVED or DECLINED order.
+  cancelledAt DateTime?
+
+  business               Business                @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job                    Job                     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  lineItems              LineItem[]
+  additionalWorkRequests AdditionalWorkRequest[]
+
+  @@index([businessId])
+  @@index([jobId])
+}
+
+/// A customer's (or, in the future, an employee's -- see `source` below)
+/// simple request for additional work on an existing Job. This is
+/// deliberately NOT an approval and NEVER changes approved scope, price,
+/// Job total, or Invoice total by itself -- it only creates an internal
+/// review item. Owner/admin then decides whether to create a ChangeOrder
+/// from it (setting changeOrderId + status CONVERTED), handle it outside
+/// this feature, or dismiss it (status DISMISSED). Mirrors the existing
+/// ServiceRequest OPEN -> CONVERTED pattern.
+model AdditionalWorkRequest {
+  id            String                      @id @default(cuid())
+  businessId    String
+  jobId         String
+  description   String
+  /// OPEN -> CONVERTED | DISMISSED. String status, matching ServiceRequest.
+  status        String                      @default("OPEN")
+  /// CUSTOMER today (submitted from /p/[token]). EMPLOYEE is reserved schema
+  /// surface for the not-yet-built Employee Field Workflow -- do not read
+  /// this as evidence that path exists yet.
+  source        AdditionalWorkRequestSource @default(CUSTOMER)
+  /// Set once the request leaves OPEN (either converted or dismissed).
+  reviewedAt    DateTime?
+  /// Set only when an owner/admin creates a ChangeOrder from this request.
+  changeOrderId String?
+  createdAt     DateTime                    @default(now())
+  updatedAt     DateTime                    @updatedAt
+
+  business    Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job         Job          @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  changeOrder ChangeOrder? @relation(fields: [changeOrderId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([changeOrderId])
 }
