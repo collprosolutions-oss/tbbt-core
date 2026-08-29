@@ -8,6 +8,7 @@ import { ClearDraftEstimateButton } from "@/components/estimates/clear-draft-est
 import { CopyEstimateLinkButton } from "@/components/estimates/copy-estimate-link-button";
 import { EditEstimateButton } from "@/components/estimates/edit-estimate-button";
 import { EmailEstimateButton } from "@/components/estimates/email-estimate-button";
+import { EstimateVersionHistory } from "@/components/estimates/estimate-version-history";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
@@ -57,6 +58,16 @@ export default async function EstimateBuilderPage({
       serviceRequest: { select: { description: true } },
       jobs: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
       lineItems: { orderBy: { createdAt: "asc" } },
+      versions: {
+        orderBy: { versionNumber: "desc" },
+        select: {
+          id: true,
+          versionNumber: true,
+          total: true,
+          sentAt: true,
+          approvedAt: true,
+        },
+      },
     },
   });
 
@@ -289,6 +300,8 @@ export default async function EstimateBuilderPage({
       </Card>
         </>
       ) : null}
+
+      <EstimateVersionHistory versions={estimate.versions} />
     </div>
   );
 }

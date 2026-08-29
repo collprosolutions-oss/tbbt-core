@@ -54,34 +54,36 @@ model Session {
 }
 
 model Business {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
+  id                  String   @id @default(cuid())
+  name                String
+  slug                String   @unique
   /// App-level trade code. Only HANDYMAN is active in Phase 1.
-  tradeCode String   @default("HANDYMAN")
-  laborMinimumEnabled Boolean @default(false)
+  tradeCode           String   @default("HANDYMAN")
+  laborMinimumEnabled Boolean  @default(false)
   laborMinimumAmount  Decimal?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
-  memberships     Membership[]
-  customers       Customer[]
-  properties      Property[]
-  catalogItems    ServiceCatalogItem[]
-  serviceRequests ServiceRequest[]
-  estimates       Estimate[]
-  jobs            Job[]
-  invoices        Invoice[]
-  lineItems       LineItem[]
-  jobPhotos       JobPhoto[]
+  memberships              Membership[]
+  customers                Customer[]
+  properties               Property[]
+  catalogItems             ServiceCatalogItem[]
+  serviceRequests          ServiceRequest[]
+  estimates                Estimate[]
+  estimateVersions         EstimateVersion[]
+  estimateVersionLineItems EstimateVersionLineItem[]
+  jobs                     Job[]
+  invoices                 Invoice[]
+  lineItems                LineItem[]
+  jobPhotos                JobPhoto[]
 }
 
 model Membership {
-  id         String          @id @default(cuid())
+  id         String         @id @default(cuid())
   userId     String
   businessId String
   role       MembershipRole
-  createdAt  DateTime        @default(now())
+  createdAt  DateTime       @default(now())
 
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -152,72 +154,145 @@ model ServiceCatalogItem {
 }
 
 model ServiceRequest {
-  id         String   @id @default(cuid())
-  businessId String
-  customerId String?
-  propertyId String?
+  id          String   @id @default(cuid())
+  businessId  String
+  customerId  String?
+  propertyId  String?
   status      String   @default("OPEN")
   summary     String?
   description String?
   createdAt   DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  updatedAt   DateTime @updatedAt
 
   /// Selected catalog service at intake time, if any. "Other / Not sure" leaves this null.
   serviceCatalogItemId String?
 
-  business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  customer  Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  property  Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  business           Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer           Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  property           Property?           @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   serviceCatalogItem ServiceCatalogItem? @relation(fields: [serviceCatalogItemId], references: [id], onDelete: SetNull)
-  estimates Estimate[]
+  estimates          Estimate[]
 
   @@index([businessId])
 }
 
 model Estimate {
-  id               String   @id @default(cuid())
-  businessId       String
-  customerId       String?
-  propertyId       String?
-  serviceRequestId String?
+  id                     String   @id @default(cuid())
+  businessId             String
+  customerId             String?
+  propertyId             String?
+  serviceRequestId       String?
   /// Lifecycle: DRAFT → SENT → APPROVED. String values, not a Prisma enum.
-  status           String   @default("DRAFT")
-  total            Decimal  @default(0)
-  laborMinimumWaived     Boolean @default(false)
-  laborMinimumAdjustment Decimal @default(0)
-  publicToken      String   @unique
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  status                 String   @default("DRAFT")
+  total                  Decimal  @default(0)
+  laborMinimumWaived     Boolean  @default(false)
+  laborMinimumAdjustment Decimal  @default(0)
+  publicToken            String   @unique
+  /// Points at the EstimateVersion the customer actually approved. Set
+  /// exactly once, in the same transaction that flips status SENT ->
+  /// APPROVED, and never changed afterward.
+  approvedVersionId      String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
-  business       Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  customer       Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  property       Property?       @relation(fields: [propertyId], references: [id], onDelete: SetNull)
-  serviceRequest ServiceRequest? @relation(fields: [serviceRequestId], references: [id], onDelete: SetNull)
-  jobs           Job[]
-  lineItems      LineItem[]
+  business        Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer        Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  property        Property?         @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  serviceRequest  ServiceRequest?   @relation(fields: [serviceRequestId], references: [id], onDelete: SetNull)
+  jobs            Job[]
+  lineItems       LineItem[]
+  /// Immutable snapshots created every time this estimate is successfully
+  /// sent. Application code must never update or delete an existing row.
+  versions        EstimateVersion[] @relation("EstimateVersions")
+  approvedVersion EstimateVersion?  @relation("EstimateApprovedVersion", fields: [approvedVersionId], references: [id], onDelete: SetNull)
 
   @@index([businessId])
   @@index([propertyId])
 }
 
+/// Immutable historical snapshot of an Estimate exactly as it was SENT to a
+/// customer. Created exactly once per successful DRAFT -> SENT transition,
+/// in the same transaction as that transition. Application code must never
+/// update the snapshot fields (versionNumber, total, labor-minimum fields,
+/// customer/property snapshot fields, line items) of an existing row --
+/// the only field ever written after creation is approvedAt, and only on
+/// the single version the customer actually approved.
+model EstimateVersion {
+  id            String @id @default(cuid())
+  businessId    String
+  estimateId    String
+  versionNumber Int
+
+  /// Snapshot of Estimate totals at the moment this version was sent.
+  total                  Decimal
+  laborMinimumWaived     Boolean
+  laborMinimumAdjustment Decimal
+
+  /// Snapshot of customer/property context needed to reconstruct what was
+  /// sent, independent of later edits to the live Customer/Property rows.
+  customerName         String?
+  customerEmail        String?
+  customerPhone        String?
+  propertyAddressLine1 String?
+  propertyAddressLine2 String?
+  propertyCity         String?
+  propertyRegion       String?
+  propertyPostalCode   String?
+
+  sentAt     DateTime  @default(now())
+  /// Set exactly once, only on the version the customer actually approved.
+  /// Never overwritten afterward.
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  business            Business                  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  estimate            Estimate                  @relation("EstimateVersions", fields: [estimateId], references: [id], onDelete: Cascade)
+  approvedOnEstimates Estimate[]                @relation("EstimateApprovedVersion")
+  lineItems           EstimateVersionLineItem[]
+
+  @@unique([estimateId, versionNumber])
+  @@index([businessId])
+  @@index([estimateId])
+}
+
+/// Immutable snapshot of a LineItem as it existed at the moment its parent
+/// EstimateVersion was sent. Never edited or deleted by application code.
+model EstimateVersionLineItem {
+  id                String       @id @default(cuid())
+  businessId        String
+  estimateVersionId String
+  description       String
+  quantity          Decimal
+  unitPrice         Decimal
+  total             Decimal
+  type              LineItemType
+  createdAt         DateTime     @default(now())
+
+  business        Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  estimateVersion EstimateVersion @relation(fields: [estimateVersionId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([estimateVersionId])
+}
+
 model Job {
-  id          String    @id @default(cuid())
-  businessId  String
-  customerId  String?
-  propertyId  String?
-  estimateId  String?
+  id                       String    @id @default(cuid())
+  businessId               String
+  customerId               String?
+  propertyId               String?
+  estimateId               String?
   /// Lifecycle: UNSCHEDULED | SCHEDULED → IN_PROGRESS → COMPLETED.
   /// String values, not a Prisma enum. No extra fields for completion notes.
-  status      String    @default("SCHEDULED")
-  scheduledAt DateTime?
+  status                   String    @default("SCHEDULED")
+  scheduledAt              DateTime?
   /// Expected duration in minutes. Null means duration is not set.
   scheduledDurationMinutes Int?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
-  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  property Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer  Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  property  Property?  @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   estimate  Estimate?  @relation(fields: [estimateId], references: [id], onDelete: SetNull)
   invoices  Invoice[]
   lineItems LineItem[]
@@ -245,23 +320,23 @@ model JobPhoto {
 }
 
 model Invoice {
-  id         String   @id @default(cuid())
-  businessId String
-  customerId String?
-  jobId      String?
-  status     String   @default("DRAFT")
-  total      Decimal  @default(0)
+  id               String    @id @default(cuid())
+  businessId       String
+  customerId       String?
+  jobId            String?
+  status           String    @default("DRAFT")
+  total            Decimal   @default(0)
   /// Set exactly once, when status transitions SENT -> PAID. Never overwritten afterward.
-  paidAt DateTime?
+  paidAt           DateTime?
   /// Owner-facing only: CASH | CHECK | ZELLE_BANK_TRANSFER | CARD_EXTERNAL | OTHER. Free-form string, not an enum.
-  paymentMethod String?
+  paymentMethod    String?
   /// Owner-facing only optional note (e.g. check number). Never shown on public/customer pages.
   paymentReference String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer  Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
   job       Job?       @relation(fields: [jobId], references: [id], onDelete: SetNull)
   lineItems LineItem[]
 
@@ -269,7 +344,7 @@ model Invoice {
 }
 
 model LineItem {
-  id                   String   @id @default(cuid())
+  id                   String       @id @default(cuid())
   businessId           String
   serviceCatalogItemId String?
   estimateId           String?
@@ -281,8 +356,8 @@ model LineItem {
   unitPrice            Decimal
   total                Decimal
   type                 LineItemType @default(LABOR)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
 
   business           Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
   serviceCatalogItem ServiceCatalogItem? @relation(fields: [serviceCatalogItemId], references: [id], onDelete: SetNull)
