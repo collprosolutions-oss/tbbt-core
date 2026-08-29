@@ -621,21 +621,59 @@ try {
   );
 
   console.log(
-    "\nTEST 8 — Crew view truthfully shows Unassigned Jobs (no employee/crew assignment field exists yet)",
+    "\nTEST 8 — Crew view groups Jobs by their REAL assignment (Phase 3 / Step 4), and keeps a truthful Unassigned bucket",
   );
-  const crewViewPage = await fetchRaw(ownerSession, `/jobs?view=crew&date=${anchorIso}`);
+  const crewViewBefore = await fetchRaw(ownerSession, `/jobs?view=crew&date=${anchorIso}`);
   check(
-    "Crew view explicitly says crew assignment isn't built yet (truthful, not fabricated)",
-    crewViewPage.body.includes("built yet") && crewViewPage.body.includes("Employee Field Workflow"),
+    "Before any assignment exists, Crew view groups real scheduled jobs under Unassigned",
+    crewViewBefore.body.includes("Unassigned"),
   );
-  check("Crew view groups real scheduled jobs under Unassigned", crewViewPage.body.includes("Unassigned"));
   check(
     "Crew view includes a real SCHEDULED job from this month (as Unassigned)",
-    crewViewPage.body.includes(`/jobs/${weekJob.id}`) || crewViewPage.body.includes(`/jobs/${scheduleResult.job.id}`),
+    crewViewBefore.body.includes(`/jobs/${weekJob.id}`) || crewViewBefore.body.includes(`/jobs/${scheduleResult.job.id}`),
   );
   check(
     "Crew view (bounded to the selected month) does not include a Job scheduled in a different month",
-    !crewViewPage.body.includes(`/jobs/${nextMonthJob.id}`),
+    !crewViewBefore.body.includes(`/jobs/${nextMonthJob.id}`),
+  );
+
+  // memberUser (businessA MEMBER, created earlier for the access-control
+  // tests above) doubles as the eligible employee here -- assign them to
+  // weekJob directly (mirroring assignJobMember() in
+  // src/app/actions/job.ts) and confirm Crew view now shows a REAL
+  // per-employee group, not the old single Unassigned bucket for
+  // everything.
+  const memberMembership = await prisma.membership.findFirstOrThrow({
+    where: { userId: memberUser.id, businessId: businessA.id },
+  });
+  await prisma.job.update({
+    where: { id: weekJob.id },
+    data: { assignedMembershipId: memberMembership.id },
+  });
+
+  const crewViewAfter = await fetchRaw(ownerSession, `/jobs?view=crew&date=${anchorIso}`);
+  check(
+    "Crew view now shows a real group for the assigned member's name",
+    crewViewAfter.body.includes(memberUser.name),
+  );
+  check(
+    "The assigned job appears under that member's group",
+    crewViewAfter.body.indexOf(memberUser.name) < crewViewAfter.body.indexOf(`/jobs/${weekJob.id}`) &&
+      crewViewAfter.body.indexOf(`/jobs/${weekJob.id}`) <
+        crewViewAfter.body.indexOf("Unassigned"),
+  );
+  check(
+    "Unassigned bucket still exists and still contains a real still-unassigned job this month",
+    crewViewAfter.body.includes("Unassigned") &&
+      (crewViewAfter.body.includes(`/jobs/${scheduleResult.job.id}`)),
+  );
+  check(
+    "The now-assigned job no longer appears under Unassigned",
+    crewViewAfter.body.indexOf(`/jobs/${weekJob.id}`) < crewViewAfter.body.indexOf("Unassigned"),
+  );
+  check(
+    "Crew view (bounded to the selected month) still does not include a Job scheduled in a different month",
+    !crewViewAfter.body.includes(`/jobs/${nextMonthJob.id}`),
   );
 
   console.log("\nTEST 17 (HTTP) — Conflict UI only appears where the underlying data really overlaps");

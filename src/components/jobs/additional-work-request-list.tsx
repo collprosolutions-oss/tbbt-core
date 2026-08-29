@@ -19,6 +19,7 @@ export type OpenAdditionalWorkRequest = {
   id: string;
   description: string;
   createdAt: Date;
+  source: "CUSTOMER" | "EMPLOYEE";
 };
 
 const createInitialState: ChangeOrderActionState = {};
@@ -77,7 +78,10 @@ function RequestRow({
     <li className="space-y-2 rounded-lg border p-3 text-sm">
       <p className="whitespace-pre-wrap">{request.description}</p>
       <p className="text-xs text-muted-foreground">
-        Requested {formatDateTime(request.createdAt)}
+        {request.source === "EMPLOYEE"
+          ? "Reported by field employee"
+          : "Requested by customer"}{" "}
+        · {formatDateTime(request.createdAt)}
       </p>
       {createState.error ? (
         <Alert variant="destructive">

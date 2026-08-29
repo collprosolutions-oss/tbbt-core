@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import {
   parseDurationMinutes,
   parseScheduleStart,
@@ -210,18 +211,17 @@ export async function startJob(
     }),
   );
 
-  if (job.status === "COMPLETED") {
-    return { error: "A completed job cannot be started." };
+  const result = evaluateStartJob(job.status);
+  if (!result.ok) {
+    return { error: result.error };
   }
 
-  if (job.status === "IN_PROGRESS") {
-    return {};
+  if (result.nextStatus) {
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { status: result.nextStatus },
+    });
   }
-
-  await prisma.job.update({
-    where: { id: job.id },
-    data: { status: "IN_PROGRESS" },
-  });
 
   revalidatePath("/jobs");
   revalidatePath("/dashboard");
@@ -247,21 +247,84 @@ export async function markJobComplete(
     }),
   );
 
-  if (job.status === "COMPLETED") {
-    return {};
+  const result = evaluateCompleteJob(job.status);
+  if (!result.ok) {
+    return { error: result.error };
   }
 
-  if (job.status !== "IN_PROGRESS") {
-    return { error: "Start the job before completing it." };
+  if (result.nextStatus) {
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { status: result.nextStatus },
+    });
   }
-
-  await prisma.job.update({
-    where: { id: job.id },
-    data: { status: "COMPLETED" },
-  });
 
   revalidatePath("/jobs");
   revalidatePath("/dashboard");
   revalidatePath(`/jobs/${job.id}`);
+  return {};
+}
+
+/**
+ * OWNER/ADMIN-only: assign, change, or remove the ONE MEMBER assigned to
+ * this Job (Phase 3 / Step 4 Employee Field Workflow). An empty
+ * `membershipId` removes the assignment (Unassigned).
+ *
+ * SECURITY: the target Membership is re-fetched scoped by
+ * `access.businessId` AND `role: "MEMBER"` in the same query used to
+ * validate it -- never trusted from client input alone. A membershipId
+ * belonging to a different business, or to an OWNER/ADMIN membership,
+ * simply does not come back, so cross-tenant assignment and
+ * self-escalation-by-assignment are both structurally impossible here, not
+ * just discouraged by the UI. MEMBER never reaches this action at all: it
+ * is gated the same way every other job-management mutation is, by
+ * CAPABILITIES.MANAGE_JOBS, which MEMBER has zero capabilities for (see
+ * src/lib/authorization.ts) -- so "MEMBER cannot assign themselves or
+ * anyone else" holds regardless of what a MEMBER might submit.
+ */
+export async function assignJobMember(
+  _prev: JobActionState,
+  formData: FormData,
+): Promise<JobActionState> {
+  const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
+  const jobId = readString(formData, "jobId");
+  const membershipId = readString(formData, "membershipId");
+
+  if (!jobId) {
+    return { error: "That job could not be found." };
+  }
+
+  const job = access.assertOwned(
+    await prisma.job.findFirst({
+      where: { id: jobId, ...access.scope },
+    }),
+  );
+
+  if (!membershipId) {
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { assignedMembershipId: null },
+    });
+    revalidatePath(`/jobs/${job.id}`);
+    revalidatePath("/jobs");
+    return {};
+  }
+
+  const membership = await prisma.membership.findFirst({
+    where: { id: membershipId, businessId: access.businessId, role: "MEMBER" },
+  });
+
+  if (!membership) {
+    return { error: "Choose a team member from this business." };
+  }
+
+  await prisma.job.update({
+    where: { id: job.id },
+    data: { assignedMembershipId: membership.id },
+  });
+
+  revalidatePath(`/jobs/${job.id}`);
+  revalidatePath("/jobs");
   return {};
 }

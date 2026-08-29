@@ -105,7 +105,12 @@ export async function signInAction(
 
   await createSession(user.id);
   await setWorkspaceCookie(membership.businessId);
-  redirect("/dashboard");
+  // OWNER/ADMIN land on the management console; MEMBER lands directly on
+  // their own Field Home ("My Jobs") -- they have no management-console
+  // read access (see canAccessManagementConsole() in
+  // src/lib/authorization.ts), so sending them to /dashboard first would
+  // just bounce them through /access-restricted for no reason.
+  redirect(membership.role === "MEMBER" ? "/field" : "/dashboard");
 }
 
 export async function signOutAction() {

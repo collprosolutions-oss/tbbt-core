@@ -62,16 +62,19 @@ export const CAPABILITIES = {
   /** Create jobs from approved estimates and schedule/dispatch them. */
   MANAGE_JOBS: "MANAGE_JOBS",
   /**
-   * Hands-on job fieldwork: start/complete a job, add/remove job photos.
+   * Hands-on job fieldwork on ANY job in the business: start/complete a
+   * job, add/remove job photos, resolve field problem reports.
+   * OWNER/ADMIN-only, unchanged by Phase 3 / Step 4.
    *
-   * FUTURE BOUNDARY: this is the seam where employee-specific access will
-   * attach. Once a Job carries an assignment (e.g. an `assignedToUserId` or
-   * a join table), MEMBER should be granted this capability SCOPED to jobs
-   * they are assigned to. That assignment model does not exist yet in the
-   * schema, so today OPERATE_JOBS is OWNER/ADMIN-only -- granting MEMBER
-   * access now would mean every MEMBER can operate on every job in the
-   * business, which this step deliberately avoids. Do not fake
-   * assigned-job enforcement; add it when the assignment model exists.
+   * MEMBER's hands-on fieldwork is authorized through a SEPARATE,
+   * narrower boundary instead of this capability: `findAssignedJob()` /
+   * `requireAssignedJobPageAccess()` in src/lib/field-access.ts, which
+   * grant a MEMBER field access to exactly the one Job assigned to them
+   * (Job.assignedMembershipId -- see prisma/schema.prisma), never to every
+   * job in the business the way this capability does. Do not grant MEMBER
+   * this capability -- that would mean every MEMBER can operate on every
+   * job, which the assigned-job-scoped boundary exists specifically to
+   * avoid.
    */
   OPERATE_JOBS: "OPERATE_JOBS",
   /** Business-wide configuration (e.g. labor minimum settings). */
