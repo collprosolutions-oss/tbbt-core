@@ -9,7 +9,8 @@
     "lint": "eslint",
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "test:isolation": "node scripts/check-isolation.mjs"
+    "test:isolation": "node scripts/check-isolation.mjs",
+    "test:estimate-versions": "node --experimental-strip-types scripts/check-estimate-versions.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

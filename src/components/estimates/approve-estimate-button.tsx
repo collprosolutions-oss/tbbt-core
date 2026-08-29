@@ -13,9 +13,17 @@ const initialState: ApproveEstimateResult = {};
 export function ApproveEstimateButton({
   publicToken,
   status,
+  currentVersionId,
 }: {
   publicToken: string;
   status: string;
+  /**
+   * The version this page rendered. Sent back as a staleness check: if the
+   * estimate has been re-sent (a newer version now exists) between page
+   * load and this submit, the server rejects the approval instead of
+   * silently approving content the customer never saw.
+   */
+  currentVersionId?: string;
 }) {
   const [state, formAction, pending] = useActionState(
     approveEstimate,
@@ -41,6 +49,11 @@ export function ApproveEstimateButton({
   return (
     <form action={formAction}>
       <input type="hidden" name="publicToken" value={publicToken} />
+      <input
+        type="hidden"
+        name="estimateVersionId"
+        value={currentVersionId ?? ""}
+      />
       {state.error ? (
         <Alert variant="destructive" className="mb-3">
           <AlertDescription>{state.error}</AlertDescription>

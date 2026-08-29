@@ -9,6 +9,7 @@ import {
   buildEstimateReadyEmail,
   formatEstimateServiceAddress,
 } from "@/lib/estimate-mail";
+import { createEstimateVersionSnapshot } from "@/lib/estimate-version";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import {
   getMailConfig,
@@ -554,6 +555,16 @@ export async function sendEstimate(
     if (updated.count !== 1) {
       return { error: "Only a draft estimate can be sent." };
     }
+
+    // Snapshot creation happens only after the guarded status transition
+    // above has succeeded, and in the same transaction: if this throws
+    // (e.g. the (estimateId, versionNumber) unique constraint), the whole
+    // transaction -- including the SENT status change -- rolls back, so an
+    // estimate is never left marked SENT without a matching version.
+    await createEstimateVersionSnapshot(tx, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+    });
 
     return {};
   });
