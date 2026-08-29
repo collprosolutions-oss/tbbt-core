@@ -70,6 +70,9 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg).*)",
+    // "brand" is public/brand -- static TBBT/business logo assets (see
+    // src/lib/business-branding.ts) that must load unauthenticated, same
+    // as the other static files already excluded here.
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/).*)",
   ],
 };
