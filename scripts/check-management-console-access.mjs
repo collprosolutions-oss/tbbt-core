@@ -232,6 +232,12 @@ try {
       propertyId: canaryProperty.id,
       estimateId: canaryEstimate.id,
       status: "COMPLETED",
+      // A real COMPLETED job was scheduled before it was completed -- set
+      // this so the canary is visible from the Schedule / Jobs calendar's
+      // default Month view (see src/app/(app)/jobs/page.tsx), not just the
+      // List view, matching real-world data.
+      scheduledAt: new Date(),
+      scheduledDurationMinutes: 60,
       projectToken: randomUUID(),
     },
   });
