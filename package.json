@@ -14,7 +14,8 @@
     "test:authorization": "node --experimental-strip-types scripts/check-authorization.mjs",
     "test:management-console-access": "node scripts/check-management-console-access.mjs",
     "test:service-categories": "node --experimental-strip-types scripts/check-service-categories.mjs",
-    "test:work-order-portal": "node --experimental-strip-types scripts/check-work-order-portal.mjs"
+    "test:work-order-portal": "node --experimental-strip-types scripts/check-work-order-portal.mjs",
+    "test:change-orders": "node --experimental-strip-types scripts/check-change-orders.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
