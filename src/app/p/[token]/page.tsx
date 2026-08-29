@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
+import { ChangeOrdersCard } from "@/components/portal/change-orders-card";
 import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
+import { RequestAdditionalWorkForm } from "@/components/portal/request-additional-work-form";
 import {
   Card,
   CardContent,
@@ -8,6 +10,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  CUSTOMER_VISIBLE_CHANGE_ORDER_STATUSES,
+  resolveCurrentApprovedProjectTotal,
+} from "@/lib/change-order";
 import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import {
@@ -93,6 +99,30 @@ export default async function CustomerProjectPortalPage({
             take: 1,
             orderBy: { createdAt: "asc" },
           },
+          // Only ever the statuses a customer is allowed to see -- a DRAFT
+          // change order has never been sent, and a CANCELLED one was
+          // withdrawn before the customer ever acted on it. See
+          // CUSTOMER_VISIBLE_CHANGE_ORDER_STATUSES in
+          // src/lib/change-order.ts.
+          changeOrders: {
+            where: { status: { in: [...CUSTOMER_VISIBLE_CHANGE_ORDER_STATUSES] } },
+            orderBy: { createdAt: "desc" },
+            select: {
+              id: true,
+              title: true,
+              status: true,
+              total: true,
+              lineItems: {
+                orderBy: { createdAt: "asc" },
+                select: {
+                  description: true,
+                  quantity: true,
+                  unitPrice: true,
+                  total: true,
+                },
+              },
+            },
+          },
         },
       })
     : null;
@@ -113,6 +143,13 @@ export default async function CustomerProjectPortalPage({
   const invoice = job.invoices[0] ?? null;
   const approvedScope = resolveApprovedWorkOrderScope(job);
   const progressStep = resolveProjectProgressStep(job, invoice);
+  const currentApprovedProjectTotal =
+    approvedScope.source === "none"
+      ? null
+      : resolveCurrentApprovedProjectTotal(
+          approvedScope.total,
+          job.changeOrders,
+        );
 
   return (
     <main className="flex min-h-full items-center justify-center px-4 py-10">
@@ -145,7 +182,39 @@ export default async function CustomerProjectPortalPage({
           </CardContent>
         </Card>
 
-        <ApprovedScopeCard scope={approvedScope} title="Approved Work" />
+        <ApprovedScopeCard scope={approvedScope} title="Original Approved Scope" />
+
+        {currentApprovedProjectTotal !== null ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Current Approved Project Total</CardTitle>
+              <CardDescription>
+                Your original approved total plus any change orders you have
+                approved below. Pending or declined change orders are never
+                included.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="text-sm font-medium">
+              {formatMoney(currentApprovedProjectTotal)}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        <ChangeOrdersCard projectToken={token} changeOrders={job.changeOrders} />
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Additional Work</CardTitle>
+            <CardDescription>
+              Have something else you&apos;d like us to look at? Send a
+              request -- we&apos;ll follow up with pricing before anything is
+              added to your project.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RequestAdditionalWorkForm projectToken={token} />
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>

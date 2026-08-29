@@ -8,8 +8,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { AdditionalWorkRequestList } from "@/components/jobs/additional-work-request-list";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
+import { ChangeOrderList } from "@/components/jobs/change-order-list";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
+import { CreateChangeOrderForm } from "@/components/jobs/create-change-order-form";
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
 import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
@@ -21,6 +24,7 @@ import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { requireManagementPageAccess } from "@/lib/access";
+import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import {
   formatAddress,
   formatDate,
@@ -110,6 +114,15 @@ export default async function JobPage({
         select: { id: true, stage: true, url: true, caption: true, createdAt: true },
         orderBy: { createdAt: "asc" },
       },
+      changeOrders: {
+        orderBy: { createdAt: "desc" },
+        select: { id: true, title: true, status: true, total: true },
+      },
+      additionalWorkRequests: {
+        where: { status: "OPEN" },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, description: true, createdAt: true },
+      },
     },
   });
 
@@ -123,6 +136,16 @@ export default async function JobPage({
   const isInProgress = job.status === "IN_PROGRESS";
   const invoice = job.invoices[0] ?? null;
   const approvedScope = resolveApprovedWorkOrderScope(job);
+  const approvedChangeOrders = job.changeOrders.filter(
+    (changeOrder) => changeOrder.status === "APPROVED",
+  );
+  const currentApprovedProjectTotal =
+    approvedScope.source === "none"
+      ? null
+      : resolveCurrentApprovedProjectTotal(
+          approvedScope.total,
+          job.changeOrders,
+        );
   const durationPreset = durationPresetForMinutes(
     job.scheduledDurationMinutes,
   );
@@ -340,7 +363,89 @@ export default async function JobPage({
         </CardContent>
       </Card>
 
-      <ApprovedScopeCard scope={approvedScope} title="Approved Scope (Work Order)" />
+      <ApprovedScopeCard scope={approvedScope} title="Original Approved Scope" />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Current Approved Project Total</CardTitle>
+          <CardDescription>
+            The original approved scope never changes. Only APPROVED change
+            orders below add to the project total -- draft, sent, declined,
+            and cancelled change orders never do.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          {approvedScope.source === "none" || currentApprovedProjectTotal === null ? (
+            <p className="text-muted-foreground">
+              No approved estimate is linked to this job yet.
+            </p>
+          ) : (
+            <>
+              <p>Original Approved Total: {formatMoney(approvedScope.total)}</p>
+              {approvedChangeOrders.length === 0 ? (
+                <p>Approved Change Orders: {formatMoney(0)}</p>
+              ) : (
+                <div>
+                  <p>Approved Change Orders:</p>
+                  <ul className="ml-4 list-disc">
+                    {approvedChangeOrders.map((changeOrder) => (
+                      <li key={changeOrder.id}>
+                        {changeOrder.title} — {formatMoney(changeOrder.total)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <p className="font-medium">
+                Current Approved Project Total:{" "}
+                {formatMoney(currentApprovedProjectTotal)}
+              </p>
+              {invoice && !invoice.total.equals(currentApprovedProjectTotal) ? (
+                <p className="text-muted-foreground">
+                  Note: this job already has an invoice (
+                  {formatMoney(invoice.total)}) created before the current
+                  approved project total above. Approved change orders since
+                  then are not automatically added to that existing invoice.
+                </p>
+              ) : null}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Change Orders</CardTitle>
+          <CardDescription>
+            Post-approval scope/pricing changes for this job. Only an
+            APPROVED change order becomes part of the approved project total
+            or invoice -- the original approved estimate above is never
+            rewritten.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <ChangeOrderList jobId={job.id} changeOrders={job.changeOrders} />
+          <CreateChangeOrderForm jobId={job.id} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Additional Work Requests</CardTitle>
+          <CardDescription>
+            Requests submitted by the customer from their project portal
+            (&ldquo;+ Request Additional Work&rdquo;). A request never
+            changes approved scope, price, or the invoice by itself -- review
+            it and, if appropriate, create a Change Order to price it.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AdditionalWorkRequestList
+            jobId={job.id}
+            requests={job.additionalWorkRequests}
+          />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

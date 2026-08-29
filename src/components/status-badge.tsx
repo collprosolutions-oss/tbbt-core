@@ -2,7 +2,7 @@ import { Badge } from "@/components/ui/badge";
 
 const VARIANTS: Record<
   string,
-  "default" | "secondary" | "outline"
+  "default" | "secondary" | "outline" | "destructive"
 > = {
   OPEN: "secondary",
   CONVERTED: "outline",
@@ -14,6 +14,9 @@ const VARIANTS: Record<
   IN_PROGRESS: "default",
   COMPLETED: "secondary",
   PAID: "default",
+  DECLINED: "destructive",
+  CANCELLED: "outline",
+  DISMISSED: "outline",
 };
 
 export function StatusBadge({ status }: { status: string }) {
