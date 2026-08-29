@@ -9,10 +9,15 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DEFAULT_SERVICE_CATEGORY } from "@/lib/service-catalog-category";
 
 const initialState: CatalogActionState = {};
 
-export function CreateCatalogItemForm() {
+export function CreateCatalogItemForm({
+  categories,
+}: {
+  categories: string[];
+}) {
   const [state, action, pending] = useActionState(
     createServiceCatalogItem,
     initialState,
@@ -29,6 +34,20 @@ export function CreateCatalogItemForm() {
       <div className="space-y-2">
         <Label htmlFor="name">Name</Label>
         <Input id="name" name="name" required />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="category">Category</Label>
+        <Input
+          id="category"
+          name="category"
+          list="catalog-category-options"
+          defaultValue={DEFAULT_SERVICE_CATEGORY}
+        />
+        <datalist id="catalog-category-options">
+          {categories.map((category) => (
+            <option key={category} value={category} />
+          ))}
+        </datalist>
       </div>
       <div className="space-y-2">
         <Label htmlFor="pricingMode">Pricing mode</Label>

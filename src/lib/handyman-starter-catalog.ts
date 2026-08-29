@@ -3,6 +3,19 @@
  * These are per-business copies after import, not a shared live price list.
  * Starter prices are templates only. CUSTOM_QUOTE services import with no
  * dollar amount. Prices are labor recommendations, not hourly rates or materials.
+ *
+ * HANDYMAN_CATALOG_CATEGORIES below is a Handyman-specific display order,
+ * not a global category enum -- see src/lib/service-catalog-category.ts,
+ * whose grouping helper accepts this as an optional `preferredOrder`
+ * instead of hardcoding it, so other trades are never forced into these
+ * category names.
+ *
+ * This file deliberately has no runtime import of
+ * src/lib/service-catalog-category.ts (only type-only / no cross-module
+ * runtime dependency), matching the existing convention of other
+ * src/lib/*.ts files that scripts/check-*.mjs import directly via Node's
+ * TypeScript type-stripping, which cannot resolve this project's "@/..."
+ * path alias outside of Next's own bundler.
  */
 
 export const HANDYMAN_CATALOG_CATEGORIES = [
@@ -588,8 +601,25 @@ export function planStarterCatalogInstall(existingNames: string[]) {
   };
 }
 
+/**
+ * Must stay equal to DEFAULT_SERVICE_CATEGORY in
+ * src/lib/service-catalog-category.ts (the trade-agnostic module's own
+ * fallback constant, and this column's database default in
+ * prisma/schema.prisma). Not re-exported from there directly so this file
+ * keeps zero runtime "@/..." cross-module imports -- see the file header
+ * comment for why.
+ */
 export const OTHER_SERVICES_CATEGORY = "Other Services";
 
+/**
+ * Name-derived category lookup, kept ONLY for the public intake page
+ * (src/app/r/[slug]/page.tsx), which is explicitly out of scope for the
+ * Step 3 persistent-category work and must not change behavior. Every
+ * other consumer (the Services page, the starter-catalog install action)
+ * now uses ServiceCatalogItem's own persisted `category` column instead --
+ * see groupServiceCatalogItemsByCategory() in
+ * src/lib/service-catalog-category.ts.
+ */
 export function starterCategoryForName(name: string) {
   const key = catalogNameKey(name);
   const match = HANDYMAN_STARTER_SERVICES.find(
@@ -598,6 +628,11 @@ export function starterCategoryForName(name: string) {
   return match?.category ?? OTHER_SERVICES_CATEGORY;
 }
 
+/**
+ * Name-derived grouping, kept ONLY for the public intake page (see
+ * starterCategoryForName() above for why). Do not use this for any page
+ * that has access to ServiceCatalogItem's own persisted `category` column.
+ */
 export function groupServicesByStarterCategory<
   T extends { name: string; id?: string; templateKey?: string },
 >(items: T[]) {

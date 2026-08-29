@@ -10,6 +10,7 @@ import {
 } from "@/lib/handyman-starter-catalog";
 import { parsePricingMode } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
+import { normalizeServiceCategory } from "@/lib/service-catalog-category";
 import { isActiveTrade } from "@/lib/trades";
 
 export type CatalogActionState = {
@@ -61,6 +62,7 @@ export async function createServiceCatalogItem(
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
   const name = readString(formData, "name");
   const description = readString(formData, "description");
+  const category = normalizeServiceCategory(readString(formData, "category"));
   const pricingMode = parsePricingMode(readString(formData, "pricingMode"));
   const priced = catalogPriceForMode(
     pricingMode ?? "",
@@ -81,6 +83,7 @@ export async function createServiceCatalogItem(
       pricingMode,
       price: priced.price,
       description: description || null,
+      category,
     },
   });
 
@@ -97,6 +100,7 @@ export async function updateServiceCatalogItem(
   const id = readString(formData, "id");
   const name = readString(formData, "name");
   const description = readString(formData, "description");
+  const category = normalizeServiceCategory(readString(formData, "category"));
   const pricingMode = parsePricingMode(readString(formData, "pricingMode"));
   const priced = catalogPriceForMode(
     pricingMode ?? "",
@@ -123,6 +127,7 @@ export async function updateServiceCatalogItem(
       pricingMode,
       price: priced.price,
       description: description || null,
+      category,
     },
   });
 
@@ -181,6 +186,9 @@ export async function installHandymanStarterCatalog(): Promise<CatalogActionStat
               service.startingPrice == null
                 ? null
                 : new Prisma.Decimal(service.startingPrice),
+            // Stored directly from the starter template's own category
+            // field, not derived later from the name.
+            category: service.category,
             active: true,
           },
         }),

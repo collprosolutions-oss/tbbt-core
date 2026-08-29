@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
 import {
-  groupServicesByStarterCategory,
+  HANDYMAN_CATALOG_CATEGORIES,
   HANDYMAN_STARTER_SERVICES,
   isImportableStarterService,
   planStarterCatalogInstall,
@@ -21,6 +21,7 @@ import {
 } from "@/lib/handyman-starter-catalog";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
+import { groupServiceCatalogItemsByCategory } from "@/lib/service-catalog-category";
 import { isActiveTrade } from "@/lib/trades";
 
 export const metadata: Metadata = {
@@ -37,9 +38,24 @@ export default async function ServicesPage() {
   const starterPlan = showStarterCatalog
     ? planStarterCatalogInstall(items.map((item) => item.name))
     : null;
-  const groupedItems = groupServicesByStarterCategory(items);
+  // Preferred display order for this business's trade. Handyman is the
+  // only trade active today; a future trade would pass its own order (or
+  // none) here instead -- this stays a page-level choice, not something
+  // baked into the grouping helper itself.
+  const preferredCategoryOrder = showStarterCatalog
+    ? HANDYMAN_CATALOG_CATEGORIES
+    : [];
+  // Grouped by each item's OWN persisted `category` column -- no more
+  // name-derived/hardcoded matching for the business's real catalog.
+  const groupedItems = groupServiceCatalogItemsByCategory(
+    items,
+    preferredCategoryOrder,
+  );
   const groupedStarter = showStarterCatalog
-    ? groupServicesByStarterCategory(HANDYMAN_STARTER_SERVICES)
+    ? groupServiceCatalogItemsByCategory(
+        HANDYMAN_STARTER_SERVICES,
+        preferredCategoryOrder,
+      )
     : [];
   const skipKeys = new Set(
     (starterPlan?.skip ?? []).map((service) => service.templateKey),
@@ -47,6 +63,15 @@ export default async function ServicesPage() {
   const pendingKeys = new Set(
     (starterPlan?.pending ?? []).map((service) => service.templateKey),
   );
+  // Category suggestions offered on the Add/Edit service forms: this
+  // business's own categories already in use, plus (for Handyman) the
+  // starter set as recommendations. Never a hardcoded global list.
+  const suggestedCategories = Array.from(
+    new Set([
+      ...preferredCategoryOrder,
+      ...items.map((item) => item.category),
+    ]),
+  ).sort((a, b) => a.localeCompare(b));
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -122,7 +147,7 @@ export default async function ServicesPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <CreateCatalogItemForm />
+          <CreateCatalogItemForm categories={suggestedCategories} />
         </CardContent>
       </Card>
 
@@ -167,6 +192,8 @@ export default async function ServicesPage() {
                         item.price,
                       )}
                       description={item.description ?? ""}
+                      category={item.category}
+                      categories={suggestedCategories}
                       active={item.active}
                     />
                   </CardContent>

@@ -142,6 +142,16 @@ model ServiceCatalogItem {
   /// FIXED | STARTING_AT | CUSTOM_QUOTE. Existing rows default to STARTING_AT.
   pricingMode String   @default("STARTING_AT")
   price       Decimal?
+  /// Persistent grouping label for this business's price list (e.g.
+  /// "Doors & Locks" for a Handyman business). Free-form per business/trade
+  /// on purpose -- this is NOT a shared enum, so a future non-Handyman trade
+  /// (Cleaning, Painting, Landscaping, ...) can use its own category
+  /// vocabulary without any TBBT Core schema change. "Other Services" is
+  /// the safe fallback for a service with no meaningful category, matching
+  /// the app's pre-existing OTHER_SERVICES_CATEGORY fallback (see
+  /// src/lib/service-catalog-category.ts and
+  /// src/lib/handyman-starter-catalog.ts).
+  category    String   @default("Other Services")
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

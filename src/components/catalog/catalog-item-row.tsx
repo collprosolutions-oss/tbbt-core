@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DEFAULT_SERVICE_CATEGORY } from "@/lib/service-catalog-category";
 
 const initialState: CatalogActionState = {};
 
@@ -21,6 +22,8 @@ type CatalogItemRowProps = {
   price: string;
   displayPrice: string;
   description: string;
+  category: string;
+  categories: string[];
   active: boolean;
 };
 
@@ -31,6 +34,8 @@ export function CatalogItemRow({
   price,
   displayPrice,
   description,
+  category,
+  categories,
   active,
 }: CatalogItemRowProps) {
   const [state, action, pending] = useActionState(
@@ -62,6 +67,20 @@ export function CatalogItemRow({
         <div className="space-y-2">
           <Label htmlFor={`name-${id}`}>Name</Label>
           <Input id={`name-${id}`} name="name" defaultValue={name} required />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor={`category-${id}`}>Category</Label>
+          <Input
+            id={`category-${id}`}
+            name="category"
+            list={`catalog-category-options-${id}`}
+            defaultValue={category || DEFAULT_SERVICE_CATEGORY}
+          />
+          <datalist id={`catalog-category-options-${id}`}>
+            {categories.map((option) => (
+              <option key={option} value={option} />
+            ))}
+          </datalist>
         </div>
         <div className="space-y-2">
           <Label htmlFor={`pricingMode-${id}`}>Pricing mode</Label>
