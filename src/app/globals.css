@@ -72,7 +72,7 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
+  --radius: 0.5rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -83,48 +83,84 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
+/*
+ * TBBT "operating system for trade contractors" theme -- professional dark
+ * navy SaaS surface. This is the ONE place the whole app's color language
+ * lives: every shared primitive (Button, Card, Badge, Input, etc.) and every
+ * page reads these tokens rather than hardcoded colors, so this block is the
+ * single lever for the entire product's look. Business identity (name,
+ * trade label) always comes from data (see AppShell/FieldShell props) --
+ * never hardcoded here, so any future TBBT business inherits the exact same
+ * professional look with zero per-tenant styling.
+ */
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: oklch(0.17 0.025 259);
+  --foreground: oklch(0.94 0.008 259);
+  --card: oklch(0.21 0.026 259);
+  --card-foreground: oklch(0.94 0.008 259);
+  --popover: oklch(0.23 0.03 259);
+  --popover-foreground: oklch(0.94 0.008 259);
+  --primary: oklch(0.62 0.17 258);
+  --primary-foreground: oklch(0.99 0.003 259);
+  --secondary: oklch(0.28 0.03 259);
+  --secondary-foreground: oklch(0.9 0.01 259);
+  --muted: oklch(0.24 0.026 259);
+  --muted-foreground: oklch(0.65 0.02 259);
+  --accent: oklch(0.29 0.035 259);
+  --accent-foreground: oklch(0.94 0.008 259);
+  --destructive: oklch(0.66 0.19 25);
+  --border: oklch(0.94 0.01 259 / 10%);
+  --input: oklch(0.94 0.01 259 / 14%);
+  --ring: oklch(0.66 0.15 258 / 55%);
+  --chart-1: oklch(0.62 0.17 258);
+  --chart-2: oklch(0.7 0.15 195);
+  --chart-3: oklch(0.75 0.16 90);
+  --chart-4: oklch(0.68 0.19 25);
+  --chart-5: oklch(0.72 0.15 320);
+  --sidebar: oklch(0.13 0.022 259);
+  --sidebar-foreground: oklch(0.88 0.01 259);
+  --sidebar-primary: oklch(0.62 0.17 258);
+  --sidebar-primary-foreground: oklch(0.99 0.003 259);
+  --sidebar-accent: oklch(0.27 0.06 258);
+  --sidebar-accent-foreground: oklch(0.97 0.006 259);
+  --sidebar-border: oklch(0.94 0.01 259 / 8%);
+  --sidebar-ring: oklch(0.66 0.15 258 / 55%);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    @apply font-sans overflow-x-hidden;
+    color-scheme: dark;
+  }
   body {
     @apply bg-background text-foreground overflow-x-hidden;
   }
-  html {
-    @apply font-sans overflow-x-hidden;
+  ::selection {
+    background-color: var(--primary);
+    color: var(--primary-foreground);
+  }
+  * {
+    scrollbar-color: var(--muted-foreground) transparent;
+    scrollbar-width: thin;
+  }
+
+  /*
+   * Shared polish for native <select> elements across the app (Duration,
+   * Payment Method, Assigned Employee, Pricing Mode, etc.). These are
+   * intentionally plain <select> tags -- not a new Radix dependency -- so
+   * this single rule keeps every one of them visually consistent with
+   * Input/Button without editing each form.
+   */
+  select {
+    @apply cursor-pointer transition-colors;
+  }
+  select:focus-visible {
+    @apply border-ring ring-3 ring-ring/50 outline-none;
+  }
+  select:disabled {
+    @apply cursor-not-allowed opacity-50;
   }
 }
