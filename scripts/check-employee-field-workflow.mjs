@@ -503,6 +503,86 @@ try {
   await prisma.changeOrder.create({ data: { businessId: businessA.id, jobId: scopeJob.id, status: "DECLINED", title: CO_DECLINED, total: new Prisma.Decimal(30), sentAt: new Date(), declinedAt: new Date() } });
   await prisma.changeOrder.create({ data: { businessId: businessA.id, jobId: scopeJob.id, status: "CANCELLED", title: CO_CANCELLED, total: new Prisma.Decimal(40), cancelledAt: new Date() } });
 
+  // --- Pricing-privacy fixtures for TEST 30 below (Launch Punch #3): a
+  // Job whose approved scope has a NONZERO Labor Minimum Service Fee
+  // Adjustment and an APPROVED Change Order, using distinctive dollar
+  // figures. Proves the Field Job page renders none of them (operational
+  // scope only) while the OWNER/ADMIN Work Order page for the exact same
+  // Job is completely unchanged.
+  const moneyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+  const PRICING_LINE_DESCRIPTION = "Canary Pricing Privacy Line Q9x";
+  const PRICING_QUANTITY = 3;
+  const PRICING_UNIT_PRICE = 54.32;
+  const PRICING_LINE_TOTAL = 162.96; // 3 x 54.32
+  const PRICING_LABOR_ADJUSTMENT = 19.73;
+  const PRICING_VERSION_TOTAL = 182.69; // line total + labor adjustment
+  const PRICING_CHANGE_ORDER_TITLE = "Canary Pricing Privacy Change Order Q9x";
+  const PRICING_CHANGE_ORDER_TOTAL = 86.54;
+  const fmtUnitPrice = moneyFormatter.format(PRICING_UNIT_PRICE);
+  const fmtLineTotal = moneyFormatter.format(PRICING_LINE_TOTAL);
+  const fmtLaborAdjustment = moneyFormatter.format(PRICING_LABOR_ADJUSTMENT);
+  const fmtVersionTotal = moneyFormatter.format(PRICING_VERSION_TOTAL);
+  const fmtChangeOrderTotal = moneyFormatter.format(PRICING_CHANGE_ORDER_TOTAL);
+
+  const pricingEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      total: new Prisma.Decimal(PRICING_VERSION_TOTAL),
+      publicToken: randomUUID(),
+      status: "APPROVED",
+    },
+  });
+  const pricingVersion = await prisma.estimateVersion.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: pricingEstimate.id,
+      versionNumber: 1,
+      total: new Prisma.Decimal(PRICING_VERSION_TOTAL),
+      laborMinimumWaived: false,
+      laborMinimumAdjustment: new Prisma.Decimal(PRICING_LABOR_ADJUSTMENT),
+      approvedAt: new Date(),
+    },
+  });
+  await prisma.estimateVersionLineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateVersionId: pricingVersion.id,
+      description: PRICING_LINE_DESCRIPTION,
+      quantity: new Prisma.Decimal(PRICING_QUANTITY),
+      unitPrice: new Prisma.Decimal(PRICING_UNIT_PRICE),
+      total: new Prisma.Decimal(PRICING_LINE_TOTAL),
+      type: "LABOR",
+    },
+  });
+  await prisma.estimate.update({ where: { id: pricingEstimate.id }, data: { approvedVersionId: pricingVersion.id } });
+
+  const pricingJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      estimateId: pricingEstimate.id,
+      approvedEstimateVersionId: pricingVersion.id,
+      assignedMembershipId: member1Membership.id,
+      projectToken: randomUUID(),
+      status: "SCHEDULED",
+      scheduledAt: new Date(),
+    },
+  });
+  await prisma.changeOrder.create({
+    data: {
+      businessId: businessA.id,
+      jobId: pricingJob.id,
+      status: "APPROVED",
+      title: PRICING_CHANGE_ORDER_TITLE,
+      total: new Prisma.Decimal(PRICING_CHANGE_ORDER_TOTAL),
+      sentAt: new Date(),
+      approvedAt: new Date(),
+    },
+  });
+
   // --- HTTP-only Work Order fixture: a field problem report + employee
   // additional-work request that OWNER/ADMIN must see (TEST 28), and that
   // must never leak to the Customer Project Portal (TEST 29).
@@ -628,6 +708,68 @@ try {
   check("TEST 17 - Assigned member does NOT see the SENT (not yet approved) change order", !scopeFieldJobPage.body.includes(CO_SENT));
   check("TEST 17 - Assigned member does NOT see the DECLINED change order", !scopeFieldJobPage.body.includes(CO_DECLINED));
   check("TEST 17 - Assigned member does NOT see the CANCELLED change order", !scopeFieldJobPage.body.includes(CO_CANCELLED));
+
+  console.log(
+    "\nTEST 30 — Launch Punch #3: Field Job page shows operational scope only (no pricing), while the OWNER Work Order page for the SAME job is completely unchanged",
+  );
+  const pricingFieldPage = await fetchRaw(member1Session, `/field/jobs/${pricingJob.id}`);
+  check("TEST 30 - Assigned member's Field Job page returns 200", pricingFieldPage.status === 200);
+  check(
+    "TEST 30 - Field Job page still shows the operational line description (what work was approved)",
+    pricingFieldPage.body.includes(PRICING_LINE_DESCRIPTION),
+  );
+  check(
+    "TEST 30 - Field Job page still shows the operational APPROVED change order title",
+    pricingFieldPage.body.includes(PRICING_CHANGE_ORDER_TITLE),
+  );
+  check(
+    "TEST 30 - Field Job page HTML never contains the unit price dollar figure",
+    !pricingFieldPage.body.includes(fmtUnitPrice),
+  );
+  check(
+    "TEST 30 - Field Job page HTML never contains the line-item dollar total",
+    !pricingFieldPage.body.includes(fmtLineTotal),
+  );
+  check(
+    "TEST 30 - Field Job page HTML never contains the 'Labor Minimum Service Fee Adjustment' label at all (purely financial, no operational meaning)",
+    !pricingFieldPage.body.includes("Labor Minimum Service Fee Adjustment"),
+  );
+  check(
+    "TEST 30 - Field Job page HTML never contains the labor-minimum dollar figure",
+    !pricingFieldPage.body.includes(fmtLaborAdjustment),
+  );
+  check(
+    "TEST 30 - Field Job page HTML never contains the 'Approved total' label or its dollar figure",
+    !pricingFieldPage.body.includes("Approved total") && !pricingFieldPage.body.includes(fmtVersionTotal),
+  );
+  check(
+    "TEST 30 - Field Job page HTML never contains the approved Change Order's dollar total",
+    !pricingFieldPage.body.includes(fmtChangeOrderTotal),
+  );
+  check(
+    "TEST 30 - Field Job page HTML never contains 'Current Approved Total' either",
+    !pricingFieldPage.body.includes("Current Approved Total"),
+  );
+
+  const pricingWorkOrderPage = await fetchRaw(ownerSession, `/jobs/${pricingJob.id}`);
+  check("TEST 30 - OWNER Work Order page for the SAME job returns 200", pricingWorkOrderPage.status === 200);
+  check(
+    "TEST 30 - OWNER Work Order page is UNCHANGED: still shows the unit price",
+    pricingWorkOrderPage.body.includes(fmtUnitPrice),
+  );
+  check(
+    "TEST 30 - OWNER Work Order page is UNCHANGED: still shows the Labor Minimum Service Fee Adjustment label and dollar figure",
+    pricingWorkOrderPage.body.includes("Labor Minimum Service Fee Adjustment") &&
+      pricingWorkOrderPage.body.includes(fmtLaborAdjustment),
+  );
+  check(
+    "TEST 30 - OWNER Work Order page is UNCHANGED: still shows the approved total dollar figure",
+    pricingWorkOrderPage.body.includes(fmtVersionTotal),
+  );
+  check(
+    "TEST 30 - OWNER Work Order page is UNCHANGED: still shows the approved Change Order's dollar total",
+    pricingWorkOrderPage.body.includes(fmtChangeOrderTotal),
+  );
 
   console.log("\nMEMBER FIELD JOB PAGE — Field-safe contact info, actions, no owner-only data");
   check("Field Job page shows a click-to-call link for the customer's phone", scopeFieldJobPage.body.includes(`tel:${customerA.phone}`));
