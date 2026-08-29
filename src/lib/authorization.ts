@@ -76,6 +76,14 @@ export const CAPABILITIES = {
   OPERATE_JOBS: "OPERATE_JOBS",
   /** Business-wide configuration (e.g. labor minimum settings). */
   MANAGE_SETTINGS: "MANAGE_SETTINGS",
+  /**
+   * Create/edit/send/cancel Change Orders (post-approval scope/pricing
+   * changes on a Job) and act on customer Additional Work Requests
+   * (create a Change Order from one, or dismiss it). Deliberately separate
+   * from MANAGE_JOBS/MANAGE_ESTIMATES: a Change Order is a distinct,
+   * separately-approved commercial record, not an edit to either.
+   */
+  MANAGE_CHANGE_ORDERS: "MANAGE_CHANGE_ORDERS",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
