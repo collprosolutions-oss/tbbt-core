@@ -312,7 +312,12 @@ export async function assignJobMember(
   }
 
   const membership = await prisma.membership.findFirst({
-    where: { id: membershipId, businessId: access.businessId, role: "MEMBER" },
+    where: {
+      id: membershipId,
+      businessId: access.businessId,
+      role: "MEMBER",
+      active: true,
+    },
   });
 
   if (!membership) {

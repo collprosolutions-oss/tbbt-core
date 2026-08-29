@@ -49,8 +49,12 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  memberships Membership[]
-  sessions    Session[]
+  memberships          Membership[]
+  sessions             Session[]
+  /// One-time credential-setup links for a newly-onboarded team member --
+  /// see PasswordSetupToken below. Empty for every user who signed up
+  /// themselves (signUpAction already sets a real password).
+  passwordSetupTokens  PasswordSetupToken[]
 }
 
 model Session {
@@ -59,6 +63,31 @@ model Session {
   userId    String
   expiresAt DateTime
   createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// A single-use, expiring, unguessable link letting a newly-onboarded team
+/// member set their OWN password -- the smallest secure onboarding
+/// mechanism that avoids ever exposing or storing a plaintext password
+/// (see addTeamMember() in src/app/actions/team.ts and
+/// src/app/set-password/[token]/page.tsx). Mirrors Session's existing
+/// hashed-token pattern exactly (sha256 tokenHash stored, raw token only
+/// ever in the URL) rather than introducing a new credential concept.
+/// OWNER/ADMIN see the raw setup link exactly once, to relay to the new
+/// MEMBER by whatever channel they already use (text, email, in person);
+/// TBBT does not require email delivery to be configured for this to
+/// work. `usedAt` makes the link single-use; `expiresAt` bounds its
+/// lifetime the same way a Session's `expiresAt` does.
+model PasswordSetupToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -98,6 +127,17 @@ model Membership {
   userId     String
   businessId String
   role       MembershipRole
+  /// Whether this Membership currently grants access. OWNER/ADMIN can
+  /// deactivate a MEMBER's Membership (see removeTeamMember() in
+  /// src/app/actions/team.ts) without deleting the row itself, so
+  /// historical records that reference this Membership (Job.
+  /// assignedMembershipId, JobProblemReport.membershipId) keep working
+  /// exactly as they do today. requireWorkspace() only resolves a
+  /// workspace from active memberships, so a deactivated MEMBER simply
+  /// loses access -- there is no separate "disabled user" flag on User
+  /// itself, since a user may still hold an active membership at a
+  /// DIFFERENT business.
+  active     Boolean        @default(true)
   createdAt  DateTime       @default(now())
 
   user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)

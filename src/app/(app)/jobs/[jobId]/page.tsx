@@ -150,7 +150,7 @@ export default async function JobPage({
   // Business only -- see assignJobMember() in src/app/actions/job.ts for
   // the server-side re-validation this list is purely a UX convenience for.
   const eligibleMembers = await prisma.membership.findMany({
-    where: { businessId: access.businessId, role: "MEMBER" },
+    where: { businessId: access.businessId, role: "MEMBER", active: true },
     select: { id: true, user: { select: { name: true, email: true } } },
     orderBy: { createdAt: "asc" },
   });

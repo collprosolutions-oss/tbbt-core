@@ -30,14 +30,25 @@ function parseAppUrl(value: string) {
   }
 }
 
+/**
+ * The app's own base URL, independent of whether transactional email
+ * (Resend) is configured. Used to build absolute links a page hands
+ * directly to the user to copy/share -- e.g. the one-time team-member
+ * password-setup link in src/app/actions/team.ts -- which must keep
+ * working even when RESEND_API_KEY/EMAIL_FROM are unset.
+ */
+export function getAppUrl(): string | null {
+  return process.env.NEXT_PUBLIC_APP_URL
+    ? parseAppUrl(process.env.NEXT_PUBLIC_APP_URL)
+    : null;
+}
+
 export function getMailConfig(): MailConfig | { error: string } {
   const apiKey = process.env.RESEND_API_KEY?.trim();
   const fromAddress = process.env.EMAIL_FROM
     ? parseFromAddress(process.env.EMAIL_FROM)
     : null;
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL
-    ? parseAppUrl(process.env.NEXT_PUBLIC_APP_URL)
-    : null;
+  const appUrl = getAppUrl();
 
   if (!apiKey || !fromAddress || !appUrl) {
     return { error: "Email delivery is not configured" };

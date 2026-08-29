@@ -161,7 +161,14 @@ check(
 );
 check(
   "assignJobMember() re-validates the target membership scoped by businessId AND role MEMBER (cross-tenant/role-escalation via assignment is impossible)",
-  /membershipId, businessId: access\.businessId, role: "MEMBER"/.test(jobActionsSrc),
+  /id:\s*membershipId,[\s\S]{0,60}businessId:\s*access\.businessId,[\s\S]{0,60}role:\s*"MEMBER"/.test(jobActionsSrc),
+);
+check(
+  // Added by the Launch Blocker Fix team-onboarding work (see
+  // scripts/check-team-onboarding.mjs): a deactivated ("removed") MEMBER
+  // must be just as un-assignable as a wrong-business/wrong-role one.
+  "assignJobMember() also excludes an inactive (removed) MEMBER's membership",
+  /role:\s*"MEMBER",[\s\S]{0,40}active:\s*true/.test(jobActionsSrc),
 );
 
 // --- 2. Prisma-level checks (mirror real server-action logic) -----------

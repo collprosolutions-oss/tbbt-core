@@ -87,6 +87,15 @@ export const CAPABILITIES = {
    * separately-approved commercial record, not an edit to either.
    */
   MANAGE_CHANGE_ORDERS: "MANAGE_CHANGE_ORDERS",
+  /**
+   * Add a field team member (MEMBER) to this business, and
+   * remove/deactivate an existing MEMBER Membership. Deliberately narrow --
+   * this is onboarding a Membership row for the existing User/auth model,
+   * NOT the future Team & Permissions module (no role changes beyond
+   * OWNER/ADMIN creating a MEMBER, no invite management UI, no
+   * payroll/HR). See src/app/actions/team.ts.
+   */
+  MANAGE_MEMBERS: "MANAGE_MEMBERS",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];

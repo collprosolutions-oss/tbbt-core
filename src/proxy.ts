@@ -27,6 +27,16 @@ function isPublicProject(pathname: string) {
   return pathname.startsWith("/p/");
 }
 
+/**
+ * One-time team-member password-setup link -- see addTeamMember() in
+ * src/app/actions/team.ts and src/app/set-password/[token]/page.tsx. Must
+ * stay reachable without a session: the person opening this link has no
+ * account credentials yet.
+ */
+function isPublicSetPassword(pathname: string) {
+  return pathname.startsWith("/set-password/");
+}
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
@@ -41,7 +51,8 @@ export function proxy(request: NextRequest) {
     isPublicIntake(pathname) ||
     isPublicEstimate(pathname) ||
     isPublicHire(pathname) ||
-    isPublicProject(pathname)
+    isPublicProject(pathname) ||
+    isPublicSetPassword(pathname)
   ) {
     return NextResponse.next();
   }

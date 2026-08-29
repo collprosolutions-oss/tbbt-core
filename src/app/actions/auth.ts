@@ -91,7 +91,13 @@ export async function signInAction(
 
   const user = await prisma.user.findUnique({
     where: { email },
-    include: { memberships: { orderBy: { createdAt: "asc" } } },
+    include: {
+      // Only an ACTIVE membership can sign in to that workspace -- matches
+      // requireWorkspace() in src/lib/workspace.ts, so a deactivated
+      // MEMBER (see removeTeamMember() in src/app/actions/team.ts) is
+      // rejected here too, not just bounced later.
+      memberships: { where: { active: true }, orderBy: { createdAt: "asc" } },
+    },
   });
 
   if (!user || !(await verifyPassword(password, user.passwordHash))) {

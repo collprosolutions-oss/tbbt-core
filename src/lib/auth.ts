@@ -15,7 +15,14 @@ export type SessionUser = {
   name: string;
 };
 
-function hashToken(token: string) {
+/**
+ * Exported so any other single-use, expiring, unguessable-token flow can
+ * reuse this exact hashing scheme instead of inventing a new one -- see
+ * PasswordSetupToken in prisma/schema.prisma and
+ * src/app/actions/team.ts::addTeamMember(), which mirrors Session's
+ * "store only the hash, mail/display only the raw token" pattern.
+ */
+export function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -27,8 +34,19 @@ export async function verifyPassword(password: string, passwordHash: string) {
   return bcrypt.compare(password, passwordHash);
 }
 
-export function createSessionToken() {
+/**
+ * A cryptographically random, URL-safe raw token. Callers store only
+ * `hashToken(token)` and hand the raw value to the user exactly once (a
+ * cookie for a session, a URL for a PasswordSetupToken) -- see
+ * createSessionToken() below and addTeamMember() in
+ * src/app/actions/team.ts.
+ */
+export function createSecureToken() {
   return randomBytes(32).toString("hex");
+}
+
+export function createSessionToken() {
+  return createSecureToken();
 }
 
 function cookieSecure() {
