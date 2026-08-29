@@ -258,6 +258,9 @@ model EstimateVersion {
   business            Business                  @relation(fields: [businessId], references: [id], onDelete: Cascade)
   estimate            Estimate                  @relation("EstimateVersions", fields: [estimateId], references: [id], onDelete: Cascade)
   approvedOnEstimates Estimate[]                @relation("EstimateApprovedVersion")
+  /// Jobs/Work Orders created from this exact approved version (see
+  /// Job.approvedEstimateVersionId).
+  jobsApprovedFrom    Job[]                     @relation("JobApprovedEstimateVersion")
   lineItems           EstimateVersionLineItem[]
 
   @@unique([estimateId, versionNumber])
@@ -291,6 +294,23 @@ model Job {
   customerId               String?
   propertyId               String?
   estimateId               String?
+  /// The immutable EstimateVersion this Work Order was created from -- the
+  /// exact scope/price a customer actually approved, independent of any
+  /// later edits to the live (mutable) Estimate. Set once, at Job creation,
+  /// from the source Estimate's approvedVersionId. Null only for legacy
+  /// Jobs created before this relation existed, or where the source
+  /// Estimate had no approved version on record (pre-versioning estimate).
+  /// Application code must never fabricate this relation after the fact --
+  /// see resolveApprovedWorkOrderScope() in src/lib/job-work-order.ts for
+  /// the safe fallback used when it is null.
+  approvedEstimateVersionId String?
+  /// Unique, unguessable token for the customer-facing Project Portal
+  /// (see src/app/p/[token]/page.tsx). Server-scoped to exactly this Job --
+  /// the portal route looks a Job up ONLY by this token and never accepts a
+  /// businessId from the client. Deliberately separate from
+  /// Estimate.publicToken (a different record with a different lifecycle:
+  /// estimate approval, not project status).
+  projectToken             String    @unique
   /// Lifecycle: UNSCHEDULED | SCHEDULED → IN_PROGRESS → COMPLETED.
   /// String values, not a Prisma enum. No extra fields for completion notes.
   status                   String    @default("SCHEDULED")
@@ -300,13 +320,14 @@ model Job {
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
-  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  customer  Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  property  Property?  @relation(fields: [propertyId], references: [id], onDelete: SetNull)
-  estimate  Estimate?  @relation(fields: [estimateId], references: [id], onDelete: SetNull)
-  invoices  Invoice[]
-  lineItems LineItem[]
-  photos    JobPhoto[]
+  business                Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer                Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  property                Property?        @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  estimate                Estimate?        @relation(fields: [estimateId], references: [id], onDelete: SetNull)
+  approvedEstimateVersion EstimateVersion? @relation("JobApprovedEstimateVersion", fields: [approvedEstimateVersionId], references: [id], onDelete: SetNull)
+  invoices                Invoice[]
+  lineItems               LineItem[]
+  photos                  JobPhoto[]
 
   @@index([businessId])
 }

@@ -1,0 +1,185 @@
+import type { Metadata } from "next";
+import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
+import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
+import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
+import {
+  customerFacingJobStatusLabel,
+  resolveProjectProgressStep,
+} from "@/lib/project-progress";
+import { prisma } from "@/lib/prisma";
+
+export const metadata: Metadata = {
+  title: "Your Project",
+};
+
+const LINE_ITEM_SELECT = {
+  description: true,
+  quantity: true,
+  unitPrice: true,
+  total: true,
+  type: true,
+} as const;
+
+/**
+ * Customer Project Portal.
+ *
+ * SECURITY: this page is looked up by `token` alone -- Job.projectToken, an
+ * unguessable unique value (see prisma/schema.prisma). It never accepts a
+ * businessId, customerId, or jobId from the client, and every field
+ * selected below is deliberately customer-safe: no internal notes, no
+ * margins/cost basis, no other customers/jobs, no owner-only payment
+ * metadata (paymentMethod/paymentReference), and no Job Photos (those stay
+ * private until an explicit customer-visible/approval mechanism exists --
+ * see the "Job Photos" note on the internal Work Order page). This route
+ * also renders standalone, outside the authenticated (app) layout/AppShell,
+ * so it never exposes any management navigation.
+ */
+export default async function CustomerProjectPortalPage({
+  params,
+}: {
+  params: Promise<{ token: string }>;
+}) {
+  const { token } = await params;
+
+  const job = token
+    ? await prisma.job.findUnique({
+        where: { projectToken: token },
+        select: {
+          status: true,
+          scheduledAt: true,
+          scheduledDurationMinutes: true,
+          business: { select: { name: true } },
+          customer: { select: { name: true } },
+          property: {
+            select: {
+              addressLine1: true,
+              addressLine2: true,
+              city: true,
+              region: true,
+              postalCode: true,
+            },
+          },
+          estimate: {
+            select: {
+              total: true,
+              lineItems: {
+                orderBy: { createdAt: "asc" },
+                select: LINE_ITEM_SELECT,
+              },
+            },
+          },
+          approvedEstimateVersion: {
+            select: {
+              versionNumber: true,
+              total: true,
+              laborMinimumAdjustment: true,
+              approvedAt: true,
+              lineItems: {
+                orderBy: { createdAt: "asc" },
+                select: LINE_ITEM_SELECT,
+              },
+            },
+          },
+          invoices: {
+            select: { status: true, total: true, paidAt: true },
+            take: 1,
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      })
+    : null;
+
+  if (!job) {
+    return (
+      <main className="flex min-h-full items-center justify-center px-4 py-10">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Project unavailable</CardTitle>
+            <CardDescription>This project link is not available.</CardDescription>
+          </CardHeader>
+        </Card>
+      </main>
+    );
+  }
+
+  const invoice = job.invoices[0] ?? null;
+  const approvedScope = resolveApprovedWorkOrderScope(job);
+  const progressStep = resolveProjectProgressStep(job, invoice);
+
+  return (
+    <main className="flex min-h-full items-center justify-center px-4 py-10">
+      <div className="w-full max-w-md space-y-6">
+        <div>
+          <p className="text-sm font-medium text-muted-foreground">
+            {job.business.name}
+          </p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+            Your Project
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {job.customer?.name ? `For ${job.customer.name}. ` : ""}
+            {job.property ? formatAddress(job.property) : ""}
+          </p>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Project Status</CardTitle>
+            <CardDescription>
+              {customerFacingJobStatusLabel(job.status)}
+              {job.scheduledAt
+                ? ` · Scheduled ${formatDateTime(job.scheduledAt)}`
+                : ""}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ProjectProgressBar currentStep={progressStep} />
+          </CardContent>
+        </Card>
+
+        <ApprovedScopeCard scope={approvedScope} title="Approved Work" />
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Invoice</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            {invoice ? (
+              <>
+                <p>Total: {formatMoney(invoice.total)}</p>
+                <p>
+                  {invoice.status === "PAID" ? (
+                    <>
+                      Paid
+                      {invoice.paidAt
+                        ? ` on ${formatDateTime(invoice.paidAt)}`
+                        : ""}
+                    </>
+                  ) : (
+                    "Outstanding"
+                  )}
+                </p>
+              </>
+            ) : (
+              <p className="text-muted-foreground">
+                An invoice will appear here once your project is complete.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <p className="text-center text-xs text-muted-foreground">
+          Questions about this project? Contact {job.business.name}.
+        </p>
+      </div>
+    </main>
+  );
+}

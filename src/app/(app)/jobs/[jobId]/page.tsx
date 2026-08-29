@@ -8,6 +8,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
+import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
 import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
@@ -31,6 +33,7 @@ import {
   expectedEnd,
   formatDurationMinutes,
 } from "@/lib/job-schedule";
+import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { prisma } from "@/lib/prisma";
 
 function pad(part: number) {
@@ -46,8 +49,16 @@ function toTimeInput(value: Date) {
 }
 
 export const metadata: Metadata = {
-  title: "Job",
+  title: "Work Order",
 };
+
+const LINE_ITEM_SELECT = {
+  description: true,
+  quantity: true,
+  unitPrice: true,
+  total: true,
+  type: true,
+} as const;
 
 export default async function JobPage({
   params,
@@ -69,8 +80,32 @@ export default async function JobPage({
           postalCode: true,
         },
       },
-      estimate: { select: { id: true, status: true, total: true } },
-      invoices: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
+      estimate: {
+        select: {
+          id: true,
+          status: true,
+          total: true,
+          lineItems: { orderBy: { createdAt: "asc" }, select: LINE_ITEM_SELECT },
+        },
+      },
+      // The immutable EstimateVersion this Work Order was actually created
+      // from -- see resolveApprovedWorkOrderScope() in
+      // src/lib/job-work-order.ts for why this is preferred over the (live,
+      // mutable) `estimate` relation above.
+      approvedEstimateVersion: {
+        select: {
+          versionNumber: true,
+          total: true,
+          laborMinimumAdjustment: true,
+          approvedAt: true,
+          lineItems: { orderBy: { createdAt: "asc" }, select: LINE_ITEM_SELECT },
+        },
+      },
+      invoices: {
+        select: { id: true, status: true, total: true },
+        take: 1,
+        orderBy: { createdAt: "asc" },
+      },
       photos: {
         select: { id: true, stage: true, url: true, caption: true, createdAt: true },
         orderBy: { createdAt: "asc" },
@@ -87,6 +122,7 @@ export default async function JobPage({
   const isCompleted = job.status === "COMPLETED";
   const isInProgress = job.status === "IN_PROGRESS";
   const invoice = job.invoices[0] ?? null;
+  const approvedScope = resolveApprovedWorkOrderScope(job);
   const durationPreset = durationPresetForMinutes(
     job.scheduledDurationMinutes,
   );
@@ -110,7 +146,7 @@ export default async function JobPage({
         title={job.customer?.name ?? "Customer"}
         description={
           <div className="flex flex-wrap items-center gap-2">
-            <span>Job</span>
+            <span>Work Order</span>
             <StatusBadge status={job.status} />
             {job.scheduledAt ? (
               <span>{formatDateTime(job.scheduledAt)}</span>
@@ -137,6 +173,87 @@ export default async function JobPage({
           />
         </div>
       </PageHeader>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Work Order Summary</CardTitle>
+          <CardDescription>
+            The operational record for this job, tied to the approved
+            estimate that created it.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <p>Work Order ID: {job.id}</p>
+          <p>
+            Status: <StatusBadge status={job.status} />
+          </p>
+          <p>Customer: {job.customer?.name ?? "None"}</p>
+          <p>
+            Service address:{" "}
+            {job.property ? formatAddress(job.property) : "None selected"}
+          </p>
+          <p>
+            Linked Estimate:{" "}
+            {job.estimate ? (
+              <Link
+                href={`/estimates/${job.estimate.id}`}
+                className="underline underline-offset-4"
+              >
+                {job.estimate.status} · {formatMoney(job.estimate.total)}
+              </Link>
+            ) : (
+              "None"
+            )}
+          </p>
+          <p>
+            Approved version:{" "}
+            {approvedScope.source === "version"
+              ? `Version ${approvedScope.versionNumber}${
+                  approvedScope.approvedAt
+                    ? ` · Approved ${formatDateTime(approvedScope.approvedAt)}`
+                    : ""
+                }`
+              : approvedScope.source === "legacy-estimate"
+                ? "Not recorded (legacy job — showing the linked estimate's current scope instead)"
+                : "None"}
+          </p>
+          <p>
+            Invoice:{" "}
+            {invoice ? (
+              <Link
+                href={`/invoices/${invoice.id}`}
+                className="underline underline-offset-4"
+              >
+                {invoice.status} · {formatMoney(invoice.total)}
+              </Link>
+            ) : isCompleted ? (
+              "None yet"
+            ) : (
+              "Created after the job is completed"
+            )}
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Customer Project Portal</CardTitle>
+          <CardDescription>
+            Share this link so the customer can see project status, approved
+            work, and their invoice once it exists. It only ever shows this
+            one job — never other customers, jobs, or business data.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-3 text-sm">
+          <Link
+            href={`/p/${job.projectToken}`}
+            className="underline underline-offset-4"
+          >
+            /p/{job.projectToken}
+          </Link>
+          <CopyProjectLinkButton projectToken={job.projectToken} />
+        </CardContent>
+      </Card>
 
       {isCompleted ? (
         <Card>
@@ -223,60 +340,17 @@ export default async function JobPage({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Details</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          <p>
-            Status: <StatusBadge status={job.status} />
-          </p>
-          <p>Customer: {job.customer?.name ?? "None"}</p>
-          <p>
-            Service address:{" "}
-            {job.property ? formatAddress(job.property) : "None selected"}
-          </p>
-          <p>
-            Scheduled:{" "}
-            {job.scheduledAt ? formatDateTime(job.scheduledAt) : "Unscheduled"}
-          </p>
-          <p>
-            Estimate:{" "}
-            {job.estimate ? (
-              <Link
-                href={`/estimates/${job.estimate.id}`}
-                className="underline underline-offset-4"
-              >
-                {job.estimate.status} · {formatMoney(job.estimate.total)}
-              </Link>
-            ) : (
-              "None"
-            )}
-          </p>
-          <p>
-            Invoice:{" "}
-            {invoice ? (
-              <Link
-                href={`/invoices/${invoice.id}`}
-                className="underline underline-offset-4"
-              >
-                Open Invoice
-              </Link>
-            ) : isCompleted ? (
-              "None yet"
-            ) : (
-              "Created after the job is completed"
-            )}
-          </p>
-        </CardContent>
-      </Card>
+      <ApprovedScopeCard scope={approvedScope} title="Approved Scope (Work Order)" />
 
       <Card>
         <CardHeader>
           <CardTitle>Job Photos</CardTitle>
           <CardDescription>
             Private to this business. Never shown to the customer or
-            published anywhere.
+            published anywhere. Completion-photo visibility on the Customer
+            Project Portal will be added later with an explicit
+            customer-visible/approval control — until then, photos never
+            appear there.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">

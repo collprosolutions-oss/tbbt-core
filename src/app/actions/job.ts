@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
@@ -88,6 +89,14 @@ export async function createJobFromEstimate(
       customerId: estimate.customerId,
       propertyId,
       estimateId: estimate.id,
+      // Bind the Job/Work Order to the EXACT EstimateVersion the customer
+      // approved (see approveEstimate() in
+      // src/app/actions/public-estimate.ts), not just the live Estimate.
+      // Null only for the rare pre-versioning estimate that was approved
+      // with no version on record -- resolveApprovedWorkOrderScope() in
+      // src/lib/job-work-order.ts falls back safely for that case.
+      approvedEstimateVersionId: estimate.approvedVersionId,
+      projectToken: randomUUID(),
       status: "UNSCHEDULED",
     },
   });
