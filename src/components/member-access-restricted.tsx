@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { signOutAction } from "@/app/actions/auth";
 import {
   Card,
@@ -45,6 +46,9 @@ export function MemberAccessRestricted({
             Ask your business owner or admin if you believe this is a
             mistake.
           </p>
+          <Button asChild className="w-full">
+            <Link href="/field">Go to My Jobs</Link>
+          </Button>
           <form action={signOutAction}>
             <Button type="submit" variant="outline" className="w-full">
               Sign out
