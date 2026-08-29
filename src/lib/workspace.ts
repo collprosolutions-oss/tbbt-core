@@ -16,8 +16,13 @@ export async function requireWorkspace(): Promise<WorkspaceContext> {
     redirect("/sign-in");
   }
 
+  // Only an ACTIVE membership resolves to a real workspace -- an
+  // OWNER/ADMIN-deactivated MEMBER membership (see removeTeamMember() in
+  // src/app/actions/team.ts) must lose access here, at the single place
+  // every authenticated page/action derives its workspace from, not just
+  // in the Team UI.
   const memberships = await prisma.membership.findMany({
-    where: { userId: user.id },
+    where: { userId: user.id, active: true },
     include: { business: true },
     orderBy: { createdAt: "asc" },
   });
