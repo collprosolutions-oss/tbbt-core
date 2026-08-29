@@ -318,7 +318,7 @@ try {
     mirrorSendEstimate(ownerA, estimateForOwner.id),
   );
   const jobForOwner = await prisma.job.create({
-    data: { businessId: businessA.id, customerId: customerA.id, status: "COMPLETED" },
+    data: { businessId: businessA.id, customerId: customerA.id, status: "COMPLETED", projectToken: randomUUID() },
   });
   const invoiceForOwner = await prisma.invoice.create({
     data: { businessId: businessA.id, customerId: customerA.id, jobId: jobForOwner.id, total: new Prisma.Decimal(100), status: "SENT" },
@@ -406,7 +406,7 @@ try {
 
   console.log("\nTEST 5 — MEMBER cannot create/modify invoices or mark invoices paid");
   const memberJob = await prisma.job.create({
-    data: { businessId: businessA.id, customerId: customerA.id, status: "COMPLETED" },
+    data: { businessId: businessA.id, customerId: customerA.id, status: "COMPLETED", projectToken: randomUUID() },
   });
   await expectForbidden("MEMBER cannot create an invoice from a completed job", () =>
     mirrorCreateInvoiceFromJob(memberA, memberJob.id),
@@ -483,7 +483,7 @@ try {
     "\nBONUS — Job start/complete and job photo mutations are OWNER/ADMIN-only for now (no assigned-job model yet)",
   );
   const jobForOperate = await prisma.job.create({
-    data: { businessId: businessA.id, customerId: customerA.id, status: "IN_PROGRESS" },
+    data: { businessId: businessA.id, customerId: customerA.id, status: "IN_PROGRESS", projectToken: randomUUID() },
   });
   await expectForbidden("MEMBER cannot start/complete a job (OPERATE_JOBS)", () =>
     mirrorOperateJob(memberA, jobForOperate.id),

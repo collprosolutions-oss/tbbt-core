@@ -232,6 +232,7 @@ try {
       propertyId: canaryProperty.id,
       estimateId: canaryEstimate.id,
       status: "COMPLETED",
+      projectToken: randomUUID(),
     },
   });
   const canaryInvoice = await prisma.invoice.create({
