@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import { isPaymentMethodValue } from "@/lib/invoice-payment";
+import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { prisma } from "@/lib/prisma";
 
 export type InvoiceActionState = {
@@ -16,6 +18,29 @@ function readString(formData: FormData, key: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+const LINE_ITEM_SELECT = {
+  description: true,
+  quantity: true,
+  unitPrice: true,
+  total: true,
+  type: true,
+} as const;
+
+/**
+ * Invoice billable total = Original Approved Total (from the bound
+ * EstimateVersion, or the legacy-estimate fallback -- see
+ * resolveApprovedWorkOrderScope) PLUS every currently APPROVED Change
+ * Order's total (see resolveCurrentApprovedProjectTotal in
+ * src/lib/change-order.ts). DRAFT/SENT/DECLINED/CANCELLED change orders
+ * never contribute.
+ *
+ * This total is computed ONCE, at invoice creation, and never
+ * recalculated afterward: a Change Order approved AFTER this Job's invoice
+ * already exists is deliberately NOT retro-added to that invoice (see the
+ * "This job has approved changes not yet billed" note surfaced on the
+ * Work Order page instead) -- this function must never be called to
+ * "refresh" an existing invoice's total.
+ */
 export async function createInvoiceFromJob(
   jobId: string,
 ): Promise<InvoiceActionState> {
@@ -24,6 +49,21 @@ export async function createInvoiceFromJob(
   const job = access.assertOwned(
     await prisma.job.findFirst({
       where: { id: jobId, ...access.scope },
+      include: {
+        estimate: {
+          select: { total: true, lineItems: { select: LINE_ITEM_SELECT } },
+        },
+        approvedEstimateVersion: {
+          select: {
+            versionNumber: true,
+            total: true,
+            laborMinimumAdjustment: true,
+            approvedAt: true,
+            lineItems: { select: LINE_ITEM_SELECT },
+          },
+        },
+        changeOrders: { select: { status: true, total: true } },
+      },
     }),
   );
 
@@ -43,14 +83,14 @@ export async function createInvoiceFromJob(
     redirect(`/invoices/${existing.id}`);
   }
 
-  if (!job.estimateId) {
+  const approvedScope = resolveApprovedWorkOrderScope(job);
+  if (approvedScope.source === "none") {
     return { error: "This job has no linked estimate." };
   }
 
-  const estimate = access.assertOwned(
-    await prisma.estimate.findFirst({
-      where: { id: job.estimateId, ...access.scope },
-    }),
+  const total = resolveCurrentApprovedProjectTotal(
+    approvedScope.total,
+    job.changeOrders,
   );
 
   const invoice = await prisma.invoice.create({
@@ -58,7 +98,7 @@ export async function createInvoiceFromJob(
       businessId: access.businessId,
       customerId: job.customerId,
       jobId: job.id,
-      total: estimate.total,
+      total,
     },
   });
 
