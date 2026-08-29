@@ -216,6 +216,11 @@ export type ScheduleJob = {
   } | null;
   approvedEstimateVersion: { lineItems: { description: string }[] } | null;
   estimate: { lineItems: { description: string }[] } | null;
+  /// The one field member assigned to this Job (Phase 3 / Step 4 Employee
+  /// Field Workflow), or null for Unassigned. See CrewView in
+  /// src/components/schedule/crew-view.tsx, the only view that groups by
+  /// this -- every other view ignores it.
+  assignedMembership: { id: string; user: { name: string } } | null;
 };
 
 /** The Prisma `select` shape that produces ScheduleJob above -- share this, never hand-roll a second one. */
@@ -254,7 +259,50 @@ export const SCHEDULE_JOB_SELECT = {
       },
     },
   },
+  assignedMembership: {
+    select: { id: true, user: { select: { name: true } } },
+  },
 } as const;
+
+/**
+ * Groups already-fetched Jobs by their real assigned member (Phase 3 / Step
+ * 4), plus a separate Unassigned bucket -- the seam CrewView's own header
+ * comment (see src/components/schedule/crew-view.tsx) said would replace
+ * its single placeholder "Unassigned" bucket once assignment existed.
+ * Groups are returned in a stable order: assigned members first (by name),
+ * then Unassigned last.
+ */
+export function groupJobsByAssignedMember<
+  T extends { assignedMembership: { id: string; user: { name: string } } | null },
+>(jobs: T[]): { member: { id: string; name: string } | null; jobs: T[] }[] {
+  const byMember = new Map<string, { id: string; name: string; jobs: T[] }>();
+  const unassigned: T[] = [];
+
+  for (const job of jobs) {
+    if (!job.assignedMembership) {
+      unassigned.push(job);
+      continue;
+    }
+    const existing = byMember.get(job.assignedMembership.id);
+    if (existing) {
+      existing.jobs.push(job);
+    } else {
+      byMember.set(job.assignedMembership.id, {
+        id: job.assignedMembership.id,
+        name: job.assignedMembership.user.name,
+        jobs: [job],
+      });
+    }
+  }
+
+  const groups: { member: { id: string; name: string } | null; jobs: T[] }[] =
+    Array.from(byMember.values())
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((group) => ({ member: { id: group.id, name: group.name }, jobs: group.jobs }));
+
+  groups.push({ member: null, jobs: unassigned });
+  return groups;
+}
 
 /** Mirrors resolveApprovedWorkOrderScope()'s priority (bound version, then legacy estimate) for a one-line summary. */
 export function jobScopeSummary(job: {
