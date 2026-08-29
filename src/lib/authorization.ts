@@ -132,3 +132,27 @@ export function requireBusinessCapability(
     throw new ForbiddenError();
   }
 }
+
+/**
+ * Coarse, temporary READ gate for the entire authenticated management
+ * console (Dashboard, Requests, Customers, Estimates, Jobs, Invoices,
+ * Services, Settings).
+ *
+ * Every one of those pages exists to browse or mutate business-wide
+ * management data, and MEMBER has no capability over any of it today (see
+ * CAPABILITIES above) -- so until a dedicated, assigned-job-scoped
+ * employee/field UI is built, MEMBER must not be able to READ any of it
+ * either, not just be blocked from mutating it. Hiding sidebar links is
+ * not sufficient: this must be enforced wherever these pages render.
+ *
+ * Applied once, at `src/app/(app)/layout.tsx`, which every one of those
+ * pages renders through -- so a MEMBER hitting any management URL directly
+ * (not just via the sidebar) is still safely denied.
+ *
+ * FUTURE: replace this single console-wide gate with per-page/read
+ * capabilities (or drop it) once employee-specific, assigned-job-scoped
+ * field pages exist and MEMBER has something real to land on.
+ */
+export function canAccessManagementConsole(role: MembershipRole): boolean {
+  return role !== "MEMBER";
+}

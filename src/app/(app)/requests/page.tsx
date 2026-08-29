@@ -4,7 +4,7 @@ import { CreateEstimateButton } from "@/components/estimates/create-estimate-but
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireManagementPageAccess } from "@/lib/access";
 import { formatDateTime } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import {
@@ -20,7 +20,7 @@ export const metadata: Metadata = {
 };
 
 export default async function RequestsPage() {
-  const access = await requireBusinessAccess();
+  const access = await requireManagementPageAccess();
   const requests = await prisma.serviceRequest.findMany({
     where: access.scope,
     include: {

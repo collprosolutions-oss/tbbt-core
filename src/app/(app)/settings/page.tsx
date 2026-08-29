@@ -8,14 +8,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireManagementPageAccess } from "@/lib/access";
 
 export const metadata: Metadata = {
   title: "Business Settings",
 };
 
 export default async function SettingsPage() {
-  const access = await requireBusinessAccess();
+  const access = await requireManagementPageAccess();
   const business = access.workspace.business;
 
   return (

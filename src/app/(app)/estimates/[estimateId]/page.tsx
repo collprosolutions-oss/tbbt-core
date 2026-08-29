@@ -24,7 +24,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireManagementPageAccess } from "@/lib/access";
 import { formatAddress, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
@@ -40,7 +40,7 @@ export default async function EstimateBuilderPage({
   params: Promise<{ estimateId: string }>;
 }) {
   const { estimateId } = await params;
-  const access = await requireBusinessAccess();
+  const access = await requireManagementPageAccess();
 
   const estimate = await prisma.estimate.findFirst({
     where: { id: estimateId, ...access.scope },

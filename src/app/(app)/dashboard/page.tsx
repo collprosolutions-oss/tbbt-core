@@ -11,7 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireManagementPageAccess } from "@/lib/access";
 import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
@@ -27,7 +27,7 @@ type CountCard = {
 };
 
 export default async function DashboardPage() {
-  const access = await requireBusinessAccess();
+  const access = await requireManagementPageAccess();
   const [
     openRequests,
     draftEstimates,
