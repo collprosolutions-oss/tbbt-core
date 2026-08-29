@@ -16,7 +16,8 @@
     "test:service-categories": "node --experimental-strip-types scripts/check-service-categories.mjs",
     "test:work-order-portal": "node --experimental-strip-types scripts/check-work-order-portal.mjs",
     "test:change-orders": "node --experimental-strip-types scripts/check-change-orders.mjs",
-    "test:schedule-calendar": "node --experimental-strip-types scripts/check-schedule-calendar.mjs"
+    "test:schedule-calendar": "node --experimental-strip-types scripts/check-schedule-calendar.mjs",
+    "test:employee-field-workflow": "node --experimental-strip-types scripts/check-employee-field-workflow.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
