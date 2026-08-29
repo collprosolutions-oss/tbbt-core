@@ -16,9 +16,8 @@ import {
 } from "@/components/ui/card";
 import { directionsUrl, telHref } from "@/lib/directions";
 import { requireAssignedJobPageAccess, assignedJobWhere, requireFieldWorkspace } from "@/lib/field-access";
-import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
+import { formatAddress, formatDateTime } from "@/lib/format";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
-import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -44,10 +43,15 @@ const LINE_ITEM_SELECT = {
  * cross-business/cross-member `jobId` in the URL returns exactly a 404,
  * with no Job/customer data anywhere in the response.
  *
- * FIELD-SAFE ONLY: this intentionally never selects/renders estimate
- * margins, labor-minimum rules, invoice/payment fields, customer email,
- * owner/admin notes, or any other Job -- see the MEMBER FIELD JOB PAGE
- * section of the spec.
+ * FIELD-SAFE ONLY: this intentionally never RENDERS unit prices,
+ * line-item dollar totals, the Labor Minimum Service Fee Adjustment (a
+ * purely financial figure with no operational meaning), or any
+ * estimate/project total -- see `hideFinancials` on ApprovedScopeCard and
+ * the Approved Additional Work list below, both of which show operational
+ * scope (what was approved, how much of it) with none of that pricing.
+ * Also never selects/renders estimate margins, invoice/payment fields,
+ * customer email, owner/admin notes, or any other Job -- see the MEMBER
+ * FIELD JOB PAGE section of the spec.
  */
 export default async function FieldJobPage({
   params,
@@ -93,7 +97,10 @@ export default async function FieldJobPage({
       changeOrders: {
         where: { status: "APPROVED" },
         orderBy: { createdAt: "asc" },
-        select: { id: true, title: true, total: true, status: true },
+        // No `total` -- the field page never renders Change Order
+        // pricing (see the FIELD-SAFE ONLY note above), so it is not
+        // fetched here at all, not merely left unrendered.
+        select: { id: true, title: true, status: true },
       },
       photos: {
         select: { id: true, stage: true, url: true, caption: true, createdAt: true },
@@ -112,10 +119,7 @@ export default async function FieldJobPage({
   const isCompleted = job.status === "COMPLETED";
   const isInProgress = job.status === "IN_PROGRESS";
   const approvedScope = resolveApprovedWorkOrderScope(job);
-  const currentApprovedProjectTotal =
-    approvedScope.source === "none"
-      ? null
-      : resolveCurrentApprovedProjectTotal(approvedScope.total, job.changeOrders);
+  const hasApprovedScope = approvedScope.source !== "none";
 
   const directions = directionsUrl(job.property);
   const tel = telHref(job.customer?.phone ?? null);
@@ -181,9 +185,13 @@ export default async function FieldJobPage({
         ) : null}
       </div>
 
-      <ApprovedScopeCard scope={approvedScope} title="Approved Scope" />
+      <ApprovedScopeCard
+        scope={approvedScope}
+        title="Approved Scope"
+        hideFinancials
+      />
 
-      {job.changeOrders.length > 0 && currentApprovedProjectTotal !== null ? (
+      {job.changeOrders.length > 0 && hasApprovedScope ? (
         <Card>
           <CardHeader>
             <CardTitle>Approved Additional Work</CardTitle>
@@ -195,15 +203,11 @@ export default async function FieldJobPage({
           <CardContent className="space-y-2 text-sm">
             <ul className="space-y-1">
               {job.changeOrders.map((changeOrder) => (
-                <li key={changeOrder.id} className="flex justify-between gap-3">
-                  <span className="min-w-0 flex-1 break-words">{changeOrder.title}</span>
-                  <span className="shrink-0">{formatMoney(changeOrder.total)}</span>
+                <li key={changeOrder.id} className="break-words">
+                  {changeOrder.title}
                 </li>
               ))}
             </ul>
-            <p className="font-medium">
-              Current Approved Total: {formatMoney(currentApprovedProjectTotal)}
-            </p>
           </CardContent>
         </Card>
       ) : null}
