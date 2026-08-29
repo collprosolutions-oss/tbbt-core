@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -64,19 +65,15 @@ export function JobsListView({ jobs }: { jobs: JobsListItem[] }) {
 
   if (jobs.length === 0) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>No jobs yet</CardTitle>
-          <CardDescription>
-            Create a job from an approved estimate.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <EmptyState
+        title="No jobs yet"
+        description="Create a job from an approved estimate."
+        action={
           <Button asChild size="sm">
             <Link href="/estimates">Open estimates</Link>
           </Button>
-        </CardContent>
-      </Card>
+        }
+      />
     );
   }
 

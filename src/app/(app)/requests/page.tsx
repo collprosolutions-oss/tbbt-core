@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CreateEstimateButton } from "@/components/estimates/create-estimate-button";
+import { EmptyState } from "@/components/empty-state";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -37,21 +39,17 @@ export default async function RequestsPage() {
   });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title="Requests"
         description={`Service requests for ${access.workspace.business.name}.`}
       />
 
       {requests.length === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>No requests yet</CardTitle>
-            <CardDescription>
-              Public intake submissions for this workspace will appear here.
-            </CardDescription>
-          </CardHeader>
-        </Card>
+        <EmptyState
+          title="No requests yet"
+          description="Public intake submissions for this workspace will appear here."
+        />
       ) : (
         <div className="space-y-3">
           {requests.map((request) => (
@@ -91,6 +89,6 @@ export default async function RequestsPage() {
           ))}
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

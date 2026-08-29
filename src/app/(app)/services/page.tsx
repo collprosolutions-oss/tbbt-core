@@ -3,6 +3,8 @@ import { CatalogItemRow } from "@/components/catalog/catalog-item-row";
 import { CreateCatalogItemForm } from "@/components/catalog/create-catalog-item-form";
 import { InstallStarterCatalogForm } from "@/components/catalog/install-starter-catalog-form";
 import { ServiceCategoryGroup } from "@/components/catalog/service-category-group";
+import { EmptyState } from "@/components/empty-state";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import {
   Card,
@@ -74,7 +76,7 @@ export default async function ServicesPage() {
   ).sort((a, b) => a.localeCompare(b));
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title="Services"
         description={`Handyman price list for ${access.workspace.business.name}. Each service can be a fixed price, a starting price, or a custom quote.`}
@@ -163,15 +165,10 @@ export default async function ServicesPage() {
           </p>
         </div>
         {items.length === 0 ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>No services yet</CardTitle>
-              <CardDescription>
-                Add a service to start this workspace price list. Active
-                services can be added to estimates.
-              </CardDescription>
-            </CardHeader>
-          </Card>
+          <EmptyState
+            title="No services yet"
+            description="Add a service to start this workspace price list. Active services can be added to estimates."
+          />
         ) : (
           groupedItems.map((group) => (
             <ServiceCategoryGroup
@@ -203,6 +200,6 @@ export default async function ServicesPage() {
           ))
         )}
       </div>
-    </div>
+    </PageContainer>
   );
 }

@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { EmptyState } from "@/components/empty-state";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import {
@@ -64,26 +66,22 @@ export default async function CustomersPage() {
   });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title="Customers"
         description={`Customers for ${access.workspace.business.name}.`}
       />
 
       {customers.length === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>No customers yet</CardTitle>
-            <CardDescription>
-              Customers appear here when someone submits a service request.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+        <EmptyState
+          title="No customers yet"
+          description="Customers appear here when someone submits a service request."
+          action={
             <Button asChild size="sm">
               <Link href="/requests">Open requests</Link>
             </Button>
-          </CardContent>
-        </Card>
+          }
+        />
       ) : (
         <div className="space-y-3">
           {customers.map((customer) => {
@@ -132,6 +130,6 @@ export default async function CustomersPage() {
           })}
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

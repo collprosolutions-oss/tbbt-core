@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { EmptyState } from "@/components/empty-state";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -30,26 +32,22 @@ export default async function InvoicesPage() {
   });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title="Invoices"
         description={`Invoices for ${access.workspace.business.name}.`}
       />
 
       {invoices.length === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>No invoices yet</CardTitle>
-            <CardDescription>
-              Create an invoice from a completed job.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+        <EmptyState
+          title="No invoices yet"
+          description="Create an invoice from a completed job."
+          action={
             <Button asChild size="sm">
               <Link href="/jobs">Open jobs</Link>
             </Button>
-          </CardContent>
-        </Card>
+          }
+        />
       ) : (
         <div className="space-y-3">
           {invoices.map((invoice) => (
@@ -76,6 +74,6 @@ export default async function InvoicesPage() {
           ))}
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

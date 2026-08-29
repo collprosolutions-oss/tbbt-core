@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { EmptyState } from "@/components/empty-state";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -29,7 +31,7 @@ export default async function EstimatesPage() {
   });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title="Estimates"
         description={`Estimates for ${access.workspace.business.name}.`}
@@ -40,23 +42,20 @@ export default async function EstimatesPage() {
       </PageHeader>
 
       {estimates.length === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>No estimates yet</CardTitle>
-            <CardDescription>
-              Create a manual draft, or open a service request and estimate from
-              there.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            <Button asChild size="sm">
-              <Link href="/estimates/new">Create Estimate</Link>
-            </Button>
-            <Button asChild size="sm" variant="outline">
-              <Link href="/requests">Open requests</Link>
-            </Button>
-          </CardContent>
-        </Card>
+        <EmptyState
+          title="No estimates yet"
+          description="Create a manual draft, or open a service request and estimate from there."
+          action={
+            <>
+              <Button asChild size="sm">
+                <Link href="/estimates/new">Create Estimate</Link>
+              </Button>
+              <Button asChild size="sm" variant="outline">
+                <Link href="/requests">Open requests</Link>
+              </Button>
+            </>
+          }
+        />
       ) : (
         <div className="space-y-3">
           {estimates.map((estimate) => (
@@ -81,6 +80,6 @@ export default async function EstimatesPage() {
           ))}
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

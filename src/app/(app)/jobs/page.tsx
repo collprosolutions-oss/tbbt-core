@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { CrewView } from "@/components/schedule/crew-view";
 import { DayView } from "@/components/schedule/day-view";
@@ -210,7 +211,7 @@ export default async function JobsPage({
   const showConflictNote = view === "month" || view === "week" || view === "day";
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <PageContainer width="wide">
       <PageHeader title="Schedule / Jobs" description={headerDescription} />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -238,6 +239,6 @@ export default async function JobsPage({
       ) : (
         <div className="space-y-6">{content}</div>
       )}
-    </div>
+    </PageContainer>
   );
 }

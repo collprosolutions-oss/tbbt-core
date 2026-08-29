@@ -20,6 +20,7 @@ import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-
 import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
 import { StartJobButton } from "@/components/jobs/start-job-button";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { RecordNav } from "@/components/record-nav";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
@@ -188,7 +189,7 @@ export default async function JobPage({
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title={job.customer?.name ?? "Customer"}
         description={
@@ -542,7 +543,7 @@ export default async function JobPage({
           <AddJobPhotoForm jobId={job.id} />
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }
 

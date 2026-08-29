@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
+import { RecordRow } from "@/components/record-row";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -177,7 +179,7 @@ export default async function DashboardPage() {
     recentRequests.length > 0;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title="Dashboard"
         description={`Work for ${access.workspace.business.name}.`}
@@ -316,7 +318,7 @@ export default async function DashboardPage() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }
 
@@ -377,19 +379,21 @@ function AttentionRow({
   action: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 text-sm">
-      <div className="min-w-0">
-        <p className="truncate font-medium">{name}</p>
-        {meta || status ? (
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-muted-foreground">
+    <RecordRow
+      title={<span className="truncate">{name}</span>}
+      meta={
+        status || meta ? (
+          <>
             {status ? <StatusBadge status={status} /> : null}
             {meta ? <span>{meta}</span> : null}
-          </div>
-        ) : null}
-      </div>
-      <Button asChild size="sm" variant="outline">
-        <Link href={href}>{action}</Link>
-      </Button>
-    </div>
+          </>
+        ) : null
+      }
+      action={
+        <Button asChild size="sm" variant="outline">
+          <Link href={href}>{action}</Link>
+        </Button>
+      }
+    />
   );
 }

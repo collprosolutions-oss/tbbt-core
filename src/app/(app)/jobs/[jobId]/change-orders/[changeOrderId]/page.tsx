@@ -13,6 +13,7 @@ import { CancelChangeOrderButton } from "@/components/change-orders/cancel-chang
 import { EditChangeOrderTitleForm } from "@/components/change-orders/edit-change-order-title-form";
 import { RemoveChangeOrderLineItemButton } from "@/components/change-orders/remove-change-order-line-item-button";
 import { SendChangeOrderButton } from "@/components/change-orders/send-change-order-button";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { requireManagementPageAccess } from "@/lib/access";
@@ -57,7 +58,7 @@ export default async function ChangeOrderPage({
   const canCancel = changeOrder.status === "DRAFT" || changeOrder.status === "SENT";
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title=""
         description={
@@ -170,6 +171,6 @@ export default async function ChangeOrderPage({
           ) : null}
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }
