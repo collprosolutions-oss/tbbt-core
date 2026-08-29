@@ -6,6 +6,8 @@ const WIDTHS = {
   default: "max-w-5xl",
   /** Calendar/grid-heavy pages that need the extra desktop room (Schedule). */
   wide: "max-w-6xl",
+  /** Dense, multi-column command-center pages (Dashboard). */
+  xl: "max-w-7xl",
   /** Single-column forms (auth, narrow confirmations). */
   narrow: "max-w-3xl",
 } as const;
