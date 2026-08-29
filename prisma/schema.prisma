@@ -29,12 +29,13 @@ enum JobPhotoStage {
   AFTER
 }
 
-/// Who originated an AdditionalWorkRequest. CUSTOMER is the only source with
-/// a built UI today (see /p/[token]'s "+ Request Additional Work"). EMPLOYEE
-/// exists now, unused, so a future Employee Field Workflow can report
-/// "customer requested more work" against this same model without a schema
-/// change -- see the note on AdditionalWorkRequest below. Do not build
-/// EMPLOYEE-facing UI yet.
+/// Who originated an AdditionalWorkRequest. CUSTOMER is the Customer Project
+/// Portal's "+ Request Additional Work" (see /p/[token]). EMPLOYEE is the
+/// assigned field MEMBER's "Customer Asked for More Work" action (Phase 3 /
+/// Step 4 Employee Field Workflow -- see reportAdditionalWorkFromField in
+/// src/app/actions/field-job.ts). Both sources create the exact same kind of
+/// record with the exact same non-effect: never scope, price, Job total, or
+/// Invoice by itself. See the note on AdditionalWorkRequest below.
 enum AdditionalWorkRequestSource {
   CUSTOMER
   EMPLOYEE
@@ -89,6 +90,7 @@ model Business {
   jobPhotos                JobPhoto[]
   changeOrders             ChangeOrder[]
   additionalWorkRequests   AdditionalWorkRequest[]
+  jobProblemReports        JobProblemReport[]
 }
 
 model Membership {
@@ -98,8 +100,15 @@ model Membership {
   role       MembershipRole
   createdAt  DateTime       @default(now())
 
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business       Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  /// Jobs where this Membership (almost always a MEMBER) is the assigned
+  /// field employee -- see Job.assignedMembershipId below. Deliberately a
+  /// plain one-to-many on Job, not a join table: Phase 3 / Step 4 only
+  /// needs ONE assigned member per Job, so a join table would be
+  /// unused-crew-management complexity this step explicitly avoids.
+  assignedJobs   Job[]              @relation("JobAssignment")
+  reportedIssues JobProblemReport[]
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -302,11 +311,11 @@ model EstimateVersionLineItem {
 }
 
 model Job {
-  id                       String    @id @default(cuid())
-  businessId               String
-  customerId               String?
-  propertyId               String?
-  estimateId               String?
+  id                        String    @id @default(cuid())
+  businessId                String
+  customerId                String?
+  propertyId                String?
+  estimateId                String?
   /// The immutable EstimateVersion this Work Order was created from -- the
   /// exact scope/price a customer actually approved, independent of any
   /// later edits to the live (mutable) Estimate. Set once, at Job creation,
@@ -317,27 +326,40 @@ model Job {
   /// see resolveApprovedWorkOrderScope() in src/lib/job-work-order.ts for
   /// the safe fallback used when it is null.
   approvedEstimateVersionId String?
+  /// The single field employee assigned to perform this Job -- Phase 3 /
+  /// Step 4's Employee Field Workflow. References Membership (the existing
+  /// business-user identity), NOT a separate Employee table -- see the note
+  /// on Membership.assignedJobs above. Null means Unassigned, a real and
+  /// safe state: existing Jobs created before this column existed simply
+  /// stay Unassigned. Only a Membership belonging to THIS Job's own
+  /// businessId may ever be set here (enforced in
+  /// src/app/actions/job.ts::assignJobMember -- cross-business assignment
+  /// must be impossible). onDelete: SetNull so a (currently unsupported)
+  /// future membership removal safely unassigns rather than deleting the
+  /// Job.
+  assignedMembershipId      String?
   /// Unique, unguessable token for the customer-facing Project Portal
   /// (see src/app/p/[token]/page.tsx). Server-scoped to exactly this Job --
   /// the portal route looks a Job up ONLY by this token and never accepts a
   /// businessId from the client. Deliberately separate from
   /// Estimate.publicToken (a different record with a different lifecycle:
   /// estimate approval, not project status).
-  projectToken             String    @unique
+  projectToken              String    @unique
   /// Lifecycle: UNSCHEDULED | SCHEDULED → IN_PROGRESS → COMPLETED.
   /// String values, not a Prisma enum. No extra fields for completion notes.
-  status                   String    @default("SCHEDULED")
-  scheduledAt              DateTime?
+  status                    String    @default("SCHEDULED")
+  scheduledAt               DateTime?
   /// Expected duration in minutes. Null means duration is not set.
-  scheduledDurationMinutes Int?
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
+  scheduledDurationMinutes  Int?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
 
-  business                Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  customer                Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  property                Property?        @relation(fields: [propertyId], references: [id], onDelete: SetNull)
-  estimate                Estimate?        @relation(fields: [estimateId], references: [id], onDelete: SetNull)
-  approvedEstimateVersion EstimateVersion? @relation("JobApprovedEstimateVersion", fields: [approvedEstimateVersionId], references: [id], onDelete: SetNull)
+  business                Business                @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer                Customer?               @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  property                Property?               @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  estimate                Estimate?               @relation(fields: [estimateId], references: [id], onDelete: SetNull)
+  approvedEstimateVersion EstimateVersion?        @relation("JobApprovedEstimateVersion", fields: [approvedEstimateVersionId], references: [id], onDelete: SetNull)
+  assignedMembership      Membership?             @relation("JobAssignment", fields: [assignedMembershipId], references: [id], onDelete: SetNull)
   invoices                Invoice[]
   lineItems               LineItem[]
   photos                  JobPhoto[]
@@ -346,8 +368,10 @@ model Job {
   /// these; they are additive, separately-approved records.
   changeOrders            ChangeOrder[]
   additionalWorkRequests  AdditionalWorkRequest[]
+  problemReports          JobProblemReport[]
 
   @@index([businessId])
+  @@index([assignedMembershipId])
 }
 
 /// Private, owner-facing job documentation. Never surfaced on any public or
@@ -452,28 +476,28 @@ model LineItem {
 /// always approving exactly what is on this record -- there is no staleness
 /// window to defend against.
 model ChangeOrder {
-  id         String   @id @default(cuid())
-  businessId String
-  jobId      String
+  id          String    @id @default(cuid())
+  businessId  String
+  jobId       String
   /// Lifecycle: DRAFT -> SENT -> APPROVED | DECLINED | CANCELLED.
-  status     String   @default("DRAFT")
+  status      String    @default("DRAFT")
   /// Short customer-facing label for the additional work covered by this
   /// change order, e.g. "Additional tile work in guest bathroom".
-  title      String
+  title       String
   /// Sum of this ChangeOrder's own LineItem rows. Recomputed by application
   /// code on every line item add/remove while DRAFT (see
   /// persistChangeOrderTotal in src/lib/change-order.ts); frozen once SENT.
-  total      Decimal  @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  total       Decimal   @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   /// Set exactly once, on the guarded DRAFT -> SENT transition.
-  sentAt     DateTime?
+  sentAt      DateTime?
   /// Set exactly once, on the guarded SENT -> APPROVED transition (customer
   /// action, token-scoped -- see src/app/actions/customer-change-order.ts).
-  approvedAt DateTime?
+  approvedAt  DateTime?
   /// Set exactly once, on the guarded SENT -> DECLINED transition (customer
   /// action).
-  declinedAt DateTime?
+  declinedAt  DateTime?
   /// Set exactly once, on the guarded DRAFT|SENT -> CANCELLED transition
   /// (owner/admin action). Never set on an APPROVED or DECLINED order.
   cancelledAt DateTime?
@@ -502,9 +526,9 @@ model AdditionalWorkRequest {
   description   String
   /// OPEN -> CONVERTED | DISMISSED. String status, matching ServiceRequest.
   status        String                      @default("OPEN")
-  /// CUSTOMER today (submitted from /p/[token]). EMPLOYEE is reserved schema
-  /// surface for the not-yet-built Employee Field Workflow -- do not read
-  /// this as evidence that path exists yet.
+  /// CUSTOMER (submitted from /p/[token]) or EMPLOYEE (submitted from the
+  /// assigned field member's Field Job page). See
+  /// AdditionalWorkRequestSource above.
   source        AdditionalWorkRequestSource @default(CUSTOMER)
   /// Set once the request leaves OPEN (either converted or dismissed).
   reviewedAt    DateTime?
@@ -520,4 +544,38 @@ model AdditionalWorkRequest {
   @@index([businessId])
   @@index([jobId])
   @@index([changeOrderId])
+}
+
+/// A factual, operational field issue reported by the assigned MEMBER
+/// against their own assigned Job (Phase 3 / Step 4 Employee Field
+/// Workflow's "Report Problem"). Deliberately minimal -- not a general
+/// ticketing system: no priority, assignment, comments, or attachments.
+/// OWNER/ADMIN read these on the Work Order and may mark one RESOLVED;
+/// nothing here ever changes Job status, approved scope, price, or the
+/// Invoice.
+model JobProblemReport {
+  id           String    @id @default(cuid())
+  businessId   String
+  jobId        String
+  /// The reporting member -- always the authenticated member's OWN
+  /// Membership row for the Job's Business, set server-side (see
+  /// reportJobProblem in src/app/actions/field-job.ts). Never accepted as
+  /// client input.
+  membershipId String
+  description  String
+  /// OPEN -> RESOLVED. String status, matching ServiceRequest/
+  /// AdditionalWorkRequest's existing pattern rather than a Prisma enum.
+  status       String    @default("OPEN")
+  /// Set once, when an owner/admin marks this RESOLVED.
+  resolvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job        Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([membershipId])
 }
