@@ -21,6 +21,7 @@ export const APP_NAV: readonly NavItem[] = [
   { href: "/jobs", label: "Schedule / Jobs" },
   { href: "/invoices", label: "Invoices", capability: CAPABILITIES.MANAGE_INVOICES },
   { href: "/services", label: "Services", capability: CAPABILITIES.MANAGE_CATALOG },
+  { href: "/team", label: "Team", capability: CAPABILITIES.MANAGE_MEMBERS },
   { href: "/settings", label: "Business Settings", capability: CAPABILITIES.MANAGE_SETTINGS },
 ] as const;
 
