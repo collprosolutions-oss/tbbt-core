@@ -19,16 +19,26 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Separator } from "@/components/ui/separator";
 import {
   Sheet,
   SheetContent,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
 type AppShellProps = {
   businessName: string;
+  /**
+   * The active subscriber business's own logo, if one is on file --
+   * resolved by the caller (see getBusinessLogoSrc() in
+   * src/lib/business-branding.ts), NEVER a hardcoded business name/path
+   * here. AppShell renders its existing empty logo slot when this is
+   * null/undefined, exactly as it does for a business with no logo yet.
+   */
+  businessLogoSrc?: string | null;
   tradeLabel: string;
   userName: string;
   userEmail: string;
@@ -62,34 +72,69 @@ function initials(name: string) {
 }
 
 /**
- * TBBT's platform identity.
- *
- * IMPORTANT: no real TBBT logo file exists anywhere in this repository
- * (checked the full working tree AND every commit on every branch -- the
- * only image assets that exist at all are public/icon.svg and
- * src/app/icon.svg, a plain auto-generated favicon, not a designed logo).
- * Per explicit direction, this deliberately does NOT invent a "TB"
- * monogram or any other replacement mark to fill that gap. Instead this
- * renders an honest, clearly-empty logo slot (a dashed outline with a
- * "no image" glyph) sized for a real logo file to be dropped in later,
- * plus the platform's own name as plain text -- never a fabricated icon.
+ * TBBT's own platform logo -- the approved brand asset at
+ * public/brand/tbbt-logo.png (an unmodified copy of the founder-provided
+ * file: same pixels, same aspect ratio, nothing redrawn/recolored/
+ * cropped). AppShell is itself a TBBT component, so this is the one place
+ * safe to reference it directly, unlike a specific subscriber business's
+ * own logo (see businessLogoSrc on AppShellProps). Sized by height so it
+ * fits the horizontal top header/mobile bar; width follows automatically
+ * from the image's own aspect ratio, never stretched or cropped.
  */
-function PlatformBrand() {
+const TBBT_LOGO_SIZE = { width: 1659, height: 948 } as const;
+
+function PlatformLogo({ className }: { className?: string }) {
   return (
-    <div className="flex items-center gap-2.5">
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src="/brand/tbbt-logo.png"
+      alt="TBBT"
+      width={TBBT_LOGO_SIZE.width}
+      height={TBBT_LOGO_SIZE.height}
+      className={cn("w-auto", className)}
+    />
+  );
+}
+
+/**
+ * A subscriber business's own square logo, if one is on file (see
+ * businessLogoSrc on AppShellProps) -- otherwise the same honest empty
+ * slot AppShell has always shown for a business with no logo yet. Never
+ * crops/recolors a provided logo: `object-contain` inside a fixed square
+ * box only ever letterboxes, it cannot cut off any part of the image.
+ */
+function BusinessLogo({
+  src,
+  businessName,
+  size = "size-9",
+}: {
+  src?: string | null;
+  businessName: string;
+  size?: string;
+}) {
+  if (!src) {
+    return (
       <span
-        className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-sidebar-border text-sidebar-foreground/30"
-        title="TBBT logo not yet provided"
+        className={cn(
+          "flex shrink-0 items-center justify-center rounded-lg border border-dashed border-sidebar-border text-sidebar-foreground/30",
+          size,
+        )}
+        title="Business logo not yet provided"
       >
         <ImageOff className="size-4" />
       </span>
-      <div className="leading-tight">
-        <p className="text-base font-bold tracking-tight text-sidebar-foreground">TBBT</p>
-        <p className="text-[10px] font-medium tracking-wide text-sidebar-foreground/50 uppercase">
-          Business Operating System
-        </p>
-      </div>
-    </div>
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-sidebar-foreground/5 ring-1 ring-sidebar-border",
+        size,
+      )}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt={businessName} className="size-full object-contain" />
+    </span>
   );
 }
 
@@ -98,33 +143,59 @@ function PlatformBrand() {
  * multi-business account model. Only one Business exists per authenticated
  * membership today, so the menu itself is deliberately inert (no business
  * list/mutation logic) -- this is presentation only, never a hardcoded
- * "CollPro" component: businessName/tradeLabel always come from the
- * caller's real workspace data.
+ * "CollPro" component: businessName/tradeLabel/logoSrc always come from
+ * the caller's real workspace data (see getBusinessLogoSrc() in
+ * src/lib/business-branding.ts for how logoSrc is resolved).
+ *
+ * `layout="header"` is the compact horizontal treatment used in the
+ * desktop top header; `layout="stacked"` is the fuller vertical treatment
+ * still used in the mobile drawer.
  */
 function BusinessSwitcher({
   businessName,
   tradeLabel,
+  logoSrc,
+  layout = "stacked",
 }: {
   businessName: string;
   tradeLabel: string;
+  logoSrc?: string | null;
+  layout?: "stacked" | "header";
 }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-sidebar-accent/50"
-        >
-          <div className="min-w-0 flex-1">
-            <p className="text-[15px] leading-snug font-semibold text-sidebar-foreground">
-              {businessName}
-            </p>
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <Badge variant="secondary">{tradeLabel}</Badge>
+        {layout === "header" ? (
+          <button
+            type="button"
+            className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent/50"
+          >
+            <BusinessLogo src={logoSrc} businessName={businessName} size="size-8" />
+            <span className="flex flex-col items-start leading-tight">
+              <span className="text-sm font-semibold whitespace-nowrap text-sidebar-foreground">
+                {businessName}
+              </span>
+              <span className="text-[11px] text-sidebar-foreground/50">{tradeLabel}</span>
+            </span>
+            <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-foreground/40" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-sidebar-accent/50"
+          >
+            <BusinessLogo src={logoSrc} businessName={businessName} />
+            <div className="min-w-0 flex-1">
+              <p className="text-[15px] leading-snug font-semibold text-sidebar-foreground">
+                {businessName}
+              </p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <Badge variant="secondary">{tradeLabel}</Badge>
+              </div>
             </div>
-          </div>
-          <ChevronsUpDown className="mt-1 size-3.5 shrink-0 text-sidebar-foreground/40" />
-        </button>
+            <ChevronsUpDown className="size-3.5 shrink-0 self-center text-sidebar-foreground/40" />
+          </button>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
         <DropdownMenuLabel>Business</DropdownMenuLabel>
@@ -239,8 +310,64 @@ function AccountArea({
   );
 }
 
+/**
+ * Compact account control for the desktop top header: avatar + name/role,
+ * opening a small menu with the full email and Sign out. Same
+ * signOutAction as everywhere else in the app -- this is presentation
+ * only.
+ */
+function AccountMenu({
+  userName,
+  userEmail,
+  role,
+}: {
+  userName: string;
+  userEmail: string;
+  role: MembershipRole;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent/50"
+        >
+          <Avatar size="sm">
+            <AvatarFallback className="bg-sidebar-accent font-semibold text-sidebar-accent-foreground">
+              {initials(userName)}
+            </AvatarFallback>
+          </Avatar>
+          <span className="flex flex-col items-start leading-tight">
+            <span className="text-sm font-medium whitespace-nowrap text-sidebar-foreground">
+              {userName}
+            </span>
+            <span className="text-[11px] text-sidebar-foreground/50">{role}</span>
+          </span>
+          <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-foreground/40" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuLabel className="font-normal">
+          <p className="truncate text-sm font-medium text-foreground">{userName}</p>
+          <p className="truncate text-xs text-muted-foreground">{userEmail}</p>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <form action={signOutAction}>
+          <DropdownMenuItem asChild variant="destructive">
+            <button type="submit" className="w-full">
+              <LogOut className="size-3.5" />
+              Sign out
+            </button>
+          </DropdownMenuItem>
+        </form>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function AppShell({
   businessName,
+  businessLogoSrc,
   tradeLabel,
   userName,
   userEmail,
@@ -249,75 +376,95 @@ export function AppShell({
 }: AppShellProps) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const currentNavItem = visibleAppNav(role).find((item) => isNavActive(pathname, item.href));
+  const pageTitle = currentNavItem?.label ?? "Dashboard";
 
   return (
-    <div className="flex min-h-full flex-col md:flex-row">
-      <aside className="hidden w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
-        <div className="px-3.5 py-4">
-          <PlatformBrand />
-        </div>
-        <div className="border-t border-sidebar-border px-2.5 py-3">
-          <BusinessSwitcher businessName={businessName} tradeLabel={tradeLabel} />
-        </div>
-        <div className="flex-1 overflow-y-auto border-t border-sidebar-border px-3 py-4">
-          <NavLinks pathname={pathname} role={role} />
-        </div>
-        <div className="border-t border-sidebar-border">
-          <AccountArea userName={userName} userEmail={userEmail} role={role} />
-        </div>
-      </aside>
+    <div className="flex min-h-full flex-col">
+      {/*
+       * Desktop-only top header: ONE horizontal bar spanning the full
+       * width, above both the nav sidebar and the content -- TBBT logo,
+       * active-business identity, current section, theme control, and
+       * account, left to right. The nav sidebar (below) is nav-only now;
+       * brand/business/account no longer live inside it on desktop.
+       */}
+      <header className="hidden h-16 shrink-0 items-center gap-3 border-b border-sidebar-border bg-sidebar px-4 md:flex">
+        <Link href="/dashboard" className="flex shrink-0 items-center">
+          <PlatformLogo className="h-9" />
+        </Link>
+        <Separator orientation="vertical" className="h-7 bg-sidebar-border" />
+        <BusinessSwitcher
+          businessName={businessName}
+          tradeLabel={tradeLabel}
+          logoSrc={businessLogoSrc}
+          layout="header"
+        />
+        <Separator orientation="vertical" className="h-7 bg-sidebar-border" />
+        <p className="truncate text-sm font-semibold text-sidebar-foreground">{pageTitle}</p>
+        <div className="flex-1" />
+        <ThemeToggle />
+        <AccountMenu userName={userName} userEmail={userEmail} role={role} />
+      </header>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-40 flex items-center justify-between gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur-sm md:hidden">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <span
-              className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground/50"
-              title="TBBT logo not yet provided"
-            >
-              <ImageOff className="size-3.5" />
-            </span>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-foreground">{businessName}</p>
-              <p className="text-[11px] text-muted-foreground">{tradeLabel}</p>
-            </div>
+      {/* Mobile-only compact header, unchanged: hamburger opens the drawer below. */}
+      <header className="sticky top-0 z-40 flex items-center justify-between gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur-sm md:hidden">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <BusinessLogo src={businessLogoSrc} businessName={businessName} size="size-8" />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-foreground">{businessName}</p>
+            <p className="text-[11px] text-muted-foreground">{tradeLabel}</p>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            aria-label="Open menu"
-            onClick={() => setMenuOpen(true)}
-          >
-            <Menu className="size-4" />
-          </Button>
-        </header>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          aria-label="Open menu"
+          onClick={() => setMenuOpen(true)}
+        >
+          <Menu className="size-4" />
+        </Button>
+      </header>
 
-        <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-          <SheetContent side="left" className="flex w-80 flex-col gap-0 p-0 bg-sidebar text-sidebar-foreground">
-            <SheetHeader className="sr-only">
-              <SheetTitle>Navigation</SheetTitle>
-            </SheetHeader>
-            <div className="px-3.5 py-4">
-              <PlatformBrand />
-            </div>
-            <div className="border-t border-sidebar-border px-2.5 py-3">
-              <BusinessSwitcher businessName={businessName} tradeLabel={tradeLabel} />
-            </div>
-            <div className="flex-1 overflow-y-auto border-t border-sidebar-border px-3 py-4">
-              <NavLinks
-                pathname={pathname}
-                role={role}
-                onNavigate={() => setMenuOpen(false)}
-              />
-            </div>
-            <div className="border-t border-sidebar-border">
-              <AccountArea userName={userName} userEmail={userEmail} role={role} />
-            </div>
-          </SheetContent>
-        </Sheet>
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        {/* Desktop nav sidebar -- nav only, starting below the top header. */}
+        <aside className="hidden w-64 shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
+          <NavLinks pathname={pathname} role={role} />
+        </aside>
 
-        <main className="flex-1 px-4 py-6 md:px-8 md:py-8">{children}</main>
+        <main className="min-w-0 flex-1 overflow-y-auto px-4 py-6 md:px-8 md:py-8">
+          {children}
+        </main>
       </div>
+
+      {/* Mobile drawer: still the fuller stacked treatment (brand, business, nav, account). */}
+      <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+        <SheetContent side="left" className="flex w-80 flex-col gap-0 p-0 bg-sidebar text-sidebar-foreground">
+          <SheetHeader className="sr-only">
+            <SheetTitle>Navigation</SheetTitle>
+          </SheetHeader>
+          <div className="px-3.5 py-4">
+            <PlatformLogo className="h-11 max-w-full" />
+          </div>
+          <div className="border-t border-sidebar-border px-2.5 py-3">
+            <BusinessSwitcher
+              businessName={businessName}
+              tradeLabel={tradeLabel}
+              logoSrc={businessLogoSrc}
+            />
+          </div>
+          <div className="flex-1 overflow-y-auto border-t border-sidebar-border px-3 py-4">
+            <NavLinks
+              pathname={pathname}
+              role={role}
+              onNavigate={() => setMenuOpen(false)}
+            />
+          </div>
+          <div className="border-t border-sidebar-border">
+            <AccountArea userName={userName} userEmail={userEmail} role={role} />
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
