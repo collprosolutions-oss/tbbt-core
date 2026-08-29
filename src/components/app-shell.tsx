@@ -4,8 +4,9 @@ import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
+import type { MembershipRole } from "@prisma/client";
 import { signOutAction } from "@/app/actions/auth";
-import { APP_NAV } from "@/lib/nav";
+import { visibleAppNav } from "@/lib/nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -16,7 +17,7 @@ type AppShellProps = {
   tradeLabel: string;
   userName: string;
   userEmail: string;
-  role: string;
+  role: MembershipRole;
   children: ReactNode;
 };
 
@@ -24,10 +25,18 @@ function isNavActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function NavLinks({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+function NavLinks({
+  pathname,
+  role,
+  onNavigate,
+}: {
+  pathname: string;
+  role: MembershipRole;
+  onNavigate?: () => void;
+}) {
   return (
     <nav className="flex flex-col gap-1">
-      {APP_NAV.map((item) => {
+      {visibleAppNav(role).map((item) => {
         const active = isNavActive(pathname, item.href);
         return (
           <Link
@@ -74,7 +83,7 @@ export function AppShell({
         </div>
         <Separator />
         <div className="flex-1 px-3 py-4">
-          <NavLinks pathname={pathname} />
+          <NavLinks pathname={pathname} role={role} />
         </div>
         <Separator />
         <div className="space-y-2 px-4 py-4">
@@ -123,6 +132,7 @@ export function AppShell({
                 <div className="flex-1 px-2">
                   <NavLinks
                     pathname={pathname}
+                    role={role}
                     onNavigate={() => setMenuOpen(false)}
                   />
                 </div>

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { requireBusinessAccess } from "@/lib/access";
+import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import { prisma } from "@/lib/prisma";
 
@@ -20,6 +21,7 @@ export async function updateLaborMinimumSettings(
   formData: FormData,
 ): Promise<SettingsActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
   const enabled = readString(formData, "enabled") === "on";
   const rawAmount = readString(formData, "amount");
 

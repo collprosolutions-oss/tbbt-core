@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireBusinessAccess } from "@/lib/access";
+import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
 import {
   deleteJobPhotoBlob,
@@ -28,6 +29,10 @@ export async function addJobPhoto(
   formData: FormData,
 ): Promise<JobPhotoActionState> {
   const access = await requireBusinessAccess();
+  // FUTURE: once Jobs carry an assignment, MEMBER should get this
+  // capability scoped to their own assigned job(s). See OPERATE_JOBS in
+  // src/lib/authorization.ts for details.
+  requireBusinessCapability(access, CAPABILITIES.OPERATE_JOBS);
   const jobId = readString(formData, "jobId");
   const stage = readString(formData, "stage");
   const caption = readString(formData, "caption");
@@ -100,6 +105,7 @@ export async function deleteJobPhoto(
   formData: FormData,
 ): Promise<JobPhotoActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.OPERATE_JOBS);
   const photoId = readString(formData, "photoId");
 
   if (!photoId) {

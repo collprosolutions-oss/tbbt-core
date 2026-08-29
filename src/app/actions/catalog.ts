@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { requireBusinessAccess } from "@/lib/access";
+import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
   planStarterCatalogInstall,
   starterPricingMode,
@@ -57,6 +58,7 @@ export async function createServiceCatalogItem(
   formData: FormData,
 ): Promise<CatalogActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
   const name = readString(formData, "name");
   const description = readString(formData, "description");
   const pricingMode = parsePricingMode(readString(formData, "pricingMode"));
@@ -91,6 +93,7 @@ export async function updateServiceCatalogItem(
   formData: FormData,
 ): Promise<CatalogActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
   const id = readString(formData, "id");
   const name = readString(formData, "name");
   const description = readString(formData, "description");
@@ -132,6 +135,7 @@ export async function setServiceCatalogItemActive(
   active: boolean,
 ): Promise<CatalogActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
   const item = access.assertOwned(
     await prisma.serviceCatalogItem.findFirst({
       where: { id, ...access.scope },
@@ -149,6 +153,7 @@ export async function setServiceCatalogItemActive(
 
 export async function installHandymanStarterCatalog(): Promise<CatalogActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
 
   if (!isActiveTrade(access.workspace.business.tradeCode)) {
     return {
