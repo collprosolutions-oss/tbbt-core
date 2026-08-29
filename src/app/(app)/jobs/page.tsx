@@ -10,7 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireManagementPageAccess } from "@/lib/access";
 import {
   formatAddress,
   formatDate,
@@ -25,7 +25,7 @@ export const metadata: Metadata = {
 };
 
 export default async function JobsPage() {
-  const access = await requireBusinessAccess();
+  const access = await requireManagementPageAccess();
   const jobs = await prisma.job.findMany({
     where: access.scope,
     include: {

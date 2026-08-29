@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireBusinessAccess } from "@/lib/access";
+import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { isUsableEmail } from "@/lib/mail";
 import { prisma } from "@/lib/prisma";
 
@@ -19,6 +20,7 @@ export async function updateCustomer(
   formData: FormData,
 ): Promise<CustomerActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_CUSTOMERS);
   const customerId = readString(formData, "customerId");
   const name = readString(formData, "name");
   const email = readString(formData, "email");

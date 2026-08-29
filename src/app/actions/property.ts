@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireBusinessAccess } from "@/lib/access";
+import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
 
 export type PropertyActionState = {
@@ -18,6 +19,7 @@ export async function addCustomerProperty(
   formData: FormData,
 ): Promise<PropertyActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_CUSTOMERS);
   const customerId = readString(formData, "customerId");
   const label = readString(formData, "label");
   const addressLine1 = readString(formData, "addressLine1");
@@ -64,6 +66,7 @@ export async function updateCustomerProperty(
   formData: FormData,
 ): Promise<PropertyActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_CUSTOMERS);
   const propertyId = readString(formData, "propertyId");
   const label = readString(formData, "label");
   const addressLine1 = readString(formData, "addressLine1");

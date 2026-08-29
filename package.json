@@ -10,7 +10,9 @@
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "test:isolation": "node scripts/check-isolation.mjs",
-    "test:estimate-versions": "node --experimental-strip-types scripts/check-estimate-versions.mjs"
+    "test:estimate-versions": "node --experimental-strip-types scripts/check-estimate-versions.mjs",
+    "test:authorization": "node --experimental-strip-types scripts/check-authorization.mjs",
+    "test:management-console-access": "node scripts/check-management-console-access.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

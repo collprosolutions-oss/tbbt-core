@@ -12,7 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireManagementPageAccess } from "@/lib/access";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
@@ -27,7 +27,7 @@ export default async function InvoicePage({
   params: Promise<{ invoiceId: string }>;
 }) {
   const { invoiceId } = await params;
-  const access = await requireBusinessAccess();
+  const access = await requireManagementPageAccess();
   const invoice = await prisma.invoice.findFirst({
     where: { id: invoiceId, ...access.scope },
     include: {

@@ -10,7 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireManagementPageAccess } from "@/lib/access";
 import { formatDate, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
 };
 
 export default async function EstimatesPage() {
-  const access = await requireBusinessAccess();
+  const access = await requireManagementPageAccess();
   const estimates = await prisma.estimate.findMany({
     where: access.scope,
     include: {

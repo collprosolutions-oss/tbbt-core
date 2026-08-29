@@ -13,7 +13,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireManagementPageAccess } from "@/lib/access";
 import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
@@ -27,7 +27,7 @@ export default async function CustomerProfilePage({
   params: Promise<{ customerId: string }>;
 }) {
   const { customerId } = await params;
-  const access = await requireBusinessAccess();
+  const access = await requireManagementPageAccess();
   const customer = await prisma.customer.findFirst({
     where: { id: customerId, ...access.scope },
     include: {

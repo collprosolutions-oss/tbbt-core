@@ -18,7 +18,7 @@ import { RecordNav } from "@/components/record-nav";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireManagementPageAccess } from "@/lib/access";
 import {
   formatAddress,
   formatDate,
@@ -55,7 +55,7 @@ export default async function JobPage({
   params: Promise<{ jobId: string }>;
 }) {
   const { jobId } = await params;
-  const access = await requireBusinessAccess();
+  const access = await requireManagementPageAccess();
   const job = await prisma.job.findFirst({
     where: { id: jobId, ...access.scope },
     include: {

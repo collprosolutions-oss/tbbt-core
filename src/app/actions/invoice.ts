@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
+import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { isPaymentMethodValue } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
 
@@ -19,6 +20,7 @@ export async function createInvoiceFromJob(
   jobId: string,
 ): Promise<InvoiceActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
   const job = access.assertOwned(
     await prisma.job.findFirst({
       where: { id: jobId, ...access.scope },
@@ -68,6 +70,7 @@ export async function markInvoiceSent(
   invoiceId: string,
 ): Promise<InvoiceActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
   const invoice = access.assertOwned(
     await prisma.invoice.findFirst({
       where: { id: invoiceId, ...access.scope },
@@ -105,6 +108,7 @@ export async function markInvoicePaid(
   formData: FormData,
 ): Promise<InvoiceActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
   const invoiceId = readString(formData, "invoiceId");
   const paymentMethod = readString(formData, "paymentMethod");
   const paymentReference = readString(formData, "paymentReference");

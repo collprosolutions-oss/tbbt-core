@@ -11,7 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireManagementPageAccess } from "@/lib/access";
 import {
   groupServicesByStarterCategory,
   HANDYMAN_STARTER_SERVICES,
@@ -28,7 +28,7 @@ export const metadata: Metadata = {
 };
 
 export default async function ServicesPage() {
-  const access = await requireBusinessAccess();
+  const access = await requireManagementPageAccess();
   const items = await prisma.serviceCatalogItem.findMany({
     where: access.scope,
     orderBy: [{ active: "desc" }, { name: "asc" }],

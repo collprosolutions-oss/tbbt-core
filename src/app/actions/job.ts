@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
+import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
   parseDurationMinutes,
   parseScheduleStart,
@@ -26,6 +27,7 @@ export async function createJobFromEstimate(
   formData: FormData,
 ): Promise<JobActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
   const estimateId =
     typeof formData.get("estimateId") === "string"
       ? formData.get("estimateId")!.toString().trim()
@@ -100,6 +102,7 @@ export async function scheduleJob(
   formData: FormData,
 ): Promise<JobActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
   const jobId = readString(formData, "jobId");
   const date = readString(formData, "date");
   const time = readString(formData, "time");
@@ -185,6 +188,7 @@ export async function startJob(
   formData: FormData,
 ): Promise<JobActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.OPERATE_JOBS);
   const jobId = readString(formData, "jobId");
 
   if (!jobId) {
@@ -221,6 +225,7 @@ export async function markJobComplete(
   formData: FormData,
 ): Promise<JobActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.OPERATE_JOBS);
   const jobId = readString(formData, "jobId");
 
   if (!jobId) {

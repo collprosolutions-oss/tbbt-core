@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
 import { requireBusinessAccess, type BusinessAccess } from "@/lib/access";
+import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
   buildEstimateReadyEmail,
   formatEstimateServiceAddress,
@@ -46,6 +47,7 @@ function parseDecimal(raw: string, allowZero = false) {
 
 export async function createEstimate(serviceRequestId: string) {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const request = access.assertOwned(
     await prisma.serviceRequest.findFirst({
       where: { id: serviceRequestId, ...access.scope },
@@ -177,6 +179,7 @@ export async function createManualEstimate(
   formData: FormData,
 ): Promise<EstimateActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const mode = readString(formData, "mode");
 
   if (mode !== "existing" && mode !== "new") {
@@ -282,6 +285,7 @@ export async function addCatalogLineItem(
   formData: FormData,
 ): Promise<EstimateActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
   const catalogItemId = readString(formData, "catalogItemId");
   const quantity = parseDecimal(readString(formData, "quantity"));
@@ -347,6 +351,7 @@ export async function addCustomLineItem(
   formData: FormData,
 ): Promise<EstimateActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
   const description = readString(formData, "description");
   const quantity = parseDecimal(readString(formData, "quantity"));
@@ -397,6 +402,7 @@ export async function setEstimateLaborMinimumWaived(
   waived: boolean,
 ): Promise<EstimateActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimate = access.assertOwned(
     await prisma.estimate.findFirst({
       where: { id: estimateId, ...access.scope },
@@ -424,6 +430,7 @@ export async function removeEstimateLineItem(
   formData: FormData,
 ): Promise<EstimateActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
   const lineItemId = readString(formData, "lineItemId");
 
@@ -471,6 +478,7 @@ export async function clearDraftEstimate(
   formData: FormData,
 ): Promise<EstimateActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
 
   if (!estimateId) {
@@ -506,6 +514,7 @@ export async function sendEstimate(
   formData: FormData,
 ): Promise<EstimateActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
 
   if (!estimateId) {
@@ -584,6 +593,7 @@ export async function returnEstimateToDraft(
   formData: FormData,
 ): Promise<EstimateActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
 
   if (!estimateId) {
@@ -624,6 +634,7 @@ export async function emailSentEstimate(
   formData: FormData,
 ): Promise<EstimateActionState> {
   const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
 
   if (!estimateId) {
