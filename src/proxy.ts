@@ -22,6 +22,11 @@ function isPublicHire(pathname: string) {
   return pathname.startsWith("/hire/");
 }
 
+/** Customer Project Portal -- see src/app/p/[token]/page.tsx. */
+function isPublicProject(pathname: string) {
+  return pathname.startsWith("/p/");
+}
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
@@ -35,7 +40,8 @@ export function proxy(request: NextRequest) {
   if (
     isPublicIntake(pathname) ||
     isPublicEstimate(pathname) ||
-    isPublicHire(pathname)
+    isPublicHire(pathname) ||
+    isPublicProject(pathname)
   ) {
     return NextResponse.next();
   }
