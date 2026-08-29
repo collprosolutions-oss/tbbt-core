@@ -10,12 +10,14 @@ import {
 } from "@/components/ui/card";
 import { AdditionalWorkRequestList } from "@/components/jobs/additional-work-request-list";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
+import { AssignJobMemberForm } from "@/components/jobs/assign-job-member-form";
 import { ChangeOrderList } from "@/components/jobs/change-order-list";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { CreateChangeOrderForm } from "@/components/jobs/create-change-order-form";
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
 import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
+import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
 import { StartJobButton } from "@/components/jobs/start-job-button";
 import { PageHeader } from "@/components/page-header";
@@ -121,7 +123,20 @@ export default async function JobPage({
       additionalWorkRequests: {
         where: { status: "OPEN" },
         orderBy: { createdAt: "desc" },
-        select: { id: true, description: true, createdAt: true },
+        select: { id: true, description: true, createdAt: true, source: true },
+      },
+      assignedMembership: {
+        select: { id: true, user: { select: { name: true, email: true } } },
+      },
+      problemReports: {
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          description: true,
+          status: true,
+          createdAt: true,
+          membership: { select: { user: { select: { name: true } } } },
+        },
       },
     },
   });
@@ -130,6 +145,15 @@ export default async function JobPage({
     notFound();
   }
   access.assertOwned(job);
+
+  // Assignment candidates: MEMBER-role memberships of THIS Job's own
+  // Business only -- see assignJobMember() in src/app/actions/job.ts for
+  // the server-side re-validation this list is purely a UX convenience for.
+  const eligibleMembers = await prisma.membership.findMany({
+    where: { businessId: access.businessId, role: "MEMBER" },
+    select: { id: true, user: { select: { name: true, email: true } } },
+    orderBy: { createdAt: "asc" },
+  });
 
   const isScheduled = Boolean(job.scheduledAt);
   const isCompleted = job.status === "COMPLETED";
@@ -363,6 +387,44 @@ export default async function JobPage({
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle>Assigned Employee</CardTitle>
+          <CardDescription>
+            The one field member assigned to perform this job. Only members
+            of {access.workspace.business.name} are eligible. An assigned
+            member can open this job from their own Field Home, start it,
+            complete it, add photos, report a problem, or flag customer
+            requests for more work -- nothing else in the management
+            console.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <p>
+            Currently:{" "}
+            {job.assignedMembership
+              ? `${job.assignedMembership.user.name} (${job.assignedMembership.user.email})`
+              : "Unassigned"}
+          </p>
+          {eligibleMembers.length === 0 ? (
+            <p className="text-muted-foreground">
+              No team members yet. Invite a MEMBER to this business to assign
+              jobs.
+            </p>
+          ) : (
+            <AssignJobMemberForm
+              jobId={job.id}
+              assignedMembershipId={job.assignedMembership?.id ?? null}
+              eligibleMembers={eligibleMembers.map((member) => ({
+                id: member.id,
+                name: member.user.name,
+                email: member.user.email,
+              }))}
+            />
+          )}
+        </CardContent>
+      </Card>
+
       <ApprovedScopeCard scope={approvedScope} title="Original Approved Scope" />
 
       <Card>
@@ -444,6 +506,21 @@ export default async function JobPage({
             jobId={job.id}
             requests={job.additionalWorkRequests}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Field Reports</CardTitle>
+          <CardDescription>
+            Factual operational issues the assigned field member reported
+            from this job (access issues, unexpected conditions, safety
+            concerns, and similar). Never changes job status, approved
+            scope, price, or the invoice by itself.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <JobProblemReportList reports={job.problemReports} />
         </CardContent>
       </Card>
 
