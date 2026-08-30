@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import {
   Card,
@@ -19,7 +20,7 @@ export default async function SettingsPage() {
   const business = access.workspace.business;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title="Business Settings"
         description={business.name}
@@ -41,6 +42,6 @@ export default async function SettingsPage() {
           />
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }

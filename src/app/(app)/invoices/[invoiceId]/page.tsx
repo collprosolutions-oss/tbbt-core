@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { MarkInvoicePaidForm } from "@/components/invoices/mark-invoice-paid-form";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { RecordNav } from "@/components/record-nav";
 import { StatusBadge } from "@/components/status-badge";
@@ -46,7 +47,7 @@ export default async function InvoicePage({
   const isPaid = invoice.status === "PAID";
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title={invoice.customer?.name ?? "Customer"}
         description={
@@ -115,6 +116,6 @@ export default async function InvoicePage({
           </p>
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }

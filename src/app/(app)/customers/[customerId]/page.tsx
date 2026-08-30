@@ -2,9 +2,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { EditCustomerForm } from "@/components/customers/edit-customer-form";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { AddPropertyForm } from "@/components/properties/add-property-form";
 import { PropertyItem } from "@/components/properties/property-item";
+import { RecordRow } from "@/components/record-row";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,7 +47,7 @@ export default async function CustomerProfilePage({
   access.assertOwned(customer);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title={customer.name}
         description="Customer profile"
@@ -97,19 +99,24 @@ export default async function CustomerProfilePage({
           {customer.serviceRequests.length === 0 ? (
             <p className="text-sm text-muted-foreground">No requests yet.</p>
           ) : (
-            <ul className="space-y-3 text-sm">
+            <div className="space-y-2">
               {customer.serviceRequests.map((request) => (
-                <li key={request.id} className="space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <StatusBadge status={request.status} />
-                    <span className="text-muted-foreground">
-                      {formatDate(request.createdAt)}
+                <RecordRow
+                  key={request.id}
+                  title={
+                    <span className="font-normal text-foreground">
+                      {request.description || request.summary || "No description"}
                     </span>
-                  </div>
-                  <p>{request.description || request.summary || "No description"}</p>
-                </li>
+                  }
+                  meta={
+                    <>
+                      <StatusBadge status={request.status} />
+                      <span>{formatDate(request.createdAt)}</span>
+                    </>
+                  }
+                />
               ))}
-            </ul>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -122,25 +129,25 @@ export default async function CustomerProfilePage({
           {customer.estimates.length === 0 ? (
             <p className="text-sm text-muted-foreground">No estimates yet.</p>
           ) : (
-            <ul className="space-y-3">
+            <div className="space-y-2">
               {customer.estimates.map((estimate) => (
-                <li
+                <RecordRow
                   key={estimate.id}
-                  className="flex flex-wrap items-center justify-between gap-3 text-sm"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <StatusBadge status={estimate.status} />
-                    <span>{formatMoney(estimate.total)}</span>
-                    <span className="text-muted-foreground">
-                      {formatDate(estimate.createdAt)}
-                    </span>
-                  </div>
-                  <Button asChild size="sm" variant="outline">
-                    <Link href={`/estimates/${estimate.id}`}>Open</Link>
-                  </Button>
-                </li>
+                  title={
+                    <>
+                      <StatusBadge status={estimate.status} />
+                      <span className="text-foreground">{formatMoney(estimate.total)}</span>
+                    </>
+                  }
+                  meta={<span>{formatDate(estimate.createdAt)}</span>}
+                  action={
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/estimates/${estimate.id}`}>Open</Link>
+                    </Button>
+                  }
+                />
               ))}
-            </ul>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -153,26 +160,26 @@ export default async function CustomerProfilePage({
           {customer.jobs.length === 0 ? (
             <p className="text-sm text-muted-foreground">No jobs yet.</p>
           ) : (
-            <ul className="space-y-3">
+            <div className="space-y-2">
               {customer.jobs.map((job) => (
-                <li
+                <RecordRow
                   key={job.id}
-                  className="flex flex-wrap items-center justify-between gap-3 text-sm"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <StatusBadge status={job.status} />
-                    <span className="text-muted-foreground">
+                  title={<StatusBadge status={job.status} />}
+                  meta={
+                    <span>
                       {job.scheduledAt
                         ? formatDateTime(job.scheduledAt)
                         : formatDate(job.createdAt)}
                     </span>
-                  </div>
-                  <Button asChild size="sm" variant="outline">
-                    <Link href={`/jobs/${job.id}`}>Open</Link>
-                  </Button>
-                </li>
+                  }
+                  action={
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/jobs/${job.id}`}>Open</Link>
+                    </Button>
+                  }
+                />
               ))}
-            </ul>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -185,28 +192,28 @@ export default async function CustomerProfilePage({
           {customer.invoices.length === 0 ? (
             <p className="text-sm text-muted-foreground">No invoices yet.</p>
           ) : (
-            <ul className="space-y-3">
+            <div className="space-y-2">
               {customer.invoices.map((invoice) => (
-                <li
+                <RecordRow
                   key={invoice.id}
-                  className="flex flex-wrap items-center justify-between gap-3 text-sm"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <StatusBadge status={invoice.status} />
-                    <span>{formatMoney(invoice.total)}</span>
-                    <span className="text-muted-foreground">
-                      {formatDate(invoice.createdAt)}
-                    </span>
-                  </div>
-                  <Button asChild size="sm" variant="outline">
-                    <Link href={`/invoices/${invoice.id}`}>Open</Link>
-                  </Button>
-                </li>
+                  title={
+                    <>
+                      <StatusBadge status={invoice.status} />
+                      <span className="text-foreground">{formatMoney(invoice.total)}</span>
+                    </>
+                  }
+                  meta={<span>{formatDate(invoice.createdAt)}</span>}
+                  action={
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/invoices/${invoice.id}`}>Open</Link>
+                    </Button>
+                  }
+                />
               ))}
-            </ul>
+            </div>
           )}
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }

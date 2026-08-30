@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
+import { getBusinessLogoSrc } from "@/lib/business-branding";
 import { canAccessManagementConsole } from "@/lib/authorization";
 import { getTrade } from "@/lib/trades";
 import { requireWorkspace } from "@/lib/workspace";
@@ -30,10 +31,12 @@ export default async function AppLayout({
   }
 
   const trade = getTrade(workspace.business.tradeCode);
+  const businessLogoSrc = getBusinessLogoSrc(workspace.business.slug);
 
   return (
     <AppShell
       businessName={workspace.business.name}
+      businessLogoSrc={businessLogoSrc}
       tradeLabel={trade?.name ?? "Handyman"}
       userName={workspace.user.name}
       userEmail={workspace.user.email}

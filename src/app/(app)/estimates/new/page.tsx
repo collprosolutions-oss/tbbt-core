@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CreateManualEstimateForm } from "@/components/estimates/create-manual-estimate-form";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import {
@@ -43,7 +44,7 @@ export default async function NewManualEstimatePage() {
   });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer width="narrow">
       <PageHeader
         title="Create estimate"
         description="Start a draft for an existing or new customer. No service request is required."
@@ -78,6 +79,6 @@ export default async function NewManualEstimatePage() {
           />
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }

@@ -13,6 +13,7 @@ import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-bu
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
 import { CreateJobButton } from "@/components/jobs/create-job-button";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { RecordNav } from "@/components/record-nav";
 import { StatusBadge } from "@/components/status-badge";
@@ -98,7 +99,7 @@ export default async function EstimateBuilderPage({
   });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title={estimate.customer?.name ?? "Customer"}
         description={
@@ -302,6 +303,6 @@ export default async function EstimateBuilderPage({
       ) : null}
 
       <EstimateVersionHistory versions={estimate.versions} />
-    </div>
+    </PageContainer>
   );
 }

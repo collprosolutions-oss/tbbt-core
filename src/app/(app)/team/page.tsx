@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { AddTeamMemberForm } from "@/components/team/add-team-member-form";
 import { SetTeamMemberActiveForm } from "@/components/team/set-team-member-active-form";
+import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
+import { RecordRow } from "@/components/record-row";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -42,7 +44,7 @@ export default async function TeamPage() {
   });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <PageContainer>
       <PageHeader
         title="Team"
         description={`Field team members for ${access.workspace.business.name}.`}
@@ -70,32 +72,32 @@ export default async function TeamPage() {
             immediately; it does not delete their account or job history.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-2">
           {members.map((member) => (
-            <div
+            <RecordRow
               key={member.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm"
-            >
-              <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{member.user.name}</span>
+              title={
+                <>
+                  <span>{member.user.name}</span>
                   <Badge variant="secondary">{member.role}</Badge>
                   {!member.active ? (
                     <Badge variant="outline">Removed</Badge>
                   ) : null}
-                </div>
-                <p className="text-muted-foreground">{member.user.email}</p>
-              </div>
-              {member.role === "MEMBER" ? (
-                <SetTeamMemberActiveForm
-                  membershipId={member.id}
-                  active={member.active}
-                />
-              ) : null}
-            </div>
+                </>
+              }
+              subtitle={member.user.email}
+              action={
+                member.role === "MEMBER" ? (
+                  <SetTeamMemberActiveForm
+                    membershipId={member.id}
+                    active={member.active}
+                  />
+                ) : null
+              }
+            />
           ))}
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }
