@@ -4,6 +4,7 @@ import type { ComponentType, ReactNode } from "react";
 import { CalendarClock, Sparkles } from "lucide-react";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
+import { PageHeaderControls } from "@/components/page-header-controls";
 import { RecordRow } from "@/components/record-row";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -262,6 +263,22 @@ export default async function DashboardPage() {
 
   return (
     <PageContainer width="xl">
+      {/*
+       * Primary page action, per the approved header architecture (TBBT
+       * logo -> business switcher -> page title -> primary page action ->
+       * page search -> ... -> theme -> account): registers into the
+       * shared AppShell top header instead of living in this page's own
+       * content. Dashboard has no real "search the dashboard" capability
+       * to wire up, so that slot is intentionally left unset here rather
+       * than inventing one -- see PageHeaderControls' own docs.
+       */}
+      <PageHeaderControls
+        actions={
+          <Button asChild size="sm">
+            <Link href="/estimates/new">Create Estimate</Link>
+          </Button>
+        }
+      />
       <PageHeader
         title="Dashboard"
         description={
@@ -277,11 +294,7 @@ export default async function DashboardPage() {
             </span>
           </div>
         }
-      >
-        <Button asChild size="sm">
-          <Link href="/estimates/new">Create Estimate</Link>
-        </Button>
-      </PageHeader>
+      />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {kpis.map((kpi) => (
