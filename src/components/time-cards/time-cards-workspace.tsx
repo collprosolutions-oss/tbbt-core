@@ -582,7 +582,7 @@ function WorkerDetailPanel({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <WageForm worker={worker} />
+        <WageForm key={worker.membershipId} worker={worker} />
 
         <div className="grid grid-cols-2 gap-2 text-sm">
           <Metric label="Week hours" value={weekHours.toFixed(1)} />
@@ -642,10 +642,19 @@ function WorkerDetailPanel({
         {worker.payrollReady ? (
           <div className="space-y-2">
             <p className="text-sm font-semibold text-emerald-400">Payroll Ready</p>
-            <ReopenForm membershipId={worker.membershipId} weekStartedAt={weekStartedAt} />
+            <ReopenForm
+              key={`reopen-${worker.membershipId}-${weekStartedAt}`}
+              membershipId={worker.membershipId}
+              weekStartedAt={weekStartedAt}
+            />
           </div>
         ) : (
-          <ApproveForm membershipId={worker.membershipId} weekStartedAt={weekStartedAt} name={worker.name} />
+          <ApproveForm
+            key={`approve-${worker.membershipId}-${weekStartedAt}`}
+            membershipId={worker.membershipId}
+            weekStartedAt={weekStartedAt}
+            name={worker.name}
+          />
         )}
       </CardContent>
     </Card>
