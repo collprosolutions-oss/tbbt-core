@@ -48,7 +48,7 @@ export function ServicePricingPanel({
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-card/40">
       <div className="border-b border-border/70 p-4">
         <h2 className="text-base font-semibold text-foreground">
-          Pricing / Service Details
+          Pricing Intelligence
         </h2>
         <p className="mt-0.5 truncate text-xs text-muted-foreground">
           {service?.name ?? "Select a service from the catalog"}
@@ -132,14 +132,38 @@ export function ServicePricingPanel({
               </Button>
             </div>
 
-            <div className="rounded-lg border border-dashed border-border/80 bg-muted/20 p-4">
-              <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-                Market comparison
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Local, state, and national market pricing is not connected yet.
-                This page only shows this business&apos;s own catalog prices.
-              </p>
+            <div className="space-y-3 rounded-lg border border-dashed border-border/80 bg-muted/20 p-4">
+              <div>
+                <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                  Market Intelligence
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Market Comparison
+                </p>
+                <p className="text-sm text-muted-foreground">Not connected yet</p>
+              </div>
+              <dl className="space-y-2 text-sm">
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="text-muted-foreground">Local Market</dt>
+                  <dd className="text-right text-muted-foreground">Not available yet</dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="text-muted-foreground">State Market</dt>
+                  <dd className="text-right text-muted-foreground">Not available yet</dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="text-muted-foreground">National Market</dt>
+                  <dd className="text-right text-muted-foreground">Not available yet</dd>
+                </div>
+              </dl>
+              <div>
+                <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                  Market Position
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Not available until pricing intelligence is connected
+                </p>
+              </div>
             </div>
 
             {editing ? (

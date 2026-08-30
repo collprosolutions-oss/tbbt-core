@@ -135,7 +135,19 @@ check("No Show on website toggle", !combined.includes("Show on") && !combined.in
 check("No fabricated local/state/national market ranges", !combined.includes("Fort Myers") && !combined.includes("National (United States)"));
 check("No Refresh Market action", !combined.includes("Refresh Market"));
 check("Website section is explicitly not connected", presentationSrc.includes("Website publishing is not connected yet"));
-check("Market section is explicitly not connected", pricingSrc.includes("Market comparison") && pricingSrc.includes("not connected yet"));
+check("Market section is explicitly not connected", pricingSrc.includes("Market Intelligence") && pricingSrc.includes("Not connected yet"));
+check("Local/State/National market rows are reserved without invented numbers",
+  pricingSrc.includes("Local Market") &&
+    pricingSrc.includes("State Market") &&
+    pricingSrc.includes("National Market") &&
+    pricingSrc.includes("Not available yet") &&
+    !pricingSrc.includes("Fort Myers") &&
+    !pricingSrc.includes("$145"));
+check("Market Position is reserved without a fabricated ranking",
+  pricingSrc.includes("Market Position") &&
+    pricingSrc.includes("Not available until pricing intelligence is connected"));
+check("Desktop workspace is a 3-column row from the lg breakpoint",
+  workspaceSrc.includes("lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(16rem,var(--tbbt-panel-width,340px))]"));
 check("Catalog search exists", catalogSrc.includes("Search services"));
 check("Collapse All / Expand All exist", catalogSrc.includes("Collapse All") && catalogSrc.includes("Expand All"));
 check("Add Service uses existing catalog form", workspaceSrc.includes("AddServiceSheet"));
@@ -224,7 +236,14 @@ if (!owner || !member) {
   );
   check(
     "OWNER page states market comparison is not connected",
-    Boolean(ownerPage?.body.includes("not connected yet")),
+    Boolean(ownerPage?.body.includes("Not connected yet")),
+  );
+  check(
+    "OWNER page reserves Local/State/National market rows without invented ranges",
+    Boolean(ownerPage?.body.includes("Local Market")) &&
+      Boolean(ownerPage?.body.includes("Not available yet")) &&
+      !ownerPage.body.includes("Fort Myers") &&
+      !ownerPage.body.includes("$145"),
   );
   check(
     "OWNER without founder flag does not see Founder Design Mode",

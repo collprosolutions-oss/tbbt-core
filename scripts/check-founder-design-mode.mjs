@@ -219,7 +219,7 @@ async function main() {
         FOUNDER_REGIONS.invoices.some((r) => r.label === "Invoice Details"));
     check("Services regions are the real Services boxes (Top Summary / Service Presentation / Pricing / Catalog)",
       FOUNDER_REGIONS.services.map((r) => r.label).join("|") ===
-        "Top Summary|Service Presentation|Pricing / Service Details|Service Catalog|Page Spacing");
+        "Top Summary|Service Presentation|Pricing Intelligence / Service Details|Service Catalog|Page Spacing");
 
     const compressed = sanitizeFounderPageTokens("dashboard", {
       kpi: { paddingY: 0, paddingX: 4, internalGap: 0, lineHeight: 100, iconSize: 16 },

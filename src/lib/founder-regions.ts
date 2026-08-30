@@ -166,7 +166,7 @@ export const FOUNDER_REGIONS: Record<FounderPageKey, readonly FounderRegionDef[]
     },
     {
       id: "pricing",
-      label: "Pricing / Service Details",
+      label: "Pricing Intelligence / Service Details",
       kind: "panel",
       hasTitle: true,
       hasBody: true,

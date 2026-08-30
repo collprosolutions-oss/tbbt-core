@@ -74,11 +74,11 @@ export function ServicesWorkspace({
       <div
         data-services-workspace=""
         data-selected-service={selected?.id ?? ""}
-        className="flex min-w-0 flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,340px)] xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_var(--tbbt-panel-width,340px)]"
+        className="flex min-w-0 flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(16rem,var(--tbbt-panel-width,340px))]"
       >
         <FounderRegion
           id="presentation"
-          className="min-h-[22rem] min-w-0 xl:col-start-1 xl:min-h-[36rem]"
+          className="min-h-[22rem] min-w-0 lg:min-h-[36rem]"
         >
           <ServicePresentationPanel
             service={selected}
@@ -88,25 +88,25 @@ export function ServicesWorkspace({
         </FounderRegion>
 
         <FounderRegion
+          id="pricing"
+          className="min-h-[22rem] min-w-0 lg:min-h-[36rem]"
+        >
+          <ServicePricingPanel
+            service={selected}
+            categories={categories}
+            laborMinimum={laborMinimum}
+          />
+        </FounderRegion>
+
+        <FounderRegion
           id="catalog"
-          className="order-first min-h-[22rem] min-w-0 lg:order-none lg:row-span-2 xl:col-start-3 xl:row-span-1 xl:min-h-[36rem]"
+          className="order-first min-h-[22rem] min-w-0 lg:order-none lg:min-h-[36rem]"
         >
           <ServiceCatalogPanel
             items={items}
             preferredCategoryOrder={preferredCategoryOrder}
             selectedId={selectedId}
             onSelect={setSelectedId}
-          />
-        </FounderRegion>
-
-        <FounderRegion
-          id="pricing"
-          className="min-h-[22rem] min-w-0 xl:col-start-2 xl:min-h-[36rem]"
-        >
-          <ServicePricingPanel
-            service={selected}
-            categories={categories}
-            laborMinimum={laborMinimum}
           />
         </FounderRegion>
       </div>
