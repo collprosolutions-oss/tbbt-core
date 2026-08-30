@@ -162,6 +162,9 @@ model Business {
   changeOrders             ChangeOrder[]
   additionalWorkRequests   AdditionalWorkRequest[]
   jobProblemReports        JobProblemReport[]
+  timeEntries              TimeEntry[]
+  timeEntryAdjustments     TimeEntryAdjustment[]
+  timesheetWeeks           TimesheetWeek[]
 }
 
 model Membership {
@@ -180,6 +183,13 @@ model Membership {
   /// itself, since a user may still hold an active membership at a
   /// DIFFERENT business.
   active     Boolean        @default(true)
+  /// Hourly wage for THIS membership at THIS business. OWNER/ADMIN only
+  /// (see CAPABILITIES.MANAGE_TIME_CARDS). Never stored on User -- the
+  /// same person may belong to different businesses at different rates.
+  /// Null means no rate is on file yet; labor-cost estimates omit that
+  /// worker rather than inventing a number. Later wage edits must not
+  /// rewrite already-approved TimeEntry / TimesheetWeek snapshots.
+  hourlyWage Decimal?
   createdAt  DateTime       @default(now())
 
   user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -191,6 +201,12 @@ model Membership {
   /// unused-crew-management complexity this step explicitly avoids.
   assignedJobs   Job[]              @relation("JobAssignment")
   reportedIssues JobProblemReport[]
+  timeEntries    TimeEntry[]
+  timesheetWeeks TimesheetWeek[]
+  /// Adjustments this membership authored (owner/admin corrections, or a
+  /// MEMBER's own correction request). Not the entries they worked.
+  authoredAdjustments TimeEntryAdjustment[] @relation("TimeEntryAdjustmentActor")
+  approvedTimesheets  TimesheetWeek[]       @relation("TimesheetWeekApprover")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -451,6 +467,7 @@ model Job {
   changeOrders            ChangeOrder[]
   additionalWorkRequests  AdditionalWorkRequest[]
   problemReports          JobProblemReport[]
+  timeEntries             TimeEntry[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -660,4 +677,104 @@ model JobProblemReport {
   @@index([businessId])
   @@index([jobId])
   @@index([membershipId])
+}
+
+/// One clocked or manually-entered interval of labor time. This is the
+/// source of labor-hour truth (Time Cards). Distinct from Job.status,
+/// which remains operational truth (UNSCHEDULED / SCHEDULED /
+/// IN_PROGRESS / COMPLETED). Starting a Job does NOT create a TimeEntry;
+/// clocking time does not change Job.status.
+///
+/// activityType: JOB | TRAVEL | MATERIAL_PICKUP | BREAK | OTHER
+/// status: RUNNING | READY | NEEDS_REVIEW | APPROVED
+/// source: CLOCK | MANUAL
+///
+/// BREAK is tracked working-day time but is unpaid (excluded from labor
+/// cost). JOB / TRAVEL / MATERIAL_PICKUP / OTHER are paid working time.
+/// jobId is required for JOB and optional for the others.
+model TimeEntry {
+  id           String    @id @default(cuid())
+  businessId   String
+  membershipId String
+  jobId        String?
+  activityType String
+  status       String    @default("RUNNING")
+  startedAt    DateTime
+  endedAt      DateTime?
+  note         String?
+  source       String    @default("CLOCK")
+  /// Frozen at week approval for historical integrity. Later wage / job /
+  /// catalog changes must not rewrite these. Null until the parent week
+  /// is approved (see TimesheetWeek).
+  approvedHours       Decimal?
+  approvedHourlyWage  Decimal?
+  approvedLaborCost   Decimal?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  business   Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership             @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  job        Job?                   @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  adjustments TimeEntryAdjustment[]
+
+  @@index([businessId])
+  @@index([membershipId])
+  @@index([jobId])
+  @@index([businessId, membershipId, status])
+  @@index([businessId, startedAt])
+}
+
+/// Auditable change history for a TimeEntry. Created on every create,
+/// edit, correction-request, approve, and reopen. Application code must
+/// never update or delete an existing row -- append only.
+model TimeEntryAdjustment {
+  id                String   @id @default(cuid())
+  businessId        String
+  timeEntryId       String
+  actorMembershipId String
+  /// CREATE | UPDATE | CORRECT | CORRECTION_REQUEST | APPROVE | REOPEN
+  action            String
+  reason            String?
+  previousJson      Json?
+  nextJson          Json?
+  createdAt         DateTime @default(now())
+
+  business     Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  timeEntry    TimeEntry  @relation(fields: [timeEntryId], references: [id], onDelete: Cascade)
+  actor        Membership @relation("TimeEntryAdjustmentActor", fields: [actorMembershipId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([timeEntryId])
+}
+
+/// Weekly approval unit for one worker in one business. Payroll Ready
+/// means status = APPROVED. This is a handoff flag only -- Time Cards
+/// does not process payroll, taxes, or bank movement.
+///
+/// weekStartedAt is Sunday 00:00 local (matching startOfWeek() in
+/// src/lib/schedule.ts). approvedHours / approvedHourlyWage /
+/// approvedLaborCost are snapshots taken at approval.
+model TimesheetWeek {
+  id                     String    @id @default(cuid())
+  businessId             String
+  membershipId           String
+  weekStartedAt          DateTime
+  /// OPEN | APPROVED
+  status                 String    @default("OPEN")
+  approvedAt             DateTime?
+  approvedByMembershipId String?
+  approvedHours          Decimal?
+  approvedHourlyWage     Decimal?
+  approvedLaborCost      Decimal?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  business     Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership   Membership  @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  approvedBy   Membership? @relation("TimesheetWeekApprover", fields: [approvedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, membershipId, weekStartedAt])
+  @@index([businessId])
+  @@index([membershipId])
+  @@index([businessId, status])
 }

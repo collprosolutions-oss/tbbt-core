@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { AddFieldJobPhotoForm } from "@/components/field/add-field-job-photo-form";
 import { CompleteAssignedJobButton } from "@/components/field/complete-assigned-job-button";
+import { FieldTimeClock } from "@/components/field/field-time-clock";
 import { ReportProblemForm } from "@/components/field/report-problem-form";
 import { RequestAdditionalWorkFieldForm } from "@/components/field/request-additional-work-field-form";
 import { StartAssignedJobButton } from "@/components/field/start-assigned-job-button";
@@ -16,7 +17,8 @@ import {
 } from "@/components/ui/card";
 import { directionsUrl, telHref } from "@/lib/directions";
 import { requireAssignedJobPageAccess, assignedJobWhere, requireFieldWorkspace } from "@/lib/field-access";
-import { formatAddress, formatDateTime } from "@/lib/format";
+import { formatAddress, formatDateTime, formatTime } from "@/lib/format";
+import { TIME_ACTIVITY_LABELS, isTimeActivityType } from "@/lib/time-cards";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { prisma } from "@/lib/prisma";
 
@@ -118,6 +120,23 @@ export default async function FieldJobPage({
 
   const isCompleted = job.status === "COMPLETED";
   const isInProgress = job.status === "IN_PROGRESS";
+  const running = await prisma.timeEntry.findFirst({
+    where: {
+      businessId: field.businessId,
+      membershipId: field.membershipId,
+      status: "RUNNING",
+      endedAt: null,
+    },
+    include: {
+      job: {
+        select: {
+          customer: { select: { name: true } },
+          property: { select: { addressLine1: true } },
+        },
+      },
+    },
+    orderBy: { startedAt: "desc" },
+  });
   const approvedScope = resolveApprovedWorkOrderScope(job);
   const hasApprovedScope = approvedScope.source !== "none";
 
@@ -174,6 +193,30 @@ export default async function FieldJobPage({
           </div>
         </CardContent>
       </Card>
+
+      <FieldTimeClock
+        membershipId={field.membershipId}
+        defaultJobId={job.id}
+        running={
+          running
+            ? {
+                activityType: running.activityType,
+                activityLabel:
+                  TIME_ACTIVITY_LABELS[
+                    isTimeActivityType(running.activityType) ? running.activityType : "OTHER"
+                  ],
+                jobLabel: running.job?.customer?.name ?? running.job?.property?.addressLine1 ?? null,
+                startedAtLabel: formatTime(running.startedAt),
+              }
+            : null
+        }
+        assignedJobs={[
+          {
+            id: job.id,
+            label: job.customer?.name ?? (job.property ? formatAddress(job.property) : "This job"),
+          },
+        ]}
+      />
 
       <div className="space-y-2">
         {!isCompleted && !isInProgress ? <StartAssignedJobButton jobId={job.id} /> : null}

@@ -241,6 +241,26 @@ try {
       projectToken: randomUUID(),
     },
   });
+  const ownerMembership = await prisma.membership.findFirst({
+    where: { userId: ownerUser.id, businessId: businessA.id },
+  });
+  await prisma.membership.update({
+    where: { id: ownerMembership.id },
+    data: { hourlyWage: new Prisma.Decimal(87.43) },
+  });
+  await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: ownerMembership.id,
+      jobId: canaryJob.id,
+      activityType: "JOB",
+      status: "READY",
+      startedAt: new Date(),
+      endedAt: new Date(),
+      source: "MANUAL",
+    },
+  });
+
   const canaryInvoice = await prisma.invoice.create({
     data: {
       businessId: businessA.id,
@@ -294,6 +314,7 @@ try {
     { path: "/invoices", label: "Invoices list", marker: CANARY_CUSTOMER },
     { path: `/invoices/${canaryInvoice.id}`, label: "Invoice detail", marker: CANARY_CUSTOMER },
     { path: "/services", label: "Services/pricing", marker: CANARY_CATALOG_ITEM },
+    { path: "/time-cards", label: "Time Cards", marker: CANARY_CUSTOMER },
     { path: "/settings", label: "Business Settings", marker: "Labor Minimum Service Fee" },
   ];
 
@@ -326,6 +347,7 @@ try {
     "/invoices": "TEST 8",
     [`/invoices/${canaryInvoice.id}`]: "TEST 8",
     "/services": "TEST 9",
+    "/time-cards": "TEST 12",
     "/settings": "TEST 10",
   };
 

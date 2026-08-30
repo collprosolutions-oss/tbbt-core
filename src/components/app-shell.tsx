@@ -57,7 +57,7 @@ type AppShellProps = {
  */
 const NAV_SECTIONS: readonly { label: string; hrefs: readonly string[] }[] = [
   { label: "Overview", hrefs: ["/dashboard"] },
-  { label: "Operations", hrefs: ["/requests", "/customers", "/estimates", "/jobs", "/invoices"] },
+  { label: "Operations", hrefs: ["/requests", "/customers", "/estimates", "/jobs", "/time-cards", "/invoices"] },
   { label: "Business", hrefs: ["/services", "/team", "/settings"] },
 ];
 

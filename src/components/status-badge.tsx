@@ -22,8 +22,17 @@ const VARIANTS: Record<string, BadgeVariant> = {
   DECLINED: "destructive",
   CANCELLED: "outline",
   DISMISSED: "outline",
+  RUNNING: "default",
+  READY: "success",
+  NEEDS_REVIEW: "warning",
+};
+
+const LABELS: Record<string, string> = {
+  RUNNING: "Working",
+  READY: "Ready",
+  NEEDS_REVIEW: "Review",
 };
 
 export function StatusBadge({ status }: { status: string }) {
-  return <Badge variant={VARIANTS[status] ?? "outline"}>{status}</Badge>;
+  return <Badge variant={VARIANTS[status] ?? "outline"}>{LABELS[status] ?? status}</Badge>;
 }

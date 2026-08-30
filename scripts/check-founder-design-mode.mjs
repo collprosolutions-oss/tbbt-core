@@ -4,7 +4,7 @@
  *
  * Verifies:
  *  1. A founder-flagged User sees the "Founder Design Mode" trigger on
- *     every one of the 7 supported pages.
+ *     every one of the 8 supported pages.
  *  2. A subscriber OWNER, ADMIN-equivalent, and MEMBER -- none of them
  *     isFounder -- never see it, on any of the 6 pages, via direct URL.
  *  3. A completely different business's OWNER also never sees it
@@ -43,7 +43,7 @@ const {
 const { FOUNDER_REGIONS } = await import("@/lib/founder-regions");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
-const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices", "/services"];
+const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices", "/services", "/time-cards"];
 const TRIGGER_TEXT = "Founder Design Mode";
 
 let passed = 0;
@@ -220,6 +220,9 @@ async function main() {
     check("Services regions are the real Services boxes (Top Summary / Service Presentation / Pricing / Catalog)",
       FOUNDER_REGIONS.services.map((r) => r.label).join("|") ===
         "Top Summary|Service Presentation|Pricing Intelligence / Service Details|Service Catalog|Page Spacing");
+    check("Time Cards regions are the real Time Cards boxes (Top Summary / Navigation / Table / Worker Detail / Page Spacing)",
+      FOUNDER_REGIONS["time-cards"].map((r) => r.label).join("|") ===
+        "Top Summary|Time Card Navigation / Filters|Time Entry Table|Worker Detail|Page Spacing");
 
     const compressed = sanitizeFounderPageTokens("dashboard", {
       kpi: { paddingY: 0, paddingX: 4, internalGap: 0, lineHeight: 100, iconSize: 16 },
@@ -260,9 +263,10 @@ async function main() {
     "/jobs": ["kpi", "calendar", "tabs", "table", "details"],
     "/invoices": ["kpi", "tabs", "table"],
     "/services": ["kpi", "presentation", "pricing", "catalog"],
+    "/time-cards": ["kpi", "tabs", "table", "details"],
   };
 
-  console.log("\nTEST 2 -- The founder sees the trigger on all 7 supported pages");
+  console.log("\nTEST 2 -- The founder sees the trigger on all 8 supported pages");
   for (const path of PAGES) {
     const { status, body } = await fetchPage(founderToken, founderMembership.businessId, path);
     check(`${path}: 200 OK`, status === 200);
@@ -276,7 +280,7 @@ async function main() {
     }
   }
 
-  console.log("\nTEST 3 -- Subscriber OWNER never sees the trigger, on any of the 7 pages (direct URL)");
+  console.log("\nTEST 3 -- Subscriber OWNER never sees the trigger, on any of the 8 pages (direct URL)");
   for (const path of PAGES) {
     const { status, body } = await fetchPage(ownerToken, ownerMembership.businessId, path);
     check(`${path}: 200 OK (page still works)`, status === 200);

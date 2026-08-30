@@ -1,9 +1,12 @@
 import type { Metadata } from "next";
 import { FieldJobCard } from "@/components/field/field-job-card";
+import { FieldTimeClock } from "@/components/field/field-time-clock";
 import { FIELD_JOB_SELECT, groupFieldJobs } from "@/lib/field-jobs";
+import { formatTime } from "@/lib/format";
 import { startOfDay } from "@/lib/schedule";
 import { requireFieldWorkspace } from "@/lib/field-access";
 import { prisma } from "@/lib/prisma";
+import { TIME_ACTIVITY_LABELS, isTimeActivityType } from "@/lib/time-cards";
 
 export const metadata: Metadata = {
   title: "My Jobs",
@@ -30,6 +33,23 @@ export default async function FieldHomePage() {
   });
 
   const groups = groupFieldJobs(jobs, startOfDay(new Date()));
+  const running = await prisma.timeEntry.findFirst({
+    where: {
+      businessId: field.businessId,
+      membershipId: field.membershipId,
+      status: "RUNNING",
+      endedAt: null,
+    },
+    include: {
+      job: {
+        select: {
+          customer: { select: { name: true } },
+          property: { select: { addressLine1: true } },
+        },
+      },
+    },
+    orderBy: { startedAt: "desc" },
+  });
 
   return (
     <div className="space-y-6">
@@ -39,6 +59,27 @@ export default async function FieldHomePage() {
           Only jobs assigned to you, {field.workspace.user.name}.
         </p>
       </div>
+
+      <FieldTimeClock
+        membershipId={field.membershipId}
+        running={
+          running
+            ? {
+                activityType: running.activityType,
+                activityLabel:
+                  TIME_ACTIVITY_LABELS[
+                    isTimeActivityType(running.activityType) ? running.activityType : "OTHER"
+                  ],
+                jobLabel: running.job?.customer?.name ?? running.job?.property?.addressLine1 ?? null,
+                startedAtLabel: formatTime(running.startedAt),
+              }
+            : null
+        }
+        assignedJobs={jobs.map((job) => ({
+          id: job.id,
+          label: job.customer?.name ?? job.property?.addressLine1 ?? "Assigned job",
+        }))}
+      />
 
       <JobGroup title="Today" jobs={groups.today} emptyLabel="Nothing assigned for today." />
       <JobGroup title="Upcoming" jobs={groups.upcoming} emptyLabel="No upcoming jobs assigned." />

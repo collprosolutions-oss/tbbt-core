@@ -501,6 +501,26 @@ try {
     mirrorUpdateSettings(ownerA),
   );
 
+  console.log("\nTEST 9 — Time Cards management is OWNER/ADMIN-only");
+  check(
+    "OWNER has MANAGE_TIME_CARDS",
+    roleHasCapability("OWNER", CAPABILITIES.MANAGE_TIME_CARDS),
+  );
+  check(
+    "ADMIN has MANAGE_TIME_CARDS",
+    roleHasCapability("ADMIN", CAPABILITIES.MANAGE_TIME_CARDS),
+  );
+  check(
+    "MEMBER does not have MANAGE_TIME_CARDS",
+    !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_TIME_CARDS),
+  );
+  await expectForbidden("MEMBER cannot pass the Time Cards management capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_TIME_CARDS);
+  });
+  await expectAllowed("ADMIN can pass the Time Cards management capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_TIME_CARDS);
+  });
+
   console.log(
     failures === 0
       ? "\nAll authorization checks passed."
