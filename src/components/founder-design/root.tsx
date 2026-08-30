@@ -13,6 +13,8 @@ import {
   tokensToCssVars,
   type FounderPageKey,
   type FounderPageTokens,
+  type KpiCardWidthValue,
+  type KpiLayout,
   type KpiTokenKey,
   type TableDensity,
 } from "@/lib/founder-design";
@@ -32,18 +34,21 @@ export function FounderDesignRoot({
   pageKey,
   isFounder,
   savedTokens,
+  kpiCardLabels,
   children,
 }: {
   pageKey: FounderPageKey;
   isFounder: boolean;
   savedTokens: FounderPageTokens;
+  /** That page's real KPI card labels, in order -- see FounderDesignContextValue.kpiCardLabels. */
+  kpiCardLabels: string[];
   children: ReactNode;
 }) {
   if (!isFounder) {
     return <>{children}</>;
   }
   return (
-    <FounderDesignActive pageKey={pageKey} savedTokens={savedTokens}>
+    <FounderDesignActive pageKey={pageKey} savedTokens={savedTokens} kpiCardLabels={kpiCardLabels}>
       {children}
     </FounderDesignActive>
   );
@@ -52,25 +57,55 @@ export function FounderDesignRoot({
 function FounderDesignActive({
   pageKey,
   savedTokens,
+  kpiCardLabels,
   children,
 }: {
   pageKey: FounderPageKey;
   savedTokens: FounderPageTokens;
+  kpiCardLabels: string[];
   children: ReactNode;
 }) {
   const [saved, setSaved] = useState<FounderPageTokens>(savedTokens);
   const [draft, setDraft] = useState<FounderPageTokens>(savedTokens);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [hoveredCardIndex, setHoveredCardIndex] = useState<number | null>(null);
 
   const isDirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(saved), [draft, saved]);
 
   const setKpiToken = useCallback((key: KpiTokenKey, value: number) => {
     setDraft((prev) => ({ ...prev, kpi: { ...prev.kpi, [key]: value } }));
   }, []);
+
+  const setKpiLayout = useCallback((layout: KpiLayout) => {
+    setDraft((prev) => ({ ...prev, kpiWidth: { ...prev.kpiWidth, layout } }));
+  }, []);
+  const setKpiGroupWidth = useCallback((value: number) => {
+    setDraft((prev) => ({ ...prev, kpiWidth: { ...prev.kpiWidth, groupWidth: value } }));
+  }, []);
+  const setKpiCardWidth = useCallback((index: number, value: KpiCardWidthValue) => {
+    setDraft((prev) => ({
+      ...prev,
+      kpiWidth: {
+        ...prev.kpiWidth,
+        cardWidths: { ...prev.kpiWidth?.cardWidths, [index]: value },
+      },
+    }));
+  }, []);
+
   const setTableDensity = useCallback((density: TableDensity) => {
     setDraft((prev) => ({ ...prev, tableDensity: density }));
   }, []);
+  const setTableCellPx = useCallback((value: number) => {
+    setDraft((prev) => ({ ...prev, tableCellPx: value }));
+  }, []);
+  const setTableFontSize = useCallback((value: number) => {
+    setDraft((prev) => ({ ...prev, tableFontSize: value }));
+  }, []);
+  const setTableHeaderFontSize = useCallback((value: number) => {
+    setDraft((prev) => ({ ...prev, tableHeaderFontSize: value }));
+  }, []);
+
   const setSectionGap = useCallback((value: number) => {
     setDraft((prev) => ({ ...prev, sectionGap: value }));
   }, []);
@@ -94,11 +129,15 @@ function FounderDesignActive({
     setDraft(saved);
   }, [saved]);
 
-  const resetSection = useCallback(
-    async (section: "kpi" | "tableDensity" | "sectionGap" | "panelWidth") => {
+  const resetFields = useCallback(
+    async (fieldPaths: string[]) => {
       setSaving(true);
       try {
-        const result = await resetFounderDesignSection(pageKey, section);
+        // Clears fieldPaths from the CURRENT DRAFT (what the founder is
+        // actively previewing), never from whatever was last saved --
+        // otherwise resetting one control would silently discard every
+        // other unsaved adjustment still on screen.
+        const result = await resetFounderDesignSection(pageKey, draft, fieldPaths);
         const next = result.tokens ?? {};
         setSaved(next);
         setDraft(next);
@@ -106,7 +145,7 @@ function FounderDesignActive({
         setSaving(false);
       }
     },
-    [pageKey],
+    [pageKey, draft],
   );
 
   const resetPage = useCallback(async () => {
@@ -122,18 +161,27 @@ function FounderDesignActive({
 
   const value: FounderDesignContextValue = {
     pageKey,
+    kpiCardLabels,
     savedTokens: saved,
     draftTokens: draft,
     isDirty,
     open,
     setOpen,
+    hoveredCardIndex,
+    setHoveredCardIndex,
     setKpiToken,
+    setKpiLayout,
+    setKpiGroupWidth,
+    setKpiCardWidth,
     setTableDensity,
+    setTableCellPx,
+    setTableFontSize,
+    setTableHeaderFontSize,
     setSectionGap,
     setPanelWidth,
     save,
     discard,
-    resetSection,
+    resetFields,
     resetPage,
     saving,
   };

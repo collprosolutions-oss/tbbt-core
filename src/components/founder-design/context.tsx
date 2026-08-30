@@ -4,12 +4,16 @@ import { createContext, useContext } from "react";
 import type {
   FounderPageKey,
   FounderPageTokens,
+  KpiCardWidthValue,
+  KpiLayout,
   KpiTokenKey,
   TableDensity,
 } from "@/lib/founder-design";
 
 export type FounderDesignContextValue = {
   pageKey: FounderPageKey;
+  /** Real KPI card labels for this page, in order (e.g. ["Total Invoices", ..., "Total Revenue"]) -- never fabricated, always that page's actual kpis array. */
+  kpiCardLabels: string[];
   /** Last known persisted-on-the-server values (what Discard reverts to, what a refresh shows). */
   savedTokens: FounderPageTokens;
   /** In-memory, unsaved values currently being previewed. */
@@ -17,13 +21,27 @@ export type FounderDesignContextValue = {
   isDirty: boolean;
   open: boolean;
   setOpen: (open: boolean) => void;
+  /** Which KPI card (by index) is currently highlighted on the real page because its drawer row is hovered/focused -- purely visual, never persisted. */
+  hoveredCardIndex: number | null;
+  setHoveredCardIndex: (index: number | null) => void;
+
   setKpiToken: (key: KpiTokenKey, value: number) => void;
+  setKpiLayout: (layout: KpiLayout) => void;
+  setKpiGroupWidth: (value: number) => void;
+  setKpiCardWidth: (index: number, value: KpiCardWidthValue) => void;
+
   setTableDensity: (density: TableDensity) => void;
+  setTableCellPx: (value: number) => void;
+  setTableFontSize: (value: number) => void;
+  setTableHeaderFontSize: (value: number) => void;
+
   setSectionGap: (value: number) => void;
   setPanelWidth: (value: number) => void;
+
   save: () => Promise<void>;
   discard: () => void;
-  resetSection: (section: "kpi" | "tableDensity" | "sectionGap" | "panelWidth") => Promise<void>;
+  /** Clears one or more specific field paths (e.g. ["kpi.minHeight","kpi.padding"], or ["kpiWidth.cardWidths.2"] for a single card's per-control reset) and persists that immediately. */
+  resetFields: (fieldPaths: string[]) => Promise<void>;
   resetPage: () => Promise<void>;
   saving: boolean;
 };
