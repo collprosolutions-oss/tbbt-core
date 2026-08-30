@@ -11,6 +11,7 @@
 import { revalidatePath } from "next/cache";
 import { requireFounderAccess } from "@/lib/founder-access";
 import {
+  clearFieldPaths,
   isFounderPageKey,
   sanitizeFounderPageTokens,
   type FounderPageKey,
@@ -63,38 +64,43 @@ export async function saveFounderDesignTokens(
 }
 
 /**
- * Clears one section (kpi / table / spacing / panel) of the founder's
- * saved override for a page, restoring that section to the approved
- * default while leaving any OTHER saved section untouched.
+ * Clears one or more specific field paths (e.g. ["kpi.minHeight",
+ * "kpi.padding"] for the "Card Height & Padding" collapsible section, or
+ * a single ["kpiWidth.cardWidths.2"] for one card's own per-control
+ * reset icon) from the CURRENT tokens the client passes in --
+ * deliberately the client's live draft, not whatever was last saved, so
+ * clicking a per-control/section reset can never silently discard other
+ * unsaved adjustments the founder is still previewing -- and persists
+ * the result immediately. See clearFieldPaths() in src/lib/founder-design.ts.
  */
 export async function resetFounderDesignSection(
   pageKeyRaw: string,
-  section: "kpi" | "tableDensity" | "sectionGap" | "panelWidth",
+  currentTokens: unknown,
+  fieldPaths: string[],
 ): Promise<FounderDesignActionState> {
   const founder = await requireFounderAccess();
   const pageKey = assertPageKey(pageKeyRaw);
 
-  const existing = await prisma.founderDesignOverride.findUnique({
-    where: { userId_pageKey: { userId: founder.id, pageKey } },
-  });
+  const sanitizedCurrent = sanitizeFounderPageTokens(pageKey, currentTokens);
+  const next = sanitizeFounderPageTokens(
+    pageKey,
+    clearFieldPaths(sanitizedCurrent, fieldPaths.filter((path) => typeof path === "string")),
+  );
 
-  const current = sanitizeFounderPageTokens(pageKey, existing?.tokens ?? {});
-  delete current[section];
-
-  if (Object.keys(current).length === 0) {
+  if (Object.keys(next).length === 0) {
     await prisma.founderDesignOverride.deleteMany({
       where: { userId: founder.id, pageKey },
     });
   } else {
     await prisma.founderDesignOverride.upsert({
       where: { userId_pageKey: { userId: founder.id, pageKey } },
-      create: { userId: founder.id, pageKey, tokens: current },
-      update: { tokens: current },
+      create: { userId: founder.id, pageKey, tokens: next },
+      update: { tokens: next },
     });
   }
 
   revalidatePath(PAGE_PATHS[pageKey]);
-  return { tokens: current };
+  return { tokens: next };
 }
 
 /** Restores the ENTIRE page to its approved default design (deletes the saved override row, if any). */

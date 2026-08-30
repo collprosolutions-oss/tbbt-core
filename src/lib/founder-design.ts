@@ -64,6 +64,23 @@ export const PAGE_HAS_PANEL: Record<FounderPageKey, boolean> = {
   invoices: true,
 };
 
+/**
+ * The exact number of KPI cards each page renders today (the length of
+ * that page's own `kpis`/`overviewKpis` array) -- used only to bound
+ * which per-card-index overrides are valid. Never used to fabricate a
+ * card that doesn't exist; each page's real card labels are passed into
+ * FounderDesignRoot at render time (see kpiCardLabels prop) for the
+ * drawer to display, not hardcoded here.
+ */
+export const KPI_CARD_COUNTS: Record<FounderPageKey, number> = {
+  dashboard: 5,
+  requests: 4,
+  customers: 4,
+  estimates: 5,
+  jobs: 5,
+  invoices: 5,
+};
+
 // ---------------------------------------------------------------------------
 // KPI card tokens
 // ---------------------------------------------------------------------------
@@ -161,6 +178,92 @@ export const KPI_CSS_VARS: Record<KpiTokenKey, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// KPI width / layout -- "equal width" (today's behavior, every card
+// shares the row equally) vs "custom widths" (a default "group" width
+// for any card without its own override, plus a per-card-index override
+// that always wins, including an explicit "auto" meaning "stay flexible
+// / fill remaining space" -- this is how e.g. Invoices' compact
+// count-cards + a wider Total Revenue card is expressed: group width
+// narrow, Total Revenue's own override left at "auto").
+//
+// Deliberately resolved in the client (see
+// src/components/founder-design/kpi-cards-layout.tsx), NOT via CSS
+// variables, because a fixed-width card needs flex-grow:0 while a
+// flexible one needs flex-grow:1 -- two different values, not just a
+// different length -- which a single var() fallback chain cannot express.
+// ---------------------------------------------------------------------------
+
+export const KPI_LAYOUTS = ["equal", "custom"] as const;
+export type KpiLayout = (typeof KPI_LAYOUTS)[number];
+
+export function isKpiLayout(value: string): value is KpiLayout {
+  return (KPI_LAYOUTS as readonly string[]).includes(value);
+}
+
+/** A specific pixel width, or "auto" to explicitly stay flexible/fill remaining space even in "custom" layout. */
+export type KpiCardWidthValue = number | "auto";
+
+export type KpiWidthTokens = {
+  layout?: KpiLayout;
+  groupWidth?: number;
+  /** Keyed by card index (0-based, matching that page's real kpis array order). */
+  cardWidths?: Record<number, KpiCardWidthValue>;
+};
+
+export const KPI_WIDTH_BOUNDS = { min: 80, max: 400, step: 10 };
+
+export function clampKpiWidthValue(value: number): number {
+  const stepped = Math.round(value / KPI_WIDTH_BOUNDS.step) * KPI_WIDTH_BOUNDS.step;
+  return Math.min(KPI_WIDTH_BOUNDS.max, Math.max(KPI_WIDTH_BOUNDS.min, stepped));
+}
+
+function sanitizeKpiWidthTokens(pageKey: FounderPageKey, input: unknown): KpiWidthTokens | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const raw = input as Record<string, unknown>;
+  const result: KpiWidthTokens = {};
+
+  if (typeof raw.layout === "string" && isKpiLayout(raw.layout)) {
+    result.layout = raw.layout;
+  }
+  if (typeof raw.groupWidth === "number" && Number.isFinite(raw.groupWidth)) {
+    result.groupWidth = clampKpiWidthValue(raw.groupWidth);
+  }
+  if (raw.cardWidths && typeof raw.cardWidths === "object") {
+    const count = KPI_CARD_COUNTS[pageKey];
+    const cardWidths: Record<number, KpiCardWidthValue> = {};
+    for (const [key, value] of Object.entries(raw.cardWidths as Record<string, unknown>)) {
+      const index = Number(key);
+      if (!Number.isInteger(index) || index < 0 || index >= count) continue;
+      if (value === "auto") {
+        cardWidths[index] = "auto";
+      } else if (typeof value === "number" && Number.isFinite(value)) {
+        cardWidths[index] = clampKpiWidthValue(value);
+      }
+    }
+    if (Object.keys(cardWidths).length > 0) {
+      result.cardWidths = cardWidths;
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/** Resolves one card's effective flex sizing from the current KPI width tokens. Pure/no side effects -- shared by the live-preview layout and (indirectly, via the same tokens) whatever gets saved. */
+export function resolveKpiCardFlex(width: KpiWidthTokens | undefined, index: number): { flexBasis: string; flexGrow: number; flexShrink: number } {
+  const override = width?.cardWidths?.[index];
+  let pixels: number | undefined;
+  if (typeof override === "number") {
+    pixels = override;
+  } else if (override === undefined && width?.layout === "custom" && typeof width.groupWidth === "number") {
+    pixels = width.groupWidth;
+  }
+  if (typeof pixels === "number") {
+    return { flexBasis: `${pixels}px`, flexGrow: 0, flexShrink: 0 };
+  }
+  return { flexBasis: "0%", flexGrow: 1, flexShrink: 1 };
+}
+
+// ---------------------------------------------------------------------------
 // Table density (Compact / Standard / Comfortable preset)
 // ---------------------------------------------------------------------------
 
@@ -209,7 +312,44 @@ export function tableDensityPx(
 export const TABLE_CSS_VARS = {
   rowPy: "--tbbt-table-row-py",
   headerPy: "--tbbt-table-header-py",
+  cellPx: "--tbbt-table-cell-px",
+  fontSize: "--tbbt-table-font-size",
+  headerFontSize: "--tbbt-table-header-font-size",
 } as const;
+
+/**
+ * Each page's current horizontal cell padding (Requests/Customers/Jobs/
+ * Invoices use `px-2` = 8px; Estimates uses `px-2.5` = 10px) and base
+ * text sizes (every table uses `text-sm` = 14px body, `text-xs` = 12px
+ * header row today).
+ */
+export const TABLE_CELL_PX_DEFAULTS: Record<FounderPageKey, number> = {
+  dashboard: 0,
+  requests: 8,
+  customers: 8,
+  estimates: 10,
+  jobs: 8,
+  invoices: 8,
+};
+export const TABLE_CELL_PX_BOUNDS = { min: 4, max: 20, step: 2 };
+
+export const TABLE_FONT_SIZE_DEFAULT = 14;
+export const TABLE_HEADER_FONT_SIZE_DEFAULT = 12;
+export const TABLE_FONT_SIZE_BOUNDS = { min: 11, max: 17, step: 1 };
+export const TABLE_HEADER_FONT_SIZE_BOUNDS = { min: 10, max: 15, step: 1 };
+
+export function clampTableCellPx(value: number): number {
+  const stepped = Math.round(value / TABLE_CELL_PX_BOUNDS.step) * TABLE_CELL_PX_BOUNDS.step;
+  return Math.min(TABLE_CELL_PX_BOUNDS.max, Math.max(TABLE_CELL_PX_BOUNDS.min, stepped));
+}
+export function clampTableFontSize(value: number): number {
+  const stepped = Math.round(value / TABLE_FONT_SIZE_BOUNDS.step) * TABLE_FONT_SIZE_BOUNDS.step;
+  return Math.min(TABLE_FONT_SIZE_BOUNDS.max, Math.max(TABLE_FONT_SIZE_BOUNDS.min, stepped));
+}
+export function clampTableHeaderFontSize(value: number): number {
+  const stepped = Math.round(value / TABLE_HEADER_FONT_SIZE_BOUNDS.step) * TABLE_HEADER_FONT_SIZE_BOUNDS.step;
+  return Math.min(TABLE_HEADER_FONT_SIZE_BOUNDS.max, Math.max(TABLE_HEADER_FONT_SIZE_BOUNDS.min, stepped));
+}
 
 // ---------------------------------------------------------------------------
 // Page section spacing (gap between the KPI row / tabs / table sections)
@@ -257,7 +397,11 @@ export function clampPanelWidth(value: number): number {
 
 export type FounderPageTokens = {
   kpi?: KpiTokens;
+  kpiWidth?: KpiWidthTokens;
   tableDensity?: TableDensity;
+  tableCellPx?: number;
+  tableFontSize?: number;
+  tableHeaderFontSize?: number;
   sectionGap?: number;
   panelWidth?: number;
 };
@@ -287,8 +431,24 @@ export function sanitizeFounderPageTokens(
     }
   }
 
-  if (PAGE_HAS_TABLE[pageKey] && typeof raw.tableDensity === "string" && isTableDensity(raw.tableDensity)) {
-    result.tableDensity = raw.tableDensity;
+  const kpiWidth = sanitizeKpiWidthTokens(pageKey, raw.kpiWidth);
+  if (kpiWidth) {
+    result.kpiWidth = kpiWidth;
+  }
+
+  if (PAGE_HAS_TABLE[pageKey]) {
+    if (typeof raw.tableDensity === "string" && isTableDensity(raw.tableDensity)) {
+      result.tableDensity = raw.tableDensity;
+    }
+    if (typeof raw.tableCellPx === "number" && Number.isFinite(raw.tableCellPx)) {
+      result.tableCellPx = clampTableCellPx(raw.tableCellPx);
+    }
+    if (typeof raw.tableFontSize === "number" && Number.isFinite(raw.tableFontSize)) {
+      result.tableFontSize = clampTableFontSize(raw.tableFontSize);
+    }
+    if (typeof raw.tableHeaderFontSize === "number" && Number.isFinite(raw.tableHeaderFontSize)) {
+      result.tableHeaderFontSize = clampTableHeaderFontSize(raw.tableHeaderFontSize);
+    }
   }
 
   if (typeof raw.sectionGap === "number" && Number.isFinite(raw.sectionGap)) {
@@ -300,6 +460,40 @@ export function sanitizeFounderPageTokens(
   }
 
   return result;
+}
+
+/**
+ * Removes one or more dot-path fields from a token bundle (e.g.
+ * "kpi.minHeight", "kpi.padding" for the "Card Height & Padding"
+ * section, or a bare top-level key like "kpiWidth" or "tableDensity" to
+ * clear a whole section at once). Used by resetFounderDesignSection() so
+ * each collapsible drawer section can reset independently without
+ * disturbing any other saved section.
+ */
+export function clearFieldPaths(tokens: FounderPageTokens, paths: readonly string[]): FounderPageTokens {
+  const next: Record<string, unknown> = structuredClone(tokens as Record<string, unknown>);
+  for (const path of paths) {
+    const segments = path.split(".");
+    const branches: Record<string, unknown>[] = [next];
+    let ok = true;
+    for (let i = 0; i < segments.length - 1; i += 1) {
+      const branch = branches[branches.length - 1][segments[i]];
+      if (!branch || typeof branch !== "object") {
+        ok = false;
+        break;
+      }
+      branches.push(branch as Record<string, unknown>);
+    }
+    if (!ok) continue;
+    delete branches[branches.length - 1][segments[segments.length - 1]];
+    // Prune now-empty ancestor objects so an empty {} never lingers in storage.
+    for (let i = branches.length - 1; i > 0; i -= 1) {
+      if (Object.keys(branches[i]).length === 0) {
+        delete branches[i - 1][segments[i - 1]];
+      }
+    }
+  }
+  return next as FounderPageTokens;
 }
 
 /**
@@ -326,6 +520,15 @@ export function tokensToCssVars(pageKey: FounderPageKey, tokens: FounderPageToke
     const density = tableDensityPx(pageKey, tokens.tableDensity);
     style[TABLE_CSS_VARS.rowPy] = `${density.rowPy}px`;
     style[TABLE_CSS_VARS.headerPy] = `${density.headerPy}px`;
+  }
+  if (typeof tokens.tableCellPx === "number") {
+    style[TABLE_CSS_VARS.cellPx] = `${tokens.tableCellPx}px`;
+  }
+  if (typeof tokens.tableFontSize === "number") {
+    style[TABLE_CSS_VARS.fontSize] = `${tokens.tableFontSize}px`;
+  }
+  if (typeof tokens.tableHeaderFontSize === "number") {
+    style[TABLE_CSS_VARS.headerFontSize] = `${tokens.tableHeaderFontSize}px`;
   }
 
   if (typeof tokens.sectionGap === "number") {
