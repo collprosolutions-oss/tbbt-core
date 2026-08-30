@@ -9,7 +9,6 @@ import {
   TrendingUp,
   UserPlus,
   Users,
-  Wrench,
 } from "lucide-react";
 import { AreaFilterSelect } from "@/components/customers/area-filter-select";
 import { ExportCustomersButton, type ExportCustomerRow } from "@/components/customers/export-customers-button";
@@ -18,6 +17,9 @@ import { PageSizeSelect } from "@/components/customers/page-size-select";
 import { EmptyState } from "@/components/empty-state";
 import { FounderDesignRoot } from "@/components/founder-design/root";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
+import { FounderRegion } from "@/components/founder-design/region";
+import { FounderRegionIcon } from "@/components/founder-design/region-icon";
+import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
@@ -275,13 +277,14 @@ export default async function CustomersPage({
   const revenueThisMonth = revenueThisMonthAgg._sum.total ?? 0;
 
   const overviewKpis: OverviewKpiProps[] = [
-    { label: "Customers", value: totalCustomersCount, icon: Users, accent: "blue" },
-    { label: "Jobs This Month", value: jobsThisMonthCount, icon: Briefcase, accent: "purple" },
+    { label: "Customers", value: totalCustomersCount, icon: Users, defaultIconId: "users" as const, accent: "blue" },
+    { label: "Jobs This Month", value: jobsThisMonthCount, icon: Briefcase, defaultIconId: "briefcase" as const, accent: "purple" },
     {
       label: "Revenue This Month",
       value: formatMoney(revenueThisMonth),
       sublabel: "Paid invoices this month",
       icon: DollarSign,
+      defaultIconId: "dollar-sign" as const,
       accent: "orange",
     },
     {
@@ -289,6 +292,7 @@ export default async function CustomersPage({
       value: formatMoney(avgJobValue),
       sublabel: "Per paid invoice",
       icon: TrendingUp,
+      defaultIconId: "trending-up" as const,
       accent: "teal",
     },
   ];
@@ -399,7 +403,7 @@ export default async function CustomersPage({
         kpiCardLabels={overviewKpis.map((kpi) => kpi.label)}
       >
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,300px)]">
-        <div className="space-y-4">
+        <FounderRegion id="table" className="space-y-4">
           {/*
            * The shared header's search slot only renders on desktop (see
            * src/components/app-shell.tsx's mobile header). Customer
@@ -477,9 +481,10 @@ export default async function CustomersPage({
               </div>
             </>
           )}
-        </div>
+        </FounderRegion>
 
         <div className="space-y-4">
+          <FounderRegion id="overview">
           <Card className="border-border/70">
             <CardHeader>
               <CardTitle className="text-base">Customer Overview</CardTitle>
@@ -490,13 +495,26 @@ export default async function CustomersPage({
                 flexBreakpointClassName="sm:flex sm:flex-wrap"
                 defaultGapPx={12}
               >
-                {overviewKpis.map((kpi) => (
-                  <OverviewKpi key={kpi.label} {...kpi} />
+                {overviewKpis.map((kpi, index) => (
+                  <TunableKpiCard
+                    key={kpi.label}
+                    index={index}
+                    label={kpi.label}
+                    value={kpi.value}
+                    sublabel={kpi.sublabel}
+                    icon={kpi.icon}
+                    defaultIconId={kpi.defaultIconId}
+                    accentClassName={OVERVIEW_ACCENT_CLASSES[kpi.accent]}
+                    variant="overview"
+                    pageKey="customers"
+                  />
                 ))}
               </KpiCardsLayout>
             </CardContent>
           </Card>
+          </FounderRegion>
 
+          <FounderRegion id="activity">
           <Card className="border-border/70">
             <CardHeader>
               <CardTitle className="text-base">Recent Activity</CardTitle>
@@ -524,7 +542,9 @@ export default async function CustomersPage({
               )}
             </CardContent>
           </Card>
+          </FounderRegion>
 
+          <FounderRegion id="services">
           <Card className="border-border/70">
             <CardHeader>
               <CardTitle className="text-base">Top Services</CardTitle>
@@ -537,7 +557,7 @@ export default async function CustomersPage({
                 topServices.map((service) => (
                   <div key={service.name} className="flex items-center justify-between gap-2 text-sm">
                     <span className="flex min-w-0 items-center gap-2">
-                      <Wrench className="size-3.5 shrink-0 text-muted-foreground" />
+                      <FounderRegionIcon regionId="services" defaultIcon="wrench" className="size-3.5 shrink-0 text-muted-foreground" />
                       <span className="truncate text-foreground">{service.name}</span>
                     </span>
                     <span className="shrink-0 text-right text-muted-foreground">
@@ -548,6 +568,7 @@ export default async function CustomersPage({
               )}
             </CardContent>
           </Card>
+          </FounderRegion>
 
           <NewCustomerForm label="Add New Customer" size="lg" className="w-full" />
         </div>
@@ -573,40 +594,8 @@ type OverviewKpiProps = {
   sublabel?: string;
   icon: ComponentType<{ className?: string }>;
   accent: OverviewAccent;
+  defaultIconId: "users" | "briefcase" | "dollar-sign" | "trending-up";
 };
-
-function OverviewKpi({ label, value, sublabel, icon: Icon, accent }: OverviewKpiProps) {
-  return (
-    <div
-      className="space-y-2 rounded-lg border border-border/60 bg-card/40"
-      style={{ padding: "var(--tbbt-kpi-padding, 12px)", minHeight: "var(--tbbt-kpi-min-height, 0px)" }}
-    >
-      <span
-        className={cn("flex items-center justify-center rounded-full", OVERVIEW_ACCENT_CLASSES[accent])}
-        style={{ width: "var(--tbbt-kpi-icon-size, 36px)", height: "var(--tbbt-kpi-icon-size, 36px)" }}
-      >
-        <Icon className="size-[calc(var(--tbbt-kpi-icon-size,36px)*0.5)]" />
-      </span>
-      <p
-        className="font-bold tabular-nums tracking-tight text-foreground"
-        style={{ fontSize: "var(--tbbt-kpi-number-font, 20px)" }}
-      >
-        {value}
-      </p>
-      <p
-        className="leading-tight font-medium tracking-wide text-muted-foreground uppercase"
-        style={{ fontSize: "var(--tbbt-kpi-label-font, 11px)" }}
-      >
-        {label}
-      </p>
-      {sublabel ? (
-        <p className="text-muted-foreground" style={{ fontSize: "var(--tbbt-kpi-supporting-font, 11px)" }}>
-          {sublabel}
-        </p>
-      ) : null}
-    </div>
-  );
-}
 
 type CustomerRow = {
   id: string;

@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { ComponentType, ReactNode } from "react";
-import { CalendarClock, Sparkles } from "lucide-react";
+import { FounderRegion } from "@/components/founder-design/region";
+import { FounderRegionIcon } from "@/components/founder-design/region-icon";
+import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
@@ -21,6 +23,7 @@ import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatDate, formatDateTime, formatMoney, formatTime } from "@/lib/format";
+import type { CuratedIconId } from "@/lib/founder-icons";
 import { NAV_ICONS } from "@/lib/nav-icons";
 import { prisma } from "@/lib/prisma";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
@@ -162,24 +165,28 @@ export default async function DashboardPage() {
       value: openRequests,
       href: "/requests",
       icon: NAV_ICONS["/requests"],
+      defaultIconId: "inbox" as CuratedIconId,
     },
     {
       label: "Estimates Awaiting Approval",
       value: sentEstimates,
       href: "/estimates",
       icon: NAV_ICONS["/estimates"],
+      defaultIconId: "file-text" as CuratedIconId,
     },
     {
       label: "Upcoming Jobs",
       value: scheduledJobs,
       href: "/jobs",
       icon: NAV_ICONS["/jobs"],
+      defaultIconId: "calendar-clock" as CuratedIconId,
     },
     {
       label: "Jobs In Progress",
       value: inProgressJobs,
       href: "/jobs?view=list",
       icon: NAV_ICONS["/jobs"],
+      defaultIconId: "calendar-clock" as CuratedIconId,
     },
     {
       label: "Outstanding Invoices",
@@ -187,6 +194,7 @@ export default async function DashboardPage() {
       sublabel: `${sentInvoicesCount} sent, unpaid`,
       href: "/invoices",
       icon: NAV_ICONS["/invoices"],
+      defaultIconId: "receipt" as CuratedIconId,
     },
   ];
 
@@ -316,13 +324,27 @@ export default async function DashboardPage() {
         savedTokens={founderTokens}
         kpiCardLabels={kpis.map((kpi) => kpi.label)}
       >
+      <FounderRegion id="kpi">
       <KpiCardsLayout gridClassName="sm:grid-cols-2 lg:grid-cols-5" defaultGapPx={12}>
-        {kpis.map((kpi) => (
-          <KpiCard key={kpi.label} {...kpi} />
+        {kpis.map((kpi, index) => (
+          <TunableKpiCard
+            key={kpi.label}
+            index={index}
+            label={kpi.label}
+            value={kpi.value}
+            sublabel={kpi.sublabel}
+            href={kpi.href}
+            icon={kpi.icon}
+            defaultIconId={kpi.defaultIconId}
+            variant="dashboard"
+            pageKey="dashboard"
+          />
         ))}
       </KpiCardsLayout>
+      </FounderRegion>
 
       <div className="grid gap-6 lg:grid-cols-3">
+        <FounderRegion id="attention" className="lg:col-span-2">
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>Needs attention</CardTitle>
@@ -344,12 +366,14 @@ export default async function DashboardPage() {
             )}
           </CardContent>
         </Card>
+        </FounderRegion>
 
         <div className="space-y-6">
+          <FounderRegion id="today">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <CalendarClock className="size-4 text-muted-foreground" />
+                <FounderRegionIcon regionId="today" defaultIcon="calendar-clock" className="size-4 text-muted-foreground" />
                 Today
               </CardTitle>
               <CardDescription>Scheduled work for {formatDate(today)}.</CardDescription>
@@ -386,11 +410,13 @@ export default async function DashboardPage() {
               </Button>
             </CardContent>
           </Card>
+          </FounderRegion>
 
+          <FounderRegion id="actions">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Sparkles className="size-4 text-muted-foreground" />
+                <FounderRegionIcon regionId="actions" defaultIcon="sparkles" className="size-4 text-muted-foreground" />
                 Quick actions
               </CardTitle>
             </CardHeader>
@@ -406,9 +432,11 @@ export default async function DashboardPage() {
               </Button>
             </CardContent>
           </Card>
+          </FounderRegion>
         </div>
       </div>
 
+      <FounderRegion id="recent">
       <Card>
         <CardHeader>
           <CardTitle>Recent activity</CardTitle>
@@ -428,6 +456,7 @@ export default async function DashboardPage() {
           )}
         </CardContent>
       </Card>
+      </FounderRegion>
       </FounderDesignRoot>
     </PageContainer>
   );
@@ -439,52 +468,8 @@ type KpiCardProps = {
   sublabel?: string;
   href: string;
   icon: ComponentType<{ className?: string }>;
+  defaultIconId: CuratedIconId;
 };
-
-function KpiCard({ label, value, sublabel, href, icon: Icon }: KpiCardProps) {
-  return (
-    <Link href={href} className="block">
-      <Card
-        className="h-full transition-colors hover:border-primary/40 hover:bg-accent/30"
-        style={{ minHeight: "var(--tbbt-kpi-min-height, 0px)" }}
-      >
-        <CardContent
-          className="flex items-start justify-between gap-3"
-          style={{ padding: "var(--tbbt-kpi-padding, 1rem)" }}
-        >
-          <div className="min-w-0">
-            <p className="font-medium text-muted-foreground" style={{ fontSize: "var(--tbbt-kpi-label-font, 12px)" }}>
-              {label}
-            </p>
-            <p
-              className="mt-1.5 font-semibold tabular-nums tracking-tight text-foreground"
-              style={{ fontSize: "var(--tbbt-kpi-number-font, 24px)" }}
-            >
-              {value}
-            </p>
-            {sublabel ? (
-              <p
-                className="mt-1 text-muted-foreground"
-                style={{ fontSize: "var(--tbbt-kpi-supporting-font, 12px)" }}
-              >
-                {sublabel}
-              </p>
-            ) : null}
-          </div>
-          <span
-            className="flex shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
-            style={{
-              width: "var(--tbbt-kpi-icon-size, 36px)",
-              height: "var(--tbbt-kpi-icon-size, 36px)",
-            }}
-          >
-            <Icon className="size-[calc(var(--tbbt-kpi-icon-size,36px)*0.5)]" />
-          </span>
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}
 
 type AttentionItem = {
   key: string;

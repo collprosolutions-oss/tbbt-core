@@ -4,9 +4,12 @@ import { createContext, useContext } from "react";
 import type {
   FounderPageKey,
   FounderPageTokens,
+  KpiAppearanceTokens,
   KpiCardWidthValue,
+  KpiInternalLayout,
   KpiLayout,
   KpiTokenKey,
+  RegionTokenKey,
   TableDensity,
 } from "@/lib/founder-design";
 
@@ -24,11 +27,18 @@ export type FounderDesignContextValue = {
   /** Which KPI card (by index) is currently highlighted on the real page because its drawer row is hovered/focused -- purely visual, never persisted. */
   hoveredCardIndex: number | null;
   setHoveredCardIndex: (index: number | null) => void;
+  /** Which visual region the drawer is currently editing. Changing this never saves. */
+  selectedRegionId: string;
+  setSelectedRegionId: (id: string) => void;
 
   setKpiToken: (key: KpiTokenKey, value: number) => void;
   setKpiLayout: (layout: KpiLayout) => void;
   setKpiGroupWidth: (value: number) => void;
   setKpiCardWidth: (index: number, value: KpiCardWidthValue) => void;
+  setKpiInternalLayout: (layout: KpiInternalLayout) => void;
+  setKpiAppearance: (index: number, patch: KpiAppearanceTokens) => void;
+  setRegionToken: (regionId: string, key: RegionTokenKey, value: number) => void;
+  setRegionAppearance: (regionId: string, patch: Pick<KpiAppearanceTokens, "icon" | "iconColor">) => void;
 
   setTableDensity: (density: TableDensity) => void;
   setTableCellPx: (value: number) => void;

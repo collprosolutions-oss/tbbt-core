@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { telHref } from "@/lib/directions";
+import { FounderRegion } from "@/components/founder-design/region";
 import { cn } from "@/lib/utils";
 
 export type InvoiceListItem = {
@@ -74,25 +75,29 @@ export function InvoicesWorkspace({ invoices }: { invoices: InvoiceListItem[] })
 
   if (invoices.length === 0) {
     return (
-      <EmptyState
-        title="No invoices match your filters"
-        description="Try a different status, customer, payment method, or search term."
-      />
+      <FounderRegion id="table">
+        <EmptyState
+          title="No invoices match your filters"
+          description="Try a different status, customer, payment method, or search term."
+        />
+      </FounderRegion>
     );
   }
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,340px)]">
+      <FounderRegion id="table">
       <div className="hidden sm:block">
         <InvoicesTable invoices={invoices} selectedId={selectedId} onSelect={selectInvoice} />
       </div>
       <div className="space-y-2 sm:hidden">
         <InvoicesMobileList invoices={invoices} selectedId={selectedId} onSelect={selectInvoice} />
       </div>
+      </FounderRegion>
 
-      <div className="hidden lg:block">
+      <FounderRegion id="details" className="hidden lg:block">
         <InvoiceDetailsPanel invoice={selected} />
-      </div>
+      </FounderRegion>
 
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="bottom" className="max-h-[85vh] overflow-y-auto lg:hidden">

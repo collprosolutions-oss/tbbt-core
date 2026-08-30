@@ -164,3 +164,39 @@
     @apply cursor-not-allowed opacity-50;
   }
 }
+
+/*
+ * Founder Design Mode V2 -- region highlight + token application.
+ * Variables are only set when the founder has an override; a missing
+ * custom property makes the declaration invalid and is ignored, so
+ * approved baseline styles stay untouched. Highlight is ephemeral
+ * (data-founder-highlight is only present while the drawer is open).
+ */
+[data-founder-highlight="true"] {
+  outline: 2px solid oklch(0.62 0.14 250 / 0.55);
+  outline-offset: 3px;
+  border-radius: 0.85rem;
+}
+
+[data-founder-region] > [data-slot="card"],
+[data-founder-region] > .tbbt-founder-box {
+  min-height: var(--tbbt-region-min-h);
+  padding-block: var(--tbbt-region-pad-y);
+  padding-inline: var(--tbbt-region-pad-x);
+  gap: var(--tbbt-region-gap);
+}
+
+[data-founder-region] [data-slot="card-title"] {
+  font-size: var(--tbbt-region-title-size);
+  line-height: var(--tbbt-region-line-height);
+}
+
+[data-founder-region] [data-slot="card-description"],
+[data-founder-region] [data-slot="card-content"] {
+  font-size: var(--tbbt-region-body-size);
+  line-height: var(--tbbt-region-line-height);
+}
+
+[data-founder-region] [data-slot="button"] {
+  font-size: var(--tbbt-region-btn-text);
+}

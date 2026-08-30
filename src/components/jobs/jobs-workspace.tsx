@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { telHref } from "@/lib/directions";
+import { FounderRegion } from "@/components/founder-design/region";
 import { cn } from "@/lib/utils";
 
 export type JobChangeOrderSummary = {
@@ -120,6 +121,7 @@ export function JobsWorkspace({
       <div className="space-y-4">
         {calendarSection}
 
+        <FounderRegion id="table">
         {jobs.length === 0 ? (
           <EmptyState
             title="No jobs match your filters"
@@ -136,11 +138,12 @@ export function JobsWorkspace({
             {pagination}
           </>
         )}
+        </FounderRegion>
       </div>
 
-      <div className="hidden xl:block">
+      <FounderRegion id="details" className="hidden xl:block">
         <JobDetailsPanel job={selected} eligibleMembers={eligibleMembers} />
-      </div>
+      </FounderRegion>
 
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="bottom" className="max-h-[85vh] overflow-y-auto xl:hidden">

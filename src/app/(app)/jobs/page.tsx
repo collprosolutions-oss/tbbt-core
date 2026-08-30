@@ -13,6 +13,8 @@ import {
 import { PageSizeSelect } from "@/components/jobs/page-size-select";
 import { FounderDesignRoot } from "@/components/founder-design/root";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
+import { FounderRegion } from "@/components/founder-design/region";
+import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
@@ -24,7 +26,6 @@ import { ScheduleDateNav } from "@/components/schedule/schedule-date-nav";
 import { ScheduleViewTabs } from "@/components/schedule/schedule-view-tabs";
 import { UnscheduledJobsPanel } from "@/components/schedule/unscheduled-jobs-panel";
 import { WeekView } from "@/components/schedule/week-view";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
@@ -486,6 +487,7 @@ export default async function JobsPage({
       value: jobsThisWeekCount,
       sublabel: jobsThisWeekValue.gt(0) ? formatMoney(jobsThisWeekValue) : undefined,
       icon: CalendarClock,
+      defaultIconId: "calendar-clock" as const,
       accent: "blue",
       href: "/jobs",
     },
@@ -493,6 +495,7 @@ export default async function JobsPage({
       label: "Scheduled",
       value: scheduledCount,
       icon: CalendarDays,
+      defaultIconId: "calendar-days" as const,
       accent: "purple",
       href: "/jobs?status=scheduled",
     },
@@ -500,6 +503,7 @@ export default async function JobsPage({
       label: "In Progress",
       value: inProgressCount,
       icon: Timer,
+      defaultIconId: "timer" as const,
       accent: "orange",
       href: "/jobs?status=in_progress",
     },
@@ -508,6 +512,7 @@ export default async function JobsPage({
       value: completedThisWeekCount,
       sublabel: completedThisWeekValue.gt(0) ? `${formatMoney(completedThisWeekValue)} this week` : "This week",
       icon: CheckCircle2,
+      defaultIconId: "check-circle" as const,
       accent: "green",
       href: "/jobs?status=completed",
     },
@@ -515,6 +520,7 @@ export default async function JobsPage({
       label: "Unscheduled",
       value: unscheduledCount,
       icon: CalendarX2,
+      defaultIconId: "calendar-x" as const,
       accent: "slate",
       href: "/jobs?status=unscheduled",
     },
@@ -554,6 +560,7 @@ export default async function JobsPage({
 
   const calendarSection = (
     <>
+      <FounderRegion id="calendar" className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <ScheduleViewTabs view={view} date={anchorDate} />
         {dateNavLabel ? <ScheduleDateNav view={view} date={anchorDate} label={dateNavLabel} /> : null}
@@ -572,7 +579,9 @@ export default async function JobsPage({
       ) : (
         <div className="space-y-6">{content}</div>
       )}
+      </FounderRegion>
 
+      <FounderRegion id="tabs" className="tbbt-founder-box">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3 pt-2">
         <nav className="flex flex-wrap items-center gap-1.5 overflow-x-auto">
           {tabs.map((tabItem) => {
@@ -609,6 +618,7 @@ export default async function JobsPage({
           <DateFilterSelect value={rangePreset ?? "all"} />
         </div>
       </div>
+      </FounderRegion>
     </>
   );
 
@@ -685,11 +695,25 @@ export default async function JobsPage({
         savedTokens={founderTokens}
         kpiCardLabels={kpis.map((kpi) => kpi.label)}
       >
+      <FounderRegion id="kpi">
       <KpiCardsLayout gridClassName="sm:grid-cols-2 lg:grid-cols-5" defaultGapPx={20}>
-        {kpis.map((kpi) => (
-          <KpiCard key={kpi.label} {...kpi} />
+        {kpis.map((kpi, index) => (
+          <TunableKpiCard
+            key={kpi.label}
+            index={index}
+            label={kpi.label}
+            value={kpi.value}
+            sublabel={kpi.sublabel}
+            href={kpi.href}
+            icon={kpi.icon}
+            defaultIconId={kpi.defaultIconId}
+            accentClassName={KPI_ACCENT_CLASSES[kpi.accent]}
+            variant="workspace"
+            pageKey="jobs"
+          />
         ))}
       </KpiCardsLayout>
+      </FounderRegion>
 
       {/* Mobile-only search fallback -- the shared header's search slot only renders on desktop. */}
       <form action="/jobs" method="GET" className="md:hidden">
@@ -732,46 +756,5 @@ type KpiCardProps = {
   href: string;
   icon: ComponentType<{ className?: string }>;
   accent: KpiAccent;
+  defaultIconId: "calendar-clock" | "calendar-days" | "timer" | "check-circle" | "calendar-x";
 };
-
-function KpiCard({ label, value, sublabel, href, icon: Icon, accent }: KpiCardProps) {
-  return (
-    <Link href={href} className="block">
-      <Card
-        className="h-full border-border/70 shadow-sm transition-colors hover:border-primary/40 hover:bg-accent/20"
-        style={{ minHeight: "var(--tbbt-kpi-min-height, 0px)" }}
-      >
-        <CardContent className="flex items-center gap-4" style={{ padding: "var(--tbbt-kpi-padding, 20px)" }}>
-          <span
-            className={cn(
-              "flex shrink-0 items-center justify-center rounded-full",
-              KPI_ACCENT_CLASSES[accent],
-            )}
-            style={{ width: "var(--tbbt-kpi-icon-size, 48px)", height: "var(--tbbt-kpi-icon-size, 48px)" }}
-          >
-            <Icon className="size-[calc(var(--tbbt-kpi-icon-size,48px)*0.42)]" />
-          </span>
-          <div className="min-w-0">
-            <p
-              className="font-semibold tracking-wider text-muted-foreground uppercase"
-              style={{ fontSize: "var(--tbbt-kpi-label-font, 11px)" }}
-            >
-              {label}
-            </p>
-            <p
-              className="mt-1 font-bold tabular-nums tracking-tight text-foreground"
-              style={{ fontSize: "var(--tbbt-kpi-number-font, 30px)" }}
-            >
-              {value}
-            </p>
-            {sublabel ? (
-              <p className="mt-0.5 truncate text-muted-foreground" style={{ fontSize: "var(--tbbt-kpi-supporting-font, 12px)" }}>
-                {sublabel}
-              </p>
-            ) : null}
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}

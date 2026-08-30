@@ -20,6 +20,13 @@
  * src/lib/founder-access.ts for who is allowed to call it.
  */
 import type { CSSProperties } from "react";
+import {
+  isCuratedIconId,
+  isIconColorToken,
+  type CuratedIconId,
+  type IconColorToken,
+} from "@/lib/founder-icons";
+import { isFounderRegionId } from "@/lib/founder-regions";
 
 export const FOUNDER_PAGE_KEYS = [
   "dashboard",
@@ -88,11 +95,15 @@ export const KPI_CARD_COUNTS: Record<FounderPageKey, number> = {
 export const KPI_TOKEN_KEYS = [
   "minHeight",
   "padding",
+  "paddingY",
+  "paddingX",
   "gap",
+  "internalGap",
   "iconSize",
   "labelFontSize",
   "numberFontSize",
   "supportingFontSize",
+  "lineHeight",
 ] as const;
 export type KpiTokenKey = (typeof KPI_TOKEN_KEYS)[number];
 export type KpiTokens = Partial<Record<KpiTokenKey, number>>;
@@ -100,29 +111,39 @@ export type KpiTokens = Partial<Record<KpiTokenKey, number>>;
 export const KPI_TOKEN_LABELS: Record<KpiTokenKey, string> = {
   minHeight: "Card Height",
   padding: "Card Padding",
+  paddingY: "Vertical Padding",
+  paddingX: "Horizontal Padding",
   gap: "Card Gap",
+  internalGap: "Internal Vertical Gap",
   iconSize: "Icon Size",
   labelFontSize: "Label Text Size",
   numberFontSize: "Number Text Size",
   supportingFontSize: "Supporting Text Size",
+  lineHeight: "Text Line Height",
 };
 
 /**
- * Safe bounds. `minHeight` floors at 0 (meaning "no minimum -- natural
- * height", i.e. today's actual behavior) rather than forcing an
- * artificial minimum on every page. All other floors are chosen so
- * content cannot visibly overlap or become unreadable (e.g. a 9px number
- * or a 16px icon circle is still legible/usable, going lower would not
- * be).
+ * Safe but substantially broader bounds than V1. `minHeight` floors at 0
+ * ("no minimum -- natural height"). Vertical padding and internal gap
+ * may reach 0px so the founder can actually compress rendered geometry;
+ * horizontal padding floors at 4px so labels stay readable. `lineHeight`
+ * is stored as a percent (120 = 1.20) so it stays an integer token.
+ *
+ * Legacy `padding` is still accepted (mapped onto paddingY at read time)
+ * so previously saved overrides keep working.
  */
 export const KPI_TOKEN_BOUNDS: Record<KpiTokenKey, { min: number; max: number; step: number }> = {
   minHeight: { min: 0, max: 160, step: 4 },
-  padding: { min: 8, max: 28, step: 2 },
-  gap: { min: 8, max: 28, step: 2 },
-  iconSize: { min: 20, max: 56, step: 2 },
+  padding: { min: 0, max: 40, step: 2 },
+  paddingY: { min: 0, max: 40, step: 2 },
+  paddingX: { min: 4, max: 32, step: 2 },
+  gap: { min: 2, max: 28, step: 2 },
+  internalGap: { min: 0, max: 16, step: 2 },
+  iconSize: { min: 16, max: 56, step: 2 },
   labelFontSize: { min: 9, max: 14, step: 1 },
-  numberFontSize: { min: 16, max: 36, step: 2 },
+  numberFontSize: { min: 14, max: 36, step: 2 },
   supportingFontSize: { min: 9, max: 14, step: 1 },
+  lineHeight: { min: 100, max: 150, step: 5 },
 };
 
 /**
@@ -146,13 +167,109 @@ export const KPI_TOKEN_BOUNDS: Record<KpiTokenKey, { min: number; max: number; s
  *    text-[0.7rem] ~= 11.2px; grid gap-3 = 12px.
  */
 export const KPI_DEFAULTS: Record<FounderPageKey, Record<KpiTokenKey, number>> = {
-  dashboard: { minHeight: 0, padding: 16, gap: 12, iconSize: 36, labelFontSize: 12, numberFontSize: 24, supportingFontSize: 12 },
-  requests: { minHeight: 0, padding: 20, gap: 20, iconSize: 48, labelFontSize: 11, numberFontSize: 30, supportingFontSize: 12 },
-  customers: { minHeight: 0, padding: 12, gap: 12, iconSize: 36, labelFontSize: 11, numberFontSize: 20, supportingFontSize: 11 },
-  estimates: { minHeight: 0, padding: 20, gap: 20, iconSize: 48, labelFontSize: 11, numberFontSize: 30, supportingFontSize: 12 },
-  jobs: { minHeight: 0, padding: 20, gap: 20, iconSize: 48, labelFontSize: 11, numberFontSize: 30, supportingFontSize: 12 },
-  invoices: { minHeight: 0, padding: 20, gap: 20, iconSize: 48, labelFontSize: 11, numberFontSize: 30, supportingFontSize: 12 },
+  dashboard: {
+    minHeight: 0,
+    padding: 16,
+    paddingY: 32,
+    paddingX: 16,
+    gap: 12,
+    internalGap: 6,
+    iconSize: 36,
+    labelFontSize: 12,
+    numberFontSize: 24,
+    supportingFontSize: 12,
+    lineHeight: 125,
+  },
+  requests: {
+    minHeight: 0,
+    padding: 20,
+    paddingY: 36,
+    paddingX: 20,
+    gap: 20,
+    internalGap: 4,
+    iconSize: 48,
+    labelFontSize: 11,
+    numberFontSize: 30,
+    supportingFontSize: 12,
+    lineHeight: 120,
+  },
+  customers: {
+    minHeight: 0,
+    padding: 12,
+    paddingY: 12,
+    paddingX: 12,
+    gap: 12,
+    internalGap: 8,
+    iconSize: 36,
+    labelFontSize: 11,
+    numberFontSize: 20,
+    supportingFontSize: 11,
+    lineHeight: 125,
+  },
+  estimates: {
+    minHeight: 0,
+    padding: 20,
+    paddingY: 36,
+    paddingX: 20,
+    gap: 20,
+    internalGap: 4,
+    iconSize: 48,
+    labelFontSize: 11,
+    numberFontSize: 30,
+    supportingFontSize: 12,
+    lineHeight: 120,
+  },
+  jobs: {
+    minHeight: 0,
+    padding: 20,
+    paddingY: 36,
+    paddingX: 20,
+    gap: 20,
+    internalGap: 4,
+    iconSize: 48,
+    labelFontSize: 11,
+    numberFontSize: 30,
+    supportingFontSize: 12,
+    lineHeight: 120,
+  },
+  invoices: {
+    minHeight: 0,
+    padding: 20,
+    paddingY: 36,
+    paddingX: 20,
+    gap: 20,
+    internalGap: 4,
+    iconSize: 48,
+    labelFontSize: 11,
+    numberFontSize: 30,
+    supportingFontSize: 12,
+    lineHeight: 120,
+  },
 };
+
+/**
+ * Effective vertical padding used when the founder has never set
+ * paddingY. Includes the shadcn Card chrome (`py-(--card-spacing)` = 16px
+ * each side) that used to sit OUTSIDE the founder `padding` token -- that
+ * chrome was why reducing "Card Padding" could not shrink rendered
+ * height. TunableKpiCard now zeros Card py/gap so this single token is
+ * the actual padding-block.
+ *
+ * Legacy saved `kpi.padding` (content-only) is applied as-is -- without
+ * re-adding chrome -- so a founder who already tried to compress gets
+ * the shrinkage they asked for.
+ */
+export function resolveKpiPaddingY(pageKey: FounderPageKey, kpi: KpiTokens | undefined): number {
+  if (typeof kpi?.paddingY === "number") return kpi.paddingY;
+  if (typeof kpi?.padding === "number") return kpi.padding;
+  return KPI_DEFAULTS[pageKey].paddingY;
+}
+
+export function resolveKpiPaddingX(pageKey: FounderPageKey, kpi: KpiTokens | undefined): number {
+  if (typeof kpi?.paddingX === "number") return kpi.paddingX;
+  if (typeof kpi?.padding === "number") return kpi.padding;
+  return KPI_DEFAULTS[pageKey].paddingX;
+}
 
 export function clampKpiTokens(input: KpiTokens): KpiTokens {
   const out: KpiTokens = {};
@@ -170,11 +287,27 @@ export function clampKpiTokens(input: KpiTokens): KpiTokens {
 export const KPI_CSS_VARS: Record<KpiTokenKey, string> = {
   minHeight: "--tbbt-kpi-min-height",
   padding: "--tbbt-kpi-padding",
+  paddingY: "--tbbt-kpi-padding-y",
+  paddingX: "--tbbt-kpi-padding-x",
   gap: "--tbbt-kpi-gap",
+  internalGap: "--tbbt-kpi-internal-gap",
   iconSize: "--tbbt-kpi-icon-size",
   labelFontSize: "--tbbt-kpi-label-font",
   numberFontSize: "--tbbt-kpi-number-font",
   supportingFontSize: "--tbbt-kpi-supporting-font",
+  lineHeight: "--tbbt-kpi-line-height",
+};
+
+export const KPI_INTERNAL_LAYOUTS = ["current", "aligned"] as const;
+export type KpiInternalLayout = (typeof KPI_INTERNAL_LAYOUTS)[number];
+
+export function isKpiInternalLayout(value: string): value is KpiInternalLayout {
+  return (KPI_INTERNAL_LAYOUTS as readonly string[]).includes(value);
+}
+
+export type KpiAppearanceTokens = {
+  icon?: CuratedIconId;
+  iconColor?: IconColorToken;
 };
 
 // ---------------------------------------------------------------------------
@@ -245,6 +378,43 @@ function sanitizeKpiWidthTokens(pageKey: FounderPageKey, input: unknown): KpiWid
     }
   }
 
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function sanitizeKpiAppearance(pageKey: FounderPageKey, input: unknown): Record<number, KpiAppearanceTokens> | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const count = KPI_CARD_COUNTS[pageKey];
+  const result: Record<number, KpiAppearanceTokens> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    const index = Number(key);
+    if (!Number.isInteger(index) || index < 0 || index >= count) continue;
+    if (!value || typeof value !== "object") continue;
+    const raw = value as Record<string, unknown>;
+    const appearance: KpiAppearanceTokens = {};
+    if (typeof raw.icon === "string" && isCuratedIconId(raw.icon)) {
+      appearance.icon = raw.icon;
+    }
+    if (typeof raw.iconColor === "string" && isIconColorToken(raw.iconColor)) {
+      appearance.iconColor = raw.iconColor;
+    }
+    if (Object.keys(appearance).length > 0) {
+      result[index] = appearance;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function sanitizeRegionMap(pageKey: FounderPageKey, input: unknown): Record<string, RegionTokens> | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const result: Record<string, RegionTokens> = {};
+  for (const [regionId, value] of Object.entries(input as Record<string, unknown>)) {
+    if (!isFounderRegionId(pageKey, regionId)) continue;
+    if (!value || typeof value !== "object") continue;
+    const clean = clampRegionTokens(value as RegionTokens);
+    if (Object.keys(clean).length > 0) {
+      result[regionId] = clean;
+    }
+  }
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
@@ -357,7 +527,7 @@ export function clampTableHeaderFontSize(value: number): number {
 
 /** Matches PageContainer's existing space-y-6 (1.5rem = 24px) rhythm exactly. */
 export const SECTION_GAP_DEFAULT = 24;
-export const SECTION_GAP_BOUNDS = { min: 8, max: 40, step: 2 };
+export const SECTION_GAP_BOUNDS = { min: 4, max: 40, step: 2 };
 export const SECTION_GAP_CSS_VAR = "--tbbt-section-gap";
 
 export function clampSectionGap(value: number): number {
@@ -395,15 +565,117 @@ export function clampPanelWidth(value: number): number {
 // Combined per-page token bundle (this is exactly what gets persisted)
 // ---------------------------------------------------------------------------
 
+export const REGION_TOKEN_KEYS = [
+  "minHeight",
+  "paddingY",
+  "paddingX",
+  "gap",
+  "titleSize",
+  "titleIconSize",
+  "bodySize",
+  "lineHeight",
+  "buttonTextSize",
+] as const;
+export type RegionTokenKey = (typeof REGION_TOKEN_KEYS)[number];
+
+export type RegionTokens = Partial<Record<RegionTokenKey, number>> & {
+  icon?: CuratedIconId;
+  iconColor?: IconColorToken;
+};
+
+export const REGION_TOKEN_LABELS: Record<RegionTokenKey, string> = {
+  minHeight: "Min Height",
+  paddingY: "Vertical Padding",
+  paddingX: "Horizontal Padding",
+  gap: "Internal Spacing",
+  titleSize: "Title Size",
+  titleIconSize: "Title Icon Size",
+  bodySize: "Body Text Size",
+  lineHeight: "Text Line Height",
+  buttonTextSize: "Button Text Size",
+};
+
+export const REGION_TOKEN_BOUNDS: Record<RegionTokenKey, { min: number; max: number; step: number }> = {
+  minHeight: { min: 0, max: 400, step: 8 },
+  paddingY: { min: 0, max: 32, step: 2 },
+  paddingX: { min: 4, max: 32, step: 2 },
+  gap: { min: 0, max: 24, step: 2 },
+  titleSize: { min: 12, max: 22, step: 1 },
+  titleIconSize: { min: 12, max: 28, step: 2 },
+  bodySize: { min: 11, max: 16, step: 1 },
+  lineHeight: { min: 110, max: 160, step: 5 },
+  buttonTextSize: { min: 11, max: 16, step: 1 },
+};
+
+export const REGION_TOKEN_DEFAULTS: Record<RegionTokenKey, number> = {
+  minHeight: 0,
+  paddingY: 16,
+  paddingX: 16,
+  gap: 16,
+  titleSize: 16,
+  titleIconSize: 16,
+  bodySize: 14,
+  lineHeight: 140,
+  buttonTextSize: 14,
+};
+
+export const REGION_CSS_VARS: Record<RegionTokenKey, string> = {
+  minHeight: "--tbbt-region-min-h",
+  paddingY: "--tbbt-region-pad-y",
+  paddingX: "--tbbt-region-pad-x",
+  gap: "--tbbt-region-gap",
+  titleSize: "--tbbt-region-title-size",
+  titleIconSize: "--tbbt-region-icon-size",
+  bodySize: "--tbbt-region-body-size",
+  lineHeight: "--tbbt-region-line-height",
+  buttonTextSize: "--tbbt-region-btn-text",
+};
+
+export function clampRegionTokens(input: RegionTokens): RegionTokens {
+  const out: RegionTokens = {};
+  for (const key of REGION_TOKEN_KEYS) {
+    const raw = input[key];
+    if (typeof raw !== "number" || !Number.isFinite(raw)) continue;
+    const bounds = REGION_TOKEN_BOUNDS[key];
+    const stepped = Math.round(raw / bounds.step) * bounds.step;
+    out[key] = Math.min(bounds.max, Math.max(bounds.min, stepped));
+  }
+  if (typeof input.icon === "string" && isCuratedIconId(input.icon)) {
+    out.icon = input.icon;
+  }
+  if (typeof input.iconColor === "string" && isIconColorToken(input.iconColor)) {
+    out.iconColor = input.iconColor;
+  }
+  return out;
+}
+
+export function regionTokensToStyle(tokens: RegionTokens | undefined): CSSProperties {
+  if (!tokens) return {};
+  const style: Record<string, string> = {};
+  for (const key of REGION_TOKEN_KEYS) {
+    const value = tokens[key];
+    if (typeof value !== "number") continue;
+    if (key === "lineHeight") {
+      style[REGION_CSS_VARS[key]] = (value / 100).toFixed(2);
+    } else {
+      style[REGION_CSS_VARS[key]] = `${value}px`;
+    }
+  }
+  return style as CSSProperties;
+}
+
 export type FounderPageTokens = {
   kpi?: KpiTokens;
   kpiWidth?: KpiWidthTokens;
+  kpiInternalLayout?: KpiInternalLayout;
+  kpiAppearance?: Record<number, KpiAppearanceTokens>;
   tableDensity?: TableDensity;
   tableCellPx?: number;
   tableFontSize?: number;
   tableHeaderFontSize?: number;
   sectionGap?: number;
   panelWidth?: number;
+  regions?: Record<string, RegionTokens>;
 };
 
 /**
@@ -434,6 +706,20 @@ export function sanitizeFounderPageTokens(
   const kpiWidth = sanitizeKpiWidthTokens(pageKey, raw.kpiWidth);
   if (kpiWidth) {
     result.kpiWidth = kpiWidth;
+  }
+
+  if (typeof raw.kpiInternalLayout === "string" && isKpiInternalLayout(raw.kpiInternalLayout)) {
+    result.kpiInternalLayout = raw.kpiInternalLayout;
+  }
+
+  const kpiAppearance = sanitizeKpiAppearance(pageKey, raw.kpiAppearance);
+  if (kpiAppearance) {
+    result.kpiAppearance = kpiAppearance;
+  }
+
+  const regions = sanitizeRegionMap(pageKey, raw.regions);
+  if (regions) {
+    result.regions = regions;
   }
 
   if (PAGE_HAS_TABLE[pageKey]) {
@@ -510,9 +796,17 @@ export function tokensToCssVars(pageKey: FounderPageKey, tokens: FounderPageToke
   if (tokens.kpi) {
     for (const key of KPI_TOKEN_KEYS) {
       const value = tokens.kpi[key];
-      if (typeof value === "number") {
+      if (typeof value !== "number") continue;
+      if (key === "lineHeight") {
+        style[KPI_CSS_VARS[key]] = (value / 100).toFixed(2);
+      } else {
         style[KPI_CSS_VARS[key]] = `${value}px`;
       }
+    }
+    // Legacy readers (and the founder-design check) look for
+    // --tbbt-kpi-padding. When only paddingY is set, alias it.
+    if (typeof tokens.kpi.padding !== "number" && typeof tokens.kpi.paddingY === "number") {
+      style[KPI_CSS_VARS.padding] = `${tokens.kpi.paddingY}px`;
     }
   }
 

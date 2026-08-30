@@ -36,8 +36,11 @@ const {
   sanitizeFounderPageTokens,
   clearFieldPaths,
   resolveKpiCardFlex,
+  resolveKpiPaddingY,
   KPI_CARD_COUNTS,
+  KPI_TOKEN_BOUNDS,
 } = await import("@/lib/founder-design");
+const { FOUNDER_REGIONS } = await import("@/lib/founder-regions");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
 const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices"];
@@ -176,17 +179,93 @@ async function main() {
     const afterSection = clearFieldPaths(tokens, ["kpi.minHeight", "kpi.padding"]);
     check("Clearing every key of a nested object (kpi.*) prunes the now-empty parent -- no dangling {}", afterSection.kpi === undefined);
     check("Clearing the kpi section leaves kpiWidth/tableDensity/sectionGap untouched", afterSection.kpiWidth?.groupWidth === 130 && afterSection.tableDensity === "compact");
+
+    const withRegions = {
+      kpi: { paddingY: 4 },
+      regions: { attention: { paddingY: 2 }, today: { paddingY: 8 } },
+    };
+    const afterOneRegion = clearFieldPaths(withRegions, ["regions.attention.paddingY"]);
+    check(
+      "Resetting one region's paddingY leaves sibling regions and KPI tokens untouched",
+      afterOneRegion.regions?.today?.paddingY === 8 &&
+        afterOneRegion.regions?.attention === undefined &&
+        afterOneRegion.kpi?.paddingY === 4,
+    );
+  }
+
+  console.log("\nTEST 1e -- V2 region / compression / icon tokens are page-aware and bounded");
+  {
+    check("Dashboard regions include Top KPI Cards, Needs Attention, Today, Quick Actions, Recent Activity", 
+      FOUNDER_REGIONS.dashboard.map((r) => r.label).join("|") ===
+        "Top KPI Cards|Needs Attention|Today|Quick Actions|Recent Activity|Page Spacing");
+    check("Requests regions are request-specific (not Dashboard labels copied over)",
+      FOUNDER_REGIONS.requests.some((r) => r.label === "Request Table") &&
+        FOUNDER_REGIONS.requests.some((r) => r.label === "Request Details") &&
+        !FOUNDER_REGIONS.requests.some((r) => r.label === "Needs Attention"));
+    check("Customers regions include Customer Table / Customer Overview / Recent Activity / Top Services / Right Rail Width",
+      ["Customer Table", "Customer Overview", "Recent Activity", "Top Services", "Right Rail Width"].every((label) =>
+        FOUNDER_REGIONS.customers.some((r) => r.label === label),
+      ));
+    check("Estimates regions include Estimate Table and Estimate Details only as real boxes",
+      FOUNDER_REGIONS.estimates.some((r) => r.label === "Estimate Table") &&
+        FOUNDER_REGIONS.estimates.some((r) => r.label === "Estimate Details") &&
+        !FOUNDER_REGIONS.estimates.some((r) => r.label === "Today"));
+    check("Jobs regions include Calendar, Job Table, Job Details",
+      FOUNDER_REGIONS.jobs.some((r) => r.label === "Calendar") &&
+        FOUNDER_REGIONS.jobs.some((r) => r.label === "Job Table") &&
+        FOUNDER_REGIONS.jobs.some((r) => r.label === "Job Details"));
+    check("Invoices regions include Invoice Table and Invoice Details",
+      FOUNDER_REGIONS.invoices.some((r) => r.label === "Invoice Table") &&
+        FOUNDER_REGIONS.invoices.some((r) => r.label === "Invoice Details"));
+
+    const compressed = sanitizeFounderPageTokens("dashboard", {
+      kpi: { paddingY: 0, paddingX: 4, internalGap: 0, lineHeight: 100, iconSize: 16 },
+      kpiInternalLayout: "aligned",
+      kpiAppearance: { 0: { icon: "inbox", iconColor: "gold" }, 99: { icon: "inbox" }, 1: { icon: "not-real", iconColor: "neon" } },
+      regions: { attention: { paddingY: 0, minHeight: 0 }, invented: { paddingY: 4 }, today: { icon: "sparkles", iconColor: "green" } },
+    });
+    check("paddingY 0 is allowed (aggressive vertical compression)", compressed.kpi?.paddingY === 0);
+    check("paddingX floors at 4px (readability)", compressed.kpi?.paddingX === 4);
+    check("internalGap 0 is allowed", compressed.kpi?.internalGap === 0);
+    check("lineHeight 100 (= 1.00) is allowed", compressed.kpi?.lineHeight === 100);
+    check("iconSize 16 is allowed (was 20 in V1)", compressed.kpi?.iconSize === 16);
+    check("Compact/Aligned internal layout is stored", compressed.kpiInternalLayout === "aligned");
+    check("A real KPI icon+color on card 0 is kept", compressed.kpiAppearance?.[0]?.icon === "inbox" && compressed.kpiAppearance?.[0]?.iconColor === "gold");
+    check("Out-of-range KPI appearance index 99 is dropped", compressed.kpiAppearance?.[99] === undefined);
+    check("Unknown icon/color on card 1 is dropped", compressed.kpiAppearance?.[1] === undefined);
+    check("Needs Attention region paddingY 0 is kept", compressed.regions?.attention?.paddingY === 0);
+    check("Invented region id is dropped -- never stored", compressed.regions?.invented === undefined);
+    check("Today icon/color from the curated palette is kept", compressed.regions?.today?.icon === "sparkles" && compressed.regions?.today?.iconColor === "green");
+
+    const requestsForged = sanitizeFounderPageTokens("requests", { regions: { attention: { paddingY: 4 } } });
+    check("Dashboard-only region id 'attention' is rejected on Requests", requestsForged.regions === undefined);
+
+    check("Dashboard default paddingY is 32 (includes former Card chrome) when nothing is saved", resolveKpiPaddingY("dashboard", undefined) === 32);
+    check("Legacy saved kpi.padding=8 is applied as-is (no chrome added back) so prior shrink attempts actually compress", resolveKpiPaddingY("dashboard", { padding: 8 }) === 8);
+    check("Vertical padding min is 0, not the old conservative 8", KPI_TOKEN_BOUNDS.paddingY.min === 0);
   }
 
   const founderToken = await makeSession(founder.id);
   const ownerToken = await makeSession(owner.id);
   const memberToken = await makeSession(member.id);
 
+  const REGION_MARKERS = {
+    "/dashboard": ["kpi", "attention", "today", "actions", "recent"],
+    "/requests": ["kpi", "tabs", "table", "calendar", "today", "actions"],
+    "/customers": ["table", "overview", "activity", "services"],
+    "/estimates": ["kpi", "tabs", "table"],
+    "/jobs": ["kpi", "calendar", "tabs", "table", "details"],
+    "/invoices": ["kpi", "tabs", "table"],
+  };
+
   console.log("\nTEST 2 -- The founder sees the trigger on all 6 supported pages");
   for (const path of PAGES) {
     const { status, body } = await fetchPage(founderToken, founderMembership.businessId, path);
     check(`${path}: 200 OK`, status === 200);
     check(`${path}: contains "${TRIGGER_TEXT}"`, body.includes(TRIGGER_TEXT));
+    for (const regionId of REGION_MARKERS[path]) {
+      check(`${path}: founder markup includes data-founder-region="${regionId}"`, body.includes(`data-founder-region="${regionId}"`));
+    }
   }
 
   console.log("\nTEST 3 -- Subscriber OWNER never sees the trigger, on any of the 6 pages (direct URL)");
@@ -194,6 +273,7 @@ async function main() {
     const { status, body } = await fetchPage(ownerToken, ownerMembership.businessId, path);
     check(`${path}: 200 OK (page still works)`, status === 200);
     check(`${path}: does NOT contain "${TRIGGER_TEXT}"`, !body.includes(TRIGGER_TEXT));
+    check(`${path}: does NOT contain founder region markers`, !body.includes("data-founder-region"));
   }
 
   console.log("\nTEST 4 -- Subscriber MEMBER never sees the trigger, on any page they can reach");

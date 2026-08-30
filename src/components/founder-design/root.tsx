@@ -13,11 +13,15 @@ import {
   tokensToCssVars,
   type FounderPageKey,
   type FounderPageTokens,
+  type KpiAppearanceTokens,
   type KpiCardWidthValue,
+  type KpiInternalLayout,
   type KpiLayout,
   type KpiTokenKey,
+  type RegionTokenKey,
   type TableDensity,
 } from "@/lib/founder-design";
+import { defaultFounderRegionId } from "@/lib/founder-regions";
 
 /**
  * The single entry point every one of the 6 approved operating pages
@@ -70,6 +74,7 @@ function FounderDesignActive({
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [hoveredCardIndex, setHoveredCardIndex] = useState<number | null>(null);
+  const [selectedRegionId, setSelectedRegionId] = useState<string>(() => defaultFounderRegionId(pageKey));
 
   const isDirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(saved), [draft, saved]);
 
@@ -89,6 +94,39 @@ function FounderDesignActive({
       kpiWidth: {
         ...prev.kpiWidth,
         cardWidths: { ...prev.kpiWidth?.cardWidths, [index]: value },
+      },
+    }));
+  }, []);
+  const setKpiInternalLayout = useCallback((layout: KpiInternalLayout) => {
+    setDraft((prev) => ({ ...prev, kpiInternalLayout: layout }));
+  }, []);
+  const setKpiAppearance = useCallback((index: number, patch: KpiAppearanceTokens) => {
+    setDraft((prev) => {
+      const next = { ...prev.kpiAppearance?.[index], ...patch };
+      if (!("icon" in patch) || !patch.icon) {
+        if ("icon" in patch) delete next.icon;
+      }
+      return {
+        ...prev,
+        kpiAppearance: { ...prev.kpiAppearance, [index]: next },
+      };
+    });
+  }, []);
+  const setRegionToken = useCallback((regionId: string, key: RegionTokenKey, value: number) => {
+    setDraft((prev) => ({
+      ...prev,
+      regions: {
+        ...prev.regions,
+        [regionId]: { ...prev.regions?.[regionId], [key]: value },
+      },
+    }));
+  }, []);
+  const setRegionAppearance = useCallback((regionId: string, patch: Pick<KpiAppearanceTokens, "icon" | "iconColor">) => {
+    setDraft((prev) => ({
+      ...prev,
+      regions: {
+        ...prev.regions,
+        [regionId]: { ...prev.regions?.[regionId], ...patch },
       },
     }));
   }, []);
@@ -169,10 +207,16 @@ function FounderDesignActive({
     setOpen,
     hoveredCardIndex,
     setHoveredCardIndex,
+    selectedRegionId,
+    setSelectedRegionId,
     setKpiToken,
     setKpiLayout,
     setKpiGroupWidth,
     setKpiCardWidth,
+    setKpiInternalLayout,
+    setKpiAppearance,
+    setRegionToken,
+    setRegionAppearance,
     setTableDensity,
     setTableCellPx,
     setTableFontSize,

@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { telHref } from "@/lib/directions";
+import { FounderRegion } from "@/components/founder-design/region";
 import { cn } from "@/lib/utils";
 
 function initials(name: string) {
@@ -60,10 +61,12 @@ export function RequestsWorkspace({ requests }: { requests: RequestListItem[] })
 
   if (requests.length === 0) {
     return (
-      <EmptyState
-        title="No requests match your filters"
-        description="Try a different status, service, or search term. New public intake submissions for this workspace will also appear here."
-      />
+      <FounderRegion id="table">
+        <EmptyState
+          title="No requests match your filters"
+          description="Try a different status, service, or search term. New public intake submissions for this workspace will also appear here."
+        />
+      </FounderRegion>
     );
   }
 
@@ -74,16 +77,18 @@ export function RequestsWorkspace({ requests }: { requests: RequestListItem[] })
       {/* Dense table at sm+ widths; a stacked, tap-friendly card list below
           that instead of forcing the same table into a narrow viewport
           (avoids horizontal scroll and tiny cramped cells on a phone). */}
+      <FounderRegion id="table">
       <div className="hidden sm:block">
         <RequestsTable requests={requests} selectedId={selectedId} onSelect={selectRequest} />
       </div>
       <div className="space-y-2 sm:hidden">
         <RequestsMobileList requests={requests} selectedId={selectedId} onSelect={selectRequest} />
       </div>
+      </FounderRegion>
 
-      <div className="hidden lg:block">
+      <FounderRegion id="details" className="hidden lg:block">
         <RequestDetailsPanel request={selected} />
-      </div>
+      </FounderRegion>
 
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="bottom" className="max-h-[85vh] overflow-y-auto lg:hidden">

@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { ComponentType, ReactNode } from "react";
-import { CalendarClock, CalendarDays, Inbox, Sparkles, TrendingUp, Wrench } from "lucide-react";
+import { Inbox, Sparkles, TrendingUp, Wrench } from "lucide-react";
+import { FounderRegion } from "@/components/founder-design/region";
+import { FounderRegionIcon } from "@/components/founder-design/region-icon";
+import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
@@ -206,6 +209,7 @@ export default async function RequestsPage({
       label: "New Requests",
       value: newCount,
       icon: Inbox,
+      defaultIconId: "inbox" as const,
       href: "/requests?status=new",
       accent: "blue",
       sublabel:
@@ -215,6 +219,7 @@ export default async function RequestsPage({
       label: "Estimate Sent",
       value: estimateSentCount,
       icon: TrendingUp,
+      defaultIconId: "trending-up" as const,
       href: "/requests?status=estimate-sent",
       accent: "orange",
       sublabel:
@@ -226,6 +231,7 @@ export default async function RequestsPage({
       label: "Converted",
       value: convertedCount,
       icon: Wrench,
+      defaultIconId: "wrench" as const,
       href: "/requests?status=converted",
       accent: "purple",
       sublabel:
@@ -237,6 +243,7 @@ export default async function RequestsPage({
       label: "New This Week",
       value: newThisWeekCount,
       icon: Sparkles,
+      defaultIconId: "sparkles" as const,
       href: "/requests",
       accent: "teal",
       sublabel: `Since ${formatDate(sevenDaysAgo)}`,
@@ -294,12 +301,27 @@ export default async function RequestsPage({
         savedTokens={founderTokens}
         kpiCardLabels={kpis.map((kpi) => kpi.label)}
       >
+      <FounderRegion id="kpi">
       <KpiCardsLayout gridClassName="sm:grid-cols-2 lg:grid-cols-4" defaultGapPx={20}>
-        {kpis.map((kpi) => (
-          <KpiCard key={kpi.label} {...kpi} />
+        {kpis.map((kpi, index) => (
+          <TunableKpiCard
+            key={kpi.label}
+            index={index}
+            label={kpi.label}
+            value={kpi.value}
+            sublabel={kpi.sublabel}
+            href={kpi.href}
+            icon={kpi.icon}
+            defaultIconId={kpi.defaultIconId}
+            accentClassName={KPI_ACCENT_CLASSES[kpi.accent]}
+            variant="workspace"
+            pageKey="requests"
+          />
         ))}
       </KpiCardsLayout>
+      </FounderRegion>
 
+      <FounderRegion id="tabs" className="tbbt-founder-box">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3">
         <nav className="flex flex-wrap items-center gap-1.5 overflow-x-auto">
           {tabs.map((tabItem) => {
@@ -337,15 +359,17 @@ export default async function RequestsPage({
           <ServiceFilterSelect value={serviceId ?? "all"} options={services} />
         ) : null}
       </div>
+      </FounderRegion>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_250px]">
         <RequestsWorkspace requests={requests} />
 
         <div className="space-y-5">
-          <div className="space-y-3 rounded-xl border border-border/70 bg-card/40 p-4">
+          <FounderRegion id="calendar">
+          <div className="tbbt-founder-box space-y-3 rounded-xl border border-border/70 bg-card/40 p-4">
             <div className="flex items-center justify-between">
               <p className="flex items-center gap-2 text-base font-semibold text-foreground">
-                <CalendarDays className="size-4.5 text-muted-foreground" />
+                <FounderRegionIcon regionId="calendar" defaultIcon="calendar-days" className="size-4.5 text-muted-foreground" />
                 Schedule &amp; Calendar
               </p>
               <Link
@@ -364,11 +388,13 @@ export default async function RequestsPage({
               conflicts={monthConflicts}
             />
           </div>
+          </FounderRegion>
 
+          <FounderRegion id="today">
           <Card className="border-border/70">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
-                <CalendarClock className="size-4.5 text-muted-foreground" />
+                <FounderRegionIcon regionId="today" defaultIcon="calendar-clock" className="size-4.5 text-muted-foreground" />
                 Today
               </CardTitle>
               <CardDescription>Scheduled work for {formatDate(today)}.</CardDescription>
@@ -400,11 +426,13 @@ export default async function RequestsPage({
               </Button>
             </CardContent>
           </Card>
+          </FounderRegion>
 
+          <FounderRegion id="actions">
           <Card className="border-border/70">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
-                <Sparkles className="size-4.5 text-muted-foreground" />
+                <FounderRegionIcon regionId="actions" defaultIcon="sparkles" className="size-4.5 text-muted-foreground" />
                 Quick actions
               </CardTitle>
             </CardHeader>
@@ -420,6 +448,7 @@ export default async function RequestsPage({
               </Button>
             </CardContent>
           </Card>
+          </FounderRegion>
         </div>
       </div>
       </FounderDesignRoot>
@@ -443,46 +472,5 @@ type KpiCardProps = {
   href: string;
   icon: ComponentType<{ className?: string }>;
   accent: KpiAccent;
+  defaultIconId: "inbox" | "trending-up" | "wrench" | "sparkles";
 };
-
-function KpiCard({ label, value, sublabel, href, icon: Icon, accent }: KpiCardProps) {
-  return (
-    <Link href={href} className="block">
-      <Card
-        className="h-full border-border/70 shadow-sm transition-colors hover:border-primary/40 hover:bg-accent/20"
-        style={{ minHeight: "var(--tbbt-kpi-min-height, 0px)" }}
-      >
-        <CardContent className="flex items-center gap-4" style={{ padding: "var(--tbbt-kpi-padding, 20px)" }}>
-          <span
-            className={cn(
-              "flex shrink-0 items-center justify-center rounded-full",
-              KPI_ACCENT_CLASSES[accent],
-            )}
-            style={{ width: "var(--tbbt-kpi-icon-size, 48px)", height: "var(--tbbt-kpi-icon-size, 48px)" }}
-          >
-            <Icon className="size-[calc(var(--tbbt-kpi-icon-size,48px)*0.42)]" />
-          </span>
-          <div className="min-w-0">
-            <p
-              className="font-semibold tracking-wider text-muted-foreground uppercase"
-              style={{ fontSize: "var(--tbbt-kpi-label-font, 11px)" }}
-            >
-              {label}
-            </p>
-            <p
-              className="mt-1 font-bold tabular-nums tracking-tight text-foreground"
-              style={{ fontSize: "var(--tbbt-kpi-number-font, 30px)" }}
-            >
-              {value}
-            </p>
-            {sublabel ? (
-              <p className="mt-0.5 truncate text-muted-foreground" style={{ fontSize: "var(--tbbt-kpi-supporting-font, 12px)" }}>
-                {sublabel}
-              </p>
-            ) : null}
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}

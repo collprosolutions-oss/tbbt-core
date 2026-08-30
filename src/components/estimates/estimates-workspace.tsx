@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { telHref } from "@/lib/directions";
+import { FounderRegion } from "@/components/founder-design/region";
 import { cn } from "@/lib/utils";
 
 export type EstimateLineItem = {
@@ -93,25 +94,29 @@ export function EstimatesWorkspace({ estimates }: { estimates: EstimateListItem[
 
   if (estimates.length === 0) {
     return (
-      <EmptyState
-        title="No estimates match your filters"
-        description="Try a different status, customer, service, or search term."
-      />
+      <FounderRegion id="table">
+        <EmptyState
+          title="No estimates match your filters"
+          description="Try a different status, customer, service, or search term."
+        />
+      </FounderRegion>
     );
   }
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,350px)]">
+      <FounderRegion id="table">
       <div className="hidden sm:block">
         <EstimatesTable estimates={estimates} selectedId={selectedId} onSelect={selectEstimate} />
       </div>
       <div className="space-y-2 sm:hidden">
         <EstimatesMobileList estimates={estimates} selectedId={selectedId} onSelect={selectEstimate} />
       </div>
+      </FounderRegion>
 
-      <div className="hidden lg:block">
+      <FounderRegion id="details" className="hidden lg:block">
         <EstimateDetailsPanel estimate={selected} />
-      </div>
+      </FounderRegion>
 
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="bottom" className="max-h-[85vh] overflow-y-auto lg:hidden">

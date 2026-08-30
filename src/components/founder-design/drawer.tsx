@@ -19,9 +19,11 @@ import {
   KPI_TOKEN_LABELS,
   KPI_WIDTH_BOUNDS,
   PAGE_HAS_PANEL,
-  PAGE_HAS_TABLE,
   PANEL_WIDTH_BOUNDS,
   PANEL_WIDTH_DEFAULTS,
+  REGION_TOKEN_BOUNDS,
+  REGION_TOKEN_DEFAULTS,
+  REGION_TOKEN_LABELS,
   SECTION_GAP_BOUNDS,
   SECTION_GAP_DEFAULT,
   TABLE_CELL_PX_BOUNDS,
@@ -31,9 +33,19 @@ import {
   TABLE_FONT_SIZE_DEFAULT,
   TABLE_HEADER_FONT_SIZE_BOUNDS,
   TABLE_HEADER_FONT_SIZE_DEFAULT,
+  resolveKpiPaddingX,
+  resolveKpiPaddingY,
   type KpiTokenKey,
+  type RegionTokenKey,
   type TableDensity,
 } from "@/lib/founder-design";
+import {
+  CURATED_ICON_IDS,
+  CURATED_ICON_LABELS,
+  ICON_COLORS,
+  ICON_COLOR_LABELS,
+} from "@/lib/founder-icons";
+import { getFounderRegion, getFounderRegions } from "@/lib/founder-regions";
 import { cn } from "@/lib/utils";
 
 function ResetIcon({ onClick, label }: { onClick: () => void; label: string }) {
@@ -59,6 +71,7 @@ function Stepper({
   onChange,
   onReset,
   unit = "px",
+  format,
 }: {
   label: string;
   value: number;
@@ -68,6 +81,7 @@ function Stepper({
   onChange: (value: number) => void;
   onReset?: () => void;
   unit?: string;
+  format?: (value: number) => string;
 }) {
   return (
     <div className="flex items-center justify-between gap-2">
@@ -84,8 +98,7 @@ function Stepper({
           <Minus className="size-3.5" />
         </Button>
         <span className="w-14 text-center text-sm tabular-nums text-foreground">
-          {value}
-          {unit}
+          {format ? format(value) : `${value}${unit}`}
         </span>
         <Button
           type="button"
@@ -103,7 +116,6 @@ function Stepper({
   );
 }
 
-/** Card-width stepper with an "Auto" state below the minimum (0 = Auto = stays flexible/fills remaining space). */
 function CardWidthStepper({
   label,
   value,
@@ -183,22 +195,60 @@ function CollapsibleSection({
   );
 }
 
+function NativeSelect({
+  label,
+  value,
+  onChange,
+  onReset,
+  children,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onReset?: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <label className="min-w-0 flex-1 truncate text-sm text-foreground">{label}</label>
+      <div className="flex items-center gap-1.5">
+        <select
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-8 max-w-40 rounded-md border border-input bg-background px-2 text-xs"
+        >
+          {children}
+        </select>
+        {onReset ? <ResetIcon onClick={onReset} label={`Reset ${label}`} /> : <div className="size-6" />}
+      </div>
+    </div>
+  );
+}
+
 export function FounderDesignDrawer() {
   const founderDesign = useFounderDesign();
   const [confirmResetPage, setConfirmResetPage] = useState(false);
 
   if (!founderDesign) return null;
+  const design = founderDesign;
 
-  const { pageKey, draftTokens, kpiCardLabels, isDirty, open, setOpen, saving } = founderDesign;
+  const { pageKey, draftTokens, kpiCardLabels, isDirty, open, setOpen, saving, selectedRegionId, setSelectedRegionId } =
+    design;
   const pageLabel = FOUNDER_PAGE_LABELS[pageKey];
+  const regions = getFounderRegions(pageKey);
+  const selected = getFounderRegion(pageKey, selectedRegionId) ?? regions[0];
   const kpiDefaults = KPI_DEFAULTS[pageKey];
-  const hasTable = PAGE_HAS_TABLE[pageKey];
-  const hasPanel = PAGE_HAS_PANEL[pageKey];
   const panelDefault = PANEL_WIDTH_DEFAULTS[pageKey] ?? PANEL_WIDTH_BOUNDS.min;
   const tableCellPxDefault = TABLE_CELL_PX_DEFAULTS[pageKey];
 
   function kpiValue(key: KpiTokenKey) {
+    if (key === "paddingY") return resolveKpiPaddingY(pageKey, draftTokens.kpi);
+    if (key === "paddingX") return resolveKpiPaddingX(pageKey, draftTokens.kpi);
     return draftTokens.kpi?.[key] ?? kpiDefaults[key];
+  }
+
+  function regionValue(key: RegionTokenKey) {
+    return draftTokens.regions?.[selected.id]?.[key] ?? REGION_TOKEN_DEFAULTS[key];
   }
 
   const layout = draftTokens.kpiWidth?.layout ?? "equal";
@@ -209,6 +259,7 @@ export function FounderDesignDrawer() {
   const tableCellPx = draftTokens.tableCellPx ?? tableCellPxDefault;
   const tableFontSize = draftTokens.tableFontSize ?? TABLE_FONT_SIZE_DEFAULT;
   const tableHeaderFontSize = draftTokens.tableHeaderFontSize ?? TABLE_HEADER_FONT_SIZE_DEFAULT;
+  const internalLayout = draftTokens.kpiInternalLayout ?? "current";
 
   function cardWidthValue(index: number): number {
     const override = draftTokens.kpiWidth?.cardWidths?.[index];
@@ -216,6 +267,17 @@ export function FounderDesignDrawer() {
     if (typeof override === "number") return override;
     return 0;
   }
+
+  function setRegion(key: RegionTokenKey, value: number) {
+    design.setRegionToken(selected.id, key, value);
+  }
+
+  const showKpi = selected.kind === "kpi";
+  const showTable = selected.kind === "table";
+  const showPanel = selected.kind === "panel";
+  const showTabs = selected.kind === "tabs";
+  const showPage = selected.kind === "page";
+  const showWidth = Boolean(selected.hasWidth) && (PAGE_HAS_PANEL[pageKey] || selected.hasWidth);
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -228,130 +290,445 @@ export function FounderDesignDrawer() {
         </SheetHeader>
 
         <div className="flex-1 overflow-y-auto px-4">
-          <CollapsibleSection
-            title="KPI Width / Layout"
-            defaultOpen
-            onReset={() => founderDesign.resetFields(["kpiWidth"])}
-          >
-            <div className="flex gap-1.5 rounded-lg border border-border/70 p-1">
-              {(["equal", "custom"] as const).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  onClick={() => founderDesign.setKpiLayout(option)}
-                  className={cn(
-                    "flex-1 rounded-md px-2 py-1.5 text-xs font-medium capitalize transition-colors",
-                    layout === option
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                  )}
-                >
-                  {option === "equal" ? "Equal Width" : "Custom Widths"}
-                </button>
+          <div className="border-b border-border/60 pb-3">
+            <label htmlFor="founder-editing-region" className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+              Editing
+            </label>
+            <select
+              id="founder-editing-region"
+              value={selected.id}
+              onChange={(event) => setSelectedRegionId(event.target.value)}
+              className="mt-1.5 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+            >
+              {regions.map((region) => (
+                <option key={region.id} value={region.id}>
+                  {region.label}
+                </option>
               ))}
-            </div>
+            </select>
+          </div>
 
-            {layout === "custom" ? (
-              <>
-                <div className="space-y-1.5 rounded-lg bg-muted/30 p-2.5">
-                  <p className="text-xs font-medium text-muted-foreground">Group width (default for any card below without its own override)</p>
+          {showKpi ? (
+            <>
+              <CollapsibleSection
+                title="Size & Padding"
+                defaultOpen
+                onReset={() =>
+                  founderDesign.resetFields(["kpi.minHeight", "kpi.padding", "kpi.paddingY", "kpi.paddingX"])
+                }
+              >
+                <Stepper
+                  label={KPI_TOKEN_LABELS.minHeight}
+                  value={kpiValue("minHeight")}
+                  min={KPI_TOKEN_BOUNDS.minHeight.min}
+                  max={KPI_TOKEN_BOUNDS.minHeight.max}
+                  step={KPI_TOKEN_BOUNDS.minHeight.step}
+                  onChange={(value) => founderDesign.setKpiToken("minHeight", value)}
+                  onReset={() => founderDesign.resetFields(["kpi.minHeight"])}
+                />
+                <p className="text-xs text-muted-foreground">
+                  0px means no minimum — cards use natural height and grow with content.
+                </p>
+                <Stepper
+                  label={KPI_TOKEN_LABELS.paddingY}
+                  value={kpiValue("paddingY")}
+                  min={KPI_TOKEN_BOUNDS.paddingY.min}
+                  max={KPI_TOKEN_BOUNDS.paddingY.max}
+                  step={KPI_TOKEN_BOUNDS.paddingY.step}
+                  onChange={(value) => founderDesign.setKpiToken("paddingY", value)}
+                  onReset={() => founderDesign.resetFields(["kpi.paddingY", "kpi.padding"])}
+                />
+                <Stepper
+                  label={KPI_TOKEN_LABELS.paddingX}
+                  value={kpiValue("paddingX")}
+                  min={KPI_TOKEN_BOUNDS.paddingX.min}
+                  max={KPI_TOKEN_BOUNDS.paddingX.max}
+                  step={KPI_TOKEN_BOUNDS.paddingX.step}
+                  onChange={(value) => founderDesign.setKpiToken("paddingX", value)}
+                  onReset={() => founderDesign.resetFields(["kpi.paddingX"])}
+                />
+              </CollapsibleSection>
+
+              <CollapsibleSection
+                title="Internal Spacing"
+                onReset={() => founderDesign.resetFields(["kpi.internalGap", "kpi.gap", "kpi.lineHeight"])}
+              >
+                <Stepper
+                  label={KPI_TOKEN_LABELS.internalGap}
+                  value={kpiValue("internalGap")}
+                  min={KPI_TOKEN_BOUNDS.internalGap.min}
+                  max={KPI_TOKEN_BOUNDS.internalGap.max}
+                  step={KPI_TOKEN_BOUNDS.internalGap.step}
+                  onChange={(value) => founderDesign.setKpiToken("internalGap", value)}
+                  onReset={() => founderDesign.resetFields(["kpi.internalGap"])}
+                />
+                <Stepper
+                  label={KPI_TOKEN_LABELS.gap}
+                  value={kpiValue("gap")}
+                  min={KPI_TOKEN_BOUNDS.gap.min}
+                  max={KPI_TOKEN_BOUNDS.gap.max}
+                  step={KPI_TOKEN_BOUNDS.gap.step}
+                  onChange={(value) => founderDesign.setKpiToken("gap", value)}
+                  onReset={() => founderDesign.resetFields(["kpi.gap"])}
+                />
+                <Stepper
+                  label={KPI_TOKEN_LABELS.lineHeight}
+                  value={kpiValue("lineHeight")}
+                  min={KPI_TOKEN_BOUNDS.lineHeight.min}
+                  max={KPI_TOKEN_BOUNDS.lineHeight.max}
+                  step={KPI_TOKEN_BOUNDS.lineHeight.step}
+                  onChange={(value) => founderDesign.setKpiToken("lineHeight", value)}
+                  onReset={() => founderDesign.resetFields(["kpi.lineHeight"])}
+                  format={(value) => (value / 100).toFixed(2)}
+                  unit=""
+                />
+              </CollapsibleSection>
+
+              <CollapsibleSection
+                title="Text"
+                onReset={() =>
+                  founderDesign.resetFields([
+                    "kpi.labelFontSize",
+                    "kpi.numberFontSize",
+                    "kpi.supportingFontSize",
+                    ...(selected.hasTitle ? [`regions.${selected.id}.titleSize`] : []),
+                  ])
+                }
+              >
+                {selected.hasTitle ? (
                   <Stepper
-                    label="Group Width"
-                    value={groupWidth}
-                    min={KPI_WIDTH_BOUNDS.min}
-                    max={KPI_WIDTH_BOUNDS.max}
-                    step={KPI_WIDTH_BOUNDS.step}
-                    onChange={founderDesign.setKpiGroupWidth}
-                    onReset={() => founderDesign.resetFields(["kpiWidth.groupWidth"])}
+                    label={REGION_TOKEN_LABELS.titleSize}
+                    value={regionValue("titleSize")}
+                    min={REGION_TOKEN_BOUNDS.titleSize.min}
+                    max={REGION_TOKEN_BOUNDS.titleSize.max}
+                    step={REGION_TOKEN_BOUNDS.titleSize.step}
+                    onChange={(value) => setRegion("titleSize", value)}
+                    onReset={() => founderDesign.resetFields([`regions.${selected.id}.titleSize`])}
                   />
-                </div>
+                ) : null}
+                {(["labelFontSize", "numberFontSize", "supportingFontSize"] as const).map((key) => (
+                  <Stepper
+                    key={key}
+                    label={KPI_TOKEN_LABELS[key]}
+                    value={kpiValue(key)}
+                    min={KPI_TOKEN_BOUNDS[key].min}
+                    max={KPI_TOKEN_BOUNDS[key].max}
+                    step={KPI_TOKEN_BOUNDS[key].step}
+                    onChange={(value) => founderDesign.setKpiToken(key, value)}
+                    onReset={() => founderDesign.resetFields([`kpi.${key}`])}
+                  />
+                ))}
+              </CollapsibleSection>
 
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground">Individual cards (overrides the group width above; &ldquo;Auto&rdquo; stays flexible/fills remaining space)</p>
-                  {kpiCardLabels.map((label, index) => (
-                    <div
-                      key={`${label}-${index}`}
-                      onMouseEnter={() => founderDesign.setHoveredCardIndex(index)}
-                      onMouseLeave={() => founderDesign.setHoveredCardIndex(null)}
+              <CollapsibleSection
+                title="Icon"
+                onReset={() => founderDesign.resetFields(["kpi.iconSize", "kpiAppearance"])}
+              >
+                <Stepper
+                  label={KPI_TOKEN_LABELS.iconSize}
+                  value={kpiValue("iconSize")}
+                  min={KPI_TOKEN_BOUNDS.iconSize.min}
+                  max={KPI_TOKEN_BOUNDS.iconSize.max}
+                  step={KPI_TOKEN_BOUNDS.iconSize.step}
+                  onChange={(value) => founderDesign.setKpiToken("iconSize", value)}
+                  onReset={() => founderDesign.resetFields(["kpi.iconSize"])}
+                />
+                {kpiCardLabels.map((label, index) => (
+                  <div
+                    key={`${label}-${index}`}
+                    onMouseEnter={() => founderDesign.setHoveredCardIndex(index)}
+                    onMouseLeave={() => founderDesign.setHoveredCardIndex(null)}
+                    className={cn(
+                      "space-y-1.5 rounded-md px-1.5 py-1",
+                      founderDesign.hoveredCardIndex === index && "bg-primary/10",
+                    )}
+                  >
+                    <p className="text-xs font-medium text-muted-foreground">{label}</p>
+                    <NativeSelect
+                      label="Icon"
+                      value={draftTokens.kpiAppearance?.[index]?.icon ?? ""}
+                      onChange={(value) =>
+                        founderDesign.setKpiAppearance(index, { icon: value ? (value as never) : undefined })
+                      }
+                      onReset={() => founderDesign.resetFields([`kpiAppearance.${index}.icon`])}
+                    >
+                      <option value="">Current (default)</option>
+                      {CURATED_ICON_IDS.map((id) => (
+                        <option key={id} value={id}>
+                          {CURATED_ICON_LABELS[id]}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                    <NativeSelect
+                      label="Icon color"
+                      value={draftTokens.kpiAppearance?.[index]?.iconColor ?? "default"}
+                      onChange={(value) => founderDesign.setKpiAppearance(index, { iconColor: value as never })}
+                      onReset={() => founderDesign.resetFields([`kpiAppearance.${index}.iconColor`])}
+                    >
+                      {ICON_COLORS.map((color) => (
+                        <option key={color} value={color}>
+                          {ICON_COLOR_LABELS[color]}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                  </div>
+                ))}
+              </CollapsibleSection>
+
+              <CollapsibleSection title="Layout" onReset={() => founderDesign.resetFields(["kpiWidth", "kpiInternalLayout"])}>
+                <p className="text-xs font-medium text-muted-foreground">KPI Internal Layout</p>
+                <div className="flex gap-1.5 rounded-lg border border-border/70 p-1">
+                  {(["current", "aligned"] as const).map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => founderDesign.setKpiInternalLayout(option)}
                       className={cn(
-                        "rounded-md px-1.5 py-0.5 transition-colors",
-                        founderDesign.hoveredCardIndex === index && "bg-primary/10",
+                        "flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                        internalLayout === option
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:bg-accent hover:text-foreground",
                       )}
                     >
-                      <CardWidthStepper
-                        label={label}
-                        value={cardWidthValue(index)}
-                        onChange={(value) => founderDesign.setKpiCardWidth(index, value === 0 ? "auto" : value)}
-                        onReset={() => founderDesign.resetFields([`kpiWidth.cardWidths.${index}`])}
-                      />
-                    </div>
+                      {option === "current" ? "Current" : "Compact / Aligned"}
+                    </button>
                   ))}
                 </div>
-              </>
-            ) : null}
-          </CollapsibleSection>
 
-          <CollapsibleSection
-            title="Card Height & Padding"
-            onReset={() => founderDesign.resetFields(["kpi.minHeight", "kpi.padding"])}
-          >
-            <Stepper
-              label={KPI_TOKEN_LABELS.minHeight}
-              value={kpiValue("minHeight")}
-              min={KPI_TOKEN_BOUNDS.minHeight.min}
-              max={KPI_TOKEN_BOUNDS.minHeight.max}
-              step={KPI_TOKEN_BOUNDS.minHeight.step}
-              onChange={(value) => founderDesign.setKpiToken("minHeight", value)}
-              onReset={() => founderDesign.resetFields(["kpi.minHeight"])}
-            />
-            <p className="text-xs text-muted-foreground">0px means &ldquo;no minimum -- natural height&rdquo; (today&apos;s behavior).</p>
-            <Stepper
-              label={KPI_TOKEN_LABELS.padding}
-              value={kpiValue("padding")}
-              min={KPI_TOKEN_BOUNDS.padding.min}
-              max={KPI_TOKEN_BOUNDS.padding.max}
-              step={KPI_TOKEN_BOUNDS.padding.step}
-              onChange={(value) => founderDesign.setKpiToken("padding", value)}
-              onReset={() => founderDesign.resetFields(["kpi.padding"])}
-            />
-          </CollapsibleSection>
+                <p className="pt-1 text-xs font-medium text-muted-foreground">Card Width</p>
+                <div className="flex gap-1.5 rounded-lg border border-border/70 p-1">
+                  {(["equal", "custom"] as const).map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => founderDesign.setKpiLayout(option)}
+                      className={cn(
+                        "flex-1 rounded-md px-2 py-1.5 text-xs font-medium capitalize transition-colors",
+                        layout === option
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                      )}
+                    >
+                      {option === "equal" ? "Equal Width" : "Custom Widths"}
+                    </button>
+                  ))}
+                </div>
 
-          <CollapsibleSection
-            title="Icon & Text Sizes"
-            onReset={() =>
-              founderDesign.resetFields(["kpi.iconSize", "kpi.labelFontSize", "kpi.numberFontSize", "kpi.supportingFontSize"])
-            }
-          >
-            {(["iconSize", "labelFontSize", "numberFontSize", "supportingFontSize"] as const).map((key) => (
-              <Stepper
-                key={key}
-                label={KPI_TOKEN_LABELS[key]}
-                value={kpiValue(key)}
-                min={KPI_TOKEN_BOUNDS[key].min}
-                max={KPI_TOKEN_BOUNDS[key].max}
-                step={KPI_TOKEN_BOUNDS[key].step}
-                onChange={(value) => founderDesign.setKpiToken(key, value)}
-                onReset={() => founderDesign.resetFields([`kpi.${key}`])}
-              />
-            ))}
-          </CollapsibleSection>
+                {layout === "custom" ? (
+                  <>
+                    <div className="space-y-1.5 rounded-lg bg-muted/30 p-2.5">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        Group width (default for any card below without its own override)
+                      </p>
+                      <Stepper
+                        label="Group Width"
+                        value={groupWidth}
+                        min={KPI_WIDTH_BOUNDS.min}
+                        max={KPI_WIDTH_BOUNDS.max}
+                        step={KPI_WIDTH_BOUNDS.step}
+                        onChange={founderDesign.setKpiGroupWidth}
+                        onReset={() => founderDesign.resetFields(["kpiWidth.groupWidth"])}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        Individual cards (overrides the group width above; “Auto” stays flexible)
+                      </p>
+                      {kpiCardLabels.map((label, index) => (
+                        <div
+                          key={`${label}-${index}`}
+                          onMouseEnter={() => founderDesign.setHoveredCardIndex(index)}
+                          onMouseLeave={() => founderDesign.setHoveredCardIndex(null)}
+                          className={cn(
+                            "rounded-md px-1.5 py-0.5 transition-colors",
+                            founderDesign.hoveredCardIndex === index && "bg-primary/10",
+                          )}
+                        >
+                          <CardWidthStepper
+                            label={label}
+                            value={cardWidthValue(index)}
+                            onChange={(value) => founderDesign.setKpiCardWidth(index, value === 0 ? "auto" : value)}
+                            onReset={() => founderDesign.resetFields([`kpiWidth.cardWidths.${index}`])}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+              </CollapsibleSection>
+            </>
+          ) : null}
 
-          <CollapsibleSection title="Card Gap / Spacing" onReset={() => founderDesign.resetFields(["kpi.gap"])}>
-            <Stepper
-              label={KPI_TOKEN_LABELS.gap}
-              value={kpiValue("gap")}
-              min={KPI_TOKEN_BOUNDS.gap.min}
-              max={KPI_TOKEN_BOUNDS.gap.max}
-              step={KPI_TOKEN_BOUNDS.gap.step}
-              onChange={(value) => founderDesign.setKpiToken("gap", value)}
-              onReset={() => founderDesign.resetFields(["kpi.gap"])}
-            />
-          </CollapsibleSection>
+          {showPanel || showTabs ? (
+            <>
+              <CollapsibleSection
+                title="Size & Padding"
+                defaultOpen
+                onReset={() =>
+                  founderDesign.resetFields([
+                    `regions.${selected.id}.minHeight`,
+                    `regions.${selected.id}.paddingY`,
+                    `regions.${selected.id}.paddingX`,
+                    `regions.${selected.id}.gap`,
+                  ])
+                }
+              >
+                <Stepper
+                  label={REGION_TOKEN_LABELS.minHeight}
+                  value={regionValue("minHeight")}
+                  min={REGION_TOKEN_BOUNDS.minHeight.min}
+                  max={REGION_TOKEN_BOUNDS.minHeight.max}
+                  step={REGION_TOKEN_BOUNDS.minHeight.step}
+                  onChange={(value) => setRegion("minHeight", value)}
+                  onReset={() => founderDesign.resetFields([`regions.${selected.id}.minHeight`])}
+                />
+                <p className="text-xs text-muted-foreground">
+                  0px means natural height — the box stays compact and still grows when content needs room.
+                </p>
+                <Stepper
+                  label={REGION_TOKEN_LABELS.paddingY}
+                  value={regionValue("paddingY")}
+                  min={REGION_TOKEN_BOUNDS.paddingY.min}
+                  max={REGION_TOKEN_BOUNDS.paddingY.max}
+                  step={REGION_TOKEN_BOUNDS.paddingY.step}
+                  onChange={(value) => setRegion("paddingY", value)}
+                  onReset={() => founderDesign.resetFields([`regions.${selected.id}.paddingY`])}
+                />
+                <Stepper
+                  label={REGION_TOKEN_LABELS.paddingX}
+                  value={regionValue("paddingX")}
+                  min={REGION_TOKEN_BOUNDS.paddingX.min}
+                  max={REGION_TOKEN_BOUNDS.paddingX.max}
+                  step={REGION_TOKEN_BOUNDS.paddingX.step}
+                  onChange={(value) => setRegion("paddingX", value)}
+                  onReset={() => founderDesign.resetFields([`regions.${selected.id}.paddingX`])}
+                />
+                <Stepper
+                  label={REGION_TOKEN_LABELS.gap}
+                  value={regionValue("gap")}
+                  min={REGION_TOKEN_BOUNDS.gap.min}
+                  max={REGION_TOKEN_BOUNDS.gap.max}
+                  step={REGION_TOKEN_BOUNDS.gap.step}
+                  onChange={(value) => setRegion("gap", value)}
+                  onReset={() => founderDesign.resetFields([`regions.${selected.id}.gap`])}
+                />
+              </CollapsibleSection>
 
-          {hasTable ? (
+              {selected.hasTitle || selected.hasBody ? (
+                <CollapsibleSection
+                  title="Text"
+                  onReset={() =>
+                    founderDesign.resetFields([
+                      `regions.${selected.id}.titleSize`,
+                      `regions.${selected.id}.bodySize`,
+                      `regions.${selected.id}.lineHeight`,
+                      `regions.${selected.id}.buttonTextSize`,
+                    ])
+                  }
+                >
+                  {selected.hasTitle ? (
+                    <Stepper
+                      label={REGION_TOKEN_LABELS.titleSize}
+                      value={regionValue("titleSize")}
+                      min={REGION_TOKEN_BOUNDS.titleSize.min}
+                      max={REGION_TOKEN_BOUNDS.titleSize.max}
+                      step={REGION_TOKEN_BOUNDS.titleSize.step}
+                      onChange={(value) => setRegion("titleSize", value)}
+                      onReset={() => founderDesign.resetFields([`regions.${selected.id}.titleSize`])}
+                    />
+                  ) : null}
+                  {selected.hasBody ? (
+                    <Stepper
+                      label={REGION_TOKEN_LABELS.bodySize}
+                      value={regionValue("bodySize")}
+                      min={REGION_TOKEN_BOUNDS.bodySize.min}
+                      max={REGION_TOKEN_BOUNDS.bodySize.max}
+                      step={REGION_TOKEN_BOUNDS.bodySize.step}
+                      onChange={(value) => setRegion("bodySize", value)}
+                      onReset={() => founderDesign.resetFields([`regions.${selected.id}.bodySize`])}
+                    />
+                  ) : null}
+                  <Stepper
+                    label={REGION_TOKEN_LABELS.lineHeight}
+                    value={regionValue("lineHeight")}
+                    min={REGION_TOKEN_BOUNDS.lineHeight.min}
+                    max={REGION_TOKEN_BOUNDS.lineHeight.max}
+                    step={REGION_TOKEN_BOUNDS.lineHeight.step}
+                    onChange={(value) => setRegion("lineHeight", value)}
+                    onReset={() => founderDesign.resetFields([`regions.${selected.id}.lineHeight`])}
+                    format={(value) => (value / 100).toFixed(2)}
+                    unit=""
+                  />
+                  {selected.hasButtons ? (
+                    <Stepper
+                      label={REGION_TOKEN_LABELS.buttonTextSize}
+                      value={regionValue("buttonTextSize")}
+                      min={REGION_TOKEN_BOUNDS.buttonTextSize.min}
+                      max={REGION_TOKEN_BOUNDS.buttonTextSize.max}
+                      step={REGION_TOKEN_BOUNDS.buttonTextSize.step}
+                      onChange={(value) => setRegion("buttonTextSize", value)}
+                      onReset={() => founderDesign.resetFields([`regions.${selected.id}.buttonTextSize`])}
+                    />
+                  ) : null}
+                </CollapsibleSection>
+              ) : null}
+
+              {selected.hasIcon ? (
+                <CollapsibleSection
+                  title="Icon"
+                  onReset={() =>
+                    founderDesign.resetFields([
+                      `regions.${selected.id}.titleIconSize`,
+                      `regions.${selected.id}.icon`,
+                      `regions.${selected.id}.iconColor`,
+                    ])
+                  }
+                >
+                  <Stepper
+                    label={REGION_TOKEN_LABELS.titleIconSize}
+                    value={regionValue("titleIconSize")}
+                    min={REGION_TOKEN_BOUNDS.titleIconSize.min}
+                    max={REGION_TOKEN_BOUNDS.titleIconSize.max}
+                    step={REGION_TOKEN_BOUNDS.titleIconSize.step}
+                    onChange={(value) => setRegion("titleIconSize", value)}
+                    onReset={() => founderDesign.resetFields([`regions.${selected.id}.titleIconSize`])}
+                  />
+                  <NativeSelect
+                    label="Current Icon"
+                    value={draftTokens.regions?.[selected.id]?.icon ?? selected.defaultIcon ?? ""}
+                    onChange={(value) => founderDesign.setRegionAppearance(selected.id, { icon: value as never })}
+                    onReset={() => founderDesign.resetFields([`regions.${selected.id}.icon`])}
+                  >
+                    {CURATED_ICON_IDS.map((id) => (
+                      <option key={id} value={id}>
+                        {CURATED_ICON_LABELS[id]}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                  <NativeSelect
+                    label="Icon color"
+                    value={draftTokens.regions?.[selected.id]?.iconColor ?? "default"}
+                    onChange={(value) => founderDesign.setRegionAppearance(selected.id, { iconColor: value as never })}
+                    onReset={() => founderDesign.resetFields([`regions.${selected.id}.iconColor`])}
+                  >
+                    {ICON_COLORS.map((color) => (
+                      <option key={color} value={color}>
+                        {ICON_COLOR_LABELS[color]}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </CollapsibleSection>
+              ) : null}
+            </>
+          ) : null}
+
+          {showTable ? (
             <CollapsibleSection
               title="Table"
-              onReset={() => founderDesign.resetFields(["tableDensity", "tableCellPx", "tableFontSize", "tableHeaderFontSize"])}
+              defaultOpen
+              onReset={() =>
+                founderDesign.resetFields(["tableDensity", "tableCellPx", "tableFontSize", "tableHeaderFontSize"])
+              }
             >
               <p className="text-sm text-foreground">Row Density</p>
               <div className="flex gap-1.5 rounded-lg border border-border/70 p-1">
@@ -401,32 +778,41 @@ export function FounderDesignDrawer() {
             </CollapsibleSection>
           ) : null}
 
-          {hasPanel ? (
-            <CollapsibleSection title="Details Panel" onReset={() => founderDesign.resetFields(["panelWidth"])}>
-              <Stepper
-                label="Panel Width"
-                value={panelWidth}
-                min={PANEL_WIDTH_BOUNDS.min}
-                max={PANEL_WIDTH_BOUNDS.max}
-                step={PANEL_WIDTH_BOUNDS.step}
-                onChange={founderDesign.setPanelWidth}
-                onReset={() => founderDesign.resetFields(["panelWidth"])}
-              />
-              <p className="text-xs text-muted-foreground">Desktop only -- mobile always uses its own stacked layout.</p>
+          {showPage || showWidth ? (
+            <CollapsibleSection
+              title={showWidth && !showPage ? "Details Panel" : "Page Spacing"}
+              defaultOpen
+              onReset={() =>
+                founderDesign.resetFields(showWidth ? ["sectionGap", "panelWidth"] : ["sectionGap"])
+              }
+            >
+              {showPage ? (
+                <Stepper
+                  label="Section Gap"
+                  value={sectionGap}
+                  min={SECTION_GAP_BOUNDS.min}
+                  max={SECTION_GAP_BOUNDS.max}
+                  step={SECTION_GAP_BOUNDS.step}
+                  onChange={founderDesign.setSectionGap}
+                  onReset={() => founderDesign.resetFields(["sectionGap"])}
+                />
+              ) : null}
+              {showWidth ? (
+                <>
+                  <Stepper
+                    label="Panel Width"
+                    value={panelWidth}
+                    min={PANEL_WIDTH_BOUNDS.min}
+                    max={PANEL_WIDTH_BOUNDS.max}
+                    step={PANEL_WIDTH_BOUNDS.step}
+                    onChange={founderDesign.setPanelWidth}
+                    onReset={() => founderDesign.resetFields(["panelWidth"])}
+                  />
+                  <p className="text-xs text-muted-foreground">Desktop only — mobile always uses its own stacked layout.</p>
+                </>
+              ) : null}
             </CollapsibleSection>
           ) : null}
-
-          <CollapsibleSection title="Page Spacing" onReset={() => founderDesign.resetFields(["sectionGap"])}>
-            <Stepper
-              label="Section Gap"
-              value={sectionGap}
-              min={SECTION_GAP_BOUNDS.min}
-              max={SECTION_GAP_BOUNDS.max}
-              step={SECTION_GAP_BOUNDS.step}
-              onChange={founderDesign.setSectionGap}
-              onReset={() => founderDesign.resetFields(["sectionGap"])}
-            />
-          </CollapsibleSection>
         </div>
 
         <SheetFooter className="flex-col gap-2 border-t border-border/60">

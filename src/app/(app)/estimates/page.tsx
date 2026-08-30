@@ -13,11 +13,12 @@ import { PageSizeSelect } from "@/components/estimates/page-size-select";
 import { ServiceFilterSelect } from "@/components/estimates/service-filter-select";
 import { FounderDesignRoot } from "@/components/founder-design/root";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
+import { FounderRegion } from "@/components/founder-design/region";
+import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
@@ -233,6 +234,7 @@ export default async function EstimatesPage({
       value: allAgg._count._all,
       sublabel: formatMoney(allAgg._sum.total ?? 0),
       icon: FileText,
+      defaultIconId: "file-text" as const,
       accent: "blue",
       href: "/estimates",
     },
@@ -241,6 +243,7 @@ export default async function EstimatesPage({
       value: approvedAgg._count._all,
       sublabel: formatMoney(approvedAgg._sum.total ?? 0),
       icon: CheckCircle2,
+      defaultIconId: "check-circle" as const,
       accent: "green",
       href: "/estimates?status=approved",
     },
@@ -249,6 +252,7 @@ export default async function EstimatesPage({
       value: sentAgg._count._all,
       sublabel: formatMoney(sentAgg._sum.total ?? 0),
       icon: Send,
+      defaultIconId: "send" as const,
       accent: "orange",
       href: "/estimates?status=sent",
     },
@@ -257,6 +261,7 @@ export default async function EstimatesPage({
       value: jobAgg._count._all,
       sublabel: formatMoney(jobAgg._sum.total ?? 0),
       icon: Briefcase,
+      defaultIconId: "briefcase" as const,
       accent: "purple",
       href: "/estimates?status=job",
     },
@@ -265,6 +270,7 @@ export default async function EstimatesPage({
       value: draftAgg._count._all,
       sublabel: formatMoney(draftAgg._sum.total ?? 0),
       icon: FileText,
+      defaultIconId: "file-text" as const,
       accent: "slate",
       href: "/estimates?status=draft",
     },
@@ -332,11 +338,25 @@ export default async function EstimatesPage({
         savedTokens={founderTokens}
         kpiCardLabels={kpis.map((kpi) => kpi.label)}
       >
+      <FounderRegion id="kpi">
       <KpiCardsLayout gridClassName="sm:grid-cols-2 lg:grid-cols-5" defaultGapPx={20}>
-        {kpis.map((kpi) => (
-          <KpiCard key={kpi.label} {...kpi} />
+        {kpis.map((kpi, index) => (
+          <TunableKpiCard
+            key={kpi.label}
+            index={index}
+            label={kpi.label}
+            value={kpi.value}
+            sublabel={kpi.sublabel}
+            href={kpi.href}
+            icon={kpi.icon}
+            defaultIconId={kpi.defaultIconId}
+            accentClassName={KPI_ACCENT_CLASSES[kpi.accent]}
+            variant="workspace"
+            pageKey="estimates"
+          />
         ))}
       </KpiCardsLayout>
+      </FounderRegion>
 
       {/* Mobile-only search fallback -- the shared header's search slot only renders on desktop. */}
       <form action="/estimates" method="GET" className="md:hidden">
@@ -347,6 +367,7 @@ export default async function EstimatesPage({
         <Input type="search" name="q" defaultValue={q} placeholder="Search estimates..." className="h-9" />
       </form>
 
+      <FounderRegion id="tabs" className="tbbt-founder-box">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3">
         <nav className="flex flex-wrap items-center gap-1.5 overflow-x-auto">
           {tabs.map((tabItem) => {
@@ -390,6 +411,7 @@ export default async function EstimatesPage({
           <DateFilterSelect value={datePreset ?? "all"} />
         </div>
       </div>
+      </FounderRegion>
 
       <EstimatesWorkspace estimates={estimates} />
 
@@ -446,46 +468,5 @@ type KpiCardProps = {
   href: string;
   icon: ComponentType<{ className?: string }>;
   accent: KpiAccent;
+  defaultIconId: "file-text" | "check-circle" | "send" | "briefcase";
 };
-
-function KpiCard({ label, value, sublabel, href, icon: Icon, accent }: KpiCardProps) {
-  return (
-    <Link href={href} className="block">
-      <Card
-        className="h-full border-border/70 shadow-sm transition-colors hover:border-primary/40 hover:bg-accent/20"
-        style={{ minHeight: "var(--tbbt-kpi-min-height, 0px)" }}
-      >
-        <CardContent className="flex items-center gap-4" style={{ padding: "var(--tbbt-kpi-padding, 20px)" }}>
-          <span
-            className={cn(
-              "flex shrink-0 items-center justify-center rounded-full",
-              KPI_ACCENT_CLASSES[accent],
-            )}
-            style={{ width: "var(--tbbt-kpi-icon-size, 48px)", height: "var(--tbbt-kpi-icon-size, 48px)" }}
-          >
-            <Icon className="size-[calc(var(--tbbt-kpi-icon-size,48px)*0.42)]" />
-          </span>
-          <div className="min-w-0">
-            <p
-              className="font-semibold tracking-wider text-muted-foreground uppercase"
-              style={{ fontSize: "var(--tbbt-kpi-label-font, 11px)" }}
-            >
-              {label}
-            </p>
-            <p
-              className="mt-1 font-bold tabular-nums tracking-tight text-foreground"
-              style={{ fontSize: "var(--tbbt-kpi-number-font, 30px)" }}
-            >
-              {value}
-            </p>
-            {sublabel ? (
-              <p className="mt-0.5 truncate text-muted-foreground" style={{ fontSize: "var(--tbbt-kpi-supporting-font, 12px)" }}>
-                {sublabel}
-              </p>
-            ) : null}
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}

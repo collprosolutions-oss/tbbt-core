@@ -12,10 +12,11 @@ import { PageSizeSelect } from "@/components/invoices/page-size-select";
 import { PaymentMethodFilterSelect } from "@/components/invoices/payment-method-filter-select";
 import { FounderDesignRoot } from "@/components/founder-design/root";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
+import { FounderRegion } from "@/components/founder-design/region";
+import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
@@ -206,6 +207,7 @@ export default async function InvoicesPage({
       value: allAgg._count._all,
       sublabel: formatMoney(allAgg._sum.total ?? 0),
       icon: FileText,
+      defaultIconId: "file-text" as const,
       accent: "blue",
       href: "/invoices",
     },
@@ -214,6 +216,7 @@ export default async function InvoicesPage({
       value: draftAgg._count._all,
       sublabel: formatMoney(draftAgg._sum.total ?? 0),
       icon: FileText,
+      defaultIconId: "file-text" as const,
       accent: "slate",
       href: "/invoices?status=draft",
     },
@@ -222,6 +225,7 @@ export default async function InvoicesPage({
       value: sentAgg._count._all,
       sublabel: formatMoney(sentAgg._sum.total ?? 0),
       icon: Send,
+      defaultIconId: "send" as const,
       accent: "orange",
       href: "/invoices?status=sent",
     },
@@ -229,6 +233,7 @@ export default async function InvoicesPage({
       label: "Paid",
       value: paidAgg._count._all,
       icon: CheckCircle2,
+      defaultIconId: "check-circle" as const,
       accent: "green",
       href: "/invoices?status=paid",
     },
@@ -237,6 +242,7 @@ export default async function InvoicesPage({
       value: formatMoney(paidAgg._sum.total ?? 0),
       sublabel: "Paid invoices only",
       icon: DollarSign,
+      defaultIconId: "dollar-sign" as const,
       accent: "teal",
       href: "/invoices?status=paid",
     },
@@ -300,11 +306,25 @@ export default async function InvoicesPage({
         savedTokens={founderTokens}
         kpiCardLabels={kpis.map((kpi) => kpi.label)}
       >
+      <FounderRegion id="kpi">
       <KpiCardsLayout gridClassName="sm:grid-cols-2 lg:grid-cols-5" defaultGapPx={20}>
-        {kpis.map((kpi) => (
-          <KpiCard key={kpi.label} {...kpi} />
+        {kpis.map((kpi, index) => (
+          <TunableKpiCard
+            key={kpi.label}
+            index={index}
+            label={kpi.label}
+            value={kpi.value}
+            sublabel={kpi.sublabel}
+            href={kpi.href}
+            icon={kpi.icon}
+            defaultIconId={kpi.defaultIconId}
+            accentClassName={KPI_ACCENT_CLASSES[kpi.accent]}
+            variant="workspace"
+            pageKey="invoices"
+          />
         ))}
       </KpiCardsLayout>
+      </FounderRegion>
 
       {/* Mobile-only search fallback -- the shared header's search slot only renders on desktop. */}
       <form action="/invoices" method="GET" className="md:hidden">
@@ -315,6 +335,7 @@ export default async function InvoicesPage({
         <Input type="search" name="q" defaultValue={q} placeholder="Search invoices..." className="h-9" />
       </form>
 
+      <FounderRegion id="tabs" className="tbbt-founder-box">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3">
         <nav className="flex flex-wrap items-center gap-1.5 overflow-x-auto">
           {tabs.map((tabItem) => {
@@ -354,6 +375,7 @@ export default async function InvoicesPage({
           <DateFilterSelect value={rangePreset ?? "all"} />
         </div>
       </div>
+      </FounderRegion>
 
       <InvoicesWorkspace invoices={invoices} />
 
@@ -420,46 +442,5 @@ type KpiCardProps = {
   href: string;
   icon: ComponentType<{ className?: string }>;
   accent: KpiAccent;
+  defaultIconId: "file-text" | "send" | "check-circle" | "dollar-sign";
 };
-
-function KpiCard({ label, value, sublabel, href, icon: Icon, accent }: KpiCardProps) {
-  return (
-    <Link href={href} className="block">
-      <Card
-        className="h-full border-border/70 shadow-sm transition-colors hover:border-primary/40 hover:bg-accent/20"
-        style={{ minHeight: "var(--tbbt-kpi-min-height, 0px)" }}
-      >
-        <CardContent className="flex items-center gap-4" style={{ padding: "var(--tbbt-kpi-padding, 20px)" }}>
-          <span
-            className={cn(
-              "flex shrink-0 items-center justify-center rounded-full",
-              KPI_ACCENT_CLASSES[accent],
-            )}
-            style={{ width: "var(--tbbt-kpi-icon-size, 48px)", height: "var(--tbbt-kpi-icon-size, 48px)" }}
-          >
-            <Icon className="size-[calc(var(--tbbt-kpi-icon-size,48px)*0.42)]" />
-          </span>
-          <div className="min-w-0">
-            <p
-              className="font-semibold tracking-wider text-muted-foreground uppercase"
-              style={{ fontSize: "var(--tbbt-kpi-label-font, 11px)" }}
-            >
-              {label}
-            </p>
-            <p
-              className="mt-1 font-bold tabular-nums tracking-tight text-foreground"
-              style={{ fontSize: "var(--tbbt-kpi-number-font, 30px)" }}
-            >
-              {value}
-            </p>
-            {sublabel ? (
-              <p className="mt-0.5 truncate text-muted-foreground" style={{ fontSize: "var(--tbbt-kpi-supporting-font, 12px)" }}>
-                {sublabel}
-              </p>
-            ) : null}
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}
