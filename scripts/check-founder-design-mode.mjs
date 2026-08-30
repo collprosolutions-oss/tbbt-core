@@ -202,6 +202,11 @@ async function main() {
       FOUNDER_REGIONS.requests.some((r) => r.label === "Request Table") &&
         FOUNDER_REGIONS.requests.some((r) => r.label === "Request Details") &&
         !FOUNDER_REGIONS.requests.some((r) => r.label === "Needs Attention"));
+    check(
+      "Requests still includes Schedule & Calendar / Today / Quick Actions as real boxes",
+      FOUNDER_REGIONS.requests.map((r) => r.id).join(",") ===
+        "kpi,tabs,table,details,calendar,today,actions,page",
+    );
     check("Customers regions include Customer Table / Customer Overview / Recent Activity / Top Services / Right Rail Width",
       ["Customer Table", "Customer Overview", "Recent Activity", "Top Services", "Right Rail Width"].every((label) =>
         FOUNDER_REGIONS.customers.some((r) => r.label === label),
