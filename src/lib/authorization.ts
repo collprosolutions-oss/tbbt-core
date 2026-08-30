@@ -96,6 +96,14 @@ export const CAPABILITIES = {
    * payroll/HR). See src/app/actions/team.ts.
    */
   MANAGE_MEMBERS: "MANAGE_MEMBERS",
+  /**
+   * Owner/admin Time Cards management: browse every worker's entries,
+   * enter/correct time, set membership hourly wage, approve/reopen a
+   * week. MEMBER field clocking is a SEPARATE, self-scoped boundary
+   * (clockInTime / clockOutTime when membershipId === the caller's own
+   * Membership) and must never be granted this capability.
+   */
+  MANAGE_TIME_CARDS: "MANAGE_TIME_CARDS",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -156,7 +164,7 @@ export function requireBusinessCapability(
 /**
  * Coarse, temporary READ gate for the entire authenticated management
  * console (Dashboard, Requests, Customers, Estimates, Jobs, Invoices,
- * Services, Settings).
+ * Services, Time Cards, Settings).
  *
  * Every one of those pages exists to browse or mutate business-wide
  * management data, and MEMBER has no capability over any of it today (see

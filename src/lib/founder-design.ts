@@ -36,6 +36,7 @@ export const FOUNDER_PAGE_KEYS = [
   "jobs",
   "invoices",
   "services",
+  "time-cards",
 ] as const;
 export type FounderPageKey = (typeof FOUNDER_PAGE_KEYS)[number];
 
@@ -51,6 +52,7 @@ export const FOUNDER_PAGE_LABELS: Record<FounderPageKey, string> = {
   jobs: "Schedule / Jobs",
   invoices: "Invoices",
   services: "Services",
+  "time-cards": "Time Cards",
 };
 
 /** Whether a page has the dense table + master-detail panel section at all (Dashboard does not). */
@@ -62,6 +64,7 @@ export const PAGE_HAS_TABLE: Record<FounderPageKey, boolean> = {
   jobs: true,
   invoices: true,
   services: false,
+  "time-cards": true,
 };
 
 /** Whether a page has a right-side detail/rail panel with a tunable desktop width. */
@@ -73,6 +76,7 @@ export const PAGE_HAS_PANEL: Record<FounderPageKey, boolean> = {
   jobs: true,
   invoices: true,
   services: true,
+  "time-cards": true,
 };
 
 /**
@@ -91,6 +95,7 @@ export const KPI_CARD_COUNTS: Record<FounderPageKey, number> = {
   jobs: 5,
   invoices: 5,
   services: 4,
+  "time-cards": 4,
 };
 
 // ---------------------------------------------------------------------------
@@ -252,6 +257,19 @@ export const KPI_DEFAULTS: Record<FounderPageKey, Record<KpiTokenKey, number>> =
     lineHeight: 120,
   },
   services: {
+    minHeight: 0,
+    padding: 20,
+    paddingY: 36,
+    paddingX: 20,
+    gap: 20,
+    internalGap: 4,
+    iconSize: 48,
+    labelFontSize: 11,
+    numberFontSize: 30,
+    supportingFontSize: 12,
+    lineHeight: 120,
+  },
+  "time-cards": {
     minHeight: 0,
     padding: 20,
     paddingY: 36,
@@ -480,6 +498,7 @@ export const TABLE_DENSITY_DEFAULTS: Record<FounderPageKey, { rowPy: number; hea
   jobs: { rowPy: 16, headerPy: 14 },
   invoices: { rowPy: 16, headerPy: 14 },
   services: { rowPy: 0, headerPy: 0 },
+  "time-cards": { rowPy: 16, headerPy: 14 },
 };
 
 /**
@@ -521,6 +540,7 @@ export const TABLE_CELL_PX_DEFAULTS: Record<FounderPageKey, number> = {
   jobs: 8,
   invoices: 8,
   services: 0,
+  "time-cards": 8,
 };
 export const TABLE_CELL_PX_BOUNDS = { min: 4, max: 20, step: 2 };
 
@@ -574,6 +594,7 @@ export const PANEL_WIDTH_DEFAULTS: Record<FounderPageKey, number | undefined> = 
   jobs: 350,
   invoices: 340,
   services: 340,
+  "time-cards": 320,
 };
 export const PANEL_WIDTH_BOUNDS = { min: 220, max: 420, step: 10 };
 export const PANEL_WIDTH_CSS_VAR = "--tbbt-panel-width";

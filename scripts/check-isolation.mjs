@@ -99,6 +99,53 @@ try {
     throw new Error("assertBusinessRecord did not reject a foreign record.");
   }
 
+  const memberA = await prisma.user.create({
+    data: { name: "Alpha Worker", email: "alpha-iso-time@example.com", passwordHash: "x" },
+  });
+  const memberB = await prisma.user.create({
+    data: { name: "Beta Worker", email: "beta-iso-time@example.com", passwordHash: "x" },
+  });
+  const membershipA = await prisma.membership.create({
+    data: { userId: memberA.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const membershipB = await prisma.membership.create({
+    data: { userId: memberB.id, businessId: businessB.id, role: "MEMBER" },
+  });
+  const entryA = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: membershipA.id,
+      activityType: "TRAVEL",
+      status: "READY",
+      startedAt: new Date(),
+      endedAt: new Date(),
+      source: "CLOCK",
+    },
+  });
+  await prisma.timeEntry.create({
+    data: {
+      businessId: businessB.id,
+      membershipId: membershipB.id,
+      activityType: "BREAK",
+      status: "READY",
+      startedAt: new Date(),
+      endedAt: new Date(),
+      source: "CLOCK",
+    },
+  });
+  const visibleEntries = await prisma.timeEntry.findMany({
+    where: businessScope(businessA.id),
+  });
+  if (visibleEntries.some((entry) => entry.businessId !== businessA.id) || visibleEntries.length !== 1) {
+    throw new Error("Scoped time-entry query leaked another business's records.");
+  }
+  const foreignEntry = await prisma.timeEntry.findFirst({
+    where: { id: entryA.id, ...businessScope(businessB.id) },
+  });
+  if (foreignEntry) {
+    throw new Error("Business B was able to load Business A's time entry by id.");
+  }
+
   console.log("Isolation check passed: business-scoped queries do not cross workspaces.");
 } finally {
   await prisma.$disconnect();

@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import {
   CalendarClock,
+  Clock,
   FileText,
   Inbox,
   LayoutDashboard,
@@ -24,6 +25,7 @@ export const NAV_ICONS: Record<string, ComponentType<{ className?: string }>> = 
   "/customers": Users,
   "/estimates": FileText,
   "/jobs": CalendarClock,
+  "/time-cards": Clock,
   "/invoices": Receipt,
   "/services": Wrench,
   "/team": UserCog,

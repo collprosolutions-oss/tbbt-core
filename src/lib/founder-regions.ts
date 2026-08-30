@@ -182,6 +182,21 @@ export const FOUNDER_REGIONS: Record<FounderPageKey, readonly FounderRegionDef[]
     },
     { id: "page", label: "Page Spacing", kind: "page" },
   ],
+  "time-cards": [
+    { id: "kpi", label: "Top Summary", kind: "kpi" },
+    { id: "tabs", label: "Time Card Navigation / Filters", kind: "tabs", hasTitle: true },
+    { id: "table", label: "Time Entry Table", kind: "table" },
+    {
+      id: "details",
+      label: "Worker Detail",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+      hasWidth: true,
+    },
+    { id: "page", label: "Page Spacing", kind: "page" },
+  ],
 };
 
 export function getFounderRegions(pageKey: FounderPageKey): readonly FounderRegionDef[] {

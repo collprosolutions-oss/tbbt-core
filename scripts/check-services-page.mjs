@@ -226,7 +226,12 @@ if (!owner || !member) {
 
   check("OWNER Services page returns 200", ownerPage?.status === 200);
   check("OWNER page contains Services heading", Boolean(ownerPage?.body.includes("Services")));
-  check("OWNER page does not say Time Cards", !ownerPage?.body.includes("Time Cards"));
+  check(
+    "OWNER page is the Services workspace, not Time Cards",
+    Boolean(ownerPage?.body.includes("Services")) &&
+      !ownerPage.body.includes("+ Time Entry") &&
+      !ownerPage.body.includes("Payroll Ready"),
+  );
   check(
     "OWNER page does not contain a functional Publish Changes control",
     !ownerPage?.body.includes("Publish Changes"),

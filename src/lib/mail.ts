@@ -31,16 +31,46 @@ function parseAppUrl(value: string) {
 }
 
 /**
+ * Vercel sets VERCEL_URL / VERCEL_BRANCH_URL as hostnames (no protocol)
+ * for the current deployment. These are platform-supplied, not request
+ * Host headers. Only honor them on preview/dev, and only when the host
+ * is a vercel.app deployment hostname -- never an arbitrary origin.
+ */
+function vercelPreviewOrigin(): string | null {
+  const env = process.env.VERCEL_ENV;
+  if (env !== "preview" && env !== "development") {
+    return null;
+  }
+  const host = (process.env.VERCEL_BRANCH_URL || process.env.VERCEL_URL || "").trim();
+  if (!host || host.includes("/") || host.includes("@") || host.includes(":")) {
+    return null;
+  }
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.vercel\.app$/i.test(host)) {
+    return null;
+  }
+  return parseAppUrl(`https://${host}`);
+}
+
+/**
  * The app's own base URL, independent of whether transactional email
  * (Resend) is configured. Used to build absolute links a page hands
  * directly to the user to copy/share -- e.g. the one-time team-member
  * password-setup link in src/app/actions/team.ts -- which must keep
  * working even when RESEND_API_KEY/EMAIL_FROM are unset.
+ *
+ * Resolution order:
+ *   1. NEXT_PUBLIC_APP_URL when explicitly set (production:
+ *      https://www.collproreno.com).
+ *   2. Trusted Vercel preview/dev deployment host when that env is
+ *      absent, so Team setup links work on preview without writing a
+ *      preview hostname into source.
+ * Never uses the request Host header.
  */
 export function getAppUrl(): string | null {
-  return process.env.NEXT_PUBLIC_APP_URL
-    ? parseAppUrl(process.env.NEXT_PUBLIC_APP_URL)
-    : null;
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    return parseAppUrl(process.env.NEXT_PUBLIC_APP_URL);
+  }
+  return vercelPreviewOrigin();
 }
 
 export function getMailConfig(): MailConfig | { error: string } {

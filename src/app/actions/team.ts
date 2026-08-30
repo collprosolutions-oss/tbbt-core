@@ -115,7 +115,7 @@ export async function addTeamMember(
   if (!appUrl) {
     return {
       error:
-        "The app URL is not configured (NEXT_PUBLIC_APP_URL), so a setup link cannot be created.",
+        "The app URL is not configured, so a setup link cannot be created.",
     };
   }
 

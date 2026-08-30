@@ -49,6 +49,7 @@
 }
 
 :root {
+  color-scheme: light;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -60,7 +61,7 @@
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  --muted-foreground: oklch(0.42 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
@@ -94,6 +95,7 @@
  * professional look with zero per-tenant styling.
  */
 .dark {
+  color-scheme: dark;
   --background: oklch(0.16 0.025 259);
   --foreground: oklch(0.95 0.008 259);
   --card: oklch(0.225 0.028 259);
@@ -133,6 +135,9 @@
   }
   html {
     @apply font-sans overflow-x-hidden;
+    color-scheme: light;
+  }
+  html.dark {
     color-scheme: dark;
   }
   body {
@@ -162,6 +167,36 @@
   }
   select:disabled {
     @apply cursor-not-allowed opacity-50;
+  }
+
+  /*
+   * Native UA widgets (select option lists, date/time pickers) follow
+   * the document color-scheme and the control's `color`.
+   *
+   * Do NOT set `color-scheme: inherit` here: LightningCSS compiles that
+   * to `color-scheme: normal`, which resets the widget to a light OS
+   * popup while dark-theme `--foreground` stays light -- white menu +
+   * light-gray text on Time Cards, Services, and every other native
+   * select. Leave color-scheme unset so controls inherit html / html.dark.
+   *
+   * Option rows are pinned to dark-on-light because most desktop UAs
+   * still paint the open <select> menu white regardless of theme.
+   * The closed <select> keeps `color: var(--foreground)` above.
+   */
+  input,
+  textarea,
+  select {
+    color: var(--foreground);
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--muted-foreground);
+    opacity: 1;
+  }
+  select option,
+  select optgroup {
+    background-color: #ffffff;
+    color: #0a0a0a;
   }
 }
 

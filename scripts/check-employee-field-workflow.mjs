@@ -296,7 +296,14 @@ try {
 
   await prisma.membership.create({ data: { userId: ownerUser.id, businessId: businessA.id, role: "OWNER" } });
   await prisma.membership.create({ data: { userId: adminUser.id, businessId: businessA.id, role: "ADMIN" } });
-  const member1Membership = await prisma.membership.create({ data: { userId: member1User.id, businessId: businessA.id, role: "MEMBER" } });
+  const member1Membership = await prisma.membership.create({
+    data: {
+      userId: member1User.id,
+      businessId: businessA.id,
+      role: "MEMBER",
+      hourlyWage: new Prisma.Decimal(41.17),
+    },
+  });
   const member2Membership = await prisma.membership.create({ data: { userId: member2User.id, businessId: businessA.id, role: "MEMBER" } });
   await prisma.membership.create({ data: { userId: betaOwnerUser.id, businessId: businessB.id, role: "OWNER" } });
   const betaMemberMembership = await prisma.membership.create({ data: { userId: betaMemberUser.id, businessId: businessB.id, role: "MEMBER" } });
@@ -749,6 +756,11 @@ try {
   check(
     "TEST 30 - Field Job page HTML never contains 'Current Approved Total' either",
     !pricingFieldPage.body.includes("Current Approved Total"),
+  );
+  const fmtMemberWage = moneyFormatter.format(41.17);
+  check(
+    "TEST 30 - Field Job page HTML never contains the MEMBER's own hourly wage",
+    !pricingFieldPage.body.includes(fmtMemberWage) && !pricingFieldPage.body.includes("41.17"),
   );
 
   const pricingWorkOrderPage = await fetchRaw(ownerSession, `/jobs/${pricingJob.id}`);
