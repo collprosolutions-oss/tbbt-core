@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ComponentType, type ReactNode } from "react";
+import { useState, type ComponentType, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { Briefcase, ExternalLink, FileText, Mail, MapPin, Phone, Receipt } from "lucide-react";
 import { MarkInvoicePaidForm } from "@/components/invoices/mark-invoice-paid-form";
@@ -82,7 +82,7 @@ export function InvoicesWorkspace({ invoices }: { invoices: InvoiceListItem[] })
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,340px)]">
       <div className="hidden sm:block">
         <InvoicesTable invoices={invoices} selectedId={selectedId} onSelect={selectInvoice} />
       </div>
@@ -120,15 +120,18 @@ function InvoicesTable({
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-border/70 bg-muted/50 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-              <th className="px-2 py-3.5 font-semibold">Invoice #</th>
-              <th className="px-2 py-3.5 font-semibold">Customer</th>
-              <th className="px-2 py-3.5 font-semibold">Job / Service</th>
-              <th className="px-2 py-3.5 font-semibold">Date</th>
-              <th className="px-2 py-3.5 font-semibold">Status</th>
-              <th className="px-2 py-3.5 text-right font-semibold">Amount</th>
-              <th className="px-2 py-3.5 text-right font-semibold">Balance</th>
-              <th className="px-2 py-3.5 text-right font-semibold">Action</th>
+            <tr
+              className="border-b border-border/70 bg-muted/50 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+              style={{ "--th-py": "var(--tbbt-table-header-py, 14px)" } as CSSProperties}
+            >
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Invoice #</th>
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Customer</th>
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Job / Service</th>
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Date</th>
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Status</th>
+              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Amount</th>
+              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Balance</th>
+              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -150,16 +153,18 @@ function InvoicesTable({
                     "cursor-pointer border-b border-border/60 outline-none transition-colors last:border-b-0 hover:bg-accent/40",
                     active && "bg-primary/10 hover:bg-primary/10",
                   )}
+                  style={{ "--tr-py": "var(--tbbt-table-row-py, 16px)" } as CSSProperties}
                 >
                   <td
                     className={cn(
-                      "px-2 py-4 align-top font-mono text-xs text-muted-foreground",
+                      "px-2 align-top font-mono text-xs text-muted-foreground",
                       active && "border-l-2 border-l-primary",
                     )}
+                    style={{ paddingBlock: "var(--tr-py)" }}
                   >
                     #{invoice.id.slice(-8)}
                   </td>
-                  <td className="max-w-20 px-2 py-4 align-top">
+                  <td className="max-w-20 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                     <p className="truncate text-[0.95rem] font-semibold text-foreground">
                       {invoice.customer?.name ?? "Customer"}
                     </p>
@@ -167,30 +172,38 @@ function InvoicesTable({
                       <p className="truncate text-xs text-muted-foreground">{invoice.propertyLabel}</p>
                     ) : null}
                   </td>
-                  <td className="max-w-24 px-2 py-4 align-top">
+                  <td className="max-w-24 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                     <p className="truncate text-[0.95rem] font-medium text-foreground">
                       {invoice.scopeSummary ?? "—"}
                     </p>
                   </td>
-                  <td className="px-2 py-4 align-top text-muted-foreground whitespace-nowrap">
+                  <td
+                    className="px-2 align-top text-muted-foreground whitespace-nowrap"
+                    style={{ paddingBlock: "var(--tr-py)" }}
+                  >
                     {invoice.createdAtLabel}
                   </td>
-                  <td className="px-2 py-4 align-top">
+                  <td className="px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                     <StatusBadge status={invoice.status} />
                   </td>
-                  <td className="px-2 py-4 text-right align-top tabular-nums font-semibold text-foreground whitespace-nowrap">
+                  <td
+                    className="px-2 text-right align-top tabular-nums font-semibold text-foreground whitespace-nowrap"
+                    style={{ paddingBlock: "var(--tr-py)" }}
+                  >
                     {invoice.totalLabel}
                   </td>
                   <td
                     className={cn(
-                      "px-2 py-4 text-right align-top tabular-nums whitespace-nowrap",
+                      "px-2 text-right align-top tabular-nums whitespace-nowrap",
                       invoice.status === "PAID" ? "text-emerald-500" : "font-medium text-amber-500",
                     )}
+                    style={{ paddingBlock: "var(--tr-py)" }}
                   >
                     {invoice.balanceLabel}
                   </td>
                   <td
-                    className="px-2 py-4 text-right align-top"
+                    className="px-2 text-right align-top"
+                    style={{ paddingBlock: "var(--tr-py)" }}
                     onClick={(event) => event.stopPropagation()}
                   >
                     <Button asChild size="sm" variant="outline">

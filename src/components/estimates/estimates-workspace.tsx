@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ComponentType, type ReactNode } from "react";
+import { useState, type ComponentType, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { Briefcase, ExternalLink, FileText, Mail, MapPin, Phone } from "lucide-react";
 import { ClearDraftEstimateButton } from "@/components/estimates/clear-draft-estimate-button";
@@ -101,7 +101,7 @@ export function EstimatesWorkspace({ estimates }: { estimates: EstimateListItem[
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_350px]">
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,350px)]">
       <div className="hidden sm:block">
         <EstimatesTable estimates={estimates} selectedId={selectedId} onSelect={selectEstimate} />
       </div>
@@ -139,14 +139,17 @@ function EstimatesTable({
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-border/70 bg-muted/50 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-              <th className="px-2.5 py-3.5 font-semibold">Estimate #</th>
-              <th className="px-2.5 py-3.5 font-semibold">Customer</th>
-              <th className="px-2.5 py-3.5 font-semibold">Service / Description</th>
-              <th className="px-2.5 py-3.5 text-right font-semibold">Amount</th>
-              <th className="px-2.5 py-3.5 font-semibold">Status</th>
-              <th className="px-2.5 py-3.5 font-semibold">Date</th>
-              <th className="px-2.5 py-3.5 text-right font-semibold">Action</th>
+            <tr
+              className="border-b border-border/70 bg-muted/50 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+              style={{ "--th-py": "var(--tbbt-table-header-py, 14px)" } as CSSProperties}
+            >
+              <th className="px-2.5 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Estimate #</th>
+              <th className="px-2.5 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Customer</th>
+              <th className="px-2.5 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Service / Description</th>
+              <th className="px-2.5 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Amount</th>
+              <th className="px-2.5 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Status</th>
+              <th className="px-2.5 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Date</th>
+              <th className="px-2.5 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -168,16 +171,18 @@ function EstimatesTable({
                     "cursor-pointer border-b border-border/60 outline-none transition-colors last:border-b-0 hover:bg-accent/40",
                     active && "bg-primary/10 hover:bg-primary/10",
                   )}
+                  style={{ "--tr-py": "var(--tbbt-table-row-py, 16px)" } as CSSProperties}
                 >
                   <td
                     className={cn(
-                      "px-2.5 py-4 align-top font-mono text-xs text-muted-foreground",
+                      "px-2.5 align-top font-mono text-xs text-muted-foreground",
                       active && "border-l-2 border-l-primary",
                     )}
+                    style={{ paddingBlock: "var(--tr-py)" }}
                   >
                     #{estimate.id.slice(-8)}
                   </td>
-                  <td className="max-w-24 px-2.5 py-4 align-top">
+                  <td className="max-w-24 px-2.5 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                     <p className="truncate text-[0.95rem] font-semibold text-foreground">
                       {estimate.customer?.name ?? "Customer"}
                     </p>
@@ -185,20 +190,27 @@ function EstimatesTable({
                       <p className="truncate text-xs text-muted-foreground">{estimate.propertyLabel}</p>
                     ) : null}
                   </td>
-                  <td className="max-w-32 px-2.5 py-4 align-top">
+                  <td className="max-w-32 px-2.5 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                     <p className="truncate text-[0.95rem] font-medium text-foreground">{estimate.serviceLabel}</p>
                   </td>
-                  <td className="px-2.5 py-4 text-right align-top tabular-nums font-semibold text-foreground whitespace-nowrap">
+                  <td
+                    className="px-2.5 text-right align-top tabular-nums font-semibold text-foreground whitespace-nowrap"
+                    style={{ paddingBlock: "var(--tr-py)" }}
+                  >
                     {estimate.totalLabel}
                   </td>
-                  <td className="px-2.5 py-4 align-top">
+                  <td className="px-2.5 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                     <StatusBadge status={estimate.status} />
                   </td>
-                  <td className="px-2.5 py-4 align-top text-muted-foreground whitespace-nowrap">
+                  <td
+                    className="px-2.5 align-top text-muted-foreground whitespace-nowrap"
+                    style={{ paddingBlock: "var(--tr-py)" }}
+                  >
                     {estimate.createdAtLabel}
                   </td>
                   <td
-                    className="px-2.5 py-4 text-right align-top"
+                    className="px-2.5 text-right align-top"
+                    style={{ paddingBlock: "var(--tr-py)" }}
                     onClick={(event) => event.stopPropagation()}
                   >
                     <Button asChild size="sm" variant="outline">

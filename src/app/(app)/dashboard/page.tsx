@@ -15,7 +15,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { FounderDesignRoot } from "@/components/founder-design/root";
 import { requireManagementPageAccess } from "@/lib/access";
+import { checkFounderAccess } from "@/lib/founder-access";
+import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatDate, formatDateTime, formatMoney, formatTime } from "@/lib/format";
 import { NAV_ICONS } from "@/lib/nav-icons";
 import { prisma } from "@/lib/prisma";
@@ -37,6 +40,16 @@ export default async function DashboardPage() {
   const today = startOfDay(new Date());
   const todayRange = dayRange(today);
   const todayIso = formatISODate(today);
+
+  // Founder Design Mode: platform-level, independent of Membership/role
+  // (see src/lib/founder-access.ts) -- never derived from OWNER/ADMIN.
+  const founder = await checkFounderAccess();
+  const founderOverride = founder
+    ? await prisma.founderDesignOverride.findUnique({
+        where: { userId_pageKey: { userId: founder.id, pageKey: "dashboard" } },
+      })
+    : null;
+  const founderTokens = sanitizeFounderPageTokens("dashboard", founderOverride?.tokens ?? {});
 
   const [
     openRequests,
@@ -296,7 +309,8 @@ export default async function DashboardPage() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <FounderDesignRoot pageKey="dashboard" isFounder={Boolean(founder)} savedTokens={founderTokens}>
+      <div className="grid sm:grid-cols-2 lg:grid-cols-5" style={{ gap: "var(--tbbt-kpi-gap, 12px)" }}>
         {kpis.map((kpi) => (
           <KpiCard key={kpi.label} {...kpi} />
         ))}
@@ -408,6 +422,7 @@ export default async function DashboardPage() {
           )}
         </CardContent>
       </Card>
+      </FounderDesignRoot>
     </PageContainer>
   );
 }
@@ -423,19 +438,41 @@ type KpiCardProps = {
 function KpiCard({ label, value, sublabel, href, icon: Icon }: KpiCardProps) {
   return (
     <Link href={href} className="block">
-      <Card className="h-full transition-colors hover:border-primary/40 hover:bg-accent/30">
-        <CardContent className="flex items-start justify-between gap-3">
+      <Card
+        className="h-full transition-colors hover:border-primary/40 hover:bg-accent/30"
+        style={{ minHeight: "var(--tbbt-kpi-min-height, 0px)" }}
+      >
+        <CardContent
+          className="flex items-start justify-between gap-3"
+          style={{ padding: "var(--tbbt-kpi-padding, 1rem)" }}
+        >
           <div className="min-w-0">
-            <p className="text-xs font-medium text-muted-foreground">{label}</p>
-            <p className="mt-1.5 text-2xl font-semibold tabular-nums tracking-tight text-foreground">
+            <p className="font-medium text-muted-foreground" style={{ fontSize: "var(--tbbt-kpi-label-font, 12px)" }}>
+              {label}
+            </p>
+            <p
+              className="mt-1.5 font-semibold tabular-nums tracking-tight text-foreground"
+              style={{ fontSize: "var(--tbbt-kpi-number-font, 24px)" }}
+            >
               {value}
             </p>
             {sublabel ? (
-              <p className="mt-1 text-xs text-muted-foreground">{sublabel}</p>
+              <p
+                className="mt-1 text-muted-foreground"
+                style={{ fontSize: "var(--tbbt-kpi-supporting-font, 12px)" }}
+              >
+                {sublabel}
+              </p>
             ) : null}
           </div>
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <Icon className="size-4.5" />
+          <span
+            className="flex shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
+            style={{
+              width: "var(--tbbt-kpi-icon-size, 36px)",
+              height: "var(--tbbt-kpi-icon-size, 36px)",
+            }}
+          >
+            <Icon className="size-[calc(var(--tbbt-kpi-icon-size,36px)*0.5)]" />
           </span>
         </CardContent>
       </Card>

@@ -11,6 +11,7 @@ import {
   type JobListItem,
 } from "@/components/jobs/jobs-workspace";
 import { PageSizeSelect } from "@/components/jobs/page-size-select";
+import { FounderDesignRoot } from "@/components/founder-design/root";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
@@ -25,6 +26,8 @@ import { WeekView } from "@/components/schedule/week-view";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
+import { checkFounderAccess } from "@/lib/founder-access";
+import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
 import {
@@ -152,6 +155,17 @@ export default async function JobsPage({
 }) {
   const params = await searchParams;
   const access = await requireManagementPageAccess();
+
+  // Founder Design Mode: platform-level, independent of Membership/role
+  // (see src/lib/founder-access.ts) -- never derived from OWNER/ADMIN.
+  const founder = await checkFounderAccess();
+  const founderOverride = founder
+    ? await prisma.founderDesignOverride.findUnique({
+        where: { userId_pageKey: { userId: founder.id, pageKey: "jobs" } },
+      })
+    : null;
+  const founderTokens = sanitizeFounderPageTokens("jobs", founderOverride?.tokens ?? {});
+
   const view = parseScheduleView(params.view);
   const anchorDate = parseScheduleDate(params.date);
   const today = startOfDay(new Date());
@@ -664,7 +678,8 @@ export default async function JobsPage({
       />
       <PageHeader title="Schedule / Jobs" description={headerDescription} />
 
-      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-5">
+      <FounderDesignRoot pageKey="jobs" isFounder={Boolean(founder)} savedTokens={founderTokens}>
+      <div className="grid sm:grid-cols-2 lg:grid-cols-5" style={{ gap: "var(--tbbt-kpi-gap, 20px)" }}>
         {kpis.map((kpi) => (
           <KpiCard key={kpi.label} {...kpi} />
         ))}
@@ -688,6 +703,7 @@ export default async function JobsPage({
         }))}
         pagination={pagination}
       />
+      </FounderDesignRoot>
     </PageContainer>
   );
 }
@@ -715,20 +731,38 @@ type KpiCardProps = {
 function KpiCard({ label, value, sublabel, href, icon: Icon, accent }: KpiCardProps) {
   return (
     <Link href={href} className="block">
-      <Card className="h-full border-border/70 shadow-sm transition-colors hover:border-primary/40 hover:bg-accent/20">
-        <CardContent className="flex items-center gap-4 p-5">
+      <Card
+        className="h-full border-border/70 shadow-sm transition-colors hover:border-primary/40 hover:bg-accent/20"
+        style={{ minHeight: "var(--tbbt-kpi-min-height, 0px)" }}
+      >
+        <CardContent className="flex items-center gap-4" style={{ padding: "var(--tbbt-kpi-padding, 20px)" }}>
           <span
             className={cn(
-              "flex size-12 shrink-0 items-center justify-center rounded-full",
+              "flex shrink-0 items-center justify-center rounded-full",
               KPI_ACCENT_CLASSES[accent],
             )}
+            style={{ width: "var(--tbbt-kpi-icon-size, 48px)", height: "var(--tbbt-kpi-icon-size, 48px)" }}
           >
-            <Icon className="size-5" />
+            <Icon className="size-[calc(var(--tbbt-kpi-icon-size,48px)*0.42)]" />
           </span>
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{label}</p>
-            <p className="mt-1 text-3xl font-bold tabular-nums tracking-tight text-foreground">{value}</p>
-            {sublabel ? <p className="mt-0.5 truncate text-xs text-muted-foreground">{sublabel}</p> : null}
+            <p
+              className="font-semibold tracking-wider text-muted-foreground uppercase"
+              style={{ fontSize: "var(--tbbt-kpi-label-font, 11px)" }}
+            >
+              {label}
+            </p>
+            <p
+              className="mt-1 font-bold tabular-nums tracking-tight text-foreground"
+              style={{ fontSize: "var(--tbbt-kpi-number-font, 30px)" }}
+            >
+              {value}
+            </p>
+            {sublabel ? (
+              <p className="mt-0.5 truncate text-muted-foreground" style={{ fontSize: "var(--tbbt-kpi-supporting-font, 12px)" }}>
+                {sublabel}
+              </p>
+            ) : null}
           </div>
         </CardContent>
       </Card>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ComponentType, type ReactNode } from "react";
+import { useState, type ComponentType, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { Camera, ExternalLink, FileText, Mail, MapPin, Phone, Receipt, UserCog } from "lucide-react";
 import { AssignJobMemberForm, type EligibleMember } from "@/components/jobs/assign-job-member-form";
@@ -116,7 +116,7 @@ export function JobsWorkspace({
   }
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_350px]">
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,350px)]">
       <div className="space-y-4">
         {calendarSection}
 
@@ -168,14 +168,17 @@ function JobsTable({
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-border/70 bg-muted/50 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-              <th className="px-2 py-3.5 font-semibold">Job / Customer</th>
-              <th className="px-2 py-3.5 font-semibold">Service / Scope</th>
-              <th className="px-2 py-3.5 font-semibold">Date &amp; Time</th>
-              <th className="px-2 py-3.5 font-semibold">Status</th>
-              <th className="px-2 py-3.5 font-semibold">Crew / Assignee</th>
-              <th className="px-2 py-3.5 text-right font-semibold">Amount</th>
-              <th className="px-2 py-3.5 text-right font-semibold">Action</th>
+            <tr
+              className="border-b border-border/70 bg-muted/50 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+              style={{ "--th-py": "var(--tbbt-table-header-py, 14px)" } as CSSProperties}
+            >
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Job / Customer</th>
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Service / Scope</th>
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Date &amp; Time</th>
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Status</th>
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Crew / Assignee</th>
+              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Amount</th>
+              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -197,12 +200,14 @@ function JobsTable({
                     "cursor-pointer border-b border-border/60 outline-none transition-colors last:border-b-0 hover:bg-accent/40",
                     active && "bg-primary/10 hover:bg-primary/10",
                   )}
+                  style={{ "--tr-py": "var(--tbbt-table-row-py, 16px)" } as CSSProperties}
                 >
                   <td
                     className={cn(
-                      "max-w-24 px-2 py-4 align-top",
+                      "max-w-24 px-2 align-top",
                       active && "border-l-2 border-l-primary",
                     )}
+                    style={{ paddingBlock: "var(--tr-py)" }}
                   >
                     <p className="truncate text-[0.95rem] font-semibold text-foreground">
                       {job.customer?.name ?? "Customer"}
@@ -211,28 +216,35 @@ function JobsTable({
                       <p className="truncate text-xs text-muted-foreground">{job.propertyLabel}</p>
                     ) : null}
                   </td>
-                  <td className="max-w-28 px-2 py-4 align-top">
+                  <td className="max-w-28 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                     <p className="truncate text-[0.95rem] font-medium text-foreground">
                       {job.scopeSummary ?? "—"}
                     </p>
                   </td>
-                  <td className="px-2 py-4 align-top text-muted-foreground whitespace-nowrap">
+                  <td
+                    className="px-2 align-top text-muted-foreground whitespace-nowrap"
+                    style={{ paddingBlock: "var(--tr-py)" }}
+                  >
                     {job.scheduledAtLabel ?? "Unscheduled"}
                     {job.durationLabel ? (
                       <p className="text-xs text-muted-foreground">{job.durationLabel}</p>
                     ) : null}
                   </td>
-                  <td className="px-2 py-4 align-top">
+                  <td className="px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                     <StatusBadge status={job.status} />
                   </td>
-                  <td className="max-w-20 px-2 py-4 align-top">
+                  <td className="max-w-20 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                     <p className="truncate text-foreground">{job.assignedMemberName ?? "Unassigned"}</p>
                   </td>
-                  <td className="px-2 py-4 text-right align-top tabular-nums font-semibold text-foreground whitespace-nowrap">
+                  <td
+                    className="px-2 text-right align-top tabular-nums font-semibold text-foreground whitespace-nowrap"
+                    style={{ paddingBlock: "var(--tr-py)" }}
+                  >
                     {job.amountLabel ?? "—"}
                   </td>
                   <td
-                    className="px-2 py-4 text-right align-top"
+                    className="px-2 text-right align-top"
+                    style={{ paddingBlock: "var(--tr-py)" }}
                     onClick={(event) => event.stopPropagation()}
                   >
                     <Button asChild size="sm" variant="outline">

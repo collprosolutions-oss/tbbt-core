@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import type { ComponentType, ReactNode } from "react";
+import type { ComponentType, CSSProperties, ReactNode } from "react";
 import {
   Briefcase,
   CalendarCheck,
@@ -16,6 +16,7 @@ import { ExportCustomersButton, type ExportCustomerRow } from "@/components/cust
 import { NewCustomerForm } from "@/components/customers/new-customer-form";
 import { PageSizeSelect } from "@/components/customers/page-size-select";
 import { EmptyState } from "@/components/empty-state";
+import { FounderDesignRoot } from "@/components/founder-design/root";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
@@ -24,6 +25,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
+import { checkFounderAccess } from "@/lib/founder-access";
+import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatDate, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { cn } from "@/lib/utils";
@@ -69,6 +72,17 @@ export default async function CustomersPage({
   searchParams: Promise<{ q?: string; area?: string; page?: string; pageSize?: string }>;
 }) {
   const access = await requireManagementPageAccess();
+
+  // Founder Design Mode: platform-level, independent of Membership/role
+  // (see src/lib/founder-access.ts) -- never derived from OWNER/ADMIN.
+  const founder = await checkFounderAccess();
+  const founderOverride = founder
+    ? await prisma.founderDesignOverride.findUnique({
+        where: { userId_pageKey: { userId: founder.id, pageKey: "customers" } },
+      })
+    : null;
+  const founderTokens = sanitizeFounderPageTokens("customers", founderOverride?.tokens ?? {});
+
   const params = await searchParams;
   const q = (params.q ?? "").trim();
   const area = params.area && params.area !== "all" ? params.area : undefined;
@@ -377,7 +391,8 @@ export default async function CustomersPage({
         description={`${totalCustomersCount} customer${totalCustomersCount === 1 ? "" : "s"} for ${access.workspace.business.name}.`}
       />
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+      <FounderDesignRoot pageKey="customers" isFounder={Boolean(founder)} savedTokens={founderTokens}>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,300px)]">
         <div className="space-y-4">
           {/*
            * The shared header's search slot only renders on desktop (see
@@ -463,7 +478,7 @@ export default async function CustomersPage({
             <CardHeader>
               <CardTitle className="text-base">Customer Overview</CardTitle>
             </CardHeader>
-            <CardContent className="grid grid-cols-2 gap-3">
+            <CardContent className="grid grid-cols-2" style={{ gap: "var(--tbbt-kpi-gap, 12px)" }}>
               {overviewKpis.map((kpi) => (
                 <OverviewKpi key={kpi.label} {...kpi} />
               ))}
@@ -525,6 +540,7 @@ export default async function CustomersPage({
           <NewCustomerForm label="Add New Customer" size="lg" className="w-full" />
         </div>
       </div>
+      </FounderDesignRoot>
     </PageContainer>
   );
 }
@@ -549,13 +565,33 @@ type OverviewKpiProps = {
 
 function OverviewKpi({ label, value, sublabel, icon: Icon, accent }: OverviewKpiProps) {
   return (
-    <div className="space-y-2 rounded-lg border border-border/60 bg-card/40 p-3">
-      <span className={cn("flex size-9 items-center justify-center rounded-full", OVERVIEW_ACCENT_CLASSES[accent])}>
-        <Icon className="size-4.5" />
+    <div
+      className="space-y-2 rounded-lg border border-border/60 bg-card/40"
+      style={{ padding: "var(--tbbt-kpi-padding, 12px)", minHeight: "var(--tbbt-kpi-min-height, 0px)" }}
+    >
+      <span
+        className={cn("flex items-center justify-center rounded-full", OVERVIEW_ACCENT_CLASSES[accent])}
+        style={{ width: "var(--tbbt-kpi-icon-size, 36px)", height: "var(--tbbt-kpi-icon-size, 36px)" }}
+      >
+        <Icon className="size-[calc(var(--tbbt-kpi-icon-size,36px)*0.5)]" />
       </span>
-      <p className="text-xl font-bold tabular-nums tracking-tight text-foreground">{value}</p>
-      <p className="text-[0.7rem] leading-tight font-medium tracking-wide text-muted-foreground uppercase">{label}</p>
-      {sublabel ? <p className="text-[0.7rem] text-muted-foreground">{sublabel}</p> : null}
+      <p
+        className="font-bold tabular-nums tracking-tight text-foreground"
+        style={{ fontSize: "var(--tbbt-kpi-number-font, 20px)" }}
+      >
+        {value}
+      </p>
+      <p
+        className="leading-tight font-medium tracking-wide text-muted-foreground uppercase"
+        style={{ fontSize: "var(--tbbt-kpi-label-font, 11px)" }}
+      >
+        {label}
+      </p>
+      {sublabel ? (
+        <p className="text-muted-foreground" style={{ fontSize: "var(--tbbt-kpi-supporting-font, 11px)" }}>
+          {sublabel}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -588,22 +624,29 @@ function CustomersTable({ customers }: { customers: CustomerRow[] }) {
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-border/70 bg-muted/50 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-              <th className="px-2 py-3.5 font-semibold">Customer</th>
-              <th className="px-2 py-3.5 font-semibold">Contact</th>
-              <th className="px-2 py-3.5 font-semibold">Location</th>
-              <th className="px-2 py-3.5 font-semibold">Status</th>
-              <th className="px-2 py-3.5 text-right font-semibold">Jobs</th>
-              <th className="px-2 py-3.5 text-right font-semibold">Total Spent</th>
-              <th className="px-2 py-3.5 text-right font-semibold">Balance</th>
-              <th className="px-2 py-3.5 font-semibold">Last Activity</th>
-              <th className="px-2 py-3.5 text-right font-semibold">Action</th>
+            <tr
+              className="border-b border-border/70 bg-muted/50 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+              style={{ "--th-py": "var(--tbbt-table-header-py, 14px)" } as CSSProperties}
+            >
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Customer</th>
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Contact</th>
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Location</th>
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Status</th>
+              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Jobs</th>
+              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Total Spent</th>
+              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Balance</th>
+              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Last Activity</th>
+              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Action</th>
             </tr>
           </thead>
           <tbody>
             {customers.map((customer) => (
-              <tr key={customer.id} className="border-b border-border/60 transition-colors last:border-b-0 hover:bg-accent/40">
-                <td className="max-w-24 px-2 py-4 align-top">
+              <tr
+                key={customer.id}
+                className="border-b border-border/60 transition-colors last:border-b-0 hover:bg-accent/40"
+                style={{ "--tr-py": "var(--tbbt-table-row-py, 16px)" } as CSSProperties}
+              >
+                <td className="max-w-24 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                   <div className="flex items-center gap-2">
                     <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
                       {initials(customer.name)}
@@ -611,19 +654,19 @@ function CustomersTable({ customers }: { customers: CustomerRow[] }) {
                     <span className="truncate text-[0.95rem] font-semibold text-foreground">{customer.name}</span>
                   </div>
                 </td>
-                <td className="max-w-28 px-2 py-4 align-top">
+                <td className="max-w-28 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                   <p className="truncate text-foreground">{customer.phone || customer.email || "—"}</p>
                   {customer.phone && customer.email ? (
                     <p className="truncate text-xs text-muted-foreground">{customer.email}</p>
                   ) : null}
                 </td>
-                <td className="max-w-24 px-2 py-4 align-top">
+                <td className="max-w-24 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                   <p className="truncate text-foreground">{customer.locationPrimary ?? "—"}</p>
                   {customer.locationSecondary ? (
                     <p className="truncate text-xs text-muted-foreground">{customer.locationSecondary}</p>
                   ) : null}
                 </td>
-                <td className="max-w-28 px-2 py-4 align-top">
+                <td className="max-w-28 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                   {customer.statusValue ? (
                     <>
                       <StatusBadge status={customer.statusValue} />
@@ -635,22 +678,34 @@ function CustomersTable({ customers }: { customers: CustomerRow[] }) {
                     <span className="text-xs text-muted-foreground">—</span>
                   )}
                 </td>
-                <td className="px-2 py-4 text-right align-top tabular-nums text-foreground">{customer.jobs}</td>
-                <td className="px-2 py-4 text-right align-top tabular-nums text-foreground whitespace-nowrap">
+                <td
+                  className="px-2 text-right align-top tabular-nums text-foreground"
+                  style={{ paddingBlock: "var(--tr-py)" }}
+                >
+                  {customer.jobs}
+                </td>
+                <td
+                  className="px-2 text-right align-top tabular-nums text-foreground whitespace-nowrap"
+                  style={{ paddingBlock: "var(--tr-py)" }}
+                >
                   {formatMoney(customer.totalSpent)}
                 </td>
                 <td
                   className={cn(
-                    "px-2 py-4 text-right align-top tabular-nums whitespace-nowrap",
+                    "px-2 text-right align-top tabular-nums whitespace-nowrap",
                     customer.balance > 0 ? "font-medium text-amber-500" : "text-emerald-500",
                   )}
+                  style={{ paddingBlock: "var(--tr-py)" }}
                 >
                   {formatMoney(customer.balance)}
                 </td>
-                <td className="max-w-24 truncate px-2 py-4 align-top text-muted-foreground">
+                <td
+                  className="max-w-24 truncate px-2 align-top text-muted-foreground"
+                  style={{ paddingBlock: "var(--tr-py)" }}
+                >
                   {formatDate(customer.lastActivity)}
                 </td>
-                <td className="px-2 py-4 text-right align-top">
+                <td className="px-2 text-right align-top" style={{ paddingBlock: "var(--tr-py)" }}>
                   <Button asChild size="sm" variant="outline">
                     <Link href={`/customers/${customer.id}`}>Open</Link>
                   </Button>
