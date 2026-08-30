@@ -147,7 +147,12 @@ check("Market Position is reserved without a fabricated ranking",
   pricingSrc.includes("Market Position") &&
     pricingSrc.includes("Not available until pricing intelligence is connected"));
 check("Desktop workspace is a 3-column row from the lg breakpoint",
-  workspaceSrc.includes("lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(16rem,var(--tbbt-panel-width,340px))]"));
+  workspaceSrc.includes("lg:grid-cols-[minmax(0,1fr)_minmax(16rem,var(--tbbt-panel-width,340px))_minmax(0,1fr)]"));
+check(
+  "Desktop column order is Presentation, Catalog, Pricing Intelligence",
+  workspaceSrc.indexOf('id="presentation"') < workspaceSrc.indexOf('id="catalog"') &&
+    workspaceSrc.indexOf('id="catalog"') < workspaceSrc.indexOf('id="pricing"'),
+);
 check("Catalog search exists", catalogSrc.includes("Search services"));
 check("Collapse All / Expand All exist", catalogSrc.includes("Collapse All") && catalogSrc.includes("Expand All"));
 check("Add Service uses existing catalog form", workspaceSrc.includes("AddServiceSheet"));
