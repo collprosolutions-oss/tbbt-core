@@ -137,19 +137,25 @@ function EstimatesTable({
   return (
     <Card className="overflow-hidden border-border/70 p-0 shadow-sm">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full" style={{ fontSize: "var(--tbbt-table-font-size, 14px)" }}>
           <thead>
             <tr
-              className="border-b border-border/70 bg-muted/50 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
-              style={{ "--th-py": "var(--tbbt-table-header-py, 14px)" } as CSSProperties}
+              className="border-b border-border/70 bg-muted/50 text-left font-semibold tracking-wide text-muted-foreground uppercase"
+              style={
+                {
+                  "--th-py": "var(--tbbt-table-header-py, 14px)",
+                  "--cell-px": "var(--tbbt-table-cell-px, 10px)",
+                  fontSize: "var(--tbbt-table-header-font-size, 12px)",
+                } as CSSProperties
+              }
             >
-              <th className="px-2.5 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Estimate #</th>
-              <th className="px-2.5 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Customer</th>
-              <th className="px-2.5 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Service / Description</th>
-              <th className="px-2.5 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Amount</th>
-              <th className="px-2.5 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Status</th>
-              <th className="px-2.5 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Date</th>
-              <th className="px-2.5 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Action</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Estimate #</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Customer</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Service / Description</th>
+              <th className="text-right font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Amount</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Status</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Date</th>
+              <th className="text-right font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -171,46 +177,51 @@ function EstimatesTable({
                     "cursor-pointer border-b border-border/60 outline-none transition-colors last:border-b-0 hover:bg-accent/40",
                     active && "bg-primary/10 hover:bg-primary/10",
                   )}
-                  style={{ "--tr-py": "var(--tbbt-table-row-py, 16px)" } as CSSProperties}
+                  style={
+                    {
+                      "--tr-py": "var(--tbbt-table-row-py, 16px)",
+                      "--cell-px": "var(--tbbt-table-cell-px, 10px)",
+                    } as CSSProperties
+                  }
                 >
                   <td
                     className={cn(
-                      "px-2.5 align-top font-mono text-xs text-muted-foreground",
+                      "align-top font-mono text-xs text-muted-foreground",
                       active && "border-l-2 border-l-primary",
                     )}
-                    style={{ paddingBlock: "var(--tr-py)" }}
+                    style={{ padding: "var(--tr-py) var(--cell-px)" }}
                   >
                     #{estimate.id.slice(-8)}
                   </td>
-                  <td className="max-w-24 px-2.5 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
-                    <p className="truncate text-[0.95rem] font-semibold text-foreground">
+                  <td className="max-w-24 align-top" style={{ padding: "var(--tr-py) var(--cell-px)" }}>
+                    <p className="truncate font-semibold text-foreground" style={{ fontSize: "1.09em" }}>
                       {estimate.customer?.name ?? "Customer"}
                     </p>
                     {estimate.propertyLabel ? (
                       <p className="truncate text-xs text-muted-foreground">{estimate.propertyLabel}</p>
                     ) : null}
                   </td>
-                  <td className="max-w-32 px-2.5 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
-                    <p className="truncate text-[0.95rem] font-medium text-foreground">{estimate.serviceLabel}</p>
+                  <td className="max-w-32 align-top" style={{ padding: "var(--tr-py) var(--cell-px)" }}>
+                    <p className="truncate font-medium text-foreground" style={{ fontSize: "1.09em" }}>{estimate.serviceLabel}</p>
                   </td>
                   <td
-                    className="px-2.5 text-right align-top tabular-nums font-semibold text-foreground whitespace-nowrap"
-                    style={{ paddingBlock: "var(--tr-py)" }}
+                    className="text-right align-top tabular-nums font-semibold text-foreground whitespace-nowrap"
+                    style={{ padding: "var(--tr-py) var(--cell-px)" }}
                   >
                     {estimate.totalLabel}
                   </td>
-                  <td className="px-2.5 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
+                  <td className="align-top" style={{ padding: "var(--tr-py) var(--cell-px)" }}>
                     <StatusBadge status={estimate.status} />
                   </td>
                   <td
-                    className="px-2.5 align-top text-muted-foreground whitespace-nowrap"
-                    style={{ paddingBlock: "var(--tr-py)" }}
+                    className="align-top text-muted-foreground whitespace-nowrap"
+                    style={{ padding: "var(--tr-py) var(--cell-px)" }}
                   >
                     {estimate.createdAtLabel}
                   </td>
                   <td
-                    className="px-2.5 text-right align-top"
-                    style={{ paddingBlock: "var(--tr-py)" }}
+                    className="text-right align-top"
+                    style={{ padding: "var(--tr-py) var(--cell-px)" }}
                     onClick={(event) => event.stopPropagation()}
                   >
                     <Button asChild size="sm" variant="outline">

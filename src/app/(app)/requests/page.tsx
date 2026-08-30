@@ -12,6 +12,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FounderDesignRoot } from "@/components/founder-design/root";
+import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
@@ -287,12 +288,17 @@ export default async function RequestsPage({
         description={`Service requests for ${access.workspace.business.name}.`}
       />
 
-      <FounderDesignRoot pageKey="requests" isFounder={Boolean(founder)} savedTokens={founderTokens}>
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4" style={{ gap: "var(--tbbt-kpi-gap, 20px)" }}>
+      <FounderDesignRoot
+        pageKey="requests"
+        isFounder={Boolean(founder)}
+        savedTokens={founderTokens}
+        kpiCardLabels={kpis.map((kpi) => kpi.label)}
+      >
+      <KpiCardsLayout gridClassName="sm:grid-cols-2 lg:grid-cols-4" defaultGapPx={20}>
         {kpis.map((kpi) => (
           <KpiCard key={kpi.label} {...kpi} />
         ))}
-      </div>
+      </KpiCardsLayout>
 
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3">
         <nav className="flex flex-wrap items-center gap-1.5 overflow-x-auto">

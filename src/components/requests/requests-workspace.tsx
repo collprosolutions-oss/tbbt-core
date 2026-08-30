@@ -109,17 +109,23 @@ function RequestsTable({
   return (
     <Card className="overflow-hidden border-border/70 p-0 shadow-sm">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full" style={{ fontSize: "var(--tbbt-table-font-size, 14px)" }}>
           <thead>
             <tr
-              className="border-b border-border/70 bg-muted/50 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
-              style={{ "--th-py": "var(--tbbt-table-header-py, 14px)" } as CSSProperties}
+              className="border-b border-border/70 bg-muted/50 text-left font-semibold tracking-wide text-muted-foreground uppercase"
+              style={
+                {
+                  "--th-py": "var(--tbbt-table-header-py, 14px)",
+                  "--cell-px": "var(--tbbt-table-cell-px, 8px)",
+                  fontSize: "var(--tbbt-table-header-font-size, 12px)",
+                } as CSSProperties
+              }
             >
-              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Customer</th>
-              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Service / Request</th>
-              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Date</th>
-              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Status</th>
-              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Action</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Customer</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Service / Request</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Date</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Status</th>
+              <th className="text-right font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -141,24 +147,26 @@ function RequestsTable({
                     "cursor-pointer border-b border-border/60 outline-none transition-colors last:border-b-0 hover:bg-accent/40",
                     active && "bg-primary/10 hover:bg-primary/10",
                   )}
-                  style={{ "--tr-py": "var(--tbbt-table-row-py, 20px)" } as CSSProperties}
+                  style={
+                    {
+                      "--tr-py": "var(--tbbt-table-row-py, 20px)",
+                      "--cell-px": "var(--tbbt-table-cell-px, 8px)",
+                    } as CSSProperties
+                  }
                 >
                   <td
-                    className={cn(
-                      "max-w-20 px-2 align-top",
-                      active && "border-l-2 border-l-primary",
-                    )}
-                    style={{ paddingBlock: "var(--tr-py)" }}
+                    className={cn("max-w-20 align-top", active && "border-l-2 border-l-primary")}
+                    style={{ padding: "var(--tr-py) var(--cell-px)" }}
                   >
-                    <p className="truncate text-[0.95rem] font-semibold text-foreground">
+                    <p className="truncate font-semibold text-foreground" style={{ fontSize: "1.09em" }}>
                       {request.customer?.name ?? "Customer"}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
                       {request.customer?.phone || request.customer?.email || "No contact on file"}
                     </p>
                   </td>
-                  <td className="max-w-20 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
-                    <p className="truncate text-[0.95rem] font-medium text-foreground">
+                  <td className="max-w-20 align-top" style={{ padding: "var(--tr-py) var(--cell-px)" }}>
+                    <p className="truncate font-medium text-foreground" style={{ fontSize: "1.09em" }}>
                       {request.serviceName ?? "Not specified"}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
@@ -166,17 +174,17 @@ function RequestsTable({
                     </p>
                   </td>
                   <td
-                    className="max-w-24 px-2 align-top text-muted-foreground whitespace-nowrap"
-                    style={{ paddingBlock: "var(--tr-py)" }}
+                    className="max-w-24 align-top text-muted-foreground whitespace-nowrap"
+                    style={{ padding: "var(--tr-py) var(--cell-px)" }}
                   >
                     {request.createdAtLabel}
                   </td>
-                  <td className="px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
+                  <td className="align-top" style={{ padding: "var(--tr-py) var(--cell-px)" }}>
                     <StatusBadge status={request.status} />
                   </td>
                   <td
-                    className="px-2 text-right align-top"
-                    style={{ paddingBlock: "var(--tr-py)" }}
+                    className="text-right align-top"
+                    style={{ padding: "var(--tr-py) var(--cell-px)" }}
                     onClick={(event) => event.stopPropagation()}
                   >
                     {request.estimate ? (

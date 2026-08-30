@@ -17,6 +17,7 @@ import { NewCustomerForm } from "@/components/customers/new-customer-form";
 import { PageSizeSelect } from "@/components/customers/page-size-select";
 import { EmptyState } from "@/components/empty-state";
 import { FounderDesignRoot } from "@/components/founder-design/root";
+import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
@@ -391,7 +392,12 @@ export default async function CustomersPage({
         description={`${totalCustomersCount} customer${totalCustomersCount === 1 ? "" : "s"} for ${access.workspace.business.name}.`}
       />
 
-      <FounderDesignRoot pageKey="customers" isFounder={Boolean(founder)} savedTokens={founderTokens}>
+      <FounderDesignRoot
+        pageKey="customers"
+        isFounder={Boolean(founder)}
+        savedTokens={founderTokens}
+        kpiCardLabels={overviewKpis.map((kpi) => kpi.label)}
+      >
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,300px)]">
         <div className="space-y-4">
           {/*
@@ -478,10 +484,16 @@ export default async function CustomersPage({
             <CardHeader>
               <CardTitle className="text-base">Customer Overview</CardTitle>
             </CardHeader>
-            <CardContent className="grid grid-cols-2" style={{ gap: "var(--tbbt-kpi-gap, 12px)" }}>
-              {overviewKpis.map((kpi) => (
-                <OverviewKpi key={kpi.label} {...kpi} />
-              ))}
+            <CardContent>
+              <KpiCardsLayout
+                gridClassName="grid-cols-2"
+                flexBreakpointClassName="sm:flex sm:flex-wrap"
+                defaultGapPx={12}
+              >
+                {overviewKpis.map((kpi) => (
+                  <OverviewKpi key={kpi.label} {...kpi} />
+                ))}
+              </KpiCardsLayout>
             </CardContent>
           </Card>
 
@@ -622,21 +634,27 @@ function CustomersTable({ customers }: { customers: CustomerRow[] }) {
   return (
     <Card className="overflow-hidden border-border/70 p-0 shadow-sm">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full" style={{ fontSize: "var(--tbbt-table-font-size, 14px)" }}>
           <thead>
             <tr
-              className="border-b border-border/70 bg-muted/50 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
-              style={{ "--th-py": "var(--tbbt-table-header-py, 14px)" } as CSSProperties}
+              className="border-b border-border/70 bg-muted/50 text-left font-semibold tracking-wide text-muted-foreground uppercase"
+              style={
+                {
+                  "--th-py": "var(--tbbt-table-header-py, 14px)",
+                  "--cell-px": "var(--tbbt-table-cell-px, 8px)",
+                  fontSize: "var(--tbbt-table-header-font-size, 12px)",
+                } as CSSProperties
+              }
             >
-              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Customer</th>
-              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Contact</th>
-              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Location</th>
-              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Status</th>
-              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Jobs</th>
-              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Total Spent</th>
-              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Balance</th>
-              <th className="px-2 font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Last Activity</th>
-              <th className="px-2 text-right font-semibold" style={{ paddingBlock: "var(--th-py)" }}>Action</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Customer</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Contact</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Location</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Status</th>
+              <th className="text-right font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Jobs</th>
+              <th className="text-right font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Total Spent</th>
+              <th className="text-right font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Balance</th>
+              <th className="font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Last Activity</th>
+              <th className="text-right font-semibold" style={{ padding: "var(--th-py) var(--cell-px)" }}>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -644,29 +662,34 @@ function CustomersTable({ customers }: { customers: CustomerRow[] }) {
               <tr
                 key={customer.id}
                 className="border-b border-border/60 transition-colors last:border-b-0 hover:bg-accent/40"
-                style={{ "--tr-py": "var(--tbbt-table-row-py, 16px)" } as CSSProperties}
+                style={
+                  {
+                    "--tr-py": "var(--tbbt-table-row-py, 16px)",
+                    "--cell-px": "var(--tbbt-table-cell-px, 8px)",
+                  } as CSSProperties
+                }
               >
-                <td className="max-w-24 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
+                <td className="max-w-24 align-top" style={{ padding: "var(--tr-py) var(--cell-px)" }}>
                   <div className="flex items-center gap-2">
                     <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
                       {initials(customer.name)}
                     </span>
-                    <span className="truncate text-[0.95rem] font-semibold text-foreground">{customer.name}</span>
+                    <span className="truncate font-semibold text-foreground" style={{ fontSize: "1.09em" }}>{customer.name}</span>
                   </div>
                 </td>
-                <td className="max-w-28 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
+                <td className="max-w-28 align-top" style={{ padding: "var(--tr-py) var(--cell-px)" }}>
                   <p className="truncate text-foreground">{customer.phone || customer.email || "—"}</p>
                   {customer.phone && customer.email ? (
                     <p className="truncate text-xs text-muted-foreground">{customer.email}</p>
                   ) : null}
                 </td>
-                <td className="max-w-24 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
+                <td className="max-w-24 align-top" style={{ padding: "var(--tr-py) var(--cell-px)" }}>
                   <p className="truncate text-foreground">{customer.locationPrimary ?? "—"}</p>
                   {customer.locationSecondary ? (
                     <p className="truncate text-xs text-muted-foreground">{customer.locationSecondary}</p>
                   ) : null}
                 </td>
-                <td className="max-w-28 px-2 align-top" style={{ paddingBlock: "var(--tr-py)" }}>
+                <td className="max-w-28 align-top" style={{ padding: "var(--tr-py) var(--cell-px)" }}>
                   {customer.statusValue ? (
                     <>
                       <StatusBadge status={customer.statusValue} />
@@ -679,33 +702,33 @@ function CustomersTable({ customers }: { customers: CustomerRow[] }) {
                   )}
                 </td>
                 <td
-                  className="px-2 text-right align-top tabular-nums text-foreground"
-                  style={{ paddingBlock: "var(--tr-py)" }}
+                  className="text-right align-top tabular-nums text-foreground"
+                  style={{ padding: "var(--tr-py) var(--cell-px)" }}
                 >
                   {customer.jobs}
                 </td>
                 <td
-                  className="px-2 text-right align-top tabular-nums text-foreground whitespace-nowrap"
-                  style={{ paddingBlock: "var(--tr-py)" }}
+                  className="text-right align-top tabular-nums text-foreground whitespace-nowrap"
+                  style={{ padding: "var(--tr-py) var(--cell-px)" }}
                 >
                   {formatMoney(customer.totalSpent)}
                 </td>
                 <td
                   className={cn(
-                    "px-2 text-right align-top tabular-nums whitespace-nowrap",
+                    "text-right align-top tabular-nums whitespace-nowrap",
                     customer.balance > 0 ? "font-medium text-amber-500" : "text-emerald-500",
                   )}
-                  style={{ paddingBlock: "var(--tr-py)" }}
+                  style={{ padding: "var(--tr-py) var(--cell-px)" }}
                 >
                   {formatMoney(customer.balance)}
                 </td>
                 <td
-                  className="max-w-24 truncate px-2 align-top text-muted-foreground"
-                  style={{ paddingBlock: "var(--tr-py)" }}
+                  className="max-w-24 truncate align-top text-muted-foreground"
+                  style={{ padding: "var(--tr-py) var(--cell-px)" }}
                 >
                   {formatDate(customer.lastActivity)}
                 </td>
-                <td className="px-2 text-right align-top" style={{ paddingBlock: "var(--tr-py)" }}>
+                <td className="text-right align-top" style={{ padding: "var(--tr-py) var(--cell-px)" }}>
                   <Button asChild size="sm" variant="outline">
                     <Link href={`/customers/${customer.id}`}>Open</Link>
                   </Button>

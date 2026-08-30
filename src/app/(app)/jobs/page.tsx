@@ -12,6 +12,7 @@ import {
 } from "@/components/jobs/jobs-workspace";
 import { PageSizeSelect } from "@/components/jobs/page-size-select";
 import { FounderDesignRoot } from "@/components/founder-design/root";
+import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
@@ -678,12 +679,17 @@ export default async function JobsPage({
       />
       <PageHeader title="Schedule / Jobs" description={headerDescription} />
 
-      <FounderDesignRoot pageKey="jobs" isFounder={Boolean(founder)} savedTokens={founderTokens}>
-      <div className="grid sm:grid-cols-2 lg:grid-cols-5" style={{ gap: "var(--tbbt-kpi-gap, 20px)" }}>
+      <FounderDesignRoot
+        pageKey="jobs"
+        isFounder={Boolean(founder)}
+        savedTokens={founderTokens}
+        kpiCardLabels={kpis.map((kpi) => kpi.label)}
+      >
+      <KpiCardsLayout gridClassName="sm:grid-cols-2 lg:grid-cols-5" defaultGapPx={20}>
         {kpis.map((kpi) => (
           <KpiCard key={kpi.label} {...kpi} />
         ))}
-      </div>
+      </KpiCardsLayout>
 
       {/* Mobile-only search fallback -- the shared header's search slot only renders on desktop. */}
       <form action="/jobs" method="GET" className="md:hidden">

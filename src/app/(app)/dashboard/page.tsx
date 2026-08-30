@@ -16,6 +16,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { FounderDesignRoot } from "@/components/founder-design/root";
+import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
@@ -309,12 +310,17 @@ export default async function DashboardPage() {
         }
       />
 
-      <FounderDesignRoot pageKey="dashboard" isFounder={Boolean(founder)} savedTokens={founderTokens}>
-      <div className="grid sm:grid-cols-2 lg:grid-cols-5" style={{ gap: "var(--tbbt-kpi-gap, 12px)" }}>
+      <FounderDesignRoot
+        pageKey="dashboard"
+        isFounder={Boolean(founder)}
+        savedTokens={founderTokens}
+        kpiCardLabels={kpis.map((kpi) => kpi.label)}
+      >
+      <KpiCardsLayout gridClassName="sm:grid-cols-2 lg:grid-cols-5" defaultGapPx={12}>
         {kpis.map((kpi) => (
           <KpiCard key={kpi.label} {...kpi} />
         ))}
-      </div>
+      </KpiCardsLayout>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">

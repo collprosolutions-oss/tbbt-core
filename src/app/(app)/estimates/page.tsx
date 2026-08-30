@@ -12,6 +12,7 @@ import {
 import { PageSizeSelect } from "@/components/estimates/page-size-select";
 import { ServiceFilterSelect } from "@/components/estimates/service-filter-select";
 import { FounderDesignRoot } from "@/components/founder-design/root";
+import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
@@ -325,12 +326,17 @@ export default async function EstimatesPage({
         description={`Estimates for ${access.workspace.business.name}.`}
       />
 
-      <FounderDesignRoot pageKey="estimates" isFounder={Boolean(founder)} savedTokens={founderTokens}>
-      <div className="grid sm:grid-cols-2 lg:grid-cols-5" style={{ gap: "var(--tbbt-kpi-gap, 20px)" }}>
+      <FounderDesignRoot
+        pageKey="estimates"
+        isFounder={Boolean(founder)}
+        savedTokens={founderTokens}
+        kpiCardLabels={kpis.map((kpi) => kpi.label)}
+      >
+      <KpiCardsLayout gridClassName="sm:grid-cols-2 lg:grid-cols-5" defaultGapPx={20}>
         {kpis.map((kpi) => (
           <KpiCard key={kpi.label} {...kpi} />
         ))}
-      </div>
+      </KpiCardsLayout>
 
       {/* Mobile-only search fallback -- the shared header's search slot only renders on desktop. */}
       <form action="/estimates" method="GET" className="md:hidden">
