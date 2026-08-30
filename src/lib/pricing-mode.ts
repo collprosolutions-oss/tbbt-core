@@ -28,3 +28,15 @@ export function formatCatalogPriceLabel(
   }
   return `Starting at ${money}`;
 }
+
+export function pricingModeLabel(mode: string) {
+  if (mode === "FIXED") return "Fixed";
+  if (mode === "CUSTOM_QUOTE") return "Custom Quote";
+  return "Starting at";
+}
+
+export function pricingModeDescription(mode: string) {
+  if (mode === "FIXED") return "For predictable services.";
+  if (mode === "CUSTOM_QUOTE") return "For highly variable work.";
+  return "For moderately variable services.";
+}

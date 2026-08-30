@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 export type TunableKpiVariant = "dashboard" | "workspace" | "overview";
 
 /**
- * Shared KPI card used by all 6 supported pages. Zeros shadcn Card
+ * Shared KPI card used by all 7 supported pages. Zeros shadcn Card
  * chrome (`py`/`gap` from `--card-spacing`) so founder paddingY/X and
  * internalGap control ACTUAL rendered geometry -- the V1 bug was that
  * Card kept 16px block padding the founder token could not touch.
