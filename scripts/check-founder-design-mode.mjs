@@ -40,7 +40,7 @@ const {
   KPI_CARD_COUNTS,
   KPI_TOKEN_BOUNDS,
 } = await import("@/lib/founder-design");
-const { FOUNDER_REGIONS } = await import("@/lib/founder-regions");
+const { FOUNDER_REGIONS, defaultFounderRegionId } = await import("@/lib/founder-regions");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
 const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices", "/services", "/time-cards"];
@@ -206,6 +206,16 @@ async function main() {
       ["Customer Table", "Customer Overview", "Recent Activity", "Top Services", "Right Rail Width"].every((label) =>
         FOUNDER_REGIONS.customers.some((r) => r.label === label),
       ));
+    check(
+      "Customers default selected region is Customer Overview (top summary, not the table)",
+      defaultFounderRegionId("customers") === "overview" && FOUNDER_REGIONS.customers[0].id === "overview",
+    );
+    check(
+      "Customers Right Rail Width is a width-only control and is not Customer Overview",
+      FOUNDER_REGIONS.customers.find((r) => r.id === "rail")?.hasWidth === true &&
+        FOUNDER_REGIONS.customers.find((r) => r.id === "overview")?.hasWidth !== true &&
+        FOUNDER_REGIONS.customers.find((r) => r.id === "overview")?.kind === "kpi",
+    );
     check("Estimates regions include Estimate Table and Estimate Details only as real boxes",
       FOUNDER_REGIONS.estimates.some((r) => r.label === "Estimate Table") &&
         FOUNDER_REGIONS.estimates.some((r) => r.label === "Estimate Details") &&
@@ -258,7 +268,7 @@ async function main() {
   const REGION_MARKERS = {
     "/dashboard": ["kpi", "attention", "today", "actions", "recent"],
     "/requests": ["kpi", "tabs", "table", "calendar", "today", "actions"],
-    "/customers": ["table", "overview", "activity", "services"],
+    "/customers": ["overview", "table", "activity", "services"],
     "/estimates": ["kpi", "tabs", "table"],
     "/jobs": ["kpi", "calendar", "tabs", "table", "details"],
     "/invoices": ["kpi", "tabs", "table"],

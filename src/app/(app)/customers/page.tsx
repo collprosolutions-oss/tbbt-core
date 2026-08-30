@@ -402,6 +402,40 @@ export default async function CustomersPage({
         savedTokens={founderTokens}
         kpiCardLabels={overviewKpis.map((kpi) => kpi.label)}
       >
+      {/*
+       * Customer Overview is the page's top summary/KPI strip -- full
+       * main-content width -- not a right-rail widget. The table +
+       * supporting rail (Recent Activity, Top Services, Add New Customer)
+       * sit below. --tbbt-panel-width sizes only that remaining rail.
+       */}
+      <FounderRegion id="overview">
+        <Card className="border-border/70">
+          <CardHeader>
+            <CardTitle className="text-base">Customer Overview</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <KpiCardsLayout
+              gridClassName="grid-cols-2 lg:grid-cols-4"
+              defaultGapPx={12}
+            >
+              {overviewKpis.map((kpi, index) => (
+                <TunableKpiCard
+                  key={kpi.label}
+                  index={index}
+                  label={kpi.label}
+                  value={kpi.value}
+                  sublabel={kpi.sublabel}
+                  defaultIconId={kpi.defaultIconId}
+                  accentClassName={OVERVIEW_ACCENT_CLASSES[kpi.accent]}
+                  variant="overview"
+                  pageKey="customers"
+                />
+              ))}
+            </KpiCardsLayout>
+          </CardContent>
+        </Card>
+      </FounderRegion>
+
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,300px)]">
         <FounderRegion id="table" className="space-y-4">
           {/*
@@ -484,35 +518,6 @@ export default async function CustomersPage({
         </FounderRegion>
 
         <div className="space-y-4">
-          <FounderRegion id="overview">
-          <Card className="border-border/70">
-            <CardHeader>
-              <CardTitle className="text-base">Customer Overview</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <KpiCardsLayout
-                gridClassName="grid-cols-2"
-                flexBreakpointClassName="sm:flex sm:flex-wrap"
-                defaultGapPx={12}
-              >
-                {overviewKpis.map((kpi, index) => (
-                  <TunableKpiCard
-                    key={kpi.label}
-                    index={index}
-                    label={kpi.label}
-                    value={kpi.value}
-                    sublabel={kpi.sublabel}
-                    defaultIconId={kpi.defaultIconId}
-                    accentClassName={OVERVIEW_ACCENT_CLASSES[kpi.accent]}
-                    variant="overview"
-                    pageKey="customers"
-                  />
-                ))}
-              </KpiCardsLayout>
-            </CardContent>
-          </Card>
-          </FounderRegion>
-
           <FounderRegion id="activity">
           <Card className="border-border/70">
             <CardHeader>
