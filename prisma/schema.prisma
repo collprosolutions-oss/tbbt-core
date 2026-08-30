@@ -46,6 +46,14 @@ model User {
   email        String   @unique
   passwordHash String
   name         String
+  /// Platform-level TBBT founder/developer flag -- NOT a business role
+  /// and completely independent of Membership/MembershipRole. Grants
+  /// access to Founder Design Mode ONLY (see src/lib/founder-access.ts);
+  /// a subscriber OWNER is never a TBBT developer just because they own a
+  /// business. Never set through any tenant-facing UI/API -- grant or
+  /// revoke only via direct database access or
+  /// scripts/set-founder-access.mjs.
+  isFounder    Boolean  @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -55,6 +63,40 @@ model User {
   /// see PasswordSetupToken below. Empty for every user who signed up
   /// themselves (signUpAction already sets a real password).
   passwordSetupTokens  PasswordSetupToken[]
+  /// Founder Design Mode cosmetic overrides this user has saved -- see
+  /// FounderDesignOverride below. Empty for every non-founder User.
+  founderDesignOverrides FounderDesignOverride[]
+}
+
+/// Founder/developer-only cosmetic design-token overrides for the
+/// approved TBBT UI foundation pages (Dashboard, Requests, Customers,
+/// Estimates, Schedule/Jobs, Invoices). Presentation-only: never read by
+/// any business-logic code path, never scoped to a Business, and never
+/// exposed to any subscriber (OWNER/ADMIN/MEMBER) UI or API -- see
+/// src/lib/founder-access.ts. Writing a row requires `userId` to belong
+/// to a User with isFounder = true; enforced in
+/// src/app/actions/founder-design.ts, not by a database constraint
+/// (Founder Design Mode intentionally has no tenant/business scoping of
+/// its own -- it is keyed by User, not Business).
+model FounderDesignOverride {
+  id      String @id @default(cuid())
+  userId  String
+  /// One of the fixed FOUNDER_PAGE_KEYS in src/lib/founder-design.ts
+  /// (e.g. "dashboard", "requests") -- never a free-form/tenant value.
+  pageKey String
+  /// Validated, bounded token values only -- see resolveFounderTokens()
+  /// and the *_BOUNDS constants in src/lib/founder-design.ts. Never HTML,
+  /// CSS, or arbitrary strings; every value is clamped server-side before
+  /// being written here.
+  tokens Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, pageKey])
+  @@index([userId])
 }
 
 model Session {
