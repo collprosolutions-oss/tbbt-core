@@ -97,27 +97,35 @@ function PlatformLogo({ className }: { className?: string }) {
 }
 
 /**
- * A subscriber business's own square logo, if one is on file (see
+ * A subscriber business's own logo, if one is on file (see
  * businessLogoSrc on AppShellProps) -- otherwise the same honest empty
- * slot AppShell has always shown for a business with no logo yet. Never
- * crops/recolors a provided logo: `object-contain` inside a fixed square
- * box only ever letterboxes, it cannot cut off any part of the image.
+ * slot AppShell has always shown for a business with no logo yet.
+ *
+ * IMPORTANT: this deliberately has NO `overflow-hidden`/rounded-corner
+ * clipping and NO `object-cover` on the provided logo -- both would crop
+ * part of the source artwork. `object-contain` at the image's own
+ * intrinsic aspect ratio (via width/height) only ever letterboxes inside
+ * the box; it can never cut off any part of the image, and the box is
+ * sized to the logo's own aspect ratio rather than forced square, so the
+ * complete, unmodified logo is always shown.
  */
+const COLLPRO_LOGO_SIZE = { width: 1254, height: 1254 } as const;
+
 function BusinessLogo({
   src,
   businessName,
-  size = "size-9",
+  heightClassName = "h-9",
 }: {
   src?: string | null;
   businessName: string;
-  size?: string;
+  heightClassName?: string;
 }) {
   if (!src) {
     return (
       <span
         className={cn(
-          "flex shrink-0 items-center justify-center rounded-lg border border-dashed border-sidebar-border text-sidebar-foreground/30",
-          size,
+          "flex aspect-square shrink-0 items-center justify-center rounded-lg border border-dashed border-sidebar-border text-sidebar-foreground/30",
+          heightClassName,
         )}
         title="Business logo not yet provided"
       >
@@ -126,15 +134,14 @@ function BusinessLogo({
     );
   }
   return (
-    <span
-      className={cn(
-        "flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-sidebar-foreground/5 ring-1 ring-sidebar-border",
-        size,
-      )}
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={src} alt={businessName} className="size-full object-contain" />
-    </span>
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={businessName}
+      width={COLLPRO_LOGO_SIZE.width}
+      height={COLLPRO_LOGO_SIZE.height}
+      className={cn("w-auto shrink-0 object-contain", heightClassName)}
+    />
   );
 }
 
@@ -170,12 +177,12 @@ function BusinessSwitcher({
             type="button"
             className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent/50"
           >
-            <BusinessLogo src={logoSrc} businessName={businessName} size="size-8" />
+            <BusinessLogo src={logoSrc} businessName={businessName} heightClassName="h-20" />
             <span className="flex flex-col items-start leading-tight">
-              <span className="text-sm font-semibold whitespace-nowrap text-sidebar-foreground">
+              <span className="text-base font-semibold whitespace-nowrap text-sidebar-foreground">
                 {businessName}
               </span>
-              <span className="text-[11px] text-sidebar-foreground/50">{tradeLabel}</span>
+              <span className="text-xs text-sidebar-foreground/50">{tradeLabel}</span>
             </span>
             <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-foreground/40" />
           </button>
@@ -388,19 +395,19 @@ export function AppShell({
        * account, left to right. The nav sidebar (below) is nav-only now;
        * brand/business/account no longer live inside it on desktop.
        */}
-      <header className="hidden h-16 shrink-0 items-center gap-3 border-b border-sidebar-border bg-sidebar px-4 md:flex">
+      <header className="hidden h-24 shrink-0 items-center gap-4 border-b border-sidebar-border bg-sidebar px-5 md:flex">
         <Link href="/dashboard" className="flex shrink-0 items-center">
-          <PlatformLogo className="h-9" />
+          <PlatformLogo className="h-16" />
         </Link>
-        <Separator orientation="vertical" className="h-7 bg-sidebar-border" />
+        <Separator orientation="vertical" className="h-12 bg-sidebar-border" />
         <BusinessSwitcher
           businessName={businessName}
           tradeLabel={tradeLabel}
           logoSrc={businessLogoSrc}
           layout="header"
         />
-        <Separator orientation="vertical" className="h-7 bg-sidebar-border" />
-        <p className="truncate text-sm font-semibold text-sidebar-foreground">{pageTitle}</p>
+        <Separator orientation="vertical" className="h-12 bg-sidebar-border" />
+        <p className="truncate text-base font-semibold text-sidebar-foreground">{pageTitle}</p>
         <div className="flex-1" />
         <ThemeToggle />
         <AccountMenu userName={userName} userEmail={userEmail} role={role} />
@@ -409,7 +416,7 @@ export function AppShell({
       {/* Mobile-only compact header, unchanged: hamburger opens the drawer below. */}
       <header className="sticky top-0 z-40 flex items-center justify-between gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur-sm md:hidden">
         <div className="flex min-w-0 items-center gap-2.5">
-          <BusinessLogo src={businessLogoSrc} businessName={businessName} size="size-8" />
+          <BusinessLogo src={businessLogoSrc} businessName={businessName} heightClassName="h-8" />
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-foreground">{businessName}</p>
             <p className="text-[11px] text-muted-foreground">{tradeLabel}</p>
