@@ -180,13 +180,22 @@ if (!owner) {
   check("OWNER Requests page returns 200", ownerPage?.status === 200);
   const body = ownerPage?.body ?? "";
   check("OWNER page still says Requests / New Leads", body.includes("Requests / New Leads"));
-  check("OWNER page still says Schedule & Calendar", body.includes("Schedule") && body.includes("Calendar"));
+  const calendarHeading = body.includes("Schedule &amp; Calendar")
+    ? "Schedule &amp; Calendar"
+    : body.includes("Schedule & Calendar")
+      ? "Schedule & Calendar"
+      : "";
+  check("OWNER page still says Schedule & Calendar", calendarHeading.length > 0);
   check("OWNER page still says Today", body.includes("Today"));
   check("OWNER page still says Quick actions", body.includes("Quick actions"));
   check(
-    "Rendered request heading appears before Schedule & Calendar",
-    body.indexOf("Requests / New Leads") >= 0 &&
-      body.indexOf("Schedule") > body.indexOf("Requests / New Leads"),
+    "Rendered tabs and request list appear before Schedule & Calendar",
+    calendarHeading.length > 0 &&
+      body.indexOf("Estimate Sent") >= 0 &&
+      body.indexOf(calendarHeading) > body.indexOf("Estimate Sent") &&
+      (body.includes("No requests")
+        ? body.indexOf("No requests") < body.indexOf(calendarHeading)
+        : true),
   );
   check("OWNER without founder flag does not see Founder Design Mode", !body.includes("Founder Design Mode"));
 
