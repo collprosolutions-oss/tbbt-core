@@ -27,6 +27,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { HeaderControlsContext } from "@/components/header-controls-context";
 import { cn } from "@/lib/utils";
 
 type AppShellProps = {
@@ -383,17 +384,23 @@ export function AppShell({
 }: AppShellProps) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pageActions, setPageActions] = useState<ReactNode>(null);
+  const [pageSearch, setPageSearch] = useState<ReactNode>(null);
   const currentNavItem = visibleAppNav(role).find((item) => isNavActive(pathname, item.href));
   const pageTitle = currentNavItem?.label ?? "Dashboard";
 
   return (
+    <HeaderControlsContext.Provider value={{ setPageActions, setPageSearch }}>
     <div className="flex min-h-full flex-col">
       {/*
        * Desktop-only top header: ONE horizontal bar spanning the full
        * width, above both the nav sidebar and the content -- TBBT logo,
-       * active-business identity, current section, theme control, and
-       * account, left to right. The nav sidebar (below) is nav-only now;
-       * brand/business/account no longer live inside it on desktop.
+       * active-business identity, current section, the current page's own
+       * primary action + search (see header-controls-context.tsx --
+       * whatever the page itself registers, never hardcoded here), theme
+       * control, and account, left to right. The nav sidebar (below) is
+       * nav-only now; brand/business/account no longer live inside it on
+       * desktop.
        */}
       <header className="hidden h-24 shrink-0 items-center gap-4 border-b border-sidebar-border bg-sidebar px-5 md:flex">
         <Link href="/dashboard" className="flex shrink-0 items-center">
@@ -407,7 +414,11 @@ export function AppShell({
           layout="header"
         />
         <Separator orientation="vertical" className="h-12 bg-sidebar-border" />
-        <p className="truncate text-base font-semibold text-sidebar-foreground">{pageTitle}</p>
+        <p className="shrink-0 truncate text-base font-semibold text-sidebar-foreground">
+          {pageTitle}
+        </p>
+        {pageActions ? <div className="flex shrink-0 items-center gap-2">{pageActions}</div> : null}
+        {pageSearch ? <div className="min-w-0 max-w-sm flex-1">{pageSearch}</div> : null}
         <div className="flex-1" />
         <ThemeToggle />
         <AccountMenu userName={userName} userEmail={userEmail} role={role} />
@@ -473,5 +484,6 @@ export function AppShell({
         </SheetContent>
       </Sheet>
     </div>
+    </HeaderControlsContext.Provider>
   );
 }
