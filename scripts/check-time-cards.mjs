@@ -170,7 +170,7 @@ try {
   const helperMem = await prisma.membership.create({
     data: { userId: helperUser.id, businessId: businessA.id, role: "MEMBER" },
   });
-  const betaOwnerMem = await prisma.membership.create({
+  await prisma.membership.create({
     data: { userId: betaOwner.id, businessId: businessB.id, role: "OWNER", hourlyWage: new Prisma.Decimal(40) },
   });
   const betaMemberMem = await prisma.membership.create({
@@ -181,9 +181,6 @@ try {
   const adminA = makeAccess(businessA.id, "ADMIN", adminMem.id);
   const memberA = makeAccess(businessA.id, "MEMBER", memberMem.id);
   const helperA = makeAccess(businessA.id, "MEMBER", helperMem.id);
-  const ownerB = makeAccess(businessB.id, "OWNER", betaOwnerMem.id);
-  const memberB = makeAccess(businessB.id, "MEMBER", betaMemberMem.id);
-
   const customerA = await prisma.customer.create({
     data: { businessId: businessA.id, name: "Alpha Customer" },
   });
@@ -332,9 +329,12 @@ try {
   });
   const flagged = await prisma.timeEntry.findUnique({ where: { id: adminManual.id } });
   check("MEMBER can request correction on own entry", flagged.status === "NEEDS_REVIEW");
+  const memberOwned = await prisma.timeEntry.findFirst({
+    where: { membershipId: memberMem.id, status: { not: "RUNNING" } },
+  });
   await expectError(
     "MEMBER cannot request correction on another worker's entry",
-    () => requestTimeCorrection(prisma, helperA, { timeEntryId: manual.id, reason: "nope" }),
+    () => requestTimeCorrection(prisma, helperA, { timeEntryId: memberOwned.id, reason: "nope" }),
     (error) => error instanceof ForbiddenError,
   );
 
