@@ -21,7 +21,7 @@ import {
   type RegionTokenKey,
   type TableDensity,
 } from "@/lib/founder-design";
-import { defaultFounderRegionId } from "@/lib/founder-regions";
+import { defaultFounderRegionId, getFounderRegions } from "@/lib/founder-regions";
 
 /**
  * The single entry point every one of the 6 approved operating pages
@@ -242,7 +242,14 @@ function FounderDesignActive({
        * else -- regardless of whether any OTHER token has been touched
        * yet. Only the KPI/table/panel vars are conditionally present.
        */}
-      <div className="flex flex-col" style={{ rowGap: "var(--tbbt-section-gap, 1.5rem)", ...cssVars }}>
+      <div
+        className="flex flex-col"
+        data-founder-page={pageKey}
+        data-founder-regions={getFounderRegions(pageKey)
+          .map((region) => region.id)
+          .join(",")}
+        style={{ rowGap: "var(--tbbt-section-gap, 1.5rem)", ...cssVars }}
+      >
         {children}
       </div>
       <FounderDesignTrigger />

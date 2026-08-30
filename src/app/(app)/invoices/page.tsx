@@ -316,7 +316,6 @@ export default async function InvoicesPage({
             value={kpi.value}
             sublabel={kpi.sublabel}
             href={kpi.href}
-            icon={kpi.icon}
             defaultIconId={kpi.defaultIconId}
             accentClassName={KPI_ACCENT_CLASSES[kpi.accent]}
             variant="workspace"

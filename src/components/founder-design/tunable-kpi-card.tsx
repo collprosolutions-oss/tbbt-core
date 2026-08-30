@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { ComponentType, CSSProperties, ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useFounderDesign } from "@/components/founder-design/context";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -31,7 +31,6 @@ export function TunableKpiCard({
   value,
   sublabel,
   href,
-  icon: DefaultIcon,
   defaultIconId,
   accentClassName,
   variant,
@@ -42,7 +41,6 @@ export function TunableKpiCard({
   value: ReactNode;
   sublabel?: string;
   href?: string;
-  icon: ComponentType<{ className?: string }>;
   defaultIconId: CuratedIconId;
   accentClassName?: string;
   variant: TunableKpiVariant;
@@ -55,8 +53,8 @@ export function TunableKpiCard({
   const appearance = founderDesign?.draftTokens.kpiAppearance?.[index];
   const aligned = founderDesign?.draftTokens.kpiInternalLayout === "aligned";
 
-  const Icon =
-    appearance?.icon && CURATED_ICONS[appearance.icon] ? CURATED_ICONS[appearance.icon] : DefaultIcon;
+  const iconId = appearance?.icon && CURATED_ICONS[appearance.icon] ? appearance.icon : defaultIconId;
+  const Icon = CURATED_ICONS[iconId];
   const tint = iconTintClass(appearance?.iconColor);
   const iconWrapClass = tint ?? accentClassName ?? "bg-primary/10 text-primary";
 

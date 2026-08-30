@@ -334,7 +334,6 @@ export default async function DashboardPage() {
             value={kpi.value}
             sublabel={kpi.sublabel}
             href={kpi.href}
-            icon={kpi.icon}
             defaultIconId={kpi.defaultIconId}
             variant="dashboard"
             pageKey="dashboard"

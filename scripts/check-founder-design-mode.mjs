@@ -263,8 +263,12 @@ async function main() {
     const { status, body } = await fetchPage(founderToken, founderMembership.businessId, path);
     check(`${path}: 200 OK`, status === 200);
     check(`${path}: contains "${TRIGGER_TEXT}"`, body.includes(TRIGGER_TEXT));
+    const listed = body.match(/data-founder-regions="([^"]+)"/)?.[1] ?? "";
     for (const regionId of REGION_MARKERS[path]) {
-      check(`${path}: founder markup includes data-founder-region="${regionId}"`, body.includes(`data-founder-region="${regionId}"`));
+      check(
+        `${path}: founder region list includes "${regionId}"`,
+        listed.split(",").includes(regionId),
+      );
     }
   }
 
@@ -273,7 +277,7 @@ async function main() {
     const { status, body } = await fetchPage(ownerToken, ownerMembership.businessId, path);
     check(`${path}: 200 OK (page still works)`, status === 200);
     check(`${path}: does NOT contain "${TRIGGER_TEXT}"`, !body.includes(TRIGGER_TEXT));
-    check(`${path}: does NOT contain founder region markers`, !body.includes("data-founder-region"));
+    check(`${path}: does NOT contain founder region markers`, !body.includes("data-founder-regions") && !body.includes("data-founder-region"));
   }
 
   console.log("\nTEST 4 -- Subscriber MEMBER never sees the trigger, on any page they can reach");

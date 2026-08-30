@@ -502,7 +502,6 @@ export default async function CustomersPage({
                     label={kpi.label}
                     value={kpi.value}
                     sublabel={kpi.sublabel}
-                    icon={kpi.icon}
                     defaultIconId={kpi.defaultIconId}
                     accentClassName={OVERVIEW_ACCENT_CLASSES[kpi.accent]}
                     variant="overview"
