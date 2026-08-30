@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
+import { FileText, Mail, MapPin, Phone, Receipt, Wrench } from "lucide-react";
 import { CreateEstimateButton } from "@/components/estimates/create-estimate-button";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -17,6 +19,12 @@ import {
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { telHref } from "@/lib/directions";
 import { cn } from "@/lib/utils";
+
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  return (parts[0][0] + (parts[1]?.[0] ?? "")).toUpperCase();
+}
 
 export type RequestListItem = {
   id: string;
@@ -60,7 +68,7 @@ export function RequestsWorkspace({ requests }: { requests: RequestListItem[] })
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_400px]">
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
       {/* Dense table at sm+ widths; a stacked, tap-friendly card list below
           that instead of forcing the same table into a narrow viewport
           (avoids horizontal scroll and tiny cramped cells on a phone). */}
@@ -97,16 +105,16 @@ function RequestsTable({
   onSelect: (id: string) => void;
 }) {
   return (
-    <Card className="overflow-hidden p-0">
+    <Card className="overflow-hidden border-border/70 p-0 shadow-sm">
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-border/70 bg-muted/40 text-left text-xs font-medium tracking-wide text-muted-foreground uppercase">
-              <th className="px-5 py-3 font-medium">Customer</th>
-              <th className="px-5 py-3 font-medium">Service / Request</th>
-              <th className="px-5 py-3 font-medium">Date</th>
-              <th className="px-5 py-3 font-medium">Status</th>
-              <th className="px-5 py-3 text-right font-medium">Action</th>
+            <tr className="border-b border-border/70 bg-muted/50 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+              <th className="px-2 py-3.5 font-semibold">Customer</th>
+              <th className="px-2 py-3.5 font-semibold">Service / Request</th>
+              <th className="px-2 py-3.5 font-semibold">Date</th>
+              <th className="px-2 py-3.5 font-semibold">Status</th>
+              <th className="px-2 py-3.5 text-right font-semibold">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -126,18 +134,23 @@ function RequestsTable({
                   }}
                   className={cn(
                     "cursor-pointer border-b border-border/60 outline-none transition-colors last:border-b-0 hover:bg-accent/40",
-                    active && "bg-accent/60",
+                    active && "bg-primary/10 hover:bg-primary/10",
                   )}
                 >
-                  <td className="px-5 py-4 align-top">
-                    <p className="text-[0.95rem] font-medium text-foreground">
+                  <td
+                    className={cn(
+                      "max-w-20 px-2 py-5 align-top",
+                      active && "border-l-2 border-l-primary",
+                    )}
+                  >
+                    <p className="truncate text-[0.95rem] font-semibold text-foreground">
                       {request.customer?.name ?? "Customer"}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
                       {request.customer?.phone || request.customer?.email || "No contact on file"}
                     </p>
                   </td>
-                  <td className="max-w-64 px-5 py-4 align-top">
+                  <td className="max-w-20 px-2 py-5 align-top">
                     <p className="truncate text-[0.95rem] font-medium text-foreground">
                       {request.serviceName ?? "Not specified"}
                     </p>
@@ -145,14 +158,14 @@ function RequestsTable({
                       {request.description || request.summary || "No description"}
                     </p>
                   </td>
-                  <td className="px-5 py-4 align-top text-muted-foreground whitespace-nowrap">
+                  <td className="max-w-24 px-2 py-5 align-top text-muted-foreground whitespace-nowrap">
                     {request.createdAtLabel}
                   </td>
-                  <td className="px-5 py-4 align-top">
+                  <td className="px-2 py-5 align-top">
                     <StatusBadge status={request.status} />
                   </td>
                   <td
-                    className="px-5 py-4 text-right align-top"
+                    className="px-2 py-5 text-right align-top"
                     onClick={(event) => event.stopPropagation()}
                   >
                     {request.estimate ? (
@@ -221,10 +234,21 @@ function RequestsMobileList({
   );
 }
 
-function DetailField({ label, children }: { label: string; children: React.ReactNode }) {
+function DetailField({
+  icon: Icon,
+  label,
+  children,
+}: {
+  icon?: ComponentType<{ className?: string }>;
+  label: string;
+  children: ReactNode;
+}) {
   return (
     <div className="space-y-1.5">
-      <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</p>
+      <p className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        {Icon ? <Icon className="size-3.5" /> : null}
+        {label}
+      </p>
       <div className="text-[0.95rem] text-foreground">{children}</div>
     </div>
   );
@@ -233,7 +257,7 @@ function DetailField({ label, children }: { label: string; children: React.React
 function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
   if (!request) {
     return (
-      <Card className="flex h-full min-h-64 items-center justify-center p-8 text-center">
+      <Card className="flex h-full min-h-64 items-center justify-center border-border/70 p-8 text-center">
         <p className="text-sm text-muted-foreground">Select a request to see its details.</p>
       </Card>
     );
@@ -241,58 +265,74 @@ function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
 
   const tel = telHref(request.customer?.phone ?? null);
   const mailto = request.customer?.email ? `mailto:${request.customer.email}` : null;
+  const customerName = request.customer?.name ?? "Customer";
 
   return (
-    <Card className="flex h-full flex-col">
-      <CardHeader>
-        <CardTitle className="text-lg">{request.customer?.name ?? "Customer"}</CardTitle>
-        <CardDescription>Request details</CardDescription>
+    <Card className="flex h-full flex-col border-border/70 shadow-sm">
+      <CardHeader className="border-b border-border/60 pb-5">
+        <div className="flex items-center gap-3">
+          <Avatar size="lg" className="ring-2 ring-primary/15">
+            <AvatarFallback className="bg-primary/15 text-base font-semibold text-primary">
+              {initials(customerName)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="min-w-0">
+            <CardTitle className="text-xl">{customerName}</CardTitle>
+            <CardDescription>Request details</CardDescription>
+          </div>
+        </div>
       </CardHeader>
-      <CardContent className="flex-1 space-y-5">
+      <CardContent className="flex-1 space-y-6 pt-5">
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <StatusBadge status={request.status} />
           <span className="text-muted-foreground">{request.createdAtLabel}</span>
         </div>
-        <DetailField label="Requested service">
+        <DetailField icon={Wrench} label="Requested service">
           {request.serviceName ?? "Not specified"}
         </DetailField>
-        <DetailField label="Description">
+        <DetailField icon={FileText} label="Description">
           {request.description || request.summary || "No description provided."}
         </DetailField>
-        <DetailField label="Contact">
+        <DetailField icon={Phone} label="Contact">
           <p>{request.customer?.phone || "No phone on file"}</p>
           <p>{request.customer?.email || "No email on file"}</p>
         </DetailField>
-        <DetailField label="Service address">
+        <DetailField icon={MapPin} label="Service address">
           {request.propertyLabel ?? "None on file"}
         </DetailField>
         {request.estimate ? (
-          <DetailField label="Estimate">
+          <DetailField icon={Receipt} label="Estimate">
             <div className="flex items-center gap-2">
               <StatusBadge status={request.estimate.status} />
-              <span>{request.estimate.totalLabel}</span>
+              <span className="font-semibold">{request.estimate.totalLabel}</span>
             </div>
           </DetailField>
         ) : null}
       </CardContent>
-      <CardFooter className="flex flex-wrap gap-2">
+      <CardFooter className="flex flex-wrap gap-2 border-t border-border/60 pt-5">
         {tel ? (
-          <Button asChild size="sm" variant="outline">
-            <a href={tel}>Call</a>
+          <Button asChild variant="outline">
+            <a href={tel}>
+              <Phone className="size-4" />
+              Call
+            </a>
           </Button>
         ) : null}
         {mailto ? (
-          <Button asChild size="sm" variant="outline">
-            <a href={mailto}>Email</a>
+          <Button asChild variant="outline">
+            <a href={mailto}>
+              <Mail className="size-4" />
+              Email
+            </a>
           </Button>
         ) : null}
         {request.customer ? (
-          <Button asChild size="sm" variant="outline">
+          <Button asChild variant="outline">
             <Link href={`/customers/${request.customer.id}`}>Open customer</Link>
           </Button>
         ) : null}
         {request.estimate ? (
-          <Button asChild size="sm">
+          <Button asChild>
             <Link href={`/estimates/${request.estimate.id}`}>Open estimate</Link>
           </Button>
         ) : (

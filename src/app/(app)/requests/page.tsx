@@ -187,24 +187,45 @@ export default async function RequestsPage({
   }));
 
   const kpis: KpiCardProps[] = [
-    { label: "New Requests", value: newCount, icon: Inbox, href: "/requests?status=new" },
+    {
+      label: "New Requests",
+      value: newCount,
+      icon: Inbox,
+      href: "/requests?status=new",
+      accent: "blue",
+      sublabel:
+        totalCount > 0 ? `${Math.round((newCount / totalCount) * 100)}% of total` : undefined,
+    },
     {
       label: "Estimate Sent",
       value: estimateSentCount,
       icon: TrendingUp,
       href: "/requests?status=estimate-sent",
+      accent: "orange",
+      sublabel:
+        totalCount > 0
+          ? `${Math.round((estimateSentCount / totalCount) * 100)}% of total`
+          : undefined,
     },
     {
       label: "Converted",
       value: convertedCount,
       icon: Wrench,
       href: "/requests?status=converted",
+      accent: "purple",
       sublabel:
         totalCount > 0
           ? `${Math.round((convertedCount / totalCount) * 100)}% of all requests`
           : undefined,
     },
-    { label: "New This Week", value: newThisWeekCount, icon: Sparkles, href: "/requests" },
+    {
+      label: "New This Week",
+      value: newThisWeekCount,
+      icon: Sparkles,
+      href: "/requests",
+      accent: "teal",
+      sublabel: `Since ${formatDate(sevenDaysAgo)}`,
+    },
   ];
 
   const otherParams = new URLSearchParams();
@@ -242,7 +263,7 @@ export default async function RequestsPage({
               name="q"
               defaultValue={q}
               placeholder="Search requests..."
-              className="h-8"
+              className="h-9 w-56"
             />
           </form>
         }
@@ -252,14 +273,14 @@ export default async function RequestsPage({
         description={`Service requests for ${access.workspace.business.name}.`}
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         {kpis.map((kpi) => (
           <KpiCard key={kpi.label} {...kpi} />
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <nav className="flex flex-wrap items-center gap-1 overflow-x-auto">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3">
+        <nav className="flex flex-wrap items-center gap-1.5 overflow-x-auto">
           {tabs.map((tabItem) => {
             const linkParams = new URLSearchParams(otherParams);
             if (tabItem.key !== "all") {
@@ -272,17 +293,17 @@ export default async function RequestsPage({
                 key={tabItem.key}
                 href={`/requests${query ? `?${query}` : ""}`}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                  "flex items-center gap-2 rounded-md border-b-2 px-4 py-2 text-sm font-medium transition-colors",
                   active
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-transparent text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                 )}
               >
                 {tabItem.label}
                 <span
                   className={cn(
-                    "rounded-full px-1.5 py-0.5 text-xs tabular-nums",
-                    active ? "bg-primary/15" : "bg-muted",
+                    "rounded-full px-1.5 py-0.5 text-xs font-semibold tabular-nums",
+                    active ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground",
                   )}
                 >
                   {tabItem.count}
@@ -296,19 +317,19 @@ export default async function RequestsPage({
         ) : null}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_250px]">
         <RequestsWorkspace requests={requests} />
 
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <div className="flex items-center justify-between px-1">
-              <p className="flex items-center gap-2 text-sm font-medium text-foreground">
-                <CalendarDays className="size-4 text-muted-foreground" />
+        <div className="space-y-5">
+          <div className="space-y-3 rounded-xl border border-border/70 bg-card/40 p-4">
+            <div className="flex items-center justify-between">
+              <p className="flex items-center gap-2 text-base font-semibold text-foreground">
+                <CalendarDays className="size-4.5 text-muted-foreground" />
                 Schedule &amp; Calendar
               </p>
               <Link
                 href="/jobs"
-                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 {monthLabel(today)}
               </Link>
@@ -323,10 +344,10 @@ export default async function RequestsPage({
             />
           </div>
 
-          <Card>
+          <Card className="border-border/70">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <CalendarClock className="size-4 text-muted-foreground" />
+              <CardTitle className="flex items-center gap-2 text-base">
+                <CalendarClock className="size-4.5 text-muted-foreground" />
                 Today
               </CardTitle>
               <CardDescription>Scheduled work for {formatDate(today)}.</CardDescription>
@@ -339,7 +360,7 @@ export default async function RequestsPage({
                   <Link
                     key={job.id}
                     href={`/jobs/${job.id}`}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-card/40 p-2.5 text-sm transition-colors hover:bg-accent/40"
+                    className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-card/40 p-3 text-sm transition-colors hover:bg-accent/40"
                   >
                     <span className="min-w-0 flex-1 truncate font-medium">
                       {job.customer?.name ?? "Customer"}
@@ -359,10 +380,10 @@ export default async function RequestsPage({
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="border-border/70">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Sparkles className="size-4 text-muted-foreground" />
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Sparkles className="size-4.5 text-muted-foreground" />
                 Quick actions
               </CardTitle>
             </CardHeader>
@@ -384,29 +405,46 @@ export default async function RequestsPage({
   );
 }
 
+type KpiAccent = "blue" | "orange" | "purple" | "teal";
+
+const KPI_ACCENT_CLASSES: Record<KpiAccent, string> = {
+  blue: "bg-blue-500/15 text-blue-400",
+  orange: "bg-orange-500/15 text-orange-400",
+  purple: "bg-purple-500/15 text-purple-400",
+  teal: "bg-teal-500/15 text-teal-400",
+};
+
 type KpiCardProps = {
   label: string;
   value: ReactNode;
   sublabel?: string;
   href: string;
   icon: ComponentType<{ className?: string }>;
+  accent: KpiAccent;
 };
 
-function KpiCard({ label, value, sublabel, href, icon: Icon }: KpiCardProps) {
+function KpiCard({ label, value, sublabel, href, icon: Icon, accent }: KpiCardProps) {
   return (
     <Link href={href} className="block">
-      <Card className="h-full transition-colors hover:border-primary/40 hover:bg-accent/30">
-        <CardContent className="flex items-start justify-between gap-3">
+      <Card className="h-full border-border/70 shadow-sm transition-colors hover:border-primary/40 hover:bg-accent/20">
+        <CardContent className="flex items-center gap-4 p-5">
+          <span
+            className={cn(
+              "flex size-12 shrink-0 items-center justify-center rounded-full",
+              KPI_ACCENT_CLASSES[accent],
+            )}
+          >
+            <Icon className="size-5" />
+          </span>
           <div className="min-w-0">
-            <p className="text-xs font-medium text-muted-foreground">{label}</p>
-            <p className="mt-1.5 text-2xl font-semibold tabular-nums tracking-tight text-foreground">
+            <p className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+              {label}
+            </p>
+            <p className="mt-1 text-3xl font-bold tabular-nums tracking-tight text-foreground">
               {value}
             </p>
-            {sublabel ? <p className="mt-1 text-xs text-muted-foreground">{sublabel}</p> : null}
+            {sublabel ? <p className="mt-0.5 truncate text-xs text-muted-foreground">{sublabel}</p> : null}
           </div>
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <Icon className="size-4.5" />
-          </span>
         </CardContent>
       </Card>
     </Link>

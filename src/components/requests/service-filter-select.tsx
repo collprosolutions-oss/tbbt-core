@@ -34,7 +34,7 @@ export function ServiceFilterSelect({
         const query = params.toString();
         router.push(`/requests${query ? `?${query}` : ""}`);
       }}
-      className="h-8 w-full min-w-40 rounded-lg border border-input bg-transparent px-2.5 text-sm sm:w-auto"
+      className="h-9 w-full min-w-44 rounded-lg border border-input bg-transparent px-3 text-sm sm:w-auto"
     >
       <option value="all">All services</option>
       {options.map((option) => (

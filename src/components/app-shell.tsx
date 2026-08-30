@@ -257,7 +257,7 @@ function NavLinks({
                 onClick={onNavigate}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "relative flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                  "relative flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-[0.925rem] font-medium transition-colors",
                   active
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
@@ -270,7 +270,7 @@ function NavLinks({
                     active ? "opacity-100" : "opacity-0",
                   )}
                 />
-                {Icon ? <Icon className="size-4 shrink-0" /> : null}
+                {Icon ? <Icon className="size-[1.1rem] shrink-0" /> : null}
                 <span className="truncate">{item.label}</span>
               </Link>
             );
@@ -415,7 +415,7 @@ export function AppShell({
           layout="header"
         />
         <Separator orientation="vertical" className="h-12 bg-sidebar-border" />
-        <p className="shrink-0 truncate text-base font-semibold text-sidebar-foreground">
+        <p className="shrink-0 truncate text-lg font-semibold text-sidebar-foreground">
           {pageTitle}
         </p>
         {pageActions ? <div className="flex shrink-0 items-center gap-2">{pageActions}</div> : null}
@@ -447,7 +447,7 @@ export function AppShell({
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {/* Desktop nav sidebar -- nav only, starting below the top header. */}
-        <aside className="hidden w-64 shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
+        <aside className="hidden w-72 shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar px-4 py-5 md:flex">
           <NavLinks pathname={pathname} role={role} />
         </aside>
 
