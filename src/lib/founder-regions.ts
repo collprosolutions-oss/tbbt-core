@@ -155,6 +155,33 @@ export const FOUNDER_REGIONS: Record<FounderPageKey, readonly FounderRegionDef[]
     },
     { id: "page", label: "Page Spacing", kind: "page" },
   ],
+  services: [
+    { id: "kpi", label: "Top Summary", kind: "kpi" },
+    {
+      id: "presentation",
+      label: "Service Presentation",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+    },
+    {
+      id: "pricing",
+      label: "Pricing Intelligence / Service Details",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+    },
+    {
+      id: "catalog",
+      label: "Service Catalog",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasWidth: true,
+    },
+    { id: "page", label: "Page Spacing", kind: "page" },
+  ],
 };
 
 export function getFounderRegions(pageKey: FounderPageKey): readonly FounderRegionDef[] {

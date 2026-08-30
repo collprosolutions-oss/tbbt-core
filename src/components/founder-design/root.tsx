@@ -24,7 +24,7 @@ import {
 import { defaultFounderRegionId, getFounderRegions } from "@/lib/founder-regions";
 
 /**
- * The single entry point every one of the 6 approved operating pages
+ * The single entry point every one of the 7 approved operating pages
  * renders around its own KPI/table/details-panel content (see
  * src/app/(app)/dashboard/page.tsx etc.). For any non-founder, `isFounder`
  * is false and this renders `children` completely unwrapped -- no extra

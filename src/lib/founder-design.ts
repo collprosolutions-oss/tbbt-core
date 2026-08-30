@@ -35,6 +35,7 @@ export const FOUNDER_PAGE_KEYS = [
   "estimates",
   "jobs",
   "invoices",
+  "services",
 ] as const;
 export type FounderPageKey = (typeof FOUNDER_PAGE_KEYS)[number];
 
@@ -49,6 +50,7 @@ export const FOUNDER_PAGE_LABELS: Record<FounderPageKey, string> = {
   estimates: "Estimates",
   jobs: "Schedule / Jobs",
   invoices: "Invoices",
+  services: "Services",
 };
 
 /** Whether a page has the dense table + master-detail panel section at all (Dashboard does not). */
@@ -59,6 +61,7 @@ export const PAGE_HAS_TABLE: Record<FounderPageKey, boolean> = {
   estimates: true,
   jobs: true,
   invoices: true,
+  services: false,
 };
 
 /** Whether a page has a right-side detail/rail panel with a tunable desktop width. */
@@ -69,6 +72,7 @@ export const PAGE_HAS_PANEL: Record<FounderPageKey, boolean> = {
   estimates: true,
   jobs: true,
   invoices: true,
+  services: true,
 };
 
 /**
@@ -86,6 +90,7 @@ export const KPI_CARD_COUNTS: Record<FounderPageKey, number> = {
   estimates: 5,
   jobs: 5,
   invoices: 5,
+  services: 4,
 };
 
 // ---------------------------------------------------------------------------
@@ -159,9 +164,10 @@ export const KPI_TOKEN_BOUNDS: Record<KpiTokenKey, { min: number; max: number; s
  *    --card-spacing (1rem = 16px); icon wrapper size-9 = 36px; label
  *    text-xs = 12px; number text-2xl = 24px; sublabel text-xs = 12px;
  *    grid gap-3 = 12px.
- *  - requests/estimates/jobs/invoices: identical KpiCard() -- CardContent
- *    p-5 = 20px; icon wrapper size-12 = 48px; label text-[11px]; number
- *    text-3xl = 30px; sublabel text-xs = 12px; grid gap-5 = 20px.
+ *  - requests/estimates/jobs/invoices/services: identical workspace KpiCard()
+ *    -- CardContent p-5 = 20px; icon wrapper size-12 = 48px; label
+ *    text-[11px]; number text-3xl = 30px; sublabel text-xs = 12px; grid
+ *    gap-5 = 20px.
  *  - customers: OverviewKpi() -- p-3 = 12px; icon wrapper size-9 = 36px;
  *    label text-[0.7rem] ~= 11.2px; number text-xl = 20px; sublabel
  *    text-[0.7rem] ~= 11.2px; grid gap-3 = 12px.
@@ -233,6 +239,19 @@ export const KPI_DEFAULTS: Record<FounderPageKey, Record<KpiTokenKey, number>> =
     lineHeight: 120,
   },
   invoices: {
+    minHeight: 0,
+    padding: 20,
+    paddingY: 36,
+    paddingX: 20,
+    gap: 20,
+    internalGap: 4,
+    iconSize: 48,
+    labelFontSize: 11,
+    numberFontSize: 30,
+    supportingFontSize: 12,
+    lineHeight: 120,
+  },
+  services: {
     minHeight: 0,
     padding: 20,
     paddingY: 36,
@@ -460,6 +479,7 @@ export const TABLE_DENSITY_DEFAULTS: Record<FounderPageKey, { rowPy: number; hea
   estimates: { rowPy: 16, headerPy: 14 },
   jobs: { rowPy: 16, headerPy: 14 },
   invoices: { rowPy: 16, headerPy: 14 },
+  services: { rowPy: 0, headerPy: 0 },
 };
 
 /**
@@ -500,6 +520,7 @@ export const TABLE_CELL_PX_DEFAULTS: Record<FounderPageKey, number> = {
   estimates: 10,
   jobs: 8,
   invoices: 8,
+  services: 0,
 };
 export const TABLE_CELL_PX_BOUNDS = { min: 4, max: 20, step: 2 };
 
@@ -552,6 +573,7 @@ export const PANEL_WIDTH_DEFAULTS: Record<FounderPageKey, number | undefined> = 
   estimates: 350,
   jobs: 350,
   invoices: 340,
+  services: 340,
 };
 export const PANEL_WIDTH_BOUNDS = { min: 220, max: 420, step: 10 };
 export const PANEL_WIDTH_CSS_VAR = "--tbbt-panel-width";

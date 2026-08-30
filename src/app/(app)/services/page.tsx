@@ -1,25 +1,19 @@
 import type { Metadata } from "next";
-import { CatalogItemRow } from "@/components/catalog/catalog-item-row";
-import { CreateCatalogItemForm } from "@/components/catalog/create-catalog-item-form";
-import { InstallStarterCatalogForm } from "@/components/catalog/install-starter-catalog-form";
-import { ServiceCategoryGroup } from "@/components/catalog/service-category-group";
-import { EmptyState } from "@/components/empty-state";
+import { ServicesWorkspace } from "@/components/services/services-workspace";
+import type { ServiceCatalogListItem } from "@/components/services/types";
+import { FounderDesignRoot } from "@/components/founder-design/root";
+import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
+import { FounderRegion } from "@/components/founder-design/region";
+import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
+import { checkFounderAccess } from "@/lib/founder-access";
+import { sanitizeFounderPageTokens } from "@/lib/founder-design";
+import { formatMoney } from "@/lib/format";
 import {
   HANDYMAN_CATALOG_CATEGORIES,
-  HANDYMAN_STARTER_SERVICES,
-  isImportableStarterService,
   planStarterCatalogInstall,
-  starterPricingMode,
 } from "@/lib/handyman-starter-catalog";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
@@ -30,8 +24,25 @@ export const metadata: Metadata = {
   title: "Services",
 };
 
-export default async function ServicesPage() {
+export default async function ServicesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ service?: string }>;
+}) {
   const access = await requireManagementPageAccess();
+  const params = await searchParams;
+
+  const founder = await checkFounderAccess();
+  const founderOverride = founder
+    ? await prisma.founderDesignOverride.findUnique({
+        where: { userId_pageKey: { userId: founder.id, pageKey: "services" } },
+      })
+    : null;
+  const founderTokens = sanitizeFounderPageTokens(
+    "services",
+    founderOverride?.tokens ?? {},
+  );
+
   const items = await prisma.serviceCatalogItem.findMany({
     where: access.scope,
     orderBy: [{ active: "desc" }, { name: "asc" }],
@@ -40,34 +51,13 @@ export default async function ServicesPage() {
   const starterPlan = showStarterCatalog
     ? planStarterCatalogInstall(items.map((item) => item.name))
     : null;
-  // Preferred display order for this business's trade. Handyman is the
-  // only trade active today; a future trade would pass its own order (or
-  // none) here instead -- this stays a page-level choice, not something
-  // baked into the grouping helper itself.
   const preferredCategoryOrder = showStarterCatalog
     ? HANDYMAN_CATALOG_CATEGORIES
     : [];
-  // Grouped by each item's OWN persisted `category` column -- no more
-  // name-derived/hardcoded matching for the business's real catalog.
   const groupedItems = groupServiceCatalogItemsByCategory(
     items,
     preferredCategoryOrder,
   );
-  const groupedStarter = showStarterCatalog
-    ? groupServiceCatalogItemsByCategory(
-        HANDYMAN_STARTER_SERVICES,
-        preferredCategoryOrder,
-      )
-    : [];
-  const skipKeys = new Set(
-    (starterPlan?.skip ?? []).map((service) => service.templateKey),
-  );
-  const pendingKeys = new Set(
-    (starterPlan?.pending ?? []).map((service) => service.templateKey),
-  );
-  // Category suggestions offered on the Add/Edit service forms: this
-  // business's own categories already in use, plus (for Handyman) the
-  // starter set as recommendations. Never a hardcoded global list.
   const suggestedCategories = Array.from(
     new Set([
       ...preferredCategoryOrder,
@@ -75,131 +65,120 @@ export default async function ServicesPage() {
     ]),
   ).sort((a, b) => a.localeCompare(b));
 
+  const catalogItems: ServiceCatalogListItem[] = items.map((item) => ({
+    id: item.id,
+    name: item.name,
+    description: item.description ?? "",
+    pricingMode: item.pricingMode,
+    price: item.price?.toString() ?? "",
+    displayPrice: formatCatalogPriceLabel(item.pricingMode, item.price),
+    category: item.category,
+    active: item.active,
+  }));
+
+  const totalCount = items.length;
+  const activeCount = items.filter((item) => item.active).length;
+  const inactiveCount = totalCount - activeCount;
+  const categoryCount = groupedItems.length;
+  const fixedCount = items.filter((item) => item.pricingMode === "FIXED").length;
+  const startingAtCount = items.filter(
+    (item) => item.pricingMode === "STARTING_AT",
+  ).length;
+  const customQuoteCount = items.filter(
+    (item) => item.pricingMode === "CUSTOM_QUOTE",
+  ).length;
+
+  const business = access.workspace.business;
+  const laborMinimum = {
+    enabled: business.laborMinimumEnabled,
+    amountLabel:
+      business.laborMinimumEnabled && business.laborMinimumAmount != null
+        ? formatMoney(business.laborMinimumAmount)
+        : null,
+  };
+
+  const kpis = [
+    {
+      label: "Total Services",
+      value: totalCount,
+      sublabel: `${fixedCount} fixed · ${startingAtCount} starting at · ${customQuoteCount} custom quote`,
+      defaultIconId: "wrench" as const,
+    },
+    {
+      label: "Active",
+      value: activeCount,
+      sublabel:
+        totalCount > 0
+          ? `${Math.round((activeCount / totalCount) * 100)}% of catalog`
+          : "None yet",
+      defaultIconId: "check-circle" as const,
+    },
+    {
+      label: "Inactive",
+      value: inactiveCount,
+      sublabel: "Not offered on new estimates",
+      defaultIconId: "clock" as const,
+    },
+    {
+      label: "Categories",
+      value: categoryCount,
+      sublabel: "From persisted service categories",
+      defaultIconId: "clipboard-list" as const,
+    },
+  ];
+
   return (
-    <PageContainer>
+    <PageContainer width="2xl">
       <PageHeader
         title="Services"
-        description={`Handyman price list for ${access.workspace.business.name}. Each service can be a fixed price, a starting price, or a custom quote.`}
+        description={`Operating catalog for ${business.name}. Customer-facing wording, internal pricing, and the persisted service list.`}
       />
 
-      {starterPlan ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Handyman starter catalog</CardTitle>
-            <CardDescription>
-              Template recommendations for this business only. Import copies
-              them once. Re-importing skips names already on your list and does
-              not change your prices, pricing mode, descriptions, or active
-              status.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <p>
-              {starterPlan.add.length} will be added. {starterPlan.skip.length}{" "}
-              already on your list.
-              {starterPlan.pending.length > 0
-                ? ` ${starterPlan.pending.length} are not importable yet.`
-                : null}
-            </p>
-            <div className="space-y-3">
-              {groupedStarter.map((group) => (
-                <ServiceCategoryGroup
-                  key={`starter-${group.category}`}
-                  category={group.category}
-                  count={group.items.length}
-                >
-                  <ul className="space-y-2">
-                    {group.items.map((service) => {
-                      const status = skipKeys.has(service.templateKey)
-                        ? "Already on your list"
-                        : pendingKeys.has(service.templateKey) ||
-                            !isImportableStarterService(service)
-                          ? "Not imported yet"
-                          : "Will be added";
-                      return (
-                        <li key={service.templateKey}>
-                          <p className="font-medium">{service.name}</p>
-                          <p className="text-muted-foreground">
-                            {formatCatalogPriceLabel(
-                              starterPricingMode(service),
-                              service.startingPrice,
-                            )}
-                            {" · "}
-                            {status}
-                          </p>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </ServiceCategoryGroup>
-              ))}
-            </div>
-            <InstallStarterCatalogForm />
-          </CardContent>
-        </Card>
-      ) : null}
+      <FounderDesignRoot
+        pageKey="services"
+        isFounder={Boolean(founder)}
+        savedTokens={founderTokens}
+        kpiCardLabels={kpis.map((kpi) => kpi.label)}
+      >
+        <FounderRegion id="kpi">
+          <KpiCardsLayout
+            gridClassName="grid-cols-2 lg:grid-cols-4"
+            defaultGapPx={20}
+          >
+            {kpis.map((kpi, index) => (
+              <TunableKpiCard
+                key={kpi.label}
+                index={index}
+                label={kpi.label}
+                value={kpi.value}
+                sublabel={kpi.sublabel}
+                defaultIconId={kpi.defaultIconId}
+                variant="workspace"
+                pageKey="services"
+              />
+            ))}
+          </KpiCardsLayout>
+        </FounderRegion>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Add service</CardTitle>
-          <CardDescription>
-            Choose Fixed, Starting at, or Custom Quote. Changing a saved service
-            later does not change amounts already on estimates, jobs, or
-            invoices.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <CreateCatalogItemForm categories={suggestedCategories} />
-        </CardContent>
-      </Card>
-
-      <div className="space-y-3">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight">
-            Your Services & Pricing
-          </h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            These are the services and prices your business currently uses. You
-            can edit pricing, descriptions, pricing mode, and active status at
-            any time.
-          </p>
-        </div>
-        {items.length === 0 ? (
-          <EmptyState
-            title="No services yet"
-            description="Add a service to start this workspace price list. Active services can be added to estimates."
-          />
-        ) : (
-          groupedItems.map((group) => (
-            <ServiceCategoryGroup
-              key={group.category}
-              category={group.category}
-              count={group.items.length}
-            >
-              {group.items.map((item) => (
-                <Card key={item.id} className="shadow-none">
-                  <CardContent className="pt-4">
-                    <CatalogItemRow
-                      id={item.id}
-                      name={item.name}
-                      pricingMode={item.pricingMode}
-                      price={item.price?.toString() ?? ""}
-                      displayPrice={formatCatalogPriceLabel(
-                        item.pricingMode,
-                        item.price,
-                      )}
-                      description={item.description ?? ""}
-                      category={item.category}
-                      categories={suggestedCategories}
-                      active={item.active}
-                    />
-                  </CardContent>
-                </Card>
-              ))}
-            </ServiceCategoryGroup>
-          ))
-        )}
-      </div>
+        <ServicesWorkspace
+          items={catalogItems}
+          preferredCategoryOrder={preferredCategoryOrder}
+          categories={suggestedCategories}
+          laborMinimum={laborMinimum}
+          businessName={business.name}
+          publicRequestHref={`/r/${business.slug}`}
+          starterPlan={
+            starterPlan
+              ? {
+                  addCount: starterPlan.add.length,
+                  skipCount: starterPlan.skip.length,
+                  pendingCount: starterPlan.pending.length,
+                }
+              : null
+          }
+          initialServiceId={params.service}
+        />
+      </FounderDesignRoot>
     </PageContainer>
   );
 }
