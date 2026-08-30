@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
  * server-side (see src/app/actions/team.ts) -- unlike
  * CopyProjectLinkButton/CopyEstimateLinkButton, this does not rebuild the
  * URL from `window.location.origin`, since the link's origin comes from
- * NEXT_PUBLIC_APP_URL, not necessarily the browser's current origin.
+ * getAppUrl() (NEXT_PUBLIC_APP_URL, or a trusted Vercel preview host),
+ * not the browser's current origin.
  */
 export function CopySetupLinkButton({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);

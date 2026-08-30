@@ -170,22 +170,33 @@
   }
 
   /*
-   * Native UA widgets (select option lists, date/time pickers, datalist)
-   * follow `color-scheme` and inherit `color`. A hardcoded dark
-   * color-scheme on <html> left light/white text on the OS's default
-   * light popup -- the contrast bug on Time Cards, Services, and every
-   * other native select. Bind widgets to the active theme tokens instead.
+   * Native UA widgets (select option lists, date/time pickers) follow
+   * the document color-scheme and the control's `color`.
+   *
+   * Do NOT set `color-scheme: inherit` here: LightningCSS compiles that
+   * to `color-scheme: normal`, which resets the widget to a light OS
+   * popup while dark-theme `--foreground` stays light -- white menu +
+   * light-gray text on Time Cards, Services, and every other native
+   * select. Leave color-scheme unset so controls inherit html / html.dark.
+   *
+   * Option rows are pinned to dark-on-light because most desktop UAs
+   * still paint the open <select> menu white regardless of theme.
+   * The closed <select> keeps `color: var(--foreground)` above.
    */
   input,
   textarea,
   select {
     color: var(--foreground);
-    color-scheme: inherit;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--muted-foreground);
+    opacity: 1;
   }
   select option,
   select optgroup {
-    background-color: var(--popover);
-    color: var(--popover-foreground);
+    background-color: #ffffff;
+    color: #0a0a0a;
   }
 }
 
