@@ -94,8 +94,8 @@ export const FOUNDER_REGIONS: Record<FounderPageKey, readonly FounderRegionDef[]
     { id: "page", label: "Page Spacing", kind: "page" },
   ],
   customers: [
-    { id: "table", label: "Customer Table", kind: "table" },
     { id: "overview", label: "Customer Overview", kind: "kpi", hasTitle: true },
+    { id: "table", label: "Customer Table", kind: "table" },
     { id: "activity", label: "Recent Activity", kind: "panel", hasTitle: true, hasBody: true },
     {
       id: "services",

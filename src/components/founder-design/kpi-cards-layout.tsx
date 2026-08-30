@@ -30,7 +30,7 @@ export function KpiCardsLayout({
   defaultGapPx,
   children,
 }: {
-  /** That page's own current grid classes, unchanged -- e.g. "sm:grid-cols-2 lg:grid-cols-5" for a full-width KPI row, or "grid-cols-2" for Customers' always-2-column rail widget. */
+  /** That page's own current grid classes, unchanged -- e.g. "sm:grid-cols-2 lg:grid-cols-5" for a full-width KPI row, or "grid-cols-2 lg:grid-cols-4" for Customers' top overview. */
   gridClassName: string;
   /** At which breakpoint (if any) the container switches from grid to flex so custom per-card widths can take effect. Below it, custom widths are always inert (grid ignores flex-basis/flex-grow). */
   flexBreakpointClassName?: string;

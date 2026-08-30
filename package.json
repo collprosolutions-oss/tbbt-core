@@ -15,6 +15,7 @@
     "test:management-console-access": "node scripts/check-management-console-access.mjs",
     "test:service-categories": "node --experimental-strip-types scripts/check-service-categories.mjs",
     "test:services-page": "node --experimental-strip-types scripts/check-services-page.mjs",
+    "test:customers-page": "node --experimental-strip-types scripts/check-customers-page.mjs",
     "test:founder-design-mode": "node --experimental-strip-types scripts/check-founder-design-mode.mjs",
     "test:work-order-portal": "node --experimental-strip-types scripts/check-work-order-portal.mjs",
     "test:change-orders": "node --experimental-strip-types scripts/check-change-orders.mjs",
