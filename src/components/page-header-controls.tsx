@@ -17,9 +17,17 @@ import { useHeaderControls } from "@/components/header-controls-context";
  * genuinely has. There is no default/fallback content invented here.
  */
 export function PageHeaderControls({
+  title,
   actions,
   search,
 }: {
+  /**
+   * Overrides the header's title segment for this page only (e.g.
+   * Requests' approved title is "Requests / New Leads", longer than its
+   * "Requests" sidebar nav label). Omit to keep AppShell's normal
+   * nav-derived title.
+   */
+  title?: string;
   actions?: ReactNode;
   search?: ReactNode;
 }) {
@@ -32,14 +40,16 @@ export function PageHeaderControls({
   // should show) and the client picking this page's own registered
   // content up.
   useLayoutEffect(() => {
+    controls?.setPageTitle(title ?? null);
     controls?.setPageActions(actions ?? null);
     controls?.setPageSearch(search ?? null);
     return () => {
+      controls?.setPageTitle(null);
       controls?.setPageActions(null);
       controls?.setPageSearch(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actions, search]);
+  }, [title, actions, search]);
 
   return null;
 }

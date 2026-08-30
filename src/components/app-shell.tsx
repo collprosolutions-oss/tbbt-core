@@ -386,11 +386,12 @@ export function AppShell({
   const [menuOpen, setMenuOpen] = useState(false);
   const [pageActions, setPageActions] = useState<ReactNode>(null);
   const [pageSearch, setPageSearch] = useState<ReactNode>(null);
+  const [pageTitleOverride, setPageTitleOverride] = useState<string | null>(null);
   const currentNavItem = visibleAppNav(role).find((item) => isNavActive(pathname, item.href));
-  const pageTitle = currentNavItem?.label ?? "Dashboard";
+  const pageTitle = pageTitleOverride ?? currentNavItem?.label ?? "Dashboard";
 
   return (
-    <HeaderControlsContext.Provider value={{ setPageActions, setPageSearch }}>
+    <HeaderControlsContext.Provider value={{ setPageActions, setPageSearch, setPageTitle: setPageTitleOverride }}>
     <div className="flex min-h-full flex-col">
       {/*
        * Desktop-only top header: ONE horizontal bar spanning the full

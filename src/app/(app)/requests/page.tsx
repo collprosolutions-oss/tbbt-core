@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { ComponentType, ReactNode } from "react";
-import { CalendarClock, Inbox, Sparkles, TrendingUp, Wrench } from "lucide-react";
+import { CalendarClock, CalendarDays, Inbox, Sparkles, TrendingUp, Wrench } from "lucide-react";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
 import { RequestsWorkspace, type RequestListItem } from "@/components/requests/requests-workspace";
 import { ServiceFilterSelect } from "@/components/requests/service-filter-select";
+import { MonthView } from "@/components/schedule/month-view";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,12 +15,29 @@ import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
 import { formatAddress, formatDate, formatMoney, formatTime } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
-import { dayRange, startOfDay } from "@/lib/schedule";
+import {
+  SCHEDULE_JOB_SELECT,
+  dayRange,
+  findScheduleConflicts,
+  groupJobsByDay,
+  monthGridRange,
+  monthLabel,
+  startOfDay,
+} from "@/lib/schedule";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
   title: "Requests",
 };
+
+/**
+ * The approved title for this page's own heading + shared-header segment
+ * ("Requests / New Leads") -- deliberately NOT the sidebar nav label
+ * ("Requests" in src/lib/nav.ts stays unchanged; see setPageTitle on
+ * PageHeaderControls below for how a page can override just its own
+ * header segment without touching AppShell's nav-derived default).
+ */
+const PAGE_TITLE = "Requests / New Leads";
 
 /**
  * Real, supported request status/estimate filters only -- see the
@@ -79,6 +97,7 @@ export default async function RequestsPage({
   const today = startOfDay(new Date());
   const todayRange = dayRange(today);
   const sevenDaysAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const monthRange = monthGridRange(today);
 
   const [
     requestsRaw,
@@ -89,6 +108,7 @@ export default async function RequestsPage({
     newThisWeekCount,
     services,
     todayJobs,
+    monthJobs,
   ] = await Promise.all([
     prisma.serviceRequest.findMany({
       where,
@@ -124,7 +144,19 @@ export default async function RequestsPage({
       orderBy: { scheduledAt: "asc" },
       take: 5,
     }),
+    // The exact same bounded month-grid query (and MonthView component)
+    // the Jobs/Schedule calendar itself uses -- see monthGridRange()/
+    // SCHEDULE_JOB_SELECT in src/lib/schedule.ts. No second scheduling
+    // engine, no fabricated events.
+    prisma.job.findMany({
+      where: { ...access.scope, scheduledAt: { gte: monthRange.start, lt: monthRange.end } },
+      select: SCHEDULE_JOB_SELECT,
+      orderBy: { scheduledAt: "asc" },
+    }),
   ]);
+
+  const monthJobsByDay = groupJobsByDay(monthJobs);
+  const monthConflicts = findScheduleConflicts(monthJobs);
 
   // Decimal/Date fields are pre-formatted to plain strings here -- Prisma's
   // Decimal is a class instance and cannot cross the Server->Client
@@ -187,7 +219,7 @@ export default async function RequestsPage({
   ];
 
   return (
-    <PageContainer width="xl">
+    <PageContainer width="2xl">
       {/*
        * Contextual header search (TBBT logo -> business switcher -> page
        * title -> primary action -> search -> ... -> theme -> account).
@@ -200,6 +232,7 @@ export default async function RequestsPage({
        * primary-action slot is intentionally left empty for this page.
        */}
       <PageHeaderControls
+        title={PAGE_TITLE}
         search={
           <form action="/requests" method="GET" className="flex items-center gap-2">
             <input type="hidden" name="status" value={tab === "all" ? "" : tab} />
@@ -215,11 +248,11 @@ export default async function RequestsPage({
         }
       />
       <PageHeader
-        title="Requests"
+        title={PAGE_TITLE}
         description={`Service requests for ${access.workspace.business.name}.`}
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {kpis.map((kpi) => (
           <KpiCard key={kpi.label} {...kpi} />
         ))}
@@ -263,10 +296,33 @@ export default async function RequestsPage({
         ) : null}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_300px]">
+      <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
         <RequestsWorkspace requests={requests} />
 
         <div className="space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between px-1">
+              <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <CalendarDays className="size-4 text-muted-foreground" />
+                Schedule &amp; Calendar
+              </p>
+              <Link
+                href="/jobs"
+                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                {monthLabel(today)}
+              </Link>
+            </div>
+            <MonthView
+              days={monthRange.days}
+              monthStart={monthRange.monthStart}
+              monthEnd={monthRange.monthEnd}
+              today={today}
+              jobsByDay={monthJobsByDay}
+              conflicts={monthConflicts}
+            />
+          </div>
+
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">

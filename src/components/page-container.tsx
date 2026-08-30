@@ -8,6 +8,12 @@ const WIDTHS = {
   wide: "max-w-6xl",
   /** Dense, multi-column command-center pages (Dashboard). */
   xl: "max-w-7xl",
+  /**
+   * The densest multi-workspace pages (table + details panel + schedule
+   * rail, e.g. Requests) -- deliberately wider than `xl` so that kind of
+   * 3-column layout gets real desktop room instead of feeling compressed.
+   */
+  "2xl": "max-w-[100rem]",
   /** Single-column forms (auth, narrow confirmations). */
   narrow: "max-w-3xl",
 } as const;

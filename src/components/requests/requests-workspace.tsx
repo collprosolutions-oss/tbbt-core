@@ -60,7 +60,7 @@ export function RequestsWorkspace({ requests }: { requests: RequestListItem[] })
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
+    <div className="grid gap-4 lg:grid-cols-[1fr_400px]">
       {/* Dense table at sm+ widths; a stacked, tap-friendly card list below
           that instead of forcing the same table into a narrow viewport
           (avoids horizontal scroll and tiny cramped cells on a phone). */}
@@ -102,11 +102,11 @@ function RequestsTable({
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border/70 bg-muted/40 text-left text-xs font-medium tracking-wide text-muted-foreground uppercase">
-              <th className="px-4 py-2.5 font-medium">Customer</th>
-              <th className="px-4 py-2.5 font-medium">Service / Request</th>
-              <th className="px-4 py-2.5 font-medium">Date</th>
-              <th className="px-4 py-2.5 font-medium">Status</th>
-              <th className="px-4 py-2.5 text-right font-medium">Action</th>
+              <th className="px-5 py-3 font-medium">Customer</th>
+              <th className="px-5 py-3 font-medium">Service / Request</th>
+              <th className="px-5 py-3 font-medium">Date</th>
+              <th className="px-5 py-3 font-medium">Status</th>
+              <th className="px-5 py-3 text-right font-medium">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -129,30 +129,30 @@ function RequestsTable({
                     active && "bg-accent/60",
                   )}
                 >
-                  <td className="px-4 py-3 align-top">
-                    <p className="font-medium text-foreground">
+                  <td className="px-5 py-4 align-top">
+                    <p className="text-[0.95rem] font-medium text-foreground">
                       {request.customer?.name ?? "Customer"}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
                       {request.customer?.phone || request.customer?.email || "No contact on file"}
                     </p>
                   </td>
-                  <td className="max-w-56 px-4 py-3 align-top">
-                    <p className="truncate font-medium text-foreground">
+                  <td className="max-w-64 px-5 py-4 align-top">
+                    <p className="truncate text-[0.95rem] font-medium text-foreground">
                       {request.serviceName ?? "Not specified"}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
                       {request.description || request.summary || "No description"}
                     </p>
                   </td>
-                  <td className="px-4 py-3 align-top text-muted-foreground whitespace-nowrap">
+                  <td className="px-5 py-4 align-top text-muted-foreground whitespace-nowrap">
                     {request.createdAtLabel}
                   </td>
-                  <td className="px-4 py-3 align-top">
+                  <td className="px-5 py-4 align-top">
                     <StatusBadge status={request.status} />
                   </td>
                   <td
-                    className="px-4 py-3 text-right align-top"
+                    className="px-5 py-4 text-right align-top"
                     onClick={(event) => event.stopPropagation()}
                   >
                     {request.estimate ? (
@@ -223,9 +223,9 @@ function RequestsMobileList({
 
 function DetailField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</p>
-      <div className="text-sm text-foreground">{children}</div>
+      <div className="text-[0.95rem] text-foreground">{children}</div>
     </div>
   );
 }
@@ -245,10 +245,10 @@ function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
   return (
     <Card className="flex h-full flex-col">
       <CardHeader>
-        <CardTitle>{request.customer?.name ?? "Customer"}</CardTitle>
+        <CardTitle className="text-lg">{request.customer?.name ?? "Customer"}</CardTitle>
         <CardDescription>Request details</CardDescription>
       </CardHeader>
-      <CardContent className="flex-1 space-y-4">
+      <CardContent className="flex-1 space-y-5">
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <StatusBadge status={request.status} />
           <span className="text-muted-foreground">{request.createdAtLabel}</span>

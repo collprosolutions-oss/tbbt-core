@@ -20,6 +20,14 @@ import { createContext, useContext, type ReactNode } from "react";
 export type HeaderControlsContextValue = {
   setPageActions: (node: ReactNode) => void;
   setPageSearch: (node: ReactNode) => void;
+  /**
+   * Overrides the header's page-title segment for the current page only
+   * (AppShell still derives the default from src/lib/nav.ts -- this never
+   * changes a nav label/sidebar link, only what a specific page's own
+   * header segment displays, for the rare case where the approved header
+   * title differs from the sidebar's short nav label).
+   */
+  setPageTitle: (title: string | null) => void;
 };
 
 export const HeaderControlsContext = createContext<HeaderControlsContextValue | null>(null);
