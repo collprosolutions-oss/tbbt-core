@@ -37,6 +37,7 @@ export function ServicePricingPanel({
   const servicePrice = service ? parsePriceNumber(service.price) : null;
   const minimumAmount = parseMoneyNumber(laborMinimum.amountLabel);
   const belowMinimum =
+    service != null &&
     laborMinimum.enabled &&
     servicePrice != null &&
     minimumAmount != null &&

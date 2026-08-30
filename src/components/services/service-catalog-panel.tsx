@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -48,16 +48,18 @@ export function ServiceCatalogPanel({
   const searching = query.trim().length > 0;
   const activeCount = items.filter((item) => item.active).length;
 
-  useEffect(() => {
-    const selected = items.find((item) => item.id === selectedId);
-    if (!selected) return;
-    setCollapsed((current) => {
-      if (!current.has(selected.category)) return current;
-      const next = new Set(current);
-      next.delete(selected.category);
-      return next;
-    });
-  }, [items, selectedId]);
+  function selectService(id: string) {
+    const selected = items.find((item) => item.id === id);
+    if (selected) {
+      setCollapsed((current) => {
+        if (!current.has(selected.category)) return current;
+        const next = new Set(current);
+        next.delete(selected.category);
+        return next;
+      });
+    }
+    onSelect(id);
+  }
 
   function expandAll() {
     setCollapsed(new Set());
@@ -154,7 +156,7 @@ export function ServiceCatalogPanel({
                         <li key={item.id}>
                           <button
                             type="button"
-                            onClick={() => onSelect(item.id)}
+                            onClick={() => selectService(item.id)}
                             className={cn(
                               "flex w-full items-center justify-between gap-2 px-4 py-2 text-left text-sm transition-colors",
                               selected
