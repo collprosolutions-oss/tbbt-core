@@ -21,7 +21,8 @@
     "test:schedule-calendar": "node --experimental-strip-types scripts/check-schedule-calendar.mjs",
     "test:employee-field-workflow": "node --experimental-strip-types scripts/check-employee-field-workflow.mjs",
     "test:team-onboarding": "node --experimental-strip-types scripts/check-team-onboarding.mjs",
-    "test:time-cards": "node --experimental-strip-types scripts/check-time-cards.mjs"
+    "test:time-cards": "node --experimental-strip-types scripts/check-time-cards.mjs",
+    "test:theme-contrast": "node scripts/check-theme-contrast.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

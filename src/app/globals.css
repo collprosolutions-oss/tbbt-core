@@ -49,6 +49,7 @@
 }
 
 :root {
+  color-scheme: light;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -60,7 +61,7 @@
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  --muted-foreground: oklch(0.42 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
@@ -94,6 +95,7 @@
  * professional look with zero per-tenant styling.
  */
 .dark {
+  color-scheme: dark;
   --background: oklch(0.16 0.025 259);
   --foreground: oklch(0.95 0.008 259);
   --card: oklch(0.225 0.028 259);
@@ -133,6 +135,9 @@
   }
   html {
     @apply font-sans overflow-x-hidden;
+    color-scheme: light;
+  }
+  html.dark {
     color-scheme: dark;
   }
   body {
@@ -162,6 +167,25 @@
   }
   select:disabled {
     @apply cursor-not-allowed opacity-50;
+  }
+
+  /*
+   * Native UA widgets (select option lists, date/time pickers, datalist)
+   * follow `color-scheme` and inherit `color`. A hardcoded dark
+   * color-scheme on <html> left light/white text on the OS's default
+   * light popup -- the contrast bug on Time Cards, Services, and every
+   * other native select. Bind widgets to the active theme tokens instead.
+   */
+  input,
+  textarea,
+  select {
+    color: var(--foreground);
+    color-scheme: inherit;
+  }
+  select option,
+  select optgroup {
+    background-color: var(--popover);
+    color: var(--popover-foreground);
   }
 }
 
