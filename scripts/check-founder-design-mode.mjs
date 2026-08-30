@@ -14,6 +14,13 @@
  *     global).
  *  5. requireFounderAccess()'s underlying data (User.isFounder) matches
  *     exactly the accounts we expect.
+ *  6. The expanded KPI width/layout, table cell/font-size tokens are
+ *     validated/clamped/page-aware (never fabricate a card that doesn't
+ *     exist, never store a value outside its safe bounds).
+ *  7. clearFieldPaths() (per-control/section reset) removes exactly the
+ *     requested field and nothing else -- regression test for a real bug
+ *     found and fixed during this pass (resetting one KPI card's width
+ *     used to wipe the whole group width and every sibling card).
  *
  * Run with:
  *   npx next start -p 3000 &
@@ -25,6 +32,12 @@ import { randomUUID, createHash } from "node:crypto";
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const { prisma } = await import("@/lib/prisma");
+const {
+  sanitizeFounderPageTokens,
+  clearFieldPaths,
+  resolveKpiCardFlex,
+  KPI_CARD_COUNTS,
+} = await import("@/lib/founder-design");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
 const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices"];
@@ -91,6 +104,79 @@ async function main() {
     "Founder test account's own tenant role is ADMIN, DIFFERENT from the subscriber OWNER above (both isFounder=false owner@collpro-test.example and isFounder=true founder@tbbt.dev reach the same pages -- only the isFounder flag, never the role, decides Founder Design Mode visibility)",
     founderMembership?.role === "ADMIN" && ownerMembership?.role === "OWNER",
   );
+
+  console.log("\nTEST 1b -- KPI width/layout sanitization is bounded and page-aware (pure logic, no server needed)");
+  {
+    const invoicesCount = KPI_CARD_COUNTS.invoices;
+    check("Invoices has exactly 5 real KPI cards (matches its kpis array)", invoicesCount === 5);
+
+    const clean = sanitizeFounderPageTokens("invoices", {
+      kpiWidth: {
+        layout: "custom",
+        groupWidth: 9999, // way above the 400px ceiling
+        cardWidths: {
+          0: 130, // Total Invoices -> compact
+          1: 130, // Draft -> compact
+          "not-a-number": 500, // must be dropped (invalid key)
+          99: 200, // must be dropped (out of range for a 5-card page)
+          4: "auto", // Total Revenue -> stays flexible
+        },
+      },
+    });
+    check("groupWidth is clamped to the 400px max, never stored raw", clean.kpiWidth?.groupWidth === 400);
+    check("card 0 (Total Invoices) keeps its valid override", clean.kpiWidth?.cardWidths?.[0] === 130);
+    check("card 1 (Draft) keeps its valid override", clean.kpiWidth?.cardWidths?.[1] === 130);
+    check("a non-numeric card key is silently dropped", clean.kpiWidth?.cardWidths?.["not-a-number"] === undefined);
+    check("card index 99 (out of range for a 5-card page) is silently dropped -- never invents a 100th card", clean.kpiWidth?.cardWidths?.[99] === undefined);
+    check('card 4 (Total Revenue) "auto" is preserved as flexible, not coerced to a number', clean.kpiWidth?.cardWidths?.[4] === "auto");
+
+    const flexFixed = resolveKpiCardFlex(clean.kpiWidth, 0);
+    check("A fixed-width card resolves to flex-grow:0 (never grows past its set width)", flexFixed.flexGrow === 0 && flexFixed.flexBasis === "130px");
+    const flexAuto = resolveKpiCardFlex(clean.kpiWidth, 4);
+    check("An \"auto\" card resolves to flex-grow:1 (fills remaining space, e.g. Total Revenue staying wider)", flexAuto.flexGrow === 1);
+    const flexGroupFallback = resolveKpiCardFlex({ layout: "custom", groupWidth: 140 }, 2);
+    check("A card with no individual override falls back to the group width under custom layout", flexGroupFallback.flexBasis === "140px" && flexGroupFallback.flexGrow === 0);
+    const flexEqualLayout = resolveKpiCardFlex({ layout: "equal", groupWidth: 140 }, 2);
+    check('Under "equal" layout, groupWidth is ignored entirely -- every card stays flexible', flexEqualLayout.flexGrow === 1);
+
+    const rejectedPage = sanitizeFounderPageTokens("requests", { kpiWidth: { cardWidths: { 4: 130 } } });
+    check("Requests only has 4 real cards (indices 0-3) -- index 4 is silently dropped, never fabricated", rejectedPage.kpiWidth === undefined);
+  }
+
+  console.log("\nTEST 1c -- Table cell/font-size tokens are bounded and per-page-table-only");
+  {
+    const clean = sanitizeFounderPageTokens("invoices", { tableCellPx: 999, tableFontSize: 2, tableHeaderFontSize: 999 });
+    check("tableCellPx is clamped to its max (20px)", clean.tableCellPx === 20);
+    check("tableFontSize is clamped to its min (11px), never unreadably tiny", clean.tableFontSize === 11);
+    check("tableHeaderFontSize is clamped to its max (15px)", clean.tableHeaderFontSize === 15);
+
+    const dashboardAttempt = sanitizeFounderPageTokens("dashboard", { tableCellPx: 12, tableFontSize: 16 });
+    check("Dashboard has no table -- table tokens are silently dropped, never stored for a page that has none", Object.keys(dashboardAttempt).length === 0);
+  }
+
+  console.log("\nTEST 1d -- clearFieldPaths() only removes exactly the requested path(s), preserving everything else");
+  {
+    const tokens = {
+      kpi: { minHeight: 90, padding: 8 },
+      kpiWidth: { layout: "custom", groupWidth: 130, cardWidths: { 0: 130, 1: 200, 4: "auto" } },
+      tableDensity: "compact",
+      sectionGap: 16,
+    };
+    const afterOneCard = clearFieldPaths(tokens, ["kpiWidth.cardWidths.1"]);
+    check(
+      "Resetting ONE individual card (index 1) leaves groupWidth, layout, and every other card untouched -- this is the exact bug that was found and fixed (a per-control reset must never wipe the group width or sibling cards)",
+      afterOneCard.kpiWidth?.groupWidth === 130 &&
+        afterOneCard.kpiWidth?.layout === "custom" &&
+        afterOneCard.kpiWidth?.cardWidths?.[0] === 130 &&
+        afterOneCard.kpiWidth?.cardWidths?.[4] === "auto" &&
+        afterOneCard.kpiWidth?.cardWidths?.[1] === undefined,
+    );
+    check("Untouched top-level sections (kpi, tableDensity, sectionGap) are byte-identical after the card reset", JSON.stringify(afterOneCard.kpi) === JSON.stringify(tokens.kpi) && afterOneCard.tableDensity === "compact" && afterOneCard.sectionGap === 16);
+
+    const afterSection = clearFieldPaths(tokens, ["kpi.minHeight", "kpi.padding"]);
+    check("Clearing every key of a nested object (kpi.*) prunes the now-empty parent -- no dangling {}", afterSection.kpi === undefined);
+    check("Clearing the kpi section leaves kpiWidth/tableDensity/sectionGap untouched", afterSection.kpiWidth?.groupWidth === 130 && afterSection.tableDensity === "compact");
+  }
 
   const founderToken = await makeSession(founder.id);
   const ownerToken = await makeSession(owner.id);
