@@ -577,6 +577,17 @@ try {
     requireBusinessCapability(adminA, CAPABILITIES.MANAGE_MARKETING);
   });
 
+  console.log("\nTEST 14 — Reviews is OWNER/ADMIN-only");
+  check("OWNER has MANAGE_REVIEWS", roleHasCapability("OWNER", CAPABILITIES.MANAGE_REVIEWS));
+  check("ADMIN has MANAGE_REVIEWS", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_REVIEWS));
+  check("MEMBER does not have MANAGE_REVIEWS", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_REVIEWS));
+  await expectForbidden("MEMBER cannot pass the Reviews capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_REVIEWS);
+  });
+  await expectAllowed("ADMIN can pass the Reviews capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_REVIEWS);
+  });
+
   console.log(
     failures === 0
       ? "\nAll authorization checks passed."

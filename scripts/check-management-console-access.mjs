@@ -319,6 +319,7 @@ try {
     { path: "/expenses", label: "Expenses", marker: "Track and manage business expenses" },
     { path: "/reports", label: "Reports", marker: CANARY_CUSTOMER },
     { path: "/marketing", label: "Marketing", marker: "Marketing Studio" },
+    { path: "/reviews", label: "Reviews", marker: "Internal review workspace" },
     { path: "/settings", label: "Business Settings", marker: "Labor Minimum Service Fee" },
   ];
 
@@ -356,6 +357,7 @@ try {
     "/expenses": "TEST 14",
     "/reports": "TEST 15",
     "/marketing": "TEST 16",
+    "/reviews": "TEST 17",
     "/settings": "TEST 10",
   };
 

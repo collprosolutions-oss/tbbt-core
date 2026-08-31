@@ -171,6 +171,9 @@ model Business {
   expenses                 Expense[]
   marketingContents        MarketingContent[]
   marketingContentPhotos   MarketingContentPhoto[]
+  reviewRequests           ReviewRequest[]
+  reviews                  Review[]
+  reviewResponses          ReviewResponse[]
 }
 
 model Membership {
@@ -223,6 +226,10 @@ model Membership {
   marketingPhotoGrants   JobPhoto[]         @relation("JobPhotoMarketingGrant")
   createdMarketingContent MarketingContent[] @relation("MarketingContentCreator")
   reviewedMarketingContent MarketingContent[] @relation("MarketingContentReviewer")
+  createdReviewRequests   ReviewRequest[]    @relation("ReviewRequestCreator")
+  recordedReviews         Review[]           @relation("ReviewRecorder")
+  createdReviewResponses  ReviewResponse[]   @relation("ReviewResponseCreator")
+  reviewedReviewResponses ReviewResponse[]   @relation("ReviewResponseReviewer")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -244,6 +251,8 @@ model Customer {
   jobs            Job[]
   invoices        Invoice[]
   expenses        Expense[]
+  reviewRequests  ReviewRequest[]
+  reviews         Review[]
 
   @@index([businessId])
 }
@@ -487,6 +496,8 @@ model Job {
   timeEntries             TimeEntry[]
   expenses                Expense[]
   marketingContents       MarketingContent[]
+  reviewRequests          ReviewRequest[]
+  reviews                 Review[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -980,6 +991,9 @@ model MarketingContent {
   createdByMembershipId  String
   reviewedByMembershipId String?
   reviewedAt             DateTime?
+  /// Optional future Marketing link from a recorded Review. Never auto-copies
+  /// review text and never publishes a testimonial.
+  reviewId               String?
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
@@ -987,12 +1001,14 @@ model MarketingContent {
   job       Job?                     @relation(fields: [jobId], references: [id], onDelete: SetNull)
   createdBy Membership               @relation("MarketingContentCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
   reviewedBy Membership?             @relation("MarketingContentReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+  review    Review?                  @relation(fields: [reviewId], references: [id], onDelete: SetNull)
   photos    MarketingContentPhoto[]
 
   @@index([businessId])
   @@index([businessId, status])
   @@index([businessId, plannedFor])
   @@index([jobId])
+  @@index([reviewId])
 }
 
 /// Selected marketing-approved JobPhoto on a content draft.
@@ -1011,4 +1027,108 @@ model MarketingContentPhoto {
   @@unique([contentId, jobPhotoId])
   @@index([businessId])
   @@index([jobPhotoId])
+}
+
+/// Internal review-request record. SENT means the owner recorded that a
+/// request was sent -- TBBT does not send SMS/email unless a real
+/// integration exists. Lifecycle: DRAFT → READY → SENT → COMPLETED,
+/// plus CANCELLED. One active (non-cancelled) request per completed Job
+/// is enforced in application code.
+model ReviewRequest {
+  id                    String    @id @default(cuid())
+  businessId            String
+  customerId            String
+  jobId                 String?
+  /// DRAFT | READY | SENT | COMPLETED | CANCELLED
+  status                String    @default("DRAFT")
+  /// GOOGLE | FACEBOOK | OTHER | UNASSIGNED
+  intendedPlatform      String    @default("UNASSIGNED")
+  requestText           String    @default("")
+  notes                 String?
+  /// Set when the owner records SENT. Not an automated send timestamp.
+  requestedAt           DateTime?
+  /// Owner workflow reminder only. Never triggers SMS/email.
+  reminderAt            DateTime?
+  createdByMembershipId String
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer  Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  job       Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  createdBy Membership @relation("ReviewRequestCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  reviews   Review[]
+
+  @@index([businessId])
+  @@index([businessId, status])
+  @@index([customerId])
+  @@index([jobId])
+}
+
+/// A review the owner recorded as received externally. TBBT does not
+/// ingest Google/Facebook reviews in this step. Low ratings flag
+/// needsAttention for recovery -- never suppress or retaliate.
+model Review {
+  id                       String    @id @default(cuid())
+  businessId               String
+  customerId               String
+  jobId                    String?
+  reviewRequestId          String?
+  /// GOOGLE | FACEBOOK | OTHER
+  platform                 String
+  /// Present only when the external review actually has a rating.
+  rating                   Int?
+  reviewText               String    @default("")
+  externalReviewDate       DateTime?
+  externalUrl              String?
+  /// NONE | DRAFT | READY_FOR_REVIEW | APPROVED -- mirrors the latest
+  /// ReviewResponse status, or NONE when no response exists.
+  responseStatus           String    @default("NONE")
+  needsAttention           Boolean   @default(false)
+  recoveryNotes            String?
+  notes                    String?
+  /// Eligible for a future Marketing opportunity. Never auto-copies
+  /// review text into public content and never publishes a testimonial.
+  marketingEligible        Boolean   @default(false)
+  recordedByMembershipId   String
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  business     Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer     Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  job          Job?            @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  reviewRequest ReviewRequest? @relation(fields: [reviewRequestId], references: [id], onDelete: SetNull)
+  recordedBy   Membership      @relation("ReviewRecorder", fields: [recordedByMembershipId], references: [id], onDelete: Restrict)
+  responses    ReviewResponse[]
+  marketingContents MarketingContent[]
+
+  @@index([businessId])
+  @@index([businessId, needsAttention])
+  @@index([customerId])
+  @@index([jobId])
+  @@index([reviewRequestId])
+}
+
+/// Editable response draft for a recorded Review. Lifecycle:
+/// DRAFT → READY_FOR_REVIEW → APPROVED. Never publishes externally.
+model ReviewResponse {
+  id                     String    @id @default(cuid())
+  businessId             String
+  reviewId               String
+  body                   String    @default("")
+  /// DRAFT | READY_FOR_REVIEW | APPROVED
+  status                 String    @default("DRAFT")
+  createdByMembershipId  String
+  reviewedByMembershipId String?
+  reviewedAt             DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  review     Review      @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  createdBy  Membership  @relation("ReviewResponseCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  reviewedBy Membership? @relation("ReviewResponseReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([reviewId])
 }

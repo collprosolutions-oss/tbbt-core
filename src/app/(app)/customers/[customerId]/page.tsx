@@ -38,6 +38,8 @@ export default async function CustomerProfilePage({
       estimates: { orderBy: { createdAt: "desc" } },
       jobs: { orderBy: { createdAt: "desc" } },
       invoices: { orderBy: { createdAt: "desc" } },
+      reviewRequests: { orderBy: { createdAt: "desc" }, take: 8 },
+      reviews: { orderBy: { createdAt: "desc" }, take: 8 },
     },
   });
 
@@ -206,6 +208,59 @@ export default async function CustomerProfilePage({
                   action={
                     <Button asChild size="sm" variant="outline">
                       <Link href={`/invoices/${invoice.id}`}>Open</Link>
+                    </Button>
+                  }
+                />
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Review activity</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {customer.reviewRequests.length === 0 && customer.reviews.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No review requests or recorded reviews yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {customer.reviewRequests.map((request) => (
+                <RecordRow
+                  key={request.id}
+                  title={
+                    <>
+                      <span className="font-normal text-foreground">Review request</span>
+                      <StatusBadge status={request.status} />
+                    </>
+                  }
+                  meta={<span>{formatDate(request.createdAt)}</span>}
+                  action={
+                    <Button asChild size="sm" variant="outline">
+                      <Link href="/reviews?area=requests">Open Reviews</Link>
+                    </Button>
+                  }
+                />
+              ))}
+              {customer.reviews.map((review) => (
+                <RecordRow
+                  key={review.id}
+                  title={
+                    <>
+                      <span className="font-normal text-foreground">Review received</span>
+                      <StatusBadge status={review.responseStatus} />
+                    </>
+                  }
+                  meta={
+                    <span>
+                      {review.rating ? `${review.rating}★ · ` : ""}
+                      {formatDate(review.externalReviewDate ?? review.createdAt)}
+                    </span>
+                  }
+                  action={
+                    <Button asChild size="sm" variant="outline">
+                      <Link href="/reviews?area=reviews">Open Reviews</Link>
                     </Button>
                   }
                 />
