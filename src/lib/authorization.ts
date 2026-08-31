@@ -148,6 +148,13 @@ export const CAPABILITIES = {
    * opportunity and estimate-value data, not assigned-job field work.
    */
   MANAGE_PIPELINE: "MANAGE_PIPELINE",
+  /**
+   * Owner/admin Knowledge Hub: durable operational knowledge, provenance,
+   * and trust state over existing TBBT records. MEMBER must never receive
+   * this -- Knowledge Hub holds business-wide operational intelligence,
+   * not assigned-job field work.
+   */
+  MANAGE_KNOWLEDGE: "MANAGE_KNOWLEDGE",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -211,7 +218,7 @@ export function requireBusinessCapability(
 /**
  * Coarse, temporary READ gate for the entire authenticated management
  * console (Dashboard, Requests, Customers, Estimates, Jobs, Invoices,
- * Reports, Marketing, Reviews, Pipeline, Services, Time Cards, Payroll, Expenses, Settings).
+ * Reports, Marketing, Reviews, Pipeline, Knowledge, Services, Time Cards, Payroll, Expenses, Settings).
  *
  * Every one of those pages exists to browse or mutate business-wide
  * management data, and MEMBER has no capability over any of it today (see

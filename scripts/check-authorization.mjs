@@ -599,6 +599,17 @@ try {
     requireBusinessCapability(adminA, CAPABILITIES.MANAGE_PIPELINE);
   });
 
+  console.log("\nTEST 16 — Knowledge Hub is OWNER/ADMIN-only");
+  check("OWNER has MANAGE_KNOWLEDGE", roleHasCapability("OWNER", CAPABILITIES.MANAGE_KNOWLEDGE));
+  check("ADMIN has MANAGE_KNOWLEDGE", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_KNOWLEDGE));
+  check("MEMBER does not have MANAGE_KNOWLEDGE", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_KNOWLEDGE));
+  await expectForbidden("MEMBER cannot pass the Knowledge Hub capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_KNOWLEDGE);
+  });
+  await expectAllowed("ADMIN can pass the Knowledge Hub capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_KNOWLEDGE);
+  });
+
   console.log(
     failures === 0
       ? "\nAll authorization checks passed."
