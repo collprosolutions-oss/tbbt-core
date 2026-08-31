@@ -13,7 +13,14 @@
  */
 
 import { addDays, startOfDay, startOfWeek } from "@/lib/schedule";
-import { estimateLaborCost, overtimeHours, roundHours, roundMoney } from "@/lib/time-cards";
+import {
+  estimateLaborCost,
+  hoursBetween,
+  isPaidActivity,
+  overtimeHours,
+  roundHours,
+  roundMoney,
+} from "@/lib/time-cards";
 
 export const PAYROLL_RUN_STATUSES = [
   "DRAFT",
@@ -148,6 +155,47 @@ export function parsePayPeriodDates(
 
 export function weekStartsInPayPeriod(weekStartedAt: Date, periodStart: Date, periodEnd: Date): boolean {
   return weekStartedAt >= periodStart && weekStartedAt < periodEnd;
+}
+
+/** True when the Time Cards week (Sunday–Sunday) overlaps [periodStart, periodEnd). */
+export function weekOverlapsPayPeriod(weekStartedAt: Date, periodStart: Date, periodEnd: Date): boolean {
+  const weekEnd = addDays(weekStartedAt, 7);
+  return weekStartedAt < periodEnd && weekEnd > periodStart;
+}
+
+/** Include an approved TimeEntry when it starts inside the pay period. */
+export function entryStartsInPayPeriod(startedAt: Date, periodStart: Date, periodEnd: Date): boolean {
+  return startedAt >= periodStart && startedAt < periodEnd;
+}
+
+/**
+ * Paid hours from approved Time Entries that start inside the pay period.
+ * Does not use TimesheetWeek.approvedHours (that snapshot is the whole week).
+ */
+export function approvedHoursInPayPeriod(
+  entries: readonly {
+    startedAt: Date;
+    endedAt: Date | null;
+    activityType: string;
+    approvedHours?: number | null;
+  }[],
+  periodStart: Date,
+  periodEnd: Date,
+): number {
+  return roundHours(
+    entries.reduce((sum, entry) => {
+      if (!entryStartsInPayPeriod(entry.startedAt, periodStart, periodEnd)) {
+        return sum;
+      }
+      if (entry.approvedHours != null && Number.isFinite(entry.approvedHours)) {
+        return sum + entry.approvedHours;
+      }
+      if (!isPaidActivity(entry.activityType)) {
+        return sum;
+      }
+      return sum + hoursBetween(entry.startedAt, entry.endedAt);
+    }, 0),
+  );
 }
 
 /**

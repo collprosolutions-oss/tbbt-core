@@ -5,14 +5,17 @@
  * must have already run requireBusinessAccess(); this module never
  * trusts a browser-supplied businessId.
  *
- * Time Cards remain labor-hour truth. This module only copies APPROVED
- * TimesheetWeek snapshots. AUTHORIZED / PROCESSED runs are locked.
+ * Time Cards remain labor-hour truth. This module copies APPROVED
+ * TimeEntry snapshots that start inside the pay period — not the entire
+ * TimesheetWeek hour total. AUTHORIZED / PROCESSED runs are locked.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, ForbiddenError, requireBusinessCapability } from "@/lib/authorization";
+import { addDays } from "@/lib/schedule";
 import {
   asPayrollExceptionList,
+  approvedHoursInPayPeriod,
   canTransitionPayroll,
   derivePayrollRunStatus,
   evaluateItemExceptions,
@@ -23,12 +26,13 @@ import {
   snapshotGrossLaborAmount,
   splitRegularAndOvertime,
   toPayrollRunAuditSnapshot,
-  weekStartsInPayPeriod,
+  weekOverlapsPayPeriod,
   type PayrollEventAction,
   type PayrollExceptionCode,
   type PayrollItemReadiness,
   type PayrollRunStatus,
 } from "@/lib/payroll";
+import { weekRange } from "@/lib/time-cards";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -142,14 +146,47 @@ async function finalizedWeekIds(
   return new Set(items.map((item) => item.timesheetWeekId));
 }
 
-function evaluateWeek(
+async function approvedEntriesForWeek(
+  db: Db,
+  week: Pick<WeekRow, "businessId" | "membershipId" | "weekStartedAt">,
+) {
+  const { start, end } = weekRange(week.weekStartedAt);
+  return db.timeEntry.findMany({
+    where: {
+      businessId: week.businessId,
+      membershipId: week.membershipId,
+      status: "APPROVED",
+      startedAt: { gte: start, lt: end },
+    },
+    select: {
+      startedAt: true,
+      endedAt: true,
+      activityType: true,
+      approvedHours: true,
+    },
+  });
+}
+
+async function evaluateWeek(
+  db: Db,
   week: WeekRow,
+  periodStart: Date,
+  periodEnd: Date,
   payrollStatus: string,
   alreadyFinalized: boolean,
-): ItemEval {
-  const approvedHours = asHours(week.approvedHours);
+): Promise<ItemEval> {
+  const entries = await approvedEntriesForWeek(db, week);
+  const approvedHours = approvedHoursInPayPeriod(
+    entries.map((entry) => ({
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      activityType: entry.activityType,
+      approvedHours: asNumber(entry.approvedHours),
+    })),
+    periodStart,
+    periodEnd,
+  );
   const approvedHourlyWage = asNumber(week.approvedHourlyWage);
-  const approvedLaborCost = asNumber(week.approvedLaborCost);
   const split = splitRegularAndOvertime(approvedHours);
   const exceptions = evaluateItemExceptions({
     timesheetStatus: week.status,
@@ -167,10 +204,27 @@ function evaluateWeek(
     overtimeHours: split.overtimeHours,
     approvedHours,
     approvedHourlyWage,
-    grossLaborAmount: snapshotGrossLaborAmount(approvedHours, approvedHourlyWage, approvedLaborCost),
+    grossLaborAmount: snapshotGrossLaborAmount(approvedHours, approvedHourlyWage),
     readiness: itemReadiness(exceptions),
     exceptions,
   };
+}
+
+async function discoverApprovedWeeksInPeriod(
+  db: Db,
+  businessId: string,
+  periodStart: Date,
+  periodEnd: Date,
+) {
+  const weeks = await db.timesheetWeek.findMany({
+    where: {
+      businessId,
+      status: "APPROVED",
+      weekStartedAt: { gte: addDays(periodStart, -6), lt: periodEnd },
+    },
+    include: { membership: { include: { user: { select: { name: true } } } } },
+  });
+  return weeks.filter((week) => weekOverlapsPayPeriod(week.weekStartedAt, periodStart, periodEnd));
 }
 
 function itemCreateData(businessId: string, payrollRunId: string, evalItem: ItemEval) {
@@ -236,14 +290,12 @@ export async function createPayrollRun(
 
   return db.$transaction(async (tx) => {
     const consumed = await finalizedWeekIds(tx, access.businessId);
-    const weeks = await tx.timesheetWeek.findMany({
-      where: {
-        businessId: access.businessId,
-        status: "APPROVED",
-        weekStartedAt: { gte: input.payPeriodStart, lt: input.payPeriodEnd },
-      },
-      include: { membership: { include: { user: { select: { name: true } } } } },
-    });
+    const weeks = await discoverApprovedWeeksInPeriod(
+      tx,
+      access.businessId,
+      input.payPeriodStart,
+      input.payPeriodEnd,
+    );
 
     const run = await tx.payrollRun.create({
       data: {
@@ -255,9 +307,13 @@ export async function createPayrollRun(
       },
     });
 
-    const evals = weeks
-      .filter((week) => !consumed.has(week.id))
-      .map((week) => evaluateWeek(week, "DRAFT", false));
+    const evals: ItemEval[] = [];
+    for (const week of weeks) {
+      if (consumed.has(week.id)) continue;
+      const evalItem = await evaluateWeek(tx, week, input.payPeriodStart, input.payPeriodEnd, "DRAFT", false);
+      if (evalItem.approvedHours <= 0) continue;
+      evals.push(evalItem);
+    }
     if (evals.length > 0) {
       await tx.payrollRunItem.createMany({
         data: evals.map((item) => itemCreateData(access.businessId, run.id, item)),
@@ -297,18 +353,20 @@ export async function changePayrollPeriod(
     }
     const previous = runAuditFromItems(run, run.items);
     const consumed = await finalizedWeekIds(tx, access.businessId, run.id);
-    const weeks = await tx.timesheetWeek.findMany({
-      where: {
-        businessId: access.businessId,
-        status: "APPROVED",
-        weekStartedAt: { gte: input.payPeriodStart, lt: input.payPeriodEnd },
-      },
-      include: { membership: { include: { user: { select: { name: true } } } } },
-    });
+    const weeks = await discoverApprovedWeeksInPeriod(
+      tx,
+      access.businessId,
+      input.payPeriodStart,
+      input.payPeriodEnd,
+    );
     await tx.payrollRunItem.deleteMany({ where: { payrollRunId: run.id, businessId: access.businessId } });
-    const evals = weeks
-      .filter((week) => !consumed.has(week.id))
-      .map((week) => evaluateWeek(week, "DRAFT", false));
+    const evals: ItemEval[] = [];
+    for (const week of weeks) {
+      if (consumed.has(week.id)) continue;
+      const evalItem = await evaluateWeek(tx, week, input.payPeriodStart, input.payPeriodEnd, "DRAFT", false);
+      if (evalItem.approvedHours <= 0) continue;
+      evals.push(evalItem);
+    }
     if (evals.length > 0) {
       await tx.payrollRunItem.createMany({
         data: evals.map((item) => itemCreateData(access.businessId, run.id, item)),
@@ -361,8 +419,8 @@ export async function addPayrollItem(
     if (week.status !== "APPROVED") {
       throw new PayrollError("Only approved timesheets can be added to payroll.");
     }
-    if (!weekStartsInPayPeriod(week.weekStartedAt, run.payPeriodStart, run.payPeriodEnd)) {
-      throw new PayrollError("That approved week is not inside this pay period.");
+    if (!weekOverlapsPayPeriod(week.weekStartedAt, run.payPeriodStart, run.payPeriodEnd)) {
+      throw new PayrollError("That approved week does not overlap this pay period.");
     }
     if (run.items.some((item) => item.timesheetWeekId === week.id)) {
       throw new PayrollError("That approved week is already on this payroll run.");
@@ -372,7 +430,17 @@ export async function addPayrollItem(
       throw new PayrollError("That approved week was already included in a finalized payroll run.");
     }
     const previous = runAuditFromItems(run, run.items);
-    const evalItem = evaluateWeek(week, run.status, false);
+    const evalItem = await evaluateWeek(
+      tx,
+      week,
+      run.payPeriodStart,
+      run.payPeriodEnd,
+      run.status,
+      false,
+    );
+    if (evalItem.approvedHours <= 0) {
+      throw new PayrollError("That approved week has no approved hours inside this pay period.");
+    }
     await tx.payrollRunItem.create({
       data: itemCreateData(access.businessId, run.id, evalItem),
     });
@@ -736,7 +804,14 @@ async function refreshUnlockedRunItems(db: Db, businessId: string, payrollRunId:
   }
   const consumed = await finalizedWeekIds(db, businessId, run.id);
   for (const item of run.items) {
-    const evalItem = evaluateWeek(item.timesheetWeek, run.status, consumed.has(item.timesheetWeekId));
+    const evalItem = await evaluateWeek(
+      db,
+      item.timesheetWeek,
+      run.payPeriodStart,
+      run.payPeriodEnd,
+      run.status,
+      consumed.has(item.timesheetWeekId),
+    );
     await db.payrollRunItem.update({
       where: { id: item.id },
       data: {

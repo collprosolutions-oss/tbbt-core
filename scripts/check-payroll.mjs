@@ -40,6 +40,7 @@ const {
   parsePayPeriodDates,
   snapshotGrossLaborAmount,
   splitRegularAndOvertime,
+  approvedHoursInPayPeriod,
 } = await import("@/lib/payroll");
 const {
   addPayrollItem,
@@ -158,6 +159,15 @@ try {
   check("Invalid range is rejected", "error" in parsePayPeriodDates("2026-08-30", "2026-08-20"));
   const defaultPeriod = defaultPayPeriod(new Date(2026, 7, 31));
   check("Default period is a week, not a hardcoded business-wide weekly rule", defaultPeriod.end.getTime() - defaultPeriod.start.getTime() === 7 * 24 * 60 * 60 * 1000);
+  const periodHours = approvedHoursInPayPeriod(
+    [
+      { startedAt: new Date("2026-08-30T09:00:00.000Z"), endedAt: new Date("2026-08-30T17:00:00.000Z"), activityType: "JOB", approvedHours: 8 },
+      { startedAt: new Date("2026-09-01T09:00:00.000Z"), endedAt: new Date("2026-09-01T17:00:00.000Z"), activityType: "JOB", approvedHours: 8 },
+    ],
+    new Date("2026-08-24T00:00:00.000Z"),
+    new Date("2026-08-31T00:00:00.000Z"),
+  );
+  check("Approved hours outside the pay period are excluded", periodHours === 8);
   check("OWNER/ADMIN have MANAGE_PAYROLL", roleHasCapability("OWNER", CAPABILITIES.MANAGE_PAYROLL) && roleHasCapability("ADMIN", CAPABILITIES.MANAGE_PAYROLL));
   check("MEMBER does not have MANAGE_PAYROLL", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_PAYROLL));
   check("Only OWNER has AUTHORIZE_PAYROLL", roleHasCapability("OWNER", CAPABILITIES.AUTHORIZE_PAYROLL) && !roleHasCapability("ADMIN", CAPABILITIES.AUTHORIZE_PAYROLL));
@@ -316,6 +326,70 @@ try {
   check("Later wage change does not rewrite payroll-run snapshot", Number(afterWage.approvedHourlyWage.toString()) === 20);
   const liveWage = await prisma.membership.findUnique({ where: { id: memberMem.id } });
   check("Current membership wage did change", Number(liveWage.hourlyWage.toString()) === 99);
+
+  console.log("\nTEST — Pay period excludes approved entries outside the range");
+  const danielUser = await prisma.user.create({
+    data: { name: "Daniel Period", email: "daniel-period@example.com", passwordHash: "x" },
+  });
+  const peterUser = await prisma.user.create({
+    data: { name: "Peter Period", email: "peter-period@example.com", passwordHash: "x" },
+  });
+  const danielMem = await prisma.membership.create({
+    data: { userId: danielUser.id, businessId: businessA.id, role: "MEMBER", hourlyWage: new Prisma.Decimal(30) },
+  });
+  const peterMem = await prisma.membership.create({
+    data: { userId: peterUser.id, businessId: businessA.id, role: "MEMBER", hourlyWage: new Prisma.Decimal(25) },
+  });
+  const jobDaniel = await prisma.job.create({
+    data: { businessId: businessA.id, status: "SCHEDULED", projectToken: randomUUID(), assignedMembershipId: danielMem.id },
+  });
+  const jobPeter = await prisma.job.create({
+    data: { businessId: businessA.id, status: "SCHEDULED", projectToken: randomUUID(), assignedMembershipId: peterMem.id },
+  });
+  const aug30Start = new Date(Date.UTC(2026, 7, 30, 9, 0, 0));
+  const aug30End = new Date(Date.UTC(2026, 7, 30, 17, 0, 0));
+  const sep1Start = new Date(Date.UTC(2026, 8, 1, 9, 0, 0));
+  const sep1End = new Date(Date.UTC(2026, 8, 1, 17, 0, 0));
+  const weekAug30 = weekRange(new Date(Date.UTC(2026, 7, 30))).start;
+  for (const { membershipId, jobId } of [
+    { membershipId: danielMem.id, jobId: jobDaniel.id },
+    { membershipId: peterMem.id, jobId: jobPeter.id },
+  ]) {
+    await createManualTimeEntry(prisma, ownerA, {
+      membershipId,
+      activityType: "JOB",
+      jobId,
+      startedAt: aug30Start,
+      endedAt: aug30End,
+      note: "In period Aug 30",
+    });
+    await createManualTimeEntry(prisma, ownerA, {
+      membershipId,
+      activityType: "JOB",
+      jobId,
+      startedAt: sep1Start,
+      endedAt: sep1End,
+      note: "Outside period Sep 1",
+    });
+    await approveTimesheetWeek(prisma, ownerA, { membershipId, weekStartedAt: weekAug30 });
+  }
+  const aug24To30 = parsePayPeriodDates("2026-08-24", "2026-08-30");
+  if ("error" in aug24To30) throw new Error(aug24To30.error);
+  const periodRun = await createPayrollRun(prisma, ownerA, {
+    payPeriodStart: aug24To30.start,
+    payPeriodEnd: aug24To30.end,
+  });
+  const danielItem = periodRun.items.find((item) => item.membershipId === danielMem.id);
+  const peterItem = periodRun.items.find((item) => item.membershipId === peterMem.id);
+  check("Daniel keeps only Aug 30 (8h), not Sep 1", Number(danielItem?.approvedHours.toString()) === 8);
+  check("Peter keeps only Aug 30 (8h), not Sep 1", Number(peterItem?.approvedHours.toString()) === 8);
+  check("Daniel gross is 8 × $30 = $240", Number(danielItem?.grossLaborAmount.toString()) === 240);
+  check("Peter gross is 8 × $25 = $200", Number(peterItem?.grossLaborAmount.toString()) === 200);
+  check(
+    "Daniel+Peter period total is 16h / $440, not 32h",
+    Number(danielItem?.approvedHours.toString()) + Number(peterItem?.approvedHours.toString()) === 16 &&
+      Number(danielItem?.grossLaborAmount.toString()) + Number(peterItem?.grossLaborAmount.toString()) === 440,
+  );
 
   console.log("\nTEST — Authorization, lock, duplicate, processed");
   const cleanPeriod = {
