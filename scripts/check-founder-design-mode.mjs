@@ -4,7 +4,7 @@
  *
  * Verifies:
  *  1. A founder-flagged User sees the "Founder Design Mode" trigger on
- *     every one of the 15 supported pages.
+ *     every one of the 16 supported pages.
  *  2. A subscriber OWNER, ADMIN-equivalent, and MEMBER -- none of them
  *     isFounder -- never see it, on any of the 6 pages, via direct URL.
  *  3. A completely different business's OWNER also never sees it
@@ -43,7 +43,7 @@ const {
 const { FOUNDER_REGIONS, defaultFounderRegionId } = await import("@/lib/founder-regions");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
-const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices", "/services", "/time-cards", "/payroll", "/expenses", "/reports", "/marketing", "/reviews", "/pipeline", "/knowledge"];
+const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices", "/services", "/time-cards", "/payroll", "/expenses", "/reports", "/marketing", "/reviews", "/pipeline", "/knowledge", "/settings"];
 const TRIGGER_TEXT = "Founder Design Mode";
 
 let passed = 0;
@@ -256,6 +256,9 @@ async function main() {
     check("Knowledge regions are the real Knowledge Hub boxes (Summary / Navigation / List / Detail / Needs Review / Learning Loop / Page Spacing)",
       FOUNDER_REGIONS.knowledge.map((r) => r.label).join("|") ===
         "Knowledge Summary|Knowledge Navigation / Filters|Knowledge List|Knowledge Detail|Needs Review / Right Rail|Learning Loop|Page Spacing");
+    check("Settings regions are the real Settings boxes (Overview / Navigation / Main / Rail / Readiness / Page Spacing)",
+      FOUNDER_REGIONS.settings.map((r) => r.label).join("|") ===
+        "Settings Overview|Settings Navigation|Settings Main Panel|Settings Detail / Right Rail|Readiness / Business Health|Page Spacing");
 
     const compressed = sanitizeFounderPageTokens("dashboard", {
       kpi: { paddingY: 0, paddingX: 4, internalGap: 0, lineHeight: 100, iconSize: 16 },
@@ -304,9 +307,10 @@ async function main() {
     "/reviews": ["summary", "nav", "opportunities", "requests", "reviews", "rail"],
     "/pipeline": ["summary", "nav", "board", "card", "details", "attention"],
     "/knowledge": ["summary", "nav", "list", "details", "attention", "loop"],
+    "/settings": ["overview", "nav", "main", "rail", "readiness"],
   };
 
-  console.log("\nTEST 2 -- The founder sees the trigger on all 15 supported pages");
+  console.log("\nTEST 2 -- The founder sees the trigger on all 16 supported pages");
   for (const path of PAGES) {
     const { status, body } = await fetchPage(founderToken, founderMembership.businessId, path);
     check(`${path}: 200 OK`, status === 200);
