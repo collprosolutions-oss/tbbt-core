@@ -35,6 +35,7 @@ const VARIANTS: Record<string, BadgeVariant> = {
   PENDING: "warning",
   REIMBURSED: "success",
   NONE: "outline",
+  PRIVATE: "outline",
 };
 
 const LABELS: Record<string, string> = {
@@ -52,6 +53,7 @@ const LABELS: Record<string, string> = {
   PENDING: "Pending",
   REIMBURSED: "Reimbursed",
   NONE: "No",
+  PRIVATE: "Private",
 };
 
 export function StatusBadge({ status }: { status: string }) {

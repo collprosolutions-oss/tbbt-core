@@ -169,6 +169,8 @@ model Business {
   payrollRunItems          PayrollRunItem[]
   payrollRunEvents         PayrollRunEvent[]
   expenses                 Expense[]
+  marketingContents        MarketingContent[]
+  marketingContentPhotos   MarketingContentPhoto[]
 }
 
 model Membership {
@@ -218,6 +220,9 @@ model Membership {
   processedPayrollRuns   PayrollRun[]       @relation("PayrollRunProcessor")
   purchasedExpenses      Expense[]          @relation("ExpensePurchaser")
   reviewedExpenses       Expense[]          @relation("ExpenseReviewer")
+  marketingPhotoGrants   JobPhoto[]         @relation("JobPhotoMarketingGrant")
+  createdMarketingContent MarketingContent[] @relation("MarketingContentCreator")
+  reviewedMarketingContent MarketingContent[] @relation("MarketingContentReviewer")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -481,13 +486,15 @@ model Job {
   problemReports          JobProblemReport[]
   timeEntries             TimeEntry[]
   expenses                Expense[]
+  marketingContents       MarketingContent[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
 }
 
-/// Private, owner-facing job documentation. Never surfaced on any public or
-/// customer-facing page. Stores only a storage URL/key, never image bytes.
+/// Private, owner-facing job documentation by default. Stores only a
+/// storage URL/key, never image bytes. Marketing/public use requires an
+/// explicit recorded permission -- existence on a Job is never enough.
 model JobPhoto {
   id         String        @id @default(cuid())
   businessId String
@@ -496,12 +503,19 @@ model JobPhoto {
   url        String
   caption    String?
   createdAt  DateTime      @default(now())
+  /// PRIVATE (default) | APPROVED. APPROVED is marketing-eligible only.
+  marketingPermissionStatus String @default("PRIVATE")
+  marketingPermissionGrantedAt DateTime?
+  marketingPermissionGrantedByMembershipId String?
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   job      Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  marketingPermissionGrantedBy Membership? @relation("JobPhotoMarketingGrant", fields: [marketingPermissionGrantedByMembershipId], references: [id], onDelete: SetNull)
+  marketingContentPhotos MarketingContentPhoto[]
 
   @@index([businessId])
   @@index([jobId])
+  @@index([businessId, marketingPermissionStatus])
 }
 
 model Invoice {
@@ -947,4 +961,54 @@ model Expense {
   @@index([jobId])
   @@index([customerId])
   @@index([purchaserMembershipId])
+}
+
+/// Internal marketing content. Never implies an external publish.
+/// Status is DRAFT | READY_FOR_REVIEW | APPROVED only -- there is no
+/// PUBLISHED state until a real channel integration exists.
+model MarketingContent {
+  id                     String    @id @default(cuid())
+  businessId             String
+  jobId                  String?
+  contentType            String
+  title                  String
+  body                   String    @default("")
+  channelIntent          String    @default("UNASSIGNED")
+  status                 String    @default("DRAFT")
+  /// Internal planning date only. Does not publish anything.
+  plannedFor             DateTime?
+  createdByMembershipId  String
+  reviewedByMembershipId String?
+  reviewedAt             DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  business  Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job       Job?                     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  createdBy Membership               @relation("MarketingContentCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  reviewedBy Membership?             @relation("MarketingContentReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+  photos    MarketingContentPhoto[]
+
+  @@index([businessId])
+  @@index([businessId, status])
+  @@index([businessId, plannedFor])
+  @@index([jobId])
+}
+
+/// Selected marketing-approved JobPhoto on a content draft.
+/// The photo must already be APPROVED for marketing at attach time.
+model MarketingContentPhoto {
+  id         String   @id @default(cuid())
+  businessId String
+  contentId  String
+  jobPhotoId String
+  createdAt  DateTime @default(now())
+
+  business Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  content  MarketingContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  jobPhoto JobPhoto         @relation(fields: [jobPhotoId], references: [id], onDelete: Cascade)
+
+  @@unique([contentId, jobPhotoId])
+  @@index([businessId])
+  @@index([jobPhotoId])
 }

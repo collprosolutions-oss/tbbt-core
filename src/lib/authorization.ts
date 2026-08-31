@@ -127,6 +127,13 @@ export const CAPABILITIES = {
    * field work.
    */
   VIEW_REPORTS: "VIEW_REPORTS",
+  /**
+   * Owner/admin Marketing Studio: photo marketing permission, content
+   * drafts, review/approval, and internal calendar. MEMBER must never
+   * receive this -- Marketing holds business-wide growth records, not
+   * assigned-job field work.
+   */
+  MANAGE_MARKETING: "MANAGE_MARKETING",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -190,7 +197,7 @@ export function requireBusinessCapability(
 /**
  * Coarse, temporary READ gate for the entire authenticated management
  * console (Dashboard, Requests, Customers, Estimates, Jobs, Invoices,
- * Reports, Services, Time Cards, Payroll, Expenses, Settings).
+ * Reports, Marketing, Services, Time Cards, Payroll, Expenses, Settings).
  *
  * Every one of those pages exists to browse or mutate business-wide
  * management data, and MEMBER has no capability over any of it today (see
