@@ -114,6 +114,12 @@ export const CAPABILITIES = {
    * MANAGE_PAYROLL but must not silently inherit this.
    */
   AUTHORIZE_PAYROLL: "AUTHORIZE_PAYROLL",
+  /**
+   * Owner/admin Expenses management: record, review, and allocate
+   * business-wide expenses. MEMBER must never receive this -- employee
+   * field submission is a later, separately scoped feature.
+   */
+  MANAGE_EXPENSES: "MANAGE_EXPENSES",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -177,7 +183,7 @@ export function requireBusinessCapability(
 /**
  * Coarse, temporary READ gate for the entire authenticated management
  * console (Dashboard, Requests, Customers, Estimates, Jobs, Invoices,
- * Services, Time Cards, Payroll, Settings).
+ * Services, Time Cards, Payroll, Expenses, Settings).
  *
  * Every one of those pages exists to browse or mutate business-wide
  * management data, and MEMBER has no capability over any of it today (see

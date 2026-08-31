@@ -316,6 +316,7 @@ try {
     { path: "/services", label: "Services/pricing", marker: CANARY_CATALOG_ITEM },
     { path: "/time-cards", label: "Time Cards", marker: CANARY_CUSTOMER },
     { path: "/payroll", label: "Payroll", marker: "Estimated Gross Payroll" },
+    { path: "/expenses", label: "Expenses", marker: "Track and manage business expenses" },
     { path: "/settings", label: "Business Settings", marker: "Labor Minimum Service Fee" },
   ];
 
@@ -350,6 +351,7 @@ try {
     "/services": "TEST 9",
     "/time-cards": "TEST 12",
     "/payroll": "TEST 13",
+    "/expenses": "TEST 14",
     "/settings": "TEST 10",
   };
 
