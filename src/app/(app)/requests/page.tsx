@@ -360,35 +360,43 @@ export default async function RequestsPage({
       </div>
       </FounderRegion>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_250px]">
-        <RequestsWorkspace requests={requests} />
+      {/*
+       * Primary row is Request Table + Request Details (see
+       * RequestsWorkspace). Schedule & Calendar sits UNDER the table
+       * column -- same main-list width -- instead of a cramped 250px
+       * third column. Today / Quick Actions stay in the supporting
+       * column under Request Details. --tbbt-panel-width sizes only
+       * that supporting column, matching the details panel.
+       */}
+      <RequestsWorkspace requests={requests} />
+
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,280px)]">
+        <FounderRegion id="calendar">
+        <div className="tbbt-founder-box space-y-3 rounded-xl border border-border/70 bg-card/40 p-4">
+          <div className="flex items-center justify-between">
+            <p className="flex items-center gap-2 text-base font-semibold text-foreground">
+              <FounderRegionIcon regionId="calendar" defaultIcon="calendar-days" className="size-4.5 text-muted-foreground" />
+              Schedule &amp; Calendar
+            </p>
+            <Link
+              href="/jobs"
+              className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              {monthLabel(today)}
+            </Link>
+          </div>
+          <MonthView
+            days={monthRange.days}
+            monthStart={monthRange.monthStart}
+            monthEnd={monthRange.monthEnd}
+            today={today}
+            jobsByDay={monthJobsByDay}
+            conflicts={monthConflicts}
+          />
+        </div>
+        </FounderRegion>
 
         <div className="space-y-5">
-          <FounderRegion id="calendar">
-          <div className="tbbt-founder-box space-y-3 rounded-xl border border-border/70 bg-card/40 p-4">
-            <div className="flex items-center justify-between">
-              <p className="flex items-center gap-2 text-base font-semibold text-foreground">
-                <FounderRegionIcon regionId="calendar" defaultIcon="calendar-days" className="size-4.5 text-muted-foreground" />
-                Schedule &amp; Calendar
-              </p>
-              <Link
-                href="/jobs"
-                className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-              >
-                {monthLabel(today)}
-              </Link>
-            </div>
-            <MonthView
-              days={monthRange.days}
-              monthStart={monthRange.monthStart}
-              monthEnd={monthRange.monthEnd}
-              today={today}
-              jobsByDay={monthJobsByDay}
-              conflicts={monthConflicts}
-            />
-          </div>
-          </FounderRegion>
-
           <FounderRegion id="today">
           <Card className="border-border/70">
             <CardHeader>
