@@ -315,6 +315,7 @@ try {
     { path: `/invoices/${canaryInvoice.id}`, label: "Invoice detail", marker: CANARY_CUSTOMER },
     { path: "/services", label: "Services/pricing", marker: CANARY_CATALOG_ITEM },
     { path: "/time-cards", label: "Time Cards", marker: CANARY_CUSTOMER },
+    { path: "/payroll", label: "Payroll", marker: "Estimated Gross Payroll" },
     { path: "/settings", label: "Business Settings", marker: "Labor Minimum Service Fee" },
   ];
 
@@ -348,6 +349,7 @@ try {
     [`/invoices/${canaryInvoice.id}`]: "TEST 8",
     "/services": "TEST 9",
     "/time-cards": "TEST 12",
+    "/payroll": "TEST 13",
     "/settings": "TEST 10",
   };
 

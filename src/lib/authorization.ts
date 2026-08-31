@@ -38,13 +38,10 @@ export class ForbiddenError extends Error {
  * Ordinary, currently-implemented business-management capabilities.
  * OWNER has every capability implicitly (see ROLE_CAPABILITIES below).
  *
- * There is deliberately no OWNER-only capability yet: every mutation that
- * exists today is ordinary business operation (customers, properties,
- * requests, catalog, estimates, jobs, invoices) that ADMIN is explicitly
- * chartered to perform. Sensitive future capabilities (banking, payroll
- * funding, ownership transfer, billing, security, full business
- * export/deletion) are NOT implemented yet; when they are built, add a
- * dedicated capability for them and grant it to OWNER only.
+ * Ordinary business-management capabilities are granted to OWNER and
+ * ADMIN. Sensitive money-movement authorization is OWNER-only
+ * (AUTHORIZE_PAYROLL). Banking, provider funding, ownership transfer,
+ * billing, security, and full business export/deletion remain unbuilt.
  */
 export const CAPABILITIES = {
   /** Create/edit customers and their properties (service addresses). */
@@ -104,16 +101,32 @@ export const CAPABILITIES = {
    * Membership) and must never be granted this capability.
    */
   MANAGE_TIME_CARDS: "MANAGE_TIME_CARDS",
+  /**
+   * Prepare and review a payroll run: assemble a pay period from
+   * APPROVED TimesheetWeek records, inspect readiness, mark reviewed.
+   * Does NOT authorize money movement. MEMBER must never receive this.
+   */
+  MANAGE_PAYROLL: "MANAGE_PAYROLL",
+  /**
+   * OWNER-only final authorization of a payroll run, plus recording an
+   * external provider/manual processed result and cancelling/reopening
+   * an already-authorized run. ADMIN may prepare/review via
+   * MANAGE_PAYROLL but must not silently inherit this.
+   */
+  AUTHORIZE_PAYROLL: "AUTHORIZE_PAYROLL",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
 
 const ALL_CAPABILITIES = Object.values(CAPABILITIES) as Capability[];
+const OWNER_ONLY_CAPABILITIES = new Set<Capability>([CAPABILITIES.AUTHORIZE_PAYROLL]);
 
 /**
- * OWNER: ultimate authority, all capabilities.
+ * OWNER: ultimate authority, all capabilities including payroll
+ *   authorization.
  * ADMIN: owner-delegated administrative role; every ordinary
- *   business-management capability that exists today.
+ *   business-management capability, including payroll prepare/review.
+ *   Does not receive OWNER-only money-authorization capabilities.
  * MEMBER: ordinary employee/worker foundation; no general management
  *   capability. Do not add capabilities here just to make the role "useful"
  *   -- future employee-specific (e.g. assigned-job-scoped) permissions
@@ -121,7 +134,7 @@ const ALL_CAPABILITIES = Object.values(CAPABILITIES) as Capability[];
  */
 const ROLE_CAPABILITIES: Record<MembershipRole, ReadonlySet<Capability>> = {
   OWNER: new Set(ALL_CAPABILITIES),
-  ADMIN: new Set(ALL_CAPABILITIES),
+  ADMIN: new Set(ALL_CAPABILITIES.filter((capability) => !OWNER_ONLY_CAPABILITIES.has(capability))),
   MEMBER: new Set(),
 };
 
@@ -164,7 +177,7 @@ export function requireBusinessCapability(
 /**
  * Coarse, temporary READ gate for the entire authenticated management
  * console (Dashboard, Requests, Customers, Estimates, Jobs, Invoices,
- * Services, Time Cards, Settings).
+ * Services, Time Cards, Payroll, Settings).
  *
  * Every one of those pages exists to browse or mutate business-wide
  * management data, and MEMBER has no capability over any of it today (see

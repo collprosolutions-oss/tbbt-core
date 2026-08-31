@@ -265,8 +265,11 @@ try {
     allCapabilities.every((capability) => roleHasCapability("OWNER", capability)),
   );
   check(
-    "ADMIN has every currently-implemented ordinary business-management capability",
-    allCapabilities.every((capability) => roleHasCapability("ADMIN", capability)),
+    "ADMIN has every currently-implemented ordinary business-management capability except OWNER-only AUTHORIZE_PAYROLL",
+    allCapabilities
+      .filter((capability) => capability !== CAPABILITIES.AUTHORIZE_PAYROLL)
+      .every((capability) => roleHasCapability("ADMIN", capability)) &&
+      !roleHasCapability("ADMIN", CAPABILITIES.AUTHORIZE_PAYROLL),
   );
   check(
     "MEMBER has NO general owner/admin management capability (foundation only)",
@@ -519,6 +522,26 @@ try {
   });
   await expectAllowed("ADMIN can pass the Time Cards management capability gate", () => {
     requireBusinessCapability(adminA, CAPABILITIES.MANAGE_TIME_CARDS);
+  });
+
+  console.log("\nTEST 10 — Payroll prepare/review is OWNER/ADMIN; authorization is OWNER-only");
+  check("OWNER has MANAGE_PAYROLL", roleHasCapability("OWNER", CAPABILITIES.MANAGE_PAYROLL));
+  check("ADMIN has MANAGE_PAYROLL", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_PAYROLL));
+  check("MEMBER does not have MANAGE_PAYROLL", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_PAYROLL));
+  check("OWNER has AUTHORIZE_PAYROLL", roleHasCapability("OWNER", CAPABILITIES.AUTHORIZE_PAYROLL));
+  check("ADMIN does not have AUTHORIZE_PAYROLL", !roleHasCapability("ADMIN", CAPABILITIES.AUTHORIZE_PAYROLL));
+  check("MEMBER does not have AUTHORIZE_PAYROLL", !roleHasCapability("MEMBER", CAPABILITIES.AUTHORIZE_PAYROLL));
+  await expectForbidden("MEMBER cannot pass the Payroll management capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_PAYROLL);
+  });
+  await expectAllowed("ADMIN can pass the Payroll management capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_PAYROLL);
+  });
+  await expectForbidden("ADMIN cannot pass the Payroll authorization capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.AUTHORIZE_PAYROLL);
+  });
+  await expectAllowed("OWNER can pass the Payroll authorization capability gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.AUTHORIZE_PAYROLL);
   });
 
   console.log(

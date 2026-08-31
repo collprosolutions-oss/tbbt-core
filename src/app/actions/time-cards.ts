@@ -37,6 +37,7 @@ function readString(formData: FormData, key: string) {
 
 function revalidateTimeCards(jobId?: string | null) {
   revalidatePath("/time-cards");
+  revalidatePath("/payroll");
   revalidatePath("/field");
   if (jobId) {
     revalidatePath(`/field/jobs/${jobId}`);

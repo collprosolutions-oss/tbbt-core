@@ -165,6 +165,9 @@ model Business {
   timeEntries              TimeEntry[]
   timeEntryAdjustments     TimeEntryAdjustment[]
   timesheetWeeks           TimesheetWeek[]
+  payrollRuns              PayrollRun[]
+  payrollRunItems          PayrollRunItem[]
+  payrollRunEvents         PayrollRunEvent[]
 }
 
 model Membership {
@@ -207,6 +210,11 @@ model Membership {
   /// MEMBER's own correction request). Not the entries they worked.
   authoredAdjustments TimeEntryAdjustment[] @relation("TimeEntryAdjustmentActor")
   approvedTimesheets  TimesheetWeek[]       @relation("TimesheetWeekApprover")
+  payrollRunItems     PayrollRunItem[]
+  payrollRunEvents    PayrollRunEvent[]     @relation("PayrollRunEventActor")
+  reviewedPayrollRuns    PayrollRun[]       @relation("PayrollRunReviewer")
+  authorizedPayrollRuns  PayrollRun[]       @relation("PayrollRunAuthorizer")
+  processedPayrollRuns   PayrollRun[]       @relation("PayrollRunProcessor")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -772,9 +780,108 @@ model TimesheetWeek {
   business     Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
   membership   Membership  @relation(fields: [membershipId], references: [id], onDelete: Cascade)
   approvedBy   Membership? @relation("TimesheetWeekApprover", fields: [approvedByMembershipId], references: [id], onDelete: SetNull)
+  payrollRunItems PayrollRunItem[]
 
   @@unique([businessId, membershipId, weekStartedAt])
   @@index([businessId])
   @@index([membershipId])
   @@index([businessId, status])
+}
+
+/// One assembled payroll period for a business. TBBT prepares, reviews,
+/// authorizes, and records -- it is NOT a payroll processor. AUTHORIZED
+/// and PROCESSED rows freeze their item snapshots; later wage / time /
+/// membership edits must not rewrite those amounts.
+///
+/// status: DRAFT | READY_FOR_REVIEW | REVIEWED | AUTHORIZED | PROCESSED | CANCELLED
+/// processedSource: MANUAL_EXTERNAL | PROVIDER (null until processed)
+model PayrollRun {
+  id         String @id @default(cuid())
+  businessId String
+  payPeriodStart DateTime
+  payPeriodEnd   DateTime
+  status     String @default("DRAFT")
+  reviewedAt DateTime?
+  reviewedByMembershipId String?
+  authorizedAt DateTime?
+  authorizedByMembershipId String?
+  processedAt DateTime?
+  processedByMembershipId String?
+  processedSource String?
+  providerReference String?
+  notes      String?
+  /// Frozen at OWNER authorization. History views read these, never
+  /// recompute from current wages.
+  authorizedWorkerCount      Int?
+  authorizedApprovedHours    Decimal?
+  authorizedGrossLaborAmount Decimal?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business     Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  reviewedBy   Membership? @relation("PayrollRunReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+  authorizedBy Membership? @relation("PayrollRunAuthorizer", fields: [authorizedByMembershipId], references: [id], onDelete: SetNull)
+  processedBy  Membership? @relation("PayrollRunProcessor", fields: [processedByMembershipId], references: [id], onDelete: SetNull)
+  items        PayrollRunItem[]
+  events       PayrollRunEvent[]
+
+  @@index([businessId])
+  @@index([businessId, status])
+  @@index([businessId, payPeriodStart])
+}
+
+/// One worker-week included in a PayrollRun. Values are copied from the
+/// approved TimesheetWeek at inclusion time. AUTHORIZED / PROCESSED items
+/// are immutable snapshots.
+model PayrollRunItem {
+  id                 String   @id @default(cuid())
+  businessId         String
+  payrollRunId       String
+  membershipId       String
+  timesheetWeekId    String
+  weekStartedAt      DateTime
+  regularHours       Decimal
+  overtimeHours      Decimal
+  approvedHours      Decimal
+  approvedHourlyWage Decimal?
+  grossLaborAmount   Decimal?
+  /// READY | NEEDS_ATTENTION
+  readiness          String   @default("NEEDS_ATTENTION")
+  /// String[] of PAYROLL_EXCEPTION codes (see src/lib/payroll.ts).
+  exceptions         Json     @default("[]")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  business      Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  payrollRun    PayrollRun    @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  membership    Membership    @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  timesheetWeek TimesheetWeek @relation(fields: [timesheetWeekId], references: [id], onDelete: Restrict)
+
+  @@unique([payrollRunId, timesheetWeekId])
+  @@index([businessId])
+  @@index([payrollRunId])
+  @@index([membershipId])
+  @@index([timesheetWeekId])
+}
+
+/// Append-only audit log for consequential payroll actions. Application
+/// code must never update or delete an existing row.
+model PayrollRunEvent {
+  id                String   @id @default(cuid())
+  businessId        String
+  payrollRunId      String
+  actorMembershipId String
+  /// CREATE | CHANGE_PERIOD | ADD_ITEM | REMOVE_ITEM | REVIEW | AUTHORIZE | REOPEN | CANCEL | MARK_PROCESSED
+  action            String
+  reason            String?
+  previousJson      Json?
+  nextJson          Json?
+  createdAt         DateTime @default(now())
+
+  business Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  actor    Membership @relation("PayrollRunEventActor", fields: [actorMembershipId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([payrollRunId])
 }

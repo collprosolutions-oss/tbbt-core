@@ -146,6 +146,61 @@ try {
     throw new Error("Business B was able to load Business A's time entry by id.");
   }
 
+  const weekA = await prisma.timesheetWeek.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: membershipA.id,
+      weekStartedAt: new Date("2026-08-23T00:00:00.000Z"),
+      status: "APPROVED",
+      approvedHours: 8,
+      approvedHourlyWage: 20,
+      approvedLaborCost: 160,
+    },
+  });
+  const runA = await prisma.payrollRun.create({
+    data: {
+      businessId: businessA.id,
+      payPeriodStart: new Date("2026-08-23T00:00:00.000Z"),
+      payPeriodEnd: new Date("2026-08-30T00:00:00.000Z"),
+      status: "DRAFT",
+    },
+  });
+  await prisma.payrollRun.create({
+    data: {
+      businessId: businessB.id,
+      payPeriodStart: new Date("2026-08-23T00:00:00.000Z"),
+      payPeriodEnd: new Date("2026-08-30T00:00:00.000Z"),
+      status: "DRAFT",
+    },
+  });
+  await prisma.payrollRunItem.create({
+    data: {
+      businessId: businessA.id,
+      payrollRunId: runA.id,
+      membershipId: membershipA.id,
+      timesheetWeekId: weekA.id,
+      weekStartedAt: weekA.weekStartedAt,
+      regularHours: 8,
+      overtimeHours: 0,
+      approvedHours: 8,
+      approvedHourlyWage: 20,
+      grossLaborAmount: 160,
+      readiness: "READY",
+    },
+  });
+  const visibleRuns = await prisma.payrollRun.findMany({
+    where: businessScope(businessA.id),
+  });
+  if (visibleRuns.some((run) => run.businessId !== businessA.id) || visibleRuns.length !== 1) {
+    throw new Error("Scoped payroll-run query leaked another business's records.");
+  }
+  const foreignRun = await prisma.payrollRun.findFirst({
+    where: { id: runA.id, ...businessScope(businessB.id) },
+  });
+  if (foreignRun) {
+    throw new Error("Business B was able to load Business A's payroll run by id.");
+  }
+
   console.log("Isolation check passed: business-scoped queries do not cross workspaces.");
 } finally {
   await prisma.$disconnect();

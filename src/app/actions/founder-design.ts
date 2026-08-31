@@ -33,6 +33,7 @@ const PAGE_PATHS: Record<FounderPageKey, string> = {
   invoices: "/invoices",
   services: "/services",
   "time-cards": "/time-cards",
+  payroll: "/payroll",
 };
 
 function assertPageKey(pageKey: string): FounderPageKey {

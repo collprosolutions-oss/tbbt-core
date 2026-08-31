@@ -659,7 +659,7 @@ export async function approveTimesheetWeek(
       })),
     );
 
-    return tx.timesheetWeek.upsert({
+    const week = await tx.timesheetWeek.upsert({
       where: {
         businessId_membershipId_weekStartedAt: {
           businessId: access.businessId,
@@ -687,6 +687,9 @@ export async function approveTimesheetWeek(
         approvedLaborCost: hasCost ? decimal(Math.round((totalCost + Number.EPSILON) * 100) / 100) : null,
       },
     });
+    const { refreshPayrollAfterTimesheetChange } = await import("@/lib/payroll-ops");
+    await refreshPayrollAfterTimesheetChange(tx, access.businessId, week.id);
+    return week;
   });
 }
 
@@ -748,7 +751,7 @@ export async function reopenTimesheetWeek(
       });
     }
 
-    return tx.timesheetWeek.update({
+    const reopened = await tx.timesheetWeek.update({
       where: { id: week.id },
       data: {
         status: "OPEN",
@@ -756,6 +759,9 @@ export async function reopenTimesheetWeek(
         approvedByMembershipId: null,
       },
     });
+    const { refreshPayrollAfterTimesheetChange } = await import("@/lib/payroll-ops");
+    await refreshPayrollAfterTimesheetChange(tx, access.businessId, week.id);
+    return reopened;
   });
 }
 
