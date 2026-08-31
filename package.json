@@ -25,6 +25,7 @@
     "test:team-onboarding": "node --experimental-strip-types scripts/check-team-onboarding.mjs",
     "test:time-cards": "node --experimental-strip-types scripts/check-time-cards.mjs",
     "test:payroll": "node --experimental-strip-types scripts/check-payroll.mjs",
+    "test:reports": "node --experimental-strip-types scripts/check-reports.mjs",
     "test:theme-contrast": "node scripts/check-theme-contrast.mjs",
     "test:app-url": "node --experimental-strip-types scripts/check-app-url.mjs",
     "test:field-time-cards-flow": "node --experimental-strip-types scripts/check-field-time-cards-flow.mjs"

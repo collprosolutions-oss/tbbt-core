@@ -68,7 +68,7 @@ export async function requireBusinessAccess(): Promise<BusinessAccess> {
 /**
  * Use this instead of `requireBusinessAccess()` at the top of every
  * management-console PAGE (Dashboard, Requests, Customers, Estimates,
- * Jobs, Invoices, Services, Time Cards, Payroll, Settings) -- NOT in server actions, which
+ * Jobs, Invoices, Reports, Services, Time Cards, Payroll, Settings) -- NOT in server actions, which
  * should keep calling `requireBusinessAccess()` directly plus a specific
  * `requireBusinessCapability()` check (see src/lib/authorization.ts), so a
  * future assigned-job-scoped MEMBER capability isn't blocked by a blanket

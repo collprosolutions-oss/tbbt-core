@@ -58,7 +58,7 @@ type AppShellProps = {
 const NAV_SECTIONS: readonly { label: string; hrefs: readonly string[] }[] = [
   { label: "Overview", hrefs: ["/dashboard"] },
   { label: "Operations", hrefs: ["/requests", "/customers", "/estimates", "/jobs", "/time-cards", "/payroll", "/invoices"] },
-  { label: "Business", hrefs: ["/services", "/team", "/settings"] },
+  { label: "Business", hrefs: ["/reports", "/services", "/team", "/settings"] },
 ];
 
 function isNavActive(pathname: string, href: string) {
