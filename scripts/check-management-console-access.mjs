@@ -320,6 +320,7 @@ try {
     { path: "/reports", label: "Reports", marker: CANARY_CUSTOMER },
     { path: "/marketing", label: "Marketing", marker: "Marketing Studio" },
     { path: "/reviews", label: "Reviews", marker: "Internal review workspace" },
+    { path: "/pipeline", label: "Deals / Pipeline", marker: "Sales workspace" },
     { path: "/settings", label: "Business Settings", marker: "Labor Minimum Service Fee" },
   ];
 
@@ -358,6 +359,7 @@ try {
     "/reports": "TEST 15",
     "/marketing": "TEST 16",
     "/reviews": "TEST 17",
+    "/pipeline": "TEST 18",
     "/settings": "TEST 10",
   };
 

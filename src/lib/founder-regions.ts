@@ -319,6 +319,42 @@ export const FOUNDER_REGIONS: Record<FounderPageKey, readonly FounderRegionDef[]
     },
     { id: "page", label: "Page Spacing", kind: "page" },
   ],
+  pipeline: [
+    { id: "summary", label: "Pipeline Summary", kind: "kpi" },
+    { id: "nav", label: "Pipeline Navigation / Filters", kind: "tabs", hasTitle: true },
+    {
+      id: "board",
+      label: "Pipeline Board",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+    },
+    {
+      id: "card",
+      label: "Opportunity Card",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+    },
+    {
+      id: "details",
+      label: "Opportunity Detail",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+      hasWidth: true,
+    },
+    {
+      id: "attention",
+      label: "Needs Attention",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+    },
+    { id: "page", label: "Page Spacing", kind: "page" },
+  ],
 };
 
 export function getFounderRegions(pageKey: FounderPageKey): readonly FounderRegionDef[] {

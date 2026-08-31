@@ -135,5 +135,6 @@ export async function approveEstimate(
   }
 
   revalidatePath(`/e/${token}`);
+  revalidatePath("/pipeline");
   return { status: "APPROVED" };
 }

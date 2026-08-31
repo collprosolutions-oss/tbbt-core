@@ -42,6 +42,7 @@ export const FOUNDER_PAGE_KEYS = [
   "reports",
   "marketing",
   "reviews",
+  "pipeline",
 ] as const;
 export type FounderPageKey = (typeof FOUNDER_PAGE_KEYS)[number];
 
@@ -63,6 +64,7 @@ export const FOUNDER_PAGE_LABELS: Record<FounderPageKey, string> = {
   reports: "Reports",
   marketing: "Marketing",
   reviews: "Reviews",
+  pipeline: "Deals / Pipeline",
 };
 
 /** Whether a page has the dense table + master-detail panel section at all (Dashboard does not). */
@@ -80,6 +82,7 @@ export const PAGE_HAS_TABLE: Record<FounderPageKey, boolean> = {
   reports: true,
   marketing: true,
   reviews: true,
+  pipeline: false,
 };
 
 /** Whether a page has a right-side detail/rail panel with a tunable desktop width. */
@@ -97,6 +100,7 @@ export const PAGE_HAS_PANEL: Record<FounderPageKey, boolean> = {
   reports: true,
   marketing: true,
   reviews: true,
+  pipeline: true,
 };
 
 /**
@@ -121,6 +125,7 @@ export const KPI_CARD_COUNTS: Record<FounderPageKey, number> = {
   reports: 5,
   marketing: 4,
   reviews: 5,
+  pipeline: 5,
 };
 
 // ---------------------------------------------------------------------------
@@ -372,6 +377,19 @@ export const KPI_DEFAULTS: Record<FounderPageKey, Record<KpiTokenKey, number>> =
     supportingFontSize: 12,
     lineHeight: 120,
   },
+  pipeline: {
+    minHeight: 0,
+    padding: 20,
+    paddingY: 36,
+    paddingX: 20,
+    gap: 20,
+    internalGap: 4,
+    iconSize: 48,
+    labelFontSize: 11,
+    numberFontSize: 30,
+    supportingFontSize: 12,
+    lineHeight: 120,
+  },
 };
 
 /**
@@ -594,6 +612,7 @@ export const TABLE_DENSITY_DEFAULTS: Record<FounderPageKey, { rowPy: number; hea
   reports: { rowPy: 16, headerPy: 14 },
   marketing: { rowPy: 16, headerPy: 14 },
   reviews: { rowPy: 16, headerPy: 14 },
+  pipeline: { rowPy: 0, headerPy: 0 },
 };
 
 /**
@@ -641,6 +660,7 @@ export const TABLE_CELL_PX_DEFAULTS: Record<FounderPageKey, number> = {
   reports: 8,
   marketing: 8,
   reviews: 8,
+  pipeline: 0,
 };
 export const TABLE_CELL_PX_BOUNDS = { min: 4, max: 20, step: 2 };
 
@@ -700,6 +720,7 @@ export const PANEL_WIDTH_DEFAULTS: Record<FounderPageKey, number | undefined> = 
   reports: 300,
   marketing: 300,
   reviews: 300,
+  pipeline: 300,
 };
 export const PANEL_WIDTH_BOUNDS = { min: 220, max: 420, step: 10 };
 export const PANEL_WIDTH_CSS_VAR = "--tbbt-panel-width";
