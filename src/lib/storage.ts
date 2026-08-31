@@ -70,10 +70,42 @@ export async function uploadJobPhoto({
   jobId: string;
   file: File;
 }): Promise<UploadedJobPhoto> {
+  return uploadManagedImage({
+    pathnamePrefix: `job-photos/${businessId}/${jobId}`,
+    file,
+  });
+}
+
+/**
+ * Same Vercel Blob path as job photos -- no second storage system.
+ * Expense receipts reuse the existing image MIME allow-list and size cap.
+ */
+export async function uploadExpenseReceipt({
+  businessId,
+  expenseId,
+  file,
+}: {
+  businessId: string;
+  expenseId: string;
+  file: File;
+}): Promise<UploadedJobPhoto> {
+  return uploadManagedImage({
+    pathnamePrefix: `expense-receipts/${businessId}/${expenseId}`,
+    file,
+  });
+}
+
+async function uploadManagedImage({
+  pathnamePrefix,
+  file,
+}: {
+  pathnamePrefix: string;
+  file: File;
+}): Promise<UploadedJobPhoto> {
   const mimeType = isSupportedImageMimeType(file.type) ? file.type : "image/jpeg";
   const extension = EXTENSION_BY_MIME_TYPE[mimeType];
   // Never derive the storage path from the browser-supplied filename.
-  const pathname = `job-photos/${businessId}/${jobId}/${randomUUID()}.${extension}`;
+  const pathname = `${pathnamePrefix}/${randomUUID()}.${extension}`;
 
   const blob = await put(pathname, file, {
     access: "public",

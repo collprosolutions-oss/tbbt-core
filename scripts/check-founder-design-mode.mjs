@@ -4,7 +4,7 @@
  *
  * Verifies:
  *  1. A founder-flagged User sees the "Founder Design Mode" trigger on
- *     every one of the 9 supported pages.
+ *     every one of the 10 supported pages.
  *  2. A subscriber OWNER, ADMIN-equivalent, and MEMBER -- none of them
  *     isFounder -- never see it, on any of the 6 pages, via direct URL.
  *  3. A completely different business's OWNER also never sees it
@@ -43,7 +43,7 @@ const {
 const { FOUNDER_REGIONS, defaultFounderRegionId } = await import("@/lib/founder-regions");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
-const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices", "/services", "/time-cards", "/payroll"];
+const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices", "/services", "/time-cards", "/payroll", "/expenses"];
 const TRIGGER_TEXT = "Founder Design Mode";
 
 let passed = 0;
@@ -283,9 +283,10 @@ async function main() {
     "/services": ["kpi", "presentation", "pricing", "catalog"],
     "/time-cards": ["kpi", "tabs", "table", "details"],
     "/payroll": ["kpi", "table", "readiness", "details", "history"],
+    "/expenses": ["kpi", "categories", "table", "rail"],
   };
 
-  console.log("\nTEST 2 -- The founder sees the trigger on all 9 supported pages");
+  console.log("\nTEST 2 -- The founder sees the trigger on all 10 supported pages");
   for (const path of PAGES) {
     const { status, body } = await fetchPage(founderToken, founderMembership.businessId, path);
     check(`${path}: 200 OK`, status === 200);
@@ -299,7 +300,7 @@ async function main() {
     }
   }
 
-  console.log("\nTEST 3 -- Subscriber OWNER never sees the trigger, on any of the 9 pages (direct URL)");
+  console.log("\nTEST 3 -- Subscriber OWNER never sees the trigger, on any of the 10 pages (direct URL)");
   for (const path of PAGES) {
     const { status, body } = await fetchPage(ownerToken, ownerMembership.businessId, path);
     check(`${path}: 200 OK (page still works)`, status === 200);
