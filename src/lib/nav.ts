@@ -29,7 +29,7 @@ export const APP_NAV: readonly NavItem[] = [
   { href: "/reviews", label: "Reviews", capability: CAPABILITIES.MANAGE_REVIEWS },
   { href: "/services", label: "Services", capability: CAPABILITIES.MANAGE_CATALOG },
   { href: "/team", label: "Team", capability: CAPABILITIES.MANAGE_MEMBERS },
-  { href: "/settings", label: "Business Settings", capability: CAPABILITIES.MANAGE_SETTINGS },
+  { href: "/settings", label: "Settings", capability: CAPABILITIES.MANAGE_SETTINGS },
 ] as const;
 
 /**

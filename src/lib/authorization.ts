@@ -40,8 +40,11 @@ export class ForbiddenError extends Error {
  *
  * Ordinary business-management capabilities are granted to OWNER and
  * ADMIN. Sensitive money-movement authorization is OWNER-only
- * (AUTHORIZE_PAYROLL). Banking, provider funding, ownership transfer,
- * billing, security, and full business export/deletion remain unbuilt.
+ * (AUTHORIZE_PAYROLL). Consequential Settings (labor minimum, business
+ * name) are OWNER-only even though ADMIN may open Settings and edit
+ * delegated preference flags. Banking, provider funding, ownership
+ * transfer, billing, security mutations, and full business deletion
+ * remain unbuilt.
  */
 export const CAPABILITIES = {
   /** Create/edit customers and their properties (service addresses). */
@@ -74,7 +77,12 @@ export const CAPABILITIES = {
    * avoid.
    */
   OPERATE_JOBS: "OPERATE_JOBS",
-  /** Business-wide configuration (e.g. labor minimum settings). */
+  /**
+   * Settings workspace access and delegated operational preferences
+   * (notification / communication flags). OWNER also uses this together
+   * with an OWNER role floor for consequential pricing and identity
+   * changes. MEMBER must never receive this.
+   */
   MANAGE_SETTINGS: "MANAGE_SETTINGS",
   /**
    * Create/edit/send/cancel Change Orders (post-approval scope/pricing

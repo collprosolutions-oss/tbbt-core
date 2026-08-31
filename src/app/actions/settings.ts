@@ -3,12 +3,19 @@
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { requireBusinessAccess } from "@/lib/access";
-import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
-import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import { prisma } from "@/lib/prisma";
+import {
+  assertSettingsBusinessScope,
+  settingsErrorMessage,
+  updateBusinessProfileOp,
+  updateLaborMinimumSettingsOp,
+  updateSettingsPreferencesOp,
+} from "@/lib/settings-ops";
+import type { SettingsPreferenceFlags } from "@/lib/settings";
 
 export type SettingsActionState = {
   error?: string;
+  message?: string;
 };
 
 function readString(formData: FormData, key: string) {
@@ -16,53 +23,105 @@ function readString(formData: FormData, key: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function readConfirmed(formData: FormData) {
+  return readString(formData, "confirmConsequential") === "1";
+}
+
+function revalidateSettings() {
+  revalidatePath("/settings");
+  revalidatePath("/estimates");
+  revalidatePath("/services");
+  revalidatePath("/dashboard");
+}
+
 export async function updateLaborMinimumSettings(
   _prev: SettingsActionState,
   formData: FormData,
 ): Promise<SettingsActionState> {
-  const access = await requireBusinessAccess();
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
-  const enabled = readString(formData, "enabled") === "on";
-  const rawAmount = readString(formData, "amount");
+  try {
+    const access = await requireBusinessAccess();
+    assertSettingsBusinessScope(access, readString(formData, "businessId") || null);
+    const enabled = readString(formData, "enabled") === "on";
+    const rawAmount = readString(formData, "amount");
 
-  let amount: Prisma.Decimal | null = null;
-  if (rawAmount) {
-    try {
-      amount = new Prisma.Decimal(rawAmount);
-    } catch {
-      return { error: "Enter a valid minimum amount." };
-    }
-    if (amount.isNaN() || amount.lte(0)) {
-      return { error: "Enter a valid minimum amount." };
-    }
-  }
-
-  if (enabled && !amount) {
-    return { error: "Enter a minimum amount to turn this on." };
-  }
-
-  await prisma.business.update({
-    where: { id: access.businessId },
-    data: {
-      laborMinimumEnabled: enabled,
-      laborMinimumAmount: amount,
-    },
-  });
-
-  const drafts = await prisma.estimate.findMany({
-    where: { ...access.scope, status: "DRAFT" },
-    select: { id: true },
-  });
-
-  if (drafts.length > 0) {
-    await prisma.$transaction(async (tx) => {
-      for (const draft of drafts) {
-        await persistDraftEstimateTotal(tx, draft.id, access.businessId);
+    let amount: Prisma.Decimal | null = null;
+    if (rawAmount) {
+      try {
+        amount = new Prisma.Decimal(rawAmount);
+      } catch {
+        return { error: "Enter a valid minimum amount." };
       }
-    });
-  }
+      if (amount.isNaN() || amount.lte(0)) {
+        return { error: "Enter a valid minimum amount." };
+      }
+    }
 
-  revalidatePath("/settings");
-  revalidatePath("/estimates");
-  return {};
+    const result = await updateLaborMinimumSettingsOp(prisma, access, {
+      enabled,
+      amount,
+      confirmed: readConfirmed(formData),
+    });
+    revalidateSettings();
+    return result.unchanged
+      ? { message: "No pricing-rule changes to save." }
+      : { message: "Labor minimum updated for future estimates." };
+  } catch (error) {
+    return { error: settingsErrorMessage(error, "That pricing rule could not be saved.") };
+  }
+}
+
+export async function updateBusinessProfileSettings(
+  _prev: SettingsActionState,
+  formData: FormData,
+): Promise<SettingsActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    assertSettingsBusinessScope(access, readString(formData, "businessId") || null);
+    const result = await updateBusinessProfileOp(prisma, access, {
+      name: readString(formData, "name"),
+      confirmed: readConfirmed(formData),
+    });
+    revalidateSettings();
+    return result.unchanged
+      ? { message: "No business-name changes to save." }
+      : { message: "Business name updated." };
+  } catch (error) {
+    return { error: settingsErrorMessage(error, "That business profile could not be saved.") };
+  }
+}
+
+const PREFERENCE_KEYS = [
+  "estimateCommunicationEnabled",
+  "scheduleNotificationEnabled",
+  "invoiceCommunicationEnabled",
+  "reviewRequestPreferenceEnabled",
+  "marketingCommunicationEnabled",
+  "notifyEstimateEvents",
+  "notifyScheduleEvents",
+  "notifyInvoiceEvents",
+  "notifyPayrollEvents",
+  "notifyTeamEvents",
+] as const satisfies ReadonlyArray<keyof SettingsPreferenceFlags>;
+
+export async function updateSettingsPreferences(
+  _prev: SettingsActionState,
+  formData: FormData,
+): Promise<SettingsActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    assertSettingsBusinessScope(access, readString(formData, "businessId") || null);
+    const flags: Partial<SettingsPreferenceFlags> = {};
+    for (const key of PREFERENCE_KEYS) {
+      if (formData.has(`pref_${key}`)) {
+        flags[key] = readString(formData, key) === "on";
+      }
+    }
+    const result = await updateSettingsPreferencesOp(prisma, access, flags);
+    revalidateSettings();
+    return result.unchanged
+      ? { message: "No preference changes to save." }
+      : { message: "Preferences saved. Delivery is not automated." };
+  } catch (error) {
+    return { error: settingsErrorMessage(error, "Those preferences could not be saved.") };
+  }
 }

@@ -43,7 +43,7 @@ const {
 const { FOUNDER_REGIONS, defaultFounderRegionId } = await import("@/lib/founder-regions");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
-const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices", "/services", "/time-cards", "/payroll", "/expenses", "/reports", "/marketing", "/reviews", "/pipeline"];
+const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices", "/services", "/time-cards", "/payroll", "/expenses", "/reports", "/marketing", "/reviews", "/pipeline", "/settings"];
 const TRIGGER_TEXT = "Founder Design Mode";
 
 let passed = 0;
@@ -253,6 +253,9 @@ async function main() {
     check("Pipeline regions are the real Pipeline boxes (Summary / Navigation / Board / Card / Detail / Needs Attention / Page Spacing)",
       FOUNDER_REGIONS.pipeline.map((r) => r.label).join("|") ===
         "Pipeline Summary|Pipeline Navigation / Filters|Pipeline Board|Opportunity Card|Opportunity Detail|Needs Attention|Page Spacing");
+    check("Settings regions are the real Settings boxes (Overview / Navigation / Main / Rail / Readiness / Page Spacing)",
+      FOUNDER_REGIONS.settings.map((r) => r.label).join("|") ===
+        "Settings Overview|Settings Navigation|Settings Main Panel|Settings Detail / Right Rail|Readiness / Business Health|Page Spacing");
 
     const compressed = sanitizeFounderPageTokens("dashboard", {
       kpi: { paddingY: 0, paddingX: 4, internalGap: 0, lineHeight: 100, iconSize: 16 },
@@ -300,9 +303,10 @@ async function main() {
     "/marketing": ["summary", "nav", "opportunities", "content", "calendar", "rail"],
     "/reviews": ["summary", "nav", "opportunities", "requests", "reviews", "rail"],
     "/pipeline": ["summary", "nav", "board", "card", "details", "attention"],
+    "/settings": ["overview", "nav", "main", "rail", "readiness"],
   };
 
-  console.log("\nTEST 2 -- The founder sees the trigger on all 14 supported pages");
+  console.log("\nTEST 2 -- The founder sees the trigger on all 15 supported pages");
   for (const path of PAGES) {
     const { status, body } = await fetchPage(founderToken, founderMembership.businessId, path);
     check(`${path}: 200 OK`, status === 200);

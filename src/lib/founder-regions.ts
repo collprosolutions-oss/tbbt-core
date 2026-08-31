@@ -355,6 +355,35 @@ export const FOUNDER_REGIONS: Record<FounderPageKey, readonly FounderRegionDef[]
     },
     { id: "page", label: "Page Spacing", kind: "page" },
   ],
+  settings: [
+    { id: "overview", label: "Settings Overview", kind: "kpi" },
+    { id: "nav", label: "Settings Navigation", kind: "tabs", hasTitle: true },
+    {
+      id: "main",
+      label: "Settings Main Panel",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+    },
+    {
+      id: "rail",
+      label: "Settings Detail / Right Rail",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+      hasWidth: true,
+    },
+    {
+      id: "readiness",
+      label: "Readiness / Business Health",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+    },
+    { id: "page", label: "Page Spacing", kind: "page" },
+  ],
 };
 
 export function getFounderRegions(pageKey: FounderPageKey): readonly FounderRegionDef[] {
