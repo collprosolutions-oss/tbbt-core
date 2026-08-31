@@ -318,6 +318,7 @@ try {
     { path: "/payroll", label: "Payroll", marker: "Estimated Gross Payroll" },
     { path: "/expenses", label: "Expenses", marker: "Track and manage business expenses" },
     { path: "/reports", label: "Reports", marker: CANARY_CUSTOMER },
+    { path: "/marketing", label: "Marketing", marker: "Marketing Studio" },
     { path: "/settings", label: "Business Settings", marker: "Labor Minimum Service Fee" },
   ];
 
@@ -354,6 +355,7 @@ try {
     "/payroll": "TEST 13",
     "/expenses": "TEST 14",
     "/reports": "TEST 15",
+    "/marketing": "TEST 16",
     "/settings": "TEST 10",
   };
 

@@ -566,6 +566,17 @@ try {
     requireBusinessCapability(adminA, CAPABILITIES.VIEW_REPORTS);
   });
 
+  console.log("\nTEST 13 — Marketing is OWNER/ADMIN-only");
+  check("OWNER has MANAGE_MARKETING", roleHasCapability("OWNER", CAPABILITIES.MANAGE_MARKETING));
+  check("ADMIN has MANAGE_MARKETING", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_MARKETING));
+  check("MEMBER does not have MANAGE_MARKETING", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_MARKETING));
+  await expectForbidden("MEMBER cannot pass the Marketing capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_MARKETING);
+  });
+  await expectAllowed("ADMIN can pass the Marketing capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_MARKETING);
+  });
+
   console.log(
     failures === 0
       ? "\nAll authorization checks passed."

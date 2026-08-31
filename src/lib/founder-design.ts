@@ -40,6 +40,7 @@ export const FOUNDER_PAGE_KEYS = [
   "payroll",
   "expenses",
   "reports",
+  "marketing",
 ] as const;
 export type FounderPageKey = (typeof FOUNDER_PAGE_KEYS)[number];
 
@@ -59,6 +60,7 @@ export const FOUNDER_PAGE_LABELS: Record<FounderPageKey, string> = {
   payroll: "Payroll",
   expenses: "Expenses",
   reports: "Reports",
+  marketing: "Marketing",
 };
 
 /** Whether a page has the dense table + master-detail panel section at all (Dashboard does not). */
@@ -74,6 +76,7 @@ export const PAGE_HAS_TABLE: Record<FounderPageKey, boolean> = {
   payroll: true,
   expenses: true,
   reports: true,
+  marketing: true,
 };
 
 /** Whether a page has a right-side detail/rail panel with a tunable desktop width. */
@@ -89,6 +92,7 @@ export const PAGE_HAS_PANEL: Record<FounderPageKey, boolean> = {
   payroll: true,
   expenses: true,
   reports: true,
+  marketing: true,
 };
 
 /**
@@ -111,6 +115,7 @@ export const KPI_CARD_COUNTS: Record<FounderPageKey, number> = {
   payroll: 4,
   expenses: 5,
   reports: 5,
+  marketing: 4,
 };
 
 // ---------------------------------------------------------------------------
@@ -324,6 +329,19 @@ export const KPI_DEFAULTS: Record<FounderPageKey, Record<KpiTokenKey, number>> =
     lineHeight: 120,
   },
   reports: {
+    minHeight: 0,
+    padding: 20,
+    paddingY: 36,
+    paddingX: 20,
+    gap: 20,
+    internalGap: 4,
+    iconSize: 48,
+    labelFontSize: 11,
+    numberFontSize: 30,
+    supportingFontSize: 12,
+    lineHeight: 120,
+  },
+  marketing: {
     minHeight: 0,
     padding: 20,
     paddingY: 36,
@@ -556,6 +574,7 @@ export const TABLE_DENSITY_DEFAULTS: Record<FounderPageKey, { rowPy: number; hea
   payroll: { rowPy: 16, headerPy: 14 },
   expenses: { rowPy: 16, headerPy: 14 },
   reports: { rowPy: 16, headerPy: 14 },
+  marketing: { rowPy: 16, headerPy: 14 },
 };
 
 /**
@@ -601,6 +620,7 @@ export const TABLE_CELL_PX_DEFAULTS: Record<FounderPageKey, number> = {
   payroll: 8,
   expenses: 8,
   reports: 8,
+  marketing: 8,
 };
 export const TABLE_CELL_PX_BOUNDS = { min: 4, max: 20, step: 2 };
 
@@ -658,6 +678,7 @@ export const PANEL_WIDTH_DEFAULTS: Record<FounderPageKey, number | undefined> = 
   payroll: 340,
   expenses: 340,
   reports: 300,
+  marketing: 300,
 };
 export const PANEL_WIDTH_BOUNDS = { min: 220, max: 420, step: 10 };
 export const PANEL_WIDTH_CSS_VAR = "--tbbt-panel-width";
