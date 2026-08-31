@@ -98,7 +98,7 @@ export function PublicHeader({
           ) : null}
           <Link
             href={requestHref}
-            className="hidden h-12 items-center rounded-lg bg-[var(--public-blue)] px-3 text-xs font-bold tracking-wide text-white uppercase sm:inline-flex"
+            className="inline-flex h-12 max-w-[7.5rem] items-center justify-center rounded-lg bg-[var(--public-blue)] px-2 text-[0.65rem] leading-tight font-bold tracking-wide text-white uppercase sm:max-w-none sm:px-3 sm:text-xs"
           >
             {PRIMARY_CTA_LABEL}
           </Link>
