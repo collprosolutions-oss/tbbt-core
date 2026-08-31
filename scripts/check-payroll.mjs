@@ -109,17 +109,24 @@ function makeAccess(businessId, role, membershipId) {
   };
 }
 
-function hoursAgo(hours) {
-  return new Date(Date.now() - hours * 3_600_000);
+let clockCursor = Date.now() - 20 * 3_600_000;
+
+function nextInterval(hours) {
+  const startedAt = new Date(clockCursor);
+  clockCursor += hours * 3_600_000;
+  const endedAt = new Date(clockCursor);
+  clockCursor += 60_000;
+  return { startedAt, endedAt };
 }
 
 async function addPaidHours(access, membershipId, jobId, hours, activityType = "JOB") {
+  const { startedAt, endedAt } = nextInterval(hours);
   return createManualTimeEntry(prisma, access, {
     membershipId,
     activityType,
     jobId: activityType === "JOB" ? jobId : undefined,
-    startedAt: hoursAgo(hours + 1),
-    endedAt: hoursAgo(1),
+    startedAt,
+    endedAt,
     note: `${activityType} ${hours}h`,
   });
 }
@@ -149,8 +156,8 @@ try {
   check("Authorize only from REVIEWED", canTransitionPayroll("REVIEWED", "AUTHORIZED") && !canTransitionPayroll("DRAFT", "AUTHORIZED"));
   check("Processed is distinct from Authorized", canTransitionPayroll("AUTHORIZED", "PROCESSED"));
   check("Invalid range is rejected", "error" in parsePayPeriodDates("2026-08-30", "2026-08-20"));
-  const period = defaultPayPeriod(new Date(2026, 7, 31));
-  check("Default period is a week, not a hardcoded business-wide weekly rule", period.end.getTime() - period.start.getTime() === 7 * 24 * 60 * 60 * 1000);
+  const defaultPeriod = defaultPayPeriod(new Date(2026, 7, 31));
+  check("Default period is a week, not a hardcoded business-wide weekly rule", defaultPeriod.end.getTime() - defaultPeriod.start.getTime() === 7 * 24 * 60 * 60 * 1000);
   check("OWNER/ADMIN have MANAGE_PAYROLL", roleHasCapability("OWNER", CAPABILITIES.MANAGE_PAYROLL) && roleHasCapability("ADMIN", CAPABILITIES.MANAGE_PAYROLL));
   check("MEMBER does not have MANAGE_PAYROLL", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_PAYROLL));
   check("Only OWNER has AUTHORIZE_PAYROLL", roleHasCapability("OWNER", CAPABILITIES.AUTHORIZE_PAYROLL) && !roleHasCapability("ADMIN", CAPABILITIES.AUTHORIZE_PAYROLL));
@@ -234,20 +241,18 @@ try {
   const jobInactive = await prisma.job.create({
     data: { businessId: businessA.id, status: "SCHEDULED", projectToken: randomUUID(), assignedMembershipId: inactiveMem.id },
   });
-  const jobB = await prisma.job.create({
-    data: { businessId: businessB.id, status: "SCHEDULED", projectToken: randomUUID(), assignedMembershipId: betaMemberMem.id },
-  });
 
   const weekStart = weekRange(new Date()).start;
   const period = { payPeriodStart: weekStart, payPeriodEnd: new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000) };
 
   console.log("\nTEST — Time Cards handoff: only APPROVED weeks feed payroll");
   await addPaidHours(ownerA, memberMem.id, jobA.id, 8, "JOB");
+  const lunch = nextInterval(1);
   await createManualTimeEntry(prisma, ownerA, {
     membershipId: memberMem.id,
     activityType: "BREAK",
-    startedAt: hoursAgo(10),
-    endedAt: hoursAgo(9),
+    startedAt: lunch.startedAt,
+    endedAt: lunch.endedAt,
     note: "Lunch",
   });
   const unapprovedWeek = await prisma.timesheetWeek.create({
@@ -271,8 +276,8 @@ try {
   check("Approved TimesheetWeek is included", includedIds.includes(approvedMember.id));
   check("Unapproved week is not included", !includedIds.includes(unapprovedWeek.id));
   const memberItem = draft.items.find((item) => item.membershipId === memberMem.id);
-  check("Wage snapshot comes from approved Time Cards", Number(memberItem.approvedHourlyWage.toString()) === 25);
-  check("Gross is approved hours × snapshot wage", Number(memberItem.grossLaborAmount.toString()) === 200);
+  check("Wage snapshot comes from approved Time Cards", Number(memberItem.approvedHourlyWage.toString()) === 20);
+  check("Gross is approved hours × snapshot wage", Number(memberItem.grossLaborAmount.toString()) === 160);
   check("OT hours informational (0 for 8h)", Number(memberItem.overtimeHours.toString()) === 0);
 
   console.log("\nTEST — Missing wage, inactive historical hours, reopen");
@@ -308,7 +313,7 @@ try {
   const beforeWage = snapshotRun.items.find((item) => item.membershipId === memberMem.id);
   await updateMembershipWage(prisma, ownerA, { membershipId: memberMem.id, hourlyWage: "99.00" });
   const afterWage = await prisma.payrollRunItem.findUnique({ where: { id: beforeWage.id } });
-  check("Later wage change does not rewrite payroll-run snapshot", Number(afterWage.approvedHourlyWage.toString()) === 25);
+  check("Later wage change does not rewrite payroll-run snapshot", Number(afterWage.approvedHourlyWage.toString()) === 20);
   const liveWage = await prisma.membership.findUnique({ where: { id: memberMem.id } });
   check("Current membership wage did change", Number(liveWage.hourlyWage.toString()) === 99);
 
@@ -410,11 +415,12 @@ try {
     (error) => error instanceof ForbiddenError,
   );
 
+  const betaTravel = nextInterval(1);
   await createManualTimeEntry(prisma, betaOwnerAccess, {
     membershipId: betaMemberMem.id,
     activityType: "TRAVEL",
-    startedAt: hoursAgo(3),
-    endedAt: hoursAgo(2),
+    startedAt: betaTravel.startedAt,
+    endedAt: betaTravel.endedAt,
     note: "Beta travel",
   });
   await approveTimesheetWeek(prisma, betaOwnerAccess, {

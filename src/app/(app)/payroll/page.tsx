@@ -23,7 +23,7 @@ import {
 } from "@/lib/payroll";
 import { payrollItemExceptions, refreshPayrollRunIfUnlocked } from "@/lib/payroll-ops";
 import { prisma } from "@/lib/prisma";
-import { addDays, formatISODate, parseScheduleDate } from "@/lib/schedule";
+import { addDays, formatISODate } from "@/lib/schedule";
 import { formatDurationClock } from "@/lib/time-cards";
 
 export const metadata: Metadata = {

@@ -265,8 +265,11 @@ try {
     allCapabilities.every((capability) => roleHasCapability("OWNER", capability)),
   );
   check(
-    "ADMIN has every currently-implemented ordinary business-management capability",
-    allCapabilities.every((capability) => roleHasCapability("ADMIN", capability)),
+    "ADMIN has every currently-implemented ordinary business-management capability except OWNER-only AUTHORIZE_PAYROLL",
+    allCapabilities
+      .filter((capability) => capability !== CAPABILITIES.AUTHORIZE_PAYROLL)
+      .every((capability) => roleHasCapability("ADMIN", capability)) &&
+      !roleHasCapability("ADMIN", CAPABILITIES.AUTHORIZE_PAYROLL),
   );
   check(
     "MEMBER has NO general owner/admin management capability (foundation only)",

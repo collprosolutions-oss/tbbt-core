@@ -574,11 +574,10 @@ export async function reopenPayrollRun(
       requireBusinessCapability(access, CAPABILITIES.AUTHORIZE_PAYROLL);
     } else if (run.status === "REVIEWED" || run.status === "READY_FOR_REVIEW") {
       requireBusinessCapability(access, CAPABILITIES.MANAGE_PAYROLL);
+    } else if (run.status === "PROCESSED") {
+      throw new PayrollError("A processed payroll run cannot be reopened.");
     } else {
       throw new PayrollError("Only a reviewed or authorized payroll run can be reopened.");
-    }
-    if (run.status === "PROCESSED") {
-      throw new PayrollError("A processed payroll run cannot be reopened.");
     }
     const previous = runAuditFromItems(run, run.items);
     const updated = await tx.payrollRun.update({
