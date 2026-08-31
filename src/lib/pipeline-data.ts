@@ -8,6 +8,7 @@
 
 import type { PrismaClient } from "@prisma/client";
 import { startOfDay } from "@/lib/schedule";
+import { requestedWorkLabels, requestedWorkSummary } from "@/lib/service-request-work";
 import {
   ATTENTION_KIND_LABELS,
   attentionKinds,
@@ -191,6 +192,13 @@ export async function loadPipelineSource(
           select: { id: true, label: true, addressLine1: true, city: true, region: true },
         },
         serviceCatalogItem: { select: { name: true } },
+        items: {
+          orderBy: { sortOrder: "asc" as const },
+          select: {
+            customDescription: true,
+            serviceCatalogItem: { select: { name: true } },
+          },
+        },
         estimates: {
           select: {
             id: true,
@@ -266,7 +274,11 @@ export async function loadPipelineSource(
     const job = request.estimates.flatMap((row) => row.jobs)[0] ?? null;
     const owner = stateByRequest.get(request.id) ?? null;
     const requestedWork =
-      request.serviceCatalogItem?.name ?? request.summary ?? request.description ?? null;
+      requestedWorkSummary(requestedWorkLabels(request)) ??
+      request.serviceCatalogItem?.name ??
+      request.summary ??
+      request.description ??
+      null;
     return toView({
       key: opportunityKey({ serviceRequestId: request.id }),
       owner,

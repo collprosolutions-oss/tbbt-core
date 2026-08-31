@@ -22,6 +22,10 @@ function isPublicHire(pathname: string) {
   return pathname.startsWith("/hire/");
 }
 
+function isPublicHome(pathname: string) {
+  return pathname === "/";
+}
+
 /** Customer Project Portal -- see src/app/p/[token]/page.tsx. */
 function isPublicProject(pathname: string) {
   return pathname.startsWith("/p/");
@@ -42,12 +46,14 @@ export function proxy(request: NextRequest) {
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
 
   if (pathname === "/") {
-    return NextResponse.redirect(
-      new URL(hasSession ? "/dashboard" : "/sign-in", request.url),
-    );
+    if (hasSession) {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
+    return NextResponse.next();
   }
 
   if (
+    isPublicHome(pathname) ||
     isPublicIntake(pathname) ||
     isPublicEstimate(pathname) ||
     isPublicHire(pathname) ||

@@ -1,67 +1,80 @@
 import type { Metadata } from "next";
-import { ServiceRequestForm } from "@/components/intake/service-request-form";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { groupServicesByStarterCategory } from "@/lib/handyman-starter-catalog";
-import { prisma } from "@/lib/prisma";
+import "@/components/public/public-site.css";
+import { MultiServiceRequestFlow } from "@/components/public/request-flow";
+import { PublicSiteShell } from "@/components/public/public-site-shell";
+import type { SelectedWorkState } from "@/components/public/service-picker";
+import { publicDisplayName } from "@/lib/public-site";
+import { loadPublicSite } from "@/lib/public-site-data";
+import { isStorageConfigured } from "@/lib/storage";
 
-export const metadata: Metadata = {
-  title: "Request service",
+export const dynamic = "force-dynamic";
+
+type PageProps = {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ services?: string; other?: string; otherText?: string }>;
 };
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { slug } = await params;
+  const site = await loadPublicSite(slug);
+  const name = site ? publicDisplayName(site.business) : "Request service";
+  return {
+    title: { absolute: `Request Service | ${name}` },
+    description: `Request one or more handyman tasks from ${name} in a single visit request.`,
+  };
+}
 
 export default async function PublicIntakePage({
   params,
-}: {
-  params: Promise<{ slug: string }>;
-}) {
+  searchParams,
+}: PageProps) {
   const { slug } = await params;
-  const business = await prisma.business.findUnique({
-    where: { slug: slug.trim().toLowerCase() },
-    select: { id: true, name: true, slug: true },
-  });
+  const query = await searchParams;
+  const site = await loadPublicSite(slug);
 
-  if (!business) {
+  if (!site) {
     return (
-      <main className="flex min-h-full items-center justify-center px-4 py-10">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle>Request unavailable</CardTitle>
-            <CardDescription>This request could not be submitted.</CardDescription>
-          </CardHeader>
-        </Card>
+      <main className="public-site mx-auto flex min-h-full max-w-md items-center px-4 py-16">
+        <div className="rounded-xl border border-border bg-white p-6">
+          <h1 className="text-xl font-semibold">Request unavailable</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            This request could not be submitted.
+          </p>
+        </div>
       </main>
     );
   }
 
-  // Only name + id are ever sent to the public form. Pricing, descriptions,
-  // and inactive services stay owner-only.
-  const activeServices = await prisma.serviceCatalogItem.findMany({
-    where: { businessId: business.id, active: true },
-    select: { id: true, name: true },
-    orderBy: { name: "asc" },
-  });
-  const groupedServices = groupServicesByStarterCategory(activeServices);
+  const validIds = new Set(site.items.map((item) => item.id));
+  const requestedIds = (query.services ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((id) => validIds.has(id));
+  const initialSelected: SelectedWorkState = {
+    catalogIds: requestedIds,
+    includeOther: query.other === "1" || query.other === "true",
+    otherDescription: (query.otherText ?? "").trim(),
+  };
 
   return (
-    <main className="flex min-h-full items-center justify-center px-4 py-10">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>Request a handyman</CardTitle>
-          <CardDescription>{business.name}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ServiceRequestForm
-            slug={business.slug}
-            businessName={business.name}
-            groupedServices={groupedServices}
+    <PublicSiteShell business={site.business}>
+      <main className="mx-auto w-full max-w-3xl px-4 py-8 lg:max-w-5xl lg:py-10">
+        <h1 className="text-3xl font-semibold tracking-tight">Request Service</h1>
+        <p className="mt-2 text-muted-foreground">
+          Select one or more tasks for a single visit. {publicDisplayName(site.business)}{" "}
+          will review your request before creating an estimate.
+        </p>
+        <div className="mt-8">
+          <MultiServiceRequestFlow
+            slug={site.business.slug}
+            businessName={publicDisplayName(site.business)}
+            items={site.items}
+            groups={site.groups}
+            initialSelected={initialSelected}
+            photosEnabled={isStorageConfigured()}
           />
-        </CardContent>
-      </Card>
-    </main>
+        </div>
+      </main>
+    </PublicSiteShell>
   );
 }

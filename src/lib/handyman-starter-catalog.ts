@@ -612,12 +612,9 @@ export function planStarterCatalogInstall(existingNames: string[]) {
 export const OTHER_SERVICES_CATEGORY = "Other Services";
 
 /**
- * Name-derived category lookup, kept ONLY for the public intake page
- * (src/app/r/[slug]/page.tsx), which is explicitly out of scope for the
- * Step 3 persistent-category work and must not change behavior. Every
- * other consumer (the Services page, the starter-catalog install action)
- * now uses ServiceCatalogItem's own persisted `category` column instead --
- * see groupServiceCatalogItemsByCategory() in
+ * Name-derived category lookup, kept for starter-catalog matching only.
+ * Public website/intake pages use ServiceCatalogItem's persisted
+ * `category` column via groupServiceCatalogItemsByCategory() in
  * src/lib/service-catalog-category.ts.
  */
 export function starterCategoryForName(name: string) {
@@ -629,9 +626,8 @@ export function starterCategoryForName(name: string) {
 }
 
 /**
- * Name-derived grouping, kept ONLY for the public intake page (see
- * starterCategoryForName() above for why). Do not use this for any page
- * that has access to ServiceCatalogItem's own persisted `category` column.
+ * Name-derived grouping kept for starter-catalog helpers. Public
+ * website/intake pages must use persisted categories instead.
  */
 export function groupServicesByStarterCategory<
   T extends { name: string; id?: string; templateKey?: string },

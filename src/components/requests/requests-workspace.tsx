@@ -34,6 +34,8 @@ export type RequestListItem = {
   description: string | null;
   summary: string | null;
   serviceName: string | null;
+  requestedTasks: string[];
+  photoCount: number;
   propertyLabel: string | null;
   customer: { id: string; name: string; email: string | null; phone: string | null } | null;
   /** Pre-formatted (Decimal -> string) server-side -- never passed as a Decimal instance across the client boundary. */
@@ -311,12 +313,25 @@ function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
           <StatusBadge status={request.status} />
           <span className="text-muted-foreground">{request.createdAtLabel}</span>
         </div>
-        <DetailField icon={Wrench} label="Requested service">
-          {request.serviceName ?? "Not specified"}
+        <DetailField icon={Wrench} label="Requested Work">
+          {request.requestedTasks.length > 0 ? (
+            <ul className="list-disc space-y-1 pl-5">
+              {request.requestedTasks.map((task) => (
+                <li key={task}>{task}</li>
+              ))}
+            </ul>
+          ) : (
+            request.serviceName ?? "Not specified"
+          )}
         </DetailField>
         <DetailField icon={FileText} label="Description">
           {request.description || request.summary || "No description provided."}
         </DetailField>
+        {request.photoCount > 0 ? (
+          <DetailField label="Project photos">
+            {request.photoCount} photo{request.photoCount === 1 ? "" : "s"} attached
+          </DetailField>
+        ) : null}
         <DetailField icon={Phone} label="Contact">
           <p>{request.customer?.phone || "No phone on file"}</p>
           <p>{request.customer?.email || "No email on file"}</p>

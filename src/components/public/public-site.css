@@ -1,0 +1,40 @@
+.public-site {
+  color-scheme: light;
+  --background: #f5f7fb;
+  --foreground: #152033;
+  --card: #ffffff;
+  --card-foreground: #152033;
+  --popover: #ffffff;
+  --popover-foreground: #152033;
+  --primary: #1b4f91;
+  --primary-foreground: #ffffff;
+  --secondary: #e8eef6;
+  --secondary-foreground: #152033;
+  --muted: #eef2f7;
+  --muted-foreground: #3d4a5c;
+  --accent: #e4edf8;
+  --accent-foreground: #152033;
+  --destructive: #b42318;
+  --border: #d5deea;
+  --input: #d5deea;
+  --ring: #1b4f91;
+  --public-navy: #10233f;
+  --public-navy-deep: #0b1a30;
+  min-height: 100%;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.public-site :focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.public-site a:focus-visible,
+.public-site button:focus-visible,
+.public-site input:focus-visible,
+.public-site textarea:focus-visible,
+.public-site select:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}

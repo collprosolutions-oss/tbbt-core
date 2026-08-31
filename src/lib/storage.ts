@@ -95,6 +95,25 @@ export async function uploadExpenseReceipt({
   });
 }
 
+/**
+ * Same Vercel Blob helper as job photos and expense receipts -- no second
+ * storage system. Used for optional public intake project photos.
+ */
+export async function uploadRequestPhoto({
+  businessId,
+  requestId,
+  file,
+}: {
+  businessId: string;
+  requestId: string;
+  file: File;
+}): Promise<UploadedJobPhoto> {
+  return uploadManagedImage({
+    pathnamePrefix: `request-photos/${businessId}/${requestId}`,
+    file,
+  });
+}
+
 async function uploadManagedImage({
   pathnamePrefix,
   file,
