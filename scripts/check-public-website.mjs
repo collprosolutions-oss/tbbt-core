@@ -58,9 +58,14 @@ const publicFiles = [
   "src/app/r/[slug]/page.tsx",
   "src/components/public/public-home.tsx",
   "src/components/public/public-header.tsx",
+  "src/components/public/public-footer.tsx",
+  "src/components/public/public-about.tsx",
   "src/components/public/public-site-shell.tsx",
+  "src/components/public/category-cards.tsx",
   "src/components/public/request-flow.tsx",
   "src/components/public/service-picker.tsx",
+  "src/app/hire/[slug]/about/page.tsx",
+  "src/app/hire/[slug]/services/page.tsx",
   "src/lib/public-site.ts",
   "src/lib/public-intake.ts",
   "src/app/actions/intake.ts",
@@ -79,6 +84,9 @@ const proxySrc = readRepo("src/proxy.ts");
 console.log("\nSTATIC — Public website presentation");
 check("Public homepage exists for CollPro Reno", homeSrc.includes("COLLPRO_RENO_DISPLAY_NAME") && homeSrc.includes("PublicHome"));
 check("Hire page reuses the same public homepage", hireSrc.includes("<PublicHome"));
+check("Homepage does not embed the full service catalog picker",
+  !readRepo("src/components/public/public-home.tsx").includes("HomeCatalogContinue") &&
+    !readRepo("src/components/public/public-home.tsx").includes("ServicePicker"));
 check("How It Works has the five real workflow steps", HOW_IT_WORKS_STEPS.length === 5);
 check("Service-area copy does not invent cities", !/reno,\s*nevada|cape coral|fort myers|naples/i.test(SERVICE_AREA_COPY));
 check("No fabricated reviews/testimonials/ratings in public copy",

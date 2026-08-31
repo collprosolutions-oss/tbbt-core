@@ -35,15 +35,21 @@ export function ServicePicker({
   selected,
   onChange,
   searchId = "service-search",
+  initialCategory,
 }: {
   groups: PublicCatalogGroup[];
   items: PublicCatalogItem[];
   selected: SelectedWorkState;
   onChange: (next: SelectedWorkState) => void;
   searchId?: string;
+  initialCategory?: string;
 }) {
   const [query, setQuery] = useState("");
-  const [activeCategory, setActiveCategory] = useState<string>("all");
+  const startingCategory =
+    initialCategory && groups.some((group) => group.category === initialCategory)
+      ? initialCategory
+      : "all";
+  const [activeCategory, setActiveCategory] = useState<string>(startingCategory);
 
   const filteredGroups = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -128,7 +134,7 @@ export function ServicePicker({
               >
                 {group.category}
               </h3>
-              <ul className="grid gap-3 sm:grid-cols-2">
+              <ul className="grid gap-4 sm:grid-cols-2">
                 {group.items.map((item) => {
                   const checked = selected.catalogIds.includes(item.id);
                   return (
@@ -138,14 +144,14 @@ export function ServicePicker({
                         aria-pressed={checked}
                         onClick={() => toggleCatalog(item.id)}
                         className={cn(
-                          "flex min-h-24 w-full flex-col rounded-xl border p-4 text-left transition-colors",
+                          "flex min-h-36 w-full flex-col rounded-2xl border p-5 text-left transition-colors",
                           checked
-                            ? "border-primary bg-accent"
-                            : "border-border bg-card hover:border-primary/40",
+                            ? "border-[var(--public-blue)] bg-[#eaf1ff]"
+                            : "border-border bg-white hover:border-[var(--public-blue)]/50",
                         )}
                       >
                         <span className="flex items-start justify-between gap-3">
-                          <span className="font-semibold">{item.name}</span>
+                          <span className="text-lg font-semibold">{item.name}</span>
                           <span
                             className={cn(
                               "mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full border",
@@ -159,11 +165,11 @@ export function ServicePicker({
                           </span>
                         </span>
                         {item.description ? (
-                          <span className="mt-1 line-clamp-3 text-sm text-muted-foreground">
+                          <span className="mt-2 line-clamp-3 text-base leading-6 text-muted-foreground">
                             {item.description}
                           </span>
                         ) : null}
-                        <span className="mt-3 text-sm font-medium text-primary">
+                        <span className="mt-4 text-base font-semibold text-[var(--public-blue)]">
                           {item.priceLabel}
                         </span>
                       </button>
@@ -231,7 +237,7 @@ export function ServicePicker({
         className="rounded-xl border border-border bg-white p-4"
       >
         <h3 className="text-sm font-semibold tracking-wide text-muted-foreground uppercase">
-          Selected work
+          Selected Work ({labels.length})
         </h3>
         {labels.length === 0 ? (
           <p className="mt-2 text-sm text-muted-foreground">
@@ -294,7 +300,7 @@ function CategoryChip({
       aria-selected={selected}
       onClick={onClick}
       className={cn(
-        "shrink-0 rounded-full border px-3 py-2 text-sm font-medium",
+        "shrink-0 rounded-full border px-4 py-2.5 text-base font-medium",
         selected
           ? "border-primary bg-primary text-primary-foreground"
           : "border-border bg-white text-foreground hover:border-primary/40",

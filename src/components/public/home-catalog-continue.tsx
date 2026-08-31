@@ -6,17 +6,18 @@ import {
   ServicePicker,
   type SelectedWorkState,
 } from "@/components/public/service-picker";
-import { Button } from "@/components/ui/button";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
 
 export function HomeCatalogContinue({
   slug,
   items,
   groups,
+  initialCategory,
 }: {
   slug: string;
   items: PublicCatalogItem[];
   groups: PublicCatalogGroup[];
+  initialCategory?: string;
 }) {
   const [selected, setSelected] = useState<SelectedWorkState>({
     catalogIds: [],
@@ -46,15 +47,16 @@ export function HomeCatalogContinue({
         items={items}
         selected={selected}
         onChange={setSelected}
+        initialCategory={initialCategory}
       />
       {canContinue ? (
-        <Button asChild className="h-12 w-full px-5 text-base sm:w-auto">
-          <Link href={href}>Continue to request</Link>
-        </Button>
+        <Link href={href} className="public-btn public-btn-primary w-full sm:w-auto">
+          Continue to request
+        </Link>
       ) : (
-        <Button type="button" className="h-12 w-full px-5 text-base sm:w-auto" disabled>
+        <button type="button" className="public-btn public-btn-outline w-full sm:w-auto" disabled>
           Select work to continue
-        </Button>
+        </button>
       )}
     </div>
   );

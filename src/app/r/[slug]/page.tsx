@@ -57,14 +57,23 @@ export default async function PublicIntakePage({
   };
 
   return (
-    <PublicSiteShell business={site.business}>
-      <main className="mx-auto w-full max-w-3xl px-4 py-8 lg:max-w-5xl lg:py-10">
-        <h1 className="text-3xl font-semibold tracking-tight">Request Service</h1>
-        <p className="mt-2 text-muted-foreground">
-          Select one or more tasks for a single visit. {publicDisplayName(site.business)}{" "}
-          will review your request before creating an estimate.
-        </p>
-        <div className="mt-8">
+    <PublicSiteShell business={site.business} groups={site.groups}>
+      <main>
+        <section className="bg-[var(--public-navy)] text-white">
+          <div className="public-container py-10 lg:py-14">
+            <p className="text-sm font-bold tracking-[0.18em] text-[var(--public-blue-soft)] uppercase">
+              Request Service
+            </p>
+            <h1 className="mt-3 text-4xl font-extrabold tracking-tight sm:text-5xl">
+              Request Service
+            </h1>
+            <p className="mt-4 max-w-3xl text-lg leading-8 text-white/80">
+              Select one or more tasks for a single visit. {publicDisplayName(site.business)}{" "}
+              will review your request before creating an estimate.
+            </p>
+          </div>
+        </section>
+        <div className="public-container py-10 lg:py-14">
           <MultiServiceRequestFlow
             slug={site.business.slug}
             businessName={publicDisplayName(site.business)}

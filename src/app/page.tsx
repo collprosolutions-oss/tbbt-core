@@ -47,7 +47,7 @@ export default async function HomePage() {
   });
 
   return (
-    <PublicSiteShell business={business}>
+    <PublicSiteShell business={business} groups={catalog.groups}>
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}

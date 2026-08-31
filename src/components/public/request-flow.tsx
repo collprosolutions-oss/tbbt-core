@@ -9,7 +9,6 @@ import {
   type SelectedWorkState,
 } from "@/components/public/service-picker";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
@@ -99,24 +98,33 @@ export function MultiServiceRequestFlow({
 
   if (ok) {
     return (
-      <Alert>
-        <AlertDescription>
-          <p className="font-medium">Request received</p>
-          <p>
-            Your request has been sent to {businessName}. Someone from the
-            team will review it before an estimate is created.
-          </p>
-        </AlertDescription>
-      </Alert>
+      <section className="rounded-2xl border border-border bg-white p-8 lg:p-10">
+        <p className="text-sm font-bold tracking-[0.16em] text-[var(--public-blue)] uppercase">
+          Submitted
+        </p>
+        <h2 className="mt-3 text-3xl font-extrabold tracking-tight">
+          Thank you. Your request was received.
+        </h2>
+        <p className="mt-4 text-lg leading-8 text-muted-foreground">
+          Your request has been sent to {businessName}. Someone from the team
+          will review it before an estimate is created.
+        </p>
+        <Link
+          href={`/hire/${slug}`}
+          className="public-btn public-btn-primary mt-8"
+        >
+          Back to the website
+        </Link>
+      </section>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <ol className="flex flex-wrap gap-2 text-sm" aria-label="Request steps">
-        <StepLabel current={step} id="select" label="1. Select work" />
-        <StepLabel current={step} id="details" label="2. Project details" />
-        <StepLabel current={step} id="review" label="3. Review" />
+    <div className="space-y-8">
+      <ol className="flex flex-wrap gap-2" aria-label="Request steps">
+        <StepLabel current={step} id="select" label="1. Select Your Work" />
+        <StepLabel current={step} id="details" label="2. Project Details" />
+        <StepLabel current={step} id="review" label="3. Review Request" />
       </ol>
 
       {error ? (
@@ -127,6 +135,7 @@ export function MultiServiceRequestFlow({
 
       {step === "select" ? (
         <div className="space-y-5">
+          <h2 className="text-3xl font-extrabold tracking-tight">Select Your Work</h2>
           <ServicePicker
             groups={groups}
             items={items}
@@ -134,14 +143,15 @@ export function MultiServiceRequestFlow({
             onChange={setSelected}
             searchId="request-service-search"
           />
-          <Button type="button" className="h-12 w-full text-base" onClick={goDetails}>
+          <button type="button" className="public-btn public-btn-primary w-full" onClick={goDetails}>
             Continue
-          </Button>
+          </button>
         </div>
       ) : null}
 
       {step === "details" ? (
         <div className="space-y-4">
+          <h2 className="text-3xl font-extrabold tracking-tight">Project Details</h2>
           <div className="space-y-2">
             <Label htmlFor="name">Name</Label>
             <Input
@@ -236,23 +246,23 @@ export function MultiServiceRequestFlow({
             </p>
           )}
           <div className="flex flex-col gap-3 sm:flex-row">
-            <Button
+            <button
               type="button"
-              variant="outline"
-              className="h-12 flex-1 text-base"
+              className="public-btn public-btn-outline flex-1"
               onClick={() => setStep("select")}
             >
               Back
-            </Button>
-            <Button type="button" className="h-12 flex-1 text-base" onClick={goReview}>
+            </button>
+            <button type="button" className="public-btn public-btn-primary flex-1" onClick={goReview}>
               Review request
-            </Button>
+            </button>
           </div>
         </div>
       ) : null}
 
       {step === "review" ? (
         <div className="space-y-5">
+          <h2 className="text-3xl font-extrabold tracking-tight">Review Request</h2>
           <ReviewBlock title="Selected services / tasks">
             {labels.length > 0 ? (
               <ul className="list-disc space-y-1 pl-5">
@@ -283,29 +293,28 @@ export function MultiServiceRequestFlow({
             </p>
           </ReviewBlock>
           <div className="flex flex-col gap-3 sm:flex-row">
-            <Button
+            <button
               type="button"
-              variant="outline"
-              className="h-12 flex-1 text-base"
+              className="public-btn public-btn-outline flex-1"
               onClick={() => setStep("details")}
             >
               Back / Edit
-            </Button>
-            <Button
+            </button>
+            <button
               type="button"
-              className="h-12 flex-1 text-base"
+              className="public-btn public-btn-primary flex-1"
               disabled={pending}
               onClick={onSubmit}
             >
               {pending ? "Submitting…" : "Submit request"}
-            </Button>
+            </button>
           </div>
         </div>
       ) : null}
 
-      <p className="text-sm text-muted-foreground">
+      <p className="text-base text-muted-foreground">
         Need to start over?{" "}
-        <Link href={`/hire/${slug}`} className="font-medium text-primary underline-offset-4 hover:underline">
+        <Link href={`/hire/${slug}`} className="font-medium text-[var(--public-blue)] underline-offset-4 hover:underline">
           Back to the website
         </Link>
       </p>
@@ -327,8 +336,8 @@ function StepLabel({
     <li
       className={
         active
-          ? "rounded-full bg-primary px-3 py-1 font-semibold text-primary-foreground"
-          : "rounded-full bg-muted px-3 py-1 text-muted-foreground"
+          ? "rounded-full bg-[var(--public-navy)] px-4 py-2 text-sm font-semibold text-white"
+          : "rounded-full bg-muted px-4 py-2 text-sm text-muted-foreground"
       }
     >
       {label}
@@ -344,11 +353,11 @@ function ReviewBlock({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-border bg-white p-4">
+    <section className="rounded-2xl border border-border bg-white p-5">
       <h2 className="text-sm font-semibold tracking-wide text-muted-foreground uppercase">
         {title}
       </h2>
-      <div className="mt-2 text-sm leading-6">{children}</div>
+      <div className="mt-2 text-base leading-7">{children}</div>
     </section>
   );
 }

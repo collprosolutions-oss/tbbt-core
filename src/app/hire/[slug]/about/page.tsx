@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import "@/components/public/public-site.css";
-import { PublicHome } from "@/components/public/public-home";
+import { PublicAbout } from "@/components/public/public-about";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
 import {
-  localBusinessJsonLd,
+  PRIMARY_CTA_LABEL,
   publicDisplayName,
-  publicLogoSrc,
-  publicPhone,
+  publicRequestPath,
 } from "@/lib/public-site";
 import { loadPublicSite } from "@/lib/public-site-data";
 
@@ -19,20 +19,14 @@ type PageProps = {
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
   const site = await loadPublicSite(slug);
-  if (!site) {
-    return {
-      title: { absolute: "Page unavailable" },
-      description: "This business website could not be found.",
-    };
-  }
-  const name = publicDisplayName(site.business);
+  const name = site ? publicDisplayName(site.business) : "About";
   return {
-    title: { absolute: `${name} | Handyman Services` },
-    description: `Request handyman services from ${name}. Choose one or more tasks for a single visit request.`,
+    title: { absolute: `About Us | ${name}` },
+    description: `Learn how ${name} helps homeowners with handyman projects, written estimates, and organized requests.`,
   };
 }
 
-export default async function PublicHirePage({ params }: PageProps) {
+export default async function PublicAboutPage({ params }: PageProps) {
   const { slug } = await params;
   const site = await loadPublicSite(slug);
 
@@ -49,26 +43,21 @@ export default async function PublicHirePage({ params }: PageProps) {
     );
   }
 
-  const name = publicDisplayName(site.business);
-  const jsonLd = localBusinessJsonLd({
-    name,
-    slug: site.business.slug,
-    phone: publicPhone(site.business.slug),
-    logoSrc: publicLogoSrc(site.business.slug),
-    description: `Handyman services from ${name}. Request repairs, installations, mounting, carpentry, and other home projects.`,
-  });
-
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
-      <PublicHome
-        business={site.business}
-        items={site.items}
-        groups={site.groups}
-      />
+      <main className="bg-[var(--background)]">
+        <div className="public-container py-14 lg:py-20">
+          <PublicAbout />
+          <div className="mt-10">
+            <Link
+              href={publicRequestPath(site.business.slug)}
+              className="public-btn public-btn-primary"
+            >
+              {PRIMARY_CTA_LABEL}
+            </Link>
+          </div>
+        </div>
+      </main>
     </PublicSiteShell>
   );
 }

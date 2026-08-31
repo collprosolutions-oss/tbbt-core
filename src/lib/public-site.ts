@@ -58,33 +58,48 @@ export const HOW_IT_WORKS_STEPS = [
 
 export const TRUST_POINTS = [
   {
-    title: "Clear estimates",
+    title: "Clear Estimates",
     body: "You review a written estimate before work is scheduled.",
   },
   {
-    title: "One request, multiple tasks",
-    body: "Ask for several handyman jobs in a single visit request.",
+    title: "Respect for Your Home",
+    body: "We treat your property carefully and keep the work organized.",
   },
   {
-    title: "Convenient online requests",
+    title: "Convenient Online Requests",
     body: "Describe the work, add optional photos, and send it from your phone.",
   },
   {
-    title: "Project communication",
+    title: "Organized Project Communication",
     body: "Your request becomes an organized project record we can review and follow up on.",
-  },
-  {
-    title: "Digital estimate approval",
-    body: "When an estimate is ready, you can review and approve it online.",
-  },
-  {
-    title: "Organized project records",
-    body: "After approval and scheduling, you can access your project information online when a private project link is sent.",
   },
 ] as const;
 
 export const SERVICE_AREA_COPY =
-  "Tell us the property address when you request service. We will confirm whether we can help at that location. This site does not list a city-by-city service map.";
+  "Serving homeowners in the local area. Submit your project address and we will confirm whether we can help at that location. This site does not list a city-by-city service map.";
+
+export const PRIMARY_CTA_LABEL = "Request Service";
+
+export const ABOUT_COPY = {
+  eyebrow: "About Us",
+  title: "Local handyman help, explained clearly",
+  lead:
+    "CollPro Reno Handyman Services helps homeowners with repairs, installations, and home-improvement projects — from a single task to several jobs in one visit.",
+  points: [
+    "Clear project communication from the first request",
+    "Organized written estimates you can review before scheduling",
+    "Homeowner-focused service and attention to detail",
+    "One request can include multiple tasks for the same visit",
+  ],
+} as const;
+
+export const PROJECTS_PLACEHOLDER_COPY =
+  "Project photos will appear here after they are approved for public marketing use. This site does not display stock or generated images as completed work.";
+
+export const REVIEWS_PLACEHOLDER_COPY =
+  "Customer reviews will appear here when they are approved for public display. This site does not invent ratings or customer quotes.";
+
+export const HOMEPAGE_CATEGORY_LIMIT = 8;
 
 export type PublicCatalogItem = {
   id: string;
@@ -166,6 +181,48 @@ export function groupPublicCatalog(
 
 export function preferredPublicCategoryOrder(tradeCode: string) {
   return isActiveTrade(tradeCode) ? [...HANDYMAN_CATALOG_CATEGORIES] : [];
+}
+
+export type PopularPublicCategory = {
+  category: string;
+  itemCount: number;
+  descriptor: string;
+};
+
+/** High-level homepage cards from real persisted catalog groups — never a second catalog. */
+export function popularPublicCategories(
+  groups: PublicCatalogGroup[],
+  limit = HOMEPAGE_CATEGORY_LIMIT,
+): PopularPublicCategory[] {
+  return groups.slice(0, limit).map((group) => ({
+    category: group.category,
+    itemCount: group.items.length,
+    descriptor: publicCategoryDescriptor(group.items),
+  }));
+}
+
+export function publicCategoryDescriptor(items: PublicCatalogItem[]) {
+  const names = items.map((item) => item.name).filter(Boolean);
+  if (names.length === 0) return "Handyman services";
+  if (names.length === 1) return names[0]!;
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names[0]}, ${names[1]}, and more`;
+}
+
+export function publicServicesPath(slug: string) {
+  return `/hire/${slug}/services`;
+}
+
+export function publicAboutPath(slug: string) {
+  return `/hire/${slug}/about`;
+}
+
+export function publicRequestPath(slug: string) {
+  return `/r/${slug}`;
+}
+
+export function publicHomePath(slug: string) {
+  return `/hire/${slug}`;
 }
 
 export function localBusinessJsonLd(input: {
