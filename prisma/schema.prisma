@@ -175,6 +175,7 @@ model Business {
   reviews                  Review[]
   reviewResponses          ReviewResponse[]
   pipelineOpportunities    PipelineOpportunity[]
+  knowledgeEntries         KnowledgeEntry[]
 }
 
 model Membership {
@@ -231,6 +232,8 @@ model Membership {
   recordedReviews         Review[]           @relation("ReviewRecorder")
   createdReviewResponses  ReviewResponse[]   @relation("ReviewResponseCreator")
   reviewedReviewResponses ReviewResponse[]   @relation("ReviewResponseReviewer")
+  createdKnowledgeEntries KnowledgeEntry[]   @relation("KnowledgeEntryCreator")
+  reviewedKnowledgeEntries KnowledgeEntry[]  @relation("KnowledgeEntryReviewer")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -1180,4 +1183,44 @@ model PipelineOpportunity {
   @@index([businessId])
   @@index([businessId, ownerStage])
   @@index([businessId, followUpOn])
+}
+
+/// Internal operational knowledge for one business. This is NOT a second
+/// catalog, CRM, or estimate store -- TBBT records stay where they are
+/// and are referenced. Owner-created text is never auto-VERIFIED.
+/// SYSTEM_DERIVED is reserved for future evidence-backed derivation and
+/// is never written by this core implementation.
+///
+/// category: SERVICES_PRICING | ESTIMATING_TAKEOFFS | JOB_PROCEDURES |
+///   CUSTOMERS_POLICIES | VENDORS_MATERIALS | MARKETING_BRAND |
+///   SAFETY_COMPLIANCE | TRAINING_HOWTO
+/// sourceType: OWNER_CREATED | TBBT_RECORD | EXTERNAL_REFERENCE | SYSTEM_DERIVED
+/// sourceKind: SERVICE | ESTIMATE | JOB | EXPENSE | TIME | MARKETING | REVIEW
+/// trustState: VERIFIED | SUPPORTED | ESTIMATE | NEEDS_REVIEW | CONFLICT | UNKNOWN
+model KnowledgeEntry {
+  id         String @id @default(cuid())
+  businessId String
+  title      String
+  category   String
+  body       String
+  sourceType String
+  sourceKind String?
+  sourceReferenceId String?
+  sourceLabel String?
+  trustState String
+  archived   Boolean  @default(false)
+  createdByMembershipId String
+  lastReviewedAt DateTime?
+  lastReviewedByMembershipId String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy  Membership @relation("KnowledgeEntryCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  reviewedBy Membership? @relation("KnowledgeEntryReviewer", fields: [lastReviewedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([businessId, category])
+  @@index([businessId, trustState])
+  @@index([businessId, archived])
 }

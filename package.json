@@ -29,6 +29,7 @@
     "test:marketing": "node --experimental-strip-types scripts/check-marketing.mjs",
     "test:reviews": "node --experimental-strip-types scripts/check-reviews.mjs",
     "test:pipeline": "node --experimental-strip-types scripts/check-pipeline.mjs",
+    "test:knowledge": "node --experimental-strip-types scripts/check-knowledge.mjs",
     "test:expenses": "node --experimental-strip-types scripts/check-expenses.mjs",
     "test:theme-contrast": "node scripts/check-theme-contrast.mjs",
     "test:app-url": "node --experimental-strip-types scripts/check-app-url.mjs",

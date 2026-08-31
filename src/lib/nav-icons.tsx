@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import {
+  BookOpen,
   Briefcase,
   CalendarClock,
   Clock,
@@ -39,6 +40,7 @@ export const NAV_ICONS: Record<string, ComponentType<{ className?: string }>> = 
   "/reports": TrendingUp,
   "/marketing": Megaphone,
   "/reviews": Star,
+  "/knowledge": BookOpen,
   "/services": Wrench,
   "/team": UserCog,
   "/settings": Settings,

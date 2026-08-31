@@ -44,6 +44,11 @@ const VARIANTS: Record<string, BadgeVariant> = {
   FOLLOW_UP: "warning",
   WON: "success",
   LOST: "destructive",
+  VERIFIED: "success",
+  SUPPORTED: "default",
+  ESTIMATE: "outline",
+  CONFLICT: "destructive",
+  UNKNOWN: "outline",
 };
 
 const LABELS: Record<string, string> = {
@@ -70,6 +75,11 @@ const LABELS: Record<string, string> = {
   FOLLOW_UP: "Follow-Up",
   WON: "Won",
   LOST: "Lost",
+  VERIFIED: "Verified",
+  SUPPORTED: "Supported",
+  ESTIMATE: "Estimate",
+  CONFLICT: "Conflict",
+  UNKNOWN: "Unknown",
 };
 
 export function StatusBadge({ status }: { status: string }) {
