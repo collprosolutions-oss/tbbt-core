@@ -129,22 +129,22 @@ try {
   check("MEMBER does not have VIEW_REPORTS", !roleHasCapability("MEMBER", CAPABILITIES.VIEW_REPORTS));
 
   const businessA = await prisma.business.create({
-    data: { name: "Alpha Reports", slug: "alpha-reports", tradeCode: "HANDYMAN" },
+    data: { name: "Alpha Reports", slug: `alpha-reports-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
   });
   const businessB = await prisma.business.create({
-    data: { name: "Beta Reports", slug: "beta-reports", tradeCode: "HANDYMAN" },
+    data: { name: "Beta Reports", slug: `beta-reports-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
   });
   const ownerUser = await prisma.user.create({
-    data: { name: "Olivia Owner", email: "owner-reports@example.com", passwordHash: "x" },
+    data: { name: "Olivia Owner", email: `owner-reports-${randomUUID()}@example.com`, passwordHash: "x" },
   });
   const adminUser = await prisma.user.create({
-    data: { name: "Amir Admin", email: "admin-reports@example.com", passwordHash: "x" },
+    data: { name: "Amir Admin", email: `admin-reports-${randomUUID()}@example.com`, passwordHash: "x" },
   });
   const memberUser = await prisma.user.create({
-    data: { name: "Mia Member", email: "member-reports@example.com", passwordHash: "x" },
+    data: { name: "Mia Member", email: `member-reports-${randomUUID()}@example.com`, passwordHash: "x" },
   });
   const betaOwner = await prisma.user.create({
-    data: { name: "Bea Owner", email: "beta-owner-reports@example.com", passwordHash: "x" },
+    data: { name: "Bea Owner", email: `beta-owner-reports-${randomUUID()}@example.com`, passwordHash: "x" },
   });
   const ownerMem = await prisma.membership.create({
     data: { userId: ownerUser.id, businessId: businessA.id, role: "OWNER", hourlyWage: new Prisma.Decimal(25) },
@@ -419,6 +419,19 @@ try {
   );
 } finally {
   await prisma.$disconnect();
+  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$executeRawUnsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
+    );
+  } catch {
+    /* ignore */
+  }
+  try {
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await cleanup.$disconnect();
+  }
 }
 
 process.exit(failures === 0 ? 0 : 1);
