@@ -555,6 +555,17 @@ try {
     requireBusinessCapability(adminA, CAPABILITIES.MANAGE_EXPENSES);
   });
 
+  console.log("\nTEST 12 — Reports is OWNER/ADMIN-only");
+  check("OWNER has VIEW_REPORTS", roleHasCapability("OWNER", CAPABILITIES.VIEW_REPORTS));
+  check("ADMIN has VIEW_REPORTS", roleHasCapability("ADMIN", CAPABILITIES.VIEW_REPORTS));
+  check("MEMBER does not have VIEW_REPORTS", !roleHasCapability("MEMBER", CAPABILITIES.VIEW_REPORTS));
+  await expectForbidden("MEMBER cannot pass the Reports capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.VIEW_REPORTS);
+  });
+  await expectAllowed("ADMIN can pass the Reports capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.VIEW_REPORTS);
+  });
+
   console.log(
     failures === 0
       ? "\nAll authorization checks passed."
