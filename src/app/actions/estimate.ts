@@ -93,6 +93,7 @@ export async function createEstimate(serviceRequestId: string) {
 
   revalidatePath("/requests");
   revalidatePath("/dashboard");
+  revalidatePath("/pipeline");
   redirect(`/estimates/${estimate.id}`);
 }
 
@@ -222,6 +223,7 @@ export async function createManualEstimate(
 
     revalidatePath("/estimates");
     revalidatePath("/customers");
+    revalidatePath("/pipeline");
     redirect(`/estimates/${estimate.id}`);
   }
 
@@ -277,6 +279,7 @@ export async function createManualEstimate(
 
   revalidatePath("/estimates");
   revalidatePath("/customers");
+  revalidatePath("/pipeline");
   redirect(`/estimates/${estimate.id}`);
 }
 
@@ -585,6 +588,7 @@ export async function sendEstimate(
   revalidatePath("/estimates");
   revalidatePath(`/estimates/${estimate.id}`);
   revalidatePath(`/e/${estimate.publicToken}`);
+  revalidatePath("/pipeline");
   return {};
 }
 
@@ -626,6 +630,7 @@ export async function returnEstimateToDraft(
   revalidatePath("/estimates");
   revalidatePath(`/estimates/${estimate.id}`);
   revalidatePath(`/e/${estimate.publicToken}`);
+  revalidatePath("/pipeline");
   return {};
 }
 

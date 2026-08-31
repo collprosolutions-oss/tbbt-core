@@ -141,6 +141,13 @@ export const CAPABILITIES = {
    * reputation records, not assigned-job field work.
    */
   MANAGE_REVIEWS: "MANAGE_REVIEWS",
+  /**
+   * Owner/admin Deals / Pipeline workspace: sales stages, follow-up
+   * dates, and loss reasons over existing Request/Estimate/Job records.
+   * MEMBER must never receive this -- Pipeline holds business-wide
+   * opportunity and estimate-value data, not assigned-job field work.
+   */
+  MANAGE_PIPELINE: "MANAGE_PIPELINE",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -204,7 +211,7 @@ export function requireBusinessCapability(
 /**
  * Coarse, temporary READ gate for the entire authenticated management
  * console (Dashboard, Requests, Customers, Estimates, Jobs, Invoices,
- * Reports, Marketing, Reviews, Services, Time Cards, Payroll, Expenses, Settings).
+ * Reports, Marketing, Reviews, Pipeline, Services, Time Cards, Payroll, Expenses, Settings).
  *
  * Every one of those pages exists to browse or mutate business-wide
  * management data, and MEMBER has no capability over any of it today (see

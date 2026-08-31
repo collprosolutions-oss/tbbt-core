@@ -104,6 +104,7 @@ export async function createJobFromEstimate(
 
   revalidatePath(`/estimates/${estimate.id}`);
   revalidatePath("/jobs");
+  revalidatePath("/pipeline");
   redirect(`/jobs/${job.id}`);
 }
 

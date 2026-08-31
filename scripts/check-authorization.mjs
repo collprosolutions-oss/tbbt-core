@@ -588,6 +588,17 @@ try {
     requireBusinessCapability(adminA, CAPABILITIES.MANAGE_REVIEWS);
   });
 
+  console.log("\nTEST 15 — Pipeline is OWNER/ADMIN-only");
+  check("OWNER has MANAGE_PIPELINE", roleHasCapability("OWNER", CAPABILITIES.MANAGE_PIPELINE));
+  check("ADMIN has MANAGE_PIPELINE", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_PIPELINE));
+  check("MEMBER does not have MANAGE_PIPELINE", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_PIPELINE));
+  await expectForbidden("MEMBER cannot pass the Pipeline capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_PIPELINE);
+  });
+  await expectAllowed("ADMIN can pass the Pipeline capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_PIPELINE);
+  });
+
   console.log(
     failures === 0
       ? "\nAll authorization checks passed."

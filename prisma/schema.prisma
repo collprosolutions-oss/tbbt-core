@@ -174,6 +174,7 @@ model Business {
   reviewRequests           ReviewRequest[]
   reviews                  Review[]
   reviewResponses          ReviewResponse[]
+  pipelineOpportunities    PipelineOpportunity[]
 }
 
 model Membership {
@@ -328,6 +329,11 @@ model ServiceRequest {
   property           Property?           @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   serviceCatalogItem ServiceCatalogItem? @relation(fields: [serviceCatalogItemId], references: [id], onDelete: SetNull)
   estimates          Estimate[]
+  /// Owner-managed sales state for this request, if any. Created lazily
+  /// when the owner records CONTACTED / SITE_VISIT_NEEDS_INFO / FOLLOW_UP /
+  /// LOST, a follow-up date, or pipeline notes. New requests appear as
+  /// New Lead without a row here.
+  pipelineOpportunity PipelineOpportunity?
 
   @@index([businessId])
 }
@@ -361,6 +367,10 @@ model Estimate {
   /// sent. Application code must never update or delete an existing row.
   versions        EstimateVersion[] @relation("EstimateVersions")
   approvedVersion EstimateVersion?  @relation("EstimateApprovedVersion", fields: [approvedVersionId], references: [id], onDelete: SetNull)
+  /// Owner-managed sales state only for standalone estimates (no
+  /// ServiceRequest). Request-linked estimates reuse the request's
+  /// PipelineOpportunity -- never a second opportunity row.
+  pipelineOpportunity PipelineOpportunity? @relation("PipelineStandaloneEstimate")
 
   @@index([businessId])
   @@index([propertyId])
@@ -1131,4 +1141,43 @@ model ReviewResponse {
 
   @@index([businessId])
   @@index([reviewId])
+}
+
+/// Minimum owner-managed sales state for the Deals / Pipeline workspace.
+/// This is NOT a second CRM: customer, request, estimate, job, and
+/// invoice records stay where they are. A row is created lazily when the
+/// owner records a stage that cannot be derived (CONTACTED,
+/// SITE_VISIT_NEEDS_INFO, FOLLOW_UP, LOST), a follow-up date, or notes.
+///
+/// Displayed stage is resolved in src/lib/pipeline.ts from this row PLUS
+/// the stronger Estimate/Job lifecycle. An approved estimate or Job
+/// always displays as WON, even if ownerStage is still LOST.
+model PipelineOpportunity {
+  id         String @id @default(cuid())
+  businessId String
+  /// Opportunity keyed by ServiceRequest when one exists.
+  serviceRequestId String? @unique
+  /// Standalone estimate (no ServiceRequest). Never set together with
+  /// serviceRequestId -- request-linked estimates reuse that request's row.
+  standaloneEstimateId String? @unique
+  /// CONTACTED | SITE_VISIT_NEEDS_INFO | FOLLOW_UP | LOST. Null until the
+  /// owner records a sales state that cannot be derived from Estimate/Job.
+  ownerStage String?
+  /// Internal owner follow-up date. Never sends SMS/email.
+  followUpOn DateTime?
+  /// PRICE | OTHER_CONTRACTOR | POSTPONED | UNABLE_TO_REACH |
+  /// OUTSIDE_SCOPE | SCHEDULING | OTHER
+  lossReason String?
+  lossReasonNote String?
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business           Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  serviceRequest     ServiceRequest? @relation(fields: [serviceRequestId], references: [id], onDelete: Cascade)
+  standaloneEstimate Estimate?       @relation("PipelineStandaloneEstimate", fields: [standaloneEstimateId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([businessId, ownerStage])
+  @@index([businessId, followUpOn])
 }

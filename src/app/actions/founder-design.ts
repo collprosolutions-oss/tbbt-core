@@ -38,6 +38,7 @@ const PAGE_PATHS: Record<FounderPageKey, string> = {
   reports: "/reports",
   marketing: "/marketing",
   reviews: "/reviews",
+  pipeline: "/pipeline",
 };
 
 function assertPageKey(pageKey: string): FounderPageKey {

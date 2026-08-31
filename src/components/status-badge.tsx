@@ -36,6 +36,14 @@ const VARIANTS: Record<string, BadgeVariant> = {
   REIMBURSED: "success",
   NONE: "outline",
   PRIVATE: "outline",
+  NEW_LEAD: "secondary",
+  CONTACTED: "default",
+  SITE_VISIT_NEEDS_INFO: "warning",
+  ESTIMATE_IN_PROGRESS: "default",
+  ESTIMATE_SENT: "default",
+  FOLLOW_UP: "warning",
+  WON: "success",
+  LOST: "destructive",
 };
 
 const LABELS: Record<string, string> = {
@@ -54,6 +62,14 @@ const LABELS: Record<string, string> = {
   REIMBURSED: "Reimbursed",
   NONE: "No",
   PRIVATE: "Private",
+  NEW_LEAD: "New Lead",
+  CONTACTED: "Contacted",
+  SITE_VISIT_NEEDS_INFO: "Site Visit / Needs Info",
+  ESTIMATE_IN_PROGRESS: "Estimate in Progress",
+  ESTIMATE_SENT: "Estimate Sent",
+  FOLLOW_UP: "Follow-Up",
+  WON: "Won",
+  LOST: "Lost",
 };
 
 export function StatusBadge({ status }: { status: string }) {
