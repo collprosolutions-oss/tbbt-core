@@ -47,8 +47,8 @@ function moneyOrDash(value: string | null) {
 
 function ageLabel(days: number) {
   if (days === 0) return "Today";
-  if (days === 1) return "1 day";
-  return `${days} days`;
+  if (days === 1) return "1 day old";
+  return `${days} days old`;
 }
 
 export function PipelineWorkspace({ source }: PipelineWorkspaceProps) {
@@ -304,7 +304,7 @@ function OpportunityDetail({
           </p>
           <p>
             <span className="text-muted-foreground">Last activity: </span>
-            {formatDate(row.lastActivity)} · {ageLabel(row.ageDays)} old
+            {formatDate(row.lastActivity)} · {ageLabel(row.ageDays)}
           </p>
           <p>
             <span className="text-muted-foreground">Follow-up: </span>
