@@ -151,8 +151,15 @@ const RESTRICTED_MARKER = "Access restricted";
 let serverProcess;
 
 try {
+  const CANARY_LABOR_MINIMUM = "98765.43";
   const businessA = await prisma.business.create({
-    data: { name: "Alpha Handyman", slug: "alpha-handyman-console", tradeCode: "HANDYMAN" },
+    data: {
+      name: "Alpha Handyman",
+      slug: "alpha-handyman-console",
+      tradeCode: "HANDYMAN",
+      laborMinimumEnabled: true,
+      laborMinimumAmount: new Prisma.Decimal(CANARY_LABOR_MINIMUM),
+    },
   });
 
   const ownerUser = await prisma.user.create({
@@ -322,7 +329,8 @@ try {
     { path: "/reviews", label: "Reviews", marker: "Internal review workspace" },
     { path: "/pipeline", label: "Deals / Pipeline", marker: "Sales workspace" },
     { path: "/knowledge", label: "Knowledge Hub", marker: "Internal operational knowledge" },
-    { path: "/settings", label: "Business Settings", marker: "Labor Minimum Service Fee" },
+    { path: "/settings", label: "Settings", marker: "Business configuration for" },
+    { path: "/settings?section=pricing", label: "Settings pricing", marker: "Labor Minimum Service Fee" },
   ];
 
   console.log("\nTEST 1/2 — OWNER and ADMIN can read every current management page");
@@ -363,6 +371,7 @@ try {
     "/pipeline": "TEST 18",
     "/knowledge": "TEST 19",
     "/settings": "TEST 10",
+    "/settings?section=pricing": "TEST 10",
   };
 
   console.log(
@@ -412,6 +421,17 @@ try {
   check(
     "MEMBER's session/cookies remain valid (not signed out) -- this is a page-level allow/deny decision, not an auth failure",
     memberStillAuthenticated.status === 200 && memberStillAuthenticated.body.includes("Sign out"),
+  );
+
+  const memberSettings = await fetchRaw(memberSession, "/settings?section=pricing");
+  check(
+    "TEST 10 - MEMBER GET /settings?section=pricing RAW body never contains the labor-minimum amount",
+    !memberSettings.body.includes(CANARY_LABOR_MINIMUM) && !memberSettings.body.includes("98765"),
+  );
+  check(
+    "TEST 10 - MEMBER GET /settings?section=pricing RAW body never contains private Settings workspace copy",
+    !memberSettings.body.includes("Business configuration for") &&
+      !memberSettings.body.includes("Labor Minimum Service Fee"),
   );
 
   console.log(

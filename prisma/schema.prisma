@@ -175,6 +175,8 @@ model Business {
   reviews                  Review[]
   reviewResponses          ReviewResponse[]
   pipelineOpportunities    PipelineOpportunity[]
+  settings                 BusinessSettings?
+  settingsAuditLogs        SettingsAuditLog[]
   knowledgeEntries         KnowledgeEntry[]
 }
 
@@ -232,8 +234,9 @@ model Membership {
   recordedReviews         Review[]           @relation("ReviewRecorder")
   createdReviewResponses  ReviewResponse[]   @relation("ReviewResponseCreator")
   reviewedReviewResponses ReviewResponse[]   @relation("ReviewResponseReviewer")
-  createdKnowledgeEntries KnowledgeEntry[]   @relation("KnowledgeEntryCreator")
-  reviewedKnowledgeEntries KnowledgeEntry[]  @relation("KnowledgeEntryReviewer")
+  settingsAuditLogs        SettingsAuditLog[] @relation("SettingsAuditActor")
+  createdKnowledgeEntries  KnowledgeEntry[]   @relation("KnowledgeEntryCreator")
+  reviewedKnowledgeEntries KnowledgeEntry[]   @relation("KnowledgeEntryReviewer")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -1183,6 +1186,54 @@ model PipelineOpportunity {
   @@index([businessId])
   @@index([businessId, ownerStage])
   @@index([businessId, followUpOn])
+}
+
+/// Typed, business-scoped lightweight settings that are not already
+/// stored on Business (name, trade, labor minimum). One row per Business.
+/// Created lazily by application code -- never a dumping-ground JSON blob.
+/// Communication and notification flags are owner preferences only; they
+/// never send SMS/email or publish externally.
+model BusinessSettings {
+  id         String @id @default(cuid())
+  businessId String @unique
+
+  estimateCommunicationEnabled     Boolean @default(true)
+  scheduleNotificationEnabled      Boolean @default(true)
+  invoiceCommunicationEnabled      Boolean @default(true)
+  reviewRequestPreferenceEnabled   Boolean @default(false)
+  marketingCommunicationEnabled    Boolean @default(false)
+
+  notifyEstimateEvents Boolean @default(true)
+  notifyScheduleEvents Boolean @default(true)
+  notifyInvoiceEvents  Boolean @default(true)
+  notifyPayrollEvents  Boolean @default(true)
+  notifyTeamEvents     Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}
+
+/// Append-only audit trail for consequential Settings changes.
+/// Application code must never update or delete an existing row.
+/// Never stores passwords, tokens, API secrets, or banking credentials.
+model SettingsAuditLog {
+  id                    String   @id @default(cuid())
+  businessId            String
+  changedByMembershipId String
+  settingArea           String
+  settingKey            String
+  previousValue         String?
+  newValue              String?
+  changedAt             DateTime @default(now())
+
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  changedBy Membership @relation("SettingsAuditActor", fields: [changedByMembershipId], references: [id], onDelete: Restrict)
+
+  @@index([businessId])
+  @@index([businessId, settingArea])
+  @@index([businessId, changedAt])
 }
 
 /// Internal operational knowledge for one business. This is NOT a second
