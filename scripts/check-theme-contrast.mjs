@@ -17,6 +17,10 @@ const timeCards = readFileSync(
   new URL("../src/components/time-cards/time-cards-workspace.tsx", import.meta.url),
   "utf8",
 );
+const payroll = readFileSync(
+  new URL("../src/components/payroll/payroll-workspace.tsx", import.meta.url),
+  "utf8",
+);
 const servicesForm = readFileSync(
   new URL("../src/components/catalog/create-catalog-item-form.tsx", import.meta.url),
   "utf8",
@@ -91,6 +95,8 @@ check(
 
 console.log("\nSTATIC — no page-local redesign / Founder Design untouched");
 check("Time Cards still uses native <select> filters", timeCards.includes("<select"));
+check("Payroll still uses native <select> for approved-week add", payroll.includes("<select"));
+check("Payroll funding copy does not invent a bank balance", payroll.includes("Funding verification not connected") && !/\$[0-9].*balance/i.test(payroll));
 check("Services catalog form still uses native <select>", servicesForm.includes("<select"));
 check(
   "Founder Design Mode root is unchanged by this contrast pass",

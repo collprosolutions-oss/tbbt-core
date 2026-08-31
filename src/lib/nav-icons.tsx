@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import {
   CalendarClock,
   Clock,
+  CircleDollarSign,
   FileText,
   Inbox,
   LayoutDashboard,
@@ -26,6 +27,7 @@ export const NAV_ICONS: Record<string, ComponentType<{ className?: string }>> = 
   "/estimates": FileText,
   "/jobs": CalendarClock,
   "/time-cards": Clock,
+  "/payroll": CircleDollarSign,
   "/invoices": Receipt,
   "/services": Wrench,
   "/team": UserCog,

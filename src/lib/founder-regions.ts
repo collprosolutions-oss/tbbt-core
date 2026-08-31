@@ -197,6 +197,29 @@ export const FOUNDER_REGIONS: Record<FounderPageKey, readonly FounderRegionDef[]
     },
     { id: "page", label: "Page Spacing", kind: "page" },
   ],
+  payroll: [
+    { id: "kpi", label: "Top Summary", kind: "kpi" },
+    { id: "table", label: "Payroll Review", kind: "table" },
+    {
+      id: "readiness",
+      label: "Readiness / Funding",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+    },
+    {
+      id: "details",
+      label: "Worker Detail",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+      hasWidth: true,
+    },
+    { id: "history", label: "Payroll History", kind: "panel", hasTitle: true, hasBody: true },
+    { id: "page", label: "Page Spacing", kind: "page" },
+  ],
 };
 
 export function getFounderRegions(pageKey: FounderPageKey): readonly FounderRegionDef[] {

@@ -113,7 +113,7 @@ export function TimeCardsWorkspace({
               + Time Entry
             </Button>
             <Button size="sm" asChild>
-              <Link href={hrefFor({ view: "approvals" })}>
+              <Link href="/payroll">
                 {payrollReadyCount} of {weekWorkerCount} Approved → Payroll
               </Link>
             </Button>

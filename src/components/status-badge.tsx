@@ -25,12 +25,23 @@ const VARIANTS: Record<string, BadgeVariant> = {
   RUNNING: "default",
   READY: "success",
   NEEDS_REVIEW: "warning",
+  READY_FOR_REVIEW: "default",
+  REVIEWED: "success",
+  AUTHORIZED: "success",
+  PROCESSED: "success",
+  NEEDS_ATTENTION: "warning",
 };
 
 const LABELS: Record<string, string> = {
   RUNNING: "Working",
   READY: "Ready",
   NEEDS_REVIEW: "Review",
+  READY_FOR_REVIEW: "Ready for Review",
+  REVIEWED: "Reviewed",
+  AUTHORIZED: "Authorized",
+  PROCESSED: "Processed",
+  NEEDS_ATTENTION: "Needs Attention",
+  MANUAL_EXTERNAL: "Processed externally",
 };
 
 export function StatusBadge({ status }: { status: string }) {
