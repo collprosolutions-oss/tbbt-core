@@ -126,8 +126,15 @@ function OpportunityBody({
         <Card>
           <CardHeader>
             <CardTitle>Reviews &amp; referrals</CardTitle>
-            <CardDescription>Future opportunity only. The Reviews module is not built in this step.</CardDescription>
+            <CardDescription>
+              Review requests and recorded reviews live in the Reviews workspace. Marketing does not copy review text automatically.
+            </CardDescription>
           </CardHeader>
+          <CardContent>
+            <Button asChild size="sm" variant="outline">
+              <Link href="/reviews">Open Reviews</Link>
+            </Button>
+          </CardContent>
         </Card>
         <Card>
           <CardHeader>

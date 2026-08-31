@@ -281,6 +281,44 @@ export const FOUNDER_REGIONS: Record<FounderPageKey, readonly FounderRegionDef[]
     },
     { id: "page", label: "Page Spacing", kind: "page" },
   ],
+  reviews: [
+    { id: "summary", label: "Review Summary", kind: "kpi" },
+    { id: "nav", label: "Review Navigation", kind: "tabs", hasTitle: true },
+    {
+      id: "opportunities",
+      label: "Opportunity Workspace",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+    },
+    {
+      id: "requests",
+      label: "Review Request Workspace",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+    },
+    {
+      id: "reviews",
+      label: "Review / Response Workspace",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+    },
+    {
+      id: "rail",
+      label: "Right Rail / Needs Attention",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+      hasWidth: true,
+    },
+    { id: "page", label: "Page Spacing", kind: "page" },
+  ],
 };
 
 export function getFounderRegions(pageKey: FounderPageKey): readonly FounderRegionDef[] {

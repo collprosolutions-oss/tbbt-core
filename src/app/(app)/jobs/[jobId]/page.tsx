@@ -139,6 +139,14 @@ export default async function JobPage({
           membership: { select: { user: { select: { name: true } } } },
         },
       },
+      reviewRequests: {
+        orderBy: { createdAt: "desc" },
+        select: { id: true, status: true, requestedAt: true, reminderAt: true },
+      },
+      reviews: {
+        orderBy: { createdAt: "desc" },
+        select: { id: true, rating: true, responseStatus: true, needsAttention: true },
+      },
     },
   });
 
@@ -321,6 +329,43 @@ export default async function JobPage({
             ) : (
               <CreateInvoiceButton jobId={job.id} />
             )}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {isCompleted ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Review activity</CardTitle>
+            <CardDescription>
+              Connected to this completed job. Requests are owner-recorded only — TBBT does not send SMS or email.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {job.reviewRequests.length === 0 && job.reviews.length === 0 ? (
+              <p className="text-muted-foreground">No review request has been made for this job.</p>
+            ) : null}
+            {job.reviewRequests.map((request) => (
+              <p key={request.id}>
+                Review request: <StatusBadge status={request.status} />
+                {request.requestedAt ? ` · recorded as sent ${formatDate(request.requestedAt)}` : ""}
+              </p>
+            ))}
+            {job.reviews.map((review) => (
+              <p key={review.id}>
+                Review received{review.rating ? ` · ${review.rating}★` : ""} · response{" "}
+                <StatusBadge status={review.responseStatus} />
+                {review.needsAttention ? (
+                  <>
+                    {" "}
+                    <StatusBadge status="NEEDS_ATTENTION" />
+                  </>
+                ) : null}
+              </p>
+            ))}
+            <Button asChild size="sm" variant="outline">
+              <Link href="/reviews?area=opportunities">Open Reviews</Link>
+            </Button>
           </CardContent>
         </Card>
       ) : null}

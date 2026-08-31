@@ -4,7 +4,7 @@
  *
  * Verifies:
  *  1. A founder-flagged User sees the "Founder Design Mode" trigger on
- *     every one of the 12 supported pages.
+ *     every one of the 13 supported pages.
  *  2. A subscriber OWNER, ADMIN-equivalent, and MEMBER -- none of them
  *     isFounder -- never see it, on any of the 6 pages, via direct URL.
  *  3. A completely different business's OWNER also never sees it
@@ -43,7 +43,7 @@ const {
 const { FOUNDER_REGIONS, defaultFounderRegionId } = await import("@/lib/founder-regions");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
-const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices", "/services", "/time-cards", "/payroll", "/expenses", "/reports", "/marketing"];
+const PAGES = ["/dashboard", "/requests", "/customers", "/estimates", "/jobs", "/invoices", "/services", "/time-cards", "/payroll", "/expenses", "/reports", "/marketing", "/reviews"];
 const TRIGGER_TEXT = "Founder Design Mode";
 
 let passed = 0;
@@ -247,6 +247,9 @@ async function main() {
     check("Marketing regions are the real Marketing boxes (Summary / Navigation / Opportunity / Content / Calendar / Growth / Page Spacing)",
       FOUNDER_REGIONS.marketing.map((r) => r.label).join("|") ===
         "Marketing Summary|Marketing Navigation|Opportunity Workspace|Content Workspace|Marketing Calendar|Right Rail / Growth Opportunities|Page Spacing");
+    check("Reviews regions are the real Reviews boxes (Summary / Navigation / Opportunity / Request / Review / Needs Attention / Page Spacing)",
+      FOUNDER_REGIONS.reviews.map((r) => r.label).join("|") ===
+        "Review Summary|Review Navigation|Opportunity Workspace|Review Request Workspace|Review / Response Workspace|Right Rail / Needs Attention|Page Spacing");
 
     const compressed = sanitizeFounderPageTokens("dashboard", {
       kpi: { paddingY: 0, paddingX: 4, internalGap: 0, lineHeight: 100, iconSize: 16 },
@@ -292,9 +295,10 @@ async function main() {
     "/expenses": ["kpi", "categories", "table", "rail"],
     "/reports": ["summary", "nav", "charts", "table", "attention"],
     "/marketing": ["summary", "nav", "opportunities", "content", "calendar", "rail"],
+    "/reviews": ["summary", "nav", "opportunities", "requests", "reviews", "rail"],
   };
 
-  console.log("\nTEST 2 -- The founder sees the trigger on all 12 supported pages");
+  console.log("\nTEST 2 -- The founder sees the trigger on all 13 supported pages");
   for (const path of PAGES) {
     const { status, body } = await fetchPage(founderToken, founderMembership.businessId, path);
     check(`${path}: 200 OK`, status === 200);
