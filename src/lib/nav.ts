@@ -27,6 +27,7 @@ export const APP_NAV: readonly NavItem[] = [
   { href: "/reports", label: "Reports", capability: CAPABILITIES.VIEW_REPORTS },
   { href: "/marketing", label: "Marketing", capability: CAPABILITIES.MANAGE_MARKETING },
   { href: "/reviews", label: "Reviews", capability: CAPABILITIES.MANAGE_REVIEWS },
+  { href: "/knowledge", label: "Knowledge Hub", capability: CAPABILITIES.MANAGE_KNOWLEDGE },
   { href: "/services", label: "Services", capability: CAPABILITIES.MANAGE_CATALOG },
   { href: "/team", label: "Team", capability: CAPABILITIES.MANAGE_MEMBERS },
   { href: "/settings", label: "Settings", capability: CAPABILITIES.MANAGE_SETTINGS },

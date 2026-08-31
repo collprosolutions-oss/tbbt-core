@@ -328,6 +328,7 @@ try {
     { path: "/marketing", label: "Marketing", marker: "Marketing Studio" },
     { path: "/reviews", label: "Reviews", marker: "Internal review workspace" },
     { path: "/pipeline", label: "Deals / Pipeline", marker: "Sales workspace" },
+    { path: "/knowledge", label: "Knowledge Hub", marker: "Internal operational knowledge" },
     { path: "/settings", label: "Settings", marker: "Business configuration for" },
     { path: "/settings?section=pricing", label: "Settings pricing", marker: "Labor Minimum Service Fee" },
   ];
@@ -368,6 +369,7 @@ try {
     "/marketing": "TEST 16",
     "/reviews": "TEST 17",
     "/pipeline": "TEST 18",
+    "/knowledge": "TEST 19",
     "/settings": "TEST 10",
     "/settings?section=pricing": "TEST 10",
   };

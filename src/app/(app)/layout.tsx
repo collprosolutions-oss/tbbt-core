@@ -14,7 +14,7 @@ export default async function AppLayout({
 
   // Server-side READ gate for the whole management console: every page
   // under this layout (Dashboard, Requests, Customers, Estimates, Jobs,
-  // Invoices, Reports, Marketing, Reviews, Pipeline, Services, Time Cards, Payroll, Expenses, Settings) browses or mutates business-wide data
+  // Invoices, Reports, Marketing, Reviews, Pipeline, Knowledge, Services, Time Cards, Payroll, Expenses, Settings) browses or mutates business-wide data
   // that MEMBER has no access to yet.
   //
   // This MUST be a redirect() (which aborts rendering) and not a
