@@ -168,6 +168,7 @@ model Business {
   payrollRuns              PayrollRun[]
   payrollRunItems          PayrollRunItem[]
   payrollRunEvents         PayrollRunEvent[]
+  expenses                 Expense[]
 }
 
 model Membership {
@@ -215,6 +216,8 @@ model Membership {
   reviewedPayrollRuns    PayrollRun[]       @relation("PayrollRunReviewer")
   authorizedPayrollRuns  PayrollRun[]       @relation("PayrollRunAuthorizer")
   processedPayrollRuns   PayrollRun[]       @relation("PayrollRunProcessor")
+  purchasedExpenses      Expense[]          @relation("ExpensePurchaser")
+  reviewedExpenses       Expense[]          @relation("ExpenseReviewer")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -235,6 +238,7 @@ model Customer {
   estimates       Estimate[]
   jobs            Job[]
   invoices        Invoice[]
+  expenses        Expense[]
 
   @@index([businessId])
 }
@@ -476,6 +480,7 @@ model Job {
   additionalWorkRequests  AdditionalWorkRequest[]
   problemReports          JobProblemReport[]
   timeEntries             TimeEntry[]
+  expenses                Expense[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -884,4 +889,62 @@ model PayrollRunEvent {
 
   @@index([businessId])
   @@index([payrollRunId])
+}
+
+/// A business expense recorded by OWNER/ADMIN. Tenant-private financial
+/// record -- always queried through the authenticated workspace
+/// businessId. Split allocation is an intentional extension point
+/// (parentExpenseId) and is not implemented in this step.
+///
+/// category: MATERIALS | GAS_FUEL | TOOLS_EQUIPMENT | VEHICLE |
+///   OFFICE_ADMIN | SOFTWARE_SUBSCRIPTIONS | INSURANCE |
+///   MARKETING_ADVERTISING | MILEAGE | OTHER
+/// reimbursementStatus: NONE | PENDING | REIMBURSED
+/// reviewStatus: RECORDED | APPROVED | FLAGGED
+/// paymentMethod: same vocabulary as Invoice (CASH | CHECK |
+///   ZELLE_BANK_TRANSFER | CARD_EXTERNAL | OTHER)
+model Expense {
+  id                    String    @id @default(cuid())
+  businessId            String
+  occurredOn            DateTime
+  description           String
+  amount                Decimal
+  category              String
+  vendor                String?
+  purchaserMembershipId String?
+  jobId                 String?
+  customerId            String?
+  receiptUrl            String?
+  reimbursable          Boolean   @default(false)
+  reimbursementStatus   String    @default("NONE")
+  paymentMethod         String?
+  taxCategory           String?
+  recurring             Boolean   @default(false)
+  recurringNote         String?
+  /// Actual miles driven, stored separately from amount. Never used to
+  /// invent an IRS/tax rate -- amount is always owner-entered.
+  mileageMiles          Decimal?
+  notes                 String?
+  reviewStatus          String    @default("RECORDED")
+  reviewedAt            DateTime?
+  reviewedByMembershipId String?
+  /// Reserved for future split-allocation children. Unused in this step.
+  parentExpenseId       String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaser  Membership? @relation("ExpensePurchaser", fields: [purchaserMembershipId], references: [id], onDelete: SetNull)
+  reviewer   Membership? @relation("ExpenseReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+  job        Job?        @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  customer   Customer?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  parent     Expense?    @relation("ExpenseSplit", fields: [parentExpenseId], references: [id], onDelete: SetNull)
+  splits     Expense[]   @relation("ExpenseSplit")
+
+  @@index([businessId])
+  @@index([businessId, occurredOn])
+  @@index([businessId, category])
+  @@index([jobId])
+  @@index([customerId])
+  @@index([purchaserMembershipId])
 }

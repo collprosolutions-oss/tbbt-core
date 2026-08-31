@@ -220,6 +220,21 @@ export const FOUNDER_REGIONS: Record<FounderPageKey, readonly FounderRegionDef[]
     { id: "history", label: "Payroll History", kind: "panel", hasTitle: true, hasBody: true },
     { id: "page", label: "Page Spacing", kind: "page" },
   ],
+  expenses: [
+    { id: "kpi", label: "Summary Cards", kind: "kpi" },
+    { id: "categories", label: "Category Totals", kind: "panel", hasTitle: true, hasBody: true },
+    { id: "table", label: "Expense Table", kind: "table" },
+    {
+      id: "rail",
+      label: "Financial Overview / Right Rail",
+      kind: "panel",
+      hasTitle: true,
+      hasBody: true,
+      hasButtons: true,
+      hasWidth: true,
+    },
+    { id: "page", label: "Page Spacing", kind: "page" },
+  ],
   reports: [
     { id: "summary", label: "Report Summary", kind: "kpi" },
     { id: "nav", label: "Report Navigation", kind: "tabs", hasTitle: true },

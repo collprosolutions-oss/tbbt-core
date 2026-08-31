@@ -30,6 +30,11 @@ const VARIANTS: Record<string, BadgeVariant> = {
   AUTHORIZED: "success",
   PROCESSED: "success",
   NEEDS_ATTENTION: "warning",
+  RECORDED: "outline",
+  FLAGGED: "warning",
+  PENDING: "warning",
+  REIMBURSED: "success",
+  NONE: "outline",
 };
 
 const LABELS: Record<string, string> = {
@@ -42,6 +47,11 @@ const LABELS: Record<string, string> = {
   PROCESSED: "Processed",
   NEEDS_ATTENTION: "Needs Attention",
   MANUAL_EXTERNAL: "Processed externally",
+  RECORDED: "Recorded",
+  FLAGGED: "Flagged",
+  PENDING: "Pending",
+  REIMBURSED: "Reimbursed",
+  NONE: "No",
 };
 
 export function StatusBadge({ status }: { status: string }) {

@@ -544,7 +544,18 @@ try {
     requireBusinessCapability(ownerA, CAPABILITIES.AUTHORIZE_PAYROLL);
   });
 
-  console.log("\nTEST 11 — Reports is OWNER/ADMIN-only");
+  console.log("\nTEST 11 — Expenses management is OWNER/ADMIN-only");
+  check("OWNER has MANAGE_EXPENSES", roleHasCapability("OWNER", CAPABILITIES.MANAGE_EXPENSES));
+  check("ADMIN has MANAGE_EXPENSES", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_EXPENSES));
+  check("MEMBER does not have MANAGE_EXPENSES", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_EXPENSES));
+  await expectForbidden("MEMBER cannot pass the Expenses management capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_EXPENSES);
+  });
+  await expectAllowed("ADMIN can pass the Expenses management capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_EXPENSES);
+  });
+
+  console.log("\nTEST 12 — Reports is OWNER/ADMIN-only");
   check("OWNER has VIEW_REPORTS", roleHasCapability("OWNER", CAPABILITIES.VIEW_REPORTS));
   check("ADMIN has VIEW_REPORTS", roleHasCapability("ADMIN", CAPABILITIES.VIEW_REPORTS));
   check("MEMBER does not have VIEW_REPORTS", !roleHasCapability("MEMBER", CAPABILITIES.VIEW_REPORTS));
