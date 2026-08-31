@@ -101,7 +101,8 @@ export default async function ExpensesPage({
   const rangePreset: ExpenseDateRange = isExpenseDateRange(params.range ?? "")
     ? (params.range as ExpenseDateRange)
     : "week";
-  const category = isExpenseCategory(params.category ?? "") ? params.category : undefined;
+  const rawCategory = params.category ?? "";
+  const category = isExpenseCategory(rawCategory) ? rawCategory : undefined;
   const purchaserId = params.purchaser && params.purchaser !== "all" ? params.purchaser : undefined;
   const method = params.method && params.method !== "all" ? params.method : undefined;
   const reimbursableFilter =
