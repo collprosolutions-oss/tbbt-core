@@ -3,16 +3,19 @@
  * TBBT records (invoices, jobs, customers, estimates, service requests,
  * catalog items, approved Time Cards, and payroll runs).
  *
- * This module does NOT invent expense totals, net profit, tax filings,
- * or service attribution when the real relationships are insufficient.
- * Expense / vendor reporting stays explicitly unavailable until the
- * Expenses records (PR #18, unmerged at the time this shipped) are
- * connected in a follow-up.
+ * Expense totals come from the merged Expense model (occurredOn, amount,
+ * category, vendor, jobId). This module does not invent vendors for blank
+ * fields, job allocations, tax filings, or service attribution when the
+ * real relationships are insufficient.
+ *
+ * P&L net is TBBT-recorded only: paid invoice revenue minus recorded
+ * expenses. That is not full accounting or tax books.
  *
  * No next/headers dependency -- authorization/isolation check scripts
  * import these helpers directly.
  */
 
+import { expenseCategoryLabel } from "@/lib/expenses";
 import { addDays, addMonths, formatISODate, startOfDay, startOfMonth, startOfWeek } from "@/lib/schedule";
 import { isPaidActivity, roundHours, roundMoney } from "@/lib/time-cards";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
@@ -44,18 +47,15 @@ export const REPORT_AREA_LABELS: Record<ReportArea, string> = {
   "vendor-spending": "Vendor Spending",
 };
 
-export const EXPENSE_UNAVAILABLE_AREAS = ["expenses", "vendor-spending"] as const;
-export type ExpenseUnavailableArea = (typeof EXPENSE_UNAVAILABLE_AREAS)[number];
+export const TBBT_RECORDED_PL_LABEL = "TBBT-recorded P&L";
 
-export const EXPENSE_UNAVAILABLE_MESSAGE = "Expense data not yet connected to Reports.";
-
-export const PROFIT_LOSS_INCOMPLETE_MESSAGE =
-  "Profit & Loss is incomplete. Expense records are not yet connected, so TBBT cannot calculate net profit.";
+export const PROFIT_LOSS_MESSAGE =
+  "TBBT-recorded P&L is paid invoice revenue minus recorded expenses. This is not full accounting or tax books.";
 
 export const TAX_DISCLAIMER =
   "TBBT is not calculating or filing taxes in this module. The records below are what TBBT actually holds so you can export them for your own bookkeeping.";
 
-export const JOB_MARGIN_LABEL = "Margin before recorded expenses";
+export const JOB_MARGIN_LABEL = "Recorded job margin";
 
 export const DATE_PRESETS = [
   "30d",
@@ -105,8 +105,10 @@ export function parseDatePreset(raw: string | undefined): DatePreset {
   return isDatePreset(raw) ? raw : "month";
 }
 
-export function isExpenseUnavailableArea(area: ReportArea): area is ExpenseUnavailableArea {
-  return (EXPENSE_UNAVAILABLE_AREAS as readonly string[]).includes(area);
+/** Non-blank vendor as recorded. Empty/whitespace is not invented as a vendor. */
+export function recordedVendor(vendor: string | null | undefined): string | null {
+  const trimmed = vendor?.trim();
+  return trimmed ? trimmed : null;
 }
 
 /**
@@ -326,6 +328,17 @@ export type ReportMembership = {
   userName: string;
 };
 
+export type ReportExpense = {
+  id: string;
+  businessId: string;
+  occurredOn: Date;
+  description: string;
+  amount: number;
+  category: string;
+  vendor: string | null;
+  jobId: string | null;
+};
+
 export type ReportSource = {
   businessId: string;
   invoices: ReportInvoice[];
@@ -338,6 +351,7 @@ export type ReportSource = {
   approvedTimeEntries: ReportTimeEntry[];
   payrollRuns: ReportPayrollRun[];
   memberships: ReportMembership[];
+  expenses: ReportExpense[];
 };
 
 export function paidInvoicesInRange(invoices: readonly ReportInvoice[], range: { start: Date | null; end: Date | null }) {
@@ -358,6 +372,13 @@ export function issuedInvoicesInRange(
 
 export function outstandingInvoices(invoices: readonly ReportInvoice[]) {
   return invoices.filter((invoice) => invoice.status === "SENT");
+}
+
+export function expensesInRange(
+  expenses: readonly ReportExpense[],
+  range: { start: Date | null; end: Date | null },
+) {
+  return expenses.filter((expense) => inRange(expense.occurredOn, range));
 }
 
 export function sumTotals(invoices: readonly { total: number }[]): number {
@@ -475,7 +496,20 @@ export type JobProfitRow = {
   approvedHours: number;
   laborCost: number | null;
   laborCostIncomplete: boolean;
-  marginBeforeExpenses: number | null;
+  recordedJobExpense: number;
+  recordedMargin: number | null;
+  href: string;
+};
+
+export type ExpenseRecordRow = {
+  id: string;
+  occurredOn: Date;
+  description: string;
+  amount: number;
+  category: string;
+  categoryLabel: string;
+  vendor: string | null;
+  jobId: string | null;
   href: string;
 };
 
@@ -525,12 +559,17 @@ export type BuiltReport = {
     revenue: number;
     laborCost: number | null;
     laborCostIncomplete: boolean;
-    expensesAvailable: false;
-    expenses: null;
-    netProfit: null;
-    incomplete: true;
+    expensesAvailable: true;
+    expenses: number;
+    recordedNet: number;
+    label: string;
     message: string;
   };
+  recordedExpenses: ChangeStat;
+  expensesByCategory: NamedAmount[];
+  expensesByDay: TimePoint[];
+  expenseRecords: ExpenseRecordRow[];
+  vendorSpending: NamedAmount[];
   revenueByDay: TimePoint[];
   revenueByCustomer: NamedAmount[];
   revenueByJob: NamedAmount[];
@@ -563,7 +602,6 @@ export type BuiltReport = {
   services: ServiceRow[];
   taxRecords: TaxRecordRow[];
   attention: AttentionItem[];
-  expenseUnavailableMessage: string;
   taxDisclaimer: string;
   jobMarginLabel: string;
 };
@@ -617,6 +655,29 @@ export function revenueTimeSeries(invoices: readonly ReportInvoice[], range: Rep
         key: formatISODate(start),
         label: bucketLabel(start, grain),
         amount: roundMoney(invoice.total),
+      });
+    }
+  }
+  return [...buckets.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, point]) => point);
+}
+
+export function expenseTimeSeries(expenses: readonly ReportExpense[], range: ReportDateRange): TimePoint[] {
+  const inPeriod = expensesInRange(expenses, range);
+  const grain = bucketGrain(range);
+  const buckets = new Map<number, TimePoint>();
+  for (const expense of inPeriod) {
+    const start = bucketStart(expense.occurredOn, grain);
+    const key = start.getTime();
+    const existing = buckets.get(key);
+    if (existing) {
+      existing.amount = roundMoney(existing.amount + expense.amount);
+    } else {
+      buckets.set(key, {
+        key: formatISODate(start),
+        label: bucketLabel(start, grain),
+        amount: roundMoney(expense.amount),
       });
     }
   }
@@ -749,6 +810,62 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
     }
   }
 
+  const expenses = source.expenses ?? [];
+  const periodExpenses = expensesInRange(expenses, range);
+  const priorExpenses = priorRange ? expensesInRange(expenses, priorRange) : [];
+  const recordedExpenseTotal = roundMoney(periodExpenses.reduce((sum, expense) => sum + expense.amount, 0));
+  const priorExpenseTotal = roundMoney(priorExpenses.reduce((sum, expense) => sum + expense.amount, 0));
+
+  const expensesByCategoryMap = new Map<string, NamedAmount>();
+  for (const expense of periodExpenses) {
+    const existing = expensesByCategoryMap.get(expense.category);
+    if (existing) {
+      existing.amount = roundMoney(existing.amount + expense.amount);
+      existing.count += 1;
+    } else {
+      expensesByCategoryMap.set(expense.category, {
+        id: expense.category,
+        name: expenseCategoryLabel(expense.category),
+        amount: roundMoney(expense.amount),
+        count: 1,
+        href: `/expenses?category=${encodeURIComponent(expense.category)}`,
+      });
+    }
+  }
+
+  const vendorSpendingMap = new Map<string, NamedAmount>();
+  for (const expense of periodExpenses) {
+    const vendor = recordedVendor(expense.vendor);
+    if (!vendor) continue;
+    const existing = vendorSpendingMap.get(vendor);
+    if (existing) {
+      existing.amount = roundMoney(existing.amount + expense.amount);
+      existing.count += 1;
+    } else {
+      vendorSpendingMap.set(vendor, {
+        id: vendor,
+        name: vendor,
+        amount: roundMoney(expense.amount),
+        count: 1,
+        href: "/expenses",
+      });
+    }
+  }
+
+  const expenseRecords: ExpenseRecordRow[] = [...periodExpenses]
+    .sort((a, b) => b.occurredOn.getTime() - a.occurredOn.getTime())
+    .map((expense) => ({
+      id: expense.id,
+      occurredOn: expense.occurredOn,
+      description: expense.description,
+      amount: expense.amount,
+      category: expense.category,
+      categoryLabel: expenseCategoryLabel(expense.category),
+      vendor: recordedVendor(expense.vendor),
+      jobId: expense.jobId,
+      href: `/expenses?expense=${expense.id}`,
+    }));
+
   const jobIds = new Set<string>();
   for (const job of source.jobs) jobIds.add(job.id);
   for (const invoice of source.invoices) {
@@ -756,6 +873,9 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
   }
   for (const entry of laborEntries) {
     if (entry.jobId) jobIds.add(entry.jobId);
+  }
+  for (const expense of periodExpenses) {
+    if (expense.jobId) jobIds.add(expense.jobId);
   }
 
   const jobProfitability: JobProfitRow[] = [...jobIds]
@@ -765,6 +885,9 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
       const paidRevenueForJob = sumTotals(jobInvoices.filter((invoice) => invoice.status === "PAID"));
       const outstandingForJob = sumTotals(jobInvoices.filter((invoice) => invoice.status === "SENT"));
       const jobLabor = rollupApprovedLabor(laborEntries.filter((entry) => entry.jobId === jobId));
+      const recordedJobExpense = roundMoney(
+        periodExpenses.filter((expense) => expense.jobId === jobId).reduce((sum, expense) => sum + expense.amount, 0),
+      );
       const hasPeriodSignal =
         jobInvoices.some(
           (invoice) =>
@@ -772,11 +895,12 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
             inRange(invoice.createdAt, range),
         ) ||
         laborEntries.some((entry) => entry.jobId === jobId) ||
+        periodExpenses.some((expense) => expense.jobId === jobId) ||
         Boolean(job && job.status === "COMPLETED" && inRange(job.createdAt, range));
       if (!hasPeriodSignal) return null;
       const margin =
         jobLabor.laborCost != null && !jobLabor.laborCostIncomplete
-          ? roundMoney(paidRevenueForJob - jobLabor.laborCost)
+          ? roundMoney(paidRevenueForJob - jobLabor.laborCost - recordedJobExpense)
           : null;
       return {
         jobId,
@@ -787,7 +911,8 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
         approvedHours: jobLabor.approvedHours,
         laborCost: jobLabor.laborCost,
         laborCostIncomplete: jobLabor.laborCostIncomplete,
-        marginBeforeExpenses: margin,
+        recordedJobExpense,
+        recordedMargin: margin,
         href: `/jobs/${jobId}`,
       } satisfies JobProfitRow;
     })
@@ -973,12 +1098,17 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
       revenue: paidRevenue,
       laborCost: labor.laborCost,
       laborCostIncomplete: labor.laborCostIncomplete,
-      expensesAvailable: false,
-      expenses: null,
-      netProfit: null,
-      incomplete: true,
-      message: PROFIT_LOSS_INCOMPLETE_MESSAGE,
+      expensesAvailable: true,
+      expenses: recordedExpenseTotal,
+      recordedNet: roundMoney(paidRevenue - recordedExpenseTotal),
+      label: TBBT_RECORDED_PL_LABEL,
+      message: PROFIT_LOSS_MESSAGE,
     },
+    recordedExpenses: changeStat(recordedExpenseTotal, comparable ? priorExpenseTotal : null, comparable),
+    expensesByCategory: [...expensesByCategoryMap.values()].sort((a, b) => b.amount - a.amount),
+    expensesByDay: expenseTimeSeries(expenses, range),
+    expenseRecords,
+    vendorSpending: [...vendorSpendingMap.values()].sort((a, b) => b.amount - a.amount),
     revenueByDay: revenueTimeSeries(source.invoices, range),
     revenueByCustomer: [...revenueByCustomerMap.values()].sort((a, b) => b.amount - a.amount),
     revenueByJob: [...revenueByJobMap.values()].sort((a, b) => b.amount - a.amount),
@@ -996,28 +1126,43 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
     services,
     taxRecords,
     attention,
-    expenseUnavailableMessage: EXPENSE_UNAVAILABLE_MESSAGE,
     taxDisclaimer: TAX_DISCLAIMER,
     jobMarginLabel: JOB_MARGIN_LABEL,
   };
 }
 
 export function reportCsvRows(area: ReportArea, report: BuiltReport): { headers: string[]; rows: string[][] } {
-  if (area === "expenses" || area === "vendor-spending") {
-    return { headers: ["Status"], rows: [[EXPENSE_UNAVAILABLE_MESSAGE]] };
+  if (area === "expenses") {
+    return {
+      headers: ["Date", "Description", "Category", "Vendor", "Amount", "Job"],
+      rows: report.expenseRecords.map((row) => [
+        formatISODate(row.occurredOn),
+        row.description,
+        row.categoryLabel,
+        row.vendor ?? "",
+        String(row.amount),
+        row.jobId ?? "",
+      ]),
+    };
+  }
+  if (area === "vendor-spending") {
+    return {
+      headers: ["Vendor", "Records", "Amount"],
+      rows: report.vendorSpending.map((row) => [row.name, String(row.count), String(row.amount)]),
+    };
   }
   if (area === "profit-loss") {
     return {
       headers: ["Line", "Amount", "Notes"],
       rows: [
         ["Paid revenue", String(report.profitLoss.revenue), "Paid invoices"],
+        ["Recorded expenses", String(report.profitLoss.expenses), "Expense.occurredOn in range"],
+        [TBBT_RECORDED_PL_LABEL, String(report.profitLoss.recordedNet), PROFIT_LOSS_MESSAGE],
         [
           "Approved labor cost",
           report.profitLoss.laborCost == null ? "" : String(report.profitLoss.laborCost),
-          report.profitLoss.laborCostIncomplete ? "Incomplete — missing wage snapshots" : "Approved Time Cards",
+          "Informational — not subtracted again in TBBT-recorded net",
         ],
-        ["Expenses", "", EXPENSE_UNAVAILABLE_MESSAGE],
-        ["Net profit", "", PROFIT_LOSS_INCOMPLETE_MESSAGE],
       ],
     };
   }
@@ -1036,7 +1181,7 @@ export function reportCsvRows(area: ReportArea, report: BuiltReport): { headers:
   }
   if (area === "job-profitability") {
     return {
-      headers: ["Job", "Customer", "Status", "Paid revenue", "Approved hours", "Labor cost", JOB_MARGIN_LABEL],
+      headers: ["Job", "Customer", "Status", "Paid revenue", "Approved hours", "Labor cost", "Recorded job expenses", JOB_MARGIN_LABEL],
       rows: report.jobProfitability.map((row) => [
         row.jobId,
         row.customerName,
@@ -1044,7 +1189,8 @@ export function reportCsvRows(area: ReportArea, report: BuiltReport): { headers:
         String(row.paidRevenue),
         String(row.approvedHours),
         row.laborCost == null ? "" : String(row.laborCost),
-        row.marginBeforeExpenses == null ? "" : String(row.marginBeforeExpenses),
+        String(row.recordedJobExpense),
+        row.recordedMargin == null ? "" : String(row.recordedMargin),
       ]),
     };
   }

@@ -3,6 +3,8 @@
  * authenticated workspace businessId passed in -- never a client-supplied
  * business id. Callers must obtain that id from requireBusinessAccess() /
  * requireManagementPageAccess().
+ *
+ * Includes merged Expense rows (occurredOn, amount, category, vendor, jobId).
  */
 
 import type { PrismaClient } from "@prisma/client";
@@ -25,6 +27,7 @@ export async function loadReportSource(
     approvedTimeEntries,
     payrollRuns,
     memberships,
+    expenses,
   ] = await Promise.all([
     prisma.invoice.findMany({
       where: scope,
@@ -102,6 +105,19 @@ export async function loadReportSource(
       where: scope,
       select: { id: true, role: true, active: true, user: { select: { name: true } } },
     }),
+    prisma.expense.findMany({
+      where: scope,
+      select: {
+        id: true,
+        businessId: true,
+        occurredOn: true,
+        description: true,
+        amount: true,
+        category: true,
+        vendor: true,
+        jobId: true,
+      },
+    }),
   ]);
 
   return {
@@ -138,6 +154,16 @@ export async function loadReportSource(
       role: membership.role,
       active: membership.active,
       userName: membership.user.name,
+    })),
+    expenses: expenses.map((expense) => ({
+      id: expense.id,
+      businessId: expense.businessId,
+      occurredOn: expense.occurredOn,
+      description: expense.description,
+      amount: asNumber(expense.amount),
+      category: expense.category,
+      vendor: expense.vendor,
+      jobId: expense.jobId,
     })),
   };
 }

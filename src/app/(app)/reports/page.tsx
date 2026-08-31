@@ -112,7 +112,7 @@ export default async function ReportsPage({
       />
       <PageHeader
         title="Reports"
-        description={`Business reports for ${access.workspace.business.name}. Expense data is not yet connected.`}
+        description={`Business reports for ${access.workspace.business.name}. Figures come from invoices, jobs, approved labor, and recorded expenses in TBBT. Profit & Loss is TBBT-recorded P&L, not full accounting or tax books.`}
       />
 
       <FounderDesignRoot

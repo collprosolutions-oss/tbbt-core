@@ -9,10 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate, formatMoney } from "@/lib/format";
 import {
-  EXPENSE_UNAVAILABLE_MESSAGE,
   REPORT_AREA_LABELS,
   REPORT_AREAS,
-  isExpenseUnavailableArea,
   type BuiltReport,
   type ReportArea,
 } from "@/lib/reports";
@@ -115,13 +113,37 @@ export function ReportsWorkspace({ area, rangePreset, from, to, report }: Report
 }
 
 function ReportCharts({ area, report }: { area: ReportArea; report: BuiltReport }) {
-  if (isExpenseUnavailableArea(area)) {
+  if (area === "expenses") {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Charts</CardTitle>
-          <CardDescription>{EXPENSE_UNAVAILABLE_MESSAGE}</CardDescription>
+          <CardTitle>Recorded expenses</CardTitle>
+          <CardDescription>Expense records in this range, using each expense&apos;s occurred-on date.</CardDescription>
         </CardHeader>
+        <CardContent>
+          <ReportChart points={report.expensesByDay} emptyLabel="No recorded expenses in this range." />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (area === "vendor-spending") {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Vendor spending</CardTitle>
+          <CardDescription>Grouped by recorded vendor only. Blank vendor fields are omitted.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ReportChart
+            points={report.vendorSpending.map((row) => ({
+              key: row.id,
+              label: row.name,
+              amount: row.amount,
+            }))}
+            emptyLabel="No recorded vendors in this range."
+          />
+        </CardContent>
       </Card>
     );
   }
@@ -130,9 +152,18 @@ function ReportCharts({ area, report }: { area: ReportArea; report: BuiltReport 
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Charts</CardTitle>
-          <CardDescription>No complete P&amp;L series — expense data is not connected.</CardDescription>
+          <CardTitle>{report.profitLoss.label}</CardTitle>
+          <CardDescription>Paid invoice revenue and recorded expenses in this range.</CardDescription>
         </CardHeader>
+        <CardContent>
+          <ReportChart
+            points={[
+              { key: "revenue", label: "Paid revenue", amount: report.profitLoss.revenue },
+              { key: "expenses", label: "Recorded expenses", amount: report.profitLoss.expenses },
+            ]}
+            emptyLabel="No paid revenue or recorded expenses in this range."
+          />
+        </CardContent>
       </Card>
     );
   }
@@ -185,11 +216,68 @@ function ReportCharts({ area, report }: { area: ReportArea; report: BuiltReport 
 }
 
 function ReportBody({ area, report }: { area: ReportArea; report: BuiltReport }) {
-  if (isExpenseUnavailableArea(area)) {
+  if (area === "expenses") {
     return (
-      <EmptyState
-        title={REPORT_AREA_LABELS[area]}
-        description={EXPENSE_UNAVAILABLE_MESSAGE}
+      <div className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <MiniStat
+            label="Recorded expenses"
+            value={<Money value={report.recordedExpenses.current} />}
+            hint={changeLabel(report.recordedExpenses.changePercent) ?? "Occurred-on date in this range"}
+          />
+          <MiniStat
+            label="Expense records"
+            value={String(report.expenseRecords.length)}
+            hint="All recorded expense rows in this range"
+          />
+        </div>
+        <ReportTable
+          title="Expenses by category"
+          description="Category totals from recorded expenses. Totals must reconcile to the period total."
+          headers={["Category", "Records", "Amount"]}
+          empty="No recorded expenses in this range."
+          rows={report.expensesByCategory.map((row) => ({
+            key: row.id,
+            href: row.href,
+            cells: [row.name, String(row.count), <Money key="a" value={row.amount} />],
+            mobile: `${row.name} · ${formatMoney(row.amount)}`,
+          }))}
+        />
+        <ReportTable
+          title="Expense records"
+          description="Drill-down of recorded expenses in this range."
+          headers={["Date", "Description", "Category", "Vendor", "Amount"]}
+          empty="No recorded expenses in this range."
+          rows={report.expenseRecords.map((row) => ({
+            key: row.id,
+            href: row.href,
+            cells: [
+              formatDate(row.occurredOn),
+              row.description,
+              row.categoryLabel,
+              row.vendor ?? "—",
+              <Money key="a" value={row.amount} />,
+            ],
+            mobile: `${row.description} · ${formatMoney(row.amount)}`,
+          }))}
+        />
+      </div>
+    );
+  }
+
+  if (area === "vendor-spending") {
+    return (
+      <ReportTable
+        title="Vendor spending"
+        description="Spending grouped by recorded vendor. Blank vendor fields are omitted — TBBT does not invent a vendor name."
+        headers={["Vendor", "Records", "Amount"]}
+        empty="No recorded vendors in this range."
+        rows={report.vendorSpending.map((row) => ({
+          key: row.id,
+          href: row.href,
+          cells: [row.name, String(row.count), <Money key="a" value={row.amount} />],
+          mobile: `${row.name} · ${formatMoney(row.amount)}`,
+        }))}
       />
     );
   }
@@ -202,9 +290,9 @@ function ReportBody({ area, report }: { area: ReportArea; report: BuiltReport })
     return (
       <ReportTable
         title="Job profitability"
-        description={`${report.jobMarginLabel} — materials and expenses are not included.`}
-        headers={["Customer", "Status", "Paid", "Labor", "Hours", report.jobMarginLabel]}
-        empty="No jobs with invoices or approved labor in this range."
+        description={`${report.jobMarginLabel} is paid revenue minus approved labor and recorded job-allocated expenses. Unallocated expenses are not assigned to a job.`}
+        headers={["Customer", "Status", "Paid", "Labor", "Hours", "Job expenses", report.jobMarginLabel]}
+        empty="No jobs with invoices, approved labor, or recorded job expenses in this range."
         rows={report.jobProfitability.map((row) => ({
           key: row.jobId,
           href: row.href,
@@ -214,7 +302,8 @@ function ReportBody({ area, report }: { area: ReportArea; report: BuiltReport })
             <Money key="p" value={row.paidRevenue} />,
             row.laborCostIncomplete ? "Incomplete" : <Money key="l" value={row.laborCost} />,
             formatDurationClock(row.approvedHours),
-            <Money key="m" value={row.marginBeforeExpenses} />,
+            <Money key="e" value={row.recordedJobExpense} />,
+            <Money key="m" value={row.recordedMargin} />,
           ],
           mobile: `${row.customerName} · paid ${formatMoney(row.paidRevenue)}`,
         }))}
@@ -361,6 +450,11 @@ function ReportBody({ area, report }: { area: ReportArea; report: BuiltReport })
             value={String(report.newCustomers.current)}
             hint={changeLabel(report.newCustomers.changePercent)}
           />
+          <MiniStat
+            label="Recorded expenses"
+            value={<Money value={report.recordedExpenses.current} />}
+            hint={changeLabel(report.recordedExpenses.changePercent) ?? "Occurred-on date in this range"}
+          />
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-3">
@@ -435,11 +529,13 @@ function ProfitLossCard({ report }: { report: BuiltReport }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Profit &amp; Loss</CardTitle>
+        <CardTitle>{report.profitLoss.label}</CardTitle>
         <CardDescription>{report.profitLoss.message}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <PnlRow label="Paid revenue" value={<Money value={report.profitLoss.revenue} />} />
+        <PnlRow label="Recorded expenses" value={<Money value={report.profitLoss.expenses} />} />
+        <PnlRow label={report.profitLoss.label} value={<Money value={report.profitLoss.recordedNet} />} />
         <PnlRow
           label="Approved labor cost"
           value={
@@ -449,18 +545,20 @@ function ProfitLossCard({ report }: { report: BuiltReport }) {
               <Money value={report.profitLoss.laborCost} />
             )
           }
+          hint="Informational — not subtracted again in TBBT-recorded net"
         />
-        <PnlRow label="Expenses" value={<span className="text-muted-foreground">{EXPENSE_UNAVAILABLE_MESSAGE}</span>} />
-        <PnlRow label="Net profit" value={<span className="text-muted-foreground">Unavailable</span>} />
       </CardContent>
     </Card>
   );
 }
 
-function PnlRow({ label, value }: { label: string; value: ReactNode }) {
+function PnlRow({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
   return (
     <div className="flex items-start justify-between gap-4 border-b border-border/50 py-2 last:border-b-0">
-      <p className="text-muted-foreground">{label}</p>
+      <div>
+        <p className="text-muted-foreground">{label}</p>
+        {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+      </div>
       <div className="text-right font-medium">{value}</div>
     </div>
   );

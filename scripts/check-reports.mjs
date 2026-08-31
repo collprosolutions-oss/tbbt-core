@@ -28,17 +28,18 @@ const {
   createManualTimeEntry,
   updateMembershipWage,
 } = await import("@/lib/time-card-ops");
+const { createExpense } = await import("@/lib/expense-ops");
 const {
-  EXPENSE_UNAVAILABLE_MESSAGE,
   JOB_MARGIN_LABEL,
-  PROFIT_LOSS_INCOMPLETE_MESSAGE,
+  PROFIT_LOSS_MESSAGE,
+  TBBT_RECORDED_PL_LABEL,
   TAX_DISCLAIMER,
   buildReport,
   catalogIdForJob,
-  isExpenseUnavailableArea,
   parseReportArea,
   parseReportDate,
   percentChange,
+  recordedVendor,
   resolveReportRange,
 } = await import("@/lib/reports");
 const { loadReportSource } = await import("@/lib/reports-data");
@@ -102,9 +103,8 @@ try {
   check("percentChange(100, 50) is +100", percentChange(100, 50) === 100);
   check("percentChange never invents +Infinity when prior is 0", percentChange(80, 0) === null);
   check("percentChange(0, 0) is unavailable", percentChange(0, 0) === null);
-  check("Expenses area is explicitly unavailable", isExpenseUnavailableArea("expenses"));
-  check("Vendor spending area is explicitly unavailable", isExpenseUnavailableArea("vendor-spending"));
-  check("Revenue is not an expense placeholder", !isExpenseUnavailableArea("revenue"));
+  check("Blank vendor is not invented", recordedVendor("") === null && recordedVendor("   ") === null);
+  check("Recorded vendor is kept as trimmed text", recordedVendor("  Home Depot  ") === "Home Depot");
 
   const now = new Date(2026, 7, 31);
   const month = resolveReportRange("month", undefined, undefined, now);
@@ -155,7 +155,7 @@ try {
   const memberMem = await prisma.membership.create({
     data: { userId: memberUser.id, businessId: businessA.id, role: "MEMBER", hourlyWage: new Prisma.Decimal(20) },
   });
-  await prisma.membership.create({
+  const betaMem = await prisma.membership.create({
     data: { userId: betaOwner.id, businessId: businessB.id, role: "OWNER" },
   });
 
@@ -298,6 +298,38 @@ try {
     },
   });
 
+  const ownerB = makeAccess(businessB.id, "OWNER", betaMem.id);
+
+  await createExpense(prisma, ownerA, {
+    occurredOn: "2026-08-20",
+    description: "Job materials",
+    amount: "60.00",
+    category: "MATERIALS",
+    vendor: "Home Depot",
+    jobId: job.id,
+  });
+  await createExpense(prisma, ownerA, {
+    occurredOn: "2026-08-21",
+    description: "Fuel — no vendor recorded",
+    amount: "40.00",
+    category: "GAS_FUEL",
+    vendor: "   ",
+  });
+  await createExpense(prisma, ownerA, {
+    occurredOn: "2026-07-15",
+    description: "July materials outside selected month",
+    amount: "25.00",
+    category: "MATERIALS",
+    vendor: "Home Depot",
+  });
+  await createExpense(prisma, ownerB, {
+    occurredOn: "2026-08-20",
+    description: "Beta secret expense",
+    amount: "500.00",
+    category: "OTHER",
+    vendor: "Beta Vendor",
+  });
+
   console.log("\nTEST — Tenant isolation and real invoice/labor numbers");
   const sourceA = await loadReportSource(prisma, businessA.id);
   const sourceB = await loadReportSource(prisma, businessB.id);
@@ -328,21 +360,33 @@ try {
   check("New customers in August is 1 (Ada)", report.newCustomers.current === 1);
   check("Customer count is 2", report.customerCount === 2);
 
-  console.log("\nTEST — Incomplete P&L and expense placeholders do not fabricate totals");
-  check("P&L revenue matches paid invoices", report.profitLoss.revenue === 400);
-  check("P&L expenses is null", report.profitLoss.expenses === null);
-  check("P&L expensesAvailable is false", report.profitLoss.expensesAvailable === false);
-  check("P&L netProfit is null — never manufactured", report.profitLoss.netProfit === null);
-  check("P&L is marked incomplete", report.profitLoss.incomplete === true);
-  check("P&L message states expenses are not connected", report.profitLoss.message === PROFIT_LOSS_INCOMPLETE_MESSAGE);
-  check("Expense placeholder copy is exact", report.expenseUnavailableMessage === EXPENSE_UNAVAILABLE_MESSAGE);
+  console.log("\nTEST — Recorded expenses, vendor spending, TBBT-recorded P&L, job allocation");
+  check("$100 of recorded expenses in August appears as $100", report.recordedExpenses.current === 100);
+  check("Outside-period July $25 is excluded from this month", report.expenseRecords.every((row) => row.amount !== 25));
+  const categorySum = report.expensesByCategory.reduce((sum, row) => sum + row.amount, 0);
+  check("Category totals reconcile to $100", categorySum === 100);
+  check(
+    "Materials $60 + Gas/Fuel $40",
+    report.expensesByCategory.some((row) => row.id === "MATERIALS" && row.amount === 60) &&
+      report.expensesByCategory.some((row) => row.id === "GAS_FUEL" && row.amount === 40),
+  );
+  check("Vendor totals use only recorded vendor (Home Depot $60)", report.vendorSpending.length === 1 && report.vendorSpending[0].name === "Home Depot" && report.vendorSpending[0].amount === 60);
+  check("Blank vendor is omitted — not invented", !report.vendorSpending.some((row) => !row.name || row.name.trim() === ""));
+  check("P&L revenue is paid invoices only (400)", report.profitLoss.revenue === 400);
+  check("P&L expenses is recorded $100", report.profitLoss.expenses === 100);
+  check("P&L recorded net is 400 − 100 = 300", report.profitLoss.recordedNet === 300);
+  check("P&L label is TBBT-recorded P&L", report.profitLoss.label === TBBT_RECORDED_PL_LABEL);
+  check("P&L message states TBBT-recorded, not tax books", report.profitLoss.message === PROFIT_LOSS_MESSAGE);
+  check("Approved labor is informational and not subtracted again into net", report.profitLoss.laborCost === 80 && report.profitLoss.recordedNet === 300);
   check("Tax disclaimer is present", report.taxDisclaimer === TAX_DISCLAIMER);
 
   const jobRow = report.jobProfitability.find((row) => row.jobId === job.id);
   check("Job paid revenue is 400", jobRow?.paidRevenue === 400);
   check("Job labor cost is 80", jobRow?.laborCost === 80);
-  check("Job margin before expenses is 320", jobRow?.marginBeforeExpenses === 320);
-  check("Job margin is not labeled as full profit", report.jobMarginLabel === JOB_MARGIN_LABEL);
+  check("Job recorded expense is only the allocated $60", jobRow?.recordedJobExpense === 60);
+  check("Unallocated $40 does not hit the job", jobRow?.recordedJobExpense !== 100);
+  check("Recorded job margin is 400 − 80 − 60 = 260", jobRow?.recordedMargin === 260);
+  check("Job margin is labeled Recorded job margin", report.jobMarginLabel === JOB_MARGIN_LABEL);
 
   const faucet = catalogIdForJob({ estimateId: estimate.id }, sourceA);
   check("Faucet job attributes to the request catalog item", faucet === catalog.id);
@@ -354,11 +398,16 @@ try {
   const allRange = resolveReportRange("all", undefined, undefined, now);
   const allReport = buildReport(sourceA, allRange);
   check("All-time paid revenue includes July + August", allReport.paidRevenue.current === 450);
+  check("All-time recorded expenses include July $25 + August $100", allReport.recordedExpenses.current === 125);
+  check("All-time TBBT-recorded net is 450 − 125 = 325", allReport.profitLoss.recordedNet === 325);
   check("All-time does not invent a prior-period percentage", allReport.paidRevenue.changePercent === null);
 
   const sourceBReport = buildReport(sourceB, range);
   check("Business B paid revenue is only its own 9999", sourceBReport.paidRevenue.current === 9999);
   check("Business B does not see Ada or the 400 invoice", sourceBReport.revenueByCustomer.every((row) => row.name !== "Ada Homeowner"));
+  check("Business A does not load Business B expenses", sourceA.expenses.every((expense) => expense.businessId === businessA.id) && !sourceA.expenses.some((expense) => expense.amount === 500));
+  check("Business B expenses are only its own $500", sourceB.expenses.length === 1 && sourceB.expenses[0].amount === 500);
+  check("Business B recorded expenses do not include A's $100", sourceBReport.recordedExpenses.current === 500);
 
   check("Needs attention includes the outstanding SENT invoice", report.attention.some((item) => item.detail.includes("outstanding")));
   check("READY time is not in the labor rollup", !report.labor.laborCostIncomplete && report.labor.entryCount === 2);
