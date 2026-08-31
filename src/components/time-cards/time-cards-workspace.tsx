@@ -771,9 +771,9 @@ function CorrectEntryForm({ entry, jobs }: { entry: TimeCardEntry; jobs: TimeCar
       </select>
       <div className="grid grid-cols-2 gap-2">
         <Input type="date" name="startDate" defaultValue={entry.startDate} />
-        <Input type="time" name="startTime" defaultValue={entry.startTime} />
+        <Input type="time" name="startTime" defaultValue={entry.startTime} step={60} />
         <Input type="date" name="endDate" defaultValue={entry.endDate || entry.startDate} />
-        <Input type="time" name="endTime" defaultValue={entry.endTime || ""} />
+        <Input type="time" name="endTime" defaultValue={entry.endTime || ""} step={60} />
       </div>
       <Input name="reason" placeholder="Reason for correction" required />
       <Button type="submit" size="sm" disabled={pending}>

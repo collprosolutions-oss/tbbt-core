@@ -27,12 +27,15 @@ const {
   canApproveWeek,
   canEditTimeEntry,
   estimateLaborCost,
+  formatDateInput,
   formatDurationClock,
+  formatTimeInput,
   hasOverlappingEntry,
   hoursBetween,
   intervalsOverlap,
   isPaidActivity,
   paidHours,
+  parseDateTimeInput,
   weekRange,
 } = await import("@/lib/time-cards");
 const {
@@ -122,6 +125,21 @@ try {
     [{ startedAt: new Date("2026-08-30T09:00:00"), endedAt: new Date("2026-08-30T10:00:00") }],
   ));
   check("2 hours is 2.00", hoursBetween(new Date("2026-08-30T09:00:00"), new Date("2026-08-30T11:00:00")) === 2);
+  const nineToFive = {
+    startedAt: parseDateTimeInput("2026-08-24", "09:00"),
+    endedAt: parseDateTimeInput("2026-08-24", "17:00"),
+  };
+  check("9 AM–5 PM parses to the same civil day", nineToFive.startedAt?.toISOString() === "2026-08-24T09:00:00.000Z" && nineToFive.endedAt?.toISOString() === "2026-08-24T17:00:00.000Z");
+  check("9 AM–5 PM = 8 hours", hoursBetween(nineToFive.startedAt, nineToFive.endedAt) === 8);
+  check("9 AM–5 PM with seconds still 8 hours", hoursBetween(parseDateTimeInput("2026-08-24", "09:00:00"), parseDateTimeInput("2026-08-24", "17:00:00")) === 8);
+  check("8 hours × $30 = $240", estimateLaborCost(8, 30) === 240);
+  check(
+    "ISO date + local 17:00 is not used for form format (would be 32h in US timezones)",
+    formatDateInput(nineToFive.endedAt) === "2026-08-24" && formatTimeInput(nineToFive.endedAt) === "17:00",
+  );
+  const danielHours = hoursBetween(parseDateTimeInput("2026-08-24", "09:00"), parseDateTimeInput("2026-08-24", "17:00"));
+  const peterHours = hoursBetween(parseDateTimeInput("2026-08-24", "09:00"), parseDateTimeInput("2026-08-24", "17:00"));
+  check("Two 8-hour workers = 16 total hours", danielHours + peterHours === 16);
   check("Labor cost is hours × wage", estimateLaborCost(4, 25) === 100);
   check("Labor cost is null without wage", estimateLaborCost(4, null) === null);
   check("Approved entries cannot be edited", canEditTimeEntry("APPROVED") === false);
@@ -268,6 +286,75 @@ try {
     where: { id: jobClock.id, businessId: businessB.id },
   });
   check("Business B cannot load Business A's time entry by id", leaked === null);
+
+  console.log("\nTEST — Manual 9 AM–5 PM duration (not 32 hours)");
+  const danielUser = await prisma.user.create({
+    data: { name: "Daniel Worker", email: "daniel-time@example.com", passwordHash: "x" },
+  });
+  const peterUser = await prisma.user.create({
+    data: { name: "Peter Worker", email: "peter-time@example.com", passwordHash: "x" },
+  });
+  const danielMem = await prisma.membership.create({
+    data: { userId: danielUser.id, businessId: businessA.id, role: "MEMBER", hourlyWage: new Prisma.Decimal(30) },
+  });
+  const peterMem = await prisma.membership.create({
+    data: { userId: peterUser.id, businessId: businessA.id, role: "MEMBER", hourlyWage: new Prisma.Decimal(30) },
+  });
+  const jobDaniel = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "SCHEDULED",
+      projectToken: randomUUID(),
+      assignedMembershipId: danielMem.id,
+    },
+  });
+  const jobPeter = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "SCHEDULED",
+      projectToken: randomUUID(),
+      assignedMembershipId: peterMem.id,
+    },
+  });
+  const dayShiftStart = parseDateTimeInput("2026-08-17", "09:00");
+  const dayShiftEnd = parseDateTimeInput("2026-08-17", "17:00");
+  const danielEntry = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: danielMem.id,
+    activityType: "JOB",
+    jobId: jobDaniel.id,
+    startedAt: dayShiftStart,
+    endedAt: dayShiftEnd,
+    note: "Daniel 9-5",
+  });
+  const peterEntry = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: peterMem.id,
+    activityType: "JOB",
+    jobId: jobPeter.id,
+    startedAt: dayShiftStart,
+    endedAt: dayShiftEnd,
+    note: "Peter 9-5",
+  });
+  const danielStored = await prisma.timeEntry.findUnique({ where: { id: danielEntry.id } });
+  const peterStored = await prisma.timeEntry.findUnique({ where: { id: peterEntry.id } });
+  const danielStoredHours = hoursBetween(danielStored.startedAt, danielStored.endedAt);
+  const peterStoredHours = hoursBetween(peterStored.startedAt, peterStored.endedAt);
+  check("Stored Daniel start/end stay 09:00Z–17:00Z", danielStored.startedAt.toISOString() === "2026-08-17T09:00:00.000Z" && danielStored.endedAt.toISOString() === "2026-08-17T17:00:00.000Z");
+  check("Stored Daniel 9 AM–5 PM = 8 hours, not 32", danielStoredHours === 8);
+  check("Stored Peter 9 AM–5 PM = 8 hours, not 32", peterStoredHours === 8);
+  const crewDay = [
+    { startedAt: danielStored.startedAt, endedAt: danielStored.endedAt, activityType: danielStored.activityType },
+    { startedAt: peterStored.startedAt, endedAt: peterStored.endedAt, activityType: peterStored.activityType },
+  ];
+  check("Two 8-hour workers aggregate to 16, not 64", paidHours(crewDay) === 16);
+  check("Aggregation does not multiply entries", paidHours(crewDay) === danielStoredHours + peterStoredHours);
+  check("Daniel 8 hours × $30 = $240, not $960", estimateLaborCost(danielStoredHours, 30) === 240);
+  const danielRoundTrip = hoursBetween(
+    parseDateTimeInput(formatDateInput(danielStored.startedAt), formatTimeInput(danielStored.startedAt)),
+    parseDateTimeInput(formatDateInput(danielStored.endedAt), formatTimeInput(danielStored.endedAt)),
+  );
+  check("Correction form round-trip stays 8 hours", danielRoundTrip === 8);
 
   console.log("\nTEST — OWNER/ADMIN manual entry, wage, and MEMBER denial");
   const manual = await createManualTimeEntry(prisma, ownerA, {

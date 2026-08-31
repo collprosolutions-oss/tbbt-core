@@ -88,13 +88,13 @@ export function AddTimeEntrySheet({
               <Input type="date" name="startDate" defaultValue={defaultDate} required />
             </Field>
             <Field label="Start time">
-              <Input type="time" name="startTime" defaultValue="09:00" required />
+              <Input type="time" name="startTime" defaultValue="09:00" step={60} required />
             </Field>
             <Field label="End date">
               <Input type="date" name="endDate" defaultValue={defaultDate} required />
             </Field>
             <Field label="End time">
-              <Input type="time" name="endTime" defaultValue="17:00" required />
+              <Input type="time" name="endTime" defaultValue="17:00" step={60} required />
             </Field>
           </div>
           <Field label="Note / reason">

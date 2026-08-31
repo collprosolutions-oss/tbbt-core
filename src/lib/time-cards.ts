@@ -137,10 +137,15 @@ export function hasOverlappingEntry(
   return existing.some((entry) => intervalsOverlap(candidate, entry, now));
 }
 
+function asInstant(value: Date): Date {
+  return value instanceof Date ? value : new Date(value);
+}
+
 /** Duration in hours, rounded to 2 decimals. RUNNING uses `now` as the end. */
 export function hoursBetween(startedAt: Date, endedAt: Date | null, now: Date = new Date()): number {
-  const end = endedAt ?? now;
-  const ms = end.getTime() - startedAt.getTime();
+  const start = asInstant(startedAt);
+  const end = endedAt == null ? now : asInstant(endedAt);
+  const ms = end.getTime() - start.getTime();
   if (ms <= 0) return 0;
   return roundHours(ms / 3_600_000);
 }
@@ -290,21 +295,60 @@ export function parseHourlyWage(raw: string): number | null | { error: string } 
   return roundMoney(value);
 }
 
+/**
+ * Manual Time Entry date+time from `<input type="date">` + `<input type="time">`.
+ *
+ * These values are civil wall-clock (the digits the owner typed), not an
+ * instant in the server's timezone. `new Date(year, month, day, hour, minute)`
+ * and `new Date("YYYY-MM-DD")` (UTC midnight) + local `setHours` both shift
+ * 17:00 onto the next UTC calendar day in US timezones. Re-reading that
+ * ISO date with local 17:00 stores 9:00 day-1 → 17:00 day-2 = 32 hours
+ * for a 9 AM–5 PM shift.
+ *
+ * Date.UTC keeps 09:00–17:00 on the same calendar day at exactly 8 hours
+ * regardless of process TZ. Browsers may send `HH:mm` or `HH:mm:ss`.
+ */
 export function parseDateTimeInput(date: string, time: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) {
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim());
+  const timeMatch = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/.exec(time.trim());
+  if (!dateMatch || !timeMatch) {
     return null;
   }
-  const [year, month, day] = date.split("-").map(Number);
-  const [hour, minute] = time.split(":").map(Number);
-  const value = new Date(year, month - 1, day, hour, minute, 0, 0);
+  const year = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]);
+  const day = Number(dateMatch[3]);
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  const second = Number(timeMatch[3] ?? "0");
+  if (hour > 23 || minute > 59 || second > 59) {
+    return null;
+  }
+  const value = new Date(Date.UTC(year, month - 1, day, hour, minute, second, 0));
   if (
-    value.getFullYear() !== year ||
-    value.getMonth() !== month - 1 ||
-    value.getDate() !== day
+    value.getUTCFullYear() !== year ||
+    value.getUTCMonth() !== month - 1 ||
+    value.getUTCDate() !== day ||
+    value.getUTCHours() !== hour
   ) {
     return null;
   }
   return value;
+}
+
+function pad2(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+/** yyyy-mm-dd from the civil wall-clock stored by parseDateTimeInput. */
+export function formatDateInput(value: Date): string {
+  const instant = asInstant(value);
+  return `${instant.getUTCFullYear()}-${pad2(instant.getUTCMonth() + 1)}-${pad2(instant.getUTCDate())}`;
+}
+
+/** HH:mm from the civil wall-clock stored by parseDateTimeInput. */
+export function formatTimeInput(value: Date): string {
+  const instant = asInstant(value);
+  return `${pad2(instant.getUTCHours())}:${pad2(instant.getUTCMinutes())}`;
 }
 
 export function formatDurationClock(hours: number): string {

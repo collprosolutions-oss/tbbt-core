@@ -26,7 +26,9 @@ import {
   TIME_STATUS_LABELS,
   canEditTimeEntry,
   estimateLaborCost,
+  formatDateInput,
   formatDurationClock,
+  formatTimeInput,
   hoursBetween,
   isTimeActivityType,
   isTimeEntryStatus,
@@ -44,16 +46,12 @@ function parseView(raw: string | undefined): TimeCardView {
     : "today";
 }
 
-function pad2(value: number) {
-  return String(value).padStart(2, "0");
+function toEntryDateInput(value: Date) {
+  return formatDateInput(value);
 }
 
-function toDateInput(value: Date) {
-  return formatISODate(value);
-}
-
-function toTimeInput(value: Date) {
-  return `${pad2(value.getHours())}:${pad2(value.getMinutes())}`;
+function toEntryTimeInput(value: Date) {
+  return formatTimeInput(value);
 }
 
 function jobLabel(job: {
@@ -177,10 +175,10 @@ export default async function TimeCardsPage({
       totalHours: hours,
       totalLabel: formatDurationClock(hours),
       note: entry.note,
-      startDate: toDateInput(entry.startedAt),
-      startTime: toTimeInput(entry.startedAt),
-      endDate: entry.endedAt ? toDateInput(entry.endedAt) : "",
-      endTime: entry.endedAt ? toTimeInput(entry.endedAt) : "",
+      startDate: toEntryDateInput(entry.startedAt),
+      startTime: toEntryTimeInput(entry.startedAt),
+      endDate: entry.endedAt ? toEntryDateInput(entry.endedAt) : "",
+      endTime: entry.endedAt ? toEntryTimeInput(entry.endedAt) : "",
       canEdit: canEditTimeEntry(entry.status),
     };
   });
@@ -324,8 +322,8 @@ export default async function TimeCardsPage({
 
         <TimeCardsWorkspace
           view={view}
-          date={toDateInput(selectedDate)}
-          weekStartedAt={toDateInput(weekStart)}
+          date={formatISODate(selectedDate)}
+          weekStartedAt={formatISODate(weekStart)}
           weekLabel={formatDate(weekStart)}
           workers={workers}
           jobs={jobOptions}
