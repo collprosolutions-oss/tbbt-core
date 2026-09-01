@@ -62,43 +62,45 @@ export default async function PublicServiceAreaPage({ params }: PageProps) {
           requestHref={requestHref}
         />
         <section className="bg-[var(--public-paper)]">
-          <div className="public-container grid gap-8 py-16 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1.4fr)]">
-            <div>
-              <MapPin className="size-8 text-[var(--public-blue)]" />
-              <h2 className="mt-4 text-2xl font-extrabold uppercase">Local Experts</h2>
-              <p className="mt-4 text-muted-foreground">{SERVICE_AREA_COPY}</p>
-              <ul className="mt-6 space-y-4">
-                {POINTS.map((point) => (
-                  <li key={point.title} className="flex gap-3">
-                    <point.Icon className="mt-0.5 size-5 text-[var(--public-blue)]" />
-                    <div>
-                      <p className="font-extrabold">{point.title}</p>
-                      <p className="text-sm text-muted-foreground">{point.body}</p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div className="rounded-lg bg-[#e8f1ff] p-6">
-              <h2 className="text-xl font-extrabold uppercase">Our Service Areas</h2>
-              <p className="mt-2 text-xs font-extrabold tracking-wide text-[var(--public-blue)] uppercase">
-                Primary areas we serve
-              </p>
-              <ul className="mt-4 space-y-2 font-semibold">
-                <li>Fort Myers</li>
-                <li>Cape Coral</li>
-                <li>And surrounding areas, confirmed by address</li>
-              </ul>
-              <div className="mt-6 rounded-md bg-white p-4">
-                <p className="font-extrabold uppercase">Not sure if you&apos;re in our area?</p>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Just text us. We&apos;ll confirm service availability for your location.
+          <div className="public-container grid gap-6 py-8 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
+            <div className="space-y-5">
+              <div>
+                <MapPin className="size-7 text-[var(--public-blue)]" />
+                <h2 className="mt-3 text-2xl font-extrabold uppercase">Local Experts</h2>
+                <p className="mt-3 text-sm leading-6 text-muted-foreground">{SERVICE_AREA_COPY}</p>
+                <ul className="mt-5 space-y-3">
+                  {POINTS.map((point) => (
+                    <li key={point.title} className="flex gap-3">
+                      <point.Icon className="mt-0.5 size-5 text-[var(--public-blue)]" />
+                      <div>
+                        <p className="font-extrabold">{point.title}</p>
+                        <p className="text-sm text-muted-foreground">{point.body}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="rounded-lg bg-[#e8f1ff] p-5">
+                <h2 className="text-lg font-extrabold uppercase">Our Service Areas</h2>
+                <p className="mt-2 text-xs font-extrabold tracking-wide text-[var(--public-blue)] uppercase">
+                  Primary areas we serve
                 </p>
-                {textHref ? (
-                  <a href={textHref} className="mt-3 inline-block font-extrabold text-[var(--public-blue)]">
-                    {TEXT_US_LABEL} {phone}
-                  </a>
-                ) : null}
+                <ul className="mt-3 space-y-1.5 font-semibold">
+                  <li>Fort Myers</li>
+                  <li>Cape Coral</li>
+                  <li>And surrounding areas, confirmed by address</li>
+                </ul>
+                <div className="mt-4 rounded-md bg-white p-3">
+                  <p className="font-extrabold uppercase">Not sure if you&apos;re in our area?</p>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Just text us. We&apos;ll confirm service availability for your location.
+                  </p>
+                  {textHref ? (
+                    <a href={textHref} className="mt-2 inline-block font-extrabold text-[var(--public-blue)]">
+                      {TEXT_US_LABEL} {phone}
+                    </a>
+                  ) : null}
+                </div>
               </div>
             </div>
             <div>
@@ -111,7 +113,7 @@ export default async function PublicServiceAreaPage({ params }: PageProps) {
                   alt="Map of the Fort Myers and Cape Coral area"
                   width={1280}
                   height={1024}
-                  className="public-map h-auto w-full object-cover"
+                  className="public-map w-full object-cover"
                 />
               </a>
               <p className="mt-3 text-sm text-muted-foreground">

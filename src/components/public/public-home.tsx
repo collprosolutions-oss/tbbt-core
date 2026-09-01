@@ -48,7 +48,7 @@ export function PublicHome({
             alt="Handyman working with tools in a workshop"
             fill
             sizes="100vw"
-            className="object-cover object-right"
+            className="object-cover object-[70%_center]"
             priority
           />
         </div>
@@ -137,10 +137,10 @@ export function PublicHome({
                 View More Projects →
               </Link>
             </div>
-            <ul className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <ul className="mt-6 grid gap-4 md:grid-cols-2">
               {featured.map((project) => (
                 <li key={project.id}>
-                  <Link href={projectsHref} className="public-project-tile min-h-72">
+                  <Link href={projectsHref} className="public-project-tile public-project-tile--lg">
                     <Image src={project.src} alt={project.title} fill sizes="(max-width: 768px) 100vw, 25vw" />
                     <span className="public-project-tile-bar">
                       <h3>{project.title}</h3>

@@ -252,8 +252,30 @@ export function publicCategoryDescriptor(items: PublicCatalogItem[]) {
   return `${names[0]}, ${names[1]}, and more`;
 }
 
-export function publicServicesPath(slug: string) {
-  return `/hire/${slug}/services`;
+export function selectedWorkQuery(input: {
+  catalogIds?: string[];
+  includeOther?: boolean;
+  otherDescription?: string;
+}) {
+  const params = new URLSearchParams();
+  if (input.catalogIds?.length) params.set("services", input.catalogIds.join(","));
+  if (input.includeOther) {
+    params.set("other", "1");
+    if (input.otherDescription?.trim()) params.set("otherText", input.otherDescription.trim());
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export function publicServicesPath(
+  slug: string,
+  selected?: {
+    catalogIds?: string[];
+    includeOther?: boolean;
+    otherDescription?: string;
+  },
+) {
+  return `/hire/${slug}/services${selected ? selectedWorkQuery(selected) : ""}`;
 }
 
 export function publicAboutPath(slug: string) {

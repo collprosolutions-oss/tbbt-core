@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ category?: string }>;
+  searchParams: Promise<{ category?: string; services?: string; other?: string; otherText?: string }>;
 };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -63,6 +63,12 @@ export default async function PublicServicesPage({ params, searchParams }: PageP
               items={site.items}
               groups={site.groups}
               initialCategory={query.category}
+              initialSelectedIds={(query.services ?? "")
+                .split(",")
+                .map((value) => value.trim())
+                .filter((id) => site.items.some((item) => item.id === id))}
+              initialIncludeOther={query.other === "1" || query.other === "true"}
+              initialOtherText={(query.otherText ?? "").trim()}
             />
           </div>
         </section>

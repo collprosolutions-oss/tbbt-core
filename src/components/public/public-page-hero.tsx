@@ -50,7 +50,7 @@ export function PublicPageHero({
               <span>{current}</span>
             </p>
             <h1 className="public-page-title">{title}</h1>
-            {accent ? <p className="public-page-accent mt-3 text-3xl font-extrabold uppercase">{accent}</p> : null}
+            {accent ? <p className="public-page-accent mt-2 text-xl font-extrabold uppercase">{accent}</p> : null}
             {description ? <p className="public-page-lead">{description}</p> : null}
           </div>
           {children}

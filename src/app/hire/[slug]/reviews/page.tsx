@@ -58,22 +58,46 @@ export default async function PublicReviewsPage({ params }: PageProps) {
           requestHref={publicRequestPath(site.business.slug)}
         />
         <section className="bg-white">
-          <div className="public-container grid gap-8 py-14 md:grid-cols-3">
-            {HIGHLIGHTS.map((item) => (
-              <div key={item.title} className="text-center">
-                <item.Icon className="mx-auto size-8 text-[var(--public-blue)]" />
-                <h2 className="mt-4 font-extrabold">{item.title}</h2>
-                <p className="mt-2 text-sm text-muted-foreground">{item.body}</p>
-              </div>
-            ))}
+          <div className="public-container grid gap-8 py-10 md:grid-cols-3">
+            <div>
+              <p className="text-xs font-extrabold tracking-[0.14em] uppercase">Customer feedback</p>
+              <p className="mt-3 max-w-sm text-sm leading-6 text-muted-foreground">
+                Public reviews will be listed here when they are approved for display.
+              </p>
+            </div>
+            <div className="grid gap-4">
+              {HIGHLIGHTS.map((item) => (
+                <div key={item.title} className="flex gap-3">
+                  <item.Icon className="mt-0.5 size-6 shrink-0 text-[var(--public-blue)]" />
+                  <div>
+                    <h2 className="font-extrabold">{item.title}</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">{item.body}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <p className="text-xs font-extrabold tracking-[0.14em] uppercase">Reviewed on</p>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                Public platform reviews will appear here as they become available.
+              </p>
+            </div>
           </div>
         </section>
-        <section className="bg-[var(--public-paper)] py-16">
+        <section className="bg-[var(--public-paper)] py-10">
           <div className="public-container">
-            <div className="public-empty-card mx-auto max-w-2xl">
-              <h2 className="text-3xl font-extrabold uppercase">Customer Reviews</h2>
-              <p className="mt-4 text-lg text-muted-foreground">{REVIEWS_PLACEHOLDER_COPY}</p>
-            </div>
+            <h2 className="text-2xl font-extrabold uppercase">Customer Reviews</h2>
+            <p className="mt-2 max-w-2xl text-muted-foreground">{REVIEWS_PLACEHOLDER_COPY}</p>
+            <ul className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <li key={index} className="public-review-card">
+                  <p className="text-xs font-extrabold tracking-[0.12em] uppercase">Review</p>
+                  <p className="mt-4 text-sm leading-6 text-muted-foreground">
+                    {REVIEWS_PLACEHOLDER_COPY}
+                  </p>
+                </li>
+              ))}
+            </ul>
           </div>
         </section>
         <PublicCtaBar

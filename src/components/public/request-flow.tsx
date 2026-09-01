@@ -5,7 +5,6 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { submitServiceRequest } from "@/app/actions/intake";
 import {
-  ServicePicker,
   selectedWorkLabels,
   type SelectedWorkState,
 } from "@/components/public/service-picker";
@@ -13,12 +12,12 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
+import { publicServicesPath, selectedWorkQuery } from "@/lib/public-site";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
 
-type Step = "select" | "details" | "info" | "review";
+type Step = "details" | "info" | "review";
 
 const STEPS: { id: Step; title: string; caption: string }[] = [
-  { id: "select", title: "Select Your Work", caption: "Choose one or more tasks" },
   { id: "details", title: "Project Details", caption: "Address, notes, and photos" },
   { id: "info", title: "Your Information", caption: "How can we reach you?" },
   { id: "review", title: "Review & Submit", caption: "Review and send request" },
@@ -39,13 +38,15 @@ export function MultiServiceRequestFlow({
   initialSelected: SelectedWorkState;
   photosEnabled: boolean;
 }) {
-  const [step, setStep] = useState<Step>("select");
-  const [selected, setSelected] = useState<SelectedWorkState>(initialSelected);
+  void groups;
+  const [step, setStep] = useState<Step>("details");
+  const [selected] = useState<SelectedWorkState>(initialSelected);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
+  const [preferredContact, setPreferredContact] = useState("text");
   const [photos, setPhotos] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
@@ -56,15 +57,12 @@ export function MultiServiceRequestFlow({
     [items, selected],
   );
   const hasWork = selected.catalogIds.length > 0 || selected.includeOther;
-
-  function goDetails() {
-    if (!hasWork) {
-      setError("Select at least one service, or describe other work.");
-      return;
-    }
-    setError(null);
-    setStep("details");
-  }
+  const servicesHref = publicServicesPath(slug, {
+    catalogIds: selected.catalogIds,
+    includeOther: selected.includeOther,
+    otherDescription: selected.otherDescription,
+  });
+  const chooseServicesHref = publicServicesPath(slug);
 
   function goInfo() {
     setError(null);
@@ -89,7 +87,13 @@ export function MultiServiceRequestFlow({
     formData.set("email", email);
     formData.set("phone", phone);
     formData.set("address", address);
-    formData.set("description", notes);
+    const preference =
+      preferredContact === "text"
+        ? "Preferred contact: Text"
+        : preferredContact === "phone"
+          ? "Preferred contact: Phone"
+          : "Preferred contact: Email";
+    formData.set("description", [notes, preference].filter(Boolean).join("\n\n"));
     for (const id of selected.catalogIds) {
       formData.append("serviceCatalogItemId", id);
     }
@@ -122,11 +126,21 @@ export function MultiServiceRequestFlow({
           Your request has been sent to {businessName}. Someone from the team
           will review it before an estimate is created.
         </p>
-        <Link
-          href={`/hire/${slug}`}
-          className="public-btn public-btn-primary mt-8"
-        >
+        <Link href={`/hire/${slug}`} className="public-btn public-btn-primary mt-8">
           Back to the website
+        </Link>
+      </section>
+    );
+  }
+
+  if (!hasWork) {
+    return (
+      <section>
+        <h2 className="text-2xl font-extrabold uppercase">What work do you need?</h2>
+        <p className="mt-3 text-muted-foreground">No services selected yet.</p>
+        <Link href={chooseServicesHref} className="public-btn public-btn-primary mt-6">
+          Choose Services
+          <ArrowRight className="size-4" aria-hidden="true" />
         </Link>
       </section>
     );
@@ -134,6 +148,23 @@ export function MultiServiceRequestFlow({
 
   return (
     <div className="space-y-8">
+      <section>
+        <h2 className="text-xl font-extrabold tracking-wide uppercase">Selected Services</h2>
+        <ul className="mt-3 space-y-2">
+          {labels.map((label) => (
+            <li key={label} className="font-semibold">
+              {label}
+            </li>
+          ))}
+        </ul>
+        <Link
+          href={servicesHref || `${chooseServicesHref}${selectedWorkQuery(selected)}`}
+          className="mt-4 inline-block font-extrabold tracking-wide text-[var(--public-blue)] uppercase"
+        >
+          Add Another Service →
+        </Link>
+      </section>
+
       <ol className="public-step-bar" aria-label="Request steps">
         {STEPS.map((item, index) => (
           <li key={item.id} className="public-step" data-active={step === item.id ? "true" : "false"}>
@@ -151,41 +182,11 @@ export function MultiServiceRequestFlow({
         </Alert>
       ) : null}
 
-      {step === "select" ? (
-        <div className="space-y-5">
-          <h2 className="text-2xl font-extrabold tracking-tight uppercase">
-            1. Select Your Work
-          </h2>
-          <ServicePicker
-            groups={groups}
-            items={items}
-            selected={selected}
-            onChange={setSelected}
-            searchId="request-service-search"
-          />
-          <button type="button" className="public-btn public-btn-primary w-full" onClick={goDetails}>
-            Next: Project Details
-            <ArrowRight className="size-4" aria-hidden="true" />
-          </button>
-        </div>
-      ) : null}
-
       {step === "details" ? (
         <div className="space-y-4">
           <h2 className="text-2xl font-extrabold tracking-tight uppercase">
-            2. Project Details
+            Project Details
           </h2>
-          <div className="space-y-2">
-            <Label htmlFor="address">Property / service address</Label>
-            <Input
-              id="address"
-              name="address"
-              autoComplete="street-address"
-              value={address}
-              onChange={(event) => setAddress(event.target.value)}
-              className="h-12 bg-white text-base"
-            />
-          </div>
           <div className="space-y-2">
             <Label htmlFor="description">Project description</Label>
             <textarea
@@ -196,6 +197,17 @@ export function MultiServiceRequestFlow({
               onChange={(event) => setNotes(event.target.value)}
               className="w-full rounded-lg border border-input bg-white px-3 py-2 text-base"
               placeholder="Please describe your project in detail..."
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="address">Property / service address</Label>
+            <Input
+              id="address"
+              name="address"
+              autoComplete="street-address"
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+              className="h-12 bg-white text-base"
             />
           </div>
           {photosEnabled ? (
@@ -232,26 +244,17 @@ export function MultiServiceRequestFlow({
               submit your request with a description.
             </p>
           )}
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <button
-              type="button"
-              className="public-btn public-btn-outline flex-1"
-              onClick={() => setStep("select")}
-            >
-              Back
-            </button>
-            <button type="button" className="public-btn public-btn-primary flex-1" onClick={goInfo}>
-              Next: Your Information
-              <ArrowRight className="size-4" aria-hidden="true" />
-            </button>
-          </div>
+          <button type="button" className="public-btn public-btn-primary w-full" onClick={goInfo}>
+            Next: Your Information
+            <ArrowRight className="size-4" aria-hidden="true" />
+          </button>
         </div>
       ) : null}
 
       {step === "info" ? (
         <div className="space-y-4">
           <h2 className="text-2xl font-extrabold tracking-tight uppercase">
-            3. Your Information
+            Your Information
           </h2>
           <div className="space-y-2">
             <Label htmlFor="name">Name *</Label>
@@ -289,6 +292,39 @@ export function MultiServiceRequestFlow({
               className="h-12 bg-white text-base"
             />
           </div>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">Preferred contact method</legend>
+            <label className="flex items-center gap-2 font-semibold">
+              <input
+                type="radio"
+                name="preferredContact"
+                value="text"
+                checked={preferredContact === "text"}
+                onChange={() => setPreferredContact("text")}
+              />
+              Text (preferred)
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="preferredContact"
+                value="phone"
+                checked={preferredContact === "phone"}
+                onChange={() => setPreferredContact("phone")}
+              />
+              Phone
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="preferredContact"
+                value="email"
+                checked={preferredContact === "email"}
+                onChange={() => setPreferredContact("email")}
+              />
+              Email
+            </label>
+          </fieldset>
           <div className="flex flex-col gap-3 sm:flex-row">
             <button type="button" className="public-btn public-btn-outline flex-1" onClick={() => setStep("details")}>
               Back
@@ -304,23 +340,20 @@ export function MultiServiceRequestFlow({
       {step === "review" ? (
         <div className="space-y-5">
           <h2 className="text-2xl font-extrabold tracking-tight uppercase">
-            4. Review & Submit
+            Review & Submit
           </h2>
           <ReviewBlock title="Selected services / tasks">
-            {labels.length > 0 ? (
-              <ul className="list-disc space-y-1 pl-5">
-                {labels.map((label) => (
-                  <li key={label}>{label}</li>
-                ))}
-              </ul>
-            ) : (
-              <p>None selected</p>
-            )}
+            <ul className="list-disc space-y-1 pl-5">
+              {labels.map((label) => (
+                <li key={label}>{label}</li>
+              ))}
+            </ul>
           </ReviewBlock>
           <ReviewBlock title="Contact">
             <p>{name || "—"}</p>
             <p>{phone || "No phone provided"}</p>
             <p>{email || "No email provided"}</p>
+            <p>Preferred: {preferredContact === "text" ? "Text" : preferredContact === "phone" ? "Phone" : "Email"}</p>
           </ReviewBlock>
           <ReviewBlock title="Property">
             <p>{address || "No address provided"}</p>
@@ -354,13 +387,6 @@ export function MultiServiceRequestFlow({
           </div>
         </div>
       ) : null}
-
-      <p className="text-base text-muted-foreground">
-        Need to start over?{" "}
-        <Link href={`/hire/${slug}`} className="font-medium text-[var(--public-blue)] underline-offset-4 hover:underline">
-          Back to the website
-        </Link>
-      </p>
     </div>
   );
 }

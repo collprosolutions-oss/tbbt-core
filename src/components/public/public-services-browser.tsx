@@ -5,7 +5,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { Check, ChevronDown } from "lucide-react";
 import { OTHER_TASK_LABEL } from "@/lib/service-request-work";
-import { PUBLIC_PRICING_DISCLAIMER, publicCategoryPhoto } from "@/lib/public-site";
+import {
+  PUBLIC_PRICING_DISCLAIMER,
+  publicCategoryPhoto,
+  selectedWorkQuery,
+} from "@/lib/public-site";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
 import { cn } from "@/lib/utils";
 
@@ -14,11 +18,17 @@ export function PublicServicesBrowser({
   items,
   groups,
   initialCategory,
+  initialSelectedIds = [],
+  initialIncludeOther = false,
+  initialOtherText = "",
 }: {
   slug: string;
   items: PublicCatalogItem[];
   groups: PublicCatalogGroup[];
   initialCategory?: string;
+  initialSelectedIds?: string[];
+  initialIncludeOther?: boolean;
+  initialOtherText?: string;
 }) {
   const starting =
     initialCategory && groups.some((group) => group.category === initialCategory)
@@ -26,26 +36,24 @@ export function PublicServicesBrowser({
       : groups[0]?.category ?? "";
   const [active, setActive] = useState(starting);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [includeOther, setIncludeOther] = useState(false);
-  const [otherText, setOtherText] = useState("");
+  const [selected, setSelected] = useState<string[]>(initialSelectedIds);
+  const [includeOther, setIncludeOther] = useState(initialIncludeOther);
+  const [otherText, setOtherText] = useState(initialOtherText);
 
   const group = groups.find((item) => item.category === active) ?? groups[0];
-  const selectedLabels = useMemo(() => {
-    const names = selected
-      .map((id) => items.find((item) => item.id === id)?.name)
-      .filter((name): name is string => Boolean(name));
-    if (includeOther) names.push(otherText.trim() || OTHER_TASK_LABEL);
-    return names;
-  }, [includeOther, items, otherText, selected]);
-
-  const params = new URLSearchParams();
-  if (selected.length) params.set("services", selected.join(","));
-  if (includeOther) {
-    params.set("other", "1");
-    if (otherText.trim()) params.set("otherText", otherText.trim());
-  }
-  const href = params.toString() ? `/r/${slug}?${params}` : `/r/${slug}`;
+  const selectedRows = useMemo(
+    () =>
+      selected
+        .map((id) => items.find((item) => item.id === id))
+        .filter((item): item is PublicCatalogItem => Boolean(item)),
+    [items, selected],
+  );
+  const selectedCount = selectedRows.length + (includeOther ? 1 : 0);
+  const href = `/r/${slug}${selectedWorkQuery({
+    catalogIds: selected,
+    includeOther,
+    otherDescription: otherText,
+  })}`;
 
   function toggle(id: string) {
     setSelected((current) =>
@@ -59,25 +67,59 @@ export function PublicServicesBrowser({
 
   return (
     <div className="public-services-layout">
-      <aside className="public-cat-rail">
-        <h2>Categories</h2>
-        {groups.map((item) => (
-          <button
-            key={item.category}
-            type="button"
-            data-active={item.category === group.category ? "true" : "false"}
-            onClick={() => {
-              setActive(item.category);
-              setOpenId(null);
-            }}
-          >
-            {item.category}
-          </button>
-        ))}
+      <aside>
+        <div className="public-cat-rail">
+          <h2>Categories</h2>
+          {groups.map((item) => (
+            <button
+              key={item.category}
+              type="button"
+              data-active={item.category === group.category ? "true" : "false"}
+              onClick={() => {
+                setActive(item.category);
+                setOpenId(null);
+              }}
+            >
+              {item.category}
+            </button>
+          ))}
+        </div>
+        <div className="public-selected-box">
+          <h3>Selected Work ({selectedCount})</h3>
+          {selectedCount === 0 ? (
+            <p className="mt-3 text-sm text-muted-foreground">No services selected yet.</p>
+          ) : (
+            <ul>
+              {selectedRows.map((item) => (
+                <li key={item.id}>
+                  <span>{item.name}</span>
+                  <button type="button" onClick={() => toggle(item.id)} aria-label={`Remove ${item.name}`}>
+                    ×
+                  </button>
+                </li>
+              ))}
+              {includeOther ? (
+                <li>
+                  <span>{otherText.trim() || OTHER_TASK_LABEL}</span>
+                  <button type="button" onClick={() => setIncludeOther(false)} aria-label="Remove other work">
+                    ×
+                  </button>
+                </li>
+              ) : null}
+            </ul>
+          )}
+          {selectedCount > 0 ? (
+            <Link href={href} className="public-btn public-btn-primary">
+              Continue with Selected Work
+            </Link>
+          ) : (
+            <p className="mt-3 text-xs text-muted-foreground">Select one or more tasks to continue.</p>
+          )}
+        </div>
       </aside>
 
       <div>
-        <div className="relative mb-6 min-h-80 overflow-hidden rounded-md">
+        <div className="relative mb-5 min-h-56 overflow-hidden rounded-md">
           <Image
             src={publicCategoryPhoto(group.category)}
             alt=""
@@ -87,13 +129,13 @@ export function PublicServicesBrowser({
           />
         </div>
         <h2 className="text-3xl font-extrabold tracking-tight">{group.category}</h2>
-        <p className="mt-3 max-w-3xl text-muted-foreground">
+        <p className="mt-2 max-w-3xl text-muted-foreground">
           {group.items.length} service{group.items.length === 1 ? "" : "s"} in this category.
           Select one or more tasks, then continue to request a quote.
         </p>
         <p className="mt-2 text-sm text-muted-foreground">{PUBLIC_PRICING_DISCLAIMER}</p>
 
-        <div className="mt-6">
+        <div className="mt-5">
           {group.items.map((item) => {
             const checked = selected.includes(item.id);
             const expanded = openId === item.id;
@@ -157,44 +199,6 @@ export function PublicServicesBrowser({
             placeholder="What needs to be done?"
           />
         ) : null}
-
-        <section className="mt-6 rounded-md border bg-white p-4">
-          <h3 className="text-sm font-extrabold tracking-wide uppercase">
-            Selected Work ({selectedLabels.length})
-          </h3>
-          {selectedLabels.length === 0 ? (
-            <p className="mt-2 text-sm text-muted-foreground">No tasks selected yet.</p>
-          ) : (
-            <ul className="mt-3 flex flex-wrap gap-2">
-              {selected.map((id) => {
-                const item = items.find((row) => row.id === id);
-                if (!item) return null;
-                return (
-                  <li key={id}>
-                    <button type="button" className="public-chip" onClick={() => toggle(id)}>
-                      {item.name} ×
-                    </button>
-                  </li>
-                );
-              })}
-              {includeOther ? (
-                <li>
-                  <button type="button" className="public-chip" onClick={() => setIncludeOther(false)}>
-                    {otherText.trim() || OTHER_TASK_LABEL} ×
-                  </button>
-                </li>
-              ) : null}
-            </ul>
-          )}
-        </section>
-
-        {selected.length > 0 || includeOther ? (
-          <Link href={href} className="public-btn public-btn-primary mt-6">
-            Continue to request
-          </Link>
-        ) : (
-          <p className="mt-6 text-sm text-muted-foreground">Select work to continue.</p>
-        )}
       </div>
     </div>
   );

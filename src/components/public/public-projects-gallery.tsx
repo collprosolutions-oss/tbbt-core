@@ -14,8 +14,8 @@ export function PublicProjectsGallery() {
 
   return (
     <div className="bg-[var(--public-paper)]">
-      <div className="public-container py-6">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="public-container">
+        <div className="public-filter-bar">
           <p className="text-xs font-extrabold tracking-[0.12em] uppercase">Filter Projects:</p>
           {PROJECT_FILTERS.map((item) => (
             <button
@@ -30,12 +30,17 @@ export function PublicProjectsGallery() {
           ))}
         </div>
       </div>
-      <div className="public-container pb-16">
-        <ul className="grid gap-5 md:grid-cols-2">
+      <div className="public-container pb-12">
+        <ul className="grid gap-5 lg:grid-cols-2">
           {projects.map((project) => (
             <li key={project.id}>
-              <article className="public-project-tile">
-                <Image src={project.src} alt={project.title} fill sizes="(max-width: 768px) 100vw, 50vw" />
+              <article className="public-project-tile public-project-tile--lg">
+                <Image
+                  src={project.src}
+                  alt={project.title}
+                  fill
+                  sizes="(max-width: 1024px) 100vw, 50vw"
+                />
                 <div className="public-project-tile-bar">
                   <h2>{project.title}</h2>
                   <p>{PROJECT_FILTERS.find((item) => item.id === project.filters[0])?.label}</p>
