@@ -9,7 +9,6 @@ import {
   TRUST_POINTS,
   popularPublicCategories,
   publicCategoryPhoto,
-  publicDisplayName,
   publicPhone,
   publicProjectsPath,
   publicRequestPath,
@@ -30,7 +29,6 @@ export function PublicHome({
   items: PublicCatalogItem[];
   groups: PublicCatalogGroup[];
 }) {
-  const name = publicDisplayName(business);
   const phone = publicPhone(business.slug);
   const textHref = smsHref(phone);
   const requestHref = publicRequestPath(business.slug);
