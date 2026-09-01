@@ -86,9 +86,14 @@ export function PublicServicesBrowser({
         </div>
         <div className="public-selected-box">
           <h3>Selected Work ({selectedCount})</h3>
-          {selectedCount === 0 ? (
-            <p className="mt-3 text-sm text-muted-foreground">No services selected yet.</p>
+          {selectedCount > 0 ? (
+            <Link href={href} className="public-btn public-btn-primary">
+              Continue with Selected Work
+            </Link>
           ) : (
+            <p className="mt-3 text-xs text-muted-foreground">Select one or more tasks to continue.</p>
+          )}
+          {selectedCount === 0 ? null : (
             <ul>
               {selectedRows.map((item) => (
                 <li key={item.id}>
@@ -107,13 +112,6 @@ export function PublicServicesBrowser({
                 </li>
               ) : null}
             </ul>
-          )}
-          {selectedCount > 0 ? (
-            <Link href={href} className="public-btn public-btn-primary">
-              Continue with Selected Work
-            </Link>
-          ) : (
-            <p className="mt-3 text-xs text-muted-foreground">Select one or more tasks to continue.</p>
           )}
         </div>
       </aside>
