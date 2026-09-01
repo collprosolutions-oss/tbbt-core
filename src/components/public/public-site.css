@@ -251,8 +251,6 @@
   justify-self: start;
 }
 
-.public-brand-stack .public-text-us,
-.public-brand-stack .public-btn,
 .public-rail .public-btn {
   width: 100%;
   max-width: 100%;
@@ -262,6 +260,23 @@
   font-size: 0.54rem;
   letter-spacing: 0.03em;
   text-align: center;
+}
+
+.public-brand-stack .public-text-us,
+.public-brand-stack .public-btn {
+  width: 94.5%;
+  max-width: 94.5%;
+  box-sizing: border-box;
+  min-height: 2.45rem;
+  padding: 0.45rem 0.28rem;
+  font-size: 0.54rem;
+  letter-spacing: 0.03em;
+  text-align: center;
+  align-self: center;
+}
+
+.public-brand-stack .public-btn svg {
+  display: none;
 }
 
 .public-text-us {
