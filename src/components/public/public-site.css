@@ -669,6 +669,7 @@
 
 .public-project-card-media img {
   object-fit: cover;
+  object-position: center 38%;
 }
 
 .public-project-card-body {
@@ -886,9 +887,21 @@
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 767px) {
   .public-home-hero-copy {
-    padding-block: 2.4rem 7.5rem;
+    padding-block: 1.7rem 1.35rem;
+  }
+
+  .public-home-hero-media {
+    min-height: 15.5rem;
+  }
+
+  .public-home-title {
+    font-size: 2.45rem;
+  }
+
+  .public-trust-bar {
+    margin-top: 0;
   }
 
   .public-page-hero {
