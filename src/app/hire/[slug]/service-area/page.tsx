@@ -61,7 +61,7 @@ export default async function PublicServiceAreaPage({ params }: PageProps) {
           requestHref={requestHref}
         />
         <section className="bg-[var(--public-paper)]">
-          <div className="public-container grid gap-8 py-16 lg:grid-cols-3">
+          <div className="public-container grid gap-8 py-16 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1.4fr)]">
             <div>
               <MapPin className="size-8 text-[var(--public-blue)]" />
               <h2 className="mt-4 text-2xl font-extrabold uppercase">Local Experts</h2>

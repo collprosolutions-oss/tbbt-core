@@ -117,7 +117,7 @@ const CATEGORY_VISUALS: Record<string, string> = {
   "Doors & Locks": "/brand/projects/door-install.jpg",
   "Mounting & Hanging": "/brand/projects/picture-hanging.jpg",
   "Walls & Drywall": "/brand/projects/bathroom-shiplap.jpg",
-  "Trim & Carpentry": "/brand/projects/exterior-carpentry.jpg",
+  "Trim & Carpentry": "/brand/projects/lanai-porch.jpg",
   "Bathroom / Caulking / Accessories": "/brand/projects/bathroom-toilet.jpg",
   "Furniture & Assembly": "/brand/projects/furniture-assembly.jpg",
   "Exterior Repairs": "/brand/projects/exterior-carpentry.jpg",

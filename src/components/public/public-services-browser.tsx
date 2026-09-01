@@ -77,7 +77,7 @@ export function PublicServicesBrowser({
       </aside>
 
       <div>
-        <div className="relative mb-6 min-h-64 overflow-hidden rounded-md">
+        <div className="relative mb-6 min-h-80 overflow-hidden rounded-md">
           <Image
             src={publicCategoryPhoto(group.category)}
             alt=""

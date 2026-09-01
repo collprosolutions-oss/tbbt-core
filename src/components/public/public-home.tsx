@@ -96,7 +96,7 @@ export function PublicHome({
           <h2 className="public-section-title">
             Handyman <span>Services</span> You Can Count On
           </h2>
-          <ul className="mt-10 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {categories.map((category) => (
               <li key={category.category}>
                 <Link

@@ -27,8 +27,8 @@
   --public-muted: #5a6573;
   --public-paper: #f3f5f8;
   --public-max: 1440px;
-  --public-header-h: 6rem;
-  --public-logo: 11.25rem;
+  --public-header-h: 6.5rem;
+  --public-logo: 12.25rem;
   min-height: 100%;
   overflow-x: hidden;
   background: #fff;
@@ -294,7 +294,7 @@
   font-weight: 800;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--public-blue-soft);
+  color: var(--public-blue);
 }
 
 .public-cinematic-copy h1,
@@ -379,7 +379,7 @@
 .public-photo-card {
   position: relative;
   display: block;
-  min-height: 14.5rem;
+  min-height: 16.5rem;
   overflow: hidden;
   border-radius: 6px;
   color: #fff;
