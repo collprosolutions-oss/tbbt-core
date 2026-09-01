@@ -1,12 +1,7 @@
 import Link from "next/link";
 import Image from "next/image";
-import { ArrowRight } from "lucide-react";
-import {
-  PRIMARY_CTA_LABEL,
-  SERVICE_AREA_COPY,
-  TEXT_US_LABEL,
-  type PopularPublicCategory,
-} from "@/lib/public-site";
+import { SERVICE_AREA_COPY, TEXT_US_LABEL, type PopularPublicCategory } from "@/lib/public-site";
+import { PublicFooterQuote } from "@/components/public/public-footer-quote";
 
 export function PublicFooter({
   name,
@@ -95,10 +90,7 @@ export function PublicFooter({
               <a href={smsHref} className="text-lg font-bold text-white">{phone}</a>
             </p>
           ) : null}
-          <Link href={requestHref} className="public-btn public-btn-primary mt-5">
-            {PRIMARY_CTA_LABEL}
-            <ArrowRight className="size-4" aria-hidden="true" />
-          </Link>
+          <PublicFooterQuote requestHref={requestHref} />
         </div>
       </div>
       <div className="public-container pb-6 text-sm text-white/50">
