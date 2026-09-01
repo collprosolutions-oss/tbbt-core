@@ -65,6 +65,7 @@ const publicFiles = [
   "src/components/public/request-flow.tsx",
   "src/components/public/service-picker.tsx",
   "src/components/public/public-contact-form.tsx",
+  "src/components/public/public-action-rail.tsx",
   "src/components/public/public-projects-gallery.tsx",
   "src/components/public/public-services-browser.tsx",
   "src/app/hire/[slug]/about/page.tsx",

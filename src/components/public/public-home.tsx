@@ -1,16 +1,14 @@
 import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, Clock, Home, MessageSquare, Shield } from "lucide-react";
-import { CategoryCards } from "@/components/public/category-cards";
-import { PublicCtaBar } from "@/components/public/public-cta-bar";
-import { telHref } from "@/lib/directions";
+import { PublicActionRail } from "@/components/public/public-action-rail";
+import { smsHref } from "@/lib/directions";
 import {
   HOME_FEATURED_PROJECT_IDS,
-  PRIMARY_CTA_LABEL,
   PUBLIC_HOME_HERO_IMAGE,
-  PUBLIC_PRICING_DISCLAIMER,
   TRUST_POINTS,
   popularPublicCategories,
+  publicCategoryPhoto,
   publicDisplayName,
   publicPhone,
   publicProjectsPath,
@@ -26,7 +24,6 @@ const TRUST_ICONS = [Shield, Clock, MessageSquare, Home] as const;
 
 export function PublicHome({
   business,
-  items,
   groups,
 }: {
   business: PublicBusiness;
@@ -35,7 +32,7 @@ export function PublicHome({
 }) {
   const name = publicDisplayName(business);
   const phone = publicPhone(business.slug);
-  const callHref = telHref(phone);
+  const textHref = smsHref(phone);
   const requestHref = publicRequestPath(business.slug);
   const servicesHref = publicServicesPath(business.slug);
   const projectsHref = publicProjectsPath(business.slug);
@@ -46,125 +43,117 @@ export function PublicHome({
 
   return (
     <main>
-      <section className="public-home-hero">
-        <div className="public-container public-home-hero-grid">
-          <div className="public-home-hero-copy">
+      <section className="public-cinematic">
+        <div className="public-cinematic-media">
+          <Image
+            src={PUBLIC_HOME_HERO_IMAGE}
+            alt="Handyman working with tools in a workshop"
+            fill
+            sizes="100vw"
+            className="object-cover object-right"
+            priority
+          />
+        </div>
+        <div className="public-cinematic-shade" />
+        <div className="public-container public-cinematic-inner">
+          <PublicActionRail phone={phone} smsHref={textHref} requestHref={requestHref} />
+          <div className="public-cinematic-copy">
             <p className="public-kicker">Reliable. Professional. Done Right.</p>
-            <h1 className="public-home-title">
+            <h1>
               Your Home.
               <br />
-              Our Handyman
+              Our
+              <br />
+              Handyman
+              <br />
               <em>Expertise.</em>
             </h1>
-            <p className="public-home-lead">
+            <p>
               From small repairs to home improvements, we get the job done
               right the first time.
             </p>
-            <div className="public-home-actions">
-              <Link href={requestHref} className="public-btn public-btn-primary">
-                {PRIMARY_CTA_LABEL}
-                <ArrowRight className="size-4" aria-hidden="true" />
-              </Link>
-              <Link href={servicesHref} className="public-btn public-btn-ghost">
-                Our Services
-                <ArrowRight className="size-4" aria-hidden="true" />
-              </Link>
-            </div>
-          </div>
-          <div className="public-home-hero-media">
-            <Image
-              src={PUBLIC_HOME_HERO_IMAGE}
-              alt="Completed CollPro Reno feature wall and television mounting project"
-              fill
-              sizes="(max-width: 768px) 100vw, 50vw"
-              className="object-cover"
-              priority
-            />
-          </div>
-        </div>
-        <div className="public-trust-bar">
-          <div className="public-container public-trust-grid">
-            {TRUST_POINTS.map((point, index) => {
-              const Icon = TRUST_ICONS[index] ?? Shield;
-              return (
-                <div key={point.title} className="public-trust-item">
-                  <span className="public-trust-icon">
-                    <Icon className="size-7" aria-hidden="true" />
-                  </span>
-                  <div>
-                    <h2>{point.title}</h2>
-                    <p>{point.body}</p>
-                  </div>
-                </div>
-              );
-            })}
           </div>
         </div>
       </section>
 
-      <section id="services" className="public-home-services">
+      <section className="public-trust-bar">
+        <div className="public-container public-trust-grid">
+          {TRUST_POINTS.map((point, index) => {
+            const Icon = TRUST_ICONS[index] ?? Shield;
+            return (
+              <div key={point.title} className="public-trust-item">
+                <Icon className="size-7 text-[var(--public-blue)]" aria-hidden="true" />
+                <div>
+                  <h2>{point.title}</h2>
+                  <p>{point.body}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="public-section">
         <div className="public-container">
-          <div className="public-panel px-5 py-10 sm:px-8 lg:px-10 lg:py-12">
-            <h2 className="public-section-title">
-              Handyman Services You Can Count On
-            </h2>
-            <div className="mt-10">
-              <CategoryCards categories={categories} servicesHref={servicesHref} />
-            </div>
-            {items.length === 0 ? (
-              <p className="mt-8 text-center text-muted-foreground">
-                Tell us what you need — we will review the work before preparing
-                an estimate.
-              </p>
-            ) : null}
-            <p className="mx-auto mt-8 max-w-3xl text-center text-sm leading-6 text-muted-foreground">
-              {PUBLIC_PRICING_DISCLAIMER}
-            </p>
+          <h2 className="public-section-title">
+            Handyman <span>Services</span> You Can Count On
+          </h2>
+          <ul className="mt-10 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {categories.map((category) => (
+              <li key={category.category}>
+                <Link
+                  href={`${servicesHref}?category=${encodeURIComponent(category.category)}`}
+                  className="public-photo-card"
+                >
+                  <Image
+                    src={publicCategoryPhoto(category.category)}
+                    alt=""
+                    fill
+                    sizes="(max-width: 768px) 100vw, 25vw"
+                  />
+                  <span className="public-photo-card-bar">
+                    <h3>{category.category}</h3>
+                    <ArrowRight className="size-8 rounded-full bg-[var(--public-blue)] p-1.5" />
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-10 flex justify-center">
+            <Link href={servicesHref} className="public-btn public-btn-outline-blue">
+              View All Services
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </Link>
           </div>
         </div>
       </section>
 
       {featured.length > 0 ? (
-        <section className="bg-white py-16 lg:py-20">
+        <section className="public-projects-band public-section">
           <div className="public-container">
-            <h2 className="public-section-title">Recent Project Work</h2>
-            <ul className="mt-10 grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <h2 className="text-3xl font-extrabold tracking-wide uppercase">
+                Recent Projects / Real CollPro Work
+              </h2>
+              <Link href={projectsHref} className="font-extrabold tracking-wide text-[var(--public-blue-soft)] uppercase">
+                View More Projects →
+              </Link>
+            </div>
+            <ul className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               {featured.map((project) => (
                 <li key={project.id}>
-                  <Link href={projectsHref} className="public-project-card">
-                    <div className="public-project-card-media">
-                      <Image
-                        src={project.src}
-                        alt={project.title}
-                        fill
-                        sizes="(max-width: 768px) 100vw, 25vw"
-                      />
-                    </div>
-                    <div className="public-project-card-body">
+                  <Link href={projectsHref} className="public-project-tile min-h-72">
+                    <Image src={project.src} alt={project.title} fill sizes="(max-width: 768px) 100vw, 25vw" />
+                    <span className="public-project-tile-bar">
                       <h3>{project.title}</h3>
-                      <p>{project.description}</p>
-                    </div>
+                    </span>
                   </Link>
                 </li>
               ))}
             </ul>
-            <div className="mt-8 flex justify-center">
-              <Link href={projectsHref} className="public-btn public-btn-outline-blue">
-                View Projects
-                <ArrowRight className="size-4" aria-hidden="true" />
-              </Link>
-            </div>
           </div>
         </section>
       ) : null}
-
-      <PublicCtaBar
-        title="Ready to get started?"
-        body={`Tell ${name} about your project and we will review the request before preparing a written estimate.`}
-        requestHref={requestHref}
-        callHref={callHref}
-        phone={phone}
-      />
     </main>
   );
 }

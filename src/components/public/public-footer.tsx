@@ -4,6 +4,7 @@ import { ArrowRight } from "lucide-react";
 import {
   PRIMARY_CTA_LABEL,
   SERVICE_AREA_COPY,
+  TEXT_US_LABEL,
   type PopularPublicCategory,
 } from "@/lib/public-site";
 
@@ -19,7 +20,7 @@ export function PublicFooter({
   reviewsHref,
   serviceAreaHref,
   contactHref,
-  callHref,
+  smsHref,
   categories,
 }: {
   name: string;
@@ -33,11 +34,9 @@ export function PublicFooter({
   reviewsHref: string;
   serviceAreaHref: string;
   contactHref: string;
-  callHref: string | null;
+  smsHref: string | null;
   categories: PopularPublicCategory[];
 }) {
-  const year = new Date().getFullYear();
-
   return (
     <footer className="public-footer">
       <div className="public-container public-footer-grid">
@@ -46,21 +45,20 @@ export function PublicFooter({
             <Image
               src={logoSrc}
               alt={`${name} logo`}
-              width={88}
-              height={88}
+              width={96}
+              height={96}
               className="size-20 rounded-full bg-black object-contain"
             />
           ) : null}
           <p className="mt-4 font-semibold text-white">{name}</p>
           <p className="mt-2 max-w-xs">
-            Reliable handyman services for homeowners. Request work online or
-            call to get started.
+            Handyman and home-improvement help for homeowners. Text us about
+            your project or request a quote online.
           </p>
         </div>
-
         <div>
           <h2>Quick Links</h2>
-          <ul className="space-y-1">
+          <ul>
             <li><Link href={homeHref}>Home</Link></li>
             <li><Link href={servicesHref}>Services</Link></li>
             <li><Link href={aboutHref}>About Us</Link></li>
@@ -70,10 +68,9 @@ export function PublicFooter({
             <li><Link href={contactHref}>Contact</Link></li>
           </ul>
         </div>
-
         <div>
           <h2>Services</h2>
-          <ul className="space-y-1">
+          <ul>
             {categories.length > 0 ? (
               categories.map((category) => (
                 <li key={category.category}>
@@ -83,28 +80,19 @@ export function PublicFooter({
                 </li>
               ))
             ) : (
-              <li>
-                <Link href={servicesHref}>View all services</Link>
-              </li>
+              <li><Link href={servicesHref}>View all services</Link></li>
             )}
           </ul>
         </div>
-
         <div>
           <h2>Service Area</h2>
           <p>{SERVICE_AREA_COPY}</p>
         </div>
-
         <div>
-          <h2>Contact</h2>
-          {callHref ? (
+          <h2>{TEXT_US_LABEL}</h2>
+          {smsHref ? (
             <p>
-              <a href={callHref} className="text-lg font-bold text-white">
-                {phone}
-              </a>
-              <span className="mt-1 block text-sm tracking-[0.12em] uppercase">
-                Call or Text
-              </span>
+              <a href={smsHref} className="text-lg font-bold text-white">{phone}</a>
             </p>
           ) : null}
           <Link href={requestHref} className="public-btn public-btn-primary mt-5">
@@ -113,8 +101,8 @@ export function PublicFooter({
           </Link>
         </div>
       </div>
-      <div className="public-container public-footer-bottom">
-        <p>© {year} {name}</p>
+      <div className="public-container pb-6 text-sm text-white/50">
+        © {new Date().getFullYear()} {name}
       </div>
     </footer>
   );

@@ -4,7 +4,7 @@ import { PublicFooter } from "@/components/public/public-footer";
 import { PublicHeader } from "@/components/public/public-header";
 import { PublicLightTheme } from "@/components/public/public-light-theme";
 import "@/components/public/public-site.css";
-import { telHref } from "@/lib/directions";
+import { smsHref } from "@/lib/directions";
 import {
   popularPublicCategories,
   publicAboutPath,
@@ -41,13 +41,7 @@ export function PublicSiteShell({
   const logoSrc = publicLogoSrc(business.slug);
   const requestHref = publicRequestPath(business.slug);
   const homeHref = publicHomePath(business.slug);
-  const servicesHref = publicServicesPath(business.slug);
-  const aboutHref = publicAboutPath(business.slug);
-  const projectsHref = publicProjectsPath(business.slug);
-  const reviewsHref = publicReviewsPath(business.slug);
-  const serviceAreaHref = publicServiceAreaPath(business.slug);
-  const contactHref = publicContactPath(business.slug);
-  const callHref = telHref(phone);
+  const textHref = smsHref(phone);
   const categories = popularPublicCategories(groups);
 
   return (
@@ -59,13 +53,13 @@ export function PublicSiteShell({
         phone={phone}
         homeHref={homeHref}
         requestHref={requestHref}
-        servicesHref={servicesHref}
-        aboutHref={aboutHref}
-        projectsHref={projectsHref}
-        reviewsHref={reviewsHref}
-        serviceAreaHref={serviceAreaHref}
-        contactHref={contactHref}
-        callHref={callHref}
+        servicesHref={publicServicesPath(business.slug)}
+        aboutHref={publicAboutPath(business.slug)}
+        projectsHref={publicProjectsPath(business.slug)}
+        reviewsHref={publicReviewsPath(business.slug)}
+        serviceAreaHref={publicServiceAreaPath(business.slug)}
+        contactHref={publicContactPath(business.slug)}
+        smsHref={textHref}
       />
       {children}
       <PublicFooter
@@ -74,13 +68,13 @@ export function PublicSiteShell({
         phone={phone}
         homeHref={homeHref}
         requestHref={requestHref}
-        servicesHref={servicesHref}
-        aboutHref={aboutHref}
-        projectsHref={projectsHref}
-        reviewsHref={reviewsHref}
-        serviceAreaHref={serviceAreaHref}
-        contactHref={contactHref}
-        callHref={callHref}
+        servicesHref={publicServicesPath(business.slug)}
+        aboutHref={publicAboutPath(business.slug)}
+        projectsHref={publicProjectsPath(business.slug)}
+        reviewsHref={publicReviewsPath(business.slug)}
+        serviceAreaHref={publicServiceAreaPath(business.slug)}
+        contactHref={publicContactPath(business.slug)}
+        smsHref={textHref}
         categories={categories}
       />
     </div>

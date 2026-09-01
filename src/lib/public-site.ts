@@ -79,6 +79,7 @@ export const SERVICE_AREA_COPY =
   "Serving homeowners in the Fort Myers / Cape Coral area. Submit your project address and we'll confirm service availability for your location.";
 
 export const PRIMARY_CTA_LABEL = "Get a Free Quote";
+export const TEXT_US_LABEL = "Text Us";
 
 export const ABOUT_COPY = {
   eyebrow: "About Us",
@@ -101,11 +102,37 @@ export const ABOUT_COPY = {
 export const REVIEWS_PLACEHOLDER_COPY =
   "Real customer feedback will appear here as it becomes available.";
 
-export const PUBLIC_HOME_HERO_IMAGE = "/brand/projects/feature-wall-tv.jpg";
-export const PUBLIC_INNER_HERO_IMAGE = "/brand/projects/wall-cabinets.jpg";
+export const PUBLIC_HOME_HERO_IMAGE = "/brand/illustrative/craftsman-hero.jpg";
+export const PUBLIC_SERVICES_HERO_IMAGE = "/brand/illustrative/tools-services.jpg";
+export const PUBLIC_REVIEWS_HERO_IMAGE = "/brand/illustrative/tools-reviews.jpg";
+export const PUBLIC_AREA_HERO_IMAGE = "/brand/illustrative/coastal-area.jpg";
+export const PUBLIC_CONTACT_HERO_IMAGE = "/brand/illustrative/dusk-home.jpg";
+export const PUBLIC_PROJECTS_HERO_IMAGE = "/brand/projects/lanai-porch.jpg";
+export const PUBLIC_ABOUT_HERO_IMAGE = "/brand/projects/feature-wall-tv.jpg";
+export const PUBLIC_QUOTE_HERO_IMAGE = "/brand/projects/wall-cabinets.jpg";
 export const PUBLIC_ABOUT_PHOTO = "/brand/projects/lanai-porch.jpg";
-export const PUBLIC_CONTACT_PHOTO = "/brand/projects/feature-wall-tv.jpg";
-export const PUBLIC_AREA_PHOTO = "/brand/projects/exterior-carpentry.jpg";
+export const PUBLIC_INNER_HERO_IMAGE = "/brand/illustrative/tools-services.jpg";
+
+const CATEGORY_VISUALS: Record<string, string> = {
+  "Doors & Locks": "/brand/projects/door-install.jpg",
+  "Mounting & Hanging": "/brand/projects/picture-hanging.jpg",
+  "Walls & Drywall": "/brand/projects/bathroom-shiplap.jpg",
+  "Trim & Carpentry": "/brand/projects/exterior-carpentry.jpg",
+  "Bathroom / Caulking / Accessories": "/brand/projects/bathroom-toilet.jpg",
+  "Furniture & Assembly": "/brand/projects/furniture-assembly.jpg",
+  "Exterior Repairs": "/brand/projects/exterior-carpentry.jpg",
+  "Cabinets / Kitchen": "/brand/projects/wall-cabinets.jpg",
+  "Fans & Fixtures": "/brand/projects/lanai-porch.jpg",
+  "Punch Lists / Small Jobs": "/brand/projects/dishwasher.jpg",
+  "General Home Repairs": "/brand/projects/feature-wall-tv.jpg",
+};
+
+export function publicCategoryPhoto(category: string) {
+  return CATEGORY_VISUALS[category] ?? "/brand/projects/feature-wall-tv.jpg";
+}
+
+export const SERVICE_AREA_MAP_SRC =
+  "https://www.openstreetmap.org/export/embed.html?bbox=-82.12%2C26.48%2C-81.70%2C26.74&layer=mapnik&marker=26.60%2C-81.91";
 
 export const HOME_FEATURED_PROJECT_IDS = [
   "feature-wall-tv",

@@ -34,3 +34,12 @@ export function telHref(phone: string | null | undefined): string | null {
   }
   return `tel:${phone.trim()}`;
 }
+
+/** Text-first contact link. Uses digits only so SMS apps open reliably. */
+export function smsHref(phone: string | null | undefined): string | null {
+  if (!phone || !phone.trim()) {
+    return null;
+  }
+  const digits = phone.replace(/\D/g, "");
+  return digits ? `sms:${digits}` : null;
+}

@@ -15,12 +15,13 @@ import { Label } from "@/components/ui/label";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
 
-type Step = "select" | "details" | "review";
+type Step = "select" | "details" | "info" | "review";
 
 const STEPS: { id: Step; title: string; caption: string }[] = [
   { id: "select", title: "Select Your Work", caption: "Choose one or more tasks" },
-  { id: "details", title: "Project Details", caption: "How can we reach you?" },
-  { id: "review", title: "Review Request", caption: "Review and send request" },
+  { id: "details", title: "Project Details", caption: "Address, notes, and photos" },
+  { id: "info", title: "Your Information", caption: "How can we reach you?" },
+  { id: "review", title: "Review & Submit", caption: "Review and send request" },
 ];
 
 export function MultiServiceRequestFlow({
@@ -63,6 +64,11 @@ export function MultiServiceRequestFlow({
     }
     setError(null);
     setStep("details");
+  }
+
+  function goInfo() {
+    setError(null);
+    setStep("info");
   }
 
   function goReview() {
@@ -170,44 +176,6 @@ export function MultiServiceRequestFlow({
             2. Project Details
           </h2>
           <div className="space-y-2">
-            <Label htmlFor="name">Name *</Label>
-            <Input
-              id="name"
-              name="name"
-              autoComplete="name"
-              required
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              className="h-12 bg-white text-base"
-            />
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="phone">Phone</Label>
-              <Input
-                id="phone"
-                name="phone"
-                type="tel"
-                autoComplete="tel"
-                value={phone}
-                onChange={(event) => setPhone(event.target.value)}
-                className="h-12 bg-white text-base"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                className="h-12 bg-white text-base"
-              />
-            </div>
-          </div>
-          <div className="space-y-2">
             <Label htmlFor="address">Property / service address</Label>
             <Input
               id="address"
@@ -272,8 +240,61 @@ export function MultiServiceRequestFlow({
             >
               Back
             </button>
+            <button type="button" className="public-btn public-btn-primary flex-1" onClick={goInfo}>
+              Next: Your Information
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {step === "info" ? (
+        <div className="space-y-4">
+          <h2 className="text-2xl font-extrabold tracking-tight uppercase">
+            3. Your Information
+          </h2>
+          <div className="space-y-2">
+            <Label htmlFor="name">Name *</Label>
+            <Input
+              id="name"
+              name="name"
+              autoComplete="name"
+              required
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              className="h-12 bg-white text-base"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="phone">Phone</Label>
+            <Input
+              id="phone"
+              name="phone"
+              type="tel"
+              autoComplete="tel"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              className="h-12 bg-white text-base"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <Input
+              id="email"
+              name="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              className="h-12 bg-white text-base"
+            />
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <button type="button" className="public-btn public-btn-outline flex-1" onClick={() => setStep("details")}>
+              Back
+            </button>
             <button type="button" className="public-btn public-btn-primary flex-1" onClick={goReview}>
-              Next: Review Request
+              Next: Review & Submit
               <ArrowRight className="size-4" aria-hidden="true" />
             </button>
           </div>
@@ -283,7 +304,7 @@ export function MultiServiceRequestFlow({
       {step === "review" ? (
         <div className="space-y-5">
           <h2 className="text-2xl font-extrabold tracking-tight uppercase">
-            3. Review Request
+            4. Review & Submit
           </h2>
           <ReviewBlock title="Selected services / tasks">
             {labels.length > 0 ? (
@@ -318,7 +339,7 @@ export function MultiServiceRequestFlow({
             <button
               type="button"
               className="public-btn public-btn-outline flex-1"
-              onClick={() => setStep("details")}
+              onClick={() => setStep("info")}
             >
               Back / Edit
             </button>
@@ -328,7 +349,7 @@ export function MultiServiceRequestFlow({
               disabled={pending}
               onClick={onSubmit}
             >
-              {pending ? "Submitting…" : "Submit request"}
+              {pending ? "Submitting…" : "Submit Request"}
             </button>
           </div>
         </div>

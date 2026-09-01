@@ -4,8 +4,8 @@ import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowRight, Menu, Phone, X } from "lucide-react";
-import { PRIMARY_CTA_LABEL } from "@/lib/public-site";
+import { Menu, MessageSquare, X } from "lucide-react";
+import { PRIMARY_CTA_LABEL, TEXT_US_LABEL } from "@/lib/public-site";
 
 type NavItem = {
   href: string;
@@ -25,7 +25,7 @@ export function PublicHeader({
   reviewsHref,
   serviceAreaHref,
   contactHref,
-  callHref,
+  smsHref,
 }: {
   name: string;
   logoSrc: string | null;
@@ -38,10 +38,11 @@ export function PublicHeader({
   reviewsHref: string;
   serviceAreaHref: string;
   contactHref: string;
-  callHref: string | null;
+  smsHref: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  const onQuotePage = pathname.startsWith("/r/");
 
   const nav: NavItem[] = [
     { href: homeHref, label: "Home", match: "exact" },
@@ -65,20 +66,11 @@ export function PublicHeader({
       <div className="public-container public-header-inner">
         <Link href={homeHref} className="public-logo" onClick={() => setOpen(false)}>
           {logoSrc ? (
-            <Image
-              src={logoSrc}
-              alt={`${name} logo`}
-              width={72}
-              height={72}
-              priority
-            />
+            <Image src={logoSrc} alt={`${name} logo`} width={220} height={220} priority />
           ) : (
-            <span className="text-sm font-extrabold tracking-[0.12em] uppercase">
-              {name}
-            </span>
+            <span className="text-sm font-extrabold uppercase">{name}</span>
           )}
         </Link>
-
         <nav className="public-nav" aria-label="Primary">
           {nav.map((item) => (
             <Link
@@ -91,33 +83,17 @@ export function PublicHeader({
             </Link>
           ))}
         </nav>
-
-        <div className="public-header-actions">
-          {callHref ? (
-            <a href={callHref} className="public-header-phone">
-              <span className="public-header-phone-number">{phone}</span>
-              <span className="public-header-phone-label">Call or Text</span>
-            </a>
-          ) : null}
-          <Link href={requestHref} className="public-btn public-btn-primary">
-            {PRIMARY_CTA_LABEL}
-            <ArrowRight className="size-4" aria-hidden="true" />
-          </Link>
-        </div>
-
         <div className="public-header-mobile">
-          {callHref ? (
-            <a
-              href={callHref}
-              className="public-icon-btn"
-              aria-label={`Call or text ${name} at ${phone}`}
-            >
-              <Phone className="size-5" />
+          {smsHref ? (
+            <a href={smsHref} className="public-icon-btn" aria-label={`${TEXT_US_LABEL} ${phone}`}>
+              <MessageSquare className="size-5" />
             </a>
           ) : null}
-          <Link href={requestHref} className="public-mobile-cta">
-            {PRIMARY_CTA_LABEL}
-          </Link>
+          {onQuotePage ? null : (
+            <Link href={requestHref} className="public-mobile-cta">
+              {PRIMARY_CTA_LABEL}
+            </Link>
+          )}
           <button
             type="button"
             className="public-icon-btn"
@@ -130,7 +106,6 @@ export function PublicHeader({
           </button>
         </div>
       </div>
-
       {open ? (
         <nav id="public-mobile-nav" className="public-mobile-nav" aria-label="Mobile">
           {nav.map((item) => (
@@ -143,9 +118,9 @@ export function PublicHeader({
               {item.label}
             </Link>
           ))}
-          {callHref ? (
-            <a href={callHref} onClick={() => setOpen(false)}>
-              Call or Text {phone}
+          {smsHref ? (
+            <a href={smsHref} onClick={() => setOpen(false)}>
+              {TEXT_US_LABEL} {phone}
             </a>
           ) : null}
         </nav>
