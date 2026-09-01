@@ -233,11 +233,11 @@
 }
 
 .public-rail .public-btn {
-  width: 100%;
-  max-width: 100%;
+  width: 80%;
+  max-width: 80%;
   min-height: 2.45rem;
-  padding: 0.45rem 0.35rem;
-  font-size: 0.58rem;
+  padding: 0.45rem 0.28rem;
+  font-size: 0.54rem;
   letter-spacing: 0.03em;
   text-align: center;
 }
@@ -245,9 +245,9 @@
 .public-text-us {
   display: block;
   box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  padding: 0.5rem 0.35rem;
+  width: 80%;
+  max-width: 80%;
+  padding: 0.5rem 0.28rem;
   border: 1px solid rgba(255, 255, 255, 0.4);
   border-radius: 6px;
   color: #fff;
