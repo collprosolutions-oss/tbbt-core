@@ -133,6 +133,7 @@ export function publicCategoryPhoto(category: string) {
 
 export const SERVICE_AREA_MAP_SRC =
   "https://www.openstreetmap.org/export/embed.html?bbox=-82.12%2C26.48%2C-81.70%2C26.74&layer=mapnik&marker=26.60%2C-81.91";
+export const SERVICE_AREA_MAP_IMAGE = "/brand/illustrative/service-area-map.jpg";
 
 export const HOME_FEATURED_PROJECT_IDS = [
   "feature-wall-tv",

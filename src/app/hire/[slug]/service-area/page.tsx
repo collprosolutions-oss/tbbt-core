@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import { Clock, Home, MapPin, Shield } from "lucide-react";
 import "@/components/public/public-site.css";
 import { PublicCtaBar } from "@/components/public/public-cta-bar";
@@ -9,7 +10,7 @@ import { smsHref } from "@/lib/directions";
 import {
   PUBLIC_AREA_HERO_IMAGE,
   SERVICE_AREA_COPY,
-  SERVICE_AREA_MAP_SRC,
+  SERVICE_AREA_MAP_IMAGE,
   TEXT_US_LABEL,
   TRUST_POINTS,
   publicDisplayName,
@@ -101,13 +102,21 @@ export default async function PublicServiceAreaPage({ params }: PageProps) {
               </div>
             </div>
             <div>
-              <iframe
-                title="Fort Myers and Cape Coral area map"
-                className="public-map"
-                src={SERVICE_AREA_MAP_SRC}
-              />
+              <a
+                href="https://www.openstreetmap.org/#map=10/26.62/-81.94"
+                className="block overflow-hidden rounded-lg"
+              >
+                <Image
+                  src={SERVICE_AREA_MAP_IMAGE}
+                  alt="Map of the Fort Myers and Cape Coral area"
+                  width={1280}
+                  height={1024}
+                  className="public-map h-auto w-full object-cover"
+                />
+              </a>
               <p className="mt-3 text-sm text-muted-foreground">
-                Map shows the Fort Myers / Cape Coral area. It is not an exact service-boundary guarantee.
+                Map shows the Fort Myers / Cape Coral area. It is not an exact
+                service-boundary guarantee. Map data © OpenStreetMap contributors.
               </p>
             </div>
           </div>
