@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   Bath,
+  ChevronRight,
   Fan,
   Hammer,
   Home,
@@ -15,7 +16,7 @@ import {
 } from "lucide-react";
 import type { PopularPublicCategory } from "@/lib/public-site";
 
-const CATEGORY_ICONS: Record<string, LucideIcon> = {
+export const CATEGORY_ICONS: Record<string, LucideIcon> = {
   "Doors & Locks": KeyRound,
   "Mounting & Hanging": Monitor,
   "Walls & Drywall": Square,
@@ -29,12 +30,18 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
   "General Home Repairs": Wrench,
 };
 
+export function categoryIcon(category: string) {
+  return CATEGORY_ICONS[category] ?? Wrench;
+}
+
 export function CategoryCards({
   categories,
   servicesHref,
+  variant = "home",
 }: {
   categories: PopularPublicCategory[];
   servicesHref: string;
+  variant?: "home" | "services";
 }) {
   if (categories.length === 0) {
     return (
@@ -45,32 +52,35 @@ export function CategoryCards({
   }
 
   return (
-    <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+    <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {categories.map((category) => {
-        const Icon = CATEGORY_ICONS[category.category] ?? Wrench;
-        const href = `${servicesHref}?category=${encodeURIComponent(category.category)}`;
+        const Icon = categoryIcon(category.category);
+        const href = `${servicesHref}?category=${encodeURIComponent(category.category)}#select-work`;
         return (
           <li key={category.category}>
-            <Link
-              href={href}
-              className="group flex h-full min-h-52 flex-col rounded-2xl border border-border bg-white p-6 shadow-[0_10px_30px_rgba(10,20,36,0.06)] transition-transform hover:-translate-y-0.5"
-            >
-              <span className="inline-flex size-14 items-center justify-center rounded-xl bg-[var(--public-navy)] text-white">
-                <Icon className="size-7" aria-hidden="true" />
-              </span>
-              <h3 className="mt-5 text-xl font-semibold tracking-tight">
-                {category.category}
-              </h3>
-              <p className="mt-2 flex-1 text-base leading-6 text-muted-foreground">
-                {category.descriptor}
-              </p>
-              <p className="mt-3 text-sm font-medium text-[var(--public-ink)]/70">
-                {category.itemCount} service{category.itemCount === 1 ? "" : "s"}
-              </p>
-              <span className="mt-5 text-sm font-bold tracking-wide text-[var(--public-blue)] uppercase">
-                View Services
-              </span>
-            </Link>
+            {variant === "home" ? (
+              <Link href={href} className="public-home-card">
+                <span className="public-icon-circle">
+                  <Icon className="size-5" aria-hidden="true" />
+                </span>
+                <span>
+                  <h3>{category.category}</h3>
+                  <p>{category.descriptor}</p>
+                </span>
+              </Link>
+            ) : (
+              <Link href={href} className="public-service-card">
+                <span className="public-icon-circle">
+                  <Icon className="size-5" aria-hidden="true" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <h3>{category.category}</h3>
+                  <p>{category.descriptor}</p>
+                  <span className="public-service-card-link">View Services</span>
+                </span>
+                <ChevronRight className="size-5 shrink-0 text-[var(--public-blue)]" aria-hidden="true" />
+              </Link>
+            )}
           </li>
         );
       })}

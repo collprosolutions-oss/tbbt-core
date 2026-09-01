@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { submitServiceRequest } from "@/app/actions/intake";
 import {
   ServicePicker,
@@ -15,6 +16,12 @@ import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
 
 type Step = "select" | "details" | "review";
+
+const STEPS: { id: Step; title: string; caption: string }[] = [
+  { id: "select", title: "Select Your Work", caption: "Choose one or more tasks" },
+  { id: "details", title: "Project Details", caption: "How can we reach you?" },
+  { id: "review", title: "Review Request", caption: "Review and send request" },
+];
 
 export function MultiServiceRequestFlow({
   slug,
@@ -98,7 +105,7 @@ export function MultiServiceRequestFlow({
 
   if (ok) {
     return (
-      <section className="rounded-2xl border border-border bg-white p-8 lg:p-10">
+      <section className="public-form-card">
         <p className="text-sm font-bold tracking-[0.16em] text-[var(--public-blue)] uppercase">
           Submitted
         </p>
@@ -121,10 +128,15 @@ export function MultiServiceRequestFlow({
 
   return (
     <div className="space-y-8">
-      <ol className="flex flex-wrap gap-2" aria-label="Request steps">
-        <StepLabel current={step} id="select" label="1. Select Your Work" />
-        <StepLabel current={step} id="details" label="2. Project Details" />
-        <StepLabel current={step} id="review" label="3. Review Request" />
+      <ol className="public-step-bar" aria-label="Request steps">
+        {STEPS.map((item, index) => (
+          <li key={item.id} className="public-step" data-active={step === item.id ? "true" : "false"}>
+            <strong>
+              {index + 1}. {item.title}
+            </strong>
+            <span>{item.caption}</span>
+          </li>
+        ))}
       </ol>
 
       {error ? (
@@ -135,7 +147,9 @@ export function MultiServiceRequestFlow({
 
       {step === "select" ? (
         <div className="space-y-5">
-          <h2 className="text-3xl font-extrabold tracking-tight">Select Your Work</h2>
+          <h2 className="text-2xl font-extrabold tracking-tight uppercase">
+            1. Select Your Work
+          </h2>
           <ServicePicker
             groups={groups}
             items={items}
@@ -144,16 +158,19 @@ export function MultiServiceRequestFlow({
             searchId="request-service-search"
           />
           <button type="button" className="public-btn public-btn-primary w-full" onClick={goDetails}>
-            Continue
+            Next: Project Details
+            <ArrowRight className="size-4" aria-hidden="true" />
           </button>
         </div>
       ) : null}
 
       {step === "details" ? (
         <div className="space-y-4">
-          <h2 className="text-3xl font-extrabold tracking-tight">Project Details</h2>
+          <h2 className="text-2xl font-extrabold tracking-tight uppercase">
+            2. Project Details
+          </h2>
           <div className="space-y-2">
-            <Label htmlFor="name">Name</Label>
+            <Label htmlFor="name">Name *</Label>
             <Input
               id="name"
               name="name"
@@ -164,29 +181,31 @@ export function MultiServiceRequestFlow({
               className="h-12 bg-white text-base"
             />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="phone">Phone</Label>
-            <Input
-              id="phone"
-              name="phone"
-              type="tel"
-              autoComplete="tel"
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              className="h-12 bg-white text-base"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              className="h-12 bg-white text-base"
-            />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="phone">Phone</Label>
+              <Input
+                id="phone"
+                name="phone"
+                type="tel"
+                autoComplete="tel"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                className="h-12 bg-white text-base"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                className="h-12 bg-white text-base"
+              />
+            </div>
           </div>
           <div className="space-y-2">
             <Label htmlFor="address">Property / service address</Label>
@@ -200,7 +219,7 @@ export function MultiServiceRequestFlow({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="description">What needs to be done? Anything we should know?</Label>
+            <Label htmlFor="description">Project description</Label>
             <textarea
               id="description"
               name="description"
@@ -208,7 +227,7 @@ export function MultiServiceRequestFlow({
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
               className="w-full rounded-lg border border-input bg-white px-3 py-2 text-base"
-              placeholder="Add details that would help us understand the work."
+              placeholder="Please describe your project in detail..."
             />
           </div>
           {photosEnabled ? (
@@ -254,7 +273,8 @@ export function MultiServiceRequestFlow({
               Back
             </button>
             <button type="button" className="public-btn public-btn-primary flex-1" onClick={goReview}>
-              Review request
+              Next: Review Request
+              <ArrowRight className="size-4" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -262,7 +282,9 @@ export function MultiServiceRequestFlow({
 
       {step === "review" ? (
         <div className="space-y-5">
-          <h2 className="text-3xl font-extrabold tracking-tight">Review Request</h2>
+          <h2 className="text-2xl font-extrabold tracking-tight uppercase">
+            3. Review Request
+          </h2>
           <ReviewBlock title="Selected services / tasks">
             {labels.length > 0 ? (
               <ul className="list-disc space-y-1 pl-5">
@@ -322,29 +344,6 @@ export function MultiServiceRequestFlow({
   );
 }
 
-function StepLabel({
-  current,
-  id,
-  label,
-}: {
-  current: Step;
-  id: Step;
-  label: string;
-}) {
-  const active = current === id;
-  return (
-    <li
-      className={
-        active
-          ? "rounded-full bg-[var(--public-navy)] px-4 py-2 text-sm font-semibold text-white"
-          : "rounded-full bg-muted px-4 py-2 text-sm text-muted-foreground"
-      }
-    >
-      {label}
-    </li>
-  );
-}
-
 function ReviewBlock({
   title,
   children,
@@ -353,7 +352,7 @@ function ReviewBlock({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-border bg-white p-5">
+    <section className="rounded-lg border border-border bg-[#f7f9fc] p-5">
       <h2 className="text-sm font-semibold tracking-wide text-muted-foreground uppercase">
         {title}
       </h2>

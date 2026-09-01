@@ -64,9 +64,17 @@ const publicFiles = [
   "src/components/public/category-cards.tsx",
   "src/components/public/request-flow.tsx",
   "src/components/public/service-picker.tsx",
+  "src/components/public/public-contact-form.tsx",
+  "src/components/public/public-projects-gallery.tsx",
+  "src/components/public/public-services-browser.tsx",
   "src/app/hire/[slug]/about/page.tsx",
   "src/app/hire/[slug]/services/page.tsx",
+  "src/app/hire/[slug]/projects/page.tsx",
+  "src/app/hire/[slug]/reviews/page.tsx",
+  "src/app/hire/[slug]/service-area/page.tsx",
+  "src/app/hire/[slug]/contact/page.tsx",
   "src/lib/public-site.ts",
+  "src/lib/public-projects.ts",
   "src/lib/public-intake.ts",
   "src/app/actions/intake.ts",
 ];
@@ -88,7 +96,11 @@ check("Homepage does not embed the full service catalog picker",
   !readRepo("src/components/public/public-home.tsx").includes("HomeCatalogContinue") &&
     !readRepo("src/components/public/public-home.tsx").includes("ServicePicker"));
 check("How It Works has the five real workflow steps", HOW_IT_WORKS_STEPS.length === 5);
-check("Service-area copy does not invent cities", !/reno,\s*nevada|cape coral|fort myers|naples/i.test(SERVICE_AREA_COPY));
+check(
+  "Service-area copy uses the verified Fort Myers / Cape Coral wording",
+  /Fort Myers \/ Cape Coral/.test(SERVICE_AREA_COPY) &&
+    !/reno,\s*nevada|naples|lehigh acres|estero|bonita springs|punta gorda/i.test(SERVICE_AREA_COPY),
+);
 check("No fabricated reviews/testimonials/ratings in public copy",
   !/(google reviews|★★★★★|5-star|testimonial|licensed and insured|years in business)/i.test(publicSrc) &&
     TRUST_POINTS.every((point) => !/award|license|insured|star/i.test(point.body)));
@@ -469,7 +481,7 @@ try {
 
     const hire = await fetchMaybe("/hire/collpro-reno");
     check("Existing /hire/collpro-reno homepage still loads",
-      Boolean(hire && hire.status === 200 && hire.body.includes("Request Service")));
+      Boolean(hire && hire.status === 200 && hire.body.includes(COLLPRO_RENO_DISPLAY_NAME)));
 
     const intake = await fetchMaybe("/r/collpro-reno");
     check("Existing /r/collpro-reno intake still loads",

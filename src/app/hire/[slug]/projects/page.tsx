@@ -1,13 +1,12 @@
 import type { Metadata } from "next";
 import "@/components/public/public-site.css";
-import { PublicAbout } from "@/components/public/public-about";
 import { PublicCtaBar } from "@/components/public/public-cta-bar";
 import { PublicPageHero } from "@/components/public/public-page-hero";
+import { PublicProjectsGallery } from "@/components/public/public-projects-gallery";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
 import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { telHref } from "@/lib/directions";
 import {
-  ABOUT_COPY,
   publicDisplayName,
   publicHomePath,
   publicPhone,
@@ -24,14 +23,14 @@ type PageProps = {
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
   const site = await loadPublicSite(slug);
-  const name = site ? publicDisplayName(site.business) : "About";
+  const name = site ? publicDisplayName(site.business) : "Projects";
   return {
-    title: { absolute: `About Us | ${name}` },
-    description: `Learn how ${name} helps homeowners with handyman projects, written estimates, and organized requests.`,
+    title: { absolute: `Projects | ${name}` },
+    description: `Recent handyman and home-improvement project photos from ${name}.`,
   };
 }
 
-export default async function PublicAboutPage({ params }: PageProps) {
+export default async function PublicProjectsPage({ params }: PageProps) {
   const { slug } = await params;
   const site = await loadPublicSite(slug);
 
@@ -44,7 +43,6 @@ export default async function PublicAboutPage({ params }: PageProps) {
     );
   }
 
-  const name = publicDisplayName(site.business);
   const phone = publicPhone(site.business.slug);
 
   return (
@@ -52,15 +50,14 @@ export default async function PublicAboutPage({ params }: PageProps) {
       <main>
         <PublicPageHero
           homeHref={publicHomePath(site.business.slug)}
-          current="About Us"
-          title="About Us"
-          accent={ABOUT_COPY.title}
-          description={ABOUT_COPY.lead}
+          current="Projects"
+          title="Projects"
+          description="Take a look at some of our recent handyman work and home improvement projects. Quality work on every project, big or small."
         />
-        <PublicAbout />
+        <PublicProjectsGallery />
         <PublicCtaBar
-          title="Ready to work together?"
-          body="Tell us about your project and we will provide a clear, upfront estimate — no surprises."
+          title="Have a project in mind?"
+          body="Let's bring your vision to life. Get a clear estimate and professional service from start to finish."
           requestHref={publicRequestPath(site.business.slug)}
           callHref={telHref(phone)}
           phone={phone}

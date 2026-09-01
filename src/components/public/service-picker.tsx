@@ -300,10 +300,8 @@ function CategoryChip({
       aria-selected={selected}
       onClick={onClick}
       className={cn(
-        "shrink-0 rounded-full border px-4 py-2.5 text-base font-medium",
-        selected
-          ? "border-primary bg-primary text-primary-foreground"
-          : "border-border bg-white text-foreground hover:border-primary/40",
+        "public-chip",
+        selected ? "public-chip-active" : "",
       )}
     >
       {children}

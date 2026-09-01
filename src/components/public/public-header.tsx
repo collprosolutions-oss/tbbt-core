@@ -3,8 +3,15 @@
 import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Menu, Phone, X } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { ArrowRight, Menu, Phone, X } from "lucide-react";
 import { PRIMARY_CTA_LABEL } from "@/lib/public-site";
+
+type NavItem = {
+  href: string;
+  label: string;
+  match: "exact" | "prefix";
+};
 
 export function PublicHeader({
   name,
@@ -14,6 +21,10 @@ export function PublicHeader({
   requestHref,
   servicesHref,
   aboutHref,
+  projectsHref,
+  reviewsHref,
+  serviceAreaHref,
+  contactHref,
   callHref,
 }: {
   name: string;
@@ -23,88 +34,93 @@ export function PublicHeader({
   requestHref: string;
   servicesHref: string;
   aboutHref: string;
+  projectsHref: string;
+  reviewsHref: string;
+  serviceAreaHref: string;
+  contactHref: string;
   callHref: string | null;
 }) {
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
 
-  const nav = [
-    { href: homeHref, label: "Home" },
-    { href: servicesHref, label: "Services" },
-    { href: aboutHref, label: "About Us" },
-    { href: `${homeHref}#projects`, label: "Projects" },
-    { href: `${homeHref}#reviews`, label: "Reviews" },
-    { href: `${homeHref}#service-area`, label: "Service Area" },
-    { href: `${homeHref}#contact`, label: "Contact" },
-  ] as const;
+  const nav: NavItem[] = [
+    { href: homeHref, label: "Home", match: "exact" },
+    { href: servicesHref, label: "Services", match: "prefix" },
+    { href: aboutHref, label: "About Us", match: "prefix" },
+    { href: projectsHref, label: "Projects", match: "prefix" },
+    { href: reviewsHref, label: "Reviews", match: "prefix" },
+    { href: serviceAreaHref, label: "Service Area", match: "prefix" },
+    { href: contactHref, label: "Contact", match: "prefix" },
+  ];
 
-  function close() {
-    setOpen(false);
+  function isActive(item: NavItem) {
+    if (item.match === "exact") {
+      return pathname === item.href || pathname === "/";
+    }
+    return pathname === item.href || pathname.startsWith(`${item.href}/`);
   }
 
   return (
-    <header className="sticky top-0 z-40 border-b border-white/10 bg-[var(--public-navy-deep)] text-white">
-      <div className="public-container flex h-[4.75rem] items-center justify-between gap-4 lg:h-20">
-        <Link href={homeHref} className="flex min-w-0 items-center gap-3 rounded-md">
+    <header className="public-header">
+      <div className="public-container public-header-inner">
+        <Link href={homeHref} className="public-logo" onClick={() => setOpen(false)}>
           {logoSrc ? (
             <Image
               src={logoSrc}
               alt={`${name} logo`}
               width={72}
               height={72}
-              className="size-14 rounded-md bg-black object-contain lg:size-16"
               priority
             />
-          ) : null}
-          <span className="hidden min-w-0 truncate text-base font-semibold tracking-tight sm:block lg:text-lg">
-            {name}
-          </span>
+          ) : (
+            <span className="text-sm font-extrabold tracking-[0.12em] uppercase">
+              {name}
+            </span>
+          )}
         </Link>
 
-        <nav className="hidden items-center gap-5 xl:flex" aria-label="Primary">
+        <nav className="public-nav" aria-label="Primary">
           {nav.map((item) => (
-            <a
+            <Link
               key={item.label}
               href={item.href}
-              className="text-[0.95rem] font-medium text-white/85 hover:text-white"
+              className="public-nav-link"
+              data-active={isActive(item) ? "true" : "false"}
             >
               {item.label}
-            </a>
+            </Link>
           ))}
         </nav>
 
-        <div className="hidden items-center gap-4 lg:flex">
+        <div className="public-header-actions">
           {callHref ? (
-            <a href={callHref} className="text-right">
-              <span className="block text-lg font-bold tracking-tight">{phone}</span>
-              <span className="block text-xs font-semibold tracking-[0.14em] text-[var(--public-blue-soft)] uppercase">
-                Call or Text
-              </span>
+            <a href={callHref} className="public-header-phone">
+              <span className="public-header-phone-number">{phone}</span>
+              <span className="public-header-phone-label">Call or Text</span>
             </a>
           ) : null}
-          <Link href={requestHref} className="public-btn public-btn-primary px-5">
+          <Link href={requestHref} className="public-btn public-btn-primary">
             {PRIMARY_CTA_LABEL}
+            <ArrowRight className="size-4" aria-hidden="true" />
           </Link>
         </div>
 
-        <div className="flex items-center gap-2 lg:hidden">
+        <div className="public-header-mobile">
           {callHref ? (
             <a
               href={callHref}
-              className="inline-flex size-12 items-center justify-center rounded-lg bg-white text-[var(--public-navy)]"
+              className="public-icon-btn"
               aria-label={`Call or text ${name} at ${phone}`}
             >
               <Phone className="size-5" />
             </a>
           ) : null}
-          <Link
-            href={requestHref}
-            className="inline-flex h-12 max-w-[7.5rem] items-center justify-center rounded-lg bg-[var(--public-blue)] px-2 text-[0.65rem] leading-tight font-bold tracking-wide text-white uppercase sm:max-w-none sm:px-3 sm:text-xs"
-          >
+          <Link href={requestHref} className="public-mobile-cta">
             {PRIMARY_CTA_LABEL}
           </Link>
           <button
             type="button"
-            className="inline-flex size-12 items-center justify-center rounded-lg bg-white text-[var(--public-navy)]"
+            className="public-icon-btn"
             aria-expanded={open}
             aria-controls="public-mobile-nav"
             onClick={() => setOpen((current) => !current)}
@@ -116,34 +132,22 @@ export function PublicHeader({
       </div>
 
       {open ? (
-        <nav
-          id="public-mobile-nav"
-          className="border-t border-white/15 px-5 py-4 lg:hidden"
-          aria-label="Mobile"
-        >
-          <ul className="space-y-1">
-            {nav.map((item) => (
-              <li key={item.label}>
-                <a
-                  href={item.href}
-                  onClick={close}
-                  className="block rounded-lg px-3 py-3 text-lg font-medium text-white hover:bg-white/10"
-                >
-                  {item.label}
-                </a>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-4 flex flex-col gap-3">
-            <Link href={requestHref} onClick={close} className="public-btn public-btn-primary">
-              {PRIMARY_CTA_LABEL}
+        <nav id="public-mobile-nav" className="public-mobile-nav" aria-label="Mobile">
+          {nav.map((item) => (
+            <Link
+              key={item.label}
+              href={item.href}
+              data-active={isActive(item) ? "true" : "false"}
+              onClick={() => setOpen(false)}
+            >
+              {item.label}
             </Link>
-            {callHref ? (
-              <a href={callHref} className="public-btn public-btn-ghost">
-                Call or Text {phone}
-              </a>
-            ) : null}
-          </div>
+          ))}
+          {callHref ? (
+            <a href={callHref} onClick={() => setOpen(false)}>
+              Call or Text {phone}
+            </a>
+          ) : null}
         </nav>
       ) : null}
     </header>

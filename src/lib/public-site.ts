@@ -58,33 +58,38 @@ export const HOW_IT_WORKS_STEPS = [
 
 export const TRUST_POINTS = [
   {
+    title: "Skilled Project Work",
+    body: "Quality-minded workmanship on the jobs we take on.",
+  },
+  {
     title: "Clear Estimates",
     body: "You review a written estimate before work is scheduled.",
+  },
+  {
+    title: "Reliable Communication",
+    body: "Your request becomes an organized project record we can follow up on.",
   },
   {
     title: "Respect for Your Home",
     body: "We treat your property carefully and keep the work organized.",
   },
-  {
-    title: "Convenient Online Requests",
-    body: "Describe the work, add optional photos, and send it from your phone.",
-  },
-  {
-    title: "Organized Project Communication",
-    body: "Your request becomes an organized project record we can review and follow up on.",
-  },
 ] as const;
 
 export const SERVICE_AREA_COPY =
-  "Serving homeowners in the local area. Submit your project address and we will confirm whether we can help at that location. This site does not list a city-by-city service map.";
+  "Serving homeowners in the Fort Myers / Cape Coral area. Submit your project address and we'll confirm service availability for your location.";
 
-export const PRIMARY_CTA_LABEL = "Request Service";
+export const PRIMARY_CTA_LABEL = "Get a Free Quote";
 
 export const ABOUT_COPY = {
   eyebrow: "About Us",
-  title: "Local handyman help, explained clearly",
+  title: "Reliable. Professional. Done Right.",
   lead:
     "CollPro Reno Handyman Services helps homeowners with repairs, installations, and home-improvement projects — from a single task to several jobs in one visit.",
+  body:
+    "We focus on attention to project details, clear estimates, organized communication, and practical solutions. Quality-minded workmanship matters on every job we take on.",
+  signature: "— CollPro Reno Team",
+  priorityTitle: "Your Home. Our Priority.",
+  priorityBody: "We treat every home carefully and keep the work organized.",
   points: [
     "Clear project communication from the first request",
     "Organized written estimates you can review before scheduling",
@@ -93,11 +98,21 @@ export const ABOUT_COPY = {
   ],
 } as const;
 
-export const PROJECTS_PLACEHOLDER_COPY =
-  "Project photos will appear here after they are approved for public marketing use. This site does not display stock or generated images as completed work.";
-
 export const REVIEWS_PLACEHOLDER_COPY =
-  "Customer reviews will appear here when they are approved for public display. This site does not invent ratings or customer quotes.";
+  "Real customer feedback will appear here as it becomes available.";
+
+export const PUBLIC_HOME_HERO_IMAGE = "/brand/projects/feature-wall-tv.jpg";
+export const PUBLIC_INNER_HERO_IMAGE = "/brand/projects/wall-cabinets.jpg";
+export const PUBLIC_ABOUT_PHOTO = "/brand/projects/lanai-porch.jpg";
+export const PUBLIC_CONTACT_PHOTO = "/brand/projects/feature-wall-tv.jpg";
+export const PUBLIC_AREA_PHOTO = "/brand/projects/exterior-carpentry.jpg";
+
+export const HOME_FEATURED_PROJECT_IDS = [
+  "feature-wall-tv",
+  "closet",
+  "wall-cabinets",
+  "lanai-porch",
+] as const;
 
 export const HOMEPAGE_CATEGORY_LIMIT = 8;
 
@@ -223,6 +238,22 @@ export function publicRequestPath(slug: string) {
 
 export function publicHomePath(slug: string) {
   return `/hire/${slug}`;
+}
+
+export function publicProjectsPath(slug: string) {
+  return `/hire/${slug}/projects`;
+}
+
+export function publicReviewsPath(slug: string) {
+  return `/hire/${slug}/reviews`;
+}
+
+export function publicServiceAreaPath(slug: string) {
+  return `/hire/${slug}/service-area`;
+}
+
+export function publicContactPath(slug: string) {
+  return `/hire/${slug}/contact`;
 }
 
 export function localBusinessJsonLd(input: {

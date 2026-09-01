@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Inter } from "next/font/google";
 import { PublicFooter } from "@/components/public/public-footer";
 import { PublicHeader } from "@/components/public/public-header";
 import { PublicLightTheme } from "@/components/public/public-light-theme";
@@ -7,15 +8,24 @@ import { telHref } from "@/lib/directions";
 import {
   popularPublicCategories,
   publicAboutPath,
+  publicContactPath,
   publicDisplayName,
   publicHomePath,
   publicLogoSrc,
   publicPhone,
+  publicProjectsPath,
   publicRequestPath,
+  publicReviewsPath,
+  publicServiceAreaPath,
   publicServicesPath,
   type PublicBusiness,
   type PublicCatalogGroup,
 } from "@/lib/public-site";
+
+const publicSans = Inter({
+  subsets: ["latin"],
+  display: "swap",
+});
 
 export function PublicSiteShell({
   business,
@@ -33,11 +43,15 @@ export function PublicSiteShell({
   const homeHref = publicHomePath(business.slug);
   const servicesHref = publicServicesPath(business.slug);
   const aboutHref = publicAboutPath(business.slug);
+  const projectsHref = publicProjectsPath(business.slug);
+  const reviewsHref = publicReviewsPath(business.slug);
+  const serviceAreaHref = publicServiceAreaPath(business.slug);
+  const contactHref = publicContactPath(business.slug);
   const callHref = telHref(phone);
   const categories = popularPublicCategories(groups);
 
   return (
-    <div className="public-site">
+    <div className={`public-site ${publicSans.className}`}>
       <PublicLightTheme />
       <PublicHeader
         name={name}
@@ -47,6 +61,10 @@ export function PublicSiteShell({
         requestHref={requestHref}
         servicesHref={servicesHref}
         aboutHref={aboutHref}
+        projectsHref={projectsHref}
+        reviewsHref={reviewsHref}
+        serviceAreaHref={serviceAreaHref}
+        contactHref={contactHref}
         callHref={callHref}
       />
       {children}
@@ -58,6 +76,10 @@ export function PublicSiteShell({
         requestHref={requestHref}
         servicesHref={servicesHref}
         aboutHref={aboutHref}
+        projectsHref={projectsHref}
+        reviewsHref={reviewsHref}
+        serviceAreaHref={serviceAreaHref}
+        contactHref={contactHref}
         callHref={callHref}
         categories={categories}
       />
