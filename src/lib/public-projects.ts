@@ -144,3 +144,12 @@ export function filterPublicProjects(filter: ProjectFilter) {
   if (filter === "all") return PUBLIC_PROJECTS;
   return PUBLIC_PROJECTS.filter((project) => project.filters.includes(filter));
 }
+
+/** Real portfolio photos only — skip unknown IDs, never invent filler. */
+export function selectPublicProjectsById(ids: readonly string[]) {
+  const byId = new Map(PUBLIC_PROJECTS.map((project) => [project.id, project]));
+  return ids.flatMap((id) => {
+    const project = byId.get(id);
+    return project ? [project] : [];
+  });
+}

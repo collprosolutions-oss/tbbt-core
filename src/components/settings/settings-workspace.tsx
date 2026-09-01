@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ExportCustomersButton } from "@/components/customers/export-customers-button";
 import { FounderRegion } from "@/components/founder-design/region";
 import { BusinessProfileForm } from "@/components/settings/business-profile-form";
+import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import type { SettingsWorkspaceProps } from "@/components/settings/types";
@@ -141,10 +142,38 @@ function OverviewSection({
 }
 
 function SectionBody(props: SettingsWorkspaceProps) {
-  const { section, snapshot, readiness, integrations, canEditConsequential, canEditPreferences } = props;
+  const {
+    section,
+    snapshot,
+    readiness,
+    integrations,
+    canEditConsequential,
+    canEditPreferences,
+    websitePhotos,
+  } = props;
 
   if (section === "overview") {
     return <OverviewSection readiness={readiness} />;
+  }
+
+  if (section === "website-photos") {
+    return (
+      <SectionCard
+        title="Edit Website Photos"
+        description="Owner and admin only. Replace, reposition, or reset Home marketing photos. This is not a page builder."
+      >
+        {websitePhotos ? (
+          <WebsitePhotosEditor
+            businessId={snapshot.business.id}
+            slots={websitePhotos.slots}
+            storageConfigured={websitePhotos.storageConfigured}
+            canEdit={canEditPreferences}
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">Website photo slots are not available.</p>
+        )}
+      </SectionCard>
+    );
   }
 
   if (section === "profile") {

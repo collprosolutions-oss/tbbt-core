@@ -500,6 +500,9 @@ try {
   await expectForbidden("MEMBER cannot change business settings (MANAGE_SETTINGS)", () =>
     mirrorUpdateSettings(memberA),
   );
+  await expectForbidden("MEMBER cannot configure public website photos (MANAGE_SETTINGS)", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_SETTINGS);
+  });
   await expectAllowed("OWNER can change business settings (MANAGE_SETTINGS)", () =>
     mirrorUpdateSettings(ownerA),
   );

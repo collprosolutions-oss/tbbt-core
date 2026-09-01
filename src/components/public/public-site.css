@@ -225,27 +225,33 @@
 .public-rail {
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 0.5rem;
-  width: calc(var(--public-logo) - 0.65rem);
-  max-width: calc(var(--public-logo) - 0.65rem);
+  width: var(--public-logo);
+  max-width: var(--public-logo);
+  justify-self: start;
 }
 
 .public-rail .public-btn {
   width: 100%;
+  max-width: 100%;
   min-height: 2.45rem;
-  padding: 0.45rem 0.4rem;
-  font-size: 0.62rem;
-  letter-spacing: 0.04em;
+  padding: 0.45rem 0.35rem;
+  font-size: 0.58rem;
+  letter-spacing: 0.03em;
+  text-align: center;
 }
 
 .public-text-us {
   display: block;
   box-sizing: border-box;
   width: 100%;
-  padding: 0.55rem 0.5rem;
+  max-width: 100%;
+  padding: 0.5rem 0.35rem;
   border: 1px solid rgba(255, 255, 255, 0.4);
   border-radius: 6px;
   color: #fff;
+  text-align: center;
   text-decoration: none;
   background: rgba(0, 0, 0, 0.45);
 }
@@ -253,18 +259,20 @@
 .public-text-us strong {
   display: block;
   color: var(--public-blue);
-  font-size: 0.62rem;
-  letter-spacing: 0.12em;
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+  text-align: center;
 }
 
 .public-text-us span {
   display: block;
   margin-top: 0.2rem;
-  font-size: 0.92rem;
+  font-size: 0.78rem;
   font-weight: 800;
   letter-spacing: 0;
   line-height: 1.15;
+  text-align: center;
 }
 
 .public-cinematic {
@@ -758,6 +766,20 @@
 
   .public-cinematic-inner {
     padding-top: 3.75rem;
+  }
+
+  .public-rail {
+    width: var(--public-logo);
+    max-width: var(--public-logo);
+  }
+
+  .public-text-us span {
+    font-size: 0.56rem;
+  }
+
+  .public-rail .public-btn {
+    font-size: 0.46rem;
+    padding: 0.35rem 0.2rem;
   }
 
   .public-btn,

@@ -9,6 +9,8 @@ import {
   publicLogoSrc,
   publicPhone,
 } from "@/lib/public-site";
+import { loadPublicHomeImages } from "@/lib/public-site-images";
+import { prisma } from "@/lib/prisma";
 import { loadDefaultPublicBusiness, loadPublicCatalog } from "@/lib/public-site-data";
 
 export const dynamic = "force-dynamic";
@@ -37,6 +39,7 @@ export default async function HomePage() {
   }
 
   const catalog = await loadPublicCatalog(business);
+  const homeImages = await loadPublicHomeImages(prisma, business.id, catalog.groups);
   const name = publicDisplayName(business);
   const jsonLd = localBusinessJsonLd({
     name,
@@ -52,7 +55,12 @@ export default async function HomePage() {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
-      <PublicHome business={business} items={catalog.items} groups={catalog.groups} />
+      <PublicHome
+        business={business}
+        items={catalog.items}
+        groups={catalog.groups}
+        images={homeImages}
+      />
     </PublicSiteShell>
   );
 }

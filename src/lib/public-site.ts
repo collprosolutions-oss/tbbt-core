@@ -140,6 +140,8 @@ export const HOME_FEATURED_PROJECT_IDS = [
   "closet",
   "wall-cabinets",
   "lanai-porch",
+  "bathroom-shiplap",
+  "door-install",
 ] as const;
 
 export const HOMEPAGE_CATEGORY_LIMIT = 8;

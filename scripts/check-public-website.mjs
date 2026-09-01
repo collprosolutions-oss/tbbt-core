@@ -26,10 +26,12 @@ const {
   PUBLIC_PRICING_DISCLAIMER,
   SERVICE_AREA_COPY,
   TRUST_POINTS,
+  HOME_FEATURED_PROJECT_IDS,
   groupPublicCatalog,
   isCollProRenoSlug,
   toPublicCatalogItem,
 } = await import("@/lib/public-site");
+const { selectPublicProjectsById } = await import("@/lib/public-projects");
 const { parseSelectedTasks, requestedWorkLabels } = await import("@/lib/service-request-work");
 const { groupServiceCatalogItemsByCategory } = await import("@/lib/service-catalog-category");
 
@@ -97,6 +99,14 @@ check("Hire page reuses the same public homepage", hireSrc.includes("<PublicHome
 check("Homepage does not embed the full service catalog picker",
   !readRepo("src/components/public/public-home.tsx").includes("HomeCatalogContinue") &&
     !readRepo("src/components/public/public-home.tsx").includes("ServicePicker"));
+check("Recent Projects uses up to six real featured photos",
+  HOME_FEATURED_PROJECT_IDS.length === 6 &&
+    selectPublicProjectsById(HOME_FEATURED_PROJECT_IDS).length === HOME_FEATURED_PROJECT_IDS.length);
+check("Home Recent Projects use a 3-column desktop grid",
+  readRepo("src/components/public/public-home.tsx").includes("lg:grid-cols-3"));
+check("Home does not expose owner photo replace controls",
+  !readRepo("src/components/public/public-home.tsx").includes("Replace Image") &&
+    !readRepo("src/components/public/public-home.tsx").includes("Reset to Default"));
 check("How It Works has the five real workflow steps", HOW_IT_WORKS_STEPS.length === 5);
 check(
   "Service-area copy uses the verified Fort Myers / Cape Coral wording",

@@ -177,6 +177,7 @@ model Business {
   pipelineOpportunities    PipelineOpportunity[]
   settings                 BusinessSettings?
   settingsAuditLogs        SettingsAuditLog[]
+  publicSiteImages         PublicSiteImage[]
   knowledgeEntries         KnowledgeEntry[]
   serviceRequestItems      ServiceRequestItem[]
   serviceRequestPhotos     ServiceRequestPhoto[]
@@ -237,6 +238,7 @@ model Membership {
   createdReviewResponses  ReviewResponse[]   @relation("ReviewResponseCreator")
   reviewedReviewResponses ReviewResponse[]   @relation("ReviewResponseReviewer")
   settingsAuditLogs        SettingsAuditLog[] @relation("SettingsAuditActor")
+  publicSiteImages         PublicSiteImage[]  @relation("PublicSiteImageActor")
   createdKnowledgeEntries  KnowledgeEntry[]   @relation("KnowledgeEntryCreator")
   reviewedKnowledgeEntries KnowledgeEntry[]   @relation("KnowledgeEntryReviewer")
 
@@ -1281,6 +1283,27 @@ model SettingsAuditLog {
   @@index([businessId])
   @@index([businessId, settingArea])
   @@index([businessId, changedAt])
+}
+
+/// Owner/admin override for a single public-website marketing image slot.
+/// Defaults stay in code/assets. A row here only changes presentation for
+/// that business — never catalog data, project history, or page structure.
+model PublicSiteImage {
+  id                    String   @id @default(cuid())
+  businessId            String
+  page                  String
+  slot                  String
+  imageUrl              String?
+  objectPosition        String   @default("50% 50%")
+  updatedByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  updatedBy Membership? @relation("PublicSiteImageActor", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, page, slot])
+  @@index([businessId, page])
 }
 
 /// Internal operational knowledge for one business. This is NOT a second

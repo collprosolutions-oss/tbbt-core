@@ -8,6 +8,8 @@ import {
   publicLogoSrc,
   publicPhone,
 } from "@/lib/public-site";
+import { loadPublicHomeImages } from "@/lib/public-site-images";
+import { prisma } from "@/lib/prisma";
 import { loadPublicSite } from "@/lib/public-site-data";
 
 export const dynamic = "force-dynamic";
@@ -49,6 +51,7 @@ export default async function PublicHirePage({ params }: PageProps) {
     );
   }
 
+  const homeImages = await loadPublicHomeImages(prisma, site.business.id, site.groups);
   const name = publicDisplayName(site.business);
   const jsonLd = localBusinessJsonLd({
     name,
@@ -68,6 +71,7 @@ export default async function PublicHirePage({ params }: PageProps) {
         business={site.business}
         items={site.items}
         groups={site.groups}
+        images={homeImages}
       />
     </PublicSiteShell>
   );
