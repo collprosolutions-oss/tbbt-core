@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { PublicActionRail } from "@/components/public/public-action-rail";
 import { PUBLIC_INNER_HERO_IMAGE } from "@/lib/public-site";
 
 export function PublicPageHero({
@@ -11,10 +10,6 @@ export function PublicPageHero({
   accent,
   description,
   imageSrc = PUBLIC_INNER_HERO_IMAGE,
-  phone,
-  smsHref,
-  requestHref,
-  showQuote,
   children,
 }: {
   homeHref: string;
@@ -36,12 +31,7 @@ export function PublicPageHero({
       </div>
       <div className="public-cinematic-shade" />
       <div className="public-container public-cinematic-inner">
-        <PublicActionRail
-          phone={phone}
-          smsHref={smsHref}
-          requestHref={requestHref}
-          showQuote={showQuote}
-        />
+        <div className="public-brand-spacer" aria-hidden="true" />
         <div className={children ? "grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)] lg:items-start" : ""}>
           <div className="public-cinematic-copy">
             <p className="public-crumb">

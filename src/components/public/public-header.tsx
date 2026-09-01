@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, MessageSquare, X } from "lucide-react";
+import { PublicActionRail } from "@/components/public/public-action-rail";
 import { PRIMARY_CTA_LABEL, TEXT_US_LABEL } from "@/lib/public-site";
 
 type NavItem = {
@@ -64,13 +65,16 @@ export function PublicHeader({
   return (
     <header className="public-header">
       <div className="public-container public-header-inner">
-        <Link href={homeHref} className="public-logo" onClick={() => setOpen(false)}>
-          {logoSrc ? (
-            <Image src={logoSrc} alt={`${name} logo`} width={220} height={220} priority />
-          ) : (
-            <span className="text-sm font-extrabold uppercase">{name}</span>
-          )}
-        </Link>
+        <div className="public-brand-stack">
+          <Link href={homeHref} className="public-logo" onClick={() => setOpen(false)}>
+            {logoSrc ? (
+              <Image src={logoSrc} alt={`${name} logo`} width={220} height={220} priority />
+            ) : (
+              <span className="text-sm font-extrabold uppercase">{name}</span>
+            )}
+          </Link>
+          <PublicActionRail phone={phone} smsHref={smsHref} requestHref={requestHref} />
+        </div>
         <nav className="public-nav" aria-label="Primary">
           {nav.map((item) => (
             <Link

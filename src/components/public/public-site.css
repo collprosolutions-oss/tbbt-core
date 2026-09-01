@@ -116,13 +116,23 @@
   height: var(--public-header-h);
 }
 
-.public-logo {
+.public-brand-stack {
   position: absolute;
   left: 0;
   top: 0.45rem;
   z-index: 70;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: var(--public-logo);
+  gap: 0.55rem;
+}
+
+.public-logo {
+  display: block;
   width: var(--public-logo);
   height: var(--public-logo);
+  flex: 0 0 var(--public-logo);
 }
 
 .public-logo img {
@@ -132,6 +142,15 @@
   background: #000;
   object-fit: contain;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.public-brand-stack .public-rail {
+  display: contents;
+}
+
+.public-brand-spacer {
+  width: var(--public-logo);
+  pointer-events: none;
 }
 
 .public-nav {
@@ -226,15 +245,18 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.55rem;
   width: var(--public-logo);
   max-width: var(--public-logo);
   justify-self: start;
 }
 
+.public-brand-stack .public-text-us,
+.public-brand-stack .public-btn,
 .public-rail .public-btn {
-  width: 80%;
-  max-width: 80%;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   min-height: 2.45rem;
   padding: 0.45rem 0.28rem;
   font-size: 0.54rem;
@@ -245,8 +267,8 @@
 .public-text-us {
   display: block;
   box-sizing: border-box;
-  width: 80%;
-  max-width: 80%;
+  width: 100%;
+  max-width: 100%;
   padding: 0.5rem 0.28rem;
   border: 1px solid rgba(255, 255, 255, 0.4);
   border-radius: 6px;
@@ -765,7 +787,11 @@
   }
 
   .public-cinematic-inner {
-    padding-top: 3.75rem;
+    padding-top: 0.75rem;
+  }
+
+  .public-brand-spacer {
+    min-height: calc(var(--public-logo) + 5.75rem);
   }
 
   .public-rail {
@@ -777,12 +803,13 @@
     font-size: 0.56rem;
   }
 
+  .public-brand-stack .public-text-us,
+  .public-brand-stack .public-btn,
   .public-rail .public-btn {
     font-size: 0.46rem;
     padding: 0.35rem 0.2rem;
   }
 
-  .public-btn,
   .public-cta-actions .public-btn {
     width: 100%;
   }

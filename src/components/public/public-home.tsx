@@ -1,8 +1,6 @@
 import Link from "next/link";
 import { ArrowRight, Clock, Home, MessageSquare, Shield } from "lucide-react";
-import { PublicActionRail } from "@/components/public/public-action-rail";
 import { PublicFittedImage } from "@/components/public/public-fitted-image";
-import { smsHref } from "@/lib/directions";
 import { selectPublicProjectsById } from "@/lib/public-projects";
 import {
   HOME_FEATURED_PROJECT_IDS,
@@ -10,9 +8,7 @@ import {
   TRUST_POINTS,
   popularPublicCategories,
   publicCategoryPhoto,
-  publicPhone,
   publicProjectsPath,
-  publicRequestPath,
   publicServicesPath,
   type PublicBusiness,
   type PublicCatalogGroup,
@@ -36,9 +32,6 @@ export function PublicHome({
   groups: PublicCatalogGroup[];
   images?: PublicHomeImagePresentation;
 }) {
-  const phone = publicPhone(business.slug);
-  const textHref = smsHref(phone);
-  const requestHref = publicRequestPath(business.slug);
   const servicesHref = publicServicesPath(business.slug);
   const projectsHref = publicProjectsPath(business.slug);
   const categories = popularPublicCategories(groups);
@@ -62,7 +55,7 @@ export function PublicHome({
         </div>
         <div className="public-cinematic-shade" />
         <div className="public-container public-cinematic-inner">
-          <PublicActionRail phone={phone} smsHref={textHref} requestHref={requestHref} />
+          <div className="public-brand-spacer" aria-hidden="true" />
           <div className="public-cinematic-copy">
             <p className="public-kicker">Reliable. Professional. Done Right.</p>
             <h1>
