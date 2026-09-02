@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { MessageSquare, Shield, Star } from "lucide-react";
 import "@/components/public/public-site.css";
 import { PublicCtaBar } from "@/components/public/public-cta-bar";
 import { PublicPageHero } from "@/components/public/public-page-hero";
@@ -7,10 +8,11 @@ import { PublicSiteShell } from "@/components/public/public-site-shell";
 import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { smsHref } from "@/lib/directions";
 import {
-  PUBLIC_QUOTE_HERO_IMAGE,
   publicDisplayName,
   publicHomePath,
   publicPhone,
+  publicQuoteHeroImage,
+  publicQuoteHeroPosition,
   publicRequestPath,
 } from "@/lib/public-site";
 import { loadPublicSite } from "@/lib/public-site-data";
@@ -59,17 +61,44 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
     <PublicSiteShell business={site.business} groups={site.groups}>
       <main>
         <PublicPageHero
+          className="public-quote-hero"
           homeHref={publicHomePath(site.business.slug)}
           current="Request a Quote"
           title="Request a Quote"
           accent="Let's get your project started."
           description="Fill out the form below. We will review your request before preparing a written estimate."
-          imageSrc={PUBLIC_QUOTE_HERO_IMAGE}
+          imageSrc={publicQuoteHeroImage(site.business.slug)}
+          objectPosition={publicQuoteHeroPosition(site.business.slug)}
           phone={phone}
           smsHref={textHref}
           requestHref={publicRequestPath(site.business.slug)}
           showQuote={false}
         />
+        <section className="public-quote-points" aria-label="What to expect">
+          <div className="public-container public-quote-points-grid">
+            <div className="public-quote-point">
+              <MessageSquare className="size-7 text-[var(--public-blue)]" aria-hidden="true" />
+              <div>
+                <h2>Fast Response</h2>
+                <p>Text us about your project and we will follow up.</p>
+              </div>
+            </div>
+            <div className="public-quote-point">
+              <Shield className="size-7 text-[var(--public-blue)]" aria-hidden="true" />
+              <div>
+                <h2>Dependable</h2>
+                <p>Your request becomes an organized project record.</p>
+              </div>
+            </div>
+            <div className="public-quote-point">
+              <Star className="size-7 text-[var(--public-blue)]" aria-hidden="true" />
+              <div>
+                <h2>Quality Work</h2>
+                <p>Quality-minded workmanship on the jobs we take on.</p>
+              </div>
+            </div>
+          </div>
+        </section>
         <section className="bg-[var(--public-paper)]">
           <div className="public-container py-12">
             <div className="public-form-card">

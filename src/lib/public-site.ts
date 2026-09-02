@@ -157,7 +157,16 @@ export const PUBLIC_ABOUT_HERO_IMAGE = "/brand/illustrative/craftsman-hero.jpg";
  */
 export const COLLPRO_ABOUT_HERO_IMAGE = "/brand/collpro/about-hero.png";
 export const PUBLIC_ABOUT_STORY_IMAGE = "/brand/projects/door-install.jpg";
+/** Neutral TBBT Request-a-Quote hero fallback. Must not contain subscriber branding. */
 export const PUBLIC_QUOTE_HERO_IMAGE = "/brand/projects/wall-cabinets.jpg";
+/**
+ * CollPro Reno business-content Request-a-Quote hero. Subscriber asset only —
+ * never the reusable intake template default.
+ */
+export const COLLPRO_QUOTE_HERO_IMAGE = "/brand/collpro/quote-hero.png";
+/** Keep the handyman/customer on the right, left side usable for HTML copy. */
+export const COLLPRO_QUOTE_HERO_POSITION = "82% 42%";
+export const PUBLIC_QUOTE_HERO_POSITION = "70% 40%";
 export const PUBLIC_ABOUT_PHOTO = "/brand/illustrative/craftsman-hero.jpg";
 export const PUBLIC_INNER_HERO_IMAGE = "/brand/illustrative/tools-services.jpg";
 
@@ -275,6 +284,19 @@ export function publicReviewsHeroImage(slug?: string | null) {
   return slug && isCollProRenoSlug(slug)
     ? COLLPRO_REVIEWS_HERO_IMAGE
     : PUBLIC_REVIEWS_HERO_IMAGE;
+}
+
+/** Per-business Request-a-Quote hero default. Other subscribers keep the unbranded fallback. */
+export function publicQuoteHeroImage(slug?: string | null) {
+  return slug && isCollProRenoSlug(slug)
+    ? COLLPRO_QUOTE_HERO_IMAGE
+    : PUBLIC_QUOTE_HERO_IMAGE;
+}
+
+export function publicQuoteHeroPosition(slug?: string | null) {
+  return slug && isCollProRenoSlug(slug)
+    ? COLLPRO_QUOTE_HERO_POSITION
+    : PUBLIC_QUOTE_HERO_POSITION;
 }
 
 export const REVIEWS_TRUST_VALUES = [

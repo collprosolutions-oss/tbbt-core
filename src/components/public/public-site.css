@@ -342,6 +342,42 @@
   z-index: 3;
 }
 
+.public-quote-hero .public-cinematic-shade {
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.58) 40%, rgba(0, 0, 0, 0.12) 100%);
+}
+
+.public-quote-points {
+  background: #eef2f6;
+  padding-block: 0.95rem;
+}
+
+.public-quote-points-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+}
+
+.public-quote-point {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+}
+
+.public-quote-point h2 {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.public-quote-point p {
+  margin: 0.2rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--public-muted);
+}
+
 .public-cinematic-shade {
   background: linear-gradient(90deg, rgba(0, 0, 0, 0.88) 0%, rgba(0, 0, 0, 0.55) 42%, rgba(0, 0, 0, 0.18) 100%);
 }
@@ -1125,6 +1161,11 @@
 }
 
 @media (min-width: 768px) {
+  .public-quote-points-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.1rem;
+  }
+
   .public-step-bar {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
