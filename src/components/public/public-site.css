@@ -365,6 +365,21 @@
   );
 }
 
+.public-quote-hero .public-cinematic-media {
+  overflow: hidden;
+}
+
+.public-quote-hero .public-cinematic-media img {
+  object-fit: fill;
+  width: auto !important;
+  max-width: none !important;
+  height: 260% !important;
+  left: auto !important;
+  right: 0 !important;
+  bottom: auto !important;
+  top: -7.15rem !important;
+}
+
 .public-quote-points {
   background: #eef2f6;
   padding-block: 0.95rem;
@@ -1349,6 +1364,13 @@
 
   .public-contact-hero .public-form-card {
     margin-top: 0;
+  }
+
+  .public-quote-hero .public-cinematic-media img {
+    object-fit: cover;
+    width: 100% !important;
+    height: 100% !important;
+    inset: 0 !important;
   }
 
   .public-brand-spacer {
