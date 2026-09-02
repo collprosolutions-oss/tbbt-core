@@ -367,17 +367,15 @@
 
 .public-quote-hero .public-cinematic-media {
   overflow: hidden;
+  background-color: #05070c;
+  background-image: url("/brand/collpro/quote-hero.png");
+  background-repeat: no-repeat;
+  background-position: 100% 40%;
+  background-size: auto 155%;
 }
 
 .public-quote-hero .public-cinematic-media img {
-  object-fit: fill;
-  width: auto !important;
-  max-width: none !important;
-  height: 175% !important;
-  left: auto !important;
-  right: 0 !important;
-  bottom: auto !important;
-  top: -4.5rem !important;
+  opacity: 0;
 }
 
 .public-quote-points {
@@ -1366,7 +1364,12 @@
     margin-top: 0;
   }
 
+  .public-quote-hero .public-cinematic-media {
+    background-image: none;
+  }
+
   .public-quote-hero .public-cinematic-media img {
+    opacity: 1;
     object-fit: cover;
     width: 100% !important;
     height: 100% !important;
