@@ -1,67 +1,128 @@
 import type { Metadata } from "next";
-import { ServiceRequestForm } from "@/components/intake/service-request-form";
+import { MessageSquare, Shield, Star } from "lucide-react";
+import "@/components/public/public-site.css";
+import { PublicCtaBar } from "@/components/public/public-cta-bar";
+import { PublicPageHero } from "@/components/public/public-page-hero";
+import { MultiServiceRequestFlow } from "@/components/public/request-flow";
+import { PublicSiteShell } from "@/components/public/public-site-shell";
+import { PublicUnavailable } from "@/components/public/public-unavailable";
+import { smsHref } from "@/lib/directions";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { groupServicesByStarterCategory } from "@/lib/handyman-starter-catalog";
-import { prisma } from "@/lib/prisma";
+  publicDisplayName,
+  publicHomePath,
+  publicPhone,
+  publicQuoteHeroImage,
+  publicQuoteHeroPosition,
+  publicRequestPath,
+} from "@/lib/public-site";
+import { loadPublicSite } from "@/lib/public-site-data";
+import { parseSelectedWorkSearch } from "@/lib/selected-work";
+import { isStorageConfigured } from "@/lib/storage";
 
-export const metadata: Metadata = {
-  title: "Request service",
+export const dynamic = "force-dynamic";
+
+type PageProps = {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{
+    services?: string;
+    other?: string;
+    otherText?: string;
+    otherQty?: string;
+  }>;
 };
 
-export default async function PublicIntakePage({
-  params,
-}: {
-  params: Promise<{ slug: string }>;
-}) {
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const business = await prisma.business.findUnique({
-    where: { slug: slug.trim().toLowerCase() },
-    select: { id: true, name: true, slug: true },
-  });
+  const site = await loadPublicSite(slug);
+  const name = site ? publicDisplayName(site.business) : "Request service";
+  return {
+    title: { absolute: `Request Service | ${name}` },
+    description: `Request one or more handyman tasks from ${name} in a single visit request.`,
+  };
+}
 
-  if (!business) {
-    return (
-      <main className="flex min-h-full items-center justify-center px-4 py-10">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle>Request unavailable</CardTitle>
-            <CardDescription>This request could not be submitted.</CardDescription>
-          </CardHeader>
-        </Card>
-      </main>
-    );
+export default async function PublicIntakePage({ params, searchParams }: PageProps) {
+  const { slug } = await params;
+  const query = await searchParams;
+  const site = await loadPublicSite(slug);
+  if (!site) {
+    return <PublicUnavailable title="Request unavailable" body="This request could not be submitted." />;
   }
 
-  // Only name + id are ever sent to the public form. Pricing, descriptions,
-  // and inactive services stay owner-only.
-  const activeServices = await prisma.serviceCatalogItem.findMany({
-    where: { businessId: business.id, active: true },
-    select: { id: true, name: true },
-    orderBy: { name: "asc" },
-  });
-  const groupedServices = groupServicesByStarterCategory(activeServices);
+  const initialSelected = parseSelectedWorkSearch(
+    query,
+    new Set(site.items.map((item) => item.id)),
+  );
+  const name = publicDisplayName(site.business);
+  const phone = publicPhone(site.business.slug);
+  const textHref = smsHref(phone);
 
   return (
-    <main className="flex min-h-full items-center justify-center px-4 py-10">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>Request a handyman</CardTitle>
-          <CardDescription>{business.name}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ServiceRequestForm
-            slug={business.slug}
-            businessName={business.name}
-            groupedServices={groupedServices}
-          />
-        </CardContent>
-      </Card>
-    </main>
+    <PublicSiteShell business={site.business} groups={site.groups}>
+      <main>
+        <PublicPageHero
+          className="public-quote-hero"
+          homeHref={publicHomePath(site.business.slug)}
+          current="Request a Quote"
+          title="Request a Quote"
+          accent="Let's get your project started."
+          description="Fill out the form below. We will review your request before preparing a written estimate."
+          imageSrc={publicQuoteHeroImage(site.business.slug)}
+          objectPosition={publicQuoteHeroPosition(site.business.slug)}
+          phone={phone}
+          smsHref={textHref}
+          requestHref={publicRequestPath(site.business.slug)}
+          showQuote={false}
+        />
+        <section className="public-quote-points" aria-label="What to expect">
+          <div className="public-container public-quote-points-grid">
+            <div className="public-quote-point">
+              <MessageSquare className="size-7 text-[var(--public-blue)]" aria-hidden="true" />
+              <div>
+                <h2>Fast Response</h2>
+                <p>Text us about your project and we will follow up.</p>
+              </div>
+            </div>
+            <div className="public-quote-point">
+              <Shield className="size-7 text-[var(--public-blue)]" aria-hidden="true" />
+              <div>
+                <h2>Dependable</h2>
+                <p>Your request becomes an organized project record.</p>
+              </div>
+            </div>
+            <div className="public-quote-point">
+              <Star className="size-7 text-[var(--public-blue)]" aria-hidden="true" />
+              <div>
+                <h2>Quality Work</h2>
+                <p>Quality-minded workmanship on the jobs we take on.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section className="bg-[var(--public-paper)]">
+          <div className="public-container py-12">
+            <div className="public-form-card">
+              <h2 className="mb-6 text-2xl font-extrabold uppercase">Request Service</h2>
+              <MultiServiceRequestFlow
+                slug={site.business.slug}
+                businessName={name}
+                items={site.items}
+                groups={site.groups}
+                initialSelected={initialSelected}
+                photosEnabled={isStorageConfigured()}
+              />
+            </div>
+          </div>
+        </section>
+        <PublicCtaBar
+          title="Prefer to text instead?"
+          body="Send project details to CollPro Reno and we will follow up."
+          requestHref={publicRequestPath(site.business.slug)}
+          smsHref={textHref}
+          phone={phone}
+          showQuote={false}
+        />
+      </main>
+    </PublicSiteShell>
   );
 }

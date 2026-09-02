@@ -16,6 +16,8 @@
 export const SETTINGS_SECTIONS = [
   "overview",
   "profile",
+  "website-photos",
+  "website-story",
   "team",
   "pricing",
   "scheduling",
@@ -37,6 +39,8 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 export const SETTINGS_SECTION_LABELS: Record<SettingsSection, string> = {
   overview: "Overview",
   profile: "Business Profile",
+  "website-photos": "Website Photos",
+  "website-story": "Website Story",
   team: "Team & Permissions",
   pricing: "Services & Pricing Rules",
   scheduling: "Scheduling",

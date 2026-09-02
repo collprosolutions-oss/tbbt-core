@@ -1,0 +1,101 @@
+import Link from "next/link";
+import Image from "next/image";
+import { SERVICE_AREA_COPY, TEXT_US_LABEL, type PopularPublicCategory } from "@/lib/public-site";
+import { PublicFooterQuote } from "@/components/public/public-footer-quote";
+
+export function PublicFooter({
+  name,
+  logoSrc,
+  phone,
+  homeHref,
+  requestHref,
+  servicesHref,
+  aboutHref,
+  projectsHref,
+  reviewsHref,
+  serviceAreaHref,
+  contactHref,
+  smsHref,
+  categories,
+}: {
+  name: string;
+  logoSrc: string | null;
+  phone: string | null;
+  homeHref: string;
+  requestHref: string;
+  servicesHref: string;
+  aboutHref: string;
+  projectsHref: string;
+  reviewsHref: string;
+  serviceAreaHref: string;
+  contactHref: string;
+  smsHref: string | null;
+  categories: PopularPublicCategory[];
+}) {
+  return (
+    <footer className="public-footer">
+      <div className="public-container public-footer-grid">
+        <div>
+          {logoSrc ? (
+            <Image
+              src={logoSrc}
+              alt={`${name} logo`}
+              width={96}
+              height={96}
+              className="size-20 rounded-full bg-black object-contain"
+            />
+          ) : null}
+          <p className="mt-4 font-semibold text-white">{name}</p>
+          <p className="mt-2 max-w-xs">
+            Handyman and home-improvement help for homeowners. Text us about
+            your project or request a quote online.
+          </p>
+        </div>
+        <div>
+          <h2>Quick Links</h2>
+          <ul>
+            <li><Link href={homeHref}>Home</Link></li>
+            <li><Link href={servicesHref}>Services</Link></li>
+            <li><Link href={aboutHref}>About Us</Link></li>
+            <li><Link href={projectsHref}>Projects</Link></li>
+            <li><Link href={reviewsHref}>Reviews</Link></li>
+            <li><Link href={serviceAreaHref}>Service Area</Link></li>
+            <li><Link href={contactHref}>Contact</Link></li>
+          </ul>
+        </div>
+        <div>
+          <h2>Services</h2>
+          <ul>
+            {categories.length > 0 ? (
+              categories.map((category) => (
+                <li key={category.category}>
+                  <Link href={`${servicesHref}?category=${encodeURIComponent(category.category)}`}>
+                    {category.category}
+                  </Link>
+                </li>
+              ))
+            ) : (
+              <li><Link href={servicesHref}>View all services</Link></li>
+            )}
+          </ul>
+        </div>
+        <div>
+          <h2>Service Area</h2>
+          <p>{SERVICE_AREA_COPY}</p>
+        </div>
+        <div>
+          <h2>{TEXT_US_LABEL}</h2>
+          {smsHref ? (
+            <p>
+              <a href={smsHref} className="text-lg font-bold text-white">{phone}</a>
+            </p>
+          ) : null}
+          <PublicFooterQuote requestHref={requestHref} />
+        </div>
+      </div>
+      <div className="public-container pb-6 text-sm text-white/50">
+        © {new Date().getFullYear()} {name}
+      </div>
+    </footer>
+  );
+}

@@ -53,6 +53,10 @@ export type SettingsSnapshot = {
     logoSrc: string | null;
   };
   preferences: SettingsPreferenceFlags;
+  websiteStory: {
+    rawOwnerStory: string;
+    approvedPublicAboutCopy: string;
+  };
   team: SettingsTeamMember[];
   catalogItemCount: number;
   distinctVendors: string[];
@@ -203,6 +207,11 @@ export async function loadSettingsSnapshot(
       }
     : DEFAULT_SETTINGS_PREFERENCES;
 
+  const websiteStory = {
+    rawOwnerStory: preferencesRow?.rawOwnerStory ?? "",
+    approvedPublicAboutCopy: preferencesRow?.approvedPublicAboutCopy ?? "",
+  };
+
   return {
     business: {
       id: business.id,
@@ -215,6 +224,7 @@ export async function loadSettingsSnapshot(
       logoSrc: getBusinessLogoSrc(business.slug),
     },
     preferences,
+    websiteStory,
     team: members.map((member) => ({
       id: member.id,
       role: member.role,

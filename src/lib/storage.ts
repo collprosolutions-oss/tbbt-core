@@ -95,6 +95,48 @@ export async function uploadExpenseReceipt({
   });
 }
 
+/**
+ * Same Vercel Blob helper as job photos and expense receipts -- no second
+ * storage system. Used for optional public intake project photos.
+ */
+export async function uploadRequestPhoto({
+  businessId,
+  requestId,
+  file,
+}: {
+  businessId: string;
+  requestId: string;
+  file: File;
+}): Promise<UploadedJobPhoto> {
+  return uploadManagedImage({
+    pathnamePrefix: `request-photos/${businessId}/${requestId}`,
+    file,
+  });
+}
+
+/**
+ * Same Vercel Blob helper as job / request / expense photos — no second
+ * storage system. Used for owner-editable public-site marketing images.
+ */
+export async function uploadPublicSitePhoto({
+  businessId,
+  page,
+  slot,
+  file,
+}: {
+  businessId: string;
+  page: string;
+  slot: string;
+  file: File;
+}): Promise<UploadedJobPhoto> {
+  const safePage = page.replace(/[^a-z0-9-]+/gi, "-").toLowerCase() || "page";
+  const safeSlot = slot.replace(/[^a-z0-9-]+/gi, "-").toLowerCase() || "slot";
+  return uploadManagedImage({
+    pathnamePrefix: `public-site-photos/${businessId}/${safePage}/${safeSlot}`,
+    file,
+  });
+}
+
 async function uploadManagedImage({
   pathnamePrefix,
   file,

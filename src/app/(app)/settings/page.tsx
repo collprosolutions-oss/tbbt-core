@@ -12,12 +12,14 @@ import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import type { CuratedIconId } from "@/lib/founder-icons";
 import { prisma } from "@/lib/prisma";
-import { parseSettingsSection } from "@/lib/settings";
+import { isBlobStorageConfigured, parseSettingsSection } from "@/lib/settings";
 import {
   loadSettingsSnapshot,
   settingsIntegrationCardsFromSnapshot,
   settingsReadinessFromSnapshot,
 } from "@/lib/settings-data";
+import { loadPublicCatalog } from "@/lib/public-site-data";
+import { loadWebsitePhotoEditorSlots } from "@/lib/public-site-images";
 
 export const metadata: Metadata = {
   title: "Settings",
@@ -38,6 +40,21 @@ export default async function SettingsPage({
   const role = access.workspace.role;
   const canEditPreferences = roleHasCapability(role, CAPABILITIES.MANAGE_SETTINGS);
   const canEditConsequential = role === "OWNER";
+  let websitePhotos:
+    | { storageConfigured: boolean; slots: Awaited<ReturnType<typeof loadWebsitePhotoEditorSlots>> }
+    | undefined;
+  if (section === "website-photos") {
+    const catalog = await loadPublicCatalog({
+      id: snapshot.business.id,
+      name: snapshot.business.name,
+      slug: snapshot.business.slug,
+      tradeCode: snapshot.business.tradeCode,
+    });
+    websitePhotos = {
+      storageConfigured: isBlobStorageConfigured(),
+      slots: await loadWebsitePhotoEditorSlots(prisma, access.businessId, catalog.groups),
+    };
+  }
 
   const founder = await checkFounderAccess();
   const founderOverride = founder
@@ -130,6 +147,7 @@ export default async function SettingsPage({
           integrations={integrations}
           canEditConsequential={canEditConsequential}
           canEditPreferences={canEditPreferences}
+          websitePhotos={websitePhotos}
         />
       </FounderDesignRoot>
     </PageContainer>

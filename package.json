@@ -34,7 +34,9 @@
     "test:expenses": "node --experimental-strip-types scripts/check-expenses.mjs",
     "test:theme-contrast": "node scripts/check-theme-contrast.mjs",
     "test:app-url": "node --experimental-strip-types scripts/check-app-url.mjs",
-    "test:field-time-cards-flow": "node --experimental-strip-types scripts/check-field-time-cards-flow.mjs"
+    "test:field-time-cards-flow": "node --experimental-strip-types scripts/check-field-time-cards-flow.mjs",
+    "test:public-website": "node --experimental-strip-types scripts/check-public-website.mjs",
+    "test:public-site-images": "node --experimental-strip-types scripts/check-public-site-images.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

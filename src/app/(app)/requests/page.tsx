@@ -31,6 +31,10 @@ import {
   monthLabel,
   startOfDay,
 } from "@/lib/schedule";
+import {
+  requestedWorkLabels,
+  requestedWorkSummary,
+} from "@/lib/service-request-work";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -103,12 +107,21 @@ export default async function RequestsPage({
           { description: { contains: q, mode: "insensitive" as const } },
           { summary: { contains: q, mode: "insensitive" as const } },
           { serviceCatalogItem: { name: { contains: q, mode: "insensitive" as const } } },
+          { items: { some: { serviceCatalogItem: { name: { contains: q, mode: "insensitive" as const } } } } },
+          { items: { some: { customDescription: { contains: q, mode: "insensitive" as const } } } },
           { property: { addressLine1: { contains: q, mode: "insensitive" as const } } },
         ],
       }
     : {};
 
-  const serviceWhere = serviceId ? { serviceCatalogItemId: serviceId } : {};
+  const serviceWhere = serviceId
+    ? {
+        OR: [
+          { serviceCatalogItemId: serviceId },
+          { items: { some: { serviceCatalogItemId: serviceId } } },
+        ],
+      }
+    : {};
 
   const where = { ...access.scope, ...tabWhere, ...searchWhere, ...serviceWhere };
 
@@ -136,6 +149,14 @@ export default async function RequestsPage({
           select: { addressLine1: true, addressLine2: true, city: true, region: true, postalCode: true },
         },
         serviceCatalogItem: { select: { name: true } },
+        items: {
+          orderBy: { sortOrder: "asc" },
+          select: {
+            customDescription: true,
+            serviceCatalogItem: { select: { name: true } },
+          },
+        },
+        photos: { select: { id: true } },
         estimates: {
           select: { id: true, status: true, total: true },
           orderBy: { createdAt: "asc" },
@@ -179,30 +200,38 @@ export default async function RequestsPage({
   // Decimal/Date fields are pre-formatted to plain strings here -- Prisma's
   // Decimal is a class instance and cannot cross the Server->Client
   // Component boundary as a prop.
-  const requests: RequestListItem[] = requestsRaw.map((request) => ({
-    id: request.id,
-    status: request.status,
-    createdAtLabel: formatDate(request.createdAt),
-    description: request.description,
-    summary: request.summary,
-    serviceName: request.serviceCatalogItem?.name ?? null,
-    propertyLabel: request.property ? formatAddress(request.property) : null,
-    customer: request.customer
-      ? {
-          id: request.customer.id,
-          name: request.customer.name,
-          email: request.customer.email,
-          phone: request.customer.phone,
-        }
-      : null,
-    estimate: request.estimates[0]
-      ? {
-          id: request.estimates[0].id,
-          status: request.estimates[0].status,
-          totalLabel: formatMoney(request.estimates[0].total),
-        }
-      : null,
-  }));
+  const requests: RequestListItem[] = requestsRaw.map((request) => {
+    const requestedTasks = requestedWorkLabels(request);
+    return {
+      id: request.id,
+      status: request.status,
+      createdAtLabel: formatDate(request.createdAt),
+      description: request.description,
+      summary: request.summary,
+      serviceName:
+        requestedWorkSummary(requestedTasks) ??
+        request.serviceCatalogItem?.name ??
+        null,
+      requestedTasks,
+      photoCount: request.photos.length,
+      propertyLabel: request.property ? formatAddress(request.property) : null,
+      customer: request.customer
+        ? {
+            id: request.customer.id,
+            name: request.customer.name,
+            email: request.customer.email,
+            phone: request.customer.phone,
+          }
+        : null,
+      estimate: request.estimates[0]
+        ? {
+            id: request.estimates[0].id,
+            status: request.estimates[0].status,
+            totalLabel: formatMoney(request.estimates[0].total),
+          }
+        : null,
+    };
+  });
 
   const kpis: KpiCardProps[] = [
     {

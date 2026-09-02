@@ -9,6 +9,7 @@ import type {
   SettingsReadiness,
   SettingsSection,
 } from "@/lib/settings";
+import type { PublicSiteImageEditorSlot } from "@/lib/public-site-images";
 
 export type SettingsWorkspaceProps = {
   section: SettingsSection;
@@ -18,6 +19,10 @@ export type SettingsWorkspaceProps = {
   integrations: IntegrationCard[];
   canEditConsequential: boolean;
   canEditPreferences: boolean;
+  websitePhotos?: {
+    storageConfigured: boolean;
+    slots: PublicSiteImageEditorSlot[];
+  };
 };
 
 export type {

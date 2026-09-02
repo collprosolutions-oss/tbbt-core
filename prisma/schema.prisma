@@ -177,7 +177,10 @@ model Business {
   pipelineOpportunities    PipelineOpportunity[]
   settings                 BusinessSettings?
   settingsAuditLogs        SettingsAuditLog[]
+  publicSiteImages         PublicSiteImage[]
   knowledgeEntries         KnowledgeEntry[]
+  serviceRequestItems      ServiceRequestItem[]
+  serviceRequestPhotos     ServiceRequestPhoto[]
 }
 
 model Membership {
@@ -235,6 +238,7 @@ model Membership {
   createdReviewResponses  ReviewResponse[]   @relation("ReviewResponseCreator")
   reviewedReviewResponses ReviewResponse[]   @relation("ReviewResponseReviewer")
   settingsAuditLogs        SettingsAuditLog[] @relation("SettingsAuditActor")
+  publicSiteImages         PublicSiteImage[]  @relation("PublicSiteImageActor")
   createdKnowledgeEntries  KnowledgeEntry[]   @relation("KnowledgeEntryCreator")
   reviewedKnowledgeEntries KnowledgeEntry[]   @relation("KnowledgeEntryReviewer")
 
@@ -312,6 +316,7 @@ model ServiceCatalogItem {
   business        Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
   lineItems       LineItem[]
   serviceRequests ServiceRequest[]
+  requestItems    ServiceRequestItem[]
 
   @@index([businessId])
 }
@@ -334,6 +339,10 @@ model ServiceRequest {
   customer           Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
   property           Property?           @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   serviceCatalogItem ServiceCatalogItem? @relation(fields: [serviceCatalogItemId], references: [id], onDelete: SetNull)
+  /// Additional requested tasks for a multi-service visit. Empty on legacy
+  /// single-service rows -- those keep using serviceCatalogItemId only.
+  items              ServiceRequestItem[]
+  photos             ServiceRequestPhoto[]
   estimates          Estimate[]
   /// Owner-managed sales state for this request, if any. Created lazily
   /// when the owner records CONTACTED / SITE_VISIT_NEEDS_INFO / FOLLOW_UP /
@@ -342,6 +351,49 @@ model ServiceRequest {
   pipelineOpportunity PipelineOpportunity?
 
   @@index([businessId])
+}
+
+/// One requested task on a public intake ServiceRequest. A customer can
+/// select multiple catalog services and/or a custom "Other" task for a
+/// single visit. Historical requests may have zero rows here and still
+/// remain readable via ServiceRequest.serviceCatalogItemId.
+model ServiceRequestItem {
+  id                   String   @id @default(cuid())
+  businessId           String
+  serviceRequestId     String
+  serviceCatalogItemId String?
+  /// Used when the customer chose "Other / Something Else" (or a catalog
+  /// item later became inactive/deleted). Never a comma-separated ID list.
+  customDescription    String?
+  /// Customer-selected count for this task. Whole numbers only, 1–99.
+  /// Never encoded only in notes. Default 1 keeps legacy rows valid.
+  quantity             Int      @default(1)
+  sortOrder            Int      @default(0)
+  createdAt            DateTime @default(now())
+
+  business           Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  serviceRequest     ServiceRequest      @relation(fields: [serviceRequestId], references: [id], onDelete: Cascade)
+  serviceCatalogItem ServiceCatalogItem? @relation(fields: [serviceCatalogItemId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([serviceRequestId])
+}
+
+/// Optional customer-uploaded project photos attached at public intake.
+/// Uses the same Vercel Blob storage helper as JobPhoto -- not a second
+/// storage system. Stores only a URL, never image bytes.
+model ServiceRequestPhoto {
+  id               String   @id @default(cuid())
+  businessId       String
+  serviceRequestId String
+  url              String
+  createdAt        DateTime @default(now())
+
+  business       Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  serviceRequest ServiceRequest @relation(fields: [serviceRequestId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([serviceRequestId])
 }
 
 model Estimate {
@@ -1209,6 +1261,11 @@ model BusinessSettings {
   notifyPayrollEvents  Boolean @default(true)
   notifyTeamEvents     Boolean @default(true)
 
+  /// Owner/admin background notes. Never published as-is.
+  rawOwnerStory String?
+  /// Owner-approved About story shown on the public website.
+  approvedPublicAboutCopy String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1234,6 +1291,27 @@ model SettingsAuditLog {
   @@index([businessId])
   @@index([businessId, settingArea])
   @@index([businessId, changedAt])
+}
+
+/// Owner/admin override for a single public-website marketing image slot.
+/// Defaults stay in code/assets. A row here only changes presentation for
+/// that business — never catalog data, project history, or page structure.
+model PublicSiteImage {
+  id                    String   @id @default(cuid())
+  businessId            String
+  page                  String
+  slot                  String
+  imageUrl              String?
+  objectPosition        String   @default("50% 50%")
+  updatedByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  updatedBy Membership? @relation("PublicSiteImageActor", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, page, slot])
+  @@index([businessId, page])
 }
 
 /// Internal operational knowledge for one business. This is NOT a second

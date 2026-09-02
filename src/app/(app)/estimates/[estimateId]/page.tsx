@@ -30,6 +30,7 @@ import { formatAddress, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
+import { requestedWorkLabels } from "@/lib/service-request-work";
 
 export const metadata: Metadata = {
   title: "Estimate",
@@ -56,7 +57,20 @@ export default async function EstimateBuilderPage({
           postalCode: true,
         },
       },
-      serviceRequest: { select: { description: true } },
+      serviceRequest: {
+        select: {
+          description: true,
+          summary: true,
+          serviceCatalogItem: { select: { name: true } },
+          items: {
+            orderBy: { sortOrder: "asc" },
+            select: {
+              customDescription: true,
+              serviceCatalogItem: { select: { name: true } },
+            },
+          },
+        },
+      },
       jobs: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
       lineItems: { orderBy: { createdAt: "asc" } },
       versions: {
@@ -137,11 +151,31 @@ export default async function EstimateBuilderPage({
           </p>
         ) : null}
         {estimate.serviceRequestId ? (
-          estimate.serviceRequest?.description ? (
-            <p className="mt-2 text-sm text-foreground">
-              {estimate.serviceRequest.description}
-            </p>
-          ) : null
+          <div className="mt-2 space-y-1 text-sm text-foreground">
+            {(() => {
+              const tasks = estimate.serviceRequest
+                ? requestedWorkLabels(estimate.serviceRequest)
+                : [];
+              if (tasks.length === 0) return null;
+              return (
+                <div>
+                  <p className="font-medium">Requested work</p>
+                  <ul className="list-disc pl-5">
+                    {tasks.map((task) => (
+                      <li key={task}>{task}</li>
+                    ))}
+                  </ul>
+                  <p className="mt-1 text-muted-foreground">
+                    Customer request is context only. Add estimate lines after
+                    you review the scope.
+                  </p>
+                </div>
+              );
+            })()}
+            {estimate.serviceRequest?.description ? (
+              <p>{estimate.serviceRequest.description}</p>
+            ) : null}
+          </div>
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">Manual estimate</p>
         )}
