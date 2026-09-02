@@ -165,7 +165,7 @@ export const PUBLIC_QUOTE_HERO_IMAGE = "/brand/projects/wall-cabinets.jpg";
  */
 export const COLLPRO_QUOTE_HERO_IMAGE = "/brand/collpro/quote-hero.png";
 /** Keep the handyman/customer on the right, left side usable for HTML copy. */
-export const COLLPRO_QUOTE_HERO_POSITION = "58% 42%";
+export const COLLPRO_QUOTE_HERO_POSITION = "80% 26%";
 export const PUBLIC_QUOTE_HERO_POSITION = "70% 40%";
 export const PUBLIC_ABOUT_PHOTO = "/brand/illustrative/craftsman-hero.jpg";
 export const PUBLIC_INNER_HERO_IMAGE = "/brand/illustrative/tools-services.jpg";
