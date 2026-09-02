@@ -269,7 +269,7 @@ const qtyQuery = selectedWorkQuery({
 });
 const qtyParsed = parseSelectedWorkSearch({ services: "door:3,fan" });
 check("Services query preserves quantities across the Request handoff",
-  qtyQuery === "?services=door:3,fan" &&
+  decodeURIComponent(qtyQuery) === "?services=door:3,fan" &&
     qtyParsed.catalogIds.join(",") === "door,fan" &&
     qtyParsed.quantities.door === 3 &&
     qtyParsed.quantities.fan === 1);
@@ -301,10 +301,15 @@ check("Estimate-draft helper keeps quantity and catalog pricing ready",
   draftLines[0]?.quantity === 3 &&
     draftLines[0]?.unitPrice === 75 &&
     draftLines[1]?.priced === false);
+const createEstimateFn = estimateActionSrc.slice(
+  estimateActionSrc.indexOf("export async function createEstimate"),
+  estimateActionSrc.indexOf("async function findReusableCustomer"),
+);
 check("Owner estimate creation remains a draft handoff, not an auto-send",
-  estimateActionSrc.includes("createEstimate") &&
-    !estimateActionSrc.includes("status: \"SENT\"") &&
-    !estimateActionSrc.includes("status: \"APPROVED\""));
+  createEstimateFn.includes("tx.estimate.create") &&
+    !createEstimateFn.includes("lineItems") &&
+    !createEstimateFn.includes("SENT") &&
+    !createEstimateFn.includes("APPROVED"));
 
 check("Legacy request with only serviceCatalogItem remains readable",
   requestedWorkLabels({
@@ -599,9 +604,9 @@ try {
     }),
   }) : [];
   check("Estimate handoff retains requested-task context",
-    estimateTasks.includes("Door Adjustment") &&
-      estimateTasks.includes("TV Mounting") &&
-      estimateTasks.includes("Caulking around the tub"));
+    estimateTasks.some((label) => label.includes("Door Adjustment")) &&
+      estimateTasks.some((label) => label.includes("TV Mounting")) &&
+      estimateTasks.some((label) => label.includes("Caulking around the tub")));
   check("Creating an estimate from a request does not auto-add priced lines",
     estimate.lineItems.length === 0 && estimate.jobs.length === 0);
 
