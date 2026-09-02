@@ -272,7 +272,7 @@ export const REVIEWS_TRUST_VALUES = [
 ] as const;
 
 export const REVIEWS_UNRATED_STATUS = {
-  title: "Review status",
+  title: "Rating / Review status",
   body: "No public reviews are available to display yet.",
 } as const;
 

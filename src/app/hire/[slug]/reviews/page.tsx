@@ -70,7 +70,7 @@ export default async function PublicReviewsPage({ params }: PageProps) {
             {REVIEWS_TRUST_VALUES.map((item, index) => {
               const Icon = TRUST_ICONS[index] ?? Shield;
               return (
-                <div key={item.title} className="public-trust-item">
+                <div key={item.title} className="public-trust-item public-reviews-trust-value">
                   <Icon className="size-7 text-[var(--public-blue)]" aria-hidden="true" />
                   <div>
                     <h2>{item.title}</h2>

@@ -431,8 +431,23 @@
   gap: 0;
 }
 
+.public-reviews-trust-grid .public-trust-item {
+  align-items: center;
+  padding: 0.85rem 0.75rem;
+}
+
 .public-reviews-trust-grid .public-trust-item + .public-trust-item {
   border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.public-reviews-trust-grid .public-trust-item h2 {
+  font-size: 0.92rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.public-reviews-trust-value p {
+  display: none;
 }
 
 .public-section {
@@ -959,6 +974,17 @@
   font-size: 0.78rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+@media (min-width: 1024px) {
+  .public-reviews-trust-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .public-reviews-trust-grid .public-trust-item + .public-trust-item {
+    border-top: 0;
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+  }
 }
 
 @media (min-width: 768px) {

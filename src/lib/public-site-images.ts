@@ -52,8 +52,8 @@ export const PUBLIC_ABOUT_HERO_DEFAULT_POSITION = "78% 42%";
 export const COLLPRO_ABOUT_HERO_DEFAULT_POSITION = "68% 40%";
 export const PUBLIC_ABOUT_STORY_DEFAULT_POSITION = "50% 45%";
 export const PUBLIC_REVIEWS_HERO_DEFAULT_POSITION = "50% 40%";
-/** Keep the CollPro Reviews subject on the right, darker left for HTML text. */
-export const COLLPRO_REVIEWS_HERO_DEFAULT_POSITION = "78% 42%";
+/** Keep the CollPro Reviews homeowners on the right, darker left for HTML text. */
+export const COLLPRO_REVIEWS_HERO_DEFAULT_POSITION = "80% 46%";
 
 export function publicReviewsHeroDefaultSrc(slug?: string | null) {
   return publicReviewsHeroImage(slug);
