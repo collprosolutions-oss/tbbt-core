@@ -8,9 +8,13 @@ import { PublicSiteShell } from "@/components/public/public-site-shell";
 import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { smsHref } from "@/lib/directions";
 import {
+  EXTENDED_SERVICE_AREA_COPY,
+  LEE_COUNTY_COMMUNITIES,
+  LEE_COUNTY_MAP_POINTS,
   PUBLIC_AREA_HERO_IMAGE,
   SERVICE_AREA_COPY,
   SERVICE_AREA_MAP_IMAGE,
+  SERVICE_AREA_MAP_VIEWBOX,
   TEXT_US_LABEL,
   TRUST_POINTS,
   publicDisplayName,
@@ -102,20 +106,52 @@ export default async function PublicServiceAreaPage({ params }: PageProps) {
                   ) : null}
                 </div>
               </div>
+              <div className="public-service-communities">
+                <h2>Where We Serve — Lee County</h2>
+                <ul className="public-service-community-list">
+                  {LEE_COUNTY_COMMUNITIES.map((name) => (
+                    <li key={name}>{name}</li>
+                  ))}
+                </ul>
+                <p className="public-service-community-note">and surrounding areas</p>
+              </div>
+              <div className="public-service-extended">
+                <h2>Extended Service Area</h2>
+                <p>{EXTENDED_SERVICE_AREA_COPY}</p>
+              </div>
             </div>
             <div>
-              <a
-                href="https://www.openstreetmap.org/#map=10/26.62/-81.94"
-                className="block overflow-hidden rounded-lg"
-              >
-                <Image
-                  src={SERVICE_AREA_MAP_IMAGE}
-                  alt="Map of the Fort Myers and Cape Coral area"
-                  width={1280}
-                  height={1024}
-                  className="public-map w-full object-cover"
-                />
-              </a>
+              <div className="public-service-map">
+                <a
+                  href="https://www.openstreetmap.org/#map=10/26.62/-81.94"
+                  className="public-service-map-frame"
+                >
+                  <Image
+                    src={SERVICE_AREA_MAP_IMAGE}
+                    alt="Map of the Fort Myers and Cape Coral area"
+                    width={1280}
+                    height={1024}
+                    className="public-map w-full object-cover"
+                  />
+                  <svg
+                    className="public-service-map-overlay"
+                    viewBox={SERVICE_AREA_MAP_VIEWBOX}
+                    preserveAspectRatio="xMidYMid slice"
+                    aria-hidden="true"
+                  >
+                    <polygon
+                      points={LEE_COUNTY_MAP_POINTS}
+                      fill="rgba(255, 214, 64, 0.18)"
+                      stroke="#c9971a"
+                      strokeWidth="3"
+                    />
+                  </svg>
+                </a>
+                <p className="public-service-map-legend">
+                  <span className="public-service-map-legend-swatch" aria-hidden="true" />
+                  Primary Service Area — Lee County
+                </p>
+              </div>
               <p className="mt-3 text-sm text-muted-foreground">
                 Map shows the Fort Myers / Cape Coral area. It is not an exact
                 service-boundary guarantee. Map data © OpenStreetMap contributors.
