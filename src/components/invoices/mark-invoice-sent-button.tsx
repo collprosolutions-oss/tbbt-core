@@ -17,7 +17,7 @@ export function MarkInvoiceSentButton({ invoiceId }: { invoiceId: string }) {
       }}
     >
       <Button type="submit" size="sm" variant="outline" disabled={isPending}>
-        {isPending ? "Marking sent…" : "Mark Sent"}
+        {isPending ? "Sending…" : "Send Invoice"}
       </Button>
     </form>
   );

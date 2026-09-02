@@ -4,9 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
-import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
+import { persistDraftInvoiceFromCompletedJob } from "@/lib/invoice-carry-forward";
 import { isPaymentMethodValue } from "@/lib/invoice-payment";
-import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { prisma } from "@/lib/prisma";
 
 export type InvoiceActionState = {
@@ -17,14 +16,6 @@ function readString(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value.trim() : "";
 }
-
-const LINE_ITEM_SELECT = {
-  description: true,
-  quantity: true,
-  unitPrice: true,
-  total: true,
-  type: true,
-} as const;
 
 /**
  * Invoice billable total = Original Approved Total (from the bound
@@ -40,6 +31,10 @@ const LINE_ITEM_SELECT = {
  * "This job has approved changes not yet billed" note surfaced on the
  * Work Order page instead) -- this function must never be called to
  * "refresh" an existing invoice's total.
+ *
+ * Approved estimate / change-order line items are copied onto the new
+ * Invoice as LineItem snapshots (see persistDraftInvoiceFromCompletedJob).
+ * This action never auto-sends or marks the invoice paid.
  */
 export async function createInvoiceFromJob(
   jobId: string,
@@ -49,21 +44,7 @@ export async function createInvoiceFromJob(
   const job = access.assertOwned(
     await prisma.job.findFirst({
       where: { id: jobId, ...access.scope },
-      include: {
-        estimate: {
-          select: { total: true, lineItems: { select: LINE_ITEM_SELECT } },
-        },
-        approvedEstimateVersion: {
-          select: {
-            versionNumber: true,
-            total: true,
-            laborMinimumAdjustment: true,
-            approvedAt: true,
-            lineItems: { select: LINE_ITEM_SELECT },
-          },
-        },
-        changeOrders: { select: { status: true, total: true } },
-      },
+      select: { id: true, status: true, businessId: true },
     }),
   );
 
@@ -83,27 +64,17 @@ export async function createInvoiceFromJob(
     redirect(`/invoices/${existing.id}`);
   }
 
-  const approvedScope = resolveApprovedWorkOrderScope(job);
-  if (approvedScope.source === "none") {
-    return { error: "This job has no linked estimate." };
-  }
-
-  const total = resolveCurrentApprovedProjectTotal(
-    approvedScope.total,
-    job.changeOrders,
-  );
-
-  const invoice = await prisma.invoice.create({
-    data: {
-      businessId: access.businessId,
-      customerId: job.customerId,
-      jobId: job.id,
-      total,
-    },
+  const result = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: access.businessId,
+    jobId: job.id,
   });
 
+  if (!result.ok) {
+    return { error: result.error };
+  }
+
   revalidatePath(`/jobs/${job.id}`);
-  redirect(`/invoices/${invoice.id}`);
+  redirect(`/invoices/${result.invoiceId}`);
 }
 
 export async function markInvoiceSent(

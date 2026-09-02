@@ -236,6 +236,23 @@ export default async function CustomerProjectPortalPage({
                     "Outstanding"
                   )}
                 </p>
+                {invoice.status === "SENT" || invoice.status === "PAID" ? (
+                  <p className="pt-2">
+                    <a
+                      href={`/p/${token}/invoice`}
+                      className="underline underline-offset-4"
+                    >
+                      View Invoice
+                    </a>
+                    {" · "}
+                    <a
+                      href={`/p/${token}/invoice/pdf`}
+                      className="underline underline-offset-4"
+                    >
+                      Download PDF
+                    </a>
+                  </p>
+                ) : null}
               </>
             ) : (
               <p className="text-muted-foreground">

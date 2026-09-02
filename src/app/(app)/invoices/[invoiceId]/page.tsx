@@ -7,14 +7,17 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { RecordNav } from "@/components/record-nav";
 import { StatusBadge } from "@/components/status-badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
+  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
 import { formatDateTime, formatMoney } from "@/lib/format";
+import { invoiceNumberFromId } from "@/lib/invoice-document";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
 
@@ -58,8 +61,19 @@ export default async function InvoicePage({
         }
       >
         <div className="flex flex-wrap items-center gap-2">
+          <Button asChild size="sm" variant="outline">
+            <Link href={`/invoices/${invoice.id}/preview`}>Preview Invoice</Link>
+          </Button>
+          <Button asChild size="sm" variant="outline">
+            <a href={`/invoices/${invoice.id}/pdf`}>Download PDF</a>
+          </Button>
           {isDraft ? <MarkInvoiceSentButton invoiceId={invoice.id} /> : null}
           {isSent ? <MarkInvoicePaidForm invoiceId={invoice.id} /> : null}
+          {invoice.job ? (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/jobs/${invoice.job.id}`}>Open Job</Link>
+            </Button>
+          ) : null}
           <RecordNav
             customerId={invoice.customerId}
             backHref="/invoices"
@@ -67,6 +81,24 @@ export default async function InvoicePage({
           />
         </div>
       </PageHeader>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Customer invoice</CardTitle>
+          <CardDescription>
+            {invoiceNumberFromId(invoice.id)} — preview or download the
+            customer-facing document. Sending and payment stay on this page.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          <Button asChild size="sm">
+            <Link href={`/invoices/${invoice.id}/preview`}>Preview Invoice</Link>
+          </Button>
+          <Button asChild size="sm" variant="outline">
+            <a href={`/invoices/${invoice.id}/pdf`}>Download PDF</a>
+          </Button>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

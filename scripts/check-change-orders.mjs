@@ -45,6 +45,7 @@ import {
   persistDraftChangeOrderTotal,
   resolveCurrentApprovedProjectTotal,
 } from "../src/lib/change-order.ts";
+import { persistDraftInvoiceFromCompletedJob } from "../src/lib/invoice-carry-forward.ts";
 import { resolveApprovedWorkOrderScope } from "../src/lib/job-work-order.ts";
 
 const baseUrl = process.env.DATABASE_URL;
@@ -376,32 +377,20 @@ async function fetchJobForScope(jobId) {
   });
 }
 
-/** Mirrors src/app/actions/invoice.ts createInvoiceFromJob() total computation + guard shape. */
+/** Mirrors src/app/actions/invoice.ts createInvoiceFromJob() using the real persist helper. */
 async function mirrorCreateInvoiceFromJob(access, jobId) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
-  const job = access.assertOwned(
+  access.assertOwned(
     await prisma.job.findFirst({ where: { id: jobId, ...access.scope } }),
   );
-  if (job.status !== "COMPLETED") {
-    throw new Error("Only a completed job can become an invoice.");
-  }
-  const existing = await prisma.invoice.findFirst({
-    where: { ...access.scope, jobId: job.id },
-    select: { id: true },
+  const result = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: access.businessId,
+    jobId,
   });
-  if (existing) {
-    return { ok: true, invoiceId: existing.id, reused: true };
+  if (!result.ok) {
+    throw new Error(result.error);
   }
-  const jobWithScope = await fetchJobForScope(job.id);
-  const approvedScope = resolveApprovedWorkOrderScope(jobWithScope);
-  if (approvedScope.source === "none") {
-    throw new Error("This job has no linked estimate.");
-  }
-  const total = resolveCurrentApprovedProjectTotal(approvedScope.total, jobWithScope.changeOrders);
-  const invoice = await prisma.invoice.create({
-    data: { businessId: access.businessId, customerId: job.customerId, jobId: job.id, total },
-  });
-  return { ok: true, invoiceId: invoice.id, reused: false, total };
+  return result;
 }
 
 /** Mirrors the guarded DRAFT -> SENT transition + version snapshot in sendEstimate(). */
