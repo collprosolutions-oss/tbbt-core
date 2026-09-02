@@ -9,7 +9,7 @@ import { register } from "node:module";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -17,7 +17,13 @@ const { ForbiddenError, CAPABILITIES, requireBusinessCapability } = await import
   "@/lib/authorization"
 );
 const { assertSettingsBusinessScope } = await import("@/lib/settings-ops");
-const { HOME_FEATURED_PROJECT_IDS, publicCategoryPhoto } = await import("@/lib/public-site");
+const {
+  COLLPRO_ABOUT_HERO_IMAGE,
+  HOME_FEATURED_PROJECT_IDS,
+  PUBLIC_ABOUT_HERO_IMAGE,
+  publicAboutHeroImage,
+  publicCategoryPhoto,
+} = await import("@/lib/public-site");
 const { selectPublicProjectsById } = await import("@/lib/public-projects");
 const {
   PUBLIC_HOME_HERO_DEFAULT_POSITION,
@@ -172,6 +178,19 @@ const aboutPresented = buildPublicAboutImagePresentation([]);
 check("About hero and story slots start on company/handyman defaults",
   aboutPresented.hero.src.includes("craftsman-hero") &&
     aboutPresented.story.src.includes("door-install"));
+check("Unbranded TBBT About hero fallback stays generic",
+  PUBLIC_ABOUT_HERO_IMAGE === "/brand/illustrative/craftsman-hero.jpg" &&
+    publicAboutHeroImage("acme-handyman") === PUBLIC_ABOUT_HERO_IMAGE);
+const collproAbout = buildPublicAboutImagePresentation([], "collpro-reno");
+check("CollPro About hero default is the CollPro-specific asset",
+  publicAboutHeroImage("collpro-reno") === COLLPRO_ABOUT_HERO_IMAGE &&
+    collproAbout.hero.src === COLLPRO_ABOUT_HERO_IMAGE &&
+    !collproAbout.hero.isOverride);
+check("Another subscriber does not inherit the CollPro About hero",
+  buildPublicAboutImagePresentation([], "other-handyman").hero.src ===
+    PUBLIC_ABOUT_HERO_IMAGE);
+check("CollPro About hero asset is stored on disk",
+  existsSync(new URL("../public/brand/collpro/about-hero.png", import.meta.url)));
 
 try {
   const ownerUser = await prisma.user.create({

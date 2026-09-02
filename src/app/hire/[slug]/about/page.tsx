@@ -40,7 +40,7 @@ export default async function PublicAboutPage({ params }: PageProps) {
   }
   const phone = publicPhone(site.business.slug);
   const [images, settings] = await Promise.all([
-    loadPublicAboutImages(prisma, site.business.id),
+    loadPublicAboutImages(prisma, site.business.id, site.business.slug),
     prisma.businessSettings.findUnique({
       where: { businessId: site.business.id },
       select: { approvedPublicAboutCopy: true },

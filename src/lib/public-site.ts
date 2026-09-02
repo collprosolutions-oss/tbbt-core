@@ -143,7 +143,13 @@ export const PUBLIC_REVIEWS_HERO_IMAGE = "/brand/illustrative/tools-reviews.jpg"
 export const PUBLIC_AREA_HERO_IMAGE = "/brand/illustrative/coastal-area.jpg";
 export const PUBLIC_CONTACT_HERO_IMAGE = "/brand/illustrative/dusk-home.jpg";
 export const PUBLIC_PROJECTS_HERO_IMAGE = "/brand/projects/lanai-porch.jpg";
+/** Neutral TBBT About-hero fallback. Must not contain subscriber branding. */
 export const PUBLIC_ABOUT_HERO_IMAGE = "/brand/illustrative/craftsman-hero.jpg";
+/**
+ * CollPro Reno business-content About hero. Visible CollPro branding lives
+ * in this subscriber asset only — never in the reusable About template.
+ */
+export const COLLPRO_ABOUT_HERO_IMAGE = "/brand/collpro/about-hero.png";
 export const PUBLIC_ABOUT_STORY_IMAGE = "/brand/projects/door-install.jpg";
 export const PUBLIC_QUOTE_HERO_IMAGE = "/brand/projects/wall-cabinets.jpg";
 export const PUBLIC_ABOUT_PHOTO = "/brand/illustrative/craftsman-hero.jpg";
@@ -224,6 +230,13 @@ export function publicPhone(slug: string) {
 
 export function publicLogoSrc(slug: string) {
   return getBusinessLogoSrc(slug);
+}
+
+/** Per-business About hero default. Other subscribers keep the unbranded fallback. */
+export function publicAboutHeroImage(slug?: string | null) {
+  return slug && isCollProRenoSlug(slug)
+    ? COLLPRO_ABOUT_HERO_IMAGE
+    : PUBLIC_ABOUT_HERO_IMAGE;
 }
 
 export function publicSiteUrl(slug: string) {

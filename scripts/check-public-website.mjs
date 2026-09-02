@@ -173,11 +173,16 @@ check("About page uses company/handyman imagery, not project-gallery photos",
   (() => {
     const about = readRepo("src/components/public/public-about.tsx");
     const page = readRepo("src/app/hire/[slug]/about/page.tsx");
+    const hero = readRepo("src/components/public/public-page-hero.tsx");
     const site = readRepo("src/lib/public-site.ts");
     return (
       site.includes('PUBLIC_ABOUT_HERO_IMAGE = "/brand/illustrative/craftsman-hero.jpg"') &&
+      site.includes('COLLPRO_ABOUT_HERO_IMAGE = "/brand/collpro/about-hero.png"') &&
+      site.includes("publicAboutHeroImage") &&
       site.includes('PUBLIC_ABOUT_STORY_IMAGE = "/brand/projects/door-install.jpg"') &&
       page.includes("loadPublicAboutImages") &&
+      !hero.includes("collpro/about-hero") &&
+      !about.includes("collpro/about-hero") &&
       about.includes("Our Story") &&
       about.includes("Why Homeowners Choose CollPro Reno") &&
       about.includes("What Our Customers Say") &&

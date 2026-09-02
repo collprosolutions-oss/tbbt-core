@@ -14,10 +14,11 @@ import {
 } from "@/lib/authorization";
 import {
   HOMEPAGE_CATEGORY_LIMIT,
-  PUBLIC_ABOUT_HERO_IMAGE,
   PUBLIC_ABOUT_STORY_IMAGE,
   PUBLIC_HOME_HERO_IMAGE,
   PUBLIC_SERVICES_HERO_IMAGE,
+  isCollProRenoSlug,
+  publicAboutHeroImage,
   publicCategoryPhoto,
   type PublicCatalogGroup,
 } from "@/lib/public-site";
@@ -44,7 +45,19 @@ export const PUBLIC_HOME_CATEGORY_DEFAULT_POSITION = "50% 50%";
 export const PUBLIC_SERVICES_HERO_DEFAULT_POSITION = "50% 40%";
 export const PUBLIC_SERVICES_CATEGORY_DEFAULT_POSITION = "50% 50%";
 export const PUBLIC_ABOUT_HERO_DEFAULT_POSITION = "78% 42%";
+/** Crop for CollPro's wide greeting photo so the people stay visible. */
+export const COLLPRO_ABOUT_HERO_DEFAULT_POSITION = "54% 40%";
 export const PUBLIC_ABOUT_STORY_DEFAULT_POSITION = "50% 45%";
+
+export function publicAboutHeroDefaultSrc(slug?: string | null) {
+  return publicAboutHeroImage(slug);
+}
+
+export function publicAboutHeroDefaultPosition(slug?: string | null) {
+  return slug && isCollProRenoSlug(slug)
+    ? COLLPRO_ABOUT_HERO_DEFAULT_POSITION
+    : PUBLIC_ABOUT_HERO_DEFAULT_POSITION;
+}
 
 export const PUBLIC_SITE_IMAGE_STORAGE_UNAVAILABLE =
   "Image storage is not configured for this environment. Existing photos stay in place. Connect Vercel Blob (BLOB_READ_WRITE_TOKEN) before replacing website photos.";
@@ -226,12 +239,13 @@ export async function loadPublicHomeImages(
 
 export function buildPublicAboutImagePresentation(
   rows: PublicSiteImageRow[],
+  slug?: string | null,
 ): PublicAboutImagePresentation {
   const bySlot = new Map(rows.map((row) => [`${row.page}:${row.slot}`, row]));
   return {
     hero: resolvePublicSiteImage({
-      defaultSrc: PUBLIC_ABOUT_HERO_IMAGE,
-      defaultPosition: PUBLIC_ABOUT_HERO_DEFAULT_POSITION,
+      defaultSrc: publicAboutHeroDefaultSrc(slug),
+      defaultPosition: publicAboutHeroDefaultPosition(slug),
       row: bySlot.get(`${PUBLIC_SITE_ABOUT_PAGE}:${PUBLIC_SITE_HERO_SLOT}`),
     }),
     story: resolvePublicSiteImage({
@@ -262,17 +276,26 @@ export async function loadPublicServicesImages(
 export async function loadPublicAboutImages(
   db: PrismaClient,
   businessId: string,
+  slug?: string | null,
 ): Promise<PublicAboutImagePresentation> {
-  const rows = await db.publicSiteImage.findMany({
-    where: { businessId, page: PUBLIC_SITE_ABOUT_PAGE },
-    select: {
-      page: true,
-      slot: true,
-      imageUrl: true,
-      objectPosition: true,
-    },
-  });
-  return buildPublicAboutImagePresentation(rows);
+  const [rows, business] = await Promise.all([
+    db.publicSiteImage.findMany({
+      where: { businessId, page: PUBLIC_SITE_ABOUT_PAGE },
+      select: {
+        page: true,
+        slot: true,
+        imageUrl: true,
+        objectPosition: true,
+      },
+    }),
+    slug
+      ? Promise.resolve(null)
+      : db.business.findUnique({
+          where: { id: businessId },
+          select: { slug: true },
+        }),
+  ]);
+  return buildPublicAboutImagePresentation(rows, slug ?? business?.slug);
 }
 
 export async function loadWebsitePhotoEditorSlots(
@@ -281,9 +304,13 @@ export async function loadWebsitePhotoEditorSlots(
   groups: PublicCatalogGroup[],
 ): Promise<PublicSiteImageEditorSlot[]> {
   const visibleHomeGroups = groups.slice(0, HOMEPAGE_CATEGORY_LIMIT);
+  const business = await db.business.findUnique({
+    where: { id: businessId },
+    select: { slug: true },
+  });
   const home = await loadPublicHomeImages(db, businessId, visibleHomeGroups);
   const services = await loadPublicServicesImages(db, businessId, groups);
-  const about = await loadPublicAboutImages(db, businessId);
+  const about = await loadPublicAboutImages(db, businessId, business?.slug);
   return [
     {
       page: PUBLIC_SITE_HOME_PAGE,
@@ -349,8 +376,8 @@ export async function loadWebsitePhotoEditorSlots(
       label: "About hero",
       kind: "hero",
       category: null,
-      defaultSrc: PUBLIC_ABOUT_HERO_IMAGE,
-      defaultPosition: PUBLIC_ABOUT_HERO_DEFAULT_POSITION,
+      defaultSrc: publicAboutHeroDefaultSrc(business?.slug),
+      defaultPosition: publicAboutHeroDefaultPosition(business?.slug),
       src: about.hero.src,
       objectPosition: about.hero.objectPosition,
       isOverride: about.hero.isOverride,
