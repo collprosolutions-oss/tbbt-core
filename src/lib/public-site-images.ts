@@ -46,7 +46,7 @@ export const PUBLIC_SERVICES_HERO_DEFAULT_POSITION = "50% 40%";
 export const PUBLIC_SERVICES_CATEGORY_DEFAULT_POSITION = "50% 50%";
 export const PUBLIC_ABOUT_HERO_DEFAULT_POSITION = "78% 42%";
 /** Crop for CollPro's wide greeting photo so the people stay visible. */
-export const COLLPRO_ABOUT_HERO_DEFAULT_POSITION = "54% 40%";
+export const COLLPRO_ABOUT_HERO_DEFAULT_POSITION = "68% 40%";
 export const PUBLIC_ABOUT_STORY_DEFAULT_POSITION = "50% 45%";
 
 export function publicAboutHeroDefaultSrc(slug?: string | null) {
