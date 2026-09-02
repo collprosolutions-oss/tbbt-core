@@ -41,7 +41,13 @@ const {
   parseSelectedTasks,
   requestedWorkLabels,
 } = await import("@/lib/service-request-work");
-const { draftEstimateLinesFromRequestItems } = await import("@/lib/request-estimate-draft");
+const {
+  addRequestDraftLines,
+  CUSTOM_QUOTE_DRAFT_MARKER,
+  STARTING_AT_DRAFT_MARKER,
+  draftEstimateLinesFromRequestItems,
+  isUnpricedCustomQuoteDraftLine,
+} = await import("@/lib/request-estimate-draft");
 const {
   parseSelectedWorkSearch,
   selectedWorkQuery,
@@ -378,11 +384,20 @@ const createEstimateFn = estimateActionSrc.slice(
   estimateActionSrc.indexOf("export async function createEstimate"),
   estimateActionSrc.indexOf("async function findReusableCustomer"),
 );
+check("Owner Create Estimate wires the request-draft helper",
+  createEstimateFn.includes("addRequestDraftLines") &&
+    createEstimateFn.includes("tx.estimate.create"));
 check("Owner estimate creation remains a draft handoff, not an auto-send",
-  createEstimateFn.includes("tx.estimate.create") &&
-    !createEstimateFn.includes("lineItems") &&
-    !createEstimateFn.includes("SENT") &&
-    !createEstimateFn.includes("APPROVED"));
+  !createEstimateFn.includes('status: "SENT"') &&
+    !createEstimateFn.includes('status: "APPROVED"') &&
+    !createEstimateFn.includes("createJob") &&
+    !createEstimateFn.includes("invoice.create"));
+check("Send Estimate still blocks unpriced custom-quote draft lines",
+  estimateActionSrc.includes("isUnpricedCustomQuoteDraftLine") &&
+    estimateActionSrc.includes("Enter a price for each custom-quote line before sending."));
+const estimatePageSrc = readRepo("src/app/(app)/estimates/[estimateId]/page.tsx");
+check("Estimate page tells the owner the draft was prefilled from the request",
+  estimatePageSrc.includes("Prefilled from customer request — review before sending."));
 
 check("Legacy request with only serviceCatalogItem remains readable",
   requestedWorkLabels({
@@ -661,6 +676,17 @@ try {
     legacy.items.length === 0 &&
       requestedWorkLabels(legacy).join(",") === "TV Mounting");
 
+  const requestItems = createdMany
+    ? await prisma.serviceRequestItem.findMany({
+        where: { serviceRequestId: createdMany.id },
+        orderBy: { sortOrder: "asc" },
+        include: {
+          serviceCatalogItem: {
+            select: { id: true, name: true, pricingMode: true, price: true },
+          },
+        },
+      })
+    : [];
   const estimate = await prisma.estimate.create({
     data: {
       businessId: businessA.id,
@@ -668,20 +694,82 @@ try {
       total: new Prisma.Decimal(0),
       publicToken: randomUUID(),
     },
-    include: { lineItems: true, jobs: true },
   });
-  const estimateTasks = createdMany ? requestedWorkLabels({
-    items: await prisma.serviceRequestItem.findMany({
-      where: { serviceRequestId: createdMany.id },
-      include: { serviceCatalogItem: { select: { name: true } } },
-    }),
-  }) : [];
+  await prisma.$transaction(async (tx) => {
+    await addRequestDraftLines(tx, {
+      businessId: businessA.id,
+      estimateId: estimate.id,
+      items: requestItems,
+    });
+  });
+  const prefilled = await prisma.estimate.findUnique({
+    where: { id: estimate.id },
+    include: { lineItems: { orderBy: { createdAt: "asc" } }, jobs: true },
+  });
+  const estimateTasks = requestedWorkLabels({ items: requestItems });
   check("Estimate handoff retains requested-task context",
     estimateTasks.some((label) => label.includes("Door Adjustment")) &&
       estimateTasks.some((label) => label.includes("TV Mounting")) &&
       estimateTasks.some((label) => label.includes("Caulking around the tub")));
-  check("Creating an estimate from a request does not auto-add priced lines",
-    estimate.lineItems.length === 0 && estimate.jobs.length === 0);
+  check("Create Estimate prefills one DRAFT line per requested item",
+    prefilled?.status === "DRAFT" &&
+      prefilled.lineItems.length === 4 &&
+      prefilled.jobs.length === 0);
+  const doorLine = prefilled?.lineItems.find((item) => item.description.includes("Door Adjustment"));
+  const quoteLine = prefilled?.lineItems.find((item) => item.description.includes("Custom Carpentry"));
+  const otherLine = prefilled?.lineItems.find((item) => item.description.includes("Caulking around the tub"));
+  const tvLine = prefilled?.lineItems.find((item) => item.description.includes("TV Mounting"));
+  check("FIXED draft line uses the catalog price snapshot",
+    tvLine?.quantity.toString() === "1" && tvLine?.unitPrice.toString() === "150");
+  check("STARTING_AT draft line keeps quantity and a starting-at marker",
+    doorLine?.quantity.toString() === "1" &&
+      Boolean(doorLine?.description.includes(STARTING_AT_DRAFT_MARKER)) &&
+      doorLine?.unitPrice.toString() === "75");
+  check("CUSTOM_QUOTE draft line invents no final price",
+    Boolean(quoteLine?.description.includes(CUSTOM_QUOTE_DRAFT_MARKER)) &&
+      quoteLine?.unitPrice.toString() === "0" &&
+      isUnpricedCustomQuoteDraftLine(quoteLine ?? { unitPrice: 0, description: "" }));
+  check("Other-work draft line also requires an owner price",
+    Boolean(otherLine?.description.includes(CUSTOM_QUOTE_DRAFT_MARKER)) &&
+      otherLine?.unitPrice.toString() === "0");
+  check("Prefill does not create a Job or Invoice",
+    prefilled?.jobs.length === 0 &&
+      (await prisma.invoice.count({ where: { businessId: businessA.id } })) === 0);
+
+  const qtyItems = qtyRequest.ok
+    ? await prisma.serviceRequestItem.findMany({
+        where: { serviceRequestId: qtyRequest.requestId },
+        include: {
+          serviceCatalogItem: {
+            select: { id: true, name: true, pricingMode: true, price: true },
+          },
+        },
+      })
+    : [];
+  const qtyEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      serviceRequestId: qtyRequest.ok ? qtyRequest.requestId : undefined,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  await addRequestDraftLines(prisma, {
+    businessId: businessA.id,
+    estimateId: qtyEstimate.id,
+    items: qtyItems,
+  });
+  const qtyPrefill = await prisma.lineItem.findFirst({
+    where: { estimateId: qtyEstimate.id },
+  });
+  check("Request quantity 3 is prefilled on the draft line",
+    qtyPrefill?.quantity.toString() === "3");
+
+  check("createEstimate redirects to an existing request estimate instead of inserting again",
+    createEstimateFn.includes("if (existing)") &&
+      createEstimateFn.includes("if (raced)"));
+  check("Existing request estimate is preserved rather than creating a second estimate",
+    (await prisma.estimate.count({ where: { serviceRequestId: createdMany?.id } })) === 1);
 
   const publicItems = (await prisma.serviceCatalogItem.findMany({
     where: { businessId: businessA.id, active: true },
