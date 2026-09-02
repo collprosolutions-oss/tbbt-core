@@ -242,10 +242,10 @@ check("Browser businessId is accepted only to be ignored",
   readRepo("src/lib/public-intake.ts").includes("Browser-supplied businessId is never authorization"));
 check("Internal request detail lists Requested Work",
   requestsWorkspaceSrc.includes("Requested Work") && requestsWorkspaceSrc.includes("requestedTasks.map"));
-check("Estimate handoff keeps request context and does not auto-add lines",
+check("Estimate handoff keeps request context and prefills draft lines",
   estimatePageSrc.includes("Requested work") &&
-    estimateActionSrc.includes("const created = await tx.estimate.create") &&
-    !estimateActionSrc.includes("serviceRequestItem"));
+    estimatePageSrc.includes("Prefilled from customer request — review before sending.") &&
+    estimateActionSrc.includes("addRequestDraftLines"));
 check("Photos reuse existing Blob storage helper",
   readRepo("src/lib/storage.ts").includes("uploadRequestPhoto") &&
     intakeActionSrc.includes("uploadRequestPhoto"));
@@ -395,9 +395,6 @@ check("Owner estimate creation remains a draft handoff, not an auto-send",
 check("Send Estimate still blocks unpriced custom-quote draft lines",
   estimateActionSrc.includes("isUnpricedCustomQuoteDraftLine") &&
     estimateActionSrc.includes("Enter a price for each custom-quote line before sending."));
-const estimatePageSrc = readRepo("src/app/(app)/estimates/[estimateId]/page.tsx");
-check("Estimate page tells the owner the draft was prefilled from the request",
-  estimatePageSrc.includes("Prefilled from customer request — review before sending."));
 
 check("Legacy request with only serviceCatalogItem remains readable",
   requestedWorkLabels({
