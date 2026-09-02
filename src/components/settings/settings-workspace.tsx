@@ -160,7 +160,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
     return (
       <SectionCard
         title="Edit Website Photos"
-        description="Owner and admin only. Replace, reposition, or reset Home marketing photos. This is not a page builder."
+        description="Owner and admin only. Replace, reposition, or reset Home and Services marketing photos. This is not a page builder."
       >
         {websitePhotos ? (
           <WebsitePhotosEditor

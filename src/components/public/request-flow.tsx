@@ -62,11 +62,7 @@ export function MultiServiceRequestFlow({
     [items, selected],
   );
   const hasWork = selected.catalogIds.length > 0 || selected.includeOther;
-  const servicesHref = publicServicesPath(slug, {
-    catalogIds: selected.catalogIds,
-    includeOther: selected.includeOther,
-    otherDescription: selected.otherDescription,
-  });
+  const servicesHref = publicServicesPath(slug, selected);
   const chooseServicesHref = publicServicesPath(slug);
 
   function goInfo() {
