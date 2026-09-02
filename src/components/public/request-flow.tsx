@@ -299,36 +299,38 @@ export function MultiServiceRequestFlow({
           </div>
           <fieldset className="space-y-2">
             <legend className="text-sm font-medium">Preferred contact method</legend>
-            <label className="flex items-center gap-2 font-semibold">
-              <input
-                type="radio"
-                name="preferredContact"
-                value="text"
-                checked={preferredContact === "text"}
-                onChange={() => setPreferredContact("text")}
-              />
-              Text (preferred)
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="preferredContact"
-                value="phone"
-                checked={preferredContact === "phone"}
-                onChange={() => setPreferredContact("phone")}
-              />
-              Phone
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="preferredContact"
-                value="email"
-                checked={preferredContact === "email"}
-                onChange={() => setPreferredContact("email")}
-              />
-              Email
-            </label>
+            <div className="public-contact-method">
+              <label className="font-semibold">
+                <input
+                  type="radio"
+                  name="preferredContact"
+                  value="text"
+                  checked={preferredContact === "text"}
+                  onChange={() => setPreferredContact("text")}
+                />
+                Text (preferred)
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="preferredContact"
+                  value="phone"
+                  checked={preferredContact === "phone"}
+                  onChange={() => setPreferredContact("phone")}
+                />
+                Phone
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="preferredContact"
+                  value="email"
+                  checked={preferredContact === "email"}
+                  onChange={() => setPreferredContact("email")}
+                />
+                Email
+              </label>
+            </div>
           </fieldset>
           <div className="flex flex-col gap-3 sm:flex-row">
             <button type="button" className="public-btn public-btn-outline flex-1" onClick={() => setStep("details")}>
