@@ -11,6 +11,7 @@ export function PublicPageHero({
   description,
   imageSrc = PUBLIC_INNER_HERO_IMAGE,
   objectPosition = "50% 38%",
+  className,
   children,
 }: {
   homeHref: string;
@@ -20,6 +21,7 @@ export function PublicPageHero({
   description?: string;
   imageSrc?: string;
   objectPosition?: string;
+  className?: string;
   phone: string | null;
   smsHref: string | null;
   requestHref: string;
@@ -27,7 +29,7 @@ export function PublicPageHero({
   children?: ReactNode;
 }) {
   return (
-    <section className="public-cinematic">
+    <section className={className ? `public-cinematic ${className}` : "public-cinematic"}>
       <div className="public-cinematic-media">
         <PublicFittedImage
           src={imageSrc}

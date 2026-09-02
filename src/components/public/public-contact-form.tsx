@@ -4,15 +4,8 @@ import { useState, type ReactNode } from "react";
 import { ArrowRight } from "lucide-react";
 import { submitServiceRequest } from "@/app/actions/intake";
 import { OTHER_TASK_LABEL } from "@/lib/service-request-work";
-import type { PopularPublicCategory } from "@/lib/public-site";
 
-export function PublicContactForm({
-  slug,
-  categories,
-}: {
-  slug: string;
-  categories: PopularPublicCategory[];
-}) {
+export function PublicContactForm({ slug }: { slug: string }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
@@ -22,8 +15,7 @@ export function PublicContactForm({
       <div className="public-form-card">
         <h2 className="text-2xl font-extrabold uppercase">Message Received</h2>
         <p className="mt-4 text-muted-foreground">
-          Your message was sent as a service request. The team will review it
-          before preparing an estimate.
+          Your message was sent. The team will follow up.
         </p>
       </div>
     );
@@ -33,11 +25,11 @@ export function PublicContactForm({
     if (pending) return;
     setPending(true);
     setError(null);
-    const serviceNeeded = String(formData.get("serviceNeeded") ?? "").trim();
     const message = String(formData.get("message") ?? "").trim();
     formData.set("includeOther", "true");
-    formData.set("otherDescription", serviceNeeded || OTHER_TASK_LABEL);
-    formData.set("description", [serviceNeeded, message].filter(Boolean).join("\n\n"));
+    formData.set("otherDescription", OTHER_TASK_LABEL);
+    formData.set("description", message);
+    formData.set("address", "");
     const result = await submitServiceRequest(slug, formData);
     setPending(false);
     if (result.error) {
@@ -59,21 +51,8 @@ export function PublicContactForm({
       <Field label="Email" htmlFor="contact-email">
         <input id="contact-email" name="email" type="email" autoComplete="email" />
       </Field>
-      <Field label="Property / service address" htmlFor="contact-address">
-        <input id="contact-address" name="address" autoComplete="street-address" />
-      </Field>
-      <Field label="Service Needed" htmlFor="contact-service">
-        <select id="contact-service" name="serviceNeeded">
-          <option value={OTHER_TASK_LABEL}>{OTHER_TASK_LABEL}</option>
-          {categories.map((category) => (
-            <option key={category.category} value={category.category}>
-              {category.category}
-            </option>
-          ))}
-        </select>
-      </Field>
       <Field label="Message" htmlFor="contact-message">
-        <textarea id="contact-message" name="message" rows={4} placeholder="Tell us about the work you need." />
+        <textarea id="contact-message" name="message" rows={4} placeholder="How can we help?" />
       </Field>
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       <button type="submit" className="public-btn public-btn-primary w-full" disabled={pending}>

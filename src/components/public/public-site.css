@@ -334,7 +334,17 @@
 
 .public-cinematic:has(.public-form-card),
 .public-cinematic:has(.public-form-card) .public-cinematic-inner {
-  min-height: 24rem;
+  min-height: 19.5rem;
+}
+
+.public-contact-hero {
+  overflow: visible;
+  z-index: 3;
+}
+
+.public-contact-hero .public-cinematic-inner {
+  align-items: start;
+  padding-bottom: 0.4rem;
 }
 
 .public-cinematic-shade {
@@ -854,10 +864,40 @@
 }
 
 .public-form-card {
+  position: relative;
+  z-index: 4;
   background: #fff;
   border-radius: 10px;
   padding: 1.5rem;
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.18);
+}
+
+.public-contact-body-wrap {
+  position: relative;
+  z-index: 1;
+}
+
+.public-contact-body {
+  display: grid;
+  gap: 1.5rem;
+  padding-top: 1.25rem;
+  padding-bottom: 2.5rem;
+}
+
+.public-contact-points {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.public-contact-details {
+  display: grid;
+  gap: 1.5rem;
+  margin-top: 1.75rem;
+}
+
+.public-contact-form-slot {
+  display: none;
 }
 
 .public-form-card input,
@@ -1160,6 +1200,16 @@
 
   .public-about-map {
     min-height: 18rem;
+  }
+
+  .public-contact-body {
+    grid-template-columns: minmax(0, 1fr) minmax(20rem, 24rem);
+    align-items: start;
+  }
+
+  .public-contact-form-slot {
+    display: block;
+    min-height: 16rem;
   }
 
   .public-selected-box ul {
