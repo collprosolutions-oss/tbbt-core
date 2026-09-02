@@ -9,23 +9,26 @@
  * Run with:
  *   node --experimental-strip-types scripts/check-invoice-document.mjs
  */
-import { createRequire } from "node:module";
+import { createRequire, register } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import {
+
+register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
+
+const {
   buildInvoiceLineSnapshots,
   LABOR_MINIMUM_INVOICE_DESCRIPTION,
   persistDraftInvoiceFromCompletedJob,
-} from "../src/lib/invoice-carry-forward.ts";
-import {
+} = await import("@/lib/invoice-carry-forward");
+const {
   invoiceNumberFromId,
   invoicePdfFilename,
   isCustomerVisibleInvoiceStatus,
   loadInvoiceDocumentForBusiness,
   loadInvoiceDocumentForProjectToken,
   sanitizeFilenamePart,
-} from "../src/lib/invoice-document.ts";
-import { renderInvoicePdf } from "../src/lib/invoice-pdf.ts";
+} = await import("@/lib/invoice-document");
+const { renderInvoicePdf } = await import("@/lib/invoice-pdf");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -58,6 +61,19 @@ const { PrismaClient, Prisma } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
 
 let failures = 0;
+function pdfExtractText(buffer) {
+  const raw = buffer.toString("latin1");
+  return [...raw.matchAll(/<([0-9a-fA-F]+)>/g)]
+    .map((match) => {
+      try {
+        return Buffer.from(match[1], "hex").toString("utf8");
+      } catch {
+        return "";
+      }
+    })
+    .join("");
+}
+
 function check(label, condition) {
   if (condition) {
     console.log(`  ok  - ${label}`);
@@ -390,7 +406,7 @@ try {
   check("job reference is present", Boolean(document?.jobReference));
 
   const pdf = await renderInvoicePdf(document);
-  const pdfText = pdf.toString("latin1");
+  const pdfText = pdfExtractText(pdf);
   check("PDF starts with %PDF", pdf.subarray(0, 4).toString() === "%PDF");
   check("PDF contains this tenant's business name", pdfText.includes("Other Subscriber Co"));
   check("PDF contains the customer name", pdfText.includes("Jordan Rivera"));
@@ -425,7 +441,7 @@ try {
   check("paid amount shows as payment", paidDoc?.amountPaidLabel === "$300.00");
   check("paid date appears when paidAt exists", Boolean(paidDoc?.paidAtLabel));
   const paidPdf = await renderInvoicePdf(paidDoc);
-  const paidPdfText = paidPdf.toString("latin1");
+  const paidPdfText = pdfExtractText(paidPdf);
   check("paid PDF does not leak owner payment reference", !paidPdfText.includes("SECRET-OWNER-ONLY-REF"));
   check("paid PDF does not leak payment method enum", !paidPdfText.includes("CASH"));
 

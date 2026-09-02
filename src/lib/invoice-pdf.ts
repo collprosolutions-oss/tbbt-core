@@ -22,7 +22,7 @@ export function renderInvoicePdf(
   docView: InvoiceDocumentView,
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: "LETTER", margin: 50 });
+    const doc = new PDFDocument({ size: "LETTER", margin: 50, compress: false });
     const chunks: Buffer[] = [];
     doc.on("data", (chunk: Buffer) => chunks.push(chunk));
     doc.on("end", () => resolve(Buffer.concat(chunks)));

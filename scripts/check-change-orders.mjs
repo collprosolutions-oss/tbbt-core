@@ -29,7 +29,7 @@
  * Run with:
  *   npm run build && node --experimental-strip-types scripts/check-change-orders.mjs
  */
-import { createRequire } from "node:module";
+import { createRequire, register } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -45,8 +45,12 @@ import {
   persistDraftChangeOrderTotal,
   resolveCurrentApprovedProjectTotal,
 } from "../src/lib/change-order.ts";
-import { persistDraftInvoiceFromCompletedJob } from "../src/lib/invoice-carry-forward.ts";
 import { resolveApprovedWorkOrderScope } from "../src/lib/job-work-order.ts";
+
+register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
+const { persistDraftInvoiceFromCompletedJob } = await import(
+  "@/lib/invoice-carry-forward"
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
