@@ -993,7 +993,7 @@
   display: none;
 }
 
-.public-form-card input,
+.public-form-card input:not([type="radio"]):not([type="checkbox"]),
 .public-form-card select,
 .public-form-card textarea {
   min-height: 3rem;
@@ -1001,6 +1001,43 @@
   border: 1px solid #d5dde6;
   border-radius: 6px;
   padding: 0.65rem 0.8rem;
+}
+
+.public-contact-method {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem 1.15rem;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.public-contact-method label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.public-contact-method input[type="radio"] {
+  width: 1rem;
+  height: 1rem;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  flex: none;
+  border: 0;
+  accent-color: var(--public-blue);
+}
+
+@media (max-width: 639px) {
+  .public-contact-method {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.55rem;
+  }
 }
 
 .public-map {
