@@ -139,7 +139,13 @@ export const REVIEWS_PLACEHOLDER_COPY =
 
 export const PUBLIC_HOME_HERO_IMAGE = "/brand/illustrative/craftsman-hero.jpg";
 export const PUBLIC_SERVICES_HERO_IMAGE = "/brand/illustrative/tools-services.jpg";
+/** Neutral TBBT Reviews-hero fallback. Must not contain subscriber branding. */
 export const PUBLIC_REVIEWS_HERO_IMAGE = "/brand/illustrative/tools-reviews.jpg";
+/**
+ * CollPro Reno business-content Reviews hero. Subscriber asset only —
+ * never the reusable Reviews template default.
+ */
+export const COLLPRO_REVIEWS_HERO_IMAGE = "/brand/collpro/reviews-hero.png";
 export const PUBLIC_AREA_HERO_IMAGE = "/brand/illustrative/coastal-area.jpg";
 export const PUBLIC_CONTACT_HERO_IMAGE = "/brand/illustrative/dusk-home.jpg";
 export const PUBLIC_PROJECTS_HERO_IMAGE = "/brand/projects/lanai-porch.jpg";
@@ -238,6 +244,37 @@ export function publicAboutHeroImage(slug?: string | null) {
     ? COLLPRO_ABOUT_HERO_IMAGE
     : PUBLIC_ABOUT_HERO_IMAGE;
 }
+
+/** Per-business Reviews hero default. Other subscribers keep the unbranded fallback. */
+export function publicReviewsHeroImage(slug?: string | null) {
+  return slug && isCollProRenoSlug(slug)
+    ? COLLPRO_REVIEWS_HERO_IMAGE
+    : PUBLIC_REVIEWS_HERO_IMAGE;
+}
+
+export const REVIEWS_TRUST_VALUES = [
+  {
+    title: "Quality Work",
+    body: "Careful, practical work on the jobs we take on.",
+  },
+  {
+    title: "On-Time Service",
+    body: "We show up prepared and keep the project moving.",
+  },
+  {
+    title: "Honest & Fair",
+    body: "Clear communication and straightforward recommendations.",
+  },
+  {
+    title: "Customer Focused",
+    body: "We treat your home with care and keep the work organized.",
+  },
+] as const;
+
+export const REVIEWS_UNRATED_STATUS = {
+  title: "Review status",
+  body: "No public reviews are available to display yet.",
+} as const;
 
 export function publicSiteUrl(slug: string) {
   const origin = getAppUrl();

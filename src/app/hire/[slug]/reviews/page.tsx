@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Clock, MessageSquare, Shield } from "lucide-react";
+import { Clock, Handshake, Shield, Star, Users } from "lucide-react";
 import "@/components/public/public-site.css";
 import { PublicCtaBar } from "@/components/public/public-cta-bar";
 import { PublicPageHero } from "@/components/public/public-page-hero";
@@ -7,15 +7,17 @@ import { PublicSiteShell } from "@/components/public/public-site-shell";
 import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { smsHref } from "@/lib/directions";
 import {
-  PUBLIC_REVIEWS_HERO_IMAGE,
   REVIEWS_PLACEHOLDER_COPY,
-  TRUST_POINTS,
+  REVIEWS_TRUST_VALUES,
+  REVIEWS_UNRATED_STATUS,
   publicDisplayName,
   publicHomePath,
   publicPhone,
   publicRequestPath,
 } from "@/lib/public-site";
+import { prisma } from "@/lib/prisma";
 import { loadPublicSite } from "@/lib/public-site-data";
+import { loadPublicReviewsImages } from "@/lib/public-site-images";
 
 export const dynamic = "force-dynamic";
 
@@ -31,11 +33,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-const HIGHLIGHTS = [
-  { title: "Quality Work", body: TRUST_POINTS[0].body, Icon: Shield },
-  { title: "Clear Estimates", body: TRUST_POINTS[1].body, Icon: Clock },
-  { title: "Great Communication", body: TRUST_POINTS[2].body, Icon: MessageSquare },
-] as const;
+const TRUST_ICONS = [Shield, Clock, Handshake, Users] as const;
 
 export default async function PublicReviewsPage({ params }: PageProps) {
   const { slug } = await params;
@@ -44,6 +42,8 @@ export default async function PublicReviewsPage({ params }: PageProps) {
     return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
   }
   const phone = publicPhone(site.business.slug);
+  const images = await loadPublicReviewsImages(prisma, site.business.id, site.business.slug);
+
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>
       <main>
@@ -52,36 +52,33 @@ export default async function PublicReviewsPage({ params }: PageProps) {
           current="Reviews"
           title={<>Real Reviews.<br /><em>Real Results.</em></>}
           description="We take pride in our work. Public customer feedback will be shown here when it is available."
-          imageSrc={PUBLIC_REVIEWS_HERO_IMAGE}
+          imageSrc={images.hero.src}
+          objectPosition={images.hero.objectPosition}
           phone={phone}
           smsHref={smsHref(phone)}
           requestHref={publicRequestPath(site.business.slug)}
         />
-        <section className="bg-white">
-          <div className="public-container grid gap-8 py-10 md:grid-cols-3">
-            <div>
-              <p className="text-xs font-extrabold tracking-[0.14em] uppercase">Customer feedback</p>
-              <p className="mt-3 max-w-sm text-sm leading-6 text-muted-foreground">
-                Public reviews will be listed here when they are approved for display.
-              </p>
+        <section className="public-trust-bar public-reviews-trust">
+          <div className="public-container public-reviews-trust-grid">
+            <div className="public-trust-item">
+              <Star className="size-7 text-[var(--public-blue)]" aria-hidden="true" />
+              <div>
+                <h2>{REVIEWS_UNRATED_STATUS.title}</h2>
+                <p>{REVIEWS_UNRATED_STATUS.body}</p>
+              </div>
             </div>
-            <div className="grid gap-4">
-              {HIGHLIGHTS.map((item) => (
-                <div key={item.title} className="flex gap-3">
-                  <item.Icon className="mt-0.5 size-6 shrink-0 text-[var(--public-blue)]" />
+            {REVIEWS_TRUST_VALUES.map((item, index) => {
+              const Icon = TRUST_ICONS[index] ?? Shield;
+              return (
+                <div key={item.title} className="public-trust-item">
+                  <Icon className="size-7 text-[var(--public-blue)]" aria-hidden="true" />
                   <div>
-                    <h2 className="font-extrabold">{item.title}</h2>
-                    <p className="mt-1 text-sm text-muted-foreground">{item.body}</p>
+                    <h2>{item.title}</h2>
+                    <p>{item.body}</p>
                   </div>
                 </div>
-              ))}
-            </div>
-            <div>
-              <p className="text-xs font-extrabold tracking-[0.14em] uppercase">Reviewed on</p>
-              <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                Public platform reviews will appear here as they become available.
-              </p>
-            </div>
+              );
+            })}
           </div>
         </section>
         <section className="bg-[var(--public-paper)] py-10">

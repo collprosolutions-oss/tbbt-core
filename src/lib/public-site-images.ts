@@ -20,6 +20,7 @@ import {
   isCollProRenoSlug,
   publicAboutHeroImage,
   publicCategoryPhoto,
+  publicReviewsHeroImage,
   type PublicCatalogGroup,
 } from "@/lib/public-site";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
@@ -31,10 +32,12 @@ import {
 export const PUBLIC_SITE_HOME_PAGE = "home";
 export const PUBLIC_SITE_SERVICES_PAGE = "services";
 export const PUBLIC_SITE_ABOUT_PAGE = "about";
+export const PUBLIC_SITE_REVIEWS_PAGE = "reviews";
 export const PUBLIC_SITE_EDITABLE_PAGES = [
   PUBLIC_SITE_HOME_PAGE,
   PUBLIC_SITE_SERVICES_PAGE,
   PUBLIC_SITE_ABOUT_PAGE,
+  PUBLIC_SITE_REVIEWS_PAGE,
 ] as const;
 export const PUBLIC_SITE_HERO_SLOT = "hero";
 export const PUBLIC_SITE_STORY_SLOT = "story";
@@ -48,6 +51,19 @@ export const PUBLIC_ABOUT_HERO_DEFAULT_POSITION = "78% 42%";
 /** Crop for CollPro's wide greeting photo so the people stay visible. */
 export const COLLPRO_ABOUT_HERO_DEFAULT_POSITION = "68% 40%";
 export const PUBLIC_ABOUT_STORY_DEFAULT_POSITION = "50% 45%";
+export const PUBLIC_REVIEWS_HERO_DEFAULT_POSITION = "50% 40%";
+/** Keep the CollPro Reviews subject on the right, darker left for HTML text. */
+export const COLLPRO_REVIEWS_HERO_DEFAULT_POSITION = "78% 42%";
+
+export function publicReviewsHeroDefaultSrc(slug?: string | null) {
+  return publicReviewsHeroImage(slug);
+}
+
+export function publicReviewsHeroDefaultPosition(slug?: string | null) {
+  return slug && isCollProRenoSlug(slug)
+    ? COLLPRO_REVIEWS_HERO_DEFAULT_POSITION
+    : PUBLIC_REVIEWS_HERO_DEFAULT_POSITION;
+}
 
 export function publicAboutHeroDefaultSrc(slug?: string | null) {
   return publicAboutHeroImage(slug);
@@ -89,6 +105,10 @@ export type PublicServicesImagePresentation = {
 export type PublicAboutImagePresentation = {
   hero: ResolvedPublicSiteImage;
   story: ResolvedPublicSiteImage;
+};
+
+export type PublicReviewsImagePresentation = {
+  hero: ResolvedPublicSiteImage;
 };
 
 export type PublicSiteImageEditorSlot = {
@@ -298,6 +318,45 @@ export async function loadPublicAboutImages(
   return buildPublicAboutImagePresentation(rows, slug ?? business?.slug);
 }
 
+export function buildPublicReviewsImagePresentation(
+  rows: PublicSiteImageRow[],
+  slug?: string | null,
+): PublicReviewsImagePresentation {
+  const bySlot = new Map(rows.map((row) => [`${row.page}:${row.slot}`, row]));
+  return {
+    hero: resolvePublicSiteImage({
+      defaultSrc: publicReviewsHeroDefaultSrc(slug),
+      defaultPosition: publicReviewsHeroDefaultPosition(slug),
+      row: bySlot.get(`${PUBLIC_SITE_REVIEWS_PAGE}:${PUBLIC_SITE_HERO_SLOT}`),
+    }),
+  };
+}
+
+export async function loadPublicReviewsImages(
+  db: PrismaClient,
+  businessId: string,
+  slug?: string | null,
+): Promise<PublicReviewsImagePresentation> {
+  const [rows, business] = await Promise.all([
+    db.publicSiteImage.findMany({
+      where: { businessId, page: PUBLIC_SITE_REVIEWS_PAGE },
+      select: {
+        page: true,
+        slot: true,
+        imageUrl: true,
+        objectPosition: true,
+      },
+    }),
+    slug
+      ? Promise.resolve(null)
+      : db.business.findUnique({
+          where: { id: businessId },
+          select: { slug: true },
+        }),
+  ]);
+  return buildPublicReviewsImagePresentation(rows, slug ?? business?.slug);
+}
+
 export async function loadWebsitePhotoEditorSlots(
   db: PrismaClient,
   businessId: string,
@@ -311,6 +370,7 @@ export async function loadWebsitePhotoEditorSlots(
   const home = await loadPublicHomeImages(db, businessId, visibleHomeGroups);
   const services = await loadPublicServicesImages(db, businessId, groups);
   const about = await loadPublicAboutImages(db, businessId, business?.slug);
+  const reviews = await loadPublicReviewsImages(db, businessId, business?.slug);
   return [
     {
       page: PUBLIC_SITE_HOME_PAGE,
@@ -396,6 +456,19 @@ export async function loadWebsitePhotoEditorSlots(
       isOverride: about.story.isOverride,
       usesCustomUpload: about.story.usesCustomUpload,
     },
+    {
+      page: PUBLIC_SITE_REVIEWS_PAGE,
+      slot: PUBLIC_SITE_HERO_SLOT,
+      label: "Reviews hero",
+      kind: "hero",
+      category: null,
+      defaultSrc: publicReviewsHeroDefaultSrc(business?.slug),
+      defaultPosition: publicReviewsHeroDefaultPosition(business?.slug),
+      src: reviews.hero.src,
+      objectPosition: reviews.hero.objectPosition,
+      isOverride: reviews.hero.isOverride,
+      usesCustomUpload: reviews.hero.usesCustomUpload,
+    },
   ];
 }
 
@@ -407,6 +480,9 @@ async function allowedSlotsForPage(db: Db, businessId: string, page: string) {
   if (!isEditablePublicSitePage(page)) return new Set<string>();
   if (page === PUBLIC_SITE_ABOUT_PAGE) {
     return new Set([PUBLIC_SITE_HERO_SLOT, PUBLIC_SITE_STORY_SLOT]);
+  }
+  if (page === PUBLIC_SITE_REVIEWS_PAGE) {
+    return new Set([PUBLIC_SITE_HERO_SLOT]);
   }
   const categories = await db.serviceCatalogItem.findMany({
     where: { businessId, active: true },
@@ -421,6 +497,9 @@ async function allowedSlotsForPage(db: Db, businessId: string, page: string) {
 }
 
 function defaultPositionFor(page: string, slot: string) {
+  if (page === PUBLIC_SITE_REVIEWS_PAGE) {
+    return PUBLIC_REVIEWS_HERO_DEFAULT_POSITION;
+  }
   if (page === PUBLIC_SITE_ABOUT_PAGE) {
     return slot === PUBLIC_SITE_STORY_SLOT
       ? PUBLIC_ABOUT_STORY_DEFAULT_POSITION

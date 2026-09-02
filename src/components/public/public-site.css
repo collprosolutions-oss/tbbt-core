@@ -426,6 +426,15 @@
   color: rgba(255, 255, 255, 0.7);
 }
 
+.public-reviews-trust-grid {
+  display: grid;
+  gap: 0;
+}
+
+.public-reviews-trust-grid .public-trust-item + .public-trust-item {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
 .public-section {
   padding-block: 2.75rem;
 }
@@ -992,6 +1001,15 @@
   }
 
   .public-trust-item + .public-trust-item {
+    border-top: 0;
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .public-reviews-trust-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .public-reviews-trust-grid .public-trust-item + .public-trust-item {
     border-top: 0;
     border-left: 1px solid rgba(255, 255, 255, 0.12);
   }
