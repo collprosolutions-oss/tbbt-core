@@ -1261,6 +1261,11 @@ model BusinessSettings {
   notifyPayrollEvents  Boolean @default(true)
   notifyTeamEvents     Boolean @default(true)
 
+  /// Owner/admin background notes. Never published as-is.
+  rawOwnerStory String?
+  /// Owner-approved About story shown on the public website.
+  approvedPublicAboutCopy String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

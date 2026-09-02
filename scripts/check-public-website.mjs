@@ -81,6 +81,7 @@ const publicFiles = [
   "src/components/public/public-footer-quote.tsx",
   "src/components/public/public-projects-gallery.tsx",
   "src/components/public/public-services-browser.tsx",
+  "src/components/public/public-about.tsx",
   "src/app/hire/[slug]/about/page.tsx",
   "src/app/hire/[slug]/services/page.tsx",
   "src/app/hire/[slug]/projects/page.tsx",
@@ -168,6 +169,32 @@ check("Intake persists structured quantity, not notes-only quantity",
 check("Services Website Photos reuse the existing PublicSiteImage page/slot model",
   readRepo("src/lib/public-site-images.ts").includes("PUBLIC_SITE_SERVICES_PAGE") &&
     readRepo("src/app/hire/[slug]/services/page.tsx").includes("loadPublicServicesImages"));
+check("About page uses company/handyman imagery, not project-gallery photos",
+  (() => {
+    const about = readRepo("src/components/public/public-about.tsx");
+    const page = readRepo("src/app/hire/[slug]/about/page.tsx");
+    const site = readRepo("src/lib/public-site.ts");
+    return (
+      site.includes('PUBLIC_ABOUT_HERO_IMAGE = "/brand/illustrative/craftsman-hero.jpg"') &&
+      site.includes('PUBLIC_ABOUT_STORY_IMAGE = "/brand/projects/door-install.jpg"') &&
+      page.includes("loadPublicAboutImages") &&
+      about.includes("Our Story") &&
+      about.includes("Why Homeowners Choose CollPro Reno") &&
+      about.includes("What Our Customers Say") &&
+      about.includes("Our Service Area") &&
+      !about.includes("lanai-porch") &&
+      !about.includes("feature-wall-tv") &&
+      !about.includes("★★★★★")
+    );
+  })());
+check("About keeps a contextual CTA and Website Photos About slots",
+  readRepo("src/app/hire/[slug]/about/page.tsx").includes("PublicCtaBar") &&
+    readRepo("src/lib/public-site-images.ts").includes("PUBLIC_SITE_ABOUT_PAGE") &&
+    readRepo("src/lib/public-site-images.ts").includes("PUBLIC_SITE_STORY_SLOT"));
+check("Website Story keeps raw owner notes separate from approved public copy",
+  readRepo("src/lib/website-story.ts").includes("rawOwnerStory is owner background") &&
+    readRepo("src/components/settings/website-story-form.tsx").includes("approvedPublicAboutCopy") &&
+    readRepo("src/lib/settings.ts").includes('"website-story"'));
 
 console.log("\nSTATIC — Catalog and intake architecture");
 check("Public catalog uses persisted categories",
@@ -678,6 +705,14 @@ try {
         services.body.includes("public-service-controls")));
     check("Services HTTP page has no pre-footer Ready to get started CTA",
       Boolean(services && !/Ready to get started/i.test(services.body)));
+
+    const about = await fetchMaybe("/hire/collpro-reno/about");
+    check("About page loads the restored company story layout",
+      Boolean(about && about.status === 200 &&
+        about.body.includes("Our Story") &&
+        about.body.includes("Why Homeowners Choose CollPro Reno") &&
+        about.body.includes("What Our Customers Say") &&
+        !/★★★★★|google reviews/i.test(about.body)));
 
     const intake = await fetchMaybe("/r/collpro-reno");
     check("Existing /r/collpro-reno intake still loads",

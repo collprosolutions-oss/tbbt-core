@@ -10,6 +10,7 @@ import {
   updateBusinessProfileOp,
   updateLaborMinimumSettingsOp,
   updateSettingsPreferencesOp,
+  updateWebsiteStoryOp,
 } from "@/lib/settings-ops";
 import type { SettingsPreferenceFlags } from "@/lib/settings";
 
@@ -123,5 +124,26 @@ export async function updateSettingsPreferences(
       : { message: "Preferences saved. Delivery is not automated." };
   } catch (error) {
     return { error: settingsErrorMessage(error, "Those preferences could not be saved.") };
+  }
+}
+
+export async function updateWebsiteStorySettings(
+  _prev: SettingsActionState,
+  formData: FormData,
+): Promise<SettingsActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    assertSettingsBusinessScope(access, readString(formData, "businessId") || null);
+    const result = await updateWebsiteStoryOp(prisma, access, {
+      rawOwnerStory: readString(formData, "rawOwnerStory"),
+      approvedPublicAboutCopy: readString(formData, "approvedPublicAboutCopy"),
+    });
+    revalidateSettings();
+    revalidatePath(`/hire/${access.workspace.business.slug}/about`);
+    return result.unchanged
+      ? { message: "No Website Story changes to save." }
+      : { message: "Website Story saved. Only approved public About copy appears on the website." };
+  } catch (error) {
+    return { error: settingsErrorMessage(error, "That Website Story could not be saved.") };
   }
 }

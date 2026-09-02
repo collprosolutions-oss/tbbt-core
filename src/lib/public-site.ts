@@ -87,21 +87,52 @@ export const TEXT_US_LABEL = "Text Us";
 
 export const ABOUT_COPY = {
   eyebrow: "About Us",
-  title: "Reliable. Professional. Done Right.",
-  lead:
-    "CollPro Reno Handyman Services helps homeowners with repairs, installations, and home-improvement projects — from a single task to several jobs in one visit.",
-  body:
-    "We focus on attention to project details, clear estimates, organized communication, and practical solutions. Quality-minded workmanship matters on every job we take on.",
-  signature: "— CollPro Reno Team",
-  priorityTitle: "Your Home. Our Priority.",
-  priorityBody: "We treat every home carefully and keep the work organized.",
-  points: [
-    "Clear project communication from the first request",
-    "Organized written estimates you can review before scheduling",
-    "Homeowner-focused service and attention to detail",
-    "One request can include multiple tasks for the same visit",
-  ],
+  title: "About Us",
+  lead: "Experience, craftsmanship, and dependable service for homeowners.",
 } as const;
+
+export const DEFAULT_PUBLIC_ABOUT_STORY = [
+  "We've been working in construction and carpentry since 1992, coming from a family tradition of craftsmanship. Over the years, that experience has included hands-on carpentry, general contracting, subcontracting, project supervision, property work, renovations, and new construction.",
+  "That broad background gives us a practical understanding of how homes are built, how different trades come together, and how repairs should be approached. We bring that experience, attention to detail, and commitment to every project.",
+].join("\n\n");
+
+export const ABOUT_TRUST_POINTS = [
+  {
+    title: "Honest Service",
+    body: "Clear communication and straightforward recommendations.",
+  },
+  {
+    title: "Quality Workmanship",
+    body: "Careful, practical work on the jobs we take on.",
+  },
+  {
+    title: "Customer Focused",
+    body: "We treat your home with care and keep the work organized.",
+  },
+] as const;
+
+export const ABOUT_REASON_CARDS = [
+  {
+    title: "Skilled & Experienced",
+    body: "Construction and carpentry background applied to everyday home repairs.",
+  },
+  {
+    title: "Reliable & Punctual",
+    body: "We show up prepared and keep the project moving.",
+  },
+  {
+    title: "Clear Estimates",
+    body: "You review a written estimate before work is scheduled.",
+  },
+  {
+    title: "Respect for Your Home",
+    body: "We work carefully and leave the job organized.",
+  },
+  {
+    title: "Local & Community Driven",
+    body: "Proud to serve homeowners in the Fort Myers / Cape Coral area.",
+  },
+] as const;
 
 export const REVIEWS_PLACEHOLDER_COPY =
   "Real customer feedback will appear here as it becomes available.";
@@ -112,9 +143,10 @@ export const PUBLIC_REVIEWS_HERO_IMAGE = "/brand/illustrative/tools-reviews.jpg"
 export const PUBLIC_AREA_HERO_IMAGE = "/brand/illustrative/coastal-area.jpg";
 export const PUBLIC_CONTACT_HERO_IMAGE = "/brand/illustrative/dusk-home.jpg";
 export const PUBLIC_PROJECTS_HERO_IMAGE = "/brand/projects/lanai-porch.jpg";
-export const PUBLIC_ABOUT_HERO_IMAGE = "/brand/projects/feature-wall-tv.jpg";
+export const PUBLIC_ABOUT_HERO_IMAGE = "/brand/illustrative/craftsman-hero.jpg";
+export const PUBLIC_ABOUT_STORY_IMAGE = "/brand/projects/door-install.jpg";
 export const PUBLIC_QUOTE_HERO_IMAGE = "/brand/projects/wall-cabinets.jpg";
-export const PUBLIC_ABOUT_PHOTO = "/brand/projects/lanai-porch.jpg";
+export const PUBLIC_ABOUT_PHOTO = "/brand/illustrative/craftsman-hero.jpg";
 export const PUBLIC_INNER_HERO_IMAGE = "/brand/illustrative/tools-services.jpg";
 
 const CATEGORY_VISUALS: Record<string, string> = {

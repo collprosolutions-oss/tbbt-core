@@ -23,6 +23,11 @@ import {
   serializeAuditValue,
   type SettingsPreferenceFlags,
 } from "@/lib/settings";
+import {
+  MAX_OWNER_STORY_LENGTH,
+  MAX_PUBLIC_ABOUT_COPY_LENGTH,
+  normalizeAboutCopy,
+} from "@/lib/website-story";
 
 type SettingsClient = PrismaClient | Prisma.TransactionClient;
 
@@ -254,6 +259,59 @@ export async function updateSettingsPreferencesOp(
         notifyPayrollEvents: current.notifyPayrollEvents,
         notifyTeamEvents: current.notifyTeamEvents,
       },
+      newValue: next,
+    });
+  });
+
+  return { unchanged: false as const };
+}
+
+export async function updateWebsiteStoryOp(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: {
+    rawOwnerStory: string;
+    approvedPublicAboutCopy: string;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+
+  const rawOwnerStory = normalizeAboutCopy(input.rawOwnerStory, MAX_OWNER_STORY_LENGTH);
+  const approvedPublicAboutCopy = normalizeAboutCopy(
+    input.approvedPublicAboutCopy,
+    MAX_PUBLIC_ABOUT_COPY_LENGTH,
+  );
+  if (rawOwnerStory == null) {
+    throw new SettingsError("The owner story is too long.");
+  }
+  if (approvedPublicAboutCopy == null) {
+    throw new SettingsError("The public About copy is too long.");
+  }
+
+  const current = await ensureBusinessSettings(db, access.businessId);
+  const previous = {
+    rawOwnerStory: current.rawOwnerStory ?? "",
+    approvedPublicAboutCopy: current.approvedPublicAboutCopy ?? "",
+  };
+  const next = { rawOwnerStory, approvedPublicAboutCopy };
+  if (
+    previous.rawOwnerStory === next.rawOwnerStory &&
+    previous.approvedPublicAboutCopy === next.approvedPublicAboutCopy
+  ) {
+    return { unchanged: true as const };
+  }
+
+  await db.$transaction(async (tx) => {
+    await tx.businessSettings.update({
+      where: { businessId: access.businessId },
+      data: next,
+    });
+    await writeSettingsAuditLog(tx, {
+      businessId: access.businessId,
+      changedByMembershipId: access.workspace.membership.id,
+      settingArea: "website-story",
+      settingKey: "aboutCopy",
+      previousValue: previous,
       newValue: next,
     });
   });

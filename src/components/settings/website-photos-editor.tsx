@@ -62,13 +62,17 @@ function SlotEditor({
         <div>
           <p className="font-medium">{slot.label}</p>
           <p className="text-sm text-muted-foreground">
-            {slot.kind === "hero"
-              ? slot.page === "services"
-                ? "Services hero photograph. Layout stays the same."
-                : "Home hero photograph. Layout stays the same."
-              : slot.page === "services"
-                ? "Services category photograph only. The category name and services do not change."
-                : "Home category card photograph only. The category name and services do not change."}
+            {slot.kind === "story"
+              ? "About Our Story photograph. Layout stays the same."
+              : slot.kind === "hero"
+                ? slot.page === "about"
+                  ? "About hero photograph. Layout stays the same."
+                  : slot.page === "services"
+                    ? "Services hero photograph. Layout stays the same."
+                    : "Home hero photograph. Layout stays the same."
+                : slot.page === "services"
+                  ? "Services category photograph only. The category name and services do not change."
+                  : "Home category card photograph only. The category name and services do not change."}
           </p>
         </div>
         {slot.isOverride ? (
@@ -190,6 +194,7 @@ export function WebsitePhotosEditor({
 }) {
   const homeSlots = slots.filter((slot) => slot.page === "home");
   const servicesSlots = slots.filter((slot) => slot.page === "services");
+  const aboutSlots = slots.filter((slot) => slot.page === "about");
 
   return (
     <div className="space-y-6">
@@ -199,7 +204,7 @@ export function WebsitePhotosEditor({
         </Alert>
       ) : null}
       <p className="text-sm text-muted-foreground">
-        Change Home and Services marketing photos. Page layout, fonts, colors, and
+        Change Home, Services, and About marketing photos. Page layout, fonts, colors, and
         Recent Projects stay as they are. Recent Projects come from real completed
         work and cannot be replaced here.
       </p>
@@ -215,6 +220,14 @@ export function WebsitePhotosEditor({
         title="Services page"
         empty="No Services photo slots are available yet. Category photos stay linked to the real catalog."
         slots={servicesSlots}
+        businessId={businessId}
+        storageConfigured={storageConfigured}
+        canEdit={canEdit}
+      />
+      <PhotoPageSection
+        title="About page"
+        empty="No About photo slots are available."
+        slots={aboutSlots}
         businessId={businessId}
         storageConfigured={storageConfigured}
         canEdit={canEdit}

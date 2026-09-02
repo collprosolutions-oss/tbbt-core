@@ -21,9 +21,12 @@ const { HOME_FEATURED_PROJECT_IDS, publicCategoryPhoto } = await import("@/lib/p
 const { selectPublicProjectsById } = await import("@/lib/public-projects");
 const {
   PUBLIC_HOME_HERO_DEFAULT_POSITION,
+  PUBLIC_SITE_ABOUT_PAGE,
   PUBLIC_SITE_HOME_PAGE,
   PUBLIC_SITE_SERVICES_PAGE,
   PUBLIC_SITE_HERO_SLOT,
+  PUBLIC_SITE_STORY_SLOT,
+  buildPublicAboutImagePresentation,
   PublicSiteImageError,
   buildPublicHomeImagePresentation,
   buildPublicServicesImagePresentation,
@@ -165,6 +168,10 @@ const servicesPresented = buildPublicServicesImagePresentation(groups, []);
 check("Services hero and category slots start on catalog defaults",
   servicesPresented.hero.src.includes("tools-services") &&
     servicesPresented.categories["Doors & Locks"]?.src === publicCategoryPhoto("Doors & Locks"));
+const aboutPresented = buildPublicAboutImagePresentation([]);
+check("About hero and story slots start on company/handyman defaults",
+  aboutPresented.hero.src.includes("craftsman-hero") &&
+    aboutPresented.story.src.includes("door-install"));
 
 try {
   const ownerUser = await prisma.user.create({
@@ -346,9 +353,36 @@ try {
     savedServicesCategory.page === PUBLIC_SITE_SERVICES_PAGE &&
       savedServicesCategory.slot === "category:Doors & Locks");
 
+  const savedAboutHero = await upsertPublicSiteImageOp(prisma, ownerA, {
+    page: PUBLIC_SITE_ABOUT_PAGE,
+    slot: PUBLIC_SITE_HERO_SLOT,
+    imageUrl: "/brand/illustrative/craftsman-hero.jpg",
+    objectPosition: "80% 40%",
+  });
+  check("OWNER can replace the About hero",
+    savedAboutHero.page === PUBLIC_SITE_ABOUT_PAGE &&
+      savedAboutHero.slot === PUBLIC_SITE_HERO_SLOT);
+
+  const savedAboutStory = await upsertPublicSiteImageOp(prisma, adminA, {
+    page: PUBLIC_SITE_ABOUT_PAGE,
+    slot: PUBLIC_SITE_STORY_SLOT,
+    imageUrl: "/brand/projects/door-install.jpg",
+  });
+  check("ADMIN can replace the About story image",
+    savedAboutStory.page === PUBLIC_SITE_ABOUT_PAGE &&
+      savedAboutStory.slot === PUBLIC_SITE_STORY_SLOT);
+
+  await expectForbidden("MEMBER cannot save an About image override", () =>
+    upsertPublicSiteImageOp(prisma, memberA, {
+      page: PUBLIC_SITE_ABOUT_PAGE,
+      slot: PUBLIC_SITE_HERO_SLOT,
+      imageUrl: "/brand/projects/closet.jpg",
+    }),
+  );
+
   try {
     await upsertPublicSiteImageOp(prisma, ownerA, {
-      page: "about",
+      page: "careers",
       slot: PUBLIC_SITE_HERO_SLOT,
       imageUrl: "/brand/projects/closet.jpg",
     });

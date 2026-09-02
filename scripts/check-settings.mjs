@@ -39,6 +39,7 @@ const {
   updateBusinessProfileOp,
   updateLaborMinimumSettingsOp,
   updateSettingsPreferencesOp,
+  updateWebsiteStoryOp,
   writeSettingsAuditLog,
 } = await import("@/lib/settings-ops");
 const { Prisma } = await import("@prisma/client");
@@ -131,6 +132,7 @@ try {
   check("ADMIN has MANAGE_SETTINGS", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_SETTINGS));
   check("MEMBER does not have MANAGE_SETTINGS", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_SETTINGS));
   check("No AI assist in Settings", settingsAiAssistAvailable() === false);
+  check("Website Story is a Settings section", parseSettingsSection("website-story") === "website-story");
   check("Settings source does not call an AI provider", !/openai|anthropic|generateText|streamText/i.test(settingsSource));
   check("Settings source does not send customer messages", !/sendTransactionalEmail|resend\.emails|twilio/i.test(settingsSource));
   check("Settings source does not publish marketing/reviews", !/publish|postReview|requestReviewAutomatically/i.test(settingsSource) || settingsSource.includes("does not publish"));
@@ -458,6 +460,25 @@ try {
     updateSettingsPreferencesOp(prisma, memberA, { notifyTeamEvents: true }),
     (error) => error instanceof ForbiddenError,
   );
+
+  await expectError("MEMBER cannot update Website Story", () =>
+    updateWebsiteStoryOp(prisma, memberA, {
+      rawOwnerStory: "Invented biography",
+      approvedPublicAboutCopy: "Invented public copy",
+    }),
+    (error) => error instanceof ForbiddenError,
+  );
+
+  await updateWebsiteStoryOp(prisma, ownerA, {
+    rawOwnerStory: "Construction since 1992. Family carpentry.",
+    approvedPublicAboutCopy: "We have worked in construction and carpentry since 1992.",
+  });
+  const storyRow = await prisma.businessSettings.findUnique({ where: { businessId: businessA.id } });
+  check("OWNER can save raw story separately from approved About copy",
+    storyRow.rawOwnerStory === "Construction since 1992. Family carpentry." &&
+      storyRow.approvedPublicAboutCopy === "We have worked in construction and carpentry since 1992.");
+  check("Raw owner story is not copied onto the public field automatically",
+    storyRow.rawOwnerStory !== storyRow.approvedPublicAboutCopy);
 
   await expectError("ADMIN cannot change business name", () =>
     updateBusinessProfileOp(prisma, adminA, { name: "Hijacked", confirmed: true }),

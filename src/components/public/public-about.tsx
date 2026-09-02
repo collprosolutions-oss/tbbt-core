@@ -1,31 +1,46 @@
-import Image from "next/image";
-import { MessageSquare } from "lucide-react";
 import {
-  ABOUT_COPY,
-  PUBLIC_ABOUT_PHOTO,
-  TEXT_US_LABEL,
-  TRUST_POINTS,
+  Clock,
+  FileText,
+  Handshake,
+  HeartHandshake,
+  Home,
+  MapPin,
+  ShieldCheck,
+  Wrench,
+} from "lucide-react";
+import { PublicFittedImage } from "@/components/public/public-fitted-image";
+import {
+  ABOUT_REASON_CARDS,
+  ABOUT_TRUST_POINTS,
+  REVIEWS_PLACEHOLDER_COPY,
+  SERVICE_AREA_COPY,
+  SERVICE_AREA_MAP_IMAGE,
 } from "@/lib/public-site";
+import type { ResolvedPublicSiteImage } from "@/lib/public-site-images";
+import { splitAboutParagraphs } from "@/lib/website-story";
 
-const STORY_PHOTOS = [
-  PUBLIC_ABOUT_PHOTO,
-  "/brand/projects/feature-wall-tv.jpg",
-  "/brand/projects/closet.jpg",
-  "/brand/projects/door-install.jpg",
-] as const;
+const TRUST_ICONS = [Handshake, ShieldCheck, HeartHandshake] as const;
+const REASON_ICONS = [Wrench, Clock, FileText, Home, MapPin] as const;
 
-export function PublicAbout() {
+export function PublicAbout({
+  storyImage,
+  storyCopy,
+}: {
+  storyImage: ResolvedPublicSiteImage;
+  storyCopy: string;
+}) {
+  const paragraphs = splitAboutParagraphs(storyCopy);
+
   return (
     <>
       <section className="bg-white">
-        <div className="public-container grid items-center gap-8 py-10 lg:grid-cols-2">
-          <div className="relative min-h-80 overflow-hidden rounded-md">
-            <Image
-              src={STORY_PHOTOS[0]}
-              alt="Finished porch and lanai work by CollPro Reno"
-              fill
-              sizes="50vw"
-              className="object-cover"
+        <div className="public-container public-about-story">
+          <div className="public-about-media">
+            <PublicFittedImage
+              src={storyImage.src}
+              alt="Handyman working at a residential doorway"
+              objectPosition={storyImage.objectPosition}
+              sizes="(max-width: 1099px) 100vw, 48vw"
             />
           </div>
           <div>
@@ -33,81 +48,82 @@ export function PublicAbout() {
               Our Story
             </p>
             <h2 className="mt-2 text-3xl font-extrabold uppercase tracking-tight">
-              Local. Dedicated. Detail-Minded.
+              Built on experience
             </h2>
-            <p className="mt-4 text-base leading-7 text-muted-foreground">{ABOUT_COPY.lead}</p>
-            <p className="mt-3 text-base leading-7 text-muted-foreground">{ABOUT_COPY.body}</p>
-            <p className="mt-5 font-semibold text-[var(--public-blue)]">{ABOUT_COPY.signature}</p>
-          </div>
-        </div>
-      </section>
-
-      <section className="bg-[var(--public-paper)] public-section">
-        <div className="public-container">
-          <h2 className="public-section-title">How We Work</h2>
-          <div className="mt-8 grid gap-5 md:grid-cols-2">
-            {TRUST_POINTS.map((point, index) => (
-              <article key={point.title} className="grid overflow-hidden bg-white md:grid-cols-[11rem_minmax(0,1fr)]">
-                <div className="relative min-h-40">
-                  <Image
-                    src={STORY_PHOTOS[index] ?? STORY_PHOTOS[0]}
-                    alt=""
-                    fill
-                    sizes="180px"
-                    className="object-cover"
-                  />
-                </div>
-                <div className="p-5">
-                  <h3 className="text-lg font-extrabold uppercase">{point.title}</h3>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">{point.body}</p>
-                </div>
-              </article>
+            {paragraphs.map((paragraph) => (
+              <p key={paragraph} className="mt-4 text-base leading-7 text-muted-foreground">
+                {paragraph}
+              </p>
             ))}
           </div>
         </div>
       </section>
 
+      <section className="bg-[var(--public-paper)]">
+        <div className="public-container public-about-trust">
+          {ABOUT_TRUST_POINTS.map((point, index) => {
+            const Icon = TRUST_ICONS[index] ?? Handshake;
+            return (
+              <article key={point.title} className="public-about-trust-card">
+                <Icon className="size-8 text-[var(--public-blue)]" aria-hidden="true" />
+                <h3>{point.title}</h3>
+                <p>{point.body}</p>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
       <section className="bg-white public-section">
-        <div className="public-container grid items-center gap-8 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-          <div>
-            <h2 className="text-3xl font-extrabold uppercase tracking-tight">
-              {ABOUT_COPY.priorityTitle}
-            </h2>
-            <p className="mt-4 max-w-xl text-base leading-7 text-muted-foreground">
-              {ABOUT_COPY.priorityBody}
-            </p>
-            <ul className="mt-6 space-y-3">
-              {ABOUT_COPY.points.map((point) => (
-                <li key={point} className="flex gap-3">
-                  <span className="mt-1 inline-block size-2.5 shrink-0 rounded-full bg-[var(--public-blue)]" />
-                  <span className="font-semibold">{point}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="relative min-h-80 overflow-hidden rounded-md">
-            <Image
-              src="/brand/projects/wall-cabinets.jpg"
-              alt="Cabinet and shelving work by CollPro Reno"
-              fill
-              sizes="40vw"
-              className="object-cover"
-            />
+        <div className="public-container">
+          <h2 className="public-section-title">
+            <span>Why Homeowners Choose CollPro Reno</span>
+          </h2>
+          <div className="public-about-reasons">
+            {ABOUT_REASON_CARDS.map((card, index) => {
+              const Icon = REASON_ICONS[index] ?? Wrench;
+              return (
+                <article key={card.title} className="public-about-reason">
+                  <Icon className="size-9 text-[var(--public-blue)]" aria-hidden="true" />
+                  <h3>{card.title}</h3>
+                  <p>{card.body}</p>
+                </article>
+              );
+            })}
           </div>
         </div>
       </section>
 
-      <section className="bg-[#e8f1ff]">
-        <div className="public-container flex flex-wrap items-center justify-between gap-5 py-8">
-          <div className="flex items-start gap-3">
-            <MessageSquare className="mt-1 size-6 text-[var(--public-blue)]" />
-            <div>
-              <p className="text-xs font-extrabold tracking-[0.14em] uppercase">{TEXT_US_LABEL} preferred</p>
-              <p className="mt-1 max-w-xl text-sm leading-6 text-muted-foreground">
-                Text project details, photos, and your address. We will review the
-                request and follow up.
+      <section className="bg-[var(--public-paper)] public-section">
+        <div className="public-container public-about-split">
+          <div>
+            <h2 className="text-3xl font-extrabold uppercase tracking-tight">
+              What Our Customers Say
+            </h2>
+            <div className="public-review-card mt-6">
+              <p className="text-xs font-extrabold tracking-[0.12em] uppercase">Reviews</p>
+              <p className="mt-4 text-sm leading-6 text-muted-foreground">
+                {REVIEWS_PLACEHOLDER_COPY}
               </p>
             </div>
+          </div>
+          <div>
+            <h2 className="text-3xl font-extrabold uppercase tracking-tight">
+              Our Service Area
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">{SERVICE_AREA_COPY}</p>
+            <div className="public-about-map mt-5 overflow-hidden rounded-md">
+              <PublicFittedImage
+                src={SERVICE_AREA_MAP_IMAGE}
+                alt="Map of the Fort Myers and Cape Coral area"
+                objectPosition="50% 50%"
+                sizes="(max-width: 1099px) 100vw, 48vw"
+              />
+            </div>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Map shows the Fort Myers / Cape Coral area. It is not an exact
+              service-boundary guarantee. Map data © OpenStreetMap contributors.
+            </p>
           </div>
         </div>
       </section>

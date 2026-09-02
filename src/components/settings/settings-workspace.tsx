@@ -4,6 +4,7 @@ import { ExportCustomersButton } from "@/components/customers/export-customers-b
 import { FounderRegion } from "@/components/founder-design/region";
 import { BusinessProfileForm } from "@/components/settings/business-profile-form";
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
+import { WebsiteStoryForm } from "@/components/settings/website-story-form";
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import type { SettingsWorkspaceProps } from "@/components/settings/types";
@@ -160,7 +161,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
     return (
       <SectionCard
         title="Edit Website Photos"
-        description="Owner and admin only. Replace, reposition, or reset Home and Services marketing photos. This is not a page builder."
+        description="Owner and admin only. Replace, reposition, or reset Home, Services, and About marketing photos. This is not a page builder."
       >
         {websitePhotos ? (
           <WebsitePhotosEditor
@@ -171,6 +172,28 @@ function SectionBody(props: SettingsWorkspaceProps) {
           />
         ) : (
           <p className="text-sm text-muted-foreground">Website photo slots are not available.</p>
+        )}
+      </SectionCard>
+    );
+  }
+
+  if (section === "website-story") {
+    return (
+      <SectionCard
+        title="Website Story"
+        description="Owner and admin only. Raw background stays private until you approve public About copy."
+      >
+        {canEditPreferences ? (
+          <WebsiteStoryForm
+            businessId={snapshot.business.id}
+            rawOwnerStory={snapshot.websiteStory.rawOwnerStory}
+            approvedPublicAboutCopy={snapshot.websiteStory.approvedPublicAboutCopy}
+            canEdit={canEditPreferences}
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Members cannot manage Website Story or public About copy.
+          </p>
         )}
       </SectionCard>
     );

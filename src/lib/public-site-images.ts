@@ -14,6 +14,8 @@ import {
 } from "@/lib/authorization";
 import {
   HOMEPAGE_CATEGORY_LIMIT,
+  PUBLIC_ABOUT_HERO_IMAGE,
+  PUBLIC_ABOUT_STORY_IMAGE,
   PUBLIC_HOME_HERO_IMAGE,
   PUBLIC_SERVICES_HERO_IMAGE,
   publicCategoryPhoto,
@@ -27,17 +29,22 @@ import {
 
 export const PUBLIC_SITE_HOME_PAGE = "home";
 export const PUBLIC_SITE_SERVICES_PAGE = "services";
+export const PUBLIC_SITE_ABOUT_PAGE = "about";
 export const PUBLIC_SITE_EDITABLE_PAGES = [
   PUBLIC_SITE_HOME_PAGE,
   PUBLIC_SITE_SERVICES_PAGE,
+  PUBLIC_SITE_ABOUT_PAGE,
 ] as const;
 export const PUBLIC_SITE_HERO_SLOT = "hero";
+export const PUBLIC_SITE_STORY_SLOT = "story";
 export const PUBLIC_SITE_CATEGORY_SLOT_PREFIX = "category:";
 
 export const PUBLIC_HOME_HERO_DEFAULT_POSITION = "70% 50%";
 export const PUBLIC_HOME_CATEGORY_DEFAULT_POSITION = "50% 50%";
 export const PUBLIC_SERVICES_HERO_DEFAULT_POSITION = "50% 40%";
 export const PUBLIC_SERVICES_CATEGORY_DEFAULT_POSITION = "50% 50%";
+export const PUBLIC_ABOUT_HERO_DEFAULT_POSITION = "78% 42%";
+export const PUBLIC_ABOUT_STORY_DEFAULT_POSITION = "50% 45%";
 
 export const PUBLIC_SITE_IMAGE_STORAGE_UNAVAILABLE =
   "Image storage is not configured for this environment. Existing photos stay in place. Connect Vercel Blob (BLOB_READ_WRITE_TOKEN) before replacing website photos.";
@@ -66,11 +73,16 @@ export type PublicServicesImagePresentation = {
   categories: Record<string, ResolvedPublicSiteImage>;
 };
 
+export type PublicAboutImagePresentation = {
+  hero: ResolvedPublicSiteImage;
+  story: ResolvedPublicSiteImage;
+};
+
 export type PublicSiteImageEditorSlot = {
   page: string;
   slot: string;
   label: string;
-  kind: "hero" | "category";
+  kind: "hero" | "category" | "story";
   category: string | null;
   defaultSrc: string;
   defaultPosition: string;
@@ -212,6 +224,24 @@ export async function loadPublicHomeImages(
   return buildPublicHomeImagePresentation(groups, rows);
 }
 
+export function buildPublicAboutImagePresentation(
+  rows: PublicSiteImageRow[],
+): PublicAboutImagePresentation {
+  const bySlot = new Map(rows.map((row) => [`${row.page}:${row.slot}`, row]));
+  return {
+    hero: resolvePublicSiteImage({
+      defaultSrc: PUBLIC_ABOUT_HERO_IMAGE,
+      defaultPosition: PUBLIC_ABOUT_HERO_DEFAULT_POSITION,
+      row: bySlot.get(`${PUBLIC_SITE_ABOUT_PAGE}:${PUBLIC_SITE_HERO_SLOT}`),
+    }),
+    story: resolvePublicSiteImage({
+      defaultSrc: PUBLIC_ABOUT_STORY_IMAGE,
+      defaultPosition: PUBLIC_ABOUT_STORY_DEFAULT_POSITION,
+      row: bySlot.get(`${PUBLIC_SITE_ABOUT_PAGE}:${PUBLIC_SITE_STORY_SLOT}`),
+    }),
+  };
+}
+
 export async function loadPublicServicesImages(
   db: PrismaClient,
   businessId: string,
@@ -229,6 +259,22 @@ export async function loadPublicServicesImages(
   return buildPublicServicesImagePresentation(groups, rows);
 }
 
+export async function loadPublicAboutImages(
+  db: PrismaClient,
+  businessId: string,
+): Promise<PublicAboutImagePresentation> {
+  const rows = await db.publicSiteImage.findMany({
+    where: { businessId, page: PUBLIC_SITE_ABOUT_PAGE },
+    select: {
+      page: true,
+      slot: true,
+      imageUrl: true,
+      objectPosition: true,
+    },
+  });
+  return buildPublicAboutImagePresentation(rows);
+}
+
 export async function loadWebsitePhotoEditorSlots(
   db: PrismaClient,
   businessId: string,
@@ -237,6 +283,7 @@ export async function loadWebsitePhotoEditorSlots(
   const visibleHomeGroups = groups.slice(0, HOMEPAGE_CATEGORY_LIMIT);
   const home = await loadPublicHomeImages(db, businessId, visibleHomeGroups);
   const services = await loadPublicServicesImages(db, businessId, groups);
+  const about = await loadPublicAboutImages(db, businessId);
   return [
     {
       page: PUBLIC_SITE_HOME_PAGE,
@@ -296,6 +343,32 @@ export async function loadWebsitePhotoEditorSlots(
         usesCustomUpload: resolved.usesCustomUpload,
       };
     }),
+    {
+      page: PUBLIC_SITE_ABOUT_PAGE,
+      slot: PUBLIC_SITE_HERO_SLOT,
+      label: "About hero",
+      kind: "hero",
+      category: null,
+      defaultSrc: PUBLIC_ABOUT_HERO_IMAGE,
+      defaultPosition: PUBLIC_ABOUT_HERO_DEFAULT_POSITION,
+      src: about.hero.src,
+      objectPosition: about.hero.objectPosition,
+      isOverride: about.hero.isOverride,
+      usesCustomUpload: about.hero.usesCustomUpload,
+    },
+    {
+      page: PUBLIC_SITE_ABOUT_PAGE,
+      slot: PUBLIC_SITE_STORY_SLOT,
+      label: "About · Our Story",
+      kind: "story",
+      category: null,
+      defaultSrc: PUBLIC_ABOUT_STORY_IMAGE,
+      defaultPosition: PUBLIC_ABOUT_STORY_DEFAULT_POSITION,
+      src: about.story.src,
+      objectPosition: about.story.objectPosition,
+      isOverride: about.story.isOverride,
+      usesCustomUpload: about.story.usesCustomUpload,
+    },
   ];
 }
 
@@ -305,6 +378,9 @@ function isEditablePublicSitePage(page: string) {
 
 async function allowedSlotsForPage(db: Db, businessId: string, page: string) {
   if (!isEditablePublicSitePage(page)) return new Set<string>();
+  if (page === PUBLIC_SITE_ABOUT_PAGE) {
+    return new Set([PUBLIC_SITE_HERO_SLOT, PUBLIC_SITE_STORY_SLOT]);
+  }
   const categories = await db.serviceCatalogItem.findMany({
     where: { businessId, active: true },
     select: { category: true },
@@ -318,6 +394,11 @@ async function allowedSlotsForPage(db: Db, businessId: string, page: string) {
 }
 
 function defaultPositionFor(page: string, slot: string) {
+  if (page === PUBLIC_SITE_ABOUT_PAGE) {
+    return slot === PUBLIC_SITE_STORY_SLOT
+      ? PUBLIC_ABOUT_STORY_DEFAULT_POSITION
+      : PUBLIC_ABOUT_HERO_DEFAULT_POSITION;
+  }
   if (slot === PUBLIC_SITE_HERO_SLOT) {
     return page === PUBLIC_SITE_SERVICES_PAGE
       ? PUBLIC_SERVICES_HERO_DEFAULT_POSITION
