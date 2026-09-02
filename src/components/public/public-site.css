@@ -342,11 +342,6 @@
   z-index: 3;
 }
 
-.public-contact-hero .public-cinematic-inner {
-  align-items: start;
-  padding-bottom: 0.4rem;
-}
-
 .public-cinematic-shade {
   background: linear-gradient(90deg, rgba(0, 0, 0, 0.88) 0%, rgba(0, 0, 0, 0.55) 42%, rgba(0, 0, 0, 0.18) 100%);
 }
@@ -360,6 +355,12 @@
   padding-top: 1.15rem;
   padding-bottom: 1.25rem;
   align-items: center;
+}
+
+.public-contact-hero .public-cinematic-inner {
+  align-items: start;
+  padding-top: 5.1rem;
+  padding-bottom: 0.35rem;
 }
 
 .public-cinematic-copy {
@@ -879,9 +880,13 @@
 
 .public-contact-body {
   display: grid;
-  gap: 1.5rem;
+  gap: 2rem;
   padding-top: 1.25rem;
   padding-bottom: 2.5rem;
+}
+
+.public-contact-left {
+  min-width: 0;
 }
 
 .public-contact-points {
@@ -1235,6 +1240,10 @@
   }
 
   .public-cinematic-inner {
+    padding-top: 0.75rem;
+  }
+
+  .public-contact-hero .public-cinematic-inner {
     padding-top: 0.75rem;
   }
 
