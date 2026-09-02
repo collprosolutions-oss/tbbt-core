@@ -8,13 +8,29 @@ export type ProjectFilter =
 
 export type PublicProject = {
   id: string;
+  /** Public project title. Owner-approved display name for this photo. */
   title: string;
+  /**
+   * Public project description / caption.
+   * Empty means the gallery shows the title only. Never invent work,
+   * materials, duration, location, price, or customer statements.
+   */
   description: string;
   src: string;
   width: number;
   height: number;
   filters: readonly ProjectFilter[];
 };
+
+/** Public caption fields for any TBBT subscriber project photo. */
+export function publicProjectCaption(project: Pick<PublicProject, "title" | "description">) {
+  const title = project.title.trim();
+  const description = project.description.trim();
+  return {
+    title,
+    description: description && description !== title ? description : null,
+  };
+}
 
 export const PROJECT_FILTERS: { id: ProjectFilter; label: string }[] = [
   { id: "all", label: "All" },

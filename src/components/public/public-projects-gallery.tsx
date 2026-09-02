@@ -5,6 +5,7 @@ import Image from "next/image";
 import {
   PROJECT_FILTERS,
   filterPublicProjects,
+  publicProjectCaption,
   type ProjectFilter,
 } from "@/lib/public-projects";
 
@@ -32,22 +33,27 @@ export function PublicProjectsGallery() {
       </div>
       <div className="public-container pb-12">
         <ul className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-          {projects.map((project) => (
-            <li key={project.id}>
-              <article className="public-project-tile public-project-tile--lg">
-                <Image
-                  src={project.src}
-                  alt={project.title}
-                  fill
-                  sizes="(max-width: 768px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                />
-                <div className="public-project-tile-bar">
-                  <h2>{project.title}</h2>
-                  <p>{PROJECT_FILTERS.find((item) => item.id === project.filters[0])?.label}</p>
-                </div>
-              </article>
-            </li>
-          ))}
+          {projects.map((project) => {
+            const caption = publicProjectCaption(project);
+            return (
+              <li key={project.id}>
+                <article className="public-project-card">
+                  <div className="public-project-tile public-project-tile--lg">
+                    <Image
+                      src={project.src}
+                      alt={caption.title}
+                      fill
+                      sizes="(max-width: 768px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                    />
+                  </div>
+                  <div className="public-project-caption">
+                    <h2>{caption.title}</h2>
+                    {caption.description ? <p>{caption.description}</p> : null}
+                  </div>
+                </article>
+              </li>
+            );
+          })}
         </ul>
       </div>
     </div>

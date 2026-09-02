@@ -31,7 +31,11 @@ const {
   isCollProRenoSlug,
   toPublicCatalogItem,
 } = await import("@/lib/public-site");
-const { selectPublicProjectsById } = await import("@/lib/public-projects");
+const {
+  PUBLIC_PROJECTS,
+  publicProjectCaption,
+  selectPublicProjectsById,
+} = await import("@/lib/public-projects");
 const {
   parseRequestQuantity,
   parseSelectedTasks,
@@ -118,6 +122,24 @@ check("Home Recent Projects use a 3-column desktop grid",
 check("Projects gallery uses a 3-column desktop grid",
   readRepo("src/components/public/public-projects-gallery.tsx").includes("lg:grid-cols-3") &&
     !readRepo("src/components/public/public-projects-gallery.tsx").includes("lg:grid-cols-2"));
+check("Projects gallery captions use stored public title/description fields",
+  (() => {
+    const gallery = readRepo("src/components/public/public-projects-gallery.tsx");
+    const missing = PUBLIC_PROJECTS.some((project) => !project.title.trim());
+    const blank = publicProjectCaption({ title: "Door work", description: "   " });
+    const kept = publicProjectCaption({
+      title: "Custom closet organization",
+      description: "White closet system with shelves, hanging rods, and drawers.",
+    });
+    return (
+      gallery.includes("publicProjectCaption") &&
+      gallery.includes("caption.description") &&
+      !gallery.includes("Removed the existing") &&
+      !missing &&
+      blank.description === null &&
+      kept.description === "White closet system with shelves, hanging rods, and drawers."
+    );
+  })());
 check("Home does not expose owner photo replace controls",
   !readRepo("src/components/public/public-home.tsx").includes("Replace Image") &&
     !readRepo("src/components/public/public-home.tsx").includes("Reset to Default"));
