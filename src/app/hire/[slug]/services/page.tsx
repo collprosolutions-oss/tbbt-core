@@ -7,19 +7,27 @@ import { PublicSiteShell } from "@/components/public/public-site-shell";
 import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { smsHref } from "@/lib/directions";
 import {
-  PUBLIC_SERVICES_HERO_IMAGE,
   publicDisplayName,
   publicHomePath,
   publicPhone,
   publicRequestPath,
 } from "@/lib/public-site";
+import { prisma } from "@/lib/prisma";
 import { loadPublicSite } from "@/lib/public-site-data";
+import { loadPublicServicesImages } from "@/lib/public-site-images";
+import { parseSelectedWorkSearch } from "@/lib/selected-work";
 
 export const dynamic = "force-dynamic";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ category?: string; services?: string; other?: string; otherText?: string }>;
+  searchParams: Promise<{
+    category?: string;
+    services?: string;
+    other?: string;
+    otherText?: string;
+    otherQty?: string;
+  }>;
 };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -42,6 +50,8 @@ export default async function PublicServicesPage({ params, searchParams }: PageP
   const phone = publicPhone(site.business.slug);
   const requestHref = publicRequestPath(site.business.slug);
   const textHref = smsHref(phone);
+  const images = await loadPublicServicesImages(prisma, site.business.id, site.groups);
+  const initialSelected = parseSelectedWorkSearch(query, new Set(site.items.map((item) => item.id)));
 
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>
@@ -51,7 +61,8 @@ export default async function PublicServicesPage({ params, searchParams }: PageP
           current="Services"
           title="Services"
           description="Professional handyman services to keep your home running smoothly and looking its best."
-          imageSrc={PUBLIC_SERVICES_HERO_IMAGE}
+          imageSrc={images.hero.src}
+          objectPosition={images.hero.objectPosition}
           phone={phone}
           smsHref={textHref}
           requestHref={requestHref}
@@ -63,12 +74,8 @@ export default async function PublicServicesPage({ params, searchParams }: PageP
               items={site.items}
               groups={site.groups}
               initialCategory={query.category}
-              initialSelectedIds={(query.services ?? "")
-                .split(",")
-                .map((value) => value.trim())
-                .filter((id) => site.items.some((item) => item.id === id))}
-              initialIncludeOther={query.other === "1" || query.other === "true"}
-              initialOtherText={(query.otherText ?? "").trim()}
+              initialSelected={initialSelected}
+              categoryImages={images.categories}
             />
           </div>
         </section>

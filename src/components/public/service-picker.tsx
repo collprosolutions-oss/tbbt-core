@@ -7,26 +7,22 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { OTHER_TASK_LABEL } from "@/lib/service-request-work";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
+import {
+  emptySelectedWork,
+  selectedWorkLabels as formatSelectedWorkLabels,
+  toggleSelectedCatalog,
+  type SelectedWorkState,
+} from "@/lib/selected-work";
 import { cn } from "@/lib/utils";
 
-export type SelectedWorkState = {
-  catalogIds: string[];
-  includeOther: boolean;
-  otherDescription: string;
-};
+export type { SelectedWorkState };
+export { emptySelectedWork };
 
 export function selectedWorkLabels(
   selected: SelectedWorkState,
   items: PublicCatalogItem[],
 ) {
-  const byId = new Map(items.map((item) => [item.id, item]));
-  const labels = selected.catalogIds
-    .map((id) => byId.get(id)?.name)
-    .filter((name): name is string => Boolean(name));
-  if (selected.includeOther) {
-    labels.push(selected.otherDescription.trim() || OTHER_TASK_LABEL);
-  }
-  return labels;
+  return formatSelectedWorkLabels(selected, items);
 }
 
 export function ServicePicker({
@@ -70,17 +66,12 @@ export function ServicePicker({
   }, [activeCategory, groups, query]);
 
   function toggleCatalog(id: string) {
-    const catalogIds = selected.catalogIds.includes(id)
-      ? selected.catalogIds.filter((value) => value !== id)
-      : [...selected.catalogIds, id];
-    onChange({ ...selected, catalogIds });
+    onChange(toggleSelectedCatalog(selected, id));
   }
 
   function removeCatalog(id: string) {
-    onChange({
-      ...selected,
-      catalogIds: selected.catalogIds.filter((value) => value !== id),
-    });
+    if (!selected.catalogIds.includes(id)) return;
+    onChange(toggleSelectedCatalog(selected, id));
   }
 
   const labels = selectedWorkLabels(selected, items);
@@ -187,7 +178,11 @@ export function ServicePicker({
           type="button"
           aria-pressed={selected.includeOther}
           onClick={() =>
-            onChange({ ...selected, includeOther: !selected.includeOther })
+            onChange({
+              ...selected,
+              includeOther: !selected.includeOther,
+              otherQuantity: selected.includeOther ? 1 : selected.otherQuantity || 1,
+            })
           }
           className={cn(
             "flex w-full items-center justify-between rounded-xl border p-4 text-left",

@@ -20,8 +20,10 @@ export type PublicIntakeInput = {
   address: string;
   notes: string;
   catalogItemIds: string[];
+  catalogQuantities?: Record<string, unknown>;
   includeOther: boolean;
   otherDescription: string;
+  otherQuantity?: unknown;
   photoUrls?: string[];
 };
 
@@ -87,6 +89,7 @@ export type PublicIntakeTx = {
         serviceRequestId: string;
         serviceCatalogItemId: string | null;
         customDescription: string | null;
+        quantity: number;
         sortOrder: number;
       }>;
     }) => Promise<unknown>;
@@ -140,8 +143,10 @@ export async function createPublicServiceRequest(
 
   const parsed = parseSelectedTasks({
     catalogItemIds: readIntakeCatalogIds(input.catalogItemIds),
+    catalogQuantities: input.catalogQuantities,
     includeOther: input.includeOther,
     otherDescription: input.otherDescription,
+    otherQuantity: input.otherQuantity,
   });
   if (!parsed.ok) {
     return parsed;
@@ -258,6 +263,7 @@ export async function createPublicServiceRequest(
                 serviceRequestId: request.id,
                 serviceCatalogItemId: task.serviceCatalogItemId,
                 customDescription: null,
+                quantity: task.quantity,
                 sortOrder: index,
               }
             : {
@@ -265,6 +271,7 @@ export async function createPublicServiceRequest(
                 serviceRequestId: request.id,
                 serviceCatalogItemId: null,
                 customDescription: task.customDescription,
+                quantity: task.quantity,
                 sortOrder: index,
               },
         ),

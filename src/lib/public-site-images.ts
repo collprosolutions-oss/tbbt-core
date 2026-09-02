@@ -15,6 +15,7 @@ import {
 import {
   HOMEPAGE_CATEGORY_LIMIT,
   PUBLIC_HOME_HERO_IMAGE,
+  PUBLIC_SERVICES_HERO_IMAGE,
   publicCategoryPhoto,
   type PublicCatalogGroup,
 } from "@/lib/public-site";
@@ -25,11 +26,18 @@ import {
 } from "@/lib/storage";
 
 export const PUBLIC_SITE_HOME_PAGE = "home";
+export const PUBLIC_SITE_SERVICES_PAGE = "services";
+export const PUBLIC_SITE_EDITABLE_PAGES = [
+  PUBLIC_SITE_HOME_PAGE,
+  PUBLIC_SITE_SERVICES_PAGE,
+] as const;
 export const PUBLIC_SITE_HERO_SLOT = "hero";
 export const PUBLIC_SITE_CATEGORY_SLOT_PREFIX = "category:";
 
 export const PUBLIC_HOME_HERO_DEFAULT_POSITION = "70% 50%";
 export const PUBLIC_HOME_CATEGORY_DEFAULT_POSITION = "50% 50%";
+export const PUBLIC_SERVICES_HERO_DEFAULT_POSITION = "50% 40%";
+export const PUBLIC_SERVICES_CATEGORY_DEFAULT_POSITION = "50% 50%";
 
 export const PUBLIC_SITE_IMAGE_STORAGE_UNAVAILABLE =
   "Image storage is not configured for this environment. Existing photos stay in place. Connect Vercel Blob (BLOB_READ_WRITE_TOKEN) before replacing website photos.";
@@ -49,6 +57,11 @@ export type ResolvedPublicSiteImage = {
 };
 
 export type PublicHomeImagePresentation = {
+  hero: ResolvedPublicSiteImage;
+  categories: Record<string, ResolvedPublicSiteImage>;
+};
+
+export type PublicServicesImagePresentation = {
   hero: ResolvedPublicSiteImage;
   categories: Record<string, ResolvedPublicSiteImage>;
 };
@@ -159,6 +172,29 @@ export function buildPublicHomeImagePresentation(
   return { hero, categories };
 }
 
+export function buildPublicServicesImagePresentation(
+  groups: PublicCatalogGroup[],
+  rows: PublicSiteImageRow[],
+): PublicServicesImagePresentation {
+  const bySlot = new Map(rows.map((row) => [`${row.page}:${row.slot}`, row]));
+  const hero = resolvePublicSiteImage({
+    defaultSrc: PUBLIC_SERVICES_HERO_IMAGE,
+    defaultPosition: PUBLIC_SERVICES_HERO_DEFAULT_POSITION,
+    row: bySlot.get(`${PUBLIC_SITE_SERVICES_PAGE}:${PUBLIC_SITE_HERO_SLOT}`),
+  });
+  const categories: Record<string, ResolvedPublicSiteImage> = {};
+  for (const group of groups) {
+    categories[group.category] = resolvePublicSiteImage({
+      defaultSrc: publicCategoryPhoto(group.category),
+      defaultPosition: PUBLIC_SERVICES_CATEGORY_DEFAULT_POSITION,
+      row: bySlot.get(
+        `${PUBLIC_SITE_SERVICES_PAGE}:${categoryImageSlot(group.category)}`,
+      ),
+    });
+  }
+  return { hero, categories };
+}
+
 export async function loadPublicHomeImages(
   db: PrismaClient,
   businessId: string,
@@ -176,33 +212,51 @@ export async function loadPublicHomeImages(
   return buildPublicHomeImagePresentation(groups, rows);
 }
 
+export async function loadPublicServicesImages(
+  db: PrismaClient,
+  businessId: string,
+  groups: PublicCatalogGroup[],
+): Promise<PublicServicesImagePresentation> {
+  const rows = await db.publicSiteImage.findMany({
+    where: { businessId, page: PUBLIC_SITE_SERVICES_PAGE },
+    select: {
+      page: true,
+      slot: true,
+      imageUrl: true,
+      objectPosition: true,
+    },
+  });
+  return buildPublicServicesImagePresentation(groups, rows);
+}
+
 export async function loadWebsitePhotoEditorSlots(
   db: PrismaClient,
   businessId: string,
   groups: PublicCatalogGroup[],
 ): Promise<PublicSiteImageEditorSlot[]> {
-  const visibleGroups = groups.slice(0, HOMEPAGE_CATEGORY_LIMIT);
-  const presentation = await loadPublicHomeImages(db, businessId, visibleGroups);
+  const visibleHomeGroups = groups.slice(0, HOMEPAGE_CATEGORY_LIMIT);
+  const home = await loadPublicHomeImages(db, businessId, visibleHomeGroups);
+  const services = await loadPublicServicesImages(db, businessId, groups);
   return [
     {
       page: PUBLIC_SITE_HOME_PAGE,
       slot: PUBLIC_SITE_HERO_SLOT,
-      label: "Hero Image",
+      label: "Home hero",
       kind: "hero",
       category: null,
       defaultSrc: PUBLIC_HOME_HERO_IMAGE,
       defaultPosition: PUBLIC_HOME_HERO_DEFAULT_POSITION,
-      src: presentation.hero.src,
-      objectPosition: presentation.hero.objectPosition,
-      isOverride: presentation.hero.isOverride,
-      usesCustomUpload: presentation.hero.usesCustomUpload,
+      src: home.hero.src,
+      objectPosition: home.hero.objectPosition,
+      isOverride: home.hero.isOverride,
+      usesCustomUpload: home.hero.usesCustomUpload,
     },
-    ...visibleGroups.map((group) => {
-      const resolved = presentation.categories[group.category]!;
+    ...visibleHomeGroups.map((group) => {
+      const resolved = home.categories[group.category]!;
       return {
         page: PUBLIC_SITE_HOME_PAGE,
         slot: categoryImageSlot(group.category),
-        label: group.category,
+        label: `Home · ${group.category}`,
         kind: "category" as const,
         category: group.category,
         defaultSrc: publicCategoryPhoto(group.category),
@@ -213,10 +267,44 @@ export async function loadWebsitePhotoEditorSlots(
         usesCustomUpload: resolved.usesCustomUpload,
       };
     }),
+    {
+      page: PUBLIC_SITE_SERVICES_PAGE,
+      slot: PUBLIC_SITE_HERO_SLOT,
+      label: "Services hero",
+      kind: "hero",
+      category: null,
+      defaultSrc: PUBLIC_SERVICES_HERO_IMAGE,
+      defaultPosition: PUBLIC_SERVICES_HERO_DEFAULT_POSITION,
+      src: services.hero.src,
+      objectPosition: services.hero.objectPosition,
+      isOverride: services.hero.isOverride,
+      usesCustomUpload: services.hero.usesCustomUpload,
+    },
+    ...groups.map((group) => {
+      const resolved = services.categories[group.category]!;
+      return {
+        page: PUBLIC_SITE_SERVICES_PAGE,
+        slot: categoryImageSlot(group.category),
+        label: `Services · ${group.category}`,
+        kind: "category" as const,
+        category: group.category,
+        defaultSrc: publicCategoryPhoto(group.category),
+        defaultPosition: PUBLIC_SERVICES_CATEGORY_DEFAULT_POSITION,
+        src: resolved.src,
+        objectPosition: resolved.objectPosition,
+        isOverride: resolved.isOverride,
+        usesCustomUpload: resolved.usesCustomUpload,
+      };
+    }),
   ];
 }
 
-async function allowedHomeSlots(db: Db, businessId: string) {
+function isEditablePublicSitePage(page: string) {
+  return (PUBLIC_SITE_EDITABLE_PAGES as readonly string[]).includes(page);
+}
+
+async function allowedSlotsForPage(db: Db, businessId: string, page: string) {
+  if (!isEditablePublicSitePage(page)) return new Set<string>();
   const categories = await db.serviceCatalogItem.findMany({
     where: { businessId, active: true },
     select: { category: true },
@@ -227,6 +315,17 @@ async function allowedHomeSlots(db: Db, businessId: string) {
     slots.add(categoryImageSlot(row.category));
   }
   return slots;
+}
+
+function defaultPositionFor(page: string, slot: string) {
+  if (slot === PUBLIC_SITE_HERO_SLOT) {
+    return page === PUBLIC_SITE_SERVICES_PAGE
+      ? PUBLIC_SERVICES_HERO_DEFAULT_POSITION
+      : PUBLIC_HOME_HERO_DEFAULT_POSITION;
+  }
+  return page === PUBLIC_SITE_SERVICES_PAGE
+    ? PUBLIC_SERVICES_CATEGORY_DEFAULT_POSITION
+    : PUBLIC_HOME_CATEGORY_DEFAULT_POSITION;
 }
 
 export class PublicSiteImageError extends Error {
@@ -254,11 +353,11 @@ export async function upsertPublicSiteImageOp(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
-  if (input.page !== PUBLIC_SITE_HOME_PAGE) {
+  if (!isEditablePublicSitePage(input.page)) {
     throw new PublicSiteImageError("That page is not editable yet.");
   }
 
-  const allowed = await allowedHomeSlots(db, access.businessId);
+  const allowed = await allowedSlotsForPage(db, access.businessId, input.page);
   if (!allowed.has(input.slot)) {
     throw new PublicSiteImageError(
       "That image slot is not available for this catalog.",
@@ -290,9 +389,7 @@ export async function upsertPublicSiteImageOp(
   const nextPosition =
     input.objectPosition?.trim() ||
     previous?.objectPosition ||
-    (input.slot === PUBLIC_SITE_HERO_SLOT
-      ? PUBLIC_HOME_HERO_DEFAULT_POSITION
-      : PUBLIC_HOME_CATEGORY_DEFAULT_POSITION);
+    defaultPositionFor(input.page, input.slot);
 
   const saved = await db.publicSiteImage.upsert({
     where: {
@@ -345,7 +442,7 @@ export async function resetPublicSiteImageOp(
   input: { page: string; slot: string },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
-  if (input.page !== PUBLIC_SITE_HOME_PAGE) {
+  if (!isEditablePublicSitePage(input.page)) {
     throw new PublicSiteImageError("That page is not editable yet.");
   }
 

@@ -5,7 +5,6 @@ import { PublicPageHero } from "@/components/public/public-page-hero";
 import { MultiServiceRequestFlow } from "@/components/public/request-flow";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
 import { PublicUnavailable } from "@/components/public/public-unavailable";
-import type { SelectedWorkState } from "@/components/public/service-picker";
 import { smsHref } from "@/lib/directions";
 import {
   PUBLIC_QUOTE_HERO_IMAGE,
@@ -15,13 +14,19 @@ import {
   publicRequestPath,
 } from "@/lib/public-site";
 import { loadPublicSite } from "@/lib/public-site-data";
+import { parseSelectedWorkSearch } from "@/lib/selected-work";
 import { isStorageConfigured } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ services?: string; other?: string; otherText?: string }>;
+  searchParams: Promise<{
+    services?: string;
+    other?: string;
+    otherText?: string;
+    otherQty?: string;
+  }>;
 };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -42,16 +47,10 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
     return <PublicUnavailable title="Request unavailable" body="This request could not be submitted." />;
   }
 
-  const validIds = new Set(site.items.map((item) => item.id));
-  const requestedIds = (query.services ?? "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter((id) => validIds.has(id));
-  const initialSelected: SelectedWorkState = {
-    catalogIds: requestedIds,
-    includeOther: query.other === "1" || query.other === "true",
-    otherDescription: (query.otherText ?? "").trim(),
-  };
+  const initialSelected = parseSelectedWorkSearch(
+    query,
+    new Set(site.items.map((item) => item.id)),
+  );
   const name = publicDisplayName(site.business);
   const phone = publicPhone(site.business.slug);
   const textHref = smsHref(phone);

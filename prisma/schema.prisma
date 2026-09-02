@@ -365,6 +365,9 @@ model ServiceRequestItem {
   /// Used when the customer chose "Other / Something Else" (or a catalog
   /// item later became inactive/deleted). Never a comma-separated ID list.
   customDescription    String?
+  /// Customer-selected count for this task. Whole numbers only, 1–99.
+  /// Never encoded only in notes. Default 1 keeps legacy rows valid.
+  quantity             Int      @default(1)
   sortOrder            Int      @default(0)
   createdAt            DateTime @default(now())
 

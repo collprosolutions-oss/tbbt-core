@@ -3,7 +3,11 @@ import {
   HANDYMAN_CATALOG_CATEGORIES,
 } from "@/lib/handyman-starter-catalog";
 import { getAppUrl } from "@/lib/mail";
-import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
+import { formatCatalogPriceLabel, publicCatalogUnitAmount } from "@/lib/pricing-mode";
+import {
+  selectedWorkQuery as encodeSelectedWorkQuery,
+  type SelectedWorkQueryInput,
+} from "@/lib/selected-work";
 import { groupServiceCatalogItemsByCategory } from "@/lib/service-catalog-category";
 import { isActiveTrade } from "@/lib/trades";
 
@@ -153,6 +157,8 @@ export type PublicCatalogItem = {
   category: string;
   pricingMode: string;
   priceLabel: string;
+  /** Public unit amount only. Null for CUSTOM_QUOTE. Never a client-trusted price. */
+  unitAmount: number | null;
 };
 
 export type PublicCatalogGroup = {
@@ -211,6 +217,7 @@ export function toPublicCatalogItem(item: {
     category: item.category,
     pricingMode: item.pricingMode,
     priceLabel: formatCatalogPriceLabel(item.pricingMode, item.price),
+    unitAmount: publicCatalogUnitAmount(item.pricingMode, item.price),
   };
 }
 
@@ -254,19 +261,8 @@ export function publicCategoryDescriptor(items: PublicCatalogItem[]) {
   return `${names[0]}, ${names[1]}, and more`;
 }
 
-export function selectedWorkQuery(input: {
-  catalogIds?: string[];
-  includeOther?: boolean;
-  otherDescription?: string;
-}) {
-  const params = new URLSearchParams();
-  if (input.catalogIds?.length) params.set("services", input.catalogIds.join(","));
-  if (input.includeOther) {
-    params.set("other", "1");
-    if (input.otherDescription?.trim()) params.set("otherText", input.otherDescription.trim());
-  }
-  const query = params.toString();
-  return query ? `?${query}` : "";
+export function selectedWorkQuery(input: SelectedWorkQueryInput) {
+  return encodeSelectedWorkQuery(input);
 }
 
 export function publicServicesPath(

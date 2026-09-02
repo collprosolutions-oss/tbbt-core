@@ -4,16 +4,21 @@ import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { submitServiceRequest } from "@/app/actions/intake";
-import {
-  selectedWorkLabels,
-  type SelectedWorkState,
-} from "@/components/public/service-picker";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
-import { publicServicesPath, selectedWorkQuery } from "@/lib/public-site";
+import { publicServicesPath } from "@/lib/public-site";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
+import {
+  catalogQuantitiesFromState,
+  formatPricingSummaryLines,
+  selectedCatalogPricingRows,
+  selectedWorkLabels,
+  selectedWorkQuery,
+  summarizeSelectedWorkPricing,
+  type SelectedWorkState,
+} from "@/lib/selected-work";
 
 type Step = "details" | "info" | "review";
 
@@ -94,12 +99,15 @@ export function MultiServiceRequestFlow({
           ? "Preferred contact: Phone"
           : "Preferred contact: Email";
     formData.set("description", [notes, preference].filter(Boolean).join("\n\n"));
+    const quantities = catalogQuantitiesFromState(selected);
     for (const id of selected.catalogIds) {
       formData.append("serviceCatalogItemId", id);
+      formData.append("quantity", String(quantities[id] ?? 1));
     }
     if (selected.includeOther) {
       formData.set("includeOther", "true");
       formData.set("otherDescription", selected.otherDescription);
+      formData.set("otherQuantity", String(selected.otherQuantity || 1));
     }
     for (const file of photos) {
       formData.append("photos", file);
@@ -149,7 +157,7 @@ export function MultiServiceRequestFlow({
   return (
     <div className="space-y-8">
       <section>
-        <h2 className="text-xl font-extrabold tracking-wide uppercase">Selected Services</h2>
+        <h2 className="text-xl font-extrabold tracking-wide uppercase">Your Selected Work</h2>
         <ul className="mt-3 space-y-2">
           {labels.map((label) => (
             <li key={label} className="font-semibold">
@@ -157,6 +165,7 @@ export function MultiServiceRequestFlow({
             </li>
           ))}
         </ul>
+        <QuotePricingNote items={items} selected={selected} />
         <Link
           href={servicesHref || `${chooseServicesHref}${selectedWorkQuery(selected)}`}
           className="mt-4 inline-block font-extrabold tracking-wide text-[var(--public-blue)] uppercase"
@@ -387,6 +396,29 @@ export function MultiServiceRequestFlow({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function QuotePricingNote({
+  items,
+  selected,
+}: {
+  items: PublicCatalogItem[];
+  selected: SelectedWorkState;
+}) {
+  const lines = formatPricingSummaryLines(
+    summarizeSelectedWorkPricing(selectedCatalogPricingRows(selected, items)),
+  );
+  if (lines.length === 0) return null;
+  return (
+    <div className="public-estimate-summary mt-4">
+      {lines.map((line) => (
+        <p key={line}>{line}</p>
+      ))}
+      <p className="public-estimate-note">
+        Not a formal estimate. The owner reviews the request before sending a written estimate.
+      </p>
     </div>
   );
 }

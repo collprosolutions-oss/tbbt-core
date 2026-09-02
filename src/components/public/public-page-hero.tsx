@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import Image from "next/image";
 import Link from "next/link";
+import { PublicFittedImage } from "@/components/public/public-fitted-image";
 import { PUBLIC_INNER_HERO_IMAGE } from "@/lib/public-site";
 
 export function PublicPageHero({
@@ -10,6 +10,7 @@ export function PublicPageHero({
   accent,
   description,
   imageSrc = PUBLIC_INNER_HERO_IMAGE,
+  objectPosition = "50% 38%",
   children,
 }: {
   homeHref: string;
@@ -18,6 +19,7 @@ export function PublicPageHero({
   accent?: string;
   description?: string;
   imageSrc?: string;
+  objectPosition?: string;
   phone: string | null;
   smsHref: string | null;
   requestHref: string;
@@ -27,7 +29,13 @@ export function PublicPageHero({
   return (
     <section className="public-cinematic">
       <div className="public-cinematic-media">
-        <Image src={imageSrc} alt="" fill sizes="100vw" className="object-cover" priority />
+        <PublicFittedImage
+          src={imageSrc}
+          alt=""
+          objectPosition={objectPosition}
+          sizes="100vw"
+          priority
+        />
       </div>
       <div className="public-cinematic-shade" />
       <div className="public-container public-cinematic-inner">

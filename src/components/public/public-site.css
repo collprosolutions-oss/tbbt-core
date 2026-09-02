@@ -544,10 +544,19 @@
 
 .public-services-layout {
   display: grid;
-  gap: 1.75rem;
+  gap: 1.25rem;
+}
+
+.public-services-body {
+  display: grid;
+  gap: 1.5rem;
 }
 
 .public-cat-rail {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+  padding: 0.75rem 0.8rem 0.85rem;
   border: 1px solid #e4ebf2;
   background: #fff;
 }
@@ -587,6 +596,36 @@
   font-weight: 700;
 }
 
+.public-selected-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.public-estimate-summary {
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #d5e6ff;
+}
+
+.public-estimate-summary h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.public-estimate-summary p {
+  margin: 0.2rem 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.public-estimate-note {
+  font-weight: 500 !important;
+  color: #5a6573;
+}
+
 .public-selected-box .public-btn {
   width: 100%;
   margin-top: 0.85rem;
@@ -596,8 +635,9 @@
 }
 
 .public-cat-rail h2 {
+  grid-column: 1 / -1;
   margin: 0;
-  padding: 1rem 1.1rem 0.6rem;
+  padding: 0.15rem 0.2rem 0.35rem;
   font-size: 0.72rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -607,19 +647,18 @@
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 0.7rem;
-  min-height: 3.15rem;
-  padding: 0.75rem 1.1rem;
-  border: 0;
-  border-top: 1px solid #eef2f6;
+  min-height: 2.65rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid #e4ebf2;
   background: #fff;
   text-align: left;
-  font-size: 0.95rem;
+  font-size: 0.88rem;
   font-weight: 700;
 }
 
 .public-cat-rail button[data-active="true"] {
   background: var(--public-blue);
+  border-color: var(--public-blue);
   color: #fff;
 }
 
@@ -627,14 +666,78 @@
   display: grid;
   gap: 0.35rem;
   width: 100%;
-  padding: 1.05rem 0;
+  padding: 0.95rem 0;
   border-bottom: 1px solid #e4ebf2;
   background: transparent;
   text-align: left;
 }
 
+.public-service-row-main {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.public-select-control {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid #d5dde6;
+}
+
+.public-qty {
+  box-sizing: border-box;
+  width: 3.1rem;
+  min-height: 2.15rem;
+  padding: 0.2rem 0.15rem;
+  border: 1px solid #c5ced8;
+  border-radius: 4px;
+  background: #fff;
+  text-align: center;
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.public-qty:disabled {
+  opacity: 0.45;
+}
+
+.public-service-copy {
+  min-width: 0;
+  text-align: left;
+}
+
+.public-service-copy strong,
 .public-service-row strong {
-  font-size: 1.05rem;
+  display: block;
+  font-size: 1.02rem;
+}
+
+.public-service-copy span {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--public-blue);
+}
+
+.public-details-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.public-service-details {
+  margin: 0.15rem 0 0 5.4rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: #5a6573;
 }
 
 .public-cta-bar {
@@ -780,7 +883,11 @@
     border-left: 1px solid rgba(255, 255, 255, 0.12);
   }
 
-  .public-services-layout {
+  .public-cat-rail {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .public-services-body {
     grid-template-columns: 18.5rem minmax(0, 1fr);
     align-items: start;
   }
@@ -791,6 +898,10 @@
 }
 
 @media (max-width: 1099px) {
+  .public-service-details {
+    margin-left: 0;
+  }
+
   .public-site {
     --public-logo: 5.6rem;
     --public-header-h: 4.6rem;

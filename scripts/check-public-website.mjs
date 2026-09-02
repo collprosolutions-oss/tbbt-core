@@ -32,7 +32,17 @@ const {
   toPublicCatalogItem,
 } = await import("@/lib/public-site");
 const { selectPublicProjectsById } = await import("@/lib/public-projects");
-const { parseSelectedTasks, requestedWorkLabels } = await import("@/lib/service-request-work");
+const {
+  parseRequestQuantity,
+  parseSelectedTasks,
+  requestedWorkLabels,
+} = await import("@/lib/service-request-work");
+const { draftEstimateLinesFromRequestItems } = await import("@/lib/request-estimate-draft");
+const {
+  parseSelectedWorkSearch,
+  selectedWorkQuery,
+  summarizeSelectedWorkPricing,
+} = await import("@/lib/selected-work");
 const { groupServiceCatalogItemsByCategory } = await import("@/lib/service-catalog-category");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:43217";
@@ -129,6 +139,19 @@ check("Public intake does not apply labor minimum",
 check("Existing /r/[slug] intake URL is preserved", requestPageSrc.includes("MultiServiceRequestFlow"));
 check("Unauthenticated / is the public homepage, not sign-in",
   proxySrc.includes("isPublicHome") && !proxySrc.includes('hasSession ? "/dashboard" : "/sign-in"'));
+check("Services page uses a compact category rail and quantity boxes",
+  readRepo("src/components/public/public-services-browser.tsx").includes("public-qty") &&
+    readRepo("src/components/public/public-site.css").includes("repeat(6, minmax(0, 1fr))"));
+check("Request a Quote keeps a compact selected-work summary",
+  requestFlowSrc.includes("Your Selected Work") &&
+    requestFlowSrc.includes("Add Another Service") &&
+    !requestFlowSrc.includes("ServicePicker"));
+check("Intake persists structured quantity, not notes-only quantity",
+  intakeActionSrc.includes("catalogQuantities") &&
+    readRepo("src/lib/public-intake.ts").includes("quantity: task.quantity"));
+check("Services Website Photos reuse the existing PublicSiteImage page/slot model",
+  readRepo("src/lib/public-site-images.ts").includes("PUBLIC_SITE_SERVICES_PAGE") &&
+    readRepo("src/app/hire/[slug]/services/page.tsx").includes("loadPublicServicesImages"));
 
 console.log("\nSTATIC — Catalog and intake architecture");
 check("Public catalog uses persisted categories",
@@ -215,6 +238,73 @@ check("Customer can remove a selected service",
   parsedRemoved.ok && parsedRemoved.tasks.length === 1 && parsedRemoved.tasks[0].serviceCatalogItemId === "svc-2");
 check("Other / custom task is supported",
   parsedOther.ok && parsedOther.tasks[0].kind === "other");
+
+check("Quantity 0 is rejected", parseRequestQuantity(0) === null);
+check("Quantity 100+ is rejected", parseRequestQuantity(100) === null);
+check("Decimal quantity is rejected", parseRequestQuantity("1.5") === null);
+check("Negative quantity is rejected", parseRequestQuantity("-2") === null);
+check("Nonnumeric quantity is rejected", parseRequestQuantity("abc") === null);
+check("Quantity 3 is accepted", parseRequestQuantity(3) === 3);
+
+const parsedQty = parseSelectedTasks({
+  catalogItemIds: ["svc-1"],
+  catalogQuantities: { "svc-1": 3 },
+  includeOther: false,
+  otherDescription: "",
+});
+check("One service with qty 3 stays a single selected task",
+  parsedQty.ok && parsedQty.tasks.length === 1 && parsedQty.tasks[0].quantity === 3);
+const parsedBadQty = parseSelectedTasks({
+  catalogItemIds: ["svc-1"],
+  catalogQuantities: { "svc-1": 0 },
+  includeOther: false,
+  otherDescription: "",
+});
+check("Invalid submitted quantity is rejected", parsedBadQty.ok === false);
+
+const qtyQuery = selectedWorkQuery({
+  catalogIds: ["door", "fan"],
+  quantities: { door: 3, fan: 1 },
+  includeOther: false,
+});
+const qtyParsed = parseSelectedWorkSearch({ services: "door:3,fan" });
+check("Services query preserves quantities across the Request handoff",
+  qtyQuery === "?services=door:3,fan" &&
+    qtyParsed.catalogIds.join(",") === "door,fan" &&
+    qtyParsed.quantities.door === 3 &&
+    qtyParsed.quantities.fan === 1);
+
+const mixed = summarizeSelectedWorkPricing([
+  { pricingMode: "FIXED", unitAmount: 75, quantity: 3 },
+  { pricingMode: "STARTING_AT", unitAmount: 75, quantity: 3 },
+  { pricingMode: "CUSTOM_QUOTE", unitAmount: null, quantity: 3 },
+]);
+check("FIXED quantity uses unit price × quantity", mixed.fixedTotal === 225);
+check("STARTING_AT quantity uses a starting subtotal", mixed.startingTotal === 225);
+check("CUSTOM_QUOTE keeps quantity but invents no price",
+  mixed.customCount === 1 && mixed.estimatedStartingTotal === 450);
+check("Mixed summary does not treat starting work as a guaranteed total",
+  mixed.allFixed === false);
+
+const draftLines = draftEstimateLinesFromRequestItems([
+  {
+    quantity: 3,
+    serviceCatalogItem: { name: "Door Knob Replacement", pricingMode: "FIXED", price: 75 },
+  },
+  {
+    quantity: 2,
+    customDescription: "Custom carpentry",
+    serviceCatalogItem: null,
+  },
+]);
+check("Estimate-draft helper keeps quantity and catalog pricing ready",
+  draftLines[0]?.quantity === 3 &&
+    draftLines[0]?.unitPrice === 75 &&
+    draftLines[1]?.priced === false);
+check("Owner estimate creation remains a draft handoff, not an auto-send",
+  estimateActionSrc.includes("createEstimate") &&
+    !estimateActionSrc.includes("status: \"SENT\"") &&
+    !estimateActionSrc.includes("status: \"APPROVED\""));
 
 check("Legacy request with only serviceCatalogItem remains readable",
   requestedWorkLabels({
@@ -356,6 +446,68 @@ try {
     : null;
   check("Selected tasks persist as ServiceRequestItem rows",
     createdMany?.items.length === 4);
+
+  const qtyRequest = await createPublicServiceRequest(prisma, {
+    slug: "collpro-reno",
+    name: "Quincy Homeowner",
+    email: "quincy@example.com",
+    phone: "555-0199",
+    address: "99 Qty St",
+    notes: "Three door knobs.",
+    catalogItemIds: [door.id],
+    catalogQuantities: { [door.id]: 3 },
+    includeOther: false,
+    otherDescription: "",
+  });
+  const qtyRow = qtyRequest.ok
+    ? await prisma.serviceRequestItem.findFirst({
+        where: { serviceRequestId: qtyRequest.requestId },
+      })
+    : null;
+  check("ServiceRequestItem quantity persists as structured data",
+    qtyRow?.quantity === 3 && qtyRow?.serviceCatalogItemId === door.id);
+
+  const rejectedZero = await createPublicServiceRequest(prisma, {
+    slug: "collpro-reno",
+    name: "Zero Qty",
+    email: "zero@example.com",
+    phone: "555-0180",
+    address: "",
+    notes: "",
+    catalogItemIds: [door.id],
+    catalogQuantities: { [door.id]: 0 },
+    includeOther: false,
+    otherDescription: "",
+  });
+  const rejectedHigh = await createPublicServiceRequest(prisma, {
+    slug: "collpro-reno",
+    name: "High Qty",
+    email: "high@example.com",
+    phone: "555-0181",
+    address: "",
+    notes: "",
+    catalogItemIds: [door.id],
+    catalogQuantities: { [door.id]: 100 },
+    includeOther: false,
+    otherDescription: "",
+  });
+  const rejectedDecimal = await createPublicServiceRequest(prisma, {
+    slug: "collpro-reno",
+    name: "Dec Qty",
+    email: "dec@example.com",
+    phone: "555-0182",
+    address: "",
+    notes: "",
+    catalogItemIds: [door.id],
+    catalogQuantities: { [door.id]: "1.5" },
+    includeOther: false,
+    otherDescription: "",
+  });
+  check("Quantity 0 is rejected at persistence", rejectedZero.ok === false);
+  check("Quantity 100+ is rejected at persistence", rejectedHigh.ok === false);
+  check("Decimal quantity is rejected at persistence", rejectedDecimal.ok === false);
+  check("Client-supplied unit prices are not a persistence field",
+    !("unitPrice" in (qtyRow ?? {})));
   check("Legacy serviceCatalogItemId is the first catalog item only",
     createdMany?.serviceCatalogItemId === door.id);
   check("No automatic Estimate creation", createdMany?.estimates.length === 0);
@@ -494,6 +646,12 @@ try {
     const hire = await fetchMaybe("/hire/collpro-reno");
     check("Existing /hire/collpro-reno homepage still loads",
       Boolean(hire && hire.status === 200 && hire.body.includes(COLLPRO_RENO_DISPLAY_NAME)));
+
+    const services = await fetchMaybe("/hire/collpro-reno/services");
+    check("Services page loads",
+      Boolean(services && services.status === 200 && services.body.includes("Selected Work")));
+    check("Services page includes quantity controls",
+      Boolean(services && services.body.includes("public-qty")));
 
     const intake = await fetchMaybe("/r/collpro-reno");
     check("Existing /r/collpro-reno intake still loads",

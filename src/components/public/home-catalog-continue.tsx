@@ -21,8 +21,10 @@ export function HomeCatalogContinue({
 }) {
   const [selected, setSelected] = useState<SelectedWorkState>({
     catalogIds: [],
+    quantities: {},
     includeOther: false,
     otherDescription: "",
+    otherQuantity: 1,
   });
 
   const params = new URLSearchParams();

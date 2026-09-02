@@ -15,6 +15,16 @@ export function parsePricingMode(value: string): PricingMode | null {
   return null;
 }
 
+export function publicCatalogUnitAmount(
+  mode: string,
+  price: { toString(): string } | number | null | undefined,
+): number | null {
+  if (mode === "CUSTOM_QUOTE" || price == null) return null;
+  const amount = typeof price === "number" ? price : Number(price.toString());
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  return amount;
+}
+
 export function formatCatalogPriceLabel(
   mode: string,
   price: { toString(): string } | number | null | undefined,

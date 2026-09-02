@@ -63,8 +63,12 @@ function SlotEditor({
           <p className="font-medium">{slot.label}</p>
           <p className="text-sm text-muted-foreground">
             {slot.kind === "hero"
-              ? "Home hero photograph. Layout stays the same."
-              : "Category card photograph only. The category name and services do not change."}
+              ? slot.page === "services"
+                ? "Services hero photograph. Layout stays the same."
+                : "Home hero photograph. Layout stays the same."
+              : slot.page === "services"
+                ? "Services category photograph only. The category name and services do not change."
+                : "Home category card photograph only. The category name and services do not change."}
           </p>
         </div>
         {slot.isOverride ? (
@@ -184,8 +188,8 @@ export function WebsitePhotosEditor({
   storageConfigured: boolean;
   canEdit: boolean;
 }) {
-  const hero = slots.filter((slot) => slot.kind === "hero");
-  const categories = slots.filter((slot) => slot.kind === "category");
+  const homeSlots = slots.filter((slot) => slot.page === "home");
+  const servicesSlots = slots.filter((slot) => slot.page === "services");
 
   return (
     <div className="space-y-6">
@@ -195,41 +199,61 @@ export function WebsitePhotosEditor({
         </Alert>
       ) : null}
       <p className="text-sm text-muted-foreground">
-        Change Home marketing photos only. Page layout, fonts, colors, and Recent
-        Projects stay as they are. Recent Projects come from real completed work
-        and cannot be replaced here.
+        Change Home and Services marketing photos. Page layout, fonts, colors, and
+        Recent Projects stay as they are. Recent Projects come from real completed
+        work and cannot be replaced here.
       </p>
-      <section className="space-y-3">
-        <h3 className="text-base font-semibold">Home page</h3>
-        {hero.map((slot) => (
+      <PhotoPageSection
+        title="Home page"
+        empty="No Home photo slots are available."
+        slots={homeSlots}
+        businessId={businessId}
+        storageConfigured={storageConfigured}
+        canEdit={canEdit}
+      />
+      <PhotoPageSection
+        title="Services page"
+        empty="No Services photo slots are available yet. Category photos stay linked to the real catalog."
+        slots={servicesSlots}
+        businessId={businessId}
+        storageConfigured={storageConfigured}
+        canEdit={canEdit}
+      />
+    </div>
+  );
+}
+
+function PhotoPageSection({
+  title,
+  empty,
+  slots,
+  businessId,
+  storageConfigured,
+  canEdit,
+}: {
+  title: string;
+  empty: string;
+  slots: PublicSiteImageEditorSlot[];
+  businessId: string;
+  storageConfigured: boolean;
+  canEdit: boolean;
+}) {
+  return (
+    <section className="space-y-3">
+      <h3 className="text-base font-semibold">{title}</h3>
+      {slots.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{empty}</p>
+      ) : (
+        slots.map((slot) => (
           <SlotEditor
-            key={slot.slot}
+            key={`${slot.page}:${slot.slot}`}
             slot={slot}
             businessId={businessId}
             storageConfigured={storageConfigured}
             canEdit={canEdit}
           />
-        ))}
-      </section>
-      <section className="space-y-3">
-        <h3 className="text-base font-semibold">Service category images</h3>
-        {categories.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No active service categories are on the catalog yet. Category cards
-            stay linked to real catalog data.
-          </p>
-        ) : (
-          categories.map((slot) => (
-            <SlotEditor
-              key={slot.slot}
-              slot={slot}
-              businessId={businessId}
-              storageConfigured={storageConfigured}
-              canEdit={canEdit}
-            />
-          ))
-        )}
-      </section>
-    </div>
+        ))
+      )}
+    </section>
   );
 }

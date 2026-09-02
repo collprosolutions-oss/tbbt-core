@@ -55,6 +55,14 @@ export async function submitServiceRequest(
     ...readAllStrings(formData, "serviceCatalogItemId"),
     ...readAllStrings(formData, "serviceCatalogItemIds"),
   ];
+  const quantityValues = readAllStrings(formData, "quantity");
+  const catalogQuantities: Record<string, string> = {};
+  catalogItemIds.forEach((id, index) => {
+    const paired = quantityValues[index];
+    const named = readString(formData, `quantity:${id}`);
+    if (named) catalogQuantities[id] = named;
+    else if (paired) catalogQuantities[id] = paired;
+  });
 
   const created = await createPublicServiceRequest(prisma, {
     slug: safeSlug,
@@ -65,8 +73,10 @@ export async function submitServiceRequest(
     address: readString(formData, "address"),
     notes: readString(formData, "description") || readString(formData, "notes"),
     catalogItemIds,
+    catalogQuantities,
     includeOther,
     otherDescription: readString(formData, "otherDescription"),
+    otherQuantity: readString(formData, "otherQuantity") || undefined,
   });
 
   if (!created.ok) {

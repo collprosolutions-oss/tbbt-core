@@ -22,9 +22,11 @@ const { selectPublicProjectsById } = await import("@/lib/public-projects");
 const {
   PUBLIC_HOME_HERO_DEFAULT_POSITION,
   PUBLIC_SITE_HOME_PAGE,
+  PUBLIC_SITE_SERVICES_PAGE,
   PUBLIC_SITE_HERO_SLOT,
   PublicSiteImageError,
   buildPublicHomeImagePresentation,
+  buildPublicServicesImagePresentation,
   categoryImageSlot,
   formatObjectPosition,
   parseCategoryImageSlot,
@@ -158,6 +160,11 @@ check("Only the overridden category image changes",
     presented.categories["Mounting & Hanging"]?.src === publicCategoryPhoto("Mounting & Hanging"));
 check("Category labels are not invented to fill eight slots",
   Object.keys(presented.categories).join("|") === "Doors & Locks|Mounting & Hanging");
+
+const servicesPresented = buildPublicServicesImagePresentation(groups, []);
+check("Services hero and category slots start on catalog defaults",
+  servicesPresented.hero.src.includes("tools-services") &&
+    servicesPresented.categories["Doors & Locks"]?.src === publicCategoryPhoto("Doors & Locks"));
 
 try {
   const ownerUser = await prisma.user.create({
@@ -311,6 +318,47 @@ try {
       slot: categoryImageSlot("Doors & Locks"),
     }),
   );
+
+  await expectForbidden("MEMBER cannot save a Services image override", () =>
+    upsertPublicSiteImageOp(prisma, memberA, {
+      page: PUBLIC_SITE_SERVICES_PAGE,
+      slot: PUBLIC_SITE_HERO_SLOT,
+      imageUrl: "/brand/projects/door-install.jpg",
+    }),
+  );
+
+  const savedServicesHero = await upsertPublicSiteImageOp(prisma, ownerA, {
+    page: PUBLIC_SITE_SERVICES_PAGE,
+    slot: PUBLIC_SITE_HERO_SLOT,
+    imageUrl: "/brand/projects/feature-wall-tv.jpg",
+    objectPosition: "25% 40%",
+  });
+  check("OWNER can replace the Services hero",
+    savedServicesHero.page === PUBLIC_SITE_SERVICES_PAGE &&
+      savedServicesHero.imageUrl === "/brand/projects/feature-wall-tv.jpg");
+
+  const savedServicesCategory = await upsertPublicSiteImageOp(prisma, adminA, {
+    page: PUBLIC_SITE_SERVICES_PAGE,
+    slot: categoryImageSlot("Doors & Locks"),
+    imageUrl: "/brand/projects/door-install.jpg",
+  });
+  check("ADMIN can replace a Services category image",
+    savedServicesCategory.page === PUBLIC_SITE_SERVICES_PAGE &&
+      savedServicesCategory.slot === "category:Doors & Locks");
+
+  try {
+    await upsertPublicSiteImageOp(prisma, ownerA, {
+      page: "about",
+      slot: PUBLIC_SITE_HERO_SLOT,
+      imageUrl: "/brand/projects/closet.jpg",
+    });
+    check("Unregistered public pages cannot receive photo slots", false);
+  } catch (error) {
+    check(
+      "Unregistered public pages cannot receive photo slots",
+      error instanceof PublicSiteImageError,
+    );
+  }
 } finally {
   await prisma.$disconnect();
   spawnSync("psql", [baseUrl, "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE);`], {
