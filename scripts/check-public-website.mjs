@@ -139,6 +139,9 @@ check("Public intake does not apply labor minimum",
 check("Existing /r/[slug] intake URL is preserved", requestPageSrc.includes("MultiServiceRequestFlow"));
 check("Unauthenticated / is the public homepage, not sign-in",
   proxySrc.includes("isPublicHome") && !proxySrc.includes('hasSession ? "/dashboard" : "/sign-in"'));
+check("Services page does not repeat a pre-footer quote CTA",
+  !readRepo("src/app/hire/[slug]/services/page.tsx").includes("PublicCtaBar") &&
+    !readRepo("src/app/hire/[slug]/services/page.tsx").includes("Ready to get started"));
 check("Services page keeps a left category rail, grouped quantity controls, and two-column service options",
   (() => {
     const browser = readRepo("src/components/public/public-services-browser.tsx");
@@ -673,6 +676,8 @@ try {
     check("Services page keeps the left category rail",
       Boolean(services && services.body.includes("public-cat-rail") &&
         services.body.includes("public-service-controls")));
+    check("Services HTTP page has no pre-footer Ready to get started CTA",
+      Boolean(services && !/Ready to get started/i.test(services.body)));
 
     const intake = await fetchMaybe("/r/collpro-reno");
     check("Existing /r/collpro-reno intake still loads",

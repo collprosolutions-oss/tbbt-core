@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "@/components/public/public-site.css";
-import { PublicCtaBar } from "@/components/public/public-cta-bar";
 import { PublicPageHero } from "@/components/public/public-page-hero";
 import { PublicServicesBrowser } from "@/components/public/public-services-browser";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
@@ -79,13 +78,6 @@ export default async function PublicServicesPage({ params, searchParams }: PageP
             />
           </div>
         </section>
-        <PublicCtaBar
-          title="Ready to get started?"
-          body="Tell us about your project and we will review the request before preparing a written estimate."
-          requestHref={requestHref}
-          smsHref={textHref}
-          phone={phone}
-        />
       </main>
     </PublicSiteShell>
   );
