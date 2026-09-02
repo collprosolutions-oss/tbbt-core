@@ -122,6 +122,7 @@ export function PublicServicesBrowser({
                           step={1}
                           value={qty}
                           aria-label={`Quantity for ${item.name}`}
+                          onFocus={(event) => event.currentTarget.select()}
                           onChange={(event) => setQty(item.id, event.target.value)}
                         />
                         <button
@@ -153,6 +154,7 @@ export function PublicServicesBrowser({
                         step={1}
                         value={selected.otherQuantity}
                         aria-label="Quantity for other work"
+                        onFocus={(event) => event.currentTarget.select()}
                         onChange={(event) => {
                           const parsed = parseRequestQuantity(event.target.value);
                           if (parsed == null && event.target.value !== "") return;
@@ -201,7 +203,7 @@ export function PublicServicesBrowser({
 
         <div>
           {categoryImage ? (
-            <div className="relative mb-5 min-h-56 overflow-hidden rounded-md">
+            <div className="public-services-category-media relative mb-4 overflow-hidden rounded-md">
               <PublicFittedImage
                 src={categoryImage.src}
                 alt=""
@@ -249,6 +251,7 @@ export function PublicServicesBrowser({
                       value={checked ? qty : 1}
                       disabled={!checked}
                       aria-label={`Quantity for ${item.name}`}
+                      onFocus={(event) => event.currentTarget.select()}
                       onChange={(event) => setQty(item.id, event.target.value)}
                     />
                     <button
@@ -304,6 +307,7 @@ export function PublicServicesBrowser({
                 step={1}
                 value={selected.otherQuantity}
                 aria-label="Quantity for other work"
+                onFocus={(event) => event.currentTarget.select()}
                 onChange={(event) => {
                   const parsed = parseRequestQuantity(event.target.value);
                   if (parsed == null && event.target.value !== "") return;

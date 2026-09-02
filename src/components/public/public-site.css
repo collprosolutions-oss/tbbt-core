@@ -552,6 +552,10 @@
   gap: 1.5rem;
 }
 
+.public-services-category-media {
+  min-height: 10rem;
+}
+
 .public-cat-rail {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -884,7 +888,7 @@
   }
 
   .public-cat-rail {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .public-services-body {

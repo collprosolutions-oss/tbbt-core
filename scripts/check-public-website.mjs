@@ -141,7 +141,7 @@ check("Unauthenticated / is the public homepage, not sign-in",
   proxySrc.includes("isPublicHome") && !proxySrc.includes('hasSession ? "/dashboard" : "/sign-in"'));
 check("Services page uses a compact category rail and quantity boxes",
   readRepo("src/components/public/public-services-browser.tsx").includes("public-qty") &&
-    readRepo("src/components/public/public-site.css").includes("repeat(6, minmax(0, 1fr))"));
+    readRepo("src/components/public/public-site.css").includes("repeat(3, minmax(0, 1fr))"));
 check("Request a Quote keeps a compact selected-work summary",
   requestFlowSrc.includes("Your Selected Work") &&
     requestFlowSrc.includes("Add Another Service") &&
