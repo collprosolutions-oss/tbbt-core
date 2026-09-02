@@ -31,7 +31,7 @@ export function PublicProjectsGallery() {
         </div>
       </div>
       <div className="public-container pb-12">
-        <ul className="grid gap-5 lg:grid-cols-2">
+        <ul className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
           {projects.map((project) => (
             <li key={project.id}>
               <article className="public-project-tile public-project-tile--lg">
@@ -39,7 +39,7 @@ export function PublicProjectsGallery() {
                   src={project.src}
                   alt={project.title}
                   fill
-                  sizes="(max-width: 1024px) 100vw, 50vw"
+                  sizes="(max-width: 768px) 100vw, (max-width: 1024px) 50vw, 33vw"
                 />
                 <div className="public-project-tile-bar">
                   <h2>{project.title}</h2>

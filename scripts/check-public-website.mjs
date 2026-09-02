@@ -115,6 +115,9 @@ check("Recent Projects uses up to six real featured photos",
     selectPublicProjectsById(HOME_FEATURED_PROJECT_IDS).length === HOME_FEATURED_PROJECT_IDS.length);
 check("Home Recent Projects use a 3-column desktop grid",
   readRepo("src/components/public/public-home.tsx").includes("lg:grid-cols-3"));
+check("Projects gallery uses a 3-column desktop grid",
+  readRepo("src/components/public/public-projects-gallery.tsx").includes("lg:grid-cols-3") &&
+    !readRepo("src/components/public/public-projects-gallery.tsx").includes("lg:grid-cols-2"));
 check("Home does not expose owner photo replace controls",
   !readRepo("src/components/public/public-home.tsx").includes("Replace Image") &&
     !readRepo("src/components/public/public-home.tsx").includes("Reset to Default"));
