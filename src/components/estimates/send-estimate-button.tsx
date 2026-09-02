@@ -29,7 +29,7 @@ export function SendEstimateButton({
       </Button>
       {disabled ? (
         <p className="mt-2 text-sm text-muted-foreground">
-          Add at least one line item before sending.
+          Review the draft and finish any required pricing before sending.
         </p>
       ) : null}
       {state.error ? (
