@@ -340,6 +340,18 @@
 .public-contact-hero {
   overflow: visible;
   z-index: 3;
+  height: 19.5rem;
+  min-height: 19.5rem;
+  max-height: 19.5rem;
+}
+
+.public-contact-hero:has(.public-form-card),
+.public-contact-hero:has(.public-form-card) .public-cinematic-inner,
+.public-contact-hero .public-cinematic-inner {
+  height: 19.5rem;
+  min-height: 19.5rem;
+  max-height: 19.5rem;
+  overflow: visible;
 }
 
 .public-quote-hero .public-cinematic-shade {
@@ -924,8 +936,8 @@
 .public-contact-body {
   display: grid;
   gap: 2rem;
-  padding-top: 1.25rem;
-  padding-bottom: 2.5rem;
+  padding-top: 1.35rem;
+  padding-bottom: 1.25rem;
 }
 
 .public-contact-left {
@@ -935,13 +947,33 @@
 .public-contact-points {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
+  gap: 1.35rem;
+  width: 100%;
+}
+
+.public-contact-points svg {
+  width: 2.35rem;
+  height: 2.35rem;
+}
+
+.public-contact-points h2 {
+  margin-top: 0.7rem;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.public-contact-points p {
+  margin-top: 0.4rem;
+  font-size: 0.92rem;
+  line-height: 1.45;
 }
 
 .public-contact-details {
   display: grid;
   gap: 1.5rem;
-  margin-top: 1.75rem;
+  margin-top: 1.35rem;
 }
 
 .public-contact-form-slot {
@@ -1255,14 +1287,25 @@
     min-height: 18rem;
   }
 
+  .public-contact-hero .public-form-card {
+    margin-top: 5.75rem;
+  }
+
   .public-contact-body {
     grid-template-columns: minmax(0, 1fr) minmax(20rem, 24rem);
+    align-items: start;
+    gap: 1.5rem;
+  }
+
+  .public-contact-details {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1.75rem;
     align-items: start;
   }
 
   .public-contact-form-slot {
     display: block;
-    min-height: 16rem;
+    min-height: 20rem;
   }
 
   .public-selected-box ul {
@@ -1291,8 +1334,21 @@
     padding-top: 0.75rem;
   }
 
+  .public-contact-hero,
+  .public-contact-hero:has(.public-form-card),
+  .public-contact-hero:has(.public-form-card) .public-cinematic-inner,
+  .public-contact-hero .public-cinematic-inner {
+    height: auto;
+    max-height: none;
+    min-height: 0;
+  }
+
   .public-contact-hero .public-cinematic-inner {
     padding-top: 0.75rem;
+  }
+
+  .public-contact-hero .public-form-card {
+    margin-top: 0;
   }
 
   .public-brand-spacer {
