@@ -139,9 +139,22 @@ check("Public intake does not apply labor minimum",
 check("Existing /r/[slug] intake URL is preserved", requestPageSrc.includes("MultiServiceRequestFlow"));
 check("Unauthenticated / is the public homepage, not sign-in",
   proxySrc.includes("isPublicHome") && !proxySrc.includes('hasSession ? "/dashboard" : "/sign-in"'));
-check("Services page uses a compact category rail and quantity boxes",
-  readRepo("src/components/public/public-services-browser.tsx").includes("public-qty") &&
-    readRepo("src/components/public/public-site.css").includes("repeat(3, minmax(0, 1fr))"));
+check("Services page keeps a left category rail, grouped quantity controls, and two-column service options",
+  (() => {
+    const browser = readRepo("src/components/public/public-services-browser.tsx");
+    const css = readRepo("src/components/public/public-site.css");
+    return (
+      browser.includes("<aside>") &&
+      browser.includes("public-cat-rail") &&
+      browser.includes("public-service-controls") &&
+      browser.includes("public-qty") &&
+      css.includes("grid-template-columns: 18.5rem minmax(0, 1fr)") &&
+      css.includes(".public-service-options") &&
+      css.includes("repeat(2, minmax(0, 1fr))") &&
+      !css.includes("public-cat-rail {\n  display: grid;\n  grid-template-columns: repeat(") &&
+      !browser.includes("public-services-body")
+    );
+  })());
 check("Request a Quote keeps a compact selected-work summary",
   requestFlowSrc.includes("Your Selected Work") &&
     requestFlowSrc.includes("Add Another Service") &&
@@ -657,6 +670,9 @@ try {
       Boolean(services && services.status === 200 && services.body.includes("Selected Work")));
     check("Services page includes quantity controls",
       Boolean(services && services.body.includes("public-qty")));
+    check("Services page keeps the left category rail",
+      Boolean(services && services.body.includes("public-cat-rail") &&
+        services.body.includes("public-service-controls")));
 
     const intake = await fetchMaybe("/r/collpro-reno");
     check("Existing /r/collpro-reno intake still loads",
