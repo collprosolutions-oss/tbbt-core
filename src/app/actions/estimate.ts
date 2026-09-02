@@ -13,6 +13,10 @@ import {
 import { createEstimateVersionSnapshot } from "@/lib/estimate-version";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import {
+  addRequestDraftLines,
+  isUnpricedCustomQuoteDraftLine,
+} from "@/lib/request-estimate-draft";
+import {
   getMailConfig,
   isUsableEmail,
   senderFrom,
@@ -51,6 +55,19 @@ export async function createEstimate(serviceRequestId: string) {
   const request = access.assertOwned(
     await prisma.serviceRequest.findFirst({
       where: { id: serviceRequestId, ...access.scope },
+      include: {
+        items: {
+          orderBy: { sortOrder: "asc" },
+          include: {
+            serviceCatalogItem: {
+              select: { id: true, name: true, pricingMode: true, price: true },
+            },
+          },
+        },
+        serviceCatalogItem: {
+          select: { id: true, name: true, pricingMode: true, price: true },
+        },
+      },
     }),
   );
 
@@ -67,7 +84,26 @@ export async function createEstimate(serviceRequestId: string) {
     redirect(`/estimates/${existing.id}`);
   }
 
+  const sourceItems =
+    request.items.length > 0
+      ? request.items
+      : request.serviceCatalogItem
+        ? [{ quantity: 1, serviceCatalogItem: request.serviceCatalogItem }]
+        : [];
+
   const estimate = await prisma.$transaction(async (tx) => {
+    const raced = await tx.estimate.findFirst({
+      where: {
+        businessId: access.businessId,
+        serviceRequestId: request.id,
+      },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    });
+    if (raced) {
+      return raced;
+    }
+
     const created = await tx.estimate.create({
       data: {
         businessId: access.businessId,
@@ -78,6 +114,13 @@ export async function createEstimate(serviceRequestId: string) {
         publicToken: randomUUID(),
       },
     });
+
+    await addRequestDraftLines(tx, {
+      businessId: access.businessId,
+      estimateId: created.id,
+      items: sourceItems,
+    });
+    await persistDraftEstimateTotal(tx, created.id, access.businessId);
 
     // An OPEN request that has become an estimate is no longer waiting on
     // the owner to act on it, so it should stop counting as "open".
@@ -527,7 +570,7 @@ export async function sendEstimate(
   const estimate = access.assertOwned(
     await prisma.estimate.findFirst({
       where: { id: estimateId, ...access.scope },
-      include: { lineItems: { select: { id: true } } },
+      include: { lineItems: { select: { id: true, description: true, unitPrice: true } } },
     }),
   );
 
@@ -539,10 +582,14 @@ export async function sendEstimate(
     return { error: "Add at least one line item before sending." };
   }
 
+  if (estimate.lineItems.some(isUnpricedCustomQuoteDraftLine)) {
+    return { error: "Enter a price for each custom-quote line before sending." };
+  }
+
   const result = await prisma.$transaction(async (tx) => {
     const current = await tx.estimate.findFirst({
       where: { id: estimate.id, businessId: access.businessId },
-      include: { lineItems: { select: { id: true } } },
+      include: { lineItems: { select: { id: true, description: true, unitPrice: true } } },
     });
 
     if (!current || current.status !== "DRAFT") {
@@ -551,6 +598,10 @@ export async function sendEstimate(
 
     if (current.lineItems.length === 0) {
       return { error: "Add at least one line item before sending." };
+    }
+
+    if (current.lineItems.some(isUnpricedCustomQuoteDraftLine)) {
+      return { error: "Enter a price for each custom-quote line before sending." };
     }
 
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);

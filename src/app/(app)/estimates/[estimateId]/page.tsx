@@ -30,6 +30,7 @@ import { formatAddress, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
+import { isUnpricedCustomQuoteDraftLine } from "@/lib/request-estimate-draft";
 import { requestedWorkLabels } from "@/lib/service-request-work";
 
 export const metadata: Metadata = {
@@ -106,6 +107,8 @@ export default async function EstimateBuilderPage({
   const isApproved = estimate.status === "APPROVED";
   const customerEmail = estimate.customer?.email ?? "";
   const hasCustomerEmail = isUsableEmail(customerEmail);
+  const needsCustomQuotePrices = estimate.lineItems.some(isUnpricedCustomQuoteDraftLine);
+  const fromCustomerRequest = Boolean(estimate.serviceRequestId);
 
   const catalogItems = await prisma.serviceCatalogItem.findMany({
     where: { ...access.scope, active: true },
@@ -166,8 +169,7 @@ export default async function EstimateBuilderPage({
                     ))}
                   </ul>
                   <p className="mt-1 text-muted-foreground">
-                    Customer request is context only. Add estimate lines after
-                    you review the scope.
+                    Customer request is context for this draft.
                   </p>
                 </div>
               );
@@ -189,7 +191,7 @@ export default async function EstimateBuilderPage({
           {isDraft ? (
             <SendEstimateButton
               estimateId={estimate.id}
-              disabled={estimate.lineItems.length === 0}
+              disabled={estimate.lineItems.length === 0 || needsCustomQuotePrices}
             />
           ) : null}
           {isSent ? <EditEstimateButton estimateId={estimate.id} /> : null}
@@ -219,7 +221,11 @@ export default async function EstimateBuilderPage({
       <Card>
         <CardHeader>
           <CardTitle>Line items</CardTitle>
-          <CardDescription>Server-calculated totals.</CardDescription>
+          <CardDescription>
+            {fromCustomerRequest && isDraft
+              ? "Prefilled from customer request — review before sending."
+              : "Server-calculated totals."}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {estimate.lineItems.length === 0 ? (
@@ -237,8 +243,10 @@ export default async function EstimateBuilderPage({
                       : item.type === "MATERIAL"
                         ? "Material"
                         : "Other"}
-                    : {item.description} × {item.quantity.toString()} @{" "}
-                    {formatMoney(item.unitPrice)}
+                    : {item.description} × {item.quantity.toString()}
+                    {isUnpricedCustomQuoteDraftLine(item)
+                      ? " — price required"
+                      : ` @ ${formatMoney(item.unitPrice)}`}
                   </span>
                   <span className="flex shrink-0 items-center gap-2">
                     <span>{formatMoney(item.total)}</span>
@@ -283,6 +291,11 @@ export default async function EstimateBuilderPage({
               Estimate total: {formatMoney(estimate.total)}
             </p>
           </div>
+          {needsCustomQuotePrices ? (
+            <p className="mt-3 text-sm text-muted-foreground">
+              Enter a price for each custom-quote line before sending.
+            </p>
+          ) : null}
           {isDraft ? (
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <WaiveLaborMinimumButton
