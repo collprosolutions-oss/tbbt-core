@@ -626,7 +626,7 @@ model Invoice {
   total            Decimal   @default(0)
   /// Set exactly once, when status transitions SENT -> PAID. Never overwritten afterward.
   paidAt           DateTime?
-  /// Owner-facing only: CASH | CHECK | ZELLE_BANK_TRANSFER | CARD_EXTERNAL | OTHER. Free-form string, not an enum.
+  /// Owner-facing only: CASH | CHECK | ZELLE_BANK_TRANSFER | CARD_EXTERNAL | OTHER | STRIPE. Free-form string, not an enum. STRIPE is set by the processor webhook, never by Mark Paid.
   paymentMethod    String?
   /// Owner-facing only optional note (e.g. check number). Never shown on public/customer pages.
   paymentReference String?

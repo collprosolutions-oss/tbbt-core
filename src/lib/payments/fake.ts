@@ -56,13 +56,18 @@ export function createFakePaymentProvider(): FakePaymentProvider {
     },
     async getAccountReadiness(accountId: string) {
       const account = accounts.get(accountId);
-      if (!account) {
-        throw new Error("Unknown connected account.");
+      if (account) {
+        return {
+          accountId: account.accountId,
+          chargesEnabled: account.chargesEnabled,
+        };
       }
-      return {
-        accountId: account.accountId,
-        chargesEnabled: account.chargesEnabled,
-      };
+      // Local screenshot / demo only: persist the account id in the DB and
+      // treat it as ready when TBBT_PAYMENTS_FAKE_READY=1.
+      if (process.env.TBBT_PAYMENTS_FAKE_READY === "1") {
+        return { accountId, chargesEnabled: true };
+      }
+      throw new Error("Unknown connected account.");
     },
     async createInvoiceCheckoutSession(input: CreateInvoiceCheckoutInput) {
       const account = accounts.get(input.connectedAccountId);

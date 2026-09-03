@@ -13,6 +13,9 @@ export function getStripeWebhookSecret(): string | null {
 }
 
 export function isStripePlatformConfigured(): boolean {
+  if (process.env.TBBT_PAYMENTS_ADAPTER === "fake") {
+    return true;
+  }
   return Boolean(getStripeSecretKey());
 }
 
