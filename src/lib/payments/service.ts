@@ -6,6 +6,7 @@ import { invoiceNumberFromId } from "@/lib/invoice-document";
 import { isStripePlatformConfigured } from "@/lib/payments/config";
 import { invoiceAmountToCents, invoiceDueCents } from "@/lib/payments/money";
 import { getPaymentProvider } from "@/lib/payments/provider";
+import { safeRetrieveErrorName } from "@/lib/payments/readiness";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
 import type {
   BusinessPaymentStatus,
@@ -71,14 +72,28 @@ export async function getBusinessPaymentStatus(
       platformConfigured: isStripePlatformConfigured(),
       stripeAccountId: account.stripeAccountId,
       paymentReady,
+      readinessDebug: readiness.debug,
     };
-  } catch {
+  } catch (error) {
     return {
       providerLabel: "Stripe",
       status: "setup_required",
       platformConfigured: isStripePlatformConfigured(),
       stripeAccountId: account.stripeAccountId,
       paymentReady: false,
+      readinessDebug: {
+        branch: "retrieve_failed",
+        ready: false,
+        cardPaymentsStatus: null,
+        cardPaymentsStatusDetails: [],
+        currentlyDueKeys: [],
+        pastDueKeys: [],
+        pendingVerificationKeys: [],
+        chargesEnabled: null,
+        detailsSubmitted: null,
+        disabledReason: null,
+        retrieveError: safeRetrieveErrorName(error),
+      },
     };
   }
 }

@@ -21,7 +21,11 @@ const { isPaymentMethodValue, paymentMethodLabel, PAYMENT_METHODS } =
 const { invoiceAmountDue } = await import("@/lib/invoice-document");
 const { createFakePaymentProvider } = await import("@/lib/payments/fake");
 const { parseCheckoutPaymentEvent } = await import("@/lib/payments/events");
-const { isMerchantPaymentReady } = await import("@/lib/payments/readiness");
+const {
+  explainMerchantReadiness,
+  isMerchantPaymentReady,
+  shouldOfferStripeOnboarding,
+} = await import("@/lib/payments/readiness");
 const { invoiceAmountToCents, invoiceDueCents } = await import("@/lib/payments/money");
 const {
   applyVerifiedCheckoutPayment,
@@ -228,6 +232,55 @@ try {
       v1ChargesEnabled: true,
     }) === true,
   );
+  check(
+    "restricted pending_verification code is ready even if resolution is provide_info",
+    explainMerchantReadiness({
+      cardPaymentsStatus: "restricted",
+      cardPaymentsStatusDetails: [
+        { code: "requirements_pending_verification", resolution: "provide_info" },
+      ],
+    }).branch === "v2_restricted_pending_verification",
+  );
+  check(
+    "details_submitted with empty currently_due and past_due is ready",
+    explainMerchantReadiness({
+      detailsSubmitted: true,
+      currentlyDueKeys: [],
+      pastDueKeys: [],
+      pendingVerificationKeys: [],
+    }).branch === "v1_submitted_no_outstanding",
+  );
+  check(
+    "currently_due keys stay Setup Required",
+    explainMerchantReadiness({
+      detailsSubmitted: true,
+      currentlyDueKeys: ["external_account"],
+      pastDueKeys: [],
+    }).branch === "user_currently_due",
+  );
+  check(
+    "pending_verification with no outstanding due is ready",
+    explainMerchantReadiness({
+      detailsSubmitted: true,
+      currentlyDueKeys: [],
+      pastDueKeys: [],
+      pendingVerificationKeys: ["individual.verification.document"],
+    }).branch === "v1_submitted_no_outstanding",
+  );
+  check(
+    "v1 disabled_reason pending_verification with no outstanding due is ready",
+    explainMerchantReadiness({
+      currentlyDueKeys: [],
+      pastDueKeys: [],
+      disabledReason: "requirements.pending_verification",
+    }).branch === "v1_pending_verification_no_outstanding",
+  );
+  check(
+    "Continue Setup is hidden after completed onboarding with no user-owed fields",
+    shouldOfferStripeOnboarding("setup_required", "v1_submitted_no_outstanding") === false &&
+      shouldOfferStripeOnboarding("connected", "v1_charges_enabled") === false &&
+      shouldOfferStripeOnboarding("setup_required", "user_currently_due") === true,
+  );
   check("375.00 becomes 37500 cents", invoiceAmountToCents(new Prisma.Decimal("375.00")) === 37500);
   check(
     "SENT amount due is the full total",
@@ -242,7 +295,8 @@ try {
   const payRouteSrc = readFileSync(new URL("../src/app/p/[token]/pay/route.ts", import.meta.url), "utf8");
   const webhookSrc = readFileSync(new URL("../src/app/api/stripe/webhook/route.ts", import.meta.url), "utf8");
   const adapterSrc = readFileSync(new URL("../src/lib/payments/stripe-adapter.ts", import.meta.url), "utf8");
-  check("adapter uses isMerchantPaymentReady", adapterSrc.includes("isMerchantPaymentReady"));
+  check("adapter uses explainMerchantReadiness", adapterSrc.includes("explainMerchantReadiness"));
+  check("adapter falls back to v1 retrieve if v2 fails", adapterSrc.includes("stripe.accounts.retrieve"));
   check("adapter retrieves requirements with merchant config", adapterSrc.includes('"requirements"'));
   check("portal uses shouldShowPayInvoice", portalSrc.includes("shouldShowPayInvoice"));
   check("portal renders PayInvoiceButton only when allowed", portalSrc.includes("showPayInvoice ? <PayInvoiceButton"));

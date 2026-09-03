@@ -1,7 +1,10 @@
 import Stripe from "stripe";
 import { getStripeSecretKey } from "@/lib/payments/config";
 import { parseCheckoutPaymentEvent } from "@/lib/payments/events";
-import { isMerchantPaymentReady } from "@/lib/payments/readiness";
+import {
+  explainMerchantReadiness,
+  safeRetrieveErrorName,
+} from "@/lib/payments/readiness";
 import type {
   CreateConnectedAccountInput,
   CreateInvoiceCheckoutInput,
@@ -23,20 +26,15 @@ const ACCOUNT_READINESS_INCLUDE = [
   "requirements",
 ] as const;
 
-function merchantPaymentReadyFromAccount(
-  account: Stripe.V2.Core.Account,
-  v1ChargesEnabled?: boolean,
-): boolean {
-  const cardPayments =
-    account.configuration?.merchant?.capabilities?.card_payments;
-  return isMerchantPaymentReady({
-    cardPaymentsStatus: cardPayments?.status ?? null,
-    cardPaymentsStatusDetails: cardPayments?.status_details ?? null,
-    requirementEntries: account.requirements?.entries ?? null,
-    requirementSummaryStatus:
-      account.requirements?.summary?.minimum_deadline?.status ?? null,
-    v1ChargesEnabled,
-  });
+function v1RequirementKeys(
+  requirements: Stripe.Account.Requirements | null | undefined,
+  field: "currently_due" | "past_due" | "pending_verification",
+) {
+  const values = requirements?.[field];
+  if (!Array.isArray(values)) {
+    return null;
+  }
+  return values.filter((value): value is string => typeof value === "string");
 }
 
 export function createStripePaymentProvider(): PaymentProvider {
@@ -100,22 +98,67 @@ export function createStripePaymentProvider(): PaymentProvider {
 
     async getAccountReadiness(accountId: string) {
       const stripe = requireStripe();
-      const account = await stripe.v2.core.accounts.retrieve(accountId, {
-        include: [...ACCOUNT_READINESS_INCLUDE],
-      });
-      let v1ChargesEnabled: boolean | undefined;
+      let v2: Stripe.V2.Core.Account | null = null;
+      let v2Error: string | null = null;
       try {
-        const v1 = await stripe.accounts.retrieve(accountId);
-        v1ChargesEnabled = v1.charges_enabled === true;
-      } catch {
-        v1ChargesEnabled = undefined;
+        v2 = await stripe.v2.core.accounts.retrieve(accountId, {
+          include: [...ACCOUNT_READINESS_INCLUDE],
+        });
+      } catch (error) {
+        v2Error = safeRetrieveErrorName(error);
       }
-      return {
-        accountId: account.id,
-        chargesEnabled: merchantPaymentReadyFromAccount(
-          account,
-          v1ChargesEnabled,
+
+      let v1: Stripe.Account | null = null;
+      let v1Error: string | null = null;
+      try {
+        v1 = await stripe.accounts.retrieve(accountId);
+      } catch (error) {
+        v1Error = safeRetrieveErrorName(error);
+      }
+
+      const cardPayments =
+        v2?.configuration?.merchant?.capabilities?.card_payments;
+      const debug = explainMerchantReadiness({
+        cardPaymentsStatus:
+          cardPayments?.status ?? v1?.capabilities?.card_payments ?? null,
+        cardPaymentsStatusDetails: cardPayments?.status_details ?? null,
+        requirementEntries: v2?.requirements?.entries ?? null,
+        currentlyDueKeys: v1RequirementKeys(v1?.requirements, "currently_due"),
+        pastDueKeys: v1RequirementKeys(v1?.requirements, "past_due"),
+        pendingVerificationKeys: v1RequirementKeys(
+          v1?.requirements,
+          "pending_verification",
         ),
+        v1ChargesEnabled: v1 ? v1.charges_enabled === true : null,
+        detailsSubmitted: v1 ? v1.details_submitted === true : null,
+        v1CardPaymentsCapability: v1?.capabilities?.card_payments ?? null,
+        disabledReason: v1?.requirements?.disabled_reason ?? null,
+        retrieveFailed: !v2 && !v1,
+        retrieveError: !v2 && !v1 ? (v2Error ?? v1Error) : null,
+      });
+      console.info(
+        "[payments] stripe readiness",
+        JSON.stringify({
+          branch: debug.branch,
+          ready: debug.ready,
+          cardPaymentsStatus: debug.cardPaymentsStatus,
+          cardPaymentsStatusDetails: debug.cardPaymentsStatusDetails,
+          chargesEnabled: debug.chargesEnabled,
+          detailsSubmitted: debug.detailsSubmitted,
+          disabledReason: debug.disabledReason,
+          currentlyDueKeys: debug.currentlyDueKeys,
+          pastDueKeys: debug.pastDueKeys,
+          pendingVerificationKeys: debug.pendingVerificationKeys,
+          retrieveError: debug.retrieveError,
+          v2RetrieveError: v2 ? null : v2Error,
+          v1RetrieveError: v1 ? null : v1Error,
+        }),
+      );
+
+      return {
+        accountId: v2?.id ?? v1?.id ?? accountId,
+        chargesEnabled: debug.ready,
+        debug,
       };
     },
 

@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import type { PaymentReadinessDebug } from "@/lib/payments/readiness";
 
 export const PAYMENT_PROVIDER_STRIPE = "stripe" as const;
 
@@ -10,6 +11,7 @@ export type PaymentConnectionStatus =
 export type ConnectedAccountReadiness = {
   accountId: string;
   chargesEnabled: boolean;
+  debug?: PaymentReadinessDebug;
 };
 
 export type CreateConnectedAccountInput = {
@@ -77,6 +79,7 @@ export type BusinessPaymentStatus = {
   platformConfigured: boolean;
   stripeAccountId: string | null;
   paymentReady: boolean;
+  readinessDebug?: PaymentReadinessDebug;
 };
 
 export type InvoiceAmount = Prisma.Decimal | { toString(): string } | number | string;

@@ -6,6 +6,10 @@ import { BusinessProfileForm } from "@/components/settings/business-profile-form
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
 import { ConnectStripeButton } from "@/components/settings/connect-stripe-button";
+import {
+  formatPaymentReadinessDebug,
+  shouldOfferStripeOnboarding,
+} from "@/lib/payments/readiness";
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import type { SettingsWorkspaceProps } from "@/components/settings/types";
@@ -349,12 +353,23 @@ function SectionBody(props: SettingsWorkspaceProps) {
             <p className="text-sm">
               Status: {PAYMENT_PROVIDER_STATUS_LABELS[snapshot.payment.status]}
             </p>
+            {snapshot.payment.status === "setup_required" &&
+            snapshot.payment.readinessDebug ? (
+              <p className="text-xs text-muted-foreground">
+                Stripe readiness:{" "}
+                {formatPaymentReadinessDebug(snapshot.payment.readinessDebug)}
+              </p>
+            ) : null}
             {!snapshot.payment.platformConfigured ? (
               <p className="text-sm text-muted-foreground">
                 {PAYMENT_PROVIDER_PLATFORM_UNCONFIGURED_MESSAGE}
               </p>
             ) : null}
-            {canEditPreferences ? (
+            {canEditPreferences &&
+            shouldOfferStripeOnboarding(
+              snapshot.payment.status,
+              snapshot.payment.readinessDebug?.branch,
+            ) ? (
               <ConnectStripeButton
                 label={
                   snapshot.payment.status === "not_connected"
