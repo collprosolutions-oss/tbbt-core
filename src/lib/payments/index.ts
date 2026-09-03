@@ -5,6 +5,7 @@ export {
   STRIPE_CURRENCY,
 } from "@/lib/payments/config";
 export { parseCheckoutPaymentEvent } from "@/lib/payments/events";
+export { isMerchantPaymentReady } from "@/lib/payments/readiness";
 export { invoiceAmountToCents, invoiceDueCents } from "@/lib/payments/money";
 export { getPaymentProvider, stripeConnectAvailable } from "@/lib/payments/provider";
 export {

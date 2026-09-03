@@ -1,6 +1,7 @@
 import Stripe from "stripe";
 import { getStripeSecretKey } from "@/lib/payments/config";
 import { parseCheckoutPaymentEvent } from "@/lib/payments/events";
+import { isMerchantPaymentReady } from "@/lib/payments/readiness";
 import type {
   CreateConnectedAccountInput,
   CreateInvoiceCheckoutInput,
@@ -17,8 +18,25 @@ function requireStripe(): Stripe {
   return new Stripe(secret);
 }
 
-function cardPaymentsActive(account: Stripe.V2.Core.Account): boolean {
-  return account.configuration?.merchant?.capabilities?.card_payments?.status === "active";
+const ACCOUNT_READINESS_INCLUDE = [
+  "configuration.merchant",
+  "requirements",
+] as const;
+
+function merchantPaymentReadyFromAccount(
+  account: Stripe.V2.Core.Account,
+  v1ChargesEnabled?: boolean,
+): boolean {
+  const cardPayments =
+    account.configuration?.merchant?.capabilities?.card_payments;
+  return isMerchantPaymentReady({
+    cardPaymentsStatus: cardPayments?.status ?? null,
+    cardPaymentsStatusDetails: cardPayments?.status_details ?? null,
+    requirementEntries: account.requirements?.entries ?? null,
+    requirementSummaryStatus:
+      account.requirements?.summary?.minimum_deadline?.status ?? null,
+    v1ChargesEnabled,
+  });
 }
 
 export function createStripePaymentProvider(): PaymentProvider {
@@ -55,7 +73,7 @@ export function createStripePaymentProvider(): PaymentProvider {
         metadata: {
           tbbtBusinessId: input.businessId,
         },
-        include: ["configuration.merchant"],
+        include: [...ACCOUNT_READINESS_INCLUDE],
       });
       return { accountId: account.id };
     },
@@ -83,11 +101,21 @@ export function createStripePaymentProvider(): PaymentProvider {
     async getAccountReadiness(accountId: string) {
       const stripe = requireStripe();
       const account = await stripe.v2.core.accounts.retrieve(accountId, {
-        include: ["configuration.merchant"],
+        include: [...ACCOUNT_READINESS_INCLUDE],
       });
+      let v1ChargesEnabled: boolean | undefined;
+      try {
+        const v1 = await stripe.accounts.retrieve(accountId);
+        v1ChargesEnabled = v1.charges_enabled === true;
+      } catch {
+        v1ChargesEnabled = undefined;
+      }
       return {
         accountId: account.id,
-        chargesEnabled: cardPaymentsActive(account),
+        chargesEnabled: merchantPaymentReadyFromAccount(
+          account,
+          v1ChargesEnabled,
+        ),
       };
     },
 

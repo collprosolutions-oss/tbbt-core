@@ -21,6 +21,7 @@ const { isPaymentMethodValue, paymentMethodLabel, PAYMENT_METHODS } =
 const { invoiceAmountDue } = await import("@/lib/invoice-document");
 const { createFakePaymentProvider } = await import("@/lib/payments/fake");
 const { parseCheckoutPaymentEvent } = await import("@/lib/payments/events");
+const { isMerchantPaymentReady } = await import("@/lib/payments/readiness");
 const { invoiceAmountToCents, invoiceDueCents } = await import("@/lib/payments/money");
 const {
   applyVerifiedCheckoutPayment,
@@ -177,6 +178,56 @@ try {
     "Pay Invoice shown only for SENT + due + ready",
     shouldShowPayInvoice({ invoiceStatus: "SENT", amountDueCents: 37500, paymentReady: true }) === true,
   );
+  check(
+    "v2 card_payments active is payment-ready",
+    isMerchantPaymentReady({ cardPaymentsStatus: "active" }) === true,
+  );
+  check(
+    "no capability is not payment-ready",
+    isMerchantPaymentReady({ cardPaymentsStatus: null }) === false,
+  );
+  check(
+    "unsupported capability is not payment-ready",
+    isMerchantPaymentReady({ cardPaymentsStatus: "unsupported" }) === false,
+  );
+  check(
+    "pending with no user-owed requirements is payment-ready",
+    isMerchantPaymentReady({ cardPaymentsStatus: "pending" }) === true,
+  );
+  check(
+    "pending with user currently_due requirements stays Setup Required",
+    isMerchantPaymentReady({
+      cardPaymentsStatus: "pending",
+      requirementEntries: [
+        { awaiting_action_from: "user", minimum_deadline: { status: "currently_due" } },
+      ],
+    }) === false,
+  );
+  check(
+    "restricted pending-verification with no user action is payment-ready",
+    isMerchantPaymentReady({
+      cardPaymentsStatus: "restricted",
+      cardPaymentsStatusDetails: [
+        { code: "requirements_pending_verification", resolution: "no_resolution" },
+      ],
+    }) === true,
+  );
+  check(
+    "restricted past-due / provide_info stays Setup Required",
+    isMerchantPaymentReady({
+      cardPaymentsStatus: "restricted",
+      cardPaymentsStatusDetails: [
+        { code: "requirements_past_due", resolution: "provide_info" },
+      ],
+    }) === false,
+  );
+  check(
+    "v1 charges_enabled is payment-ready even if v2 status has not flipped to active",
+    isMerchantPaymentReady({
+      cardPaymentsStatus: "pending",
+      v1ChargesEnabled: true,
+    }) === true,
+  );
   check("375.00 becomes 37500 cents", invoiceAmountToCents(new Prisma.Decimal("375.00")) === 37500);
   check(
     "SENT amount due is the full total",
@@ -190,6 +241,9 @@ try {
   const portalSrc = readFileSync(new URL("../src/app/p/[token]/page.tsx", import.meta.url), "utf8");
   const payRouteSrc = readFileSync(new URL("../src/app/p/[token]/pay/route.ts", import.meta.url), "utf8");
   const webhookSrc = readFileSync(new URL("../src/app/api/stripe/webhook/route.ts", import.meta.url), "utf8");
+  const adapterSrc = readFileSync(new URL("../src/lib/payments/stripe-adapter.ts", import.meta.url), "utf8");
+  check("adapter uses isMerchantPaymentReady", adapterSrc.includes("isMerchantPaymentReady"));
+  check("adapter retrieves requirements with merchant config", adapterSrc.includes('"requirements"'));
   check("portal uses shouldShowPayInvoice", portalSrc.includes("shouldShowPayInvoice"));
   check("portal renders PayInvoiceButton only when allowed", portalSrc.includes("showPayInvoice ? <PayInvoiceButton"));
   check("portal success return does not mark paid", !portalSrc.includes("applyVerifiedCheckoutPayment"));
