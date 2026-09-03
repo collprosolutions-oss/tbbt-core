@@ -5,6 +5,7 @@ import { FounderRegion } from "@/components/founder-design/region";
 import { BusinessProfileForm } from "@/components/settings/business-profile-form";
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
+import { ConnectStripeButton } from "@/components/settings/connect-stripe-button";
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import type { SettingsWorkspaceProps } from "@/components/settings/types";
@@ -26,7 +27,11 @@ import {
   FULL_EXPORT_PLANNED_MESSAGE,
   INTEGRATION_STATUS_LABELS,
   LABOR_MINIMUM_FUTURE_RULE_MESSAGE,
+  PAYMENT_PROVIDER_CONNECTED_MESSAGE,
   PAYMENT_PROVIDER_DISCONNECTED_MESSAGE,
+  PAYMENT_PROVIDER_PLATFORM_UNCONFIGURED_MESSAGE,
+  PAYMENT_PROVIDER_SETUP_REQUIRED_MESSAGE,
+  PAYMENT_PROVIDER_STATUS_LABELS,
   PAYROLL_PROVIDER_DISCONNECTED_MESSAGE,
   PROJECTED_BALANCE_UNAVAILABLE_MESSAGE,
   SCHEDULING_DEFAULTS_DEFERRED_MESSAGE,
@@ -316,7 +321,10 @@ function SectionBody(props: SettingsWorkspaceProps) {
             <Link href="/estimates">Open Estimates</Link>
           </Button>
         </SectionCard>
-        <SectionCard title="Payment methods" description={PAYMENT_PROVIDER_DISCONNECTED_MESSAGE}>
+        <SectionCard
+          title="Payment methods"
+          description="Cash, check, Zelle / bank transfer, and other offline payments stay available for owner Mark Paid."
+        >
           <ul className="space-y-2 text-sm">
             {snapshot.paymentMethods.map((method) => (
               <li key={method.value} className="flex items-center justify-between gap-2 rounded-lg border p-3">
@@ -325,7 +333,38 @@ function SectionBody(props: SettingsWorkspaceProps) {
               </li>
             ))}
           </ul>
-          <p className="text-sm font-medium">Payment provider: Not Connected</p>
+        </SectionCard>
+        <SectionCard
+          title="Payment provider"
+          description={
+            snapshot.payment.status === "connected"
+              ? PAYMENT_PROVIDER_CONNECTED_MESSAGE
+              : snapshot.payment.status === "setup_required"
+                ? PAYMENT_PROVIDER_SETUP_REQUIRED_MESSAGE
+                : PAYMENT_PROVIDER_DISCONNECTED_MESSAGE
+          }
+        >
+          <div className="space-y-3">
+            <p className="text-sm font-medium">Stripe</p>
+            <p className="text-sm">
+              Status: {PAYMENT_PROVIDER_STATUS_LABELS[snapshot.payment.status]}
+            </p>
+            {!snapshot.payment.platformConfigured ? (
+              <p className="text-sm text-muted-foreground">
+                {PAYMENT_PROVIDER_PLATFORM_UNCONFIGURED_MESSAGE}
+              </p>
+            ) : null}
+            {canEditPreferences ? (
+              <ConnectStripeButton
+                label={
+                  snapshot.payment.status === "not_connected"
+                    ? "Connect Stripe"
+                    : "Continue Setup"
+                }
+                disabled={!snapshot.payment.platformConfigured}
+              />
+            ) : null}
+          </div>
         </SectionCard>
       </div>
     );

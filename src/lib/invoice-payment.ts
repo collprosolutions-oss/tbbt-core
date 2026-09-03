@@ -6,11 +6,27 @@ export const PAYMENT_METHODS = [
   { value: "OTHER", label: "Other" },
 ] as const;
 
+export const PROCESSOR_PAYMENT_METHODS = [
+  { value: "STRIPE", label: "Card (Stripe)" },
+] as const;
+
+export const INVOICE_PAYMENT_METHOD_FILTERS = [
+  ...PAYMENT_METHODS,
+  ...PROCESSOR_PAYMENT_METHODS,
+] as const;
+
 export type PaymentMethodValue = (typeof PAYMENT_METHODS)[number]["value"];
+export type ProcessorPaymentMethodValue =
+  (typeof PROCESSOR_PAYMENT_METHODS)[number]["value"];
 
 const PAYMENT_METHOD_VALUES = new Set<string>(
   PAYMENT_METHODS.map((method) => method.value),
 );
+
+const ALL_PAYMENT_LABELS = [
+  ...PAYMENT_METHODS,
+  ...PROCESSOR_PAYMENT_METHODS,
+] as const;
 
 export function isPaymentMethodValue(
   value: string,
@@ -20,5 +36,5 @@ export function isPaymentMethodValue(
 
 export function paymentMethodLabel(value: string | null | undefined) {
   if (!value) return null;
-  return PAYMENT_METHODS.find((method) => method.value === value)?.label ?? value;
+  return ALL_PAYMENT_LABELS.find((method) => method.value === value)?.label ?? value;
 }

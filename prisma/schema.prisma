@@ -181,6 +181,7 @@ model Business {
   knowledgeEntries         KnowledgeEntry[]
   serviceRequestItems      ServiceRequestItem[]
   serviceRequestPhotos     ServiceRequestPhoto[]
+  paymentAccount           BusinessPaymentAccount?
 }
 
 model Membership {
@@ -595,6 +596,25 @@ model JobPhoto {
   @@index([businessId])
   @@index([jobId])
   @@index([businessId, marketingPermissionStatus])
+}
+
+/// Per-business electronic payment destination. Stores only the
+/// provider account identifier — never secret keys, bank numbers, or
+/// card data. Payment readiness is derived from the processor, not
+/// persisted here.
+model BusinessPaymentAccount {
+  id              String   @id @default(cuid())
+  businessId      String   @unique
+  /// First implementation: "stripe".
+  provider        String
+  /// Stripe Accounts v2 connected-account id (acct_...).
+  stripeAccountId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([stripeAccountId])
 }
 
 model Invoice {
