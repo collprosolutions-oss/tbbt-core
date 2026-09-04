@@ -27,7 +27,7 @@ const {
   shouldOfferStripeOnboarding,
 } = await import("@/lib/payments/readiness");
 const { invoiceAmountToCents, invoiceDueCents } = await import("@/lib/payments/money");
-const { invoiceCheckoutPaymentMethodPreferences } = await import(
+const { INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES } = await import(
   "@/lib/payments/stripe-adapter"
 );
 const {
@@ -309,36 +309,18 @@ try {
   check("webhook verifies the Stripe signature", webhookSrc.includes("constructStripeWebhookEvent"));
   check("webhook applies only a parsed checkout payment", webhookSrc.includes("parseCheckoutPaymentEvent"));
   check(
-    "invoice checkout excludes Affirm and Klarna",
-    adapterSrc.includes("excluded_payment_method_types") &&
-      adapterSrc.includes('"affirm"') &&
-      adapterSrc.includes('"klarna"'),
+    "invoice checkout uses an explicit card/cashapp/us_bank_account allowlist",
+    INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.join(",") === "card,cashapp,us_bank_account" &&
+      adapterSrc.includes("payment_method_types: [...INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES]"),
   );
   check(
-    "invoice checkout uses a payment method configuration for the connected account",
-    adapterSrc.includes("payment_method_configuration") &&
-      adapterSrc.includes("paymentMethodConfigurations") &&
-      adapterSrc.includes("TBBT invoice checkout"),
-  );
-  const invoicePmc = invoiceCheckoutPaymentMethodPreferences();
-  check(
-    "invoice PMC turns Affirm and Klarna off",
-    invoicePmc.affirm.display_preference.preference === "off" &&
-      invoicePmc.klarna.display_preference.preference === "off",
-  );
-  check(
-    "invoice PMC keeps card, wallets, Link, Cash App, and bank",
-    invoicePmc.card.display_preference.preference === "on" &&
-      invoicePmc.apple_pay.display_preference.preference === "on" &&
-      invoicePmc.google_pay.display_preference.preference === "on" &&
-      invoicePmc.link.display_preference.preference === "on" &&
-      invoicePmc.cashapp.display_preference.preference === "on" &&
-      invoicePmc.us_bank_account.display_preference.preference === "on" &&
-      invoicePmc.pay_by_bank.display_preference.preference === "on",
-  );
-  check(
-    "invoice checkout does not pin an explicit payment_method_types allowlist",
-    !/\n\s*payment_method_types:/.test(adapterSrc),
+    "invoice checkout does not enable Link, Affirm, Klarna, or a payment method configuration",
+    !INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.includes("link") &&
+      !INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.includes("affirm") &&
+      !INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.includes("klarna") &&
+      !adapterSrc.includes("payment_method_configuration") &&
+      !adapterSrc.includes("paymentMethodConfigurations") &&
+      adapterSrc.includes('display: "never"'),
   );
 
   const businessA = await seedBusiness("Alpha Payments");
