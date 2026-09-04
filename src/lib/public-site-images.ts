@@ -24,6 +24,7 @@ import {
   type PublicCatalogGroup,
 } from "@/lib/public-site";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
+import { isManagedPublicAssetPath } from "@/lib/business-storage/keys";
 import {
   deleteJobPhotoBlob,
   isManagedBlobUrl,
@@ -89,7 +90,7 @@ export function publicAboutHeroDefaultPosition(slug?: string | null) {
 }
 
 export const PUBLIC_SITE_IMAGE_STORAGE_UNAVAILABLE =
-  "Image storage is not configured for this environment. Existing photos stay in place. Connect Vercel Blob (BLOB_READ_WRITE_TOKEN) before replacing website photos.";
+  "Image storage is not configured for this environment. Existing photos stay in place. Connect platform file storage (Cloudflare R2) before replacing website photos.";
 
 export type PublicSiteImageRow = {
   page: string;
@@ -163,7 +164,15 @@ export function parseCategoryImageSlot(slot: string) {
 }
 
 export function isAllowedPublicSiteImageUrl(url: string) {
-  return url.startsWith("/brand/") || isManagedBlobUrl(url);
+  return (
+    url.startsWith("/brand/") ||
+    isManagedPublicAssetPath(url) ||
+    isManagedBlobUrl(url)
+  );
+}
+
+export function isManagedWebsitePhotoUrl(url: string) {
+  return isManagedPublicAssetPath(url) || isManagedBlobUrl(url);
 }
 
 export function splitObjectPosition(value: string): { x: number; y: number } {
@@ -335,7 +344,7 @@ export function resolvePublicSiteImage(input: {
     objectPosition: input.row.objectPosition?.trim() || input.defaultPosition,
     objectZoom: clampObjectZoom(input.row.objectZoom ?? defaultZoom),
     isOverride: true,
-    usesCustomUpload: Boolean(candidate) && isManagedBlobUrl(candidate),
+    usesCustomUpload: Boolean(candidate) && isManagedWebsitePhotoUrl(candidate),
   };
 }
 
@@ -611,7 +620,7 @@ export async function loadWebsitePhotoEditorSlots(
   ];
 }
 
-function isEditablePublicSitePage(page: string) {
+export function isEditablePublicSitePage(page: string) {
   return (PUBLIC_SITE_EDITABLE_PAGES as readonly string[]).includes(page);
 }
 
@@ -677,6 +686,7 @@ export async function upsertPublicSiteImageOp(
     imageUrl?: string | null;
     objectPosition?: string;
     objectZoom?: number;
+    storedAssetId?: string | null;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
@@ -720,6 +730,10 @@ export async function upsertPublicSiteImageOp(
   const nextZoom = clampObjectZoom(
     input.objectZoom ?? previous?.objectZoom ?? PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
   );
+  const nextStoredAssetId =
+    input.storedAssetId === undefined
+      ? previous?.storedAssetId ?? null
+      : input.storedAssetId;
 
   const saved = await db.publicSiteImage.upsert({
     where: {
@@ -736,12 +750,14 @@ export async function upsertPublicSiteImageOp(
       imageUrl: nextUrl,
       objectPosition: nextPosition,
       objectZoom: nextZoom,
+      storedAssetId: nextStoredAssetId,
       updatedByMembershipId: access.workspace.membership.id,
     },
     update: {
       imageUrl: nextUrl,
       objectPosition: nextPosition,
       objectZoom: nextZoom,
+      storedAssetId: nextStoredAssetId,
       updatedByMembershipId: access.workspace.membership.id,
     },
   });
@@ -815,5 +831,9 @@ export async function resetPublicSiteImageOp(
     newValue: null,
   });
 
-  return { unchanged: false as const };
+  return {
+    unchanged: false as const,
+    storedAssetId: existing.storedAssetId,
+    imageUrl: existing.imageUrl,
+  };
 }

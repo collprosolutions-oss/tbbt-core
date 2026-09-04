@@ -173,6 +173,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
             businessId={snapshot.business.id}
             slots={websitePhotos.slots}
             storageConfigured={websitePhotos.storageConfigured}
+            storageUsage={websitePhotos.storageUsage}
             canEdit={canEditPreferences}
           />
         ) : (

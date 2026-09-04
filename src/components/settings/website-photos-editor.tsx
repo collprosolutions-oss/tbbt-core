@@ -9,11 +9,16 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
-  replacePublicSiteImage,
+  abortWebsitePhotoUpload,
+  authorizeWebsitePhotoUpload,
+  finalizeWebsitePhotoUpload,
+} from "@/app/actions/business-storage";
+import {
   repositionPublicSiteImage,
   resetPublicSiteImage,
   type PublicSiteImageActionState,
 } from "@/app/actions/public-site-images";
+import { formatStorageBytes } from "@/lib/business-storage";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -64,12 +69,14 @@ function SlotEditor({
   slot,
   businessId,
   storageConfigured,
+  storageUsage,
   canEdit,
   heading,
 }: {
   slot: PublicSiteImageEditorSlot;
   businessId: string;
   storageConfigured: boolean;
+  storageUsage?: { usedBytes: number; limitBytes: number } | null;
   canEdit: boolean;
   heading?: string;
 }) {
@@ -94,10 +101,8 @@ function SlotEditor({
   const [displaySrc, setDisplaySrc] = useState(slot.src);
   const [fileError, setFileError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [replaceState, replaceAction, replacePending] = useActionState(
-    replacePublicSiteImage,
-    emptyState,
-  );
+  const [replaceState, setReplaceState] = useState<PublicSiteImageActionState>(emptyState);
+  const [replacePending, setReplacePending] = useState(false);
   const [positionState, positionAction, positionPending] = useActionState(
     repositionPublicSiteImage,
     emptyState,
@@ -119,7 +124,6 @@ function SlotEditor({
   const fileInputId = `website-photo-file-${slot.page}-${slot.slot.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 
   const positionWasPending = useRef(false);
-  const replaceWasPending = useRef(false);
   useEffect(() => {
     setDisplaySrc(slot.src);
   }, [slot.src]);
@@ -139,19 +143,6 @@ function SlotEditor({
     }
     positionWasPending.current = positionPending;
   }, [positionPending, positionState.error, positionState.message, x, y, zoom]);
-  useEffect(() => {
-    if (replaceWasPending.current && !replacePending) {
-      if (replaceState.imageUrl && !replaceState.error) {
-        if (localPreview) URL.revokeObjectURL(localPreview);
-        setLocalPreview(null);
-        setSelectedFile(null);
-        setFileError(null);
-        setDisplaySrc(replaceState.imageUrl);
-        if (fileInputRef.current) fileInputRef.current.value = "";
-      }
-    }
-    replaceWasPending.current = replacePending;
-  }, [localPreview, replacePending, replaceState.error, replaceState.imageUrl]);
 
   function applyFromPointer(event: ReactPointerEvent<HTMLButtonElement>, nextX: number, nextY: number) {
     if (event.pointerId !== drag?.pointerId && drag) return;
@@ -226,14 +217,60 @@ function SlotEditor({
     input.click();
   }
 
-  function submitReplacement() {
+  async function submitReplacement() {
     if (!selectedFile || replacePending) return;
-    const formData = new FormData();
-    formData.set("businessId", businessId);
-    formData.set("page", slot.page);
-    formData.set("slot", slot.slot);
-    formData.set("file", selectedFile);
-    replaceAction(formData);
+    setReplacePending(true);
+    setReplaceState({});
+    let assetId = "";
+    try {
+      const authorized = await authorizeWebsitePhotoUpload({
+        page: slot.page,
+        slot: slot.slot,
+        originalFilename: selectedFile.name,
+        mimeType: selectedFile.type || "application/octet-stream",
+        fileSizeBytes: selectedFile.size,
+      });
+      if (authorized.error || !authorized.assetId || !authorized.uploadUrl) {
+        setReplaceState({ error: authorized.error || "That photo could not be authorized." });
+        return;
+      }
+      assetId = authorized.assetId;
+      const uploaded = await fetch(authorized.uploadUrl, {
+        method: authorized.uploadMethod || "PUT",
+        headers: authorized.uploadHeaders,
+        body: selectedFile,
+      });
+      if (!uploaded.ok) {
+        await abortWebsitePhotoUpload({ assetId });
+        setReplaceState({
+          error: "The photo could not be uploaded to file storage. Try again.",
+        });
+        return;
+      }
+      const finalized = await finalizeWebsitePhotoUpload({
+        assetId,
+        page: slot.page,
+        slot: slot.slot,
+      });
+      if (finalized.error || !finalized.imageUrl) {
+        setReplaceState({
+          error: finalized.error || "That website photo could not be saved.",
+        });
+        return;
+      }
+      if (localPreview) URL.revokeObjectURL(localPreview);
+      setLocalPreview(null);
+      setSelectedFile(null);
+      setFileError(null);
+      setDisplaySrc(finalized.imageUrl);
+      setReplaceState({ message: finalized.message, imageUrl: finalized.imageUrl });
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } catch {
+      if (assetId) await abortWebsitePhotoUpload({ assetId }).catch(() => undefined);
+      setReplaceState({ error: "That website photo could not be saved." });
+    } finally {
+      setReplacePending(false);
+    }
   }
 
   return (
@@ -434,11 +471,13 @@ function ServiceCategoryPicker({
   slots,
   businessId,
   storageConfigured,
+  storageUsage,
   canEdit,
 }: {
   slots: PublicSiteImageEditorSlot[];
   businessId: string;
   storageConfigured: boolean;
+  storageUsage?: { usedBytes: number; limitBytes: number } | null;
   canEdit: boolean;
 }) {
   const [openSlot, setOpenSlot] = useState(slots[0]?.slot ?? "");
@@ -479,6 +518,7 @@ function ServiceCategoryPicker({
           heading={selected.category ?? selected.label}
           businessId={businessId}
           storageConfigured={storageConfigured}
+          storageUsage={storageUsage}
           canEdit={canEdit}
         />
       ) : null}
@@ -490,11 +530,13 @@ export function WebsitePhotosEditor({
   businessId,
   slots,
   storageConfigured,
+  storageUsage,
   canEdit,
 }: {
   businessId: string;
   slots: PublicSiteImageEditorSlot[];
   storageConfigured: boolean;
+  storageUsage?: { usedBytes: number; limitBytes: number } | null;
   canEdit: boolean;
 }) {
   const homeHero = slots.find((slot) => slot.page === "home" && slot.kind === "hero");
@@ -521,6 +563,13 @@ export function WebsitePhotosEditor({
           <AlertDescription>{PUBLIC_SITE_IMAGE_STORAGE_UNAVAILABLE}</AlertDescription>
         </Alert>
       ) : null}
+      {storageUsage ? (
+        <p className="text-sm text-muted-foreground">
+          Storage {formatStorageBytes(storageUsage.usedBytes)} used of{" "}
+          {formatStorageBytes(storageUsage.limitBytes)}. This business has a
+          defined storage amount — it is not unlimited.
+        </p>
+      ) : null}
       <p className="text-sm text-muted-foreground">
         Adjust how each website photo fits its slot. The original upload is kept.
         Page layout, fonts, colors, service names, and Recent Projects stay as they
@@ -535,6 +584,7 @@ export function WebsitePhotosEditor({
             heading="Home Hero"
             businessId={businessId}
             storageConfigured={storageConfigured}
+            storageUsage={storageUsage}
             canEdit={canEdit}
           />
         ) : (
@@ -552,6 +602,7 @@ export function WebsitePhotosEditor({
           slots={homeCategories}
           businessId={businessId}
           storageConfigured={storageConfigured}
+          storageUsage={storageUsage}
           canEdit={canEdit}
         />
       </section>
@@ -564,6 +615,7 @@ export function WebsitePhotosEditor({
             slot={slot}
             businessId={businessId}
             storageConfigured={storageConfigured}
+            storageUsage={storageUsage}
             canEdit={canEdit}
           />
         ))}
@@ -574,6 +626,7 @@ export function WebsitePhotosEditor({
               slots={servicesCategories}
               businessId={businessId}
               storageConfigured={storageConfigured}
+              storageUsage={storageUsage}
               canEdit={canEdit}
             />
           </div>

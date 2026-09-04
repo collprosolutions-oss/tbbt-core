@@ -144,10 +144,11 @@ check("Recent Projects stay on real portfolio photos",
       project.src.startsWith("/brand/projects/"),
     ));
 check("Home Recent Projects use a 3-column desktop grid", homeSrc.includes("lg:grid-cols-3"));
-check("Uploads reuse the existing Blob helper",
-  storageSrc.includes("uploadPublicSitePhoto") &&
-    actionSrc.includes("uploadPublicSitePhoto") &&
-    actionSrc.includes("isStorageConfigured"));
+check("Website Photos use the business storage service, not Vercel Blob",
+  actionSrc.includes("replaceWebsitePhotoFromBytes") &&
+    actionSrc.includes("isBusinessStorageConfigured") &&
+    !actionSrc.includes("uploadPublicSitePhoto") &&
+    !actionSrc.includes("BLOB_READ_WRITE_TOKEN"));
 check("Private job photos are not auto-promoted into Home slots",
   !opsSrc.includes("prisma.jobPhoto") &&
     !opsSrc.includes("grantJobPhotoMarketingPermission") &&
@@ -171,7 +172,8 @@ check("Selected photo filename and local preview stay in React state",
     editorSrc.includes("No photo selected") &&
     editorSrc.includes("setSelectedFile(file)") &&
     editorSrc.includes("URL.createObjectURL(file)") &&
-    editorSrc.includes("formData.set(\"file\", selectedFile)"));
+    editorSrc.includes("authorizeWebsitePhotoUpload") &&
+    editorSrc.includes("finalizeWebsitePhotoUpload"));
 check("Editor accepts JPEG PNG and WebP from the computer",
   PUBLIC_SITE_IMAGE_FILE_ACCEPT ===
     "image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" &&

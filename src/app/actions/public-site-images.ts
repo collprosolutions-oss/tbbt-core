@@ -2,6 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { requireBusinessAccess } from "@/lib/access";
+import {
+  deleteStoredAsset,
+  isBusinessStorageConfigured,
+} from "@/lib/business-storage";
+import { replaceWebsitePhotoFromBytes } from "@/lib/business-storage/website-photos";
 import { prisma } from "@/lib/prisma";
 import {
   PUBLIC_SITE_HOME_PAGE,
@@ -14,10 +19,8 @@ import {
 } from "@/lib/public-site-images";
 import { assertSettingsBusinessScope } from "@/lib/settings-ops";
 import {
-  isStorageConfigured,
   MAX_JOB_PHOTO_UPLOAD_BYTES,
   resolveSupportedImageMimeType,
-  uploadPublicSitePhoto,
 } from "@/lib/storage";
 
 export type PublicSiteImageActionState = {
@@ -72,23 +75,30 @@ export async function replacePublicSiteImage(
       const maxMb = (MAX_JOB_PHOTO_UPLOAD_BYTES / (1024 * 1024)).toFixed(0);
       return { error: `That photo is too large. The limit is ${maxMb} MB.` };
     }
-    if (!isStorageConfigured()) {
+    if (!isBusinessStorageConfigured()) {
       return { error: PUBLIC_SITE_IMAGE_STORAGE_UNAVAILABLE };
     }
 
-    const uploaded = await uploadPublicSitePhoto({
-      businessId: access.businessId,
-      page,
-      slot,
-      file,
-    });
-    await upsertPublicSiteImageOp(prisma, access, {
-      page,
-      slot,
-      imageUrl: uploaded.url,
-    });
+    const mimeType = resolveSupportedImageMimeType(file);
+    if (!mimeType) {
+      return {
+        error: "Unsupported file type. Upload a JPEG, PNG, or WebP photo.",
+      };
+    }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const replaced = await replaceWebsitePhotoFromBytes(
+      { db: prisma },
+      access,
+      {
+        page,
+        slot,
+        originalFilename: file.name || "photo",
+        mimeType,
+        body: bytes,
+      },
+    );
     revalidatePublicSite(access.workspace.business.slug);
-    return { message: "Website photo saved.", imageUrl: uploaded.url };
+    return { message: "Website photo saved.", imageUrl: replaced.imageUrl };
   } catch (error) {
     return {
       error: ownerUploadError(error),
@@ -143,6 +153,11 @@ export async function resetPublicSiteImage(
       return { error: "Choose an image slot to reset." };
     }
     const result = await resetPublicSiteImageOp(prisma, access, { page, slot });
+    if (!result.unchanged && result.storedAssetId) {
+      await deleteStoredAsset({ db: prisma }, access, result.storedAssetId).catch(
+        () => undefined,
+      );
+    }
     revalidatePublicSite(access.workspace.business.slug);
     return result.unchanged
       ? { message: "This image is already using the default." }

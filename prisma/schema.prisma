@@ -182,6 +182,8 @@ model Business {
   serviceRequestItems      ServiceRequestItem[]
   serviceRequestPhotos     ServiceRequestPhoto[]
   paymentAccount           BusinessPaymentAccount?
+  storageAccount           BusinessStorageAccount?
+  storedAssets             StoredAsset[]
 }
 
 model Membership {
@@ -596,6 +598,74 @@ model JobPhoto {
   @@index([businessId])
   @@index([jobId])
   @@index([businessId, marketingPermissionStatus])
+}
+
+/// Per-business object-storage allocation. Platform-managed R2 by default.
+/// BYO credentials are not stored here — only the chosen bucket/namespace.
+/// Usage and quota live on this row so one tenant cannot silently consume
+/// unlimited platform storage.
+model BusinessStorageAccount {
+  id                  String   @id @default(cuid())
+  businessId          String   @unique
+  /// R2 | S3_COMPATIBLE
+  provider            String   @default("R2")
+  /// MANAGED | BYO
+  mode                String   @default("MANAGED")
+  bucketName          String
+  /// Immutable tenant prefix, e.g. businesses/{businessId}
+  namespacePrefix     String
+  /// ACTIVE | SUSPENDED
+  status              String   @default("ACTIVE")
+  storageLimitBytes   BigInt
+  storageUsedBytes    BigInt   @default(0)
+  storageReservedBytes BigInt  @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  assets   StoredAsset[]
+
+  @@index([provider, mode])
+}
+
+/// Provider-neutral file metadata. The bytes live in object storage;
+/// this row is the source of truth for ownership, visibility, and quota.
+model StoredAsset {
+  id               String    @id @default(cuid())
+  businessId       String
+  storageAccountId String
+  customerId       String?
+  propertyId       String?
+  jobId            String?
+  /// WEBSITE_IMAGE | BRAND_ASSET | CUSTOMER_PHOTO | JOB_PHOTO |
+  /// BEFORE_PHOTO | AFTER_PHOTO | DOCUMENT | INVOICE_ASSET |
+  /// ATTACHMENT | OTHER
+  category         String
+  purpose          String?
+  originalFilename String
+  storageKey       String
+  mimeType         String
+  fileSizeBytes    Int
+  width            Int?
+  height           Int?
+  /// PUBLIC | PRIVATE
+  visibility       String    @default("PRIVATE")
+  /// PENDING | READY | FAILED | DELETED
+  status           String    @default("PENDING")
+  publicPath       String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+  expiresAt        DateTime?
+
+  business       Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  storageAccount BusinessStorageAccount @relation(fields: [storageAccountId], references: [id], onDelete: Cascade)
+  publicSiteImages PublicSiteImage[]
+
+  @@unique([businessId, storageKey])
+  @@index([businessId, category, status])
+  @@index([storageAccountId, status])
+  @@index([businessId, visibility, status])
 }
 
 /// Per-business electronic payment destination. Stores only the
@@ -1325,15 +1395,21 @@ model PublicSiteImage {
   objectPosition        String   @default("50% 50%")
   /// Non-destructive display zoom. 1 = current object-fit:cover appearance.
   objectZoom            Float    @default(1)
+  /// Optional pointer to the reusable StoredAsset that owns this slot's
+  /// upload. Crop/zoom stay on this row; the original file is never
+  /// destructively cropped.
+  storedAssetId         String?
   updatedByMembershipId String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
-  business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  updatedBy Membership? @relation("PublicSiteImageActor", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
+  business    Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  storedAsset StoredAsset? @relation(fields: [storedAssetId], references: [id], onDelete: SetNull)
+  updatedBy   Membership?  @relation("PublicSiteImageActor", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
 
   @@unique([businessId, page, slot])
   @@index([businessId, page])
+  @@index([storedAssetId])
 }
 
 /// Internal operational knowledge for one business. This is NOT a second
