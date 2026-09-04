@@ -22,6 +22,7 @@ const {
   persistDraftInvoiceFromCompletedJob,
 } = await import("@/lib/invoice-carry-forward");
 const {
+  INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
   invoiceNumberFromId,
   invoicePdfFilename,
   isCustomerVisibleInvoiceStatus,
@@ -545,6 +546,12 @@ try {
       invoiceHtmlSrc.includes("invoice.business.logoSrc"),
   );
   check("PDF renderer uses the document view logo path", invoicePdfSrc.includes("docView.business.logoSrc"));
+  check(
+    "invoice HTML and PDF use the same readable document-logo height",
+    INVOICE_DOCUMENT_LOGO_HEIGHT_PX === 108 &&
+      invoiceHtmlSrc.includes("INVOICE_DOCUMENT_LOGO_HEIGHT_PX") &&
+      invoicePdfSrc.includes("INVOICE_DOCUMENT_LOGO_HEIGHT_PX"),
+  );
   check(
     "website and dashboard still use the dark logo helper",
     appShellSrc.includes("getBusinessLogoSrc") &&
