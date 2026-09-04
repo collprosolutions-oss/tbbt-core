@@ -3,6 +3,7 @@ import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
 import { ChangeOrdersCard } from "@/components/portal/change-orders-card";
 import { PayInvoiceButton } from "@/components/portal/pay-invoice-button";
 import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
+import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { RequestAdditionalWorkForm } from "@/components/portal/request-additional-work-form";
 import {
   Card,
@@ -27,6 +28,7 @@ import {
   reconcileProjectTokenCheckoutPayment,
   shouldShowPayInvoice,
 } from "@/lib/payments";
+import { backfillEmptyInvoiceWorkLinesForProjectToken } from "@/lib/invoice-carry-forward";
 import { loadPortalAdditionalWorkCatalog } from "@/lib/portal-additional-work";
 import { prisma } from "@/lib/prisma";
 
@@ -159,10 +161,23 @@ export default async function CustomerProjectPortalPage({
     );
   }
 
+  if (job.invoices[0]) {
+    await backfillEmptyInvoiceWorkLinesForProjectToken(prisma, token);
+  }
+
   const invoice = job.invoices[0]
     ? await prisma.invoice.findFirst({
         where: { id: job.invoices[0].id, job: { projectToken: token } },
-        select: { id: true, status: true, total: true, paidAt: true },
+        select: {
+          id: true,
+          status: true,
+          total: true,
+          paidAt: true,
+          lineItems: {
+            orderBy: { createdAt: "asc" },
+            select: { description: true, quantity: true },
+          },
+        },
       })
     : null;
   const payment = invoice
@@ -250,7 +265,7 @@ export default async function CustomerProjectPortalPage({
           <CardContent>
             <RequestAdditionalWorkForm
               projectToken={token}
-              catalog={await loadPortalAdditionalWorkCatalog(job.business)}
+              groups={await loadPortalAdditionalWorkCatalog(job.business)}
             />
           </CardContent>
         </Card>
@@ -262,6 +277,16 @@ export default async function CustomerProjectPortalPage({
           <CardContent className="space-y-1 text-sm">
             {invoice ? (
               <>
+                {invoice.lineItems.length > 0 ? (
+                  <div className="pb-3">
+                    <WorkPerformedList
+                      lines={invoice.lineItems.map((line) => ({
+                        description: line.description,
+                        quantityLabel: line.quantity.toString(),
+                      }))}
+                    />
+                  </div>
+                ) : null}
                 <p>Total: {formatMoney(invoice.total)}</p>
                 <p>
                   {invoice.status === "PAID" ? (

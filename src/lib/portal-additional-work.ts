@@ -2,13 +2,13 @@ import { prisma } from "@/lib/prisma";
 import {
   groupPublicCatalog,
   toPublicCatalogItem,
-  type PublicCatalogItem,
+  type PublicCatalogGroup,
 } from "@/lib/public-site";
 
 export async function loadPortalAdditionalWorkCatalog(business: {
   id: string;
   tradeCode: string;
-}): Promise<PublicCatalogItem[]> {
+}): Promise<PublicCatalogGroup[]> {
   const rows = await prisma.serviceCatalogItem.findMany({
     where: { businessId: business.id, active: true },
     select: {
@@ -21,8 +21,5 @@ export async function loadPortalAdditionalWorkCatalog(business: {
     },
     orderBy: { name: "asc" },
   });
-  const items = rows.map(toPublicCatalogItem);
-  return groupPublicCatalog(items, business.tradeCode).flatMap(
-    (group) => group.items,
-  );
+  return groupPublicCatalog(rows.map(toPublicCatalogItem), business.tradeCode);
 }

@@ -18,7 +18,9 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 const {
   buildInvoiceLineSnapshots,
   LABOR_MINIMUM_INVOICE_DESCRIPTION,
+  backfillEmptyInvoiceWorkLines,
   persistDraftInvoiceFromCompletedJob,
+  selectApprovedChangeOrdersForInvoiceBackfill,
 } = await import("@/lib/invoice-carry-forward");
 const {
   invoiceNumberFromId,
@@ -208,6 +210,84 @@ try {
       built[1].total.toString() === "25",
   );
   check("change-order line is copied last", built[2].description === "Grout");
+
+  const closetLine = {
+    description: "Closet Shelf / Rod Repair",
+    quantity: 2,
+    unitPrice: 100,
+    total: 200,
+    type: "LABOR",
+  };
+  const curtainLine = {
+    description: "Curtain Rod Installation",
+    quantity: 1,
+    unitPrice: 75,
+    total: 75,
+    type: "LABOR",
+  };
+  const keypadCo = {
+    id: "co-keypad",
+    createdAt: new Date("2026-09-01T12:00:00.000Z"),
+    lineItems: [
+      {
+        description: "Keypad / Electronic Deadbolt Replacement",
+        quantity: 1,
+        unitPrice: 100,
+        total: 100,
+        type: "LABOR",
+      },
+    ],
+  };
+  const laterCo = {
+    id: "co-later",
+    createdAt: new Date("2026-09-04T12:00:00.000Z"),
+    lineItems: [
+      {
+        description: "Should not appear",
+        quantity: 1,
+        unitPrice: 50,
+        total: 50,
+        type: "LABOR",
+      },
+    ],
+  };
+  const invoiceCreatedAt = new Date("2026-09-02T12:00:00.000Z");
+  const matchedCos = selectApprovedChangeOrdersForInvoiceBackfill({
+    approvedLineItems: [closetLine, curtainLine],
+    laborMinimumAdjustment: 0,
+    approvedChangeOrders: [laterCo, keypadCo],
+    invoiceCreatedAt,
+    invoiceTotal: 375,
+  });
+  check(
+    "backfill selector keeps the approved CO that existed at invoice create",
+    matchedCos?.length === 1 && matchedCos[0].id === "co-keypad",
+  );
+  check(
+    "backfill selector omits a later approved CO that would break the invoice total",
+    matchedCos?.every((changeOrder) => changeOrder.id !== "co-later") === true,
+  );
+  const estimateOnly = selectApprovedChangeOrdersForInvoiceBackfill({
+    approvedLineItems: [closetLine, curtainLine],
+    laborMinimumAdjustment: 0,
+    approvedChangeOrders: [keypadCo, laterCo],
+    invoiceCreatedAt,
+    invoiceTotal: 275,
+  });
+  check(
+    "backfill selector uses estimate-only when that is the stored invoice total",
+    estimateOnly?.length === 0,
+  );
+  check(
+    "backfill selector returns null when no approved subset matches the invoice total",
+    selectApprovedChangeOrdersForInvoiceBackfill({
+      approvedLineItems: [closetLine, curtainLine],
+      laborMinimumAdjustment: 0,
+      approvedChangeOrders: [keypadCo],
+      invoiceCreatedAt,
+      invoiceTotal: 999,
+    }) === null,
+  );
 
   const otherBusiness = await prisma.business.create({
     data: {
@@ -517,6 +597,296 @@ try {
     "other tenant document still has no CollPro logo/phone after CollPro invoice exists",
     otherDocAgain?.business.logoSrc == null && otherDocAgain?.business.phone == null,
   );
+
+  console.log("\nTEST 8 — Empty paid invoice backfills approved work only");
+  const founderWork = await createApprovedCompletedJob({
+    businessId: otherBusiness.id,
+    customerId: otherCustomer.id,
+    propertyId: otherProperty.id,
+    customerName: otherCustomer.name,
+    lineDescription: "Closet Shelf / Rod Repair",
+    quantity: 2,
+    unitPrice: 100,
+    lineTotal: 200,
+    laborMinimum: 0,
+    versionTotal: 275,
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      estimateId: founderWork.estimate.id,
+      description: "Curtain Rod Installation",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(75),
+      total: new Prisma.Decimal(75),
+      type: "LABOR",
+    },
+  });
+  await prisma.estimateVersionLineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      estimateVersionId: founderWork.version.id,
+      description: "Curtain Rod Installation",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(75),
+      total: new Prisma.Decimal(75),
+      type: "LABOR",
+    },
+  });
+  await prisma.estimate.update({
+    where: { id: founderWork.estimate.id },
+    data: { total: new Prisma.Decimal(275) },
+  });
+  await prisma.estimateVersion.update({
+    where: { id: founderWork.version.id },
+    data: { total: new Prisma.Decimal(275) },
+  });
+
+  const draftCo = await prisma.changeOrder.create({
+    data: {
+      businessId: otherBusiness.id,
+      jobId: founderWork.job.id,
+      title: "Draft never sent",
+      status: "DRAFT",
+      total: new Prisma.Decimal(40),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      changeOrderId: draftCo.id,
+      description: "Draft only line",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(40),
+      total: new Prisma.Decimal(40),
+      type: "LABOR",
+    },
+  });
+  const sentCo = await prisma.changeOrder.create({
+    data: {
+      businessId: otherBusiness.id,
+      jobId: founderWork.job.id,
+      title: "Sent never approved",
+      status: "SENT",
+      total: new Prisma.Decimal(55),
+      sentAt: new Date(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      changeOrderId: sentCo.id,
+      description: "Sent only line",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(55),
+      total: new Prisma.Decimal(55),
+      type: "LABOR",
+    },
+  });
+  const declinedCo2 = await prisma.changeOrder.create({
+    data: {
+      businessId: otherBusiness.id,
+      jobId: founderWork.job.id,
+      title: "Declined extra",
+      status: "DECLINED",
+      total: new Prisma.Decimal(60),
+      declinedAt: new Date(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      changeOrderId: declinedCo2.id,
+      description: "Declined only line",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(60),
+      total: new Prisma.Decimal(60),
+      type: "LABOR",
+    },
+  });
+  const cancelledCo = await prisma.changeOrder.create({
+    data: {
+      businessId: otherBusiness.id,
+      jobId: founderWork.job.id,
+      title: "Cancelled extra",
+      status: "CANCELLED",
+      total: new Prisma.Decimal(70),
+      cancelledAt: new Date(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      changeOrderId: cancelledCo.id,
+      description: "Cancelled only line",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(70),
+      total: new Prisma.Decimal(70),
+      type: "LABOR",
+    },
+  });
+  const keypadApproved = await prisma.changeOrder.create({
+    data: {
+      businessId: otherBusiness.id,
+      jobId: founderWork.job.id,
+      title: "Keypad change order",
+      status: "APPROVED",
+      total: new Prisma.Decimal(100),
+      approvedAt: new Date("2026-09-01T15:00:00.000Z"),
+      createdAt: new Date("2026-09-01T15:00:00.000Z"),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      changeOrderId: keypadApproved.id,
+      description: "Keypad / Electronic Deadbolt Replacement",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(100),
+      total: new Prisma.Decimal(100),
+      type: "LABOR",
+    },
+  });
+  const laterApproved = await prisma.changeOrder.create({
+    data: {
+      businessId: otherBusiness.id,
+      jobId: founderWork.job.id,
+      title: "Later approved extra",
+      status: "APPROVED",
+      total: new Prisma.Decimal(50),
+      approvedAt: new Date("2026-09-04T18:00:00.000Z"),
+      createdAt: new Date("2026-09-04T18:00:00.000Z"),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      changeOrderId: laterApproved.id,
+      description: "Later extra work",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(50),
+      total: new Prisma.Decimal(50),
+      type: "LABOR",
+    },
+  });
+
+  const emptyPaid = await prisma.invoice.create({
+    data: {
+      businessId: otherBusiness.id,
+      customerId: otherCustomer.id,
+      jobId: founderWork.job.id,
+      status: "PAID",
+      total: new Prisma.Decimal(375),
+      paidAt: new Date("2026-09-03T16:00:00.000Z"),
+      paymentMethod: "STRIPE",
+      paymentReference: "pi_legacy_empty_375",
+      createdAt: new Date("2026-09-02T12:00:00.000Z"),
+    },
+  });
+  const beforeBackfill = await prisma.invoice.findUniqueOrThrow({
+    where: { id: emptyPaid.id },
+  });
+  const foreignBackfill = await backfillEmptyInvoiceWorkLines(prisma, {
+    businessId: collproBusiness.id,
+    invoiceId: emptyPaid.id,
+  });
+  check("other tenant cannot backfill this invoice", foreignBackfill.backfilled === false);
+  check(
+    "cross-tenant backfill created no lines",
+    (await prisma.lineItem.count({ where: { invoiceId: emptyPaid.id } })) === 0,
+  );
+
+  const founderDoc = await loadInvoiceDocumentForBusiness(
+    emptyPaid.id,
+    otherBusiness.id,
+    prisma,
+  );
+  const afterBackfill = await prisma.invoice.findUniqueOrThrow({
+    where: { id: emptyPaid.id },
+    include: { lineItems: { orderBy: { createdAt: "asc" } } },
+  });
+  check("document loader backfilled the empty paid invoice", afterBackfill.lineItems.length === 3);
+  check(
+    "backfill copied original approved closet qty 2",
+    afterBackfill.lineItems[0].description === "Closet Shelf / Rod Repair" &&
+      afterBackfill.lineItems[0].quantity.toString() === "2",
+  );
+  check(
+    "backfill copied original approved curtain qty 1",
+    afterBackfill.lineItems[1].description === "Curtain Rod Installation" &&
+      afterBackfill.lineItems[1].quantity.toString() === "1",
+  );
+  check(
+    "backfill copied the approved keypad change order",
+    afterBackfill.lineItems[2].description ===
+      "Keypad / Electronic Deadbolt Replacement" &&
+      afterBackfill.lineItems[2].quantity.toString() === "1",
+  );
+  check(
+    "unapproved change-order lines were not backfilled",
+    afterBackfill.lineItems.every(
+      (line) =>
+        !["Draft only line", "Sent only line", "Declined only line", "Cancelled only line", "Later extra work"].includes(
+          line.description,
+        ),
+    ),
+  );
+  check("historical invoice total stays $375", afterBackfill.total.toString() === "375");
+  check(
+    "paidAt is unchanged",
+    afterBackfill.paidAt?.toISOString() === beforeBackfill.paidAt?.toISOString(),
+  );
+  check("payment method is unchanged", afterBackfill.paymentMethod === "STRIPE");
+  check(
+    "payment reference is unchanged",
+    afterBackfill.paymentReference === "pi_legacy_empty_375",
+  );
+  check("invoice status stays PAID", afterBackfill.status === "PAID");
+  check("document total remains $375.00", founderDoc?.totalLabel === "$375.00");
+  check("document payments remain $375.00", founderDoc?.amountPaidLabel === "$375.00");
+  check("document amount due remains $0.00", founderDoc?.amountDueLabel === "$0.00");
+  check(
+    "document lists the three approved work descriptions",
+    founderDoc?.lineItems.map((line) => line.description).join("|") ===
+      "Closet Shelf / Rod Repair|Curtain Rod Installation|Keypad / Electronic Deadbolt Replacement",
+  );
+
+  const secondBackfill = await backfillEmptyInvoiceWorkLines(prisma, {
+    businessId: otherBusiness.id,
+    invoiceId: emptyPaid.id,
+  });
+  check("second backfill is a no-op", secondBackfill.backfilled === false);
+  check(
+    "second backfill does not duplicate lines",
+    (await prisma.lineItem.count({ where: { invoiceId: emptyPaid.id } })) === 3,
+  );
+
+  const reuseEmpty = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: otherBusiness.id,
+    jobId: founderWork.job.id,
+  });
+  check("persist reuse does not create a second invoice", reuseEmpty.ok === true && reuseEmpty.reused === true);
+  check(
+    "persist reuse does not duplicate invoice lines",
+    (await prisma.lineItem.count({ where: { invoiceId: emptyPaid.id } })) === 3,
+  );
+  check(
+    "persist reuse does not change the paid total",
+    (await prisma.invoice.findUniqueOrThrow({ where: { id: emptyPaid.id } })).total.toString() ===
+      "375",
+  );
+
+  const founderPdf = await renderInvoicePdf(founderDoc);
+  const founderPdfText = pdfExtractText(founderPdf);
+  check("PDF heading includes WORK PERFORMED", founderPdfText.includes("WORK PERFORMED"));
+  check("PDF contains closet work", founderPdfText.includes("Closet Shelf / Rod Repair"));
+  check("PDF contains curtain work", founderPdfText.includes("Curtain Rod Installation"));
+  check("PDF contains keypad work", founderPdfText.includes("Keypad / Electronic Deadbolt Replacement"));
+  check("PDF still shows the $375.00 total", founderPdfText.includes("$375.00"));
+  check("PDF does not invent later extra work", !founderPdfText.includes("Later extra work"));
+  check("original approved estimate total is still $275", (await prisma.estimateVersion.findUniqueOrThrow({
+    where: { id: founderWork.version.id },
+  })).total.toString() === "275");
 
   console.log(
     failures === 0

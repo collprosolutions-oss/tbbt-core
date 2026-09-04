@@ -1184,6 +1184,42 @@ try {
     "portal Additional Work form submits catalog item ids",
     (portalFormGrep.stdout || "").trim().length > 0,
   );
+  const portalGroupsGrep = spawnSync(
+    "grep",
+    ["-n", "groups:", "src/components/portal/request-additional-work-form.tsx"],
+    { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
+  );
+  check(
+    "portal Additional Work form takes existing catalog groups, not a second category system",
+    (portalGroupsGrep.stdout || "").trim().length > 0,
+  );
+  const portalCollapsedGrep = spawnSync(
+    "grep",
+    ["-n", "useState<Set<string>>(() => new Set())", "src/components/portal/request-additional-work-form.tsx"],
+    { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
+  );
+  check(
+    "portal Additional Work categories start collapsed",
+    (portalCollapsedGrep.stdout || "").trim().length > 0,
+  );
+  const portalExpandedGrep = spawnSync(
+    "grep",
+    ["-n", "aria-expanded", "src/components/portal/request-additional-work-form.tsx"],
+    { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
+  );
+  check(
+    "portal Additional Work category bars expose aria-expanded",
+    (portalExpandedGrep.stdout || "").trim().length > 0,
+  );
+  const portalCatalogGroupGrep = spawnSync(
+    "grep",
+    ["-n", "groupPublicCatalog", "src/lib/portal-additional-work.ts"],
+    { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
+  );
+  check(
+    "portal catalog loader groups by existing ServiceCatalogItem.category",
+    (portalCatalogGroupGrep.stdout || "").trim().length > 0,
+  );
 
   // --- HTTP-level checks against the built, running app ---------------
   console.log(`\nStarting built app on ${APP_URL} against the test database...`);

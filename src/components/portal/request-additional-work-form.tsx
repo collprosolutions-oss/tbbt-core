@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useRef, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import {
   requestAdditionalWork,
   type RequestAdditionalWorkState,
@@ -8,8 +9,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import type { PublicCatalogItem } from "@/lib/public-site";
-import { groupServiceCatalogItemsByCategory } from "@/lib/service-catalog-category";
+import type { PublicCatalogGroup } from "@/lib/public-site";
 import {
   OTHER_TASK_LABEL,
   parseRequestQuantity,
@@ -20,6 +20,7 @@ import {
   setSelectedQuantity,
   toggleSelectedCatalog,
 } from "@/lib/selected-work";
+import { cn } from "@/lib/utils";
 
 const initialState: RequestAdditionalWorkState = {};
 
@@ -28,33 +29,47 @@ const initialState: RequestAdditionalWorkState = {};
  * approval and does NOT create a Change Order by itself -- it only sends
  * the business a request for them to review. Approved scope, price, Job
  * total, and the invoice are never changed by this alone.
+ *
+ * Services are grouped by the existing ServiceCatalogItem.category values
+ * (via groupPublicCatalog). Categories start collapsed; selection and
+ * quantity live in form state so collapsing a category does not clear them.
  */
 export function RequestAdditionalWorkForm({
   projectToken,
-  catalog,
+  groups,
 }: {
   projectToken: string;
-  catalog: PublicCatalogItem[];
+  groups: PublicCatalogGroup[];
 }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(emptySelectedWork);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [state, formAction, pending] = useActionState(
     requestAdditionalWork,
     initialState,
   );
   const wasPending = useRef(false);
-  const groups = useMemo(
-    () => groupServiceCatalogItemsByCategory(catalog),
-    [catalog],
-  );
 
   useEffect(() => {
     if (wasPending.current && !pending && !state.error) {
       setOpen(false);
       setSelected(emptySelectedWork());
+      setExpanded(new Set());
     }
     wasPending.current = pending;
   }, [pending, state]);
+
+  function toggleCategory(category: string) {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(category)) {
+        next.delete(category);
+      } else {
+        next.add(category);
+      }
+      return next;
+    });
+  }
 
   if (!open) {
     return (
@@ -90,78 +105,121 @@ export function RequestAdditionalWorkForm({
       ) : null}
 
       {groups.length > 0 ? (
-        <div className="space-y-3">
+        <div className="space-y-2">
           <p className="text-sm font-medium">Select a service</p>
-          {groups.map((group) => (
-            <div key={group.category} className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">
-                {group.category}
-              </p>
-              <ul className="space-y-2">
-                {group.items.map((item) => {
-                  const checked = selected.catalogIds.includes(item.id);
-                  const qty = quantityForId(selected.quantities, item.id);
-                  return (
-                    <li key={item.id} className="space-y-1 rounded-md border p-2">
-                      <label className="flex items-start gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          className="mt-1"
-                          checked={checked}
-                          onChange={() =>
-                            setSelected((current) =>
-                              toggleSelectedCatalog(current, item.id),
-                            )
-                          }
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="block font-medium">{item.name}</span>
-                          <span className="block text-xs text-muted-foreground">
-                            {item.priceLabel}
-                          </span>
-                        </span>
-                      </label>
-                      {checked ? (
-                        <div className="pl-6">
-                          <Label
-                            htmlFor={`additional-work-qty-${item.id}`}
-                            className="text-xs"
+          <p className="text-xs text-muted-foreground">
+            Open a category to choose services. Selections stay selected if
+            you collapse the category again.
+          </p>
+          <div className="overflow-hidden rounded-lg border">
+            {groups.map((group) => {
+              const isExpanded = expanded.has(group.category);
+              const selectedInGroup = group.items.filter((item) =>
+                selected.catalogIds.includes(item.id),
+              ).length;
+              return (
+                <div
+                  key={group.category}
+                  className="border-b last:border-b-0"
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleCategory(group.category)}
+                    aria-expanded={isExpanded}
+                    className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-accent/40"
+                  >
+                    <span className="min-w-0 truncate text-sm font-medium">
+                      {group.category}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                      {selectedInGroup > 0
+                        ? `${selectedInGroup} selected`
+                        : `${group.items.length}`}
+                      <ChevronDown
+                        className={cn(
+                          "size-3.5 transition-transform",
+                          isExpanded ? "rotate-0" : "-rotate-90",
+                        )}
+                      />
+                    </span>
+                  </button>
+                  {isExpanded ? (
+                    <ul className="space-y-2 px-3 pb-3">
+                      {group.items.map((item) => {
+                        const checked = selected.catalogIds.includes(item.id);
+                        const qty = quantityForId(selected.quantities, item.id);
+                        return (
+                          <li
+                            key={item.id}
+                            className="space-y-1 rounded-md border p-2"
                           >
-                            Quantity
-                          </Label>
-                          <input
-                            id={`additional-work-qty-${item.id}`}
-                            type="number"
-                            inputMode="numeric"
-                            min={1}
-                            max={99}
-                            step={1}
-                            value={qty}
-                            className="mt-1 w-20 rounded-md border border-input bg-transparent px-2 py-1 text-sm"
-                            onChange={(event) => {
-                              const parsed = parseRequestQuantity(
-                                event.target.value,
-                              );
-                              if (parsed == null && event.target.value !== "") {
-                                return;
-                              }
-                              setSelected((current) =>
-                                setSelectedQuantity(
-                                  current,
-                                  item.id,
-                                  parsed ?? 1,
-                                ),
-                              );
-                            }}
-                          />
-                        </div>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ))}
+                            <label className="flex items-start gap-2 text-sm">
+                              <input
+                                type="checkbox"
+                                className="mt-1"
+                                checked={checked}
+                                onChange={() =>
+                                  setSelected((current) =>
+                                    toggleSelectedCatalog(current, item.id),
+                                  )
+                                }
+                              />
+                              <span className="min-w-0 flex-1">
+                                <span className="block font-medium">
+                                  {item.name}
+                                </span>
+                                <span className="block text-xs text-muted-foreground">
+                                  {item.priceLabel}
+                                </span>
+                              </span>
+                            </label>
+                            {checked ? (
+                              <div className="pl-6">
+                                <Label
+                                  htmlFor={`additional-work-qty-${item.id}`}
+                                  className="text-xs"
+                                >
+                                  Quantity
+                                </Label>
+                                <input
+                                  id={`additional-work-qty-${item.id}`}
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={1}
+                                  max={99}
+                                  step={1}
+                                  value={qty}
+                                  className="mt-1 w-20 rounded-md border border-input bg-transparent px-2 py-1 text-sm"
+                                  onChange={(event) => {
+                                    const parsed = parseRequestQuantity(
+                                      event.target.value,
+                                    );
+                                    if (
+                                      parsed == null &&
+                                      event.target.value !== ""
+                                    ) {
+                                      return;
+                                    }
+                                    setSelected((current) =>
+                                      setSelectedQuantity(
+                                        current,
+                                        item.id,
+                                        parsed ?? 1,
+                                      ),
+                                    );
+                                  }}
+                                />
+                              </div>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
         </div>
       ) : null}
 

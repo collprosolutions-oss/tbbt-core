@@ -104,6 +104,9 @@ export function renderInvoicePdf(
     }
 
     y += 16;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
+    doc.text("WORK PERFORMED", left, y);
+    y += 16;
     const colQty = right - 220;
     const colRate = right - 140;
     const colAmt = right;

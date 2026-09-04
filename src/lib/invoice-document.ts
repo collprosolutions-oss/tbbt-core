@@ -9,7 +9,10 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
 import { formatAddress, formatDate, formatMoney } from "@/lib/format";
-import { toInvoiceDecimal } from "@/lib/invoice-carry-forward";
+import {
+  backfillEmptyInvoiceWorkLines,
+  toInvoiceDecimal,
+} from "@/lib/invoice-carry-forward";
 import { prisma } from "@/lib/prisma";
 import { publicPhone } from "@/lib/public-site";
 
@@ -221,6 +224,16 @@ export async function loadInvoiceDocumentForBusiness(
   if (!invoiceId || !businessId) {
     return null;
   }
+
+  const existing = await db.invoice.findFirst({
+    where: { id: invoiceId, businessId },
+    select: { id: true },
+  });
+  if (!existing) {
+    return null;
+  }
+
+  await backfillEmptyInvoiceWorkLines(db, { businessId, invoiceId });
 
   const invoice = await db.invoice.findFirst({
     where: { id: invoiceId, businessId },

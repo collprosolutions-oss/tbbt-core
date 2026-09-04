@@ -73,7 +73,10 @@ export function InvoiceDocument({
       </section>
 
       <section className="mt-8">
-        <table className="w-full border-collapse text-sm">
+        <h2 className="text-xs font-semibold tracking-wider text-neutral-500">
+          WORK PERFORMED
+        </h2>
+        <table className="mt-3 w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-neutral-300 text-left text-xs tracking-wider text-neutral-500">
               <th className="py-2 pr-3 font-semibold">Description</th>
