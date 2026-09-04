@@ -1323,6 +1323,8 @@ model PublicSiteImage {
   slot                  String
   imageUrl              String?
   objectPosition        String   @default("50% 50%")
+  /// Non-destructive display zoom. 1 = current object-fit:cover appearance.
+  objectZoom            Float    @default(1)
   updatedByMembershipId String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt

@@ -58,6 +58,7 @@ export default async function PublicAboutPage({ params }: PageProps) {
           description={ABOUT_COPY.lead}
           imageSrc={images.hero.src}
           objectPosition={images.hero.objectPosition}
+          objectZoom={images.hero.objectZoom}
           phone={phone}
           smsHref={smsHref(phone)}
           requestHref={publicRequestPath(site.business.slug)}

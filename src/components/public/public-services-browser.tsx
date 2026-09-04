@@ -204,6 +204,7 @@ export function PublicServicesBrowser({
               src={categoryImage.src}
               alt=""
               objectPosition={categoryImage.objectPosition}
+              objectZoom={categoryImage.objectZoom}
               sizes="(max-width: 1100px) 100vw, 70vw"
             />
           </div>

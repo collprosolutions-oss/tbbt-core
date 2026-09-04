@@ -32,13 +32,17 @@ const {
   PUBLIC_SITE_SERVICES_PAGE,
   PUBLIC_SITE_HERO_SLOT,
   PUBLIC_SITE_STORY_SLOT,
+  PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
   buildPublicAboutImagePresentation,
   PublicSiteImageError,
   buildPublicHomeImagePresentation,
   buildPublicServicesImagePresentation,
   categoryImageSlot,
+  clampObjectZoom,
+  clampPercent,
   formatObjectPosition,
   parseCategoryImageSlot,
+  publicImageObjectStyle,
   resolvePublicSiteImage,
   resetPublicSiteImageOp,
   upsertPublicSiteImageOp,
@@ -113,11 +117,16 @@ const storageSrc = readRepo("src/lib/storage.ts");
 const actionSrc = readRepo("src/app/actions/public-site-images.ts");
 
 console.log("\nSTATIC — Home photo editor boundaries");
-check("Website Photos editor exists for owners", editorSrc.includes("Edit Website Photos") || editorSrc.includes("Home page"));
-check("Editor can replace, reposition, and reset",
+check("Website Photos editor exists for owners", editorSrc.includes("Home Hero") && editorSrc.includes("Service Categories"));
+check("Editor can replace, save crop, and reset",
   editorSrc.includes("Replace Image") &&
-    editorSrc.includes("Save Position") &&
-    editorSrc.includes("Reset to Default"));
+    editorSrc.includes("Save Changes") &&
+    editorSrc.includes("Zoom") &&
+    editorSrc.includes("Move Left / Right") &&
+    editorSrc.includes("Move Up / Down") &&
+    editorSrc.includes("Reset"));
+check("Editor does not persist every slider movement",
+  editorSrc.includes("Save Changes") && !editorSrc.includes("Save Position"));
 check("Home page has no owner replace/reset controls",
   !homeSrc.includes("Replace Image") && !homeSrc.includes("Reset to Default"));
 check("Recent Projects stay on real portfolio photos",
@@ -145,12 +154,29 @@ const defaultHero = resolvePublicSiteImage({
   row: null,
 });
 check("Missing override keeps the default hero",
-  defaultHero.src === "/brand/illustrative/craftsman-hero.jpg" && !defaultHero.isOverride);
+  defaultHero.src === "/brand/illustrative/craftsman-hero.jpg" &&
+    !defaultHero.isOverride &&
+    defaultHero.objectZoom === PUBLIC_SITE_IMAGE_DEFAULT_ZOOM &&
+    defaultHero.objectPosition === PUBLIC_HOME_HERO_DEFAULT_POSITION);
 check("Category slots stay keyed to the real category name",
   categoryImageSlot("Doors & Locks") === "category:Doors & Locks" &&
     parseCategoryImageSlot("category:Doors & Locks") === "Doors & Locks");
 check("Object position formats as CSS percents",
   formatObjectPosition(70, 50) === "70% 50%");
+check("Invalid percents clamp to 0-100",
+  formatObjectPosition(-20, 140) === "0% 100%" && clampPercent(Number.NaN) === 50);
+check("Invalid zoom clamps to the safe 1-3 range",
+  clampObjectZoom(Number.NaN) === 1 &&
+    clampObjectZoom(-4) === 1 &&
+    clampObjectZoom(9) === 3 &&
+    clampObjectZoom(1.555) === 1.56);
+check("Default zoom does not add a CSS transform",
+  publicImageObjectStyle("70% 50%", 1).transform == null);
+check("Saved zoom becomes a scale transform",
+  publicImageObjectStyle("30% 60%", 1.5).transform === "scale(1.5)");
+check("Home public rendering consumes saved zoom",
+  homeSrc.includes("objectZoom={hero.objectZoom}") &&
+    homeSrc.includes("objectZoom={visual.objectZoom}"));
 
 const groups = [
   { category: "Doors & Locks", items: [] },
@@ -166,7 +192,9 @@ const presented = buildPublicHomeImagePresentation(groups, [
 ]);
 check("Only the overridden category image changes",
   presented.categories["Doors & Locks"]?.src === "/brand/projects/door-install.jpg" &&
-    presented.categories["Mounting & Hanging"]?.src === publicCategoryPhoto("Mounting & Hanging"));
+    presented.categories["Mounting & Hanging"]?.src === publicCategoryPhoto("Mounting & Hanging") &&
+    presented.hero.objectZoom === PUBLIC_SITE_IMAGE_DEFAULT_ZOOM &&
+    presented.categories["Mounting & Hanging"]?.objectZoom === PUBLIC_SITE_IMAGE_DEFAULT_ZOOM);
 check("Category labels are not invented to fill eight slots",
   Object.keys(presented.categories).join("|") === "Doors & Locks|Mounting & Hanging");
 
@@ -270,20 +298,47 @@ try {
     slot: PUBLIC_SITE_HERO_SLOT,
     imageUrl: "/brand/projects/lanai-porch.jpg",
     objectPosition: "30% 60%",
+    objectZoom: 1.45,
   });
   check("OWNER can replace the Home hero",
     savedHero.imageUrl === "/brand/projects/lanai-porch.jpg" &&
-      savedHero.objectPosition === "30% 60%");
+      savedHero.objectPosition === "30% 60%" &&
+      savedHero.objectZoom === 1.45);
+
+  const zoomedHero = await upsertPublicSiteImageOp(prisma, ownerA, {
+    page: PUBLIC_SITE_HOME_PAGE,
+    slot: PUBLIC_SITE_HERO_SLOT,
+    objectPosition: "15% 80%",
+    objectZoom: 99,
+  });
+  check("Home Hero zoom and x/y save, and invalid zoom clamps",
+    zoomedHero.objectPosition === "15% 80%" && zoomedHero.objectZoom === 3);
 
   const savedCategory = await upsertPublicSiteImageOp(prisma, adminA, {
     page: PUBLIC_SITE_HOME_PAGE,
     slot: categoryImageSlot("Doors & Locks"),
     imageUrl: "/brand/projects/door-install.jpg",
     objectPosition: "10% 90%",
+    objectZoom: 1.2,
   });
   check("ADMIN can replace one category image",
     savedCategory.slot === "category:Doors & Locks" &&
-      savedCategory.imageUrl === "/brand/projects/door-install.jpg");
+      savedCategory.imageUrl === "/brand/projects/door-install.jpg" &&
+      savedCategory.objectZoom === 1.2);
+
+  const heroAfterCategory = await prisma.publicSiteImage.findUnique({
+    where: {
+      businessId_page_slot: {
+        businessId: businessA.id,
+        page: PUBLIC_SITE_HOME_PAGE,
+        slot: PUBLIC_SITE_HERO_SLOT,
+      },
+    },
+  });
+  check("Category crop does not change the Home Hero crop",
+    heroAfterCategory?.objectPosition === "15% 80%" &&
+      heroAfterCategory?.objectZoom === 3 &&
+      savedCategory.objectPosition === "10% 90%");
 
   try {
     await upsertPublicSiteImageOp(prisma, ownerA, {
@@ -306,7 +361,12 @@ try {
   const loaded = buildPublicHomeImagePresentation(groups, aRows);
   check("Hero override is used on Home",
     loaded.hero.src === "/brand/projects/lanai-porch.jpg" &&
-      loaded.hero.objectPosition === "30% 60%");
+      loaded.hero.objectPosition === "15% 80%" &&
+      loaded.hero.objectZoom === 3);
+  check("Service-card positioning stays independent",
+    loaded.categories["Doors & Locks"]?.objectPosition === "10% 90%" &&
+      loaded.categories["Doors & Locks"]?.objectZoom === 1.2 &&
+      loaded.categories["Mounting & Hanging"]?.objectZoom === PUBLIC_SITE_IMAGE_DEFAULT_ZOOM);
   check("Untouched category keeps its default image",
     loaded.categories["Mounting & Hanging"]?.src === publicCategoryPhoto("Mounting & Hanging") &&
       loaded.categories["Doors & Locks"]?.src === "/brand/projects/door-install.jpg");

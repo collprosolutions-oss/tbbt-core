@@ -1,9 +1,14 @@
 import Image from "next/image";
+import {
+  PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
+  publicImageObjectStyle,
+} from "@/lib/public-site-images";
 
 export function PublicFittedImage({
   src,
   alt,
   objectPosition,
+  objectZoom = PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
   sizes,
   priority,
   className,
@@ -11,6 +16,7 @@ export function PublicFittedImage({
   src: string;
   alt: string;
   objectPosition: string;
+  objectZoom?: number;
   sizes: string;
   priority?: boolean;
   className?: string;
@@ -25,7 +31,7 @@ export function PublicFittedImage({
       priority={priority}
       unoptimized={remote}
       className={className ?? "object-cover"}
-      style={{ objectPosition }}
+      style={publicImageObjectStyle(objectPosition, objectZoom)}
     />
   );
 }

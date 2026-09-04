@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "PublicSiteImage" ADD COLUMN "objectZoom" DOUBLE PRECISION NOT NULL DEFAULT 1;

@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import {
   PUBLIC_SITE_HOME_PAGE,
   PUBLIC_SITE_IMAGE_STORAGE_UNAVAILABLE,
+  clampObjectZoom,
   formatObjectPosition,
   publicSiteImageErrorMessage,
   resetPublicSiteImageOp,
@@ -97,6 +98,7 @@ export async function repositionPublicSiteImage(
     const currentSrc = readString(formData, "currentSrc");
     const x = Number(readString(formData, "positionX"));
     const y = Number(readString(formData, "positionY"));
+    const zoom = Number(readString(formData, "objectZoom"));
 
     if (!slot) {
       return { error: "Choose an image slot to update." };
@@ -107,6 +109,7 @@ export async function repositionPublicSiteImage(
       slot,
       imageUrl: currentSrc || undefined,
       objectPosition: formatObjectPosition(x, y),
+      objectZoom: clampObjectZoom(zoom),
     });
     revalidatePublicSite(access.workspace.business.slug);
     return { message: "Image position saved." };

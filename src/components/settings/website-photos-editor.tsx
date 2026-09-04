@@ -1,6 +1,13 @@
 "use client";
 
-import { useActionState, useState, type MouseEvent } from "react";
+import {
+  useActionState,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   replacePublicSiteImage,
   repositionPublicSiteImage,
@@ -10,27 +17,75 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
+  PUBLIC_SITE_IMAGE_MAX_ZOOM,
+  PUBLIC_SITE_IMAGE_MIN_ZOOM,
   PUBLIC_SITE_IMAGE_STORAGE_UNAVAILABLE,
+  clampObjectZoom,
+  clampPercent,
+  publicImageObjectStyle,
   splitObjectPosition,
   type PublicSiteImageEditorSlot,
 } from "@/lib/public-site-images";
+import { cn } from "@/lib/utils";
 
 const emptyState: PublicSiteImageActionState = {};
+
+function previewFrameClass(slot: PublicSiteImageEditorSlot) {
+  if (slot.kind === "story") {
+    return "relative h-72 w-full overflow-hidden rounded-md border bg-[#05070c]";
+  }
+  if (slot.kind === "category") {
+    return slot.page === "home"
+      ? "relative h-[13.5rem] w-full overflow-hidden rounded-[6px] border bg-[#05070c]"
+      : "relative h-56 w-full overflow-hidden rounded-md border bg-[#05070c]";
+  }
+  return "relative h-[13rem] w-full overflow-hidden border bg-[#05070c] sm:h-[14.5rem]";
+}
+
+function previewHint(slot: PublicSiteImageEditorSlot) {
+  if (slot.kind === "story") {
+    return "Preview uses the About story photo frame.";
+  }
+  if (slot.kind === "category") {
+    return slot.page === "home"
+      ? "Preview uses the Home service-card frame."
+      : "Preview uses the Services category photo frame.";
+  }
+  if (slot.page === "home") {
+    return "Preview uses the same wide Home hero frame as the public website.";
+  }
+  return "Preview uses the public website hero frame.";
+}
 
 function SlotEditor({
   slot,
   businessId,
   storageConfigured,
   canEdit,
+  heading,
 }: {
   slot: PublicSiteImageEditorSlot;
   businessId: string;
   storageConfigured: boolean;
   canEdit: boolean;
+  heading?: string;
 }) {
   const start = splitObjectPosition(slot.objectPosition);
   const [x, setX] = useState(start.x);
   const [y, setY] = useState(start.y);
+  const [zoom, setZoom] = useState(clampObjectZoom(slot.objectZoom));
+  const [saved, setSaved] = useState({
+    x: start.x,
+    y: start.y,
+    zoom: clampObjectZoom(slot.objectZoom),
+  });
+  const [drag, setDrag] = useState<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
   const [replaceState, replaceAction, replacePending] = useActionState(
     replacePublicSiteImage,
     emptyState,
@@ -45,22 +100,80 @@ function SlotEditor({
   );
   const pending = replacePending || positionPending || resetPending;
   const error = replaceState.error || positionState.error || resetState.error;
-  const message = replaceState.message || positionState.message || resetState.message;
+  const message =
+    replaceState.message || positionState.message || resetState.message;
+  const unsaved = x !== saved.x || y !== saved.y || zoom !== saved.zoom;
+  const defaultPos = splitObjectPosition(slot.defaultPosition);
+  const previewStyle = publicImageObjectStyle(`${x}% ${y}%`, zoom);
 
-  function setFromPreview(event: MouseEvent<HTMLButtonElement>) {
+  const positionWasPending = useRef(false);
+  useEffect(() => {
+    if (
+      positionWasPending.current &&
+      !positionPending &&
+      positionState.message &&
+      !positionState.error
+    ) {
+      setSaved({ x, y, zoom });
+    }
+    positionWasPending.current = positionPending;
+  }, [positionPending, positionState.error, positionState.message, x, y, zoom]);
+
+  function applyFromPointer(event: ReactPointerEvent<HTMLButtonElement>, nextX: number, nextY: number) {
+    if (event.pointerId !== drag?.pointerId && drag) return;
+    setX(clampPercent(nextX));
+    setY(clampPercent(nextY));
+  }
+
+  function onPreviewPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
     if (!canEdit) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDrag({
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: x,
+      originY: y,
+    });
+  }
+
+  function onPreviewPointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!drag || event.pointerId !== drag.pointerId) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const nextX = Math.round(((event.clientX - rect.left) / rect.width) * 100);
-    const nextY = Math.round(((event.clientY - rect.top) / rect.height) * 100);
-    setX(Math.min(100, Math.max(0, nextX)));
-    setY(Math.min(100, Math.max(0, nextY)));
+    if (rect.width === 0 || rect.height === 0) return;
+    const moved =
+      Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY);
+    if (moved < 3) return;
+    const deltaX = ((event.clientX - drag.startX) / rect.width) * 100;
+    const deltaY = ((event.clientY - drag.startY) / rect.height) * 100;
+    applyFromPointer(event, drag.originX - deltaX, drag.originY - deltaY);
+  }
+
+  function onPreviewPointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const moved =
+      Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY);
+    if (moved < 3 && rect.width > 0 && rect.height > 0) {
+      const nextX = ((event.clientX - rect.left) / rect.width) * 100;
+      const nextY = ((event.clientY - rect.top) / rect.height) * 100;
+      setX(clampPercent(nextX));
+      setY(clampPercent(nextY));
+    }
+    setDrag(null);
+  }
+
+  function resetCropLocally() {
+    setX(defaultPos.x);
+    setY(defaultPos.y);
+    setZoom(clampObjectZoom(slot.defaultZoom));
   }
 
   return (
     <div className="space-y-3 rounded-xl border p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="font-medium">{slot.label}</p>
+          <p className="font-medium">{heading ?? slot.label}</p>
           <p className="text-sm text-muted-foreground">
             {slot.kind === "story"
               ? "About Our Story photograph. Layout stays the same."
@@ -71,48 +184,83 @@ function SlotEditor({
                     ? "Reviews hero photograph. Layout stays the same."
                     : slot.page === "services"
                       ? "Services hero photograph. Layout stays the same."
-                      : "Home hero photograph. Layout stays the same."
+                      : "Home hero photograph. Adjust zoom and position to match the live wide header."
                 : slot.page === "services"
                   ? "Services category photograph only. The category name and services do not change."
                   : "Home category card photograph only. The category name and services do not change."}
           </p>
         </div>
-        {slot.isOverride ? (
-          <p className="text-xs font-medium text-primary">Custom photo</p>
-        ) : (
-          <p className="text-xs text-muted-foreground">Default photo</p>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {unsaved ? (
+            <p className="text-xs font-medium text-amber-700">Unsaved changes</p>
+          ) : null}
+          {slot.isOverride ? (
+            <p className="text-xs font-medium text-primary">Custom photo</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">Default photo</p>
+          )}
+        </div>
       </div>
 
-      <button
-        type="button"
-        onClick={setFromPreview}
-        className="relative block aspect-[16/9] w-full overflow-hidden rounded-lg border bg-muted"
-        aria-label={`Preview ${slot.label}. Click to set the focal point.`}
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={slot.src}
-          alt=""
-          className="absolute inset-0 size-full object-cover"
-          style={{ objectPosition: `${x}% ${y}%` }}
-        />
-      </button>
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div>
+          <p className="mb-1 text-xs font-medium text-muted-foreground">Current image</p>
+          <div className="relative aspect-square max-h-56 w-full overflow-hidden rounded-lg border bg-muted">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={slot.src} alt="" className="size-full object-contain" />
+          </div>
+        </div>
+        <div>
+          <p className="mb-1 text-xs font-medium text-muted-foreground">Live preview</p>
+          <button
+            type="button"
+            onPointerDown={onPreviewPointerDown}
+            onPointerMove={onPreviewPointerMove}
+            onPointerUp={onPreviewPointerUp}
+            onPointerCancel={() => setDrag(null)}
+            className={cn(previewFrameClass(slot), canEdit && "cursor-grab active:cursor-grabbing")}
+            aria-label={`Preview ${slot.label}. Drag to reposition, or use the sliders.`}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={slot.src}
+              alt=""
+              className="absolute inset-0 size-full object-cover"
+              style={previewStyle}
+              draggable={false}
+            />
+          </button>
+          <p className="mt-1 text-xs text-muted-foreground">{previewHint(slot)}</p>
+        </div>
+      </div>
 
       {error ? (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
-      {message ? (
+      {message && !error ? (
         <Alert>
           <AlertDescription>{message}</AlertDescription>
         </Alert>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3">
         <label className="text-sm">
-          Horizontal
+          Zoom
+          <input
+            type="range"
+            min={PUBLIC_SITE_IMAGE_MIN_ZOOM}
+            max={PUBLIC_SITE_IMAGE_MAX_ZOOM}
+            step={0.05}
+            value={zoom}
+            disabled={!canEdit}
+            onChange={(event) => setZoom(clampObjectZoom(Number(event.target.value)))}
+            className="mt-1 w-full"
+          />
+        </label>
+        <label className="text-sm">
+          Move Left / Right
           <input
             type="range"
             min={0}
@@ -124,7 +272,7 @@ function SlotEditor({
           />
         </label>
         <label className="text-sm">
-          Vertical
+          Move Up / Down
           <input
             type="range"
             min={0}
@@ -161,16 +309,25 @@ function SlotEditor({
             <input type="hidden" name="currentSrc" value={slot.src} />
             <input type="hidden" name="positionX" value={String(x)} />
             <input type="hidden" name="positionY" value={String(y)} />
-            <Button type="submit" variant="outline" disabled={pending}>
-              {positionPending ? "Saving…" : "Save Position"}
+            <input type="hidden" name="objectZoom" value={String(zoom)} />
+            <Button type="submit" variant="outline" disabled={pending || !unsaved}>
+              {positionPending ? "Saving…" : "Save Changes"}
             </Button>
           </form>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={pending}
+            onClick={resetCropLocally}
+          >
+            Reset
+          </Button>
           <form action={resetAction}>
             <input type="hidden" name="businessId" value={businessId} />
             <input type="hidden" name="page" value={slot.page} />
             <input type="hidden" name="slot" value={slot.slot} />
             <Button type="submit" variant="ghost" disabled={pending || !slot.isOverride}>
-              {resetPending ? "Resetting…" : "Reset to Default"}
+              {resetPending ? "Resetting…" : "Restore default photo"}
             </Button>
           </form>
         </div>
@@ -179,6 +336,62 @@ function SlotEditor({
           Viewing only. Replacing website photos requires owner or admin access.
         </p>
       )}
+    </div>
+  );
+}
+
+function ServiceCategoryPicker({
+  slots,
+  businessId,
+  storageConfigured,
+  canEdit,
+}: {
+  slots: PublicSiteImageEditorSlot[];
+  businessId: string;
+  storageConfigured: boolean;
+  canEdit: boolean;
+}) {
+  const [openSlot, setOpenSlot] = useState(slots[0]?.slot ?? "");
+  const selected = slots.find((slot) => slot.slot === openSlot) ?? slots[0];
+
+  if (slots.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No service-category photo slots are available yet. Category photos stay linked
+        to the real catalog.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        {slots.map((slot) => (
+          <button
+            key={`${slot.page}:${slot.slot}`}
+            type="button"
+            onClick={() => setOpenSlot(slot.slot)}
+            className={cn(
+              "rounded-full border px-3 py-1 text-sm",
+              selected?.slot === slot.slot
+                ? "border-primary bg-primary/10 font-medium"
+                : "bg-background text-muted-foreground",
+            )}
+          >
+            {slot.category ?? slot.label}
+          </button>
+        ))}
+      </div>
+      {selected ? (
+        <SlotEditor
+          key={`${selected.page}:${selected.slot}`}
+          slot={selected}
+          heading={selected.category ?? selected.label}
+          businessId={businessId}
+          storageConfigured={storageConfigured}
+          canEdit={canEdit}
+        />
+      ) : null}
     </div>
   );
 }
@@ -194,72 +407,68 @@ export function WebsitePhotosEditor({
   storageConfigured: boolean;
   canEdit: boolean;
 }) {
-  const homeSlots = slots.filter((slot) => slot.page === "home");
-  const servicesSlots = slots.filter((slot) => slot.page === "services");
+  const homeHero = slots.find((slot) => slot.page === "home" && slot.kind === "hero");
+  const homeCategories = slots.filter(
+    (slot) => slot.page === "home" && slot.kind === "category",
+  );
+  const servicesHero = slots.find(
+    (slot) => slot.page === "services" && slot.kind === "hero",
+  );
+  const servicesCategories = slots.filter(
+    (slot) => slot.page === "services" && slot.kind === "category",
+  );
   const aboutSlots = slots.filter((slot) => slot.page === "about");
+  const reviewsSlots = slots.filter((slot) => slot.page === "reviews");
+  const otherHeroes = useMemo(
+    () => [servicesHero, ...aboutSlots, ...reviewsSlots].filter(Boolean) as PublicSiteImageEditorSlot[],
+    [aboutSlots, reviewsSlots, servicesHero],
+  );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {!storageConfigured ? (
         <Alert>
           <AlertDescription>{PUBLIC_SITE_IMAGE_STORAGE_UNAVAILABLE}</AlertDescription>
         </Alert>
       ) : null}
       <p className="text-sm text-muted-foreground">
-        Change Home, Services, and About marketing photos. Page layout, fonts, colors, and
-        Recent Projects stay as they are. Recent Projects come from real completed
-        work and cannot be replaced here.
+        Adjust how each website photo fits its slot. The original upload is kept.
+        Page layout, fonts, colors, service names, and Recent Projects stay as they
+        are. Recent Projects come from real completed work and cannot be replaced here.
       </p>
-      <PhotoPageSection
-        title="Home page"
-        empty="No Home photo slots are available."
-        slots={homeSlots}
-        businessId={businessId}
-        storageConfigured={storageConfigured}
-        canEdit={canEdit}
-      />
-      <PhotoPageSection
-        title="Services page"
-        empty="No Services photo slots are available yet. Category photos stay linked to the real catalog."
-        slots={servicesSlots}
-        businessId={businessId}
-        storageConfigured={storageConfigured}
-        canEdit={canEdit}
-      />
-      <PhotoPageSection
-        title="About page"
-        empty="No About photo slots are available."
-        slots={aboutSlots}
-        businessId={businessId}
-        storageConfigured={storageConfigured}
-        canEdit={canEdit}
-      />
-    </div>
-  );
-}
 
-function PhotoPageSection({
-  title,
-  empty,
-  slots,
-  businessId,
-  storageConfigured,
-  canEdit,
-}: {
-  title: string;
-  empty: string;
-  slots: PublicSiteImageEditorSlot[];
-  businessId: string;
-  storageConfigured: boolean;
-  canEdit: boolean;
-}) {
-  return (
-    <section className="space-y-3">
-      <h3 className="text-base font-semibold">{title}</h3>
-      {slots.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{empty}</p>
-      ) : (
-        slots.map((slot) => (
+      <section className="space-y-3">
+        <h3 className="text-base font-semibold">Home Hero</h3>
+        {homeHero ? (
+          <SlotEditor
+            slot={homeHero}
+            heading="Home Hero"
+            businessId={businessId}
+            storageConfigured={storageConfigured}
+            canEdit={canEdit}
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">No Home hero slot is available.</p>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-base font-semibold">Service Categories</h3>
+        <p className="text-sm text-muted-foreground">
+          Each card has its own crop. Changing one category does not change the Home
+          Hero or another card, even if they use the same source photo.
+        </p>
+        <ServiceCategoryPicker
+          slots={homeCategories}
+          businessId={businessId}
+          storageConfigured={storageConfigured}
+          canEdit={canEdit}
+        />
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-base font-semibold">Other website photos</h3>
+        {otherHeroes.map((slot) => (
           <SlotEditor
             key={`${slot.page}:${slot.slot}`}
             slot={slot}
@@ -267,8 +476,19 @@ function PhotoPageSection({
             storageConfigured={storageConfigured}
             canEdit={canEdit}
           />
-        ))
-      )}
-    </section>
+        ))}
+        {servicesCategories.length > 0 ? (
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold">Services page categories</h4>
+            <ServiceCategoryPicker
+              slots={servicesCategories}
+              businessId={businessId}
+              storageConfigured={storageConfigured}
+              canEdit={canEdit}
+            />
+          </div>
+        ) : null}
+      </section>
+    </div>
   );
 }

@@ -54,6 +54,7 @@ export default async function PublicReviewsPage({ params }: PageProps) {
           description="We take pride in our work. Public customer feedback will be shown here when it is available."
           imageSrc={images.hero.src}
           objectPosition={images.hero.objectPosition}
+          objectZoom={images.hero.objectZoom}
           phone={phone}
           smsHref={smsHref(phone)}
           requestHref={publicRequestPath(site.business.slug)}

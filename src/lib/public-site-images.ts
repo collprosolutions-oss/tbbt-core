@@ -55,6 +55,11 @@ export const PUBLIC_REVIEWS_HERO_DEFAULT_POSITION = "50% 40%";
 /** Keep the CollPro Reviews homeowners on the right, darker left for HTML text. */
 export const COLLPRO_REVIEWS_HERO_DEFAULT_POSITION = "80% 46%";
 
+/** 1 = current object-fit:cover appearance. Higher values zoom in. */
+export const PUBLIC_SITE_IMAGE_DEFAULT_ZOOM = 1;
+export const PUBLIC_SITE_IMAGE_MIN_ZOOM = 1;
+export const PUBLIC_SITE_IMAGE_MAX_ZOOM = 3;
+
 export function publicReviewsHeroDefaultSrc(slug?: string | null) {
   return publicReviewsHeroImage(slug);
 }
@@ -83,14 +88,24 @@ export type PublicSiteImageRow = {
   slot: string;
   imageUrl: string | null;
   objectPosition: string;
+  objectZoom?: number | null;
 };
 
 export type ResolvedPublicSiteImage = {
   src: string;
   objectPosition: string;
+  objectZoom: number;
   isOverride: boolean;
   usesCustomUpload: boolean;
 };
+
+export const PUBLIC_SITE_IMAGE_SELECT = {
+  page: true,
+  slot: true,
+  imageUrl: true,
+  objectPosition: true,
+  objectZoom: true,
+} as const;
 
 export type PublicHomeImagePresentation = {
   hero: ResolvedPublicSiteImage;
@@ -121,6 +136,8 @@ export type PublicSiteImageEditorSlot = {
   defaultPosition: string;
   src: string;
   objectPosition: string;
+  objectZoom: number;
+  defaultZoom: number;
   isOverride: boolean;
   usesCustomUpload: boolean;
 };
@@ -153,6 +170,35 @@ export function formatObjectPosition(x: number, y: number) {
   return `${clampPercent(x)}% ${clampPercent(y)}%`;
 }
 
+export function clampPercent(value: number) {
+  if (!Number.isFinite(value)) return 50;
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+export function clampObjectZoom(value: number) {
+  if (!Number.isFinite(value)) return PUBLIC_SITE_IMAGE_DEFAULT_ZOOM;
+  const rounded = Math.round(value * 100) / 100;
+  return Math.min(
+    PUBLIC_SITE_IMAGE_MAX_ZOOM,
+    Math.max(PUBLIC_SITE_IMAGE_MIN_ZOOM, rounded),
+  );
+}
+
+export function publicImageObjectStyle(
+  objectPosition: string,
+  objectZoom: number,
+): { objectPosition: string; transform?: string; transformOrigin?: string } {
+  const zoom = clampObjectZoom(objectZoom);
+  if (zoom === PUBLIC_SITE_IMAGE_DEFAULT_ZOOM) {
+    return { objectPosition };
+  }
+  return {
+    objectPosition,
+    transform: `scale(${zoom})`,
+    transformOrigin: objectPosition,
+  };
+}
+
 function positionTokenToPercent(token: string, fallback: number) {
   const normalized = token.trim().toLowerCase();
   if (normalized === "left" || normalized === "top") return 0;
@@ -163,20 +209,20 @@ function positionTokenToPercent(token: string, fallback: number) {
   return clampPercent(Number(match[1]));
 }
 
-function clampPercent(value: number) {
-  if (!Number.isFinite(value)) return 50;
-  return Math.min(100, Math.max(0, Math.round(value)));
-}
-
 export function resolvePublicSiteImage(input: {
   defaultSrc: string;
   defaultPosition: string;
+  defaultZoom?: number;
   row: PublicSiteImageRow | null | undefined;
 }): ResolvedPublicSiteImage {
+  const defaultZoom = clampObjectZoom(
+    input.defaultZoom ?? PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
+  );
   if (!input.row) {
     return {
       src: input.defaultSrc,
       objectPosition: input.defaultPosition,
+      objectZoom: defaultZoom,
       isOverride: false,
       usesCustomUpload: false,
     };
@@ -189,6 +235,7 @@ export function resolvePublicSiteImage(input: {
   return {
     src,
     objectPosition: input.row.objectPosition?.trim() || input.defaultPosition,
+    objectZoom: clampObjectZoom(input.row.objectZoom ?? defaultZoom),
     isOverride: true,
     usesCustomUpload: Boolean(candidate) && isManagedBlobUrl(candidate),
   };
@@ -247,12 +294,7 @@ export async function loadPublicHomeImages(
 ): Promise<PublicHomeImagePresentation> {
   const rows = await db.publicSiteImage.findMany({
     where: { businessId, page: PUBLIC_SITE_HOME_PAGE },
-    select: {
-      page: true,
-      slot: true,
-      imageUrl: true,
-      objectPosition: true,
-    },
+    select: PUBLIC_SITE_IMAGE_SELECT,
   });
   return buildPublicHomeImagePresentation(groups, rows);
 }
@@ -283,12 +325,7 @@ export async function loadPublicServicesImages(
 ): Promise<PublicServicesImagePresentation> {
   const rows = await db.publicSiteImage.findMany({
     where: { businessId, page: PUBLIC_SITE_SERVICES_PAGE },
-    select: {
-      page: true,
-      slot: true,
-      imageUrl: true,
-      objectPosition: true,
-    },
+    select: PUBLIC_SITE_IMAGE_SELECT,
   });
   return buildPublicServicesImagePresentation(groups, rows);
 }
@@ -301,12 +338,7 @@ export async function loadPublicAboutImages(
   const [rows, business] = await Promise.all([
     db.publicSiteImage.findMany({
       where: { businessId, page: PUBLIC_SITE_ABOUT_PAGE },
-      select: {
-        page: true,
-        slot: true,
-        imageUrl: true,
-        objectPosition: true,
-      },
+      select: PUBLIC_SITE_IMAGE_SELECT,
     }),
     slug
       ? Promise.resolve(null)
@@ -340,12 +372,7 @@ export async function loadPublicReviewsImages(
   const [rows, business] = await Promise.all([
     db.publicSiteImage.findMany({
       where: { businessId, page: PUBLIC_SITE_REVIEWS_PAGE },
-      select: {
-        page: true,
-        slot: true,
-        imageUrl: true,
-        objectPosition: true,
-      },
+      select: PUBLIC_SITE_IMAGE_SELECT,
     }),
     slug
       ? Promise.resolve(null)
@@ -382,6 +409,8 @@ export async function loadWebsitePhotoEditorSlots(
       defaultPosition: PUBLIC_HOME_HERO_DEFAULT_POSITION,
       src: home.hero.src,
       objectPosition: home.hero.objectPosition,
+      objectZoom: home.hero.objectZoom,
+      defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
       isOverride: home.hero.isOverride,
       usesCustomUpload: home.hero.usesCustomUpload,
     },
@@ -397,6 +426,8 @@ export async function loadWebsitePhotoEditorSlots(
         defaultPosition: PUBLIC_HOME_CATEGORY_DEFAULT_POSITION,
         src: resolved.src,
         objectPosition: resolved.objectPosition,
+        objectZoom: resolved.objectZoom,
+        defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
         isOverride: resolved.isOverride,
         usesCustomUpload: resolved.usesCustomUpload,
       };
@@ -411,6 +442,8 @@ export async function loadWebsitePhotoEditorSlots(
       defaultPosition: PUBLIC_SERVICES_HERO_DEFAULT_POSITION,
       src: services.hero.src,
       objectPosition: services.hero.objectPosition,
+      objectZoom: services.hero.objectZoom,
+      defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
       isOverride: services.hero.isOverride,
       usesCustomUpload: services.hero.usesCustomUpload,
     },
@@ -426,6 +459,8 @@ export async function loadWebsitePhotoEditorSlots(
         defaultPosition: PUBLIC_SERVICES_CATEGORY_DEFAULT_POSITION,
         src: resolved.src,
         objectPosition: resolved.objectPosition,
+        objectZoom: resolved.objectZoom,
+        defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
         isOverride: resolved.isOverride,
         usesCustomUpload: resolved.usesCustomUpload,
       };
@@ -440,6 +475,8 @@ export async function loadWebsitePhotoEditorSlots(
       defaultPosition: publicAboutHeroDefaultPosition(business?.slug),
       src: about.hero.src,
       objectPosition: about.hero.objectPosition,
+      objectZoom: about.hero.objectZoom,
+      defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
       isOverride: about.hero.isOverride,
       usesCustomUpload: about.hero.usesCustomUpload,
     },
@@ -453,6 +490,8 @@ export async function loadWebsitePhotoEditorSlots(
       defaultPosition: PUBLIC_ABOUT_STORY_DEFAULT_POSITION,
       src: about.story.src,
       objectPosition: about.story.objectPosition,
+      objectZoom: about.story.objectZoom,
+      defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
       isOverride: about.story.isOverride,
       usesCustomUpload: about.story.usesCustomUpload,
     },
@@ -466,6 +505,8 @@ export async function loadWebsitePhotoEditorSlots(
       defaultPosition: publicReviewsHeroDefaultPosition(business?.slug),
       src: reviews.hero.src,
       objectPosition: reviews.hero.objectPosition,
+      objectZoom: reviews.hero.objectZoom,
+      defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
       isOverride: reviews.hero.isOverride,
       usesCustomUpload: reviews.hero.usesCustomUpload,
     },
@@ -537,6 +578,7 @@ export async function upsertPublicSiteImageOp(
     slot: string;
     imageUrl?: string | null;
     objectPosition?: string;
+    objectZoom?: number;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
@@ -577,6 +619,9 @@ export async function upsertPublicSiteImageOp(
     input.objectPosition?.trim() ||
     previous?.objectPosition ||
     defaultPositionFor(input.page, input.slot);
+  const nextZoom = clampObjectZoom(
+    input.objectZoom ?? previous?.objectZoom ?? PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
+  );
 
   const saved = await db.publicSiteImage.upsert({
     where: {
@@ -592,11 +637,13 @@ export async function upsertPublicSiteImageOp(
       slot: input.slot,
       imageUrl: nextUrl,
       objectPosition: nextPosition,
+      objectZoom: nextZoom,
       updatedByMembershipId: access.workspace.membership.id,
     },
     update: {
       imageUrl: nextUrl,
       objectPosition: nextPosition,
+      objectZoom: nextZoom,
       updatedByMembershipId: access.workspace.membership.id,
     },
   });
@@ -615,9 +662,17 @@ export async function upsertPublicSiteImageOp(
     settingArea: "website-photos",
     settingKey: `${input.page}:${input.slot}`,
     previousValue: previous
-      ? { imageUrl: previous.imageUrl, objectPosition: previous.objectPosition }
+      ? {
+          imageUrl: previous.imageUrl,
+          objectPosition: previous.objectPosition,
+          objectZoom: previous.objectZoom,
+        }
       : null,
-    newValue: { imageUrl: saved.imageUrl, objectPosition: saved.objectPosition },
+    newValue: {
+      imageUrl: saved.imageUrl,
+      objectPosition: saved.objectPosition,
+      objectZoom: saved.objectZoom,
+    },
   });
 
   return saved;
@@ -657,6 +712,7 @@ export async function resetPublicSiteImageOp(
     previousValue: {
       imageUrl: existing.imageUrl,
       objectPosition: existing.objectPosition,
+      objectZoom: existing.objectZoom,
     },
     newValue: null,
   });
