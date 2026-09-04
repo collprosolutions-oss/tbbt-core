@@ -313,7 +313,7 @@ try {
   );
   check(
     "invoice checkout does not pin an explicit payment_method_types allowlist",
-    !adapterSrc.includes("payment_method_types: ["),
+    !/\n\s*payment_method_types:/.test(adapterSrc),
   );
 
   const businessA = await seedBusiness("Alpha Payments");
