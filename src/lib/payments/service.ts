@@ -217,7 +217,7 @@ export async function createCustomerInvoiceCheckout(
     amountCents,
     currency: "usd",
     description: `Invoice ${invoiceNumberFromId(invoice.id)}`,
-    successUrl: `${appUrl}/p/${token}?checkout=return`,
+    successUrl: `${appUrl}/p/${token}?checkout=return&session_id={CHECKOUT_SESSION_ID}`,
     cancelUrl: `${appUrl}/p/${token}?checkout=cancelled`,
   });
 }
@@ -285,4 +285,100 @@ export async function applyVerifiedCheckoutPayment(
     return { applied: false, reason: "already_paid" };
   }
   return { applied: true, reason: "paid" };
+}
+
+export type ReconcileCheckoutResult = {
+  applied: boolean;
+  reason: string;
+};
+
+/**
+ * Outbound Stripe API lookup for a Checkout Session that already succeeded.
+ * Used when inbound webhooks never reached TBBT (Preview Vercel Authentication)
+ * and when the owner or customer refreshes after a completed payment.
+ * Never marks paid from a browser query flag alone.
+ */
+export async function reconcileStripeCheckoutPayment(
+  db: PaymentsClient,
+  businessId: string,
+  invoiceId: string,
+  checkoutSessionId?: string | null,
+  provider: PaymentProvider = getPaymentProvider(),
+): Promise<ReconcileCheckoutResult> {
+  const invoice = await db.invoice.findFirst({
+    where: { id: invoiceId, businessId },
+    select: { id: true, status: true, total: true },
+  });
+  if (!invoice) {
+    return { applied: false, reason: "invoice_not_found" };
+  }
+  if (invoice.status === "PAID") {
+    return { applied: false, reason: "already_paid" };
+  }
+  if (invoice.status !== "SENT") {
+    return { applied: false, reason: "invoice_not_sent" };
+  }
+
+  const account = await db.businessPaymentAccount.findUnique({
+    where: { businessId },
+    select: { stripeAccountId: true },
+  });
+  if (!account) {
+    return { applied: false, reason: "no_payment_account" };
+  }
+
+  let payment: VerifiedCheckoutPayment | null = null;
+  try {
+    payment = await provider.findPaidInvoiceCheckout({
+      connectedAccountId: account.stripeAccountId,
+      invoiceId: invoice.id,
+      businessId,
+      amountCents: invoiceAmountToCents(invoice.total),
+      checkoutSessionId,
+    });
+  } catch {
+    return { applied: false, reason: "lookup_failed" };
+  }
+  if (!payment) {
+    return { applied: false, reason: "no_paid_checkout" };
+  }
+
+  return applyVerifiedCheckoutPayment(db, payment);
+}
+
+/**
+ * Token-scoped reconcile for the customer portal. Resolves the business and
+ * invoice from Job.projectToken so portal routes never take a client
+ * businessId.
+ */
+export async function reconcileProjectTokenCheckoutPayment(
+  db: PaymentsClient,
+  token: string,
+  checkoutSessionId?: string | null,
+  provider: PaymentProvider = getPaymentProvider(),
+): Promise<ReconcileCheckoutResult> {
+  const job = token
+    ? await db.job.findUnique({
+        where: { projectToken: token },
+        select: {
+          businessId: true,
+          invoices: {
+            take: 1,
+            orderBy: { createdAt: "asc" },
+            select: { id: true },
+          },
+        },
+      })
+    : null;
+  const invoice = job?.invoices[0] ?? null;
+  if (!job || !invoice) {
+    return { applied: false, reason: "invoice_not_found" };
+  }
+  return reconcileStripeCheckoutPayment(
+    db,
+    job.businessId,
+    invoice.id,
+    checkoutSessionId,
+    provider,
+  );
 }

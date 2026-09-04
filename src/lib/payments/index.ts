@@ -19,6 +19,8 @@ export { invoiceAmountToCents, invoiceDueCents } from "@/lib/payments/money";
 export { getPaymentProvider, stripeConnectAvailable } from "@/lib/payments/provider";
 export {
   applyVerifiedCheckoutPayment,
+  reconcileProjectTokenCheckoutPayment,
+  reconcileStripeCheckoutPayment,
   createCustomerInvoiceCheckout,
   getBusinessPaymentStatus,
   PaymentError,

@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { InvoiceDocument } from "@/components/invoices/invoice-document";
 import { InvoicePreviewToolbar } from "@/components/invoices/invoice-preview-toolbar";
 import { loadInvoiceDocumentForProjectToken } from "@/lib/invoice-document";
+import { reconcileProjectTokenCheckoutPayment } from "@/lib/payments";
+import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
   title: "Invoice",
@@ -13,6 +15,7 @@ export default async function CustomerInvoicePage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
+  await reconcileProjectTokenCheckoutPayment(prisma, token);
   const document = await loadInvoiceDocumentForProjectToken(token);
 
   if (!document) {

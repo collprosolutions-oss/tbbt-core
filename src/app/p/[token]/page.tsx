@@ -24,6 +24,7 @@ import {
 import {
   getBusinessPaymentStatus,
   invoiceDueCents,
+  reconcileProjectTokenCheckoutPayment,
   shouldShowPayInvoice,
 } from "@/lib/payments";
 import { prisma } from "@/lib/prisma";
@@ -59,7 +60,7 @@ export default async function CustomerProjectPortalPage({
   searchParams,
 }: {
   params: Promise<{ token: string }>;
-  searchParams: Promise<{ checkout?: string }>;
+  searchParams: Promise<{ checkout?: string; session_id?: string }>;
 }) {
   const { token } = await params;
   const query = await searchParams;
@@ -104,7 +105,7 @@ export default async function CustomerProjectPortalPage({
             },
           },
           invoices: {
-            select: { status: true, total: true, paidAt: true },
+            select: { id: true, status: true, total: true, paidAt: true },
             take: 1,
             orderBy: { createdAt: "asc" },
           },
@@ -149,7 +150,20 @@ export default async function CustomerProjectPortalPage({
     );
   }
 
-  const invoice = job.invoices[0] ?? null;
+  if (job.invoices[0]?.status === "SENT") {
+    await reconcileProjectTokenCheckoutPayment(
+      prisma,
+      token,
+      query.session_id,
+    );
+  }
+
+  const invoice = job.invoices[0]
+    ? await prisma.invoice.findFirst({
+        where: { id: job.invoices[0].id, job: { projectToken: token } },
+        select: { id: true, status: true, total: true, paidAt: true },
+      })
+    : null;
   const payment = invoice
     ? await getBusinessPaymentStatus(prisma, job.business.id)
     : null;

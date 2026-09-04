@@ -16,12 +16,14 @@ export type FakeAccountState = {
 export type FakeCheckoutSession = CheckoutSessionResult & {
   invoiceId: string;
   businessId: string;
+  paid: boolean;
 };
 
 export type FakePaymentProvider = PaymentProvider & {
   accounts: Map<string, FakeAccountState>;
   checkouts: FakeCheckoutSession[];
   setChargesEnabled(accountId: string, chargesEnabled: boolean): void;
+  completeCheckout(sessionId: string): void;
 };
 
 export function createFakePaymentProvider(): FakePaymentProvider {
@@ -40,6 +42,12 @@ export function createFakePaymentProvider(): FakePaymentProvider {
         existing.chargesEnabled = chargesEnabled;
       } else {
         accounts.set(accountId, { accountId, chargesEnabled });
+      }
+    },
+    completeCheckout(sessionId) {
+      const session = checkouts.find((checkout) => checkout.id === sessionId);
+      if (session) {
+        session.paid = true;
       }
     },
     async createConnectedAccount(input: CreateConnectedAccountInput) {
@@ -83,9 +91,37 @@ export function createFakePaymentProvider(): FakePaymentProvider {
         currency: input.currency,
         invoiceId: input.invoiceId,
         businessId: input.businessId,
+        paid: false,
       };
       checkouts.push(result);
       return result;
+    },
+    async findPaidInvoiceCheckout(input) {
+      const matchesInvoice = (checkout: FakeCheckoutSession) =>
+        checkout.paid &&
+        checkout.connectedAccountId === input.connectedAccountId &&
+        checkout.invoiceId === input.invoiceId &&
+        checkout.businessId === input.businessId &&
+        checkout.amountCents === input.amountCents;
+      const session =
+        (input.checkoutSessionId
+          ? checkouts.find(
+              (checkout) =>
+                checkout.id === input.checkoutSessionId && matchesInvoice(checkout),
+            )
+          : undefined) ?? checkouts.find(matchesInvoice);
+      if (!session) {
+        return null;
+      }
+      return {
+        invoiceId: session.invoiceId,
+        businessId: session.businessId,
+        connectedAccountId: session.connectedAccountId,
+        amountCents: session.amountCents,
+        currency: session.currency,
+        paymentReference: session.id,
+        paymentStatus: "paid",
+      };
     },
     parseCheckoutPaymentEvent,
   };

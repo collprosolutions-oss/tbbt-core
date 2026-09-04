@@ -5,6 +5,13 @@ const SUCCESSFUL_CHECKOUT_EVENTS = new Set([
   "checkout.session.async_payment_succeeded",
 ]);
 
+function normalizeCheckoutEventType(type: string | undefined) {
+  if (!type) {
+    return "";
+  }
+  return type.startsWith("v1.") ? type.slice(3) : type;
+}
+
 function readMetadata(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object") {
     return {};
@@ -26,7 +33,8 @@ export function parseCheckoutPaymentEvent(
     account?: string;
     data?: { object?: Record<string, unknown> };
   };
-  if (!record.type || !SUCCESSFUL_CHECKOUT_EVENTS.has(record.type)) {
+  const eventType = normalizeCheckoutEventType(record.type);
+  if (!eventType || !SUCCESSFUL_CHECKOUT_EVENTS.has(eventType)) {
     return null;
   }
   const session = record.data?.object;
@@ -36,7 +44,7 @@ export function parseCheckoutPaymentEvent(
   const metadata = readMetadata(session.metadata);
   const paymentStatus =
     typeof session.payment_status === "string" ? session.payment_status : "";
-  if (record.type === "checkout.session.completed" && paymentStatus !== "paid") {
+  if (eventType === "checkout.session.completed" && paymentStatus !== "paid") {
     return null;
   }
   const amountCents =
@@ -48,10 +56,11 @@ export function parseCheckoutPaymentEvent(
       : typeof session.id === "string"
         ? session.id
         : "";
+  const connectedAccountId = record.account || metadata.connectedAccountId;
   if (
     !metadata.invoiceId ||
     !metadata.businessId ||
-    !record.account ||
+    !connectedAccountId ||
     !Number.isInteger(amountCents) ||
     !currency ||
     !paymentIntent
@@ -61,7 +70,7 @@ export function parseCheckoutPaymentEvent(
   return {
     invoiceId: metadata.invoiceId,
     businessId: metadata.businessId,
-    connectedAccountId: record.account,
+    connectedAccountId,
     amountCents,
     currency,
     paymentReference: paymentIntent,

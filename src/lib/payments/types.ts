@@ -70,6 +70,13 @@ export type PaymentProvider = {
   createInvoiceCheckoutSession(
     input: CreateInvoiceCheckoutInput,
   ): Promise<CheckoutSessionResult>;
+  findPaidInvoiceCheckout(input: {
+    connectedAccountId: string;
+    invoiceId: string;
+    businessId: string;
+    amountCents: number;
+    checkoutSessionId?: string | null;
+  }): Promise<VerifiedCheckoutPayment | null>;
   parseCheckoutPaymentEvent(event: unknown): VerifiedCheckoutPayment | null;
 };
 

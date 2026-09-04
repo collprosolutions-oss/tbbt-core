@@ -35,6 +35,8 @@ const {
   createCustomerInvoiceCheckout,
   getBusinessPaymentStatus,
   PaymentError,
+  reconcileProjectTokenCheckoutPayment,
+  reconcileStripeCheckoutPayment,
   shouldShowPayInvoice,
   startStripeConnectOnboarding,
 } = await import("@/lib/payments/service");
@@ -106,6 +108,9 @@ function checkoutEvent(input) {
         metadata: {
           invoiceId: input.invoiceId,
           businessId: input.businessId,
+          ...(input.connectedAccountId
+            ? { connectedAccountId: input.connectedAccountId }
+            : {}),
         },
       },
     },
@@ -301,9 +306,44 @@ try {
   check("adapter uses explainMerchantReadiness", adapterSrc.includes("explainMerchantReadiness"));
   check("adapter falls back to v1 retrieve if v2 fails", adapterSrc.includes("stripe.accounts.retrieve"));
   check("adapter retrieves requirements with merchant config", adapterSrc.includes('"requirements"'));
+  const serviceSrc = readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8");
+  const portalInvoiceSrc = readFileSync(
+    new URL("../src/app/p/[token]/invoice/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const ownerInvoiceSrc = readFileSync(
+    new URL("../src/app/(app)/invoices/[invoiceId]/page.tsx", import.meta.url),
+    "utf8",
+  );
   check("portal uses shouldShowPayInvoice", portalSrc.includes("shouldShowPayInvoice"));
   check("portal renders PayInvoiceButton only when allowed", portalSrc.includes("showPayInvoice ? <PayInvoiceButton"));
   check("portal success return does not mark paid", !portalSrc.includes("applyVerifiedCheckoutPayment"));
+  check(
+    "portal reconciles a paid Stripe checkout server-side",
+    portalSrc.includes("reconcileProjectTokenCheckoutPayment"),
+  );
+  check(
+    "portal invoice document reconciles server-side",
+    portalInvoiceSrc.includes("reconcileProjectTokenCheckoutPayment"),
+  );
+  check(
+    "owner invoice page reconciles server-side",
+    ownerInvoiceSrc.includes("reconcileStripeCheckoutPayment"),
+  );
+  check(
+    "success URL includes Checkout session id for reconcile",
+    serviceSrc.includes("session_id={CHECKOUT_SESSION_ID}"),
+  );
+  check(
+    "portal source has no businessId identifier",
+    portalSrc
+      .split("\n")
+      .filter((line) => {
+        const trimmed = line.trim();
+        return trimmed && !trimmed.startsWith("*") && !trimmed.startsWith("//") && !trimmed.startsWith("/*");
+      })
+      .every((line) => !line.includes("businessId")),
+  );
   check("pay route does not read amount from the request", !/searchParams|formData|json\(\)|amount/.test(payRouteSrc.replace(/createCustomerInvoiceCheckout[\s\S]+/, "")));
   check("pay route creates checkout from the token only", payRouteSrc.includes("createCustomerInvoiceCheckout(prisma, token)"));
   check("webhook verifies the Stripe signature", webhookSrc.includes("constructStripeWebhookEvent"));
@@ -444,6 +484,41 @@ try {
   check("Business A and B accounts are different", accountA.stripeAccountId !== accountB.stripeAccountId);
   check("onboarding for B does not reuse A's account", onboardB.url.includes(accountB.stripeAccountId));
 
+  console.log("\nTEST — Checkout event parsing");
+  check(
+    "parse without event.account uses metadata.connectedAccountId",
+    parseCheckoutPaymentEvent(
+      checkoutEvent({
+        invoiceId: "inv_meta",
+        businessId: "biz_meta",
+        amountCents: 37500,
+        connectedAccountId: "acct_from_metadata",
+      }),
+    )?.connectedAccountId === "acct_from_metadata",
+  );
+  check(
+    "parse without account and without metadata connectedAccountId is ignored",
+    parseCheckoutPaymentEvent(
+      checkoutEvent({
+        invoiceId: "inv_meta",
+        businessId: "biz_meta",
+        amountCents: 37500,
+      }),
+    ) === null,
+  );
+  check(
+    "v1. checkout event type is accepted",
+    parseCheckoutPaymentEvent({
+      ...checkoutEvent({
+        account: "acct_v1",
+        invoiceId: "inv_v1",
+        businessId: "biz_v1",
+        amountCents: 37500,
+      }),
+      type: "v1.checkout.session.completed",
+    })?.paymentStatus === "paid",
+  );
+
   console.log("\nTEST — Webhook reconciliation");
   const paid = await applyVerifiedCheckoutPayment(
     prisma,
@@ -557,6 +632,58 @@ try {
     ),
   );
   check("wrong business metadata is rejected", wrongBusiness.reason === "business_mismatch");
+
+  console.log("\nTEST — Server-side Stripe checkout reconcile");
+  const reconcileInvoice = await seedSentInvoice({
+    businessId: businessA.business.id,
+    customerId: businessA.customer.id,
+    propertyId: businessA.property.id,
+    total: "375.00",
+  });
+  const reconcileSession = await createCustomerInvoiceCheckout(
+    prisma,
+    reconcileInvoice.token,
+    provider,
+    { appUrl: "http://payments.test" },
+  );
+  const beforeComplete = await reconcileStripeCheckoutPayment(
+    prisma,
+    businessA.business.id,
+    reconcileInvoice.invoice.id,
+    reconcileSession.id,
+    provider,
+  );
+  check(
+    "unpaid checkout cannot be reconciled",
+    beforeComplete.reason === "no_paid_checkout",
+  );
+  provider.completeCheckout(reconcileSession.id);
+  const reconciled = await reconcileProjectTokenCheckoutPayment(
+    prisma,
+    reconcileInvoice.token,
+    reconcileSession.id,
+    provider,
+  );
+  const afterReconcile = await prisma.invoice.findUnique({
+    where: { id: reconcileInvoice.invoice.id },
+  });
+  check("token reconcile applies a paid Stripe checkout", reconciled.applied === true);
+  check("reconciled invoice is PAID", afterReconcile.status === "PAID");
+  check("reconciled amount due is $0", invoiceDueCents(afterReconcile.status, afterReconcile.total) === 0);
+  check("reconciled method is STRIPE", afterReconcile.paymentMethod === "STRIPE");
+  const replayReconcile = await reconcileStripeCheckoutPayment(
+    prisma,
+    businessA.business.id,
+    reconcileInvoice.invoice.id,
+    reconcileSession.id,
+    provider,
+  );
+  const afterReplay = await prisma.invoice.findUnique({
+    where: { id: reconcileInvoice.invoice.id },
+  });
+  check("second reconcile is idempotent", replayReconcile.reason === "already_paid");
+  check("second reconcile does not create another payment write", afterReplay.paymentReference === afterReconcile.paymentReference);
+  check("second reconcile remains PAID", afterReplay.status === "PAID");
 
   console.log("\nTEST — Manual Mark Paid remains available");
   requireBusinessCapability(accessA, CAPABILITIES.MANAGE_INVOICES);

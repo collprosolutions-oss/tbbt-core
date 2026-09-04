@@ -10,6 +10,7 @@ import type {
   CreateInvoiceCheckoutInput,
   CreateOnboardingLinkInput,
   PaymentProvider,
+  VerifiedCheckoutPayment,
 } from "@/lib/payments/types";
 import { PAYMENT_PROVIDER_STRIPE } from "@/lib/payments/types";
 
@@ -197,11 +198,13 @@ export function createStripePaymentProvider(): PaymentProvider {
           metadata: {
             invoiceId: input.invoiceId,
             businessId: input.businessId,
+            connectedAccountId: input.connectedAccountId,
           },
           payment_intent_data: {
             metadata: {
               invoiceId: input.invoiceId,
               businessId: input.businessId,
+              connectedAccountId: input.connectedAccountId,
             },
           },
         },
@@ -217,6 +220,101 @@ export function createStripePaymentProvider(): PaymentProvider {
         amountCents: input.amountCents,
         currency: input.currency,
       };
+    },
+
+    async findPaidInvoiceCheckout(input) {
+      const stripe = requireStripe();
+      const matchesInvoice = (session: Stripe.Checkout.Session) => {
+        const metadata = session.metadata ?? {};
+        return (
+          session.payment_status === "paid" &&
+          metadata.invoiceId === input.invoiceId &&
+          metadata.businessId === input.businessId &&
+          session.amount_total === input.amountCents &&
+          session.currency === "usd"
+        );
+      };
+      const toVerified = (
+        session: Stripe.Checkout.Session,
+      ): VerifiedCheckoutPayment | null => {
+        if (!matchesInvoice(session)) {
+          return null;
+        }
+        const paymentIntent =
+          typeof session.payment_intent === "string"
+            ? session.payment_intent
+            : session.id;
+        return {
+          invoiceId: input.invoiceId,
+          businessId: input.businessId,
+          connectedAccountId: input.connectedAccountId,
+          amountCents: input.amountCents,
+          currency: "usd",
+          paymentReference: paymentIntent,
+          paymentStatus: "paid",
+        };
+      };
+
+      if (input.checkoutSessionId) {
+        try {
+          const session = await stripe.checkout.sessions.retrieve(
+            input.checkoutSessionId,
+            undefined,
+            { stripeAccount: input.connectedAccountId },
+          );
+          const verified = toVerified(session);
+          if (verified) {
+            return verified;
+          }
+        } catch {
+          // Fall through to a recent-session list for webhook-missed payments.
+        }
+      }
+
+      try {
+        const listed = await stripe.checkout.sessions.list(
+          { limit: 100, status: "complete" },
+          { stripeAccount: input.connectedAccountId },
+        );
+        for (const session of listed.data) {
+          const verified = toVerified(session);
+          if (verified) {
+            return verified;
+          }
+        }
+      } catch {
+        // Continue to PaymentIntent lookup for webhook-missed payments.
+      }
+
+      try {
+        const intents = await stripe.paymentIntents.list(
+          { limit: 100 },
+          { stripeAccount: input.connectedAccountId },
+        );
+        for (const intent of intents.data) {
+          const metadata = intent.metadata ?? {};
+          if (
+            intent.status === "succeeded" &&
+            metadata.invoiceId === input.invoiceId &&
+            metadata.businessId === input.businessId &&
+            intent.amount === input.amountCents &&
+            intent.currency === "usd"
+          ) {
+            return {
+              invoiceId: input.invoiceId,
+              businessId: input.businessId,
+              connectedAccountId: input.connectedAccountId,
+              amountCents: input.amountCents,
+              currency: "usd",
+              paymentReference: intent.id,
+              paymentStatus: "paid",
+            };
+          }
+        }
+      } catch {
+        return null;
+      }
+      return null;
     },
 
     parseCheckoutPaymentEvent,
