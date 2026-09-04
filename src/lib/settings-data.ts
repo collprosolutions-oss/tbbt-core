@@ -15,6 +15,7 @@ import {
   CHANNELS_DISCONNECTED_MESSAGE,
 } from "@/lib/marketing";
 import { PLATFORMS_DISCONNECTED_MESSAGE } from "@/lib/reviews";
+import { isBusinessStorageConfigured } from "@/lib/business-storage";
 import {
   DEFAULT_SETTINGS_PREFERENCES,
   buildIntegrationCards,
@@ -247,7 +248,7 @@ export async function loadSettingsSnapshot(
       .map((row) => row.vendor)
       .filter((vendor): vendor is string => Boolean(vendor)),
     emailDeliveryConfigured,
-    storageConfigured: isBlobStorageConfigured(),
+    storageConfigured: isBusinessStorageConfigured() || isBlobStorageConfigured(),
     paymentMethods: PAYMENT_METHODS.map((method) => ({
       value: method.value,
       label: method.label,

@@ -484,7 +484,7 @@ export function buildIntegrationCards(input: {
       label: "File storage",
       status: input.storageConfigured ? "connected" : "not_connected",
       detail: input.storageConfigured
-        ? "File storage is configured for job photos and receipts. Credentials are not shown."
+        ? "Platform file storage is configured. Credentials are not shown."
         : "File storage is not configured.",
     },
   ];
