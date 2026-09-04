@@ -26,6 +26,12 @@ const ACCOUNT_READINESS_INCLUDE = [
   "requirements",
 ] as const;
 
+/** BNPL methods TBBT does not offer on customer invoice Checkout. */
+export const INVOICE_CHECKOUT_EXCLUDED_PAYMENT_METHODS = [
+  "affirm",
+  "klarna",
+] as const;
+
 function v1RequirementKeys(
   requirements: Stripe.Account.Requirements | null | undefined,
   field: "currently_due" | "past_due" | "pending_verification",
@@ -179,6 +185,9 @@ export function createStripePaymentProvider(): PaymentProvider {
           ],
           success_url: input.successUrl,
           cancel_url: input.cancelUrl,
+          excluded_payment_method_types: [
+            ...INVOICE_CHECKOUT_EXCLUDED_PAYMENT_METHODS,
+          ],
           metadata: {
             invoiceId: input.invoiceId,
             businessId: input.businessId,

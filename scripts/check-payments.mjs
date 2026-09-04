@@ -305,6 +305,16 @@ try {
   check("pay route creates checkout from the token only", payRouteSrc.includes("createCustomerInvoiceCheckout(prisma, token)"));
   check("webhook verifies the Stripe signature", webhookSrc.includes("constructStripeWebhookEvent"));
   check("webhook applies only a parsed checkout payment", webhookSrc.includes("parseCheckoutPaymentEvent"));
+  check(
+    "invoice checkout excludes Affirm and Klarna",
+    adapterSrc.includes("excluded_payment_method_types") &&
+      adapterSrc.includes('"affirm"') &&
+      adapterSrc.includes('"klarna"'),
+  );
+  check(
+    "invoice checkout does not pin an explicit payment_method_types allowlist",
+    !adapterSrc.includes("payment_method_types:"),
+  );
 
   const businessA = await seedBusiness("Alpha Payments");
   const businessB = await seedBusiness("Beta Payments");
