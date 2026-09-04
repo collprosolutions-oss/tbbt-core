@@ -44,6 +44,7 @@ const {
   parseCategoryImageSlot,
   publicImageObjectStyle,
   resolvePublicSiteImage,
+  resolveSupportedImageMimeType,
   resetPublicSiteImageOp,
   upsertPublicSiteImageOp,
 } = await import("@/lib/public-site-images");
@@ -146,6 +147,23 @@ check("Private job photos are not auto-promoted into Home slots",
     !actionSrc.includes("uploadJobPhoto"));
 check("Browser businessId is not authorization proof",
   actionSrc.includes("assertSettingsBusinessScope"));
+check("Replace Image stays disabled until a file is chosen",
+  editorSrc.includes("canReplace") &&
+    editorSrc.includes("onFileSelected") &&
+    editorSrc.includes("createObjectURL"));
+check("Editor accepts JPEG PNG and WebP from the computer",
+  editorSrc.includes(".jpg,.jpeg,.png,.webp") &&
+    editorSrc.includes("JPEG, PNG, or WebP"));
+const nextConfigSrc = readRepo("next.config.ts");
+check("Server Action body limit allows the existing 4 MB photo cap",
+  nextConfigSrc.includes('bodySizeLimit: "4.5mb"'));
+check("JPG alias and filename extensions resolve to supported types",
+  resolveSupportedImageMimeType({ type: "image/jpg", name: "hero.jpg" }) === "image/jpeg" &&
+    resolveSupportedImageMimeType({ type: "", name: "card.PNG" }) === "image/png" &&
+    resolveSupportedImageMimeType({ type: "image/webp", name: "wall.webp" }) === "image/webp");
+check("Invalid file types are rejected before upload",
+  resolveSupportedImageMimeType({ type: "application/pdf", name: "notes.pdf" }) == null &&
+    resolveSupportedImageMimeType({ type: "text/plain", name: "readme.txt" }) == null);
 
 console.log("\nPURE — Slot mapping and defaults");
 const defaultHero = resolvePublicSiteImage({
@@ -314,6 +332,41 @@ try {
   check("Home Hero zoom and x/y save, and invalid zoom clamps",
     zoomedHero.objectPosition === "15% 80%" && zoomedHero.objectZoom === 3);
 
+  const replacedHero = await upsertPublicSiteImageOp(prisma, ownerA, {
+    page: PUBLIC_SITE_HOME_PAGE,
+    slot: PUBLIC_SITE_HERO_SLOT,
+    imageUrl: "/brand/projects/closet.jpg",
+  });
+  check("Replacing the hero image keeps the saved crop metadata",
+    replacedHero.imageUrl === "/brand/projects/closet.jpg" &&
+      replacedHero.objectPosition === "15% 80%" &&
+      replacedHero.objectZoom === 3);
+
+  try {
+    await upsertPublicSiteImageOp(prisma, ownerA, {
+      page: PUBLIC_SITE_HOME_PAGE,
+      slot: PUBLIC_SITE_HERO_SLOT,
+      imageUrl: "https://evil.example/not-allowed.jpg",
+    });
+    check("Failed replacement leaves the previous hero image intact", false);
+  } catch (error) {
+    const stillHero = await prisma.publicSiteImage.findUnique({
+      where: {
+        businessId_page_slot: {
+          businessId: businessA.id,
+          page: PUBLIC_SITE_HOME_PAGE,
+          slot: PUBLIC_SITE_HERO_SLOT,
+        },
+      },
+    });
+    check(
+      "Failed replacement leaves the previous hero image intact",
+      error instanceof PublicSiteImageError &&
+        stillHero?.imageUrl === "/brand/projects/closet.jpg" &&
+        stillHero?.objectZoom === 3,
+    );
+  }
+
   const savedCategory = await upsertPublicSiteImageOp(prisma, adminA, {
     page: PUBLIC_SITE_HOME_PAGE,
     slot: categoryImageSlot("Doors & Locks"),
@@ -360,9 +413,11 @@ try {
 
   const loaded = buildPublicHomeImagePresentation(groups, aRows);
   check("Hero override is used on Home",
-    loaded.hero.src === "/brand/projects/lanai-porch.jpg" &&
+    loaded.hero.src === "/brand/projects/closet.jpg" &&
       loaded.hero.objectPosition === "15% 80%" &&
       loaded.hero.objectZoom === 3);
+  check("Public site consumes the uploaded hero image",
+    loaded.hero.src === "/brand/projects/closet.jpg" && loaded.hero.isOverride);
   check("Service-card positioning stays independent",
     loaded.categories["Doors & Locks"]?.objectPosition === "10% 90%" &&
       loaded.categories["Doors & Locks"]?.objectZoom === 1.2 &&

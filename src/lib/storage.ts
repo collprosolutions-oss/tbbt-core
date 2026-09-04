@@ -25,6 +25,33 @@ export function isSupportedImageMimeType(
   return (SUPPORTED_IMAGE_MIME_TYPES as readonly string[]).includes(value);
 }
 
+const EXTENSION_TO_MIME: Record<string, SupportedImageMimeType> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+  heic: "image/heic",
+  heif: "image/heif",
+};
+
+/**
+ * Browsers sometimes send `image/jpg`, an empty type, or only a filename.
+ * Resolve a supported MIME from type first, then from the file extension.
+ */
+export function resolveSupportedImageMimeType(file: {
+  type?: string | null;
+  name?: string | null;
+}): SupportedImageMimeType | null {
+  const type = (file.type || "").trim().toLowerCase();
+  if (type === "image/jpg") return "image/jpeg";
+  if (isSupportedImageMimeType(type)) return type;
+  const name = (file.name || "").trim().toLowerCase();
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return null;
+  return EXTENSION_TO_MIME[name.slice(dot + 1)] ?? null;
+}
+
 // Vercel Functions cap request bodies at 4.5 MB, which this direct
 // server-action upload passes through. We stay safely under that so a
 // rejected upload is always our own clear validation error, never an
@@ -144,7 +171,7 @@ async function uploadManagedImage({
   pathnamePrefix: string;
   file: File;
 }): Promise<UploadedJobPhoto> {
-  const mimeType = isSupportedImageMimeType(file.type) ? file.type : "image/jpeg";
+  const mimeType = resolveSupportedImageMimeType(file) ?? "image/jpeg";
   const extension = EXTENSION_BY_MIME_TYPE[mimeType];
   // Never derive the storage path from the browser-supplied filename.
   const pathname = `${pathnamePrefix}/${randomUUID()}.${extension}`;

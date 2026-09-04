@@ -552,6 +552,12 @@ try {
       brandingSrc.includes('"/brand/collpro-logo.png"'),
   );
   check("transparent document logo asset exists", existsSync(documentLogoPath));
+  const documentLogoBytes = readFileSync(documentLogoPath);
+  check(
+    "document logo is the approved light PNG, not a later generated substitute",
+    documentLogoBytes.length > 1_400_000 &&
+      documentLogoBytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
+  );
   const collproPdf = await renderInvoicePdf(collproDoc);
   check("CollPro PDF renders with the document logo present", collproPdf.subarray(0, 4).toString() === "%PDF");
 

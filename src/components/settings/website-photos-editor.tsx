@@ -17,12 +17,14 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
+  MAX_JOB_PHOTO_UPLOAD_BYTES,
   PUBLIC_SITE_IMAGE_MAX_ZOOM,
   PUBLIC_SITE_IMAGE_MIN_ZOOM,
   PUBLIC_SITE_IMAGE_STORAGE_UNAVAILABLE,
   clampObjectZoom,
   clampPercent,
   publicImageObjectStyle,
+  resolveSupportedImageMimeType,
   splitObjectPosition,
   type PublicSiteImageEditorSlot,
 } from "@/lib/public-site-images";
@@ -86,6 +88,11 @@ function SlotEditor({
     originX: number;
     originY: number;
   } | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [localPreview, setLocalPreview] = useState<string | null>(null);
+  const [displaySrc, setDisplaySrc] = useState(slot.src);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [replaceState, replaceAction, replacePending] = useActionState(
     replacePublicSiteImage,
     emptyState,
@@ -99,14 +106,26 @@ function SlotEditor({
     emptyState,
   );
   const pending = replacePending || positionPending || resetPending;
-  const error = replaceState.error || positionState.error || resetState.error;
+  const error =
+    fileError || replaceState.error || positionState.error || resetState.error;
   const message =
     replaceState.message || positionState.message || resetState.message;
+  const previewSrc = localPreview ?? displaySrc;
+  const canReplace = Boolean(selectedFile) && !pending;
   const unsaved = x !== saved.x || y !== saved.y || zoom !== saved.zoom;
   const defaultPos = splitObjectPosition(slot.defaultPosition);
   const previewStyle = publicImageObjectStyle(`${x}% ${y}%`, zoom);
 
   const positionWasPending = useRef(false);
+  const replaceWasPending = useRef(false);
+  useEffect(() => {
+    setDisplaySrc(slot.src);
+  }, [slot.src]);
+  useEffect(() => {
+    return () => {
+      if (localPreview) URL.revokeObjectURL(localPreview);
+    };
+  }, [localPreview]);
   useEffect(() => {
     if (
       positionWasPending.current &&
@@ -118,6 +137,19 @@ function SlotEditor({
     }
     positionWasPending.current = positionPending;
   }, [positionPending, positionState.error, positionState.message, x, y, zoom]);
+  useEffect(() => {
+    if (replaceWasPending.current && !replacePending) {
+      if (replaceState.imageUrl && !replaceState.error) {
+        if (localPreview) URL.revokeObjectURL(localPreview);
+        setLocalPreview(null);
+        setSelectedFile(null);
+        setFileError(null);
+        setDisplaySrc(replaceState.imageUrl);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    }
+    replaceWasPending.current = replacePending;
+  }, [localPreview, replacePending, replaceState.error, replaceState.imageUrl]);
 
   function applyFromPointer(event: ReactPointerEvent<HTMLButtonElement>, nextX: number, nextY: number) {
     if (event.pointerId !== drag?.pointerId && drag) return;
@@ -169,6 +201,34 @@ function SlotEditor({
     setZoom(clampObjectZoom(slot.defaultZoom));
   }
 
+  function onFileSelected(file: File | null) {
+    if (localPreview) URL.revokeObjectURL(localPreview);
+    setLocalPreview(null);
+    setSelectedFile(null);
+    setFileError(null);
+    if (!file) {
+      setDisplaySrc(slot.src);
+      return;
+    }
+    if (!resolveSupportedImageMimeType(file)) {
+      setFileError("Unsupported file type. Choose a JPEG, PNG, or WebP photo.");
+      setDisplaySrc(slot.src);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    if (file.size > MAX_JOB_PHOTO_UPLOAD_BYTES) {
+      const maxMb = (MAX_JOB_PHOTO_UPLOAD_BYTES / (1024 * 1024)).toFixed(0);
+      setFileError(`That photo is too large. The limit is ${maxMb} MB.`);
+      setDisplaySrc(slot.src);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    const preview = URL.createObjectURL(file);
+    setSelectedFile(file);
+    setLocalPreview(preview);
+    setDisplaySrc(preview);
+  }
+
   return (
     <div className="space-y-3 rounded-xl border p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -207,7 +267,7 @@ function SlotEditor({
           <p className="mb-1 text-xs font-medium text-muted-foreground">Current image</p>
           <div className="relative aspect-square max-h-56 w-full overflow-hidden rounded-lg border bg-muted">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={slot.src} alt="" className="size-full object-contain" />
+            <img src={previewSrc} alt="" className="size-full object-contain" />
           </div>
         </div>
         <div>
@@ -223,7 +283,7 @@ function SlotEditor({
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={slot.src}
+              src={previewSrc}
               alt=""
               className="absolute inset-0 size-full object-cover"
               style={previewStyle}
@@ -292,15 +352,24 @@ function SlotEditor({
             <input type="hidden" name="page" value={slot.page} />
             <input type="hidden" name="slot" value={slot.slot} />
             <input
+              ref={fileInputRef}
               type="file"
               name="file"
-              accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
-              disabled={!storageConfigured || pending}
+              accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+              disabled={pending}
+              onChange={(event) => onFileSelected(event.target.files?.[0] ?? null)}
               className="max-w-[16rem] text-sm"
             />
-            <Button type="submit" disabled={!storageConfigured || pending}>
+            <Button type="submit" disabled={!canReplace}>
               {replacePending ? "Uploading…" : "Replace Image"}
             </Button>
+            {selectedFile ? (
+              <p className="text-xs text-muted-foreground">{selectedFile.name}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                JPEG, PNG, or WebP, up to 4 MB. Choose a file, then Replace Image.
+              </p>
+            )}
           </form>
           <form action={positionAction}>
             <input type="hidden" name="businessId" value={businessId} />

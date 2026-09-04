@@ -15,19 +15,29 @@ import {
 import { assertSettingsBusinessScope } from "@/lib/settings-ops";
 import {
   isStorageConfigured,
-  isSupportedImageMimeType,
   MAX_JOB_PHOTO_UPLOAD_BYTES,
+  resolveSupportedImageMimeType,
   uploadPublicSitePhoto,
 } from "@/lib/storage";
 
 export type PublicSiteImageActionState = {
   error?: string;
   message?: string;
+  imageUrl?: string;
 };
 
 function readString(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value.trim() : "";
+}
+
+function ownerUploadError(error: unknown) {
+  const detail = error instanceof Error ? error.message : "";
+  if (/body.*exceed|too large|size limit|request entity/i.test(detail)) {
+    const maxMb = (MAX_JOB_PHOTO_UPLOAD_BYTES / (1024 * 1024)).toFixed(0);
+    return `That photo is too large. The limit is ${maxMb} MB.`;
+  }
+  return publicSiteImageErrorMessage(error, "That website photo could not be saved.");
 }
 
 function revalidatePublicSite(slug: string) {
@@ -53,9 +63,9 @@ export async function replacePublicSiteImage(
     if (!(file instanceof File) || file.size === 0) {
       return { error: "Choose a photo to upload." };
     }
-    if (!isSupportedImageMimeType(file.type)) {
+    if (!resolveSupportedImageMimeType(file)) {
       return {
-        error: "Unsupported file type. Upload a JPEG, PNG, WebP, GIF, or HEIC photo.",
+        error: "Unsupported file type. Upload a JPEG, PNG, or WebP photo.",
       };
     }
     if (file.size > MAX_JOB_PHOTO_UPLOAD_BYTES) {
@@ -78,10 +88,10 @@ export async function replacePublicSiteImage(
       imageUrl: uploaded.url,
     });
     revalidatePublicSite(access.workspace.business.slug);
-    return { message: "Website photo saved." };
+    return { message: "Website photo saved.", imageUrl: uploaded.url };
   } catch (error) {
     return {
-      error: publicSiteImageErrorMessage(error, "That website photo could not be saved."),
+      error: ownerUploadError(error),
     };
   }
 }

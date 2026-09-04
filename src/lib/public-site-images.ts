@@ -27,7 +27,11 @@ import { writeSettingsAuditLog } from "@/lib/settings-ops";
 import {
   deleteJobPhotoBlob,
   isManagedBlobUrl,
+  resolveSupportedImageMimeType,
 } from "@/lib/storage";
+
+export { resolveSupportedImageMimeType };
+export { MAX_JOB_PHOTO_UPLOAD_BYTES } from "@/lib/storage";
 
 export const PUBLIC_SITE_HOME_PAGE = "home";
 export const PUBLIC_SITE_SERVICES_PAGE = "services";

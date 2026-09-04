@@ -36,8 +36,8 @@ export function renderInvoicePdf(
     const logoPath = resolvePublicAsset(docView.business.logoSrc);
     if (logoPath) {
       try {
-        doc.image(logoPath, left, y, { height: 42 });
-        y += 52;
+        doc.image(logoPath, left, y, { height: 56 });
+        y += 66;
       } catch {
         // Missing/unreadable logo: fall through to the business name.
       }
