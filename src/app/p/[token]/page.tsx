@@ -27,6 +27,7 @@ import {
   reconcileProjectTokenCheckoutPayment,
   shouldShowPayInvoice,
 } from "@/lib/payments";
+import { loadPortalAdditionalWorkCatalog } from "@/lib/portal-additional-work";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -72,7 +73,7 @@ export default async function CustomerProjectPortalPage({
           status: true,
           scheduledAt: true,
           scheduledDurationMinutes: true,
-          business: { select: { id: true, name: true } },
+          business: { select: { id: true, name: true, tradeCode: true } },
           customer: { select: { name: true } },
           property: {
             select: {
@@ -247,7 +248,10 @@ export default async function CustomerProjectPortalPage({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <RequestAdditionalWorkForm projectToken={token} />
+            <RequestAdditionalWorkForm
+              projectToken={token}
+              catalog={await loadPortalAdditionalWorkCatalog(job.business)}
+            />
           </CardContent>
         </Card>
 

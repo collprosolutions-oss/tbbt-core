@@ -160,8 +160,9 @@ model Business {
   lineItems                LineItem[]
   jobPhotos                JobPhoto[]
   changeOrders             ChangeOrder[]
-  additionalWorkRequests   AdditionalWorkRequest[]
-  jobProblemReports        JobProblemReport[]
+  additionalWorkRequests      AdditionalWorkRequest[]
+  additionalWorkRequestItems  AdditionalWorkRequestItem[]
+  jobProblemReports           JobProblemReport[]
   timeEntries              TimeEntry[]
   timeEntryAdjustments     TimeEntryAdjustment[]
   timesheetWeeks           TimesheetWeek[]
@@ -314,10 +315,11 @@ model ServiceCatalogItem {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  business        Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  lineItems       LineItem[]
-  serviceRequests ServiceRequest[]
-  requestItems    ServiceRequestItem[]
+  business                     Business                    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  lineItems                    LineItem[]
+  serviceRequests              ServiceRequest[]
+  requestItems                 ServiceRequestItem[]
+  additionalWorkRequestItems   AdditionalWorkRequestItem[]
 
   @@index([businessId])
 }
@@ -765,10 +767,35 @@ model AdditionalWorkRequest {
   business    Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
   job         Job          @relation(fields: [jobId], references: [id], onDelete: Cascade)
   changeOrder ChangeOrder? @relation(fields: [changeOrderId], references: [id], onDelete: SetNull)
+  items       AdditionalWorkRequestItem[]
 
   @@index([businessId])
   @@index([jobId])
   @@index([changeOrderId])
+}
+
+/// One requested task on a customer Additional Work request. Catalog
+/// selections persist the ServiceCatalogItem id (not only the name) so
+/// Create draft can prefill Change Order lines from the live catalog.
+/// Legacy requests may have zero rows and remain description-only.
+model AdditionalWorkRequestItem {
+  id                      String   @id @default(cuid())
+  businessId              String
+  additionalWorkRequestId String
+  serviceCatalogItemId    String?
+  /// Used when the customer chose "Something else / Other".
+  customDescription       String?
+  /// Customer-selected count for this task. Whole numbers only, 1–99.
+  quantity                Int      @default(1)
+  sortOrder               Int      @default(0)
+  createdAt               DateTime @default(now())
+
+  business                Business                @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  additionalWorkRequest   AdditionalWorkRequest   @relation(fields: [additionalWorkRequestId], references: [id], onDelete: Cascade)
+  serviceCatalogItem      ServiceCatalogItem?     @relation(fields: [serviceCatalogItemId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([additionalWorkRequestId])
 }
 
 /// A factual, operational field issue reported by the assigned MEMBER

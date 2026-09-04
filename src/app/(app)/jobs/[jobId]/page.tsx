@@ -124,7 +124,20 @@ export default async function JobPage({
       additionalWorkRequests: {
         where: { status: "OPEN" },
         orderBy: { createdAt: "desc" },
-        select: { id: true, description: true, createdAt: true, source: true },
+        select: {
+          id: true,
+          description: true,
+          createdAt: true,
+          source: true,
+          items: {
+            orderBy: { sortOrder: "asc" },
+            select: {
+              quantity: true,
+              customDescription: true,
+              serviceCatalogItem: { select: { name: true } },
+            },
+          },
+        },
       },
       assignedMembership: {
         select: { id: true, user: { select: { name: true, email: true } } },
