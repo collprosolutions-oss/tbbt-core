@@ -26,11 +26,92 @@ const ACCOUNT_READINESS_INCLUDE = [
   "requirements",
 ] as const;
 
-/** BNPL methods TBBT does not offer on customer invoice Checkout. */
+/** Standalone BNPL types. Klarna-on-Link is a separate Link funding source. */
 export const INVOICE_CHECKOUT_EXCLUDED_PAYMENT_METHODS = [
   "affirm",
   "klarna",
 ] as const;
+
+export const INVOICE_CHECKOUT_PMC_NAME = "TBBT invoice checkout";
+
+type InvoiceCheckoutDisplayPreference = {
+  display_preference: { preference: "on" | "off" };
+};
+
+/** Invoice Checkout method set: keep card/wallets/Link/Cash App/bank, hide BNPL. */
+export function invoiceCheckoutPaymentMethodPreferences(): {
+  apple_pay: InvoiceCheckoutDisplayPreference;
+  cashapp: InvoiceCheckoutDisplayPreference;
+  card: InvoiceCheckoutDisplayPreference;
+  google_pay: InvoiceCheckoutDisplayPreference;
+  link: InvoiceCheckoutDisplayPreference;
+  pay_by_bank: InvoiceCheckoutDisplayPreference;
+  us_bank_account: InvoiceCheckoutDisplayPreference;
+  affirm: InvoiceCheckoutDisplayPreference;
+  klarna: InvoiceCheckoutDisplayPreference;
+} {
+  const on = { display_preference: { preference: "on" as const } };
+  const off = { display_preference: { preference: "off" as const } };
+  return {
+    card: on,
+    apple_pay: on,
+    google_pay: on,
+    link: on,
+    cashapp: on,
+    us_bank_account: on,
+    pay_by_bank: on,
+    affirm: off,
+    klarna: off,
+  };
+}
+
+async function resolveInvoiceCheckoutPaymentMethodConfiguration(
+  stripe: Stripe,
+  connectedAccountId: string,
+): Promise<string | null> {
+  const stripeAccount = { stripeAccount: connectedAccountId };
+  const preferences = invoiceCheckoutPaymentMethodPreferences();
+
+  try {
+    const existing = await stripe.paymentMethodConfigurations.list(
+      { limit: 100 },
+      stripeAccount,
+    );
+    const named = existing.data.find(
+      (config) => config.name === INVOICE_CHECKOUT_PMC_NAME && config.active,
+    );
+    const defaultConfig = existing.data.find((config) => config.is_default);
+    if (defaultConfig && defaultConfig.id !== named?.id) {
+      await stripe.paymentMethodConfigurations.update(
+        defaultConfig.id,
+        {
+          affirm: preferences.affirm,
+          klarna: preferences.klarna,
+        },
+        stripeAccount,
+      );
+    }
+    if (named) {
+      const updated = await stripe.paymentMethodConfigurations.update(
+        named.id,
+        preferences,
+        stripeAccount,
+      );
+      return updated.id;
+    }
+
+    const created = await stripe.paymentMethodConfigurations.create(
+      {
+        name: INVOICE_CHECKOUT_PMC_NAME,
+        ...preferences,
+      },
+      stripeAccount,
+    );
+    return created.id;
+  } catch {
+    return null;
+  }
+}
 
 function v1RequirementKeys(
   requirements: Stripe.Account.Requirements | null | undefined,
@@ -170,6 +251,11 @@ export function createStripePaymentProvider(): PaymentProvider {
 
     async createInvoiceCheckoutSession(input: CreateInvoiceCheckoutInput) {
       const stripe = requireStripe();
+      const paymentMethodConfiguration =
+        await resolveInvoiceCheckoutPaymentMethodConfiguration(
+          stripe,
+          input.connectedAccountId,
+        );
       const session = await stripe.checkout.sessions.create(
         {
           mode: "payment",
@@ -188,6 +274,9 @@ export function createStripePaymentProvider(): PaymentProvider {
           excluded_payment_method_types: [
             ...INVOICE_CHECKOUT_EXCLUDED_PAYMENT_METHODS,
           ],
+          ...(paymentMethodConfiguration
+            ? { payment_method_configuration: paymentMethodConfiguration }
+            : {}),
           metadata: {
             invoiceId: input.invoiceId,
             businessId: input.businessId,

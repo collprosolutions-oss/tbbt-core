@@ -27,6 +27,9 @@ const {
   shouldOfferStripeOnboarding,
 } = await import("@/lib/payments/readiness");
 const { invoiceAmountToCents, invoiceDueCents } = await import("@/lib/payments/money");
+const { invoiceCheckoutPaymentMethodPreferences } = await import(
+  "@/lib/payments/stripe-adapter"
+);
 const {
   applyVerifiedCheckoutPayment,
   createCustomerInvoiceCheckout,
@@ -310,6 +313,28 @@ try {
     adapterSrc.includes("excluded_payment_method_types") &&
       adapterSrc.includes('"affirm"') &&
       adapterSrc.includes('"klarna"'),
+  );
+  check(
+    "invoice checkout uses a payment method configuration for the connected account",
+    adapterSrc.includes("payment_method_configuration") &&
+      adapterSrc.includes("paymentMethodConfigurations") &&
+      adapterSrc.includes("TBBT invoice checkout"),
+  );
+  const invoicePmc = invoiceCheckoutPaymentMethodPreferences();
+  check(
+    "invoice PMC turns Affirm and Klarna off",
+    invoicePmc.affirm.display_preference.preference === "off" &&
+      invoicePmc.klarna.display_preference.preference === "off",
+  );
+  check(
+    "invoice PMC keeps card, wallets, Link, Cash App, and bank",
+    invoicePmc.card.display_preference.preference === "on" &&
+      invoicePmc.apple_pay.display_preference.preference === "on" &&
+      invoicePmc.google_pay.display_preference.preference === "on" &&
+      invoicePmc.link.display_preference.preference === "on" &&
+      invoicePmc.cashapp.display_preference.preference === "on" &&
+      invoicePmc.us_bank_account.display_preference.preference === "on" &&
+      invoicePmc.pay_by_bank.display_preference.preference === "on",
   );
   check(
     "invoice checkout does not pin an explicit payment_method_types allowlist",
