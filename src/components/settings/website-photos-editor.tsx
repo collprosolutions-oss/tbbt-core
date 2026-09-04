@@ -17,14 +17,15 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
-  MAX_JOB_PHOTO_UPLOAD_BYTES,
+  PUBLIC_SITE_IMAGE_FILE_ACCEPT,
   PUBLIC_SITE_IMAGE_MAX_ZOOM,
   PUBLIC_SITE_IMAGE_MIN_ZOOM,
   PUBLIC_SITE_IMAGE_STORAGE_UNAVAILABLE,
+  PUBLIC_SITE_IMAGE_ZOOM_STEP,
   clampObjectZoom,
   clampPercent,
-  publicImageObjectStyle,
-  resolveSupportedImageMimeType,
+  evaluateWebsitePhotoSelection,
+  publicImageFrameModel,
   splitObjectPosition,
   type PublicSiteImageEditorSlot,
 } from "@/lib/public-site-images";
@@ -114,7 +115,8 @@ function SlotEditor({
   const canReplace = Boolean(selectedFile) && !pending;
   const unsaved = x !== saved.x || y !== saved.y || zoom !== saved.zoom;
   const defaultPos = splitObjectPosition(slot.defaultPosition);
-  const previewStyle = publicImageObjectStyle(`${x}% ${y}%`, zoom);
+  const previewFrame = publicImageFrameModel(`${x}% ${y}%`, zoom);
+  const fileInputId = `website-photo-file-${slot.page}-${slot.slot.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 
   const positionWasPending = useRef(false);
   const replaceWasPending = useRef(false);
@@ -202,31 +204,36 @@ function SlotEditor({
   }
 
   function onFileSelected(file: File | null) {
+    if (!file) return;
+    const inspection = evaluateWebsitePhotoSelection(file);
+    if (!inspection.ok) {
+      setFileError(inspection.error);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
     if (localPreview) URL.revokeObjectURL(localPreview);
-    setLocalPreview(null);
-    setSelectedFile(null);
-    setFileError(null);
-    if (!file) {
-      setDisplaySrc(slot.src);
-      return;
-    }
-    if (!resolveSupportedImageMimeType(file)) {
-      setFileError("Unsupported file type. Choose a JPEG, PNG, or WebP photo.");
-      setDisplaySrc(slot.src);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
-    }
-    if (file.size > MAX_JOB_PHOTO_UPLOAD_BYTES) {
-      const maxMb = (MAX_JOB_PHOTO_UPLOAD_BYTES / (1024 * 1024)).toFixed(0);
-      setFileError(`That photo is too large. The limit is ${maxMb} MB.`);
-      setDisplaySrc(slot.src);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
-    }
     const preview = URL.createObjectURL(file);
+    setFileError(null);
     setSelectedFile(file);
     setLocalPreview(preview);
     setDisplaySrc(preview);
+  }
+
+  function openPhotoChooser() {
+    const input = fileInputRef.current;
+    if (!input || pending) return;
+    input.value = "";
+    input.click();
+  }
+
+  function submitReplacement() {
+    if (!selectedFile || replacePending) return;
+    const formData = new FormData();
+    formData.set("businessId", businessId);
+    formData.set("page", slot.page);
+    formData.set("slot", slot.slot);
+    formData.set("file", selectedFile);
+    replaceAction(formData);
   }
 
   return (
@@ -281,14 +288,16 @@ function SlotEditor({
             className={cn(previewFrameClass(slot), canEdit && "cursor-grab active:cursor-grabbing")}
             aria-label={`Preview ${slot.label}. Drag to reposition, or use the sliders.`}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={previewSrc}
-              alt=""
-              className="absolute inset-0 size-full object-cover"
-              style={previewStyle}
-              draggable={false}
-            />
+            <div data-public-site-image-frame="" style={previewFrame.box}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={previewSrc}
+                alt=""
+                className="size-full"
+                style={previewFrame.image}
+                draggable={false}
+              />
+            </div>
           </button>
           <p className="mt-1 text-xs text-muted-foreground">{previewHint(slot)}</p>
         </div>
@@ -307,12 +316,12 @@ function SlotEditor({
 
       <div className="grid gap-3">
         <label className="text-sm">
-          Zoom
+          Zoom {zoom.toFixed(2)}
           <input
             type="range"
             min={PUBLIC_SITE_IMAGE_MIN_ZOOM}
             max={PUBLIC_SITE_IMAGE_MAX_ZOOM}
-            step={0.05}
+            step={PUBLIC_SITE_IMAGE_ZOOM_STEP}
             value={zoom}
             disabled={!canEdit}
             onChange={(event) => setZoom(clampObjectZoom(Number(event.target.value)))}
@@ -347,30 +356,42 @@ function SlotEditor({
 
       {canEdit ? (
         <div className="flex flex-wrap gap-2">
-          <form action={replaceAction} className="flex flex-wrap items-center gap-2">
-            <input type="hidden" name="businessId" value={businessId} />
-            <input type="hidden" name="page" value={slot.page} />
-            <input type="hidden" name="slot" value={slot.slot} />
+          <div className="flex flex-wrap items-center gap-2">
             <input
               ref={fileInputRef}
+              id={fileInputId}
               type="file"
-              name="file"
-              accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
-              disabled={pending}
+              accept={PUBLIC_SITE_IMAGE_FILE_ACCEPT}
+              className="sr-only"
+              tabIndex={-1}
+              data-website-photo-file-input={`${slot.page}:${slot.slot}`}
               onChange={(event) => onFileSelected(event.target.files?.[0] ?? null)}
-              className="max-w-[16rem] text-sm"
             />
-            <Button type="submit" disabled={!canReplace}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={openPhotoChooser}
+            >
+              Choose Photo
+            </Button>
+            <Button
+              type="button"
+              disabled={!canReplace}
+              onClick={submitReplacement}
+            >
               {replacePending ? "Uploading…" : "Replace Image"}
             </Button>
-            {selectedFile ? (
-              <p className="text-xs text-muted-foreground">{selectedFile.name}</p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                JPEG, PNG, or WebP, up to 4 MB. Choose a file, then Replace Image.
-              </p>
-            )}
-          </form>
+            <p className="text-xs text-muted-foreground">
+              {selectedFile
+                ? `Selected: ${selectedFile.name}`
+                : "No photo selected"}
+            </p>
+            <p className="basis-full text-xs text-muted-foreground">
+              JPEG, PNG, or WebP, up to 4 MB. Photos upload only when you click
+              Replace Image.
+            </p>
+          </div>
           <form action={positionAction}>
             <input type="hidden" name="businessId" value={businessId} />
             <input type="hidden" name="page" value={slot.page} />

@@ -33,6 +33,10 @@ const {
   PUBLIC_SITE_HERO_SLOT,
   PUBLIC_SITE_STORY_SLOT,
   PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
+  PUBLIC_SITE_IMAGE_FILE_ACCEPT,
+  PUBLIC_SITE_IMAGE_MAX_ZOOM,
+  PUBLIC_SITE_IMAGE_MIN_ZOOM,
+  PUBLIC_SITE_IMAGE_ZOOM_STEP,
   buildPublicAboutImagePresentation,
   PublicSiteImageError,
   buildPublicHomeImagePresentation,
@@ -40,8 +44,10 @@ const {
   categoryImageSlot,
   clampObjectZoom,
   clampPercent,
+  evaluateWebsitePhotoSelection,
   formatObjectPosition,
   parseCategoryImageSlot,
+  publicImageFrameModel,
   publicImageObjectStyle,
   resolvePublicSiteImage,
   resolveSupportedImageMimeType,
@@ -113,6 +119,7 @@ function readRepo(path) {
 
 const homeSrc = readRepo("src/components/public/public-home.tsx");
 const editorSrc = readRepo("src/components/settings/website-photos-editor.tsx");
+const fittedSrc = readRepo("src/components/public/public-fitted-image.tsx");
 const opsSrc = readRepo("src/lib/public-site-images.ts");
 const storageSrc = readRepo("src/lib/storage.ts");
 const actionSrc = readRepo("src/app/actions/public-site-images.ts");
@@ -150,9 +157,25 @@ check("Browser businessId is not authorization proof",
 check("Replace Image stays disabled until a file is chosen",
   editorSrc.includes("canReplace") &&
     editorSrc.includes("onFileSelected") &&
-    editorSrc.includes("createObjectURL"));
+    editorSrc.includes("createObjectURL") &&
+    editorSrc.includes("disabled={!canReplace}"));
+check("Choose Photo uses a real file input triggered through a ref",
+  editorSrc.includes("Choose Photo") &&
+    editorSrc.includes('type="file"') &&
+    editorSrc.includes("fileInputRef") &&
+    editorSrc.includes("input.click()") &&
+    editorSrc.includes("className=\"sr-only\"") &&
+    !editorSrc.includes("Choose File"));
+check("Selected photo filename and local preview stay in React state",
+  editorSrc.includes("Selected: ${selectedFile.name}") &&
+    editorSrc.includes("No photo selected") &&
+    editorSrc.includes("setSelectedFile(file)") &&
+    editorSrc.includes("URL.createObjectURL(file)") &&
+    editorSrc.includes("formData.set(\"file\", selectedFile)"));
 check("Editor accepts JPEG PNG and WebP from the computer",
-  editorSrc.includes(".jpg,.jpeg,.png,.webp") &&
+  PUBLIC_SITE_IMAGE_FILE_ACCEPT ===
+    "image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" &&
+    editorSrc.includes("PUBLIC_SITE_IMAGE_FILE_ACCEPT") &&
     editorSrc.includes("JPEG, PNG, or WebP"));
 const nextConfigSrc = readRepo("next.config.ts");
 check("Server Action body limit allows the existing 4 MB photo cap",
@@ -183,18 +206,71 @@ check("Object position formats as CSS percents",
   formatObjectPosition(70, 50) === "70% 50%");
 check("Invalid percents clamp to 0-100",
   formatObjectPosition(-20, 140) === "0% 100%" && clampPercent(Number.NaN) === 50);
-check("Invalid zoom clamps to the safe 1-3 range",
+check("Zoom range is 0.50 default 1.00 max 3.00 step 0.05",
+  PUBLIC_SITE_IMAGE_MIN_ZOOM === 0.5 &&
+    PUBLIC_SITE_IMAGE_DEFAULT_ZOOM === 1 &&
+    PUBLIC_SITE_IMAGE_MAX_ZOOM === 3 &&
+    PUBLIC_SITE_IMAGE_ZOOM_STEP === 0.05 &&
+    editorSrc.includes("PUBLIC_SITE_IMAGE_MIN_ZOOM") &&
+    editorSrc.includes("PUBLIC_SITE_IMAGE_ZOOM_STEP"));
+check("Valid zoom values below 1 are accepted and not forced to 1",
+  clampObjectZoom(0.5) === 0.5 &&
+    clampObjectZoom(0.75) === 0.75 &&
+    clampObjectZoom(0.7) === 0.7 &&
+    clampObjectZoom(1) === 1 &&
+    clampObjectZoom(1.25) === 1.25 &&
+    clampObjectZoom(2) === 2 &&
+    clampObjectZoom(3) === 3);
+check("Invalid zoom clamps to the safe 0.50-3 range",
   clampObjectZoom(Number.NaN) === 1 &&
-    clampObjectZoom(-4) === 1 &&
+    clampObjectZoom(-4) === 0.5 &&
+    clampObjectZoom(0) === 0.5 &&
     clampObjectZoom(9) === 3 &&
     clampObjectZoom(1.555) === 1.56);
-check("Default zoom does not add a CSS transform",
-  publicImageObjectStyle("70% 50%", 1).transform == null);
-check("Saved zoom becomes a scale transform",
-  publicImageObjectStyle("30% 60%", 1.5).transform === "scale(1.5)");
+check("Valid file selection captures the filename",
+  evaluateWebsitePhotoSelection({ type: "image/jpeg", name: "walls-drywall.jpg", size: 1200 }).ok === true &&
+    evaluateWebsitePhotoSelection({ type: "image/jpeg", name: "walls-drywall.jpg", size: 1200 }).fileName ===
+      "walls-drywall.jpg" &&
+    evaluateWebsitePhotoSelection({ type: "image/png", name: "hero.png", size: 800 }).ok === true &&
+    evaluateWebsitePhotoSelection({ type: "image/webp", name: "card.webp", size: 800 }).ok === true &&
+    evaluateWebsitePhotoSelection({ type: "", name: "porch.JPEG", size: 800 }).ok === true);
+check("Invalid or empty file selection is rejected",
+  evaluateWebsitePhotoSelection(null).ok === false &&
+    evaluateWebsitePhotoSelection({ type: "application/pdf", name: "notes.pdf", size: 800 }).ok === false &&
+    evaluateWebsitePhotoSelection({ type: "image/jpeg", name: "huge.jpg", size: 5 * 1024 * 1024 }).ok === false);
+check("Default zoom keeps cover fill without a scale transform",
+  publicImageFrameModel("70% 50%", 1).image.objectFit === "cover" &&
+    publicImageFrameModel("70% 50%", 1).image.transform == null &&
+    publicImageObjectStyle("70% 50%", 1).transform == null);
+check("Zoom above 1 still scales the cover image",
+  publicImageFrameModel("30% 60%", 1.5).image.transform === "scale(1.5)" &&
+    publicImageFrameModel("30% 60%", 1.5).image.objectFit === "cover" &&
+    publicImageObjectStyle("30% 60%", 1.5).transform === "scale(1.5)");
+check("Zoom below 1 shrinks the photo box and uses contain",
+  publicImageFrameModel("42% 35%", 0.5).box.width === "50%" &&
+    publicImageFrameModel("42% 35%", 0.75).box.width === "75%" &&
+    publicImageFrameModel("42% 35%", 0.7).box.width === "70%" &&
+    publicImageFrameModel("42% 35%", 0.7).box.height === "70%" &&
+    publicImageFrameModel("42% 35%", 0.7).box.left === "42%" &&
+    publicImageFrameModel("42% 35%", 0.7).box.top === "35%" &&
+    publicImageFrameModel("42% 35%", 0.7).image.objectFit === "contain" &&
+    publicImageFrameModel("42% 35%", 0.7).image.transform == null);
+check("Settings preview and public rendering share the same frame model",
+  fittedSrc.includes("publicImageFrameModel") &&
+    fittedSrc.includes("data-public-site-image-frame") &&
+    editorSrc.includes("publicImageFrameModel") &&
+    editorSrc.includes("data-public-site-image-frame") &&
+    editorSrc.includes("previewFrame.image") &&
+    editorSrc.includes("resetCropLocally") &&
+    editorSrc.includes("setZoom(clampObjectZoom(slot.defaultZoom))"));
 check("Home public rendering consumes saved zoom",
   homeSrc.includes("objectZoom={hero.objectZoom}") &&
     homeSrc.includes("objectZoom={visual.objectZoom}"));
+check("Hero and service-card public rendering use saved zoom",
+  readRepo("src/components/public/public-page-hero.tsx").includes("objectZoom={objectZoom}") &&
+    readRepo("src/components/public/public-services-browser.tsx").includes(
+      "objectZoom={categoryImage.objectZoom}",
+    ));
 
 const groups = [
   { category: "Doors & Locks", items: [] },
@@ -323,6 +399,28 @@ try {
       savedHero.objectPosition === "30% 60%" &&
       savedHero.objectZoom === 1.45);
 
+  const zoomedOutHero = await upsertPublicSiteImageOp(prisma, ownerA, {
+    page: PUBLIC_SITE_HOME_PAGE,
+    slot: PUBLIC_SITE_HERO_SLOT,
+    objectPosition: "42% 35%",
+    objectZoom: 0.7,
+  });
+  check("Home Hero accepts saved zoom below 1.00",
+    zoomedOutHero.objectPosition === "42% 35%" && zoomedOutHero.objectZoom === 0.7);
+  const halfZoomHero = await upsertPublicSiteImageOp(prisma, ownerA, {
+    page: PUBLIC_SITE_HOME_PAGE,
+    slot: PUBLIC_SITE_HERO_SLOT,
+    objectZoom: 0.5,
+  });
+  check("Home Hero accepts the minimum zoom 0.50",
+    halfZoomHero.objectZoom === 0.5 && halfZoomHero.objectPosition === "42% 35%");
+  const midZoomHero = await upsertPublicSiteImageOp(prisma, ownerA, {
+    page: PUBLIC_SITE_HOME_PAGE,
+    slot: PUBLIC_SITE_HERO_SLOT,
+    objectZoom: 0.75,
+  });
+  check("Home Hero accepts zoom 0.75", midZoomHero.objectZoom === 0.75);
+
   const zoomedHero = await upsertPublicSiteImageOp(prisma, ownerA, {
     page: PUBLIC_SITE_HOME_PAGE,
     slot: PUBLIC_SITE_HERO_SLOT,
@@ -412,6 +510,22 @@ try {
   check("Overrides stay on the owning business", aRows.length === 2 && bRows.length === 0);
 
   const loaded = buildPublicHomeImagePresentation(groups, aRows);
+  const zoomedOutPresentation = buildPublicHomeImagePresentation(groups, [
+    {
+      page: PUBLIC_SITE_HOME_PAGE,
+      slot: PUBLIC_SITE_HERO_SLOT,
+      imageUrl: "/brand/projects/closet.jpg",
+      objectPosition: "42% 35%",
+      objectZoom: 0.7,
+    },
+  ]);
+  check("Saved zoom below 1 reaches public Home hero rendering",
+    zoomedOutPresentation.hero.objectZoom === 0.7 &&
+      zoomedOutPresentation.hero.objectPosition === "42% 35%" &&
+      publicImageFrameModel(
+        zoomedOutPresentation.hero.objectPosition,
+        zoomedOutPresentation.hero.objectZoom,
+      ).box.width === "70%");
   check("Hero override is used on Home",
     loaded.hero.src === "/brand/projects/closet.jpg" &&
       loaded.hero.objectPosition === "15% 80%" &&

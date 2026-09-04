@@ -27,11 +27,12 @@ import { writeSettingsAuditLog } from "@/lib/settings-ops";
 import {
   deleteJobPhotoBlob,
   isManagedBlobUrl,
+  MAX_JOB_PHOTO_UPLOAD_BYTES,
   resolveSupportedImageMimeType,
 } from "@/lib/storage";
 
 export { resolveSupportedImageMimeType };
-export { MAX_JOB_PHOTO_UPLOAD_BYTES } from "@/lib/storage";
+export { MAX_JOB_PHOTO_UPLOAD_BYTES };
 
 export const PUBLIC_SITE_HOME_PAGE = "home";
 export const PUBLIC_SITE_SERVICES_PAGE = "services";
@@ -59,10 +60,13 @@ export const PUBLIC_REVIEWS_HERO_DEFAULT_POSITION = "50% 40%";
 /** Keep the CollPro Reviews homeowners on the right, darker left for HTML text. */
 export const COLLPRO_REVIEWS_HERO_DEFAULT_POSITION = "80% 46%";
 
-/** 1 = current object-fit:cover appearance. Higher values zoom in. */
+/** 1 = current object-fit:cover appearance. Below 1 shrinks so more of the source fits. */
 export const PUBLIC_SITE_IMAGE_DEFAULT_ZOOM = 1;
-export const PUBLIC_SITE_IMAGE_MIN_ZOOM = 1;
+export const PUBLIC_SITE_IMAGE_MIN_ZOOM = 0.5;
 export const PUBLIC_SITE_IMAGE_MAX_ZOOM = 3;
+export const PUBLIC_SITE_IMAGE_ZOOM_STEP = 0.05;
+export const PUBLIC_SITE_IMAGE_FILE_ACCEPT =
+  "image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp";
 
 export function publicReviewsHeroDefaultSrc(slug?: string | null) {
   return publicReviewsHeroImage(slug);
@@ -188,19 +192,109 @@ export function clampObjectZoom(value: number) {
   );
 }
 
+export type PublicImageBoxStyle = {
+  position: "absolute";
+  inset?: number;
+  left?: string;
+  top?: string;
+  width?: string;
+  height?: string;
+  transform?: string;
+};
+
+export type PublicImageFitStyle = {
+  objectFit: "contain" | "cover";
+  objectPosition: string;
+  transform?: string;
+  transformOrigin?: string;
+};
+
+export type PublicImageFrameModel = {
+  zoom: number;
+  x: number;
+  y: number;
+  box: PublicImageBoxStyle;
+  image: PublicImageFitStyle;
+};
+
+/**
+ * Shared Settings + public-site framing.
+ *
+ * Zoom >= 1 keeps the existing cover fill and optional scale-in.
+ * Zoom < 1 sizes the photo inside the frame with contain so the founder
+ * can shrink the picture and see more of the original source. Empty
+ * container background around a zoomed-out photo is intentional.
+ */
+export function publicImageFrameModel(
+  objectPosition: string,
+  objectZoom: number,
+): PublicImageFrameModel {
+  const zoom = clampObjectZoom(objectZoom);
+  const { x, y } = splitObjectPosition(objectPosition);
+  if (zoom < PUBLIC_SITE_IMAGE_DEFAULT_ZOOM) {
+    return {
+      zoom,
+      x,
+      y,
+      box: {
+        position: "absolute",
+        left: `${x}%`,
+        top: `${y}%`,
+        width: `${zoom * 100}%`,
+        height: `${zoom * 100}%`,
+        transform: "translate(-50%, -50%)",
+      },
+      image: {
+        objectFit: "contain",
+        objectPosition: "center",
+      },
+    };
+  }
+  return {
+    zoom,
+    x,
+    y,
+    box: {
+      position: "absolute",
+      inset: 0,
+    },
+    image: {
+      objectFit: "cover",
+      objectPosition: `${x}% ${y}%`,
+      ...(zoom > PUBLIC_SITE_IMAGE_DEFAULT_ZOOM
+        ? {
+            transform: `scale(${zoom})`,
+            transformOrigin: `${x}% ${y}%`,
+          }
+        : {}),
+    },
+  };
+}
+
 export function publicImageObjectStyle(
   objectPosition: string,
   objectZoom: number,
-): { objectPosition: string; transform?: string; transformOrigin?: string } {
-  const zoom = clampObjectZoom(objectZoom);
-  if (zoom === PUBLIC_SITE_IMAGE_DEFAULT_ZOOM) {
-    return { objectPosition };
+): PublicImageFitStyle {
+  return publicImageFrameModel(objectPosition, objectZoom).image;
+}
+
+export function evaluateWebsitePhotoSelection(file: {
+  type?: string | null;
+  name?: string | null;
+  size: number;
+} | null): { ok: true; fileName: string } | { ok: false; error: string } {
+  if (!file || file.size === 0) {
+    return { ok: false, error: "No photo selected" };
   }
-  return {
-    objectPosition,
-    transform: `scale(${zoom})`,
-    transformOrigin: objectPosition,
-  };
+  if (!resolveSupportedImageMimeType(file)) {
+    return { ok: false, error: "Unsupported file type. Choose a JPEG, PNG, or WebP photo." };
+  }
+  if (file.size > MAX_JOB_PHOTO_UPLOAD_BYTES) {
+    const maxMb = (MAX_JOB_PHOTO_UPLOAD_BYTES / (1024 * 1024)).toFixed(0);
+    return { ok: false, error: `That photo is too large. The limit is ${maxMb} MB.` };
+  }
+  const fileName = (file.name || "").trim() || "photo";
+  return { ok: true, fileName };
 }
 
 function positionTokenToPercent(token: string, fallback: number) {
