@@ -303,6 +303,10 @@ try {
   const payRouteSrc = readFileSync(new URL("../src/app/p/[token]/pay/route.ts", import.meta.url), "utf8");
   const webhookSrc = readFileSync(new URL("../src/app/api/stripe/webhook/route.ts", import.meta.url), "utf8");
   const adapterSrc = readFileSync(new URL("../src/lib/payments/stripe-adapter.ts", import.meta.url), "utf8");
+  const settingsSrc = readFileSync(
+    new URL("../src/components/settings/settings-workspace.tsx", import.meta.url),
+    "utf8",
+  );
   check("adapter uses explainMerchantReadiness", adapterSrc.includes("explainMerchantReadiness"));
   check("adapter falls back to v1 retrieve if v2 fails", adapterSrc.includes("stripe.accounts.retrieve"));
   check("adapter retrieves requirements with merchant config", adapterSrc.includes('"requirements"'));
@@ -361,6 +365,14 @@ try {
       !adapterSrc.includes("payment_method_configuration") &&
       !adapterSrc.includes("paymentMethodConfigurations") &&
       adapterSrc.includes('display: "never"'),
+  );
+  check(
+    "Settings payment card does not render Stripe readiness diagnostics",
+    !settingsSrc.includes("formatPaymentReadinessDebug") &&
+      !settingsSrc.includes("Stripe readiness") &&
+      !settingsSrc.includes("currently_due") &&
+      !settingsSrc.includes("charges_enabled") &&
+      !settingsSrc.includes("stripeAccountId"),
   );
 
   const businessA = await seedBusiness("Alpha Payments");

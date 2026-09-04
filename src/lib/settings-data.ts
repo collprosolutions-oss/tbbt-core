@@ -9,7 +9,7 @@ import { getBusinessLogoSrc } from "@/lib/business-branding";
 import { projectedOperatingBalance } from "@/lib/expenses";
 import { PAYMENT_METHODS } from "@/lib/invoice-payment";
 import { getBusinessPaymentStatus } from "@/lib/payments";
-import type { PaymentReadinessDebug } from "@/lib/payments";
+import { shouldOfferStripeOnboarding } from "@/lib/payments/readiness";
 import type { PaymentProviderStatus } from "@/lib/settings";
 import {
   CHANNELS_DISCONNECTED_MESSAGE,
@@ -70,7 +70,7 @@ export type SettingsSnapshot = {
     providerLabel: "Stripe";
     status: PaymentProviderStatus;
     platformConfigured: boolean;
-    readinessDebug?: PaymentReadinessDebug;
+    offerOnboarding: boolean;
   };
   bank: {
     connected: false;
@@ -256,7 +256,10 @@ export async function loadSettingsSnapshot(
       providerLabel: "Stripe",
       status: payment.status,
       platformConfigured: payment.platformConfigured,
-      readinessDebug: payment.readinessDebug,
+      offerOnboarding: shouldOfferStripeOnboarding(
+        payment.status,
+        payment.readinessDebug?.branch,
+      ),
     },
     bank: {
       connected: false,

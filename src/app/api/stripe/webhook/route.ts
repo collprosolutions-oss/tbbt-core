@@ -1,3 +1,13 @@
+/**
+ * Stripe Checkout webhook for connected-account payments.
+ *
+ * Vercel Authentication on Preview deployments can reject Stripe POSTs
+ * with 401 before this handler runs. Do not disable Preview protection
+ * globally to make webhooks work. Production webhook destinations must
+ * be publicly reachable by Stripe. This route stays protected by Stripe
+ * signature verification (STRIPE_WEBHOOK_SECRET). Never log secrets,
+ * account ids, customer names, emails, or bank details.
+ */
 import { NextResponse } from "next/server";
 import {
   applyVerifiedCheckoutPayment,
