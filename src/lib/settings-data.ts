@@ -8,6 +8,9 @@ import type { PrismaClient } from "@prisma/client";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
 import { projectedOperatingBalance } from "@/lib/expenses";
 import { PAYMENT_METHODS } from "@/lib/invoice-payment";
+import { getBusinessPaymentStatus } from "@/lib/payments";
+import { shouldOfferStripeOnboarding } from "@/lib/payments/readiness";
+import type { PaymentProviderStatus } from "@/lib/settings";
 import {
   CHANNELS_DISCONNECTED_MESSAGE,
 } from "@/lib/marketing";
@@ -63,6 +66,12 @@ export type SettingsSnapshot = {
   emailDeliveryConfigured: boolean;
   storageConfigured: boolean;
   paymentMethods: Array<{ value: string; label: string }>;
+  payment: {
+    providerLabel: "Stripe";
+    status: PaymentProviderStatus;
+    platformConfigured: boolean;
+    offerOnboarding: boolean;
+  };
   bank: {
     connected: false;
     lastVerifiedBalance: null;
@@ -71,7 +80,7 @@ export type SettingsSnapshot = {
     knownOutflows: number;
     unavailableReason: string;
   };
-  paymentProviderConnected: false;
+  paymentProviderConnected: boolean;
   payrollProviderConnected: false;
   accountingConnected: false;
   marketingConnected: false;
@@ -191,6 +200,7 @@ export async function loadSettingsSnapshot(
   const projection = projectedOperatingBalance({ knownInflows, knownOutflows });
   const emailDeliveryConfigured = isEmailDeliveryConfigured();
   const trade = getTrade(business.tradeCode);
+  const payment = await getBusinessPaymentStatus(prisma, businessId);
 
   const preferences: SettingsPreferenceFlags = preferencesRow
     ? {
@@ -242,6 +252,15 @@ export async function loadSettingsSnapshot(
       value: method.value,
       label: method.label,
     })),
+    payment: {
+      providerLabel: "Stripe",
+      status: payment.status,
+      platformConfigured: payment.platformConfigured,
+      offerOnboarding: shouldOfferStripeOnboarding(
+        payment.status,
+        payment.readinessDebug?.branch,
+      ),
+    },
     bank: {
       connected: false,
       lastVerifiedBalance: null,
@@ -250,7 +269,7 @@ export async function loadSettingsSnapshot(
       knownOutflows,
       unavailableReason: projection.unavailableReason,
     },
-    paymentProviderConnected: false,
+    paymentProviderConnected: payment.paymentReady,
     payrollProviderConnected: false,
     accountingConnected: false,
     marketingConnected: false,
@@ -299,6 +318,7 @@ export function settingsReadinessFromSnapshot(snapshot: SettingsSnapshot) {
     catalogItemCount: snapshot.catalogItemCount,
     emailDeliveryConfigured: snapshot.emailDeliveryConfigured,
     paymentProviderConnected: snapshot.paymentProviderConnected,
+    paymentProviderStatus: snapshot.payment.status,
     payrollProviderConnected: snapshot.payrollProviderConnected,
     bankConnected: snapshot.bank.connected,
     marketingConnected: snapshot.marketingConnected,
@@ -310,6 +330,7 @@ export function settingsIntegrationCardsFromSnapshot(snapshot: SettingsSnapshot)
   return buildIntegrationCards({
     emailDeliveryConfigured: snapshot.emailDeliveryConfigured,
     paymentProviderConnected: snapshot.paymentProviderConnected,
+    paymentProviderStatus: snapshot.payment.status,
     payrollProviderConnected: snapshot.payrollProviderConnected,
     bankConnected: snapshot.bank.connected,
     accountingConnected: snapshot.accountingConnected,

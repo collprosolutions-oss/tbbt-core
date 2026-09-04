@@ -181,6 +181,7 @@ model Business {
   knowledgeEntries         KnowledgeEntry[]
   serviceRequestItems      ServiceRequestItem[]
   serviceRequestPhotos     ServiceRequestPhoto[]
+  paymentAccount           BusinessPaymentAccount?
 }
 
 model Membership {
@@ -597,6 +598,25 @@ model JobPhoto {
   @@index([businessId, marketingPermissionStatus])
 }
 
+/// Per-business electronic payment destination. Stores only the
+/// provider account identifier — never secret keys, bank numbers, or
+/// card data. Payment readiness is derived from the processor, not
+/// persisted here.
+model BusinessPaymentAccount {
+  id              String   @id @default(cuid())
+  businessId      String   @unique
+  /// First implementation: "stripe".
+  provider        String
+  /// Stripe Accounts v2 connected-account id (acct_...).
+  stripeAccountId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([stripeAccountId])
+}
+
 model Invoice {
   id               String    @id @default(cuid())
   businessId       String
@@ -606,7 +626,7 @@ model Invoice {
   total            Decimal   @default(0)
   /// Set exactly once, when status transitions SENT -> PAID. Never overwritten afterward.
   paidAt           DateTime?
-  /// Owner-facing only: CASH | CHECK | ZELLE_BANK_TRANSFER | CARD_EXTERNAL | OTHER. Free-form string, not an enum.
+  /// Owner-facing only: CASH | CHECK | ZELLE_BANK_TRANSFER | CARD_EXTERNAL | OTHER | STRIPE. Free-form string, not an enum. STRIPE is set by the processor webhook, never by Mark Paid.
   paymentMethod    String?
   /// Owner-facing only optional note (e.g. check number). Never shown on public/customer pages.
   paymentReference String?

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
 import { ChangeOrdersCard } from "@/components/portal/change-orders-card";
+import { PayInvoiceButton } from "@/components/portal/pay-invoice-button";
 import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
 import { RequestAdditionalWorkForm } from "@/components/portal/request-additional-work-form";
 import {
@@ -20,6 +21,12 @@ import {
   customerFacingJobStatusLabel,
   resolveProjectProgressStep,
 } from "@/lib/project-progress";
+import {
+  getBusinessPaymentStatus,
+  invoiceDueCents,
+  reconcileProjectTokenCheckoutPayment,
+  shouldShowPayInvoice,
+} from "@/lib/payments";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -50,10 +57,13 @@ const LINE_ITEM_SELECT = {
  */
 export default async function CustomerProjectPortalPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ token: string }>;
+  searchParams: Promise<{ checkout?: string; session_id?: string }>;
 }) {
   const { token } = await params;
+  const query = await searchParams;
 
   const job = token
     ? await prisma.job.findUnique({
@@ -62,7 +72,7 @@ export default async function CustomerProjectPortalPage({
           status: true,
           scheduledAt: true,
           scheduledDurationMinutes: true,
-          business: { select: { name: true } },
+          business: { select: { id: true, name: true } },
           customer: { select: { name: true } },
           property: {
             select: {
@@ -95,7 +105,7 @@ export default async function CustomerProjectPortalPage({
             },
           },
           invoices: {
-            select: { status: true, total: true, paidAt: true },
+            select: { id: true, status: true, total: true, paidAt: true },
             take: 1,
             orderBy: { createdAt: "asc" },
           },
@@ -140,7 +150,32 @@ export default async function CustomerProjectPortalPage({
     );
   }
 
-  const invoice = job.invoices[0] ?? null;
+  if (job.invoices[0]?.status === "SENT") {
+    await reconcileProjectTokenCheckoutPayment(
+      prisma,
+      token,
+      query.session_id,
+    );
+  }
+
+  const invoice = job.invoices[0]
+    ? await prisma.invoice.findFirst({
+        where: { id: job.invoices[0].id, job: { projectToken: token } },
+        select: { id: true, status: true, total: true, paidAt: true },
+      })
+    : null;
+  const payment = invoice
+    ? await getBusinessPaymentStatus(prisma, job.business.id)
+    : null;
+  const showPayInvoice = Boolean(
+    invoice &&
+      payment &&
+      shouldShowPayInvoice({
+        invoiceStatus: invoice.status,
+        amountDueCents: invoiceDueCents(invoice.status, invoice.total),
+        paymentReady: payment.paymentReady,
+      }),
+  );
   const approvedScope = resolveApprovedWorkOrderScope(job);
   const progressStep = resolveProjectProgressStep(job, invoice);
   const currentApprovedProjectTotal =
@@ -253,6 +288,18 @@ export default async function CustomerProjectPortalPage({
                     </a>
                   </p>
                 ) : null}
+                {query.checkout === "return" && invoice.status !== "PAID" ? (
+                  <p className="pt-2 text-muted-foreground">
+                    If you just paid, this invoice updates to Paid after
+                    payment is confirmed.
+                  </p>
+                ) : null}
+                {query.checkout === "cancelled" ? (
+                  <p className="pt-2 text-muted-foreground">
+                    Payment was cancelled. This invoice is still unpaid.
+                  </p>
+                ) : null}
+                {showPayInvoice ? <PayInvoiceButton token={token} /> : null}
               </>
             ) : (
               <p className="text-muted-foreground">

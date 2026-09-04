@@ -1,11 +1,10 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { PAYMENT_METHODS } from "@/lib/invoice-payment";
+import { INVOICE_PAYMENT_METHOD_FILTERS } from "@/lib/invoice-payment";
 
 /**
- * Real filter on Invoice.paymentMethod -- the exact same 5 values
- * MarkInvoicePaidForm already writes (see src/lib/invoice-payment.ts).
+ * Real filter on Invoice.paymentMethod -- manual methods plus Stripe.
  * Only PAID invoices ever have a payment method set, so this naturally
  * (and correctly) only ever matches paid invoices -- no fabricated
  * options.
@@ -32,7 +31,7 @@ export function PaymentMethodFilterSelect({ value }: { value: string }) {
       className="h-9 w-full min-w-40 rounded-lg border border-input bg-transparent px-3 text-sm sm:w-auto"
     >
       <option value="all">All Payment Methods</option>
-      {PAYMENT_METHODS.map((method) => (
+      {INVOICE_PAYMENT_METHOD_FILTERS.map((method) => (
         <option key={method.value} value={method.value}>
           {method.label}
         </option>

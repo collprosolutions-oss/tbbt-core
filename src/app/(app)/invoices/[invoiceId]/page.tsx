@@ -19,6 +19,7 @@ import { requireManagementPageAccess } from "@/lib/access";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { invoiceNumberFromId } from "@/lib/invoice-document";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
+import { reconcileStripeCheckoutPayment } from "@/lib/payments";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -32,18 +33,28 @@ export default async function InvoicePage({
 }) {
   const { invoiceId } = await params;
   const access = await requireManagementPageAccess();
-  const invoice = await prisma.invoice.findFirst({
+  const invoiceQuery = {
     where: { id: invoiceId, ...access.scope },
     include: {
       customer: { select: { name: true } },
       job: { select: { id: true, status: true } },
     },
-  });
+  } as const;
+  let invoice = await prisma.invoice.findFirst(invoiceQuery);
 
   if (!invoice) {
     notFound();
   }
   access.assertOwned(invoice);
+
+  if (invoice.status === "SENT") {
+    await reconcileStripeCheckoutPayment(
+      prisma,
+      invoice.businessId,
+      invoice.id,
+    );
+    invoice = (await prisma.invoice.findFirst(invoiceQuery)) ?? invoice;
+  }
 
   const isDraft = invoice.status === "DRAFT";
   const isSent = invoice.status === "SENT";

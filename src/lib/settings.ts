@@ -143,6 +143,23 @@ export const SMS_DELIVERY_UNAVAILABLE_MESSAGE =
 export const PAYMENT_PROVIDER_DISCONNECTED_MESSAGE =
   "No payment provider is connected. TBBT records cash, check, Zelle / bank transfer, card, and other payments manually.";
 
+export const PAYMENT_PROVIDER_SETUP_REQUIRED_MESSAGE =
+  "Stripe is connected but setup is not finished. Complete Stripe onboarding before customers can pay invoices online.";
+
+export const PAYMENT_PROVIDER_CONNECTED_MESSAGE =
+  "Stripe is connected. Customers can pay sent invoices online. Cash, check, Zelle / bank transfer, and other offline payments can still be recorded manually.";
+
+export const PAYMENT_PROVIDER_PLATFORM_UNCONFIGURED_MESSAGE =
+  "Stripe is not configured on this TBBT environment. Set STRIPE_SECRET_KEY to enable Connect onboarding.";
+
+export type PaymentProviderStatus = "not_connected" | "setup_required" | "connected";
+
+export const PAYMENT_PROVIDER_STATUS_LABELS: Record<PaymentProviderStatus, string> = {
+  not_connected: "Not Connected",
+  setup_required: "Setup Required",
+  connected: "Connected",
+};
+
 export const PAYROLL_PROVIDER_DISCONNECTED_MESSAGE =
   "No payroll provider is connected. TBBT prepares, reviews, and records payroll — it does not move money.";
 
@@ -223,6 +240,7 @@ export type SettingsReadinessInput = {
   catalogItemCount: number;
   emailDeliveryConfigured: boolean;
   paymentProviderConnected: boolean;
+  paymentProviderStatus?: PaymentProviderStatus;
   payrollProviderConnected: boolean;
   bankConnected: boolean;
   marketingConnected: boolean;
@@ -283,10 +301,8 @@ export function buildSettingsReadiness(input: SettingsReadinessInput): SettingsR
       id: "payments",
       label: "Payments",
       section: "estimates-payments",
-      status: input.paymentProviderConnected ? "configured" : "not_connected",
-      detail: input.paymentProviderConnected
-        ? "A payment provider is connected."
-        : PAYMENT_PROVIDER_DISCONNECTED_MESSAGE,
+      status: paymentReadinessStatus(input),
+      detail: paymentReadinessDetail(input),
       required: false,
     },
     {
@@ -359,9 +375,50 @@ export function buildSettingsReadiness(input: SettingsReadinessInput): SettingsR
   return { items, requiredTotal, requiredReady, readyPercent };
 }
 
+function paymentProviderStatusOf(input: {
+  paymentProviderConnected: boolean;
+  paymentProviderStatus?: PaymentProviderStatus;
+}): PaymentProviderStatus {
+  if (input.paymentProviderStatus) {
+    return input.paymentProviderStatus;
+  }
+  return input.paymentProviderConnected ? "connected" : "not_connected";
+}
+
+function paymentReadinessStatus(input: {
+  paymentProviderConnected: boolean;
+  paymentProviderStatus?: PaymentProviderStatus;
+}): SettingsReadinessStatus {
+  const status = paymentProviderStatusOf(input);
+  if (status === "connected") return "configured";
+  if (status === "setup_required") return "needs_setup";
+  return "not_connected";
+}
+
+function paymentReadinessDetail(input: {
+  paymentProviderConnected: boolean;
+  paymentProviderStatus?: PaymentProviderStatus;
+}) {
+  const status = paymentProviderStatusOf(input);
+  if (status === "connected") return PAYMENT_PROVIDER_CONNECTED_MESSAGE;
+  if (status === "setup_required") return PAYMENT_PROVIDER_SETUP_REQUIRED_MESSAGE;
+  return PAYMENT_PROVIDER_DISCONNECTED_MESSAGE;
+}
+
+function paymentIntegrationStatus(input: {
+  paymentProviderConnected: boolean;
+  paymentProviderStatus?: PaymentProviderStatus;
+}): IntegrationConnectionStatus {
+  const status = paymentProviderStatusOf(input);
+  if (status === "connected") return "connected";
+  if (status === "setup_required") return "needs_attention";
+  return "not_connected";
+}
+
 export function buildIntegrationCards(input: {
   emailDeliveryConfigured: boolean;
   paymentProviderConnected: boolean;
+  paymentProviderStatus?: PaymentProviderStatus;
   payrollProviderConnected: boolean;
   bankConnected: boolean;
   accountingConnected: boolean;
@@ -373,10 +430,8 @@ export function buildIntegrationCards(input: {
       id: "payments",
       category: "Payments",
       label: "Payment provider",
-      status: input.paymentProviderConnected ? "connected" : "not_connected",
-      detail: input.paymentProviderConnected
-        ? "A payment provider is connected."
-        : PAYMENT_PROVIDER_DISCONNECTED_MESSAGE,
+      status: paymentIntegrationStatus(input),
+      detail: paymentReadinessDetail(input),
     },
     {
       id: "banking",
