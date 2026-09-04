@@ -14,7 +14,7 @@ export function InvoiceDocument({
             <img
               src={invoice.business.logoSrc}
               alt={invoice.business.name}
-              className="h-12 w-auto object-contain"
+              className="h-12 w-auto bg-transparent object-contain"
             />
           ) : null}
           <p className="text-lg font-semibold tracking-tight">

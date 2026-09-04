@@ -5,7 +5,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
-import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
+import { completeJobAndSendInvoice } from "@/lib/complete-job-invoice";
+import { evaluateStartJob } from "@/lib/job-lifecycle";
 import {
   parseDurationMinutes,
   parseScheduleStart,
@@ -248,22 +249,28 @@ export async function markJobComplete(
     }),
   );
 
-  const result = evaluateCompleteJob(job.status);
-  if (!result.ok) {
-    return { error: result.error };
-  }
+  const result = await completeJobAndSendInvoice(prisma, {
+    businessId: access.businessId,
+    jobId: job.id,
+    businessName: access.workspace.business.name,
+  });
 
-  if (result.nextStatus) {
-    await prisma.job.update({
-      where: { id: job.id },
-      data: { status: result.nextStatus },
-    });
+  if (!result.ok) {
+    revalidatePath("/jobs");
+    revalidatePath("/dashboard");
+    revalidatePath(`/jobs/${job.id}`);
+    if (result.invoiceId) {
+      revalidatePath(`/invoices/${result.invoiceId}`);
+    }
+    return { error: result.error };
   }
 
   revalidatePath("/jobs");
   revalidatePath("/dashboard");
+  revalidatePath("/invoices");
   revalidatePath(`/jobs/${job.id}`);
-  return {};
+  revalidatePath(`/invoices/${result.invoiceId}`);
+  return result.warning ? { warning: result.warning } : {};
 }
 
 /**

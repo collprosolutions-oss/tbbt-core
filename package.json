@@ -38,6 +38,7 @@
     "test:public-website": "node --experimental-strip-types scripts/check-public-website.mjs",
     "test:public-site-images": "node --experimental-strip-types scripts/check-public-site-images.mjs",
     "test:invoice-document": "node --experimental-strip-types scripts/check-invoice-document.mjs",
+    "test:complete-job-invoice": "node --experimental-strip-types scripts/check-complete-job-invoice.mjs",
     "test:payments": "node --experimental-strip-types scripts/check-payments.mjs"
   },
   "dependencies": {

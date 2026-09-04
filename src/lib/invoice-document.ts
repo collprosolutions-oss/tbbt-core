@@ -7,7 +7,7 @@
  * copied LineItem snapshots (see src/lib/invoice-carry-forward.ts).
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { getBusinessLogoSrc } from "@/lib/business-branding";
+import { getBusinessDocumentLogoSrc } from "@/lib/business-branding";
 import { formatAddress, formatDate, formatMoney } from "@/lib/format";
 import {
   backfillEmptyInvoiceWorkLines,
@@ -190,7 +190,7 @@ function toDocumentView(
     pdfFilename: invoicePdfFilename(invoiceNumber, customerName),
     business: {
       name: invoice.business.name,
-      logoSrc: getBusinessLogoSrc(invoice.business.slug),
+      logoSrc: getBusinessDocumentLogoSrc(invoice.business.slug),
       phone: publicPhone(invoice.business.slug),
     },
     customer: {

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { sendDraftInvoiceIfNeeded } from "@/lib/complete-job-invoice";
 import { persistDraftInvoiceFromCompletedJob } from "@/lib/invoice-carry-forward";
 import { isPaymentMethodValue } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
@@ -34,7 +35,8 @@ function readString(formData: FormData, key: string) {
  *
  * Approved estimate / change-order line items are copied onto the new
  * Invoice as LineItem snapshots (see persistDraftInvoiceFromCompletedJob).
- * This action never auto-sends or marks the invoice paid.
+ * Recovery / manual create now also sends the invoice (DRAFT → SENT)
+ * so the owner is not left with a second send step after Complete Job.
  */
 export async function createInvoiceFromJob(
   jobId: string,
@@ -57,10 +59,20 @@ export async function createInvoiceFromJob(
       ...access.scope,
       jobId: job.id,
     },
-    select: { id: true },
+    select: { id: true, status: true },
   });
 
   if (existing) {
+    if (existing.status === "DRAFT") {
+      const sent = await sendDraftInvoiceIfNeeded(prisma, {
+        businessId: access.businessId,
+        invoiceId: existing.id,
+        businessName: access.workspace.business.name,
+      });
+      if (!sent.ok) {
+        return { error: sent.error };
+      }
+    }
     redirect(`/invoices/${existing.id}`);
   }
 
@@ -73,7 +85,19 @@ export async function createInvoiceFromJob(
     return { error: result.error };
   }
 
+  const sent = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: access.businessId,
+    invoiceId: result.invoiceId,
+    businessName: access.workspace.business.name,
+  });
+  if (!sent.ok) {
+    revalidatePath(`/jobs/${job.id}`);
+    revalidatePath(`/invoices/${result.invoiceId}`);
+    return { error: sent.error };
+  }
+
   revalidatePath(`/jobs/${job.id}`);
+  revalidatePath("/invoices");
   redirect(`/invoices/${result.invoiceId}`);
 }
 
@@ -88,29 +112,21 @@ export async function markInvoiceSent(
     }),
   );
 
-  if (invoice.status === "SENT" || invoice.status === "PAID") {
-    return {};
-  }
-
-  if (invoice.status !== "DRAFT") {
-    return { error: "Only a draft invoice can be sent." };
-  }
-
-  const updated = await prisma.invoice.updateMany({
-    where: {
-      id: invoice.id,
-      businessId: access.businessId,
-      status: "DRAFT",
-    },
-    data: { status: "SENT" },
+  const sent = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: access.businessId,
+    invoiceId: invoice.id,
+    businessName: access.workspace.business.name,
   });
 
-  if (updated.count !== 1) {
-    return { error: "Only a draft invoice can be sent." };
+  if (!sent.ok) {
+    return { error: sent.error };
   }
 
   revalidatePath("/invoices");
   revalidatePath(`/invoices/${invoice.id}`);
+  if (invoice.jobId) {
+    revalidatePath(`/jobs/${invoice.jobId}`);
+  }
   return {};
 }
 

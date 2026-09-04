@@ -34,6 +34,20 @@ const BUSINESS_LOGOS: Record<string, string> = {
   "collpro-reno-handyman-services": "/brand/collpro-logo.png",
 };
 
+/** Dark-background logo for the dashboard / public website. */
 export function getBusinessLogoSrc(slug: string): string | null {
   return BUSINESS_LOGOS[slug] ?? null;
+}
+
+/**
+ * Transparent-background logo for white invoice/PDF pages only.
+ * Does not replace getBusinessLogoSrc() — dark UI keeps the original asset.
+ */
+const BUSINESS_DOCUMENT_LOGOS: Record<string, string> = {
+  "collpro-reno": "/brand/collpro-logo-document.png",
+  "collpro-reno-handyman-services": "/brand/collpro-logo-document.png",
+};
+
+export function getBusinessDocumentLogoSrc(slug: string): string | null {
+  return BUSINESS_DOCUMENT_LOGOS[slug] ?? getBusinessLogoSrc(slug);
 }

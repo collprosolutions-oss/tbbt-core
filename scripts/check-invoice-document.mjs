@@ -31,6 +31,10 @@ const {
   sanitizeFilenamePart,
 } = await import("@/lib/invoice-document");
 const { renderInvoicePdf } = await import("@/lib/invoice-pdf");
+const { getBusinessDocumentLogoSrc, getBusinessLogoSrc } = await import(
+  "@/lib/business-branding"
+);
+const { existsSync } = await import("node:fs");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -181,6 +185,18 @@ try {
   check("DRAFT is not customer-visible", isCustomerVisibleInvoiceStatus("DRAFT") === false);
   check("SENT is customer-visible", isCustomerVisibleInvoiceStatus("SENT") === true);
   check("PAID is customer-visible", isCustomerVisibleInvoiceStatus("PAID") === true);
+  check(
+    "dashboard/website logo stays the dark-background CollPro asset",
+    getBusinessLogoSrc("collpro-reno") === "/brand/collpro-logo.png",
+  );
+  check(
+    "invoice/document logo is the transparent CollPro variant",
+    getBusinessDocumentLogoSrc("collpro-reno") === "/brand/collpro-logo-document.png",
+  );
+  check(
+    "transparent document logo file exists",
+    existsSync(new URL("../public/brand/collpro-logo-document.png", import.meta.url)),
+  );
 
   const built = buildInvoiceLineSnapshots({
     approvedLineItems: [
@@ -586,7 +602,10 @@ try {
     prisma,
   );
   check("CollPro document uses CollPro business name from the DB", collproDoc?.business.name === "CollPro Reno Handyman Services");
-  check("CollPro document uses the CollPro logo map", collproDoc?.business.logoSrc === "/brand/collpro-logo.png");
+  check(
+    "CollPro invoice document uses the transparent document logo, not the dark UI logo",
+    collproDoc?.business.logoSrc === "/brand/collpro-logo-document.png",
+  );
   check("CollPro document uses the configured CollPro phone", collproDoc?.business.phone === "239-357-8199");
   const otherDocAgain = await loadInvoiceDocumentForBusiness(
     invoice.id,

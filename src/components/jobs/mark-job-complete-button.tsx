@@ -21,6 +21,9 @@ export function MarkJobCompleteButton({ jobId }: { jobId: string }) {
       {state.error ? (
         <p className="mt-2 text-sm text-destructive">{state.error}</p>
       ) : null}
+      {state.warning ? (
+        <p className="mt-2 text-sm text-amber-600">{state.warning}</p>
+      ) : null}
     </form>
   );
 }
