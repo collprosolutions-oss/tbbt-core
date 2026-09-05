@@ -26,6 +26,11 @@ function isPublicHome(pathname: string) {
   return pathname === "/";
 }
 
+/** Existing secure public-asset route. The handler still checks PUBLIC + READY. */
+function isPublicStoredAsset(pathname: string) {
+  return pathname.startsWith("/api/storage/public/");
+}
+
 /** Customer Project Portal -- see src/app/p/[token]/page.tsx. */
 function isPublicProject(pathname: string) {
   return pathname.startsWith("/p/");
@@ -45,20 +50,16 @@ export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
 
-  if (pathname === "/") {
-    if (hasSession) {
-      return NextResponse.redirect(new URL("/dashboard", request.url));
-    }
-    return NextResponse.next();
-  }
-
+  // `/` is always the public website. A signed-in owner still reaches
+  // /dashboard by going there directly; the session must not hijack Home.
   if (
     isPublicHome(pathname) ||
     isPublicIntake(pathname) ||
     isPublicEstimate(pathname) ||
     isPublicHire(pathname) ||
     isPublicProject(pathname) ||
-    isPublicSetPassword(pathname)
+    isPublicSetPassword(pathname) ||
+    isPublicStoredAsset(pathname)
   ) {
     return NextResponse.next();
   }
