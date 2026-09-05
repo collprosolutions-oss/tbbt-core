@@ -121,10 +121,10 @@ export const PUBLIC_PROJECTS: PublicProject[] = [
   {
     id: "door-install",
     title: "Interior door installation",
-    description: "Interior door being fitted and fastened at the hinges.",
-    src: "/brand/projects/door-install.jpg",
-    width: 1122,
-    height: 1402,
+    description: "Finished hallway with three installed white interior doors.",
+    src: "/brand/projects/interior-door-installation.jpg",
+    width: 1086,
+    height: 1448,
     filters: ["installations", "carpentry"],
   },
   {

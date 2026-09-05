@@ -126,6 +126,14 @@ check("Recent Projects uses up to six real featured photos",
     selectPublicProjectsById(HOME_FEATURED_PROJECT_IDS).length === HOME_FEATURED_PROJECT_IDS.length);
 check("Home Recent Projects use a 3-column desktop grid",
   readRepo("src/components/public/public-home.tsx").includes("lg:grid-cols-3"));
+const interiorDoorProject = PUBLIC_PROJECTS.find((project) => project.id === "door-install");
+check(
+  "Interior door installation card uses the approved finished-hallway photo",
+  interiorDoorProject?.title === "Interior door installation" &&
+    interiorDoorProject.src === "/brand/projects/interior-door-installation.jpg" &&
+    interiorDoorProject.src !== "/brand/projects/door-install.jpg" &&
+    !/fitted|fastened|hinges|handyman/i.test(interiorDoorProject.description),
+);
 check("Projects gallery uses a 3-column desktop grid",
   readRepo("src/components/public/public-projects-gallery.tsx").includes("lg:grid-cols-3") &&
     !readRepo("src/components/public/public-projects-gallery.tsx").includes("lg:grid-cols-2"));
