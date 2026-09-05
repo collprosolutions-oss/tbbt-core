@@ -2,9 +2,11 @@ import type { Metadata } from "next";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
 import { ChangeOrdersCard } from "@/components/portal/change-orders-card";
 import { PayInvoiceButton } from "@/components/portal/pay-invoice-button";
+import { ProjectPortalHeader } from "@/components/portal/project-portal-header";
 import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { RequestAdditionalWorkForm } from "@/components/portal/request-additional-work-form";
+import { getBusinessLogoSrc } from "@/lib/business-branding";
 import {
   Card,
   CardContent,
@@ -75,7 +77,7 @@ export default async function CustomerProjectPortalPage({
           status: true,
           scheduledAt: true,
           scheduledDurationMinutes: true,
-          business: { select: { id: true, name: true, tradeCode: true } },
+          business: { select: { id: true, name: true, slug: true, tradeCode: true } },
           customer: { select: { name: true } },
           property: {
             select: {
@@ -201,142 +203,148 @@ export default async function CustomerProjectPortalPage({
           approvedScope.total,
           job.changeOrders,
         );
+  const logoSrc = getBusinessLogoSrc(job.business.slug);
+  const serviceAddress = job.property ? formatAddress(job.property) : "";
 
   return (
-    <main className="flex min-h-full items-center justify-center px-4 py-10">
-      <div className="w-full max-w-md space-y-6">
-        <div>
-          <p className="text-sm font-medium text-muted-foreground">
-            {job.business.name}
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">
-            Your Project
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {job.customer?.name ? `For ${job.customer.name}. ` : ""}
-            {job.property ? formatAddress(job.property) : ""}
-          </p>
-        </div>
+    <main className="min-h-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      <div className="mx-auto w-full max-w-[1200px] space-y-6">
+        <ProjectPortalHeader
+          businessName={job.business.name}
+          logoSrc={logoSrc}
+          customerName={job.customer?.name}
+          address={serviceAddress}
+        />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Project Status</CardTitle>
-            <CardDescription>
-              {customerFacingJobStatusLabel(job.status)}
-              {job.scheduledAt
-                ? ` · Scheduled ${formatDateTime(job.scheduledAt)}`
-                : ""}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ProjectProgressBar currentStep={progressStep} />
-          </CardContent>
-        </Card>
-
-        <ApprovedScopeCard scope={approvedScope} title="Original Approved Scope" />
-
-        {currentApprovedProjectTotal !== null ? (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,45fr)_minmax(0,55fr)]">
           <Card>
             <CardHeader>
-              <CardTitle>Current Approved Project Total</CardTitle>
+              <CardTitle>Project Status</CardTitle>
               <CardDescription>
-                Your original approved total plus any change orders you have
-                approved below. Pending or declined change orders are never
-                included.
+                {customerFacingJobStatusLabel(job.status)}
+                {job.scheduledAt
+                  ? ` · Scheduled ${formatDateTime(job.scheduledAt)}`
+                  : ""}
               </CardDescription>
             </CardHeader>
-            <CardContent className="text-sm font-medium">
-              {formatMoney(currentApprovedProjectTotal)}
+            <CardContent>
+              <ProjectProgressBar currentStep={progressStep} />
             </CardContent>
           </Card>
-        ) : null}
 
-        <ChangeOrdersCard projectToken={token} changeOrders={job.changeOrders} />
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Additional Work</CardTitle>
-            <CardDescription>
-              Have something else you&apos;d like us to look at? Send a
-              request -- we&apos;ll follow up with pricing before anything is
-              added to your project.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <RequestAdditionalWorkForm
-              projectToken={token}
-              groups={await loadPortalAdditionalWorkCatalog(job.business)}
+          <div className="space-y-6">
+            <ApprovedScopeCard
+              scope={approvedScope}
+              title="Original Approved Scope"
+              scanColumns
             />
-          </CardContent>
-        </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Invoice</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-1 text-sm">
-            {invoice ? (
-              <>
-                {invoice.lineItems.length > 0 ? (
-                  <div className="pb-3">
-                    <WorkPerformedList
-                      lines={invoice.lineItems.map((line) => ({
-                        description: line.description,
-                        quantityLabel: line.quantity.toString(),
-                      }))}
-                    />
-                  </div>
-                ) : null}
-                <p>Total: {formatMoney(invoice.total)}</p>
-                <p>
-                  {invoice.status === "PAID" ? (
-                    <>
-                      Paid
-                      {invoice.paidAt
-                        ? ` on ${formatDateTime(invoice.paidAt)}`
-                        : ""}
-                    </>
-                  ) : (
-                    "Outstanding"
-                  )}
+            {currentApprovedProjectTotal !== null ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Current Approved Project Total</CardTitle>
+                  <CardDescription>
+                    Your original approved total plus any change orders you have
+                    approved below. Pending or declined change orders are never
+                    included.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="text-sm font-medium">
+                  {formatMoney(currentApprovedProjectTotal)}
+                </CardContent>
+              </Card>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+          <ChangeOrdersCard projectToken={token} changeOrders={job.changeOrders} />
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Additional Work</CardTitle>
+              <CardDescription>
+                Have something else you&apos;d like us to look at? Send a
+                request -- we&apos;ll follow up with pricing before anything is
+                added to your project.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <RequestAdditionalWorkForm
+                projectToken={token}
+                groups={await loadPortalAdditionalWorkCatalog(job.business)}
+              />
+            </CardContent>
+          </Card>
+
+          <Card className="md:col-span-2 xl:col-span-1">
+            <CardHeader>
+              <CardTitle>Invoice</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1 text-sm">
+              {invoice ? (
+                <>
+                  {invoice.lineItems.length > 0 ? (
+                    <div className="pb-3">
+                      <WorkPerformedList
+                        lines={invoice.lineItems.map((line) => ({
+                          description: line.description,
+                          quantityLabel: line.quantity.toString(),
+                        }))}
+                      />
+                    </div>
+                  ) : null}
+                  <p>Total: {formatMoney(invoice.total)}</p>
+                  <p>
+                    {invoice.status === "PAID" ? (
+                      <>
+                        Paid
+                        {invoice.paidAt
+                          ? ` on ${formatDateTime(invoice.paidAt)}`
+                          : ""}
+                      </>
+                    ) : (
+                      "Outstanding"
+                    )}
+                  </p>
+                  {invoice.status === "SENT" || invoice.status === "PAID" ? (
+                    <p className="pt-2">
+                      <a
+                        href={`/p/${token}/invoice`}
+                        className="underline underline-offset-4"
+                      >
+                        View Invoice
+                      </a>
+                      {" · "}
+                      <a
+                        href={`/p/${token}/invoice/pdf`}
+                        className="underline underline-offset-4"
+                      >
+                        Download PDF
+                      </a>
+                    </p>
+                  ) : null}
+                  {query.checkout === "return" && invoice.status !== "PAID" ? (
+                    <p className="pt-2 text-muted-foreground">
+                      If you just paid, this invoice updates to Paid after
+                      payment is confirmed.
+                    </p>
+                  ) : null}
+                  {query.checkout === "cancelled" ? (
+                    <p className="pt-2 text-muted-foreground">
+                      Payment was cancelled. This invoice is still unpaid.
+                    </p>
+                  ) : null}
+                  {showPayInvoice ? <PayInvoiceButton token={token} /> : null}
+                </>
+              ) : (
+                <p className="text-muted-foreground">
+                  An invoice will appear here once your project is complete.
                 </p>
-                {invoice.status === "SENT" || invoice.status === "PAID" ? (
-                  <p className="pt-2">
-                    <a
-                      href={`/p/${token}/invoice`}
-                      className="underline underline-offset-4"
-                    >
-                      View Invoice
-                    </a>
-                    {" · "}
-                    <a
-                      href={`/p/${token}/invoice/pdf`}
-                      className="underline underline-offset-4"
-                    >
-                      Download PDF
-                    </a>
-                  </p>
-                ) : null}
-                {query.checkout === "return" && invoice.status !== "PAID" ? (
-                  <p className="pt-2 text-muted-foreground">
-                    If you just paid, this invoice updates to Paid after
-                    payment is confirmed.
-                  </p>
-                ) : null}
-                {query.checkout === "cancelled" ? (
-                  <p className="pt-2 text-muted-foreground">
-                    Payment was cancelled. This invoice is still unpaid.
-                  </p>
-                ) : null}
-                {showPayInvoice ? <PayInvoiceButton token={token} /> : null}
-              </>
-            ) : (
-              <p className="text-muted-foreground">
-                An invoice will appear here once your project is complete.
-              </p>
-            )}
-          </CardContent>
-        </Card>
+              )}
+            </CardContent>
+          </Card>
+        </div>
 
         <p className="text-center text-xs text-muted-foreground">
           Questions about this project? Contact {job.business.name}.
