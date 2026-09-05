@@ -58,6 +58,11 @@ export type CreateExpenseInput = {
   mileageMiles?: string;
   notes?: string;
   receiptUrl?: string;
+  customerBillable?: boolean;
+};
+
+export type UpdateExpenseInput = CreateExpenseInput & {
+  expenseId: string;
 };
 
 async function loadMembershipInBusiness(db: Db, businessId: string, membershipId: string) {
@@ -100,9 +105,14 @@ function requireCategory(raw: string): ExpenseCategory {
   return raw;
 }
 
-export async function createExpense(db: Db, access: BusinessAccess, input: CreateExpenseInput) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+function requireActiveExpense<T extends { voidedAt: Date | null }>(expense: T): T {
+  if (expense.voidedAt) {
+    throw new ExpenseError("This expense has been voided.");
+  }
+  return expense;
+}
 
+async function resolveExpenseFields(db: Db, access: BusinessAccess, input: CreateExpenseInput) {
   const occurredOn = parseExpenseDate(input.occurredOn);
   if (!occurredOn) {
     throw new ExpenseError("Enter a valid expense date.");
@@ -148,37 +158,118 @@ export async function createExpense(db: Db, access: BusinessAccess, input: Creat
     customerId = customer.id;
   }
 
-  const reimbursable = Boolean(input.reimbursable);
-  const paymentMethod = normalizePaymentMethod(input.paymentMethod ?? "");
-  const taxCategory = normalizeTaxCategory(input.taxCategory ?? "");
-  const recurring = Boolean(input.recurring);
-  const recurringNote = input.recurringNote?.trim() || null;
-  const notes = input.notes?.trim() || null;
-  const vendor = input.vendor?.trim() || null;
-  const receiptUrl = input.receiptUrl?.trim() || null;
+  return {
+    occurredOn,
+    description,
+    amount,
+    category,
+    vendor: input.vendor?.trim() || null,
+    purchaserMembershipId,
+    jobId,
+    customerId,
+    reimbursable: Boolean(input.reimbursable),
+    customerBillable: Boolean(input.customerBillable),
+    paymentMethod: normalizePaymentMethod(input.paymentMethod ?? ""),
+    taxCategory: normalizeTaxCategory(input.taxCategory ?? ""),
+    recurring: Boolean(input.recurring),
+    recurringNote: input.recurringNote?.trim() || null,
+    mileageMiles,
+    notes: input.notes?.trim() || null,
+    receiptUrl: input.receiptUrl?.trim() || null,
+  };
+}
+
+export async function createExpense(db: Db, access: BusinessAccess, input: CreateExpenseInput) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+  const fields = await resolveExpenseFields(db, access, input);
 
   return db.expense.create({
     data: {
       businessId: access.businessId,
-      occurredOn,
-      description,
-      amount,
-      category,
-      vendor,
-      purchaserMembershipId,
-      jobId,
-      customerId,
-      receiptUrl,
-      reimbursable,
-      reimbursementStatus: defaultReimbursementStatus(reimbursable),
-      paymentMethod,
-      taxCategory,
-      recurring,
-      recurringNote,
-      mileageMiles,
-      notes,
+      occurredOn: fields.occurredOn,
+      description: fields.description,
+      amount: fields.amount,
+      category: fields.category,
+      vendor: fields.vendor,
+      purchaserMembershipId: fields.purchaserMembershipId,
+      jobId: fields.jobId,
+      customerId: fields.customerId,
+      receiptUrl: fields.receiptUrl,
+      reimbursable: fields.reimbursable,
+      reimbursementStatus: defaultReimbursementStatus(fields.reimbursable),
+      customerBillable: fields.customerBillable,
+      paymentMethod: fields.paymentMethod,
+      taxCategory: fields.taxCategory,
+      recurring: fields.recurring,
+      recurringNote: fields.recurringNote,
+      mileageMiles: fields.mileageMiles,
+      notes: fields.notes,
       reviewStatus: "RECORDED",
     },
+  });
+}
+
+export async function updateExpense(db: Db, access: BusinessAccess, input: UpdateExpenseInput) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+
+  const existing = requireActiveExpense(
+    access.assertOwned(
+      await db.expense.findFirst({
+        where: { id: input.expenseId, ...access.scope },
+      }),
+    ),
+  );
+
+  const fields = await resolveExpenseFields(db, access, input);
+  const reimbursementStatus = fields.reimbursable
+    ? existing.reimbursementStatus === "NONE"
+      ? "PENDING"
+      : existing.reimbursementStatus
+    : "NONE";
+
+  return db.expense.update({
+    where: { id: existing.id },
+    data: {
+      occurredOn: fields.occurredOn,
+      description: fields.description,
+      amount: fields.amount,
+      category: fields.category,
+      vendor: fields.vendor,
+      purchaserMembershipId: fields.purchaserMembershipId,
+      jobId: fields.jobId,
+      customerId: fields.customerId,
+      reimbursable: fields.reimbursable,
+      reimbursementStatus,
+      customerBillable: fields.customerBillable,
+      paymentMethod: fields.paymentMethod,
+      taxCategory: fields.taxCategory,
+      recurring: fields.recurring,
+      recurringNote: fields.recurringNote,
+      mileageMiles: fields.mileageMiles,
+      notes: fields.notes,
+    },
+  });
+}
+
+export async function voidExpense(
+  db: Db,
+  access: BusinessAccess,
+  input: { expenseId: string },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+
+  const existing = access.assertOwned(
+    await db.expense.findFirst({
+      where: { id: input.expenseId, ...access.scope },
+    }),
+  );
+  if (existing.voidedAt) {
+    throw new ExpenseError("This expense is already voided.");
+  }
+
+  return db.expense.update({
+    where: { id: existing.id },
+    data: { voidedAt: new Date() },
   });
 }
 
@@ -193,10 +284,12 @@ export async function reviewExpense(
   }
   const reviewStatus: ExpenseReviewStatus = input.reviewStatus;
 
-  const expense = access.assertOwned(
-    await db.expense.findFirst({
-      where: { id: input.expenseId, ...access.scope },
-    }),
+  const expense = requireActiveExpense(
+    access.assertOwned(
+      await db.expense.findFirst({
+        where: { id: input.expenseId, ...access.scope },
+      }),
+    ),
   );
 
   return db.expense.update({
@@ -220,10 +313,12 @@ export async function setReimbursementStatus(
   }
   const reimbursementStatus: ReimbursementStatus = input.reimbursementStatus;
 
-  const expense = access.assertOwned(
-    await db.expense.findFirst({
-      where: { id: input.expenseId, ...access.scope },
-    }),
+  const expense = requireActiveExpense(
+    access.assertOwned(
+      await db.expense.findFirst({
+        where: { id: input.expenseId, ...access.scope },
+      }),
+    ),
   );
 
   if (!expense.reimbursable && reimbursementStatus !== "NONE") {
@@ -247,10 +342,12 @@ export async function attachExpenseReceipt(
     throw new ExpenseError("A receipt URL is required.");
   }
 
-  const expense = access.assertOwned(
-    await db.expense.findFirst({
-      where: { id: input.expenseId, ...access.scope },
-    }),
+  const expense = requireActiveExpense(
+    access.assertOwned(
+      await db.expense.findFirst({
+        where: { id: input.expenseId, ...access.scope },
+      }),
+    ),
   );
 
   return db.expense.update({

@@ -17,6 +17,7 @@ import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
 import {
+  ACTIVE_EXPENSE_WHERE,
   EXPENSE_CATEGORIES,
   EXPENSE_CATEGORY_LABELS,
   REIMBURSEMENT_STATUS_LABELS,
@@ -82,6 +83,8 @@ export default async function ExpensesPage({
     purchaser?: string;
     method?: string;
     reimbursable?: string;
+    job?: string;
+    vendor?: string;
     page?: string;
     pageSize?: string;
     filters?: string;
@@ -107,6 +110,8 @@ export default async function ExpensesPage({
   const method = params.method && params.method !== "all" ? params.method : undefined;
   const reimbursableFilter =
     params.reimbursable === "yes" ? true : params.reimbursable === "no" ? false : undefined;
+  const jobId = params.job && params.job !== "all" ? params.job : undefined;
+  const vendor = params.vendor && params.vendor !== "all" ? params.vendor : undefined;
   const pageSize = PAGE_SIZE_OPTIONS.includes(Number(params.pageSize))
     ? Number(params.pageSize)
     : DEFAULT_PAGE_SIZE;
@@ -131,17 +136,22 @@ export default async function ExpensesPage({
   const methodWhere = method ? { paymentMethod: method } : {};
   const reimbursableWhere =
     reimbursableFilter === undefined ? {} : { reimbursable: reimbursableFilter };
+  const jobWhere = jobId ? { jobId } : {};
+  const vendorWhere = vendor ? { vendor } : {};
 
   const listWhere = {
     ...access.scope,
+    ...ACTIVE_EXPENSE_WHERE,
     ...rangeWhere,
     ...searchWhere,
     ...categoryWhere,
     ...purchaserWhere,
     ...methodWhere,
     ...reimbursableWhere,
+    ...jobWhere,
+    ...vendorWhere,
   };
-  const summaryWhere = { ...access.scope, ...rangeWhere };
+  const summaryWhere = { ...access.scope, ...ACTIVE_EXPENSE_WHERE, ...rangeWhere };
 
   const horizonStart = startOfDay(now);
   const horizonEnd = addDays(horizonStart, 30);
@@ -155,6 +165,7 @@ export default async function ExpensesPage({
     customers,
     sentInvoices,
     upcomingExpenses,
+    vendorRows,
   ] = await Promise.all([
     prisma.expense.findMany({
       where: summaryWhere,
@@ -206,9 +217,20 @@ export default async function ExpensesPage({
       _count: { _all: true },
     }),
     prisma.expense.aggregate({
-      where: { ...access.scope, occurredOn: { gte: horizonStart, lt: horizonEnd } },
+      where: {
+        ...access.scope,
+        ...ACTIVE_EXPENSE_WHERE,
+        occurredOn: { gte: horizonStart, lt: horizonEnd },
+      },
       _sum: { amount: true },
       _count: { _all: true },
+    }),
+    prisma.expense.findMany({
+      where: { ...access.scope, ...ACTIVE_EXPENSE_WHERE, vendor: { not: null } },
+      select: { vendor: true },
+      distinct: ["vendor"],
+      orderBy: { vendor: "asc" },
+      take: 80,
     }),
   ]);
 
@@ -228,6 +250,8 @@ export default async function ExpensesPage({
     if (method) next.set("method", method);
     if (reimbursableFilter === true) next.set("reimbursable", "yes");
     if (reimbursableFilter === false) next.set("reimbursable", "no");
+    if (jobId) next.set("job", jobId);
+    if (vendor) next.set("vendor", vendor);
     if (showFilters) next.set("filters", "1");
     if (pageSize !== DEFAULT_PAGE_SIZE) next.set("pageSize", String(pageSize));
     for (const [key, value] of Object.entries(updates)) {
@@ -295,26 +319,36 @@ export default async function ExpensesPage({
     return {
       id: expense.id,
       occurredOnLabel: formatDate(expense.occurredOn),
+      occurredOnValue: formatISODate(expense.occurredOn),
       description: expense.description,
       vendor: expense.vendor,
       category: expense.category,
       categoryLabel: expenseCategoryLabel(expense.category),
       amountLabel: formatMoney(expense.amount),
+      amountValue: asMoneyNumber(expense.amount).toFixed(2),
       purchaserName,
       purchaserInitials: purchaserName ? initials(purchaserName) : null,
+      purchaserMembershipId: expense.purchaserMembershipId,
+      jobId: expense.jobId,
       jobLabel: expense.job ? jobLabel(expense.job) : null,
+      customerId: expense.customerId,
       customerName: expense.customer?.name ?? null,
       hasReceipt: Boolean(expense.receiptUrl),
       receiptUrl: expense.receiptUrl,
       reimbursable: expense.reimbursable,
+      customerBillable: expense.customerBillable,
       reimbursementStatus: expense.reimbursementStatus,
       reimbursementLabel: isReimbursementStatus(expense.reimbursementStatus)
         ? REIMBURSEMENT_STATUS_LABELS[expense.reimbursementStatus]
         : expense.reimbursementStatus,
+      paymentMethod: expense.paymentMethod,
       paymentMethodLabel: paymentMethodLabel(expense.paymentMethod),
+      taxCategory: expense.taxCategory,
       reviewStatus: expense.reviewStatus,
       reviewLabel: expense.reviewStatus,
       recurring: expense.recurring,
+      recurringNote: expense.recurringNote,
+      mileageMilesValue: expense.mileageMiles != null ? String(asMoneyNumber(expense.mileageMiles)) : "",
       mileageMilesLabel: expense.mileageMiles != null ? `${asMoneyNumber(expense.mileageMiles)} miles` : null,
       notes: expense.notes,
       taxCategoryLabel: expense.taxCategory && isTaxCategory(expense.taxCategory)
@@ -355,6 +389,21 @@ export default async function ExpensesPage({
       clearHref: hrefWith({ reimbursable: undefined }),
     });
   }
+  if (jobId) {
+    const job = jobs.find((row) => row.id === jobId);
+    filters.push({
+      key: "job",
+      label: job ? jobLabel(job) : "Job",
+      clearHref: hrefWith({ job: undefined }),
+    });
+  }
+  if (vendor) {
+    filters.push({
+      key: "vendor",
+      label: vendor,
+      clearHref: hrefWith({ vendor: undefined }),
+    });
+  }
   if (q) {
     filters.push({ key: "q", label: `Search: ${q}`, clearHref: hrefWith({ q: undefined }) });
   }
@@ -381,6 +430,9 @@ export default async function ExpensesPage({
       customerId: job.customerId,
     })),
     customers,
+    vendors: vendorRows
+      .map((row) => row.vendor)
+      .filter((value): value is string => Boolean(value)),
     financial: {
       bankConnected: false,
       verifiedBalanceLabel: "Not connected",
@@ -484,6 +536,35 @@ export default async function ExpensesPage({
                 {membership.user.name}
               </option>
             ))}
+          </select>
+          <select
+            name="job"
+            defaultValue={jobId ?? "all"}
+            className="h-9 rounded-lg border border-input bg-transparent px-3 text-sm dark:bg-input/30"
+            aria-label="Job"
+          >
+            <option value="all">All jobs</option>
+            {jobs.map((job) => (
+              <option key={job.id} value={job.id}>
+                {jobLabel(job)}
+              </option>
+            ))}
+          </select>
+          <select
+            name="vendor"
+            defaultValue={vendor ?? "all"}
+            className="h-9 rounded-lg border border-input bg-transparent px-3 text-sm dark:bg-input/30"
+            aria-label="Vendor"
+          >
+            <option value="all">All vendors</option>
+            {vendorRows
+              .map((row) => row.vendor)
+              .filter((value): value is string => Boolean(value))
+              .map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
           </select>
           <button
             type="submit"

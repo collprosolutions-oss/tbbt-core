@@ -14,6 +14,8 @@ export const EXPENSE_CATEGORIES = [
   "GAS_FUEL",
   "TOOLS_EQUIPMENT",
   "VEHICLE",
+  "SUBCONTRACTOR_HELPER",
+  "PERMITS_FEES",
   "OFFICE_ADMIN",
   "SOFTWARE_SUBSCRIPTIONS",
   "INSURANCE",
@@ -25,13 +27,15 @@ export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
 export const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
   MATERIALS: "Materials",
-  GAS_FUEL: "Gas / Fuel",
-  TOOLS_EQUIPMENT: "Tools / Equipment",
+  GAS_FUEL: "Fuel",
+  TOOLS_EQUIPMENT: "Tools & Equipment",
   VEHICLE: "Vehicle",
+  SUBCONTRACTOR_HELPER: "Subcontractor / Helper",
+  PERMITS_FEES: "Permits / Fees",
   OFFICE_ADMIN: "Office / Admin",
   SOFTWARE_SUBSCRIPTIONS: "Software / Subscriptions",
   INSURANCE: "Insurance",
-  MARKETING_ADVERTISING: "Marketing / Advertising",
+  MARKETING_ADVERTISING: "Marketing",
   MILEAGE: "Mileage",
   OTHER: "Other",
 };
@@ -44,6 +48,8 @@ export const EXPENSE_CATEGORY_ACCENTS: Record<
   GAS_FUEL: "orange",
   TOOLS_EQUIPMENT: "blue",
   VEHICLE: "green",
+  SUBCONTRACTOR_HELPER: "gold",
+  PERMITS_FEES: "red",
   OFFICE_ADMIN: "gold",
   SOFTWARE_SUBSCRIPTIONS: "blue",
   INSURANCE: "green",
@@ -51,6 +57,9 @@ export const EXPENSE_CATEGORY_ACCENTS: Record<
   MILEAGE: "green",
   OTHER: "gray",
 };
+
+/** Active expenses only. Voided rows stay for job-cost history. */
+export const ACTIVE_EXPENSE_WHERE = { voidedAt: null } as const;
 
 export const REIMBURSEMENT_STATUSES = ["NONE", "PENDING", "REIMBURSED"] as const;
 export type ReimbursementStatus = (typeof REIMBURSEMENT_STATUSES)[number];
