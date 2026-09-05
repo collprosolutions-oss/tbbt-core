@@ -335,7 +335,18 @@ export default async function CustomerProjectPortalPage({
                       Payment was cancelled. This invoice is still unpaid.
                     </p>
                   ) : null}
-                  {showPayInvoice ? <PayInvoiceButton token={token} /> : null}
+                  {query.checkout === "unavailable" ? (
+                    <p className="pt-2 text-muted-foreground">
+                      Online payment is not available for this invoice right
+                      now. The invoice is still outstanding.
+                    </p>
+                  ) : null}
+                  {showPayInvoice ? (
+                    <PayInvoiceButton
+                      token={token}
+                      amountLabel={formatMoney(invoice.total)}
+                    />
+                  ) : null}
                 </>
               ) : (
                 <p className="text-muted-foreground">

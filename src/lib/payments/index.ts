@@ -15,7 +15,7 @@ export type {
   PaymentReadinessBranch,
   PaymentReadinessDebug,
 } from "@/lib/payments/readiness";
-export { invoiceAmountToCents, invoiceDueCents } from "@/lib/payments/money";
+export { invoiceAmountToCents, invoiceDueCents, payInvoiceButtonLabel } from "@/lib/payments/money";
 export { getPaymentProvider, stripeConnectAvailable } from "@/lib/payments/provider";
 export {
   applyVerifiedCheckoutPayment,

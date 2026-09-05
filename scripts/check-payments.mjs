@@ -26,7 +26,7 @@ const {
   isMerchantPaymentReady,
   shouldOfferStripeOnboarding,
 } = await import("@/lib/payments/readiness");
-const { invoiceAmountToCents, invoiceDueCents } = await import("@/lib/payments/money");
+const { invoiceAmountToCents, invoiceDueCents, payInvoiceButtonLabel } = await import("@/lib/payments/money");
 const { INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES } = await import(
   "@/lib/payments/stripe-adapter"
 );
@@ -191,6 +191,10 @@ try {
     shouldShowPayInvoice({ invoiceStatus: "SENT", amountDueCents: 37500, paymentReady: true }) === true,
   );
   check(
+    "Pay Invoice button label includes the server-formatted amount",
+    payInvoiceButtonLabel("$300.00") === "Pay Invoice — $300.00",
+  );
+  check(
     "v2 card_payments active is payment-ready",
     isMerchantPaymentReady({ cardPaymentsStatus: "active" }) === true,
   );
@@ -320,7 +324,22 @@ try {
     "utf8",
   );
   check("portal uses shouldShowPayInvoice", portalSrc.includes("shouldShowPayInvoice"));
-  check("portal renders PayInvoiceButton only when allowed", portalSrc.includes("showPayInvoice ? <PayInvoiceButton"));
+  check("portal renders PayInvoiceButton only when allowed", portalSrc.includes("showPayInvoice ? ("));
+  check("portal Pay Invoice label includes the invoice amount", portalSrc.includes("amountLabel={formatMoney(invoice.total)}"));
+  check(
+    "customer invoice page uses shouldShowPayInvoice",
+    portalInvoiceSrc.includes("shouldShowPayInvoice"),
+  );
+  check(
+    "customer invoice page renders PayInvoiceButton only when allowed",
+    portalInvoiceSrc.includes("showPayInvoice && invoice") &&
+      portalInvoiceSrc.includes("<PayInvoiceButton"),
+  );
+  check(
+    "customer invoice page does not read amount from the browser",
+    !portalInvoiceSrc.includes("searchParams") &&
+      portalInvoiceSrc.includes("invoiceDueCents(invoice.status, invoice.total)"),
+  );
   check("portal success return does not mark paid", !portalSrc.includes("applyVerifiedCheckoutPayment"));
   check(
     "portal reconciles a paid Stripe checkout server-side",
