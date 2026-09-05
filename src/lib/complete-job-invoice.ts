@@ -19,6 +19,7 @@ import { evaluateCompleteJob } from "@/lib/job-lifecycle";
 import {
   getAppUrl,
   getMailConfig,
+  invoiceReadyIdempotencyKey,
   isUsableEmail,
   senderFrom,
   sendTransactionalEmail,
@@ -197,7 +198,8 @@ async function notifyCustomerInvoiceReady(
     subject: email.subject,
     html: email.html,
     text: email.text,
-    idempotencyKey: `invoice-ready/${input.invoiceId}`,
+    kind: "invoice",
+    idempotencyKey: invoiceReadyIdempotencyKey(input.invoiceId),
   });
 
   if (sent.error) {
