@@ -11,8 +11,9 @@
  */
 import { createRequire, register } from "node:module";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { inflateSync } from "node:zlib";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -88,6 +89,111 @@ function check(label, condition) {
     console.error(`FAIL - ${label}`);
     failures += 1;
   }
+}
+
+/** Founder-approved document logo from 5c6c8ae — not the earlier PR #30 binary. */
+const APPROVED_DOCUMENT_LOGO_SHA256 =
+  "fb319b2559e49d1226a3af5af5c801a794b4553b68feb286f9b85ff219d4f7b9";
+
+function inspectPng(bytes) {
+  const pngSig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (bytes.length < 8 || !bytes.subarray(0, 8).equals(pngSig)) {
+    return {
+      isPng: false,
+      width: 0,
+      height: 0,
+      bitDepth: 0,
+      colorType: -1,
+      hasAlphaChannel: false,
+      transparentPixels: 0,
+      decoded: false,
+    };
+  }
+
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = -1;
+  let hasTrns = false;
+  const idat = [];
+  for (let i = 8; i + 8 <= bytes.length; ) {
+    const length = bytes.readUInt32BE(i);
+    const type = bytes.subarray(i + 4, i + 8).toString("ascii");
+    const dataStart = i + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > bytes.length) {
+      break;
+    }
+    const data = bytes.subarray(dataStart, dataEnd);
+    if (type === "IHDR" && data.length >= 13) {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+    } else if (type === "tRNS") {
+      hasTrns = true;
+    } else if (type === "IDAT") {
+      idat.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    i = dataEnd + 4;
+  }
+
+  const hasAlphaChannel = colorType === 4 || colorType === 6 || hasTrns;
+  let transparentPixels = 0;
+  let decoded = false;
+  if (colorType === 6 && bitDepth === 8 && width > 0 && height > 0 && idat.length > 0) {
+    const inflated = inflateSync(Buffer.concat(idat));
+    const bpp = 4;
+    const stride = width * bpp;
+    const prev = Buffer.alloc(stride);
+    const row = Buffer.alloc(stride);
+    let offset = 0;
+    for (let y = 0; y < height; y += 1) {
+      const filter = inflated[offset];
+      offset += 1;
+      inflated.copy(row, 0, offset, offset + stride);
+      offset += stride;
+      for (let x = 0; x < stride; x += 1) {
+        const left = x >= bpp ? row[x - bpp] : 0;
+        const up = prev[x];
+        const upLeft = x >= bpp ? prev[x - bpp] : 0;
+        if (filter === 1) {
+          row[x] = (row[x] + left) & 255;
+        } else if (filter === 2) {
+          row[x] = (row[x] + up) & 255;
+        } else if (filter === 3) {
+          row[x] = (row[x] + Math.floor((left + up) / 2)) & 255;
+        } else if (filter === 4) {
+          const p = left + up - upLeft;
+          const pa = Math.abs(p - left);
+          const pb = Math.abs(p - up);
+          const pc = Math.abs(p - upLeft);
+          const pr = pa <= pb && pa <= pc ? left : pb <= pc ? up : upLeft;
+          row[x] = (row[x] + pr) & 255;
+        }
+      }
+      for (let x = 3; x < stride; x += 4) {
+        if (row[x] === 0) {
+          transparentPixels += 1;
+        }
+      }
+      row.copy(prev);
+    }
+    decoded = offset === inflated.length;
+  }
+
+  return {
+    isPng: true,
+    width,
+    height,
+    bitDepth,
+    colorType,
+    hasAlphaChannel,
+    transparentPixels,
+    decoded,
+  };
 }
 
 async function createApprovedCompletedJob(input) {
@@ -945,10 +1051,30 @@ try {
   );
   check("transparent document logo asset exists", existsSync(documentLogoPath));
   const documentLogoBytes = readFileSync(documentLogoPath);
+  const websiteLogoBytes = readFileSync(new URL("../public/brand/collpro-logo.png", import.meta.url));
+  const documentPng = inspectPng(documentLogoBytes);
+  const websitePng = inspectPng(websiteLogoBytes);
+  const documentLogoSha256 = createHash("sha256").update(documentLogoBytes).digest("hex");
   check(
-    "document logo is the approved light PNG, not a later generated substitute",
-    documentLogoBytes.length > 1_400_000 &&
-      documentLogoBytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
+    "document logo PNG has a real alpha channel, not just a document filename",
+    documentPng.isPng && documentPng.hasAlphaChannel && documentPng.colorType === 6,
+  );
+  check(
+    "document logo PNG decodes with transparent pixels (no baked-in plate)",
+    documentPng.decoded && documentPng.transparentPixels > 0,
+  );
+  check(
+    "document logo binary is not the dark website/dashboard logo",
+    documentLogoBytes.length !== websiteLogoBytes.length &&
+      !documentLogoBytes.equals(websiteLogoBytes) &&
+      websitePng.isPng &&
+      websitePng.colorType === 2,
+  );
+  check(
+    "document logo is the founder-approved 5c6c8ae binary",
+    documentLogoSha256 === APPROVED_DOCUMENT_LOGO_SHA256 &&
+      documentPng.width === 1243 &&
+      documentPng.height === 1170,
   );
   const collproPdf = await renderInvoicePdf(collproDoc);
   check("CollPro PDF renders with the document logo present", collproPdf.subarray(0, 4).toString() === "%PDF");
