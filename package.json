@@ -4,11 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 43217",
-    "build": "prisma generate && prisma migrate deploy && next build",
+    "build": "prisma generate && node scripts/run-production-migrate.mjs && next build",
     "start": "next start --port 43217",
     "lint": "eslint",
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
     "test:isolation": "node scripts/check-isolation.mjs",
     "test:estimate-versions": "node --experimental-strip-types scripts/check-estimate-versions.mjs",
     "test:authorization": "node --experimental-strip-types scripts/check-authorization.mjs",
