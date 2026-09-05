@@ -10,7 +10,6 @@
  * changes beyond OWNER/ADMIN adding a MEMBER, no invite management UI
  * beyond a single one-time link, no payroll/HR.
  */
-import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { createSecureToken, hashPassword, hashToken } from "@/lib/auth";
 import { requireBusinessAccess } from "@/lib/access";
@@ -20,6 +19,7 @@ import {
   getMailConfig,
   senderFrom,
   sendTransactionalEmail,
+  teamInviteIdempotencyKey,
 } from "@/lib/mail";
 import { buildTeamInviteEmail } from "@/lib/team-mail";
 import { prisma } from "@/lib/prisma";
@@ -171,7 +171,8 @@ export async function addTeamMember(
       subject: invite.subject,
       html: invite.html,
       text: invite.text,
-      idempotencyKey: `team-invite/${access.businessId}/${email}/${randomUUID()}`,
+      kind: "team",
+      idempotencyKey: teamInviteIdempotencyKey(access.businessId, email),
     });
   }
 
