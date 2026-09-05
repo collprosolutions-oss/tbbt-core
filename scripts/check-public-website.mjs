@@ -86,6 +86,7 @@ const publicFiles = [
   "src/components/public/public-site-shell.tsx",
   "src/components/public/category-cards.tsx",
   "src/components/public/request-flow.tsx",
+  "src/components/public/service-address-fields.tsx",
   "src/components/public/service-picker.tsx",
   "src/components/public/public-contact-form.tsx",
   "src/components/public/public-action-rail.tsx",
@@ -170,6 +171,18 @@ check("No AI provider integration on public intake",
 check("Public intake does not apply labor minimum",
   !intakeActionSrc.includes("labor-minimum") && !intakeActionSrc.includes("laborMinimum"));
 check("Existing /r/[slug] intake URL is preserved", requestPageSrc.includes("MultiServiceRequestFlow"));
+check(
+  "Public request Step 1 uses the structured service-address fields",
+  requestFlowSrc.includes("ServiceAddressFields") &&
+    requestFlowSrc.includes("streetAddress") &&
+    !requestFlowSrc.includes("Property / service address"),
+);
+check(
+  "Reusable address fields do not hardcode CollPro cities or Florida",
+  !readRepo("src/components/public/service-address-fields.tsx").includes("Fort Myers") &&
+    !readRepo("src/components/public/service-address-fields.tsx").includes("Cape Coral") &&
+    !/Florida/.test(readRepo("src/components/public/service-address-fields.tsx")),
+);
 check("Unauthenticated / is the public homepage, not sign-in",
   proxySrc.includes("isPublicWebsitePath") &&
     isPublicWebsitePath("/") &&

@@ -1,4 +1,12 @@
+import { resolveBusinessServiceArea } from "@/lib/business-service-area";
 import { OTHER_SERVICE_VALUE } from "@/lib/intake";
+import {
+  findReusableLegacyProperty,
+  findReusableProperty,
+  hasStructuredAddressInput,
+  validateStructuredAddress,
+  type StructuredServiceAddress,
+} from "@/lib/service-address";
 import {
   MAX_INTAKE_PHOTOS,
   MAX_NOTES_LENGTH,
@@ -18,6 +26,11 @@ export type PublicIntakeInput = {
   email: string;
   phone: string;
   address: string;
+  streetAddress?: string;
+  unit?: string;
+  city?: string;
+  region?: string;
+  postalCode?: string;
   notes: string;
   catalogItemIds: string[];
   catalogQuantities?: Record<string, unknown>;
@@ -60,13 +73,33 @@ export type PublicIntakeTx = {
   property: {
     findMany: (args: {
       where: { businessId: string; customerId: string };
-      select: { id: true; addressLine1: true };
-    }) => Promise<Array<{ id: string; addressLine1: string }>>;
+      select: {
+        id: true;
+        addressLine1: true;
+        addressLine2: true;
+        city: true;
+        region: true;
+        postalCode: true;
+      };
+    }) => Promise<
+      Array<{
+        id: string;
+        addressLine1: string;
+        addressLine2: string | null;
+        city: string | null;
+        region: string | null;
+        postalCode: string | null;
+      }>
+    >;
     create: (args: {
       data: {
         businessId: string;
         customerId: string;
         addressLine1: string;
+        addressLine2?: string | null;
+        city?: string | null;
+        region?: string | null;
+        postalCode?: string | null;
       };
     }) => Promise<{ id: string }>;
   };
@@ -109,10 +142,6 @@ export type PublicIntakeResult =
   | { ok: true; requestId: string }
   | { ok: false; error: string };
 
-function normalizeAddress(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
 export function readIntakeCatalogIds(rawIds: string[]) {
   return rawIds
     .map((value) => value.trim())
@@ -132,7 +161,22 @@ export async function createPublicServiceRequest(
   const email = input.email.trim().toLowerCase();
   const phone = input.phone.trim();
   const address = input.address.trim();
+  const structuredInput: StructuredServiceAddress = {
+    streetAddress: input.streetAddress ?? "",
+    unit: input.unit ?? "",
+    city: input.city ?? "",
+    region: input.region ?? "",
+    postalCode: input.postalCode ?? "",
+  };
   const notes = input.notes.trim();
+  const serviceArea = resolveBusinessServiceArea({ slug: safeSlug });
+  const usingStructured = hasStructuredAddressInput(structuredInput);
+  const structured = usingStructured
+    ? validateStructuredAddress(structuredInput, { country: serviceArea.country })
+    : null;
+  if (structured && !structured.ok) {
+    return structured;
+  }
 
   if (!name) {
     return { ok: false, error: "Name is required." };
@@ -221,15 +265,52 @@ export async function createPublicServiceRequest(
       }
 
       let propertyId: string | null = null;
-      if (address) {
-        const normalized = normalizeAddress(address);
+      if (structured?.ok) {
         const existingProperties = await tx.property.findMany({
           where: { businessId: business.id, customerId: customer.id },
-          select: { id: true, addressLine1: true },
+          select: {
+            id: true,
+            addressLine1: true,
+            addressLine2: true,
+            city: true,
+            region: true,
+            postalCode: true,
+          },
         });
-        const reusable = existingProperties.find(
-          (property) => normalizeAddress(property.addressLine1) === normalized,
+        const reusable = findReusableProperty(
+          existingProperties,
+          structured.address,
+          serviceArea.country,
         );
+        if (reusable) {
+          propertyId = reusable.id;
+        } else {
+          const property = await tx.property.create({
+            data: {
+              businessId: business.id,
+              customerId: customer.id,
+              addressLine1: structured.address.streetAddress,
+              addressLine2: structured.address.unit || null,
+              city: structured.address.city,
+              region: structured.address.region,
+              postalCode: structured.address.postalCode || null,
+            },
+          });
+          propertyId = property.id;
+        }
+      } else if (address) {
+        const existingProperties = await tx.property.findMany({
+          where: { businessId: business.id, customerId: customer.id },
+          select: {
+            id: true,
+            addressLine1: true,
+            addressLine2: true,
+            city: true,
+            region: true,
+            postalCode: true,
+          },
+        });
+        const reusable = findReusableLegacyProperty(existingProperties, address);
         if (reusable) {
           propertyId = reusable.id;
         } else {

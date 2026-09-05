@@ -7,8 +7,15 @@ import { submitServiceRequest } from "@/app/actions/intake";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ServiceAddressFields } from "@/components/public/service-address-fields";
+import type { BusinessServiceArea } from "@/lib/business-service-area";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
 import { publicServicesPath } from "@/lib/public-site";
+import {
+  formatStructuredAddress,
+  validateStructuredAddress,
+  type StructuredServiceAddress,
+} from "@/lib/service-address";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
 import {
   catalogQuantitiesFromState,
@@ -35,6 +42,7 @@ export function MultiServiceRequestFlow({
   groups,
   initialSelected,
   photosEnabled,
+  serviceArea,
 }: {
   slug: string;
   businessName: string;
@@ -42,6 +50,7 @@ export function MultiServiceRequestFlow({
   groups: PublicCatalogGroup[];
   initialSelected: SelectedWorkState;
   photosEnabled: boolean;
+  serviceArea: BusinessServiceArea;
 }) {
   void groups;
   const [step, setStep] = useState<Step>("details");
@@ -49,7 +58,13 @@ export function MultiServiceRequestFlow({
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [address, setAddress] = useState("");
+  const [serviceAddress, setServiceAddress] = useState<StructuredServiceAddress>({
+    streetAddress: "",
+    unit: "",
+    city: "",
+    region: serviceArea.region ?? "",
+    postalCode: "",
+  });
   const [notes, setNotes] = useState("");
   const [preferredContact, setPreferredContact] = useState("text");
   const [photos, setPhotos] = useState<File[]>([]);
@@ -66,6 +81,14 @@ export function MultiServiceRequestFlow({
   const chooseServicesHref = publicServicesPath(slug);
 
   function goInfo() {
+    const checked = validateStructuredAddress(serviceAddress, {
+      country: serviceArea.country,
+    });
+    if (!checked.ok) {
+      setError(checked.error);
+      return;
+    }
+    setServiceAddress(checked.address);
     setError(null);
     setStep("info");
   }
@@ -87,7 +110,12 @@ export function MultiServiceRequestFlow({
     formData.set("name", name);
     formData.set("email", email);
     formData.set("phone", phone);
-    formData.set("address", address);
+    formData.set("streetAddress", serviceAddress.streetAddress);
+    formData.set("unit", serviceAddress.unit);
+    formData.set("city", serviceAddress.city);
+    formData.set("region", serviceAddress.region);
+    formData.set("postalCode", serviceAddress.postalCode);
+    formData.set("address", formatStructuredAddress(serviceAddress));
     const preference =
       preferredContact === "text"
         ? "Preferred contact: Text"
@@ -204,17 +232,11 @@ export function MultiServiceRequestFlow({
               placeholder="Please describe your project in detail..."
             />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="address">Property / service address</Label>
-            <Input
-              id="address"
-              name="address"
-              autoComplete="street-address"
-              value={address}
-              onChange={(event) => setAddress(event.target.value)}
-              className="h-12 bg-white text-base"
-            />
-          </div>
+          <ServiceAddressFields
+            value={serviceAddress}
+            onChange={setServiceAddress}
+            serviceArea={serviceArea}
+          />
           {photosEnabled ? (
             <div className="space-y-2">
               <Label htmlFor="photos">Project photos (optional)</Label>
@@ -363,7 +385,7 @@ export function MultiServiceRequestFlow({
             <p>Preferred: {preferredContact === "text" ? "Text" : preferredContact === "phone" ? "Phone" : "Email"}</p>
           </ReviewBlock>
           <ReviewBlock title="Property">
-            <p>{address || "No address provided"}</p>
+            <p>{formatStructuredAddress(serviceAddress) || "No address provided"}</p>
           </ReviewBlock>
           <ReviewBlock title="Project notes">
             <p>{notes || "No additional notes"}</p>
