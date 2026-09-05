@@ -15,7 +15,7 @@ export async function GET(
     return new NextResponse(result.body, { status: result.status });
   }
 
-  return new NextResponse(result.body, {
+  return new NextResponse(Buffer.from(result.body), {
     status: 200,
     headers: {
       "Content-Type": result.contentType,
