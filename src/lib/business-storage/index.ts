@@ -9,19 +9,24 @@ export {
   businessNamespacePrefix,
   formatStorageBytes,
   isManagedPublicAssetPath,
+  privateAssetPath,
   publicAssetPath,
 } from "@/lib/business-storage/keys";
 export { MemoryStorageProvider } from "@/lib/business-storage/memory-provider";
+export { servePrivateStoredAsset } from "@/lib/business-storage/private-serve";
 export { servePublicStoredAsset } from "@/lib/business-storage/public-serve";
 export { R2StorageProvider, createR2StorageProvider } from "@/lib/business-storage/r2-provider";
 export {
   abortBusinessUpload,
+  abortManagedUpload,
   assertOwnedStoredAsset,
   authorizeBusinessUpload,
+  authorizeManagedUpload,
   createPrivateDownloadUrl,
   deleteStoredAsset,
   ensureBusinessStorageAccount,
   finalizeBusinessUpload,
+  finalizeManagedUpload,
   getBusinessStorageUsage,
   hasEnoughStorage,
   putBusinessObject,
@@ -37,6 +42,7 @@ export {
   StorageAccessError,
   StorageError,
   StorageQuotaError,
+  REQUEST_PHOTO_MAX_BYTES,
   WEBSITE_PHOTO_MAX_BYTES,
 } from "@/lib/business-storage/types";
 export type {

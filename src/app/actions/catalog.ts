@@ -6,6 +6,7 @@ import { requireBusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
   planStarterCatalogInstall,
+  starterIntakeFields,
   starterPricingMode,
 } from "@/lib/handyman-starter-catalog";
 import { parsePricingMode } from "@/lib/pricing-mode";
@@ -190,6 +191,7 @@ export async function installHandymanStarterCatalog(): Promise<CatalogActionStat
             // field, not derived later from the name.
             category: service.category,
             active: true,
+            ...starterIntakeFields(service),
           },
         }),
       ),

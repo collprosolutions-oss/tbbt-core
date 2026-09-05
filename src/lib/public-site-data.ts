@@ -41,6 +41,9 @@ export async function loadPublicCatalog(business: PublicBusiness) {
       category: true,
       pricingMode: true,
       price: true,
+      intakeMeasurementMode: true,
+      intakeMeasurementAxes: true,
+      intakeMeasurementUnit: true,
     },
     orderBy: { name: "asc" },
   });

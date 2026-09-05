@@ -237,6 +237,9 @@ export type PublicCatalogItem = {
   priceLabel: string;
   /** Public unit amount only. Null for CUSTOM_QUOTE. Never a client-trusted price. */
   unitAmount: number | null;
+  intakeMeasurementMode: string;
+  intakeMeasurementAxes: string;
+  intakeMeasurementUnit: string;
 };
 
 export type PublicCatalogGroup = {
@@ -338,6 +341,9 @@ export function toPublicCatalogItem(item: {
   category: string;
   pricingMode: string;
   price: { toString(): string } | number | null;
+  intakeMeasurementMode?: string | null;
+  intakeMeasurementAxes?: string | null;
+  intakeMeasurementUnit?: string | null;
 }): PublicCatalogItem {
   return {
     id: item.id,
@@ -347,6 +353,9 @@ export function toPublicCatalogItem(item: {
     pricingMode: item.pricingMode,
     priceLabel: formatCatalogPriceLabel(item.pricingMode, item.price),
     unitAmount: publicCatalogUnitAmount(item.pricingMode, item.price),
+    intakeMeasurementMode: item.intakeMeasurementMode ?? "NONE",
+    intakeMeasurementAxes: item.intakeMeasurementAxes ?? "",
+    intakeMeasurementUnit: item.intakeMeasurementUnit ?? "IN",
   };
 }
 
