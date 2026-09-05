@@ -32,11 +32,19 @@ export function ApprovedScopeCard({
   scope,
   title = "Approved Scope",
   hideFinancials = false,
+  scanColumns = false,
 }: {
   scope: ApprovedWorkOrderScope;
   title?: string;
   /** MEMBER field-safe mode -- see the component doc comment above. */
   hideFinancials?: boolean;
+  /**
+   * Presentation-only: on md+ screens, show description / quantity /
+   * unit price / total in columns. Does not change which fields exist
+   * or which history is shown. The Customer Project Portal opts in;
+   * Work Order and Field Job keep the original stacked rows.
+   */
+  scanColumns?: boolean;
 }) {
   if (scope.source === "none") {
     return (
@@ -64,6 +72,40 @@ export function ApprovedScopeCard({
       <CardContent className="space-y-3 text-sm">
         {scope.lineItems.length === 0 ? (
           <p className="text-muted-foreground">No line items.</p>
+        ) : scanColumns && !hideFinancials ? (
+          <div className="space-y-2">
+            <div className="hidden text-xs font-medium text-muted-foreground md:grid md:grid-cols-[minmax(0,1fr)_5rem_6.5rem_6rem] md:gap-3">
+              <span>Service</span>
+              <span className="md:text-right">Qty</span>
+              <span className="md:text-right">Unit price</span>
+              <span className="md:text-right">Total</span>
+            </div>
+            <ul className="space-y-2">
+              {scope.lineItems.map((item, index) => (
+                <li
+                  key={index}
+                  className="flex justify-between gap-3 md:grid md:grid-cols-[minmax(0,1fr)_5rem_6.5rem_6rem] md:items-baseline"
+                >
+                  <span className="min-w-0 flex-1 break-words md:flex-none">
+                    <span>{item.description}</span>
+                    <span className="md:hidden">
+                      {" "}
+                      × {item.quantity.toString()} @ {formatMoney(item.unitPrice)}
+                    </span>
+                  </span>
+                  <span className="hidden md:block md:text-right">
+                    {item.quantity.toString()}
+                  </span>
+                  <span className="hidden md:block md:text-right">
+                    {formatMoney(item.unitPrice)}
+                  </span>
+                  <span className="shrink-0 md:text-right">
+                    {formatMoney(item.total)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : (
           <ul className="space-y-2">
             {scope.lineItems.map((item, index) => (

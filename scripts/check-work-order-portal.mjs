@@ -558,7 +558,12 @@ try {
   const validBody = await validRes.text();
   check("valid token returns 200", validRes.status === 200);
   check("valid token's page shows this job's own business name", validBody.includes("Beta Handyman"));
+  check("valid token's page shows Your Project", validBody.includes("Your Project"));
   check("valid token's page shows this job's own customer name", validBody.includes("Beta Canary Customer Q7z"));
+  check(
+    "non-CollPro tenant page does not hardcode the CollPro logo asset",
+    !validBody.includes("/brand/collpro-logo"),
+  );
   check("valid token's page shows the approved total ($500.00)", validBody.includes("500.00"));
   check("valid token's page shows the invoice as Paid", validBody.includes("Paid"));
 
