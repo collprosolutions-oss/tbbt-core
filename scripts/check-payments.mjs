@@ -315,6 +315,10 @@ try {
   check("adapter falls back to v1 retrieve if v2 fails", adapterSrc.includes("stripe.accounts.retrieve"));
   check("adapter retrieves requirements with merchant config", adapterSrc.includes('"requirements"'));
   const serviceSrc = readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8");
+  const payButtonSrc = readFileSync(
+    new URL("../src/components/portal/pay-invoice-button.tsx", import.meta.url),
+    "utf8",
+  );
   const portalInvoiceSrc = readFileSync(
     new URL("../src/app/p/[token]/invoice/page.tsx", import.meta.url),
     "utf8",
@@ -322,6 +326,13 @@ try {
   const ownerInvoiceSrc = readFileSync(
     new URL("../src/app/(app)/invoices/[invoiceId]/page.tsx", import.meta.url),
     "utf8",
+  );
+  check(
+    "customer Pay Invoice CTA is a green button with white text",
+    payButtonSrc.includes("bg-emerald-700") &&
+      payButtonSrc.includes("text-white") &&
+      !payButtonSrc.includes("bg-neutral-950") &&
+      !payButtonSrc.includes("bg-neutral-900"),
   );
   check("portal uses shouldShowPayInvoice", portalSrc.includes("shouldShowPayInvoice"));
   check("portal renders PayInvoiceButton only when allowed", portalSrc.includes("showPayInvoice ? ("));

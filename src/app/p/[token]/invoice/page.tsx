@@ -72,7 +72,6 @@ export default async function CustomerInvoicePage({
           <PayInvoiceButton
             token={token}
             amountLabel={formatMoney(invoice.total)}
-            surface="light"
           />
         </div>
       ) : null}
