@@ -11,15 +11,18 @@
  */
 import { createRequire, register } from "node:module";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { inflateSync } from "node:zlib";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const {
   buildInvoiceLineSnapshots,
   LABOR_MINIMUM_INVOICE_DESCRIPTION,
+  backfillEmptyInvoiceWorkLines,
   persistDraftInvoiceFromCompletedJob,
+  selectApprovedChangeOrdersForInvoiceBackfill,
 } = await import("@/lib/invoice-carry-forward");
 const {
   INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
@@ -86,6 +89,111 @@ function check(label, condition) {
     console.error(`FAIL - ${label}`);
     failures += 1;
   }
+}
+
+/** Founder-approved document logo from 5c6c8ae — not the earlier PR #30 binary. */
+const APPROVED_DOCUMENT_LOGO_SHA256 =
+  "fb319b2559e49d1226a3af5af5c801a794b4553b68feb286f9b85ff219d4f7b9";
+
+function inspectPng(bytes) {
+  const pngSig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (bytes.length < 8 || !bytes.subarray(0, 8).equals(pngSig)) {
+    return {
+      isPng: false,
+      width: 0,
+      height: 0,
+      bitDepth: 0,
+      colorType: -1,
+      hasAlphaChannel: false,
+      transparentPixels: 0,
+      decoded: false,
+    };
+  }
+
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = -1;
+  let hasTrns = false;
+  const idat = [];
+  for (let i = 8; i + 8 <= bytes.length; ) {
+    const length = bytes.readUInt32BE(i);
+    const type = bytes.subarray(i + 4, i + 8).toString("ascii");
+    const dataStart = i + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > bytes.length) {
+      break;
+    }
+    const data = bytes.subarray(dataStart, dataEnd);
+    if (type === "IHDR" && data.length >= 13) {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+    } else if (type === "tRNS") {
+      hasTrns = true;
+    } else if (type === "IDAT") {
+      idat.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    i = dataEnd + 4;
+  }
+
+  const hasAlphaChannel = colorType === 4 || colorType === 6 || hasTrns;
+  let transparentPixels = 0;
+  let decoded = false;
+  if (colorType === 6 && bitDepth === 8 && width > 0 && height > 0 && idat.length > 0) {
+    const inflated = inflateSync(Buffer.concat(idat));
+    const bpp = 4;
+    const stride = width * bpp;
+    const prev = Buffer.alloc(stride);
+    const row = Buffer.alloc(stride);
+    let offset = 0;
+    for (let y = 0; y < height; y += 1) {
+      const filter = inflated[offset];
+      offset += 1;
+      inflated.copy(row, 0, offset, offset + stride);
+      offset += stride;
+      for (let x = 0; x < stride; x += 1) {
+        const left = x >= bpp ? row[x - bpp] : 0;
+        const up = prev[x];
+        const upLeft = x >= bpp ? prev[x - bpp] : 0;
+        if (filter === 1) {
+          row[x] = (row[x] + left) & 255;
+        } else if (filter === 2) {
+          row[x] = (row[x] + up) & 255;
+        } else if (filter === 3) {
+          row[x] = (row[x] + Math.floor((left + up) / 2)) & 255;
+        } else if (filter === 4) {
+          const p = left + up - upLeft;
+          const pa = Math.abs(p - left);
+          const pb = Math.abs(p - up);
+          const pc = Math.abs(p - upLeft);
+          const pr = pa <= pb && pa <= pc ? left : pb <= pc ? up : upLeft;
+          row[x] = (row[x] + pr) & 255;
+        }
+      }
+      for (let x = 3; x < stride; x += 4) {
+        if (row[x] === 0) {
+          transparentPixels += 1;
+        }
+      }
+      row.copy(prev);
+    }
+    decoded = offset === inflated.length;
+  }
+
+  return {
+    isPng: true,
+    width,
+    height,
+    bitDepth,
+    colorType,
+    hasAlphaChannel,
+    transparentPixels,
+    decoded,
+  };
 }
 
 async function createApprovedCompletedJob(input) {
@@ -184,6 +292,18 @@ try {
   check("DRAFT is not customer-visible", isCustomerVisibleInvoiceStatus("DRAFT") === false);
   check("SENT is customer-visible", isCustomerVisibleInvoiceStatus("SENT") === true);
   check("PAID is customer-visible", isCustomerVisibleInvoiceStatus("PAID") === true);
+  check(
+    "dashboard/website logo stays the dark-background CollPro asset",
+    getBusinessLogoSrc("collpro-reno") === "/brand/collpro-logo.png",
+  );
+  check(
+    "invoice/document logo is the transparent CollPro variant",
+    getBusinessDocumentLogoSrc("collpro-reno") === "/brand/collpro-logo-document.png",
+  );
+  check(
+    "transparent document logo file exists",
+    existsSync(new URL("../public/brand/collpro-logo-document.png", import.meta.url)),
+  );
 
   const built = buildInvoiceLineSnapshots({
     approvedLineItems: [
@@ -213,6 +333,84 @@ try {
       built[1].total.toString() === "25",
   );
   check("change-order line is copied last", built[2].description === "Grout");
+
+  const closetLine = {
+    description: "Closet Shelf / Rod Repair",
+    quantity: 2,
+    unitPrice: 100,
+    total: 200,
+    type: "LABOR",
+  };
+  const curtainLine = {
+    description: "Curtain Rod Installation",
+    quantity: 1,
+    unitPrice: 75,
+    total: 75,
+    type: "LABOR",
+  };
+  const keypadCo = {
+    id: "co-keypad",
+    createdAt: new Date("2026-09-01T12:00:00.000Z"),
+    lineItems: [
+      {
+        description: "Keypad / Electronic Deadbolt Replacement",
+        quantity: 1,
+        unitPrice: 100,
+        total: 100,
+        type: "LABOR",
+      },
+    ],
+  };
+  const laterCo = {
+    id: "co-later",
+    createdAt: new Date("2026-09-04T12:00:00.000Z"),
+    lineItems: [
+      {
+        description: "Should not appear",
+        quantity: 1,
+        unitPrice: 50,
+        total: 50,
+        type: "LABOR",
+      },
+    ],
+  };
+  const invoiceCreatedAt = new Date("2026-09-02T12:00:00.000Z");
+  const matchedCos = selectApprovedChangeOrdersForInvoiceBackfill({
+    approvedLineItems: [closetLine, curtainLine],
+    laborMinimumAdjustment: 0,
+    approvedChangeOrders: [laterCo, keypadCo],
+    invoiceCreatedAt,
+    invoiceTotal: 375,
+  });
+  check(
+    "backfill selector keeps the approved CO that existed at invoice create",
+    matchedCos?.length === 1 && matchedCos[0].id === "co-keypad",
+  );
+  check(
+    "backfill selector omits a later approved CO that would break the invoice total",
+    matchedCos?.every((changeOrder) => changeOrder.id !== "co-later") === true,
+  );
+  const estimateOnly = selectApprovedChangeOrdersForInvoiceBackfill({
+    approvedLineItems: [closetLine, curtainLine],
+    laborMinimumAdjustment: 0,
+    approvedChangeOrders: [keypadCo, laterCo],
+    invoiceCreatedAt,
+    invoiceTotal: 275,
+  });
+  check(
+    "backfill selector uses estimate-only when that is the stored invoice total",
+    estimateOnly?.length === 0,
+  );
+  check(
+    "backfill selector returns null when no approved subset matches the invoice total",
+    selectApprovedChangeOrdersForInvoiceBackfill({
+      approvedLineItems: [closetLine, curtainLine],
+      laborMinimumAdjustment: 0,
+      approvedChangeOrders: [keypadCo],
+      invoiceCreatedAt,
+      invoiceTotal: 999,
+    }) === null,
+  );
 
   const otherBusiness = await prisma.business.create({
     data: {
@@ -511,7 +709,10 @@ try {
     prisma,
   );
   check("CollPro document uses CollPro business name from the DB", collproDoc?.business.name === "CollPro Reno Handyman Services");
-  check("CollPro invoice uses the document logo helper asset", collproDoc?.business.logoSrc === "/brand/collpro-logo-document.png");
+  check(
+    "CollPro invoice document uses the transparent document logo, not the dark UI logo",
+    collproDoc?.business.logoSrc === "/brand/collpro-logo-document.png",
+  );
   check("CollPro document uses the configured CollPro phone", collproDoc?.business.phone === "239-357-8199");
   const otherDocAgain = await loadInvoiceDocumentForBusiness(
     invoice.id,
@@ -523,7 +724,297 @@ try {
     otherDocAgain?.business.logoSrc == null && otherDocAgain?.business.phone == null,
   );
 
-  console.log("\nTEST 8 — Document logo stays separate from the dark website logo");
+  console.log("\nTEST 8 — Empty paid invoice backfills approved work only");
+  const founderWork = await createApprovedCompletedJob({
+    businessId: otherBusiness.id,
+    customerId: otherCustomer.id,
+    propertyId: otherProperty.id,
+    customerName: otherCustomer.name,
+    lineDescription: "Closet Shelf / Rod Repair",
+    quantity: 2,
+    unitPrice: 100,
+    lineTotal: 200,
+    laborMinimum: 0,
+    versionTotal: 275,
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      estimateId: founderWork.estimate.id,
+      description: "Curtain Rod Installation",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(75),
+      total: new Prisma.Decimal(75),
+      type: "LABOR",
+    },
+  });
+  await prisma.estimateVersionLineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      estimateVersionId: founderWork.version.id,
+      description: "Curtain Rod Installation",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(75),
+      total: new Prisma.Decimal(75),
+      type: "LABOR",
+    },
+  });
+  await prisma.estimate.update({
+    where: { id: founderWork.estimate.id },
+    data: { total: new Prisma.Decimal(275) },
+  });
+  await prisma.estimateVersion.update({
+    where: { id: founderWork.version.id },
+    data: { total: new Prisma.Decimal(275) },
+  });
+
+  const draftCo = await prisma.changeOrder.create({
+    data: {
+      businessId: otherBusiness.id,
+      jobId: founderWork.job.id,
+      title: "Draft never sent",
+      status: "DRAFT",
+      total: new Prisma.Decimal(40),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      changeOrderId: draftCo.id,
+      description: "Draft only line",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(40),
+      total: new Prisma.Decimal(40),
+      type: "LABOR",
+    },
+  });
+  const sentCo = await prisma.changeOrder.create({
+    data: {
+      businessId: otherBusiness.id,
+      jobId: founderWork.job.id,
+      title: "Sent never approved",
+      status: "SENT",
+      total: new Prisma.Decimal(55),
+      sentAt: new Date(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      changeOrderId: sentCo.id,
+      description: "Sent only line",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(55),
+      total: new Prisma.Decimal(55),
+      type: "LABOR",
+    },
+  });
+  const declinedCo2 = await prisma.changeOrder.create({
+    data: {
+      businessId: otherBusiness.id,
+      jobId: founderWork.job.id,
+      title: "Declined extra",
+      status: "DECLINED",
+      total: new Prisma.Decimal(60),
+      declinedAt: new Date(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      changeOrderId: declinedCo2.id,
+      description: "Declined only line",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(60),
+      total: new Prisma.Decimal(60),
+      type: "LABOR",
+    },
+  });
+  const cancelledCo = await prisma.changeOrder.create({
+    data: {
+      businessId: otherBusiness.id,
+      jobId: founderWork.job.id,
+      title: "Cancelled extra",
+      status: "CANCELLED",
+      total: new Prisma.Decimal(70),
+      cancelledAt: new Date(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      changeOrderId: cancelledCo.id,
+      description: "Cancelled only line",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(70),
+      total: new Prisma.Decimal(70),
+      type: "LABOR",
+    },
+  });
+  const keypadApproved = await prisma.changeOrder.create({
+    data: {
+      businessId: otherBusiness.id,
+      jobId: founderWork.job.id,
+      title: "Keypad change order",
+      status: "APPROVED",
+      total: new Prisma.Decimal(100),
+      approvedAt: new Date("2026-09-01T15:00:00.000Z"),
+      createdAt: new Date("2026-09-01T15:00:00.000Z"),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      changeOrderId: keypadApproved.id,
+      description: "Keypad / Electronic Deadbolt Replacement",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(100),
+      total: new Prisma.Decimal(100),
+      type: "LABOR",
+    },
+  });
+  const laterApproved = await prisma.changeOrder.create({
+    data: {
+      businessId: otherBusiness.id,
+      jobId: founderWork.job.id,
+      title: "Later approved extra",
+      status: "APPROVED",
+      total: new Prisma.Decimal(50),
+      approvedAt: new Date("2026-09-04T18:00:00.000Z"),
+      createdAt: new Date("2026-09-04T18:00:00.000Z"),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: otherBusiness.id,
+      changeOrderId: laterApproved.id,
+      description: "Later extra work",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(50),
+      total: new Prisma.Decimal(50),
+      type: "LABOR",
+    },
+  });
+
+  const emptyPaid = await prisma.invoice.create({
+    data: {
+      businessId: otherBusiness.id,
+      customerId: otherCustomer.id,
+      jobId: founderWork.job.id,
+      status: "PAID",
+      total: new Prisma.Decimal(375),
+      paidAt: new Date("2026-09-03T16:00:00.000Z"),
+      paymentMethod: "STRIPE",
+      paymentReference: "pi_legacy_empty_375",
+      createdAt: new Date("2026-09-02T12:00:00.000Z"),
+    },
+  });
+  const beforeBackfill = await prisma.invoice.findUniqueOrThrow({
+    where: { id: emptyPaid.id },
+  });
+  const foreignBackfill = await backfillEmptyInvoiceWorkLines(prisma, {
+    businessId: collproBusiness.id,
+    invoiceId: emptyPaid.id,
+  });
+  check("other tenant cannot backfill this invoice", foreignBackfill.backfilled === false);
+  check(
+    "cross-tenant backfill created no lines",
+    (await prisma.lineItem.count({ where: { invoiceId: emptyPaid.id } })) === 0,
+  );
+
+  const founderDoc = await loadInvoiceDocumentForBusiness(
+    emptyPaid.id,
+    otherBusiness.id,
+    prisma,
+  );
+  const afterBackfill = await prisma.invoice.findUniqueOrThrow({
+    where: { id: emptyPaid.id },
+    include: { lineItems: { orderBy: { createdAt: "asc" } } },
+  });
+  check("document loader backfilled the empty paid invoice", afterBackfill.lineItems.length === 3);
+  check(
+    "backfill copied original approved closet qty 2",
+    afterBackfill.lineItems[0].description === "Closet Shelf / Rod Repair" &&
+      afterBackfill.lineItems[0].quantity.toString() === "2",
+  );
+  check(
+    "backfill copied original approved curtain qty 1",
+    afterBackfill.lineItems[1].description === "Curtain Rod Installation" &&
+      afterBackfill.lineItems[1].quantity.toString() === "1",
+  );
+  check(
+    "backfill copied the approved keypad change order",
+    afterBackfill.lineItems[2].description ===
+      "Keypad / Electronic Deadbolt Replacement" &&
+      afterBackfill.lineItems[2].quantity.toString() === "1",
+  );
+  check(
+    "unapproved change-order lines were not backfilled",
+    afterBackfill.lineItems.every(
+      (line) =>
+        !["Draft only line", "Sent only line", "Declined only line", "Cancelled only line", "Later extra work"].includes(
+          line.description,
+        ),
+    ),
+  );
+  check("historical invoice total stays $375", afterBackfill.total.toString() === "375");
+  check(
+    "paidAt is unchanged",
+    afterBackfill.paidAt?.toISOString() === beforeBackfill.paidAt?.toISOString(),
+  );
+  check("payment method is unchanged", afterBackfill.paymentMethod === "STRIPE");
+  check(
+    "payment reference is unchanged",
+    afterBackfill.paymentReference === "pi_legacy_empty_375",
+  );
+  check("invoice status stays PAID", afterBackfill.status === "PAID");
+  check("document total remains $375.00", founderDoc?.totalLabel === "$375.00");
+  check("document payments remain $375.00", founderDoc?.amountPaidLabel === "$375.00");
+  check("document amount due remains $0.00", founderDoc?.amountDueLabel === "$0.00");
+  check(
+    "document lists the three approved work descriptions",
+    founderDoc?.lineItems.map((line) => line.description).join("|") ===
+      "Closet Shelf / Rod Repair|Curtain Rod Installation|Keypad / Electronic Deadbolt Replacement",
+  );
+
+  const secondBackfill = await backfillEmptyInvoiceWorkLines(prisma, {
+    businessId: otherBusiness.id,
+    invoiceId: emptyPaid.id,
+  });
+  check("second backfill is a no-op", secondBackfill.backfilled === false);
+  check(
+    "second backfill does not duplicate lines",
+    (await prisma.lineItem.count({ where: { invoiceId: emptyPaid.id } })) === 3,
+  );
+
+  const reuseEmpty = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: otherBusiness.id,
+    jobId: founderWork.job.id,
+  });
+  check("persist reuse does not create a second invoice", reuseEmpty.ok === true && reuseEmpty.reused === true);
+  check(
+    "persist reuse does not duplicate invoice lines",
+    (await prisma.lineItem.count({ where: { invoiceId: emptyPaid.id } })) === 3,
+  );
+  check(
+    "persist reuse does not change the paid total",
+    (await prisma.invoice.findUniqueOrThrow({ where: { id: emptyPaid.id } })).total.toString() ===
+      "375",
+  );
+
+  const founderPdf = await renderInvoicePdf(founderDoc);
+  const founderPdfText = pdfExtractText(founderPdf);
+  check("PDF heading includes WORK PERFORMED", founderPdfText.includes("WORK PERFORMED"));
+  check("PDF contains closet work", founderPdfText.includes("Closet Shelf / Rod Repair"));
+  check("PDF contains curtain work", founderPdfText.includes("Curtain Rod Installation"));
+  check("PDF contains keypad work", founderPdfText.includes("Keypad / Electronic Deadbolt Replacement"));
+  check("PDF still shows the $375.00 total", founderPdfText.includes("$375.00"));
+  check("PDF does not invent later extra work", !founderPdfText.includes("Later extra work"));
+  check("original approved estimate total is still $275", (await prisma.estimateVersion.findUniqueOrThrow({
+    where: { id: founderWork.version.id },
+  })).total.toString() === "275");
+
+  console.log("\nTEST 9 — Document logo stays separate from the dark website logo");
   const brandingSrc = readFileSync(new URL("../src/lib/business-branding.ts", import.meta.url), "utf8");
   const invoiceDocSrc = readFileSync(new URL("../src/lib/invoice-document.ts", import.meta.url), "utf8");
   const invoicePdfSrc = readFileSync(new URL("../src/lib/invoice-pdf.ts", import.meta.url), "utf8");
@@ -560,10 +1051,30 @@ try {
   );
   check("transparent document logo asset exists", existsSync(documentLogoPath));
   const documentLogoBytes = readFileSync(documentLogoPath);
+  const websiteLogoBytes = readFileSync(new URL("../public/brand/collpro-logo.png", import.meta.url));
+  const documentPng = inspectPng(documentLogoBytes);
+  const websitePng = inspectPng(websiteLogoBytes);
+  const documentLogoSha256 = createHash("sha256").update(documentLogoBytes).digest("hex");
   check(
-    "document logo is the approved light PNG, not a later generated substitute",
-    documentLogoBytes.length > 1_400_000 &&
-      documentLogoBytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
+    "document logo PNG has a real alpha channel, not just a document filename",
+    documentPng.isPng && documentPng.hasAlphaChannel && documentPng.colorType === 6,
+  );
+  check(
+    "document logo PNG decodes with transparent pixels (no baked-in plate)",
+    documentPng.decoded && documentPng.transparentPixels > 0,
+  );
+  check(
+    "document logo binary is not the dark website/dashboard logo",
+    documentLogoBytes.length !== websiteLogoBytes.length &&
+      !documentLogoBytes.equals(websiteLogoBytes) &&
+      websitePng.isPng &&
+      websitePng.colorType === 2,
+  );
+  check(
+    "document logo is the founder-approved 5c6c8ae binary",
+    documentLogoSha256 === APPROVED_DOCUMENT_LOGO_SHA256 &&
+      documentPng.width === 1243 &&
+      documentPng.height === 1170,
   );
   const collproPdf = await renderInvoicePdf(collproDoc);
   check("CollPro PDF renders with the document logo present", collproPdf.subarray(0, 4).toString() === "%PDF");

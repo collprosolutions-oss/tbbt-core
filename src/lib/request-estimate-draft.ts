@@ -123,3 +123,33 @@ export async function addRequestDraftLines(
   });
   return rows.length;
 }
+
+/**
+ * Same catalog pricing as estimate prefill, attached to a DRAFT Change
+ * Order. Does not send or approve. Unpriced custom-quote lines stay $0
+ * with the shared "enter price" description marker.
+ */
+export async function addChangeOrderDraftLines(
+  tx: Prisma.TransactionClient,
+  input: {
+    businessId: string;
+    changeOrderId: string;
+    items: RequestDraftSourceItem[];
+  },
+) {
+  const rows = buildEstimateLineCreatesFromRequestItems(input.businessId, input.items);
+  if (rows.length === 0) return 0;
+  await tx.lineItem.createMany({
+    data: rows.map((row) => ({
+      businessId: row.businessId,
+      changeOrderId: input.changeOrderId,
+      serviceCatalogItemId: row.serviceCatalogItemId,
+      description: row.description,
+      quantity: new Prisma.Decimal(row.quantity),
+      unitPrice: new Prisma.Decimal(row.unitPrice),
+      total: new Prisma.Decimal(row.total),
+      type: row.type,
+    })),
+  });
+  return rows.length;
+}

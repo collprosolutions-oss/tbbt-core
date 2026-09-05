@@ -7,6 +7,10 @@ import { requireBusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { persistDraftChangeOrderTotal } from "@/lib/change-order";
 import { prisma } from "@/lib/prisma";
+import {
+  addChangeOrderDraftLines,
+  isUnpricedCustomQuoteDraftLine,
+} from "@/lib/request-estimate-draft";
 
 export type ChangeOrderActionState = {
   error?: string;
@@ -74,8 +78,21 @@ export async function createChangeOrder(
     }),
   );
 
-  let sourceRequest: { id: string; businessId: string; status: string } | null =
-    null;
+  let sourceRequest: {
+    id: string;
+    businessId: string;
+    status: string;
+    items: Array<{
+      quantity: number;
+      customDescription: string | null;
+      serviceCatalogItem: {
+        id: string;
+        name: string;
+        pricingMode: string;
+        price: Prisma.Decimal | null;
+      } | null;
+    }>;
+  } | null = null;
   if (additionalWorkRequestId) {
     sourceRequest = access.assertOwned(
       await prisma.additionalWorkRequest.findFirst({
@@ -84,7 +101,26 @@ export async function createChangeOrder(
           jobId: job.id,
           ...access.scope,
         },
-        select: { id: true, businessId: true, status: true },
+        select: {
+          id: true,
+          businessId: true,
+          status: true,
+          items: {
+            orderBy: { sortOrder: "asc" },
+            select: {
+              quantity: true,
+              customDescription: true,
+              serviceCatalogItem: {
+                select: {
+                  id: true,
+                  name: true,
+                  pricingMode: true,
+                  price: true,
+                },
+              },
+            },
+          },
+        },
       }),
     );
     if (sourceRequest.status !== "OPEN") {
@@ -113,6 +149,17 @@ export async function createChangeOrder(
       });
       if (linked.count !== 1) {
         throw new Error("That request has already been handled.");
+      }
+      if (
+        sourceRequest &&
+        sourceRequest.items.some((item) => item.serviceCatalogItem)
+      ) {
+        await addChangeOrderDraftLines(tx, {
+          businessId: access.businessId,
+          changeOrderId: created.id,
+          items: sourceRequest.items,
+        });
+        await persistDraftChangeOrderTotal(tx, created.id, access.businessId);
       }
     }
 
@@ -275,7 +322,9 @@ export async function sendChangeOrder(
   const changeOrder = access.assertOwned(
     await prisma.changeOrder.findFirst({
       where: { id: changeOrderId, ...access.scope },
-      include: { lineItems: { select: { id: true } } },
+      include: {
+        lineItems: { select: { id: true, unitPrice: true, description: true } },
+      },
     }),
   );
 
@@ -285,6 +334,9 @@ export async function sendChangeOrder(
 
   if (changeOrder.lineItems.length === 0) {
     return { error: "Add at least one line item before sending." };
+  }
+  if (changeOrder.lineItems.some((item) => isUnpricedCustomQuoteDraftLine(item))) {
+    return { error: "Enter a price for each custom-quote line before sending." };
   }
 
   const updated = await prisma.changeOrder.updateMany({

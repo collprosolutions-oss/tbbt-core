@@ -51,6 +51,13 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 const { persistDraftInvoiceFromCompletedJob } = await import(
   "@/lib/invoice-carry-forward"
 );
+const { createCustomerAdditionalWorkRequest } = await import(
+  "@/lib/additional-work-request"
+);
+const {
+  addChangeOrderDraftLines,
+  CUSTOM_QUOTE_DRAFT_MARKER,
+} = await import("@/lib/request-estimate-draft");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -162,7 +169,24 @@ async function mirrorCreateChangeOrderFromRequest(access, jobId, title, requestI
     if (linked.count !== 1) {
       throw new Error("race");
     }
-    return created;
+    const items = await tx.additionalWorkRequestItem.findMany({
+      where: { additionalWorkRequestId: request.id, businessId: access.businessId },
+      orderBy: { sortOrder: "asc" },
+      include: {
+        serviceCatalogItem: {
+          select: { id: true, name: true, pricingMode: true, price: true },
+        },
+      },
+    });
+    if (items.some((item) => item.serviceCatalogItem)) {
+      await addChangeOrderDraftLines(tx, {
+        businessId: access.businessId,
+        changeOrderId: created.id,
+        items,
+      });
+      await persistDraftChangeOrderTotal(tx, created.id, access.businessId);
+    }
+    return tx.changeOrder.findUniqueOrThrow({ where: { id: created.id } });
   });
 }
 
@@ -811,6 +835,167 @@ try {
   check("converted request status is CONVERTED", convertedRequest.status === "CONVERTED");
   check("converted request links to the new change order", convertedRequest.changeOrderId === coFromRequest.id);
   check("the change order created from a request starts DRAFT (never auto-approved)", coFromRequest.status === "DRAFT");
+  const legacyLines = await prisma.lineItem.findMany({ where: { changeOrderId: coFromRequest.id } });
+  check("legacy free-text request still creates an empty draft (no invented price)", legacyLines.length === 0);
+  check("legacy free-text draft total stays $0", coFromRequest.total.toString() === "0");
+
+  console.log("\nTEST — Additional Work catalog selection prefills Change Order draft lines");
+  const deadbolt = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Digital Deadbolt Installation",
+      pricingMode: "FIXED",
+      price: new Prisma.Decimal("125.00"),
+      category: "Doors & Locks",
+      active: true,
+    },
+  });
+  const startingAtItem = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Shelf Install Starting",
+      pricingMode: "STARTING_AT",
+      price: new Prisma.Decimal("80.00"),
+      category: "Other Services",
+      active: true,
+    },
+  });
+  const customItem = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Custom Carpentry",
+      pricingMode: "CUSTOM_QUOTE",
+      price: null,
+      category: "Other Services",
+      active: true,
+    },
+  });
+  const otherBusinessItem = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessB.id,
+      name: "Beta Only Service",
+      pricingMode: "FIXED",
+      price: new Prisma.Decimal("50.00"),
+      active: true,
+    },
+  });
+  const beforeCatalogScope = resolveApprovedWorkOrderScope(await fetchJobForScope(job1.id));
+  const catalogRequest = await createCustomerAdditionalWorkRequest(prisma, {
+    token: jobA1.projectToken,
+    catalogItemIds: [deadbolt.id],
+    catalogQuantities: { [deadbolt.id]: 1 },
+    notes: "i would like to add a digital dead bolt",
+  });
+  check("catalog additional-work request is stored", catalogRequest.ok === true);
+  const storedCatalogRequest = await prisma.additionalWorkRequest.findUniqueOrThrow({
+    where: { id: catalogRequest.ok ? catalogRequest.requestId : "missing" },
+    include: { items: true },
+  });
+  check("request stores the ServiceCatalogItem id", storedCatalogRequest.items[0]?.serviceCatalogItemId === deadbolt.id);
+  check("request stores quantity 1", storedCatalogRequest.items[0]?.quantity === 1);
+  const catalogCo = await mirrorCreateChangeOrderFromRequest(
+    ownerAccessA,
+    job1.id,
+    storedCatalogRequest.description.slice(0, 80),
+    storedCatalogRequest.id,
+  );
+  const catalogLines = await prisma.lineItem.findMany({
+    where: { changeOrderId: catalogCo.id },
+    orderBy: { createdAt: "asc" },
+  });
+  check("catalog create-draft stays DRAFT", catalogCo.status === "DRAFT");
+  check("Digital Deadbolt Installation is already a line item", catalogLines[0]?.description === "Digital Deadbolt Installation");
+  check("prefilled quantity is 1", catalogLines[0]?.quantity.toString() === "1");
+  check("prefilled unit price is the catalog price", catalogLines[0]?.unitPrice.toString() === "125");
+  check("prefilled amount is calculated", catalogLines[0]?.total.toString() === "125");
+  check("prefilled line type is LABOR", catalogLines[0]?.type === "LABOR");
+  check("prefilled line keeps the catalog item id", catalogLines[0]?.serviceCatalogItemId === deadbolt.id);
+  const afterCatalogScope = resolveApprovedWorkOrderScope(await fetchJobForScope(job1.id));
+  check(
+    "original approved estimate is unchanged by catalog additional work",
+    afterCatalogScope.total.toString() === beforeCatalogScope.total.toString(),
+  );
+  check(
+    "Job.approvedEstimateVersionId is unchanged by catalog create-draft",
+    (await prisma.job.findUniqueOrThrow({ where: { id: job1.id } })).approvedEstimateVersionId ===
+      originalVersion.id,
+  );
+
+  const qtyRequest = await createCustomerAdditionalWorkRequest(prisma, {
+    token: jobA1.projectToken,
+    catalogItemIds: [deadbolt.id],
+    catalogQuantities: { [deadbolt.id]: 2 },
+  });
+  const qtyCo = await mirrorCreateChangeOrderFromRequest(
+    ownerAccessA,
+    job1.id,
+    "Two deadbolts",
+    qtyRequest.ok ? qtyRequest.requestId : "missing",
+  );
+  const qtyLine = await prisma.lineItem.findFirst({ where: { changeOrderId: qtyCo.id } });
+  check("quantity >1 is carried onto the draft line", qtyLine?.quantity.toString() === "2");
+  check("quantity >1 amount uses catalog price × qty", qtyLine?.total.toString() === "250");
+
+  const startingRequest = await createCustomerAdditionalWorkRequest(prisma, {
+    token: jobA1.projectToken,
+    catalogItemIds: [startingAtItem.id],
+    catalogQuantities: { [startingAtItem.id]: 1 },
+  });
+  const startingCo = await mirrorCreateChangeOrderFromRequest(
+    ownerAccessA,
+    job1.id,
+    "Starting at shelf",
+    startingRequest.ok ? startingRequest.requestId : "missing",
+  );
+  const startingLine = await prisma.lineItem.findFirst({ where: { changeOrderId: startingCo.id } });
+  check(
+    "starting-at catalog price is prefilled with the shared marker",
+    startingLine?.description.includes("(starting at)") === true &&
+      startingLine?.unitPrice.toString() === "80",
+  );
+
+  const customRequest = await createCustomerAdditionalWorkRequest(prisma, {
+    token: jobA1.projectToken,
+    catalogItemIds: [customItem.id],
+    catalogQuantities: { [customItem.id]: 1 },
+  });
+  const customCo = await mirrorCreateChangeOrderFromRequest(
+    ownerAccessA,
+    job1.id,
+    "Custom carpentry",
+    customRequest.ok ? customRequest.requestId : "missing",
+  );
+  const customLine = await prisma.lineItem.findFirst({ where: { changeOrderId: customCo.id } });
+  check(
+    "custom-quote line is marked Price required instead of a silent $0 price",
+    customLine?.description.includes(CUSTOM_QUOTE_DRAFT_MARKER) === true &&
+      customLine?.unitPrice.toString() === "0",
+  );
+
+  const otherRequest = await createCustomerAdditionalWorkRequest(prisma, {
+    token: jobA1.projectToken,
+    includeOther: true,
+    otherDescription: "something else not in the catalog",
+  });
+  check("free-text Other request is stored", otherRequest.ok === true);
+  const otherCo = await mirrorCreateChangeOrderFromRequest(
+    ownerAccessA,
+    job1.id,
+    "Something else",
+    otherRequest.ok ? otherRequest.requestId : "missing",
+  );
+  const otherLine = await prisma.lineItem.findFirst({ where: { changeOrderId: otherCo.id } });
+  check(
+    "Other free-text create draft stays empty for manual pricing",
+    otherLine === null && otherCo.total.toString() === "0" && otherCo.status === "DRAFT",
+  );
+
+  const rejectedCrossCatalog = await createCustomerAdditionalWorkRequest(prisma, {
+    token: jobA1.projectToken,
+    catalogItemIds: [otherBusinessItem.id],
+    catalogQuantities: { [otherBusinessItem.id]: 1 },
+  });
+  check("cross-business catalog id is rejected", rejectedCrossCatalog.ok === false);
 
   // --- Invoice integration -------------------------------------------
   console.log("\nTEST 12, 13, 14 — Invoice integration: only APPROVED change orders count, exactly once, no duplicate billing");
@@ -974,12 +1159,66 @@ try {
   }
   const additionalWorkGrep = spawnSync(
     "grep",
-    ["-n", "businessId: job.businessId", "src/app/actions/public-additional-work-request.ts"],
+    ["-n", "businessId: job.businessId", "src/lib/additional-work-request.ts"],
     { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
   );
   check(
-    "src/app/actions/public-additional-work-request.ts derives the stored businessId from the token-looked-up Job, not the client",
+    "src/lib/additional-work-request.ts derives the stored businessId from the token-looked-up Job, not the client",
     (additionalWorkGrep.stdout || "").trim().length > 0,
+  );
+  const changeOrderActionSrc = spawnSync(
+    "grep",
+    ["-n", "addChangeOrderDraftLines", "src/app/actions/change-order.ts"],
+    { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
+  );
+  check(
+    "createChangeOrder prefills draft lines through the shared request-estimate helper",
+    (changeOrderActionSrc.stdout || "").trim().length > 0,
+  );
+  const portalFormGrep = spawnSync(
+    "grep",
+    ["-n", "serviceCatalogItemId", "src/components/portal/request-additional-work-form.tsx"],
+    { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
+  );
+  check(
+    "portal Additional Work form submits catalog item ids",
+    (portalFormGrep.stdout || "").trim().length > 0,
+  );
+  const portalGroupsGrep = spawnSync(
+    "grep",
+    ["-n", "groups:", "src/components/portal/request-additional-work-form.tsx"],
+    { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
+  );
+  check(
+    "portal Additional Work form takes existing catalog groups, not a second category system",
+    (portalGroupsGrep.stdout || "").trim().length > 0,
+  );
+  const portalCollapsedGrep = spawnSync(
+    "grep",
+    ["-n", "useState<Set<string>>(() => new Set())", "src/components/portal/request-additional-work-form.tsx"],
+    { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
+  );
+  check(
+    "portal Additional Work categories start collapsed",
+    (portalCollapsedGrep.stdout || "").trim().length > 0,
+  );
+  const portalExpandedGrep = spawnSync(
+    "grep",
+    ["-n", "aria-expanded", "src/components/portal/request-additional-work-form.tsx"],
+    { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
+  );
+  check(
+    "portal Additional Work category bars expose aria-expanded",
+    (portalExpandedGrep.stdout || "").trim().length > 0,
+  );
+  const portalCatalogGroupGrep = spawnSync(
+    "grep",
+    ["-n", "groupPublicCatalog", "src/lib/portal-additional-work.ts"],
+    { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
+  );
+  check(
+    "portal catalog loader groups by existing ServiceCatalogItem.category",
+    (portalCatalogGroupGrep.stdout || "").trim().length > 0,
   );
 
   // --- HTTP-level checks against the built, running app ---------------

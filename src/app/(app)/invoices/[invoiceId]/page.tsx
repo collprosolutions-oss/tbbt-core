@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { MarkInvoicePaidForm } from "@/components/invoices/mark-invoice-paid-form";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
+import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { RecordNav } from "@/components/record-nav";
@@ -17,6 +18,7 @@ import {
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
 import { formatDateTime, formatMoney } from "@/lib/format";
+import { backfillEmptyInvoiceWorkLines } from "@/lib/invoice-carry-forward";
 import { invoiceNumberFromId } from "@/lib/invoice-document";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { reconcileStripeCheckoutPayment } from "@/lib/payments";
@@ -38,6 +40,10 @@ export default async function InvoicePage({
     include: {
       customer: { select: { name: true } },
       job: { select: { id: true, status: true } },
+      lineItems: {
+        orderBy: { createdAt: "asc" as const },
+        select: { description: true, quantity: true },
+      },
     },
   } as const;
   let invoice = await prisma.invoice.findFirst(invoiceQuery);
@@ -53,8 +59,13 @@ export default async function InvoicePage({
       invoice.businessId,
       invoice.id,
     );
-    invoice = (await prisma.invoice.findFirst(invoiceQuery)) ?? invoice;
   }
+
+  await backfillEmptyInvoiceWorkLines(prisma, {
+    businessId: invoice.businessId,
+    invoiceId: invoice.id,
+  });
+  invoice = (await prisma.invoice.findFirst(invoiceQuery)) ?? invoice;
 
   const isDraft = invoice.status === "DRAFT";
   const isSent = invoice.status === "SENT";
@@ -117,7 +128,17 @@ export default async function InvoicePage({
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           <p>Customer: {invoice.customer?.name ?? "None"}</p>
+          <WorkPerformedList
+            lines={invoice.lineItems.map((line) => ({
+              description: line.description,
+              quantityLabel: line.quantity.toString(),
+            }))}
+          />
           <p>Invoice total: {formatMoney(invoice.total)}</p>
+          <p>
+            Payments:{" "}
+            {isPaid ? formatMoney(invoice.total) : formatMoney(0)}
+          </p>
           <p>Amount due: {isPaid ? formatMoney(0) : formatMoney(invoice.total)}</p>
           {isPaid ? (
             <>

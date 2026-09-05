@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Briefcase, ExternalLink, FileText, Mail, MapPin, Phone, Receipt } from "lucide-react";
 import { MarkInvoicePaidForm } from "@/components/invoices/mark-invoice-paid-form";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
+import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
@@ -32,6 +33,7 @@ export type InvoiceListItem = {
   customer: { id: string; name: string; phone: string | null; email: string | null } | null;
   propertyLabel: string | null;
   scopeSummary: string | null;
+  workPerformed: Array<{ description: string; quantityLabel: string }>;
   jobId: string | null;
   jobProjectToken: string | null;
   paidAtLabel: string | null;
@@ -354,7 +356,11 @@ function InvoiceDetailsPanel({ invoice }: { invoice: InvoiceListItem | null }) {
         </DetailField>
 
         <DetailField icon={Briefcase} label="Billed for">
-          {invoice.scopeSummary ?? "No linked job scope on file"}
+          {invoice.workPerformed.length > 0 ? (
+            <WorkPerformedList lines={invoice.workPerformed} />
+          ) : (
+            invoice.scopeSummary ?? "No linked job scope on file"
+          )}
         </DetailField>
 
         <div className="space-y-1 rounded-lg border border-border/60 bg-card/40 p-3 text-sm">

@@ -129,8 +129,10 @@ export const JOB_INVOICE_SCOPE_INCLUDE = {
   },
   changeOrders: {
     select: {
+      id: true,
       status: true,
       total: true,
+      createdAt: true,
       lineItems: {
         orderBy: { createdAt: "asc" as const },
         select: INVOICE_LINE_SELECT,
@@ -138,6 +140,254 @@ export const JOB_INVOICE_SCOPE_INCLUDE = {
     },
   },
 } as const;
+
+export type InvoiceBackfillResult =
+  | {
+      ok: true;
+      backfilled: false;
+      reason:
+        | "already-has-lines"
+        | "no-invoice"
+        | "no-job"
+        | "no-scope"
+        | "no-match";
+    }
+  | { ok: true; backfilled: true; lineCount: number };
+
+export type BackfillChangeOrderCandidate = {
+  id: string;
+  createdAt: Date;
+  lineItems: InvoiceSnapshotLineInput[];
+};
+
+export function snapshotLinesTotal(
+  lines: readonly InvoiceSnapshotLineInput[],
+): Prisma.Decimal {
+  return lines.reduce(
+    (sum, line) => sum.add(toInvoiceDecimal(line.total)),
+    ZERO,
+  );
+}
+
+/**
+ * Choose the APPROVED Change Orders whose copied lines, plus the original
+ * approved estimate (and labor-minimum snapshot), equal the invoice total.
+ *
+ * Prefers Change Orders that already existed when the invoice was created.
+ * If that set does not match — for example a Change Order approved in the
+ * same second as invoice create — grows prefixes in createdAt order until
+ * the snapshot sum equals the stored Invoice.total.
+ *
+ * Returns null when no safe reconstruction exists. Never invents lines and
+ * never includes DRAFT / SENT / DECLINED / CANCELLED Change Orders
+ * (callers must pass only APPROVED candidates).
+ */
+export function selectApprovedChangeOrdersForInvoiceBackfill(input: {
+  approvedLineItems: readonly InvoiceSnapshotLineInput[];
+  laborMinimumAdjustment?: Prisma.Decimal | number | string | null;
+  approvedChangeOrders: readonly BackfillChangeOrderCandidate[];
+  invoiceCreatedAt: Date;
+  invoiceTotal: Prisma.Decimal | number | string;
+}): BackfillChangeOrderCandidate[] | null {
+  const invoiceTotal = toInvoiceDecimal(input.invoiceTotal);
+  const ordered = [...input.approvedChangeOrders].sort((a, b) => {
+    const byTime = a.createdAt.getTime() - b.createdAt.getTime();
+    return byTime !== 0 ? byTime : a.id.localeCompare(b.id);
+  });
+
+  const matches = (changeOrders: BackfillChangeOrderCandidate[]) => {
+    const lines = buildInvoiceLineSnapshots({
+      approvedLineItems: input.approvedLineItems,
+      laborMinimumAdjustment: input.laborMinimumAdjustment,
+      approvedChangeOrderLineItems: changeOrders.flatMap(
+        (changeOrder) => changeOrder.lineItems,
+      ),
+    });
+    return snapshotLinesTotal(lines).eq(invoiceTotal);
+  };
+
+  const asOfInvoice = ordered.filter(
+    (changeOrder) =>
+      changeOrder.createdAt.getTime() <= input.invoiceCreatedAt.getTime(),
+  );
+  if (matches(asOfInvoice)) {
+    return asOfInvoice;
+  }
+
+  for (let index = 0; index <= ordered.length; index += 1) {
+    const prefix = ordered.slice(0, index);
+    if (matches(prefix)) {
+      return prefix;
+    }
+  }
+
+  return null;
+}
+
+type InvoiceWriteClient = PrismaClient | Prisma.TransactionClient;
+
+function canStartTransaction(
+  db: InvoiceWriteClient,
+): db is PrismaClient {
+  return typeof (db as PrismaClient).$transaction === "function";
+}
+
+/**
+ * Persist approved-scope snapshots onto an invoice that has zero LineItem
+ * rows. Does not change Invoice.total, paidAt, payment method, or
+ * payment reference. No-ops when lines already exist or reconstruction
+ * would not equal the stored total.
+ */
+export async function backfillEmptyInvoiceWorkLines(
+  db: InvoiceWriteClient,
+  input: { businessId: string; invoiceId: string },
+): Promise<InvoiceBackfillResult> {
+  if (!input.businessId || !input.invoiceId) {
+    return { ok: true, backfilled: false, reason: "no-invoice" };
+  }
+
+  if (canStartTransaction(db)) {
+    return db.$transaction((tx) => persistEmptyInvoiceWorkLines(tx, input));
+  }
+
+  return persistEmptyInvoiceWorkLines(db, input);
+}
+
+/**
+ * Token-scoped wrapper for the Customer Project Portal. Looks up the job
+ * by projectToken only, then backfills that job's invoice if empty.
+ */
+export async function backfillEmptyInvoiceWorkLinesForProjectToken(
+  db: PrismaClient,
+  token: string,
+): Promise<InvoiceBackfillResult> {
+  if (!token) {
+    return { ok: true, backfilled: false, reason: "no-invoice" };
+  }
+
+  const job = await db.job.findUnique({
+    where: { projectToken: token },
+    select: {
+      invoices: {
+        take: 1,
+        orderBy: { createdAt: "asc" },
+        select: { id: true, businessId: true },
+      },
+    },
+  });
+
+  const invoice = job?.invoices[0];
+  if (!invoice) {
+    return { ok: true, backfilled: false, reason: "no-invoice" };
+  }
+
+  return backfillEmptyInvoiceWorkLines(db, {
+    businessId: invoice.businessId,
+    invoiceId: invoice.id,
+  });
+}
+
+async function persistEmptyInvoiceWorkLines(
+  tx: InvoiceWriteClient,
+  input: { businessId: string; invoiceId: string },
+): Promise<InvoiceBackfillResult> {
+  const invoice = await tx.invoice.findFirst({
+    where: { id: input.invoiceId, businessId: input.businessId },
+    select: {
+      id: true,
+      businessId: true,
+      jobId: true,
+      total: true,
+      createdAt: true,
+      _count: { select: { lineItems: true } },
+    },
+  });
+
+  if (!invoice) {
+    return { ok: true, backfilled: false, reason: "no-invoice" };
+  }
+  if (invoice._count.lineItems > 0) {
+    return { ok: true, backfilled: false, reason: "already-has-lines" };
+  }
+  if (!invoice.jobId) {
+    return { ok: true, backfilled: false, reason: "no-job" };
+  }
+
+  const job = await tx.job.findFirst({
+    where: { id: invoice.jobId, businessId: input.businessId },
+    include: JOB_INVOICE_SCOPE_INCLUDE,
+  });
+
+  if (!job) {
+    return { ok: true, backfilled: false, reason: "no-job" };
+  }
+
+  const approvedScope = resolveApprovedWorkOrderScope(job);
+  if (approvedScope.source === "none") {
+    return { ok: true, backfilled: false, reason: "no-scope" };
+  }
+
+  const laborMinimumAdjustment =
+    approvedScope.source === "version"
+      ? approvedScope.laborMinimumAdjustment
+      : (job.estimate?.laborMinimumAdjustment ?? ZERO);
+
+  const approvedChangeOrders = job.changeOrders
+    .filter((changeOrder) => changeOrder.status === "APPROVED")
+    .map((changeOrder) => ({
+      id: changeOrder.id,
+      createdAt: changeOrder.createdAt,
+      lineItems: changeOrder.lineItems,
+    }));
+
+  const selected = selectApprovedChangeOrdersForInvoiceBackfill({
+    approvedLineItems: approvedScope.lineItems,
+    laborMinimumAdjustment,
+    approvedChangeOrders,
+    invoiceCreatedAt: invoice.createdAt,
+    invoiceTotal: invoice.total,
+  });
+
+  if (!selected) {
+    return { ok: true, backfilled: false, reason: "no-match" };
+  }
+
+  const lines = buildInvoiceLineSnapshots({
+    approvedLineItems: approvedScope.lineItems,
+    laborMinimumAdjustment,
+    approvedChangeOrderLineItems: selected.flatMap(
+      (changeOrder) => changeOrder.lineItems,
+    ),
+  });
+
+  if (!snapshotLinesTotal(lines).eq(invoice.total)) {
+    return { ok: true, backfilled: false, reason: "no-match" };
+  }
+
+  const stillEmpty = await tx.lineItem.count({
+    where: { invoiceId: invoice.id, businessId: invoice.businessId },
+  });
+  if (stillEmpty > 0) {
+    return { ok: true, backfilled: false, reason: "already-has-lines" };
+  }
+
+  for (const line of lines) {
+    await tx.lineItem.create({
+      data: {
+        businessId: invoice.businessId,
+        invoiceId: invoice.id,
+        serviceCatalogItemId: line.serviceCatalogItemId ?? null,
+        description: line.description,
+        quantity: toInvoiceDecimal(line.quantity),
+        unitPrice: toInvoiceDecimal(line.unitPrice),
+        total: toInvoiceDecimal(line.total),
+        type: line.type,
+      },
+    });
+  }
+
+  return { ok: true, backfilled: true, lineCount: lines.length };
+}
 
 export type PersistDraftInvoiceResult =
   | { ok: true; invoiceId: string; reused: true }
@@ -177,6 +427,10 @@ export async function persistDraftInvoiceFromCompletedJob(
       select: { id: true },
     });
     if (existing) {
+      await backfillEmptyInvoiceWorkLines(tx, {
+        businessId: input.businessId,
+        invoiceId: existing.id,
+      });
       return { ok: true as const, invoiceId: existing.id, reused: true as const };
     }
 

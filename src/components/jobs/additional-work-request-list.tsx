@@ -14,12 +14,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatDateTime } from "@/lib/format";
+import { requestedWorkLabels } from "@/lib/service-request-work";
 
 export type OpenAdditionalWorkRequest = {
   id: string;
   description: string;
   createdAt: Date;
   source: "CUSTOMER" | "EMPLOYEE";
+  items?: Array<{
+    quantity: number;
+    customDescription: string | null;
+    serviceCatalogItem: { name: string } | null;
+  }>;
 };
 
 const createInitialState: ChangeOrderActionState = {};
@@ -64,6 +70,8 @@ function RequestRow({
   jobId: string;
   request: OpenAdditionalWorkRequest;
 }) {
+  const serviceLabels = requestedWorkLabels(request);
+  const defaultTitle = (serviceLabels[0] ?? request.description).slice(0, 80);
   const [creating, setCreating] = useState(false);
   const [createState, createAction, createPending] = useActionState(
     createChangeOrder,
@@ -76,7 +84,18 @@ function RequestRow({
 
   return (
     <li className="space-y-2 rounded-lg border p-3 text-sm">
-      <p className="whitespace-pre-wrap">{request.description}</p>
+      {serviceLabels.length > 0 ? (
+        <ul className="list-disc space-y-1 pl-5">
+          {serviceLabels.map((label) => (
+            <li key={label}>{label}</li>
+          ))}
+        </ul>
+      ) : null}
+      {request.description &&
+      (serviceLabels.length === 0 ||
+        request.description !== serviceLabels[0]) ? (
+        <p className="whitespace-pre-wrap">{request.description}</p>
+      ) : null}
       <p className="text-xs text-muted-foreground">
         {request.source === "EMPLOYEE"
           ? "Reported by field employee"
@@ -108,7 +127,7 @@ function RequestRow({
             <Input
               id={`co-title-${request.id}`}
               name="title"
-              defaultValue={request.description.slice(0, 80)}
+              defaultValue={defaultTitle}
               required
             />
           </div>

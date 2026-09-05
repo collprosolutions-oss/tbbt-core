@@ -96,8 +96,8 @@ export async function completeAssignedJob(
   if (result.nextStatus) {
     // Deliberately ONLY flips Job.status. Does not create/send an Invoice,
     // approve any Change Order, or touch payment -- owner financial control
-    // (invoice review/send/paid) stays entirely on the existing Work Order
-    // (src/app/(app)/jobs/[jobId]/page.tsx / src/app/actions/invoice.ts).
+    // stays on Work Order Complete Job (markJobComplete →
+    // completeJobAndSendInvoice).
     await prisma.job.update({
       where: { id: job.id },
       data: { status: result.nextStatus },

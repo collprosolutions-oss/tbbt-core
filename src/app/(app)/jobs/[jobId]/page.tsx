@@ -15,6 +15,7 @@ import { ChangeOrderList } from "@/components/jobs/change-order-list";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { CreateChangeOrderForm } from "@/components/jobs/create-change-order-form";
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
+import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
 import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
 import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
@@ -124,7 +125,20 @@ export default async function JobPage({
       additionalWorkRequests: {
         where: { status: "OPEN" },
         orderBy: { createdAt: "desc" },
-        select: { id: true, description: true, createdAt: true, source: true },
+        select: {
+          id: true,
+          description: true,
+          createdAt: true,
+          source: true,
+          items: {
+            orderBy: { sortOrder: "asc" },
+            select: {
+              quantity: true,
+              customDescription: true,
+              serviceCatalogItem: { select: { name: true } },
+            },
+          },
+        },
       },
       assignedMembership: {
         select: { id: true, user: { select: { name: true, email: true } } },
@@ -314,15 +328,24 @@ export default async function JobPage({
       {isCompleted ? (
         <Card>
           <CardHeader>
-            <CardTitle>Continue to Invoice</CardTitle>
+            <CardTitle>Invoice</CardTitle>
             <CardDescription>
-              {invoice
-                ? "This job already has an invoice. Opening it will not create another one."
-                : "Create one invoice from this completed job. A job cannot have two invoices."}
+              {invoice?.status === "DRAFT"
+                ? "The invoice was created from the approved work but was not sent. Send it so the customer can view and pay it in the project portal."
+                : invoice
+                  ? "Completing this job created and sent one invoice from the approved estimate and approved change orders. Opening it will not create another one."
+                  : "Completing this job did not create an invoice. Create and send one from the approved work. A job cannot have two invoices."}
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            {invoice ? (
+          <CardContent className="flex flex-wrap items-center gap-2">
+            {invoice?.status === "DRAFT" ? (
+              <>
+                <MarkInvoiceSentButton invoiceId={invoice.id} />
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/invoices/${invoice.id}`}>Open Invoice</Link>
+                </Button>
+              </>
+            ) : invoice ? (
               <Button asChild size="sm">
                 <Link href={`/invoices/${invoice.id}`}>Open Invoice</Link>
               </Button>
