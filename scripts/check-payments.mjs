@@ -26,7 +26,7 @@ const {
   isMerchantPaymentReady,
   shouldOfferStripeOnboarding,
 } = await import("@/lib/payments/readiness");
-const { invoiceAmountToCents, invoiceDueCents } = await import("@/lib/payments/money");
+const { invoiceAmountToCents, invoiceDueCents, payInvoiceButtonLabel } = await import("@/lib/payments/money");
 const { INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES } = await import(
   "@/lib/payments/stripe-adapter"
 );
@@ -191,6 +191,10 @@ try {
     shouldShowPayInvoice({ invoiceStatus: "SENT", amountDueCents: 37500, paymentReady: true }) === true,
   );
   check(
+    "Pay Invoice button label includes the server-formatted amount",
+    payInvoiceButtonLabel("$300.00") === "Pay Invoice — $300.00",
+  );
+  check(
     "v2 card_payments active is payment-ready",
     isMerchantPaymentReady({ cardPaymentsStatus: "active" }) === true,
   );
@@ -311,6 +315,10 @@ try {
   check("adapter falls back to v1 retrieve if v2 fails", adapterSrc.includes("stripe.accounts.retrieve"));
   check("adapter retrieves requirements with merchant config", adapterSrc.includes('"requirements"'));
   const serviceSrc = readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8");
+  const payButtonSrc = readFileSync(
+    new URL("../src/components/portal/pay-invoice-button.tsx", import.meta.url),
+    "utf8",
+  );
   const portalInvoiceSrc = readFileSync(
     new URL("../src/app/p/[token]/invoice/page.tsx", import.meta.url),
     "utf8",
@@ -319,8 +327,31 @@ try {
     new URL("../src/app/(app)/invoices/[invoiceId]/page.tsx", import.meta.url),
     "utf8",
   );
+  check(
+    "customer Pay Invoice CTA is a bright green button with white text",
+    payButtonSrc.includes("bg-[#22c55e]") &&
+      payButtonSrc.includes("text-white") &&
+      !payButtonSrc.includes("bg-emerald-700") &&
+      !payButtonSrc.includes("bg-neutral-950") &&
+      !payButtonSrc.includes("bg-neutral-900"),
+  );
   check("portal uses shouldShowPayInvoice", portalSrc.includes("shouldShowPayInvoice"));
-  check("portal renders PayInvoiceButton only when allowed", portalSrc.includes("showPayInvoice ? <PayInvoiceButton"));
+  check("portal renders PayInvoiceButton only when allowed", portalSrc.includes("showPayInvoice ? ("));
+  check("portal Pay Invoice label includes the invoice amount", portalSrc.includes("amountLabel={formatMoney(invoice.total)}"));
+  check(
+    "customer invoice page uses shouldShowPayInvoice",
+    portalInvoiceSrc.includes("shouldShowPayInvoice"),
+  );
+  check(
+    "customer invoice page renders PayInvoiceButton only when allowed",
+    portalInvoiceSrc.includes("showPayInvoice && invoice") &&
+      portalInvoiceSrc.includes("<PayInvoiceButton"),
+  );
+  check(
+    "customer invoice page does not read amount from the browser",
+    !portalInvoiceSrc.includes("searchParams") &&
+      portalInvoiceSrc.includes("invoiceDueCents(invoice.status, invoice.total)"),
+  );
   check("portal success return does not mark paid", !portalSrc.includes("applyVerifiedCheckoutPayment"));
   check(
     "portal reconciles a paid Stripe checkout server-side",

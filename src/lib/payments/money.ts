@@ -24,3 +24,7 @@ export function invoiceAmountToCents(total: InvoiceAmount): number {
 export function invoiceDueCents(status: string, total: InvoiceAmount): number {
   return invoiceAmountToCents(invoiceAmountDue(status, toInvoiceDecimal(total)));
 }
+
+export function payInvoiceButtonLabel(amountLabel: string) {
+  return `Pay Invoice — ${amountLabel}`;
+}

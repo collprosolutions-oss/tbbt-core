@@ -534,12 +534,54 @@ try {
     },
   });
 
+  await prisma.businessPaymentAccount.create({
+    data: {
+      businessId: businessB.id,
+      provider: "stripe",
+      stripeAccountId: "acct_test_portal_ready",
+    },
+  });
+  const customerPay = await prisma.customer.create({
+    data: { businessId: businessB.id, name: "Sue Bosse Pay Test" },
+  });
+  const propertyPay = await prisma.property.create({
+    data: {
+      businessId: businessB.id,
+      customerId: customerPay.id,
+      addressLine1: "12 Payable Ln",
+    },
+  });
+  const jobPay = await prisma.job.create({
+    data: {
+      businessId: businessB.id,
+      customerId: customerPay.id,
+      propertyId: propertyPay.id,
+      projectToken: randomUUID(),
+      status: "COMPLETED",
+    },
+  });
+  await prisma.invoice.create({
+    data: {
+      businessId: businessB.id,
+      customerId: customerPay.id,
+      jobId: jobPay.id,
+      total: new Prisma.Decimal("300.00"),
+      status: "SENT",
+    },
+  });
+
   serverProcess = spawn(
     "node_modules/.bin/next",
     ["start", "--hostname", "127.0.0.1", "--port", String(PORT)],
     {
       cwd: repoRoot.replace(/\/$/, ""),
-      env: { ...process.env, DATABASE_URL: testUrl, NODE_ENV: "production" },
+      env: {
+        ...process.env,
+        DATABASE_URL: testUrl,
+        NODE_ENV: "production",
+        TBBT_PAYMENTS_ADAPTER: "fake",
+        TBBT_PAYMENTS_FAKE_READY: "1",
+      },
       stdio: "pipe",
     },
   );
@@ -566,6 +608,7 @@ try {
   );
   check("valid token's page shows the approved total ($500.00)", validBody.includes("500.00"));
   check("valid token's page shows the invoice as Paid", validBody.includes("Paid"));
+  check("paid invoice does not offer Pay Invoice", !validBody.includes("Pay Invoice"));
 
   console.log("\nTEST 8 — A different/invalid project token reveals no other business/customer data");
   const invalidRes = await fetch(`${APP_URL}/p/${randomUUID()}`, { redirect: "manual" });
@@ -593,6 +636,40 @@ try {
 
   console.log("\nTEST 10 (portal render) — Progress bar reflects a COMPLETED + PAID job as fully progressed");
   check("portal page highlights the Invoice / Receipt step for this completed+paid job", validBody.includes("Invoice / Receipt"));
+
+  console.log("\nTEST — Outstanding payable invoice exposes Pay Invoice; paid invoice does not");
+  const payableRes = await fetch(`${APP_URL}/p/${jobPay.projectToken}`, { redirect: "manual" });
+  const payableBody = await payableRes.text();
+  check("SENT payable portal returns 200", payableRes.status === 200);
+  check(
+    "SENT payable portal shows Pay Invoice — $300.00",
+    payableBody.includes("Pay Invoice — $300.00"),
+  );
+  check(
+    "SENT payable portal posts only the token pay route",
+    payableBody.includes(`action="/p/${jobPay.projectToken}/pay"`),
+  );
+  check(
+    "SENT payable portal does not include a client amount field",
+    !payableBody.includes('name="amount"'),
+  );
+  const payableInvoiceRes = await fetch(`${APP_URL}/p/${jobPay.projectToken}/invoice`, {
+    redirect: "manual",
+  });
+  const payableInvoiceBody = await payableInvoiceRes.text();
+  check("SENT payable invoice page returns 200", payableInvoiceRes.status === 200);
+  check(
+    "SENT payable invoice page shows Pay Invoice — $300.00",
+    payableInvoiceBody.includes("Pay Invoice — $300.00"),
+  );
+  const paidInvoiceRes = await fetch(`${APP_URL}/p/${jobB.projectToken}/invoice`, {
+    redirect: "manual",
+  });
+  const paidInvoiceBody = await paidInvoiceRes.text();
+  check(
+    "PAID invoice page does not offer Pay Invoice",
+    !paidInvoiceBody.includes("Pay Invoice"),
+  );
 
   console.log(
     failures === 0
