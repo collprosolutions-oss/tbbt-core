@@ -1153,12 +1153,16 @@ model PayrollRunEvent {
 /// (parentExpenseId) and is not implemented in this step.
 ///
 /// category: MATERIALS | GAS_FUEL | TOOLS_EQUIPMENT | VEHICLE |
-///   OFFICE_ADMIN | SOFTWARE_SUBSCRIPTIONS | INSURANCE |
-///   MARKETING_ADVERTISING | MILEAGE | OTHER
+///   SUBCONTRACTOR_HELPER | PERMITS_FEES | OFFICE_ADMIN |
+///   SOFTWARE_SUBSCRIPTIONS | INSURANCE | MARKETING_ADVERTISING |
+///   MILEAGE | OTHER
 /// reimbursementStatus: NONE | PENDING | REIMBURSED
 /// reviewStatus: RECORDED | APPROVED | FLAGGED
 /// paymentMethod: same vocabulary as Invoice (CASH | CHECK |
 ///   ZELLE_BANK_TRANSFER | CARD_EXTERNAL | OTHER)
+/// customerBillable marks a possible customer charge later. It never
+/// creates or updates an Invoice / LineItem.
+/// voidedAt is a soft void -- the row stays for job-cost history.
 model Expense {
   id                    String    @id @default(cuid())
   businessId            String
@@ -1172,6 +1176,8 @@ model Expense {
   customerId            String?
   receiptUrl            String?
   reimbursable          Boolean   @default(false)
+  customerBillable      Boolean   @default(false)
+  voidedAt              DateTime?
   reimbursementStatus   String    @default("NONE")
   paymentMethod         String?
   taxCategory           String?

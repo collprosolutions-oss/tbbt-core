@@ -27,9 +27,17 @@ const {
   parseExpenseAmount,
   parseMileageMiles,
   projectedOperatingBalance,
+  ACTIVE_EXPENSE_WHERE,
   EXPENSE_CATEGORIES,
 } = await import("@/lib/expenses");
-const { createExpense, reviewExpense, ExpenseError } = await import("@/lib/expense-ops");
+const {
+  attachExpenseReceipt,
+  createExpense,
+  reviewExpense,
+  updateExpense,
+  voidExpense,
+  ExpenseError,
+} = await import("@/lib/expense-ops");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -97,6 +105,10 @@ try {
   check("Negative amount is rejected", parseExpenseAmount("-12") === null);
   check("Miles 46.2 parses separately from money", String(parseMileageMiles("46.2")) === "46.2");
   check("Initial categories include Materials and Mileage", EXPENSE_CATEGORIES.includes("MATERIALS") && EXPENSE_CATEGORIES.includes("MILEAGE"));
+  check(
+    "Handyman categories include Subcontractor/Helper and Permits/Fees",
+    EXPENSE_CATEGORIES.includes("SUBCONTRACTOR_HELPER") && EXPENSE_CATEGORIES.includes("PERMITS_FEES"),
+  );
   check("OWNER/ADMIN have MANAGE_EXPENSES", roleHasCapability("OWNER", CAPABILITIES.MANAGE_EXPENSES) && roleHasCapability("ADMIN", CAPABILITIES.MANAGE_EXPENSES));
   check("MEMBER does not have MANAGE_EXPENSES", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_EXPENSES));
   check("MEMBER cannot access the management console", !canAccessManagementConsole("MEMBER"));
@@ -256,6 +268,131 @@ try {
   const reviewed = await reviewExpense(prisma, ownerA, { expenseId: mileage.id, reviewStatus: "APPROVED" });
   check("Owner can approve a reimbursable expense", reviewed.reviewStatus === "APPROVED");
 
+  console.log("\nTEST — Edit, job cost link, customer-billable, void, receipts");
+  const invoicesBefore = await prisma.invoice.count({ where: { businessId: businessA.id } });
+  const linesBefore = await prisma.lineItem.count({
+    where: { invoice: { businessId: businessA.id } },
+  });
+  const helper = await createExpense(prisma, ownerA, {
+    occurredOn: "2026-08-29",
+    description: "Helper for kitchen demo",
+    amount: "180.00",
+    category: "SUBCONTRACTOR_HELPER",
+    vendor: "Sam Helper",
+    jobId: job.id,
+    customerBillable: true,
+    paymentMethod: "CASH",
+  });
+  check("Customer-billable flag is stored", helper.customerBillable === true);
+  check("Billable material/helper purchase stays on the job", helper.jobId === job.id);
+  check("Customer inferred from job for billable cost", helper.customerId === customer.id);
+  const invoicesAfterBillable = await prisma.invoice.count({ where: { businessId: businessA.id } });
+  const linesAfterBillable = await prisma.lineItem.count({
+    where: { invoice: { businessId: businessA.id } },
+  });
+  check("Customer-billable does not create an invoice", invoicesAfterBillable === invoicesBefore);
+  check("Customer-billable does not create invoice line items", linesAfterBillable === linesBefore);
+
+  const permit = await createExpense(prisma, ownerA, {
+    occurredOn: "2026-08-25",
+    description: "Building permit",
+    amount: "75.00",
+    category: "PERMITS_FEES",
+    vendor: "City of Springfield",
+  });
+  const linked = await updateExpense(prisma, ownerA, {
+    expenseId: permit.id,
+    occurredOn: "2026-08-25",
+    description: "Building permit — kitchen",
+    amount: "85.00",
+    category: "PERMITS_FEES",
+    vendor: "City of Springfield",
+    jobId: job.id,
+    customerBillable: true,
+  });
+  check("Edit updates description and amount", linked.description === "Building permit — kitchen" && Number(linked.amount.toString()) === 85);
+  check("Edit can attach a job for later job-cost math", linked.jobId === job.id);
+  check("Edit can mark customer-billable without invoicing", linked.customerBillable === true);
+
+  const receipt = await attachExpenseReceipt(prisma, ownerA, {
+    expenseId: lumber.id,
+    receiptUrl: "https://blob.example.test/expense-receipts/a/lumber.jpg",
+  });
+  check("Owner can attach a receipt URL on their expense", receipt.receiptUrl?.includes("expense-receipts") === true);
+
+  await expectError(
+    "Business B cannot attach a receipt to Business A expense",
+    () =>
+      attachExpenseReceipt(prisma, ownerB, {
+        expenseId: lumber.id,
+        receiptUrl: "https://blob.example.test/leaked.jpg",
+      }),
+    (error) => error instanceof Error,
+  );
+  const lumberAfterLeak = await prisma.expense.findUnique({ where: { id: lumber.id } });
+  check("Cross-tenant receipt attach did not change A's receipt", lumberAfterLeak?.receiptUrl === receipt.receiptUrl);
+
+  await expectError(
+    "Business B cannot edit Business A expense",
+    () =>
+      updateExpense(prisma, ownerB, {
+        expenseId: lumber.id,
+        occurredOn: "2026-08-30",
+        description: "Hijacked",
+        amount: "1.00",
+        category: "OTHER",
+      }),
+    (error) => error instanceof Error,
+  );
+  await expectError(
+    "MEMBER cannot edit an expense",
+    () =>
+      updateExpense(prisma, memberA, {
+        expenseId: lumber.id,
+        occurredOn: "2026-08-30",
+        description: "Member edit",
+        amount: "10.00",
+        category: "OTHER",
+      }),
+    (error) => error instanceof ForbiddenError,
+  );
+
+  const voided = await voidExpense(prisma, ownerA, { expenseId: gas.id });
+  check("Void sets voidedAt", voided.voidedAt instanceof Date);
+  const activeRows = await prisma.expense.findMany({
+    where: { businessId: businessA.id, ...ACTIVE_EXPENSE_WHERE },
+  });
+  check("Voided expense is excluded from active totals query", activeRows.every((row) => row.id !== gas.id));
+  const activeSummary = expenseSummary(activeRows);
+  check(
+    "Active total drops the voided $54 fuel row",
+    Math.abs(activeSummary.total - (142.68 + 27.12 + 40 + 180 + 85)) < 0.001,
+  );
+  const voidedStillThere = await prisma.expense.findUnique({ where: { id: gas.id } });
+  check("Void keeps the row for job-cost history", voidedStillThere?.id === gas.id && voidedStillThere.voidedAt != null);
+  await expectError(
+    "Voided expense cannot be edited",
+    () =>
+      updateExpense(prisma, ownerA, {
+        expenseId: gas.id,
+        occurredOn: "2026-08-27",
+        description: "Fuel",
+        amount: "54.00",
+        category: "GAS_FUEL",
+      }),
+    (error) => error instanceof ExpenseError,
+  );
+  await expectError(
+    "MEMBER cannot void an expense",
+    () => voidExpense(prisma, memberA, { expenseId: lumber.id }),
+    (error) => error instanceof ForbiddenError,
+  );
+  await expectError(
+    "Business B cannot void Business A expense",
+    () => voidExpense(prisma, ownerB, { expenseId: lumber.id }),
+    (error) => error instanceof Error,
+  );
+
   console.log("\nTEST — Permissions and tenant isolation");
   await expectError(
     "MEMBER cannot create a business-wide expense",
@@ -312,6 +449,9 @@ try {
   check("Projected KPI is Unavailable when bank is missing", pageSource.includes('value: "Unavailable"'));
   check("Mobile list exists (no forced desktop table on small viewports)", workspaceSource.includes("sm:hidden"));
   check("Category totals section is required on the page", workspaceSource.includes("Expenses by Category"));
+  check("List can filter by job and vendor", pageSource.includes('name="job"') && pageSource.includes('name="vendor"'));
+  check("Workspace can edit and void an expense", workspaceSource.includes("voidExpenseAction") && workspaceSource.includes("Edit"));
+  check("Receipt header opens receipt mode, not a new expense", workspaceSource.includes('onAdd("receipt")'));
 
   console.log(
     failures === 0 ? "\nAll Expenses checks passed." : `\n${failures} Expenses check(s) failed.`,
