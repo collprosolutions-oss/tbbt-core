@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/cookies";
+import { isPublicWebsitePath } from "@/lib/public-website-paths";
 
 const AUTH_PATHS = ["/sign-in", "/sign-up"];
 
@@ -10,57 +11,13 @@ function isAuthPath(pathname: string) {
   );
 }
 
-function isPublicIntake(pathname: string) {
-  return pathname.startsWith("/r/");
-}
-
-function isPublicEstimate(pathname: string) {
-  return pathname.startsWith("/e/");
-}
-
-function isPublicHire(pathname: string) {
-  return pathname.startsWith("/hire/");
-}
-
-function isPublicHome(pathname: string) {
-  return pathname === "/";
-}
-
-/** Existing secure public-asset route. The handler still checks PUBLIC + READY. */
-function isPublicStoredAsset(pathname: string) {
-  return pathname.startsWith("/api/storage/public/");
-}
-
-/** Customer Project Portal -- see src/app/p/[token]/page.tsx. */
-function isPublicProject(pathname: string) {
-  return pathname.startsWith("/p/");
-}
-
-/**
- * One-time team-member password-setup link -- see addTeamMember() in
- * src/app/actions/team.ts and src/app/set-password/[token]/page.tsx. Must
- * stay reachable without a session: the person opening this link has no
- * account credentials yet.
- */
-function isPublicSetPassword(pathname: string) {
-  return pathname.startsWith("/set-password/");
-}
-
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
 
   // `/` is always the public website. A signed-in owner still reaches
   // /dashboard by going there directly; the session must not hijack Home.
-  if (
-    isPublicHome(pathname) ||
-    isPublicIntake(pathname) ||
-    isPublicEstimate(pathname) ||
-    isPublicHire(pathname) ||
-    isPublicProject(pathname) ||
-    isPublicSetPassword(pathname) ||
-    isPublicStoredAsset(pathname)
-  ) {
+  if (isPublicWebsitePath(pathname)) {
     return NextResponse.next();
   }
 

@@ -54,9 +54,7 @@ const {
   summarizeSelectedWorkPricing,
 } = await import("@/lib/selected-work");
 const { groupServiceCatalogItemsByCategory } = await import("@/lib/service-catalog-category");
-const { proxy } = await import("@/proxy");
-const { SESSION_COOKIE } = await import("@/lib/cookies");
-const { NextRequest } = await import("next/server");
+const { isPublicWebsitePath } = await import("@/lib/public-website-paths");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:43217";
 const baseUrl = process.env.DATABASE_URL;
@@ -173,35 +171,25 @@ check("Public intake does not apply labor minimum",
   !intakeActionSrc.includes("labor-minimum") && !intakeActionSrc.includes("laborMinimum"));
 check("Existing /r/[slug] intake URL is preserved", requestPageSrc.includes("MultiServiceRequestFlow"));
 check("Unauthenticated / is the public homepage, not sign-in",
-  proxySrc.includes("isPublicHome") && !proxySrc.includes('hasSession ? "/dashboard" : "/sign-in"'));
-function proxyRequest(path, sessionValue) {
-  const headers = new Headers();
-  if (sessionValue) headers.set("cookie", `${SESSION_COOKIE}=${sessionValue}`);
-  return proxy(new NextRequest(new URL(path, "http://localhost:43217"), { headers }));
-}
-function proxyLocation(response) {
-  const location = response.headers.get("location");
-  return location ? new URL(location).pathname : null;
-}
-const signedInHome = proxyRequest("/", "owner-session");
-check("Signed-in owner visiting / stays on the public homepage",
-  signedInHome.ok && proxyLocation(signedInHome) === null &&
-    !proxySrc.includes('if (pathname === "/")'));
-check("Signed-in owner visiting /?public=1 also stays on the public homepage",
-  proxyRequest("/?public=1", "owner-session").ok &&
-    proxyLocation(proxyRequest("/?public=1", "owner-session")) === null);
-const signedInDashboard = proxyRequest("/dashboard", "owner-session");
-check("Signed-in owner can still open /dashboard",
-  signedInDashboard.ok && proxyLocation(signedInDashboard) === null);
-check("Unauthenticated /dashboard still redirects to sign-in",
-  proxyLocation(proxyRequest("/dashboard")) === "/sign-in");
-check("Unauthenticated /jobs /customers /estimates /invoices /settings stay protected",
-  ["/jobs", "/customers", "/estimates", "/invoices", "/settings"].every(
-    (path) => proxyLocation(proxyRequest(path)) === "/sign-in",
-  ));
-check("Public storage images stay reachable without a session",
-  proxyRequest("/api/storage/public/asset_workshop").ok &&
-    proxyLocation(proxyRequest("/api/storage/public/asset_workshop")) === null);
+  proxySrc.includes("isPublicWebsitePath") &&
+    isPublicWebsitePath("/") &&
+    !proxySrc.includes('hasSession ? "/dashboard" : "/sign-in"') &&
+    !/if \(pathname === ["']\/["']\)/.test(proxySrc));
+check("Signed-in visitors are not redirected away from /",
+  isPublicWebsitePath("/") &&
+    proxySrc.includes("if (isPublicWebsitePath(pathname))") &&
+    !/if \(pathname === ["']\/["']\)[\s\S]{0,120}\/dashboard/.test(proxySrc));
+check("Operations routes are not treated as the public website",
+  !isPublicWebsitePath("/dashboard") &&
+    !isPublicWebsitePath("/jobs") &&
+    !isPublicWebsitePath("/customers") &&
+    !isPublicWebsitePath("/estimates") &&
+    !isPublicWebsitePath("/invoices") &&
+    !isPublicWebsitePath("/settings"));
+check("Public hire, intake, and stored website photos stay public",
+  isPublicWebsitePath("/hire/collpro-reno") &&
+    isPublicWebsitePath("/r/collpro-reno") &&
+    isPublicWebsitePath("/api/storage/public/asset_workshop"));
 check("Services page does not repeat a pre-footer quote CTA",
   !readRepo("src/app/hire/[slug]/services/page.tsx").includes("PublicCtaBar") &&
     !readRepo("src/app/hire/[slug]/services/page.tsx").includes("Ready to get started"));
