@@ -62,6 +62,7 @@ export default async function PublicServicesPage({ params, searchParams }: PageP
           description="Professional handyman services to keep your home running smoothly and looking its best."
           imageSrc={images.hero.src}
           objectPosition={images.hero.objectPosition}
+          objectZoom={images.hero.objectZoom}
           phone={phone}
           smsHref={textHref}
           requestHref={requestHref}

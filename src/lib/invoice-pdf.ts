@@ -7,7 +7,10 @@ import { createWriteStream } from "node:fs";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import PDFDocument from "pdfkit";
-import type { InvoiceDocumentView } from "@/lib/invoice-document";
+import {
+  INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
+  type InvoiceDocumentView,
+} from "@/lib/invoice-document";
 
 function resolvePublicAsset(src: string | null): string | null {
   if (!src || src.includes("..")) {
@@ -36,8 +39,8 @@ export function renderInvoicePdf(
     const logoPath = resolvePublicAsset(docView.business.logoSrc);
     if (logoPath) {
       try {
-        doc.image(logoPath, left, y, { height: 42 });
-        y += 52;
+        doc.image(logoPath, left, y, { height: INVOICE_DOCUMENT_LOGO_HEIGHT_PX });
+        y += INVOICE_DOCUMENT_LOGO_HEIGHT_PX + 10;
       } catch {
         // Missing/unreadable logo: fall through to the business name.
       }

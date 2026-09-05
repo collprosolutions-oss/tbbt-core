@@ -12,7 +12,9 @@ import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import type { CuratedIconId } from "@/lib/founder-icons";
 import { prisma } from "@/lib/prisma";
-import { isBlobStorageConfigured, parseSettingsSection } from "@/lib/settings";
+import { isBusinessStorageConfigured } from "@/lib/business-storage";
+import { loadWebsitePhotoStorageSummary } from "@/lib/business-storage/website-photos";
+import { parseSettingsSection } from "@/lib/settings";
 import {
   loadSettingsSnapshot,
   settingsIntegrationCardsFromSnapshot,
@@ -41,7 +43,11 @@ export default async function SettingsPage({
   const canEditPreferences = roleHasCapability(role, CAPABILITIES.MANAGE_SETTINGS);
   const canEditConsequential = role === "OWNER";
   let websitePhotos:
-    | { storageConfigured: boolean; slots: Awaited<ReturnType<typeof loadWebsitePhotoEditorSlots>> }
+    | {
+        storageConfigured: boolean;
+        storageUsage?: { usedBytes: number; limitBytes: number } | null;
+        slots: Awaited<ReturnType<typeof loadWebsitePhotoEditorSlots>>;
+      }
     | undefined;
   if (section === "website-photos") {
     const catalog = await loadPublicCatalog({
@@ -51,7 +57,8 @@ export default async function SettingsPage({
       tradeCode: snapshot.business.tradeCode,
     });
     websitePhotos = {
-      storageConfigured: isBlobStorageConfigured(),
+      storageConfigured: isBusinessStorageConfigured(),
+      storageUsage: await loadWebsitePhotoStorageSummary(prisma, access.businessId),
       slots: await loadWebsitePhotoEditorSlots(prisma, access.businessId, catalog.groups),
     };
   }

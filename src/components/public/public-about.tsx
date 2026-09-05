@@ -40,6 +40,7 @@ export function PublicAbout({
               src={storyImage.src}
               alt="Handyman working at a residential doorway"
               objectPosition={storyImage.objectPosition}
+              objectZoom={storyImage.objectZoom}
               sizes="(max-width: 1099px) 100vw, 48vw"
             />
           </div>

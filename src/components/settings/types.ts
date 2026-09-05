@@ -21,6 +21,7 @@ export type SettingsWorkspaceProps = {
   canEditPreferences: boolean;
   websitePhotos?: {
     storageConfigured: boolean;
+    storageUsage?: { usedBytes: number; limitBytes: number } | null;
     slots: PublicSiteImageEditorSlot[];
   };
 };

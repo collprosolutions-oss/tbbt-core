@@ -1,4 +1,7 @@
-import type { InvoiceDocumentView } from "@/lib/invoice-document";
+import {
+  INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
+  type InvoiceDocumentView,
+} from "@/lib/invoice-document";
 
 export function InvoiceDocument({
   document: invoice,
@@ -14,7 +17,8 @@ export function InvoiceDocument({
             <img
               src={invoice.business.logoSrc}
               alt={invoice.business.name}
-              className="h-12 w-auto object-contain"
+              className="w-auto object-contain"
+              style={{ height: INVOICE_DOCUMENT_LOGO_HEIGHT_PX }}
             />
           ) : null}
           <p className="text-lg font-semibold tracking-tight">

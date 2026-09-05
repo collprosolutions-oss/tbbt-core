@@ -7,7 +7,7 @@
  * copied LineItem snapshots (see src/lib/invoice-carry-forward.ts).
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { getBusinessLogoSrc } from "@/lib/business-branding";
+import { getBusinessDocumentLogoSrc } from "@/lib/business-branding";
 import { formatAddress, formatDate, formatMoney } from "@/lib/format";
 import { toInvoiceDecimal } from "@/lib/invoice-carry-forward";
 import { prisma } from "@/lib/prisma";
@@ -16,6 +16,9 @@ import { publicPhone } from "@/lib/public-site";
 const ZERO = new Prisma.Decimal(0);
 
 export const INVOICE_THANK_YOU = "Thank you for your business.";
+
+/** Shared invoice/PDF header logo height. Tall enough to read COLL★PRO. */
+export const INVOICE_DOCUMENT_LOGO_HEIGHT_PX = 108;
 
 export function invoiceNumberFromId(invoiceId: string): string {
   return `INV-${invoiceId.slice(-8).toUpperCase()}`;
@@ -187,7 +190,7 @@ function toDocumentView(
     pdfFilename: invoicePdfFilename(invoiceNumber, customerName),
     business: {
       name: invoice.business.name,
-      logoSrc: getBusinessLogoSrc(invoice.business.slug),
+      logoSrc: getBusinessDocumentLogoSrc(invoice.business.slug),
       phone: publicPhone(invoice.business.slug),
     },
     customer: {

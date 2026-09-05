@@ -39,6 +39,7 @@ export function PublicHome({
   const hero = images?.hero ?? {
     src: PUBLIC_HOME_HERO_IMAGE,
     objectPosition: PUBLIC_HOME_HERO_DEFAULT_POSITION,
+    objectZoom: 1,
   };
 
   return (
@@ -49,6 +50,7 @@ export function PublicHome({
             src={hero.src}
             alt="Handyman working with tools in a workshop"
             objectPosition={hero.objectPosition}
+            objectZoom={hero.objectZoom}
             sizes="100vw"
             priority
           />
@@ -102,6 +104,7 @@ export function PublicHome({
               const visual = images?.categories[category.category] ?? {
                 src: publicCategoryPhoto(category.category),
                 objectPosition: PUBLIC_HOME_CATEGORY_DEFAULT_POSITION,
+                objectZoom: 1,
               };
               return (
                 <li key={category.category}>
@@ -113,6 +116,7 @@ export function PublicHome({
                       src={visual.src}
                       alt=""
                       objectPosition={visual.objectPosition}
+                      objectZoom={visual.objectZoom}
                       sizes="(max-width: 768px) 100vw, 25vw"
                     />
                     <span className="public-photo-card-bar">

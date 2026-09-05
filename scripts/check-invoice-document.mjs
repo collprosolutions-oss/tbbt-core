@@ -12,6 +12,7 @@
 import { createRequire, register } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -21,6 +22,7 @@ const {
   persistDraftInvoiceFromCompletedJob,
 } = await import("@/lib/invoice-carry-forward");
 const {
+  INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
   invoiceNumberFromId,
   invoicePdfFilename,
   isCustomerVisibleInvoiceStatus,
@@ -29,6 +31,9 @@ const {
   sanitizeFilenamePart,
 } = await import("@/lib/invoice-document");
 const { renderInvoicePdf } = await import("@/lib/invoice-pdf");
+const { getBusinessDocumentLogoSrc, getBusinessLogoSrc } = await import(
+  "@/lib/business-branding"
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -506,7 +511,7 @@ try {
     prisma,
   );
   check("CollPro document uses CollPro business name from the DB", collproDoc?.business.name === "CollPro Reno Handyman Services");
-  check("CollPro document uses the CollPro logo map", collproDoc?.business.logoSrc === "/brand/collpro-logo.png");
+  check("CollPro invoice uses the document logo helper asset", collproDoc?.business.logoSrc === "/brand/collpro-logo-document.png");
   check("CollPro document uses the configured CollPro phone", collproDoc?.business.phone === "239-357-8199");
   const otherDocAgain = await loadInvoiceDocumentForBusiness(
     invoice.id,
@@ -517,6 +522,51 @@ try {
     "other tenant document still has no CollPro logo/phone after CollPro invoice exists",
     otherDocAgain?.business.logoSrc == null && otherDocAgain?.business.phone == null,
   );
+
+  console.log("\nTEST 8 — Document logo stays separate from the dark website logo");
+  const brandingSrc = readFileSync(new URL("../src/lib/business-branding.ts", import.meta.url), "utf8");
+  const invoiceDocSrc = readFileSync(new URL("../src/lib/invoice-document.ts", import.meta.url), "utf8");
+  const invoicePdfSrc = readFileSync(new URL("../src/lib/invoice-pdf.ts", import.meta.url), "utf8");
+  const invoiceHtmlSrc = readFileSync(
+    new URL("../src/components/invoices/invoice-document.tsx", import.meta.url),
+    "utf8",
+  );
+  const appShellSrc = readFileSync(new URL("../src/app/(app)/layout.tsx", import.meta.url), "utf8");
+  const publicSiteSrc = readFileSync(new URL("../src/lib/public-site.ts", import.meta.url), "utf8");
+  const documentLogoPath = new URL("../public/brand/collpro-logo-document.png", import.meta.url);
+  check(
+    "document helper is distinct from the dark website/dashboard logo",
+    getBusinessLogoSrc("collpro-reno") === "/brand/collpro-logo.png" &&
+      getBusinessDocumentLogoSrc("collpro-reno") === "/brand/collpro-logo-document.png",
+  );
+  check(
+    "invoice HTML uses the document logo helper",
+    invoiceDocSrc.includes("getBusinessDocumentLogoSrc") &&
+      !invoiceDocSrc.includes("getBusinessLogoSrc(") &&
+      invoiceHtmlSrc.includes("invoice.business.logoSrc"),
+  );
+  check("PDF renderer uses the document view logo path", invoicePdfSrc.includes("docView.business.logoSrc"));
+  check(
+    "invoice HTML and PDF use the same readable document-logo height",
+    INVOICE_DOCUMENT_LOGO_HEIGHT_PX === 108 &&
+      invoiceHtmlSrc.includes("INVOICE_DOCUMENT_LOGO_HEIGHT_PX") &&
+      invoicePdfSrc.includes("INVOICE_DOCUMENT_LOGO_HEIGHT_PX"),
+  );
+  check(
+    "website and dashboard still use the dark logo helper",
+    appShellSrc.includes("getBusinessLogoSrc") &&
+      publicSiteSrc.includes("getBusinessLogoSrc") &&
+      brandingSrc.includes('"/brand/collpro-logo.png"'),
+  );
+  check("transparent document logo asset exists", existsSync(documentLogoPath));
+  const documentLogoBytes = readFileSync(documentLogoPath);
+  check(
+    "document logo is the approved light PNG, not a later generated substitute",
+    documentLogoBytes.length > 1_400_000 &&
+      documentLogoBytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
+  );
+  const collproPdf = await renderInvoicePdf(collproDoc);
+  check("CollPro PDF renders with the document logo present", collproPdf.subarray(0, 4).toString() === "%PDF");
 
   console.log(
     failures === 0

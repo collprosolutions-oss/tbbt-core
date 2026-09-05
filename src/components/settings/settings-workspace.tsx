@@ -166,13 +166,14 @@ function SectionBody(props: SettingsWorkspaceProps) {
     return (
       <SectionCard
         title="Edit Website Photos"
-        description="Owner and admin only. Replace, reposition, or reset Home, Services, and About marketing photos. This is not a page builder."
+        description="Owner and admin only. Replace photos or adjust zoom and position for Home, Services, About, and Reviews. This is not a page builder."
       >
         {websitePhotos ? (
           <WebsitePhotosEditor
             businessId={snapshot.business.id}
             slots={websitePhotos.slots}
             storageConfigured={websitePhotos.storageConfigured}
+            storageUsage={websitePhotos.storageUsage}
             canEdit={canEditPreferences}
           />
         ) : (
