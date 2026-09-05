@@ -96,6 +96,52 @@ export function isUsableEmail(value: string | null | undefined) {
   return Boolean(value && EMAIL_PATTERN.test(value.trim()));
 }
 
+const SEND_ATTEMPT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isMailSendAttemptId(value: string) {
+  return SEND_ATTEMPT_ID_PATTERN.test(value);
+}
+
+/**
+ * Estimate Email can be clicked again on purpose (customer lost the
+ * message). Each owner click supplies a sendAttemptId; React/server-action
+ * retries resubmit the same FormData, so the key stays stable for that
+ * click. A later intentional click uses a new attempt id.
+ */
+export function estimateEmailIdempotencyKey(
+  estimateId: string,
+  sendAttemptId: string,
+) {
+  return `estimate-ready/${estimateId}/${sendAttemptId}`;
+}
+
+/**
+ * Team invite email is sent once when a brand-new member is created.
+ * There is no resend-invite action. Retrying the same add uses the same
+ * business + email key.
+ */
+export function teamInviteIdempotencyKey(businessId: string, email: string) {
+  return `team-invite/${businessId}/${email.trim().toLowerCase()}`;
+}
+
+/** Invoice notify is attempted once on the DRAFT → SENT flip. */
+export function invoiceReadyIdempotencyKey(invoiceId: string) {
+  return `invoice-ready/${invoiceId}`;
+}
+
+export type TransactionalEmailKind = "estimate" | "invoice" | "team";
+
+export function transactionalEmailFailureMessage(kind: TransactionalEmailKind) {
+  if (kind === "estimate") {
+    return "The estimate email could not be sent.";
+  }
+  if (kind === "invoice") {
+    return "The invoice email could not be sent.";
+  }
+  return "The team invitation email could not be sent.";
+}
+
 export async function sendTransactionalEmail(input: {
   apiKey: string;
   from: string;
@@ -104,7 +150,9 @@ export async function sendTransactionalEmail(input: {
   html: string;
   text: string;
   idempotencyKey: string;
+  kind: TransactionalEmailKind;
 }) {
+  const failure = transactionalEmailFailureMessage(input.kind);
   try {
     const resend = new Resend(input.apiKey);
     const { data, error } = await resend.emails.send(
@@ -119,11 +167,11 @@ export async function sendTransactionalEmail(input: {
     );
 
     if (error) {
-      return { error: "The estimate email could not be sent." };
+      return { error: failure };
     }
 
     return { id: data?.id };
   } catch {
-    return { error: "The estimate email could not be sent." };
+    return { error: failure };
   }
 }

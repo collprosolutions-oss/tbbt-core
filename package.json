@@ -45,7 +45,8 @@
     "test:business-storage": "node --experimental-strip-types scripts/check-business-storage.mjs",
     "test:invoice-document": "node --experimental-strip-types scripts/check-invoice-document.mjs",
     "test:complete-job-invoice": "node --experimental-strip-types scripts/check-complete-job-invoice.mjs",
-    "test:payments": "node --experimental-strip-types scripts/check-payments.mjs"
+    "test:payments": "node --experimental-strip-types scripts/check-payments.mjs",
+    "test:communications": "node --experimental-strip-types scripts/check-communications.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",

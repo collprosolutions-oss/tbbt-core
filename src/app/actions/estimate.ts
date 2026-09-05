@@ -17,7 +17,9 @@ import {
   isUnpricedCustomQuoteDraftLine,
 } from "@/lib/request-estimate-draft";
 import {
+  estimateEmailIdempotencyKey,
   getMailConfig,
+  isMailSendAttemptId,
   isUsableEmail,
   senderFrom,
   sendTransactionalEmail,
@@ -692,8 +694,12 @@ export async function emailSentEstimate(
   const access = await requireBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
+  const sendAttemptId = readString(formData, "sendAttemptId");
 
   if (!estimateId) {
+    return { error: "That estimate could not be emailed." };
+  }
+  if (!isMailSendAttemptId(sendAttemptId)) {
     return { error: "That estimate could not be emailed." };
   }
 
@@ -747,7 +753,8 @@ export async function emailSentEstimate(
     subject: email.subject,
     html: email.html,
     text: email.text,
-    idempotencyKey: `estimate-ready/${estimate.id}/${randomUUID()}`,
+    kind: "estimate",
+    idempotencyKey: estimateEmailIdempotencyKey(estimate.id, sendAttemptId),
   });
 
   if (sent.error) {
