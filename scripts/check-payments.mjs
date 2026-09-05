@@ -328,9 +328,10 @@ try {
     "utf8",
   );
   check(
-    "customer Pay Invoice CTA is a green button with white text",
-    payButtonSrc.includes("bg-emerald-700") &&
+    "customer Pay Invoice CTA is a bright green button with white text",
+    payButtonSrc.includes("bg-[#22c55e]") &&
       payButtonSrc.includes("text-white") &&
+      !payButtonSrc.includes("bg-emerald-700") &&
       !payButtonSrc.includes("bg-neutral-950") &&
       !payButtonSrc.includes("bg-neutral-900"),
   );
