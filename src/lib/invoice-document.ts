@@ -20,6 +20,9 @@ const ZERO = new Prisma.Decimal(0);
 
 export const INVOICE_THANK_YOU = "Thank you for your business.";
 
+/** Shared invoice/PDF header logo height. Tall enough to read COLL★PRO. */
+export const INVOICE_DOCUMENT_LOGO_HEIGHT_PX = 108;
+
 export function invoiceNumberFromId(invoiceId: string): string {
   return `INV-${invoiceId.slice(-8).toUpperCase()}`;
 }

@@ -25,9 +25,18 @@ import {
 } from "@/lib/public-site";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
 import {
+  isManagedPublicAssetPath,
+  publicAssetPath,
+} from "@/lib/business-storage/keys";
+import {
   deleteJobPhotoBlob,
   isManagedBlobUrl,
+  MAX_JOB_PHOTO_UPLOAD_BYTES,
+  resolveSupportedImageMimeType,
 } from "@/lib/storage";
+
+export { resolveSupportedImageMimeType };
+export { MAX_JOB_PHOTO_UPLOAD_BYTES };
 
 export const PUBLIC_SITE_HOME_PAGE = "home";
 export const PUBLIC_SITE_SERVICES_PAGE = "services";
@@ -55,6 +64,14 @@ export const PUBLIC_REVIEWS_HERO_DEFAULT_POSITION = "50% 40%";
 /** Keep the CollPro Reviews homeowners on the right, darker left for HTML text. */
 export const COLLPRO_REVIEWS_HERO_DEFAULT_POSITION = "80% 46%";
 
+/** 1 = current object-fit:cover appearance. Below 1 shrinks so more of the source fits. */
+export const PUBLIC_SITE_IMAGE_DEFAULT_ZOOM = 1;
+export const PUBLIC_SITE_IMAGE_MIN_ZOOM = 0.5;
+export const PUBLIC_SITE_IMAGE_MAX_ZOOM = 3;
+export const PUBLIC_SITE_IMAGE_ZOOM_STEP = 0.05;
+export const PUBLIC_SITE_IMAGE_FILE_ACCEPT =
+  "image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp";
+
 export function publicReviewsHeroDefaultSrc(slug?: string | null) {
   return publicReviewsHeroImage(slug);
 }
@@ -76,21 +93,33 @@ export function publicAboutHeroDefaultPosition(slug?: string | null) {
 }
 
 export const PUBLIC_SITE_IMAGE_STORAGE_UNAVAILABLE =
-  "Image storage is not configured for this environment. Existing photos stay in place. Connect Vercel Blob (BLOB_READ_WRITE_TOKEN) before replacing website photos.";
+  "Image storage is not configured for this environment. Existing photos stay in place. Connect platform file storage (Cloudflare R2) before replacing website photos.";
 
 export type PublicSiteImageRow = {
   page: string;
   slot: string;
   imageUrl: string | null;
   objectPosition: string;
+  objectZoom?: number | null;
+  storedAssetId?: string | null;
 };
 
 export type ResolvedPublicSiteImage = {
   src: string;
   objectPosition: string;
+  objectZoom: number;
   isOverride: boolean;
   usesCustomUpload: boolean;
 };
+
+export const PUBLIC_SITE_IMAGE_SELECT = {
+  page: true,
+  slot: true,
+  imageUrl: true,
+  objectPosition: true,
+  objectZoom: true,
+  storedAssetId: true,
+} as const;
 
 export type PublicHomeImagePresentation = {
   hero: ResolvedPublicSiteImage;
@@ -121,6 +150,8 @@ export type PublicSiteImageEditorSlot = {
   defaultPosition: string;
   src: string;
   objectPosition: string;
+  objectZoom: number;
+  defaultZoom: number;
   isOverride: boolean;
   usesCustomUpload: boolean;
 };
@@ -138,7 +169,52 @@ export function parseCategoryImageSlot(slot: string) {
 }
 
 export function isAllowedPublicSiteImageUrl(url: string) {
-  return url.startsWith("/brand/") || isManagedBlobUrl(url);
+  return (
+    url.startsWith("/brand/") ||
+    isManagedPublicAssetPath(url) ||
+    isManagedBlobUrl(url)
+  );
+}
+
+export function isManagedWebsitePhotoUrl(url: string) {
+  return isManagedPublicAssetPath(url) || isManagedBlobUrl(url);
+}
+
+const STORED_ASSET_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+export function publicSrcFromStoredAssetId(storedAssetId?: string | null) {
+  const id = storedAssetId?.trim() || "";
+  if (!id || !STORED_ASSET_ID_PATTERN.test(id)) return null;
+  return publicAssetPath(id);
+}
+
+/**
+ * Resolve the public <img> src for a saved Website Photos row.
+ * Prefer the allowlisted imageUrl; otherwise use the tenant-owned
+ * StoredAsset via /api/storage/public/{id}. Never invent another
+ * business's path — storedAssetId comes from a businessId-scoped query.
+ */
+export function resolveSavedPublicSiteImageSrc(row: {
+  imageUrl?: string | null;
+  storedAssetId?: string | null;
+}) {
+  const candidate = row.imageUrl?.trim() || "";
+  if (candidate && isAllowedPublicSiteImageUrl(candidate)) {
+    return candidate;
+  }
+  if (candidate.startsWith("http://") || candidate.startsWith("https://")) {
+    try {
+      const path = new URL(candidate).pathname;
+      if (isManagedPublicAssetPath(path)) return path;
+    } catch {
+      // Malformed absolute URL — fall through to the stored asset.
+    }
+  }
+  return publicSrcFromStoredAssetId(row.storedAssetId);
+}
+
+export function publicImageBypassesOptimizer(src: string) {
+  return src.startsWith("https://") || isManagedPublicAssetPath(src);
 }
 
 export function splitObjectPosition(value: string): { x: number; y: number } {
@@ -153,6 +229,125 @@ export function formatObjectPosition(x: number, y: number) {
   return `${clampPercent(x)}% ${clampPercent(y)}%`;
 }
 
+export function clampPercent(value: number) {
+  if (!Number.isFinite(value)) return 50;
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+export function clampObjectZoom(value: number) {
+  if (!Number.isFinite(value)) return PUBLIC_SITE_IMAGE_DEFAULT_ZOOM;
+  const rounded = Math.round(value * 100) / 100;
+  return Math.min(
+    PUBLIC_SITE_IMAGE_MAX_ZOOM,
+    Math.max(PUBLIC_SITE_IMAGE_MIN_ZOOM, rounded),
+  );
+}
+
+export type PublicImageBoxStyle = {
+  position: "absolute";
+  inset?: number;
+  left?: string;
+  top?: string;
+  width?: string;
+  height?: string;
+  transform?: string;
+};
+
+export type PublicImageFitStyle = {
+  objectFit: "contain" | "cover";
+  objectPosition: string;
+  transform?: string;
+  transformOrigin?: string;
+};
+
+export type PublicImageFrameModel = {
+  zoom: number;
+  x: number;
+  y: number;
+  box: PublicImageBoxStyle;
+  image: PublicImageFitStyle;
+};
+
+/**
+ * Shared Settings + public-site framing.
+ *
+ * Zoom >= 1 keeps the existing cover fill and optional scale-in.
+ * Zoom < 1 sizes the photo inside the frame with contain so the founder
+ * can shrink the picture and see more of the original source. Empty
+ * container background around a zoomed-out photo is intentional.
+ */
+export function publicImageFrameModel(
+  objectPosition: string,
+  objectZoom: number,
+): PublicImageFrameModel {
+  const zoom = clampObjectZoom(objectZoom);
+  const { x, y } = splitObjectPosition(objectPosition);
+  if (zoom < PUBLIC_SITE_IMAGE_DEFAULT_ZOOM) {
+    return {
+      zoom,
+      x,
+      y,
+      box: {
+        position: "absolute",
+        left: `${x}%`,
+        top: `${y}%`,
+        width: `${zoom * 100}%`,
+        height: `${zoom * 100}%`,
+        transform: "translate(-50%, -50%)",
+      },
+      image: {
+        objectFit: "contain",
+        objectPosition: "center",
+      },
+    };
+  }
+  return {
+    zoom,
+    x,
+    y,
+    box: {
+      position: "absolute",
+      inset: 0,
+    },
+    image: {
+      objectFit: "cover",
+      objectPosition: `${x}% ${y}%`,
+      ...(zoom > PUBLIC_SITE_IMAGE_DEFAULT_ZOOM
+        ? {
+            transform: `scale(${zoom})`,
+            transformOrigin: `${x}% ${y}%`,
+          }
+        : {}),
+    },
+  };
+}
+
+export function publicImageObjectStyle(
+  objectPosition: string,
+  objectZoom: number,
+): PublicImageFitStyle {
+  return publicImageFrameModel(objectPosition, objectZoom).image;
+}
+
+export function evaluateWebsitePhotoSelection(file: {
+  type?: string | null;
+  name?: string | null;
+  size: number;
+} | null): { ok: true; fileName: string } | { ok: false; error: string } {
+  if (!file || file.size === 0) {
+    return { ok: false, error: "No photo selected" };
+  }
+  if (!resolveSupportedImageMimeType(file)) {
+    return { ok: false, error: "Unsupported file type. Choose a JPEG, PNG, or WebP photo." };
+  }
+  if (file.size > MAX_JOB_PHOTO_UPLOAD_BYTES) {
+    const maxMb = (MAX_JOB_PHOTO_UPLOAD_BYTES / (1024 * 1024)).toFixed(0);
+    return { ok: false, error: `That photo is too large. The limit is ${maxMb} MB.` };
+  }
+  const fileName = (file.name || "").trim() || "photo";
+  return { ok: true, fileName };
+}
+
 function positionTokenToPercent(token: string, fallback: number) {
   const normalized = token.trim().toLowerCase();
   if (normalized === "left" || normalized === "top") return 0;
@@ -163,34 +358,31 @@ function positionTokenToPercent(token: string, fallback: number) {
   return clampPercent(Number(match[1]));
 }
 
-function clampPercent(value: number) {
-  if (!Number.isFinite(value)) return 50;
-  return Math.min(100, Math.max(0, Math.round(value)));
-}
-
 export function resolvePublicSiteImage(input: {
   defaultSrc: string;
   defaultPosition: string;
+  defaultZoom?: number;
   row: PublicSiteImageRow | null | undefined;
 }): ResolvedPublicSiteImage {
+  const defaultZoom = clampObjectZoom(
+    input.defaultZoom ?? PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
+  );
   if (!input.row) {
     return {
       src: input.defaultSrc,
       objectPosition: input.defaultPosition,
+      objectZoom: defaultZoom,
       isOverride: false,
       usesCustomUpload: false,
     };
   }
-  const candidate = input.row.imageUrl?.trim() || "";
-  const src =
-    candidate && isAllowedPublicSiteImageUrl(candidate)
-      ? candidate
-      : input.defaultSrc;
+  const resolved = resolveSavedPublicSiteImageSrc(input.row);
   return {
-    src,
+    src: resolved || input.defaultSrc,
     objectPosition: input.row.objectPosition?.trim() || input.defaultPosition,
+    objectZoom: clampObjectZoom(input.row.objectZoom ?? defaultZoom),
     isOverride: true,
-    usesCustomUpload: Boolean(candidate) && isManagedBlobUrl(candidate),
+    usesCustomUpload: Boolean(resolved && isManagedWebsitePhotoUrl(resolved)),
   };
 }
 
@@ -247,12 +439,7 @@ export async function loadPublicHomeImages(
 ): Promise<PublicHomeImagePresentation> {
   const rows = await db.publicSiteImage.findMany({
     where: { businessId, page: PUBLIC_SITE_HOME_PAGE },
-    select: {
-      page: true,
-      slot: true,
-      imageUrl: true,
-      objectPosition: true,
-    },
+    select: PUBLIC_SITE_IMAGE_SELECT,
   });
   return buildPublicHomeImagePresentation(groups, rows);
 }
@@ -283,12 +470,7 @@ export async function loadPublicServicesImages(
 ): Promise<PublicServicesImagePresentation> {
   const rows = await db.publicSiteImage.findMany({
     where: { businessId, page: PUBLIC_SITE_SERVICES_PAGE },
-    select: {
-      page: true,
-      slot: true,
-      imageUrl: true,
-      objectPosition: true,
-    },
+    select: PUBLIC_SITE_IMAGE_SELECT,
   });
   return buildPublicServicesImagePresentation(groups, rows);
 }
@@ -301,12 +483,7 @@ export async function loadPublicAboutImages(
   const [rows, business] = await Promise.all([
     db.publicSiteImage.findMany({
       where: { businessId, page: PUBLIC_SITE_ABOUT_PAGE },
-      select: {
-        page: true,
-        slot: true,
-        imageUrl: true,
-        objectPosition: true,
-      },
+      select: PUBLIC_SITE_IMAGE_SELECT,
     }),
     slug
       ? Promise.resolve(null)
@@ -340,12 +517,7 @@ export async function loadPublicReviewsImages(
   const [rows, business] = await Promise.all([
     db.publicSiteImage.findMany({
       where: { businessId, page: PUBLIC_SITE_REVIEWS_PAGE },
-      select: {
-        page: true,
-        slot: true,
-        imageUrl: true,
-        objectPosition: true,
-      },
+      select: PUBLIC_SITE_IMAGE_SELECT,
     }),
     slug
       ? Promise.resolve(null)
@@ -382,6 +554,8 @@ export async function loadWebsitePhotoEditorSlots(
       defaultPosition: PUBLIC_HOME_HERO_DEFAULT_POSITION,
       src: home.hero.src,
       objectPosition: home.hero.objectPosition,
+      objectZoom: home.hero.objectZoom,
+      defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
       isOverride: home.hero.isOverride,
       usesCustomUpload: home.hero.usesCustomUpload,
     },
@@ -397,6 +571,8 @@ export async function loadWebsitePhotoEditorSlots(
         defaultPosition: PUBLIC_HOME_CATEGORY_DEFAULT_POSITION,
         src: resolved.src,
         objectPosition: resolved.objectPosition,
+        objectZoom: resolved.objectZoom,
+        defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
         isOverride: resolved.isOverride,
         usesCustomUpload: resolved.usesCustomUpload,
       };
@@ -411,6 +587,8 @@ export async function loadWebsitePhotoEditorSlots(
       defaultPosition: PUBLIC_SERVICES_HERO_DEFAULT_POSITION,
       src: services.hero.src,
       objectPosition: services.hero.objectPosition,
+      objectZoom: services.hero.objectZoom,
+      defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
       isOverride: services.hero.isOverride,
       usesCustomUpload: services.hero.usesCustomUpload,
     },
@@ -426,6 +604,8 @@ export async function loadWebsitePhotoEditorSlots(
         defaultPosition: PUBLIC_SERVICES_CATEGORY_DEFAULT_POSITION,
         src: resolved.src,
         objectPosition: resolved.objectPosition,
+        objectZoom: resolved.objectZoom,
+        defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
         isOverride: resolved.isOverride,
         usesCustomUpload: resolved.usesCustomUpload,
       };
@@ -440,6 +620,8 @@ export async function loadWebsitePhotoEditorSlots(
       defaultPosition: publicAboutHeroDefaultPosition(business?.slug),
       src: about.hero.src,
       objectPosition: about.hero.objectPosition,
+      objectZoom: about.hero.objectZoom,
+      defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
       isOverride: about.hero.isOverride,
       usesCustomUpload: about.hero.usesCustomUpload,
     },
@@ -453,6 +635,8 @@ export async function loadWebsitePhotoEditorSlots(
       defaultPosition: PUBLIC_ABOUT_STORY_DEFAULT_POSITION,
       src: about.story.src,
       objectPosition: about.story.objectPosition,
+      objectZoom: about.story.objectZoom,
+      defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
       isOverride: about.story.isOverride,
       usesCustomUpload: about.story.usesCustomUpload,
     },
@@ -466,13 +650,15 @@ export async function loadWebsitePhotoEditorSlots(
       defaultPosition: publicReviewsHeroDefaultPosition(business?.slug),
       src: reviews.hero.src,
       objectPosition: reviews.hero.objectPosition,
+      objectZoom: reviews.hero.objectZoom,
+      defaultZoom: PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
       isOverride: reviews.hero.isOverride,
       usesCustomUpload: reviews.hero.usesCustomUpload,
     },
   ];
 }
 
-function isEditablePublicSitePage(page: string) {
+export function isEditablePublicSitePage(page: string) {
   return (PUBLIC_SITE_EDITABLE_PAGES as readonly string[]).includes(page);
 }
 
@@ -537,6 +723,8 @@ export async function upsertPublicSiteImageOp(
     slot: string;
     imageUrl?: string | null;
     objectPosition?: string;
+    objectZoom?: number;
+    storedAssetId?: string | null;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
@@ -577,6 +765,13 @@ export async function upsertPublicSiteImageOp(
     input.objectPosition?.trim() ||
     previous?.objectPosition ||
     defaultPositionFor(input.page, input.slot);
+  const nextZoom = clampObjectZoom(
+    input.objectZoom ?? previous?.objectZoom ?? PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
+  );
+  const nextStoredAssetId =
+    input.storedAssetId === undefined
+      ? previous?.storedAssetId ?? null
+      : input.storedAssetId;
 
   const saved = await db.publicSiteImage.upsert({
     where: {
@@ -592,11 +787,15 @@ export async function upsertPublicSiteImageOp(
       slot: input.slot,
       imageUrl: nextUrl,
       objectPosition: nextPosition,
+      objectZoom: nextZoom,
+      storedAssetId: nextStoredAssetId,
       updatedByMembershipId: access.workspace.membership.id,
     },
     update: {
       imageUrl: nextUrl,
       objectPosition: nextPosition,
+      objectZoom: nextZoom,
+      storedAssetId: nextStoredAssetId,
       updatedByMembershipId: access.workspace.membership.id,
     },
   });
@@ -615,9 +814,17 @@ export async function upsertPublicSiteImageOp(
     settingArea: "website-photos",
     settingKey: `${input.page}:${input.slot}`,
     previousValue: previous
-      ? { imageUrl: previous.imageUrl, objectPosition: previous.objectPosition }
+      ? {
+          imageUrl: previous.imageUrl,
+          objectPosition: previous.objectPosition,
+          objectZoom: previous.objectZoom,
+        }
       : null,
-    newValue: { imageUrl: saved.imageUrl, objectPosition: saved.objectPosition },
+    newValue: {
+      imageUrl: saved.imageUrl,
+      objectPosition: saved.objectPosition,
+      objectZoom: saved.objectZoom,
+    },
   });
 
   return saved;
@@ -657,9 +864,14 @@ export async function resetPublicSiteImageOp(
     previousValue: {
       imageUrl: existing.imageUrl,
       objectPosition: existing.objectPosition,
+      objectZoom: existing.objectZoom,
     },
     newValue: null,
   });
 
-  return { unchanged: false as const };
+  return {
+    unchanged: false as const,
+    storedAssetId: existing.storedAssetId,
+    imageUrl: existing.imageUrl,
+  };
 }

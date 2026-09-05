@@ -54,6 +54,7 @@ const {
   summarizeSelectedWorkPricing,
 } = await import("@/lib/selected-work");
 const { groupServiceCatalogItemsByCategory } = await import("@/lib/service-catalog-category");
+const { isPublicWebsitePath } = await import("@/lib/public-website-paths");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:43217";
 const baseUrl = process.env.DATABASE_URL;
@@ -170,7 +171,25 @@ check("Public intake does not apply labor minimum",
   !intakeActionSrc.includes("labor-minimum") && !intakeActionSrc.includes("laborMinimum"));
 check("Existing /r/[slug] intake URL is preserved", requestPageSrc.includes("MultiServiceRequestFlow"));
 check("Unauthenticated / is the public homepage, not sign-in",
-  proxySrc.includes("isPublicHome") && !proxySrc.includes('hasSession ? "/dashboard" : "/sign-in"'));
+  proxySrc.includes("isPublicWebsitePath") &&
+    isPublicWebsitePath("/") &&
+    !proxySrc.includes('hasSession ? "/dashboard" : "/sign-in"') &&
+    !/if \(pathname === ["']\/["']\)/.test(proxySrc));
+check("Signed-in visitors are not redirected away from /",
+  isPublicWebsitePath("/") &&
+    proxySrc.includes("if (isPublicWebsitePath(pathname))") &&
+    !/if \(pathname === ["']\/["']\)[\s\S]{0,120}\/dashboard/.test(proxySrc));
+check("Operations routes are not treated as the public website",
+  !isPublicWebsitePath("/dashboard") &&
+    !isPublicWebsitePath("/jobs") &&
+    !isPublicWebsitePath("/customers") &&
+    !isPublicWebsitePath("/estimates") &&
+    !isPublicWebsitePath("/invoices") &&
+    !isPublicWebsitePath("/settings"));
+check("Public hire, intake, and stored website photos stay public",
+  isPublicWebsitePath("/hire/collpro-reno") &&
+    isPublicWebsitePath("/r/collpro-reno") &&
+    isPublicWebsitePath("/api/storage/public/asset_workshop"));
 check("Services page does not repeat a pre-footer quote CTA",
   !readRepo("src/app/hire/[slug]/services/page.tsx").includes("PublicCtaBar") &&
     !readRepo("src/app/hire/[slug]/services/page.tsx").includes("Ready to get started"));

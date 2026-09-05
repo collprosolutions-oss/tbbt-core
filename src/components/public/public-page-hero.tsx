@@ -11,6 +11,7 @@ export function PublicPageHero({
   description,
   imageSrc = PUBLIC_INNER_HERO_IMAGE,
   objectPosition = "50% 38%",
+  objectZoom = 1,
   className,
   children,
 }: {
@@ -21,6 +22,7 @@ export function PublicPageHero({
   description?: string;
   imageSrc?: string;
   objectPosition?: string;
+  objectZoom?: number;
   className?: string;
   phone: string | null;
   smsHref: string | null;
@@ -35,6 +37,7 @@ export function PublicPageHero({
           src={imageSrc}
           alt=""
           objectPosition={objectPosition}
+          objectZoom={objectZoom}
           sizes="100vw"
           priority
         />

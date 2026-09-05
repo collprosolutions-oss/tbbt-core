@@ -327,9 +327,13 @@
   inset: 0;
 }
 
+.public-cinematic-media {
+  overflow: hidden;
+  background: #05070c;
+}
+
 .public-cinematic-media img {
-  object-fit: cover;
-  object-position: center 38%;
+  /* Framing (fit, position, zoom) comes from PublicFittedImage. */
 }
 
 .public-cinematic:has(.public-form-card),
