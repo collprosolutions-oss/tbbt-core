@@ -40,7 +40,7 @@ check(
   "Portal page no longer uses the mobile-only max-w-md column for the project",
   !page.includes('className="w-full max-w-md space-y-6"'),
 );
-check("Primary row is a responsive 45/55 grid", page.includes("lg:grid-cols-[minmax(0,45fr)_minmax(0,55fr)]"));
+check("Primary row is a responsive 45/55 grid", page.includes("md:grid-cols-[minmax(0,45fr)_minmax(0,55fr)]"));
 check("Secondary cards use a 1/2/3 column grid", page.includes("md:grid-cols-2 xl:grid-cols-3"));
 check("Approved scope opts into scan columns only on the portal", page.includes("scanColumns"));
 check("Unavailable page still uses the compact card", page.includes('className="w-full max-w-md"'));

@@ -216,7 +216,7 @@ export default async function CustomerProjectPortalPage({
           address={serviceAddress}
         />
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,45fr)_minmax(0,55fr)]">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,45fr)_minmax(0,55fr)]">
           <Card>
             <CardHeader>
               <CardTitle>Project Status</CardTitle>
