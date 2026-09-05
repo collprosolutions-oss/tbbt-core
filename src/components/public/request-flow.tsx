@@ -8,8 +8,26 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ServiceAddressFields } from "@/components/public/service-address-fields";
+import {
+  RequestMeasurementFields,
+  type MeasurementDraft,
+} from "@/components/public/request-measurement-fields";
+import {
+  RequestPhotoPicker,
+  type SelectedRequestPhoto,
+} from "@/components/public/request-photo-picker";
 import type { BusinessServiceArea } from "@/lib/business-service-area";
-import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
+import {
+  abortPublicRequestPhotoUpload,
+  authorizePublicRequestPhotoUpload,
+  finalizePublicRequestPhotoUpload,
+} from "@/app/actions/public-request-photos";
+import {
+  catalogAsksMeasurements,
+  formatCustomerMeasurement,
+  resolveCatalogIntakeConfig,
+  validateCustomerMeasurementInput,
+} from "@/lib/catalog-intake";
 import { publicServicesPath } from "@/lib/public-site";
 import {
   formatStructuredAddress,
@@ -67,7 +85,8 @@ export function MultiServiceRequestFlow({
   });
   const [notes, setNotes] = useState("");
   const [preferredContact, setPreferredContact] = useState("text");
-  const [photos, setPhotos] = useState<File[]>([]);
+  const [photos, setPhotos] = useState<SelectedRequestPhoto[]>([]);
+  const [measurements, setMeasurements] = useState<Record<string, MeasurementDraft>>({});
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
   const [pending, setPending] = useState(false);
@@ -87,6 +106,17 @@ export function MultiServiceRequestFlow({
     if (!checked.ok) {
       setError(checked.error);
       return;
+    }
+    for (const id of selected.catalogIds) {
+      const item = items.find((row) => row.id === id);
+      if (!item) continue;
+      const config = resolveCatalogIntakeConfig(item);
+      if (!catalogAsksMeasurements(config)) continue;
+      const measured = validateCustomerMeasurementInput(config, measurements[id] ?? {});
+      if (!measured.ok) {
+        setError(measured.error);
+        return;
+      }
     }
     setServiceAddress(checked.address);
     setError(null);
@@ -116,6 +146,58 @@ export function MultiServiceRequestFlow({
     formData.set("region", serviceAddress.region);
     formData.set("postalCode", serviceAddress.postalCode);
     formData.set("address", formatStructuredAddress(serviceAddress));
+    for (const id of selected.catalogIds) {
+      const item = items.find((row) => row.id === id);
+      if (!item) continue;
+      const config = resolveCatalogIntakeConfig(item);
+      if (!catalogAsksMeasurements(config)) continue;
+      const draft = measurements[id] ?? { width: "", height: "", length: "" };
+      formData.append(
+        "measurement",
+        JSON.stringify({
+          catalogItemId: id,
+          width: draft.width,
+          height: draft.height,
+          length: draft.length,
+          unit: config.unit,
+        }),
+      );
+    }
+    for (const photo of photos) {
+      const authorized = await authorizePublicRequestPhotoUpload({
+        slug,
+        originalFilename: photo.file.name,
+        mimeType: photo.file.type,
+        fileSizeBytes: photo.file.size,
+      });
+      if (!authorized.assetId || !authorized.uploadUrl) {
+        setPending(false);
+        setError(authorized.error || "That photo could not be uploaded.");
+        return;
+      }
+      const uploaded = await fetch(authorized.uploadUrl, {
+        method: authorized.uploadMethod || "PUT",
+        headers: authorized.uploadHeaders,
+        body: photo.file,
+      });
+      if (!uploaded.ok) {
+        await abortPublicRequestPhotoUpload({ slug, assetId: authorized.assetId });
+        setPending(false);
+        setError("That photo could not be uploaded.");
+        return;
+      }
+      const finalized = await finalizePublicRequestPhotoUpload({
+        slug,
+        assetId: authorized.assetId,
+      });
+      if (!finalized.assetId) {
+        await abortPublicRequestPhotoUpload({ slug, assetId: authorized.assetId });
+        setPending(false);
+        setError(finalized.error || "That photo could not be saved.");
+        return;
+      }
+      formData.append("photoAssetId", finalized.assetId);
+    }
     const preference =
       preferredContact === "text"
         ? "Preferred contact: Text"
@@ -132,9 +214,6 @@ export function MultiServiceRequestFlow({
       formData.set("includeOther", "true");
       formData.set("otherDescription", selected.otherDescription);
       formData.set("otherQuantity", String(selected.otherQuantity || 1));
-    }
-    for (const file of photos) {
-      formData.append("photos", file);
     }
     const result = await submitServiceRequest(slug, formData);
     setPending(false);
@@ -237,34 +316,20 @@ export function MultiServiceRequestFlow({
             onChange={setServiceAddress}
             serviceArea={serviceArea}
           />
+          <RequestMeasurementFields
+            items={items}
+            selectedCatalogIds={selected.catalogIds}
+            values={measurements}
+            onChange={(catalogItemId, next) =>
+              setMeasurements((current) => ({ ...current, [catalogItemId]: next }))
+            }
+          />
           {photosEnabled ? (
-            <div className="space-y-2">
-              <Label htmlFor="photos">Project photos (optional)</Label>
-              <p className="text-sm text-muted-foreground">
-                Photos can help {businessName} understand the work. You can add up
-                to {MAX_INTAKE_PHOTOS} images.
-              </p>
-              <Input
-                id="photos"
-                name="photos"
-                type="file"
-                accept="image/*"
-                multiple
-                className="h-12 bg-white pt-2"
-                onChange={(event) => {
-                  const files = Array.from(event.target.files ?? []).slice(
-                    0,
-                    MAX_INTAKE_PHOTOS,
-                  );
-                  setPhotos(files);
-                }}
-              />
-              {photos.length > 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  {photos.length} photo{photos.length === 1 ? "" : "s"} selected
-                </p>
-              ) : null}
-            </div>
+            <RequestPhotoPicker
+              photos={photos}
+              onChange={setPhotos}
+              businessName={businessName}
+            />
           ) : (
             <p className="text-sm text-muted-foreground">
               Photo upload is not available on this site yet. You can still
@@ -390,6 +455,7 @@ export function MultiServiceRequestFlow({
           <ReviewBlock title="Project notes">
             <p>{notes || "No additional notes"}</p>
           </ReviewBlock>
+          <ReviewMeasurementSummary items={items} selectedCatalogIds={selected.catalogIds} measurements={measurements} />
           <ReviewBlock title="Photos">
             <p>
               {photosEnabled
@@ -440,6 +506,41 @@ function QuotePricingNote({
         Not a formal estimate. The owner reviews the request before sending a written estimate.
       </p>
     </div>
+  );
+}
+
+function ReviewMeasurementSummary({
+  items,
+  selectedCatalogIds,
+  measurements,
+}: {
+  items: PublicCatalogItem[];
+  selectedCatalogIds: string[];
+  measurements: Record<string, MeasurementDraft>;
+}) {
+  const rows = selectedCatalogIds.flatMap((id) => {
+    const item = items.find((row) => row.id === id);
+    if (!item) return [];
+    const config = resolveCatalogIntakeConfig(item);
+    if (!catalogAsksMeasurements(config)) return [];
+    const draft = measurements[id] ?? { width: "", height: "", length: "" };
+    const label = formatCustomerMeasurement({
+      width: draft.width ? Number(draft.width) : null,
+      height: draft.height ? Number(draft.height) : null,
+      length: draft.length ? Number(draft.length) : null,
+      unit: config.unit,
+    });
+    return [`${item.name}: ${label || "Not provided"}`];
+  });
+  if (rows.length === 0) return null;
+  return (
+    <ReviewBlock title="Approximate measurements">
+      <ul className="list-disc space-y-1 pl-5">
+        {rows.map((row) => (
+          <li key={row}>{row}</li>
+        ))}
+      </ul>
+    </ReviewBlock>
   );
 }
 

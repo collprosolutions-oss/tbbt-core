@@ -42,6 +42,9 @@ export type HandymanStarterService = {
   description: string;
   startingPrice: number | null;
   pricingMode?: "FIXED" | "STARTING_AT" | "CUSTOM_QUOTE";
+  intakeMeasurementMode?: "NONE" | "OPTIONAL" | "RECOMMENDED" | "REQUIRED";
+  intakeMeasurementAxes?: string;
+  intakeMeasurementUnit?: "IN" | "FT";
 };
 
 export const HANDYMAN_STARTER_SERVICES: HandymanStarterService[] = [
@@ -146,6 +149,9 @@ export const HANDYMAN_STARTER_SERVICES: HandymanStarterService[] = [
     category: "Mounting & Hanging",
     name: "Blind / Shade Installation",
     startingPrice: 75,
+    intakeMeasurementMode: "RECOMMENDED",
+    intakeMeasurementAxes: "width,height",
+    intakeMeasurementUnit: "IN",
     description:
       "Install a standard interior blind or shade in an existing window opening. Custom sizes, motorized units, or several openings may increase the price.",
   },
@@ -562,6 +568,14 @@ export function starterPricingMode(service: HandymanStarterService) {
     return service.pricingMode;
   }
   return service.startingPrice == null ? "CUSTOM_QUOTE" : "STARTING_AT";
+}
+
+export function starterIntakeFields(service: HandymanStarterService) {
+  return {
+    intakeMeasurementMode: service.intakeMeasurementMode ?? "NONE",
+    intakeMeasurementAxes: service.intakeMeasurementAxes ?? "",
+    intakeMeasurementUnit: service.intakeMeasurementUnit ?? "IN",
+  };
 }
 
 export function isImportableStarterService(service: HandymanStarterService) {

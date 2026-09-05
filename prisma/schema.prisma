@@ -180,8 +180,9 @@ model Business {
   settingsAuditLogs        SettingsAuditLog[]
   publicSiteImages         PublicSiteImage[]
   knowledgeEntries         KnowledgeEntry[]
-  serviceRequestItems      ServiceRequestItem[]
-  serviceRequestPhotos     ServiceRequestPhoto[]
+  serviceRequestItems         ServiceRequestItem[]
+  serviceRequestPhotos        ServiceRequestPhoto[]
+  serviceRequestMeasurements  ServiceRequestMeasurement[]
   paymentAccount           BusinessPaymentAccount?
   storageAccount           BusinessStorageAccount?
   storedAssets             StoredAsset[]
@@ -245,6 +246,7 @@ model Membership {
   publicSiteImages         PublicSiteImage[]  @relation("PublicSiteImageActor")
   createdKnowledgeEntries  KnowledgeEntry[]   @relation("KnowledgeEntryCreator")
   reviewedKnowledgeEntries KnowledgeEntry[]   @relation("KnowledgeEntryReviewer")
+  verifiedMeasurements     ServiceRequestMeasurement[] @relation("MeasurementVerifier")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -314,6 +316,14 @@ model ServiceCatalogItem {
   /// src/lib/handyman-starter-catalog.ts).
   category    String   @default("Other Services")
   active      Boolean  @default(true)
+  /// NONE | OPTIONAL | RECOMMENDED | REQUIRED. Default NONE means the
+  /// public request form does not ask for measurements for this item.
+  intakeMeasurementMode String @default("NONE")
+  /// Comma-separated axes this item cares about: width,height,length.
+  /// Empty when measurements are not applicable.
+  intakeMeasurementAxes String @default("")
+  /// IN | FT. Customer-reported only; never contractor-verified units.
+  intakeMeasurementUnit String @default("IN")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -348,6 +358,7 @@ model ServiceRequest {
   /// single-service rows -- those keep using serviceCatalogItemId only.
   items              ServiceRequestItem[]
   photos             ServiceRequestPhoto[]
+  measurements       ServiceRequestMeasurement[]
   estimates          Estimate[]
   /// Owner-managed sales state for this request, if any. Created lazily
   /// when the owner records CONTACTED / SITE_VISIT_NEEDS_INFO / FOLLOW_UP /
@@ -379,26 +390,60 @@ model ServiceRequestItem {
   business           Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
   serviceRequest     ServiceRequest      @relation(fields: [serviceRequestId], references: [id], onDelete: Cascade)
   serviceCatalogItem ServiceCatalogItem? @relation(fields: [serviceCatalogItemId], references: [id], onDelete: SetNull)
+  measurements       ServiceRequestMeasurement[]
 
   @@index([businessId])
   @@index([serviceRequestId])
 }
 
 /// Optional customer-uploaded project photos attached at public intake.
-/// Uses the same Vercel Blob storage helper as JobPhoto -- not a second
-/// storage system. Stores only a URL, never image bytes.
+/// New photos use private Business Storage (R2) via storedAssetId.
+/// Legacy rows may still have a Vercel Blob URL and no stored asset.
 model ServiceRequestPhoto {
   id               String   @id @default(cuid())
   businessId       String
   serviceRequestId String
   url              String
+  storedAssetId    String?
   createdAt        DateTime @default(now())
 
   business       Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
   serviceRequest ServiceRequest @relation(fields: [serviceRequestId], references: [id], onDelete: Cascade)
+  storedAsset    StoredAsset?   @relation(fields: [storedAssetId], references: [id], onDelete: SetNull)
 
   @@index([businessId])
   @@index([serviceRequestId])
+  @@index([storedAssetId])
+}
+
+/// Approximate project measurements captured at intake or later confirmed
+/// by the contractor. Customer-reported rows are never overwritten when a
+/// contractor-verified row is added.
+model ServiceRequestMeasurement {
+  id                     String    @id @default(cuid())
+  businessId             String
+  serviceRequestId       String
+  serviceRequestItemId   String?
+  /// CUSTOMER_REPORTED | CONTRACTOR_VERIFIED
+  source                 String
+  width                  Decimal?
+  height                 Decimal?
+  length                 Decimal?
+  quantity               Int?
+  /// IN | FT
+  unit                   String
+  createdAt              DateTime  @default(now())
+  verifiedAt             DateTime?
+  verifiedByMembershipId String?
+
+  business             Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  serviceRequest       ServiceRequest      @relation(fields: [serviceRequestId], references: [id], onDelete: Cascade)
+  serviceRequestItem   ServiceRequestItem? @relation(fields: [serviceRequestItemId], references: [id], onDelete: SetNull)
+  verifiedBy           Membership?         @relation("MeasurementVerifier", fields: [verifiedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([serviceRequestId])
+  @@index([serviceRequestItemId])
 }
 
 model Estimate {
@@ -662,7 +707,8 @@ model StoredAsset {
 
   business       Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
   storageAccount BusinessStorageAccount @relation(fields: [storageAccountId], references: [id], onDelete: Cascade)
-  publicSiteImages PublicSiteImage[]
+  publicSiteImages     PublicSiteImage[]
+  serviceRequestPhotos ServiceRequestPhoto[]
 
   @@unique([businessId, storageKey])
   @@index([businessId, category, status])

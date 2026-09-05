@@ -2,7 +2,7 @@ export const OTHER_TASK_LABEL = "Other / Something Else";
 export const MAX_REQUEST_ITEMS = 25;
 export const MAX_CUSTOM_TASK_LENGTH = 400;
 export const MAX_NOTES_LENGTH = 4000;
-export const MAX_INTAKE_PHOTOS = 5;
+export const MAX_INTAKE_PHOTOS = 8;
 export const MIN_REQUEST_QUANTITY = 1;
 export const MAX_REQUEST_QUANTITY = 99;
 

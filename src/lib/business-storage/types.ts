@@ -45,6 +45,7 @@ export const DEFAULT_MANAGED_STORAGE_LIMIT_BYTES = 5 * 1024 * 1024 * 1024;
 export const STORAGE_UPLOAD_URL_TTL_SECONDS = 5 * 60;
 export const STORAGE_PENDING_TTL_MS = 15 * 60 * 1000;
 export const WEBSITE_PHOTO_MAX_BYTES = 4 * 1024 * 1024;
+export const REQUEST_PHOTO_MAX_BYTES = 4 * 1024 * 1024;
 
 export type StorageObjectMeta = {
   key: string;

@@ -1,4 +1,11 @@
 import { resolveBusinessServiceArea } from "@/lib/business-service-area";
+import { privateAssetPath } from "@/lib/business-storage/keys";
+import {
+  CUSTOMER_REPORTED_MEASUREMENT,
+  catalogAsksMeasurements,
+  resolveCatalogIntakeConfig,
+  validateCustomerMeasurementInput,
+} from "@/lib/catalog-intake";
 import { OTHER_SERVICE_VALUE } from "@/lib/intake";
 import {
   findReusableLegacyProperty,
@@ -38,6 +45,15 @@ export type PublicIntakeInput = {
   otherDescription: string;
   otherQuantity?: unknown;
   photoUrls?: string[];
+  photoAssetIds?: string[];
+  measurements?: Array<{
+    catalogItemId: string;
+    width?: string;
+    height?: string;
+    length?: string;
+    quantity?: number | null;
+    unit?: string;
+  }>;
 };
 
 export type PublicIntakeDb = {
@@ -50,8 +66,34 @@ export type PublicIntakeDb = {
   serviceCatalogItem: {
     findMany: (args: {
       where: { id: { in: string[] }; businessId: string; active: boolean };
-      select: { id: true; name: true };
-    }) => Promise<Array<{ id: string; name: string }>>;
+      select: {
+        id: true;
+        name: true;
+        intakeMeasurementMode: true;
+        intakeMeasurementAxes: true;
+        intakeMeasurementUnit: true;
+      };
+    }) => Promise<
+      Array<{
+        id: string;
+        name: string;
+        intakeMeasurementMode: string;
+        intakeMeasurementAxes: string;
+        intakeMeasurementUnit: string;
+      }>
+    >;
+  };
+  storedAsset: {
+    findMany: (args: {
+      where: {
+        id: { in: string[] };
+        businessId: string;
+        category: string;
+        visibility: string;
+        status: string;
+      };
+      select: { id: true };
+    }) => Promise<Array<{ id: string }>>;
   };
   $transaction: <T>(fn: (tx: PublicIntakeTx) => Promise<T>) => Promise<T>;
 };
@@ -126,6 +168,11 @@ export type PublicIntakeTx = {
         sortOrder: number;
       }>;
     }) => Promise<unknown>;
+    findMany: (args: {
+      where: { serviceRequestId: string; businessId: string };
+      orderBy: { sortOrder: "asc" };
+      select: { id: true; serviceCatalogItemId: true };
+    }) => Promise<Array<{ id: string; serviceCatalogItemId: string | null }>>;
   };
   serviceRequestPhoto: {
     createMany: (args: {
@@ -133,6 +180,22 @@ export type PublicIntakeTx = {
         businessId: string;
         serviceRequestId: string;
         url: string;
+        storedAssetId?: string | null;
+      }>;
+    }) => Promise<unknown>;
+  };
+  serviceRequestMeasurement: {
+    createMany: (args: {
+      data: Array<{
+        businessId: string;
+        serviceRequestId: string;
+        serviceRequestItemId: string | null;
+        source: string;
+        width: number | null;
+        height: number | null;
+        length: number | null;
+        quantity: number | null;
+        unit: string;
       }>;
     }) => Promise<unknown>;
   };
@@ -208,7 +271,16 @@ export async function createPublicServiceRequest(
     .filter((task): task is Extract<SelectedPublicTask, { kind: "catalog" }> => task.kind === "catalog")
     .map((task) => task.serviceCatalogItemId);
 
-  let catalogById = new Map<string, { id: string; name: string }>();
+  let catalogById = new Map<
+    string,
+    {
+      id: string;
+      name: string;
+      intakeMeasurementMode: string;
+      intakeMeasurementAxes: string;
+      intakeMeasurementUnit: string;
+    }
+  >();
   if (catalogIds.length > 0) {
     const catalogItems = await db.serviceCatalogItem.findMany({
       where: {
@@ -216,13 +288,60 @@ export async function createPublicServiceRequest(
         businessId: business.id,
         active: true,
       },
-      select: { id: true, name: true },
+      select: {
+        id: true,
+        name: true,
+        intakeMeasurementMode: true,
+        intakeMeasurementAxes: true,
+        intakeMeasurementUnit: true,
+      },
     });
     if (catalogItems.length !== catalogIds.length) {
       return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
     }
     catalogById = new Map(catalogItems.map((item) => [item.id, item]));
   }
+
+  const measurementInputs = input.measurements ?? [];
+  const preparedMeasurements: Array<{
+    catalogItemId: string;
+    width: number | null;
+    height: number | null;
+    length: number | null;
+    quantity: number | null;
+    unit: string;
+  }> = [];
+  for (const task of parsed.tasks) {
+    if (task.kind !== "catalog") continue;
+    const catalog = catalogById.get(task.serviceCatalogItemId);
+    if (!catalog) continue;
+    const config = resolveCatalogIntakeConfig(catalog);
+    if (!catalogAsksMeasurements(config)) continue;
+    const submitted = measurementInputs.find(
+      (row) => row.catalogItemId === task.serviceCatalogItemId,
+    ) ?? {};
+    const checked = validateCustomerMeasurementInput(config, submitted);
+    if (!checked.ok) return checked;
+    if (
+      checked.values.width != null ||
+      checked.values.height != null ||
+      checked.values.length != null
+    ) {
+      preparedMeasurements.push({
+        catalogItemId: task.serviceCatalogItemId,
+        width: checked.values.width,
+        height: checked.values.height,
+        length: checked.values.length,
+        quantity: task.quantity,
+        unit: config.unit,
+      });
+    }
+  }
+
+  const photoAssetIds = [...new Set((input.photoAssetIds ?? []).map((id) => id.trim()).filter(Boolean))].slice(
+    0,
+    MAX_INTAKE_PHOTOS,
+  );
 
   const labels = requestedWorkLabels({
     items: parsed.tasks.map((task) =>
@@ -237,6 +356,21 @@ export async function createPublicServiceRequest(
   const summary = requestedWorkSummary(labels, 120);
   const description = notes || null;
   const photoUrls = (input.photoUrls ?? []).filter(Boolean).slice(0, MAX_INTAKE_PHOTOS);
+  const ownedPhotoIds =
+    photoAssetIds.length > 0
+      ? (
+          await db.storedAsset.findMany({
+            where: {
+              id: { in: photoAssetIds },
+              businessId: business.id,
+              category: "CUSTOMER_PHOTO",
+              visibility: "PRIVATE",
+              status: "READY",
+            },
+            select: { id: true },
+          })
+        ).map((row) => row.id)
+      : [];
 
   try {
     const requestId = await db.$transaction(async (tx) => {
@@ -358,13 +492,47 @@ export async function createPublicServiceRequest(
         ),
       });
 
-      if (photoUrls.length > 0) {
-        await tx.serviceRequestPhoto.createMany({
-          data: photoUrls.map((url) => ({
+      if (preparedMeasurements.length > 0) {
+        const createdItems = await tx.serviceRequestItem.findMany({
+          where: { serviceRequestId: request.id, businessId: business.id },
+          orderBy: { sortOrder: "asc" },
+          select: { id: true, serviceCatalogItemId: true },
+        });
+        await tx.serviceRequestMeasurement.createMany({
+          data: preparedMeasurements.map((row) => ({
             businessId: business.id,
             serviceRequestId: request.id,
-            url,
+            serviceRequestItemId:
+              createdItems.find((item) => item.serviceCatalogItemId === row.catalogItemId)?.id ??
+              null,
+            source: CUSTOMER_REPORTED_MEASUREMENT,
+            width: row.width,
+            height: row.height,
+            length: row.length,
+            quantity: row.quantity,
+            unit: row.unit,
           })),
+        });
+      }
+
+      const photoRows = [
+        ...photoUrls.map((url) => ({
+          businessId: business.id,
+          serviceRequestId: request.id,
+          url,
+          storedAssetId: null as string | null,
+        })),
+        ...ownedPhotoIds.map((assetId) => ({
+          businessId: business.id,
+          serviceRequestId: request.id,
+          url: privateAssetPath(assetId),
+          storedAssetId: assetId,
+        })),
+      ].slice(0, MAX_INTAKE_PHOTOS);
+
+      if (photoRows.length > 0) {
+        await tx.serviceRequestPhoto.createMany({
+          data: photoRows,
         });
       }
 

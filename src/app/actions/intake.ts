@@ -1,14 +1,12 @@
 "use server";
 
 import { createPublicServiceRequest } from "@/lib/public-intake";
+import { isBusinessStorageConfigured } from "@/lib/business-storage";
+import { putPublicRequestPhotoFromBytes } from "@/lib/business-storage/request-photos";
+import { privateAssetPath } from "@/lib/business-storage/keys";
 import { prisma } from "@/lib/prisma";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
-import {
-  isStorageConfigured,
-  isSupportedImageMimeType,
-  MAX_JOB_PHOTO_UPLOAD_BYTES,
-  uploadRequestPhoto,
-} from "@/lib/storage";
+import { resolveSupportedImageMimeType } from "@/lib/storage";
 
 export type IntakeResult = {
   error?: string;
@@ -82,6 +80,32 @@ export async function submitServiceRequest(
     includeOther,
     otherDescription: readString(formData, "otherDescription"),
     otherQuantity: readString(formData, "otherQuantity") || undefined,
+    photoAssetIds: readAllStrings(formData, "photoAssetId"),
+    measurements: readAllStrings(formData, "measurement").flatMap((raw) => {
+      try {
+        const parsed = JSON.parse(raw) as {
+          catalogItemId?: string;
+          width?: string;
+          height?: string;
+          length?: string;
+          quantity?: number | null;
+          unit?: string;
+        };
+        if (!parsed.catalogItemId) return [];
+        return [
+          {
+            catalogItemId: parsed.catalogItemId,
+            width: parsed.width,
+            height: parsed.height,
+            length: parsed.length,
+            quantity: parsed.quantity,
+            unit: parsed.unit,
+          },
+        ];
+      } catch {
+        return [];
+      }
+    }),
   });
 
   if (!created.ok) {
@@ -89,7 +113,7 @@ export async function submitServiceRequest(
   }
 
   const files = readPhotoFiles(formData).slice(0, MAX_INTAKE_PHOTOS);
-  if (files.length === 0 || !isStorageConfigured()) {
+  if (files.length === 0 || !isBusinessStorageConfigured()) {
     return { ok: true };
   }
 
@@ -109,28 +133,36 @@ export async function submitServiceRequest(
     return { ok: true };
   }
 
-  const uploadedUrls: string[] = [];
+  const attached: Array<{ url: string; storedAssetId: string }> = [];
   for (const file of files) {
-    if (!isSupportedImageMimeType(file.type)) continue;
-    if (file.size > MAX_JOB_PHOTO_UPLOAD_BYTES) continue;
+    const mimeType = resolveSupportedImageMimeType(file);
+    if (!mimeType) continue;
     try {
-      const uploaded = await uploadRequestPhoto({
-        businessId: business.id,
-        requestId: request.id,
-        file,
+      const asset = await putPublicRequestPhotoFromBytes(
+        { db: prisma },
+        safeSlug,
+        {
+          originalFilename: file.name,
+          mimeType,
+          body: new Uint8Array(await file.arrayBuffer()),
+        },
+      );
+      attached.push({
+        url: privateAssetPath(asset.id),
+        storedAssetId: asset.id,
       });
-      uploadedUrls.push(uploaded.url);
     } catch {
       // Request already exists. A failed photo must not roll it back.
     }
   }
 
-  if (uploadedUrls.length > 0) {
+  if (attached.length > 0) {
     await prisma.serviceRequestPhoto.createMany({
-      data: uploadedUrls.map((url) => ({
+      data: attached.map((photo) => ({
         businessId: business.id,
         serviceRequestId: request.id,
-        url,
+        url: photo.url,
+        storedAssetId: photo.storedAssetId,
       })),
     });
   }

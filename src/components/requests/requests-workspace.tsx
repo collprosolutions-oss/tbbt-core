@@ -36,6 +36,8 @@ export type RequestListItem = {
   serviceName: string | null;
   requestedTasks: string[];
   photoCount: number;
+  photoSrcs: string[];
+  measurementLabels: string[];
   propertyLabel: string | null;
   customer: { id: string; name: string; email: string | null; phone: string | null } | null;
   /** Pre-formatted (Decimal -> string) server-side -- never passed as a Decimal instance across the client boundary. */
@@ -327,9 +329,28 @@ function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
         <DetailField icon={FileText} label="Description">
           {request.description || request.summary || "No description provided."}
         </DetailField>
+        {request.measurementLabels.length > 0 ? (
+          <DetailField label="Approximate measurements">
+            <ul className="space-y-1">
+              {request.measurementLabels.map((label) => (
+                <li key={label}>{label}</li>
+              ))}
+            </ul>
+          </DetailField>
+        ) : null}
         {request.photoCount > 0 ? (
           <DetailField label="Project photos">
-            {request.photoCount} photo{request.photoCount === 1 ? "" : "s"} attached
+            <div className="grid grid-cols-2 gap-2">
+              {request.photoSrcs.map((src) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={src}
+                  src={src}
+                  alt=""
+                  className="aspect-square w-full rounded-md object-cover"
+                />
+              ))}
+            </div>
           </DetailField>
         ) : null}
         <DetailField icon={Phone} label="Contact">

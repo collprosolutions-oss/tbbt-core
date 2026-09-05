@@ -20,6 +20,8 @@ import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
+import { requestPhotoOwnerSrc } from "@/lib/business-storage/request-photos";
+import { formatCustomerMeasurement } from "@/lib/catalog-intake";
 import { formatAddress, formatDate, formatMoney, formatTime } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import {
@@ -156,7 +158,20 @@ export default async function RequestsPage({
             serviceCatalogItem: { select: { name: true } },
           },
         },
-        photos: { select: { id: true } },
+        photos: { select: { id: true, url: true, storedAssetId: true } },
+        measurements: {
+          select: {
+            source: true,
+            width: true,
+            height: true,
+            length: true,
+            quantity: true,
+            unit: true,
+            serviceRequestItem: {
+              select: { serviceCatalogItem: { select: { name: true } }, customDescription: true },
+            },
+          },
+        },
         estimates: {
           select: { id: true, status: true, total: true },
           orderBy: { createdAt: "asc" },
@@ -214,6 +229,23 @@ export default async function RequestsPage({
         null,
       requestedTasks,
       photoCount: request.photos.length,
+      photoSrcs: request.photos.map((photo) => requestPhotoOwnerSrc(photo)),
+      measurementLabels: request.measurements.map((row) => {
+        const name =
+          row.serviceRequestItem?.serviceCatalogItem?.name ||
+          row.serviceRequestItem?.customDescription ||
+          "Selected work";
+        const dims = formatCustomerMeasurement({
+          width: row.width ? Number(row.width.toString()) : null,
+          height: row.height ? Number(row.height.toString()) : null,
+          length: row.length ? Number(row.length.toString()) : null,
+          quantity: row.quantity,
+          unit: row.unit,
+        });
+        const source =
+          row.source === "CONTRACTOR_VERIFIED" ? "contractor verified" : "customer reported";
+        return `${name}: ${dims || "on file"} (${source})`;
+      }),
       propertyLabel: request.property ? formatAddress(request.property) : null,
       customer: request.customer
         ? {

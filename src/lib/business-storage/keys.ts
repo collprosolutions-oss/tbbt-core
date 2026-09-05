@@ -50,6 +50,10 @@ export function publicAssetPath(assetId: string) {
   return `/api/storage/public/${assetId}`;
 }
 
+export function privateAssetPath(assetId: string) {
+  return `/api/storage/private/${assetId}`;
+}
+
 export function isManagedPublicAssetPath(url: string) {
   return /^\/api\/storage\/public\/[a-zA-Z0-9_-]+$/.test(url.trim());
 }

@@ -18,7 +18,7 @@ import {
 import { resolveBusinessServiceArea } from "@/lib/business-service-area";
 import { loadPublicSite } from "@/lib/public-site-data";
 import { parseSelectedWorkSearch } from "@/lib/selected-work";
-import { isStorageConfigured } from "@/lib/storage";
+import { isBusinessStorageConfigured } from "@/lib/business-storage";
 
 export const dynamic = "force-dynamic";
 
@@ -110,7 +110,7 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
                 items={site.items}
                 groups={site.groups}
                 initialSelected={initialSelected}
-                photosEnabled={isStorageConfigured()}
+                photosEnabled={isBusinessStorageConfigured()}
                 serviceArea={resolveBusinessServiceArea(site.business)}
               />
             </div>

@@ -118,9 +118,9 @@ async function releaseExpiredReservations(db: Db, businessId: string, now: Date)
   }
 }
 
-export async function authorizeBusinessUpload(
+export async function authorizeManagedUpload(
   deps: StorageServiceDeps,
-  access: BusinessAccess,
+  businessId: string,
   input: {
     category: StoredAssetCategory;
     purpose?: string;
@@ -133,13 +133,12 @@ export async function authorizeBusinessUpload(
     jobId?: string | null;
   },
 ) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
   if (input.fileSizeBytes <= 0) {
     throw new StorageError("Choose a file to upload.");
   }
   const now = deps.now?.() ?? new Date();
   const provider = await resolveStorageProvider(deps);
-  const account = await ensureBusinessStorageAccount(deps.db, access.businessId, {
+  const account = await ensureBusinessStorageAccount(deps.db, businessId, {
     bucketName: deps.bucketName,
     defaultLimitBytes: deps.defaultLimitBytes,
   });
@@ -147,7 +146,7 @@ export async function authorizeBusinessUpload(
     throw new StorageError("File storage is suspended for this business.");
   }
 
-  await releaseExpiredReservations(deps.db, access.businessId, now);
+  await releaseExpiredReservations(deps.db, businessId, now);
 
   const fresh = await deps.db.businessStorageAccount.findUniqueOrThrow({
     where: { id: account.id },
@@ -164,11 +163,11 @@ export async function authorizeBusinessUpload(
   }
 
   const key = buildBusinessStorageKey({
-    businessId: access.businessId,
+    businessId,
     category: input.category,
     mimeType: input.mimeType,
   });
-  assertKeyBelongsToBusiness(key, access.businessId);
+  assertKeyBelongsToBusiness(key, businessId);
 
   const asset = await deps.db.$transaction(async (tx) => {
     const locked = await tx.businessStorageAccount.findUniqueOrThrow({
@@ -186,7 +185,7 @@ export async function authorizeBusinessUpload(
     }
     const created = await tx.storedAsset.create({
       data: {
-        businessId: access.businessId,
+        businessId,
         storageAccountId: account.id,
         customerId: input.customerId ?? null,
         propertyId: input.propertyId ?? null,
@@ -220,14 +219,32 @@ export async function authorizeBusinessUpload(
   return { asset, account, upload };
 }
 
-export async function abortBusinessUpload(
+export async function authorizeBusinessUpload(
   deps: StorageServiceDeps,
   access: BusinessAccess,
-  assetId: string,
+  input: {
+    category: StoredAssetCategory;
+    purpose?: string;
+    originalFilename: string;
+    mimeType: string;
+    fileSizeBytes: number;
+    visibility: StoredAssetVisibility;
+    customerId?: string | null;
+    propertyId?: string | null;
+    jobId?: string | null;
+  },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  return authorizeManagedUpload(deps, access.businessId, input);
+}
+
+export async function abortManagedUpload(
+  deps: StorageServiceDeps,
+  businessId: string,
+  assetId: string,
+) {
   const asset = await deps.db.storedAsset.findFirst({
-    where: { id: assetId, businessId: access.businessId },
+    where: { id: assetId, businessId },
   });
   if (!asset) throw new StorageAccessError();
   if (asset.status !== "PENDING") return asset;
@@ -245,14 +262,22 @@ export async function abortBusinessUpload(
   return { ...asset, status: "FAILED" as const };
 }
 
-export async function finalizeBusinessUpload(
+export async function abortBusinessUpload(
   deps: StorageServiceDeps,
   access: BusinessAccess,
   assetId: string,
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  return abortManagedUpload(deps, access.businessId, assetId);
+}
+
+export async function finalizeManagedUpload(
+  deps: StorageServiceDeps,
+  businessId: string,
+  assetId: string,
+) {
   const asset = await deps.db.storedAsset.findFirst({
-    where: { id: assetId, businessId: access.businessId },
+    where: { id: assetId, businessId },
     include: { storageAccount: true },
   });
   if (!asset) throw new StorageAccessError();
@@ -260,7 +285,7 @@ export async function finalizeBusinessUpload(
   if (asset.status !== "PENDING") {
     throw new StorageError("That upload is no longer pending.");
   }
-  assertKeyBelongsToBusiness(asset.storageKey, access.businessId);
+  assertKeyBelongsToBusiness(asset.storageKey, businessId);
   const provider = await resolveStorageProvider(deps);
   const meta = await provider.getObjectMetadata({
     bucket: asset.storageAccount.bucketName,
@@ -270,7 +295,7 @@ export async function finalizeBusinessUpload(
     throw new StorageError("The file was not found in storage. Upload it again.");
   }
   if (meta.sizeBytes > asset.fileSizeBytes) {
-    await abortBusinessUpload(deps, access, asset.id);
+    await abortManagedUpload(deps, businessId, asset.id);
     await provider.deleteObject({
       bucket: asset.storageAccount.bucketName,
       key: asset.storageKey,
@@ -305,6 +330,15 @@ export async function finalizeBusinessUpload(
     });
     return updated;
   });
+}
+
+export async function finalizeBusinessUpload(
+  deps: StorageServiceDeps,
+  access: BusinessAccess,
+  assetId: string,
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  return finalizeManagedUpload(deps, access.businessId, assetId);
 }
 
 export async function putBusinessObject(

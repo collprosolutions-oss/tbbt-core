@@ -278,9 +278,10 @@ check("Estimate handoff keeps request context and prefills draft lines",
   estimatePageSrc.includes("Requested work") &&
     estimatePageSrc.includes("Prefilled from customer request — review before sending.") &&
     estimateActionSrc.includes("addRequestDraftLines"));
-check("Photos reuse existing Blob storage helper",
-  readRepo("src/lib/storage.ts").includes("uploadRequestPhoto") &&
-    intakeActionSrc.includes("uploadRequestPhoto"));
+check("Public request photos use private Business Storage, not a public website path",
+  readRepo("src/lib/business-storage/request-photos.ts").includes("CUSTOMER_PHOTO") &&
+    readRepo("src/lib/business-storage/request-photos.ts").includes('visibility: "PRIVATE"') &&
+    intakeActionSrc.includes("photoAssetIds"));
 
 console.log("\nPURE — Pricing labels and requested-work fallback");
 check("STARTING_AT displays Starting at $X",
