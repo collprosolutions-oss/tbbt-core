@@ -38,6 +38,7 @@
     "test:field-time-cards-flow": "node --experimental-strip-types scripts/check-field-time-cards-flow.mjs",
     "test:public-website": "node --experimental-strip-types scripts/check-public-website.mjs",
     "test:service-address": "node --experimental-strip-types scripts/check-service-address.mjs",
+    "test:production-migrate": "node scripts/check-production-migrate.mjs",
     "test:request-intake": "node --experimental-strip-types scripts/check-request-intake.mjs",
     "test:public-site-images": "node --experimental-strip-types scripts/check-public-site-images.mjs",
     "test:business-storage": "node --experimental-strip-types scripts/check-business-storage.mjs",

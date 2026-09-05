@@ -1,18 +1,23 @@
 /**
- * Vercel Preview and Production share DATABASE_URL. Running
- * `prisma migrate deploy` on every Preview build contends for the
- * PostgreSQL advisory lock (P1002) and can fail the Preview deploy.
+ * Vercel Preview and the unused `workspace` project share DATABASE_URL
+ * with live collpro-reno Production. Running `prisma migrate deploy` on
+ * every build contends for PostgreSQL advisory lock 72707369 (P1002).
  *
- * Migrations run only when Vercel is building Production.
- * Preview and local `npm run build` still run `prisma generate` and
- * `next build`. Apply schema changes with `npm run db:deploy` or by
- * deploying to Production.
+ * Preview and local `npm run build` skip migrate. Production migrate
+ * runs only on the collpro-reno Vercel project. Prisma locking stays on.
  */
 import { spawnSync } from "node:child_process";
+import { shouldRunProductionMigrate } from "./production-migrate-policy.mjs";
 
-const vercelEnv = process.env.VERCEL_ENV || "local";
-if (vercelEnv !== "production") {
-  console.log(`Skipping prisma migrate deploy (${vercelEnv} build).`);
+const decision = shouldRunProductionMigrate({
+  vercelEnv: process.env.VERCEL_ENV,
+  projectId: process.env.VERCEL_PROJECT_ID,
+  projectName: process.env.VERCEL_PROJECT_NAME,
+  productionUrl: process.env.VERCEL_PROJECT_PRODUCTION_URL,
+});
+
+if (!decision.run) {
+  console.log(`Skipping prisma migrate deploy (${decision.reason}).`);
   process.exit(0);
 }
 
