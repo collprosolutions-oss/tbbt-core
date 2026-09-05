@@ -31,6 +31,11 @@ export class R2StorageProvider implements StorageProvider {
         accessKeyId: config.accessKeyId,
         secretAccessKey: config.secretAccessKey,
       },
+      // AWS SDK JS v3.729+ sends CRC32 checksums by default. R2 rejects
+      // those headers on GetObject, which made /api/storage/public fail
+      // while browser PUT + HeadObject finalize still succeeded.
+      requestChecksumCalculation: "WHEN_REQUIRED",
+      responseChecksumValidation: "WHEN_REQUIRED",
     });
   }
 

@@ -266,6 +266,11 @@ check("Public Home and hire pages load images for the resolved business only",
     readRepo("src/app/hire/[slug]/page.tsx").includes(
       "loadPublicHomeImages(prisma, site.business.id, site.groups)",
     ));
+const publicRouteSrc = readRepo("src/app/api/storage/public/[assetId]/route.ts");
+check("Public Home storage URLs are served by the unauthenticated READY/PUBLIC route",
+  publicRouteSrc.includes("servePublicStoredAsset") &&
+    publicRouteSrc.includes("runtime = \"nodejs\"") &&
+    !publicRouteSrc.includes("publicBaseUrl"));
 check("Category slots stay keyed to the real category name",
   categoryImageSlot("Doors & Locks") === "category:Doors & Locks" &&
     parseCategoryImageSlot("category:Doors & Locks") === "Doors & Locks");

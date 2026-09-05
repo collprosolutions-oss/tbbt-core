@@ -12,6 +12,7 @@ export {
   publicAssetPath,
 } from "@/lib/business-storage/keys";
 export { MemoryStorageProvider } from "@/lib/business-storage/memory-provider";
+export { servePublicStoredAsset } from "@/lib/business-storage/public-serve";
 export { R2StorageProvider, createR2StorageProvider } from "@/lib/business-storage/r2-provider";
 export {
   abortBusinessUpload,

@@ -38,6 +38,7 @@ const {
   putBusinessObject,
   readPublicStoredAsset,
 } = await import("@/lib/business-storage/service");
+const { servePublicStoredAsset } = await import("@/lib/business-storage/public-serve");
 const {
   authorizeWebsitePhotoUploadOp,
   finalizeWebsitePhotoUploadOp,
@@ -132,6 +133,15 @@ check("Job-photo helper still exists for the later migration",
 check("Public website assets use an explicit public path",
   isManagedPublicAssetPath("/api/storage/public/asset123") &&
     !isManagedPublicAssetPath("/api/storage/public/../secret"));
+const routeSrc = readRepo("src/app/api/storage/public/[assetId]/route.ts");
+const r2Src = readRepo("src/lib/business-storage/r2-provider.ts");
+check("Public asset route streams READY objects instead of a public-bucket redirect",
+  routeSrc.includes("servePublicStoredAsset") &&
+    !routeSrc.includes("publicBaseUrl") &&
+    !routeSrc.includes("NextResponse.redirect"));
+check("R2 client disables default AWS checksums that break GetObject",
+  r2Src.includes('requestChecksumCalculation: "WHEN_REQUIRED"') &&
+    r2Src.includes('responseChecksumValidation: "WHEN_REQUIRED"'));
 check("Tenant keys always start with the business namespace",
   businessNamespacePrefix("biz_a") === "businesses/biz_a" &&
     buildBusinessStorageKey({
@@ -287,6 +297,17 @@ try {
   const publicAsset = await readPublicStoredAsset(prisma, second.asset.id);
   check("Public website assets are readable without a session",
     publicAsset?.id === second.asset.id && publicAsset.visibility === "PUBLIC");
+  const served = await servePublicStoredAsset(prisma, second.asset.id, { provider });
+  check("Public /api/storage/public route returns the READY PUBLIC object bytes",
+    served.ok === true &&
+      served.status === 200 &&
+      served.contentType === "image/jpeg" &&
+      served.contentLength === jpeg.byteLength &&
+      Buffer.from(served.body).equals(jpeg) &&
+      presented.hero.src === `/api/storage/public/${second.asset.id}`);
+  const missing = await servePublicStoredAsset(prisma, "missing-asset", { provider });
+  check("Unknown public asset ids are not served",
+    missing.ok === false && missing.status === 404);
 
   const privateAuth = await authorizeBusinessUpload(deps, ownerA, {
     category: "JOB_PHOTO",
@@ -307,6 +328,9 @@ try {
     privateAsset.visibility === "PRIVATE" && privateAsset.publicPath == null);
   const leaked = await readPublicStoredAsset(prisma, privateAsset.id);
   check("Private asset is not publicly exposed", leaked == null);
+  const privateServed = await servePublicStoredAsset(prisma, privateAsset.id, { provider });
+  check("Private objects cannot be read from the public image route",
+    privateServed.ok === false && privateServed.status === 404);
 
   await expectThrow("Business B cannot finalize Business A upload", () =>
     finalizeBusinessUpload(deps, ownerB, second.asset.id),
