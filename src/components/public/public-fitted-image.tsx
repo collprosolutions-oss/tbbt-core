@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Image from "next/image";
 import {
   PUBLIC_SITE_IMAGE_DEFAULT_ZOOM,
+  publicImageBypassesOptimizer,
   publicImageFrameModel,
 } from "@/lib/public-site-images";
 
@@ -39,7 +40,6 @@ export function PublicFittedImage({
   priority?: boolean;
   className?: string;
 }) {
-  const remote = src.startsWith("https://");
   const frame = publicImageFrameModel(objectPosition, objectZoom);
   return (
     <PublicSiteImageFrame objectPosition={objectPosition} objectZoom={objectZoom}>
@@ -49,7 +49,7 @@ export function PublicFittedImage({
         fill
         sizes={sizes}
         priority={priority}
-        unoptimized={remote}
+        unoptimized={publicImageBypassesOptimizer(src)}
         className={className}
         style={frame.image}
       />

@@ -24,7 +24,10 @@ import {
   type PublicCatalogGroup,
 } from "@/lib/public-site";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
-import { isManagedPublicAssetPath } from "@/lib/business-storage/keys";
+import {
+  isManagedPublicAssetPath,
+  publicAssetPath,
+} from "@/lib/business-storage/keys";
 import {
   deleteJobPhotoBlob,
   isManagedBlobUrl,
@@ -98,6 +101,7 @@ export type PublicSiteImageRow = {
   imageUrl: string | null;
   objectPosition: string;
   objectZoom?: number | null;
+  storedAssetId?: string | null;
 };
 
 export type ResolvedPublicSiteImage = {
@@ -114,6 +118,7 @@ export const PUBLIC_SITE_IMAGE_SELECT = {
   imageUrl: true,
   objectPosition: true,
   objectZoom: true,
+  storedAssetId: true,
 } as const;
 
 export type PublicHomeImagePresentation = {
@@ -173,6 +178,43 @@ export function isAllowedPublicSiteImageUrl(url: string) {
 
 export function isManagedWebsitePhotoUrl(url: string) {
   return isManagedPublicAssetPath(url) || isManagedBlobUrl(url);
+}
+
+const STORED_ASSET_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+export function publicSrcFromStoredAssetId(storedAssetId?: string | null) {
+  const id = storedAssetId?.trim() || "";
+  if (!id || !STORED_ASSET_ID_PATTERN.test(id)) return null;
+  return publicAssetPath(id);
+}
+
+/**
+ * Resolve the public <img> src for a saved Website Photos row.
+ * Prefer the allowlisted imageUrl; otherwise use the tenant-owned
+ * StoredAsset via /api/storage/public/{id}. Never invent another
+ * business's path — storedAssetId comes from a businessId-scoped query.
+ */
+export function resolveSavedPublicSiteImageSrc(row: {
+  imageUrl?: string | null;
+  storedAssetId?: string | null;
+}) {
+  const candidate = row.imageUrl?.trim() || "";
+  if (candidate && isAllowedPublicSiteImageUrl(candidate)) {
+    return candidate;
+  }
+  if (candidate.startsWith("http://") || candidate.startsWith("https://")) {
+    try {
+      const path = new URL(candidate).pathname;
+      if (isManagedPublicAssetPath(path)) return path;
+    } catch {
+      // Malformed absolute URL — fall through to the stored asset.
+    }
+  }
+  return publicSrcFromStoredAssetId(row.storedAssetId);
+}
+
+export function publicImageBypassesOptimizer(src: string) {
+  return src.startsWith("https://") || isManagedPublicAssetPath(src);
 }
 
 export function splitObjectPosition(value: string): { x: number; y: number } {
@@ -334,17 +376,13 @@ export function resolvePublicSiteImage(input: {
       usesCustomUpload: false,
     };
   }
-  const candidate = input.row.imageUrl?.trim() || "";
-  const src =
-    candidate && isAllowedPublicSiteImageUrl(candidate)
-      ? candidate
-      : input.defaultSrc;
+  const resolved = resolveSavedPublicSiteImageSrc(input.row);
   return {
-    src,
+    src: resolved || input.defaultSrc,
     objectPosition: input.row.objectPosition?.trim() || input.defaultPosition,
     objectZoom: clampObjectZoom(input.row.objectZoom ?? defaultZoom),
     isOverride: true,
-    usesCustomUpload: Boolean(candidate) && isManagedWebsitePhotoUrl(candidate),
+    usesCustomUpload: Boolean(resolved && isManagedWebsitePhotoUrl(resolved)),
   };
 }
 

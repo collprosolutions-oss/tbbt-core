@@ -47,9 +47,11 @@ const {
   evaluateWebsitePhotoSelection,
   formatObjectPosition,
   parseCategoryImageSlot,
+  publicImageBypassesOptimizer,
   publicImageFrameModel,
   publicImageObjectStyle,
   resolvePublicSiteImage,
+  resolveSavedPublicSiteImageSrc,
   resolveSupportedImageMimeType,
   resetPublicSiteImageOp,
   upsertPublicSiteImageOp,
@@ -201,6 +203,69 @@ check("Missing override keeps the default hero",
     !defaultHero.isOverride &&
     defaultHero.objectZoom === PUBLIC_SITE_IMAGE_DEFAULT_ZOOM &&
     defaultHero.objectPosition === PUBLIC_HOME_HERO_DEFAULT_POSITION);
+check("Saved Website Photo uses the stored public path, not the default hero",
+  resolvePublicSiteImage({
+    defaultSrc: "/brand/illustrative/craftsman-hero.jpg",
+    defaultPosition: PUBLIC_HOME_HERO_DEFAULT_POSITION,
+    row: {
+      page: PUBLIC_SITE_HOME_PAGE,
+      slot: PUBLIC_SITE_HERO_SLOT,
+      imageUrl: "/api/storage/public/asset_workshop",
+      storedAssetId: "asset_workshop",
+      objectPosition: "42% 35%",
+      objectZoom: 0.7,
+    },
+  }).src === "/api/storage/public/asset_workshop");
+check("Stored asset id recovers the public path when imageUrl is missing",
+  resolveSavedPublicSiteImageSrc({
+    imageUrl: null,
+    storedAssetId: "asset_workshop",
+  }) === "/api/storage/public/asset_workshop" &&
+    resolvePublicSiteImage({
+      defaultSrc: "/brand/illustrative/craftsman-hero.jpg",
+      defaultPosition: PUBLIC_HOME_HERO_DEFAULT_POSITION,
+      row: {
+        page: PUBLIC_SITE_HOME_PAGE,
+        slot: PUBLIC_SITE_HERO_SLOT,
+        imageUrl: null,
+        storedAssetId: "asset_workshop",
+        objectPosition: "42% 35%",
+        objectZoom: 0.7,
+      },
+    }).src === "/api/storage/public/asset_workshop");
+check("Absolute preview URLs collapse to the managed public path",
+  resolveSavedPublicSiteImageSrc({
+    imageUrl: "https://collpro-reno.vercel.app/api/storage/public/asset_workshop",
+    storedAssetId: "asset_workshop",
+  }) === "/api/storage/public/asset_workshop");
+check("A disallowed imageUrl still uses the same-row stored asset, not craftsman",
+  resolvePublicSiteImage({
+    defaultSrc: "/brand/illustrative/craftsman-hero.jpg",
+    defaultPosition: PUBLIC_HOME_HERO_DEFAULT_POSITION,
+    row: {
+      page: PUBLIC_SITE_HOME_PAGE,
+      slot: PUBLIC_SITE_HERO_SLOT,
+      imageUrl: "businesses/other/website/hero.jpg",
+      storedAssetId: "asset_workshop",
+      objectPosition: "20% 80%",
+      objectZoom: 1.25,
+    },
+  }).src === "/api/storage/public/asset_workshop");
+check("Public Home query selects the stored asset id with crop metadata",
+  opsSrc.includes("storedAssetId: true") &&
+    opsSrc.includes("objectPosition: true") &&
+    opsSrc.includes("objectZoom: true"));
+check("Public fitted images serve managed storage URLs without the optimizer",
+  publicImageBypassesOptimizer("/api/storage/public/asset_workshop") &&
+    publicImageBypassesOptimizer("https://example.public.blob.vercel-storage.com/hero.jpg") &&
+    !publicImageBypassesOptimizer("/brand/illustrative/craftsman-hero.jpg") &&
+    fittedSrc.includes("publicImageBypassesOptimizer") &&
+    fittedSrc.includes("unoptimized={publicImageBypassesOptimizer(src)}"));
+check("Public Home and hire pages load images for the resolved business only",
+  readRepo("src/app/page.tsx").includes("loadPublicHomeImages(prisma, business.id, catalog.groups)") &&
+    readRepo("src/app/hire/[slug]/page.tsx").includes(
+      "loadPublicHomeImages(prisma, site.business.id, site.groups)",
+    ));
 check("Category slots stay keyed to the real category name",
   categoryImageSlot("Doors & Locks") === "category:Doors & Locks" &&
     parseCategoryImageSlot("category:Doors & Locks") === "Doors & Locks");
@@ -532,6 +597,25 @@ try {
     loaded.hero.src === "/brand/projects/closet.jpg" &&
       loaded.hero.objectPosition === "15% 80%" &&
       loaded.hero.objectZoom === 3);
+  const storedHero = buildPublicHomeImagePresentation(groups, [
+    {
+      page: PUBLIC_SITE_HOME_PAGE,
+      slot: PUBLIC_SITE_HERO_SLOT,
+      imageUrl: "/api/storage/public/asset_workshop",
+      storedAssetId: "asset_workshop",
+      objectPosition: "42% 35%",
+      objectZoom: 0.7,
+    },
+  ]);
+  check("Public Home hero binds the Website Photos storage path and crop",
+    storedHero.hero.src === "/api/storage/public/asset_workshop" &&
+      storedHero.hero.usesCustomUpload &&
+      storedHero.hero.objectPosition === "42% 35%" &&
+      storedHero.hero.objectZoom === 0.7 &&
+      publicImageFrameModel(
+        storedHero.hero.objectPosition,
+        storedHero.hero.objectZoom,
+      ).box.width === "70%");
   check("Public site consumes the uploaded hero image",
     loaded.hero.src === "/brand/projects/closet.jpg" && loaded.hero.isOverride);
   check("Service-card positioning stays independent",
