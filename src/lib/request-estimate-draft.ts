@@ -12,6 +12,7 @@ import {
   joinLineDescription,
   splitLineDescription,
 } from "@/lib/estimate-line-scope";
+import { resolveCustomerPolicies } from "@/lib/estimate-policies";
 import { coerceRequestQuantity } from "@/lib/service-request-work";
 import { publicCatalogUnitAmount } from "@/lib/pricing-mode";
 
@@ -104,7 +105,12 @@ export function pricedCustomQuoteDescription(description: string) {
   const parts = splitLineDescription(description);
   const title =
     parts.title.replace(` ${CUSTOM_QUOTE_DRAFT_MARKER}`, "").trim() || parts.title;
-  return joinLineDescription(title, parts.includedWork, parts.calculatorSnapshot);
+  return joinLineDescription(
+    title,
+    parts.includedWork,
+    parts.calculatorSnapshot,
+    parts.customerPolicies,
+  );
 }
 
 export function draftEstimateSendError(estimate: {
@@ -145,6 +151,9 @@ export function buildEstimateLineCreatesFromRequestItems(
               title: catalog?.name ?? line.description,
               definition: calculatorDefinition,
             })
+          : null,
+        calculatorDefinition
+          ? resolveCustomerPolicies(calculatorDefinition.customerPolicies)
           : null,
       ),
       quantity: line.quantity,

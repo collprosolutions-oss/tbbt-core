@@ -107,6 +107,12 @@ export const JOB_SPECIFIC_CALCULATOR_INPUT_KEYS = [
   "receptacles",
   "switches",
   "lightFixtures",
+  "contentsHandlingLevel",
+  "contentsHandlingCustomAmount",
+  "contentsProtectionLevel",
+  "contentsProtectionCustomAmount",
+  "belongingsCleanupLevel",
+  "belongingsCleanupCustomAmount",
   "notes",
 ] as const;
 
@@ -136,6 +142,15 @@ export function persistableCalculatorRates(
       lightFixtureRate: normalized.lightFixtureRate,
       defaultTrimAllowance: job.trimAllowance,
       defaultCleanupAllowance: job.cleanupAllowance,
+      contentsHandlingLightRate: normalized.contentsHandlingLightRate,
+      contentsHandlingModerateRate: normalized.contentsHandlingModerateRate,
+      contentsHandlingHeavyRate: normalized.contentsHandlingHeavyRate,
+      contentsProtectionLightRate: normalized.contentsProtectionLightRate,
+      contentsProtectionModerateRate: normalized.contentsProtectionModerateRate,
+      contentsProtectionHeavyRate: normalized.contentsProtectionHeavyRate,
+      belongingsCleanupLightRate: normalized.belongingsCleanupLightRate,
+      belongingsCleanupModerateRate: normalized.belongingsCleanupModerateRate,
+      belongingsCleanupHeavyRate: normalized.belongingsCleanupHeavyRate,
     };
   }
   return { ...(rates ?? {}) };

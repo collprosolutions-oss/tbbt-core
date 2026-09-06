@@ -19,10 +19,12 @@ const { persistDraftEstimateTotal } = await import("@/lib/labor-minimum");
 const { createEstimateVersionSnapshot } = await import("@/lib/estimate-version");
 const {
   CALCULATOR_SNAPSHOT_MARKER,
+  CUSTOMER_POLICY_MARKER,
   catalogCalculatorDefinition,
   catalogScopeText,
   joinLineDescription,
   lineCalculatorSnapshot,
+  lineCustomerPolicies,
   lineItemIncludedWork,
   lineItemTitle,
 } = await import("@/lib/estimate-line-scope");
@@ -30,16 +32,28 @@ const {
   DECORATIVE_WALL_PANELING_CALCULATOR_ID,
   DECORATIVE_WALL_PANELING_TITLE,
   DEFAULT_DECORATIVE_WALL_PANELING_RATES,
+  DEFAULT_CONTENTS_HANDLING_RATES,
+  DEFAULT_CONTENTS_PROTECTION_RATES,
+  DEFAULT_BELONGINGS_CLEANUP_RATES,
   FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE,
   computeDecorativeWallPaneling,
+  computeWorkAreaService,
   definitionOmitsJobQuantities,
+  emptyDecorativeWallPanelingInputs,
   findCatalogCalculatorDefinition,
   persistableCalculatorRates,
   resolveCalculatorRatesForForm,
   startingCalculatorSnapshot,
+  stepCount,
+  parseTypedCount,
   suggestedPanelEquivalents,
   grossWallAreaSqFt,
 } = await import("@/lib/estimate-calculators");
+const {
+  DEFAULT_WORK_AREA_PERSONAL_PROPERTY_BODY,
+  WORK_AREA_PERSONAL_PROPERTY_TITLE,
+  defaultWorkAreaPersonalPropertyPolicy,
+} = await import("@/lib/estimate-policies");
 const {
   EstimateLineError,
   addCatalogItemToDraftEstimate,
@@ -124,6 +138,7 @@ try {
     "No Prisma calculator column — Preview cannot migrate a new field",
     !schema.includes("calculatorSnapshot") &&
       !schema.includes("calculatorId        ") &&
+      !schema.includes("customerPolicy") &&
       schema.includes("CALCULATOR_SNAPSHOT_MARKER"),
   );
 
@@ -137,7 +152,10 @@ try {
       !customerPage.includes("CalculatorBreakdown") &&
       !customerPage.includes("TBBT Calculator Snapshot") &&
       customerPage.includes("lineItemTitle") &&
-      customerPage.includes("IncludedWorkDisplay"),
+      customerPage.includes("IncludedWorkDisplay") &&
+      customerPage.includes("EstimateCustomerPolicies") &&
+      !customerPage.includes("panelRate") &&
+      !customerPage.includes("contentsHandlingLightRate"),
   );
 
   const ownerPage = readFileSync(
@@ -150,7 +168,8 @@ try {
       ownerPage.includes("applyEstimateCalculator") === false &&
       ownerPage.includes("OverrideLinePriceForm") &&
       ownerPage.includes("resolveCalculatorRatesForForm") &&
-      ownerPage.includes("findCatalogCalculatorDefinition"),
+      ownerPage.includes("findCatalogCalculatorDefinition") &&
+      ownerPage.includes("EstimateCustomerPolicies"),
   );
 
   const firstUseRates = resolveCalculatorRatesForForm({
@@ -228,6 +247,29 @@ try {
     new URL("../src/components/estimates/variable-scope-calculator-form.tsx", import.meta.url),
     "utf8",
   );
+  const stepper = readFileSync(
+    new URL("../src/components/estimates/quantity-stepper.tsx", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Counted items use integer steppers; measurements stay free numeric entry",
+    stepper.includes("stepCount") &&
+      stepper.includes("parseTypedCount") &&
+      stepper.includes("Decrease") &&
+      calculatorForm.includes("QuantityStepper") &&
+      calculatorForm.includes("Measurements / Area") &&
+      calculatorForm.includes("Counted Items") &&
+      calculatorForm.includes("Allowances / Adjustments") &&
+      calculatorForm.includes('name="wallWidthFt"') &&
+      calculatorForm.includes('step="0.01"'),
+  );
+  check(
+    "Integer steppers are not forced onto dimensions or dollar rates",
+    calculatorForm.includes("QuantityStepper") &&
+      !stepper.includes("wallWidthFt") &&
+      calculatorForm.includes("RateField") &&
+      calculatorForm.includes("panelRate"),
+  );
   check(
     "Rate edits persist automatically; a final-price override does not rewrite saved rates",
     calculatorForm.includes("persistEstimateCalculatorRates") &&
@@ -304,6 +346,62 @@ try {
       { ...FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE, panelQuantity: 10 },
       DEFAULT_DECORATIVE_WALL_PANELING_RATES,
     ).recommendedAmount === 1890,
+  );
+  check(
+    "Founder fixture stays $1,800 when the work area is clear and no contents services are selected",
+    founder.recommendedAmount === 1800 &&
+      founder.lines.find((line) => line.key === "contents-handling")?.amount === 0 &&
+      founder.lines.find((line) => line.key === "contents-protection")?.amount === 0 &&
+      founder.lines.find((line) => line.key === "belongings-cleanup")?.amount === 0,
+  );
+  check("Integer quantity stepper minimum is 0", stepCount(0, -1) === 0 && stepCount(2, -1) === 1);
+  check("Integer quantity stepper steps by 1", stepCount(0, 1) === 1 && stepCount(3, 1) === 4);
+  check("Manual count entry still works and floors to an integer", parseTypedCount("4") === 4 && parseTypedCount("2.9") === 2 && parseTypedCount("") === 0);
+
+  const unused = computeDecorativeWallPaneling(
+    emptyDecorativeWallPanelingInputs(),
+    DEFAULT_DECORATIVE_WALL_PANELING_RATES,
+  );
+  check(
+    "Untouched calculated categories wait instead of looking like $0 business rates",
+    unused.lines.find((line) => line.key === "panels")?.amountState === "waiting" &&
+      unused.lines.find((line) => line.key === "windows")?.amountState === "not_entered" &&
+      unused.lines.find((line) => line.key === "windows")?.rate === 100 &&
+      unused.lines.find((line) => line.key === "windows")?.amount === 0,
+  );
+  check(
+    "Saved business rates stay visible when a job has zero windows",
+    unused.lines.find((line) => line.key === "windows")?.rate ===
+      DEFAULT_DECORATIVE_WALL_PANELING_RATES.windowRate,
+  );
+
+  const handling = computeWorkAreaService("moderate", DEFAULT_CONTENTS_HANDLING_RATES);
+  const protection = computeWorkAreaService("light", DEFAULT_CONTENTS_PROTECTION_RATES);
+  const belongings = computeWorkAreaService("heavy", DEFAULT_BELONGINGS_CLEANUP_RATES);
+  const withContents = computeDecorativeWallPaneling(
+    {
+      ...FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE,
+      contentsHandlingLevel: "moderate",
+      contentsProtectionLevel: "light",
+      belongingsCleanupLevel: "heavy",
+    },
+    DEFAULT_DECORATIVE_WALL_PANELING_RATES,
+  );
+  check("Contents handling calculates from the selected business rate", handling.amount === 165);
+  check("Contents protection calculates from the selected business rate", protection.amount === 55);
+  check("Additional customer-belongings cleanup calculates from the selected business rate", belongings.amount === 165);
+  check(
+    "Selected work-area services add labor only when chosen",
+    withContents.recommendedAmount === 1800 + 165 + 55 + 165 &&
+      withContents.lines.find((line) => line.key === "contents-handling")?.amount === 165 &&
+      withContents.lines.find((line) => line.key === "contents-protection")?.amount === 55 &&
+      withContents.lines.find((line) => line.key === "belongings-cleanup")?.amount === 165,
+  );
+  check(
+    "Starter Work Area & Personal Property policy is configurable template text",
+    defaultWorkAreaPersonalPropertyPolicy().title === WORK_AREA_PERSONAL_PROPERTY_TITLE &&
+      DEFAULT_WORK_AREA_PERSONAL_PROPERTY_BODY.includes("reasonably clear") &&
+      DEFAULT_WORK_AREA_PERSONAL_PROPERTY_BODY.includes("does not guarantee a completely dust-free environment"),
   );
 
   const ownerUser = await prisma.user.create({
@@ -604,6 +702,15 @@ try {
     lightFixtureRate: 80,
     defaultTrimAllowance: 200,
     defaultCleanupAllowance: 80,
+    contentsHandlingLightRate: 90,
+    contentsHandlingModerateRate: 175,
+    contentsHandlingHeavyRate: 310,
+    contentsProtectionLightRate: 60,
+    contentsProtectionModerateRate: 120,
+    contentsProtectionHeavyRate: 210,
+    belongingsCleanupLightRate: 50,
+    belongingsCleanupModerateRate: 105,
+    belongingsCleanupHeavyRate: 180,
   };
   await persistDraftEstimateCalculatorRates(prisma, persistOwner, {
     estimateId: firstJob.estimate.id,
@@ -613,8 +720,18 @@ try {
       ...FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE,
       trimAllowance: 200,
       cleanupAllowance: 80,
+      contentsHandlingLevel: "heavy",
+      contentsProtectionLevel: "moderate",
+      belongingsCleanupLevel: "light",
       notes: "Do not persist these job notes",
     },
+    customerPolicies: [
+      {
+        id: "work-area-personal-property",
+        title: WORK_AREA_PERSONAL_PROPERTY_TITLE,
+        body: DEFAULT_WORK_AREA_PERSONAL_PROPERTY_BODY,
+      },
+    ],
   });
   const persistedCatalog = await prisma.serviceCatalogItem.findFirst({
     where: {
@@ -635,7 +752,10 @@ try {
       persistedDefinition?.rates.switchRate === 55 &&
       persistedDefinition?.rates.lightFixtureRate === 80 &&
       persistedDefinition?.rates.defaultTrimAllowance === 200 &&
-      persistedDefinition?.rates.defaultCleanupAllowance === 80,
+      persistedDefinition?.rates.defaultCleanupAllowance === 80 &&
+      persistedDefinition?.rates.contentsHandlingLightRate === 90 &&
+      persistedDefinition?.rates.contentsProtectionLightRate === 60 &&
+      persistedDefinition?.rates.belongingsCleanupLightRate === 50,
   );
   check(
     "Persisted business rates do not include job-specific quantities or notes",
@@ -667,7 +787,10 @@ try {
     futureSnapshot?.rates.panelRate === 105 &&
       futureSnapshot?.rates.windowRate === 120 &&
       futureSnapshot?.rates.defaultTrimAllowance === 200 &&
-      futureSnapshot?.rates.defaultCleanupAllowance === 80,
+      futureSnapshot?.rates.defaultCleanupAllowance === 80 &&
+      futureSnapshot?.rates.contentsHandlingLightRate === 90 &&
+      futureSnapshot?.rates.contentsProtectionLightRate === 60 &&
+      futureSnapshot?.rates.belongingsCleanupLightRate === 50,
   );
   check(
     "Future estimates do not carry forward prior job quantities",
@@ -679,6 +802,9 @@ try {
       futureSnapshot?.inputs.receptacles === 0 &&
       futureSnapshot?.inputs.switches === 0 &&
       futureSnapshot?.inputs.lightFixtures === 0 &&
+      futureSnapshot?.inputs.contentsHandlingLevel === "clear" &&
+      futureSnapshot?.inputs.contentsProtectionLevel === "none" &&
+      futureSnapshot?.inputs.belongingsCleanupLevel === "none" &&
       futureSnapshot?.inputs.notes === "",
   );
 
@@ -819,6 +945,99 @@ try {
     appliedWithNewRate.unitPrice.toString() !== "1800" &&
       lineCalculatorSnapshot(appliedWithNewRate.description)?.rates.panelRate === 125 &&
       afterApplyDefinition?.rates.panelRate === 125,
+  );
+  const appliedPolicies = lineCustomerPolicies(appliedWithNewRate.description);
+  check(
+    "Applying the calculator stamps Work Area & Personal Property terms on a DRAFT line",
+    appliedPolicies.length === 1 &&
+      appliedPolicies[0].title === WORK_AREA_PERSONAL_PROPERTY_TITLE &&
+      appliedPolicies[0].body.includes("reasonably clear") &&
+      appliedWithNewRate.description.includes(CUSTOMER_POLICY_MARKER) &&
+      !lineItemTitle(appliedWithNewRate.description).includes("TBBT Customer Policy") &&
+      !lineItemIncludedWork(appliedWithNewRate.description)?.includes("TBBT Customer Policy"),
+  );
+
+  const policyEstimate = await prisma.estimate.create({
+    data: {
+      businessId: persistBusiness.id,
+      total: new Prisma.Decimal(1800),
+      publicToken: randomUUID(),
+      status: "DRAFT",
+    },
+  });
+  const historicalLine = await prisma.lineItem.create({
+    data: {
+      businessId: persistBusiness.id,
+      estimateId: policyEstimate.id,
+      description: joinLineDescription(DECORATIVE_WALL_PANELING_TITLE, WALL_SCOPE),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(1800),
+      total: new Prisma.Decimal(1800),
+      type: "LABOR",
+    },
+  });
+  await persistDraftEstimateTotal(prisma, policyEstimate.id, persistBusiness.id);
+  const sentHistorical = await prisma.$transaction(async (tx) => {
+    await tx.estimate.updateMany({
+      where: { id: policyEstimate.id, businessId: persistBusiness.id, status: "DRAFT" },
+      data: { status: "SENT" },
+    });
+    return createEstimateVersionSnapshot(tx, {
+      estimateId: policyEstimate.id,
+      businessId: persistBusiness.id,
+    });
+  });
+  const sentHistoricalLine = await prisma.estimateVersionLineItem.findFirst({
+    where: { estimateVersionId: sentHistorical.id },
+  });
+  check(
+    "Historical SENT estimates without policy wording stay unchanged",
+    sentHistoricalLine.description ===
+      joinLineDescription(DECORATIVE_WALL_PANELING_TITLE, WALL_SCOPE) &&
+      !sentHistoricalLine.description.includes(CUSTOMER_POLICY_MARKER) &&
+      lineCustomerPolicies(sentHistoricalLine.description).length === 0,
+  );
+
+  const sentApplied = await prisma.$transaction(async (tx) => {
+    await tx.estimate.updateMany({
+      where: { id: applyEdited.estimate.id, businessId: persistBusiness.id, status: "DRAFT" },
+      data: { status: "SENT" },
+    });
+    return createEstimateVersionSnapshot(tx, {
+      estimateId: applyEdited.estimate.id,
+      businessId: persistBusiness.id,
+    });
+  });
+  const sentAppliedLine = await prisma.estimateVersionLineItem.findFirst({
+    where: { estimateVersionId: sentApplied.id },
+  });
+  check(
+    "SENT version snapshot preserves the applicable Work Area & Personal Property wording",
+    lineCustomerPolicies(sentAppliedLine.description)[0]?.body ===
+      appliedPolicies[0].body &&
+      lineItemTitle(sentAppliedLine.description) === DECORATIVE_WALL_PANELING_TITLE,
+  );
+
+  await persistDraftEstimateCalculatorRates(prisma, persistOwner, {
+    estimateId: firstJob.estimate.id,
+    lineItemId: firstJob.line.id,
+    rates: savedRates,
+    customerPolicies: [
+      {
+        id: "work-area-personal-property",
+        title: WORK_AREA_PERSONAL_PROPERTY_TITLE,
+        body: `${DEFAULT_WORK_AREA_PERSONAL_PROPERTY_BODY}\n\nUpdated later.`,
+      },
+    ],
+  });
+  const sentAppliedReread = await prisma.estimateVersionLineItem.findFirst({
+    where: { id: sentAppliedLine.id },
+  });
+  check(
+    "Later business policy edits do not rewrite a SENT snapshot",
+    lineCustomerPolicies(sentAppliedReread.description)[0]?.body ===
+      appliedPolicies[0].body &&
+      !lineCustomerPolicies(sentAppliedReread.description)[0]?.body.includes("Updated later."),
   );
 
   await expectError(

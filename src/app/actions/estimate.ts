@@ -499,6 +499,12 @@ export async function applyEstimateCalculator(
         lightFixtures: readString(formData, "lightFixtures"),
         trimAllowance: readString(formData, "trimAllowance"),
         cleanupAllowance: readString(formData, "cleanupAllowance"),
+        contentsHandlingLevel: readString(formData, "contentsHandlingLevel"),
+        contentsHandlingCustomAmount: readString(formData, "contentsHandlingCustomAmount"),
+        contentsProtectionLevel: readString(formData, "contentsProtectionLevel"),
+        contentsProtectionCustomAmount: readString(formData, "contentsProtectionCustomAmount"),
+        belongingsCleanupLevel: readString(formData, "belongingsCleanupLevel"),
+        belongingsCleanupCustomAmount: readString(formData, "belongingsCleanupCustomAmount"),
         notes: readString(formData, "notes"),
       },
       rates: {
@@ -512,7 +518,23 @@ export async function applyEstimateCalculator(
         lightFixtureRate: readString(formData, "lightFixtureRate"),
         defaultTrimAllowance: readString(formData, "defaultTrimAllowance"),
         defaultCleanupAllowance: readString(formData, "defaultCleanupAllowance"),
+        contentsHandlingLightRate: readString(formData, "contentsHandlingLightRate"),
+        contentsHandlingModerateRate: readString(formData, "contentsHandlingModerateRate"),
+        contentsHandlingHeavyRate: readString(formData, "contentsHandlingHeavyRate"),
+        contentsProtectionLightRate: readString(formData, "contentsProtectionLightRate"),
+        contentsProtectionModerateRate: readString(formData, "contentsProtectionModerateRate"),
+        contentsProtectionHeavyRate: readString(formData, "contentsProtectionHeavyRate"),
+        belongingsCleanupLightRate: readString(formData, "belongingsCleanupLightRate"),
+        belongingsCleanupModerateRate: readString(formData, "belongingsCleanupModerateRate"),
+        belongingsCleanupHeavyRate: readString(formData, "belongingsCleanupHeavyRate"),
       },
+      customerPolicies: [
+        {
+          id: readString(formData, "customerPolicyId") || "work-area-personal-property",
+          title: readString(formData, "customerPolicyTitle") || "Work Area & Personal Property",
+          body: readString(formData, "customerPolicyBody"),
+        },
+      ].filter((policy) => policy.body),
     });
     revalidatePath(`/estimates/${estimateId}`);
     return { message: "Recommended labor price applied." };
@@ -541,7 +563,27 @@ export async function persistEstimateCalculatorRates(
         lightFixtureRate: readString(formData, "lightFixtureRate"),
         defaultTrimAllowance: readString(formData, "defaultTrimAllowance"),
         defaultCleanupAllowance: readString(formData, "defaultCleanupAllowance"),
+        contentsHandlingLightRate: readString(formData, "contentsHandlingLightRate"),
+        contentsHandlingModerateRate: readString(formData, "contentsHandlingModerateRate"),
+        contentsHandlingHeavyRate: readString(formData, "contentsHandlingHeavyRate"),
+        contentsProtectionLightRate: readString(formData, "contentsProtectionLightRate"),
+        contentsProtectionModerateRate: readString(formData, "contentsProtectionModerateRate"),
+        contentsProtectionHeavyRate: readString(formData, "contentsProtectionHeavyRate"),
+        belongingsCleanupLightRate: readString(formData, "belongingsCleanupLightRate"),
+        belongingsCleanupModerateRate: readString(formData, "belongingsCleanupModerateRate"),
+        belongingsCleanupHeavyRate: readString(formData, "belongingsCleanupHeavyRate"),
       },
+      customerPolicies: readString(formData, "customerPolicyBody")
+        ? [
+            {
+              id: readString(formData, "customerPolicyId") || "work-area-personal-property",
+              title:
+                readString(formData, "customerPolicyTitle") ||
+                "Work Area & Personal Property",
+              body: readString(formData, "customerPolicyBody"),
+            },
+          ]
+        : null,
     });
     return { message: "Calculator rates saved as the business default." };
   } catch (error) {

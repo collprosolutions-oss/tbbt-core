@@ -14,6 +14,7 @@ import {
   EditLineIncludedWorkForm,
   SaveLineForReuseForm,
 } from "@/components/estimates/draft-line-scope-forms";
+import { EstimateCustomerPolicies } from "@/components/estimates/customer-policy-display";
 import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
 import { OverrideLinePriceForm } from "@/components/estimates/override-line-price-form";
 import { PriceRequiredLineForm } from "@/components/estimates/price-required-line-form";
@@ -50,6 +51,7 @@ import {
   catalogCalculatorDefinition,
   catalogScopeText,
   lineCalculatorSnapshot,
+  lineCustomerPolicies,
   lineItemIncludedWork,
   lineItemTitle,
 } from "@/lib/estimate-line-scope";
@@ -336,6 +338,7 @@ export default async function EstimateBuilderPage({
                         lineItemId={item.id}
                         inputs={formInputs}
                         rates={formRates}
+                        customerPolicy={lineCustomerPolicies(item.description)[0]}
                       />
                     ) : null}
                     {isDraft && calculatorId && item.unitPrice.gt(0) ? (
@@ -372,6 +375,10 @@ export default async function EstimateBuilderPage({
               })}
             </ul>
           )}
+          <EstimateCustomerPolicies
+            className="mt-4 space-y-3"
+            descriptions={estimate.lineItems.map((item) => item.description)}
+          />
           <div className="mt-4 space-y-1 text-sm">
             <p>Labor subtotal: {formatMoney(laborSubtotal)}</p>
             {materialSubtotal.gt(0) ? (

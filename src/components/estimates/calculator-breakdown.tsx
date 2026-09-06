@@ -22,8 +22,29 @@ export function CalculatorBreakdown({
       <ul className="mt-2 space-y-1 text-sm">
         {breakdown.lines.map((line) => (
           <li key={line.key} className="flex justify-between gap-3">
-            <span>{line.label}</span>
-            <span className="shrink-0 tabular-nums">{formatMoney(line.amount)}</span>
+            <span>
+              {line.label}
+              {line.rate > 0 ? (
+                <span className="block text-xs text-muted-foreground">
+                  Business rate {formatMoney(line.rate)}
+                  {line.key.startsWith("patio") ||
+                  line.key === "doors" ||
+                  line.key === "windows" ||
+                  line.key === "receptacles" ||
+                  line.key === "switches" ||
+                  line.key === "fixtures"
+                    ? ` · qty ${line.quantity}`
+                    : ""}
+                </span>
+              ) : null}
+            </span>
+            <span className="shrink-0 text-right tabular-nums">
+              {line.amountState === "waiting"
+                ? "Waiting for quantity"
+                : line.amountState === "not_entered"
+                  ? "—"
+                  : formatMoney(line.amount)}
+            </span>
           </li>
         ))}
       </ul>

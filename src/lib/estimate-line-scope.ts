@@ -8,14 +8,17 @@
  */
 import {
   isCalculatorId,
+  type CalculatorCustomerPolicy,
   type CalculatorDefinition,
   type CalculatorSnapshot,
 } from "@/lib/estimate-calculators/types";
+import { normalizeCustomerPolicies } from "@/lib/estimate-policies";
 
 export const MAX_INCLUDED_WORK_LENGTH = 8000;
 export const INCLUDED_WORK_MARKER = "\n\nScope / Included Work:\n";
 export const CALCULATOR_SNAPSHOT_MARKER = "\n\nTBBT Calculator Snapshot:\n";
 export const CALCULATOR_DEFINITION_MARKER = "\n\nTBBT Calculator Definition:\n";
+export const CUSTOMER_POLICY_MARKER = "\n\nTBBT Customer Policy:\n";
 
 export function normalizeIncludedWork(
   raw: string | null | undefined,
@@ -36,6 +39,7 @@ export function splitLineDescription(description: string | null | undefined): {
   title: string;
   includedWork: string | null;
   calculatorSnapshot: CalculatorSnapshot | null;
+  customerPolicies: CalculatorCustomerPolicy[];
 } {
   const raw = description ?? "";
   const snapshotIndex = raw.indexOf(CALCULATOR_SNAPSHOT_MARKER);
@@ -46,20 +50,31 @@ export function splitLineDescription(description: string | null | undefined): {
       : parseCalculatorSnapshot(
           raw.slice(snapshotIndex + CALCULATOR_SNAPSHOT_MARKER.length),
         );
-  const index = withoutSnapshot.indexOf(INCLUDED_WORK_MARKER);
+  const policyIndex = withoutSnapshot.indexOf(CUSTOMER_POLICY_MARKER);
+  const withoutPolicy =
+    policyIndex === -1 ? withoutSnapshot : withoutSnapshot.slice(0, policyIndex);
+  const customerPolicies =
+    policyIndex === -1
+      ? []
+      : parseCustomerPolicies(
+          withoutSnapshot.slice(policyIndex + CUSTOMER_POLICY_MARKER.length),
+        );
+  const index = withoutPolicy.indexOf(INCLUDED_WORK_MARKER);
   if (index === -1) {
     return {
-      title: withoutSnapshot,
+      title: withoutPolicy,
       includedWork: null,
       calculatorSnapshot,
+      customerPolicies,
     };
   }
   return {
-    title: withoutSnapshot.slice(0, index),
+    title: withoutPolicy.slice(0, index),
     includedWork: normalizeIncludedWork(
-      withoutSnapshot.slice(index + INCLUDED_WORK_MARKER.length),
+      withoutPolicy.slice(index + INCLUDED_WORK_MARKER.length),
     ),
     calculatorSnapshot,
+    customerPolicies,
   };
 }
 
@@ -79,19 +94,30 @@ export function lineCalculatorSnapshot(
   return splitLineDescription(description).calculatorSnapshot;
 }
 
+export function lineCustomerPolicies(
+  description: string | null | undefined,
+): CalculatorCustomerPolicy[] {
+  return splitLineDescription(description).customerPolicies;
+}
+
 export function joinLineDescription(
   title: string,
   includedWork?: string | null,
   calculatorSnapshot?: CalculatorSnapshot | null,
+  customerPolicies?: CalculatorCustomerPolicy[] | null,
 ): string {
   const cleanTitle = splitLineDescription(title).title;
   const scope = normalizeIncludedWork(includedWork);
+  const policies = normalizeCustomerPolicies(customerPolicies);
   const snapshot = calculatorSnapshot
     ? serializeCalculatorSnapshot(calculatorSnapshot)
     : null;
   let next = cleanTitle;
   if (scope) {
     next = `${next}${INCLUDED_WORK_MARKER}${scope}`;
+  }
+  if (policies.length > 0) {
+    next = `${next}${CUSTOMER_POLICY_MARKER}${JSON.stringify(policies)}`;
   }
   if (snapshot) {
     next = `${next}${CALCULATOR_SNAPSHOT_MARKER}${snapshot}`;
@@ -155,9 +181,14 @@ export function stripCalculatorEncoding(raw: string) {
   const snapshotIndex = raw.indexOf(CALCULATOR_SNAPSHOT_MARKER);
   const withoutSnapshot = snapshotIndex === -1 ? raw : raw.slice(0, snapshotIndex);
   const definitionIndex = withoutSnapshot.indexOf(CALCULATOR_DEFINITION_MARKER);
-  return definitionIndex === -1
-    ? withoutSnapshot
-    : withoutSnapshot.slice(0, definitionIndex);
+  const withoutDefinition =
+    definitionIndex === -1
+      ? withoutSnapshot
+      : withoutSnapshot.slice(0, definitionIndex);
+  const policyIndex = withoutDefinition.indexOf(CUSTOMER_POLICY_MARKER);
+  return policyIndex === -1
+    ? withoutDefinition
+    : withoutDefinition.slice(0, policyIndex);
 }
 
 function parseCalculatorSnapshot(raw: string): CalculatorSnapshot | null {
@@ -200,6 +231,7 @@ function parseCalculatorDefinition(raw: string): CalculatorDefinition | null {
       parsed.rates && typeof parsed.rates === "object" && !Array.isArray(parsed.rates)
         ? (parsed.rates as Record<string, unknown>)
         : {},
+    customerPolicies: normalizeCustomerPolicies(parsed.customerPolicies),
   };
 }
 
@@ -216,10 +248,20 @@ function serializeCalculatorSnapshot(snapshot: CalculatorSnapshot) {
 }
 
 function serializeCalculatorDefinition(definition: CalculatorDefinition) {
+  const customerPolicies = normalizeCustomerPolicies(definition.customerPolicies);
   return JSON.stringify({
     calculatorId: definition.calculatorId,
     rates: definition.rates,
+    ...(customerPolicies.length > 0 ? { customerPolicies } : {}),
   });
+}
+
+function parseCustomerPolicies(raw: string): CalculatorCustomerPolicy[] {
+  try {
+    return normalizeCustomerPolicies(JSON.parse(raw.trim()));
+  } catch {
+    return [];
+  }
 }
 
 function parseJsonObject(raw: string): Record<string, unknown> | null {

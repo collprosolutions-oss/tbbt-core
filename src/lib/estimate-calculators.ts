@@ -18,6 +18,19 @@ export type {
   DecorativeWallPanelingRates,
   RemovalType,
 } from "@/lib/estimate-calculators/decorative-wall-paneling";
+export { clampCount, parseTypedCount, stepCount } from "@/lib/estimate-calculators/count-input";
+export {
+  BELONGINGS_CLEANUP_LEVELS,
+  CONTENTS_PROTECTION_LEVELS,
+  DEFAULT_BELONGINGS_CLEANUP_RATES,
+  DEFAULT_CONTENTS_HANDLING_RATES,
+  DEFAULT_CONTENTS_PROTECTION_RATES,
+  WORK_AREA_HANDLING_LEVELS,
+  belongingsCleanupLabel,
+  computeWorkAreaService,
+  contentsProtectionLabel,
+  workAreaHandlingLabel,
+} from "@/lib/estimate-calculators/work-area-services";
 export {
   JOB_SPECIFIC_CALCULATOR_INPUT_KEYS,
   calculatorRatesEqual,
@@ -37,7 +50,9 @@ export {
 } from "@/lib/estimate-calculators/registry";
 export { isCalculatorId, roundMoney } from "@/lib/estimate-calculators/types";
 export type {
+  CalculatorAmountState,
   CalculatorBreakdownLine,
+  CalculatorCustomerPolicy,
   CalculatorDefinition,
   CalculatorId,
   CalculatorResult,

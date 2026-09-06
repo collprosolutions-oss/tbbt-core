@@ -10,12 +10,25 @@ export const CALCULATOR_IDS = ["decorative-wall-paneling"] as const;
 
 export type CalculatorId = (typeof CALCULATOR_IDS)[number];
 
+export type CalculatorAmountState =
+  | "ready"
+  | "waiting"
+  | "not_entered"
+  | "zero_selected";
+
 export type CalculatorBreakdownLine = {
   key: string;
   label: string;
   quantity: number;
   rate: number;
   amount: number;
+  amountState?: CalculatorAmountState;
+};
+
+export type CalculatorCustomerPolicy = {
+  id: string;
+  title: string;
+  body: string;
 };
 
 export type CalculatorResult = {
@@ -36,6 +49,7 @@ export type CalculatorSnapshot = {
 export type CalculatorDefinition = {
   calculatorId: CalculatorId;
   rates: Record<string, unknown>;
+  customerPolicies?: CalculatorCustomerPolicy[];
 };
 
 export function isCalculatorId(value: unknown): value is CalculatorId {

@@ -36,6 +36,7 @@ import {
   isUnpricedCustomQuoteDraftLine,
   pricedCustomQuoteDescription,
 } from "@/lib/request-estimate-draft";
+import { resolveCustomerPolicies } from "@/lib/estimate-policies";
 import { DEFAULT_SERVICE_CATEGORY } from "@/lib/service-catalog-category";
 
 type Db = PrismaClient;
@@ -138,6 +139,9 @@ export async function addCatalogItemToDraftEstimate(
             title: catalogItem.name,
             definition: calculatorDefinition,
           }),
+          calculatorDefinition
+            ? resolveCustomerPolicies(calculatorDefinition.customerPolicies)
+            : null,
         ),
         quantity: input.quantity,
         unitPrice,
@@ -265,6 +269,7 @@ export async function updateDraftEstimateLineIncludedWork(
         parts.title,
         input.includedWork,
         parts.calculatorSnapshot,
+        parts.customerPolicies,
       ),
     },
   });
@@ -319,10 +324,18 @@ export async function saveDraftEstimateLineAsCatalog(
   }
 
   const includedWork = lineItemIncludedWork(line.description);
+  const lineParts = splitLineDescription(line.description);
   const calculatorDefinition = catalogDefinitionFromSnapshot(
-    lineCalculatorSnapshot(line.description),
+    lineParts.calculatorSnapshot,
     name,
   );
+  if (calculatorDefinition) {
+    calculatorDefinition.customerPolicies = resolveCustomerPolicies(
+      lineParts.customerPolicies.length > 0
+        ? lineParts.customerPolicies
+        : calculatorDefinition.customerPolicies,
+    );
+  }
   const linkedCatalog = line.serviceCatalogItemId
     ? await db.serviceCatalogItem.findFirst({
         where: { id: line.serviceCatalogItemId, ...access.scope },
@@ -386,6 +399,7 @@ export async function applyDraftEstimateCalculator(
     lineItemId: string;
     inputs: Record<string, unknown>;
     rates?: Record<string, unknown>;
+    customerPolicies?: Array<{ id: string; title: string; body: string }> | null;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
@@ -443,8 +457,12 @@ export async function applyDraftEstimateCalculator(
   }
   const unitPrice = new Prisma.Decimal(result.recommendedAmount.toFixed(2));
   const total = line.quantity.mul(unitPrice);
+  const customerPolicies = resolveCustomerPolicies(
+    input.customerPolicies ??
+      (parts.customerPolicies.length > 0 ? parts.customerPolicies : null),
+  );
   const description = pricedCustomQuoteDescription(
-    joinLineDescription(parts.title, parts.includedWork, snapshot),
+    joinLineDescription(parts.title, parts.includedWork, snapshot, customerPolicies),
   );
   const nextRates = persistableCalculatorRates(
     calculatorId,
@@ -499,6 +517,7 @@ export async function persistDraftEstimateCalculatorRates(
     lineItemId: string;
     rates: Record<string, unknown>;
     inputs?: Record<string, unknown>;
+    customerPolicies?: Array<{ id: string; title: string; body: string }> | null;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
@@ -539,6 +558,7 @@ export async function persistDraftEstimateCalculatorRates(
     title: customQuoteDisplayDescription(parts.title),
     includedWork: parts.includedWork,
     rates,
+    customerPolicies: input.customerPolicies,
     lineItemId: line.id,
   });
 
@@ -562,16 +582,12 @@ async function writeBusinessCalculatorRates(
     title: string;
     includedWork?: string | null;
     rates: Record<string, unknown>;
+    customerPolicies?: Array<{ id: string; title: string; body: string }> | null;
     lineItemId: string;
   },
 ) {
   const calculatorId = input.calculatorId;
   if (!calculatorId) return;
-
-  const definition = {
-    calculatorId,
-    rates: persistableCalculatorRates(calculatorId, input.rates),
-  };
   const name = input.title.trim() || calculatorTitle(calculatorId);
 
   const linked = input.catalogItemId
@@ -614,6 +630,14 @@ async function writeBusinessCalculatorRates(
   }
 
   const existing = named ?? marked;
+  const existingDefinition = catalogCalculatorDefinition(existing?.description);
+  const definition = {
+    calculatorId,
+    rates: persistableCalculatorRates(calculatorId, input.rates),
+    customerPolicies: resolveCustomerPolicies(
+      input.customerPolicies ?? existingDefinition?.customerPolicies,
+    ),
+  };
   const catalog = existing
     ? await db.serviceCatalogItem.update({
         where: { id: existing.id },
@@ -693,7 +717,12 @@ export async function overrideDraftEstimateLinePrice(
       }
     : parts.calculatorSnapshot;
   const description = pricedCustomQuoteDescription(
-    joinLineDescription(parts.title, parts.includedWork, snapshot),
+    joinLineDescription(
+      parts.title,
+      parts.includedWork,
+      snapshot,
+      parts.customerPolicies,
+    ),
   );
   const total = line.quantity.mul(unitPrice);
 

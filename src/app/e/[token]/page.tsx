@@ -7,6 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { EstimateCustomerPolicies } from "@/components/estimates/customer-policy-display";
 import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
 import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { formatAddress, formatMoney } from "@/lib/format";
@@ -144,6 +145,9 @@ export default async function PublicEstimatePage({
               ))}
             </ul>
           )}
+          <EstimateCustomerPolicies
+            descriptions={lineItems.map((item) => item.description)}
+          />
           {laborMinimumAdjustment.gt(0) ? (
             <p className="text-sm">
               Labor Minimum Service Fee Adjustment —{" "}

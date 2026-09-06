@@ -1,8 +1,25 @@
+import { clampCount } from "@/lib/estimate-calculators/count-input";
 import {
   roundMoney,
+  type CalculatorAmountState,
   type CalculatorBreakdownLine,
   type CalculatorResult,
 } from "@/lib/estimate-calculators/types";
+import {
+  DEFAULT_BELONGINGS_CLEANUP_RATES,
+  DEFAULT_CONTENTS_HANDLING_RATES,
+  DEFAULT_CONTENTS_PROTECTION_RATES,
+  belongingsCleanupLabel,
+  computeWorkAreaService,
+  contentsProtectionLabel,
+  isBelongingsCleanupLevel,
+  isContentsProtectionLevel,
+  isWorkAreaHandlingLevel,
+  workAreaHandlingLabel,
+  type BelongingsCleanupLevel,
+  type ContentsProtectionLevel,
+  type WorkAreaHandlingLevel,
+} from "@/lib/estimate-calculators/work-area-services";
 
 export const DECORATIVE_WALL_PANELING_CALCULATOR_ID =
   "decorative-wall-paneling" as const;
@@ -32,6 +49,15 @@ export type DecorativeWallPanelingRates = {
   lightFixtureRate: number;
   defaultTrimAllowance: number;
   defaultCleanupAllowance: number;
+  contentsHandlingLightRate: number;
+  contentsHandlingModerateRate: number;
+  contentsHandlingHeavyRate: number;
+  contentsProtectionLightRate: number;
+  contentsProtectionModerateRate: number;
+  contentsProtectionHeavyRate: number;
+  belongingsCleanupLightRate: number;
+  belongingsCleanupModerateRate: number;
+  belongingsCleanupHeavyRate: number;
 };
 
 export type DecorativeWallPanelingInputs = {
@@ -47,6 +73,12 @@ export type DecorativeWallPanelingInputs = {
   lightFixtures: number;
   trimAllowance: number;
   cleanupAllowance: number;
+  contentsHandlingLevel: WorkAreaHandlingLevel;
+  contentsHandlingCustomAmount: number;
+  contentsProtectionLevel: ContentsProtectionLevel;
+  contentsProtectionCustomAmount: number;
+  belongingsCleanupLevel: BelongingsCleanupLevel;
+  belongingsCleanupCustomAmount: number;
   notes: string;
 };
 
@@ -62,6 +94,15 @@ export const DEFAULT_DECORATIVE_WALL_PANELING_RATES: DecorativeWallPanelingRates
     lightFixtureRate: 75,
     defaultTrimAllowance: 180,
     defaultCleanupAllowance: 75,
+    contentsHandlingLightRate: DEFAULT_CONTENTS_HANDLING_RATES.light,
+    contentsHandlingModerateRate: DEFAULT_CONTENTS_HANDLING_RATES.moderate,
+    contentsHandlingHeavyRate: DEFAULT_CONTENTS_HANDLING_RATES.heavy,
+    contentsProtectionLightRate: DEFAULT_CONTENTS_PROTECTION_RATES.light,
+    contentsProtectionModerateRate: DEFAULT_CONTENTS_PROTECTION_RATES.moderate,
+    contentsProtectionHeavyRate: DEFAULT_CONTENTS_PROTECTION_RATES.heavy,
+    belongingsCleanupLightRate: DEFAULT_BELONGINGS_CLEANUP_RATES.light,
+    belongingsCleanupModerateRate: DEFAULT_BELONGINGS_CLEANUP_RATES.moderate,
+    belongingsCleanupHeavyRate: DEFAULT_BELONGINGS_CLEANUP_RATES.heavy,
   };
 
 export const FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE: DecorativeWallPanelingInputs =
@@ -78,6 +119,12 @@ export const FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE: DecorativeWallPanelingInp
     lightFixtures: 1,
     trimAllowance: 180,
     cleanupAllowance: 75,
+    contentsHandlingLevel: "clear",
+    contentsHandlingCustomAmount: 0,
+    contentsProtectionLevel: "none",
+    contentsProtectionCustomAmount: 0,
+    belongingsCleanupLevel: "none",
+    belongingsCleanupCustomAmount: 0,
     notes: "",
   };
 
@@ -97,6 +144,12 @@ export function emptyDecorativeWallPanelingInputs(
     lightFixtures: 0,
     trimAllowance: rates.defaultTrimAllowance,
     cleanupAllowance: rates.defaultCleanupAllowance,
+    contentsHandlingLevel: "clear",
+    contentsHandlingCustomAmount: 0,
+    contentsProtectionLevel: "none",
+    contentsProtectionCustomAmount: 0,
+    belongingsCleanupLevel: "none",
+    belongingsCleanupCustomAmount: 0,
     notes: "",
   };
 }
@@ -126,6 +179,42 @@ export function normalizeDecorativeWallPanelingRates(
       raw?.defaultCleanupAllowance,
       defaults.defaultCleanupAllowance,
     ),
+    contentsHandlingLightRate: moneyOr(
+      raw?.contentsHandlingLightRate,
+      defaults.contentsHandlingLightRate,
+    ),
+    contentsHandlingModerateRate: moneyOr(
+      raw?.contentsHandlingModerateRate,
+      defaults.contentsHandlingModerateRate,
+    ),
+    contentsHandlingHeavyRate: moneyOr(
+      raw?.contentsHandlingHeavyRate,
+      defaults.contentsHandlingHeavyRate,
+    ),
+    contentsProtectionLightRate: moneyOr(
+      raw?.contentsProtectionLightRate,
+      defaults.contentsProtectionLightRate,
+    ),
+    contentsProtectionModerateRate: moneyOr(
+      raw?.contentsProtectionModerateRate,
+      defaults.contentsProtectionModerateRate,
+    ),
+    contentsProtectionHeavyRate: moneyOr(
+      raw?.contentsProtectionHeavyRate,
+      defaults.contentsProtectionHeavyRate,
+    ),
+    belongingsCleanupLightRate: moneyOr(
+      raw?.belongingsCleanupLightRate,
+      defaults.belongingsCleanupLightRate,
+    ),
+    belongingsCleanupModerateRate: moneyOr(
+      raw?.belongingsCleanupModerateRate,
+      defaults.belongingsCleanupModerateRate,
+    ),
+    belongingsCleanupHeavyRate: moneyOr(
+      raw?.belongingsCleanupHeavyRate,
+      defaults.belongingsCleanupHeavyRate,
+    ),
   };
 }
 
@@ -151,6 +240,27 @@ export function normalizeDecorativeWallPanelingInputs(
     lightFixtures: countOr(raw?.lightFixtures, empty.lightFixtures),
     trimAllowance: moneyOr(raw?.trimAllowance, rates.defaultTrimAllowance),
     cleanupAllowance: moneyOr(raw?.cleanupAllowance, rates.defaultCleanupAllowance),
+    contentsHandlingLevel: isWorkAreaHandlingLevel(raw?.contentsHandlingLevel)
+      ? raw.contentsHandlingLevel
+      : empty.contentsHandlingLevel,
+    contentsHandlingCustomAmount: moneyOr(
+      raw?.contentsHandlingCustomAmount,
+      empty.contentsHandlingCustomAmount,
+    ),
+    contentsProtectionLevel: isContentsProtectionLevel(raw?.contentsProtectionLevel)
+      ? raw.contentsProtectionLevel
+      : empty.contentsProtectionLevel,
+    contentsProtectionCustomAmount: moneyOr(
+      raw?.contentsProtectionCustomAmount,
+      empty.contentsProtectionCustomAmount,
+    ),
+    belongingsCleanupLevel: isBelongingsCleanupLevel(raw?.belongingsCleanupLevel)
+      ? raw.belongingsCleanupLevel
+      : empty.belongingsCleanupLevel,
+    belongingsCleanupCustomAmount: moneyOr(
+      raw?.belongingsCleanupCustomAmount,
+      empty.belongingsCleanupCustomAmount,
+    ),
     notes: typeof raw?.notes === "string" ? raw.notes.trim() : "",
   };
 }
@@ -179,22 +289,84 @@ export function computeDecorativeWallPaneling(
       : suggestedPanelEquivalents(inputs.wallWidthFt, inputs.wallHeightFt);
   const removalQty = inputs.removalType === "none" ? 0 : area;
 
+  const handling = computeWorkAreaService(
+    inputs.contentsHandlingLevel,
+    {
+      light: rates.contentsHandlingLightRate,
+      moderate: rates.contentsHandlingModerateRate,
+      heavy: rates.contentsHandlingHeavyRate,
+    },
+    inputs.contentsHandlingCustomAmount,
+  );
+  const protection = computeWorkAreaService(
+    inputs.contentsProtectionLevel,
+    {
+      light: rates.contentsProtectionLightRate,
+      moderate: rates.contentsProtectionModerateRate,
+      heavy: rates.contentsProtectionHeavyRate,
+    },
+    inputs.contentsProtectionCustomAmount,
+  );
+  const belongings = computeWorkAreaService(
+    inputs.belongingsCleanupLevel,
+    {
+      light: rates.belongingsCleanupLightRate,
+      moderate: rates.belongingsCleanupModerateRate,
+      heavy: rates.belongingsCleanupHeavyRate,
+    },
+    inputs.belongingsCleanupCustomAmount,
+  );
+  const areaEntered = inputs.wallWidthFt > 0 && inputs.wallHeightFt > 0;
+  const manualPanels = inputs.panelQuantity != null && inputs.panelQuantity > 0;
+
   const lines: CalculatorBreakdownLine[] = [
-    line("panels", `${panels} panel-equivalent${panels === 1 ? "" : "s"}`, panels, rates.panelRate),
+    line(
+      "panels",
+      `${panels} panel-equivalent${panels === 1 ? "" : "s"}`,
+      panels,
+      rates.panelRate,
+      areaEntered || manualPanels ? "ready" : "waiting",
+    ),
     line(
       "removal",
       removalLabel(inputs.removalType),
       removalQty,
       inputs.removalType === "none" ? 0 : rates.removalRatePerSqFt,
+      inputs.removalType === "none"
+        ? "zero_selected"
+        : areaEntered
+          ? "ready"
+          : "waiting",
     ),
-    line("patio-doors", "Sliding/patio door openings", inputs.slidingPatioDoors, rates.slidingPatioDoorRate),
-    line("doors", "Standard door openings", inputs.standardDoors, rates.standardDoorRate),
-    line("windows", "Window openings", inputs.windows, rates.windowRate),
-    line("receptacles", "Receptacles / outlets", inputs.receptacles, rates.receptacleRate),
-    line("switches", "Switches", inputs.switches, rates.switchRate),
-    line("fixtures", "Light fixtures", inputs.lightFixtures, rates.lightFixtureRate),
-    line("trim", "Finish trim / transitions allowance", 1, inputs.trimAllowance),
-    line("cleanup", "Cleanup / debris handling allowance", 1, inputs.cleanupAllowance),
+    counted("patio-doors", "Sliding/patio door openings", inputs.slidingPatioDoors, rates.slidingPatioDoorRate),
+    counted("doors", "Standard door openings", inputs.standardDoors, rates.standardDoorRate),
+    counted("windows", "Window openings", inputs.windows, rates.windowRate),
+    counted("receptacles", "Receptacles / outlets", inputs.receptacles, rates.receptacleRate),
+    counted("switches", "Switches", inputs.switches, rates.switchRate),
+    counted("fixtures", "Light fixtures", inputs.lightFixtures, rates.lightFixtureRate),
+    line("trim", "Finish trim / transitions allowance", 1, inputs.trimAllowance, "ready"),
+    line("cleanup", "Construction cleanup / debris handling", 1, inputs.cleanupAllowance, "ready"),
+    line(
+      "contents-handling",
+      workAreaHandlingLabel(inputs.contentsHandlingLevel),
+      handling.quantity,
+      handling.rate,
+      handling.explicitZero ? "zero_selected" : "ready",
+    ),
+    line(
+      "contents-protection",
+      contentsProtectionLabel(inputs.contentsProtectionLevel),
+      protection.quantity,
+      protection.rate,
+      protection.explicitZero ? "zero_selected" : "ready",
+    ),
+    line(
+      "belongings-cleanup",
+      belongingsCleanupLabel(inputs.belongingsCleanupLevel),
+      belongings.quantity,
+      belongings.rate,
+      belongings.explicitZero ? "zero_selected" : "ready",
+    ),
   ];
 
   return {
@@ -203,11 +375,21 @@ export function computeDecorativeWallPaneling(
   };
 }
 
+function counted(
+  key: string,
+  label: string,
+  quantity: number,
+  rate: number,
+): CalculatorBreakdownLine {
+  return line(key, label, quantity, rate, quantity > 0 ? "ready" : "not_entered");
+}
+
 function line(
   key: string,
   label: string,
   quantity: number,
   rate: number,
+  amountState: CalculatorAmountState = "ready",
 ): CalculatorBreakdownLine {
   return {
     key,
@@ -215,6 +397,7 @@ function line(
     quantity,
     rate,
     amount: roundMoney(quantity * rate),
+    amountState,
   };
 }
 
@@ -231,7 +414,8 @@ function numberOr(value: unknown, fallback: number) {
 }
 
 function countOr(value: unknown, fallback: number) {
-  return Math.max(0, Math.floor(numberOr(value, fallback)));
+  if (value == null || value === "") return fallback;
+  return clampCount(value, 0);
 }
 
 function moneyOr(value: unknown, fallback: number) {
