@@ -1,3 +1,7 @@
+/** One scheduled work day matches the existing Full day preset. */
+export const WORK_DAY_MINUTES = 480;
+export const CUSTOM_DURATION_MAX_HOURS = 240;
+
 export const DURATION_PRESETS = [
   { value: "30", minutes: 30, label: "30 minutes" },
   { value: "60", minutes: 60, label: "1 hour" },
@@ -6,15 +10,26 @@ export const DURATION_PRESETS = [
   { value: "180", minutes: 180, label: "3 hours" },
   { value: "240", minutes: 240, label: "4 hours" },
   { value: "half", minutes: 240, label: "Half day" },
-  { value: "full", minutes: 480, label: "Full day" },
+  { value: "full", minutes: WORK_DAY_MINUTES, label: "Full day" },
+  { value: "1d", minutes: WORK_DAY_MINUTES, label: "1 day" },
+  { value: "2d", minutes: WORK_DAY_MINUTES * 2, label: "2 days" },
+  { value: "3d", minutes: WORK_DAY_MINUTES * 3, label: "3 days" },
+  { value: "4d", minutes: WORK_DAY_MINUTES * 4, label: "4 days" },
+  { value: "5d", minutes: WORK_DAY_MINUTES * 5, label: "5 days" },
 ] as const;
+
+function isAliasDurationValue(value: string) {
+  return value === "half" || value === "1d";
+}
 
 export function durationPresetForMinutes(minutes: number | null | undefined) {
   if (minutes == null) {
     return "";
   }
-  const preset = DURATION_PRESETS.find((item) => item.minutes === minutes);
-  if (preset && preset.value !== "half") {
+  const preset = DURATION_PRESETS.find(
+    (item) => item.minutes === minutes && !isAliasDurationValue(item.value),
+  );
+  if (preset) {
     return preset.value;
   }
   return "custom";
@@ -30,10 +45,15 @@ export function parseDurationMinutes(
 
   if (preset === "custom") {
     const hours = Number(customHours);
-    if (!customHours.trim() || Number.isNaN(hours) || hours <= 0 || hours > 24) {
+    if (
+      !customHours.trim() ||
+      Number.isNaN(hours) ||
+      hours <= 0 ||
+      hours > CUSTOM_DURATION_MAX_HOURS
+    ) {
       return {
         ok: false,
-        error: "Enter a custom duration between 0 and 24 hours.",
+        error: `Enter a custom duration between 0 and ${CUSTOM_DURATION_MAX_HOURS} hours.`,
       };
     }
     return { ok: true, minutes: Math.round(hours * 60) };
@@ -78,7 +98,7 @@ export function schedulesOverlap(
 
 export function formatDurationMinutes(minutes: number) {
   const preset = DURATION_PRESETS.find(
-    (item) => item.minutes === minutes && item.value !== "half",
+    (item) => item.minutes === minutes && !isAliasDurationValue(item.value),
   );
   if (preset) {
     return preset.label;

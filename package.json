@@ -25,6 +25,8 @@
     "test:work-order-portal": "node --experimental-strip-types scripts/check-work-order-portal.mjs",
     "test:change-orders": "node --experimental-strip-types scripts/check-change-orders.mjs",
     "test:schedule-calendar": "node --experimental-strip-types scripts/check-schedule-calendar.mjs",
+    "test:job-schedule-duration": "node --experimental-strip-types scripts/check-job-schedule-duration.mjs",
+    "test:estimate-document": "node --experimental-strip-types scripts/check-estimate-document.mjs",
     "test:employee-field-workflow": "node --experimental-strip-types scripts/check-employee-field-workflow.mjs",
     "test:team-onboarding": "node --experimental-strip-types scripts/check-team-onboarding.mjs",
     "test:time-cards": "node --experimental-strip-types scripts/check-time-cards.mjs",

@@ -173,6 +173,12 @@ export default async function EstimateBuilderPage({
               /e/{estimate.publicToken}
             </Link>
           </p>
+          <Button asChild size="sm" variant="outline">
+            <Link href={`/estimates/${estimate.id}/print`}>Preview Estimate</Link>
+          </Button>
+          <Button asChild size="sm" variant="outline">
+            <a href={`/estimates/${estimate.id}/pdf`}>Download PDF</a>
+          </Button>
           {isSent || isApproved ? (
             <CopyEstimateLinkButton publicToken={estimate.publicToken} />
           ) : null}

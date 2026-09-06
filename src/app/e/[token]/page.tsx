@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { ApproveEstimateButton } from "@/components/estimates/approve-estimate-button";
 import { CustomerEstimateHeader } from "@/components/estimates/customer-estimate-header";
 import { EstimateCustomerPolicies } from "@/components/estimates/customer-policy-display";
 import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -194,6 +196,9 @@ export default async function PublicEstimatePage({
               <p className="text-2xl font-semibold tracking-tight">
                 {formatMoney(total)}
               </p>
+              <Button asChild variant="outline" className="w-full">
+                <Link href={`/e/${estimate.publicToken}/print`}>Print / PDF</Link>
+              </Button>
               <ApproveEstimateButton
                 publicToken={estimate.publicToken}
                 status={estimate.status}
@@ -218,7 +223,10 @@ export default async function PublicEstimatePage({
               <CardTitle>Approve this estimate</CardTitle>
               <CardDescription>Total {formatMoney(total)}</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
+              <Button asChild variant="outline" className="w-full">
+                <Link href={`/e/${estimate.publicToken}/print`}>Print / PDF</Link>
+              </Button>
               <ApproveEstimateButton
                 publicToken={estimate.publicToken}
                 status={estimate.status}

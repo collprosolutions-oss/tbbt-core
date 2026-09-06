@@ -28,6 +28,8 @@ const page = readRepo("src/app/e/[token]/page.tsx");
 const header = readRepo("src/components/estimates/customer-estimate-header.tsx");
 const approve = readRepo("src/components/estimates/approve-estimate-button.tsx");
 const branding = readRepo("src/lib/business-branding.ts");
+const printPage = readRepo("src/app/(invoice-document)/e/[token]/print/page.tsx");
+const estimateDocument = readRepo("src/components/estimates/estimate-document.tsx");
 
 console.log("\nSTATIC — Customer estimate responsive layout");
 
@@ -110,6 +112,21 @@ check(
   page.includes("currentVersionId={currentVersion?.id}") &&
     approve.includes("approveEstimate") &&
     approve.includes("estimateVersionId"),
+);
+check(
+  "Customer estimate offers a Print / PDF path without replacing approval",
+  page.includes("/print") &&
+    page.includes("Print / PDF") &&
+    page.includes("ApproveEstimateButton"),
+);
+check(
+  "Printable estimate uses the document logo helper, not the dark website logo",
+  printPage.includes("loadEstimateDocumentByToken") &&
+    printPage.includes("EstimateDocument") &&
+    !printPage.includes("ApproveEstimateButton") &&
+    estimateDocument.includes("ESTIMATE") &&
+    estimateDocument.includes("SERVICE ADDRESS") &&
+    estimateDocument.includes("TERMS"),
 );
 
 console.log(
