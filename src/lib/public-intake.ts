@@ -10,6 +10,7 @@ import { OTHER_SERVICE_VALUE } from "@/lib/intake";
 import {
   catalogAsksWorkAreaIntake,
   joinRequestDescription,
+  normalizeIntakeSubmissionId,
   validateWorkAreaIntakeAnswer,
   type WorkAreaIntakeAnswer,
 } from "@/lib/work-area-intake";
@@ -66,6 +67,7 @@ export type PublicIntakeInput = {
     contentsProtection?: string;
     belongingsCleanup?: string;
   }>;
+  submissionId?: string | null;
 };
 
 export type PublicIntakeDb = {
@@ -108,6 +110,12 @@ export type PublicIntakeDb = {
       };
       select: { id: true };
     }) => Promise<Array<{ id: string }>>;
+  };
+  serviceRequest: {
+    findFirst: (args: {
+      where: { businessId: string; description: { contains: string } };
+      select: { id: true };
+    }) => Promise<{ id: string } | null>;
   };
   $transaction: <T>(fn: (tx: PublicIntakeTx) => Promise<T>) => Promise<T>;
 };
@@ -160,6 +168,10 @@ export type PublicIntakeTx = {
     }) => Promise<{ id: string }>;
   };
   serviceRequest: {
+    findFirst: (args: {
+      where: { businessId: string; description: { contains: string } };
+      select: { id: true };
+    }) => Promise<{ id: string } | null>;
     create: (args: {
       data: {
         businessId: string;
@@ -226,6 +238,17 @@ export function readIntakeCatalogIds(rawIds: string[]) {
 }
 
 export async function createPublicServiceRequest(
+  db: PublicIntakeDb,
+  input: PublicIntakeInput,
+): Promise<PublicIntakeResult> {
+  try {
+    return await createPublicServiceRequestInner(db, input);
+  } catch {
+    return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
+  }
+}
+
+async function createPublicServiceRequestInner(
   db: PublicIntakeDb,
   input: PublicIntakeInput,
 ): Promise<PublicIntakeResult> {
@@ -388,9 +411,11 @@ export async function createPublicServiceRequest(
     parsed.tasks.find((task) => task.kind === "catalog")?.serviceCatalogItemId ??
     null;
   const summary = requestedWorkSummary(labels, 120);
+  const submissionId = normalizeIntakeSubmissionId(input.submissionId);
   const description = joinRequestDescription(
     notes || null,
     workAreaAnswers.length > 0 ? { answers: workAreaAnswers } : null,
+    submissionId,
   );
   const photoUrls = (input.photoUrls ?? []).filter(Boolean).slice(0, MAX_INTAKE_PHOTOS);
   const ownedPhotoIds =
@@ -411,6 +436,17 @@ export async function createPublicServiceRequest(
 
   try {
     const requestId = await db.$transaction(async (tx) => {
+      if (submissionId) {
+        const existing = await tx.serviceRequest.findFirst({
+          where: {
+            businessId: business.id,
+            description: { contains: submissionId },
+          },
+          select: { id: true },
+        });
+        if (existing) return existing.id;
+      }
+
       let customer =
         email
           ? await tx.customer.findFirst({

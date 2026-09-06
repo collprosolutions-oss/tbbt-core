@@ -12,6 +12,13 @@ import { randomUUID } from "node:crypto";
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const { createPublicServiceRequest } = await import("@/lib/public-intake");
+const { submitPublicIntakeForm, runPublicRequestSubmit } = await import(
+  "@/lib/public-request-submit"
+);
+const { putPublicRequestPhotoFromBytes } = await import(
+  "@/lib/business-storage/request-photos"
+);
+const { MemoryStorageProvider } = await import("@/lib/business-storage/index");
 const { toPublicCatalogItem } = await import("@/lib/public-site");
 const {
   buildEstimateLineCreatesFromRequestItems,
@@ -40,9 +47,12 @@ const { customQuoteDisplayDescription } = await import("@/lib/request-estimate-d
 const {
   WORK_AREA_INTAKE_CLARIFICATION,
   WORK_AREA_INTAKE_MARKER,
+  INTAKE_SUBMISSION_MARKER,
   calculatorAsksWorkAreaIntake,
   catalogAsksWorkAreaIntake,
   joinRequestDescription,
+  parseIntakeSubmissionId,
+  parseWorkAreaFormAnswers,
   parseWorkAreaIntake,
   requestNotesText,
   workAreaIntakeToCalculatorInputs,
@@ -233,6 +243,15 @@ check(
       .slice(lineOps.indexOf("export async function applyDraftEstimateCalculator"))
       .includes("serviceRequest.update"),
 );
+check(
+  "Submit Request always clears pending and catches a thrown server action",
+  requestFlow.includes("submitPublicIntakeForm") &&
+    requestFlow.includes("finally") &&
+    requestFlow.includes("setPending(false)") &&
+    requestFlow.includes("submissionId") &&
+    readRepo("src/app/actions/intake.ts").includes("submitServiceRequestInner") &&
+    readRepo("src/app/actions/intake.ts").includes("return { error: GENERIC_ERROR }"),
+);
 
 console.log("\nUNIT — Applicability, encoding, and calculator prefill");
 check(
@@ -336,6 +355,63 @@ const publicItem = toPublicCatalogItem({
   pricingMode: "CUSTOM_QUOTE",
   price: null,
 });
+const formAnswers = parseWorkAreaFormAnswers([
+  JSON.stringify({
+    catalogItemId: "panel-1",
+    contentsHandling: "light",
+    contentsProtection: "none",
+    belongingsCleanup: "none",
+  }),
+  "not-json",
+]);
+check(
+  "Work-area FormData JSON is parsed into validated answers",
+  formAnswers.length === 1 && formAnswers[0].contentsHandling === "light",
+);
+
+const storedWithSubmission = joinRequestDescription(notes, intakeRecord, "submit-token-123");
+check(
+  "Submission token is stored without breaking work-area JSON parse",
+  parseWorkAreaIntake(storedWithSubmission)?.answers[0]?.contentsHandling === "light" &&
+    parseIntakeSubmissionId(storedWithSubmission) === "submit-token-123" &&
+    requestNotesText(storedWithSubmission) === notes &&
+    storedWithSubmission.includes(INTAKE_SUBMISSION_MARKER),
+);
+
+const thrownSubmit = await submitPublicIntakeForm(async () => {
+  throw new Error("server action digest");
+}, "collpro-reno", new FormData());
+const failedSubmit = await submitPublicIntakeForm(async () => {
+  return { error: "Please answer the work-area questions for the selected work." };
+}, "collpro-reno", new FormData());
+const okSubmit = await submitPublicIntakeForm(async () => {
+  return { ok: true };
+}, "collpro-reno", new FormData());
+let pendingFlag = true;
+const pendingAfterThrow = await (async () => {
+  pendingFlag = true;
+  try {
+    const result = await submitPublicIntakeForm(async () => {
+      throw new Error("hung action");
+    }, "collpro-reno", new FormData());
+    return result;
+  } finally {
+    pendingFlag = false;
+  }
+})();
+check("Thrown server action becomes a retryable error instead of hanging", thrownSubmit.ok === false);
+check("Returned validation errors stay visible to the customer", failedSubmit.ok === false);
+check("Successful submit returns ok", okSubmit.ok === true);
+check(
+  "Failure state clears pending UI",
+  pendingAfterThrow.ok === false && pendingFlag === false,
+);
+
+const runFailed = await runPublicRequestSubmit(async () => {
+  throw new Error("boom");
+});
+check("runPublicRequestSubmit clears a thrown submit without a value", runFailed.ok === false);
+
 check(
   "Public catalog item can enable intake without exposing internal rates",
   publicItem.asksWorkAreaIntake === true &&
@@ -693,6 +769,153 @@ try {
       DEFAULT_CONTENTS_HANDLING_RATES.light &&
       lineCalculatorSnapshot(overridden.description)?.rates.contentsHandlingModerateRate ===
         DEFAULT_CONTENTS_HANDLING_RATES.moderate,
+  );
+
+  console.log("\nDB — Submit Request payload, photos, and no-duplicate retry");
+  const workAreaPayload = parseWorkAreaFormAnswers([
+    JSON.stringify({
+      catalogItemId: paneling.id,
+      contentsHandling: "moderate",
+      contentsProtection: "light",
+      belongingsCleanup: "none",
+    }),
+  ]);
+  const noPhotoSubmit = await createPublicServiceRequest(prisma, {
+    slug,
+    name: "No Photo Submit",
+    email: "nophoto-submit@example.com",
+    phone: "555-0200",
+    address: "",
+    streetAddress: "100 Pine",
+    city: "Fort Myers",
+    region: "FL",
+    postalCode: "33901",
+    notes: "No photos attached.",
+    catalogItemIds: [paneling.id],
+    includeOther: false,
+    otherDescription: "",
+    workAreaAnswers: workAreaPayload,
+    submissionId: "retry-token-no-photos",
+  });
+  const noPhotoRequest = noPhotoSubmit.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: noPhotoSubmit.requestId },
+        include: { photos: true },
+      })
+    : null;
+  check("Decorative Wall Paneling request with work-area answers and no photos succeeds", noPhotoSubmit.ok === true);
+  check(
+    "Work-area answers persist on the no-photo request",
+    parseWorkAreaIntake(noPhotoRequest?.description)?.answers[0]?.contentsHandling ===
+      "moderate" && noPhotoRequest?.photos.length === 0,
+  );
+  const noPhotoRetry = await createPublicServiceRequest(prisma, {
+    slug,
+    name: "No Photo Submit",
+    email: "nophoto-submit@example.com",
+    phone: "555-0200",
+    address: "",
+    streetAddress: "100 Pine",
+    city: "Fort Myers",
+    region: "FL",
+    postalCode: "33901",
+    notes: "No photos attached.",
+    catalogItemIds: [paneling.id],
+    includeOther: false,
+    otherDescription: "",
+    workAreaAnswers: workAreaPayload,
+    submissionId: "retry-token-no-photos",
+  });
+  const noPhotoCount = await prisma.serviceRequest.count({
+    where: { businessId: business.id, description: { contains: "retry-token-no-photos" } },
+  });
+  check(
+    "Retrying the same no-photo submit does not create a duplicate request",
+    noPhotoRetry.ok === true &&
+      noPhotoRetry.requestId === noPhotoSubmit.requestId &&
+      noPhotoCount === 1,
+  );
+
+  const pngBytes = Buffer.from(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082",
+    "hex",
+  );
+  const provider = new MemoryStorageProvider();
+  const storageDeps = {
+    db: prisma,
+    provider,
+    bucketName: "tbbt-request-photos",
+  };
+  const firstPhoto = await putPublicRequestPhotoFromBytes(storageDeps, slug, {
+    originalFilename: "wall-1.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const secondPhoto = await putPublicRequestPhotoFromBytes(storageDeps, slug, {
+    originalFilename: "wall-2.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const withPhotosSubmit = await createPublicServiceRequest(prisma, {
+    slug,
+    name: "Photo Submit",
+    email: "photos-submit@example.com",
+    phone: "555-0201",
+    address: "",
+    streetAddress: "200 Pine",
+    city: "Fort Myers",
+    region: "FL",
+    postalCode: "33901",
+    notes: "Two photos attached.",
+    catalogItemIds: [paneling.id],
+    includeOther: false,
+    otherDescription: "",
+    workAreaAnswers: workAreaPayload,
+    photoAssetIds: [firstPhoto.id, secondPhoto.id],
+    submissionId: "retry-token-with-photos",
+  });
+  const photoRequest = withPhotosSubmit.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: withPhotosSubmit.requestId },
+        include: { photos: true },
+      })
+    : null;
+  check("Decorative Wall Paneling request with work-area answers and multiple photos succeeds", withPhotosSubmit.ok === true);
+  check(
+    "Photos still attach when present",
+    photoRequest?.photos.length === 2 &&
+      parseWorkAreaIntake(photoRequest?.description)?.answers[0]?.contentsProtection ===
+        "light",
+  );
+  const photoRetry = await createPublicServiceRequest(prisma, {
+    slug,
+    name: "Photo Submit",
+    email: "photos-submit@example.com",
+    phone: "555-0201",
+    address: "",
+    streetAddress: "200 Pine",
+    city: "Fort Myers",
+    region: "FL",
+    postalCode: "33901",
+    notes: "Two photos attached.",
+    catalogItemIds: [paneling.id],
+    includeOther: false,
+    otherDescription: "",
+    workAreaAnswers: workAreaPayload,
+    photoAssetIds: [firstPhoto.id, secondPhoto.id],
+    submissionId: "retry-token-with-photos",
+  });
+  const photoCount = await prisma.serviceRequest.count({
+    where: { businessId: business.id, description: { contains: "retry-token-with-photos" } },
+  });
+  check(
+    "Retrying the same photo submit does not create a duplicate request",
+    photoRetry.ok === true &&
+      photoRetry.requestId === withPhotosSubmit.requestId &&
+      photoCount === 1 &&
+      (await prisma.serviceRequestPhoto.count({
+        where: { serviceRequestId: withPhotosSubmit.requestId },
+      })) === 2,
   );
 } finally {
   await prisma.$disconnect();

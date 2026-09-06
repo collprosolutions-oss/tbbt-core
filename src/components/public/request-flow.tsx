@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { submitServiceRequest } from "@/app/actions/intake";
@@ -40,6 +40,7 @@ import {
   validateWorkAreaIntakeAnswer,
   workAreaIntakeOptionLabel,
 } from "@/lib/work-area-intake";
+import { submitPublicIntakeForm } from "@/lib/public-request-submit";
 import { publicServicesPath } from "@/lib/public-site";
 import {
   formatStructuredAddress,
@@ -103,6 +104,11 @@ export function MultiServiceRequestFlow({
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
   const [pending, setPending] = useState(false);
+  const submissionIdRef = useRef(
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `intake-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+  );
 
   const labels = useMemo(
     () => selectedWorkLabels(selected, items),
@@ -166,7 +172,9 @@ export function MultiServiceRequestFlow({
     if (pending) return;
     setPending(true);
     setError(null);
+    try {
     const formData = new FormData();
+    formData.set("submissionId", submissionIdRef.current.replace(/[^A-Za-z0-9_-]/g, ""));
     formData.set("name", name);
     formData.set("email", email);
     formData.set("phone", phone);
@@ -216,7 +224,6 @@ export function MultiServiceRequestFlow({
         fileSizeBytes: photo.file.size,
       });
       if (!authorized.assetId || !authorized.uploadUrl) {
-        setPending(false);
         setError(authorized.error || "That photo could not be uploaded.");
         return;
       }
@@ -227,7 +234,6 @@ export function MultiServiceRequestFlow({
       });
       if (!uploaded.ok) {
         await abortPublicRequestPhotoUpload({ slug, assetId: authorized.assetId });
-        setPending(false);
         setError("That photo could not be uploaded.");
         return;
       }
@@ -237,7 +243,6 @@ export function MultiServiceRequestFlow({
       });
       if (!finalized.assetId) {
         await abortPublicRequestPhotoUpload({ slug, assetId: authorized.assetId });
-        setPending(false);
         setError(finalized.error || "That photo could not be saved.");
         return;
       }
@@ -260,13 +265,17 @@ export function MultiServiceRequestFlow({
       formData.set("otherDescription", selected.otherDescription);
       formData.set("otherQuantity", String(selected.otherQuantity || 1));
     }
-    const result = await submitServiceRequest(slug, formData);
-    setPending(false);
-    if (result.error) {
+    const result = await submitPublicIntakeForm(submitServiceRequest, slug, formData);
+    if (!result.ok) {
       setError(result.error);
       return;
     }
     setOk(true);
+    } catch {
+      setError("This request could not be submitted. Please try again.");
+    } finally {
+      setPending(false);
+    }
   }
 
   if (ok) {
