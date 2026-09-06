@@ -4,6 +4,8 @@ import { useState, type ComponentType, type CSSProperties, type ReactNode } from
 import Link from "next/link";
 import { FileText, Mail, MapPin, Phone, Receipt, Wrench } from "lucide-react";
 import { CreateEstimateButton } from "@/components/estimates/create-estimate-button";
+import { OwnerPrivatePhoto } from "@/components/estimates/owner-private-photo";
+import type { OwnerIntakePhoto } from "@/lib/intake-quote-handoff";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -36,7 +38,7 @@ export type RequestListItem = {
   serviceName: string | null;
   requestedTasks: string[];
   photoCount: number;
-  photoSrcs: string[];
+  photos: OwnerIntakePhoto[];
   measurementLabels: string[];
   workAreaLabels: string[];
   propertyLabel: string | null;
@@ -351,14 +353,8 @@ function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
         {request.photoCount > 0 ? (
           <DetailField label="Project photos">
             <div className="grid grid-cols-2 gap-2">
-              {request.photoSrcs.map((src) => (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  key={src}
-                  src={src}
-                  alt=""
-                  className="aspect-square w-full rounded-md object-cover"
-                />
+              {request.photos.map((photo) => (
+                <OwnerPrivatePhoto key={photo.id} photo={photo} />
               ))}
             </div>
           </DetailField>

@@ -20,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
-import { requestPhotoOwnerSrc } from "@/lib/business-storage/request-photos";
+import { ownerVisibleRequestPhotos } from "@/lib/intake-quote-handoff";
 import { formatCustomerMeasurement } from "@/lib/catalog-intake";
 import { formatAddress, formatDate, formatMoney, formatTime } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
@@ -163,7 +163,25 @@ export default async function RequestsPage({
             serviceCatalogItem: { select: { id: true, name: true } },
           },
         },
-        photos: { select: { id: true, url: true, storedAssetId: true } },
+        photos: {
+          select: {
+            id: true,
+            businessId: true,
+            serviceRequestId: true,
+            url: true,
+            storedAssetId: true,
+            storedAsset: {
+              select: {
+                mimeType: true,
+                originalFilename: true,
+                visibility: true,
+                category: true,
+                status: true,
+                publicPath: true,
+              },
+            },
+          },
+        },
         measurements: {
           select: {
             source: true,
@@ -234,7 +252,11 @@ export default async function RequestsPage({
         null,
       requestedTasks,
       photoCount: request.photos.length,
-      photoSrcs: request.photos.map((photo) => requestPhotoOwnerSrc(photo)),
+      photos: ownerVisibleRequestPhotos({
+        businessId: request.businessId,
+        serviceRequestId: request.id,
+        photos: request.photos,
+      }),
       measurementLabels: request.measurements.map((row) => {
         const name =
           row.serviceRequestItem?.serviceCatalogItem?.name ||

@@ -83,6 +83,17 @@ check(
   "Customer-reported and contractor-verified sources stay distinct",
   CUSTOMER_REPORTED_MEASUREMENT !== CONTRACTOR_VERIFIED_MEASUREMENT,
 );
+check(
+  "Public request photos now accept HEIC/HEIF in addition to JPEG/PNG/WebP",
+  readRepo("src/lib/business-storage/request-photo-rules.ts").includes("image/heic") &&
+    readRepo("src/lib/business-storage/request-photo-rules.ts").includes("image/heif"),
+);
+check(
+  "Job-photo and expense Blob upload paths are not rewritten here",
+  readRepo("src/lib/storage.ts").includes("MAX_JOB_PHOTO_UPLOAD_BYTES = 4 * 1024 * 1024") &&
+    readRepo("src/app/actions/job-photo.ts").includes("MAX_JOB_PHOTO_UPLOAD_BYTES") &&
+    readRepo("src/app/actions/expenses.ts").includes("MAX_JOB_PHOTO_UPLOAD_BYTES"),
+);
 
 const noneConfig = resolveCatalogIntakeConfig({ intakeMeasurementMode: "NONE" });
 const blindsConfig = resolveCatalogIntakeConfig({

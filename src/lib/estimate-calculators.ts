@@ -47,6 +47,7 @@ export {
   normalizeCalculatorSnapshot,
   persistableCalculatorComponents,
   persistableCalculatorRates,
+  pickPositiveNumericCalculatorInputs,
   resolveCalculatorId,
   resolveCalculatorRatesForForm,
   startingCalculatorSnapshot,

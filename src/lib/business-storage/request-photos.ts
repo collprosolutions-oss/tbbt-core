@@ -10,7 +10,7 @@ import { inspectRequestPhotoUpload } from "@/lib/business-storage/request-photo-
 import { privateAssetPath } from "@/lib/business-storage/keys";
 import { StorageError } from "@/lib/business-storage/types";
 
-export { inspectRequestPhotoUpload } from "@/lib/business-storage/request-photo-rules";
+export { inspectRequestPhotoUpload, requestPhotoMaxBytesLabel } from "@/lib/business-storage/request-photo-rules";
 
 export async function resolvePublicStorageBusiness(
   db: PrismaClient | Prisma.TransactionClient,

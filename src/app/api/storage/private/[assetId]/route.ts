@@ -28,6 +28,7 @@ export async function GET(
     headers: {
       "Content-Type": result.contentType,
       "Content-Length": String(result.contentLength),
+      "Content-Disposition": result.contentDisposition,
       "Cache-Control": "private, no-store",
     },
   });

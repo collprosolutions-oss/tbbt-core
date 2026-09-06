@@ -13,12 +13,37 @@ export type PrivateStoredAssetServeResult =
       body: Uint8Array;
       contentType: string;
       contentLength: number;
+      contentDisposition: string;
     }
   | {
       ok: false;
       status: 401 | 404 | 502 | 503;
       body: string;
     };
+
+const PREVIEWABLE_PRIVATE_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+]);
+
+function headerFilename(name: string) {
+  const cleaned = name.replace(/[\r\n"]/g, "").trim() || "photo";
+  return cleaned.slice(0, 120);
+}
+
+export function privateAssetContentDisposition(input: {
+  mimeType?: string | null;
+  originalFilename?: string | null;
+}) {
+  const filename = headerFilename(input.originalFilename ?? "photo");
+  const mime = (input.mimeType ?? "").trim().toLowerCase();
+  const disposition = PREVIEWABLE_PRIVATE_IMAGE_TYPES.has(mime)
+    ? "inline"
+    : "attachment";
+  return `${disposition}; filename="${filename}"`;
+}
 
 /**
  * Authenticated owner/admin delivery of PRIVATE (or any READY) assets
@@ -68,12 +93,17 @@ export async function servePrivateStoredAsset(
       object.body instanceof Uint8Array
         ? object.body
         : new Uint8Array(object.body);
+    const contentType = object.contentType || asset.mimeType || "application/octet-stream";
     return {
       ok: true,
       status: 200,
       body,
-      contentType: object.contentType || asset.mimeType || "application/octet-stream",
+      contentType,
       contentLength: body.byteLength,
+      contentDisposition: privateAssetContentDisposition({
+        mimeType: contentType,
+        originalFilename: asset.originalFilename,
+      }),
     };
   } catch {
     return { ok: false, status: 502, body: "Storage read failed" };

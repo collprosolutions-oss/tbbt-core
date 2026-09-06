@@ -365,6 +365,32 @@ export function calculatorSnapshotIsApplied(snapshot?: CalculatorSnapshot | null
   return snapshot?.appliedAmount != null || snapshot?.recommendedAmount != null;
 }
 
+/**
+ * Copy positive numeric job quantities from a source onto calculator
+ * keys that already exist. Used so stored intake measurements can prefill
+ * width/height/length fields without inventing new calculator inputs.
+ */
+export function pickPositiveNumericCalculatorInputs(
+  source?: Record<string, unknown> | null,
+  allowedKeys?: string[],
+) {
+  const next: Record<string, number> = {};
+  if (!source) return next;
+  const keys = allowedKeys ?? Object.keys(source);
+  for (const key of keys) {
+    if (!(key in source)) continue;
+    const value = source[key];
+    const n =
+      typeof value === "number"
+        ? value
+        : typeof value === "string" && value.trim()
+          ? Number(value)
+          : NaN;
+    if (Number.isFinite(n) && n > 0) next[key] = n;
+  }
+  return next;
+}
+
 export function startingCalculatorSnapshot(input: {
   title?: string | null;
   definition?: CalculatorDefinition | null;
@@ -385,11 +411,15 @@ export function startingCalculatorSnapshot(input: {
     undefined,
     components,
   );
+  const empty = emptyCalculatorInputs(calculatorId, rates, components);
+  const allowedKeys = Object.keys(empty);
   return {
     calculatorId,
     rates,
     inputs: {
-      ...emptyCalculatorInputs(calculatorId, rates, components),
+      ...empty,
+      ...pickPositiveNumericCalculatorInputs(input.prefillInputs, allowedKeys),
+      ...pickPositiveNumericCalculatorInputs(input.snapshot?.inputs, allowedKeys),
       ...pickWorkAreaCalculatorInputs(input.prefillInputs ?? input.snapshot?.inputs),
     },
     ...(components ? { components } : {}),
@@ -412,6 +442,7 @@ export function formCalculatorInputs(input: {
   }
   return {
     ...empty,
+    ...pickPositiveNumericCalculatorInputs(input.snapshot?.inputs, Object.keys(empty)),
     ...pickWorkAreaCalculatorInputs(input.snapshot?.inputs),
   };
 }

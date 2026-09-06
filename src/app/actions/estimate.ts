@@ -24,6 +24,7 @@ import {
 } from "@/lib/estimate-line-ops";
 import { joinLineDescription } from "@/lib/estimate-line-scope";
 import { parseWorkAreaIntake } from "@/lib/work-area-intake";
+import { toStoredIntakeMeasurement } from "@/lib/intake-quote-handoff";
 import {
   addRequestDraftLines,
   draftEstimateSendError,
@@ -158,6 +159,19 @@ export async function createEstimate(serviceRequestId: string) {
             },
           },
         },
+        measurements: {
+          select: {
+            source: true,
+            width: true,
+            height: true,
+            length: true,
+            quantity: true,
+            unit: true,
+            serviceRequestItem: {
+              select: { serviceCatalogItemId: true },
+            },
+          },
+        },
         serviceCatalogItem: {
           select: {
             id: true,
@@ -220,6 +234,7 @@ export async function createEstimate(serviceRequestId: string) {
       estimateId: created.id,
       items: sourceItems,
       workAreaIntake: parseWorkAreaIntake(request.description),
+      measurements: request.measurements.map((row) => toStoredIntakeMeasurement(row)),
     });
     await persistDraftEstimateTotal(tx, created.id, access.businessId);
 

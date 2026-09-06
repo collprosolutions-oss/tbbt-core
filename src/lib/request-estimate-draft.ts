@@ -7,6 +7,12 @@
 import { Prisma } from "@prisma/client";
 import { startingCalculatorSnapshot } from "@/lib/estimate-calculators";
 import {
+  calculatorPrefillFromStoredMeasurement,
+  customerReportedMeasurementForCatalog,
+  mergeWorkAreaAndMeasurementPrefill,
+  type StoredIntakeMeasurement,
+} from "@/lib/intake-quote-handoff";
+import {
   workAreaAnswerForCatalog,
   workAreaIntakeToCalculatorInputs,
   type WorkAreaIntakeRecord,
@@ -141,23 +147,35 @@ export function buildEstimateLineCreatesFromRequestItems(
   businessId: string,
   items: RequestDraftSourceItem[],
   workAreaIntake?: WorkAreaIntakeRecord | null,
+  measurements?: StoredIntakeMeasurement[] | null,
 ) {
   return draftEstimateLinesFromRequestItems(items).map((line, index) => {
     const unitPrice = line.priced && line.unitPrice != null ? line.unitPrice : 0;
     const catalog = items[index]?.serviceCatalogItem;
     const calculatorDefinition = catalogCalculatorDefinition(catalog?.description);
-    const workAreaAnswer = workAreaAnswerForCatalog(
-      workAreaIntake,
-      catalog?.id ?? line.serviceCatalogItemId,
-    );
+    const catalogItemId = catalog?.id ?? line.serviceCatalogItemId;
+    const workAreaAnswer = workAreaAnswerForCatalog(workAreaIntake, catalogItemId);
+    const measurementPrefill = calculatorPrefillFromStoredMeasurement({
+      measurement: customerReportedMeasurementForCatalog(
+        measurements ?? [],
+        catalogItemId,
+      ),
+      calculatorId: calculatorDefinition?.calculatorId,
+      components: calculatorDefinition?.components,
+      definition: calculatorDefinition,
+    }).applied;
+    const prefillInputs = mergeWorkAreaAndMeasurementPrefill({
+      workAreaInputs: workAreaAnswer
+        ? workAreaIntakeToCalculatorInputs(workAreaAnswer)
+        : null,
+      measurementInputs: measurementPrefill,
+    });
     const snapshot =
-      calculatorDefinition || workAreaAnswer
+      calculatorDefinition || workAreaAnswer || Object.keys(measurementPrefill).length > 0
         ? startingCalculatorSnapshot({
             title: catalog?.name ?? line.description,
             definition: calculatorDefinition,
-            prefillInputs: workAreaAnswer
-              ? workAreaIntakeToCalculatorInputs(workAreaAnswer)
-              : null,
+            prefillInputs,
           })
         : null;
     return {
@@ -186,12 +204,14 @@ export async function addRequestDraftLines(
     estimateId: string;
     items: RequestDraftSourceItem[];
     workAreaIntake?: WorkAreaIntakeRecord | null;
+    measurements?: StoredIntakeMeasurement[] | null;
   },
 ) {
   const rows = buildEstimateLineCreatesFromRequestItems(
     input.businessId,
     input.items,
     input.workAreaIntake,
+    input.measurements,
   );
   if (rows.length === 0) return 0;
   await tx.lineItem.createMany({

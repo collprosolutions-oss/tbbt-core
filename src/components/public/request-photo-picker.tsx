@@ -3,13 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { inspectRequestPhotoUpload } from "@/lib/business-storage/request-photo-rules";
+import { inspectRequestPhotoUpload, requestPhotoMaxBytesLabel } from "@/lib/business-storage/request-photo-rules";
+import { isBrowserPreviewableRequestPhoto } from "@/lib/intake-quote-handoff";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
 
 export type SelectedRequestPhoto = {
   id: string;
   file: File;
   previewUrl: string;
+  mimeType: string;
+  previewable: boolean;
 };
 
 export function RequestPhotoPicker({
@@ -29,7 +32,7 @@ export function RequestPhotoPicker({
   useEffect(() => {
     return () => {
       for (const photo of photos) {
-        URL.revokeObjectURL(photo.previewUrl);
+        if (photo.previewUrl) URL.revokeObjectURL(photo.previewUrl);
       }
     };
     // Revoke only on unmount.
@@ -51,10 +54,13 @@ export function RequestPhotoPicker({
         error = inspection.error;
         continue;
       }
+      const previewable = isBrowserPreviewableRequestPhoto(inspection.mimeType);
       next.push({
         id: `${file.name}-${file.size}-${file.lastModified}-${next.length}`,
         file,
-        previewUrl: URL.createObjectURL(file),
+        previewUrl: previewable ? URL.createObjectURL(file) : "",
+        mimeType: inspection.mimeType,
+        previewable,
       });
     }
     setLocalError(error);
@@ -63,7 +69,7 @@ export function RequestPhotoPicker({
 
   function removePhoto(id: string) {
     const match = photos.find((photo) => photo.id === id);
-    if (match) URL.revokeObjectURL(match.previewUrl);
+    if (match?.previewUrl) URL.revokeObjectURL(match.previewUrl);
     onChange(photos.filter((photo) => photo.id !== id));
   }
 
@@ -72,14 +78,15 @@ export function RequestPhotoPicker({
       <Label htmlFor="photos">Project photos (optional)</Label>
       <p className="text-sm text-muted-foreground">
         Photos help {businessName} understand the work. You can add up to{" "}
-        {MAX_INTAKE_PHOTOS} JPEG, PNG, or WebP images. These stay private and
-        are not published on the website.
+        {MAX_INTAKE_PHOTOS} JPEG, PNG, WebP, or HEIC images, up to{" "}
+        {requestPhotoMaxBytesLabel()} each. These stay private and are not
+        published on the website.
       </p>
       <Input
         id="photos"
         name="photos"
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/*"
+        accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif,image/*"
         multiple
         disabled={remaining <= 0}
         className="h-12 bg-white pt-2"
@@ -93,12 +100,19 @@ export function RequestPhotoPicker({
         <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">
           {previews.map((photo) => (
             <li key={photo.id} className="relative overflow-hidden rounded-md border border-border bg-white">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={photo.previewUrl}
-                alt=""
-                className="aspect-square w-full object-cover"
-              />
+              {photo.previewable && photo.previewUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={photo.previewUrl}
+                  alt=""
+                  className="aspect-square w-full object-cover"
+                />
+              ) : (
+                <div className="flex aspect-square w-full flex-col items-center justify-center gap-1 bg-muted/40 p-2 text-center">
+                  <p className="line-clamp-3 text-[11px] font-medium">{photo.file.name}</p>
+                  <p className="text-[10px] text-muted-foreground">Saved with your request. Preview is not available for this phone photo format.</p>
+                </div>
+              )}
               <button
                 type="button"
                 className="absolute right-1 top-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wide text-white uppercase"
