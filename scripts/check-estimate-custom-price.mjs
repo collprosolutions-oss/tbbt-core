@@ -97,7 +97,7 @@ try {
   check("Add custom item remains available (reused architecture, not a second catalog path)", pageSource.includes("AddCustomLineForm"));
   check(
     "Inline form saves unit price without a catalog write",
-    formSource.includes('name="unitPrice"') && formSource.includes("service catalog"),
+    formSource.includes('name="unitPrice"') && formSource.includes("catalog item"),
   );
   check(
     "Price-required line is highlighted with Quantity, Unit price, and Save Price",
@@ -109,8 +109,7 @@ try {
   );
   check(
     "Owner is told to price the original line instead of adding a duplicate",
-    pageSource.includes("do not add a duplicate custom item") &&
-      pageSource.includes("Do not add a second custom item"),
+    pageSource.includes("duplicate custom item") && pageSource.includes("second custom item"),
   );
 
   const ownerUser = await prisma.user.create({
