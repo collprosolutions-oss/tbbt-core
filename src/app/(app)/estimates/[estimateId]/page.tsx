@@ -300,6 +300,9 @@ export default async function EstimateBuilderPage({
                           estimateId={estimate.id}
                           lineItemId={item.id}
                           hasPrice={item.unitPrice.gt(0)}
+                          currentPriceLabel={
+                            item.unitPrice.gt(0) ? formatMoney(item.unitPrice) : null
+                          }
                         />
                       </>
                     ) : (
@@ -394,9 +397,9 @@ export default async function EstimateBuilderPage({
           <CardTitle>Add custom item</CardTitle>
           <CardDescription>
             Choose Labor, Material, or Other. Add Scope / Included Work if
-            you want the customer to see what the price includes. Saving for
-            future use is optional and never automatic. The labor minimum
-            uses labor lines only.
+            you want the customer to see what the price includes. Saving the
+            service and scope to the catalog is optional and never automatic.
+            The labor minimum uses labor lines only.
           </CardDescription>
         </CardHeader>
         <CardContent>

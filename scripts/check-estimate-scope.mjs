@@ -1,6 +1,6 @@
 /**
  * Multi-line Scope / Included Work on estimate lines, plus explicit
- * Save for Future Use into the existing ServiceCatalogItem catalog.
+ * Save Service & Scope to Catalog into the existing ServiceCatalogItem catalog.
  *
  * Run with:
  *   node --experimental-strip-types scripts/check-estimate-scope.mjs
@@ -212,11 +212,25 @@ try {
     "utf8",
   );
   check(
-    "DRAFT owner page can edit scope and optionally save for reuse",
+    "DRAFT owner page can edit scope and optionally save service and scope to the catalog",
     ownerPage.includes("EditLineIncludedWorkForm") &&
       ownerPage.includes("SaveLineForReuseForm") &&
-      reuseForm.includes("Save for Future Use") &&
+      ownerPage.includes("currentPriceLabel") &&
+      reuseForm.includes("Save Service & Scope to Catalog") &&
+      reuseForm.includes("Also save the current price as the default starting price") &&
+      reuseForm.includes("currentPriceLabel") &&
+      !reuseForm.includes("defaultChecked") &&
+      reuseForm.includes("useState(false)") &&
       reuseForm.includes("Scope / Included Work"),
+  );
+  const saveOps = readFileSync(
+    new URL("../src/lib/estimate-line-ops.ts", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Catalog price is saved only when savePrice is explicitly true",
+    saveOps.includes("const savePrice = input.savePrice === true") &&
+      !saveOps.includes("input.savePrice !== false"),
   );
   const addCustomSlice = customAction.slice(
     customAction.indexOf("export async function addCustomLineItem"),
@@ -523,7 +537,7 @@ try {
       ) === `${WALL_SCOPE}\nAdd shoe molding`,
   );
 
-  console.log("\nTEST — Save for Future Use and insert snapshot");
+  console.log("\nTEST — Save Service & Scope to Catalog and insert snapshot");
   const reuseEstimate = await prisma.estimate.create({
     data: {
       businessId: businessA.id,
@@ -554,6 +568,39 @@ try {
     catalogBeforeSave === catalogCountBefore,
   );
 
+  const savedUnchecked = await saveDraftEstimateLineAsCatalog(prisma, ownerA, {
+    estimateId: reuseEstimate.id,
+    lineItemId: reuseLine.id,
+    savePrice: false,
+  });
+  check(
+    "Unchecked price box still saves the service title to the catalog",
+    savedUnchecked.name === "Decorative Wall Paneling & Finish Carpentry",
+  );
+  check(
+    "Unchecked price box still saves Scope / Included Work to the catalog",
+    savedUnchecked.description === WALL_SCOPE,
+  );
+  check("Unchecked save stays CUSTOM_QUOTE", savedUnchecked.pricingMode === "CUSTOM_QUOTE");
+  check(
+    "Unchecked price box does not save the $1,800 job price as the catalog default",
+    savedUnchecked.price == null,
+  );
+  check(
+    "Exactly one new catalog row was created after an unchecked save",
+    (await prisma.serviceCatalogItem.count({ where: { businessId: businessA.id } })) ===
+      catalogCountBefore + 1,
+  );
+
+  const savedOmitted = await saveDraftEstimateLineAsCatalog(prisma, ownerA, {
+    estimateId: reuseEstimate.id,
+    lineItemId: reuseLine.id,
+  });
+  check(
+    "Omitting savePrice is treated as unchecked and still does not write the price",
+    savedOmitted.id === savedUnchecked.id && savedOmitted.price == null,
+  );
+
   const saved = await saveDraftEstimateLineAsCatalog(prisma, ownerA, {
     estimateId: reuseEstimate.id,
     lineItemId: reuseLine.id,
@@ -562,11 +609,27 @@ try {
   check("Explicit save creates a reusable ServiceCatalogItem", saved.name === "Decorative Wall Paneling & Finish Carpentry");
   check("Saved reusable service keeps the multi-line scope", saved.description === WALL_SCOPE);
   check("Saved reusable service keeps CUSTOM_QUOTE mode", saved.pricingMode === "CUSTOM_QUOTE");
-  check("Saved current price is only a default starting point", saved.price?.toString() === "1800");
   check(
-    "Exactly one new catalog row was created",
-    (await prisma.serviceCatalogItem.count({ where: { businessId: businessA.id } })) ===
-      catalogCountBefore + 1,
+    "Checked price box saves the $1,800 job price as the default starting price",
+    saved.price?.toString() === "1800",
+  );
+  check(
+    "Checked save updates the same catalog row instead of creating another",
+    saved.id === savedUnchecked.id &&
+      (await prisma.serviceCatalogItem.count({ where: { businessId: businessA.id } })) ===
+        catalogCountBefore + 1,
+  );
+
+  const savedUncheckAfterPrice = await saveDraftEstimateLineAsCatalog(prisma, ownerA, {
+    estimateId: reuseEstimate.id,
+    lineItemId: reuseLine.id,
+    savePrice: false,
+  });
+  check(
+    "Unchecking later still saves title and scope and leaves the existing catalog price alone",
+    savedUncheckAfterPrice.id === saved.id &&
+      savedUncheckAfterPrice.description === WALL_SCOPE &&
+      savedUncheckAfterPrice.price?.toString() === "1800",
   );
 
   const savedAgain = await saveDraftEstimateLineAsCatalog(prisma, ownerA, {

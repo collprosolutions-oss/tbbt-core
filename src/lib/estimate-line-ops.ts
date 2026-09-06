@@ -286,8 +286,8 @@ export async function saveDraftEstimateLineAsCatalog(
       })
     : null;
   const pricingMode = linkedCatalog?.pricingMode ?? "CUSTOM_QUOTE";
-  const defaultPrice =
-    input.savePrice !== false && line.unitPrice.gt(0) ? line.unitPrice : null;
+  const savePrice = input.savePrice === true;
+  const defaultPrice = savePrice && line.unitPrice.gt(0) ? line.unitPrice : null;
 
   const existing =
     linkedCatalog ??
@@ -306,10 +306,9 @@ export async function saveDraftEstimateLineAsCatalog(
           name,
           description: includedWork,
           pricingMode,
-          price:
-            input.savePrice === false
-              ? existing.price
-              : defaultPrice ?? (pricingMode === "CUSTOM_QUOTE" ? null : existing.price),
+          price: savePrice
+            ? defaultPrice ?? (pricingMode === "CUSTOM_QUOTE" ? null : existing.price)
+            : existing.price,
           active: true,
         },
       })

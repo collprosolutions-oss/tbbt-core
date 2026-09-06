@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import {
   saveEstimateLineForReuse,
   updateEstimateLineIncludedWork,
@@ -62,15 +62,18 @@ export function SaveLineForReuseForm({
   estimateId,
   lineItemId,
   hasPrice,
+  currentPriceLabel,
 }: {
   estimateId: string;
   lineItemId: string;
   hasPrice: boolean;
+  currentPriceLabel?: string | null;
 }) {
   const [state, action, pending] = useActionState(
     saveEstimateLineForReuse,
     initialState,
   );
+  const [savePrice, setSavePrice] = useState(false);
 
   return (
     <form action={action} className="mt-2 space-y-2">
@@ -90,16 +93,20 @@ export function SaveLineForReuseForm({
             type="checkbox"
             name="savePrice"
             value="1"
-            defaultChecked
+            checked={savePrice}
+            onChange={(event) => setSavePrice(event.target.checked)}
             className="mt-1"
           />
-          <span>Also save the current price as a default starting point</span>
+          <span>
+            Also save the current price as the default starting price
+            {currentPriceLabel ? ` (${currentPriceLabel})` : ""}
+          </span>
         </label>
       ) : (
         <input type="hidden" name="savePrice" value="0" />
       )}
       <Button type="submit" size="sm" variant="secondary" disabled={pending}>
-        {pending ? "Saving…" : "Save for Future Use"}
+        {pending ? "Saving…" : "Save Service & Scope to Catalog"}
       </Button>
     </form>
   );

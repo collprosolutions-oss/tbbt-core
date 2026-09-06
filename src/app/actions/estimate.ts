@@ -487,7 +487,7 @@ export async function saveEstimateLineForReuse(
     });
     revalidatePath(`/estimates/${estimateId}`);
     revalidatePath("/services");
-    return { message: `Saved “${catalog.name}” for future use.` };
+    return { message: `Saved “${catalog.name}” to the catalog.` };
   } catch (error) {
     return {
       error: estimateLineErrorMessage(error, "Could not save that service for reuse."),
