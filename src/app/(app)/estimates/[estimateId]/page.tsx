@@ -63,11 +63,16 @@ import {
   isUnpricedCustomQuoteDraftLine,
 } from "@/lib/request-estimate-draft";
 import { requestedWorkLabels } from "@/lib/service-request-work";
+import { RequestIntakeContext } from "@/components/estimates/request-intake-context";
 import {
   formatWorkAreaIntakeLabels,
   parseWorkAreaIntake,
   requestNotesText,
 } from "@/lib/work-area-intake";
+import {
+  ownerVisibleRequestMeasurements,
+  ownerVisibleRequestPhotos,
+} from "@/lib/intake-quote-handoff";
 
 export const metadata: Metadata = {
   title: "Estimate",
@@ -96,6 +101,7 @@ export default async function EstimateBuilderPage({
       },
       serviceRequest: {
         select: {
+          id: true,
           description: true,
           summary: true,
           serviceCatalogItem: { select: { name: true } },
@@ -104,6 +110,46 @@ export default async function EstimateBuilderPage({
             select: {
               customDescription: true,
               serviceCatalogItem: { select: { id: true, name: true } },
+            },
+          },
+          photos: {
+            orderBy: { createdAt: "asc" },
+            select: {
+              id: true,
+              businessId: true,
+              serviceRequestId: true,
+              url: true,
+              storedAssetId: true,
+              storedAsset: {
+                select: {
+                  mimeType: true,
+                  originalFilename: true,
+                  visibility: true,
+                  category: true,
+                  status: true,
+                  publicPath: true,
+                },
+              },
+            },
+          },
+          measurements: {
+            orderBy: { createdAt: "asc" },
+            select: {
+              id: true,
+              businessId: true,
+              serviceRequestId: true,
+              source: true,
+              width: true,
+              height: true,
+              length: true,
+              quantity: true,
+              unit: true,
+              serviceRequestItem: {
+                select: {
+                  customDescription: true,
+                  serviceCatalogItem: { select: { name: true } },
+                },
+              },
             },
           },
         },
@@ -145,6 +191,16 @@ export default async function EstimateBuilderPage({
   const hasCustomerEmail = isUsableEmail(customerEmail);
   const needsCustomQuotePrices = estimate.lineItems.some(isUnpricedCustomQuoteDraftLine);
   const fromCustomerRequest = Boolean(estimate.serviceRequestId);
+  const intakePhotos = ownerVisibleRequestPhotos({
+    businessId: estimate.businessId,
+    serviceRequestId: estimate.serviceRequestId,
+    photos: estimate.serviceRequest?.photos ?? [],
+  });
+  const intakeMeasurements = ownerVisibleRequestMeasurements({
+    businessId: estimate.businessId,
+    serviceRequestId: estimate.serviceRequestId,
+    measurements: estimate.serviceRequest?.measurements ?? [],
+  });
 
   const catalogItems = await prisma.serviceCatalogItem.findMany({
     where: { ...access.scope, active: true },
@@ -242,6 +298,7 @@ export default async function EstimateBuilderPage({
                 </div>
               );
             })()}
+            <RequestIntakeContext photos={intakePhotos} measurements={intakeMeasurements} />
           </div>
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">Manual estimate</p>

@@ -108,6 +108,13 @@ check(
     !header.includes("panelRate"),
 );
 check(
+  "Customer estimate does not load private request photos or owner intake context",
+  !page.includes("RequestIntakeContext") &&
+    !page.includes("ownerVisibleRequestPhotos") &&
+    !page.includes("/api/storage/private/") &&
+    !page.includes("Customer-reported / unverified"),
+);
+check(
   "Approval action and version binding are unchanged",
   page.includes("currentVersionId={currentVersion?.id}") &&
     approve.includes("approveEstimate") &&

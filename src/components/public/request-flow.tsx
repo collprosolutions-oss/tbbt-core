@@ -220,7 +220,7 @@ export function MultiServiceRequestFlow({
       const authorized = await authorizePublicRequestPhotoUpload({
         slug,
         originalFilename: photo.file.name,
-        mimeType: photo.file.type,
+        mimeType: photo.mimeType || photo.file.type,
         fileSizeBytes: photo.file.size,
       });
       if (!authorized.assetId || !authorized.uploadUrl) {

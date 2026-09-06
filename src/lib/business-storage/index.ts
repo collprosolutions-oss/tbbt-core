@@ -13,7 +13,10 @@ export {
   publicAssetPath,
 } from "@/lib/business-storage/keys";
 export { MemoryStorageProvider } from "@/lib/business-storage/memory-provider";
-export { servePrivateStoredAsset } from "@/lib/business-storage/private-serve";
+export {
+  privateAssetContentDisposition,
+  servePrivateStoredAsset,
+} from "@/lib/business-storage/private-serve";
 export { servePublicStoredAsset } from "@/lib/business-storage/public-serve";
 export {
   R2_BROWSER_UPLOAD_ALLOWED_HEADERS,
