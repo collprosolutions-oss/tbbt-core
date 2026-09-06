@@ -35,8 +35,8 @@ const {
   joinCatalogDescription,
   lineCalculatorSnapshot,
   lineItemIncludedWork,
-  lineItemTitle,
 } = await import("@/lib/estimate-line-scope");
+const { customQuoteDisplayDescription } = await import("@/lib/request-estimate-draft");
 const {
   WORK_AREA_INTAKE_CLARIFICATION,
   WORK_AREA_INTAKE_MARKER,
@@ -182,17 +182,20 @@ check(
     !schema.includes("contentsHandling") &&
     schema.includes("description"),
 );
+const intakeLib = readRepo("src/lib/work-area-intake.ts");
 check(
   "Customer intake asks the three work-area questions without rates",
-  intakeFields.includes("Work area clear / ready") &&
-    intakeFields.includes("Light contents moving needed") &&
-    intakeFields.includes("No contractor protection required") &&
-    intakeFields.includes("Not included / not required") &&
-    intakeFields.includes("ordinary construction cleanup") &&
-    intakeFields.includes(WORK_AREA_INTAKE_CLARIFICATION) &&
-    !intakeFields.includes("Rate") &&
+  intakeLib.includes("Work area clear / ready") &&
+    intakeLib.includes("Light contents moving needed") &&
+    intakeLib.includes("No contractor protection required") &&
+    intakeLib.includes("Not included / not required") &&
+    intakeFields.includes("reasonably clear and accessible") &&
+    intakeFields.includes("Ordinary construction cleanup") &&
+    intakeFields.includes("WORK_AREA_INTAKE_CLARIFICATION") &&
+    intakeLib.includes(WORK_AREA_INTAKE_CLARIFICATION) &&
     !intakeFields.includes("panelRate") &&
-    !intakeFields.includes("contentsHandlingLightRate"),
+    !intakeFields.includes("contentsHandlingLightRate") &&
+    !intakeLib.includes("contentsHandlingLightRate"),
 );
 check(
   "Public request flow collects, validates, reviews, and submits work-area answers",
@@ -602,9 +605,14 @@ try {
   );
   check(
     "Customer-facing draft title and scope do not expose rates or intake JSON",
-    lineItemTitle(panelingLineCreate?.description) === DECORATIVE_WALL_PANELING_TITLE &&
-      !lineItemIncludedWork(panelingLineCreate?.description)?.includes("contentsHandlingLightRate") &&
-      !lineItemIncludedWork(panelingLineCreate?.description)?.includes(WORK_AREA_INTAKE_MARKER),
+    customQuoteDisplayDescription(panelingLineCreate?.description ?? "") ===
+      DECORATIVE_WALL_PANELING_TITLE &&
+      !lineItemIncludedWork(panelingLineCreate?.description)?.includes(
+        "contentsHandlingLightRate",
+      ) &&
+      !lineItemIncludedWork(panelingLineCreate?.description)?.includes(
+        WORK_AREA_INTAKE_MARKER,
+      ),
   );
 
   const estimate = await prisma.estimate.create({
