@@ -19,6 +19,7 @@ import {
   persistableCalculatorRates,
   resolveCalculatorId,
   startingCalculatorSnapshot,
+  templateForCalculator,
   type CalculatorId,
   type CalculatorSnapshot,
 } from "@/lib/estimate-calculators";
@@ -660,6 +661,8 @@ async function writeBusinessCalculatorRates(
     calculatorId,
     input.components ?? existingDefinition?.components,
   );
+  const intake =
+    existingDefinition?.intake ?? templateForCalculator(calculatorId, components)?.intake;
   const definition = {
     calculatorId,
     rates: persistableCalculatorRates(calculatorId, input.rates, null, components),
@@ -667,6 +670,7 @@ async function writeBusinessCalculatorRates(
       input.customerPolicies ?? existingDefinition?.customerPolicies,
     ),
     ...(components ? { components } : {}),
+    ...(intake ? { intake } : {}),
   };
   const catalog = existing
     ? await db.serviceCatalogItem.update({

@@ -45,6 +45,7 @@
     "test:customer-estimate-layout": "node scripts/check-customer-estimate-layout.mjs",
     "test:production-migrate": "node scripts/check-production-migrate.mjs",
     "test:request-intake": "node --experimental-strip-types scripts/check-request-intake.mjs",
+    "test:work-area-intake": "node --experimental-strip-types scripts/check-work-area-intake.mjs",
     "test:public-site-images": "node --experimental-strip-types scripts/check-public-site-images.mjs",
     "test:business-storage": "node --experimental-strip-types scripts/check-business-storage.mjs",
     "test:invoice-document": "node --experimental-strip-types scripts/check-invoice-document.mjs",

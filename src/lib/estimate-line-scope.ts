@@ -236,6 +236,7 @@ function parseCalculatorDefinition(raw: string): CalculatorDefinition | null {
         : {},
     customerPolicies: normalizeCustomerPolicies(parsed.customerPolicies),
     ...calculatorComponentsField(parsed.calculatorId, parsed.components),
+    ...calculatorIntakeField(parsed.intake),
   };
 }
 
@@ -259,7 +260,16 @@ function serializeCalculatorDefinition(definition: CalculatorDefinition) {
     rates: definition.rates,
     ...(customerPolicies.length > 0 ? { customerPolicies } : {}),
     ...calculatorComponentsField(definition.calculatorId, definition.components),
+    ...calculatorIntakeField(definition.intake),
   });
+}
+
+function calculatorIntakeField(raw: unknown) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const workArea = (raw as { workArea?: unknown }).workArea;
+  if (workArea === true) return { intake: { workArea: true } };
+  if (workArea === false) return { intake: { workArea: false } };
+  return {};
 }
 
 function calculatorComponentsField(

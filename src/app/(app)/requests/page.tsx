@@ -37,6 +37,11 @@ import {
   requestedWorkLabels,
   requestedWorkSummary,
 } from "@/lib/service-request-work";
+import {
+  formatWorkAreaIntakeLabels,
+  parseWorkAreaIntake,
+  requestNotesText,
+} from "@/lib/work-area-intake";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -155,7 +160,7 @@ export default async function RequestsPage({
           orderBy: { sortOrder: "asc" },
           select: {
             customDescription: true,
-            serviceCatalogItem: { select: { name: true } },
+            serviceCatalogItem: { select: { id: true, name: true } },
           },
         },
         photos: { select: { id: true, url: true, storedAssetId: true } },
@@ -221,7 +226,7 @@ export default async function RequestsPage({
       id: request.id,
       status: request.status,
       createdAtLabel: formatDate(request.createdAt),
-      description: request.description,
+      description: requestNotesText(request.description),
       summary: request.summary,
       serviceName:
         requestedWorkSummary(requestedTasks) ??
@@ -246,6 +251,16 @@ export default async function RequestsPage({
           row.source === "CONTRACTOR_VERIFIED" ? "contractor verified" : "customer reported";
         return `${name}: ${dims || "on file"} (${source})`;
       }),
+      workAreaLabels: formatWorkAreaIntakeLabels(
+        parseWorkAreaIntake(request.description),
+        Object.fromEntries(
+          request.items.flatMap((item) =>
+            item.serviceCatalogItem
+              ? [[item.serviceCatalogItem.id, item.serviceCatalogItem.name]]
+              : [],
+          ),
+        ),
+      ),
       propertyLabel: request.property ? formatAddress(request.property) : null,
       customer: request.customer
         ? {

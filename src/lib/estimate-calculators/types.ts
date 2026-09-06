@@ -54,11 +54,16 @@ export type CalculatorSnapshot = {
   components?: VariableScopeComponent[];
 };
 
+export type CalculatorIntakeConfig = {
+  workArea?: boolean;
+};
+
 export type CalculatorDefinition = {
   calculatorId: CalculatorId;
   rates: Record<string, unknown>;
   customerPolicies?: CalculatorCustomerPolicy[];
   components?: VariableScopeComponent[];
+  intake?: CalculatorIntakeConfig;
 };
 
 export function isCalculatorId(value: unknown): value is CalculatorId {

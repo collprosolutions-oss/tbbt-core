@@ -7,6 +7,11 @@
 import { Prisma } from "@prisma/client";
 import { startingCalculatorSnapshot } from "@/lib/estimate-calculators";
 import {
+  workAreaAnswerForCatalog,
+  workAreaIntakeToCalculatorInputs,
+  type WorkAreaIntakeRecord,
+} from "@/lib/work-area-intake";
+import {
   catalogCalculatorDefinition,
   catalogScopeText,
   joinLineDescription,
@@ -135,25 +140,32 @@ export function draftEstimateSendError(estimate: {
 export function buildEstimateLineCreatesFromRequestItems(
   businessId: string,
   items: RequestDraftSourceItem[],
+  workAreaIntake?: WorkAreaIntakeRecord | null,
 ) {
   return draftEstimateLinesFromRequestItems(items).map((line, index) => {
     const unitPrice = line.priced && line.unitPrice != null ? line.unitPrice : 0;
     const catalog = items[index]?.serviceCatalogItem;
     const calculatorDefinition = catalogCalculatorDefinition(catalog?.description);
+    const workAreaAnswer = workAreaAnswerForCatalog(
+      workAreaIntake,
+      catalog?.id ?? line.serviceCatalogItemId,
+    );
+    const snapshot = startingCalculatorSnapshot({
+      title: catalog?.name ?? line.description,
+      definition: calculatorDefinition,
+      prefillInputs: workAreaAnswer
+        ? workAreaIntakeToCalculatorInputs(workAreaAnswer)
+        : null,
+    });
     return {
       businessId,
       serviceCatalogItemId: line.serviceCatalogItemId,
       description: joinLineDescription(
         formatDraftEstimateDescription(line),
         catalogScopeText(catalog?.description) ?? catalog?.description,
-        calculatorDefinition
-          ? startingCalculatorSnapshot({
-              title: catalog?.name ?? line.description,
-              definition: calculatorDefinition,
-            })
-          : null,
-        calculatorDefinition
-          ? resolveCustomerPolicies(calculatorDefinition.customerPolicies)
+        snapshot,
+        snapshot
+          ? resolveCustomerPolicies(calculatorDefinition?.customerPolicies)
           : null,
       ),
       quantity: line.quantity,
@@ -170,9 +182,14 @@ export async function addRequestDraftLines(
     businessId: string;
     estimateId: string;
     items: RequestDraftSourceItem[];
+    workAreaIntake?: WorkAreaIntakeRecord | null;
   },
 ) {
-  const rows = buildEstimateLineCreatesFromRequestItems(input.businessId, input.items);
+  const rows = buildEstimateLineCreatesFromRequestItems(
+    input.businessId,
+    input.items,
+    input.workAreaIntake,
+  );
   if (rows.length === 0) return 0;
   await tx.lineItem.createMany({
     data: rows.map((row) => ({
@@ -200,9 +217,14 @@ export async function addChangeOrderDraftLines(
     businessId: string;
     changeOrderId: string;
     items: RequestDraftSourceItem[];
+    workAreaIntake?: WorkAreaIntakeRecord | null;
   },
 ) {
-  const rows = buildEstimateLineCreatesFromRequestItems(input.businessId, input.items);
+  const rows = buildEstimateLineCreatesFromRequestItems(
+    input.businessId,
+    input.items,
+    input.workAreaIntake,
+  );
   if (rows.length === 0) return 0;
   await tx.lineItem.createMany({
     data: rows.map((row) => ({

@@ -43,6 +43,7 @@ export {
   definitionOmitsJobQuantities,
   emptyCalculatorInputs,
   findCatalogCalculatorDefinition,
+  formCalculatorInputs,
   normalizeCalculatorSnapshot,
   persistableCalculatorComponents,
   persistableCalculatorRates,

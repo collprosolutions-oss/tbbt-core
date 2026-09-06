@@ -16,6 +16,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
+import { requestNotesText } from "@/lib/work-area-intake";
 import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
@@ -107,7 +108,7 @@ export default async function CustomerProfilePage({
                   key={request.id}
                   title={
                     <span className="font-normal text-foreground">
-                      {request.description || request.summary || "No description"}
+                      {requestNotesText(request.description) || request.summary || "No description"}
                     </span>
                   }
                   meta={

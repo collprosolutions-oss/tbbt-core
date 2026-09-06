@@ -8,6 +8,12 @@ import {
 } from "@/lib/catalog-intake";
 import { OTHER_SERVICE_VALUE } from "@/lib/intake";
 import {
+  catalogAsksWorkAreaIntake,
+  joinRequestDescription,
+  validateWorkAreaIntakeAnswer,
+  type WorkAreaIntakeAnswer,
+} from "@/lib/work-area-intake";
+import {
   findReusableLegacyProperty,
   findReusableProperty,
   hasStructuredAddressInput,
@@ -54,6 +60,12 @@ export type PublicIntakeInput = {
     quantity?: number | null;
     unit?: string;
   }>;
+  workAreaAnswers?: Array<{
+    catalogItemId: string;
+    contentsHandling?: string;
+    contentsProtection?: string;
+    belongingsCleanup?: string;
+  }>;
 };
 
 export type PublicIntakeDb = {
@@ -72,6 +84,7 @@ export type PublicIntakeDb = {
         intakeMeasurementMode: true;
         intakeMeasurementAxes: true;
         intakeMeasurementUnit: true;
+        description: true;
       };
     }) => Promise<
       Array<{
@@ -80,6 +93,7 @@ export type PublicIntakeDb = {
         intakeMeasurementMode: string;
         intakeMeasurementAxes: string;
         intakeMeasurementUnit: string;
+        description: string | null;
       }>
     >;
   };
@@ -279,6 +293,7 @@ export async function createPublicServiceRequest(
       intakeMeasurementMode: string;
       intakeMeasurementAxes: string;
       intakeMeasurementUnit: string;
+      description: string | null;
     }
   >();
   if (catalogIds.length > 0) {
@@ -294,6 +309,7 @@ export async function createPublicServiceRequest(
         intakeMeasurementMode: true,
         intakeMeasurementAxes: true,
         intakeMeasurementUnit: true,
+        description: true,
       },
     });
     if (catalogItems.length !== catalogIds.length) {
@@ -338,6 +354,24 @@ export async function createPublicServiceRequest(
     }
   }
 
+  const workAreaAnswers: WorkAreaIntakeAnswer[] = [];
+  for (const task of parsed.tasks) {
+    if (task.kind !== "catalog") continue;
+    const catalog = catalogById.get(task.serviceCatalogItemId);
+    if (!catalog || !catalogAsksWorkAreaIntake(catalog.description, catalog.name)) continue;
+    const submitted = (input.workAreaAnswers ?? []).find(
+      (row) => row.catalogItemId === task.serviceCatalogItemId,
+    ) ?? { catalogItemId: task.serviceCatalogItemId };
+    const checked = validateWorkAreaIntakeAnswer({
+      catalogItemId: task.serviceCatalogItemId,
+      contentsHandling: submitted.contentsHandling,
+      contentsProtection: submitted.contentsProtection,
+      belongingsCleanup: submitted.belongingsCleanup,
+    });
+    if (!checked.ok) return checked;
+    workAreaAnswers.push(checked.answer);
+  }
+
   const photoAssetIds = [...new Set((input.photoAssetIds ?? []).map((id) => id.trim()).filter(Boolean))].slice(
     0,
     MAX_INTAKE_PHOTOS,
@@ -354,7 +388,10 @@ export async function createPublicServiceRequest(
     parsed.tasks.find((task) => task.kind === "catalog")?.serviceCatalogItemId ??
     null;
   const summary = requestedWorkSummary(labels, 120);
-  const description = notes || null;
+  const description = joinRequestDescription(
+    notes || null,
+    workAreaAnswers.length > 0 ? { answers: workAreaAnswers } : null,
+  );
   const photoUrls = (input.photoUrls ?? []).filter(Boolean).slice(0, MAX_INTAKE_PHOTOS);
   const ownedPhotoIds =
     photoAssetIds.length > 0

@@ -102,6 +102,7 @@ check(
     !page.includes("CalculatorBreakdown") &&
     !page.includes("panelRate") &&
     !page.includes("contentsHandlingLightRate") &&
+    !page.includes("TBBT Work Area Intake") &&
     !header.includes("panelRate"),
 );
 check(

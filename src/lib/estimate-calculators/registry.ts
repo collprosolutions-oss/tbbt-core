@@ -28,6 +28,7 @@ import {
   type VariableScopeTemplate,
 } from "@/lib/estimate-calculators/variable-scope";
 import { catalogCalculatorDefinition } from "@/lib/estimate-line-scope";
+import { pickWorkAreaCalculatorInputs } from "@/lib/work-area-intake";
 
 const TITLE_ALIASES: Partial<Record<CalculatorId, string[]>> = {
   "decorative-wall-paneling": [DECORATIVE_WALL_PANELING_TITLE.toLowerCase()],
@@ -258,6 +259,7 @@ export function catalogDefinitionFromSnapshot(
   const calculatorId = resolveCalculatorId({ title, snapshot });
   if (!calculatorId) return null;
   const components = persistableCalculatorComponents(calculatorId, snapshot?.components);
+  const template = templateForCalculator(calculatorId, components);
   return {
     calculatorId,
     rates: persistableCalculatorRates(
@@ -267,6 +269,7 @@ export function catalogDefinitionFromSnapshot(
       components,
     ),
     ...(components ? { components } : {}),
+    ...(template?.intake ? { intake: template.intake } : {}),
   };
 }
 
@@ -366,6 +369,7 @@ export function startingCalculatorSnapshot(input: {
   title?: string | null;
   definition?: CalculatorDefinition | null;
   snapshot?: CalculatorSnapshot | null;
+  prefillInputs?: Record<string, unknown> | null;
 }): CalculatorSnapshot | null {
   const calculatorId = resolveCalculatorId(input);
   if (!calculatorId) return null;
@@ -384,7 +388,30 @@ export function startingCalculatorSnapshot(input: {
   return {
     calculatorId,
     rates,
-    inputs: emptyCalculatorInputs(calculatorId, rates, components),
+    inputs: {
+      ...emptyCalculatorInputs(calculatorId, rates, components),
+      ...pickWorkAreaCalculatorInputs(input.prefillInputs ?? input.snapshot?.inputs),
+    },
     ...(components ? { components } : {}),
+  };
+}
+
+export function formCalculatorInputs(input: {
+  calculatorId: CalculatorId;
+  snapshot?: CalculatorSnapshot | null;
+  rates?: Record<string, unknown> | null;
+  components?: unknown[] | null;
+}) {
+  const empty = emptyCalculatorInputs(
+    input.calculatorId,
+    input.rates ?? undefined,
+    input.components,
+  );
+  if (calculatorSnapshotIsApplied(input.snapshot)) {
+    return input.snapshot?.inputs ?? empty;
+  }
+  return {
+    ...empty,
+    ...pickWorkAreaCalculatorInputs(input.snapshot?.inputs),
   };
 }

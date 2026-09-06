@@ -13,6 +13,10 @@ import {
   type MeasurementDraft,
 } from "@/components/public/request-measurement-fields";
 import {
+  RequestWorkAreaFields,
+  type WorkAreaDraft,
+} from "@/components/public/request-work-area-fields";
+import {
   RequestPhotoPicker,
   type SelectedRequestPhoto,
 } from "@/components/public/request-photo-picker";
@@ -28,6 +32,14 @@ import {
   resolveCatalogIntakeConfig,
   validateCustomerMeasurementInput,
 } from "@/lib/catalog-intake";
+import {
+  WORK_AREA_INTAKE_CLEANUP_OPTIONS,
+  WORK_AREA_INTAKE_CLARIFICATION,
+  WORK_AREA_INTAKE_HANDLING_OPTIONS,
+  WORK_AREA_INTAKE_PROTECTION_OPTIONS,
+  validateWorkAreaIntakeAnswer,
+  workAreaIntakeOptionLabel,
+} from "@/lib/work-area-intake";
 import { publicServicesPath } from "@/lib/public-site";
 import {
   formatStructuredAddress,
@@ -87,6 +99,7 @@ export function MultiServiceRequestFlow({
   const [preferredContact, setPreferredContact] = useState("text");
   const [photos, setPhotos] = useState<SelectedRequestPhoto[]>([]);
   const [measurements, setMeasurements] = useState<Record<string, MeasurementDraft>>({});
+  const [workArea, setWorkArea] = useState<Record<string, WorkAreaDraft>>({});
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
   const [pending, setPending] = useState(false);
@@ -115,6 +128,23 @@ export function MultiServiceRequestFlow({
       const measured = validateCustomerMeasurementInput(config, measurements[id] ?? {});
       if (!measured.ok) {
         setError(measured.error);
+        return;
+      }
+    }
+    for (const id of selected.catalogIds) {
+      const item = items.find((row) => row.id === id);
+      if (!item?.asksWorkAreaIntake) continue;
+      const draft = workArea[id] ?? {
+        contentsHandling: "",
+        contentsProtection: "",
+        belongingsCleanup: "",
+      };
+      const answered = validateWorkAreaIntakeAnswer({
+        catalogItemId: id,
+        ...draft,
+      });
+      if (!answered.ok) {
+        setError(answered.error);
         return;
       }
     }
@@ -160,6 +190,21 @@ export function MultiServiceRequestFlow({
           height: draft.height,
           length: draft.length,
           unit: config.unit,
+        }),
+      );
+    }
+    for (const id of selected.catalogIds) {
+      const item = items.find((row) => row.id === id);
+      if (!item?.asksWorkAreaIntake) continue;
+      const draft = workArea[id];
+      if (!draft) continue;
+      formData.append(
+        "workArea",
+        JSON.stringify({
+          catalogItemId: id,
+          contentsHandling: draft.contentsHandling,
+          contentsProtection: draft.contentsProtection,
+          belongingsCleanup: draft.belongingsCleanup,
         }),
       );
     }
@@ -324,6 +369,14 @@ export function MultiServiceRequestFlow({
               setMeasurements((current) => ({ ...current, [catalogItemId]: next }))
             }
           />
+          <RequestWorkAreaFields
+            items={items}
+            selectedCatalogIds={selected.catalogIds}
+            values={workArea}
+            onChange={(catalogItemId, next) =>
+              setWorkArea((current) => ({ ...current, [catalogItemId]: next }))
+            }
+          />
           {photosEnabled ? (
             <RequestPhotoPicker
               photos={photos}
@@ -456,6 +509,7 @@ export function MultiServiceRequestFlow({
             <p>{notes || "No additional notes"}</p>
           </ReviewBlock>
           <ReviewMeasurementSummary items={items} selectedCatalogIds={selected.catalogIds} measurements={measurements} />
+          <ReviewWorkAreaSummary items={items} selectedCatalogIds={selected.catalogIds} workArea={workArea} />
           <ReviewBlock title="Photos">
             <p>
               {photosEnabled
@@ -540,6 +594,56 @@ function ReviewMeasurementSummary({
           <li key={row}>{row}</li>
         ))}
       </ul>
+    </ReviewBlock>
+  );
+}
+
+function ReviewWorkAreaSummary({
+  items,
+  selectedCatalogIds,
+  workArea,
+}: {
+  items: PublicCatalogItem[];
+  selectedCatalogIds: string[];
+  workArea: Record<string, WorkAreaDraft>;
+}) {
+  const rows = selectedCatalogIds.flatMap((id) => {
+    const item = items.find((row) => row.id === id);
+    if (!item?.asksWorkAreaIntake) return [];
+    const draft = workArea[id];
+    if (!draft) return [];
+    return [
+      {
+        name: item.name,
+        handling: workAreaIntakeOptionLabel(
+          WORK_AREA_INTAKE_HANDLING_OPTIONS,
+          draft.contentsHandling,
+        ),
+        protection: workAreaIntakeOptionLabel(
+          WORK_AREA_INTAKE_PROTECTION_OPTIONS,
+          draft.contentsProtection,
+        ),
+        cleanup: workAreaIntakeOptionLabel(
+          WORK_AREA_INTAKE_CLEANUP_OPTIONS,
+          draft.belongingsCleanup,
+        ),
+      },
+    ];
+  });
+  if (rows.length === 0) return null;
+  return (
+    <ReviewBlock title="Work area & belongings">
+      <ul className="list-disc space-y-2 pl-5">
+        {rows.map((row) => (
+          <li key={row.name}>
+            <p>{row.name}</p>
+            <p>Work area / contents: {row.handling}</p>
+            <p>Contents protection: {row.protection}</p>
+            <p>Additional belongings cleaning: {row.cleanup}</p>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-3 text-sm text-muted-foreground">{WORK_AREA_INTAKE_CLARIFICATION}</p>
     </ReviewBlock>
   );
 }

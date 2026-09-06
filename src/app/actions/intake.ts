@@ -81,6 +81,27 @@ export async function submitServiceRequest(
     otherDescription: readString(formData, "otherDescription"),
     otherQuantity: readString(formData, "otherQuantity") || undefined,
     photoAssetIds: readAllStrings(formData, "photoAssetId"),
+    workAreaAnswers: readAllStrings(formData, "workArea").flatMap((raw) => {
+      try {
+        const parsed = JSON.parse(raw) as {
+          catalogItemId?: string;
+          contentsHandling?: string;
+          contentsProtection?: string;
+          belongingsCleanup?: string;
+        };
+        if (!parsed.catalogItemId) return [];
+        return [
+          {
+            catalogItemId: parsed.catalogItemId,
+            contentsHandling: parsed.contentsHandling,
+            contentsProtection: parsed.contentsProtection,
+            belongingsCleanup: parsed.belongingsCleanup,
+          },
+        ];
+      } catch {
+        return [];
+      }
+    }),
     measurements: readAllStrings(formData, "measurement").flatMap((raw) => {
       try {
         const parsed = JSON.parse(raw) as {

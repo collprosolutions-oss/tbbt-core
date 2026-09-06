@@ -23,6 +23,7 @@ import {
   updateDraftEstimateLineIncludedWork,
 } from "@/lib/estimate-line-ops";
 import { joinLineDescription } from "@/lib/estimate-line-scope";
+import { parseWorkAreaIntake } from "@/lib/work-area-intake";
 import {
   addRequestDraftLines,
   draftEstimateSendError,
@@ -216,6 +217,7 @@ export async function createEstimate(serviceRequestId: string) {
       businessId: access.businessId,
       estimateId: created.id,
       items: sourceItems,
+      workAreaIntake: parseWorkAreaIntake(request.description),
     });
     await persistDraftEstimateTotal(tx, created.id, access.businessId);
 

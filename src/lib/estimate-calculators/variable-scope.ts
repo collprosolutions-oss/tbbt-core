@@ -48,6 +48,7 @@ export type VariableScopeTemplate = {
   calculatorId: string;
   title: string;
   components: VariableScopeComponent[];
+  intake?: { workArea?: boolean };
 };
 
 export function isVariableScopeInputType(
@@ -117,7 +118,17 @@ export function normalizeVariableScopeTemplate(
   const title = typeof item.title === "string" ? item.title.trim() : calculatorId;
   const components = normalizeVariableScopeComponents(item.components);
   if (!calculatorId || components.length === 0) return null;
-  return { calculatorId, title, components };
+  const intakeRaw =
+    item.intake && typeof item.intake === "object" && !Array.isArray(item.intake)
+      ? (item.intake as { workArea?: unknown })
+      : null;
+  const intake =
+    intakeRaw?.workArea === true
+      ? { workArea: true as const }
+      : intakeRaw?.workArea === false
+        ? { workArea: false as const }
+        : undefined;
+  return { calculatorId, title, components, ...(intake ? { intake } : {}) };
 }
 
 export function defaultVariableScopeRates(template: VariableScopeTemplate) {

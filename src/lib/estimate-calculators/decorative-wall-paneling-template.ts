@@ -16,6 +16,7 @@ const rates = DEFAULT_DECORATIVE_WALL_PANELING_RATES;
 export const DECORATIVE_WALL_PANELING_TEMPLATE: VariableScopeTemplate = {
   calculatorId: DECORATIVE_WALL_PANELING_CALCULATOR_ID,
   title: DECORATIVE_WALL_PANELING_TITLE,
+  intake: { workArea: true },
   components: [
     {
       key: "wallWidthFt",

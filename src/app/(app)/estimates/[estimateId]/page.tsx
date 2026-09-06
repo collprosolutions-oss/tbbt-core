@@ -44,9 +44,8 @@ import { prisma } from "@/lib/prisma";
 import {
   CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
   DECORATIVE_WALL_PANELING_CALCULATOR_ID,
-  calculatorSnapshotIsApplied,
-  emptyCalculatorInputs,
   findCatalogCalculatorDefinition,
+  formCalculatorInputs,
   resolveCalculatorId,
   resolveCalculatorRatesForForm,
   templateForCalculator,
@@ -64,6 +63,11 @@ import {
   isUnpricedCustomQuoteDraftLine,
 } from "@/lib/request-estimate-draft";
 import { requestedWorkLabels } from "@/lib/service-request-work";
+import {
+  formatWorkAreaIntakeLabels,
+  parseWorkAreaIntake,
+  requestNotesText,
+} from "@/lib/work-area-intake";
 
 export const metadata: Metadata = {
   title: "Estimate",
@@ -99,7 +103,7 @@ export default async function EstimateBuilderPage({
             orderBy: { sortOrder: "asc" },
             select: {
               customDescription: true,
-              serviceCatalogItem: { select: { name: true } },
+              serviceCatalogItem: { select: { id: true, name: true } },
             },
           },
         },
@@ -206,9 +210,32 @@ export default async function EstimateBuilderPage({
                 </div>
               );
             })()}
-            {estimate.serviceRequest?.description ? (
-              <p>{estimate.serviceRequest.description}</p>
+            {requestNotesText(estimate.serviceRequest?.description) ? (
+              <p>{requestNotesText(estimate.serviceRequest?.description)}</p>
             ) : null}
+            {(() => {
+              const workAreaLabels = formatWorkAreaIntakeLabels(
+                parseWorkAreaIntake(estimate.serviceRequest?.description),
+                Object.fromEntries(
+                  (estimate.serviceRequest?.items ?? []).flatMap((item) =>
+                    item.serviceCatalogItem
+                      ? [[item.serviceCatalogItem.id, item.serviceCatalogItem.name]]
+                      : [],
+                  ),
+                ),
+              );
+              if (workAreaLabels.length === 0) return null;
+              return (
+                <div className="mt-2">
+                  <p className="font-medium">Customer work-area answers</p>
+                  <ul className="list-disc pl-5">
+                    {workAreaLabels.map((label) => (
+                      <li key={label}>{label}</li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })()}
           </div>
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">Manual estimate</p>
@@ -289,16 +316,14 @@ export default async function EstimateBuilderPage({
                       components: calculatorComponents,
                     })
                   : null;
-                const formInputs =
-                  calculatorId && calculatorSnapshotIsApplied(calculatorSnapshot)
-                    ? calculatorSnapshot?.inputs
-                    : calculatorId
-                      ? emptyCalculatorInputs(
-                          calculatorId,
-                          formRates ?? undefined,
-                          calculatorComponents,
-                        )
-                      : null;
+                const formInputs = calculatorId
+                  ? formCalculatorInputs({
+                      calculatorId,
+                      snapshot: calculatorSnapshot,
+                      rates: formRates,
+                      components: calculatorComponents,
+                    })
+                  : null;
                 const customTemplate =
                   calculatorId === CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID
                     ? templateForCalculator(calculatorId, calculatorComponents)
