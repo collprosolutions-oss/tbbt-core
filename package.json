@@ -42,6 +42,7 @@
     "test:public-website": "node --experimental-strip-types scripts/check-public-website.mjs",
     "test:service-address": "node --experimental-strip-types scripts/check-service-address.mjs",
     "test:project-portal-layout": "node scripts/check-project-portal-layout.mjs",
+    "test:customer-estimate-layout": "node scripts/check-customer-estimate-layout.mjs",
     "test:production-migrate": "node scripts/check-production-migrate.mjs",
     "test:request-intake": "node --experimental-strip-types scripts/check-request-intake.mjs",
     "test:public-site-images": "node --experimental-strip-types scripts/check-public-site-images.mjs",
