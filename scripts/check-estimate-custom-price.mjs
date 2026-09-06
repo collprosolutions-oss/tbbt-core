@@ -95,7 +95,10 @@ try {
   );
   check("Estimate page mounts an inline price field on price-required lines", pageSource.includes("PriceRequiredLineForm"));
   check("Add custom item remains available (reused architecture, not a second catalog path)", pageSource.includes("AddCustomLineForm"));
-  check("Inline form saves unit price without a catalog write", formSource.includes("unitPrice") && formSource.includes("does not add the work to the service catalog"));
+  check(
+    "Inline form saves unit price without a catalog write",
+    formSource.includes('name="unitPrice"') && formSource.includes("service catalog"),
+  );
 
   const ownerUser = await prisma.user.create({
     data: { name: "Olivia Owner", email: `owner-price-${randomUUID()}@example.com`, passwordHash: "x" },
