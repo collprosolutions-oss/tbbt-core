@@ -9,6 +9,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { startOfDay } from "@/lib/schedule";
 import { requestedWorkLabels, requestedWorkSummary } from "@/lib/service-request-work";
+import { requestNotesText } from "@/lib/work-area-intake";
 import {
   ATTENTION_KIND_LABELS,
   attentionKinds,
@@ -277,7 +278,7 @@ export async function loadPipelineSource(
       requestedWorkSummary(requestedWorkLabels(request)) ??
       request.serviceCatalogItem?.name ??
       request.summary ??
-      request.description ??
+      requestNotesText(request.description) ??
       null;
     return toView({
       key: opportunityKey({ serviceRequestId: request.id }),
@@ -286,7 +287,7 @@ export async function loadPipelineSource(
       property: request.property,
       serviceRequestId: request.id,
       requestStatus: request.status,
-      requestSummary: request.summary || request.description || requestedWork || "Service request",
+      requestSummary: request.summary || requestNotesText(request.description) || requestedWork || "Service request",
       requestedWork,
       estimate,
       job,

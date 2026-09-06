@@ -15,6 +15,7 @@ import {
   HANDYMAN_CATALOG_CATEGORIES,
   planStarterCatalogInstall,
 } from "@/lib/handyman-starter-catalog";
+import { catalogScopeText } from "@/lib/estimate-line-scope";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
 import { groupServiceCatalogItemsByCategory } from "@/lib/service-catalog-category";
@@ -68,7 +69,7 @@ export default async function ServicesPage({
   const catalogItems: ServiceCatalogListItem[] = items.map((item) => ({
     id: item.id,
     name: item.name,
-    description: item.description ?? "",
+    description: catalogScopeText(item.description) ?? "",
     pricingMode: item.pricingMode,
     price: item.price?.toString() ?? "",
     displayPrice: formatCatalogPriceLabel(item.pricingMode, item.price),

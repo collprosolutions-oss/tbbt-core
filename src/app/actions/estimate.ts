@@ -13,8 +13,20 @@ import {
 import { createEstimateVersionSnapshot } from "@/lib/estimate-version";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import {
+  addCatalogItemToDraftEstimate,
+  applyDraftEstimateCalculator,
+  estimateLineErrorMessage,
+  overrideDraftEstimateLinePrice,
+  persistDraftEstimateCalculatorRates,
+  priceDraftEstimateLine,
+  saveDraftEstimateLineAsCatalog,
+  updateDraftEstimateLineIncludedWork,
+} from "@/lib/estimate-line-ops";
+import { joinLineDescription } from "@/lib/estimate-line-scope";
+import { parseWorkAreaIntake } from "@/lib/work-area-intake";
+import {
   addRequestDraftLines,
-  isUnpricedCustomQuoteDraftLine,
+  draftEstimateSendError,
 } from "@/lib/request-estimate-draft";
 import {
   getMailConfig,
@@ -32,6 +44,80 @@ export type EstimateActionState = {
 function readString(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readVariableScopePayload(formData: FormData): {
+  inputs: Record<string, unknown>;
+  rates: Record<string, unknown>;
+} | null {
+  const raw = formData.get("variableScopePayload");
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      inputs?: unknown;
+      rates?: unknown;
+    };
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      inputs:
+        parsed.inputs && typeof parsed.inputs === "object" && !Array.isArray(parsed.inputs)
+          ? (parsed.inputs as Record<string, unknown>)
+          : {},
+      rates:
+        parsed.rates && typeof parsed.rates === "object" && !Array.isArray(parsed.rates)
+          ? (parsed.rates as Record<string, unknown>)
+          : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+function decorativeWallPanelingFormFields(formData: FormData) {
+  return {
+    inputs: {
+      wallWidthFt: readString(formData, "wallWidthFt"),
+      wallHeightFt: readString(formData, "wallHeightFt"),
+      removalType: readString(formData, "removalType"),
+      panelQuantity: readString(formData, "panelQuantity"),
+      slidingPatioDoors: readString(formData, "slidingPatioDoors"),
+      standardDoors: readString(formData, "standardDoors"),
+      windows: readString(formData, "windows"),
+      receptacles: readString(formData, "receptacles"),
+      switches: readString(formData, "switches"),
+      lightFixtures: readString(formData, "lightFixtures"),
+      trimAllowance: readString(formData, "trimAllowance"),
+      cleanupAllowance: readString(formData, "cleanupAllowance"),
+      contentsHandlingLevel: readString(formData, "contentsHandlingLevel"),
+      contentsHandlingCustomAmount: readString(formData, "contentsHandlingCustomAmount"),
+      contentsProtectionLevel: readString(formData, "contentsProtectionLevel"),
+      contentsProtectionCustomAmount: readString(formData, "contentsProtectionCustomAmount"),
+      belongingsCleanupLevel: readString(formData, "belongingsCleanupLevel"),
+      belongingsCleanupCustomAmount: readString(formData, "belongingsCleanupCustomAmount"),
+      notes: readString(formData, "notes"),
+    },
+    rates: {
+      panelRate: readString(formData, "panelRate"),
+      removalRatePerSqFt: readString(formData, "removalRatePerSqFt"),
+      slidingPatioDoorRate: readString(formData, "slidingPatioDoorRate"),
+      standardDoorRate: readString(formData, "standardDoorRate"),
+      windowRate: readString(formData, "windowRate"),
+      receptacleRate: readString(formData, "receptacleRate"),
+      switchRate: readString(formData, "switchRate"),
+      lightFixtureRate: readString(formData, "lightFixtureRate"),
+      defaultTrimAllowance: readString(formData, "defaultTrimAllowance"),
+      defaultCleanupAllowance: readString(formData, "defaultCleanupAllowance"),
+      contentsHandlingLightRate: readString(formData, "contentsHandlingLightRate"),
+      contentsHandlingModerateRate: readString(formData, "contentsHandlingModerateRate"),
+      contentsHandlingHeavyRate: readString(formData, "contentsHandlingHeavyRate"),
+      contentsProtectionLightRate: readString(formData, "contentsProtectionLightRate"),
+      contentsProtectionModerateRate: readString(formData, "contentsProtectionModerateRate"),
+      contentsProtectionHeavyRate: readString(formData, "contentsProtectionHeavyRate"),
+      belongingsCleanupLightRate: readString(formData, "belongingsCleanupLightRate"),
+      belongingsCleanupModerateRate: readString(formData, "belongingsCleanupModerateRate"),
+      belongingsCleanupHeavyRate: readString(formData, "belongingsCleanupHeavyRate"),
+    },
+  };
 }
 
 function parseDecimal(raw: string, allowZero = false) {
@@ -60,12 +146,24 @@ export async function createEstimate(serviceRequestId: string) {
           orderBy: { sortOrder: "asc" },
           include: {
             serviceCatalogItem: {
-              select: { id: true, name: true, pricingMode: true, price: true },
+              select: {
+                id: true,
+                name: true,
+                pricingMode: true,
+                price: true,
+                description: true,
+              },
             },
           },
         },
         serviceCatalogItem: {
-          select: { id: true, name: true, pricingMode: true, price: true },
+          select: {
+            id: true,
+            name: true,
+            pricingMode: true,
+            price: true,
+            description: true,
+          },
         },
       },
     }),
@@ -119,6 +217,7 @@ export async function createEstimate(serviceRequestId: string) {
       businessId: access.businessId,
       estimateId: created.id,
       items: sourceItems,
+      workAreaIntake: parseWorkAreaIntake(request.description),
     });
     await persistDraftEstimateTotal(tx, created.id, access.businessId);
 
@@ -340,55 +439,18 @@ export async function addCatalogLineItem(
     return { error: "Catalog item and a quantity greater than 0 are required." };
   }
 
-  const estimate = access.assertOwned(
-    await prisma.estimate.findFirst({
-      where: { id: estimateId, ...access.scope },
-    }),
-  );
-
-  if (estimate.status !== "DRAFT") {
-    return { error: "Only a draft estimate can be changed." };
-  }
-
-  const catalogItem = access.assertOwned(
-    await prisma.serviceCatalogItem.findFirst({
-      where: { id: catalogItemId, ...access.scope },
-    }),
-  );
-
-  if (!catalogItem.active) {
-    return { error: "That service is not active." };
-  }
-
-  let unitPrice = catalogItem.price;
-  if (catalogItem.pricingMode === "CUSTOM_QUOTE") {
-    unitPrice = parseDecimal(readString(formData, "unitPrice"));
-    if (!unitPrice) {
-      return { error: "Enter the price for this job." };
-    }
-  } else if (!unitPrice || unitPrice.lte(0)) {
-    return { error: "That service has no saved price." };
-  }
-
-  const total = quantity.mul(unitPrice);
-
-  await prisma.$transaction(async (tx) => {
-    await tx.lineItem.create({
-      data: {
-        businessId: access.businessId,
-        estimateId: estimate.id,
-        serviceCatalogItemId: catalogItem.id,
-        description: catalogItem.name,
-        quantity,
-        unitPrice,
-        total,
-        type: "LABOR",
-      },
+  try {
+    await addCatalogItemToDraftEstimate(prisma, access, {
+      estimateId,
+      catalogItemId,
+      quantity,
+      unitPrice: parseDecimal(readString(formData, "unitPrice")),
     });
-    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
-  });
+  } catch (error) {
+    return { error: estimateLineErrorMessage(error, "Could not add that service.") };
+  }
 
-  revalidatePath(`/estimates/${estimate.id}`);
+  revalidatePath(`/estimates/${estimateId}`);
   return {};
 }
 
@@ -429,7 +491,12 @@ export async function addCustomLineItem(
       data: {
         businessId: access.businessId,
         estimateId: estimate.id,
-        description,
+        description: joinLineDescription(
+          description,
+          typeof formData.get("includedWork") === "string"
+            ? String(formData.get("includedWork"))
+            : "",
+        ),
         quantity,
         unitPrice,
         total,
@@ -441,6 +508,153 @@ export async function addCustomLineItem(
 
   revalidatePath(`/estimates/${estimate.id}`);
   return {};
+}
+
+export async function priceEstimateLineItem(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    await priceDraftEstimateLine(prisma, access, {
+      estimateId: readString(formData, "estimateId"),
+      lineItemId: readString(formData, "lineItemId"),
+      unitPrice: readString(formData, "unitPrice"),
+      quantity: readString(formData, "quantity") || undefined,
+    });
+    revalidatePath(`/estimates/${readString(formData, "estimateId")}`);
+    return { message: "Price saved." };
+  } catch (error) {
+    return { error: estimateLineErrorMessage(error, "Could not save that price.") };
+  }
+}
+
+export async function updateEstimateLineIncludedWork(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    await updateDraftEstimateLineIncludedWork(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      includedWork: typeof formData.get("includedWork") === "string"
+        ? String(formData.get("includedWork"))
+        : "",
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: "Scope saved." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not save that scope."),
+    };
+  }
+}
+
+export async function applyEstimateCalculator(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    const calculatorFields =
+      readVariableScopePayload(formData) ?? decorativeWallPanelingFormFields(formData);
+    await applyDraftEstimateCalculator(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      inputs: calculatorFields.inputs,
+      rates: calculatorFields.rates,
+      customerPolicies: [
+        {
+          id: readString(formData, "customerPolicyId") || "work-area-personal-property",
+          title: readString(formData, "customerPolicyTitle") || "Work Area & Personal Property",
+          body: readString(formData, "customerPolicyBody"),
+        },
+      ].filter((policy) => policy.body),
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: "Recommended labor price applied." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not apply that recommended price."),
+    };
+  }
+}
+
+export async function persistEstimateCalculatorRates(
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const payload = readVariableScopePayload(formData);
+    const calculatorFields = payload ?? decorativeWallPanelingFormFields(formData);
+    await persistDraftEstimateCalculatorRates(prisma, await requireBusinessAccess(), {
+      estimateId: readString(formData, "estimateId"),
+      lineItemId: readString(formData, "lineItemId"),
+      rates: calculatorFields.rates,
+      inputs: payload?.inputs,
+      customerPolicies: readString(formData, "customerPolicyBody")
+        ? [
+            {
+              id: readString(formData, "customerPolicyId") || "work-area-personal-property",
+              title:
+                readString(formData, "customerPolicyTitle") ||
+                "Work Area & Personal Property",
+              body: readString(formData, "customerPolicyBody"),
+            },
+          ]
+        : null,
+    });
+    return { message: "Calculator rates saved as the business default." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not save those calculator rates."),
+    };
+  }
+}
+
+export async function overrideEstimateLinePrice(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    await overrideDraftEstimateLinePrice(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      unitPrice: readString(formData, "unitPrice"),
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: "Line price updated." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not override that price."),
+    };
+  }
+}
+
+export async function saveEstimateLineForReuse(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    const catalog = await saveDraftEstimateLineAsCatalog(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      savePrice: readString(formData, "savePrice") === "1",
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    revalidatePath("/services");
+    return { message: `Saved “${catalog.name}” to the catalog.` };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not save that service for reuse."),
+    };
+  }
 }
 
 export async function setEstimateLaborMinimumWaived(
@@ -574,16 +788,9 @@ export async function sendEstimate(
     }),
   );
 
-  if (estimate.status !== "DRAFT") {
-    return { error: "Only a draft estimate can be sent." };
-  }
-
-  if (estimate.lineItems.length === 0) {
-    return { error: "Add at least one line item before sending." };
-  }
-
-  if (estimate.lineItems.some(isUnpricedCustomQuoteDraftLine)) {
-    return { error: "Enter a price for each custom-quote line before sending." };
+  const blocked = draftEstimateSendError(estimate);
+  if (blocked) {
+    return { error: blocked };
   }
 
   const result = await prisma.$transaction(async (tx) => {
@@ -592,16 +799,12 @@ export async function sendEstimate(
       include: { lineItems: { select: { id: true, description: true, unitPrice: true } } },
     });
 
-    if (!current || current.status !== "DRAFT") {
-      return { error: "Only a draft estimate can be sent." };
+    if (!current) {
+      return { error: "That estimate could not be sent." };
     }
-
-    if (current.lineItems.length === 0) {
-      return { error: "Add at least one line item before sending." };
-    }
-
-    if (current.lineItems.some(isUnpricedCustomQuoteDraftLine)) {
-      return { error: "Enter a price for each custom-quote line before sending." };
+    const currentBlocked = draftEstimateSendError(current);
+    if (currentBlocked) {
+      return { error: currentBlocked };
     }
 
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);

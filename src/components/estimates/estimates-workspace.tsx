@@ -7,6 +7,8 @@ import { ClearDraftEstimateButton } from "@/components/estimates/clear-draft-est
 import { CopyEstimateLinkButton } from "@/components/estimates/copy-estimate-link-button";
 import { EditEstimateButton } from "@/components/estimates/edit-estimate-button";
 import { EmailEstimateButton } from "@/components/estimates/email-estimate-button";
+import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
+import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { EmptyState } from "@/components/empty-state";
 import { CreateJobButton } from "@/components/jobs/create-job-button";
@@ -369,12 +371,15 @@ function EstimateDetailsPanel({ estimate }: { estimate: EstimateListItem | null 
           ) : (
             <ul className="space-y-2 rounded-lg border border-border/60 bg-card/40 p-3 text-sm">
               {estimate.lineItems.map((item) => (
-                <li key={item.id} className="flex items-start justify-between gap-3">
-                  <span className="min-w-0 flex-1 break-words text-foreground">
-                    <span className="text-muted-foreground">{LineItemTypeLabel(item.type)}:</span>{" "}
-                    {item.description} × {item.quantity}
-                  </span>
-                  <span className="shrink-0 font-medium tabular-nums text-foreground">{item.total}</span>
+                <li key={item.id} className="space-y-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="min-w-0 flex-1 break-words text-foreground">
+                      <span className="text-muted-foreground">{LineItemTypeLabel(item.type)}:</span>{" "}
+                      {lineItemTitle(item.description)} × {item.quantity}
+                    </span>
+                    <span className="shrink-0 font-medium tabular-nums text-foreground">{item.total}</span>
+                  </div>
+                  <IncludedWorkDisplay description={item.description} />
                 </li>
               ))}
             </ul>

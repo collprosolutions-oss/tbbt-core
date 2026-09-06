@@ -96,7 +96,17 @@ export function CatalogItemRow({
             <option value="CUSTOM_QUOTE">Custom Quote</option>
           </select>
         </div>
-        {mode === "CUSTOM_QUOTE" ? null : (
+        {mode === "CUSTOM_QUOTE" ? (
+          <div className="space-y-2">
+            <Label htmlFor={`price-${id}`}>Default starting price (optional)</Label>
+            <Input
+              id={`price-${id}`}
+              name="price"
+              inputMode="decimal"
+              defaultValue={price}
+            />
+          </div>
+        ) : (
           <div className="space-y-2">
             <Label htmlFor={`price-${id}`}>Price</Label>
             <Input
@@ -109,7 +119,7 @@ export function CatalogItemRow({
           </div>
         )}
         <div className="space-y-2">
-          <Label htmlFor={`description-${id}`}>Description</Label>
+          <Label htmlFor={`description-${id}`}>Scope / Included Work</Label>
           <textarea
             id={`description-${id}`}
             name="description"

@@ -132,15 +132,31 @@ export function renderInvoicePdf(
           doc.addPage();
           y = 50;
         }
+        const descWidth = colQty - left - 12;
         const descHeight = doc.heightOfString(line.description, {
-          width: colQty - left - 12,
+          width: descWidth,
         });
+        const scope = line.includedWork?.trim() ?? "";
+        const scopeHeight = scope
+          ? 12 +
+            doc.heightOfString(`Scope / Included Work\n${scope}`, {
+              width: descWidth,
+            })
+          : 0;
         doc.font("Helvetica").fontSize(10).fillColor("#111111");
-        doc.text(line.description, left, y, { width: colQty - left - 12 });
+        doc.text(line.description, left, y, { width: descWidth });
         doc.text(line.quantityLabel, colQty, y, { width: 70, align: "right" });
         doc.text(line.unitPriceLabel, colRate, y, { width: 70, align: "right" });
         doc.text(line.amountLabel, colAmt - 80, y, { width: 80, align: "right" });
-        y += Math.max(16, descHeight) + 6;
+        if (scope) {
+          doc.font("Helvetica-Bold").fontSize(8).fillColor("#555555");
+          doc.text("Scope / Included Work", left, y + descHeight + 2, {
+            width: descWidth,
+          });
+          doc.font("Helvetica").fontSize(8).fillColor("#333333");
+          doc.text(scope, left, y + descHeight + 12, { width: descWidth });
+        }
+        y += Math.max(16, descHeight + scopeHeight) + 6;
       }
     }
 

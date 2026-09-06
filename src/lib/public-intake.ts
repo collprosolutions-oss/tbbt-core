@@ -8,6 +8,13 @@ import {
 } from "@/lib/catalog-intake";
 import { OTHER_SERVICE_VALUE } from "@/lib/intake";
 import {
+  catalogAsksWorkAreaIntake,
+  joinRequestDescription,
+  normalizeIntakeSubmissionId,
+  validateWorkAreaIntakeAnswer,
+  type WorkAreaIntakeAnswer,
+} from "@/lib/work-area-intake";
+import {
   findReusableLegacyProperty,
   findReusableProperty,
   hasStructuredAddressInput,
@@ -54,6 +61,13 @@ export type PublicIntakeInput = {
     quantity?: number | null;
     unit?: string;
   }>;
+  workAreaAnswers?: Array<{
+    catalogItemId: string;
+    contentsHandling?: string;
+    contentsProtection?: string;
+    belongingsCleanup?: string;
+  }>;
+  submissionId?: string | null;
 };
 
 export type PublicIntakeDb = {
@@ -72,6 +86,7 @@ export type PublicIntakeDb = {
         intakeMeasurementMode: true;
         intakeMeasurementAxes: true;
         intakeMeasurementUnit: true;
+        description: true;
       };
     }) => Promise<
       Array<{
@@ -80,6 +95,7 @@ export type PublicIntakeDb = {
         intakeMeasurementMode: string;
         intakeMeasurementAxes: string;
         intakeMeasurementUnit: string;
+        description: string | null;
       }>
     >;
   };
@@ -94,6 +110,12 @@ export type PublicIntakeDb = {
       };
       select: { id: true };
     }) => Promise<Array<{ id: string }>>;
+  };
+  serviceRequest: {
+    findFirst: (args: {
+      where: { businessId: string; description: { contains: string } };
+      select: { id: true };
+    }) => Promise<{ id: string } | null>;
   };
   $transaction: <T>(fn: (tx: PublicIntakeTx) => Promise<T>) => Promise<T>;
 };
@@ -146,6 +168,10 @@ export type PublicIntakeTx = {
     }) => Promise<{ id: string }>;
   };
   serviceRequest: {
+    findFirst: (args: {
+      where: { businessId: string; description: { contains: string } };
+      select: { id: true };
+    }) => Promise<{ id: string } | null>;
     create: (args: {
       data: {
         businessId: string;
@@ -215,6 +241,17 @@ export async function createPublicServiceRequest(
   db: PublicIntakeDb,
   input: PublicIntakeInput,
 ): Promise<PublicIntakeResult> {
+  try {
+    return await createPublicServiceRequestInner(db, input);
+  } catch {
+    return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
+  }
+}
+
+async function createPublicServiceRequestInner(
+  db: PublicIntakeDb,
+  input: PublicIntakeInput,
+): Promise<PublicIntakeResult> {
   const safeSlug = input.slug.trim().toLowerCase();
   if (!safeSlug) {
     return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
@@ -279,6 +316,7 @@ export async function createPublicServiceRequest(
       intakeMeasurementMode: string;
       intakeMeasurementAxes: string;
       intakeMeasurementUnit: string;
+      description: string | null;
     }
   >();
   if (catalogIds.length > 0) {
@@ -294,6 +332,7 @@ export async function createPublicServiceRequest(
         intakeMeasurementMode: true,
         intakeMeasurementAxes: true,
         intakeMeasurementUnit: true,
+        description: true,
       },
     });
     if (catalogItems.length !== catalogIds.length) {
@@ -338,6 +377,24 @@ export async function createPublicServiceRequest(
     }
   }
 
+  const workAreaAnswers: WorkAreaIntakeAnswer[] = [];
+  for (const task of parsed.tasks) {
+    if (task.kind !== "catalog") continue;
+    const catalog = catalogById.get(task.serviceCatalogItemId);
+    if (!catalog || !catalogAsksWorkAreaIntake(catalog.description, catalog.name)) continue;
+    const submitted = (input.workAreaAnswers ?? []).find(
+      (row) => row.catalogItemId === task.serviceCatalogItemId,
+    ) ?? { catalogItemId: task.serviceCatalogItemId };
+    const checked = validateWorkAreaIntakeAnswer({
+      catalogItemId: task.serviceCatalogItemId,
+      contentsHandling: submitted.contentsHandling,
+      contentsProtection: submitted.contentsProtection,
+      belongingsCleanup: submitted.belongingsCleanup,
+    });
+    if (!checked.ok) return checked;
+    workAreaAnswers.push(checked.answer);
+  }
+
   const photoAssetIds = [...new Set((input.photoAssetIds ?? []).map((id) => id.trim()).filter(Boolean))].slice(
     0,
     MAX_INTAKE_PHOTOS,
@@ -354,7 +411,12 @@ export async function createPublicServiceRequest(
     parsed.tasks.find((task) => task.kind === "catalog")?.serviceCatalogItemId ??
     null;
   const summary = requestedWorkSummary(labels, 120);
-  const description = notes || null;
+  const submissionId = normalizeIntakeSubmissionId(input.submissionId);
+  const description = joinRequestDescription(
+    notes || null,
+    workAreaAnswers.length > 0 ? { answers: workAreaAnswers } : null,
+    submissionId,
+  );
   const photoUrls = (input.photoUrls ?? []).filter(Boolean).slice(0, MAX_INTAKE_PHOTOS);
   const ownedPhotoIds =
     photoAssetIds.length > 0
@@ -374,6 +436,17 @@ export async function createPublicServiceRequest(
 
   try {
     const requestId = await db.$transaction(async (tx) => {
+      if (submissionId) {
+        const existing = await tx.serviceRequest.findFirst({
+          where: {
+            businessId: business.id,
+            description: { contains: submissionId },
+          },
+          select: { id: true },
+        });
+        if (existing) return existing.id;
+      }
+
       let customer =
         email
           ? await tx.customer.findFirst({

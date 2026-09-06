@@ -9,6 +9,8 @@ import {
   starterIntakeFields,
   starterPricingMode,
 } from "@/lib/handyman-starter-catalog";
+import { catalogDefinitionFromSnapshot } from "@/lib/estimate-calculators";
+import { catalogCalculatorDefinition, joinCatalogDescription } from "@/lib/estimate-line-scope";
 import { parsePricingMode } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
 import { normalizeServiceCategory } from "@/lib/service-catalog-category";
@@ -43,7 +45,17 @@ function parsePrice(raw: string) {
 
 function catalogPriceForMode(mode: string, rawPrice: string) {
   if (mode === "CUSTOM_QUOTE") {
-    return { ok: true as const, price: null };
+    if (!rawPrice.trim()) {
+      return { ok: true as const, price: null };
+    }
+    const price = parsePrice(rawPrice);
+    if (!price) {
+      return {
+        ok: false as const,
+        error: "Enter a valid default price, or leave it blank.",
+      };
+    }
+    return { ok: true as const, price };
   }
   const price = parsePrice(rawPrice);
   if (!price) {
@@ -83,7 +95,10 @@ export async function createServiceCatalogItem(
       name,
       pricingMode,
       price: priced.price,
-      description: description || null,
+      description: joinCatalogDescription(
+        description || null,
+        catalogDefinitionFromSnapshot(null, name),
+      ),
       category,
     },
   });
@@ -127,7 +142,11 @@ export async function updateServiceCatalogItem(
       name,
       pricingMode,
       price: priced.price,
-      description: description || null,
+      description: joinCatalogDescription(
+        description || null,
+        catalogCalculatorDefinition(item.description) ??
+          catalogDefinitionFromSnapshot(null, name),
+      ),
       category,
     },
   });

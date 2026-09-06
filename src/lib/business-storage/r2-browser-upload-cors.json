@@ -1,0 +1,16 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://www.collproreno.com",
+      "https://collproreno.com",
+      "https://collpro-reno.vercel.app",
+      "https://collpro-reno-git-cursor-estimate-pri-d221ac-collpro-s-projects5.vercel.app",
+      "http://localhost:43217",
+      "http://127.0.0.1:43217"
+    ],
+    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["Content-Type", "Content-Length"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]

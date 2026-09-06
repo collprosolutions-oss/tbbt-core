@@ -5,6 +5,8 @@ import { isBusinessStorageConfigured } from "@/lib/business-storage";
 import { putPublicRequestPhotoFromBytes } from "@/lib/business-storage/request-photos";
 import { privateAssetPath } from "@/lib/business-storage/keys";
 import { prisma } from "@/lib/prisma";
+import { readFormStrings } from "@/lib/public-request-submit";
+import { parseWorkAreaFormAnswers } from "@/lib/work-area-intake";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
 import { resolveSupportedImageMimeType } from "@/lib/storage";
 
@@ -20,21 +22,52 @@ function readString(formData: FormData, key: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function readAllStrings(formData: FormData, key: string) {
-  return formData
-    .getAll(key)
-    .filter((value): value is string => typeof value === "string")
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
-
 function readPhotoFiles(formData: FormData) {
   return formData
     .getAll("photos")
     .filter((value): value is File => value instanceof File && value.size > 0);
 }
 
+function parseMeasurementFields(formData: FormData) {
+  return readFormStrings(formData, "measurement").flatMap((raw) => {
+    try {
+      const parsed = JSON.parse(raw) as {
+        catalogItemId?: string;
+        width?: string;
+        height?: string;
+        length?: string;
+        quantity?: number | null;
+        unit?: string;
+      };
+      if (!parsed.catalogItemId) return [];
+      return [
+        {
+          catalogItemId: parsed.catalogItemId,
+          width: parsed.width,
+          height: parsed.height,
+          length: parsed.length,
+          quantity: parsed.quantity,
+          unit: parsed.unit,
+        },
+      ];
+    } catch {
+      return [];
+    }
+  });
+}
+
 export async function submitServiceRequest(
+  slug: string,
+  formData: FormData,
+): Promise<IntakeResult> {
+  try {
+    return await submitServiceRequestInner(slug, formData);
+  } catch {
+    return { error: GENERIC_ERROR };
+  }
+}
+
+async function submitServiceRequestInner(
   slug: string,
   formData: FormData,
 ): Promise<IntakeResult> {
@@ -50,10 +83,10 @@ export async function submitServiceRequest(
     includeOtherRaw === "1";
 
   const catalogItemIds = [
-    ...readAllStrings(formData, "serviceCatalogItemId"),
-    ...readAllStrings(formData, "serviceCatalogItemIds"),
+    ...readFormStrings(formData, "serviceCatalogItemId"),
+    ...readFormStrings(formData, "serviceCatalogItemIds"),
   ];
-  const quantityValues = readAllStrings(formData, "quantity");
+  const quantityValues = readFormStrings(formData, "quantity");
   const catalogQuantities: Record<string, string> = {};
   catalogItemIds.forEach((id, index) => {
     const paired = quantityValues[index];
@@ -80,32 +113,10 @@ export async function submitServiceRequest(
     includeOther,
     otherDescription: readString(formData, "otherDescription"),
     otherQuantity: readString(formData, "otherQuantity") || undefined,
-    photoAssetIds: readAllStrings(formData, "photoAssetId"),
-    measurements: readAllStrings(formData, "measurement").flatMap((raw) => {
-      try {
-        const parsed = JSON.parse(raw) as {
-          catalogItemId?: string;
-          width?: string;
-          height?: string;
-          length?: string;
-          quantity?: number | null;
-          unit?: string;
-        };
-        if (!parsed.catalogItemId) return [];
-        return [
-          {
-            catalogItemId: parsed.catalogItemId,
-            width: parsed.width,
-            height: parsed.height,
-            length: parsed.length,
-            quantity: parsed.quantity,
-            unit: parsed.unit,
-          },
-        ];
-      } catch {
-        return [];
-      }
-    }),
+    photoAssetIds: readFormStrings(formData, "photoAssetId"),
+    workAreaAnswers: parseWorkAreaFormAnswers(readFormStrings(formData, "workArea")),
+    measurements: parseMeasurementFields(formData),
+    submissionId: readString(formData, "submissionId") || null,
   });
 
   if (!created.ok) {

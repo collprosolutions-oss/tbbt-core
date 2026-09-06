@@ -1,4 +1,6 @@
 import { getBusinessLogoSrc } from "@/lib/business-branding";
+import { catalogScopeText } from "@/lib/estimate-line-scope";
+import { catalogAsksWorkAreaIntake } from "@/lib/work-area-intake";
 import {
   HANDYMAN_CATALOG_CATEGORIES,
 } from "@/lib/handyman-starter-catalog";
@@ -240,6 +242,8 @@ export type PublicCatalogItem = {
   intakeMeasurementMode: string;
   intakeMeasurementAxes: string;
   intakeMeasurementUnit: string;
+  /** Customer-facing flag only. Never includes rates or calculator internals. */
+  asksWorkAreaIntake: boolean;
 };
 
 export type PublicCatalogGroup = {
@@ -348,7 +352,7 @@ export function toPublicCatalogItem(item: {
   return {
     id: item.id,
     name: item.name,
-    description: item.description,
+    description: catalogScopeText(item.description) ?? item.description,
     category: item.category,
     pricingMode: item.pricingMode,
     priceLabel: formatCatalogPriceLabel(item.pricingMode, item.price),
@@ -356,6 +360,7 @@ export function toPublicCatalogItem(item: {
     intakeMeasurementMode: item.intakeMeasurementMode ?? "NONE",
     intakeMeasurementAxes: item.intakeMeasurementAxes ?? "",
     intakeMeasurementUnit: item.intakeMeasurementUnit ?? "IN",
+    asksWorkAreaIntake: catalogAsksWorkAreaIntake(item.description, item.name),
   };
 }
 

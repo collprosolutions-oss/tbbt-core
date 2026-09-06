@@ -1,5 +1,10 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { ApproveEstimateButton } from "@/components/estimates/approve-estimate-button";
+import { CustomerEstimateHeader } from "@/components/estimates/customer-estimate-header";
+import { EstimateCustomerPolicies } from "@/components/estimates/customer-policy-display";
+import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -7,6 +12,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { getBusinessLogoSrc } from "@/lib/business-branding";
+import { lineCustomerPolicies, lineItemTitle } from "@/lib/estimate-line-scope";
+import { uniqueCustomerPolicies } from "@/lib/estimate-policies";
 import { formatAddress, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
@@ -27,6 +35,7 @@ export default async function PublicEstimatePage({
       status: true,
       total: true,
       laborMinimumAdjustment: true,
+      business: { select: { name: true, slug: true } },
       property: {
         select: {
           addressLine1: true,
@@ -113,51 +122,120 @@ export default async function PublicEstimatePage({
         }
       : null
     : estimate.property;
+  const logoSrc = getBusinessLogoSrc(estimate.business.slug);
+  const customerPolicies = uniqueCustomerPolicies(
+    lineItems.map((item) => lineCustomerPolicies(item.description)),
+  );
 
   return (
-    <main className="flex min-h-full items-center justify-center px-4 py-10">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>Estimate</CardTitle>
-          <CardDescription>
-            Status {estimate.status} · Total {formatMoney(total)}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {lineItems.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No line items.</p>
-          ) : (
-            <ul className="space-y-2 text-sm">
-              {lineItems.map((item, index) => (
-                <li key={index} className="flex justify-between gap-3">
-                  <span>
-                    {item.description} × {item.quantity.toString()} @{" "}
-                    {formatMoney(item.unitPrice)}
-                  </span>
-                  <span>{formatMoney(item.total)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {laborMinimumAdjustment.gt(0) ? (
-            <p className="text-sm">
-              Labor Minimum Service Fee Adjustment —{" "}
-              {formatMoney(laborMinimumAdjustment)}
-            </p>
+    <main className="min-h-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      <div className="mx-auto w-full max-w-[1200px] space-y-6">
+        <CustomerEstimateHeader
+          businessName={estimate.business.name}
+          logoSrc={logoSrc}
+          status={estimate.status}
+          totalLabel={formatMoney(total)}
+        />
+
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+          <Card>
+            <CardHeader>
+              <CardTitle>Services</CardTitle>
+              <CardDescription>
+                What is included in this estimate.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              {lineItems.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No line items.</p>
+              ) : (
+                <ul className="space-y-5">
+                  {lineItems.map((item, index) => (
+                    <li key={index} className="space-y-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-medium">
+                            {lineItemTitle(item.description)}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            Qty {item.quantity.toString()} ·{" "}
+                            {formatMoney(item.unitPrice)}
+                          </p>
+                        </div>
+                        <p className="shrink-0 font-medium">
+                          {formatMoney(item.total)}
+                        </p>
+                      </div>
+                      <IncludedWorkDisplay description={item.description} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {laborMinimumAdjustment.gt(0) ? (
+                <p className="text-sm">
+                  Labor Minimum Service Fee Adjustment —{" "}
+                  {formatMoney(laborMinimumAdjustment)}
+                </p>
+              ) : null}
+              {property ? (
+                <p className="text-sm">
+                  Service address: {formatAddress(property)}
+                </p>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="hidden h-fit md:block">
+            <CardHeader>
+              <CardTitle>Estimate summary</CardTitle>
+              <CardDescription>
+                Status {estimate.status} · Total {formatMoney(total)}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-2xl font-semibold tracking-tight">
+                {formatMoney(total)}
+              </p>
+              <Button asChild variant="outline" className="w-full">
+                <Link href={`/e/${estimate.publicToken}/print`}>Print / PDF</Link>
+              </Button>
+              <ApproveEstimateButton
+                publicToken={estimate.publicToken}
+                status={estimate.status}
+                currentVersionId={currentVersion?.id}
+              />
+            </CardContent>
+          </Card>
+
+          {customerPolicies.length > 0 ? (
+            <Card className="md:col-span-2">
+              <CardContent className="pt-6">
+                <EstimateCustomerPolicies
+                  className="max-w-none space-y-4"
+                  descriptions={lineItems.map((item) => item.description)}
+                />
+              </CardContent>
+            </Card>
           ) : null}
-          {property ? (
-            <p className="text-sm">Service address: {formatAddress(property)}</p>
-          ) : null}
-          <p className="text-sm font-medium">
-            Estimate total: {formatMoney(total)}
-          </p>
-          <ApproveEstimateButton
-            publicToken={estimate.publicToken}
-            status={estimate.status}
-            currentVersionId={currentVersion?.id}
-          />
-        </CardContent>
-      </Card>
+
+          <Card className="md:hidden">
+            <CardHeader>
+              <CardTitle>Approve this estimate</CardTitle>
+              <CardDescription>Total {formatMoney(total)}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Button asChild variant="outline" className="w-full">
+                <Link href={`/e/${estimate.publicToken}/print`}>Print / PDF</Link>
+              </Button>
+              <ApproveEstimateButton
+                publicToken={estimate.publicToken}
+                status={estimate.status}
+                currentVersionId={currentVersion?.id}
+              />
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </main>
   );
 }

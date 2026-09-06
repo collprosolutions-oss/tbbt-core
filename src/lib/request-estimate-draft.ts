@@ -5,6 +5,19 @@
  * approve, or create a Job/Invoice.
  */
 import { Prisma } from "@prisma/client";
+import { startingCalculatorSnapshot } from "@/lib/estimate-calculators";
+import {
+  workAreaAnswerForCatalog,
+  workAreaIntakeToCalculatorInputs,
+  type WorkAreaIntakeRecord,
+} from "@/lib/work-area-intake";
+import {
+  catalogCalculatorDefinition,
+  catalogScopeText,
+  joinLineDescription,
+  splitLineDescription,
+} from "@/lib/estimate-line-scope";
+import { resolveCustomerPolicies } from "@/lib/estimate-policies";
 import { coerceRequestQuantity } from "@/lib/service-request-work";
 import { publicCatalogUnitAmount } from "@/lib/pricing-mode";
 
@@ -19,6 +32,7 @@ export type RequestDraftSourceItem = {
     name: string;
     pricingMode: string;
     price: { toString(): string } | number | null;
+    description?: string | null;
   } | null;
 };
 
@@ -81,16 +95,82 @@ export function isUnpricedCustomQuoteDraftLine(item: {
   return unpaid && item.description.includes(CUSTOM_QUOTE_DRAFT_MARKER);
 }
 
+/** Owner/customer-facing title without the internal "enter price" marker. */
+export function customQuoteDisplayDescription(description: string) {
+  return splitLineDescription(description)
+    .title.replace(` ${CUSTOM_QUOTE_DRAFT_MARKER}`, "")
+    .trim();
+}
+
+/**
+ * After the owner enters a job price, keep the original request wording
+ * and encoded scope, and drop the price-required marker. Never writes the catalog.
+ */
+export function pricedCustomQuoteDescription(description: string) {
+  const parts = splitLineDescription(description);
+  const title =
+    parts.title.replace(` ${CUSTOM_QUOTE_DRAFT_MARKER}`, "").trim() || parts.title;
+  return joinLineDescription(
+    title,
+    parts.includedWork,
+    parts.calculatorSnapshot,
+    parts.customerPolicies,
+  );
+}
+
+export function draftEstimateSendError(estimate: {
+  status: string;
+  lineItems: Array<{
+    description: string;
+    unitPrice: { lte: (value: number) => boolean } | number | string;
+  }>;
+}): string | null {
+  if (estimate.status !== "DRAFT") {
+    return "Only a draft estimate can be sent.";
+  }
+  if (estimate.lineItems.length === 0) {
+    return "Add at least one line item before sending.";
+  }
+  if (estimate.lineItems.some(isUnpricedCustomQuoteDraftLine)) {
+    return "Enter a price for each custom-quote line before sending.";
+  }
+  return null;
+}
+
 export function buildEstimateLineCreatesFromRequestItems(
   businessId: string,
   items: RequestDraftSourceItem[],
+  workAreaIntake?: WorkAreaIntakeRecord | null,
 ) {
-  return draftEstimateLinesFromRequestItems(items).map((line) => {
+  return draftEstimateLinesFromRequestItems(items).map((line, index) => {
     const unitPrice = line.priced && line.unitPrice != null ? line.unitPrice : 0;
+    const catalog = items[index]?.serviceCatalogItem;
+    const calculatorDefinition = catalogCalculatorDefinition(catalog?.description);
+    const workAreaAnswer = workAreaAnswerForCatalog(
+      workAreaIntake,
+      catalog?.id ?? line.serviceCatalogItemId,
+    );
+    const snapshot =
+      calculatorDefinition || workAreaAnswer
+        ? startingCalculatorSnapshot({
+            title: catalog?.name ?? line.description,
+            definition: calculatorDefinition,
+            prefillInputs: workAreaAnswer
+              ? workAreaIntakeToCalculatorInputs(workAreaAnswer)
+              : null,
+          })
+        : null;
     return {
       businessId,
       serviceCatalogItemId: line.serviceCatalogItemId,
-      description: formatDraftEstimateDescription(line),
+      description: joinLineDescription(
+        formatDraftEstimateDescription(line),
+        catalogScopeText(catalog?.description) ?? catalog?.description,
+        snapshot,
+        snapshot
+          ? resolveCustomerPolicies(calculatorDefinition?.customerPolicies)
+          : null,
+      ),
       quantity: line.quantity,
       unitPrice,
       total: line.priced && line.unitPrice != null ? line.unitPrice * line.quantity : 0,
@@ -105,9 +185,14 @@ export async function addRequestDraftLines(
     businessId: string;
     estimateId: string;
     items: RequestDraftSourceItem[];
+    workAreaIntake?: WorkAreaIntakeRecord | null;
   },
 ) {
-  const rows = buildEstimateLineCreatesFromRequestItems(input.businessId, input.items);
+  const rows = buildEstimateLineCreatesFromRequestItems(
+    input.businessId,
+    input.items,
+    input.workAreaIntake,
+  );
   if (rows.length === 0) return 0;
   await tx.lineItem.createMany({
     data: rows.map((row) => ({
@@ -135,9 +220,14 @@ export async function addChangeOrderDraftLines(
     businessId: string;
     changeOrderId: string;
     items: RequestDraftSourceItem[];
+    workAreaIntake?: WorkAreaIntakeRecord | null;
   },
 ) {
-  const rows = buildEstimateLineCreatesFromRequestItems(input.businessId, input.items);
+  const rows = buildEstimateLineCreatesFromRequestItems(
+    input.businessId,
+    input.items,
+    input.workAreaIntake,
+  );
   if (rows.length === 0) return 0;
   await tx.lineItem.createMany({
     data: rows.map((row) => ({

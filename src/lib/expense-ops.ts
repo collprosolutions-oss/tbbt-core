@@ -100,6 +100,36 @@ function requireCategory(raw: string): ExpenseCategory {
   return raw;
 }
 
+/**
+ * Job wins when both are set: the job's customer is used. A customer that
+ * does not own the job is rejected. Either field may be omitted.
+ */
+async function resolveExpenseJobAndCustomer(
+  db: Db,
+  businessId: string,
+  input: { jobId?: string; customerId?: string },
+) {
+  let jobId: string | null = null;
+  let customerId: string | null = null;
+
+  if (input.jobId) {
+    const job = await loadJobInBusiness(db, businessId, input.jobId);
+    jobId = job.id;
+    customerId = job.customerId;
+    if (input.customerId && input.customerId !== job.customerId) {
+      throw new ExpenseError("That job does not belong to the selected customer.");
+    }
+    return { jobId, customerId };
+  }
+
+  if (input.customerId) {
+    const customer = await loadCustomerInBusiness(db, businessId, input.customerId);
+    customerId = customer.id;
+  }
+
+  return { jobId, customerId };
+}
+
 export async function createExpense(db: Db, access: BusinessAccess, input: CreateExpenseInput) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
 
@@ -136,17 +166,12 @@ export async function createExpense(db: Db, access: BusinessAccess, input: Creat
     purchaserMembershipId = membership.id;
   }
 
-  let jobId: string | null = null;
-  let customerId: string | null = null;
-  if (input.jobId) {
-    const job = await loadJobInBusiness(db, access.businessId, input.jobId);
-    jobId = job.id;
-    customerId = job.customerId;
-  }
-  if (input.customerId) {
-    const customer = await loadCustomerInBusiness(db, access.businessId, input.customerId);
-    customerId = customer.id;
-  }
+  const linked = await resolveExpenseJobAndCustomer(db, access.businessId, {
+    jobId: input.jobId,
+    customerId: input.customerId,
+  });
+  const jobId = linked.jobId;
+  const customerId = linked.customerId;
 
   const reimbursable = Boolean(input.reimbursable);
   const paymentMethod = normalizePaymentMethod(input.paymentMethod ?? "");

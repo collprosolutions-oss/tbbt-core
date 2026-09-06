@@ -7,6 +7,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { ManagedStorageConfig } from "@/lib/business-storage/config";
+import { ensureR2BrowserUploadCors } from "@/lib/business-storage/r2-cors";
 import type {
   PresignedDownload,
   PresignedUpload,
@@ -22,8 +23,10 @@ function toUint8Array(body: Buffer | Uint8Array) {
 export class R2StorageProvider implements StorageProvider {
   readonly id = "R2" as const;
   private readonly client: S3Client;
+  private readonly config: ManagedStorageConfig;
 
   constructor(config: ManagedStorageConfig) {
+    this.config = config;
     this.client = new S3Client({
       region: config.region,
       endpoint: config.endpoint,
@@ -124,6 +127,7 @@ export class R2StorageProvider implements StorageProvider {
     contentLength: number;
     expiresInSeconds: number;
   }): Promise<PresignedUpload> {
+    await ensureR2BrowserUploadCors(this.client, this.config.bucketName);
     const url = await getSignedUrl(
       this.client,
       new PutObjectCommand({

@@ -434,8 +434,13 @@ check("Owner estimate creation remains a draft handoff, not an auto-send",
     !createEstimateFn.includes("createJob") &&
     !createEstimateFn.includes("invoice.create"));
 check("Send Estimate still blocks unpriced custom-quote draft lines",
-  estimateActionSrc.includes("isUnpricedCustomQuoteDraftLine") &&
-    estimateActionSrc.includes("Enter a price for each custom-quote line before sending."));
+  estimateActionSrc.includes("draftEstimateSendError"));
+const draftHelperSrc = readRepo("src/lib/request-estimate-draft.ts");
+check("Unpriced custom-quote send error stays owner-facing",
+  draftHelperSrc.includes("Enter a price for each custom-quote line before sending."));
+check("Owner can price a custom-quote draft line without a catalog write",
+  estimateActionSrc.includes("priceEstimateLineItem") &&
+    estimateActionSrc.includes("priceDraftEstimateLine"));
 
 check("Legacy request with only serviceCatalogItem remains readable",
   requestedWorkLabels({

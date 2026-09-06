@@ -84,8 +84,11 @@ export function ScheduleJobForm({
             name="customHours"
             inputMode="decimal"
             defaultValue={customHours}
-            placeholder="1.25"
+            placeholder="16"
           />
+          <p className="text-xs text-muted-foreground">
+            Enter total hours, including multi-day jobs.
+          </p>
         </div>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">

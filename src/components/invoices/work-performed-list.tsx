@@ -1,5 +1,8 @@
+import { lineItemIncludedWork, lineItemTitle } from "@/lib/estimate-line-scope";
+
 export type WorkPerformedLine = {
   description: string;
+  includedWork?: string | null;
   quantityLabel: string;
 };
 
@@ -27,7 +30,14 @@ export function WorkPerformedList({
             key={`${line.description}-${index}`}
             className="flex justify-between gap-4"
           >
-            <span>{line.description}</span>
+            <span className="min-w-0">
+              <span>{lineItemTitle(line.description)}</span>
+              {line.includedWork || lineItemIncludedWork(line.description) ? (
+                <span className="mt-1 block whitespace-pre-line text-xs text-muted-foreground">
+                  {line.includedWork || lineItemIncludedWork(line.description)}
+                </span>
+              ) : null}
+            </span>
             <span className="shrink-0 tabular-nums text-muted-foreground">
               Qty {line.quantityLabel}
             </span>

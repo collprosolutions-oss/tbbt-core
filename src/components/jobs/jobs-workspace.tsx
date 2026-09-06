@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { telHref } from "@/lib/directions";
+import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { FounderRegion } from "@/components/founder-design/region";
 import { cn } from "@/lib/utils";
 
@@ -440,7 +441,7 @@ function JobDetailsPanel({
                 {job.approvedScopeLineItems.map((item, index) => (
                   <li key={index} className="flex items-start justify-between gap-3">
                     <span className="min-w-0 flex-1 break-words text-foreground">
-                      {item.description} × {item.quantity}
+                      {lineItemTitle(item.description)} × {item.quantity}
                     </span>
                     <span className="shrink-0 font-medium tabular-nums text-foreground">{item.total}</span>
                   </li>

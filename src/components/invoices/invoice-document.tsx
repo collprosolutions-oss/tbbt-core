@@ -99,7 +99,17 @@ export function InvoiceDocument({
             ) : (
               invoice.lineItems.map((line, index) => (
                 <tr key={`${line.description}-${index}`} className="border-b border-neutral-100">
-                  <td className="py-2.5 pr-3 align-top">{line.description}</td>
+                  <td className="py-2.5 pr-3 align-top">
+                    <div>{line.description}</div>
+                    {line.includedWork ? (
+                      <div className="mt-1 whitespace-pre-line text-xs text-neutral-600">
+                        <div className="font-semibold tracking-wide">
+                          Scope / Included Work
+                        </div>
+                        {line.includedWork}
+                      </div>
+                    ) : null}
+                  </td>
                   <td className="py-2.5 px-3 text-right align-top tabular-nums">
                     {line.quantityLabel}
                   </td>

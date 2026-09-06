@@ -1,0 +1,333 @@
+/**
+ * Customer-facing estimate document helpers for print/PDF.
+ *
+ * Estimate numbers and PDF filenames are derived from existing Estimate
+ * rows — there is no estimateNumber column. The document is version-first
+ * (same rule as the public customer estimate page) and must never expose
+ * calculator rates, formulas, owner notes, margins, work-area intake
+ * answers, or other internal-only fields.
+ */
+import { Prisma, type PrismaClient } from "@prisma/client";
+import { getBusinessDocumentLogoSrc } from "@/lib/business-branding";
+import type { CalculatorCustomerPolicy } from "@/lib/estimate-calculators/types";
+import { splitLineDescription } from "@/lib/estimate-line-scope";
+import { uniqueCustomerPolicies } from "@/lib/estimate-policies";
+import { formatAddress, formatDate, formatMoney } from "@/lib/format";
+import {
+  INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
+  sanitizeFilenamePart,
+} from "@/lib/invoice-document";
+import { prisma } from "@/lib/prisma";
+import { publicPhone } from "@/lib/public-site";
+
+const ZERO = new Prisma.Decimal(0);
+
+export const ESTIMATE_DOCUMENT_LOGO_HEIGHT_PX = INVOICE_DOCUMENT_LOGO_HEIGHT_PX;
+
+export const LABOR_MINIMUM_CUSTOMER_LABEL =
+  "Labor Minimum Service Fee Adjustment";
+
+export function estimateNumberFromId(estimateId: string): string {
+  return `EST-${estimateId.slice(-8).toUpperCase()}`;
+}
+
+export function estimatePdfFilename(
+  estimateNumber: string,
+  customerName?: string | null,
+): string {
+  return `Estimate-${sanitizeFilenamePart(estimateNumber)}-${sanitizeFilenamePart(
+    customerName?.trim() || "Customer",
+  )}.pdf`;
+}
+
+export function estimateStatusLabel(status: string): string {
+  switch (status) {
+    case "DRAFT":
+      return "Draft";
+    case "SENT":
+      return "Sent";
+    case "APPROVED":
+      return "Approved";
+    default:
+      return status;
+  }
+}
+
+export type EstimateDocumentLine = {
+  description: string;
+  includedWork?: string | null;
+  quantityLabel: string;
+  unitPriceLabel: string;
+  amountLabel: string;
+};
+
+export type EstimateDocumentPolicy = {
+  title: string;
+  body: string;
+};
+
+export type EstimateDocumentView = {
+  estimateId: string;
+  publicToken: string;
+  estimateNumber: string;
+  status: string;
+  statusLabel: string;
+  estimateDateLabel: string;
+  pdfFilename: string;
+  business: {
+    name: string;
+    logoSrc: string | null;
+    phone: string | null;
+  };
+  customer: {
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+  };
+  serviceAddress: string | null;
+  lineItems: EstimateDocumentLine[];
+  policies: EstimateDocumentPolicy[];
+  subtotalLabel: string;
+  laborMinimumLabel: string | null;
+  laborMinimumAmountLabel: string | null;
+  totalLabel: string;
+};
+
+const ESTIMATE_DOCUMENT_INCLUDE = {
+  business: { select: { id: true, name: true, slug: true } },
+  customer: { select: { id: true, name: true, email: true, phone: true } },
+  property: {
+    select: {
+      addressLine1: true,
+      addressLine2: true,
+      city: true,
+      region: true,
+      postalCode: true,
+    },
+  },
+  lineItems: {
+    orderBy: { createdAt: "asc" as const },
+    select: {
+      description: true,
+      quantity: true,
+      unitPrice: true,
+      total: true,
+    },
+  },
+  versions: {
+    orderBy: { versionNumber: "desc" as const },
+    take: 1,
+    select: {
+      id: true,
+      sentAt: true,
+      createdAt: true,
+      total: true,
+      laborMinimumAdjustment: true,
+      customerName: true,
+      customerEmail: true,
+      customerPhone: true,
+      propertyAddressLine1: true,
+      propertyAddressLine2: true,
+      propertyCity: true,
+      propertyRegion: true,
+      propertyPostalCode: true,
+      lineItems: {
+        orderBy: { createdAt: "asc" as const },
+        select: {
+          description: true,
+          quantity: true,
+          unitPrice: true,
+          total: true,
+        },
+      },
+    },
+  },
+} as const;
+
+function formatQuantity(quantity: Prisma.Decimal): string {
+  return quantity.toString();
+}
+
+function toCustomerPolicies(
+  descriptions: Array<string | null | undefined>,
+): EstimateDocumentPolicy[] {
+  return uniqueCustomerPolicies(
+    descriptions.map((description) => splitLineDescription(description).customerPolicies),
+  ).map((policy: CalculatorCustomerPolicy) => ({
+    title: policy.title,
+    body: policy.body,
+  }));
+}
+
+function toDocumentView(estimate: {
+  id: string;
+  publicToken: string;
+  status: string;
+  total: Prisma.Decimal;
+  laborMinimumAdjustment: Prisma.Decimal;
+  createdAt: Date;
+  business: { name: string; slug: string };
+  customer: {
+    name: string;
+    email: string | null;
+    phone: string | null;
+  } | null;
+  property: {
+    addressLine1: string;
+    addressLine2: string | null;
+    city: string | null;
+    region: string | null;
+    postalCode: string | null;
+  } | null;
+  lineItems: Array<{
+    description: string;
+    quantity: Prisma.Decimal;
+    unitPrice: Prisma.Decimal;
+    total: Prisma.Decimal;
+  }>;
+  versions: Array<{
+    sentAt: Date;
+    createdAt: Date;
+    total: Prisma.Decimal;
+    laborMinimumAdjustment: Prisma.Decimal;
+    customerName: string | null;
+    customerEmail: string | null;
+    customerPhone: string | null;
+    propertyAddressLine1: string | null;
+    propertyAddressLine2: string | null;
+    propertyCity: string | null;
+    propertyRegion: string | null;
+    propertyPostalCode: string | null;
+    lineItems: Array<{
+      description: string;
+      quantity: Prisma.Decimal;
+      unitPrice: Prisma.Decimal;
+      total: Prisma.Decimal;
+    }>;
+  }>;
+}): EstimateDocumentView {
+  const currentVersion = estimate.versions[0] ?? null;
+  const total = currentVersion?.total ?? estimate.total;
+  const laborMinimumAdjustment =
+    currentVersion?.laborMinimumAdjustment ?? estimate.laborMinimumAdjustment;
+  const lineItems = currentVersion?.lineItems ?? estimate.lineItems;
+  const customerName = currentVersion?.customerName ?? estimate.customer?.name ?? null;
+  const customerEmail =
+    currentVersion?.customerEmail ?? estimate.customer?.email ?? null;
+  const customerPhone =
+    currentVersion?.customerPhone ?? estimate.customer?.phone ?? null;
+  const property = currentVersion
+    ? currentVersion.propertyAddressLine1
+      ? {
+          addressLine1: currentVersion.propertyAddressLine1,
+          addressLine2: currentVersion.propertyAddressLine2,
+          city: currentVersion.propertyCity,
+          region: currentVersion.propertyRegion,
+          postalCode: currentVersion.propertyPostalCode,
+        }
+      : null
+    : estimate.property;
+  const estimateDate = currentVersion?.sentAt ?? currentVersion?.createdAt ?? estimate.createdAt;
+  const estimateNumber = estimateNumberFromId(estimate.id);
+  const showLaborMinimum = laborMinimumAdjustment.gt(0);
+  const subtotal = lineItems.reduce((sum, line) => sum.add(line.total), ZERO);
+
+  return {
+    estimateId: estimate.id,
+    publicToken: estimate.publicToken,
+    estimateNumber,
+    status: estimate.status,
+    statusLabel: estimateStatusLabel(estimate.status),
+    estimateDateLabel: formatDate(estimateDate),
+    pdfFilename: estimatePdfFilename(estimateNumber, customerName),
+    business: {
+      name: estimate.business.name,
+      logoSrc: getBusinessDocumentLogoSrc(estimate.business.slug),
+      phone: publicPhone(estimate.business.slug),
+    },
+    customer: {
+      name: customerName,
+      email: customerEmail,
+      phone: customerPhone,
+    },
+    serviceAddress: property ? formatAddress(property) : null,
+    lineItems: lineItems.map((line) => {
+      const parts = splitLineDescription(line.description);
+      return {
+        description: parts.title,
+        includedWork: parts.includedWork,
+        quantityLabel: formatQuantity(line.quantity),
+        unitPriceLabel: formatMoney(line.unitPrice),
+        amountLabel: formatMoney(line.total),
+      };
+    }),
+    policies: toCustomerPolicies(lineItems.map((line) => line.description)),
+    subtotalLabel: formatMoney(subtotal),
+    laborMinimumLabel: showLaborMinimum ? LABOR_MINIMUM_CUSTOMER_LABEL : null,
+    laborMinimumAmountLabel: showLaborMinimum
+      ? formatMoney(laborMinimumAdjustment)
+      : null,
+    totalLabel: formatMoney(total),
+  };
+}
+
+export function estimateDocumentPlainText(document: EstimateDocumentView): string {
+  const lines = [
+    document.business.name,
+    document.business.phone ?? "",
+    "ESTIMATE",
+    document.estimateNumber,
+    document.estimateDateLabel,
+    document.statusLabel,
+    document.customer.name ?? "",
+    document.customer.email ?? "",
+    document.customer.phone ?? "",
+    document.serviceAddress ?? "",
+    ...document.lineItems.flatMap((line) => [
+      line.description,
+      line.includedWork ?? "",
+      line.quantityLabel,
+      line.unitPriceLabel,
+      line.amountLabel,
+    ]),
+    document.subtotalLabel,
+    document.laborMinimumLabel ?? "",
+    document.laborMinimumAmountLabel ?? "",
+    document.totalLabel,
+    ...document.policies.flatMap((policy) => [policy.title, policy.body]),
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
+export async function loadEstimateDocumentForBusiness(
+  estimateId: string,
+  businessId: string,
+  db: PrismaClient = prisma,
+): Promise<EstimateDocumentView | null> {
+  if (!estimateId || !businessId) {
+    return null;
+  }
+
+  const estimate = await db.estimate.findFirst({
+    where: { id: estimateId, businessId },
+    include: ESTIMATE_DOCUMENT_INCLUDE,
+  });
+
+  return estimate ? toDocumentView(estimate) : null;
+}
+
+export async function loadEstimateDocumentByToken(
+  token: string,
+  db: PrismaClient = prisma,
+): Promise<EstimateDocumentView | null> {
+  if (!token) {
+    return null;
+  }
+
+  const estimate = await db.estimate.findUnique({
+    where: { publicToken: token },
+    include: ESTIMATE_DOCUMENT_INCLUDE,
+  });
+
+  return estimate ? toDocumentView(estimate) : null;
+}

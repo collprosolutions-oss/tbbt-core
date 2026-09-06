@@ -9,6 +9,17 @@ import { CopyEstimateLinkButton } from "@/components/estimates/copy-estimate-lin
 import { EditEstimateButton } from "@/components/estimates/edit-estimate-button";
 import { EmailEstimateButton } from "@/components/estimates/email-estimate-button";
 import { EstimateVersionHistory } from "@/components/estimates/estimate-version-history";
+import { CalculatorBreakdown } from "@/components/estimates/calculator-breakdown";
+import {
+  EditLineIncludedWorkForm,
+  SaveLineForReuseForm,
+} from "@/components/estimates/draft-line-scope-forms";
+import { EstimateCustomerPolicies } from "@/components/estimates/customer-policy-display";
+import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
+import { OverrideLinePriceForm } from "@/components/estimates/override-line-price-form";
+import { PriceRequiredLineForm } from "@/components/estimates/price-required-line-form";
+import { VariableScopeCalculatorForm } from "@/components/estimates/variable-scope-calculator-form";
+import { VariableScopeDefinitionForm } from "@/components/estimates/variable-scope-definition-form";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
@@ -30,8 +41,33 @@ import { formatAddress, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
-import { isUnpricedCustomQuoteDraftLine } from "@/lib/request-estimate-draft";
+import {
+  CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
+  DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+  findCatalogCalculatorDefinition,
+  formCalculatorInputs,
+  resolveCalculatorId,
+  resolveCalculatorRatesForForm,
+  templateForCalculator,
+} from "@/lib/estimate-calculators";
+import {
+  catalogCalculatorDefinition,
+  catalogScopeText,
+  lineCalculatorSnapshot,
+  lineCustomerPolicies,
+  lineItemIncludedWork,
+  lineItemTitle,
+} from "@/lib/estimate-line-scope";
+import {
+  customQuoteDisplayDescription,
+  isUnpricedCustomQuoteDraftLine,
+} from "@/lib/request-estimate-draft";
 import { requestedWorkLabels } from "@/lib/service-request-work";
+import {
+  formatWorkAreaIntakeLabels,
+  parseWorkAreaIntake,
+  requestNotesText,
+} from "@/lib/work-area-intake";
 
 export const metadata: Metadata = {
   title: "Estimate",
@@ -67,7 +103,7 @@ export default async function EstimateBuilderPage({
             orderBy: { sortOrder: "asc" },
             select: {
               customDescription: true,
-              serviceCatalogItem: { select: { name: true } },
+              serviceCatalogItem: { select: { id: true, name: true } },
             },
           },
         },
@@ -137,6 +173,12 @@ export default async function EstimateBuilderPage({
               /e/{estimate.publicToken}
             </Link>
           </p>
+          <Button asChild size="sm" variant="outline">
+            <Link href={`/estimates/${estimate.id}/print`}>Preview Estimate</Link>
+          </Button>
+          <Button asChild size="sm" variant="outline">
+            <a href={`/estimates/${estimate.id}/pdf`}>Download PDF</a>
+          </Button>
           {isSent || isApproved ? (
             <CopyEstimateLinkButton publicToken={estimate.publicToken} />
           ) : null}
@@ -174,9 +216,32 @@ export default async function EstimateBuilderPage({
                 </div>
               );
             })()}
-            {estimate.serviceRequest?.description ? (
-              <p>{estimate.serviceRequest.description}</p>
+            {requestNotesText(estimate.serviceRequest?.description) ? (
+              <p>{requestNotesText(estimate.serviceRequest?.description)}</p>
             ) : null}
+            {(() => {
+              const workAreaLabels = formatWorkAreaIntakeLabels(
+                parseWorkAreaIntake(estimate.serviceRequest?.description),
+                Object.fromEntries(
+                  (estimate.serviceRequest?.items ?? []).flatMap((item) =>
+                    item.serviceCatalogItem
+                      ? [[item.serviceCatalogItem.id, item.serviceCatalogItem.name]]
+                      : [],
+                  ),
+                ),
+              );
+              if (workAreaLabels.length === 0) return null;
+              return (
+                <div className="mt-2">
+                  <p className="font-medium">Customer work-area answers</p>
+                  <ul className="list-disc pl-5">
+                    {workAreaLabels.map((label) => (
+                      <li key={label}>{label}</li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })()}
           </div>
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">Manual estimate</p>
@@ -231,36 +296,144 @@ export default async function EstimateBuilderPage({
           {estimate.lineItems.length === 0 ? (
             <p className="text-sm text-muted-foreground">No line items yet.</p>
           ) : (
-            <ul className="space-y-2 text-sm">
-              {estimate.lineItems.map((item) => (
-                <li
-                  key={item.id}
-                  className="flex items-start justify-between gap-3"
-                >
-                  <span className="min-w-0 flex-1 break-words">
-                    {item.type === "LABOR"
-                      ? "Labor"
-                      : item.type === "MATERIAL"
-                        ? "Material"
-                        : "Other"}
-                    : {item.description} × {item.quantity.toString()}
-                    {isUnpricedCustomQuoteDraftLine(item)
-                      ? " — price required"
-                      : ` @ ${formatMoney(item.unitPrice)}`}
-                  </span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    <span>{formatMoney(item.total)}</span>
-                    {isDraft ? (
-                      <RemoveLineItemButton
+            <ul className="space-y-3 text-sm">
+              {estimate.lineItems.map((item) => {
+                const priceRequired = isUnpricedCustomQuoteDraftLine(item);
+                const requestName = customQuoteDisplayDescription(item.description);
+                const calculatorSnapshot = lineCalculatorSnapshot(item.description);
+                const calculatorId = resolveCalculatorId({
+                  title: requestName,
+                  snapshot: calculatorSnapshot,
+                });
+                const businessDefinition = calculatorId
+                  ? findCatalogCalculatorDefinition(catalogItems, {
+                      calculatorId,
+                      catalogItemId: item.serviceCatalogItemId,
+                      title: requestName,
+                    })
+                  : null;
+                const calculatorComponents =
+                  businessDefinition?.components ?? calculatorSnapshot?.components;
+                const formRates = calculatorId
+                  ? resolveCalculatorRatesForForm({
+                      calculatorId,
+                      snapshot: calculatorSnapshot,
+                      businessRates: businessDefinition?.rates,
+                      components: calculatorComponents,
+                    })
+                  : null;
+                const formInputs = calculatorId
+                  ? formCalculatorInputs({
+                      calculatorId,
+                      snapshot: calculatorSnapshot,
+                      rates: formRates,
+                      components: calculatorComponents,
+                    })
+                  : null;
+                const customTemplate =
+                  calculatorId === CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID
+                    ? templateForCalculator(calculatorId, calculatorComponents)
+                    : null;
+                return (
+                  <li
+                    key={item.id}
+                    className={
+                      priceRequired
+                        ? "rounded-xl border-2 border-amber-500 bg-amber-50 p-3 dark:bg-amber-950/20"
+                        : "space-y-1"
+                    }
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="min-w-0 flex-1 break-words">
+                        {item.type === "LABOR"
+                          ? "Labor"
+                          : item.type === "MATERIAL"
+                            ? "Material"
+                            : "Other"}
+                        : {lineItemTitle(item.description)} × {item.quantity.toString()}
+                        {priceRequired
+                          ? " — price required"
+                          : ` @ ${formatMoney(item.unitPrice)}`}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span>{formatMoney(item.total)}</span>
+                        {isDraft ? (
+                          <RemoveLineItemButton
+                            estimateId={estimate.id}
+                            lineItemId={item.id}
+                          />
+                        ) : null}
+                      </span>
+                    </div>
+                    {isDraft && priceRequired && !calculatorId ? (
+                      <>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Original customer request: {requestName}. Price this
+                          same line — do not add a duplicate custom item.
+                        </p>
+                        <PriceRequiredLineForm
+                          estimateId={estimate.id}
+                          lineItemId={item.id}
+                          quantity={item.quantity.toString()}
+                        />
+                      </>
+                    ) : null}
+                    {isDraft && calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID ? (
+                      <VariableScopeCalculatorForm
                         estimateId={estimate.id}
                         lineItemId={item.id}
+                        inputs={formInputs}
+                        rates={formRates}
+                        customerPolicy={lineCustomerPolicies(item.description)[0]}
                       />
                     ) : null}
-                  </span>
-                </li>
-              ))}
+                    {isDraft && customTemplate ? (
+                      <VariableScopeDefinitionForm
+                        estimateId={estimate.id}
+                        lineItemId={item.id}
+                        template={customTemplate}
+                        inputs={formInputs}
+                        rates={formRates}
+                      />
+                    ) : null}
+                    {isDraft && calculatorId && item.unitPrice.gt(0) ? (
+                      <OverrideLinePriceForm
+                        estimateId={estimate.id}
+                        lineItemId={item.id}
+                        currentPrice={item.unitPrice.toString()}
+                      />
+                    ) : null}
+                    {!isDraft && calculatorSnapshot?.result ? (
+                      <CalculatorBreakdown snapshot={calculatorSnapshot} />
+                    ) : null}
+                    {isDraft ? (
+                      <>
+                        <EditLineIncludedWorkForm
+                          estimateId={estimate.id}
+                          lineItemId={item.id}
+                          includedWork={lineItemIncludedWork(item.description)}
+                        />
+                        <SaveLineForReuseForm
+                          estimateId={estimate.id}
+                          lineItemId={item.id}
+                          hasPrice={item.unitPrice.gt(0)}
+                          currentPriceLabel={
+                            item.unitPrice.gt(0) ? formatMoney(item.unitPrice) : null
+                          }
+                        />
+                      </>
+                    ) : (
+                      <IncludedWorkDisplay description={item.description} />
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
+          <EstimateCustomerPolicies
+            className="mt-4 space-y-3"
+            descriptions={estimate.lineItems.map((item) => item.description)}
+          />
           <div className="mt-4 space-y-1 text-sm">
             <p>Labor subtotal: {formatMoney(laborSubtotal)}</p>
             {materialSubtotal.gt(0) ? (
@@ -292,8 +465,10 @@ export default async function EstimateBuilderPage({
             </p>
           </div>
           {needsCustomQuotePrices ? (
-            <p className="mt-3 text-sm text-muted-foreground">
-              Enter a price for each custom-quote line before sending.
+            <p className="mt-3 text-sm font-medium text-amber-800 dark:text-amber-300">
+              Price required on the highlighted original request line above.
+              Send Estimate stays disabled until that price is saved. Do not
+              add a second custom item for the same work.
             </p>
           ) : null}
           {isDraft ? (
@@ -316,9 +491,10 @@ export default async function EstimateBuilderPage({
         <CardHeader>
           <CardTitle>Add catalog item</CardTitle>
           <CardDescription>
-            Uses the current catalog price. Custom Quote services need a job
-            price when added. The line is saved as a snapshot and will not
-            change if the catalog is edited later.
+            Uses the current catalog price and copies Scope / Included Work
+            onto this estimate. Custom Quote services need a job price when
+            added. The line is a snapshot and will not change if the catalog
+            is edited later.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -329,6 +505,15 @@ export default async function EstimateBuilderPage({
               name: item.name,
               pricingMode: item.pricingMode,
               priceLabel: formatCatalogPriceLabel(item.pricingMode, item.price),
+              includedWork: catalogScopeText(item.description),
+              hasCalculator: Boolean(
+                resolveCalculatorId({
+                  title: item.name,
+                  definition: catalogCalculatorDefinition(item.description),
+                }),
+              ),
+              defaultPrice:
+                item.price && item.price.gt(0) ? item.price.toString() : null,
             }))}
           />
         </CardContent>
@@ -338,8 +523,10 @@ export default async function EstimateBuilderPage({
         <CardHeader>
           <CardTitle>Add custom item</CardTitle>
           <CardDescription>
-            Choose Labor, Material, or Other. The labor minimum uses labor
-            lines only.
+            Choose Labor, Material, or Other. Add Scope / Included Work if
+            you want the customer to see what the price includes. Saving the
+            service and scope to the catalog is optional and never automatic.
+            The labor minimum uses labor lines only.
           </CardDescription>
         </CardHeader>
         <CardContent>

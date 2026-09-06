@@ -42,6 +42,16 @@ export function AddCustomLineForm({ estimateId }: { estimateId: string }) {
         <Input id="custom-description" name="description" required />
       </div>
       <div className="space-y-2">
+        <Label htmlFor="custom-includedWork">Scope / Included Work</Label>
+        <textarea
+          id="custom-includedWork"
+          name="includedWork"
+          rows={6}
+          placeholder="Optional. What this price includes, one item per line."
+          className="min-h-24 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base outline-none md:text-sm"
+        />
+      </div>
+      <div className="space-y-2">
         <Label htmlFor="custom-quantity">Quantity</Label>
         <Input
           id="custom-quantity"
