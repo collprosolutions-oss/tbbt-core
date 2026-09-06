@@ -379,6 +379,7 @@ export default async function ExpensesPage({
       id: job.id,
       label: jobLabel(job),
       customerId: job.customerId,
+      customerName: job.customer?.name ?? null,
     })),
     customers,
     financial: {

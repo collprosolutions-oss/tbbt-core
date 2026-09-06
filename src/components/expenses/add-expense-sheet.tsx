@@ -7,6 +7,7 @@ import {
   createMileageExpenseAction,
   type ExpenseActionState,
 } from "@/app/actions/expenses";
+import { ExpenseAssociationFields } from "@/components/expenses/expense-association-fields";
 import type {
   ExpenseCustomerOption,
   ExpenseJobOption,
@@ -65,6 +66,7 @@ export function AddExpenseSheet({
         onOpenChange={onOpenChange}
         workers={workers}
         jobs={jobs}
+        customers={customers}
         defaultDate={defaultDate}
       />
     );
@@ -161,27 +163,11 @@ function ExpenseForm({
                 </option>
               ))}
             </select>
+            <p className="text-xs text-muted-foreground">
+              Who bought or paid for this — a team member, not the customer.
+            </p>
           </Field>
-          <Field label="Job (optional)">
-            <select name="jobId" defaultValue="" className={selectClass}>
-              <option value="">No job</option>
-              {jobs.map((job) => (
-                <option key={job.id} value={job.id}>
-                  {job.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Customer (optional)">
-            <select name="customerId" defaultValue="" className={selectClass}>
-              <option value="">No customer</option>
-              {customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.name}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <ExpenseAssociationFields jobs={jobs} customers={customers} />
           <Field label="Payment method">
             <select name="paymentMethod" defaultValue="" className={selectClass}>
               <option value="">Not recorded</option>
@@ -243,12 +229,14 @@ function MileageForm({
   onOpenChange,
   workers,
   jobs,
+  customers,
   defaultDate,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   workers: ExpenseWorkerOption[];
   jobs: ExpenseJobOption[];
+  customers: ExpenseCustomerOption[];
   defaultDate: string;
 }) {
   const [state, formAction, pending] = useActionState(createMileageExpenseAction, initialState);
@@ -289,17 +277,11 @@ function MileageForm({
                 </option>
               ))}
             </select>
+            <p className="text-xs text-muted-foreground">
+              Who drove — a team member, not the customer.
+            </p>
           </Field>
-          <Field label="Job (optional)">
-            <select name="jobId" defaultValue="" className={selectClass}>
-              <option value="">No job</option>
-              {jobs.map((job) => (
-                <option key={job.id} value={job.id}>
-                  {job.label}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <ExpenseAssociationFields jobs={jobs} customers={customers} />
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" name="reimbursable" value="1" defaultChecked className="size-4" />
             Reimbursable to employee

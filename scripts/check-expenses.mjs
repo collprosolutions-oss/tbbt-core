@@ -256,6 +256,71 @@ try {
   const reviewed = await reviewExpense(prisma, ownerA, { expenseId: mileage.id, reviewStatus: "APPROVED" });
   check("Owner can approve a reimbursable expense", reviewed.reviewStatus === "APPROVED");
 
+  console.log("\nTEST — Purchaser vs job/customer association");
+  const otherCustomer = await prisma.customer.create({
+    data: { businessId: businessA.id, name: "Other Homeowner" },
+  });
+  check("Purchaser is the team membership, not the customer", lumber.purchaserMembershipId === adminMem.id);
+  check("Purchaser is not the homeowner id", lumber.purchaserMembershipId !== customer.id);
+  await expectError(
+    "Purchaser cannot be a customer id",
+    () =>
+      createExpense(prisma, ownerA, {
+        occurredOn: "2026-08-30",
+        description: "Bad purchaser",
+        amount: "10.00",
+        category: "MATERIALS",
+        purchaserMembershipId: customer.id,
+      }),
+    (error) => error instanceof ExpenseError,
+  );
+
+  const invoicesBefore = await prisma.invoice.count({ where: { businessId: businessA.id } });
+  const linesBefore = await prisma.lineItem.count({
+    where: { invoice: { businessId: businessA.id } },
+  });
+  const doorbell = await createExpense(prisma, ownerA, {
+    occurredOn: "2026-08-31",
+    description: "Video doorbell",
+    amount: "89.99",
+    category: "MATERIALS",
+    vendor: "Amazon",
+    purchaserMembershipId: ownerMem.id,
+    jobId: job.id,
+  });
+  check("Job-linked expense resolves the job customer", doorbell.customerId === customer.id);
+  check("Job-linked expense keeps the selected job", doorbell.jobId === job.id);
+  check("Purchaser stays the team member who bought it", doorbell.purchaserMembershipId === ownerMem.id);
+  const invoicesAfter = await prisma.invoice.count({ where: { businessId: businessA.id } });
+  const linesAfter = await prisma.lineItem.count({
+    where: { invoice: { businessId: businessA.id } },
+  });
+  check("Job-linked / customer-associated expense does not create an invoice", invoicesAfter === invoicesBefore);
+  check("Job-linked expense does not mutate invoice line items", linesAfter === linesBefore);
+
+  await expectError(
+    "Mismatched customer/job is rejected",
+    () =>
+      createExpense(prisma, ownerA, {
+        occurredOn: "2026-08-31",
+        description: "Mismatch",
+        amount: "12.00",
+        category: "MATERIALS",
+        jobId: job.id,
+        customerId: otherCustomer.id,
+      }),
+    (error) => error instanceof ExpenseError && /does not belong to the selected customer/i.test(error.message),
+  );
+
+  const office = await createExpense(prisma, ownerA, {
+    occurredOn: "2026-08-31",
+    description: "Printer paper",
+    amount: "18.00",
+    category: "OFFICE_ADMIN",
+    customerId: otherCustomer.id,
+  });
+  check("Customer-only expense has no job", office.jobId === null && office.customerId === otherCustomer.id);
+
   console.log("\nTEST — Permissions and tenant isolation");
   await expectError(
     "MEMBER cannot create a business-wide expense",
@@ -308,10 +373,29 @@ try {
   const workspaceSource = await import("node:fs").then((fs) =>
     fs.readFileSync(new URL("../src/components/expenses/expenses-workspace.tsx", import.meta.url), "utf8"),
   );
+  const sheetSource = await import("node:fs").then((fs) =>
+    fs.readFileSync(new URL("../src/components/expenses/add-expense-sheet.tsx", import.meta.url), "utf8"),
+  );
+  const associationSource = await import("node:fs").then((fs) =>
+    fs.readFileSync(new URL("../src/components/expenses/expense-association-fields.tsx", import.meta.url), "utf8"),
+  );
   check("Page never hardcodes a fabricated bank balance", !/\$8,750/.test(pageSource) && !/Chase/.test(pageSource));
   check("Projected KPI is Unavailable when bank is missing", pageSource.includes('value: "Unavailable"'));
   check("Mobile list exists (no forced desktop table on small viewports)", workspaceSource.includes("sm:hidden"));
   check("Category totals section is required on the page", workspaceSource.includes("Expenses by Category"));
+  check(
+    "Purchaser options stay team members",
+    sheetSource.includes("purchaserMembershipId") &&
+      sheetSource.includes("workers.map") &&
+      !sheetSource.includes("customers.map((customer)") &&
+      sheetSource.includes("not the customer"),
+  );
+  check(
+    "Job/customer fields are separate from purchaser",
+    associationSource.includes("Job customer:") &&
+      associationSource.includes("expense-customerId") &&
+      associationSource.includes("expense-jobId"),
+  );
 
   console.log(
     failures === 0 ? "\nAll Expenses checks passed." : `\n${failures} Expenses check(s) failed.`,

@@ -81,6 +81,38 @@ export function isUnpricedCustomQuoteDraftLine(item: {
   return unpaid && item.description.includes(CUSTOM_QUOTE_DRAFT_MARKER);
 }
 
+/** Owner/customer-facing name without the internal "enter price" marker. */
+export function customQuoteDisplayDescription(description: string) {
+  return description.replace(` ${CUSTOM_QUOTE_DRAFT_MARKER}`, "").trim();
+}
+
+/**
+ * After the owner enters a job price, keep the original request wording
+ * and drop the price-required marker. Never writes the catalog.
+ */
+export function pricedCustomQuoteDescription(description: string) {
+  return customQuoteDisplayDescription(description) || description;
+}
+
+export function draftEstimateSendError(estimate: {
+  status: string;
+  lineItems: Array<{
+    description: string;
+    unitPrice: { lte: (value: number) => boolean } | number | string;
+  }>;
+}): string | null {
+  if (estimate.status !== "DRAFT") {
+    return "Only a draft estimate can be sent.";
+  }
+  if (estimate.lineItems.length === 0) {
+    return "Add at least one line item before sending.";
+  }
+  if (estimate.lineItems.some(isUnpricedCustomQuoteDraftLine)) {
+    return "Enter a price for each custom-quote line before sending.";
+  }
+  return null;
+}
+
 export function buildEstimateLineCreatesFromRequestItems(
   businessId: string,
   items: RequestDraftSourceItem[],

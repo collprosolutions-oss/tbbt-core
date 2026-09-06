@@ -9,6 +9,7 @@ import { CopyEstimateLinkButton } from "@/components/estimates/copy-estimate-lin
 import { EditEstimateButton } from "@/components/estimates/edit-estimate-button";
 import { EmailEstimateButton } from "@/components/estimates/email-estimate-button";
 import { EstimateVersionHistory } from "@/components/estimates/estimate-version-history";
+import { PriceRequiredLineForm } from "@/components/estimates/price-required-line-form";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
@@ -30,7 +31,10 @@ import { formatAddress, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
-import { isUnpricedCustomQuoteDraftLine } from "@/lib/request-estimate-draft";
+import {
+  customQuoteDisplayDescription,
+  isUnpricedCustomQuoteDraftLine,
+} from "@/lib/request-estimate-draft";
 import { requestedWorkLabels } from "@/lib/service-request-work";
 
 export const metadata: Metadata = {
@@ -231,34 +235,46 @@ export default async function EstimateBuilderPage({
           {estimate.lineItems.length === 0 ? (
             <p className="text-sm text-muted-foreground">No line items yet.</p>
           ) : (
-            <ul className="space-y-2 text-sm">
-              {estimate.lineItems.map((item) => (
-                <li
-                  key={item.id}
-                  className="flex items-start justify-between gap-3"
-                >
-                  <span className="min-w-0 flex-1 break-words">
-                    {item.type === "LABOR"
-                      ? "Labor"
-                      : item.type === "MATERIAL"
-                        ? "Material"
-                        : "Other"}
-                    : {item.description} × {item.quantity.toString()}
-                    {isUnpricedCustomQuoteDraftLine(item)
-                      ? " — price required"
-                      : ` @ ${formatMoney(item.unitPrice)}`}
-                  </span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    <span>{formatMoney(item.total)}</span>
-                    {isDraft ? (
-                      <RemoveLineItemButton
+            <ul className="space-y-3 text-sm">
+              {estimate.lineItems.map((item) => {
+                const priceRequired = isUnpricedCustomQuoteDraftLine(item);
+                const description = priceRequired
+                  ? customQuoteDisplayDescription(item.description)
+                  : item.description;
+                return (
+                  <li key={item.id} className="space-y-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="min-w-0 flex-1 break-words">
+                        {item.type === "LABOR"
+                          ? "Labor"
+                          : item.type === "MATERIAL"
+                            ? "Material"
+                            : "Other"}
+                        : {description} × {item.quantity.toString()}
+                        {priceRequired
+                          ? " — price required"
+                          : ` @ ${formatMoney(item.unitPrice)}`}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span>{formatMoney(item.total)}</span>
+                        {isDraft ? (
+                          <RemoveLineItemButton
+                            estimateId={estimate.id}
+                            lineItemId={item.id}
+                          />
+                        ) : null}
+                      </span>
+                    </div>
+                    {isDraft && priceRequired ? (
+                      <PriceRequiredLineForm
                         estimateId={estimate.id}
                         lineItemId={item.id}
+                        quantity={item.quantity.toString()}
                       />
                     ) : null}
-                  </span>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
           <div className="mt-4 space-y-1 text-sm">
@@ -292,8 +308,9 @@ export default async function EstimateBuilderPage({
             </p>
           </div>
           {needsCustomQuotePrices ? (
-            <p className="mt-3 text-sm text-muted-foreground">
-              Enter a price for each custom-quote line before sending.
+            <p className="mt-3 text-sm text-amber-700 dark:text-amber-400">
+              Enter a price on each highlighted line above before sending. Send
+              Estimate stays disabled until every required price is saved.
             </p>
           ) : null}
           {isDraft ? (

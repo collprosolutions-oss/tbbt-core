@@ -13,8 +13,12 @@ import {
 import { createEstimateVersionSnapshot } from "@/lib/estimate-version";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import {
+  estimateLineErrorMessage,
+  priceDraftEstimateLine,
+} from "@/lib/estimate-line-ops";
+import {
   addRequestDraftLines,
-  isUnpricedCustomQuoteDraftLine,
+  draftEstimateSendError,
 } from "@/lib/request-estimate-draft";
 import {
   getMailConfig,
@@ -443,6 +447,25 @@ export async function addCustomLineItem(
   return {};
 }
 
+export async function priceEstimateLineItem(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    await priceDraftEstimateLine(prisma, access, {
+      estimateId: readString(formData, "estimateId"),
+      lineItemId: readString(formData, "lineItemId"),
+      unitPrice: readString(formData, "unitPrice"),
+      quantity: readString(formData, "quantity") || undefined,
+    });
+    revalidatePath(`/estimates/${readString(formData, "estimateId")}`);
+    return { message: "Price saved." };
+  } catch (error) {
+    return { error: estimateLineErrorMessage(error, "Could not save that price.") };
+  }
+}
+
 export async function setEstimateLaborMinimumWaived(
   estimateId: string,
   waived: boolean,
@@ -574,16 +597,9 @@ export async function sendEstimate(
     }),
   );
 
-  if (estimate.status !== "DRAFT") {
-    return { error: "Only a draft estimate can be sent." };
-  }
-
-  if (estimate.lineItems.length === 0) {
-    return { error: "Add at least one line item before sending." };
-  }
-
-  if (estimate.lineItems.some(isUnpricedCustomQuoteDraftLine)) {
-    return { error: "Enter a price for each custom-quote line before sending." };
+  const blocked = draftEstimateSendError(estimate);
+  if (blocked) {
+    return { error: blocked };
   }
 
   const result = await prisma.$transaction(async (tx) => {
@@ -592,16 +608,12 @@ export async function sendEstimate(
       include: { lineItems: { select: { id: true, description: true, unitPrice: true } } },
     });
 
-    if (!current || current.status !== "DRAFT") {
-      return { error: "Only a draft estimate can be sent." };
+    if (!current) {
+      return { error: "That estimate could not be sent." };
     }
-
-    if (current.lineItems.length === 0) {
-      return { error: "Add at least one line item before sending." };
-    }
-
-    if (current.lineItems.some(isUnpricedCustomQuoteDraftLine)) {
-      return { error: "Enter a price for each custom-quote line before sending." };
+    const currentBlocked = draftEstimateSendError(current);
+    if (currentBlocked) {
+      return { error: currentBlocked };
     }
 
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);

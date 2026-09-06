@@ -54,6 +54,7 @@ export type ExpenseJobOption = {
   id: string;
   label: string;
   customerId: string | null;
+  customerName: string | null;
 };
 
 export type ExpenseCustomerOption = {
