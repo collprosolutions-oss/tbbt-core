@@ -25,6 +25,7 @@ import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatAddress, formatDate, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
+import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { prisma } from "@/lib/prisma";
 import { cn } from "@/lib/utils";
 
@@ -193,7 +194,7 @@ export default async function EstimatesPage({
 
     const isManual = !estimate.serviceRequestId;
     const serviceLabel = isManual
-      ? estimate.lineItems[0]?.description ?? "Manual estimate"
+      ? lineItemTitle(estimate.lineItems[0]?.description) || "Manual estimate"
       : estimate.serviceRequest?.serviceCatalogItem?.name ??
         estimate.serviceRequest?.description ??
         "Service request";
@@ -214,7 +215,6 @@ export default async function EstimatesPage({
       lineItems: estimate.lineItems.map((item) => ({
         id: item.id,
         description: item.description,
-        includedWork: item.includedWork,
         quantity: item.quantity.toString(),
         unitPrice: formatMoney(item.unitPrice),
         total: formatMoney(item.total),

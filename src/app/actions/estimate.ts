@@ -19,7 +19,7 @@ import {
   saveDraftEstimateLineAsCatalog,
   updateDraftEstimateLineIncludedWork,
 } from "@/lib/estimate-line-ops";
-import { normalizeIncludedWork } from "@/lib/estimate-line-scope";
+import { joinLineDescription } from "@/lib/estimate-line-scope";
 import {
   addRequestDraftLines,
   draftEstimateSendError,
@@ -412,8 +412,12 @@ export async function addCustomLineItem(
       data: {
         businessId: access.businessId,
         estimateId: estimate.id,
-        description,
-        includedWork: normalizeIncludedWork(formData.get("includedWork")?.toString()),
+        description: joinLineDescription(
+          description,
+          typeof formData.get("includedWork") === "string"
+            ? String(formData.get("includedWork"))
+            : "",
+        ),
         quantity,
         unitPrice,
         total,

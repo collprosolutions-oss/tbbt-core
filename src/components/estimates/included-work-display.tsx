@@ -1,11 +1,15 @@
+import { lineItemIncludedWork } from "@/lib/estimate-line-scope";
+
 export function IncludedWorkDisplay({
   includedWork,
+  description,
   className,
 }: {
   includedWork?: string | null;
+  description?: string | null;
   className?: string;
 }) {
-  const text = includedWork?.trim();
+  const text = (includedWork ?? lineItemIncludedWork(description))?.trim();
   if (!text) {
     return null;
   }

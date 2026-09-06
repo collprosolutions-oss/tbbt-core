@@ -5,7 +5,10 @@
  * approve, or create a Job/Invoice.
  */
 import { Prisma } from "@prisma/client";
-import { normalizeIncludedWork } from "@/lib/estimate-line-scope";
+import {
+  joinLineDescription,
+  splitLineDescription,
+} from "@/lib/estimate-line-scope";
 import { coerceRequestQuantity } from "@/lib/service-request-work";
 import { publicCatalogUnitAmount } from "@/lib/pricing-mode";
 
@@ -83,17 +86,22 @@ export function isUnpricedCustomQuoteDraftLine(item: {
   return unpaid && item.description.includes(CUSTOM_QUOTE_DRAFT_MARKER);
 }
 
-/** Owner/customer-facing name without the internal "enter price" marker. */
+/** Owner/customer-facing title without the internal "enter price" marker. */
 export function customQuoteDisplayDescription(description: string) {
-  return description.replace(` ${CUSTOM_QUOTE_DRAFT_MARKER}`, "").trim();
+  return splitLineDescription(description)
+    .title.replace(` ${CUSTOM_QUOTE_DRAFT_MARKER}`, "")
+    .trim();
 }
 
 /**
  * After the owner enters a job price, keep the original request wording
- * and drop the price-required marker. Never writes the catalog.
+ * and encoded scope, and drop the price-required marker. Never writes the catalog.
  */
 export function pricedCustomQuoteDescription(description: string) {
-  return customQuoteDisplayDescription(description) || description;
+  const parts = splitLineDescription(description);
+  const title =
+    parts.title.replace(` ${CUSTOM_QUOTE_DRAFT_MARKER}`, "").trim() || parts.title;
+  return joinLineDescription(title, parts.includedWork);
 }
 
 export function draftEstimateSendError(estimate: {
@@ -125,8 +133,10 @@ export function buildEstimateLineCreatesFromRequestItems(
     return {
       businessId,
       serviceCatalogItemId: line.serviceCatalogItemId,
-      description: formatDraftEstimateDescription(line),
-      includedWork: normalizeIncludedWork(catalog?.description),
+      description: joinLineDescription(
+        formatDraftEstimateDescription(line),
+        catalog?.description,
+      ),
       quantity: line.quantity,
       unitPrice,
       total: line.priced && line.unitPrice != null ? line.unitPrice * line.quantity : 0,
@@ -151,7 +161,6 @@ export async function addRequestDraftLines(
       estimateId: input.estimateId,
       serviceCatalogItemId: row.serviceCatalogItemId,
       description: row.description,
-      includedWork: row.includedWork,
       quantity: new Prisma.Decimal(row.quantity),
       unitPrice: new Prisma.Decimal(row.unitPrice),
       total: new Prisma.Decimal(row.total),
@@ -182,7 +191,6 @@ export async function addChangeOrderDraftLines(
       changeOrderId: input.changeOrderId,
       serviceCatalogItemId: row.serviceCatalogItemId,
       description: row.description,
-      includedWork: row.includedWork,
       quantity: new Prisma.Decimal(row.quantity),
       unitPrice: new Prisma.Decimal(row.unitPrice),
       total: new Prisma.Decimal(row.total),

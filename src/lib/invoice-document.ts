@@ -8,6 +8,7 @@
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { getBusinessDocumentLogoSrc } from "@/lib/business-branding";
+import { splitLineDescription } from "@/lib/estimate-line-scope";
 import { formatAddress, formatDate, formatMoney } from "@/lib/format";
 import {
   backfillEmptyInvoiceWorkLines,
@@ -133,7 +134,6 @@ const INVOICE_DOCUMENT_INCLUDE = {
     orderBy: { createdAt: "asc" as const },
     select: {
       description: true,
-      includedWork: true,
       quantity: true,
       unitPrice: true,
       total: true,
@@ -167,7 +167,6 @@ function toDocumentView(
     } | null;
     lineItems: Array<{
       description: string;
-      includedWork?: string | null;
       quantity: Prisma.Decimal;
       unitPrice: Prisma.Decimal;
       total: Prisma.Decimal;
@@ -208,13 +207,16 @@ function toDocumentView(
     jobReference: invoice.job ? jobReferenceFromId(invoice.job.id) : null,
     jobId: invoice.job?.id ?? null,
     customerId: invoice.customerId,
-    lineItems: invoice.lineItems.map((line) => ({
-      description: line.description,
-      includedWork: line.includedWork ?? null,
-      quantityLabel: formatQuantity(line.quantity),
-      unitPriceLabel: formatMoney(line.unitPrice),
-      amountLabel: formatMoney(line.total),
-    })),
+    lineItems: invoice.lineItems.map((line) => {
+      const parts = splitLineDescription(line.description);
+      return {
+        description: parts.title,
+        includedWork: parts.includedWork,
+        quantityLabel: formatQuantity(line.quantity),
+        unitPriceLabel: formatMoney(line.unitPrice),
+        amountLabel: formatMoney(line.total),
+      };
+    }),
     subtotalLabel: formatMoney(subtotal),
     totalLabel: formatMoney(invoice.total),
     amountPaidLabel: formatMoney(amountPaid),

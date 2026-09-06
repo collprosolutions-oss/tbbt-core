@@ -36,6 +36,7 @@ import { formatAddress, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
+import { lineItemIncludedWork, lineItemTitle } from "@/lib/estimate-line-scope";
 import {
   customQuoteDisplayDescription,
   isUnpricedCustomQuoteDraftLine,
@@ -260,7 +261,7 @@ export default async function EstimateBuilderPage({
                           : item.type === "MATERIAL"
                             ? "Material"
                             : "Other"}
-                        : {item.description} × {item.quantity.toString()}
+                        : {lineItemTitle(item.description)} × {item.quantity.toString()}
                         {priceRequired
                           ? " — price required"
                           : ` @ ${formatMoney(item.unitPrice)}`}
@@ -293,7 +294,7 @@ export default async function EstimateBuilderPage({
                         <EditLineIncludedWorkForm
                           estimateId={estimate.id}
                           lineItemId={item.id}
-                          includedWork={item.includedWork}
+                          includedWork={lineItemIncludedWork(item.description)}
                         />
                         <SaveLineForReuseForm
                           estimateId={estimate.id}
@@ -302,7 +303,7 @@ export default async function EstimateBuilderPage({
                         />
                       </>
                     ) : (
-                      <IncludedWorkDisplay includedWork={item.includedWork} />
+                      <IncludedWorkDisplay description={item.description} />
                     )}
                   </li>
                 );

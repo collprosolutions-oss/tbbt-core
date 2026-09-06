@@ -18,6 +18,7 @@ import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { requireManagementPageAccess } from "@/lib/access";
 import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
+import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { CUSTOM_QUOTE_DRAFT_MARKER } from "@/lib/request-estimate-draft";
@@ -42,7 +43,6 @@ export default async function ChangeOrderPage({
         select: {
           id: true,
           description: true,
-          includedWork: true,
           quantity: true,
           unitPrice: true,
           total: true,
@@ -130,7 +130,7 @@ export default async function ChangeOrderPage({
                 <li key={item.id} className="space-y-1">
                   <div className="flex items-center justify-between gap-3">
                     <span className="min-w-0 flex-1 break-words">
-                      {item.description} × {item.quantity.toString()} @{" "}
+                      {lineItemTitle(item.description)} × {item.quantity.toString()} @{" "}
                       {item.description.includes(CUSTOM_QUOTE_DRAFT_MARKER) &&
                       Number(item.unitPrice) <= 0
                         ? "Price required"
@@ -144,7 +144,7 @@ export default async function ChangeOrderPage({
                       />
                     ) : null}
                   </div>
-                  <IncludedWorkDisplay includedWork={item.includedWork} />
+                  <IncludedWorkDisplay description={item.description} />
                 </li>
               ))}
             </ul>

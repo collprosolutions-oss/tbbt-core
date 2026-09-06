@@ -10,6 +10,7 @@
  * already uses for its own overlap warning (see src/lib/job-schedule.ts and
  * src/app/actions/job.ts). Do not add a second scheduling data source here.
  */
+import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { schedulesOverlap } from "@/lib/job-schedule";
 
 export const SCHEDULE_VIEWS = ["month", "week", "day", "crew", "list"] as const;
@@ -311,7 +312,7 @@ export function jobScopeSummary(job: {
 }): string | null {
   const line =
     job.approvedEstimateVersion?.lineItems[0] ?? job.estimate?.lineItems[0];
-  return line?.description ?? null;
+  return line ? lineItemTitle(line.description) : null;
 }
 
 export function groupJobsByDay<T extends { scheduledAt: Date | null }>(

@@ -6,6 +6,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
+import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { formatMoney } from "@/lib/format";
 import type { ApprovedWorkOrderScope } from "@/lib/job-work-order";
 
@@ -88,12 +89,12 @@ export function ApprovedScopeCard({
                   className="flex justify-between gap-3 md:grid md:grid-cols-[minmax(0,1fr)_5rem_6.5rem_6rem] md:items-baseline"
                 >
                   <span className="min-w-0 flex-1 break-words md:flex-none">
-                    <span>{item.description}</span>
+                    <span>{lineItemTitle(item.description)}</span>
                     <span className="md:hidden">
                       {" "}
                       × {item.quantity.toString()} @ {formatMoney(item.unitPrice)}
                     </span>
-                    <IncludedWorkDisplay includedWork={item.includedWork} />
+                    <IncludedWorkDisplay description={item.description} />
                   </span>
                   <span className="hidden md:block md:text-right">
                     {item.quantity.toString()}
@@ -114,7 +115,7 @@ export function ApprovedScopeCard({
               <li key={index} className="space-y-1">
                 <div className="flex justify-between gap-3">
                   <span className="min-w-0 flex-1 break-words">
-                    {item.description} × {item.quantity.toString()}
+                    {lineItemTitle(item.description)} × {item.quantity.toString()}
                     {hideFinancials ? null : (
                       <> @ {formatMoney(item.unitPrice)}</>
                     )}
@@ -123,7 +124,7 @@ export function ApprovedScopeCard({
                     <span className="shrink-0">{formatMoney(item.total)}</span>
                   )}
                 </div>
-                <IncludedWorkDisplay includedWork={item.includedWork} />
+                <IncludedWorkDisplay description={item.description} />
               </li>
             ))}
           </ul>

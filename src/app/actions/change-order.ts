@@ -7,7 +7,7 @@ import { requireBusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { persistDraftChangeOrderTotal } from "@/lib/change-order";
 import { prisma } from "@/lib/prisma";
-import { normalizeIncludedWork } from "@/lib/estimate-line-scope";
+import { joinLineDescription } from "@/lib/estimate-line-scope";
 import {
   addChangeOrderDraftLines,
   isUnpricedCustomQuoteDraftLine,
@@ -242,8 +242,8 @@ export async function addChangeOrderLineItem(
       data: {
         businessId: access.businessId,
         changeOrderId: changeOrder.id,
-        description,
-        includedWork: normalizeIncludedWork(
+        description: joinLineDescription(
+          description,
           typeof formData.get("includedWork") === "string"
             ? String(formData.get("includedWork"))
             : "",

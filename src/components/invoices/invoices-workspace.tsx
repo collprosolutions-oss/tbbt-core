@@ -35,7 +35,6 @@ export type InvoiceListItem = {
   scopeSummary: string | null;
   workPerformed: Array<{
     description: string;
-    includedWork?: string | null;
     quantityLabel: string;
   }>;
   jobId: string | null;

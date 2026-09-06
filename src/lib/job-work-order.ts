@@ -20,7 +20,6 @@ import type { LineItemType, Prisma } from "@prisma/client";
 
 export type WorkOrderLineItem = {
   description: string;
-  includedWork?: string | null;
   quantity: Prisma.Decimal;
   unitPrice: Prisma.Decimal;
   total: Prisma.Decimal;

@@ -42,7 +42,7 @@ export default async function InvoicePage({
       job: { select: { id: true, status: true } },
       lineItems: {
         orderBy: { createdAt: "asc" as const },
-        select: { description: true, includedWork: true, quantity: true },
+        select: { description: true, quantity: true },
       },
     },
   } as const;
@@ -131,7 +131,6 @@ export default async function InvoicePage({
           <WorkPerformedList
             lines={invoice.lineItems.map((line) => ({
               description: line.description,
-              includedWork: line.includedWork,
               quantityLabel: line.quantity.toString(),
             }))}
           />

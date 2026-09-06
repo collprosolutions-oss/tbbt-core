@@ -69,7 +69,6 @@ export async function createEstimateVersionSnapshot(
         create: estimate.lineItems.map((item) => ({
           businessId: input.businessId,
           description: item.description,
-          includedWork: item.includedWork,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
           total: item.total,

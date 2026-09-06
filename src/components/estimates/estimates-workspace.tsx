@@ -8,6 +8,7 @@ import { CopyEstimateLinkButton } from "@/components/estimates/copy-estimate-lin
 import { EditEstimateButton } from "@/components/estimates/edit-estimate-button";
 import { EmailEstimateButton } from "@/components/estimates/email-estimate-button";
 import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
+import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { EmptyState } from "@/components/empty-state";
 import { CreateJobButton } from "@/components/jobs/create-job-button";
@@ -30,7 +31,6 @@ import { cn } from "@/lib/utils";
 export type EstimateLineItem = {
   id: string;
   description: string;
-  includedWork?: string | null;
   quantity: string;
   unitPrice: string;
   total: string;
@@ -375,11 +375,11 @@ function EstimateDetailsPanel({ estimate }: { estimate: EstimateListItem | null 
                   <div className="flex items-start justify-between gap-3">
                     <span className="min-w-0 flex-1 break-words text-foreground">
                       <span className="text-muted-foreground">{LineItemTypeLabel(item.type)}:</span>{" "}
-                      {item.description} × {item.quantity}
+                      {lineItemTitle(item.description)} × {item.quantity}
                     </span>
                     <span className="shrink-0 font-medium tabular-nums text-foreground">{item.total}</span>
                   </div>
-                  <IncludedWorkDisplay includedWork={item.includedWork} />
+                  <IncludedWorkDisplay description={item.description} />
                 </li>
               ))}
             </ul>

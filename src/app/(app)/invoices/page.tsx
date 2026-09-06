@@ -160,7 +160,7 @@ export default async function InvoicesPage({
         customer: { select: { id: true, name: true, phone: true, email: true } },
         lineItems: {
           orderBy: { createdAt: "asc" as const },
-          select: { description: true, includedWork: true, quantity: true },
+          select: { description: true, quantity: true },
         },
         job: {
           select: {
@@ -200,7 +200,6 @@ export default async function InvoicesPage({
     scopeSummary: invoice.job ? jobScopeSummary(invoice.job) : null,
     workPerformed: invoice.lineItems.map((line) => ({
       description: line.description,
-      includedWork: line.includedWork,
       quantityLabel: line.quantity.toString(),
     })),
     jobId: invoice.job?.id ?? null,

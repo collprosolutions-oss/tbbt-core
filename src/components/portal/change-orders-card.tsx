@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/card";
 import { ApproveDeclineChangeOrderButtons } from "@/components/portal/approve-decline-change-order-buttons";
 import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
+import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { customerFacingChangeOrderStatusLabel } from "@/lib/change-order";
 import { formatMoney } from "@/lib/format";
 
@@ -17,7 +18,6 @@ export type PortalChangeOrder = {
   total: { toString(): string };
   lineItems: {
     description: string;
-    includedWork?: string | null;
     quantity: { toString(): string };
     unitPrice: { toString(): string };
     total: { toString(): string };
@@ -68,12 +68,12 @@ export function ChangeOrdersCard({
                     <li key={index} className="space-y-1">
                       <div className="flex justify-between gap-3">
                         <span className="min-w-0 flex-1 break-words">
-                          {item.description} × {item.quantity.toString()} @{" "}
+                          {lineItemTitle(item.description)} × {item.quantity.toString()} @{" "}
                           {formatMoney(item.unitPrice)}
                         </span>
                         <span className="shrink-0">{formatMoney(item.total)}</span>
                       </div>
-                      <IncludedWorkDisplay includedWork={item.includedWork} />
+                      <IncludedWorkDisplay description={item.description} />
                     </li>
                   ))}
                 </ul>

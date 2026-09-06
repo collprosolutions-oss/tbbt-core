@@ -26,7 +26,6 @@ export const LABOR_MINIMUM_INVOICE_DESCRIPTION =
 
 export type InvoiceSnapshotLineInput = {
   description: string;
-  includedWork?: string | null;
   quantity: Prisma.Decimal | number | string;
   unitPrice: Prisma.Decimal | number | string;
   total: Prisma.Decimal | number | string;
@@ -54,7 +53,6 @@ export function buildInvoiceLineSnapshots(input: {
   const lines: InvoiceSnapshotLineInput[] = input.approvedLineItems.map(
     (line) => ({
       description: line.description,
-      includedWork: line.includedWork ?? null,
       quantity: line.quantity,
       unitPrice: line.unitPrice,
       total: line.total,
@@ -78,7 +76,6 @@ export function buildInvoiceLineSnapshots(input: {
   for (const line of input.approvedChangeOrderLineItems ?? []) {
     lines.push({
       description: line.description,
-      includedWork: line.includedWork ?? null,
       quantity: line.quantity,
       unitPrice: line.unitPrice,
       total: line.total,
@@ -92,7 +89,6 @@ export function buildInvoiceLineSnapshots(input: {
 
 const INVOICE_LINE_SELECT = {
   description: true,
-  includedWork: true,
   quantity: true,
   unitPrice: true,
   total: true,
@@ -102,7 +98,6 @@ const INVOICE_LINE_SELECT = {
 
 const VERSION_LINE_SELECT = {
   description: true,
-  includedWork: true,
   quantity: true,
   unitPrice: true,
   total: true,
@@ -383,7 +378,6 @@ async function persistEmptyInvoiceWorkLines(
         invoiceId: invoice.id,
         serviceCatalogItemId: line.serviceCatalogItemId ?? null,
         description: line.description,
-        includedWork: line.includedWork ?? null,
         quantity: toInvoiceDecimal(line.quantity),
         unitPrice: toInvoiceDecimal(line.unitPrice),
         total: toInvoiceDecimal(line.total),
@@ -476,7 +470,6 @@ export async function persistDraftInvoiceFromCompletedJob(
           invoiceId: created.id,
           serviceCatalogItemId: line.serviceCatalogItemId ?? null,
           description: line.description,
-          includedWork: line.includedWork ?? null,
           quantity: toInvoiceDecimal(line.quantity),
           unitPrice: toInvoiceDecimal(line.unitPrice),
           total: toInvoiceDecimal(line.total),

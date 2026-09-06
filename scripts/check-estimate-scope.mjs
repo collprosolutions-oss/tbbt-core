@@ -18,7 +18,13 @@ const { CAPABILITIES, ForbiddenError, roleHasCapability } = await import(
 );
 const { persistDraftEstimateTotal } = await import("@/lib/labor-minimum");
 const { createEstimateVersionSnapshot } = await import("@/lib/estimate-version");
-const { normalizeIncludedWork } = await import("@/lib/estimate-line-scope");
+const {
+  INCLUDED_WORK_MARKER,
+  joinLineDescription,
+  lineItemIncludedWork,
+  normalizeIncludedWork,
+  splitLineDescription,
+} = await import("@/lib/estimate-line-scope");
 const {
   CUSTOM_QUOTE_DRAFT_MARKER,
   STARTING_AT_DRAFT_MARKER,
@@ -99,6 +105,19 @@ const WALL_SCOPE = [
   "Job-site cleanup and debris removal",
 ].join("\n");
 
+function scopeOf(item) {
+  return item ? lineItemIncludedWork(item.description) : null;
+}
+
+function titleOf(item) {
+  return item ? splitLineDescription(item.description).title : "";
+}
+
+function lineItemModelFieldNames(modelName) {
+  const model = Prisma.dmmf.datamodel.models.find((entry) => entry.name === modelName);
+  return model ? model.fields.map((field) => field.name) : [];
+}
+
 async function simulateSend(estimateId, businessId) {
   return prisma.$transaction(async (tx) => {
     const updated = await tx.estimate.updateMany({
@@ -123,14 +142,22 @@ try {
   check("MEMBER cannot manage estimates", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_ESTIMATES));
 
   const schema = readFileSync(new URL("../prisma/schema.prisma", import.meta.url), "utf8");
-  check("LineItem has optional includedWork", schema.includes("includedWork         String?"));
   check(
-    "EstimateVersionLineItem has optional includedWork",
-    schema.includes("includedWork      String?"),
+    "LineItem has no includedWork column — Preview shares Production DB and cannot select a missing field",
+    !schema.includes("includedWork         String?") &&
+      !schema.includes("includedWork      String?"),
   );
   check(
-    "Scope is documented as descriptive-only on LineItem",
-    schema.includes("never read by estimate, change-order"),
+    "Prisma LineItem client has no includedWork field (React #441 / missing-column crash)",
+    !lineItemModelFieldNames("LineItem").includes("includedWork"),
+  );
+  check(
+    "Prisma EstimateVersionLineItem client has no includedWork field",
+    !lineItemModelFieldNames("EstimateVersionLineItem").includes("includedWork"),
+  );
+  check(
+    "Scope is encoded in the existing description snapshot field",
+    schema.includes("INCLUDED_WORK_MARKER") && INCLUDED_WORK_MARKER.includes("Scope / Included Work"),
   );
 
   const laborSource = readFileSync(new URL("../src/lib/labor-minimum.ts", import.meta.url), "utf8");
@@ -145,8 +172,9 @@ try {
     "utf8",
   );
   check(
-    "Estimate version snapshot copies includedWork",
-    snapshotSource.includes("includedWork: item.includedWork"),
+    "Estimate version snapshot copies the description that carries scope",
+    snapshotSource.includes("description: item.description") &&
+      !snapshotSource.includes("includedWork"),
   );
 
   const customerPage = readFileSync(
@@ -154,16 +182,23 @@ try {
     "utf8",
   );
   check(
-    "Customer estimate selects and renders includedWork",
-    customerPage.includes("includedWork: true") &&
-      customerPage.includes("IncludedWorkDisplay") &&
-      customerPage.includes("includedWork={item.includedWork}"),
+    "Customer estimate renders scope from description, without selecting a missing column",
+    customerPage.includes("IncludedWorkDisplay") &&
+      customerPage.includes("description={item.description}") &&
+      !customerPage.includes("includedWork: true"),
   );
 
-  const ownerPage = readFileSync(
+  const ownerPageSource = readFileSync(
     new URL("../src/app/(app)/estimates/[estimateId]/page.tsx", import.meta.url),
     "utf8",
   );
+  check(
+    "Owner estimate detail does not query a Prisma includedWork field",
+    !ownerPageSource.includes("includedWork: true") &&
+      ownerPageSource.includes("lineItems: { orderBy: { createdAt: \"asc\" } }"),
+  );
+
+  const ownerPage = ownerPageSource;
   const reuseForm = readFileSync(
     new URL("../src/components/estimates/draft-line-scope-forms.tsx", import.meta.url),
     "utf8",
@@ -205,9 +240,9 @@ try {
     "utf8",
   );
   check(
-    "Invoice carry-forward copies includedWork without using it in totals",
-    invoiceCarry.includes("includedWork: line.includedWork ?? null") &&
-      invoiceCarry.includes("includedWork: true"),
+    "Invoice carry-forward copies description snapshots and does not select includedWork",
+    invoiceCarry.includes("description: line.description") &&
+      !invoiceCarry.includes("includedWork"),
   );
 
   check(
@@ -315,21 +350,25 @@ try {
     where: { id: estimate.id },
     include: { lineItems: { orderBy: { createdAt: "asc" } } },
   });
+  check(
+    "DRAFT estimate detail query (same include as /estimates/[id]) loads without a missing-column crash",
+    draft != null && draft.lineItems.length === 4,
+  );
   const tvLine = draft.lineItems.find((item) => item.description.includes("TV Mounting"));
   const doorLine = draft.lineItems.find((item) => item.description.includes("Door Adjustment"));
   const carpentryLine = draft.lineItems.find((item) => item.description.includes("Custom Carpentry"));
   const oneOffLine = draft.lineItems.find((item) => item.description.includes("one-off custom trim"));
 
-  check("FIXED catalog description snapshots onto includedWork", tvLine.includedWork === "Mount TV\nConceal cords");
+  check("FIXED catalog description snapshots onto includedWork", scopeOf(tvLine) === "Mount TV\nConceal cords");
   check(
     "STARTING_AT catalog description snapshots onto includedWork",
-    doorLine.includedWork === "Adjust latch\nTighten hinges",
+    scopeOf(doorLine) === "Adjust latch\nTighten hinges",
   );
   check(
     "CUSTOM_QUOTE catalog description snapshots onto includedWork",
-    carpentryLine.includedWork === "Measure on site\nBuild to fit",
+    scopeOf(carpentryLine) === "Measure on site\nBuild to fit",
   );
-  check("One-off custom request has no scope until the owner adds it", oneOffLine.includedWork == null);
+  check("One-off custom request has no scope until the owner adds it", scopeOf(oneOffLine) == null);
   check(
     "Prefill still keeps existing pricing-mode behavior",
     tvLine.unitPrice.toString() === "150" &&
@@ -350,7 +389,7 @@ try {
     lineItemId: oneOffLine.id,
     includedWork: WALL_SCOPE,
   });
-  check("DRAFT scope editing persists every line break", scoped.includedWork === WALL_SCOPE);
+  check("DRAFT scope editing persists every line break", scopeOf(scoped) === WALL_SCOPE);
   const afterScope = await prisma.estimate.findUnique({ where: { id: estimate.id } });
   check(
     "Editing scope does not change estimate total or labor minimum",
@@ -391,7 +430,7 @@ try {
   });
   check(
     "Failed SENT scope edit left the DRAFT scope unchanged",
-    stillDraftScope.includedWork === WALL_SCOPE,
+    scopeOf(stillDraftScope) === WALL_SCOPE,
   );
 
   console.log("\nTEST — Snapshot / SENT / APPROVED lifecycle");
@@ -402,11 +441,27 @@ try {
     orderBy: { createdAt: "asc" },
   });
   const versionOneOff = versionLines.find((item) => item.description.includes("one-off custom trim"));
-  check("SENT snapshot stores the multi-line scope", versionOneOff?.includedWork === WALL_SCOPE);
+  check("SENT snapshot stores the multi-line scope", scopeOf(versionOneOff) === WALL_SCOPE);
   check(
     "SENT snapshot also stores catalog-copied scope",
-    versionLines.find((item) => item.description.includes("TV Mounting"))?.includedWork ===
+    scopeOf(versionLines.find((item) => item.description.includes("TV Mounting"))) ===
       "Mount TV\nConceal cords",
+  );
+  const sentDetail = await prisma.estimate.findFirst({
+    where: { id: estimate.id, status: "SENT" },
+    include: {
+      lineItems: { orderBy: { createdAt: "asc" } },
+      versions: { orderBy: { versionNumber: "desc" } },
+    },
+  });
+  check(
+    "SENT estimate detail query (same include as /estimates/[id]) loads without a missing-column crash",
+    sentDetail != null &&
+      sentDetail.lineItems.length > 0 &&
+      sentDetail.versions.length > 0 &&
+      scopeOf(
+        sentDetail.lineItems.find((item) => item.description.includes("one-off custom trim")),
+      ) === WALL_SCOPE,
   );
 
   await prisma.estimate.update({
@@ -425,10 +480,10 @@ try {
   const version2Line = await prisma.estimateVersionLineItem.findFirst({
     where: { estimateVersionId: sent2.version.id, description: { contains: "one-off custom trim" } },
   });
-  check("Version 1 scope is unchanged after a later send", version1Reread.includedWork === WALL_SCOPE);
+  check("Version 1 scope is unchanged after a later send", scopeOf(version1Reread) === WALL_SCOPE);
   check(
     "Version 2 stores the edited scope",
-    version2Line.includedWork === `${WALL_SCOPE}\nAdd shoe molding`,
+    scopeOf(version2Line) === `${WALL_SCOPE}\nAdd shoe molding`,
   );
 
   await prisma.$transaction(async (tx) => {
@@ -446,7 +501,26 @@ try {
   });
   check(
     "APPROVED version still has the agreed scope",
-    approvedVersionLine.includedWork === `${WALL_SCOPE}\nAdd shoe molding`,
+    scopeOf(approvedVersionLine) === `${WALL_SCOPE}\nAdd shoe molding`,
+  );
+
+  const approvedDetail = await prisma.estimate.findFirst({
+    where: { id: estimate.id, status: "APPROVED" },
+    include: {
+      lineItems: { orderBy: { createdAt: "asc" } },
+      versions: { orderBy: { versionNumber: "desc" } },
+    },
+  });
+  check(
+    "APPROVED estimate detail query (same include as /estimates/[id]) loads without a missing-column crash",
+    approvedDetail != null &&
+      approvedDetail.lineItems.length > 0 &&
+      approvedDetail.versions.length > 0 &&
+      scopeOf(
+        approvedDetail.lineItems.find((item) =>
+          item.description.includes("one-off custom trim"),
+        ),
+      ) === `${WALL_SCOPE}\nAdd shoe molding`,
   );
 
   console.log("\nTEST — Save for Future Use and insert snapshot");
@@ -461,8 +535,10 @@ try {
     data: {
       businessId: businessA.id,
       estimateId: reuseEstimate.id,
-      description: "Decorative Wall Paneling & Finish Carpentry",
-      includedWork: WALL_SCOPE,
+      description: joinLineDescription(
+        "Decorative Wall Paneling & Finish Carpentry",
+        WALL_SCOPE,
+      ),
       quantity: new Prisma.Decimal(1),
       unitPrice: new Prisma.Decimal(1800),
       total: new Prisma.Decimal(1800),
@@ -518,8 +594,8 @@ try {
     quantity: new Prisma.Decimal(1),
     unitPrice: new Prisma.Decimal(1800),
   });
-  check("Inserted estimate receives the saved title", inserted.description === saved.name);
-  check("Inserted estimate receives its own scope snapshot", inserted.includedWork === WALL_SCOPE);
+  check("Inserted estimate receives the saved title", titleOf(inserted) === saved.name);
+  check("Inserted estimate receives its own scope snapshot", scopeOf(inserted) === WALL_SCOPE);
   check("Inserted estimate receives the default price as a starting point", inserted.unitPrice.toString() === "1800");
   check("Inserted line is a snapshot, not a live catalog pointer for content", inserted.id !== reuseLine.id);
 
@@ -565,20 +641,20 @@ try {
   });
   check(
     "Later reusable-service edits do not alter previously created estimate lines",
-    historical.description === "Decorative Wall Paneling & Finish Carpentry" &&
-      historical.includedWork === WALL_SCOPE &&
+    titleOf(historical) === "Decorative Wall Paneling & Finish Carpentry" &&
+      scopeOf(historical) === WALL_SCOPE &&
       historical.unitPrice.toString() === "1800",
   );
   check(
     "The customized second estimate keeps its own title, scope, and price",
-    nextLine.description === "Decorative Wall Paneling & Finish Carpentry" &&
-      nextLine.includedWork === `${WALL_SCOPE}\nStain to match existing trim` &&
+    titleOf(nextLine) === "Decorative Wall Paneling & Finish Carpentry" &&
+      scopeOf(nextLine) === `${WALL_SCOPE}\nStain to match existing trim` &&
       nextLine.unitPrice.toString() === "2400",
   );
   check(
     "SENT historical snapshot still has the original agreed scope",
-    historicalVersion?.includedWork === WALL_SCOPE &&
-      historicalVersion.description === "Decorative Wall Paneling & Finish Carpentry",
+    scopeOf(historicalVersion) === WALL_SCOPE &&
+      titleOf(historicalVersion) === "Decorative Wall Paneling & Finish Carpentry",
   );
 
   const insertedFixed = await addCatalogItemToDraftEstimate(prisma, ownerA, {
@@ -591,11 +667,11 @@ try {
     catalogItemId: startingItem.id,
     quantity: new Prisma.Decimal(1),
   });
-  check("FIXED insert still snapshots catalog price and scope", insertedFixed.unitPrice.toString() === "150" && insertedFixed.includedWork === "Mount TV\nConceal cords");
+  check("FIXED insert still snapshots catalog price and scope", insertedFixed.unitPrice.toString() === "150" && scopeOf(insertedFixed) === "Mount TV\nConceal cords");
   check(
     "STARTING_AT insert still snapshots catalog price and scope",
     insertedStarting.unitPrice.toString() === "75" &&
-      insertedStarting.includedWork === "Adjust latch\nTighten hinges",
+      scopeOf(insertedStarting) === "Adjust latch\nTighten hinges",
   );
 
   const minEstimate = await prisma.estimate.create({
@@ -609,8 +685,7 @@ try {
     data: {
       businessId: businessA.id,
       estimateId: minEstimate.id,
-      description: "Small labor",
-      includedWork: "Prep\nInstall\nCleanup",
+      description: joinLineDescription("Small labor", "Prep\nInstall\nCleanup"),
       quantity: new Prisma.Decimal(1),
       unitPrice: new Prisma.Decimal(50),
       total: new Prisma.Decimal(50),
@@ -662,7 +737,7 @@ try {
   });
   check(
     "Cross-tenant scope edit did not mutate Business A",
-    aLineUnchanged.includedWork === `${WALL_SCOPE}\nStain to match existing trim`,
+    scopeOf(aLineUnchanged) === `${WALL_SCOPE}\nStain to match existing trim`,
   );
 
   console.log(

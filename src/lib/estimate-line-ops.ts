@@ -7,8 +7,15 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
-import { normalizeIncludedWork } from "@/lib/estimate-line-scope";
 import {
+  joinLineDescription,
+  lineItemIncludedWork,
+  splitLineDescription,
+} from "@/lib/estimate-line-scope";
+import {
+  CUSTOM_QUOTE_DRAFT_MARKER,
+  STARTING_AT_DRAFT_MARKER,
+  customQuoteDisplayDescription,
   isUnpricedCustomQuoteDraftLine,
   pricedCustomQuoteDescription,
 } from "@/lib/request-estimate-draft";
@@ -87,7 +94,6 @@ export async function addCatalogItemToDraftEstimate(
   }
 
   const total = input.quantity.mul(unitPrice);
-  const includedWork = normalizeIncludedWork(catalogItem.description);
 
   let createdId = "";
   await db.$transaction(async (tx) => {
@@ -96,8 +102,7 @@ export async function addCatalogItemToDraftEstimate(
         businessId: access.businessId,
         estimateId: estimate.id,
         serviceCatalogItemId: catalogItem.id,
-        description: catalogItem.name,
-        includedWork,
+        description: joinLineDescription(catalogItem.name, catalogItem.description),
         quantity: input.quantity,
         unitPrice,
         total,
@@ -216,10 +221,12 @@ export async function updateDraftEstimateLineIncludedWork(
     }),
   );
 
-  const includedWork = normalizeIncludedWork(input.includedWork);
+  const parts = splitLineDescription(line.description);
   await db.lineItem.update({
     where: { id: line.id },
-    data: { includedWork },
+    data: {
+      description: joinLineDescription(parts.title, input.includedWork),
+    },
   });
 
   return db.lineItem.findFirstOrThrow({
@@ -263,12 +270,15 @@ export async function saveDraftEstimateLineAsCatalog(
     }),
   );
 
-  const name = pricedCustomQuoteDescription(line.description);
+  const name = customQuoteDisplayDescription(line.description)
+    .replace(` ${STARTING_AT_DRAFT_MARKER}`, "")
+    .replace(` ${CUSTOM_QUOTE_DRAFT_MARKER}`, "")
+    .trim();
   if (!name) {
     throw new EstimateLineError("This line needs a title before it can be saved.");
   }
 
-  const includedWork = normalizeIncludedWork(line.includedWork);
+  const includedWork = lineItemIncludedWork(line.description);
   const linkedCatalog = line.serviceCatalogItemId
     ? await db.serviceCatalogItem.findFirst({
         where: { id: line.serviceCatalogItemId, ...access.scope },
