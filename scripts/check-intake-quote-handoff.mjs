@@ -99,6 +99,15 @@ check(
     ownerPage.includes("ownerVisibleRequestMeasurements"),
 );
 check(
+  "Owner measurement list keys by persisted measurement id",
+  readRepo("src/components/estimates/request-intake-context.tsx").includes(
+    "key={row.id}",
+  ) &&
+    !readRepo("src/components/estimates/request-intake-context.tsx").includes(
+      "key={row.label}",
+    ),
+);
+check(
   "Customer estimate, print, and document do not import private intake context",
   !customerPage.includes("RequestIntakeContext") &&
     !customerPage.includes("ownerVisibleRequestPhotos") &&
@@ -396,6 +405,7 @@ const measurementViews = ownerVisibleRequestMeasurements({
   serviceRequestId: "req-a",
   measurements: [
     {
+      id: "m1",
       businessId: "biz-a",
       serviceRequestId: "req-a",
       source: CUSTOMER_REPORTED_MEASUREMENT,
@@ -409,6 +419,7 @@ const measurementViews = ownerVisibleRequestMeasurements({
       },
     },
     {
+      id: "m-foreign",
       businessId: "biz-b",
       serviceRequestId: "req-a",
       source: CUSTOMER_REPORTED_MEASUREMENT,
@@ -424,9 +435,52 @@ const measurementViews = ownerVisibleRequestMeasurements({
 check(
   "Customer-reported measurements appear with unit/source context",
   measurementViews.length === 1 &&
+    measurementViews[0].id === "m1" &&
     measurementViews[0].label.includes("Width 32 in") &&
     measurementViews[0].label.includes("Height 48 in") &&
     measurementViews[0].sourceLabel === CUSTOMER_REPORTED_MEASUREMENT_LABEL,
+);
+
+const duplicateLabelViews = ownerVisibleRequestMeasurements({
+  businessId: "biz-a",
+  serviceRequestId: "req-a",
+  measurements: [
+    {
+      id: "m-a",
+      businessId: "biz-a",
+      serviceRequestId: "req-a",
+      source: CUSTOMER_REPORTED_MEASUREMENT,
+      width: 32,
+      height: 48,
+      length: null,
+      quantity: 1,
+      unit: "IN",
+      serviceRequestItem: {
+        serviceCatalogItem: { name: "Blind / Shade Installation" },
+      },
+    },
+    {
+      id: "m-b",
+      businessId: "biz-a",
+      serviceRequestId: "req-a",
+      source: CUSTOMER_REPORTED_MEASUREMENT,
+      width: 32,
+      height: 48,
+      length: null,
+      quantity: 1,
+      unit: "IN",
+      serviceRequestItem: {
+        serviceCatalogItem: { name: "Blind / Shade Installation" },
+      },
+    },
+  ],
+});
+check(
+  "Duplicate measurement labels still carry distinct persisted ids",
+  duplicateLabelViews.length === 2 &&
+    duplicateLabelViews[0].label === duplicateLabelViews[1].label &&
+    duplicateLabelViews[0].id === "m-a" &&
+    duplicateLabelViews[1].id === "m-b",
 );
 
 const baseUrl = process.env.DATABASE_URL;
@@ -575,6 +629,7 @@ try {
   check(
     "Customer-reported measurements appear on the correct estimate",
     visibleMeasurements.length === 1 &&
+      visibleMeasurements[0].id === request.measurements[0].id &&
       visibleMeasurements[0].label.includes("Width 96 in") &&
       visibleMeasurements[0].sourceLabel === CUSTOMER_REPORTED_MEASUREMENT_LABEL,
   );

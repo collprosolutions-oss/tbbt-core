@@ -43,6 +43,7 @@ export type OwnerIntakePhoto = {
 };
 
 export type OwnerIntakeMeasurementView = {
+  id: string;
   label: string;
   sourceLabel: string;
   catalogName: string;
@@ -98,7 +99,8 @@ export function toStoredIntakeMeasurement(row: {
 
 export function formatOwnerIntakeMeasurement(
   row: StoredIntakeMeasurement,
-  catalogName?: string | null,
+  catalogName: string | null | undefined,
+  id: string,
 ): OwnerIntakeMeasurementView {
   const dims = formatCustomerMeasurement({
     width: row.width,
@@ -109,6 +111,7 @@ export function formatOwnerIntakeMeasurement(
   });
   const name = catalogName?.trim() || "Selected work";
   return {
+    id,
     catalogName: name,
     sourceLabel: measurementSourceLabel(row.source),
     label: `${name}: ${dims || "on file"} (${measurementSourceLabel(row.source)})`,
@@ -176,6 +179,7 @@ export function ownerVisibleRequestMeasurements(
     businessId: string;
     serviceRequestId: string | null | undefined;
     measurements: Array<{
+      id: string;
       businessId: string;
       serviceRequestId: string;
       source: string;
@@ -205,7 +209,7 @@ export function ownerVisibleRequestMeasurements(
       row.serviceRequestItem?.serviceCatalogItem?.name ??
       row.serviceRequestItem?.customDescription ??
       null;
-    return [formatOwnerIntakeMeasurement(stored, catalogName)];
+    return [formatOwnerIntakeMeasurement(stored, catalogName, row.id)];
   });
 }
 

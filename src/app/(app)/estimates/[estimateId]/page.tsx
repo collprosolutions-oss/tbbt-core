@@ -135,6 +135,7 @@ export default async function EstimateBuilderPage({
           measurements: {
             orderBy: { createdAt: "asc" },
             select: {
+              id: true,
               businessId: true,
               serviceRequestId: true,
               source: true,

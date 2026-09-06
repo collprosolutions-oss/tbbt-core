@@ -24,7 +24,7 @@ export function RequestIntakeContext({
           </p>
           <ul className="mt-1 list-disc pl-5">
             {measurements.map((row) => (
-              <li key={row.label}>{row.label}</li>
+              <li key={row.id}>{row.label}</li>
             ))}
           </ul>
         </div>
