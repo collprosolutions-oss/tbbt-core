@@ -7,11 +7,13 @@
  * `description` after stable markers. Totals never read them.
  */
 import {
+  CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
   isCalculatorId,
   type CalculatorCustomerPolicy,
   type CalculatorDefinition,
   type CalculatorSnapshot,
 } from "@/lib/estimate-calculators/types";
+import { normalizeVariableScopeComponents } from "@/lib/estimate-calculators/variable-scope";
 import { normalizeCustomerPolicies } from "@/lib/estimate-policies";
 
 export const MAX_INCLUDED_WORK_LENGTH = 8000;
@@ -217,6 +219,7 @@ function parseCalculatorSnapshot(raw: string): CalculatorSnapshot | null {
       parsed.overriddenAmount == null || typeof parsed.overriddenAmount === "number"
         ? (parsed.overriddenAmount as number | null | undefined)
         : undefined,
+    ...calculatorComponentsField(parsed.calculatorId, parsed.components),
   };
 }
 
@@ -232,6 +235,7 @@ function parseCalculatorDefinition(raw: string): CalculatorDefinition | null {
         ? (parsed.rates as Record<string, unknown>)
         : {},
     customerPolicies: normalizeCustomerPolicies(parsed.customerPolicies),
+    ...calculatorComponentsField(parsed.calculatorId, parsed.components),
   };
 }
 
@@ -244,6 +248,7 @@ function serializeCalculatorSnapshot(snapshot: CalculatorSnapshot) {
     recommendedAmount: snapshot.recommendedAmount,
     appliedAmount: snapshot.appliedAmount,
     overriddenAmount: snapshot.overriddenAmount ?? null,
+    ...calculatorComponentsField(snapshot.calculatorId, snapshot.components),
   });
 }
 
@@ -253,7 +258,19 @@ function serializeCalculatorDefinition(definition: CalculatorDefinition) {
     calculatorId: definition.calculatorId,
     rates: definition.rates,
     ...(customerPolicies.length > 0 ? { customerPolicies } : {}),
+    ...calculatorComponentsField(definition.calculatorId, definition.components),
   });
+}
+
+function calculatorComponentsField(
+  calculatorId: CalculatorSnapshot["calculatorId"],
+  components: unknown,
+) {
+  if (calculatorId !== CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID) return {};
+  const normalized = normalizeVariableScopeComponents(
+    Array.isArray(components) ? components : null,
+  );
+  return normalized.length > 0 ? { components: normalized } : {};
 }
 
 function parseCustomerPolicies(raw: string): CalculatorCustomerPolicy[] {

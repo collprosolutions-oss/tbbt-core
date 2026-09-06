@@ -7,16 +7,29 @@ import {
   normalizeDecorativeWallPanelingInputs,
   normalizeDecorativeWallPanelingRates,
 } from "@/lib/estimate-calculators/decorative-wall-paneling";
+import { DECORATIVE_WALL_PANELING_TEMPLATE } from "@/lib/estimate-calculators/decorative-wall-paneling-template";
 import {
+  CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
   isCalculatorId,
   type CalculatorDefinition,
   type CalculatorId,
   type CalculatorResult,
   type CalculatorSnapshot,
 } from "@/lib/estimate-calculators/types";
+import {
+  computeVariableScope,
+  defaultVariableScopeRates,
+  emptyVariableScopeInputs,
+  jobQuantityKeysFromTemplate,
+  normalizeVariableScopeComponents,
+  normalizeVariableScopeTemplate,
+  persistableVariableScopeRates,
+  type VariableScopeComponent,
+  type VariableScopeTemplate,
+} from "@/lib/estimate-calculators/variable-scope";
 import { catalogCalculatorDefinition } from "@/lib/estimate-line-scope";
 
-const TITLE_ALIASES: Record<CalculatorId, string[]> = {
+const TITLE_ALIASES: Partial<Record<CalculatorId, string[]>> = {
   "decorative-wall-paneling": [DECORATIVE_WALL_PANELING_TITLE.toLowerCase()],
 };
 
@@ -43,32 +56,60 @@ export function resolveCalculatorId(input: {
   return null;
 }
 
-export function defaultCalculatorRates(calculatorId: CalculatorId) {
+export function templateForCalculator(
+  calculatorId: CalculatorId,
+  components?: unknown[] | null,
+): VariableScopeTemplate | null {
+  if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
+    return DECORATIVE_WALL_PANELING_TEMPLATE;
+  }
+  if (calculatorId === CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID) {
+    return normalizeVariableScopeTemplate({
+      calculatorId,
+      title: "Custom Work",
+      components,
+    });
+  }
+  return null;
+}
+
+export function defaultCalculatorRates(
+  calculatorId: CalculatorId,
+  components?: unknown[] | null,
+) {
   if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
     return { ...DEFAULT_DECORATIVE_WALL_PANELING_RATES };
   }
-  return {};
+  const template = templateForCalculator(calculatorId, components);
+  return template ? defaultVariableScopeRates(template) : {};
 }
 
 export function emptyCalculatorInputs(
   calculatorId: CalculatorId,
   rates?: Record<string, unknown>,
+  components?: unknown[] | null,
 ) {
   if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
     return emptyDecorativeWallPanelingInputs(
       normalizeDecorativeWallPanelingRates(rates),
     );
   }
-  return {};
+  const template = templateForCalculator(calculatorId, components);
+  return template ? emptyVariableScopeInputs(template) : {};
 }
 
 export function computeCalculator(
   calculatorId: CalculatorId,
   inputs?: Record<string, unknown> | null,
   rates?: Record<string, unknown> | null,
+  components?: unknown[] | null,
 ): CalculatorResult {
   if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
     return computeDecorativeWallPaneling(inputs, rates);
+  }
+  const template = templateForCalculator(calculatorId, components);
+  if (template) {
+    return computeVariableScope(template, inputs, rates);
   }
   return { recommendedAmount: 0, lines: [] };
 }
@@ -77,22 +118,30 @@ export function normalizeCalculatorSnapshot(
   snapshot: CalculatorSnapshot,
 ): CalculatorSnapshot {
   const calculatorId = snapshot.calculatorId;
-  const rates =
-    calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID
-      ? normalizeDecorativeWallPanelingRates(snapshot.rates)
-      : snapshot.rates;
-  const inputs =
-    calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID
-      ? normalizeDecorativeWallPanelingInputs(
-          snapshot.inputs,
-          normalizeDecorativeWallPanelingRates(snapshot.rates),
-        )
-      : snapshot.inputs;
+  if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
+    const rates = normalizeDecorativeWallPanelingRates(snapshot.rates);
+    return {
+      ...snapshot,
+      calculatorId,
+      rates,
+      inputs: normalizeDecorativeWallPanelingInputs(snapshot.inputs, rates),
+    };
+  }
+  const template = templateForCalculator(calculatorId, snapshot.components);
+  if (!template) {
+    return { ...snapshot, calculatorId };
+  }
   return {
     ...snapshot,
     calculatorId,
-    rates,
-    inputs,
+    rates: persistableVariableScopeRates(template, snapshot.rates, snapshot.inputs),
+    inputs: {
+      ...emptyVariableScopeInputs(template),
+      ...(snapshot.inputs && typeof snapshot.inputs === "object"
+        ? snapshot.inputs
+        : {}),
+    },
+    components: template.components,
   };
 }
 
@@ -120,6 +169,9 @@ export function calculatorTitle(calculatorId: CalculatorId) {
   if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
     return DECORATIVE_WALL_PANELING_TITLE;
   }
+  if (calculatorId === CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID) {
+    return "Custom Work";
+  }
   return calculatorId;
 }
 
@@ -127,6 +179,7 @@ export function persistableCalculatorRates(
   calculatorId: CalculatorId,
   rates?: Record<string, unknown> | null,
   inputs?: Record<string, unknown> | null,
+  components?: unknown[] | null,
 ): Record<string, unknown> {
   if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
     const normalized = normalizeDecorativeWallPanelingRates(rates);
@@ -153,7 +206,10 @@ export function persistableCalculatorRates(
       belongingsCleanupHeavyRate: normalized.belongingsCleanupHeavyRate,
     };
   }
-  return { ...(rates ?? {}) };
+  const template = templateForCalculator(calculatorId, components);
+  return template
+    ? persistableVariableScopeRates(template, rates, inputs)
+    : { ...(rates ?? {}) };
 }
 
 export function calculatorRatesEqual(
@@ -167,7 +223,29 @@ export function definitionOmitsJobQuantities(
   definition: CalculatorDefinition | null | undefined,
 ) {
   if (!definition) return true;
-  const encoded = JSON.stringify(definition);
+  const maybeInputs = (definition as { inputs?: unknown }).inputs;
+  if (maybeInputs && typeof maybeInputs === "object") {
+    return false;
+  }
+  const template = templateForCalculator(
+    definition.calculatorId,
+    definition.components,
+  );
+  const quantityKeys = new Set<string>([
+    ...JOB_SPECIFIC_CALCULATOR_INPUT_KEYS,
+    ...(template ? jobQuantityKeysFromTemplate(template) : []),
+  ]);
+  const rates = definition.rates ?? {};
+  if ([...quantityKeys].some((key) => Object.hasOwn(rates, key))) {
+    return false;
+  }
+  if (definition.calculatorId === CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID) {
+    return true;
+  }
+  const encoded = JSON.stringify({
+    calculatorId: definition.calculatorId,
+    rates: definition.rates,
+  });
   return JOB_SPECIFIC_CALCULATOR_INPUT_KEYS.every(
     (key) => !encoded.includes(`"${key}"`),
   );
@@ -179,14 +257,26 @@ export function catalogDefinitionFromSnapshot(
 ): CalculatorDefinition | null {
   const calculatorId = resolveCalculatorId({ title, snapshot });
   if (!calculatorId) return null;
+  const components = persistableCalculatorComponents(calculatorId, snapshot?.components);
   return {
     calculatorId,
     rates: persistableCalculatorRates(
       calculatorId,
-      snapshot?.rates ?? defaultCalculatorRates(calculatorId),
+      snapshot?.rates ?? defaultCalculatorRates(calculatorId, components),
       snapshot?.inputs,
+      components,
     ),
+    ...(components ? { components } : {}),
   };
+}
+
+export function persistableCalculatorComponents(
+  calculatorId: CalculatorId,
+  components?: unknown[] | null,
+): VariableScopeComponent[] | undefined {
+  if (calculatorId !== CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID) return undefined;
+  const normalized = normalizeVariableScopeComponents(components);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 export function findCatalogCalculatorDefinition(
@@ -244,7 +334,9 @@ export function resolveCalculatorRatesForForm(input: {
   calculatorId: CalculatorId;
   snapshot?: CalculatorSnapshot | null;
   businessRates?: Record<string, unknown> | null;
+  components?: unknown[] | null;
 }) {
+  const components = input.components ?? input.snapshot?.components;
   const applied =
     input.snapshot?.appliedAmount != null ||
     input.snapshot?.recommendedAmount != null;
@@ -253,11 +345,16 @@ export function resolveCalculatorRatesForForm(input: {
       input.calculatorId,
       input.snapshot?.rates,
       input.snapshot?.inputs,
+      components,
     );
   }
   return persistableCalculatorRates(
     input.calculatorId,
-    input.businessRates ?? input.snapshot?.rates ?? defaultCalculatorRates(input.calculatorId),
+    input.businessRates ??
+      input.snapshot?.rates ??
+      defaultCalculatorRates(input.calculatorId, components),
+    undefined,
+    components,
   );
 }
 
@@ -272,13 +369,22 @@ export function startingCalculatorSnapshot(input: {
 }): CalculatorSnapshot | null {
   const calculatorId = resolveCalculatorId(input);
   if (!calculatorId) return null;
-  const rates =
+  const components = persistableCalculatorComponents(
+    calculatorId,
+    input.definition?.components ?? input.snapshot?.components,
+  );
+  const rates = persistableCalculatorRates(
+    calculatorId,
     input.definition?.rates ??
-    input.snapshot?.rates ??
-    defaultCalculatorRates(calculatorId);
+      input.snapshot?.rates ??
+      defaultCalculatorRates(calculatorId, components),
+    undefined,
+    components,
+  );
   return {
     calculatorId,
     rates,
-    inputs: emptyCalculatorInputs(calculatorId, rates),
+    inputs: emptyCalculatorInputs(calculatorId, rates, components),
+    ...(components ? { components } : {}),
   };
 }

@@ -15,10 +15,12 @@ import {
   computeCalculator,
   findCatalogCalculatorDefinition,
   normalizeCalculatorSnapshot,
+  persistableCalculatorComponents,
   persistableCalculatorRates,
   resolveCalculatorId,
   startingCalculatorSnapshot,
   type CalculatorId,
+  type CalculatorSnapshot,
 } from "@/lib/estimate-calculators";
 import {
   catalogCalculatorDefinition,
@@ -437,6 +439,10 @@ export async function applyDraftEstimateCalculator(
     calculatorId,
     inputs: input.inputs,
     rates: input.rates ?? parts.calculatorSnapshot?.rates ?? {},
+    components: persistableCalculatorComponents(
+      calculatorId,
+      parts.calculatorSnapshot?.components,
+    ),
   });
   if (
     calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID &&
@@ -447,7 +453,12 @@ export async function applyDraftEstimateCalculator(
       "Enter wall width and height before applying a recommended price.",
     );
   }
-  const result = computeCalculator(calculatorId, snapshot.inputs, snapshot.rates);
+  const result = computeCalculator(
+    calculatorId,
+    snapshot.inputs,
+    snapshot.rates,
+    snapshot.components,
+  );
   snapshot.result = result;
   snapshot.recommendedAmount = result.recommendedAmount;
   snapshot.appliedAmount = result.recommendedAmount;
@@ -468,14 +479,16 @@ export async function applyDraftEstimateCalculator(
     calculatorId,
     snapshot.rates,
     snapshot.inputs,
+    snapshot.components,
   );
   const baselineRates = parts.calculatorSnapshot
     ? persistableCalculatorRates(
         calculatorId,
         parts.calculatorSnapshot.rates,
         parts.calculatorSnapshot.inputs,
+        parts.calculatorSnapshot.components,
       )
-    : persistableCalculatorRates(calculatorId);
+    : persistableCalculatorRates(calculatorId, undefined, undefined, snapshot.components);
   const ratesEdited = !calculatorRatesEqual(nextRates, baselineRates);
 
   await db.$transaction(async (tx) => {
@@ -495,6 +508,7 @@ export async function applyDraftEstimateCalculator(
         title: customQuoteDisplayDescription(parts.title),
         includedWork: parts.includedWork,
         rates: nextRates,
+        components: snapshot.components,
         lineItemId: line.id,
       });
     }
@@ -551,13 +565,23 @@ export async function persistDraftEstimateCalculatorRates(
     throw new EstimateLineError("This line does not have a pricing calculator.");
   }
 
-  const rates = persistableCalculatorRates(calculatorId, input.rates, input.inputs);
+  const components = persistableCalculatorComponents(
+    calculatorId,
+    parts.calculatorSnapshot?.components,
+  );
+  const rates = persistableCalculatorRates(
+    calculatorId,
+    input.rates,
+    input.inputs,
+    components,
+  );
   await writeBusinessCalculatorRates(db, access, {
     calculatorId,
     catalogItemId: line.serviceCatalogItemId,
     title: customQuoteDisplayDescription(parts.title),
     includedWork: parts.includedWork,
     rates,
+    components,
     customerPolicies: input.customerPolicies,
     lineItemId: line.id,
   });
@@ -582,6 +606,7 @@ async function writeBusinessCalculatorRates(
     title: string;
     includedWork?: string | null;
     rates: Record<string, unknown>;
+    components?: CalculatorSnapshot["components"];
     customerPolicies?: Array<{ id: string; title: string; body: string }> | null;
     lineItemId: string;
   },
@@ -631,12 +656,17 @@ async function writeBusinessCalculatorRates(
 
   const existing = named ?? marked;
   const existingDefinition = catalogCalculatorDefinition(existing?.description);
+  const components = persistableCalculatorComponents(
+    calculatorId,
+    input.components ?? existingDefinition?.components,
+  );
   const definition = {
     calculatorId,
-    rates: persistableCalculatorRates(calculatorId, input.rates),
+    rates: persistableCalculatorRates(calculatorId, input.rates, null, components),
     customerPolicies: resolveCustomerPolicies(
       input.customerPolicies ?? existingDefinition?.customerPolicies,
     ),
+    ...(components ? { components } : {}),
   };
   const catalog = existing
     ? await db.serviceCatalogItem.update({

@@ -1,12 +1,19 @@
 /**
  * Small reusable variable-scope calculator framework.
  *
- * Only Decorative Wall Paneling is implemented now. Later trade
- * calculators (drywall, siding, flooring, trim, concrete, cabinets,
- * painting) register the same way. Preview cannot add Prisma columns,
- * so snapshots live in existing description text.
+ * Decorative Wall Paneling is the first fully configured template.
+ * `custom-variable-scope` is the reusable engine for future Custom Work
+ * / Other items. Preview cannot add Prisma columns, so snapshots live
+ * in existing description text.
  */
-export const CALCULATOR_IDS = ["decorative-wall-paneling"] as const;
+import type { VariableScopeComponent } from "@/lib/estimate-calculators/variable-scope";
+
+export const CALCULATOR_IDS = [
+  "decorative-wall-paneling",
+  "custom-variable-scope",
+] as const;
+
+export const CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID = "custom-variable-scope" as const;
 
 export type CalculatorId = (typeof CALCULATOR_IDS)[number];
 
@@ -44,12 +51,14 @@ export type CalculatorSnapshot = {
   recommendedAmount?: number;
   appliedAmount?: number;
   overriddenAmount?: number | null;
+  components?: VariableScopeComponent[];
 };
 
 export type CalculatorDefinition = {
   calculatorId: CalculatorId;
   rates: Record<string, unknown>;
   customerPolicies?: CalculatorCustomerPolicy[];
+  components?: VariableScopeComponent[];
 };
 
 export function isCalculatorId(value: unknown): value is CalculatorId {

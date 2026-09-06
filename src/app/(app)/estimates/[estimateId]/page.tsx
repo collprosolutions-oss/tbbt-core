@@ -19,6 +19,7 @@ import { IncludedWorkDisplay } from "@/components/estimates/included-work-displa
 import { OverrideLinePriceForm } from "@/components/estimates/override-line-price-form";
 import { PriceRequiredLineForm } from "@/components/estimates/price-required-line-form";
 import { VariableScopeCalculatorForm } from "@/components/estimates/variable-scope-calculator-form";
+import { VariableScopeDefinitionForm } from "@/components/estimates/variable-scope-definition-form";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
@@ -41,11 +42,14 @@ import { isUsableEmail } from "@/lib/mail";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
 import {
+  CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
+  DECORATIVE_WALL_PANELING_CALCULATOR_ID,
   calculatorSnapshotIsApplied,
   emptyCalculatorInputs,
   findCatalogCalculatorDefinition,
   resolveCalculatorId,
   resolveCalculatorRatesForForm,
+  templateForCalculator,
 } from "@/lib/estimate-calculators";
 import {
   catalogCalculatorDefinition,
@@ -275,19 +279,30 @@ export default async function EstimateBuilderPage({
                       title: requestName,
                     })
                   : null;
+                const calculatorComponents =
+                  businessDefinition?.components ?? calculatorSnapshot?.components;
                 const formRates = calculatorId
                   ? resolveCalculatorRatesForForm({
                       calculatorId,
                       snapshot: calculatorSnapshot,
                       businessRates: businessDefinition?.rates,
+                      components: calculatorComponents,
                     })
                   : null;
                 const formInputs =
                   calculatorId && calculatorSnapshotIsApplied(calculatorSnapshot)
                     ? calculatorSnapshot?.inputs
                     : calculatorId
-                      ? emptyCalculatorInputs(calculatorId, formRates ?? undefined)
+                      ? emptyCalculatorInputs(
+                          calculatorId,
+                          formRates ?? undefined,
+                          calculatorComponents,
+                        )
                       : null;
+                const customTemplate =
+                  calculatorId === CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID
+                    ? templateForCalculator(calculatorId, calculatorComponents)
+                    : null;
                 return (
                   <li
                     key={item.id}
@@ -332,13 +347,22 @@ export default async function EstimateBuilderPage({
                         />
                       </>
                     ) : null}
-                    {isDraft && calculatorId ? (
+                    {isDraft && calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID ? (
                       <VariableScopeCalculatorForm
                         estimateId={estimate.id}
                         lineItemId={item.id}
                         inputs={formInputs}
                         rates={formRates}
                         customerPolicy={lineCustomerPolicies(item.description)[0]}
+                      />
+                    ) : null}
+                    {isDraft && customTemplate ? (
+                      <VariableScopeDefinitionForm
+                        estimateId={estimate.id}
+                        lineItemId={item.id}
+                        template={customTemplate}
+                        inputs={formInputs}
+                        rates={formRates}
                       />
                     ) : null}
                     {isDraft && calculatorId && item.unitPrice.gt(0) ? (

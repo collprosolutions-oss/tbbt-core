@@ -29,18 +29,24 @@ const {
   lineItemTitle,
 } = await import("@/lib/estimate-line-scope");
 const {
+  CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
   DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+  DECORATIVE_WALL_PANELING_TEMPLATE,
   DECORATIVE_WALL_PANELING_TITLE,
   DEFAULT_DECORATIVE_WALL_PANELING_RATES,
   DEFAULT_CONTENTS_HANDLING_RATES,
   DEFAULT_CONTENTS_PROTECTION_RATES,
   DEFAULT_BELONGINGS_CLEANUP_RATES,
   FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE,
+  computeCalculator,
   computeDecorativeWallPaneling,
+  computeVariableScope,
   computeWorkAreaService,
   definitionOmitsJobQuantities,
+  emptyCalculatorInputs,
   emptyDecorativeWallPanelingInputs,
   findCatalogCalculatorDefinition,
+  jobQuantityKeysFromTemplate,
   persistableCalculatorRates,
   resolveCalculatorRatesForForm,
   startingCalculatorSnapshot,
@@ -128,6 +134,52 @@ const WALL_SCOPE = [
   "Job-site cleanup and debris removal",
 ].join("\n");
 
+const SYNTHETIC_CUSTOM_TEMPLATE = {
+  calculatorId: "custom-variable-scope",
+  title: "Test Custom Opening Work",
+  components: [
+    {
+      key: "area",
+      name: "Affected area",
+      inputType: "measurement",
+      units: "sq ft",
+      quantityKey: "areaSqFt",
+      rateKey: "areaRate",
+      defaultRate: 2.5,
+      persistRate: true,
+      resetQuantity: true,
+      customerVisible: false,
+      section: "measurements",
+    },
+    {
+      key: "openings",
+      name: "Openings",
+      inputType: "count",
+      units: "each",
+      quantityKey: "openingCount",
+      rateKey: "openingRate",
+      defaultRate: 40,
+      persistRate: true,
+      resetQuantity: true,
+      customerVisible: false,
+      section: "counts",
+    },
+    {
+      key: "travel",
+      name: "Travel allowance",
+      inputType: "allowance",
+      units: "usd",
+      quantityKey: "travelAllowance",
+      rateKey: "defaultTravelAllowance",
+      defaultRate: 50,
+      persistRate: true,
+      resetQuantity: false,
+      customerVisible: false,
+      section: "allowances",
+    },
+  ],
+};
+
 try {
   console.log("\nSTATIC — Calculator framework, customer hiding, no new column");
   check("OWNER can manage estimates", roleHasCapability("OWNER", CAPABILITIES.MANAGE_ESTIMATES));
@@ -149,6 +201,7 @@ try {
   check(
     "Customer estimate does not mount the internal calculator UI",
     !customerPage.includes("VariableScopeCalculatorForm") &&
+      !customerPage.includes("VariableScopeDefinitionForm") &&
       !customerPage.includes("CalculatorBreakdown") &&
       !customerPage.includes("TBBT Calculator Snapshot") &&
       customerPage.includes("lineItemTitle") &&
@@ -165,6 +218,7 @@ try {
   check(
     "Owner DRAFT page mounts the calculator and keeps apply on the server",
     ownerPage.includes("VariableScopeCalculatorForm") &&
+      ownerPage.includes("VariableScopeDefinitionForm") &&
       ownerPage.includes("applyEstimateCalculator") === false &&
       ownerPage.includes("OverrideLinePriceForm") &&
       ownerPage.includes("resolveCalculatorRatesForForm") &&
@@ -300,12 +354,124 @@ try {
     "Customer-facing surfaces do not expose internal calculator details",
     !customerPage.includes("panelRate") &&
       !customerPage.includes("VariableScopeCalculatorForm") &&
+      !customerPage.includes("VariableScopeDefinitionForm") &&
       customerPage.includes("lineItemTitle") &&
       invoiceList.includes("lineItemTitle") &&
       !invoiceList.includes("VariableScopeCalculatorForm") &&
+      !invoiceList.includes("VariableScopeDefinitionForm") &&
       !invoiceList.includes("panelRate") &&
       portalChangeOrders.includes("lineItemTitle") &&
       !portalChangeOrders.includes("CalculatorBreakdown"),
+  );
+
+  const quantityKeys = jobQuantityKeysFromTemplate(DECORATIVE_WALL_PANELING_TEMPLATE);
+  const persistablePanelKeys = DECORATIVE_WALL_PANELING_TEMPLATE.components
+    .filter((component) => component.persistRate && component.rateKey)
+    .map((component) => component.rateKey);
+  check(
+    "Decorative Wall Paneling is defined through the reusable variable-scope template",
+    DECORATIVE_WALL_PANELING_TEMPLATE.calculatorId ===
+      DECORATIVE_WALL_PANELING_CALCULATOR_ID &&
+      DECORATIVE_WALL_PANELING_TEMPLATE.components.some(
+        (component) =>
+          component.quantityKey === "wallWidthFt" &&
+          component.resetQuantity === true &&
+          component.persistRate === false &&
+          component.customerVisible !== true,
+      ) &&
+      DECORATIVE_WALL_PANELING_TEMPLATE.components.some(
+        (component) =>
+          component.rateKey === "panelRate" &&
+          component.persistRate === true &&
+          component.resetQuantity === true &&
+          component.customerVisible !== true,
+      ) &&
+      persistablePanelKeys.includes("panelRate") &&
+      persistablePanelKeys.includes("windowRate") &&
+      persistablePanelKeys.includes("defaultTrimAllowance"),
+  );
+  check(
+    "Paneling template keeps business rates distinct from project quantities",
+    quantityKeys.includes("wallWidthFt") &&
+      quantityKeys.includes("panelQuantity") &&
+      quantityKeys.includes("windows") &&
+      !quantityKeys.includes("panelRate") &&
+      !quantityKeys.includes("defaultTrimAllowance") &&
+      definitionOmitsJobQuantities({
+        calculatorId: DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+        rates: persistableCalculatorRates(
+          DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+          DEFAULT_DECORATIVE_WALL_PANELING_RATES,
+          FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE,
+        ),
+      }),
+  );
+
+  const syntheticEmpty = emptyCalculatorInputs(
+    CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
+    undefined,
+    SYNTHETIC_CUSTOM_TEMPLATE.components,
+  );
+  const syntheticRates = persistableCalculatorRates(
+    CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
+    { openingRate: 45 },
+    { openingCount: 3, areaSqFt: 10, travelAllowance: 50 },
+    SYNTHETIC_CUSTOM_TEMPLATE.components,
+  );
+  const syntheticResult = computeCalculator(
+    CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
+    { openingCount: 3, areaSqFt: 10, travelAllowance: 50 },
+    { openingRate: 45, areaRate: 2.5, defaultTravelAllowance: 50 },
+    SYNTHETIC_CUSTOM_TEMPLATE.components,
+  );
+  const syntheticEngineResult = computeVariableScope(
+    SYNTHETIC_CUSTOM_TEMPLATE,
+    { openingCount: 3, areaSqFt: 10, travelAllowance: 50 },
+    { openingRate: 45, areaRate: 2.5, defaultTravelAllowance: 50 },
+  );
+  const syntheticStart = startingCalculatorSnapshot({
+    definition: {
+      calculatorId: CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
+      rates: syntheticRates,
+      components: SYNTHETIC_CUSTOM_TEMPLATE.components,
+    },
+  });
+  const definitionForm = readFileSync(
+    new URL("../src/components/estimates/variable-scope-definition-form.tsx", import.meta.url),
+    "utf8",
+  );
+  check(
+    "A second synthetic custom calculator is instantiated by the engine without a hardcoded React calculator",
+    syntheticEmpty.openingCount === 0 &&
+      syntheticEmpty.areaSqFt === 0 &&
+      syntheticEmpty.travelAllowance == null &&
+      syntheticRates.openingRate === 45 &&
+      syntheticRates.areaRate === 2.5 &&
+      syntheticRates.defaultTravelAllowance === 50 &&
+      !Object.hasOwn(syntheticRates, "openingCount") &&
+      !Object.hasOwn(syntheticRates, "areaSqFt") &&
+      syntheticResult.recommendedAmount === 210 &&
+      syntheticEngineResult.recommendedAmount === 210 &&
+      JSON.stringify(syntheticResult) === JSON.stringify(syntheticEngineResult) &&
+      syntheticStart?.inputs.openingCount === 0 &&
+      syntheticStart?.inputs.areaSqFt === 0 &&
+      syntheticStart?.rates.openingRate === 45 &&
+      definitionOmitsJobQuantities({
+        calculatorId: CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
+        rates: syntheticRates,
+        components: SYNTHETIC_CUSTOM_TEMPLATE.components,
+      }) &&
+      definitionForm.includes("computeVariableScope") &&
+      !definitionForm.includes("drywall") &&
+      !definitionForm.includes("flooring"),
+  );
+  check(
+    "No new customer-visible internal pricing breakdown is added",
+    !customerPage.includes("VariableScopeDefinitionForm") &&
+      !customerPage.includes("computeVariableScope") &&
+      !customerPage.includes("areaRate") &&
+      !customerPage.includes("openingRate") &&
+      customerPage.includes("lineItemTitle"),
   );
 
   const founder = computeDecorativeWallPaneling(
@@ -1049,6 +1215,98 @@ try {
         rates: savedRates,
       }),
     (error) => error instanceof ForbiddenError || error instanceof EstimateLineError,
+  );
+
+  console.log("\nTEST — Reusable custom-variable-scope engine (no hardcoded trade calculator)");
+  const customEstimate = await prisma.estimate.create({
+    data: {
+      businessId: persistBusiness.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const customLine = await prisma.lineItem.create({
+    data: {
+      businessId: persistBusiness.id,
+      estimateId: customEstimate.id,
+      description: joinLineDescription(
+        "Opening Cut-Outs",
+        "Cut and finish openings",
+        startingCalculatorSnapshot({
+          definition: {
+            calculatorId: CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
+            rates: persistableCalculatorRates(
+              CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
+              { openingRate: 45, areaRate: 2.5, defaultTravelAllowance: 50 },
+              null,
+              SYNTHETIC_CUSTOM_TEMPLATE.components,
+            ),
+            components: SYNTHETIC_CUSTOM_TEMPLATE.components,
+          },
+        }),
+      ),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(0),
+      total: new Prisma.Decimal(0),
+      type: "LABOR",
+    },
+  });
+  const customFresh = lineCalculatorSnapshot(customLine.description);
+  check(
+    "Custom calculator snapshot starts with saved rates and empty job quantities",
+    customFresh?.calculatorId === CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID &&
+      customFresh?.rates.openingRate === 45 &&
+      customFresh?.inputs.openingCount === 0 &&
+      customFresh?.inputs.areaSqFt === 0 &&
+      Array.isArray(customFresh?.components) &&
+      customFresh.components.length === SYNTHETIC_CUSTOM_TEMPLATE.components.length,
+  );
+  const customApplied = await applyDraftEstimateCalculator(prisma, persistOwner, {
+    estimateId: customEstimate.id,
+    lineItemId: customLine.id,
+    inputs: { openingCount: 3, areaSqFt: 10, travelAllowance: 50 },
+    rates: { openingRate: 45, areaRate: 2.5, defaultTravelAllowance: 50 },
+  });
+  check(
+    "Engine-applied synthetic custom calculator prices the line without a new React calculator",
+    customApplied.unitPrice.toString() === "210",
+  );
+  const customSaved = await saveDraftEstimateLineAsCatalog(prisma, persistOwner, {
+    estimateId: customEstimate.id,
+    lineItemId: customLine.id,
+    savePrice: false,
+  });
+  const customDefinition = catalogCalculatorDefinition(customSaved.description);
+  check(
+    "Save for reuse keeps custom calculator type, rates, and definition without job quantities",
+    customDefinition?.calculatorId === CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID &&
+      customDefinition?.rates.openingRate === 45 &&
+      customDefinition?.components?.length === SYNTHETIC_CUSTOM_TEMPLATE.components.length &&
+      definitionOmitsJobQuantities(customDefinition) &&
+      !JSON.stringify(customDefinition.rates).includes("openingCount") &&
+      catalogScopeText(customSaved.description) === "Cut and finish openings",
+  );
+  const reusedCustomEstimate = await prisma.estimate.create({
+    data: {
+      businessId: persistBusiness.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const reusedCustom = await addCatalogItemToDraftEstimate(prisma, persistOwner, {
+    estimateId: reusedCustomEstimate.id,
+    catalogItemId: customSaved.id,
+    quantity: new Prisma.Decimal(1),
+  });
+  const reusedSnapshot = lineCalculatorSnapshot(reusedCustom.description);
+  check(
+    "A future custom estimate starts from saved rates with fresh quantities",
+    reusedSnapshot?.calculatorId === CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID &&
+      reusedSnapshot?.rates.openingRate === 45 &&
+      reusedSnapshot?.inputs.openingCount === 0 &&
+      reusedSnapshot?.inputs.areaSqFt === 0 &&
+      reusedSnapshot?.components?.length === SYNTHETIC_CUSTOM_TEMPLATE.components.length &&
+      reusedCustom.unitPrice.toString() === "0",
   );
 
   console.log("\nTEST — Tenant isolation");

@@ -45,6 +45,80 @@ function readString(formData: FormData, key: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function readVariableScopePayload(formData: FormData): {
+  inputs: Record<string, unknown>;
+  rates: Record<string, unknown>;
+} | null {
+  const raw = formData.get("variableScopePayload");
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      inputs?: unknown;
+      rates?: unknown;
+    };
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      inputs:
+        parsed.inputs && typeof parsed.inputs === "object" && !Array.isArray(parsed.inputs)
+          ? (parsed.inputs as Record<string, unknown>)
+          : {},
+      rates:
+        parsed.rates && typeof parsed.rates === "object" && !Array.isArray(parsed.rates)
+          ? (parsed.rates as Record<string, unknown>)
+          : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+function decorativeWallPanelingFormFields(formData: FormData) {
+  return {
+    inputs: {
+      wallWidthFt: readString(formData, "wallWidthFt"),
+      wallHeightFt: readString(formData, "wallHeightFt"),
+      removalType: readString(formData, "removalType"),
+      panelQuantity: readString(formData, "panelQuantity"),
+      slidingPatioDoors: readString(formData, "slidingPatioDoors"),
+      standardDoors: readString(formData, "standardDoors"),
+      windows: readString(formData, "windows"),
+      receptacles: readString(formData, "receptacles"),
+      switches: readString(formData, "switches"),
+      lightFixtures: readString(formData, "lightFixtures"),
+      trimAllowance: readString(formData, "trimAllowance"),
+      cleanupAllowance: readString(formData, "cleanupAllowance"),
+      contentsHandlingLevel: readString(formData, "contentsHandlingLevel"),
+      contentsHandlingCustomAmount: readString(formData, "contentsHandlingCustomAmount"),
+      contentsProtectionLevel: readString(formData, "contentsProtectionLevel"),
+      contentsProtectionCustomAmount: readString(formData, "contentsProtectionCustomAmount"),
+      belongingsCleanupLevel: readString(formData, "belongingsCleanupLevel"),
+      belongingsCleanupCustomAmount: readString(formData, "belongingsCleanupCustomAmount"),
+      notes: readString(formData, "notes"),
+    },
+    rates: {
+      panelRate: readString(formData, "panelRate"),
+      removalRatePerSqFt: readString(formData, "removalRatePerSqFt"),
+      slidingPatioDoorRate: readString(formData, "slidingPatioDoorRate"),
+      standardDoorRate: readString(formData, "standardDoorRate"),
+      windowRate: readString(formData, "windowRate"),
+      receptacleRate: readString(formData, "receptacleRate"),
+      switchRate: readString(formData, "switchRate"),
+      lightFixtureRate: readString(formData, "lightFixtureRate"),
+      defaultTrimAllowance: readString(formData, "defaultTrimAllowance"),
+      defaultCleanupAllowance: readString(formData, "defaultCleanupAllowance"),
+      contentsHandlingLightRate: readString(formData, "contentsHandlingLightRate"),
+      contentsHandlingModerateRate: readString(formData, "contentsHandlingModerateRate"),
+      contentsHandlingHeavyRate: readString(formData, "contentsHandlingHeavyRate"),
+      contentsProtectionLightRate: readString(formData, "contentsProtectionLightRate"),
+      contentsProtectionModerateRate: readString(formData, "contentsProtectionModerateRate"),
+      contentsProtectionHeavyRate: readString(formData, "contentsProtectionHeavyRate"),
+      belongingsCleanupLightRate: readString(formData, "belongingsCleanupLightRate"),
+      belongingsCleanupModerateRate: readString(formData, "belongingsCleanupModerateRate"),
+      belongingsCleanupHeavyRate: readString(formData, "belongingsCleanupHeavyRate"),
+    },
+  };
+}
+
 function parseDecimal(raw: string, allowZero = false) {
   if (!raw) {
     return null;
@@ -483,51 +557,13 @@ export async function applyEstimateCalculator(
   try {
     const estimateId = readString(formData, "estimateId");
     const access = await requireBusinessAccess();
+    const calculatorFields =
+      readVariableScopePayload(formData) ?? decorativeWallPanelingFormFields(formData);
     await applyDraftEstimateCalculator(prisma, access, {
       estimateId,
       lineItemId: readString(formData, "lineItemId"),
-      inputs: {
-        wallWidthFt: readString(formData, "wallWidthFt"),
-        wallHeightFt: readString(formData, "wallHeightFt"),
-        removalType: readString(formData, "removalType"),
-        panelQuantity: readString(formData, "panelQuantity"),
-        slidingPatioDoors: readString(formData, "slidingPatioDoors"),
-        standardDoors: readString(formData, "standardDoors"),
-        windows: readString(formData, "windows"),
-        receptacles: readString(formData, "receptacles"),
-        switches: readString(formData, "switches"),
-        lightFixtures: readString(formData, "lightFixtures"),
-        trimAllowance: readString(formData, "trimAllowance"),
-        cleanupAllowance: readString(formData, "cleanupAllowance"),
-        contentsHandlingLevel: readString(formData, "contentsHandlingLevel"),
-        contentsHandlingCustomAmount: readString(formData, "contentsHandlingCustomAmount"),
-        contentsProtectionLevel: readString(formData, "contentsProtectionLevel"),
-        contentsProtectionCustomAmount: readString(formData, "contentsProtectionCustomAmount"),
-        belongingsCleanupLevel: readString(formData, "belongingsCleanupLevel"),
-        belongingsCleanupCustomAmount: readString(formData, "belongingsCleanupCustomAmount"),
-        notes: readString(formData, "notes"),
-      },
-      rates: {
-        panelRate: readString(formData, "panelRate"),
-        removalRatePerSqFt: readString(formData, "removalRatePerSqFt"),
-        slidingPatioDoorRate: readString(formData, "slidingPatioDoorRate"),
-        standardDoorRate: readString(formData, "standardDoorRate"),
-        windowRate: readString(formData, "windowRate"),
-        receptacleRate: readString(formData, "receptacleRate"),
-        switchRate: readString(formData, "switchRate"),
-        lightFixtureRate: readString(formData, "lightFixtureRate"),
-        defaultTrimAllowance: readString(formData, "defaultTrimAllowance"),
-        defaultCleanupAllowance: readString(formData, "defaultCleanupAllowance"),
-        contentsHandlingLightRate: readString(formData, "contentsHandlingLightRate"),
-        contentsHandlingModerateRate: readString(formData, "contentsHandlingModerateRate"),
-        contentsHandlingHeavyRate: readString(formData, "contentsHandlingHeavyRate"),
-        contentsProtectionLightRate: readString(formData, "contentsProtectionLightRate"),
-        contentsProtectionModerateRate: readString(formData, "contentsProtectionModerateRate"),
-        contentsProtectionHeavyRate: readString(formData, "contentsProtectionHeavyRate"),
-        belongingsCleanupLightRate: readString(formData, "belongingsCleanupLightRate"),
-        belongingsCleanupModerateRate: readString(formData, "belongingsCleanupModerateRate"),
-        belongingsCleanupHeavyRate: readString(formData, "belongingsCleanupHeavyRate"),
-      },
+      inputs: calculatorFields.inputs,
+      rates: calculatorFields.rates,
       customerPolicies: [
         {
           id: readString(formData, "customerPolicyId") || "work-area-personal-property",
@@ -549,30 +585,13 @@ export async function persistEstimateCalculatorRates(
   formData: FormData,
 ): Promise<EstimateActionState> {
   try {
+    const payload = readVariableScopePayload(formData);
+    const calculatorFields = payload ?? decorativeWallPanelingFormFields(formData);
     await persistDraftEstimateCalculatorRates(prisma, await requireBusinessAccess(), {
       estimateId: readString(formData, "estimateId"),
       lineItemId: readString(formData, "lineItemId"),
-      rates: {
-        panelRate: readString(formData, "panelRate"),
-        removalRatePerSqFt: readString(formData, "removalRatePerSqFt"),
-        slidingPatioDoorRate: readString(formData, "slidingPatioDoorRate"),
-        standardDoorRate: readString(formData, "standardDoorRate"),
-        windowRate: readString(formData, "windowRate"),
-        receptacleRate: readString(formData, "receptacleRate"),
-        switchRate: readString(formData, "switchRate"),
-        lightFixtureRate: readString(formData, "lightFixtureRate"),
-        defaultTrimAllowance: readString(formData, "defaultTrimAllowance"),
-        defaultCleanupAllowance: readString(formData, "defaultCleanupAllowance"),
-        contentsHandlingLightRate: readString(formData, "contentsHandlingLightRate"),
-        contentsHandlingModerateRate: readString(formData, "contentsHandlingModerateRate"),
-        contentsHandlingHeavyRate: readString(formData, "contentsHandlingHeavyRate"),
-        contentsProtectionLightRate: readString(formData, "contentsProtectionLightRate"),
-        contentsProtectionModerateRate: readString(formData, "contentsProtectionModerateRate"),
-        contentsProtectionHeavyRate: readString(formData, "contentsProtectionHeavyRate"),
-        belongingsCleanupLightRate: readString(formData, "belongingsCleanupLightRate"),
-        belongingsCleanupModerateRate: readString(formData, "belongingsCleanupModerateRate"),
-        belongingsCleanupHeavyRate: readString(formData, "belongingsCleanupHeavyRate"),
-      },
+      rates: calculatorFields.rates,
+      inputs: payload?.inputs,
       customerPolicies: readString(formData, "customerPolicyBody")
         ? [
             {
