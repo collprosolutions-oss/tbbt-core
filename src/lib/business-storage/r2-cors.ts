@@ -155,18 +155,25 @@ export async function applyR2BrowserUploadCors(
 
 let ensurePromise: Promise<ApplyR2BrowserUploadCorsResult | void> | null = null;
 
+const ENSURE_TIMEOUT_MS = 2500;
+
 export function resetR2BrowserUploadCorsLatch() {
   ensurePromise = null;
 }
 
 /**
  * Apply the narrow browser-upload CORS policy once per isolate.
- * Failures are logged and retried on the next upload authorize so a
- * missing bucket CORS config cannot permanently hide behind a latch.
+ * Failures and timeouts are logged and retried later so a missing
+ * PutBucketCors permission cannot hang Submit Request.
  */
 export function ensureR2BrowserUploadCors(client: S3Client, bucketName: string) {
   if (!ensurePromise) {
-    ensurePromise = applyR2BrowserUploadCors(client, bucketName).catch((error) => {
+    ensurePromise = Promise.race([
+      applyR2BrowserUploadCors(client, bucketName),
+      new Promise<void>((_, reject) => {
+        setTimeout(() => reject(new Error("R2 CORS apply timed out")), ENSURE_TIMEOUT_MS);
+      }),
+    ]).catch((error) => {
       ensurePromise = null;
       console.error("R2 browser-upload CORS could not be applied:", error);
     });

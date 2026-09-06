@@ -44,6 +44,7 @@ const r2Provider = readRepo("src/lib/business-storage/r2-provider.ts");
 const publicPhotos = readRepo("src/app/actions/public-request-photos.ts");
 const applyScript = readRepo("scripts/apply-r2-browser-upload-cors.mjs");
 const packageJson = readRepo("package.json");
+const dashboardFile = JSON.parse(readRepo("src/lib/business-storage/r2-browser-upload-cors.json"));
 
 console.log("\nUNIT — Exact origins, PUT-only methods, signed headers");
 check(
@@ -91,6 +92,10 @@ check(
   R2_BROWSER_UPLOAD_EXPOSE_HEADERS.includes("ETag"),
 );
 check("Dashboard JSON matches the S3 CORS rule", corsRulesMatch(r2BrowserUploadCorsDashboardJson(), rules));
+check(
+  "Committed Cloudflare dashboard file matches the TypeScript policy",
+  corsRulesMatch(dashboardFile, rules),
+);
 check("Policy helper reports the rule as narrow", corsPolicyIsNarrow(rules) === true);
 check(
   "A wildcard policy is rejected by the narrowness check",
