@@ -1,3 +1,5 @@
+import { getMailConfig } from "@/lib/mail";
+
 /**
  * Settings Core domain -- owner-controlled configuration for one business.
  *
@@ -135,7 +137,7 @@ export function settingsAiAssistAvailable(): boolean {
 }
 
 export const EMAIL_DELIVERY_UNCONFIGURED_MESSAGE =
-  "Email delivery is not configured. TBBT does not send customer SMS or email from Settings.";
+  "Email delivery is not configured. Sending requires platform email credentials and a valid app URL so customer links resolve. TBBT does not send customer SMS or email from Settings.";
 
 export const SMS_DELIVERY_UNAVAILABLE_MESSAGE =
   "SMS delivery is not connected. TBBT does not send customer text messages.";
@@ -491,16 +493,7 @@ export function buildIntegrationCards(input: {
 }
 
 export function isEmailDeliveryConfigured(): boolean {
-  return !("error" in getMailConfigSafe());
-}
-
-function getMailConfigSafe(): { configured: true } | { error: string } {
-  const apiKey = process.env.RESEND_API_KEY?.trim();
-  const from = process.env.EMAIL_FROM?.trim();
-  if (!apiKey || !from) {
-    return { error: "Email delivery is not configured" };
-  }
-  return { configured: true };
+  return !("error" in getMailConfig());
 }
 
 export function isBlobStorageConfigured(): boolean {
