@@ -39,7 +39,13 @@ import { formatAddress, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
-import { resolveCalculatorId } from "@/lib/estimate-calculators";
+import {
+  calculatorSnapshotIsApplied,
+  emptyCalculatorInputs,
+  findCatalogCalculatorDefinition,
+  resolveCalculatorId,
+  resolveCalculatorRatesForForm,
+} from "@/lib/estimate-calculators";
 import {
   catalogCalculatorDefinition,
   catalogScopeText,
@@ -260,6 +266,26 @@ export default async function EstimateBuilderPage({
                   title: requestName,
                   snapshot: calculatorSnapshot,
                 });
+                const businessDefinition = calculatorId
+                  ? findCatalogCalculatorDefinition(catalogItems, {
+                      calculatorId,
+                      catalogItemId: item.serviceCatalogItemId,
+                      title: requestName,
+                    })
+                  : null;
+                const formRates = calculatorId
+                  ? resolveCalculatorRatesForForm({
+                      calculatorId,
+                      snapshot: calculatorSnapshot,
+                      businessRates: businessDefinition?.rates,
+                    })
+                  : null;
+                const formInputs =
+                  calculatorId && calculatorSnapshotIsApplied(calculatorSnapshot)
+                    ? calculatorSnapshot?.inputs
+                    : calculatorId
+                      ? emptyCalculatorInputs(calculatorId, formRates ?? undefined)
+                      : null;
                 return (
                   <li
                     key={item.id}
@@ -308,8 +334,8 @@ export default async function EstimateBuilderPage({
                       <VariableScopeCalculatorForm
                         estimateId={estimate.id}
                         lineItemId={item.id}
-                        inputs={calculatorSnapshot?.inputs}
-                        rates={calculatorSnapshot?.rates}
+                        inputs={formInputs}
+                        rates={formRates}
                       />
                     ) : null}
                     {isDraft && calculatorId && item.unitPrice.gt(0) ? (

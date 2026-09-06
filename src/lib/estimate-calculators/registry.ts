@@ -14,6 +14,7 @@ import {
   type CalculatorResult,
   type CalculatorSnapshot,
 } from "@/lib/estimate-calculators/types";
+import { catalogCalculatorDefinition } from "@/lib/estimate-line-scope";
 
 const TITLE_ALIASES: Record<CalculatorId, string[]> = {
   "decorative-wall-paneling": [DECORATIVE_WALL_PANELING_TITLE.toLowerCase()],
@@ -95,6 +96,68 @@ export function normalizeCalculatorSnapshot(
   };
 }
 
+export const JOB_SPECIFIC_CALCULATOR_INPUT_KEYS = [
+  "wallWidthFt",
+  "wallHeightFt",
+  "removalType",
+  "panelQuantity",
+  "slidingPatioDoors",
+  "standardDoors",
+  "windows",
+  "receptacles",
+  "switches",
+  "lightFixtures",
+  "notes",
+] as const;
+
+export function calculatorTitle(calculatorId: CalculatorId) {
+  if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
+    return DECORATIVE_WALL_PANELING_TITLE;
+  }
+  return calculatorId;
+}
+
+export function persistableCalculatorRates(
+  calculatorId: CalculatorId,
+  rates?: Record<string, unknown> | null,
+  inputs?: Record<string, unknown> | null,
+): Record<string, unknown> {
+  if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
+    const normalized = normalizeDecorativeWallPanelingRates(rates);
+    const job = normalizeDecorativeWallPanelingInputs(inputs ?? undefined, normalized);
+    return {
+      panelRate: normalized.panelRate,
+      removalRatePerSqFt: normalized.removalRatePerSqFt,
+      slidingPatioDoorRate: normalized.slidingPatioDoorRate,
+      standardDoorRate: normalized.standardDoorRate,
+      windowRate: normalized.windowRate,
+      receptacleRate: normalized.receptacleRate,
+      switchRate: normalized.switchRate,
+      lightFixtureRate: normalized.lightFixtureRate,
+      defaultTrimAllowance: job.trimAllowance,
+      defaultCleanupAllowance: job.cleanupAllowance,
+    };
+  }
+  return { ...(rates ?? {}) };
+}
+
+export function calculatorRatesEqual(
+  left?: Record<string, unknown> | null,
+  right?: Record<string, unknown> | null,
+) {
+  return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {});
+}
+
+export function definitionOmitsJobQuantities(
+  definition: CalculatorDefinition | null | undefined,
+) {
+  if (!definition) return true;
+  const encoded = JSON.stringify(definition);
+  return JOB_SPECIFIC_CALCULATOR_INPUT_KEYS.every(
+    (key) => !encoded.includes(`"${key}"`),
+  );
+}
+
 export function catalogDefinitionFromSnapshot(
   snapshot: CalculatorSnapshot | null,
   title?: string | null,
@@ -103,8 +166,88 @@ export function catalogDefinitionFromSnapshot(
   if (!calculatorId) return null;
   return {
     calculatorId,
-    rates: snapshot?.rates ?? defaultCalculatorRates(calculatorId),
+    rates: persistableCalculatorRates(
+      calculatorId,
+      snapshot?.rates ?? defaultCalculatorRates(calculatorId),
+      snapshot?.inputs,
+    ),
   };
+}
+
+export function findCatalogCalculatorDefinition(
+  items: Array<{
+    id?: string | null;
+    name?: string | null;
+    description?: string | null;
+  }>,
+  input: {
+    calculatorId?: CalculatorId | null;
+    catalogItemId?: string | null;
+    title?: string | null;
+  },
+): CalculatorDefinition | null {
+  const calculatorId =
+    input.calculatorId ??
+    resolveCalculatorId({
+      title: input.title,
+      definition: input.catalogItemId
+        ? catalogCalculatorDefinition(
+            items.find((item) => item.id === input.catalogItemId)?.description,
+          )
+        : null,
+    });
+  if (!calculatorId) return null;
+
+  if (input.catalogItemId) {
+    const linked = items.find((item) => item.id === input.catalogItemId);
+    const definition = catalogCalculatorDefinition(linked?.description);
+    if (definition?.calculatorId === calculatorId) return definition;
+  }
+
+  const title = input.title?.trim().toLowerCase();
+  if (title) {
+    const named = items.find((item) => item.name?.trim().toLowerCase() === title);
+    const definition = catalogCalculatorDefinition(named?.description);
+    if (definition?.calculatorId === calculatorId) return definition;
+  }
+
+  const canonical = calculatorTitle(calculatorId).toLowerCase();
+  const namedCanonical = items.find(
+    (item) => item.name?.trim().toLowerCase() === canonical,
+  );
+  const namedDefinition = catalogCalculatorDefinition(namedCanonical?.description);
+  if (namedDefinition?.calculatorId === calculatorId) return namedDefinition;
+
+  for (const item of items) {
+    const definition = catalogCalculatorDefinition(item.description);
+    if (definition?.calculatorId === calculatorId) return definition;
+  }
+  return null;
+}
+
+export function resolveCalculatorRatesForForm(input: {
+  calculatorId: CalculatorId;
+  snapshot?: CalculatorSnapshot | null;
+  businessRates?: Record<string, unknown> | null;
+}) {
+  const applied =
+    input.snapshot?.appliedAmount != null ||
+    input.snapshot?.recommendedAmount != null;
+  if (applied) {
+    return persistableCalculatorRates(
+      input.calculatorId,
+      input.snapshot?.rates,
+      input.snapshot?.inputs,
+    );
+  }
+  return persistableCalculatorRates(
+    input.calculatorId,
+    input.businessRates ?? input.snapshot?.rates ?? defaultCalculatorRates(input.calculatorId),
+  );
+}
+
+export function calculatorSnapshotIsApplied(snapshot?: CalculatorSnapshot | null) {
+  return snapshot?.appliedAmount != null || snapshot?.recommendedAmount != null;
 }
 
 export function startingCalculatorSnapshot(input: {

@@ -27,18 +27,25 @@ const {
   lineItemTitle,
 } = await import("@/lib/estimate-line-scope");
 const {
+  DECORATIVE_WALL_PANELING_CALCULATOR_ID,
   DECORATIVE_WALL_PANELING_TITLE,
   DEFAULT_DECORATIVE_WALL_PANELING_RATES,
   FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE,
   computeDecorativeWallPaneling,
-  grossWallAreaSqFt,
+  definitionOmitsJobQuantities,
+  findCatalogCalculatorDefinition,
+  persistableCalculatorRates,
+  resolveCalculatorRatesForForm,
+  startingCalculatorSnapshot,
   suggestedPanelEquivalents,
+  grossWallAreaSqFt,
 } = await import("@/lib/estimate-calculators");
 const {
   EstimateLineError,
   addCatalogItemToDraftEstimate,
   applyDraftEstimateCalculator,
   overrideDraftEstimateLinePrice,
+  persistDraftEstimateCalculatorRates,
   saveDraftEstimateLineAsCatalog,
 } = await import("@/lib/estimate-line-ops");
 
@@ -141,7 +148,122 @@ try {
     "Owner DRAFT page mounts the calculator and keeps apply on the server",
     ownerPage.includes("VariableScopeCalculatorForm") &&
       ownerPage.includes("applyEstimateCalculator") === false &&
-      ownerPage.includes("OverrideLinePriceForm"),
+      ownerPage.includes("OverrideLinePriceForm") &&
+      ownerPage.includes("resolveCalculatorRatesForForm") &&
+      ownerPage.includes("findCatalogCalculatorDefinition"),
+  );
+
+  const firstUseRates = resolveCalculatorRatesForForm({
+    calculatorId: DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+    snapshot: null,
+    businessRates: findCatalogCalculatorDefinition([], {
+      calculatorId: DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+      title: DECORATIVE_WALL_PANELING_TITLE,
+    })?.rates,
+  });
+  check(
+    "First use gets founder starter rates when the business has no saved pricing",
+    firstUseRates.panelRate === 90 &&
+      firstUseRates.removalRatePerSqFt === 1.25 &&
+      firstUseRates.slidingPatioDoorRate === 150 &&
+      firstUseRates.standardDoorRate === 100 &&
+      firstUseRates.windowRate === 100 &&
+      firstUseRates.receptacleRate === 50 &&
+      firstUseRates.switchRate === 50 &&
+      firstUseRates.lightFixtureRate === 75 &&
+      firstUseRates.defaultTrimAllowance === 180 &&
+      firstUseRates.defaultCleanupAllowance === 75 &&
+      JSON.stringify(firstUseRates) === JSON.stringify(DEFAULT_DECORATIVE_WALL_PANELING_RATES),
+  );
+
+  const editedRates = persistableCalculatorRates(
+    DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+    { ...DEFAULT_DECORATIVE_WALL_PANELING_RATES, panelRate: 105 },
+    { ...FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE, wallWidthFt: 24, notes: "job notes" },
+  );
+  check(
+    "Persisted rates include every calculator rate and omit job quantities",
+    editedRates.panelRate === 105 &&
+      editedRates.removalRatePerSqFt === 1.25 &&
+      editedRates.slidingPatioDoorRate === 150 &&
+      editedRates.windowRate === 100 &&
+      editedRates.receptacleRate === 50 &&
+      editedRates.switchRate === 50 &&
+      editedRates.lightFixtureRate === 75 &&
+      editedRates.defaultTrimAllowance === 180 &&
+      editedRates.defaultCleanupAllowance === 75 &&
+      definitionOmitsJobQuantities({
+        calculatorId: DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+        rates: editedRates,
+      }) &&
+      !JSON.stringify(editedRates).includes("wallWidthFt") &&
+      !JSON.stringify(editedRates).includes("notes"),
+  );
+
+  const futureFromSaved = startingCalculatorSnapshot({
+    title: DECORATIVE_WALL_PANELING_TITLE,
+    definition: {
+      calculatorId: DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+      rates: editedRates,
+    },
+  });
+  check(
+    "Future estimates start from saved rates with empty job quantities",
+    futureFromSaved?.rates.panelRate === 105 &&
+      futureFromSaved?.inputs.wallWidthFt === 0 &&
+      futureFromSaved?.inputs.windows === 0 &&
+      futureFromSaved?.inputs.slidingPatioDoors === 0 &&
+      futureFromSaved?.inputs.notes === "",
+  );
+
+  const ownerOps = readFileSync(
+    new URL("../src/lib/estimate-line-ops.ts", import.meta.url),
+    "utf8",
+  );
+  const overrideForm = readFileSync(
+    new URL("../src/components/estimates/override-line-price-form.tsx", import.meta.url),
+    "utf8",
+  );
+  const calculatorForm = readFileSync(
+    new URL("../src/components/estimates/variable-scope-calculator-form.tsx", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Rate edits persist automatically; a final-price override does not rewrite saved rates",
+    calculatorForm.includes("persistEstimateCalculatorRates") &&
+      calculatorForm.includes("persistRates") &&
+      overrideForm.includes("overrideEstimateLinePrice") &&
+      !overrideForm.includes("persistEstimateCalculatorRates") &&
+      ownerOps.includes("persistDraftEstimateCalculatorRates") &&
+      ownerOps.includes("writeBusinessCalculatorRates") &&
+      /export async function overrideDraftEstimateLinePrice[\s\S]+?\nexport /m.test(
+        `${ownerOps}\nexport `,
+      ) &&
+      !ownerOps
+        .slice(
+          ownerOps.indexOf("export async function overrideDraftEstimateLinePrice"),
+        )
+        .includes("writeBusinessCalculatorRates"),
+  );
+
+  const invoiceList = readFileSync(
+    new URL("../src/components/invoices/work-performed-list.tsx", import.meta.url),
+    "utf8",
+  );
+  const portalChangeOrders = readFileSync(
+    new URL("../src/components/portal/change-orders-card.tsx", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Customer-facing surfaces do not expose internal calculator details",
+    !customerPage.includes("panelRate") &&
+      !customerPage.includes("VariableScopeCalculatorForm") &&
+      customerPage.includes("lineItemTitle") &&
+      invoiceList.includes("lineItemTitle") &&
+      !invoiceList.includes("VariableScopeCalculatorForm") &&
+      !invoiceList.includes("panelRate") &&
+      portalChangeOrders.includes("lineItemTitle") &&
+      !portalChangeOrders.includes("CalculatorBreakdown"),
   );
 
   const founder = computeDecorativeWallPaneling(
@@ -404,6 +526,310 @@ try {
       insertedSnapshot?.rates.panelRate === 90 &&
       lineItemTitle(inserted.description) === DECORATIVE_WALL_PANELING_TITLE &&
       lineItemIncludedWork(inserted.description) === WALL_SCOPE,
+  );
+
+  console.log("\nTEST — Business rate persistence, quantities stay job-specific");
+  const persistUser = await prisma.user.create({
+    data: { name: "Pat Persist", email: `persist-calc-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const persistBusiness = await prisma.business.create({
+    data: { name: "Persist Calc", slug: `persist-calc-${randomUUID().slice(0, 8)}` },
+  });
+  const persistMembership = await prisma.membership.create({
+    data: { businessId: persistBusiness.id, userId: persistUser.id, role: "OWNER" },
+  });
+  const persistOwner = makeAccess(persistBusiness.id, "OWNER", persistMembership.id);
+
+  async function createPanelLine(businessId) {
+    const nextEstimate = await prisma.estimate.create({
+      data: {
+        businessId,
+        total: new Prisma.Decimal(0),
+        publicToken: randomUUID(),
+      },
+    });
+    const nextLine = await prisma.lineItem.create({
+      data: {
+        businessId,
+        estimateId: nextEstimate.id,
+        description: joinLineDescription(DECORATIVE_WALL_PANELING_TITLE, WALL_SCOPE),
+        quantity: new Prisma.Decimal(1),
+        unitPrice: new Prisma.Decimal(0),
+        total: new Prisma.Decimal(0),
+        type: "LABOR",
+      },
+    });
+    return { estimate: nextEstimate, line: nextLine };
+  }
+
+  const firstJob = await createPanelLine(persistBusiness.id);
+  const firstUseCatalog = await prisma.serviceCatalogItem.findMany({
+    where: { businessId: persistBusiness.id },
+  });
+  check(
+    "A new business has no saved calculator rates yet",
+    findCatalogCalculatorDefinition(firstUseCatalog, {
+      calculatorId: DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+      title: DECORATIVE_WALL_PANELING_TITLE,
+    }) == null,
+  );
+
+  const starterApply = await applyDraftEstimateCalculator(prisma, persistOwner, {
+    estimateId: firstJob.estimate.id,
+    lineItemId: firstJob.line.id,
+    inputs: FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE,
+    rates: DEFAULT_DECORATIVE_WALL_PANELING_RATES,
+  });
+  check("First apply with starter rates prices the job at $1,800", starterApply.unitPrice.toString() === "1800");
+  const afterStarterCatalog = await prisma.serviceCatalogItem.findMany({
+    where: { businessId: persistBusiness.id },
+  });
+  check(
+    "Applying starter rates does not invent a saved pricing history",
+    findCatalogCalculatorDefinition(afterStarterCatalog, {
+      calculatorId: DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+      title: DECORATIVE_WALL_PANELING_TITLE,
+    }) == null,
+  );
+
+  const savedRates = {
+    ...DEFAULT_DECORATIVE_WALL_PANELING_RATES,
+    panelRate: 105,
+    removalRatePerSqFt: 1.5,
+    slidingPatioDoorRate: 160,
+    standardDoorRate: 110,
+    windowRate: 120,
+    receptacleRate: 55,
+    switchRate: 55,
+    lightFixtureRate: 80,
+    defaultTrimAllowance: 200,
+    defaultCleanupAllowance: 80,
+  };
+  await persistDraftEstimateCalculatorRates(prisma, persistOwner, {
+    estimateId: firstJob.estimate.id,
+    lineItemId: firstJob.line.id,
+    rates: savedRates,
+    inputs: {
+      ...FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE,
+      trimAllowance: 200,
+      cleanupAllowance: 80,
+      notes: "Do not persist these job notes",
+    },
+  });
+  const persistedCatalog = await prisma.serviceCatalogItem.findFirst({
+    where: {
+      businessId: persistBusiness.id,
+      name: { equals: DECORATIVE_WALL_PANELING_TITLE, mode: "insensitive" },
+    },
+  });
+  const persistedDefinition = catalogCalculatorDefinition(persistedCatalog?.description);
+  check(
+    "Editing a rate persists every calculator rate as the business default",
+    persistedDefinition?.calculatorId === "decorative-wall-paneling" &&
+      persistedDefinition?.rates.panelRate === 105 &&
+      persistedDefinition?.rates.removalRatePerSqFt === 1.5 &&
+      persistedDefinition?.rates.slidingPatioDoorRate === 160 &&
+      persistedDefinition?.rates.standardDoorRate === 110 &&
+      persistedDefinition?.rates.windowRate === 120 &&
+      persistedDefinition?.rates.receptacleRate === 55 &&
+      persistedDefinition?.rates.switchRate === 55 &&
+      persistedDefinition?.rates.lightFixtureRate === 80 &&
+      persistedDefinition?.rates.defaultTrimAllowance === 200 &&
+      persistedDefinition?.rates.defaultCleanupAllowance === 80,
+  );
+  check(
+    "Persisted business rates do not include job-specific quantities or notes",
+    definitionOmitsJobQuantities(persistedDefinition) &&
+      catalogScopeText(persistedCatalog?.description) === WALL_SCOPE &&
+      !JSON.stringify(persistedDefinition ?? {}).includes("24") &&
+      !JSON.stringify(persistedDefinition ?? {}).includes("job notes"),
+  );
+  check(
+    "Persisting rates does not rewrite the catalog default price from the job total",
+    persistedCatalog?.price == null,
+  );
+
+  const futureEstimate = await prisma.estimate.create({
+    data: {
+      businessId: persistBusiness.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const futureLine = await addCatalogItemToDraftEstimate(prisma, persistOwner, {
+    estimateId: futureEstimate.id,
+    catalogItemId: persistedCatalog.id,
+    quantity: new Prisma.Decimal(1),
+  });
+  const futureSnapshot = lineCalculatorSnapshot(futureLine.description);
+  check(
+    "Future Decorative Wall Paneling estimates start with the saved $105 panel rate",
+    futureSnapshot?.rates.panelRate === 105 &&
+      futureSnapshot?.rates.windowRate === 120 &&
+      futureSnapshot?.rates.defaultTrimAllowance === 200 &&
+      futureSnapshot?.rates.defaultCleanupAllowance === 80,
+  );
+  check(
+    "Future estimates do not carry forward prior job quantities",
+    futureSnapshot?.inputs.wallWidthFt === 0 &&
+      futureSnapshot?.inputs.wallHeightFt === 0 &&
+      futureSnapshot?.inputs.panelQuantity == null &&
+      futureSnapshot?.inputs.windows === 0 &&
+      futureSnapshot?.inputs.slidingPatioDoors === 0 &&
+      futureSnapshot?.inputs.receptacles === 0 &&
+      futureSnapshot?.inputs.switches === 0 &&
+      futureSnapshot?.inputs.lightFixtures === 0 &&
+      futureSnapshot?.inputs.notes === "",
+  );
+
+  const recountInputs = {
+    ...FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE,
+    windows: 2,
+    standardDoors: 1,
+    trimAllowance: 200,
+    cleanupAllowance: 80,
+  };
+  const recount = computeDecorativeWallPaneling(recountInputs, futureSnapshot.rates);
+  const recountStarter = computeDecorativeWallPaneling(
+    recountInputs,
+    DEFAULT_DECORATIVE_WALL_PANELING_RATES,
+  );
+  check(
+    "Changing job counts recalculates from the saved rates, not starter rates",
+    recount.recommendedAmount !== recountStarter.recommendedAmount &&
+      recount.lines.find((item) => item.key === "panels")?.rate === 105 &&
+      recount.lines.find((item) => item.key === "windows")?.amount === 240 &&
+      recount.lines.find((item) => item.key === "doors")?.amount === 110,
+  );
+  const recountedJob = await applyDraftEstimateCalculator(prisma, persistOwner, {
+    estimateId: futureEstimate.id,
+    lineItemId: futureLine.id,
+    inputs: recountInputs,
+    rates: futureSnapshot.rates,
+  });
+  check(
+    "Applying a new job's counts writes the recalculated price from saved rates",
+    Number(recountedJob.unitPrice.toString()) === recount.recommendedAmount,
+  );
+  const catalogAfterRecount = catalogCalculatorDefinition(
+    (
+      await prisma.serviceCatalogItem.findFirst({
+        where: { id: persistedCatalog.id },
+      })
+    )?.description,
+  );
+  check(
+    "Recalculating from saved rates does not replace them with starter rates",
+    catalogAfterRecount?.rates.panelRate === 105 &&
+      catalogAfterRecount?.rates.windowRate === 120,
+  );
+
+  const overriddenJob = await overrideDraftEstimateLinePrice(prisma, persistOwner, {
+    estimateId: futureEstimate.id,
+    lineItemId: futureLine.id,
+    unitPrice: "1600",
+  });
+  const catalogAfterOverride = await prisma.serviceCatalogItem.findFirst({
+    where: { id: persistedCatalog.id },
+  });
+  const definitionAfterOverride = catalogCalculatorDefinition(catalogAfterOverride?.description);
+  check("One-time final estimate override sets this job to $1,600", overriddenJob.unitPrice.toString() === "1600");
+  check(
+    "A customer discount does not change the saved calculator rates",
+    definitionAfterOverride?.rates.panelRate === 105 &&
+      definitionAfterOverride?.rates.windowRate === 120 &&
+      definitionAfterOverride?.rates.defaultTrimAllowance === 200 &&
+      catalogAfterOverride?.price == null,
+  );
+
+  const thirdEstimate = await prisma.estimate.create({
+    data: {
+      businessId: persistBusiness.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const thirdLine = await addCatalogItemToDraftEstimate(prisma, persistOwner, {
+    estimateId: thirdEstimate.id,
+    catalogItemId: persistedCatalog.id,
+    quantity: new Prisma.Decimal(1),
+  });
+  const thirdSnapshot = lineCalculatorSnapshot(thirdLine.description);
+  const nextFormula = computeDecorativeWallPaneling(
+    FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE,
+    thirdSnapshot.rates,
+  );
+  check(
+    "The next estimate still calculates from the saved formula, not the discounted $1,600",
+    thirdSnapshot?.rates.panelRate === 105 &&
+      thirdSnapshot?.inputs.wallWidthFt === 0 &&
+      nextFormula.recommendedAmount !== 1600 &&
+      nextFormula.lines.find((item) => item.key === "panels")?.rate === 105,
+  );
+
+  await persistDraftEstimateCalculatorRates(prisma, persistOwner, {
+    estimateId: thirdEstimate.id,
+    lineItemId: thirdLine.id,
+    rates: { ...savedRates, panelRate: 110 },
+    inputs: { trimAllowance: 200, cleanupAllowance: 80 },
+  });
+  const replacedCatalog = await prisma.serviceCatalogItem.findFirst({
+    where: { id: persistedCatalog.id },
+  });
+  const replacedDefinition = catalogCalculatorDefinition(replacedCatalog?.description);
+  check(
+    "A later rate edit replaces the prior saved default",
+    replacedDefinition?.rates.panelRate === 110 &&
+      replacedDefinition?.rates.windowRate === 120,
+  );
+  const fourthEstimate = await prisma.estimate.create({
+    data: {
+      businessId: persistBusiness.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const fourthLine = await addCatalogItemToDraftEstimate(prisma, persistOwner, {
+    estimateId: fourthEstimate.id,
+    catalogItemId: persistedCatalog.id,
+    quantity: new Prisma.Decimal(1),
+  });
+  check(
+    "Estimates created after the later edit start at $110",
+    lineCalculatorSnapshot(fourthLine.description)?.rates.panelRate === 110 &&
+      lineCalculatorSnapshot(fourthLine.description)?.inputs.windows === 0,
+  );
+
+  const applyEdited = await createPanelLine(persistBusiness.id);
+  const appliedWithNewRate = await applyDraftEstimateCalculator(prisma, persistOwner, {
+    estimateId: applyEdited.estimate.id,
+    lineItemId: applyEdited.line.id,
+    inputs: FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE,
+    rates: { ...savedRates, panelRate: 125 },
+  });
+  const afterApplyDefinition = catalogCalculatorDefinition(
+    (
+      await prisma.serviceCatalogItem.findFirst({
+        where: { id: persistedCatalog.id },
+      })
+    )?.description,
+  );
+  check(
+    "Applying a calculator with an edited rate also persists that rate",
+    appliedWithNewRate.unitPrice.toString() !== "1800" &&
+      lineCalculatorSnapshot(appliedWithNewRate.description)?.rates.panelRate === 125 &&
+      afterApplyDefinition?.rates.panelRate === 125,
+  );
+
+  await expectError(
+    "MEMBER cannot persist calculator rates",
+    () =>
+      persistDraftEstimateCalculatorRates(prisma, memberA, {
+        estimateId: firstJob.estimate.id,
+        lineItemId: firstJob.line.id,
+        rates: savedRates,
+      }),
+    (error) => error instanceof ForbiddenError || error instanceof EstimateLineError,
   );
 
   console.log("\nTEST — Tenant isolation");

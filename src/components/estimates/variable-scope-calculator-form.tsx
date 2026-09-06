@@ -1,7 +1,11 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
-import { applyEstimateCalculator, type EstimateActionState } from "@/app/actions/estimate";
+import { useActionState, useMemo, useRef, useState } from "react";
+import {
+  applyEstimateCalculator,
+  persistEstimateCalculatorRates,
+  type EstimateActionState,
+} from "@/app/actions/estimate";
 import { CalculatorBreakdown } from "@/components/estimates/calculator-breakdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +46,23 @@ export function VariableScopeCalculatorForm({
   );
   const [draft, setDraft] = useState<DecorativeWallPanelingInputs>(startingInputs);
   const [draftRates, setDraftRates] = useState<DecorativeWallPanelingRates>(startingRates);
+  const lastPersistedRates = useRef(startingRates);
+
+  function persistRates(nextRates: DecorativeWallPanelingRates) {
+    if (
+      JSON.stringify(nextRates) === JSON.stringify(lastPersistedRates.current)
+    ) {
+      return;
+    }
+    lastPersistedRates.current = nextRates;
+    const formData = new FormData();
+    formData.set("estimateId", estimateId);
+    formData.set("lineItemId", lineItemId);
+    for (const [key, value] of Object.entries(nextRates)) {
+      formData.set(key, String(value));
+    }
+    void persistEstimateCalculatorRates(formData);
+  }
 
   const area = grossWallAreaSqFt(draft.wallWidthFt, draft.wallHeightFt);
   const suggestedPanels = suggestedPanelEquivalents(draft.wallWidthFt, draft.wallHeightFt);
@@ -57,13 +78,6 @@ export function VariableScopeCalculatorForm({
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
-  function setRate<K extends keyof DecorativeWallPanelingRates>(
-    key: K,
-    value: number,
-  ) {
-    setDraftRates((current) => ({ ...current, [key]: value }));
-  }
-
   return (
     <form action={action} className="mt-3 space-y-3 rounded-lg border border-border p-3">
       <input type="hidden" name="estimateId" value={estimateId} />
@@ -72,7 +86,9 @@ export function VariableScopeCalculatorForm({
         <p className="text-sm font-medium">Variable-scope labor calculator</p>
         <p className="text-xs text-muted-foreground">
           Owner/internal only. Uses gross wall area. Openings are priced
-          separately instead of subtracted from labor area.
+          separately instead of subtracted from labor area. Job quantities stay
+          on this estimate. Edited rates save automatically as the business
+          default for future estimates.
         </p>
       </div>
 
@@ -177,6 +193,14 @@ export function VariableScopeCalculatorForm({
           label="Finish trim / transitions allowance"
           value={draft.trimAllowance}
           onChange={(value) => setInput("trimAllowance", value)}
+          onBlur={() => {
+            const nextRates = {
+              ...draftRates,
+              defaultTrimAllowance: draft.trimAllowance,
+            };
+            setDraftRates(nextRates);
+            persistRates(nextRates);
+          }}
           step="0.01"
         />
         <NumberField
@@ -185,6 +209,14 @@ export function VariableScopeCalculatorForm({
           label="Cleanup / debris handling"
           value={draft.cleanupAllowance}
           onChange={(value) => setInput("cleanupAllowance", value)}
+          onBlur={() => {
+            const nextRates = {
+              ...draftRates,
+              defaultCleanupAllowance: draft.cleanupAllowance,
+            };
+            setDraftRates(nextRates);
+            persistRates(nextRates);
+          }}
           step="0.01"
         />
       </div>
@@ -204,17 +236,17 @@ export function VariableScopeCalculatorForm({
 
       <details className="rounded-lg border border-border/60 p-2">
         <summary className="cursor-pointer text-sm font-medium">
-          Starting rates (editable for this job)
+          Business rates (saved automatically when you edit a rate)
         </summary>
         <div className="mt-2 grid gap-3 sm:grid-cols-2">
-          <NumberField id={`panelRate-${lineItemId}`} name="panelRate" label="Per 4×8 panel-equivalent" value={draftRates.panelRate} onChange={(value) => setRate("panelRate", value)} step="0.01" />
-          <NumberField id={`removalRate-${lineItemId}`} name="removalRatePerSqFt" label="Removal per gross sq ft" value={draftRates.removalRatePerSqFt} onChange={(value) => setRate("removalRatePerSqFt", value)} step="0.01" />
-          <NumberField id={`patioRate-${lineItemId}`} name="slidingPatioDoorRate" label="Sliding/patio door each" value={draftRates.slidingPatioDoorRate} onChange={(value) => setRate("slidingPatioDoorRate", value)} step="0.01" />
-          <NumberField id={`doorRate-${lineItemId}`} name="standardDoorRate" label="Standard door each" value={draftRates.standardDoorRate} onChange={(value) => setRate("standardDoorRate", value)} step="0.01" />
-          <NumberField id={`windowRate-${lineItemId}`} name="windowRate" label="Window each" value={draftRates.windowRate} onChange={(value) => setRate("windowRate", value)} step="0.01" />
-          <NumberField id={`receptacleRate-${lineItemId}`} name="receptacleRate" label="Receptacle each" value={draftRates.receptacleRate} onChange={(value) => setRate("receptacleRate", value)} step="0.01" />
-          <NumberField id={`switchRate-${lineItemId}`} name="switchRate" label="Switch each" value={draftRates.switchRate} onChange={(value) => setRate("switchRate", value)} step="0.01" />
-          <NumberField id={`fixtureRate-${lineItemId}`} name="lightFixtureRate" label="Light fixture each" value={draftRates.lightFixtureRate} onChange={(value) => setRate("lightFixtureRate", value)} step="0.01" />
+          <RateField id={`panelRate-${lineItemId}`} name="panelRate" label="Per 4×8 panel-equivalent" rateKey="panelRate" value={draftRates.panelRate} draftRates={draftRates} setDraftRates={setDraftRates} persistRates={persistRates} />
+          <RateField id={`removalRate-${lineItemId}`} name="removalRatePerSqFt" label="Removal per gross sq ft" rateKey="removalRatePerSqFt" value={draftRates.removalRatePerSqFt} draftRates={draftRates} setDraftRates={setDraftRates} persistRates={persistRates} />
+          <RateField id={`patioRate-${lineItemId}`} name="slidingPatioDoorRate" label="Sliding/patio door each" rateKey="slidingPatioDoorRate" value={draftRates.slidingPatioDoorRate} draftRates={draftRates} setDraftRates={setDraftRates} persistRates={persistRates} />
+          <RateField id={`doorRate-${lineItemId}`} name="standardDoorRate" label="Standard door each" rateKey="standardDoorRate" value={draftRates.standardDoorRate} draftRates={draftRates} setDraftRates={setDraftRates} persistRates={persistRates} />
+          <RateField id={`windowRate-${lineItemId}`} name="windowRate" label="Window each" rateKey="windowRate" value={draftRates.windowRate} draftRates={draftRates} setDraftRates={setDraftRates} persistRates={persistRates} />
+          <RateField id={`receptacleRate-${lineItemId}`} name="receptacleRate" label="Receptacle each" rateKey="receptacleRate" value={draftRates.receptacleRate} draftRates={draftRates} setDraftRates={setDraftRates} persistRates={persistRates} />
+          <RateField id={`switchRate-${lineItemId}`} name="switchRate" label="Switch each" rateKey="switchRate" value={draftRates.switchRate} draftRates={draftRates} setDraftRates={setDraftRates} persistRates={persistRates} />
+          <RateField id={`fixtureRate-${lineItemId}`} name="lightFixtureRate" label="Light fixture each" rateKey="lightFixtureRate" value={draftRates.lightFixtureRate} draftRates={draftRates} setDraftRates={setDraftRates} persistRates={persistRates} />
           <input type="hidden" name="defaultTrimAllowance" value={String(draftRates.defaultTrimAllowance)} />
           <input type="hidden" name="defaultCleanupAllowance" value={String(draftRates.defaultCleanupAllowance)} />
         </div>
@@ -234,12 +266,55 @@ export function VariableScopeCalculatorForm({
   );
 }
 
+function RateField({
+  id,
+  name,
+  label,
+  rateKey,
+  value,
+  draftRates,
+  setDraftRates,
+  persistRates,
+}: {
+  id: string;
+  name: string;
+  label: string;
+  rateKey: keyof DecorativeWallPanelingRates;
+  value: number;
+  draftRates: DecorativeWallPanelingRates;
+  setDraftRates: (
+    update:
+      | DecorativeWallPanelingRates
+      | ((current: DecorativeWallPanelingRates) => DecorativeWallPanelingRates),
+  ) => void;
+  persistRates: (rates: DecorativeWallPanelingRates) => void;
+}) {
+  return (
+    <NumberField
+      id={id}
+      name={name}
+      label={label}
+      value={value}
+      step="0.01"
+      onChange={(next) =>
+        setDraftRates((current) => ({ ...current, [rateKey]: next }))
+      }
+      onBlur={() => {
+        const next = { ...draftRates, [rateKey]: value };
+        setDraftRates(next);
+        persistRates(next);
+      }}
+    />
+  );
+}
+
 function NumberField({
   id,
   name,
   label,
   value,
   onChange,
+  onBlur,
   step = "1",
   allowEmpty = false,
 }: {
@@ -248,6 +323,7 @@ function NumberField({
   label: string;
   value: number | "";
   onChange: (value: number) => void;
+  onBlur?: () => void;
   step?: string;
   allowEmpty?: boolean;
 }) {
@@ -268,6 +344,7 @@ function NumberField({
           }
           onChange(Number(raw));
         }}
+        onBlur={onBlur}
       />
     </div>
   );

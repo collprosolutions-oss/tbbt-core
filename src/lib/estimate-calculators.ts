@@ -19,12 +19,20 @@ export type {
   RemovalType,
 } from "@/lib/estimate-calculators/decorative-wall-paneling";
 export {
+  JOB_SPECIFIC_CALCULATOR_INPUT_KEYS,
+  calculatorRatesEqual,
+  calculatorSnapshotIsApplied,
+  calculatorTitle,
   catalogDefinitionFromSnapshot,
   computeCalculator,
   defaultCalculatorRates,
+  definitionOmitsJobQuantities,
   emptyCalculatorInputs,
+  findCatalogCalculatorDefinition,
   normalizeCalculatorSnapshot,
+  persistableCalculatorRates,
   resolveCalculatorId,
+  resolveCalculatorRatesForForm,
   startingCalculatorSnapshot,
 } from "@/lib/estimate-calculators/registry";
 export { isCalculatorId, roundMoney } from "@/lib/estimate-calculators/types";

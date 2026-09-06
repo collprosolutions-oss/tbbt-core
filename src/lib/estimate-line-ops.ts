@@ -9,11 +9,16 @@ import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import {
   DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+  calculatorRatesEqual,
+  calculatorTitle,
   catalogDefinitionFromSnapshot,
   computeCalculator,
+  findCatalogCalculatorDefinition,
   normalizeCalculatorSnapshot,
+  persistableCalculatorRates,
   resolveCalculatorId,
   startingCalculatorSnapshot,
+  type CalculatorId,
 } from "@/lib/estimate-calculators";
 import {
   catalogCalculatorDefinition,
@@ -441,6 +446,19 @@ export async function applyDraftEstimateCalculator(
   const description = pricedCustomQuoteDescription(
     joinLineDescription(parts.title, parts.includedWork, snapshot),
   );
+  const nextRates = persistableCalculatorRates(
+    calculatorId,
+    snapshot.rates,
+    snapshot.inputs,
+  );
+  const baselineRates = parts.calculatorSnapshot
+    ? persistableCalculatorRates(
+        calculatorId,
+        parts.calculatorSnapshot.rates,
+        parts.calculatorSnapshot.inputs,
+      )
+    : persistableCalculatorRates(calculatorId);
+  const ratesEdited = !calculatorRatesEqual(nextRates, baselineRates);
 
   await db.$transaction(async (tx) => {
     await tx.lineItem.update({
@@ -452,11 +470,187 @@ export async function applyDraftEstimateCalculator(
       },
     });
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
+    if (ratesEdited) {
+      await writeBusinessCalculatorRates(tx, access, {
+        calculatorId,
+        catalogItemId: line.serviceCatalogItemId,
+        title: customQuoteDisplayDescription(parts.title),
+        includedWork: parts.includedWork,
+        rates: nextRates,
+        lineItemId: line.id,
+      });
+    }
   });
 
   return db.lineItem.findFirstOrThrow({
     where: { id: line.id, businessId: access.businessId },
   });
+}
+
+/**
+ * Persist calculator RATES as the business/service default.
+ * Job quantities, notes, and final-price overrides are never written here.
+ */
+export async function persistDraftEstimateCalculatorRates(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    estimateId: string;
+    lineItemId: string;
+    rates: Record<string, unknown>;
+    inputs?: Record<string, unknown>;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+
+  const estimate = access.assertOwned(
+    await db.estimate.findFirst({
+      where: { id: input.estimateId, ...access.scope },
+      select: { id: true, businessId: true, status: true },
+    }),
+  );
+  if (estimate.status !== "DRAFT") {
+    throw new EstimateLineError("Only a draft estimate can update saved calculator rates.");
+  }
+
+  const line = access.assertOwned(
+    await db.lineItem.findFirst({
+      where: {
+        id: input.lineItemId,
+        estimateId: estimate.id,
+        ...access.scope,
+      },
+    }),
+  );
+
+  const parts = splitLineDescription(line.description);
+  const calculatorId = resolveCalculatorId({
+    title: customQuoteDisplayDescription(parts.title),
+    snapshot: parts.calculatorSnapshot,
+  });
+  if (!calculatorId) {
+    throw new EstimateLineError("This line does not have a pricing calculator.");
+  }
+
+  const rates = persistableCalculatorRates(calculatorId, input.rates, input.inputs);
+  await writeBusinessCalculatorRates(db, access, {
+    calculatorId,
+    catalogItemId: line.serviceCatalogItemId,
+    title: customQuoteDisplayDescription(parts.title),
+    includedWork: parts.includedWork,
+    rates,
+    lineItemId: line.id,
+  });
+
+  const catalogItems = await db.serviceCatalogItem.findMany({
+    where: { ...access.scope },
+    select: { id: true, name: true, description: true },
+  });
+  return findCatalogCalculatorDefinition(catalogItems, {
+    calculatorId,
+    catalogItemId: line.serviceCatalogItemId,
+    title: customQuoteDisplayDescription(parts.title),
+  });
+}
+
+async function writeBusinessCalculatorRates(
+  db: Pick<Db, "serviceCatalogItem" | "lineItem">,
+  access: BusinessAccess,
+  input: {
+    calculatorId: CalculatorId;
+    catalogItemId?: string | null;
+    title: string;
+    includedWork?: string | null;
+    rates: Record<string, unknown>;
+    lineItemId: string;
+  },
+) {
+  const calculatorId = input.calculatorId;
+  if (!calculatorId) return;
+
+  const definition = {
+    calculatorId,
+    rates: persistableCalculatorRates(calculatorId, input.rates),
+  };
+  const name = input.title.trim() || calculatorTitle(calculatorId);
+
+  const linked = input.catalogItemId
+    ? await db.serviceCatalogItem.findFirst({
+        where: { id: input.catalogItemId, ...access.scope },
+        select: { id: true, description: true, businessId: true },
+      })
+    : null;
+  const named =
+    linked ??
+    (await db.serviceCatalogItem.findFirst({
+      where: {
+        ...access.scope,
+        name: { equals: name, mode: "insensitive" },
+      },
+      select: { id: true, description: true, businessId: true },
+    })) ??
+    (await db.serviceCatalogItem.findFirst({
+      where: {
+        ...access.scope,
+        name: { equals: calculatorTitle(calculatorId), mode: "insensitive" },
+      },
+      select: { id: true, description: true, businessId: true },
+    }));
+
+  let marked: { id: string; description: string | null; businessId: string } | null = null;
+  if (!named) {
+    const candidates = await db.serviceCatalogItem.findMany({
+      where: {
+        ...access.scope,
+        description: { contains: "TBBT Calculator Definition" },
+      },
+      select: { id: true, description: true, businessId: true },
+    });
+    marked =
+      candidates.find(
+        (item) =>
+          catalogCalculatorDefinition(item.description)?.calculatorId === calculatorId,
+      ) ?? null;
+  }
+
+  const existing = named ?? marked;
+  const catalog = existing
+    ? await db.serviceCatalogItem.update({
+        where: { id: existing.id },
+        data: {
+          description: joinCatalogDescription(
+            catalogScopeText(existing.description),
+            definition,
+          ),
+          active: true,
+        },
+      })
+    : await db.serviceCatalogItem.create({
+        data: {
+          businessId: access.businessId,
+          name,
+          description: joinCatalogDescription(input.includedWork, definition),
+          pricingMode: "CUSTOM_QUOTE",
+          price: null,
+          category: DEFAULT_SERVICE_CATEGORY,
+          active: true,
+        },
+      });
+
+  if (input.lineItemId && catalog.id) {
+    const line = await db.lineItem.findFirst({
+      where: { id: input.lineItemId, businessId: access.businessId },
+      select: { id: true, serviceCatalogItemId: true },
+    });
+    if (line && line.serviceCatalogItemId !== catalog.id) {
+      await db.lineItem.update({
+        where: { id: line.id },
+        data: { serviceCatalogItemId: catalog.id },
+      });
+    }
+  }
+
+  return catalog;
 }
 
 export async function overrideDraftEstimateLinePrice(

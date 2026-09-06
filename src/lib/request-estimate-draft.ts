@@ -142,7 +142,7 @@ export function buildEstimateLineCreatesFromRequestItems(
         catalogScopeText(catalog?.description) ?? catalog?.description,
         calculatorDefinition
           ? startingCalculatorSnapshot({
-              title: catalog?.name,
+              title: catalog?.name ?? line.description,
               definition: calculatorDefinition,
             })
           : null,

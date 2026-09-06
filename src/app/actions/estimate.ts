@@ -17,6 +17,7 @@ import {
   applyDraftEstimateCalculator,
   estimateLineErrorMessage,
   overrideDraftEstimateLinePrice,
+  persistDraftEstimateCalculatorRates,
   priceDraftEstimateLine,
   saveDraftEstimateLineAsCatalog,
   updateDraftEstimateLineIncludedWork,
@@ -518,6 +519,34 @@ export async function applyEstimateCalculator(
   } catch (error) {
     return {
       error: estimateLineErrorMessage(error, "Could not apply that recommended price."),
+    };
+  }
+}
+
+export async function persistEstimateCalculatorRates(
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    await persistDraftEstimateCalculatorRates(prisma, await requireBusinessAccess(), {
+      estimateId: readString(formData, "estimateId"),
+      lineItemId: readString(formData, "lineItemId"),
+      rates: {
+        panelRate: readString(formData, "panelRate"),
+        removalRatePerSqFt: readString(formData, "removalRatePerSqFt"),
+        slidingPatioDoorRate: readString(formData, "slidingPatioDoorRate"),
+        standardDoorRate: readString(formData, "standardDoorRate"),
+        windowRate: readString(formData, "windowRate"),
+        receptacleRate: readString(formData, "receptacleRate"),
+        switchRate: readString(formData, "switchRate"),
+        lightFixtureRate: readString(formData, "lightFixtureRate"),
+        defaultTrimAllowance: readString(formData, "defaultTrimAllowance"),
+        defaultCleanupAllowance: readString(formData, "defaultCleanupAllowance"),
+      },
+    });
+    return { message: "Calculator rates saved as the business default." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not save those calculator rates."),
     };
   }
 }
