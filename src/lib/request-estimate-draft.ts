@@ -150,13 +150,16 @@ export function buildEstimateLineCreatesFromRequestItems(
       workAreaIntake,
       catalog?.id ?? line.serviceCatalogItemId,
     );
-    const snapshot = startingCalculatorSnapshot({
-      title: catalog?.name ?? line.description,
-      definition: calculatorDefinition,
-      prefillInputs: workAreaAnswer
-        ? workAreaIntakeToCalculatorInputs(workAreaAnswer)
-        : null,
-    });
+    const snapshot =
+      calculatorDefinition || workAreaAnswer
+        ? startingCalculatorSnapshot({
+            title: catalog?.name ?? line.description,
+            definition: calculatorDefinition,
+            prefillInputs: workAreaAnswer
+              ? workAreaIntakeToCalculatorInputs(workAreaAnswer)
+              : null,
+          })
+        : null;
     return {
       businessId,
       serviceCatalogItemId: line.serviceCatalogItemId,
