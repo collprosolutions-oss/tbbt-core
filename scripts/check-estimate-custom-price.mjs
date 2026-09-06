@@ -99,6 +99,19 @@ try {
     "Inline form saves unit price without a catalog write",
     formSource.includes('name="unitPrice"') && formSource.includes("service catalog"),
   );
+  check(
+    "Price-required line is highlighted with Quantity, Unit price, and Save Price",
+    pageSource.includes("border-amber-500") &&
+      formSource.includes("Price required") &&
+      formSource.includes("Save Price") &&
+      formSource.includes("Quantity") &&
+      formSource.includes("Unit price"),
+  );
+  check(
+    "Owner is told to price the original line instead of adding a duplicate",
+    pageSource.includes("do not add a duplicate custom item") &&
+      pageSource.includes("Do not add a second custom item"),
+  );
 
   const ownerUser = await prisma.user.create({
     data: { name: "Olivia Owner", email: `owner-price-${randomUUID()}@example.com`, passwordHash: "x" },
@@ -310,6 +323,76 @@ try {
   const minAfter = await prisma.estimate.findUnique({ where: { id: minEstimate.id } });
   check("Labor minimum still calculates after the custom price is entered", minAfter?.laborMinimumAdjustment.toString() === "150");
   check("Estimate total is custom labor + labor-minimum adjustment", minAfter?.total.toString() === "200");
+
+  console.log("\nTEST — Decorative Wall Paneling founder scenario");
+  const wallItem = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Decorative Wall Paneling & Finish Carpentry",
+      pricingMode: "CUSTOM_QUOTE",
+      price: null,
+      active: true,
+    },
+  });
+  const catalogBeforeWall = await prisma.serviceCatalogItem.count({ where: { businessId: businessA.id } });
+  const wallEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  await prisma.$transaction(async (tx) => {
+    await addRequestDraftLines(tx, {
+      businessId: businessA.id,
+      estimateId: wallEstimate.id,
+      items: [{ quantity: 1, serviceCatalogItem: wallItem }],
+    });
+    await persistDraftEstimateTotal(tx, wallEstimate.id, businessA.id);
+  });
+  const wallDraft = await prisma.estimate.findUnique({
+    where: { id: wallEstimate.id },
+    include: { lineItems: true },
+  });
+  check("Exactly one prefilled line exists", wallDraft?.lineItems.length === 1);
+  const wallLine = wallDraft.lineItems[0];
+  check(
+    "Original line is the Decorative Wall Paneling custom-quote request",
+    wallLine.description.includes("Decorative Wall Paneling & Finish Carpentry") &&
+      wallLine.description.includes(CUSTOM_QUOTE_DRAFT_MARKER) &&
+      isUnpricedCustomQuoteDraftLine(wallLine) &&
+      wallLine.unitPrice.toString() === "0",
+  );
+  check(
+    "Send Estimate is disabled on the $0 original line",
+    draftEstimateSendError(wallDraft) === "Enter a price for each custom-quote line before sending.",
+  );
+  const pricedWall = await priceDraftEstimateLine(prisma, ownerA, {
+    estimateId: wallEstimate.id,
+    lineItemId: wallLine.id,
+    unitPrice: "1800",
+    quantity: "1",
+  });
+  const wallAfter = await prisma.estimate.findUnique({
+    where: { id: wallEstimate.id },
+    include: { lineItems: true },
+  });
+  check("The same line id was priced — no duplicate line", wallAfter?.lineItems.length === 1 && wallAfter.lineItems[0].id === wallLine.id);
+  check("Original line is now $1,800", pricedWall.unitPrice.toString() === "1800" && pricedWall.total.toString() === "1800");
+  check(
+    "Original customer-request wording is preserved",
+    pricedWall.description === "Decorative Wall Paneling & Finish Carpentry",
+  );
+  check("Price-required state is gone", !isUnpricedCustomQuoteDraftLine(pricedWall));
+  check("Send Estimate is enabled after pricing the original line", draftEstimateSendError(wallAfter) === null);
+  check(
+    "Estimate total is $1,800 and labor minimum does not add on top",
+    wallAfter?.total.toString() === "1800" && wallAfter.laborMinimumAdjustment.toString() === "0",
+  );
+  check(
+    "No catalog item was created for the priced request line",
+    (await prisma.serviceCatalogItem.count({ where: { businessId: businessA.id } })) === catalogBeforeWall,
+  );
 
   await expectError(
     "MEMBER cannot price a custom-quote line",

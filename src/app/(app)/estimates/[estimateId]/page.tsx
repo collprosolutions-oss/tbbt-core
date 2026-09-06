@@ -238,11 +238,16 @@ export default async function EstimateBuilderPage({
             <ul className="space-y-3 text-sm">
               {estimate.lineItems.map((item) => {
                 const priceRequired = isUnpricedCustomQuoteDraftLine(item);
-                const description = priceRequired
-                  ? customQuoteDisplayDescription(item.description)
-                  : item.description;
+                const requestName = customQuoteDisplayDescription(item.description);
                 return (
-                  <li key={item.id} className="space-y-1">
+                  <li
+                    key={item.id}
+                    className={
+                      priceRequired
+                        ? "rounded-xl border-2 border-amber-500 bg-amber-50 p-3 dark:bg-amber-950/20"
+                        : "space-y-1"
+                    }
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <span className="min-w-0 flex-1 break-words">
                         {item.type === "LABOR"
@@ -250,7 +255,7 @@ export default async function EstimateBuilderPage({
                           : item.type === "MATERIAL"
                             ? "Material"
                             : "Other"}
-                        : {description} × {item.quantity.toString()}
+                        : {item.description} × {item.quantity.toString()}
                         {priceRequired
                           ? " — price required"
                           : ` @ ${formatMoney(item.unitPrice)}`}
@@ -266,11 +271,17 @@ export default async function EstimateBuilderPage({
                       </span>
                     </div>
                     {isDraft && priceRequired ? (
-                      <PriceRequiredLineForm
-                        estimateId={estimate.id}
-                        lineItemId={item.id}
-                        quantity={item.quantity.toString()}
-                      />
+                      <>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Original customer request: {requestName}. Price this
+                          same line — do not add a duplicate custom item.
+                        </p>
+                        <PriceRequiredLineForm
+                          estimateId={estimate.id}
+                          lineItemId={item.id}
+                          quantity={item.quantity.toString()}
+                        />
+                      </>
                     ) : null}
                   </li>
                 );
@@ -308,9 +319,10 @@ export default async function EstimateBuilderPage({
             </p>
           </div>
           {needsCustomQuotePrices ? (
-            <p className="mt-3 text-sm text-amber-700 dark:text-amber-400">
-              Enter a price on each highlighted line above before sending. Send
-              Estimate stays disabled until every required price is saved.
+            <p className="mt-3 text-sm font-medium text-amber-800 dark:text-amber-300">
+              Price required on the highlighted original request line above.
+              Send Estimate stays disabled until that price is saved. Do not
+              add a second custom item for the same work.
             </p>
           ) : null}
           {isDraft ? (
