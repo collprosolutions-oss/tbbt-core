@@ -17,6 +17,8 @@ type CatalogOption = {
   name: string;
   pricingMode: string;
   priceLabel: string;
+  includedWork?: string | null;
+  defaultPrice?: string | null;
 };
 
 export function AddCatalogLineForm({
@@ -67,14 +69,29 @@ export function AddCatalogLineForm({
           ))}
         </select>
       </div>
+      {selected?.includedWork ? (
+        <div className="rounded-lg border border-border/60 bg-muted/30 p-2">
+          <p className="text-xs font-medium text-muted-foreground">
+            Scope / Included Work
+          </p>
+          <p className="whitespace-pre-line text-sm">{selected.includedWork}</p>
+        </div>
+      ) : null}
       {needsJobPrice ? (
         <div className="space-y-2">
           <Label htmlFor="catalog-unitPrice">Price for this job</Label>
           <Input
+            key={`${selectedId}-price`}
             id="catalog-unitPrice"
             name="unitPrice"
             inputMode="decimal"
-            required
+            defaultValue={selected?.defaultPrice ?? ""}
+            required={!selected?.defaultPrice}
+            placeholder={
+              selected?.defaultPrice
+                ? "Default starting price — change for this job if needed"
+                : "Enter the price for this job"
+            }
           />
         </div>
       ) : null}

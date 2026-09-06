@@ -76,6 +76,7 @@ export function invoiceAmountDue(status: string, total: Prisma.Decimal): Prisma.
 
 export type InvoiceDocumentLine = {
   description: string;
+  includedWork?: string | null;
   quantityLabel: string;
   unitPriceLabel: string;
   amountLabel: string;
@@ -132,6 +133,7 @@ const INVOICE_DOCUMENT_INCLUDE = {
     orderBy: { createdAt: "asc" as const },
     select: {
       description: true,
+      includedWork: true,
       quantity: true,
       unitPrice: true,
       total: true,
@@ -165,6 +167,7 @@ function toDocumentView(
     } | null;
     lineItems: Array<{
       description: string;
+      includedWork?: string | null;
       quantity: Prisma.Decimal;
       unitPrice: Prisma.Decimal;
       total: Prisma.Decimal;
@@ -207,6 +210,7 @@ function toDocumentView(
     customerId: invoice.customerId,
     lineItems: invoice.lineItems.map((line) => ({
       description: line.description,
+      includedWork: line.includedWork ?? null,
       quantityLabel: formatQuantity(line.quantity),
       unitPriceLabel: formatMoney(line.unitPrice),
       amountLabel: formatMoney(line.total),

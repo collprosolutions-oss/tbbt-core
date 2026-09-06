@@ -13,9 +13,13 @@ import {
 import { createEstimateVersionSnapshot } from "@/lib/estimate-version";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import {
+  addCatalogItemToDraftEstimate,
   estimateLineErrorMessage,
   priceDraftEstimateLine,
+  saveDraftEstimateLineAsCatalog,
+  updateDraftEstimateLineIncludedWork,
 } from "@/lib/estimate-line-ops";
+import { normalizeIncludedWork } from "@/lib/estimate-line-scope";
 import {
   addRequestDraftLines,
   draftEstimateSendError,
@@ -64,12 +68,24 @@ export async function createEstimate(serviceRequestId: string) {
           orderBy: { sortOrder: "asc" },
           include: {
             serviceCatalogItem: {
-              select: { id: true, name: true, pricingMode: true, price: true },
+              select: {
+                id: true,
+                name: true,
+                pricingMode: true,
+                price: true,
+                description: true,
+              },
             },
           },
         },
         serviceCatalogItem: {
-          select: { id: true, name: true, pricingMode: true, price: true },
+          select: {
+            id: true,
+            name: true,
+            pricingMode: true,
+            price: true,
+            description: true,
+          },
         },
       },
     }),
@@ -344,55 +360,18 @@ export async function addCatalogLineItem(
     return { error: "Catalog item and a quantity greater than 0 are required." };
   }
 
-  const estimate = access.assertOwned(
-    await prisma.estimate.findFirst({
-      where: { id: estimateId, ...access.scope },
-    }),
-  );
-
-  if (estimate.status !== "DRAFT") {
-    return { error: "Only a draft estimate can be changed." };
-  }
-
-  const catalogItem = access.assertOwned(
-    await prisma.serviceCatalogItem.findFirst({
-      where: { id: catalogItemId, ...access.scope },
-    }),
-  );
-
-  if (!catalogItem.active) {
-    return { error: "That service is not active." };
-  }
-
-  let unitPrice = catalogItem.price;
-  if (catalogItem.pricingMode === "CUSTOM_QUOTE") {
-    unitPrice = parseDecimal(readString(formData, "unitPrice"));
-    if (!unitPrice) {
-      return { error: "Enter the price for this job." };
-    }
-  } else if (!unitPrice || unitPrice.lte(0)) {
-    return { error: "That service has no saved price." };
-  }
-
-  const total = quantity.mul(unitPrice);
-
-  await prisma.$transaction(async (tx) => {
-    await tx.lineItem.create({
-      data: {
-        businessId: access.businessId,
-        estimateId: estimate.id,
-        serviceCatalogItemId: catalogItem.id,
-        description: catalogItem.name,
-        quantity,
-        unitPrice,
-        total,
-        type: "LABOR",
-      },
+  try {
+    await addCatalogItemToDraftEstimate(prisma, access, {
+      estimateId,
+      catalogItemId,
+      quantity,
+      unitPrice: parseDecimal(readString(formData, "unitPrice")),
     });
-    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
-  });
+  } catch (error) {
+    return { error: estimateLineErrorMessage(error, "Could not add that service.") };
+  }
 
-  revalidatePath(`/estimates/${estimate.id}`);
+  revalidatePath(`/estimates/${estimateId}`);
   return {};
 }
 
@@ -434,6 +413,7 @@ export async function addCustomLineItem(
         businessId: access.businessId,
         estimateId: estimate.id,
         description,
+        includedWork: normalizeIncludedWork(formData.get("includedWork")?.toString()),
         quantity,
         unitPrice,
         total,
@@ -463,6 +443,51 @@ export async function priceEstimateLineItem(
     return { message: "Price saved." };
   } catch (error) {
     return { error: estimateLineErrorMessage(error, "Could not save that price.") };
+  }
+}
+
+export async function updateEstimateLineIncludedWork(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    await updateDraftEstimateLineIncludedWork(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      includedWork: typeof formData.get("includedWork") === "string"
+        ? String(formData.get("includedWork"))
+        : "",
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: "Scope saved." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not save that scope."),
+    };
+  }
+}
+
+export async function saveEstimateLineForReuse(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    const catalog = await saveDraftEstimateLineAsCatalog(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      savePrice: readString(formData, "savePrice") === "1",
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    revalidatePath("/services");
+    return { message: `Saved “${catalog.name}” for future use.` };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not save that service for reuse."),
+    };
   }
 }
 

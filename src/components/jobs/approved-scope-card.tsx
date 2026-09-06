@@ -5,6 +5,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
 import { formatMoney } from "@/lib/format";
 import type { ApprovedWorkOrderScope } from "@/lib/job-work-order";
 
@@ -92,6 +93,7 @@ export function ApprovedScopeCard({
                       {" "}
                       × {item.quantity.toString()} @ {formatMoney(item.unitPrice)}
                     </span>
+                    <IncludedWorkDisplay includedWork={item.includedWork} />
                   </span>
                   <span className="hidden md:block md:text-right">
                     {item.quantity.toString()}
@@ -109,16 +111,19 @@ export function ApprovedScopeCard({
         ) : (
           <ul className="space-y-2">
             {scope.lineItems.map((item, index) => (
-              <li key={index} className="flex justify-between gap-3">
-                <span className="min-w-0 flex-1 break-words">
-                  {item.description} × {item.quantity.toString()}
+              <li key={index} className="space-y-1">
+                <div className="flex justify-between gap-3">
+                  <span className="min-w-0 flex-1 break-words">
+                    {item.description} × {item.quantity.toString()}
+                    {hideFinancials ? null : (
+                      <> @ {formatMoney(item.unitPrice)}</>
+                    )}
+                  </span>
                   {hideFinancials ? null : (
-                    <> @ {formatMoney(item.unitPrice)}</>
+                    <span className="shrink-0">{formatMoney(item.total)}</span>
                   )}
-                </span>
-                {hideFinancials ? null : (
-                  <span className="shrink-0">{formatMoney(item.total)}</span>
-                )}
+                </div>
+                <IncludedWorkDisplay includedWork={item.includedWork} />
               </li>
             ))}
           </ul>

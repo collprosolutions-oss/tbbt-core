@@ -214,6 +214,7 @@ export default async function EstimatesPage({
       lineItems: estimate.lineItems.map((item) => ({
         id: item.id,
         description: item.description,
+        includedWork: item.includedWork,
         quantity: item.quantity.toString(),
         unitPrice: formatMoney(item.unitPrice),
         total: formatMoney(item.total),

@@ -9,6 +9,11 @@ import { CopyEstimateLinkButton } from "@/components/estimates/copy-estimate-lin
 import { EditEstimateButton } from "@/components/estimates/edit-estimate-button";
 import { EmailEstimateButton } from "@/components/estimates/email-estimate-button";
 import { EstimateVersionHistory } from "@/components/estimates/estimate-version-history";
+import {
+  EditLineIncludedWorkForm,
+  SaveLineForReuseForm,
+} from "@/components/estimates/draft-line-scope-forms";
+import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
 import { PriceRequiredLineForm } from "@/components/estimates/price-required-line-form";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
@@ -283,6 +288,22 @@ export default async function EstimateBuilderPage({
                         />
                       </>
                     ) : null}
+                    {isDraft ? (
+                      <>
+                        <EditLineIncludedWorkForm
+                          estimateId={estimate.id}
+                          lineItemId={item.id}
+                          includedWork={item.includedWork}
+                        />
+                        <SaveLineForReuseForm
+                          estimateId={estimate.id}
+                          lineItemId={item.id}
+                          hasPrice={item.unitPrice.gt(0)}
+                        />
+                      </>
+                    ) : (
+                      <IncludedWorkDisplay includedWork={item.includedWork} />
+                    )}
                   </li>
                 );
               })}
@@ -345,9 +366,10 @@ export default async function EstimateBuilderPage({
         <CardHeader>
           <CardTitle>Add catalog item</CardTitle>
           <CardDescription>
-            Uses the current catalog price. Custom Quote services need a job
-            price when added. The line is saved as a snapshot and will not
-            change if the catalog is edited later.
+            Uses the current catalog price and copies Scope / Included Work
+            onto this estimate. Custom Quote services need a job price when
+            added. The line is a snapshot and will not change if the catalog
+            is edited later.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -358,6 +380,9 @@ export default async function EstimateBuilderPage({
               name: item.name,
               pricingMode: item.pricingMode,
               priceLabel: formatCatalogPriceLabel(item.pricingMode, item.price),
+              includedWork: item.description,
+              defaultPrice:
+                item.price && item.price.gt(0) ? item.price.toString() : null,
             }))}
           />
         </CardContent>
@@ -367,8 +392,10 @@ export default async function EstimateBuilderPage({
         <CardHeader>
           <CardTitle>Add custom item</CardTitle>
           <CardDescription>
-            Choose Labor, Material, or Other. The labor minimum uses labor
-            lines only.
+            Choose Labor, Material, or Other. Add Scope / Included Work if
+            you want the customer to see what the price includes. Saving for
+            future use is optional and never automatic. The labor minimum
+            uses labor lines only.
           </CardDescription>
         </CardHeader>
         <CardContent>

@@ -40,6 +40,7 @@ export const metadata: Metadata = {
 
 const LINE_ITEM_SELECT = {
   description: true,
+  includedWork: true,
   quantity: true,
   unitPrice: true,
   total: true,
@@ -131,6 +132,7 @@ export default async function CustomerProjectPortalPage({
                 orderBy: { createdAt: "asc" },
                 select: {
                   description: true,
+                  includedWork: true,
                   quantity: true,
                   unitPrice: true,
                   total: true,
@@ -177,7 +179,7 @@ export default async function CustomerProjectPortalPage({
           paidAt: true,
           lineItems: {
             orderBy: { createdAt: "asc" },
-            select: { description: true, quantity: true },
+            select: { description: true, includedWork: true, quantity: true },
           },
         },
       })
@@ -289,6 +291,7 @@ export default async function CustomerProjectPortalPage({
                       <WorkPerformedList
                         lines={invoice.lineItems.map((line) => ({
                           description: line.description,
+                          includedWork: line.includedWork,
                           quantityLabel: line.quantity.toString(),
                         }))}
                       />

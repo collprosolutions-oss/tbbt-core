@@ -17,6 +17,7 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { requireManagementPageAccess } from "@/lib/access";
+import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { CUSTOM_QUOTE_DRAFT_MARKER } from "@/lib/request-estimate-draft";
@@ -41,6 +42,7 @@ export default async function ChangeOrderPage({
         select: {
           id: true,
           description: true,
+          includedWork: true,
           quantity: true,
           unitPrice: true,
           total: true,
@@ -123,23 +125,26 @@ export default async function ChangeOrderPage({
           {changeOrder.lineItems.length === 0 ? (
             <p className="text-sm text-muted-foreground">No line items yet.</p>
           ) : (
-            <ul className="space-y-2 text-sm">
+            <ul className="space-y-3 text-sm">
               {changeOrder.lineItems.map((item) => (
-                <li key={item.id} className="flex items-center justify-between gap-3">
-                  <span className="min-w-0 flex-1 break-words">
-                    {item.description} × {item.quantity.toString()} @{" "}
-                    {item.description.includes(CUSTOM_QUOTE_DRAFT_MARKER) &&
-                    Number(item.unitPrice) <= 0
-                      ? "Price required"
-                      : formatMoney(item.unitPrice)}
-                  </span>
-                  <span className="shrink-0">{formatMoney(item.total)}</span>
-                  {isDraft ? (
-                    <RemoveChangeOrderLineItemButton
-                      changeOrderId={changeOrder.id}
-                      lineItemId={item.id}
-                    />
-                  ) : null}
+                <li key={item.id} className="space-y-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 flex-1 break-words">
+                      {item.description} × {item.quantity.toString()} @{" "}
+                      {item.description.includes(CUSTOM_QUOTE_DRAFT_MARKER) &&
+                      Number(item.unitPrice) <= 0
+                        ? "Price required"
+                        : formatMoney(item.unitPrice)}
+                    </span>
+                    <span className="shrink-0">{formatMoney(item.total)}</span>
+                    {isDraft ? (
+                      <RemoveChangeOrderLineItemButton
+                        changeOrderId={changeOrder.id}
+                        lineItemId={item.id}
+                      />
+                    ) : null}
+                  </div>
+                  <IncludedWorkDisplay includedWork={item.includedWork} />
                 </li>
               ))}
             </ul>

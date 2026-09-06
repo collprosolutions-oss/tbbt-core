@@ -49,6 +49,16 @@ export function AddChangeOrderLineItemForm({
         <Input id="co-line-description" name="description" required />
       </div>
       <div className="space-y-2">
+        <Label htmlFor="co-line-includedWork">Scope / Included Work</Label>
+        <textarea
+          id="co-line-includedWork"
+          name="includedWork"
+          rows={5}
+          placeholder="Optional. What this additional price includes."
+          className="min-h-20 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base outline-none md:text-sm"
+        />
+      </div>
+      <div className="space-y-2">
         <Label htmlFor="co-line-quantity">Quantity</Label>
         <Input
           id="co-line-quantity"

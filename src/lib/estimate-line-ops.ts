@@ -7,10 +7,12 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
+import { normalizeIncludedWork } from "@/lib/estimate-line-scope";
 import {
   isUnpricedCustomQuoteDraftLine,
   pricedCustomQuoteDescription,
 } from "@/lib/request-estimate-draft";
+import { DEFAULT_SERVICE_CATEGORY } from "@/lib/service-catalog-category";
 
 type Db = PrismaClient;
 
@@ -41,6 +43,74 @@ function parsePositiveDecimal(raw: string, label: string) {
     if (error instanceof EstimateLineError) throw error;
     throw new EstimateLineError(`Enter a valid ${label}.`);
   }
+}
+
+export async function addCatalogItemToDraftEstimate(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    estimateId: string;
+    catalogItemId: string;
+    quantity: Prisma.Decimal;
+    unitPrice?: Prisma.Decimal | null;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+
+  const estimate = access.assertOwned(
+    await db.estimate.findFirst({
+      where: { id: input.estimateId, ...access.scope },
+      select: { id: true, businessId: true, status: true },
+    }),
+  );
+  if (estimate.status !== "DRAFT") {
+    throw new EstimateLineError("Only a draft estimate can be changed.");
+  }
+
+  const catalogItem = access.assertOwned(
+    await db.serviceCatalogItem.findFirst({
+      where: { id: input.catalogItemId, ...access.scope },
+    }),
+  );
+  if (!catalogItem.active) {
+    throw new EstimateLineError("That service is not active.");
+  }
+
+  let unitPrice = input.unitPrice ?? catalogItem.price;
+  if (catalogItem.pricingMode === "CUSTOM_QUOTE") {
+    unitPrice = input.unitPrice ?? (catalogItem.price && catalogItem.price.gt(0) ? catalogItem.price : null);
+    if (!unitPrice || unitPrice.lte(0)) {
+      throw new EstimateLineError("Enter the price for this job.");
+    }
+  } else if (!unitPrice || unitPrice.lte(0)) {
+    throw new EstimateLineError("That service has no saved price.");
+  }
+
+  const total = input.quantity.mul(unitPrice);
+  const includedWork = normalizeIncludedWork(catalogItem.description);
+
+  let createdId = "";
+  await db.$transaction(async (tx) => {
+    const created = await tx.lineItem.create({
+      data: {
+        businessId: access.businessId,
+        estimateId: estimate.id,
+        serviceCatalogItemId: catalogItem.id,
+        description: catalogItem.name,
+        includedWork,
+        quantity: input.quantity,
+        unitPrice,
+        total,
+        type: "LABOR",
+      },
+    });
+    createdId = created.id;
+    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
+  });
+
+  return db.lineItem.findFirstOrThrow({
+    where: { id: createdId, businessId: access.businessId },
+  });
 }
 
 /**
@@ -109,4 +179,148 @@ export async function priceDraftEstimateLine(
   return db.lineItem.findFirstOrThrow({
     where: { id: line.id, businessId: access.businessId },
   });
+}
+
+/**
+ * Update Scope / Included Work on a DRAFT line. Does not change quantity,
+ * price, totals, or the catalog master.
+ */
+export async function updateDraftEstimateLineIncludedWork(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    estimateId: string;
+    lineItemId: string;
+    includedWork: string;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+
+  const estimate = access.assertOwned(
+    await db.estimate.findFirst({
+      where: { id: input.estimateId, ...access.scope },
+      select: { id: true, businessId: true, status: true },
+    }),
+  );
+  if (estimate.status !== "DRAFT") {
+    throw new EstimateLineError("Only a draft estimate can be changed.");
+  }
+
+  const line = access.assertOwned(
+    await db.lineItem.findFirst({
+      where: {
+        id: input.lineItemId,
+        estimateId: estimate.id,
+        ...access.scope,
+      },
+    }),
+  );
+
+  const includedWork = normalizeIncludedWork(input.includedWork);
+  await db.lineItem.update({
+    where: { id: line.id },
+    data: { includedWork },
+  });
+
+  return db.lineItem.findFirstOrThrow({
+    where: { id: line.id, businessId: access.businessId },
+  });
+}
+
+/**
+ * Explicit owner action: save this DRAFT line as a reusable
+ * ServiceCatalogItem. Never runs automatically from add/price.
+ */
+export async function saveDraftEstimateLineAsCatalog(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    estimateId: string;
+    lineItemId: string;
+    savePrice?: boolean;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
+
+  const estimate = access.assertOwned(
+    await db.estimate.findFirst({
+      where: { id: input.estimateId, ...access.scope },
+      select: { id: true, businessId: true, status: true },
+    }),
+  );
+  if (estimate.status !== "DRAFT") {
+    throw new EstimateLineError("Only a draft estimate item can be saved for reuse.");
+  }
+
+  const line = access.assertOwned(
+    await db.lineItem.findFirst({
+      where: {
+        id: input.lineItemId,
+        estimateId: estimate.id,
+        ...access.scope,
+      },
+    }),
+  );
+
+  const name = pricedCustomQuoteDescription(line.description);
+  if (!name) {
+    throw new EstimateLineError("This line needs a title before it can be saved.");
+  }
+
+  const includedWork = normalizeIncludedWork(line.includedWork);
+  const linkedCatalog = line.serviceCatalogItemId
+    ? await db.serviceCatalogItem.findFirst({
+        where: { id: line.serviceCatalogItemId, ...access.scope },
+        select: { id: true, pricingMode: true, price: true },
+      })
+    : null;
+  const pricingMode = linkedCatalog?.pricingMode ?? "CUSTOM_QUOTE";
+  const defaultPrice =
+    input.savePrice !== false && line.unitPrice.gt(0) ? line.unitPrice : null;
+
+  const existing =
+    linkedCatalog ??
+    (await db.serviceCatalogItem.findFirst({
+      where: {
+        ...access.scope,
+        name: { equals: name, mode: "insensitive" },
+      },
+      select: { id: true, pricingMode: true, price: true },
+    }));
+
+  const catalog = existing
+    ? await db.serviceCatalogItem.update({
+        where: { id: existing.id },
+        data: {
+          name,
+          description: includedWork,
+          pricingMode,
+          price:
+            input.savePrice === false
+              ? existing.price
+              : defaultPrice ?? (pricingMode === "CUSTOM_QUOTE" ? null : existing.price),
+          active: true,
+        },
+      })
+    : await db.serviceCatalogItem.create({
+        data: {
+          businessId: access.businessId,
+          name,
+          description: includedWork,
+          pricingMode,
+          price: defaultPrice,
+          category: DEFAULT_SERVICE_CATEGORY,
+          active: true,
+        },
+      });
+
+  if (line.serviceCatalogItemId !== catalog.id) {
+    await db.lineItem.update({
+      where: { id: line.id },
+      data: { serviceCatalogItemId: catalog.id },
+    });
+  }
+
+  return catalog;
 }

@@ -43,7 +43,17 @@ function parsePrice(raw: string) {
 
 function catalogPriceForMode(mode: string, rawPrice: string) {
   if (mode === "CUSTOM_QUOTE") {
-    return { ok: true as const, price: null };
+    if (!rawPrice.trim()) {
+      return { ok: true as const, price: null };
+    }
+    const price = parsePrice(rawPrice);
+    if (!price) {
+      return {
+        ok: false as const,
+        error: "Enter a valid default price, or leave it blank.",
+      };
+    }
+    return { ok: true as const, price };
   }
   const price = parsePrice(rawPrice);
   if (!price) {

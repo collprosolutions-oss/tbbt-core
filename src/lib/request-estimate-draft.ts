@@ -5,6 +5,7 @@
  * approve, or create a Job/Invoice.
  */
 import { Prisma } from "@prisma/client";
+import { normalizeIncludedWork } from "@/lib/estimate-line-scope";
 import { coerceRequestQuantity } from "@/lib/service-request-work";
 import { publicCatalogUnitAmount } from "@/lib/pricing-mode";
 
@@ -19,6 +20,7 @@ export type RequestDraftSourceItem = {
     name: string;
     pricingMode: string;
     price: { toString(): string } | number | null;
+    description?: string | null;
   } | null;
 };
 
@@ -117,12 +119,14 @@ export function buildEstimateLineCreatesFromRequestItems(
   businessId: string,
   items: RequestDraftSourceItem[],
 ) {
-  return draftEstimateLinesFromRequestItems(items).map((line) => {
+  return draftEstimateLinesFromRequestItems(items).map((line, index) => {
     const unitPrice = line.priced && line.unitPrice != null ? line.unitPrice : 0;
+    const catalog = items[index]?.serviceCatalogItem;
     return {
       businessId,
       serviceCatalogItemId: line.serviceCatalogItemId,
       description: formatDraftEstimateDescription(line),
+      includedWork: normalizeIncludedWork(catalog?.description),
       quantity: line.quantity,
       unitPrice,
       total: line.priced && line.unitPrice != null ? line.unitPrice * line.quantity : 0,
@@ -147,6 +151,7 @@ export async function addRequestDraftLines(
       estimateId: input.estimateId,
       serviceCatalogItemId: row.serviceCatalogItemId,
       description: row.description,
+      includedWork: row.includedWork,
       quantity: new Prisma.Decimal(row.quantity),
       unitPrice: new Prisma.Decimal(row.unitPrice),
       total: new Prisma.Decimal(row.total),
@@ -177,6 +182,7 @@ export async function addChangeOrderDraftLines(
       changeOrderId: input.changeOrderId,
       serviceCatalogItemId: row.serviceCatalogItemId,
       description: row.description,
+      includedWork: row.includedWork,
       quantity: new Prisma.Decimal(row.quantity),
       unitPrice: new Prisma.Decimal(row.unitPrice),
       total: new Prisma.Decimal(row.total),

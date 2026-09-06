@@ -33,7 +33,11 @@ export type InvoiceListItem = {
   customer: { id: string; name: string; phone: string | null; email: string | null } | null;
   propertyLabel: string | null;
   scopeSummary: string | null;
-  workPerformed: Array<{ description: string; quantityLabel: string }>;
+  workPerformed: Array<{
+    description: string;
+    includedWork?: string | null;
+    quantityLabel: string;
+  }>;
   jobId: string | null;
   jobProjectToken: string | null;
   paidAtLabel: string | null;

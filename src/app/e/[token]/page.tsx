@@ -7,6 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
 import { formatAddress, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
@@ -40,6 +41,7 @@ export default async function PublicEstimatePage({
         orderBy: { createdAt: "asc" },
         select: {
           description: true,
+          includedWork: true,
           quantity: true,
           unitPrice: true,
           total: true,
@@ -69,6 +71,7 @@ export default async function PublicEstimatePage({
             orderBy: { createdAt: "asc" },
             select: {
               description: true,
+              includedWork: true,
               quantity: true,
               unitPrice: true,
               total: true,
@@ -127,14 +130,17 @@ export default async function PublicEstimatePage({
           {lineItems.length === 0 ? (
             <p className="text-sm text-muted-foreground">No line items.</p>
           ) : (
-            <ul className="space-y-2 text-sm">
+            <ul className="space-y-3 text-sm">
               {lineItems.map((item, index) => (
-                <li key={index} className="flex justify-between gap-3">
-                  <span>
-                    {item.description} × {item.quantity.toString()} @{" "}
-                    {formatMoney(item.unitPrice)}
-                  </span>
-                  <span>{formatMoney(item.total)}</span>
+                <li key={index} className="space-y-1">
+                  <div className="flex justify-between gap-3">
+                    <span>
+                      {item.description} × {item.quantity.toString()} @{" "}
+                      {formatMoney(item.unitPrice)}
+                    </span>
+                    <span>{formatMoney(item.total)}</span>
+                  </div>
+                  <IncludedWorkDisplay includedWork={item.includedWork} />
                 </li>
               ))}
             </ul>

@@ -301,6 +301,8 @@ model ServiceCatalogItem {
   id          String   @id @default(cuid())
   businessId  String
   name        String
+  /// Reusable Scope / Included Work copied onto estimate lines as a snapshot.
+  /// Later catalog edits must not rewrite existing LineItem.includedWork.
   description String?
   /// FIXED | STARTING_AT | CUSTOM_QUOTE. Existing rows default to STARTING_AT.
   pricingMode String   @default("STARTING_AT")
@@ -539,6 +541,8 @@ model EstimateVersionLineItem {
   businessId        String
   estimateVersionId String
   description       String
+  /// Snapshot of Scope / Included Work at send time. Descriptive only.
+  includedWork      String?
   quantity          Decimal
   unitPrice         Decimal
   total             Decimal
@@ -777,6 +781,10 @@ model LineItem {
   changeOrderId        String?
   /// Snapshot fields. Catalog price changes must not rewrite these.
   description          String
+  /// Optional multi-line Scope / Included Work. Descriptive only — never
+  /// creates priced lines and is never read by estimate, change-order,
+  /// labor-minimum, or invoice totals.
+  includedWork         String?
   quantity             Decimal
   unitPrice            Decimal
   total                Decimal

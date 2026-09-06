@@ -63,14 +63,19 @@ export function CreateCatalogItemForm({
           <option value="CUSTOM_QUOTE">Custom Quote</option>
         </select>
       </div>
-      {mode === "CUSTOM_QUOTE" ? null : (
+      {mode === "CUSTOM_QUOTE" ? (
+        <div className="space-y-2">
+          <Label htmlFor="price">Default starting price (optional)</Label>
+          <Input id="price" name="price" inputMode="decimal" />
+        </div>
+      ) : (
         <div className="space-y-2">
           <Label htmlFor="price">Price</Label>
           <Input id="price" name="price" inputMode="decimal" required />
         </div>
       )}
       <div className="space-y-2">
-        <Label htmlFor="description">Description (optional)</Label>
+        <Label htmlFor="description">Scope / Included Work (optional)</Label>
         <textarea
           id="description"
           name="description"

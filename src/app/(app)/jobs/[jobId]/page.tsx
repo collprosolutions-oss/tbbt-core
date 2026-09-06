@@ -62,6 +62,7 @@ export const metadata: Metadata = {
 
 const LINE_ITEM_SELECT = {
   description: true,
+  includedWork: true,
   quantity: true,
   unitPrice: true,
   total: true,
