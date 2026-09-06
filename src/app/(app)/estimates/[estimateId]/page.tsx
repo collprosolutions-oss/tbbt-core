@@ -9,12 +9,15 @@ import { CopyEstimateLinkButton } from "@/components/estimates/copy-estimate-lin
 import { EditEstimateButton } from "@/components/estimates/edit-estimate-button";
 import { EmailEstimateButton } from "@/components/estimates/email-estimate-button";
 import { EstimateVersionHistory } from "@/components/estimates/estimate-version-history";
+import { CalculatorBreakdown } from "@/components/estimates/calculator-breakdown";
 import {
   EditLineIncludedWorkForm,
   SaveLineForReuseForm,
 } from "@/components/estimates/draft-line-scope-forms";
 import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
+import { OverrideLinePriceForm } from "@/components/estimates/override-line-price-form";
 import { PriceRequiredLineForm } from "@/components/estimates/price-required-line-form";
+import { VariableScopeCalculatorForm } from "@/components/estimates/variable-scope-calculator-form";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
@@ -36,7 +39,14 @@ import { formatAddress, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
-import { lineItemIncludedWork, lineItemTitle } from "@/lib/estimate-line-scope";
+import { resolveCalculatorId } from "@/lib/estimate-calculators";
+import {
+  catalogCalculatorDefinition,
+  catalogScopeText,
+  lineCalculatorSnapshot,
+  lineItemIncludedWork,
+  lineItemTitle,
+} from "@/lib/estimate-line-scope";
 import {
   customQuoteDisplayDescription,
   isUnpricedCustomQuoteDraftLine,
@@ -245,6 +255,11 @@ export default async function EstimateBuilderPage({
               {estimate.lineItems.map((item) => {
                 const priceRequired = isUnpricedCustomQuoteDraftLine(item);
                 const requestName = customQuoteDisplayDescription(item.description);
+                const calculatorSnapshot = lineCalculatorSnapshot(item.description);
+                const calculatorId = resolveCalculatorId({
+                  title: requestName,
+                  snapshot: calculatorSnapshot,
+                });
                 return (
                   <li
                     key={item.id}
@@ -276,7 +291,7 @@ export default async function EstimateBuilderPage({
                         ) : null}
                       </span>
                     </div>
-                    {isDraft && priceRequired ? (
+                    {isDraft && priceRequired && !calculatorId ? (
                       <>
                         <p className="mt-1 text-xs text-muted-foreground">
                           Original customer request: {requestName}. Price this
@@ -288,6 +303,24 @@ export default async function EstimateBuilderPage({
                           quantity={item.quantity.toString()}
                         />
                       </>
+                    ) : null}
+                    {isDraft && calculatorId ? (
+                      <VariableScopeCalculatorForm
+                        estimateId={estimate.id}
+                        lineItemId={item.id}
+                        inputs={calculatorSnapshot?.inputs}
+                        rates={calculatorSnapshot?.rates}
+                      />
+                    ) : null}
+                    {isDraft && calculatorId && item.unitPrice.gt(0) ? (
+                      <OverrideLinePriceForm
+                        estimateId={estimate.id}
+                        lineItemId={item.id}
+                        currentPrice={item.unitPrice.toString()}
+                      />
+                    ) : null}
+                    {!isDraft && calculatorSnapshot?.result ? (
+                      <CalculatorBreakdown snapshot={calculatorSnapshot} />
                     ) : null}
                     {isDraft ? (
                       <>
@@ -384,7 +417,13 @@ export default async function EstimateBuilderPage({
               name: item.name,
               pricingMode: item.pricingMode,
               priceLabel: formatCatalogPriceLabel(item.pricingMode, item.price),
-              includedWork: item.description,
+              includedWork: catalogScopeText(item.description),
+              hasCalculator: Boolean(
+                resolveCalculatorId({
+                  title: item.name,
+                  definition: catalogCalculatorDefinition(item.description),
+                }),
+              ),
               defaultPrice:
                 item.price && item.price.gt(0) ? item.price.toString() : null,
             }))}

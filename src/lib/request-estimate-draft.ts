@@ -5,7 +5,10 @@
  * approve, or create a Job/Invoice.
  */
 import { Prisma } from "@prisma/client";
+import { startingCalculatorSnapshot } from "@/lib/estimate-calculators";
 import {
+  catalogCalculatorDefinition,
+  catalogScopeText,
   joinLineDescription,
   splitLineDescription,
 } from "@/lib/estimate-line-scope";
@@ -101,7 +104,7 @@ export function pricedCustomQuoteDescription(description: string) {
   const parts = splitLineDescription(description);
   const title =
     parts.title.replace(` ${CUSTOM_QUOTE_DRAFT_MARKER}`, "").trim() || parts.title;
-  return joinLineDescription(title, parts.includedWork);
+  return joinLineDescription(title, parts.includedWork, parts.calculatorSnapshot);
 }
 
 export function draftEstimateSendError(estimate: {
@@ -130,12 +133,19 @@ export function buildEstimateLineCreatesFromRequestItems(
   return draftEstimateLinesFromRequestItems(items).map((line, index) => {
     const unitPrice = line.priced && line.unitPrice != null ? line.unitPrice : 0;
     const catalog = items[index]?.serviceCatalogItem;
+    const calculatorDefinition = catalogCalculatorDefinition(catalog?.description);
     return {
       businessId,
       serviceCatalogItemId: line.serviceCatalogItemId,
       description: joinLineDescription(
         formatDraftEstimateDescription(line),
-        catalog?.description,
+        catalogScopeText(catalog?.description) ?? catalog?.description,
+        calculatorDefinition
+          ? startingCalculatorSnapshot({
+              title: catalog?.name,
+              definition: calculatorDefinition,
+            })
+          : null,
       ),
       quantity: line.quantity,
       unitPrice,

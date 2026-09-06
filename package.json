@@ -14,6 +14,7 @@
     "test:estimate-versions": "node --experimental-strip-types scripts/check-estimate-versions.mjs",
     "test:estimate-custom-price": "node --experimental-strip-types scripts/check-estimate-custom-price.mjs",
     "test:estimate-scope": "node --experimental-strip-types scripts/check-estimate-scope.mjs",
+    "test:estimate-calculator": "node --experimental-strip-types scripts/check-estimate-calculator.mjs",
     "test:authorization": "node --experimental-strip-types scripts/check-authorization.mjs",
     "test:management-console-access": "node scripts/check-management-console-access.mjs",
     "test:service-categories": "node --experimental-strip-types scripts/check-service-categories.mjs",

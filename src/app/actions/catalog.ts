@@ -9,6 +9,8 @@ import {
   starterIntakeFields,
   starterPricingMode,
 } from "@/lib/handyman-starter-catalog";
+import { catalogDefinitionFromSnapshot } from "@/lib/estimate-calculators";
+import { catalogCalculatorDefinition, joinCatalogDescription } from "@/lib/estimate-line-scope";
 import { parsePricingMode } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
 import { normalizeServiceCategory } from "@/lib/service-catalog-category";
@@ -93,7 +95,10 @@ export async function createServiceCatalogItem(
       name,
       pricingMode,
       price: priced.price,
-      description: description || null,
+      description: joinCatalogDescription(
+        description || null,
+        catalogDefinitionFromSnapshot(null, name),
+      ),
       category,
     },
   });
@@ -137,7 +142,11 @@ export async function updateServiceCatalogItem(
       name,
       pricingMode,
       price: priced.price,
-      description: description || null,
+      description: joinCatalogDescription(
+        description || null,
+        catalogCalculatorDefinition(item.description) ??
+          catalogDefinitionFromSnapshot(null, name),
+      ),
       category,
     },
   });

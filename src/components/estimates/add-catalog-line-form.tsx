@@ -18,6 +18,7 @@ type CatalogOption = {
   pricingMode: string;
   priceLabel: string;
   includedWork?: string | null;
+  hasCalculator?: boolean;
   defaultPrice?: string | null;
 };
 
@@ -34,7 +35,8 @@ export function AddCatalogLineForm({
     () => items.find((item) => item.id === selectedId) ?? items[0],
     [items, selectedId],
   );
-  const needsJobPrice = selected?.pricingMode === "CUSTOM_QUOTE";
+  const needsJobPrice =
+    selected?.pricingMode === "CUSTOM_QUOTE" && !selected.hasCalculator;
 
   if (items.length === 0) {
     return (

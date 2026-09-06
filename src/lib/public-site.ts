@@ -1,4 +1,5 @@
 import { getBusinessLogoSrc } from "@/lib/business-branding";
+import { catalogScopeText } from "@/lib/estimate-line-scope";
 import {
   HANDYMAN_CATALOG_CATEGORIES,
 } from "@/lib/handyman-starter-catalog";
@@ -348,7 +349,7 @@ export function toPublicCatalogItem(item: {
   return {
     id: item.id,
     name: item.name,
-    description: item.description,
+    description: catalogScopeText(item.description) ?? item.description,
     category: item.category,
     pricingMode: item.pricingMode,
     priceLabel: formatCatalogPriceLabel(item.pricingMode, item.price),

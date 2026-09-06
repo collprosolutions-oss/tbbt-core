@@ -20,6 +20,7 @@ const { persistDraftEstimateTotal } = await import("@/lib/labor-minimum");
 const { createEstimateVersionSnapshot } = await import("@/lib/estimate-version");
 const {
   INCLUDED_WORK_MARKER,
+  catalogScopeText,
   joinLineDescription,
   lineItemIncludedWork,
   normalizeIncludedWork,
@@ -579,7 +580,7 @@ try {
   );
   check(
     "Unchecked price box still saves Scope / Included Work to the catalog",
-    savedUnchecked.description === WALL_SCOPE,
+    catalogScopeText(savedUnchecked.description) === WALL_SCOPE,
   );
   check("Unchecked save stays CUSTOM_QUOTE", savedUnchecked.pricingMode === "CUSTOM_QUOTE");
   check(
@@ -607,7 +608,7 @@ try {
     savePrice: true,
   });
   check("Explicit save creates a reusable ServiceCatalogItem", saved.name === "Decorative Wall Paneling & Finish Carpentry");
-  check("Saved reusable service keeps the multi-line scope", saved.description === WALL_SCOPE);
+  check("Saved reusable service keeps the multi-line scope", catalogScopeText(saved.description) === WALL_SCOPE);
   check("Saved reusable service keeps CUSTOM_QUOTE mode", saved.pricingMode === "CUSTOM_QUOTE");
   check(
     "Checked price box saves the $1,800 job price as the default starting price",
@@ -628,7 +629,7 @@ try {
   check(
     "Unchecking later still saves title and scope and leaves the existing catalog price alone",
     savedUncheckAfterPrice.id === saved.id &&
-      savedUncheckAfterPrice.description === WALL_SCOPE &&
+      catalogScopeText(savedUncheckAfterPrice.description) === WALL_SCOPE &&
       savedUncheckAfterPrice.price?.toString() === "1800",
   );
 
@@ -678,7 +679,7 @@ try {
   });
   check(
     "Editing the new estimate does not alter the reusable master",
-    masterAfterEdit.description === WALL_SCOPE && masterAfterEdit.price.toString() === "1800",
+    catalogScopeText(masterAfterEdit.description) === WALL_SCOPE && masterAfterEdit.price.toString() === "1800",
   );
 
   await prisma.serviceCatalogItem.update({

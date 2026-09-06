@@ -780,8 +780,10 @@ model LineItem {
   changeOrderId        String?
   /// Snapshot fields. Catalog price changes must not rewrite these.
   /// Optional Scope / Included Work is encoded in description after
-  /// INCLUDED_WORK_MARKER (see src/lib/estimate-line-scope.ts). Descriptive
-  /// only — never read by estimate, change-order, labor-minimum, or invoice totals.
+  /// INCLUDED_WORK_MARKER. Internal calculator snapshots use
+  /// CALCULATOR_SNAPSHOT_MARKER (see src/lib/estimate-line-scope.ts).
+  /// Descriptive only — never read by estimate, change-order, labor-minimum,
+  /// or invoice totals. Do not add a Preview-breaking column for these.
   description          String
   quantity             Decimal
   unitPrice            Decimal

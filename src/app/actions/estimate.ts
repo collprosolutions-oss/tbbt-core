@@ -14,7 +14,9 @@ import { createEstimateVersionSnapshot } from "@/lib/estimate-version";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import {
   addCatalogItemToDraftEstimate,
+  applyDraftEstimateCalculator,
   estimateLineErrorMessage,
+  overrideDraftEstimateLinePrice,
   priceDraftEstimateLine,
   saveDraftEstimateLineAsCatalog,
   updateDraftEstimateLineIncludedWork,
@@ -469,6 +471,74 @@ export async function updateEstimateLineIncludedWork(
   } catch (error) {
     return {
       error: estimateLineErrorMessage(error, "Could not save that scope."),
+    };
+  }
+}
+
+export async function applyEstimateCalculator(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    await applyDraftEstimateCalculator(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      inputs: {
+        wallWidthFt: readString(formData, "wallWidthFt"),
+        wallHeightFt: readString(formData, "wallHeightFt"),
+        removalType: readString(formData, "removalType"),
+        panelQuantity: readString(formData, "panelQuantity"),
+        slidingPatioDoors: readString(formData, "slidingPatioDoors"),
+        standardDoors: readString(formData, "standardDoors"),
+        windows: readString(formData, "windows"),
+        receptacles: readString(formData, "receptacles"),
+        switches: readString(formData, "switches"),
+        lightFixtures: readString(formData, "lightFixtures"),
+        trimAllowance: readString(formData, "trimAllowance"),
+        cleanupAllowance: readString(formData, "cleanupAllowance"),
+        notes: readString(formData, "notes"),
+      },
+      rates: {
+        panelRate: readString(formData, "panelRate"),
+        removalRatePerSqFt: readString(formData, "removalRatePerSqFt"),
+        slidingPatioDoorRate: readString(formData, "slidingPatioDoorRate"),
+        standardDoorRate: readString(formData, "standardDoorRate"),
+        windowRate: readString(formData, "windowRate"),
+        receptacleRate: readString(formData, "receptacleRate"),
+        switchRate: readString(formData, "switchRate"),
+        lightFixtureRate: readString(formData, "lightFixtureRate"),
+        defaultTrimAllowance: readString(formData, "defaultTrimAllowance"),
+        defaultCleanupAllowance: readString(formData, "defaultCleanupAllowance"),
+      },
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: "Recommended labor price applied." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not apply that recommended price."),
+    };
+  }
+}
+
+export async function overrideEstimateLinePrice(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    await overrideDraftEstimateLinePrice(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      unitPrice: readString(formData, "unitPrice"),
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: "Line price updated." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not override that price."),
     };
   }
 }
