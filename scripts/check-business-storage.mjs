@@ -142,6 +142,11 @@ check("Public asset route streams READY objects instead of a public-bucket redir
 check("R2 client disables default AWS checksums that break GetObject",
   r2Src.includes('requestChecksumCalculation: "WHEN_REQUIRED"') &&
     r2Src.includes('responseChecksumValidation: "WHEN_REQUIRED"'));
+check("Browser PutObject uses a narrow exact-origin R2 CORS policy",
+  r2Src.includes("ensureR2BrowserUploadCors") &&
+    readRepo("src/lib/business-storage/r2-cors.ts").includes("https://www.collproreno.com") &&
+    readRepo("src/lib/business-storage/r2-cors.ts").includes("AllowedMethods") &&
+    !readRepo("src/lib/business-storage/r2-cors.ts").includes('AllowedOrigins: ["*"]'));
 check("Tenant keys always start with the business namespace",
   businessNamespacePrefix("biz_a") === "businesses/biz_a" &&
     buildBusinessStorageKey({

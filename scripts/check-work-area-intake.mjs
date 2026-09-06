@@ -252,6 +252,17 @@ check(
     readRepo("src/app/actions/intake.ts").includes("submitServiceRequestInner") &&
     readRepo("src/app/actions/intake.ts").includes("return { error: GENERIC_ERROR }"),
 );
+check(
+  "Photo uploads still use the existing presigned R2 PUT and abort before submit on failure",
+  requestFlow.includes("authorizePublicRequestPhotoUpload") &&
+    requestFlow.includes("authorized.uploadUrl") &&
+    requestFlow.indexOf("if (!uploaded.ok)") <
+      requestFlow.lastIndexOf("submitPublicIntakeForm") &&
+    requestFlow.includes("abortPublicRequestPhotoUpload") &&
+    readRepo("src/lib/business-storage/r2-cors.ts").includes(
+      "https://collpro-reno-git-cursor-estimate-pri-d221ac-collpro-s-projects5.vercel.app",
+    ),
+);
 
 console.log("\nUNIT — Applicability, encoding, and calculator prefill");
 check(
@@ -851,6 +862,37 @@ try {
     mimeType: "image/png",
     body: pngBytes,
   });
+  const onePhotoSubmit = await createPublicServiceRequest(prisma, {
+    slug,
+    name: "One Photo Submit",
+    email: "one-photo-submit@example.com",
+    phone: "555-0202",
+    address: "",
+    streetAddress: "150 Pine",
+    city: "Fort Myers",
+    region: "FL",
+    postalCode: "33901",
+    notes: "One photo attached.",
+    catalogItemIds: [paneling.id],
+    includeOther: false,
+    otherDescription: "",
+    workAreaAnswers: workAreaPayload,
+    photoAssetIds: [firstPhoto.id],
+    submissionId: "retry-token-one-photo",
+  });
+  const onePhotoRequest = onePhotoSubmit.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: onePhotoSubmit.requestId },
+        include: { photos: true },
+      })
+    : null;
+  check(
+    "Decorative Wall Paneling request with work-area answers and one photo succeeds",
+    onePhotoSubmit.ok === true &&
+      onePhotoRequest?.photos.length === 1 &&
+      parseWorkAreaIntake(onePhotoRequest?.description)?.answers[0]?.belongingsCleanup ===
+        "none",
+  );
   const secondPhoto = await putPublicRequestPhotoFromBytes(storageDeps, slug, {
     originalFilename: "wall-2.png",
     mimeType: "image/png",

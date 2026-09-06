@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 43217",
-    "build": "prisma generate && node scripts/run-production-migrate.mjs && next build",
+    "build": "prisma generate && node scripts/run-production-migrate.mjs && node --experimental-strip-types scripts/apply-r2-browser-upload-cors.mjs && next build",
     "start": "next start --port 43217",
     "lint": "eslint",
     "postinstall": "prisma generate",
@@ -48,6 +48,7 @@
     "test:work-area-intake": "node --experimental-strip-types scripts/check-work-area-intake.mjs",
     "test:public-site-images": "node --experimental-strip-types scripts/check-public-site-images.mjs",
     "test:business-storage": "node --experimental-strip-types scripts/check-business-storage.mjs",
+    "test:r2-cors": "node --experimental-strip-types scripts/check-r2-browser-upload-cors.mjs",
     "test:invoice-document": "node --experimental-strip-types scripts/check-invoice-document.mjs",
     "test:complete-job-invoice": "node --experimental-strip-types scripts/check-complete-job-invoice.mjs",
     "test:payments": "node --experimental-strip-types scripts/check-payments.mjs"
