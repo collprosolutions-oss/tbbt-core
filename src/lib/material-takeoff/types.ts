@@ -47,6 +47,7 @@ export type TakeoffItem = {
   calculatedQuantity: number;
   quantityOverride: number | null;
   unitCost: number | null;
+  customerUnitPrice: number | null;
   explanation: string;
   convertedLineItemId: string | null;
 };
@@ -87,8 +88,25 @@ export function extendedMaterialCost(item: TakeoffItem) {
   return roundMoney(qty * unitCost);
 }
 
+export function hasValidCustomerUnitPrice(item: TakeoffItem) {
+  const price = item.customerUnitPrice;
+  return price != null && Number.isFinite(price) && price > 0;
+}
+
+export function extendedCustomerPrice(item: TakeoffItem) {
+  const qty = workingQuantity(item);
+  if (!hasValidCustomerUnitPrice(item) || item.customerUnitPrice == null) return 0;
+  return roundMoney(qty * item.customerUnitPrice);
+}
+
 export function takeoffInternalMaterialTotal(snapshot: TakeoffSnapshot) {
   return roundMoney(
     snapshot.items.reduce((sum, item) => sum + extendedMaterialCost(item), 0),
+  );
+}
+
+export function takeoffCustomerSellingTotal(snapshot: TakeoffSnapshot) {
+  return roundMoney(
+    snapshot.items.reduce((sum, item) => sum + extendedCustomerPrice(item), 0),
   );
 }

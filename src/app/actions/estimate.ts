@@ -686,7 +686,7 @@ export async function recalculateEstimateMaterialTakeoff(
       snapshotEdits: snapshot,
     });
     revalidatePath(`/estimates/${estimateId}`);
-    return { message: "Material takeoff recalculated. Owner quantity and unit-cost edits were kept." };
+    return { message: "Material takeoff recalculated. Owner quantity, unit-cost, and customer-price edits were kept." };
   } catch (error) {
     return {
       error: estimateLineErrorMessage(error, "Could not calculate that material takeoff."),

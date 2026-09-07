@@ -1,9 +1,10 @@
 /**
  * Trade-aware material takeoff engine.
  *
- * Recalculation preserves owner quantity/unit-cost overrides and
- * conversion ids. New formulas register in TAKEOFF_FORMULAS without
- * changing snapshot storage or MATERIAL conversion.
+ * Recalculation preserves owner quantity, internal unit cost,
+ * customer unit price, selection, and conversion ids. New formulas
+ * register in TAKEOFF_FORMULAS without changing snapshot storage or
+ * MATERIAL conversion.
  */
 import { computeConcreteSlabTakeoff } from "@/lib/material-takeoff/formulas/concrete-slab";
 import { computeFramedWallTakeoff } from "@/lib/material-takeoff/formulas/framed-wall";
@@ -101,6 +102,7 @@ function preserveOwnerOverrides(next: TakeoffItem, previous?: TakeoffItem): Take
     selected: previous.selected,
     quantityOverride: previous.quantityOverride,
     unitCost: previous.unitCost,
+    customerUnitPrice: previous.customerUnitPrice,
     convertedLineItemId: previous.convertedLineItemId,
     label: previous.kind === "custom" ? previous.label : next.label,
   };
@@ -113,6 +115,7 @@ export function applyTakeoffItemEdits(
     selected?: boolean;
     quantityOverride?: number | null;
     unitCost?: number | null;
+    customerUnitPrice?: number | null;
     label?: string;
     remove?: boolean;
   }>,
@@ -135,6 +138,10 @@ export function applyTakeoffItemEdits(
             ? item.quantityOverride
             : edit.quantityOverride,
         unitCost: edit.unitCost === undefined ? item.unitCost : edit.unitCost,
+        customerUnitPrice:
+          edit.customerUnitPrice === undefined
+            ? item.customerUnitPrice
+            : edit.customerUnitPrice,
         label: edit.label?.trim() ? edit.label.trim() : item.label,
       };
     });
@@ -144,7 +151,13 @@ export function applyTakeoffItemEdits(
 
 export function addCustomTakeoffItem(
   snapshot: TakeoffSnapshot,
-  input: { label: string; unit: string; quantity: number; unitCost?: number | null },
+  input: {
+    label: string;
+    unit: string;
+    quantity: number;
+    unitCost?: number | null;
+    customerUnitPrice?: number | null;
+  },
 ): TakeoffSnapshot {
   const label = input.label.trim();
   if (!label) return snapshot;
@@ -159,6 +172,7 @@ export function addCustomTakeoffItem(
     calculatedQuantity: quantity,
     quantityOverride: quantity,
     unitCost: parseNonNegativeNumber(input.unitCost) ?? null,
+    customerUnitPrice: parseNonNegativeNumber(input.customerUnitPrice) ?? null,
     explanation: "Owner-added takeoff item.",
     convertedLineItemId: null,
   };
@@ -216,6 +230,10 @@ function normalizeTakeoffItem(raw: unknown): TakeoffItem | null {
         : parseNonNegativeNumber(parsed.quantityOverride),
     unitCost:
       parsed.unitCost == null ? null : parseNonNegativeNumber(parsed.unitCost),
+    customerUnitPrice:
+      parsed.customerUnitPrice == null
+        ? null
+        : parseNonNegativeNumber(parsed.customerUnitPrice),
     explanation: typeof parsed.explanation === "string" ? parsed.explanation : "",
     convertedLineItemId:
       typeof parsed.convertedLineItemId === "string" && parsed.convertedLineItemId.trim()

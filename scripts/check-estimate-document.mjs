@@ -73,6 +73,8 @@ const INTERNAL_LEAKS = [
   "quantityOverride",
   "bagYieldCuFt",
   "wastePercent",
+  "unitCost",
+  "customerUnitPrice",
   "Owner-only margin",
   "INTERNAL_OWNER_NOTE",
 ];
@@ -236,6 +238,7 @@ const encodedDescription = joinLineDescription(
           calculatedQuantity: 10,
           quantityOverride: 11,
           unitCost: 28,
+          customerUnitPrice: 42,
           explanation: "Owner-only derivation",
           convertedLineItemId: null,
         },

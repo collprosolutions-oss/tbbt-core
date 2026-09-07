@@ -197,12 +197,16 @@ function blankSnapshot(
 }
 
 function item(
-  value: Omit<TakeoffItem, "quantityOverride" | "unitCost" | "convertedLineItemId">,
+  value: Omit<
+    TakeoffItem,
+    "quantityOverride" | "unitCost" | "customerUnitPrice" | "convertedLineItemId"
+  >,
 ): TakeoffItem {
   return {
     ...value,
     quantityOverride: null,
     unitCost: null,
+    customerUnitPrice: null,
     convertedLineItemId: null,
   };
 }

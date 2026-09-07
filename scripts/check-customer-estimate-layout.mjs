@@ -107,6 +107,8 @@ check(
     !page.includes("contentsHandlingLightRate") &&
     !page.includes("TBBT Work Area Intake") &&
     !page.includes("TBBT Material Takeoff") &&
+    !page.includes("customerUnitPrice") &&
+    !page.includes("Unit cost (internal)") &&
     !header.includes("panelRate"),
 );
 check(

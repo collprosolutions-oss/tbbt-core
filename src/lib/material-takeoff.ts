@@ -1,8 +1,11 @@
 export {
   TAKEOFF_TYPE_IDS,
   TAKEOFF_TYPE_LABELS,
+  extendedCustomerPrice,
   extendedMaterialCost,
+  hasValidCustomerUnitPrice,
   isTakeoffTypeId,
+  takeoffCustomerSellingTotal,
   takeoffInternalMaterialTotal,
   workingQuantity,
 } from "@/lib/material-takeoff/types";

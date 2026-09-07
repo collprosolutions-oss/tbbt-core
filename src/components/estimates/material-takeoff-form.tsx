@@ -22,7 +22,9 @@ import { emptySheetCoveringInputs } from "@/lib/material-takeoff/formulas/sheet-
 import {
   TAKEOFF_TYPE_IDS,
   TAKEOFF_TYPE_LABELS,
+  extendedCustomerPrice,
   extendedMaterialCost,
+  takeoffCustomerSellingTotal,
   takeoffInternalMaterialTotal,
   type TakeoffItem,
   type TakeoffMeasurementSource,
@@ -73,9 +75,14 @@ export function MaterialTakeoffForm({
   const [customUnit, setCustomUnit] = useState("ea");
   const [customQty, setCustomQty] = useState("1");
   const [customCost, setCustomCost] = useState("");
+  const [customPrice, setCustomPrice] = useState("");
 
-  const preview = useMemo(
+  const internalTotal = useMemo(
     () => takeoffInternalMaterialTotal(draft),
+    [draft],
+  );
+  const customerTotal = useMemo(
+    () => takeoffCustomerSellingTotal(draft),
     [draft],
   );
   const pending = savePending || convertPending;
@@ -130,6 +137,7 @@ export function MaterialTakeoffForm({
     const quantity = Number(customQty);
     if (!customLabel.trim() || !Number.isFinite(quantity) || quantity <= 0) return;
     const unitCost = customCost.trim() ? Number(customCost) : null;
+    const customerUnitPrice = customPrice.trim() ? Number(customPrice) : null;
     setDraft((current) => ({
       ...current,
       items: [
@@ -144,6 +152,10 @@ export function MaterialTakeoffForm({
           calculatedQuantity: quantity,
           quantityOverride: quantity,
           unitCost: unitCost != null && Number.isFinite(unitCost) ? unitCost : null,
+          customerUnitPrice:
+            customerUnitPrice != null && Number.isFinite(customerUnitPrice)
+              ? customerUnitPrice
+              : null,
           explanation: "Owner-added takeoff item.",
           convertedLineItemId: null,
         },
@@ -152,6 +164,7 @@ export function MaterialTakeoffForm({
     setCustomLabel("");
     setCustomQty("1");
     setCustomCost("");
+    setCustomPrice("");
   }
 
   function removeItem(id: string) {
@@ -179,9 +192,10 @@ export function MaterialTakeoffForm({
         <input type="hidden" name="takeoffJson" value={takeoffJson} />
 
         <p className="text-xs text-muted-foreground">
-          Internal working quantities and material cost. Not shown on the
-          customer estimate, print/PDF, or portal until you convert selected
-          items into normal MATERIAL lines.
+          Internal working quantities, unit cost, and a separate customer unit
+          price. Cost is never treated as the selling price. Nothing here is
+          shown on the customer estimate, print/PDF, or portal until you convert
+          selected items into normal MATERIAL lines.
         </p>
 
         {draft.measurementSource ? (
@@ -272,8 +286,10 @@ export function MaterialTakeoffForm({
                   <th className="py-1 pr-2">Calc qty</th>
                   <th className="py-1 pr-2">Owner qty</th>
                   <th className="py-1 pr-2">Unit</th>
-                  <th className="py-1 pr-2">Unit cost</th>
-                  <th className="py-1 pr-2">Extended</th>
+                  <th className="py-1 pr-2">Unit cost (internal)</th>
+                  <th className="py-1 pr-2">Internal extended</th>
+                  <th className="py-1 pr-2">Customer unit price</th>
+                  <th className="py-1 pr-2">Customer extended</th>
                   <th className="py-1"> </th>
                 </tr>
               </thead>
@@ -320,7 +336,7 @@ export function MaterialTakeoffForm({
                       <Input
                         inputMode="decimal"
                         value={item.unitCost == null ? "" : String(item.unitCost)}
-                        placeholder="Owner cost"
+                        placeholder="Internal cost"
                         onChange={(event) =>
                           patchItem(item.id, {
                             unitCost: event.target.value.trim()
@@ -332,6 +348,27 @@ export function MaterialTakeoffForm({
                     </td>
                     <td className="py-2 pr-2 tabular-nums">
                       {formatMoney(extendedMaterialCost(item))}
+                    </td>
+                    <td className="py-2 pr-2">
+                      <Input
+                        inputMode="decimal"
+                        value={
+                          item.customerUnitPrice == null
+                            ? ""
+                            : String(item.customerUnitPrice)
+                        }
+                        placeholder="Selling price"
+                        onChange={(event) =>
+                          patchItem(item.id, {
+                            customerUnitPrice: event.target.value.trim()
+                              ? Number(event.target.value)
+                              : null,
+                          })
+                        }
+                      />
+                    </td>
+                    <td className="py-2 pr-2 tabular-nums">
+                      {formatMoney(extendedCustomerPrice(item))}
                     </td>
                     <td className="py-2">
                       <button
@@ -347,13 +384,14 @@ export function MaterialTakeoffForm({
               </tbody>
             </table>
             <p className="mt-2 text-xs">
-              Internal material cost: {formatMoney(preview)}. Customer MATERIAL
-              price is set on converted lines and stays separate.
+              Internal material cost: {formatMoney(internalTotal)}. Customer
+              selling total: {formatMoney(customerTotal)}. Conversion uses
+              customer unit price, not internal cost.
             </p>
           </div>
         ) : null}
 
-        <div className="grid gap-2 sm:grid-cols-4">
+        <div className="grid gap-2 sm:grid-cols-5">
           <Input
             placeholder="Add item label"
             value={customLabel}
@@ -371,10 +409,16 @@ export function MaterialTakeoffForm({
             onChange={(event) => setCustomQty(event.target.value)}
           />
           <Input
-            placeholder="Unit cost"
+            placeholder="Unit cost (internal)"
             inputMode="decimal"
             value={customCost}
             onChange={(event) => setCustomCost(event.target.value)}
+          />
+          <Input
+            placeholder="Customer unit price"
+            inputMode="decimal"
+            value={customPrice}
+            onChange={(event) => setCustomPrice(event.target.value)}
           />
         </div>
         <Button type="button" variant="outline" onClick={addCustom}>

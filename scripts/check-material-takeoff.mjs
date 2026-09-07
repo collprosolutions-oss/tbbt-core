@@ -45,11 +45,15 @@ const {
   DEFAULT_CONCRETE_BAG_SIZE_LB,
   DEFAULT_CONCRETE_BAG_YIELD_CU_FT,
   DEFAULT_CONCRETE_WASTE_PERCENT,
+  applyTakeoffItemEdits,
+  computeTakeoff,
   concreteBagsRequired,
   concreteVolumeCuFt,
   convertDraftMaterialTakeoff,
   convertLinearToFeet,
   emptyConcreteSlabInputs,
+  extendedCustomerPrice,
+  extendedMaterialCost,
   framedWallPlateBoards,
   framedWallStudCount,
   isRejectedLinearUnit,
@@ -162,7 +166,11 @@ try {
       !ownerPage.includes("saveDraftMaterialTakeoff") &&
       takeoffForm.includes("saveEstimateMaterialTakeoff") &&
       takeoffForm.includes("convertEstimateMaterialTakeoff") &&
-      takeoffForm.includes("Calculate from measurements"),
+      takeoffForm.includes("Calculate from measurements") &&
+      takeoffForm.includes("Unit cost (internal)") &&
+      takeoffForm.includes("Customer unit price") &&
+      takeoffForm.includes("Internal extended") &&
+      takeoffForm.includes("Customer extended"),
   );
   check(
     "Estimate document uses split title/scope, not raw description",
@@ -209,6 +217,59 @@ try {
     "No hard-coded $36 or $52 takeoff rate in concrete formula",
     !readRepo("src/lib/material-takeoff/formulas/concrete-slab.ts").includes("36") &&
       !readRepo("src/lib/material-takeoff/formulas/concrete-slab.ts").includes("52"),
+  );
+
+  console.log("\nUNIT — Internal unit cost stays independent of customer unit price");
+  const priced = applyTakeoffItemEdits(
+    computeTakeoff({
+      takeoffType: "concrete-slab",
+      inputs: {
+        lengthFt: 10,
+        widthFt: 10,
+        thicknessIn: 4,
+        bagSizeLb: 60,
+        bagYieldCuFt: 0.45,
+      },
+      wastePercent: 10,
+    }).snapshot,
+    [
+      {
+        id: "concrete-bags",
+        quantityOverride: 90,
+        unitCost: 8,
+        customerUnitPrice: 12,
+        selected: true,
+      },
+    ],
+  );
+  const pricedBags = priced.items.find((item) => item.id === "concrete-bags");
+  check(
+    "Internal unit cost and customer unit price are independent fields",
+    pricedBags?.unitCost === 8 &&
+      pricedBags?.customerUnitPrice === 12 &&
+      pricedBags?.unitCost !== pricedBags?.customerUnitPrice &&
+      extendedMaterialCost(pricedBags) === 720 &&
+      extendedCustomerPrice(pricedBags) === 1080,
+  );
+  const preserved = computeTakeoff({
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFt: 10,
+      widthFt: 10,
+      thicknessIn: 6,
+      bagSizeLb: 60,
+      bagYieldCuFt: 0.45,
+    },
+    wastePercent: 10,
+    previous: priced,
+  }).snapshot.items.find((item) => item.id === "concrete-bags");
+  check(
+    "Recalculation preserves quantity override, unit cost, and customer unit price",
+    preserved?.quantityOverride === 90 &&
+      preserved?.calculatedQuantity === 123 &&
+      preserved?.unitCost === 8 &&
+      preserved?.customerUnitPrice === 12 &&
+      preserved?.selected === true,
   );
 
   console.log("\nUNIT — Sheet count and framed-wall studs/plates");
@@ -334,7 +395,7 @@ try {
   const memberA = makeAccess(businessA.id, "MEMBER", membershipMember.id);
   const ownerB = makeAccess(businessB.id, "OWNER", membershipB.id);
 
-  console.log("\nTEST — Recalculate, owner override, unit cost, convert, no duplicates");
+  console.log("\nTEST — Recalculate, owner override, customer price, convert, no duplicates");
   const estimate = await prisma.estimate.create({
     data: {
       businessId: businessA.id,
@@ -383,10 +444,21 @@ try {
     ...calculated.snapshot,
     items: calculated.snapshot.items.map((item) =>
       item.id === "concrete-bags"
-        ? { ...item, quantityOverride: 90, unitCost: 8, selected: true }
+        ? {
+            ...item,
+            quantityOverride: 90,
+            unitCost: 8,
+            customerUnitPrice: 12,
+            selected: true,
+          }
         : item.id === "pickup-procurement"
-          ? { ...item, unitCost: 75, selected: true }
-          : { ...item, selected: item.id === "wire-mesh" ? false : item.selected },
+          ? {
+              ...item,
+              unitCost: 75,
+              customerUnitPrice: 95,
+              selected: true,
+            }
+          : { ...item, selected: false },
     ),
   };
   await saveDraftMaterialTakeoff(prisma, ownerA, {
@@ -411,11 +483,110 @@ try {
     "Owner quantity override survives recalculation while calculated qty updates",
     bagsAfter?.quantityOverride === 90 &&
       bagsAfter?.calculatedQuantity === 123 &&
-      bagsAfter?.unitCost === 8,
+      bagsAfter?.unitCost === 8 &&
+      bagsAfter?.customerUnitPrice === 12 &&
+      bagsAfter?.selected === true,
   );
   check(
-    "Unit-cost edit drives extended internal material cost",
-    bagsAfter != null && 90 * 8 === 720,
+    "Unit-cost edit drives extended internal material cost without changing selling price",
+    bagsAfter != null &&
+      extendedMaterialCost(bagsAfter) === 720 &&
+      extendedCustomerPrice(bagsAfter) === 1080,
+  );
+  const pickupAfter = recalculated.snapshot.items.find((item) => item.id === "pickup-procurement");
+  check(
+    "Pickup customer unit price is preserved independently of unit cost",
+    pickupAfter?.unitCost === 75 && pickupAfter?.customerUnitPrice === 95,
+  );
+
+  const missingPriceSnapshot = {
+    ...recalculated.snapshot,
+    items: recalculated.snapshot.items.map((item) =>
+      item.id === "concrete-bags"
+        ? { ...item, selected: true, customerUnitPrice: null }
+        : { ...item, selected: false },
+    ),
+  };
+  const materialBeforeMissing = await prisma.lineItem.count({
+    where: { estimateId: estimate.id, businessId: businessA.id, type: "MATERIAL" },
+  });
+  await expectError(
+    "Conversion refuses a missing customer unit price instead of creating a $0 MATERIAL line",
+    () =>
+      convertDraftMaterialTakeoff(prisma, ownerA, {
+        estimateId: estimate.id,
+        lineItemId: line.id,
+        snapshot: missingPriceSnapshot,
+      }),
+    (error) =>
+      error instanceof EstimateLineError &&
+      error.message.includes("customer unit price") &&
+      error.message.includes("60-lb concrete bags"),
+  );
+  const materialAfterMissing = await prisma.lineItem.count({
+    where: { estimateId: estimate.id, businessId: businessA.id, type: "MATERIAL" },
+  });
+  check(
+    "No MATERIAL line is created when customer unit price is missing",
+    materialAfterMissing === materialBeforeMissing,
+  );
+
+  const zeroPriceSnapshot = {
+    ...recalculated.snapshot,
+    items: recalculated.snapshot.items.map((item) =>
+      item.id === "concrete-bags"
+        ? { ...item, selected: true, customerUnitPrice: 0 }
+        : { ...item, selected: false },
+    ),
+  };
+  await expectError(
+    "Conversion refuses a $0 customer unit price instead of creating a $0 MATERIAL line",
+    () =>
+      convertDraftMaterialTakeoff(prisma, ownerA, {
+        estimateId: estimate.id,
+        lineItemId: line.id,
+        snapshot: zeroPriceSnapshot,
+      }),
+    (error) =>
+      error instanceof EstimateLineError &&
+      error.message.includes("customer unit price") &&
+      error.message.includes("60-lb concrete bags"),
+  );
+  check(
+    "No MATERIAL line is created from a $0 customer unit price",
+    (await prisma.lineItem.count({
+      where: { estimateId: estimate.id, businessId: businessA.id, type: "MATERIAL" },
+    })) === materialBeforeMissing,
+  );
+
+  const mixedPriceSnapshot = {
+    ...recalculated.snapshot,
+    items: recalculated.snapshot.items.map((item) =>
+      item.id === "concrete-bags"
+        ? { ...item, selected: true }
+        : item.id === "pickup-procurement"
+          ? { ...item, selected: true, customerUnitPrice: null }
+          : { ...item, selected: false },
+    ),
+  };
+  await expectError(
+    "Conversion names every selected item that still needs a customer unit price",
+    () =>
+      convertDraftMaterialTakeoff(prisma, ownerA, {
+        estimateId: estimate.id,
+        lineItemId: line.id,
+        snapshot: mixedPriceSnapshot,
+      }),
+    (error) =>
+      error instanceof EstimateLineError &&
+      error.message.includes("Material pickup / procurement") &&
+      !error.message.includes("60-lb concrete bags"),
+  );
+  check(
+    "Partial convert does not create MATERIAL lines when another selected item is missing a customer price",
+    (await prisma.lineItem.count({
+      where: { estimateId: estimate.id, businessId: businessA.id, type: "MATERIAL" },
+    })) === materialBeforeMissing,
   );
 
   const firstConvert = await convertDraftMaterialTakeoff(prisma, ownerA, {
@@ -423,7 +594,7 @@ try {
     lineItemId: line.id,
     snapshot: recalculated.snapshot,
   });
-  check("Selected takeoff items convert to MATERIAL lines", firstConvert.created >= 1);
+  check("Selected takeoff items convert to MATERIAL lines", firstConvert.created === 2);
 
   const afterConvert = await prisma.lineItem.findMany({
     where: { estimateId: estimate.id, businessId: businessA.id },
@@ -431,15 +602,25 @@ try {
   });
   const materialLines = afterConvert.filter((item) => item.type === "MATERIAL");
   const bagLine = materialLines.find((item) => lineItemTitle(item.description) === "60-lb concrete bags");
+  const pickupLine = materialLines.find(
+    (item) => lineItemTitle(item.description) === "Material pickup / procurement",
+  );
   check(
-    "Converted MATERIAL line uses owner quantity and unit cost as customer starting price",
+    "Converted MATERIAL line uses customer unit price, not internal unit cost",
     bagLine != null &&
       Number(bagLine.quantity.toString()) === 90 &&
-      Number(bagLine.unitPrice.toString()) === 8 &&
+      Number(bagLine.unitPrice.toString()) === 12 &&
+      Number(bagLine.unitPrice.toString()) !== 8 &&
       lineMaterialTakeoffSource(bagLine.description)?.itemId === "concrete-bags" &&
       bagLine.description.includes(MATERIAL_TAKEOFF_SOURCE_MARKER) &&
       !lineItemTitle(bagLine.description).includes("TBBT") &&
-      !bagLine.description.includes("quantityOverride"),
+      !bagLine.description.includes("quantityOverride") &&
+      !bagLine.description.includes("unitCost") &&
+      !bagLine.description.includes("customerUnitPrice"),
+  );
+  check(
+    "Pickup MATERIAL line also uses customer unit price",
+    pickupLine != null && Number(pickupLine.unitPrice.toString()) === 95,
   );
   check(
     "Converted lines do not include takeoff internals in the customer title",
@@ -470,7 +651,12 @@ try {
   check(
     "Applying the labor calculator preserves the owner takeoff snapshot",
     lineCalculatorSnapshot(applied.description)?.recommendedAmount === 1800 &&
-      lineMaterialTakeoff(applied.description)?.items.some((item) => item.quantityOverride === 90),
+      lineMaterialTakeoff(applied.description)?.items.some(
+        (item) =>
+          item.quantityOverride === 90 &&
+          item.unitCost === 8 &&
+          item.customerUnitPrice === 12,
+      ),
   );
 
   await persistDraftEstimateTotal(prisma, estimate.id, businessA.id);
@@ -494,6 +680,9 @@ try {
       !plain.includes("quantityOverride") &&
       !plain.includes("bagYieldCuFt") &&
       !plain.includes("calculatedQuantity") &&
+      !plain.includes("unitCost") &&
+      !plain.includes("customerUnitPrice") &&
+      !plain.includes("wastePercent") &&
       document.lineItems[0]?.description === DECORATIVE_WALL_PANELING_TITLE,
   );
 

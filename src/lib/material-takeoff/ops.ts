@@ -24,12 +24,13 @@ import {
   normalizeTakeoffSnapshot,
 } from "@/lib/material-takeoff/engine";
 import {
+  hasValidCustomerUnitPrice,
   isTakeoffTypeId,
   workingQuantity,
   type TakeoffSnapshot,
   type TakeoffTypeId,
 } from "@/lib/material-takeoff/types";
-import { parseNonNegativeNumber } from "@/lib/material-takeoff/units";
+import { parsePositiveNumber } from "@/lib/material-takeoff/units";
 
 type Db = PrismaClient;
 
@@ -133,6 +134,7 @@ export async function convertDraftMaterialTakeoff(
     (input.itemIds ?? snapshot.items.filter((item) => item.selected).map((item) => item.id)),
   );
   const nextItems = [...snapshot.items];
+  const missingPriceLabels: string[] = [];
   const creates: Array<{
     itemId: string;
     description: string;
@@ -154,9 +156,13 @@ export async function convertDraftMaterialTakeoff(
     }
     const quantity = workingQuantity(item);
     if (!(quantity > 0)) continue;
-    const unitCost = parseNonNegativeNumber(item.unitCost) ?? 0;
+    const customerUnitPrice = parsePositiveNumber(item.customerUnitPrice);
+    if (customerUnitPrice == null || !hasValidCustomerUnitPrice(item)) {
+      missingPriceLabels.push(item.label);
+      continue;
+    }
     const qty = new Prisma.Decimal(quantity.toFixed(4));
-    const unitPrice = new Prisma.Decimal(unitCost.toFixed(2));
+    const unitPrice = new Prisma.Decimal(customerUnitPrice.toFixed(2));
     creates.push({
       itemId: item.id,
       description: joinLineDescription(item.label, null, null, null, {
@@ -166,6 +172,10 @@ export async function convertDraftMaterialTakeoff(
       unitPrice,
       total: qty.mul(unitPrice),
     });
+  }
+
+  if (missingPriceLabels.length > 0) {
+    throw new EstimateLineError(missingCustomerPriceMessage(missingPriceLabels));
   }
 
   const nextSnapshot: TakeoffSnapshot = { ...snapshot, items: nextItems };
@@ -233,11 +243,13 @@ export function applyTakeoffFormMutations(
     customUnit?: string;
     customQuantity?: number;
     customUnitCost?: number | null;
+    customCustomerUnitPrice?: number | null;
     itemEdits?: Array<{
       id: string;
       selected?: boolean;
       quantityOverride?: number | null;
       unitCost?: number | null;
+      customerUnitPrice?: number | null;
       label?: string;
       remove?: boolean;
     }>;
@@ -262,9 +274,14 @@ export function applyTakeoffFormMutations(
       unit: form.customUnit || "ea",
       quantity: form.customQuantity ?? 1,
       unitCost: form.customUnitCost,
+      customerUnitPrice: form.customCustomerUnitPrice,
     });
   }
   return next;
+}
+
+function missingCustomerPriceMessage(labels: string[]) {
+  return `Enter a customer unit price before converting: ${labels.join(", ")}.`;
 }
 
 async function loadDraftParentLine(
