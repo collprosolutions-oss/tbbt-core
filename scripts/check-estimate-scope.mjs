@@ -825,12 +825,33 @@ try {
   );
 
   console.log("\nTEST — Catalog save blocked for materials; delete/deactivate keeps history");
+  const safetyEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const safetyLabor = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: safetyEstimate.id,
+      description: joinLineDescription(
+        "Patio slab custom quote",
+        "Form, pour, and finish.",
+      ),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(792),
+      total: new Prisma.Decimal(792),
+      type: "LABOR",
+    },
+  });
   const materialLine = await prisma.lineItem.create({
     data: {
       businessId: businessA.id,
-      estimateId: reuseEstimate.id,
+      estimateId: safetyEstimate.id,
       description: joinLineDescription("60-lb concrete bags", null, null, null, {
-        materialTakeoffSource: { parentLineItemId: reuseLine.id, itemId: "concrete-bags" },
+        materialTakeoffSource: { parentLineItemId: safetyLabor.id, itemId: "concrete-bags" },
       }),
       quantity: new Prisma.Decimal(22),
       unitPrice: new Prisma.Decimal(12),
@@ -845,7 +866,7 @@ try {
     "Takeoff-generated MATERIAL lines cannot be saved to the service catalog",
     () =>
       saveDraftEstimateLineAsCatalog(prisma, ownerA, {
-        estimateId: reuseEstimate.id,
+        estimateId: safetyEstimate.id,
         lineItemId: materialLine.id,
       }),
     (error) =>
@@ -858,12 +879,12 @@ try {
       catalogCountBeforeMaterialSave,
   );
   const laborSavedAgain = await saveDraftEstimateLineAsCatalog(prisma, ownerA, {
-    estimateId: reuseEstimate.id,
-    lineItemId: reuseLine.id,
+    estimateId: safetyEstimate.id,
+    lineItemId: safetyLabor.id,
   });
   check(
     "Real LABOR/service lines can still be saved to the catalog",
-    laborSavedAgain.name === "Decorative Wall Paneling & Finish Carpentry",
+    laborSavedAgain.name === "Patio slab custom quote",
   );
 
   const keepService = await prisma.serviceCatalogItem.create({
