@@ -21,11 +21,15 @@ const {
   buildInvoiceLineSnapshots,
   LABOR_MINIMUM_INVOICE_DESCRIPTION,
   backfillEmptyInvoiceWorkLines,
+  invoiceCustomerPricingTotal,
   persistDraftInvoiceFromCompletedJob,
   selectApprovedChangeOrdersForInvoiceBackfill,
 } = await import("@/lib/invoice-carry-forward");
 const {
   INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
+  INVOICE_LABOR_SECTION_TITLE,
+  INVOICE_TOTAL_CUSTOMER_LABEL,
+  invoiceDocumentPlainText,
   invoiceNumberFromId,
   invoicePdfFilename,
   isCustomerVisibleInvoiceStatus,
@@ -33,6 +37,7 @@ const {
   loadInvoiceDocumentForProjectToken,
   sanitizeFilenamePart,
 } = await import("@/lib/invoice-document");
+const { joinLineDescription } = await import("@/lib/estimate-line-scope");
 const { renderInvoicePdf } = await import("@/lib/invoice-pdf");
 const { getBusinessDocumentLogoSrc, getBusinessLogoSrc } = await import(
   "@/lib/business-branding"
@@ -277,6 +282,171 @@ async function createApprovedCompletedJob(input) {
   return { catalog, estimate, version, job };
 }
 
+const FOUNDER_MATERIAL_ROWS = [
+  { description: "60-lb concrete bags", quantity: 22, unitPrice: "8", total: "176" },
+  { description: "Welded wire mesh sheets", quantity: 1, unitPrice: "45", total: "45" },
+  { description: "8-ft form boards", quantity: 3, unitPrice: "12", total: "36" },
+  { description: "Form stakes / pins", quantity: 12, unitPrice: "1.5", total: "18" },
+  { description: "Anchor bolts / hardware", quantity: 10, unitPrice: "0.5", total: "5" },
+  { description: "Material pickup / procurement", quantity: 1, unitPrice: "5.18", total: "5.18" },
+  { description: "Poly Plastic", quantity: 1, unitPrice: "2", total: "2" },
+  { description: "Vegetable Oil", quantity: 1, unitPrice: "2", total: "2" },
+];
+
+const FOUNDER_TAKEOFF = {
+  version: 1,
+  takeoffType: "concrete-slab",
+  inputs: { lengthFt: 10, widthFt: 10 },
+  wastePercent: 10,
+  markupPercent: 40,
+  laborRate: 36,
+  laborAdjustment: 0,
+  measurementSource: { kind: "manual", label: "owner takeoff", unverified: false },
+  explanation: "internal $36/bag production quantity formula",
+  skippedMeasurements: [],
+  removedItemIds: [],
+  items: [
+    {
+      id: "bags",
+      kind: "material",
+      label: "60-lb bags",
+      unit: "bag",
+      optional: false,
+      selected: true,
+      calculatedQuantity: 22,
+      quantityOverride: null,
+      unitCost: 6.5,
+      customerUnitPrice: 8,
+      explanation: "waste included",
+      convertedLineItemId: null,
+    },
+  ],
+};
+
+function founderLaborDescription() {
+  return joinLineDescription(
+    "Concrete slab / approved work",
+    "Form, pour, and finish a concrete slab as specified.",
+    null,
+    null,
+    {
+      customerMaterialsTotal: { amount: 300, manual: true },
+      materialTakeoff: FOUNDER_TAKEOFF,
+    },
+  );
+}
+
+function founderSnapshotLines() {
+  return [
+    {
+      description: founderLaborDescription(),
+      quantity: 1,
+      unitPrice: 800,
+      total: 800,
+      type: "LABOR",
+    },
+    ...FOUNDER_MATERIAL_ROWS.map((row) => ({
+      description: row.description,
+      quantity: row.quantity,
+      unitPrice: row.unitPrice,
+      total: row.total,
+      type: "MATERIAL",
+    })),
+  ];
+}
+
+async function createFounderMaterialsCompletedJob(input) {
+  const laborDescription = founderLaborDescription();
+  const estimate = await prisma.estimate.create({
+    data: {
+      businessId: input.businessId,
+      customerId: input.customerId,
+      propertyId: input.propertyId,
+      status: "APPROVED",
+      total: new Prisma.Decimal("1100"),
+      laborMinimumAdjustment: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+
+  await prisma.lineItem.create({
+    data: {
+      businessId: input.businessId,
+      estimateId: estimate.id,
+      description: laborDescription,
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(800),
+      total: new Prisma.Decimal(800),
+      type: "LABOR",
+    },
+  });
+  for (const row of FOUNDER_MATERIAL_ROWS) {
+    await prisma.lineItem.create({
+      data: {
+        businessId: input.businessId,
+        estimateId: estimate.id,
+        description: row.description,
+        quantity: new Prisma.Decimal(row.quantity),
+        unitPrice: new Prisma.Decimal(row.unitPrice),
+        total: new Prisma.Decimal(row.total),
+        type: "MATERIAL",
+      },
+    });
+  }
+
+  const version = await prisma.estimateVersion.create({
+    data: {
+      businessId: input.businessId,
+      estimateId: estimate.id,
+      versionNumber: 1,
+      total: new Prisma.Decimal("1100"),
+      laborMinimumWaived: false,
+      laborMinimumAdjustment: new Prisma.Decimal(0),
+      customerName: input.customerName,
+      approvedAt: new Date(),
+      lineItems: {
+        create: [
+          {
+            businessId: input.businessId,
+            description: laborDescription,
+            quantity: new Prisma.Decimal(1),
+            unitPrice: new Prisma.Decimal(800),
+            total: new Prisma.Decimal(800),
+            type: "LABOR",
+          },
+          ...FOUNDER_MATERIAL_ROWS.map((row) => ({
+            businessId: input.businessId,
+            description: row.description,
+            quantity: new Prisma.Decimal(row.quantity),
+            unitPrice: new Prisma.Decimal(row.unitPrice),
+            total: new Prisma.Decimal(row.total),
+            type: "MATERIAL",
+          })),
+        ],
+      },
+    },
+  });
+
+  await prisma.estimate.update({
+    where: { id: estimate.id },
+    data: { approvedVersionId: version.id },
+  });
+
+  const job = await prisma.job.create({
+    data: {
+      businessId: input.businessId,
+      customerId: input.customerId,
+      propertyId: input.propertyId,
+      estimateId: estimate.id,
+      approvedEstimateVersionId: version.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+
+  return { estimate, version, job };
+}
+
 try {
   console.log("\nPURE — invoice number / filename / carry-forward helpers");
   check(
@@ -410,6 +580,29 @@ try {
       invoiceCreatedAt,
       invoiceTotal: 999,
     }) === null,
+  );
+
+  const founderSnapshots = founderSnapshotLines();
+  check(
+    "raw material selling lines still sum to $289.18",
+    founderSnapshots
+      .filter((line) => line.type === "MATERIAL")
+      .reduce((sum, line) => sum.add(new Prisma.Decimal(line.total)), new Prisma.Decimal(0))
+      .toString() === "289.18",
+  );
+  check(
+    "customer pricing total uses the $300 materials override, not $289.18",
+    invoiceCustomerPricingTotal(founderSnapshots).toString() === "1100",
+  );
+  check(
+    "backfill selector matches Invoice.total $1,100 when raw lines sum to $1,089.18",
+    selectApprovedChangeOrdersForInvoiceBackfill({
+      approvedLineItems: founderSnapshots,
+      laborMinimumAdjustment: 0,
+      approvedChangeOrders: [],
+      invoiceCreatedAt,
+      invoiceTotal: 1100,
+    })?.length === 0,
   );
 
   const otherBusiness = await prisma.business.create({
@@ -1086,6 +1279,248 @@ try {
   );
   const collproPdf = await renderInvoicePdf(collproDoc);
   check("CollPro PDF renders with the document logo present", collproPdf.subarray(0, 4).toString() === "%PDF");
+  check(
+    "invoice HTML presents Labor / Materials / Invoice Total without a raw Subtotal",
+    invoiceHtmlSrc.includes("CustomerEstimateLineSections") &&
+      invoiceHtmlSrc.includes("INVOICE_LABOR_SECTION_TITLE") &&
+      invoiceHtmlSrc.includes("INVOICE_TOTAL_CUSTOMER_LABEL") &&
+      invoiceHtmlSrc.includes("Amount Due") &&
+      !invoiceHtmlSrc.includes("Subtotal"),
+  );
+  check(
+    "invoice PDF uses the labor/materials section titles and Invoice Total",
+    invoicePdfSrc.includes("INVOICE_LABOR_SECTION_TITLE") &&
+      invoicePdfSrc.includes("INVOICE_MATERIALS_SECTION_TITLE") &&
+      invoicePdfSrc.includes("INVOICE_TOTAL_CUSTOMER_LABEL") &&
+      invoicePdfSrc.includes("Amount Due") &&
+      !invoicePdfSrc.includes('row("Subtotal"'),
+  );
+  check(
+    "labor section title still contains WORK PERFORMED for existing PDF tests",
+    INVOICE_LABOR_SECTION_TITLE.includes("WORK PERFORMED") &&
+      INVOICE_TOTAL_CUSTOMER_LABEL === "Invoice Total",
+  );
+
+  console.log("\nTEST 10 — Approved customer materials total survives estimate → job → invoice");
+  const founderMaterialsWork = await createFounderMaterialsCompletedJob({
+    businessId: otherBusiness.id,
+    customerId: otherCustomer.id,
+    propertyId: otherProperty.id,
+    customerName: otherCustomer.name,
+  });
+  const founderCreated = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: otherBusiness.id,
+    jobId: founderMaterialsWork.job.id,
+  });
+  check("founder invoice create succeeds", founderCreated.ok === true && founderCreated.reused === false);
+  check(
+    "invoice total is the approved $1,100, not raw $1,089.18",
+    founderCreated.ok && founderCreated.total.toString() === "1100",
+  );
+  const founderInvoice = await prisma.invoice.findUniqueOrThrow({
+    where: { id: founderCreated.invoiceId },
+    include: { lineItems: { orderBy: { createdAt: "asc" } } },
+  });
+  check(
+    "copied snapshot still has $800 labor + $289.18 raw material rows",
+    founderInvoice.lineItems
+      .filter((line) => line.type === "LABOR")
+      .reduce((sum, line) => sum.add(line.total), new Prisma.Decimal(0))
+      .toString() === "800" &&
+      founderInvoice.lineItems
+        .filter((line) => line.type === "MATERIAL")
+        .reduce((sum, line) => sum.add(line.total), new Prisma.Decimal(0))
+        .toString() === "289.18" &&
+      founderInvoice.lineItems.length === 9,
+  );
+
+  const founderMaterialsDoc = await loadInvoiceDocumentForBusiness(
+    founderInvoice.id,
+    otherBusiness.id,
+    prisma,
+  );
+  const founderPlain = founderMaterialsDoc
+    ? invoiceDocumentPlainText(founderMaterialsDoc)
+    : "";
+  check("founder document loads", Boolean(founderMaterialsDoc));
+  check("labor total is $800.00", founderMaterialsDoc?.laborTotalLabel === "$800.00");
+  check(
+    "materials total is the approved $300.00, not $289.18",
+    founderMaterialsDoc?.materialTotalLabel === "$300.00",
+  );
+  check("invoice total is $1,100.00", founderMaterialsDoc?.totalLabel === "$1,100.00");
+  check("payments start at $0.00", founderMaterialsDoc?.amountPaidLabel === "$0.00");
+  check("amount due is $1,100.00", founderMaterialsDoc?.amountDueLabel === "$1,100.00");
+  check(
+    "customer document does not show the raw $1,089.18 subtotal",
+    !founderPlain.includes("$1,089.18") &&
+      !JSON.stringify(founderMaterialsDoc).includes("1,089.18") &&
+      !JSON.stringify(founderMaterialsDoc).includes("1089.18"),
+  );
+  check(
+    "customer document does not show the raw $289.18 material sum",
+    !founderPlain.includes("$289.18") &&
+      !JSON.stringify(founderMaterialsDoc).includes("289.18"),
+  );
+  check(
+    "labor section keeps the customer title and Scope / Included Work",
+    founderMaterialsDoc?.laborLines.length === 1 &&
+      founderMaterialsDoc?.laborLines[0]?.description === "Concrete slab / approved work" &&
+      founderMaterialsDoc?.laborLines[0]?.includedWork?.includes(
+        "Form, pour, and finish a concrete slab as specified.",
+      ) === true &&
+      founderMaterialsDoc?.laborLines[0]?.amountLabel === "$800.00",
+  );
+  check(
+    "materials keep Description + Qty only, with no unit or extended prices",
+    founderMaterialsDoc?.materialLines.length === 8 &&
+      founderMaterialsDoc?.materialLines.every(
+        (line) =>
+          line.showLinePricing === false &&
+          line.unitPriceLabel === "" &&
+          line.amountLabel === "" &&
+          Boolean(line.quantityLabel) &&
+          Boolean(line.description),
+      ) === true &&
+      founderMaterialsDoc?.materialLines.map((line) => line.description).join("|") ===
+        FOUNDER_MATERIAL_ROWS.map((row) => row.description).join("|") &&
+      founderMaterialsDoc?.materialLines.map((line) => line.quantityLabel).join("|") ===
+        FOUNDER_MATERIAL_ROWS.map((row) => String(row.quantity)).join("|"),
+  );
+  check(
+    "owner-only takeoff / cost / markup / $36 bag internals stay off the customer invoice",
+    !founderPlain.includes("TBBT") &&
+      !founderPlain.includes("customerUnitPrice") &&
+      !founderPlain.includes("unitCost") &&
+      !founderPlain.includes("wastePercent") &&
+      !founderPlain.includes("markupPercent") &&
+      !founderPlain.includes("$36") &&
+      !founderPlain.includes("production quantity") &&
+      !JSON.stringify(founderMaterialsDoc).includes("TBBT Material") &&
+      !JSON.stringify(founderMaterialsDoc).includes("$36/bag"),
+  );
+
+  const founderMaterialsPdf = await renderInvoicePdf(founderMaterialsDoc);
+  const founderMaterialsPdfText = pdfExtractText(founderMaterialsPdf);
+  check("PDF heading includes WORK PERFORMED", founderMaterialsPdfText.includes("WORK PERFORMED"));
+  check("PDF includes MATERIALS", founderMaterialsPdfText.includes("MATERIALS"));
+  check("PDF includes Invoice Total", founderMaterialsPdfText.includes("Invoice Total"));
+  check("PDF labor amount is $800.00", founderMaterialsPdfText.includes("$800.00"));
+  check("PDF materials total is $300.00", founderMaterialsPdfText.includes("$300.00"));
+  check("PDF invoice total is $1,100.00", founderMaterialsPdfText.includes("$1,100.00"));
+  check("PDF does not show $1,089.18", !founderMaterialsPdfText.includes("$1,089.18"));
+  check("PDF does not show $289.18", !founderMaterialsPdfText.includes("$289.18"));
+  check(
+    "PDF does not show individual material unit or extended prices",
+    !founderMaterialsPdfText.includes("$176.00") &&
+      !founderMaterialsPdfText.includes("$45.00") &&
+      !founderMaterialsPdfText.includes("$8.00") &&
+      !founderMaterialsPdfText.includes("$5.18"),
+  );
+  check("PDF still lists material descriptions", founderMaterialsPdfText.includes("60-lb concrete bags"));
+  check("PDF still lists material quantities", founderMaterialsPdfText.includes("22"));
+  check("PDF keeps Scope / Included Work", founderMaterialsPdfText.includes("Scope / Included Work"));
+  check(
+    "PDF does not copy estimate Project Conditions or Terms & Conditions",
+    !founderMaterialsPdfText.includes("PROJECT CONDITIONS") &&
+      !founderMaterialsPdfText.includes("TERMS & CONDITIONS"),
+  );
+  check(
+    "HTML/PDF/plain text agree on approved customer pricing",
+    founderPlain.includes("$800.00") &&
+      founderPlain.includes("$300.00") &&
+      founderPlain.includes("$1,100.00") &&
+      founderMaterialsPdfText.includes("$800.00") &&
+      founderMaterialsPdfText.includes("$300.00") &&
+      founderMaterialsPdfText.includes("$1,100.00"),
+  );
+
+  await prisma.invoice.update({
+    where: { id: founderInvoice.id },
+    data: { status: "PAID", paidAt: new Date("2026-09-07T18:00:00.000Z") },
+  });
+  const paidFounderDoc = await loadInvoiceDocumentForBusiness(
+    founderInvoice.id,
+    otherBusiness.id,
+    prisma,
+  );
+  check("paid invoice keeps the $1,100.00 total", paidFounderDoc?.totalLabel === "$1,100.00");
+  check("payments reduce Amount Due to $0.00", paidFounderDoc?.amountDueLabel === "$0.00");
+  check("paid payments equal the invoice total", paidFounderDoc?.amountPaidLabel === "$1,100.00");
+
+  await prisma.lineItem.updateMany({
+    where: { estimateId: founderMaterialsWork.estimate.id, type: "MATERIAL" },
+    data: { unitPrice: new Prisma.Decimal(99), total: new Prisma.Decimal(999) },
+  });
+  await prisma.estimate.update({
+    where: { id: founderMaterialsWork.estimate.id },
+    data: { total: new Prisma.Decimal(9999) },
+  });
+  await prisma.estimateVersion.update({
+    where: { id: founderMaterialsWork.version.id },
+    data: { total: new Prisma.Decimal(9999) },
+  });
+  const frozenFounder = await loadInvoiceDocumentForBusiness(
+    founderInvoice.id,
+    otherBusiness.id,
+    prisma,
+  );
+  check(
+    "later estimate/catalog/material edits do not change historical invoice pricing",
+    frozenFounder?.laborTotalLabel === "$800.00" &&
+      frozenFounder?.materialTotalLabel === "$300.00" &&
+      frozenFounder?.totalLabel === "$1,100.00",
+  );
+  const frozenInvoiceRow = await prisma.invoice.findUniqueOrThrow({
+    where: { id: founderInvoice.id },
+    include: { lineItems: true },
+  });
+  check(
+    "invoice snapshot rows stay at the approved $289.18 raw material sum",
+    frozenInvoiceRow.total.toString() === "1100" &&
+      frozenInvoiceRow.lineItems
+        .filter((line) => line.type === "MATERIAL")
+        .reduce((sum, line) => sum.add(line.total), new Prisma.Decimal(0))
+        .toString() === "289.18",
+  );
+
+  const foreignFounderDoc = await loadInvoiceDocumentForBusiness(
+    founderInvoice.id,
+    collproBusiness.id,
+    prisma,
+  );
+  check("other tenant cannot load the founder materials invoice", foreignFounderDoc === null);
+
+  const emptyMaterialsJob = await createFounderMaterialsCompletedJob({
+    businessId: otherBusiness.id,
+    customerId: otherCustomer.id,
+    propertyId: otherProperty.id,
+    customerName: otherCustomer.name,
+  });
+  const emptyMaterialsInvoice = await prisma.invoice.create({
+    data: {
+      businessId: otherBusiness.id,
+      customerId: otherCustomer.id,
+      jobId: emptyMaterialsJob.job.id,
+      status: "SENT",
+      total: new Prisma.Decimal("1100"),
+    },
+  });
+  const emptyMaterialsDoc = await loadInvoiceDocumentForBusiness(
+    emptyMaterialsInvoice.id,
+    otherBusiness.id,
+    prisma,
+  );
+  const emptyMaterialsLines = await prisma.lineItem.count({
+    where: { invoiceId: emptyMaterialsInvoice.id },
+  });
+  check(
+    "empty invoice backfill reconstructs lines when Invoice.total is the $1,100 customer price",
+    emptyMaterialsLines === 9 &&
+      emptyMaterialsDoc?.laborTotalLabel === "$800.00" &&
+      emptyMaterialsDoc?.materialTotalLabel === "$300.00" &&
+      emptyMaterialsDoc?.totalLabel === "$1,100.00",
+  );
 
   console.log(
     failures === 0

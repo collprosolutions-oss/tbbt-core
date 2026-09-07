@@ -6,8 +6,9 @@
  * those fields. Commercial content comes from the Invoice row and its
  * copied LineItem snapshots (see src/lib/invoice-carry-forward.ts).
  */
-import { Prisma, type PrismaClient } from "@prisma/client";
+import { Prisma, type LineItemType, type PrismaClient } from "@prisma/client";
 import { getBusinessDocumentLogoSrc } from "@/lib/business-branding";
+import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { splitLineDescription } from "@/lib/estimate-line-scope";
 import { formatAddress, formatDate, formatMoney } from "@/lib/format";
 import {
@@ -20,6 +21,12 @@ import { publicPhone } from "@/lib/public-site";
 const ZERO = new Prisma.Decimal(0);
 
 export const INVOICE_THANK_YOU = "Thank you for your business.";
+
+/** Keeps the "WORK PERFORMED" substring used by existing invoice/PDF tests. */
+export const INVOICE_LABOR_SECTION_TITLE = "LABOR / WORK PERFORMED";
+export const INVOICE_MATERIALS_SECTION_TITLE = "MATERIALS";
+export const INVOICE_OTHER_SECTION_TITLE = "OTHER";
+export const INVOICE_TOTAL_CUSTOMER_LABEL = "Invoice Total";
 
 /** Shared invoice/PDF header logo height. Tall enough to read COLL★PRO. */
 export const INVOICE_DOCUMENT_LOGO_HEIGHT_PX = 108;
@@ -76,11 +83,13 @@ export function invoiceAmountDue(status: string, total: Prisma.Decimal): Prisma.
 }
 
 export type InvoiceDocumentLine = {
+  type: LineItemType;
   description: string;
   includedWork?: string | null;
   quantityLabel: string;
   unitPriceLabel: string;
   amountLabel: string;
+  showLinePricing: boolean;
 };
 
 export type InvoiceDocumentView = {
@@ -106,6 +115,16 @@ export type InvoiceDocumentView = {
   jobId: string | null;
   customerId: string | null;
   lineItems: InvoiceDocumentLine[];
+  laborLines: InvoiceDocumentLine[];
+  materialLines: InvoiceDocumentLine[];
+  otherLines: InvoiceDocumentLine[];
+  laborTotalLabel: string;
+  materialTotalLabel: string | null;
+  otherTotalLabel: string | null;
+  /**
+   * Always the frozen Invoice.total. Never the raw MATERIAL line sum.
+   * Customer HTML/PDF do not render a Subtotal row.
+   */
   subtotalLabel: string;
   totalLabel: string;
   amountPaidLabel: string;
@@ -137,12 +156,37 @@ const INVOICE_DOCUMENT_INCLUDE = {
       quantity: true,
       unitPrice: true,
       total: true,
+      type: true,
     },
   },
 } as const;
 
 function formatQuantity(quantity: Prisma.Decimal): string {
   return quantity.toString();
+}
+
+function toDocumentLines(
+  lineItems: Array<{
+    description: string;
+    quantity: Prisma.Decimal;
+    unitPrice: Prisma.Decimal;
+    total: Prisma.Decimal;
+    type: LineItemType;
+  }>,
+): InvoiceDocumentLine[] {
+  return lineItems.map((line) => {
+    const parts = splitLineDescription(line.description);
+    const hideLinePricing = line.type === "MATERIAL";
+    return {
+      type: line.type,
+      description: parts.title,
+      includedWork: hideLinePricing ? null : parts.includedWork,
+      quantityLabel: formatQuantity(line.quantity),
+      unitPriceLabel: hideLinePricing ? "" : formatMoney(line.unitPrice),
+      amountLabel: hideLinePricing ? "" : formatMoney(line.total),
+      showLinePricing: !hideLinePricing,
+    };
+  });
 }
 
 function toDocumentView(
@@ -170,20 +214,32 @@ function toDocumentView(
       quantity: Prisma.Decimal;
       unitPrice: Prisma.Decimal;
       total: Prisma.Decimal;
+      type: LineItemType;
     }>;
   },
 ): InvoiceDocumentView {
   const invoiceNumber = invoiceNumberFromId(invoice.id);
   const customerName = invoice.customer?.name ?? null;
-  const subtotal = invoice.lineItems.reduce(
-    (sum, line) => sum.add(line.total),
-    ZERO,
-  );
+  const laborTotal = invoice.lineItems
+    .filter((line) => line.type === "LABOR")
+    .reduce((sum, line) => sum.add(line.total), ZERO);
+  const materials = resolveCustomerMaterialsTotal(invoice.lineItems);
+  const materialTotal = materials.amount;
+  const otherTotal = invoice.lineItems
+    .filter((line) => line.type === "OTHER")
+    .reduce((sum, line) => sum.add(line.total), ZERO);
+  const lineItems = toDocumentLines(invoice.lineItems);
+  const laborLines = lineItems.filter((line) => line.type === "LABOR");
+  const materialLines = lineItems.filter((line) => line.type === "MATERIAL");
+  const otherLines = lineItems.filter((line) => line.type === "OTHER");
+  const showMaterials = materialLines.length > 0 || materialTotal.gt(0);
+  const showOther = otherLines.length > 0 || otherTotal.gt(0);
   const amountPaid = invoiceAmountPaid(invoice.status, invoice.total);
   const amountDue = invoiceAmountDue(invoice.status, invoice.total);
   const serviceAddress = invoice.job?.property
     ? formatAddress(invoice.job.property)
     : null;
+  const totalLabel = formatMoney(invoice.total);
 
   return {
     invoiceId: invoice.id,
@@ -207,18 +263,15 @@ function toDocumentView(
     jobReference: invoice.job ? jobReferenceFromId(invoice.job.id) : null,
     jobId: invoice.job?.id ?? null,
     customerId: invoice.customerId,
-    lineItems: invoice.lineItems.map((line) => {
-      const parts = splitLineDescription(line.description);
-      return {
-        description: parts.title,
-        includedWork: parts.includedWork,
-        quantityLabel: formatQuantity(line.quantity),
-        unitPriceLabel: formatMoney(line.unitPrice),
-        amountLabel: formatMoney(line.total),
-      };
-    }),
-    subtotalLabel: formatMoney(subtotal),
-    totalLabel: formatMoney(invoice.total),
+    lineItems,
+    laborLines,
+    materialLines,
+    otherLines,
+    laborTotalLabel: formatMoney(laborTotal),
+    materialTotalLabel: showMaterials ? formatMoney(materialTotal) : null,
+    otherTotalLabel: showOther ? formatMoney(otherTotal) : null,
+    subtotalLabel: totalLabel,
+    totalLabel,
     amountPaidLabel: formatMoney(amountPaid),
     amountDueLabel: formatMoney(amountDue),
     thankYou: INVOICE_THANK_YOU,
@@ -290,4 +343,57 @@ export function invoiceLineSubtotal(
     (sum, line) => sum.add(toInvoiceDecimal(line.total)),
     ZERO,
   );
+}
+
+function sectionPlainText(title: string, lines: InvoiceDocumentLine[]) {
+  if (lines.length === 0) return [];
+  const quantityOnly = lines.every((line) => !line.showLinePricing);
+  return [
+    title,
+    ...(quantityOnly ? ["Description", "Qty"] : []),
+    ...lines.flatMap((line) =>
+      line.showLinePricing
+        ? [
+            line.description,
+            line.includedWork ?? "",
+            line.quantityLabel,
+            line.unitPriceLabel,
+            line.amountLabel,
+          ]
+        : [line.description, line.quantityLabel],
+    ),
+  ];
+}
+
+export function invoiceDocumentPlainText(document: InvoiceDocumentView): string {
+  const lines = [
+    document.business.name,
+    document.business.phone ?? "",
+    "INVOICE",
+    document.invoiceNumber,
+    document.invoiceDateLabel,
+    document.statusLabel,
+    document.customer.name ?? "",
+    document.customer.email ?? "",
+    document.customer.phone ?? "",
+    document.serviceAddress ?? "",
+    ...sectionPlainText(INVOICE_LABOR_SECTION_TITLE, document.laborLines),
+    ...sectionPlainText(INVOICE_MATERIALS_SECTION_TITLE, document.materialLines),
+    ...sectionPlainText(INVOICE_OTHER_SECTION_TITLE, document.otherLines),
+    "Labor",
+    document.laborTotalLabel,
+    document.materialTotalLabel ? "Materials" : "",
+    document.materialTotalLabel ?? "",
+    document.otherTotalLabel ? "Other" : "",
+    document.otherTotalLabel ?? "",
+    INVOICE_TOTAL_CUSTOMER_LABEL,
+    document.totalLabel,
+    "Payments",
+    document.amountPaidLabel,
+    "Amount Due",
+    document.amountDueLabel,
+    document.thankYou,
+    document.jobReference ?? "",
+  ];
+  return lines.filter(Boolean).join("\n");
 }
