@@ -222,7 +222,15 @@ export function EstimatingTakeoffProvider({
         : skippedMeasurements,
       previous: draft,
     });
-    setDraft(computed.snapshot);
+    const next = applyBusinessEstimatingDefaults(
+      computed.snapshot,
+      businessDefaults ?? null,
+      { mode: "overlay" },
+    );
+    setDraft({
+      ...next,
+      laborAdjustment: draft.laborAdjustment,
+    });
     setLocalError(computed.rejected);
   }
 
@@ -240,7 +248,9 @@ export function EstimatingTakeoffProvider({
       businessDefaults.material.takeoffType === next;
     setDraft(
       defaultsMatch
-        ? applyBusinessEstimatingDefaults(computed, businessDefaults ?? null)
+        ? applyBusinessEstimatingDefaults(computed, businessDefaults ?? null, {
+            mode: "seed",
+          })
         : computed,
     );
   }
@@ -299,6 +309,7 @@ export function EstimatingTakeoffProvider({
           customerUnitPrice,
           explanation: "Owner-added takeoff item.",
           convertedLineItemId: null,
+          persistAs: "project",
         },
       ],
     }));
@@ -432,9 +443,10 @@ function SaveAsBusinessDefaultControl() {
     <div className="space-y-1 rounded-lg border border-dashed border-border/80 bg-muted/20 p-3">
       <p className="text-xs text-muted-foreground">
         Save as business default stores reusable pricing for future estimates
-        using this calculator — labor rate, bag yield, waste, markup, and
-        standard material prices. It does not save this job’s dimensions,
-        add-ons, or rounded labor/material totals.
+        using this calculator — labor rate, bag yield, waste, markup, standard
+        material prices, and owner-added materials marked “Save with this
+        calculator as business default”. It does not save this job’s
+        dimensions, labor add-ons, or rounded totals.
       </p>
       <Button
         type="submit"
@@ -805,6 +817,28 @@ export function MaterialTakeoffPanel({
                     <td className="py-2 pr-2">
                       <div>{item.label}</div>
                       <div className="text-muted-foreground">{item.explanation}</div>
+                      {item.kind === "custom" ? (
+                        <label className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <span>Reuse</span>
+                          <select
+                            className="h-7 max-w-[16rem] rounded-md border border-input bg-transparent px-1.5 text-[11px]"
+                            value={item.persistAs === "business-default" ? "business-default" : "project"}
+                            onChange={(event) =>
+                              patchItem(item.id, {
+                                persistAs:
+                                  event.target.value === "business-default"
+                                    ? "business-default"
+                                    : "project",
+                              })
+                            }
+                          >
+                            <option value="project">Project only</option>
+                            <option value="business-default">
+                              Save with this calculator as business default
+                            </option>
+                          </select>
+                        </label>
+                      ) : null}
                       {item.convertedLineItemId ? (
                         <div className="text-muted-foreground">
                           Converted — repeat will not duplicate
@@ -971,6 +1005,11 @@ export function MaterialTakeoffPanel({
         <Button type="button" variant="outline" onClick={addCustom}>
           Add takeoff item
         </Button>
+        <p className="text-xs text-muted-foreground">
+          New owner-added materials start as Project only. Mark “Save with this
+          calculator as business default” only for reusable items such as Poly
+          Plastic or Vegetable Oil, then click Save as business default.
+        </p>
       </form>
       {showReset ? (
         <div className="mt-6 border-t border-dashed border-border pt-4">

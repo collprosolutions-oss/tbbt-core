@@ -39,6 +39,8 @@ export type TakeoffMeasurementSource = {
   unverified: boolean;
 };
 
+export type TakeoffItemPersistAs = "project" | "business-default";
+
 export type TakeoffItem = {
   id: string;
   kind: string;
@@ -52,6 +54,12 @@ export type TakeoffItem = {
   customerUnitPrice: number | null;
   explanation: string;
   convertedLineItemId: string | null;
+  /**
+   * Owner-added materials only. Standard generated items always save
+   * reusable prices with the calculator. "project" is the default so a
+   * one-off add does not silently become a business default.
+   */
+  persistAs?: TakeoffItemPersistAs;
 };
 
 export type TakeoffSnapshot = {

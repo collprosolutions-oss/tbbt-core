@@ -114,6 +114,7 @@ function preserveOwnerOverrides(next: TakeoffItem, previous?: TakeoffItem): Take
     unitCost: previous.unitCost,
     customerUnitPrice: previous.customerUnitPrice,
     convertedLineItemId: previous.convertedLineItemId,
+    persistAs: previous.persistAs ?? next.persistAs,
     label: previous.kind === "custom" ? previous.label : next.label,
   };
 }
@@ -127,6 +128,7 @@ export function applyTakeoffItemEdits(
     unitCost?: number | null;
     customerUnitPrice?: number | null;
     label?: string;
+    persistAs?: "project" | "business-default";
     remove?: boolean;
   }>,
 ): TakeoffSnapshot {
@@ -153,6 +155,7 @@ export function applyTakeoffItemEdits(
             ? item.customerUnitPrice
             : edit.customerUnitPrice,
         label: edit.label?.trim() ? edit.label.trim() : item.label,
+        persistAs: edit.persistAs ?? item.persistAs,
       };
     });
   }
@@ -224,6 +227,7 @@ export function addCustomTakeoffItem(
     customerUnitPrice: parseNonNegativeNumber(input.customerUnitPrice) ?? null,
     explanation: "Owner-added takeoff item.",
     convertedLineItemId: null,
+    persistAs: "project",
   };
   return { ...snapshot, items: [...snapshot.items, item] };
 }
@@ -291,6 +295,12 @@ function normalizeTakeoffItem(raw: unknown): TakeoffItem | null {
       typeof parsed.convertedLineItemId === "string" && parsed.convertedLineItemId.trim()
         ? parsed.convertedLineItemId
         : null,
+    persistAs:
+      parsed.persistAs === "business-default"
+        ? "business-default"
+        : parsed.kind === "custom"
+          ? "project"
+          : undefined,
   };
 }
 
