@@ -101,6 +101,7 @@ import {
   partitionEstimateTerms,
 } from "@/lib/estimate-terms/compose";
 import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
+import { loadBusinessEstimatingDefaults } from "@/lib/estimating-defaults-db";
 import {
   pickIntakeMeasurementForLine,
   suggestTakeoffInputs,
@@ -366,8 +367,20 @@ export default async function EstimateBuilderPage({
         ? takeoffSnapshot.skippedMeasurements
         : takeoffSuggestion.skippedMeasurements,
       workspaceTitle: lineWorkspace?.title ?? draftWorkspace?.title ?? null,
+      workspaceId: lineWorkspace?.id ?? draftWorkspace?.id ?? null,
     };
   })();
+
+  const businessEstimatingWorkspaceId =
+    originalTakeoffWorkspace?.workspaceId ?? draftWorkspace?.id ?? null;
+  const businessDefaults =
+    isDraft && businessEstimatingWorkspaceId
+      ? await loadBusinessEstimatingDefaults(
+          prisma,
+          access.businessId,
+          businessEstimatingWorkspaceId,
+        )
+      : null;
 
   const laborSection = (
     <Card>
@@ -421,6 +434,8 @@ export default async function EstimateBuilderPage({
                   }).measurementSource
                 }
                 workspaceTitle={draftWorkspace.title}
+                workspaceId={draftWorkspace.id}
+                businessDefaults={businessDefaults}
               />
             ) : null}
           </div>
@@ -704,6 +719,8 @@ export default async function EstimateBuilderPage({
           measurementSource={originalTakeoffWorkspace.measurementSource}
           skippedMeasurements={originalTakeoffWorkspace.skippedMeasurements}
           workspaceTitle={originalTakeoffWorkspace.workspaceTitle}
+          workspaceId={originalTakeoffWorkspace.workspaceId}
+          businessDefaults={businessDefaults}
         >
           {laborSection}
           {materialsSection}

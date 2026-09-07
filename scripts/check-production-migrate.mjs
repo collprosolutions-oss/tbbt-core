@@ -40,6 +40,21 @@ check(
     migration.includes("WHERE name = 'Blind / Shade Installation'"),
 );
 
+const estimatingDefaultsMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260907220000_add_business_estimating_defaults/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Business estimating defaults migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(estimatingDefaultsMigration) &&
+    estimatingDefaultsMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessEstimatingDefault"') &&
+    estimatingDefaultsMigration.includes('"workspaceId"') &&
+    estimatingDefaultsMigration.includes('"payload"'),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

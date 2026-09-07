@@ -186,6 +186,7 @@ model Business {
   paymentAccount           BusinessPaymentAccount?
   storageAccount           BusinessStorageAccount?
   storedAssets             StoredAsset[]
+  estimatingDefaults       BusinessEstimatingDefault[]
 }
 
 model Membership {
@@ -1413,6 +1414,28 @@ model PipelineOpportunity {
   @@index([businessId])
   @@index([businessId, ownerStage])
   @@index([businessId, followUpOn])
+}
+
+/// Reusable owner-configured estimating defaults for a registered
+/// workspace (concrete-slab, decorative-wall-paneling, framed-wall, ...).
+/// This is business pricing infrastructure — not a catalog row, not a
+/// prior estimate, and not a project takeoff encoding. Catalog deletion,
+/// draft reset, and finishing a job must not remove these values.
+/// Payload JSON holds labor rates, waste/markup, bag yield, and reusable
+/// material unit costs / customer unit prices. Project measurements,
+/// rounded job totals, and SENT/APPROVED snapshots never live here.
+model BusinessEstimatingDefault {
+  id          String   @id @default(cuid())
+  businessId  String
+  workspaceId String
+  payload     String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, workspaceId])
+  @@index([businessId])
 }
 
 /// Typed, business-scoped lightweight settings that are not already

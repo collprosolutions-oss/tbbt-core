@@ -41,7 +41,13 @@ import {
   resetDraftTakeoffAndGeneratedMaterials,
   restoreDraftOriginalRequestPricing,
   saveDraftMaterialTakeoff,
+  seedDraftTakeoffFromBusinessDefaults,
 } from "@/lib/material-takeoff";
+import {
+  loadBusinessEstimatingDefaults,
+  saveBusinessEstimatingDefaultsFromTakeoff,
+} from "@/lib/estimating-defaults-db";
+import { resolveDraftEstimatingWorkspace } from "@/lib/estimate-calculators/estimating-registry";
 import { parseWorkAreaIntake } from "@/lib/work-area-intake";
 import { stampDraftEstimateTerms } from "@/lib/estimate-terms/stamp";
 import { normalizeCustomerPolicies } from "@/lib/estimate-policies";
@@ -225,6 +231,22 @@ export async function createEstimate(serviceRequestId: string) {
       : request.serviceCatalogItem
         ? [{ quantity: 1, serviceCatalogItem: request.serviceCatalogItem }]
         : [];
+  const workspaceTitle =
+    sourceItems[0]?.serviceCatalogItem?.name ??
+    (sourceItems[0] && "customDescription" in sourceItems[0]
+      ? sourceItems[0].customDescription
+      : null) ??
+    request.summary ??
+    "";
+  const workspace = resolveDraftEstimatingWorkspace({
+    title: workspaceTitle,
+    customQuote: true,
+  });
+  const businessDefaults = await loadBusinessEstimatingDefaults(
+    prisma,
+    access.businessId,
+    workspace.id,
+  );
 
   const estimate = await prisma.$transaction(async (tx) => {
     const raced = await tx.estimate.findFirst({
@@ -256,6 +278,7 @@ export async function createEstimate(serviceRequestId: string) {
       items: sourceItems,
       workAreaIntake: parseWorkAreaIntake(request.description),
       measurements: request.measurements.map((row) => toStoredIntakeMeasurement(row)),
+      businessDefaults,
     });
     await persistDraftEstimateTotal(tx, created.id, access.businessId);
 
@@ -269,6 +292,10 @@ export async function createEstimate(serviceRequestId: string) {
     }
 
     return created;
+  });
+
+  await seedDraftTakeoffFromBusinessDefaults(prisma, access, {
+    estimateId: estimate.id,
   });
 
   revalidatePath("/requests");
@@ -641,6 +668,37 @@ export async function applyEstimateCalculator(
   } catch (error) {
     return {
       error: estimateLineErrorMessage(error, "Could not apply that recommended price."),
+    };
+  }
+}
+
+export async function saveEstimateBusinessEstimatingDefaults(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const snapshot = parseTakeoffFormSnapshot(readString(formData, "takeoffJson"));
+    if (!snapshot) {
+      return { error: "Calculate or enter reusable pricing before saving a business default." };
+    }
+    const access = await requireBusinessAccess();
+    await saveBusinessEstimatingDefaultsFromTakeoff(prisma, access, {
+      workspaceId: readString(formData, "workspaceId"),
+      snapshot,
+      title: readString(formData, "workspaceTitle"),
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return {
+      message:
+        "Saved as business default. Future estimates using this calculator will preload these reusable prices — not this job’s rounded totals.",
+    };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(
+        error,
+        "Could not save those values as a business default.",
+      ),
     };
   }
 }

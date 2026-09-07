@@ -51,6 +51,7 @@
     "test:work-area-intake": "node --experimental-strip-types scripts/check-work-area-intake.mjs",
     "test:intake-quote-handoff": "node --experimental-strip-types scripts/check-intake-quote-handoff.mjs",
     "test:material-takeoff": "node --experimental-strip-types scripts/check-material-takeoff.mjs",
+    "test:estimating-business-defaults": "node --experimental-strip-types scripts/check-estimating-business-defaults.mjs",
     "test:public-site-images": "node --experimental-strip-types scripts/check-public-site-images.mjs",
     "test:business-storage": "node --experimental-strip-types scripts/check-business-storage.mjs",
     "test:r2-cors": "node --experimental-strip-types scripts/check-r2-browser-upload-cors.mjs",

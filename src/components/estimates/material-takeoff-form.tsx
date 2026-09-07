@@ -14,9 +14,17 @@ import {
 import {
   applyEstimateTakeoffRecommendedLabor,
   convertEstimateMaterialTakeoff,
+  saveEstimateBusinessEstimatingDefaults,
   saveEstimateMaterialTakeoff,
   type EstimateActionState,
 } from "@/app/actions/estimate";
+import {
+  applyBusinessEstimatingDefaults,
+  BUSINESS_DEFAULT_SOURCE_LABEL,
+  businessDefaultFieldSources,
+  startingTakeoffDraftWithDefaults,
+  type BusinessEstimatingDefaultPayload,
+} from "@/lib/estimating-defaults";
 import { ResetTakeoffAndGeneratedMaterialsForm } from "@/components/estimates/draft-estimate-recovery-forms";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -66,12 +74,15 @@ type TakeoffFormProps = {
   measurementSource?: TakeoffMeasurementSource | null;
   skippedMeasurements?: string[];
   workspaceTitle?: string | null;
+  workspaceId?: string | null;
+  businessDefaults?: BusinessEstimatingDefaultPayload | null;
 };
 
 type EstimatingTakeoffContextValue = {
   estimateId: string;
   lineItemId?: string;
   workspaceTitle?: string | null;
+  workspaceId?: string | null;
   fieldId: string;
   takeoffType: TakeoffTypeId;
   changeType: (next: TakeoffTypeId) => void;
@@ -91,6 +102,11 @@ type EstimatingTakeoffContextValue = {
   saveAction: (payload: FormData) => void;
   convertAction: (payload: FormData) => void;
   laborAction: (payload: FormData) => void;
+  defaultsAction: (payload: FormData) => void;
+  defaultsPending: boolean;
+  defaultsError: string | null | undefined;
+  defaultsStatus: string | null | undefined;
+  defaultSources: ReturnType<typeof businessDefaultFieldSources>;
   laborError: string | null | undefined;
   laborStatus: string | null | undefined;
   materialError: string | null | undefined;
@@ -135,6 +151,8 @@ export function EstimatingTakeoffProvider({
   measurementSource,
   skippedMeasurements,
   workspaceTitle,
+  workspaceId,
+  businessDefaults,
 }: TakeoffFormProps & { children: ReactNode }) {
   const [saveState, saveAction, savePending] = useActionState(
     saveEstimateMaterialTakeoff,
@@ -148,16 +166,21 @@ export function EstimatingTakeoffProvider({
     applyEstimateTakeoffRecommendedLabor,
     initialState,
   );
+  const [defaultsState, defaultsAction, defaultsPending] = useActionState(
+    saveEstimateBusinessEstimatingDefaults,
+    initialState,
+  );
   const startingType = snapshot?.takeoffType ?? suggestedType ?? "generic-custom";
   const [takeoffType, setTakeoffType] = useState<TakeoffTypeId>(startingType);
-  const [draft, setDraft] = useState<TakeoffSnapshot>(
-    snapshot ??
-      computeTakeoff({
-        takeoffType: startingType,
-        inputs: suggestedInputs,
-        measurementSource,
-        skippedMeasurements,
-      }).snapshot,
+  const [draft, setDraft] = useState<TakeoffSnapshot>(() =>
+    startingTakeoffDraftWithDefaults({
+      snapshot,
+      takeoffType: startingType,
+      suggestedInputs,
+      measurementSource,
+      skippedMeasurements,
+      businessDefaults,
+    }),
   );
   const [localError, setLocalError] = useState<string | null>(null);
   const [markupStatus, setMarkupStatus] = useState<string | null>(null);
@@ -179,7 +202,11 @@ export function EstimatingTakeoffProvider({
     () => recommendTakeoffLabor(draft),
     [draft],
   );
-  const pending = savePending || convertPending || laborPending;
+  const defaultSources = useMemo(
+    () => businessDefaultFieldSources(draft, businessDefaults ?? null),
+    [businessDefaults, draft],
+  );
+  const pending = savePending || convertPending || laborPending || defaultsPending;
   const fieldId = lineItemId || "workspace";
   const showConcreteLabor = takeoffType === "concrete-slab";
   const showGenericLabor = takeoffType === "generic-custom";
@@ -201,14 +228,20 @@ export function EstimatingTakeoffProvider({
 
   function changeType(next: TakeoffTypeId) {
     setTakeoffType(next);
+    const computed = computeTakeoff({
+      takeoffType: next,
+      inputs: suggestedInputs,
+      measurementSource,
+      skippedMeasurements,
+      previous: draft.takeoffType === next ? draft : null,
+    }).snapshot;
+    const defaultsMatch =
+      !businessDefaults?.material.takeoffType ||
+      businessDefaults.material.takeoffType === next;
     setDraft(
-      computeTakeoff({
-        takeoffType: next,
-        inputs: suggestedInputs,
-        measurementSource,
-        skippedMeasurements,
-        previous: draft.takeoffType === next ? draft : null,
-      }).snapshot,
+      defaultsMatch
+        ? applyBusinessEstimatingDefaults(computed, businessDefaults ?? null)
+        : computed,
     );
   }
 
@@ -308,6 +341,7 @@ export function EstimatingTakeoffProvider({
     estimateId,
     lineItemId,
     workspaceTitle,
+    workspaceId,
     fieldId,
     takeoffType,
     changeType,
@@ -327,6 +361,11 @@ export function EstimatingTakeoffProvider({
     saveAction,
     convertAction,
     laborAction,
+    defaultsAction,
+    defaultsPending,
+    defaultsError: defaultsState.error,
+    defaultsStatus: defaultsState.message,
+    defaultSources,
     laborError: laborState.error,
     laborStatus: laborState.message,
     materialError: localError || convertState.error || saveState.error,
@@ -357,7 +396,8 @@ export function EstimatingTakeoffProvider({
 }
 
 function TakeoffHiddenFields() {
-  const { estimateId, lineItemId, takeoffType, takeoffJson } = useEstimatingTakeoff();
+  const { estimateId, lineItemId, takeoffType, takeoffJson, workspaceTitle, workspaceId } =
+    useEstimatingTakeoff();
   return (
     <>
       <input type="hidden" name="estimateId" value={estimateId} />
@@ -366,7 +406,53 @@ function TakeoffHiddenFields() {
       ) : null}
       <input type="hidden" name="takeoffType" value={takeoffType} />
       <input type="hidden" name="takeoffJson" value={takeoffJson} />
+      {workspaceTitle ? (
+        <input type="hidden" name="workspaceTitle" value={workspaceTitle} />
+      ) : null}
+      {workspaceId ? (
+        <input type="hidden" name="workspaceId" value={workspaceId} />
+      ) : null}
     </>
+  );
+}
+
+function BusinessDefaultBadge({ show }: { show: boolean }) {
+  if (!show) return null;
+  return (
+    <span className="ml-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      {BUSINESS_DEFAULT_SOURCE_LABEL}
+    </span>
+  );
+}
+
+function SaveAsBusinessDefaultControl() {
+  const { pending, defaultsAction, defaultsPending, defaultsError, defaultsStatus } =
+    useEstimatingTakeoff();
+  return (
+    <div className="space-y-1 rounded-lg border border-dashed border-border/80 bg-muted/20 p-3">
+      <p className="text-xs text-muted-foreground">
+        Save as business default stores reusable pricing for future estimates
+        using this calculator — labor rate, bag yield, waste, markup, and
+        standard material prices. It does not save this job’s dimensions,
+        add-ons, or rounded labor/material totals.
+      </p>
+      <Button
+        type="submit"
+        formAction={defaultsAction}
+        variant="outline"
+        disabled={pending}
+      >
+        {defaultsPending ? "Saving default…" : "Save as business default"}
+      </Button>
+      {defaultsError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{defaultsError}</AlertDescription>
+        </Alert>
+      ) : null}
+      {defaultsStatus ? (
+        <p className="text-xs text-muted-foreground">{defaultsStatus}</p>
+      ) : null}
+    </div>
   );
 }
 
@@ -385,6 +471,7 @@ export function LaborTakeoffPanel() {
     laborRecommendation,
     showConcreteLabor,
     showGenericLabor,
+    defaultSources,
   } = useEstimatingTakeoff();
 
   return (
@@ -409,6 +496,7 @@ export function LaborTakeoffPanel() {
               laborRecommendation.rateLabel || "Labor production rate / 60-lb bag"
             }
             value={laborRecommendation.rate}
+            fromBusinessDefault={defaultSources.laborRate}
             onChange={(value) =>
               setDraft((current) => ({
                 ...current,
@@ -446,6 +534,7 @@ export function LaborTakeoffPanel() {
             id={`labor-rate-${fieldId}`}
             label={laborRecommendation.rateLabel || "Labor rate"}
             value={draft.laborRate}
+            fromBusinessDefault={defaultSources.laborRate}
             onChange={(value) =>
               setDraft((current) => ({
                 ...current,
@@ -547,6 +636,7 @@ export function LaborTakeoffPanel() {
       {laborStatus ? (
         <p className="text-xs text-muted-foreground">{laborStatus}</p>
       ) : null}
+      <SaveAsBusinessDefaultControl />
     </form>
   );
 }
@@ -580,6 +670,7 @@ export function MaterialTakeoffPanel({
     markupStatus,
     internalTotal,
     customerTotal,
+    defaultSources,
     customLabel,
     setCustomLabel,
     customUnit,
@@ -634,7 +725,11 @@ export function MaterialTakeoffPanel({
         </div>
 
         {takeoffType === "concrete-slab" ? (
-          <ConcreteInputs draft={draft} setInput={setInput} />
+          <ConcreteInputs
+            draft={draft}
+            setInput={setInput}
+            defaultSources={defaultSources}
+          />
         ) : null}
         {takeoffType === "sheet-covering" ? (
           <SheetInputs draft={draft} setInput={setInput} />
@@ -647,6 +742,7 @@ export function MaterialTakeoffPanel({
           id={`waste-${fieldId}`}
           label="Waste %"
           value={draft.wastePercent}
+          fromBusinessDefault={defaultSources.wastePercent}
           onChange={(value) =>
             setDraft((current) => ({
               ...current,
@@ -670,6 +766,7 @@ export function MaterialTakeoffPanel({
             {convertPending ? "Converting…" : "Convert selected to MATERIAL lines"}
           </Button>
         </div>
+        <SaveAsBusinessDefaultControl />
 
         {materialError ? (
           <Alert variant="destructive">
@@ -757,6 +854,7 @@ export function MaterialTakeoffPanel({
                 id={`markup-${fieldId}`}
                 label="Material Markup %"
                 value={draft.markupPercent}
+                fromBusinessDefault={defaultSources.markupPercent}
                 onChange={(value) =>
                   setDraft((current) => ({
                     ...current,
@@ -803,6 +901,7 @@ export function MaterialTakeoffPanel({
                             value={item.unitCost}
                             placeholder="Internal cost"
                             nullable
+                            fromBusinessDefault={defaultSources.itemIds.includes(item.id)}
                             onChange={(value) =>
                               patchItem(item.id, { unitCost: value })
                             }
@@ -816,6 +915,7 @@ export function MaterialTakeoffPanel({
                             value={item.customerUnitPrice}
                             placeholder="Selling price"
                             nullable
+                            fromBusinessDefault={defaultSources.itemIds.includes(item.id)}
                             onChange={(value) =>
                               patchItem(item.id, { customerUnitPrice: value })
                             }
@@ -935,9 +1035,11 @@ function GenericCustomInputs({
 function ConcreteInputs({
   draft,
   setInput,
+  defaultSources,
 }: {
   draft: TakeoffSnapshot;
   setInput: (key: string | Record<string, unknown>, value?: unknown) => void;
+  defaultSources: ReturnType<typeof businessDefaultFieldSources>;
 }) {
   const inputs = emptyConcreteSlabInputs(draft.inputs);
   return (
@@ -983,6 +1085,7 @@ function ConcreteInputs({
         label="Bag yield (cu ft)"
         value={inputs.bagYieldCuFt}
         emptyZero
+        fromBusinessDefault={defaultSources.reusableInputKeys.includes("bagYieldCuFt")}
         onChange={(v) => setInput("bagYieldCuFt", v ?? 0)}
       />
       <label className="flex items-center gap-2 text-sm">
@@ -1233,6 +1336,7 @@ function TakeoffDecimalField({
   integer = false,
   nullable = false,
   emptyZero = false,
+  fromBusinessDefault = false,
 }: {
   id?: string;
   label?: string;
@@ -1243,6 +1347,7 @@ function TakeoffDecimalField({
   integer?: boolean;
   nullable?: boolean;
   emptyZero?: boolean;
+  fromBusinessDefault?: boolean;
 }) {
   const [text, setText] = useState(() => formatTakeoffNumericDraft(value, emptyZero));
 
@@ -1286,11 +1391,23 @@ function TakeoffDecimalField({
     />
   );
 
-  if (!label) return input;
+  if (!label) {
+    return (
+      <div className="space-y-1">
+        {input}
+        {fromBusinessDefault ? (
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            {BUSINESS_DEFAULT_SOURCE_LABEL}
+          </p>
+        ) : null}
+      </div>
+    );
+  }
   return (
     <div className="space-y-2">
       <Label htmlFor={id} className="text-xs text-muted-foreground">
         {label}
+        <BusinessDefaultBadge show={fromBusinessDefault} />
       </Label>
       {input}
     </div>
