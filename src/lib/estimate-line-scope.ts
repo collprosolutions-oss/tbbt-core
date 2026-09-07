@@ -1,10 +1,12 @@
 /**
- * Scope / Included Work and internal calculator snapshots on estimate lines.
+ * Scope / Included Work, calculator snapshots, and owner-only material
+ * takeoff on estimate lines.
  *
  * Preview shares the Production database and does not run migrations, so
- * neither scope nor calculator data can live in a new Prisma column.
- * Both are encoded in the existing LineItem / EstimateVersionLineItem
- * `description` after stable markers. Totals never read them.
+ * none of this can live in a new Prisma column. All of it is encoded in
+ * the existing LineItem / EstimateVersionLineItem `description` after
+ * stable markers. Totals never read them. Customer surfaces use
+ * lineItemTitle() / included work only.
  */
 import {
   CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
@@ -15,12 +17,27 @@ import {
 } from "@/lib/estimate-calculators/types";
 import { normalizeVariableScopeComponents } from "@/lib/estimate-calculators/variable-scope";
 import { normalizeCustomerPolicies } from "@/lib/estimate-policies";
+import { normalizeTakeoffSnapshot } from "@/lib/material-takeoff/engine";
+import type {
+  TakeoffSnapshot,
+  TakeoffSourceRef,
+} from "@/lib/material-takeoff/types";
 
 export const MAX_INCLUDED_WORK_LENGTH = 8000;
 export const INCLUDED_WORK_MARKER = "\n\nScope / Included Work:\n";
 export const CALCULATOR_SNAPSHOT_MARKER = "\n\nTBBT Calculator Snapshot:\n";
 export const CALCULATOR_DEFINITION_MARKER = "\n\nTBBT Calculator Definition:\n";
 export const CUSTOMER_POLICY_MARKER = "\n\nTBBT Customer Policy:\n";
+export const MATERIAL_TAKEOFF_MARKER = "\n\nTBBT Material Takeoff:\n";
+export const MATERIAL_TAKEOFF_SOURCE_MARKER = "\n\nTBBT Material Takeoff Source:\n";
+
+const LINE_INTERNAL_MARKERS = [
+  INCLUDED_WORK_MARKER,
+  CUSTOMER_POLICY_MARKER,
+  CALCULATOR_SNAPSHOT_MARKER,
+  MATERIAL_TAKEOFF_MARKER,
+  MATERIAL_TAKEOFF_SOURCE_MARKER,
+] as const;
 
 export function normalizeIncludedWork(
   raw: string | null | undefined,
@@ -42,41 +59,32 @@ export function splitLineDescription(description: string | null | undefined): {
   includedWork: string | null;
   calculatorSnapshot: CalculatorSnapshot | null;
   customerPolicies: CalculatorCustomerPolicy[];
+  materialTakeoff: TakeoffSnapshot | null;
+  materialTakeoffSource: TakeoffSourceRef | null;
 } {
   const raw = description ?? "";
-  const snapshotIndex = raw.indexOf(CALCULATOR_SNAPSHOT_MARKER);
-  const withoutSnapshot = snapshotIndex === -1 ? raw : raw.slice(0, snapshotIndex);
-  const calculatorSnapshot =
-    snapshotIndex === -1
-      ? null
-      : parseCalculatorSnapshot(
-          raw.slice(snapshotIndex + CALCULATOR_SNAPSHOT_MARKER.length),
-        );
-  const policyIndex = withoutSnapshot.indexOf(CUSTOMER_POLICY_MARKER);
-  const withoutPolicy =
-    policyIndex === -1 ? withoutSnapshot : withoutSnapshot.slice(0, policyIndex);
-  const customerPolicies =
-    policyIndex === -1
-      ? []
-      : parseCustomerPolicies(
-          withoutSnapshot.slice(policyIndex + CUSTOMER_POLICY_MARKER.length),
-        );
-  const index = withoutPolicy.indexOf(INCLUDED_WORK_MARKER);
-  if (index === -1) {
-    return {
-      title: withoutPolicy,
-      includedWork: null,
-      calculatorSnapshot,
-      customerPolicies,
-    };
-  }
+  const calculatorSnapshot = parseCalculatorSnapshot(
+    payloadAfterMarker(raw, CALCULATOR_SNAPSHOT_MARKER) ?? "",
+  );
+  const customerPolicies = parseCustomerPolicies(
+    payloadAfterMarker(raw, CUSTOMER_POLICY_MARKER) ?? "",
+  );
+  const materialTakeoff = normalizeTakeoffSnapshot(
+    parseJsonObject(payloadAfterMarker(raw, MATERIAL_TAKEOFF_MARKER) ?? ""),
+  );
+  const materialTakeoffSource = parseTakeoffSourceRef(
+    payloadAfterMarker(raw, MATERIAL_TAKEOFF_SOURCE_MARKER),
+  );
+  const prefix = sliceBeforeFirstMarker(raw);
   return {
-    title: withoutPolicy.slice(0, index),
+    title: prefix,
     includedWork: normalizeIncludedWork(
-      withoutPolicy.slice(index + INCLUDED_WORK_MARKER.length),
+      payloadAfterMarker(raw, INCLUDED_WORK_MARKER),
     ),
     calculatorSnapshot,
     customerPolicies,
+    materialTakeoff,
+    materialTakeoffSource,
   };
 }
 
@@ -102,17 +110,39 @@ export function lineCustomerPolicies(
   return splitLineDescription(description).customerPolicies;
 }
 
+export function lineMaterialTakeoff(
+  description: string | null | undefined,
+): TakeoffSnapshot | null {
+  return splitLineDescription(description).materialTakeoff;
+}
+
+export function lineMaterialTakeoffSource(
+  description: string | null | undefined,
+): TakeoffSourceRef | null {
+  return splitLineDescription(description).materialTakeoffSource;
+}
+
 export function joinLineDescription(
   title: string,
   includedWork?: string | null,
   calculatorSnapshot?: CalculatorSnapshot | null,
   customerPolicies?: CalculatorCustomerPolicy[] | null,
+  extras?: {
+    materialTakeoff?: TakeoffSnapshot | null;
+    materialTakeoffSource?: TakeoffSourceRef | null;
+  },
 ): string {
   const cleanTitle = splitLineDescription(title).title;
   const scope = normalizeIncludedWork(includedWork);
   const policies = normalizeCustomerPolicies(customerPolicies);
   const snapshot = calculatorSnapshot
     ? serializeCalculatorSnapshot(calculatorSnapshot)
+    : null;
+  const takeoff = extras?.materialTakeoff
+    ? JSON.stringify(extras.materialTakeoff)
+    : null;
+  const takeoffSource = extras?.materialTakeoffSource
+    ? JSON.stringify(extras.materialTakeoffSource)
     : null;
   let next = cleanTitle;
   if (scope) {
@@ -123,6 +153,12 @@ export function joinLineDescription(
   }
   if (snapshot) {
     next = `${next}${CALCULATOR_SNAPSHOT_MARKER}${snapshot}`;
+  }
+  if (takeoff) {
+    next = `${next}${MATERIAL_TAKEOFF_MARKER}${takeoff}`;
+  }
+  if (takeoffSource) {
+    next = `${next}${MATERIAL_TAKEOFF_SOURCE_MARKER}${takeoffSource}`;
   }
   return next;
 }
@@ -180,20 +216,51 @@ export function joinCatalogDescription(
 }
 
 export function stripCalculatorEncoding(raw: string) {
-  const snapshotIndex = raw.indexOf(CALCULATOR_SNAPSHOT_MARKER);
-  const withoutSnapshot = snapshotIndex === -1 ? raw : raw.slice(0, snapshotIndex);
-  const definitionIndex = withoutSnapshot.indexOf(CALCULATOR_DEFINITION_MARKER);
-  const withoutDefinition =
-    definitionIndex === -1
-      ? withoutSnapshot
-      : withoutSnapshot.slice(0, definitionIndex);
-  const policyIndex = withoutDefinition.indexOf(CUSTOMER_POLICY_MARKER);
-  return policyIndex === -1
-    ? withoutDefinition
-    : withoutDefinition.slice(0, policyIndex);
+  let next = raw;
+  for (const marker of [
+    ...LINE_INTERNAL_MARKERS,
+    CALCULATOR_DEFINITION_MARKER,
+  ]) {
+    const index = next.indexOf(marker);
+    if (index !== -1) next = next.slice(0, index);
+  }
+  return next;
+}
+
+function sliceBeforeFirstMarker(raw: string) {
+  let earliest = raw.length;
+  for (const marker of LINE_INTERNAL_MARKERS) {
+    const index = raw.indexOf(marker);
+    if (index !== -1 && index < earliest) earliest = index;
+  }
+  return raw.slice(0, earliest);
+}
+
+function payloadAfterMarker(raw: string, marker: string): string | null {
+  const start = raw.indexOf(marker);
+  if (start === -1) return null;
+  const after = raw.slice(start + marker.length);
+  let end = after.length;
+  for (const other of LINE_INTERNAL_MARKERS) {
+    if (other === marker) continue;
+    const index = after.indexOf(other);
+    if (index !== -1 && index < end) end = index;
+  }
+  return after.slice(0, end);
+}
+
+function parseTakeoffSourceRef(raw: string | null): TakeoffSourceRef | null {
+  const parsed = parseJsonObject(raw ?? "");
+  if (!parsed) return null;
+  const parentLineItemId =
+    typeof parsed.parentLineItemId === "string" ? parsed.parentLineItemId.trim() : "";
+  const itemId = typeof parsed.itemId === "string" ? parsed.itemId.trim() : "";
+  if (!parentLineItemId || !itemId) return null;
+  return { parentLineItemId, itemId };
 }
 
 function parseCalculatorSnapshot(raw: string): CalculatorSnapshot | null {
+  if (!raw.trim()) return null;
   const parsed = parseJsonObject(raw);
   if (!parsed || !isCalculatorId(parsed.calculatorId)) {
     return null;
@@ -284,6 +351,7 @@ function calculatorComponentsField(
 }
 
 function parseCustomerPolicies(raw: string): CalculatorCustomerPolicy[] {
+  if (!raw.trim()) return [];
   try {
     return normalizeCustomerPolicies(JSON.parse(raw.trim()));
   } catch {

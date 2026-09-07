@@ -23,6 +23,13 @@ import {
   updateDraftEstimateLineIncludedWork,
 } from "@/lib/estimate-line-ops";
 import { joinLineDescription } from "@/lib/estimate-line-scope";
+import {
+  convertDraftMaterialTakeoff,
+  isTakeoffTypeId,
+  parseTakeoffFormSnapshot,
+  recalculateDraftMaterialTakeoff,
+  saveDraftMaterialTakeoff,
+} from "@/lib/material-takeoff";
 import { parseWorkAreaIntake } from "@/lib/work-area-intake";
 import { toStoredIntakeMeasurement } from "@/lib/intake-quote-handoff";
 import {
@@ -627,6 +634,95 @@ export async function persistEstimateCalculatorRates(
   } catch (error) {
     return {
       error: estimateLineErrorMessage(error, "Could not save those calculator rates."),
+    };
+  }
+}
+
+export async function saveEstimateMaterialTakeoff(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const snapshot = parseTakeoffFormSnapshot(readString(formData, "takeoffJson"));
+    if (!snapshot) {
+      return { error: "Calculate or enter a material takeoff before saving." };
+    }
+    const access = await requireBusinessAccess();
+    await saveDraftMaterialTakeoff(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      snapshot,
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: "Material takeoff saved." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not save that material takeoff."),
+    };
+  }
+}
+
+export async function recalculateEstimateMaterialTakeoff(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const takeoffType = readString(formData, "takeoffType");
+    if (!isTakeoffTypeId(takeoffType)) {
+      return { error: "Choose a material takeoff type." };
+    }
+    const snapshot = parseTakeoffFormSnapshot(readString(formData, "takeoffJson"));
+    const access = await requireBusinessAccess();
+    await recalculateDraftMaterialTakeoff(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      takeoffType,
+      inputs: snapshot?.inputs,
+      wastePercent: snapshot?.wastePercent,
+      measurementSource: snapshot?.measurementSource,
+      skippedMeasurements: snapshot?.skippedMeasurements,
+      snapshotEdits: snapshot,
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: "Material takeoff recalculated. Owner quantity and unit-cost edits were kept." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not calculate that material takeoff."),
+    };
+  }
+}
+
+export async function convertEstimateMaterialTakeoff(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const snapshot = parseTakeoffFormSnapshot(readString(formData, "takeoffJson"));
+    const access = await requireBusinessAccess();
+    const result = await convertDraftMaterialTakeoff(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      snapshot,
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    if (result.created === 0) {
+      return {
+        message:
+          "No new MATERIAL lines were added. Selected items were already converted or had a quantity of 0.",
+      };
+    }
+    return {
+      message: `Added ${result.created} MATERIAL line${result.created === 1 ? "" : "s"} from takeoff. Repeat convert will not duplicate them.`,
+    };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(
+        error,
+        "Could not convert that material takeoff into MATERIAL lines.",
+      ),
     };
   }
 }

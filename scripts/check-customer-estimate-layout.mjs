@@ -102,9 +102,11 @@ check(
   !page.includes("VariableScopeCalculatorForm") &&
     !page.includes("VariableScopeDefinitionForm") &&
     !page.includes("CalculatorBreakdown") &&
+    !page.includes("MaterialTakeoffForm") &&
     !page.includes("panelRate") &&
     !page.includes("contentsHandlingLightRate") &&
     !page.includes("TBBT Work Area Intake") &&
+    !page.includes("TBBT Material Takeoff") &&
     !header.includes("panelRate"),
 );
 check(

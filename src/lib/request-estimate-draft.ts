@@ -121,6 +121,10 @@ export function pricedCustomQuoteDescription(description: string) {
     parts.includedWork,
     parts.calculatorSnapshot,
     parts.customerPolicies,
+    {
+      materialTakeoff: parts.materialTakeoff,
+      materialTakeoffSource: parts.materialTakeoffSource,
+    },
   );
 }
 

@@ -273,6 +273,10 @@ export async function updateDraftEstimateLineIncludedWork(
         input.includedWork,
         parts.calculatorSnapshot,
         parts.customerPolicies,
+        {
+          materialTakeoff: parts.materialTakeoff,
+          materialTakeoffSource: parts.materialTakeoffSource,
+        },
       ),
     },
   });
@@ -474,7 +478,10 @@ export async function applyDraftEstimateCalculator(
       (parts.customerPolicies.length > 0 ? parts.customerPolicies : null),
   );
   const description = pricedCustomQuoteDescription(
-    joinLineDescription(parts.title, parts.includedWork, snapshot, customerPolicies),
+    joinLineDescription(parts.title, parts.includedWork, snapshot, customerPolicies, {
+      materialTakeoff: parts.materialTakeoff,
+      materialTakeoffSource: parts.materialTakeoffSource,
+    }),
   );
   const nextRates = persistableCalculatorRates(
     calculatorId,
@@ -756,6 +763,10 @@ export async function overrideDraftEstimateLinePrice(
       parts.includedWork,
       snapshot,
       parts.customerPolicies,
+      {
+        materialTakeoff: parts.materialTakeoff,
+        materialTakeoffSource: parts.materialTakeoffSource,
+      },
     ),
   );
   const total = line.quantity.mul(unitPrice);
