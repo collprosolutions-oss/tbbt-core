@@ -31,6 +31,8 @@ const {
   lineMaterialTakeoff,
   lineMaterialTakeoffSource,
   canSaveEstimateLineToServiceCatalog,
+  isOriginalEstimateWorkLine,
+  isTakeoffGeneratedMaterialLine,
   splitLineDescription,
 } = await import("@/lib/estimate-line-scope");
 const {
@@ -92,9 +94,12 @@ const {
   setDraftEstimateMaterialDeposit,
   suggestedMaterialDeposit,
 } = await import("@/lib/material-deposit");
-const { CUSTOM_QUOTE_DRAFT_MARKER, isUnpricedCustomQuoteDraftLine } = await import(
-  "@/lib/request-estimate-draft"
-);
+const {
+  CUSTOM_QUOTE_DRAFT_MARKER,
+  addRequestDraftLines,
+  customQuoteDisplayDescription,
+  isUnpricedCustomQuoteDraftLine,
+} = await import("@/lib/request-estimate-draft");
 const { CUSTOMER_REPORTED_MEASUREMENT } = await import("@/lib/catalog-intake");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -235,7 +240,10 @@ try {
     "Owner draft page has restore-original-pricing recovery and gates catalog save",
     ownerPage.includes("RestoreOriginalRequestPricingForm") &&
       ownerPage.includes("canSaveEstimateLineToServiceCatalog") &&
+      ownerPage.includes("isOriginalEstimateWorkLine") &&
       recoveryForms.includes("Restore Original Request Pricing") &&
+      recoveryForms.includes("original customer-request labor/work line (never deleted)") &&
+      recoveryForms.includes("Restore original request labor line") &&
       recoveryForms.includes("restoreEstimateOriginalRequestPricing") &&
       !customerPage.includes("Reset Takeoff & Generated Materials") &&
       !customerPage.includes("Restore Original Request Pricing") &&
@@ -2080,6 +2088,216 @@ try {
   check(
     "Tenant ownership is preserved on recovery lines",
     afterRestore.every((item) => item.businessId === businessA.id),
+  );
+  check(
+    "Restore never deletes the original labor line",
+    afterRestore.some((item) => item.id === recoveryLabor.id && item.type === "LABOR"),
+  );
+
+  console.log("\nTEST — Converted request restore keeps original LABOR and takeoff");
+  const patioCatalog = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Patio slab",
+      pricingMode: "CUSTOM_QUOTE",
+      price: null,
+      description: "Form, pour, and finish a slab.",
+      category: "Concrete",
+      active: true,
+    },
+  });
+  const convertedRequest = await prisma.serviceRequest.create({
+    data: {
+      businessId: businessA.id,
+      status: "CONVERTED",
+      summary: "Patio slab",
+      description: "Need a patio slab poured.",
+      serviceCatalogItemId: patioCatalog.id,
+      items: {
+        create: {
+          businessId: businessA.id,
+          serviceCatalogItemId: patioCatalog.id,
+          quantity: 1,
+          sortOrder: 0,
+        },
+      },
+    },
+  });
+  const requestEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      serviceRequestId: convertedRequest.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  await prisma.$transaction(async (tx) => {
+    await addRequestDraftLines(tx, {
+      businessId: businessA.id,
+      estimateId: requestEstimate.id,
+      items: [
+        {
+          quantity: 1,
+          serviceCatalogItem: {
+            id: patioCatalog.id,
+            name: patioCatalog.name,
+            pricingMode: patioCatalog.pricingMode,
+            price: patioCatalog.price,
+            description: patioCatalog.description,
+          },
+        },
+      ],
+    });
+    await persistDraftEstimateTotal(tx, requestEstimate.id, businessA.id);
+  });
+  const requestLaborBefore = await prisma.lineItem.findMany({
+    where: { estimateId: requestEstimate.id, businessId: businessA.id },
+  });
+  const requestLabor = requestLaborBefore.find((item) => item.type === "LABOR");
+  check(
+    "Converted request prefills one original LABOR/work line",
+    requestLaborBefore.length === 1 &&
+      requestLabor != null &&
+      isOriginalEstimateWorkLine(requestLabor) &&
+      !lineMaterialTakeoffSource(requestLabor.description),
+  );
+  let requestTakeoff = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: requestEstimate.id,
+    lineItemId: requestLabor.id,
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFt: 10,
+      widthFt: 10,
+      thicknessIn: 4,
+      bagSizeLb: 60,
+    },
+    wastePercent: 10,
+  });
+  requestTakeoff = {
+    ...requestTakeoff,
+    snapshot: {
+      ...requestTakeoff.snapshot,
+      items: requestTakeoff.snapshot.items.map((item) =>
+        item.id === "concrete-bags"
+          ? { ...item, selected: true, customerUnitPrice: 12 }
+          : item.id === "pickup-procurement"
+            ? { ...item, selected: true, customerUnitPrice: 95 }
+            : { ...item, selected: false },
+      ),
+    },
+  };
+  await saveDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: requestEstimate.id,
+    lineItemId: requestLabor.id,
+    snapshot: requestTakeoff.snapshot,
+  });
+  const requestConvert = await convertDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: requestEstimate.id,
+    lineItemId: requestLabor.id,
+    snapshot: requestTakeoff.snapshot,
+  });
+  check("Converted request takeoff generated MATERIAL lines", requestConvert.created >= 1);
+  await applyDraftTakeoffRecommendedLabor(prisma, ownerA, {
+    estimateId: requestEstimate.id,
+    lineItemId: requestLabor.id,
+    snapshot: requestTakeoff.snapshot,
+  });
+  const afterConvertRequest = await prisma.lineItem.findMany({
+    where: { estimateId: requestEstimate.id, businessId: businessA.id },
+  });
+  check(
+    "Generated materials are takeoff children, not replacements for the request labor line",
+    afterConvertRequest.some((item) => item.id === requestLabor.id && item.type === "LABOR") &&
+      afterConvertRequest.filter(isTakeoffGeneratedMaterialLine).length === requestConvert.created,
+  );
+
+  const restoredRequest = await restoreDraftOriginalRequestPricing(prisma, ownerA, {
+    estimateId: requestEstimate.id,
+    lineItemId: requestLabor.id,
+  });
+  const afterRequestRestore = await prisma.lineItem.findMany({
+    where: { estimateId: requestEstimate.id, businessId: businessA.id },
+  });
+  const restoredRequestLabor = afterRequestRestore.find(isOriginalEstimateWorkLine);
+  check(
+    "Restore keeps the original request LABOR line",
+    restoredRequestLabor != null &&
+      restoredRequestLabor.id === requestLabor.id &&
+      restoredRequestLabor.type === "LABOR" &&
+      afterRequestRestore.filter((item) => item.type === "LABOR").length === 1,
+  );
+  check(
+    "Restore returns that LABOR line to the unpriced draft state and clears takeoff edits",
+    isUnpricedCustomQuoteDraftLine(restoredRequest) &&
+      lineMaterialTakeoff(restoredRequest.description) == null &&
+      !lineMaterialTakeoffSource(restoredRequest.description) &&
+      afterRequestRestore.every((item) => !isTakeoffGeneratedMaterialLine(item)),
+  );
+  check(
+    "Material takeoff is available again on the restored original LABOR line",
+    isOriginalEstimateWorkLine(restoredRequestLabor) &&
+      !lineMaterialTakeoffSource(restoredRequestLabor.description),
+  );
+  const recalculatedAfterRestore = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: requestEstimate.id,
+    lineItemId: restoredRequestLabor.id,
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFt: 10,
+      widthFt: 10,
+      thicknessIn: 4,
+      bagSizeLb: 60,
+    },
+    wastePercent: 10,
+  });
+  check(
+    "Owner can recalculate takeoff from scratch on the restored LABOR line",
+    recalculatedAfterRestore.snapshot.items.length > 0 &&
+      recalculatedAfterRestore.snapshot.items.some((item) => item.id === "concrete-bags") &&
+      (await prisma.lineItem.findFirst({
+        where: { id: restoredRequestLabor.id, businessId: businessA.id },
+      }))?.type === "LABOR",
+  );
+
+  await prisma.lineItem.deleteMany({
+    where: { estimateId: requestEstimate.id, businessId: businessA.id },
+  });
+  check(
+    "Broken empty draft has no line items",
+    (await prisma.lineItem.count({
+      where: { estimateId: requestEstimate.id, businessId: businessA.id },
+    })) === 0,
+  );
+  const reconstructed = await restoreDraftOriginalRequestPricing(prisma, ownerA, {
+    estimateId: requestEstimate.id,
+  });
+  const afterReconstruct = await prisma.lineItem.findMany({
+    where: { estimateId: requestEstimate.id, businessId: businessA.id },
+  });
+  check(
+    "Empty DRAFT reconstructs the original request LABOR line from the linked ServiceRequest",
+    reconstructed.type === "LABOR" &&
+      isOriginalEstimateWorkLine(reconstructed) &&
+      afterReconstruct.length === 1 &&
+      afterReconstruct[0].type === "LABOR" &&
+      customQuoteDisplayDescription(afterReconstruct[0].description).includes("Patio slab"),
+  );
+  const restoredAgain = await restoreDraftOriginalRequestPricing(prisma, ownerA, {
+    estimateId: requestEstimate.id,
+  });
+  check(
+    "A second restore does not create a duplicate LABOR line",
+    (await prisma.lineItem.count({
+      where: { estimateId: requestEstimate.id, businessId: businessA.id, type: "LABOR" },
+    })) === 1 && restoredAgain.type === "LABOR",
+  );
+  await expectError(
+    "SENT/APPROVED estimates remain protected from request-line recovery",
+    () =>
+      restoreDraftOriginalRequestPricing(prisma, ownerA, {
+        estimateId: laborEstimate.id,
+      }),
+    (error) => error instanceof EstimateLineError,
   );
 
   console.log("\nTEST — Sheet covering, framed wall, tenant isolation");

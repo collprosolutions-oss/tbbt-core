@@ -801,12 +801,12 @@ export async function restoreEstimateOriginalRequestPricing(
     const access = await requireBusinessAccess();
     await restoreDraftOriginalRequestPricing(prisma, access, {
       estimateId,
-      lineItemId: readString(formData, "lineItemId"),
+      lineItemId: readString(formData, "lineItemId") || null,
     });
     revalidatePath(`/estimates/${estimateId}`);
     return {
       message:
-        "Original request pricing restored. Takeoff-generated materials and the material deposit override were cleared.",
+        "Original customer-request labor line restored. Takeoff-generated materials were removed. Material Takeoff is available on that labor line so you can recalculate from scratch.",
     };
   } catch (error) {
     return {

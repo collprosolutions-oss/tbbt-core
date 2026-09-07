@@ -21,6 +21,7 @@ import {
   catalogCalculatorDefinition,
   catalogScopeText,
   joinLineDescription,
+  lineMaterialTakeoffSource,
   splitLineDescription,
 } from "@/lib/estimate-line-scope";
 import { resolveCustomerPolicies } from "@/lib/estimate-policies";
@@ -232,6 +233,45 @@ export async function addRequestDraftLines(
     })),
   });
   return rows.length;
+}
+
+export function sourceItemsFromServiceRequest(request: {
+  items: RequestDraftSourceItem[];
+  serviceCatalogItem?: RequestDraftSourceItem["serviceCatalogItem"] | null;
+  summary?: string | null;
+  description?: string | null;
+}): RequestDraftSourceItem[] {
+  if (request.items.length > 0) return request.items;
+  if (request.serviceCatalogItem) {
+    return [{ quantity: 1, serviceCatalogItem: request.serviceCatalogItem }];
+  }
+  const fallback =
+    request.summary?.trim() ||
+    splitLineDescription(request.description ?? "").title.trim() ||
+    "Custom work";
+  return [{ quantity: 1, customDescription: fallback }];
+}
+
+export function requestDraftItemIsAlreadyOnEstimate(
+  lines: Array<{
+    type: string;
+    description: string;
+    serviceCatalogItemId?: string | null;
+  }>,
+  item: RequestDraftSourceItem,
+) {
+  const expected = draftEstimateLinesFromRequestItems([item])[0];
+  if (!expected) return false;
+  const expectedTitle = customQuoteDisplayDescription(
+    formatDraftEstimateDescription(expected),
+  );
+  const catalogId = item.serviceCatalogItem?.id ?? null;
+  return lines.some((line) => {
+    if (line.type !== "LABOR") return false;
+    if (lineMaterialTakeoffSource(line.description)) return false;
+    if (catalogId && line.serviceCatalogItemId === catalogId) return true;
+    return customQuoteDisplayDescription(line.description) === expectedTitle;
+  });
 }
 
 /**

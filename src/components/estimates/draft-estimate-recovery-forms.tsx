@@ -11,10 +11,13 @@ import { Button } from "@/components/ui/button";
 const initialState: EstimateActionState = {};
 
 export const RESET_TAKEOFF_CONFIRM =
-  "Reset takeoff and generated materials?\n\nThis will:\n• Remove MATERIAL lines generated from this takeoff\n• Clear owner quantity, customer price, markup helper, and converted-item edits\n• Restore calculated takeoff defaults from the current dimensions and options\n\nThis will keep:\n• The original customer request, customer/property, and request photos\n• The original labor/request line and saved Scope / Included Work\n• Unrelated custom estimate lines\n\nThis only works on DRAFT estimates. Sent and approved estimates are not changed.";
+  "Reset takeoff experiments?\n\nThis will KEEP:\n• The original customer-request labor/work line (never deleted)\n• The customer request, property, photos, and intake\n• Saved Scope / Included Work\n• Unrelated custom estimate lines you added\n\nThis will REMOVE:\n• MATERIAL lines generated from this takeoff (bags, mesh, form boards, pickup, etc.)\n• Owner quantity, customer price, markup helper, and converted-item edits\n\nCalculated takeoff defaults from the current dimensions will be restored. Material Takeoff stays on the original labor line.\n\nDoes not change sent or approved estimates.";
 
 export const RESTORE_ORIGINAL_REQUEST_PRICING_CONFIRM =
-  "Restore original request pricing?\n\nThis will:\n• Return the original labor/request line to the pre-priced draft state ($0 custom quote, or the original catalog price where that is safer)\n• Remove MATERIAL lines generated from this takeoff\n• Clear the material deposit override on this draft\n\nThis will keep:\n• Request details, photos, intake, and saved Scope / Included Work\n• Unrelated estimate lines\n\nThis only works on DRAFT estimates. Sent and approved estimates are not changed.";
+  "Restore the original customer-request labor line?\n\nThis will KEEP:\n• The original labor/work line itself (never deleted)\n• The customer request, property, photos, and intake measurements\n• Saved Scope / Included Work\n• Unrelated custom estimate lines you added\n\nThis will REMOVE:\n• MATERIAL lines generated from this takeoff (bags, mesh, form boards, pickup, etc.)\n• Takeoff quantity, price, markup, and conversion experiments\n• Applied labor/takeoff prices on the original request line\n• The material deposit override\n\nThe original labor/work line returns to the unpriced draft state and keeps Material Takeoff so you can recalculate from scratch.\n\nDoes not change sent or approved estimates.";
+
+export const RESTORE_MISSING_ORIGINAL_REQUEST_LINE_CONFIRM =
+  "Restore the original request labor/work line from the linked customer request?\n\nThis draft no longer has that original labor line, so Material Takeoff is missing.\n\nThis will KEEP:\n• The customer request, property, photos, and intake\n• Unrelated custom estimate lines that are still on this draft\n\nThis will:\n• Recreate the original unpriced request labor/work line (no duplicate if it already exists)\n• Remove leftover takeoff-generated MATERIAL lines\n• Make Material Takeoff available on that labor line so you can recalculate from scratch\n\nDoes not change sent or approved estimates.";
 
 export function ResetTakeoffAndGeneratedMaterialsForm({
   estimateId,
@@ -44,8 +47,8 @@ export function ResetTakeoffAndGeneratedMaterialsForm({
         {pending ? "Resetting…" : "Reset Takeoff & Generated Materials"}
       </Button>
       <p className="text-xs text-muted-foreground">
-        Undo takeoff quantity, price, and conversion experiments. Does not
-        change the original request, photos, or saved scope.
+        Removes takeoff-generated materials and owner takeoff edits only. The
+        original customer-request labor/work line is never deleted.
       </p>
       {state.error ? (
         <p className="text-sm text-destructive">{state.error}</p>
@@ -60,33 +63,45 @@ export function ResetTakeoffAndGeneratedMaterialsForm({
 export function RestoreOriginalRequestPricingForm({
   estimateId,
   lineItemId,
+  missingOriginalLine = false,
 }: {
   estimateId: string;
-  lineItemId: string;
+  lineItemId?: string;
+  missingOriginalLine?: boolean;
 }) {
   const [state, formAction, pending] = useActionState(
     restoreEstimateOriginalRequestPricing,
     initialState,
   );
+  const confirmText = missingOriginalLine
+    ? RESTORE_MISSING_ORIGINAL_REQUEST_LINE_CONFIRM
+    : RESTORE_ORIGINAL_REQUEST_PRICING_CONFIRM;
 
   return (
     <form
       action={(formData) => {
-        if (!window.confirm(RESTORE_ORIGINAL_REQUEST_PRICING_CONFIRM)) {
+        if (!window.confirm(confirmText)) {
           return;
         }
         formAction(formData);
       }}
-      className="mt-2 space-y-2"
+      className={missingOriginalLine ? "space-y-2" : "mt-2 space-y-2"}
     >
       <input type="hidden" name="estimateId" value={estimateId} />
-      <input type="hidden" name="lineItemId" value={lineItemId} />
+      {lineItemId ? (
+        <input type="hidden" name="lineItemId" value={lineItemId} />
+      ) : null}
       <Button type="submit" size="sm" variant="outline" disabled={pending}>
-        {pending ? "Restoring…" : "Restore Original Request Pricing"}
+        {pending
+          ? "Restoring…"
+          : missingOriginalLine
+            ? "Restore original request labor line"
+            : "Restore Original Request Pricing"}
       </Button>
       <p className="text-xs text-muted-foreground">
-        Return this labor/request line to the pre-priced draft state and
-        remove takeoff-generated materials. Unrelated lines stay.
+        {missingOriginalLine
+          ? "Recreates the original unpriced request labor/work line from the linked customer request so Material Takeoff is available again. Does not create a duplicate."
+          : "Returns this labor/request line to the unpriced draft state and removes takeoff-generated materials only. The original labor/work line stays."}
       </p>
       {state.error ? (
         <p className="text-sm text-destructive">{state.error}</p>

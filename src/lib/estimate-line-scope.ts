@@ -148,6 +148,24 @@ export function canSaveEstimateLineToServiceCatalog(line: {
   return line.type === "LABOR" && !lineMaterialTakeoffSource(line.description);
 }
 
+/** Takeoff-generated customer MATERIAL rows tied to a parent work line. */
+export function isTakeoffGeneratedMaterialLine(line: {
+  type: string;
+  description?: string | null;
+}) {
+  return (
+    line.type === "MATERIAL" && lineMaterialTakeoffSource(line.description) != null
+  );
+}
+
+/** Original request/service work line — never a converted takeoff child. */
+export function isOriginalEstimateWorkLine(line: {
+  type: string;
+  description?: string | null;
+}) {
+  return line.type === "LABOR" && !lineMaterialTakeoffSource(line.description);
+}
+
 export function joinLineDescription(
   title: string,
   includedWork?: string | null,

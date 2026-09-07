@@ -57,6 +57,7 @@ import {
   catalogCalculatorDefinition,
   catalogScopeText,
   canSaveEstimateLineToServiceCatalog,
+  isOriginalEstimateWorkLine,
   lineCalculatorSnapshot,
   lineCustomerPolicies,
   lineItemIncludedWork,
@@ -209,6 +210,7 @@ export default async function EstimateBuilderPage({
   const hasCustomerEmail = isUsableEmail(customerEmail);
   const needsCustomQuotePrices = estimate.lineItems.some(isUnpricedCustomQuoteDraftLine);
   const fromCustomerRequest = Boolean(estimate.serviceRequestId);
+  const hasOriginalWorkLine = estimate.lineItems.some(isOriginalEstimateWorkLine);
   const intakePhotos = ownerVisibleRequestPhotos({
     businessId: estimate.businessId,
     serviceRequestId: estimate.serviceRequestId,
@@ -375,6 +377,23 @@ export default async function EstimateBuilderPage({
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {isDraft && fromCustomerRequest && !hasOriginalWorkLine ? (
+            <div className="mb-4 space-y-2 rounded-lg border border-amber-500/60 bg-amber-50 p-3 dark:bg-amber-950/20">
+              <p className="text-sm font-medium">
+                The original customer-request labor/work line is missing, so
+                Material Takeoff is not available.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Restore it from the linked request. This does not create a
+                duplicate, does not change photos or intake, and does not
+                recreate takeoff-generated material lines.
+              </p>
+              <RestoreOriginalRequestPricingForm
+                estimateId={estimate.id}
+                missingOriginalLine
+              />
+            </div>
+          ) : null}
           {estimate.lineItems.length === 0 ? (
             <p className="text-sm text-muted-foreground">No line items yet.</p>
           ) : (

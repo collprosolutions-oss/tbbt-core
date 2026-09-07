@@ -13,6 +13,8 @@ import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import {
   joinLineDescription,
   joinLineDescriptionFromParts,
+  isOriginalEstimateWorkLine,
+  isTakeoffGeneratedMaterialLine,
   lineMaterialTakeoff,
   lineMaterialTakeoffSource,
   splitLineDescription,
@@ -20,11 +22,16 @@ import {
 import { EstimateLineError } from "@/lib/estimate-line-ops";
 import { descriptionsWithMaterialDeposit } from "@/lib/material-deposit";
 import { publicCatalogUnitAmount } from "@/lib/pricing-mode";
+import { parseWorkAreaIntake } from "@/lib/work-area-intake";
+import { toStoredIntakeMeasurement } from "@/lib/intake-quote-handoff";
 import {
   CUSTOM_QUOTE_DRAFT_MARKER,
   STARTING_AT_DRAFT_MARKER,
+  addRequestDraftLines,
   customQuoteDisplayDescription,
   pricedCustomQuoteDescription,
+  requestDraftItemIsAlreadyOnEstimate,
+  sourceItemsFromServiceRequest,
 } from "@/lib/request-estimate-draft";
 import { recommendTakeoffLabor } from "@/lib/material-takeoff/labor-pricing";
 import {
@@ -326,12 +333,11 @@ export async function resetDraftTakeoffAndGeneratedMaterials(
     input.lineItemId,
   );
   const previous = lineMaterialTakeoff(line.description);
-  const generatedIds = await generatedTakeoffMaterialIds(
-    db,
-    estimate.id,
-    access.businessId,
-    line.id,
-  );
+  const currentLines = await db.lineItem.findMany({
+    where: { estimateId: estimate.id, businessId: access.businessId },
+    select: { id: true, type: true, description: true },
+  });
+  const generatedIds = takeoffGeneratedMaterialIds(currentLines, line.id);
   if (!previous && generatedIds.length === 0) {
     throw new EstimateLineError("There is no material takeoff or generated materials to reset.");
   }
@@ -352,20 +358,38 @@ export async function resetDraftTakeoffAndGeneratedMaterials(
   }
 
   await db.$transaction(async (tx) => {
-    if (generatedIds.length > 0) {
-      await tx.lineItem.deleteMany({
-        where: {
-          id: { in: generatedIds },
-          estimateId: estimate.id,
-          businessId: access.businessId,
-        },
-      });
+    await deleteTakeoffGeneratedMaterials(tx, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+      generatedIds,
+      protectedLineIds: [line.id],
+    });
+    const parent = await tx.lineItem.findFirst({
+      where: {
+        id: line.id,
+        estimateId: estimate.id,
+        businessId: access.businessId,
+      },
+    });
+    if (!parent || parent.type !== "LABOR") {
+      throw new EstimateLineError(
+        "The original customer-request labor line is missing. Restore it from the linked request instead of resetting takeoff.",
+      );
     }
     if (nextSnapshot) {
-      await persistTakeoffOnLine(tx, line, nextSnapshot);
+      await persistTakeoffOnLine(tx, parent, nextSnapshot);
     }
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
   });
+
+  const preserved = await db.lineItem.findFirst({
+    where: { id: line.id, businessId: access.businessId },
+  });
+  if (!preserved || preserved.type !== "LABOR") {
+    throw new EstimateLineError(
+      "Reset cannot remove the original customer-request labor line.",
+    );
+  }
 
   return {
     removedMaterialCount: generatedIds.length,
@@ -374,69 +398,116 @@ export async function resetDraftTakeoffAndGeneratedMaterials(
 }
 
 /**
- * Owner recovery: return the original request LABOR line to the
- * pre-priced draft state where safe, remove takeoff-generated MATERIAL
- * children, and clear the material deposit override. Request/scope/intake
- * stay. Unrelated estimate lines stay. DRAFT only.
+ * Owner recovery: return the original request LABOR/work line to the
+ * pre-priced draft state, remove takeoff-generated MATERIAL children,
+ * and clear the material deposit override. Never deletes the original
+ * labor/work line. If that line is already missing on a DRAFT linked to
+ * a ServiceRequest, reconstruct it from the request instead of creating
+ * a duplicate. DRAFT only.
  */
 export async function restoreDraftOriginalRequestPricing(
   db: Db,
   access: BusinessAccess,
   input: {
     estimateId: string;
-    lineItemId: string;
+    lineItemId?: string | null;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
-  const { line, estimate } = await loadDraftParentLine(
-    db,
-    access,
-    input.estimateId,
-    input.lineItemId,
+  const estimate = access.assertOwned(
+    await db.estimate.findFirst({
+      where: { id: input.estimateId, ...access.scope },
+      select: {
+        id: true,
+        businessId: true,
+        status: true,
+        serviceRequestId: true,
+      },
+    }),
   );
-  if (line.type !== "LABOR") {
+  if (estimate.status !== "DRAFT") {
+    throw new EstimateLineError("Only a draft estimate can be changed.");
+  }
+
+  const lines = await db.lineItem.findMany({
+    where: { estimateId: estimate.id, businessId: access.businessId },
+    orderBy: { createdAt: "asc" },
+  });
+  const originalWorkLines = lines.filter(isOriginalEstimateWorkLine);
+  const requestedLine = input.lineItemId
+    ? lines.find((row) => row.id === input.lineItemId)
+    : null;
+  if (requestedLine && lineMaterialTakeoffSource(requestedLine.description)) {
+    throw new EstimateLineError(
+      "Restore original request pricing applies to the original labor/service line.",
+    );
+  }
+  if (requestedLine && requestedLine.type !== "LABOR") {
     throw new EstimateLineError(
       "Restore original request pricing applies to the original labor/service line.",
     );
   }
 
-  const catalog = line.serviceCatalogItemId
-    ? await db.serviceCatalogItem.findFirst({
-        where: { id: line.serviceCatalogItemId, businessId: access.businessId },
-        select: { pricingMode: true, price: true },
-      })
-    : null;
-  const parts = splitLineDescription(line.description);
-  const restored = originalRequestLaborState(parts, catalog);
-  const unitPrice = new Prisma.Decimal(restored.unitPrice.toFixed(2));
-  const total = line.quantity.mul(unitPrice);
+  const parentId = requestedLine?.id ?? null;
+  const generatedIds = takeoffGeneratedMaterialIds(lines, parentId);
+  const protectedLineIds = lines.filter((row) => row.type === "LABOR").map((row) => row.id);
+  const workLinesToRestore = requestedLine
+    ? [requestedLine]
+    : originalWorkLines;
 
   await db.$transaction(async (tx) => {
-    const generatedIds = await generatedTakeoffMaterialIds(
-      tx,
-      estimate.id,
-      access.businessId,
-      line.id,
-    );
-    if (generatedIds.length > 0) {
-      await tx.lineItem.deleteMany({
+    await deleteTakeoffGeneratedMaterials(tx, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+      generatedIds,
+      protectedLineIds,
+    });
+
+    for (const workLine of workLinesToRestore) {
+      const stillThere = await tx.lineItem.findFirst({
         where: {
-          id: { in: generatedIds },
+          id: workLine.id,
           estimateId: estimate.id,
           businessId: access.businessId,
+          type: "LABOR",
+        },
+      });
+      if (!stillThere) continue;
+      const catalog = stillThere.serviceCatalogItemId
+        ? await tx.serviceCatalogItem.findFirst({
+            where: {
+              id: stillThere.serviceCatalogItemId,
+              businessId: access.businessId,
+            },
+            select: { pricingMode: true, price: true },
+          })
+        : null;
+      const restored = originalRequestLaborState(
+        splitLineDescription(stillThere.description),
+        catalog,
+      );
+      const unitPrice = new Prisma.Decimal(restored.unitPrice.toFixed(2));
+      await tx.lineItem.update({
+        where: { id: stillThere.id },
+        data: {
+          unitPrice,
+          total: stillThere.quantity.mul(unitPrice),
+          description: restored.description,
         },
       });
     }
-    await tx.lineItem.update({
-      where: { id: line.id },
-      data: {
-        unitPrice,
-        total,
-        description: restored.description,
-      },
+
+    const remainingAfterRestore = await tx.lineItem.findMany({
+      where: { estimateId: estimate.id, businessId: access.businessId },
+      orderBy: { createdAt: "asc" },
     });
+    if (!remainingAfterRestore.some(isOriginalEstimateWorkLine)) {
+      await reconstructOriginalRequestWorkLines(tx, access, estimate);
+    }
+
     const remaining = await tx.lineItem.findMany({
       where: { estimateId: estimate.id, businessId: access.businessId },
+      orderBy: { createdAt: "asc" },
       select: { id: true, type: true, description: true },
     });
     const depositUpdates = descriptionsWithMaterialDeposit(remaining, null);
@@ -449,9 +520,17 @@ export async function restoreDraftOriginalRequestPricing(
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
   });
 
-  return db.lineItem.findFirstOrThrow({
-    where: { id: line.id, businessId: access.businessId },
+  const after = await db.lineItem.findMany({
+    where: { estimateId: estimate.id, businessId: access.businessId },
+    orderBy: { createdAt: "asc" },
   });
+  const restoredLabor = after.find(isOriginalEstimateWorkLine);
+  if (!restoredLabor) {
+    throw new EstimateLineError(
+      "Could not restore the original customer-request labor line.",
+    );
+  }
+  return restoredLabor;
 }
 
 export function parseTakeoffFormSnapshot(raw: string) {
@@ -574,22 +653,118 @@ function convertedLinesByItemId(
   return found;
 }
 
-async function generatedTakeoffMaterialIds(
-  db: Pick<Db, "lineItem">,
-  estimateId: string,
-  businessId: string,
-  parentLineItemId: string,
+function takeoffGeneratedMaterialIds(
+  lines: Array<{ id: string; type: string; description: string }>,
+  parentLineItemId?: string | null,
 ) {
-  const lines = await db.lineItem.findMany({
-    where: { estimateId, businessId },
-    select: { id: true, description: true },
-  });
   return lines
     .filter((row) => {
-      const source = lineMaterialTakeoffSource(row.description);
-      return source?.parentLineItemId === parentLineItemId;
+      if (!isTakeoffGeneratedMaterialLine(row)) return false;
+      if (row.type === "LABOR") return false;
+      if (parentLineItemId) {
+        return (
+          lineMaterialTakeoffSource(row.description)?.parentLineItemId ===
+          parentLineItemId
+        );
+      }
+      return true;
     })
     .map((row) => row.id);
+}
+
+async function deleteTakeoffGeneratedMaterials(
+  tx: Pick<Db, "lineItem">,
+  input: {
+    estimateId: string;
+    businessId: string;
+    generatedIds: string[];
+    protectedLineIds: string[];
+  },
+) {
+  const removable = input.generatedIds.filter(
+    (id) => !input.protectedLineIds.includes(id),
+  );
+  if (removable.length === 0) return;
+  await tx.lineItem.deleteMany({
+    where: {
+      id: { in: removable },
+      estimateId: input.estimateId,
+      businessId: input.businessId,
+      type: "MATERIAL",
+    },
+  });
+}
+
+async function reconstructOriginalRequestWorkLines(
+  tx: Prisma.TransactionClient,
+  access: BusinessAccess,
+  estimate: { id: string; businessId: string; serviceRequestId: string | null },
+) {
+  if (!estimate.serviceRequestId) {
+    throw new EstimateLineError(
+      "This draft has no original request labor line to restore.",
+    );
+  }
+  const request = access.assertOwned(
+    await tx.serviceRequest.findFirst({
+      where: { id: estimate.serviceRequestId, businessId: access.businessId },
+      include: {
+        items: {
+          orderBy: { sortOrder: "asc" },
+          include: {
+            serviceCatalogItem: {
+              select: {
+                id: true,
+                name: true,
+                pricingMode: true,
+                price: true,
+                description: true,
+              },
+            },
+          },
+        },
+        measurements: {
+          select: {
+            source: true,
+            width: true,
+            height: true,
+            length: true,
+            quantity: true,
+            unit: true,
+            serviceRequestItem: { select: { serviceCatalogItemId: true } },
+          },
+        },
+        serviceCatalogItem: {
+          select: {
+            id: true,
+            name: true,
+            pricingMode: true,
+            price: true,
+            description: true,
+          },
+        },
+      },
+    }),
+  );
+  const existing = await tx.lineItem.findMany({
+    where: { estimateId: estimate.id, businessId: access.businessId },
+    select: {
+      type: true,
+      description: true,
+      serviceCatalogItemId: true,
+    },
+  });
+  const sourceItems = sourceItemsFromServiceRequest(request).filter(
+    (item) => !requestDraftItemIsAlreadyOnEstimate(existing, item),
+  );
+  if (sourceItems.length === 0) return 0;
+  return addRequestDraftLines(tx, {
+    businessId: access.businessId,
+    estimateId: estimate.id,
+    items: sourceItems,
+    workAreaIntake: parseWorkAreaIntake(request.description),
+    measurements: request.measurements.map((row) => toStoredIntakeMeasurement(row)),
+  });
 }
 
 function originalRequestLaborState(
