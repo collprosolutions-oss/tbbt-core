@@ -5,13 +5,15 @@
  * the unit or axis is incompatible with the selected formula.
  */
 import {
-  CUSTOMER_REPORTED_MEASUREMENT,
   CUSTOMER_REPORTED_MEASUREMENT_LABEL,
   type StoredIntakeMeasurement,
   convertLinearMeasurement,
   measurementSourceLabel,
 } from "@/lib/intake-quote-handoff";
-import { parseIntakeMeasurementUnit } from "@/lib/catalog-intake";
+import {
+  CUSTOMER_REPORTED_MEASUREMENT,
+  parseIntakeMeasurementUnit,
+} from "@/lib/catalog-intake";
 import type { CalculatorSnapshot } from "@/lib/estimate-calculators/types";
 import { parseLinearUnitToken, parsePositiveNumber } from "@/lib/material-takeoff/units";
 import type {

@@ -76,6 +76,7 @@ const INTERNAL_LEAKS = [
   "Owner-only margin",
   "INTERNAL_OWNER_NOTE",
 ];
+let passed = 0;
 let failed = 0;
 function check(label, ok) {
   if (ok) {

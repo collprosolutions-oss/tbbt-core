@@ -156,6 +156,7 @@ export default async function EstimateBuilderPage({
               serviceRequestItem: {
                 select: {
                   customDescription: true,
+                  serviceCatalogItemId: true,
                   serviceCatalogItem: { select: { name: true } },
                 },
               },

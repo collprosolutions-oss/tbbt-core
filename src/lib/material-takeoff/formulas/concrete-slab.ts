@@ -13,7 +13,6 @@ import {
 } from "@/lib/material-takeoff/types";
 import {
   ceilCount,
-  inchesToFeet,
   parseNonNegativeNumber,
   parsePositiveNumber,
   roundTakeoff,
@@ -86,16 +85,10 @@ export function emptyConcreteSlabInputs(
 }
 
 export function concreteVolumeCuFt(input: ConcreteSlabInputs) {
-  const thicknessFt = inchesToFeet(input.thicknessIn);
-  if (
-    input.lengthFt <= 0 ||
-    input.widthFt <= 0 ||
-    thicknessFt == null ||
-    thicknessFt <= 0
-  ) {
+  if (input.lengthFt <= 0 || input.widthFt <= 0 || input.thicknessIn <= 0) {
     return 0;
   }
-  return roundTakeoff(input.lengthFt * input.widthFt * thicknessFt, 4);
+  return roundTakeoff(input.lengthFt * input.widthFt * (input.thicknessIn / 12), 4);
 }
 
 export function concreteBagsRequired(
