@@ -14,6 +14,7 @@ import {
   EditLineIncludedWorkForm,
   SaveLineForReuseForm,
 } from "@/components/estimates/draft-line-scope-forms";
+import { RestoreOriginalRequestPricingForm } from "@/components/estimates/draft-estimate-recovery-forms";
 import { EstimateCustomerPolicies } from "@/components/estimates/customer-policy-display";
 import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
 import { OverrideLinePriceForm } from "@/components/estimates/override-line-price-form";
@@ -55,6 +56,7 @@ import {
 import {
   catalogCalculatorDefinition,
   catalogScopeText,
+  canSaveEstimateLineToServiceCatalog,
   lineCalculatorSnapshot,
   lineCustomerPolicies,
   lineItemIncludedWork,
@@ -495,6 +497,7 @@ export default async function EstimateBuilderPage({
                     ) : null}
                     {isDraft && !takeoffSource ? (
                       <MaterialTakeoffForm
+                        key={item.description}
                         estimateId={estimate.id}
                         lineItemId={item.id}
                         snapshot={takeoffSnapshot}
@@ -528,14 +531,22 @@ export default async function EstimateBuilderPage({
                           lineItemId={item.id}
                           includedWork={lineItemIncludedWork(item.description)}
                         />
-                        <SaveLineForReuseForm
-                          estimateId={estimate.id}
-                          lineItemId={item.id}
-                          hasPrice={item.unitPrice.gt(0)}
-                          currentPriceLabel={
-                            item.unitPrice.gt(0) ? formatMoney(item.unitPrice) : null
-                          }
-                        />
+                        {item.type === "LABOR" && !takeoffSource ? (
+                          <RestoreOriginalRequestPricingForm
+                            estimateId={estimate.id}
+                            lineItemId={item.id}
+                          />
+                        ) : null}
+                        {canSaveEstimateLineToServiceCatalog(item) ? (
+                          <SaveLineForReuseForm
+                            estimateId={estimate.id}
+                            lineItemId={item.id}
+                            hasPrice={item.unitPrice.gt(0)}
+                            currentPriceLabel={
+                              item.unitPrice.gt(0) ? formatMoney(item.unitPrice) : null
+                            }
+                          />
+                        ) : null}
                       </>
                     ) : (
                       <IncludedWorkDisplay description={item.description} />

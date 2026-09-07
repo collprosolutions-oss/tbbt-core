@@ -33,6 +33,8 @@ import {
   isTakeoffTypeId,
   parseTakeoffFormSnapshot,
   recalculateDraftMaterialTakeoff,
+  resetDraftTakeoffAndGeneratedMaterials,
+  restoreDraftOriginalRequestPricing,
   saveDraftMaterialTakeoff,
 } from "@/lib/material-takeoff";
 import { parseWorkAreaIntake } from "@/lib/work-area-intake";
@@ -757,6 +759,60 @@ export async function applyEstimateTakeoffRecommendedLabor(
       error: estimateLineErrorMessage(
         error,
         "Could not apply recommended labor to the original request line.",
+      ),
+    };
+  }
+}
+
+export async function resetEstimateTakeoffAndGeneratedMaterials(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    const result = await resetDraftTakeoffAndGeneratedMaterials(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return {
+      message:
+        result.removedMaterialCount > 0
+          ? `Takeoff reset to calculated defaults. Removed ${result.removedMaterialCount} generated material line${result.removedMaterialCount === 1 ? "" : "s"}.`
+          : "Takeoff reset to calculated defaults from the current dimensions.",
+    };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(
+        error,
+        "Could not reset the takeoff and generated materials.",
+      ),
+    };
+  }
+}
+
+export async function restoreEstimateOriginalRequestPricing(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    await restoreDraftOriginalRequestPricing(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return {
+      message:
+        "Original request pricing restored. Takeoff-generated materials and the material deposit override were cleared.",
+    };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(
+        error,
+        "Could not restore the original request pricing state.",
       ),
     };
   }

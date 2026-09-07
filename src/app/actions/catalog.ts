@@ -9,6 +9,10 @@ import {
   starterIntakeFields,
   starterPricingMode,
 } from "@/lib/handyman-starter-catalog";
+import {
+  deleteOwnedServiceCatalogItem,
+  setOwnedServiceCatalogItemActive,
+} from "@/lib/catalog-ops";
 import { catalogDefinitionFromSnapshot } from "@/lib/estimate-calculators";
 import { catalogCalculatorDefinition, joinCatalogDescription } from "@/lib/estimate-line-scope";
 import { parsePricingMode } from "@/lib/pricing-mode";
@@ -159,21 +163,37 @@ export async function setServiceCatalogItemActive(
   id: string,
   active: boolean,
 ): Promise<CatalogActionState> {
-  const access = await requireBusinessAccess();
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
-  const item = access.assertOwned(
-    await prisma.serviceCatalogItem.findFirst({
-      where: { id, ...access.scope },
-    }),
-  );
+  try {
+    const access = await requireBusinessAccess();
+    await setOwnedServiceCatalogItemActive(prisma, access, { id, active });
+    revalidatePath("/services");
+    return {};
+  } catch (error) {
+    return {
+      error:
+        error instanceof Error && error.message
+          ? error.message
+          : "Could not update that catalog service.",
+    };
+  }
+}
 
-  await prisma.serviceCatalogItem.update({
-    where: { id: item.id },
-    data: { active },
-  });
-
-  revalidatePath("/services");
-  return {};
+export async function deleteServiceCatalogItem(
+  id: string,
+): Promise<CatalogActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    await deleteOwnedServiceCatalogItem(prisma, access, { id });
+    revalidatePath("/services");
+    return { message: "Catalog service deleted. Existing estimates keep their recorded lines." };
+  } catch (error) {
+    return {
+      error:
+        error instanceof Error && error.message
+          ? error.message
+          : "Could not delete that catalog service.",
+    };
+  }
 }
 
 export async function installHandymanStarterCatalog(): Promise<CatalogActionState> {

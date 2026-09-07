@@ -24,6 +24,7 @@ import {
   type CalculatorSnapshot,
 } from "@/lib/estimate-calculators";
 import {
+  canSaveEstimateLineToServiceCatalog,
   catalogCalculatorDefinition,
   catalogScopeText,
   joinCatalogDescription,
@@ -315,6 +316,11 @@ export async function saveDraftEstimateLineAsCatalog(
       },
     }),
   );
+  if (!canSaveEstimateLineToServiceCatalog(line)) {
+    throw new EstimateLineError(
+      "Only labor/service lines can be saved to the services catalog. Material takeoff items stay as materials.",
+    );
+  }
 
   const name = customQuoteDisplayDescription(line.description)
     .replace(` ${STARTING_AT_DRAFT_MARKER}`, "")

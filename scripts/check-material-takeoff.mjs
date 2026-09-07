@@ -30,6 +30,7 @@ const {
   lineItemTitle,
   lineMaterialTakeoff,
   lineMaterialTakeoffSource,
+  canSaveEstimateLineToServiceCatalog,
   splitLineDescription,
 } = await import("@/lib/estimate-line-scope");
 const {
@@ -41,6 +42,7 @@ const {
   applyDraftEstimateCalculator,
   EstimateLineError,
   overrideDraftEstimateLinePrice,
+  saveDraftEstimateLineAsCatalog,
 } = await import("@/lib/estimate-line-ops");
 const {
   CONCRETE_BAG_YIELDS_CU_FT,
@@ -75,6 +77,8 @@ const {
   parseTakeoffNumericInput,
   recalculateDraftMaterialTakeoff,
   recommendTakeoffLabor,
+  resetDraftTakeoffAndGeneratedMaterials,
+  restoreDraftOriginalRequestPricing,
   saveDraftMaterialTakeoff,
   sheetCountRequired,
   splitFeetAndInches,
@@ -85,8 +89,12 @@ const { estimateDocumentPlainText, loadEstimateDocumentForBusiness } = await imp
 );
 const {
   resolveMaterialDeposit,
+  setDraftEstimateMaterialDeposit,
   suggestedMaterialDeposit,
 } = await import("@/lib/material-deposit");
+const { CUSTOM_QUOTE_DRAFT_MARKER, isUnpricedCustomQuoteDraftLine } = await import(
+  "@/lib/request-estimate-draft"
+);
 const { CUSTOMER_REPORTED_MEASUREMENT } = await import("@/lib/catalog-intake");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -172,6 +180,7 @@ try {
   const portalPage = readRepo("src/app/p/[token]/page.tsx");
   const ownerPage = readRepo("src/app/(app)/estimates/[estimateId]/page.tsx");
   const takeoffForm = readRepo("src/components/estimates/material-takeoff-form.tsx");
+  const recoveryForms = readRepo("src/components/estimates/draft-estimate-recovery-forms.tsx");
   const estimateDocument = readRepo("src/lib/estimate-document.ts");
 
   check(
@@ -216,8 +225,33 @@ try {
       takeoffForm.includes("Recommended labor / service price") &&
       takeoffForm.includes("Recommended estimate subtotal") &&
       takeoffForm.includes("applyEstimateTakeoffRecommendedLabor") &&
+      takeoffForm.includes("ResetTakeoffAndGeneratedMaterialsForm") &&
+      recoveryForms.includes("Reset Takeoff & Generated Materials") &&
+      recoveryForms.includes("resetEstimateTakeoffAndGeneratedMaterials") &&
       !takeoffForm.includes("Number(event.target.value) || 0") &&
       !takeoffForm.includes('type="number"'),
+  );
+  check(
+    "Owner draft page has restore-original-pricing recovery and gates catalog save",
+    ownerPage.includes("RestoreOriginalRequestPricingForm") &&
+      ownerPage.includes("canSaveEstimateLineToServiceCatalog") &&
+      recoveryForms.includes("Restore Original Request Pricing") &&
+      recoveryForms.includes("restoreEstimateOriginalRequestPricing") &&
+      !customerPage.includes("Reset Takeoff & Generated Materials") &&
+      !customerPage.includes("Restore Original Request Pricing") &&
+      !printPage.includes("Reset Takeoff") &&
+      !portalPage.includes("Restore Original Request Pricing"),
+  );
+  check(
+    "Converted MATERIAL / takeoff-source lines cannot be saved as public services",
+    canSaveEstimateLineToServiceCatalog({ type: "LABOR", description: "Patio slab" }) &&
+      !canSaveEstimateLineToServiceCatalog({ type: "MATERIAL", description: "60-lb concrete bags" }) &&
+      !canSaveEstimateLineToServiceCatalog({
+        type: "LABOR",
+        description: joinLineDescription("Welded wire mesh sheets", null, null, null, {
+          materialTakeoffSource: { parentLineItemId: "parent", itemId: "mesh" },
+        }),
+      }),
   );
   check(
     "Estimate document uses split title/scope, not raw description",
@@ -1761,6 +1795,291 @@ try {
         snapshot: laborSnapshot,
       }),
     (error) => error instanceof Error && error.message.includes("authorized business"),
+  );
+
+  console.log("\nTEST — Draft recovery and catalog material safety");
+  const recoveryEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const requestScope = "Form, pour, and finish the slab.";
+  const recoveryLabor = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: recoveryEstimate.id,
+      description: joinLineDescription(
+        `Patio slab ${CUSTOM_QUOTE_DRAFT_MARKER}`,
+        requestScope,
+      ),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(0),
+      total: new Prisma.Decimal(0),
+      type: "LABOR",
+    },
+  });
+  const unrelatedLabor = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: recoveryEstimate.id,
+      description: joinLineDescription("Extra trim carpentry", "Stain to match."),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(250),
+      total: new Prisma.Decimal(250),
+      type: "LABOR",
+    },
+  });
+  const unrelatedMaterial = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: recoveryEstimate.id,
+      description: joinLineDescription("Owner-added stain"),
+      quantity: new Prisma.Decimal(2),
+      unitPrice: new Prisma.Decimal(18),
+      total: new Prisma.Decimal(36),
+      type: "MATERIAL",
+    },
+  });
+  let recoveryTakeoff = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: recoveryEstimate.id,
+    lineItemId: recoveryLabor.id,
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFt: 10,
+      widthFt: 10,
+      thicknessIn: 4,
+      bagSizeLb: 60,
+    },
+    wastePercent: 10,
+  });
+  recoveryTakeoff = {
+    ...recoveryTakeoff,
+    snapshot: {
+      ...recoveryTakeoff.snapshot,
+      markupPercent: 25,
+      laborRate: 36,
+      items: recoveryTakeoff.snapshot.items.map((item) =>
+        item.id === "concrete-bags"
+          ? {
+              ...item,
+              selected: true,
+              quantityOverride: 90,
+              unitCost: 8,
+              customerUnitPrice: 12,
+            }
+          : item.id === "pickup-procurement"
+            ? {
+                ...item,
+                selected: true,
+                customerUnitPrice: 95,
+              }
+            : { ...item, selected: false },
+      ),
+    },
+  };
+  await saveDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: recoveryEstimate.id,
+    lineItemId: recoveryLabor.id,
+    snapshot: recoveryTakeoff.snapshot,
+  });
+  const recoveryConvert = await convertDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: recoveryEstimate.id,
+    lineItemId: recoveryLabor.id,
+    snapshot: recoveryTakeoff.snapshot,
+  });
+  check("Recovery fixture converted takeoff MATERIAL lines", recoveryConvert.created >= 1);
+  await applyDraftTakeoffRecommendedLabor(prisma, ownerA, {
+    estimateId: recoveryEstimate.id,
+    lineItemId: recoveryLabor.id,
+    snapshot: recoveryTakeoff.snapshot,
+  });
+  await persistDraftEstimateTotal(prisma, recoveryEstimate.id, businessA.id);
+  await setDraftEstimateMaterialDeposit(prisma, ownerA, {
+    estimateId: recoveryEstimate.id,
+    amount: "50",
+  });
+  const generatedMaterials = await prisma.lineItem.findMany({
+    where: { estimateId: recoveryEstimate.id, businessId: businessA.id, type: "MATERIAL" },
+  });
+  const generatedTakeoffMaterials = generatedMaterials.filter(
+    (item) => lineMaterialTakeoffSource(item.description)?.parentLineItemId === recoveryLabor.id,
+  );
+  check(
+    "Takeoff-generated MATERIAL lines are not eligible for service-catalog save",
+    generatedTakeoffMaterials.length > 0 &&
+      generatedTakeoffMaterials.every(
+        (item) => !canSaveEstimateLineToServiceCatalog(item),
+      ),
+  );
+  const catalogCountBeforeBadSave = await prisma.serviceCatalogItem.count({
+    where: { businessId: businessA.id },
+  });
+  await expectError(
+    "Saving a takeoff-generated MATERIAL line to the catalog is rejected",
+    () =>
+      saveDraftEstimateLineAsCatalog(prisma, ownerA, {
+        estimateId: recoveryEstimate.id,
+        lineItemId: generatedTakeoffMaterials[0].id,
+      }),
+    (error) =>
+      error instanceof EstimateLineError && error.message.includes("labor/service"),
+  );
+  check(
+    "Rejected MATERIAL catalog save does not create a public service",
+    (await prisma.serviceCatalogItem.count({ where: { businessId: businessA.id } })) ===
+      catalogCountBeforeBadSave,
+  );
+  const savedLaborCatalog = await saveDraftEstimateLineAsCatalog(prisma, ownerA, {
+    estimateId: recoveryEstimate.id,
+    lineItemId: recoveryLabor.id,
+  });
+  check(
+    "Real LABOR/service lines can still be saved to the catalog",
+    savedLaborCatalog.name === "Patio slab" && savedLaborCatalog.active === true,
+  );
+
+  const resetResult = await resetDraftTakeoffAndGeneratedMaterials(prisma, ownerA, {
+    estimateId: recoveryEstimate.id,
+    lineItemId: recoveryLabor.id,
+  });
+  const afterReset = await prisma.lineItem.findMany({
+    where: { estimateId: recoveryEstimate.id, businessId: businessA.id },
+    orderBy: { createdAt: "asc" },
+  });
+  const laborAfterReset = afterReset.find((item) => item.id === recoveryLabor.id);
+  const resetTakeoff = lineMaterialTakeoff(laborAfterReset?.description);
+  const resetBags = resetTakeoff?.items.find((item) => item.id === "concrete-bags");
+  check(
+    "Reset removes generated MATERIAL lines but preserves original request/scope",
+    resetResult.removedMaterialCount === generatedTakeoffMaterials.length &&
+      afterReset.every(
+        (item) => lineMaterialTakeoffSource(item.description)?.parentLineItemId !== recoveryLabor.id,
+      ) &&
+      lineItemIncludedWork(laborAfterReset?.description) === requestScope &&
+      lineItemTitle(laborAfterReset?.description) === "Patio slab" &&
+      Number(laborAfterReset?.unitPrice.toString()) > 0,
+  );
+  check(
+    "Reset restores calculated takeoff defaults and clears owner overrides",
+    resetBags != null &&
+      resetBags.quantityOverride == null &&
+      resetBags.convertedLineItemId == null &&
+      (resetTakeoff?.markupPercent ?? 0) === 0 &&
+      (resetTakeoff?.laborRate ?? 0) === 0 &&
+      resetBags.calculatedQuantity === 82,
+  );
+  check(
+    "Unrelated custom estimate lines survive reset",
+    afterReset.some((item) => item.id === unrelatedLabor.id) &&
+      afterReset.some((item) => item.id === unrelatedMaterial.id) &&
+      afterReset.find((item) => item.id === unrelatedLabor.id)?.unitPrice.toString() === "250" &&
+      afterReset.find((item) => item.id === unrelatedMaterial.id)?.description ===
+        joinLineDescription("Owner-added stain"),
+  );
+
+  await expectError(
+    "Reset is blocked on SENT estimates",
+    () =>
+      resetDraftTakeoffAndGeneratedMaterials(prisma, ownerA, {
+        estimateId: laborEstimate.id,
+        lineItemId: laborLine.id,
+      }),
+    (error) => error instanceof EstimateLineError,
+  );
+  await prisma.estimate.update({
+    where: { id: laborEstimate.id },
+    data: { status: "APPROVED" },
+  });
+  await expectError(
+    "Reset is blocked on APPROVED estimates",
+    () =>
+      resetDraftTakeoffAndGeneratedMaterials(prisma, ownerA, {
+        estimateId: laborEstimate.id,
+        lineItemId: laborLine.id,
+      }),
+    (error) => error instanceof EstimateLineError,
+  );
+  await expectError(
+    "Restore original pricing is blocked on APPROVED estimates",
+    () =>
+      restoreDraftOriginalRequestPricing(prisma, ownerA, {
+        estimateId: laborEstimate.id,
+        lineItemId: laborLine.id,
+      }),
+    (error) => error instanceof EstimateLineError,
+  );
+  await expectError(
+    "MEMBER cannot reset another owner's takeoff",
+    () =>
+      resetDraftTakeoffAndGeneratedMaterials(prisma, memberA, {
+        estimateId: recoveryEstimate.id,
+        lineItemId: recoveryLabor.id,
+      }),
+    (error) => error instanceof ForbiddenError,
+  );
+  await expectError(
+    "Foreign-business owner cannot reset another tenant's takeoff",
+    () =>
+      resetDraftTakeoffAndGeneratedMaterials(prisma, ownerB, {
+        estimateId: recoveryEstimate.id,
+        lineItemId: recoveryLabor.id,
+      }),
+    (error) => error instanceof Error && error.message.includes("authorized business"),
+  );
+
+  const pricedAgain = {
+    ...resetTakeoff,
+    items: resetTakeoff.items.map((item) =>
+      item.id === "concrete-bags"
+        ? { ...item, selected: true, customerUnitPrice: 12 }
+        : item.id === "pickup-procurement"
+          ? { ...item, selected: true, customerUnitPrice: 95 }
+          : { ...item, selected: false },
+    ),
+  };
+  await saveDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: recoveryEstimate.id,
+    lineItemId: recoveryLabor.id,
+    snapshot: pricedAgain,
+  });
+  await convertDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: recoveryEstimate.id,
+    lineItemId: recoveryLabor.id,
+    snapshot: pricedAgain,
+  });
+  await persistDraftEstimateTotal(prisma, recoveryEstimate.id, businessA.id);
+  await setDraftEstimateMaterialDeposit(prisma, ownerA, {
+    estimateId: recoveryEstimate.id,
+    amount: "40",
+  });
+  const restored = await restoreDraftOriginalRequestPricing(prisma, ownerA, {
+    estimateId: recoveryEstimate.id,
+    lineItemId: recoveryLabor.id,
+  });
+  const afterRestore = await prisma.lineItem.findMany({
+    where: { estimateId: recoveryEstimate.id, businessId: businessA.id },
+  });
+  check(
+    "Restore original request pricing returns the labor line to the pre-priced draft state",
+    isUnpricedCustomQuoteDraftLine(restored) &&
+      restored.description.includes(CUSTOM_QUOTE_DRAFT_MARKER) &&
+      lineItemIncludedWork(restored.description) === requestScope &&
+      lineMaterialTakeoff(restored.description) == null &&
+      splitLineDescription(restored.description).materialDeposit == null,
+  );
+  check(
+    "Restore removes takeoff-generated MATERIAL lines and keeps unrelated lines",
+    afterRestore.every(
+      (item) => lineMaterialTakeoffSource(item.description)?.parentLineItemId !== recoveryLabor.id,
+    ) &&
+      afterRestore.some((item) => item.id === unrelatedLabor.id) &&
+      afterRestore.some((item) => item.id === unrelatedMaterial.id),
+  );
+  check(
+    "Tenant ownership is preserved on recovery lines",
+    afterRestore.every((item) => item.businessId === businessA.id),
   );
 
   console.log("\nTEST — Sheet covering, framed wall, tenant isolation");

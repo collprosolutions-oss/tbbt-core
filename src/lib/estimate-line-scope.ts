@@ -136,6 +136,18 @@ export function lineMaterialTakeoffSource(
   return splitLineDescription(description).materialTakeoffSource;
 }
 
+/**
+ * Public service catalog save is for real LABOR/service lines only.
+ * Converted takeoff MATERIAL rows and other material lines must never
+ * become public catalog services.
+ */
+export function canSaveEstimateLineToServiceCatalog(line: {
+  type: string;
+  description?: string | null;
+}) {
+  return line.type === "LABOR" && !lineMaterialTakeoffSource(line.description);
+}
+
 export function joinLineDescription(
   title: string,
   includedWork?: string | null,

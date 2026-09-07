@@ -20,6 +20,7 @@ const { persistDraftEstimateTotal } = await import("@/lib/labor-minimum");
 const { createEstimateVersionSnapshot } = await import("@/lib/estimate-version");
 const {
   INCLUDED_WORK_MARKER,
+  canSaveEstimateLineToServiceCatalog,
   catalogScopeText,
   joinLineDescription,
   lineItemIncludedWork,
@@ -38,6 +39,10 @@ const {
   saveDraftEstimateLineAsCatalog,
   updateDraftEstimateLineIncludedWork,
 } = await import("@/lib/estimate-line-ops");
+const {
+  deleteOwnedServiceCatalogItem,
+  setOwnedServiceCatalogItemActive,
+} = await import("@/lib/catalog-ops");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -217,6 +222,7 @@ try {
     "DRAFT owner page can edit scope and optionally save service and scope to the catalog",
     ownerPage.includes("EditLineIncludedWorkForm") &&
       ownerPage.includes("SaveLineForReuseForm") &&
+      ownerPage.includes("canSaveEstimateLineToServiceCatalog") &&
       ownerPage.includes("currentPriceLabel") &&
       reuseForm.includes("Save Service & Scope to Catalog") &&
       reuseForm.includes("Also save the current price as the default starting price") &&
@@ -228,6 +234,19 @@ try {
   const saveOps = readFileSync(
     new URL("../src/lib/estimate-line-ops.ts", import.meta.url),
     "utf8",
+  );
+  check(
+    "Only LABOR/service lines are eligible for service-catalog save",
+    saveOps.includes("canSaveEstimateLineToServiceCatalog") &&
+      saveOps.includes("Only labor/service lines can be saved to the services catalog") &&
+      canSaveEstimateLineToServiceCatalog({ type: "LABOR", description: "Patio slab" }) &&
+      !canSaveEstimateLineToServiceCatalog({ type: "MATERIAL", description: "60-lb concrete bags" }) &&
+      !canSaveEstimateLineToServiceCatalog({
+        type: "LABOR",
+        description: joinLineDescription("60-lb concrete bags", null, null, null, {
+          materialTakeoffSource: { parentLineItemId: "parent", itemId: "concrete-bags" },
+        }),
+      }),
   );
   check(
     "Catalog price is saved only when savePrice is explicitly true",
@@ -803,6 +822,162 @@ try {
   check(
     "Cross-tenant scope edit did not mutate Business A",
     scopeOf(aLineUnchanged) === `${WALL_SCOPE}\nStain to match existing trim`,
+  );
+
+  console.log("\nTEST — Catalog save blocked for materials; delete/deactivate keeps history");
+  const materialLine = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: reuseEstimate.id,
+      description: joinLineDescription("60-lb concrete bags", null, null, null, {
+        materialTakeoffSource: { parentLineItemId: reuseLine.id, itemId: "concrete-bags" },
+      }),
+      quantity: new Prisma.Decimal(22),
+      unitPrice: new Prisma.Decimal(12),
+      total: new Prisma.Decimal(264),
+      type: "MATERIAL",
+    },
+  });
+  const catalogCountBeforeMaterialSave = await prisma.serviceCatalogItem.count({
+    where: { businessId: businessA.id },
+  });
+  await expectError(
+    "Takeoff-generated MATERIAL lines cannot be saved to the service catalog",
+    () =>
+      saveDraftEstimateLineAsCatalog(prisma, ownerA, {
+        estimateId: reuseEstimate.id,
+        lineItemId: materialLine.id,
+      }),
+    (error) =>
+      error instanceof EstimateLineError &&
+      error.message.includes("labor/service lines"),
+  );
+  check(
+    "Refusing a MATERIAL catalog save does not create a catalog row",
+    (await prisma.serviceCatalogItem.count({ where: { businessId: businessA.id } })) ===
+      catalogCountBeforeMaterialSave,
+  );
+  const laborSavedAgain = await saveDraftEstimateLineAsCatalog(prisma, ownerA, {
+    estimateId: reuseEstimate.id,
+    lineItemId: reuseLine.id,
+  });
+  check(
+    "Real LABOR/service lines can still be saved to the catalog",
+    laborSavedAgain.name === "Decorative Wall Paneling & Finish Carpentry",
+  );
+
+  const keepService = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Keep This Real Service",
+      pricingMode: "FIXED",
+      price: new Prisma.Decimal(150),
+      description: "Real labor service",
+      category: "General",
+      active: true,
+    },
+  });
+  const accidental = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Welded wire mesh sheets",
+      pricingMode: "CUSTOM_QUOTE",
+      price: null,
+      description: "Accidental material saved as a service",
+      category: "General",
+      active: true,
+    },
+  });
+  const historyEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const historyLine = await addCatalogItemToDraftEstimate(prisma, ownerA, {
+    estimateId: historyEstimate.id,
+    catalogItemId: accidental.id,
+    quantity: new Prisma.Decimal(1),
+    unitPrice: new Prisma.Decimal(88),
+  });
+  const historyDescription = historyLine.description;
+  const historyPrice = historyLine.unitPrice.toString();
+  await persistDraftEstimateTotal(prisma, historyEstimate.id, businessA.id);
+  const sentHistory = await simulateSend(historyEstimate.id, businessA.id);
+  check("Historical estimate can be snapshotted before catalog cleanup", sentHistory.ok === true);
+  const versionLineBefore = await prisma.estimateVersionLineItem.findFirst({
+    where: { estimateVersionId: sentHistory.version.id, businessId: businessA.id },
+  });
+
+  await setOwnedServiceCatalogItemActive(prisma, ownerA, {
+    id: accidental.id,
+    active: false,
+  });
+  const activeAfterDeactivate = await prisma.serviceCatalogItem.findMany({
+    where: { businessId: businessA.id, active: true },
+    select: { id: true, name: true },
+  });
+  check(
+    "Deactivate removes the item from the public/active service selector",
+    activeAfterDeactivate.every((item) => item.id !== accidental.id) &&
+      activeAfterDeactivate.some((item) => item.id === keepService.id),
+  );
+  await expectError(
+    "Inactive catalog items cannot be added to a new draft estimate",
+    () =>
+      addCatalogItemToDraftEstimate(prisma, ownerA, {
+        estimateId: nextEstimate.id,
+        catalogItemId: accidental.id,
+        quantity: new Prisma.Decimal(1),
+      }),
+    (error) => error instanceof EstimateLineError && error.message.includes("not active"),
+  );
+
+  await expectError(
+    "MEMBER cannot delete a catalog item",
+    () => deleteOwnedServiceCatalogItem(prisma, memberA, { id: accidental.id }),
+    (error) => error instanceof ForbiddenError,
+  );
+  await expectError(
+    "Foreign-business owner cannot delete another tenant's catalog item",
+    () => deleteOwnedServiceCatalogItem(prisma, ownerB, { id: accidental.id }),
+    (error) => error instanceof Error && error.message.includes("authorized business"),
+  );
+
+  await deleteOwnedServiceCatalogItem(prisma, ownerA, { id: accidental.id });
+  const activeAfterDelete = await prisma.serviceCatalogItem.findMany({
+    where: { businessId: businessA.id, active: true },
+    select: { id: true },
+  });
+  check(
+    "Delete removes the item from the public/active service selector",
+    !(await prisma.serviceCatalogItem.findFirst({ where: { id: accidental.id } })) &&
+      activeAfterDelete.every((item) => item.id !== accidental.id) &&
+      activeAfterDelete.some((item) => item.id === keepService.id),
+  );
+  const historyLineAfter = await prisma.lineItem.findFirst({
+    where: { id: historyLine.id, businessId: businessA.id },
+  });
+  const versionLineAfter = await prisma.estimateVersionLineItem.findFirst({
+    where: { id: versionLineBefore.id, businessId: businessA.id },
+  });
+  check(
+    "Historical estimate line snapshot stays intact after catalog delete",
+    historyLineAfter != null &&
+      historyLineAfter.description === historyDescription &&
+      historyLineAfter.unitPrice.toString() === historyPrice &&
+      historyLineAfter.serviceCatalogItemId == null &&
+      versionLineAfter != null &&
+      versionLineAfter.description === versionLineBefore.description &&
+      versionLineAfter.unitPrice.toString() === versionLineBefore.unitPrice.toString() &&
+      versionLineAfter.total.toString() === versionLineBefore.total.toString(),
+  );
+  check(
+    "Existing real catalog services are preserved",
+    (await prisma.serviceCatalogItem.findFirst({
+      where: { id: keepService.id, businessId: businessA.id },
+    }))?.name === "Keep This Real Service",
   );
 
   console.log(

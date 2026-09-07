@@ -7,6 +7,7 @@ import {
   saveEstimateMaterialTakeoff,
   type EstimateActionState,
 } from "@/app/actions/estimate";
+import { ResetTakeoffAndGeneratedMaterialsForm } from "@/components/estimates/draft-estimate-recovery-forms";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -540,6 +541,12 @@ export function MaterialTakeoffForm({
           Add takeoff item
         </Button>
       </form>
+      <div className="mt-4 border-t border-border pt-3">
+        <ResetTakeoffAndGeneratedMaterialsForm
+          estimateId={estimateId}
+          lineItemId={lineItemId}
+        />
+      </div>
     </details>
   );
 }

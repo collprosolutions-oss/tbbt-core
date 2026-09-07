@@ -86,6 +86,8 @@ export {
   convertDraftMaterialTakeoff,
   parseTakeoffFormSnapshot,
   recalculateDraftMaterialTakeoff,
+  resetDraftTakeoffAndGeneratedMaterials,
+  restoreDraftOriginalRequestPricing,
   saveDraftMaterialTakeoff,
 } from "@/lib/material-takeoff/ops";
 export {

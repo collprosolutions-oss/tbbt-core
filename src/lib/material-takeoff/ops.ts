@@ -18,7 +18,14 @@ import {
   splitLineDescription,
 } from "@/lib/estimate-line-scope";
 import { EstimateLineError } from "@/lib/estimate-line-ops";
-import { pricedCustomQuoteDescription } from "@/lib/request-estimate-draft";
+import { descriptionsWithMaterialDeposit } from "@/lib/material-deposit";
+import { publicCatalogUnitAmount } from "@/lib/pricing-mode";
+import {
+  CUSTOM_QUOTE_DRAFT_MARKER,
+  STARTING_AT_DRAFT_MARKER,
+  customQuoteDisplayDescription,
+  pricedCustomQuoteDescription,
+} from "@/lib/request-estimate-draft";
 import { recommendTakeoffLabor } from "@/lib/material-takeoff/labor-pricing";
 import {
   addCustomTakeoffItem,
@@ -297,6 +304,156 @@ export async function applyDraftTakeoffRecommendedLabor(
   };
 }
 
+/**
+ * Owner recovery: wipe takeoff experiments back to calculated defaults
+ * from the current dimensions/options. Generated MATERIAL children of
+ * this parent are removed. Unrelated custom lines, the original labor
+ * line, request/scope, and photos stay. DRAFT only.
+ */
+export async function resetDraftTakeoffAndGeneratedMaterials(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    estimateId: string;
+    lineItemId: string;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  const { line, estimate } = await loadDraftParentLine(
+    db,
+    access,
+    input.estimateId,
+    input.lineItemId,
+  );
+  const previous = lineMaterialTakeoff(line.description);
+  const generatedIds = await generatedTakeoffMaterialIds(
+    db,
+    estimate.id,
+    access.businessId,
+    line.id,
+  );
+  if (!previous && generatedIds.length === 0) {
+    throw new EstimateLineError("There is no material takeoff or generated materials to reset.");
+  }
+
+  let nextSnapshot = previous;
+  if (previous) {
+    const computed = computeTakeoff({
+      takeoffType: previous.takeoffType,
+      inputs: previous.inputs,
+      wastePercent: previous.wastePercent,
+      measurementSource: previous.measurementSource,
+      skippedMeasurements: previous.skippedMeasurements,
+    });
+    if (computed.rejected && computed.snapshot.items.length === 0) {
+      throw new EstimateLineError(computed.rejected);
+    }
+    nextSnapshot = computed.snapshot;
+  }
+
+  await db.$transaction(async (tx) => {
+    if (generatedIds.length > 0) {
+      await tx.lineItem.deleteMany({
+        where: {
+          id: { in: generatedIds },
+          estimateId: estimate.id,
+          businessId: access.businessId,
+        },
+      });
+    }
+    if (nextSnapshot) {
+      await persistTakeoffOnLine(tx, line, nextSnapshot);
+    }
+    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
+  });
+
+  return {
+    removedMaterialCount: generatedIds.length,
+    snapshot: nextSnapshot,
+  };
+}
+
+/**
+ * Owner recovery: return the original request LABOR line to the
+ * pre-priced draft state where safe, remove takeoff-generated MATERIAL
+ * children, and clear the material deposit override. Request/scope/intake
+ * stay. Unrelated estimate lines stay. DRAFT only.
+ */
+export async function restoreDraftOriginalRequestPricing(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    estimateId: string;
+    lineItemId: string;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  const { line, estimate } = await loadDraftParentLine(
+    db,
+    access,
+    input.estimateId,
+    input.lineItemId,
+  );
+  if (line.type !== "LABOR") {
+    throw new EstimateLineError(
+      "Restore original request pricing applies to the original labor/service line.",
+    );
+  }
+
+  const catalog = line.serviceCatalogItemId
+    ? await db.serviceCatalogItem.findFirst({
+        where: { id: line.serviceCatalogItemId, businessId: access.businessId },
+        select: { pricingMode: true, price: true },
+      })
+    : null;
+  const parts = splitLineDescription(line.description);
+  const restored = originalRequestLaborState(parts, catalog);
+  const unitPrice = new Prisma.Decimal(restored.unitPrice.toFixed(2));
+  const total = line.quantity.mul(unitPrice);
+
+  await db.$transaction(async (tx) => {
+    const generatedIds = await generatedTakeoffMaterialIds(
+      tx,
+      estimate.id,
+      access.businessId,
+      line.id,
+    );
+    if (generatedIds.length > 0) {
+      await tx.lineItem.deleteMany({
+        where: {
+          id: { in: generatedIds },
+          estimateId: estimate.id,
+          businessId: access.businessId,
+        },
+      });
+    }
+    await tx.lineItem.update({
+      where: { id: line.id },
+      data: {
+        unitPrice,
+        total,
+        description: restored.description,
+      },
+    });
+    const remaining = await tx.lineItem.findMany({
+      where: { estimateId: estimate.id, businessId: access.businessId },
+      select: { id: true, type: true, description: true },
+    });
+    const depositUpdates = descriptionsWithMaterialDeposit(remaining, null);
+    for (const row of depositUpdates) {
+      await tx.lineItem.update({
+        where: { id: row.id },
+        data: { description: row.description },
+      });
+    }
+    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
+  });
+
+  return db.lineItem.findFirstOrThrow({
+    where: { id: line.id, businessId: access.businessId },
+  });
+}
+
 export function parseTakeoffFormSnapshot(raw: string) {
   try {
     return normalizeTakeoffSnapshot(JSON.parse(raw));
@@ -415,4 +572,60 @@ function convertedLinesByItemId(
     }
   }
   return found;
+}
+
+async function generatedTakeoffMaterialIds(
+  db: Pick<Db, "lineItem">,
+  estimateId: string,
+  businessId: string,
+  parentLineItemId: string,
+) {
+  const lines = await db.lineItem.findMany({
+    where: { estimateId, businessId },
+    select: { id: true, description: true },
+  });
+  return lines
+    .filter((row) => {
+      const source = lineMaterialTakeoffSource(row.description);
+      return source?.parentLineItemId === parentLineItemId;
+    })
+    .map((row) => row.id);
+}
+
+function originalRequestLaborState(
+  parts: ReturnType<typeof splitLineDescription>,
+  catalog: { pricingMode: string; price: Prisma.Decimal | null } | null,
+) {
+  const displayTitle = customQuoteDisplayDescription(parts.title)
+    .replace(` ${STARTING_AT_DRAFT_MARKER}`, "")
+    .trim();
+  const pricingMode = catalog?.pricingMode ?? "CUSTOM_QUOTE";
+  const catalogAmount = catalog
+    ? publicCatalogUnitAmount(pricingMode, catalog.price)
+    : null;
+  let title = displayTitle;
+  let unitPrice = 0;
+  if (pricingMode === "STARTING_AT") {
+    title = `${displayTitle} ${STARTING_AT_DRAFT_MARKER}`;
+    unitPrice = catalogAmount ?? 0;
+  } else if (pricingMode === "FIXED" && catalogAmount != null) {
+    unitPrice = catalogAmount;
+  } else {
+    title = `${displayTitle} ${CUSTOM_QUOTE_DRAFT_MARKER}`;
+    unitPrice = 0;
+  }
+  return {
+    unitPrice,
+    description: joinLineDescription(
+      title,
+      parts.includedWork,
+      parts.calculatorSnapshot,
+      parts.customerPolicies,
+      {
+        materialTakeoff: null,
+        materialTakeoffSource: null,
+        materialDeposit: null,
+      },
+    ),
+  };
 }

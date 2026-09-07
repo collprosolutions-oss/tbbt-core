@@ -2,7 +2,10 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { CatalogItemRow } from "@/components/catalog/catalog-item-row";
+import {
+  CatalogItemRow,
+  CatalogItemSafetyActions,
+} from "@/components/catalog/catalog-item-row";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { pricingModeDescription, pricingModeLabel } from "@/lib/pricing-mode";
@@ -93,6 +96,13 @@ export function ServicePricingPanel({
                   {service.active ? "Active" : "Inactive"}
                 </Badge>
               </div>
+              {!editing ? (
+                <CatalogItemSafetyActions
+                  id={service.id}
+                  name={service.name}
+                  active={service.active}
+                />
+              ) : null}
             </div>
 
             <div className="space-y-2 rounded-lg border border-border/70 bg-background/50 p-4">
