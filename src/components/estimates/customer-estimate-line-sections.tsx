@@ -131,20 +131,31 @@ function CompactCustomerMaterialList({
       : "border-muted-foreground/40";
 
   return (
-    <ul className="customer-materials-compact mt-1.5 text-sm leading-5">
-      {lines.map((line, lineIndex) => (
-        <li
-          key={`${line.description}-${lineIndex}`}
-          className="flex items-baseline gap-2 py-px"
-        >
-          <span className="min-w-0">{line.description}</span>
-          <span
-            aria-hidden
-            className={`min-w-3 flex-1 translate-y-[-0.35em] border-b border-dotted ${leader}`}
-          />
-          <span className="shrink-0 tabular-nums">{line.quantityLabel}</span>
-        </li>
-      ))}
-    </ul>
+    <div className="mt-1.5">
+      <div
+        className={`mb-0.5 flex items-baseline gap-2 text-[11px] font-semibold tracking-wider ${
+          appearance === "print" ? "text-neutral-500" : "text-muted-foreground"
+        }`}
+      >
+        <span>Description</span>
+        <span className="flex-1" />
+        <span>Qty</span>
+      </div>
+      <ul className="customer-materials-compact text-sm leading-5">
+        {lines.map((line, lineIndex) => (
+          <li
+            key={`${line.description}-${lineIndex}`}
+            className="flex items-baseline gap-2 py-px"
+          >
+            <span className="min-w-0">{line.description}</span>
+            <span
+              aria-hidden
+              className={`min-w-3 flex-1 translate-y-[-0.35em] border-b border-dotted ${leader}`}
+            />
+            <span className="shrink-0 tabular-nums">{line.quantityLabel}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

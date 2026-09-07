@@ -16,6 +16,10 @@ import {
   type EstimateDocumentView,
 } from "@/lib/estimate-document";
 import {
+  PROJECT_CONDITIONS_TITLE,
+  TERMS_AND_CONDITIONS_TITLE,
+} from "@/lib/estimate-terms/types";
+import {
   MATERIAL_DEPOSIT_CUSTOMER_LABEL,
   REMAINING_BALANCE_CUSTOMER_LABEL,
 } from "@/lib/material-deposit";
@@ -131,9 +135,13 @@ export function renderEstimatePdf(
       ensureSpace(40);
       doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
       doc.text(title, left, y);
-      y += quantityOnly ? 12 : 16;
-      if (!quantityOnly) {
-        doc.font("Helvetica-Bold").fontSize(8).fillColor("#666666");
+      y += quantityOnly ? 10 : 16;
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#666666");
+      if (quantityOnly) {
+        doc.text("DESCRIPTION", left, y);
+        doc.text("QTY", colQty, y, { width: 70, align: "right" });
+        y += 11;
+      } else {
         doc.text("DESCRIPTION", left, y);
         doc.text("QTY", colQty, y, { width: 70, align: "right" });
         doc.text("RATE", colRate, y, { width: 70, align: "right" });
@@ -268,23 +276,45 @@ export function renderEstimatePdf(
       }
     }
 
-    if (docView.policies.length > 0) {
-      y += 20;
-      ensureSpace(40);
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
-      doc.text("TERMS", left, y);
+    const renderPolicyBlock = (
+      heading: string,
+      items: EstimateDocumentView["terms"],
+    ) => {
+      if (items.length === 0) return;
       y += 14;
-      for (const policy of docView.policies) {
-        const bodyHeight = doc.heightOfString(policy.body, { width: right - left });
-        ensureSpace(24 + bodyHeight);
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#111111");
+      ensureSpace(36);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
+      doc.text(heading, left, y);
+      y += 12;
+      for (const policy of items) {
+        const bodyHeight = doc.heightOfString(policy.body, {
+          width: right - left,
+        });
+        ensureSpace(20 + bodyHeight);
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#111111");
         doc.text(policy.title, left, y, { width: right - left });
-        y += 14;
+        y += 11;
         doc.font("Helvetica").fontSize(8).fillColor("#333333");
         doc.text(policy.body, left, y, { width: right - left });
-        y += bodyHeight + 12;
+        y += bodyHeight + 8;
       }
+    };
+
+    if (docView.projectConditions) {
+      y += 14;
+      ensureSpace(36);
+      const bodyHeight = doc.heightOfString(docView.projectConditions.body, {
+        width: right - left,
+      });
+      ensureSpace(20 + bodyHeight);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
+      doc.text(PROJECT_CONDITIONS_TITLE, left, y);
+      y += 12;
+      doc.font("Helvetica").fontSize(8).fillColor("#333333");
+      doc.text(docView.projectConditions.body, left, y, { width: right - left });
+      y += bodyHeight + 8;
     }
+    renderPolicyBlock(TERMS_AND_CONDITIONS_TITLE, docView.terms);
 
     y += 12;
     ensureSpace(20);

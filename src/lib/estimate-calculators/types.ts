@@ -36,6 +36,9 @@ export type CalculatorCustomerPolicy = {
   id: string;
   title: string;
   body: string;
+  family?: "core" | "trade" | "project" | "business";
+  optional?: boolean;
+  disabled?: boolean;
 };
 
 export type CalculatorResult = {

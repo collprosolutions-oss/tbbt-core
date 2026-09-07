@@ -41,7 +41,11 @@ import {
   isUnpricedCustomQuoteDraftLine,
   pricedCustomQuoteDescription,
 } from "@/lib/request-estimate-draft";
-import { resolveCustomerPolicies } from "@/lib/estimate-policies";
+import {
+  catalogCustomerPolicies,
+  mergeCustomerPolicies,
+  resolveCustomerPolicies,
+} from "@/lib/estimate-policies";
 import { DEFAULT_SERVICE_CATEGORY } from "@/lib/service-catalog-category";
 
 type Db = PrismaClient;
@@ -413,7 +417,7 @@ export async function saveDraftEstimateLineAsCatalog(
     name,
   );
   if (calculatorDefinition) {
-    calculatorDefinition.customerPolicies = resolveCustomerPolicies(
+    calculatorDefinition.customerPolicies = catalogCustomerPolicies(
       lineParts.customerPolicies.length > 0
         ? lineParts.customerPolicies
         : calculatorDefinition.customerPolicies,
@@ -549,9 +553,9 @@ export async function applyDraftEstimateCalculator(
   }
   const unitPrice = new Prisma.Decimal(result.recommendedAmount.toFixed(2));
   const total = line.quantity.mul(unitPrice);
-  const customerPolicies = resolveCustomerPolicies(
-    input.customerPolicies ??
-      (parts.customerPolicies.length > 0 ? parts.customerPolicies : null),
+  const customerPolicies = mergeCustomerPolicies(
+    parts.customerPolicies,
+    input.customerPolicies,
   );
   const description = pricedCustomQuoteDescription(
     joinLineDescriptionFromParts(parts, {
@@ -749,8 +753,10 @@ async function writeBusinessCalculatorRates(
   const definition = {
     calculatorId,
     rates: persistableCalculatorRates(calculatorId, input.rates, null, components),
-    customerPolicies: resolveCustomerPolicies(
-      input.customerPolicies ?? existingDefinition?.customerPolicies,
+    customerPolicies: catalogCustomerPolicies(
+      resolveCustomerPolicies(
+        input.customerPolicies ?? existingDefinition?.customerPolicies,
+      ),
     ),
     ...(components ? { components } : {}),
     ...(intake ? { intake } : {}),

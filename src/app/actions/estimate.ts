@@ -43,6 +43,8 @@ import {
   saveDraftMaterialTakeoff,
 } from "@/lib/material-takeoff";
 import { parseWorkAreaIntake } from "@/lib/work-area-intake";
+import { stampDraftEstimateTerms } from "@/lib/estimate-terms/stamp";
+import { normalizeCustomerPolicies } from "@/lib/estimate-policies";
 import { toStoredIntakeMeasurement } from "@/lib/intake-quote-handoff";
 import {
   addRequestDraftLines,
@@ -948,6 +950,45 @@ export async function setEstimateCustomerMaterialsTotal(
   }
 }
 
+export async function updateEstimateTerms(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+    if (!estimateId) {
+      return { error: "Those terms could not be saved." };
+    }
+    let parsed: unknown = null;
+    const raw = readString(formData, "termsJson");
+    if (raw) {
+      parsed = JSON.parse(raw);
+    }
+    const estimate = access.assertOwned(
+      await prisma.estimate.findFirst({
+        where: { id: estimateId, ...access.scope },
+        select: { id: true, status: true, businessId: true },
+      }),
+    );
+    if (estimate.status !== "DRAFT") {
+      return { error: "Only a draft estimate can update terms." };
+    }
+    await stampDraftEstimateTerms(prisma, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+      policies: normalizeCustomerPolicies(parsed),
+    });
+    revalidatePath(`/estimates/${estimate.id}`);
+    return { message: "Customer terms saved on this estimate." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not save those terms."),
+    };
+  }
+}
+
 export async function setEstimateMaterialDeposit(
   _prev: EstimateActionState,
   formData: FormData,
@@ -1121,6 +1162,10 @@ export async function sendEstimate(
     }
 
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
+    await stampDraftEstimateTerms(tx, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+    });
 
     const updated = await tx.estimate.updateMany({
       where: {

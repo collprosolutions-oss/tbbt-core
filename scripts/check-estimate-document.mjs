@@ -184,7 +184,7 @@ check(
     "SERVICE ADDRESS",
     "ESTIMATE_TOTAL_CUSTOMER_LABEL",
     "MATERIAL_DEPOSIT_CUSTOMER_LABEL",
-    "TERMS",
+    "EstimateDocumentTerms",
   ].every((label) => documentView.includes(label)) &&
     documentView.includes("CustomerEstimateLineSections") &&
     lineSections.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
@@ -203,7 +203,7 @@ check(
   "Document loader is version-first and strips internals via splitLineDescription",
   documentLib.includes("versions") &&
     documentLib.includes("splitLineDescription") &&
-    documentLib.includes("uniqueCustomerPolicies"),
+  documentLib.includes("resolveEstimateDocumentTerms"),
 );
 check(
   "Owner estimate page links to print and PDF",
@@ -230,6 +230,8 @@ check(
     lineSections.includes("customer-materials-compact") &&
     compactMaterials.includes("line.quantityLabel") &&
     compactMaterials.includes("line.description") &&
+    compactMaterials.includes(">Qty</span>") &&
+    compactMaterials.includes(">Description</span>") &&
     !compactMaterials.includes("unitPriceLabel") &&
     !compactMaterials.includes("amountLabel") &&
     !compactMaterials.includes("py-2.5") &&
@@ -238,7 +240,9 @@ check(
     estimatePdfSrc.includes(
       "drawSection(ESTIMATE_MATERIALS_SECTION_TITLE, docView.materialLines, true)",
     ) &&
-    estimatePdfSrc.includes("Compact customer materials"),
+    estimatePdfSrc.includes("Compact customer materials") &&
+    estimatePdfSrc.includes('doc.text("QTY"') &&
+    estimatePdfSrc.includes("quantityOnly"),
 );
 
 const baseUrl = process.env.DATABASE_URL;
@@ -646,6 +650,8 @@ try {
     "customer document shows deposit wording without internals",
     slabPlain.includes(ESTIMATE_LABOR_SECTION_TITLE) &&
       slabPlain.includes(ESTIMATE_MATERIALS_SECTION_TITLE) &&
+      slabPlain.includes("Description") &&
+      slabPlain.includes("Qty") &&
       slabPlain.includes(ESTIMATE_TOTAL_CUSTOMER_LABEL) &&
       slabPlain.includes(MATERIAL_DEPOSIT_CUSTOMER_LABEL) &&
       slabPlain.includes(REMAINING_BALANCE_CUSTOMER_LABEL) &&
@@ -653,9 +659,31 @@ try {
       !slabPlain.includes("unitCost") &&
       !slabPlain.includes("markupPercent"),
   );
+  check(
+    "MATERIALS heading includes Qty without restoring unit prices",
+    slabPlain.includes("MATERIALS") &&
+      slabPlain.includes("Qty") &&
+      !slabDoc?.materialLines[0]?.unitPriceLabel &&
+      !slabDoc?.materialLines[0]?.amountLabel,
+  );
+  check(
+    "construction draft preview includes core terms and material-deposit language",
+    slabDoc?.terms.some((term) => term.title === "Scope of Work") === true &&
+      slabDoc?.terms.some((term) => term.title === "Unforeseen / Concealed Conditions") === true &&
+      slabDoc?.terms.some((term) => term.title === "Material Deposit") === true &&
+      slabDoc?.terms.some((term) =>
+        term.body.includes("part of the estimate total, not an additional fee"),
+      ) === true &&
+      slabDoc?.terms.some((term) => term.title === "Customer-Supplied Materials") !== true &&
+      slabDoc?.terms.some((term) => term.title === "Cleaning Access & Utilities") !== true,
+  );
   const slabPdf = await renderEstimatePdf(slabDoc);
   const slabPdfText = pdfExtractText(slabPdf);
   check("PDF includes LABOR and MATERIALS section titles", slabPdfText.includes("LABOR") && slabPdfText.includes("MATERIALS"));
+  check(
+    "PDF MATERIALS includes Description and Qty headings",
+    slabPdfText.includes("DESCRIPTION") && slabPdfText.includes("QTY"),
+  );
   check("PDF includes material deposit due upon approval", slabPdfText.includes("Material Deposit Due Upon Approval"));
   check("PDF remaining balance is $792.00", slabPdfText.includes("$792.00"));
   assertNoInternalLeaks("founder slab document", slabPlain);

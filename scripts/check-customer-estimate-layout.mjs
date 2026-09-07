@@ -159,7 +159,7 @@ check(
     !printPage.includes("ApproveEstimateButton") &&
     estimateDocument.includes("ESTIMATE") &&
     estimateDocument.includes("SERVICE ADDRESS") &&
-    estimateDocument.includes("TERMS") &&
+    estimateDocument.includes("EstimateDocumentTerms") &&
     estimateDocument.includes("CustomerEstimateLineSections") &&
     lineSections.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
     lineSections.includes("ESTIMATE_MATERIALS_SECTION_TITLE"),
@@ -184,6 +184,8 @@ check(
     compactMaterials.includes("leading-5") &&
     compactMaterials.includes("border-dotted") &&
     compactMaterials.includes("py-px") &&
+    compactMaterials.includes(">Qty</span>") &&
+    compactMaterials.includes(">Description</span>") &&
     !compactMaterials.includes("py-2.5") &&
     !compactMaterials.includes("unitPriceLabel") &&
     !compactMaterials.includes("amountLabel") &&

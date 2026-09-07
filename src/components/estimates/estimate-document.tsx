@@ -1,4 +1,5 @@
 import { CustomerEstimateLineSections } from "@/components/estimates/customer-estimate-line-sections";
+import { EstimateDocumentTerms } from "@/components/estimates/customer-policy-display";
 import {
   ESTIMATE_DOCUMENT_LOGO_HEIGHT_PX,
   ESTIMATE_TOTAL_CUSTOMER_LABEL,
@@ -129,22 +130,13 @@ export function EstimateDocument({
         ) : null}
       </section>
 
-      {estimate.policies.length > 0 ? (
-        <section className="mt-10 border-t border-neutral-200 pt-4 text-sm text-neutral-700">
-          <h2 className="text-xs font-semibold tracking-wider text-neutral-500">
-            TERMS
-          </h2>
-          <div className="mt-3 space-y-4">
-            {estimate.policies.map((policy) => (
-              <div key={policy.title}>
-                <p className="font-medium text-neutral-800">{policy.title}</p>
-                <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-neutral-600">
-                  {policy.body}
-                </p>
-              </div>
-            ))}
-          </div>
-        </section>
+      {estimate.projectConditions || estimate.terms.length > 0 ? (
+        <EstimateDocumentTerms
+          className="mt-6 border-t border-neutral-200 pt-4"
+          appearance="print"
+          projectConditions={estimate.projectConditions}
+          terms={estimate.terms}
+        />
       ) : null}
 
       <footer className="mt-8 border-t border-neutral-200 pt-4 text-xs text-neutral-500">

@@ -9,9 +9,16 @@
  */
 import { Prisma, type LineItemType, type PrismaClient } from "@prisma/client";
 import { getBusinessDocumentLogoSrc } from "@/lib/business-branding";
-import type { CalculatorCustomerPolicy } from "@/lib/estimate-calculators/types";
 import { splitLineDescription } from "@/lib/estimate-line-scope";
-import { uniqueCustomerPolicies } from "@/lib/estimate-policies";
+import { parseWorkAreaIntake } from "@/lib/work-area-intake";
+import {
+  collectEstimateTermContext,
+  resolveEstimateDocumentTerms,
+} from "@/lib/estimate-terms/compose";
+import {
+  PROJECT_CONDITIONS_TITLE,
+  TERMS_AND_CONDITIONS_TITLE,
+} from "@/lib/estimate-terms/types";
 import { formatAddress, formatDate, formatMoney } from "@/lib/format";
 import {
   INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
@@ -76,6 +83,7 @@ export type EstimateDocumentLine = {
 };
 
 export type EstimateDocumentPolicy = {
+  id?: string;
   title: string;
   body: string;
 };
@@ -106,6 +114,8 @@ export type EstimateDocumentView = {
   materialLines: EstimateDocumentLine[];
   otherLines: EstimateDocumentLine[];
   policies: EstimateDocumentPolicy[];
+  projectConditions: EstimateDocumentPolicy | null;
+  terms: EstimateDocumentPolicy[];
   laborTotalLabel: string;
   materialTotalLabel: string;
   otherTotalLabel: string | null;
@@ -130,6 +140,7 @@ const ESTIMATE_DOCUMENT_INCLUDE = {
       postalCode: true,
     },
   },
+  serviceRequest: { select: { description: true } },
   lineItems: {
     orderBy: { createdAt: "asc" as const },
     select: {
@@ -175,15 +186,16 @@ function formatQuantity(quantity: Prisma.Decimal): string {
   return quantity.toString();
 }
 
-function toCustomerPolicies(
-  descriptions: Array<string | null | undefined>,
-): EstimateDocumentPolicy[] {
-  return uniqueCustomerPolicies(
-    descriptions.map((description) => splitLineDescription(description).customerPolicies),
-  ).map((policy: CalculatorCustomerPolicy) => ({
+function toDocumentPolicy(policy: {
+  id?: string;
+  title: string;
+  body: string;
+}): EstimateDocumentPolicy {
+  return {
+    ...(policy.id ? { id: policy.id } : {}),
     title: policy.title,
     body: policy.body,
-  }));
+  };
 }
 
 function toDocumentLines(
@@ -237,6 +249,7 @@ function toDocumentView(estimate: {
     total: Prisma.Decimal;
     type: LineItemType;
   }>;
+  serviceRequest?: { description: string | null } | null;
   versions: Array<{
     id: string;
     sentAt: Date;
@@ -296,6 +309,21 @@ function toDocumentView(estimate: {
   const deposit = resolveMaterialDeposit({ lines: rawLines, total });
   const showDeposit = deposit.amount.gt(0);
   const subtotal = laborTotal.add(materialTotal).add(otherTotal);
+  const freezeSnapshot = Boolean(currentVersion) || estimate.status !== "DRAFT";
+  const context = collectEstimateTermContext(rawLines);
+  const resolvedTerms = resolveEstimateDocumentTerms({
+    existing: context.existing,
+    titles: context.titles,
+    takeoffType: context.takeoffType,
+    calculatorId: context.calculatorId,
+    intake: freezeSnapshot
+      ? undefined
+      : parseWorkAreaIntake(estimate.serviceRequest?.description),
+    hasMaterials: context.hasMaterials,
+    hasDeposit: showDeposit,
+    freezeSnapshot,
+  });
+  const policies = resolvedTerms.visible.map(toDocumentPolicy);
 
   return {
     estimateId: estimate.id,
@@ -322,7 +350,11 @@ function toDocumentView(estimate: {
     laborLines: lineItems.filter((line) => line.type === "LABOR"),
     materialLines: lineItems.filter((line) => line.type === "MATERIAL"),
     otherLines: lineItems.filter((line) => line.type === "OTHER"),
-    policies: toCustomerPolicies(rawLines.map((line) => line.description)),
+    policies,
+    projectConditions: resolvedTerms.projectConditions
+      ? toDocumentPolicy(resolvedTerms.projectConditions)
+      : null,
+    terms: resolvedTerms.terms.map(toDocumentPolicy),
     laborTotalLabel: formatMoney(laborTotal),
     materialTotalLabel: formatMoney(materialTotal),
     otherTotalLabel: otherTotal.gt(0) ? formatMoney(otherTotal) : null,
@@ -340,8 +372,10 @@ function toDocumentView(estimate: {
 
 function sectionPlainText(title: string, lines: EstimateDocumentLine[]) {
   if (lines.length === 0) return [];
+  const quantityOnly = lines.every((line) => !line.showLinePricing);
   return [
     title,
+    ...(quantityOnly ? ["Description", "Qty"] : []),
     ...lines.flatMap((line) =>
       line.showLinePricing
         ? [
@@ -390,6 +424,11 @@ export function estimateDocumentPlainText(document: EstimateDocumentView): strin
       : "",
     document.remainingBalanceLabel ?? "",
     document.materialDepositNote ?? "",
+    document.projectConditions ? PROJECT_CONDITIONS_TITLE : "",
+    document.projectConditions?.title ?? "",
+    document.projectConditions?.body ?? "",
+    document.terms.length > 0 ? TERMS_AND_CONDITIONS_TITLE : "",
+    ...document.terms.flatMap((policy) => [policy.title, policy.body]),
     ...document.policies.flatMap((policy) => [policy.title, policy.body]),
   ];
   return lines.filter(Boolean).join("\n");

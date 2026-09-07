@@ -101,12 +101,13 @@ export default async function PublicEstimatePage({
             </CardContent>
           </Card>
 
-          {estimate.policies.length > 0 ? (
+          {estimate.projectConditions || estimate.terms.length > 0 ? (
             <Card className="md:col-span-2">
               <CardContent className="pt-6">
                 <EstimateCustomerPolicies
                   className="max-w-none space-y-4"
-                  policies={estimate.policies}
+                  projectConditions={estimate.projectConditions}
+                  terms={estimate.terms}
                 />
               </CardContent>
             </Card>

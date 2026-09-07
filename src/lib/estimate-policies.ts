@@ -41,9 +41,53 @@ export function normalizeCustomerPolicies(
       const title = typeof policy.title === "string" ? policy.title.trim() : "";
       const body = typeof policy.body === "string" ? policy.body.trim() : "";
       if (!id || !title || !body) return null;
-      return { id, title, body };
+      const family = normalizePolicyFamily(policy.family);
+      const optional = policy.optional === true;
+      const disabled = policy.disabled === true;
+      return {
+        id,
+        title,
+        body,
+        ...(family ? { family } : {}),
+        ...(optional ? { optional: true } : {}),
+        ...(disabled ? { disabled: true } : {}),
+      };
     })
     .filter((policy): policy is CalculatorCustomerPolicy => policy != null);
+}
+
+function normalizePolicyFamily(
+  raw: unknown,
+): CalculatorCustomerPolicy["family"] | undefined {
+  return raw === "core" ||
+    raw === "trade" ||
+    raw === "project" ||
+    raw === "business"
+    ? raw
+    : undefined;
+}
+
+export function mergeCustomerPolicies(
+  existing: CalculatorCustomerPolicy[] | null | undefined,
+  incoming: CalculatorCustomerPolicy[] | null | undefined,
+): CalculatorCustomerPolicy[] {
+  const current = normalizeCustomerPolicies(existing);
+  const updates = normalizeCustomerPolicies(incoming);
+  if (updates.length === 0) {
+    return current.length > 0 ? current : [defaultWorkAreaPersonalPropertyPolicy()];
+  }
+  const byId = new Map(current.map((policy) => [policy.id, policy]));
+  for (const policy of updates) {
+    const previous = byId.get(policy.id);
+    byId.set(policy.id, previous ? { ...previous, ...policy } : policy);
+  }
+  return [...byId.values()];
+}
+
+export function visibleCustomerPolicies(
+  policies: CalculatorCustomerPolicy[] | null | undefined,
+): CalculatorCustomerPolicy[] {
+  return normalizeCustomerPolicies(policies).filter((policy) => !policy.disabled);
 }
 
 export function resolveCustomerPolicies(raw?: unknown): CalculatorCustomerPolicy[] {
@@ -64,4 +108,15 @@ export function uniqueCustomerPolicies(
     }
   }
   return next;
+}
+
+/** Catalog defaults keep calculator/work-area templates, not estimate contract terms. */
+export function catalogCustomerPolicies(
+  policies: CalculatorCustomerPolicy[] | null | undefined,
+): CalculatorCustomerPolicy[] {
+  return normalizeCustomerPolicies(policies).filter((policy) => {
+    if (policy.family === "core" || policy.family === "trade") return false;
+    if (policy.family === "project" || policy.family === "business") return false;
+    return true;
+  });
 }

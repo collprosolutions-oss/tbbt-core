@@ -1036,6 +1036,14 @@ try {
       !invoiceDocSrc.includes("getBusinessLogoSrc(") &&
       invoiceHtmlSrc.includes("invoice.business.logoSrc"),
   );
+  check(
+    "invoice HTML does not copy estimate PROJECT CONDITIONS or TERMS & CONDITIONS sections",
+    !invoiceHtmlSrc.includes("PROJECT CONDITIONS") &&
+      !invoiceHtmlSrc.includes("TERMS & CONDITIONS") &&
+      !invoiceHtmlSrc.includes("EstimateDocumentTerms") &&
+      !invoiceDocSrc.includes("projectConditions") &&
+      !invoiceDocSrc.includes("TERMS_AND_CONDITIONS"),
+  );
   check("PDF renderer uses the document view logo path", invoicePdfSrc.includes("docView.business.logoSrc"));
   check(
     "invoice HTML and PDF use the same readable document-logo height",

@@ -19,6 +19,7 @@ import {
   RestoreOriginalRequestPricingForm,
 } from "@/components/estimates/draft-estimate-recovery-forms";
 import { EstimateCustomerPolicies } from "@/components/estimates/customer-policy-display";
+import { EstimateTermsEditor } from "@/components/estimates/estimate-terms-editor";
 import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
 import { OverrideLinePriceForm } from "@/components/estimates/override-line-price-form";
 import { PriceRequiredLineForm } from "@/components/estimates/price-required-line-form";
@@ -94,6 +95,11 @@ import {
   toStoredIntakeMeasurement,
 } from "@/lib/intake-quote-handoff";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
+import {
+  collectEstimateTermContext,
+  composeEstimateTerms,
+  partitionEstimateTerms,
+} from "@/lib/estimate-terms/compose";
 import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import {
   pickIntakeMeasurementForLine,
@@ -220,6 +226,19 @@ export default async function EstimateBuilderPage({
   const isDraft = estimate.status === "DRAFT";
   const isSent = estimate.status === "SENT";
   const isApproved = estimate.status === "APPROVED";
+  const termContext = collectEstimateTermContext(estimate.lineItems);
+  const composedTerms = isDraft
+    ? composeEstimateTerms({
+        existing: termContext.existing,
+        titles: termContext.titles,
+        takeoffType: termContext.takeoffType,
+        calculatorId: termContext.calculatorId,
+        intake: parseWorkAreaIntake(estimate.serviceRequest?.description),
+        hasMaterials: materialLines.length > 0,
+        hasDeposit: materialDeposit.amount.gt(0),
+      })
+    : termContext.existing;
+  const customerTerms = partitionEstimateTerms(composedTerms);
   const customerEmail = estimate.customer?.email ?? "";
   const hasCustomerEmail = isUsableEmail(customerEmail);
   const needsCustomQuotePrices = estimate.lineItems.some(isUnpricedCustomQuoteDraftLine);
@@ -778,10 +797,6 @@ export default async function EstimateBuilderPage({
               ))}
             </ul>
           ) : null}
-          <EstimateCustomerPolicies
-            className="mt-4 space-y-3"
-            descriptions={estimate.lineItems.map((item) => item.description)}
-          />
           {isDraft ? (
             <MaterialDepositForm
               estimateId={estimate.id}
@@ -812,6 +827,32 @@ export default async function EstimateBuilderPage({
           ) : null}
         </CardContent>
       </Card>
+
+      {estimate.lineItems.length > 0 && composedTerms.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Project conditions & terms</CardTitle>
+            <CardDescription>
+              {isDraft
+                ? "Review customer-facing conditions and terms before sending. Optional terms can be turned off for this estimate."
+                : "Customer-facing conditions and terms sent with this estimate."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isDraft ? (
+              <EstimateTermsEditor
+                estimateId={estimate.id}
+                policies={composedTerms}
+              />
+            ) : (
+              <EstimateCustomerPolicies
+                projectConditions={customerTerms.projectConditions}
+                terms={customerTerms.terms}
+              />
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {isDraft ? (
         <>
