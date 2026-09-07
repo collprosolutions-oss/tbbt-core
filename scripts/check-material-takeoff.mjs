@@ -272,8 +272,7 @@ try {
       recoveryForms.includes("resetEstimateTakeoffAndGeneratedMaterials") &&
       takeoffForm.includes("saveEstimateBusinessEstimatingDefaults") &&
       takeoffForm.includes("Save as business default") &&
-      takeoffForm.includes("Business default") &&
-      takeoffForm.includes("does not save this job") &&
+      takeoffForm.includes("BUSINESS_DEFAULT_SOURCE_LABEL") &&
       !takeoffForm.includes("Number(event.target.value) || 0") &&
       !takeoffForm.includes('type="number"'),
   );

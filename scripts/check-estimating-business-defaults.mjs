@@ -42,7 +42,6 @@ const { setDraftEstimateCustomerMaterialsTotal } = await import(
 );
 const {
   applyBusinessEstimatingDefaults,
-  BUSINESS_DEFAULT_SOURCE_LABEL,
   extractReusableEstimatingDefaults,
   parseBusinessEstimatingDefaultPayload,
   stripProjectTakeoffInputs,
@@ -131,6 +130,10 @@ function snapshotReadyToConvert(snapshot) {
   };
 }
 
+function money(value) {
+  return Number(new Prisma.Decimal(value).toFixed(2));
+}
+
 const DAVID_INPUTS = {
   lengthFt: 10,
   widthFt: 10,
@@ -176,7 +179,7 @@ try {
   check(
     "Owner has an explicit Save as business default control and source label",
     form.includes("Save as business default") &&
-      form.includes(BUSINESS_DEFAULT_SOURCE_LABEL) &&
+      form.includes("BUSINESS_DEFAULT_SOURCE_LABEL") &&
       form.includes("saveEstimateBusinessEstimatingDefaults") &&
       ownerPage.includes("businessDefaults") &&
       !customerPage.includes("Save as business default") &&
@@ -454,15 +457,15 @@ try {
     who: "David",
   });
   const davidTakeoff = lineMaterialTakeoff(david.labor.description);
-  const davidBags = davidTakeoff?.items.find((item) => item.id === "concrete-bags");
+  const davidSeedBags = davidTakeoff?.items.find((item) => item.id === "concrete-bags");
   check(
     "David's new Concrete Slab estimate preloads reusable defaults, not empty starter prices",
     davidTakeoff?.laborRate === 36 &&
       davidTakeoff?.wastePercent === 10 &&
       davidTakeoff?.markupPercent === 15 &&
       davidTakeoff?.inputs.bagYieldCuFt === 0.45 &&
-      davidBags?.unitCost === 8.5 &&
-      davidBags?.customerUnitPrice === 12 &&
+      davidSeedBags?.unitCost === 8.5 &&
+      davidSeedBags?.customerUnitPrice === 12 &&
       Number(davidTakeoff?.inputs.lengthFt) === 10 &&
       Number(davidTakeoff?.inputs.widthFt) === 10,
   );
