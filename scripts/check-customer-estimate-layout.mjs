@@ -37,7 +37,7 @@ check(
   "Customer estimate uses the tenant logo helper",
   page.includes("getBusinessLogoSrc(estimate.business.slug)"),
 );
-check("Customer estimate selects business.slug for branding lookup", page.includes("slug: true"));
+check("Customer estimate selects business.slug for branding lookup", page.includes("estimate.business.slug"));
 check("Customer estimate renders CustomerEstimateHeader", page.includes("<CustomerEstimateHeader"));
 check("Desktop uses a centered wide container around 1100–1200px", page.includes("max-w-[1200px]"));
 check(
@@ -90,16 +90,16 @@ check(
 );
 check(
   "Customer page still shows title, scope, price, terms, address, and approval",
-  page.includes("lineItemTitle") &&
-    page.includes("IncludedWorkDisplay") &&
-    page.includes("formatMoney") &&
+  page.includes("loadEstimateDocumentByToken") &&
+    page.includes("Scope / Included Work") &&
+    page.includes("CustomerEstimateTotals") &&
     page.includes("EstimateCustomerPolicies") &&
     page.includes("Service address") &&
     page.includes("ApproveEstimateButton"),
 );
 check(
   "Internal calculator remains hidden from the customer estimate",
-  !page.includes("VariableScopeCalculatorForm") &&
+    !page.includes("VariableScopeCalculatorForm") &&
     !page.includes("VariableScopeDefinitionForm") &&
     !page.includes("CalculatorBreakdown") &&
     !page.includes("MaterialTakeoffForm") &&
@@ -107,6 +107,7 @@ check(
     !page.includes("contentsHandlingLightRate") &&
     !page.includes("TBBT Work Area Intake") &&
     !page.includes("TBBT Material Takeoff") &&
+    !page.includes("TBBT Material Deposit") &&
     !page.includes("customerUnitPrice") &&
     !page.includes("Unit cost (internal)") &&
     !page.includes("Material Markup") &&
@@ -127,7 +128,7 @@ check(
 );
 check(
   "Approval action and version binding are unchanged",
-  page.includes("currentVersionId={currentVersion?.id}") &&
+  page.includes("currentVersionId={estimate.currentVersionId ?? undefined}") &&
     approve.includes("approveEstimate") &&
     approve.includes("estimateVersionId"),
 );
@@ -144,7 +145,34 @@ check(
     !printPage.includes("ApproveEstimateButton") &&
     estimateDocument.includes("ESTIMATE") &&
     estimateDocument.includes("SERVICE ADDRESS") &&
-    estimateDocument.includes("TERMS"),
+    estimateDocument.includes("TERMS") &&
+    estimateDocument.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
+    estimateDocument.includes("ESTIMATE_MATERIALS_SECTION_TITLE"),
+);
+check(
+  "Customer labor and materials render as separate sections with a divider between them",
+  page.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
+    page.includes("ESTIMATE_MATERIALS_SECTION_TITLE") &&
+    page.includes("border-t-2") &&
+    estimateDocument.includes("border-t-2 border-neutral-400") &&
+    !estimateDocument.includes("SERVICES") &&
+    page.includes("Scope / Included Work"),
+);
+check(
+  "Customer totals show labor, materials, estimate total, material deposit, and remaining balance",
+  page.includes("CustomerEstimateTotals") &&
+    readRepo("src/components/estimates/customer-estimate-totals.tsx").includes(
+      "MATERIAL_DEPOSIT_CUSTOMER_LABEL",
+    ) &&
+    readRepo("src/components/estimates/customer-estimate-totals.tsx").includes(
+      "REMAINING_BALANCE_CUSTOMER_LABEL",
+    ) &&
+    readRepo("src/components/estimates/customer-estimate-totals.tsx").includes(
+      "ESTIMATE_TOTAL_CUSTOMER_LABEL",
+    ) &&
+    !readRepo("src/components/estimates/customer-estimate-totals.tsx").includes(
+      "TBBT Material Deposit",
+    ),
 );
 
 console.log(

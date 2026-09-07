@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ApproveEstimateButton } from "@/components/estimates/approve-estimate-button";
 import { CustomerEstimateHeader } from "@/components/estimates/customer-estimate-header";
+import { CustomerEstimateTotals } from "@/components/estimates/customer-estimate-totals";
 import { EstimateCustomerPolicies } from "@/components/estimates/customer-policy-display";
-import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -13,10 +13,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
-import { lineCustomerPolicies, lineItemTitle } from "@/lib/estimate-line-scope";
-import { uniqueCustomerPolicies } from "@/lib/estimate-policies";
-import { formatAddress, formatMoney } from "@/lib/format";
-import { prisma } from "@/lib/prisma";
+import {
+  ESTIMATE_LABOR_SECTION_TITLE,
+  ESTIMATE_MATERIALS_SECTION_TITLE,
+  ESTIMATE_OTHER_SECTION_TITLE,
+  loadEstimateDocumentByToken,
+  type EstimateDocumentLine,
+} from "@/lib/estimate-document";
 
 export const metadata: Metadata = {
   title: "Estimate",
@@ -28,65 +31,7 @@ export default async function PublicEstimatePage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const estimate = await prisma.estimate.findUnique({
-    where: { publicToken: token },
-    select: {
-      publicToken: true,
-      status: true,
-      total: true,
-      laborMinimumAdjustment: true,
-      business: { select: { name: true, slug: true } },
-      property: {
-        select: {
-          addressLine1: true,
-          addressLine2: true,
-          city: true,
-          region: true,
-          postalCode: true,
-        },
-      },
-      lineItems: {
-        orderBy: { createdAt: "asc" },
-        select: {
-          description: true,
-          quantity: true,
-          unitPrice: true,
-          total: true,
-        },
-      },
-      // The immutable snapshot of what was actually sent. While an
-      // estimate's status is SENT/APPROVED, application code guarantees the
-      // live fields above and this current version's fields are identical
-      // (no action mutates line items/totals outside DRAFT) -- this page
-      // reads from the version explicitly so it stays correct even if that
-      // invariant is ever loosened later, and so approval can be bound to
-      // the exact version id shown here.
-      versions: {
-        orderBy: { versionNumber: "desc" },
-        take: 1,
-        select: {
-          id: true,
-          versionNumber: true,
-          total: true,
-          laborMinimumAdjustment: true,
-          propertyAddressLine1: true,
-          propertyAddressLine2: true,
-          propertyCity: true,
-          propertyRegion: true,
-          propertyPostalCode: true,
-          lineItems: {
-            orderBy: { createdAt: "asc" },
-            select: {
-              description: true,
-              quantity: true,
-              unitPrice: true,
-              total: true,
-            },
-          },
-        },
-      },
-    },
-  });
+  const estimate = await loadEstimateDocumentByToken(token);
 
   if (!estimate) {
     return (
@@ -101,31 +46,11 @@ export default async function PublicEstimatePage({
     );
   }
 
-  // Legacy estimates sent before estimate versioning existed may have no
-  // version yet (see prisma/migrations/*_add_estimate_version_integrity).
-  // Fall back to the live estimate fields for display only; approveEstimate
-  // still refuses to approve without a bound version until this estimate is
-  // re-sent, which creates Version 1.
-  const currentVersion = estimate.versions[0] ?? null;
-  const total = currentVersion?.total ?? estimate.total;
-  const laborMinimumAdjustment =
-    currentVersion?.laborMinimumAdjustment ?? estimate.laborMinimumAdjustment;
-  const lineItems = currentVersion?.lineItems ?? estimate.lineItems;
-  const property = currentVersion
-    ? currentVersion.propertyAddressLine1
-      ? {
-          addressLine1: currentVersion.propertyAddressLine1,
-          addressLine2: currentVersion.propertyAddressLine2,
-          city: currentVersion.propertyCity,
-          region: currentVersion.propertyRegion,
-          postalCode: currentVersion.propertyPostalCode,
-        }
-      : null
-    : estimate.property;
   const logoSrc = getBusinessLogoSrc(estimate.business.slug);
-  const customerPolicies = uniqueCustomerPolicies(
-    lineItems.map((item) => lineCustomerPolicies(item.description)),
-  );
+  const hasLines =
+    estimate.laborLines.length > 0 ||
+    estimate.materialLines.length > 0 ||
+    estimate.otherLines.length > 0;
 
   return (
     <main className="min-h-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -134,53 +59,29 @@ export default async function PublicEstimatePage({
           businessName={estimate.business.name}
           logoSrc={logoSrc}
           status={estimate.status}
-          totalLabel={formatMoney(total)}
+          totalLabel={estimate.totalLabel}
         />
 
         <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <Card>
             <CardHeader>
-              <CardTitle>Services</CardTitle>
+              <CardTitle>What&apos;s included</CardTitle>
               <CardDescription>
-                What is included in this estimate.
+                Labor and materials included in this estimate.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              {lineItems.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No line items.</p>
+              {hasLines ? (
+                <CustomerLineSections
+                  laborLines={estimate.laborLines}
+                  materialLines={estimate.materialLines}
+                  otherLines={estimate.otherLines}
+                />
               ) : (
-                <ul className="space-y-5">
-                  {lineItems.map((item, index) => (
-                    <li key={index} className="space-y-2">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="font-medium">
-                            {lineItemTitle(item.description)}
-                          </p>
-                          <p className="text-sm text-muted-foreground">
-                            Qty {item.quantity.toString()} ·{" "}
-                            {formatMoney(item.unitPrice)}
-                          </p>
-                        </div>
-                        <p className="shrink-0 font-medium">
-                          {formatMoney(item.total)}
-                        </p>
-                      </div>
-                      <IncludedWorkDisplay description={item.description} />
-                    </li>
-                  ))}
-                </ul>
+                <p className="text-sm text-muted-foreground">No line items.</p>
               )}
-              {laborMinimumAdjustment.gt(0) ? (
-                <p className="text-sm">
-                  Labor Minimum Service Fee Adjustment —{" "}
-                  {formatMoney(laborMinimumAdjustment)}
-                </p>
-              ) : null}
-              {property ? (
-                <p className="text-sm">
-                  Service address: {formatAddress(property)}
-                </p>
+              {estimate.serviceAddress ? (
+                <p className="text-sm">Service address: {estimate.serviceAddress}</p>
               ) : null}
             </CardContent>
           </Card>
@@ -189,30 +90,28 @@ export default async function PublicEstimatePage({
             <CardHeader>
               <CardTitle>Estimate summary</CardTitle>
               <CardDescription>
-                Status {estimate.status} · Total {formatMoney(total)}
+                Status {estimate.status} · Total {estimate.totalLabel}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <p className="text-2xl font-semibold tracking-tight">
-                {formatMoney(total)}
-              </p>
+              <CustomerEstimateTotals document={estimate} />
               <Button asChild variant="outline" className="w-full">
                 <Link href={`/e/${estimate.publicToken}/print`}>Print / PDF</Link>
               </Button>
               <ApproveEstimateButton
                 publicToken={estimate.publicToken}
                 status={estimate.status}
-                currentVersionId={currentVersion?.id}
+                currentVersionId={estimate.currentVersionId ?? undefined}
               />
             </CardContent>
           </Card>
 
-          {customerPolicies.length > 0 ? (
+          {estimate.policies.length > 0 ? (
             <Card className="md:col-span-2">
               <CardContent className="pt-6">
                 <EstimateCustomerPolicies
                   className="max-w-none space-y-4"
-                  descriptions={lineItems.map((item) => item.description)}
+                  policies={estimate.policies}
                 />
               </CardContent>
             </Card>
@@ -221,21 +120,97 @@ export default async function PublicEstimatePage({
           <Card className="md:hidden">
             <CardHeader>
               <CardTitle>Approve this estimate</CardTitle>
-              <CardDescription>Total {formatMoney(total)}</CardDescription>
+              <CardDescription>Total {estimate.totalLabel}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              <CustomerEstimateTotals document={estimate} />
               <Button asChild variant="outline" className="w-full">
                 <Link href={`/e/${estimate.publicToken}/print`}>Print / PDF</Link>
               </Button>
               <ApproveEstimateButton
                 publicToken={estimate.publicToken}
                 status={estimate.status}
-                currentVersionId={currentVersion?.id}
+                currentVersionId={estimate.currentVersionId ?? undefined}
               />
             </CardContent>
           </Card>
         </div>
       </div>
     </main>
+  );
+}
+
+function CustomerLineSections({
+  laborLines,
+  materialLines,
+  otherLines,
+}: {
+  laborLines: EstimateDocumentLine[];
+  materialLines: EstimateDocumentLine[];
+  otherLines: EstimateDocumentLine[];
+}) {
+  const blocks: Array<{ title: string; lines: EstimateDocumentLine[] }> = [];
+  if (laborLines.length > 0) {
+    blocks.push({ title: ESTIMATE_LABOR_SECTION_TITLE, lines: laborLines });
+  }
+  if (materialLines.length > 0) {
+    blocks.push({ title: ESTIMATE_MATERIALS_SECTION_TITLE, lines: materialLines });
+  }
+  if (otherLines.length > 0) {
+    blocks.push({ title: ESTIMATE_OTHER_SECTION_TITLE, lines: otherLines });
+  }
+
+  return (
+    <div>
+      {blocks.map((block, index) => (
+        <section
+          key={block.title}
+          className={index > 0 ? "mt-6 border-t-2 border-border pt-6" : undefined}
+        >
+          <h3 className="text-xs font-semibold tracking-wider text-muted-foreground">
+            {block.title}
+          </h3>
+          <table className="mt-3 w-full border-collapse text-sm">
+            <thead>
+              <tr className="text-left text-xs tracking-wider text-muted-foreground">
+                <th className="py-2 pr-3 font-semibold">Description</th>
+                <th className="py-2 px-3 text-right font-semibold">Qty</th>
+                <th className="py-2 px-3 text-right font-semibold">Rate</th>
+                <th className="py-2 pl-3 text-right font-semibold">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {block.lines.map((line, lineIndex) => (
+                <tr
+                  key={`${block.title}-${line.description}-${lineIndex}`}
+                  className="border-t border-border/60"
+                >
+                  <td className="py-2.5 pr-3 align-top">
+                    <p className="font-medium">{line.description}</p>
+                    {line.includedWork ? (
+                      <div className="mt-1 whitespace-pre-line text-xs text-muted-foreground">
+                        <p className="font-semibold tracking-wide">
+                          Scope / Included Work
+                        </p>
+                        {line.includedWork}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="py-2.5 px-3 text-right align-top tabular-nums">
+                    {line.quantityLabel}
+                  </td>
+                  <td className="py-2.5 px-3 text-right align-top tabular-nums">
+                    {line.unitPriceLabel}
+                  </td>
+                  <td className="py-2.5 pl-3 text-right align-top tabular-nums font-medium">
+                    {line.amountLabel}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ))}
+    </div>
   );
 }

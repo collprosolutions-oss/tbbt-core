@@ -1,7 +1,16 @@
 import {
   ESTIMATE_DOCUMENT_LOGO_HEIGHT_PX,
+  ESTIMATE_LABOR_SECTION_TITLE,
+  ESTIMATE_MATERIALS_SECTION_TITLE,
+  ESTIMATE_OTHER_SECTION_TITLE,
+  ESTIMATE_TOTAL_CUSTOMER_LABEL,
+  type EstimateDocumentLine,
   type EstimateDocumentView,
 } from "@/lib/estimate-document";
+import {
+  MATERIAL_DEPOSIT_CUSTOMER_LABEL,
+  REMAINING_BALANCE_CUSTOMER_LABEL,
+} from "@/lib/material-deposit";
 
 export function EstimateDocument({
   document: estimate,
@@ -71,64 +80,23 @@ export function EstimateDocument({
         ) : null}
       </section>
 
-      <section className="mt-8">
-        <h2 className="text-xs font-semibold tracking-wider text-neutral-500">
-          SERVICES
-        </h2>
-        <table className="mt-3 w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-neutral-300 text-left text-xs tracking-wider text-neutral-500">
-              <th className="py-2 pr-3 font-semibold">Description</th>
-              <th className="py-2 px-3 text-right font-semibold">Qty</th>
-              <th className="py-2 px-3 text-right font-semibold">Rate</th>
-              <th className="py-2 pl-3 text-right font-semibold">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {estimate.lineItems.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="py-4 text-neutral-500">
-                  No line items.
-                </td>
-              </tr>
-            ) : (
-              estimate.lineItems.map((line, index) => (
-                <tr
-                  key={`${line.description}-${index}`}
-                  className="border-b border-neutral-100"
-                >
-                  <td className="py-2.5 pr-3 align-top">
-                    <div>{line.description}</div>
-                    {line.includedWork ? (
-                      <div className="mt-1 whitespace-pre-line text-xs text-neutral-600">
-                        <div className="font-semibold tracking-wide">
-                          Scope / Included Work
-                        </div>
-                        {line.includedWork}
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="py-2.5 px-3 text-right align-top tabular-nums">
-                    {line.quantityLabel}
-                  </td>
-                  <td className="py-2.5 px-3 text-right align-top tabular-nums">
-                    {line.unitPriceLabel}
-                  </td>
-                  <td className="py-2.5 pl-3 text-right align-top tabular-nums">
-                    {line.amountLabel}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </section>
+      <EstimateDocumentLineSections document={estimate} />
 
       <section className="mt-6 ml-auto w-full max-w-xs space-y-2 text-sm">
         <div className="flex justify-between gap-6">
-          <span className="text-neutral-600">Subtotal</span>
-          <span className="tabular-nums">{estimate.subtotalLabel}</span>
+          <span className="text-neutral-600">Labor</span>
+          <span className="tabular-nums">{estimate.laborTotalLabel}</span>
         </div>
+        <div className="flex justify-between gap-6">
+          <span className="text-neutral-600">Materials</span>
+          <span className="tabular-nums">{estimate.materialTotalLabel}</span>
+        </div>
+        {estimate.otherTotalLabel ? (
+          <div className="flex justify-between gap-6">
+            <span className="text-neutral-600">Other</span>
+            <span className="tabular-nums">{estimate.otherTotalLabel}</span>
+          </div>
+        ) : null}
         {estimate.laborMinimumLabel && estimate.laborMinimumAmountLabel ? (
           <div className="flex justify-between gap-6">
             <span className="text-neutral-600">{estimate.laborMinimumLabel}</span>
@@ -136,9 +104,26 @@ export function EstimateDocument({
           </div>
         ) : null}
         <div className="flex justify-between gap-6 border-t border-neutral-200 pt-2 font-semibold">
-          <span>Total</span>
+          <span>{ESTIMATE_TOTAL_CUSTOMER_LABEL}</span>
           <span className="tabular-nums">{estimate.totalLabel}</span>
         </div>
+        {estimate.materialDepositLabel && estimate.remainingBalanceLabel ? (
+          <>
+            <div className="flex justify-between gap-6 pt-2">
+              <span className="text-neutral-600">{MATERIAL_DEPOSIT_CUSTOMER_LABEL}</span>
+              <span className="tabular-nums">{estimate.materialDepositLabel}</span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-neutral-600">{REMAINING_BALANCE_CUSTOMER_LABEL}</span>
+              <span className="tabular-nums">{estimate.remainingBalanceLabel}</span>
+            </div>
+            {estimate.materialDepositNote ? (
+              <p className="pt-1 text-xs font-normal text-neutral-500">
+                {estimate.materialDepositNote}
+              </p>
+            ) : null}
+          </>
+        ) : null}
       </section>
 
       {estimate.policies.length > 0 ? (
@@ -163,5 +148,95 @@ export function EstimateDocument({
         <p>Reference: {estimate.estimateNumber}</p>
       </footer>
     </article>
+  );
+}
+
+function EstimateDocumentLineSections({
+  document: estimate,
+}: {
+  document: EstimateDocumentView;
+}) {
+  const hasLines =
+    estimate.laborLines.length > 0 ||
+    estimate.materialLines.length > 0 ||
+    estimate.otherLines.length > 0;
+  if (!hasLines) {
+    return (
+      <section className="mt-8">
+        <p className="text-sm text-neutral-500">No line items.</p>
+      </section>
+    );
+  }
+
+  const blocks: Array<{ title: string; lines: EstimateDocumentLine[] }> = [];
+  if (estimate.laborLines.length > 0) {
+    blocks.push({ title: ESTIMATE_LABOR_SECTION_TITLE, lines: estimate.laborLines });
+  }
+  if (estimate.materialLines.length > 0) {
+    blocks.push({
+      title: ESTIMATE_MATERIALS_SECTION_TITLE,
+      lines: estimate.materialLines,
+    });
+  }
+  if (estimate.otherLines.length > 0) {
+    blocks.push({ title: ESTIMATE_OTHER_SECTION_TITLE, lines: estimate.otherLines });
+  }
+
+  return (
+    <div className="mt-8 space-y-0">
+      {blocks.map((block, index) => (
+        <section
+          key={block.title}
+          className={
+            index > 0
+              ? "mt-6 border-t-2 border-neutral-400 pt-6"
+              : undefined
+          }
+        >
+          <h2 className="text-xs font-semibold tracking-wider text-neutral-500">
+            {block.title}
+          </h2>
+          <table className="mt-3 w-full border-collapse text-sm">
+            <thead>
+              <tr className="text-left text-xs tracking-wider text-neutral-500">
+                <th className="py-2 pr-3 font-semibold">Description</th>
+                <th className="py-2 px-3 text-right font-semibold">Qty</th>
+                <th className="py-2 px-3 text-right font-semibold">Rate</th>
+                <th className="py-2 pl-3 text-right font-semibold">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {block.lines.map((line, lineIndex) => (
+                <tr
+                  key={`${block.title}-${line.description}-${lineIndex}`}
+                  className="border-t border-neutral-100"
+                >
+                  <td className="py-2.5 pr-3 align-top">
+                    <div>{line.description}</div>
+                    {line.includedWork ? (
+                      <div className="mt-1 whitespace-pre-line text-xs text-neutral-600">
+                        <div className="font-semibold tracking-wide">
+                          Scope / Included Work
+                        </div>
+                        {line.includedWork}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="py-2.5 px-3 text-right align-top tabular-nums">
+                    {line.quantityLabel}
+                  </td>
+                  <td className="py-2.5 px-3 text-right align-top tabular-nums">
+                    {line.unitPriceLabel}
+                  </td>
+                  <td className="py-2.5 pl-3 text-right align-top tabular-nums">
+                    {line.amountLabel}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ))}
+    </div>
   );
 }

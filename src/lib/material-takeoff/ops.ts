@@ -12,6 +12,7 @@ import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import {
   joinLineDescription,
+  joinLineDescriptionFromParts,
   lineMaterialTakeoff,
   lineMaterialTakeoffSource,
   splitLineDescription,
@@ -210,13 +211,9 @@ export async function convertDraftMaterialTakeoff(
     await tx.lineItem.update({
       where: { id: line.id },
       data: {
-        description: joinLineDescription(
-          parts.title,
-          parts.includedWork,
-          parts.calculatorSnapshot,
-          parts.customerPolicies,
-          { materialTakeoff: stored },
-        ),
+        description: joinLineDescriptionFromParts(parts, {
+          materialTakeoff: stored,
+        }),
       },
     });
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
@@ -273,16 +270,9 @@ export async function applyDraftTakeoffRecommendedLabor(
   const total = line.quantity.mul(unitPrice);
   const parts = splitLineDescription(line.description);
   const description = pricedCustomQuoteDescription(
-    joinLineDescription(
-      parts.title,
-      parts.includedWork,
-      parts.calculatorSnapshot,
-      parts.customerPolicies,
-      {
-        materialTakeoff: stored,
-        materialTakeoffSource: parts.materialTakeoffSource,
-      },
-    ),
+    joinLineDescriptionFromParts(parts, {
+      materialTakeoff: stored,
+    }),
   );
 
   await db.$transaction(async (tx) => {
@@ -406,16 +396,9 @@ async function persistTakeoffOnLine(
   await db.lineItem.update({
     where: { id: line.id },
     data: {
-      description: joinLineDescription(
-        parts.title,
-        parts.includedWork,
-        parts.calculatorSnapshot,
-        parts.customerPolicies,
-        {
-          materialTakeoff: snapshot,
-          materialTakeoffSource: parts.materialTakeoffSource,
-        },
-      ),
+      description: joinLineDescriptionFromParts(parts, {
+        materialTakeoff: snapshot,
+      }),
     },
   });
 }

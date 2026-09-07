@@ -24,6 +24,10 @@ import {
 } from "@/lib/estimate-line-ops";
 import { joinLineDescription } from "@/lib/estimate-line-scope";
 import {
+  relocateMaterialDepositAfterLineRemoval,
+  setDraftEstimateMaterialDeposit,
+} from "@/lib/material-deposit";
+import {
   applyDraftTakeoffRecommendedLabor,
   convertDraftMaterialTakeoff,
   isTakeoffTypeId,
@@ -829,6 +833,36 @@ export async function setEstimateLaborMinimumWaived(
   return {};
 }
 
+export async function setEstimateMaterialDeposit(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const mode = readString(formData, "mode");
+    const access = await requireBusinessAccess();
+    const result = await setDraftEstimateMaterialDeposit(prisma, access, {
+      estimateId,
+      amount: mode === "none" ? "0" : readString(formData, "amount"),
+      followSuggested: mode === "suggested",
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    if (mode === "suggested") {
+      return { message: "Material deposit now follows the customer material total." };
+    }
+    if (result.amount.eq(0)) {
+      return { message: "No material deposit will be requested." };
+    }
+    return {
+      message: `Material deposit set to ${result.amount.toFixed(2)}. Remaining balance ${result.remaining.toFixed(2)}.`,
+    };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not save the material deposit."),
+    };
+  }
+}
+
 export async function removeEstimateLineItem(
   _prev: EstimateActionState,
   formData: FormData,
@@ -863,12 +897,26 @@ export async function removeEstimateLineItem(
   );
 
   await prisma.$transaction(async (tx) => {
+    const remaining = await tx.lineItem.findMany({
+      where: {
+        estimateId: estimate.id,
+        businessId: access.businessId,
+        id: { not: lineItem.id },
+      },
+      select: { id: true },
+    });
     await tx.lineItem.deleteMany({
       where: {
         id: lineItem.id,
         estimateId: estimate.id,
         businessId: access.businessId,
       },
+    });
+    await relocateMaterialDepositAfterLineRemoval(tx, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+      removedDescription: lineItem.description,
+      remainingLineIds: remaining.map((row) => row.id),
     });
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
   });

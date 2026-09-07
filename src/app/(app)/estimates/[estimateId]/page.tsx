@@ -21,6 +21,7 @@ import { PriceRequiredLineForm } from "@/components/estimates/price-required-lin
 import { VariableScopeCalculatorForm } from "@/components/estimates/variable-scope-calculator-form";
 import { VariableScopeDefinitionForm } from "@/components/estimates/variable-scope-definition-form";
 import { MaterialTakeoffForm } from "@/components/estimates/material-takeoff-form";
+import { MaterialDepositForm } from "@/components/estimates/material-deposit-form";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
@@ -77,6 +78,7 @@ import {
   ownerVisibleRequestPhotos,
   toStoredIntakeMeasurement,
 } from "@/lib/intake-quote-handoff";
+import { resolveMaterialDeposit } from "@/lib/material-deposit";
 import {
   pickIntakeMeasurementForLine,
   suggestTakeoffInputs,
@@ -193,6 +195,10 @@ export default async function EstimateBuilderPage({
   const otherSubtotal = estimate.lineItems
     .filter((item) => item.type === "OTHER")
     .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0));
+  const materialDeposit = resolveMaterialDeposit({
+    lines: estimate.lineItems,
+    total: estimate.total,
+  });
   const business = access.workspace.business;
   const isDraft = estimate.status === "DRAFT";
   const isSent = estimate.status === "SENT";
@@ -572,7 +578,32 @@ export default async function EstimateBuilderPage({
             <p className="font-medium">
               Estimate total: {formatMoney(estimate.total)}
             </p>
+            <p>
+              Suggested material deposit:{" "}
+              {formatMoney(materialDeposit.suggested)}
+            </p>
+            <p>
+              Material deposit due upon approval:{" "}
+              {formatMoney(materialDeposit.amount)}
+            </p>
+            <p>Remaining balance: {formatMoney(materialDeposit.remaining)}</p>
+            {materialDeposit.suggestedChanged ? (
+              <p className="text-amber-800 dark:text-amber-300">
+                Suggested material deposit has changed. The saved deposit was
+                not overwritten.
+              </p>
+            ) : null}
           </div>
+          {isDraft ? (
+            <MaterialDepositForm
+              estimateId={estimate.id}
+              suggestedLabel={formatMoney(materialDeposit.suggested)}
+              currentAmount={materialDeposit.amount.toFixed(2)}
+              remainingLabel={formatMoney(materialDeposit.remaining)}
+              manual={materialDeposit.manual}
+              suggestedChanged={materialDeposit.suggestedChanged}
+            />
+          ) : null}
           {needsCustomQuotePrices ? (
             <p className="mt-3 text-sm font-medium text-amber-800 dark:text-amber-300">
               Price required on the highlighted original request line above.

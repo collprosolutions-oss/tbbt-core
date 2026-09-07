@@ -5,8 +5,9 @@
  * Preview shares the Production database and does not run migrations, so
  * none of this can live in a new Prisma column. All of it is encoded in
  * the existing LineItem / EstimateVersionLineItem `description` after
- * stable markers. Totals never read them. Customer surfaces use
- * lineItemTitle() / included work only.
+ * stable markers, including the owner material-deposit override. Totals
+ * never read them. Customer surfaces use lineItemTitle() / included work
+ * only.
  */
 import {
   CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
@@ -30,6 +31,7 @@ export const CALCULATOR_DEFINITION_MARKER = "\n\nTBBT Calculator Definition:\n";
 export const CUSTOMER_POLICY_MARKER = "\n\nTBBT Customer Policy:\n";
 export const MATERIAL_TAKEOFF_MARKER = "\n\nTBBT Material Takeoff:\n";
 export const MATERIAL_TAKEOFF_SOURCE_MARKER = "\n\nTBBT Material Takeoff Source:\n";
+export const MATERIAL_DEPOSIT_MARKER = "\n\nTBBT Material Deposit:\n";
 
 const LINE_INTERNAL_MARKERS = [
   INCLUDED_WORK_MARKER,
@@ -37,7 +39,14 @@ const LINE_INTERNAL_MARKERS = [
   CALCULATOR_SNAPSHOT_MARKER,
   MATERIAL_TAKEOFF_MARKER,
   MATERIAL_TAKEOFF_SOURCE_MARKER,
+  MATERIAL_DEPOSIT_MARKER,
 ] as const;
+
+/** Owner override only. Suggested deposit is computed from MATERIAL line totals. */
+export type MaterialDepositOverride = {
+  amount: number;
+  manual: true;
+};
 
 export function normalizeIncludedWork(
   raw: string | null | undefined,
@@ -61,6 +70,7 @@ export function splitLineDescription(description: string | null | undefined): {
   customerPolicies: CalculatorCustomerPolicy[];
   materialTakeoff: TakeoffSnapshot | null;
   materialTakeoffSource: TakeoffSourceRef | null;
+  materialDeposit: MaterialDepositOverride | null;
 } {
   const raw = description ?? "";
   const calculatorSnapshot = parseCalculatorSnapshot(
@@ -75,6 +85,9 @@ export function splitLineDescription(description: string | null | undefined): {
   const materialTakeoffSource = parseTakeoffSourceRef(
     payloadAfterMarker(raw, MATERIAL_TAKEOFF_SOURCE_MARKER),
   );
+  const materialDeposit = parseMaterialDepositOverride(
+    payloadAfterMarker(raw, MATERIAL_DEPOSIT_MARKER),
+  );
   const prefix = sliceBeforeFirstMarker(raw);
   return {
     title: prefix,
@@ -85,6 +98,7 @@ export function splitLineDescription(description: string | null | undefined): {
     customerPolicies,
     materialTakeoff,
     materialTakeoffSource,
+    materialDeposit,
   };
 }
 
@@ -130,6 +144,7 @@ export function joinLineDescription(
   extras?: {
     materialTakeoff?: TakeoffSnapshot | null;
     materialTakeoffSource?: TakeoffSourceRef | null;
+    materialDeposit?: MaterialDepositOverride | null;
   },
 ): string {
   const cleanTitle = splitLineDescription(title).title;
@@ -143,6 +158,9 @@ export function joinLineDescription(
     : null;
   const takeoffSource = extras?.materialTakeoffSource
     ? JSON.stringify(extras.materialTakeoffSource)
+    : null;
+  const deposit = extras?.materialDeposit
+    ? JSON.stringify(extras.materialDeposit)
     : null;
   let next = cleanTitle;
   if (scope) {
@@ -160,7 +178,48 @@ export function joinLineDescription(
   if (takeoffSource) {
     next = `${next}${MATERIAL_TAKEOFF_SOURCE_MARKER}${takeoffSource}`;
   }
+  if (deposit) {
+    next = `${next}${MATERIAL_DEPOSIT_MARKER}${deposit}`;
+  }
   return next;
+}
+
+export function joinLineDescriptionFromParts(
+  parts: ReturnType<typeof splitLineDescription>,
+  patch?: {
+    title?: string;
+    includedWork?: string | null;
+    calculatorSnapshot?: CalculatorSnapshot | null;
+    customerPolicies?: CalculatorCustomerPolicy[] | null;
+    materialTakeoff?: TakeoffSnapshot | null;
+    materialTakeoffSource?: TakeoffSourceRef | null;
+    materialDeposit?: MaterialDepositOverride | null;
+  },
+) {
+  return joinLineDescription(
+    patch?.title ?? parts.title,
+    patch && "includedWork" in patch ? patch.includedWork : parts.includedWork,
+    patch && "calculatorSnapshot" in patch
+      ? patch.calculatorSnapshot
+      : parts.calculatorSnapshot,
+    patch && "customerPolicies" in patch
+      ? patch.customerPolicies
+      : parts.customerPolicies,
+    {
+      materialTakeoff:
+        patch && "materialTakeoff" in patch
+          ? patch.materialTakeoff
+          : parts.materialTakeoff,
+      materialTakeoffSource:
+        patch && "materialTakeoffSource" in patch
+          ? patch.materialTakeoffSource
+          : parts.materialTakeoffSource,
+      materialDeposit:
+        patch && "materialDeposit" in patch
+          ? patch.materialDeposit
+          : parts.materialDeposit,
+    },
+  );
 }
 
 export function includedWorkLines(raw: string | null | undefined): string[] {
@@ -247,6 +306,21 @@ function payloadAfterMarker(raw: string, marker: string): string | null {
     if (index !== -1 && index < end) end = index;
   }
   return after.slice(0, end);
+}
+
+function parseMaterialDepositOverride(
+  raw: string | null,
+): MaterialDepositOverride | null {
+  const parsed = parseJsonObject(raw ?? "");
+  if (!parsed || parsed.manual !== true) return null;
+  const amount =
+    typeof parsed.amount === "number"
+      ? parsed.amount
+      : typeof parsed.amount === "string"
+        ? Number(parsed.amount)
+        : NaN;
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  return { amount, manual: true };
 }
 
 function parseTakeoffSourceRef(raw: string | null): TakeoffSourceRef | null {

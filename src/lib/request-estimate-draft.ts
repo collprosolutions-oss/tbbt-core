@@ -124,6 +124,7 @@ export function pricedCustomQuoteDescription(description: string) {
     {
       materialTakeoff: parts.materialTakeoff,
       materialTakeoffSource: parts.materialTakeoffSource,
+      materialDeposit: parts.materialDeposit,
     },
   );
 }

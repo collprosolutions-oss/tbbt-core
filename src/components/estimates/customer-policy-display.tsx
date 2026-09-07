@@ -19,12 +19,19 @@ export function CustomerPolicyDisplay({
 
 export function EstimateCustomerPolicies({
   descriptions,
+  policies: givenPolicies,
   className,
 }: {
-  descriptions: Array<string | null | undefined>;
+  descriptions?: Array<string | null | undefined>;
+  policies?: Array<{ title: string; body: string }>;
   className?: string;
 }) {
-  const policies = uniqueCustomerPolicies(descriptions.map(lineCustomerPolicies));
+  const policies =
+    givenPolicies?.map((policy, index) => ({
+      id: `policy-${index}`,
+      title: policy.title,
+      body: policy.body,
+    })) ?? uniqueCustomerPolicies((descriptions ?? []).map(lineCustomerPolicies));
   if (policies.length === 0) return null;
 
   return (

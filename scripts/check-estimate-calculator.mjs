@@ -204,8 +204,8 @@ try {
       !customerPage.includes("VariableScopeDefinitionForm") &&
       !customerPage.includes("CalculatorBreakdown") &&
       !customerPage.includes("TBBT Calculator Snapshot") &&
-      customerPage.includes("lineItemTitle") &&
-      customerPage.includes("IncludedWorkDisplay") &&
+      customerPage.includes("loadEstimateDocumentByToken") &&
+      customerPage.includes("Scope / Included Work") &&
       customerPage.includes("EstimateCustomerPolicies") &&
       !customerPage.includes("panelRate") &&
       !customerPage.includes("contentsHandlingLightRate"),
@@ -355,7 +355,7 @@ try {
     !customerPage.includes("panelRate") &&
       !customerPage.includes("VariableScopeCalculatorForm") &&
       !customerPage.includes("VariableScopeDefinitionForm") &&
-      customerPage.includes("lineItemTitle") &&
+      customerPage.includes("loadEstimateDocumentByToken") &&
       invoiceList.includes("lineItemTitle") &&
       !invoiceList.includes("VariableScopeCalculatorForm") &&
       !invoiceList.includes("VariableScopeDefinitionForm") &&
@@ -471,7 +471,7 @@ try {
       !customerPage.includes("computeVariableScope") &&
       !customerPage.includes("areaRate") &&
       !customerPage.includes("openingRate") &&
-      customerPage.includes("lineItemTitle"),
+      customerPage.includes("loadEstimateDocumentByToken"),
   );
 
   const founder = computeDecorativeWallPaneling(

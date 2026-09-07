@@ -783,6 +783,7 @@ model LineItem {
   /// INCLUDED_WORK_MARKER. Internal calculator snapshots use
   /// CALCULATOR_SNAPSHOT_MARKER. Owner-only material takeoff uses
   /// MATERIAL_TAKEOFF_MARKER (see src/lib/estimate-line-scope.ts).
+  /// Owner material-deposit override uses MATERIAL_DEPOSIT_MARKER.
   /// Descriptive only — never read by estimate, change-order, labor-minimum,
   /// or invoice totals. Do not add a Preview-breaking column for these.
   description          String

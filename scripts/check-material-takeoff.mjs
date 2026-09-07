@@ -21,6 +21,7 @@ const { persistDraftEstimateTotal } = await import("@/lib/labor-minimum");
 const { createEstimateVersionSnapshot } = await import("@/lib/estimate-version");
 const {
   CALCULATOR_SNAPSHOT_MARKER,
+  MATERIAL_DEPOSIT_MARKER,
   MATERIAL_TAKEOFF_MARKER,
   MATERIAL_TAKEOFF_SOURCE_MARKER,
   joinLineDescription,
@@ -82,6 +83,10 @@ const {
 const { estimateDocumentPlainText, loadEstimateDocumentForBusiness } = await import(
   "@/lib/estimate-document"
 );
+const {
+  resolveMaterialDeposit,
+  suggestedMaterialDeposit,
+} = await import("@/lib/material-deposit");
 const { CUSTOMER_REPORTED_MEASUREMENT } = await import("@/lib/catalog-intake");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -156,7 +161,9 @@ try {
     "No Prisma material-takeoff column — reuse description encoding",
     !/\n\s+materialTakeoff\s+/.test(schema) &&
       !schema.includes("takeoffSnapshot") &&
+      !/\n\s+materialDepositAmount\s+/.test(schema) &&
       schema.includes("MATERIAL_TAKEOFF_MARKER") &&
+      schema.includes("MATERIAL_DEPOSIT_MARKER") &&
       schema.includes("CALCULATOR_SNAPSHOT_MARKER"),
   );
 
@@ -175,7 +182,8 @@ try {
       !customerPage.includes("markupPercent") &&
       !customerPage.includes("Apply recommended labor") &&
       !customerPage.includes("laborRate") &&
-      customerPage.includes("lineItemTitle") &&
+      customerPage.includes("loadEstimateDocumentByToken") &&
+      customerPage.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
       !printPage.includes("MaterialTakeoffForm") &&
       !printPage.includes("Material Markup") &&
       !printPage.includes("Apply recommended labor") &&
@@ -714,6 +722,60 @@ try {
         inputs: { wallWidthFt: 10, wallHeightFt: 8 },
       }).snapshot,
     ).available === false,
+  );
+
+  console.log("\nUNIT — Material deposit from customer MATERIAL totals");
+  check(
+    "Suggested material deposit is the customer MATERIAL total, not labor",
+    suggestedMaterialDeposit([
+      { type: "LABOR", total: "792" },
+      { type: "MATERIAL", total: "294.32" },
+    ]).toFixed(2) === "294.32",
+  );
+  const founderDeposit = resolveMaterialDeposit({
+    lines: [
+      { type: "LABOR", total: "792", description: "Patio slab" },
+      { type: "MATERIAL", total: "294.32", description: "Bags" },
+    ],
+    total: "1086.32",
+  });
+  check(
+    "Founder slab suggested deposit $294.32, remaining $792, total $1,086.32",
+    founderDeposit.suggested.toFixed(2) === "294.32" &&
+      founderDeposit.amount.toFixed(2) === "294.32" &&
+      founderDeposit.remaining.toFixed(2) === "792.00" &&
+      founderDeposit.manual === false,
+  );
+  check(
+    "No MATERIAL lines => suggested deposit $0",
+    resolveMaterialDeposit({
+      lines: [{ type: "LABOR", total: "792", description: "Patio slab" }],
+      total: "792",
+    }).suggested.toFixed(2) === "0.00",
+  );
+  const depositEncoded = joinLineDescription("Patio slab", "Pour slab", null, null, {
+    materialDeposit: { amount: 200, manual: true },
+  });
+  check(
+    "Deposit override is encoded after the internal marker and stripped from the title",
+    depositEncoded.includes(MATERIAL_DEPOSIT_MARKER) &&
+      lineItemTitle(depositEncoded) === "Patio slab" &&
+      splitLineDescription(depositEncoded).materialDeposit?.amount === 200 &&
+      splitLineDescription(depositEncoded).includedWork === "Pour slab",
+  );
+  const overriddenDeposit = resolveMaterialDeposit({
+    lines: [
+      { type: "LABOR", total: "792", description: depositEncoded },
+      { type: "MATERIAL", total: "344.32", description: "Bags" },
+    ],
+    total: "1136.32",
+  });
+  check(
+    "Manual deposit stays put when materials change, and suggestedChanged is true",
+    overriddenDeposit.amount.toFixed(2) === "200.00" &&
+      overriddenDeposit.suggested.toFixed(2) === "344.32" &&
+      overriddenDeposit.suggestedChanged === true &&
+      overriddenDeposit.remaining.toFixed(2) === "936.32",
   );
 
   console.log("\nUNIT — Internal unit cost stays independent of customer unit price");
@@ -1662,6 +1724,7 @@ try {
       laborDocument.lineItems.some((item) => item.unitPriceLabel === "$800.00") &&
       laborDocument.laborMinimumLabel === null &&
       !laborPlain.includes("TBBT Material Takeoff") &&
+      !laborPlain.includes("TBBT Material Deposit") &&
       !laborPlain.includes("laborRate") &&
       !laborPlain.includes("Recommended labor") &&
       !laborPlain.includes("per 60-lb bag") &&

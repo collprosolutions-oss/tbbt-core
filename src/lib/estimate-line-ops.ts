@@ -28,6 +28,7 @@ import {
   catalogScopeText,
   joinCatalogDescription,
   joinLineDescription,
+  joinLineDescriptionFromParts,
   lineCalculatorSnapshot,
   lineItemIncludedWork,
   splitLineDescription,
@@ -268,16 +269,9 @@ export async function updateDraftEstimateLineIncludedWork(
   await db.lineItem.update({
     where: { id: line.id },
     data: {
-      description: joinLineDescription(
-        parts.title,
-        input.includedWork,
-        parts.calculatorSnapshot,
-        parts.customerPolicies,
-        {
-          materialTakeoff: parts.materialTakeoff,
-          materialTakeoffSource: parts.materialTakeoffSource,
-        },
-      ),
+      description: joinLineDescriptionFromParts(parts, {
+        includedWork: input.includedWork,
+      }),
     },
   });
 
@@ -478,9 +472,9 @@ export async function applyDraftEstimateCalculator(
       (parts.customerPolicies.length > 0 ? parts.customerPolicies : null),
   );
   const description = pricedCustomQuoteDescription(
-    joinLineDescription(parts.title, parts.includedWork, snapshot, customerPolicies, {
-      materialTakeoff: parts.materialTakeoff,
-      materialTakeoffSource: parts.materialTakeoffSource,
+    joinLineDescriptionFromParts(parts, {
+      calculatorSnapshot: snapshot,
+      customerPolicies,
     }),
   );
   const nextRates = persistableCalculatorRates(
@@ -758,16 +752,9 @@ export async function overrideDraftEstimateLinePrice(
       }
     : parts.calculatorSnapshot;
   const description = pricedCustomQuoteDescription(
-    joinLineDescription(
-      parts.title,
-      parts.includedWork,
-      snapshot,
-      parts.customerPolicies,
-      {
-        materialTakeoff: parts.materialTakeoff,
-        materialTakeoffSource: parts.materialTakeoffSource,
-      },
-    ),
+    joinLineDescriptionFromParts(parts, {
+      calculatorSnapshot: snapshot,
+    }),
   );
   const total = line.quantity.mul(unitPrice);
 

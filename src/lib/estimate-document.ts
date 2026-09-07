@@ -7,7 +7,7 @@
  * calculator rates, formulas, owner notes, margins, work-area intake
  * answers, or other internal-only fields.
  */
-import { Prisma, type PrismaClient } from "@prisma/client";
+import { Prisma, type LineItemType, type PrismaClient } from "@prisma/client";
 import { getBusinessDocumentLogoSrc } from "@/lib/business-branding";
 import type { CalculatorCustomerPolicy } from "@/lib/estimate-calculators/types";
 import { splitLineDescription } from "@/lib/estimate-line-scope";
@@ -17,6 +17,12 @@ import {
   INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
   sanitizeFilenamePart,
 } from "@/lib/invoice-document";
+import {
+  MATERIAL_DEPOSIT_CUSTOMER_LABEL,
+  MATERIAL_DEPOSIT_CUSTOMER_NOTE,
+  REMAINING_BALANCE_CUSTOMER_LABEL,
+  resolveMaterialDeposit,
+} from "@/lib/material-deposit";
 import { prisma } from "@/lib/prisma";
 import { publicPhone } from "@/lib/public-site";
 
@@ -26,6 +32,11 @@ export const ESTIMATE_DOCUMENT_LOGO_HEIGHT_PX = INVOICE_DOCUMENT_LOGO_HEIGHT_PX;
 
 export const LABOR_MINIMUM_CUSTOMER_LABEL =
   "Labor Minimum Service Fee Adjustment";
+
+export const ESTIMATE_LABOR_SECTION_TITLE = "LABOR";
+export const ESTIMATE_MATERIALS_SECTION_TITLE = "MATERIALS";
+export const ESTIMATE_OTHER_SECTION_TITLE = "OTHER";
+export const ESTIMATE_TOTAL_CUSTOMER_LABEL = "Estimate Total";
 
 export function estimateNumberFromId(estimateId: string): string {
   return `EST-${estimateId.slice(-8).toUpperCase()}`;
@@ -54,6 +65,7 @@ export function estimateStatusLabel(status: string): string {
 }
 
 export type EstimateDocumentLine = {
+  type: LineItemType;
   description: string;
   includedWork?: string | null;
   quantityLabel: string;
@@ -76,6 +88,7 @@ export type EstimateDocumentView = {
   pdfFilename: string;
   business: {
     name: string;
+    slug: string;
     logoSrc: string | null;
     phone: string | null;
   };
@@ -85,12 +98,22 @@ export type EstimateDocumentView = {
     phone: string | null;
   };
   serviceAddress: string | null;
+  currentVersionId: string | null;
   lineItems: EstimateDocumentLine[];
+  laborLines: EstimateDocumentLine[];
+  materialLines: EstimateDocumentLine[];
+  otherLines: EstimateDocumentLine[];
   policies: EstimateDocumentPolicy[];
+  laborTotalLabel: string;
+  materialTotalLabel: string;
+  otherTotalLabel: string | null;
   subtotalLabel: string;
   laborMinimumLabel: string | null;
   laborMinimumAmountLabel: string | null;
   totalLabel: string;
+  materialDepositLabel: string | null;
+  remainingBalanceLabel: string | null;
+  materialDepositNote: string | null;
 };
 
 const ESTIMATE_DOCUMENT_INCLUDE = {
@@ -112,6 +135,7 @@ const ESTIMATE_DOCUMENT_INCLUDE = {
       quantity: true,
       unitPrice: true,
       total: true,
+      type: true,
     },
   },
   versions: {
@@ -138,6 +162,7 @@ const ESTIMATE_DOCUMENT_INCLUDE = {
           quantity: true,
           unitPrice: true,
           total: true,
+          type: true,
         },
       },
     },
@@ -157,6 +182,28 @@ function toCustomerPolicies(
     title: policy.title,
     body: policy.body,
   }));
+}
+
+function toDocumentLines(
+  lineItems: Array<{
+    description: string;
+    quantity: Prisma.Decimal;
+    unitPrice: Prisma.Decimal;
+    total: Prisma.Decimal;
+    type: LineItemType;
+  }>,
+): EstimateDocumentLine[] {
+  return lineItems.map((line) => {
+    const parts = splitLineDescription(line.description);
+    return {
+      type: line.type,
+      description: parts.title,
+      includedWork: line.type === "MATERIAL" ? null : parts.includedWork,
+      quantityLabel: formatQuantity(line.quantity),
+      unitPriceLabel: formatMoney(line.unitPrice),
+      amountLabel: formatMoney(line.total),
+    };
+  });
 }
 
 function toDocumentView(estimate: {
@@ -184,8 +231,10 @@ function toDocumentView(estimate: {
     quantity: Prisma.Decimal;
     unitPrice: Prisma.Decimal;
     total: Prisma.Decimal;
+    type: LineItemType;
   }>;
   versions: Array<{
+    id: string;
     sentAt: Date;
     createdAt: Date;
     total: Prisma.Decimal;
@@ -203,6 +252,7 @@ function toDocumentView(estimate: {
       quantity: Prisma.Decimal;
       unitPrice: Prisma.Decimal;
       total: Prisma.Decimal;
+      type: LineItemType;
     }>;
   }>;
 }): EstimateDocumentView {
@@ -210,7 +260,7 @@ function toDocumentView(estimate: {
   const total = currentVersion?.total ?? estimate.total;
   const laborMinimumAdjustment =
     currentVersion?.laborMinimumAdjustment ?? estimate.laborMinimumAdjustment;
-  const lineItems = currentVersion?.lineItems ?? estimate.lineItems;
+  const rawLines = currentVersion?.lineItems ?? estimate.lineItems;
   const customerName = currentVersion?.customerName ?? estimate.customer?.name ?? null;
   const customerEmail =
     currentVersion?.customerEmail ?? estimate.customer?.email ?? null;
@@ -230,7 +280,19 @@ function toDocumentView(estimate: {
   const estimateDate = currentVersion?.sentAt ?? currentVersion?.createdAt ?? estimate.createdAt;
   const estimateNumber = estimateNumberFromId(estimate.id);
   const showLaborMinimum = laborMinimumAdjustment.gt(0);
-  const subtotal = lineItems.reduce((sum, line) => sum.add(line.total), ZERO);
+  const subtotal = rawLines.reduce((sum, line) => sum.add(line.total), ZERO);
+  const laborTotal = rawLines
+    .filter((line) => line.type === "LABOR")
+    .reduce((sum, line) => sum.add(line.total), ZERO);
+  const materialTotal = rawLines
+    .filter((line) => line.type === "MATERIAL")
+    .reduce((sum, line) => sum.add(line.total), ZERO);
+  const otherTotal = rawLines
+    .filter((line) => line.type === "OTHER")
+    .reduce((sum, line) => sum.add(line.total), ZERO);
+  const lineItems = toDocumentLines(rawLines);
+  const deposit = resolveMaterialDeposit({ lines: rawLines, total });
+  const showDeposit = deposit.amount.gt(0);
 
   return {
     estimateId: estimate.id,
@@ -242,6 +304,7 @@ function toDocumentView(estimate: {
     pdfFilename: estimatePdfFilename(estimateNumber, customerName),
     business: {
       name: estimate.business.name,
+      slug: estimate.business.slug,
       logoSrc: getBusinessDocumentLogoSrc(estimate.business.slug),
       phone: publicPhone(estimate.business.slug),
     },
@@ -251,24 +314,39 @@ function toDocumentView(estimate: {
       phone: customerPhone,
     },
     serviceAddress: property ? formatAddress(property) : null,
-    lineItems: lineItems.map((line) => {
-      const parts = splitLineDescription(line.description);
-      return {
-        description: parts.title,
-        includedWork: parts.includedWork,
-        quantityLabel: formatQuantity(line.quantity),
-        unitPriceLabel: formatMoney(line.unitPrice),
-        amountLabel: formatMoney(line.total),
-      };
-    }),
-    policies: toCustomerPolicies(lineItems.map((line) => line.description)),
+    currentVersionId: currentVersion?.id ?? null,
+    lineItems,
+    laborLines: lineItems.filter((line) => line.type === "LABOR"),
+    materialLines: lineItems.filter((line) => line.type === "MATERIAL"),
+    otherLines: lineItems.filter((line) => line.type === "OTHER"),
+    policies: toCustomerPolicies(rawLines.map((line) => line.description)),
+    laborTotalLabel: formatMoney(laborTotal),
+    materialTotalLabel: formatMoney(materialTotal),
+    otherTotalLabel: otherTotal.gt(0) ? formatMoney(otherTotal) : null,
     subtotalLabel: formatMoney(subtotal),
     laborMinimumLabel: showLaborMinimum ? LABOR_MINIMUM_CUSTOMER_LABEL : null,
     laborMinimumAmountLabel: showLaborMinimum
       ? formatMoney(laborMinimumAdjustment)
       : null,
     totalLabel: formatMoney(total),
+    materialDepositLabel: showDeposit ? formatMoney(deposit.amount) : null,
+    remainingBalanceLabel: showDeposit ? formatMoney(deposit.remaining) : null,
+    materialDepositNote: showDeposit ? MATERIAL_DEPOSIT_CUSTOMER_NOTE : null,
   };
+}
+
+function sectionPlainText(title: string, lines: EstimateDocumentLine[]) {
+  if (lines.length === 0) return [];
+  return [
+    title,
+    ...lines.flatMap((line) => [
+      line.description,
+      line.includedWork ?? "",
+      line.quantityLabel,
+      line.unitPriceLabel,
+      line.amountLabel,
+    ]),
+  ];
 }
 
 export function estimateDocumentPlainText(document: EstimateDocumentView): string {
@@ -283,17 +361,28 @@ export function estimateDocumentPlainText(document: EstimateDocumentView): strin
     document.customer.email ?? "",
     document.customer.phone ?? "",
     document.serviceAddress ?? "",
-    ...document.lineItems.flatMap((line) => [
-      line.description,
-      line.includedWork ?? "",
-      line.quantityLabel,
-      line.unitPriceLabel,
-      line.amountLabel,
-    ]),
+    ...sectionPlainText(ESTIMATE_LABOR_SECTION_TITLE, document.laborLines),
+    ...sectionPlainText(ESTIMATE_MATERIALS_SECTION_TITLE, document.materialLines),
+    ...sectionPlainText(ESTIMATE_OTHER_SECTION_TITLE, document.otherLines),
+    "Labor",
+    document.laborTotalLabel,
+    "Materials",
+    document.materialTotalLabel,
+    document.otherTotalLabel ?? "",
     document.subtotalLabel,
     document.laborMinimumLabel ?? "",
     document.laborMinimumAmountLabel ?? "",
+    ESTIMATE_TOTAL_CUSTOMER_LABEL,
     document.totalLabel,
+    document.materialDepositLabel
+      ? MATERIAL_DEPOSIT_CUSTOMER_LABEL
+      : "",
+    document.materialDepositLabel ?? "",
+    document.remainingBalanceLabel
+      ? REMAINING_BALANCE_CUSTOMER_LABEL
+      : "",
+    document.remainingBalanceLabel ?? "",
+    document.materialDepositNote ?? "",
     ...document.policies.flatMap((policy) => [policy.title, policy.body]),
   ];
   return lines.filter(Boolean).join("\n");

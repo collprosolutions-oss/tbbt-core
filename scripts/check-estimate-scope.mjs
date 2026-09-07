@@ -184,8 +184,9 @@ try {
   );
   check(
     "Customer estimate renders scope from description, without selecting a missing column",
-    customerPage.includes("IncludedWorkDisplay") &&
-      customerPage.includes("description={item.description}") &&
+    customerPage.includes("loadEstimateDocumentByToken") &&
+      customerPage.includes("Scope / Included Work") &&
+      customerPage.includes("line.includedWork") &&
       !customerPage.includes("includedWork: true"),
   );
 
