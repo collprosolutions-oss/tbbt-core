@@ -29,7 +29,7 @@ const {
 } = await import("@/lib/estimate-document");
 const { renderEstimatePdf } = await import("@/lib/estimate-pdf");
 const { createEstimateVersionSnapshot } = await import("@/lib/estimate-version");
-const { joinLineDescription } = await import("@/lib/estimate-line-scope");
+const { joinLineDescription, splitLineDescription } = await import("@/lib/estimate-line-scope");
 const {
   MATERIAL_DEPOSIT_CUSTOMER_LABEL,
   REMAINING_BALANCE_CUSTOMER_LABEL,
@@ -888,6 +888,137 @@ try {
     afterMemberMaterials?.materialTotalLabel === "$300.00" &&
       afterMemberMaterials?.totalLabel === "$1,100.00",
   );
+
+  console.log("\nTEST 6 — Edit converted material customer line");
+  const { updateDraftMaterialCustomerLine } = await import("@/lib/estimate-line-ops");
+  const editEstimate = await prisma.estimate.create({
+    data: {
+      businessId: business.id,
+      customerId: customer.id,
+      propertyId: property.id,
+      status: "DRAFT",
+      total: new Prisma.Decimal(0),
+      laborMinimumAdjustment: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: business.id,
+      estimateId: editEstimate.id,
+      description: joinLineDescription("Patio slab", "Form, pour, and finish the slab."),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(800),
+      total: new Prisma.Decimal(800),
+      type: "LABOR",
+    },
+  });
+  const sourcedMaterial = await prisma.lineItem.create({
+    data: {
+      businessId: business.id,
+      estimateId: editEstimate.id,
+      description: joinLineDescription("60-lb concrete bags", null, null, null, {
+        materialTakeoffSource: { parentLineItemId: "parent-line", itemId: "bags" },
+      }),
+      quantity: new Prisma.Decimal(22),
+      unitPrice: new Prisma.Decimal("13.38"),
+      total: new Prisma.Decimal("294.36"),
+      type: "MATERIAL",
+    },
+  });
+  await persistDraftEstimateTotal(prisma, editEstimate.id, business.id);
+  await setDraftEstimateCustomerMaterialsTotal(prisma, ownerAccess, {
+    estimateId: editEstimate.id,
+    amount: "300",
+  });
+  const edited = await updateDraftMaterialCustomerLine(prisma, ownerAccess, {
+    estimateId: editEstimate.id,
+    lineItemId: sourcedMaterial.id,
+    title: "60-lb Quikrete bags",
+    quantity: "20",
+  });
+  const editedParts = splitLineDescription(edited.description);
+  const afterEdit = await loadEstimateDocumentForBusiness(
+    editEstimate.id,
+    business.id,
+    prisma,
+  );
+  check(
+    "Edit updates customer description and quantity without exposing unit price",
+    editedParts.title === "60-lb Quikrete bags" &&
+      edited.quantity.toFixed(2) === "20.00" &&
+      edited.unitPrice.toFixed(2) === "13.38" &&
+      edited.total.toFixed(2) === "267.60" &&
+      editedParts.materialTakeoffSource?.parentLineItemId === "parent-line" &&
+      editedParts.materialTakeoffSource?.itemId === "bags",
+  );
+  check(
+    "Manual Final Customer Materials Total survives a material Edit",
+    afterEdit?.materialTotalLabel === "$300.00" &&
+      afterEdit?.laborTotalLabel === "$800.00" &&
+      afterEdit?.totalLabel === "$1,100.00" &&
+      afterEdit?.materialLines[0]?.description === "60-lb Quikrete bags" &&
+      afterEdit?.materialLines[0]?.quantityLabel === "20" &&
+      afterEdit?.materialLines[0]?.showLinePricing === false,
+  );
+
+  await prisma.estimate.update({
+    where: { id: editEstimate.id },
+    data: { status: "SENT" },
+  });
+  let editSentBlocked = false;
+  try {
+    await updateDraftMaterialCustomerLine(prisma, ownerAccess, {
+      estimateId: editEstimate.id,
+      lineItemId: sourcedMaterial.id,
+      title: "Should not save",
+      quantity: "1",
+    });
+  } catch {
+    editSentBlocked = true;
+  }
+  check("SENT estimate cannot edit a material customer line", editSentBlocked);
+  await prisma.estimate.update({
+    where: { id: editEstimate.id },
+    data: { status: "DRAFT" },
+  });
+
+  let editMemberBlocked = false;
+  try {
+    await updateDraftMaterialCustomerLine(prisma, memberAccess, {
+      estimateId: editEstimate.id,
+      lineItemId: sourcedMaterial.id,
+      title: "Member edit",
+      quantity: "1",
+    });
+  } catch {
+    editMemberBlocked = true;
+  }
+  const afterMemberEdit = await prisma.lineItem.findFirst({
+    where: { id: sourcedMaterial.id, businessId: business.id },
+  });
+  check("MEMBER cannot edit a material customer line", editMemberBlocked);
+  check(
+    "tenant isolation keeps the owner material after MEMBER edit attempt",
+    afterMemberEdit?.quantity.toFixed(2) === "20.00" &&
+      splitLineDescription(afterMemberEdit?.description).title === "60-lb Quikrete bags",
+  );
+
+  const laborLine = await prisma.lineItem.findFirst({
+    where: { estimateId: editEstimate.id, type: "LABOR", businessId: business.id },
+  });
+  let laborEditBlocked = false;
+  try {
+    await updateDraftMaterialCustomerLine(prisma, ownerAccess, {
+      estimateId: editEstimate.id,
+      lineItemId: laborLine.id,
+      title: "Not a material",
+      quantity: "1",
+    });
+  } catch {
+    laborEditBlocked = true;
+  }
+  check("Labor lines cannot be edited from Customer Materials", laborEditBlocked);
 } finally {
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });

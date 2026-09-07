@@ -21,6 +21,7 @@ import {
   priceDraftEstimateLine,
   saveDraftEstimateLineAsCatalog,
   updateDraftEstimateLineIncludedWork,
+  updateDraftMaterialCustomerLine,
 } from "@/lib/estimate-line-ops";
 import { joinLineDescription } from "@/lib/estimate-line-scope";
 import {
@@ -585,6 +586,28 @@ export async function updateEstimateLineIncludedWork(
   } catch (error) {
     return {
       error: estimateLineErrorMessage(error, "Could not save that scope."),
+    };
+  }
+}
+
+export async function updateEstimateMaterialCustomerLine(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    await updateDraftMaterialCustomerLine(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      title: readString(formData, "title"),
+      quantity: readString(formData, "quantity"),
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: "Material updated." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not update that material."),
     };
   }
 }

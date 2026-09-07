@@ -32,11 +32,12 @@ export function CustomerMaterialsTotalForm({
 
   return (
     <div className="mt-3 space-y-2 rounded-lg border border-border p-3">
-      <p className="text-sm font-medium">Final customer materials total</p>
+      <p className="text-sm font-medium">Final Customer Materials Total</p>
       <p className="text-xs text-muted-foreground">
-        The customer sees this one materials price, not individual material
-        line prices. Recalculation does not overwrite a saved amount unless
-        you use the calculated total.
+        Calculated total comes from the material calculator. Final Customer
+        Materials Total is the single materials price shown on the
+        estimate/invoice. You may round it up or down manually. Recalculation
+        does not overwrite a saved manual total.
       </p>
       <p className="text-sm">Calculated Materials Total: {calculatedLabel}</p>
       {manual ? (

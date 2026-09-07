@@ -227,6 +227,9 @@ try {
   check(
     "Owner draft page mounts takeoff and keeps mutations in server actions",
     ownerPage.includes("MaterialTakeoffForm") &&
+      ownerPage.includes("EstimatingTakeoffProvider") &&
+      ownerPage.includes("LaborTakeoffPanel") &&
+      ownerPage.includes("MaterialTakeoffPanel") &&
       ownerPage.includes("lineMaterialTakeoff") &&
       !ownerPage.includes("saveDraftMaterialTakeoff") &&
       takeoffForm.includes("saveEstimateMaterialTakeoff") &&
@@ -251,7 +254,9 @@ try {
       takeoffForm.includes("ResetTakeoffAndGeneratedMaterialsForm") &&
       takeoffForm.includes("Apply recommended labor to estimate") &&
       takeoffForm.includes("Recommended Labor Total") &&
-      takeoffForm.includes("Recommended Estimate Total") &&
+      takeoffForm.includes("Advanced material pricing (owner only)") &&
+      !takeoffForm.includes("Recommended Estimate Total") &&
+      !takeoffForm.includes("Combined pricing summary") &&
       takeoffForm.includes("CONCRETE_PRODUCTION_LABOR_COVERS") &&
       recoveryForms.includes("Reset Takeoff & Generated Materials") &&
       recoveryForms.includes("resetEstimateTakeoffAndGeneratedMaterials") &&
@@ -286,6 +291,17 @@ try {
         }),
       }),
   );
+  const laborSlice = ownerPage.slice(
+    ownerPage.indexOf("LABOR — Calculate & Price the Work"),
+    ownerPage.indexOf("MATERIALS — Calculate & Price the Materials"),
+  );
+  const materialsSlice = ownerPage.slice(
+    ownerPage.indexOf("MATERIALS — Calculate & Price the Materials"),
+    ownerPage.indexOf("ESTIMATE SUMMARY — Review Before Sending"),
+  );
+  const summarySlice = ownerPage.slice(
+    ownerPage.indexOf("ESTIMATE SUMMARY — Review Before Sending"),
+  );
   const materialMapAt = ownerPage.indexOf("materialLines.map");
   const materialListSlice = ownerPage.slice(
     materialMapAt,
@@ -300,13 +316,48 @@ try {
       readRepo("src/components/estimates/customer-materials-total-form.tsx").includes(
         "Use calculated total",
       ) &&
-      ownerPage.includes("workLines.map") &&
+      ownerPage.includes("laborLines.map") &&
       ownerPage.includes("EditLineIncludedWorkForm") &&
       materialListSlice.includes("lineItemTitle") &&
+      materialListSlice.includes("EditMaterialLineForm") &&
       !materialListSlice.includes("EditLineIncludedWorkForm") &&
       !materialListSlice.includes("SaveLineForReuseForm") &&
       !materialListSlice.includes("includedWork") &&
+      !materialListSlice.includes("Unit price") &&
+      !materialListSlice.includes("Amount") &&
       !customerPage.includes("CustomerMaterialsTotalForm"),
+  );
+  check(
+    "Owner draft workspace is Labor, then Materials, then Estimate Summary",
+    ownerPage.includes("LABOR — Calculate & Price the Work") &&
+      ownerPage.includes("MATERIALS — Calculate & Price the Materials") &&
+      ownerPage.includes("ESTIMATE SUMMARY — Review Before Sending") &&
+      ownerPage.includes("Customer Materials") &&
+      ownerPage.includes("EditMaterialLineForm") &&
+      ownerPage.indexOf("LABOR — Calculate & Price the Work") <
+        ownerPage.indexOf("MATERIALS — Calculate & Price the Materials") &&
+      ownerPage.indexOf("MATERIALS — Calculate & Price the Materials") <
+        ownerPage.indexOf("ESTIMATE SUMMARY — Review Before Sending") &&
+      laborSlice.includes("LaborTakeoffPanel") &&
+      !laborSlice.includes("MaterialTakeoffPanel") &&
+      !laborSlice.includes("CustomerMaterialsTotalForm") &&
+      !laborSlice.includes("MaterialDepositForm") &&
+      !laborSlice.includes("ResetTakeoffAndGeneratedMaterialsForm") &&
+      materialsSlice.includes("MaterialTakeoffPanel") &&
+      materialsSlice.includes("Customer Materials") &&
+      materialsSlice.includes("CustomerMaterialsTotalForm") &&
+      materialsSlice.includes("ResetTakeoffAndGeneratedMaterialsForm") &&
+      materialsSlice.indexOf("Customer Materials") <
+        materialsSlice.indexOf("CustomerMaterialsTotalForm") &&
+      materialsSlice.indexOf("CustomerMaterialsTotalForm") <
+        materialsSlice.indexOf("ResetTakeoffAndGeneratedMaterialsForm") &&
+      !materialsSlice.includes("MaterialDepositForm") &&
+      summarySlice.includes("MaterialDepositForm") &&
+      summarySlice.includes("Material Deposit Due") &&
+      summarySlice.includes("Remaining Balance") &&
+      summarySlice.includes("Estimate Total") &&
+      !summarySlice.includes("LaborTakeoffPanel") &&
+      !summarySlice.includes("MaterialTakeoffPanel"),
   );
   check(
     "Estimate document uses split title/scope, not raw description",

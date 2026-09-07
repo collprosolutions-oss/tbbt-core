@@ -1,6 +1,16 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useActionState,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import {
   applyEstimateTakeoffRecommendedLabor,
   convertEstimateMaterialTakeoff,
@@ -47,16 +57,7 @@ import {
 
 const initialState: EstimateActionState = {};
 
-export function MaterialTakeoffForm({
-  estimateId,
-  lineItemId,
-  snapshot,
-  suggestedType,
-  suggestedInputs,
-  measurementSource,
-  skippedMeasurements,
-  workspaceTitle,
-}: {
+type TakeoffFormProps = {
   estimateId: string;
   lineItemId?: string;
   snapshot?: TakeoffSnapshot | null;
@@ -65,7 +66,76 @@ export function MaterialTakeoffForm({
   measurementSource?: TakeoffMeasurementSource | null;
   skippedMeasurements?: string[];
   workspaceTitle?: string | null;
-}) {
+};
+
+type EstimatingTakeoffContextValue = {
+  estimateId: string;
+  lineItemId?: string;
+  workspaceTitle?: string | null;
+  fieldId: string;
+  takeoffType: TakeoffTypeId;
+  changeType: (next: TakeoffTypeId) => void;
+  draft: TakeoffSnapshot;
+  setDraft: Dispatch<SetStateAction<TakeoffSnapshot>>;
+  setInput: (key: string | Record<string, unknown>, value?: unknown) => void;
+  patchItem: (id: string, patch: Partial<TakeoffItem>) => void;
+  removeItem: (id: string) => void;
+  addCustom: () => void;
+  applyMarkupToSelected: () => void;
+  calculateFromInputs: () => void;
+  takeoffJson: string;
+  pending: boolean;
+  savePending: boolean;
+  convertPending: boolean;
+  laborPending: boolean;
+  saveAction: (payload: FormData) => void;
+  convertAction: (payload: FormData) => void;
+  laborAction: (payload: FormData) => void;
+  laborError: string | null | undefined;
+  laborStatus: string | null | undefined;
+  materialError: string | null | undefined;
+  materialStatus: string | null | undefined;
+  markupStatus: string | null;
+  laborRecommendation: ReturnType<typeof recommendTakeoffLabor>;
+  internalTotal: ReturnType<typeof takeoffInternalMaterialTotal>;
+  customerTotal: ReturnType<typeof takeoffCustomerSellingTotal>;
+  showConcreteLabor: boolean;
+  showGenericLabor: boolean;
+  customLabel: string;
+  setCustomLabel: Dispatch<SetStateAction<string>>;
+  customUnit: string;
+  setCustomUnit: Dispatch<SetStateAction<string>>;
+  customQty: string;
+  setCustomQty: Dispatch<SetStateAction<string>>;
+  customCost: string;
+  setCustomCost: Dispatch<SetStateAction<string>>;
+  customPrice: string;
+  setCustomPrice: Dispatch<SetStateAction<string>>;
+};
+
+const EstimatingTakeoffContext = createContext<EstimatingTakeoffContextValue | null>(
+  null,
+);
+
+function useEstimatingTakeoff() {
+  const context = useContext(EstimatingTakeoffContext);
+  if (!context) {
+    throw new Error("Labor and material calculators need EstimatingTakeoffProvider.");
+  }
+  return context;
+}
+
+export function EstimatingTakeoffProvider({
+  children,
+  estimateId,
+  lineItemId,
+  snapshot,
+  suggestedType,
+  suggestedInputs,
+  measurementSource,
+  skippedMeasurements,
+  workspaceTitle,
+}: TakeoffFormProps & { children: ReactNode }) {
   const [saveState, saveAction, savePending] = useActionState(
     saveEstimateMaterialTakeoff,
     initialState,
@@ -110,8 +180,6 @@ export function MaterialTakeoffForm({
     [draft],
   );
   const pending = savePending || convertPending || laborPending;
-  const status = laborState.message || convertState.message || saveState.message;
-  const error = localError || laborState.error || convertState.error || saveState.error;
   const fieldId = lineItemId || "workspace";
   const showConcreteLabor = takeoffType === "concrete-slab";
   const showGenericLabor = takeoffType === "generic-custom";
@@ -236,30 +304,303 @@ export function MaterialTakeoffForm({
   }
 
   const takeoffJson = JSON.stringify(draft);
+  const value: EstimatingTakeoffContextValue = {
+    estimateId,
+    lineItemId,
+    workspaceTitle,
+    fieldId,
+    takeoffType,
+    changeType,
+    draft,
+    setDraft,
+    setInput,
+    patchItem,
+    removeItem,
+    addCustom,
+    applyMarkupToSelected,
+    calculateFromInputs,
+    takeoffJson,
+    pending,
+    savePending,
+    convertPending,
+    laborPending,
+    saveAction,
+    convertAction,
+    laborAction,
+    laborError: laborState.error,
+    laborStatus: laborState.message,
+    materialError: localError || convertState.error || saveState.error,
+    materialStatus: convertState.message || saveState.message,
+    markupStatus,
+    laborRecommendation,
+    internalTotal,
+    customerTotal,
+    showConcreteLabor,
+    showGenericLabor,
+    customLabel,
+    setCustomLabel,
+    customUnit,
+    setCustomUnit,
+    customQty,
+    setCustomQty,
+    customCost,
+    setCustomCost,
+    customPrice,
+    setCustomPrice,
+  };
 
   return (
-    <details
-      className="mt-3 rounded-lg border border-border p-3"
-      open={Boolean(snapshot) || !lineItemId}
-    >
-      <summary className="cursor-pointer text-sm font-medium">
-        {workspaceTitle
-          ? `${workspaceTitle} estimating workspace (owner only)`
-          : "Estimating workspace (owner only)"}
-      </summary>
-      <form className="mt-3 space-y-4">
-        <input type="hidden" name="estimateId" value={estimateId} />
-        {lineItemId ? (
-          <input type="hidden" name="lineItemId" value={lineItemId} />
-        ) : null}
-        <input type="hidden" name="takeoffType" value={takeoffType} />
-        <input type="hidden" name="takeoffJson" value={takeoffJson} />
+    <EstimatingTakeoffContext.Provider value={value}>
+      {children}
+    </EstimatingTakeoffContext.Provider>
+  );
+}
 
+function TakeoffHiddenFields() {
+  const { estimateId, lineItemId, takeoffType, takeoffJson } = useEstimatingTakeoff();
+  return (
+    <>
+      <input type="hidden" name="estimateId" value={estimateId} />
+      {lineItemId ? (
+        <input type="hidden" name="lineItemId" value={lineItemId} />
+      ) : null}
+      <input type="hidden" name="takeoffType" value={takeoffType} />
+      <input type="hidden" name="takeoffJson" value={takeoffJson} />
+    </>
+  );
+}
+
+export function LaborTakeoffPanel() {
+  const {
+    fieldId,
+    takeoffType,
+    draft,
+    setDraft,
+    setInput,
+    pending,
+    laborPending,
+    laborAction,
+    laborError,
+    laborStatus,
+    laborRecommendation,
+    showConcreteLabor,
+    showGenericLabor,
+  } = useEstimatingTakeoff();
+
+  return (
+    <form className="space-y-4">
+      <TakeoffHiddenFields />
+      <p className="text-sm font-medium">Labor Takeoff / Labor Calculator</p>
+      <p className="text-xs text-muted-foreground">
+        Permanent labor calculator for this trade. It follows the takeoff type
+        selected in Materials ({TAKEOFF_TYPE_LABELS[takeoffType]}).
+      </p>
+      {showConcreteLabor ? (
+        <>
+          <p className="text-xs text-muted-foreground">
+            The $36 / 60-lb bag production rate (configurable) is the starting
+            model for a normal complete slab. It already covers{" "}
+            {CONCRETE_PRODUCTION_LABOR_COVERS.join(", ")}. Those tasks are not
+            stacked on top of the bag production labor.
+          </p>
+          <TakeoffDecimalField
+            id={`labor-rate-${fieldId}`}
+            label={
+              laborRecommendation.rateLabel || "Labor production rate / 60-lb bag"
+            }
+            value={laborRecommendation.rate}
+            onChange={(value) =>
+              setDraft((current) => ({
+                ...current,
+                laborRate: value ?? 0,
+              }))
+            }
+          />
+          <TakeoffDecimalField
+            id={`labor-adjustment-${fieldId}`}
+            label="Labor adjustments / add-ons"
+            value={draft.laborAdjustment ?? 0}
+            onChange={(value) =>
+              setDraft((current) => ({
+                ...current,
+                laborAdjustment: value ?? 0,
+              }))
+            }
+          />
+          <p className="text-xs text-muted-foreground">
+            Use add-ons only for work outside the normal production assumption
+            (unusual excavation/prep, demolition, difficult access, thickened
+            edges/footings, specialty finish, unusual reinforcement).
+          </p>
+        </>
+      ) : null}
+      {showGenericLabor ? (
+        <>
+          <p className="text-xs text-muted-foreground">
+            No specialized labor formula is registered for this work. Enter
+            quantity, rate, and any extras. Do not invent trade production math
+            here.
+          </p>
+          <GenericCustomInputs draft={draft} setInput={setInput} />
+          <TakeoffDecimalField
+            id={`labor-rate-${fieldId}`}
+            label={laborRecommendation.rateLabel || "Labor rate"}
+            value={draft.laborRate}
+            onChange={(value) =>
+              setDraft((current) => ({
+                ...current,
+                laborRate: value ?? 0,
+              }))
+            }
+          />
+          <TakeoffDecimalField
+            id={`labor-adjustment-${fieldId}`}
+            label="Labor adjustments / add-ons"
+            value={draft.laborAdjustment ?? 0}
+            onChange={(value) =>
+              setDraft((current) => ({
+                ...current,
+                laborAdjustment: value ?? 0,
+              }))
+            }
+          />
+        </>
+      ) : null}
+      {!showConcreteLabor && !showGenericLabor ? (
         <p className="text-xs text-muted-foreground">
-          Permanent TBBT labor and material calculators for this trade. Resetting
-          a draft, deleting generated materials, or removing a public catalog
-          service does not remove this workspace. Project dimensions, prices, and
-          takeoff results stay on this estimate only.
+          {laborRecommendation.unavailableReason ||
+            "Enter labor on the original request line. A specialized labor calculator is not registered for this takeoff type yet."}
+        </p>
+      ) : null}
+      <dl className="grid gap-1 text-sm">
+        {laborRecommendation.productionQuantityLabel ? (
+          <div className="flex justify-between gap-3">
+            <dt>Calculated production quantity</dt>
+            <dd className="tabular-nums">
+              {laborRecommendation.productionQuantityLabel}
+            </dd>
+          </div>
+        ) : null}
+        {showConcreteLabor || showGenericLabor ? (
+          <div className="flex justify-between gap-3">
+            <dt>
+              {showConcreteLabor
+                ? "Labor production rate"
+                : laborRecommendation.rateLabel || "Labor rate"}
+            </dt>
+            <dd className="tabular-nums">
+              {laborRecommendation.rate > 0
+                ? `${formatMoney(laborRecommendation.rate)}${
+                    showConcreteLabor ? " / 60-lb bag" : ""
+                  }`
+                : "—"}
+            </dd>
+          </div>
+        ) : null}
+        <div className="flex justify-between gap-3">
+          <dt>Base recommended labor</dt>
+          <dd className="tabular-nums">
+            {laborRecommendation.available || laborRecommendation.baseLabor > 0
+              ? formatMoney(laborRecommendation.baseLabor)
+              : "—"}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt>Applicable labor adjustments/add-ons</dt>
+          <dd className="tabular-nums">
+            {formatMoney(laborRecommendation.laborAdjustment)}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-3 font-medium">
+          <dt>Recommended Labor Total</dt>
+          <dd className="tabular-nums">
+            {laborRecommendation.available
+              ? formatMoney(laborRecommendation.recommendedLabor)
+              : "—"}
+          </dd>
+        </div>
+      </dl>
+      {laborRecommendation.unavailableReason ? (
+        <p className="text-xs text-muted-foreground">
+          {laborRecommendation.unavailableReason}
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Apply updates the original request labor/work line only. It never
+          silently overwrites labor later, never copies material totals into
+          LABOR, and does not convert MATERIAL lines.
+        </p>
+      )}
+      <Button
+        type="submit"
+        formAction={laborAction}
+        variant="outline"
+        disabled={pending || !laborRecommendation.available}
+      >
+        {laborPending ? "Applying…" : "Apply recommended labor to estimate"}
+      </Button>
+      {laborError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{laborError}</AlertDescription>
+        </Alert>
+      ) : null}
+      {laborStatus ? (
+        <p className="text-xs text-muted-foreground">{laborStatus}</p>
+      ) : null}
+    </form>
+  );
+}
+
+export function MaterialTakeoffPanel({
+  showReset = false,
+}: {
+  showReset?: boolean;
+}) {
+  const {
+    estimateId,
+    lineItemId,
+    fieldId,
+    takeoffType,
+    changeType,
+    draft,
+    setDraft,
+    setInput,
+    patchItem,
+    removeItem,
+    addCustom,
+    applyMarkupToSelected,
+    calculateFromInputs,
+    pending,
+    savePending,
+    convertPending,
+    saveAction,
+    convertAction,
+    materialError,
+    materialStatus,
+    markupStatus,
+    internalTotal,
+    customerTotal,
+    customLabel,
+    setCustomLabel,
+    customUnit,
+    setCustomUnit,
+    customQty,
+    setCustomQty,
+    customCost,
+    setCustomCost,
+    customPrice,
+    setCustomPrice,
+  } = useEstimatingTakeoff();
+
+  return (
+    <div className="space-y-4">
+      <form className="space-y-4">
+        <TakeoffHiddenFields />
+        <p className="text-sm font-medium">Material Takeoff / Material Calculator</p>
+        <p className="text-xs text-muted-foreground">
+          Permanent material calculator for this trade. Calculate quantities,
+          review costs and markup, then convert selected items into the customer
+          material list. Cost is never treated as the selling price.
         </p>
 
         {draft.measurementSource ? (
@@ -292,13 +633,6 @@ export function MaterialTakeoffForm({
           </select>
         </div>
 
-        <p className="text-sm font-medium">Material Takeoff / Material Calculator</p>
-        <p className="text-xs text-muted-foreground">
-          Internal working quantities, unit cost, and a separate customer unit
-          price. Cost is never treated as the selling price. Nothing here is
-          shown on the customer estimate, print/PDF, or portal until you convert
-          selected items into normal MATERIAL lines.
-        </p>
         {takeoffType === "concrete-slab" ? (
           <ConcreteInputs draft={draft} setInput={setInput} />
         ) : null}
@@ -309,49 +643,17 @@ export function MaterialTakeoffForm({
           <FramedInputs draft={draft} setInput={setInput} />
         ) : null}
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <TakeoffDecimalField
-            id={`waste-${fieldId}`}
-            label="Waste %"
-            value={draft.wastePercent}
-            onChange={(value) =>
-              setDraft((current) => ({
-                ...current,
-                wastePercent: value ?? 0,
-              }))
-            }
-          />
-          <div className="space-y-2">
-            <TakeoffDecimalField
-              id={`markup-${fieldId}`}
-              label="Material Markup %"
-              value={draft.markupPercent}
-              onChange={(value) =>
-                setDraft((current) => ({
-                  ...current,
-                  markupPercent: value ?? 0,
-                }))
-              }
-            />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={applyMarkupToSelected}
-              disabled={pending}
-            >
-              Apply markup to selected items
-            </Button>
-            <p className="text-xs text-muted-foreground">
-              Sets customer unit price from internal cost for selected items that
-              already have a unit cost. Does not change cost, quantity, or waste,
-              and does not convert MATERIAL lines. Unselect pickup/procurement
-              first if you do not want it marked up.
-            </p>
-            {markupStatus ? (
-              <p className="text-xs text-muted-foreground">{markupStatus}</p>
-            ) : null}
-          </div>
-        </div>
+        <TakeoffDecimalField
+          id={`waste-${fieldId}`}
+          label="Waste %"
+          value={draft.wastePercent}
+          onChange={(value) =>
+            setDraft((current) => ({
+              ...current,
+              wastePercent: value ?? 0,
+            }))
+          }
+        />
 
         {draft.explanation ? (
           <p className="text-xs text-muted-foreground">{draft.explanation}</p>
@@ -369,12 +671,14 @@ export function MaterialTakeoffForm({
           </Button>
         </div>
 
-        {error ? (
+        {materialError ? (
           <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
+            <AlertDescription>{materialError}</AlertDescription>
           </Alert>
         ) : null}
-        {status ? <p className="text-xs text-muted-foreground">{status}</p> : null}
+        {materialStatus ? (
+          <p className="text-xs text-muted-foreground">{materialStatus}</p>
+        ) : null}
 
         {draft.items.length > 0 ? (
           <div className="overflow-x-auto">
@@ -386,10 +690,6 @@ export function MaterialTakeoffForm({
                   <th className="py-1 pr-2">Calc qty</th>
                   <th className="py-1 pr-2">Owner qty</th>
                   <th className="py-1 pr-2">Unit</th>
-                  <th className="py-1 pr-2">Unit cost (internal)</th>
-                  <th className="py-1 pr-2">Internal extended</th>
-                  <th className="py-1 pr-2">Customer unit price</th>
-                  <th className="py-1 pr-2">Customer extended</th>
                   <th className="py-1"> </th>
                 </tr>
               </thead>
@@ -409,7 +709,9 @@ export function MaterialTakeoffForm({
                       <div>{item.label}</div>
                       <div className="text-muted-foreground">{item.explanation}</div>
                       {item.convertedLineItemId ? (
-                        <div className="text-muted-foreground">Converted — repeat will not duplicate</div>
+                        <div className="text-muted-foreground">
+                          Converted — repeat will not duplicate
+                        </div>
                       ) : null}
                     </td>
                     <td className="py-2 pr-2 tabular-nums">{item.calculatedQuantity}</td>
@@ -424,30 +726,6 @@ export function MaterialTakeoffForm({
                       />
                     </td>
                     <td className="py-2 pr-2">{item.unit}</td>
-                    <td className="py-2 pr-2">
-                      <TakeoffDecimalField
-                        value={item.unitCost}
-                        placeholder="Internal cost"
-                        nullable
-                        onChange={(value) => patchItem(item.id, { unitCost: value })}
-                      />
-                    </td>
-                    <td className="py-2 pr-2 tabular-nums">
-                      {formatMoney(extendedMaterialCost(item))}
-                    </td>
-                    <td className="py-2 pr-2">
-                      <TakeoffDecimalField
-                        value={item.customerUnitPrice}
-                        placeholder="Selling price"
-                        nullable
-                        onChange={(value) =>
-                          patchItem(item.id, { customerUnitPrice: value })
-                        }
-                      />
-                    </td>
-                    <td className="py-2 pr-2 tabular-nums">
-                      {formatMoney(extendedCustomerPrice(item))}
-                    </td>
                     <td className="py-2">
                       <button
                         type="button"
@@ -461,202 +739,104 @@ export function MaterialTakeoffForm({
                 ))}
               </tbody>
             </table>
-            <p className="mt-2 text-xs">
-              Internal material cost: {formatMoney(internalTotal)}. Customer
-              selling total: {formatMoney(customerTotal)}. Conversion uses
-              customer unit price, not internal cost.
-            </p>
           </div>
         ) : null}
 
-        <div className="space-y-3 rounded-lg border border-border p-3">
-          <p className="text-sm font-medium">Labor Takeoff / Labor Calculator</p>
-          {showConcreteLabor ? (
-            <>
-              <p className="text-xs text-muted-foreground">
-                The $36 / 60-lb bag production rate (configurable) is the starting
-                model for a normal complete slab. It already covers{" "}
-                {CONCRETE_PRODUCTION_LABOR_COVERS.join(", ")}. Those tasks are not
-                stacked on top of the bag production labor.
-              </p>
-              <TakeoffDecimalField
-                id={`labor-rate-${fieldId}`}
-                label={
-                  laborRecommendation.rateLabel || "Labor production rate / 60-lb bag"
-                }
-                value={laborRecommendation.rate}
-                onChange={(value) =>
-                  setDraft((current) => ({
-                    ...current,
-                    laborRate: value ?? 0,
-                  }))
-                }
-              />
-              <TakeoffDecimalField
-                id={`labor-adjustment-${fieldId}`}
-                label="Labor adjustments / add-ons"
-                value={draft.laborAdjustment ?? 0}
-                onChange={(value) =>
-                  setDraft((current) => ({
-                    ...current,
-                    laborAdjustment: value ?? 0,
-                  }))
-                }
-              />
-              <p className="text-xs text-muted-foreground">
-                Use add-ons only for work outside the normal production assumption
-                (unusual excavation/prep, demolition, difficult access, thickened
-                edges/footings, specialty finish, unusual reinforcement).
-              </p>
-            </>
-          ) : null}
-          {showGenericLabor ? (
-            <>
-              <p className="text-xs text-muted-foreground">
-                No specialized labor formula is registered for this work. Enter
-                quantity, rate, and any extras. Do not invent trade production
-                math here.
-              </p>
-              <GenericCustomInputs draft={draft} setInput={setInput} />
-              <TakeoffDecimalField
-                id={`labor-rate-${fieldId}`}
-                label={laborRecommendation.rateLabel || "Labor rate"}
-                value={draft.laborRate}
-                onChange={(value) =>
-                  setDraft((current) => ({
-                    ...current,
-                    laborRate: value ?? 0,
-                  }))
-                }
-              />
-              <TakeoffDecimalField
-                id={`labor-adjustment-${fieldId}`}
-                label="Labor adjustments / add-ons"
-                value={draft.laborAdjustment ?? 0}
-                onChange={(value) =>
-                  setDraft((current) => ({
-                    ...current,
-                    laborAdjustment: value ?? 0,
-                  }))
-                }
-              />
-            </>
-          ) : null}
-          {!showConcreteLabor && !showGenericLabor ? (
+        <details open className="rounded-lg border border-border/70 bg-muted/20 p-3">
+          <summary className="cursor-pointer text-sm font-medium">
+            Advanced material pricing (owner only)
+          </summary>
+          <div className="mt-3 space-y-3">
             <p className="text-xs text-muted-foreground">
-              {laborRecommendation.unavailableReason ||
-                "Enter labor on the original request line. A specialized labor calculator is not registered for this takeoff type yet."}
+              Internal cost, markup, and customer unit price stay on this
+              workspace. Customers never see these figures — only the material
+              description, quantity, and one Final Customer Materials Total.
             </p>
-          ) : null}
-          <dl className="grid gap-1 text-sm">
-            {laborRecommendation.productionQuantityLabel ? (
-              <div className="flex justify-between gap-3">
-                <dt>Calculated production quantity</dt>
-                <dd className="tabular-nums">
-                  {laborRecommendation.productionQuantityLabel}
-                </dd>
+            <div className="space-y-2">
+              <TakeoffDecimalField
+                id={`markup-${fieldId}`}
+                label="Material Markup %"
+                value={draft.markupPercent}
+                onChange={(value) =>
+                  setDraft((current) => ({
+                    ...current,
+                    markupPercent: value ?? 0,
+                  }))
+                }
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={applyMarkupToSelected}
+                disabled={pending}
+              >
+                Apply markup to selected items
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Sets customer unit price from internal cost for selected items that
+                already have a unit cost. Does not change cost, quantity, or waste,
+                and does not convert MATERIAL lines. Unselect pickup/procurement
+                first if you do not want it marked up.
+              </p>
+              {markupStatus ? (
+                <p className="text-xs text-muted-foreground">{markupStatus}</p>
+              ) : null}
+            </div>
+            {draft.items.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-muted-foreground">
+                      <th className="py-1 pr-2">Item</th>
+                      <th className="py-1 pr-2">Unit cost (internal)</th>
+                      <th className="py-1 pr-2">Internal extended</th>
+                      <th className="py-1 pr-2">Customer unit price</th>
+                      <th className="py-1 pr-2">Customer extended</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {draft.items.map((item) => (
+                      <tr key={`adv-${item.id}`} className="border-t border-border align-top">
+                        <td className="py-2 pr-2">{item.label}</td>
+                        <td className="py-2 pr-2">
+                          <TakeoffDecimalField
+                            value={item.unitCost}
+                            placeholder="Internal cost"
+                            nullable
+                            onChange={(value) =>
+                              patchItem(item.id, { unitCost: value })
+                            }
+                          />
+                        </td>
+                        <td className="py-2 pr-2 tabular-nums">
+                          {formatMoney(extendedMaterialCost(item))}
+                        </td>
+                        <td className="py-2 pr-2">
+                          <TakeoffDecimalField
+                            value={item.customerUnitPrice}
+                            placeholder="Selling price"
+                            nullable
+                            onChange={(value) =>
+                              patchItem(item.id, { customerUnitPrice: value })
+                            }
+                          />
+                        </td>
+                        <td className="py-2 pr-2 tabular-nums">
+                          {formatMoney(extendedCustomerPrice(item))}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="mt-2 text-xs">
+                  Internal material cost: {formatMoney(internalTotal)}. Customer
+                  selling total: {formatMoney(customerTotal)}. Conversion uses
+                  customer unit price, not internal cost.
+                </p>
               </div>
             ) : null}
-            {showConcreteLabor || showGenericLabor ? (
-              <div className="flex justify-between gap-3">
-                <dt>
-                  {showConcreteLabor
-                    ? "Labor production rate"
-                    : laborRecommendation.rateLabel || "Labor rate"}
-                </dt>
-                <dd className="tabular-nums">
-                  {laborRecommendation.rate > 0
-                    ? `${formatMoney(laborRecommendation.rate)}${
-                        showConcreteLabor ? " / 60-lb bag" : ""
-                      }`
-                    : "—"}
-                </dd>
-              </div>
-            ) : null}
-            <div className="flex justify-between gap-3">
-              <dt>Base recommended labor</dt>
-              <dd className="tabular-nums">
-                {laborRecommendation.available || laborRecommendation.baseLabor > 0
-                  ? formatMoney(laborRecommendation.baseLabor)
-                  : "—"}
-              </dd>
-            </div>
-            <div className="flex justify-between gap-3">
-              <dt>Applicable labor adjustments/add-ons</dt>
-              <dd className="tabular-nums">
-                {formatMoney(laborRecommendation.laborAdjustment)}
-              </dd>
-            </div>
-            <div className="flex justify-between gap-3 font-medium">
-              <dt>Recommended Labor Total</dt>
-              <dd className="tabular-nums">
-                {laborRecommendation.available
-                  ? formatMoney(laborRecommendation.recommendedLabor)
-                  : "—"}
-              </dd>
-            </div>
-          </dl>
-          {laborRecommendation.unavailableReason ? (
-            <p className="text-xs text-muted-foreground">
-              {laborRecommendation.unavailableReason}
-            </p>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              Apply updates the original request labor/work line only. It never
-              silently overwrites labor later, never copies material totals into
-              LABOR, and does not convert MATERIAL lines.
-            </p>
-          )}
-          <Button
-            type="submit"
-            formAction={laborAction}
-            variant="outline"
-            disabled={pending || !laborRecommendation.available}
-          >
-            {laborPending ? "Applying…" : "Apply recommended labor to estimate"}
-          </Button>
-        </div>
-
-        <div className="space-y-3 rounded-lg border border-border p-3">
-          <p className="text-sm font-medium">Combined pricing summary</p>
-          <dl className="grid gap-1 text-sm">
-            <div className="flex justify-between gap-3">
-              <dt>Recommended Labor</dt>
-              <dd className="tabular-nums">
-                {formatMoney(laborRecommendation.recommendedLabor)}
-              </dd>
-            </div>
-            <div className="flex justify-between gap-3">
-              <dt>Customer Materials</dt>
-              <dd className="tabular-nums">
-                {formatMoney(laborRecommendation.customerMaterialTotal)}
-              </dd>
-            </div>
-            <div className="flex justify-between gap-3 font-medium">
-              <dt>Recommended Estimate Total</dt>
-              <dd className="tabular-nums">
-                {formatMoney(laborRecommendation.recommendedSubtotal)}
-              </dd>
-            </div>
-            <div className="flex justify-between gap-3">
-              <dt>Material Deposit</dt>
-              <dd className="tabular-nums">
-                {formatMoney(laborRecommendation.customerMaterialTotal)}
-              </dd>
-            </div>
-            <div className="flex justify-between gap-3">
-              <dt>Remaining Balance</dt>
-              <dd className="tabular-nums">
-                {formatMoney(laborRecommendation.recommendedLabor)}
-              </dd>
-            </div>
-          </dl>
-          <p className="text-xs text-muted-foreground">
-            Materials stay separate from labor. A business labor minimum is not
-            stacked on top when calculated labor already exceeds that minimum.
-            Customer/print/PDF never show these calculator internals.
-          </p>
-        </div>
+          </div>
+        </details>
 
         <div className="grid gap-2 sm:grid-cols-5">
           <Input
@@ -692,20 +872,36 @@ export function MaterialTakeoffForm({
           Add takeoff item
         </Button>
       </form>
-      <div className="mt-4 border-t border-border pt-3">
-        {lineItemId ? (
-          <ResetTakeoffAndGeneratedMaterialsForm
-            estimateId={estimateId}
-            lineItemId={lineItemId}
-          />
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            Calculate or apply from this workspace to restore the original
-            request labor/work line. Reset stays available after that line exists.
+      {showReset ? (
+        <div className="mt-6 border-t border-dashed border-border pt-4">
+          <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Advanced / recovery
           </p>
-        )}
+          {lineItemId ? (
+            <ResetTakeoffAndGeneratedMaterialsForm
+              estimateId={estimateId}
+              lineItemId={lineItemId}
+            />
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Calculate or apply from this workspace to restore the original
+              request labor/work line. Reset stays available after that line exists.
+            </p>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function MaterialTakeoffForm(props: TakeoffFormProps) {
+  return (
+    <EstimatingTakeoffProvider {...props}>
+      <div className="space-y-8">
+        <LaborTakeoffPanel />
+        <MaterialTakeoffPanel showReset />
       </div>
-    </details>
+    </EstimatingTakeoffProvider>
   );
 }
 

@@ -288,6 +288,76 @@ export async function updateDraftEstimateLineIncludedWork(
 }
 
 /**
+ * Correct a DRAFT MATERIAL line's customer-facing description and
+ * quantity without exposing unit price. Recalculates the line total from
+ * the existing unit price so Final Customer Materials Total / deposit
+ * behavior stays unchanged unless the owner later uses calculated total.
+ */
+export async function updateDraftMaterialCustomerLine(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    estimateId: string;
+    lineItemId: string;
+    title: string;
+    quantity: string;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+
+  const title = input.title.trim();
+  if (!title) {
+    throw new EstimateLineError("Enter a material description.");
+  }
+  const quantity = parsePositiveDecimal(input.quantity, "quantity");
+
+  const estimate = access.assertOwned(
+    await db.estimate.findFirst({
+      where: { id: input.estimateId, ...access.scope },
+      select: { id: true, businessId: true, status: true },
+    }),
+  );
+  if (estimate.status !== "DRAFT") {
+    throw new EstimateLineError("Only a draft estimate can be changed.");
+  }
+
+  const line = access.assertOwned(
+    await db.lineItem.findFirst({
+      where: {
+        id: input.lineItemId,
+        estimateId: estimate.id,
+        ...access.scope,
+      },
+    }),
+  );
+  if (line.type !== "MATERIAL") {
+    throw new EstimateLineError(
+      "Only material lines can be edited from Customer Materials.",
+    );
+  }
+
+  const parts = splitLineDescription(line.description);
+  const description = joinLineDescriptionFromParts(parts, { title });
+  const total = quantity.mul(line.unitPrice);
+
+  await db.$transaction(async (tx) => {
+    await tx.lineItem.update({
+      where: { id: line.id },
+      data: {
+        description,
+        quantity,
+        total,
+      },
+    });
+    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
+  });
+
+  return db.lineItem.findFirstOrThrow({
+    where: { id: line.id, businessId: access.businessId },
+  });
+}
+
+/**
  * Explicit owner action: save this DRAFT line as a reusable
  * ServiceCatalogItem. Never runs automatically from add/price.
  */

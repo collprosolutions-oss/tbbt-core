@@ -34,7 +34,7 @@ export function MaterialDepositForm({
 
   return (
     <div className="mt-3 space-y-2 rounded-lg border border-border p-3">
-      <p className="text-sm font-medium">Material deposit</p>
+      <p className="text-sm font-medium">Material Deposit Due</p>
       <p className="text-xs text-muted-foreground">
         Suggested deposit is the Final Customer Materials Total. It is part of the
         estimate total, not an extra fee. Labor is not included.
@@ -49,7 +49,7 @@ export function MaterialDepositForm({
           current deposit stays until you apply the new amount.
         </p>
       ) : null}
-      <p className="text-sm">Remaining balance: {remainingLabel}</p>
+      <p className="text-sm">Remaining Balance {remainingLabel}</p>
       <form action={action} className="flex flex-wrap items-end gap-2">
         <input type="hidden" name="estimateId" value={estimateId} />
         <div className="space-y-1">

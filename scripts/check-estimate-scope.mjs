@@ -251,7 +251,7 @@ try {
   );
   check(
     "MATERIAL lines do not render Scope / Included Work or catalog-save editors",
-    ownerPage.includes("workLines.map") &&
+    ownerPage.includes("laborLines.map") &&
       ownerPage.includes("materialLines.map") &&
       !ownerPage.slice(ownerPage.indexOf("materialLines.map")).includes(
         "EditLineIncludedWorkForm",
