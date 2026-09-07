@@ -45,6 +45,7 @@ const {
   DEFAULT_CONCRETE_BAG_SIZE_LB,
   DEFAULT_CONCRETE_BAG_YIELD_CU_FT,
   DEFAULT_CONCRETE_WASTE_PERCENT,
+  addCustomTakeoffItem,
   applyTakeoffItemEdits,
   computeTakeoff,
   concreteBagsRequired,
@@ -60,8 +61,11 @@ const {
   formatFeetInches,
   framedWallPlateBoards,
   framedWallStudCount,
+  isIncompleteNumericDraft,
   isRejectedLinearUnit,
   parseConstructionNumber,
+  parseNonNegativeNumber,
+  parseTakeoffNumericInput,
   recalculateDraftMaterialTakeoff,
   saveDraftMaterialTakeoff,
   sheetCountRequired,
@@ -178,7 +182,12 @@ try {
       takeoffForm.includes("Internal extended") &&
       takeoffForm.includes("Customer extended") &&
       takeoffForm.includes("Feet") &&
-      takeoffForm.includes("Inches"),
+      takeoffForm.includes("Inches") &&
+      takeoffForm.includes("TakeoffDecimalField") &&
+      takeoffForm.includes("isIncompleteNumericDraft") &&
+      takeoffForm.includes("parseTakeoffNumericInput") &&
+      !takeoffForm.includes("Number(event.target.value) || 0") &&
+      !takeoffForm.includes('type="number"'),
   );
   check(
     "Estimate document uses split title/scope, not raw description",
@@ -355,6 +364,128 @@ try {
       emptyFramedWallInputs({ wallLengthFtPart: 12, wallLengthInPart: 0 }).wallLengthFt,
       16,
     ) === 10,
+  );
+
+  console.log("\nUNIT — Decimal takeoff qty, cost, price, and waste");
+  check(
+    "Incomplete drafts like 6. are not parsed as 6 while typing",
+    isIncompleteNumericDraft("6.") === true &&
+      isIncompleteNumericDraft(".") === true &&
+      isIncompleteNumericDraft("4 1/") === true &&
+      parseNonNegativeNumber("6.") == null &&
+      parseTakeoffNumericInput("6.").status === "incomplete" &&
+      parseTakeoffNumericInput("6.24").status === "ok" &&
+      parseTakeoffNumericInput("6.24").value === 6.24,
+  );
+  check(
+    "Owner qty 12.5, internal cost 6.24, customer price 7.95, and waste 7.5 are accepted",
+    parseTakeoffNumericInput("12.5").value === 12.5 &&
+      parseTakeoffNumericInput("6.24").value === 6.24 &&
+      parseTakeoffNumericInput("7.95").value === 7.95 &&
+      parseTakeoffNumericInput("7.50").value === 7.5 &&
+      parseTakeoffNumericInput("7.5").value === 7.5 &&
+      computeTakeoff({
+        takeoffType: "concrete-slab",
+        inputs: { lengthFt: 10, widthFt: 10, thicknessIn: 4 },
+        wastePercent: 7.5,
+      }).snapshot.wastePercent === 7.5,
+  );
+  check(
+    "Negative and malformed numeric input is rejected",
+    parseTakeoffNumericInput("-1").status === "invalid" &&
+      parseTakeoffNumericInput("-6.24").status === "invalid" &&
+      parseTakeoffNumericInput("abc").status === "invalid" &&
+      parseNonNegativeNumber("-7.5") == null,
+  );
+  check(
+    "Fractional inch input still works: 4.5, 4 1/2, 4½",
+    parseConstructionNumber("4.5") === 4.5 &&
+      parseConstructionNumber("4 1/2") === 4.5 &&
+      parseConstructionNumber("4½") === 4.5 &&
+      parseTakeoffNumericInput("4½", "construction").value === 4.5,
+  );
+  const decimalPriced = applyTakeoffItemEdits(
+    computeTakeoff({
+      takeoffType: "concrete-slab",
+      inputs: {
+        lengthFtPart: 8,
+        lengthInPart: 0,
+        widthFtPart: 3,
+        widthInPart: 4,
+        thicknessIn: 4,
+        bagSizeLb: 60,
+        bagYieldCuFt: 0.45,
+      },
+      wastePercent: 7.5,
+    }).snapshot,
+    [
+      {
+        id: "concrete-bags",
+        quantityOverride: 12.5,
+        unitCost: 6.24,
+        customerUnitPrice: 7.95,
+        selected: true,
+      },
+    ],
+  );
+  const decimalBags = decimalPriced.items.find((item) => item.id === "concrete-bags");
+  check(
+    "Decimal owner qty and cents calculate independent internal vs customer extended amounts",
+    decimalPriced.wastePercent === 7.5 &&
+      decimalBags?.quantityOverride === 12.5 &&
+      decimalBags?.unitCost === 6.24 &&
+      decimalBags?.customerUnitPrice === 7.95 &&
+      extendedMaterialCost(decimalBags) === 78 &&
+      extendedCustomerPrice(decimalBags) === 99.38,
+  );
+  const decimalPreserved = computeTakeoff({
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFtPart: 8,
+      lengthInPart: 0,
+      widthFtPart: 3,
+      widthInPart: 4,
+      thicknessIn: 6,
+      bagSizeLb: 60,
+      bagYieldCuFt: 0.45,
+    },
+    wastePercent: 7.5,
+    previous: decimalPriced,
+  }).snapshot.items.find((item) => item.id === "concrete-bags");
+  check(
+    "Recalculation preserves decimal owner qty, internal cost, and customer selling price",
+    decimalPreserved?.quantityOverride === 12.5 &&
+      decimalPreserved?.unitCost === 6.24 &&
+      decimalPreserved?.customerUnitPrice === 7.95 &&
+      decimalPreserved?.calculatedQuantity !== 12.5,
+  );
+  const customDecimal = addCustomTakeoffItem(decimalPriced, {
+    label: "Trip allowance",
+    unit: "trips",
+    quantity: 1.5,
+    unitCost: 28.75,
+    customerUnitPrice: 37.5,
+  }).items.find((item) => item.label === "Trip allowance");
+  check(
+    "Custom takeoff qty, internal cost, and selling price accept decimals",
+    customDecimal?.quantityOverride === 1.5 &&
+      customDecimal?.unitCost === 28.75 &&
+      customDecimal?.customerUnitPrice === 37.5,
+  );
+  check(
+    "Bag yield and stud spacing accept fractional values",
+    emptyConcreteSlabInputs({ bagYieldCuFt: 0.45 }).bagYieldCuFt === 0.45 &&
+      emptyFramedWallInputs({ studSpacingIn: 16.5 }).studSpacingIn === 16.5,
+  );
+  check(
+    "Door/window/opening counts stay whole-number inputs",
+    takeoffForm.includes("integer") &&
+      takeoffForm.includes("Sliding patio doors") &&
+      takeoffForm.includes("Standard doors") &&
+      takeoffForm.includes("Windows") &&
+      takeoffForm.includes("Openings") &&
+      parseTakeoffNumericInput("2", "integer").value === 2 &&
+      parseTakeoffNumericInput("1.5", "integer").status === "invalid",
   );
 
   console.log("\nUNIT — Internal unit cost stays independent of customer unit price");
@@ -823,6 +954,134 @@ try {
       !plain.includes("wastePercent") &&
       !plain.includes("lengthInPart") &&
       document.lineItems[0]?.description === DECORATIVE_WALL_PANELING_TITLE,
+  );
+
+  console.log("\nTEST — Decimal conversion preserves cents and hides internals");
+  const decimalEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const decimalLine = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: decimalEstimate.id,
+      description: joinLineDescription("Decimal takeoff patio"),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(0),
+      total: new Prisma.Decimal(0),
+      type: "LABOR",
+    },
+  });
+  const decimalCalculated = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: decimalEstimate.id,
+    lineItemId: decimalLine.id,
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFtPart: 8,
+      lengthInPart: 0,
+      widthFtPart: 3,
+      widthInPart: 4,
+      thicknessIn: 4,
+      bagSizeLb: 60,
+      bagYieldCuFt: 0.45,
+    },
+    wastePercent: 10,
+  });
+  check(
+    "Founder 8 ft × 3 ft 4 in × 4 in slab still calculates after decimal-input change",
+    decimalCalculated.snapshot.items.find((item) => item.id === "concrete-bags")
+      ?.calculatedQuantity === 22 && decimalCalculated.snapshot.wastePercent === 10,
+  );
+  const decimalSnapshot = {
+    ...decimalCalculated.snapshot,
+    items: decimalCalculated.snapshot.items.map((item) =>
+      item.id === "concrete-bags"
+        ? {
+            ...item,
+            quantityOverride: 12.5,
+            unitCost: 6.24,
+            customerUnitPrice: 7.95,
+            selected: true,
+          }
+        : { ...item, selected: false },
+    ),
+  };
+  await saveDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: decimalEstimate.id,
+    lineItemId: decimalLine.id,
+    snapshot: decimalSnapshot,
+  });
+  const decimalRecalc = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: decimalEstimate.id,
+    lineItemId: decimalLine.id,
+    takeoffType: "concrete-slab",
+    inputs: decimalSnapshot.inputs,
+    wastePercent: 10,
+    snapshotEdits: decimalSnapshot,
+  });
+  const decimalBagsAfter = decimalRecalc.snapshot.items.find(
+    (item) => item.id === "concrete-bags",
+  );
+  check(
+    "Saved decimal qty/cost/price survive recalculation",
+    decimalBagsAfter?.quantityOverride === 12.5 &&
+      decimalBagsAfter?.unitCost === 6.24 &&
+      decimalBagsAfter?.customerUnitPrice === 7.95,
+  );
+  const decimalConvert = await convertDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: decimalEstimate.id,
+    lineItemId: decimalLine.id,
+    snapshot: decimalRecalc.snapshot,
+  });
+  check("Decimal takeoff converts one selected MATERIAL line", decimalConvert.created === 1);
+  const decimalMaterials = await prisma.lineItem.findMany({
+    where: { estimateId: decimalEstimate.id, businessId: businessA.id, type: "MATERIAL" },
+  });
+  const decimalBagLine = decimalMaterials.find(
+    (item) => lineItemTitle(item.description) === "60-lb concrete bags",
+  );
+  check(
+    "Converted MATERIAL line keeps cents in customer unit price and decimal owner qty",
+    decimalBagLine != null &&
+      Number(decimalBagLine.quantity.toString()) === 12.5 &&
+      Number(decimalBagLine.unitPrice.toString()) === 7.95 &&
+      Number(decimalBagLine.unitPrice.toString()) !== 6.24 &&
+      !decimalBagLine.description.includes("unitCost") &&
+      !decimalBagLine.description.includes("quantityOverride") &&
+      !decimalBagLine.description.includes("wastePercent"),
+  );
+
+  await persistDraftEstimateTotal(prisma, decimalEstimate.id, businessA.id);
+  await prisma.$transaction(async (tx) => {
+    await tx.estimate.update({
+      where: { id: decimalEstimate.id },
+      data: { status: "SENT" },
+    });
+    await createEstimateVersionSnapshot(tx, {
+      estimateId: decimalEstimate.id,
+      businessId: businessA.id,
+    });
+  });
+  const decimalDocument = await loadEstimateDocumentForBusiness(
+    decimalEstimate.id,
+    businessA.id,
+    prisma,
+  );
+  const decimalPlain = decimalDocument ? estimateDocumentPlainText(decimalDocument) : "";
+  check(
+    "Customer-facing document does not expose internal cost or takeoff fields",
+    decimalDocument != null &&
+      decimalDocument.lineItems.every((item) => !item.description.includes("TBBT Material")) &&
+      !decimalPlain.includes("TBBT Material Takeoff") &&
+      !decimalPlain.includes("quantityOverride") &&
+      !decimalPlain.includes("unitCost") &&
+      !decimalPlain.includes("customerUnitPrice") &&
+      !decimalPlain.includes("wastePercent") &&
+      !decimalPlain.includes("bagYieldCuFt") &&
+      !decimalPlain.includes("6.24"),
   );
 
   console.log("\nTEST — Sheet covering, framed wall, tenant isolation");

@@ -21,7 +21,9 @@ import { emptyFramedWallInputs } from "@/lib/material-takeoff/formulas/framed-wa
 import { emptySheetCoveringInputs } from "@/lib/material-takeoff/formulas/sheet-covering";
 import {
   feetAndInchesToFeet,
-  parseNonNegativeConstructionNumber,
+  isIncompleteNumericDraft,
+  parsePositiveNumber,
+  parseTakeoffNumericInput,
 } from "@/lib/material-takeoff/units";
 import {
   TAKEOFF_TYPE_IDS,
@@ -121,10 +123,13 @@ export function MaterialTakeoffForm({
     );
   }
 
-  function setInput(key: string, value: unknown) {
+  function setInput(key: string | Record<string, unknown>, value?: unknown) {
     setDraft((current) => ({
       ...current,
-      inputs: { ...current.inputs, [key]: value },
+      inputs:
+        typeof key === "string"
+          ? { ...current.inputs, [key]: value }
+          : { ...current.inputs, ...key },
     }));
   }
 
@@ -138,10 +143,23 @@ export function MaterialTakeoffForm({
   }
 
   function addCustom() {
-    const quantity = Number(customQty);
-    if (!customLabel.trim() || !Number.isFinite(quantity) || quantity <= 0) return;
-    const unitCost = customCost.trim() ? Number(customCost) : null;
-    const customerUnitPrice = customPrice.trim() ? Number(customPrice) : null;
+    if (
+      isIncompleteNumericDraft(customQty) ||
+      isIncompleteNumericDraft(customCost) ||
+      isIncompleteNumericDraft(customPrice)
+    ) {
+      return;
+    }
+    const quantity = parsePositiveNumber(customQty);
+    if (!customLabel.trim() || quantity == null) return;
+    const unitCost = customCost.trim()
+      ? parseTakeoffNumericInput(customCost).value
+      : null;
+    const customerUnitPrice = customPrice.trim()
+      ? parseTakeoffNumericInput(customPrice).value
+      : null;
+    if (customCost.trim() && unitCost == null) return;
+    if (customPrice.trim() && customerUnitPrice == null) return;
     setDraft((current) => ({
       ...current,
       items: [
@@ -155,11 +173,8 @@ export function MaterialTakeoffForm({
           selected: true,
           calculatedQuantity: quantity,
           quantityOverride: quantity,
-          unitCost: unitCost != null && Number.isFinite(unitCost) ? unitCost : null,
-          customerUnitPrice:
-            customerUnitPrice != null && Number.isFinite(customerUnitPrice)
-              ? customerUnitPrice
-              : null,
+          unitCost,
+          customerUnitPrice,
           explanation: "Owner-added takeoff item.",
           convertedLineItemId: null,
         },
@@ -243,15 +258,14 @@ export function MaterialTakeoffForm({
         ) : null}
 
         <div className="space-y-2">
-          <Label htmlFor={`waste-${lineItemId}`}>Waste %</Label>
-          <Input
+          <TakeoffDecimalField
             id={`waste-${lineItemId}`}
-            inputMode="decimal"
-            value={String(draft.wastePercent)}
-            onChange={(event) =>
+            label="Waste %"
+            value={draft.wastePercent}
+            onChange={(value) =>
               setDraft((current) => ({
                 ...current,
-                wastePercent: Number(event.target.value) || 0,
+                wastePercent: value ?? 0,
               }))
             }
           />
@@ -318,56 +332,34 @@ export function MaterialTakeoffForm({
                     </td>
                     <td className="py-2 pr-2 tabular-nums">{item.calculatedQuantity}</td>
                     <td className="py-2 pr-2">
-                      <Input
-                        inputMode="decimal"
-                        value={
-                          item.quantityOverride == null
-                            ? ""
-                            : String(item.quantityOverride)
-                        }
+                      <TakeoffDecimalField
+                        value={item.quantityOverride}
                         placeholder={String(item.calculatedQuantity)}
-                        onChange={(event) =>
-                          patchItem(item.id, {
-                            quantityOverride: event.target.value.trim()
-                              ? Number(event.target.value)
-                              : null,
-                          })
+                        nullable
+                        onChange={(value) =>
+                          patchItem(item.id, { quantityOverride: value })
                         }
                       />
                     </td>
                     <td className="py-2 pr-2">{item.unit}</td>
                     <td className="py-2 pr-2">
-                      <Input
-                        inputMode="decimal"
-                        value={item.unitCost == null ? "" : String(item.unitCost)}
+                      <TakeoffDecimalField
+                        value={item.unitCost}
                         placeholder="Internal cost"
-                        onChange={(event) =>
-                          patchItem(item.id, {
-                            unitCost: event.target.value.trim()
-                              ? Number(event.target.value)
-                              : null,
-                          })
-                        }
+                        nullable
+                        onChange={(value) => patchItem(item.id, { unitCost: value })}
                       />
                     </td>
                     <td className="py-2 pr-2 tabular-nums">
                       {formatMoney(extendedMaterialCost(item))}
                     </td>
                     <td className="py-2 pr-2">
-                      <Input
-                        inputMode="decimal"
-                        value={
-                          item.customerUnitPrice == null
-                            ? ""
-                            : String(item.customerUnitPrice)
-                        }
+                      <TakeoffDecimalField
+                        value={item.customerUnitPrice}
                         placeholder="Selling price"
-                        onChange={(event) =>
-                          patchItem(item.id, {
-                            customerUnitPrice: event.target.value.trim()
-                              ? Number(event.target.value)
-                              : null,
-                          })
+                        nullable
+                        onChange={(value) =>
+                          patchItem(item.id, { customerUnitPrice: value })
                         }
                       />
                     </td>
@@ -438,7 +430,7 @@ function ConcreteInputs({
   setInput,
 }: {
   draft: TakeoffSnapshot;
-  setInput: (key: string, value: unknown) => void;
+  setInput: (key: string | Record<string, unknown>, value?: unknown) => void;
 }) {
   const inputs = emptyConcreteSlabInputs(draft.inputs);
   return (
@@ -455,10 +447,12 @@ function ConcreteInputs({
         inches={inputs.widthInPart}
         onChange={(feet, inches) => setLinear(setInput, "width", feet, inches)}
       />
-      <ConstructionNumberField
+      <TakeoffDecimalField
         label="Thickness (in)"
         value={inputs.thicknessIn}
-        onChange={(v) => setInput("thicknessIn", v)}
+        fractions
+        emptyZero
+        onChange={(v) => setInput("thicknessIn", v ?? 0)}
       />
       <div className="space-y-2">
         <Label>Bag size</Label>
@@ -478,10 +472,11 @@ function ConcreteInputs({
           <option value="80">80-lb</option>
         </select>
       </div>
-      <NumberField
+      <TakeoffDecimalField
         label="Bag yield (cu ft)"
         value={inputs.bagYieldCuFt}
-        onChange={(v) => setInput("bagYieldCuFt", v)}
+        emptyZero
+        onChange={(v) => setInput("bagYieldCuFt", v ?? 0)}
       />
       <label className="flex items-center gap-2 text-sm">
         <input
@@ -532,7 +527,7 @@ function SheetInputs({
   setInput,
 }: {
   draft: TakeoffSnapshot;
-  setInput: (key: string, value: unknown) => void;
+  setInput: (key: string | Record<string, unknown>, value?: unknown) => void;
 }) {
   const inputs = emptySheetCoveringInputs(draft.inputs);
   return (
@@ -561,9 +556,27 @@ function SheetInputs({
         inches={inputs.sheetHeightInPart}
         onChange={(feet, inches) => setLinear(setInput, "sheetHeight", feet, inches)}
       />
-      <NumberField label="Sliding patio doors" value={inputs.slidingPatioDoors} onChange={(v) => setInput("slidingPatioDoors", v)} />
-      <NumberField label="Standard doors" value={inputs.standardDoors} onChange={(v) => setInput("standardDoors", v)} />
-      <NumberField label="Windows" value={inputs.windows} onChange={(v) => setInput("windows", v)} />
+      <TakeoffDecimalField
+        label="Sliding patio doors"
+        value={inputs.slidingPatioDoors}
+        integer
+        emptyZero
+        onChange={(v) => setInput("slidingPatioDoors", v ?? 0)}
+      />
+      <TakeoffDecimalField
+        label="Standard doors"
+        value={inputs.standardDoors}
+        integer
+        emptyZero
+        onChange={(v) => setInput("standardDoors", v ?? 0)}
+      />
+      <TakeoffDecimalField
+        label="Windows"
+        value={inputs.windows}
+        integer
+        emptyZero
+        onChange={(v) => setInput("windows", v ?? 0)}
+      />
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -597,7 +610,7 @@ function FramedInputs({
   setInput,
 }: {
   draft: TakeoffSnapshot;
-  setInput: (key: string, value: unknown) => void;
+  setInput: (key: string | Record<string, unknown>, value?: unknown) => void;
 }) {
   const inputs = emptyFramedWallInputs(draft.inputs);
   return (
@@ -614,12 +627,20 @@ function FramedInputs({
         inches={inputs.wallHeightInPart}
         onChange={(feet, inches) => setLinear(setInput, "wallHeight", feet, inches)}
       />
-      <ConstructionNumberField
+      <TakeoffDecimalField
         label="Stud spacing (in)"
         value={inputs.studSpacingIn}
-        onChange={(v) => setInput("studSpacingIn", v)}
+        fractions
+        emptyZero
+        onChange={(v) => setInput("studSpacingIn", v ?? 0)}
       />
-      <NumberField label="Openings" value={inputs.openings} onChange={(v) => setInput("openings", v)} />
+      <TakeoffDecimalField
+        label="Openings"
+        value={inputs.openings}
+        integer
+        emptyZero
+        onChange={(v) => setInput("openings", v ?? 0)}
+      />
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -649,14 +670,16 @@ function FramedInputs({
 }
 
 function setLinear(
-  setInput: (key: string, value: unknown) => void,
+  setInput: (key: string | Record<string, unknown>, value?: unknown) => void,
   prefix: string,
   feet: number,
   inches: number,
 ) {
-  setInput(`${prefix}FtPart`, feet);
-  setInput(`${prefix}InPart`, inches);
-  setInput(`${prefix}Ft`, feetAndInchesToFeet(feet, inches));
+  setInput({
+    [`${prefix}FtPart`]: feet,
+    [`${prefix}InPart`]: inches,
+    [`${prefix}Ft`]: feetAndInchesToFeet(feet, inches),
+  });
 }
 
 function FeetInchesField({
@@ -674,74 +697,101 @@ function FeetInchesField({
     <div className="space-y-2">
       <Label>{label}</Label>
       <div className="grid grid-cols-2 gap-2">
-        <ConstructionNumberField
+        <TakeoffDecimalField
           label="Feet"
           value={feet}
-          onChange={(value) => onChange(value, inches)}
+          fractions
+          emptyZero
+          onChange={(value) => onChange(value ?? 0, inches)}
         />
-        <ConstructionNumberField
+        <TakeoffDecimalField
           label="Inches"
           value={inches}
-          onChange={(value) => onChange(feet, value)}
+          fractions
+          emptyZero
+          onChange={(value) => onChange(feet, value ?? 0)}
         />
       </div>
     </div>
   );
 }
 
-function ConstructionNumberField({
+function TakeoffDecimalField({
+  id,
   label,
   value,
   onChange,
+  placeholder,
+  fractions = false,
+  integer = false,
+  nullable = false,
+  emptyZero = false,
 }: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
+  id?: string;
+  label?: string;
+  value: number | null;
+  onChange: (value: number | null) => void;
+  placeholder?: string;
+  fractions?: boolean;
+  integer?: boolean;
+  nullable?: boolean;
+  emptyZero?: boolean;
 }) {
-  const [text, setText] = useState(value === 0 ? "" : String(value));
-  useEffect(() => {
-    setText(value === 0 ? "" : String(value));
-  }, [value]);
+  const [text, setText] = useState(() => formatTakeoffNumericDraft(value, emptyZero));
 
+  useEffect(() => {
+    setText((current) => {
+      if (isIncompleteNumericDraft(current)) return current;
+      if (current.trim() === "" && (value === null || (emptyZero && value === 0))) {
+        return current;
+      }
+      const parsed = parseTakeoffNumericInput(
+        current,
+        integer ? "integer" : fractions ? "construction" : "decimal",
+      );
+      if (parsed.status === "ok" && parsed.value != null && value != null && Math.abs(parsed.value - value) < 1e-9) {
+        return current;
+      }
+      return formatTakeoffNumericDraft(value, emptyZero);
+    });
+  }, [emptyZero, fractions, integer, value]);
+
+  const input = (
+    <Input
+      id={id}
+      inputMode={integer ? "numeric" : "decimal"}
+      value={text}
+      placeholder={placeholder}
+      onChange={(event) => {
+        const next = event.target.value;
+        setText(next);
+        const parsed = parseTakeoffNumericInput(
+          next,
+          integer ? "integer" : fractions ? "construction" : "decimal",
+        );
+        if (parsed.status === "incomplete") return;
+        if (parsed.status === "empty") {
+          onChange(nullable ? null : 0);
+          return;
+        }
+        if (parsed.status === "ok" && parsed.value != null) onChange(parsed.value);
+      }}
+    />
+  );
+
+  if (!label) return input;
   return (
-    <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      <Input
-        inputMode="decimal"
-        value={text}
-        placeholder="0"
-        onChange={(event) => {
-          const next = event.target.value;
-          setText(next);
-          if (!next.trim()) {
-            onChange(0);
-            return;
-          }
-          const parsed = parseNonNegativeConstructionNumber(next);
-          if (parsed != null) onChange(parsed);
-        }}
-      />
+    <div className="space-y-2">
+      <Label htmlFor={id} className="text-xs text-muted-foreground">
+        {label}
+      </Label>
+      {input}
     </div>
   );
 }
 
-function NumberField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <div className="space-y-2">
-      <Label>{label}</Label>
-      <Input
-        inputMode="decimal"
-        value={value === 0 ? "" : String(value)}
-        onChange={(event) => onChange(Number(event.target.value) || 0)}
-      />
-    </div>
-  );
+function formatTakeoffNumericDraft(value: number | null, emptyZero = false): string {
+  if (value === null || !Number.isFinite(value)) return "";
+  if (emptyZero && value === 0) return "";
+  return String(value);
 }

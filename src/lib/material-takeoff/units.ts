@@ -39,11 +39,27 @@ export function roundTakeoff(value: number, digits = 4) {
   return Math.round((value + Number.EPSILON) * factor) / factor;
 }
 
+/** True while the owner is mid-keystroke on a decimal or mixed fraction. */
+export function isIncompleteNumericDraft(raw: string): boolean {
+  if (typeof raw !== "string") return false;
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (trimmed === "-" || trimmed === "." || trimmed === "-.") return true;
+  if (/^-?\d+\.$/.test(trimmed)) return true;
+  if (/^-?\d+-$/.test(trimmed)) return true;
+  if (/^-?\d+\s+$/.test(raw)) return true;
+  if (/^-?\d+\s+\d*$/.test(trimmed)) return true;
+  if (/^-?\d+\s+\d+\/$/.test(trimmed)) return true;
+  if (/^-?\d+\/$/.test(trimmed)) return true;
+  return false;
+}
+
 export function parsePositiveNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return value;
   }
   if (typeof value === "string" && value.trim()) {
+    if (isIncompleteNumericDraft(value)) return null;
     const n = Number(value);
     if (Number.isFinite(n) && n > 0) return n;
   }
@@ -55,6 +71,7 @@ export function parseNonNegativeNumber(value: unknown): number | null {
     return value;
   }
   if (typeof value === "string" && value.trim()) {
+    if (isIncompleteNumericDraft(value)) return null;
     const n = Number(value);
     if (Number.isFinite(n) && n >= 0) return n;
   }
@@ -145,7 +162,7 @@ export function parseConstructionNumber(value: unknown): number | null {
     const signed = num / den;
     return fraction[1] ? -signed : signed;
   }
-  if (!/^-?\d+(\.\d+)?$/.test(raw)) return null;
+  if (!/^-?\d+(\.\d+)?$/.test(raw) && !/^-?\.\d+$/.test(raw)) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
@@ -160,6 +177,35 @@ export function parsePositiveConstructionNumber(value: unknown): number | null {
   const parsed = parseConstructionNumber(value);
   if (parsed == null || parsed <= 0) return null;
   return parsed;
+}
+
+export function parseNonNegativeInteger(value: unknown): number | null {
+  const parsed = parseNonNegativeNumber(value);
+  if (parsed == null || !Number.isInteger(parsed)) return null;
+  return parsed;
+}
+
+export type TakeoffNumericParseMode = "decimal" | "integer" | "construction";
+
+/**
+ * Parse a takeoff numeric field without committing incomplete drafts
+ * such as "6." or "4 1/". Malformed and negative values are invalid.
+ */
+export function parseTakeoffNumericInput(
+  raw: string,
+  mode: TakeoffNumericParseMode = "decimal",
+): { status: "incomplete" | "empty" | "invalid" | "ok"; value: number | null } {
+  if (typeof raw !== "string") return { status: "invalid", value: null };
+  if (isIncompleteNumericDraft(raw)) return { status: "incomplete", value: null };
+  if (!raw.trim()) return { status: "empty", value: null };
+  const parsed =
+    mode === "integer"
+      ? parseNonNegativeInteger(raw)
+      : mode === "construction"
+        ? parseNonNegativeConstructionNumber(raw)
+        : parseNonNegativeNumber(raw);
+  if (parsed == null) return { status: "invalid", value: null };
+  return { status: "ok", value: parsed };
 }
 
 export function feetAndInchesToFeet(feet: number, inches: number): number {
