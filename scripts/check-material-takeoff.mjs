@@ -199,6 +199,12 @@ try {
   const takeoffForm = readRepo("src/components/estimates/material-takeoff-form.tsx");
   const recoveryForms = readRepo("src/components/estimates/draft-estimate-recovery-forms.tsx");
   const estimateDocument = readRepo("src/lib/estimate-document.ts");
+  const lineSections = readRepo(
+    "src/components/estimates/customer-estimate-line-sections.tsx",
+  );
+  const compactMaterials = lineSections.slice(
+    lineSections.indexOf("function CompactCustomerMaterialList"),
+  );
 
   check(
     "Customer estimate, print, and portal do not mount takeoff UI",
@@ -211,7 +217,11 @@ try {
       !customerPage.includes("laborAdjustment") &&
       !customerPage.includes("Labor Takeoff") &&
       customerPage.includes("loadEstimateDocumentByToken") &&
-      customerPage.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
+      customerPage.includes("CustomerEstimateLineSections") &&
+      lineSections.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
+      lineSections.includes("customer-materials-compact") &&
+      compactMaterials.includes("line.quantityLabel") &&
+      !compactMaterials.includes("unitPriceLabel") &&
       !printPage.includes("MaterialTakeoffForm") &&
       !printPage.includes("Material Markup") &&
       !printPage.includes("Apply recommended labor") &&

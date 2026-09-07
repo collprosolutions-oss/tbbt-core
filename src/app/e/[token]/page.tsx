@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ApproveEstimateButton } from "@/components/estimates/approve-estimate-button";
 import { CustomerEstimateHeader } from "@/components/estimates/customer-estimate-header";
+import { CustomerEstimateLineSections } from "@/components/estimates/customer-estimate-line-sections";
 import { CustomerEstimateTotals } from "@/components/estimates/customer-estimate-totals";
 import { EstimateCustomerPolicies } from "@/components/estimates/customer-policy-display";
 import { Button } from "@/components/ui/button";
@@ -13,13 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
-import {
-  ESTIMATE_LABOR_SECTION_TITLE,
-  ESTIMATE_MATERIALS_SECTION_TITLE,
-  ESTIMATE_OTHER_SECTION_TITLE,
-  loadEstimateDocumentByToken,
-  type EstimateDocumentLine,
-} from "@/lib/estimate-document";
+import { loadEstimateDocumentByToken } from "@/lib/estimate-document";
 
 export const metadata: Metadata = {
   title: "Estimate",
@@ -72,7 +67,7 @@ export default async function PublicEstimatePage({
             </CardHeader>
             <CardContent className="space-y-5">
               {hasLines ? (
-                <CustomerLineSections
+                <CustomerEstimateLineSections
                   laborLines={estimate.laborLines}
                   materialLines={estimate.materialLines}
                   otherLines={estimate.otherLines}
@@ -137,88 +132,5 @@ export default async function PublicEstimatePage({
         </div>
       </div>
     </main>
-  );
-}
-
-function CustomerLineSections({
-  laborLines,
-  materialLines,
-  otherLines,
-}: {
-  laborLines: EstimateDocumentLine[];
-  materialLines: EstimateDocumentLine[];
-  otherLines: EstimateDocumentLine[];
-}) {
-  const blocks: Array<{ title: string; lines: EstimateDocumentLine[] }> = [];
-  if (laborLines.length > 0) {
-    blocks.push({ title: ESTIMATE_LABOR_SECTION_TITLE, lines: laborLines });
-  }
-  if (materialLines.length > 0) {
-    blocks.push({ title: ESTIMATE_MATERIALS_SECTION_TITLE, lines: materialLines });
-  }
-  if (otherLines.length > 0) {
-    blocks.push({ title: ESTIMATE_OTHER_SECTION_TITLE, lines: otherLines });
-  }
-
-  return (
-    <div>
-      {blocks.map((block, index) => (
-        <section
-          key={block.title}
-          className={index > 0 ? "mt-6 border-t-2 border-border pt-6" : undefined}
-        >
-          <h3 className="text-xs font-semibold tracking-wider text-muted-foreground">
-            {block.title}
-          </h3>
-          <table className="mt-3 w-full border-collapse text-sm">
-            <thead>
-              <tr className="text-left text-xs tracking-wider text-muted-foreground">
-                <th className="py-2 pr-3 font-semibold">Description</th>
-                <th className="py-2 px-3 text-right font-semibold">Qty</th>
-                {block.title === ESTIMATE_MATERIALS_SECTION_TITLE ? null : (
-                  <>
-                    <th className="py-2 px-3 text-right font-semibold">Rate</th>
-                    <th className="py-2 pl-3 text-right font-semibold">Amount</th>
-                  </>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {block.lines.map((line, lineIndex) => (
-                <tr
-                  key={`${block.title}-${line.description}-${lineIndex}`}
-                  className="border-t border-border/60"
-                >
-                  <td className="py-2.5 pr-3 align-top">
-                    <p className="font-medium">{line.description}</p>
-                    {line.includedWork ? (
-                      <div className="mt-1 whitespace-pre-line text-xs text-muted-foreground">
-                        <p className="font-semibold tracking-wide">
-                          Scope / Included Work
-                        </p>
-                        {line.includedWork}
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="py-2.5 px-3 text-right align-top tabular-nums">
-                    {line.quantityLabel}
-                  </td>
-                  {line.showLinePricing ? (
-                    <>
-                      <td className="py-2.5 px-3 text-right align-top tabular-nums">
-                        {line.unitPriceLabel}
-                      </td>
-                      <td className="py-2.5 pl-3 text-right align-top tabular-nums font-medium">
-                        {line.amountLabel}
-                      </td>
-                    </>
-                  ) : null}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      ))}
-    </div>
   );
 }

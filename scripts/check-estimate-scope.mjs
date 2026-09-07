@@ -188,12 +188,23 @@ try {
     new URL("../src/app/e/[token]/page.tsx", import.meta.url),
     "utf8",
   );
+  const customerLineSections = readFileSync(
+    new URL(
+      "../src/components/estimates/customer-estimate-line-sections.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
   check(
     "Customer estimate renders scope from description, without selecting a missing column",
     customerPage.includes("loadEstimateDocumentByToken") &&
-      customerPage.includes("Scope / Included Work") &&
-      customerPage.includes("line.includedWork") &&
-      !customerPage.includes("includedWork: true"),
+      customerPage.includes("CustomerEstimateLineSections") &&
+      customerLineSections.includes("Scope / Included Work") &&
+      customerLineSections.includes("line.includedWork") &&
+      !customerPage.includes("includedWork: true") &&
+      !customerLineSections
+        .slice(customerLineSections.indexOf("function CompactCustomerMaterialList"))
+        .includes("includedWork"),
   );
 
   const ownerPageSource = readFileSync(

@@ -30,6 +30,13 @@ const approve = readRepo("src/components/estimates/approve-estimate-button.tsx")
 const branding = readRepo("src/lib/business-branding.ts");
 const printPage = readRepo("src/app/(invoice-document)/e/[token]/print/page.tsx");
 const estimateDocument = readRepo("src/components/estimates/estimate-document.tsx");
+const lineSections = readRepo(
+  "src/components/estimates/customer-estimate-line-sections.tsx",
+);
+const estimatePdf = readRepo("src/lib/estimate-pdf.ts");
+const compactMaterials = lineSections.slice(
+  lineSections.indexOf("function CompactCustomerMaterialList"),
+);
 
 console.log("\nSTATIC — Customer estimate responsive layout");
 
@@ -91,7 +98,8 @@ check(
 check(
   "Customer page still shows title, scope, price, terms, address, and approval",
   page.includes("loadEstimateDocumentByToken") &&
-    page.includes("Scope / Included Work") &&
+    page.includes("CustomerEstimateLineSections") &&
+    lineSections.includes("Scope / Included Work") &&
     page.includes("CustomerEstimateTotals") &&
     page.includes("EstimateCustomerPolicies") &&
     page.includes("Service address") &&
@@ -152,27 +160,47 @@ check(
     estimateDocument.includes("ESTIMATE") &&
     estimateDocument.includes("SERVICE ADDRESS") &&
     estimateDocument.includes("TERMS") &&
-    estimateDocument.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
-    estimateDocument.includes("ESTIMATE_MATERIALS_SECTION_TITLE"),
+    estimateDocument.includes("CustomerEstimateLineSections") &&
+    lineSections.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
+    lineSections.includes("ESTIMATE_MATERIALS_SECTION_TITLE"),
 );
 check(
   "Customer labor and materials render as separate sections with a divider between them",
-  page.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
-    page.includes("ESTIMATE_MATERIALS_SECTION_TITLE") &&
-    page.includes("border-t-2") &&
-    estimateDocument.includes("border-t-2 border-neutral-400") &&
+  page.includes("CustomerEstimateLineSections") &&
+    estimateDocument.includes("CustomerEstimateLineSections") &&
+    lineSections.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
+    lineSections.includes("ESTIMATE_MATERIALS_SECTION_TITLE") &&
+    lineSections.includes("border-t-2") &&
+    lineSections.includes("border-t-2 border-neutral-400") &&
     !estimateDocument.includes("SERVICES") &&
-    page.includes("Scope / Included Work"),
+    page.includes("Scope / Included Work") === false &&
+    lineSections.includes("Scope / Included Work"),
 );
 check(
-  "Customer MATERIALS table is Description | Qty only",
-  page.includes("ESTIMATE_MATERIALS_SECTION_TITLE ? null") &&
-    estimateDocument.includes("ESTIMATE_MATERIALS_SECTION_TITLE ? null") &&
-    page.includes("line.showLinePricing") &&
-    estimateDocument.includes("line.showLinePricing") &&
+  "Customer MATERIALS list is compact description + qty, with no line prices",
+  lineSections.includes("customer-materials-compact") &&
+    compactMaterials.includes("line.description") &&
+    compactMaterials.includes("line.quantityLabel") &&
+    compactMaterials.includes("leading-5") &&
+    compactMaterials.includes("border-dotted") &&
+    compactMaterials.includes("py-px") &&
+    !compactMaterials.includes("py-2.5") &&
+    !compactMaterials.includes("unitPriceLabel") &&
+    !compactMaterials.includes("amountLabel") &&
+    !compactMaterials.includes("Rate") &&
+    !compactMaterials.includes("showLinePricing") &&
+    !compactMaterials.includes("includedWork") &&
+    lineSections.includes("line.showLinePricing") &&
     !page.includes("CustomerMaterialsTotalForm") &&
     !page.includes("TBBT Customer Materials Total") &&
-    !page.includes("Final Customer Materials Total"),
+    !page.includes("Final Customer Materials Total") &&
+    estimatePdf.includes(
+      "drawSection(ESTIMATE_MATERIALS_SECTION_TITLE, docView.materialLines, true)",
+    ) &&
+    estimatePdf.includes("Compact customer materials") &&
+    !readRepo("src/app/(app)/estimates/[estimateId]/page.tsx").includes(
+      "customer-materials-compact",
+    ),
 );
 check(
   "Customer totals show labor, materials, estimate total, material deposit, and remaining balance",

@@ -205,7 +205,14 @@ try {
       !customerPage.includes("CalculatorBreakdown") &&
       !customerPage.includes("TBBT Calculator Snapshot") &&
       customerPage.includes("loadEstimateDocumentByToken") &&
-      customerPage.includes("Scope / Included Work") &&
+      customerPage.includes("CustomerEstimateLineSections") &&
+      readFileSync(
+        new URL(
+          "../src/components/estimates/customer-estimate-line-sections.tsx",
+          import.meta.url,
+        ),
+        "utf8",
+      ).includes("Scope / Included Work") &&
       customerPage.includes("EstimateCustomerPolicies") &&
       !customerPage.includes("panelRate") &&
       !customerPage.includes("contentsHandlingLightRate"),

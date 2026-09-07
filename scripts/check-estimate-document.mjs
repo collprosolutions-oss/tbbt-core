@@ -147,6 +147,13 @@ const ownerPdf = readRepo(
 );
 const documentView = readRepo("src/components/estimates/estimate-document.tsx");
 const documentLib = readRepo("src/lib/estimate-document.ts");
+const lineSections = readRepo(
+  "src/components/estimates/customer-estimate-line-sections.tsx",
+);
+const compactMaterials = lineSections.slice(
+  lineSections.indexOf("function CompactCustomerMaterialList"),
+);
+const estimatePdfSrc = readRepo("src/lib/estimate-pdf.ts");
 const ownerPage = readRepo("src/app/(app)/estimates/[estimateId]/page.tsx");
 const customerPage = readRepo("src/app/e/[token]/page.tsx");
 
@@ -175,13 +182,14 @@ check(
     "ESTIMATE",
     "PREPARED FOR",
     "SERVICE ADDRESS",
-    "ESTIMATE_LABOR_SECTION_TITLE",
-    "ESTIMATE_MATERIALS_SECTION_TITLE",
     "ESTIMATE_TOTAL_CUSTOMER_LABEL",
     "MATERIAL_DEPOSIT_CUSTOMER_LABEL",
     "TERMS",
   ].every((label) => documentView.includes(label)) &&
-    documentView.includes("border-t-2 border-neutral-400") &&
+    documentView.includes("CustomerEstimateLineSections") &&
+    lineSections.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
+    lineSections.includes("ESTIMATE_MATERIALS_SECTION_TITLE") &&
+    lineSections.includes("border-t-2 border-neutral-400") &&
     !documentView.includes('"SERVICES"') &&
     documentLib.includes('ESTIMATE_LABOR_SECTION_TITLE = "LABOR"') &&
     documentLib.includes('ESTIMATE_MATERIALS_SECTION_TITLE = "MATERIALS"'),
@@ -215,13 +223,22 @@ check(
 );
 check(
   "Customer material rows hide Rate/Amount and keep one Materials Total",
-  documentView.includes("ESTIMATE_MATERIALS_SECTION_TITLE") &&
-    documentView.includes("line.showLinePricing") &&
-    customerPage.includes("line.showLinePricing") &&
+  documentView.includes("ESTIMATE_MATERIALS_SECTION_TITLE") === false &&
+    documentView.includes("CustomerEstimateLineSections") &&
+    customerPage.includes("CustomerEstimateLineSections") &&
+    lineSections.includes("ESTIMATE_MATERIALS_SECTION_TITLE") &&
+    lineSections.includes("customer-materials-compact") &&
+    compactMaterials.includes("line.quantityLabel") &&
+    compactMaterials.includes("line.description") &&
+    !compactMaterials.includes("unitPriceLabel") &&
+    !compactMaterials.includes("amountLabel") &&
+    !compactMaterials.includes("py-2.5") &&
+    lineSections.includes("line.showLinePricing") &&
     documentLib.includes("showLinePricing: !hideLinePricing") &&
-    readRepo("src/lib/estimate-pdf.ts").includes(
+    estimatePdfSrc.includes(
       "drawSection(ESTIMATE_MATERIALS_SECTION_TITLE, docView.materialLines, true)",
-    ),
+    ) &&
+    estimatePdfSrc.includes("Compact customer materials"),
 );
 
 const baseUrl = process.env.DATABASE_URL;

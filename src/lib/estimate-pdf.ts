@@ -131,22 +131,52 @@ export function renderEstimatePdf(
       ensureSpace(40);
       doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
       doc.text(title, left, y);
-      y += 16;
-      doc.font("Helvetica-Bold").fontSize(8).fillColor("#666666");
-      doc.text("DESCRIPTION", left, y);
-      doc.text("QTY", colQty, y, { width: 70, align: "right" });
+      y += quantityOnly ? 12 : 16;
       if (!quantityOnly) {
+        doc.font("Helvetica-Bold").fontSize(8).fillColor("#666666");
+        doc.text("DESCRIPTION", left, y);
+        doc.text("QTY", colQty, y, { width: 70, align: "right" });
         doc.text("RATE", colRate, y, { width: 70, align: "right" });
         doc.text("AMOUNT", colAmt - 80, y, { width: 80, align: "right" });
+        y += 14;
       }
-      y += 14;
       for (const line of lines) {
+        if (quantityOnly) {
+          // Compact customer materials: one tight description + qty line.
+          ensureSpace(16);
+          const descWidth = colQty - left - 12;
+          doc.font("Helvetica").fontSize(10).fillColor("#111111");
+          const descHeight = doc.heightOfString(line.description, {
+            width: descWidth,
+          });
+          const firstLineWidth = Math.min(
+            descWidth,
+            doc.widthOfString(line.description.split("\n")[0] ?? ""),
+          );
+          doc.text(line.description, left, y, { width: descWidth });
+          const leaderStart = left + firstLineWidth + 4;
+          const leaderEnd = colQty - 4;
+          if (leaderEnd > leaderStart + 8) {
+            doc.save();
+            doc
+              .strokeColor("#bbbbbb")
+              .lineWidth(0.6)
+              .dash(1, { space: 2 })
+              .moveTo(leaderStart, y + 8)
+              .lineTo(leaderEnd, y + 8)
+              .stroke();
+            doc.restore();
+          }
+          doc.text(line.quantityLabel, colQty, y, { width: 70, align: "right" });
+          y += Math.max(12, descHeight + 1);
+          continue;
+        }
         ensureSpace(48);
         const descWidth = colQty - left - 12;
         const descHeight = doc.heightOfString(line.description, {
           width: descWidth,
         });
-        const scope = quantityOnly ? "" : line.includedWork?.trim() ?? "";
+        const scope = line.includedWork?.trim() ?? "";
         const scopeHeight = scope
           ? 12 +
             doc.heightOfString(`Scope / Included Work\n${scope}`, {
@@ -156,10 +186,8 @@ export function renderEstimatePdf(
         doc.font("Helvetica").fontSize(10).fillColor("#111111");
         doc.text(line.description, left, y, { width: descWidth });
         doc.text(line.quantityLabel, colQty, y, { width: 70, align: "right" });
-        if (!quantityOnly) {
-          doc.text(line.unitPriceLabel, colRate, y, { width: 70, align: "right" });
-          doc.text(line.amountLabel, colAmt - 80, y, { width: 80, align: "right" });
-        }
+        doc.text(line.unitPriceLabel, colRate, y, { width: 70, align: "right" });
+        doc.text(line.amountLabel, colAmt - 80, y, { width: 80, align: "right" });
         if (scope) {
           doc.font("Helvetica-Bold").fontSize(8).fillColor("#555555");
           doc.text("Scope / Included Work", left, y + descHeight + 2, {
