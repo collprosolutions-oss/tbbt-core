@@ -24,6 +24,7 @@ import {
 } from "@/lib/estimate-line-ops";
 import { joinLineDescription } from "@/lib/estimate-line-scope";
 import {
+  applyDraftTakeoffRecommendedLabor,
   convertDraftMaterialTakeoff,
   isTakeoffTypeId,
   parseTakeoffFormSnapshot,
@@ -722,6 +723,36 @@ export async function convertEstimateMaterialTakeoff(
       error: estimateLineErrorMessage(
         error,
         "Could not convert that material takeoff into MATERIAL lines.",
+      ),
+    };
+  }
+}
+
+export async function applyEstimateTakeoffRecommendedLabor(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const snapshot = parseTakeoffFormSnapshot(readString(formData, "takeoffJson"));
+    if (!snapshot) {
+      return { error: "Calculate a material takeoff before applying labor." };
+    }
+    const access = await requireBusinessAccess();
+    const result = await applyDraftTakeoffRecommendedLabor(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      snapshot,
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return {
+      message: `Applied recommended labor ${result.recommendedLabor.toFixed(2)} to the original request line. Materials stay separate.`,
+    };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(
+        error,
+        "Could not apply recommended labor to the original request line.",
       ),
     };
   }

@@ -82,8 +82,17 @@ export {
 export type { TakeoffInputSuggestion } from "@/lib/material-takeoff/measurements";
 export {
   applyTakeoffFormMutations,
+  applyDraftTakeoffRecommendedLabor,
   convertDraftMaterialTakeoff,
   parseTakeoffFormSnapshot,
   recalculateDraftMaterialTakeoff,
   saveDraftMaterialTakeoff,
 } from "@/lib/material-takeoff/ops";
+export {
+  CONCRETE_60LB_BAG_LABOR_HELPER_ID,
+  DEFAULT_CONCRETE_60LB_BAG_LABOR_RATE,
+  concreteLaborRate,
+  recommendTakeoffLabor,
+  takeoffSelectedCustomerSellingTotal,
+} from "@/lib/material-takeoff/labor-pricing";
+export type { TakeoffLaborRecommendation } from "@/lib/material-takeoff/labor-pricing";

@@ -69,6 +69,7 @@ export function mergeTakeoffSnapshots(
     return {
       ...calculated,
       markupPercent: parseNonNegativeNumber(previous?.markupPercent) ?? 0,
+      laborRate: parseNonNegativeNumber(previous?.laborRate) ?? 0,
       removedItemIds: [],
     };
   }
@@ -94,6 +95,7 @@ export function mergeTakeoffSnapshots(
       ? calculated.wastePercent
       : calculated.wastePercent,
     markupPercent: parseNonNegativeNumber(previous.markupPercent) ?? 0,
+    laborRate: parseNonNegativeNumber(previous.laborRate) ?? 0,
     removedItemIds: [...removed],
     items: [...formulaItems, ...customItems, ...convertedOrphans],
   };
@@ -242,6 +244,7 @@ export function normalizeTakeoffSnapshot(raw: unknown): TakeoffSnapshot | null {
     inputs,
     wastePercent: parseNonNegativeNumber(parsed.wastePercent) ?? 0,
     markupPercent: parseNonNegativeNumber(parsed.markupPercent) ?? 0,
+    laborRate: parseNonNegativeNumber(parsed.laborRate) ?? 0,
     measurementSource: normalizeMeasurementSource(parsed.measurementSource),
     explanation: typeof parsed.explanation === "string" ? parsed.explanation : "",
     skippedMeasurements: Array.isArray(parsed.skippedMeasurements)

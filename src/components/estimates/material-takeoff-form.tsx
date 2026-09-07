@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useMemo, useState } from "react";
 import {
+  applyEstimateTakeoffRecommendedLabor,
   convertEstimateMaterialTakeoff,
   saveEstimateMaterialTakeoff,
   type EstimateActionState,
@@ -12,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatMoney } from "@/lib/format";
 import { applyMaterialMarkup, computeTakeoff } from "@/lib/material-takeoff/engine";
+import { recommendTakeoffLabor } from "@/lib/material-takeoff/labor-pricing";
 import {
   CONCRETE_BAG_YIELDS_CU_FT,
   DEFAULT_CONCRETE_BAG_SIZE_LB,
@@ -65,6 +67,10 @@ export function MaterialTakeoffForm({
     convertEstimateMaterialTakeoff,
     initialState,
   );
+  const [laborState, laborAction, laborPending] = useActionState(
+    applyEstimateTakeoffRecommendedLabor,
+    initialState,
+  );
   const startingType = snapshot?.takeoffType ?? suggestedType ?? "concrete-slab";
   const [takeoffType, setTakeoffType] = useState<TakeoffTypeId>(startingType);
   const [draft, setDraft] = useState<TakeoffSnapshot>(
@@ -92,9 +98,13 @@ export function MaterialTakeoffForm({
     () => takeoffCustomerSellingTotal(draft),
     [draft],
   );
-  const pending = savePending || convertPending;
-  const status = convertState.message || saveState.message;
-  const error = localError || convertState.error || saveState.error;
+  const laborRecommendation = useMemo(
+    () => recommendTakeoffLabor(draft),
+    [draft],
+  );
+  const pending = savePending || convertPending || laborPending;
+  const status = laborState.message || convertState.message || saveState.message;
+  const error = localError || laborState.error || convertState.error || saveState.error;
 
   function calculateFromInputs() {
     const computed = computeTakeoff({
@@ -437,6 +447,64 @@ export function MaterialTakeoffForm({
             </p>
           </div>
         ) : null}
+
+        <div className="space-y-3 rounded-lg border border-border p-3">
+          <p className="text-sm font-medium">Estimate pricing (owner only)</p>
+          {takeoffType === "concrete-slab" ? (
+            <TakeoffDecimalField
+              id={`labor-rate-${lineItemId}`}
+              label={laborRecommendation.rateLabel || "Labor rate per 60-lb bag"}
+              value={laborRecommendation.rate}
+              onChange={(value) =>
+                setDraft((current) => ({
+                  ...current,
+                  laborRate: value ?? 0,
+                }))
+              }
+            />
+          ) : null}
+          <dl className="grid gap-1 text-sm">
+            <div className="flex justify-between gap-3">
+              <dt>Recommended labor / service price</dt>
+              <dd className="tabular-nums">
+                {laborRecommendation.available
+                  ? formatMoney(laborRecommendation.recommendedLabor)
+                  : "—"}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt>Materials</dt>
+              <dd className="tabular-nums">
+                {formatMoney(laborRecommendation.customerMaterialTotal)}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-3 font-medium">
+              <dt>Recommended estimate subtotal</dt>
+              <dd className="tabular-nums">
+                {formatMoney(laborRecommendation.recommendedSubtotal)}
+              </dd>
+            </div>
+          </dl>
+          {laborRecommendation.unavailableReason ? (
+            <p className="text-xs text-muted-foreground">
+              {laborRecommendation.unavailableReason}
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Labor is separate from materials. Applying updates the original
+              request line only and does not convert MATERIAL lines or change
+              takeoff costs.
+            </p>
+          )}
+          <Button
+            type="submit"
+            formAction={laborAction}
+            variant="outline"
+            disabled={pending || !laborRecommendation.available}
+          >
+            {laborPending ? "Applying…" : "Apply recommended labor to estimate"}
+          </Button>
+        </div>
 
         <div className="grid gap-2 sm:grid-cols-5">
           <Input

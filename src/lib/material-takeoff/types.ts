@@ -59,6 +59,8 @@ export type TakeoffSnapshot = {
   wastePercent: number;
   /** Owner helper only. Applied when the owner clicks Apply markup; never auto-run on recalc. */
   markupPercent: number;
+  /** Owner labor-helper rate. Concrete slab: $ per 60-lb bag. 0 means use the type default. */
+  laborRate: number;
   measurementSource: TakeoffMeasurementSource | null;
   explanation: string;
   skippedMeasurements: string[];

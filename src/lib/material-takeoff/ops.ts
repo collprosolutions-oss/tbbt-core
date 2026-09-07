@@ -17,6 +17,8 @@ import {
   splitLineDescription,
 } from "@/lib/estimate-line-scope";
 import { EstimateLineError } from "@/lib/estimate-line-ops";
+import { pricedCustomQuoteDescription } from "@/lib/request-estimate-draft";
+import { recommendTakeoffLabor } from "@/lib/material-takeoff/labor-pricing";
 import {
   addCustomTakeoffItem,
   applyTakeoffItemEdits,
@@ -223,6 +225,85 @@ export async function convertDraftMaterialTakeoff(
   return {
     created: creates.length,
     skippedDuplicates: requested.size - creates.length,
+  };
+}
+
+/**
+ * Apply the takeoff labor helper to the original request/service LABOR
+ * line. Materials stay on MATERIAL lines. Recalc never calls this.
+ */
+export async function applyDraftTakeoffRecommendedLabor(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    estimateId: string;
+    lineItemId: string;
+    snapshot?: TakeoffSnapshot | null;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  const { line, estimate } = await loadDraftParentLine(
+    db,
+    access,
+    input.estimateId,
+    input.lineItemId,
+  );
+  if (line.type !== "LABOR") {
+    throw new EstimateLineError(
+      "Recommended labor applies to the original request/service labor line.",
+    );
+  }
+  const snapshot =
+    normalizeTakeoffSnapshot(input.snapshot) ?? lineMaterialTakeoff(line.description);
+  if (!snapshot) {
+    throw new EstimateLineError("Calculate a material takeoff before applying labor.");
+  }
+  const recommendation = recommendTakeoffLabor(snapshot);
+  if (!recommendation.available || !(recommendation.recommendedLabor > 0)) {
+    throw new EstimateLineError(
+      recommendation.unavailableReason ??
+        "This takeoff does not have a recommended labor price yet.",
+    );
+  }
+  const stored: TakeoffSnapshot = {
+    ...snapshot,
+    laborRate: recommendation.rate,
+  };
+  const unitPrice = new Prisma.Decimal(recommendation.recommendedLabor.toFixed(2));
+  const total = line.quantity.mul(unitPrice);
+  const parts = splitLineDescription(line.description);
+  const description = pricedCustomQuoteDescription(
+    joinLineDescription(
+      parts.title,
+      parts.includedWork,
+      parts.calculatorSnapshot,
+      parts.customerPolicies,
+      {
+        materialTakeoff: stored,
+        materialTakeoffSource: parts.materialTakeoffSource,
+      },
+    ),
+  );
+
+  await db.$transaction(async (tx) => {
+    await tx.lineItem.update({
+      where: { id: line.id },
+      data: {
+        unitPrice,
+        total,
+        description,
+      },
+    });
+    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
+  });
+
+  return {
+    recommendedLabor: recommendation.recommendedLabor,
+    customerMaterialTotal: recommendation.customerMaterialTotal,
+    recommendedSubtotal: recommendation.recommendedSubtotal,
+    line: await db.lineItem.findFirstOrThrow({
+      where: { id: line.id, businessId: access.businessId },
+    }),
   };
 }
 

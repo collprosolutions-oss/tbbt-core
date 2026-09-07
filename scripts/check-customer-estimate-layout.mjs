@@ -112,6 +112,9 @@ check(
     !page.includes("Material Markup") &&
     !page.includes("markupPercent") &&
     !page.includes("Apply markup") &&
+    !page.includes("Apply recommended labor") &&
+    !page.includes("laborRate") &&
+    !page.includes("Recommended labor") &&
     !page.includes("lengthInPart") &&
     !header.includes("panelRate"),
 );

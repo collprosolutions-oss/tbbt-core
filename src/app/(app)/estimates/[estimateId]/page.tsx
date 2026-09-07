@@ -505,7 +505,7 @@ export default async function EstimateBuilderPage({
                         }
                       />
                     ) : null}
-                    {isDraft && calculatorId && item.unitPrice.gt(0) ? (
+                    {isDraft && item.unitPrice.gt(0) && (calculatorId || takeoffSnapshot) ? (
                       <OverrideLinePriceForm
                         estimateId={estimate.id}
                         lineItemId={item.id}

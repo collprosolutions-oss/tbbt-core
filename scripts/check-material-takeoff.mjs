@@ -39,6 +39,7 @@ const {
 const {
   applyDraftEstimateCalculator,
   EstimateLineError,
+  overrideDraftEstimateLinePrice,
 } = await import("@/lib/estimate-line-ops");
 const {
   CONCRETE_BAG_YIELDS_CU_FT,
@@ -46,6 +47,7 @@ const {
   DEFAULT_CONCRETE_BAG_YIELD_CU_FT,
   DEFAULT_CONCRETE_WASTE_PERCENT,
   addCustomTakeoffItem,
+  applyDraftTakeoffRecommendedLabor,
   applyMaterialMarkup,
   applyTakeoffItemEdits,
   computeTakeoff,
@@ -53,6 +55,7 @@ const {
   concreteVolumeCuFt,
   convertDraftMaterialTakeoff,
   convertLinearToFeet,
+  DEFAULT_CONCRETE_60LB_BAG_LABOR_RATE,
   emptyConcreteSlabInputs,
   emptyFramedWallInputs,
   emptySheetCoveringInputs,
@@ -70,6 +73,7 @@ const {
   parseNonNegativeNumber,
   parseTakeoffNumericInput,
   recalculateDraftMaterialTakeoff,
+  recommendTakeoffLabor,
   saveDraftMaterialTakeoff,
   sheetCountRequired,
   splitFeetAndInches,
@@ -169,11 +173,15 @@ try {
       !customerPage.includes("TBBT Material Takeoff") &&
       !customerPage.includes("Material Markup") &&
       !customerPage.includes("markupPercent") &&
+      !customerPage.includes("Apply recommended labor") &&
+      !customerPage.includes("laborRate") &&
       customerPage.includes("lineItemTitle") &&
       !printPage.includes("MaterialTakeoffForm") &&
       !printPage.includes("Material Markup") &&
+      !printPage.includes("Apply recommended labor") &&
       !portalPage.includes("MaterialTakeoffForm") &&
       !portalPage.includes("Material Markup") &&
+      !portalPage.includes("Apply recommended labor") &&
       portalPage.includes("ApprovedScopeCard"),
   );
   check(
@@ -196,6 +204,10 @@ try {
       takeoffForm.includes("Material Markup %") &&
       takeoffForm.includes("Apply markup to selected items") &&
       takeoffForm.includes("applyMaterialMarkup") &&
+      takeoffForm.includes("Apply recommended labor to estimate") &&
+      takeoffForm.includes("Recommended labor / service price") &&
+      takeoffForm.includes("Recommended estimate subtotal") &&
+      takeoffForm.includes("applyEstimateTakeoffRecommendedLabor") &&
       !takeoffForm.includes("Number(event.target.value) || 0") &&
       !takeoffForm.includes('type="number"'),
   );
@@ -243,7 +255,10 @@ try {
   check(
     "No hard-coded $36 or $52 takeoff rate in concrete formula",
     !readRepo("src/lib/material-takeoff/formulas/concrete-slab.ts").includes("36") &&
-      !readRepo("src/lib/material-takeoff/formulas/concrete-slab.ts").includes("52"),
+      !readRepo("src/lib/material-takeoff/formulas/concrete-slab.ts").includes("52") &&
+      readRepo("src/lib/material-takeoff/labor-pricing.ts").includes(
+        "DEFAULT_CONCRETE_60LB_BAG_LABOR_RATE",
+      ),
   );
 
   console.log("\nUNIT — Construction feet + inches inputs");
@@ -641,6 +656,64 @@ try {
       removedItemIds: [],
       items: [],
     })?.markupPercent === 0,
+  );
+
+  console.log("\nUNIT — Concrete labor helper and recommended subtotal");
+  check(
+    "Default 60-lb bag labor rate is configurable starting guidance of $36",
+    DEFAULT_CONCRETE_60LB_BAG_LABOR_RATE === 36,
+  );
+  const founderLabor = recommendTakeoffLabor(founderComputed);
+  check(
+    "Founder 22 × $36 = $792 recommended labor",
+    founderLabor.available === true &&
+      founderLabor.units === 22 &&
+      founderLabor.rate === 36 &&
+      founderLabor.recommendedLabor === 792,
+  );
+  const founderPricedMaterials = {
+    ...founderComputed,
+    items: founderComputed.items.map((item) =>
+      item.id === "pickup-procurement"
+        ? {
+            ...item,
+            selected: true,
+            customerUnitPrice: 294.32,
+          }
+        : item.id === "concrete-bags"
+          ? { ...item, selected: true, customerUnitPrice: null }
+          : { ...item, selected: false },
+    ),
+  };
+  const founderSubtotal = recommendTakeoffLabor(founderPricedMaterials);
+  check(
+    "Founder slab materials $294.32 + labor $792 = $1,086.32 subtotal",
+    founderSubtotal.recommendedLabor === 792 &&
+      founderSubtotal.customerMaterialTotal === 294.32 &&
+      founderSubtotal.recommendedSubtotal === 1086.32,
+  );
+  check(
+    "40-lb bag takeoff does not use the 60-lb labor helper",
+    recommendTakeoffLabor(
+      computeTakeoff({
+        takeoffType: "concrete-slab",
+        inputs: {
+          lengthFt: 10,
+          widthFt: 10,
+          thicknessIn: 4,
+          bagSizeLb: 40,
+        },
+      }).snapshot,
+    ).available === false,
+  );
+  check(
+    "Sheet covering has no labor helper yet",
+    recommendTakeoffLabor(
+      computeTakeoff({
+        takeoffType: "sheet-covering",
+        inputs: { wallWidthFt: 10, wallHeightFt: 8 },
+      }).snapshot,
+    ).available === false,
   );
 
   console.log("\nUNIT — Internal unit cost stays independent of customer unit price");
@@ -1383,6 +1456,248 @@ try {
       !markupPlain.includes("6.24") &&
       !markupPlain.includes("wastePercent") &&
       !markupPlain.includes("quantityOverride"),
+  );
+
+  console.log("\nTEST — Apply recommended labor to original request line");
+  await prisma.business.update({
+    where: { id: businessA.id },
+    data: {
+      laborMinimumEnabled: true,
+      laborMinimumAmount: new Prisma.Decimal(200),
+    },
+  });
+  const laborEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const laborLine = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: laborEstimate.id,
+      description: joinLineDescription("Patio slab"),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(0),
+      total: new Prisma.Decimal(0),
+      type: "LABOR",
+    },
+  });
+  const laborCalc = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: laborEstimate.id,
+    lineItemId: laborLine.id,
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFtPart: 8,
+      lengthInPart: 0,
+      widthFtPart: 3,
+      widthInPart: 4,
+      thicknessIn: 4,
+      bagSizeLb: 60,
+      bagYieldCuFt: 0.45,
+      includePickup: true,
+    },
+    wastePercent: 10,
+  });
+  const laborSnapshot = {
+    ...laborCalc.snapshot,
+    laborRate: 36,
+    items: laborCalc.snapshot.items.map((item) =>
+      item.id === "concrete-bags"
+        ? {
+            ...item,
+            selected: true,
+            unitCost: 6.24,
+            customerUnitPrice: 7.8,
+          }
+        : item.id === "pickup-procurement"
+          ? {
+              ...item,
+              selected: true,
+              customerUnitPrice: 294.32,
+            }
+          : { ...item, selected: false },
+    ),
+  };
+  await saveDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: laborEstimate.id,
+    lineItemId: laborLine.id,
+    snapshot: laborSnapshot,
+  });
+  const laborBeforeApply = await prisma.lineItem.count({
+    where: { estimateId: laborEstimate.id, businessId: businessA.id, type: "LABOR" },
+  });
+  const materialBeforeLaborApply = await prisma.lineItem.findMany({
+    where: { estimateId: laborEstimate.id, businessId: businessA.id, type: "MATERIAL" },
+  });
+  const appliedLabor = await applyDraftTakeoffRecommendedLabor(prisma, ownerA, {
+    estimateId: laborEstimate.id,
+    lineItemId: laborLine.id,
+    snapshot: laborSnapshot,
+  });
+  const laborAfterApply = await prisma.lineItem.findMany({
+    where: { estimateId: laborEstimate.id, businessId: businessA.id },
+    orderBy: { createdAt: "asc" },
+  });
+  const originalLabor = laborAfterApply.find((item) => item.id === laborLine.id);
+  check(
+    "Apply updates the original request LABOR line to $792",
+    originalLabor != null &&
+      originalLabor.type === "LABOR" &&
+      Number(originalLabor.unitPrice.toString()) === 792 &&
+      Number(originalLabor.total.toString()) === 792 &&
+      appliedLabor.recommendedLabor === 792,
+  );
+  check(
+    "Apply does not create a duplicate LABOR line",
+    laborAfterApply.filter((item) => item.type === "LABOR").length === laborBeforeApply,
+  );
+  check(
+    "Apply does not create or change MATERIAL lines",
+    laborAfterApply.filter((item) => item.type === "MATERIAL").length ===
+      materialBeforeLaborApply.length,
+  );
+  const laborEstimateRow = await prisma.estimate.findFirst({
+    where: { id: laborEstimate.id, businessId: businessA.id },
+  });
+  check(
+    "Labor minimum is not added when applied labor exceeds the minimum",
+    laborEstimateRow?.laborMinimumAdjustment.toString() === "0" &&
+      Number(laborEstimateRow?.total.toString()) === 792,
+  );
+
+  const firstConvertLabor = await convertDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: laborEstimate.id,
+    lineItemId: laborLine.id,
+    snapshot: laborSnapshot,
+  });
+  const materialsAfterConvert = await prisma.lineItem.findMany({
+    where: { estimateId: laborEstimate.id, businessId: businessA.id, type: "MATERIAL" },
+  });
+  const bagMaterial = materialsAfterConvert.find(
+    (item) => lineItemTitle(item.description) === "60-lb concrete bags",
+  );
+  check("Selected takeoff items still convert after labor apply", firstConvertLabor.created >= 1);
+  const laborAfterConvert = await prisma.lineItem.findFirst({
+    where: { id: laborLine.id, businessId: businessA.id },
+  });
+  check(
+    "Converting MATERIAL lines does not change the applied LABOR price",
+    laborAfterConvert != null && Number(laborAfterConvert.unitPrice.toString()) === 792,
+  );
+
+  const thickerLabor = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: laborEstimate.id,
+    lineItemId: laborLine.id,
+    takeoffType: "concrete-slab",
+    inputs: {
+      ...laborSnapshot.inputs,
+      thicknessIn: 6,
+    },
+    wastePercent: 10,
+    snapshotEdits: laborSnapshot,
+  });
+  const laborAfterRecalc = await prisma.lineItem.findFirst({
+    where: { id: laborLine.id, businessId: businessA.id },
+  });
+  check(
+    "Recalculation does not silently overwrite applied labor price",
+    Number(laborAfterRecalc?.unitPrice.toString()) === 792 &&
+      (thickerLabor.snapshot.items.find((item) => item.id === "concrete-bags")
+        ?.calculatedQuantity ?? 0) > 22,
+  );
+  const bagMaterialAfterRecalc = await prisma.lineItem.findFirst({
+    where: { id: bagMaterial?.id, businessId: businessA.id },
+  });
+  check(
+    "MATERIAL lines remain unchanged when takeoff labor is recalculated",
+    bagMaterial != null &&
+      bagMaterialAfterRecalc != null &&
+      bagMaterialAfterRecalc.unitPrice.toString() === bagMaterial.unitPrice.toString() &&
+      bagMaterialAfterRecalc.quantity.toString() === bagMaterial.quantity.toString(),
+  );
+
+  await overrideDraftEstimateLinePrice(prisma, ownerA, {
+    estimateId: laborEstimate.id,
+    lineItemId: laborLine.id,
+    unitPrice: "800",
+  });
+  await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: laborEstimate.id,
+    lineItemId: laborLine.id,
+    takeoffType: "concrete-slab",
+    inputs: thickerLabor.snapshot.inputs,
+    wastePercent: 10,
+    snapshotEdits: thickerLabor.snapshot,
+  });
+  const laborAfterManual = await prisma.lineItem.findFirst({
+    where: { id: laborLine.id, businessId: businessA.id },
+  });
+  check(
+    "Manual owner labor price can still be edited and is not overwritten by recalc",
+    Number(laborAfterManual?.unitPrice.toString()) === 800,
+  );
+
+  await persistDraftEstimateTotal(prisma, laborEstimate.id, businessA.id);
+  await prisma.$transaction(async (tx) => {
+    await tx.estimate.update({
+      where: { id: laborEstimate.id },
+      data: { status: "SENT" },
+    });
+    await createEstimateVersionSnapshot(tx, {
+      estimateId: laborEstimate.id,
+      businessId: businessA.id,
+    });
+  });
+  const laborDocument = await loadEstimateDocumentForBusiness(
+    laborEstimate.id,
+    businessA.id,
+    prisma,
+  );
+  const laborPlain = laborDocument ? estimateDocumentPlainText(laborDocument) : "";
+  check(
+    "Customer document shows normal line prices, not labor formula or takeoff internals",
+    laborDocument != null &&
+      laborDocument.lineItems.some((item) => item.unitPriceLabel === "$800.00") &&
+      laborDocument.laborMinimumLabel === null &&
+      !laborPlain.includes("TBBT Material Takeoff") &&
+      !laborPlain.includes("laborRate") &&
+      !laborPlain.includes("Recommended labor") &&
+      !laborPlain.includes("per 60-lb bag") &&
+      !laborPlain.includes("markupPercent") &&
+      !laborPlain.includes("unitCost") &&
+      !laborPlain.includes("6.24"),
+  );
+  await expectError(
+    "SENT estimate cannot apply takeoff labor",
+    () =>
+      applyDraftTakeoffRecommendedLabor(prisma, ownerA, {
+        estimateId: laborEstimate.id,
+        lineItemId: laborLine.id,
+        snapshot: laborSnapshot,
+      }),
+    (error) => error instanceof EstimateLineError,
+  );
+  await expectError(
+    "MEMBER cannot apply takeoff labor",
+    () =>
+      applyDraftTakeoffRecommendedLabor(prisma, memberA, {
+        estimateId: laborEstimate.id,
+        lineItemId: laborLine.id,
+        snapshot: laborSnapshot,
+      }),
+    (error) => error instanceof ForbiddenError,
+  );
+  await expectError(
+    "Foreign-business owner cannot apply takeoff labor",
+    () =>
+      applyDraftTakeoffRecommendedLabor(prisma, ownerB, {
+        estimateId: laborEstimate.id,
+        lineItemId: laborLine.id,
+        snapshot: laborSnapshot,
+      }),
+    (error) => error instanceof Error && error.message.includes("authorized business"),
   );
 
   console.log("\nTEST — Sheet covering, framed wall, tenant isolation");

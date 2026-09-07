@@ -75,6 +75,9 @@ const INTERNAL_LEAKS = [
   "wastePercent",
   "markupPercent",
   "Material Markup",
+  "laborRate",
+  "Recommended labor",
+  "per 60-lb bag",
   "unitCost",
   "customerUnitPrice",
   "lengthFtPart",
@@ -231,6 +234,7 @@ const encodedDescription = joinLineDescription(
       },
       wastePercent: 10,
       markupPercent: 25,
+      laborRate: 36,
       measurementSource: {
         kind: "intake",
         label: "Customer-reported / unverified",
