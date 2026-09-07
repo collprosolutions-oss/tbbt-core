@@ -253,9 +253,12 @@ try {
     "MATERIAL lines do not render Scope / Included Work or catalog-save editors",
     ownerPage.includes("laborLines.map") &&
       ownerPage.includes("materialLines.map") &&
-      !ownerPage.slice(ownerPage.indexOf("materialLines.map")).includes(
-        "EditLineIncludedWorkForm",
-      ) &&
+      !ownerPage
+        .slice(
+          ownerPage.indexOf("MATERIALS — Calculate & Price the Materials"),
+          ownerPage.indexOf("ESTIMATE SUMMARY — Review Before Sending"),
+        )
+        .includes("EditLineIncludedWorkForm") &&
       saveOps.includes("Material lines do not have Scope / Included Work") &&
       customForm.includes('name="includedWork"') &&
       customForm.includes('lineType !== "MATERIAL"'),
