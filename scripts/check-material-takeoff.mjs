@@ -578,7 +578,7 @@ try {
     (item) => item.id === "pickup-procurement",
   );
   const meshMarked = markupApplied.snapshot.items.find((item) => item.id === "wire-mesh");
-  const formsMarked = markupApplied.snapshot.items.find((item) => item.id === "form-boards");
+  const formsMarked = markupApplied.snapshot.items.find((item) => item.id === "form-lumber");
   check(
     "Apply markup updates only selected items that have internal cost",
     markupApplied.applied === 2 &&
