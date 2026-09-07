@@ -5,9 +5,11 @@
  * Preview shares the Production database and does not run migrations, so
  * none of this can live in a new Prisma column. All of it is encoded in
  * the existing LineItem / EstimateVersionLineItem `description` after
- * stable markers, including the owner material-deposit override. Totals
- * never read them. Customer surfaces use lineItemTitle() / included work
- * only.
+ * stable markers, including the owner material-deposit override and the
+ * owner Final Customer Materials Total override. persistDraftEstimateTotal
+ * reads that materials-total override so the customer estimate uses the
+ * lump sum instead of summing MATERIAL line prices. Customer surfaces use
+ * lineItemTitle() / included work only and never show the markers.
  */
 import {
   CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
@@ -32,6 +34,7 @@ export const CUSTOMER_POLICY_MARKER = "\n\nTBBT Customer Policy:\n";
 export const MATERIAL_TAKEOFF_MARKER = "\n\nTBBT Material Takeoff:\n";
 export const MATERIAL_TAKEOFF_SOURCE_MARKER = "\n\nTBBT Material Takeoff Source:\n";
 export const MATERIAL_DEPOSIT_MARKER = "\n\nTBBT Material Deposit:\n";
+export const CUSTOMER_MATERIALS_TOTAL_MARKER = "\n\nTBBT Customer Materials Total:\n";
 
 const LINE_INTERNAL_MARKERS = [
   INCLUDED_WORK_MARKER,
@@ -40,10 +43,20 @@ const LINE_INTERNAL_MARKERS = [
   MATERIAL_TAKEOFF_MARKER,
   MATERIAL_TAKEOFF_SOURCE_MARKER,
   MATERIAL_DEPOSIT_MARKER,
+  CUSTOMER_MATERIALS_TOTAL_MARKER,
 ] as const;
 
 /** Owner override only. Suggested deposit is computed from MATERIAL line totals. */
 export type MaterialDepositOverride = {
+  amount: number;
+  manual: true;
+};
+
+/**
+ * Owner override only. Calculated materials total is the sum of MATERIAL
+ * line customer prices. Recalc never overwrites a stored manual amount.
+ */
+export type CustomerMaterialsTotalOverride = {
   amount: number;
   manual: true;
 };
@@ -71,6 +84,7 @@ export function splitLineDescription(description: string | null | undefined): {
   materialTakeoff: TakeoffSnapshot | null;
   materialTakeoffSource: TakeoffSourceRef | null;
   materialDeposit: MaterialDepositOverride | null;
+  customerMaterialsTotal: CustomerMaterialsTotalOverride | null;
 } {
   const raw = description ?? "";
   const calculatorSnapshot = parseCalculatorSnapshot(
@@ -88,6 +102,9 @@ export function splitLineDescription(description: string | null | undefined): {
   const materialDeposit = parseMaterialDepositOverride(
     payloadAfterMarker(raw, MATERIAL_DEPOSIT_MARKER),
   );
+  const customerMaterialsTotal = parseCustomerMaterialsTotalOverride(
+    payloadAfterMarker(raw, CUSTOMER_MATERIALS_TOTAL_MARKER),
+  );
   const prefix = sliceBeforeFirstMarker(raw);
   return {
     title: prefix,
@@ -99,6 +116,7 @@ export function splitLineDescription(description: string | null | undefined): {
     materialTakeoff,
     materialTakeoffSource,
     materialDeposit,
+    customerMaterialsTotal,
   };
 }
 
@@ -175,6 +193,7 @@ export function joinLineDescription(
     materialTakeoff?: TakeoffSnapshot | null;
     materialTakeoffSource?: TakeoffSourceRef | null;
     materialDeposit?: MaterialDepositOverride | null;
+    customerMaterialsTotal?: CustomerMaterialsTotalOverride | null;
   },
 ): string {
   const cleanTitle = splitLineDescription(title).title;
@@ -191,6 +210,9 @@ export function joinLineDescription(
     : null;
   const deposit = extras?.materialDeposit
     ? JSON.stringify(extras.materialDeposit)
+    : null;
+  const customerMaterialsTotal = extras?.customerMaterialsTotal
+    ? JSON.stringify(extras.customerMaterialsTotal)
     : null;
   let next = cleanTitle;
   if (scope) {
@@ -211,6 +233,9 @@ export function joinLineDescription(
   if (deposit) {
     next = `${next}${MATERIAL_DEPOSIT_MARKER}${deposit}`;
   }
+  if (customerMaterialsTotal) {
+    next = `${next}${CUSTOMER_MATERIALS_TOTAL_MARKER}${customerMaterialsTotal}`;
+  }
   return next;
 }
 
@@ -224,6 +249,7 @@ export function joinLineDescriptionFromParts(
     materialTakeoff?: TakeoffSnapshot | null;
     materialTakeoffSource?: TakeoffSourceRef | null;
     materialDeposit?: MaterialDepositOverride | null;
+    customerMaterialsTotal?: CustomerMaterialsTotalOverride | null;
   },
 ) {
   return joinLineDescription(
@@ -248,6 +274,10 @@ export function joinLineDescriptionFromParts(
         patch && "materialDeposit" in patch
           ? patch.materialDeposit
           : parts.materialDeposit,
+      customerMaterialsTotal:
+        patch && "customerMaterialsTotal" in patch
+          ? patch.customerMaterialsTotal
+          : parts.customerMaterialsTotal,
     },
   );
 }
@@ -341,6 +371,18 @@ function payloadAfterMarker(raw: string, marker: string): string | null {
 function parseMaterialDepositOverride(
   raw: string | null,
 ): MaterialDepositOverride | null {
+  return parseMoneyManualOverride(raw);
+}
+
+function parseCustomerMaterialsTotalOverride(
+  raw: string | null,
+): CustomerMaterialsTotalOverride | null {
+  return parseMoneyManualOverride(raw);
+}
+
+function parseMoneyManualOverride(
+  raw: string | null,
+): { amount: number; manual: true } | null {
   const parsed = parseJsonObject(raw ?? "");
   if (!parsed || parsed.manual !== true) return null;
   const amount =

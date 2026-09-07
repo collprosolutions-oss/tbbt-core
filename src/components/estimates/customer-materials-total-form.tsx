@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import {
-  setEstimateMaterialDeposit,
+  setEstimateCustomerMaterialsTotal,
   type EstimateActionState,
 } from "@/app/actions/estimate";
 import { Button } from "@/components/ui/button";
@@ -12,50 +12,52 @@ import { formatMoney } from "@/lib/format";
 
 const initialState: EstimateActionState = {};
 
-export function MaterialDepositForm({
+export function CustomerMaterialsTotalForm({
   estimateId,
-  suggestedLabel,
+  calculatedLabel,
   currentAmount,
-  remainingLabel,
   manual,
-  suggestedChanged,
+  differs,
 }: {
   estimateId: string;
-  suggestedLabel: string;
+  calculatedLabel: string;
   currentAmount: string;
-  remainingLabel: string;
   manual: boolean;
-  suggestedChanged: boolean;
+  differs: boolean;
 }) {
   const [state, action, pending] = useActionState(
-    setEstimateMaterialDeposit,
+    setEstimateCustomerMaterialsTotal,
     initialState,
   );
 
   return (
     <div className="mt-3 space-y-2 rounded-lg border border-border p-3">
-      <p className="text-sm font-medium">Material deposit</p>
+      <p className="text-sm font-medium">Final customer materials total</p>
       <p className="text-xs text-muted-foreground">
-        Suggested deposit is the Final Customer Materials Total. It is part of the
-        estimate total, not an extra fee. Labor is not included.
+        The customer sees this one materials price, not individual material
+        line prices. Recalculation does not overwrite a saved amount unless
+        you use the calculated total.
       </p>
-      <p className="text-sm">Suggested material deposit: {suggestedLabel}</p>
+      <p className="text-sm">Calculated Materials Total: {calculatedLabel}</p>
       {manual ? (
-        <p className="text-sm">Current deposit: {formatMoney(currentAmount)}</p>
-      ) : null}
-      {suggestedChanged ? (
-        <p className="text-sm text-amber-800 dark:text-amber-300">
-          Suggested material deposit has changed to {suggestedLabel}. The
-          current deposit stays until you apply the new amount.
+        <p className="text-sm">
+          Saved Final Customer Materials Total: {formatMoney(currentAmount)}
         </p>
       ) : null}
-      <p className="text-sm">Remaining balance: {remainingLabel}</p>
+      {differs ? (
+        <p className="text-sm text-amber-800 dark:text-amber-300">
+          Final Customer Materials Total differs from the calculated total.
+          Changing quantities, markup, or unit cost will not overwrite it.
+        </p>
+      ) : null}
       <form action={action} className="flex flex-wrap items-end gap-2">
         <input type="hidden" name="estimateId" value={estimateId} />
         <div className="space-y-1">
-          <Label htmlFor="material-deposit-amount">Deposit amount</Label>
+          <Label htmlFor="customer-materials-total-amount">
+            Final Customer Materials Total
+          </Label>
           <Input
-            id="material-deposit-amount"
+            id="customer-materials-total-amount"
             name="amount"
             inputMode="decimal"
             defaultValue={currentAmount}
@@ -63,7 +65,7 @@ export function MaterialDepositForm({
           />
         </div>
         <Button type="submit" size="sm" variant="outline" disabled={pending} name="mode" value="save">
-          {pending ? "Saving…" : "Save deposit"}
+          {pending ? "Saving…" : "Save materials total"}
         </Button>
         <Button
           type="submit"
@@ -71,19 +73,9 @@ export function MaterialDepositForm({
           variant="ghost"
           disabled={pending}
           name="mode"
-          value="suggested"
+          value="calculated"
         >
-          Use suggested
-        </Button>
-        <Button
-          type="submit"
-          size="sm"
-          variant="ghost"
-          disabled={pending}
-          name="mode"
-          value="none"
-        >
-          No deposit
+          Use calculated total
         </Button>
       </form>
       {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}

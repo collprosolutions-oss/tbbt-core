@@ -401,8 +401,8 @@ export async function resetDraftTakeoffAndGeneratedMaterials(
 /**
  * Owner recovery: return the original request LABOR/work line to the
  * pre-priced draft state, remove takeoff-generated MATERIAL children,
- * and clear the material deposit override. Never deletes the original
- * labor/work line. If that line is already missing on a DRAFT linked to
+ * and clear the material deposit override and Final Customer Materials
+ * Total override. Never deletes the original labor/work line. If that line is already missing on a DRAFT linked to
  * a ServiceRequest, reconstruct it from the request instead of creating
  * a duplicate. DRAFT only.
  */
@@ -888,6 +888,7 @@ function originalRequestLaborState(
         materialTakeoff: null,
         materialTakeoffSource: null,
         materialDeposit: null,
+        customerMaterialsTotal: null,
       },
     ),
   };

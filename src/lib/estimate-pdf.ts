@@ -116,12 +116,18 @@ export function renderEstimatePdf(
     }
 
     y += 16;
-    const colQty = right - 220;
+    const colQtyPriced = right - 220;
     const colRate = right - 140;
     const colAmt = right;
+    const colQtyOnly = right - 80;
 
-    const drawSection = (title: string, lines: EstimateDocumentLine[]) => {
+    const drawSection = (
+      title: string,
+      lines: EstimateDocumentLine[],
+      quantityOnly = false,
+    ) => {
       if (lines.length === 0) return;
+      const colQty = quantityOnly ? colQtyOnly : colQtyPriced;
       ensureSpace(40);
       doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
       doc.text(title, left, y);
@@ -129,8 +135,10 @@ export function renderEstimatePdf(
       doc.font("Helvetica-Bold").fontSize(8).fillColor("#666666");
       doc.text("DESCRIPTION", left, y);
       doc.text("QTY", colQty, y, { width: 70, align: "right" });
-      doc.text("RATE", colRate, y, { width: 70, align: "right" });
-      doc.text("AMOUNT", colAmt - 80, y, { width: 80, align: "right" });
+      if (!quantityOnly) {
+        doc.text("RATE", colRate, y, { width: 70, align: "right" });
+        doc.text("AMOUNT", colAmt - 80, y, { width: 80, align: "right" });
+      }
       y += 14;
       for (const line of lines) {
         ensureSpace(48);
@@ -138,7 +146,7 @@ export function renderEstimatePdf(
         const descHeight = doc.heightOfString(line.description, {
           width: descWidth,
         });
-        const scope = line.includedWork?.trim() ?? "";
+        const scope = quantityOnly ? "" : line.includedWork?.trim() ?? "";
         const scopeHeight = scope
           ? 12 +
             doc.heightOfString(`Scope / Included Work\n${scope}`, {
@@ -148,8 +156,10 @@ export function renderEstimatePdf(
         doc.font("Helvetica").fontSize(10).fillColor("#111111");
         doc.text(line.description, left, y, { width: descWidth });
         doc.text(line.quantityLabel, colQty, y, { width: 70, align: "right" });
-        doc.text(line.unitPriceLabel, colRate, y, { width: 70, align: "right" });
-        doc.text(line.amountLabel, colAmt - 80, y, { width: 80, align: "right" });
+        if (!quantityOnly) {
+          doc.text(line.unitPriceLabel, colRate, y, { width: 70, align: "right" });
+          doc.text(line.amountLabel, colAmt - 80, y, { width: 80, align: "right" });
+        }
         if (scope) {
           doc.font("Helvetica-Bold").fontSize(8).fillColor("#555555");
           doc.text("Scope / Included Work", left, y + descHeight + 2, {
@@ -179,7 +189,7 @@ export function renderEstimatePdf(
         doc.lineWidth(1);
         y += 14;
       }
-      drawSection(ESTIMATE_MATERIALS_SECTION_TITLE, docView.materialLines);
+      drawSection(ESTIMATE_MATERIALS_SECTION_TITLE, docView.materialLines, true);
       if (
         (docView.laborLines.length > 0 || docView.materialLines.length > 0) &&
         docView.otherLines.length > 0

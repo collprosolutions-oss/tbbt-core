@@ -175,8 +175,12 @@ function CustomerLineSections({
               <tr className="text-left text-xs tracking-wider text-muted-foreground">
                 <th className="py-2 pr-3 font-semibold">Description</th>
                 <th className="py-2 px-3 text-right font-semibold">Qty</th>
-                <th className="py-2 px-3 text-right font-semibold">Rate</th>
-                <th className="py-2 pl-3 text-right font-semibold">Amount</th>
+                {block.title === ESTIMATE_MATERIALS_SECTION_TITLE ? null : (
+                  <>
+                    <th className="py-2 px-3 text-right font-semibold">Rate</th>
+                    <th className="py-2 pl-3 text-right font-semibold">Amount</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -199,12 +203,16 @@ function CustomerLineSections({
                   <td className="py-2.5 px-3 text-right align-top tabular-nums">
                     {line.quantityLabel}
                   </td>
-                  <td className="py-2.5 px-3 text-right align-top tabular-nums">
-                    {line.unitPriceLabel}
-                  </td>
-                  <td className="py-2.5 pl-3 text-right align-top tabular-nums font-medium">
-                    {line.amountLabel}
-                  </td>
+                  {line.showLinePricing ? (
+                    <>
+                      <td className="py-2.5 px-3 text-right align-top tabular-nums">
+                        {line.unitPriceLabel}
+                      </td>
+                      <td className="py-2.5 pl-3 text-right align-top tabular-nums font-medium">
+                        {line.amountLabel}
+                      </td>
+                    </>
+                  ) : null}
                 </tr>
               ))}
             </tbody>

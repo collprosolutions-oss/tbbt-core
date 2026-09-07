@@ -266,6 +266,12 @@ export async function updateDraftEstimateLineIncludedWork(
     }),
   );
 
+  if (line.type === "MATERIAL") {
+    throw new EstimateLineError(
+      "Material lines do not have Scope / Included Work. Edit the labor/service line instead.",
+    );
+  }
+
   const parts = splitLineDescription(line.description);
   await db.lineItem.update({
     where: { id: line.id },

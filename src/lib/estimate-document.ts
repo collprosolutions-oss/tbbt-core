@@ -23,6 +23,7 @@ import {
   REMAINING_BALANCE_CUSTOMER_LABEL,
   resolveMaterialDeposit,
 } from "@/lib/material-deposit";
+import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { prisma } from "@/lib/prisma";
 import { publicPhone } from "@/lib/public-site";
 
@@ -71,6 +72,7 @@ export type EstimateDocumentLine = {
   quantityLabel: string;
   unitPriceLabel: string;
   amountLabel: string;
+  showLinePricing: boolean;
 };
 
 export type EstimateDocumentPolicy = {
@@ -195,13 +197,15 @@ function toDocumentLines(
 ): EstimateDocumentLine[] {
   return lineItems.map((line) => {
     const parts = splitLineDescription(line.description);
+    const hideLinePricing = line.type === "MATERIAL";
     return {
       type: line.type,
       description: parts.title,
-      includedWork: line.type === "MATERIAL" ? null : parts.includedWork,
+      includedWork: hideLinePricing ? null : parts.includedWork,
       quantityLabel: formatQuantity(line.quantity),
-      unitPriceLabel: formatMoney(line.unitPrice),
-      amountLabel: formatMoney(line.total),
+      unitPriceLabel: hideLinePricing ? "" : formatMoney(line.unitPrice),
+      amountLabel: hideLinePricing ? "" : formatMoney(line.total),
+      showLinePricing: !hideLinePricing,
     };
   });
 }
@@ -280,19 +284,18 @@ function toDocumentView(estimate: {
   const estimateDate = currentVersion?.sentAt ?? currentVersion?.createdAt ?? estimate.createdAt;
   const estimateNumber = estimateNumberFromId(estimate.id);
   const showLaborMinimum = laborMinimumAdjustment.gt(0);
-  const subtotal = rawLines.reduce((sum, line) => sum.add(line.total), ZERO);
   const laborTotal = rawLines
     .filter((line) => line.type === "LABOR")
     .reduce((sum, line) => sum.add(line.total), ZERO);
-  const materialTotal = rawLines
-    .filter((line) => line.type === "MATERIAL")
-    .reduce((sum, line) => sum.add(line.total), ZERO);
+  const materials = resolveCustomerMaterialsTotal(rawLines);
+  const materialTotal = materials.amount;
   const otherTotal = rawLines
     .filter((line) => line.type === "OTHER")
     .reduce((sum, line) => sum.add(line.total), ZERO);
   const lineItems = toDocumentLines(rawLines);
   const deposit = resolveMaterialDeposit({ lines: rawLines, total });
   const showDeposit = deposit.amount.gt(0);
+  const subtotal = laborTotal.add(materialTotal).add(otherTotal);
 
   return {
     estimateId: estimate.id,
@@ -339,13 +342,17 @@ function sectionPlainText(title: string, lines: EstimateDocumentLine[]) {
   if (lines.length === 0) return [];
   return [
     title,
-    ...lines.flatMap((line) => [
-      line.description,
-      line.includedWork ?? "",
-      line.quantityLabel,
-      line.unitPriceLabel,
-      line.amountLabel,
-    ]),
+    ...lines.flatMap((line) =>
+      line.showLinePricing
+        ? [
+            line.description,
+            line.includedWork ?? "",
+            line.quantityLabel,
+            line.unitPriceLabel,
+            line.amountLabel,
+          ]
+        : [line.description, line.quantityLabel],
+    ),
   ];
 }
 

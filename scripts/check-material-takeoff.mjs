@@ -21,6 +21,7 @@ const { persistDraftEstimateTotal } = await import("@/lib/labor-minimum");
 const { createEstimateVersionSnapshot } = await import("@/lib/estimate-version");
 const {
   CALCULATOR_SNAPSHOT_MARKER,
+  CUSTOMER_MATERIALS_TOTAL_MARKER,
   MATERIAL_DEPOSIT_MARKER,
   MATERIAL_TAKEOFF_MARKER,
   MATERIAL_TAKEOFF_SOURCE_MARKER,
@@ -99,6 +100,10 @@ const {
   setDraftEstimateMaterialDeposit,
   suggestedMaterialDeposit,
 } = await import("@/lib/material-deposit");
+const {
+  calculatedMaterialsTotal,
+  resolveCustomerMaterialsTotal,
+} = await import("@/lib/customer-materials-total");
 const {
   CUSTOM_QUOTE_DRAFT_MARKER,
   addRequestDraftLines,
@@ -180,8 +185,10 @@ try {
     !/\n\s+materialTakeoff\s+/.test(schema) &&
       !schema.includes("takeoffSnapshot") &&
       !/\n\s+materialDepositAmount\s+/.test(schema) &&
+      !/\n\s+customerMaterialsTotal\s+/.test(schema) &&
       schema.includes("MATERIAL_TAKEOFF_MARKER") &&
       schema.includes("MATERIAL_DEPOSIT_MARKER") &&
+      schema.includes("CUSTOMER_MATERIALS_TOTAL_MARKER") &&
       schema.includes("CALCULATOR_SNAPSHOT_MARKER"),
   );
 
@@ -211,7 +218,11 @@ try {
       !portalPage.includes("MaterialTakeoffForm") &&
       !portalPage.includes("Material Markup") &&
       !portalPage.includes("Apply recommended labor") &&
-      portalPage.includes("ApprovedScopeCard"),
+      portalPage.includes("ApprovedScopeCard") &&
+      !customerPage.includes("TBBT Customer Materials Total") &&
+      !customerPage.includes("Final Customer Materials Total") &&
+      !customerPage.includes("Calculated Materials Total") &&
+      !customerPage.includes("CustomerMaterialsTotalForm"),
   );
   check(
     "Owner draft page mounts takeoff and keeps mutations in server actions",
@@ -274,6 +285,28 @@ try {
           materialTakeoffSource: { parentLineItemId: "parent", itemId: "mesh" },
         }),
       }),
+  );
+  const materialMapAt = ownerPage.indexOf("materialLines.map");
+  const materialListSlice = ownerPage.slice(
+    materialMapAt,
+    ownerPage.indexOf("CustomerMaterialsTotalForm", materialMapAt + 1),
+  );
+  check(
+    "Owner MATERIAL list is compact and has no Scope / catalog-save editors",
+    ownerPage.includes("CustomerMaterialsTotalForm") &&
+      ownerPage.includes("Calculated Materials Total") &&
+      ownerPage.includes("Final Customer Materials Total") &&
+      ownerPage.includes("Use calculated total") === false &&
+      readRepo("src/components/estimates/customer-materials-total-form.tsx").includes(
+        "Use calculated total",
+      ) &&
+      ownerPage.includes("workLines.map") &&
+      ownerPage.includes("EditLineIncludedWorkForm") &&
+      materialListSlice.includes("lineItemTitle") &&
+      !materialListSlice.includes("EditLineIncludedWorkForm") &&
+      !materialListSlice.includes("SaveLineForReuseForm") &&
+      !materialListSlice.includes("includedWork") &&
+      !customerPage.includes("CustomerMaterialsTotalForm"),
   );
   check(
     "Estimate document uses split title/scope, not raw description",
@@ -851,6 +884,60 @@ try {
       overriddenDeposit.suggested.toFixed(2) === "344.32" &&
       overriddenDeposit.suggestedChanged === true &&
       overriddenDeposit.remaining.toFixed(2) === "936.32",
+  );
+
+  console.log("\nUNIT — Final Customer Materials Total override");
+  check(
+    "Calculated materials total is the MATERIAL line sum",
+    calculatedMaterialsTotal([
+      { type: "LABOR", total: "800" },
+      { type: "MATERIAL", total: "294.32" },
+    ]).toFixed(2) === "294.32",
+  );
+  const materialsEncoded = joinLineDescription("Patio slab", "Pour slab", null, null, {
+    customerMaterialsTotal: { amount: 300, manual: true },
+  });
+  check(
+    "Final materials override is encoded after the internal marker and stripped from the title",
+    materialsEncoded.includes(CUSTOMER_MATERIALS_TOTAL_MARKER) &&
+      lineItemTitle(materialsEncoded) === "Patio slab" &&
+      splitLineDescription(materialsEncoded).customerMaterialsTotal?.amount === 300 &&
+      splitLineDescription(materialsEncoded).includedWork === "Pour slab",
+  );
+  const resolvedFinal = resolveCustomerMaterialsTotal([
+    { type: "LABOR", total: "800", description: materialsEncoded },
+    { type: "MATERIAL", total: "294.32", description: "Bags" },
+  ]);
+  check(
+    "Manual final materials stays at $300 when calculated is $294.32",
+    resolvedFinal.calculated.toFixed(2) === "294.32" &&
+      resolvedFinal.amount.toFixed(2) === "300.00" &&
+      resolvedFinal.manual === true &&
+      resolvedFinal.differs === true,
+  );
+  const depositFromFinal = resolveMaterialDeposit({
+    lines: [
+      { type: "LABOR", total: "800", description: materialsEncoded },
+      { type: "MATERIAL", total: "294.32", description: "Bags" },
+    ],
+    total: "1100",
+  });
+  check(
+    "Suggested material deposit follows Final Customer Materials Total $300",
+    depositFromFinal.suggested.toFixed(2) === "300.00" &&
+      depositFromFinal.amount.toFixed(2) === "300.00" &&
+      depositFromFinal.remaining.toFixed(2) === "800.00" &&
+      depositFromFinal.manual === false,
+  );
+  const oldSnapshot = resolveCustomerMaterialsTotal([
+    { type: "LABOR", total: "800", description: "Patio slab" },
+    { type: "MATERIAL", total: "294.32", description: "Bags" },
+  ]);
+  check(
+    "Old snapshots without the override field use the calculated materials total",
+    oldSnapshot.manual === false &&
+      oldSnapshot.amount.toFixed(2) === "294.32" &&
+      oldSnapshot.differs === false,
   );
 
   console.log("\nUNIT — Internal unit cost stays independent of customer unit price");
@@ -2108,7 +2195,8 @@ try {
       restored.description.includes(CUSTOM_QUOTE_DRAFT_MARKER) &&
       lineItemIncludedWork(restored.description) === requestScope &&
       lineMaterialTakeoff(restored.description) == null &&
-      splitLineDescription(restored.description).materialDeposit == null,
+      splitLineDescription(restored.description).materialDeposit == null &&
+      splitLineDescription(restored.description).customerMaterialsTotal == null,
   );
   check(
     "Restore removes takeoff-generated MATERIAL lines and keeps unrelated lines",

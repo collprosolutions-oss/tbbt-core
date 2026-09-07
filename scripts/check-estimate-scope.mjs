@@ -249,6 +249,17 @@ try {
       }),
   );
   check(
+    "MATERIAL lines do not render Scope / Included Work or catalog-save editors",
+    ownerPage.includes("workLines.map") &&
+      ownerPage.includes("materialLines.map") &&
+      !ownerPage.slice(ownerPage.indexOf("materialLines.map")).includes(
+        "EditLineIncludedWorkForm",
+      ) &&
+      saveOps.includes("Material lines do not have Scope / Included Work") &&
+      customForm.includes('name="includedWork"') &&
+      customForm.includes('lineType !== "MATERIAL"'),
+  );
+  check(
     "Catalog price is saved only when savePrice is explicitly true",
     saveOps.includes("const savePrice = input.savePrice === true") &&
       !saveOps.includes("input.savePrice !== false"),
@@ -437,6 +448,51 @@ try {
     where: { estimateId: estimate.id, businessId: businessA.id },
   });
   check("Scope does not create additional priced line items", afterScopeLines === lineCountBefore);
+
+  const bagsLine = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: estimate.id,
+      description: joinLineDescription("60-lb concrete bags"),
+      quantity: new Prisma.Decimal(22),
+      unitPrice: new Prisma.Decimal("13.38"),
+      total: new Prisma.Decimal("294.32"),
+      type: "MATERIAL",
+    },
+  });
+  await expectError(
+    "MATERIAL lines cannot save Scope / Included Work",
+    async () => {
+      await updateDraftEstimateLineIncludedWork(prisma, ownerA, {
+        estimateId: estimate.id,
+        lineItemId: bagsLine.id,
+        includedWork: "should not save on a material line",
+      });
+    },
+    (error) =>
+      error instanceof EstimateLineError &&
+      String(error.message).includes("Material lines do not have Scope / Included Work"),
+  );
+  await expectError(
+    "MATERIAL lines cannot be saved to the services catalog",
+    async () => {
+      await saveDraftEstimateLineAsCatalog(prisma, ownerA, {
+        estimateId: estimate.id,
+        lineItemId: bagsLine.id,
+      });
+    },
+    (error) =>
+      error instanceof EstimateLineError &&
+      String(error.message).includes("Only labor/service lines"),
+  );
+  const bagsAfter = await prisma.lineItem.findFirst({
+    where: { id: bagsLine.id, businessId: businessA.id },
+  });
+  check(
+    "Rejected MATERIAL scope/catalog saves left the material description unchanged",
+    bagsAfter.description === bagsLine.description &&
+      scopeOf(bagsAfter) == null,
+  );
 
   await expectError(
     "SENT estimate cannot change scope",

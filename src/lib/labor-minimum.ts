@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { splitLineDescription } from "@/lib/estimate-line-scope";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -55,10 +56,10 @@ export async function persistDraftEstimateTotal(
 
   const items = await tx.lineItem.findMany({
     where: { estimateId, businessId },
-    select: { total: true, type: true },
+    select: { total: true, type: true, description: true },
   });
   const laborSubtotal = sumByType(items, "LABOR");
-  const materialSubtotal = sumByType(items, "MATERIAL");
+  const materialSubtotal = resolvedMaterialSubtotal(items);
   const otherSubtotal = sumByType(items, "OTHER");
   const laborLineCount = items.filter((item) => item.type === "LABOR").length;
 
@@ -85,4 +86,16 @@ export async function persistDraftEstimateTotal(
       total: laborSubtotal.add(adjustment).add(materialSubtotal).add(otherSubtotal),
     },
   });
+}
+
+function resolvedMaterialSubtotal(
+  items: Array<{ type: string; total: Prisma.Decimal; description: string }>,
+) {
+  for (const item of items) {
+    const override = splitLineDescription(item.description).customerMaterialsTotal;
+    if (override) {
+      return new Prisma.Decimal(override.amount.toFixed(2));
+    }
+  }
+  return sumByType(items, "MATERIAL");
 }

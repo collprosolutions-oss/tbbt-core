@@ -24,6 +24,10 @@ import {
 } from "@/lib/estimate-line-ops";
 import { joinLineDescription } from "@/lib/estimate-line-scope";
 import {
+  relocateCustomerMaterialsTotalAfterLineRemoval,
+  setDraftEstimateCustomerMaterialsTotal,
+} from "@/lib/customer-materials-total";
+import {
   relocateMaterialDepositAfterLineRemoval,
   setDraftEstimateMaterialDeposit,
 } from "@/lib/material-deposit";
@@ -524,9 +528,11 @@ export async function addCustomLineItem(
         estimateId: estimate.id,
         description: joinLineDescription(
           description,
-          typeof formData.get("includedWork") === "string"
-            ? String(formData.get("includedWork"))
-            : "",
+          type === "MATERIAL"
+            ? ""
+            : typeof formData.get("includedWork") === "string"
+              ? String(formData.get("includedWork"))
+              : "",
         ),
         quantity,
         unitPrice,
@@ -889,6 +895,36 @@ export async function setEstimateLaborMinimumWaived(
   return {};
 }
 
+export async function setEstimateCustomerMaterialsTotal(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const mode = readString(formData, "mode");
+    const access = await requireBusinessAccess();
+    const result = await setDraftEstimateCustomerMaterialsTotal(prisma, access, {
+      estimateId,
+      amount: readString(formData, "amount"),
+      followCalculated: mode === "calculated",
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    if (mode === "calculated") {
+      return { message: "Final customer materials total now follows the calculated total." };
+    }
+    return {
+      message: `Final customer materials total set to ${result.amount.toFixed(2)}.`,
+    };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(
+        error,
+        "Could not save the customer materials total.",
+      ),
+    };
+  }
+}
+
 export async function setEstimateMaterialDeposit(
   _prev: EstimateActionState,
   formData: FormData,
@@ -969,6 +1005,12 @@ export async function removeEstimateLineItem(
       },
     });
     await relocateMaterialDepositAfterLineRemoval(tx, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+      removedDescription: lineItem.description,
+      remainingLineIds: remaining.map((row) => row.id),
+    });
+    await relocateCustomerMaterialsTotalAfterLineRemoval(tx, {
       estimateId: estimate.id,
       businessId: access.businessId,
       removedDescription: lineItem.description,

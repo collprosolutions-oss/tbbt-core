@@ -165,6 +165,16 @@ check(
     page.includes("Scope / Included Work"),
 );
 check(
+  "Customer MATERIALS table is Description | Qty only",
+  page.includes("ESTIMATE_MATERIALS_SECTION_TITLE ? null") &&
+    estimateDocument.includes("ESTIMATE_MATERIALS_SECTION_TITLE ? null") &&
+    page.includes("line.showLinePricing") &&
+    estimateDocument.includes("line.showLinePricing") &&
+    !page.includes("CustomerMaterialsTotalForm") &&
+    !page.includes("TBBT Customer Materials Total") &&
+    !page.includes("Final Customer Materials Total"),
+);
+check(
   "Customer totals show labor, materials, estimate total, material deposit, and remaining balance",
   page.includes("CustomerEstimateTotals") &&
     readRepo("src/components/estimates/customer-estimate-totals.tsx").includes(

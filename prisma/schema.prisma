@@ -784,8 +784,10 @@ model LineItem {
   /// CALCULATOR_SNAPSHOT_MARKER. Owner-only material takeoff uses
   /// MATERIAL_TAKEOFF_MARKER (see src/lib/estimate-line-scope.ts).
   /// Owner material-deposit override uses MATERIAL_DEPOSIT_MARKER.
-  /// Descriptive only — never read by estimate, change-order, labor-minimum,
-  /// or invoice totals. Do not add a Preview-breaking column for these.
+  /// Owner Final Customer Materials Total override uses
+  /// CUSTOMER_MATERIALS_TOTAL_MARKER and is read by persistDraftEstimateTotal
+  /// so the customer estimate can use that lump sum instead of summing
+  /// MATERIAL line prices. Do not add a Preview-breaking column for these.
   description          String
   quantity             Decimal
   unitPrice            Decimal

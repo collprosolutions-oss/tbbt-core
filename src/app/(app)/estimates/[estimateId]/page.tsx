@@ -23,6 +23,7 @@ import { VariableScopeCalculatorForm } from "@/components/estimates/variable-sco
 import { VariableScopeDefinitionForm } from "@/components/estimates/variable-scope-definition-form";
 import { MaterialTakeoffForm } from "@/components/estimates/material-takeoff-form";
 import { MaterialDepositForm } from "@/components/estimates/material-deposit-form";
+import { CustomerMaterialsTotalForm } from "@/components/estimates/customer-materials-total-form";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
@@ -84,6 +85,7 @@ import {
   toStoredIntakeMeasurement,
 } from "@/lib/intake-quote-handoff";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
+import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import {
   pickIntakeMeasurementForLine,
   suggestTakeoffInputs,
@@ -194,9 +196,9 @@ export default async function EstimateBuilderPage({
   const laborSubtotal = estimate.lineItems
     .filter((item) => item.type === "LABOR")
     .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0));
-  const materialSubtotal = estimate.lineItems
-    .filter((item) => item.type === "MATERIAL")
-    .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0));
+  const workLines = estimate.lineItems.filter((item) => item.type !== "MATERIAL");
+  const materialLines = estimate.lineItems.filter((item) => item.type === "MATERIAL");
+  const customerMaterials = resolveCustomerMaterialsTotal(estimate.lineItems);
   const otherSubtotal = estimate.lineItems
     .filter((item) => item.type === "OTHER")
     .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0));
@@ -472,8 +474,10 @@ export default async function EstimateBuilderPage({
           {estimate.lineItems.length === 0 ? (
             <p className="text-sm text-muted-foreground">No line items yet.</p>
           ) : (
+            <>
+            {workLines.length > 0 ? (
             <ul className="space-y-3 text-sm">
-              {estimate.lineItems.map((item) => {
+              {workLines.map((item) => {
                 const priceRequired = isUnpricedCustomQuoteDraftLine(item);
                 const requestName = customQuoteDisplayDescription(item.description);
                 const calculatorSnapshot = lineCalculatorSnapshot(item.description);
@@ -671,6 +675,61 @@ export default async function EstimateBuilderPage({
                 );
               })}
             </ul>
+            ) : null}
+            {materialLines.length > 0 ? (
+              <div className={workLines.length > 0 ? "mt-6" : undefined}>
+                <h3 className="text-xs font-semibold tracking-wider text-muted-foreground">
+                  MATERIALS
+                </h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Owner-only pricing. The customer sees quantity and one
+                  Materials Total — not unit price, markup, waste, or takeoff
+                  formulas.
+                </p>
+                <table className="mt-2 w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="text-left text-xs tracking-wider text-muted-foreground">
+                      <th className="py-1.5 pr-3 font-semibold">Description</th>
+                      <th className="py-1.5 px-3 text-right font-semibold">Qty</th>
+                      <th className="py-1.5 px-3 text-right font-semibold">
+                        Unit price
+                      </th>
+                      <th className="py-1.5 pl-3 text-right font-semibold">
+                        Amount
+                      </th>
+                      {isDraft ? <th className="py-1.5 pl-2" /> : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {materialLines.map((item) => (
+                      <tr key={item.id} className="border-t border-border/60">
+                        <td className="py-1.5 pr-3 align-top">
+                          {lineItemTitle(item.description)}
+                        </td>
+                        <td className="py-1.5 px-3 text-right align-top tabular-nums">
+                          {item.quantity.toString()}
+                        </td>
+                        <td className="py-1.5 px-3 text-right align-top tabular-nums">
+                          {formatMoney(item.unitPrice)}
+                        </td>
+                        <td className="py-1.5 pl-3 text-right align-top tabular-nums">
+                          {formatMoney(item.total)}
+                        </td>
+                        {isDraft ? (
+                          <td className="py-1.5 pl-2 text-right align-top">
+                            <RemoveLineItemButton
+                              estimateId={estimate.id}
+                              lineItemId={item.id}
+                            />
+                          </td>
+                        ) : null}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+            </>
           )}
           <EstimateCustomerPolicies
             className="mt-4 space-y-3"
@@ -678,8 +737,23 @@ export default async function EstimateBuilderPage({
           />
           <div className="mt-4 space-y-1 text-sm">
             <p>Labor subtotal: {formatMoney(laborSubtotal)}</p>
-            {materialSubtotal.gt(0) ? (
-              <p>Materials: {formatMoney(materialSubtotal)}</p>
+            {customerMaterials.calculated.gt(0) || customerMaterials.manual ? (
+              <>
+                <p>
+                  Calculated Materials Total:{" "}
+                  {formatMoney(customerMaterials.calculated)}
+                </p>
+                <p>
+                  Final Customer Materials Total:{" "}
+                  {formatMoney(customerMaterials.amount)}
+                </p>
+                {customerMaterials.differs ? (
+                  <p className="text-amber-800 dark:text-amber-300">
+                    Final Customer Materials Total differs from the calculated
+                    total. Recalculation will not overwrite it.
+                  </p>
+                ) : null}
+              </>
             ) : null}
             {otherSubtotal.gt(0) ? (
               <p>Other: {formatMoney(otherSubtotal)}</p>
@@ -721,6 +795,15 @@ export default async function EstimateBuilderPage({
               </p>
             ) : null}
           </div>
+          {isDraft && (materialLines.length > 0 || customerMaterials.manual) ? (
+            <CustomerMaterialsTotalForm
+              estimateId={estimate.id}
+              calculatedLabel={formatMoney(customerMaterials.calculated)}
+              currentAmount={customerMaterials.amount.toFixed(2)}
+              manual={customerMaterials.manual}
+              differs={customerMaterials.differs}
+            />
+          ) : null}
           {isDraft ? (
             <MaterialDepositForm
               estimateId={estimate.id}
@@ -790,10 +873,12 @@ export default async function EstimateBuilderPage({
         <CardHeader>
           <CardTitle>Add custom item</CardTitle>
           <CardDescription>
-            Choose Labor, Material, or Other. Add Scope / Included Work if
-            you want the customer to see what the price includes. Saving the
-            service and scope to the catalog is optional and never automatic.
-            The labor minimum uses labor lines only.
+            Choose Labor, Material, or Other. Add Scope / Included Work on
+            labor/service lines if you want the customer to see what the price
+            includes. Material lines stay compact — the customer sees quantity
+            and one Materials Total. Saving the service and scope to the catalog
+            is optional and never automatic. The labor minimum uses labor lines
+            only.
           </CardDescription>
         </CardHeader>
         <CardContent>

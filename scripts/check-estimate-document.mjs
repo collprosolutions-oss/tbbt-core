@@ -36,6 +36,9 @@ const {
   resolveMaterialDeposit,
   setDraftEstimateMaterialDeposit,
 } = await import("@/lib/material-deposit");
+const { setDraftEstimateCustomerMaterialsTotal } = await import(
+  "@/lib/customer-materials-total"
+);
 const { defaultWorkAreaPersonalPropertyPolicy } = await import(
   "@/lib/estimate-policies"
 );
@@ -79,6 +82,10 @@ const INTERNAL_LEAKS = [
   "TBBT Material Takeoff",
   "TBBT Material Takeoff Source",
   "TBBT Material Deposit",
+  "TBBT Customer Materials Total",
+  "Final Customer Materials Total",
+  "Calculated Materials Total",
+  "customerMaterialsTotal",
   "materialDeposit",
   "suggestedChanged",
   "calculatedQuantity",
@@ -205,6 +212,16 @@ check(
   !printPage.includes("panelRate") &&
     !documentView.includes("panelRate") &&
     !documentView.includes("CalculatorBreakdown"),
+);
+check(
+  "Customer material rows hide Rate/Amount and keep one Materials Total",
+  documentView.includes("ESTIMATE_MATERIALS_SECTION_TITLE") &&
+    documentView.includes("line.showLinePricing") &&
+    customerPage.includes("line.showLinePricing") &&
+    documentLib.includes("showLinePricing: !hideLinePricing") &&
+    readRepo("src/lib/estimate-pdf.ts").includes(
+      "drawSection(ESTIMATE_MATERIALS_SECTION_TITLE, docView.materialLines, true)",
+    ),
 );
 
 const baseUrl = process.env.DATABASE_URL;
@@ -589,6 +606,13 @@ try {
     slabDoc?.laborLines[0]?.includedWork === "Form, pour, and finish the slab." &&
       !slabDoc.materialLines[0]?.includedWork,
   );
+  check(
+    "Customer material row shows quantity and hides unit/extended price",
+    slabDoc?.materialLines[0]?.quantityLabel === "1" &&
+      slabDoc.materialLines[0]?.showLinePricing === false &&
+      slabDoc.materialLines[0]?.unitPriceLabel === "" &&
+      slabDoc.materialLines[0]?.amountLabel === "",
+  );
   check("customer material total is $294.32", slabDoc?.materialTotalLabel === "$294.32");
   check("suggested material deposit is $294.32", slabDoc?.materialDepositLabel === "$294.32");
   check("labor total is $792.00", slabDoc?.laborTotalLabel === "$792.00");
@@ -686,6 +710,183 @@ try {
     "use suggested follows the customer material total again",
     followSuggested?.materialDepositLabel === "$344.32" &&
       followSuggested?.totalLabel === "$1,136.32",
+  );
+
+  console.log("\nTEST 5 — Final Customer Materials Total override");
+  const founder = await prisma.estimate.create({
+    data: {
+      businessId: business.id,
+      customerId: customer.id,
+      propertyId: property.id,
+      status: "DRAFT",
+      total: new Prisma.Decimal(0),
+      laborMinimumAdjustment: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: business.id,
+      estimateId: founder.id,
+      description: joinLineDescription("Patio slab", "Form, pour, and finish the slab."),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(800),
+      total: new Prisma.Decimal(800),
+      type: "LABOR",
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: business.id,
+      estimateId: founder.id,
+      description: joinLineDescription("60-lb concrete bags"),
+      quantity: new Prisma.Decimal(22),
+      unitPrice: new Prisma.Decimal("13.38"),
+      total: new Prisma.Decimal("294.32"),
+      type: "MATERIAL",
+    },
+  });
+  await persistDraftEstimateTotal(prisma, founder.id, business.id);
+  const beforeOverride = await loadEstimateDocumentForBusiness(
+    founder.id,
+    business.id,
+    prisma,
+  );
+  check(
+    "Calculated materials total is $294.32 before an owner override",
+    beforeOverride?.materialTotalLabel === "$294.32" &&
+      beforeOverride?.laborTotalLabel === "$800.00" &&
+      beforeOverride?.totalLabel === "$1,094.32" &&
+      beforeOverride?.materialDepositLabel === "$294.32" &&
+      beforeOverride?.materialLines[0]?.quantityLabel === "22" &&
+      beforeOverride?.materialLines[0]?.showLinePricing === false,
+  );
+
+  await setDraftEstimateCustomerMaterialsTotal(prisma, ownerAccess, {
+    estimateId: founder.id,
+    amount: "300",
+  });
+  const afterFinal = await loadEstimateDocumentForBusiness(
+    founder.id,
+    business.id,
+    prisma,
+  );
+  const afterFinalPlain = afterFinal ? estimateDocumentPlainText(afterFinal) : "";
+  check(
+    "Final Customer Materials Total $300 becomes the only customer materials price",
+    afterFinal?.materialTotalLabel === "$300.00" &&
+      afterFinal?.laborTotalLabel === "$800.00" &&
+      afterFinal?.totalLabel === "$1,100.00" &&
+      afterFinal?.materialDepositLabel === "$300.00" &&
+      afterFinal?.remainingBalanceLabel === "$800.00" &&
+      afterFinal?.materialLines[0]?.quantityLabel === "22" &&
+      afterFinal?.materialLines[0]?.unitPriceLabel === "" &&
+      afterFinal?.materialLines[0]?.amountLabel === "",
+  );
+  check(
+    "Customer document does not leak the $294.32 calculated line price after override",
+    afterFinalPlain.includes("$300.00") &&
+      afterFinalPlain.includes("$1,100.00") &&
+      !afterFinalPlain.includes("$294.32") &&
+      !afterFinalPlain.includes("$13.38") &&
+      !afterFinalPlain.includes("TBBT Customer Materials Total") &&
+      !afterFinalPlain.includes("markupPercent") &&
+      !afterFinalPlain.includes("wastePercent"),
+  );
+  const founderPdf = await renderEstimatePdf(afterFinal);
+  const founderPdfText = pdfExtractText(founderPdf);
+  check(
+    "PDF materials section is quantity-only and uses the $300 materials total",
+    founderPdfText.includes("MATERIALS") &&
+      founderPdfText.includes("60-lb concrete bags") &&
+      founderPdfText.includes("$300.00") &&
+      founderPdfText.includes("$1,100.00") &&
+      !founderPdfText.includes("$294.32") &&
+      !founderPdfText.includes("$13.38"),
+  );
+  assertNoInternalLeaks("founder override document", afterFinalPlain);
+  assertNoInternalLeaks("founder override PDF", founderPdfText);
+
+  await prisma.lineItem.updateMany({
+    where: { estimateId: founder.id, type: "MATERIAL", businessId: business.id },
+    data: {
+      unitPrice: new Prisma.Decimal("20.00"),
+      total: new Prisma.Decimal("440.00"),
+    },
+  });
+  await persistDraftEstimateTotal(prisma, founder.id, business.id);
+  const survived = await loadEstimateDocumentForBusiness(
+    founder.id,
+    business.id,
+    prisma,
+  );
+  check(
+    "Manual final-materials override survives quantity/price recalc",
+    survived?.materialTotalLabel === "$300.00" &&
+      survived?.totalLabel === "$1,100.00" &&
+      survived?.materialDepositLabel === "$300.00" &&
+      survived?.remainingBalanceLabel === "$800.00",
+  );
+
+  await setDraftEstimateCustomerMaterialsTotal(prisma, ownerAccess, {
+    estimateId: founder.id,
+    amount: "300",
+    followCalculated: true,
+  });
+  const restoredCalc = await loadEstimateDocumentForBusiness(
+    founder.id,
+    business.id,
+    prisma,
+  );
+  check(
+    "Use calculated total restores the current MATERIAL line sum",
+    restoredCalc?.materialTotalLabel === "$440.00" &&
+      restoredCalc?.totalLabel === "$1,240.00" &&
+      restoredCalc?.materialDepositLabel === "$440.00",
+  );
+
+  await setDraftEstimateCustomerMaterialsTotal(prisma, ownerAccess, {
+    estimateId: founder.id,
+    amount: "300",
+  });
+  await prisma.estimate.update({
+    where: { id: founder.id },
+    data: { status: "SENT" },
+  });
+  let sentBlocked = false;
+  try {
+    await setDraftEstimateCustomerMaterialsTotal(prisma, ownerAccess, {
+      estimateId: founder.id,
+      amount: "1",
+    });
+  } catch {
+    sentBlocked = true;
+  }
+  check("SENT estimate cannot change Final Customer Materials Total", sentBlocked);
+  await prisma.estimate.update({
+    where: { id: founder.id },
+    data: { status: "DRAFT" },
+  });
+
+  let memberMaterialsBlocked = false;
+  try {
+    await setDraftEstimateCustomerMaterialsTotal(prisma, memberAccess, {
+      estimateId: founder.id,
+      amount: "1",
+    });
+  } catch {
+    memberMaterialsBlocked = true;
+  }
+  const afterMemberMaterials = await loadEstimateDocumentForBusiness(
+    founder.id,
+    business.id,
+    prisma,
+  );
+  check("MEMBER cannot set Final Customer Materials Total", memberMaterialsBlocked);
+  check(
+    "tenant/business ownership keeps the owner materials total after MEMBER attempt",
+    afterMemberMaterials?.materialTotalLabel === "$300.00" &&
+      afterMemberMaterials?.totalLabel === "$1,100.00",
   );
 } finally {
   await prisma.$disconnect();

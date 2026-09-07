@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import {
   addCustomLineItem,
   type EstimateActionState,
@@ -14,6 +14,7 @@ const initialState: EstimateActionState = {};
 
 export function AddCustomLineForm({ estimateId }: { estimateId: string }) {
   const [state, action, pending] = useActionState(addCustomLineItem, initialState);
+  const [lineType, setLineType] = useState("LABOR");
 
   return (
     <form action={action} className="space-y-3">
@@ -28,7 +29,8 @@ export function AddCustomLineForm({ estimateId }: { estimateId: string }) {
         <select
           id="custom-type"
           name="type"
-          defaultValue="LABOR"
+          value={lineType}
+          onChange={(event) => setLineType(event.target.value)}
           required
           className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
         >
@@ -41,16 +43,23 @@ export function AddCustomLineForm({ estimateId }: { estimateId: string }) {
         <Label htmlFor="custom-description">Description</Label>
         <Input id="custom-description" name="description" required />
       </div>
-      <div className="space-y-2">
-        <Label htmlFor="custom-includedWork">Scope / Included Work</Label>
-        <textarea
-          id="custom-includedWork"
-          name="includedWork"
-          rows={6}
-          placeholder="Optional. What this price includes, one item per line."
-          className="min-h-24 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base outline-none md:text-sm"
-        />
-      </div>
+      {lineType !== "MATERIAL" ? (
+        <div className="space-y-2">
+          <Label htmlFor="custom-includedWork">Scope / Included Work</Label>
+          <textarea
+            id="custom-includedWork"
+            name="includedWork"
+            rows={6}
+            placeholder="Optional. What this price includes, one item per line."
+            className="min-h-24 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base outline-none md:text-sm"
+          />
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Material lines do not include Scope / Included Work. The customer
+          sees quantity and one Materials Total.
+        </p>
+      )}
       <div className="space-y-2">
         <Label htmlFor="custom-quantity">Quantity</Label>
         <Input

@@ -1,10 +1,11 @@
 /**
  * Owner-controlled material deposit on draft estimates.
  *
- * Suggested deposit is the customer MATERIAL line total (never internal
- * cost, never labor). An owner override is encoded on a line description
- * after MATERIAL_DEPOSIT_MARKER — Preview shares Production and does not
- * run migrations, so this cannot be a new Prisma column.
+ * Suggested deposit is the Final Customer Materials Total (the owner
+ * lump sum when overridden, otherwise the MATERIAL line total — never
+ * internal cost, never labor). An owner override is encoded on a line
+ * description after MATERIAL_DEPOSIT_MARKER — Preview shares Production
+ * and does not run migrations, so this cannot be a new Prisma column.
  *
  * Deposit is part of the estimate total, not an extra fee. Recalc and
  * material-line changes never overwrite a manual override.
@@ -19,6 +20,7 @@ import {
   splitLineDescription,
   type MaterialDepositOverride,
 } from "@/lib/estimate-line-scope";
+import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 
 const ZERO = new Prisma.Decimal(0);
@@ -58,10 +60,14 @@ function clampMoney(
   return value;
 }
 
-export function suggestedMaterialDeposit(lines: Array<{ type: string; total: Prisma.Decimal | string | number }>) {
-  return lines
-    .filter((line) => line.type === "MATERIAL")
-    .reduce((sum, line) => sum.add(toDecimal(line.total)), ZERO);
+export function suggestedMaterialDeposit(
+  lines: Array<{
+    type: string;
+    total: Prisma.Decimal | string | number;
+    description?: string;
+  }>,
+) {
+  return resolveCustomerMaterialsTotal(lines).amount;
 }
 
 export function materialDepositOverrideFromLines(
