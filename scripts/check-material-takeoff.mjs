@@ -46,6 +46,7 @@ const {
   DEFAULT_CONCRETE_BAG_YIELD_CU_FT,
   DEFAULT_CONCRETE_WASTE_PERCENT,
   addCustomTakeoffItem,
+  applyMaterialMarkup,
   applyTakeoffItemEdits,
   computeTakeoff,
   concreteBagsRequired,
@@ -63,6 +64,8 @@ const {
   framedWallStudCount,
   isIncompleteNumericDraft,
   isRejectedLinearUnit,
+  markedUpCustomerUnitPrice,
+  normalizeTakeoffSnapshot,
   parseConstructionNumber,
   parseNonNegativeNumber,
   parseTakeoffNumericInput,
@@ -162,11 +165,15 @@ try {
 
   check(
     "Customer estimate, print, and portal do not mount takeoff UI",
-    !customerPage.includes("MaterialTakeoffForm") &&
+      !customerPage.includes("MaterialTakeoffForm") &&
       !customerPage.includes("TBBT Material Takeoff") &&
+      !customerPage.includes("Material Markup") &&
+      !customerPage.includes("markupPercent") &&
       customerPage.includes("lineItemTitle") &&
       !printPage.includes("MaterialTakeoffForm") &&
+      !printPage.includes("Material Markup") &&
       !portalPage.includes("MaterialTakeoffForm") &&
+      !portalPage.includes("Material Markup") &&
       portalPage.includes("ApprovedScopeCard"),
   );
   check(
@@ -186,6 +193,9 @@ try {
       takeoffForm.includes("TakeoffDecimalField") &&
       takeoffForm.includes("isIncompleteNumericDraft") &&
       takeoffForm.includes("parseTakeoffNumericInput") &&
+      takeoffForm.includes("Material Markup %") &&
+      takeoffForm.includes("Apply markup to selected items") &&
+      takeoffForm.includes("applyMaterialMarkup") &&
       !takeoffForm.includes("Number(event.target.value) || 0") &&
       !takeoffForm.includes('type="number"'),
   );
@@ -486,6 +496,151 @@ try {
       takeoffForm.includes("Openings") &&
       parseTakeoffNumericInput("2", "integer").value === 2 &&
       parseTakeoffNumericInput("1.5", "integer").status === "invalid",
+  );
+
+  console.log("\nUNIT — Material markup assist");
+  check(
+    "6.24 + 25% rounds to 7.80 and 18.98 + 25% rounds to 23.73",
+    markedUpCustomerUnitPrice(6.24, 25) === 7.8 &&
+      markedUpCustomerUnitPrice(6.24, 25)?.toFixed(2) === "7.80" &&
+      markedUpCustomerUnitPrice(18.98, 25) === 23.73,
+  );
+  check(
+    "Decimal markup 22.5% works",
+    markedUpCustomerUnitPrice(6.24, 22.5) === 7.64,
+  );
+  check(
+    "Negative markup is rejected",
+    markedUpCustomerUnitPrice(6.24, -25) == null &&
+      applyMaterialMarkup(
+        computeTakeoff({
+          takeoffType: "concrete-slab",
+          inputs: { lengthFt: 10, widthFt: 10, thicknessIn: 4 },
+        }).snapshot,
+        -25,
+      ).applied === 0,
+  );
+  const markupComputed = computeTakeoff({
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFt: 10,
+      widthFt: 10,
+      thicknessIn: 4,
+      bagSizeLb: 60,
+      bagYieldCuFt: 0.45,
+      includePickup: true,
+    },
+    wastePercent: 10,
+  }).snapshot;
+  const markupBase = {
+    ...markupComputed,
+    items: markupComputed.items.map((item) => {
+      if (item.id === "concrete-bags") {
+        return {
+          ...item,
+          selected: true,
+          quantityOverride: 12.5,
+          unitCost: 6.24,
+          customerUnitPrice: 1,
+        };
+      }
+      if (item.id === "pickup-procurement") {
+        return {
+          ...item,
+          selected: true,
+          unitCost: 18.98,
+          customerUnitPrice: 20,
+        };
+      }
+      if (item.id === "wire-mesh") {
+        return {
+          ...item,
+          selected: false,
+          unitCost: 40,
+          customerUnitPrice: 50,
+        };
+      }
+      if (item.id === "form-lumber") {
+        return {
+          ...item,
+          selected: true,
+          unitCost: null,
+          customerUnitPrice: 9,
+        };
+      }
+      return { ...item, selected: false };
+    }),
+  };
+  const bagsBeforeMarkup = markupBase.items.find((item) => item.id === "concrete-bags");
+  const markupApplied = applyMaterialMarkup(markupBase, 25);
+  const bagsMarked = markupApplied.snapshot.items.find((item) => item.id === "concrete-bags");
+  const pickupMarked = markupApplied.snapshot.items.find(
+    (item) => item.id === "pickup-procurement",
+  );
+  const meshMarked = markupApplied.snapshot.items.find((item) => item.id === "wire-mesh");
+  const formsMarked = markupApplied.snapshot.items.find((item) => item.id === "form-boards");
+  check(
+    "Apply markup updates only selected items that have internal cost",
+    markupApplied.applied === 2 &&
+      markupApplied.skipped === 1 &&
+      bagsMarked?.customerUnitPrice === 7.8 &&
+      pickupMarked?.customerUnitPrice === 23.73 &&
+      meshMarked?.customerUnitPrice === 50 &&
+      formsMarked?.customerUnitPrice === 9 &&
+      formsMarked?.unitCost == null,
+  );
+  check(
+    "Markup does not change unit cost, quantities, waste, or selection",
+    bagsMarked?.unitCost === 6.24 &&
+      bagsMarked?.quantityOverride === 12.5 &&
+      bagsMarked?.calculatedQuantity === bagsBeforeMarkup?.calculatedQuantity &&
+      bagsMarked?.selected === true &&
+      markupApplied.snapshot.wastePercent === 10 &&
+      markupApplied.snapshot.markupPercent === 25,
+  );
+  const afterManualPrice = applyTakeoffItemEdits(markupApplied.snapshot, [
+    { id: "concrete-bags", customerUnitPrice: 9.99 },
+  ]);
+  check(
+    "Owner can still edit customer unit price after applying markup",
+    afterManualPrice.items.find((item) => item.id === "concrete-bags")?.customerUnitPrice ===
+      9.99,
+  );
+  const markupPreserved = computeTakeoff({
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFt: 10,
+      widthFt: 10,
+      thicknessIn: 6,
+      bagSizeLb: 60,
+      bagYieldCuFt: 0.45,
+      includePickup: true,
+    },
+    wastePercent: 10,
+    previous: afterManualPrice,
+  }).snapshot;
+  check(
+    "Recalculation keeps helper markup % and does not overwrite a manual customer price",
+    markupPreserved.markupPercent === 25 &&
+      markupPreserved.items.find((item) => item.id === "concrete-bags")?.customerUnitPrice ===
+        9.99 &&
+      markupPreserved.items.find((item) => item.id === "concrete-bags")?.unitCost === 6.24 &&
+      markupPreserved.items.find((item) => item.id === "pickup-procurement")
+        ?.customerUnitPrice === 23.73,
+  );
+  check(
+    "Old snapshots without markupPercent still normalize",
+    normalizeTakeoffSnapshot({
+      version: 1,
+      takeoffType: "concrete-slab",
+      inputs: { lengthFt: 10, widthFt: 10, thicknessIn: 4 },
+      wastePercent: 10,
+      measurementSource: null,
+      explanation: "",
+      skippedMeasurements: [],
+      removedItemIds: [],
+      items: [],
+    })?.markupPercent === 0,
   );
 
   console.log("\nUNIT — Internal unit cost stays independent of customer unit price");
@@ -952,6 +1107,8 @@ try {
       !plain.includes("unitCost") &&
       !plain.includes("customerUnitPrice") &&
       !plain.includes("wastePercent") &&
+      !plain.includes("markupPercent") &&
+      !plain.includes("Material Markup") &&
       !plain.includes("lengthInPart") &&
       document.lineItems[0]?.description === DECORATIVE_WALL_PANELING_TITLE,
   );
@@ -1080,8 +1237,152 @@ try {
       !decimalPlain.includes("unitCost") &&
       !decimalPlain.includes("customerUnitPrice") &&
       !decimalPlain.includes("wastePercent") &&
+      !decimalPlain.includes("markupPercent") &&
+      !decimalPlain.includes("Material Markup") &&
       !decimalPlain.includes("bagYieldCuFt") &&
       !decimalPlain.includes("6.24"),
+  );
+
+  console.log("\nTEST — Markup assist does not auto-convert and stays private");
+  const markupEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const markupLine = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: markupEstimate.id,
+      description: joinLineDescription("Markup patio"),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(0),
+      total: new Prisma.Decimal(0),
+      type: "LABOR",
+    },
+  });
+  const markupCalc = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: markupEstimate.id,
+    lineItemId: markupLine.id,
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFtPart: 8,
+      lengthInPart: 0,
+      widthFtPart: 3,
+      widthInPart: 4,
+      thicknessIn: 4,
+      bagSizeLb: 60,
+      bagYieldCuFt: 0.45,
+      includePickup: true,
+    },
+    wastePercent: 10,
+  });
+  const pricedForMarkup = {
+    ...markupCalc.snapshot,
+    items: markupCalc.snapshot.items.map((item) =>
+      item.id === "concrete-bags"
+        ? {
+            ...item,
+            selected: true,
+            quantityOverride: 12.5,
+            unitCost: 6.24,
+            customerUnitPrice: null,
+          }
+        : item.id === "pickup-procurement"
+          ? {
+              ...item,
+              selected: false,
+              unitCost: 18.98,
+              customerUnitPrice: null,
+            }
+          : { ...item, selected: false },
+    ),
+  };
+  const appliedMarkup = applyMaterialMarkup(pricedForMarkup, 25);
+  check(
+    "Unselected pickup is not marked up",
+    appliedMarkup.snapshot.items.find((item) => item.id === "pickup-procurement")
+      ?.customerUnitPrice == null &&
+      appliedMarkup.snapshot.items.find((item) => item.id === "concrete-bags")
+        ?.customerUnitPrice === 7.8,
+  );
+  await saveDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: markupEstimate.id,
+    lineItemId: markupLine.id,
+    snapshot: appliedMarkup.snapshot,
+  });
+  const materialBeforeMarkupConvert = await prisma.lineItem.count({
+    where: { estimateId: markupEstimate.id, businessId: businessA.id, type: "MATERIAL" },
+  });
+  check(
+    "Applying markup does not auto-convert MATERIAL lines",
+    materialBeforeMarkupConvert === 0 && appliedMarkup.snapshot.markupPercent === 25,
+  );
+  const markupRecalc = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: markupEstimate.id,
+    lineItemId: markupLine.id,
+    takeoffType: "concrete-slab",
+    inputs: appliedMarkup.snapshot.inputs,
+    wastePercent: 10,
+    snapshotEdits: appliedMarkup.snapshot,
+  });
+  check(
+    "Recalc after markup keeps 7.80 selling price and helper 25%",
+    markupRecalc.snapshot.markupPercent === 25 &&
+      markupRecalc.snapshot.items.find((item) => item.id === "concrete-bags")
+        ?.customerUnitPrice === 7.8 &&
+      markupRecalc.snapshot.items.find((item) => item.id === "concrete-bags")
+        ?.unitCost === 6.24,
+  );
+  const markupConvert = await convertDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: markupEstimate.id,
+    lineItemId: markupLine.id,
+    snapshot: markupRecalc.snapshot,
+  });
+  const markupMaterials = await prisma.lineItem.findMany({
+    where: { estimateId: markupEstimate.id, businessId: businessA.id, type: "MATERIAL" },
+  });
+  const markupBagLine = markupMaterials.find(
+    (item) => lineItemTitle(item.description) === "60-lb concrete bags",
+  );
+  check("Markup convert creates the selected MATERIAL line only", markupConvert.created === 1);
+  check(
+    "Converted MATERIAL line uses marked-up customer price, not internal cost",
+    markupBagLine != null &&
+      Number(markupBagLine.unitPrice.toString()) === 7.8 &&
+      Number(markupBagLine.quantity.toString()) === 12.5 &&
+      !markupBagLine.description.includes("markupPercent") &&
+      !markupBagLine.description.includes("unitCost"),
+  );
+
+  await persistDraftEstimateTotal(prisma, markupEstimate.id, businessA.id);
+  await prisma.$transaction(async (tx) => {
+    await tx.estimate.update({
+      where: { id: markupEstimate.id },
+      data: { status: "SENT" },
+    });
+    await createEstimateVersionSnapshot(tx, {
+      estimateId: markupEstimate.id,
+      businessId: businessA.id,
+    });
+  });
+  const markupDocument = await loadEstimateDocumentForBusiness(
+    markupEstimate.id,
+    businessA.id,
+    prisma,
+  );
+  const markupPlain = markupDocument ? estimateDocumentPlainText(markupDocument) : "";
+  check(
+    "Customer document does not expose markup %, internal cost, or takeoff internals",
+    markupDocument != null &&
+      !markupPlain.includes("TBBT Material Takeoff") &&
+      !markupPlain.includes("markupPercent") &&
+      !markupPlain.includes("Material Markup") &&
+      !markupPlain.includes("unitCost") &&
+      !markupPlain.includes("6.24") &&
+      !markupPlain.includes("wastePercent") &&
+      !markupPlain.includes("quantityOverride"),
   );
 
   console.log("\nTEST — Sheet covering, framed wall, tenant isolation");

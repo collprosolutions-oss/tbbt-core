@@ -73,6 +73,8 @@ const INTERNAL_LEAKS = [
   "quantityOverride",
   "bagYieldCuFt",
   "wastePercent",
+  "markupPercent",
+  "Material Markup",
   "unitCost",
   "customerUnitPrice",
   "lengthFtPart",
@@ -228,6 +230,7 @@ const encodedDescription = joinLineDescription(
         bagYieldCuFt: 0.45,
       },
       wastePercent: 10,
+      markupPercent: 25,
       measurementSource: {
         kind: "intake",
         label: "Customer-reported / unverified",

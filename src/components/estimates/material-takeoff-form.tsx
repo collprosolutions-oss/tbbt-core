@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatMoney } from "@/lib/format";
-import { computeTakeoff } from "@/lib/material-takeoff/engine";
+import { applyMaterialMarkup, computeTakeoff } from "@/lib/material-takeoff/engine";
 import {
   CONCRETE_BAG_YIELDS_CU_FT,
   DEFAULT_CONCRETE_BAG_SIZE_LB,
@@ -77,6 +77,7 @@ export function MaterialTakeoffForm({
       }).snapshot,
   );
   const [localError, setLocalError] = useState<string | null>(null);
+  const [markupStatus, setMarkupStatus] = useState<string | null>(null);
   const [customLabel, setCustomLabel] = useState("");
   const [customUnit, setCustomUnit] = useState("ea");
   const [customQty, setCustomQty] = useState("1");
@@ -186,6 +187,26 @@ export function MaterialTakeoffForm({
     setCustomPrice("");
   }
 
+  function applyMarkupToSelected() {
+    const result = applyMaterialMarkup(draft, draft.markupPercent ?? 0);
+    setDraft(result.snapshot);
+    if (result.applied === 0) {
+      setMarkupStatus(
+        result.skipped > 0
+          ? "No customer prices changed. Selected items need an internal unit cost greater than 0."
+          : "Select items with an internal unit cost, then apply markup.",
+      );
+      return;
+    }
+    const skippedNote =
+      result.skipped > 0
+        ? ` Skipped ${result.skipped} without an internal unit cost.`
+        : "";
+    setMarkupStatus(
+      `Applied markup to ${result.applied} selected item${result.applied === 1 ? "" : "s"}.${skippedNote}`,
+    );
+  }
+
   function removeItem(id: string) {
     setDraft((current) => ({
       ...current,
@@ -257,7 +278,7 @@ export function MaterialTakeoffForm({
           <FramedInputs draft={draft} setInput={setInput} />
         ) : null}
 
-        <div className="space-y-2">
+        <div className="grid gap-3 sm:grid-cols-2">
           <TakeoffDecimalField
             id={`waste-${lineItemId}`}
             label="Waste %"
@@ -269,6 +290,36 @@ export function MaterialTakeoffForm({
               }))
             }
           />
+          <div className="space-y-2">
+            <TakeoffDecimalField
+              id={`markup-${lineItemId}`}
+              label="Material Markup %"
+              value={draft.markupPercent}
+              onChange={(value) =>
+                setDraft((current) => ({
+                  ...current,
+                  markupPercent: value ?? 0,
+                }))
+              }
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={applyMarkupToSelected}
+              disabled={pending}
+            >
+              Apply markup to selected items
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Sets customer unit price from internal cost for selected items that
+              already have a unit cost. Does not change cost, quantity, or waste,
+              and does not convert MATERIAL lines. Unselect pickup/procurement
+              first if you do not want it marked up.
+            </p>
+            {markupStatus ? (
+              <p className="text-xs text-muted-foreground">{markupStatus}</p>
+            ) : null}
+          </div>
         </div>
 
         {draft.explanation ? (

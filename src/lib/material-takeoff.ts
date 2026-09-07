@@ -4,7 +4,9 @@ export {
   extendedCustomerPrice,
   extendedMaterialCost,
   hasValidCustomerUnitPrice,
+  hasValidInternalUnitCost,
   isTakeoffTypeId,
+  markedUpCustomerUnitPrice,
   takeoffCustomerSellingTotal,
   takeoffInternalMaterialTotal,
   workingQuantity,
@@ -18,6 +20,7 @@ export type {
 } from "@/lib/material-takeoff/types";
 export {
   addCustomTakeoffItem,
+  applyMaterialMarkup,
   applyTakeoffItemEdits,
   computeTakeoff,
   emptyTakeoffSnapshot,

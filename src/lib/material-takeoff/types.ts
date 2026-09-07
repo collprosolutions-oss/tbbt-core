@@ -57,6 +57,8 @@ export type TakeoffSnapshot = {
   takeoffType: TakeoffTypeId;
   inputs: Record<string, unknown>;
   wastePercent: number;
+  /** Owner helper only. Applied when the owner clicks Apply markup; never auto-run on recalc. */
+  markupPercent: number;
   measurementSource: TakeoffMeasurementSource | null;
   explanation: string;
   skippedMeasurements: string[];
@@ -86,6 +88,22 @@ export function extendedMaterialCost(item: TakeoffItem) {
   const unitCost = item.unitCost;
   if (unitCost == null || !Number.isFinite(unitCost)) return 0;
   return roundMoney(qty * unitCost);
+}
+
+export function hasValidInternalUnitCost(item: TakeoffItem) {
+  const cost = item.unitCost;
+  return cost != null && Number.isFinite(cost) && cost > 0;
+}
+
+export function markedUpCustomerUnitPrice(
+  unitCost: number,
+  markupPercent: number,
+): number | null {
+  if (!Number.isFinite(unitCost) || !(unitCost > 0)) return null;
+  if (!Number.isFinite(markupPercent) || markupPercent < 0) return null;
+  const price = roundMoney(unitCost * (1 + markupPercent / 100));
+  if (!(price > 0)) return null;
+  return price;
 }
 
 export function hasValidCustomerUnitPrice(item: TakeoffItem) {
