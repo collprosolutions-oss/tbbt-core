@@ -168,8 +168,9 @@ try {
 
   const laborSource = readFileSync(new URL("../src/lib/labor-minimum.ts", import.meta.url), "utf8");
   check(
-    "Labor-minimum totals still read only total and type",
-    laborSource.includes("select: { total: true, type: true }") &&
+    "Labor-minimum totals read line money plus description snapshots, not an includedWork column",
+    laborSource.includes("select: { total: true, type: true, description: true }") &&
+      laborSource.includes("customerMaterialsTotal") &&
       !laborSource.includes("includedWork"),
   );
 
