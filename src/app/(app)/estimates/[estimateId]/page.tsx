@@ -20,6 +20,7 @@ import { OverrideLinePriceForm } from "@/components/estimates/override-line-pric
 import { PriceRequiredLineForm } from "@/components/estimates/price-required-line-form";
 import { VariableScopeCalculatorForm } from "@/components/estimates/variable-scope-calculator-form";
 import { VariableScopeDefinitionForm } from "@/components/estimates/variable-scope-definition-form";
+import { MaterialTakeoffForm } from "@/components/estimates/material-takeoff-form";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
@@ -57,6 +58,8 @@ import {
   lineCustomerPolicies,
   lineItemIncludedWork,
   lineItemTitle,
+  lineMaterialTakeoff,
+  lineMaterialTakeoffSource,
 } from "@/lib/estimate-line-scope";
 import {
   customQuoteDisplayDescription,
@@ -72,7 +75,13 @@ import {
 import {
   ownerVisibleRequestMeasurements,
   ownerVisibleRequestPhotos,
+  toStoredIntakeMeasurement,
 } from "@/lib/intake-quote-handoff";
+import {
+  pickIntakeMeasurementForLine,
+  suggestTakeoffInputs,
+  suggestedTakeoffType,
+} from "@/lib/material-takeoff/measurements";
 
 export const metadata: Metadata = {
   title: "Estimate",
@@ -147,6 +156,7 @@ export default async function EstimateBuilderPage({
               serviceRequestItem: {
                 select: {
                   customDescription: true,
+                  serviceCatalogItemId: true,
                   serviceCatalogItem: { select: { name: true } },
                 },
               },
@@ -201,6 +211,13 @@ export default async function EstimateBuilderPage({
     serviceRequestId: estimate.serviceRequestId,
     measurements: estimate.serviceRequest?.measurements ?? [],
   });
+  const storedIntakeMeasurements = (estimate.serviceRequest?.measurements ?? [])
+    .filter(
+      (row) =>
+        row.businessId === estimate.businessId &&
+        row.serviceRequestId === estimate.serviceRequestId,
+    )
+    .map((row) => toStoredIntakeMeasurement(row));
 
   const catalogItems = await prisma.serviceCatalogItem.findMany({
     where: { ...access.scope, active: true },
@@ -391,6 +408,23 @@ export default async function EstimateBuilderPage({
                   calculatorId === CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID
                     ? templateForCalculator(calculatorId, calculatorComponents)
                     : null;
+                const takeoffSource = lineMaterialTakeoffSource(item.description);
+                const takeoffSnapshot = lineMaterialTakeoff(item.description);
+                const takeoffType =
+                  takeoffSnapshot?.takeoffType ??
+                  suggestedTakeoffType({
+                    calculatorId,
+                    title: requestName,
+                  }) ??
+                  "concrete-slab";
+                const takeoffSuggestion = suggestTakeoffInputs({
+                  takeoffType,
+                  calculatorSnapshot,
+                  intakeMeasurement: pickIntakeMeasurementForLine(
+                    storedIntakeMeasurements,
+                    item.serviceCatalogItemId,
+                  ),
+                });
                 return (
                   <li
                     key={item.id}
@@ -451,6 +485,24 @@ export default async function EstimateBuilderPage({
                         template={customTemplate}
                         inputs={formInputs}
                         rates={formRates}
+                      />
+                    ) : null}
+                    {isDraft && !takeoffSource ? (
+                      <MaterialTakeoffForm
+                        estimateId={estimate.id}
+                        lineItemId={item.id}
+                        snapshot={takeoffSnapshot}
+                        suggestedType={takeoffType}
+                        suggestedInputs={takeoffSuggestion.inputs}
+                        measurementSource={
+                          takeoffSnapshot?.measurementSource ??
+                          takeoffSuggestion.measurementSource
+                        }
+                        skippedMeasurements={
+                          takeoffSnapshot?.skippedMeasurements.length
+                            ? takeoffSnapshot.skippedMeasurements
+                            : takeoffSuggestion.skippedMeasurements
+                        }
                       />
                     ) : null}
                     {isDraft && calculatorId && item.unitPrice.gt(0) ? (

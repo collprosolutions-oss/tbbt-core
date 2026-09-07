@@ -67,10 +67,17 @@ const INTERNAL_LEAKS = [
   "overriddenAmount",
   "calculatorId",
   "decorative-wall-paneling",
+  "TBBT Material Takeoff",
+  "TBBT Material Takeoff Source",
+  "calculatedQuantity",
+  "quantityOverride",
+  "bagYieldCuFt",
+  "wastePercent",
+  "unitCost",
+  "customerUnitPrice",
   "Owner-only margin",
   "INTERNAL_OWNER_NOTE",
 ];
-
 let passed = 0;
 let failed = 0;
 function check(label, ok) {
@@ -206,6 +213,38 @@ const encodedDescription = joinLineDescription(
     overriddenAmount: null,
   },
   [defaultWorkAreaPersonalPropertyPolicy()],
+  {
+    materialTakeoff: {
+      version: 1,
+      takeoffType: "sheet-covering",
+      inputs: { wallWidthFt: 24, wallHeightFt: 12, bagYieldCuFt: 0.45 },
+      wastePercent: 10,
+      measurementSource: {
+        kind: "intake",
+        label: "Customer-reported / unverified",
+        unverified: true,
+      },
+      explanation: "Internal takeoff notes must not print.",
+      skippedMeasurements: [],
+      removedItemIds: [],
+      items: [
+        {
+          id: "sheets",
+          kind: "sheets",
+          label: "4x8 sheets",
+          unit: "sheet",
+          optional: false,
+          selected: true,
+          calculatedQuantity: 10,
+          quantityOverride: 11,
+          unitCost: 28,
+          customerUnitPrice: 42,
+          explanation: "Owner-only derivation",
+          convertedLineItemId: null,
+        },
+      ],
+    },
+  },
 );
 
 function assertNoInternalLeaks(label, text) {
