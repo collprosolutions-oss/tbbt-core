@@ -1,5 +1,8 @@
+import { CustomerEstimateLineSections } from "@/components/estimates/customer-estimate-line-sections";
 import {
   INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
+  INVOICE_LABOR_SECTION_TITLE,
+  INVOICE_TOTAL_CUSTOMER_LABEL,
   type InvoiceDocumentView,
 } from "@/lib/invoice-document";
 
@@ -76,63 +79,34 @@ export function InvoiceDocument({
         ) : null}
       </section>
 
-      <section className="mt-8">
-        <h2 className="text-xs font-semibold tracking-wider text-neutral-500">
-          WORK PERFORMED
-        </h2>
-        <table className="mt-3 w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-neutral-300 text-left text-xs tracking-wider text-neutral-500">
-              <th className="py-2 pr-3 font-semibold">Description</th>
-              <th className="py-2 px-3 text-right font-semibold">Qty</th>
-              <th className="py-2 px-3 text-right font-semibold">Rate</th>
-              <th className="py-2 pl-3 text-right font-semibold">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {invoice.lineItems.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="py-4 text-neutral-500">
-                  No line items.
-                </td>
-              </tr>
-            ) : (
-              invoice.lineItems.map((line, index) => (
-                <tr key={`${line.description}-${index}`} className="border-b border-neutral-100">
-                  <td className="py-2.5 pr-3 align-top">
-                    <div>{line.description}</div>
-                    {line.includedWork ? (
-                      <div className="mt-1 whitespace-pre-line text-xs text-neutral-600">
-                        <div className="font-semibold tracking-wide">
-                          Scope / Included Work
-                        </div>
-                        {line.includedWork}
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="py-2.5 px-3 text-right align-top tabular-nums">
-                    {line.quantityLabel}
-                  </td>
-                  <td className="py-2.5 px-3 text-right align-top tabular-nums">
-                    {line.unitPriceLabel}
-                  </td>
-                  <td className="py-2.5 pl-3 text-right align-top tabular-nums">
-                    {line.amountLabel}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </section>
+      <CustomerEstimateLineSections
+        laborLines={invoice.laborLines}
+        materialLines={invoice.materialLines}
+        otherLines={invoice.otherLines}
+        appearance="print"
+        className="mt-8"
+        laborSectionTitle={INVOICE_LABOR_SECTION_TITLE}
+      />
 
       <section className="mt-6 ml-auto w-full max-w-xs space-y-2 text-sm">
         <div className="flex justify-between gap-6">
-          <span className="text-neutral-600">Subtotal</span>
-          <span className="tabular-nums">{invoice.subtotalLabel}</span>
+          <span className="text-neutral-600">Labor</span>
+          <span className="tabular-nums">{invoice.laborTotalLabel}</span>
         </div>
+        {invoice.materialTotalLabel ? (
+          <div className="flex justify-between gap-6">
+            <span className="text-neutral-600">Materials</span>
+            <span className="tabular-nums">{invoice.materialTotalLabel}</span>
+          </div>
+        ) : null}
+        {invoice.otherTotalLabel ? (
+          <div className="flex justify-between gap-6">
+            <span className="text-neutral-600">Other</span>
+            <span className="tabular-nums">{invoice.otherTotalLabel}</span>
+          </div>
+        ) : null}
         <div className="flex justify-between gap-6 font-semibold">
-          <span>Total</span>
+          <span>{INVOICE_TOTAL_CUSTOMER_LABEL}</span>
           <span className="tabular-nums">{invoice.totalLabel}</span>
         </div>
         <div className="flex justify-between gap-6">
@@ -140,7 +114,7 @@ export function InvoiceDocument({
           <span className="tabular-nums">{invoice.amountPaidLabel}</span>
         </div>
         <div className="flex justify-between gap-6 border-t border-neutral-200 pt-2 font-semibold">
-          <span>Amount due</span>
+          <span>Amount Due</span>
           <span className="tabular-nums">{invoice.amountDueLabel}</span>
         </div>
       </section>

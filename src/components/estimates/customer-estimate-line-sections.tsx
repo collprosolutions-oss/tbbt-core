@@ -11,12 +11,15 @@ export function CustomerEstimateLineSections({
   otherLines,
   appearance = "web",
   className,
+  laborSectionTitle = ESTIMATE_LABOR_SECTION_TITLE,
 }: {
   laborLines: EstimateDocumentLine[];
   materialLines: EstimateDocumentLine[];
   otherLines: EstimateDocumentLine[];
   appearance?: "web" | "print";
   className?: string;
+  /** Invoice documents use "LABOR / WORK PERFORMED". Estimates stay "LABOR". */
+  laborSectionTitle?: string;
 }) {
   const print = appearance === "print";
   const heading = print
@@ -31,7 +34,7 @@ export function CustomerEstimateLineSections({
 
   const blocks: Array<{ title: string; lines: EstimateDocumentLine[] }> = [];
   if (laborLines.length > 0) {
-    blocks.push({ title: ESTIMATE_LABOR_SECTION_TITLE, lines: laborLines });
+    blocks.push({ title: laborSectionTitle, lines: laborLines });
   }
   if (materialLines.length > 0) {
     blocks.push({

@@ -2,6 +2,10 @@
  * Server-side invoice PDF. Uses pdfkit (no existing document generator
  * was in the repo). Renders the same fields as InvoiceDocumentView —
  * never invents licenses, tax, due dates, or payment methods.
+ *
+ * Materials match the customer estimate: Description + Qty only, plus one
+ * Final Customer Materials Total. Never a raw line-item Subtotal that
+ * disagrees with Invoice.total.
  */
 import { createWriteStream } from "node:fs";
 import { existsSync } from "node:fs";
@@ -9,6 +13,11 @@ import path from "node:path";
 import PDFDocument from "pdfkit";
 import {
   INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
+  INVOICE_LABOR_SECTION_TITLE,
+  INVOICE_MATERIALS_SECTION_TITLE,
+  INVOICE_OTHER_SECTION_TITLE,
+  INVOICE_TOTAL_CUSTOMER_LABEL,
+  type InvoiceDocumentLine,
   type InvoiceDocumentView,
 } from "@/lib/invoice-document";
 
@@ -35,6 +44,13 @@ export function renderInvoicePdf(
     const left = 50;
     const right = pageWidth - 50;
     let y = 50;
+
+    const ensureSpace = (needed: number) => {
+      if (y + needed > 720) {
+        doc.addPage();
+        y = 50;
+      }
+    };
 
     const logoPath = resolvePublicAsset(docView.business.logoSrc);
     if (logoPath) {
@@ -107,31 +123,65 @@ export function renderInvoicePdf(
     }
 
     y += 16;
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
-    doc.text("WORK PERFORMED", left, y);
-    y += 16;
-    const colQty = right - 220;
+    const colQtyPriced = right - 220;
     const colRate = right - 140;
     const colAmt = right;
-    doc.font("Helvetica-Bold").fontSize(8).fillColor("#666666");
-    doc.text("DESCRIPTION", left, y);
-    doc.text("QTY", colQty, y, { width: 70, align: "right" });
-    doc.text("RATE", colRate, y, { width: 70, align: "right" });
-    doc.text("AMOUNT", colAmt - 80, y, { width: 80, align: "right" });
-    y += 12;
-    doc.moveTo(left, y).lineTo(right, y).strokeColor("#cccccc").stroke();
-    y += 10;
+    const colQtyOnly = right - 80;
 
-    if (docView.lineItems.length === 0) {
-      doc.font("Helvetica").fontSize(10).fillColor("#666666");
-      doc.text("No line items.", left, y);
-      y += 18;
-    } else {
-      for (const line of docView.lineItems) {
-        if (y > 680) {
-          doc.addPage();
-          y = 50;
+    const drawSection = (
+      title: string,
+      lines: InvoiceDocumentLine[],
+      quantityOnly = false,
+    ) => {
+      if (lines.length === 0) return;
+      const colQty = quantityOnly ? colQtyOnly : colQtyPriced;
+      ensureSpace(40);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
+      doc.text(title, left, y);
+      y += quantityOnly ? 10 : 16;
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#666666");
+      if (quantityOnly) {
+        doc.text("DESCRIPTION", left, y);
+        doc.text("QTY", colQty, y, { width: 70, align: "right" });
+        y += 11;
+      } else {
+        doc.text("DESCRIPTION", left, y);
+        doc.text("QTY", colQty, y, { width: 70, align: "right" });
+        doc.text("RATE", colRate, y, { width: 70, align: "right" });
+        doc.text("AMOUNT", colAmt - 80, y, { width: 80, align: "right" });
+        y += 14;
+      }
+      for (const line of lines) {
+        if (quantityOnly) {
+          ensureSpace(16);
+          const descWidth = colQty - left - 12;
+          doc.font("Helvetica").fontSize(10).fillColor("#111111");
+          const descHeight = doc.heightOfString(line.description, {
+            width: descWidth,
+          });
+          const firstLineWidth = Math.min(
+            descWidth,
+            doc.widthOfString(line.description.split("\n")[0] ?? ""),
+          );
+          doc.text(line.description, left, y, { width: descWidth });
+          const leaderStart = left + firstLineWidth + 4;
+          const leaderEnd = colQty - 4;
+          if (leaderEnd > leaderStart + 8) {
+            doc.save();
+            doc
+              .strokeColor("#bbbbbb")
+              .lineWidth(0.6)
+              .dash(1, { space: 2 })
+              .moveTo(leaderStart, y + 8)
+              .lineTo(leaderEnd, y + 8)
+              .stroke();
+            doc.restore();
+          }
+          doc.text(line.quantityLabel, colQty, y, { width: 70, align: "right" });
+          y += Math.max(12, descHeight + 1);
+          continue;
         }
+        ensureSpace(48);
         const descWidth = colQty - left - 12;
         const descHeight = doc.heightOfString(line.description, {
           width: descWidth,
@@ -158,24 +208,73 @@ export function renderInvoicePdf(
         }
         y += Math.max(16, descHeight + scopeHeight) + 6;
       }
+    };
+
+    if (
+      docView.laborLines.length === 0 &&
+      docView.materialLines.length === 0 &&
+      docView.otherLines.length === 0
+    ) {
+      doc.font("Helvetica").fontSize(10).fillColor("#666666");
+      doc.text("No line items.", left, y);
+      y += 18;
+    } else {
+      drawSection(INVOICE_LABOR_SECTION_TITLE, docView.laborLines);
+      if (docView.laborLines.length > 0 && docView.materialLines.length > 0) {
+        y += 6;
+        ensureSpace(16);
+        doc
+          .moveTo(left, y)
+          .lineTo(right, y)
+          .strokeColor("#555555")
+          .lineWidth(1.5)
+          .stroke();
+        doc.lineWidth(1);
+        y += 14;
+      }
+      drawSection(INVOICE_MATERIALS_SECTION_TITLE, docView.materialLines, true);
+      if (
+        (docView.laborLines.length > 0 || docView.materialLines.length > 0) &&
+        docView.otherLines.length > 0
+      ) {
+        y += 6;
+        ensureSpace(16);
+        doc
+          .moveTo(left, y)
+          .lineTo(right, y)
+          .strokeColor("#555555")
+          .lineWidth(1.5)
+          .stroke();
+        doc.lineWidth(1);
+        y += 14;
+      }
+      drawSection(INVOICE_OTHER_SECTION_TITLE, docView.otherLines);
     }
 
     y += 8;
+    ensureSpace(120);
     doc.moveTo(left, y).lineTo(right, y).strokeColor("#cccccc").stroke();
     y += 16;
 
     const totalsLeft = right - 220;
     const row = (label: string, value: string, bold = false) => {
+      ensureSpace(20);
       doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(10).fillColor("#111111");
       doc.text(label, totalsLeft, y, { width: 100 });
       doc.text(value, totalsLeft + 100, y, { width: 120, align: "right" });
       y += 16;
     };
 
-    row("Subtotal", docView.subtotalLabel);
-    row("Total", docView.totalLabel, true);
+    row("Labor", docView.laborTotalLabel);
+    if (docView.materialTotalLabel) {
+      row("Materials", docView.materialTotalLabel);
+    }
+    if (docView.otherTotalLabel) {
+      row("Other", docView.otherTotalLabel);
+    }
+    row(INVOICE_TOTAL_CUSTOMER_LABEL, docView.totalLabel, true);
     row("Payments", docView.amountPaidLabel);
-    row("Amount due", docView.amountDueLabel, true);
+    row("Amount Due", docView.amountDueLabel, true);
 
     y += 24;
     doc.font("Helvetica").fontSize(10).fillColor("#333333");

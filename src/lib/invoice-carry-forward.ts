@@ -17,6 +17,7 @@
  */
 import { Prisma, type LineItemType, type PrismaClient } from "@prisma/client";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
+import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 
 const ZERO = new Prisma.Decimal(0);
@@ -170,6 +171,34 @@ export function snapshotLinesTotal(
 }
 
 /**
+ * Customer commercial total for an invoice snapshot: LABOR + OTHER + the
+ * approved Final Customer Materials Total (override encoded on a copied
+ * line description), not the raw MATERIAL line sum.
+ *
+ * Empty-invoice backfill must match Invoice.total this way. A $300
+ * customer materials total with $289.18 of underlying material rows is
+ * still a $1,100 invoice, not $1,089.18.
+ */
+export function invoiceCustomerPricingTotal(
+  lines: readonly InvoiceSnapshotLineInput[],
+): Prisma.Decimal {
+  const labor = lines
+    .filter((line) => line.type === "LABOR")
+    .reduce((sum, line) => sum.add(toInvoiceDecimal(line.total)), ZERO);
+  const other = lines
+    .filter((line) => line.type === "OTHER")
+    .reduce((sum, line) => sum.add(toInvoiceDecimal(line.total)), ZERO);
+  const materials = resolveCustomerMaterialsTotal(
+    lines.map((line) => ({
+      type: line.type,
+      total: line.total,
+      description: line.description,
+    })),
+  );
+  return labor.add(materials.amount).add(other);
+}
+
+/**
  * Choose the APPROVED Change Orders whose copied lines, plus the original
  * approved estimate (and labor-minimum snapshot), equal the invoice total.
  *
@@ -203,7 +232,7 @@ export function selectApprovedChangeOrdersForInvoiceBackfill(input: {
         (changeOrder) => changeOrder.lineItems,
       ),
     });
-    return snapshotLinesTotal(lines).eq(invoiceTotal);
+    return invoiceCustomerPricingTotal(lines).eq(invoiceTotal);
   };
 
   const asOfInvoice = ordered.filter(
@@ -360,7 +389,7 @@ async function persistEmptyInvoiceWorkLines(
     ),
   });
 
-  if (!snapshotLinesTotal(lines).eq(invoice.total)) {
+  if (!invoiceCustomerPricingTotal(lines).eq(invoice.total)) {
     return { ok: true, backfilled: false, reason: "no-match" };
   }
 

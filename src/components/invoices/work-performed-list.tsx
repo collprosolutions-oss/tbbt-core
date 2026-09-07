@@ -7,8 +7,9 @@ export type WorkPerformedLine = {
 };
 
 /**
- * Description + quantity list for invoice surfaces that do not need
- * per-service rates. The invoice document/PDF keep Rate and Amount.
+ * Description + quantity list for owner invoice surfaces that do not
+ * need per-service rates. The customer invoice document/PDF show labor
+ * rates and a single Materials lump sum — never raw material unit prices.
  */
 export function WorkPerformedList({
   lines,
