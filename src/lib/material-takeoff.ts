@@ -57,9 +57,14 @@ export {
 } from "@/lib/material-takeoff/formulas/framed-wall";
 export {
   convertLinearToFeet,
+  feetAndInchesToFeet,
+  formatFeetInches,
   isRejectedLinearUnit,
   linearToFeet,
+  parseConstructionNumber,
   parseLinearUnitToken,
+  splitFeetAndInches,
+  splitTotalInches,
 } from "@/lib/material-takeoff/units";
 export {
   pickIntakeMeasurementForLine,

@@ -109,6 +109,7 @@ check(
     !page.includes("TBBT Material Takeoff") &&
     !page.includes("customerUnitPrice") &&
     !page.includes("Unit cost (internal)") &&
+    !page.includes("lengthInPart") &&
     !header.includes("panelRate"),
 );
 check(

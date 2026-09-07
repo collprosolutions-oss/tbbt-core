@@ -7,7 +7,6 @@
 import {
   CUSTOMER_REPORTED_MEASUREMENT_LABEL,
   type StoredIntakeMeasurement,
-  convertLinearMeasurement,
   measurementSourceLabel,
 } from "@/lib/intake-quote-handoff";
 import {
@@ -15,7 +14,14 @@ import {
   parseIntakeMeasurementUnit,
 } from "@/lib/catalog-intake";
 import type { CalculatorSnapshot } from "@/lib/estimate-calculators/types";
-import { parseLinearUnitToken, parsePositiveNumber } from "@/lib/material-takeoff/units";
+import {
+  feetAndInchesToFeet,
+  parseLinearUnitToken,
+  parsePositiveNumber,
+  roundTakeoff,
+  splitFeetAndInches,
+  splitTotalInches,
+} from "@/lib/material-takeoff/units";
 import type {
   TakeoffMeasurementSource,
   TakeoffTypeId,
@@ -101,8 +107,8 @@ function inputsFromCalculator(
     return {
       source,
       inputs: {
-        ...(wallWidthFt != null ? { wallWidthFt } : {}),
-        ...(wallHeightFt != null ? { wallHeightFt } : {}),
+        ...(wallWidthFt != null ? feetFields("wallWidth", wallWidthFt) : {}),
+        ...(wallHeightFt != null ? feetFields("wallHeight", wallHeightFt) : {}),
         slidingPatioDoors: values.slidingPatioDoors ?? 0,
         standardDoors: values.standardDoors ?? 0,
         windows: values.windows ?? 0,
@@ -120,8 +126,8 @@ function inputsFromCalculator(
     return {
       source,
       inputs: {
-        ...(wallLengthFt != null ? { wallLengthFt } : {}),
-        ...(wallHeightFt != null ? { wallHeightFt } : {}),
+        ...(wallLengthFt != null ? feetFields("wallLength", wallLengthFt) : {}),
+        ...(wallHeightFt != null ? feetFields("wallHeight", wallHeightFt) : {}),
       },
     };
   }
@@ -137,8 +143,8 @@ function inputsFromCalculator(
   return {
     source,
     inputs: {
-      ...(lengthFt != null ? { lengthFt } : {}),
-      ...(widthFt != null ? { widthFt } : {}),
+      ...(lengthFt != null ? feetFields("length", lengthFt) : {}),
+      ...(widthFt != null ? feetFields("width", widthFt) : {}),
     },
   };
 }
@@ -158,9 +164,9 @@ function inputsFromIntake(
     };
   }
   const storedUnit = parseIntakeMeasurementUnit(measurement.unit);
-  const width = axisFeet(measurement.width, storedUnit, "width", skipped);
-  const height = axisFeet(measurement.height, storedUnit, "height", skipped);
-  const length = axisFeet(measurement.length, storedUnit, "length", skipped);
+  const width = axisLinear(measurement.width, storedUnit, "width", skipped);
+  const height = axisLinear(measurement.height, storedUnit, "height", skipped);
+  const length = axisLinear(measurement.length, storedUnit, "length", skipped);
 
   if (takeoffType === "concrete-slab") {
     if (height != null) skipped.push("intake:height-not-used-as-slab-thickness");
@@ -169,48 +175,103 @@ function inputsFromIntake(
     return {
       source: intakeSource(measurement),
       inputs: {
-        ...(length != null ? { lengthFt: length } : {}),
-        ...(width != null ? { widthFt: width } : {}),
+        ...(length != null
+          ? {
+              lengthFt: length.totalFt,
+              lengthFtPart: length.feetPart,
+              lengthInPart: length.inchesPart,
+            }
+          : {}),
+        ...(width != null
+          ? {
+              widthFt: width.totalFt,
+              widthFtPart: width.feetPart,
+              widthInPart: width.inchesPart,
+            }
+          : {}),
       },
     };
   }
 
   if (takeoffType === "sheet-covering") {
+    const wallWidth = width ?? length;
     return {
       source: intakeSource(measurement),
       inputs: {
-        ...(width != null ? { wallWidthFt: width } : length != null ? { wallWidthFt: length } : {}),
-        ...(height != null ? { wallHeightFt: height } : {}),
+        ...(wallWidth != null
+          ? {
+              wallWidthFt: wallWidth.totalFt,
+              wallWidthFtPart: wallWidth.feetPart,
+              wallWidthInPart: wallWidth.inchesPart,
+            }
+          : {}),
+        ...(height != null
+          ? {
+              wallHeightFt: height.totalFt,
+              wallHeightFtPart: height.feetPart,
+              wallHeightInPart: height.inchesPart,
+            }
+          : {}),
       },
     };
   }
 
+  const wallLength = length ?? width;
   return {
     source: intakeSource(measurement),
     inputs: {
-      ...(length != null
-        ? { wallLengthFt: length }
-        : width != null
-          ? { wallLengthFt: width }
-          : {}),
-      ...(height != null ? { wallHeightFt: height } : {}),
+      ...(wallLength != null
+        ? {
+            wallLengthFt: wallLength.totalFt,
+            wallLengthFtPart: wallLength.feetPart,
+            wallLengthInPart: wallLength.inchesPart,
+          }
+        : {}),
+      ...(height != null
+        ? {
+            wallHeightFt: height.totalFt,
+            wallHeightFtPart: height.feetPart,
+            wallHeightInPart: height.inchesPart,
+          }
+        : {}),
     },
   };
 }
 
-function axisFeet(
+function feetFields(prefix: string, totalFt: number) {
+  const parts = splitFeetAndInches(totalFt);
+  return {
+    [`${prefix}Ft`]: roundTakeoff(totalFt, 4),
+    [`${prefix}FtPart`]: parts.feet,
+    [`${prefix}InPart`]: parts.inches,
+  };
+}
+
+function axisLinear(
   value: number | null | undefined,
   unit: ReturnType<typeof parseIntakeMeasurementUnit>,
   axis: string,
   skipped: string[],
-) {
+): { totalFt: number; feetPart: number; inchesPart: number } | null {
   if (value == null) return null;
-  const converted = convertLinearMeasurement(value, unit, "FT");
-  if (converted == null) {
-    skipped.push(`intake:${axis}`);
-    return null;
+  if (unit === "IN") {
+    const parts = splitTotalInches(value);
+    return {
+      totalFt: feetAndInchesToFeet(parts.feet, parts.inches),
+      feetPart: parts.feet,
+      inchesPart: parts.inches,
+    };
   }
-  return converted;
+  if (unit === "FT") {
+    const parts = splitFeetAndInches(value);
+    return {
+      totalFt: roundTakeoff(value, 4),
+      feetPart: parts.feet,
+      inchesPart: parts.inches,
+    };
+  }
+  skipped.push(`intake:${axis}`);
+  return null;
 }
 
 function intakeSource(measurement: StoredIntakeMeasurement): TakeoffMeasurementSource {

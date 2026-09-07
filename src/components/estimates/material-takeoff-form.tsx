@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useState } from "react";
 import {
   convertEstimateMaterialTakeoff,
   saveEstimateMaterialTakeoff,
@@ -19,6 +19,10 @@ import {
 } from "@/lib/material-takeoff/formulas/concrete-slab";
 import { emptyFramedWallInputs } from "@/lib/material-takeoff/formulas/framed-wall";
 import { emptySheetCoveringInputs } from "@/lib/material-takeoff/formulas/sheet-covering";
+import {
+  feetAndInchesToFeet,
+  parseNonNegativeConstructionNumber,
+} from "@/lib/material-takeoff/units";
 import {
   TAKEOFF_TYPE_IDS,
   TAKEOFF_TYPE_LABELS,
@@ -439,9 +443,23 @@ function ConcreteInputs({
   const inputs = emptyConcreteSlabInputs(draft.inputs);
   return (
     <div className="grid gap-3 sm:grid-cols-3">
-      <NumberField label="Length (ft)" value={inputs.lengthFt} onChange={(v) => setInput("lengthFt", v)} />
-      <NumberField label="Width (ft)" value={inputs.widthFt} onChange={(v) => setInput("widthFt", v)} />
-      <NumberField label="Thickness (in)" value={inputs.thicknessIn} onChange={(v) => setInput("thicknessIn", v)} />
+      <FeetInchesField
+        label="Length"
+        feet={inputs.lengthFtPart}
+        inches={inputs.lengthInPart}
+        onChange={(feet, inches) => setLinear(setInput, "length", feet, inches)}
+      />
+      <FeetInchesField
+        label="Width"
+        feet={inputs.widthFtPart}
+        inches={inputs.widthInPart}
+        onChange={(feet, inches) => setLinear(setInput, "width", feet, inches)}
+      />
+      <ConstructionNumberField
+        label="Thickness (in)"
+        value={inputs.thicknessIn}
+        onChange={(v) => setInput("thicknessIn", v)}
+      />
       <div className="space-y-2">
         <Label>Bag size</Label>
         <select
@@ -519,10 +537,30 @@ function SheetInputs({
   const inputs = emptySheetCoveringInputs(draft.inputs);
   return (
     <div className="grid gap-3 sm:grid-cols-3">
-      <NumberField label="Wall width (ft)" value={inputs.wallWidthFt} onChange={(v) => setInput("wallWidthFt", v)} />
-      <NumberField label="Wall height (ft)" value={inputs.wallHeightFt} onChange={(v) => setInput("wallHeightFt", v)} />
-      <NumberField label="Sheet width (ft)" value={inputs.sheetWidthFt} onChange={(v) => setInput("sheetWidthFt", v)} />
-      <NumberField label="Sheet height (ft)" value={inputs.sheetHeightFt} onChange={(v) => setInput("sheetHeightFt", v)} />
+      <FeetInchesField
+        label="Wall width"
+        feet={inputs.wallWidthFtPart}
+        inches={inputs.wallWidthInPart}
+        onChange={(feet, inches) => setLinear(setInput, "wallWidth", feet, inches)}
+      />
+      <FeetInchesField
+        label="Wall height"
+        feet={inputs.wallHeightFtPart}
+        inches={inputs.wallHeightInPart}
+        onChange={(feet, inches) => setLinear(setInput, "wallHeight", feet, inches)}
+      />
+      <FeetInchesField
+        label="Sheet width"
+        feet={inputs.sheetWidthFtPart}
+        inches={inputs.sheetWidthInPart}
+        onChange={(feet, inches) => setLinear(setInput, "sheetWidth", feet, inches)}
+      />
+      <FeetInchesField
+        label="Sheet height"
+        feet={inputs.sheetHeightFtPart}
+        inches={inputs.sheetHeightInPart}
+        onChange={(feet, inches) => setLinear(setInput, "sheetHeight", feet, inches)}
+      />
       <NumberField label="Sliding patio doors" value={inputs.slidingPatioDoors} onChange={(v) => setInput("slidingPatioDoors", v)} />
       <NumberField label="Standard doors" value={inputs.standardDoors} onChange={(v) => setInput("standardDoors", v)} />
       <NumberField label="Windows" value={inputs.windows} onChange={(v) => setInput("windows", v)} />
@@ -564,9 +602,23 @@ function FramedInputs({
   const inputs = emptyFramedWallInputs(draft.inputs);
   return (
     <div className="grid gap-3 sm:grid-cols-3">
-      <NumberField label="Wall length (ft)" value={inputs.wallLengthFt} onChange={(v) => setInput("wallLengthFt", v)} />
-      <NumberField label="Wall height (ft)" value={inputs.wallHeightFt} onChange={(v) => setInput("wallHeightFt", v)} />
-      <NumberField label="Stud spacing (in)" value={inputs.studSpacingIn} onChange={(v) => setInput("studSpacingIn", v)} />
+      <FeetInchesField
+        label="Wall length"
+        feet={inputs.wallLengthFtPart}
+        inches={inputs.wallLengthInPart}
+        onChange={(feet, inches) => setLinear(setInput, "wallLength", feet, inches)}
+      />
+      <FeetInchesField
+        label="Wall height"
+        feet={inputs.wallHeightFtPart}
+        inches={inputs.wallHeightInPart}
+        onChange={(feet, inches) => setLinear(setInput, "wallHeight", feet, inches)}
+      />
+      <ConstructionNumberField
+        label="Stud spacing (in)"
+        value={inputs.studSpacingIn}
+        onChange={(v) => setInput("studSpacingIn", v)}
+      />
       <NumberField label="Openings" value={inputs.openings} onChange={(v) => setInput("openings", v)} />
       <label className="flex items-center gap-2 text-sm">
         <input
@@ -592,6 +644,83 @@ function FramedInputs({
         />
         Pickup / procurement
       </label>
+    </div>
+  );
+}
+
+function setLinear(
+  setInput: (key: string, value: unknown) => void,
+  prefix: string,
+  feet: number,
+  inches: number,
+) {
+  setInput(`${prefix}FtPart`, feet);
+  setInput(`${prefix}InPart`, inches);
+  setInput(`${prefix}Ft`, feetAndInchesToFeet(feet, inches));
+}
+
+function FeetInchesField({
+  label,
+  feet,
+  inches,
+  onChange,
+}: {
+  label: string;
+  feet: number;
+  inches: number;
+  onChange: (feet: number, inches: number) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label>{label}</Label>
+      <div className="grid grid-cols-2 gap-2">
+        <ConstructionNumberField
+          label="Feet"
+          value={feet}
+          onChange={(value) => onChange(value, inches)}
+        />
+        <ConstructionNumberField
+          label="Inches"
+          value={inches}
+          onChange={(value) => onChange(feet, value)}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ConstructionNumberField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const [text, setText] = useState(value === 0 ? "" : String(value));
+  useEffect(() => {
+    setText(value === 0 ? "" : String(value));
+  }, [value]);
+
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Input
+        inputMode="decimal"
+        value={text}
+        placeholder="0"
+        onChange={(event) => {
+          const next = event.target.value;
+          setText(next);
+          if (!next.trim()) {
+            onChange(0);
+            return;
+          }
+          const parsed = parseNonNegativeConstructionNumber(next);
+          if (parsed != null) onChange(parsed);
+        }}
+      />
     </div>
   );
 }

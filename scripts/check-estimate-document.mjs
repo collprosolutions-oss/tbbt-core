@@ -75,6 +75,9 @@ const INTERNAL_LEAKS = [
   "wastePercent",
   "unitCost",
   "customerUnitPrice",
+  "lengthFtPart",
+  "lengthInPart",
+  "wallWidthInPart",
   "Owner-only margin",
   "INTERNAL_OWNER_NOTE",
 ];
@@ -217,7 +220,13 @@ const encodedDescription = joinLineDescription(
     materialTakeoff: {
       version: 1,
       takeoffType: "sheet-covering",
-      inputs: { wallWidthFt: 24, wallHeightFt: 12, bagYieldCuFt: 0.45 },
+      inputs: {
+        wallWidthFt: 24,
+        wallHeightFt: 12,
+        wallWidthFtPart: 24,
+        wallWidthInPart: 0,
+        bagYieldCuFt: 0.45,
+      },
       wastePercent: 10,
       measurementSource: {
         kind: "intake",

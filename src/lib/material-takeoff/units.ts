@@ -97,6 +97,125 @@ export function inchesToFeet(inches: number): number | null {
   return roundTakeoff(inches / 12, 4);
 }
 
+const UNICODE_FRACTIONS: Record<string, string> = {
+  "¼": "1/4",
+  "½": "1/2",
+  "¾": "3/4",
+  "⅓": "1/3",
+  "⅔": "2/3",
+  "⅛": "1/8",
+  "⅜": "3/8",
+  "⅝": "5/8",
+  "⅞": "7/8",
+  "⅙": "1/6",
+  "⅚": "5/6",
+};
+
+/**
+ * Parse construction measurements: 4.5, 4 1/2, 4-1/2, 4½, 1/2.
+ * Returns null when empty or not a number. Zero is allowed.
+ */
+export function parseConstructionNumber(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== "string") return null;
+  let raw = value.trim();
+  if (!raw) return null;
+  for (const [glyph, ascii] of Object.entries(UNICODE_FRACTIONS)) {
+    raw = raw.split(glyph).join(` ${ascii} `);
+  }
+  raw = raw.replace(/(\d)\s+(\d+\s*\/\s*\d+)/, "$1 $2").replace(/\s+/g, " ").trim();
+  const mixed = raw.match(/^(-?\d+(?:\.\d+)?)\s*[- ]\s*(\d+)\s*\/\s*(\d+)$/);
+  if (mixed) {
+    const whole = Number(mixed[1]);
+    const num = Number(mixed[2]);
+    const den = Number(mixed[3]);
+    if (!Number.isFinite(whole) || !Number.isFinite(num) || !Number.isFinite(den) || den === 0) {
+      return null;
+    }
+    const sign = whole < 0 ? -1 : 1;
+    return sign * (Math.abs(whole) + num / den);
+  }
+  const fraction = raw.match(/^(-)?(\d+)\s*\/\s*(\d+)$/);
+  if (fraction) {
+    const num = Number(fraction[2]);
+    const den = Number(fraction[3]);
+    if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return null;
+    const signed = num / den;
+    return fraction[1] ? -signed : signed;
+  }
+  if (!/^-?\d+(\.\d+)?$/.test(raw)) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function parseNonNegativeConstructionNumber(value: unknown): number | null {
+  const parsed = parseConstructionNumber(value);
+  if (parsed == null || parsed < 0) return null;
+  return parsed;
+}
+
+export function parsePositiveConstructionNumber(value: unknown): number | null {
+  const parsed = parseConstructionNumber(value);
+  if (parsed == null || parsed <= 0) return null;
+  return parsed;
+}
+
+export function feetAndInchesToFeet(feet: number, inches: number): number {
+  const ft = Number.isFinite(feet) ? Math.max(0, feet) : 0;
+  const inch = Number.isFinite(inches) ? Math.max(0, inches) : 0;
+  return roundTakeoff(ft + inch / 12, 4);
+}
+
+/** Split stored decimal feet into construction feet + inches (nearest 1/8 in). */
+export function splitFeetAndInches(totalFeet: number): { feet: number; inches: number } {
+  if (!Number.isFinite(totalFeet) || totalFeet <= 0) return { feet: 0, inches: 0 };
+  const totalInches = Math.round(totalFeet * 12 * 8 + Number.EPSILON) / 8;
+  return splitTotalInches(totalInches);
+}
+
+export function splitTotalInches(totalInches: number): { feet: number; inches: number } {
+  if (!Number.isFinite(totalInches) || totalInches <= 0) return { feet: 0, inches: 0 };
+  const rounded = roundTakeoff(totalInches, 4);
+  const feet = Math.floor((rounded + 1e-9) / 12);
+  const inches = roundTakeoff(rounded - feet * 12, 4);
+  if (inches >= 12 - 1e-9) return { feet: feet + 1, inches: 0 };
+  return { feet, inches };
+}
+
+export function formatFeetInches(totalFeet: number): string {
+  const parts = splitFeetAndInches(totalFeet);
+  const inchLabel = Number.isInteger(parts.inches)
+    ? String(parts.inches)
+    : String(roundTakeoff(parts.inches, 4));
+  return `${parts.feet} ft ${inchLabel} in`;
+}
+
+export function resolveFeetInchesInput(
+  partial: Record<string, unknown> | null | undefined,
+  totalKey: string,
+  feetPartKey: string,
+  inchesPartKey: string,
+): { totalFt: number; feetPart: number; inchesPart: number } {
+  const hasFeetPart =
+    partial != null && Object.prototype.hasOwnProperty.call(partial, feetPartKey);
+  const hasInchesPart =
+    partial != null && Object.prototype.hasOwnProperty.call(partial, inchesPartKey);
+  if (hasFeetPart || hasInchesPart) {
+    const feetPart = parseNonNegativeConstructionNumber(partial?.[feetPartKey]) ?? 0;
+    const inchesPart = parseNonNegativeConstructionNumber(partial?.[inchesPartKey]) ?? 0;
+    return {
+      totalFt: feetAndInchesToFeet(feetPart, inchesPart),
+      feetPart,
+      inchesPart,
+    };
+  }
+  const totalFt = parseNonNegativeNumber(partial?.[totalKey]) ?? 0;
+  const split = splitFeetAndInches(totalFt);
+  return { totalFt, feetPart: split.feet, inchesPart: split.inches };
+}
+
 export function convertLinearToFeet(
   value: unknown,
   unitRaw: string | null | undefined,

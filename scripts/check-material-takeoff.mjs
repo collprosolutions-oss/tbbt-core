@@ -52,14 +52,20 @@ const {
   convertDraftMaterialTakeoff,
   convertLinearToFeet,
   emptyConcreteSlabInputs,
+  emptyFramedWallInputs,
+  emptySheetCoveringInputs,
   extendedCustomerPrice,
   extendedMaterialCost,
+  feetAndInchesToFeet,
+  formatFeetInches,
   framedWallPlateBoards,
   framedWallStudCount,
   isRejectedLinearUnit,
+  parseConstructionNumber,
   recalculateDraftMaterialTakeoff,
   saveDraftMaterialTakeoff,
   sheetCountRequired,
+  splitFeetAndInches,
   suggestTakeoffInputs,
 } = await import("@/lib/material-takeoff");
 const { estimateDocumentPlainText, loadEstimateDocumentForBusiness } = await import(
@@ -170,7 +176,9 @@ try {
       takeoffForm.includes("Unit cost (internal)") &&
       takeoffForm.includes("Customer unit price") &&
       takeoffForm.includes("Internal extended") &&
-      takeoffForm.includes("Customer extended"),
+      takeoffForm.includes("Customer extended") &&
+      takeoffForm.includes("Feet") &&
+      takeoffForm.includes("Inches"),
   );
   check(
     "Estimate document uses split title/scope, not raw description",
@@ -217,6 +225,136 @@ try {
     "No hard-coded $36 or $52 takeoff rate in concrete formula",
     !readRepo("src/lib/material-takeoff/formulas/concrete-slab.ts").includes("36") &&
       !readRepo("src/lib/material-takeoff/formulas/concrete-slab.ts").includes("52"),
+  );
+
+  console.log("\nUNIT — Construction feet + inches inputs");
+  check(
+    "4.5, 4 1/2, and 4½ parse as the same construction inch value",
+    parseConstructionNumber("4.5") === 4.5 &&
+      parseConstructionNumber("4 1/2") === 4.5 &&
+      parseConstructionNumber("4½") === 4.5 &&
+      parseConstructionNumber("1/2") === 0.5,
+  );
+  check(
+    "3 ft 4 in normalizes to 3.3333 ft",
+    feetAndInchesToFeet(3, 4) === 3.3333 &&
+      splitFeetAndInches(3.3333).feet === 3 &&
+      splitFeetAndInches(3.3333).inches === 4,
+  );
+  const founderSlab = emptyConcreteSlabInputs({
+    lengthFtPart: 8,
+    lengthInPart: 0,
+    widthFtPart: 3,
+    widthInPart: 4,
+    thicknessIn: 4,
+    bagSizeLb: 60,
+    bagYieldCuFt: 0.45,
+  });
+  const founderVolume = concreteVolumeCuFt(founderSlab);
+  check(
+    "8 ft × 3 ft 4 in × 4 in slab volume is 8.8888 cu ft",
+    founderSlab.lengthFt === 8 &&
+      founderSlab.widthFt === 3.3333 &&
+      founderSlab.thicknessIn === 4 &&
+      founderVolume === 8.8888,
+  );
+  check(
+    "8 ft × 3 ft 4 in × 4 in uses 20 bags without waste and 22 with 10% waste",
+    concreteBagsRequired(founderVolume, 0, 0.45) === 20 &&
+      concreteBagsRequired(founderVolume, 10, 0.45) === 22,
+  );
+  const founderComputed = computeTakeoff({
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFtPart: 8,
+      lengthInPart: 0,
+      widthFtPart: 3,
+      widthInPart: 4,
+      thicknessIn: 4,
+      bagSizeLb: 60,
+      bagYieldCuFt: 0.45,
+    },
+    wastePercent: 10,
+  }).snapshot;
+  check(
+    "Founder slab takeoff counts 22 60-lb bags with default waste",
+    founderComputed.items.find((item) => item.id === "concrete-bags")?.calculatedQuantity === 22,
+  );
+  const halfInch = emptyConcreteSlabInputs({
+    lengthFtPart: 8,
+    lengthInPart: 0,
+    widthFtPart: 3,
+    widthInPart: "4½",
+    thicknessIn: "4.5",
+  });
+  check(
+    "Inches accept 4½ and thickness accepts 4.5",
+    halfInch.widthInPart === 4.5 &&
+      halfInch.widthFt === feetAndInchesToFeet(3, 4.5) &&
+      halfInch.thicknessIn === 4.5,
+  );
+  const legacySlab = emptyConcreteSlabInputs({
+    lengthFt: 10,
+    widthFt: 10,
+    thicknessIn: 4,
+  });
+  check(
+    "Saved decimal-feet snapshots still calculate and split into feet/inches",
+    legacySlab.lengthFt === 10 &&
+      legacySlab.widthFt === 10 &&
+      concreteVolumeCuFt(legacySlab) === 33.3333 &&
+      legacySlab.lengthFtPart === 10 &&
+      legacySlab.lengthInPart === 0 &&
+      formatFeetInches(10) === "10 ft 0 in",
+  );
+  const inchPrefill = suggestTakeoffInputs({
+    takeoffType: "concrete-slab",
+    intakeMeasurement: {
+      catalogItemId: "x",
+      source: CUSTOMER_REPORTED_MEASUREMENT,
+      width: 40,
+      height: 12,
+      length: 96,
+      quantity: null,
+      unit: "IN",
+    },
+  });
+  check(
+    "Customer-reported 96 in × 40 in prefills 8 ft 0 in × 3 ft 4 in",
+    inchPrefill.inputs.lengthFt === 8 &&
+      inchPrefill.inputs.lengthFtPart === 8 &&
+      inchPrefill.inputs.lengthInPart === 0 &&
+      inchPrefill.inputs.widthFt === 3.3333 &&
+      inchPrefill.inputs.widthFtPart === 3 &&
+      inchPrefill.inputs.widthInPart === 4 &&
+      inchPrefill.measurementSource?.unverified === true,
+  );
+
+  check(
+    "0 ft 40 in is the same width as 3 ft 4 in",
+    emptyConcreteSlabInputs({
+      lengthFtPart: 8,
+      lengthInPart: 0,
+      widthFtPart: 0,
+      widthInPart: 40,
+      thicknessIn: 4,
+    }).widthFt === 3.3333,
+  );
+  check(
+    "Sheet covering 10 ft 6 in wall width normalizes without changing sheet math",
+    emptySheetCoveringInputs({
+      wallWidthFtPart: 10,
+      wallWidthInPart: 6,
+      wallHeightFtPart: 8,
+      wallHeightInPart: 0,
+    }).wallWidthFt === 10.5,
+  );
+  check(
+    "Framed-wall 12 ft 0 in still yields 10 layout studs at 16 in OC",
+    framedWallStudCount(
+      emptyFramedWallInputs({ wallLengthFtPart: 12, wallLengthInPart: 0 }).wallLengthFt,
+      16,
+    ) === 10,
   );
 
   console.log("\nUNIT — Internal unit cost stays independent of customer unit price");
@@ -683,6 +821,7 @@ try {
       !plain.includes("unitCost") &&
       !plain.includes("customerUnitPrice") &&
       !plain.includes("wastePercent") &&
+      !plain.includes("lengthInPart") &&
       document.lineItems[0]?.description === DECORATIVE_WALL_PANELING_TITLE,
   );
 
