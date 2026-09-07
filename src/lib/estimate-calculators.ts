@@ -82,3 +82,22 @@ export type {
   CalculatorResult,
   CalculatorSnapshot,
 } from "@/lib/estimate-calculators/types";
+export {
+  CONCRETE_SLAB_WORKSPACE_ID,
+  ESTIMATING_WORKSPACES,
+  ESTIMATING_WORKSPACE_IDS,
+  GENERIC_CUSTOM_WORKSPACE_ID,
+  descriptionLooksLikeCustomQuote,
+  estimatingWorkspaceById,
+  isEstimatingWorkspaceId,
+  resolveDraftEstimatingWorkspace,
+  resolveEstimatingWorkspace,
+  workspaceMaterialTakeoffType,
+} from "@/lib/estimate-calculators/estimating-registry";
+export type {
+  EstimatingLaborCalculatorKind,
+  EstimatingMaterialCalculatorKind,
+  EstimatingWorkspaceContext,
+  EstimatingWorkspaceDefinition,
+  EstimatingWorkspaceId,
+} from "@/lib/estimate-calculators/estimating-registry";

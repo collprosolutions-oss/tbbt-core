@@ -8,6 +8,7 @@
  */
 import { computeConcreteSlabTakeoff } from "@/lib/material-takeoff/formulas/concrete-slab";
 import { computeFramedWallTakeoff } from "@/lib/material-takeoff/formulas/framed-wall";
+import { computeGenericCustomTakeoff } from "@/lib/material-takeoff/formulas/generic-custom";
 import { computeSheetCoveringTakeoff } from "@/lib/material-takeoff/formulas/sheet-covering";
 import {
   hasValidInternalUnitCost,
@@ -31,6 +32,7 @@ const TAKEOFF_FORMULAS: Record<
   "concrete-slab": computeConcreteSlabTakeoff,
   "sheet-covering": computeSheetCoveringTakeoff,
   "framed-wall": computeFramedWallTakeoff,
+  "generic-custom": computeGenericCustomTakeoff,
 };
 
 export function computeTakeoff(input: {
@@ -70,6 +72,7 @@ export function mergeTakeoffSnapshots(
       ...calculated,
       markupPercent: parseNonNegativeNumber(previous?.markupPercent) ?? 0,
       laborRate: parseNonNegativeNumber(previous?.laborRate) ?? 0,
+      laborAdjustment: parseNonNegativeNumber(previous?.laborAdjustment) ?? 0,
       removedItemIds: [],
     };
   }
@@ -96,6 +99,7 @@ export function mergeTakeoffSnapshots(
       : calculated.wastePercent,
     markupPercent: parseNonNegativeNumber(previous.markupPercent) ?? 0,
     laborRate: parseNonNegativeNumber(previous.laborRate) ?? 0,
+    laborAdjustment: parseNonNegativeNumber(previous.laborAdjustment) ?? 0,
     removedItemIds: [...removed],
     items: [...formulaItems, ...customItems, ...convertedOrphans],
   };
@@ -245,6 +249,7 @@ export function normalizeTakeoffSnapshot(raw: unknown): TakeoffSnapshot | null {
     wastePercent: parseNonNegativeNumber(parsed.wastePercent) ?? 0,
     markupPercent: parseNonNegativeNumber(parsed.markupPercent) ?? 0,
     laborRate: parseNonNegativeNumber(parsed.laborRate) ?? 0,
+    laborAdjustment: parseNonNegativeNumber(parsed.laborAdjustment) ?? 0,
     measurementSource: normalizeMeasurementSource(parsed.measurementSource),
     explanation: typeof parsed.explanation === "string" ? parsed.explanation : "",
     skippedMeasurements: Array.isArray(parsed.skippedMeasurements)

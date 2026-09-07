@@ -115,6 +115,12 @@ check(
     !page.includes("Apply markup") &&
     !page.includes("Apply recommended labor") &&
     !page.includes("laborRate") &&
+    !page.includes("laborAdjustment") &&
+    !page.includes("Labor production rate") &&
+    !page.includes("Labor Takeoff") &&
+    !page.includes("estimating-registry") &&
+    !page.includes("CONCRETE_PRODUCTION_LABOR_COVERS") &&
+    !page.includes("$36") &&
     !page.includes("Recommended labor") &&
     !page.includes("lengthInPart") &&
     !header.includes("panelRate"),

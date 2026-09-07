@@ -39,6 +39,7 @@ const {
   DECORATIVE_WALL_PANELING_TITLE,
   DEFAULT_DECORATIVE_WALL_PANELING_RATES,
   FOUNDER_DECORATIVE_WALL_PANELING_EXAMPLE,
+  resolveEstimatingWorkspace,
 } = await import("@/lib/estimate-calculators");
 const {
   applyDraftEstimateCalculator,
@@ -60,9 +61,11 @@ const {
   concreteVolumeCuFt,
   convertDraftMaterialTakeoff,
   convertLinearToFeet,
+  CONCRETE_PRODUCTION_LABOR_COVERS,
   DEFAULT_CONCRETE_60LB_BAG_LABOR_RATE,
   emptyConcreteSlabInputs,
   emptyFramedWallInputs,
+  emptyGenericCustomInputs,
   emptySheetCoveringInputs,
   extendedCustomerPrice,
   extendedMaterialCost,
@@ -84,7 +87,9 @@ const {
   saveDraftMaterialTakeoff,
   sheetCountRequired,
   splitFeetAndInches,
+  suggestedTakeoffType,
   suggestTakeoffInputs,
+  ensureDraftEstimateWorkLine,
 } = await import("@/lib/material-takeoff");
 const { estimateDocumentPlainText, loadEstimateDocumentForBusiness } = await import(
   "@/lib/estimate-document"
@@ -196,6 +201,8 @@ try {
       !customerPage.includes("markupPercent") &&
       !customerPage.includes("Apply recommended labor") &&
       !customerPage.includes("laborRate") &&
+      !customerPage.includes("laborAdjustment") &&
+      !customerPage.includes("Labor Takeoff") &&
       customerPage.includes("loadEstimateDocumentByToken") &&
       customerPage.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
       !printPage.includes("MaterialTakeoffForm") &&
@@ -227,10 +234,14 @@ try {
       takeoffForm.includes("Apply markup to selected items") &&
       takeoffForm.includes("applyMaterialMarkup") &&
       takeoffForm.includes("Apply recommended labor to estimate") &&
-      takeoffForm.includes("Recommended labor / service price") &&
-      takeoffForm.includes("Recommended estimate subtotal") &&
       takeoffForm.includes("applyEstimateTakeoffRecommendedLabor") &&
+      takeoffForm.includes("Labor Takeoff / Labor Calculator") &&
+      takeoffForm.includes("Material Takeoff / Material Calculator") &&
       takeoffForm.includes("ResetTakeoffAndGeneratedMaterialsForm") &&
+      takeoffForm.includes("Apply recommended labor to estimate") &&
+      takeoffForm.includes("Recommended Labor Total") &&
+      takeoffForm.includes("Recommended Estimate Total") &&
+      takeoffForm.includes("CONCRETE_PRODUCTION_LABOR_COVERS") &&
       recoveryForms.includes("Reset Takeoff & Generated Materials") &&
       recoveryForms.includes("resetEstimateTakeoffAndGeneratedMaterials") &&
       !takeoffForm.includes("Number(event.target.value) || 0") &&
@@ -241,6 +252,9 @@ try {
     ownerPage.includes("RestoreOriginalRequestPricingForm") &&
       ownerPage.includes("canSaveEstimateLineToServiceCatalog") &&
       ownerPage.includes("isOriginalEstimateWorkLine") &&
+      ownerPage.includes("resolveEstimatingWorkspace") &&
+      ownerPage.includes("draftWorkspace") &&
+      recoveryForms.includes("calculators themselves were never deleted") &&
       recoveryForms.includes("Restore Original Request Pricing") &&
       recoveryForms.includes("original customer-request labor/work line (never deleted)") &&
       recoveryForms.includes("Restore original request labor line") &&
@@ -306,6 +320,11 @@ try {
     "No hard-coded $36 or $52 takeoff rate in concrete formula",
     !readRepo("src/lib/material-takeoff/formulas/concrete-slab.ts").includes("36") &&
       !readRepo("src/lib/material-takeoff/formulas/concrete-slab.ts").includes("52") &&
+      readRepo("src/lib/estimate-calculators/estimating-registry.ts").includes(
+        "Permanent TBBT estimating calculator registry",
+      ) &&
+      !readRepo("prisma/schema.prisma").includes("EstimatingWorkspace") &&
+      !readRepo("prisma/schema.prisma").includes("calculatorRegistry") &&
       readRepo("src/lib/material-takeoff/labor-pricing.ts").includes(
         "DEFAULT_CONCRETE_60LB_BAG_LABOR_RATE",
       ),
@@ -719,7 +738,10 @@ try {
     founderLabor.available === true &&
       founderLabor.units === 22 &&
       founderLabor.rate === 36 &&
-      founderLabor.recommendedLabor === 792,
+      founderLabor.baseLabor === 792 &&
+      founderLabor.laborAdjustment === 0 &&
+      founderLabor.recommendedLabor === 792 &&
+      CONCRETE_PRODUCTION_LABOR_COVERS.length >= 6,
   );
   const founderPricedMaterials = {
     ...founderComputed,
@@ -741,6 +763,17 @@ try {
     founderSubtotal.recommendedLabor === 792 &&
       founderSubtotal.customerMaterialTotal === 294.32 &&
       founderSubtotal.recommendedSubtotal === 1086.32,
+  );
+  const founderAdjusted = recommendTakeoffLabor({
+    ...founderPricedMaterials,
+    laborAdjustment: 0,
+  });
+  check(
+    "Normal slab tasks covered by the production rate are not stacked on $792",
+    founderAdjusted.recommendedLabor === 792 &&
+      founderAdjusted.baseLabor === 792 &&
+      founderAdjusted.coveredByProductionRate.includes("finishing") &&
+      founderAdjusted.coveredByProductionRate.includes("cleanup"),
   );
   check(
     "40-lb bag takeoff does not use the 60-lb labor helper",
@@ -2298,6 +2331,324 @@ try {
         estimateId: laborEstimate.id,
       }),
     (error) => error instanceof EstimateLineError,
+  );
+
+  console.log("\nTEST — Permanent estimating calculators survive catalog/project deletion");
+  check(
+    "Concrete calculator definition is registered in application code, not the catalog",
+    resolveEstimatingWorkspace({ titles: ["Concrete Slab for a Shed"] })?.id ===
+      "concrete-slab" &&
+      resolveEstimatingWorkspace({ titles: ["Patio slab"] })?.labor.kind ===
+        "concrete-slab-labor" &&
+      resolveEstimatingWorkspace({ titles: ["Patio slab"] })?.material.takeoffType ===
+        "concrete-slab",
+  );
+  check(
+    "Decorative wall paneling remains a registered specialized calculator",
+    resolveEstimatingWorkspace({
+      calculatorId: "decorative-wall-paneling",
+      title: DECORATIVE_WALL_PANELING_TITLE,
+    })?.id === "decorative-wall-paneling",
+  );
+  check(
+    "Generic CUSTOM quote without a specialized formula still receives the generic workspace",
+    resolveEstimatingWorkspace({
+      title: "Odd repair, no named trade",
+      customQuote: true,
+    })?.id === "generic-custom" &&
+      suggestedTakeoffType({
+        title: "Odd repair, no named trade",
+        customQuote: true,
+      }) === "generic-custom",
+  );
+  const disposableCatalog = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Concrete Slab for a Shed",
+      pricingMode: "CUSTOM_QUOTE",
+      price: null,
+      description: "Public service row — not the calculator registry.",
+      category: "Concrete",
+      active: true,
+    },
+  });
+  const workspaceBeforeDelete = resolveEstimatingWorkspace({
+    titles: [disposableCatalog.name],
+  });
+  await prisma.serviceCatalogItem.update({
+    where: { id: disposableCatalog.id },
+    data: { active: false },
+  });
+  await prisma.serviceCatalogItem.delete({
+    where: { id: disposableCatalog.id },
+  });
+  const workspaceAfterDelete = resolveEstimatingWorkspace({
+    titles: ["Concrete Slab for a Shed"],
+  });
+  check(
+    "Concrete calculator definition survives deletion/deactivation of a public concrete catalog service",
+    workspaceBeforeDelete?.id === "concrete-slab" &&
+      workspaceAfterDelete?.id === "concrete-slab" &&
+      workspaceAfterDelete?.permanent === true,
+  );
+
+  const newConcreteEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const newConcreteLabor = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: newConcreteEstimate.id,
+      description: joinLineDescription(`Patio slab ${CUSTOM_QUOTE_DRAFT_MARKER}`),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(0),
+      total: new Prisma.Decimal(0),
+      type: "LABOR",
+    },
+  });
+  check(
+    "New concrete custom estimate still gets Concrete Labor + Material calculators",
+    resolveEstimatingWorkspace({
+      title: "Patio slab",
+      customQuote: true,
+    })?.id === "concrete-slab" &&
+      suggestedTakeoffType({ title: "Patio slab" }) === "concrete-slab",
+  );
+  const newConcreteTakeoff = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: newConcreteEstimate.id,
+    lineItemId: newConcreteLabor.id,
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFt: 10,
+      widthFt: 10,
+      thicknessIn: 4,
+      bagSizeLb: 60,
+    },
+    wastePercent: 10,
+  });
+  check(
+    "New concrete estimate can calculate materials without a catalog service",
+    newConcreteTakeoff.snapshot.items.some((item) => item.id === "concrete-bags") &&
+      recommendTakeoffLabor({
+        ...newConcreteTakeoff.snapshot,
+        laborRate: 36,
+      }).recommendedLabor > 0,
+  );
+
+  const resetKeep = await resetDraftTakeoffAndGeneratedMaterials(prisma, ownerA, {
+    estimateId: newConcreteEstimate.id,
+    lineItemId: newConcreteLabor.id,
+  });
+  const afterResetKeep = await prisma.lineItem.findFirst({
+    where: { id: newConcreteLabor.id, businessId: businessA.id },
+  });
+  check(
+    "Reset does not remove calculator availability",
+    afterResetKeep != null &&
+      afterResetKeep.type === "LABOR" &&
+      isOriginalEstimateWorkLine(afterResetKeep) &&
+      suggestedTakeoffType({
+        title: customQuoteDisplayDescription(afterResetKeep.description),
+      }) === "concrete-slab" &&
+      resetKeep.removedMaterialCount >= 0,
+  );
+  const restoreKeep = await restoreDraftOriginalRequestPricing(prisma, ownerA, {
+    estimateId: newConcreteEstimate.id,
+    lineItemId: newConcreteLabor.id,
+  });
+  check(
+    "Restore does not remove calculator availability",
+    restoreKeep.type === "LABOR" &&
+      suggestedTakeoffType({
+        title: customQuoteDisplayDescription(restoreKeep.description),
+      }) === "concrete-slab" &&
+      (await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+        estimateId: newConcreteEstimate.id,
+        lineItemId: restoreKeep.id,
+        takeoffType: "concrete-slab",
+        inputs: { lengthFt: 10, widthFt: 10, thicknessIn: 4, bagSizeLb: 60 },
+        wastePercent: 10,
+      })).snapshot.items.length > 0,
+  );
+
+  const pricedForConvert = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: newConcreteEstimate.id,
+    lineItemId: restoreKeep.id,
+    takeoffType: "concrete-slab",
+    inputs: { lengthFt: 10, widthFt: 10, thicknessIn: 4, bagSizeLb: 60 },
+    wastePercent: 10,
+  });
+  const convertSnapshot = {
+    ...pricedForConvert.snapshot,
+    items: pricedForConvert.snapshot.items.map((item) =>
+      item.id === "concrete-bags"
+        ? { ...item, selected: true, customerUnitPrice: 12 }
+        : { ...item, selected: false },
+    ),
+  };
+  const generatedOnce = await convertDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: newConcreteEstimate.id,
+    lineItemId: restoreKeep.id,
+    snapshot: convertSnapshot,
+  });
+  const generatedCount = (
+    await prisma.lineItem.findMany({
+      where: { estimateId: newConcreteEstimate.id, businessId: businessA.id },
+    })
+  ).filter(isTakeoffGeneratedMaterialLine).length;
+  await resetDraftTakeoffAndGeneratedMaterials(prisma, ownerA, {
+    estimateId: newConcreteEstimate.id,
+    lineItemId: restoreKeep.id,
+  });
+  const afterRemoveGenerated = (
+    await prisma.lineItem.findMany({
+      where: { estimateId: newConcreteEstimate.id, businessId: businessA.id },
+    })
+  ).filter(isTakeoffGeneratedMaterialLine).length;
+  const regenerated = await convertDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: newConcreteEstimate.id,
+    lineItemId: restoreKeep.id,
+    snapshot: convertSnapshot,
+  });
+  check(
+    "Generated MATERIAL lines can be removed and regenerated",
+    generatedOnce.created >= 1 &&
+      generatedCount >= 1 &&
+      afterRemoveGenerated === 0 &&
+      regenerated.created >= 1,
+  );
+
+  await prisma.lineItem.deleteMany({
+    where: { estimateId: requestEstimate.id, businessId: businessA.id },
+  });
+  const recoveredContext = await ensureDraftEstimateWorkLine(prisma, ownerA, {
+    id: requestEstimate.id,
+    businessId: businessA.id,
+    serviceRequestId: convertedRequest.id,
+    status: "DRAFT",
+  });
+  check(
+    "Zero-line linked concrete DRAFT recovers calculator/work context",
+    recoveredContext.type === "LABOR" &&
+      isOriginalEstimateWorkLine(recoveredContext) &&
+      resolveEstimatingWorkspace({
+        title: customQuoteDisplayDescription(recoveredContext.description),
+      })?.id === "concrete-slab",
+  );
+  const recoveredTakeoff = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: requestEstimate.id,
+    lineItemId: recoveredContext.id,
+    takeoffType: "concrete-slab",
+    inputs: {
+      lengthFtPart: 8,
+      lengthInPart: 0,
+      widthFtPart: 3,
+      widthInPart: 4,
+      thicknessIn: 4,
+      bagSizeLb: 60,
+    },
+    wastePercent: 10,
+  });
+  const recoveredLabor = recommendTakeoffLabor({
+    ...recoveredTakeoff.snapshot,
+    laborRate: 36,
+  });
+  await applyDraftTakeoffRecommendedLabor(prisma, ownerA, {
+    estimateId: requestEstimate.id,
+    lineItemId: recoveredContext.id,
+    snapshot: {
+      ...recoveredTakeoff.snapshot,
+      laborRate: 36,
+      items: recoveredTakeoff.snapshot.items.map((item) =>
+        item.id === "concrete-bags"
+          ? { ...item, selected: true, customerUnitPrice: 12 }
+          : item.id === "pickup-procurement"
+            ? { ...item, selected: true, customerUnitPrice: 95 }
+            : { ...item, selected: false },
+      ),
+    },
+  });
+  const recoveredAgain = await ensureDraftEstimateWorkLine(prisma, ownerA, {
+    id: requestEstimate.id,
+    businessId: businessA.id,
+    serviceRequestId: convertedRequest.id,
+    status: "DRAFT",
+  });
+  check(
+    "Recovered concrete DRAFT can takeoff, apply labor, and does not duplicate LABOR",
+    recoveredLabor.recommendedLabor === 792 &&
+      recoveredAgain.id === recoveredContext.id &&
+      (await prisma.lineItem.count({
+        where: {
+          estimateId: requestEstimate.id,
+          businessId: businessA.id,
+          type: "LABOR",
+        },
+      })) === 1,
+  );
+
+  const genericEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const genericLine = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: genericEstimate.id,
+      description: joinLineDescription(`Odd repair ${CUSTOM_QUOTE_DRAFT_MARKER}`),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(0),
+      total: new Prisma.Decimal(0),
+      type: "LABOR",
+    },
+  });
+  const genericCalc = await recalculateDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: genericEstimate.id,
+    lineItemId: genericLine.id,
+    takeoffType: "generic-custom",
+    inputs: { laborQuantity: 2, laborUnit: "hours" },
+  });
+  const genericLabor = recommendTakeoffLabor({
+    ...genericCalc.snapshot,
+    laborRate: 50,
+  });
+  check(
+    "Generic CUSTOM workspace recommends labor from owner quantity × rate with no invented trade formula",
+    genericCalc.snapshot.takeoffType === "generic-custom" &&
+      genericCalc.snapshot.items.length === 0 &&
+      genericLabor.available === true &&
+      genericLabor.recommendedLabor === 100 &&
+      emptyGenericCustomInputs(genericCalc.snapshot.inputs).laborQuantity === 2,
+  );
+  await expectError(
+    "SENT/APPROVED estimates remain protected from calculator recovery",
+    () =>
+      ensureDraftEstimateWorkLine(prisma, ownerA, {
+        id: laborEstimate.id,
+        businessId: businessA.id,
+        serviceRequestId: null,
+        status: "SENT",
+      }),
+    (error) => error instanceof EstimateLineError,
+  );
+  await expectError(
+    "Tenant B cannot recover tenant A estimating workspace",
+    () =>
+      ensureDraftEstimateWorkLine(prisma, ownerB, {
+        id: genericEstimate.id,
+        businessId: businessA.id,
+        serviceRequestId: null,
+        status: "DRAFT",
+      }),
+    (error) =>
+      error instanceof Error && error.message.includes("authorized business"),
   );
 
   console.log("\nTEST — Sheet covering, framed wall, tenant isolation");

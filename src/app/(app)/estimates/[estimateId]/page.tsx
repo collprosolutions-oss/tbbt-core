@@ -47,10 +47,12 @@ import { prisma } from "@/lib/prisma";
 import {
   CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
   DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+  descriptionLooksLikeCustomQuote,
   findCatalogCalculatorDefinition,
   formCalculatorInputs,
   resolveCalculatorId,
   resolveCalculatorRatesForForm,
+  resolveEstimatingWorkspace,
   templateForCalculator,
 } from "@/lib/estimate-calculators";
 import {
@@ -211,6 +213,50 @@ export default async function EstimateBuilderPage({
   const needsCustomQuotePrices = estimate.lineItems.some(isUnpricedCustomQuoteDraftLine);
   const fromCustomerRequest = Boolean(estimate.serviceRequestId);
   const hasOriginalWorkLine = estimate.lineItems.some(isOriginalEstimateWorkLine);
+  const originalWorkLine = estimate.lineItems.find(isOriginalEstimateWorkLine) ?? null;
+  const requestWorkspaceTitles = [
+    estimate.serviceRequest?.summary,
+    estimate.serviceRequest?.serviceCatalogItem?.name,
+    ...(estimate.serviceRequest?.items ?? []).flatMap((item) => [
+      item.customDescription,
+      item.serviceCatalogItem?.name,
+    ]),
+    originalWorkLine
+      ? customQuoteDisplayDescription(originalWorkLine.description)
+      : null,
+  ];
+  const draftWorkspace = isDraft
+    ? resolveEstimatingWorkspace({
+        title:
+          (originalWorkLine
+            ? customQuoteDisplayDescription(originalWorkLine.description)
+            : null) ??
+          estimate.serviceRequest?.summary ??
+          estimate.serviceRequest?.serviceCatalogItem?.name,
+        titles: requestWorkspaceTitles,
+        calculatorId: originalWorkLine
+          ? resolveCalculatorId({
+              title: customQuoteDisplayDescription(originalWorkLine.description),
+              snapshot: lineCalculatorSnapshot(originalWorkLine.description),
+            })
+          : resolveCalculatorId({
+              title: estimate.serviceRequest?.summary,
+            }),
+        takeoffType: originalWorkLine
+          ? lineMaterialTakeoff(originalWorkLine.description)?.takeoffType
+          : null,
+        customQuote:
+          fromCustomerRequest ||
+          estimate.lineItems.some(
+            (item) =>
+              isUnpricedCustomQuoteDraftLine(item) ||
+              descriptionLooksLikeCustomQuote(item.description),
+          ),
+        alwaysProvideWorkspace:
+          fromCustomerRequest ||
+          estimate.lineItems.some(isUnpricedCustomQuoteDraftLine),
+      })
+    : null;
   const intakePhotos = ownerVisibleRequestPhotos({
     businessId: estimate.businessId,
     serviceRequestId: estimate.serviceRequestId,
@@ -380,18 +426,47 @@ export default async function EstimateBuilderPage({
           {isDraft && fromCustomerRequest && !hasOriginalWorkLine ? (
             <div className="mb-4 space-y-2 rounded-lg border border-amber-500/60 bg-amber-50 p-3 dark:bg-amber-950/20">
               <p className="text-sm font-medium">
-                The original customer-request labor/work line is missing, so
-                Material Takeoff is not available.
+                The original customer-request labor/work line is missing.
+                Concrete/custom calculators are still available — they are not
+                stored on that disposable line.
               </p>
               <p className="text-xs text-muted-foreground">
-                Restore it from the linked request. This does not create a
-                duplicate, does not change photos or intake, and does not
-                recreate takeoff-generated material lines.
+                Restore reconstructs the original unpriced labor/work line from
+                the linked request so takeoff results have a place to save. This
+                does not create a duplicate, does not change photos or intake,
+                and does not recreate takeoff-generated material lines.
               </p>
               <RestoreOriginalRequestPricingForm
                 estimateId={estimate.id}
                 missingOriginalLine
               />
+              {draftWorkspace ? (
+                <MaterialTakeoffForm
+                  estimateId={estimate.id}
+                  snapshot={null}
+                  suggestedType={draftWorkspace.material.takeoffType}
+                  suggestedInputs={suggestTakeoffInputs({
+                    takeoffType: draftWorkspace.material.takeoffType,
+                    calculatorSnapshot: null,
+                    intakeMeasurement: pickIntakeMeasurementForLine(
+                      storedIntakeMeasurements,
+                      estimate.serviceRequest?.items[0]?.serviceCatalogItem?.id ??
+                        null,
+                    ),
+                  }).inputs}
+                  measurementSource={
+                    suggestTakeoffInputs({
+                      takeoffType: draftWorkspace.material.takeoffType,
+                      intakeMeasurement: pickIntakeMeasurementForLine(
+                        storedIntakeMeasurements,
+                        estimate.serviceRequest?.items[0]?.serviceCatalogItem?.id ??
+                          null,
+                      ),
+                    }).measurementSource
+                  }
+                  workspaceTitle={draftWorkspace.title}
+                />
+              ) : null}
             </div>
           ) : null}
           {estimate.lineItems.length === 0 ? (
@@ -437,13 +512,26 @@ export default async function EstimateBuilderPage({
                     : null;
                 const takeoffSource = lineMaterialTakeoffSource(item.description);
                 const takeoffSnapshot = lineMaterialTakeoff(item.description);
+                const lineWorkspace = resolveEstimatingWorkspace({
+                  title: requestName,
+                  titles: [requestName, ...requestWorkspaceTitles],
+                  calculatorId,
+                  takeoffType: takeoffSnapshot?.takeoffType,
+                  customQuote:
+                    priceRequired || descriptionLooksLikeCustomQuote(item.description),
+                  alwaysProvideWorkspace:
+                    isOriginalEstimateWorkLine(item) && Boolean(draftWorkspace),
+                });
                 const takeoffType =
                   takeoffSnapshot?.takeoffType ??
+                  lineWorkspace?.material.takeoffType ??
+                  draftWorkspace?.material.takeoffType ??
                   suggestedTakeoffType({
                     calculatorId,
                     title: requestName,
+                    titles: requestWorkspaceTitles,
                   }) ??
-                  "concrete-slab";
+                  "generic-custom";
                 const takeoffSuggestion = suggestTakeoffInputs({
                   takeoffType,
                   calculatorSnapshot,
@@ -452,6 +540,12 @@ export default async function EstimateBuilderPage({
                     item.serviceCatalogItemId,
                   ),
                 });
+                const showEstimatingWorkspace =
+                  isDraft &&
+                  isOriginalEstimateWorkLine(item) &&
+                  (takeoffSnapshot != null ||
+                    lineWorkspace != null ||
+                    draftWorkspace != null);
                 return (
                   <li
                     key={item.id}
@@ -514,7 +608,7 @@ export default async function EstimateBuilderPage({
                         rates={formRates}
                       />
                     ) : null}
-                    {isDraft && !takeoffSource ? (
+                    {showEstimatingWorkspace ? (
                       <MaterialTakeoffForm
                         key={item.description}
                         estimateId={estimate.id}
@@ -530,6 +624,9 @@ export default async function EstimateBuilderPage({
                           takeoffSnapshot?.skippedMeasurements.length
                             ? takeoffSnapshot.skippedMeasurements
                             : takeoffSuggestion.skippedMeasurements
+                        }
+                        workspaceTitle={
+                          lineWorkspace?.title ?? draftWorkspace?.title ?? null
                         }
                       />
                     ) : null}

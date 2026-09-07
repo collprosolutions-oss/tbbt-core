@@ -56,7 +56,7 @@ export async function saveDraftMaterialTakeoff(
   access: BusinessAccess,
   input: {
     estimateId: string;
-    lineItemId: string;
+    lineItemId?: string | null;
     snapshot: TakeoffSnapshot;
   },
 ) {
@@ -80,7 +80,7 @@ export async function recalculateDraftMaterialTakeoff(
   access: BusinessAccess,
   input: {
     estimateId: string;
-    lineItemId: string;
+    lineItemId?: string | null;
     takeoffType: TakeoffTypeId;
     inputs?: Record<string, unknown> | null;
     wastePercent?: number;
@@ -122,7 +122,7 @@ export async function convertDraftMaterialTakeoff(
   access: BusinessAccess,
   input: {
     estimateId: string;
-    lineItemId: string;
+    lineItemId?: string | null;
     snapshot?: TakeoffSnapshot | null;
     itemIds?: string[] | null;
   },
@@ -248,7 +248,7 @@ export async function applyDraftTakeoffRecommendedLabor(
   access: BusinessAccess,
   input: {
     estimateId: string;
-    lineItemId: string;
+    lineItemId?: string | null;
     snapshot?: TakeoffSnapshot | null;
   },
 ) {
@@ -276,9 +276,10 @@ export async function applyDraftTakeoffRecommendedLabor(
         "This takeoff does not have a recommended labor price yet.",
     );
   }
-  const stored: TakeoffSnapshot = {
+    const stored: TakeoffSnapshot = {
     ...snapshot,
     laborRate: recommendation.rate,
+    laborAdjustment: recommendation.laborAdjustment,
   };
   const unitPrice = new Prisma.Decimal(recommendation.recommendedLabor.toFixed(2));
   const total = line.quantity.mul(unitPrice);
@@ -322,7 +323,7 @@ export async function resetDraftTakeoffAndGeneratedMaterials(
   access: BusinessAccess,
   input: {
     estimateId: string;
-    lineItemId: string;
+    lineItemId?: string | null;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
@@ -595,32 +596,119 @@ async function loadDraftParentLine(
   db: Db,
   access: BusinessAccess,
   estimateId: string,
-  lineItemId: string,
+  lineItemId?: string | null,
 ) {
   const estimate = access.assertOwned(
     await db.estimate.findFirst({
       where: { id: estimateId, ...access.scope },
-      select: { id: true, businessId: true, status: true },
+      select: {
+        id: true,
+        businessId: true,
+        status: true,
+        serviceRequestId: true,
+      },
     }),
   );
   if (estimate.status !== "DRAFT") {
     throw new EstimateLineError("Only a draft estimate can be changed.");
   }
-  const line = access.assertOwned(
-    await db.lineItem.findFirst({
-      where: {
-        id: lineItemId,
-        estimateId: estimate.id,
-        ...access.scope,
+
+  const requestedId = lineItemId?.trim() || null;
+  if (requestedId) {
+    const line = access.assertOwned(
+      await db.lineItem.findFirst({
+        where: {
+          id: requestedId,
+          estimateId: estimate.id,
+          ...access.scope,
+        },
+      }),
+    );
+    if (lineMaterialTakeoffSource(line.description)) {
+      throw new EstimateLineError(
+        "Converted material lines keep customer pricing only. Edit takeoff on the parent work line.",
+      );
+    }
+    return { estimate, line };
+  }
+
+  const line = await ensureDraftEstimateWorkLine(db, access, estimate);
+  return { estimate, line };
+}
+
+/**
+ * Reconstruct or create the original LABOR/work line so calculators have
+ * a place to store project-specific state. Never deletes calculator
+ * definitions. Never creates a duplicate LABOR line.
+ */
+export async function ensureDraftEstimateWorkLine(
+  db: Db,
+  access: BusinessAccess,
+  estimate: { id: string; businessId: string; serviceRequestId: string | null; status?: string },
+) {
+  const owned = access.assertOwned(
+    await db.estimate.findFirst({
+      where: { id: estimate.id, ...access.scope },
+      select: {
+        id: true,
+        businessId: true,
+        status: true,
+        serviceRequestId: true,
       },
     }),
   );
-  if (lineMaterialTakeoffSource(line.description)) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  if (owned.status !== "DRAFT") {
+    throw new EstimateLineError("Only a draft estimate can be changed.");
+  }
+  const existing = await db.lineItem.findMany({
+    where: { estimateId: owned.id, businessId: access.businessId },
+    orderBy: { createdAt: "asc" },
+  });
+  const original = existing.find(isOriginalEstimateWorkLine);
+  if (original) return original;
+
+  await db.$transaction(async (tx) => {
+    if (owned.serviceRequestId) {
+      await reconstructOriginalRequestWorkLines(tx, access, owned);
+    } else {
+      await createGenericCustomWorkLine(tx, access, owned, existing);
+    }
+    await persistDraftEstimateTotal(tx, owned.id, access.businessId);
+  });
+
+  const after = await db.lineItem.findMany({
+    where: { estimateId: owned.id, businessId: access.businessId },
+    orderBy: { createdAt: "asc" },
+  });
+  const restored = after.find(isOriginalEstimateWorkLine);
+  if (!restored) {
     throw new EstimateLineError(
-      "Converted material lines keep customer pricing only. Edit takeoff on the parent work line.",
+      "Could not restore a labor/work line for the estimating workspace.",
     );
   }
-  return { estimate, line };
+  return restored;
+}
+
+async function createGenericCustomWorkLine(
+  tx: Prisma.TransactionClient,
+  access: BusinessAccess,
+  estimate: { id: string; businessId: string },
+  existing: Array<{ type: string; description: string }>,
+) {
+  if (existing.some(isOriginalEstimateWorkLine)) return 0;
+  await tx.lineItem.create({
+    data: {
+      businessId: access.businessId,
+      estimateId: estimate.id,
+      description: joinLineDescription(`Custom work ${CUSTOM_QUOTE_DRAFT_MARKER}`),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(0),
+      total: new Prisma.Decimal(0),
+      type: "LABOR",
+    },
+  });
+  return 1;
 }
 
 async function persistTakeoffOnLine(

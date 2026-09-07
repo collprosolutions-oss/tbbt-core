@@ -241,15 +241,24 @@ export function sourceItemsFromServiceRequest(request: {
   summary?: string | null;
   description?: string | null;
 }): RequestDraftSourceItem[] {
-  if (request.items.length > 0) return request.items;
-  if (request.serviceCatalogItem) {
-    return [{ quantity: 1, serviceCatalogItem: request.serviceCatalogItem }];
-  }
-  const fallback =
+  const fallbackTitle =
     request.summary?.trim() ||
     splitLineDescription(request.description ?? "").title.trim() ||
     "Custom work";
-  return [{ quantity: 1, customDescription: fallback }];
+  if (request.items.length > 0) {
+    return request.items.map((item) => {
+      if (item.serviceCatalogItem) return item;
+      return {
+        ...item,
+        customDescription:
+          item.customDescription?.trim() || fallbackTitle,
+      };
+    });
+  }
+  if (request.serviceCatalogItem) {
+    return [{ quantity: 1, serviceCatalogItem: request.serviceCatalogItem }];
+  }
+  return [{ quantity: 1, customDescription: fallbackTitle }];
 }
 
 export function requestDraftItemIsAlreadyOnEstimate(

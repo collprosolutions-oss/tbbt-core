@@ -5,6 +5,9 @@
  * the unit or axis is incompatible with the selected formula.
  */
 import {
+  resolveEstimatingWorkspace,
+} from "@/lib/estimate-calculators/estimating-registry";
+import {
   CUSTOMER_REPORTED_MEASUREMENT_LABEL,
   type StoredIntakeMeasurement,
   measurementSourceLabel,
@@ -36,24 +39,18 @@ export type TakeoffInputSuggestion = {
 export function suggestedTakeoffType(input: {
   calculatorId?: string | null;
   title?: string | null;
+  titles?: Array<string | null | undefined>;
+  customQuote?: boolean;
+  takeoffType?: string | null;
 }): TakeoffTypeId | null {
-  const calculatorId = input.calculatorId ?? "";
-  const title = (input.title ?? "").toLowerCase();
-  if (
-    calculatorId === "decorative-wall-paneling" ||
-    title.includes("panel") ||
-    title.includes("plywood") ||
-    title.includes("sheet")
-  ) {
-    return "sheet-covering";
-  }
-  if (title.includes("concrete") || title.includes("slab")) {
-    return "concrete-slab";
-  }
-  if (title.includes("fram") || title.includes("stud wall")) {
-    return "framed-wall";
-  }
-  return null;
+  const workspace = resolveEstimatingWorkspace({
+    calculatorId: input.calculatorId,
+    title: input.title,
+    titles: input.titles,
+    customQuote: input.customQuote,
+    takeoffType: input.takeoffType,
+  });
+  return workspace?.material.takeoffType ?? null;
 }
 
 export function suggestTakeoffInputs(input: {
