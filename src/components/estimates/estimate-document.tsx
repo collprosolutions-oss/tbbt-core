@@ -1,7 +1,14 @@
+import { CustomerEstimateLineSections } from "@/components/estimates/customer-estimate-line-sections";
+import { EstimateDocumentTerms } from "@/components/estimates/customer-policy-display";
 import {
   ESTIMATE_DOCUMENT_LOGO_HEIGHT_PX,
+  ESTIMATE_TOTAL_CUSTOMER_LABEL,
   type EstimateDocumentView,
 } from "@/lib/estimate-document";
+import {
+  MATERIAL_DEPOSIT_CUSTOMER_LABEL,
+  REMAINING_BALANCE_CUSTOMER_LABEL,
+} from "@/lib/material-deposit";
 
 export function EstimateDocument({
   document: estimate,
@@ -71,64 +78,29 @@ export function EstimateDocument({
         ) : null}
       </section>
 
-      <section className="mt-8">
-        <h2 className="text-xs font-semibold tracking-wider text-neutral-500">
-          SERVICES
-        </h2>
-        <table className="mt-3 w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-neutral-300 text-left text-xs tracking-wider text-neutral-500">
-              <th className="py-2 pr-3 font-semibold">Description</th>
-              <th className="py-2 px-3 text-right font-semibold">Qty</th>
-              <th className="py-2 px-3 text-right font-semibold">Rate</th>
-              <th className="py-2 pl-3 text-right font-semibold">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {estimate.lineItems.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="py-4 text-neutral-500">
-                  No line items.
-                </td>
-              </tr>
-            ) : (
-              estimate.lineItems.map((line, index) => (
-                <tr
-                  key={`${line.description}-${index}`}
-                  className="border-b border-neutral-100"
-                >
-                  <td className="py-2.5 pr-3 align-top">
-                    <div>{line.description}</div>
-                    {line.includedWork ? (
-                      <div className="mt-1 whitespace-pre-line text-xs text-neutral-600">
-                        <div className="font-semibold tracking-wide">
-                          Scope / Included Work
-                        </div>
-                        {line.includedWork}
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="py-2.5 px-3 text-right align-top tabular-nums">
-                    {line.quantityLabel}
-                  </td>
-                  <td className="py-2.5 px-3 text-right align-top tabular-nums">
-                    {line.unitPriceLabel}
-                  </td>
-                  <td className="py-2.5 pl-3 text-right align-top tabular-nums">
-                    {line.amountLabel}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </section>
+      <CustomerEstimateLineSections
+        className="mt-8"
+        appearance="print"
+        laborLines={estimate.laborLines}
+        materialLines={estimate.materialLines}
+        otherLines={estimate.otherLines}
+      />
 
       <section className="mt-6 ml-auto w-full max-w-xs space-y-2 text-sm">
         <div className="flex justify-between gap-6">
-          <span className="text-neutral-600">Subtotal</span>
-          <span className="tabular-nums">{estimate.subtotalLabel}</span>
+          <span className="text-neutral-600">Labor</span>
+          <span className="tabular-nums">{estimate.laborTotalLabel}</span>
         </div>
+        <div className="flex justify-between gap-6">
+          <span className="text-neutral-600">Materials</span>
+          <span className="tabular-nums">{estimate.materialTotalLabel}</span>
+        </div>
+        {estimate.otherTotalLabel ? (
+          <div className="flex justify-between gap-6">
+            <span className="text-neutral-600">Other</span>
+            <span className="tabular-nums">{estimate.otherTotalLabel}</span>
+          </div>
+        ) : null}
         {estimate.laborMinimumLabel && estimate.laborMinimumAmountLabel ? (
           <div className="flex justify-between gap-6">
             <span className="text-neutral-600">{estimate.laborMinimumLabel}</span>
@@ -136,27 +108,35 @@ export function EstimateDocument({
           </div>
         ) : null}
         <div className="flex justify-between gap-6 border-t border-neutral-200 pt-2 font-semibold">
-          <span>Total</span>
+          <span>{ESTIMATE_TOTAL_CUSTOMER_LABEL}</span>
           <span className="tabular-nums">{estimate.totalLabel}</span>
         </div>
+        {estimate.materialDepositLabel && estimate.remainingBalanceLabel ? (
+          <>
+            <div className="flex justify-between gap-6 pt-2">
+              <span className="text-neutral-600">{MATERIAL_DEPOSIT_CUSTOMER_LABEL}</span>
+              <span className="tabular-nums">{estimate.materialDepositLabel}</span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-neutral-600">{REMAINING_BALANCE_CUSTOMER_LABEL}</span>
+              <span className="tabular-nums">{estimate.remainingBalanceLabel}</span>
+            </div>
+            {estimate.materialDepositNote ? (
+              <p className="pt-1 text-xs font-normal text-neutral-500">
+                {estimate.materialDepositNote}
+              </p>
+            ) : null}
+          </>
+        ) : null}
       </section>
 
-      {estimate.policies.length > 0 ? (
-        <section className="mt-10 border-t border-neutral-200 pt-4 text-sm text-neutral-700">
-          <h2 className="text-xs font-semibold tracking-wider text-neutral-500">
-            TERMS
-          </h2>
-          <div className="mt-3 space-y-4">
-            {estimate.policies.map((policy) => (
-              <div key={policy.title}>
-                <p className="font-medium text-neutral-800">{policy.title}</p>
-                <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-neutral-600">
-                  {policy.body}
-                </p>
-              </div>
-            ))}
-          </div>
-        </section>
+      {estimate.projectConditions || estimate.terms.length > 0 ? (
+        <EstimateDocumentTerms
+          className="mt-6 border-t border-neutral-200 pt-4"
+          appearance="print"
+          projectConditions={estimate.projectConditions}
+          terms={estimate.terms}
+        />
       ) : null}
 
       <footer className="mt-8 border-t border-neutral-200 pt-4 text-xs text-neutral-500">
@@ -165,3 +145,4 @@ export function EstimateDocument({
     </article>
   );
 }
+

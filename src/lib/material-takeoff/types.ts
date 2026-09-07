@@ -12,6 +12,7 @@ export const TAKEOFF_TYPE_IDS = [
   "concrete-slab",
   "sheet-covering",
   "framed-wall",
+  "generic-custom",
 ] as const;
 
 export type TakeoffTypeId = (typeof TAKEOFF_TYPE_IDS)[number];
@@ -27,6 +28,7 @@ export const TAKEOFF_TYPE_LABELS: Record<TakeoffTypeId, string> = {
   "concrete-slab": "Concrete slab",
   "sheet-covering": "Sheet / wall covering",
   "framed-wall": "Simple framed wall",
+  "generic-custom": "Custom labor & materials",
 };
 
 export type TakeoffMeasurementSourceKind = "intake" | "calculator" | "manual";
@@ -57,6 +59,16 @@ export type TakeoffSnapshot = {
   takeoffType: TakeoffTypeId;
   inputs: Record<string, unknown>;
   wastePercent: number;
+  /** Owner helper only. Applied when the owner clicks Apply markup; never auto-run on recalc. */
+  markupPercent: number;
+  /** Owner labor-helper rate. Concrete slab: $ per 60-lb bag. 0 means use the type default. */
+  laborRate: number;
+  /**
+   * Extra labor outside the production-rate assumption (unusual excavation,
+   * demolition, difficult access, specialty finish, etc.). Not auto-stacked
+   * from normal slab tasks already covered by the production rate.
+   */
+  laborAdjustment: number;
   measurementSource: TakeoffMeasurementSource | null;
   explanation: string;
   skippedMeasurements: string[];
@@ -86,6 +98,22 @@ export function extendedMaterialCost(item: TakeoffItem) {
   const unitCost = item.unitCost;
   if (unitCost == null || !Number.isFinite(unitCost)) return 0;
   return roundMoney(qty * unitCost);
+}
+
+export function hasValidInternalUnitCost(item: TakeoffItem) {
+  const cost = item.unitCost;
+  return cost != null && Number.isFinite(cost) && cost > 0;
+}
+
+export function markedUpCustomerUnitPrice(
+  unitCost: number,
+  markupPercent: number,
+): number | null {
+  if (!Number.isFinite(unitCost) || !(unitCost > 0)) return null;
+  if (!Number.isFinite(markupPercent) || markupPercent < 0) return null;
+  const price = roundMoney(unitCost * (1 + markupPercent / 100));
+  if (!(price > 0)) return null;
+  return price;
 }
 
 export function hasValidCustomerUnitPrice(item: TakeoffItem) {

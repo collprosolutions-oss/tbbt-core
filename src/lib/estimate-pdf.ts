@@ -8,8 +8,21 @@ import path from "node:path";
 import PDFDocument from "pdfkit";
 import {
   ESTIMATE_DOCUMENT_LOGO_HEIGHT_PX,
+  ESTIMATE_LABOR_SECTION_TITLE,
+  ESTIMATE_MATERIALS_SECTION_TITLE,
+  ESTIMATE_OTHER_SECTION_TITLE,
+  ESTIMATE_TOTAL_CUSTOMER_LABEL,
+  type EstimateDocumentLine,
   type EstimateDocumentView,
 } from "@/lib/estimate-document";
+import {
+  PROJECT_CONDITIONS_TITLE,
+  TERMS_AND_CONDITIONS_TITLE,
+} from "@/lib/estimate-terms/types";
+import {
+  MATERIAL_DEPOSIT_CUSTOMER_LABEL,
+  REMAINING_BALANCE_CUSTOMER_LABEL,
+} from "@/lib/material-deposit";
 
 function resolvePublicAsset(src: string | null): string | null {
   if (!src || src.includes("..")) {
@@ -107,27 +120,65 @@ export function renderEstimatePdf(
     }
 
     y += 16;
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
-    doc.text("SERVICES", left, y);
-    y += 16;
-    const colQty = right - 220;
+    const colQtyPriced = right - 220;
     const colRate = right - 140;
     const colAmt = right;
-    doc.font("Helvetica-Bold").fontSize(8).fillColor("#666666");
-    doc.text("DESCRIPTION", left, y);
-    doc.text("QTY", colQty, y, { width: 70, align: "right" });
-    doc.text("RATE", colRate, y, { width: 70, align: "right" });
-    doc.text("AMOUNT", colAmt - 80, y, { width: 80, align: "right" });
-    y += 12;
-    doc.moveTo(left, y).lineTo(right, y).strokeColor("#cccccc").stroke();
-    y += 10;
+    const colQtyOnly = right - 80;
 
-    if (docView.lineItems.length === 0) {
-      doc.font("Helvetica").fontSize(10).fillColor("#666666");
-      doc.text("No line items.", left, y);
-      y += 18;
-    } else {
-      for (const line of docView.lineItems) {
+    const drawSection = (
+      title: string,
+      lines: EstimateDocumentLine[],
+      quantityOnly = false,
+    ) => {
+      if (lines.length === 0) return;
+      const colQty = quantityOnly ? colQtyOnly : colQtyPriced;
+      ensureSpace(40);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
+      doc.text(title, left, y);
+      y += quantityOnly ? 10 : 16;
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#666666");
+      if (quantityOnly) {
+        doc.text("DESCRIPTION", left, y);
+        doc.text("QTY", colQty, y, { width: 70, align: "right" });
+        y += 11;
+      } else {
+        doc.text("DESCRIPTION", left, y);
+        doc.text("QTY", colQty, y, { width: 70, align: "right" });
+        doc.text("RATE", colRate, y, { width: 70, align: "right" });
+        doc.text("AMOUNT", colAmt - 80, y, { width: 80, align: "right" });
+        y += 14;
+      }
+      for (const line of lines) {
+        if (quantityOnly) {
+          // Compact customer materials: one tight description + qty line.
+          ensureSpace(16);
+          const descWidth = colQty - left - 12;
+          doc.font("Helvetica").fontSize(10).fillColor("#111111");
+          const descHeight = doc.heightOfString(line.description, {
+            width: descWidth,
+          });
+          const firstLineWidth = Math.min(
+            descWidth,
+            doc.widthOfString(line.description.split("\n")[0] ?? ""),
+          );
+          doc.text(line.description, left, y, { width: descWidth });
+          const leaderStart = left + firstLineWidth + 4;
+          const leaderEnd = colQty - 4;
+          if (leaderEnd > leaderStart + 8) {
+            doc.save();
+            doc
+              .strokeColor("#bbbbbb")
+              .lineWidth(0.6)
+              .dash(1, { space: 2 })
+              .moveTo(leaderStart, y + 8)
+              .lineTo(leaderEnd, y + 8)
+              .stroke();
+            doc.restore();
+          }
+          doc.text(line.quantityLabel, colQty, y, { width: 70, align: "right" });
+          y += Math.max(12, descHeight + 1);
+          continue;
+        }
         ensureSpace(48);
         const descWidth = colQty - left - 12;
         const descHeight = doc.heightOfString(line.description, {
@@ -155,44 +206,115 @@ export function renderEstimatePdf(
         }
         y += Math.max(16, descHeight + scopeHeight) + 6;
       }
+    };
+
+    if (
+      docView.laborLines.length === 0 &&
+      docView.materialLines.length === 0 &&
+      docView.otherLines.length === 0
+    ) {
+      doc.font("Helvetica").fontSize(10).fillColor("#666666");
+      doc.text("No line items.", left, y);
+      y += 18;
+    } else {
+      drawSection(ESTIMATE_LABOR_SECTION_TITLE, docView.laborLines);
+      if (docView.laborLines.length > 0 && docView.materialLines.length > 0) {
+        y += 6;
+        ensureSpace(16);
+        doc.moveTo(left, y).lineTo(right, y).strokeColor("#555555").lineWidth(1.5).stroke();
+        doc.lineWidth(1);
+        y += 14;
+      }
+      drawSection(ESTIMATE_MATERIALS_SECTION_TITLE, docView.materialLines, true);
+      if (
+        (docView.laborLines.length > 0 || docView.materialLines.length > 0) &&
+        docView.otherLines.length > 0
+      ) {
+        y += 6;
+        ensureSpace(16);
+        doc.moveTo(left, y).lineTo(right, y).strokeColor("#555555").lineWidth(1.5).stroke();
+        doc.lineWidth(1);
+        y += 14;
+      }
+      drawSection(ESTIMATE_OTHER_SECTION_TITLE, docView.otherLines);
     }
 
     y += 8;
-    ensureSpace(80);
+    ensureSpace(120);
     doc.moveTo(left, y).lineTo(right, y).strokeColor("#cccccc").stroke();
     y += 16;
 
-    const totalsLeft = right - 220;
+    const totalsLeft = right - 280;
     const row = (label: string, value: string, bold = false) => {
+      ensureSpace(20);
+      const labelHeight = doc.heightOfString(label, { width: 190 });
       doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(10).fillColor("#111111");
-      doc.text(label, totalsLeft, y, { width: 100 });
-      doc.text(value, totalsLeft + 100, y, { width: 120, align: "right" });
-      y += 16;
+      doc.text(label, totalsLeft, y, { width: 190 });
+      doc.text(value, right - 80, y, { width: 80, align: "right" });
+      y += Math.max(16, labelHeight + 2);
     };
 
-    row("Subtotal", docView.subtotalLabel);
+    row("Labor", docView.laborTotalLabel);
+    row("Materials", docView.materialTotalLabel);
+    if (docView.otherTotalLabel) {
+      row("Other", docView.otherTotalLabel);
+    }
     if (docView.laborMinimumLabel && docView.laborMinimumAmountLabel) {
       row(docView.laborMinimumLabel, docView.laborMinimumAmountLabel);
     }
-    row("Total", docView.totalLabel, true);
-
-    if (docView.policies.length > 0) {
-      y += 20;
-      ensureSpace(40);
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
-      doc.text("TERMS", left, y);
-      y += 14;
-      for (const policy of docView.policies) {
-        const bodyHeight = doc.heightOfString(policy.body, { width: right - left });
-        ensureSpace(24 + bodyHeight);
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#111111");
-        doc.text(policy.title, left, y, { width: right - left });
-        y += 14;
-        doc.font("Helvetica").fontSize(8).fillColor("#333333");
-        doc.text(policy.body, left, y, { width: right - left });
-        y += bodyHeight + 12;
+    row(ESTIMATE_TOTAL_CUSTOMER_LABEL, docView.totalLabel, true);
+    if (docView.materialDepositLabel && docView.remainingBalanceLabel) {
+      y += 4;
+      row(MATERIAL_DEPOSIT_CUSTOMER_LABEL, docView.materialDepositLabel);
+      row(REMAINING_BALANCE_CUSTOMER_LABEL, docView.remainingBalanceLabel);
+      if (docView.materialDepositNote) {
+        y += 4;
+        ensureSpace(28);
+        doc.font("Helvetica").fontSize(8).fillColor("#555555");
+        doc.text(docView.materialDepositNote, left, y, { width: right - left });
+        y += 16;
       }
     }
+
+    const renderPolicyBlock = (
+      heading: string,
+      items: EstimateDocumentView["terms"],
+    ) => {
+      if (items.length === 0) return;
+      y += 14;
+      ensureSpace(36);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
+      doc.text(heading, left, y);
+      y += 12;
+      for (const policy of items) {
+        const bodyHeight = doc.heightOfString(policy.body, {
+          width: right - left,
+        });
+        ensureSpace(20 + bodyHeight);
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#111111");
+        doc.text(policy.title, left, y, { width: right - left });
+        y += 11;
+        doc.font("Helvetica").fontSize(8).fillColor("#333333");
+        doc.text(policy.body, left, y, { width: right - left });
+        y += bodyHeight + 8;
+      }
+    };
+
+    if (docView.projectConditions) {
+      y += 14;
+      ensureSpace(36);
+      const bodyHeight = doc.heightOfString(docView.projectConditions.body, {
+        width: right - left,
+      });
+      ensureSpace(20 + bodyHeight);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#666666");
+      doc.text(PROJECT_CONDITIONS_TITLE, left, y);
+      y += 12;
+      doc.font("Helvetica").fontSize(8).fillColor("#333333");
+      doc.text(docView.projectConditions.body, left, y, { width: right - left });
+      y += bodyHeight + 8;
+    }
+    renderPolicyBlock(TERMS_AND_CONDITIONS_TITLE, docView.terms);
 
     y += 12;
     ensureSpace(20);

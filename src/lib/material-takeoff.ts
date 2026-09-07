@@ -4,7 +4,9 @@ export {
   extendedCustomerPrice,
   extendedMaterialCost,
   hasValidCustomerUnitPrice,
+  hasValidInternalUnitCost,
   isTakeoffTypeId,
+  markedUpCustomerUnitPrice,
   takeoffCustomerSellingTotal,
   takeoffInternalMaterialTotal,
   workingQuantity,
@@ -18,6 +20,7 @@ export type {
 } from "@/lib/material-takeoff/types";
 export {
   addCustomTakeoffItem,
+  applyMaterialMarkup,
   applyTakeoffItemEdits,
   computeTakeoff,
   emptyTakeoffSnapshot,
@@ -56,10 +59,25 @@ export {
   framedWallStudCount,
 } from "@/lib/material-takeoff/formulas/framed-wall";
 export {
+  GENERIC_CUSTOM_TAKEOFF_ID,
+  computeGenericCustomTakeoff,
+  emptyGenericCustomInputs,
+} from "@/lib/material-takeoff/formulas/generic-custom";
+export {
   convertLinearToFeet,
+  feetAndInchesToFeet,
+  formatFeetInches,
+  isIncompleteNumericDraft,
   isRejectedLinearUnit,
   linearToFeet,
+  parseConstructionNumber,
   parseLinearUnitToken,
+  parseNonNegativeInteger,
+  parseNonNegativeNumber,
+  parsePositiveNumber,
+  parseTakeoffNumericInput,
+  splitFeetAndInches,
+  splitTotalInches,
 } from "@/lib/material-takeoff/units";
 export {
   pickIntakeMeasurementForLine,
@@ -69,8 +87,23 @@ export {
 export type { TakeoffInputSuggestion } from "@/lib/material-takeoff/measurements";
 export {
   applyTakeoffFormMutations,
+  applyDraftTakeoffRecommendedLabor,
   convertDraftMaterialTakeoff,
+  ensureDraftEstimateWorkLine,
   parseTakeoffFormSnapshot,
   recalculateDraftMaterialTakeoff,
+  resetDraftTakeoffAndGeneratedMaterials,
+  restoreDraftOriginalRequestPricing,
   saveDraftMaterialTakeoff,
 } from "@/lib/material-takeoff/ops";
+export {
+  CONCRETE_60LB_BAG_LABOR_HELPER_ID,
+  CONCRETE_PRODUCTION_LABOR_COVERS,
+  DEFAULT_CONCRETE_60LB_BAG_LABOR_RATE,
+  GENERIC_CUSTOM_LABOR_HELPER_ID,
+  concreteLaborRate,
+  recommendTakeoffLabor,
+  snapshotLaborAdjustment,
+  takeoffSelectedCustomerSellingTotal,
+} from "@/lib/material-takeoff/labor-pricing";
+export type { TakeoffLaborRecommendation } from "@/lib/material-takeoff/labor-pricing";

@@ -8,9 +8,12 @@
  */
 import { computeConcreteSlabTakeoff } from "@/lib/material-takeoff/formulas/concrete-slab";
 import { computeFramedWallTakeoff } from "@/lib/material-takeoff/formulas/framed-wall";
+import { computeGenericCustomTakeoff } from "@/lib/material-takeoff/formulas/generic-custom";
 import { computeSheetCoveringTakeoff } from "@/lib/material-takeoff/formulas/sheet-covering";
 import {
+  hasValidInternalUnitCost,
   isTakeoffTypeId,
+  markedUpCustomerUnitPrice,
   type TakeoffItem,
   type TakeoffSnapshot,
   type TakeoffTypeId,
@@ -29,6 +32,7 @@ const TAKEOFF_FORMULAS: Record<
   "concrete-slab": computeConcreteSlabTakeoff,
   "sheet-covering": computeSheetCoveringTakeoff,
   "framed-wall": computeFramedWallTakeoff,
+  "generic-custom": computeGenericCustomTakeoff,
 };
 
 export function computeTakeoff(input: {
@@ -66,6 +70,9 @@ export function mergeTakeoffSnapshots(
   if (!previous || previous.takeoffType !== calculated.takeoffType) {
     return {
       ...calculated,
+      markupPercent: parseNonNegativeNumber(previous?.markupPercent) ?? 0,
+      laborRate: parseNonNegativeNumber(previous?.laborRate) ?? 0,
+      laborAdjustment: parseNonNegativeNumber(previous?.laborAdjustment) ?? 0,
       removedItemIds: [],
     };
   }
@@ -90,6 +97,9 @@ export function mergeTakeoffSnapshots(
     wastePercent: previous.wastePercent === calculated.wastePercent
       ? calculated.wastePercent
       : calculated.wastePercent,
+    markupPercent: parseNonNegativeNumber(previous.markupPercent) ?? 0,
+    laborRate: parseNonNegativeNumber(previous.laborRate) ?? 0,
+    laborAdjustment: parseNonNegativeNumber(previous.laborAdjustment) ?? 0,
     removedItemIds: [...removed],
     items: [...formulaItems, ...customItems, ...convertedOrphans],
   };
@@ -149,6 +159,45 @@ export function applyTakeoffItemEdits(
   return { ...snapshot, removedItemIds: [...removed], items };
 }
 
+/**
+ * Explicit owner action: set customer unit price from internal cost × (1 + markup%).
+ * Does not convert MATERIAL lines, change quantities, waste, or unit cost.
+ */
+export function applyMaterialMarkup(
+  snapshot: TakeoffSnapshot,
+  markupPercent: number,
+): { snapshot: TakeoffSnapshot; applied: number; skipped: number } {
+  const markup = parseNonNegativeNumber(markupPercent);
+  if (markup == null) {
+    return { snapshot, applied: 0, skipped: 0 };
+  }
+  let applied = 0;
+  let skipped = 0;
+  const items = snapshot.items.map((item) => {
+    if (!item.selected) return item;
+    if (!hasValidInternalUnitCost(item) || item.unitCost == null) {
+      skipped += 1;
+      return item;
+    }
+    const price = markedUpCustomerUnitPrice(item.unitCost, markup);
+    if (price == null) {
+      skipped += 1;
+      return item;
+    }
+    applied += 1;
+    return { ...item, customerUnitPrice: price };
+  });
+  return {
+    snapshot: {
+      ...snapshot,
+      markupPercent: markup,
+      items,
+    },
+    applied,
+    skipped,
+  };
+}
+
 export function addCustomTakeoffItem(
   snapshot: TakeoffSnapshot,
   input: {
@@ -198,6 +247,9 @@ export function normalizeTakeoffSnapshot(raw: unknown): TakeoffSnapshot | null {
     takeoffType: parsed.takeoffType,
     inputs,
     wastePercent: parseNonNegativeNumber(parsed.wastePercent) ?? 0,
+    markupPercent: parseNonNegativeNumber(parsed.markupPercent) ?? 0,
+    laborRate: parseNonNegativeNumber(parsed.laborRate) ?? 0,
+    laborAdjustment: parseNonNegativeNumber(parsed.laborAdjustment) ?? 0,
     measurementSource: normalizeMeasurementSource(parsed.measurementSource),
     explanation: typeof parsed.explanation === "string" ? parsed.explanation : "",
     skippedMeasurements: Array.isArray(parsed.skippedMeasurements)

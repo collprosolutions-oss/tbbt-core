@@ -24,10 +24,12 @@ import {
   type CalculatorSnapshot,
 } from "@/lib/estimate-calculators";
 import {
+  canSaveEstimateLineToServiceCatalog,
   catalogCalculatorDefinition,
   catalogScopeText,
   joinCatalogDescription,
   joinLineDescription,
+  joinLineDescriptionFromParts,
   lineCalculatorSnapshot,
   lineItemIncludedWork,
   splitLineDescription,
@@ -39,7 +41,11 @@ import {
   isUnpricedCustomQuoteDraftLine,
   pricedCustomQuoteDescription,
 } from "@/lib/request-estimate-draft";
-import { resolveCustomerPolicies } from "@/lib/estimate-policies";
+import {
+  catalogCustomerPolicies,
+  mergeCustomerPolicies,
+  resolveCustomerPolicies,
+} from "@/lib/estimate-policies";
 import { DEFAULT_SERVICE_CATEGORY } from "@/lib/service-catalog-category";
 
 type Db = PrismaClient;
@@ -264,21 +270,90 @@ export async function updateDraftEstimateLineIncludedWork(
     }),
   );
 
+  if (line.type === "MATERIAL") {
+    throw new EstimateLineError(
+      "Material lines do not have Scope / Included Work. Edit the labor/service line instead.",
+    );
+  }
+
   const parts = splitLineDescription(line.description);
   await db.lineItem.update({
     where: { id: line.id },
     data: {
-      description: joinLineDescription(
-        parts.title,
-        input.includedWork,
-        parts.calculatorSnapshot,
-        parts.customerPolicies,
-        {
-          materialTakeoff: parts.materialTakeoff,
-          materialTakeoffSource: parts.materialTakeoffSource,
-        },
-      ),
+      description: joinLineDescriptionFromParts(parts, {
+        includedWork: input.includedWork,
+      }),
     },
+  });
+
+  return db.lineItem.findFirstOrThrow({
+    where: { id: line.id, businessId: access.businessId },
+  });
+}
+
+/**
+ * Correct a DRAFT MATERIAL line's customer-facing description and
+ * quantity without exposing unit price. Recalculates the line total from
+ * the existing unit price so Final Customer Materials Total / deposit
+ * behavior stays unchanged unless the owner later uses calculated total.
+ */
+export async function updateDraftMaterialCustomerLine(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    estimateId: string;
+    lineItemId: string;
+    title: string;
+    quantity: string;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+
+  const title = input.title.trim();
+  if (!title) {
+    throw new EstimateLineError("Enter a material description.");
+  }
+  const quantity = parsePositiveDecimal(input.quantity, "quantity");
+
+  const estimate = access.assertOwned(
+    await db.estimate.findFirst({
+      where: { id: input.estimateId, ...access.scope },
+      select: { id: true, businessId: true, status: true },
+    }),
+  );
+  if (estimate.status !== "DRAFT") {
+    throw new EstimateLineError("Only a draft estimate can be changed.");
+  }
+
+  const line = access.assertOwned(
+    await db.lineItem.findFirst({
+      where: {
+        id: input.lineItemId,
+        estimateId: estimate.id,
+        ...access.scope,
+      },
+    }),
+  );
+  if (line.type !== "MATERIAL") {
+    throw new EstimateLineError(
+      "Only material lines can be edited from Customer Materials.",
+    );
+  }
+
+  const parts = splitLineDescription(line.description);
+  const description = joinLineDescriptionFromParts(parts, { title });
+  const total = quantity.mul(line.unitPrice);
+
+  await db.$transaction(async (tx) => {
+    await tx.lineItem.update({
+      where: { id: line.id },
+      data: {
+        description,
+        quantity,
+        total,
+      },
+    });
+    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
   });
 
   return db.lineItem.findFirstOrThrow({
@@ -321,6 +396,11 @@ export async function saveDraftEstimateLineAsCatalog(
       },
     }),
   );
+  if (!canSaveEstimateLineToServiceCatalog(line)) {
+    throw new EstimateLineError(
+      "Only labor/service lines can be saved to the services catalog. Material takeoff items stay as materials.",
+    );
+  }
 
   const name = customQuoteDisplayDescription(line.description)
     .replace(` ${STARTING_AT_DRAFT_MARKER}`, "")
@@ -337,7 +417,7 @@ export async function saveDraftEstimateLineAsCatalog(
     name,
   );
   if (calculatorDefinition) {
-    calculatorDefinition.customerPolicies = resolveCustomerPolicies(
+    calculatorDefinition.customerPolicies = catalogCustomerPolicies(
       lineParts.customerPolicies.length > 0
         ? lineParts.customerPolicies
         : calculatorDefinition.customerPolicies,
@@ -473,14 +553,14 @@ export async function applyDraftEstimateCalculator(
   }
   const unitPrice = new Prisma.Decimal(result.recommendedAmount.toFixed(2));
   const total = line.quantity.mul(unitPrice);
-  const customerPolicies = resolveCustomerPolicies(
-    input.customerPolicies ??
-      (parts.customerPolicies.length > 0 ? parts.customerPolicies : null),
+  const customerPolicies = mergeCustomerPolicies(
+    parts.customerPolicies,
+    input.customerPolicies,
   );
   const description = pricedCustomQuoteDescription(
-    joinLineDescription(parts.title, parts.includedWork, snapshot, customerPolicies, {
-      materialTakeoff: parts.materialTakeoff,
-      materialTakeoffSource: parts.materialTakeoffSource,
+    joinLineDescriptionFromParts(parts, {
+      calculatorSnapshot: snapshot,
+      customerPolicies,
     }),
   );
   const nextRates = persistableCalculatorRates(
@@ -673,8 +753,10 @@ async function writeBusinessCalculatorRates(
   const definition = {
     calculatorId,
     rates: persistableCalculatorRates(calculatorId, input.rates, null, components),
-    customerPolicies: resolveCustomerPolicies(
-      input.customerPolicies ?? existingDefinition?.customerPolicies,
+    customerPolicies: catalogCustomerPolicies(
+      resolveCustomerPolicies(
+        input.customerPolicies ?? existingDefinition?.customerPolicies,
+      ),
     ),
     ...(components ? { components } : {}),
     ...(intake ? { intake } : {}),
@@ -758,16 +840,9 @@ export async function overrideDraftEstimateLinePrice(
       }
     : parts.calculatorSnapshot;
   const description = pricedCustomQuoteDescription(
-    joinLineDescription(
-      parts.title,
-      parts.includedWork,
-      snapshot,
-      parts.customerPolicies,
-      {
-        materialTakeoff: parts.materialTakeoff,
-        materialTakeoffSource: parts.materialTakeoffSource,
-      },
-    ),
+    joinLineDescriptionFromParts(parts, {
+      calculatorSnapshot: snapshot,
+    }),
   );
   const total = line.quantity.mul(unitPrice);
 

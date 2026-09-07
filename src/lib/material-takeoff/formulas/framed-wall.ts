@@ -10,8 +10,11 @@ import {
 } from "@/lib/material-takeoff/types";
 import {
   ceilCount,
+  formatFeetInches,
   parseNonNegativeNumber,
+  parsePositiveConstructionNumber,
   parsePositiveNumber,
+  resolveFeetInchesInput,
   roundTakeoff,
 } from "@/lib/material-takeoff/units";
 
@@ -26,6 +29,10 @@ export const EXTRA_STUDS_PER_OPENING = 4;
 export type FramedWallInputs = {
   wallLengthFt: number;
   wallHeightFt: number;
+  wallLengthFtPart: number;
+  wallLengthInPart: number;
+  wallHeightFtPart: number;
+  wallHeightInPart: number;
   studSpacingIn: number;
   openings: number;
   plateBoardLengthFt: number;
@@ -37,15 +44,37 @@ export type FramedWallInputs = {
 export function emptyFramedWallInputs(
   partial?: Record<string, unknown> | null,
 ): FramedWallInputs {
+  const wallLength = resolveFeetInchesInput(
+    partial,
+    "wallLengthFt",
+    "wallLengthFtPart",
+    "wallLengthInPart",
+  );
+  const fallbackLength =
+    wallLength.totalFt > 0
+      ? wallLength
+      : resolveFeetInchesInput(partial, "wallWidthFt", "wallWidthFtPart", "wallWidthInPart");
+  const length =
+    fallbackLength.totalFt > 0
+      ? fallbackLength
+      : resolveFeetInchesInput(partial, "lengthFt", "lengthFtPart", "lengthInPart");
+  const wallHeight = resolveFeetInchesInput(
+    partial,
+    "wallHeightFt",
+    "wallHeightFtPart",
+    "wallHeightInPart",
+  );
   return {
-    wallLengthFt:
-      parsePositiveNumber(partial?.wallLengthFt) ??
-      parsePositiveNumber(partial?.wallWidthFt) ??
-      parsePositiveNumber(partial?.lengthFt) ??
-      0,
-    wallHeightFt: parsePositiveNumber(partial?.wallHeightFt) ?? 0,
+    wallLengthFt: length.totalFt,
+    wallHeightFt: wallHeight.totalFt,
+    wallLengthFtPart: length.feetPart,
+    wallLengthInPart: length.inchesPart,
+    wallHeightFtPart: wallHeight.feetPart,
+    wallHeightInPart: wallHeight.inchesPart,
     studSpacingIn:
-      parsePositiveNumber(partial?.studSpacingIn) ?? DEFAULT_STUD_SPACING_IN,
+      parsePositiveConstructionNumber(partial?.studSpacingIn) ??
+      parsePositiveNumber(partial?.studSpacingIn) ??
+      DEFAULT_STUD_SPACING_IN,
     openings: Math.max(
       0,
       Math.floor(parseNonNegativeNumber(partial?.openings) ?? 0),
@@ -114,7 +143,7 @@ export function computeFramedWallTakeoff(input: {
   const fastenerBoxes = Math.max(1, ceilCount(studs / 20));
 
   const explanation =
-    `${inputs.wallLengthFt} ft wall @ ${inputs.studSpacingIn}" OC → ${layoutStuds} layout studs` +
+    `${formatFeetInches(inputs.wallLengthFt)} wall @ ${inputs.studSpacingIn}" OC → ${layoutStuds} layout studs` +
     (openingStuds
       ? ` + ${openingStuds} king/jack studs for ${inputs.openings} opening(s)`
       : "") +
@@ -173,6 +202,9 @@ export function computeFramedWallTakeoff(input: {
       takeoffType: FRAMED_WALL_TAKEOFF_ID,
       inputs: { ...inputs },
       wastePercent,
+      markupPercent: 0,
+      laborRate: 0,
+      laborAdjustment: 0,
       measurementSource: input.measurementSource ?? null,
       explanation,
       skippedMeasurements: input.skippedMeasurements ?? [],
@@ -195,6 +227,9 @@ function blankSnapshot(
     takeoffType: FRAMED_WALL_TAKEOFF_ID,
     inputs: { ...inputs },
     wastePercent,
+    markupPercent: 0,
+    laborRate: 0,
+    laborAdjustment: 0,
     measurementSource: input.measurementSource ?? null,
     explanation: `${TAKEOFF_TYPE_LABELS[FRAMED_WALL_TAKEOFF_ID]} needs wall length and height before quantities can be calculated.`,
     skippedMeasurements: input.skippedMeasurements ?? [],

@@ -30,6 +30,13 @@ const approve = readRepo("src/components/estimates/approve-estimate-button.tsx")
 const branding = readRepo("src/lib/business-branding.ts");
 const printPage = readRepo("src/app/(invoice-document)/e/[token]/print/page.tsx");
 const estimateDocument = readRepo("src/components/estimates/estimate-document.tsx");
+const lineSections = readRepo(
+  "src/components/estimates/customer-estimate-line-sections.tsx",
+);
+const estimatePdf = readRepo("src/lib/estimate-pdf.ts");
+const compactMaterials = lineSections.slice(
+  lineSections.indexOf("function CompactCustomerMaterialList"),
+);
 
 console.log("\nSTATIC — Customer estimate responsive layout");
 
@@ -37,7 +44,7 @@ check(
   "Customer estimate uses the tenant logo helper",
   page.includes("getBusinessLogoSrc(estimate.business.slug)"),
 );
-check("Customer estimate selects business.slug for branding lookup", page.includes("slug: true"));
+check("Customer estimate selects business.slug for branding lookup", page.includes("estimate.business.slug"));
 check("Customer estimate renders CustomerEstimateHeader", page.includes("<CustomerEstimateHeader"));
 check("Desktop uses a centered wide container around 1100–1200px", page.includes("max-w-[1200px]"));
 check(
@@ -90,16 +97,17 @@ check(
 );
 check(
   "Customer page still shows title, scope, price, terms, address, and approval",
-  page.includes("lineItemTitle") &&
-    page.includes("IncludedWorkDisplay") &&
-    page.includes("formatMoney") &&
+  page.includes("loadEstimateDocumentByToken") &&
+    page.includes("CustomerEstimateLineSections") &&
+    lineSections.includes("Scope / Included Work") &&
+    page.includes("CustomerEstimateTotals") &&
     page.includes("EstimateCustomerPolicies") &&
     page.includes("Service address") &&
     page.includes("ApproveEstimateButton"),
 );
 check(
   "Internal calculator remains hidden from the customer estimate",
-  !page.includes("VariableScopeCalculatorForm") &&
+    !page.includes("VariableScopeCalculatorForm") &&
     !page.includes("VariableScopeDefinitionForm") &&
     !page.includes("CalculatorBreakdown") &&
     !page.includes("MaterialTakeoffForm") &&
@@ -107,8 +115,22 @@ check(
     !page.includes("contentsHandlingLightRate") &&
     !page.includes("TBBT Work Area Intake") &&
     !page.includes("TBBT Material Takeoff") &&
+    !page.includes("TBBT Material Deposit") &&
     !page.includes("customerUnitPrice") &&
     !page.includes("Unit cost (internal)") &&
+    !page.includes("Material Markup") &&
+    !page.includes("markupPercent") &&
+    !page.includes("Apply markup") &&
+    !page.includes("Apply recommended labor") &&
+    !page.includes("laborRate") &&
+    !page.includes("laborAdjustment") &&
+    !page.includes("Labor production rate") &&
+    !page.includes("Labor Takeoff") &&
+    !page.includes("estimating-registry") &&
+    !page.includes("CONCRETE_PRODUCTION_LABOR_COVERS") &&
+    !page.includes("$36") &&
+    !page.includes("Recommended labor") &&
+    !page.includes("lengthInPart") &&
     !header.includes("panelRate"),
 );
 check(
@@ -120,7 +142,7 @@ check(
 );
 check(
   "Approval action and version binding are unchanged",
-  page.includes("currentVersionId={currentVersion?.id}") &&
+  page.includes("currentVersionId={estimate.currentVersionId ?? undefined}") &&
     approve.includes("approveEstimate") &&
     approve.includes("estimateVersionId"),
 );
@@ -137,7 +159,66 @@ check(
     !printPage.includes("ApproveEstimateButton") &&
     estimateDocument.includes("ESTIMATE") &&
     estimateDocument.includes("SERVICE ADDRESS") &&
-    estimateDocument.includes("TERMS"),
+    estimateDocument.includes("EstimateDocumentTerms") &&
+    estimateDocument.includes("CustomerEstimateLineSections") &&
+    lineSections.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
+    lineSections.includes("ESTIMATE_MATERIALS_SECTION_TITLE"),
+);
+check(
+  "Customer labor and materials render as separate sections with a divider between them",
+  page.includes("CustomerEstimateLineSections") &&
+    estimateDocument.includes("CustomerEstimateLineSections") &&
+    lineSections.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
+    lineSections.includes("ESTIMATE_MATERIALS_SECTION_TITLE") &&
+    lineSections.includes("border-t-2") &&
+    lineSections.includes("border-t-2 border-neutral-400") &&
+    !estimateDocument.includes("SERVICES") &&
+    page.includes("Scope / Included Work") === false &&
+    lineSections.includes("Scope / Included Work"),
+);
+check(
+  "Customer MATERIALS list is compact description + qty, with no line prices",
+  lineSections.includes("customer-materials-compact") &&
+    compactMaterials.includes("line.description") &&
+    compactMaterials.includes("line.quantityLabel") &&
+    compactMaterials.includes("leading-5") &&
+    compactMaterials.includes("border-dotted") &&
+    compactMaterials.includes("py-px") &&
+    compactMaterials.includes(">Qty</span>") &&
+    compactMaterials.includes(">Description</span>") &&
+    !compactMaterials.includes("py-2.5") &&
+    !compactMaterials.includes("unitPriceLabel") &&
+    !compactMaterials.includes("amountLabel") &&
+    !compactMaterials.includes("Rate") &&
+    !compactMaterials.includes("showLinePricing") &&
+    !compactMaterials.includes("includedWork") &&
+    lineSections.includes("line.showLinePricing") &&
+    !page.includes("CustomerMaterialsTotalForm") &&
+    !page.includes("TBBT Customer Materials Total") &&
+    !page.includes("Final Customer Materials Total") &&
+    estimatePdf.includes(
+      "drawSection(ESTIMATE_MATERIALS_SECTION_TITLE, docView.materialLines, true)",
+    ) &&
+    estimatePdf.includes("Compact customer materials") &&
+    !readRepo("src/app/(app)/estimates/[estimateId]/page.tsx").includes(
+      "customer-materials-compact",
+    ),
+);
+check(
+  "Customer totals show labor, materials, estimate total, material deposit, and remaining balance",
+  page.includes("CustomerEstimateTotals") &&
+    readRepo("src/components/estimates/customer-estimate-totals.tsx").includes(
+      "MATERIAL_DEPOSIT_CUSTOMER_LABEL",
+    ) &&
+    readRepo("src/components/estimates/customer-estimate-totals.tsx").includes(
+      "REMAINING_BALANCE_CUSTOMER_LABEL",
+    ) &&
+    readRepo("src/components/estimates/customer-estimate-totals.tsx").includes(
+      "ESTIMATE_TOTAL_CUSTOMER_LABEL",
+    ) &&
+    !readRepo("src/components/estimates/customer-estimate-totals.tsx").includes(
+      "TBBT Material Deposit",
+    ),
 );
 
 console.log(

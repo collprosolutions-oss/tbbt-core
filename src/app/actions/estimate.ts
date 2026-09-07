@@ -21,16 +21,30 @@ import {
   priceDraftEstimateLine,
   saveDraftEstimateLineAsCatalog,
   updateDraftEstimateLineIncludedWork,
+  updateDraftMaterialCustomerLine,
 } from "@/lib/estimate-line-ops";
 import { joinLineDescription } from "@/lib/estimate-line-scope";
 import {
+  relocateCustomerMaterialsTotalAfterLineRemoval,
+  setDraftEstimateCustomerMaterialsTotal,
+} from "@/lib/customer-materials-total";
+import {
+  relocateMaterialDepositAfterLineRemoval,
+  setDraftEstimateMaterialDeposit,
+} from "@/lib/material-deposit";
+import {
+  applyDraftTakeoffRecommendedLabor,
   convertDraftMaterialTakeoff,
   isTakeoffTypeId,
   parseTakeoffFormSnapshot,
   recalculateDraftMaterialTakeoff,
+  resetDraftTakeoffAndGeneratedMaterials,
+  restoreDraftOriginalRequestPricing,
   saveDraftMaterialTakeoff,
 } from "@/lib/material-takeoff";
 import { parseWorkAreaIntake } from "@/lib/work-area-intake";
+import { stampDraftEstimateTerms } from "@/lib/estimate-terms/stamp";
+import { normalizeCustomerPolicies } from "@/lib/estimate-policies";
 import { toStoredIntakeMeasurement } from "@/lib/intake-quote-handoff";
 import {
   addRequestDraftLines,
@@ -517,9 +531,11 @@ export async function addCustomLineItem(
         estimateId: estimate.id,
         description: joinLineDescription(
           description,
-          typeof formData.get("includedWork") === "string"
-            ? String(formData.get("includedWork"))
-            : "",
+          type === "MATERIAL"
+            ? ""
+            : typeof formData.get("includedWork") === "string"
+              ? String(formData.get("includedWork"))
+              : "",
         ),
         quantity,
         unitPrice,
@@ -572,6 +588,28 @@ export async function updateEstimateLineIncludedWork(
   } catch (error) {
     return {
       error: estimateLineErrorMessage(error, "Could not save that scope."),
+    };
+  }
+}
+
+export async function updateEstimateMaterialCustomerLine(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    await updateDraftMaterialCustomerLine(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      title: readString(formData, "title"),
+      quantity: readString(formData, "quantity"),
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: "Material updated." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not update that material."),
     };
   }
 }
@@ -727,6 +765,90 @@ export async function convertEstimateMaterialTakeoff(
   }
 }
 
+export async function applyEstimateTakeoffRecommendedLabor(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const snapshot = parseTakeoffFormSnapshot(readString(formData, "takeoffJson"));
+    if (!snapshot) {
+      return { error: "Calculate a material takeoff before applying labor." };
+    }
+    const access = await requireBusinessAccess();
+    const result = await applyDraftTakeoffRecommendedLabor(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+      snapshot,
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return {
+      message: `Applied recommended labor ${result.recommendedLabor.toFixed(2)} to the original request line. Materials stay separate.`,
+    };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(
+        error,
+        "Could not apply recommended labor to the original request line.",
+      ),
+    };
+  }
+}
+
+export async function resetEstimateTakeoffAndGeneratedMaterials(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    const result = await resetDraftTakeoffAndGeneratedMaterials(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId"),
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return {
+      message:
+        result.removedMaterialCount > 0
+          ? `Takeoff reset to calculated defaults. Removed ${result.removedMaterialCount} generated material line${result.removedMaterialCount === 1 ? "" : "s"}.`
+          : "Takeoff reset to calculated defaults from the current dimensions.",
+    };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(
+        error,
+        "Could not reset the takeoff and generated materials.",
+      ),
+    };
+  }
+}
+
+export async function restoreEstimateOriginalRequestPricing(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    await restoreDraftOriginalRequestPricing(prisma, access, {
+      estimateId,
+      lineItemId: readString(formData, "lineItemId") || null,
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return {
+      message:
+        "Original customer-request labor line restored. Takeoff-generated materials were removed. Material Takeoff is available on that labor line so you can recalculate from scratch.",
+    };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(
+        error,
+        "Could not restore the original request pricing state.",
+      ),
+    };
+  }
+}
+
 export async function overrideEstimateLinePrice(
   _prev: EstimateActionState,
   formData: FormData,
@@ -798,6 +920,105 @@ export async function setEstimateLaborMinimumWaived(
   return {};
 }
 
+export async function setEstimateCustomerMaterialsTotal(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const mode = readString(formData, "mode");
+    const access = await requireBusinessAccess();
+    const result = await setDraftEstimateCustomerMaterialsTotal(prisma, access, {
+      estimateId,
+      amount: readString(formData, "amount"),
+      followCalculated: mode === "calculated",
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    if (mode === "calculated") {
+      return { message: "Final customer materials total now follows the calculated total." };
+    }
+    return {
+      message: `Final customer materials total set to ${result.amount.toFixed(2)}.`,
+    };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(
+        error,
+        "Could not save the customer materials total.",
+      ),
+    };
+  }
+}
+
+export async function updateEstimateTerms(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireBusinessAccess();
+    requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+    if (!estimateId) {
+      return { error: "Those terms could not be saved." };
+    }
+    let parsed: unknown = null;
+    const raw = readString(formData, "termsJson");
+    if (raw) {
+      parsed = JSON.parse(raw);
+    }
+    const estimate = access.assertOwned(
+      await prisma.estimate.findFirst({
+        where: { id: estimateId, ...access.scope },
+        select: { id: true, status: true, businessId: true },
+      }),
+    );
+    if (estimate.status !== "DRAFT") {
+      return { error: "Only a draft estimate can update terms." };
+    }
+    await stampDraftEstimateTerms(prisma, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+      policies: normalizeCustomerPolicies(parsed),
+    });
+    revalidatePath(`/estimates/${estimate.id}`);
+    return { message: "Customer terms saved on this estimate." };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not save those terms."),
+    };
+  }
+}
+
+export async function setEstimateMaterialDeposit(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const mode = readString(formData, "mode");
+    const access = await requireBusinessAccess();
+    const result = await setDraftEstimateMaterialDeposit(prisma, access, {
+      estimateId,
+      amount: mode === "none" ? "0" : readString(formData, "amount"),
+      followSuggested: mode === "suggested",
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    if (mode === "suggested") {
+      return { message: "Material deposit now follows the customer material total." };
+    }
+    if (result.amount.eq(0)) {
+      return { message: "No material deposit will be requested." };
+    }
+    return {
+      message: `Material deposit set to ${result.amount.toFixed(2)}. Remaining balance ${result.remaining.toFixed(2)}.`,
+    };
+  } catch (error) {
+    return {
+      error: estimateLineErrorMessage(error, "Could not save the material deposit."),
+    };
+  }
+}
+
 export async function removeEstimateLineItem(
   _prev: EstimateActionState,
   formData: FormData,
@@ -832,12 +1053,32 @@ export async function removeEstimateLineItem(
   );
 
   await prisma.$transaction(async (tx) => {
+    const remaining = await tx.lineItem.findMany({
+      where: {
+        estimateId: estimate.id,
+        businessId: access.businessId,
+        id: { not: lineItem.id },
+      },
+      select: { id: true },
+    });
     await tx.lineItem.deleteMany({
       where: {
         id: lineItem.id,
         estimateId: estimate.id,
         businessId: access.businessId,
       },
+    });
+    await relocateMaterialDepositAfterLineRemoval(tx, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+      removedDescription: lineItem.description,
+      remainingLineIds: remaining.map((row) => row.id),
+    });
+    await relocateCustomerMaterialsTotalAfterLineRemoval(tx, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+      removedDescription: lineItem.description,
+      remainingLineIds: remaining.map((row) => row.id),
     });
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
   });
@@ -921,6 +1162,10 @@ export async function sendEstimate(
     }
 
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
+    await stampDraftEstimateTerms(tx, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+    });
 
     const updated = await tx.estimate.updateMany({
       where: {

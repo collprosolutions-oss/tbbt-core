@@ -13,8 +13,11 @@ import {
 } from "@/lib/material-takeoff/types";
 import {
   ceilCount,
+  formatFeetInches,
   parseNonNegativeNumber,
+  parsePositiveConstructionNumber,
   parsePositiveNumber,
+  resolveFeetInchesInput,
   roundTakeoff,
 } from "@/lib/material-takeoff/units";
 
@@ -41,6 +44,10 @@ export type ConcreteSlabInputs = {
   lengthFt: number;
   widthFt: number;
   thicknessIn: number;
+  lengthFtPart: number;
+  lengthInPart: number;
+  widthFtPart: number;
+  widthInPart: number;
   bagSizeLb: number;
   bagYieldCuFt: number;
   formBoardLengthFt: number;
@@ -62,11 +69,19 @@ export function emptyConcreteSlabInputs(
     bagSize === 40 || bagSize === 60 || bagSize === 80
       ? CONCRETE_BAG_YIELDS_CU_FT[bagSize]
       : DEFAULT_CONCRETE_BAG_YIELD_CU_FT;
+  const length = resolveFeetInchesInput(partial, "lengthFt", "lengthFtPart", "lengthInPart");
+  const width = resolveFeetInchesInput(partial, "widthFt", "widthFtPart", "widthInPart");
   return {
-    lengthFt: parsePositiveNumber(partial?.lengthFt) ?? 0,
-    widthFt: parsePositiveNumber(partial?.widthFt) ?? 0,
+    lengthFt: length.totalFt,
+    widthFt: width.totalFt,
     thicknessIn:
-      parsePositiveNumber(partial?.thicknessIn) ?? DEFAULT_SLAB_THICKNESS_IN,
+      parsePositiveConstructionNumber(partial?.thicknessIn) ??
+      parsePositiveNumber(partial?.thicknessIn) ??
+      DEFAULT_SLAB_THICKNESS_IN,
+    lengthFtPart: length.feetPart,
+    lengthInPart: length.inchesPart,
+    widthFtPart: width.feetPart,
+    widthInPart: width.inchesPart,
     bagSizeLb: bagSize,
     bagYieldCuFt: parsePositiveNumber(partial?.bagYieldCuFt) ?? knownYield,
     formBoardLengthFt:
@@ -150,7 +165,7 @@ export function computeConcreteSlabTakeoff(input: {
   const gasketLf = ceilCount(perimeterFt);
 
   const explanation =
-    `${inputs.lengthFt} ft × ${inputs.widthFt} ft × ${inputs.thicknessIn} in ` +
+    `${formatFeetInches(inputs.lengthFt)} × ${formatFeetInches(inputs.widthFt)} × ${inputs.thicknessIn} in ` +
     `= ${volumeCuFt} cu ft. ${wastePercent}% waste → ${volumeWithWaste} cu ft. ` +
     `${inputs.bagSizeLb}-lb bags @ ${inputs.bagYieldCuFt} cu ft each → ${bags} bags (rounded up). ` +
     `Unit costs are owner-entered; no locked job rate is applied.`;
@@ -227,6 +242,9 @@ export function computeConcreteSlabTakeoff(input: {
       takeoffType: CONCRETE_SLAB_TAKEOFF_ID,
       inputs: { ...inputs },
       wastePercent,
+      markupPercent: 0,
+      laborRate: 0,
+      laborAdjustment: 0,
       measurementSource: input.measurementSource ?? null,
       explanation,
       skippedMeasurements: input.skippedMeasurements ?? [],
@@ -249,6 +267,9 @@ function blankSnapshot(
     takeoffType: CONCRETE_SLAB_TAKEOFF_ID,
     inputs: { ...inputs },
     wastePercent,
+    markupPercent: 0,
+    laborRate: 0,
+    laborAdjustment: 0,
     measurementSource: input.measurementSource ?? null,
     explanation: `${TAKEOFF_TYPE_LABELS[CONCRETE_SLAB_TAKEOFF_ID]} needs dimensions before quantities can be calculated.`,
     skippedMeasurements: input.skippedMeasurements ?? [],

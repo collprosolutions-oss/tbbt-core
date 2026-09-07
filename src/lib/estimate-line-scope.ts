@@ -5,8 +5,11 @@
  * Preview shares the Production database and does not run migrations, so
  * none of this can live in a new Prisma column. All of it is encoded in
  * the existing LineItem / EstimateVersionLineItem `description` after
- * stable markers. Totals never read them. Customer surfaces use
- * lineItemTitle() / included work only.
+ * stable markers, including the owner material-deposit override and the
+ * owner Final Customer Materials Total override. persistDraftEstimateTotal
+ * reads that materials-total override so the customer estimate uses the
+ * lump sum instead of summing MATERIAL line prices. Customer surfaces use
+ * lineItemTitle() / included work only and never show the markers.
  */
 import {
   CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
@@ -30,6 +33,8 @@ export const CALCULATOR_DEFINITION_MARKER = "\n\nTBBT Calculator Definition:\n";
 export const CUSTOMER_POLICY_MARKER = "\n\nTBBT Customer Policy:\n";
 export const MATERIAL_TAKEOFF_MARKER = "\n\nTBBT Material Takeoff:\n";
 export const MATERIAL_TAKEOFF_SOURCE_MARKER = "\n\nTBBT Material Takeoff Source:\n";
+export const MATERIAL_DEPOSIT_MARKER = "\n\nTBBT Material Deposit:\n";
+export const CUSTOMER_MATERIALS_TOTAL_MARKER = "\n\nTBBT Customer Materials Total:\n";
 
 const LINE_INTERNAL_MARKERS = [
   INCLUDED_WORK_MARKER,
@@ -37,7 +42,24 @@ const LINE_INTERNAL_MARKERS = [
   CALCULATOR_SNAPSHOT_MARKER,
   MATERIAL_TAKEOFF_MARKER,
   MATERIAL_TAKEOFF_SOURCE_MARKER,
+  MATERIAL_DEPOSIT_MARKER,
+  CUSTOMER_MATERIALS_TOTAL_MARKER,
 ] as const;
+
+/** Owner override only. Suggested deposit is computed from MATERIAL line totals. */
+export type MaterialDepositOverride = {
+  amount: number;
+  manual: true;
+};
+
+/**
+ * Owner override only. Calculated materials total is the sum of MATERIAL
+ * line customer prices. Recalc never overwrites a stored manual amount.
+ */
+export type CustomerMaterialsTotalOverride = {
+  amount: number;
+  manual: true;
+};
 
 export function normalizeIncludedWork(
   raw: string | null | undefined,
@@ -61,6 +83,8 @@ export function splitLineDescription(description: string | null | undefined): {
   customerPolicies: CalculatorCustomerPolicy[];
   materialTakeoff: TakeoffSnapshot | null;
   materialTakeoffSource: TakeoffSourceRef | null;
+  materialDeposit: MaterialDepositOverride | null;
+  customerMaterialsTotal: CustomerMaterialsTotalOverride | null;
 } {
   const raw = description ?? "";
   const calculatorSnapshot = parseCalculatorSnapshot(
@@ -75,6 +99,12 @@ export function splitLineDescription(description: string | null | undefined): {
   const materialTakeoffSource = parseTakeoffSourceRef(
     payloadAfterMarker(raw, MATERIAL_TAKEOFF_SOURCE_MARKER),
   );
+  const materialDeposit = parseMaterialDepositOverride(
+    payloadAfterMarker(raw, MATERIAL_DEPOSIT_MARKER),
+  );
+  const customerMaterialsTotal = parseCustomerMaterialsTotalOverride(
+    payloadAfterMarker(raw, CUSTOMER_MATERIALS_TOTAL_MARKER),
+  );
   const prefix = sliceBeforeFirstMarker(raw);
   return {
     title: prefix,
@@ -85,6 +115,8 @@ export function splitLineDescription(description: string | null | undefined): {
     customerPolicies,
     materialTakeoff,
     materialTakeoffSource,
+    materialDeposit,
+    customerMaterialsTotal,
   };
 }
 
@@ -122,6 +154,36 @@ export function lineMaterialTakeoffSource(
   return splitLineDescription(description).materialTakeoffSource;
 }
 
+/**
+ * Public service catalog save is for real LABOR/service lines only.
+ * Converted takeoff MATERIAL rows and other material lines must never
+ * become public catalog services.
+ */
+export function canSaveEstimateLineToServiceCatalog(line: {
+  type: string;
+  description?: string | null;
+}) {
+  return line.type === "LABOR" && !lineMaterialTakeoffSource(line.description);
+}
+
+/** Takeoff-generated customer MATERIAL rows tied to a parent work line. */
+export function isTakeoffGeneratedMaterialLine(line: {
+  type: string;
+  description?: string | null;
+}) {
+  return (
+    line.type === "MATERIAL" && lineMaterialTakeoffSource(line.description) != null
+  );
+}
+
+/** Original request/service work line — never a converted takeoff child. */
+export function isOriginalEstimateWorkLine(line: {
+  type: string;
+  description?: string | null;
+}) {
+  return line.type === "LABOR" && !lineMaterialTakeoffSource(line.description);
+}
+
 export function joinLineDescription(
   title: string,
   includedWork?: string | null,
@@ -130,6 +192,8 @@ export function joinLineDescription(
   extras?: {
     materialTakeoff?: TakeoffSnapshot | null;
     materialTakeoffSource?: TakeoffSourceRef | null;
+    materialDeposit?: MaterialDepositOverride | null;
+    customerMaterialsTotal?: CustomerMaterialsTotalOverride | null;
   },
 ): string {
   const cleanTitle = splitLineDescription(title).title;
@@ -143,6 +207,12 @@ export function joinLineDescription(
     : null;
   const takeoffSource = extras?.materialTakeoffSource
     ? JSON.stringify(extras.materialTakeoffSource)
+    : null;
+  const deposit = extras?.materialDeposit
+    ? JSON.stringify(extras.materialDeposit)
+    : null;
+  const customerMaterialsTotal = extras?.customerMaterialsTotal
+    ? JSON.stringify(extras.customerMaterialsTotal)
     : null;
   let next = cleanTitle;
   if (scope) {
@@ -160,7 +230,56 @@ export function joinLineDescription(
   if (takeoffSource) {
     next = `${next}${MATERIAL_TAKEOFF_SOURCE_MARKER}${takeoffSource}`;
   }
+  if (deposit) {
+    next = `${next}${MATERIAL_DEPOSIT_MARKER}${deposit}`;
+  }
+  if (customerMaterialsTotal) {
+    next = `${next}${CUSTOMER_MATERIALS_TOTAL_MARKER}${customerMaterialsTotal}`;
+  }
   return next;
+}
+
+export function joinLineDescriptionFromParts(
+  parts: ReturnType<typeof splitLineDescription>,
+  patch?: {
+    title?: string;
+    includedWork?: string | null;
+    calculatorSnapshot?: CalculatorSnapshot | null;
+    customerPolicies?: CalculatorCustomerPolicy[] | null;
+    materialTakeoff?: TakeoffSnapshot | null;
+    materialTakeoffSource?: TakeoffSourceRef | null;
+    materialDeposit?: MaterialDepositOverride | null;
+    customerMaterialsTotal?: CustomerMaterialsTotalOverride | null;
+  },
+) {
+  return joinLineDescription(
+    patch?.title ?? parts.title,
+    patch && "includedWork" in patch ? patch.includedWork : parts.includedWork,
+    patch && "calculatorSnapshot" in patch
+      ? patch.calculatorSnapshot
+      : parts.calculatorSnapshot,
+    patch && "customerPolicies" in patch
+      ? patch.customerPolicies
+      : parts.customerPolicies,
+    {
+      materialTakeoff:
+        patch && "materialTakeoff" in patch
+          ? patch.materialTakeoff
+          : parts.materialTakeoff,
+      materialTakeoffSource:
+        patch && "materialTakeoffSource" in patch
+          ? patch.materialTakeoffSource
+          : parts.materialTakeoffSource,
+      materialDeposit:
+        patch && "materialDeposit" in patch
+          ? patch.materialDeposit
+          : parts.materialDeposit,
+      customerMaterialsTotal:
+        patch && "customerMaterialsTotal" in patch
+          ? patch.customerMaterialsTotal
+          : parts.customerMaterialsTotal,
+    },
+  );
 }
 
 export function includedWorkLines(raw: string | null | undefined): string[] {
@@ -247,6 +366,33 @@ function payloadAfterMarker(raw: string, marker: string): string | null {
     if (index !== -1 && index < end) end = index;
   }
   return after.slice(0, end);
+}
+
+function parseMaterialDepositOverride(
+  raw: string | null,
+): MaterialDepositOverride | null {
+  return parseMoneyManualOverride(raw);
+}
+
+function parseCustomerMaterialsTotalOverride(
+  raw: string | null,
+): CustomerMaterialsTotalOverride | null {
+  return parseMoneyManualOverride(raw);
+}
+
+function parseMoneyManualOverride(
+  raw: string | null,
+): { amount: number; manual: true } | null {
+  const parsed = parseJsonObject(raw ?? "");
+  if (!parsed || parsed.manual !== true) return null;
+  const amount =
+    typeof parsed.amount === "number"
+      ? parsed.amount
+      : typeof parsed.amount === "string"
+        ? Number(parsed.amount)
+        : NaN;
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  return { amount, manual: true };
 }
 
 function parseTakeoffSourceRef(raw: string | null): TakeoffSourceRef | null {

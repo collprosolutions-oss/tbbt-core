@@ -157,6 +157,14 @@ check("Catalog search exists", catalogSrc.includes("Search services"));
 check("Collapse All / Expand All exist", catalogSrc.includes("Collapse All") && catalogSrc.includes("Expand All"));
 check("Add Service uses existing catalog form", workspaceSrc.includes("AddServiceSheet"));
 check("Existing CatalogItemRow edit form is reused", pricingSrc.includes("CatalogItemRow"));
+check(
+  "Owner can deactivate or delete a catalog item without opening Edit",
+  pricingSrc.includes("CatalogItemSafetyActions") &&
+    readRepo("src/components/catalog/catalog-item-row.tsx").includes("Delete") &&
+    readRepo("src/components/catalog/catalog-item-row.tsx").includes("Deactivate") &&
+    readRepo("src/app/actions/catalog.ts").includes("deleteServiceCatalogItem") &&
+    readRepo("src/lib/catalog-ops.ts").includes("deleteOwnedServiceCatalogItem"),
+);
 check("Labor minimum uses the business setting, not a hardcoded $120", !pricingSrc.includes("$120") && pricingSrc.includes("laborMinimum"));
 check("Page header title is Services", pageSrc.includes("<PageHeader") && pageSrc.includes('title="Services"'));
 

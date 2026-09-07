@@ -12,10 +12,12 @@ export function OverrideLinePriceForm({
   estimateId,
   lineItemId,
   currentPrice,
+  label = "Override line price",
 }: {
   estimateId: string;
   lineItemId: string;
   currentPrice: string;
+  label?: string;
 }) {
   const [state, action, pending] = useActionState(overrideEstimateLinePrice, initialState);
 
@@ -25,7 +27,7 @@ export function OverrideLinePriceForm({
       <input type="hidden" name="lineItemId" value={lineItemId} />
       <div className="flex flex-wrap items-end gap-2">
         <div className="space-y-1">
-          <Label htmlFor={`override-price-${lineItemId}`}>Override line price</Label>
+          <Label htmlFor={`override-price-${lineItemId}`}>{label}</Label>
           <Input
             id={`override-price-${lineItemId}`}
             name="unitPrice"

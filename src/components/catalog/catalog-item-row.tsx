@@ -2,6 +2,7 @@
 
 import { useActionState, useState } from "react";
 import {
+  deleteServiceCatalogItem,
   setServiceCatalogItemActive,
   updateServiceCatalogItem,
   type CatalogActionState,
@@ -15,6 +16,15 @@ import { DEFAULT_SERVICE_CATEGORY } from "@/lib/service-catalog-category";
 
 const initialState: CatalogActionState = {};
 
+export const DEACTIVATE_CATALOG_ITEM_CONFIRM =
+  "Deactivate this catalog service?\n\nIt will no longer appear on the public request page or when adding services to new estimates. Existing estimates, jobs, and invoices keep their recorded line items and prices. You can reactivate it later.";
+
+export const REACTIVATE_CATALOG_ITEM_CONFIRM =
+  "Reactivate this catalog service?\n\nIt will appear again on the public request page and when adding services to new estimates. Existing estimates stay unchanged.";
+
+export const DELETE_CATALOG_ITEM_CONFIRM =
+  "Delete this catalog service?\n\nIt will no longer appear on the public request page or when adding services to new estimates.\n\nExisting estimates, jobs, and invoices keep their recorded line items and prices. Historical snapshots are not changed.\n\nThis cannot be undone from here. Prefer Deactivate if you may need the service later.";
+
 type CatalogItemRowProps = {
   id: string;
   name: string;
@@ -26,6 +36,72 @@ type CatalogItemRowProps = {
   categories: string[];
   active: boolean;
 };
+
+export function CatalogItemSafetyActions({
+  id,
+  name,
+  active,
+}: {
+  id: string;
+  name: string;
+  active: boolean;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  return (
+    <div className="space-y-2">
+      {error ? (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <form
+          action={async () => {
+            if (
+              !window.confirm(
+                active ? DEACTIVATE_CATALOG_ITEM_CONFIRM : REACTIVATE_CATALOG_ITEM_CONFIRM,
+              )
+            ) {
+              return;
+            }
+            setPending(true);
+            setError(null);
+            const result = await setServiceCatalogItemActive(id, !active);
+            setPending(false);
+            if (result.error) setError(result.error);
+          }}
+        >
+          <Button type="submit" variant="outline" size="sm" disabled={pending}>
+            {active ? "Deactivate" : "Reactivate"}
+          </Button>
+        </form>
+        <form
+          action={async () => {
+            if (!window.confirm(DELETE_CATALOG_ITEM_CONFIRM)) {
+              return;
+            }
+            setPending(true);
+            setError(null);
+            const result = await deleteServiceCatalogItem(id);
+            setPending(false);
+            if (result.error) setError(result.error);
+          }}
+        >
+          <Button type="submit" variant="destructive" size="sm" disabled={pending}>
+            Delete
+          </Button>
+        </form>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Deactivate hides “{name}” from the public request page and new
+        estimates. Delete removes it from the catalog. Historical estimate
+        lines keep their recorded prices.
+      </p>
+    </div>
+  );
+}
 
 export function CatalogItemRow({
   id,
@@ -133,15 +209,7 @@ export function CatalogItemRow({
         </Button>
       </form>
 
-      <form
-        action={async () => {
-          await setServiceCatalogItemActive(id, !active);
-        }}
-      >
-        <Button type="submit" variant="outline" size="sm">
-          {active ? "Deactivate" : "Reactivate"}
-        </Button>
-      </form>
+      <CatalogItemSafetyActions id={id} name={name} active={active} />
     </div>
   );
 }

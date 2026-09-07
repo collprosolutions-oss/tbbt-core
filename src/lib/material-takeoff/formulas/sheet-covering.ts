@@ -11,9 +11,11 @@ import {
 } from "@/lib/material-takeoff/types";
 import {
   ceilCount,
+  formatFeetInches,
   parseNonNegativeNumber,
-  parsePositiveNumber,
+  resolveFeetInchesInput,
   roundTakeoff,
+  splitFeetAndInches,
 } from "@/lib/material-takeoff/units";
 
 export const SHEET_COVERING_TAKEOFF_ID = "sheet-covering" as const;
@@ -30,6 +32,14 @@ export type SheetCoveringInputs = {
   wallHeightFt: number;
   sheetWidthFt: number;
   sheetHeightFt: number;
+  wallWidthFtPart: number;
+  wallWidthInPart: number;
+  wallHeightFtPart: number;
+  wallHeightInPart: number;
+  sheetWidthFtPart: number;
+  sheetWidthInPart: number;
+  sheetHeightFtPart: number;
+  sheetHeightInPart: number;
   slidingPatioDoors: number;
   standardDoors: number;
   windows: number;
@@ -41,13 +51,65 @@ export type SheetCoveringInputs = {
 export function emptySheetCoveringInputs(
   partial?: Record<string, unknown> | null,
 ): SheetCoveringInputs {
+  const wallWidth = resolveFeetInchesInput(
+    partial,
+    "wallWidthFt",
+    "wallWidthFtPart",
+    "wallWidthInPart",
+  );
+  const wallHeight = resolveFeetInchesInput(
+    partial,
+    "wallHeightFt",
+    "wallHeightFtPart",
+    "wallHeightInPart",
+  );
+  const sheetWidth = resolveFeetInchesInput(
+    partial,
+    "sheetWidthFt",
+    "sheetWidthFtPart",
+    "sheetWidthInPart",
+  );
+  const sheetHeight = resolveFeetInchesInput(
+    partial,
+    "sheetHeightFt",
+    "sheetHeightFtPart",
+    "sheetHeightInPart",
+  );
+  const sheetWidthFt =
+    sheetWidth.totalFt > 0 ? sheetWidth.totalFt : DEFAULT_SHEET_WIDTH_FT;
+  const sheetHeightFt =
+    sheetHeight.totalFt > 0 ? sheetHeight.totalFt : DEFAULT_SHEET_HEIGHT_FT;
+  const defaultSheetWidth = splitFeetAndInches(DEFAULT_SHEET_WIDTH_FT);
+  const defaultSheetHeight = splitFeetAndInches(DEFAULT_SHEET_HEIGHT_FT);
+  const sheetWidthParts =
+    sheetWidth.totalFt > 0
+      ? sheetWidth
+      : {
+          totalFt: DEFAULT_SHEET_WIDTH_FT,
+          feetPart: defaultSheetWidth.feet,
+          inchesPart: defaultSheetWidth.inches,
+        };
+  const sheetHeightParts =
+    sheetHeight.totalFt > 0
+      ? sheetHeight
+      : {
+          totalFt: DEFAULT_SHEET_HEIGHT_FT,
+          feetPart: defaultSheetHeight.feet,
+          inchesPart: defaultSheetHeight.inches,
+        };
   return {
-    wallWidthFt: parsePositiveNumber(partial?.wallWidthFt) ?? 0,
-    wallHeightFt: parsePositiveNumber(partial?.wallHeightFt) ?? 0,
-    sheetWidthFt:
-      parsePositiveNumber(partial?.sheetWidthFt) ?? DEFAULT_SHEET_WIDTH_FT,
-    sheetHeightFt:
-      parsePositiveNumber(partial?.sheetHeightFt) ?? DEFAULT_SHEET_HEIGHT_FT,
+    wallWidthFt: wallWidth.totalFt,
+    wallHeightFt: wallHeight.totalFt,
+    sheetWidthFt,
+    sheetHeightFt,
+    wallWidthFtPart: wallWidth.feetPart,
+    wallWidthInPart: wallWidth.inchesPart,
+    wallHeightFtPart: wallHeight.feetPart,
+    wallHeightInPart: wallHeight.inchesPart,
+    sheetWidthFtPart: sheetWidthParts.feetPart,
+    sheetWidthInPart: sheetWidthParts.inchesPart,
+    sheetHeightFtPart: sheetHeightParts.feetPart,
+    sheetHeightInPart: sheetHeightParts.inchesPart,
     slidingPatioDoors: Math.max(
       0,
       Math.floor(parseNonNegativeNumber(partial?.slidingPatioDoors) ?? 0),
@@ -120,9 +182,9 @@ export function computeSheetCoveringTakeoff(input: {
   const fastenerBoxes = Math.max(1, ceilCount(sheets / 8));
 
   const explanation =
-    `${inputs.wallWidthFt} ft × ${inputs.wallHeightFt} ft = ${gross} sq ft` +
+    `${formatFeetInches(inputs.wallWidthFt)} × ${formatFeetInches(inputs.wallHeightFt)} = ${gross} sq ft` +
     (net !== gross ? ` minus typical opening deductions → ${net} sq ft` : "") +
-    `. ${wastePercent}% waste, ${inputs.sheetWidthFt}×${inputs.sheetHeightFt} sheets (${sheetArea} sq ft) → ${sheets} sheets (rounded up).`;
+    `. ${wastePercent}% waste, ${formatFeetInches(inputs.sheetWidthFt)} × ${formatFeetInches(inputs.sheetHeightFt)} sheets (${sheetArea} sq ft) → ${sheets} sheets (rounded up).`;
 
   const items: TakeoffItem[] = [
     item({
@@ -166,6 +228,9 @@ export function computeSheetCoveringTakeoff(input: {
       takeoffType: SHEET_COVERING_TAKEOFF_ID,
       inputs: { ...inputs },
       wastePercent,
+      markupPercent: 0,
+      laborRate: 0,
+      laborAdjustment: 0,
       measurementSource: input.measurementSource ?? null,
       explanation,
       skippedMeasurements: input.skippedMeasurements ?? [],
@@ -188,6 +253,9 @@ function blankSnapshot(
     takeoffType: SHEET_COVERING_TAKEOFF_ID,
     inputs: { ...inputs },
     wastePercent,
+    markupPercent: 0,
+    laborRate: 0,
+    laborAdjustment: 0,
     measurementSource: input.measurementSource ?? null,
     explanation: `${TAKEOFF_TYPE_LABELS[SHEET_COVERING_TAKEOFF_ID]} needs wall width and height before quantities can be calculated.`,
     skippedMeasurements: input.skippedMeasurements ?? [],
