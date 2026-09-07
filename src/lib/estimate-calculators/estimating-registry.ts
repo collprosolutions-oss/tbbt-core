@@ -6,9 +6,10 @@
  * service, resetting a draft, or reconstructing a work line must never
  * remove these capabilities.
  *
- * Project-specific state (dimensions, quantities, prices, markup,
- * takeoff snapshots) stays encoded on estimate lines. This file only
- * answers: which labor + material calculators apply to this work?
+ * Project-specific state (dimensions, quantities, rounded totals,
+ * takeoff encodings) stays on estimate lines. Reusable business pricing
+ * defaults live on BusinessEstimatingDefault. This file only answers:
+ * which labor + material calculators apply to this work?
  *
  * Do not add Prisma columns for the registry. Preview shares Production.
  */

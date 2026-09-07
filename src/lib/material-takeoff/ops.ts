@@ -25,6 +25,10 @@ import { publicCatalogUnitAmount } from "@/lib/pricing-mode";
 import { parseWorkAreaIntake } from "@/lib/work-area-intake";
 import { toStoredIntakeMeasurement } from "@/lib/intake-quote-handoff";
 import {
+  pickIntakeMeasurementForLine,
+  suggestTakeoffInputs,
+} from "@/lib/material-takeoff/measurements";
+import {
   CUSTOM_QUOTE_DRAFT_MARKER,
   STARTING_AT_DRAFT_MARKER,
   addRequestDraftLines,
@@ -48,6 +52,9 @@ import {
   type TakeoffTypeId,
 } from "@/lib/material-takeoff/types";
 import { parsePositiveNumber } from "@/lib/material-takeoff/units";
+import { applyBusinessEstimatingDefaults } from "@/lib/estimating-defaults";
+import { loadBusinessEstimatingDefaults } from "@/lib/estimating-defaults-db";
+import { resolveDraftEstimatingWorkspace } from "@/lib/estimate-calculators/estimating-registry";
 
 type Db = PrismaClient;
 
@@ -73,6 +80,80 @@ export async function saveDraftMaterialTakeoff(
   );
   await persistTakeoffOnLine(db, line, snapshot);
   return snapshot;
+}
+
+export async function seedDraftTakeoffFromBusinessDefaults(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: {
+    estimateId: string;
+    lineItemId?: string | null;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  const { line, estimate } = await loadDraftParentLine(
+    db,
+    access,
+    input.estimateId,
+    input.lineItemId,
+  );
+  if (lineMaterialTakeoff(line.description)) {
+    return lineMaterialTakeoff(line.description);
+  }
+  const title = customQuoteDisplayDescription(line.description);
+  const workspace = resolveDraftEstimatingWorkspace({
+    title,
+    customQuote: true,
+  });
+  const defaults = await loadBusinessEstimatingDefaults(
+    db,
+    access.businessId,
+    workspace.id,
+  );
+  if (!defaults) return null;
+
+  const request = estimate.serviceRequestId
+    ? await db.serviceRequest.findFirst({
+        where: { id: estimate.serviceRequestId, businessId: access.businessId },
+        select: {
+          items: {
+            select: { serviceCatalogItemId: true },
+          },
+          measurements: {
+            select: {
+              source: true,
+              width: true,
+              height: true,
+              length: true,
+              quantity: true,
+              unit: true,
+              serviceRequestItem: {
+                select: { serviceCatalogItemId: true },
+              },
+            },
+          },
+        },
+      })
+    : null;
+  const measurements = (request?.measurements ?? []).map((row) =>
+    toStoredIntakeMeasurement(row),
+  );
+  const suggestion = suggestTakeoffInputs({
+    takeoffType: workspace.material.takeoffType,
+    intakeMeasurement: pickIntakeMeasurementForLine(
+      measurements,
+      line.serviceCatalogItemId,
+    ),
+  });
+  const computed = computeTakeoff({
+    takeoffType: workspace.material.takeoffType,
+    inputs: suggestion.inputs,
+    measurementSource: suggestion.measurementSource,
+    skippedMeasurements: suggestion.skippedMeasurements,
+  });
+  const seeded = applyBusinessEstimatingDefaults(computed.snapshot, defaults);
+  await persistTakeoffOnLine(db, line, seeded);
+  return seeded;
 }
 
 export async function recalculateDraftMaterialTakeoff(
@@ -356,6 +437,20 @@ export async function resetDraftTakeoffAndGeneratedMaterials(
       throw new EstimateLineError(computed.rejected);
     }
     nextSnapshot = computed.snapshot;
+    const title = customQuoteDisplayDescription(line.description);
+    const workspace = resolveDraftEstimatingWorkspace({
+      title,
+      takeoffType: previous.takeoffType,
+      customQuote: true,
+    });
+    const defaults = await loadBusinessEstimatingDefaults(
+      db,
+      access.businessId,
+      workspace.id,
+    );
+    if (defaults) {
+      nextSnapshot = applyBusinessEstimatingDefaults(nextSnapshot, defaults);
+    }
   }
 
   await db.$transaction(async (tx) => {

@@ -270,6 +270,9 @@ try {
       takeoffForm.includes("CONCRETE_PRODUCTION_LABOR_COVERS") &&
       recoveryForms.includes("Reset Takeoff & Generated Materials") &&
       recoveryForms.includes("resetEstimateTakeoffAndGeneratedMaterials") &&
+      takeoffForm.includes("saveEstimateBusinessEstimatingDefaults") &&
+      takeoffForm.includes("Save as business default") &&
+      takeoffForm.includes("BUSINESS_DEFAULT_SOURCE_LABEL") &&
       !takeoffForm.includes("Number(event.target.value) || 0") &&
       !takeoffForm.includes('type="number"'),
   );

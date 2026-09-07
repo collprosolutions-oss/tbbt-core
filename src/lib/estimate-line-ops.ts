@@ -34,6 +34,7 @@ import {
   lineItemIncludedWork,
   splitLineDescription,
 } from "@/lib/estimate-line-scope";
+import { mergeBusinessCalculatorRateDefaults } from "@/lib/estimating-defaults-db";
 import {
   CUSTOM_QUOTE_DRAFT_MARKER,
   STARTING_AT_DRAFT_MARKER,
@@ -59,6 +60,7 @@ export class EstimateLineError extends Error {
 
 export function estimateLineErrorMessage(error: unknown, fallback: string) {
   if (error instanceof EstimateLineError) return error.message;
+  if (error instanceof Error && error.name === "EstimateLineError") return error.message;
   if (error instanceof Error && error.name === "ForbiddenError") return error.message;
   return fallback;
 }
@@ -686,7 +688,7 @@ export async function persistDraftEstimateCalculatorRates(
 }
 
 async function writeBusinessCalculatorRates(
-  db: Pick<Db, "serviceCatalogItem" | "lineItem">,
+  db: PrismaClient | Prisma.TransactionClient,
   access: BusinessAccess,
   input: {
     calculatorId: CalculatorId;
@@ -796,6 +798,12 @@ async function writeBusinessCalculatorRates(
       });
     }
   }
+
+  await mergeBusinessCalculatorRateDefaults(db, access, {
+    calculatorId,
+    title: input.title,
+    rates: definition.rates,
+  });
 
   return catalog;
 }

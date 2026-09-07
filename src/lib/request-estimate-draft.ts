@@ -27,6 +27,7 @@ import {
 import { resolveCustomerPolicies } from "@/lib/estimate-policies";
 import { coerceRequestQuantity } from "@/lib/service-request-work";
 import { publicCatalogUnitAmount } from "@/lib/pricing-mode";
+import type { BusinessEstimatingDefaultPayload } from "@/lib/estimating-defaults";
 
 export const STARTING_AT_DRAFT_MARKER = "(starting at)";
 export const CUSTOM_QUOTE_DRAFT_MARKER = "(custom quote — enter price)";
@@ -155,11 +156,19 @@ export function buildEstimateLineCreatesFromRequestItems(
   items: RequestDraftSourceItem[],
   workAreaIntake?: WorkAreaIntakeRecord | null,
   measurements?: StoredIntakeMeasurement[] | null,
+  businessDefaults?: BusinessEstimatingDefaultPayload | null,
 ) {
   return draftEstimateLinesFromRequestItems(items).map((line, index) => {
     const unitPrice = line.priced && line.unitPrice != null ? line.unitPrice : 0;
     const catalog = items[index]?.serviceCatalogItem;
-    const calculatorDefinition = catalogCalculatorDefinition(catalog?.description);
+    const calculatorDefinition =
+      catalogCalculatorDefinition(catalog?.description) ??
+      (businessDefaults?.labor.calculatorId && businessDefaults.labor.rates
+        ? {
+            calculatorId: businessDefaults.labor.calculatorId,
+            rates: businessDefaults.labor.rates,
+          }
+        : null);
     const catalogItemId = catalog?.id ?? line.serviceCatalogItemId;
     const workAreaAnswer = workAreaAnswerForCatalog(workAreaIntake, catalogItemId);
     const measurementPrefill = calculatorPrefillFromStoredMeasurement({
@@ -212,6 +221,7 @@ export async function addRequestDraftLines(
     items: RequestDraftSourceItem[];
     workAreaIntake?: WorkAreaIntakeRecord | null;
     measurements?: StoredIntakeMeasurement[] | null;
+    businessDefaults?: BusinessEstimatingDefaultPayload | null;
   },
 ) {
   const rows = buildEstimateLineCreatesFromRequestItems(
@@ -219,6 +229,7 @@ export async function addRequestDraftLines(
     input.items,
     input.workAreaIntake,
     input.measurements,
+    input.businessDefaults,
   );
   if (rows.length === 0) return 0;
   await tx.lineItem.createMany({
