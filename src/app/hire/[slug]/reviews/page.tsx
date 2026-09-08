@@ -41,7 +41,7 @@ export default async function PublicReviewsPage({ params }: PageProps) {
   if (!site) {
     return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
   }
-  const phone = publicPhone(site.business.slug);
+  const phone = publicPhone(site.business);
   const images = await loadPublicReviewsImages(prisma, site.business.id, site.business.slug);
 
   return (

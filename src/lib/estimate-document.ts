@@ -19,7 +19,12 @@ import {
   PROJECT_CONDITIONS_TITLE,
   TERMS_AND_CONDITIONS_TITLE,
 } from "@/lib/estimate-terms/types";
-import { formatAddress, formatDate, formatMoney } from "@/lib/format";
+import {
+  formatDate,
+  formatMailingAddress,
+  formatMoney,
+  formatPublicPhoneDisplay,
+} from "@/lib/format";
 import {
   INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
   sanitizeFilenamePart,
@@ -32,7 +37,10 @@ import {
 } from "@/lib/material-deposit";
 import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { prisma } from "@/lib/prisma";
-import { publicPhone } from "@/lib/public-site";
+import {
+  ensureBusinessPublicContactSchema,
+  resolveBusinessPublicContact,
+} from "@/lib/business-contact";
 import { loadEstimatePaymentSummary } from "@/lib/project-payments";
 
 const ZERO = new Prisma.Decimal(0);
@@ -103,6 +111,8 @@ export type EstimateDocumentView = {
     slug: string;
     logoSrc: string | null;
     phone: string | null;
+    email: string | null;
+    website: string | null;
   };
   customer: {
     name: string | null;
@@ -135,7 +145,7 @@ export type EstimateDocumentView = {
 };
 
 const ESTIMATE_DOCUMENT_INCLUDE = {
-  business: { select: { id: true, name: true, slug: true } },
+  business: { select: { id: true, name: true, slug: true, publicPhone: true, publicEmail: true, publicWebsite: true } },
   customer: { select: { id: true, name: true, email: true, phone: true } },
   property: {
     select: {
@@ -235,7 +245,14 @@ function toDocumentView(estimate: {
   total: Prisma.Decimal;
   laborMinimumAdjustment: Prisma.Decimal;
   createdAt: Date;
-  business: { id: string; name: string; slug: string };
+  business: {
+    id: string;
+    name: string;
+    slug: string;
+    publicPhone?: string | null;
+    publicEmail?: string | null;
+    publicWebsite?: string | null;
+  };
   customer: {
     name: string;
     email: string | null;
@@ -344,14 +361,14 @@ function toDocumentView(estimate: {
       name: estimate.business.name,
       slug: estimate.business.slug,
       logoSrc: getBusinessDocumentLogoSrc(estimate.business.slug),
-      phone: publicPhone(estimate.business.slug),
+      ...resolveBusinessPublicContact(estimate.business),
     },
     customer: {
       name: customerName,
       email: customerEmail,
-      phone: customerPhone,
+      phone: formatPublicPhoneDisplay(customerPhone),
     },
-    serviceAddress: property ? formatAddress(property) : null,
+    serviceAddress: property ? formatMailingAddress(property) : null,
     currentVersionId: currentVersion?.id ?? null,
     lineItems,
     laborLines: lineItems.filter((line) => line.type === "LABOR"),
@@ -445,6 +462,8 @@ export function estimateDocumentPlainText(document: EstimateDocumentView): strin
   const lines = [
     document.business.name,
     document.business.phone ?? "",
+    document.business.email ?? "",
+    document.business.website ?? "",
     "ESTIMATE",
     document.estimateNumber,
     document.estimateDateLabel,
@@ -494,6 +513,7 @@ export async function loadEstimateDocumentForBusiness(
     return null;
   }
 
+  await ensureBusinessPublicContactSchema(db);
   const estimate = await db.estimate.findFirst({
     where: { id: estimateId, businessId },
     include: ESTIMATE_DOCUMENT_INCLUDE,
@@ -512,6 +532,7 @@ export async function loadEstimateDocumentByToken(
     return null;
   }
 
+  await ensureBusinessPublicContactSchema(db);
   const estimate = await db.estimate.findUnique({
     where: { publicToken: token },
     include: ESTIMATE_DOCUMENT_INCLUDE,

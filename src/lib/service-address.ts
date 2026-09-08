@@ -1,4 +1,4 @@
-import { formatAddress } from "@/lib/format";
+import { formatAddress, formatMailingAddress } from "@/lib/format";
 
 export const OTHER_CITY_VALUE = "__other__";
 
@@ -130,6 +130,17 @@ export function normalizeRegion(value: string, country: ServiceAddressCountry) {
 export function formatStructuredAddress(address: StructuredServiceAddress) {
   return formatAddress({
     addressLine1: address.streetAddress.trim(),
+    addressLine2: address.unit.trim() || null,
+    city: address.city.trim() || null,
+    region: address.region.trim() || null,
+    postalCode: address.postalCode.trim() || null,
+  });
+}
+
+/** Customer-facing stacked mailing label from public-request structured fields. */
+export function formatStructuredMailingAddress(address: StructuredServiceAddress) {
+  return formatMailingAddress({
+    addressLine1: address.streetAddress,
     addressLine2: address.unit.trim() || null,
     city: address.city.trim() || null,
     region: address.region.trim() || null,

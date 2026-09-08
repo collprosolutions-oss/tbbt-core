@@ -20,6 +20,7 @@ const {
   cityIsInServiceArea,
   findReusableProperty,
   formatStructuredAddress,
+  formatStructuredMailingAddress,
   getAddressLookupProvider,
   isValidUsPostalCode,
   normalizeRegion,
@@ -84,6 +85,33 @@ check(
     region: "FL",
     postalCode: "33904",
   }) === "10 Main St, Cape Coral, FL, 33904",
+);
+check(
+  "customer-facing structured mailing address stacks street / city, state / ZIP",
+  formatStructuredMailingAddress({
+    streetAddress: "369 alpha st",
+    unit: "",
+    city: "Cape Coral",
+    region: "FL",
+    postalCode: "33904",
+  }) === "369 alpha st\nCape Coral, FL\n33904",
+);
+check(
+  "customer-facing structured mailing address keeps unit with the street",
+  formatStructuredMailingAddress({
+    streetAddress: "412 Pine St",
+    unit: "Apt 3",
+    city: "Fort Myers",
+    region: "FL",
+    postalCode: "33901",
+  }) === "412 Pine St, Apt 3\nFort Myers, FL\n33901" &&
+    formatStructuredAddress({
+      streetAddress: "412 Pine St",
+      unit: "Apt 3",
+      city: "Fort Myers",
+      region: "FL",
+      postalCode: "33901",
+    }) === "412 Pine St, Apt 3, Fort Myers, FL, 33901",
 );
 
 check("5-digit ZIP is accepted", isValidUsPostalCode("33901"));

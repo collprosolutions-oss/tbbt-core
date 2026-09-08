@@ -8,6 +8,7 @@ import {
   assertSettingsBusinessScope,
   settingsErrorMessage,
   updateBusinessProfileOp,
+  updateBusinessPublicContactOp,
   updateLaborMinimumSettingsOp,
   updateSettingsPreferencesOp,
   updateWebsiteStoryOp,
@@ -95,6 +96,30 @@ export async function updateBusinessProfileSettings(
       : { message: "Business name updated." };
   } catch (error) {
     return { error: settingsErrorMessage(error, "That business profile could not be saved.") };
+  }
+}
+
+export async function updateBusinessPublicContactSettings(
+  _prev: SettingsActionState,
+  formData: FormData,
+): Promise<SettingsActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    assertSettingsBusinessScope(access, readString(formData, "businessId") || null);
+    const result = await updateBusinessPublicContactOp(prisma, access, {
+      phone: readString(formData, "publicPhone"),
+      email: readString(formData, "publicEmail"),
+      website: readString(formData, "publicWebsite"),
+    });
+    revalidateSettings();
+    revalidatePath("/");
+    revalidatePath(`/hire/${access.workspace.business.slug}`);
+    revalidatePath("/invoices");
+    return result.unchanged
+      ? { message: "No customer-facing contact changes to save." }
+      : { message: "Customer-facing phone, email, and website updated on estimates, invoices, and the public site." };
+  } catch (error) {
+    return { error: settingsErrorMessage(error, "That contact information could not be saved.") };
   }
 }
 

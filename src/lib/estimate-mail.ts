@@ -1,4 +1,4 @@
-import { formatAddress, formatMoney } from "@/lib/format";
+import { formatMailingAddress, formatMoney } from "@/lib/format";
 
 function escapeHtml(value: string) {
   return value
@@ -16,6 +16,16 @@ export function customerFirstName(name: string | null | undefined) {
   return first || null;
 }
 
+function serviceAddressEmail(address: string | null) {
+  if (!address) {
+    return { text: null, html: "" };
+  }
+  return {
+    text: `Service address:\n${address}`,
+    html: `<p>Service address:<br />${escapeHtml(address).replaceAll("\n", "<br />")}</p>`,
+  };
+}
+
 export function buildEstimateReadyEmail(input: {
   businessName: string;
   customerName: string | null;
@@ -26,16 +36,14 @@ export function buildEstimateReadyEmail(input: {
   const firstName = customerFirstName(input.customerName);
   const greeting = firstName ? `Hi ${firstName},` : "Hi,";
   const total = formatMoney(input.total);
-  const addressLine = input.address
-    ? `Service address: ${input.address}`
-    : null;
+  const addressBlock = serviceAddressEmail(input.address);
 
   const text = [
     greeting,
     "",
     `${input.businessName} has an estimate ready for you.`,
     `Estimate total: ${total}`,
-    addressLine,
+    addressBlock.text,
     "",
     "View and approve your estimate:",
     input.approveUrl,
@@ -54,11 +62,7 @@ export function buildEstimateReadyEmail(input: {
     <p>${escapeHtml(greeting)}</p>
     <p>${escapeHtml(input.businessName)} has an estimate ready for you.</p>
     <p><strong>Estimate total: ${escapeHtml(total)}</strong></p>
-    ${
-      addressLine
-        ? `<p>${escapeHtml(addressLine)}</p>`
-        : ""
-    }
+    ${addressBlock.html}
     <p>
       <a href="${escapeHtml(input.approveUrl)}" style="display:inline-block;padding:12px 18px;background:#0f172a;color:#ffffff;text-decoration:none;border-radius:8px;">View &amp; Approve Estimate</a>
     </p>
@@ -80,5 +84,5 @@ export function formatEstimateServiceAddress(property: {
   region?: string | null;
   postalCode?: string | null;
 } | null) {
-  return property ? formatAddress(property) : null;
+  return property ? formatMailingAddress(property) : null;
 }

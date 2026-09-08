@@ -26,6 +26,12 @@ import {
   type SettingsPreferenceFlags,
 } from "@/lib/settings";
 import {
+  parsePublicEmail,
+  parsePublicPhone,
+  parsePublicWebsite,
+  ensureBusinessPublicContactSchema,
+} from "@/lib/business-contact";
+import {
   MAX_OWNER_STORY_LENGTH,
   MAX_PUBLIC_ABOUT_COPY_LENGTH,
   normalizeAboutCopy,
@@ -203,6 +209,76 @@ export async function updateBusinessProfileOp(
       previousValue: business.name,
       newValue: name,
     });
+  });
+
+  return { unchanged: false as const };
+}
+
+export async function updateBusinessPublicContactOp(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: { phone: string; email: string; website: string },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  requireBusinessRole(access, "OWNER");
+  await ensureBusinessPublicContactSchema(db);
+
+  let publicPhone: string | null;
+  let publicEmail: string | null;
+  let publicWebsite: string | null;
+  try {
+    publicPhone = parsePublicPhone(input.phone);
+    publicEmail = parsePublicEmail(input.email);
+    publicWebsite = parsePublicWebsite(input.website);
+  } catch (error) {
+    throw new SettingsError(
+      error instanceof Error ? error.message : "That contact information could not be saved.",
+    );
+  }
+
+  const business = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: {
+      id: true,
+      publicPhone: true,
+      publicEmail: true,
+      publicWebsite: true,
+    },
+  });
+  if (!business) {
+    throw new SettingsError("Business was not found.");
+  }
+
+  const next = { publicPhone, publicEmail, publicWebsite };
+  const unchanged =
+    (business.publicPhone ?? null) === next.publicPhone &&
+    (business.publicEmail ?? null) === next.publicEmail &&
+    (business.publicWebsite ?? null) === next.publicWebsite;
+  if (unchanged) {
+    return { unchanged: true as const };
+  }
+
+  await db.$transaction(async (tx) => {
+    await tx.business.update({
+      where: { id: access.businessId },
+      data: next,
+    });
+    const fields = [
+      ["publicPhone", business.publicPhone, next.publicPhone],
+      ["publicEmail", business.publicEmail, next.publicEmail],
+      ["publicWebsite", business.publicWebsite, next.publicWebsite],
+    ] as const;
+    for (const [settingKey, previousValue, newValue] of fields) {
+      if ((previousValue ?? null) === (newValue ?? null)) continue;
+      await writeSettingsAuditLog(tx, {
+        businessId: access.businessId,
+        changedByMembershipId: access.workspace.membership.id,
+        settingArea: "profile",
+        settingKey,
+        previousValue,
+        newValue,
+      });
+    }
   });
 
   return { unchanged: false as const };

@@ -35,6 +35,15 @@ console.log("\nSTATIC — Customer Project Portal responsive layout");
 check("Portal page uses the tenant logo helper", page.includes("getBusinessLogoSrc(job.business.slug)"));
 check("Portal page selects business.slug for branding lookup", page.includes("slug: true"));
 check("Portal page renders ProjectPortalHeader", page.includes("<ProjectPortalHeader"));
+check(
+  "Portal service address uses the shared mailing-label formatter",
+  page.includes("formatMailingAddress") && !page.includes("formatAddress("),
+);
+check(
+  "Portal header stacks the service address instead of joining it onto one line",
+  header.includes("whitespace-pre-line") &&
+    !header.includes('[who, where].filter(Boolean).join(" ")'),
+);
 check("Portal page uses a wide desktop container", page.includes("max-w-[1200px]"));
 check(
   "Portal page no longer uses the mobile-only max-w-md column for the project",

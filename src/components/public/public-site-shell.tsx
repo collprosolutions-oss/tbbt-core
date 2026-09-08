@@ -37,7 +37,7 @@ export function PublicSiteShell({
   children: ReactNode;
 }) {
   const name = publicDisplayName(business);
-  const phone = publicPhone(business.slug);
+  const phone = publicPhone(business);
   const logoSrc = publicLogoSrc(business.slug);
   const requestHref = publicRequestPath(business.slug);
   const homeHref = publicHomePath(business.slug);

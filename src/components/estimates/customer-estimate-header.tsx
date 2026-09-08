@@ -12,11 +12,17 @@ export function CustomerEstimateHeader({
   logoSrc,
   status,
   totalLabel,
+  phone,
+  email,
+  website,
 }: {
   businessName: string;
   logoSrc: string | null;
   status: string;
   totalLabel: string;
+  phone?: string | null;
+  email?: string | null;
+  website?: string | null;
 }) {
   return (
     <header className="rounded-xl border bg-card px-4 py-4 shadow-sm ring-1 ring-foreground/10 md:px-6 md:py-5">
@@ -36,6 +42,15 @@ export function CustomerEstimateHeader({
             <p className="text-sm font-medium text-muted-foreground">
               {businessName}
             </p>
+            {phone ? (
+              <p className="mt-0.5 text-xs text-muted-foreground">{phone}</p>
+            ) : null}
+            {email ? (
+              <p className="text-xs text-muted-foreground">{email}</p>
+            ) : null}
+            {website ? (
+              <p className="text-xs text-muted-foreground">{website}</p>
+            ) : null}
             <p className="mt-0.5 text-xs font-semibold tracking-[0.18em] text-muted-foreground">
               ESTIMATE
             </p>

@@ -78,6 +78,9 @@ export default async function PublicEstimatePage({
           logoSrc={logoSrc}
           status={estimate.status}
           totalLabel={estimate.totalLabel}
+          phone={estimate.business.phone}
+          email={estimate.business.email}
+          website={estimate.business.website}
         />
 
         <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
@@ -99,7 +102,10 @@ export default async function PublicEstimatePage({
                 <p className="text-sm text-muted-foreground">No line items.</p>
               )}
               {estimate.serviceAddress ? (
-                <p className="text-sm">Service address: {estimate.serviceAddress}</p>
+                <div className="text-sm">
+                  <p>Service address</p>
+                  <p className="whitespace-pre-line">{estimate.serviceAddress}</p>
+                </div>
               ) : null}
             </CardContent>
           </Card>

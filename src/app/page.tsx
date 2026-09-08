@@ -44,7 +44,7 @@ export default async function HomePage() {
   const jsonLd = localBusinessJsonLd({
     name,
     slug: business.slug,
-    phone: publicPhone(business.slug),
+    phone: publicPhone(business),
     logoSrc: publicLogoSrc(business.slug),
     description: `Handyman services from ${name}. Request repairs, installations, mounting, carpentry, and other home projects.`,
   });

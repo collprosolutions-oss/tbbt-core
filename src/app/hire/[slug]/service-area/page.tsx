@@ -47,7 +47,7 @@ export default async function PublicServiceAreaPage({ params }: PageProps) {
   if (!site) {
     return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
   }
-  const phone = publicPhone(site.business.slug);
+  const phone = publicPhone(site.business);
   const textHref = smsHref(phone);
   const requestHref = publicRequestPath(site.business.slug);
 

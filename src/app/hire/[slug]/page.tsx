@@ -56,7 +56,7 @@ export default async function PublicHirePage({ params }: PageProps) {
   const jsonLd = localBusinessJsonLd({
     name,
     slug: site.business.slug,
-    phone: publicPhone(site.business.slug),
+    phone: publicPhone(site.business),
     logoSrc: publicLogoSrc(site.business.slug),
     description: `Handyman services from ${name}. Request repairs, installations, mounting, carpentry, and other home projects.`,
   });

@@ -1,4 +1,4 @@
-import { formatAddress, formatMoney } from "@/lib/format";
+import { formatMailingAddress, formatMoney } from "@/lib/format";
 
 function escapeHtml(value: string) {
   return value
@@ -6,6 +6,16 @@ function escapeHtml(value: string) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function serviceAddressEmail(address: string | null) {
+  if (!address) {
+    return { text: null, html: "" };
+  }
+  return {
+    text: `Service address:\n${address}`,
+    html: `<p>Service address:<br />${escapeHtml(address).replaceAll("\n", "<br />")}</p>`,
+  };
 }
 
 export function buildInvoiceReadyEmail(input: {
@@ -18,14 +28,14 @@ export function buildInvoiceReadyEmail(input: {
   const first = input.customerName?.trim().split(/\s+/)[0];
   const greeting = first ? `Hi ${first},` : "Hi,";
   const total = formatMoney(input.total);
-  const addressLine = input.address ? `Service address: ${input.address}` : null;
+  const addressBlock = serviceAddressEmail(input.address);
 
   const text = [
     greeting,
     "",
     `${input.businessName} has sent your invoice.`,
     `Invoice total: ${total}`,
-    addressLine,
+    addressBlock.text,
     "",
     "View your invoice and payment options:",
     input.invoiceUrl,
@@ -44,7 +54,7 @@ export function buildInvoiceReadyEmail(input: {
     <p>${escapeHtml(greeting)}</p>
     <p>${escapeHtml(input.businessName)} has sent your invoice.</p>
     <p><strong>Invoice total: ${escapeHtml(total)}</strong></p>
-    ${addressLine ? `<p>${escapeHtml(addressLine)}</p>` : ""}
+    ${addressBlock.html}
     <p>
       <a href="${escapeHtml(input.invoiceUrl)}" style="display:inline-block;padding:12px 18px;background:#0f172a;color:#ffffff;text-decoration:none;border-radius:8px;">View Invoice</a>
     </p>
@@ -66,5 +76,5 @@ export function formatInvoiceServiceAddress(property: {
   region?: string | null;
   postalCode?: string | null;
 } | null) {
-  return property ? formatAddress(property) : null;
+  return property ? formatMailingAddress(property) : null;
 }

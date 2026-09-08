@@ -30,6 +30,12 @@ export function InvoiceDocument({
           {invoice.business.phone ? (
             <p className="text-sm text-neutral-600">{invoice.business.phone}</p>
           ) : null}
+          {invoice.business.email ? (
+            <p className="text-sm text-neutral-600">{invoice.business.email}</p>
+          ) : null}
+          {invoice.business.website ? (
+            <p className="text-sm text-neutral-600">{invoice.business.website}</p>
+          ) : null}
         </div>
         <div className="text-right">
           <p className="text-3xl font-semibold tracking-wide">INVOICE</p>
@@ -72,7 +78,7 @@ export function InvoiceDocument({
             <h2 className="text-xs font-semibold tracking-wider text-neutral-500">
               SERVICE ADDRESS
             </h2>
-            <p className="mt-2 text-sm text-neutral-700">
+            <p className="mt-2 whitespace-pre-line text-sm text-neutral-700">
               {invoice.serviceAddress}
             </p>
           </div>
