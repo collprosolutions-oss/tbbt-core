@@ -285,7 +285,7 @@ check("Internal request detail lists Requested Work",
   requestsWorkspaceSrc.includes("Requested Work") && requestsWorkspaceSrc.includes("requestedTasks.map"));
 check("Estimate handoff keeps request context and prefills draft lines",
   estimatePageSrc.includes("Requested work") &&
-    estimatePageSrc.includes("Prefilled from customer request — review before sending.") &&
+    estimatePageSrc.includes("Customer request is context for this draft.") &&
     estimateActionSrc.includes("addRequestDraftLines"));
 check("Public request photos use private Business Storage, not a public website path",
   readRepo("src/lib/business-storage/request-photos.ts").includes("CUSTOMER_PHOTO") &&
