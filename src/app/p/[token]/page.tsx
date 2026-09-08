@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
 import { ChangeOrdersCard } from "@/components/portal/change-orders-card";
 import { PayInvoiceButton } from "@/components/portal/pay-invoice-button";
+import { PortalMaterialDepositCard } from "@/components/portal/portal-material-deposit-card";
 import { ProjectPortalHeader } from "@/components/portal/project-portal-header";
 import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
@@ -20,6 +21,7 @@ import {
 } from "@/lib/change-order";
 import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
+import { resolveMaterialDeposit } from "@/lib/material-deposit";
 import {
   customerFacingJobStatusLabel,
   resolveProjectProgressStep,
@@ -27,10 +29,16 @@ import {
 import {
   getBusinessPaymentStatus,
   invoiceAmountToCents,
+  reconcileEstimateDepositCheckout,
   reconcileProjectTokenCheckoutPayment,
+  shouldShowPayDeposit,
   shouldShowPayInvoice,
 } from "@/lib/payments";
-import { invoicePaymentBreakdown, listProjectPayments } from "@/lib/project-payments";
+import {
+  invoicePaymentBreakdown,
+  loadEstimatePaymentSummary,
+  listProjectPayments,
+} from "@/lib/project-payments";
 import { backfillEmptyInvoiceWorkLinesForProjectToken } from "@/lib/invoice-carry-forward";
 import { loadPortalAdditionalWorkCatalog } from "@/lib/portal-additional-work";
 import { prisma } from "@/lib/prisma";
@@ -90,8 +98,10 @@ export default async function CustomerProjectPortalPage({
               postalCode: true,
             },
           },
+          estimateId: true,
           estimate: {
             select: {
+              id: true,
               total: true,
               lineItems: {
                 orderBy: { createdAt: "asc" },
@@ -157,6 +167,10 @@ export default async function CustomerProjectPortalPage({
     );
   }
 
+  if (query.checkout === "return") {
+    await reconcileEstimateDepositCheckout(prisma, token, query.session_id);
+  }
+
   if (job.invoices[0]?.status === "SENT") {
     await reconcileProjectTokenCheckoutPayment(
       prisma,
@@ -184,9 +198,7 @@ export default async function CustomerProjectPortalPage({
         },
       })
     : null;
-  const payment = invoice
-    ? await getBusinessPaymentStatus(prisma, job.business.id)
-    : null;
+  const payment = await getBusinessPaymentStatus(prisma, job.business.id);
   const invoicePayments = invoice
     ? await listProjectPayments(prisma, {
         businessId: job.business.id,
@@ -212,6 +224,37 @@ export default async function CustomerProjectPortalPage({
       }),
   );
   const approvedScope = resolveApprovedWorkOrderScope(job);
+  const depositLines =
+    approvedScope.source === "none" ? [] : approvedScope.lineItems;
+  const depositTotal =
+    approvedScope.source === "none" ? 0 : approvedScope.total;
+  const requiredDeposit = resolveMaterialDeposit({
+    lines: depositLines,
+    total: depositTotal,
+  }).amount;
+  const estimateId = job.estimateId ?? job.estimate?.id ?? null;
+  const depositSummary =
+    estimateId && requiredDeposit.gt(0)
+      ? await loadEstimatePaymentSummary(prisma, {
+          businessId: job.business.id,
+          estimateId,
+          estimateTotal: depositTotal,
+          requiredDeposit,
+          jobId: job.id,
+          invoiceId: invoice?.id ?? null,
+        })
+      : null;
+  const hasCustomerInvoice =
+    invoice?.status === "SENT" || invoice?.status === "PAID";
+  const showPayDeposit = Boolean(
+    depositSummary &&
+      shouldShowPayDeposit({
+        requiredCents: invoiceAmountToCents(depositSummary.requiredDeposit),
+        remainingCents: invoiceAmountToCents(depositSummary.depositRemaining),
+        paymentReady: payment.paymentReady,
+        hasCustomerInvoice,
+      }),
+  );
   const progressStep = resolveProjectProgressStep(job, invoice);
   const currentApprovedProjectTotal =
     approvedScope.source === "none"
@@ -254,7 +297,21 @@ export default async function CustomerProjectPortalPage({
               scope={approvedScope}
               title="Original Approved Scope"
               scanColumns
+              hideMaterialLinePricing
             />
+
+            {depositSummary ? (
+              <PortalMaterialDepositCard
+                token={token}
+                requiredLabel={formatMoney(depositSummary.requiredDeposit)}
+                paidLabel={formatMoney(depositSummary.depositPaid)}
+                remainingLabel={formatMoney(depositSummary.depositRemaining)}
+                status={depositSummary.depositStatus}
+                showPay={showPayDeposit}
+                remaining={depositSummary.depositStatus === "partial"}
+                checkout={query.checkout}
+              />
+            ) : null}
 
             {currentApprovedProjectTotal !== null ? (
               <Card>

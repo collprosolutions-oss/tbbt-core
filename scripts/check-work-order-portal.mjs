@@ -468,8 +468,9 @@ try {
       return !afterColon.startsWith("*") && !afterColon.startsWith("//");
     });
   check(
-    "src/app/p/[token]/page.tsx has no CODE reference to businessId at all (the lookup is scoped by token alone)",
-    businessIdCodeLines.length === 0,
+    "src/app/p/[token]/page.tsx never accepts a client-supplied businessId (token lookup only; tenant scope uses job.business.id)",
+    businessIdCodeLines.length > 0 &&
+      businessIdCodeLines.every((line) => line.includes("job.business.id")),
   );
 
   // --- HTTP-level checks against the built, running app ---------------
@@ -567,6 +568,112 @@ try {
       jobId: jobPay.id,
       total: new Prisma.Decimal("300.00"),
       status: "SENT",
+    },
+  });
+
+  const depositCustomer = await prisma.customer.create({
+    data: { businessId: businessB.id, name: "Portal Deposit Customer" },
+  });
+  const depositProperty = await prisma.property.create({
+    data: {
+      businessId: businessB.id,
+      customerId: depositCustomer.id,
+      addressLine1: "22 Portal Deposit Ln",
+    },
+  });
+
+  async function seedPortalDepositJob() {
+    const estimate = await prisma.estimate.create({
+      data: {
+        businessId: businessB.id,
+        customerId: depositCustomer.id,
+        propertyId: depositProperty.id,
+        total: new Prisma.Decimal("1086.36"),
+        publicToken: randomUUID(),
+        status: "APPROVED",
+      },
+    });
+    const lines = [
+      {
+        description: "Decorative wall paneling",
+        quantity: new Prisma.Decimal(1),
+        unitPrice: new Prisma.Decimal("792.00"),
+        total: new Prisma.Decimal("792.00"),
+        type: "LABOR",
+      },
+      {
+        description: "60-lb concrete bags",
+        quantity: new Prisma.Decimal(22),
+        unitPrice: new Prisma.Decimal("13.38"),
+        total: new Prisma.Decimal("294.36"),
+        type: "MATERIAL",
+      },
+    ];
+    await prisma.lineItem.createMany({
+      data: lines.map((line) => ({
+        businessId: businessB.id,
+        estimateId: estimate.id,
+        ...line,
+      })),
+    });
+    const version = await prisma.estimateVersion.create({
+      data: {
+        businessId: businessB.id,
+        estimateId: estimate.id,
+        versionNumber: 1,
+        total: new Prisma.Decimal("1086.36"),
+        laborMinimumWaived: false,
+        laborMinimumAdjustment: new Prisma.Decimal(0),
+        approvedAt: new Date(),
+        lineItems: {
+          create: lines.map((line) => ({
+            businessId: businessB.id,
+            ...line,
+          })),
+        },
+      },
+    });
+    await prisma.estimate.update({
+      where: { id: estimate.id },
+      data: { approvedVersionId: version.id },
+    });
+    const job = await prisma.job.create({
+      data: {
+        businessId: businessB.id,
+        customerId: depositCustomer.id,
+        propertyId: depositProperty.id,
+        estimateId: estimate.id,
+        approvedEstimateVersionId: version.id,
+        projectToken: randomUUID(),
+        status: "UNSCHEDULED",
+      },
+    });
+    return { estimate, job };
+  }
+
+  const duePortal = await seedPortalDepositJob();
+  const partialPortal = await seedPortalDepositJob();
+  const paidPortal = await seedPortalDepositJob();
+  await prisma.payment.create({
+    data: {
+      businessId: businessB.id,
+      customerId: depositCustomer.id,
+      estimateId: partialPortal.estimate.id,
+      jobId: partialPortal.job.id,
+      purpose: "MATERIAL_DEPOSIT",
+      amount: new Prisma.Decimal("100.00"),
+      method: "CASH",
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      businessId: businessB.id,
+      customerId: depositCustomer.id,
+      estimateId: paidPortal.estimate.id,
+      jobId: paidPortal.job.id,
+      purpose: "MATERIAL_DEPOSIT",
+      amount: new Prisma.Decimal("294.36"),
+      method: "CASH",
     },
   });
 
@@ -669,6 +776,68 @@ try {
   check(
     "PAID invoice page does not offer Pay Invoice",
     !paidInvoiceBody.includes("Pay Invoice"),
+  );
+
+  console.log("\nTEST — Portal material privacy and deposit due/partial/paid");
+  const dueRes = await fetch(`${APP_URL}/p/${duePortal.job.projectToken}`, {
+    redirect: "manual",
+  });
+  const dueBody = await dueRes.text();
+  check("unpaid deposit portal returns 200", dueRes.status === 200);
+  check("unpaid deposit portal shows Required Material Deposit", dueBody.includes("Required Material Deposit"));
+  check("unpaid deposit portal shows Deposit Paid", dueBody.includes("Deposit Paid"));
+  check("unpaid deposit portal shows Deposit Remaining", dueBody.includes("Deposit Remaining"));
+  check("unpaid deposit portal shows the $294.36 remaining", dueBody.includes("$294.36"));
+  check(
+    "unpaid deposit portal shows Pay $294.36 Material Deposit",
+    dueBody.includes("Pay $294.36 Material Deposit"),
+  );
+  check(
+    "unpaid deposit portal posts to the project-token deposit route",
+    dueBody.includes(`action="/p/${duePortal.job.projectToken}/deposit"`),
+  );
+  check(
+    "portal MATERIALS list does not expose the $13.38 unit price",
+    !dueBody.includes("$13.38") && !dueBody.includes("13.38"),
+  );
+  check("portal LABOR pricing remains visible", dueBody.includes("$792.00"));
+  check("portal shows Description and Qty for materials", dueBody.includes("Description") && dueBody.includes("Qty"));
+  check("portal still lists the material description and quantity", dueBody.includes("60-lb concrete bags") && dueBody.includes("22"));
+  check("portal shows the materials lump-sum total", dueBody.includes("Materials") && dueBody.includes("$294.36"));
+
+  const partialRes = await fetch(`${APP_URL}/p/${partialPortal.job.projectToken}`, {
+    redirect: "manual",
+  });
+  const partialBody = await partialRes.text();
+  check("partial deposit portal returns 200", partialRes.status === 200);
+  check("partial deposit portal shows $100.00 paid", partialBody.includes("$100.00"));
+  check("partial deposit portal shows $194.36 remaining", partialBody.includes("$194.36"));
+  check(
+    "partial deposit portal shows Pay Remaining Deposit",
+    partialBody.includes("Pay Remaining Deposit") &&
+      !partialBody.includes("Pay $194.36 Material Deposit"),
+  );
+  check(
+    "partial portal still hides the material unit price",
+    !partialBody.includes("$13.38") && !partialBody.includes("13.38"),
+  );
+
+  const paidDepositRes = await fetch(`${APP_URL}/p/${paidPortal.job.projectToken}`, {
+    redirect: "manual",
+  });
+  const paidDepositBody = await paidDepositRes.text();
+  check("paid deposit portal returns 200", paidDepositRes.status === 200);
+  check("paid deposit portal shows Deposit Paid", paidDepositBody.includes("Deposit Paid"));
+  check(
+    "paid deposit portal has no Pay Deposit button",
+    !paidDepositBody.includes("Pay $294.36 Material Deposit") &&
+      !paidDepositBody.includes("Pay Remaining Deposit") &&
+      !paidDepositBody.includes(`action="/p/${paidPortal.job.projectToken}/deposit"`),
+  );
+  check("paid deposit remaining is $0.00", paidDepositBody.includes("$0.00"));
+  check(
+    "Business A's portal never shows the portal-deposit customer",
+    !crossBody.includes("Portal Deposit Customer"),
   );
 
   console.log(

@@ -43,6 +43,9 @@ check(
 check("Primary row is a responsive 45/55 grid", page.includes("md:grid-cols-[minmax(0,45fr)_minmax(0,55fr)]"));
 check("Secondary cards use a 1/2/3 column grid", page.includes("md:grid-cols-2 xl:grid-cols-3"));
 check("Approved scope opts into scan columns only on the portal", page.includes("scanColumns"));
+check("Portal hides MATERIAL line prices", page.includes("hideMaterialLinePricing"));
+check("Portal shows the material deposit summary card", page.includes("PortalMaterialDepositCard"));
+check("Portal reconciles deposit checkout on return", page.includes("reconcileEstimateDepositCheckout"));
 check("Unavailable page still uses the compact card", page.includes('className="w-full max-w-md"'));
 
 check("Header shows Your Project", header.includes("Your Project"));
@@ -76,6 +79,12 @@ check(
 );
 
 check("Approved scope still has hideFinancials protection", scope.includes("hideFinancials"));
+check(
+  "Portal approved scope can hide MATERIAL unit prices without changing owner/field defaults",
+  scope.includes("hideMaterialLinePricing") &&
+    scope.includes("customer-materials-compact") &&
+    scope.includes('item.description} × {item.quantity.toString()}'),
+);
 check(
   "Work Order / Field default rows are unchanged when scanColumns is off",
   scope.includes("item.description} × {item.quantity.toString()}"),

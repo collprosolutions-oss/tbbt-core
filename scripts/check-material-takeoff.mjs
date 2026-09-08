@@ -229,6 +229,7 @@ try {
       !portalPage.includes("Material Markup") &&
       !portalPage.includes("Apply recommended labor") &&
       portalPage.includes("ApprovedScopeCard") &&
+      portalPage.includes("hideMaterialLinePricing") &&
       !customerPage.includes("TBBT Customer Materials Total") &&
       !customerPage.includes("Final Customer Materials Total") &&
       !customerPage.includes("Calculated Materials Total") &&

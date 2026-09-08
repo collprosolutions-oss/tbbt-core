@@ -51,6 +51,20 @@ export function shouldShowPayInvoice(input: {
   );
 }
 
+export function shouldShowPayDeposit(input: {
+  requiredCents: number;
+  remainingCents: number;
+  paymentReady: boolean;
+  hasCustomerInvoice: boolean;
+}): boolean {
+  return (
+    input.requiredCents > 0 &&
+    input.remainingCents > 0 &&
+    input.paymentReady &&
+    !input.hasCustomerInvoice
+  );
+}
+
 export async function getBusinessPaymentStatus(
   db: PaymentsClient,
   businessId: string,
@@ -429,6 +443,42 @@ async function applyVerifiedDepositPayment(
   return { applied: true, reason: "paid" };
 }
 
+const DEPOSIT_ESTIMATE_SELECT = {
+  id: true,
+  businessId: true,
+  status: true,
+  total: true,
+  approvedVersion: {
+    select: {
+      total: true,
+      lineItems: { select: { type: true, total: true, description: true } },
+    },
+  },
+  lineItems: { select: { type: true, total: true, description: true } },
+} as const;
+
+async function loadDepositEstimateByCustomerToken(
+  db: PaymentsClient,
+  token: string,
+) {
+  if (!token) return null;
+  const estimate = await db.estimate.findUnique({
+    where: { publicToken: token },
+    select: DEPOSIT_ESTIMATE_SELECT,
+  });
+  if (estimate) {
+    return { estimate, returnPath: `/e/${token}` as const };
+  }
+  const job = await db.job.findUnique({
+    where: { projectToken: token },
+    select: { estimate: { select: DEPOSIT_ESTIMATE_SELECT } },
+  });
+  if (job?.estimate) {
+    return { estimate: job.estimate, returnPath: `/p/${token}` as const };
+  }
+  return null;
+}
+
 export async function createCustomerDepositCheckout(
   db: PaymentsClient,
   token: string,
@@ -439,27 +489,11 @@ export async function createCustomerDepositCheckout(
   if (!appUrl) {
     throw new PaymentError("App URL is not configured.");
   }
-  const estimate = token
-    ? await db.estimate.findUnique({
-        where: { publicToken: token },
-        select: {
-          id: true,
-          businessId: true,
-          status: true,
-          total: true,
-          approvedVersion: {
-            select: {
-              total: true,
-              lineItems: { select: { type: true, total: true, description: true } },
-            },
-          },
-          lineItems: { select: { type: true, total: true, description: true } },
-        },
-      })
-    : null;
-  if (!estimate || estimate.status !== "APPROVED") {
+  const loaded = await loadDepositEstimateByCustomerToken(db, token);
+  if (!loaded || loaded.estimate.status !== "APPROVED") {
     throw new PaymentError("This deposit cannot be paid yet.");
   }
+  const estimate = loaded.estimate;
   const lines = estimate.approvedVersion?.lineItems ?? estimate.lineItems;
   const total = estimate.approvedVersion?.total ?? estimate.total;
   const required = requiredDepositFromLines(lines, total);
@@ -485,8 +519,8 @@ export async function createCustomerDepositCheckout(
     amountCents: invoiceAmountToCents(due),
     currency: "usd",
     description: "Material deposit",
-    successUrl: `${appUrl}/e/${token}?checkout=return&session_id={CHECKOUT_SESSION_ID}`,
-    cancelUrl: `${appUrl}/e/${token}?checkout=cancelled`,
+    successUrl: `${appUrl}${loaded.returnPath}?checkout=return&session_id={CHECKOUT_SESSION_ID}`,
+    cancelUrl: `${appUrl}${loaded.returnPath}?checkout=cancelled`,
   });
 }
 
@@ -496,24 +530,8 @@ export async function reconcileEstimateDepositCheckout(
   checkoutSessionId?: string | null,
   provider: PaymentProvider = getPaymentProvider(),
 ): Promise<ReconcileCheckoutResult> {
-  const estimate = token
-    ? await db.estimate.findUnique({
-        where: { publicToken: token },
-        select: {
-          id: true,
-          businessId: true,
-          status: true,
-          total: true,
-          approvedVersion: {
-            select: {
-              total: true,
-              lineItems: { select: { type: true, total: true, description: true } },
-            },
-          },
-          lineItems: { select: { type: true, total: true, description: true } },
-        },
-      })
-    : null;
+  const loaded = await loadDepositEstimateByCustomerToken(db, token);
+  const estimate = loaded?.estimate ?? null;
   if (!estimate) {
     return { applied: false, reason: "estimate_not_found" };
   }

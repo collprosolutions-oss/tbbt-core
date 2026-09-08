@@ -26,7 +26,7 @@ const {
   isMerchantPaymentReady,
   shouldOfferStripeOnboarding,
 } = await import("@/lib/payments/readiness");
-const { invoiceAmountToCents, invoiceDueCents, payInvoiceButtonLabel } = await import("@/lib/payments/money");
+const { invoiceAmountToCents, invoiceDueCents, payDepositButtonLabel, payInvoiceButtonLabel } = await import("@/lib/payments/money");
 const { INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES } = await import(
   "@/lib/payments/stripe-adapter"
 );
@@ -37,6 +37,7 @@ const {
   PaymentError,
   reconcileProjectTokenCheckoutPayment,
   reconcileStripeCheckoutPayment,
+  shouldShowPayDeposit,
   shouldShowPayInvoice,
   startStripeConnectOnboarding,
 } = await import("@/lib/payments/service");
@@ -195,6 +196,32 @@ try {
   check(
     "Pay Invoice button label includes the server-formatted amount",
     payInvoiceButtonLabel("$300.00") === "Pay Invoice — $300.00",
+  );
+  check(
+    "Pay Deposit button labels cover unpaid and remaining",
+    payDepositButtonLabel("$200.00") === "Pay $200.00 Material Deposit" &&
+      payDepositButtonLabel("$100.00", true) === "Pay Remaining Deposit",
+  );
+  check(
+    "Pay Deposit is hidden when remaining is 0 or an invoice is already customer-visible",
+    shouldShowPayDeposit({
+      requiredCents: 20000,
+      remainingCents: 20000,
+      paymentReady: true,
+      hasCustomerInvoice: false,
+    }) &&
+      !shouldShowPayDeposit({
+        requiredCents: 20000,
+        remainingCents: 0,
+        paymentReady: true,
+        hasCustomerInvoice: false,
+      }) &&
+      !shouldShowPayDeposit({
+        requiredCents: 20000,
+        remainingCents: 20000,
+        paymentReady: true,
+        hasCustomerInvoice: true,
+      }),
   );
   check(
     "v2 card_payments active is payment-ready",

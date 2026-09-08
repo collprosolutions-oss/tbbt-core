@@ -22,6 +22,7 @@ const {
   createCustomerInvoiceCheckout,
   getBusinessPaymentStatus,
   PaymentError,
+  shouldShowPayDeposit,
   startStripeConnectOnboarding,
 } = await import("@/lib/payments/service");
 const { completeJobAndSendInvoice } = await import("@/lib/complete-job-invoice");
@@ -40,6 +41,7 @@ const {
   recordOwnerManualDeposit,
   unpaidMaterialDepositWarning,
 } = await import("@/lib/project-payments");
+const { payDepositButtonLabel } = await import("@/lib/payments/money");
 const { Prisma } = await import("@prisma/client");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -256,6 +258,18 @@ try {
     new URL("../src/app/(app)/estimates/[estimateId]/page.tsx", import.meta.url),
     "utf8",
   );
+  const portalPageSrc = readFileSync(
+    new URL("../src/app/p/[token]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const portalDepositRouteSrc = readFileSync(
+    new URL("../src/app/p/[token]/deposit/route.ts", import.meta.url),
+    "utf8",
+  );
+  const approvedScopeSrc = readFileSync(
+    new URL("../src/components/jobs/approved-scope-card.tsx", import.meta.url),
+    "utf8",
+  );
 
   console.log("\nSTATIC — Deposit workflow contracts");
   check(
@@ -308,6 +322,47 @@ try {
     "approved estimate deposit snapshot prefers the approved version",
     estimatePageSrc.includes("estimate.approvedVersion?.lineItems ?? estimate.lineItems") &&
       estimatePageSrc.includes("estimate.approvedVersion?.total ?? estimate.total"),
+  );
+  check(
+    "project portal reuses createCustomerDepositCheckout for job tokens",
+    portalDepositRouteSrc.includes("createCustomerDepositCheckout(prisma, token)") &&
+      portalPageSrc.includes("reconcileEstimateDepositCheckout") &&
+      portalPageSrc.includes("PortalMaterialDepositCard") &&
+      portalPageSrc.includes("shouldShowPayDeposit"),
+  );
+  check(
+    "project portal hides MATERIAL unit prices and shows Description | Qty",
+    portalPageSrc.includes("hideMaterialLinePricing") &&
+      approvedScopeSrc.includes("hideMaterialLinePricing") &&
+      approvedScopeSrc.includes("customer-materials-compact") &&
+      approvedScopeSrc.includes("Description") &&
+      approvedScopeSrc.includes("Qty"),
+  );
+  check(
+    "Pay Remaining Deposit is the partial-payment CTA",
+    payDepositButtonLabel("$200.00") === "Pay $200.00 Material Deposit" &&
+      payDepositButtonLabel("$100.00", true) === "Pay Remaining Deposit",
+  );
+  check(
+    "Pay Deposit is hidden once a customer invoice exists",
+    shouldShowPayDeposit({
+      requiredCents: 20000,
+      remainingCents: 20000,
+      paymentReady: true,
+      hasCustomerInvoice: false,
+    }) === true &&
+      shouldShowPayDeposit({
+        requiredCents: 20000,
+        remainingCents: 20000,
+        paymentReady: true,
+        hasCustomerInvoice: true,
+      }) === false &&
+      shouldShowPayDeposit({
+        requiredCents: 20000,
+        remainingCents: 0,
+        paymentReady: true,
+        hasCustomerInvoice: false,
+      }) === false,
   );
   check(
     "unpaid warning names the remaining deposit",
@@ -734,8 +789,49 @@ try {
     });
     check("unapproved estimate cannot be charged a deposit", false);
   } catch (error) {
+  check(
+    "unapproved estimate cannot be charged a deposit",
+    error instanceof PaymentError,
+    );
+  }
+
+  console.log("\nTEST — Project portal token reuses the same deposit checkout");
+  const portalEst = await seedEstimate({
+    businessId: businessA.business.id,
+    customerId: businessA.customer.id,
+    propertyId: businessA.property.id,
+    total: "550.00",
+  });
+  const portalJob = await prisma.job.create({
+    data: {
+      businessId: businessA.business.id,
+      customerId: businessA.customer.id,
+      propertyId: businessA.property.id,
+      estimateId: portalEst.estimate.id,
+      approvedEstimateVersionId: portalEst.version.id,
+      status: "UNSCHEDULED",
+      projectToken: randomUUID(),
+    },
+  });
+  const portalSession = await createCustomerDepositCheckout(
+    prisma,
+    portalJob.projectToken,
+    provider,
+    { appUrl: "http://deposit.test" },
+  );
+  check("project portal token can start the same $200 deposit checkout", portalSession.amountCents === 20000);
+  check(
+    "project portal deposit checkout stays on Business A connected account",
+    portalSession.connectedAccountId === accountA.stripeAccountId,
+  );
+  try {
+    await createCustomerDepositCheckout(prisma, randomUUID(), provider, {
+      appUrl: "http://deposit.test",
+    });
+    check("unknown project token cannot open deposit checkout", false);
+  } catch (error) {
     check(
-      "unapproved estimate cannot be charged a deposit",
+      "unknown project token cannot open deposit checkout",
       error instanceof PaymentError,
     );
   }
