@@ -167,12 +167,15 @@ check(
     lineSections.includes("ESTIMATE_MATERIALS_SECTION_TITLE"),
 );
 check(
-  "Deposit CTA is approve-then-pay, not charge-before-accept",
-  approve.includes("Approve Estimate & Pay") &&
+  "Deposit CTA is approve-then-pay only when checkout can start",
+  approve.includes("needsDeposit && paymentReady") &&
+    approve.includes("Approve Estimate & Pay") &&
     approve.includes("Approve Estimate") &&
     approve.includes("Material Deposit Due:") &&
     approve.includes("PayDepositButton") &&
     approve.includes("Approval records your acceptance first") &&
+    approve.includes("Online deposit payment is not available yet") &&
+    approve.includes("material deposit is still due") &&
     !approve.includes("pi_"),
 );
 check(
