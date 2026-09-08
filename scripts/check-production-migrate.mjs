@@ -80,6 +80,29 @@ check(
     availabilityMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessUnavailableDate"'),
 );
 
+const materialPriceMigration = readFileSync(
+  new URL("../prisma/migrations/20260908190000_add_material_price_engine/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Material price engine migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(materialPriceMigration) &&
+    materialPriceMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessSupplierPreference"') &&
+    materialPriceMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessMaterialSupplierMapping"') &&
+    materialPriceMigration.includes('CREATE TABLE IF NOT EXISTS "SupplierPriceRecord"'),
+);
+
+const materialPriceDb = readFileSync(
+  new URL("../src/lib/material-pricing/db.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers material price engine tables skipped by migrate",
+  materialPriceDb.includes("Preview shares Production and skips migrate") &&
+    materialPriceDb.includes("CREATE TABLE IF NOT EXISTS") &&
+    materialPriceDb.includes("ensureMaterialPriceEngineTables"),
+);
+
 const availabilityData = readFileSync(
   new URL("../src/lib/availability-data.ts", import.meta.url),
   "utf8",

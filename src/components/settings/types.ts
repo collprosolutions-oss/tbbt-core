@@ -10,6 +10,7 @@ import type {
   SettingsSection,
 } from "@/lib/settings";
 import type { PublicSiteImageEditorSlot } from "@/lib/public-site-images";
+import type { SupplierPricingContextPayload } from "@/lib/material-pricing/types";
 
 export type SettingsWorkspaceProps = {
   section: SettingsSection;
@@ -24,6 +25,7 @@ export type SettingsWorkspaceProps = {
     storageUsage?: { usedBytes: number; limitBytes: number } | null;
     slots: PublicSiteImageEditorSlot[];
   };
+  supplierPricing?: SupplierPricingContextPayload | null;
 };
 
 export type {

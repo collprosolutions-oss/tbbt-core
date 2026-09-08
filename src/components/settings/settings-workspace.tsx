@@ -9,6 +9,7 @@ import { ConnectStripeButton } from "@/components/settings/connect-stripe-button
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import { SchedulingSettingsForm } from "@/components/settings/scheduling-settings-form";
+import { SupplierPricingSettingsForm } from "@/components/settings/supplier-pricing-form";
 import type { SettingsWorkspaceProps } from "@/components/settings/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -156,6 +157,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
     canEditConsequential,
     canEditPreferences,
     websitePhotos,
+    supplierPricing,
   } = props;
 
   if (section === "overview") {
@@ -432,8 +434,18 @@ function SectionBody(props: SettingsWorkspaceProps) {
     return (
       <SectionCard
         title="Vendors & purchasing"
-        description="Settings foundation only. This is not a vendor-management module and is separate from recorded Expenses."
+        description="Supplier pricing foundation for estimates. This is not purchasing, checkout, or a vendor-management module."
       >
+        {supplierPricing ? (
+          <SupplierPricingSettingsForm
+            context={supplierPricing}
+            canEdit={canEditPreferences}
+          />
+        ) : null}
+        <DeferredField
+          label="Purchase orders / checkout / delivery"
+          detail="Out of scope. Recorded expenses stay on the Expenses workspace."
+        />
         {snapshot.distinctVendors.length > 0 ? (
           <ul className="space-y-2 text-sm">
             {snapshot.distinctVendors.map((vendor) => (
@@ -443,10 +455,6 @@ function SectionBody(props: SettingsWorkspaceProps) {
         ) : (
           <p className="text-sm text-muted-foreground">No vendor names have been recorded on expenses yet.</p>
         )}
-        <DeferredField
-          label="Purchasing accounts / supplier integrations"
-          detail="Not implemented. Recorded expenses stay on the Expenses workspace."
-        />
         <Button asChild variant="outline">
           <Link href="/expenses">Open Expenses</Link>
         </Button>
