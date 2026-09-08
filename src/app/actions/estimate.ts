@@ -47,6 +47,7 @@ import {
   loadBusinessEstimatingDefaults,
   saveBusinessEstimatingDefaultsFromTakeoff,
 } from "@/lib/estimating-defaults-db";
+import { describeSavedBusinessDefaults } from "@/lib/estimating-defaults";
 import { resolveDraftEstimatingWorkspace } from "@/lib/estimate-calculators/estimating-registry";
 import { parseWorkAreaIntake } from "@/lib/work-area-intake";
 import { stampDraftEstimateTerms } from "@/lib/estimate-terms/stamp";
@@ -683,15 +684,14 @@ export async function saveEstimateBusinessEstimatingDefaults(
       return { error: "Calculate or enter reusable pricing before saving a business default." };
     }
     const access = await requireBusinessAccess();
-    await saveBusinessEstimatingDefaultsFromTakeoff(prisma, access, {
+    const saved = await saveBusinessEstimatingDefaultsFromTakeoff(prisma, access, {
       workspaceId: readString(formData, "workspaceId"),
       snapshot,
       title: readString(formData, "workspaceTitle"),
     });
     revalidatePath(`/estimates/${estimateId}`);
     return {
-      message:
-        "Saved as business default. Future estimates using this calculator will preload these reusable prices — not this job’s rounded totals.",
+      message: describeSavedBusinessDefaults(saved),
     };
   } catch (error) {
     return {

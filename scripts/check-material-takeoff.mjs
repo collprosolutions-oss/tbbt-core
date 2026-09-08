@@ -273,6 +273,8 @@ try {
       takeoffForm.includes("saveEstimateBusinessEstimatingDefaults") &&
       takeoffForm.includes("Save as business default") &&
       takeoffForm.includes("BUSINESS_DEFAULT_SOURCE_LABEL") &&
+      takeoffForm.includes("Project only") &&
+      takeoffForm.includes("Save with this calculator as business default") &&
       !takeoffForm.includes("Number(event.target.value) || 0") &&
       !takeoffForm.includes('type="number"'),
   );

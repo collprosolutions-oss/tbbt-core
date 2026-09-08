@@ -37,11 +37,6 @@ const PROJECT_TAKEOFF_INPUT_KEYS: Record<TakeoffTypeId, readonly string[]> = {
     "lengthInPart",
     "widthFtPart",
     "widthInPart",
-    "includeWireMesh",
-    "includeFormLumber",
-    "includeAnchors",
-    "includeSillGasket",
-    "includePickup",
   ],
   "sheet-covering": [
     "wallWidthFt",
@@ -53,9 +48,6 @@ const PROJECT_TAKEOFF_INPUT_KEYS: Record<TakeoffTypeId, readonly string[]> = {
     "slidingPatioDoors",
     "standardDoors",
     "windows",
-    "includeTrim",
-    "includeFasteners",
-    "includePickup",
   ],
   "framed-wall": [
     "wallLengthFt",
@@ -65,16 +57,19 @@ const PROJECT_TAKEOFF_INPUT_KEYS: Record<TakeoffTypeId, readonly string[]> = {
     "wallHeightFtPart",
     "wallHeightInPart",
     "openings",
-    "includeSheathing",
-    "includeFasteners",
   ],
   "generic-custom": ["laborQuantity"],
 };
 
 export type BusinessMaterialItemDefault = {
   id: string;
+  kind: string;
+  label?: string;
+  unit?: string;
+  selected?: boolean;
   unitCost: number | null;
   customerUnitPrice: number | null;
+  defaultQuantity?: number | null;
 };
 
 export type BusinessEstimatingDefaultPayload = {
@@ -144,11 +139,27 @@ export function parseBusinessEstimatingDefaultPayload(
         if (!item || typeof item !== "object" || Array.isArray(item)) return [];
         const rec = item as Record<string, unknown>;
         if (typeof rec.id !== "string" || !rec.id.trim()) return [];
+        const kind =
+          typeof rec.kind === "string" && rec.kind.trim()
+            ? rec.kind.trim()
+            : rec.id.startsWith("custom:")
+              ? "custom"
+              : rec.id.trim();
+        const defaultQuantity = parsePositiveNumber(rec.defaultQuantity);
         return [
           {
             id: rec.id.trim(),
+            kind,
+            ...(typeof rec.label === "string" && rec.label.trim()
+              ? { label: rec.label.trim() }
+              : {}),
+            ...(typeof rec.unit === "string" && rec.unit.trim()
+              ? { unit: rec.unit.trim() }
+              : {}),
+            ...(typeof rec.selected === "boolean" ? { selected: rec.selected } : {}),
             unitCost: parseNullableMoney(rec.unitCost),
             customerUnitPrice: parseNullableMoney(rec.customerUnitPrice),
+            ...(defaultQuantity != null ? { defaultQuantity } : {}),
           },
         ];
       })
@@ -201,17 +212,10 @@ export function extractReusableEstimatingDefaults(input: {
   const takeoffType = snapshot?.takeoffType;
   const laborRate = snapshot ? parsePositiveNumber(snapshot.laborRate) : null;
   const items =
-    snapshot?.items
-      .filter(
-        (item) =>
-          item.kind !== "custom" &&
-          (item.unitCost != null || item.customerUnitPrice != null),
-      )
-      .map((item) => ({
-        id: item.id,
-        unitCost: parseNullableMoney(item.unitCost),
-        customerUnitPrice: parseNullableMoney(item.customerUnitPrice),
-      })) ?? [];
+    snapshot?.items.flatMap((item) => {
+      const saved = extractReusableMaterialItem(item);
+      return saved ? [saved] : [];
+    }) ?? [];
   const calculatorId =
     input.calculatorId && isCalculatorId(input.calculatorId)
       ? input.calculatorId
@@ -261,7 +265,18 @@ export function mergeEstimatingDefaultPayloads(
   const itemMap = new Map(
     (current.material.items ?? []).map((item) => [item.id, item]),
   );
-  for (const item of patch.material.items ?? []) {
+  const patchItems = patch.material.items ?? [];
+  const patchCustomIds = new Set(
+    patchItems.filter((item) => isReusableCustomItem(item)).map((item) => item.id),
+  );
+  if (patch.material.items) {
+    for (const [id, item] of [...itemMap.entries()]) {
+      if (isReusableCustomItem(item) && !patchCustomIds.has(id)) {
+        itemMap.delete(id);
+      }
+    }
+  }
+  for (const item of patchItems) {
     itemMap.set(item.id, item);
   }
   return {
@@ -288,51 +303,108 @@ export function mergeEstimatingDefaultPayloads(
  * Apply reusable business defaults onto a project takeoff snapshot.
  * Never copies labor add-ons, quantity overrides, rounded job totals,
  * or project measurements that are already set.
+ *
+ * mode "seed": new estimate — reusable include flags and prices fill in,
+ *              project dimensions still win.
+ * mode "overlay": existing draft — project inputs/prices/add-ons win;
+ *                 fill only missing prices and missing reusable custom items.
  */
 export function applyBusinessEstimatingDefaults(
   snapshot: TakeoffSnapshot,
   defaults: BusinessEstimatingDefaultPayload | null,
+  options?: { mode?: "seed" | "overlay" },
 ): TakeoffSnapshot {
   if (!defaults) return snapshot;
+  const mode = options?.mode ?? "seed";
   const takeoffType = snapshot.takeoffType;
-  const mergedInputs = {
-    ...snapshot.inputs,
-    ...(defaults.material.reusableInputs ?? {}),
-    ...keepProjectTakeoffInputs(takeoffType, snapshot.inputs),
-  };
-  const previousItems: TakeoffItem[] = (defaults.material.items ?? []).map(
-    (item) => ({
-      id: item.id,
-      kind: item.id,
-      label: item.id,
-      unit: "ea",
-      optional: true,
-      selected: true,
-      calculatedQuantity: 0,
-      quantityOverride: null,
-      unitCost: item.unitCost,
-      customerUnitPrice: item.customerUnitPrice,
-      explanation: "",
-      convertedLineItemId: null,
-    }),
-  );
-  const previous: TakeoffSnapshot = {
-    ...snapshot,
-    inputs: mergedInputs,
-    wastePercent: defaults.material.wastePercent ?? snapshot.wastePercent,
-    markupPercent: defaults.material.markupPercent ?? snapshot.markupPercent,
-    laborRate: defaults.labor.laborRate ?? snapshot.laborRate,
-    laborAdjustment: snapshot.laborAdjustment,
-    items: previousItems,
-  };
-  return computeTakeoff({
+  const mergedInputs =
+    mode === "overlay"
+      ? { ...(defaults.material.reusableInputs ?? {}), ...snapshot.inputs }
+      : {
+          ...snapshot.inputs,
+          ...(defaults.material.reusableInputs ?? {}),
+          ...keepProjectTakeoffInputs(takeoffType, snapshot.inputs),
+        };
+  const computed = computeTakeoff({
     takeoffType,
     inputs: mergedInputs,
-    wastePercent: previous.wastePercent,
+    wastePercent:
+      mode === "overlay"
+        ? snapshot.wastePercent
+        : (defaults.material.wastePercent ?? snapshot.wastePercent),
     measurementSource: snapshot.measurementSource,
     skippedMeasurements: snapshot.skippedMeasurements,
-    previous,
+    previous: {
+      ...snapshot,
+      inputs: mergedInputs,
+      markupPercent:
+        mode === "overlay"
+          ? snapshot.markupPercent
+          : (defaults.material.markupPercent ?? snapshot.markupPercent),
+      laborRate:
+        mode === "overlay"
+          ? snapshot.laborRate
+          : (defaults.labor.laborRate ?? snapshot.laborRate),
+      laborAdjustment: snapshot.laborAdjustment,
+    },
   }).snapshot;
+
+  const savedItems = defaults.material.items ?? [];
+  const savedById = new Map(savedItems.map((item) => [item.id, item]));
+  const formulaItems = computed.items.map((item) => {
+    if (item.kind === "custom") return item;
+    const saved = savedById.get(item.id);
+    if (!saved) return item;
+    return {
+      ...item,
+      selected: mode === "overlay" ? item.selected : (saved.selected ?? item.selected),
+      unitCost: item.unitCost ?? saved.unitCost,
+      customerUnitPrice: item.customerUnitPrice ?? saved.customerUnitPrice,
+      quantityOverride: item.quantityOverride,
+    };
+  });
+  const customItems = savedItems
+    .filter((item) => isReusableCustomItem(item))
+    .flatMap((saved) => {
+      if (formulaItems.some((item) => customItemMatchesSaved(item, saved))) {
+        return [];
+      }
+      return [reusableCustomTakeoffItem(saved)];
+    });
+
+  return {
+    ...computed,
+    inputs: mergedInputs,
+    wastePercent:
+      mode === "overlay"
+        ? snapshot.wastePercent
+        : (defaults.material.wastePercent ?? computed.wastePercent),
+    markupPercent:
+      mode === "overlay"
+        ? snapshot.markupPercent
+        : (defaults.material.markupPercent ?? computed.markupPercent),
+    laborRate:
+      mode === "overlay"
+        ? snapshot.laborRate
+        : (defaults.labor.laborRate ?? snapshot.laborRate ?? computed.laborRate),
+    laborAdjustment: snapshot.laborAdjustment,
+    items: [
+      ...formulaItems.map((item) => {
+        if (item.kind !== "custom") return item;
+        const saved =
+          savedById.get(item.id) ??
+          savedItems.find((candidate) => customItemMatchesSaved(item, candidate));
+        if (!saved) return item;
+        return {
+          ...item,
+          unitCost: item.unitCost ?? saved.unitCost,
+          customerUnitPrice: item.customerUnitPrice ?? saved.customerUnitPrice,
+          persistAs: "business-default" as const,
+        };
+      }),
+      ...customItems,
+    ],
+  };
 }
 
 export function startingTakeoffDraftWithDefaults(input: {
@@ -350,7 +422,9 @@ export function startingTakeoffDraftWithDefaults(input: {
     measurementSource: input.measurementSource,
     skippedMeasurements: input.skippedMeasurements,
   }).snapshot;
-  return applyBusinessEstimatingDefaults(computed, input.businessDefaults ?? null);
+  return applyBusinessEstimatingDefaults(computed, input.businessDefaults ?? null, {
+    mode: "seed",
+  });
 }
 
 export function businessDefaultFieldSources(
@@ -413,6 +487,113 @@ export function resolveWorkspaceIdForTakeoff(input: {
       customQuote: true,
     })?.id ?? null
   );
+}
+
+export function describeSavedBusinessDefaults(
+  payload: BusinessEstimatingDefaultPayload,
+) {
+  const items = payload.material.items ?? [];
+  const customCount = items.filter((item) => isReusableCustomItem(item)).length;
+  const standardPriced = items.filter(
+    (item) =>
+      !isReusableCustomItem(item) &&
+      (item.unitCost != null || item.customerUnitPrice != null),
+  ).length;
+  const parts: string[] = [];
+  if (payload.labor.laborRate != null) parts.push("labor rate");
+  if (payload.material.wastePercent != null) parts.push("waste");
+  if (payload.material.markupPercent != null) parts.push("markup");
+  if (payload.material.reusableInputs?.bagYieldCuFt != null) parts.push("bag yield");
+  if (standardPriced > 0) parts.push("standard material prices");
+  if (customCount > 0) {
+    parts.push(
+      `${customCount} reusable custom material${customCount === 1 ? "" : "s"}`,
+    );
+  }
+  const workspace =
+    payload.workspaceId === "concrete-slab"
+      ? "Concrete Slab"
+      : payload.workspaceId.replace(/-/g, " ");
+  const detail =
+    parts.length === 0
+      ? "reusable calculator pricing"
+      : parts.length === 1
+        ? parts[0]
+        : parts.length === 2
+          ? `${parts[0]} and ${parts[1]}`
+          : `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+  return `Business defaults saved — ${detail} will be used as starting values on future ${workspace} estimates.`;
+}
+
+export function reusableCustomMaterialId(label: string, unit: string) {
+  return `custom:${slugToken(label)}:${slugToken(unit) || "ea"}`;
+}
+
+export function isReusableCustomItem(item: { id: string; kind?: string }) {
+  return item.kind === "custom" || item.id.startsWith("custom:");
+}
+
+function extractReusableMaterialItem(item: TakeoffItem): BusinessMaterialItemDefault | null {
+  if (item.kind === "custom") {
+    if (item.persistAs !== "business-default") return null;
+    const label = item.label.trim();
+    if (!label) return null;
+    const unit = item.unit.trim() || "ea";
+    return {
+      id: reusableCustomMaterialId(label, unit),
+      kind: "custom",
+      label,
+      unit,
+      selected: item.selected,
+      unitCost: parseNullableMoney(item.unitCost),
+      customerUnitPrice: parseNullableMoney(item.customerUnitPrice),
+    };
+  }
+  if (item.unitCost == null && item.customerUnitPrice == null) return null;
+  return {
+    id: item.id,
+    kind: item.kind,
+    label: item.label,
+    unit: item.unit,
+    selected: item.selected,
+    unitCost: parseNullableMoney(item.unitCost),
+    customerUnitPrice: parseNullableMoney(item.customerUnitPrice),
+  };
+}
+
+function reusableCustomTakeoffItem(saved: BusinessMaterialItemDefault): TakeoffItem {
+  return {
+    id: saved.id,
+    kind: "custom",
+    label: saved.label?.trim() || saved.id,
+    unit: saved.unit?.trim() || "ea",
+    optional: true,
+    selected: saved.selected !== false,
+    calculatedQuantity: 1,
+    quantityOverride: null,
+    unitCost: saved.unitCost,
+    customerUnitPrice: saved.customerUnitPrice,
+    explanation: "Reusable business-default material for this calculator.",
+    convertedLineItemId: null,
+    persistAs: "business-default",
+  };
+}
+
+function customItemMatchesSaved(
+  item: TakeoffItem,
+  saved: BusinessMaterialItemDefault,
+) {
+  if (item.kind !== "custom" && !isReusableCustomItem(item)) return false;
+  if (item.id === saved.id) return true;
+  return reusableCustomMaterialId(item.label, item.unit) === saved.id;
+}
+
+function slugToken(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "item";
 }
 
 export function stripProjectTakeoffInputs(

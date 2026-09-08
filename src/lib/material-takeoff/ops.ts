@@ -151,7 +151,9 @@ export async function seedDraftTakeoffFromBusinessDefaults(
     measurementSource: suggestion.measurementSource,
     skippedMeasurements: suggestion.skippedMeasurements,
   });
-  const seeded = applyBusinessEstimatingDefaults(computed.snapshot, defaults);
+  const seeded = applyBusinessEstimatingDefaults(computed.snapshot, defaults, {
+    mode: "seed",
+  });
   await persistTakeoffOnLine(db, line, seeded);
   return seeded;
 }
@@ -449,7 +451,9 @@ export async function resetDraftTakeoffAndGeneratedMaterials(
       workspace.id,
     );
     if (defaults) {
-      nextSnapshot = applyBusinessEstimatingDefaults(nextSnapshot, defaults);
+      nextSnapshot = applyBusinessEstimatingDefaults(nextSnapshot, defaults, {
+        mode: "seed",
+      });
     }
   }
 

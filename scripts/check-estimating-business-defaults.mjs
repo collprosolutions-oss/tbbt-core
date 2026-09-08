@@ -27,14 +27,15 @@ const { resolveEstimatingWorkspace } = await import(
   "@/lib/estimate-calculators"
 );
 const { overrideDraftEstimateLinePrice } = await import("@/lib/estimate-line-ops");
-const {
-  applyDraftTakeoffRecommendedLabor,
-  computeTakeoff,
-  convertDraftMaterialTakeoff,
-  resetDraftTakeoffAndGeneratedMaterials,
-  seedDraftTakeoffFromBusinessDefaults,
-  DEFAULT_CONCRETE_60LB_BAG_LABOR_RATE,
-} = await import("@/lib/material-takeoff");
+  const {
+    applyDraftTakeoffRecommendedLabor,
+    computeTakeoff,
+    convertDraftMaterialTakeoff,
+    resetDraftTakeoffAndGeneratedMaterials,
+    saveDraftMaterialTakeoff,
+    seedDraftTakeoffFromBusinessDefaults,
+    DEFAULT_CONCRETE_60LB_BAG_LABOR_RATE,
+  } = await import("@/lib/material-takeoff");
 const { addRequestDraftLines } = await import("@/lib/request-estimate-draft");
 const { CUSTOMER_REPORTED_MEASUREMENT } = await import("@/lib/catalog-intake");
 const { setDraftEstimateCustomerMaterialsTotal } = await import(
@@ -42,8 +43,10 @@ const { setDraftEstimateCustomerMaterialsTotal } = await import(
 );
 const {
   applyBusinessEstimatingDefaults,
+  describeSavedBusinessDefaults,
   extractReusableEstimatingDefaults,
   parseBusinessEstimatingDefaultPayload,
+  reusableCustomMaterialId,
   stripProjectTakeoffInputs,
 } = await import("@/lib/estimating-defaults");
 const {
@@ -180,6 +183,8 @@ try {
     "Owner has an explicit Save as business default control and source label",
     form.includes("Save as business default") &&
       form.includes("BUSINESS_DEFAULT_SOURCE_LABEL") &&
+      form.includes("Project only") &&
+      form.includes("Save with this calculator as business default") &&
       form.includes("saveEstimateBusinessEstimatingDefaults") &&
       ownerPage.includes("businessDefaults") &&
       !customerPage.includes("Save as business default") &&
@@ -202,9 +207,62 @@ try {
   emptyConcrete.items = emptyConcrete.items.map((item) =>
     item.id === "concrete-bags"
       ? { ...item, unitCost: 8.5, customerUnitPrice: 12, quantityOverride: 999 }
-      : item.id === "pickup-procurement"
-        ? { ...item, unitCost: 40, customerUnitPrice: 40 }
-        : item,
+      : item.id === "wire-mesh"
+        ? { ...item, unitCost: 18, customerUnitPrice: 24 }
+        : item.id === "form-lumber"
+          ? { ...item, unitCost: 9.5, customerUnitPrice: 14 }
+          : item.id === "form-stakes"
+            ? { ...item, unitCost: 1.25, customerUnitPrice: 2 }
+            : item.id === "pickup-procurement"
+              ? { ...item, unitCost: 40, customerUnitPrice: 40 }
+              : item,
+  );
+  emptyConcrete.items.push(
+    {
+      id: "custom-one-off",
+      kind: "custom",
+      label: "Unusual hauling",
+      unit: "trip",
+      optional: true,
+      selected: true,
+      calculatedQuantity: 1,
+      quantityOverride: 1,
+      unitCost: 200,
+      customerUnitPrice: 250,
+      explanation: "Project only",
+      convertedLineItemId: null,
+      persistAs: "project",
+    },
+    {
+      id: "custom-poly-uuid",
+      kind: "custom",
+      label: "Poly Plastic",
+      unit: "roll",
+      optional: true,
+      selected: true,
+      calculatedQuantity: 1,
+      quantityOverride: 1,
+      unitCost: 22,
+      customerUnitPrice: 35,
+      explanation: "Reusable",
+      convertedLineItemId: null,
+      persistAs: "business-default",
+    },
+    {
+      id: "custom-oil-uuid",
+      kind: "custom",
+      label: "Vegetable Oil",
+      unit: "gal",
+      optional: true,
+      selected: true,
+      calculatedQuantity: 1,
+      quantityOverride: 1,
+      unitCost: 8,
+      customerUnitPrice: 12,
+      explanation: "Reusable",
+      convertedLineItemId: null,
+      persistAs: "business-default",
+    },
   );
   const extracted = extractReusableEstimatingDefaults({
     workspaceId: "concrete-slab",
@@ -216,12 +274,30 @@ try {
       extracted.material.wastePercent === 10 &&
       extracted.material.markupPercent === 20 &&
       extracted.material.reusableInputs?.bagYieldCuFt === 0.45 &&
+      extracted.material.reusableInputs?.includeWireMesh === true &&
       extracted.material.items?.some((item) => item.id === "concrete-bags" && item.unitCost === 8.5) &&
+      extracted.material.items?.some((item) => item.id === "wire-mesh" && item.unitCost === 18) &&
       extracted.material.items?.some((item) => item.id === "pickup-procurement" && item.unitCost === 40) &&
       extracted.material.reusableInputs?.lengthFt == null &&
       extracted.material.reusableInputs?.widthFt == null &&
       extracted.labor.laborRate !== 800 &&
       !Object.prototype.hasOwnProperty.call(extracted.labor, "laborAdjustment"),
+  );
+  check(
+    "Extract saves reusable custom materials by stable calculator identity, not LineItem ids",
+    extracted.material.items?.some(
+      (item) =>
+        item.id === reusableCustomMaterialId("Poly Plastic", "roll") &&
+        item.kind === "custom" &&
+        item.unitCost === 22,
+    ) &&
+      extracted.material.items?.some(
+        (item) =>
+          item.id === reusableCustomMaterialId("Vegetable Oil", "gal") &&
+          item.label === "Vegetable Oil",
+      ) &&
+      !extracted.material.items?.some((item) => item.label === "Unusual hauling") &&
+      !extracted.material.items?.some((item) => item.id === "custom-poly-uuid"),
   );
   check(
     "stripProjectTakeoffInputs never copies slab dimensions",
@@ -246,6 +322,12 @@ try {
   const victoriaApplied = applyBusinessEstimatingDefaults(victoriaBase, extracted);
   const victoriaBags = victoriaApplied.items.find((item) => item.id === "concrete-bags");
   const davidBags = emptyConcrete.items.find((item) => item.id === "concrete-bags");
+  const victoriaPoly = victoriaApplied.items.find(
+    (item) => item.id === reusableCustomMaterialId("Poly Plastic", "roll"),
+  );
+  const victoriaOil = victoriaApplied.items.find(
+    (item) => item.id === reusableCustomMaterialId("Vegetable Oil", "gal"),
+  );
   check(
     "Applying defaults onto Victoria keeps her dimensions and fresh quantities, not David totals",
     victoriaApplied.laborRate === 36 &&
@@ -258,6 +340,100 @@ try {
       victoriaBags?.calculatedQuantity !== 999 &&
       Number(victoriaApplied.inputs.lengthFt) === 12 &&
       Number(victoriaApplied.inputs.widthFt) === 8,
+  );
+  check(
+    "Victoria receives reusable Poly Plastic and Vegetable Oil with saved prices, not project-only hauling",
+    victoriaPoly?.kind === "custom" &&
+      victoriaPoly?.unitCost === 22 &&
+      victoriaPoly?.customerUnitPrice === 35 &&
+      victoriaOil?.unitCost === 8 &&
+      victoriaOil?.customerUnitPrice === 12 &&
+      !victoriaApplied.items.some((item) => item.label === "Unusual hauling"),
+  );
+
+  const victoriaSmallBase = computeTakeoff({
+    takeoffType: "concrete-slab",
+    inputs: { lengthFt: 3, widthFt: 2, thicknessIn: 4, bagSizeLb: 60, bagYieldCuFt: 0.45 },
+    wastePercent: 8,
+  }).snapshot;
+  const victoriaSmall = applyBusinessEstimatingDefaults(victoriaSmallBase, extracted, {
+    mode: "seed",
+  });
+  const smallBags = victoriaSmall.items.find((item) => item.id === "concrete-bags");
+  check(
+    "3 ft × 2 ft × 4 in calculates a fresh bag count while keeping saved material prices",
+    Number(victoriaSmall.inputs.lengthFt) === 3 &&
+      Number(victoriaSmall.inputs.widthFt) === 2 &&
+      smallBags?.unitCost === 8.5 &&
+      smallBags?.calculatedQuantity != null &&
+      smallBags.calculatedQuantity < (victoriaBags?.calculatedQuantity ?? 0) &&
+      victoriaSmall.laborAdjustment === 0 &&
+      victoriaSmall.items.some((item) => item.label === "Poly Plastic"),
+  );
+
+  const afterCalculate = applyBusinessEstimatingDefaults(
+    computeTakeoff({
+      takeoffType: "concrete-slab",
+      inputs: victoriaSmall.inputs,
+      wastePercent: victoriaSmall.wastePercent,
+      previous: { ...victoriaSmall, items: victoriaSmall.items.filter((item) => item.kind !== "custom") },
+    }).snapshot,
+    extracted,
+    { mode: "overlay" },
+  );
+  check(
+    "Calculate overlay restores missing reusable custom materials and standard prices",
+    afterCalculate.items.some((item) => item.label === "Poly Plastic" && item.unitCost === 22) &&
+      afterCalculate.items.find((item) => item.id === "concrete-bags")?.unitCost === 8.5 &&
+      afterCalculate.laborAdjustment === 0,
+  );
+  const overlayWithExistingPoly = applyBusinessEstimatingDefaults(
+    {
+      ...victoriaSmall,
+      items: [
+        ...victoriaSmall.items.filter((item) => item.label !== "Poly Plastic"),
+        {
+          id: "custom-poly-uuid",
+          kind: "custom",
+          label: "Poly Plastic",
+          unit: "roll",
+          optional: true,
+          selected: true,
+          calculatedQuantity: 1,
+          quantityOverride: 1,
+          unitCost: 22,
+          customerUnitPrice: 35,
+          explanation: "Already on this project",
+          convertedLineItemId: null,
+          persistAs: "business-default",
+        },
+      ],
+    },
+    extracted,
+    { mode: "overlay" },
+  );
+  check(
+    "Overlay matches reusable custom materials by label/unit, not a prior estimate LineItem id",
+    overlayWithExistingPoly.items.filter((item) => item.label === "Poly Plastic").length === 1,
+  );
+  const fortyRateDefaults = {
+    ...extracted,
+    labor: { ...extracted.labor, laborRate: 40 },
+  };
+  const seededForty = applyBusinessEstimatingDefaults(
+    { ...victoriaSmallBase, laborRate: 0 },
+    fortyRateDefaults,
+    { mode: "seed" },
+  );
+  check(
+    "New estimates use the saved business labor rate, not the blank formula starter",
+    seededForty.laborRate === 40,
+  );
+  check(
+    "Save confirmation names labor, material prices, and reusable custom materials",
+    describeSavedBusinessDefaults(extracted).includes("standard material prices") &&
+      describeSavedBusinessDefaults(extracted).includes("2 reusable custom materials") &&
+      describeSavedBusinessDefaults(extracted).includes("Concrete Slab"),
   );
 
   const ownerUser = await prisma.user.create({
@@ -416,13 +592,51 @@ try {
     ...starter,
     laborRate: DEFAULT_CONCRETE_60LB_BAG_LABOR_RATE,
     markupPercent: 15,
-    items: starter.items.map((item) =>
-      item.id === "concrete-bags"
-        ? { ...item, unitCost: 8.5, customerUnitPrice: 12 }
-        : item.id === "pickup-procurement"
-          ? { ...item, unitCost: 45, customerUnitPrice: 45 }
-          : item,
-    ),
+    items: [
+      ...starter.items.map((item) =>
+        item.id === "concrete-bags"
+          ? { ...item, unitCost: 8.5, customerUnitPrice: 12 }
+          : item.id === "wire-mesh"
+            ? { ...item, unitCost: 18, customerUnitPrice: 24 }
+            : item.id === "form-lumber"
+              ? { ...item, unitCost: 9.5, customerUnitPrice: 14 }
+              : item.id === "form-stakes"
+                ? { ...item, unitCost: 1.25, customerUnitPrice: 2 }
+                : item.id === "pickup-procurement"
+                  ? { ...item, unitCost: 45, customerUnitPrice: 45 }
+                  : item,
+      ),
+      {
+        id: "custom-poly-uuid",
+        kind: "custom",
+        label: "Poly Plastic",
+        unit: "roll",
+        optional: true,
+        selected: true,
+        calculatedQuantity: 1,
+        quantityOverride: 1,
+        unitCost: 22,
+        customerUnitPrice: 35,
+        explanation: "Reusable",
+        convertedLineItemId: null,
+        persistAs: "business-default",
+      },
+      {
+        id: "custom-oil-uuid",
+        kind: "custom",
+        label: "Vegetable Oil",
+        unit: "gal",
+        optional: true,
+        selected: true,
+        calculatedQuantity: 1,
+        quantityOverride: 1,
+        unitCost: 8,
+        customerUnitPrice: 12,
+        explanation: "Reusable",
+        convertedLineItemId: null,
+        persistAs: "business-default",
+      },
+    ],
   };
   const saved = await saveBusinessEstimatingDefaultsFromTakeoff(prisma, ownerA, {
     workspaceId: "concrete-slab",
@@ -434,7 +648,13 @@ try {
       saved.material.wastePercent === 10 &&
       saved.material.markupPercent === 15 &&
       saved.material.reusableInputs?.bagYieldCuFt === 0.45 &&
-      saved.material.items?.some((item) => item.id === "concrete-bags" && item.unitCost === 8.5),
+      saved.material.items?.some((item) => item.id === "concrete-bags" && item.unitCost === 8.5) &&
+      saved.material.items?.some(
+        (item) => item.id === reusableCustomMaterialId("Poly Plastic", "roll"),
+      ) &&
+      saved.material.items?.some(
+        (item) => item.id === reusableCustomMaterialId("Vegetable Oil", "gal"),
+      ),
   );
 
   await expectError(
@@ -466,8 +686,28 @@ try {
       davidTakeoff?.inputs.bagYieldCuFt === 0.45 &&
       davidSeedBags?.unitCost === 8.5 &&
       davidSeedBags?.customerUnitPrice === 12 &&
+      davidTakeoff?.items.find((item) => item.id === "wire-mesh")?.unitCost === 18 &&
+      davidTakeoff?.items.some((item) => item.label === "Poly Plastic" && item.unitCost === 22) &&
+      davidTakeoff?.items.some((item) => item.label === "Vegetable Oil" && item.unitCost === 8) &&
       Number(davidTakeoff?.inputs.lengthFt) === 10 &&
       Number(davidTakeoff?.inputs.widthFt) === 10,
+  );
+
+  await saveDraftMaterialTakeoff(prisma, ownerA, {
+    estimateId: david.estimate.id,
+    lineItemId: david.labor.id,
+    snapshot: { ...davidTakeoff, laborAdjustment: 70 },
+  });
+  check(
+    "David's $70 labor add-on stays on the project snapshot and is not written as a business default",
+    lineMaterialTakeoff(
+      (await prisma.lineItem.findFirst({ where: { id: david.labor.id } })).description,
+    )?.laborAdjustment === 70 &&
+      (await loadBusinessEstimatingDefaults(prisma, businessA.id, "concrete-slab"))
+        ?.labor.laborRate === 36 &&
+      JSON.stringify(await loadBusinessEstimatingDefaults(prisma, businessA.id, "concrete-slab")).includes(
+        "laborAdjustment",
+      ) === false,
   );
 
   await applyDraftTakeoffRecommendedLabor(prisma, ownerA, {
@@ -636,7 +876,13 @@ try {
     "Victoria inherits reusable defaults but not David's $800/$300 project totals",
     victoriaTakeoff?.laborRate === 36 &&
       victoriaTakeoff?.wastePercent === 10 &&
+      victoriaTakeoff?.markupPercent === 15 &&
+      victoriaTakeoff?.laborAdjustment === 0 &&
       victoriaTakeoff?.items.find((item) => item.id === "concrete-bags")?.unitCost === 8.5 &&
+      victoriaTakeoff?.items.find((item) => item.id === "wire-mesh")?.customerUnitPrice === 24 &&
+      victoriaTakeoff?.items.find((item) => item.id === "pickup-procurement")?.unitCost === 45 &&
+      victoriaTakeoff?.items.some((item) => item.label === "Poly Plastic" && item.unitCost === 22) &&
+      victoriaTakeoff?.items.some((item) => item.label === "Vegetable Oil" && item.customerUnitPrice === 12) &&
       money(victoria.labor.total) !== 800 &&
       money(victoria.labor.unitPrice) !== 800 &&
       Number(victoriaTakeoff?.inputs.lengthFt) === 12 &&
