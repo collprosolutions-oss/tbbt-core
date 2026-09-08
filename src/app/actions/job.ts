@@ -10,8 +10,13 @@ import { evaluateStartJob } from "@/lib/job-lifecycle";
 import {
   parseDurationMinutes,
   parseScheduleStart,
-  schedulesOverlap,
 } from "@/lib/job-schedule";
+import {
+  describeScheduleWarning,
+  evaluateProposedSchedule,
+  hasScheduleWarning,
+} from "@/lib/availability";
+import { loadAvailabilitySettings, loadOccupiedJobs } from "@/lib/availability-data";
 import { formatDateTime } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
@@ -147,35 +152,19 @@ export async function scheduleJob(
   }
 
   if (!confirmOverlap) {
-    const others = await prisma.job.findMany({
-      where: {
-        ...access.scope,
-        id: { not: job.id },
-        status: { not: "COMPLETED" },
-        scheduledAt: { not: null },
-      },
-      select: {
-        scheduledAt: true,
-        scheduledDurationMinutes: true,
-        customer: { select: { name: true } },
-      },
+    const [settings, others] = await Promise.all([
+      loadAvailabilitySettings(prisma, access.businessId),
+      loadOccupiedJobs(prisma, access.businessId, job.id),
+    ]);
+    const evaluation = evaluateProposedSchedule({
+      start,
+      durationMinutes: duration.minutes,
+      settings,
+      existing: others,
     });
-
-    const overlap = others.find(
-      (other) =>
-        other.scheduledAt &&
-        schedulesOverlap(
-          start,
-          duration.minutes,
-          other.scheduledAt,
-          other.scheduledDurationMinutes,
-        ),
-    );
-
-    if (overlap?.scheduledAt) {
-      const who = overlap.customer?.name ?? "another job";
+    if (hasScheduleWarning(evaluation)) {
       return {
-        warning: `This time overlaps ${who} at ${formatDateTime(overlap.scheduledAt)}. You can schedule anyway if needed.`,
+        warning: describeScheduleWarning(evaluation, start, formatDateTime, settings) ?? undefined,
       };
     }
   }
@@ -192,6 +181,7 @@ export async function scheduleJob(
   revalidatePath("/jobs");
   revalidatePath("/dashboard");
   revalidatePath(`/jobs/${job.id}`);
+  revalidatePath(`/p/${job.projectToken}`);
   return {};
 }
 

@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
 import { formatAddress } from "@/lib/format";
+import type { AvailabilitySnapshot } from "@/lib/availability";
 
 export type UnscheduledJobLite = {
   id: string;
@@ -33,9 +34,11 @@ export type UnscheduledJobLite = {
 export function UnscheduledJobsPanel({
   jobs,
   totalCount,
+  availability,
 }: {
   jobs: UnscheduledJobLite[];
   totalCount: number;
+  availability?: AvailabilitySnapshot | null;
 }) {
   return (
     <Card>
@@ -71,6 +74,7 @@ export function UnscheduledJobsPanel({
                   </Button>
                 </div>
                 <ScheduleJobForm
+                  key={job.id}
                   jobId={job.id}
                   date=""
                   time=""
@@ -78,6 +82,7 @@ export function UnscheduledJobsPanel({
                   customHours=""
                   isScheduled={false}
                   unpaidDepositWarning={job.unpaidDepositWarning}
+                  availability={availability}
                 />
               </div>
             ))}

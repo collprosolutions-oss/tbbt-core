@@ -19,6 +19,8 @@ import { resolveBusinessServiceArea } from "@/lib/business-service-area";
 import { loadPublicSite } from "@/lib/public-site-data";
 import { parseSelectedWorkSearch } from "@/lib/selected-work";
 import { isBusinessStorageConfigured } from "@/lib/business-storage";
+import { loadPublicNextAvailableLabel } from "@/lib/availability-data";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +59,7 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
   const name = publicDisplayName(site.business);
   const phone = publicPhone(site.business.slug);
   const textHref = smsHref(phone);
+  const nextAvailableLabel = await loadPublicNextAvailableLabel(prisma, site.business.id);
 
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>
@@ -104,6 +107,11 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
           <div className="public-container py-12">
             <div className="public-form-card">
               <h2 className="mb-6 text-2xl font-extrabold uppercase">Request Service</h2>
+              {nextAvailableLabel ? (
+                <p className="mb-6 text-sm text-[var(--public-ink)]">
+                  Next available: {nextAvailableLabel}
+                </p>
+              ) : null}
               <MultiServiceRequestFlow
                 slug={site.business.slug}
                 businessName={name}

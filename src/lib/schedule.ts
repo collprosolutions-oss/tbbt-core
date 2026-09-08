@@ -11,7 +11,7 @@
  * src/app/actions/job.ts). Do not add a second scheduling data source here.
  */
 import { lineItemTitle } from "@/lib/estimate-line-scope";
-import { schedulesOverlap } from "@/lib/job-schedule";
+import { durationWithBuffer, schedulesOverlap } from "@/lib/job-schedule";
 
 export const SCHEDULE_VIEWS = ["month", "week", "day", "crew", "list"] as const;
 export type ScheduleView = (typeof SCHEDULE_VIEWS)[number];
@@ -339,9 +339,10 @@ export function groupJobsByDay<T extends { scheduledAt: Date | null }>(
  * section of the Phase 3 / Step 3 spec): two Jobs conflict only when their
  * known scheduledAt + scheduledDurationMinutes windows actually overlap,
  * using the exact same window math as scheduleJob()'s own overlap warning
- * (schedulesOverlap() in src/lib/job-schedule.ts). COMPLETED jobs are
- * excluded, matching that same existing rule -- a finished job cannot be in
- * conflict with anything.
+ * (schedulesOverlap() in src/lib/job-schedule.ts). An optional business
+ * scheduling buffer pads those windows the same way scheduleJob() does.
+ * COMPLETED jobs are excluded, matching that same existing rule -- a
+ * finished job cannot be in conflict with anything.
  *
  * KNOWN LIMITATION (documented, not hidden): a Job with no
  * scheduledDurationMinutes is treated as a single-instant appointment (the
@@ -358,7 +359,7 @@ export function findScheduleConflicts<
     scheduledAt: Date | null;
     scheduledDurationMinutes: number | null;
   },
->(jobs: T[]): Map<string, T[]> {
+>(jobs: T[], bufferMinutes = 0): Map<string, T[]> {
   const relevant = jobs.filter(
     (job) => job.scheduledAt && job.status !== "COMPLETED",
   );
@@ -370,9 +371,9 @@ export function findScheduleConflicts<
       if (
         schedulesOverlap(
           a.scheduledAt!,
-          a.scheduledDurationMinutes,
+          durationWithBuffer(a.scheduledDurationMinutes, bufferMinutes),
           b.scheduledAt!,
-          b.scheduledDurationMinutes,
+          durationWithBuffer(b.scheduledDurationMinutes, bufferMinutes),
         )
       ) {
         conflicts.set(a.id, [...(conflicts.get(a.id) ?? []), b]);

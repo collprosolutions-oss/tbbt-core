@@ -8,6 +8,7 @@ import { WebsiteStoryForm } from "@/components/settings/website-story-form";
 import { ConnectStripeButton } from "@/components/settings/connect-stripe-button";
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
+import { SchedulingSettingsForm } from "@/components/settings/scheduling-settings-form";
 import type { SettingsWorkspaceProps } from "@/components/settings/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,7 +35,6 @@ import {
   PAYMENT_PROVIDER_STATUS_LABELS,
   PAYROLL_PROVIDER_DISCONNECTED_MESSAGE,
   PROJECTED_BALANCE_UNAVAILABLE_MESSAGE,
-  SCHEDULING_DEFAULTS_DEFERRED_MESSAGE,
   SETTINGS_READINESS_LABELS,
   SETTINGS_SECTION_LABELS,
   SETTINGS_SECTIONS,
@@ -297,10 +297,15 @@ function SectionBody(props: SettingsWorkspaceProps) {
 
   if (section === "scheduling") {
     return (
-      <SectionCard title="Scheduling defaults" description={SCHEDULING_DEFAULTS_DEFERRED_MESSAGE}>
-        <DeferredField label="Default job duration" detail="Jobs already store their own scheduledDurationMinutes. A business-wide default is not persisted yet." />
-        <DeferredField label="Scheduling buffer" detail="Not in the current scheduling schema." />
-        <DeferredField label="Business working hours" detail="Not in the current scheduling schema." />
+      <SectionCard
+        title="Scheduling availability"
+        description="Working days, hours, blocked dates, and the travel/pickup buffer for this business only."
+      >
+        <p className="text-sm">{snapshot.scheduling.summary}</p>
+        <SchedulingSettingsForm
+          settings={snapshot.scheduling}
+          canEdit={canEditPreferences}
+        />
         <Button asChild variant="outline">
           <Link href="/jobs">Open Schedule / Jobs</Link>
         </Button>

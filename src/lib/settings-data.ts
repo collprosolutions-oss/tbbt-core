@@ -24,6 +24,11 @@ import {
   isEmailDeliveryConfigured,
   type SettingsPreferenceFlags,
 } from "@/lib/settings";
+import { formatAvailabilitySummary } from "@/lib/availability";
+import {
+  availabilitySettingsFromRow,
+  ensureBusinessAvailabilitySchema,
+} from "@/lib/availability-data";
 import { getTrade } from "@/lib/trades";
 
 export type SettingsTeamMember = {
@@ -60,6 +65,14 @@ export type SettingsSnapshot = {
   websiteStory: {
     rawOwnerStory: string;
     approvedPublicAboutCopy: string;
+  };
+  scheduling: {
+    workingWeekdays: number[];
+    workStartMinutes: number;
+    workEndMinutes: number;
+    schedulingBufferMinutes: number;
+    unavailableDates: string[];
+    summary: string;
   };
   team: SettingsTeamMember[];
   catalogItemCount: number;
@@ -105,6 +118,7 @@ export async function loadSettingsSnapshot(
   businessId: string,
 ): Promise<SettingsSnapshot> {
   const scope = { businessId } as const;
+  await ensureBusinessAvailabilitySchema(prisma);
 
   const [
     business,
@@ -116,6 +130,7 @@ export async function loadSettingsSnapshot(
     paidInvoices,
     expenses,
     auditRows,
+    unavailableDates,
   ] = await Promise.all([
     prisma.business.findFirst({
       where: { id: businessId },
@@ -190,6 +205,11 @@ export async function loadSettingsSnapshot(
       orderBy: { changedAt: "desc" },
       take: 8,
     }),
+    prisma.businessUnavailableDate.findMany({
+      where: scope,
+      select: { date: true },
+      orderBy: { date: "asc" },
+    }),
   ]);
 
   if (!business) {
@@ -222,6 +242,10 @@ export async function loadSettingsSnapshot(
     rawOwnerStory: preferencesRow?.rawOwnerStory ?? "",
     approvedPublicAboutCopy: preferencesRow?.approvedPublicAboutCopy ?? "",
   };
+  const scheduling = availabilitySettingsFromRow(
+    preferencesRow,
+    unavailableDates.map((row) => row.date),
+  );
 
   return {
     business: {
@@ -236,6 +260,10 @@ export async function loadSettingsSnapshot(
     },
     preferences,
     websiteStory,
+    scheduling: {
+      ...scheduling,
+      summary: formatAvailabilitySummary(scheduling),
+    },
     team: members.map((member) => ({
       id: member.id,
       role: member.role,
@@ -324,6 +352,8 @@ export function settingsReadinessFromSnapshot(snapshot: SettingsSnapshot) {
     bankConnected: snapshot.bank.connected,
     marketingConnected: snapshot.marketingConnected,
     reviewPlatformConnected: snapshot.reviewPlatformConnected,
+    schedulingConfigured: true,
+    schedulingDetail: snapshot.scheduling.summary,
   });
 }
 

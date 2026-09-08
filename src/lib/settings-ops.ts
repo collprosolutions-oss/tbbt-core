@@ -18,8 +18,10 @@ import {
   requireBusinessRole,
 } from "@/lib/authorization";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
+import { ensureBusinessAvailabilitySchema } from "@/lib/availability-data";
 import {
   DEFAULT_SETTINGS_PREFERENCES,
+  SCHEDULING_FUTURE_RULE_MESSAGE,
   serializeAuditValue,
   type SettingsPreferenceFlags,
 } from "@/lib/settings";
@@ -49,6 +51,7 @@ export async function ensureBusinessSettings(
   db: SettingsClient,
   businessId: string,
 ) {
+  await ensureBusinessAvailabilitySchema(db);
   const existing = await db.businessSettings.findUnique({
     where: { businessId },
   });
@@ -317,6 +320,95 @@ export async function updateWebsiteStoryOp(
   });
 
   return { unchanged: false as const };
+}
+
+export async function updateSchedulingSettingsOp(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: {
+    workStartMinutes: number;
+    workEndMinutes: number;
+    workingWeekdays: number[];
+    schedulingBufferMinutes: number;
+    unavailableDates: string[];
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+
+  if (input.workingWeekdays.length === 0) {
+    throw new SettingsError("Choose at least one working day.");
+  }
+  if (input.workStartMinutes >= input.workEndMinutes) {
+    throw new SettingsError("Closing time must be after opening time.");
+  }
+  if (input.schedulingBufferMinutes < 0 || input.schedulingBufferMinutes > 240) {
+    throw new SettingsError("Enter a scheduling buffer between 0 and 240 minutes.");
+  }
+
+  const current = await ensureBusinessSettings(db, access.businessId);
+  const currentDates = await db.businessUnavailableDate.findMany({
+    where: { businessId: access.businessId },
+    select: { date: true },
+    orderBy: { date: "asc" },
+  });
+  const previous = {
+    workStartMinutes: current.workStartMinutes,
+    workEndMinutes: current.workEndMinutes,
+    workingWeekdays: current.workingWeekdays,
+    schedulingBufferMinutes: current.schedulingBufferMinutes,
+    unavailableDates: currentDates.map((row) => row.date),
+  };
+  const nextDates = [...new Set(input.unavailableDates)].sort();
+  const next = {
+    workStartMinutes: input.workStartMinutes,
+    workEndMinutes: input.workEndMinutes,
+    workingWeekdays: input.workingWeekdays.join(","),
+    schedulingBufferMinutes: input.schedulingBufferMinutes,
+    unavailableDates: nextDates,
+  };
+
+  const unchanged =
+    previous.workStartMinutes === next.workStartMinutes &&
+    previous.workEndMinutes === next.workEndMinutes &&
+    previous.workingWeekdays === next.workingWeekdays &&
+    previous.schedulingBufferMinutes === next.schedulingBufferMinutes &&
+    previous.unavailableDates.join(",") === next.unavailableDates.join(",");
+  if (unchanged) {
+    return { unchanged: true as const };
+  }
+
+  await db.$transaction(async (tx) => {
+    await tx.businessSettings.update({
+      where: { businessId: access.businessId },
+      data: {
+        workStartMinutes: next.workStartMinutes,
+        workEndMinutes: next.workEndMinutes,
+        workingWeekdays: next.workingWeekdays,
+        schedulingBufferMinutes: next.schedulingBufferMinutes,
+      },
+    });
+    await tx.businessUnavailableDate.deleteMany({
+      where: { businessId: access.businessId },
+    });
+    if (nextDates.length > 0) {
+      await tx.businessUnavailableDate.createMany({
+        data: nextDates.map((date) => ({
+          businessId: access.businessId,
+          date,
+        })),
+      });
+    }
+    await writeSettingsAuditLog(tx, {
+      businessId: access.businessId,
+      changedByMembershipId: access.workspace.membership.id,
+      settingArea: "scheduling",
+      settingKey: "availability",
+      previousValue: previous,
+      newValue: next,
+    });
+  });
+
+  return { unchanged: false as const, note: SCHEDULING_FUTURE_RULE_MESSAGE };
 }
 
 /**
