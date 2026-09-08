@@ -102,7 +102,10 @@ export default async function PublicEstimatePage({
                 <p className="text-sm text-muted-foreground">No line items.</p>
               )}
               {estimate.serviceAddress ? (
-                <p className="text-sm">Service address: {estimate.serviceAddress}</p>
+                <div className="text-sm">
+                  <p>Service address</p>
+                  <p className="whitespace-pre-line">{estimate.serviceAddress}</p>
+                </div>
               ) : null}
             </CardContent>
           </Card>

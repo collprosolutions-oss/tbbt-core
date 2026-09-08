@@ -4,6 +4,7 @@ import { catalogAsksWorkAreaIntake } from "@/lib/work-area-intake";
 import {
   HANDYMAN_CATALOG_CATEGORIES,
 } from "@/lib/handyman-starter-catalog";
+import { formatPublicPhoneDisplay } from "@/lib/format";
 import { getAppUrl } from "@/lib/mail";
 import { formatCatalogPriceLabel, publicCatalogUnitAmount } from "@/lib/pricing-mode";
 import {
@@ -278,11 +279,13 @@ export function publicPhone(
   businessOrSlug: string | { slug: string; publicPhone?: string | null },
 ): string | null {
   if (typeof businessOrSlug === "string") {
-    return isCollProRenoSlug(businessOrSlug) ? COLLPRO_RENO_PHONE : null;
+    return formatPublicPhoneDisplay(
+      isCollProRenoSlug(businessOrSlug) ? COLLPRO_RENO_PHONE : null,
+    );
   }
   const stored = businessOrSlug.publicPhone?.trim();
   if (stored) {
-    return stored;
+    return formatPublicPhoneDisplay(stored);
   }
   return publicPhone(businessOrSlug.slug);
 }

@@ -128,8 +128,10 @@ export function renderInvoicePdf(
       doc.text("SERVICE ADDRESS", left, y + 6);
       y += 18;
       doc.font("Helvetica").fontSize(10).fillColor("#333333");
-      doc.text(docView.serviceAddress, left, y, { width: 360 });
-      y += 16;
+      for (const line of docView.serviceAddress.split("\n")) {
+        doc.text(line, left, y, { width: 360 });
+        y += 13;
+      }
     }
 
     y += 16;

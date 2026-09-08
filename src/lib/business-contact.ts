@@ -10,6 +10,7 @@
  * ensure the additive columns exist.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { formatPublicPhoneDisplay } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import {
   COLLPRO_RENO_PHONE,
@@ -111,7 +112,7 @@ export function resolveBusinessPublicContact(
   const storedEmail = input.publicEmail?.trim() || null;
   const storedWebsite = input.publicWebsite?.trim() || null;
   return {
-    phone: storedPhone || fallbackPhoneForSlug(input.slug),
+    phone: formatPublicPhoneDisplay(storedPhone || fallbackPhoneForSlug(input.slug)),
     email: storedEmail,
     website: storedWebsite,
   };

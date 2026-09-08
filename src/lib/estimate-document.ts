@@ -19,7 +19,7 @@ import {
   PROJECT_CONDITIONS_TITLE,
   TERMS_AND_CONDITIONS_TITLE,
 } from "@/lib/estimate-terms/types";
-import { formatAddress, formatDate, formatMoney } from "@/lib/format";
+import { formatDate, formatMailingAddress, formatMoney } from "@/lib/format";
 import {
   INVOICE_DOCUMENT_LOGO_HEIGHT_PX,
   sanitizeFilenamePart,
@@ -363,7 +363,7 @@ function toDocumentView(estimate: {
       email: customerEmail,
       phone: customerPhone,
     },
-    serviceAddress: property ? formatAddress(property) : null,
+    serviceAddress: property ? formatMailingAddress(property) : null,
     currentVersionId: currentVersion?.id ?? null,
     lineItems,
     laborLines: lineItems.filter((line) => line.type === "LABOR"),

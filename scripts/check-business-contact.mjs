@@ -24,6 +24,7 @@ const {
   loadActiveWorkspaceMemberships,
 } = await import("@/lib/business-contact");
 const { COLLPRO_RENO_PHONE, publicPhone } = await import("@/lib/public-site");
+const { formatMailingAddress, formatPublicPhoneDisplay } = await import("@/lib/format");
 
 function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
@@ -70,14 +71,16 @@ check(
     !contactOp.includes("invoice.update"),
 );
 check(
-  "Estimate documents resolve stored/fallback contact",
+  "Estimate documents resolve stored/fallback contact and stack service addresses",
   estimateDoc.includes("resolveBusinessPublicContact") &&
-    estimateDoc.includes("publicPhone: true"),
+    estimateDoc.includes("publicPhone: true") &&
+    estimateDoc.includes("formatMailingAddress"),
 );
 check(
-  "Invoice documents resolve stored/fallback contact",
+  "Invoice documents resolve stored/fallback contact and stack service addresses",
   invoiceDoc.includes("resolveBusinessPublicContact") &&
-    invoiceDoc.includes("publicPhone: true"),
+    invoiceDoc.includes("publicPhone: true") &&
+    invoiceDoc.includes("formatMailingAddress"),
 );
 const workspaceSrc = readRepo("src/lib/workspace.ts");
 const contactLoaderSrc = readRepo("src/lib/business-contact.ts");
@@ -131,7 +134,11 @@ expectThrow(
 const collproFallback = resolveBusinessPublicContact({ slug: "collpro-reno" });
 check("CollPro fallback does not invent email", collproFallback.email === null);
 check("CollPro fallback does not invent website", collproFallback.website === null);
-check("CollPro fallback phone is the launch number", collproFallback.phone === COLLPRO_RENO_PHONE);
+check("CollPro fallback phone is the launch number", collproFallback.phone === "(239) 357-8199");
+check(
+  "CollPro fallback display formats the stored launch digits without rewriting COLLPRO_RENO_PHONE",
+  COLLPRO_RENO_PHONE === "239-357-8199" && collproFallback.phone !== COLLPRO_RENO_PHONE,
+);
 
 const stored = resolveBusinessPublicContact({
   slug: "collpro-reno",
@@ -139,7 +146,7 @@ const stored = resolveBusinessPublicContact({
   publicEmail: "office@collproreno.com",
   publicWebsite: "https://www.collproreno.com",
 });
-check("stored phone wins over the CollPro fallback", stored.phone === "941-555-0199");
+check("stored phone wins over the CollPro fallback", stored.phone === "(941) 555-0199");
 check("stored email is used when saved", stored.email === "office@collproreno.com");
 check("stored website is used when saved", stored.website === "https://www.collproreno.com");
 
@@ -149,19 +156,59 @@ check("other tenant has no invented email", other.email === null);
 
 check(
   "publicPhone(slug) still returns the CollPro fallback",
-  publicPhone("collpro-reno") === "239-357-8199" && publicPhone("other-handyman") === null,
+  publicPhone("collpro-reno") === "(239) 357-8199" && publicPhone("other-handyman") === null,
 );
 check(
   "publicPhone(business) uses the stored number when present",
-  publicPhone({ slug: "collpro-reno", publicPhone: "555-111-2222" }) === "555-111-2222",
+  publicPhone({ slug: "collpro-reno", publicPhone: "555-111-2222" }) === "(555) 111-2222",
 );
 check(
   "publicPhone(business) falls back for CollPro when stored is empty",
-  publicPhone({ slug: "collpro-reno", publicPhone: "  " }) === "239-357-8199",
+  publicPhone({ slug: "collpro-reno", publicPhone: "  " }) === "(239) 357-8199",
 );
 check(
   "publicPhone(other tenant) does not leak the CollPro number",
   publicPhone({ slug: "other-handyman", publicPhone: null }) === null,
+);
+
+console.log("\nUNIT — customer-facing phone and mailing-address display");
+check(
+  "11-digit U.S. phone beginning with 1 displays as (###) ###-####",
+  formatPublicPhoneDisplay("12393578199") === "(239) 357-8199" &&
+    formatPublicPhoneDisplay("+1 (239) 357-8199") === "(239) 357-8199",
+);
+check(
+  "10-digit U.S. phone displays as (###) ###-####",
+  formatPublicPhoneDisplay("2393578199") === "(239) 357-8199" &&
+    formatPublicPhoneDisplay("239-357-8199") === "(239) 357-8199",
+);
+check(
+  "non-standard/non-U.S. phone is displayed as stored",
+  formatPublicPhoneDisplay("+44 20 7946 0958") === "+44 20 7946 0958" &&
+    formatPublicPhoneDisplay("239-357-819") === "239-357-819" &&
+    formatPublicPhoneDisplay("Call the shop") === "Call the shop",
+);
+check("empty phone display is null", formatPublicPhoneDisplay("  ") === null);
+check(
+  "structured service address stacks street / city, state / ZIP",
+  formatMailingAddress({
+    addressLine1: "369 alpha st",
+    addressLine2: null,
+    city: "Cape Coral",
+    region: "FL",
+    postalCode: "33904",
+  }) === "369 alpha st\nCape Coral, FL\n33904",
+);
+check(
+  "address 2 stays on the street line and missing parts are omitted",
+  formatMailingAddress({
+    addressLine1: "10 Cypress Ave",
+    addressLine2: "Unit 2",
+    city: "Naples",
+    region: "FL",
+    postalCode: "34102",
+  }) === "10 Cypress Ave, Unit 2\nNaples, FL\n34102" &&
+    formatMailingAddress({ addressLine1: "10 Cypress Ave" }) === "10 Cypress Ave",
 );
 
 const baseUrl = process.env.DATABASE_URL;
@@ -238,7 +285,8 @@ try {
   const resolved = resolveBusinessPublicContact(saved);
   check(
     "stored contact round-trips onto the resolver",
-    resolved.phone === "239-357-8199" &&
+    saved.publicPhone === "239-357-8199" &&
+      resolved.phone === "(239) 357-8199" &&
       resolved.email === "office@collproreno.com" &&
       resolved.website === "https://www.collproreno.com",
   );

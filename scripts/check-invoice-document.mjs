@@ -796,7 +796,10 @@ try {
   check("other tenant does not receive CollPro phone", document?.business.phone == null);
   check("customer name carried onto the document", document?.customer.name === "Jordan Rivera");
   check("customer contact carried onto the document", document?.customer.email === "jordan@example.com");
-  check("service address carried onto the document", document?.serviceAddress?.includes("10 Other Ave") === true);
+  check(
+    "service address stacks as a mailing label from structured Property fields",
+    document?.serviceAddress === "10 Other Ave\nReno, NV\n89501",
+  );
   check("document total is $300.00", document?.totalLabel === "$300.00");
   check("SENT amount due is still the total", document?.amountDueLabel === "$300.00");
   check("job reference is present", Boolean(document?.jobReference));
@@ -806,6 +809,9 @@ try {
   check("PDF starts with %PDF", pdf.subarray(0, 4).toString() === "%PDF");
   check("PDF contains this tenant's business name", pdfText.includes("Other Subscriber Co"));
   check("PDF contains the customer name", pdfText.includes("Jordan Rivera"));
+  check("PDF contains service address street", pdfText.includes("10 Other Ave"));
+  check("PDF contains service address city/state", pdfText.includes("Reno, NV"));
+  check("PDF contains service address ZIP", pdfText.includes("89501"));
   check("PDF contains the approved faucet line", pdfText.includes("Bathroom faucet repair"));
   check("PDF contains the change-order line", pdfText.includes("Grout repair"));
   check("PDF contains the invoice total", pdfText.includes("$300.00"));
@@ -906,7 +912,7 @@ try {
     "CollPro invoice document uses the transparent document logo, not the dark UI logo",
     collproDoc?.business.logoSrc === "/brand/collpro-logo-document.png",
   );
-  check("CollPro document uses the configured CollPro phone", collproDoc?.business.phone === "239-357-8199");
+  check("CollPro document uses the configured CollPro phone", collproDoc?.business.phone === "(239) 357-8199");
   const otherDocAgain = await loadInvoiceDocumentForBusiness(
     invoice.id,
     otherBusiness.id,
@@ -932,16 +938,50 @@ try {
     prisma,
   );
   check(
-    "CollPro invoice uses the saved phone/email/website, not only the fallback",
-    collproContactDoc?.business.phone === "941-555-0199" &&
+    "CollPro invoice formats the saved 10-digit phone/email/website without changing totals",
+    collproContactDoc?.business.phone === "(941) 555-0199" &&
       collproContactDoc?.business.email === "office@collproreno.com" &&
       collproContactDoc?.business.website === "https://www.collproreno.com" &&
       collproContactDoc?.totalLabel === collproDoc?.totalLabel,
   );
   const collproContactPdf = await renderInvoicePdf(collproContactDoc);
   const collproContactPdfText = pdfExtractText(collproContactPdf);
-  check("CollPro invoice PDF includes the saved phone", collproContactPdfText.includes("941-555-0199"));
+  check("CollPro invoice PDF includes the formatted saved phone", collproContactPdfText.includes("(941) 555-0199"));
   check("CollPro invoice PDF includes the saved website", collproContactPdfText.includes("https://www.collproreno.com"));
+
+  await prisma.business.update({
+    where: { id: collproBusiness.id },
+    data: { publicPhone: "12393578199" },
+  });
+  const elevenDigitInvoice = await loadInvoiceDocumentForBusiness(
+    collproCreated.invoiceId,
+    collproBusiness.id,
+    prisma,
+  );
+  check(
+    "invoice formats an 11-digit U.S. phone beginning with 1 without changing totals",
+    elevenDigitInvoice?.business.phone === "(239) 357-8199" &&
+      elevenDigitInvoice?.totalLabel === collproDoc?.totalLabel,
+  );
+  const elevenDigitPdf = await renderInvoicePdf(elevenDigitInvoice);
+  const elevenDigitPdfText = pdfExtractText(elevenDigitPdf);
+  check("invoice PDF formats an 11-digit U.S. phone beginning with 1", elevenDigitPdfText.includes("(239) 357-8199"));
+  check("invoice PDF does not dump the raw 11-digit stored phone", !elevenDigitPdfText.includes("12393578199"));
+
+  await prisma.business.update({
+    where: { id: collproBusiness.id },
+    data: { publicPhone: "+44 20 7946 0958" },
+  });
+  const internationalInvoice = await loadInvoiceDocumentForBusiness(
+    collproCreated.invoiceId,
+    collproBusiness.id,
+    prisma,
+  );
+  check(
+    "invoice leaves a non-U.S. phone stored value unchanged",
+    internationalInvoice?.business.phone === "+44 20 7946 0958" &&
+      internationalInvoice?.totalLabel === collproDoc?.totalLabel,
+  );
 
   await prisma.business.update({
     where: { id: otherBusiness.id },
@@ -953,10 +993,11 @@ try {
     prisma,
   );
   check(
-    "other tenant invoice shows its own phone and still omits CollPro branding",
-    otherContactInvoice?.business.phone === "305-555-0140" &&
-      otherContactInvoice?.business.phone !== "239-357-8199" &&
-      otherContactInvoice?.business.name === "Other Subscriber Co",
+    "other tenant invoice shows its own formatted 10-digit phone and still omits CollPro branding",
+    otherContactInvoice?.business.phone === "(305) 555-0140" &&
+      otherContactInvoice?.business.phone !== "(239) 357-8199" &&
+      otherContactInvoice?.business.name === "Other Subscriber Co" &&
+      otherContactInvoice?.totalLabel === "$300.00",
   );
 
   console.log("\nTEST 8 — Empty paid invoice backfills approved work only");

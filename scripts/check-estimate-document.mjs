@@ -400,9 +400,12 @@ try {
   check("draft number is EST- plus last 8 of id", draftDoc?.estimateNumber === estimateNumberFromId(estimate.id));
   check("draft status is Draft", draftDoc?.statusLabel === "Draft");
   check("draft uses document logo", draftDoc?.business.logoSrc === getBusinessDocumentLogoSrc("collpro-reno"));
-  check("draft includes business phone", draftDoc?.business.phone === "239-357-8199");
+  check("draft includes business phone", draftDoc?.business.phone === "(239) 357-8199");
   check("draft customer name", draftDoc?.customer.name === "Jordan Rivera");
-  check("draft service address", draftDoc?.serviceAddress?.includes("10 Cypress Ave") === true);
+  check(
+    "draft service address stacks as a mailing label",
+    draftDoc?.serviceAddress === "10 Cypress Ave\nNaples, FL\n34102",
+  );
   check("draft line title is customer-facing", draftDoc?.lineItems[0]?.description === "Decorative Wall Paneling & Finish Carpentry");
   check(
     "draft included work is customer-facing",
@@ -468,7 +471,10 @@ try {
   const sentDoc = await loadEstimateDocumentByToken(estimate.publicToken, prisma);
   check("token loader finds the sent estimate", Boolean(sentDoc));
   check("sent document still shows snapshot customer", sentDoc?.customer.name === "Jordan Rivera");
-  check("sent document still shows snapshot address", sentDoc?.serviceAddress?.includes("10 Cypress Ave") === true);
+  check(
+    "sent document still shows snapshot mailing-label address",
+    sentDoc?.serviceAddress === "10 Cypress Ave\nNaples, FL\n34102",
+  );
   check("sent document still shows snapshot title", sentDoc?.lineItems[0]?.description === "Decorative Wall Paneling & Finish Carpentry");
   check("sent document still shows snapshot total", sentDoc?.totalLabel === "$1,850.00");
   check("sent status is Sent", sentDoc?.statusLabel === "Sent");
@@ -484,7 +490,9 @@ try {
   check("PDF contains estimate number", pdfText.includes(sentDoc.estimateNumber));
   check("PDF contains business name", pdfText.includes("CollPro Reno Handyman Services"));
   check("PDF contains customer name", pdfText.includes("Jordan Rivera"));
-  check("PDF contains service address", pdfText.includes("10 Cypress Ave"));
+  check("PDF contains service address street", pdfText.includes("10 Cypress Ave"));
+  check("PDF contains service address city/state", pdfText.includes("Naples, FL"));
+  check("PDF contains service address ZIP", pdfText.includes("34102"));
   check("PDF contains service title", pdfText.includes("Decorative Wall Paneling"));
   check("PDF contains included work", pdfText.includes("feature wall"));
   check("PDF contains customer total", pdfText.includes("$1,850.00"));
@@ -543,16 +551,50 @@ try {
     prisma,
   );
   check(
-    "stored phone/email/website appear on a SENT estimate without changing the total",
-    liveContactDoc?.business.phone === "941-555-0199" &&
+    "stored 10-digit phone/email/website appear on a SENT estimate without changing the total",
+    liveContactDoc?.business.phone === "(941) 555-0199" &&
       liveContactDoc?.business.email === "office@collproreno.com" &&
       liveContactDoc?.business.website === "https://www.collproreno.com" &&
       liveContactDoc?.totalLabel === sentTotalBeforeContact,
   );
   const livePdf = await renderEstimatePdf(liveContactDoc);
   const livePdfText = pdfExtractText(livePdf);
-  check("estimate PDF includes the saved phone", livePdfText.includes("941-555-0199"));
+  check("estimate PDF includes the formatted saved phone", livePdfText.includes("(941) 555-0199"));
   check("estimate PDF includes the saved email", livePdfText.includes("office@collproreno.com"));
+
+  await prisma.business.update({
+    where: { id: business.id },
+    data: { publicPhone: "12393578199" },
+  });
+  const elevenDigitDoc = await loadEstimateDocumentForBusiness(
+    estimate.id,
+    business.id,
+    prisma,
+  );
+  check(
+    "11-digit U.S. phone beginning with 1 formats as (###) ###-#### without changing totals",
+    elevenDigitDoc?.business.phone === "(239) 357-8199" &&
+      elevenDigitDoc?.totalLabel === sentTotalBeforeContact,
+  );
+  const elevenDigitPdf = await renderEstimatePdf(elevenDigitDoc);
+  const elevenDigitPdfText = pdfExtractText(elevenDigitPdf);
+  check("estimate PDF formats an 11-digit U.S. phone beginning with 1", elevenDigitPdfText.includes("(239) 357-8199"));
+  check("estimate PDF does not dump the raw 11-digit stored phone", !elevenDigitPdfText.includes("12393578199"));
+
+  await prisma.business.update({
+    where: { id: business.id },
+    data: { publicPhone: "+44 20 7946 0958" },
+  });
+  const internationalDoc = await loadEstimateDocumentForBusiness(
+    estimate.id,
+    business.id,
+    prisma,
+  );
+  check(
+    "non-U.S. phone is left as stored on the estimate document",
+    internationalDoc?.business.phone === "+44 20 7946 0958" &&
+      internationalDoc?.totalLabel === sentTotalBeforeContact,
+  );
 
   await prisma.business.update({
     where: { id: otherBusiness.id },
@@ -564,10 +606,10 @@ try {
     prisma,
   );
   check(
-    "other tenant shows its own saved phone, not CollPro's",
-    otherContactDoc?.business.phone === "305-555-0140" &&
+    "other tenant shows its own formatted 10-digit phone, not CollPro's",
+    otherContactDoc?.business.phone === "(305) 555-0140" &&
       otherContactDoc?.business.email === "hello@other.example" &&
-      otherContactDoc?.business.phone !== "239-357-8199",
+      otherContactDoc?.business.phone !== "(239) 357-8199",
   );
 
   console.log("\nTEST 4 — Founder slab labor/materials sections and material deposit");

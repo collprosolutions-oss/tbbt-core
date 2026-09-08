@@ -10,7 +10,7 @@ import { Prisma, type LineItemType, type PrismaClient } from "@prisma/client";
 import { getBusinessDocumentLogoSrc } from "@/lib/business-branding";
 import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { splitLineDescription } from "@/lib/estimate-line-scope";
-import { formatAddress, formatDate, formatMoney } from "@/lib/format";
+import { formatDate, formatMailingAddress, formatMoney } from "@/lib/format";
 import {
   backfillEmptyInvoiceWorkLines,
   toInvoiceDecimal,
@@ -255,7 +255,7 @@ function toDocumentView(
   const amountPaid = amount.amountPaid;
   const amountDue = amount.amountDue;
   const serviceAddress = invoice.job?.property
-    ? formatAddress(invoice.job.property)
+    ? formatMailingAddress(invoice.job.property)
     : null;
   const totalLabel = formatMoney(invoice.total);
 

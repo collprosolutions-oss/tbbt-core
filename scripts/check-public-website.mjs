@@ -463,11 +463,11 @@ check("CollPro phone and name are the verified launch values",
     COLLPRO_RENO_DISPLAY_NAME === "CollPro Reno Handyman Services");
 check(
   "publicPhone(slug) keeps the CollPro fallback and hides it from other tenants",
-  publicPhone("collpro-reno") === "239-357-8199" && publicPhone("other-handyman") === null,
+  publicPhone("collpro-reno") === "(239) 357-8199" && publicPhone("other-handyman") === null,
 );
 check(
   "publicPhone(business) uses a stored number when the owner has saved one",
-  publicPhone({ slug: "collpro-reno", publicPhone: "941-555-0199" }) === "941-555-0199",
+  publicPhone({ slug: "collpro-reno", publicPhone: "941-555-0199" }) === "(941) 555-0199",
 );
 check(
   "Contact page does not hardcode the CollPro phone into metadata",
@@ -524,7 +524,7 @@ try {
   });
   check(
     "publicPhone uses the stored CollPro number when one is saved",
-    publicPhone(collproPublic) === "941-555-0199",
+    publicPhone(collproPublic) === "(941) 555-0199",
   );
   check(
     "publicPhone does not leak the CollPro fallback to another tenant",

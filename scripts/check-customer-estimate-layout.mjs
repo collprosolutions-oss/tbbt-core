@@ -96,13 +96,14 @@ check(
     !header.includes("/brand/collpro-logo"),
 );
 check(
-  "Customer page still shows title, scope, price, terms, address, and approval",
+  "Customer page still shows title, scope, price, terms, stacked address, and approval",
   page.includes("loadEstimateDocumentByToken") &&
     page.includes("CustomerEstimateLineSections") &&
     lineSections.includes("Scope / Included Work") &&
     page.includes("CustomerEstimateTotals") &&
     page.includes("EstimateCustomerPolicies") &&
     page.includes("Service address") &&
+    page.includes("whitespace-pre-line") &&
     page.includes("ApproveEstimateButton"),
 );
 check(
@@ -159,6 +160,7 @@ check(
     !printPage.includes("ApproveEstimateButton") &&
     estimateDocument.includes("ESTIMATE") &&
     estimateDocument.includes("SERVICE ADDRESS") &&
+    estimateDocument.includes("whitespace-pre-line") &&
     estimateDocument.includes("EstimateDocumentTerms") &&
     estimateDocument.includes("CustomerEstimateLineSections") &&
     lineSections.includes("ESTIMATE_LABOR_SECTION_TITLE") &&
@@ -218,6 +220,17 @@ check(
     estimatePdf.includes("Compact customer materials") &&
     !readRepo("src/app/(app)/estimates/[estimateId]/page.tsx").includes(
       "customer-materials-compact",
+    ),
+);
+check(
+  "Print and PDF render service address as stacked mailing-label lines",
+  estimateDocument.includes("whitespace-pre-line") &&
+    estimatePdf.includes('docView.serviceAddress.split("\\n")') &&
+    readRepo("src/components/invoices/invoice-document.tsx").includes(
+      "whitespace-pre-line",
+    ) &&
+    readRepo("src/lib/invoice-pdf.ts").includes(
+      'docView.serviceAddress.split("\\n")',
     ),
 );
 check(
