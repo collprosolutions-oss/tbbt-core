@@ -10,7 +10,12 @@ import { Prisma, type LineItemType, type PrismaClient } from "@prisma/client";
 import { getBusinessDocumentLogoSrc } from "@/lib/business-branding";
 import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { splitLineDescription } from "@/lib/estimate-line-scope";
-import { formatDate, formatMailingAddress, formatMoney } from "@/lib/format";
+import {
+  formatDate,
+  formatMailingAddress,
+  formatMoney,
+  formatPublicPhoneDisplay,
+} from "@/lib/format";
 import {
   backfillEmptyInvoiceWorkLines,
   toInvoiceDecimal,
@@ -275,7 +280,7 @@ function toDocumentView(
     customer: {
       name: customerName,
       email: invoice.customer?.email ?? null,
-      phone: invoice.customer?.phone ?? null,
+      phone: formatPublicPhoneDisplay(invoice.customer?.phone),
     },
     serviceAddress,
     jobReference: invoice.job ? jobReferenceFromId(invoice.job.id) : null,

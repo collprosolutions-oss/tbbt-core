@@ -231,6 +231,10 @@ check(
     ) &&
     readRepo("src/lib/invoice-pdf.ts").includes(
       'docView.serviceAddress.split("\\n")',
+    ) &&
+    readRepo("src/app/p/[token]/page.tsx").includes("formatMailingAddress") &&
+    readRepo("src/components/portal/project-portal-header.tsx").includes(
+      "whitespace-pre-line",
     ),
 );
 check(

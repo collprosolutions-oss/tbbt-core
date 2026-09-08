@@ -403,6 +403,10 @@ try {
   check("draft includes business phone", draftDoc?.business.phone === "(239) 357-8199");
   check("draft customer name", draftDoc?.customer.name === "Jordan Rivera");
   check(
+    "draft customer phone uses the shared US display formatter",
+    draftDoc?.customer.phone === "(239) 555-0100",
+  );
+  check(
     "draft service address stacks as a mailing label",
     draftDoc?.serviceAddress === "10 Cypress Ave\nNaples, FL\n34102",
   );

@@ -842,10 +842,18 @@ try {
   check("paid amount due is $0.00", paidDoc?.amountDueLabel === "$0.00");
   check("paid amount shows as payment", paidDoc?.amountPaidLabel === "$300.00");
   check("paid date appears when paidAt exists", Boolean(paidDoc?.paidAtLabel));
+  check(
+    "paid receipt stacks the same mailing-label service address as the invoice",
+    paidDoc?.serviceAddress === "10 Other Ave\nReno, NV\n89501",
+  );
+  check("paid receipt total remains $300.00", paidDoc?.totalLabel === "$300.00");
   const paidPdf = await renderInvoicePdf(paidDoc);
   const paidPdfText = pdfExtractText(paidPdf);
   check("paid PDF does not leak owner payment reference", !paidPdfText.includes("SECRET-OWNER-ONLY-REF"));
   check("paid PDF does not leak payment method enum", !paidPdfText.includes("CASH"));
+  check("paid PDF contains service address street", paidPdfText.includes("10 Other Ave"));
+  check("paid PDF contains service address city/state", paidPdfText.includes("Reno, NV"));
+  check("paid PDF contains service address ZIP", paidPdfText.includes("89501"));
 
   console.log("\nTEST 6 — Customer portal scope");
   const draftJob = await createApprovedCompletedJob({
@@ -998,6 +1006,14 @@ try {
       otherContactInvoice?.business.phone !== "(239) 357-8199" &&
       otherContactInvoice?.business.name === "Other Subscriber Co" &&
       otherContactInvoice?.totalLabel === "$300.00",
+  );
+  check(
+    "paid receipt uses the same shared phone and mailing-address formatters as the invoice",
+    otherContactInvoice?.statusLabel === "Paid" &&
+      otherContactInvoice?.business.phone === "(305) 555-0140" &&
+      otherContactInvoice?.serviceAddress === "10 Other Ave\nReno, NV\n89501" &&
+      otherContactInvoice?.amountPaidLabel === "$300.00" &&
+      otherContactInvoice?.amountDueLabel === "$0.00",
   );
 
   console.log("\nTEST 8 — Empty paid invoice backfills approved work only");

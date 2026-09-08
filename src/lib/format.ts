@@ -53,9 +53,11 @@ export function formatAddress(property: {
 }
 
 /**
- * Customer-facing U.S. phone display. Storage is left as entered.
- * 11 digits starting with country code 1 drop the leading 1. Exactly 10
- * remaining digits render as (###) ###-####. Anything else is shown as stored.
+ * Shared customer-facing U.S. phone display. Use this on estimates,
+ * invoices, receipts, print/PDF, the project portal, and public pages.
+ * Storage is left as entered. 11 digits starting with country code 1 drop
+ * the leading 1. Exactly 10 remaining digits render as (###) ###-####.
+ * Anything else is shown as stored.
  */
 export function formatPublicPhoneDisplay(
   value: string | null | undefined,
@@ -80,7 +82,8 @@ type MailingAddressInput = {
 };
 
 /**
- * Customer-facing mailing-label lines. Does not invent missing parts.
+ * Shared customer-facing mailing-label lines. Use this anywhere a service
+ * address is shown to a customer. Does not invent missing parts.
  * Line 1: street + address 2 when present
  * Line 2: city, state
  * Line 3: ZIP

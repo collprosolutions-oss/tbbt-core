@@ -80,7 +80,45 @@ check(
   "Invoice documents resolve stored/fallback contact and stack service addresses",
   invoiceDoc.includes("resolveBusinessPublicContact") &&
     invoiceDoc.includes("publicPhone: true") &&
-    invoiceDoc.includes("formatMailingAddress"),
+    invoiceDoc.includes("formatMailingAddress") &&
+    invoiceDoc.includes("formatPublicPhoneDisplay"),
+);
+check(
+  "Estimate documents format customer phones with the shared display helper",
+  estimateDoc.includes("formatPublicPhoneDisplay"),
+);
+const portalPageSrc = readRepo("src/app/p/[token]/page.tsx");
+const portalHeaderSrc = readRepo("src/components/portal/project-portal-header.tsx");
+const estimatePdfSrc = readRepo("src/lib/estimate-pdf.ts");
+const invoicePdfSrc = readRepo("src/lib/invoice-pdf.ts");
+const invoicePageSrc = readRepo("src/app/p/[token]/invoice/page.tsx");
+const requestFlowSrc = readRepo("src/components/public/request-flow.tsx");
+check(
+  "Customer project portal uses the shared mailing-address formatter",
+  portalPageSrc.includes("formatMailingAddress") &&
+    !portalPageSrc.includes("formatAddress("),
+);
+check(
+  "Portal header preserves stacked mailing-label lines",
+  portalHeaderSrc.includes("whitespace-pre-line"),
+);
+check(
+  "Estimate and invoice PDFs render the same document phone/address fields",
+  estimatePdfSrc.includes("docView.business.phone") &&
+    estimatePdfSrc.includes('docView.serviceAddress.split("\\n")') &&
+    invoicePdfSrc.includes("docView.business.phone") &&
+    invoicePdfSrc.includes('docView.serviceAddress.split("\\n")'),
+);
+check(
+  "Customer invoice/receipt page reuses InvoiceDocument instead of a second formatter",
+  invoicePageSrc.includes("InvoiceDocument") &&
+    invoicePageSrc.includes("loadInvoiceDocumentForProjectToken"),
+);
+check(
+  "Public request review uses shared phone and mailing-address display",
+  requestFlowSrc.includes("formatPublicPhoneDisplay") &&
+    requestFlowSrc.includes("formatStructuredMailingAddress") &&
+    requestFlowSrc.includes("formatStructuredAddress(serviceAddress)"),
 );
 const workspaceSrc = readRepo("src/lib/workspace.ts");
 const contactLoaderSrc = readRepo("src/lib/business-contact.ts");

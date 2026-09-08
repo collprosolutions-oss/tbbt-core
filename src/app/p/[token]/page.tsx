@@ -19,7 +19,7 @@ import {
   CUSTOMER_VISIBLE_CHANGE_ORDER_STATUSES,
   resolveCurrentApprovedProjectTotal,
 } from "@/lib/change-order";
-import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
+import { formatDateTime, formatMailingAddress, formatMoney } from "@/lib/format";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
 import {
@@ -266,7 +266,9 @@ export default async function CustomerProjectPortalPage({
           job.changeOrders,
         );
   const logoSrc = getBusinessLogoSrc(job.business.slug);
-  const serviceAddress = job.property ? formatAddress(job.property) : "";
+  const serviceAddress = job.property
+    ? formatMailingAddress(job.property)
+    : null;
 
   return (
     <main className="min-h-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8">

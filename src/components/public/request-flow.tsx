@@ -42,8 +42,10 @@ import {
 } from "@/lib/work-area-intake";
 import { submitPublicIntakeForm } from "@/lib/public-request-submit";
 import { publicServicesPath } from "@/lib/public-site";
+import { formatPublicPhoneDisplay } from "@/lib/format";
 import {
   formatStructuredAddress,
+  formatStructuredMailingAddress,
   validateStructuredAddress,
   type StructuredServiceAddress,
 } from "@/lib/service-address";
@@ -507,12 +509,19 @@ export function MultiServiceRequestFlow({
           </ReviewBlock>
           <ReviewBlock title="Contact">
             <p>{name || "—"}</p>
-            <p>{phone || "No phone provided"}</p>
+            <p>
+              {formatPublicPhoneDisplay(phone) ||
+                phone ||
+                "No phone provided"}
+            </p>
             <p>{email || "No email provided"}</p>
             <p>Preferred: {preferredContact === "text" ? "Text" : preferredContact === "phone" ? "Phone" : "Email"}</p>
           </ReviewBlock>
           <ReviewBlock title="Property">
-            <p>{formatStructuredAddress(serviceAddress) || "No address provided"}</p>
+            <p className="whitespace-pre-line">
+              {formatStructuredMailingAddress(serviceAddress) ||
+                "No address provided"}
+            </p>
           </ReviewBlock>
           <ReviewBlock title="Project notes">
             <p>{notes || "No additional notes"}</p>

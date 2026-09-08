@@ -18,7 +18,6 @@ export function ProjectPortalHeader({
 }) {
   const who = customerName?.trim() ? `For ${customerName.trim()}.` : "";
   const where = address?.trim() ?? "";
-  const detail = [who, where].filter(Boolean).join(" ");
 
   return (
     <header className="rounded-xl border bg-card px-4 py-4 shadow-sm ring-1 ring-foreground/10 md:px-6 md:py-5">
@@ -40,8 +39,13 @@ export function ProjectPortalHeader({
           <h1 className="mt-0.5 text-xl font-semibold tracking-tight md:text-2xl">
             Your Project
           </h1>
-          {detail ? (
-            <p className="mt-1 text-sm text-muted-foreground">{detail}</p>
+          {who ? (
+            <p className="mt-1 text-sm text-muted-foreground">{who}</p>
+          ) : null}
+          {where ? (
+            <p className="mt-1 whitespace-pre-line text-sm text-muted-foreground">
+              {where}
+            </p>
           ) : null}
         </div>
       </div>
