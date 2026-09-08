@@ -128,3 +128,20 @@ export function contactFromBusinessRow(
 ): BusinessPublicContact {
   return resolveBusinessPublicContact(business);
 }
+
+/**
+ * Authenticated workspace memberships include the full Business row.
+ * Preview shares Production and skips migrate, so this must ADD the
+ * contact columns before Prisma SELECTs them.
+ */
+export async function loadActiveWorkspaceMemberships(
+  db: ContactClient,
+  userId: string,
+) {
+  await ensureBusinessPublicContactSchema(db);
+  return db.membership.findMany({
+    where: { userId, active: true },
+    include: { business: true },
+    orderBy: { createdAt: "asc" },
+  });
+}

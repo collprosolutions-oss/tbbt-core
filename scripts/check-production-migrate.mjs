@@ -126,6 +126,19 @@ check(
     businessContact.includes("ensureBusinessPublicContactSchema"),
 );
 
+const workspaceLoader = readFileSync(
+  new URL("../src/lib/workspace.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Authenticated workspace load ensures public contact columns before Business SELECT",
+  workspaceLoader.includes("loadActiveWorkspaceMemberships") &&
+    businessContact.includes("export async function loadActiveWorkspaceMemberships") &&
+    businessContact.includes("include: { business: true }") &&
+    businessContact.indexOf("await ensureBusinessPublicContactSchema(db)") <
+      businessContact.lastIndexOf("include: { business: true }"),
+);
+
 const availabilityData = readFileSync(
   new URL("../src/lib/availability-data.ts", import.meta.url),
   "utf8",
