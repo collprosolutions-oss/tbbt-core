@@ -221,6 +221,7 @@ export default async function CustomerProjectPortalPage({
         invoiceStatus: invoice.status,
         amountDueCents: invoiceAmountToCents(invoiceBreakdown.amountDue),
         paymentReady: payment.paymentReady,
+        appUrlConfigured: payment.appUrlConfigured,
       }),
   );
   const approvedScope = resolveApprovedWorkOrderScope(job);
@@ -252,6 +253,7 @@ export default async function CustomerProjectPortalPage({
         requiredCents: invoiceAmountToCents(depositSummary.requiredDeposit),
         remainingCents: invoiceAmountToCents(depositSummary.depositRemaining),
         paymentReady: payment.paymentReady,
+        appUrlConfigured: payment.appUrlConfigured,
         hasCustomerInvoice,
       }),
   );

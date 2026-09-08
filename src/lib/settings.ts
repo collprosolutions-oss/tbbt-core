@@ -154,6 +154,9 @@ export const PAYMENT_PROVIDER_CONNECTED_MESSAGE =
 export const PAYMENT_PROVIDER_PLATFORM_UNCONFIGURED_MESSAGE =
   "Stripe is not configured on this TBBT environment. Set STRIPE_SECRET_KEY to enable Connect onboarding.";
 
+export const PAYMENT_PROVIDER_APP_URL_UNCONFIGURED_MESSAGE =
+  "Customer checkout links need NEXT_PUBLIC_APP_URL (production: https://www.collproreno.com). Until that is set, Pay buttons stay hidden. Record cash, check, or Zelle with Mark Paid.";
+
 export type PaymentProviderStatus = "not_connected" | "setup_required" | "connected";
 
 export const PAYMENT_PROVIDER_STATUS_LABELS: Record<PaymentProviderStatus, string> = {

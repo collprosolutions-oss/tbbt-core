@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { MarkInvoicePaidForm } from "@/components/invoices/mark-invoice-paid-form";
+import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { PageContainer } from "@/components/page-container";
@@ -21,7 +23,11 @@ import { formatDateTime, formatMoney } from "@/lib/format";
 import { backfillEmptyInvoiceWorkLines } from "@/lib/invoice-carry-forward";
 import { invoiceNumberFromId } from "@/lib/invoice-document";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
-import { reconcileStripeCheckoutPayment } from "@/lib/payments";
+import {
+  getBusinessPaymentStatus,
+  reconcileStripeCheckoutPayment,
+} from "@/lib/payments";
+import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
 import { prisma } from "@/lib/prisma";
 import {
   invoicePaymentBreakdown,
@@ -43,7 +49,7 @@ export default async function InvoicePage({
     where: { id: invoiceId, ...access.scope },
     include: {
       customer: { select: { name: true } },
-      job: { select: { id: true, status: true } },
+      job: { select: { id: true, status: true, projectToken: true } },
       lineItems: {
         orderBy: { createdAt: "asc" as const },
         select: { description: true, quantity: true },
@@ -85,6 +91,9 @@ export default async function InvoicePage({
   const isSent = invoice.status === "SENT";
   const isPaid = invoice.status === "PAID";
   const dueIsZero = breakdown.amountDue.lte(0);
+  const payment = await getBusinessPaymentStatus(prisma, invoice.businessId);
+  const paymentsGoLive = explainPaymentsGoLiveFromStatus(payment);
+  const showCollectionHelp = isSent && !dueIsZero;
 
   return (
     <PageContainer>
@@ -106,6 +115,13 @@ export default async function InvoicePage({
           </Button>
           {isDraft ? <MarkInvoiceSentButton invoiceId={invoice.id} /> : null}
           {isSent ? <MarkInvoicePaidForm invoiceId={invoice.id} /> : null}
+          {invoice.job?.projectToken && (isSent || isPaid) ? (
+            <CopyProjectLinkButton
+              projectToken={invoice.job.projectToken}
+              hrefPath={`/p/${invoice.job.projectToken}/invoice`}
+              label="Copy invoice link"
+            />
+          ) : null}
           {invoice.job ? (
             <Button asChild size="sm" variant="outline">
               <Link href={`/jobs/${invoice.job.id}`}>Open Job</Link>
@@ -136,6 +152,39 @@ export default async function InvoicePage({
           </Button>
         </CardContent>
       </Card>
+
+      {showCollectionHelp ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Collect payment</CardTitle>
+            <CardDescription>
+              Share the customer invoice link. Use Mark Paid for cash, check, or
+              Zelle. Card checkout appears for the customer only when online
+              payments are live.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <OwnerPaymentsGoLiveBanner explanation={paymentsGoLive} />
+            {invoice.job?.projectToken ? (
+              <CopyProjectLinkButton
+                projectToken={invoice.job.projectToken}
+                hrefPath={`/p/${invoice.job.projectToken}/invoice`}
+                label="Copy invoice link"
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                This invoice has no customer project link. Open the job once it
+                exists, or send the PDF directly.
+              </p>
+            )}
+            <p className="text-sm text-muted-foreground">
+              {paymentsGoLive.onlineCheckoutPossible
+                ? "Customers can pay this invoice online from the link."
+                : "Online card pay is not live. Record the payment with Mark Paid when the customer pays."}
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>

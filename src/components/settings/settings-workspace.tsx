@@ -5,7 +5,7 @@ import { FounderRegion } from "@/components/founder-design/region";
 import { BusinessProfileForm } from "@/components/settings/business-profile-form";
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
-import { ConnectStripeButton } from "@/components/settings/connect-stripe-button";
+import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import { SchedulingSettingsForm } from "@/components/settings/scheduling-settings-form";
@@ -29,6 +29,7 @@ import {
   FULL_EXPORT_PLANNED_MESSAGE,
   INTEGRATION_STATUS_LABELS,
   LABOR_MINIMUM_FUTURE_RULE_MESSAGE,
+  PAYMENT_PROVIDER_APP_URL_UNCONFIGURED_MESSAGE,
   PAYMENT_PROVIDER_CONNECTED_MESSAGE,
   PAYMENT_PROVIDER_DISCONNECTED_MESSAGE,
   PAYMENT_PROVIDER_PLATFORM_UNCONFIGURED_MESSAGE,
@@ -43,7 +44,7 @@ import {
   type SettingsReadinessStatus,
   type SettingsSection,
 } from "@/lib/settings";
-import { cn } from "@/lib/utils";
+import { explainPaymentsGoLive } from "@/lib/payments/go-live";
 
 function readinessVariant(status: SettingsReadinessStatus) {
   if (status === "configured") return "success" as const;
@@ -316,6 +317,21 @@ function SectionBody(props: SettingsWorkspaceProps) {
   }
 
   if (section === "estimates-payments") {
+    const paymentsGoLive = explainPaymentsGoLive({
+      platformConfigured: snapshot.payment.platformConfigured,
+      appUrlConfigured: snapshot.payment.appUrlConfigured,
+      paymentReady: snapshot.payment.paymentReady,
+      status: snapshot.payment.status,
+    });
+    const paymentProviderDescription = paymentsGoLive.onlineCheckoutPossible
+      ? PAYMENT_PROVIDER_CONNECTED_MESSAGE
+      : paymentsGoLive.blocker === "app_url"
+        ? PAYMENT_PROVIDER_APP_URL_UNCONFIGURED_MESSAGE
+        : paymentsGoLive.blocker === "platform"
+          ? PAYMENT_PROVIDER_PLATFORM_UNCONFIGURED_MESSAGE
+          : snapshot.payment.status === "setup_required"
+            ? PAYMENT_PROVIDER_SETUP_REQUIRED_MESSAGE
+            : PAYMENT_PROVIDER_DISCONNECTED_MESSAGE;
     return (
       <div className="space-y-4">
         <SectionCard
@@ -344,15 +360,10 @@ function SectionBody(props: SettingsWorkspaceProps) {
         </SectionCard>
         <SectionCard
           title="Payment provider"
-          description={
-            snapshot.payment.status === "connected"
-              ? PAYMENT_PROVIDER_CONNECTED_MESSAGE
-              : snapshot.payment.status === "setup_required"
-                ? PAYMENT_PROVIDER_SETUP_REQUIRED_MESSAGE
-                : PAYMENT_PROVIDER_DISCONNECTED_MESSAGE
-          }
+          description={paymentProviderDescription}
         >
           <div className="space-y-3">
+            <OwnerPaymentsGoLiveBanner explanation={paymentsGoLive} />
             <p className="text-sm font-medium">Stripe</p>
             <p className="text-sm">
               Status: {PAYMENT_PROVIDER_STATUS_LABELS[snapshot.payment.status]}
@@ -362,6 +373,11 @@ function SectionBody(props: SettingsWorkspaceProps) {
                 {PAYMENT_PROVIDER_PLATFORM_UNCONFIGURED_MESSAGE}
               </p>
             ) : null}
+            {snapshot.payment.platformConfigured && !snapshot.payment.appUrlConfigured ? (
+              <p className="text-sm text-muted-foreground">
+                {PAYMENT_PROVIDER_APP_URL_UNCONFIGURED_MESSAGE}
+              </p>
+            ) : null}
             {canEditPreferences && snapshot.payment.offerOnboarding ? (
               <ConnectStripeButton
                 label={
@@ -369,7 +385,10 @@ function SectionBody(props: SettingsWorkspaceProps) {
                     ? "Connect Stripe"
                     : "Continue Setup"
                 }
-                disabled={!snapshot.payment.platformConfigured}
+                disabled={
+                  !snapshot.payment.platformConfigured ||
+                  !snapshot.payment.appUrlConfigured
+                }
               />
             ) : null}
           </div>

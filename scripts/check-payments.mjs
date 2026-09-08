@@ -183,15 +183,19 @@ try {
   check("STRIPE label is Card (Stripe)", paymentMethodLabel("STRIPE") === "Card (Stripe)");
   check(
     "Pay Invoice hidden without a ready account",
-    shouldShowPayInvoice({ invoiceStatus: "SENT", amountDueCents: 37500, paymentReady: false }) === false,
+    shouldShowPayInvoice({ invoiceStatus: "SENT", amountDueCents: 37500, paymentReady: false, appUrlConfigured: true }) === false,
   );
   check(
     "Pay Invoice hidden when already PAID",
-    shouldShowPayInvoice({ invoiceStatus: "PAID", amountDueCents: 0, paymentReady: true }) === false,
+    shouldShowPayInvoice({ invoiceStatus: "PAID", amountDueCents: 0, paymentReady: true, appUrlConfigured: true }) === false,
   );
   check(
-    "Pay Invoice shown only for SENT + due + ready",
-    shouldShowPayInvoice({ invoiceStatus: "SENT", amountDueCents: 37500, paymentReady: true }) === true,
+    "Pay Invoice shown only for SENT + due + ready + app URL",
+    shouldShowPayInvoice({ invoiceStatus: "SENT", amountDueCents: 37500, paymentReady: true, appUrlConfigured: true }) === true,
+  );
+  check(
+    "Pay Invoice hidden when app URL is missing even if Stripe is ready",
+    shouldShowPayInvoice({ invoiceStatus: "SENT", amountDueCents: 37500, paymentReady: true, appUrlConfigured: false }) === false,
   );
   check(
     "Pay Invoice button label includes the server-formatted amount",
@@ -208,19 +212,29 @@ try {
       requiredCents: 20000,
       remainingCents: 20000,
       paymentReady: true,
+      appUrlConfigured: true,
       hasCustomerInvoice: false,
     }) &&
       !shouldShowPayDeposit({
         requiredCents: 20000,
         remainingCents: 0,
         paymentReady: true,
+        appUrlConfigured: true,
         hasCustomerInvoice: false,
       }) &&
       !shouldShowPayDeposit({
         requiredCents: 20000,
         remainingCents: 20000,
         paymentReady: true,
+        appUrlConfigured: true,
         hasCustomerInvoice: true,
+      }) &&
+      !shouldShowPayDeposit({
+        requiredCents: 20000,
+        remainingCents: 20000,
+        paymentReady: true,
+        appUrlConfigured: false,
+        hasCustomerInvoice: false,
       }),
   );
   check(
@@ -396,6 +410,31 @@ try {
     ownerInvoiceSrc.includes("reconcileStripeCheckoutPayment"),
   );
   check(
+    "owner invoice page copies the customer invoice URL",
+    ownerInvoiceSrc.includes("Copy invoice link") &&
+      ownerInvoiceSrc.includes("/invoice"),
+  );
+  check(
+    "owner invoice page tells the owner when card pay is not live",
+    ownerInvoiceSrc.includes("OwnerPaymentsGoLiveBanner") &&
+      ownerInvoiceSrc.includes("Mark Paid"),
+  );
+  check(
+    "customer invoice page does not show owner go-live or Mark Paid",
+    !portalInvoiceSrc.includes("OwnerPaymentsGoLiveBanner") &&
+      !portalInvoiceSrc.includes("Mark Paid") &&
+      !portalInvoiceSrc.includes("STRIPE_SECRET_KEY"),
+  );
+  check(
+    "Pay Invoice and Pay Deposit require an app URL",
+    serviceSrc.includes("input.appUrlConfigured") &&
+      serviceSrc.includes("onlineCheckoutPossible"),
+  );
+  check(
+    "Connect Stripe stays disabled without an app URL",
+    settingsSrc.includes("!snapshot.payment.appUrlConfigured"),
+  );
+  check(
     "success URL includes Checkout session id for reconcile",
     serviceSrc.includes("session_id={CHECKOUT_SESSION_ID}"),
   );
@@ -501,6 +540,7 @@ try {
       invoiceStatus: "SENT",
       amountDueCents: 37500,
       paymentReady: (await getBusinessPaymentStatus(prisma, businessA.business.id, provider)).paymentReady,
+      appUrlConfigured: true,
     }) === false,
   );
 
@@ -516,6 +556,7 @@ try {
       invoiceStatus: "SENT",
       amountDueCents: 20000,
       paymentReady: (await getBusinessPaymentStatus(prisma, businessB.business.id, provider)).paymentReady,
+      appUrlConfigured: true,
     }) === false,
   );
 
@@ -524,11 +565,16 @@ try {
   const readyA = await getBusinessPaymentStatus(prisma, businessA.business.id, provider);
   check("Business A becomes payment-ready after Stripe charges enable", readyA.paymentReady === true);
   check(
+    "ready Business A can start online checkout when app URL is set",
+    readyA.appUrlConfigured === true && readyA.onlineCheckoutPossible === true,
+  );
+  check(
     "Pay Invoice appears for payment-ready Business A SENT invoice",
     shouldShowPayInvoice({
       invoiceStatus: invoiceANone.invoice.status,
       amountDueCents: invoiceDueCents(invoiceANone.invoice.status, invoiceANone.invoice.total),
       paymentReady: readyA.paymentReady,
+      appUrlConfigured: readyA.appUrlConfigured,
     }) === true,
   );
 
@@ -640,6 +686,7 @@ try {
       invoiceStatus: afterPay.status,
       amountDueCents: invoiceDueCents(afterPay.status, afterPay.total),
       paymentReady: true,
+      appUrlConfigured: true,
     }) === false,
   );
 

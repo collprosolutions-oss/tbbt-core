@@ -36,6 +36,15 @@ export {
   shouldShowPayInvoice,
   startStripeConnectOnboarding,
 } from "@/lib/payments/service";
+export {
+  explainPaymentsGoLive,
+  explainPaymentsGoLiveFromStatus,
+  PAYMENTS_SETTINGS_HREF,
+} from "@/lib/payments/go-live";
+export type {
+  PaymentsGoLiveBlocker,
+  PaymentsGoLiveExplanation,
+} from "@/lib/payments/go-live";
 export type {
   BusinessPaymentStatus,
   PaymentConnectionStatus,

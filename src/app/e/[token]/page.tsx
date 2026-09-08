@@ -67,7 +67,7 @@ export default async function PublicEstimatePage({
     depositRemaining: estimate.depositRemainingDueLabel,
     remainingProjectBalance: estimate.remainingProjectBalanceLabel,
     depositStatus: estimate.depositStatus,
-    paymentReady: paymentStatus.paymentReady,
+    paymentReady: paymentStatus.onlineCheckoutPossible,
   };
 
   return (

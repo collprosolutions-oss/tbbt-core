@@ -17,7 +17,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { FounderDesignRoot } from "@/components/founder-design/root";
+import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
@@ -27,7 +27,8 @@ import type { CuratedIconId } from "@/lib/founder-icons";
 import { NAV_ICONS } from "@/lib/nav-icons";
 import { prisma } from "@/lib/prisma";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
-import { getTrade } from "@/lib/trades";
+import { getBusinessPaymentStatus } from "@/lib/payments";
+import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -75,6 +76,7 @@ export default async function DashboardPage() {
     recentCustomers,
     recentJobs,
     recentRequests,
+    paymentStatus,
   ] = await Promise.all([
     prisma.serviceRequest.count({ where: { ...access.scope, status: "OPEN" } }),
     prisma.estimate.count({ where: { ...access.scope, status: "SENT" } }),
@@ -155,9 +157,11 @@ export default async function DashboardPage() {
       orderBy: { createdAt: "desc" },
       take: RECENT_TAKE,
     }),
+    getBusinessPaymentStatus(prisma, access.businessId),
   ]);
 
   const outstandingTotal = outstandingAgg._sum.total ?? 0;
+  const paymentsGoLive = explainPaymentsGoLiveFromStatus(paymentStatus);
 
   const kpis: KpiCardProps[] = [
     {
@@ -317,6 +321,12 @@ export default async function DashboardPage() {
           </div>
         }
       />
+
+      {paymentsGoLive.showOwnerBanner ? (
+        <div className="mb-6">
+          <OwnerPaymentsGoLiveBanner explanation={paymentsGoLive} />
+        </div>
+      ) : null}
 
       <FounderDesignRoot
         pageKey="dashboard"

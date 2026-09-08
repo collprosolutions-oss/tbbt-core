@@ -75,6 +75,7 @@ export default async function CustomerInvoicePage({
         invoiceStatus: invoice.status,
         amountDueCents: invoiceAmountToCents(breakdown.amountDue),
         paymentReady: payment.paymentReady,
+        appUrlConfigured: payment.appUrlConfigured,
       }),
   );
 

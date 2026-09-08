@@ -59,6 +59,7 @@
     "test:invoice-document": "node --experimental-strip-types scripts/check-invoice-document.mjs",
     "test:complete-job-invoice": "node --experimental-strip-types scripts/check-complete-job-invoice.mjs",
     "test:payments": "node --experimental-strip-types scripts/check-payments.mjs",
+    "test:payments-go-live": "node --experimental-strip-types scripts/check-payments-go-live.mjs",
     "test:material-deposit-payments": "node --experimental-strip-types scripts/check-material-deposit-payments.mjs",
     "test:material-price-engine": "node --experimental-strip-types scripts/check-material-price-engine.mjs",
     "test:communications": "node --experimental-strip-types scripts/check-communications.mjs"

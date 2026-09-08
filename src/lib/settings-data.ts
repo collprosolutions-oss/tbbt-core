@@ -85,6 +85,9 @@ export type SettingsSnapshot = {
     status: PaymentProviderStatus;
     platformConfigured: boolean;
     offerOnboarding: boolean;
+    appUrlConfigured: boolean;
+    paymentReady: boolean;
+    onlineCheckoutPossible: boolean;
   };
   bank: {
     connected: false;
@@ -289,6 +292,9 @@ export async function loadSettingsSnapshot(
         payment.status,
         payment.readinessDebug?.branch,
       ),
+      appUrlConfigured: payment.appUrlConfigured,
+      paymentReady: payment.paymentReady,
+      onlineCheckoutPossible: payment.onlineCheckoutPossible,
     },
     bank: {
       connected: false,

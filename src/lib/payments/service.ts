@@ -43,11 +43,13 @@ export function shouldShowPayInvoice(input: {
   invoiceStatus: string;
   amountDueCents: number;
   paymentReady: boolean;
+  appUrlConfigured: boolean;
 }): boolean {
   return (
     input.invoiceStatus === "SENT" &&
     input.amountDueCents > 0 &&
-    input.paymentReady
+    input.paymentReady &&
+    input.appUrlConfigured
   );
 }
 
@@ -55,14 +57,27 @@ export function shouldShowPayDeposit(input: {
   requiredCents: number;
   remainingCents: number;
   paymentReady: boolean;
+  appUrlConfigured: boolean;
   hasCustomerInvoice: boolean;
 }): boolean {
   return (
     input.requiredCents > 0 &&
     input.remainingCents > 0 &&
     input.paymentReady &&
+    input.appUrlConfigured &&
     !input.hasCustomerInvoice
   );
+}
+
+function withCheckoutReadiness(
+  status: Omit<BusinessPaymentStatus, "appUrlConfigured" | "onlineCheckoutPossible">,
+): BusinessPaymentStatus {
+  const appUrlConfigured = Boolean(getAppUrl());
+  return {
+    ...status,
+    appUrlConfigured,
+    onlineCheckoutPossible: status.paymentReady && appUrlConfigured,
+  };
 }
 
 export async function getBusinessPaymentStatus(
@@ -76,28 +91,28 @@ export async function getBusinessPaymentStatus(
   });
 
   if (!account) {
-    return {
+    return withCheckoutReadiness({
       providerLabel: "Stripe",
       status: "not_connected",
       platformConfigured: isStripePlatformConfigured(),
       stripeAccountId: null,
       paymentReady: false,
-    };
+    });
   }
 
   try {
     const readiness = await provider.getAccountReadiness(account.stripeAccountId);
     const paymentReady = readiness.chargesEnabled;
-    return {
+    return withCheckoutReadiness({
       providerLabel: "Stripe",
       status: paymentReady ? "connected" : "setup_required",
       platformConfigured: isStripePlatformConfigured(),
       stripeAccountId: account.stripeAccountId,
       paymentReady,
       readinessDebug: readiness.debug,
-    };
+    });
   } catch (error) {
-    return {
+    return withCheckoutReadiness({
       providerLabel: "Stripe",
       status: "setup_required",
       platformConfigured: isStripePlatformConfigured(),
@@ -116,7 +131,7 @@ export async function getBusinessPaymentStatus(
         disabledReason: null,
         retrieveError: safeRetrieveErrorName(error),
       },
-    };
+    });
   }
 }
 
@@ -274,6 +289,7 @@ export async function createCustomerInvoiceCheckout(
       invoiceStatus: invoice.status,
       amountDueCents: amountCents,
       paymentReady: payment.paymentReady,
+      appUrlConfigured: Boolean(appUrl),
     }) ||
     !payment.stripeAccountId
   ) {
@@ -509,7 +525,7 @@ export async function createCustomerDepositCheckout(
     throw new PaymentError("This material deposit is already paid.");
   }
   const payment = await getBusinessPaymentStatus(db, estimate.businessId, provider);
-  if (!payment.paymentReady || !payment.stripeAccountId) {
+  if (!payment.paymentReady || !payment.stripeAccountId || !appUrl) {
     throw new PaymentError("Online deposit payment is not available right now.");
   }
   return provider.createDepositCheckoutSession({
