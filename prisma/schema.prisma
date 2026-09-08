@@ -189,6 +189,9 @@ model Business {
   estimatingDefaults       BusinessEstimatingDefault[]
   payments                 Payment[]
   unavailableDates         BusinessUnavailableDate[]
+  supplierPreferences      BusinessSupplierPreference[]
+  materialSupplierMappings BusinessMaterialSupplierMapping[]
+  supplierPriceRecords     SupplierPriceRecord[]
 }
 
 model Membership {
@@ -1477,6 +1480,82 @@ model BusinessEstimatingDefault {
 
   @@unique([businessId, workspaceId])
   @@index([businessId])
+}
+
+/// One preferred supplier/location context per business + provider.
+/// First implementation uses Home Depot; Lowe's can be added later
+/// without changing the estimating engine. Not a purchasing account.
+model BusinessSupplierPreference {
+  id              String   @id @default(cuid())
+  businessId      String
+  providerId      String
+  enabled         Boolean  @default(true)
+  locationZip     String?
+  locationStoreId String?
+  locationLabel   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, providerId])
+  @@index([businessId])
+}
+
+/// Maps a stable calculator material identity (not an estimate line)
+/// to a provider product for one business. Custom materials may be
+/// mapped later; pickup/procurement is never a supplier product.
+model BusinessMaterialSupplierMapping {
+  id                String   @id @default(cuid())
+  businessId        String
+  providerId        String
+  materialIdentity  String
+  takeoffType       String?
+  providerProductId String
+  providerSku       String?
+  providerUrl       String?
+  productName       String
+  unitLabel         String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, providerId, materialIdentity])
+  @@index([businessId])
+  @@index([businessId, providerId])
+}
+
+/// Current supplier/source price for one business, product, and
+/// location key. Separate from BusinessEstimatingDefault. Never
+/// auto-copied onto SENT/APPROVED/job/invoice snapshots.
+model SupplierPriceRecord {
+  id                String   @id @default(cuid())
+  businessId        String
+  providerId        String
+  providerProductId String
+  productName       String
+  sku               String?
+  productUrl        String?
+  unitLabel         String
+  currentPrice      Decimal
+  currency          String   @default("USD")
+  locationKey       String   @default("_")
+  locationZip       String?
+  locationStoreId   String?
+  locationLabel     String?
+  fetchedAt         DateTime
+  sourceStatus      String
+  sourceMode        String
+  rawMetadata       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, providerId, providerProductId, locationKey])
+  @@index([businessId])
+  @@index([businessId, providerId])
 }
 
 /// Typed, business-scoped lightweight settings that are not already

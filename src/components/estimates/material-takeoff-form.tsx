@@ -26,6 +26,11 @@ import {
   type BusinessEstimatingDefaultPayload,
 } from "@/lib/estimating-defaults";
 import { ResetTakeoffAndGeneratedMaterialsForm } from "@/components/estimates/draft-estimate-recovery-forms";
+import {
+  SupplierPricingPanel,
+  applySupplierPriceLocally,
+} from "@/components/estimates/supplier-pricing-panel";
+import type { SupplierPricingContextPayload } from "@/lib/material-pricing/types";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -76,6 +81,8 @@ type TakeoffFormProps = {
   workspaceTitle?: string | null;
   workspaceId?: string | null;
   businessDefaults?: BusinessEstimatingDefaultPayload | null;
+  supplierPricing?: SupplierPricingContextPayload | null;
+  isDraft?: boolean;
 };
 
 type EstimatingTakeoffContextValue = {
@@ -107,6 +114,9 @@ type EstimatingTakeoffContextValue = {
   defaultsError: string | null | undefined;
   defaultsStatus: string | null | undefined;
   defaultSources: ReturnType<typeof businessDefaultFieldSources>;
+  applyCurrentSupplierPrice: (itemId: string, cost: number) => void;
+  supplierPricing: SupplierPricingContextPayload | null;
+  isDraftEstimate: boolean;
   laborError: string | null | undefined;
   laborStatus: string | null | undefined;
   materialError: string | null | undefined;
@@ -153,6 +163,8 @@ export function EstimatingTakeoffProvider({
   workspaceTitle,
   workspaceId,
   businessDefaults,
+  supplierPricing = null,
+  isDraft = true,
 }: TakeoffFormProps & { children: ReactNode }) {
   const [saveState, saveAction, savePending] = useActionState(
     saveEstimateMaterialTakeoff,
@@ -319,6 +331,10 @@ export function EstimatingTakeoffProvider({
     setCustomPrice("");
   }
 
+  function applyCurrentSupplierPrice(itemId: string, cost: number) {
+    setDraft((current) => applySupplierPriceLocally(current, itemId, cost));
+  }
+
   function applyMarkupToSelected() {
     const result = applyMaterialMarkup(draft, draft.markupPercent ?? 0);
     setDraft(result.snapshot);
@@ -377,6 +393,9 @@ export function EstimatingTakeoffProvider({
     defaultsError: defaultsState.error,
     defaultsStatus: defaultsState.message,
     defaultSources,
+    applyCurrentSupplierPrice,
+    supplierPricing,
+    isDraftEstimate: isDraft,
     laborError: laborState.error,
     laborStatus: laborState.message,
     materialError: localError || convertState.error || saveState.error,
@@ -693,10 +712,23 @@ export function MaterialTakeoffPanel({
     setCustomCost,
     customPrice,
     setCustomPrice,
+    applyCurrentSupplierPrice,
+    supplierPricing,
+    isDraftEstimate,
+    takeoffJson,
   } = useEstimatingTakeoff();
 
   return (
     <div className="space-y-4">
+      <SupplierPricingPanel
+        estimateId={estimateId}
+        lineItemId={lineItemId}
+        takeoffJson={takeoffJson}
+        draft={draft}
+        onApplyLocal={applyCurrentSupplierPrice}
+        context={supplierPricing}
+        isDraft={isDraftEstimate}
+      />
       <form className="space-y-4">
         <TakeoffHiddenFields />
         <p className="text-sm font-medium">Material Takeoff / Material Calculator</p>

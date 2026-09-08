@@ -110,6 +110,7 @@ import {
 } from "@/lib/estimate-terms/compose";
 import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { loadBusinessEstimatingDefaults } from "@/lib/estimating-defaults-db";
+import { loadSupplierPricingContextPayload } from "@/lib/material-pricing/db";
 import {
   pickIntakeMeasurementForLine,
   suggestTakeoffInputs,
@@ -407,6 +408,13 @@ export default async function EstimateBuilderPage({
           businessEstimatingWorkspaceId,
         )
       : null;
+  const supplierPricing = isDraft
+    ? await loadSupplierPricingContextPayload(prisma, {
+        businessId: access.businessId,
+        businessSlug: access.workspace.business.slug,
+        snapshot: originalTakeoffWorkspace?.snapshot ?? null,
+      })
+    : null;
 
   const laborSection = (
     <Card>
@@ -462,6 +470,8 @@ export default async function EstimateBuilderPage({
                 workspaceTitle={draftWorkspace.title}
                 workspaceId={draftWorkspace.id}
                 businessDefaults={businessDefaults}
+                supplierPricing={supplierPricing}
+                isDraft={isDraft}
               />
             ) : null}
           </div>
@@ -750,6 +760,8 @@ export default async function EstimateBuilderPage({
           workspaceTitle={originalTakeoffWorkspace.workspaceTitle}
           workspaceId={originalTakeoffWorkspace.workspaceId}
           businessDefaults={businessDefaults}
+          supplierPricing={supplierPricing}
+          isDraft={isDraft}
         >
           {laborSection}
           {materialsSection}

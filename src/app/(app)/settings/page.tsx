@@ -22,6 +22,7 @@ import {
 } from "@/lib/settings-data";
 import { loadPublicCatalog } from "@/lib/public-site-data";
 import { loadWebsitePhotoEditorSlots } from "@/lib/public-site-images";
+import { loadSupplierPricingContextPayload } from "@/lib/material-pricing/db";
 
 export const metadata: Metadata = {
   title: "Settings",
@@ -62,6 +63,14 @@ export default async function SettingsPage({
       slots: await loadWebsitePhotoEditorSlots(prisma, access.businessId, catalog.groups),
     };
   }
+
+  const supplierPricing =
+    section === "vendors"
+      ? await loadSupplierPricingContextPayload(prisma, {
+          businessId: access.businessId,
+          businessSlug: snapshot.business.slug,
+        })
+      : null;
 
   const founder = await checkFounderAccess();
   const founderOverride = founder
@@ -155,6 +164,7 @@ export default async function SettingsPage({
           canEditConsequential={canEditConsequential}
           canEditPreferences={canEditPreferences}
           websitePhotos={websitePhotos}
+          supplierPricing={supplierPricing}
         />
       </FounderDesignRoot>
     </PageContainer>
