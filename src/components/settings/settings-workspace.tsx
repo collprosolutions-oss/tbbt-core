@@ -6,6 +6,7 @@ import { BusinessProfileForm } from "@/components/settings/business-profile-form
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
+import { ConnectStripeButton } from "@/components/settings/connect-stripe-button";
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import { SchedulingSettingsForm } from "@/components/settings/scheduling-settings-form";
@@ -45,6 +46,7 @@ import {
   type SettingsSection,
 } from "@/lib/settings";
 import { explainPaymentsGoLive } from "@/lib/payments/go-live";
+import { cn } from "@/lib/utils";
 
 function readinessVariant(status: SettingsReadinessStatus) {
   if (status === "configured") return "success" as const;

@@ -18,6 +18,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
+import { FounderDesignRoot } from "@/components/founder-design/root";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
@@ -29,6 +30,7 @@ import { prisma } from "@/lib/prisma";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
 import { getBusinessPaymentStatus } from "@/lib/payments";
 import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
+import { getTrade } from "@/lib/trades";
 
 export const metadata: Metadata = {
   title: "Dashboard",
