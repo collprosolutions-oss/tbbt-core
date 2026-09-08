@@ -75,8 +75,17 @@ const UNSCHEDULED_PANEL_TAKE = 25;
 const DEFAULT_PAGE_SIZE = 10;
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
+const LINE_ITEM_SELECT = {
+  description: true,
+  quantity: true,
+  unitPrice: true,
+  total: true,
+  type: true,
+} as const;
+
 const UNSCHEDULED_PANEL_SELECT = {
   id: true,
+  estimateId: true,
   customer: { select: { name: true } },
   property: {
     select: {
@@ -85,6 +94,18 @@ const UNSCHEDULED_PANEL_SELECT = {
       city: true,
       region: true,
       postalCode: true,
+    },
+  },
+  approvedEstimateVersion: {
+    select: {
+      total: true,
+      lineItems: { orderBy: { createdAt: "asc" as const }, select: LINE_ITEM_SELECT },
+    },
+  },
+  estimate: {
+    select: {
+      total: true,
+      lineItems: { orderBy: { createdAt: "asc" as const }, select: LINE_ITEM_SELECT },
     },
   },
 } as const;
@@ -137,14 +158,6 @@ function computeJobTotal(job: {
   if (!base) return null;
   return resolveCurrentApprovedProjectTotal(base, job.changeOrders);
 }
-
-const LINE_ITEM_SELECT = {
-  description: true,
-  quantity: true,
-  unitPrice: true,
-  total: true,
-  type: true,
-} as const;
 
 export default async function JobsPage({
   searchParams,
@@ -360,8 +373,30 @@ export default async function JobsPage({
   const depositPaid = await depositPaidByEstimateIds(
     prisma,
     access.businessId,
-    jobsRawForList.map((job) => job.estimateId).filter((id): id is string => Boolean(id)),
+    [
+      ...jobsRawForList.map((job) => job.estimateId),
+      ...unscheduledJobs.map((job) => job.estimateId),
+    ].filter((id): id is string => Boolean(id)),
   );
+  const unscheduledPanelJobs = unscheduledJobs.map((job) => {
+    const lineItems =
+      job.approvedEstimateVersion?.lineItems ?? job.estimate?.lineItems ?? [];
+    const requiredDeposit = resolveMaterialDeposit({
+      lines: lineItems,
+      total: job.approvedEstimateVersion?.total ?? job.estimate?.total ?? 0,
+    }).amount;
+    const paidTowardDeposit = job.estimateId
+      ? (depositPaid.get(job.estimateId) ?? new Prisma.Decimal(0))
+      : new Prisma.Decimal(0);
+    return {
+      id: job.id,
+      customer: job.customer,
+      property: job.property,
+      unpaidDepositWarning: unpaidMaterialDepositWarning(
+        requiredDeposit.sub(paidTowardDeposit),
+      ),
+    };
+  });
   const jobs: JobListItem[] = jobsRawForList.map((job) => {
     const approvedTotal = job.approvedEstimateVersion?.total ?? job.estimate?.total ?? null;
     const source: JobListItem["approvedScopeSource"] = job.approvedEstimateVersion
@@ -594,7 +629,7 @@ export default async function JobsPage({
             {showConflictNote ? <p className="text-xs text-muted-foreground">{CONFLICT_METHOD_NOTE}</p> : null}
           </div>
           <div className="lg:col-span-1">
-            <UnscheduledJobsPanel jobs={unscheduledJobs} totalCount={unscheduledCount} />
+            <UnscheduledJobsPanel jobs={unscheduledPanelJobs} totalCount={unscheduledCount} />
           </div>
         </div>
       ) : (

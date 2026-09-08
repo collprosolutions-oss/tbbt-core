@@ -262,6 +262,47 @@ export function invoicePaymentBreakdown(input: {
   };
 }
 
+const PROJECT_PAYMENT_SELECT = {
+  id: true,
+  purpose: true,
+  amount: true,
+  method: true,
+  receivedAt: true,
+  note: true,
+  estimateId: true,
+  jobId: true,
+  invoiceId: true,
+} as const;
+
+export type ProjectPaymentRow = {
+  id: string;
+  purpose: string;
+  amount: Prisma.Decimal;
+  method: string;
+  receivedAt: Date;
+  note: string | null;
+  estimateId: string | null;
+  jobId: string | null;
+  invoiceId: string | null;
+};
+
+export function paymentsBelongingToInvoice<
+  T extends { id: string; invoiceId: string | null; jobId: string | null },
+>(
+  invoice: { id: string; jobId?: string | null },
+  payments: T[],
+): T[] {
+  const seen = new Set<string>();
+  return payments.filter((row) => {
+    if (seen.has(row.id)) return false;
+    const belongs =
+      row.invoiceId === invoice.id ||
+      (!row.invoiceId && Boolean(invoice.jobId) && row.jobId === invoice.jobId);
+    if (belongs) seen.add(row.id);
+    return belongs;
+  });
+}
+
 export async function listProjectPayments(
   db: PaymentsDb,
   input: {
@@ -283,18 +324,40 @@ export async function listProjectPayments(
       OR: or,
     },
     orderBy: { receivedAt: "asc" },
-    select: {
-      id: true,
-      purpose: true,
-      amount: true,
-      method: true,
-      receivedAt: true,
-      note: true,
-      estimateId: true,
-      jobId: true,
-      invoiceId: true,
-    },
+    select: PROJECT_PAYMENT_SELECT,
   });
+}
+
+export async function listPaymentsGroupedByInvoiceId(
+  db: PaymentsDb,
+  businessId: string,
+  invoices: Array<{ id: string; jobId?: string | null }>,
+) {
+  await ensurePaymentTable(db);
+  const grouped = new Map<string, ProjectPaymentRow[]>();
+  if (invoices.length === 0) return grouped;
+  const invoiceIds = invoices.map((invoice) => invoice.id);
+  const jobIds = [
+    ...new Set(
+      invoices
+        .map((invoice) => invoice.jobId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  const or: Prisma.PaymentWhereInput[] = [{ invoiceId: { in: invoiceIds } }];
+  if (jobIds.length > 0) or.push({ jobId: { in: jobIds } });
+  const rows = await db.payment.findMany({
+    where: {
+      businessId,
+      OR: or,
+    },
+    orderBy: { receivedAt: "asc" },
+    select: PROJECT_PAYMENT_SELECT,
+  });
+  for (const invoice of invoices) {
+    grouped.set(invoice.id, paymentsBelongingToInvoice(invoice, rows));
+  }
+  return grouped;
 }
 
 export function requiredDepositFromLines(

@@ -23,6 +23,10 @@ import { invoiceNumberFromId } from "@/lib/invoice-document";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { reconcileStripeCheckoutPayment } from "@/lib/payments";
 import { prisma } from "@/lib/prisma";
+import {
+  invoicePaymentBreakdown,
+  listProjectPayments,
+} from "@/lib/project-payments";
 
 export const metadata: Metadata = {
   title: "Invoice",
@@ -67,9 +71,20 @@ export default async function InvoicePage({
   });
   invoice = (await prisma.invoice.findFirst(invoiceQuery)) ?? invoice;
 
+  const payments = await listProjectPayments(prisma, {
+    businessId: invoice.businessId,
+    invoiceId: invoice.id,
+    jobId: invoice.job?.id ?? null,
+  });
+  const breakdown = invoicePaymentBreakdown({
+    status: invoice.status,
+    total: invoice.total,
+    payments,
+  });
   const isDraft = invoice.status === "DRAFT";
   const isSent = invoice.status === "SENT";
   const isPaid = invoice.status === "PAID";
+  const dueIsZero = breakdown.amountDue.lte(0);
 
   return (
     <PageContainer>
@@ -134,12 +149,35 @@ export default async function InvoicePage({
               quantityLabel: line.quantity.toString(),
             }))}
           />
-          <p>Invoice total: {formatMoney(invoice.total)}</p>
-          <p>
-            Payments:{" "}
-            {isPaid ? formatMoney(invoice.total) : formatMoney(0)}
-          </p>
-          <p>Amount due: {isPaid ? formatMoney(0) : formatMoney(invoice.total)}</p>
+          <p>Invoice total: {formatMoney(breakdown.total)}</p>
+          {breakdown.depositPaid.gt(0) ? (
+            <p>Deposit paid: {formatMoney(breakdown.depositPaid)}</p>
+          ) : null}
+          <p>Payments: {formatMoney(breakdown.amountPaid)}</p>
+          <p>Amount due: {formatMoney(breakdown.amountDue)}</p>
+          {breakdown.credit.gt(0) ? (
+            <p>Credit on account: {formatMoney(breakdown.credit)}</p>
+          ) : null}
+          {payments.length > 0 ? (
+            <div className="space-y-1 pt-1">
+              <p className="font-medium">View Payments</p>
+              <ul className="space-y-1 text-muted-foreground">
+                {payments.map((payment) => (
+                  <li key={payment.id}>
+                    {formatMoney(payment.amount)} ·{" "}
+                    {payment.purpose === "MATERIAL_DEPOSIT"
+                      ? "Deposit"
+                      : "Payment"}{" "}
+                    · {paymentMethodLabel(payment.method) ?? payment.method}
+                    {payment.receivedAt
+                      ? ` · ${formatDateTime(payment.receivedAt)}`
+                      : ""}
+                    {payment.note ? ` · ${payment.note}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {isPaid ? (
             <>
               <p>Paid: Yes</p>
@@ -160,7 +198,9 @@ export default async function InvoicePage({
             {isDraft
               ? "Mark this invoice sent once you've delivered it to the customer."
               : isSent
-                ? "Record payment here once the customer pays."
+                ? dueIsZero
+                  ? "Recorded payments already cover this invoice. Mark it paid when you are ready to close it."
+                  : "Record the remaining balance here once the customer pays."
                 : isPaid
                   ? "This invoice is paid and cannot be reopened."
                   : null}

@@ -197,6 +197,12 @@ export default async function EstimateBuilderPage({
       },
       jobs: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
       lineItems: { orderBy: { createdAt: "asc" } },
+      approvedVersion: {
+        select: {
+          total: true,
+          lineItems: { orderBy: { createdAt: "asc" } },
+        },
+      },
       versions: {
         orderBy: { versionNumber: "desc" },
         select: {
@@ -225,14 +231,16 @@ export default async function EstimateBuilderPage({
   const otherSubtotal = estimate.lineItems
     .filter((item) => item.type === "OTHER")
     .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0));
+  const depositLines = estimate.approvedVersion?.lineItems ?? estimate.lineItems;
+  const depositTotal = estimate.approvedVersion?.total ?? estimate.total;
   const materialDeposit = resolveMaterialDeposit({
-    lines: estimate.lineItems,
-    total: estimate.total,
+    lines: depositLines,
+    total: depositTotal,
   });
   const paymentSummary = await loadEstimatePaymentSummary(prisma, {
     businessId: access.businessId,
     estimateId: estimate.id,
-    estimateTotal: estimate.total,
+    estimateTotal: depositTotal,
     requiredDeposit: materialDeposit.amount,
     jobId: estimate.jobs[0]?.id ?? null,
   });

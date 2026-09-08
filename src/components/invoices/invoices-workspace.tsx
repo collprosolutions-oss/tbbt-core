@@ -28,7 +28,10 @@ export type InvoiceListItem = {
   id: string;
   status: string;
   totalLabel: string;
+  paymentsLabel: string;
+  depositPaidLabel: string | null;
   balanceLabel: string;
+  balanceSettled: boolean;
   createdAtLabel: string;
   customer: { id: string; name: string; phone: string | null; email: string | null } | null;
   propertyLabel: string | null;
@@ -216,7 +219,7 @@ function InvoicesTable({
                   <td
                     className={cn(
                       "text-right align-top tabular-nums whitespace-nowrap",
-                      invoice.status === "PAID" ? "text-emerald-500" : "font-medium text-amber-500",
+                      invoice.balanceSettled ? "text-emerald-500" : "font-medium text-amber-500",
                     )}
                     style={{ padding: "var(--tr-py) var(--cell-px)" }}
                   >
@@ -277,10 +280,12 @@ function InvoicesMobileList({
             </div>
             <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
               <span>{invoice.createdAtLabel}</span>
-              {invoice.status !== "PAID" ? (
-                <span className="font-medium text-amber-500">Balance {invoice.balanceLabel}</span>
+              {invoice.balanceSettled ? (
+                <span className="text-emerald-500">
+                  {invoice.status === "PAID" ? "Paid in full" : `Balance ${invoice.balanceLabel}`}
+                </span>
               ) : (
-                <span className="text-emerald-500">Paid in full</span>
+                <span className="font-medium text-amber-500">Balance {invoice.balanceLabel}</span>
               )}
             </div>
           </button>
@@ -371,9 +376,24 @@ function InvoiceDetailsPanel({ invoice }: { invoice: InvoiceListItem | null }) {
             <span>Total</span>
             <span className="tabular-nums text-foreground">{invoice.totalLabel}</span>
           </div>
+          {invoice.depositPaidLabel ? (
+            <div className="flex items-center justify-between text-muted-foreground">
+              <span>Deposit paid</span>
+              <span className="tabular-nums text-foreground">{invoice.depositPaidLabel}</span>
+            </div>
+          ) : null}
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span>Payments</span>
+            <span className="tabular-nums text-foreground">{invoice.paymentsLabel}</span>
+          </div>
           <div className="flex items-center justify-between border-t border-border/60 pt-2 text-base font-semibold text-foreground">
             <span>Balance Due</span>
-            <span className={cn("tabular-nums", isPaid ? "text-emerald-500" : "text-amber-500")}>
+            <span
+              className={cn(
+                "tabular-nums",
+                invoice.balanceSettled ? "text-emerald-500" : "text-amber-500",
+              )}
+            >
               {invoice.balanceLabel}
             </span>
           </div>

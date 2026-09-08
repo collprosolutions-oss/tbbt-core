@@ -33,8 +33,10 @@ const {
   MATERIAL_DEPOSIT_STATUS_LABELS,
   buildProjectPaymentSummary,
   invoicePaymentBreakdown,
+  listPaymentsGroupedByInvoiceId,
   loadEstimatePaymentSummary,
   materialDepositStatus,
+  paymentsBelongingToInvoice,
   recordOwnerManualDeposit,
   unpaidMaterialDepositWarning,
 } = await import("@/lib/project-payments");
@@ -230,6 +232,30 @@ try {
     new URL("../src/app/e/[token]/pay/route.ts", import.meta.url),
     "utf8",
   );
+  const ownerInvoiceSrc = readFileSync(
+    new URL("../src/app/(app)/invoices/[invoiceId]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const invoicesListSrc = readFileSync(
+    new URL("../src/app/(app)/invoices/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const invoicesWorkspaceSrc = readFileSync(
+    new URL("../src/components/invoices/invoices-workspace.tsx", import.meta.url),
+    "utf8",
+  );
+  const unscheduledPanelSrc = readFileSync(
+    new URL("../src/components/schedule/unscheduled-jobs-panel.tsx", import.meta.url),
+    "utf8",
+  );
+  const jobsPageSrc = readFileSync(
+    new URL("../src/app/(app)/jobs/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const estimatePageSrc = readFileSync(
+    new URL("../src/app/(app)/estimates/[estimateId]/page.tsx", import.meta.url),
+    "utf8",
+  );
 
   console.log("\nSTATIC — Deposit workflow contracts");
   check(
@@ -252,6 +278,36 @@ try {
   check(
     "deposit pay route uses createCustomerDepositCheckout",
     depositRouteSrc.includes("createCustomerDepositCheckout(prisma, token)"),
+  );
+  check(
+    "owner invoice ops page derives payments and amount due from Payment rows",
+    ownerInvoiceSrc.includes("listProjectPayments") &&
+      ownerInvoiceSrc.includes("invoicePaymentBreakdown") &&
+      !ownerInvoiceSrc.includes("isPaid ? formatMoney(invoice.total)") &&
+      !ownerInvoiceSrc.includes("isPaid ? formatMoney(0) : formatMoney(invoice.total)"),
+  );
+  check(
+    "owner invoices list remaining due uses Payment rows, not PAID vs full total",
+    invoicesListSrc.includes("listPaymentsGroupedByInvoiceId") &&
+      invoicesListSrc.includes("invoicePaymentBreakdown") &&
+      !invoicesListSrc.includes('invoice.status === "PAID" ? formatMoney(0) : formatMoney(invoice.total)'),
+  );
+  check(
+    "owner invoices workspace shows deposit credit and remaining balance",
+    invoicesWorkspaceSrc.includes("depositPaidLabel") &&
+      invoicesWorkspaceSrc.includes("paymentsLabel") &&
+      invoicesWorkspaceSrc.includes("balanceSettled"),
+  );
+  check(
+    "unscheduled jobs panel warns on schedule when the deposit is unpaid",
+    unscheduledPanelSrc.includes("unpaidDepositWarning={job.unpaidDepositWarning}") &&
+      jobsPageSrc.includes("unscheduledPanelJobs") &&
+      jobsPageSrc.includes("depositPaidByEstimateIds"),
+  );
+  check(
+    "approved estimate deposit snapshot prefers the approved version",
+    estimatePageSrc.includes("estimate.approvedVersion?.lineItems ?? estimate.lineItems") &&
+      estimatePageSrc.includes("estimate.approvedVersion?.total ?? estimate.total"),
   );
   check(
     "unpaid warning names the remaining deposit",
@@ -320,6 +376,20 @@ try {
   });
   check("legacy PAID invoices without Payment rows stay fully paid", legacyPaid.legacyFullyPaid === true);
   check("legacy PAID amount due is $0", legacyPaid.amountDue.toString() === "0");
+
+  const groupedRows = paymentsBelongingToInvoice(
+    { id: "inv-1", jobId: "job-1" },
+    [
+      { id: "p-deposit", invoiceId: "inv-1", jobId: "job-1" },
+      { id: "p-other-invoice", invoiceId: "inv-2", jobId: "job-1" },
+      { id: "p-unattached", invoiceId: null, jobId: "job-1" },
+      { id: "p-other-job", invoiceId: null, jobId: "job-2" },
+    ],
+  );
+  check(
+    "invoice payment grouping keeps this invoice's rows and unattached job payments",
+    groupedRows.map((row) => row.id).join(",") === "p-deposit,p-unattached",
+  );
 
   const businessA = await seedBusiness("Deposit A");
   const businessB = await seedBusiness("Deposit B");
@@ -444,6 +514,22 @@ try {
     "invoice keeps one materials lump sum, not unit prices",
     invoiceDoc?.materialTotalLabel === "$200.00" &&
       invoiceDoc?.materialLines.every((line) => line.showLinePricing === false),
+  );
+  const ownerInvoicePayments = await listPaymentsGroupedByInvoiceId(
+    prisma,
+    businessA.business.id,
+    [{ id: completed.invoiceId, jobId: job.id }],
+  );
+  const ownerInvoiceBreakdown = invoicePaymentBreakdown({
+    status: "SENT",
+    total: "550.00",
+    payments: ownerInvoicePayments.get(completed.invoiceId) ?? [],
+  });
+  check(
+    "owner invoice ops remaining due after $200 deposit is $350",
+    ownerInvoiceBreakdown.amountPaid.toString() === "200" &&
+      ownerInvoiceBreakdown.amountDue.toString() === "350" &&
+      ownerInvoiceBreakdown.depositPaid.toString() === "200",
   );
 
   const remainingCheckout = await createCustomerInvoiceCheckout(

@@ -20,6 +20,7 @@ export type UnscheduledJobLite = {
     region: string | null;
     postalCode: string | null;
   } | null;
+  unpaidDepositWarning?: string | null;
 };
 
 /**
@@ -76,6 +77,7 @@ export function UnscheduledJobsPanel({
                   durationPreset=""
                   customHours=""
                   isScheduled={false}
+                  unpaidDepositWarning={job.unpaidDepositWarning}
                 />
               </div>
             ))}
