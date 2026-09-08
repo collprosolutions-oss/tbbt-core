@@ -112,6 +112,8 @@ export type BusinessPaymentStatus = {
   platformConfigured: boolean;
   stripeAccountId: string | null;
   paymentReady: boolean;
+  appUrlConfigured: boolean;
+  onlineCheckoutPossible: boolean;
   readinessDebug?: PaymentReadinessDebug;
 };
 

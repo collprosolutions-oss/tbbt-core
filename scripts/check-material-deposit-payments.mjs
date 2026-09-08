@@ -386,18 +386,28 @@ try {
       requiredCents: 20000,
       remainingCents: 20000,
       paymentReady: true,
+      appUrlConfigured: true,
       hasCustomerInvoice: false,
     }) === true &&
       shouldShowPayDeposit({
         requiredCents: 20000,
         remainingCents: 20000,
         paymentReady: true,
+        appUrlConfigured: true,
         hasCustomerInvoice: true,
       }) === false &&
       shouldShowPayDeposit({
         requiredCents: 20000,
         remainingCents: 0,
         paymentReady: true,
+        appUrlConfigured: true,
+        hasCustomerInvoice: false,
+      }) === false &&
+      shouldShowPayDeposit({
+        requiredCents: 20000,
+        remainingCents: 20000,
+        paymentReady: true,
+        appUrlConfigured: false,
         hasCustomerInvoice: false,
       }) === false,
   );
