@@ -28,3 +28,12 @@ export function invoiceDueCents(status: string, total: InvoiceAmount): number {
 export function payInvoiceButtonLabel(amountLabel: string) {
   return `Pay Invoice — ${amountLabel}`;
 }
+
+export function payDepositButtonLabel(
+  amountLabel: string,
+  remaining = false,
+) {
+  return remaining
+    ? "Pay Remaining Deposit"
+    : `Pay ${amountLabel} Material Deposit`;
+}

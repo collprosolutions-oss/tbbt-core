@@ -27,6 +27,7 @@ import { RecordNav } from "@/components/record-nav";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
+import { Prisma } from "@prisma/client";
 import { requireManagementPageAccess } from "@/lib/access";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import {
@@ -42,6 +43,15 @@ import {
   formatDurationMinutes,
 } from "@/lib/job-schedule";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
+import {
+  OwnerRecordDepositSection,
+  ProjectPaymentSummaryCard,
+} from "@/components/payments/project-payment-summary";
+import { resolveMaterialDeposit } from "@/lib/material-deposit";
+import {
+  loadEstimatePaymentSummary,
+  unpaidMaterialDepositWarning,
+} from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
 
 function pad(part: number) {
@@ -183,6 +193,27 @@ export default async function JobPage({
   const isInProgress = job.status === "IN_PROGRESS";
   const invoice = job.invoices[0] ?? null;
   const approvedScope = resolveApprovedWorkOrderScope(job);
+  const depositLines =
+    job.approvedEstimateVersion?.lineItems ?? job.estimate?.lineItems ?? [];
+  const depositTotal =
+    job.approvedEstimateVersion?.total ?? job.estimate?.total ?? new Prisma.Decimal(0);
+  const requiredDeposit = resolveMaterialDeposit({
+    lines: depositLines,
+    total: depositTotal,
+  }).amount;
+  const paymentSummary = job.estimateId
+    ? await loadEstimatePaymentSummary(prisma, {
+        businessId: access.businessId,
+        estimateId: job.estimateId,
+        estimateTotal: depositTotal,
+        requiredDeposit,
+        jobId: job.id,
+        invoiceId: invoice?.id ?? null,
+      })
+    : null;
+  const unpaidDepositWarning = paymentSummary
+    ? unpaidMaterialDepositWarning(paymentSummary.depositRemaining)
+    : null;
   const approvedChangeOrders = job.changeOrders.filter(
     (changeOrder) => changeOrder.status === "APPROVED",
   );
@@ -228,7 +259,10 @@ export default async function JobPage({
       >
         <div className="flex flex-wrap items-center gap-2">
           {!isCompleted && !isInProgress ? (
-            <StartJobButton jobId={job.id} />
+            <StartJobButton
+              jobId={job.id}
+              unpaidDepositWarning={unpaidDepositWarning}
+            />
           ) : null}
           {isInProgress ? <MarkJobCompleteButton jobId={job.id} /> : null}
           {isCompleted && invoice ? (
@@ -304,6 +338,30 @@ export default async function JobPage({
           </p>
         </CardContent>
       </Card>
+
+      {paymentSummary ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Payments & Deposit</CardTitle>
+            <CardDescription>
+              Estimate total, material deposit, and remaining project balance
+              for this work order.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <ProjectPaymentSummaryCard
+              summary={paymentSummary}
+              warning={unpaidDepositWarning}
+            />
+            {job.estimateId ? (
+              <OwnerRecordDepositSection
+                estimateId={job.estimateId}
+                summary={paymentSummary}
+              />
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -451,6 +509,7 @@ export default async function JobPage({
               durationPreset={durationPreset}
               customHours={customHours}
               isScheduled={isScheduled}
+              unpaidDepositWarning={unpaidDepositWarning}
             />
           )}
         </CardContent>

@@ -37,6 +37,17 @@ export type CreateInvoiceCheckoutInput = {
   cancelUrl: string;
 };
 
+export type CreateDepositCheckoutInput = {
+  connectedAccountId: string;
+  estimateId: string;
+  businessId: string;
+  amountCents: number;
+  currency: "usd";
+  description: string;
+  successUrl: string;
+  cancelUrl: string;
+};
+
 export type CheckoutSessionResult = {
   id: string;
   url: string;
@@ -45,8 +56,13 @@ export type CheckoutSessionResult = {
   currency: string;
 };
 
+export type CheckoutPurpose = "invoice_balance" | "material_deposit";
+
 export type VerifiedCheckoutPayment = {
-  invoiceId: string;
+  purpose: CheckoutPurpose;
+  invoiceId: string | null;
+  estimateId: string | null;
+  checkoutSessionId: string;
   businessId: string;
   connectedAccountId: string;
   amountCents: number;
@@ -70,9 +86,19 @@ export type PaymentProvider = {
   createInvoiceCheckoutSession(
     input: CreateInvoiceCheckoutInput,
   ): Promise<CheckoutSessionResult>;
+  createDepositCheckoutSession(
+    input: CreateDepositCheckoutInput,
+  ): Promise<CheckoutSessionResult>;
   findPaidInvoiceCheckout(input: {
     connectedAccountId: string;
     invoiceId: string;
+    businessId: string;
+    amountCents: number;
+    checkoutSessionId?: string | null;
+  }): Promise<VerifiedCheckoutPayment | null>;
+  findPaidDepositCheckout(input: {
+    connectedAccountId: string;
+    estimateId: string;
     businessId: string;
     amountCents: number;
     checkoutSessionId?: string | null;

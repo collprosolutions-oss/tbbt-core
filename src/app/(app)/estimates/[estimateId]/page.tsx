@@ -32,6 +32,10 @@ import {
   MaterialTakeoffPanel,
 } from "@/components/estimates/material-takeoff-form";
 import { MaterialDepositForm } from "@/components/estimates/material-deposit-form";
+import {
+  OwnerRecordDepositSection,
+  ProjectPaymentSummaryCard,
+} from "@/components/payments/project-payment-summary";
 import { CustomerMaterialsTotalForm } from "@/components/estimates/customer-materials-total-form";
 import { EditMaterialLineForm } from "@/components/estimates/edit-material-line-form";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
@@ -95,6 +99,10 @@ import {
   toStoredIntakeMeasurement,
 } from "@/lib/intake-quote-handoff";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
+import {
+  loadEstimatePaymentSummary,
+  unpaidMaterialDepositWarning,
+} from "@/lib/project-payments";
 import {
   collectEstimateTermContext,
   composeEstimateTerms,
@@ -191,6 +199,12 @@ export default async function EstimateBuilderPage({
       },
       jobs: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
       lineItems: { orderBy: { createdAt: "asc" } },
+      approvedVersion: {
+        select: {
+          total: true,
+          lineItems: { orderBy: { createdAt: "asc" } },
+        },
+      },
       versions: {
         orderBy: { versionNumber: "desc" },
         select: {
@@ -219,10 +233,22 @@ export default async function EstimateBuilderPage({
   const otherSubtotal = estimate.lineItems
     .filter((item) => item.type === "OTHER")
     .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0));
+  const depositLines = estimate.approvedVersion?.lineItems ?? estimate.lineItems;
+  const depositTotal = estimate.approvedVersion?.total ?? estimate.total;
   const materialDeposit = resolveMaterialDeposit({
-    lines: estimate.lineItems,
-    total: estimate.total,
+    lines: depositLines,
+    total: depositTotal,
   });
+  const paymentSummary = await loadEstimatePaymentSummary(prisma, {
+    businessId: access.businessId,
+    estimateId: estimate.id,
+    estimateTotal: depositTotal,
+    requiredDeposit: materialDeposit.amount,
+    jobId: estimate.jobs[0]?.id ?? null,
+  });
+  const unpaidDepositWarning = unpaidMaterialDepositWarning(
+    paymentSummary.depositRemaining,
+  );
   const business = access.workspace.business;
   const isDraft = estimate.status === "DRAFT";
   const isSent = estimate.status === "SENT";
@@ -698,7 +724,10 @@ export default async function EstimateBuilderPage({
               <Link href={`/jobs/${estimate.jobs[0].id}`}>Open job</Link>
             </Button>
           ) : isApproved ? (
-            <CreateJobButton estimateId={estimate.id} />
+            <CreateJobButton
+              estimateId={estimate.id}
+              unpaidDepositWarning={unpaidDepositWarning}
+            />
           ) : null}
           <RecordNav
             customerId={estimate.customerId}
@@ -775,6 +804,18 @@ export default async function EstimateBuilderPage({
               </dd>
             </div>
           </dl>
+          {!isDraft ? (
+            <div className="mt-4 space-y-4 border-t border-border pt-4">
+              <ProjectPaymentSummaryCard
+                summary={paymentSummary}
+                warning={unpaidDepositWarning}
+              />
+              <OwnerRecordDepositSection
+                estimateId={estimate.id}
+                summary={paymentSummary}
+              />
+            </div>
+          ) : null}
           {isDraft &&
           business.laborMinimumEnabled &&
           business.laborMinimumAmount ? (

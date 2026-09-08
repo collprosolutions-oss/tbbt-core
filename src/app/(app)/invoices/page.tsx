@@ -24,6 +24,10 @@ import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
+import {
+  invoicePaymentBreakdown,
+  listPaymentsGroupedByInvoiceId,
+} from "@/lib/project-payments";
 import { jobScopeSummary } from "@/lib/schedule";
 import { cn } from "@/lib/utils";
 
@@ -189,25 +193,46 @@ export default async function InvoicesPage({
     }),
   ]);
 
-  const invoices: InvoiceListItem[] = invoicesRaw.map((invoice) => ({
-    id: invoice.id,
-    status: invoice.status,
-    totalLabel: formatMoney(invoice.total),
-    balanceLabel: invoice.status === "PAID" ? formatMoney(0) : formatMoney(invoice.total),
-    createdAtLabel: formatDateTime(invoice.createdAt),
-    customer: invoice.customer,
-    propertyLabel: invoice.job?.property ? formatAddress(invoice.job.property) : null,
-    scopeSummary: invoice.job ? jobScopeSummary(invoice.job) : null,
-    workPerformed: invoice.lineItems.map((line) => ({
-      description: line.description,
-      quantityLabel: line.quantity.toString(),
+  const paymentsByInvoiceId = await listPaymentsGroupedByInvoiceId(
+    prisma,
+    access.businessId,
+    invoicesRaw.map((invoice) => ({
+      id: invoice.id,
+      jobId: invoice.job?.id ?? null,
     })),
-    jobId: invoice.job?.id ?? null,
-    jobProjectToken: invoice.job?.projectToken ?? null,
-    paidAtLabel: invoice.paidAt ? formatDateTime(invoice.paidAt) : null,
-    paymentMethodLabel: paymentMethodLabel(invoice.paymentMethod),
-    paymentReference: invoice.paymentReference,
-  }));
+  );
+
+  const invoices: InvoiceListItem[] = invoicesRaw.map((invoice) => {
+    const breakdown = invoicePaymentBreakdown({
+      status: invoice.status,
+      total: invoice.total,
+      payments: paymentsByInvoiceId.get(invoice.id) ?? [],
+    });
+    return {
+      id: invoice.id,
+      status: invoice.status,
+      totalLabel: formatMoney(invoice.total),
+      paymentsLabel: formatMoney(breakdown.amountPaid),
+      depositPaidLabel: breakdown.depositPaid.gt(0)
+        ? formatMoney(breakdown.depositPaid)
+        : null,
+      balanceLabel: formatMoney(breakdown.amountDue),
+      balanceSettled: breakdown.amountDue.lte(0),
+      createdAtLabel: formatDateTime(invoice.createdAt),
+      customer: invoice.customer,
+      propertyLabel: invoice.job?.property ? formatAddress(invoice.job.property) : null,
+      scopeSummary: invoice.job ? jobScopeSummary(invoice.job) : null,
+      workPerformed: invoice.lineItems.map((line) => ({
+        description: line.description,
+        quantityLabel: line.quantity.toString(),
+      })),
+      jobId: invoice.job?.id ?? null,
+      jobProjectToken: invoice.job?.projectToken ?? null,
+      paidAtLabel: invoice.paidAt ? formatDateTime(invoice.paidAt) : null,
+      paymentMethodLabel: paymentMethodLabel(invoice.paymentMethod),
+      paymentReference: invoice.paymentReference,
+    };
+  });
 
   const kpis: KpiCardProps[] = [
     {

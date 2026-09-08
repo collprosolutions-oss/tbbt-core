@@ -41,12 +41,28 @@ export function CustomerEstimateTotals({
       {estimate.materialDepositLabel && estimate.remainingBalanceLabel ? (
         <>
           <div className="flex justify-between gap-4 pt-2">
-            <span className="text-muted-foreground">{MATERIAL_DEPOSIT_CUSTOMER_LABEL}</span>
-            <span className="tabular-nums">{estimate.materialDepositLabel}</span>
+            <span className="text-muted-foreground">
+              {estimate.depositStatus === "paid"
+                ? "Deposit Paid"
+                : estimate.depositStatus === "partial"
+                  ? "Deposit Remaining"
+                  : MATERIAL_DEPOSIT_CUSTOMER_LABEL}
+            </span>
+            <span className="tabular-nums">
+              {estimate.depositStatus === "paid"
+                ? estimate.depositPaidLabel ?? estimate.materialDepositLabel
+                : estimate.depositStatus === "partial"
+                  ? estimate.depositRemainingDueLabel ?? estimate.materialDepositLabel
+                  : estimate.materialDepositLabel}
+            </span>
           </div>
           <div className="flex justify-between gap-4">
             <span className="text-muted-foreground">{REMAINING_BALANCE_CUSTOMER_LABEL}</span>
-            <span className="tabular-nums">{estimate.remainingBalanceLabel}</span>
+            <span className="tabular-nums">
+              {estimate.depositStatus === "paid" || estimate.depositStatus === "partial"
+                ? estimate.remainingProjectBalanceLabel ?? estimate.remainingBalanceLabel
+                : estimate.remainingBalanceLabel}
+            </span>
           </div>
           {estimate.materialDepositNote ? (
             <p className="text-xs text-muted-foreground">{estimate.materialDepositNote}</p>

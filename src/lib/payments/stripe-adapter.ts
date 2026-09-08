@@ -7,6 +7,7 @@ import {
 } from "@/lib/payments/readiness";
 import type {
   CreateConnectedAccountInput,
+  CreateDepositCheckoutInput,
   CreateInvoiceCheckoutInput,
   CreateOnboardingLinkInput,
   PaymentProvider,
@@ -47,6 +48,187 @@ function v1RequirementKeys(
     return null;
   }
   return values.filter((value): value is string => typeof value === "string");
+}
+
+function checkoutMetadata(input: {
+  purpose: "invoice_balance" | "material_deposit";
+  businessId: string;
+  connectedAccountId: string;
+  invoiceId?: string | null;
+  estimateId?: string | null;
+}) {
+  return {
+    purpose: input.purpose,
+    businessId: input.businessId,
+    connectedAccountId: input.connectedAccountId,
+    ...(input.invoiceId ? { invoiceId: input.invoiceId } : {}),
+    ...(input.estimateId ? { estimateId: input.estimateId } : {}),
+  };
+}
+
+async function createStripeCheckout(input: {
+  connectedAccountId: string;
+  businessId: string;
+  amountCents: number;
+  currency: "usd";
+  description: string;
+  successUrl: string;
+  cancelUrl: string;
+  purpose: "invoice_balance" | "material_deposit";
+  invoiceId?: string | null;
+  estimateId?: string | null;
+}) {
+  const stripe = requireStripe();
+  const metadata = checkoutMetadata(input);
+  const session = await stripe.checkout.sessions.create(
+    {
+      mode: "payment",
+      payment_method_types: [...INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES],
+      wallet_options: {
+        link: { display: "never" },
+      },
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: input.currency,
+            unit_amount: input.amountCents,
+            product_data: { name: input.description },
+          },
+        },
+      ],
+      success_url: input.successUrl,
+      cancel_url: input.cancelUrl,
+      metadata,
+      payment_intent_data: { metadata },
+    },
+    { stripeAccount: input.connectedAccountId },
+  );
+  if (!session.url) {
+    throw new Error("Stripe did not return a checkout URL.");
+  }
+  return {
+    id: session.id,
+    url: session.url,
+    connectedAccountId: input.connectedAccountId,
+    amountCents: input.amountCents,
+    currency: input.currency,
+  };
+}
+
+function verifiedFromSession(
+  session: Stripe.Checkout.Session,
+  input: {
+    connectedAccountId: string;
+    businessId: string;
+    amountCents: number;
+    purpose: "invoice_balance" | "material_deposit";
+    invoiceId?: string | null;
+    estimateId?: string | null;
+  },
+): VerifiedCheckoutPayment | null {
+  const metadata = session.metadata ?? {};
+  const purpose =
+    metadata.purpose === "material_deposit" ? "material_deposit" : "invoice_balance";
+  if (session.payment_status !== "paid") return null;
+  if (metadata.businessId !== input.businessId) return null;
+  if (session.amount_total !== input.amountCents || session.currency !== "usd") {
+    return null;
+  }
+  if (purpose !== input.purpose) return null;
+  if (input.invoiceId && metadata.invoiceId !== input.invoiceId) return null;
+  if (input.estimateId && metadata.estimateId !== input.estimateId) return null;
+  const paymentIntent =
+    typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : session.id;
+  return {
+    purpose,
+    invoiceId: metadata.invoiceId ?? input.invoiceId ?? null,
+    estimateId: metadata.estimateId ?? input.estimateId ?? null,
+    checkoutSessionId: session.id,
+    businessId: input.businessId,
+    connectedAccountId: input.connectedAccountId,
+    amountCents: input.amountCents,
+    currency: "usd",
+    paymentReference: paymentIntent,
+    paymentStatus: "paid",
+  };
+}
+
+async function findPaidStripeCheckout(input: {
+  connectedAccountId: string;
+  businessId: string;
+  amountCents: number;
+  purpose: "invoice_balance" | "material_deposit";
+  invoiceId?: string | null;
+  estimateId?: string | null;
+  checkoutSessionId?: string | null;
+}): Promise<VerifiedCheckoutPayment | null> {
+  const stripe = requireStripe();
+  if (input.checkoutSessionId) {
+    try {
+      const session = await stripe.checkout.sessions.retrieve(
+        input.checkoutSessionId,
+        undefined,
+        { stripeAccount: input.connectedAccountId },
+      );
+      const verified = verifiedFromSession(session, input);
+      if (verified) return verified;
+    } catch {
+      // Fall through to a recent-session list for webhook-missed payments.
+    }
+  }
+  try {
+    const listed = await stripe.checkout.sessions.list(
+      { limit: 100, status: "complete" },
+      { stripeAccount: input.connectedAccountId },
+    );
+    for (const session of listed.data) {
+      const verified = verifiedFromSession(session, input);
+      if (verified) return verified;
+    }
+  } catch {
+    // Continue to PaymentIntent lookup for webhook-missed payments.
+  }
+  try {
+    const intents = await stripe.paymentIntents.list(
+      { limit: 100 },
+      { stripeAccount: input.connectedAccountId },
+    );
+    for (const intent of intents.data) {
+      const metadata = intent.metadata ?? {};
+      const purpose =
+        metadata.purpose === "material_deposit"
+          ? "material_deposit"
+          : "invoice_balance";
+      if (
+        intent.status === "succeeded" &&
+        purpose === input.purpose &&
+        metadata.businessId === input.businessId &&
+        intent.amount === input.amountCents &&
+        intent.currency === "usd" &&
+        (!input.invoiceId || metadata.invoiceId === input.invoiceId) &&
+        (!input.estimateId || metadata.estimateId === input.estimateId)
+      ) {
+        return {
+          purpose,
+          invoiceId: metadata.invoiceId ?? input.invoiceId ?? null,
+          estimateId: metadata.estimateId ?? input.estimateId ?? null,
+          checkoutSessionId: input.checkoutSessionId ?? intent.id,
+          businessId: input.businessId,
+          connectedAccountId: input.connectedAccountId,
+          amountCents: input.amountCents,
+          currency: "usd",
+          paymentReference: intent.id,
+          paymentStatus: "paid",
+        };
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 export function createStripePaymentProvider(): PaymentProvider {
@@ -175,146 +357,37 @@ export function createStripePaymentProvider(): PaymentProvider {
     },
 
     async createInvoiceCheckoutSession(input: CreateInvoiceCheckoutInput) {
-      const stripe = requireStripe();
-      const session = await stripe.checkout.sessions.create(
-        {
-          mode: "payment",
-          payment_method_types: [...INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES],
-          wallet_options: {
-            link: { display: "never" },
-          },
-          line_items: [
-            {
-              quantity: 1,
-              price_data: {
-                currency: input.currency,
-                unit_amount: input.amountCents,
-                product_data: { name: input.description },
-              },
-            },
-          ],
-          success_url: input.successUrl,
-          cancel_url: input.cancelUrl,
-          metadata: {
-            invoiceId: input.invoiceId,
-            businessId: input.businessId,
-            connectedAccountId: input.connectedAccountId,
-          },
-          payment_intent_data: {
-            metadata: {
-              invoiceId: input.invoiceId,
-              businessId: input.businessId,
-              connectedAccountId: input.connectedAccountId,
-            },
-          },
-        },
-        { stripeAccount: input.connectedAccountId },
-      );
-      if (!session.url) {
-        throw new Error("Stripe did not return a checkout URL.");
-      }
-      return {
-        id: session.id,
-        url: session.url,
-        connectedAccountId: input.connectedAccountId,
-        amountCents: input.amountCents,
-        currency: input.currency,
-      };
+      return createStripeCheckout({
+        ...input,
+        purpose: "invoice_balance",
+        invoiceId: input.invoiceId,
+        estimateId: null,
+      });
+    },
+
+    async createDepositCheckoutSession(input: CreateDepositCheckoutInput) {
+      return createStripeCheckout({
+        ...input,
+        purpose: "material_deposit",
+        invoiceId: null,
+        estimateId: input.estimateId,
+      });
     },
 
     async findPaidInvoiceCheckout(input) {
-      const stripe = requireStripe();
-      const matchesInvoice = (session: Stripe.Checkout.Session) => {
-        const metadata = session.metadata ?? {};
-        return (
-          session.payment_status === "paid" &&
-          metadata.invoiceId === input.invoiceId &&
-          metadata.businessId === input.businessId &&
-          session.amount_total === input.amountCents &&
-          session.currency === "usd"
-        );
-      };
-      const toVerified = (
-        session: Stripe.Checkout.Session,
-      ): VerifiedCheckoutPayment | null => {
-        if (!matchesInvoice(session)) {
-          return null;
-        }
-        const paymentIntent =
-          typeof session.payment_intent === "string"
-            ? session.payment_intent
-            : session.id;
-        return {
-          invoiceId: input.invoiceId,
-          businessId: input.businessId,
-          connectedAccountId: input.connectedAccountId,
-          amountCents: input.amountCents,
-          currency: "usd",
-          paymentReference: paymentIntent,
-          paymentStatus: "paid",
-        };
-      };
+      return findPaidStripeCheckout({
+        ...input,
+        purpose: "invoice_balance",
+        invoiceId: input.invoiceId,
+      });
+    },
 
-      if (input.checkoutSessionId) {
-        try {
-          const session = await stripe.checkout.sessions.retrieve(
-            input.checkoutSessionId,
-            undefined,
-            { stripeAccount: input.connectedAccountId },
-          );
-          const verified = toVerified(session);
-          if (verified) {
-            return verified;
-          }
-        } catch {
-          // Fall through to a recent-session list for webhook-missed payments.
-        }
-      }
-
-      try {
-        const listed = await stripe.checkout.sessions.list(
-          { limit: 100, status: "complete" },
-          { stripeAccount: input.connectedAccountId },
-        );
-        for (const session of listed.data) {
-          const verified = toVerified(session);
-          if (verified) {
-            return verified;
-          }
-        }
-      } catch {
-        // Continue to PaymentIntent lookup for webhook-missed payments.
-      }
-
-      try {
-        const intents = await stripe.paymentIntents.list(
-          { limit: 100 },
-          { stripeAccount: input.connectedAccountId },
-        );
-        for (const intent of intents.data) {
-          const metadata = intent.metadata ?? {};
-          if (
-            intent.status === "succeeded" &&
-            metadata.invoiceId === input.invoiceId &&
-            metadata.businessId === input.businessId &&
-            intent.amount === input.amountCents &&
-            intent.currency === "usd"
-          ) {
-            return {
-              invoiceId: input.invoiceId,
-              businessId: input.businessId,
-              connectedAccountId: input.connectedAccountId,
-              amountCents: input.amountCents,
-              currency: "usd",
-              paymentReference: intent.id,
-              paymentStatus: "paid",
-            };
-          }
-        }
-      } catch {
-        return null;
-      }
-      return null;
+    async findPaidDepositCheckout(input) {
+      return findPaidStripeCheckout({
+        ...input,
+        purpose: "material_deposit",
+        estimateId: input.estimateId,
+      });
     },
 
     parseCheckoutPaymentEvent,

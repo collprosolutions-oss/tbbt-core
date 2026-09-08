@@ -187,6 +187,7 @@ model Business {
   storageAccount           BusinessStorageAccount?
   storedAssets             StoredAsset[]
   estimatingDefaults       BusinessEstimatingDefault[]
+  payments                 Payment[]
 }
 
 model Membership {
@@ -268,6 +269,7 @@ model Customer {
   estimates       Estimate[]
   jobs            Job[]
   invoices        Invoice[]
+  payments        Payment[]
   expenses        Expense[]
   reviewRequests  ReviewRequest[]
   reviews         Review[]
@@ -475,6 +477,7 @@ model Estimate {
   serviceRequest  ServiceRequest?   @relation(fields: [serviceRequestId], references: [id], onDelete: SetNull)
   jobs            Job[]
   lineItems       LineItem[]
+  payments        Payment[]
   /// Immutable snapshots created every time this estimate is successfully
   /// sent. Application code must never update or delete an existing row.
   versions        EstimateVersion[] @relation("EstimateVersions")
@@ -617,6 +620,7 @@ model Job {
   problemReports          JobProblemReport[]
   timeEntries             TimeEntry[]
   expenses                Expense[]
+  payments                Payment[]
   marketingContents       MarketingContent[]
   reviewRequests          ReviewRequest[]
   reviews                 Review[]
@@ -759,8 +763,44 @@ model Invoice {
   customer  Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
   job       Job?       @relation(fields: [jobId], references: [id], onDelete: SetNull)
   lineItems LineItem[]
+  payments  Payment[]
 
   @@index([businessId])
+}
+
+/// Durable payment record — source of truth for material deposits and
+/// invoice credits. Do not store "deposit paid" as a boolean. Amounts
+/// are whole cents. Stripe Checkout session/payment-intent ids are
+/// unique so webhook retries cannot double-credit.
+model Payment {
+  id                      String    @id @default(cuid())
+  businessId              String
+  customerId              String?
+  estimateId              String?
+  jobId                   String?
+  invoiceId               String?
+  /// MATERIAL_DEPOSIT | INVOICE_BALANCE
+  purpose                 String
+  amount                  Decimal
+  /// CASH | CHECK | ZELLE_BANK_TRANSFER | CARD_EXTERNAL | OTHER | STRIPE
+  method                  String
+  receivedAt              DateTime  @default(now())
+  note                    String?
+  stripeCheckoutSessionId String?   @unique
+  stripePaymentIntentId   String?   @unique
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  estimate Estimate? @relation(fields: [estimateId], references: [id], onDelete: SetNull)
+  job      Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  invoice  Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([estimateId])
+  @@index([jobId])
+  @@index([invoiceId])
 }
 
 model LineItem {

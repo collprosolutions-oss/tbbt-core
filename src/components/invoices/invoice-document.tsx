@@ -113,10 +113,25 @@ export function InvoiceDocument({
           <span className="text-neutral-600">Payments</span>
           <span className="tabular-nums">{invoice.amountPaidLabel}</span>
         </div>
+        {invoice.depositPaidLabel ? (
+          <div className="flex justify-between gap-6 text-neutral-600">
+            <span>Deposit Paid</span>
+            <span className="tabular-nums">-{invoice.depositPaidLabel}</span>
+          </div>
+        ) : null}
+        {invoice.otherPaymentsLabel && invoice.depositPaidLabel ? (
+          <div className="flex justify-between gap-6 text-neutral-600">
+            <span>Other Payments</span>
+            <span className="tabular-nums">-{invoice.otherPaymentsLabel}</span>
+          </div>
+        ) : null}
         <div className="flex justify-between gap-6 border-t border-neutral-200 pt-2 font-semibold">
           <span>Amount Due</span>
           <span className="tabular-nums">{invoice.amountDueLabel}</span>
         </div>
+        {invoice.creditLabel ? (
+          <p className="text-xs text-neutral-600">{invoice.creditLabel}</p>
+        ) : null}
       </section>
 
       <footer className="mt-10 border-t border-neutral-200 pt-4 text-sm text-neutral-600">

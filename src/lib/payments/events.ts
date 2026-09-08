@@ -50,25 +50,37 @@ export function parseCheckoutPaymentEvent(
   const amountCents =
     typeof session.amount_total === "number" ? session.amount_total : NaN;
   const currency = typeof session.currency === "string" ? session.currency : "";
+  const checkoutSessionId = typeof session.id === "string" ? session.id : "";
   const paymentIntent =
     typeof session.payment_intent === "string"
       ? session.payment_intent
-      : typeof session.id === "string"
-        ? session.id
-        : "";
+      : checkoutSessionId;
   const connectedAccountId = record.account || metadata.connectedAccountId;
+  const purpose =
+    metadata.purpose === "material_deposit" ? "material_deposit" : "invoice_balance";
+  const invoiceId = metadata.invoiceId || null;
+  const estimateId = metadata.estimateId || null;
   if (
-    !metadata.invoiceId ||
     !metadata.businessId ||
     !connectedAccountId ||
+    !checkoutSessionId ||
     !Number.isInteger(amountCents) ||
     !currency ||
     !paymentIntent
   ) {
     return null;
   }
+  if (purpose === "material_deposit" && !estimateId) {
+    return null;
+  }
+  if (purpose === "invoice_balance" && !invoiceId) {
+    return null;
+  }
   return {
-    invoiceId: metadata.invoiceId,
+    purpose,
+    invoiceId,
+    estimateId,
+    checkoutSessionId,
     businessId: metadata.businessId,
     connectedAccountId,
     amountCents,

@@ -274,7 +274,19 @@ export function renderInvoicePdf(
     }
     row(INVOICE_TOTAL_CUSTOMER_LABEL, docView.totalLabel, true);
     row("Payments", docView.amountPaidLabel);
+    if (docView.depositPaidLabel) {
+      row("Deposit Paid", `-${docView.depositPaidLabel}`);
+    }
+    if (docView.otherPaymentsLabel && docView.depositPaidLabel) {
+      row("Other Payments", `-${docView.otherPaymentsLabel}`);
+    }
     row("Amount Due", docView.amountDueLabel, true);
+    if (docView.creditLabel) {
+      ensureSpace(18);
+      doc.font("Helvetica").fontSize(9).fillColor("#333333");
+      doc.text(docView.creditLabel, totalsLeft, y, { width: 220 });
+      y += 16;
+    }
 
     y += 24;
     doc.font("Helvetica").fontSize(10).fillColor("#333333");

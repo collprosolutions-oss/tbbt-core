@@ -15,16 +15,24 @@ export type {
   PaymentReadinessBranch,
   PaymentReadinessDebug,
 } from "@/lib/payments/readiness";
-export { invoiceAmountToCents, invoiceDueCents, payInvoiceButtonLabel } from "@/lib/payments/money";
+export {
+  invoiceAmountToCents,
+  invoiceDueCents,
+  payDepositButtonLabel,
+  payInvoiceButtonLabel,
+} from "@/lib/payments/money";
 export { getPaymentProvider, stripeConnectAvailable } from "@/lib/payments/provider";
 export {
   applyVerifiedCheckoutPayment,
+  reconcileEstimateDepositCheckout,
   reconcileProjectTokenCheckoutPayment,
   reconcileStripeCheckoutPayment,
+  createCustomerDepositCheckout,
   createCustomerInvoiceCheckout,
   getBusinessPaymentStatus,
   PaymentError,
   paymentErrorMessage,
+  shouldShowPayDeposit,
   shouldShowPayInvoice,
   startStripeConnectOnboarding,
 } from "@/lib/payments/service";

@@ -55,6 +55,19 @@ check(
     estimatingDefaultsMigration.includes('"payload"'),
 );
 
+const paymentsMigration = readFileSync(
+  new URL("../prisma/migrations/20260908010000_add_payments/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Payment migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(paymentsMigration) &&
+    paymentsMigration.includes('CREATE TABLE IF NOT EXISTS "Payment"') &&
+    paymentsMigration.includes('"purpose"') &&
+    paymentsMigration.includes('"stripeCheckoutSessionId"') &&
+    paymentsMigration.includes('"stripePaymentIntentId"'),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

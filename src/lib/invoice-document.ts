@@ -17,6 +17,10 @@ import {
 } from "@/lib/invoice-carry-forward";
 import { prisma } from "@/lib/prisma";
 import { publicPhone } from "@/lib/public-site";
+import {
+  invoicePaymentBreakdown,
+  listProjectPayments,
+} from "@/lib/project-payments";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -129,6 +133,9 @@ export type InvoiceDocumentView = {
   totalLabel: string;
   amountPaidLabel: string;
   amountDueLabel: string;
+  depositPaidLabel: string | null;
+  otherPaymentsLabel: string | null;
+  creditLabel: string | null;
   thankYou: string;
 };
 
@@ -217,6 +224,7 @@ function toDocumentView(
       type: LineItemType;
     }>;
   },
+  payments: Array<{ purpose: string; amount: Prisma.Decimal | number | string }> = [],
 ): InvoiceDocumentView {
   const invoiceNumber = invoiceNumberFromId(invoice.id);
   const customerName = invoice.customer?.name ?? null;
@@ -234,8 +242,13 @@ function toDocumentView(
   const otherLines = lineItems.filter((line) => line.type === "OTHER");
   const showMaterials = materialLines.length > 0 || materialTotal.gt(0);
   const showOther = otherLines.length > 0 || otherTotal.gt(0);
-  const amountPaid = invoiceAmountPaid(invoice.status, invoice.total);
-  const amountDue = invoiceAmountDue(invoice.status, invoice.total);
+  const amount = invoicePaymentBreakdown({
+    status: invoice.status,
+    total: invoice.total,
+    payments,
+  });
+  const amountPaid = amount.amountPaid;
+  const amountDue = amount.amountDue;
   const serviceAddress = invoice.job?.property
     ? formatAddress(invoice.job.property)
     : null;
@@ -274,6 +287,15 @@ function toDocumentView(
     totalLabel,
     amountPaidLabel: formatMoney(amountPaid),
     amountDueLabel: formatMoney(amountDue),
+    depositPaidLabel:
+      amount.depositPaid.gt(0) ? formatMoney(amount.depositPaid) : null,
+    otherPaymentsLabel:
+      amount.depositPaid.gt(0) && amount.otherPaid.gt(0)
+        ? formatMoney(amount.otherPaid)
+        : null,
+    creditLabel: amount.credit.gt(0)
+      ? `Credit on account ${formatMoney(amount.credit)}`
+      : null,
     thankYou: INVOICE_THANK_YOU,
   };
 }
@@ -301,8 +323,13 @@ export async function loadInvoiceDocumentForBusiness(
     where: { id: invoiceId, businessId },
     include: INVOICE_DOCUMENT_INCLUDE,
   });
-
-  return invoice ? toDocumentView(invoice) : null;
+  if (!invoice) return null;
+  const payments = await listProjectPayments(db, {
+    businessId,
+    invoiceId: invoice.id,
+    jobId: invoice.job?.id ?? null,
+  });
+  return toDocumentView(invoice, payments);
 }
 
 /**
@@ -390,6 +417,8 @@ export function invoiceDocumentPlainText(document: InvoiceDocumentView): string 
     document.totalLabel,
     "Payments",
     document.amountPaidLabel,
+    document.depositPaidLabel ? "Deposit Paid" : "",
+    document.depositPaidLabel ? `-${document.depositPaidLabel}` : "",
     "Amount Due",
     document.amountDueLabel,
     document.thankYou,
