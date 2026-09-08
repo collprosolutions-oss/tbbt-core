@@ -83,11 +83,12 @@ check(
   "Portal approved scope can hide MATERIAL unit prices without changing owner/field defaults",
   scope.includes("hideMaterialLinePricing") &&
     scope.includes("customer-materials-compact") &&
-    scope.includes('item.description} × {item.quantity.toString()}'),
+    scope.includes("lineItemTitle(item.description)} × {item.quantity.toString()"),
 );
 check(
   "Work Order / Field default rows are unchanged when scanColumns is off",
-  scope.includes("item.description} × {item.quantity.toString()}"),
+  scope.includes("lineItemTitle(item.description)} × {item.quantity.toString()") &&
+    scope.includes("@ {formatMoney(item.unitPrice)}"),
 );
 check(
   "Portal page still uses existing status/invoice helpers",
