@@ -25,6 +25,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { telHref } from "@/lib/directions";
 import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { FounderRegion } from "@/components/founder-design/region";
+import type { AvailabilitySnapshot } from "@/lib/availability";
 import { cn } from "@/lib/utils";
 
 export type JobChangeOrderSummary = {
@@ -94,11 +95,13 @@ export function JobsWorkspace({
   jobs,
   eligibleMembers,
   pagination,
+  availability,
 }: {
   calendarSection: ReactNode;
   jobs: JobListItem[];
   eligibleMembers: EligibleMember[];
   pagination: ReactNode;
+  availability?: AvailabilitySnapshot | null;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(jobs[0]?.id ?? null);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -144,7 +147,7 @@ export function JobsWorkspace({
       </div>
 
       <FounderRegion id="details" className="hidden xl:block">
-        <JobDetailsPanel job={selected} eligibleMembers={eligibleMembers} />
+        <JobDetailsPanel job={selected} eligibleMembers={eligibleMembers} availability={availability} />
       </FounderRegion>
 
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
@@ -152,7 +155,7 @@ export function JobsWorkspace({
           <SheetHeader className="sr-only">
             <SheetTitle>Job details</SheetTitle>
           </SheetHeader>
-          <JobDetailsPanel job={selected} eligibleMembers={eligibleMembers} />
+          <JobDetailsPanel job={selected} eligibleMembers={eligibleMembers} availability={availability} />
         </SheetContent>
       </Sheet>
     </div>
@@ -341,9 +344,11 @@ function DetailField({
 function JobDetailsPanel({
   job,
   eligibleMembers,
+  availability,
 }: {
   job: JobListItem | null;
   eligibleMembers: EligibleMember[];
+  availability?: AvailabilitySnapshot | null;
 }) {
   if (!job) {
     return (
@@ -402,6 +407,7 @@ function JobDetailsPanel({
             </p>
           ) : (
             <ScheduleJobForm
+              key={job.id}
               jobId={job.id}
               date={job.scheduleDate}
               time={job.scheduleTime}
@@ -409,6 +415,7 @@ function JobDetailsPanel({
               customHours={job.customHours}
               isScheduled={isScheduled}
               unpaidDepositWarning={job.unpaidDepositWarning}
+              availability={availability}
             />
           )}
         </div>

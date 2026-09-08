@@ -68,6 +68,18 @@ check(
     paymentsMigration.includes('"stripePaymentIntentId"'),
 );
 
+const availabilityMigration = readFileSync(
+  new URL("../prisma/migrations/20260908140000_add_business_availability/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Business availability migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(availabilityMigration) &&
+    availabilityMigration.includes('ADD COLUMN IF NOT EXISTS "workStartMinutes"') &&
+    availabilityMigration.includes('ADD COLUMN IF NOT EXISTS "schedulingBufferMinutes"') &&
+    availabilityMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessUnavailableDate"'),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

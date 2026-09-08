@@ -59,6 +59,7 @@ import {
   weekLabel,
   weekRange,
 } from "@/lib/schedule";
+import { loadAvailabilitySnapshot } from "@/lib/availability-data";
 import { cn } from "@/lib/utils";
 
 // Deliberately not the exact "Schedule / Jobs" sidebar nav label: Next's
@@ -116,7 +117,7 @@ const UNSCHEDULED_PANEL_SELECT = {
  * duration, and never invents precision the data doesn't have.
  */
 const CONFLICT_METHOD_NOTE =
-  "Conflicts are flagged only when two Jobs' known start times and durations actually overlap. A Job with no saved duration is compared as a single instant, so some real-world conflicts may go undetected here -- never fabricated.";
+  "Conflicts are flagged when two jobs' known start times, durations, and the business travel/pickup buffer overlap. A Job with no saved duration is compared as a single instant, so some real-world conflicts may go undetected here -- never fabricated.";
 
 /**
  * The real Job lifecycle only (see prisma/schema.prisma's Job.status
@@ -347,6 +348,8 @@ export default async function JobsPage({
       take: pageSize,
     }),
   ]);
+  const availability = await loadAvailabilitySnapshot(prisma, access.businessId);
+  const scheduleBufferMinutes = availability.settings.schedulingBufferMinutes;
 
   const jobsThisWeekCount = thisWeekJobsForSum.length;
   const jobsThisWeekValue = thisWeekJobsForSum.reduce(
@@ -483,7 +486,7 @@ export default async function JobsPage({
       orderBy: { scheduledAt: "asc" },
     });
     const jobsByDay = groupJobsByDay(calendarJobs);
-    const conflicts = findScheduleConflicts(calendarJobs);
+    const conflicts = findScheduleConflicts(calendarJobs, scheduleBufferMinutes);
     dateNavLabel = monthLabel(anchorDate);
     content = (
       <MonthView days={range.days} monthStart={range.monthStart} monthEnd={range.monthEnd} today={today} jobsByDay={jobsByDay} conflicts={conflicts} />
@@ -496,7 +499,7 @@ export default async function JobsPage({
       orderBy: { scheduledAt: "asc" },
     });
     const jobsByDay = groupJobsByDay(calendarJobs);
-    const conflicts = findScheduleConflicts(calendarJobs);
+    const conflicts = findScheduleConflicts(calendarJobs, scheduleBufferMinutes);
     dateNavLabel = weekLabel(range);
     content = <WeekView days={range.days} today={today} jobsByDay={jobsByDay} conflicts={conflicts} />;
   } else if (view === "day") {
@@ -506,7 +509,7 @@ export default async function JobsPage({
       select: SCHEDULE_JOB_SELECT,
       orderBy: { scheduledAt: "asc" },
     });
-    const conflicts = findScheduleConflicts(calendarJobs);
+    const conflicts = findScheduleConflicts(calendarJobs, scheduleBufferMinutes);
     dateNavLabel = dayLabel(anchorDate);
     content = <DayView jobs={calendarJobs} conflicts={conflicts} isToday={isSameDay(anchorDate, today)} />;
   } else if (view === "crew") {
@@ -629,7 +632,11 @@ export default async function JobsPage({
             {showConflictNote ? <p className="text-xs text-muted-foreground">{CONFLICT_METHOD_NOTE}</p> : null}
           </div>
           <div className="lg:col-span-1">
-            <UnscheduledJobsPanel jobs={unscheduledPanelJobs} totalCount={unscheduledCount} />
+            <UnscheduledJobsPanel
+              jobs={unscheduledPanelJobs}
+              totalCount={unscheduledCount}
+              availability={availability}
+            />
           </div>
         </div>
       ) : (
@@ -787,6 +794,7 @@ export default async function JobsPage({
           email: member.user.email,
         }))}
         pagination={pagination}
+        availability={availability}
       />
       </FounderDesignRoot>
     </PageContainer>

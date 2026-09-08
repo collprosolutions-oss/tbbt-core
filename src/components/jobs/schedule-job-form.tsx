@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useMemo, useState } from "react";
 import {
   scheduleJob,
   type JobActionState,
@@ -9,9 +9,24 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { DURATION_PRESETS } from "@/lib/job-schedule";
+import {
+  findNextAvailableStart,
+  formatNextAvailableDateTime,
+  occupiedJobsFromSnapshot,
+  type AvailabilitySnapshot,
+} from "@/lib/availability";
+import { DURATION_PRESETS, parseDurationMinutes } from "@/lib/job-schedule";
+import { formatISODate } from "@/lib/schedule";
 
 const initialState: JobActionState = {};
+
+function pad2(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+function toTimeInput(value: Date) {
+  return `${pad2(value.getHours())}:${pad2(value.getMinutes())}`;
+}
 
 export function ScheduleJobForm({
   jobId,
@@ -21,6 +36,7 @@ export function ScheduleJobForm({
   customHours,
   isScheduled,
   unpaidDepositWarning,
+  availability,
 }: {
   jobId: string;
   date: string;
@@ -29,12 +45,34 @@ export function ScheduleJobForm({
   customHours: string;
   isScheduled: boolean;
   unpaidDepositWarning?: string | null;
+  availability?: AvailabilitySnapshot | null;
 }) {
   const [state, formAction, pending] = useActionState(
     scheduleJob,
     initialState,
   );
   const [preset, setPreset] = useState(durationPreset);
+  const [custom, setCustom] = useState(customHours);
+  const [dateValue, setDateValue] = useState(date);
+  const [timeValue, setTimeValue] = useState(time);
+  const [now, setNow] = useState<Date | null>(null);
+
+  useEffect(() => {
+    setNow(new Date());
+  }, []);
+
+  const parsedDuration = parseDurationMinutes(preset, custom);
+  const durationMinutes = parsedDuration.ok ? parsedDuration.minutes : null;
+
+  const nextAvailable = useMemo(() => {
+    if (!availability || !now) return null;
+    return findNextAvailableStart({
+      from: now,
+      durationMinutes: durationMinutes ?? 60,
+      settings: availability.settings,
+      existing: occupiedJobsFromSnapshot(availability, jobId),
+    });
+  }, [availability, durationMinutes, jobId, now]);
 
   return (
     <form
@@ -67,24 +105,72 @@ export function ScheduleJobForm({
       ) : null}
       {state.warning ? (
         <Alert>
-          <AlertTitle>Schedule overlap</AlertTitle>
+          <AlertTitle>Schedule conflict</AlertTitle>
           <AlertDescription>{state.warning}</AlertDescription>
         </Alert>
       ) : null}
+      {availability ? (
+        <div className="space-y-1 rounded-lg border border-dashed p-3 text-sm">
+          <p className="font-medium">Next available</p>
+          {nextAvailable ? (
+            <p>
+              {formatNextAvailableDateTime(nextAvailable)}
+            </p>
+          ) : now ? (
+            <p className="text-muted-foreground">
+              No open slot in the next 60 days for this duration.
+            </p>
+          ) : (
+            <p className="text-muted-foreground">Checking availability…</p>
+          )}
+          {nextAvailable ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setDateValue(formatISODate(nextAvailable));
+                setTimeValue(toTimeInput(nextAvailable));
+              }}
+            >
+              Use this time
+            </Button>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            Uses working hours, blocked dates, existing jobs, duration, and the{" "}
+            {availability.settings.schedulingBufferMinutes}-minute travel/pickup
+            buffer. Buffer is scheduling time only — not a charge.
+          </p>
+        </div>
+      ) : null}
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          <Label htmlFor="date">Date</Label>
-          <Input id="date" name="date" type="date" defaultValue={date} required />
+          <Label htmlFor={`date-${jobId}`}>Date</Label>
+          <Input
+            id={`date-${jobId}`}
+            name="date"
+            type="date"
+            value={dateValue}
+            onChange={(event) => setDateValue(event.target.value)}
+            required
+          />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="time">Start time</Label>
-          <Input id="time" name="time" type="time" defaultValue={time} required />
+          <Label htmlFor={`time-${jobId}`}>Start time</Label>
+          <Input
+            id={`time-${jobId}`}
+            name="time"
+            type="time"
+            value={timeValue}
+            onChange={(event) => setTimeValue(event.target.value)}
+            required
+          />
         </div>
       </div>
       <div className="space-y-2">
-        <Label htmlFor="durationPreset">Expected duration</Label>
+        <Label htmlFor={`durationPreset-${jobId}`}>Expected duration</Label>
         <select
-          id="durationPreset"
+          id={`durationPreset-${jobId}`}
           name="durationPreset"
           value={preset}
           onChange={(event) => setPreset(event.target.value)}
@@ -101,12 +187,13 @@ export function ScheduleJobForm({
       </div>
       {preset === "custom" ? (
         <div className="space-y-2">
-          <Label htmlFor="customHours">Custom hours</Label>
+          <Label htmlFor={`customHours-${jobId}`}>Custom hours</Label>
           <Input
-            id="customHours"
+            id={`customHours-${jobId}`}
             name="customHours"
             inputMode="decimal"
-            defaultValue={customHours}
+            value={custom}
+            onChange={(event) => setCustom(event.target.value)}
             placeholder="16"
           />
           <p className="text-xs text-muted-foreground">

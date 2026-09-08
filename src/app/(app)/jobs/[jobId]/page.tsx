@@ -29,6 +29,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Prisma } from "@prisma/client";
 import { requireManagementPageAccess } from "@/lib/access";
+import { loadAvailabilitySnapshot } from "@/lib/availability-data";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import {
   formatAddress,
@@ -231,6 +232,9 @@ export default async function JobPage({
     durationPreset === "custom" && job.scheduledDurationMinutes
       ? (job.scheduledDurationMinutes / 60).toString()
       : "";
+  const availability = isCompleted
+    ? null
+    : await loadAvailabilitySnapshot(prisma, access.businessId);
 
   const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
     BEFORE: [],
@@ -503,6 +507,7 @@ export default async function JobPage({
           )}
           {isCompleted ? null : (
             <ScheduleJobForm
+              key={job.id}
               jobId={job.id}
               date={job.scheduledAt ? toDateInput(job.scheduledAt) : ""}
               time={job.scheduledAt ? toTimeInput(job.scheduledAt) : ""}
@@ -510,6 +515,7 @@ export default async function JobPage({
               customHours={customHours}
               isScheduled={isScheduled}
               unpaidDepositWarning={unpaidDepositWarning}
+              availability={availability}
             />
           )}
         </CardContent>

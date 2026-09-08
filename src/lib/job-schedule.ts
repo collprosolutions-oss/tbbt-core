@@ -85,6 +85,21 @@ export function scheduleWindow(start: Date, durationMinutes: number | null) {
   };
 }
 
+/**
+ * Occupied length for conflict/availability checks. Buffer 0 keeps the
+ * existing "null duration = 1 minute" window. A positive buffer pads the
+ * known window so travel / material pickup cannot silently double-book.
+ */
+export function durationWithBuffer(
+  durationMinutes: number | null,
+  bufferMinutes: number,
+) {
+  if (bufferMinutes <= 0) {
+    return durationMinutes;
+  }
+  return Math.max(durationMinutes ?? 0, 1) + bufferMinutes;
+}
+
 export function schedulesOverlap(
   aStart: Date,
   aDuration: number | null,
@@ -94,6 +109,21 @@ export function schedulesOverlap(
   const a = scheduleWindow(aStart, aDuration);
   const b = scheduleWindow(bStart, bDuration);
   return a.start < b.end && b.start < a.end;
+}
+
+export function schedulesOverlapWithBuffer(
+  aStart: Date,
+  aDuration: number | null,
+  bStart: Date,
+  bDuration: number | null,
+  bufferMinutes: number,
+) {
+  return schedulesOverlap(
+    aStart,
+    durationWithBuffer(aDuration, bufferMinutes),
+    bStart,
+    durationWithBuffer(bDuration, bufferMinutes),
+  );
 }
 
 export function formatDurationMinutes(minutes: number) {

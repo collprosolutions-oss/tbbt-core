@@ -188,6 +188,7 @@ model Business {
   storedAssets             StoredAsset[]
   estimatingDefaults       BusinessEstimatingDefault[]
   payments                 Payment[]
+  unavailableDates         BusinessUnavailableDate[]
 }
 
 model Membership {
@@ -1504,10 +1505,33 @@ model BusinessSettings {
   /// Owner-approved About story shown on the public website.
   approvedPublicAboutCopy String?
 
+  /// Minutes from midnight for the normal workday start (default 08:00).
+  workStartMinutes Int @default(480)
+  /// Minutes from midnight for the normal workday end (default 17:00).
+  workEndMinutes Int @default(1020)
+  /// Comma-separated JS getDay() values (0=Sun … 6=Sat). Default Mon–Fri.
+  workingWeekdays String @default("1,2,3,4,5")
+  /// Travel / material-pickup buffer after a job, in minutes. Default 30.
+  schedulingBufferMinutes Int @default(30)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}
+
+/// A calendar date this business is unavailable. Stored as YYYY-MM-DD so it
+/// matches the existing schedule date inputs. Tenant-scoped; never shared.
+model BusinessUnavailableDate {
+  id         String   @id @default(cuid())
+  businessId String
+  date       String
+  createdAt  DateTime @default(now())
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, date])
+  @@index([businessId])
 }
 
 /// Append-only audit trail for consequential Settings changes.

@@ -11,8 +11,15 @@ import {
   updateLaborMinimumSettingsOp,
   updateSettingsPreferencesOp,
   updateWebsiteStoryOp,
+  updateSchedulingSettingsOp,
 } from "@/lib/settings-ops";
 import type { SettingsPreferenceFlags } from "@/lib/settings";
+import {
+  parseBufferMinutes,
+  parseTimeToMinutes,
+  parseUnavailableDate,
+  parseWorkingWeekdaysInput,
+} from "@/lib/availability";
 
 export type SettingsActionState = {
   error?: string;
@@ -145,5 +152,57 @@ export async function updateWebsiteStorySettings(
       : { message: "Website Story saved. Only approved public About copy appears on the website." };
   } catch (error) {
     return { error: settingsErrorMessage(error, "That Website Story could not be saved.") };
+  }
+}
+
+export async function updateSchedulingSettings(
+  _prev: SettingsActionState,
+  formData: FormData,
+): Promise<SettingsActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    assertSettingsBusinessScope(access, readString(formData, "businessId") || null);
+
+    const start = parseTimeToMinutes(readString(formData, "workStart"));
+    const end = parseTimeToMinutes(readString(formData, "workEnd"));
+    if (start == null || end == null) {
+      return { error: "Choose valid working hours." };
+    }
+
+    const weekdays = parseWorkingWeekdaysInput(formData.getAll("workingWeekday").map(String));
+    if (!weekdays.ok) {
+      return { error: weekdays.error };
+    }
+
+    const buffer = parseBufferMinutes(readString(formData, "schedulingBufferMinutes"));
+    if (!buffer.ok) {
+      return { error: buffer.error };
+    }
+
+    const unavailableDates: string[] = [];
+    for (const value of formData.getAll("unavailableDate")) {
+      if (typeof value !== "string") continue;
+      const parsed = parseUnavailableDate(value.trim());
+      if (!parsed) {
+        return { error: "Choose a valid unavailable date." };
+      }
+      unavailableDates.push(parsed);
+    }
+
+    const result = await updateSchedulingSettingsOp(prisma, access, {
+      workStartMinutes: start,
+      workEndMinutes: end,
+      workingWeekdays: weekdays.days,
+      schedulingBufferMinutes: buffer.minutes,
+      unavailableDates,
+    });
+    revalidateSettings();
+    revalidatePath("/jobs");
+    revalidatePath("/dashboard");
+    return result.unchanged
+      ? { message: "No scheduling changes to save." }
+      : { message: "Scheduling availability saved. Existing jobs keep their saved date and duration." };
+  } catch (error) {
+    return { error: settingsErrorMessage(error, "Those scheduling settings could not be saved.") };
   }
 }

@@ -183,8 +183,8 @@ export const EMERGENCY_SECURITY_LOCK_DEFERRED_MESSAGE =
 export const DOCUMENT_STORAGE_DEFERRED_MESSAGE =
   "Business document storage is not implemented. Knowledge Hub holds durable operational knowledge separately from Settings.";
 
-export const SCHEDULING_DEFAULTS_DEFERRED_MESSAGE =
-  "Advanced scheduling defaults (default job duration, buffer, working hours) are not persisted yet. Existing scheduled jobs keep their own date and duration.";
+export const SCHEDULING_FUTURE_RULE_MESSAGE =
+  "Working days, hours, unavailable dates, and the travel/pickup buffer apply to future scheduling. Existing jobs keep the date and duration already saved.";
 
 export const ACCOUNT_DELETION_UNAVAILABLE_MESSAGE =
   "Account deletion is not available. Historical business records remain preserved.";
@@ -247,6 +247,8 @@ export type SettingsReadinessInput = {
   bankConnected: boolean;
   marketingConnected: boolean;
   reviewPlatformConnected: boolean;
+  schedulingConfigured?: boolean;
+  schedulingDetail?: string;
 };
 
 /**
@@ -295,8 +297,8 @@ export function buildSettingsReadiness(input: SettingsReadinessInput): SettingsR
       id: "scheduling",
       label: "Scheduling",
       section: "scheduling",
-      status: "optional",
-      detail: SCHEDULING_DEFAULTS_DEFERRED_MESSAGE,
+      status: input.schedulingConfigured === false ? "needs_setup" : "configured",
+      detail: input.schedulingDetail ?? SCHEDULING_FUTURE_RULE_MESSAGE,
       required: false,
     },
     {
