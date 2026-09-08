@@ -1,5 +1,10 @@
+import { RecordDepositForm } from "@/components/estimates/record-deposit-form";
 import { formatMoney } from "@/lib/format";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
+import {
+  ownerMaterialDepositPaidConfirmation,
+  shouldShowOwnerRecordDepositForm,
+} from "@/lib/owner-record-deposit-ui";
 import type { ProjectPaymentSummary } from "@/lib/project-payments";
 
 export function ProjectPaymentSummaryCard({
@@ -68,5 +73,30 @@ export function ProjectPaymentSummaryCard({
         </div>
       ) : null}
     </div>
+  );
+}
+
+export function OwnerRecordDepositSection({
+  estimateId,
+  summary,
+}: {
+  estimateId: string;
+  summary: ProjectPaymentSummary;
+}) {
+  if (!summary.requiredDeposit.gt(0)) {
+    return null;
+  }
+  if (!shouldShowOwnerRecordDepositForm(summary)) {
+    return (
+      <p className="text-sm font-medium">
+        {ownerMaterialDepositPaidConfirmation(summary.depositPaid)}
+      </p>
+    );
+  }
+  return (
+    <RecordDepositForm
+      estimateId={estimateId}
+      remainingLabel={formatMoney(summary.depositRemaining)}
+    />
   );
 }

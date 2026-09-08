@@ -43,8 +43,10 @@ import {
   formatDurationMinutes,
 } from "@/lib/job-schedule";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
-import { RecordDepositForm } from "@/components/estimates/record-deposit-form";
-import { ProjectPaymentSummaryCard } from "@/components/payments/project-payment-summary";
+import {
+  OwnerRecordDepositSection,
+  ProjectPaymentSummaryCard,
+} from "@/components/payments/project-payment-summary";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
 import {
   loadEstimatePaymentSummary,
@@ -351,10 +353,10 @@ export default async function JobPage({
               summary={paymentSummary}
               warning={unpaidDepositWarning}
             />
-            {job.estimateId && paymentSummary.requiredDeposit.gt(0) ? (
-              <RecordDepositForm
+            {job.estimateId ? (
+              <OwnerRecordDepositSection
                 estimateId={job.estimateId}
-                remainingLabel={formatMoney(paymentSummary.depositRemaining)}
+                summary={paymentSummary}
               />
             ) : null}
           </CardContent>

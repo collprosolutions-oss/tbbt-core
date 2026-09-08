@@ -42,6 +42,10 @@ const {
   unpaidMaterialDepositWarning,
 } = await import("@/lib/project-payments");
 const { payDepositButtonLabel } = await import("@/lib/payments/money");
+const {
+  ownerMaterialDepositPaidConfirmation,
+  shouldShowOwnerRecordDepositForm,
+} = await import("@/lib/owner-record-deposit-ui");
 const { Prisma } = await import("@prisma/client");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -258,6 +262,18 @@ try {
     new URL("../src/app/(app)/estimates/[estimateId]/page.tsx", import.meta.url),
     "utf8",
   );
+  const jobDetailSrc = readFileSync(
+    new URL("../src/app/(app)/jobs/[jobId]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const ownerPaymentSummarySrc = readFileSync(
+    new URL("../src/components/payments/project-payment-summary.tsx", import.meta.url),
+    "utf8",
+  );
+  const ownerRecordDepositUiSrc = readFileSync(
+    new URL("../src/lib/owner-record-deposit-ui.ts", import.meta.url),
+    "utf8",
+  );
   const portalPageSrc = readFileSync(
     new URL("../src/app/p/[token]/page.tsx", import.meta.url),
     "utf8",
@@ -339,6 +355,27 @@ try {
       approvedScopeSrc.includes("Qty"),
   );
   check(
+    "owner Estimate and Job views share OwnerRecordDepositSection",
+    estimatePageSrc.includes("OwnerRecordDepositSection") &&
+      jobDetailSrc.includes("OwnerRecordDepositSection") &&
+      ownerPaymentSummarySrc.includes("export function OwnerRecordDepositSection") &&
+      ownerPaymentSummarySrc.includes("RecordDepositForm"),
+  );
+  check(
+    "owner Record Deposit form is hidden once remaining is $0",
+    ownerRecordDepositUiSrc.includes("requiredDeposit.gt(0) && summary.depositRemaining.gt(0)") &&
+      ownerPaymentSummarySrc.includes("shouldShowOwnerRecordDepositForm(summary)") &&
+      ownerPaymentSummarySrc.includes("ownerMaterialDepositPaidConfirmation") &&
+      !estimatePageSrc.includes("RecordDepositForm") &&
+      !jobDetailSrc.includes("RecordDepositForm"),
+  );
+  check(
+    "owner payment history stays visible next to the deposit action",
+    ownerPaymentSummarySrc.includes("Payments") &&
+      estimatePageSrc.includes("ProjectPaymentSummaryCard") &&
+      jobDetailSrc.includes("ProjectPaymentSummaryCard"),
+  );
+  check(
     "Pay Remaining Deposit is the partial-payment CTA",
     payDepositButtonLabel("$200.00") === "Pay $200.00 Material Deposit" &&
       payDepositButtonLabel("$100.00", true) === "Pay Remaining Deposit",
@@ -405,6 +442,53 @@ try {
   check("founder deposit remaining is $0", founderSummary.depositRemaining.toString() === "0");
   check("founder remaining project balance is $350", founderSummary.remainingBalance.toString() === "350");
   check("founder deposit status is paid", founderSummary.depositStatus === "paid");
+
+  console.log("\nUNIT — Owner Record Deposit visibility");
+  const unpaidOwnerSummary = buildProjectPaymentSummary({
+    estimateTotal: "550.00",
+    requiredDeposit: "200.00",
+    payments: [],
+  });
+  const partialOwnerSummary = buildProjectPaymentSummary({
+    estimateTotal: "550.00",
+    requiredDeposit: "200.00",
+    payments: [
+      {
+        id: "p-partial",
+        purpose: "MATERIAL_DEPOSIT",
+        amount: "100.00",
+        method: "CHECK",
+        receivedAt: new Date(),
+        note: null,
+      },
+    ],
+  });
+  const noneOwnerSummary = buildProjectPaymentSummary({
+    estimateTotal: "350.00",
+    requiredDeposit: "0",
+    payments: [],
+  });
+  check(
+    "unpaid deposit still shows Record Deposit",
+    shouldShowOwnerRecordDepositForm(unpaidOwnerSummary) === true,
+  );
+  check(
+    "partially paid deposit still shows Record Deposit",
+    shouldShowOwnerRecordDepositForm(partialOwnerSummary) === true,
+  );
+  check(
+    "fully paid deposit hides Record Deposit",
+    shouldShowOwnerRecordDepositForm(founderSummary) === false,
+  );
+  check(
+    "fully paid confirmation shows the $200 deposit",
+    ownerMaterialDepositPaidConfirmation(founderSummary.depositPaid) ===
+      "✓ Material deposit paid — $200.00",
+  );
+  check(
+    "no required deposit does not show Record Deposit",
+    shouldShowOwnerRecordDepositForm(noneOwnerSummary) === false,
+  );
 
   const invoiceCredit = invoicePaymentBreakdown({
     status: "SENT",
@@ -474,6 +558,17 @@ try {
     propertyId: businessA.property.id,
     total: "550.00",
   });
+  const founderUnpaidSummary = await loadEstimatePaymentSummary(prisma, {
+    businessId: businessA.business.id,
+    estimateId: founder.estimate.id,
+    estimateTotal: "550.00",
+    requiredDeposit: "200.00",
+  });
+  check(
+    "unpaid owner Record Deposit stays available",
+    shouldShowOwnerRecordDepositForm(founderUnpaidSummary) === true &&
+      founderUnpaidSummary.depositRemaining.toString() === "200",
+  );
   const depositSession = await createCustomerDepositCheckout(prisma, founder.token, provider, {
     appUrl: "http://deposit.test",
   });
@@ -511,6 +606,15 @@ try {
   check("Deposit Remaining = $0", founderPaidSummary.depositRemaining.toString() === "0");
   check("Remaining Project Balance = $350", founderPaidSummary.remainingBalance.toString() === "350");
   check("one Payment row is the source of truth", founderPaidSummary.payments.length === 1);
+  check(
+    "fully paid owner Record Deposit is hidden",
+    shouldShowOwnerRecordDepositForm(founderPaidSummary) === false,
+  );
+  check(
+    "fully paid owner confirmation is $200.00",
+    ownerMaterialDepositPaidConfirmation(founderPaidSummary.depositPaid) ===
+      "✓ Material deposit paid — $200.00",
+  );
 
   const duplicate = await applyVerifiedCheckoutPayment(
     prisma,
@@ -691,6 +795,10 @@ try {
   check("partial remaining is $100", partialSummary.depositRemaining.toString() === "100");
   check("partial remaining project balance is $450", partialSummary.remainingBalance.toString() === "450");
   check("partial status is Deposit Partially Paid", partialSummary.depositStatus === "partial");
+  check(
+    "partial owner Record Deposit stays available",
+    shouldShowOwnerRecordDepositForm(partialSummary) === true,
+  );
   const partialCheckout = await createCustomerDepositCheckout(prisma, partial.token, provider, {
     appUrl: "http://deposit.test",
   });
@@ -720,6 +828,10 @@ try {
   });
   check("no-deposit status is none", noneSummary.depositStatus === "none");
   check("no-deposit remaining warning is hidden", unpaidMaterialDepositWarning(noneSummary.depositRemaining) === null);
+  check(
+    "no-deposit owner Record Deposit stays hidden",
+    shouldShowOwnerRecordDepositForm(noneSummary) === false,
+  );
   try {
     await createCustomerDepositCheckout(prisma, none.token, provider, {
       appUrl: "http://deposit.test",

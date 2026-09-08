@@ -32,8 +32,10 @@ import {
   MaterialTakeoffPanel,
 } from "@/components/estimates/material-takeoff-form";
 import { MaterialDepositForm } from "@/components/estimates/material-deposit-form";
-import { RecordDepositForm } from "@/components/estimates/record-deposit-form";
-import { ProjectPaymentSummaryCard } from "@/components/payments/project-payment-summary";
+import {
+  OwnerRecordDepositSection,
+  ProjectPaymentSummaryCard,
+} from "@/components/payments/project-payment-summary";
 import { CustomerMaterialsTotalForm } from "@/components/estimates/customer-materials-total-form";
 import { EditMaterialLineForm } from "@/components/estimates/edit-material-line-form";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
@@ -808,12 +810,10 @@ export default async function EstimateBuilderPage({
                 summary={paymentSummary}
                 warning={unpaidDepositWarning}
               />
-              {paymentSummary.requiredDeposit.gt(0) ? (
-                <RecordDepositForm
-                  estimateId={estimate.id}
-                  remainingLabel={formatMoney(paymentSummary.depositRemaining)}
-                />
-              ) : null}
+              <OwnerRecordDepositSection
+                estimateId={estimate.id}
+                summary={paymentSummary}
+              />
             </div>
           ) : null}
           {isDraft &&
