@@ -18,6 +18,7 @@ import {
   requireBusinessRole,
 } from "@/lib/authorization";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
+import { ensureBusinessAvailabilitySchema } from "@/lib/availability-data";
 import {
   DEFAULT_SETTINGS_PREFERENCES,
   SCHEDULING_FUTURE_RULE_MESSAGE,
@@ -50,6 +51,7 @@ export async function ensureBusinessSettings(
   db: SettingsClient,
   businessId: string,
 ) {
+  await ensureBusinessAvailabilitySchema(db);
   const existing = await db.businessSettings.findUnique({
     where: { businessId },
   });

@@ -25,7 +25,10 @@ import {
   type SettingsPreferenceFlags,
 } from "@/lib/settings";
 import { formatAvailabilitySummary } from "@/lib/availability";
-import { availabilitySettingsFromRow } from "@/lib/availability-data";
+import {
+  availabilitySettingsFromRow,
+  ensureBusinessAvailabilitySchema,
+} from "@/lib/availability-data";
 import { getTrade } from "@/lib/trades";
 
 export type SettingsTeamMember = {
@@ -115,6 +118,7 @@ export async function loadSettingsSnapshot(
   businessId: string,
 ): Promise<SettingsSnapshot> {
   const scope = { businessId } as const;
+  await ensureBusinessAvailabilitySchema(prisma);
 
   const [
     business,

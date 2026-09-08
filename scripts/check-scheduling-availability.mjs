@@ -65,6 +65,11 @@ function readRepo(rel) {
 const form = readRepo("src/components/jobs/schedule-job-form.tsx");
 const jobAction = readRepo("src/app/actions/job.ts");
 const settingsForm = readRepo("src/components/settings/scheduling-settings-form.tsx");
+const settingsWorkspace = readRepo("src/components/settings/settings-workspace.tsx");
+const settingsPage = readRepo("src/app/(app)/settings/page.tsx");
+const settingsData = readRepo("src/lib/settings-data.ts");
+const settingsOps = readRepo("src/lib/settings-ops.ts");
+const availabilityData = readRepo("src/lib/availability-data.ts");
 const intake = readRepo("src/app/r/[slug]/page.tsx");
 const portal = readRepo("src/app/p/[token]/page.tsx");
 
@@ -128,6 +133,30 @@ check(
   DEFAULT_WORK_START_MINUTES === 480 &&
     DEFAULT_WORK_END_MINUTES === 1020 &&
     DEFAULT_WORKING_WEEKDAYS.join(",") === "1,2,3,4,5",
+);
+check(
+  "Preview-safe runtime ensure adds availability columns/table before Settings reads",
+  availabilityData.includes("ADD COLUMN IF NOT EXISTS \"workStartMinutes\"") &&
+    availabilityData.includes("CREATE TABLE IF NOT EXISTS \"BusinessUnavailableDate\"") &&
+    availabilityData.includes("export async function ensureBusinessAvailabilitySchema") &&
+    settingsData.includes("await ensureBusinessAvailabilitySchema(prisma)") &&
+    settingsOps.includes("await ensureBusinessAvailabilitySchema(db)") &&
+    /await ensureBusinessAvailabilitySchema\(db\);[\s\S]*businessSettings\.findUnique/.test(
+      availabilityData,
+    ),
+);
+check(
+  "Settings → Scheduling still renders the persisted availability form",
+  settingsPage.includes("loadSettingsSnapshot") &&
+    settingsWorkspace.includes('section === "scheduling"') &&
+    settingsWorkspace.includes("SchedulingSettingsForm") &&
+    settingsWorkspace.includes("snapshot.scheduling"),
+);
+check(
+  "Scheduling settings form does not format dates during render (hydration-safe)",
+  !settingsForm.includes("toLocaleDateString") &&
+    !settingsForm.includes("Date.now(") &&
+    !settingsForm.includes("new Date("),
 );
 
 console.log("\nUNIT — Working hours, blocked dates, duration, buffer, next available");
@@ -509,7 +538,12 @@ try {
     },
   });
 
-  const { loadOccupiedJobs, loadAvailabilitySettings } = await import("@/lib/availability-data");
+  const {
+    loadOccupiedJobs,
+    loadAvailabilitySettings,
+    resetBusinessAvailabilitySchemaEnsure,
+  } = await import("@/lib/availability-data");
+  const { loadSettingsSnapshot } = await import("@/lib/settings-data");
   const occupiedA = await loadOccupiedJobs(prisma, businessA.id);
   const occupiedB = await loadOccupiedJobs(prisma, businessB.id);
   check("Occupied jobs for A do not include B's job", occupiedA.length === 1 && occupiedA[0].id === jobA.id);
@@ -520,6 +554,69 @@ try {
   check("Business A still has Wednesday blocked", settingsA.unavailableDates.includes("2026-09-09"));
   check("Business B defaults have no blocked dates", settingsB.unavailableDates.length === 0);
   check("Business B still uses the 30-minute default buffer", settingsB.schedulingBufferMinutes === 30);
+
+  console.log("\nPRISMA — Preview-skip-migrate Settings / Scheduling load");
+
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "workStartMinutes"`,
+  );
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "workEndMinutes"`,
+  );
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "workingWeekdays"`,
+  );
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "schedulingBufferMinutes"`,
+  );
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "BusinessUnavailableDate"`);
+
+  let missingSchemaThrew = false;
+  try {
+    await prisma.businessSettings.findUnique({ where: { businessId: businessA.id } });
+    await prisma.businessUnavailableDate.findMany({ where: { businessId: businessA.id } });
+  } catch {
+    missingSchemaThrew = true;
+  }
+  check(
+    "Settings snapshot queries throw when availability columns/table are missing (the #441 crash)",
+    missingSchemaThrew,
+  );
+
+  resetBusinessAvailabilitySchemaEnsure();
+  const recoveredSettings = await loadAvailabilitySettings(prisma, businessA.id);
+  check(
+    "loadAvailabilitySettings recreates the schema and returns defaults-or-saved hours",
+    recoveredSettings.workStartMinutes === 480 &&
+      recoveredSettings.schedulingBufferMinutes === 30 &&
+      recoveredSettings.workingWeekdays.join(",") === "1,2,3,4,5",
+  );
+
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "workStartMinutes"`,
+  );
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "workEndMinutes"`,
+  );
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "workingWeekdays"`,
+  );
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "schedulingBufferMinutes"`,
+  );
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "BusinessUnavailableDate"`);
+  resetBusinessAvailabilitySchemaEnsure();
+
+  const snapshot = await loadSettingsSnapshot(prisma, businessA.id);
+  check(
+    "loadSettingsSnapshot (Settings → Scheduling) renders after preview-skip-migrate schema ensure",
+    snapshot.business.id === businessA.id &&
+      snapshot.scheduling.workStartMinutes === 480 &&
+      snapshot.scheduling.workEndMinutes === 1020 &&
+      snapshot.scheduling.schedulingBufferMinutes === 30 &&
+      snapshot.scheduling.workingWeekdays.join(",") === "1,2,3,4,5" &&
+      snapshot.scheduling.summary.includes("30-minute"),
+  );
 } finally {
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });

@@ -80,6 +80,18 @@ check(
     availabilityMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessUnavailableDate"'),
 );
 
+const availabilityData = readFileSync(
+  new URL("../src/lib/availability-data.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers availability columns/table skipped by migrate",
+  availabilityData.includes("Preview shares Production and skips migrate") &&
+    availabilityData.includes("ADD COLUMN IF NOT EXISTS \"workStartMinutes\"") &&
+    availabilityData.includes("CREATE TABLE IF NOT EXISTS \"BusinessUnavailableDate\"") &&
+    availabilityData.includes("ensureBusinessAvailabilitySchema"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,
