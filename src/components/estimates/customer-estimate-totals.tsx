@@ -59,7 +59,9 @@ export function CustomerEstimateTotals({
           <div className="flex justify-between gap-4">
             <span className="text-muted-foreground">{REMAINING_BALANCE_CUSTOMER_LABEL}</span>
             <span className="tabular-nums">
-              {estimate.remainingProjectBalanceLabel ?? estimate.remainingBalanceLabel}
+              {estimate.depositStatus === "paid" || estimate.depositStatus === "partial"
+                ? estimate.remainingProjectBalanceLabel ?? estimate.remainingBalanceLabel
+                : estimate.remainingBalanceLabel}
             </span>
           </div>
           {estimate.materialDepositNote ? (

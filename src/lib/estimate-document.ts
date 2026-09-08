@@ -414,7 +414,10 @@ async function withPaymentSummary(
     depositPaidLabel: formatMoney(summary.depositPaid),
     depositRemainingDueLabel: formatMoney(summary.depositRemaining),
     remainingProjectBalanceLabel: formatMoney(summary.remainingBalance),
-    remainingBalanceLabel: formatMoney(summary.remainingBalance),
+    remainingBalanceLabel:
+      summary.depositStatus === "due"
+        ? document.remainingBalanceLabel
+        : formatMoney(summary.remainingBalance),
   };
 }
 

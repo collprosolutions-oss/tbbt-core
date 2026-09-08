@@ -142,7 +142,7 @@ check(
 );
 check(
   "Approval action and version binding are unchanged",
-  page.includes("currentVersionId={estimate.currentVersionId ?? undefined}") &&
+  page.includes("currentVersionId: estimate.currentVersionId ?? undefined") &&
     approve.includes("approveEstimate") &&
     approve.includes("estimateVersionId"),
 );
