@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { ensureBusinessPublicContactSchema } from "@/lib/business-contact";
 import {
   COLLPRO_RENO_SLUGS,
   groupPublicCatalog,
@@ -17,9 +18,18 @@ export type PublicSitePayload = {
 export async function loadPublicBusiness(slug: string) {
   const safeSlug = slug.trim().toLowerCase();
   if (!safeSlug) return null;
+  await ensureBusinessPublicContactSchema(prisma);
   return prisma.business.findUnique({
     where: { slug: safeSlug },
-    select: { id: true, name: true, slug: true, tradeCode: true },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      tradeCode: true,
+      publicPhone: true,
+      publicEmail: true,
+      publicWebsite: true,
+    },
   });
 }
 

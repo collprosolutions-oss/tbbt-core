@@ -917,6 +917,48 @@ try {
     otherDocAgain?.business.logoSrc == null && otherDocAgain?.business.phone == null,
   );
 
+  console.log("\nTEST 7b — Owner-saved contact is live on invoices");
+  await prisma.business.update({
+    where: { id: collproBusiness.id },
+    data: {
+      publicPhone: "941-555-0199",
+      publicEmail: "office@collproreno.com",
+      publicWebsite: "https://www.collproreno.com",
+    },
+  });
+  const collproContactDoc = await loadInvoiceDocumentForBusiness(
+    collproCreated.invoiceId,
+    collproBusiness.id,
+    prisma,
+  );
+  check(
+    "CollPro invoice uses the saved phone/email/website, not only the fallback",
+    collproContactDoc?.business.phone === "941-555-0199" &&
+      collproContactDoc?.business.email === "office@collproreno.com" &&
+      collproContactDoc?.business.website === "https://www.collproreno.com" &&
+      collproContactDoc?.totalLabel === collproDoc?.totalLabel,
+  );
+  const collproContactPdf = await renderInvoicePdf(collproContactDoc);
+  const collproContactPdfText = pdfExtractText(collproContactPdf);
+  check("CollPro invoice PDF includes the saved phone", collproContactPdfText.includes("941-555-0199"));
+  check("CollPro invoice PDF includes the saved website", collproContactPdfText.includes("https://www.collproreno.com"));
+
+  await prisma.business.update({
+    where: { id: otherBusiness.id },
+    data: { publicPhone: "305-555-0140" },
+  });
+  const otherContactInvoice = await loadInvoiceDocumentForBusiness(
+    invoice.id,
+    otherBusiness.id,
+    prisma,
+  );
+  check(
+    "other tenant invoice shows its own phone and still omits CollPro branding",
+    otherContactInvoice?.business.phone === "305-555-0140" &&
+      otherContactInvoice?.business.phone !== "239-357-8199" &&
+      otherContactInvoice?.business.name === "Other Subscriber Co",
+  );
+
   console.log("\nTEST 8 — Empty paid invoice backfills approved work only");
   const founderWork = await createApprovedCompletedJob({
     businessId: otherBusiness.id,

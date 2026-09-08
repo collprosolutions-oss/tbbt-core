@@ -103,6 +103,29 @@ check(
     materialPriceDb.includes("ensureMaterialPriceEngineTables"),
 );
 
+const publicContactMigration = readFileSync(
+  new URL("../prisma/migrations/20260908210000_add_business_public_contact/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Business public contact migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(publicContactMigration) &&
+    publicContactMigration.includes('ADD COLUMN IF NOT EXISTS "publicPhone"') &&
+    publicContactMigration.includes('ADD COLUMN IF NOT EXISTS "publicEmail"') &&
+    publicContactMigration.includes('ADD COLUMN IF NOT EXISTS "publicWebsite"'),
+);
+
+const businessContact = readFileSync(
+  new URL("../src/lib/business-contact.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers public contact columns skipped by migrate",
+  businessContact.includes("Preview shares Production and skips migrate") &&
+    businessContact.includes('ADD COLUMN IF NOT EXISTS "publicPhone"') &&
+    businessContact.includes("ensureBusinessPublicContactSchema"),
+);
+
 const availabilityData = readFileSync(
   new URL("../src/lib/availability-data.ts", import.meta.url),
   "utf8",

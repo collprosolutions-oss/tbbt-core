@@ -29,6 +29,7 @@ const {
   HOME_FEATURED_PROJECT_IDS,
   groupPublicCatalog,
   isCollProRenoSlug,
+  publicPhone,
   toPublicCatalogItem,
 } = await import("@/lib/public-site");
 const {
@@ -460,6 +461,19 @@ check("CollPro slug mapping is recognized",
 check("CollPro phone and name are the verified launch values",
   COLLPRO_RENO_PHONE === "239-357-8199" &&
     COLLPRO_RENO_DISPLAY_NAME === "CollPro Reno Handyman Services");
+check(
+  "publicPhone(slug) keeps the CollPro fallback and hides it from other tenants",
+  publicPhone("collpro-reno") === "239-357-8199" && publicPhone("other-handyman") === null,
+);
+check(
+  "publicPhone(business) uses a stored number when the owner has saved one",
+  publicPhone({ slug: "collpro-reno", publicPhone: "941-555-0199" }) === "941-555-0199",
+);
+check(
+  "Contact page does not hardcode the CollPro phone into metadata",
+  !readRepo("src/app/hire/[slug]/contact/page.tsx").includes("239-357-8199") &&
+    readRepo("src/app/hire/[slug]/contact/page.tsx").includes("publicPhone(site.business)"),
+);
 check("Pricing disclaimer is truthful starting-price language",
   PUBLIC_PRICING_DISCLAIMER.includes("starting labor prices"));
 
@@ -496,6 +510,26 @@ try {
   const businessB = await prisma.business.create({
     data: { name: "Other Handyman", slug: "other-handyman", tradeCode: "HANDYMAN" },
   });
+  await prisma.business.update({
+    where: { id: businessA.id },
+    data: { publicPhone: "941-555-0199" },
+  });
+  const collproPublic = await prisma.business.findUnique({
+    where: { id: businessA.id },
+    select: { slug: true, publicPhone: true },
+  });
+  const otherPublic = await prisma.business.findUnique({
+    where: { id: businessB.id },
+    select: { slug: true, publicPhone: true },
+  });
+  check(
+    "publicPhone uses the stored CollPro number when one is saved",
+    publicPhone(collproPublic) === "941-555-0199",
+  );
+  check(
+    "publicPhone does not leak the CollPro fallback to another tenant",
+    publicPhone(otherPublic) === null,
+  );
   const door = await prisma.serviceCatalogItem.create({
     data: {
       businessId: businessA.id,

@@ -38,7 +38,7 @@ export default async function PublicAboutPage({ params }: PageProps) {
   if (!site) {
     return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
   }
-  const phone = publicPhone(site.business.slug);
+  const phone = publicPhone(site.business);
   const [images, settings] = await Promise.all([
     loadPublicAboutImages(prisma, site.business.id, site.business.slug),
     prisma.businessSettings.findUnique({

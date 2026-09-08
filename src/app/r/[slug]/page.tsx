@@ -57,7 +57,7 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
     new Set(site.items.map((item) => item.id)),
   );
   const name = publicDisplayName(site.business);
-  const phone = publicPhone(site.business.slug);
+  const phone = publicPhone(site.business);
   const textHref = smsHref(phone);
   const nextAvailableLabel = await loadPublicNextAvailableLabel(prisma, site.business.id);
 

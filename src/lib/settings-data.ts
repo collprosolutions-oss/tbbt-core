@@ -6,6 +6,10 @@
  */
 import type { PrismaClient } from "@prisma/client";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
+import {
+  ensureBusinessPublicContactSchema,
+  resolveBusinessPublicContact,
+} from "@/lib/business-contact";
 import { projectedOperatingBalance } from "@/lib/expenses";
 import { PAYMENT_METHODS } from "@/lib/invoice-payment";
 import { getBusinessPaymentStatus } from "@/lib/payments";
@@ -30,6 +34,7 @@ import {
   ensureBusinessAvailabilitySchema,
 } from "@/lib/availability-data";
 import { getTrade } from "@/lib/trades";
+import { publicPhone } from "@/lib/public-site";
 
 export type SettingsTeamMember = {
   id: string;
@@ -60,6 +65,11 @@ export type SettingsSnapshot = {
     laborMinimumEnabled: boolean;
     laborMinimumAmount: string;
     logoSrc: string | null;
+    publicPhone: string;
+    publicEmail: string;
+    publicWebsite: string;
+    displayedPhone: string | null;
+    fallbackPhone: string | null;
   };
   preferences: SettingsPreferenceFlags;
   websiteStory: {
@@ -122,6 +132,7 @@ export async function loadSettingsSnapshot(
 ): Promise<SettingsSnapshot> {
   const scope = { businessId } as const;
   await ensureBusinessAvailabilitySchema(prisma);
+  await ensureBusinessPublicContactSchema(prisma);
 
   const [
     business,
@@ -144,6 +155,9 @@ export async function loadSettingsSnapshot(
         tradeCode: true,
         laborMinimumEnabled: true,
         laborMinimumAmount: true,
+        publicPhone: true,
+        publicEmail: true,
+        publicWebsite: true,
       },
     }),
     prisma.businessSettings.findUnique({
@@ -223,6 +237,7 @@ export async function loadSettingsSnapshot(
   const knownOutflows = Number(expenses._sum.amount ?? 0);
   const projection = projectedOperatingBalance({ knownInflows, knownOutflows });
   const emailDeliveryConfigured = isEmailDeliveryConfigured();
+  const contact = resolveBusinessPublicContact(business);
   const trade = getTrade(business.tradeCode);
   const payment = await getBusinessPaymentStatus(prisma, businessId);
 
@@ -260,6 +275,11 @@ export async function loadSettingsSnapshot(
       laborMinimumEnabled: business.laborMinimumEnabled,
       laborMinimumAmount: business.laborMinimumAmount?.toString() ?? "",
       logoSrc: getBusinessLogoSrc(business.slug),
+      publicPhone: business.publicPhone ?? "",
+      publicEmail: business.publicEmail ?? "",
+      publicWebsite: business.publicWebsite ?? "",
+      displayedPhone: contact.phone,
+      fallbackPhone: publicPhone(business.slug),
     },
     preferences,
     websiteStory,

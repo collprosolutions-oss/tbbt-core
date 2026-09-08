@@ -35,7 +35,7 @@ export default async function PublicProjectsPage({ params }: PageProps) {
   if (!site) {
     return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
   }
-  const phone = publicPhone(site.business.slug);
+  const phone = publicPhone(site.business);
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>
       <main>

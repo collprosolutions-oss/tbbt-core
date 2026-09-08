@@ -16,7 +16,10 @@ import {
   toInvoiceDecimal,
 } from "@/lib/invoice-carry-forward";
 import { prisma } from "@/lib/prisma";
-import { publicPhone } from "@/lib/public-site";
+import {
+  ensureBusinessPublicContactSchema,
+  resolveBusinessPublicContact,
+} from "@/lib/business-contact";
 import {
   invoicePaymentBreakdown,
   listProjectPayments,
@@ -108,6 +111,8 @@ export type InvoiceDocumentView = {
     name: string;
     logoSrc: string | null;
     phone: string | null;
+    email: string | null;
+    website: string | null;
   };
   customer: {
     name: string | null;
@@ -140,7 +145,7 @@ export type InvoiceDocumentView = {
 };
 
 const INVOICE_DOCUMENT_INCLUDE = {
-  business: { select: { id: true, name: true, slug: true } },
+  business: { select: { id: true, name: true, slug: true, publicPhone: true, publicEmail: true, publicWebsite: true } },
   customer: { select: { id: true, name: true, email: true, phone: true } },
   job: {
     select: {
@@ -204,7 +209,7 @@ function toDocumentView(
     paidAt: Date | null;
     createdAt: Date;
     customerId: string | null;
-    business: { name: string; slug: string };
+    business: { name: string; slug: string; publicPhone?: string | null; publicEmail?: string | null; publicWebsite?: string | null };
     customer: { id: string; name: string; email: string | null; phone: string | null } | null;
     job: {
       id: string;
@@ -265,7 +270,7 @@ function toDocumentView(
     business: {
       name: invoice.business.name,
       logoSrc: getBusinessDocumentLogoSrc(invoice.business.slug),
-      phone: publicPhone(invoice.business.slug),
+      ...resolveBusinessPublicContact(invoice.business),
     },
     customer: {
       name: customerName,
@@ -309,6 +314,7 @@ export async function loadInvoiceDocumentForBusiness(
     return null;
   }
 
+  await ensureBusinessPublicContactSchema(db);
   const existing = await db.invoice.findFirst({
     where: { id: invoiceId, businessId },
     select: { id: true },
@@ -396,6 +402,8 @@ export function invoiceDocumentPlainText(document: InvoiceDocumentView): string 
   const lines = [
     document.business.name,
     document.business.phone ?? "",
+    document.business.email ?? "",
+    document.business.website ?? "",
     "INVOICE",
     document.invoiceNumber,
     document.invoiceDateLabel,

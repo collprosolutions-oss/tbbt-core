@@ -70,6 +70,16 @@ export function renderInvoicePdf(
       doc.text(docView.business.phone, left, y, { width: 280 });
       y += 14;
     }
+    if (docView.business.email) {
+      doc.font("Helvetica").fontSize(10).fillColor("#333333");
+      doc.text(docView.business.email, left, y, { width: 280 });
+      y += 14;
+    }
+    if (docView.business.website) {
+      doc.font("Helvetica").fontSize(10).fillColor("#333333");
+      doc.text(docView.business.website, left, y, { width: 280 });
+      y += 14;
+    }
 
     const headerTop = 50;
     doc.font("Helvetica-Bold").fontSize(22).fillColor("#111111");

@@ -17,6 +17,7 @@ import {
   publicRequestPath,
 } from "@/lib/public-site";
 import { loadPublicSite } from "@/lib/public-site-data";
+import { resolveBusinessPublicContact } from "@/lib/business-contact";
 
 export const dynamic = "force-dynamic";
 
@@ -26,9 +27,10 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const { slug } = await params;
   const site = await loadPublicSite(slug);
   const name = site ? publicDisplayName(site.business) : "Contact";
+  const phone = site ? publicPhone(site.business) : null;
   return {
     title: { absolute: `Contact Us | ${name}` },
-    description: `Text ${name} at 239-357-8199 or send a project request online.`,
+    description: `Text ${name}${phone ? ` at ${phone}` : ""} or send a project request online.`,
   };
 }
 
@@ -38,7 +40,8 @@ export default async function PublicContactPage({ params }: PageProps) {
   if (!site) {
     return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
   }
-  const phone = publicPhone(site.business.slug);
+  const phone = publicPhone(site.business);
+  const contact = resolveBusinessPublicContact(site.business);
   const textHref = smsHref(phone);
 
   return (
@@ -85,6 +88,16 @@ export default async function PublicContactPage({ params }: PageProps) {
                     <a href={textHref} className="mt-1 block text-2xl font-extrabold">
                       {phone}
                     </a>
+                  ) : null}
+                  {contact.email ? (
+                    <p className="mt-3 text-sm font-medium">{contact.email}</p>
+                  ) : null}
+                  {contact.website ? (
+                    <p className="mt-1 text-sm">
+                      <a href={contact.website} className="underline underline-offset-4">
+                        {contact.website}
+                      </a>
+                    </p>
                   ) : null}
                   <p className="mt-3 text-sm text-muted-foreground">
                     Text project photos, the work you need, and your address. We will respond and follow up.

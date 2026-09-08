@@ -46,7 +46,7 @@ export default async function PublicServicesPage({ params, searchParams }: PageP
   if (!site) {
     return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
   }
-  const phone = publicPhone(site.business.slug);
+  const phone = publicPhone(site.business);
   const requestHref = publicRequestPath(site.business.slug);
   const textHref = smsHref(phone);
   const images = await loadPublicServicesImages(prisma, site.business.id, site.groups);

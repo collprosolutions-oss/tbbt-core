@@ -78,6 +78,9 @@ export default async function PublicEstimatePage({
           logoSrc={logoSrc}
           status={estimate.status}
           totalLabel={estimate.totalLabel}
+          phone={estimate.business.phone}
+          email={estimate.business.email}
+          website={estimate.business.website}
         />
 
         <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">

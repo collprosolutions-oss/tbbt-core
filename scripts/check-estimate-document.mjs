@@ -527,6 +527,49 @@ try {
   check("other tenant does not receive CollPro logo", simpleDoc?.business.logoSrc == null);
   check("other tenant does not receive CollPro phone", simpleDoc?.business.phone == null);
 
+  console.log("\nTEST 3b — Owner-saved contact is live on documents, not frozen into prices");
+  const sentTotalBeforeContact = draftDoc?.totalLabel;
+  await prisma.business.update({
+    where: { id: business.id },
+    data: {
+      publicPhone: "941-555-0199",
+      publicEmail: "office@collproreno.com",
+      publicWebsite: "https://www.collproreno.com",
+    },
+  });
+  const liveContactDoc = await loadEstimateDocumentForBusiness(
+    estimate.id,
+    business.id,
+    prisma,
+  );
+  check(
+    "stored phone/email/website appear on a SENT estimate without changing the total",
+    liveContactDoc?.business.phone === "941-555-0199" &&
+      liveContactDoc?.business.email === "office@collproreno.com" &&
+      liveContactDoc?.business.website === "https://www.collproreno.com" &&
+      liveContactDoc?.totalLabel === sentTotalBeforeContact,
+  );
+  const livePdf = await renderEstimatePdf(liveContactDoc);
+  const livePdfText = pdfExtractText(livePdf);
+  check("estimate PDF includes the saved phone", livePdfText.includes("941-555-0199"));
+  check("estimate PDF includes the saved email", livePdfText.includes("office@collproreno.com"));
+
+  await prisma.business.update({
+    where: { id: otherBusiness.id },
+    data: { publicPhone: "305-555-0140", publicEmail: "hello@other.example" },
+  });
+  const otherContactDoc = await loadEstimateDocumentForBusiness(
+    simple.id,
+    otherBusiness.id,
+    prisma,
+  );
+  check(
+    "other tenant shows its own saved phone, not CollPro's",
+    otherContactDoc?.business.phone === "305-555-0140" &&
+      otherContactDoc?.business.email === "hello@other.example" &&
+      otherContactDoc?.business.phone !== "239-357-8199",
+  );
+
   console.log("\nTEST 4 — Founder slab labor/materials sections and material deposit");
   const { persistDraftEstimateTotal } = await import("@/lib/labor-minimum");
   const ownerUser = await prisma.user.create({

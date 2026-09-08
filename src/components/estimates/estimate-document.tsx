@@ -34,6 +34,12 @@ export function EstimateDocument({
           {estimate.business.phone ? (
             <p className="text-sm text-neutral-600">{estimate.business.phone}</p>
           ) : null}
+          {estimate.business.email ? (
+            <p className="text-sm text-neutral-600">{estimate.business.email}</p>
+          ) : null}
+          {estimate.business.website ? (
+            <p className="text-sm text-neutral-600">{estimate.business.website}</p>
+          ) : null}
         </div>
         <div className="text-right">
           <p className="text-3xl font-semibold tracking-wide">ESTIMATE</p>

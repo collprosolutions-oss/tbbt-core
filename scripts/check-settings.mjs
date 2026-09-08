@@ -36,7 +36,9 @@ const {
 } = await import("@/lib/settings");
 const {
   assertSettingsBusinessScope,
+  SettingsError,
   updateBusinessProfileOp,
+  updateBusinessPublicContactOp,
   updateLaborMinimumSettingsOp,
   updateSettingsPreferencesOp,
   updateWebsiteStoryOp,
@@ -108,6 +110,7 @@ const settingsSource = [
   readFileSync(new URL("../src/lib/settings-data.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/app/actions/settings.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/components/settings/settings-workspace.tsx", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/components/settings/business-public-contact-form.tsx", import.meta.url), "utf8"),
 ].join("\n");
 
 try {
@@ -139,6 +142,13 @@ try {
   check("Secret keys serialize as redacted", serializeAuditValue("apiKey", "sk-live-secret") === SETTINGS_SECRET_REDACTED);
   check("Labor minimum values are stored for audit", serializeAuditValue("laborMinimum", { enabled: true, amount: "140" }) === JSON.stringify({ enabled: true, amount: "140" }));
   check("Future-rule copy is present", /future estimates/i.test(LABOR_MINIMUM_FUTURE_RULE_MESSAGE));
+  check(
+    "Customer-facing phone/email/website are owner-editable, not deferred",
+    settingsSource.includes("BusinessPublicContactForm") &&
+      settingsSource.includes("Customer-facing contact") &&
+      settingsSource.includes("updateBusinessPublicContactOp") &&
+      !settingsSource.includes('DeferredField label="Phone"'),
+  );
 
   const readiness = buildSettingsReadiness({
     businessName: "CollPro",
@@ -488,6 +498,75 @@ try {
   await updateBusinessProfileOp(prisma, ownerA, { name: "Alpha Settings Renamed", confirmed: true });
   const renamed = await prisma.business.findUnique({ where: { id: businessA.id } });
   check("Business Profile uses the existing Business record", renamed.name === "Alpha Settings Renamed" && renamed.id === businessA.id);
+
+  console.log("\nTEST — Customer-facing public contact");
+  await expectError("ADMIN cannot update public contact", () =>
+    updateBusinessPublicContactOp(prisma, adminA, {
+      phone: "239-000-0000",
+      email: "admin@example.com",
+      website: "https://example.com",
+    }),
+    (error) => error instanceof ForbiddenError,
+  );
+  await expectError("Invalid public phone is rejected", () =>
+    updateBusinessPublicContactOp(prisma, ownerA, {
+      phone: "nope",
+      email: "",
+      website: "",
+    }),
+    (error) => error instanceof SettingsError && /valid phone/i.test(error.message),
+  );
+
+  const sentBeforeContact = await prisma.estimate.findUnique({ where: { id: sent.id } });
+  const invoiceBeforeContact = await prisma.invoice.findUnique({ where: { id: invoice.id } });
+  await updateBusinessPublicContactOp(prisma, ownerA, {
+    phone: "239-111-2222",
+    email: "hello@alpha.example",
+    website: "https://alpha.example/",
+  });
+  const alphaContact = await prisma.business.findUnique({ where: { id: businessA.id } });
+  check(
+    "OWNER can save customer-facing phone, email, and website",
+    alphaContact.publicPhone === "239-111-2222" &&
+      alphaContact.publicEmail === "hello@alpha.example" &&
+      alphaContact.publicWebsite === "https://alpha.example",
+  );
+  const contactAudit = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessA.id, settingArea: "profile", settingKey: { in: ["publicPhone", "publicEmail", "publicWebsite"] } },
+    orderBy: { settingKey: "asc" },
+  });
+  check(
+    "Public contact writes an audit row per changed field",
+    contactAudit.length === 3 &&
+      contactAudit.every((row) => row.changedByMembershipId === ownerMem.id),
+  );
+  const sentAfterContact = await prisma.estimate.findUnique({ where: { id: sent.id } });
+  const invoiceAfterContact = await prisma.invoice.findUnique({ where: { id: invoice.id } });
+  check(
+    "Saving contact does not rewrite SENT estimate totals",
+    sentAfterContact.total.toString() === sentBeforeContact.total.toString() &&
+      sentAfterContact.laborMinimumAdjustment.toString() ===
+        sentBeforeContact.laborMinimumAdjustment.toString(),
+  );
+  check(
+    "Saving contact does not rewrite invoice payment history",
+    invoiceAfterContact.total.toString() === invoiceBeforeContact.total.toString() &&
+      invoiceAfterContact.status === invoiceBeforeContact.status,
+  );
+
+  await updateBusinessPublicContactOp(prisma, ownerB, {
+    phone: "941-555-0100",
+    email: "beta@example.com",
+    website: "https://beta.example",
+  });
+  const alphaAfterBeta = await prisma.business.findUnique({ where: { id: businessA.id } });
+  const betaContact = await prisma.business.findUnique({ where: { id: businessB.id } });
+  check(
+    "Public contact is tenant-isolated",
+    alphaAfterBeta.publicPhone === "239-111-2222" &&
+      betaContact.publicPhone === "941-555-0100" &&
+      betaContact.publicEmail === "beta@example.com",
+  );
 
   const betaUnchanged = await prisma.business.findUnique({ where: { id: businessB.id } });
   check("Business B labor minimum is untouched", betaUnchanged.laborMinimumAmount.toString() === "80" && betaUnchanged.name === "Beta Settings");

@@ -1,0 +1,264 @@
+/**
+ * Owner-configurable customer-facing business contact.
+ *
+ * Stored phone/email/website win. CollPro Reno keeps its existing public
+ * phone until the owner saves one. Other tenants get no invented contact.
+ *
+ * Run with:
+ *   node --experimental-strip-types scripts/check-business-contact.mjs
+ */
+import { createRequire, register } from "node:module";
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
+
+const {
+  parsePublicEmail,
+  parsePublicPhone,
+  parsePublicWebsite,
+  resolveBusinessPublicContact,
+  ensureBusinessPublicContactSchema,
+  resetBusinessPublicContactSchemaEnsure,
+} = await import("@/lib/business-contact");
+const { COLLPRO_RENO_PHONE, publicPhone } = await import("@/lib/public-site");
+
+function readRepo(rel) {
+  return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
+}
+
+let passed = 0;
+let failed = 0;
+function check(label, ok) {
+  if (ok) {
+    passed += 1;
+    console.log(`  ok  - ${label}`);
+  } else {
+    failed += 1;
+    console.error(`FAIL - ${label}`);
+  }
+}
+
+function expectThrow(label, fn, predicate) {
+  try {
+    fn();
+    check(label, false);
+  } catch (error) {
+    check(label, predicate(error));
+  }
+}
+
+console.log("\nSTATIC — Documents resolve live contact, not a frozen snapshot");
+const contactSrc = readRepo("src/lib/business-contact.ts");
+const settingsOps = readRepo("src/lib/settings-ops.ts");
+const estimateDoc = readRepo("src/lib/estimate-document.ts");
+const invoiceDoc = readRepo("src/lib/invoice-document.ts");
+check(
+  "Contact helper documents live resolution without rewriting prices",
+  contactSrc.includes("They are not financial snapshot fields") &&
+    contactSrc.includes("ensureBusinessPublicContactSchema"),
+);
+const contactOpStart = settingsOps.indexOf("export async function updateBusinessPublicContactOp");
+const contactOpEnd = settingsOps.indexOf("export async function", contactOpStart + 10);
+const contactOp = settingsOps.slice(contactOpStart, contactOpEnd === -1 ? undefined : contactOpEnd);
+check(
+  "Settings contact mutation updates only Business fields",
+  contactOp.includes("publicPhone") &&
+    !contactOp.includes("estimateVersion") &&
+    !contactOp.includes("invoice.update"),
+);
+check(
+  "Estimate documents resolve stored/fallback contact",
+  estimateDoc.includes("resolveBusinessPublicContact") &&
+    estimateDoc.includes("publicPhone: true"),
+);
+check(
+  "Invoice documents resolve stored/fallback contact",
+  invoiceDoc.includes("resolveBusinessPublicContact") &&
+    invoiceDoc.includes("publicPhone: true"),
+);
+check(
+  "Contact page metadata no longer hardcodes the CollPro phone",
+  !readRepo("src/app/hire/[slug]/contact/page.tsx").includes("239-357-8199") &&
+    readRepo("src/app/hire/[slug]/contact/page.tsx").includes("publicPhone(site.business)"),
+);
+
+console.log("\nUNIT — parse and resolve");
+check("empty phone stores as null", parsePublicPhone("") === null);
+check("valid phone is trimmed", parsePublicPhone("  239-357-8199  ") === "239-357-8199");
+expectThrow(
+  "short phone is rejected",
+  () => parsePublicPhone("123"),
+  (error) => /valid phone/i.test(error.message),
+);
+check("empty email stores as null", parsePublicEmail("  ") === null);
+check("valid email is trimmed", parsePublicEmail("  hello@collproreno.com ") === "hello@collproreno.com");
+expectThrow(
+  "invalid email is rejected",
+  () => parsePublicEmail("not-an-email"),
+  (error) => /valid email/i.test(error.message),
+);
+check("empty website stores as null", parsePublicWebsite("") === null);
+check(
+  "https website keeps the origin and drops a trailing slash",
+  parsePublicWebsite("https://www.collproreno.com/") === "https://www.collproreno.com",
+);
+expectThrow(
+  "javascript: website is rejected",
+  () => parsePublicWebsite("javascript:alert(1)"),
+  (error) => /https:\/\//i.test(error.message),
+);
+expectThrow(
+  "website without a protocol is rejected",
+  () => parsePublicWebsite("www.collproreno.com"),
+  (error) => /https:\/\//i.test(error.message),
+);
+
+const collproFallback = resolveBusinessPublicContact({ slug: "collpro-reno" });
+check("CollPro fallback does not invent email", collproFallback.email === null);
+check("CollPro fallback does not invent website", collproFallback.website === null);
+check("CollPro fallback phone is the launch number", collproFallback.phone === COLLPRO_RENO_PHONE);
+
+const stored = resolveBusinessPublicContact({
+  slug: "collpro-reno",
+  publicPhone: "941-555-0199",
+  publicEmail: "office@collproreno.com",
+  publicWebsite: "https://www.collproreno.com",
+});
+check("stored phone wins over the CollPro fallback", stored.phone === "941-555-0199");
+check("stored email is used when saved", stored.email === "office@collproreno.com");
+check("stored website is used when saved", stored.website === "https://www.collproreno.com");
+
+const other = resolveBusinessPublicContact({ slug: "other-handyman" });
+check("other tenant has no fallback phone", other.phone === null);
+check("other tenant has no invented email", other.email === null);
+
+check(
+  "publicPhone(slug) still returns the CollPro fallback",
+  publicPhone("collpro-reno") === "239-357-8199" && publicPhone("other-handyman") === null,
+);
+check(
+  "publicPhone(business) uses the stored number when present",
+  publicPhone({ slug: "collpro-reno", publicPhone: "555-111-2222" }) === "555-111-2222",
+);
+check(
+  "publicPhone(business) falls back for CollPro when stored is empty",
+  publicPhone({ slug: "collpro-reno", publicPhone: "  " }) === "239-357-8199",
+);
+check(
+  "publicPhone(other tenant) does not leak the CollPro number",
+  publicPhone({ slug: "other-handyman", publicPhone: null }) === null,
+);
+
+const baseUrl = process.env.DATABASE_URL;
+if (!baseUrl) {
+  console.log("\nSkipping DB persist checks (DATABASE_URL unset).");
+  console.log(
+    failed === 0
+      ? `\nAll business-contact checks passed (${passed}).`
+      : `\n${failed} business-contact check(s) failed.`,
+  );
+  process.exit(failed === 0 ? 0 : 1);
+}
+
+const testDbName = "tbbt_business_contact_test";
+const parsed = new URL(baseUrl);
+parsed.pathname = `/${testDbName}`;
+const testUrl = parsed.toString();
+
+const push = spawnSync(
+  "npx",
+  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+);
+if (push.status !== 0) {
+  console.error("Failed to push schema for business-contact test database.");
+  process.exit(push.status ?? 1);
+}
+
+const require = createRequire(import.meta.url);
+const { PrismaClient } = require("@prisma/client");
+const prisma = new PrismaClient({ datasourceUrl: testUrl });
+
+try {
+  console.log("\nDB — Persist and preview-safe ensure");
+  resetBusinessPublicContactSchemaEnsure();
+  await ensureBusinessPublicContactSchema(prisma);
+
+  const collpro = await prisma.business.create({
+    data: {
+      name: "CollPro Reno Handyman Services",
+      slug: `collpro-reno-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const otherBiz = await prisma.business.create({
+    data: {
+      name: "Other Subscriber Co",
+      slug: `other-contact-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+
+  const collproRow = await prisma.business.findUnique({
+    where: { id: collpro.id },
+    select: { slug: true, publicPhone: true, publicEmail: true, publicWebsite: true },
+  });
+  check(
+    "new CollPro-style row has no stored contact yet",
+    collproRow.publicPhone == null && collproRow.publicEmail == null && collproRow.publicWebsite == null,
+  );
+
+  await prisma.business.update({
+    where: { id: collpro.id },
+    data: {
+      publicPhone: "239-357-8199",
+      publicEmail: "office@collproreno.com",
+      publicWebsite: "https://www.collproreno.com",
+    },
+  });
+  const saved = await prisma.business.findUnique({
+    where: { id: collpro.id },
+    select: { slug: true, publicPhone: true, publicEmail: true, publicWebsite: true },
+  });
+  const resolved = resolveBusinessPublicContact(saved);
+  check(
+    "stored contact round-trips onto the resolver",
+    resolved.phone === "239-357-8199" &&
+      resolved.email === "office@collproreno.com" &&
+      resolved.website === "https://www.collproreno.com",
+  );
+
+  const otherRow = await prisma.business.findUnique({
+    where: { id: otherBiz.id },
+    select: { slug: true, publicPhone: true, publicEmail: true, publicWebsite: true },
+  });
+  check(
+    "other tenant remains empty when CollPro contact is saved",
+    otherRow.publicPhone == null &&
+      resolveBusinessPublicContact(otherRow).phone === null,
+  );
+} finally {
+  await prisma.$disconnect();
+  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$executeRawUnsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
+    );
+  } catch {
+    /* ignore */
+  }
+  try {
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await cleanup.$disconnect();
+  }
+}
+
+console.log(
+  failed === 0
+    ? `\nAll business-contact checks passed (${passed}).`
+    : `\n${failed} business-contact check(s) failed.`,
+);
+process.exit(failed === 0 ? 0 : 1);

@@ -144,6 +144,12 @@ model Business {
   tradeCode           String   @default("HANDYMAN")
   laborMinimumEnabled Boolean  @default(false)
   laborMinimumAmount  Decimal?
+  /// Customer-facing phone shown on estimates, invoices, and the public site.
+  publicPhone         String?
+  /// Customer-facing email shown on estimates, invoices, and the public site.
+  publicEmail         String?
+  /// Customer-facing website shown on estimates, invoices, and the public site.
+  publicWebsite       String?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 

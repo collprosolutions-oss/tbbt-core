@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ExportCustomersButton } from "@/components/customers/export-customers-button";
 import { FounderRegion } from "@/components/founder-design/region";
 import { BusinessProfileForm } from "@/components/settings/business-profile-form";
+import { BusinessPublicContactForm } from "@/components/settings/business-public-contact-form";
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
@@ -240,9 +241,16 @@ function SectionBody(props: SettingsWorkspaceProps) {
               detail="No logoUrl field exists on Business. A logo appears here only when the existing slug map already has one."
             />
           )}
-          <DeferredField label="Phone" detail="Not stored on the Business record yet." />
-          <DeferredField label="Email" detail="Not stored on the Business record yet." />
-          <DeferredField label="Website" detail="Not stored on the Business record yet." />
+          <div className="space-y-2 border-t pt-4">
+            <h3 className="text-sm font-medium">Customer-facing contact</h3>
+            <BusinessPublicContactForm
+              phone={snapshot.business.publicPhone}
+              email={snapshot.business.publicEmail}
+              website={snapshot.business.publicWebsite}
+              fallbackPhone={snapshot.business.fallbackPhone}
+              canEdit={canEditConsequential}
+            />
+          </div>
           <DeferredField label="Business address" detail="Not stored on the Business record yet." />
           <DeferredField label="Service area" detail="Not stored as a business-level field yet." />
         </SectionCard>

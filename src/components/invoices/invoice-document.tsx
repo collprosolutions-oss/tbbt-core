@@ -30,6 +30,12 @@ export function InvoiceDocument({
           {invoice.business.phone ? (
             <p className="text-sm text-neutral-600">{invoice.business.phone}</p>
           ) : null}
+          {invoice.business.email ? (
+            <p className="text-sm text-neutral-600">{invoice.business.email}</p>
+          ) : null}
+          {invoice.business.website ? (
+            <p className="text-sm text-neutral-600">{invoice.business.website}</p>
+          ) : null}
         </div>
         <div className="text-right">
           <p className="text-3xl font-semibold tracking-wide">INVOICE</p>
