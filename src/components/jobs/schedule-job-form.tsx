@@ -20,6 +20,7 @@ export function ScheduleJobForm({
   durationPreset,
   customHours,
   isScheduled,
+  unpaidDepositWarning,
 }: {
   jobId: string;
   date: string;
@@ -27,6 +28,7 @@ export function ScheduleJobForm({
   durationPreset: string;
   customHours: string;
   isScheduled: boolean;
+  unpaidDepositWarning?: string | null;
 }) {
   const [state, formAction, pending] = useActionState(
     scheduleJob,
@@ -35,8 +37,29 @@ export function ScheduleJobForm({
   const [preset, setPreset] = useState(durationPreset);
 
   return (
-    <form action={formAction} className="space-y-4">
+    <form
+      action={formAction}
+      className="space-y-4"
+      onSubmit={
+        unpaidDepositWarning
+          ? (event) => {
+              if (
+                !window.confirm(
+                  `${unpaidDepositWarning}\n\nSchedule the job anyway?`,
+                )
+              ) {
+                event.preventDefault();
+              }
+            }
+          : undefined
+      }
+    >
       <input type="hidden" name="jobId" value={jobId} />
+      {unpaidDepositWarning ? (
+        <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+          {unpaidDepositWarning}
+        </p>
+      ) : null}
       {state.error ? (
         <Alert variant="destructive">
           <AlertDescription>{state.error}</AlertDescription>

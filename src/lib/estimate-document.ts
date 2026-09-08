@@ -33,6 +33,7 @@ import {
 import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { prisma } from "@/lib/prisma";
 import { publicPhone } from "@/lib/public-site";
+import { loadEstimatePaymentSummary } from "@/lib/project-payments";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -90,6 +91,7 @@ export type EstimateDocumentPolicy = {
 
 export type EstimateDocumentView = {
   estimateId: string;
+  businessId: string;
   publicToken: string;
   estimateNumber: string;
   status: string;
@@ -126,6 +128,10 @@ export type EstimateDocumentView = {
   materialDepositLabel: string | null;
   remainingBalanceLabel: string | null;
   materialDepositNote: string | null;
+  depositStatus: "none" | "due" | "partial" | "paid";
+  depositPaidLabel: string | null;
+  depositRemainingDueLabel: string | null;
+  remainingProjectBalanceLabel: string | null;
 };
 
 const ESTIMATE_DOCUMENT_INCLUDE = {
@@ -229,7 +235,7 @@ function toDocumentView(estimate: {
   total: Prisma.Decimal;
   laborMinimumAdjustment: Prisma.Decimal;
   createdAt: Date;
-  business: { name: string; slug: string };
+  business: { id: string; name: string; slug: string };
   customer: {
     name: string;
     email: string | null;
@@ -327,6 +333,7 @@ function toDocumentView(estimate: {
 
   return {
     estimateId: estimate.id,
+    businessId: estimate.business.id,
     publicToken: estimate.publicToken,
     estimateNumber,
     status: estimate.status,
@@ -367,6 +374,47 @@ function toDocumentView(estimate: {
     materialDepositLabel: showDeposit ? formatMoney(deposit.amount) : null,
     remainingBalanceLabel: showDeposit ? formatMoney(deposit.remaining) : null,
     materialDepositNote: showDeposit ? MATERIAL_DEPOSIT_CUSTOMER_NOTE : null,
+    depositStatus: showDeposit ? "due" : "none",
+    depositPaidLabel: null,
+    depositRemainingDueLabel: showDeposit ? formatMoney(deposit.amount) : null,
+    remainingProjectBalanceLabel: showDeposit
+      ? formatMoney(deposit.remaining)
+      : formatMoney(total),
+  };
+}
+
+async function withPaymentSummary(
+  estimate: {
+    id: string;
+    businessId: string;
+    total: Prisma.Decimal;
+    lineItems: Array<{ type: string; total: Prisma.Decimal; description: string }>;
+    versions?: Array<{
+      total: Prisma.Decimal;
+      lineItems: Array<{ type: string; total: Prisma.Decimal; description: string }>;
+    }>;
+  },
+  document: EstimateDocumentView,
+  db: PrismaClient,
+): Promise<EstimateDocumentView> {
+  const version = estimate.versions?.[0];
+  const lines = version?.lineItems ?? estimate.lineItems;
+  const total = version?.total ?? estimate.total;
+  const deposit = resolveMaterialDeposit({ lines, total });
+  if (deposit.amount.lte(0)) return document;
+  const summary = await loadEstimatePaymentSummary(db, {
+    businessId: estimate.businessId,
+    estimateId: estimate.id,
+    estimateTotal: total,
+    requiredDeposit: deposit.amount,
+  });
+  return {
+    ...document,
+    depositStatus: summary.depositStatus,
+    depositPaidLabel: formatMoney(summary.depositPaid),
+    depositRemainingDueLabel: formatMoney(summary.depositRemaining),
+    remainingProjectBalanceLabel: formatMoney(summary.remainingBalance),
+    remainingBalanceLabel: formatMoney(summary.remainingBalance),
   };
 }
 
@@ -448,7 +496,9 @@ export async function loadEstimateDocumentForBusiness(
     include: ESTIMATE_DOCUMENT_INCLUDE,
   });
 
-  return estimate ? toDocumentView(estimate) : null;
+  return estimate
+    ? withPaymentSummary(estimate, toDocumentView(estimate), db)
+    : null;
 }
 
 export async function loadEstimateDocumentByToken(
@@ -464,5 +514,7 @@ export async function loadEstimateDocumentByToken(
     include: ESTIMATE_DOCUMENT_INCLUDE,
   });
 
-  return estimate ? toDocumentView(estimate) : null;
+  return estimate
+    ? withPaymentSummary(estimate, toDocumentView(estimate), db)
+    : null;
 }

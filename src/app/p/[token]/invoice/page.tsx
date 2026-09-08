@@ -6,10 +6,11 @@ import { formatMoney } from "@/lib/format";
 import { loadInvoiceDocumentForProjectToken } from "@/lib/invoice-document";
 import {
   getBusinessPaymentStatus,
-  invoiceDueCents,
+  invoiceAmountToCents,
   reconcileProjectTokenCheckoutPayment,
   shouldShowPayInvoice,
 } from "@/lib/payments";
+import { invoicePaymentBreakdown, listProjectPayments } from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -38,11 +39,12 @@ export default async function CustomerInvoicePage({
   const payable = await prisma.job.findUnique({
     where: { projectToken: token },
     select: {
+      id: true,
       business: { select: { id: true } },
       invoices: {
         where: { id: document.invoiceId },
         take: 1,
-        select: { status: true, total: true },
+        select: { id: true, status: true, total: true },
       },
     },
   });
@@ -50,12 +52,28 @@ export default async function CustomerInvoicePage({
   const payment = payable
     ? await getBusinessPaymentStatus(prisma, payable.business.id)
     : null;
+  const invoicePayments =
+    payable && invoice
+      ? await listProjectPayments(prisma, {
+          businessId: payable.business.id,
+          invoiceId: invoice.id,
+          jobId: payable.id,
+        })
+      : [];
+  const breakdown = invoice
+    ? invoicePaymentBreakdown({
+        status: invoice.status,
+        total: invoice.total,
+        payments: invoicePayments,
+      })
+    : null;
   const showPayInvoice = Boolean(
     invoice &&
       payment &&
+      breakdown &&
       shouldShowPayInvoice({
         invoiceStatus: invoice.status,
-        amountDueCents: invoiceDueCents(invoice.status, invoice.total),
+        amountDueCents: invoiceAmountToCents(breakdown.amountDue),
         paymentReady: payment.paymentReady,
       }),
   );
@@ -67,11 +85,11 @@ export default async function CustomerInvoicePage({
         backLabel="Back to project"
         pdfHref={`/p/${token}/invoice/pdf`}
       />
-      {showPayInvoice && invoice ? (
+      {showPayInvoice && invoice && breakdown ? (
         <div className="mx-auto flex max-w-3xl justify-end px-4 pt-4 print:hidden">
           <PayInvoiceButton
             token={token}
-            amountLabel={formatMoney(invoice.total)}
+            amountLabel={formatMoney(breakdown.amountDue)}
           />
         </div>
       ) : null}

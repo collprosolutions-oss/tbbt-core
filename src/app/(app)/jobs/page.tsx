@@ -37,6 +37,11 @@ import {
   formatDurationMinutes,
 } from "@/lib/job-schedule";
 import { prisma } from "@/lib/prisma";
+import { resolveMaterialDeposit } from "@/lib/material-deposit";
+import {
+  depositPaidByEstimateIds,
+  unpaidMaterialDepositWarning,
+} from "@/lib/project-payments";
 import {
   SCHEDULE_JOB_SELECT,
   dayLabel,
@@ -351,7 +356,13 @@ export default async function JobsPage({
     return `${pad(value.getHours())}:${pad(value.getMinutes())}`;
   }
 
-  const jobs: JobListItem[] = jobsRaw.map((job) => {
+  const jobsRawForList = jobsRaw;
+  const depositPaid = await depositPaidByEstimateIds(
+    prisma,
+    access.businessId,
+    jobsRawForList.map((job) => job.estimateId).filter((id): id is string => Boolean(id)),
+  );
+  const jobs: JobListItem[] = jobsRawForList.map((job) => {
     const approvedTotal = job.approvedEstimateVersion?.total ?? job.estimate?.total ?? null;
     const source: JobListItem["approvedScopeSource"] = job.approvedEstimateVersion
       ? "version"
@@ -365,6 +376,13 @@ export default async function JobsPage({
     const currentTotal = approvedTotal ? resolveCurrentApprovedProjectTotal(approvedTotal, job.changeOrders) : null;
     const durationPreset = durationPresetForMinutes(job.scheduledDurationMinutes);
     const invoice = job.invoices[0] ?? null;
+    const requiredDeposit = resolveMaterialDeposit({
+      lines: lineItems,
+      total: approvedTotal ?? 0,
+    }).amount;
+    const paidTowardDeposit = job.estimateId
+      ? (depositPaid.get(job.estimateId) ?? new Prisma.Decimal(0))
+      : new Prisma.Decimal(0);
 
     return {
       id: job.id,
@@ -400,6 +418,9 @@ export default async function JobsPage({
         total: formatMoney(item.total),
       })),
       approvedChangeOrders,
+      unpaidDepositWarning: unpaidMaterialDepositWarning(
+        requiredDeposit.sub(paidTowardDeposit),
+      ),
     };
   });
 

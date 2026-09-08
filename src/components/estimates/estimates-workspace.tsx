@@ -55,6 +55,7 @@ export type EstimateListItem = {
   jobId: string | null;
   hasCustomerEmail: boolean;
   publicToken: string;
+  unpaidDepositWarning?: string | null;
 };
 
 function initials(name: string) {
@@ -461,7 +462,10 @@ function EstimateDetailsPanel({ estimate }: { estimate: EstimateListItem | null 
               </Link>
             </Button>
           ) : (
-            <CreateJobButton estimateId={estimate.id} />
+            <CreateJobButton
+              estimateId={estimate.id}
+              unpaidDepositWarning={estimate.unpaidDepositWarning}
+            />
           )
         ) : null}
         {estimate.jobId && !isApproved ? (

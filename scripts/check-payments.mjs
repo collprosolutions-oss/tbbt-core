@@ -107,6 +107,8 @@ function checkoutEvent(input) {
         payment_intent: input.paymentIntent ?? "pi_test_1",
         metadata: {
           invoiceId: input.invoiceId,
+          estimateId: input.estimateId,
+          purpose: input.purpose ?? "invoice_balance",
           businessId: input.businessId,
           ...(input.connectedAccountId
             ? { connectedAccountId: input.connectedAccountId }
@@ -337,7 +339,7 @@ try {
   );
   check("portal uses shouldShowPayInvoice", portalSrc.includes("shouldShowPayInvoice"));
   check("portal renders PayInvoiceButton only when allowed", portalSrc.includes("showPayInvoice ? ("));
-  check("portal Pay Invoice label includes the invoice amount", portalSrc.includes("amountLabel={formatMoney(invoice.total)}"));
+  check("portal Pay Invoice label uses remaining amount due", portalSrc.includes("invoiceBreakdown?.amountDue"));
   check(
     "customer invoice page uses shouldShowPayInvoice",
     portalInvoiceSrc.includes("shouldShowPayInvoice"),
@@ -350,7 +352,8 @@ try {
   check(
     "customer invoice page does not read amount from the browser",
     !portalInvoiceSrc.includes("searchParams") &&
-      portalInvoiceSrc.includes("invoiceDueCents(invoice.status, invoice.total)"),
+      portalInvoiceSrc.includes("invoicePaymentBreakdown") &&
+      portalInvoiceSrc.includes("invoiceAmountToCents"),
   );
   check("portal success return does not mark paid", !portalSrc.includes("applyVerifiedCheckoutPayment"));
   check(
@@ -370,14 +373,14 @@ try {
     serviceSrc.includes("session_id={CHECKOUT_SESSION_ID}"),
   );
   check(
-    "portal source has no businessId identifier",
+    "portal source has no client-supplied businessId identifier",
     portalSrc
       .split("\n")
       .filter((line) => {
         const trimmed = line.trim();
         return trimmed && !trimmed.startsWith("*") && !trimmed.startsWith("//") && !trimmed.startsWith("/*");
       })
-      .every((line) => !line.includes("businessId")),
+      .every((line) => !line.includes("businessId") || line.includes("job.business.id")),
   );
   check("pay route does not read amount from the request", !/searchParams|formData|json\(\)|amount/.test(payRouteSrc.replace(/createCustomerInvoiceCheckout[\s\S]+/, "")));
   check("pay route creates checkout from the token only", payRouteSrc.includes("createCustomerInvoiceCheckout(prisma, token)"));
@@ -560,6 +563,29 @@ try {
       }),
       type: "v1.checkout.session.completed",
     })?.paymentStatus === "paid",
+  );
+  check(
+    "material deposit checkout event requires estimateId",
+    parseCheckoutPaymentEvent(
+      checkoutEvent({
+        account: "acct_dep",
+        purpose: "material_deposit",
+        businessId: "biz_dep",
+        amountCents: 20000,
+      }),
+    ) === null,
+  );
+  check(
+    "material deposit checkout event parses estimate-scoped payment",
+    parseCheckoutPaymentEvent(
+      checkoutEvent({
+        account: "acct_dep",
+        purpose: "material_deposit",
+        estimateId: "est_dep",
+        businessId: "biz_dep",
+        amountCents: 20000,
+      }),
+    )?.purpose === "material_deposit",
   );
 
   console.log("\nTEST — Webhook reconciliation");

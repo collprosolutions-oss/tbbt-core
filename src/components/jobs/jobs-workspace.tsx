@@ -66,6 +66,7 @@ export type JobListItem = {
   originalApprovedTotalLabel: string | null;
   approvedScopeLineItems: JobLineItemSummary[];
   approvedChangeOrders: JobChangeOrderSummary[];
+  unpaidDepositWarning?: string | null;
 };
 
 function initials(name: string) {
@@ -407,6 +408,7 @@ function JobDetailsPanel({
               durationPreset={job.durationPreset}
               customHours={job.customHours}
               isScheduled={isScheduled}
+              unpaidDepositWarning={job.unpaidDepositWarning}
             />
           )}
         </div>
@@ -515,7 +517,12 @@ function JobDetailsPanel({
             </a>
           </Button>
         ) : null}
-        {!isCompleted && !isInProgress ? <StartJobButton jobId={job.id} /> : null}
+        {!isCompleted && !isInProgress ? (
+          <StartJobButton
+            jobId={job.id}
+            unpaidDepositWarning={job.unpaidDepositWarning}
+          />
+        ) : null}
         {isInProgress ? <MarkJobCompleteButton jobId={job.id} /> : null}
         {isCompleted ? (
           job.invoice ? (

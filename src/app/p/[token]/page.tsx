@@ -26,10 +26,11 @@ import {
 } from "@/lib/project-progress";
 import {
   getBusinessPaymentStatus,
-  invoiceDueCents,
+  invoiceAmountToCents,
   reconcileProjectTokenCheckoutPayment,
   shouldShowPayInvoice,
 } from "@/lib/payments";
+import { invoicePaymentBreakdown, listProjectPayments } from "@/lib/project-payments";
 import { backfillEmptyInvoiceWorkLinesForProjectToken } from "@/lib/invoice-carry-forward";
 import { loadPortalAdditionalWorkCatalog } from "@/lib/portal-additional-work";
 import { prisma } from "@/lib/prisma";
@@ -74,6 +75,7 @@ export default async function CustomerProjectPortalPage({
     ? await prisma.job.findUnique({
         where: { projectToken: token },
         select: {
+          id: true,
           status: true,
           scheduledAt: true,
           scheduledDurationMinutes: true,
@@ -185,12 +187,27 @@ export default async function CustomerProjectPortalPage({
   const payment = invoice
     ? await getBusinessPaymentStatus(prisma, job.business.id)
     : null;
+  const invoicePayments = invoice
+    ? await listProjectPayments(prisma, {
+        businessId: job.business.id,
+        invoiceId: invoice.id,
+        jobId: job.id,
+      })
+    : [];
+  const invoiceBreakdown = invoice
+    ? invoicePaymentBreakdown({
+        status: invoice.status,
+        total: invoice.total,
+        payments: invoicePayments,
+      })
+    : null;
   const showPayInvoice = Boolean(
     invoice &&
       payment &&
+      invoiceBreakdown &&
       shouldShowPayInvoice({
         invoiceStatus: invoice.status,
-        amountDueCents: invoiceDueCents(invoice.status, invoice.total),
+        amountDueCents: invoiceAmountToCents(invoiceBreakdown.amountDue),
         paymentReady: payment.paymentReady,
       }),
   );
@@ -295,6 +312,12 @@ export default async function CustomerProjectPortalPage({
                     </div>
                   ) : null}
                   <p>Total: {formatMoney(invoice.total)}</p>
+                  {invoiceBreakdown && invoiceBreakdown.amountPaid.gt(0) ? (
+                    <p>Payments: {formatMoney(invoiceBreakdown.amountPaid)}</p>
+                  ) : null}
+                  {invoiceBreakdown && invoice.status !== "PAID" ? (
+                    <p>Amount Due: {formatMoney(invoiceBreakdown.amountDue)}</p>
+                  ) : null}
                   <p>
                     {invoice.status === "PAID" ? (
                       <>
@@ -344,7 +367,9 @@ export default async function CustomerProjectPortalPage({
                   {showPayInvoice ? (
                     <PayInvoiceButton
                       token={token}
-                      amountLabel={formatMoney(invoice.total)}
+                      amountLabel={formatMoney(
+                        invoiceBreakdown?.amountDue ?? invoice.total,
+                      )}
                     />
                   ) : null}
                 </>

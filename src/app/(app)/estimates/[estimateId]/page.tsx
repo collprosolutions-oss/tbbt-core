@@ -32,6 +32,8 @@ import {
   MaterialTakeoffPanel,
 } from "@/components/estimates/material-takeoff-form";
 import { MaterialDepositForm } from "@/components/estimates/material-deposit-form";
+import { RecordDepositForm } from "@/components/estimates/record-deposit-form";
+import { ProjectPaymentSummaryCard } from "@/components/payments/project-payment-summary";
 import { CustomerMaterialsTotalForm } from "@/components/estimates/customer-materials-total-form";
 import { EditMaterialLineForm } from "@/components/estimates/edit-material-line-form";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
@@ -95,6 +97,10 @@ import {
   toStoredIntakeMeasurement,
 } from "@/lib/intake-quote-handoff";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
+import {
+  loadEstimatePaymentSummary,
+  unpaidMaterialDepositWarning,
+} from "@/lib/project-payments";
 import {
   collectEstimateTermContext,
   composeEstimateTerms,
@@ -223,6 +229,16 @@ export default async function EstimateBuilderPage({
     lines: estimate.lineItems,
     total: estimate.total,
   });
+  const paymentSummary = await loadEstimatePaymentSummary(prisma, {
+    businessId: access.businessId,
+    estimateId: estimate.id,
+    estimateTotal: estimate.total,
+    requiredDeposit: materialDeposit.amount,
+    jobId: estimate.jobs[0]?.id ?? null,
+  });
+  const unpaidDepositWarning = unpaidMaterialDepositWarning(
+    paymentSummary.depositRemaining,
+  );
   const business = access.workspace.business;
   const isDraft = estimate.status === "DRAFT";
   const isSent = estimate.status === "SENT";
@@ -698,7 +714,10 @@ export default async function EstimateBuilderPage({
               <Link href={`/jobs/${estimate.jobs[0].id}`}>Open job</Link>
             </Button>
           ) : isApproved ? (
-            <CreateJobButton estimateId={estimate.id} />
+            <CreateJobButton
+              estimateId={estimate.id}
+              unpaidDepositWarning={unpaidDepositWarning}
+            />
           ) : null}
           <RecordNav
             customerId={estimate.customerId}
@@ -775,6 +794,20 @@ export default async function EstimateBuilderPage({
               </dd>
             </div>
           </dl>
+          {!isDraft ? (
+            <div className="mt-4 space-y-4 border-t border-border pt-4">
+              <ProjectPaymentSummaryCard
+                summary={paymentSummary}
+                warning={unpaidDepositWarning}
+              />
+              {paymentSummary.requiredDeposit.gt(0) ? (
+                <RecordDepositForm
+                  estimateId={estimate.id}
+                  remainingLabel={formatMoney(paymentSummary.depositRemaining)}
+                />
+              ) : null}
+            </div>
+          ) : null}
           {isDraft &&
           business.laborMinimumEnabled &&
           business.laborMinimumAmount ? (

@@ -15,6 +15,11 @@ import {
 } from "@/components/ui/card";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
 import { loadEstimateDocumentByToken } from "@/lib/estimate-document";
+import {
+  getBusinessPaymentStatus,
+  reconcileEstimateDepositCheckout,
+} from "@/lib/payments";
+import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
   title: "Estimate",
@@ -22,10 +27,16 @@ export const metadata: Metadata = {
 
 export default async function PublicEstimatePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ token: string }>;
+  searchParams: Promise<{ checkout?: string; session_id?: string }>;
 }) {
   const { token } = await params;
+  const query = await searchParams;
+  if (query.checkout === "return") {
+    await reconcileEstimateDepositCheckout(prisma, token, query.session_id);
+  }
   const estimate = await loadEstimateDocumentByToken(token);
 
   if (!estimate) {
@@ -46,6 +57,18 @@ export default async function PublicEstimatePage({
     estimate.laborLines.length > 0 ||
     estimate.materialLines.length > 0 ||
     estimate.otherLines.length > 0;
+  const paymentStatus = await getBusinessPaymentStatus(prisma, estimate.businessId);
+  const approveProps = {
+    publicToken: estimate.publicToken,
+    status: estimate.status,
+    currentVersionId: estimate.currentVersionId ?? undefined,
+    requiredDeposit: estimate.materialDepositLabel,
+    depositPaid: estimate.depositPaidLabel,
+    depositRemaining: estimate.depositRemainingDueLabel,
+    remainingProjectBalance: estimate.remainingProjectBalanceLabel,
+    depositStatus: estimate.depositStatus,
+    paymentReady: paymentStatus.paymentReady,
+  };
 
   return (
     <main className="min-h-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -93,11 +116,19 @@ export default async function PublicEstimatePage({
               <Button asChild variant="outline" className="w-full">
                 <Link href={`/e/${estimate.publicToken}/print`}>Print / PDF</Link>
               </Button>
-              <ApproveEstimateButton
-                publicToken={estimate.publicToken}
-                status={estimate.status}
-                currentVersionId={estimate.currentVersionId ?? undefined}
-              />
+              <ApproveEstimateButton {...approveProps} />
+              {query.checkout === "cancelled" ? (
+                <p className="text-sm text-muted-foreground">
+                  Deposit payment was cancelled. The estimate is still approved
+                  and the deposit remains due.
+                </p>
+              ) : null}
+              {query.checkout === "unavailable" ? (
+                <p className="text-sm text-muted-foreground">
+                  Online deposit payment is not available right now. The
+                  estimate is still approved and the deposit remains due.
+                </p>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -123,11 +154,19 @@ export default async function PublicEstimatePage({
               <Button asChild variant="outline" className="w-full">
                 <Link href={`/e/${estimate.publicToken}/print`}>Print / PDF</Link>
               </Button>
-              <ApproveEstimateButton
-                publicToken={estimate.publicToken}
-                status={estimate.status}
-                currentVersionId={estimate.currentVersionId ?? undefined}
-              />
+              <ApproveEstimateButton {...approveProps} />
+              {query.checkout === "cancelled" ? (
+                <p className="text-sm text-muted-foreground">
+                  Deposit payment was cancelled. The estimate is still approved
+                  and the deposit remains due.
+                </p>
+              ) : null}
+              {query.checkout === "unavailable" ? (
+                <p className="text-sm text-muted-foreground">
+                  Online deposit payment is not available right now. The
+                  estimate is still approved and the deposit remains due.
+                </p>
+              ) : null}
             </CardContent>
           </Card>
         </div>

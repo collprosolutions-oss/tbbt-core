@@ -27,6 +27,11 @@ import { formatAddress, formatDate, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { prisma } from "@/lib/prisma";
+import { resolveMaterialDeposit } from "@/lib/material-deposit";
+import {
+  depositPaidByEstimateIds,
+  unpaidMaterialDepositWarning,
+} from "@/lib/project-payments";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -184,7 +189,13 @@ export default async function EstimatesPage({
     }),
   ]);
 
-  const estimates: EstimateListItem[] = estimatesRaw.map((estimate) => {
+  const estimatesRawForList = estimatesRaw;
+  const depositPaid = await depositPaidByEstimateIds(
+    prisma,
+    access.businessId,
+    estimatesRawForList.map((estimate) => estimate.id),
+  );
+  const estimates: EstimateListItem[] = estimatesRawForList.map((estimate) => {
     const laborItems = estimate.lineItems.filter((item) => item.type === "LABOR");
     const materialItems = estimate.lineItems.filter((item) => item.type === "MATERIAL");
     const otherItems = estimate.lineItems.filter((item) => item.type === "OTHER");
@@ -198,6 +209,12 @@ export default async function EstimatesPage({
       : estimate.serviceRequest?.serviceCatalogItem?.name ??
         estimate.serviceRequest?.description ??
         "Service request";
+
+    const materialDeposit = resolveMaterialDeposit({
+      lines: estimate.lineItems,
+      total: estimate.total,
+    });
+    const paidTowardDeposit = depositPaid.get(estimate.id) ?? new Prisma.Decimal(0);
 
     return {
       id: estimate.id,
@@ -226,6 +243,9 @@ export default async function EstimatesPage({
       jobId: estimate.jobs[0]?.id ?? null,
       hasCustomerEmail: isUsableEmail(estimate.customer?.email ?? ""),
       publicToken: estimate.publicToken,
+      unpaidDepositWarning: unpaidMaterialDepositWarning(
+        materialDeposit.amount.sub(paidTowardDeposit),
+      ),
     };
   });
 

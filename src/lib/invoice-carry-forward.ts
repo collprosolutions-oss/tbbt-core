@@ -19,6 +19,7 @@ import { Prisma, type LineItemType, type PrismaClient } from "@prisma/client";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
+import { attachEstimatePaymentsToInvoice } from "@/lib/project-payments";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -460,6 +461,12 @@ export async function persistDraftInvoiceFromCompletedJob(
         businessId: input.businessId,
         invoiceId: existing.id,
       });
+      await attachEstimatePaymentsToInvoice(tx, {
+        businessId: input.businessId,
+        estimateId: job.estimateId,
+        jobId: job.id,
+        invoiceId: existing.id,
+      });
       return { ok: true as const, invoiceId: existing.id, reused: true as const };
     }
 
@@ -506,6 +513,13 @@ export async function persistDraftInvoiceFromCompletedJob(
         },
       });
     }
+
+    await attachEstimatePaymentsToInvoice(tx, {
+      businessId: input.businessId,
+      estimateId: job.estimateId,
+      jobId: job.id,
+      invoiceId: created.id,
+    });
 
     return {
       ok: true as const,

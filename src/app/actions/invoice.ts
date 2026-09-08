@@ -7,6 +7,12 @@ import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { sendDraftInvoiceIfNeeded } from "@/lib/complete-job-invoice";
 import { persistDraftInvoiceFromCompletedJob } from "@/lib/invoice-carry-forward";
 import { isPaymentMethodValue } from "@/lib/invoice-payment";
+import {
+  PAYMENT_PURPOSE_INVOICE_BALANCE,
+  invoicePaymentBreakdown,
+  listProjectPayments,
+  recordSucceededPayment,
+} from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
 
 export type InvoiceActionState = {
@@ -147,6 +153,7 @@ export async function markInvoicePaid(
   const invoice = access.assertOwned(
     await prisma.invoice.findFirst({
       where: { id: invoiceId, ...access.scope },
+      include: { job: { select: { estimateId: true } } },
     }),
   );
 
@@ -162,6 +169,30 @@ export async function markInvoicePaid(
 
   if (!isPaymentMethodValue(paymentMethod)) {
     return { error: "Choose a payment method." };
+  }
+
+  const payments = await listProjectPayments(prisma, {
+    businessId: access.businessId,
+    invoiceId: invoice.id,
+    jobId: invoice.jobId,
+  });
+  const breakdown = invoicePaymentBreakdown({
+    status: invoice.status,
+    total: invoice.total,
+    payments,
+  });
+  if (breakdown.amountDue.gt(0)) {
+    await recordSucceededPayment(prisma, {
+      businessId: invoice.businessId,
+      customerId: invoice.customerId,
+      estimateId: invoice.job?.estimateId ?? null,
+      jobId: invoice.jobId,
+      invoiceId: invoice.id,
+      purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+      amount: breakdown.amountDue,
+      method: paymentMethod,
+      note: paymentReference || null,
+    });
   }
 
   const updated = await prisma.invoice.updateMany({

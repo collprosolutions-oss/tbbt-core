@@ -2,9 +2,11 @@ import { parseCheckoutPaymentEvent } from "@/lib/payments/events";
 import type {
   CheckoutSessionResult,
   CreateConnectedAccountInput,
+  CreateDepositCheckoutInput,
   CreateInvoiceCheckoutInput,
   CreateOnboardingLinkInput,
   PaymentProvider,
+  VerifiedCheckoutPayment,
 } from "@/lib/payments/types";
 import { PAYMENT_PROVIDER_STRIPE } from "@/lib/payments/types";
 
@@ -14,7 +16,9 @@ export type FakeAccountState = {
 };
 
 export type FakeCheckoutSession = CheckoutSessionResult & {
-  invoiceId: string;
+  invoiceId: string | null;
+  estimateId: string | null;
+  purpose: "invoice_balance" | "material_deposit";
   businessId: string;
   paid: boolean;
 };
@@ -31,6 +35,51 @@ export function createFakePaymentProvider(): FakePaymentProvider {
   const checkouts: FakeCheckoutSession[] = [];
   let accountSeq = 0;
   let sessionSeq = 0;
+
+  function createCheckout(input: {
+    connectedAccountId: string;
+    businessId: string;
+    amountCents: number;
+    currency: string;
+    purpose: "invoice_balance" | "material_deposit";
+    invoiceId: string | null;
+    estimateId: string | null;
+  }): FakeCheckoutSession {
+    const account = accounts.get(input.connectedAccountId);
+    if (!account?.chargesEnabled) {
+      throw new Error("Connected account is not payment-ready.");
+    }
+    sessionSeq += 1;
+    const result: FakeCheckoutSession = {
+      id: `cs_test_${sessionSeq}`,
+      url: `https://checkout.stripe.test/pay/${sessionSeq}`,
+      connectedAccountId: input.connectedAccountId,
+      amountCents: input.amountCents,
+      currency: input.currency,
+      invoiceId: input.invoiceId,
+      estimateId: input.estimateId,
+      purpose: input.purpose,
+      businessId: input.businessId,
+      paid: false,
+    };
+    checkouts.push(result);
+    return result;
+  }
+
+  function toVerified(session: FakeCheckoutSession): VerifiedCheckoutPayment {
+    return {
+      purpose: session.purpose,
+      invoiceId: session.invoiceId,
+      estimateId: session.estimateId,
+      checkoutSessionId: session.id,
+      businessId: session.businessId,
+      connectedAccountId: session.connectedAccountId,
+      amountCents: session.amountCents,
+      currency: session.currency,
+      paymentReference: session.id,
+      paymentStatus: "paid",
+    };
+  }
 
   return {
     id: PAYMENT_PROVIDER_STRIPE,
@@ -78,27 +127,25 @@ export function createFakePaymentProvider(): FakePaymentProvider {
       throw new Error("Unknown connected account.");
     },
     async createInvoiceCheckoutSession(input: CreateInvoiceCheckoutInput) {
-      const account = accounts.get(input.connectedAccountId);
-      if (!account?.chargesEnabled) {
-        throw new Error("Connected account is not payment-ready.");
-      }
-      sessionSeq += 1;
-      const result: FakeCheckoutSession = {
-        id: `cs_test_${sessionSeq}`,
-        url: `https://checkout.stripe.test/pay/${sessionSeq}`,
-        connectedAccountId: input.connectedAccountId,
-        amountCents: input.amountCents,
-        currency: input.currency,
+      return createCheckout({
+        ...input,
+        purpose: "invoice_balance",
         invoiceId: input.invoiceId,
-        businessId: input.businessId,
-        paid: false,
-      };
-      checkouts.push(result);
-      return result;
+        estimateId: null,
+      });
+    },
+    async createDepositCheckoutSession(input: CreateDepositCheckoutInput) {
+      return createCheckout({
+        ...input,
+        purpose: "material_deposit",
+        invoiceId: null,
+        estimateId: input.estimateId,
+      });
     },
     async findPaidInvoiceCheckout(input) {
       const matchesInvoice = (checkout: FakeCheckoutSession) =>
         checkout.paid &&
+        checkout.purpose === "invoice_balance" &&
         checkout.connectedAccountId === input.connectedAccountId &&
         checkout.invoiceId === input.invoiceId &&
         checkout.businessId === input.businessId &&
@@ -110,18 +157,24 @@ export function createFakePaymentProvider(): FakePaymentProvider {
                 checkout.id === input.checkoutSessionId && matchesInvoice(checkout),
             )
           : undefined) ?? checkouts.find(matchesInvoice);
-      if (!session) {
-        return null;
-      }
-      return {
-        invoiceId: session.invoiceId,
-        businessId: session.businessId,
-        connectedAccountId: session.connectedAccountId,
-        amountCents: session.amountCents,
-        currency: session.currency,
-        paymentReference: session.id,
-        paymentStatus: "paid",
-      };
+      return session ? toVerified(session) : null;
+    },
+    async findPaidDepositCheckout(input) {
+      const matchesDeposit = (checkout: FakeCheckoutSession) =>
+        checkout.paid &&
+        checkout.purpose === "material_deposit" &&
+        checkout.connectedAccountId === input.connectedAccountId &&
+        checkout.estimateId === input.estimateId &&
+        checkout.businessId === input.businessId &&
+        checkout.amountCents === input.amountCents;
+      const session =
+        (input.checkoutSessionId
+          ? checkouts.find(
+              (checkout) =>
+                checkout.id === input.checkoutSessionId && matchesDeposit(checkout),
+            )
+          : undefined) ?? checkouts.find(matchesDeposit);
+      return session ? toVerified(session) : null;
     },
     parseCheckoutPaymentEvent,
   };
