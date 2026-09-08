@@ -202,6 +202,13 @@ check(
   approveSrc.includes("paymentReady") && approveSrc.includes("form.action"),
 );
 check(
+  "approve CTA only promises Pay Deposit when checkout can start",
+  approveSrc.includes("needsDeposit && paymentReady") &&
+    approveSrc.includes("Approve Estimate & Pay") &&
+    approveSrc.includes("Online deposit payment is not available yet") &&
+    approveSrc.includes("material deposit is still due"),
+);
+check(
   "go-live helper does not invent a fake payment provider",
   !goLiveSrc.includes("TBBT_PAYMENTS_ADAPTER") && !goLiveSrc.includes("fake"),
 );

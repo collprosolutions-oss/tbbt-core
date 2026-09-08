@@ -109,9 +109,10 @@ export function ApproveEstimateButton({
     );
   }
 
-  const approveLabel = needsDeposit
-    ? `Approve Estimate & Pay ${requiredDeposit ?? "$0.00"} Deposit`
-    : "Approve Estimate";
+  const approveLabel =
+    needsDeposit && paymentReady
+      ? `Approve Estimate & Pay ${requiredDeposit ?? "$0.00"} Deposit`
+      : "Approve Estimate";
 
   return (
     <form action={formAction}>
@@ -127,10 +128,17 @@ export function ApproveEstimateButton({
         </Alert>
       ) : null}
       <p className="mb-3 text-sm">Status: SENT</p>
-      {needsDeposit ? (
+      {needsDeposit && paymentReady ? (
         <p className="mb-3 text-sm text-muted-foreground">
           Approval records your acceptance first. You will then be asked to
           pay the {requiredDeposit ?? "$0.00"} material deposit.
+        </p>
+      ) : null}
+      {needsDeposit && !paymentReady ? (
+        <p className="mb-3 text-sm text-muted-foreground">
+          Approval records your acceptance. The{" "}
+          {requiredDeposit ?? "$0.00"} material deposit is still due. Online
+          deposit payment is not available yet.
         </p>
       ) : null}
       <Button type="submit" className="w-full" disabled={pending}>
