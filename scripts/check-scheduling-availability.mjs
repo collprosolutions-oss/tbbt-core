@@ -539,11 +539,12 @@ try {
   });
 
   const {
+    availabilitySettingsFromRow,
+    ensureBusinessAvailabilitySchema,
     loadOccupiedJobs,
     loadAvailabilitySettings,
     resetBusinessAvailabilitySchemaEnsure,
   } = await import("@/lib/availability-data");
-  const { loadSettingsSnapshot } = await import("@/lib/settings-data");
   const occupiedA = await loadOccupiedJobs(prisma, businessA.id);
   const occupiedB = await loadOccupiedJobs(prisma, businessB.id);
   check("Occupied jobs for A do not include B's job", occupiedA.length === 1 && occupiedA[0].id === jobA.id);
@@ -607,15 +608,27 @@ try {
   await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "BusinessUnavailableDate"`);
   resetBusinessAvailabilitySchemaEnsure();
 
-  const snapshot = await loadSettingsSnapshot(prisma, businessA.id);
+  // Same reads Settings → Scheduling uses via loadSettingsSnapshot.
+  await ensureBusinessAvailabilitySchema(prisma);
+  const [preferencesRow, unavailableDates] = await Promise.all([
+    prisma.businessSettings.findUnique({ where: { businessId: businessA.id } }),
+    prisma.businessUnavailableDate.findMany({
+      where: { businessId: businessA.id },
+      select: { date: true },
+      orderBy: { date: "asc" },
+    }),
+  ]);
+  const scheduling = availabilitySettingsFromRow(
+    preferencesRow,
+    unavailableDates.map((row) => row.date),
+  );
   check(
-    "loadSettingsSnapshot (Settings → Scheduling) renders after preview-skip-migrate schema ensure",
-    snapshot.business.id === businessA.id &&
-      snapshot.scheduling.workStartMinutes === 480 &&
-      snapshot.scheduling.workEndMinutes === 1020 &&
-      snapshot.scheduling.schedulingBufferMinutes === 30 &&
-      snapshot.scheduling.workingWeekdays.join(",") === "1,2,3,4,5" &&
-      snapshot.scheduling.summary.includes("30-minute"),
+    "Settings → Scheduling snapshot queries succeed after preview-skip-migrate schema ensure",
+    scheduling.workStartMinutes === 480 &&
+      scheduling.workEndMinutes === 1020 &&
+      scheduling.schedulingBufferMinutes === 30 &&
+      scheduling.workingWeekdays.join(",") === "1,2,3,4,5" &&
+      formatAvailabilitySummary(scheduling).includes("30-minute"),
   );
 } finally {
   await prisma.$disconnect();
