@@ -179,7 +179,7 @@ export default async function InvoicePage({
             )}
             <p className="text-sm text-muted-foreground">
               {paymentsGoLive.onlineCheckoutPossible
-                ? "Customers can pay this invoice online from the link."
+                ? "Customers can view this invoice from the link. Online card payment will be available when payment processing is connected."
                 : "Online card pay is not live. Record the payment with Mark Paid when the customer pays."}
             </p>
           </CardContent>

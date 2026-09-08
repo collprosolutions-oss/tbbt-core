@@ -177,6 +177,13 @@ check(
     ownerInvoiceSrc.includes("/invoice"),
 );
 check(
+  "owner invoice link copy does not claim customers can pay online",
+  ownerInvoiceSrc.includes(
+    "Customers can view this invoice from the link. Online card payment will be available when payment processing is connected.",
+  ) &&
+    !ownerInvoiceSrc.includes("Customers can pay this invoice online from the link."),
+);
+check(
   "copy button can target an explicit customer path",
   copyBtnSrc.includes("hrefPath") && copyBtnSrc.includes("window.location.origin"),
 );
