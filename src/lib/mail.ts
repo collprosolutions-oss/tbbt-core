@@ -51,6 +51,8 @@ function vercelPreviewOrigin(): string | null {
   return parseAppUrl(`https://${host}`);
 }
 
+export const PRODUCTION_APP_ORIGIN = "https://www.collproreno.com";
+
 /**
  * The app's own base URL, independent of whether transactional email
  * (Resend) is configured. Used to build absolute links a page hands
@@ -59,16 +61,22 @@ function vercelPreviewOrigin(): string | null {
  * working even when RESEND_API_KEY/EMAIL_FROM are unset.
  *
  * Resolution order:
- *   1. NEXT_PUBLIC_APP_URL when explicitly set (production:
- *      https://www.collproreno.com).
- *   2. Trusted Vercel preview/dev deployment host when that env is
+ *   1. NEXT_PUBLIC_APP_URL when explicitly set.
+ *   2. Canonical production origin on Vercel production
+ *      (https://www.collproreno.com) so Connect return URLs and Checkout
+ *      success/cancel links work even if that env is missing.
+ *   3. Trusted Vercel preview/dev deployment host when that env is
  *      absent, so Team setup links work on preview without writing a
  *      preview hostname into source.
- * Never uses the request Host header.
+ * Never uses the request Host header. Never adopts a Vercel production
+ * deployment hostname.
  */
 export function getAppUrl(): string | null {
   if (process.env.NEXT_PUBLIC_APP_URL) {
     return parseAppUrl(process.env.NEXT_PUBLIC_APP_URL);
+  }
+  if (process.env.VERCEL_ENV === "production") {
+    return PRODUCTION_APP_ORIGIN;
   }
   return vercelPreviewOrigin();
 }
