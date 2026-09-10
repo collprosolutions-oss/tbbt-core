@@ -331,10 +331,13 @@ try {
     }).branch === "v1_pending_verification_no_outstanding",
   );
   check(
-    "Continue Setup is hidden after completed onboarding with no user-owed fields",
-    shouldOfferStripeOnboarding("setup_required", "v1_submitted_no_outstanding") === false &&
+    "Continue Stripe Setup is offered while Setup Required unless Stripe says unsupported",
+    shouldOfferStripeOnboarding("setup_required", "v1_submitted_no_outstanding") === true &&
+      shouldOfferStripeOnboarding("setup_required", "retrieve_failed") === true &&
+      shouldOfferStripeOnboarding("setup_required", "not_ready") === true &&
+      shouldOfferStripeOnboarding("setup_required", "user_currently_due") === true &&
       shouldOfferStripeOnboarding("connected", "v1_charges_enabled") === false &&
-      shouldOfferStripeOnboarding("setup_required", "user_currently_due") === true,
+      shouldOfferStripeOnboarding("setup_required", "unsupported") === false,
   );
   check("375.00 becomes 37500 cents", invoiceAmountToCents(new Prisma.Decimal("375.00")) === 37500);
   check(
@@ -523,6 +526,44 @@ try {
   check("Business A stores its own Stripe account id", Boolean(accountA?.stripeAccountId));
   check("onboarding URL is Stripe-hosted test setup, not an account-link dump in TBBT", onboardA.url.startsWith("https://connect.stripe.test/setup/"));
   check("Business A is not payment-ready before charges are enabled", (await getBusinessPaymentStatus(prisma, businessA.business.id, provider)).paymentReady === false);
+
+  console.log("\nTEST — Resume onboarding when the stored account is missing on this platform");
+  const stale = await seedBusiness("Stale Connect");
+  const accessStale = makeAccess(stale.business.id, "OWNER", stale.membership.id);
+  await prisma.businessPaymentAccount.create({
+    data: {
+      businessId: stale.business.id,
+      provider: "stripe",
+      stripeAccountId: "acct_missing_on_this_platform",
+    },
+  });
+  const staleStatus = await getBusinessPaymentStatus(prisma, stale.business.id, provider);
+  check(
+    "missing platform account is Setup Required, not fake-ready",
+    staleStatus.status === "setup_required" && staleStatus.paymentReady === false,
+  );
+  check(
+    "Setup Required still offers Continue Stripe Setup when retrieve fails",
+    shouldOfferStripeOnboarding(staleStatus.status, staleStatus.readinessDebug?.branch) === true,
+  );
+  const resumed = await startStripeConnectOnboarding(
+    prisma,
+    accessStale,
+    { appUrl: "http://payments.test" },
+    provider,
+  );
+  const replaced = await prisma.businessPaymentAccount.findUnique({
+    where: { businessId: stale.business.id },
+  });
+  check(
+    "stale account is replaced with a connected account on this platform",
+    Boolean(replaced?.stripeAccountId) &&
+      replaced.stripeAccountId !== "acct_missing_on_this_platform",
+  );
+  check(
+    "resume returns a hosted Account Link for the replacement account",
+    resumed.url === `https://connect.stripe.test/setup/${replaced.stripeAccountId}`,
+  );
 
   const invoiceANone = await seedSentInvoice({
     businessId: businessA.business.id,

@@ -5,8 +5,10 @@ import type { PaymentsGoLiveExplanation } from "@/lib/payments/go-live";
 
 export function OwnerPaymentsGoLiveBanner({
   explanation,
+  showSettingsLink = true,
 }: {
   explanation: PaymentsGoLiveExplanation;
+  showSettingsLink?: boolean;
 }) {
   if (!explanation.showOwnerBanner) {
     return null;
@@ -17,11 +19,13 @@ export function OwnerPaymentsGoLiveBanner({
       <AlertTitle>{explanation.headline}</AlertTitle>
       <AlertDescription>
         <p>{explanation.detail}</p>
-        <div className="pt-2">
-          <Button asChild size="sm" variant="outline">
-            <Link href={explanation.settingsHref}>Open Estimates & Payments</Link>
-          </Button>
-        </div>
+        {showSettingsLink ? (
+          <div className="pt-2">
+            <Button asChild size="sm" variant="outline">
+              <Link href={explanation.settingsHref}>Open Estimates & Payments</Link>
+            </Button>
+          </div>
+        ) : null}
       </AlertDescription>
     </Alert>
   );
