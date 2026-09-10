@@ -23,12 +23,15 @@ const V1_ACCOUNT_LINK_FALLBACK_CODES = new Set([
   "accounts_v2_access_blocked",
 ]);
 
+const REDACTED_MESSAGE_MAX_LENGTH = 240;
+
 export type StripeErrorSummary = {
   type: string | null;
   code: string | null;
   statusCode: number | null;
   requestId: string | null;
   param: string | null;
+  rawType: string | null;
 };
 
 export function redactStripeText(value: string) {
@@ -39,9 +42,32 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+export function redactedStripeErrorMessage(error: unknown): string | null {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+  const record = error as { message?: unknown; raw?: { message?: unknown } };
+  const message = readString(record.message) ?? readString(record.raw?.message);
+  if (!message) {
+    return null;
+  }
+  const redacted = redactStripeText(message);
+  if (redacted.length <= REDACTED_MESSAGE_MAX_LENGTH) {
+    return redacted;
+  }
+  return `${redacted.slice(0, REDACTED_MESSAGE_MAX_LENGTH)}…`;
+}
+
 export function summarizeStripeError(error: unknown): StripeErrorSummary {
   if (!error || typeof error !== "object") {
-    return { type: null, code: null, statusCode: null, requestId: null, param: null };
+    return {
+      type: null,
+      code: null,
+      statusCode: null,
+      requestId: null,
+      param: null,
+      rawType: null,
+    };
   }
   const record = error as {
     type?: unknown;
@@ -50,6 +76,7 @@ export function summarizeStripeError(error: unknown): StripeErrorSummary {
     statusCode?: unknown;
     requestId?: unknown;
     param?: unknown;
+    rawType?: unknown;
     raw?: { type?: unknown; code?: unknown; param?: unknown };
   };
   const statusCode =
@@ -62,7 +89,30 @@ export function summarizeStripeError(error: unknown): StripeErrorSummary {
     statusCode,
     requestId: readString(record.requestId),
     param: readString(record.param) ?? readString(record.raw?.param),
+    rawType: readString(record.rawType) ?? readString(record.raw?.type),
   };
+}
+
+/**
+ * Owner-safe Stripe identifier. When Stripe omits `code`, include type,
+ * param, and HTTP status so the UI is not only the SDK class name.
+ */
+export function stripeConnectOnboardingFailureIdentifier(error: unknown): string | null {
+  const summary = summarizeStripeError(error);
+  if (summary.code) {
+    return redactStripeText(summary.code);
+  }
+  const parts: string[] = [];
+  if (summary.type) {
+    parts.push(redactStripeText(summary.type));
+  }
+  if (summary.param) {
+    parts.push(`param=${redactStripeText(summary.param)}`);
+  }
+  if (summary.statusCode != null) {
+    parts.push(`status=${summary.statusCode}`);
+  }
+  return parts.length > 0 ? parts.join(" / ") : null;
 }
 
 export function isUnknownConnectedAccountError(error: unknown): boolean {
@@ -113,11 +163,11 @@ export function stripeConnectOnboardingFailureMessage(error: unknown): string {
   if (summary.code === "configs_must_match_to_use_account_links") {
     return "Stripe could not create an Account Link for this connected account. The stored account's configuration does not match Connect onboarding.";
   }
-  const code = summary.code || summary.type;
-  if (!code) {
+  const identifier = stripeConnectOnboardingFailureIdentifier(error);
+  if (!identifier) {
     return "Stripe onboarding could not be started.";
   }
-  return `Stripe onboarding could not be started. (${redactStripeText(code)})`;
+  return `Stripe onboarding could not be started. (${identifier})`;
 }
 
 export function logStripeConnectOnboardingError(
@@ -133,6 +183,8 @@ export function logStripeConnectOnboardingError(
       statusCode: summary.statusCode,
       requestId: summary.requestId,
       param: summary.param,
+      rawType: summary.rawType,
+      message: redactedStripeErrorMessage(error),
       ...extra,
     }),
   );
