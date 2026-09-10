@@ -218,6 +218,18 @@ check(
     ),
 );
 check(
+  "Connect onboarding UI includes type/param/status when Stripe omits a code",
+  readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+    "stripeConnectOnboardingFailureIdentifier",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      "redactedStripeErrorMessage",
+    ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      "param=${",
+    ),
+);
+check(
   "owner invoice ops copies /p/{token}/invoice",
   ownerInvoiceSrc.includes('label="Copy invoice link"') &&
     ownerInvoiceSrc.includes("/invoice"),

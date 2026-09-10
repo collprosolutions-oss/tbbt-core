@@ -44,6 +44,7 @@ const {
 const {
   isUnknownConnectedAccountError,
   redactStripeText,
+  redactedStripeErrorMessage,
   shouldFallBackToV1AccountLink,
   stripeConnectOnboardingFailureMessage,
 } = await import("@/lib/payments/stripe-errors");
@@ -414,6 +415,30 @@ try {
     "forbidden owner message explains platform key permission without leaking account ids",
     stripeConnectOnboardingFailureMessage(v2Forbidden).includes("platform") &&
       !stripeConnectOnboardingFailureMessage(v2Forbidden).includes("acct_"),
+  );
+  const v1InvalidNoCode = Object.assign(
+    new Error("You cannot create Account Links for this account: 'acct_TESTLEAK123'."),
+    {
+      type: "StripeInvalidRequestError",
+      rawType: "invalid_request_error",
+      statusCode: 400,
+      param: "type",
+      requestId: "req_test_invalid",
+    },
+  );
+  check(
+    "v1 Account Link without a Stripe code is not treated as a stale account",
+    isUnknownConnectedAccountError(v1InvalidNoCode) === false,
+  );
+  check(
+    "owner-facing onboarding error without a Stripe code includes type, param, and status",
+    stripeConnectOnboardingFailureMessage(v1InvalidNoCode) ===
+      "Stripe onboarding could not be started. (StripeInvalidRequestError / param=type / status=400)",
+  );
+  check(
+    "onboarding log message redacts connected-account ids",
+    redactedStripeErrorMessage(v1InvalidNoCode) ===
+      "You cannot create Account Links for this account: '[redacted]'.",
   );
   check("375.00 becomes 37500 cents", invoiceAmountToCents(new Prisma.Decimal("375.00")) === 37500);
   check(
