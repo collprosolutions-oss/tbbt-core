@@ -4,6 +4,12 @@ export {
   isStripePlatformConfigured,
   STRIPE_CURRENCY,
 } from "@/lib/payments/config";
+export {
+  isUnknownConnectedAccountError,
+  redactStripeText,
+  stripeConnectOnboardingFailureMessage,
+  summarizeStripeError,
+} from "@/lib/payments/stripe-errors";
 export { parseCheckoutPaymentEvent } from "@/lib/payments/events";
 export {
   explainMerchantReadiness,

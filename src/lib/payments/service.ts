@@ -16,6 +16,11 @@ import {
   requiredDepositFromLines,
 } from "@/lib/project-payments";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
+import {
+  isUnknownConnectedAccountError,
+  logStripeConnectOnboardingError,
+  stripeConnectOnboardingFailureMessage,
+} from "@/lib/payments/stripe-errors";
 import type {
   BusinessPaymentStatus,
   CheckoutSessionResult,
@@ -175,8 +180,9 @@ export async function startStripeConnectOnboarding(
     });
     return { url: link.url };
   } catch (error) {
+    logStripeConnectOnboardingError(error);
     if (!isUnknownConnectedAccountError(error)) {
-      throw error;
+      throw new PaymentError(stripeConnectOnboardingFailureMessage(error));
     }
     const existingStripePayment = await db.payment.findFirst({
       where: { businessId: access.businessId, method: "STRIPE" },
@@ -191,27 +197,18 @@ export async function startStripeConnectOnboarding(
     stripeAccountId = await createBusinessConnectedAccount(db, access, business, provider, {
       replaceAccountId: previousAccountId,
     });
-    const link = await provider.createAccountOnboardingLink({
-      accountId: stripeAccountId,
-      returnUrl,
-      refreshUrl,
-    });
-    return { url: link.url };
+    try {
+      const link = await provider.createAccountOnboardingLink({
+        accountId: stripeAccountId,
+        returnUrl,
+        refreshUrl,
+      });
+      return { url: link.url };
+    } catch (retryError) {
+      logStripeConnectOnboardingError(retryError);
+      throw new PaymentError(stripeConnectOnboardingFailureMessage(retryError));
+    }
   }
-}
-
-function isUnknownConnectedAccountError(error: unknown) {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  const record = error as { code?: unknown; message?: unknown };
-  if (record.code === "resource_missing") {
-    return true;
-  }
-  return (
-    typeof record.message === "string" &&
-    /unknown connected account/i.test(record.message)
-  );
 }
 
 async function createBusinessConnectedAccount(

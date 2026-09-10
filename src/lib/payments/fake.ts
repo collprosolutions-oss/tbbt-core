@@ -107,7 +107,15 @@ export function createFakePaymentProvider(): FakePaymentProvider {
     },
     async createAccountOnboardingLink(input: CreateOnboardingLinkInput) {
       if (!accounts.has(input.accountId)) {
-        throw new Error("Unknown connected account.");
+        const error = new Error(`No such account: '${input.accountId}'`);
+        Object.assign(error, {
+          type: "StripeInvalidRequestError",
+          code: "not_found",
+          statusCode: 404,
+          param: "account",
+          requestId: "req_test_not_found",
+        });
+        throw error;
       }
       return { url: `https://connect.stripe.test/setup/${input.accountId}` };
     },
