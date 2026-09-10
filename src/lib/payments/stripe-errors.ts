@@ -18,6 +18,11 @@ const STALE_ACCOUNT_CODES = new Set([
   "account_invalid",
 ]);
 
+const V1_ACCOUNT_LINK_FALLBACK_CODES = new Set([
+  "forbidden",
+  "accounts_v2_access_blocked",
+]);
+
 export type StripeErrorSummary = {
   type: string | null;
   code: string | null;
@@ -79,10 +84,31 @@ export function isUnknownConnectedAccountError(error: unknown): boolean {
   );
 }
 
+/**
+ * v2 POST /v2/core/account_links requires Accounts v2 enrollment on the
+ * platform. A live Connect platform that is not in that preview returns
+ * 403 `forbidden` (StripePermissionError) or 400 `accounts_v2_access_blocked`.
+ * That is a platform-key/config failure, not a stale connected-account id.
+ * GA Connect onboarding is POST /v1/account_links.
+ */
+export function shouldFallBackToV1AccountLink(error: unknown): boolean {
+  const summary = summarizeStripeError(error);
+  if (summary.code && V1_ACCOUNT_LINK_FALLBACK_CODES.has(summary.code)) {
+    return true;
+  }
+  if (summary.statusCode === 403) {
+    return true;
+  }
+  return summary.type === "StripePermissionError";
+}
+
 export function stripeConnectOnboardingFailureMessage(error: unknown): string {
   const summary = summarizeStripeError(error);
   if (summary.code === "accounts_v2_access_blocked") {
     return "Stripe Connect Accounts v2 is not enabled on this platform. Enable Accounts v2 in the Stripe Dashboard, then try Continue Stripe Setup again.";
+  }
+  if (summary.code === "forbidden" || summary.type === "StripePermissionError") {
+    return "The live Stripe platform key is not allowed to create Connect onboarding links. In the CrewClock Stripe Dashboard (live mode), enable Connect and use the full platform secret key — not a restricted key or a connected-account key.";
   }
   if (summary.code === "configs_must_match_to_use_account_links") {
     return "Stripe could not create an Account Link for this connected account. The stored account's configuration does not match Connect onboarding.";
@@ -94,7 +120,10 @@ export function stripeConnectOnboardingFailureMessage(error: unknown): string {
   return `Stripe onboarding could not be started. (${redactStripeText(code)})`;
 }
 
-export function logStripeConnectOnboardingError(error: unknown) {
+export function logStripeConnectOnboardingError(
+  error: unknown,
+  extra: Record<string, string | number | boolean | null> = {},
+) {
   const summary = summarizeStripeError(error);
   console.info(
     "[payments] connect onboarding",
@@ -104,6 +133,7 @@ export function logStripeConnectOnboardingError(error: unknown) {
       statusCode: summary.statusCode,
       requestId: summary.requestId,
       param: summary.param,
+      ...extra,
     }),
   );
 }

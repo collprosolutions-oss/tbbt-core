@@ -203,6 +203,21 @@ check(
     ),
 );
 check(
+  "v2 Account Link forbidden falls back to v1 instead of replacing the stored account",
+  readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+    "shouldFallBackToV1AccountLink",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      '"forbidden"',
+    ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-adapter.ts", import.meta.url), "utf8").includes(
+      "stripe.accountLinks.create",
+    ) &&
+    !readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      "acct_",
+    ),
+);
+check(
   "owner invoice ops copies /p/{token}/invoice",
   ownerInvoiceSrc.includes('label="Copy invoice link"') &&
     ownerInvoiceSrc.includes("/invoice"),
