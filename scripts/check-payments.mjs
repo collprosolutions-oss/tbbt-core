@@ -44,6 +44,7 @@ const {
 const {
   isUnknownConnectedAccountError,
   redactStripeText,
+  shouldFallBackToV1AccountLink,
   stripeConnectOnboardingFailureMessage,
 } = await import("@/lib/payments/stripe-errors");
 const { Prisma } = await import("@prisma/client");
@@ -367,12 +368,37 @@ try {
     code: "accounts_v2_access_blocked",
     statusCode: 400,
   });
+  const v2Forbidden = Object.assign(
+    new Error("The provided key does not have permission to complete this request."),
+    {
+      type: "StripePermissionError",
+      code: "forbidden",
+      statusCode: 403,
+      requestId: "req_test_forbidden",
+      param: null,
+    },
+  );
   check("v2 Account Link 404 not_found is a stale connected account", isUnknownConnectedAccountError(v2Missing) === true);
   check("v1 resource_missing is a stale connected account", isUnknownConnectedAccountError(v1Missing) === true);
   check("test/live mode mismatch is a stale connected account", isUnknownConnectedAccountError(modeMismatch) === true);
   check(
     "Accounts v2 blocked is not treated as a stale account to replace",
     isUnknownConnectedAccountError(v2Blocked) === false,
+  );
+  check(
+    "v2 Account Link forbidden is not treated as a stale account to replace",
+    isUnknownConnectedAccountError(v2Forbidden) === false,
+  );
+  check(
+    "v2 Account Link forbidden falls back to GA v1 Account Links",
+    shouldFallBackToV1AccountLink(v2Forbidden) === true &&
+      shouldFallBackToV1AccountLink(v2Blocked) === true &&
+      shouldFallBackToV1AccountLink({ type: "StripePermissionError", statusCode: 403 }) === true,
+  );
+  check(
+    "missing connected account does not fall back to v1 Account Links",
+    shouldFallBackToV1AccountLink(v2Missing) === false &&
+      shouldFallBackToV1AccountLink(v1Missing) === false,
   );
   check(
     "owner-facing onboarding error includes the Stripe code and redacts account ids",
@@ -383,6 +409,11 @@ try {
   check(
     "Accounts v2 blocked tells the owner to enable it on the platform",
     stripeConnectOnboardingFailureMessage(v2Blocked).includes("Accounts v2"),
+  );
+  check(
+    "forbidden owner message explains platform key permission without leaking account ids",
+    stripeConnectOnboardingFailureMessage(v2Forbidden).includes("platform") &&
+      !stripeConnectOnboardingFailureMessage(v2Forbidden).includes("acct_"),
   );
   check("375.00 becomes 37500 cents", invoiceAmountToCents(new Prisma.Decimal("375.00")) === 37500);
   check(
@@ -404,6 +435,14 @@ try {
   );
   check("adapter uses explainMerchantReadiness", adapterSrc.includes("explainMerchantReadiness"));
   check("adapter falls back to v1 retrieve if v2 fails", adapterSrc.includes("stripe.accounts.retrieve"));
+  check(
+    "adapter falls back to v1 Account Links when v2 returns forbidden",
+    adapterSrc.includes("shouldFallBackToV1AccountLink") &&
+      adapterSrc.includes("v2.core.accountLinks.create") &&
+      adapterSrc.includes("stripe.accountLinks.create") &&
+      adapterSrc.includes('operation: "v2.core.accountLinks.create"') &&
+      adapterSrc.includes('operation: "v1.accountLinks.create"'),
+  );
   check("adapter retrieves requirements with merchant config", adapterSrc.includes('"requirements"'));
   const serviceSrc = readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8");
   const payButtonSrc = readFileSync(
@@ -608,6 +647,59 @@ try {
   check(
     "resume returns a hosted Account Link for the replacement account",
     resumed.url === `https://connect.stripe.test/setup/${replaced.stripeAccountId}`,
+  );
+
+  console.log("\nTEST — forbidden Account Link does not mint a second connected account");
+  const forbiddenBiz = await seedBusiness("Forbidden Connect");
+  const accessForbidden = makeAccess(forbiddenBiz.business.id, "OWNER", forbiddenBiz.membership.id);
+  await prisma.businessPaymentAccount.create({
+    data: {
+      businessId: forbiddenBiz.business.id,
+      provider: "stripe",
+      stripeAccountId: "acct_existing_on_platform",
+    },
+  });
+  let createdAccounts = 0;
+  const forbiddenProvider = {
+    id: "stripe",
+    async createConnectedAccount() {
+      createdAccounts += 1;
+      throw new Error("must not create another connected account");
+    },
+    async createAccountOnboardingLink() {
+      throw Object.assign(
+        new Error("The provided key does not have permission to complete this request."),
+        {
+          type: "StripePermissionError",
+          code: "forbidden",
+          statusCode: 403,
+          requestId: "req_test_forbidden",
+        },
+      );
+    },
+  };
+  try {
+    await startStripeConnectOnboarding(
+      prisma,
+      accessForbidden,
+      { appUrl: "http://payments.test" },
+      forbiddenProvider,
+    );
+    check("forbidden Account Link does not start onboarding by replacing the account", false);
+  } catch (error) {
+    check(
+      "forbidden Account Link fails as a platform permission error",
+      error instanceof PaymentError &&
+        error.message.includes("platform") &&
+        !error.message.includes("acct_"),
+    );
+  }
+  const unchangedForbidden = await prisma.businessPaymentAccount.findUnique({
+    where: { businessId: forbiddenBiz.business.id },
+  });
+  check(
+    "forbidden Account Link keeps the stored connected account",
+    createdAccounts === 0 && unchangedForbidden?.stripeAccountId === "acct_existing_on_platform",
   );
 
   const invoiceANone = await seedSentInvoice({
