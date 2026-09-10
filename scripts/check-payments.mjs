@@ -41,6 +41,11 @@ const {
   shouldShowPayInvoice,
   startStripeConnectOnboarding,
 } = await import("@/lib/payments/service");
+const {
+  isUnknownConnectedAccountError,
+  redactStripeText,
+  stripeConnectOnboardingFailureMessage,
+} = await import("@/lib/payments/stripe-errors");
 const { Prisma } = await import("@prisma/client");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -338,6 +343,46 @@ try {
       shouldOfferStripeOnboarding("setup_required", "user_currently_due") === true &&
       shouldOfferStripeOnboarding("connected", "v1_charges_enabled") === false &&
       shouldOfferStripeOnboarding("setup_required", "unsupported") === false,
+  );
+
+  const v2Missing = Object.assign(new Error("No such account: 'acct_TESTLEAK123'"), {
+    type: "StripeInvalidRequestError",
+    code: "not_found",
+    statusCode: 404,
+    param: "account",
+    requestId: "req_abc",
+  });
+  const v1Missing = Object.assign(new Error("No such account: 'acct_TESTLEAK123'"), {
+    type: "StripeInvalidRequestError",
+    code: "resource_missing",
+    statusCode: 400,
+    param: "account",
+  });
+  const modeMismatch = Object.assign(
+    new Error("No such account: a similar object exists in test mode, but a live mode key was used to make this request."),
+    { type: "StripeInvalidRequestError", code: "resource_missing", statusCode: 400 },
+  );
+  const v2Blocked = Object.assign(new Error("Accounts v2 is not enabled for your platform."), {
+    type: "StripeInvalidRequestError",
+    code: "accounts_v2_access_blocked",
+    statusCode: 400,
+  });
+  check("v2 Account Link 404 not_found is a stale connected account", isUnknownConnectedAccountError(v2Missing) === true);
+  check("v1 resource_missing is a stale connected account", isUnknownConnectedAccountError(v1Missing) === true);
+  check("test/live mode mismatch is a stale connected account", isUnknownConnectedAccountError(modeMismatch) === true);
+  check(
+    "Accounts v2 blocked is not treated as a stale account to replace",
+    isUnknownConnectedAccountError(v2Blocked) === false,
+  );
+  check(
+    "owner-facing onboarding error includes the Stripe code and redacts account ids",
+    stripeConnectOnboardingFailureMessage(v2Missing) ===
+      "Stripe onboarding could not be started. (not_found)" &&
+      !redactStripeText("No such account: 'acct_TESTLEAK123'").includes("acct_TESTLEAK123"),
+  );
+  check(
+    "Accounts v2 blocked tells the owner to enable it on the platform",
+    stripeConnectOnboardingFailureMessage(v2Blocked).includes("Accounts v2"),
   );
   check("375.00 becomes 37500 cents", invoiceAmountToCents(new Prisma.Decimal("375.00")) === 37500);
   check(

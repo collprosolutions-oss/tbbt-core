@@ -188,6 +188,21 @@ check(
     ),
 );
 check(
+  "Connect onboarding logs a redacted Stripe type/code instead of swallowing the failure",
+  readFileSync(new URL("../src/app/actions/payments.ts", import.meta.url), "utf8").includes(
+    "logStripeConnectOnboardingError",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "isUnknownConnectedAccountError",
+    ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      '"not_found"',
+    ) &&
+    !readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      "acct_",
+    ),
+);
+check(
   "owner invoice ops copies /p/{token}/invoice",
   ownerInvoiceSrc.includes('label="Copy invoice link"') &&
     ownerInvoiceSrc.includes("/invoice"),
