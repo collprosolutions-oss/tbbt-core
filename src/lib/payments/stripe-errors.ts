@@ -9,7 +9,7 @@
  */
 
 const SECRET_SHAPED =
-  /\b(?:acct|sk_live|sk_test|pk_live|pk_test|rk_live|rk_test|whsec)_[A-Za-z0-9]+\b/g;
+  /\b(?:acct|sk_live|sk_test|pk_live|pk_test|rk_live|rk_test|whsec)_[A-Za-z0-9_]+\b/g;
 const EMAIL_SHAPED = /\b[^\s@]+@[^\s@]+\.[^\s@]+\b/g;
 
 const STALE_ACCOUNT_CODES = new Set([
