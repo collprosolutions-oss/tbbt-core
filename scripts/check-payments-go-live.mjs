@@ -172,6 +172,22 @@ check(
     settingsSrc.includes("!snapshot.payment.appUrlConfigured"),
 );
 check(
+  "Settings Setup Required has Continue Stripe Setup instead of a circular Open Estimates link",
+  settingsSrc.includes("Continue Stripe Setup") &&
+    settingsSrc.includes("ConnectStripeButton") &&
+    settingsSrc.includes("snapshot.payment.offerOnboarding") &&
+    settingsSrc.includes("showSettingsLink={false}"),
+);
+check(
+  "hosted Checkout still charges the business connected account",
+  readFileSync(new URL("../src/lib/payments/stripe-adapter.ts", import.meta.url), "utf8").includes(
+    "{ stripeAccount: input.connectedAccountId }",
+  ) &&
+    readFileSync(new URL("../src/app/api/stripe/webhook/route.ts", import.meta.url), "utf8").includes(
+      "constructStripeWebhookEvent",
+    ),
+);
+check(
   "owner invoice ops copies /p/{token}/invoice",
   ownerInvoiceSrc.includes('label="Copy invoice link"') &&
     ownerInvoiceSrc.includes("/invoice"),
