@@ -416,6 +416,25 @@ try {
     stripeConnectOnboardingFailureMessage(v2Forbidden).includes("platform") &&
       !stripeConnectOnboardingFailureMessage(v2Forbidden).includes("acct_"),
   );
+  const v1OrphanAccount = Object.assign(
+    new Error(
+      "You requested an account link for an account that is not connected to your platform or does not exist.",
+    ),
+    {
+      type: "StripeInvalidRequestError",
+      rawType: "invalid_request_error",
+      statusCode: 400,
+      requestId: "req_test_v1_orphan",
+    },
+  );
+  check(
+    "v1 Account Link for an account not on this platform is a stale connected account",
+    isUnknownConnectedAccountError(v1OrphanAccount) === true,
+  );
+  check(
+    "v1 orphan Account Link does not fall back as a v2 permission error",
+    shouldFallBackToV1AccountLink(v1OrphanAccount) === false,
+  );
   const v1InvalidNoCode = Object.assign(
     new Error("You cannot create Account Links for this account: 'acct_TESTLEAK123'."),
     {
@@ -672,6 +691,118 @@ try {
   check(
     "resume returns a hosted Account Link for the replacement account",
     resumed.url === `https://connect.stripe.test/setup/${replaced.stripeAccountId}`,
+  );
+
+  console.log("\nTEST — v1 Account Link orphan account is replaced when there are no Stripe payments");
+  const orphan = await seedBusiness("Orphan Connect");
+  const accessOrphan = makeAccess(orphan.business.id, "OWNER", orphan.membership.id);
+  await prisma.businessPaymentAccount.create({
+    data: {
+      businessId: orphan.business.id,
+      provider: "stripe",
+      stripeAccountId: "acct_not_on_this_platform",
+    },
+  });
+  const orphanBase = createFakePaymentProvider();
+  const orphanProvider = {
+    ...orphanBase,
+    async createAccountOnboardingLink(input) {
+      if (!orphanBase.accounts.has(input.accountId)) {
+        throw Object.assign(
+          new Error(
+            "You requested an account link for an account that is not connected to your platform or does not exist.",
+          ),
+          {
+            type: "StripeInvalidRequestError",
+            rawType: "invalid_request_error",
+            statusCode: 400,
+            requestId: "req_test_v1_orphan",
+          },
+        );
+      }
+      return orphanBase.createAccountOnboardingLink(input);
+    },
+  };
+  const orphanResumed = await startStripeConnectOnboarding(
+    prisma,
+    accessOrphan,
+    { appUrl: "http://payments.test" },
+    orphanProvider,
+  );
+  const orphanReplaced = await prisma.businessPaymentAccount.findUnique({
+    where: { businessId: orphan.business.id },
+  });
+  check(
+    "v1 orphan account is replaced with a live connected account on this platform",
+    Boolean(orphanReplaced?.stripeAccountId) &&
+      orphanReplaced.stripeAccountId !== "acct_not_on_this_platform",
+  );
+  check(
+    "v1 orphan resume immediately opens Account Link for the new account",
+    orphanResumed.url === `https://connect.stripe.test/setup/${orphanReplaced.stripeAccountId}`,
+  );
+
+  console.log("\nTEST — v1 orphan Account Link does not replace when Stripe payments exist");
+  const orphanPaid = await seedBusiness("Orphan With Stripe Payment");
+  const accessOrphanPaid = makeAccess(orphanPaid.business.id, "OWNER", orphanPaid.membership.id);
+  await prisma.businessPaymentAccount.create({
+    data: {
+      businessId: orphanPaid.business.id,
+      provider: "stripe",
+      stripeAccountId: "acct_not_on_this_platform",
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      businessId: orphanPaid.business.id,
+      purpose: "INVOICE_BALANCE",
+      amount: new Prisma.Decimal("10.00"),
+      method: "STRIPE",
+    },
+  });
+  let createdWhilePaid = 0;
+  const orphanPaidProvider = {
+    id: "stripe",
+    async createConnectedAccount() {
+      createdWhilePaid += 1;
+      throw new Error("must not create another connected account");
+    },
+    async createAccountOnboardingLink() {
+      throw Object.assign(
+        new Error(
+          "You requested an account link for an account that is not connected to your platform or does not exist.",
+        ),
+        {
+          type: "StripeInvalidRequestError",
+          rawType: "invalid_request_error",
+          statusCode: 400,
+          requestId: "req_test_v1_orphan_paid",
+        },
+      );
+    },
+  };
+  try {
+    await startStripeConnectOnboarding(
+      prisma,
+      accessOrphanPaid,
+      { appUrl: "http://payments.test" },
+      orphanPaidProvider,
+    );
+    check("v1 orphan with Stripe payments does not replace the stored account", false);
+  } catch (error) {
+    check(
+      "v1 orphan with Stripe payments keeps the stored account",
+      error instanceof PaymentError &&
+        error.message.includes("Do not create a second connected account") &&
+        createdWhilePaid === 0,
+    );
+  }
+  const unchangedOrphanPaid = await prisma.businessPaymentAccount.findUnique({
+    where: { businessId: orphanPaid.business.id },
+  });
+  check(
+    "v1 orphan with Stripe payments still stores the original account id",
+    unchangedOrphanPaid?.stripeAccountId === "acct_not_on_this_platform",
   );
 
   console.log("\nTEST — forbidden Account Link does not mint a second connected account");

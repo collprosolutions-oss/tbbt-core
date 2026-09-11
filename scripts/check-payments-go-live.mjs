@@ -230,6 +230,18 @@ check(
     ),
 );
 check(
+  "v1 Account Link for an account not on this platform is treated as stale",
+  readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+    "not connected to your platform or does not exist",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "isUnknownConnectedAccountError",
+    ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "replaceAccountId",
+    ),
+);
+check(
   "owner invoice ops copies /p/{token}/invoice",
   ownerInvoiceSrc.includes('label="Copy invoice link"') &&
     ownerInvoiceSrc.includes("/invoice"),

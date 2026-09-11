@@ -2,10 +2,10 @@
  * Stripe Connect onboarding errors, without leaking secrets or account ids.
  *
  * v1 Account Links use `resource_missing`. v2 `core/account_links` uses
- * HTTP 404 `not_found`. Test/live mismatches often keep `resource_missing`
- * but put "similar object exists in test mode" in the message. Matching
- * only `resource_missing` / "unknown connected account" swallows the
- * production failure into "Stripe onboarding could not be started."
+ * HTTP 404 `not_found`. Live Workbench also returns HTTP 400 with no
+ * machine code: "You requested an account link for an account that is not
+ * connected to your platform or does not exist." That is a stale stored
+ * connected-account id, not a platform permission failure.
  */
 
 const SECRET_SHAPED =
@@ -115,6 +115,17 @@ export function stripeConnectOnboardingFailureIdentifier(error: unknown): string
   return parts.length > 0 ? parts.join(" / ") : null;
 }
 
+function stripeErrorMessageText(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (error && typeof error === "object") {
+    const record = error as { raw?: { message?: unknown } };
+    return readString(record.raw?.message) ?? "";
+  }
+  return "";
+}
+
 export function isUnknownConnectedAccountError(error: unknown): boolean {
   const summary = summarizeStripeError(error);
   if (summary.code && STALE_ACCOUNT_CODES.has(summary.code)) {
@@ -123,11 +134,12 @@ export function isUnknownConnectedAccountError(error: unknown): boolean {
   if (summary.statusCode === 404 && summary.param === "account") {
     return true;
   }
-  const message = error instanceof Error ? error.message : "";
+  const message = stripeErrorMessageText(error);
   const lower = message.toLowerCase();
   return (
     /unknown connected account/i.test(message) ||
     /no such account/i.test(lower) ||
+    /not connected to your platform or does not exist/i.test(lower) ||
     /similar object exists in (?:test|live) mode/i.test(lower) ||
     /live mode key was used/i.test(lower) ||
     /test mode key was used/i.test(lower)
