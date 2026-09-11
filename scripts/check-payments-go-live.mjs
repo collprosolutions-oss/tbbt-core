@@ -242,6 +242,21 @@ check(
     ),
 );
 check(
+  "stale-account replacement allows cs_test_ history and blocks cs_live_ or unknown sessions",
+  readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+    "connectedAccountReplacementBlockReason",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      '"cs_live_"',
+    ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "connectedAccountReplacementBlockReason",
+    ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "live Stripe payments already exist",
+    ),
+);
+check(
   "owner invoice ops copies /p/{token}/invoice",
   ownerInvoiceSrc.includes('label="Copy invoice link"') &&
     ownerInvoiceSrc.includes("/invoice"),

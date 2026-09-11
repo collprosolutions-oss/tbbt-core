@@ -42,10 +42,12 @@ const {
   startStripeConnectOnboarding,
 } = await import("@/lib/payments/service");
 const {
+  connectedAccountReplacementBlockReason,
   isUnknownConnectedAccountError,
   redactStripeText,
   redactedStripeErrorMessage,
   shouldFallBackToV1AccountLink,
+  stripeCheckoutSessionMode,
   stripeConnectOnboardingFailureMessage,
 } = await import("@/lib/payments/stripe-errors");
 const { Prisma } = await import("@prisma/client");
@@ -435,6 +437,28 @@ try {
     "v1 orphan Account Link does not fall back as a v2 permission error",
     shouldFallBackToV1AccountLink(v1OrphanAccount) === false,
   );
+  check(
+    "cs_test_ Checkout sessions are test-mode history",
+    stripeCheckoutSessionMode("cs_test_abc") === "test" &&
+      stripeCheckoutSessionMode("cs_live_abc") === "live" &&
+      stripeCheckoutSessionMode(null) === "unknown" &&
+      stripeCheckoutSessionMode("pi_abc") === "unknown",
+  );
+  check(
+    "only cs_test_ Stripe history allows replacing a stale connected account",
+    connectedAccountReplacementBlockReason([
+      { stripeCheckoutSessionId: "cs_test_deposit" },
+      { stripeCheckoutSessionId: "cs_test_invoice" },
+    ]) === null &&
+      connectedAccountReplacementBlockReason([
+        { stripeCheckoutSessionId: "cs_test_deposit" },
+        { stripeCheckoutSessionId: "cs_live_invoice" },
+      ]) === "live" &&
+      connectedAccountReplacementBlockReason([
+        { stripeCheckoutSessionId: "cs_test_deposit" },
+        { stripeCheckoutSessionId: null },
+      ]) === "unknown",
+  );
   const v1InvalidNoCode = Object.assign(
     new Error("You cannot create Account Links for this account: 'acct_TESTLEAK123'."),
     {
@@ -742,7 +766,7 @@ try {
     orphanResumed.url === `https://connect.stripe.test/setup/${orphanReplaced.stripeAccountId}`,
   );
 
-  console.log("\nTEST — v1 orphan Account Link does not replace when Stripe payments exist");
+  console.log("\nTEST — v1 orphan Account Link does not replace when live or ambiguous Stripe payments exist");
   const orphanPaid = await seedBusiness("Orphan With Stripe Payment");
   const accessOrphanPaid = makeAccess(orphanPaid.business.id, "OWNER", orphanPaid.membership.id);
   await prisma.businessPaymentAccount.create({
@@ -788,12 +812,12 @@ try {
       { appUrl: "http://payments.test" },
       orphanPaidProvider,
     );
-    check("v1 orphan with Stripe payments does not replace the stored account", false);
+    check("v1 orphan with ambiguous Stripe payments does not replace the stored account", false);
   } catch (error) {
     check(
-      "v1 orphan with Stripe payments keeps the stored account",
+      "v1 orphan with no Checkout session fails closed and keeps the stored account",
       error instanceof PaymentError &&
-        error.message.includes("Do not create a second connected account") &&
+        error.message.includes("cannot be confirmed as test-mode") &&
         createdWhilePaid === 0,
     );
   }
@@ -801,8 +825,169 @@ try {
     where: { businessId: orphanPaid.business.id },
   });
   check(
-    "v1 orphan with Stripe payments still stores the original account id",
+    "v1 orphan with ambiguous Stripe payments still stores the original account id",
     unchangedOrphanPaid?.stripeAccountId === "acct_not_on_this_platform",
+  );
+
+  console.log("\nTEST — cs_test_ Stripe history does not block stale-account replacement");
+  const testHistory = await seedBusiness("Test Mode Stripe History");
+  const accessTestHistory = makeAccess(testHistory.business.id, "OWNER", testHistory.membership.id);
+  await prisma.businessPaymentAccount.create({
+    data: {
+      businessId: testHistory.business.id,
+      provider: "stripe",
+      stripeAccountId: "acct_not_on_this_platform",
+    },
+  });
+  const paidInvoice = await prisma.invoice.create({
+    data: {
+      businessId: testHistory.business.id,
+      customerId: testHistory.customer.id,
+      status: "PAID",
+      total: new Prisma.Decimal("1985.00"),
+      paidAt: new Date("2026-08-01T12:00:00.000Z"),
+      paymentMethod: "STRIPE",
+    },
+  });
+  const testHistoryRows = [
+    { purpose: "MATERIAL_DEPOSIT", amount: "200.00", session: "cs_test_deposit200" },
+    { purpose: "INVOICE_BALANCE", amount: "350.00", session: "cs_test_invoice350" },
+    { purpose: "INVOICE_BALANCE", amount: "1800.00", session: "cs_test_invoice1800" },
+    {
+      purpose: "INVOICE_BALANCE",
+      amount: "1985.00",
+      session: "cs_test_invoice1985",
+      invoiceId: paidInvoice.id,
+    },
+  ];
+  for (const row of testHistoryRows) {
+    await prisma.payment.create({
+      data: {
+        businessId: testHistory.business.id,
+        purpose: row.purpose,
+        amount: new Prisma.Decimal(row.amount),
+        method: "STRIPE",
+        stripeCheckoutSessionId: row.session,
+        invoiceId: row.invoiceId ?? null,
+      },
+    });
+  }
+  const testHistoryBase = createFakePaymentProvider();
+  const testHistoryProvider = {
+    ...testHistoryBase,
+    async createAccountOnboardingLink(input) {
+      if (!testHistoryBase.accounts.has(input.accountId)) {
+        throw Object.assign(
+          new Error(
+            "You requested an account link for an account that is not connected to your platform or does not exist.",
+          ),
+          {
+            type: "StripeInvalidRequestError",
+            rawType: "invalid_request_error",
+            statusCode: 400,
+            requestId: "req_test_v1_orphan_test_history",
+          },
+        );
+      }
+      return testHistoryBase.createAccountOnboardingLink(input);
+    },
+  };
+  const testHistoryResumed = await startStripeConnectOnboarding(
+    prisma,
+    accessTestHistory,
+    { appUrl: "http://payments.test" },
+    testHistoryProvider,
+  );
+  const testHistoryReplaced = await prisma.businessPaymentAccount.findUnique({
+    where: { businessId: testHistory.business.id },
+  });
+  const preservedTestPayments = await prisma.payment.findMany({
+    where: { businessId: testHistory.business.id, method: "STRIPE" },
+    orderBy: { amount: "asc" },
+  });
+  const preservedPaidInvoice = await prisma.invoice.findUnique({
+    where: { id: paidInvoice.id },
+  });
+  check(
+    "cs_test_ Stripe history allows replacing the stale connected account",
+    Boolean(testHistoryReplaced?.stripeAccountId) &&
+      testHistoryReplaced.stripeAccountId !== "acct_not_on_this_platform",
+  );
+  check(
+    "cs_test_ history resume opens Account Link for the new account",
+    testHistoryResumed.url === `https://connect.stripe.test/setup/${testHistoryReplaced.stripeAccountId}`,
+  );
+  check(
+    "cs_test_ Payment rows and PAID invoices are left untouched",
+    preservedTestPayments.length === 4 &&
+      preservedTestPayments.map((row) => Number(row.amount)).join(",") === "200,350,1800,1985" &&
+      preservedTestPayments.every((row) => row.stripeCheckoutSessionId?.startsWith("cs_test_")) &&
+      preservedPaidInvoice?.status === "PAID" &&
+      preservedPaidInvoice.paymentMethod === "STRIPE",
+  );
+
+  console.log("\nTEST — cs_live_ Stripe history blocks stale-account replacement");
+  const liveHistory = await seedBusiness("Live Stripe History");
+  const accessLiveHistory = makeAccess(liveHistory.business.id, "OWNER", liveHistory.membership.id);
+  await prisma.businessPaymentAccount.create({
+    data: {
+      businessId: liveHistory.business.id,
+      provider: "stripe",
+      stripeAccountId: "acct_not_on_this_platform",
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      businessId: liveHistory.business.id,
+      purpose: "INVOICE_BALANCE",
+      amount: new Prisma.Decimal("25.00"),
+      method: "STRIPE",
+      stripeCheckoutSessionId: "cs_live_realcustomer",
+    },
+  });
+  let createdWhileLive = 0;
+  const liveHistoryProvider = {
+    id: "stripe",
+    async createConnectedAccount() {
+      createdWhileLive += 1;
+      throw new Error("must not create another connected account");
+    },
+    async createAccountOnboardingLink() {
+      throw Object.assign(
+        new Error(
+          "You requested an account link for an account that is not connected to your platform or does not exist.",
+        ),
+        {
+          type: "StripeInvalidRequestError",
+          rawType: "invalid_request_error",
+          statusCode: 400,
+          requestId: "req_test_v1_orphan_live",
+        },
+      );
+    },
+  };
+  try {
+    await startStripeConnectOnboarding(
+      prisma,
+      accessLiveHistory,
+      { appUrl: "http://payments.test" },
+      liveHistoryProvider,
+    );
+    check("cs_live_ Stripe history does not replace the stored account", false);
+  } catch (error) {
+    check(
+      "cs_live_ Stripe history fails closed",
+      error instanceof PaymentError &&
+        error.message.includes("live Stripe payments already exist") &&
+        createdWhileLive === 0,
+    );
+  }
+  const unchangedLiveHistory = await prisma.businessPaymentAccount.findUnique({
+    where: { businessId: liveHistory.business.id },
+  });
+  check(
+    "cs_live_ Stripe history still stores the original account id",
+    unchangedLiveHistory?.stripeAccountId === "acct_not_on_this_platform",
   );
 
   console.log("\nTEST — forbidden Account Link does not mint a second connected account");

@@ -17,6 +17,7 @@ import {
 } from "@/lib/project-payments";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
 import {
+  connectedAccountReplacementBlockReason,
   isUnknownConnectedAccountError,
   logStripeConnectOnboardingError,
   stripeConnectOnboardingFailureMessage,
@@ -184,13 +185,19 @@ export async function startStripeConnectOnboarding(
     if (!isUnknownConnectedAccountError(error)) {
       throw new PaymentError(stripeConnectOnboardingFailureMessage(error));
     }
-    const existingStripePayment = await db.payment.findFirst({
+    const stripePayments = await db.payment.findMany({
       where: { businessId: access.businessId, method: "STRIPE" },
-      select: { id: true },
+      select: { stripeCheckoutSessionId: true },
     });
-    if (existingStripePayment) {
+    const replacementBlock = connectedAccountReplacementBlockReason(stripePayments);
+    if (replacementBlock === "live") {
       throw new PaymentError(
-        "This business's Stripe account could not be loaded on the current platform. Do not create a second connected account while Stripe payments already exist.",
+        "This business's Stripe account could not be loaded on the current platform. Do not create a second connected account while live Stripe payments already exist.",
+      );
+    }
+    if (replacementBlock === "unknown") {
+      throw new PaymentError(
+        "This business's Stripe account could not be loaded on the current platform. Do not create a second connected account while Stripe payment history cannot be confirmed as test-mode.",
       );
     }
     const previousAccountId = stripeAccountId;
