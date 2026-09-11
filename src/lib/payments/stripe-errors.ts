@@ -126,6 +126,44 @@ function stripeErrorMessageText(error: unknown): string {
   return "";
 }
 
+export type StripeCheckoutSessionMode = "test" | "live" | "unknown";
+
+/**
+ * Checkout session ids are the only safe stored signal of Stripe mode.
+ * `cs_test_...` is sandbox/test history. `cs_live_...` is real money.
+ * Missing or unrecognized prefixes fail closed.
+ */
+export function stripeCheckoutSessionMode(
+  sessionId: string | null | undefined,
+): StripeCheckoutSessionMode {
+  if (typeof sessionId !== "string" || sessionId.length === 0) {
+    return "unknown";
+  }
+  if (sessionId.startsWith("cs_live_")) {
+    return "live";
+  }
+  if (sessionId.startsWith("cs_test_")) {
+    return "test";
+  }
+  return "unknown";
+}
+
+export function connectedAccountReplacementBlockReason(
+  payments: Array<{ stripeCheckoutSessionId?: string | null }>,
+): "live" | "unknown" | null {
+  let sawUnknown = false;
+  for (const payment of payments) {
+    const mode = stripeCheckoutSessionMode(payment.stripeCheckoutSessionId);
+    if (mode === "live") {
+      return "live";
+    }
+    if (mode === "unknown") {
+      sawUnknown = true;
+    }
+  }
+  return sawUnknown ? "unknown" : null;
+}
+
 export function isUnknownConnectedAccountError(error: unknown): boolean {
   const summary = summarizeStripeError(error);
   if (summary.code && STALE_ACCOUNT_CODES.has(summary.code)) {
