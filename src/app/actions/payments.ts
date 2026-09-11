@@ -4,9 +4,12 @@ import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
 import {
   PaymentError,
-  paymentErrorMessage,
   startStripeConnectOnboarding,
 } from "@/lib/payments";
+import {
+  logStripeConnectOnboardingError,
+  stripeConnectOnboardingFailureMessage,
+} from "@/lib/payments/stripe-errors";
 import { prisma } from "@/lib/prisma";
 
 export type PaymentSettingsActionState = {
@@ -34,11 +37,9 @@ export async function startStripeConnect(
     ) {
       throw error;
     }
+    logStripeConnectOnboardingError(error);
     return {
-      error: paymentErrorMessage(
-        error,
-        "Stripe onboarding could not be started.",
-      ),
+      error: stripeConnectOnboardingFailureMessage(error),
     };
   }
 }

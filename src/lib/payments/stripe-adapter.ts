@@ -5,6 +5,10 @@ import {
   explainMerchantReadiness,
   safeRetrieveErrorName,
 } from "@/lib/payments/readiness";
+import {
+  logStripeConnectOnboardingError,
+  shouldFallBackToV1AccountLink,
+} from "@/lib/payments/stripe-errors";
 import type {
   CreateConnectedAccountInput,
   CreateDepositCheckoutInput,
@@ -272,22 +276,51 @@ export function createStripePaymentProvider(): PaymentProvider {
 
     async createAccountOnboardingLink(input: CreateOnboardingLinkInput) {
       const stripe = requireStripe();
-      const link = await stripe.v2.core.accountLinks.create({
-        account: input.accountId,
-        use_case: {
-          type: "account_onboarding",
-          account_onboarding: {
-            configurations: ["merchant"],
+      try {
+        const link = await stripe.v2.core.accountLinks.create({
+          account: input.accountId,
+          use_case: {
+            type: "account_onboarding",
+            account_onboarding: {
+              configurations: ["merchant"],
+              collection_options: { fields: "eventually_due" },
+              return_url: input.returnUrl,
+              refresh_url: input.refreshUrl,
+            },
+          },
+        });
+        if (!link.url) {
+          throw new Error("Stripe did not return an onboarding URL.");
+        }
+        return { url: link.url };
+      } catch (error) {
+        const fallBackToV1 = shouldFallBackToV1AccountLink(error);
+        logStripeConnectOnboardingError(error, {
+          operation: "v2.core.accountLinks.create",
+          willFallBackToV1: fallBackToV1,
+        });
+        if (!fallBackToV1) {
+          throw error;
+        }
+        try {
+          const link = await stripe.accountLinks.create({
+            account: input.accountId,
+            type: "account_onboarding",
             collection_options: { fields: "eventually_due" },
             return_url: input.returnUrl,
             refresh_url: input.refreshUrl,
-          },
-        },
-      });
-      if (!link.url) {
-        throw new Error("Stripe did not return an onboarding URL.");
+          });
+          if (!link.url) {
+            throw new Error("Stripe did not return an onboarding URL.");
+          }
+          return { url: link.url };
+        } catch (v1Error) {
+          logStripeConnectOnboardingError(v1Error, {
+            operation: "v1.accountLinks.create",
+          });
+          throw v1Error;
+        }
       }
-      return { url: link.url };
     },
 
     async getAccountReadiness(accountId: string) {

@@ -172,6 +172,91 @@ check(
     settingsSrc.includes("!snapshot.payment.appUrlConfigured"),
 );
 check(
+  "Settings Setup Required has Continue Stripe Setup instead of a circular Open Estimates link",
+  settingsSrc.includes("Continue Stripe Setup") &&
+    settingsSrc.includes("ConnectStripeButton") &&
+    settingsSrc.includes("snapshot.payment.offerOnboarding") &&
+    settingsSrc.includes("showSettingsLink={false}"),
+);
+check(
+  "hosted Checkout still charges the business connected account",
+  readFileSync(new URL("../src/lib/payments/stripe-adapter.ts", import.meta.url), "utf8").includes(
+    "{ stripeAccount: input.connectedAccountId }",
+  ) &&
+    readFileSync(new URL("../src/app/api/stripe/webhook/route.ts", import.meta.url), "utf8").includes(
+      "constructStripeWebhookEvent",
+    ),
+);
+check(
+  "Connect onboarding logs a redacted Stripe type/code instead of swallowing the failure",
+  readFileSync(new URL("../src/app/actions/payments.ts", import.meta.url), "utf8").includes(
+    "logStripeConnectOnboardingError",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "isUnknownConnectedAccountError",
+    ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      '"not_found"',
+    ) &&
+    !readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      "acct_",
+    ),
+);
+check(
+  "v2 Account Link forbidden falls back to v1 instead of replacing the stored account",
+  readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+    "shouldFallBackToV1AccountLink",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      '"forbidden"',
+    ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-adapter.ts", import.meta.url), "utf8").includes(
+      "stripe.accountLinks.create",
+    ) &&
+    !readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      "acct_",
+    ),
+);
+check(
+  "Connect onboarding UI includes type/param/status when Stripe omits a code",
+  readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+    "stripeConnectOnboardingFailureIdentifier",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      "redactedStripeErrorMessage",
+    ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      "param=${",
+    ),
+);
+check(
+  "v1 Account Link for an account not on this platform is treated as stale",
+  readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+    "not connected to your platform or does not exist",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "isUnknownConnectedAccountError",
+    ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "replaceAccountId",
+    ),
+);
+check(
+  "stale-account replacement allows cs_test_ history and blocks cs_live_ or unknown sessions",
+  readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+    "connectedAccountReplacementBlockReason",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      '"cs_live_"',
+    ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "connectedAccountReplacementBlockReason",
+    ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "live Stripe payments already exist",
+    ),
+);
+check(
   "owner invoice ops copies /p/{token}/invoice",
   ownerInvoiceSrc.includes('label="Copy invoice link"') &&
     ownerInvoiceSrc.includes("/invoice"),
