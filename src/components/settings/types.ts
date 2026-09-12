@@ -11,6 +11,7 @@ import type {
 } from "@/lib/settings";
 import type { PublicSiteImageEditorSlot } from "@/lib/public-site-images";
 import type { SupplierPricingContextPayload } from "@/lib/material-pricing/types";
+import type { TestDataCleanupPreview } from "@/lib/test-data-cleanup";
 
 export type SettingsWorkspaceProps = {
   section: SettingsSection;
@@ -26,6 +27,8 @@ export type SettingsWorkspaceProps = {
     slots: PublicSiteImageEditorSlot[];
   };
   supplierPricing?: SupplierPricingContextPayload | null;
+  canClearTestData?: boolean;
+  testDataCleanupPreview?: TestDataCleanupPreview | null;
 };
 
 export type {

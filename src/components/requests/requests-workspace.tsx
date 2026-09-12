@@ -43,6 +43,7 @@ export type RequestListItem = {
   workAreaLabels: string[];
   propertyLabel: string | null;
   customer: { id: string; name: string; email: string | null; phone: string | null } | null;
+  identityReview: { reason: string; message: string } | null;
   /** Pre-formatted (Decimal -> string) server-side -- never passed as a Decimal instance across the client boundary. */
   estimate: { id: string; status: string; totalLabel: string } | null;
 };
@@ -192,7 +193,12 @@ function RequestsTable({
                     {request.createdAtLabel}
                   </td>
                   <td className="align-top" style={{ padding: "var(--tr-py) var(--cell-px)" }}>
-                    <StatusBadge status={request.status} />
+                    <div className="flex flex-col items-start gap-1">
+                      <StatusBadge status={request.status} />
+                      {request.identityReview ? (
+                        <StatusBadge status="IDENTITY_REVIEW" />
+                      ) : null}
+                    </div>
                   </td>
                   <td
                     className="text-right align-top"
@@ -254,6 +260,9 @@ function RequestsMobileList({
             <p className="mt-2 truncate text-sm font-medium text-foreground">
               {request.serviceName ?? "Not specified"}
             </p>
+            {request.identityReview ? (
+              <p className="mt-1 text-xs font-medium text-amber-800">Needs identity review</p>
+            ) : null}
             <p className="truncate text-xs text-muted-foreground">
               {request.description || request.summary || "No description"}
             </p>
@@ -316,8 +325,15 @@ function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
       <CardContent className="flex-1 space-y-6 pt-5">
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <StatusBadge status={request.status} />
+          {request.identityReview ? <StatusBadge status="IDENTITY_REVIEW" /> : null}
           <span className="text-muted-foreground">{request.createdAtLabel}</span>
         </div>
+        {request.identityReview ? (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+            <p className="font-medium">Needs identity review</p>
+            <p className="mt-1">{request.identityReview.message}</p>
+          </div>
+        ) : null}
         <DetailField icon={Wrench} label="Requested Work">
           {request.requestedTasks.length > 0 ? (
             <ul className="list-disc space-y-1 pl-5">
