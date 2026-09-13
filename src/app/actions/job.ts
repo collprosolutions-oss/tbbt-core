@@ -4,6 +4,20 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
+import { readAccessArrangementFromFormData } from "@/lib/access-arrangement-form";
+import {
+  CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
+  isMaterialAppointmentChange,
+  isOwnerConfirmationSource,
+  nextAppointmentProposalId,
+  parseStartWithoutConfirmationReason,
+  startJobRequiresCustomerConfirmation,
+} from "@/lib/appointment-confirmation";
+import {
+  ensureAppointmentConfirmationSchema,
+  recordAppointmentEvent,
+} from "@/lib/appointment-data";
+import { notifyCustomerAppointmentProposed } from "@/lib/appointment-notify";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { completeJobAndSendInvoice } from "@/lib/complete-job-invoice";
 import { evaluateStartJob } from "@/lib/job-lifecycle";
@@ -18,16 +32,26 @@ import {
 } from "@/lib/availability";
 import { loadAvailabilitySettings, loadOccupiedJobs } from "@/lib/availability-data";
 import { formatDateTime } from "@/lib/format";
+import { accessArrangementWriteData } from "@/lib/property-access";
 import { prisma } from "@/lib/prisma";
 
 export type JobActionState = {
   error?: string;
   warning?: string;
+  notificationWarning?: string;
+  message?: string;
 };
 
 function readString(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value.trim() : "";
+}
+
+function revalidateJobSurfaces(job: { id: string; projectToken: string }) {
+  revalidatePath("/jobs");
+  revalidatePath("/dashboard");
+  revalidatePath(`/jobs/${job.id}`);
+  revalidatePath(`/p/${job.projectToken}`);
 }
 
 export async function createJobFromEstimate(
@@ -120,6 +144,7 @@ export async function scheduleJob(
 ): Promise<JobActionState> {
   const access = await requireBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
+  await ensureAppointmentConfirmationSchema(prisma);
   const jobId = readString(formData, "jobId");
   const date = readString(formData, "date");
   const time = readString(formData, "time");
@@ -169,20 +194,185 @@ export async function scheduleJob(
     }
   }
 
+  const materialChange = isMaterialAppointmentChange(
+    job,
+    start,
+    duration.minutes,
+  );
+  const proposalId = materialChange
+    ? nextAppointmentProposalId(job.appointmentProposalId)
+    : job.appointmentProposalId;
+  const rescheduled = Boolean(job.scheduledAt) && materialChange;
+
   await prisma.job.update({
     where: { id: job.id },
     data: {
       scheduledAt: start,
       scheduledDurationMinutes: duration.minutes,
       ...(job.status === "UNSCHEDULED" ? { status: "SCHEDULED" } : {}),
+      ...(materialChange
+        ? {
+            appointmentProposalId: proposalId,
+            appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+            appointmentConfirmedAt: null,
+            appointmentConfirmedForProposalId: null,
+            appointmentConfirmationSource: null,
+            appointmentConfirmedByMembershipId: null,
+            startWithoutConfirmationAt: null,
+            startWithoutConfirmationReason: null,
+            startWithoutConfirmationByMembershipId: null,
+            appointmentNotificationStatus: null,
+            appointmentNotificationError: null,
+            appointmentNotifiedAt: null,
+            appointmentNotifiedForProposalId: null,
+          }
+        : {}),
     },
   });
 
-  revalidatePath("/jobs");
-  revalidatePath("/dashboard");
-  revalidatePath(`/jobs/${job.id}`);
-  revalidatePath(`/p/${job.projectToken}`);
+  if (materialChange) {
+    await recordAppointmentEvent(prisma, {
+      businessId: access.businessId,
+      jobId: job.id,
+      eventType: rescheduled ? "APPOINTMENT_RESCHEDULED" : "APPOINTMENT_PROPOSED",
+      appointmentProposalId: proposalId,
+      scheduledAt: start,
+      scheduledDurationMinutes: duration.minutes,
+      actorKind: "OWNER",
+      actorMembershipId: access.workspace.membership.id,
+    });
+
+    const notified = await notifyCustomerAppointmentProposed(prisma, {
+      businessId: access.businessId,
+      jobId: job.id,
+      businessName: access.workspace.business.name,
+      proposalId,
+      scheduledAt: start,
+      scheduledDurationMinutes: duration.minutes,
+      rescheduled,
+      sendAttemptId: "auto",
+      actorMembershipId: access.workspace.membership.id,
+    });
+
+    revalidateJobSurfaces(job);
+    return notified.warning ? { notificationWarning: notified.warning } : {};
+  }
+
+  revalidateJobSurfaces(job);
   return {};
+}
+
+export async function retryAppointmentNotification(
+  _prev: JobActionState,
+  formData: FormData,
+): Promise<JobActionState> {
+  const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
+  await ensureAppointmentConfirmationSchema(prisma);
+  const jobId = readString(formData, "jobId");
+  const sendAttemptId = readString(formData, "sendAttemptId");
+
+  if (!jobId || !/^[0-9a-f-]{36}$/i.test(sendAttemptId)) {
+    return { error: "That appointment notification could not be sent." };
+  }
+
+  const job = access.assertOwned(
+    await prisma.job.findFirst({
+      where: { id: jobId, ...access.scope },
+    }),
+  );
+
+  if (!job.scheduledAt) {
+    return { error: "Schedule the appointment before notifying the customer." };
+  }
+
+  const notified = await notifyCustomerAppointmentProposed(prisma, {
+    businessId: access.businessId,
+    jobId: job.id,
+    businessName: access.workspace.business.name,
+    proposalId: job.appointmentProposalId,
+    scheduledAt: job.scheduledAt,
+    scheduledDurationMinutes: job.scheduledDurationMinutes,
+    rescheduled: job.appointmentProposalId > 1,
+    sendAttemptId,
+    actorMembershipId: access.workspace.membership.id,
+  });
+
+  revalidateJobSurfaces(job);
+  if (notified.warning) {
+    return { notificationWarning: notified.warning };
+  }
+  return { message: "Appointment notification sent." };
+}
+
+export async function recordOwnerAppointmentConfirmation(
+  _prev: JobActionState,
+  formData: FormData,
+): Promise<JobActionState> {
+  const access = await requireBusinessAccess();
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
+  await ensureAppointmentConfirmationSchema(prisma);
+  const jobId = readString(formData, "jobId");
+  const method = readString(formData, "confirmationMethod");
+
+  if (!jobId) {
+    return { error: "That appointment could not be confirmed." };
+  }
+  if (!isOwnerConfirmationSource(method)) {
+    return { error: "Choose how the customer confirmed." };
+  }
+
+  const accessArrangement = readAccessArrangementFromFormData(formData);
+  if (!accessArrangement.ok) {
+    return { error: accessArrangement.error };
+  }
+
+  const job = access.assertOwned(
+    await prisma.job.findFirst({
+      where: { id: jobId, ...access.scope },
+    }),
+  );
+
+  if (!job.scheduledAt) {
+    return { error: "Schedule the appointment before recording confirmation." };
+  }
+
+  if (
+    job.appointmentConfirmationStatus === "CONFIRMED" &&
+    job.appointmentConfirmedForProposalId === job.appointmentProposalId
+  ) {
+    revalidateJobSurfaces(job);
+    return { message: "Appointment is already confirmed." };
+  }
+
+  await prisma.job.update({
+    where: { id: job.id },
+    data: {
+      appointmentConfirmationStatus: "CONFIRMED",
+      appointmentConfirmedAt: new Date(),
+      appointmentConfirmedForProposalId: job.appointmentProposalId,
+      appointmentConfirmationSource: method,
+      appointmentConfirmedByMembershipId: access.workspace.membership.id,
+      ...accessArrangementWriteData(accessArrangement.value),
+    },
+  });
+  await recordAppointmentEvent(prisma, {
+    businessId: access.businessId,
+    jobId: job.id,
+    eventType: "APPOINTMENT_CONFIRMED",
+    appointmentProposalId: job.appointmentProposalId,
+    scheduledAt: job.scheduledAt,
+    scheduledDurationMinutes: job.scheduledDurationMinutes,
+    actorKind: "OWNER",
+    actorMembershipId: access.workspace.membership.id,
+    payload: {
+      confirmationSource: method,
+      accessMethod: accessArrangement.value.method,
+    },
+  });
+
+  revalidateJobSurfaces(job);
+  return { message: "Owner recorded confirmation." };
 }
 
 export async function startJob(
@@ -191,6 +381,7 @@ export async function startJob(
 ): Promise<JobActionState> {
   const access = await requireBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.OPERATE_JOBS);
+  await ensureAppointmentConfirmationSchema(prisma);
   const jobId = readString(formData, "jobId");
 
   if (!jobId) {
@@ -208,7 +399,51 @@ export async function startJob(
     return { error: result.error };
   }
 
-  if (result.nextStatus) {
+  if (!result.nextStatus) {
+    return {};
+  }
+
+  if (startJobRequiresCustomerConfirmation(job)) {
+    const override = readString(formData, "startWithoutConfirmation") === "1";
+    if (!override) {
+      return { error: CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT };
+    }
+    const reason = parseStartWithoutConfirmationReason(
+      readString(formData, "overrideReason"),
+    );
+    if (!reason) {
+      return { error: "Choose why you are starting without customer confirmation." };
+    }
+    let reasonLabel: string = reason.label;
+    if (reason.id === "OTHER") {
+      const other = readString(formData, "overrideOther");
+      if (!other) {
+        return { error: "Enter a reason." };
+      }
+      reasonLabel = `Other: ${other}`;
+    }
+
+    await prisma.job.update({
+      where: { id: job.id },
+      data: {
+        status: result.nextStatus,
+        startWithoutConfirmationAt: new Date(),
+        startWithoutConfirmationReason: reasonLabel,
+        startWithoutConfirmationByMembershipId: access.workspace.membership.id,
+      },
+    });
+    await recordAppointmentEvent(prisma, {
+      businessId: access.businessId,
+      jobId: job.id,
+      eventType: "APPOINTMENT_CONFIRMATION_OVERRIDE",
+      appointmentProposalId: job.appointmentProposalId,
+      scheduledAt: job.scheduledAt,
+      scheduledDurationMinutes: job.scheduledDurationMinutes,
+      actorKind: "OWNER",
+      actorMembershipId: access.workspace.membership.id,
+      payload: { overrideReason: reasonLabel },
+    });
+  } else {
     await prisma.job.update({
       where: { id: job.id },
       data: { status: result.nextStatus },

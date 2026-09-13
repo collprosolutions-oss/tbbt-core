@@ -109,6 +109,12 @@ export function ScheduleJobForm({
           <AlertDescription>{state.warning}</AlertDescription>
         </Alert>
       ) : null}
+      {state.notificationWarning ? (
+        <Alert>
+          <AlertTitle>Customer was not notified</AlertTitle>
+          <AlertDescription>{state.notificationWarning}</AlertDescription>
+        </Alert>
+      ) : null}
       {availability ? (
         <div className="space-y-1 rounded-lg border border-dashed p-3 text-sm">
           <p className="font-medium">Next available</p>

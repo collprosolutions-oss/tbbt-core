@@ -21,6 +21,8 @@ import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-
 import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
 import { StartJobButton } from "@/components/jobs/start-job-button";
+import { RecordOwnerAppointmentConfirmationForm } from "@/components/jobs/record-owner-appointment-confirmation-form";
+import { RetryAppointmentNotificationButton } from "@/components/jobs/retry-appointment-notification-button";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { RecordNav } from "@/components/record-nav";
@@ -29,6 +31,15 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Prisma } from "@prisma/client";
 import { requireManagementPageAccess } from "@/lib/access";
+import {
+  appointmentConfirmationLabel,
+  confirmationSourceLabel,
+  customerNotificationNeeded,
+  effectiveAppointmentConfirmationStatus,
+  isCurrentAppointmentConfirmed,
+  notificationOwnerMessage,
+} from "@/lib/appointment-confirmation";
+import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { loadAvailabilitySnapshot } from "@/lib/availability-data";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import {
@@ -49,6 +60,10 @@ import {
   ProjectPaymentSummaryCard,
 } from "@/components/payments/project-payment-summary";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
+import {
+  accessFormValuesFromJob,
+  ownerAccessSummaryLines,
+} from "@/lib/property-access";
 import {
   loadEstimatePaymentSummary,
   unpaidMaterialDepositWarning,
@@ -86,6 +101,7 @@ export default async function JobPage({
 }) {
   const { jobId } = await params;
   const access = await requireManagementPageAccess();
+  await ensureAppointmentConfirmationSchema(prisma);
   const job = await prisma.job.findFirst({
     where: { id: jobId, ...access.scope },
     include: {
@@ -190,6 +206,10 @@ export default async function JobPage({
   });
 
   const isScheduled = Boolean(job.scheduledAt);
+  const appointmentStatus = effectiveAppointmentConfirmationStatus(job);
+  const appointmentConfirmed = isCurrentAppointmentConfirmed(job);
+  const needsNotification = customerNotificationNeeded(job);
+  const notificationMessage = notificationOwnerMessage(job);
   const isCompleted = job.status === "COMPLETED";
   const isInProgress = job.status === "IN_PROGRESS";
   const invoice = job.invoices[0] ?? null;
@@ -266,6 +286,7 @@ export default async function JobPage({
             <StartJobButton
               jobId={job.id}
               unpaidDepositWarning={unpaidDepositWarning}
+              appointmentConfirmed={appointmentConfirmed}
             />
           ) : null}
           {isInProgress ? <MarkJobCompleteButton jobId={job.id} /> : null}
@@ -497,6 +518,42 @@ export default async function JobPage({
                 Service address:{" "}
                 {job.property ? formatAddress(job.property) : "None selected"}
               </p>
+              <p className="font-medium">
+                {appointmentConfirmationLabel(appointmentStatus)}
+              </p>
+              {confirmationSourceLabel(job.appointmentConfirmationSource) &&
+              appointmentStatus === "CONFIRMED" ? (
+                <p>{confirmationSourceLabel(job.appointmentConfirmationSource)}</p>
+              ) : null}
+              {appointmentStatus === "DIFFERENT_TIME_REQUESTED" ? (
+                <p>Awaiting reschedule. The proposed time is still on this job.</p>
+              ) : null}
+              {isScheduled
+                ? ownerAccessSummaryLines(job).map((line) => (
+                    <p key={line}>{line}</p>
+                  ))
+                : null}
+              {job.startWithoutConfirmationAt ? (
+                <p>
+                  Started without customer confirmation
+                  {job.startWithoutConfirmationReason
+                    ? ` — ${job.startWithoutConfirmationReason}`
+                    : ""}
+                  {` · ${formatDateTime(job.startWithoutConfirmationAt)}`}
+                </p>
+              ) : null}
+              {needsNotification ? (
+                <div className="space-y-2 pt-2">
+                  <p className="font-medium text-amber-800 dark:text-amber-300">
+                    {notificationMessage}
+                  </p>
+                  <RetryAppointmentNotificationButton jobId={job.id} />
+                </div>
+              ) : job.appointmentNotifiedAt ? (
+                <p>
+                  Customer notified {formatDateTime(job.appointmentNotifiedAt)}
+                </p>
+              ) : null}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
@@ -506,7 +563,14 @@ export default async function JobPage({
             </p>
           )}
           {isCompleted ? null : (
-            <ScheduleJobForm
+            <>
+              {isScheduled && appointmentStatus !== "CONFIRMED" ? (
+                <RecordOwnerAppointmentConfirmationForm
+                  jobId={job.id}
+                  existingAccess={accessFormValuesFromJob(job)}
+                />
+              ) : null}
+              <ScheduleJobForm
               key={job.id}
               jobId={job.id}
               date={job.scheduledAt ? toDateInput(job.scheduledAt) : ""}
@@ -517,6 +581,7 @@ export default async function JobPage({
               unpaidDepositWarning={unpaidDepositWarning}
               availability={availability}
             />
+            </>
           )}
         </CardContent>
       </Card>

@@ -1,6 +1,7 @@
 /**
  * Offline contract check for the communications that exist today:
- * estimate email, invoice-ready email, and team invite email.
+ * estimate email, invoice-ready email, team invite email, and
+ * appointment-proposed email.
  *
  * Does not call Resend or any SMS provider.
  *
@@ -14,6 +15,7 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const {
   estimateEmailIdempotencyKey,
+  appointmentProposedEmailIdempotencyKey,
   getMailConfig,
   invoiceReadyIdempotencyKey,
   isMailSendAttemptId,
@@ -24,6 +26,7 @@ const { isEmailDeliveryConfigured } = await import("@/lib/settings");
 const { buildEstimateReadyEmail } = await import("@/lib/estimate-mail");
 const { buildInvoiceReadyEmail } = await import("@/lib/invoice-mail");
 const { buildTeamInviteEmail } = await import("@/lib/team-mail");
+const { buildAppointmentProposedEmail } = await import("@/lib/appointment-mail");
 
 let passed = 0;
 let failed = 0;
@@ -70,6 +73,10 @@ const teamActionSrc = readFileSync(
 );
 const invoiceNotifySrc = readFileSync(
   new URL("../src/lib/complete-job-invoice.ts", import.meta.url),
+  "utf8",
+);
+const jobActionSrc = readFileSync(
+  new URL("../src/app/actions/job.ts", import.meta.url),
   "utf8",
 );
 const mailSrc = readFileSync(new URL("../src/lib/mail.ts", import.meta.url), "utf8");
@@ -123,6 +130,25 @@ check(
   "invoice-ready key differs across invoices",
   invoiceReadyIdempotencyKey("inv-1") !== invoiceReadyIdempotencyKey("inv-2"),
 );
+check(
+  "appointment proposal key is stable for job + proposal + attempt",
+  appointmentProposedEmailIdempotencyKey("job-1", 2, "auto") ===
+    appointmentProposedEmailIdempotencyKey("job-1", 2, "auto"),
+);
+check(
+  "appointment retry uses a different attempt key",
+  appointmentProposedEmailIdempotencyKey("job-1", 2, "auto") !==
+    appointmentProposedEmailIdempotencyKey(
+      "job-1",
+      2,
+      "11111111-1111-4111-8111-111111111111",
+    ),
+);
+check(
+  "appointment proposal key differs across proposals",
+  appointmentProposedEmailIdempotencyKey("job-1", 1, "auto") !==
+    appointmentProposedEmailIdempotencyKey("job-1", 2, "auto"),
+);
 
 console.log("\nSTATIC — Source contracts");
 check(
@@ -153,6 +179,21 @@ check(
   "invoice notify uses the stable invoice helper",
   invoiceNotifySrc.includes("invoiceReadyIdempotencyKey(input.invoiceId)"),
 );
+const scheduleJobSrc = jobActionSrc.slice(
+  jobActionSrc.indexOf("export async function scheduleJob"),
+  jobActionSrc.indexOf("export async function retryAppointmentNotification"),
+);
+check(
+  "scheduleJob persists the appointment before notifying",
+  scheduleJobSrc.indexOf("prisma.job.update") <
+    scheduleJobSrc.indexOf("notifyCustomerAppointmentProposed") &&
+    scheduleJobSrc.includes("notifyCustomerAppointmentProposed"),
+);
+check(
+  "scheduleJob does not roll back the appointment when notify is called",
+  !scheduleJobSrc.includes("prisma.job.update({") ||
+    !/rollback|delete.*scheduledAt/i.test(scheduleJobSrc),
+);
 check(
   "Settings readiness uses getMailConfig()",
   settingsSrc.includes("return !(\"error\" in getMailConfig())") ||
@@ -180,6 +221,11 @@ check(
   "estimate failure stays estimate-specific",
   transactionalEmailFailureMessage("estimate") ===
     "The estimate email could not be sent.",
+);
+check(
+  "appointment failure is appointment-specific",
+  transactionalEmailFailureMessage("appointment") ===
+    "The appointment email could not be sent.",
 );
 
 console.log("\nSTATIC — Templates and customer-safe content");
@@ -227,6 +273,39 @@ check(
   teamEmail.text.includes("https://www.collproreno.com/set-password/setup-token"),
 );
 
+const appointmentEmail = buildAppointmentProposedEmail({
+  businessName: "CollPro Reno",
+  customerName: "Stanley Test",
+  address: "10 Other Ave, Reno, NV 89501",
+  scheduledAt: new Date(2026, 8, 14, 8, 0, 0),
+  scheduledDurationMinutes: 60,
+  serviceDescription: "Ceiling Fan Replacement",
+  projectUrl: "https://www.collproreno.com/p/project-token",
+  rescheduled: false,
+});
+check(
+  "appointment email links to the customer project portal",
+  appointmentEmail.text.includes("https://www.collproreno.com/p/project-token") &&
+    appointmentEmail.html.includes("https://www.collproreno.com/p/project-token"),
+);
+check(
+  "appointment email does not expose owner job routes",
+  !appointmentEmail.html.includes("/jobs/") &&
+    !appointmentEmail.text.includes("/jobs/"),
+);
+check(
+  "appointment email includes confirm and request-different-time actions",
+  appointmentEmail.html.includes("Confirm Appointment") &&
+    appointmentEmail.html.includes("Request Different Time") &&
+    appointmentEmail.html.includes("View Your Project"),
+);
+check(
+  "appointment email does not include access codes or key locations",
+  !appointmentEmail.html.toLowerCase().includes("lockbox") &&
+    !appointmentEmail.text.toLowerCase().includes("gate code") &&
+    !appointmentEmail.html.includes("1234"),
+);
+
 const leaked = [
   "paymentMethod",
   "paymentReference",
@@ -245,6 +324,8 @@ const combined = [
   invoiceEmail.text,
   teamEmail.html,
   teamEmail.text,
+  appointmentEmail.html,
+  appointmentEmail.text,
 ].join("\n");
 check(
   "customer-facing templates omit owner-only / private fields",

@@ -151,6 +151,38 @@ check(
     availabilityData.includes("ensureBusinessAvailabilitySchema"),
 );
 
+const appointmentMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260913200000_add_appointment_confirmation/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Appointment confirmation migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(appointmentMigration) &&
+    appointmentMigration.includes('ADD COLUMN IF NOT EXISTS "appointmentConfirmationStatus"') &&
+    appointmentMigration.includes('ADD COLUMN IF NOT EXISTS "propertyAccessMethod"') &&
+    appointmentMigration.includes('CREATE TABLE IF NOT EXISTS "JobAppointmentEvent"'),
+);
+
+const appointmentData = readFileSync(
+  new URL("../src/lib/appointment-data.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers appointment confirmation columns/table skipped by migrate",
+  appointmentData.includes("Preview shares Production and skips migrate") &&
+    appointmentData.includes('ADD COLUMN IF NOT EXISTS "appointmentConfirmationStatus"') &&
+    appointmentData.includes('CREATE TABLE IF NOT EXISTS "JobAppointmentEvent"') &&
+    appointmentData.includes("ensureAppointmentConfirmationSchema"),
+);
+
+check(
+  "Authenticated workspace load ensures appointment columns before Job SELECT",
+  workspaceLoader.includes("ensureAppointmentConfirmationSchema"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

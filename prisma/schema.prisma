@@ -162,6 +162,7 @@ model Business {
   estimateVersions         EstimateVersion[]
   estimateVersionLineItems EstimateVersionLineItem[]
   jobs                     Job[]
+  appointmentEvents        JobAppointmentEvent[]
   invoices                 Invoice[]
   lineItems                LineItem[]
   jobPhotos                JobPhoto[]
@@ -233,6 +234,9 @@ model Membership {
   /// needs ONE assigned member per Job, so a join table would be
   /// unused-crew-management complexity this step explicitly avoids.
   assignedJobs   Job[]              @relation("JobAssignment")
+  appointmentConfirmations Job[]   @relation("JobAppointmentConfirmedBy")
+  startWithoutConfirmationJobs Job[] @relation("JobStartWithoutConfirmationBy")
+  appointmentEvents JobAppointmentEvent[] @relation("JobAppointmentEventActor")
   reportedIssues JobProblemReport[]
   timeEntries    TimeEntry[]
   timesheetWeeks TimesheetWeek[]
@@ -610,6 +614,37 @@ model Job {
   scheduledAt               DateTime?
   /// Expected duration in minutes. Null means duration is not set.
   scheduledDurationMinutes  Int?
+  /// Orthogonal to Job.status. NONE | AWAITING_CUSTOMER | CONFIRMED |
+  /// DIFFERENT_TIME_REQUESTED. Confirmation is bound to appointmentProposalId,
+  /// never to operational lifecycle (UNSCHEDULED/SCHEDULED/IN_PROGRESS/COMPLETED).
+  appointmentConfirmationStatus String @default("NONE")
+  /// Increments when scheduledAt or duration materially changes so a stale
+  /// confirmation cannot apply to a new slot.
+  appointmentProposalId     Int       @default(0)
+  appointmentConfirmedAt   DateTime?
+  appointmentConfirmedForProposalId Int?
+  /// PORTAL | OWNER_PHONE | OWNER_TEXT | OWNER_IN_PERSON | OWNER_OTHER
+  appointmentConfirmationSource String?
+  appointmentConfirmedByMembershipId String?
+  /// Data-driven property access (not trade-specific). See src/lib/property-access.ts.
+  propertyAccessMethod      String?
+  /// Key location, access-code instructions, pickup instructions, or Other notes.
+  /// Sensitive operational information — never put in ordinary emails.
+  propertyAccessInstructions String?
+  propertyAccessContactName String?
+  propertyAccessContactInfo String?
+  /// Structured pickup location for KEY_PICKUP_REQUIRED so later scheduling
+  /// can account for pickup before the Job. Not a routing engine.
+  propertyAccessPickupLocation String?
+  propertyAccessNote        String?
+  /// SENT | FAILED | SKIPPED_NO_EMAIL | NOT_CONFIGURED
+  appointmentNotificationStatus String?
+  appointmentNotificationError String?
+  appointmentNotifiedAt     DateTime?
+  appointmentNotifiedForProposalId Int?
+  startWithoutConfirmationAt DateTime?
+  startWithoutConfirmationReason String?
+  startWithoutConfirmationByMembershipId String?
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
 
@@ -619,6 +654,9 @@ model Job {
   estimate                Estimate?               @relation(fields: [estimateId], references: [id], onDelete: SetNull)
   approvedEstimateVersion EstimateVersion?        @relation("JobApprovedEstimateVersion", fields: [approvedEstimateVersionId], references: [id], onDelete: SetNull)
   assignedMembership      Membership?             @relation("JobAssignment", fields: [assignedMembershipId], references: [id], onDelete: SetNull)
+  appointmentConfirmedBy Membership?            @relation("JobAppointmentConfirmedBy", fields: [appointmentConfirmedByMembershipId], references: [id], onDelete: SetNull)
+  startWithoutConfirmationBy Membership?       @relation("JobStartWithoutConfirmationBy", fields: [startWithoutConfirmationByMembershipId], references: [id], onDelete: SetNull)
+  appointmentEvents       JobAppointmentEvent[]
   invoices                Invoice[]
   lineItems               LineItem[]
   photos                  JobPhoto[]
@@ -637,6 +675,39 @@ model Job {
 
   @@index([businessId])
   @@index([assignedMembershipId])
+  @@index([appointmentConfirmedByMembershipId])
+  @@index([startWithoutConfirmationByMembershipId])
+}
+
+/// Append-only appointment communication/confirmation history for one Job.
+/// Application code must never update or delete an existing row.
+/// Do not store access codes, key locations, or similar sensitive details
+/// in payload — those live on Job and are shown only on authorized surfaces.
+model JobAppointmentEvent {
+  id                       String   @id @default(cuid())
+  businessId               String
+  jobId                    String
+  /// APPOINTMENT_PROPOSED | APPOINTMENT_CONFIRMED | APPOINTMENT_RESCHEDULED |
+  /// APPOINTMENT_DIFFERENT_TIME_REQUESTED | APPOINTMENT_CONFIRMATION_OVERRIDE |
+  /// APPOINTMENT_NOTIFICATION_SENT | APPOINTMENT_NOTIFICATION_FAILED
+  eventType                String
+  appointmentProposalId   Int?
+  scheduledAt              DateTime?
+  scheduledDurationMinutes Int?
+  /// CUSTOMER | OWNER | SYSTEM
+  actorKind                String
+  actorMembershipId       String?
+  /// Non-sensitive JSON (method labels, notification status, override reason).
+  payload                  String?
+  createdAt                DateTime @default(now())
+
+  business Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job      Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  actor    Membership? @relation("JobAppointmentEventActor", fields: [actorMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([businessId, createdAt])
 }
 
 /// Private, owner-facing job documentation by default. Stores only a
