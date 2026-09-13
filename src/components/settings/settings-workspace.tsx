@@ -12,6 +12,7 @@ import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-se
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import { SchedulingSettingsForm } from "@/components/settings/scheduling-settings-form";
 import { SupplierPricingSettingsForm } from "@/components/settings/supplier-pricing-form";
+import { ClearTestDataForm } from "@/components/settings/clear-test-data-form";
 import type { SettingsWorkspaceProps } from "@/components/settings/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -162,6 +163,8 @@ function SectionBody(props: SettingsWorkspaceProps) {
     canEditPreferences,
     websitePhotos,
     supplierPricing,
+    canClearTestData,
+    testDataCleanupPreview,
   } = props;
 
   if (section === "overview") {
@@ -650,6 +653,19 @@ function SectionBody(props: SettingsWorkspaceProps) {
           </div>
         ))}
       </div>
+      {canClearTestData && testDataCleanupPreview ? (
+        <div className="rounded-lg border border-destructive/30 p-3">
+          <p className="font-medium">Clear test data</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Pre-launch only. Removes fake customers, requests, estimates, jobs, invoices, and
+            payments from this workspace. Does not run automatically and does not change Stripe,
+            Resend, website, or catalog configuration.
+          </p>
+          <div className="mt-3">
+            <ClearTestDataForm preview={testDataCleanupPreview} />
+          </div>
+        </div>
+      ) : null}
       <p className="text-sm text-muted-foreground">{FULL_EXPORT_PLANNED_MESSAGE}</p>
       <p className="text-sm text-muted-foreground">{ACCOUNT_DELETION_UNAVAILABLE_MESSAGE}</p>
     </SectionCard>

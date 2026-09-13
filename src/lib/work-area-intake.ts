@@ -19,6 +19,7 @@ import {
   isContentsProtectionLevel,
   isWorkAreaHandlingLevel,
 } from "@/lib/estimate-calculators/work-area-services";
+import { IDENTITY_REVIEW_MARKER } from "@/lib/customer-identity";
 import { catalogCalculatorDefinition } from "@/lib/estimate-line-scope";
 
 export const WORK_AREA_INTAKE_MARKER = "\n\nTBBT Work Area Intake:\n";
@@ -177,7 +178,11 @@ export function parseIntakeSubmissionId(description?: string | null) {
 export function requestNotesText(description?: string | null) {
   const raw = description ?? "";
   let cut = raw.length;
-  for (const marker of [WORK_AREA_INTAKE_MARKER, INTAKE_SUBMISSION_MARKER]) {
+  for (const marker of [
+    WORK_AREA_INTAKE_MARKER,
+    INTAKE_SUBMISSION_MARKER,
+    IDENTITY_REVIEW_MARKER,
+  ]) {
     const index = raw.indexOf(marker);
     if (index !== -1 && index < cut) cut = index;
   }

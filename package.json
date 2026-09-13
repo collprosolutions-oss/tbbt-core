@@ -63,7 +63,9 @@
     "test:payments-go-live": "node --experimental-strip-types scripts/check-payments-go-live.mjs",
     "test:material-deposit-payments": "node --experimental-strip-types scripts/check-material-deposit-payments.mjs",
     "test:material-price-engine": "node --experimental-strip-types scripts/check-material-price-engine.mjs",
-    "test:communications": "node --experimental-strip-types scripts/check-communications.mjs"
+    "test:communications": "node --experimental-strip-types scripts/check-communications.mjs",
+    "test:public-intake-identity": "node --experimental-strip-types scripts/check-public-intake-identity.mjs",
+    "test:test-data-cleanup": "node --experimental-strip-types scripts/check-test-data-cleanup.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",
