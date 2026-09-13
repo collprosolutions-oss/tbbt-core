@@ -103,11 +103,35 @@ export function nextAppointmentProposalId(current: number | null | undefined) {
 
 export function isCurrentAppointmentConfirmed(job: AppointmentJobFields) {
   if (!job.scheduledAt) return false;
+  if (hasPendingAppointmentChangeRequest(job)) return false;
   if (job.appointmentConfirmationStatus !== "CONFIRMED") return false;
   if (job.appointmentConfirmedForProposalId !== job.appointmentProposalId) {
     return false;
   }
   return isAccessArrangementComplete(job);
+}
+
+/**
+ * A change request on the current proposal is operationally more important
+ * than a prior confirmation of that same slot.
+ */
+export function hasPendingAppointmentChangeRequest(job: {
+  scheduledAt: Date | null;
+  appointmentConfirmationStatus: string | null;
+  appointmentProposalId: number | null;
+  appointmentConfirmedForProposalId: number | null;
+  appointmentChangeRequestNote?: string | null;
+}) {
+  if (!job.scheduledAt) return false;
+  if (job.appointmentConfirmationStatus === "DIFFERENT_TIME_REQUESTED") {
+    return true;
+  }
+  const note = job.appointmentChangeRequestNote?.trim();
+  if (!note) return false;
+  return (
+    job.appointmentConfirmedForProposalId == null ||
+    job.appointmentConfirmedForProposalId === job.appointmentProposalId
+  );
 }
 
 export function effectiveAppointmentConfirmationStatus(
@@ -116,17 +140,11 @@ export function effectiveAppointmentConfirmationStatus(
   if (!job.scheduledAt) {
     return "NONE";
   }
+  if (hasPendingAppointmentChangeRequest(job)) {
+    return "DIFFERENT_TIME_REQUESTED";
+  }
   if (isCurrentAppointmentConfirmed(job)) {
     return "CONFIRMED";
-  }
-  if (
-    job.appointmentConfirmationStatus === "DIFFERENT_TIME_REQUESTED" &&
-    (job.appointmentConfirmedForProposalId == null ||
-      job.appointmentConfirmedForProposalId === job.appointmentProposalId)
-  ) {
-    // Different-time is stored on the current proposal; a reschedule already
-    // reset status to AWAITING_CUSTOMER.
-    return "DIFFERENT_TIME_REQUESTED";
   }
   return "AWAITING_CUSTOMER";
 }
@@ -153,7 +171,7 @@ export function customerAppointmentStatusLabel(
     case "CONFIRMED":
       return "Appointment confirmed";
     case "DIFFERENT_TIME_REQUESTED":
-      return "We received your request for a different time.";
+      return "Change requested";
     case "AWAITING_CUSTOMER":
       return "Awaiting Your Confirmation";
     default:

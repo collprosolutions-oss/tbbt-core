@@ -35,8 +35,8 @@ export function OwnerAppointmentAttentionBanner({
           {kind === "DIFFERENT_TIME" ? (
             <>
               <p>Customer requested a different appointment time.</p>
-              {customerNote ? <p>Customer note: “{customerNote}”</p> : null}
-              <p>Current appointment remains: {when}</p>
+              {customerNote ?               <p>Customer note: “{customerNote}”</p> : null}
+              <p>Current appointment: {when}</p>
               <p>Action required: Reschedule the appointment or contact the customer.</p>
             </>
           ) : (

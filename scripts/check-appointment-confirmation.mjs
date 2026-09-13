@@ -30,6 +30,12 @@ const {
   startJobRequiresCustomerConfirmation,
 } = await import("@/lib/appointment-confirmation");
 const { ownerAccessSummaryLines, validateAccessArrangement } = await import("@/lib/property-access");
+const {
+  customerDifferentTimeRequestTouchesAccess,
+  customerDifferentTimeRequestWriteData,
+  isAppointmentChangeRequestSubmission,
+  readAppointmentChangeRequestNoteFromFormData,
+} = await import("@/lib/appointment-change-request");
 const { buildAppointmentProposedEmail } = await import("@/lib/appointment-mail");
 const { evaluateStartJob } = await import("@/lib/job-lifecycle");
 const { formatAppointmentWhen } = await import("@/lib/format");
@@ -125,11 +131,21 @@ check(
     portalSrc.includes("customerAppointmentStatusLabel") &&
     portalActionsSrc.includes("Confirm Appointment") &&
     portalActionsSrc.includes("Request Different Time") &&
-    portalActionsSrc.includes("changeRequestNote"),
+    portalActionsSrc.includes("appointmentChangeRequestNote") &&
+    portalActionsSrc.includes("request-different-time") &&
+    portalSrc.includes("Change requested") &&
+    portalSrc.includes("Your request:"),
+);
+check(
+  "Portal confirm and request-different-time share one dispatched action",
+  publicSrc.includes("submitCustomerAppointmentAction") &&
+    publicSrc.includes("isAppointmentChangeRequestSubmission") &&
+    portalActionsSrc.includes("submitCustomerAppointmentAction"),
 );
 check(
   "Different-time request stores a scheduling note, not access instructions",
-  publicSrc.includes("appointmentChangeRequestNote: note") &&
+  publicSrc.includes("customerDifferentTimeRequestWriteData") &&
+    publicSrc.includes("data: write") &&
     !publicSrc.includes("propertyAccessInstructions: note") &&
     !publicSrc.includes("propertyAccessNote: note"),
 );
@@ -267,6 +283,66 @@ check(
   "Change-request note is trimmed and capped",
   parseAppointmentChangeRequestNote("  Available Wednesday instead.  ") ===
     "Available Wednesday instead.",
+);
+check(
+  "Confirmed slot with a current-proposal change request is not Customer Confirmed",
+  !isCurrentAppointmentConfirmed({
+    ...slot,
+    appointmentChangeRequestNote: "make it 9am instead",
+  }) &&
+    effectiveAppointmentConfirmationStatus({
+      ...slot,
+      appointmentChangeRequestNote: "make it 9am instead",
+    }) === "DIFFERENT_TIME_REQUESTED" &&
+    ownerAppointmentAttention({
+      ...slot,
+      appointmentChangeRequestNote: "make it 9am instead",
+    }) === "DIFFERENT_TIME",
+);
+
+const changeRequestForm = new FormData();
+changeRequestForm.set("appointmentAction", "request-different-time");
+changeRequestForm.set("appointmentChangeRequestNote", "make it 9am instead");
+changeRequestForm.set("accessInstructions", "make it 9am instead");
+changeRequestForm.set("accessNote", "make it 9am instead");
+changeRequestForm.set("accessMethod", "ACCESS_CODE");
+check(
+  "Request Different Time FormData is classified as a change request even if access fields are also present",
+  isAppointmentChangeRequestSubmission(changeRequestForm),
+);
+check(
+  "Change-request note is read from the dedicated field, not accessInstructions",
+  readAppointmentChangeRequestNoteFromFormData(changeRequestForm) ===
+    "make it 9am instead",
+);
+const changeRequestWrite = customerDifferentTimeRequestWriteData(
+  readAppointmentChangeRequestNoteFromFormData(changeRequestForm),
+);
+check(
+  "Different-time write data stores the exact founder note",
+  changeRequestWrite.appointmentChangeRequestNote === "make it 9am instead" &&
+    changeRequestWrite.appointmentConfirmationStatus === "DIFFERENT_TIME_REQUESTED",
+);
+check(
+  "Different-time write data does not include any access fields",
+  !customerDifferentTimeRequestTouchesAccess(changeRequestWrite) &&
+    !("propertyAccessInstructions" in changeRequestWrite) &&
+    changeRequestWrite.propertyAccessInstructions !== "make it 9am instead",
+);
+const poisonedAccessLines = ownerAccessSummaryLines({
+  propertyAccessMethod: "ACCESS_CODE",
+  propertyAccessInstructions: "make it 9am instead",
+  propertyAccessContactName: null,
+  propertyAccessContactInfo: null,
+  propertyAccessPickupLocation: null,
+  propertyAccessNote: null,
+  appointmentChangeRequestNote: "make it 9am instead",
+});
+check(
+  "Owner access summary does not render the founder note as Access instructions",
+  !poisonedAccessLines.some((line) =>
+    line.toLowerCase().includes("access instructions: make it 9am instead"),
+  ),
 );
 check(
   "Appointment when format uses at, not a comma-only datetime",
@@ -646,6 +722,48 @@ try {
     !differentAccessLines.some((line) =>
       line.toLowerCase().includes("available wednesday instead"),
     ),
+  );
+
+  const founderNote = "make it 9am instead";
+  const founderConfirmed = await makeJob(businessA.id, {
+    status: "SCHEDULED",
+    scheduledAt: new Date(2026, 8, 16, 8, 0, 0),
+    scheduledDurationMinutes: 60,
+    appointmentProposalId: 1,
+    appointmentConfirmationStatus: "CONFIRMED",
+    job: {
+      appointmentConfirmedForProposalId: 1,
+      propertyAccessMethod: "ACCESS_CODE",
+      propertyAccessInstructions: "Gate 4455 then door 2211",
+    },
+  });
+  const founderWrite = customerDifferentTimeRequestWriteData(founderNote);
+  check(
+    "Founder note write payload does not contain accessInstructions",
+    founderWrite.appointmentChangeRequestNote === founderNote &&
+      !customerDifferentTimeRequestTouchesAccess(founderWrite),
+  );
+  const afterFounderRequest = await prisma.job.update({
+    where: { id: founderConfirmed.id },
+    data: founderWrite,
+  });
+  check(
+    "After Request Different Time the founder note is only in appointmentChangeRequestNote",
+    afterFounderRequest.appointmentChangeRequestNote === founderNote &&
+      afterFounderRequest.propertyAccessInstructions !== founderNote &&
+      afterFounderRequest.propertyAccessInstructions === "Gate 4455 then door 2211" &&
+      afterFounderRequest.appointmentConfirmationStatus === "DIFFERENT_TIME_REQUESTED",
+  );
+  check(
+    "After Request Different Time the owner attention banner is CUSTOMER REQUEST",
+    ownerAppointmentAttention(afterFounderRequest) === "DIFFERENT_TIME" &&
+      !isCurrentAppointmentConfirmed(afterFounderRequest),
+  );
+  const founderAccessLines = ownerAccessSummaryLines(afterFounderRequest);
+  check(
+    "After Request Different Time access instructions stay the real gate code",
+    founderAccessLines.includes("Access instructions: Gate 4455 then door 2211") &&
+      !founderAccessLines.some((line) => line.includes(founderNote)),
   );
 
   const confirmedThenRequest = await makeJob(businessA.id, {

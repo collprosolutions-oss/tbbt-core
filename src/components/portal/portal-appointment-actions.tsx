@@ -2,8 +2,7 @@
 
 import { useActionState, useState } from "react";
 import {
-  confirmAppointment,
-  requestDifferentAppointmentTime,
+  submitCustomerAppointmentAction,
   type CustomerAppointmentActionState,
 } from "@/app/actions/public-appointment";
 import {
@@ -11,6 +10,12 @@ import {
   type AccessArrangementFieldValues,
 } from "@/components/appointments/access-arrangement-fields";
 import { Button } from "@/components/ui/button";
+import {
+  APPOINTMENT_ACTION_CONFIRM,
+  APPOINTMENT_ACTION_FIELD,
+  APPOINTMENT_ACTION_REQUEST_DIFFERENT_TIME,
+  APPOINTMENT_CHANGE_REQUEST_NOTE_FIELD,
+} from "@/lib/appointment-change-request";
 
 const initialState: CustomerAppointmentActionState = {};
 
@@ -36,12 +41,8 @@ export function PortalAppointmentActions({
   canRequestDifferentTime: boolean;
   existingAccess: AccessArrangementFieldValues;
 }) {
-  const [confirmState, confirmAction, confirmPending] = useActionState(
-    confirmAppointment,
-    initialState,
-  );
-  const [requestState, requestAction, requestPending] = useActionState(
-    requestDifferentAppointmentTime,
+  const [state, formAction, pending] = useActionState(
+    submitCustomerAppointmentAction,
     initialState,
   );
   const [access, setAccess] = useState<AccessArrangementFieldValues>(
@@ -49,53 +50,66 @@ export function PortalAppointmentActions({
   );
 
   return (
-    <div className="space-y-4">
-      {canConfirm ? (
-        <form action={confirmAction} className="space-y-3">
+    <div className="space-y-6">
+      {canRequestDifferentTime ? (
+        <form action={formAction} className="space-y-3" id="request-different-time">
           <input type="hidden" name="projectToken" value={projectToken} />
           <input
             type="hidden"
             name="appointmentProposalId"
             value={String(appointmentProposalId)}
+          />
+          <input
+            type="hidden"
+            name={APPOINTMENT_ACTION_FIELD}
+            value={APPOINTMENT_ACTION_REQUEST_DIFFERENT_TIME}
+          />
+          <div className="space-y-2">
+            <label
+              htmlFor="appointmentChangeRequestNote"
+              className="text-sm font-medium"
+            >
+              When would work better? (optional)
+            </label>
+            <textarea
+              id="appointmentChangeRequestNote"
+              name={APPOINTMENT_CHANGE_REQUEST_NOTE_FIELD}
+              maxLength={500}
+              className="min-h-20 w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm"
+            />
+          </div>
+          <Button type="submit" variant="outline" disabled={pending}>
+            {pending ? "Sending…" : "Request Different Time"}
+          </Button>
+          {state.error ? (
+            <p className="text-sm text-destructive">{state.error}</p>
+          ) : null}
+        </form>
+      ) : null}
+
+      {canConfirm ? (
+        <form action={formAction} className="space-y-3" id="confirm-appointment">
+          <input type="hidden" name="projectToken" value={projectToken} />
+          <input
+            type="hidden"
+            name="appointmentProposalId"
+            value={String(appointmentProposalId)}
+          />
+          <input
+            type="hidden"
+            name={APPOINTMENT_ACTION_FIELD}
+            value={APPOINTMENT_ACTION_CONFIRM}
           />
           <AccessArrangementFields
             idPrefix="portal"
             values={access}
             onChange={setAccess}
           />
-          <Button type="submit" disabled={confirmPending}>
-            {confirmPending ? "Confirming…" : "Confirm Appointment"}
+          <Button type="submit" disabled={pending}>
+            {pending ? "Confirming…" : "Confirm Appointment"}
           </Button>
-          {confirmState.error ? (
-            <p className="text-sm text-destructive">{confirmState.error}</p>
-          ) : null}
-        </form>
-      ) : null}
-
-      {canRequestDifferentTime ? (
-        <form action={requestAction} className="space-y-3">
-          <input type="hidden" name="projectToken" value={projectToken} />
-          <input
-            type="hidden"
-            name="appointmentProposalId"
-            value={String(appointmentProposalId)}
-          />
-          <div className="space-y-2">
-            <label htmlFor="changeRequestNote" className="text-sm font-medium">
-              When would work better? (optional)
-            </label>
-            <textarea
-              id="changeRequestNote"
-              name="changeRequestNote"
-              maxLength={500}
-              className="min-h-20 w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm"
-            />
-          </div>
-          <Button type="submit" variant="outline" disabled={requestPending}>
-            {requestPending ? "Sending…" : "Request Different Time"}
-          </Button>
-          {requestState.error ? (
-            <p className="text-sm text-destructive">{requestState.error}</p>
+          {state.error ? (
+            <p className="text-sm text-destructive">{state.error}</p>
           ) : null}
         </form>
       ) : null}

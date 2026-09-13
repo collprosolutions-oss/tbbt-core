@@ -20,7 +20,7 @@ import {
   CUSTOMER_VISIBLE_CHANGE_ORDER_STATUSES,
   resolveCurrentApprovedProjectTotal,
 } from "@/lib/change-order";
-import { formatDateTime, formatMailingAddress, formatMoney } from "@/lib/format";
+import { formatAppointmentWhen, formatDateTime, formatMailingAddress, formatMoney } from "@/lib/format";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
 import {
@@ -109,6 +109,7 @@ export default async function CustomerProjectPortalPage({
           propertyAccessContactInfo: true,
           propertyAccessPickupLocation: true,
           propertyAccessNote: true,
+          appointmentChangeRequestNote: true,
           business: { select: { id: true, name: true, slug: true, tradeCode: true } },
           customer: { select: { name: true } },
           property: {
@@ -333,13 +334,21 @@ export default async function CustomerProjectPortalPage({
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <p className="font-medium">
-                  {customerAppointmentStatusLabel(appointmentStatus)}
-                </p>
                 {appointmentStatus === "DIFFERENT_TIME_REQUESTED" ? (
-                  <p>The proposed time is still shown above. We will update it after a new appointment is scheduled.</p>
-                ) : null}
-                {appointmentConfirmed
+                  <div className="space-y-2">
+                    <p className="font-medium">Change requested</p>
+                    <p>Current appointment: {formatAppointmentWhen(job.scheduledAt)}</p>
+                    {job.appointmentChangeRequestNote ? (
+                      <p>Your request: “{job.appointmentChangeRequestNote}”</p>
+                    ) : null}
+                    <p>We&apos;ll confirm a new appointment time with you.</p>
+                  </div>
+                ) : (
+                  <p className="font-medium">
+                    {customerAppointmentStatusLabel(appointmentStatus)}
+                  </p>
+                )}
+                {job.propertyAccessMethod
                   ? ownerAccessSummaryLines(job).map((line) => (
                       <p key={line}>{line}</p>
                     ))

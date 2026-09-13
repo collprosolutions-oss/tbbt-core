@@ -3,9 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { readAccessArrangementFromFormData } from "@/lib/access-arrangement-form";
 import {
+  customerDifferentTimeRequestTouchesAccess,
+  customerDifferentTimeRequestWriteData,
+  isAppointmentChangeRequestSubmission,
+  readAppointmentChangeRequestNoteFromFormData,
+} from "@/lib/appointment-change-request";
+import {
   appointmentAwaitingCustomerAction,
   isCurrentAppointmentConfirmed,
-  parseAppointmentChangeRequestNote,
 } from "@/lib/appointment-confirmation";
 import {
   ensureAppointmentConfirmationSchema,
@@ -66,8 +71,44 @@ async function findJobByToken(token: string) {
   });
 }
 
+function revalidateAppointmentSurfaces(token: string, jobId: string) {
+  revalidatePath(`/p/${token}`);
+  revalidatePath(`/jobs/${jobId}`);
+  revalidatePath("/jobs");
+}
+
+/**
+ * Single portal entry so Confirm and Request Different Time cannot be
+ * mixed up by two useActionState hooks in one client component.
+ */
+export async function submitCustomerAppointmentAction(
+  prev: CustomerAppointmentActionState,
+  formData: FormData,
+): Promise<CustomerAppointmentActionState> {
+  if (isAppointmentChangeRequestSubmission(formData)) {
+    return applyRequestDifferentAppointmentTime(formData);
+  }
+  return applyConfirmAppointment(formData);
+}
+
 export async function confirmAppointment(
   _prev: CustomerAppointmentActionState,
+  formData: FormData,
+): Promise<CustomerAppointmentActionState> {
+  if (isAppointmentChangeRequestSubmission(formData)) {
+    return applyRequestDifferentAppointmentTime(formData);
+  }
+  return applyConfirmAppointment(formData);
+}
+
+export async function requestDifferentAppointmentTime(
+  _prev: CustomerAppointmentActionState,
+  formData: FormData,
+): Promise<CustomerAppointmentActionState> {
+  return applyRequestDifferentAppointmentTime(formData);
+}
+
+async function applyConfirmAppointment(
   formData: FormData,
 ): Promise<CustomerAppointmentActionState> {
   const token = readString(formData, "projectToken");
@@ -139,18 +180,16 @@ export async function confirmAppointment(
     payload: { confirmationSource: "PORTAL", accessMethod: accessArrangement.value.method },
   });
 
-  revalidatePath(`/p/${token}`);
-  revalidatePath(`/jobs/${job.id}`);
-  revalidatePath("/jobs");
+  revalidateAppointmentSurfaces(token, job.id);
   return { status: "CONFIRMED" };
 }
 
-export async function requestDifferentAppointmentTime(
-  _prev: CustomerAppointmentActionState,
+async function applyRequestDifferentAppointmentTime(
   formData: FormData,
 ): Promise<CustomerAppointmentActionState> {
   const token = readString(formData, "projectToken");
   const proposalId = parseProposalId(readString(formData, "appointmentProposalId"));
+  const note = readAppointmentChangeRequestNoteFromFormData(formData);
 
   if (!token || proposalId == null) {
     return { error: GENERIC_ERROR };
@@ -163,13 +202,20 @@ export async function requestDifferentAppointmentTime(
   if (job.appointmentProposalId !== proposalId) {
     return { error: STALE_ERROR };
   }
-  const note = parseAppointmentChangeRequestNote(
-    readString(formData, "changeRequestNote"),
-  );
 
-  if (job.appointmentConfirmationStatus === "DIFFERENT_TIME_REQUESTED") {
-    return { status: "DIFFERENT_TIME_REQUESTED" };
+  const write = customerDifferentTimeRequestWriteData(note);
+  if (customerDifferentTimeRequestTouchesAccess(write)) {
+    return { error: GENERIC_ERROR };
   }
+
+  const previousAccess = {
+    propertyAccessMethod: job.propertyAccessMethod,
+    propertyAccessInstructions: job.propertyAccessInstructions,
+    propertyAccessContactName: job.propertyAccessContactName,
+    propertyAccessContactInfo: job.propertyAccessContactInfo,
+    propertyAccessPickupLocation: job.propertyAccessPickupLocation,
+    propertyAccessNote: job.propertyAccessNote,
+  };
 
   const updated = await prisma.job.updateMany({
     where: {
@@ -177,27 +223,31 @@ export async function requestDifferentAppointmentTime(
       projectToken: token,
       appointmentProposalId: proposalId,
       appointmentConfirmationStatus: {
-        in: ["NONE", "AWAITING_CUSTOMER", "CONFIRMED"],
+        in: ["NONE", "AWAITING_CUSTOMER", "CONFIRMED", "DIFFERENT_TIME_REQUESTED"],
       },
     },
-    data: {
-      appointmentConfirmationStatus: "DIFFERENT_TIME_REQUESTED",
-      appointmentConfirmedAt: null,
-      appointmentConfirmationSource: null,
-      appointmentConfirmedByMembershipId: null,
-      appointmentChangeRequestNote: note,
-    },
+    data: write,
   });
 
   if (updated.count !== 1) {
-    const latest = await findJobByToken(token);
-    if (latest?.appointmentConfirmationStatus === "DIFFERENT_TIME_REQUESTED") {
-      return { status: "DIFFERENT_TIME_REQUESTED" };
-    }
-    if (latest && latest.appointmentProposalId !== proposalId) {
-      return { error: STALE_ERROR };
-    }
     return { error: NOT_READY_ERROR };
+  }
+
+  const latest = await findJobByToken(token);
+  if (
+    latest &&
+    (latest.propertyAccessMethod !== previousAccess.propertyAccessMethod ||
+      latest.propertyAccessInstructions !== previousAccess.propertyAccessInstructions ||
+      latest.propertyAccessNote !== previousAccess.propertyAccessNote ||
+      latest.propertyAccessContactName !== previousAccess.propertyAccessContactName ||
+      latest.propertyAccessContactInfo !== previousAccess.propertyAccessContactInfo ||
+      latest.propertyAccessPickupLocation !== previousAccess.propertyAccessPickupLocation)
+  ) {
+    await prisma.job.update({
+      where: { id: job.id },
+      data: previousAccess,
+    });
+    return { error: GENERIC_ERROR };
   }
 
   await recordAppointmentEvent(prisma, {
@@ -211,8 +261,6 @@ export async function requestDifferentAppointmentTime(
     payload: { changeRequestNote: note },
   });
 
-  revalidatePath(`/p/${token}`);
-  revalidatePath(`/jobs/${job.id}`);
-  revalidatePath("/jobs");
+  revalidateAppointmentSurfaces(token, job.id);
   return { status: "DIFFERENT_TIME_REQUESTED" };
 }

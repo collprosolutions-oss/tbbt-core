@@ -250,11 +250,13 @@ export function ownerAccessSummaryLines(job: {
   propertyAccessContactInfo: string | null;
   propertyAccessPickupLocation: string | null;
   propertyAccessNote: string | null;
+  appointmentChangeRequestNote?: string | null;
 }) {
   const method = propertyAccessMethodById(job.propertyAccessMethod);
   if (!method) {
     return ["Access arrangement has not been recorded."];
   }
+  const changeRequest = job.appointmentChangeRequestNote?.trim() ?? "";
   const lines = [`Access: ${method.ownerLabel}`];
   if (job.propertyAccessContactName) {
     lines.push(`Who will be there: ${job.propertyAccessContactName}`);
@@ -265,10 +267,13 @@ export function ownerAccessSummaryLines(job: {
   if (job.propertyAccessPickupLocation) {
     lines.push(`Pickup: ${job.propertyAccessPickupLocation}`);
   }
-  if (job.propertyAccessInstructions) {
+  if (
+    job.propertyAccessInstructions &&
+    job.propertyAccessInstructions.trim() !== changeRequest
+  ) {
     lines.push(`Access instructions: ${job.propertyAccessInstructions}`);
   }
-  if (job.propertyAccessNote) {
+  if (job.propertyAccessNote && job.propertyAccessNote.trim() !== changeRequest) {
     lines.push(`Note: ${job.propertyAccessNote}`);
   }
   return lines;
