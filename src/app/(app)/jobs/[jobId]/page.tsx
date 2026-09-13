@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { CheckCircle2 } from "lucide-react";
 import { AdditionalWorkRequestList } from "@/components/jobs/additional-work-request-list";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
 import { AssignJobMemberForm } from "@/components/jobs/assign-job-member-form";
@@ -22,6 +23,7 @@ import { JobProblemReportList } from "@/components/jobs/job-problem-report-list"
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
 import { StartJobButton } from "@/components/jobs/start-job-button";
 import { RecordOwnerAppointmentConfirmationForm } from "@/components/jobs/record-owner-appointment-confirmation-form";
+import { OwnerAppointmentAttentionBanner } from "@/components/jobs/owner-appointment-attention-banner";
 import { RetryAppointmentNotificationButton } from "@/components/jobs/retry-appointment-notification-button";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
@@ -38,6 +40,7 @@ import {
   effectiveAppointmentConfirmationStatus,
   isCurrentAppointmentConfirmed,
   notificationOwnerMessage,
+  ownerAppointmentAttention,
 } from "@/lib/appointment-confirmation";
 import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { loadAvailabilitySnapshot } from "@/lib/availability-data";
@@ -208,6 +211,7 @@ export default async function JobPage({
   const isScheduled = Boolean(job.scheduledAt);
   const appointmentStatus = effectiveAppointmentConfirmationStatus(job);
   const appointmentConfirmed = isCurrentAppointmentConfirmed(job);
+  const appointmentAttention = ownerAppointmentAttention(job);
   const needsNotification = customerNotificationNeeded(job);
   const notificationMessage = notificationOwnerMessage(job);
   const isCompleted = job.status === "COMPLETED";
@@ -491,7 +495,16 @@ export default async function JobPage({
         </CardHeader>
         <CardContent className="space-y-4">
           {job.scheduledAt ? (
-            <div className="space-y-1 text-sm">
+            <div className="space-y-3 text-sm">
+              {appointmentAttention && job.scheduledAt ? (
+                <OwnerAppointmentAttentionBanner
+                  kind={appointmentAttention}
+                  customerNote={job.appointmentChangeRequestNote}
+                  scheduledAt={job.scheduledAt}
+                  notificationSent={job.appointmentNotificationStatus === "SENT"}
+                />
+              ) : null}
+              <div className="space-y-1">
               <p>Date: {formatDate(job.scheduledAt)}</p>
               <p>Start time: {formatTime(job.scheduledAt)}</p>
               {job.scheduledDurationMinutes ? (
@@ -518,15 +531,19 @@ export default async function JobPage({
                 Service address:{" "}
                 {job.property ? formatAddress(job.property) : "None selected"}
               </p>
-              <p className="font-medium">
-                {appointmentConfirmationLabel(appointmentStatus)}
-              </p>
+              {appointmentAttention ? null : appointmentStatus === "CONFIRMED" ? (
+                <p className="flex items-center gap-1.5 font-medium text-emerald-800 dark:text-emerald-300">
+                  <CheckCircle2 className="size-4" aria-hidden />
+                  Customer Confirmed
+                </p>
+              ) : (
+                <p className="font-medium">
+                  {appointmentConfirmationLabel(appointmentStatus)}
+                </p>
+              )}
               {confirmationSourceLabel(job.appointmentConfirmationSource) &&
               appointmentStatus === "CONFIRMED" ? (
                 <p>{confirmationSourceLabel(job.appointmentConfirmationSource)}</p>
-              ) : null}
-              {appointmentStatus === "DIFFERENT_TIME_REQUESTED" ? (
-                <p>Awaiting reschedule. The proposed time is still on this job.</p>
               ) : null}
               {isScheduled
                 ? ownerAccessSummaryLines(job).map((line) => (
@@ -542,6 +559,7 @@ export default async function JobPage({
                   {` · ${formatDateTime(job.startWithoutConfirmationAt)}`}
                 </p>
               ) : null}
+              </div>
               {needsNotification ? (
                 <div className="space-y-2 pt-2">
                   <p className="font-medium text-amber-800 dark:text-amber-300">

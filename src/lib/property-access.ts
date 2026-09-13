@@ -153,13 +153,11 @@ export function validateAccessArrangement(
     ok: true,
     value: {
       method: method.id,
-      instructions: method.requireInstructions || method.id === "OTHER_PERSON_PRESENT" || method.id === "KEY_PICKUP_REQUIRED"
-        ? instructions
-        : instructions ?? note,
+      instructions,
       contactName,
       contactInfo,
-      pickupLocation: method.requirePickupLocation ? pickupLocation : pickupLocation,
-      note: method.requireInstructions ? note : note,
+      pickupLocation,
+      note,
     },
   };
 }

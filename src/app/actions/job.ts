@@ -215,9 +215,9 @@ export async function scheduleJob(
             appointmentProposalId: proposalId,
             appointmentConfirmationStatus: "AWAITING_CUSTOMER",
             appointmentConfirmedAt: null,
-            appointmentConfirmedForProposalId: null,
             appointmentConfirmationSource: null,
             appointmentConfirmedByMembershipId: null,
+            appointmentChangeRequestNote: null,
             startWithoutConfirmationAt: null,
             startWithoutConfirmationReason: null,
             startWithoutConfirmationByMembershipId: null,
@@ -353,6 +353,7 @@ export async function recordOwnerAppointmentConfirmation(
       appointmentConfirmedForProposalId: job.appointmentProposalId,
       appointmentConfirmationSource: method,
       appointmentConfirmedByMembershipId: access.workspace.membership.id,
+      appointmentChangeRequestNote: null,
       ...accessArrangementWriteData(accessArrangement.value),
     },
   });

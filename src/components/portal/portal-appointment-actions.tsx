@@ -73,18 +73,29 @@ export function PortalAppointmentActions({
       ) : null}
 
       {canRequestDifferentTime ? (
-        <form action={requestAction}>
+        <form action={requestAction} className="space-y-3">
           <input type="hidden" name="projectToken" value={projectToken} />
           <input
             type="hidden"
             name="appointmentProposalId"
             value={String(appointmentProposalId)}
           />
+          <div className="space-y-2">
+            <label htmlFor="changeRequestNote" className="text-sm font-medium">
+              When would work better? (optional)
+            </label>
+            <textarea
+              id="changeRequestNote"
+              name="changeRequestNote"
+              maxLength={500}
+              className="min-h-20 w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm"
+            />
+          </div>
           <Button type="submit" variant="outline" disabled={requestPending}>
             {requestPending ? "Sending…" : "Request Different Time"}
           </Button>
           {requestState.error ? (
-            <p className="mt-2 text-sm text-destructive">{requestState.error}</p>
+            <p className="text-sm text-destructive">{requestState.error}</p>
           ) : null}
         </form>
       ) : null}

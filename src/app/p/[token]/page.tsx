@@ -44,7 +44,7 @@ import { backfillEmptyInvoiceWorkLinesForProjectToken } from "@/lib/invoice-carr
 import { loadPortalAdditionalWorkCatalog } from "@/lib/portal-additional-work";
 import { prisma } from "@/lib/prisma";
 import {
-  appointmentConfirmationLabel,
+  customerAppointmentStatusLabel,
   effectiveAppointmentConfirmationStatus,
   isCurrentAppointmentConfirmed,
 } from "@/lib/appointment-confirmation";
@@ -334,10 +334,10 @@ export default async function CustomerProjectPortalPage({
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
                 <p className="font-medium">
-                  {appointmentConfirmationLabel(appointmentStatus)}
+                  {customerAppointmentStatusLabel(appointmentStatus)}
                 </p>
                 {appointmentStatus === "DIFFERENT_TIME_REQUESTED" ? (
-                  <p>Awaiting reschedule. The proposed time is still shown above.</p>
+                  <p>The proposed time is still shown above. We will update it after a new appointment is scheduled.</p>
                 ) : null}
                 {appointmentConfirmed
                   ? ownerAccessSummaryLines(job).map((line) => (

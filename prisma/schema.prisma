@@ -637,6 +637,8 @@ model Job {
   /// can account for pickup before the Job. Not a routing engine.
   propertyAccessPickupLocation String?
   propertyAccessNote        String?
+  /// Customer note from Request Different Time. Never access instructions.
+  appointmentChangeRequestNote String?
   /// SENT | FAILED | SKIPPED_NO_EMAIL | NOT_CONFIGURED
   appointmentNotificationStatus String?
   appointmentNotificationError String?

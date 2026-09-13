@@ -62,6 +62,13 @@ export const START_WITHOUT_CONFIRMATION_REASONS = [
 export const CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT =
   "Customer has not confirmed this appointment.";
 
+export const OWNER_DIFFERENT_TIME_ATTENTION_HEADING =
+  "CUSTOMER REQUEST / APPOINTMENT CHANGE";
+export const OWNER_RECONFIRMATION_ATTENTION_HEADING =
+  "APPOINTMENT CHANGED — CUSTOMER RECONFIRMATION REQUIRED";
+
+const MAX_CHANGE_REQUEST_NOTE = 500;
+
 export type AppointmentJobFields = {
   scheduledAt: Date | null;
   scheduledDurationMinutes: number | null;
@@ -69,6 +76,7 @@ export type AppointmentJobFields = {
   appointmentProposalId: number | null;
   appointmentConfirmedForProposalId: number | null;
   appointmentConfirmationSource: string | null;
+  appointmentChangeRequestNote?: string | null;
   propertyAccessMethod: string | null;
   propertyAccessInstructions: string | null;
   propertyAccessContactName: string | null;
@@ -76,6 +84,8 @@ export type AppointmentJobFields = {
   propertyAccessPickupLocation: string | null;
   propertyAccessNote: string | null;
 };
+
+export type OwnerAppointmentAttentionKind = "DIFFERENT_TIME" | "RECONFIRMATION";
 
 export function isMaterialAppointmentChange(
   job: { scheduledAt: Date | null; scheduledDurationMinutes: number | null },
@@ -134,6 +144,53 @@ export function appointmentConfirmationLabel(
     default:
       return "Not scheduled";
   }
+}
+
+export function customerAppointmentStatusLabel(
+  status: AppointmentConfirmationStatus,
+) {
+  switch (status) {
+    case "CONFIRMED":
+      return "Appointment confirmed";
+    case "DIFFERENT_TIME_REQUESTED":
+      return "We received your request for a different time.";
+    case "AWAITING_CUSTOMER":
+      return "Awaiting Your Confirmation";
+    default:
+      return "Not scheduled";
+  }
+}
+
+export function parseAppointmentChangeRequestNote(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, MAX_CHANGE_REQUEST_NOTE);
+}
+
+/**
+ * Owner Work Order attention. Distinct from property-access copy.
+ * DIFFERENT_TIME takes precedence until the owner reschedules.
+ * After a previously confirmed slot is rescheduled, the last confirmed
+ * proposal id is kept as a stale binding so reconfirmation is required.
+ */
+export function ownerAppointmentAttention(
+  job: AppointmentJobFields,
+): OwnerAppointmentAttentionKind | null {
+  if (!job.scheduledAt) return null;
+  const status = effectiveAppointmentConfirmationStatus(job);
+  if (status === "DIFFERENT_TIME_REQUESTED") {
+    return "DIFFERENT_TIME";
+  }
+  if (status === "CONFIRMED") {
+    return null;
+  }
+  if (
+    job.appointmentConfirmedForProposalId != null &&
+    job.appointmentConfirmedForProposalId !== job.appointmentProposalId
+  ) {
+    return "RECONFIRMATION";
+  }
+  return null;
 }
 
 export function confirmationSourceLabel(source: string | null | undefined) {

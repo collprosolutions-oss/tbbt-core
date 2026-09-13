@@ -5,6 +5,7 @@ import { readAccessArrangementFromFormData } from "@/lib/access-arrangement-form
 import {
   appointmentAwaitingCustomerAction,
   isCurrentAppointmentConfirmed,
+  parseAppointmentChangeRequestNote,
 } from "@/lib/appointment-confirmation";
 import {
   ensureAppointmentConfirmationSchema,
@@ -60,6 +61,7 @@ async function findJobByToken(token: string) {
       propertyAccessContactInfo: true,
       propertyAccessPickupLocation: true,
       propertyAccessNote: true,
+      appointmentChangeRequestNote: true,
     },
   });
 }
@@ -110,6 +112,7 @@ export async function confirmAppointment(
       appointmentConfirmedForProposalId: proposalId,
       appointmentConfirmationSource: "PORTAL",
       appointmentConfirmedByMembershipId: null,
+      appointmentChangeRequestNote: null,
       ...accessArrangementWriteData(accessArrangement.value),
     },
   });
@@ -160,6 +163,10 @@ export async function requestDifferentAppointmentTime(
   if (job.appointmentProposalId !== proposalId) {
     return { error: STALE_ERROR };
   }
+  const note = parseAppointmentChangeRequestNote(
+    readString(formData, "changeRequestNote"),
+  );
+
   if (job.appointmentConfirmationStatus === "DIFFERENT_TIME_REQUESTED") {
     return { status: "DIFFERENT_TIME_REQUESTED" };
   }
@@ -176,9 +183,9 @@ export async function requestDifferentAppointmentTime(
     data: {
       appointmentConfirmationStatus: "DIFFERENT_TIME_REQUESTED",
       appointmentConfirmedAt: null,
-      appointmentConfirmedForProposalId: null,
       appointmentConfirmationSource: null,
       appointmentConfirmedByMembershipId: null,
+      appointmentChangeRequestNote: note,
     },
   });
 
@@ -201,6 +208,7 @@ export async function requestDifferentAppointmentTime(
     scheduledAt: job.scheduledAt,
     scheduledDurationMinutes: job.scheduledDurationMinutes,
     actorKind: "CUSTOMER",
+    payload: { changeRequestNote: note },
   });
 
   revalidatePath(`/p/${token}`);

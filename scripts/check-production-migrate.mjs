@@ -163,6 +163,7 @@ check(
   !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(appointmentMigration) &&
     appointmentMigration.includes('ADD COLUMN IF NOT EXISTS "appointmentConfirmationStatus"') &&
     appointmentMigration.includes('ADD COLUMN IF NOT EXISTS "propertyAccessMethod"') &&
+    appointmentMigration.includes('ADD COLUMN IF NOT EXISTS "appointmentChangeRequestNote"') &&
     appointmentMigration.includes('CREATE TABLE IF NOT EXISTS "JobAppointmentEvent"'),
 );
 
@@ -174,6 +175,7 @@ check(
   "Preview runtime ensure covers appointment confirmation columns/table skipped by migrate",
   appointmentData.includes("Preview shares Production and skips migrate") &&
     appointmentData.includes('ADD COLUMN IF NOT EXISTS "appointmentConfirmationStatus"') &&
+    appointmentData.includes('ADD COLUMN IF NOT EXISTS "appointmentChangeRequestNote"') &&
     appointmentData.includes('CREATE TABLE IF NOT EXISTS "JobAppointmentEvent"') &&
     appointmentData.includes("ensureAppointmentConfirmationSchema"),
 );

@@ -16,17 +16,23 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const {
   CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
+  OWNER_DIFFERENT_TIME_ATTENTION_HEADING,
+  OWNER_RECONFIRMATION_ATTENTION_HEADING,
   appointmentConfirmationLabel,
+  customerAppointmentStatusLabel,
   customerNotificationNeeded,
   effectiveAppointmentConfirmationStatus,
   isCurrentAppointmentConfirmed,
   isMaterialAppointmentChange,
   nextAppointmentProposalId,
+  ownerAppointmentAttention,
+  parseAppointmentChangeRequestNote,
   startJobRequiresCustomerConfirmation,
 } = await import("@/lib/appointment-confirmation");
-const { validateAccessArrangement } = await import("@/lib/property-access");
+const { ownerAccessSummaryLines, validateAccessArrangement } = await import("@/lib/property-access");
 const { buildAppointmentProposedEmail } = await import("@/lib/appointment-mail");
 const { evaluateStartJob } = await import("@/lib/job-lifecycle");
+const { formatAppointmentWhen } = await import("@/lib/format");
 
 function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
@@ -48,7 +54,12 @@ const jobActionSrc = readRepo("src/app/actions/job.ts");
 const publicSrc = readRepo("src/app/actions/public-appointment.ts");
 const fieldSrc = readRepo("src/app/actions/field-job.ts");
 const portalSrc = readRepo("src/app/p/[token]/page.tsx");
+const portalActionsSrc = readRepo("src/components/portal/portal-appointment-actions.tsx");
+const ownerJobSrc = readRepo("src/app/(app)/jobs/[jobId]/page.tsx");
+const ownerBannerSrc = readRepo("src/components/jobs/owner-appointment-attention-banner.tsx");
 const notifySrc = readRepo("src/lib/appointment-notify.ts");
+const mailSrc = readRepo("src/lib/mail.ts");
+const accessSrc = readRepo("src/lib/property-access.ts");
 
 console.log("\nSTATIC — Security and lifecycle contracts");
 check(
@@ -86,9 +97,50 @@ check(
     !notifySrc.includes("propertyAccessPickupLocation"),
 );
 check(
+  "Appointment email still goes through getMailConfig + sendTransactionalEmail",
+  notifySrc.includes("getMailConfig()") &&
+    notifySrc.includes("sendTransactionalEmail({") &&
+    mailSrc.includes("process.env.RESEND_API_KEY") &&
+    mailSrc.includes("process.env.EMAIL_FROM"),
+);
+check(
   "Job.status values are not overloaded with CONFIRMED",
   !readRepo("prisma/schema.prisma").includes('status                    String    @default("CONFIRMED")') &&
     readRepo("prisma/schema.prisma").includes("appointmentConfirmationStatus"),
+);
+check(
+  "Owner Work Order renders the amber appointment attention banner",
+  ownerJobSrc.includes("OwnerAppointmentAttentionBanner") &&
+    ownerBannerSrc.includes("AlertTriangle") &&
+    ownerBannerSrc.includes("border-amber-300") &&
+    ownerBannerSrc.includes("OWNER_DIFFERENT_TIME_ATTENTION_HEADING") &&
+    ownerBannerSrc.includes("OWNER_RECONFIRMATION_ATTENTION_HEADING") &&
+    !ownerBannerSrc.includes("variant=\"destructive\""),
+);
+check(
+  "Customer portal does not use the owner attention banner",
+  !portalSrc.includes("OwnerAppointmentAttentionBanner") &&
+    !portalSrc.includes(OWNER_DIFFERENT_TIME_ATTENTION_HEADING) &&
+    !portalSrc.includes(OWNER_RECONFIRMATION_ATTENTION_HEADING) &&
+    portalSrc.includes("customerAppointmentStatusLabel") &&
+    portalActionsSrc.includes("Confirm Appointment") &&
+    portalActionsSrc.includes("Request Different Time") &&
+    portalActionsSrc.includes("changeRequestNote"),
+);
+check(
+  "Different-time request stores a scheduling note, not access instructions",
+  publicSrc.includes("appointmentChangeRequestNote: note") &&
+    !publicSrc.includes("propertyAccessInstructions: note") &&
+    !publicSrc.includes("propertyAccessNote: note"),
+);
+check(
+  "Owner reschedule clears the scheduling note and does not null last confirmed proposal id",
+  jobActionSrc.includes("appointmentChangeRequestNote: null") &&
+    !jobActionSrc.includes("appointmentConfirmedForProposalId: null"),
+);
+check(
+  "Access arrangement helper never copies a note into instructions",
+  !accessSrc.includes("instructions ?? note"),
 );
 
 const slot = {
@@ -105,6 +157,17 @@ const slot = {
   propertyAccessPickupLocation: null,
   propertyAccessNote: null,
 };
+
+function accessJob(extras = {}) {
+  return {
+    propertyAccessMethod: extras.propertyAccessMethod ?? null,
+    propertyAccessInstructions: extras.propertyAccessInstructions ?? null,
+    propertyAccessContactName: extras.propertyAccessContactName ?? null,
+    propertyAccessContactInfo: extras.propertyAccessContactInfo ?? null,
+    propertyAccessPickupLocation: extras.propertyAccessPickupLocation ?? null,
+    propertyAccessNote: extras.propertyAccessNote ?? null,
+  };
+}
 
 console.log("\nPURE — Confirmation binding and access completeness");
 check("Confirmed current slot is customer-confirmed", isCurrentAppointmentConfirmed(slot));
@@ -150,6 +213,65 @@ check(
 check(
   "Confirmed label is Customer Confirmed",
   appointmentConfirmationLabel("CONFIRMED") === "Customer Confirmed",
+);
+check(
+  "Owner attention headings match founder copy",
+  OWNER_DIFFERENT_TIME_ATTENTION_HEADING === "CUSTOMER REQUEST / APPOINTMENT CHANGE" &&
+    OWNER_RECONFIRMATION_ATTENTION_HEADING ===
+      "APPOINTMENT CHANGED — CUSTOMER RECONFIRMATION REQUIRED",
+);
+check(
+  "Customer portal awaiting copy is Awaiting Your Confirmation",
+  customerAppointmentStatusLabel("AWAITING_CUSTOMER") ===
+    "Awaiting Your Confirmation",
+);
+check(
+  "Different-time request produces owner attention",
+  ownerAppointmentAttention({
+    ...slot,
+    appointmentConfirmationStatus: "DIFFERENT_TIME_REQUESTED",
+    appointmentConfirmedForProposalId: null,
+    propertyAccessMethod: null,
+    appointmentChangeRequestNote: "Available Wednesday instead.",
+  }) === "DIFFERENT_TIME",
+);
+check(
+  "First schedule without confirmation has no owner attention banner",
+  ownerAppointmentAttention({
+    ...slot,
+    appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+    appointmentConfirmedForProposalId: null,
+    propertyAccessMethod: null,
+  }) === null,
+);
+check(
+  "Reschedule of a previously confirmed appointment requires reconfirmation attention",
+  ownerAppointmentAttention({
+    ...slot,
+    appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+    appointmentProposalId: 2,
+    appointmentConfirmedForProposalId: 1,
+    propertyAccessMethod: "CUSTOMER_PRESENT",
+  }) === "RECONFIRMATION",
+);
+check(
+  "Customer reconfirmation clears owner attention",
+  ownerAppointmentAttention({
+    ...slot,
+    appointmentConfirmationStatus: "CONFIRMED",
+    appointmentProposalId: 2,
+    appointmentConfirmedForProposalId: 2,
+  }) === null,
+);
+check(
+  "Change-request note is trimmed and capped",
+  parseAppointmentChangeRequestNote("  Available Wednesday instead.  ") ===
+    "Available Wednesday instead.",
+);
+check(
+  "Appointment when format uses at, not a comma-only datetime",
+  formatAppointmentWhen(slot.scheduledAt).includes(" at ") &&
+    formatAppointmentWhen(slot.scheduledAt).includes("2026"),
 );
 check(
   "Material date change is a new proposal",
@@ -207,6 +329,47 @@ for (const [method, extra, expectedOk] of methods) {
   const result = validateAccessArrangement({ method, ...extra });
   check(`${method} ${expectedOk ? "accepts" : "requires"} extra fields as specified`, result.ok === expectedOk);
 }
+
+const schedulingNoteAccess = validateAccessArrangement({
+  method: "CUSTOMER_PRESENT",
+  note: "available wednesday instead",
+});
+check(
+  "Optional access note is not stored as access instructions",
+  schedulingNoteAccess.ok &&
+    schedulingNoteAccess.value.instructions == null &&
+    schedulingNoteAccess.value.note === "available wednesday instead",
+);
+const accessLinesFromNote = ownerAccessSummaryLines(
+  accessJob({
+    propertyAccessMethod: "CUSTOMER_PRESENT",
+    propertyAccessInstructions: schedulingNoteAccess.value.instructions,
+    propertyAccessNote: schedulingNoteAccess.value.note,
+  }),
+);
+check(
+  "Owner access summary does not present a scheduling note as Access instructions",
+  accessLinesFromNote.every(
+    (line) => !line.toLowerCase().startsWith("access instructions:"),
+  ) &&
+    !accessLinesFromNote.some((line) =>
+      line.toLowerCase().includes("access instructions: available wednesday instead"),
+    ),
+);
+const schedulingRequestLines = ownerAccessSummaryLines(
+  accessJob({
+    propertyAccessMethod: "KEY_AT_PROPERTY",
+    propertyAccessInstructions: "Lockbox beside garage",
+  }),
+);
+check(
+  "Real access instructions remain labeled as access instructions",
+  schedulingRequestLines.some((line) => line === "Access instructions: Lockbox beside garage"),
+);
+check(
+  "Scheduling-request data stays off the access summary",
+  !schedulingRequestLines.some((line) => line.toLowerCase().includes("wednesday")),
+);
 
 const email = buildAppointmentProposedEmail({
   businessName: "CollPro Reno",
@@ -312,9 +475,9 @@ async function proposeAppointment(job, start, minutes) {
             appointmentProposalId: proposalId,
             appointmentConfirmationStatus: "AWAITING_CUSTOMER",
             appointmentConfirmedAt: null,
-            appointmentConfirmedForProposalId: null,
             appointmentConfirmationSource: null,
             appointmentConfirmedByMembershipId: null,
+            appointmentChangeRequestNote: null,
             appointmentNotificationStatus: "FAILED",
             appointmentNotificationError: "The appointment email could not be sent.",
             appointmentNotifiedForProposalId: proposalId,
@@ -412,6 +575,11 @@ try {
   check("Reschedule is awaiting confirmation again", rescheduled.job.appointmentConfirmationStatus === "AWAITING_CUSTOMER");
   check("Stale confirmation does not apply to the new slot", !isCurrentAppointmentConfirmed(rescheduled.job));
   check("Proposal id advanced", rescheduled.proposalId === first.proposalId + 1);
+  check(
+    "Reschedule of a confirmed appointment keeps the last confirmed proposal id as a stale binding",
+    rescheduled.job.appointmentConfirmedForProposalId === first.proposalId &&
+      ownerAppointmentAttention(rescheduled.job) === "RECONFIRMATION",
+  );
 
   const staleConfirm = await prisma.job.updateMany({
     where: {
@@ -439,6 +607,7 @@ try {
   const afterReconfirm = await prisma.job.findUnique({ where: { id: first.job.id } });
   check("Customer can update access when reconfirming", afterReconfirm.propertyAccessInstructions.includes("lanai"));
   check("Reconfirm is bound to the new proposal", isCurrentAppointmentConfirmed(afterReconfirm));
+  check("Customer reconfirmation clears owner attention", ownerAppointmentAttention(afterReconfirm) === null);
 
   const awaiting = await makeJob(businessA.id, {
     status: "SCHEDULED",
@@ -452,7 +621,7 @@ try {
     data: {
       appointmentConfirmationStatus: "DIFFERENT_TIME_REQUESTED",
       appointmentConfirmedAt: null,
-      appointmentConfirmedForProposalId: null,
+      appointmentChangeRequestNote: "available wednesday instead",
     },
   });
   check("Request different time preserves the proposed appointment", different.scheduledAt.getTime() === start.getTime());
@@ -460,6 +629,70 @@ try {
     "Request different time is not confirmed",
     effectiveAppointmentConfirmationStatus(different) === "DIFFERENT_TIME_REQUESTED" &&
       !isCurrentAppointmentConfirmed(different),
+  );
+  check(
+    "Different-time request produces owner attention",
+    ownerAppointmentAttention(different) === "DIFFERENT_TIME",
+  );
+  check(
+    "Customer scheduling note is not stored as access instructions",
+    different.appointmentChangeRequestNote === "available wednesday instead" &&
+      different.propertyAccessInstructions == null &&
+      different.propertyAccessNote == null,
+  );
+  const differentAccessLines = ownerAccessSummaryLines(different);
+  check(
+    "Owner access summary does not render the scheduling note as Access instructions",
+    !differentAccessLines.some((line) =>
+      line.toLowerCase().includes("available wednesday instead"),
+    ),
+  );
+
+  const confirmedThenRequest = await makeJob(businessA.id, {
+    status: "SCHEDULED",
+    scheduledAt: start,
+    scheduledDurationMinutes: 60,
+    appointmentProposalId: 1,
+    appointmentConfirmationStatus: "CONFIRMED",
+    job: {
+      appointmentConfirmedForProposalId: 1,
+      propertyAccessMethod: "CUSTOMER_PRESENT",
+      propertyAccessInstructions: "Lockbox beside garage",
+    },
+  });
+  const requestedAfterConfirm = await prisma.job.update({
+    where: { id: confirmedThenRequest.id },
+    data: {
+      appointmentConfirmationStatus: "DIFFERENT_TIME_REQUESTED",
+      appointmentConfirmedAt: null,
+      appointmentConfirmationSource: null,
+      appointmentChangeRequestNote: "Available Wednesday instead.",
+    },
+  });
+  check(
+    "Different-time after confirm keeps access data and last confirmed proposal id",
+    requestedAfterConfirm.appointmentConfirmedForProposalId === 1 &&
+      requestedAfterConfirm.propertyAccessInstructions === "Lockbox beside garage" &&
+      requestedAfterConfirm.appointmentChangeRequestNote === "Available Wednesday instead." &&
+      ownerAppointmentAttention(requestedAfterConfirm) === "DIFFERENT_TIME",
+  );
+  const wednesday = new Date(2026, 8, 16, 8, 0, 0);
+  const afterOwnerReschedule = await proposeAppointment(requestedAfterConfirm, wednesday, 60);
+  check(
+    "Owner reschedule after a confirmed slot shows reconfirmation attention",
+    afterOwnerReschedule.job.appointmentConfirmationStatus === "AWAITING_CUSTOMER" &&
+      afterOwnerReschedule.job.appointmentChangeRequestNote == null &&
+      afterOwnerReschedule.job.propertyAccessInstructions === "Lockbox beside garage" &&
+      afterOwnerReschedule.job.appointmentConfirmedForProposalId === 1 &&
+      ownerAppointmentAttention(afterOwnerReschedule.job) === "RECONFIRMATION" &&
+      !isCurrentAppointmentConfirmed(afterOwnerReschedule.job),
+  );
+  const accessStillSeparate = ownerAccessSummaryLines(afterOwnerReschedule.job);
+  check(
+    "Access data and scheduling-request data remain separate after reschedule",
+    accessStillSeparate.some((line) => line === "Access instructions: Lockbox beside garage") &&
+      !accessStillSeparate.some((line) => line.toLowerCase().includes("wednesday")) &&
+      afterOwnerReschedule.job.appointmentChangeRequestNote == null,
   );
 
   const ownerManual = await makeJob(businessA.id, {

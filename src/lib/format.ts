@@ -34,6 +34,10 @@ export function formatTime(value: Date) {
   });
 }
 
+export function formatAppointmentWhen(value: Date) {
+  return `${formatDate(value)} at ${formatTime(value)}`;
+}
+
 export function formatAddress(property: {
   addressLine1: string;
   addressLine2?: string | null;

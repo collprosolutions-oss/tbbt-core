@@ -15,6 +15,7 @@ ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "propertyAccessContactName" TEXT;
 ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "propertyAccessContactInfo" TEXT;
 ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "propertyAccessPickupLocation" TEXT;
 ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "propertyAccessNote" TEXT;
+ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "appointmentChangeRequestNote" TEXT;
 ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "appointmentNotificationStatus" TEXT;
 ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "appointmentNotificationError" TEXT;
 ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "appointmentNotifiedAt" TIMESTAMP(3);
