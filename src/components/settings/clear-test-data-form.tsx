@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import {
   CLEAR_TEST_DATA_CONFIRMATION,
   type TestDataCleanupPreview,
-} from "@/lib/test-data-cleanup";
+} from "@/lib/test-data-cleanup-constants";
 
 const initialState: ClearTestDataActionState = {};
 

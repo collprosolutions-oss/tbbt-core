@@ -42,6 +42,8 @@ function readRepo(path) {
 }
 
 const cleanupSrc = readRepo("src/lib/test-data-cleanup.ts");
+const cleanupConstantsSrc = readRepo("src/lib/test-data-cleanup-constants.ts");
+const cleanupFormSrc = readRepo("src/components/settings/clear-test-data-form.tsx");
 const actionSrc = readRepo("src/app/actions/test-data-cleanup.ts");
 const settingsPage = readRepo("src/app/(app)/settings/page.tsx");
 const settingsWorkspace = readRepo("src/components/settings/settings-workspace.tsx");
@@ -51,7 +53,8 @@ const intakeAction = readRepo("src/app/actions/intake.ts");
 console.log("\nSTATIC — cleanup is founder/owner-only and never automatic");
 check(
   "Confirmation phrase is CLEAR TEST DATA",
-  cleanupSrc.includes('CLEAR_TEST_DATA_CONFIRMATION = "CLEAR TEST DATA"'),
+  cleanupConstantsSrc.includes('CLEAR_TEST_DATA_CONFIRMATION = "CLEAR TEST DATA"') &&
+    cleanupSrc.includes("CLEAR_TEST_DATA_CONFIRMATION"),
 );
 check(
   "Execute requires the exact confirmation phrase",
@@ -69,6 +72,13 @@ check(
     settingsWorkspace.includes("ClearTestDataForm"),
 );
 check(
+  "Client Clear Test Data form does not import the Prisma cleanup module",
+  cleanupFormSrc.includes('from "@/lib/test-data-cleanup-constants"') &&
+    !cleanupFormSrc.includes('from "@/lib/test-data-cleanup"') &&
+    !cleanupFormSrc.includes("settings-ops") &&
+    !cleanupFormSrc.includes("@prisma/client"),
+);
+check(
   "Public intake cannot call cleanup",
   !intakeAction.includes("executeOperationalTestDataCleanup") &&
     !intakeAction.includes("clearOperationalTestData"),
@@ -80,7 +90,7 @@ check(
 );
 check(
   "Stripe connected-account rows are not deleted",
-  cleanupSrc.includes("Stripe Connect connected-account configuration") &&
+  cleanupConstantsSrc.includes("Stripe Connect connected-account configuration") &&
     !cleanupSrc.includes("businessPaymentAccount.deleteMany"),
 );
 check(
