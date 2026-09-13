@@ -31,11 +31,17 @@ const {
 } = await import("@/lib/appointment-confirmation");
 const { ownerAccessSummaryLines, validateAccessArrangement } = await import("@/lib/property-access");
 const {
+  FOUNDER_TEST_CHANGE_REQUEST_NOTE,
+  PROPERTY_ACCESS_COLUMN_KEYS,
   customerDifferentTimeRequestTouchesAccess,
   customerDifferentTimeRequestWriteData,
   isAppointmentChangeRequestSubmission,
+  propertyAccessSnapshotsEqual,
   readAppointmentChangeRequestNoteFromFormData,
+  snapshotPropertyAccess,
+  withoutMisfiledChangeRequestAccess,
 } = await import("@/lib/appointment-change-request");
+const { ensureAppointmentConfirmationSchema } = await import("@/lib/appointment-data");
 const { buildAppointmentProposedEmail } = await import("@/lib/appointment-mail");
 const { evaluateStartJob } = await import("@/lib/job-lifecycle");
 const { formatAppointmentWhen } = await import("@/lib/format");
@@ -146,6 +152,7 @@ check(
   "Different-time request stores a scheduling note, not access instructions",
   publicSrc.includes("customerDifferentTimeRequestWriteData") &&
     publicSrc.includes("data: write") &&
+    publicSrc.includes("withoutMisfiledChangeRequestAccess") &&
     !publicSrc.includes("propertyAccessInstructions: note") &&
     !publicSrc.includes("propertyAccessNote: note"),
 );
@@ -157,6 +164,11 @@ check(
 check(
   "Access arrangement helper never copies a note into instructions",
   !accessSrc.includes("instructions ?? note"),
+);
+check(
+  "Preview ensure repairs stale founder change-request text in access fields",
+  readRepo("src/lib/appointment-data.ts").includes("repairMisfiledChangeRequestAccessFields") &&
+    jobActionSrc.includes("withoutMisfiledChangeRequestAccess"),
 );
 
 const slot = {
@@ -326,8 +338,25 @@ check(
 check(
   "Different-time write data does not include any access fields",
   !customerDifferentTimeRequestTouchesAccess(changeRequestWrite) &&
-    !("propertyAccessInstructions" in changeRequestWrite) &&
-    changeRequestWrite.propertyAccessInstructions !== "make it 9am instead",
+    PROPERTY_ACCESS_COLUMN_KEYS.every((key) => !(key in changeRequestWrite)) &&
+    changeRequestWrite.propertyAccessInstructions !== FOUNDER_TEST_CHANGE_REQUEST_NOTE,
+);
+const sanitizedConfirmAccess = withoutMisfiledChangeRequestAccess(
+  {
+    method: "ACCESS_CODE",
+    instructions: FOUNDER_TEST_CHANGE_REQUEST_NOTE,
+    contactName: null,
+    contactInfo: null,
+    pickupLocation: null,
+    note: FOUNDER_TEST_CHANGE_REQUEST_NOTE,
+  },
+  { appointmentChangeRequestNote: FOUNDER_TEST_CHANGE_REQUEST_NOTE },
+);
+check(
+  "Confirm/reconfirm cannot persist the founder change-request note as access",
+  sanitizedConfirmAccess.instructions !== FOUNDER_TEST_CHANGE_REQUEST_NOTE &&
+    sanitizedConfirmAccess.note !== FOUNDER_TEST_CHANGE_REQUEST_NOTE &&
+    sanitizedConfirmAccess.method === "CUSTOMER_PRESENT",
 );
 const poisonedAccessLines = ownerAccessSummaryLines({
   propertyAccessMethod: "ACCESS_CODE",
@@ -738,10 +767,12 @@ try {
     },
   });
   const founderWrite = customerDifferentTimeRequestWriteData(founderNote);
+  const accessBeforeFounderRequest = snapshotPropertyAccess(founderConfirmed);
   check(
     "Founder note write payload does not contain accessInstructions",
     founderWrite.appointmentChangeRequestNote === founderNote &&
-      !customerDifferentTimeRequestTouchesAccess(founderWrite),
+      !customerDifferentTimeRequestTouchesAccess(founderWrite) &&
+      PROPERTY_ACCESS_COLUMN_KEYS.every((key) => !(key in founderWrite)),
   );
   const afterFounderRequest = await prisma.job.update({
     where: { id: founderConfirmed.id },
@@ -753,6 +784,41 @@ try {
       afterFounderRequest.propertyAccessInstructions !== founderNote &&
       afterFounderRequest.propertyAccessInstructions === "Gate 4455 then door 2211" &&
       afterFounderRequest.appointmentConfirmationStatus === "DIFFERENT_TIME_REQUESTED",
+  );
+  check(
+    "Request Different Time never modifies any propertyAccess field",
+    propertyAccessSnapshotsEqual(
+      accessBeforeFounderRequest,
+      snapshotPropertyAccess(afterFounderRequest),
+    ),
+  );
+
+  const poisonedStanley = await makeJob(businessA.id, {
+    status: "SCHEDULED",
+    scheduledAt: new Date(2026, 8, 16, 9, 0, 0),
+    scheduledDurationMinutes: 60,
+    appointmentProposalId: 2,
+    appointmentConfirmationStatus: "CONFIRMED",
+    job: {
+      appointmentConfirmedForProposalId: 2,
+      appointmentChangeRequestNote: null,
+      propertyAccessMethod: "ACCESS_CODE",
+      propertyAccessInstructions: FOUNDER_TEST_CHANGE_REQUEST_NOTE,
+      propertyAccessNote: FOUNDER_TEST_CHANGE_REQUEST_NOTE,
+    },
+  });
+  await ensureAppointmentConfirmationSchema(prisma);
+  const cleanedStanley = await prisma.job.findUnique({
+    where: { id: poisonedStanley.id },
+  });
+  check(
+    "Stale founder note is cleared from property-access fields only",
+    cleanedStanley?.propertyAccessInstructions !== FOUNDER_TEST_CHANGE_REQUEST_NOTE &&
+      cleanedStanley?.propertyAccessNote !== FOUNDER_TEST_CHANGE_REQUEST_NOTE &&
+      cleanedStanley?.propertyAccessMethod === "CUSTOMER_PRESENT" &&
+      cleanedStanley?.appointmentChangeRequestNote == null &&
+      cleanedStanley?.appointmentConfirmationStatus === "CONFIRMED" &&
+      cleanedStanley?.appointmentProposalId === 2,
   );
   check(
     "After Request Different Time the owner attention banner is CUSTOMER REQUEST",

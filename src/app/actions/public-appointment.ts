@@ -7,6 +7,7 @@ import {
   customerDifferentTimeRequestWriteData,
   isAppointmentChangeRequestSubmission,
   readAppointmentChangeRequestNoteFromFormData,
+  withoutMisfiledChangeRequestAccess,
 } from "@/lib/appointment-change-request";
 import {
   appointmentAwaitingCustomerAction,
@@ -154,7 +155,9 @@ async function applyConfirmAppointment(
       appointmentConfirmationSource: "PORTAL",
       appointmentConfirmedByMembershipId: null,
       appointmentChangeRequestNote: null,
-      ...accessArrangementWriteData(accessArrangement.value),
+      ...accessArrangementWriteData(
+        withoutMisfiledChangeRequestAccess(accessArrangement.value, job),
+      ),
     },
   });
 

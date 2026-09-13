@@ -5,6 +5,7 @@
  * no-op for this additive migration.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { repairMisfiledChangeRequestAccessFields } from "@/lib/appointment-change-request";
 import { eventPayload, type AppointmentEventType } from "@/lib/appointment-confirmation";
 
 type AppointmentClient = PrismaClient | Prisma.TransactionClient;
@@ -116,6 +117,7 @@ export async function ensureAppointmentConfirmationSchema(db: AppointmentClient)
     });
   }
   await ensureSchemaPromise;
+  await repairMisfiledChangeRequestAccessFields(db);
 }
 
 export async function recordAppointmentEvent(

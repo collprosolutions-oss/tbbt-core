@@ -13,6 +13,7 @@ import {
   parseStartWithoutConfirmationReason,
   startJobRequiresCustomerConfirmation,
 } from "@/lib/appointment-confirmation";
+import { withoutMisfiledChangeRequestAccess } from "@/lib/appointment-change-request";
 import {
   ensureAppointmentConfirmationSchema,
   recordAppointmentEvent,
@@ -354,7 +355,9 @@ export async function recordOwnerAppointmentConfirmation(
       appointmentConfirmationSource: method,
       appointmentConfirmedByMembershipId: access.workspace.membership.id,
       appointmentChangeRequestNote: null,
-      ...accessArrangementWriteData(accessArrangement.value),
+      ...accessArrangementWriteData(
+        withoutMisfiledChangeRequestAccess(accessArrangement.value, job),
+      ),
     },
   });
   await recordAppointmentEvent(prisma, {
