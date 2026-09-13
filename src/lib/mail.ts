@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { isTrustedVercelAppHost } from "@/lib/vercel-app-host";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -42,10 +43,7 @@ function vercelPreviewOrigin(): string | null {
     return null;
   }
   const host = (process.env.VERCEL_BRANCH_URL || process.env.VERCEL_URL || "").trim();
-  if (!host || host.includes("/") || host.includes("@") || host.includes(":")) {
-    return null;
-  }
-  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.vercel\.app$/i.test(host)) {
+  if (!isTrustedVercelAppHost(host)) {
     return null;
   }
   return parseAppUrl(`https://${host}`);
