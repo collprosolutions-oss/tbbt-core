@@ -17,7 +17,13 @@ import {
 } from "@/components/ui/card";
 import { directionsUrl, telHref } from "@/lib/directions";
 import { requireAssignedJobPageAccess, assignedJobWhere, requireFieldWorkspace } from "@/lib/field-access";
+import {
+  appointmentConfirmationLabel,
+  effectiveAppointmentConfirmationStatus,
+  isCurrentAppointmentConfirmed,
+} from "@/lib/appointment-confirmation";
 import { formatAddress, formatDateTime, formatTime } from "@/lib/format";
+import { ownerAccessSummaryLines } from "@/lib/property-access";
 import { TIME_ACTIVITY_LABELS, isTimeActivityType } from "@/lib/time-cards";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { prisma } from "@/lib/prisma";
@@ -71,6 +77,16 @@ export default async function FieldJobPage({
       status: true,
       scheduledAt: true,
       scheduledDurationMinutes: true,
+      appointmentConfirmationStatus: true,
+      appointmentProposalId: true,
+      appointmentConfirmedForProposalId: true,
+      appointmentConfirmationSource: true,
+      propertyAccessMethod: true,
+      propertyAccessInstructions: true,
+      propertyAccessContactName: true,
+      propertyAccessContactInfo: true,
+      propertyAccessPickupLocation: true,
+      propertyAccessNote: true,
       customer: { select: { name: true, phone: true } },
       property: {
         select: {
@@ -163,12 +179,20 @@ export default async function FieldJobPage({
           <span>
             {job.scheduledAt ? formatDateTime(job.scheduledAt) : "Not yet scheduled"}
           </span>
+          {job.scheduledAt ? (
+            <span>
+              {appointmentConfirmationLabel(effectiveAppointmentConfirmationStatus(job))}
+            </span>
+          ) : null}
         </div>
       </div>
 
       <Card>
         <CardContent className="space-y-3 pt-6 text-sm">
           <p>{job.property ? formatAddress(job.property) : "No address on file"}</p>
+          {job.scheduledAt
+            ? ownerAccessSummaryLines(job).map((line) => <p key={line}>{line}</p>)
+            : null}
           <div className="grid grid-cols-2 gap-2">
             {tel ? (
               <Button asChild variant="outline" className="h-12 text-base">
@@ -219,7 +243,12 @@ export default async function FieldJobPage({
       />
 
       <div className="space-y-2">
-        {!isCompleted && !isInProgress ? <StartAssignedJobButton jobId={job.id} /> : null}
+        {!isCompleted && !isInProgress ? (
+          <StartAssignedJobButton
+            jobId={job.id}
+            appointmentConfirmed={isCurrentAppointmentConfirmed(job)}
+          />
+        ) : null}
         {isInProgress ? <CompleteAssignedJobButton jobId={job.id} /> : null}
         {isCompleted ? (
           <p className="rounded-lg border border-dashed p-3 text-center text-sm text-muted-foreground">

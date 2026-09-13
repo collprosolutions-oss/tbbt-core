@@ -33,6 +33,11 @@ import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
 import {
+  appointmentConfirmationLabel,
+  effectiveAppointmentConfirmationStatus,
+  isCurrentAppointmentConfirmed,
+} from "@/lib/appointment-confirmation";
+import {
   durationPresetForMinutes,
   formatDurationMinutes,
 } from "@/lib/job-schedule";
@@ -459,6 +464,10 @@ export default async function JobsPage({
       unpaidDepositWarning: unpaidMaterialDepositWarning(
         requiredDeposit.sub(paidTowardDeposit),
       ),
+      appointmentConfirmed: isCurrentAppointmentConfirmed(job),
+      appointmentConfirmationLabel: job.scheduledAt
+        ? appointmentConfirmationLabel(effectiveAppointmentConfirmationStatus(job))
+        : null,
     };
   });
 

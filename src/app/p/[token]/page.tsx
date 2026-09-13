@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
 import { ChangeOrdersCard } from "@/components/portal/change-orders-card";
+import { PortalAppointmentActions } from "@/components/portal/portal-appointment-actions";
 import { PayInvoiceButton } from "@/components/portal/pay-invoice-button";
 import { PortalMaterialDepositCard } from "@/components/portal/portal-material-deposit-card";
 import { ProjectPortalHeader } from "@/components/portal/project-portal-header";
@@ -19,7 +20,7 @@ import {
   CUSTOMER_VISIBLE_CHANGE_ORDER_STATUSES,
   resolveCurrentApprovedProjectTotal,
 } from "@/lib/change-order";
-import { formatDateTime, formatMailingAddress, formatMoney } from "@/lib/format";
+import { formatAppointmentWhen, formatDateTime, formatMailingAddress, formatMoney } from "@/lib/format";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
 import {
@@ -42,6 +43,16 @@ import {
 import { backfillEmptyInvoiceWorkLinesForProjectToken } from "@/lib/invoice-carry-forward";
 import { loadPortalAdditionalWorkCatalog } from "@/lib/portal-additional-work";
 import { prisma } from "@/lib/prisma";
+import {
+  customerAppointmentStatusLabel,
+  effectiveAppointmentConfirmationStatus,
+  isCurrentAppointmentConfirmed,
+} from "@/lib/appointment-confirmation";
+import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
+import {
+  accessFormValuesFromJob,
+  ownerAccessSummaryLines,
+} from "@/lib/property-access";
 
 export const metadata: Metadata = {
   title: "Your Project",
@@ -78,6 +89,7 @@ export default async function CustomerProjectPortalPage({
 }) {
   const { token } = await params;
   const query = await searchParams;
+  await ensureAppointmentConfirmationSchema(prisma);
 
   const job = token
     ? await prisma.job.findUnique({
@@ -87,6 +99,17 @@ export default async function CustomerProjectPortalPage({
           status: true,
           scheduledAt: true,
           scheduledDurationMinutes: true,
+          appointmentConfirmationStatus: true,
+          appointmentProposalId: true,
+          appointmentConfirmedForProposalId: true,
+          appointmentConfirmationSource: true,
+          propertyAccessMethod: true,
+          propertyAccessInstructions: true,
+          propertyAccessContactName: true,
+          propertyAccessContactInfo: true,
+          propertyAccessPickupLocation: true,
+          propertyAccessNote: true,
+          appointmentChangeRequestNote: true,
           business: { select: { id: true, name: true, slug: true, tradeCode: true } },
           customer: { select: { name: true } },
           property: {
@@ -269,6 +292,8 @@ export default async function CustomerProjectPortalPage({
   const serviceAddress = job.property
     ? formatMailingAddress(job.property)
     : null;
+  const appointmentStatus = effectiveAppointmentConfirmationStatus(job);
+  const appointmentConfirmed = isCurrentAppointmentConfirmed(job);
 
   return (
     <main className="min-h-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -281,6 +306,7 @@ export default async function CustomerProjectPortalPage({
         />
 
         <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,45fr)_minmax(0,55fr)]">
+          <div className="space-y-6">
           <Card>
             <CardHeader>
               <CardTitle>Project Status</CardTitle>
@@ -291,10 +317,53 @@ export default async function CustomerProjectPortalPage({
                   : ""}
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
               <ProjectProgressBar currentStep={progressStep} />
             </CardContent>
           </Card>
+
+          {job.scheduledAt ? (
+            <Card id="appointment">
+              <CardHeader>
+                <CardTitle>Appointment</CardTitle>
+                <CardDescription>
+                  {formatDateTime(job.scheduledAt)}
+                  {job.scheduledDurationMinutes
+                    ? ` · ${job.scheduledDurationMinutes} minutes`
+                    : ""}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                {appointmentStatus === "DIFFERENT_TIME_REQUESTED" ? (
+                  <div className="space-y-2">
+                    <p className="font-medium">Change requested</p>
+                    <p>Current appointment: {formatAppointmentWhen(job.scheduledAt)}</p>
+                    {job.appointmentChangeRequestNote ? (
+                      <p>Your request: “{job.appointmentChangeRequestNote}”</p>
+                    ) : null}
+                    <p>We&apos;ll confirm a new appointment time with you.</p>
+                  </div>
+                ) : (
+                  <p className="font-medium">
+                    {customerAppointmentStatusLabel(appointmentStatus)}
+                  </p>
+                )}
+                {job.propertyAccessMethod
+                  ? ownerAccessSummaryLines(job).map((line) => (
+                      <p key={line}>{line}</p>
+                    ))
+                  : null}
+                <PortalAppointmentActions
+                  projectToken={token}
+                  appointmentProposalId={job.appointmentProposalId}
+                  canConfirm={!appointmentConfirmed}
+                  canRequestDifferentTime={appointmentStatus !== "NONE"}
+                  existingAccess={accessFormValuesFromJob(job)}
+                />
+              </CardContent>
+            </Card>
+          ) : null}
+          </div>
 
           <div className="space-y-6">
             <ApprovedScopeCard

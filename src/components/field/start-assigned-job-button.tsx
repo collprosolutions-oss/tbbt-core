@@ -9,11 +9,25 @@ import { Button } from "@/components/ui/button";
 
 const initialState: FieldJobActionState = {};
 
-export function StartAssignedJobButton({ jobId }: { jobId: string }) {
+export function StartAssignedJobButton({
+  jobId,
+  appointmentConfirmed = true,
+}: {
+  jobId: string;
+  appointmentConfirmed?: boolean;
+}) {
   const [state, formAction, pending] = useActionState(
     startAssignedJob,
     initialState,
   );
+
+  if (!appointmentConfirmed) {
+    return (
+      <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+        Customer has not confirmed this appointment.
+      </p>
+    );
+  }
 
   return (
     <form action={formAction} className="w-full">

@@ -17,6 +17,8 @@
  */
 import { revalidatePath } from "next/cache";
 import { findAssignedJob } from "@/lib/field-access";
+import { CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT, startJobRequiresCustomerConfirmation } from "@/lib/appointment-confirmation";
+import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import { prisma } from "@/lib/prisma";
 import {
@@ -58,9 +60,14 @@ export async function startAssignedJob(
     return { error: NOT_ASSIGNED_ERROR };
   }
 
+  await ensureAppointmentConfirmationSchema(prisma);
   const result = evaluateStartJob(job.status);
   if (!result.ok) {
     return { error: result.error };
+  }
+
+  if (result.nextStatus && startJobRequiresCustomerConfirmation(job)) {
+    return { error: CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT };
   }
 
   if (result.nextStatus) {

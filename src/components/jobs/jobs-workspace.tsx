@@ -68,6 +68,8 @@ export type JobListItem = {
   approvedScopeLineItems: JobLineItemSummary[];
   approvedChangeOrders: JobChangeOrderSummary[];
   unpaidDepositWarning?: string | null;
+  appointmentConfirmed: boolean;
+  appointmentConfirmationLabel: string | null;
 };
 
 function initials(name: string) {
@@ -401,6 +403,9 @@ function JobDetailsPanel({
           <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
             {isCompleted || isScheduled ? "Appointment" : "Schedule Job"}
           </p>
+          {job.appointmentConfirmationLabel ? (
+            <p className="text-sm font-medium">{job.appointmentConfirmationLabel}</p>
+          ) : null}
           {isCompleted ? (
             <p className="text-sm text-muted-foreground">
               Completed jobs keep their saved appointment and cannot be rescheduled.
@@ -528,6 +533,7 @@ function JobDetailsPanel({
           <StartJobButton
             jobId={job.id}
             unpaidDepositWarning={job.unpaidDepositWarning}
+            appointmentConfirmed={job.appointmentConfirmed}
           />
         ) : null}
         {isInProgress ? <MarkJobCompleteButton jobId={job.id} /> : null}

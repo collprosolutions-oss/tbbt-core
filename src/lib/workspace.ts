@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import type { Business, Membership, MembershipRole } from "@prisma/client";
 import { getSessionUser, getWorkspaceCookie, setWorkspaceCookie } from "@/lib/auth";
+import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { loadActiveWorkspaceMemberships } from "@/lib/business-contact";
 import { prisma } from "@/lib/prisma";
 
@@ -22,6 +23,7 @@ export async function requireWorkspace(): Promise<WorkspaceContext> {
   // src/app/actions/team.ts) must lose access here, at the single place
   // every authenticated page/action derives its workspace from, not just
   // in the Team UI.
+  await ensureAppointmentConfirmationSchema(prisma);
   const memberships = await loadActiveWorkspaceMemberships(prisma, user.id);
 
   if (memberships.length === 0) {
