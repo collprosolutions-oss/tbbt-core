@@ -20,6 +20,7 @@ import {
   settingsIntegrationCardsFromSnapshot,
   settingsReadinessFromSnapshot,
 } from "@/lib/settings-data";
+import { previewOperationalTestData } from "@/lib/test-data-cleanup";
 import { loadPublicCatalog } from "@/lib/public-site-data";
 import { loadWebsitePhotoEditorSlots } from "@/lib/public-site-images";
 import { loadSupplierPricingContextPayload } from "@/lib/material-pricing/db";
@@ -73,6 +74,11 @@ export default async function SettingsPage({
       : null;
 
   const founder = await checkFounderAccess();
+  const canClearTestData = Boolean(founder) && role === "OWNER";
+  const testDataCleanupPreview =
+    canClearTestData && section === "data-export"
+      ? await previewOperationalTestData(prisma, access.businessId)
+      : null;
   const founderOverride = founder
     ? await prisma.founderDesignOverride.findUnique({
         where: { userId_pageKey: { userId: founder.id, pageKey: "settings" } },
@@ -165,6 +171,8 @@ export default async function SettingsPage({
           canEditPreferences={canEditPreferences}
           websitePhotos={websitePhotos}
           supplierPricing={supplierPricing}
+          canClearTestData={canClearTestData}
+          testDataCleanupPreview={testDataCleanupPreview}
         />
       </FounderDesignRoot>
     </PageContainer>

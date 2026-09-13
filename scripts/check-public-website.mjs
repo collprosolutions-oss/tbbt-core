@@ -201,6 +201,10 @@ check("Signed-in visitors are not redirected away from /",
   isPublicWebsitePath("/") &&
     proxySrc.includes("if (isPublicWebsitePath(pathname))") &&
     !/if \(pathname === ["']\/["']\)[\s\S]{0,120}\/dashboard/.test(proxySrc));
+check("Auth proxy redirects stay on the current Preview host",
+  proxySrc.includes("navigationRedirectUrl") &&
+    !proxySrc.includes('new URL("/sign-in", request.url)') &&
+    !proxySrc.includes('new URL("/dashboard", request.url)'));
 check("Operations routes are not treated as the public website",
   !isPublicWebsitePath("/dashboard") &&
     !isPublicWebsitePath("/jobs") &&

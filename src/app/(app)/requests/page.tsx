@@ -38,6 +38,10 @@ import {
   requestedWorkSummary,
 } from "@/lib/service-request-work";
 import {
+  identityReviewOwnerMessage,
+  parseIntakeIdentityReview,
+} from "@/lib/customer-identity";
+import {
   formatWorkAreaIntakeLabels,
   parseWorkAreaIntake,
   requestNotesText,
@@ -292,6 +296,12 @@ export default async function RequestsPage({
             phone: request.customer.phone,
           }
         : null,
+      identityReview: (() => {
+        const review = parseIntakeIdentityReview(request.description);
+        return review
+          ? { reason: review.reason, message: identityReviewOwnerMessage(review.reason) }
+          : null;
+      })(),
       estimate: request.estimates[0]
         ? {
             id: request.estimates[0].id,
