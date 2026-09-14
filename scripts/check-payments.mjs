@@ -25,6 +25,7 @@ const {
   explainMerchantReadiness,
   isMerchantPaymentReady,
   shouldOfferStripeOnboarding,
+  stripeConnectActionLabel,
 } = await import("@/lib/payments/readiness");
 const { invoiceAmountToCents, invoiceDueCents, payDepositButtonLabel, payInvoiceButtonLabel } = await import("@/lib/payments/money");
 const { INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES } = await import(
@@ -340,13 +341,24 @@ try {
     }).branch === "v1_pending_verification_no_outstanding",
   );
   check(
-    "Continue Stripe Setup is offered while Setup Required unless Stripe says unsupported",
-    shouldOfferStripeOnboarding("setup_required", "v1_submitted_no_outstanding") === true &&
-      shouldOfferStripeOnboarding("setup_required", "retrieve_failed") === true &&
+    "not created offers Connect Stripe",
+    shouldOfferStripeOnboarding("not_connected") === true &&
+      stripeConnectActionLabel("not_connected") === "Connect Stripe",
+  );
+  check(
+    "incomplete onboarding offers Continue Stripe setup",
+    shouldOfferStripeOnboarding("setup_required", "retrieve_failed") === true &&
       shouldOfferStripeOnboarding("setup_required", "not_ready") === true &&
       shouldOfferStripeOnboarding("setup_required", "user_currently_due") === true &&
-      shouldOfferStripeOnboarding("connected", "v1_charges_enabled") === false &&
-      shouldOfferStripeOnboarding("setup_required", "unsupported") === false,
+      shouldOfferStripeOnboarding("setup_required", "v1_submitted_no_outstanding") === true &&
+      stripeConnectActionLabel("setup_required", "retrieve_failed") === "Continue Stripe setup" &&
+      stripeConnectActionLabel("setup_required", "not_ready") === "Continue Stripe setup",
+  );
+  check(
+    "complete onboarding hides the Stripe setup action",
+    shouldOfferStripeOnboarding("connected", "v1_charges_enabled") === false &&
+      stripeConnectActionLabel("connected", "v1_charges_enabled") === null &&
+      stripeConnectActionLabel("setup_required", "unsupported") === null,
   );
 
   const v2Missing = Object.assign(new Error("No such account: 'acct_TESTLEAK123'"), {
@@ -597,6 +609,12 @@ try {
     settingsSrc.includes("!snapshot.payment.appUrlConfigured"),
   );
   check(
+    "Settings uses stripeConnectActionLabel for Connect / Continue Stripe setup",
+    settingsSrc.includes("stripeConnectActionLabel(snapshot.payment.status)") &&
+      settingsSrc.includes("ConnectStripeButton") &&
+      settingsSrc.includes("snapshot.payment.offerOnboarding"),
+  );
+  check(
     "success URL includes Checkout session id for reconcile",
     serviceSrc.includes("session_id={CHECKOUT_SESSION_ID}"),
   );
@@ -677,7 +695,42 @@ try {
   });
   check("Business A stores its own Stripe account id", Boolean(accountA?.stripeAccountId));
   check("onboarding URL is Stripe-hosted test setup, not an account-link dump in TBBT", onboardA.url.startsWith("https://connect.stripe.test/setup/"));
-  check("Business A is not payment-ready before charges are enabled", (await getBusinessPaymentStatus(prisma, businessA.business.id, provider)).paymentReady === false);
+  const incompleteA = await getBusinessPaymentStatus(prisma, businessA.business.id, provider);
+  check(
+    "created account with charges disabled is Setup Required from live Stripe readiness",
+    incompleteA.status === "setup_required" && incompleteA.paymentReady === false,
+  );
+  check(
+    "Setup Required offers Continue Stripe setup",
+    stripeConnectActionLabel(incompleteA.status, incompleteA.readinessDebug?.branch) ===
+      "Continue Stripe setup",
+  );
+  const noneB = await getBusinessPaymentStatus(prisma, businessB.business.id, provider);
+  check(
+    "no BusinessPaymentAccount is not created",
+    noneB.status === "not_connected" && noneB.stripeAccountId === null,
+  );
+  check(
+    "not created offers Connect Stripe",
+    stripeConnectActionLabel(noneB.status, noneB.readinessDebug?.branch) === "Connect Stripe",
+  );
+  const resumeA = await startStripeConnectOnboarding(
+    prisma,
+    accessA,
+    { appUrl: "http://payments.test" },
+    provider,
+  );
+  const stillAccountA = await prisma.businessPaymentAccount.findUnique({
+    where: { businessId: businessA.business.id },
+  });
+  check(
+    "Continue Stripe setup reuses the stored connected account",
+    stillAccountA?.stripeAccountId === accountA.stripeAccountId,
+  );
+  check(
+    "Continue Stripe setup creates a fresh hosted Account Link",
+    resumeA.url === `https://connect.stripe.test/setup/${accountA.stripeAccountId}`,
+  );
 
   console.log("\nTEST — Resume onboarding when the stored account is missing on this platform");
   const stale = await seedBusiness("Stale Connect");
@@ -695,8 +748,9 @@ try {
     staleStatus.status === "setup_required" && staleStatus.paymentReady === false,
   );
   check(
-    "Setup Required still offers Continue Stripe Setup when retrieve fails",
-    shouldOfferStripeOnboarding(staleStatus.status, staleStatus.readinessDebug?.branch) === true,
+    "Setup Required still offers Continue Stripe setup when retrieve fails",
+    stripeConnectActionLabel(staleStatus.status, staleStatus.readinessDebug?.branch) ===
+      "Continue Stripe setup",
   );
   const resumed = await startStripeConnectOnboarding(
     prisma,
@@ -1090,6 +1144,11 @@ try {
   provider.setChargesEnabled(accountA.stripeAccountId, true);
   const readyA = await getBusinessPaymentStatus(prisma, businessA.business.id, provider);
   check("Business A becomes payment-ready after Stripe charges enable", readyA.paymentReady === true);
+  check("payment-ready Stripe status is Connected", readyA.status === "connected");
+  check(
+    "complete onboarding does not offer Connect or Continue Stripe setup",
+    stripeConnectActionLabel(readyA.status, readyA.readinessDebug?.branch) === null,
+  );
   check(
     "ready Business A can start online checkout when app URL is set",
     readyA.appUrlConfigured === true && readyA.onlineCheckoutPossible === true,

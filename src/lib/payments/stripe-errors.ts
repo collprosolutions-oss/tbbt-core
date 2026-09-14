@@ -205,7 +205,7 @@ export function shouldFallBackToV1AccountLink(error: unknown): boolean {
 export function stripeConnectOnboardingFailureMessage(error: unknown): string {
   const summary = summarizeStripeError(error);
   if (summary.code === "accounts_v2_access_blocked") {
-    return "Stripe Connect Accounts v2 is not enabled on this platform. Enable Accounts v2 in the Stripe Dashboard, then try Continue Stripe Setup again.";
+    return "Stripe Connect Accounts v2 is not enabled on this platform. Enable Accounts v2 in the Stripe Dashboard, then try Continue Stripe setup again.";
   }
   if (summary.code === "forbidden" || summary.type === "StripePermissionError") {
     return "The live Stripe platform key is not allowed to create Connect onboarding links. In the CrewClock Stripe Dashboard (live mode), enable Connect and use the full platform secret key — not a restricted key or a connected-account key.";

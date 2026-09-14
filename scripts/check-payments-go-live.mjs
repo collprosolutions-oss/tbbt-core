@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const { explainPaymentsGoLive } = await import("@/lib/payments/go-live");
+const { stripeConnectActionLabel } = await import("@/lib/payments/readiness");
 const { shouldShowPayDeposit, shouldShowPayInvoice } = await import(
   "@/lib/payments/service"
 );
@@ -172,8 +173,21 @@ check(
     settingsSrc.includes("!snapshot.payment.appUrlConfigured"),
 );
 check(
-  "Settings Setup Required has Continue Stripe Setup instead of a circular Open Estimates link",
-  settingsSrc.includes("Continue Stripe Setup") &&
+  "not created shows Connect Stripe",
+  stripeConnectActionLabel("not_connected") === "Connect Stripe",
+);
+check(
+  "incomplete onboarding shows Continue Stripe setup",
+  stripeConnectActionLabel("setup_required", "retrieve_failed") === "Continue Stripe setup" &&
+    stripeConnectActionLabel("setup_required", "not_ready") === "Continue Stripe setup",
+);
+check(
+  "complete onboarding hides the setup action",
+  stripeConnectActionLabel("connected", "v1_charges_enabled") === null,
+);
+check(
+  "Settings Setup Required has Continue Stripe setup instead of a circular Open Estimates link",
+  settingsSrc.includes("stripeConnectActionLabel") &&
     settingsSrc.includes("ConnectStripeButton") &&
     settingsSrc.includes("snapshot.payment.offerOnboarding") &&
     settingsSrc.includes("showSettingsLink={false}"),

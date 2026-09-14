@@ -16,6 +16,7 @@ export {
   formatPaymentReadinessDebug,
   isMerchantPaymentReady,
   shouldOfferStripeOnboarding,
+  stripeConnectActionLabel,
 } from "@/lib/payments/readiness";
 export type {
   PaymentReadinessBranch,

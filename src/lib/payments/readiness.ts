@@ -97,6 +97,24 @@ export function shouldOfferStripeOnboarding(
   return branch !== "unsupported";
 }
 
+export type StripeConnectActionLabel = "Connect Stripe" | "Continue Stripe setup";
+
+/**
+ * Owner/admin Settings action for hosted Connect onboarding.
+ * not created → Connect Stripe (create account + Account Link).
+ * incomplete → Continue Stripe setup (fresh Account Link, same account).
+ * complete / unsupported → no action.
+ */
+export function stripeConnectActionLabel(
+  status: "not_connected" | "setup_required" | "connected",
+  branch?: PaymentReadinessBranch | null,
+): StripeConnectActionLabel | null {
+  if (!shouldOfferStripeOnboarding(status, branch)) {
+    return null;
+  }
+  return status === "not_connected" ? "Connect Stripe" : "Continue Stripe setup";
+}
+
 export function formatPaymentReadinessDebug(debug: PaymentReadinessDebug): string {
   const details =
     debug.cardPaymentsStatusDetails

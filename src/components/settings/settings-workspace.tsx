@@ -48,6 +48,7 @@ import {
   type SettingsSection,
 } from "@/lib/settings";
 import { explainPaymentsGoLive } from "@/lib/payments/go-live";
+import { stripeConnectActionLabel } from "@/lib/payments/readiness";
 import { cn } from "@/lib/utils";
 
 function readinessVariant(status: SettingsReadinessStatus) {
@@ -397,9 +398,8 @@ function SectionBody(props: SettingsWorkspaceProps) {
             {canEditPreferences && snapshot.payment.offerOnboarding ? (
               <ConnectStripeButton
                 label={
-                  snapshot.payment.status === "not_connected"
-                    ? "Connect Stripe"
-                    : "Continue Stripe Setup"
+                  stripeConnectActionLabel(snapshot.payment.status) ??
+                  "Connect Stripe"
                 }
                 disabled={
                   !snapshot.payment.platformConfigured ||
