@@ -31,7 +31,6 @@ import {
   TBBT_PILLARS,
   TBBT_PROMISE_STRIP,
   TBBT_SIGN_UP_HREF,
-  TBBT_TAGLINE,
   TBBT_TRADE_STATUS_LABEL,
   TBBT_TRADE_THUMBS,
   TBBT_TRADES,
@@ -114,11 +113,14 @@ export function TbbtHomePage() {
         </div>
       </section>
 
-      <section className="tbbt-band tbbt-band--tight">
+      <section className="tbbt-band tbbt-band--trades">
         <div className="tbbt-wrap">
           <div className="tbbt-split-head">
             <h2>Built for every trade</h2>
-            <p className="tbbt-muted">Same powerful platform. Customized for your trade.</p>
+            <p className="tbbt-muted">
+              TBBT is not just for Handyman. Same operating system. Customized
+              for your trade.
+            </p>
           </div>
           <div className="tbbt-trade-strip">
             {TBBT_TRADES.map((trade) => {
@@ -152,9 +154,16 @@ export function TbbtHomePage() {
         </div>
       </section>
 
-      <section className="tbbt-band">
-        <div className="tbbt-wrap tbbt-brg">
-          <article className="tbbt-brg-card">
+      <section className="tbbt-band tbbt-band--brg">
+        <div className="tbbt-wrap">
+          <div className="tbbt-brg-head">
+            <h2>Build. Run. Grow.</h2>
+            <p className="tbbt-muted">
+              Website, operations, and business insight — one connected system.
+            </p>
+          </div>
+          <div className="tbbt-brg">
+            <article className="tbbt-brg-card">
             <p className="tbbt-kicker">{buildPillar.kicker}</p>
             <h3>{buildPillar.title}</h3>
             <p>{buildPillar.body}</p>
@@ -166,7 +175,7 @@ export function TbbtHomePage() {
               <ArrowRight size={16} />
             </Link>
           </article>
-          <article className="tbbt-brg-card">
+            <article className="tbbt-brg-card">
             <p className="tbbt-kicker">{runPillar.kicker}</p>
             <h3>{runPillar.title}</h3>
             <p>{runPillar.body}</p>
@@ -178,16 +187,17 @@ export function TbbtHomePage() {
               <ArrowRight size={16} />
             </Link>
           </article>
-          <article className="tbbt-brg-card">
+            <article className="tbbt-brg-card">
             <p className="tbbt-kicker">{growPillar.kicker}</p>
             <h3>{growPillar.title}</h3>
             <p>{growPillar.body}</p>
             <TbbtGrowMock />
             <Link href="/features" className="tbbt-btn tbbt-btn--ghost">
-              See the Coach
+              See Reports
               <ArrowRight size={16} />
             </Link>
           </article>
+          </div>
         </div>
       </section>
 
@@ -196,7 +206,7 @@ export function TbbtHomePage() {
           <div className="tbbt-connected-head">
             <h2>It&apos;s all connected</h2>
             <p className="tbbt-muted">
-              From the first customer inquiry to the final payment — everything
+              From the first customer inquiry to the final payment, everything
               works together.
             </p>
             <Link href="/features" className="tbbt-btn tbbt-btn--primary">
@@ -212,7 +222,7 @@ export function TbbtHomePage() {
                 <div className="tbbt-connected-item" key={step}>
                   <div className="tbbt-connected-step">
                     <span className="tbbt-connected-icon">
-                      <Icon size={16} />
+                      <Icon size={18} />
                     </span>
                     {step}
                   </div>
@@ -236,10 +246,8 @@ export function TbbtHomePage() {
           <div>
             <h2>Ready to Build a Better Business?</h2>
             <p className="tbbt-muted tbbt-final-lead">
-              Join trades professionals who are saving time, winning more work,
-              and building the business they want — with TBBT. Start the 30-day
-              Founder Plan trial. No credit card required to begin. Handyman is
-              the first available trade.
+              Start the 30-day Founder Plan trial. No credit card required to
+              begin. Handyman is the first available trade.
             </p>
             <div className="tbbt-hero-actions tbbt-final-actions">
               <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
@@ -251,7 +259,11 @@ export function TbbtHomePage() {
           </div>
           <div className="tbbt-final-motto">
             <p className="tbbt-script tbbt-final-script">{TBBT_BRAND_MOTTO}</p>
-            <p className="tbbt-muted">{TBBT_TAGLINE}</p>
+            <p className="tbbt-final-tagline">
+              More Than Tools.
+              <br />
+              A Better Way Forward.
+            </p>
           </div>
         </div>
       </section>

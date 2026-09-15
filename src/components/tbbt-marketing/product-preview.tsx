@@ -19,12 +19,11 @@ export function TbbtDashboardMock() {
             <div className="tbbt-dash">
               <div className="tbbt-dash-rail">
                 <b>TBBT</b>
-                <span className="is-on" />
-                <span />
-                <span />
-                <span />
-                <span />
-                <span />
+                <span className="is-on">Jobs</span>
+                <span>Estimates</span>
+                <span>Schedule</span>
+                <span>Invoices</span>
+                <span>Time</span>
               </div>
               <div className="tbbt-dash-main">
                 <div className="tbbt-dash-hello">
@@ -138,23 +137,38 @@ export function TbbtRunPhones() {
 export function TbbtGrowMock() {
   return (
     <div className="tbbt-grow-ui" aria-hidden="true">
-      <header>
+      <div className="tbbt-grow-kpis">
+        <div>
+          <span>Jobs</span>
+          <b>This week</b>
+        </div>
+        <div>
+          <span>Invoices</span>
+          <b>Ready</b>
+        </div>
+        <div>
+          <span>Time</span>
+          <b>Recorded</b>
+        </div>
+      </div>
+      <div className="tbbt-grow-bars">
+        <i style={{ width: "78%" }} />
+        <i style={{ width: "62%" }} />
+        <i style={{ width: "44%" }} />
+      </div>
+      <ul>
+        <li>See completed jobs, invoices, and hours in one place</li>
+        <li>Turn finished work into marketing and reviews</li>
+      </ul>
+      <div className="tbbt-grow-coach">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/brand/tbbt-marketing/grow-coach.png" alt="" />
         <div>
           <span className="tbbt-badge">Planned</span>
-          <strong>Business Success OS</strong>
+          <strong>Business Coach</strong>
+          <p>Coming later — not a live AI feature today.</p>
         </div>
-      </header>
-      <p>
-        Coaching from recorded jobs, invoices, and time — not a live AI
-        feature today.
-      </p>
-      <ul>
-        <li>Review today&apos;s open estimates</li>
-        <li>Follow up after completed jobs</li>
-        <li>Stay on track for weekly goals</li>
-      </ul>
+      </div>
     </div>
   );
 }
