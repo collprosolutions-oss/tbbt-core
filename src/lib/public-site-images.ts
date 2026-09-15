@@ -14,11 +14,11 @@ import {
 } from "@/lib/authorization";
 import {
   HOMEPAGE_CATEGORY_LIMIT,
-  PUBLIC_ABOUT_STORY_IMAGE,
   PUBLIC_HOME_HERO_IMAGE,
   PUBLIC_SERVICES_HERO_IMAGE,
   isCollProRenoSlug,
   publicAboutHeroImage,
+  publicAboutStoryImage,
   publicCategoryPhoto,
   publicReviewsHeroImage,
   type PublicCatalogGroup,
@@ -456,7 +456,7 @@ export function buildPublicAboutImagePresentation(
       row: bySlot.get(`${PUBLIC_SITE_ABOUT_PAGE}:${PUBLIC_SITE_HERO_SLOT}`),
     }),
     story: resolvePublicSiteImage({
-      defaultSrc: PUBLIC_ABOUT_STORY_IMAGE,
+      defaultSrc: publicAboutStoryImage(slug),
       defaultPosition: PUBLIC_ABOUT_STORY_DEFAULT_POSITION,
       row: bySlot.get(`${PUBLIC_SITE_ABOUT_PAGE}:${PUBLIC_SITE_STORY_SLOT}`),
     }),
@@ -631,7 +631,7 @@ export async function loadWebsitePhotoEditorSlots(
       label: "About · Our Story",
       kind: "story",
       category: null,
-      defaultSrc: PUBLIC_ABOUT_STORY_IMAGE,
+      defaultSrc: publicAboutStoryImage(business?.slug),
       defaultPosition: PUBLIC_ABOUT_STORY_DEFAULT_POSITION,
       src: about.story.src,
       objectPosition: about.story.objectPosition,

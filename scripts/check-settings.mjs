@@ -143,11 +143,12 @@ try {
   check("Labor minimum values are stored for audit", serializeAuditValue("laborMinimum", { enabled: true, amount: "140" }) === JSON.stringify({ enabled: true, amount: "140" }));
   check("Future-rule copy is present", /future estimates/i.test(LABOR_MINIMUM_FUTURE_RULE_MESSAGE));
   check(
-    "Customer-facing phone/email/website are owner-editable, not deferred",
+    "Customer-facing phone/email/website/service area are owner-editable, not deferred",
     settingsSource.includes("BusinessPublicContactForm") &&
       settingsSource.includes("Customer-facing contact") &&
       settingsSource.includes("updateBusinessPublicContactOp") &&
-      !settingsSource.includes('DeferredField label="Phone"'),
+      !settingsSource.includes('DeferredField label="Phone"') &&
+      !settingsSource.includes('DeferredField label="Service area"'),
   );
 
   const readiness = buildSettingsReadiness({

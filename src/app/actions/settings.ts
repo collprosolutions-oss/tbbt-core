@@ -110,14 +110,18 @@ export async function updateBusinessPublicContactSettings(
       phone: readString(formData, "publicPhone"),
       email: readString(formData, "publicEmail"),
       website: readString(formData, "publicWebsite"),
+      serviceArea: readString(formData, "publicServiceAreaLabel"),
     });
     revalidateSettings();
     revalidatePath("/");
     revalidatePath(`/hire/${access.workspace.business.slug}`);
+    revalidatePath(`/hire/${access.workspace.business.slug}/about`);
+    revalidatePath(`/hire/${access.workspace.business.slug}/service-area`);
+    revalidatePath(`/hire/${access.workspace.business.slug}/contact`);
     revalidatePath("/invoices");
     return result.unchanged
       ? { message: "No customer-facing contact changes to save." }
-      : { message: "Customer-facing phone, email, and website updated on estimates, invoices, and the public site." };
+      : { message: "Customer-facing contact and service area updated on estimates, invoices, and the public site." };
   } catch (error) {
     return { error: settingsErrorMessage(error, "That contact information could not be saved.") };
   }

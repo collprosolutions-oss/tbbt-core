@@ -150,6 +150,10 @@ model Business {
   publicEmail         String?
   /// Customer-facing website shown on estimates, invoices, and the public site.
   publicWebsite       String?
+  /// Customer-facing primary service area shown on the public site.
+  /// Free-text label only (for example "Reno, NV"). Not a city list, and
+  /// not inferred from CollPro's Fort Myers map.
+  publicServiceAreaLabel String?
   /// Set when the OWNER finishes first-run business identity setup.
   /// Null means this business still needs that setup. Existing tenants are
   /// backfilled once when the column is first created — not inferred from
@@ -163,6 +167,14 @@ model Business {
   /// INSTALLED or SKIPPED once starterServicesSetupCompletedAt is set for a
   /// new owner. Existing backfilled tenants may leave this null.
   starterServicesSetupChoice String?
+  /// Set when the OWNER finishes (saves or skips) first-run public website
+  /// setup. Null means the step is still pending. Existing tenants are
+  /// backfilled once when the column is first created — not inferred from
+  /// About copy or service-area text being populated.
+  websiteSetupCompletedAt DateTime?
+  /// SAVED or SKIPPED once websiteSetupCompletedAt is set for a new owner.
+  /// Existing backfilled tenants may leave this null.
+  websiteSetupChoice String?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 

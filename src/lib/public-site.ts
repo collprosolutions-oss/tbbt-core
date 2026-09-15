@@ -120,8 +120,19 @@ export const SERVICE_AREA_COPY =
 export const GENERIC_SERVICE_AREA_COPY =
   "Service availability is confirmed from the project address you provide.";
 
-export function resolvePublicServiceAreaCopy(slug: string) {
-  return isCollProRenoSlug(slug) ? SERVICE_AREA_COPY : GENERIC_SERVICE_AREA_COPY;
+export function resolvePublicServiceAreaCopy(
+  businessOrSlug: string | { slug: string; publicServiceAreaLabel?: string | null },
+) {
+  const slug = typeof businessOrSlug === "string" ? businessOrSlug : businessOrSlug.slug;
+  if (isCollProRenoSlug(slug)) return SERVICE_AREA_COPY;
+  const stored =
+    typeof businessOrSlug === "object"
+      ? businessOrSlug.publicServiceAreaLabel?.trim() || ""
+      : "";
+  if (stored) {
+    return `Serving homeowners in ${stored}. Submit your project address and we'll confirm service availability for your location.`;
+  }
+  return GENERIC_SERVICE_AREA_COPY;
 }
 
 export const PRIMARY_CTA_LABEL = "Get a Free Quote";
@@ -299,6 +310,7 @@ export type PublicBusiness = {
   publicPhone?: string | null;
   publicEmail?: string | null;
   publicWebsite?: string | null;
+  publicServiceAreaLabel?: string | null;
 };
 
 export function isCollProRenoSlug(slug: string) {
@@ -337,6 +349,13 @@ export function publicLogoSrc(slug: string) {
 export function publicAboutHeroImage(slug?: string | null) {
   return slug && isCollProRenoSlug(slug)
     ? COLLPRO_ABOUT_HERO_IMAGE
+    : PUBLIC_ABOUT_HERO_IMAGE;
+}
+
+/** CollPro keeps its project story photo. Other tenants use the unbranded fallback. */
+export function publicAboutStoryImage(slug?: string | null) {
+  return slug && isCollProRenoSlug(slug)
+    ? PUBLIC_ABOUT_STORY_IMAGE
     : PUBLIC_ABOUT_HERO_IMAGE;
 }
 

@@ -77,7 +77,7 @@ export function PublicSiteShell({
         contactHref={publicContactPath(business.slug)}
         smsHref={textHref}
         categories={categories}
-        serviceAreaCopy={resolvePublicServiceAreaCopy(business.slug)}
+        serviceAreaCopy={resolvePublicServiceAreaCopy(business)}
       />
     </div>
   );

@@ -23,6 +23,7 @@ const ENSURE_PUBLIC_CONTACT_SQL = [
   `ALTER TABLE "Business" ADD COLUMN IF NOT EXISTS "publicPhone" TEXT`,
   `ALTER TABLE "Business" ADD COLUMN IF NOT EXISTS "publicEmail" TEXT`,
   `ALTER TABLE "Business" ADD COLUMN IF NOT EXISTS "publicWebsite" TEXT`,
+  `ALTER TABLE "Business" ADD COLUMN IF NOT EXISTS "publicServiceAreaLabel" TEXT`,
 ];
 
 let ensureSchemaPromise: Promise<void> | null = null;
@@ -78,6 +79,15 @@ export function parsePublicEmail(value: string | null | undefined): string | nul
   return trimmed;
 }
 
+export function parsePublicServiceAreaLabel(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) return null;
+  if (trimmed.length > 120) {
+    throw new Error("Service area is too long.");
+  }
+  return trimmed;
+}
+
 export function parsePublicWebsite(value: string | null | undefined): string | null {
   const trimmed = value?.trim() ?? "";
   if (!trimmed) return null;
@@ -122,6 +132,7 @@ export const BUSINESS_PUBLIC_CONTACT_SELECT = {
   publicPhone: true,
   publicEmail: true,
   publicWebsite: true,
+  publicServiceAreaLabel: true,
 } as const;
 
 export function contactFromBusinessRow(

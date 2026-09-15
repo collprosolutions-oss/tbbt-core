@@ -55,11 +55,17 @@ export function PublicAbout({
             <h2 className="mt-2 text-3xl font-extrabold uppercase tracking-tight">
               Built on experience
             </h2>
-            {paragraphs.map((paragraph) => (
-              <p key={paragraph} className="mt-4 text-base leading-7 text-muted-foreground">
-                {paragraph}
+            {paragraphs.length > 0 ? (
+              paragraphs.map((paragraph) => (
+                <p key={paragraph} className="mt-4 text-base leading-7 text-muted-foreground">
+                  {paragraph}
+                </p>
+              ))
+            ) : (
+              <p className="mt-4 text-base leading-7 text-muted-foreground">
+                This business has not published an About story yet.
               </p>
-            ))}
+            )}
           </div>
         </div>
       </section>

@@ -68,6 +68,7 @@ export type SettingsSnapshot = {
     publicPhone: string;
     publicEmail: string;
     publicWebsite: string;
+    publicServiceAreaLabel: string;
     displayedPhone: string | null;
     fallbackPhone: string | null;
   };
@@ -158,6 +159,7 @@ export async function loadSettingsSnapshot(
         publicPhone: true,
         publicEmail: true,
         publicWebsite: true,
+        publicServiceAreaLabel: true,
       },
     }),
     prisma.businessSettings.findUnique({
@@ -278,6 +280,7 @@ export async function loadSettingsSnapshot(
       publicPhone: business.publicPhone ?? "",
       publicEmail: business.publicEmail ?? "",
       publicWebsite: business.publicWebsite ?? "",
+      publicServiceAreaLabel: business.publicServiceAreaLabel ?? "",
       displayedPhone: contact.phone,
       fallbackPhone: publicPhone(business.slug),
     },

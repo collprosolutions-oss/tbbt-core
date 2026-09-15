@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
+import { postAuthenticationPath } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
 import { settingsErrorMessage } from "@/lib/settings-ops";
 import {
@@ -44,5 +45,13 @@ export async function installOnboardingStarterServicesAction(
 export async function skipOnboardingStarterServicesAction(): Promise<void> {
   const access = await requireBusinessAccess();
   await skipOnboardingStarterServicesOp(prisma, access);
-  redirect("/dashboard");
+  redirect(
+    postAuthenticationPath({
+      role: access.workspace.role,
+      business: {
+        ...access.workspace.business,
+        starterServicesSetupCompletedAt: new Date(),
+      },
+    }),
+  );
 }

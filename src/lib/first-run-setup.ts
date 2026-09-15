@@ -24,6 +24,10 @@ import {
   ownerNeedsStarterServicesSetup,
   STARTER_SERVICES_SETUP_PATH,
 } from "@/lib/starter-services-setup";
+import {
+  ownerNeedsWebsiteSetup,
+  WEBSITE_SETUP_PATH,
+} from "@/lib/website-setup";
 
 type SetupClient = PrismaClient | Prisma.TransactionClient;
 
@@ -71,6 +75,8 @@ export type FirstRunSetupBusiness = {
   firstRunSetupCompletedAt?: Date | null;
   starterServicesSetupCompletedAt?: Date | null;
   starterServicesSetupChoice?: string | null;
+  websiteSetupCompletedAt?: Date | null;
+  websiteSetupChoice?: string | null;
 };
 
 export function hasCompletedFirstRunSetup(business: FirstRunSetupBusiness) {
@@ -94,6 +100,7 @@ export function postAuthenticationPath(input: {
   if (input.role === "MEMBER") return "/field";
   if (ownerNeedsFirstRunSetup(input)) return FIRST_RUN_SETUP_PATH;
   if (ownerNeedsStarterServicesSetup(input)) return STARTER_SERVICES_SETUP_PATH;
+  if (ownerNeedsWebsiteSetup(input)) return WEBSITE_SETUP_PATH;
   return "/dashboard";
 }
 

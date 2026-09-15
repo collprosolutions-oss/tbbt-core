@@ -6,6 +6,7 @@ import { loadActiveWorkspaceMemberships } from "@/lib/business-contact";
 import { ensureFirstRunSetupSchema } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
 import { ensureStarterServicesSetupSchema } from "@/lib/starter-services-setup";
+import { ensureWebsiteSetupSchema } from "@/lib/website-setup";
 
 export type WorkspaceContext = {
   user: { id: string; email: string; name: string };
@@ -28,6 +29,7 @@ export async function requireWorkspace(): Promise<WorkspaceContext> {
   await ensureAppointmentConfirmationSchema(prisma);
   await ensureFirstRunSetupSchema(prisma);
   await ensureStarterServicesSetupSchema(prisma);
+  await ensureWebsiteSetupSchema(prisma);
   const memberships = await loadActiveWorkspaceMemberships(prisma, user.id);
 
   if (memberships.length === 0) {

@@ -118,7 +118,8 @@ check(
   "Starter-services screen offers Add and Skip, then Continue after install",
   starterForm.includes("Add Handyman Starter Services") &&
     starterForm.includes("Skip for now") &&
-    starterForm.includes("Continue to Dashboard") &&
+    starterForm.includes("Continue") &&
+    starterPage.includes("continueHref") &&
     starterPage.includes("Handyman starter services"),
 );
 check(
@@ -205,7 +206,7 @@ check(
         starterServicesSetupCompletedAt: new Date("2026-01-02T00:00:00Z"),
         starterServicesSetupChoice: STARTER_SERVICES_SETUP_INSTALLED,
       },
-    }) === "/dashboard",
+    }) === "/setup/website",
 );
 check(
   "Existing CollPro is not forced through starter-services onboarding",
@@ -438,7 +439,7 @@ try {
     cedarAfterInstall?.starterServicesSetupCompletedAt instanceof Date &&
       cedarAfterInstall?.starterServicesSetupChoice === STARTER_SERVICES_SETUP_INSTALLED &&
       postAuthenticationPath({ role: "OWNER", business: cedarAfterInstall }) ===
-        "/dashboard",
+        "/setup/website",
   );
 
   const secondInstall = await installOnboardingStarterServicesOp(prisma, ownerAccess);
@@ -482,7 +483,7 @@ try {
     skippedBiz?.starterServicesSetupCompletedAt instanceof Date &&
       skippedBiz?.starterServicesSetupChoice === STARTER_SERVICES_SETUP_SKIPPED &&
       skippedItems.length === 0 &&
-      postAuthenticationPath({ role: "OWNER", business: skippedBiz }) === "/dashboard",
+      postAuthenticationPath({ role: "OWNER", business: skippedBiz }) === "/setup/website",
   );
 
   const skippedInstall = await installOnboardingStarterServicesOp(prisma, skipAccess);

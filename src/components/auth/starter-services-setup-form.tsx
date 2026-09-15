@@ -12,7 +12,11 @@ import { Button, buttonVariants } from "@/components/ui/button";
 
 const initialState: StarterServicesSetupState = {};
 
-export function StarterServicesSetupForm() {
+export function StarterServicesSetupForm({
+  continueHref,
+}: {
+  continueHref: string;
+}) {
   const [state, installAction, pending] = useActionState(
     installOnboardingStarterServicesAction,
     initialState,
@@ -26,8 +30,8 @@ export function StarterServicesSetupForm() {
             <AlertDescription>{state.message}</AlertDescription>
           </Alert>
         ) : null}
-        <Link href="/dashboard" className={buttonVariants({ className: "w-full" })}>
-          Continue to Dashboard
+        <Link href={continueHref} className={buttonVariants({ className: "w-full" })}>
+          Continue
         </Link>
       </div>
     );

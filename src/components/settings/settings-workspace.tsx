@@ -250,12 +250,12 @@ function SectionBody(props: SettingsWorkspaceProps) {
               phone={snapshot.business.publicPhone}
               email={snapshot.business.publicEmail}
               website={snapshot.business.publicWebsite}
+              serviceArea={snapshot.business.publicServiceAreaLabel}
               fallbackPhone={snapshot.business.fallbackPhone}
               canEdit={canEditConsequential}
             />
           </div>
           <DeferredField label="Business address" detail="Not stored on the Business record yet." />
-          <DeferredField label="Service area" detail="Not stored as a business-level field yet." />
         </SectionCard>
       </div>
     );

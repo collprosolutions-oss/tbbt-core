@@ -104,7 +104,7 @@ export default async function PublicContactPage({ params }: PageProps) {
                   </p>
                   <p className="mt-6 text-xs font-extrabold tracking-wide uppercase">Service Area</p>
                   <p className="mt-2 text-sm text-muted-foreground">
-                    {resolvePublicServiceAreaCopy(site.business.slug)}
+                    {resolvePublicServiceAreaCopy(site.business)}
                   </p>
                 </div>
                 <div>
