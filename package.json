@@ -66,6 +66,7 @@
     "test:material-price-engine": "node --experimental-strip-types scripts/check-material-price-engine.mjs",
     "test:communications": "node --experimental-strip-types scripts/check-communications.mjs",
     "test:appointment-confirmation": "node --experimental-strip-types scripts/check-appointment-confirmation.mjs",
+    "test:dashboard-attention": "node --experimental-strip-types scripts/check-dashboard-attention.mjs",
     "test:public-intake-identity": "node --experimental-strip-types scripts/check-public-intake-identity.mjs",
     "test:test-data-cleanup": "node --experimental-strip-types scripts/check-test-data-cleanup.mjs"
   },
