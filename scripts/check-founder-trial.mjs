@@ -407,6 +407,20 @@ check(
   ended?.founderEligible === false && Boolean(ended?.founderEligibilityEndedAt),
 );
 check("A later restart does not restore founder eligibility", restart === null);
+const scheduledCancelFields = founderFieldsForSubscriptionStatus({
+  current: {
+    founderEligible: true,
+    founderConvertedAt: windowStart,
+    founderEligibilityEndedAt: null,
+  },
+  nextStatus: "active",
+  cancelAtPeriodEnd: true,
+  now: windowStart,
+});
+check(
+  "Scheduling cancellation at period end does not end Founder eligibility",
+  scheduledCancelFields === null,
+);
 
 try {
   resetSaasBillingSchemaEnsure();

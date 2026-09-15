@@ -880,6 +880,8 @@ model BusinessSaasSubscription {
   legacyExempt         Boolean   @default(false)
   /// Set once when existing tenants were marked legacy-exempt.
   saasFounderTrialBackfilledAt DateTime?
+  /// Latest Stripe event.created applied to this row. Stale events are ignored.
+  lastStripeEventCreatedAt DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
@@ -891,11 +893,12 @@ model BusinessSaasSubscription {
 /// Idempotency log for TBBT SaaS billing webhooks. Distinct from the
 /// Payment table used by Stripe Connect invoice/deposit Checkout.
 model SaasBillingWebhookEvent {
-  id            String   @id @default(cuid())
-  stripeEventId String   @unique
-  eventType     String
-  businessId    String?
-  processedAt   DateTime @default(now())
+  id                   String    @id @default(cuid())
+  stripeEventId        String    @unique
+  eventType            String
+  businessId           String?
+  stripeEventCreatedAt DateTime?
+  processedAt          DateTime  @default(now())
 
   @@index([businessId])
 }

@@ -326,7 +326,12 @@ export async function loadSettingsSnapshot(
       paymentReady: payment.paymentReady,
       onlineCheckoutPossible: payment.onlineCheckoutPossible,
     },
-    saasBilling,
+    saasBilling: {
+      ...saasBilling,
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+      stripePriceId: null,
+    },
     bank: {
       connected: false,
       lastVerifiedBalance: null,

@@ -34,6 +34,10 @@ export type { SaasEntitlement, SaasEntitlementState } from "@/lib/saas-billing/e
 export {
   SAAS_SUBSCRIPTION_REQUIRED_OWNER_MESSAGE,
   SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE,
+  SAAS_PAYMENT_PROBLEM_OWNER_MESSAGE,
+  SAAS_PAYMENT_PROBLEM_TEAM_MESSAGE,
+  SAAS_CANCELLATION_SCHEDULED_OWNER_MESSAGE,
+  SAAS_CANCELLATION_SCHEDULED_TEAM_MESSAGE,
 } from "@/lib/saas-billing/messages";
 export {
   inspectConfiguredFounderPrice,
@@ -58,10 +62,17 @@ export {
 export { constructStripeWebhookEventWithSecrets } from "@/lib/saas-billing/stripe";
 export {
   isBlockingSaasStatus,
+  isSaasPaymentProblemStatus,
+  isSaasSubscribedStatus,
+  isSaasTerminatedStatus,
   SAAS_SUBSCRIPTION_STATUS_NONE,
   SaasBillingError,
   saasBillingErrorMessage,
   saasStatusLabel,
 } from "@/lib/saas-billing/types";
+export {
+  isStaleSaasStripeEvent,
+  resolveNextSaasStatus,
+} from "@/lib/saas-billing/lifecycle";
 export type { ParsedSaasBillingEvent, SaasBillingProvider } from "@/lib/saas-billing/types";
 export type { SaasBillingSnapshot } from "@/lib/saas-billing/ops";

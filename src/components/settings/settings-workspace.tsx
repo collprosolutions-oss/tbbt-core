@@ -51,8 +51,12 @@ import {
   TBBT_SAAS_BILLING_DESCRIPTION,
   TBBT_SAAS_BILLING_OWNER_ONLY_MESSAGE,
   TBBT_SAAS_BILLING_UNCONFIGURED_MESSAGE,
+  TBBT_SAAS_CANCELLATION_SCHEDULED_MESSAGE,
+  TBBT_SAAS_CANCELLATION_SCHEDULED_TEAM_MESSAGE,
   TBBT_SAAS_CHECKOUT_CANCELED_MESSAGE,
   TBBT_SAAS_CHECKOUT_SUCCESS_MESSAGE,
+  TBBT_SAAS_PAYMENT_PROBLEM_OWNER_MESSAGE,
+  TBBT_SAAS_PAYMENT_PROBLEM_TEAM_MESSAGE,
   TBBT_FOUNDER_PLAN_DESCRIPTION,
   TBBT_FOUNDER_TRIAL_NO_CARD_MESSAGE,
   type SettingsReadinessStatus,
@@ -468,6 +472,26 @@ function SectionBody(props: SettingsWorkspaceProps) {
             {billing.founderPriceWarning}
           </p>
         ) : null}
+        {billing.entitlement.state === "payment_problem" ? (
+          <p className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+            {canEditConsequential
+              ? TBBT_SAAS_PAYMENT_PROBLEM_OWNER_MESSAGE
+              : TBBT_SAAS_PAYMENT_PROBLEM_TEAM_MESSAGE}
+          </p>
+        ) : null}
+        {billing.cancelAtPeriodEnd && billing.entitlement.state === "subscribed_active" ? (
+          <p className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+            {canEditConsequential
+              ? TBBT_SAAS_CANCELLATION_SCHEDULED_MESSAGE
+              : TBBT_SAAS_CANCELLATION_SCHEDULED_TEAM_MESSAGE}
+            {periodLabel ? ` Access through ${periodLabel}.` : ""}
+          </p>
+        ) : null}
+        {billing.entitlement.state === "subscription_required" ? (
+          <p className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
+            A TBBT subscription is required to keep operating. Existing records are retained.
+          </p>
+        ) : null}
         <dl className="grid gap-3 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-muted-foreground">Plan</dt>
@@ -483,7 +507,11 @@ function SectionBody(props: SettingsWorkspaceProps) {
           </div>
           <div>
             <dt className="text-muted-foreground">Subscription status</dt>
-            <dd className="font-medium">{billing.statusLabel}</dd>
+            <dd className="font-medium">
+              {billing.entitlement.state === "subscribed_active" && billing.cancelAtPeriodEnd
+                ? "Active · cancellation scheduled"
+                : billing.statusLabel}
+            </dd>
           </div>
           <div>
             <dt className="text-muted-foreground">Trial status</dt>
@@ -512,11 +540,13 @@ function SectionBody(props: SettingsWorkspaceProps) {
             <dd className="font-medium">{billing.founderEligible ? "Yes, while continuously subscribed" : "No"}</dd>
           </div>
           <div>
-            <dt className="text-muted-foreground">Current period ends</dt>
+            <dt className="text-muted-foreground">
+              {billing.cancelAtPeriodEnd ? "Access through" : "Current period ends"}
+            </dt>
             <dd className="font-medium">{periodLabel ?? "Not available yet"}</dd>
           </div>
           <div>
-            <dt className="text-muted-foreground">Cancel at period end</dt>
+            <dt className="text-muted-foreground">Cancellation scheduled</dt>
             <dd className="font-medium">{billing.cancelAtPeriodEnd ? "Yes" : "No"}</dd>
           </div>
         </dl>
