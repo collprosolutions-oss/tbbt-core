@@ -56,6 +56,7 @@ const {
 } = await import("@/lib/selected-work");
 const { groupServiceCatalogItemsByCategory } = await import("@/lib/service-catalog-category");
 const { isPublicWebsitePath } = await import("@/lib/public-website-paths");
+const { isStripeWebhookPath, STRIPE_WEBHOOK_PATH } = await import("@/lib/stripe-webhook-path");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:43217";
 const baseUrl = process.env.DATABASE_URL;
@@ -199,7 +200,7 @@ check("Unauthenticated / is the public homepage, not sign-in",
     !/if \(pathname === ["']\/["']\)/.test(proxySrc));
 check("Signed-in visitors are not redirected away from /",
   isPublicWebsitePath("/") &&
-    proxySrc.includes("if (isPublicWebsitePath(pathname))") &&
+    /if \(isPublicWebsitePath\(pathname\)/.test(proxySrc) &&
     !/if \(pathname === ["']\/["']\)[\s\S]{0,120}\/dashboard/.test(proxySrc));
 check("Auth proxy redirects stay on the current Preview host",
   proxySrc.includes("navigationRedirectUrl") &&
@@ -216,6 +217,20 @@ check("Public hire, intake, and stored website photos stay public",
   isPublicWebsitePath("/hire/collpro-reno") &&
     isPublicWebsitePath("/r/collpro-reno") &&
     isPublicWebsitePath("/api/storage/public/asset_workshop"));
+check(
+  "Stripe webhook path is not a public website path and is an exact route",
+  !isPublicWebsitePath("/api/stripe/webhook") &&
+    isStripeWebhookPath("/api/stripe/webhook") &&
+    STRIPE_WEBHOOK_PATH === "/api/stripe/webhook" &&
+    !isStripeWebhookPath("/api/stripe/webhook/extra") &&
+    !isStripeWebhookPath("/settings"),
+);
+check(
+  "Auth proxy matcher excludes the Stripe webhook so Stripe POSTs are not redirected",
+  proxySrc.includes("isStripeWebhookPath") &&
+    proxySrc.includes("api/stripe/webhook") &&
+    proxySrc.includes("isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname)"),
+);
 check("Services page does not repeat a pre-footer quote CTA",
   !readRepo("src/app/hire/[slug]/services/page.tsx").includes("PublicCtaBar") &&
     !readRepo("src/app/hire/[slug]/services/page.tsx").includes("Ready to get started"));

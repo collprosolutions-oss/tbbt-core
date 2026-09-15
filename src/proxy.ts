@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/cookies";
 import { navigationRedirectUrl } from "@/lib/navigation-origin";
 import { isPublicWebsitePath } from "@/lib/public-website-paths";
+import { isStripeWebhookPath } from "@/lib/stripe-webhook-path";
 
 const AUTH_PATHS = ["/sign-in", "/sign-up"];
 
@@ -32,7 +33,7 @@ export function proxy(request: NextRequest) {
 
   // `/` is always the public website. A signed-in owner still reaches
   // /dashboard by going there directly; the session must not hijack Home.
-  if (isPublicWebsitePath(pathname)) {
+  if (isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname)) {
     return NextResponse.next();
   }
 
@@ -52,6 +53,6 @@ export const config = {
     // "brand" is public/brand -- static TBBT/business logo assets (see
     // src/lib/business-branding.ts) that must load unauthenticated, same
     // as the other static files already excluded here.
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/|api/stripe/webhook).*)",
   ],
 };
