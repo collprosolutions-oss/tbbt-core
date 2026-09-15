@@ -8,10 +8,23 @@ import {
   publicProjectCaption,
   type ProjectFilter,
 } from "@/lib/public-projects";
+import { isCollProRenoSlug } from "@/lib/public-site";
 
-export function PublicProjectsGallery() {
+export function PublicProjectsGallery({ slug }: { slug: string }) {
   const [filter, setFilter] = useState<ProjectFilter>("all");
   const projects = useMemo(() => filterPublicProjects(filter), [filter]);
+
+  if (!isCollProRenoSlug(slug)) {
+    return (
+      <div className="bg-[var(--public-paper)]">
+        <div className="public-container py-12">
+          <p className="max-w-xl text-sm leading-6 text-muted-foreground">
+            Project photos will appear here when this business publishes them.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-[var(--public-paper)]">

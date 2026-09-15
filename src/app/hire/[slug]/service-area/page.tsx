@@ -38,7 +38,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   return {
     title: { absolute: `Service Area | ${name}` },
     description: site
-      ? resolvePublicServiceAreaCopy(site.business.slug)
+      ? resolvePublicServiceAreaCopy(site.business)
       : SERVICE_AREA_COPY,
   };
 }
@@ -58,10 +58,11 @@ export default async function PublicServiceAreaPage({ params }: PageProps) {
   const phone = publicPhone(site.business);
   const textHref = smsHref(phone);
   const requestHref = publicRequestPath(site.business.slug);
-  const areaCopy = resolvePublicServiceAreaCopy(site.business.slug);
+  const areaCopy = resolvePublicServiceAreaCopy(site.business);
 
   if (!isCollProRenoSlug(site.business.slug)) {
     const area = resolveBusinessServiceArea(site.business);
+    const storedLabel = site.business.publicServiceAreaLabel?.trim() || "";
     return (
       <PublicSiteShell business={site.business} groups={site.groups}>
         <main>
@@ -85,11 +86,12 @@ export default async function PublicServiceAreaPage({ params }: PageProps) {
                     <li key={city}>{city}</li>
                   ))}
                 </ul>
-              ) : (
-                <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">
-                  {areaCopy}
-                </p>
-              )}
+              ) : storedLabel ? (
+                <p className="mt-3 font-semibold">{storedLabel}</p>
+              ) : null}
+              <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">
+                {areaCopy}
+              </p>
             </div>
           </section>
           <PublicCtaBar

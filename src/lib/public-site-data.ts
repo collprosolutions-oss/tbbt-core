@@ -29,6 +29,7 @@ export async function loadPublicBusiness(slug: string) {
       publicPhone: true,
       publicEmail: true,
       publicWebsite: true,
+      publicServiceAreaLabel: true,
     },
   });
 }

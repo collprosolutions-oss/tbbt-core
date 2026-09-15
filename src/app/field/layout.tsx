@@ -8,6 +8,10 @@ import {
   ownerNeedsStarterServicesSetup,
   STARTER_SERVICES_SETUP_PATH,
 } from "@/lib/starter-services-setup";
+import {
+  ownerNeedsWebsiteSetup,
+  WEBSITE_SETUP_PATH,
+} from "@/lib/website-setup";
 import { requireWorkspace } from "@/lib/workspace";
 
 /**
@@ -31,6 +35,9 @@ export default async function FieldLayout({
   }
   if (ownerNeedsStarterServicesSetup(workspace)) {
     redirect(STARTER_SERVICES_SETUP_PATH);
+  }
+  if (ownerNeedsWebsiteSetup(workspace)) {
+    redirect(WEBSITE_SETUP_PATH);
   }
 
   return (

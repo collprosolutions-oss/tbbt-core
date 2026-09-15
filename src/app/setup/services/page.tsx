@@ -14,6 +14,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   ownerNeedsFirstRunSetup,
   FIRST_RUN_SETUP_PATH,
+  postAuthenticationPath,
 } from "@/lib/first-run-setup";
 import {
   ownerNeedsStarterServicesSetup,
@@ -40,8 +41,17 @@ export default async function StarterServicesSetupPage() {
     workspace.business.starterServicesSetupChoice === STARTER_SERVICES_SETUP_INSTALLED;
 
   if (!ownerNeedsStarterServicesSetup(workspace) && !installed) {
-    redirect("/dashboard");
+    redirect(postAuthenticationPath(workspace));
   }
+
+  const continueHref = postAuthenticationPath({
+    ...workspace,
+    business: {
+      ...workspace.business,
+      starterServicesSetupCompletedAt:
+        workspace.business.starterServicesSetupCompletedAt ?? new Date(),
+    },
+  });
 
   return (
     <Card>
@@ -58,16 +68,15 @@ export default async function StarterServicesSetupPage() {
           <div className="space-y-4">
             <Alert>
               <AlertDescription>
-                Handyman starter services are ready. Continue to the Dashboard
-                when you are.
+                Handyman starter services are ready. Continue when you are.
               </AlertDescription>
             </Alert>
-            <Link href="/dashboard" className={buttonVariants({ className: "w-full" })}>
-              Continue to Dashboard
+            <Link href={continueHref} className={buttonVariants({ className: "w-full" })}>
+              Continue
             </Link>
           </div>
         ) : (
-          <StarterServicesSetupForm />
+          <StarterServicesSetupForm continueHref={continueHref} />
         )}
       </CardContent>
     </Card>

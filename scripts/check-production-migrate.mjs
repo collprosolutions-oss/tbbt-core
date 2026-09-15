@@ -245,6 +245,37 @@ check(
   workspaceLoader.includes("ensureStarterServicesSetupSchema"),
 );
 
+const websiteSetupMigration = readFileSync(
+  new URL("../prisma/migrations/20260915160000_add_website_setup/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Website setup migration is additive and one-shot",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(websiteSetupMigration) &&
+    websiteSetupMigration.includes('ADD COLUMN "websiteSetupCompletedAt"') &&
+    websiteSetupMigration.includes('ADD COLUMN "websiteSetupChoice"') &&
+    websiteSetupMigration.includes("publicServiceAreaLabel") &&
+    websiteSetupMigration.includes("information_schema.columns") &&
+    websiteSetupMigration.includes("IF NOT EXISTS"),
+);
+
+const websiteSetup = readFileSync(
+  new URL("../src/lib/website-setup.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers website setup columns skipped by migrate",
+  websiteSetup.includes("Preview shares Production and skips migrate") &&
+    websiteSetup.includes("ensureWebsiteSetupSchema") &&
+    websiteSetup.includes("WEBSITE_SETUP_ENSURE_SQL") &&
+    websiteSetup.includes('ADD COLUMN "websiteSetupCompletedAt"'),
+);
+
+check(
+  "Authenticated workspace load ensures website setup columns before Business SELECT",
+  workspaceLoader.includes("ensureWebsiteSetupSchema"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

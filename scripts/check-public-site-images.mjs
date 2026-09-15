@@ -371,7 +371,7 @@ check("Services hero and category slots start on catalog defaults",
 const aboutPresented = buildPublicAboutImagePresentation([]);
 check("About hero and story slots start on company/handyman defaults",
   aboutPresented.hero.src.includes("craftsman-hero") &&
-    aboutPresented.story.src.includes("door-install"));
+    aboutPresented.story.src.includes("craftsman-hero"));
 check("Unbranded TBBT About hero fallback stays generic",
   PUBLIC_ABOUT_HERO_IMAGE === "/brand/illustrative/craftsman-hero.jpg" &&
     publicAboutHeroImage("acme-handyman") === PUBLIC_ABOUT_HERO_IMAGE);
@@ -379,10 +379,13 @@ const collproAbout = buildPublicAboutImagePresentation([], "collpro-reno");
 check("CollPro About hero default is the CollPro-specific asset",
   publicAboutHeroImage("collpro-reno") === COLLPRO_ABOUT_HERO_IMAGE &&
     collproAbout.hero.src === COLLPRO_ABOUT_HERO_IMAGE &&
+    collproAbout.story.src.includes("door-install") &&
     !collproAbout.hero.isOverride);
 check("Another subscriber does not inherit the CollPro About hero",
   buildPublicAboutImagePresentation([], "other-handyman").hero.src ===
-    PUBLIC_ABOUT_HERO_IMAGE);
+    PUBLIC_ABOUT_HERO_IMAGE &&
+    buildPublicAboutImagePresentation([], "other-handyman").story.src ===
+      PUBLIC_ABOUT_HERO_IMAGE);
 check("CollPro About hero asset is stored on disk",
   existsSync(new URL("../public/brand/collpro/about-hero.png", import.meta.url)));
 

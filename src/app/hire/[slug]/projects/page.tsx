@@ -49,7 +49,7 @@ export default async function PublicProjectsPage({ params }: PageProps) {
           smsHref={smsHref(phone)}
           requestHref={publicRequestPath(site.business.slug)}
         />
-        <PublicProjectsGallery />
+        <PublicProjectsGallery slug={site.business.slug} />
         <PublicCtaBar
           title="Have a project in mind?"
           body="Let's make it happen. We're here to help."

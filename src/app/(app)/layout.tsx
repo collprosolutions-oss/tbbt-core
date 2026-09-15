@@ -10,6 +10,10 @@ import {
   ownerNeedsStarterServicesSetup,
   STARTER_SERVICES_SETUP_PATH,
 } from "@/lib/starter-services-setup";
+import {
+  ownerNeedsWebsiteSetup,
+  WEBSITE_SETUP_PATH,
+} from "@/lib/website-setup";
 import { getTrade } from "@/lib/trades";
 import { requireWorkspace } from "@/lib/workspace";
 
@@ -25,6 +29,9 @@ export default async function AppLayout({
   }
   if (ownerNeedsStarterServicesSetup(workspace)) {
     redirect(STARTER_SERVICES_SETUP_PATH);
+  }
+  if (ownerNeedsWebsiteSetup(workspace)) {
+    redirect(WEBSITE_SETUP_PATH);
   }
 
   // Server-side READ gate for the whole management console: every page
