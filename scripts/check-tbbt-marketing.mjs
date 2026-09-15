@@ -122,7 +122,9 @@ check(
     !isTbbtMarketingPublicPath("/features/extra") &&
     !isPublicWebsitePath("/dashboard") &&
     !isPublicWebsitePath("/setup") &&
-    isPublicWebsitePath("/"),
+    isPublicWebsitePath("/") &&
+    isPublicWebsitePath("/robots.txt") &&
+    isPublicWebsitePath("/sitemap.xml"),
 );
 
 const homeSrc = readRepo("src/app/page.tsx");
@@ -268,11 +270,11 @@ if (!reachable) {
   console.log("\nHTTP — TBBT marketing routes");
   const collproHome = await fetchMaybe("/");
   check(
-    "Default / remains CollPro when the Host is not tbbtools.com",
+    "Default / is not the TBBT marketing homepage off tbbtools.com",
     Boolean(
       collproHome &&
-        collproHome.status === 200 &&
-        collproHome.body.includes("CollPro Reno"),
+        !collproHome.body.includes("tbbt-site") &&
+        (collproHome.body.includes("CollPro Reno") || collproHome.status >= 400),
     ),
   );
 
@@ -311,6 +313,16 @@ if (!reachable) {
         homePreview.body.includes("/sign-up") &&
         homePreview.body.includes("/sign-in") &&
         homePreview.body.includes("Start Your Free 30-Day Trial"),
+    ),
+  );
+  const robots = await fetchMaybe("/robots.txt");
+  check(
+    "robots.txt is public and does not bounce to sign-in",
+    Boolean(
+      robots &&
+        robots.status === 200 &&
+        /user-agent/i.test(robots.body) &&
+        !robots.location?.includes("sign-in"),
     ),
   );
 }

@@ -9,6 +9,8 @@ import { isTbbtMarketingPublicPath } from "@/lib/tbbt-marketing-host";
 export function isPublicWebsitePath(pathname: string) {
   return (
     pathname === "/" ||
+    pathname === "/robots.txt" ||
+    pathname === "/sitemap.xml" ||
     isTbbtMarketingPublicPath(pathname) ||
     pathname.startsWith("/r/") ||
     pathname.startsWith("/e/") ||
