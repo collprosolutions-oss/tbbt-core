@@ -176,6 +176,7 @@ check(
 
 const pricingSrc = readRepo("src/components/tbbt-marketing/pricing.tsx");
 const homeMarketingSrc = readRepo("src/components/tbbt-marketing/home.tsx");
+const homeCssSrc = readRepo("src/components/tbbt-marketing/tbbt-home.css");
 const resourcesSrc = readRepo("src/components/tbbt-marketing/resources.tsx");
 const aboutSrc = readRepo("src/components/tbbt-marketing/about.tsx");
 const videoSrc = readRepo("src/components/tbbt-marketing/watch-video.tsx");
@@ -212,7 +213,10 @@ check(
   "Home keeps BUILD / RUN / GROW and the connected lifecycle",
   homeMarketingSrc.includes("TBBT_PILLARS") &&
     homeMarketingSrc.includes("TBBT_WORKFLOW_STEPS") &&
-    homeMarketingSrc.includes("TBBT_TRIAL_CTA_LABEL"),
+    homeMarketingSrc.includes("TBBT_TRIAL_CTA_LABEL") &&
+    homeMarketingSrc.includes("tbbt-hero-cinematic") &&
+    homeCssSrc.includes("hero-workshop.png") &&
+    homeMarketingSrc.includes("hero-tradespro.png"),
 );
 check(
   "Core feature cards match the requested set",

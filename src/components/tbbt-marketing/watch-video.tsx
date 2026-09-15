@@ -1,19 +1,22 @@
 "use client";
 
 import { useState } from "react";
+import { Play } from "lucide-react";
 
-export function TbbtWatchVideoButton() {
+export function TbbtWatchVideoButton({ className = "tbbt-btn tbbt-btn--ghost tbbt-btn--lg" }: { className?: string }) {
   const [open, setOpen] = useState(false);
 
   return (
     <div>
       <button
         type="button"
-        className="tbbt-btn tbbt-btn--ghost tbbt-btn--lg"
+        className={className}
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
+        <Play size={16} />
         Watch Video
+        <span className="tbbt-soon">Coming Soon</span>
       </button>
       {open ? (
         <p className="tbbt-video-note" role="status">

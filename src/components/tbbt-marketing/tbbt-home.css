@@ -1,0 +1,601 @@
+.tbbt-home {
+  --tbbt-script: var(--font-tbbt-script), "Palatino Linotype", Palatino, serif;
+}
+
+.tbbt-hero-cinematic {
+  position: relative;
+  overflow: hidden;
+  min-height: 44rem;
+  background:
+    linear-gradient(90deg, rgba(5, 8, 16, 0.92) 0%, rgba(5, 8, 16, 0.55) 42%, rgba(5, 8, 16, 0.28) 100%),
+    url("/brand/tbbt-marketing/hero-workshop.png") center / cover no-repeat,
+    #070b14;
+}
+
+.tbbt-hero-cinematic::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 5rem;
+  background: linear-gradient(transparent, var(--tbbt-bg));
+  pointer-events: none;
+}
+
+.tbbt-hero-stage {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 1.5rem;
+  padding: 2.4rem 0 2.2rem;
+}
+
+.tbbt-eyebrow {
+  color: #f3f6fb;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.tbbt-hero-copy h1 {
+  margin: 0.7rem 0 1rem;
+  font-size: clamp(2.6rem, 6.4vw, 4.85rem);
+  line-height: 0.94;
+  letter-spacing: -0.045em;
+  font-weight: 800;
+}
+
+.tbbt-accent {
+  color: var(--tbbt-orange);
+}
+
+.tbbt-hero-copy p {
+  margin: 0;
+  color: #d5dceb;
+  font-size: 1.05rem;
+  line-height: 1.55;
+  max-width: 34rem;
+}
+
+.tbbt-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.8rem;
+  margin-top: 1.4rem;
+}
+
+.tbbt-benefit-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem 1rem;
+  margin-top: 1.6rem;
+}
+
+.tbbt-benefit {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: #e8edf7;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.tbbt-benefit svg {
+  color: var(--tbbt-orange);
+  flex-shrink: 0;
+}
+
+.tbbt-hero-media {
+  display: grid;
+  gap: 1rem;
+  align-items: end;
+}
+
+.tbbt-hero-pro {
+  position: relative;
+  min-height: 22rem;
+}
+
+.tbbt-hero-pro img {
+  width: min(100%, 28rem);
+  height: 28rem;
+  object-fit: cover;
+  object-position: 50% 12%;
+  filter: drop-shadow(0 24px 40px rgba(0, 0, 0, 0.45));
+}
+
+.tbbt-script {
+  font-family: var(--tbbt-script);
+  color: #fff;
+  line-height: 1.05;
+}
+
+.tbbt-hero-script {
+  position: absolute;
+  left: 0.2rem;
+  top: 1.2rem;
+  max-width: 11rem;
+  font-size: 1.7rem;
+  text-shadow: 0 10px 24px rgba(0, 0, 0, 0.55);
+}
+
+.tbbt-dash-stack {
+  position: relative;
+  min-height: 22rem;
+}
+
+.tbbt-platform-card {
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 3;
+  width: min(100%, 16.5rem);
+  border: 1px solid var(--tbbt-line);
+  border-radius: 1rem;
+  background: rgba(10, 16, 28, 0.88);
+  backdrop-filter: blur(10px);
+  padding: 0.85rem 0.95rem;
+}
+
+.tbbt-platform-card strong {
+  display: block;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 0.55rem;
+}
+
+.tbbt-platform-card ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem 0.7rem;
+  color: #d7deec;
+  font-size: 0.72rem;
+}
+
+.tbbt-laptop {
+  width: 100%;
+  border: 1px solid var(--tbbt-line-strong);
+  border-radius: 1.1rem 1.1rem 0.4rem 0.4rem;
+  background: #0b1220;
+  box-shadow: 0 30px 70px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.tbbt-laptop-lid {
+  padding: 0.45rem 0.55rem 0;
+}
+
+.tbbt-laptop-screen {
+  border-radius: 0.55rem 0.55rem 0 0;
+  overflow: hidden;
+  background: #10192c;
+  min-height: 16.5rem;
+}
+
+.tbbt-dash {
+  display: grid;
+  grid-template-columns: 3.4rem 1fr;
+  min-height: 16.5rem;
+}
+
+.tbbt-dash-rail {
+  background: #0a1222;
+  padding: 0.7rem 0.4rem;
+  display: grid;
+  align-content: start;
+  gap: 0.45rem;
+}
+
+.tbbt-dash-rail span {
+  height: 0.42rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.tbbt-dash-rail span.is-on {
+  background: var(--tbbt-orange);
+}
+
+.tbbt-dash-main {
+  padding: 0.75rem;
+  display: grid;
+  align-content: start;
+  gap: 0.55rem;
+}
+
+.tbbt-dash-hello {
+  font-size: 0.78rem;
+}
+
+.tbbt-dash-hello strong {
+  display: block;
+  font-size: 0.95rem;
+}
+
+.tbbt-dash-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.tbbt-dash-kpis div {
+  background: #17233a;
+  border: 1px solid var(--tbbt-line);
+  border-radius: 0.55rem;
+  padding: 0.45rem;
+}
+
+.tbbt-dash-kpis span {
+  display: block;
+  color: var(--tbbt-muted);
+  font-size: 0.58rem;
+}
+
+.tbbt-dash-kpis b {
+  font-size: 0.95rem;
+}
+
+.tbbt-dash-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  background: rgba(7, 11, 20, 0.55);
+  border: 1px solid var(--tbbt-line);
+  border-radius: 0.45rem;
+  padding: 0.38rem 0.5rem;
+  font-size: 0.68rem;
+}
+
+.tbbt-phone-ui {
+  width: 9.4rem;
+  border: 3px solid #1b2438;
+  border-radius: 1.4rem;
+  background: #0b1220;
+  padding: 0.55rem 0.5rem 0.7rem;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+}
+
+.tbbt-phone-ui .tbbt-notch {
+  width: 2.6rem;
+  height: 0.28rem;
+  margin: 0 auto 0.5rem;
+  border-radius: 999px;
+  background: #2d3a54;
+}
+
+.tbbt-phone-ui h3 {
+  margin: 0 0 0.45rem;
+  font-size: 0.78rem;
+}
+
+.tbbt-phone-item {
+  border: 1px solid var(--tbbt-line);
+  border-radius: 0.45rem;
+  padding: 0.35rem 0.4rem;
+  margin-bottom: 0.32rem;
+  font-size: 0.62rem;
+  background: #141d30;
+}
+
+.tbbt-hero-phone {
+  position: absolute;
+  right: 0.4rem;
+  bottom: -0.4rem;
+  z-index: 4;
+}
+
+.tbbt-band {
+  padding: 2.4rem 0;
+}
+
+.tbbt-band--tight {
+  padding: 1.6rem 0 2rem;
+}
+
+.tbbt-split-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: end;
+  margin-bottom: 1.1rem;
+}
+
+.tbbt-split-head h2,
+.tbbt-connected-head h2 {
+  margin: 0;
+  font-size: clamp(1.4rem, 3vw, 2rem);
+  letter-spacing: 0.02em;
+}
+
+.tbbt-trade-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.tbbt-thumb {
+  display: grid;
+  gap: 0.4rem;
+  text-decoration: none;
+}
+
+.tbbt-thumb-photo {
+  aspect-ratio: 4 / 3;
+  border-radius: 0.7rem;
+  overflow: hidden;
+  background: #121a2c;
+  border: 1px solid var(--tbbt-line);
+}
+
+.tbbt-thumb-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tbbt-thumb-fallback {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--tbbt-orange);
+  background: #141c2e;
+}
+
+.tbbt-thumb figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.3rem;
+  align-items: center;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.tbbt-thumb .tbbt-badge {
+  font-size: 0.58rem;
+  padding: 0.12rem 0.38rem;
+}
+
+.tbbt-brg {
+  display: grid;
+  gap: 1rem;
+}
+
+.tbbt-brg-card {
+  border: 1px solid var(--tbbt-line);
+  border-radius: 1.15rem;
+  background: #10192b;
+  padding: 1.2rem 1.15rem 1.3rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.tbbt-brg-card h3 {
+  margin: 0.15rem 0 0.35rem;
+  font-size: 1.35rem;
+}
+
+.tbbt-brg-card p {
+  margin: 0;
+  color: var(--tbbt-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.tbbt-device-web,
+.tbbt-device-run {
+  display: grid;
+  place-items: center;
+  min-height: 13.5rem;
+}
+
+.tbbt-site-mock {
+  width: 100%;
+  max-width: 22rem;
+  border: 1px solid var(--tbbt-line);
+  border-radius: 0.8rem;
+  overflow: hidden;
+  background: #fff;
+  color: #102033;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+}
+
+.tbbt-site-mock img {
+  width: 100%;
+  height: 7.2rem;
+  object-fit: cover;
+}
+
+.tbbt-site-mock-body {
+  padding: 0.65rem 0.7rem 0.8rem;
+}
+
+.tbbt-site-mock-body strong {
+  display: block;
+  font-size: 0.78rem;
+}
+
+.tbbt-site-mock-body span {
+  display: inline-block;
+  margin-top: 0.45rem;
+  background: var(--tbbt-orange);
+  color: #1a0d06;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  padding: 0.28rem 0.55rem;
+}
+
+.tbbt-site-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+  font-size: 0.58rem;
+}
+
+.tbbt-site-tiles b {
+  display: block;
+  border: 1px solid #d7deea;
+  border-radius: 0.35rem;
+  padding: 0.28rem;
+  text-align: center;
+}
+
+.tbbt-grow-ui {
+  border: 1px solid var(--tbbt-line);
+  border-radius: 0.9rem;
+  padding: 0.8rem;
+  background: #0c1424;
+}
+
+.tbbt-grow-ui p {
+  color: #d7deec;
+}
+
+.tbbt-connected {
+  border-top: 1px solid var(--tbbt-line);
+  border-bottom: 1px solid var(--tbbt-line);
+  background: #0a1220;
+}
+
+.tbbt-connected-head {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 1.1rem;
+}
+
+.tbbt-connected-flow {
+  display: flex;
+  gap: 0.35rem;
+  overflow-x: auto;
+  padding-bottom: 0.4rem;
+}
+
+.tbbt-connected-step {
+  flex: 0 0 auto;
+  display: grid;
+  justify-items: center;
+  gap: 0.4rem;
+  min-width: 5.6rem;
+  color: #e8edf7;
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-align: center;
+}
+
+.tbbt-connected-icon {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: #151e32;
+  border: 1px solid var(--tbbt-line);
+  color: var(--tbbt-orange);
+}
+
+.tbbt-final-cta {
+  position: relative;
+  min-height: 22rem;
+  display: grid;
+  align-items: center;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(5, 8, 14, 0.55) 0%, rgba(5, 8, 14, 0.42) 40%, rgba(5, 8, 14, 0.55) 100%),
+    url("/brand/tbbt-marketing/cta-sunset.png") center / cover no-repeat;
+}
+
+.tbbt-final-inner {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 1.2rem;
+  padding: 3rem 0;
+  text-align: center;
+}
+
+.tbbt-final-inner h2 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3.3rem);
+  letter-spacing: -0.03em;
+}
+
+.tbbt-final-script {
+  font-size: clamp(2.4rem, 5vw, 3.6rem);
+}
+
+.tbbt-final-side {
+  display: none;
+}
+
+@media (min-width: 720px) {
+  .tbbt-benefit-row {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .tbbt-trade-strip {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .tbbt-brg {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .tbbt-connected-head {
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+  }
+
+  .tbbt-connected-flow {
+    overflow: visible;
+    justify-content: space-between;
+  }
+}
+
+@media (min-width: 1100px) {
+  .tbbt-hero-cinematic {
+    min-height: 48rem;
+  }
+
+  .tbbt-hero-stage {
+    grid-template-columns: 0.92fr 0.78fr 1.05fr;
+    align-items: end;
+    padding: 3.4rem 0 2.6rem;
+    gap: 1rem;
+  }
+
+  .tbbt-hero-pro img {
+    height: 32rem;
+    width: 24rem;
+  }
+
+  .tbbt-dash-stack {
+    min-height: 26rem;
+  }
+
+  .tbbt-final-cta {
+    min-height: 24rem;
+  }
+
+  .tbbt-final-inner {
+    grid-template-columns: 0.9fr 1.4fr 0.9fr;
+    text-align: center;
+    align-items: center;
+  }
+
+  .tbbt-final-side {
+    display: block;
+    text-align: left;
+    font-size: 0.82rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 800;
+    max-width: 12rem;
+  }
+}

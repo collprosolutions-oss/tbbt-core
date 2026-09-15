@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Great_Vibes } from "next/font/google";
 import { TbbtMarketingFooter } from "@/components/tbbt-marketing/footer";
 import { TbbtMarketingHeader } from "@/components/tbbt-marketing/header";
 import {
@@ -6,6 +7,12 @@ import {
   tbbtMarketingHomeHref,
 } from "@/lib/tbbt-marketing-host";
 import "@/components/tbbt-marketing/tbbt-marketing.css";
+
+const tbbtScript = Great_Vibes({
+  weight: "400",
+  subsets: ["latin"],
+  variable: "--font-tbbt-script",
+});
 
 export function TbbtMarketingShell({
   host,
@@ -18,7 +25,7 @@ export function TbbtMarketingShell({
   const preview = !isTbbtMarketingIndexableHost(host);
 
   return (
-    <div className="tbbt-site">
+    <div className={`tbbt-site ${tbbtScript.variable}`}>
       {preview ? (
         <div className="tbbt-preview-note">
           Previewing TBBT marketing pages. Canonical site: tbbtools.com. CollPro

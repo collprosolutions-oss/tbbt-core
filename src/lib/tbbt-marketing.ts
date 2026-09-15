@@ -40,11 +40,19 @@ export const TBBT_LEGAL_NAV = [
 export const TBBT_HERO_HEADLINE = [
   "The All-In-One",
   "Business Operating",
-  "System for the Trades.",
+  "System",
 ] as const;
 
-export const TBBT_HERO_SUPPORT =
-  "TBBT helps trades businesses build a professional website, manage customers, schedule work, create estimates, run jobs, invoice, track time, organize teams, market the business, understand performance, and grow — in one connected operating system.";
+export const TBBT_HERO_ACCENT = "for the Trades.";
+
+export const TBBT_HERO_SCRIPT = "Built for the Trades. By a Tradesman.";
+
+export const TBBT_HERO_SUPPORT_LINES = [
+  "Build your website. Manage your customers.",
+  "Schedule your work. Create estimates and invoices.",
+  "Track your time and payments. Market your business.",
+  "All in one powerful platform.",
+] as const;
 
 export const TBBT_PROMISE_STRIP = [
   { kicker: "Save Time", body: "Stop jumping between disconnected tools for the same customer." },
@@ -68,6 +76,44 @@ export const TBBT_OPERATING_HELP = [
 ] as const;
 
 export type TbbtTradeAvailability = "available" | "coming-next" | "planned";
+
+export type TbbtTradeThumb = {
+  src: string;
+  position?: string;
+};
+
+/** Temporary photography for the homepage trade strip. Replace in place. */
+export const TBBT_TRADE_THUMBS: Record<string, TbbtTradeThumb> = {
+  Handyman: {
+    src: "/brand/tbbt-marketing/hero-tradespro.png",
+    position: "50% 18%",
+  },
+  Cleaning: { src: "/brand/tbbt-marketing/trade-cleaning.png" },
+  Electrical: { src: "/brand/tbbt-marketing/trade-electrical.png" },
+  Plumbing: { src: "/brand/tbbt-marketing/trade-plumbing.png" },
+  HVAC: { src: "/brand/tbbt-marketing/trade-hvac.png" },
+  Painting: { src: "/brand/tbbt-marketing/trade-painting.png" },
+  Landscaping: {
+    src: "/brand/tbbt-marketing/trades-mosaic.png",
+    position: "68% 50%",
+  },
+  Roofing: {
+    src: "/brand/tbbt-marketing/trades-mosaic.png",
+    position: "78% 50%",
+  },
+  Remodeling: {
+    src: "/brand/tbbt-marketing/trades-mosaic.png",
+    position: "88% 50%",
+  },
+  Concrete: {
+    src: "/brand/tbbt-marketing/trades-mosaic.png",
+    position: "97% 50%",
+  },
+  Carpentry: {
+    src: "/brand/tbbt-marketing/hero-workshop.png",
+    position: "80% 50%",
+  },
+};
 
 export const TBBT_TRADES: readonly {
   name: string;
@@ -357,48 +403,82 @@ export const TBBT_RESOURCE_CATEGORIES = [
 ] as const;
 
 /**
- * Replaceable photography slots. Files are not shipped until founder
- * photography is approved. Do not 404-request these paths yet.
- *
- * Place finished assets under public/brand/tbbt-marketing/ using these
- * names, then wire them in src/components/tbbt-marketing/.
+ * Replaceable photography under public/brand/tbbt-marketing/.
+ * Temporary originals are shipped so the homepage is not empty.
+ * Swap files in place; keep these names and aspect ratios.
  */
 export const TBBT_MARKETING_ASSET_SLOTS = [
   {
-    file: "hero-product.jpg",
-    ratio: "16 / 10",
-    pixelHint: "1600 × 1000",
-    usage: "Optional hero still of the product UI. The live hero uses an HTML product frame until this exists.",
+    file: "hero-workshop.png",
+    ratio: "16 / 9",
+    pixelHint: "1920 × 1080",
+    usage: "Full-bleed cinematic workshop background behind the homepage hero.",
+  },
+  {
+    file: "hero-tradespro.png",
+    ratio: "4 / 3",
+    pixelHint: "1600 × 1200",
+    usage: "Hero trades professional. Do not let this become the only brand identity.",
+  },
+  {
+    file: "cta-sunset.png",
+    ratio: "16 / 9",
+    pixelHint: "1920 × 1080",
+    usage: "Lower CTA band. Person from behind at golden hour.",
+  },
+  {
+    file: "build-house.png",
+    ratio: "16 / 9",
+    pixelHint: "1600 × 900",
+    usage: "House photo inside the BUILD website laptop mock.",
+  },
+  {
+    file: "trades-mosaic.png",
+    ratio: "16 / 9",
+    pixelHint: "1920 × 1080",
+    usage: "Multi-trade strip source for planned-trade thumbnails.",
+  },
+  {
+    file: "trade-cleaning.png",
+    ratio: "1 / 1",
+    pixelHint: "1200 × 1200",
+    usage: "Cleaning trade thumbnail.",
+  },
+  {
+    file: "trade-electrical.png",
+    ratio: "1 / 1",
+    pixelHint: "1200 × 1200",
+    usage: "Electrical trade thumbnail.",
+  },
+  {
+    file: "trade-plumbing.png",
+    ratio: "1 / 1",
+    pixelHint: "1200 × 1200",
+    usage: "Plumbing trade thumbnail.",
+  },
+  {
+    file: "trade-hvac.png",
+    ratio: "1 / 1",
+    pixelHint: "1200 × 1200",
+    usage: "HVAC trade thumbnail.",
+  },
+  {
+    file: "trade-painting.png",
+    ratio: "1 / 1",
+    pixelHint: "1200 × 1200",
+    usage: "Painting trade thumbnail.",
   },
   {
     file: "og-default.jpg",
     ratio: "1.91 / 1",
     pixelHint: "1200 × 630",
-    usage: "Open Graph share image for tbbtools.com.",
-  },
-  {
-    file: "trades-mosaic.jpg",
-    ratio: "16 / 9",
-    pixelHint: "1920 × 1080",
-    usage: "Multi-trade photography mosaic. Must not be a single handyman portrait used as the brand.",
+    usage: "Open Graph share image for tbbtools.com. Not shipped yet.",
   },
   {
     file: "founder.jpg",
     ratio: "4 / 5",
     pixelHint: "1200 × 1500",
-    usage: "Optional founder portrait for /about.",
-  },
-  {
-    file: "trade-handyman.jpg",
-    ratio: "4 / 3",
-    pixelHint: "1200 × 900",
-    usage: "Handyman trade card.",
-  },
-  {
-    file: "trade-cleaning.jpg",
-    ratio: "4 / 3",
-    pixelHint: "1200 × 900",
-    usage: "Cleaning trade card.",
+    usage: "Optional founder portrait for /about. Not shipped yet.",
   },
 ] as const;
 

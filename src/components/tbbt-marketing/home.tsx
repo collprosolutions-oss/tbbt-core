@@ -1,169 +1,252 @@
 import Link from "next/link";
-import { TbbtProductPreview } from "@/components/tbbt-marketing/product-preview";
+import {
+  ArrowRight,
+  CalendarClock,
+  ClipboardList,
+  CreditCard,
+  FileText,
+  Hammer,
+  RefreshCw,
+  ShieldCheck,
+  Smile,
+  Sparkles,
+  Timer,
+  Users,
+  Wrench,
+} from "lucide-react";
+import {
+  TbbtDashboardMock,
+  TbbtGrowMock,
+  TbbtPhoneMock,
+  TbbtWebsiteMock,
+} from "@/components/tbbt-marketing/product-preview";
 import { TbbtWatchVideoButton } from "@/components/tbbt-marketing/watch-video";
+import "@/components/tbbt-marketing/tbbt-home.css";
 import {
   TBBT_BRAND_MOTTO,
-  TBBT_CORE_FEATURES,
+  TBBT_HERO_ACCENT,
   TBBT_HERO_HEADLINE,
-  TBBT_HERO_SUPPORT,
-  TBBT_OPERATING_HELP,
+  TBBT_HERO_SCRIPT,
+  TBBT_HERO_SUPPORT_LINES,
   TBBT_PILLARS,
-  TBBT_POSITIONING,
   TBBT_PROMISE_STRIP,
   TBBT_SIGN_UP_HREF,
   TBBT_TAGLINE,
   TBBT_TRADE_STATUS_LABEL,
+  TBBT_TRADE_THUMBS,
   TBBT_TRADES,
   TBBT_TRIAL_CTA_LABEL,
   TBBT_WORKFLOW_STEPS,
 } from "@/lib/tbbt-marketing";
 
+const BENEFIT_ICONS = [Timer, Sparkles, Users, ShieldCheck] as const;
+
+const WORKFLOW_ICONS = [
+  ClipboardList,
+  Users,
+  FileText,
+  CalendarClock,
+  Hammer,
+  FileText,
+  CreditCard,
+  Smile,
+  RefreshCw,
+] as const;
+
+const [buildPillar, runPillar, growPillar] = TBBT_PILLARS;
+
+function tradeBadgeClass(status: (typeof TBBT_TRADES)[number]["status"]) {
+  if (status === "available") return "tbbt-badge tbbt-badge--available";
+  if (status === "coming-next") return "tbbt-badge tbbt-badge--coming";
+  return "tbbt-badge";
+}
+
 export function TbbtHomePage() {
   return (
-    <>
-      <section className="tbbt-wrap tbbt-hero">
-        <div>
-          <p className="tbbt-kicker">{TBBT_BRAND_MOTTO}</p>
-          <h1>
-            {TBBT_HERO_HEADLINE[0]}
-            <br />
-            {TBBT_HERO_HEADLINE[1]}
-            <br />
-            {TBBT_HERO_HEADLINE[2]}
-          </h1>
-          <p className="tbbt-lead">{TBBT_HERO_SUPPORT}</p>
-          <ul className="tbbt-help-list">
-            {TBBT_OPERATING_HELP.map((item) => (
-              <li key={item}>{item}</li>
+    <div className="tbbt-home">
+      <section className="tbbt-hero-cinematic">
+        <div className="tbbt-wrap tbbt-hero-stage">
+          <div className="tbbt-hero-copy">
+            <p className="tbbt-eyebrow">More than tools. A better way to build your business.</p>
+            <h1>
+              {TBBT_HERO_HEADLINE[0]}
+              <br />
+              {TBBT_HERO_HEADLINE[1]}
+              <br />
+              {TBBT_HERO_HEADLINE[2]}{" "}
+              <span className="tbbt-accent">{TBBT_HERO_ACCENT}</span>
+            </h1>
+            {TBBT_HERO_SUPPORT_LINES.map((line) => (
+              <p key={line}>{line}</p>
             ))}
-          </ul>
-          <div className="tbbt-hero-actions">
-            <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
-              {TBBT_TRIAL_CTA_LABEL}
-            </Link>
-            <TbbtWatchVideoButton />
-          </div>
-          <p className="tbbt-muted" style={{ marginTop: "1rem" }}>
-            {TBBT_TAGLINE}
-          </p>
-        </div>
-        <TbbtProductPreview />
-      </section>
-
-      <section className="tbbt-wrap tbbt-section" aria-label="What TBBT is for">
-        <div className="tbbt-promises">
-          {TBBT_PROMISE_STRIP.map((item) => (
-            <article key={item.kicker} className="tbbt-card tbbt-promise">
-              <strong>{item.kicker}</strong>
-              <p>{item.body}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="tbbt-wrap tbbt-section">
-        <p className="tbbt-kicker">Built for the trades</p>
-        <h2>One operating system. Many trades over time.</h2>
-        <p className="tbbt-lead">
-          TBBT is not a handyman-only product. Handyman is the first live
-          template. Cleaning is next. Other trades share the same business
-          operating system and are marked honestly until they can launch.
-        </p>
-        <div className="tbbt-trade-grid" style={{ marginTop: "1.4rem" }}>
-          {TBBT_TRADES.map((trade) => (
-            <article key={trade.name} className="tbbt-card tbbt-trade-card">
-              <span
-                className={
-                  trade.status === "available"
-                    ? "tbbt-badge tbbt-badge--available"
-                    : trade.status === "coming-next"
-                      ? "tbbt-badge tbbt-badge--coming"
-                      : "tbbt-badge"
-                }
-              >
-                {TBBT_TRADE_STATUS_LABEL[trade.status]}
-              </span>
-              <h3 style={{ margin: "0.7rem 0 0.35rem", fontSize: "1.2rem" }}>
-                {trade.name}
-              </h3>
-              <p className="tbbt-muted">{trade.summary}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="tbbt-wrap tbbt-section">
-        <p className="tbbt-kicker">{TBBT_BRAND_MOTTO}</p>
-        <h2>The original idea, in production form.</h2>
-        <div className="tbbt-pillars" style={{ marginTop: "1.4rem" }}>
-          {TBBT_PILLARS.map((pillar) => (
-            <article key={pillar.kicker} className="tbbt-panel tbbt-pillar">
-              <p className="tbbt-kicker">{pillar.kicker}</p>
-              <h3>{pillar.title}</h3>
-              <p className="tbbt-muted">{pillar.body}</p>
-              <ul>
-                {pillar.points.map((point) => (
-                  <li key={point}>{point}</li>
-                ))}
-              </ul>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="tbbt-wrap tbbt-section">
-        <p className="tbbt-kicker">It&apos;s all connected</p>
-        <h2>The customer lifecycle stays in one system.</h2>
-        <p className="tbbt-lead">
-          TBBT connects the full customer and business lifecycle so a lead is
-          not retyped into a spreadsheet, then a calendar, then an invoice app.
-        </p>
-        <div className="tbbt-flow" style={{ marginTop: "1.3rem" }}>
-          {TBBT_WORKFLOW_STEPS.map((step, index) => (
-            <div className="tbbt-flow-step" key={step}>
-              <span className="tbbt-flow-node">{step}</span>
-              {index < TBBT_WORKFLOW_STEPS.length - 1 ? (
-                <span className="tbbt-flow-arrow" aria-hidden="true">
-                  →
-                </span>
-              ) : null}
+            <div className="tbbt-hero-actions">
+              <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
+                {TBBT_TRIAL_CTA_LABEL}
+                <ArrowRight size={16} />
+              </Link>
+              <TbbtWatchVideoButton />
             </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="tbbt-wrap tbbt-section">
-        <p className="tbbt-kicker">In the product today</p>
-        <h2>The operating pieces trades actually use.</h2>
-        <div className="tbbt-feature-grid" style={{ marginTop: "1.4rem" }}>
-          {TBBT_CORE_FEATURES.map((feature) => (
-            <article key={feature.title} className="tbbt-card tbbt-feature-card">
-              <h3 style={{ margin: "0 0 0.45rem", fontSize: "1.15rem" }}>
-                {feature.title}
-              </h3>
-              <p className="tbbt-muted">{feature.body}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="tbbt-wrap tbbt-section">
-        <div className="tbbt-panel tbbt-cta-band">
-          <div>
-            <p className="tbbt-kicker">{TBBT_POSITIONING}</p>
-            <h2 style={{ marginBottom: 0 }}>Start with the Founder Plan trial.</h2>
-            <p className="tbbt-muted" style={{ marginTop: "0.55rem" }}>
-              New workspaces begin with a 30-day free trial. No credit card is
-              required to begin. Handyman is the first available trade.
-            </p>
+            <div className="tbbt-benefit-row">
+              {TBBT_PROMISE_STRIP.map((item, index) => {
+                const Icon = BENEFIT_ICONS[index] ?? Sparkles;
+                return (
+                  <div className="tbbt-benefit" key={item.kicker}>
+                    <Icon size={18} />
+                    {item.kicker}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          <div>
-            <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
-              {TBBT_TRIAL_CTA_LABEL}
+
+          <div className="tbbt-hero-pro">
+            <p className="tbbt-script tbbt-hero-script">{TBBT_HERO_SCRIPT}</p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/brand/tbbt-marketing/hero-tradespro.png"
+              alt="Trades professional in the shop"
+            />
+          </div>
+
+          <TbbtDashboardMock />
+        </div>
+      </section>
+
+      <section className="tbbt-band tbbt-band--tight">
+        <div className="tbbt-wrap">
+          <div className="tbbt-split-head">
+            <h2>Built for every trade</h2>
+            <p className="tbbt-muted">Same powerful platform. Customized for your trade.</p>
+          </div>
+          <div className="tbbt-trade-strip">
+            {TBBT_TRADES.map((trade) => {
+              const thumb = TBBT_TRADE_THUMBS[trade.name];
+              return (
+                <figure className="tbbt-thumb" key={trade.name}>
+                  <div className="tbbt-thumb-photo">
+                    {thumb ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={thumb.src}
+                        alt=""
+                        style={thumb.position ? { objectPosition: thumb.position } : undefined}
+                      />
+                    ) : (
+                      <div className="tbbt-thumb-fallback">
+                        <Wrench size={28} />
+                      </div>
+                    )}
+                  </div>
+                  <figcaption>
+                    {trade.name}
+                    <span className={tradeBadgeClass(trade.status)}>
+                      {TBBT_TRADE_STATUS_LABEL[trade.status]}
+                    </span>
+                  </figcaption>
+                </figure>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      <section className="tbbt-band">
+        <div className="tbbt-wrap tbbt-brg">
+          <article className="tbbt-brg-card">
+            <p className="tbbt-kicker">{buildPillar.kicker}</p>
+            <h3>{buildPillar.title}</h3>
+            <p>{buildPillar.body}</p>
+            <div className="tbbt-device-web">
+              <TbbtWebsiteMock />
+            </div>
+            <Link href="/features#website-builder" className="tbbt-btn tbbt-btn--ghost">
+              See Website Builder
+              <ArrowRight size={16} />
+            </Link>
+          </article>
+          <article className="tbbt-brg-card">
+            <p className="tbbt-kicker">{runPillar.kicker}</p>
+            <h3>{runPillar.title}</h3>
+            <p>{runPillar.body}</p>
+            <div className="tbbt-device-run">
+              <TbbtPhoneMock />
+            </div>
+            <Link href="#connected" className="tbbt-btn tbbt-btn--ghost">
+              See How It Works
+              <ArrowRight size={16} />
+            </Link>
+          </article>
+          <article className="tbbt-brg-card">
+            <p className="tbbt-kicker">{growPillar.kicker}</p>
+            <h3>{growPillar.title}</h3>
+            <p>{growPillar.body}</p>
+            <TbbtGrowMock />
+            <Link href="/features" className="tbbt-btn tbbt-btn--ghost">
+              See the Coach
+              <ArrowRight size={16} />
+            </Link>
+          </article>
+        </div>
+      </section>
+
+      <section className="tbbt-band tbbt-connected" id="connected">
+        <div className="tbbt-wrap">
+          <div className="tbbt-connected-head">
+            <h2>It&apos;s all connected</h2>
+            <p className="tbbt-muted">
+              From the first customer inquiry to the final payment — everything
+              works together.
+            </p>
+            <Link href="/features" className="tbbt-btn tbbt-btn--primary">
+              See the Full System
+              <ArrowRight size={16} />
             </Link>
           </div>
+          <div className="tbbt-connected-flow">
+            {TBBT_WORKFLOW_STEPS.map((step, index) => {
+              const Icon = WORKFLOW_ICONS[index] ?? ClipboardList;
+              return (
+                <div className="tbbt-connected-step" key={step}>
+                  <span className="tbbt-connected-icon">
+                    <Icon size={16} />
+                  </span>
+                  {step}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </section>
-    </>
+
+      <section className="tbbt-final-cta">
+        <div className="tbbt-wrap tbbt-final-inner">
+          <p className="tbbt-final-side">
+            TBBT
+            <br />
+            Build today.
+            <br />
+            A stronger tomorrow.
+          </p>
+          <div>
+            <h2>Ready to Build a Better Business?</h2>
+            <p className="tbbt-muted" style={{ margin: "0.7rem auto 1.1rem", maxWidth: "36rem" }}>
+              Start the 30-day Founder Plan trial. No credit card required to
+              begin. Handyman is the first available trade.
+            </p>
+            <div className="tbbt-hero-actions" style={{ justifyContent: "center" }}>
+              <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
+                {TBBT_TRIAL_CTA_LABEL}
+                <ArrowRight size={16} />
+              </Link>
+              <TbbtWatchVideoButton />
+            </div>
+          </div>
+          <div>
+            <p className="tbbt-script tbbt-final-script">{TBBT_BRAND_MOTTO}</p>
+            <p className="tbbt-muted">{TBBT_TAGLINE}</p>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
