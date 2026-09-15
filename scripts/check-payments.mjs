@@ -349,6 +349,11 @@ try {
   const portalSrc = readFileSync(new URL("../src/app/p/[token]/page.tsx", import.meta.url), "utf8");
   const payRouteSrc = readFileSync(new URL("../src/app/p/[token]/pay/route.ts", import.meta.url), "utf8");
   const webhookSrc = readFileSync(new URL("../src/app/api/stripe/webhook/route.ts", import.meta.url), "utf8");
+  const webhookDispatchSrc = readFileSync(
+    new URL("../src/lib/stripe-webhook-dispatch.ts", import.meta.url),
+    "utf8",
+  );
+  const webhookStack = `${webhookSrc}\n${webhookDispatchSrc}`;
   const adapterSrc = readFileSync(new URL("../src/lib/payments/stripe-adapter.ts", import.meta.url), "utf8");
   const settingsSrc = readFileSync(
     new URL("../src/components/settings/settings-workspace.tsx", import.meta.url),
@@ -457,8 +462,8 @@ try {
   );
   check("pay route does not read amount from the request", !/searchParams|formData|json\(\)|amount/.test(payRouteSrc.replace(/createCustomerInvoiceCheckout[\s\S]+/, "")));
   check("pay route creates checkout from the token only", payRouteSrc.includes("createCustomerInvoiceCheckout(prisma, token)"));
-  check("webhook verifies the Stripe signature", webhookSrc.includes("constructStripeWebhookEvent"));
-  check("webhook applies only a parsed checkout payment", webhookSrc.includes("parseCheckoutPaymentEvent"));
+  check("webhook verifies the Stripe signature", webhookStack.includes("constructStripeWebhookEvent"));
+  check("webhook applies only a parsed checkout payment", webhookStack.includes("parseCheckoutPaymentEvent"));
   check(
     "invoice checkout uses an explicit card/cashapp/us_bank_account allowlist",
     INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.join(",") === "card,cashapp,us_bank_account" &&

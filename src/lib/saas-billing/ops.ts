@@ -283,15 +283,16 @@ export async function applyParsedSaasBillingEvent(
   const incomingStatus = parsed.snapshot.status || current?.status || SAAS_SUBSCRIPTION_STATUS_NONE;
   const keepExistingStatus =
     !isSubscriptionEvent &&
-    Boolean(current) &&
+    current != null &&
     current.status !== SAAS_SUBSCRIPTION_STATUS_NONE &&
     current.status !== "incomplete";
+  const nextStatus = keepExistingStatus ? current.status : incomingStatus;
   await upsertRow(db, businessId, {
     stripeCustomerId: parsed.snapshot.stripeCustomerId ?? current?.stripeCustomerId ?? null,
     stripeSubscriptionId:
       parsed.snapshot.stripeSubscriptionId ?? current?.stripeSubscriptionId ?? null,
     stripePriceId: parsed.snapshot.stripePriceId ?? current?.stripePriceId ?? null,
-    status: keepExistingStatus && current ? current.status : incomingStatus,
+    status: nextStatus,
     currentPeriodEnd: parsed.snapshot.currentPeriodEnd ?? current?.currentPeriodEnd ?? null,
     cancelAtPeriodEnd: isSubscriptionEvent
       ? parsed.snapshot.cancelAtPeriodEnd

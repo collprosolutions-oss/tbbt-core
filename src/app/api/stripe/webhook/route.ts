@@ -19,19 +19,12 @@
  * webhook state is authoritative for SaaS status.
  */
 import { NextResponse } from "next/server";
-import {
-  applyVerifiedCheckoutPayment,
-  getStripeWebhookSecret,
-} from "@/lib/payments";
-import { parseCheckoutPaymentEvent } from "@/lib/payments/events";
-import { constructStripeWebhookEvent } from "@/lib/payments/stripe-adapter";
 import { prisma } from "@/lib/prisma";
 import {
-  applyParsedSaasBillingEvent,
-  constructStripeWebhookEventWithSecrets,
-  parseSaasBillingEvent,
-  saasBillingWebhookSecrets,
-} from "@/lib/saas-billing";
+  dispatchStripeWebhookEvent,
+  stripeWebhookSecretsConfigured,
+  verifyStripeWebhookPayload,
+} from "@/lib/stripe-webhook-dispatch";
 
 function webhookEventSummary(event: unknown) {
   if (!event || typeof event !== "object") {
@@ -71,22 +64,8 @@ function webhookEventSummary(event: unknown) {
   };
 }
 
-function verifyStripeWebhook(payload: string, signature: string) {
-  const secrets = saasBillingWebhookSecrets();
-  try {
-    return constructStripeWebhookEventWithSecrets(payload, signature, secrets);
-  } catch {
-    const fallback = getStripeWebhookSecret();
-    if (!fallback) {
-      throw new Error("Invalid signature.");
-    }
-    return constructStripeWebhookEvent(payload, signature, fallback);
-  }
-}
-
 export async function POST(request: Request) {
-  const secrets = saasBillingWebhookSecrets();
-  if (secrets.length === 0) {
+  if (!stripeWebhookSecretsConfigured()) {
     return NextResponse.json(
       { error: "Webhook secret is not configured." },
       { status: 503 },
@@ -101,45 +80,22 @@ export async function POST(request: Request) {
   const payload = await request.text();
   let event: unknown;
   try {
-    event = verifyStripeWebhook(payload, signature);
+    event = verifyStripeWebhookPayload(payload, signature);
   } catch {
     return NextResponse.json({ error: "Invalid signature." }, { status: 400 });
   }
 
   const summary = webhookEventSummary(event);
-  const saasEvent = parseSaasBillingEvent(event);
-  if (saasEvent) {
-    const result = await applyParsedSaasBillingEvent(prisma, saasEvent);
-    console.info(
-      "[saas-billing] webhook",
-      JSON.stringify({
-        ...summary,
-        parsed: true,
-        applied: result.applied,
-        reason: result.reason,
-      }),
-    );
-    return NextResponse.json({ received: true, system: "saas", ...result });
-  }
-
-  const payment = parseCheckoutPaymentEvent(event);
-  if (!payment) {
-    console.info(
-      "[payments] webhook",
-      JSON.stringify({ ...summary, parsed: false, applied: false }),
-    );
-    return NextResponse.json({ received: true, applied: false });
-  }
-
-  const result = await applyVerifiedCheckoutPayment(prisma, payment);
+  const result = await dispatchStripeWebhookEvent(prisma, event);
+  const logLabel = result.system === "saas" ? "[saas-billing] webhook" : "[payments] webhook";
   console.info(
-    "[payments] webhook",
+    logLabel,
     JSON.stringify({
       ...summary,
-      parsed: true,
-      applied: result.applied,
-      reason: result.reason,
+      parsed: result.system !== null,
+      applied: "applied" in result ? result.applied : false,
+      reason: "reason" in result ? result.reason : undefined,
     }),
   );
-  return NextResponse.json({ received: true, system: "connect", ...result });
+  return NextResponse.json(result);
 }

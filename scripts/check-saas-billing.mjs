@@ -68,7 +68,10 @@ const {
   startSaasSubscriptionCheckout,
   SaasBillingError,
 } = await import("@/lib/saas-billing");
-const { POST } = await import("@/app/api/stripe/webhook/route");
+const {
+  dispatchStripeWebhookEvent,
+  verifyStripeWebhookPayload,
+} = await import("@/lib/stripe-webhook-dispatch");
 
 let failures = 0;
 function check(label, condition) {
@@ -178,24 +181,26 @@ function saasSubscriptionEvent(input) {
   };
 }
 
-async function signedWebhookRequest(event, secret = process.env.STRIPE_WEBHOOK_SECRET) {
+async function verifyAndDispatch(event, secret = process.env.STRIPE_WEBHOOK_SECRET) {
   const payload = JSON.stringify(event);
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
   const signature = stripe.webhooks.generateTestHeaderString({
     payload,
     secret,
   });
-  return new Request("http://saas-billing.test/api/stripe/webhook", {
-    method: "POST",
-    headers: { "stripe-signature": signature },
-    body: payload,
-  });
+  const verified = verifyStripeWebhookPayload(payload, signature);
+  return dispatchStripeWebhookEvent(prisma, verified);
 }
 
 const saasDir = readFileSync(new URL("../src/lib/saas-billing/stripe.ts", import.meta.url), "utf8");
 const saasOps = readFileSync(new URL("../src/lib/saas-billing/ops.ts", import.meta.url), "utf8");
 const saasEvents = readFileSync(new URL("../src/lib/saas-billing/events.ts", import.meta.url), "utf8");
 const webhookSrc = readFileSync(new URL("../src/app/api/stripe/webhook/route.ts", import.meta.url), "utf8");
+const webhookDispatchSrc = readFileSync(
+  new URL("../src/lib/stripe-webhook-dispatch.ts", import.meta.url),
+  "utf8",
+);
+const webhookStack = `${webhookSrc}\n${webhookDispatchSrc}`;
 const settingsSrc = readFileSync(
   new URL("../src/components/settings/settings-workspace.tsx", import.meta.url),
   "utf8",
@@ -241,11 +246,12 @@ check(
 );
 check(
   "Webhook verifies signatures and dispatches SaaS before Connect",
-  webhookSrc.includes("constructStripeWebhookEvent") &&
-    webhookSrc.includes("constructStripeWebhookEventWithSecrets") &&
-    webhookSrc.includes("parseSaasBillingEvent") &&
-    webhookSrc.includes("parseCheckoutPaymentEvent") &&
-    webhookSrc.includes("Invalid signature."),
+  webhookStack.includes("constructStripeWebhookEvent") &&
+    webhookStack.includes("constructStripeWebhookEventWithSecrets") &&
+    webhookStack.includes("parseSaasBillingEvent") &&
+    webhookStack.includes("parseCheckoutPaymentEvent") &&
+    webhookSrc.includes("Invalid signature.") &&
+    webhookDispatchSrc.includes("system: \"saas\""),
 );
 check(
   "Success redirect copy does not persist subscription status",
@@ -453,18 +459,17 @@ try {
   );
 
   console.log("\nTEST — Valid webhook updates the correct tenant; invalid signatures are rejected");
-  const invalid = await POST(
-    new Request("http://saas-billing.test/api/stripe/webhook", {
-      method: "POST",
-      headers: { "stripe-signature": "t=1,v1=deadbeef" },
-      body: JSON.stringify(saasSubscriptionEvent({
-        businessId: businessA.business.id,
-        customerId: first.customerId,
-        subscriptionId: "sub_should_not_apply",
-      })),
-    }),
-  );
-  check("Invalid webhook signature is rejected", invalid.status === 400);
+  const invalidPayload = JSON.stringify(saasSubscriptionEvent({
+    businessId: businessA.business.id,
+    customerId: first.customerId,
+    subscriptionId: "sub_should_not_apply",
+  }));
+  try {
+    verifyStripeWebhookPayload(invalidPayload, "t=1,v1=deadbeef");
+    check("Invalid webhook signature is rejected", false);
+  } catch {
+    check("Invalid webhook signature is rejected", true);
+  }
   check(
     "Invalid signature does not persist a subscription",
     (await prisma.businessSaasSubscription.findUnique({
@@ -489,9 +494,8 @@ try {
     customerId: first.customerId,
     subscriptionId: "sub_alpha",
   });
-  const appliedCheckout = await POST(await signedWebhookRequest(checkoutWebhook));
-  const appliedCheckoutBody = await appliedCheckout.json();
-  check("Valid Checkout webhook is accepted", appliedCheckout.status === 200 && appliedCheckoutBody.applied === true);
+  const appliedCheckout = await verifyAndDispatch(checkoutWebhook);
+  check("Valid Checkout webhook is accepted", appliedCheckout.applied === true && appliedCheckout.system === "saas");
   const afterCheckoutWebhook = await prisma.businessSaasSubscription.findUnique({
     where: { businessId: businessA.business.id },
   });
@@ -635,6 +639,7 @@ try {
       role: "OWNER",
       business: {
         slug: "brand-new",
+        tradeCode: "HANDYMAN",
         firstRunSetupCompletedAt: null,
         starterServicesSetupCompletedAt: null,
         websiteSetupCompletedAt: null,
@@ -644,6 +649,7 @@ try {
         role: "OWNER",
         business: {
           slug: "brand-new",
+          tradeCode: "HANDYMAN",
           firstRunSetupCompletedAt: now,
           starterServicesSetupCompletedAt: null,
           websiteSetupCompletedAt: null,
@@ -653,6 +659,7 @@ try {
         role: "OWNER",
         business: {
           slug: "brand-new",
+          tradeCode: "HANDYMAN",
           firstRunSetupCompletedAt: now,
           starterServicesSetupCompletedAt: now,
           websiteSetupCompletedAt: null,

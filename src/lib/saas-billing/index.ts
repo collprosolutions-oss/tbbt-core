@@ -29,6 +29,5 @@ export {
   saasBillingErrorMessage,
   saasStatusLabel,
 } from "@/lib/saas-billing/types";
-export type { ParsedSaasBillingEvent } from "@/lib/saas-billing/events";
+export type { ParsedSaasBillingEvent, SaasBillingProvider } from "@/lib/saas-billing/types";
 export type { SaasBillingSnapshot } from "@/lib/saas-billing/ops";
-export type { SaasBillingProvider } from "@/lib/saas-billing/types";
