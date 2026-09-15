@@ -73,17 +73,17 @@ export type PaymentReadinessDebug = {
   retrieveError: string | null;
 };
 
-const USER_ONBOARDING_BRANCHES = new Set<PaymentReadinessBranch>([
-  "user_currently_due",
-  "user_past_due",
-  "restricted_requires_info",
-  "missing_capability",
-]);
-
 export function isMerchantPaymentReady(input: MerchantReadinessInput): boolean {
   return explainMerchantReadiness(input).ready;
 }
 
+/**
+ * Hosted Connect onboarding is the only way a merchant can finish setup.
+ * Offer it whenever the business is not payment-ready, except when Stripe
+ * says card payments are unsupported (another Account Link cannot fix that).
+ * Hiding the button for retrieve_failed / not_ready leaves Setup Required
+ * with no action — that is the production CollPro Reno blocker.
+ */
 export function shouldOfferStripeOnboarding(
   status: "not_connected" | "setup_required" | "connected",
   branch?: PaymentReadinessBranch | null,
@@ -94,10 +94,25 @@ export function shouldOfferStripeOnboarding(
   if (status !== "setup_required") {
     return false;
   }
-  if (!branch) {
-    return true;
+  return branch !== "unsupported";
+}
+
+export type StripeConnectActionLabel = "Connect Stripe" | "Continue Stripe setup";
+
+/**
+ * Owner/admin Settings action for hosted Connect onboarding.
+ * not created → Connect Stripe (create account + Account Link).
+ * incomplete → Continue Stripe setup (fresh Account Link, same account).
+ * complete / unsupported → no action.
+ */
+export function stripeConnectActionLabel(
+  status: "not_connected" | "setup_required" | "connected",
+  branch?: PaymentReadinessBranch | null,
+): StripeConnectActionLabel | null {
+  if (!shouldOfferStripeOnboarding(status, branch)) {
+    return null;
   }
-  return USER_ONBOARDING_BRANCHES.has(branch);
+  return status === "not_connected" ? "Connect Stripe" : "Continue Stripe setup";
 }
 
 export function formatPaymentReadinessDebug(debug: PaymentReadinessDebug): string {
