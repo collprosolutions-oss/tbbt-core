@@ -47,6 +47,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { EXPENSE_CATEGORY_ACCENTS } from "@/lib/expenses";
 import { ICON_COLOR_CLASSES } from "@/lib/founder-icons";
 import { cn } from "@/lib/utils";
+import { OperatingWriteGate, useSaasOperating } from "@/components/saas/saas-operating-context";
 
 const CATEGORY_ACCENT: Record<string, string> = {
   purple: ICON_COLOR_CLASSES.purple,
@@ -75,6 +76,11 @@ export function ExpensesHeaderActions({
   storageConfigured: boolean;
   onAdd: (mode: ExpenseSheetMode) => void;
 }) {
+  const operating = useSaasOperating();
+  if (!operating.canOperate) {
+    return <OperatingWriteGate fallbackLabel="Add Expense" />;
+  }
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <DropdownMenu>
@@ -116,6 +122,7 @@ export function ExpensesWorkspace({
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sheetMode, setSheetMode] = useState<ExpenseSheetMode | null>(null);
   const selected = workspace.items.find((item) => item.id === selectedId) ?? null;
+  const operating = useSaasOperating();
 
   function selectExpense(id: string) {
     setSelectedId(id);
@@ -188,10 +195,14 @@ export function ExpensesWorkspace({
               title="No expenses match your filters"
               description="Add an expense, or try a different date range, category, or search."
               action={
+                operating.canOperate ? (
                 <Button onClick={() => setSheetMode("expense")}>
                   <Plus />
                   Add Expense
                 </Button>
+                ) : (
+                  <OperatingWriteGate fallbackLabel="Add Expense" />
+                )
               }
             />
           ) : (
@@ -499,6 +510,7 @@ function RightRail({
           <CardTitle>Quick Actions</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
+          <OperatingWriteGate fallbackLabel="Add Expense">
           <Button variant="ghost" className="justify-start" onClick={() => onAdd("expense")}>
             <Plus />
             Add Expense
@@ -511,6 +523,7 @@ function RightRail({
             <Repeat />
             Add Recurring Expense
           </Button>
+          </OperatingWriteGate>
         </CardContent>
       </Card>
 

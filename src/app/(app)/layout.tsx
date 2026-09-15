@@ -17,8 +17,9 @@ import {
 import { getTrade } from "@/lib/trades";
 import { requireWorkspace } from "@/lib/workspace";
 import { prisma } from "@/lib/prisma";
-import { loadSaasEntitlement } from "@/lib/saas-billing";
+import { loadSaasEntitlement, saasOperatingUiState } from "@/lib/saas-billing";
 import { SaasEntitlementBanner } from "@/components/settings/saas-entitlement-banner";
+import { SaasOperatingProvider } from "@/components/saas/saas-operating-context";
 
 export default async function AppLayout({
   children,
@@ -58,8 +59,10 @@ export default async function AppLayout({
   const trade = getTrade(workspace.business.tradeCode);
   const businessLogoSrc = getBusinessLogoSrc(workspace.business.slug);
   const entitlement = await loadSaasEntitlement(prisma, workspace.business);
+  const operating = saasOperatingUiState(entitlement, workspace.role);
 
   return (
+    <SaasOperatingProvider value={operating}>
     <AppShell
       businessName={workspace.business.name}
       businessLogoSrc={businessLogoSrc}
@@ -73,5 +76,6 @@ export default async function AppLayout({
     >
       {children}
     </AppShell>
+    </SaasOperatingProvider>
   );
 }

@@ -9,6 +9,7 @@
 import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
 
 type Db = PrismaClient;
 
@@ -18,6 +19,7 @@ export async function setOwnedServiceCatalogItemActive(
   input: { id: string; active: boolean },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
+  await requireSaasOperatingEntitlement(db, access);
   const item = access.assertOwned(
     await db.serviceCatalogItem.findFirst({
       where: { id: input.id, ...access.scope },
@@ -35,6 +37,7 @@ export async function deleteOwnedServiceCatalogItem(
   input: { id: string },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
+  await requireSaasOperatingEntitlement(db, access);
   const item = access.assertOwned(
     await db.serviceCatalogItem.findFirst({
       where: { id: input.id, ...access.scope },

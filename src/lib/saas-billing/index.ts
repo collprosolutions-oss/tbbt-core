@@ -23,11 +23,18 @@ export {
 export {
   assertSaasOperatingEntitlement,
   loadSaasEntitlement,
+  requireSaasOperatingEntitlement,
   resolveSaasEntitlement,
+  saasOperatingUiState,
   SAAS_ENTITLEMENT_STATES,
+  saasOperatingErrorMessage,
   SaasSubscriptionRequiredError,
 } from "@/lib/saas-billing/entitlement";
 export type { SaasEntitlement, SaasEntitlementState } from "@/lib/saas-billing/entitlement";
+export {
+  SAAS_SUBSCRIPTION_REQUIRED_OWNER_MESSAGE,
+  SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE,
+} from "@/lib/saas-billing/messages";
 export {
   inspectConfiguredFounderPrice,
   TBBT_FOUNDER_PLAN_AMOUNT_CENTS,

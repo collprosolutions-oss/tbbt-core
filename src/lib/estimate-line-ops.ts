@@ -7,6 +7,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
+import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
 import {
   DECORATIVE_WALL_PANELING_CALCULATOR_ID,
   calculatorRatesEqual,
@@ -62,6 +63,9 @@ export function estimateLineErrorMessage(error: unknown, fallback: string) {
   if (error instanceof EstimateLineError) return error.message;
   if (error instanceof Error && error.name === "EstimateLineError") return error.message;
   if (error instanceof Error && error.name === "ForbiddenError") return error.message;
+  if (error instanceof Error && error.name === "SaasSubscriptionRequiredError") {
+    return error.message;
+  }
   return fallback;
 }
 
@@ -92,6 +96,7 @@ export async function addCatalogItemToDraftEstimate(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  await requireSaasOperatingEntitlement(db, access);
 
   const estimate = access.assertOwned(
     await db.estimate.findFirst({
@@ -185,6 +190,7 @@ export async function priceDraftEstimateLine(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  await requireSaasOperatingEntitlement(db, access);
 
   const unitPrice = parsePositiveDecimal(input.unitPrice, "price");
   const quantity = input.quantity?.trim()
@@ -251,6 +257,7 @@ export async function updateDraftEstimateLineIncludedWork(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  await requireSaasOperatingEntitlement(db, access);
 
   const estimate = access.assertOwned(
     await db.estimate.findFirst({
@@ -310,6 +317,7 @@ export async function updateDraftMaterialCustomerLine(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  await requireSaasOperatingEntitlement(db, access);
 
   const title = input.title.trim();
   if (!title) {
@@ -377,6 +385,7 @@ export async function saveDraftEstimateLineAsCatalog(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
 
   const estimate = access.assertOwned(
@@ -492,6 +501,7 @@ export async function applyDraftEstimateCalculator(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  await requireSaasOperatingEntitlement(db, access);
 
   const estimate = access.assertOwned(
     await db.estimate.findFirst({
@@ -625,6 +635,7 @@ export async function persistDraftEstimateCalculatorRates(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  await requireSaasOperatingEntitlement(db, access);
 
   const estimate = access.assertOwned(
     await db.estimate.findFirst({
@@ -818,6 +829,7 @@ export async function overrideDraftEstimateLinePrice(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
+  await requireSaasOperatingEntitlement(db, access);
   const unitPrice = parsePositiveDecimal(input.unitPrice, "price");
 
   const estimate = access.assertOwned(

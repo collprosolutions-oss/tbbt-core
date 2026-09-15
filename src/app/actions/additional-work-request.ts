@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
 
@@ -25,7 +25,7 @@ export async function dismissAdditionalWorkRequest(
   _prev: AdditionalWorkRequestActionState,
   formData: FormData,
 ): Promise<AdditionalWorkRequestActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CHANGE_ORDERS);
   const requestId = readString(formData, "requestId");
 

@@ -17,6 +17,7 @@ import {
   requireBusinessCapability,
   requireBusinessRole,
 } from "@/lib/authorization";
+import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import { ensureBusinessAvailabilitySchema } from "@/lib/availability-data";
 import {
@@ -49,6 +50,9 @@ export class SettingsError extends Error {
 
 export function settingsErrorMessage(error: unknown, fallback: string) {
   if (error instanceof SettingsError || error instanceof ForbiddenError) {
+    return error.message;
+  }
+  if (error instanceof Error && error.name === "SaasSubscriptionRequiredError") {
     return error.message;
   }
   return fallback;
@@ -110,6 +114,7 @@ export async function updateLaborMinimumSettingsOp(
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
   requireBusinessRole(access, "OWNER");
+  await requireSaasOperatingEntitlement(db, access);
 
   if (input.enabled && (!input.amount || input.amount.lte(0))) {
     throw new SettingsError("Enter a minimum amount to turn this on.");
@@ -372,6 +377,7 @@ export async function updateWebsiteStoryOp(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  await requireSaasOperatingEntitlement(db, access);
 
   const rawOwnerStory = normalizeAboutCopy(input.rawOwnerStory, MAX_OWNER_STORY_LENGTH);
   const approvedPublicAboutCopy = normalizeAboutCopy(
@@ -428,6 +434,7 @@ export async function updateSchedulingSettingsOp(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  await requireSaasOperatingEntitlement(db, access);
 
   if (input.workingWeekdays.length === 0) {
     throw new SettingsError("Choose at least one working day.");

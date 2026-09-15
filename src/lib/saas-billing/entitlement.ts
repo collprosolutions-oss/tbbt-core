@@ -2,15 +2,21 @@
  * Central TBBT SaaS entitlement. Pages and actions should read this
  * instead of scattering subscription checks. Stripe Connect is unrelated.
  *
- * This task enforces a management-console banner plus this resolver.
- * Viewing retained business records stays allowed. Per-action mutation
- * locks and field-app gating are deferred to a later task.
+ * Authorization (role/capability) and SaaS entitlement are separate:
+ * both must pass for an operating mutation. Reads, billing, data export,
+ * auth, webhooks, and public customer flows do not use this gate.
  */
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { isCollProRenoSlug } from "@/lib/public-site";
 import { trialDaysRemaining } from "@/lib/saas-billing/founder-price";
+import {
+  SAAS_SUBSCRIPTION_REQUIRED_OWNER_MESSAGE,
+  SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE,
+} from "@/lib/saas-billing/messages";
 import { ensureSaasBillingSchema } from "@/lib/saas-billing/schema";
 import { SAAS_SUBSCRIPTION_STATUS_NONE } from "@/lib/saas-billing/types";
+
+export { SAAS_SUBSCRIPTION_REQUIRED_OWNER_MESSAGE, SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE } from "@/lib/saas-billing/messages";
 
 export const SAAS_ENTITLEMENT_STATES = [
   "trial_active",
@@ -143,8 +149,57 @@ export function resolveSaasEntitlement(input: {
   };
 }
 
+type EntitlementDb = PrismaClient | Prisma.TransactionClient;
+
+export type SaasOperatingAccess = {
+  businessId?: string;
+  workspace: {
+    role: "OWNER" | "ADMIN" | "MEMBER";
+    business?: { id: string; slug: string };
+  };
+};
+
+export function saasOperatingUiState(
+  entitlement: Pick<SaasEntitlement, "canOperate" | "requiresSubscription">,
+  role: SaasOperatingAccess["workspace"]["role"],
+) {
+  return {
+    canOperate: entitlement.canOperate,
+    requiresSubscription: entitlement.requiresSubscription,
+    role,
+    blockedMessage:
+      role === "OWNER"
+        ? SAAS_SUBSCRIPTION_REQUIRED_OWNER_MESSAGE
+        : SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE,
+  };
+}
+
+async function resolveOperatingBusiness(
+  db: EntitlementDb,
+  access: SaasOperatingAccess,
+): Promise<{ id: string; slug: string }> {
+  if (access.workspace.business?.id && access.workspace.business.slug) {
+    return {
+      id: access.workspace.business.id,
+      slug: access.workspace.business.slug,
+    };
+  }
+  const id = access.workspace.business?.id ?? access.businessId;
+  if (!id) {
+    throw new Error("Business workspace is required for SaaS operating entitlement.");
+  }
+  const business = await db.business.findUnique({
+    where: { id },
+    select: { id: true, slug: true },
+  });
+  if (!business) {
+    throw new Error("Business workspace is required for SaaS operating entitlement.");
+  }
+  return business;
+}
+
 export async function loadSaasEntitlement(
-  db: PrismaClient,
+  db: EntitlementDb,
   business: { id: string; slug: string },
   now = new Date(),
 ): Promise<SaasEntitlement> {
@@ -165,14 +220,39 @@ export async function loadSaasEntitlement(
 }
 
 export class SaasSubscriptionRequiredError extends Error {
-  constructor(message = "A TBBT subscription is required to do that.") {
+  constructor(message = SAAS_SUBSCRIPTION_REQUIRED_OWNER_MESSAGE) {
     super(message);
     this.name = "SaasSubscriptionRequiredError";
   }
 }
 
-export function assertSaasOperatingEntitlement(entitlement: SaasEntitlement) {
-  if (!entitlement.canOperate) {
-    throw new SaasSubscriptionRequiredError();
+export function saasOperatingErrorMessage(error: unknown): string | null {
+  if (error instanceof SaasSubscriptionRequiredError) return error.message;
+  if (error instanceof Error && error.name === "SaasSubscriptionRequiredError") {
+    return error.message;
   }
+  return null;
+}
+
+export function assertSaasOperatingEntitlement(
+  entitlement: SaasEntitlement,
+  role?: SaasOperatingAccess["workspace"]["role"],
+) {
+  if (!entitlement.canOperate) {
+    throw new SaasSubscriptionRequiredError(
+      role && role !== "OWNER"
+        ? SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE
+        : SAAS_SUBSCRIPTION_REQUIRED_OWNER_MESSAGE,
+    );
+  }
+}
+
+export async function requireSaasOperatingEntitlement(
+  db: EntitlementDb,
+  access: SaasOperatingAccess,
+) {
+  const business = await resolveOperatingBusiness(db, access);
+  const entitlement = await loadSaasEntitlement(db, business);
+  assertSaasOperatingEntitlement(entitlement, access.workspace.role);
+  return entitlement;
 }

@@ -6,6 +6,7 @@ import {
   type FieldJobActionState,
 } from "@/app/actions/field-job";
 import { Button } from "@/components/ui/button";
+import { useSaasOperating } from "@/components/saas/saas-operating-context";
 
 const initialState: FieldJobActionState = {};
 
@@ -14,6 +15,11 @@ export function CompleteAssignedJobButton({ jobId }: { jobId: string }) {
     completeAssignedJob,
     initialState,
   );
+  const operating = useSaasOperating();
+
+  if (!operating.canOperate) {
+    return <p className="text-sm text-muted-foreground">{operating.blockedMessage}</p>;
+  }
 
   return (
     <form action={formAction} className="w-full">

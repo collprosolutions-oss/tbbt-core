@@ -9,7 +9,7 @@
  * src/lib/time-card-ops.ts.
  */
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { prisma } from "@/lib/prisma";
 import { parseScheduleDate } from "@/lib/schedule";
 import { parseDateTimeInput } from "@/lib/time-cards";
@@ -49,7 +49,7 @@ export async function clockInAction(
   formData: FormData,
 ): Promise<TimeCardActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const membershipId = readString(formData, "membershipId") || access.workspace.membership.id;
     const activityType = readString(formData, "activityType");
     const jobId = readString(formData, "jobId") || null;
@@ -67,7 +67,7 @@ export async function clockOutAction(
   formData: FormData,
 ): Promise<TimeCardActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const membershipId = readString(formData, "membershipId") || access.workspace.membership.id;
     const note = readString(formData, "note") || null;
     const result = await clockOutTime(prisma, access, { membershipId, note });
@@ -83,7 +83,7 @@ export async function createManualTimeEntryAction(
   formData: FormData,
 ): Promise<TimeCardActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const membershipId = readString(formData, "membershipId");
     const activityType = readString(formData, "activityType");
     const jobId = readString(formData, "jobId") || null;
@@ -113,7 +113,7 @@ export async function correctTimeEntryAction(
   formData: FormData,
 ): Promise<TimeCardActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const timeEntryId = readString(formData, "timeEntryId");
     const reason = readString(formData, "reason");
     const startDate = readString(formData, "startDate");
@@ -157,7 +157,7 @@ export async function requestTimeCorrectionAction(
   formData: FormData,
 ): Promise<TimeCardActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const timeEntryId = readString(formData, "timeEntryId");
     const reason = readString(formData, "reason");
     if (!timeEntryId) return { error: "That time entry could not be found." };
@@ -174,7 +174,7 @@ export async function updateMembershipWageAction(
   formData: FormData,
 ): Promise<TimeCardActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const membershipId = readString(formData, "membershipId");
     const hourlyWage = readString(formData, "hourlyWage");
     if (!membershipId) return { error: "Choose a worker." };
@@ -191,7 +191,7 @@ export async function approveTimesheetWeekAction(
   formData: FormData,
 ): Promise<TimeCardActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const membershipId = readString(formData, "membershipId");
     const weekStartedAtRaw = readString(formData, "weekStartedAt");
     if (!membershipId || !weekStartedAtRaw) {
@@ -211,7 +211,7 @@ export async function reopenTimesheetWeekAction(
   formData: FormData,
 ): Promise<TimeCardActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const membershipId = readString(formData, "membershipId");
     const weekStartedAtRaw = readString(formData, "weekStartedAt");
     const reason = readString(formData, "reason");

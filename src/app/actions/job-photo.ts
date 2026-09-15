@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
 import {
@@ -28,7 +28,7 @@ export async function addJobPhoto(
   _prev: JobPhotoActionState,
   formData: FormData,
 ): Promise<JobPhotoActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   // FUTURE: once Jobs carry an assignment, MEMBER should get this
   // capability scoped to their own assigned job(s). See OPERATE_JOBS in
   // src/lib/authorization.ts for details.
@@ -104,7 +104,7 @@ export async function deleteJobPhoto(
   _prev: JobPhotoActionState,
   formData: FormData,
 ): Promise<JobPhotoActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.OPERATE_JOBS);
   const photoId = readString(formData, "photoId");
 

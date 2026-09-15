@@ -8,7 +8,7 @@
  * AUTHORIZE_PAYROLL (OWNER only).
  */
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { parsePayPeriodDates } from "@/lib/payroll";
 import {
   addPayrollItem,
@@ -55,7 +55,7 @@ export async function createPayrollRunAction(
   formData: FormData,
 ): Promise<PayrollActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const period = readPeriod(formData);
     if ("error" in period) return { error: period.error };
     await createPayrollRun(prisma, access, {
@@ -75,7 +75,7 @@ export async function changePayrollPeriodAction(
   formData: FormData,
 ): Promise<PayrollActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const payrollRunId = readString(formData, "payrollRunId");
     if (!payrollRunId) return { error: "Choose a payroll run." };
     const period = readPeriod(formData);
@@ -97,7 +97,7 @@ export async function addPayrollItemAction(
   formData: FormData,
 ): Promise<PayrollActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const payrollRunId = readString(formData, "payrollRunId");
     const timesheetWeekId = readString(formData, "timesheetWeekId");
     if (!payrollRunId || !timesheetWeekId) {
@@ -116,7 +116,7 @@ export async function removePayrollItemAction(
   formData: FormData,
 ): Promise<PayrollActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const payrollRunItemId = readString(formData, "payrollRunItemId");
     if (!payrollRunItemId) return { error: "Choose a worker week to remove." };
     await removePayrollItem(prisma, access, { payrollRunItemId });
@@ -132,7 +132,7 @@ export async function reviewPayrollRunAction(
   formData: FormData,
 ): Promise<PayrollActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const payrollRunId = readString(formData, "payrollRunId");
     if (!payrollRunId) return { error: "Choose a payroll run." };
     await reviewPayrollRun(prisma, access, { payrollRunId });
@@ -148,7 +148,7 @@ export async function authorizePayrollRunAction(
   formData: FormData,
 ): Promise<PayrollActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const payrollRunId = readString(formData, "payrollRunId");
     const confirmed = readString(formData, "confirmAuthorize") === "yes";
     if (!payrollRunId) return { error: "Choose a payroll run." };
@@ -165,7 +165,7 @@ export async function reopenPayrollRunAction(
   formData: FormData,
 ): Promise<PayrollActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const payrollRunId = readString(formData, "payrollRunId");
     const reason = readString(formData, "reason");
     if (!payrollRunId) return { error: "Choose a payroll run." };
@@ -182,7 +182,7 @@ export async function cancelPayrollRunAction(
   formData: FormData,
 ): Promise<PayrollActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const payrollRunId = readString(formData, "payrollRunId");
     const reason = readString(formData, "reason");
     if (!payrollRunId) return { error: "Choose a payroll run." };
@@ -199,7 +199,7 @@ export async function markPayrollProcessedAction(
   formData: FormData,
 ): Promise<PayrollActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const payrollRunId = readString(formData, "payrollRunId");
     const confirmed = readString(formData, "confirmProcessed") === "yes";
     const providerReference = readString(formData, "providerReference");

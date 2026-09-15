@@ -11,6 +11,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, ForbiddenError, requireBusinessCapability } from "@/lib/authorization";
+import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
 import {
   asPayrollExceptionList,
   canTransitionPayroll,
@@ -228,6 +229,7 @@ export async function createPayrollRun(
   access: BusinessAccess,
   input: { payPeriodStart: Date; payPeriodEnd: Date; notes?: string },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_PAYROLL);
   if (input.payPeriodStart.getTime() >= input.payPeriodEnd.getTime()) {
     throw new PayrollError("Pay period end must be after the start.");
@@ -285,6 +287,7 @@ export async function changePayrollPeriod(
   access: BusinessAccess,
   input: { payrollRunId: string; payPeriodStart: Date; payPeriodEnd: Date },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_PAYROLL);
   if (input.payPeriodStart.getTime() >= input.payPeriodEnd.getTime()) {
     throw new PayrollError("Pay period end must be after the start.");
@@ -343,6 +346,7 @@ export async function addPayrollItem(
   access: BusinessAccess,
   input: { payrollRunId: string; timesheetWeekId: string },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_PAYROLL);
 
   return db.$transaction(async (tx) => {
@@ -411,6 +415,7 @@ export async function removePayrollItem(
   access: BusinessAccess,
   input: { payrollRunItemId: string },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_PAYROLL);
 
   return db.$transaction(async (tx) => {
@@ -462,6 +467,7 @@ export async function reviewPayrollRun(
   access: BusinessAccess,
   input: { payrollRunId: string },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_PAYROLL);
 
   return db.$transaction(async (tx) => {
@@ -501,6 +507,7 @@ export async function authorizePayrollRun(
   access: BusinessAccess,
   input: { payrollRunId: string; confirmed: boolean },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.AUTHORIZE_PAYROLL);
   if (!input.confirmed) {
     throw new PayrollError("Owner authorization requires explicit confirmation.");
@@ -563,6 +570,7 @@ export async function reopenPayrollRun(
   access: BusinessAccess,
   input: { payrollRunId: string; reason: string },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   const reason = input.reason.trim();
   if (!reason) {
     throw new PayrollError("A reason is required to reopen a payroll run.");
@@ -615,6 +623,7 @@ export async function cancelPayrollRun(
   access: BusinessAccess,
   input: { payrollRunId: string; reason: string },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   const reason = input.reason.trim();
   if (!reason) {
     throw new PayrollError("A reason is required to cancel a payroll run.");
@@ -661,6 +670,7 @@ export async function markPayrollProcessedExternally(
   access: BusinessAccess,
   input: { payrollRunId: string; confirmed: boolean; providerReference?: string; processedAt?: Date },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.AUTHORIZE_PAYROLL);
   if (!input.confirmed) {
     throw new PayrollError("Recording an external payroll result requires explicit confirmation.");
@@ -787,6 +797,9 @@ export function isPayrollError(error: unknown): error is PayrollError {
 export function payrollErrorMessage(error: unknown, fallback = "That payroll action could not be completed.") {
   if (error instanceof PayrollError) return error.message;
   if (error instanceof ForbiddenError) return error.message;
+  if (error instanceof Error && error.name === "SaasSubscriptionRequiredError") {
+    return error.message;
+  }
   return fallback;
 }
 

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { persistDraftChangeOrderTotal } from "@/lib/change-order";
 import { prisma } from "@/lib/prisma";
@@ -60,7 +60,7 @@ export async function createChangeOrder(
   _prev: ChangeOrderActionState,
   formData: FormData,
 ): Promise<ChangeOrderActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CHANGE_ORDERS);
   const jobId = readString(formData, "jobId");
   const title = readString(formData, "title");
@@ -177,7 +177,7 @@ export async function updateChangeOrderTitle(
   _prev: ChangeOrderActionState,
   formData: FormData,
 ): Promise<ChangeOrderActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CHANGE_ORDERS);
   const changeOrderId = readString(formData, "changeOrderId");
   const title = readString(formData, "title");
@@ -209,7 +209,7 @@ export async function addChangeOrderLineItem(
   _prev: ChangeOrderActionState,
   formData: FormData,
 ): Promise<ChangeOrderActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CHANGE_ORDERS);
   const changeOrderId = readString(formData, "changeOrderId");
   const description = readString(formData, "description");
@@ -265,7 +265,7 @@ export async function removeChangeOrderLineItem(
   _prev: ChangeOrderActionState,
   formData: FormData,
 ): Promise<ChangeOrderActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CHANGE_ORDERS);
   const changeOrderId = readString(formData, "changeOrderId");
   const lineItemId = readString(formData, "lineItemId");
@@ -319,7 +319,7 @@ export async function sendChangeOrder(
   _prev: ChangeOrderActionState,
   formData: FormData,
 ): Promise<ChangeOrderActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CHANGE_ORDERS);
   const changeOrderId = readString(formData, "changeOrderId");
 
@@ -373,7 +373,7 @@ export async function cancelChangeOrder(
   _prev: ChangeOrderActionState,
   formData: FormData,
 ): Promise<ChangeOrderActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CHANGE_ORDERS);
   const changeOrderId = readString(formData, "changeOrderId");
 

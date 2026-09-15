@@ -172,6 +172,8 @@ function SectionBody(props: SettingsWorkspaceProps) {
     integrations,
     canEditConsequential,
     canEditPreferences,
+    canOperate,
+    operatingBlockedMessage,
     websitePhotos,
     supplierPricing,
     canClearTestData,
@@ -195,11 +197,14 @@ function SectionBody(props: SettingsWorkspaceProps) {
             slots={websitePhotos.slots}
             storageConfigured={websitePhotos.storageConfigured}
             storageUsage={websitePhotos.storageUsage}
-            canEdit={canEditPreferences}
+            canEdit={canEditPreferences && canOperate}
           />
         ) : (
           <p className="text-sm text-muted-foreground">Website photo slots are not available.</p>
         )}
+        {!canOperate ? (
+          <p className="mt-2 text-sm text-muted-foreground">{operatingBlockedMessage}</p>
+        ) : null}
       </SectionCard>
     );
   }
@@ -210,13 +215,15 @@ function SectionBody(props: SettingsWorkspaceProps) {
         title="Website Story"
         description="Owner and admin only. Raw background stays private until you approve public About copy."
       >
-        {canEditPreferences ? (
+        {canEditPreferences && canOperate ? (
           <WebsiteStoryForm
             businessId={snapshot.business.id}
             rawOwnerStory={snapshot.websiteStory.rawOwnerStory}
             approvedPublicAboutCopy={snapshot.websiteStory.approvedPublicAboutCopy}
             canEdit={canEditPreferences}
           />
+        ) : canEditPreferences ? (
+          <p className="text-sm text-muted-foreground">{operatingBlockedMessage}</p>
         ) : (
           <p className="text-sm text-muted-foreground">
             Members cannot manage Website Story or public About copy.
@@ -313,7 +320,8 @@ function SectionBody(props: SettingsWorkspaceProps) {
         <LaborMinimumSettingsForm
           enabled={snapshot.business.laborMinimumEnabled}
           amount={snapshot.business.laborMinimumAmount}
-          canEdit={canEditConsequential}
+          canEdit={canEditConsequential && canOperate}
+          blockedMessage={canOperate ? undefined : operatingBlockedMessage}
         />
         <p className="text-sm text-muted-foreground">{LABOR_MINIMUM_FUTURE_RULE_MESSAGE}</p>
         <Button asChild variant="outline">
@@ -332,8 +340,11 @@ function SectionBody(props: SettingsWorkspaceProps) {
         <p className="text-sm">{snapshot.scheduling.summary}</p>
         <SchedulingSettingsForm
           settings={snapshot.scheduling}
-          canEdit={canEditPreferences}
+          canEdit={canEditPreferences && canOperate}
         />
+        {!canOperate ? (
+          <p className="text-sm text-muted-foreground">{operatingBlockedMessage}</p>
+        ) : null}
         <Button asChild variant="outline">
           <Link href="/jobs">Open Schedule / Jobs</Link>
         </Button>
@@ -590,7 +601,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
         {supplierPricing ? (
           <SupplierPricingSettingsForm
             context={supplierPricing}
-            canEdit={canEditPreferences}
+            canEdit={canEditPreferences && canOperate}
           />
         ) : null}
         <DeferredField

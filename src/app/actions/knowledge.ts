@@ -6,7 +6,7 @@
  * businessId. OWNER/ADMIN only (MANAGE_KNOWLEDGE).
  */
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import {
   createKnowledgeEntry,
   knowledgeErrorMessage,
@@ -35,7 +35,7 @@ export async function createKnowledgeEntryAction(
   formData: FormData,
 ): Promise<KnowledgeActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await createKnowledgeEntry(prisma, access, {
       title: readString(formData, "title"),
       body: readString(formData, "body"),
@@ -58,7 +58,7 @@ export async function updateKnowledgeEntryAction(
   formData: FormData,
 ): Promise<KnowledgeActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await updateKnowledgeEntry(prisma, access, {
       entryId: readString(formData, "entryId"),
       title: formData.has("title") ? readString(formData, "title") : undefined,
@@ -84,7 +84,7 @@ export async function markKnowledgeReviewedAction(
   formData: FormData,
 ): Promise<KnowledgeActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await markKnowledgeReviewed(prisma, access, {
       entryId: readString(formData, "entryId"),
     });
@@ -100,7 +100,7 @@ export async function setKnowledgeArchivedAction(
   formData: FormData,
 ): Promise<KnowledgeActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await setKnowledgeArchived(prisma, access, {
       entryId: readString(formData, "entryId"),
       archived: readString(formData, "archived") === "1",

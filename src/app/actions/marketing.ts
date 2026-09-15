@@ -6,7 +6,7 @@
  * businessId. OWNER/ADMIN only (MANAGE_MARKETING).
  */
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import {
   advanceMarketingContentStatus,
   createMarketingContent,
@@ -36,7 +36,7 @@ export async function grantPhotoMarketingPermissionAction(
   formData: FormData,
 ): Promise<MarketingActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await grantJobPhotoMarketingPermission(prisma, access, {
       photoId: readString(formData, "photoId"),
     });
@@ -52,7 +52,7 @@ export async function revokePhotoMarketingPermissionAction(
   formData: FormData,
 ): Promise<MarketingActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await revokeJobPhotoMarketingPermission(prisma, access, {
       photoId: readString(formData, "photoId"),
     });
@@ -68,7 +68,7 @@ export async function createMarketingContentAction(
   formData: FormData,
 ): Promise<MarketingActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await createMarketingContent(prisma, access, {
       contentType: readString(formData, "contentType"),
       title: readString(formData, "title"),
@@ -90,7 +90,7 @@ export async function advanceMarketingContentAction(
   formData: FormData,
 ): Promise<MarketingActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const updated = await advanceMarketingContentStatus(prisma, access, {
       contentId: readString(formData, "contentId"),
     });
@@ -111,7 +111,7 @@ export async function setMarketingPlannedDateAction(
   formData: FormData,
 ): Promise<MarketingActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await setMarketingContentPlannedFor(prisma, access, {
       contentId: readString(formData, "contentId"),
       plannedFor: readString(formData, "plannedFor"),

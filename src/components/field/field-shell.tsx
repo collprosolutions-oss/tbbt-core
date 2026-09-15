@@ -25,10 +25,12 @@ function initials(name: string) {
 export function FieldShell({
   businessName,
   userName,
+  banner,
   children,
 }: {
   businessName: string;
   userName: string;
+  banner?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -55,6 +57,7 @@ export function FieldShell({
         </form>
       </header>
       <main className="mx-auto w-full max-w-md flex-1 space-y-4 px-4 py-5">
+        {banner}
         {children}
       </main>
     </div>

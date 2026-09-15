@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 import { FieldShell } from "@/components/field/field-shell";
+import { SaasOperatingProvider } from "@/components/saas/saas-operating-context";
+import { SaasEntitlementBanner } from "@/components/settings/saas-entitlement-banner";
 import {
   FIRST_RUN_SETUP_PATH,
   ownerNeedsFirstRunSetup,
@@ -13,6 +15,8 @@ import {
   WEBSITE_SETUP_PATH,
 } from "@/lib/website-setup";
 import { requireWorkspace } from "@/lib/workspace";
+import { prisma } from "@/lib/prisma";
+import { loadSaasEntitlement, saasOperatingUiState } from "@/lib/saas-billing";
 
 /**
  * Employee Field Workflow layout. Any authenticated member of a business
@@ -40,12 +44,22 @@ export default async function FieldLayout({
     redirect(WEBSITE_SETUP_PATH);
   }
 
+  const entitlement = await loadSaasEntitlement(prisma, workspace.business);
+  const operating = saasOperatingUiState(entitlement, workspace.role);
+
   return (
+    <SaasOperatingProvider value={operating}>
     <FieldShell
       businessName={workspace.business.name}
       userName={workspace.user.name}
+      banner={
+        entitlement.requiresSubscription ? (
+          <SaasEntitlementBanner entitlement={entitlement} role={workspace.role} />
+        ) : null
+      }
     >
       {children}
     </FieldShell>
+    </SaasOperatingProvider>
   );
 }
