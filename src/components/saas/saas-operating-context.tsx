@@ -47,7 +47,7 @@ export function OperatingWriteGate({
   children,
   fallbackLabel,
 }: {
-  children: ReactNode;
+  children?: ReactNode;
   fallbackLabel?: string;
 }) {
   const operating = useSaasOperating();
