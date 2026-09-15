@@ -129,9 +129,9 @@ check(
     fieldLayout.includes("FIRST_RUN_SETUP_PATH"),
 );
 check(
-  "Completed OWNER leaves setup for Dashboard",
+  "Completed first-run setup leaves /setup for the next onboarding path",
   setupPage.includes("hasCompletedFirstRunSetup") &&
-    setupPage.includes('redirect("/dashboard")') &&
+    setupPage.includes("postAuthenticationPath") &&
     setupPage.includes('workspace.role !== "OWNER"') &&
     setupPage.includes('"/field"'),
 );
@@ -243,7 +243,7 @@ check(
     }) === "/dashboard",
 );
 check(
-  "Incomplete OWNER is routed to setup; completed OWNER reaches Dashboard",
+  "Incomplete OWNER is routed to identity setup; identity-complete Handyman OWNER continues to starter services",
   postAuthenticationPath({
     role: "OWNER",
     business: { slug: "new-handyman", firstRunSetupCompletedAt: null },
@@ -252,9 +252,10 @@ check(
       role: "OWNER",
       business: {
         slug: "new-handyman",
+        tradeCode: "HANDYMAN",
         firstRunSetupCompletedAt: new Date("2026-01-01T00:00:00Z"),
       },
-    }) === "/dashboard",
+    }) === "/setup/services",
 );
 
 console.log("\nUNIT — New non-CollPro tenants do not inherit CollPro public identity");
@@ -466,8 +467,8 @@ try {
     saved?.firstRunSetupCompletedAt instanceof Date,
   );
   check(
-    "Completed OWNER reaches Dashboard normally",
-    postAuthenticationPath({ role: "OWNER", business: saved }) === "/dashboard" &&
+    "Completed identity setup continues to starter services instead of Dashboard",
+    postAuthenticationPath({ role: "OWNER", business: saved }) === "/setup/services" &&
       ownerNeedsFirstRunSetup({ role: "OWNER", business: saved }) === false,
   );
 

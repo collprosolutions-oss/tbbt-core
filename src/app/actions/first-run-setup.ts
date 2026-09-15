@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
-import { completeFirstRunSetupOp } from "@/lib/first-run-setup";
+import { completeFirstRunSetupOp, postAuthenticationPath } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
 import { settingsErrorMessage } from "@/lib/settings-ops";
 
@@ -19,6 +19,7 @@ export async function completeFirstRunSetupAction(
   _prev: FirstRunSetupState,
   formData: FormData,
 ): Promise<FirstRunSetupState> {
+  let nextPath = "/dashboard";
   try {
     const access = await requireBusinessAccess();
     await completeFirstRunSetupOp(prisma, access, {
@@ -27,11 +28,18 @@ export async function completeFirstRunSetupAction(
       email: readString(formData, "publicEmail"),
       website: readString(formData, "publicWebsite"),
     });
+    nextPath = postAuthenticationPath({
+      role: access.workspace.role,
+      business: {
+        ...access.workspace.business,
+        firstRunSetupCompletedAt: new Date(),
+      },
+    });
   } catch (error) {
     return {
       error: settingsErrorMessage(error, "That business information could not be saved."),
     };
   }
 
-  redirect("/dashboard");
+  redirect(nextPath);
 }

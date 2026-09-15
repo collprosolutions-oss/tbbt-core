@@ -20,6 +20,10 @@ import {
   updateBusinessPublicContactOp,
   writeSettingsAuditLog,
 } from "@/lib/settings-ops";
+import {
+  ownerNeedsStarterServicesSetup,
+  STARTER_SERVICES_SETUP_PATH,
+} from "@/lib/starter-services-setup";
 
 type SetupClient = PrismaClient | Prisma.TransactionClient;
 
@@ -63,7 +67,10 @@ export async function ensureFirstRunSetupSchema(db: SetupClient) {
 
 export type FirstRunSetupBusiness = {
   slug: string;
+  tradeCode?: string | null;
   firstRunSetupCompletedAt?: Date | null;
+  starterServicesSetupCompletedAt?: Date | null;
+  starterServicesSetupChoice?: string | null;
 };
 
 export function hasCompletedFirstRunSetup(business: FirstRunSetupBusiness) {
@@ -86,6 +93,7 @@ export function postAuthenticationPath(input: {
 }) {
   if (input.role === "MEMBER") return "/field";
   if (ownerNeedsFirstRunSetup(input)) return FIRST_RUN_SETUP_PATH;
+  if (ownerNeedsStarterServicesSetup(input)) return STARTER_SERVICES_SETUP_PATH;
   return "/dashboard";
 }
 

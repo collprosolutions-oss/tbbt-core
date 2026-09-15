@@ -4,6 +4,10 @@ import {
   FIRST_RUN_SETUP_PATH,
   ownerNeedsFirstRunSetup,
 } from "@/lib/first-run-setup";
+import {
+  ownerNeedsStarterServicesSetup,
+  STARTER_SERVICES_SETUP_PATH,
+} from "@/lib/starter-services-setup";
 import { requireWorkspace } from "@/lib/workspace";
 
 /**
@@ -24,6 +28,9 @@ export default async function FieldLayout({
 
   if (ownerNeedsFirstRunSetup(workspace)) {
     redirect(FIRST_RUN_SETUP_PATH);
+  }
+  if (ownerNeedsStarterServicesSetup(workspace)) {
+    redirect(STARTER_SERVICES_SETUP_PATH);
   }
 
   return (

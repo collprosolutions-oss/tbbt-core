@@ -5,6 +5,7 @@ import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { loadActiveWorkspaceMemberships } from "@/lib/business-contact";
 import { ensureFirstRunSetupSchema } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
+import { ensureStarterServicesSetupSchema } from "@/lib/starter-services-setup";
 
 export type WorkspaceContext = {
   user: { id: string; email: string; name: string };
@@ -26,6 +27,7 @@ export async function requireWorkspace(): Promise<WorkspaceContext> {
   // in the Team UI.
   await ensureAppointmentConfirmationSchema(prisma);
   await ensureFirstRunSetupSchema(prisma);
+  await ensureStarterServicesSetupSchema(prisma);
   const memberships = await loadActiveWorkspaceMemberships(prisma, user.id);
 
   if (memberships.length === 0) {

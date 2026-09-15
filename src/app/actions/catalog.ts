@@ -4,11 +4,7 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { requireBusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
-import {
-  planStarterCatalogInstall,
-  starterIntakeFields,
-  starterPricingMode,
-} from "@/lib/handyman-starter-catalog";
+import { installHandymanStarterCatalogForBusiness } from "@/lib/starter-catalog-install";
 import {
   deleteOwnedServiceCatalogItem,
   setOwnedServiceCatalogItemActive,
@@ -206,41 +202,15 @@ export async function installHandymanStarterCatalog(): Promise<CatalogActionStat
     };
   }
 
-  const existing = await prisma.serviceCatalogItem.findMany({
-    where: access.scope,
-    select: { name: true },
-  });
-
-  const plan = planStarterCatalogInstall(existing.map((item) => item.name));
-
-  if (plan.add.length > 0) {
-    await prisma.$transaction(
-      plan.add.map((service) =>
-        prisma.serviceCatalogItem.create({
-          data: {
-            businessId: access.businessId,
-            name: service.name,
-            description: service.description,
-            pricingMode: starterPricingMode(service),
-            price:
-              service.startingPrice == null
-                ? null
-                : new Prisma.Decimal(service.startingPrice),
-            // Stored directly from the starter template's own category
-            // field, not derived later from the name.
-            category: service.category,
-            active: true,
-            ...starterIntakeFields(service),
-          },
-        }),
-      ),
-    );
-  }
+  const plan = await installHandymanStarterCatalogForBusiness(
+    prisma,
+    access.businessId,
+  );
 
   revalidatePath("/services");
   return {
-    added: plan.add.length,
-    skipped: plan.skip.length,
-    message: `Added ${plan.add.length}. Skipped ${plan.skip.length} already on your list.`,
+    added: plan.added,
+    skipped: plan.skipped,
+    message: `Added ${plan.added}. Skipped ${plan.skipped} already on your list.`,
   };
 }
