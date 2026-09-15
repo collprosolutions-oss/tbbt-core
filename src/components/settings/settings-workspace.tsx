@@ -53,6 +53,8 @@ import {
   TBBT_SAAS_BILLING_UNCONFIGURED_MESSAGE,
   TBBT_SAAS_CHECKOUT_CANCELED_MESSAGE,
   TBBT_SAAS_CHECKOUT_SUCCESS_MESSAGE,
+  TBBT_FOUNDER_PLAN_DESCRIPTION,
+  TBBT_FOUNDER_TRIAL_NO_CARD_MESSAGE,
   type SettingsReadinessStatus,
   type SettingsSection,
 } from "@/lib/settings";
@@ -432,6 +434,14 @@ function SectionBody(props: SettingsWorkspaceProps) {
           day: "numeric",
         })
       : null;
+    const trialEndLabel = billing.trialEndsAt
+      ? new Date(billing.trialEndsAt).toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        })
+      : null;
+    const priceLabel = billing.showFounderPrice ? billing.founderPriceLabel : "Set by Stripe Price";
     return (
       <SectionCard title="TBBT software subscription" description={TBBT_SAAS_BILLING_DESCRIPTION}>
         {checkoutStatus === "success" ? (
@@ -440,14 +450,55 @@ function SectionBody(props: SettingsWorkspaceProps) {
         {checkoutStatus === "canceled" ? (
           <p className="rounded-lg border bg-muted/40 p-3 text-sm">{TBBT_SAAS_CHECKOUT_CANCELED_MESSAGE}</p>
         ) : null}
+        <p className="text-sm">{TBBT_FOUNDER_PLAN_DESCRIPTION}</p>
+        <p className="text-sm text-muted-foreground">{TBBT_FOUNDER_TRIAL_NO_CARD_MESSAGE}</p>
+        {billing.founderPriceWarning ? (
+          <p className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+            {billing.founderPriceWarning}
+          </p>
+        ) : null}
         <dl className="grid gap-3 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-muted-foreground">Plan</dt>
             <dd className="font-medium">{billing.planName}</dd>
           </div>
           <div>
-            <dt className="text-muted-foreground">Status</dt>
+            <dt className="text-muted-foreground">Price</dt>
+            <dd className="font-medium">{priceLabel}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Access</dt>
+            <dd className="font-medium">{billing.entitlement.label}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Subscription status</dt>
             <dd className="font-medium">{billing.statusLabel}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Trial status</dt>
+            <dd className="font-medium">
+              {billing.entitlement.trialActive
+                ? "Active"
+                : billing.trialEndsAt
+                  ? "Ended"
+                  : "Not on a Founder trial"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Trial expires</dt>
+            <dd className="font-medium">{trialEndLabel ?? "Not applicable"}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Days remaining</dt>
+            <dd className="font-medium">
+              {billing.entitlement.trialActive
+                ? String(billing.trialDaysRemaining ?? 0)
+                : "Not applicable"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Founder eligibility</dt>
+            <dd className="font-medium">{billing.founderEligible ? "Yes, while continuously subscribed" : "No"}</dd>
           </div>
           <div>
             <dt className="text-muted-foreground">Current period ends</dt>

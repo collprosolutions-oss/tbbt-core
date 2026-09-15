@@ -71,6 +71,7 @@
     "test:starter-services-setup": "node --experimental-strip-types scripts/check-starter-services-setup.mjs",
     "test:website-setup": "node --experimental-strip-types scripts/check-website-setup.mjs",
     "test:saas-billing": "node --experimental-strip-types scripts/check-saas-billing.mjs",
+    "test:founder-trial": "node --experimental-strip-types scripts/check-founder-trial.mjs",
     "test:public-intake-identity": "node --experimental-strip-types scripts/check-public-intake-identity.mjs",
     "test:test-data-cleanup": "node --experimental-strip-types scripts/check-test-data-cleanup.mjs"
   },

@@ -307,6 +307,28 @@ check(
   workspaceLoader.includes("ensureSaasBillingSchema"),
 );
 
+const founderTrialMigration = readFileSync(
+  new URL("../prisma/migrations/20260915200000_add_saas_founder_trial/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Founder trial migration is additive and does not rewrite Business rows",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(founderTrialMigration) &&
+    founderTrialMigration.includes('ADD COLUMN IF NOT EXISTS "trialStartedAt"') &&
+    founderTrialMigration.includes('ADD COLUMN IF NOT EXISTS "founderEligible"') &&
+    founderTrialMigration.includes('ADD COLUMN IF NOT EXISTS "legacyExempt"') &&
+    founderTrialMigration.includes("legacyExempt") &&
+    !/UPDATE "Business"\s/.test(founderTrialMigration) &&
+    founderTrialMigration.includes("Does not create Stripe Customers"),
+);
+check(
+  "Preview runtime ensure covers Founder trial columns skipped by migrate",
+  saasBillingSchema.includes("SAAS_FOUNDER_TRIAL_ENSURE_SQL") &&
+    saasBillingSchema.includes("SAAS_FOUNDER_TRIAL_BACKFILL_SQL") &&
+    saasBillingSchema.includes("legacyExempt") &&
+    saasBillingSchema.includes("trialStartedAt"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

@@ -866,6 +866,20 @@ model BusinessSaasSubscription {
   status               String    @default("none")
   currentPeriodEnd     DateTime?
   cancelAtPeriodEnd    Boolean   @default(false)
+  /// Explicit Founder trial window. Never inferred from Business.createdAt.
+  trialStartedAt       DateTime?
+  trialEndsAt          DateTime?
+  /// Eligible for Founder Plan pricing while continuously subscribed.
+  founderEligible      Boolean   @default(false)
+  /// Set when a Founder-eligible trial first converts to a paid subscription.
+  founderConvertedAt   DateTime?
+  /// Set when Founder eligibility ends (cancel/terminate). A later restart
+  /// is not promised the Founder rate.
+  founderEligibilityEndedAt DateTime?
+  /// Existing tenants present when Founder trial shipped. Not a trial.
+  legacyExempt         Boolean   @default(false)
+  /// Set once when existing tenants were marked legacy-exempt.
+  saasFounderTrialBackfilledAt DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
