@@ -15,6 +15,7 @@ import {
   REVIEWS_PLACEHOLDER_COPY,
   SERVICE_AREA_COPY,
   SERVICE_AREA_MAP_IMAGE,
+  isCollProRenoSlug,
 } from "@/lib/public-site";
 import type { ResolvedPublicSiteImage } from "@/lib/public-site-images";
 import { splitAboutParagraphs } from "@/lib/website-story";
@@ -25,11 +26,14 @@ const REASON_ICONS = [Wrench, Clock, FileText, Home, MapPin] as const;
 export function PublicAbout({
   storyImage,
   storyCopy,
+  slug,
 }: {
   storyImage: ResolvedPublicSiteImage;
   storyCopy: string;
+  slug: string;
 }) {
   const paragraphs = splitAboutParagraphs(storyCopy);
+  const isCollProReno = isCollProRenoSlug(slug);
 
   return (
     <>
@@ -75,6 +79,7 @@ export function PublicAbout({
         </div>
       </section>
 
+      {isCollProReno ? (
       <section className="bg-white public-section">
         <div className="public-container">
           <h2 className="public-section-title">
@@ -94,7 +99,9 @@ export function PublicAbout({
           </div>
         </div>
       </section>
+      ) : null}
 
+      {isCollProReno ? (
       <section className="bg-[var(--public-paper)] public-section">
         <div className="public-container public-about-split">
           <div>
@@ -128,6 +135,7 @@ export function PublicAbout({
           </div>
         </div>
       </section>
+      ) : null}
     </>
   );
 }

@@ -185,6 +185,36 @@ check(
   workspaceLoader.includes("ensureAppointmentConfirmationSchema"),
 );
 
+const firstRunMigration = readFileSync(
+  new URL("../prisma/migrations/20260915120000_add_first_run_setup/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "First-run setup migration is additive and one-shot",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(firstRunMigration) &&
+    firstRunMigration.includes('ADD COLUMN "firstRunSetupCompletedAt"') &&
+    firstRunMigration.includes('UPDATE "Business"') &&
+    firstRunMigration.includes("information_schema.columns") &&
+    firstRunMigration.includes("IF NOT EXISTS"),
+);
+
+const firstRunSetup = readFileSync(
+  new URL("../src/lib/first-run-setup.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers first-run setup column skipped by migrate",
+  firstRunSetup.includes("Preview shares Production and skips migrate") &&
+    firstRunSetup.includes("ensureFirstRunSetupSchema") &&
+    firstRunSetup.includes("FIRST_RUN_SETUP_ENSURE_SQL") &&
+    firstRunSetup.includes('ADD COLUMN "firstRunSetupCompletedAt"'),
+);
+
+check(
+  "Authenticated workspace load ensures first-run setup column before Business SELECT",
+  workspaceLoader.includes("ensureFirstRunSetupSchema"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

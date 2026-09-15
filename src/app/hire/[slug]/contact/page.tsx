@@ -9,12 +9,12 @@ import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { smsHref } from "@/lib/directions";
 import {
   PUBLIC_CONTACT_HERO_IMAGE,
-  SERVICE_AREA_COPY,
   TEXT_US_LABEL,
   publicDisplayName,
   publicHomePath,
   publicPhone,
   publicRequestPath,
+  resolvePublicServiceAreaCopy,
 } from "@/lib/public-site";
 import { loadPublicSite } from "@/lib/public-site-data";
 import { resolveBusinessPublicContact } from "@/lib/business-contact";
@@ -103,7 +103,9 @@ export default async function PublicContactPage({ params }: PageProps) {
                     Text project photos, the work you need, and your address. We will respond and follow up.
                   </p>
                   <p className="mt-6 text-xs font-extrabold tracking-wide uppercase">Service Area</p>
-                  <p className="mt-2 text-sm text-muted-foreground">{SERVICE_AREA_COPY}</p>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    {resolvePublicServiceAreaCopy(site.business.slug)}
+                  </p>
                 </div>
                 <div>
                   <h2 className="text-2xl font-extrabold uppercase">Not sure if we service your area?</h2>

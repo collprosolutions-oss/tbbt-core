@@ -2,6 +2,10 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
 import { canAccessManagementConsole } from "@/lib/authorization";
+import {
+  FIRST_RUN_SETUP_PATH,
+  ownerNeedsFirstRunSetup,
+} from "@/lib/first-run-setup";
 import { getTrade } from "@/lib/trades";
 import { requireWorkspace } from "@/lib/workspace";
 
@@ -11,6 +15,10 @@ export default async function AppLayout({
   children: React.ReactNode;
 }) {
   const workspace = await requireWorkspace();
+
+  if (ownerNeedsFirstRunSetup(workspace)) {
+    redirect(FIRST_RUN_SETUP_PATH);
+  }
 
   // Server-side READ gate for the whole management console: every page
   // under this layout (Dashboard, Requests, Customers, Estimates, Jobs,

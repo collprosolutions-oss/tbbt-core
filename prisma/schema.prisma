@@ -150,6 +150,11 @@ model Business {
   publicEmail         String?
   /// Customer-facing website shown on estimates, invoices, and the public site.
   publicWebsite       String?
+  /// Set when the OWNER finishes first-run business identity setup.
+  /// Null means this business still needs that setup. Existing tenants are
+  /// backfilled once when the column is first created — not inferred from
+  /// phone/email being populated.
+  firstRunSetupCompletedAt DateTime?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 

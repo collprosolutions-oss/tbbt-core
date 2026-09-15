@@ -17,12 +17,15 @@ import {
   SERVICE_AREA_MAP_VIEWBOX,
   TEXT_US_LABEL,
   TRUST_POINTS,
+  isCollProRenoSlug,
   publicDisplayName,
   publicHomePath,
   publicPhone,
   publicRequestPath,
+  resolvePublicServiceAreaCopy,
 } from "@/lib/public-site";
 import { loadPublicSite } from "@/lib/public-site-data";
+import { resolveBusinessServiceArea } from "@/lib/business-service-area";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +35,12 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const { slug } = await params;
   const site = await loadPublicSite(slug);
   const name = site ? publicDisplayName(site.business) : "Service Area";
-  return { title: { absolute: `Service Area | ${name}` }, description: SERVICE_AREA_COPY };
+  return {
+    title: { absolute: `Service Area | ${name}` },
+    description: site
+      ? resolvePublicServiceAreaCopy(site.business.slug)
+      : SERVICE_AREA_COPY,
+  };
 }
 
 const POINTS = [
@@ -50,6 +58,51 @@ export default async function PublicServiceAreaPage({ params }: PageProps) {
   const phone = publicPhone(site.business);
   const textHref = smsHref(phone);
   const requestHref = publicRequestPath(site.business.slug);
+  const areaCopy = resolvePublicServiceAreaCopy(site.business.slug);
+
+  if (!isCollProRenoSlug(site.business.slug)) {
+    const area = resolveBusinessServiceArea(site.business);
+    return (
+      <PublicSiteShell business={site.business} groups={site.groups}>
+        <main>
+          <PublicPageHero
+            homeHref={publicHomePath(site.business.slug)}
+            current="Service Area"
+            title="Our Service Area."
+            accent="Confirmed by address."
+            description={areaCopy}
+            imageSrc={PUBLIC_AREA_HERO_IMAGE}
+            phone={phone}
+            smsHref={textHref}
+            requestHref={requestHref}
+          />
+          <section className="bg-[var(--public-paper)]">
+            <div className="public-container py-8">
+              <h2 className="text-2xl font-extrabold uppercase">Where we work</h2>
+              {area.cities.length > 0 ? (
+                <ul className="mt-4 space-y-1.5 font-semibold">
+                  {area.cities.map((city) => (
+                    <li key={city}>{city}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">
+                  {areaCopy}
+                </p>
+              )}
+            </div>
+          </section>
+          <PublicCtaBar
+            title="Ready to get your project started?"
+            body="Let's make it happen. We're here to help."
+            requestHref={requestHref}
+            smsHref={textHref}
+            phone={phone}
+          />
+        </main>
+      </PublicSiteShell>
+    );
+  }
 
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>

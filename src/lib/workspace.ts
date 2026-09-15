@@ -3,6 +3,7 @@ import type { Business, Membership, MembershipRole } from "@prisma/client";
 import { getSessionUser, getWorkspaceCookie, setWorkspaceCookie } from "@/lib/auth";
 import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { loadActiveWorkspaceMemberships } from "@/lib/business-contact";
+import { ensureFirstRunSetupSchema } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
 
 export type WorkspaceContext = {
@@ -24,6 +25,7 @@ export async function requireWorkspace(): Promise<WorkspaceContext> {
   // every authenticated page/action derives its workspace from, not just
   // in the Team UI.
   await ensureAppointmentConfirmationSchema(prisma);
+  await ensureFirstRunSetupSchema(prisma);
   const memberships = await loadActiveWorkspaceMemberships(prisma, user.id);
 
   if (memberships.length === 0) {

@@ -63,6 +63,38 @@ export const HOW_IT_WORKS_STEPS = [
   },
 ] as const;
 
+const GENERIC_HOW_IT_WORKS_STEPS = [
+  {
+    step: 1,
+    title: "Tell Us What You Need",
+    body: "Choose one or more handyman tasks, or describe something else. Photos are optional and help us understand the work.",
+  },
+  {
+    step: 2,
+    title: "We Review Your Project",
+    body: "Your request, selected tasks, and notes are reviewed before anyone is scheduled.",
+  },
+  {
+    step: 3,
+    title: "Receive Your Estimate",
+    body: "You receive a written estimate to review. Estimates are not instant and are not a final invoice.",
+  },
+  {
+    step: 4,
+    title: "Approve & Schedule",
+    body: "After you approve the estimate, the work can be scheduled.",
+  },
+  {
+    step: 5,
+    title: "We Complete the Work",
+    body: "The approved work is completed, and you can follow the project online through a private link when one is provided.",
+  },
+] as const;
+
+export function resolveHowItWorksSteps(slug: string) {
+  return isCollProRenoSlug(slug) ? HOW_IT_WORKS_STEPS : GENERIC_HOW_IT_WORKS_STEPS;
+}
+
 export const TRUST_POINTS = [
   {
     title: "Skilled Project Work",
@@ -84,6 +116,13 @@ export const TRUST_POINTS = [
 
 export const SERVICE_AREA_COPY =
   "Serving homeowners in the Fort Myers / Cape Coral area. Submit your project address and we'll confirm service availability for your location.";
+
+export const GENERIC_SERVICE_AREA_COPY =
+  "Service availability is confirmed from the project address you provide.";
+
+export function resolvePublicServiceAreaCopy(slug: string) {
+  return isCollProRenoSlug(slug) ? SERVICE_AREA_COPY : GENERIC_SERVICE_AREA_COPY;
+}
 
 export const PRIMARY_CTA_LABEL = "Get a Free Quote";
 export const TEXT_US_LABEL = "Text Us";

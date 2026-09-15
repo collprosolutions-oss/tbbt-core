@@ -5,7 +5,7 @@
  * approvedPublicAboutCopy is the only public About story field.
  * AI assistance is not wired — unknown facts stay unknown.
  */
-import { DEFAULT_PUBLIC_ABOUT_STORY } from "@/lib/public-site";
+import { DEFAULT_PUBLIC_ABOUT_STORY, isCollProRenoSlug } from "@/lib/public-site";
 
 export const MAX_OWNER_STORY_LENGTH = 8000;
 export const MAX_PUBLIC_ABOUT_COPY_LENGTH = 4000;
@@ -19,9 +19,14 @@ export function normalizeAboutCopy(value: string | null | undefined, maxLength: 
   return text;
 }
 
-export function resolvePublishedAboutCopy(approved: string | null | undefined) {
+export function resolvePublishedAboutCopy(
+  approved: string | null | undefined,
+  slug?: string | null,
+) {
   const text = approved?.trim();
-  return text || DEFAULT_PUBLIC_ABOUT_STORY;
+  if (text) return text;
+  if (slug && isCollProRenoSlug(slug)) return DEFAULT_PUBLIC_ABOUT_STORY;
+  return "";
 }
 
 export function splitAboutParagraphs(text: string) {
