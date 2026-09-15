@@ -1,4 +1,9 @@
+import { redirect } from "next/navigation";
 import { FieldShell } from "@/components/field/field-shell";
+import {
+  FIRST_RUN_SETUP_PATH,
+  ownerNeedsFirstRunSetup,
+} from "@/lib/first-run-setup";
 import { requireWorkspace } from "@/lib/workspace";
 
 /**
@@ -16,6 +21,10 @@ export default async function FieldLayout({
   children: React.ReactNode;
 }) {
   const workspace = await requireWorkspace();
+
+  if (ownerNeedsFirstRunSetup(workspace)) {
+    redirect(FIRST_RUN_SETUP_PATH);
+  }
 
   return (
     <FieldShell

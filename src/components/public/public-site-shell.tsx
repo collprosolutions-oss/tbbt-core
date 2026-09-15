@@ -18,6 +18,7 @@ import {
   publicReviewsPath,
   publicServiceAreaPath,
   publicServicesPath,
+  resolvePublicServiceAreaCopy,
   type PublicBusiness,
   type PublicCatalogGroup,
 } from "@/lib/public-site";
@@ -76,6 +77,7 @@ export function PublicSiteShell({
         contactHref={publicContactPath(business.slug)}
         smsHref={textHref}
         categories={categories}
+        serviceAreaCopy={resolvePublicServiceAreaCopy(business.slug)}
       />
     </div>
   );

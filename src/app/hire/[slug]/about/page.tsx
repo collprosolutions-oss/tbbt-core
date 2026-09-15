@@ -46,7 +46,10 @@ export default async function PublicAboutPage({ params }: PageProps) {
       select: { approvedPublicAboutCopy: true },
     }),
   ]);
-  const storyCopy = resolvePublishedAboutCopy(settings?.approvedPublicAboutCopy);
+  const storyCopy = resolvePublishedAboutCopy(
+    settings?.approvedPublicAboutCopy,
+    site.business.slug,
+  );
 
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>
@@ -63,7 +66,11 @@ export default async function PublicAboutPage({ params }: PageProps) {
           smsHref={smsHref(phone)}
           requestHref={publicRequestPath(site.business.slug)}
         />
-        <PublicAbout storyImage={images.story} storyCopy={storyCopy} />
+        <PublicAbout
+          storyImage={images.story}
+          storyCopy={storyCopy}
+          slug={site.business.slug}
+        />
         <PublicCtaBar
           title="Ready to work together?"
           body="Tell us about your project and we will review the request before preparing a written estimate."

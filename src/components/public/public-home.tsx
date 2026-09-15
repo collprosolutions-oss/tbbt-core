@@ -6,6 +6,7 @@ import {
   HOME_FEATURED_PROJECT_IDS,
   PUBLIC_HOME_HERO_IMAGE,
   TRUST_POINTS,
+  isCollProRenoSlug,
   popularPublicCategories,
   publicCategoryPhoto,
   publicProjectsPath,
@@ -35,7 +36,10 @@ export function PublicHome({
   const servicesHref = publicServicesPath(business.slug);
   const projectsHref = publicProjectsPath(business.slug);
   const categories = popularPublicCategories(groups);
-  const featured = selectPublicProjectsById(HOME_FEATURED_PROJECT_IDS);
+  const isCollProReno = isCollProRenoSlug(business.slug);
+  const featured = isCollProReno
+    ? selectPublicProjectsById(HOME_FEATURED_PROJECT_IDS)
+    : [];
   const hero = images?.hero ?? {
     src: PUBLIC_HOME_HERO_IMAGE,
     objectPosition: PUBLIC_HOME_HERO_DEFAULT_POSITION,
@@ -142,7 +146,9 @@ export function PublicHome({
           <div className="public-container">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <h2 className="text-3xl font-extrabold tracking-wide uppercase">
-                Recent Projects / Real CollPro Work
+                {isCollProReno
+                  ? "Recent Projects / Real CollPro Work"
+                  : "Recent Projects"}
               </h2>
               <Link href={projectsHref} className="font-extrabold tracking-wide text-[var(--public-blue-soft)] uppercase">
                 View More Projects →

@@ -67,6 +67,7 @@
     "test:communications": "node --experimental-strip-types scripts/check-communications.mjs",
     "test:appointment-confirmation": "node --experimental-strip-types scripts/check-appointment-confirmation.mjs",
     "test:dashboard-attention": "node --experimental-strip-types scripts/check-dashboard-attention.mjs",
+    "test:first-run-setup": "node --experimental-strip-types scripts/check-first-run-setup.mjs",
     "test:public-intake-identity": "node --experimental-strip-types scripts/check-public-intake-identity.mjs",
     "test:test-data-cleanup": "node --experimental-strip-types scripts/check-test-data-cleanup.mjs"
   },
