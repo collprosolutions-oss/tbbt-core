@@ -3,7 +3,8 @@
  *
  * 1. TBBT SaaS billing (platform): the trade business pays TBBT for
  *    software access. Events: checkout.session.completed (mode
- *    subscription), customer.subscription.created/updated/deleted.
+ *    subscription), customer.subscription.created/updated/deleted/paused/resumed,
+ *    and invoice.paid / invoice.payment_succeeded for payment recovery.
  * 2. Stripe Connect (connected accounts): customers pay the trade
  *    business for invoices/deposits. Events carry event.account.
  *

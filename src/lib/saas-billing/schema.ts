@@ -26,6 +26,7 @@ export const SAAS_BILLING_ENSURE_SQL = [
     "founderEligibilityEndedAt" TIMESTAMP(3),
     "legacyExempt" BOOLEAN NOT NULL DEFAULT false,
     "saasFounderTrialBackfilledAt" TIMESTAMP(3),
+    "lastStripeEventCreatedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
     CONSTRAINT "BusinessSaasSubscription_pkey" PRIMARY KEY ("id")
@@ -38,6 +39,7 @@ export const SAAS_BILLING_ENSURE_SQL = [
     "stripeEventId" TEXT NOT NULL,
     "eventType" TEXT NOT NULL,
     "businessId" TEXT,
+    "stripeEventCreatedAt" TIMESTAMP(3),
     "processedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "SaasBillingWebhookEvent_pkey" PRIMARY KEY ("id")
   )`,
@@ -56,6 +58,11 @@ ALTER TABLE "BusinessSaasSubscription" ADD COLUMN IF NOT EXISTS "legacyExempt" B
 
 export const SAAS_FOUNDER_TRIAL_SENTINEL_SQL = `
 ALTER TABLE "BusinessSaasSubscription" ADD COLUMN IF NOT EXISTS "saasFounderTrialBackfilledAt" TIMESTAMP(3);
+`.trim();
+
+export const SAAS_SUBSCRIPTION_LIFECYCLE_ENSURE_SQL = `
+ALTER TABLE "BusinessSaasSubscription" ADD COLUMN IF NOT EXISTS "lastStripeEventCreatedAt" TIMESTAMP(3);
+ALTER TABLE "SaasBillingWebhookEvent" ADD COLUMN IF NOT EXISTS "stripeEventCreatedAt" TIMESTAMP(3);
 `.trim();
 
 /**
@@ -163,6 +170,11 @@ export async function ensureSaasBillingTablesAndColumns(db: BillingClient) {
         await db.$executeRawUnsafe(statement);
       }
       await db.$executeRawUnsafe(SAAS_FOUNDER_TRIAL_SENTINEL_SQL);
+      for (const statement of SAAS_SUBSCRIPTION_LIFECYCLE_ENSURE_SQL.split(";")
+        .map((part) => part.trim())
+        .filter(Boolean)) {
+        await db.$executeRawUnsafe(statement);
+      }
     })().catch((error) => {
       ensureTablesPromise = null;
       throw error;

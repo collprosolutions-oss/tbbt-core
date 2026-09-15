@@ -88,6 +88,7 @@ export function founderFieldsForSubscriptionStatus(input: {
     founderEligibilityEndedAt: Date | null;
   } | null;
   nextStatus: string;
+  cancelAtPeriodEnd?: boolean | null;
   now?: Date;
 }) {
   const now = input.now ?? new Date();
@@ -98,6 +99,11 @@ export function founderFieldsForSubscriptionStatus(input: {
   if (input.nextStatus === "active" || input.nextStatus === "trialing") {
     if (current.founderConvertedAt) return null;
     return { founderConvertedAt: now };
+  }
+  // Scheduling cancellation for period end is not termination. The
+  // contractor stays continuously subscribed, so Founder eligibility stays.
+  if (input.cancelAtPeriodEnd === true && input.nextStatus !== "canceled" && input.nextStatus !== "incomplete_expired") {
+    return null;
   }
   if (input.nextStatus === "canceled" || input.nextStatus === "incomplete_expired") {
     return {
@@ -112,6 +118,7 @@ export async function applyFounderSubscriptionTransition(
   db: BillingClient,
   businessId: string,
   nextStatus: string,
+  cancelAtPeriodEnd?: boolean | null,
 ) {
   const current = await db.businessSaasSubscription.findUnique({
     where: { businessId },
@@ -121,7 +128,11 @@ export async function applyFounderSubscriptionTransition(
       founderEligibilityEndedAt: true,
     },
   });
-  const patch = founderFieldsForSubscriptionStatus({ current, nextStatus });
+  const patch = founderFieldsForSubscriptionStatus({
+    current,
+    nextStatus,
+    cancelAtPeriodEnd,
+  });
   if (!patch) return;
   await db.businessSaasSubscription.update({
     where: { businessId },

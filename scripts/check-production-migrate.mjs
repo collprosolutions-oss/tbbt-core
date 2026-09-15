@@ -329,6 +329,25 @@ check(
     saasBillingSchema.includes("trialStartedAt"),
 );
 
+const saasLifecycleMigration = readFileSync(
+  new URL("../prisma/migrations/20260915220000_add_saas_subscription_lifecycle/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "SaaS subscription lifecycle migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(saasLifecycleMigration) &&
+    saasLifecycleMigration.includes('ADD COLUMN IF NOT EXISTS "lastStripeEventCreatedAt"') &&
+    saasLifecycleMigration.includes('ADD COLUMN IF NOT EXISTS "stripeEventCreatedAt"') &&
+    saasLifecycleMigration.includes("Does not rewrite Business") &&
+    !/UPDATE "Business"/i.test(saasLifecycleMigration),
+);
+check(
+  "Preview runtime ensure covers SaaS lifecycle timestamps skipped by migrate",
+  saasBillingSchema.includes("SAAS_SUBSCRIPTION_LIFECYCLE_ENSURE_SQL") &&
+    saasBillingSchema.includes("lastStripeEventCreatedAt") &&
+    saasBillingSchema.includes("stripeEventCreatedAt"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

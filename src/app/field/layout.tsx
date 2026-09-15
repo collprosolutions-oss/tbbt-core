@@ -53,7 +53,9 @@ export default async function FieldLayout({
       businessName={workspace.business.name}
       userName={workspace.user.name}
       banner={
-        entitlement.requiresSubscription ? (
+        entitlement.requiresSubscription ||
+        entitlement.state === "payment_problem" ||
+        entitlement.cancelAtPeriodEnd ? (
           <SaasEntitlementBanner entitlement={entitlement} role={workspace.role} />
         ) : null
       }

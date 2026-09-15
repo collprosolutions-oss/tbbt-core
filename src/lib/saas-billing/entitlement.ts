@@ -14,7 +14,12 @@ import {
   SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE,
 } from "@/lib/saas-billing/messages";
 import { ensureSaasBillingSchema } from "@/lib/saas-billing/schema";
-import { SAAS_SUBSCRIPTION_STATUS_NONE } from "@/lib/saas-billing/types";
+import {
+  isSaasPaymentProblemStatus,
+  isSaasSubscribedStatus,
+  isSaasTerminatedStatus,
+  SAAS_SUBSCRIPTION_STATUS_NONE,
+} from "@/lib/saas-billing/types";
 
 export { SAAS_SUBSCRIPTION_REQUIRED_OWNER_MESSAGE, SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE } from "@/lib/saas-billing/messages";
 
@@ -36,6 +41,8 @@ export type SaasEntitlementRow = {
   founderConvertedAt: Date | null;
   founderEligibilityEndedAt: Date | null;
   legacyExempt: boolean;
+  cancelAtPeriodEnd?: boolean | null;
+  currentPeriodEnd?: Date | null;
 };
 
 export type SaasEntitlement = {
@@ -50,12 +57,11 @@ export type SaasEntitlement = {
   founderConvertedAt: string | null;
   founderEligibilityEndedAt: string | null;
   legacyExempt: boolean;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodEnd: string | null;
   label: string;
   detail: string;
 };
-
-const PAYMENT_PROBLEM_STATUSES = new Set(["past_due", "unpaid", "paused"]);
-const SUBSCRIBED_STATUSES = new Set(["active", "trialing"]);
 
 export function resolveSaasEntitlement(input: {
   slug: string;
@@ -67,6 +73,8 @@ export function resolveSaasEntitlement(input: {
   const trialStartedAt = row?.trialStartedAt ?? null;
   const trialEndsAt = row?.trialEndsAt ?? null;
   const founderEligible = row?.founderEligible ?? false;
+  const cancelAtPeriodEnd = row?.cancelAtPeriodEnd === true;
+  const currentPeriodEnd = row?.currentPeriodEnd ?? null;
   const base = {
     trialStartedAt: trialStartedAt?.toISOString() ?? null,
     trialEndsAt: trialEndsAt?.toISOString() ?? null,
@@ -75,6 +83,8 @@ export function resolveSaasEntitlement(input: {
     founderConvertedAt: row?.founderConvertedAt?.toISOString() ?? null,
     founderEligibilityEndedAt: row?.founderEligibilityEndedAt?.toISOString() ?? null,
     legacyExempt: row?.legacyExempt ?? false,
+    cancelAtPeriodEnd,
+    currentPeriodEnd: currentPeriodEnd?.toISOString() ?? null,
   };
 
   if (isCollProRenoSlug(input.slug)) {
@@ -91,18 +101,20 @@ export function resolveSaasEntitlement(input: {
   }
 
   const status = row?.status ?? SAAS_SUBSCRIPTION_STATUS_NONE;
-  if (SUBSCRIBED_STATUSES.has(status)) {
+  if (isSaasSubscribedStatus(status)) {
     return {
       ...base,
       state: "subscribed_active",
       canOperate: true,
       requiresSubscription: false,
       trialActive: false,
-      label: "Subscribed",
-      detail: "TBBT software access is covered by an active subscription.",
+      label: cancelAtPeriodEnd ? "Cancellation scheduled" : "Subscribed",
+      detail: cancelAtPeriodEnd
+        ? "Cancellation is scheduled at period end. TBBT stays operational until the paid period actually ends."
+        : "TBBT software access is covered by an active subscription.",
     };
   }
-  if (PAYMENT_PROBLEM_STATUSES.has(status)) {
+  if (isSaasPaymentProblemStatus(status)) {
     return {
       ...base,
       state: "payment_problem",
@@ -125,6 +137,19 @@ export function resolveSaasEntitlement(input: {
       detail: `Founder Plan trial is active. ${days} day${days === 1 ? "" : "s"} remaining. No credit card is required to continue the trial.`,
     };
   }
+  if (isSaasTerminatedStatus(status) || status === "incomplete") {
+    return {
+      ...base,
+      state: "subscription_required",
+      canOperate: false,
+      requiresSubscription: true,
+      trialActive: false,
+      label: "Subscription required",
+      detail: isSaasTerminatedStatus(status)
+        ? "The TBBT subscription has ended. Business data is retained. Subscribe from TBBT Billing to keep operating."
+        : "The TBBT subscription was not completed. Business data is retained. Subscribe from TBBT Billing to keep operating.",
+    };
+  }
   if (trialEndsAt && now >= trialEndsAt) {
     return {
       ...base,
@@ -134,6 +159,17 @@ export function resolveSaasEntitlement(input: {
       trialActive: false,
       label: "Subscription required",
       detail: "The Founder Plan trial has ended. Business data is retained. Subscribe from TBBT Billing to keep operating.",
+    };
+  }
+  if (row?.founderEligibilityEndedAt || row?.founderConvertedAt) {
+    return {
+      ...base,
+      state: "subscription_required",
+      canOperate: false,
+      requiresSubscription: true,
+      trialActive: false,
+      label: "Subscription required",
+      detail: "The TBBT subscription has ended. Business data is retained. Subscribe from TBBT Billing to keep operating.",
     };
   }
 
@@ -214,6 +250,8 @@ export async function loadSaasEntitlement(
       founderConvertedAt: true,
       founderEligibilityEndedAt: true,
       legacyExempt: true,
+      cancelAtPeriodEnd: true,
+      currentPeriodEnd: true,
     },
   });
   return resolveSaasEntitlement({ slug: business.slug, row, now });

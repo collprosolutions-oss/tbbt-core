@@ -1,11 +1,12 @@
 export const SAAS_SUBSCRIPTION_STATUS_NONE = "none";
 
+export const SAAS_SUBSCRIBED_STATUSES = ["active", "trialing"] as const;
+export const SAAS_PAYMENT_PROBLEM_STATUSES = ["past_due", "unpaid", "paused"] as const;
+export const SAAS_TERMINATED_STATUSES = ["canceled", "incomplete_expired"] as const;
+
 export const BLOCKING_SAAS_SUBSCRIPTION_STATUSES = [
-  "active",
-  "trialing",
-  "past_due",
-  "unpaid",
-  "paused",
+  ...SAAS_SUBSCRIBED_STATUSES,
+  ...SAAS_PAYMENT_PROBLEM_STATUSES,
 ] as const;
 
 export type BlockingSaasSubscriptionStatus =
@@ -17,7 +18,11 @@ export type SaasSubscriptionSnapshot = {
   stripePriceId: string | null;
   status: string;
   currentPeriodEnd: Date | null;
-  cancelAtPeriodEnd: boolean;
+  /**
+   * null means the event does not speak to cancellation scheduling
+   * (Checkout / invoice recovery without an expanded subscription).
+   */
+  cancelAtPeriodEnd: boolean | null;
 };
 
 export type CreateSaasCustomerInput = {
@@ -48,6 +53,7 @@ export type ParsedSaasBillingEvent = {
   stripeEventId: string;
   eventType: string;
   businessId: string | null;
+  stripeEventCreatedAt: Date | null;
   snapshot: SaasSubscriptionSnapshot;
 };
 
@@ -84,6 +90,18 @@ export function isBlockingSaasStatus(status: string | null | undefined) {
   return BLOCKING_SAAS_SUBSCRIPTION_STATUSES.includes(
     (status ?? "") as BlockingSaasSubscriptionStatus,
   );
+}
+
+export function isSaasPaymentProblemStatus(status: string | null | undefined) {
+  return (SAAS_PAYMENT_PROBLEM_STATUSES as readonly string[]).includes(status ?? "");
+}
+
+export function isSaasSubscribedStatus(status: string | null | undefined) {
+  return (SAAS_SUBSCRIBED_STATUSES as readonly string[]).includes(status ?? "");
+}
+
+export function isSaasTerminatedStatus(status: string | null | undefined) {
+  return (SAAS_TERMINATED_STATUSES as readonly string[]).includes(status ?? "");
 }
 
 export function saasStatusLabel(status: string | null | undefined) {

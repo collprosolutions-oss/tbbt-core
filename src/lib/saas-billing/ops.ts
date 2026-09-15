@@ -25,6 +25,11 @@ import {
 } from "@/lib/saas-billing/founder-price";
 import { resolveSaasEntitlement, type SaasEntitlement } from "@/lib/saas-billing/entitlement";
 import { applyFounderSubscriptionTransition } from "@/lib/saas-billing/trial";
+import {
+  isStaleSaasStripeEvent,
+  isSaasSubscriptionObjectEvent,
+  resolveNextSaasStatus,
+} from "@/lib/saas-billing/lifecycle";
 import type { ParsedSaasBillingEvent, SaasSubscriptionSnapshot } from "@/lib/saas-billing/types";
 import {
   isBlockingSaasStatus,
@@ -79,7 +84,10 @@ async function loadRow(db: BillingClient, businessId: string) {
 async function upsertRow(
   db: BillingClient,
   businessId: string,
-  data: Partial<SaasSubscriptionSnapshot> & { stripeCustomerId?: string | null },
+  data: Partial<SaasSubscriptionSnapshot> & {
+    stripeCustomerId?: string | null;
+    lastStripeEventCreatedAt?: Date | null;
+  },
 ) {
   const current = await loadRow(db, businessId);
   if (!current) {
@@ -92,6 +100,7 @@ async function upsertRow(
         status: data.status ?? SAAS_SUBSCRIPTION_STATUS_NONE,
         currentPeriodEnd: data.currentPeriodEnd ?? null,
         cancelAtPeriodEnd: data.cancelAtPeriodEnd ?? false,
+        lastStripeEventCreatedAt: data.lastStripeEventCreatedAt ?? null,
       },
     });
   }
@@ -109,8 +118,11 @@ async function upsertRow(
       ...(data.currentPeriodEnd !== undefined
         ? { currentPeriodEnd: data.currentPeriodEnd }
         : {}),
-      ...(data.cancelAtPeriodEnd !== undefined
+      ...(data.cancelAtPeriodEnd !== undefined && data.cancelAtPeriodEnd !== null
         ? { cancelAtPeriodEnd: data.cancelAtPeriodEnd }
+        : {}),
+      ...(data.lastStripeEventCreatedAt !== undefined
+        ? { lastStripeEventCreatedAt: data.lastStripeEventCreatedAt }
         : {}),
     },
   });
@@ -145,6 +157,8 @@ export async function loadSaasBillingSnapshot(
           founderConvertedAt: row.founderConvertedAt,
           founderEligibilityEndedAt: row.founderEligibilityEndedAt,
           legacyExempt: row.legacyExempt,
+          cancelAtPeriodEnd: row.cancelAtPeriodEnd,
+          currentPeriodEnd: row.currentPeriodEnd,
         }
       : null,
   });
@@ -324,14 +338,39 @@ export async function applyParsedSaasBillingEvent(
   }
 
   const current = await loadRow(db, businessId);
-  const isSubscriptionEvent = parsed.eventType.startsWith("customer.subscription");
+  if (isStaleSaasStripeEvent(current?.lastStripeEventCreatedAt, parsed.stripeEventCreatedAt)) {
+    try {
+      await db.saasBillingWebhookEvent.create({
+        data: {
+          stripeEventId: parsed.stripeEventId,
+          eventType: parsed.eventType,
+          businessId,
+          stripeEventCreatedAt: parsed.stripeEventCreatedAt,
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        return { applied: false as const, reason: "already_processed" as const, businessId };
+      }
+      throw error;
+    }
+    return { applied: false as const, reason: "stale_event" as const, businessId };
+  }
+
   const incomingStatus = parsed.snapshot.status || current?.status || SAAS_SUBSCRIPTION_STATUS_NONE;
-  const keepExistingStatus =
-    !isSubscriptionEvent &&
-    current != null &&
-    current.status !== SAAS_SUBSCRIPTION_STATUS_NONE &&
-    current.status !== "incomplete";
-  const nextStatus = keepExistingStatus ? current.status : incomingStatus;
+  const nextStatus = resolveNextSaasStatus({
+    eventType: parsed.eventType,
+    incomingStatus,
+    currentStatus: current?.status,
+  });
+  const nextCancelAtPeriodEnd = isSaasSubscriptionObjectEvent(parsed.eventType)
+    ? parsed.snapshot.cancelAtPeriodEnd === true
+    : parsed.snapshot.cancelAtPeriodEnd != null
+      ? parsed.snapshot.cancelAtPeriodEnd
+      : current?.cancelAtPeriodEnd ?? false;
   await upsertRow(db, businessId, {
     stripeCustomerId: parsed.snapshot.stripeCustomerId ?? current?.stripeCustomerId ?? null,
     stripeSubscriptionId:
@@ -339,11 +378,16 @@ export async function applyParsedSaasBillingEvent(
     stripePriceId: parsed.snapshot.stripePriceId ?? current?.stripePriceId ?? null,
     status: nextStatus,
     currentPeriodEnd: parsed.snapshot.currentPeriodEnd ?? current?.currentPeriodEnd ?? null,
-    cancelAtPeriodEnd: isSubscriptionEvent
-      ? parsed.snapshot.cancelAtPeriodEnd
-      : current?.cancelAtPeriodEnd ?? false,
+    cancelAtPeriodEnd: nextCancelAtPeriodEnd,
+    lastStripeEventCreatedAt:
+      parsed.stripeEventCreatedAt ?? current?.lastStripeEventCreatedAt ?? null,
   });
-  await applyFounderSubscriptionTransition(db, businessId, nextStatus);
+  await applyFounderSubscriptionTransition(
+    db,
+    businessId,
+    nextStatus,
+    nextCancelAtPeriodEnd,
+  );
 
   try {
     await db.saasBillingWebhookEvent.create({
@@ -351,6 +395,7 @@ export async function applyParsedSaasBillingEvent(
         stripeEventId: parsed.stripeEventId,
         eventType: parsed.eventType,
         businessId,
+        stripeEventCreatedAt: parsed.stripeEventCreatedAt,
       },
     });
   } catch (error) {
