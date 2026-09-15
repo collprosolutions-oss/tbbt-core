@@ -29,6 +29,7 @@ export type SettingsWorkspaceProps = {
   supplierPricing?: SupplierPricingContextPayload | null;
   canClearTestData?: boolean;
   testDataCleanupPreview?: TestDataCleanupPreview | null;
+  checkoutStatus?: "success" | "canceled" | null;
 };
 
 export type {

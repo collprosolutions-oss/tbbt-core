@@ -117,6 +117,7 @@ try {
   console.log("\nSTATIC — Settings domain helpers");
   check("Invalid section falls back to overview", parseSettingsSection("not-real") === "overview");
   check("pricing section parses", parseSettingsSection("pricing") === "pricing");
+  check("TBBT Billing is a Settings section", parseSettingsSection("tbbt-billing") === "tbbt-billing");
   check("FOUNDER_PAGE_KEYS includes settings", FOUNDER_PAGE_KEYS.includes("settings"));
   check("Settings has 4 KPI cards", KPI_CARD_COUNTS.settings === 4);
   check(

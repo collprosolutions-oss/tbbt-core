@@ -216,6 +216,7 @@ model Business {
   serviceRequestPhotos        ServiceRequestPhoto[]
   serviceRequestMeasurements  ServiceRequestMeasurement[]
   paymentAccount           BusinessPaymentAccount?
+  saasSubscription         BusinessSaasSubscription?
   storageAccount           BusinessStorageAccount?
   storedAssets             StoredAsset[]
   estimatingDefaults       BusinessEstimatingDefault[]
@@ -849,6 +850,40 @@ model BusinessPaymentAccount {
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
   @@index([stripeAccountId])
+}
+
+/// TBBT SaaS software subscription for one Business. This is what the
+/// trade business pays TBBT for access. It is not Stripe Connect and
+/// not a contractor-customer invoice/deposit record. Stripe Customer
+/// and Subscription ids live here — never on BusinessPaymentAccount.
+model BusinessSaasSubscription {
+  id                   String    @id @default(cuid())
+  businessId           String    @unique
+  stripeCustomerId     String?
+  stripeSubscriptionId String?   @unique
+  stripePriceId        String?
+  /// Stripe subscription status, or "none" before Checkout completes.
+  status               String    @default("none")
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean   @default(false)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([stripeCustomerId])
+}
+
+/// Idempotency log for TBBT SaaS billing webhooks. Distinct from the
+/// Payment table used by Stripe Connect invoice/deposit Checkout.
+model SaasBillingWebhookEvent {
+  id            String   @id @default(cuid())
+  stripeEventId String   @unique
+  eventType     String
+  businessId    String?
+  processedAt   DateTime @default(now())
+
+  @@index([businessId])
 }
 
 model Invoice {

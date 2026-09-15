@@ -623,6 +623,30 @@ try {
     )?.connectedAccountId === "acct_from_metadata",
   );
   check(
+    "subscription Checkout is not treated as a Connect invoice/deposit payment",
+    parseCheckoutPaymentEvent({
+      type: "checkout.session.completed",
+      account: "acct_connect",
+      data: {
+        object: {
+          object: "checkout.session",
+          id: "cs_sub_1",
+          mode: "subscription",
+          payment_status: "paid",
+          amount_total: 9900,
+          currency: "usd",
+          payment_intent: "pi_sub_1",
+          metadata: {
+            purpose: "tbbt_saas_subscription",
+            businessId: "biz_saas",
+            invoiceId: "inv_should_ignore",
+            connectedAccountId: "acct_connect",
+          },
+        },
+      },
+    }) === null,
+  );
+  check(
     "parse without account and without metadata connectedAccountId is ignored",
     parseCheckoutPaymentEvent(
       checkoutEvent({

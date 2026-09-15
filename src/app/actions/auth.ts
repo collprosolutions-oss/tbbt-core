@@ -18,6 +18,7 @@ import { prisma } from "@/lib/prisma";
 import { provisionOwnerWorkspace } from "@/lib/signup-provision";
 import { ensureStarterServicesSetupSchema } from "@/lib/starter-services-setup";
 import { ensureWebsiteSetupSchema } from "@/lib/website-setup";
+import { ensureSaasBillingSchema } from "@/lib/saas-billing";
 
 export type AuthFormState = {
   error?: string;
@@ -82,6 +83,7 @@ export async function signInAction(
   await ensureFirstRunSetupSchema(prisma);
   await ensureStarterServicesSetupSchema(prisma);
   await ensureWebsiteSetupSchema(prisma);
+  await ensureSaasBillingSchema(prisma);
 
   const user = await prisma.user.findUnique({
     where: { email },
