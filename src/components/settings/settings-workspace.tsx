@@ -8,6 +8,10 @@ import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { ConnectStripeButton } from "@/components/settings/connect-stripe-button";
+import {
+  SaasBillingPortalButton,
+  SaasSubscribeButton,
+} from "@/components/settings/saas-billing-buttons";
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import { SchedulingSettingsForm } from "@/components/settings/scheduling-settings-form";
@@ -44,6 +48,11 @@ import {
   SETTINGS_SECTION_LABELS,
   SETTINGS_SECTIONS,
   SMS_DELIVERY_UNAVAILABLE_MESSAGE,
+  TBBT_SAAS_BILLING_DESCRIPTION,
+  TBBT_SAAS_BILLING_OWNER_ONLY_MESSAGE,
+  TBBT_SAAS_BILLING_UNCONFIGURED_MESSAGE,
+  TBBT_SAAS_CHECKOUT_CANCELED_MESSAGE,
+  TBBT_SAAS_CHECKOUT_SUCCESS_MESSAGE,
   type SettingsReadinessStatus,
   type SettingsSection,
 } from "@/lib/settings";
@@ -165,6 +174,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
     supplierPricing,
     canClearTestData,
     testDataCleanupPreview,
+    checkoutStatus,
   } = props;
 
   if (section === "overview") {
@@ -404,9 +414,67 @@ function SectionBody(props: SettingsWorkspaceProps) {
                 }
               />
             ) : null}
+            <p className="text-sm text-muted-foreground">
+              Customer invoice and deposit payments are separate from TBBT software billing.
+            </p>
           </div>
         </SectionCard>
       </div>
+    );
+  }
+
+  if (section === "tbbt-billing") {
+    const billing = snapshot.saasBilling;
+    const periodLabel = billing.currentPeriodEnd
+      ? new Date(billing.currentPeriodEnd).toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        })
+      : null;
+    return (
+      <SectionCard title="TBBT software subscription" description={TBBT_SAAS_BILLING_DESCRIPTION}>
+        {checkoutStatus === "success" ? (
+          <p className="rounded-lg border bg-muted/40 p-3 text-sm">{TBBT_SAAS_CHECKOUT_SUCCESS_MESSAGE}</p>
+        ) : null}
+        {checkoutStatus === "canceled" ? (
+          <p className="rounded-lg border bg-muted/40 p-3 text-sm">{TBBT_SAAS_CHECKOUT_CANCELED_MESSAGE}</p>
+        ) : null}
+        <dl className="grid gap-3 text-sm sm:grid-cols-2">
+          <div>
+            <dt className="text-muted-foreground">Plan</dt>
+            <dd className="font-medium">{billing.planName}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Status</dt>
+            <dd className="font-medium">{billing.statusLabel}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Current period ends</dt>
+            <dd className="font-medium">{periodLabel ?? "Not available yet"}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Cancel at period end</dt>
+            <dd className="font-medium">{billing.cancelAtPeriodEnd ? "Yes" : "No"}</dd>
+          </div>
+        </dl>
+        {!billing.configured ? (
+          <p className="text-sm text-muted-foreground">{TBBT_SAAS_BILLING_UNCONFIGURED_MESSAGE}</p>
+        ) : null}
+        {billing.configured && !billing.appUrlConfigured ? (
+          <p className="text-sm text-muted-foreground">
+            Checkout needs NEXT_PUBLIC_APP_URL so Stripe can return to TBBT.
+          </p>
+        ) : null}
+        {canEditConsequential ? (
+          <div className="flex flex-wrap gap-3">
+            {billing.checkoutPossible ? <SaasSubscribeButton /> : null}
+            {billing.portalPossible ? <SaasBillingPortalButton /> : null}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">{TBBT_SAAS_BILLING_OWNER_ONLY_MESSAGE}</p>
+        )}
+      </SectionCard>
     );
   }
 

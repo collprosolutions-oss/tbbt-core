@@ -32,11 +32,15 @@ export const metadata: Metadata = {
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ section?: string }>;
+  searchParams: Promise<{ section?: string; checkout?: string }>;
 }) {
   const access = await requireManagementPageAccess();
   const params = await searchParams;
   const section = parseSettingsSection(params.section);
+  const checkoutStatus =
+    params.checkout === "success" || params.checkout === "canceled"
+      ? params.checkout
+      : null;
 
   const snapshot = await loadSettingsSnapshot(prisma, access.businessId);
   const readiness = settingsReadinessFromSnapshot(snapshot);
@@ -173,6 +177,7 @@ export default async function SettingsPage({
           supplierPricing={supplierPricing}
           canClearTestData={canClearTestData}
           testDataCleanupPreview={testDataCleanupPreview}
+          checkoutStatus={checkoutStatus}
         />
       </FounderDesignRoot>
     </PageContainer>

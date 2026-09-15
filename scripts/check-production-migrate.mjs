@@ -276,6 +276,37 @@ check(
   workspaceLoader.includes("ensureWebsiteSetupSchema"),
 );
 
+const saasBillingMigration = readFileSync(
+  new URL("../prisma/migrations/20260915180000_add_saas_billing/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "SaaS billing migration is additive and distinct from Connect",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(saasBillingMigration) &&
+    saasBillingMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessSaasSubscription"') &&
+    saasBillingMigration.includes('CREATE TABLE IF NOT EXISTS "SaasBillingWebhookEvent"') &&
+    saasBillingMigration.includes("Do not backfill Stripe Customer") &&
+    saasBillingMigration.includes("BusinessPaymentAccount") &&
+    !saasBillingMigration.includes("UPDATE \"Business\""),
+);
+
+const saasBillingSchema = readFileSync(
+  new URL("../src/lib/saas-billing/schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers SaaS billing tables skipped by migrate",
+  saasBillingSchema.includes("Preview shares Production and skips migrate") &&
+    saasBillingSchema.includes("ensureSaasBillingSchema") &&
+    saasBillingSchema.includes("SAAS_BILLING_ENSURE_SQL") &&
+    saasBillingSchema.includes('CREATE TABLE IF NOT EXISTS "BusinessSaasSubscription"'),
+);
+
+check(
+  "Authenticated workspace load ensures SaaS billing tables before Business SELECT",
+  workspaceLoader.includes("ensureSaasBillingSchema"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

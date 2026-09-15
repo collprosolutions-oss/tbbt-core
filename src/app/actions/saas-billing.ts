@@ -1,0 +1,75 @@
+"use server";
+
+import { redirect } from "next/navigation";
+import { requireBusinessAccess } from "@/lib/access";
+import { ForbiddenError } from "@/lib/authorization";
+import { prisma } from "@/lib/prisma";
+import {
+  SaasBillingError,
+  saasBillingErrorMessage,
+  startSaasBillingPortal,
+  startSaasSubscriptionCheckout,
+} from "@/lib/saas-billing";
+
+export type SaasBillingActionState = {
+  error?: string;
+};
+
+function rethrowRedirect(error: unknown) {
+  if (
+    error &&
+    typeof error === "object" &&
+    "digest" in error &&
+    typeof (error as { digest?: string }).digest === "string" &&
+    (error as { digest: string }).digest.startsWith("NEXT_REDIRECT")
+  ) {
+    throw error;
+  }
+}
+
+export async function startSaasSubscriptionCheckoutAction(
+  _prev: SaasBillingActionState,
+  _formData: FormData,
+): Promise<SaasBillingActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    const result = await startSaasSubscriptionCheckout(prisma, access);
+    redirect(result.url);
+  } catch (error) {
+    rethrowRedirect(error);
+    if (error instanceof ForbiddenError) {
+      return { error: error.message };
+    }
+    return {
+      error: saasBillingErrorMessage(
+        error,
+        "TBBT subscription checkout could not be started.",
+      ),
+    };
+  }
+}
+
+export async function startSaasBillingPortalAction(
+  _prev: SaasBillingActionState,
+  _formData: FormData,
+): Promise<SaasBillingActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    const result = await startSaasBillingPortal(prisma, access);
+    redirect(result.url);
+  } catch (error) {
+    rethrowRedirect(error);
+    if (error instanceof ForbiddenError) {
+      return { error: error.message };
+    }
+    if (error instanceof SaasBillingError) {
+      return { error: error.message };
+    }
+    return {
+      error: saasBillingErrorMessage(
+        error,
+        "Stripe Billing Portal is not available on this Stripe account yet.",
+      ),
+    };
+  }
+}

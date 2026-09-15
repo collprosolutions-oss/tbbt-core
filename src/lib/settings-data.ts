@@ -14,6 +14,10 @@ import { ACTIVE_EXPENSE_WHERE, projectedOperatingBalance } from "@/lib/expenses"
 import { PAYMENT_METHODS } from "@/lib/invoice-payment";
 import { getBusinessPaymentStatus } from "@/lib/payments";
 import { shouldOfferStripeOnboarding } from "@/lib/payments/readiness";
+import {
+  loadSaasBillingSnapshot,
+  type SaasBillingSnapshot,
+} from "@/lib/saas-billing";
 import type { PaymentProviderStatus } from "@/lib/settings";
 import {
   CHANNELS_DISCONNECTED_MESSAGE,
@@ -100,6 +104,7 @@ export type SettingsSnapshot = {
     paymentReady: boolean;
     onlineCheckoutPossible: boolean;
   };
+  saasBilling: SaasBillingSnapshot;
   bank: {
     connected: false;
     lastVerifiedBalance: null;
@@ -146,6 +151,7 @@ export async function loadSettingsSnapshot(
     expenses,
     auditRows,
     unavailableDates,
+    saasBilling,
   ] = await Promise.all([
     prisma.business.findFirst({
       where: { id: businessId },
@@ -229,6 +235,7 @@ export async function loadSettingsSnapshot(
       select: { date: true },
       orderBy: { date: "asc" },
     }),
+    loadSaasBillingSnapshot(prisma, businessId),
   ]);
 
   if (!business) {
@@ -319,6 +326,7 @@ export async function loadSettingsSnapshot(
       paymentReady: payment.paymentReady,
       onlineCheckoutPossible: payment.onlineCheckoutPossible,
     },
+    saasBilling,
     bank: {
       connected: false,
       lastVerifiedBalance: null,

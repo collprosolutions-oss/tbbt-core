@@ -1,3 +1,4 @@
+import { SAAS_CHECKOUT_PURPOSE } from "@/lib/saas-billing/config";
 import type { VerifiedCheckoutPayment } from "@/lib/payments/types";
 
 const SUCCESSFUL_CHECKOUT_EVENTS = new Set([
@@ -42,6 +43,9 @@ export function parseCheckoutPaymentEvent(
     return null;
   }
   const metadata = readMetadata(session.metadata);
+  if (session.mode === "subscription" || metadata.purpose === SAAS_CHECKOUT_PURPOSE) {
+    return null;
+  }
   const paymentStatus =
     typeof session.payment_status === "string" ? session.payment_status : "";
   if (eventType === "checkout.session.completed" && paymentStatus !== "paid") {
