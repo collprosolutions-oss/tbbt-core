@@ -14,13 +14,17 @@ export function ExpenseAssociationFields({
   jobs,
   customers,
   includeCustomerSelect = true,
+  defaultJobId = "",
+  defaultCustomerId = "",
 }: {
   jobs: ExpenseJobOption[];
   customers: ExpenseCustomerOption[];
   includeCustomerSelect?: boolean;
+  defaultJobId?: string;
+  defaultCustomerId?: string;
 }) {
-  const [customerId, setCustomerId] = useState("");
-  const [jobId, setJobId] = useState("");
+  const [customerId, setCustomerId] = useState(defaultCustomerId);
+  const [jobId, setJobId] = useState(defaultJobId);
 
   const selectedJob = jobs.find((job) => job.id === jobId) ?? null;
   const derivedCustomerName =

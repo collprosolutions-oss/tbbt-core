@@ -13,6 +13,8 @@ import {
   expenseErrorMessage,
   reviewExpense,
   setReimbursementStatus,
+  updateExpense,
+  voidExpense,
 } from "@/lib/expense-ops";
 import { prisma } from "@/lib/prisma";
 import {
@@ -80,6 +82,7 @@ export async function createExpenseAction(
       jobId: readString(formData, "jobId") || undefined,
       customerId: readString(formData, "customerId") || undefined,
       reimbursable: readChecked(formData, "reimbursable"),
+      customerBillable: readChecked(formData, "customerBillable"),
       paymentMethod: readString(formData, "paymentMethod") || undefined,
       taxCategory: readString(formData, "taxCategory") || undefined,
       recurring: readChecked(formData, "recurring"),
@@ -118,6 +121,7 @@ export async function createMileageExpenseAction(
       jobId: readString(formData, "jobId") || undefined,
       customerId: readString(formData, "customerId") || undefined,
       reimbursable: readChecked(formData, "reimbursable"),
+      customerBillable: readChecked(formData, "customerBillable"),
       mileageMiles: readString(formData, "mileageMiles"),
       notes: readString(formData, "notes") || undefined,
     });
@@ -125,6 +129,56 @@ export async function createMileageExpenseAction(
     return { message: "Mileage expense recorded." };
   } catch (error) {
     return { error: expenseErrorMessage(error, "Could not record that mileage expense.") };
+  }
+}
+
+export async function updateExpenseAction(
+  _prev: ExpenseActionState,
+  formData: FormData,
+): Promise<ExpenseActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    const expenseId = readString(formData, "expenseId");
+    if (!expenseId) return { error: "That expense could not be found." };
+    await updateExpense(prisma, access, {
+      expenseId,
+      occurredOn: readString(formData, "occurredOn"),
+      description: readString(formData, "description"),
+      amount: readString(formData, "amount"),
+      category: readString(formData, "category"),
+      vendor: readString(formData, "vendor"),
+      purchaserMembershipId: readString(formData, "purchaserMembershipId") || undefined,
+      jobId: readString(formData, "jobId") || undefined,
+      customerId: readString(formData, "customerId") || undefined,
+      reimbursable: readChecked(formData, "reimbursable"),
+      customerBillable: readChecked(formData, "customerBillable"),
+      paymentMethod: readString(formData, "paymentMethod") || undefined,
+      taxCategory: readString(formData, "taxCategory") || undefined,
+      recurring: readChecked(formData, "recurring"),
+      recurringNote: readString(formData, "recurringNote") || undefined,
+      mileageMiles: readString(formData, "mileageMiles") || undefined,
+      notes: readString(formData, "notes") || undefined,
+    });
+    revalidateExpenses();
+    return { message: "Expense updated." };
+  } catch (error) {
+    return { error: expenseErrorMessage(error, "Could not update that expense.") };
+  }
+}
+
+export async function voidExpenseAction(
+  _prev: ExpenseActionState,
+  formData: FormData,
+): Promise<ExpenseActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    const expenseId = readString(formData, "expenseId");
+    if (!expenseId) return { error: "That expense could not be found." };
+    await voidExpense(prisma, access, { expenseId });
+    revalidateExpenses();
+    return { message: "Expense voided." };
+  } catch (error) {
+    return { error: expenseErrorMessage(error, "Could not void that expense.") };
   }
 }
 

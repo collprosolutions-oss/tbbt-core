@@ -5,12 +5,14 @@ import {
   attachExpenseReceiptAction,
   createExpenseAction,
   createMileageExpenseAction,
+  updateExpenseAction,
   type ExpenseActionState,
 } from "@/app/actions/expenses";
 import { ExpenseAssociationFields } from "@/components/expenses/expense-association-fields";
 import type {
   ExpenseCustomerOption,
   ExpenseJobOption,
+  ExpenseListItem,
   ExpenseWorkerOption,
 } from "@/components/expenses/types";
 import { Button } from "@/components/ui/button";
@@ -36,7 +38,7 @@ const initialState: ExpenseActionState = {};
 const selectClass =
   "h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm dark:bg-input/30";
 
-export type ExpenseSheetMode = "expense" | "mileage" | "recurring" | "receipt";
+export type ExpenseSheetMode = "expense" | "mileage" | "recurring" | "receipt" | "edit";
 
 export function AddExpenseSheet({
   open,
@@ -48,6 +50,7 @@ export function AddExpenseSheet({
   defaultDate,
   storageConfigured,
   attachExpenseId,
+  editingExpense,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -58,6 +61,7 @@ export function AddExpenseSheet({
   defaultDate: string;
   storageConfigured: boolean;
   attachExpenseId?: string | null;
+  editingExpense?: ExpenseListItem | null;
 }) {
   if (mode === "mileage") {
     return (
@@ -71,7 +75,21 @@ export function AddExpenseSheet({
       />
     );
   }
-  if (mode === "receipt" && attachExpenseId) {
+  if (mode === "receipt") {
+    if (!attachExpenseId) {
+      return (
+        <Sheet open={open} onOpenChange={onOpenChange}>
+          <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
+            <SheetHeader>
+              <SheetTitle>Upload Receipt</SheetTitle>
+              <SheetDescription>
+                Select an expense in the list first, then attach a receipt to it.
+              </SheetDescription>
+            </SheetHeader>
+          </SheetContent>
+        </Sheet>
+      );
+    }
     return (
       <AttachReceiptForm
         open={open}
@@ -81,16 +99,29 @@ export function AddExpenseSheet({
       />
     );
   }
+  if (mode === "edit" && !editingExpense) {
+    return (
+      <Sheet open={open} onOpenChange={onOpenChange}>
+        <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
+          <SheetHeader>
+            <SheetTitle>Edit Expense</SheetTitle>
+            <SheetDescription>Select an expense in the list first, then edit it.</SheetDescription>
+          </SheetHeader>
+        </SheetContent>
+      </Sheet>
+    );
+  }
   return (
     <ExpenseForm
       open={open}
       onOpenChange={onOpenChange}
-      mode={mode === "recurring" ? "recurring" : "expense"}
+      mode={mode === "edit" ? "edit" : mode === "recurring" ? "recurring" : "expense"}
       workers={workers}
       jobs={jobs}
       customers={customers}
       defaultDate={defaultDate}
       storageConfigured={storageConfigured}
+      editingExpense={mode === "edit" ? editingExpense : null}
     />
   );
 }
@@ -104,45 +135,73 @@ function ExpenseForm({
   customers,
   defaultDate,
   storageConfigured,
+  editingExpense,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  mode: "expense" | "recurring";
+  mode: "expense" | "recurring" | "edit";
   workers: ExpenseWorkerOption[];
   jobs: ExpenseJobOption[];
   customers: ExpenseCustomerOption[];
   defaultDate: string;
   storageConfigured: boolean;
+  editingExpense?: ExpenseListItem | null;
 }) {
-  const [state, formAction, pending] = useActionState(createExpenseAction, initialState);
-  const recurring = mode === "recurring";
+  const editing = mode === "edit" && editingExpense;
+  const [state, formAction, pending] = useActionState(
+    editing ? updateExpenseAction : createExpenseAction,
+    initialState,
+  );
+  const recurring = mode === "recurring" || Boolean(editingExpense?.recurring);
+  const dateValue = editingExpense?.occurredOnValue ?? defaultDate;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
         <SheetHeader>
-          <SheetTitle>{recurring ? "Recurring Expense" : "Add Expense"}</SheetTitle>
+          <SheetTitle>
+            {editing ? "Edit Expense" : recurring && mode !== "edit" ? "Recurring Expense" : "Add Expense"}
+          </SheetTitle>
           <SheetDescription>
-            {recurring
-              ? "Identify this as a recurring expense. TBBT does not automatically bill or charge it."
-              : "Record a business expense. Amounts are saved as entered."}
+            {editing
+              ? "Update this expense. Linking a job stores the cost for later profitability — it does not add a line to an invoice."
+              : recurring && mode !== "edit"
+                ? "Identify this as a recurring expense. TBBT does not automatically bill or charge it."
+                : "Record a business expense. Amounts are saved as entered."}
           </SheetDescription>
         </SheetHeader>
-        <form action={formAction} className="mt-4 space-y-3 px-4 pb-6">
-          {recurring ? <input type="hidden" name="recurring" value="1" /> : null}
+        <form action={formAction} className="mt-4 space-y-3 px-4 pb-6" key={editingExpense?.id ?? "create"}>
+          {editing ? <input type="hidden" name="expenseId" value={editingExpense.id} /> : null}
+          {mode === "recurring" ? <input type="hidden" name="recurring" value="1" /> : null}
           <div className="grid grid-cols-2 gap-2">
             <Field label="Date">
-              <Input type="date" name="occurredOn" defaultValue={defaultDate} required />
+              <Input type="date" name="occurredOn" defaultValue={dateValue} required />
             </Field>
             <Field label="Amount">
-              <Input name="amount" inputMode="decimal" placeholder="0.00" required />
+              <Input
+                name="amount"
+                inputMode="decimal"
+                placeholder="0.00"
+                defaultValue={editingExpense?.amountValue ?? ""}
+                required
+              />
             </Field>
           </div>
           <Field label="Description">
-            <Input name="description" placeholder="What was purchased" required />
+            <Input
+              name="description"
+              placeholder="What was purchased"
+              defaultValue={editingExpense?.description ?? ""}
+              required
+            />
           </Field>
           <Field label="Category">
-            <select name="category" defaultValue="MATERIALS" required className={selectClass}>
+            <select
+              name="category"
+              defaultValue={editingExpense?.category ?? "MATERIALS"}
+              required
+              className={selectClass}
+            >
               {EXPENSE_CATEGORIES.filter((category) => category !== "MILEAGE").map((category) => (
                 <option key={category} value={category}>
                   {EXPENSE_CATEGORY_LABELS[category]}
@@ -151,11 +210,15 @@ function ExpenseForm({
               <option value="MILEAGE">{EXPENSE_CATEGORY_LABELS.MILEAGE}</option>
             </select>
           </Field>
-          <Field label="Vendor">
-            <Input name="vendor" placeholder="Optional vendor name" />
+          <Field label="Merchant / vendor / payee">
+            <Input name="vendor" placeholder="Home Depot, helper name, city permit…" defaultValue={editingExpense?.vendor ?? ""} />
           </Field>
           <Field label="Purchaser">
-            <select name="purchaserMembershipId" defaultValue="" className={selectClass}>
+            <select
+              name="purchaserMembershipId"
+              defaultValue={editingExpense?.purchaserMembershipId ?? ""}
+              className={selectClass}
+            >
               <option value="">Unassigned</option>
               {workers.map((worker) => (
                 <option key={worker.membershipId} value={worker.membershipId}>
@@ -167,9 +230,14 @@ function ExpenseForm({
               Who bought or paid for this — a team member, not the customer.
             </p>
           </Field>
-          <ExpenseAssociationFields jobs={jobs} customers={customers} />
+          <ExpenseAssociationFields
+            jobs={jobs}
+            customers={customers}
+            defaultJobId={editingExpense?.jobId ?? ""}
+            defaultCustomerId={editingExpense?.customerId ?? ""}
+          />
           <Field label="Payment method">
-            <select name="paymentMethod" defaultValue="" className={selectClass}>
+            <select name="paymentMethod" defaultValue={editingExpense?.paymentMethod ?? ""} className={selectClass}>
               <option value="">Not recorded</option>
               {PAYMENT_METHODS.map((method) => (
                 <option key={method.value} value={method.value}>
@@ -179,7 +247,11 @@ function ExpenseForm({
             </select>
           </Field>
           <Field label="Tax treatment">
-            <select name="taxCategory" defaultValue="UNSPECIFIED" className={selectClass}>
+            <select
+              name="taxCategory"
+              defaultValue={editingExpense?.taxCategory ?? "UNSPECIFIED"}
+              className={selectClass}
+            >
               {TAX_CATEGORIES.map((category) => (
                 <option key={category} value={category}>
                   {TAX_CATEGORY_LABELS[category]}
@@ -187,9 +259,13 @@ function ExpenseForm({
               ))}
             </select>
           </Field>
-          {recurring ? (
+          {mode === "recurring" || editingExpense?.recurring ? (
             <Field label="Recurring note">
-              <Input name="recurringNote" placeholder="e.g. Monthly software" />
+              <Input
+                name="recurringNote"
+                placeholder="e.g. Monthly software"
+                defaultValue={editingExpense?.recurringNote ?? ""}
+              />
             </Field>
           ) : (
             <label className="flex items-center gap-2 text-sm">
@@ -197,14 +273,38 @@ function ExpenseForm({
               Recurring (identify only — not billed automatically)
             </label>
           )}
+          {(mode === "recurring" || editingExpense?.recurring) && mode !== "recurring" ? (
+            <input type="hidden" name="recurring" value="1" />
+          ) : null}
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" name="reimbursable" value="1" className="size-4" />
+            <input
+              type="checkbox"
+              name="reimbursable"
+              value="1"
+              defaultChecked={Boolean(editingExpense?.reimbursable)}
+              className="size-4"
+            />
             Reimbursable to employee
           </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="customerBillable"
+              value="1"
+              defaultChecked={Boolean(editingExpense?.customerBillable)}
+              className="mt-0.5 size-4"
+            />
+            <span>
+              Potentially billable to the customer
+              <span className="block text-xs text-muted-foreground">
+                Does not add this expense to an invoice.
+              </span>
+            </span>
+          </label>
           <Field label="Notes">
-            <Input name="notes" placeholder="Optional notes" />
+            <Input name="notes" placeholder="Optional notes" defaultValue={editingExpense?.notes ?? ""} />
           </Field>
-          {storageConfigured ? (
+          {editing ? null : storageConfigured ? (
             <Field label="Receipt">
               <Input type="file" name="receipt" accept="image/*" />
             </Field>
@@ -216,7 +316,13 @@ function ExpenseForm({
           {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}
           {state.message ? <p className="text-sm text-emerald-400">{state.message}</p> : null}
           <Button type="submit" disabled={pending} className="w-full">
-            {pending ? "Saving…" : recurring ? "Save recurring expense" : "Save expense"}
+            {pending
+              ? "Saving…"
+              : editing
+                ? "Save changes"
+                : recurring && mode !== "edit"
+                  ? "Save recurring expense"
+                  : "Save expense"}
           </Button>
         </form>
       </SheetContent>
@@ -285,6 +391,15 @@ function MileageForm({
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" name="reimbursable" value="1" defaultChecked className="size-4" />
             Reimbursable to employee
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" name="customerBillable" value="1" className="mt-0.5 size-4" />
+            <span>
+              Potentially billable to the customer
+              <span className="block text-xs text-muted-foreground">
+                Does not add this expense to an invoice.
+              </span>
+            </span>
           </label>
           <Field label="Notes">
             <Input name="notes" placeholder="Optional notes" />

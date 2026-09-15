@@ -10,7 +10,7 @@ import {
   ensureBusinessPublicContactSchema,
   resolveBusinessPublicContact,
 } from "@/lib/business-contact";
-import { projectedOperatingBalance } from "@/lib/expenses";
+import { ACTIVE_EXPENSE_WHERE, projectedOperatingBalance } from "@/lib/expenses";
 import { PAYMENT_METHODS } from "@/lib/invoice-payment";
 import { getBusinessPaymentStatus } from "@/lib/payments";
 import { shouldOfferStripeOnboarding } from "@/lib/payments/readiness";
@@ -175,7 +175,7 @@ export async function loadSettingsSnapshot(
     }),
     prisma.serviceCatalogItem.count({ where: scope }),
     prisma.expense.findMany({
-      where: { ...scope, vendor: { not: null } },
+      where: { ...scope, ...ACTIVE_EXPENSE_WHERE, vendor: { not: null } },
       select: { vendor: true },
       distinct: ["vendor"],
       orderBy: { vendor: "asc" },
@@ -205,7 +205,7 @@ export async function loadSettingsSnapshot(
       _sum: { total: true },
     }),
     prisma.expense.aggregate({
-      where: scope,
+      where: { ...scope, ...ACTIVE_EXPENSE_WHERE },
       _sum: { amount: true },
     }),
     prisma.settingsAuditLog.findMany({
