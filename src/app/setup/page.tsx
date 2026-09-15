@@ -8,7 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { hasCompletedFirstRunSetup } from "@/lib/first-run-setup";
+import { hasCompletedFirstRunSetup, postAuthenticationPath } from "@/lib/first-run-setup";
 import { requireWorkspace } from "@/lib/workspace";
 
 export const metadata: Metadata = {
@@ -23,7 +23,7 @@ export default async function FirstRunSetupPage() {
   }
 
   if (hasCompletedFirstRunSetup(workspace.business)) {
-    redirect("/dashboard");
+    redirect(postAuthenticationPath(workspace));
   }
 
   return (

@@ -155,6 +155,14 @@ model Business {
   /// backfilled once when the column is first created — not inferred from
   /// phone/email being populated.
   firstRunSetupCompletedAt DateTime?
+  /// Set when the OWNER finishes (installs or skips) first-run starter
+  /// services setup for this business's current trade. Null means the step
+  /// is still pending. Existing tenants are backfilled once when the column
+  /// is first created — not inferred from catalog item count.
+  starterServicesSetupCompletedAt DateTime?
+  /// INSTALLED or SKIPPED once starterServicesSetupCompletedAt is set for a
+  /// new owner. Existing backfilled tenants may leave this null.
+  starterServicesSetupChoice String?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 

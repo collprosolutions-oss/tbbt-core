@@ -215,6 +215,36 @@ check(
   workspaceLoader.includes("ensureFirstRunSetupSchema"),
 );
 
+const starterServicesMigration = readFileSync(
+  new URL("../prisma/migrations/20260915140000_add_starter_services_setup/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Starter-services setup migration is additive and one-shot",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(starterServicesMigration) &&
+    starterServicesMigration.includes('ADD COLUMN "starterServicesSetupCompletedAt"') &&
+    starterServicesMigration.includes('ADD COLUMN "starterServicesSetupChoice"') &&
+    starterServicesMigration.includes("information_schema.columns") &&
+    starterServicesMigration.includes("IF NOT EXISTS"),
+);
+
+const starterServicesSetup = readFileSync(
+  new URL("../src/lib/starter-services-setup.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers starter-services setup columns skipped by migrate",
+  starterServicesSetup.includes("Preview shares Production and skips migrate") &&
+    starterServicesSetup.includes("ensureStarterServicesSetupSchema") &&
+    starterServicesSetup.includes("STARTER_SERVICES_SETUP_ENSURE_SQL") &&
+    starterServicesSetup.includes('ADD COLUMN "starterServicesSetupCompletedAt"'),
+);
+
+check(
+  "Authenticated workspace load ensures starter-services setup columns before Business SELECT",
+  workspaceLoader.includes("ensureStarterServicesSetupSchema"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

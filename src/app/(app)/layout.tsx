@@ -6,6 +6,10 @@ import {
   FIRST_RUN_SETUP_PATH,
   ownerNeedsFirstRunSetup,
 } from "@/lib/first-run-setup";
+import {
+  ownerNeedsStarterServicesSetup,
+  STARTER_SERVICES_SETUP_PATH,
+} from "@/lib/starter-services-setup";
 import { getTrade } from "@/lib/trades";
 import { requireWorkspace } from "@/lib/workspace";
 
@@ -18,6 +22,9 @@ export default async function AppLayout({
 
   if (ownerNeedsFirstRunSetup(workspace)) {
     redirect(FIRST_RUN_SETUP_PATH);
+  }
+  if (ownerNeedsStarterServicesSetup(workspace)) {
+    redirect(STARTER_SERVICES_SETUP_PATH);
   }
 
   // Server-side READ gate for the whole management console: every page
