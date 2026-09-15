@@ -1,6 +1,7 @@
 export {
   getStripeSecretKey,
   getStripeWebhookSecret,
+  isFakePaymentsAdapterEnabled,
   isStripePlatformConfigured,
   STRIPE_CURRENCY,
 } from "@/lib/payments/config";

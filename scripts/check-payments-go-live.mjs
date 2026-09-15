@@ -11,6 +11,10 @@ import { readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
+const {
+  isFakePaymentsAdapterEnabled,
+  isStripePlatformConfigured,
+} = await import("@/lib/payments/config");
 const { explainPaymentsGoLive } = await import("@/lib/payments/go-live");
 const { shouldShowPayDeposit, shouldShowPayInvoice } = await import(
   "@/lib/payments/service"
@@ -91,6 +95,37 @@ const setupRequired = explainPaymentsGoLive({
 });
 check("incomplete onboarding is the setup blocker", setupRequired.blocker === "setup");
 
+console.log("\nUNIT — fake adapter never counts as live Stripe in production");
+const savedPaymentsEnv = {
+  VERCEL_ENV: process.env.VERCEL_ENV,
+  TBBT_PAYMENTS_ADAPTER: process.env.TBBT_PAYMENTS_ADAPTER,
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+};
+function restorePaymentsEnv() {
+  for (const [key, value] of Object.entries(savedPaymentsEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+process.env.VERCEL_ENV = "production";
+process.env.TBBT_PAYMENTS_ADAPTER = "fake";
+delete process.env.STRIPE_SECRET_KEY;
+check(
+  "production ignores TBBT_PAYMENTS_ADAPTER=fake",
+  isFakePaymentsAdapterEnabled() === false,
+);
+check(
+  "production fake adapter does not mark the platform configured",
+  isStripePlatformConfigured() === false,
+);
+process.env.VERCEL_ENV = "preview";
+process.env.TBBT_PAYMENTS_ADAPTER = "fake";
+check(
+  "preview still allows the fake adapter for tests",
+  isFakePaymentsAdapterEnabled() === true && isStripePlatformConfigured() === true,
+);
+restorePaymentsEnv();
+
 console.log("\nUNIT — customer Pay CTAs stay hidden without an app URL");
 check(
   "Pay Invoice requires app URL even when Stripe is ready",
@@ -155,6 +190,26 @@ const goLiveSrc = readFileSync(
   new URL("../src/lib/payments/go-live.ts", import.meta.url),
   "utf8",
 );
+const envExampleSrc = readFileSync(
+  new URL("../.env.example", import.meta.url),
+  "utf8",
+);
+const serviceSrc = readFileSync(
+  new URL("../src/lib/payments/service.ts", import.meta.url),
+  "utf8",
+);
+const adapterSrc = readFileSync(
+  new URL("../src/lib/payments/stripe-adapter.ts", import.meta.url),
+  "utf8",
+);
+const providerSrc = readFileSync(
+  new URL("../src/lib/payments/provider.ts", import.meta.url),
+  "utf8",
+);
+const configSrc = readFileSync(
+  new URL("../src/lib/payments/config.ts", import.meta.url),
+  "utf8",
+);
 
 check(
   "dashboard shows owner go-live honesty",
@@ -211,6 +266,30 @@ check(
 check(
   "go-live helper does not invent a fake payment provider",
   !goLiveSrc.includes("TBBT_PAYMENTS_ADAPTER") && !goLiveSrc.includes("fake"),
+);
+check(
+  "production webhook destination is documented",
+  envExampleSrc.includes("https://www.collproreno.com/api/stripe/webhook") &&
+    envExampleSrc.includes("checkout.session.completed") &&
+    envExampleSrc.includes("Connected accounts"),
+);
+check(
+  "hosted Checkout does not require a publishable key",
+  !adapterSrc.includes("NEXT_PUBLIC_STRIPE") &&
+    !adapterSrc.includes("publishable") &&
+    envExampleSrc.includes("never a publishable key"),
+);
+check(
+  "deposit apply rejects amount mismatches against remaining due",
+  serviceSrc.includes("async function applyVerifiedDepositPayment") &&
+    serviceSrc.includes('reason: "amount_mismatch"') &&
+    serviceSrc.includes("requiredDepositFromLines"),
+);
+check(
+  "production never enables the fake payments adapter",
+  configSrc.includes('process.env.VERCEL_ENV === "production"') &&
+    providerSrc.includes("isFakePaymentsAdapterEnabled") &&
+    envExampleSrc.includes("Never set TBBT_PAYMENTS_ADAPTER=fake"),
 );
 
 console.log(`\n${passed} passed, ${failed} failed`);

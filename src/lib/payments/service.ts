@@ -404,6 +404,13 @@ async function applyVerifiedDepositPayment(
       customerId: true,
       status: true,
       total: true,
+      approvedVersion: {
+        select: {
+          total: true,
+          lineItems: { select: { type: true, total: true, description: true } },
+        },
+      },
+      lineItems: { select: { type: true, total: true, description: true } },
       jobs: {
         select: { id: true, invoices: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } } },
         take: 1,
@@ -426,6 +433,25 @@ async function applyVerifiedDepositPayment(
   });
   if (!account || account.stripeAccountId !== payment.connectedAccountId) {
     return { applied: false, reason: "account_mismatch" };
+  }
+
+  const lines = estimate.approvedVersion?.lineItems ?? estimate.lineItems;
+  const total = estimate.approvedVersion?.total ?? estimate.total;
+  const required = requiredDepositFromLines(lines, total);
+  const existingPayments = await listProjectPayments(db, {
+    businessId: estimate.businessId,
+    estimateId: estimate.id,
+  });
+  const alreadyPaid = existingPayments
+    .filter((row) => row.purpose === PAYMENT_PURPOSE_MATERIAL_DEPOSIT)
+    .reduce((sum, row) => sum.add(row.amount), new Prisma.Decimal(0));
+  const due = required.sub(alreadyPaid);
+  if (due.lte(0)) {
+    return { applied: false, reason: "already_paid" };
+  }
+  const expectedCents = invoiceAmountToCents(due);
+  if (payment.amountCents !== expectedCents) {
+    return { applied: false, reason: "amount_mismatch" };
   }
 
   const job = estimate.jobs[0] ?? null;

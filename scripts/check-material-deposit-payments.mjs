@@ -648,6 +648,64 @@ try {
   });
   check("duplicate webhook does not create a second payment", afterDup.payments.length === 1);
 
+  const secondSession = await applyVerifiedCheckoutPayment(
+    prisma,
+    parseCheckoutPaymentEvent(
+      checkoutEvent({
+        account: accountA.stripeAccountId,
+        estimateId: founder.estimate.id,
+        businessId: businessA.business.id,
+        amountCents: 20000,
+        sessionId: "cs_deposit_second_session",
+        paymentIntent: "pi_deposit_second",
+      }),
+    ),
+  );
+  check(
+    "a second paid checkout cannot double the deposit",
+    secondSession.reason === "already_paid",
+  );
+  const afterSecond = await loadEstimatePaymentSummary(prisma, {
+    businessId: businessA.business.id,
+    estimateId: founder.estimate.id,
+    estimateTotal: "550.00",
+    requiredDeposit: "200.00",
+  });
+  check(
+    "second paid checkout does not create another Payment row",
+    afterSecond.payments.length === 1,
+  );
+
+  console.log("\nTEST — Deposit webhook amount must match remaining due");
+  const mismatchEst = await seedEstimate({
+    businessId: businessA.business.id,
+    customerId: businessA.customer.id,
+    propertyId: businessA.property.id,
+    total: "550.00",
+  });
+  const wrongDeposit = await applyVerifiedCheckoutPayment(
+    prisma,
+    parseCheckoutPaymentEvent(
+      checkoutEvent({
+        account: accountA.stripeAccountId,
+        estimateId: mismatchEst.estimate.id,
+        businessId: businessA.business.id,
+        amountCents: 1,
+        sessionId: "cs_deposit_wrong_amount",
+        paymentIntent: "pi_deposit_wrong_amount",
+      }),
+    ),
+  );
+  const afterWrong = await loadEstimatePaymentSummary(prisma, {
+    businessId: businessA.business.id,
+    estimateId: mismatchEst.estimate.id,
+    estimateTotal: "550.00",
+    requiredDeposit: "200.00",
+  });
+  check("wrong deposit amount is rejected", wrongDeposit.reason === "amount_mismatch");
+  check("wrong amount leaves deposit remaining $200", afterWrong.depositRemaining.toString() === "200");
+  check("wrong amount creates no Payment row", afterWrong.payments.length === 0);
+
   const job = await prisma.job.create({
     data: {
       businessId: businessA.business.id,
