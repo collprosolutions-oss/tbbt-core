@@ -215,6 +215,7 @@ const websiteSrc = readFileSync(new URL("../src/lib/website-setup.ts", import.me
 const paymentsServiceSrc = readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8");
 const schemaSrc = readFileSync(new URL("../prisma/schema.prisma", import.meta.url), "utf8");
 const envExample = readFileSync(new URL("../.env.example", import.meta.url), "utf8");
+const proxySrc = readFileSync(new URL("../src/proxy.ts", import.meta.url), "utf8");
 
 console.log("\nSTATIC — SaaS billing stays separate from Connect and Tasks 1–3");
 check(
@@ -252,6 +253,12 @@ check(
     webhookStack.includes("parseCheckoutPaymentEvent") &&
     webhookSrc.includes("Invalid signature.") &&
     webhookDispatchSrc.includes("system: \"saas\""),
+);
+check(
+  "Auth proxy lets Stripe reach /api/stripe/webhook without a session cookie",
+  proxySrc.includes("isStripeWebhookPath") &&
+    proxySrc.includes("api/stripe/webhook") &&
+    proxySrc.includes("isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname)"),
 );
 check(
   "Success redirect copy does not persist subscription status",

@@ -464,6 +464,13 @@ try {
   check("pay route creates checkout from the token only", payRouteSrc.includes("createCustomerInvoiceCheckout(prisma, token)"));
   check("webhook verifies the Stripe signature", webhookStack.includes("constructStripeWebhookEvent"));
   check("webhook applies only a parsed checkout payment", webhookStack.includes("parseCheckoutPaymentEvent"));
+  const proxySrc = readFileSync(new URL("../src/proxy.ts", import.meta.url), "utf8");
+  check(
+    "Auth proxy does not redirect unauthenticated Stripe webhook POSTs to sign-in",
+    proxySrc.includes("isStripeWebhookPath") &&
+      proxySrc.includes("api/stripe/webhook") &&
+      proxySrc.includes("isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname)"),
+  );
   check(
     "invoice checkout uses an explicit card/cashapp/us_bank_account allowlist",
     INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.join(",") === "card,cashapp,us_bank_account" &&

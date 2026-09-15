@@ -11,8 +11,9 @@
  * Vercel Authentication on Preview deployments can reject Stripe POSTs
  * with 401 before this handler runs. Do not disable Preview protection
  * globally to make webhooks work. Production webhook destinations must
- * be publicly reachable by Stripe. This route stays protected by Stripe
- * signature verification (STRIPE_WEBHOOK_SECRET, and optionally
+ * be publicly reachable by Stripe. The auth proxy allows this path
+ * without a session cookie; Stripe signature verification still
+ * protects the handler (STRIPE_WEBHOOK_SECRET, and optionally
  * STRIPE_SAAS_WEBHOOK_SECRET). Never log secrets, account ids, customer
  * names, emails, or bank details.
  *

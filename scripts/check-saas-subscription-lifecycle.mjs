@@ -246,6 +246,7 @@ const bannerSrc = readFileSync(
 const paymentsServiceSrc = readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8");
 const schemaSrc = readFileSync(new URL("../prisma/schema.prisma", import.meta.url), "utf8");
 const settingsDataSrc = readFileSync(new URL("../src/lib/settings-data.ts", import.meta.url), "utf8");
+const proxySrc = readFileSync(new URL("../src/proxy.ts", import.meta.url), "utf8");
 
 console.log("\nSTATIC — Lifecycle reuses Tasks 4–6 and stays separate from Connect");
 check(
@@ -294,6 +295,11 @@ check(
   "Connect payment service still does not persist BusinessSaasSubscription",
   !paymentsServiceSrc.includes("BusinessSaasSubscription") &&
     !paymentsServiceSrc.includes("tbbt_saas_subscription"),
+);
+check(
+  "Auth proxy allows the Stripe webhook without a session cookie",
+  proxySrc.includes("isStripeWebhookPath") &&
+    proxySrc.includes("api/stripe/webhook"),
 );
 check(
   "Stale-event helper does not treat missing timestamps as stale",
