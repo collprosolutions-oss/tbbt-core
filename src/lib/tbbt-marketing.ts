@@ -84,35 +84,18 @@ export type TbbtTradeThumb = {
 
 /** Temporary photography for the homepage trade strip. Replace in place. */
 export const TBBT_TRADE_THUMBS: Record<string, TbbtTradeThumb> = {
-  Handyman: {
-    src: "/brand/tbbt-marketing/hero-tradespro.png",
-    position: "50% 18%",
-  },
+  Handyman: { src: "/brand/tbbt-marketing/trade-handyman.png" },
   Cleaning: { src: "/brand/tbbt-marketing/trade-cleaning.png" },
   Electrical: { src: "/brand/tbbt-marketing/trade-electrical.png" },
   Plumbing: { src: "/brand/tbbt-marketing/trade-plumbing.png" },
   HVAC: { src: "/brand/tbbt-marketing/trade-hvac.png" },
   Painting: { src: "/brand/tbbt-marketing/trade-painting.png" },
-  Landscaping: {
-    src: "/brand/tbbt-marketing/trades-mosaic.png",
-    position: "68% 50%",
-  },
-  Roofing: {
-    src: "/brand/tbbt-marketing/trades-mosaic.png",
-    position: "78% 50%",
-  },
-  Remodeling: {
-    src: "/brand/tbbt-marketing/trades-mosaic.png",
-    position: "88% 50%",
-  },
-  Concrete: {
-    src: "/brand/tbbt-marketing/trades-mosaic.png",
-    position: "97% 50%",
-  },
-  Carpentry: {
-    src: "/brand/tbbt-marketing/hero-workshop.png",
-    position: "80% 50%",
-  },
+  Landscaping: { src: "/brand/tbbt-marketing/trade-landscaping.png" },
+  Roofing: { src: "/brand/tbbt-marketing/trade-roofing.png" },
+  Remodeling: { src: "/brand/tbbt-marketing/trade-remodeling.png" },
+  Concrete: { src: "/brand/tbbt-marketing/trade-concrete.png" },
+  Carpentry: { src: "/brand/tbbt-marketing/trade-carpentry.png" },
+  "And More": { src: "/brand/tbbt-marketing/trade-more.png" },
 };
 
 export const TBBT_TRADES: readonly {
@@ -416,9 +399,9 @@ export const TBBT_MARKETING_ASSET_SLOTS = [
   },
   {
     file: "hero-tradespro.png",
-    ratio: "4 / 3",
-    pixelHint: "1600 × 1200",
-    usage: "Hero trades professional. Do not let this become the only brand identity.",
+    ratio: "3 / 4",
+    pixelHint: "1200 × 1600",
+    usage: "Hero trades professional overlapping the product devices. Do not let this become the only brand identity.",
   },
   {
     file: "cta-sunset.png",
@@ -436,7 +419,13 @@ export const TBBT_MARKETING_ASSET_SLOTS = [
     file: "trades-mosaic.png",
     ratio: "16 / 9",
     pixelHint: "1920 × 1080",
-    usage: "Multi-trade strip source for planned-trade thumbnails.",
+    usage: "Optional multi-trade mosaic. Individual trade thumbs are preferred.",
+  },
+  {
+    file: "trade-handyman.png",
+    ratio: "4 / 3",
+    pixelHint: "1600 × 1200",
+    usage: "Handyman trade thumbnail.",
   },
   {
     file: "trade-cleaning.png",
@@ -467,6 +456,48 @@ export const TBBT_MARKETING_ASSET_SLOTS = [
     ratio: "1 / 1",
     pixelHint: "1200 × 1200",
     usage: "Painting trade thumbnail.",
+  },
+  {
+    file: "trade-landscaping.png",
+    ratio: "4 / 3",
+    pixelHint: "1600 × 1200",
+    usage: "Landscaping trade thumbnail.",
+  },
+  {
+    file: "trade-roofing.png",
+    ratio: "4 / 3",
+    pixelHint: "1600 × 1200",
+    usage: "Roofing trade thumbnail.",
+  },
+  {
+    file: "trade-remodeling.png",
+    ratio: "4 / 3",
+    pixelHint: "1600 × 1200",
+    usage: "Remodeling trade thumbnail.",
+  },
+  {
+    file: "trade-concrete.png",
+    ratio: "4 / 3",
+    pixelHint: "1600 × 1200",
+    usage: "Concrete trade thumbnail.",
+  },
+  {
+    file: "trade-carpentry.png",
+    ratio: "4 / 3",
+    pixelHint: "1600 × 1200",
+    usage: "Carpentry trade thumbnail.",
+  },
+  {
+    file: "trade-more.png",
+    ratio: "4 / 3",
+    pixelHint: "1600 × 1200",
+    usage: "And More trade thumbnail.",
+  },
+  {
+    file: "grow-coach.png",
+    ratio: "1 / 1",
+    pixelHint: "800 × 800",
+    usage: "GROW coaching portrait inside the homepage mock. Feature is Planned.",
   },
   {
     file: "og-default.jpg",

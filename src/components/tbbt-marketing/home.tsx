@@ -17,7 +17,7 @@ import {
 import {
   TbbtDashboardMock,
   TbbtGrowMock,
-  TbbtPhoneMock,
+  TbbtRunPhones,
   TbbtWebsiteMock,
 } from "@/components/tbbt-marketing/product-preview";
 import { TbbtWatchVideoButton } from "@/components/tbbt-marketing/watch-video";
@@ -73,12 +73,12 @@ export function TbbtHomePage() {
               <br />
               {TBBT_HERO_HEADLINE[1]}
               <br />
-              {TBBT_HERO_HEADLINE[2]}{" "}
-              <span className="tbbt-accent">{TBBT_HERO_ACCENT}</span>
+              <span className="tbbt-hero-lastline">
+                {TBBT_HERO_HEADLINE[2]}{" "}
+                <span className="tbbt-accent">{TBBT_HERO_ACCENT}</span>
+              </span>
             </h1>
-            {TBBT_HERO_SUPPORT_LINES.map((line) => (
-              <p key={line}>{line}</p>
-            ))}
+            <p className="tbbt-hero-support">{TBBT_HERO_SUPPORT_LINES.join(" ")}</p>
             <div className="tbbt-hero-actions">
               <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
                 {TBBT_TRIAL_CTA_LABEL}
@@ -86,29 +86,31 @@ export function TbbtHomePage() {
               </Link>
               <TbbtWatchVideoButton />
             </div>
-            <div className="tbbt-benefit-row">
-              {TBBT_PROMISE_STRIP.map((item, index) => {
-                const Icon = BENEFIT_ICONS[index] ?? Sparkles;
-                return (
-                  <div className="tbbt-benefit" key={item.kicker}>
-                    <Icon size={18} />
-                    {item.kicker}
-                  </div>
-                );
-              })}
-            </div>
           </div>
 
-          <div className="tbbt-hero-pro">
+          <div className="tbbt-hero-visual">
             <p className="tbbt-script tbbt-hero-script">{TBBT_HERO_SCRIPT}</p>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/brand/tbbt-marketing/hero-tradespro.png"
-              alt="Trades professional in the shop"
-            />
+            <div className="tbbt-hero-pro">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/brand/tbbt-marketing/hero-tradespro.png"
+                alt="Trades professional in the shop"
+              />
+            </div>
+            <TbbtDashboardMock />
           </div>
 
-          <TbbtDashboardMock />
+          <div className="tbbt-benefit-row">
+            {TBBT_PROMISE_STRIP.map((item, index) => {
+              const Icon = BENEFIT_ICONS[index] ?? Sparkles;
+              return (
+                <div className="tbbt-benefit" key={item.kicker}>
+                  <Icon size={18} />
+                  {item.kicker}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </section>
 
@@ -138,7 +140,7 @@ export function TbbtHomePage() {
                     )}
                   </div>
                   <figcaption>
-                    {trade.name}
+                    <span>{trade.name}</span>
                     <span className={tradeBadgeClass(trade.status)}>
                       {TBBT_TRADE_STATUS_LABEL[trade.status]}
                     </span>
@@ -169,7 +171,7 @@ export function TbbtHomePage() {
             <h3>{runPillar.title}</h3>
             <p>{runPillar.body}</p>
             <div className="tbbt-device-run">
-              <TbbtPhoneMock />
+              <TbbtRunPhones />
             </div>
             <Link href="#connected" className="tbbt-btn tbbt-btn--ghost">
               See How It Works
@@ -205,12 +207,16 @@ export function TbbtHomePage() {
           <div className="tbbt-connected-flow">
             {TBBT_WORKFLOW_STEPS.map((step, index) => {
               const Icon = WORKFLOW_ICONS[index] ?? ClipboardList;
+              const last = index === TBBT_WORKFLOW_STEPS.length - 1;
               return (
-                <div className="tbbt-connected-step" key={step}>
-                  <span className="tbbt-connected-icon">
-                    <Icon size={16} />
-                  </span>
-                  {step}
+                <div className="tbbt-connected-item" key={step}>
+                  <div className="tbbt-connected-step">
+                    <span className="tbbt-connected-icon">
+                      <Icon size={16} />
+                    </span>
+                    {step}
+                  </div>
+                  {last ? null : <span className="tbbt-connected-arrow" aria-hidden="true">→</span>}
                 </div>
               );
             })}
@@ -229,11 +235,13 @@ export function TbbtHomePage() {
           </p>
           <div>
             <h2>Ready to Build a Better Business?</h2>
-            <p className="tbbt-muted" style={{ margin: "0.7rem auto 1.1rem", maxWidth: "36rem" }}>
-              Start the 30-day Founder Plan trial. No credit card required to
-              begin. Handyman is the first available trade.
+            <p className="tbbt-muted tbbt-final-lead">
+              Join trades professionals who are saving time, winning more work,
+              and building the business they want — with TBBT. Start the 30-day
+              Founder Plan trial. No credit card required to begin. Handyman is
+              the first available trade.
             </p>
-            <div className="tbbt-hero-actions" style={{ justifyContent: "center" }}>
+            <div className="tbbt-hero-actions tbbt-final-actions">
               <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
                 {TBBT_TRIAL_CTA_LABEL}
                 <ArrowRight size={16} />
@@ -241,7 +249,7 @@ export function TbbtHomePage() {
               <TbbtWatchVideoButton />
             </div>
           </div>
-          <div>
+          <div className="tbbt-final-motto">
             <p className="tbbt-script tbbt-final-script">{TBBT_BRAND_MOTTO}</p>
             <p className="tbbt-muted">{TBBT_TAGLINE}</p>
           </div>

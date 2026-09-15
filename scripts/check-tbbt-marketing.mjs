@@ -177,6 +177,8 @@ check(
 const pricingSrc = readRepo("src/components/tbbt-marketing/pricing.tsx");
 const homeMarketingSrc = readRepo("src/components/tbbt-marketing/home.tsx");
 const homeCssSrc = readRepo("src/components/tbbt-marketing/tbbt-home.css");
+const marketingLibSrc = readRepo("src/lib/tbbt-marketing.ts");
+const previewSrc = readRepo("src/components/tbbt-marketing/product-preview.tsx");
 const resourcesSrc = readRepo("src/components/tbbt-marketing/resources.tsx");
 const aboutSrc = readRepo("src/components/tbbt-marketing/about.tsx");
 const videoSrc = readRepo("src/components/tbbt-marketing/watch-video.tsx");
@@ -216,7 +218,22 @@ check(
     homeMarketingSrc.includes("TBBT_TRIAL_CTA_LABEL") &&
     homeMarketingSrc.includes("tbbt-hero-cinematic") &&
     homeCssSrc.includes("hero-workshop.png") &&
-    homeMarketingSrc.includes("hero-tradespro.png"),
+    homeMarketingSrc.includes("hero-tradespro.png") &&
+    homeMarketingSrc.includes("tbbt-connected-arrow"),
+);
+check(
+  "Homepage trade strip uses dedicated visual thumbnails, not chips",
+  marketingLibSrc.includes("trade-handyman.png") &&
+    marketingLibSrc.includes("trade-landscaping.png") &&
+    marketingLibSrc.includes("trade-more.png") &&
+    homeMarketingSrc.includes("tbbt-trade-strip") &&
+    !homeMarketingSrc.includes("tbbt-chip"),
+);
+check(
+  "GROW coaching visual is labeled Planned",
+  previewSrc.includes("Planned") &&
+    previewSrc.includes("grow-coach.png") &&
+    previewSrc.includes("not a live AI"),
 );
 check(
   "Core feature cards match the requested set",

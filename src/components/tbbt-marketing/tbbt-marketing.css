@@ -9,7 +9,7 @@
   --tbbt-muted: #9aa6bd;
   --tbbt-line: rgba(255, 255, 255, 0.1);
   --tbbt-line-strong: rgba(255, 255, 255, 0.16);
-  --tbbt-max: 80rem;
+  --tbbt-max: 88rem;
   color: var(--tbbt-ink);
   background:
     radial-gradient(1200px 480px at 80% -10%, rgba(242, 101, 34, 0.12), transparent 55%),
@@ -41,7 +41,7 @@
   grid-template-columns: 1fr auto;
   align-items: center;
   gap: 1rem;
-  min-height: 4.75rem;
+  min-height: 5rem;
 }
 
 .tbbt-logo {
@@ -118,11 +118,11 @@
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
-  min-height: 2.85rem;
-  padding: 0.6rem 1.2rem;
+  min-height: 2.95rem;
+  padding: 0.62rem 1.28rem;
   border-radius: 999px;
   font-weight: 700;
-  font-size: 0.92rem;
+  font-size: 0.94rem;
   text-decoration: none;
   border: 1px solid transparent;
   cursor: pointer;
@@ -149,9 +149,9 @@
 }
 
 .tbbt-btn--lg {
-  min-height: 3.35rem;
-  padding-inline: 1.45rem;
-  font-size: 1.02rem;
+  min-height: 3.5rem;
+  padding-inline: 1.55rem;
+  font-size: 1.05rem;
 }
 
 .tbbt-soon {
