@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
   ProjectPaymentError,
@@ -24,7 +24,7 @@ export async function recordEstimateDeposit(
   formData: FormData,
 ): Promise<DepositActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
     const estimateId = readString(formData, "estimateId");
     if (!estimateId) {

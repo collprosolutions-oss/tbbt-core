@@ -2,7 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
-import { requireBusinessAccess } from "@/lib/access";
+import {
+  requireOperatingBusinessAccess,
+  requireOperatingBusinessAccessForForm,
+} from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { installHandymanStarterCatalogForBusiness } from "@/lib/starter-catalog-install";
 import {
@@ -71,7 +74,9 @@ export async function createServiceCatalogItem(
   _prev: CatalogActionState,
   formData: FormData,
 ): Promise<CatalogActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
   const name = readString(formData, "name");
   const description = readString(formData, "description");
@@ -111,7 +116,7 @@ export async function updateServiceCatalogItem(
   _prev: CatalogActionState,
   formData: FormData,
 ): Promise<CatalogActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
   const id = readString(formData, "id");
   const name = readString(formData, "name");
@@ -160,7 +165,7 @@ export async function setServiceCatalogItemActive(
   active: boolean,
 ): Promise<CatalogActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await setOwnedServiceCatalogItemActive(prisma, access, { id, active });
     revalidatePath("/services");
     return {};
@@ -178,7 +183,7 @@ export async function deleteServiceCatalogItem(
   id: string,
 ): Promise<CatalogActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await deleteOwnedServiceCatalogItem(prisma, access, { id });
     revalidatePath("/services");
     return { message: "Catalog service deleted. Existing estimates keep their recorded lines." };
@@ -193,7 +198,9 @@ export async function deleteServiceCatalogItem(
 }
 
 export async function installHandymanStarterCatalog(): Promise<CatalogActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
 
   if (!isActiveTrade(access.workspace.business.tradeCode)) {

@@ -14,6 +14,8 @@ import {
 import { requireManagementPageAccess } from "@/lib/access";
 import { formatAddress } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
+import { loadSaasEntitlement, saasOperatingUiState } from "@/lib/saas-billing";
+import { SAAS_BILLING_SETTINGS_HREF } from "@/lib/saas-billing/config";
 
 export const metadata: Metadata = {
   title: "Create estimate",
@@ -21,6 +23,8 @@ export const metadata: Metadata = {
 
 export default async function NewManualEstimatePage() {
   const access = await requireManagementPageAccess();
+  const entitlement = await loadSaasEntitlement(prisma, access.workspace.business);
+  const operating = saasOperatingUiState(entitlement, access.workspace.role);
   const customers = await prisma.customer.findMany({
     where: access.scope,
     select: {
@@ -54,6 +58,25 @@ export default async function NewManualEstimatePage() {
         </Button>
       </PageHeader>
 
+      {!operating.canOperate ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Subscription required</CardTitle>
+            <CardDescription>{operating.blockedMessage}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {operating.role === "OWNER" ? (
+              <Button asChild>
+                <Link href={SAAS_BILLING_SETTINGS_HREF}>Open TBBT Billing</Link>
+              </Button>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Ask the business owner to subscribe from TBBT Billing.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
       <Card>
         <CardHeader>
           <CardTitle>Customer</CardTitle>
@@ -79,6 +102,7 @@ export default async function NewManualEstimatePage() {
           />
         </CardContent>
       </Card>
+      )}
     </PageContainer>
   );
 }

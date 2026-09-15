@@ -14,6 +14,7 @@ import type { CuratedIconId } from "@/lib/founder-icons";
 import { prisma } from "@/lib/prisma";
 import { isBusinessStorageConfigured } from "@/lib/business-storage";
 import { loadWebsitePhotoStorageSummary } from "@/lib/business-storage/website-photos";
+import { loadSaasEntitlement, saasOperatingUiState } from "@/lib/saas-billing";
 import { parseSettingsSection } from "@/lib/settings";
 import {
   loadSettingsSnapshot,
@@ -48,6 +49,8 @@ export default async function SettingsPage({
   const role = access.workspace.role;
   const canEditPreferences = roleHasCapability(role, CAPABILITIES.MANAGE_SETTINGS);
   const canEditConsequential = role === "OWNER";
+  const entitlement = await loadSaasEntitlement(prisma, access.workspace.business);
+  const operating = saasOperatingUiState(entitlement, role);
   let websitePhotos:
     | {
         storageConfigured: boolean;
@@ -173,6 +176,8 @@ export default async function SettingsPage({
           integrations={integrations}
           canEditConsequential={canEditConsequential}
           canEditPreferences={canEditPreferences}
+          canOperate={operating.canOperate}
+          operatingBlockedMessage={operating.blockedMessage}
           websitePhotos={websitePhotos}
           supplierPricing={supplierPricing}
           canClearTestData={canClearTestData}

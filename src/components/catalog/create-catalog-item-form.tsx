@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DEFAULT_SERVICE_CATEGORY } from "@/lib/service-catalog-category";
+import { OperatingWriteGate, useSaasOperating } from "@/components/saas/saas-operating-context";
 
 const initialState: CatalogActionState = {};
 
@@ -23,6 +24,11 @@ export function CreateCatalogItemForm({
     initialState,
   );
   const [mode, setMode] = useState("STARTING_AT");
+  const operating = useSaasOperating();
+
+  if (!operating.canOperate) {
+    return <OperatingWriteGate fallbackLabel="Add service" />;
+  }
 
   return (
     <form action={action} className="space-y-3">

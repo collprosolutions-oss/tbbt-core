@@ -241,7 +241,9 @@ check(
   "Management console reads centralized entitlement instead of per-page subscription checks",
   appLayout.includes("loadSaasEntitlement") &&
     appLayout.includes("SaasEntitlementBanner") &&
-    !fieldLayout.includes("loadSaasEntitlement"),
+    fieldLayout.includes("loadSaasEntitlement") &&
+    fieldLayout.includes("SaasEntitlementBanner") &&
+    fieldLayout.includes("saasOperatingUiState"),
 );
 check(
   "Checkout still uses getSaasPriceId / STRIPE_SAAS_PRICE_ID and does not invent a Price ID",

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccessForForm } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
 
@@ -18,7 +18,9 @@ export async function addCustomerProperty(
   _prev: PropertyActionState,
   formData: FormData,
 ): Promise<PropertyActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CUSTOMERS);
   const customerId = readString(formData, "customerId");
   const label = readString(formData, "label");
@@ -65,7 +67,9 @@ export async function updateCustomerProperty(
   _prev: PropertyActionState,
   formData: FormData,
 ): Promise<PropertyActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CUSTOMERS);
   const propertyId = readString(formData, "propertyId");
   const label = readString(formData, "label");

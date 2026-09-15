@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import {
   isBusinessStorageConfigured,
   StorageError,
@@ -53,7 +53,7 @@ export async function authorizeWebsitePhotoUpload(input: {
           "Image storage is not configured for this environment. Existing photos stay in place. Connect platform file storage (Cloudflare R2) before replacing website photos.",
       };
     }
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const authorized = await authorizeWebsitePhotoUploadOp(
       { db: prisma },
       access,
@@ -82,7 +82,7 @@ export async function finalizeWebsitePhotoUpload(input: {
   slot: string;
 }): Promise<WebsitePhotoUploadState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const result = await finalizeWebsitePhotoUploadOp({ db: prisma }, access, {
       assetId: input.assetId,
       page: input.page || PUBLIC_SITE_HOME_PAGE,
@@ -99,7 +99,7 @@ export async function abortWebsitePhotoUpload(input: {
   assetId: string;
 }): Promise<WebsitePhotoUploadState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await abortWebsitePhotoUploadOp({ db: prisma }, access, input.assetId);
     return {};
   } catch (error) {
@@ -111,7 +111,7 @@ export async function authorizeWebsitePhotoUploadAction(
   _prev: WebsitePhotoUploadState,
   formData: FormData,
 ): Promise<WebsitePhotoUploadState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   assertSettingsBusinessScope(access, String(formData.get("businessId") || "") || null);
   return authorizeWebsitePhotoUpload({
     page: String(formData.get("page") || ""),

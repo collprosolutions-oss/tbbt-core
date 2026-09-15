@@ -6,7 +6,7 @@
  * businessId. OWNER/ADMIN only (MANAGE_PIPELINE).
  */
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import {
   pipelineErrorMessage,
   updatePipelineFollowUp,
@@ -34,7 +34,7 @@ export async function updatePipelineStageAction(
   formData: FormData,
 ): Promise<PipelineActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await updatePipelineStage(prisma, access, {
       opportunityKey: readString(formData, "opportunityKey"),
       ownerStage: readString(formData, "ownerStage"),
@@ -53,7 +53,7 @@ export async function updatePipelineFollowUpAction(
   formData: FormData,
 ): Promise<PipelineActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await updatePipelineFollowUp(prisma, access, {
       opportunityKey: readString(formData, "opportunityKey"),
       followUpOn: readString(formData, "followUpOn") || undefined,
@@ -70,7 +70,7 @@ export async function updatePipelineNotesAction(
   formData: FormData,
 ): Promise<PipelineActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await updatePipelineNotes(prisma, access, {
       opportunityKey: readString(formData, "opportunityKey"),
       notes: readString(formData, "notes") || undefined,

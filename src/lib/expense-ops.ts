@@ -8,6 +8,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
 import {
   defaultReimbursementStatus,
   isExpenseCategory,
@@ -35,6 +36,9 @@ export class ExpenseError extends Error {
 export function expenseErrorMessage(error: unknown, fallback: string) {
   if (error instanceof ExpenseError) return error.message;
   if (error instanceof Error && error.name === "ForbiddenError") return error.message;
+  if (error instanceof Error && error.name === "SaasSubscriptionRequiredError") {
+    return error.message;
+  }
   if (error instanceof Error && /receipt|storage|Unsupported|too large/i.test(error.message)) {
     return error.message;
   }
@@ -204,8 +208,13 @@ async function resolveExpenseFields(db: Db, access: BusinessAccess, input: Creat
   };
 }
 
-export async function createExpense(db: Db, access: BusinessAccess, input: CreateExpenseInput) {
+async function requireExpenseMutation(db: Db, access: BusinessAccess) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+  await requireSaasOperatingEntitlement(db, access);
+}
+
+export async function createExpense(db: Db, access: BusinessAccess, input: CreateExpenseInput) {
+  await requireExpenseMutation(db, access);
   const fields = await resolveExpenseFields(db, access, input);
 
   return db.expense.create({
@@ -235,7 +244,7 @@ export async function createExpense(db: Db, access: BusinessAccess, input: Creat
 }
 
 export async function updateExpense(db: Db, access: BusinessAccess, input: UpdateExpenseInput) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+  await requireExpenseMutation(db, access);
 
   const existing = requireActiveExpense(
     access.assertOwned(
@@ -281,7 +290,7 @@ export async function voidExpense(
   access: BusinessAccess,
   input: { expenseId: string },
 ) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+  await requireExpenseMutation(db, access);
 
   const existing = access.assertOwned(
     await db.expense.findFirst({
@@ -303,7 +312,7 @@ export async function reviewExpense(
   access: BusinessAccess,
   input: { expenseId: string; reviewStatus: string },
 ) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+  await requireExpenseMutation(db, access);
   if (!isExpenseReviewStatus(input.reviewStatus) || input.reviewStatus === "RECORDED") {
     throw new ExpenseError("Choose Approve or Flag.");
   }
@@ -332,7 +341,7 @@ export async function setReimbursementStatus(
   access: BusinessAccess,
   input: { expenseId: string; reimbursementStatus: string },
 ) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+  await requireExpenseMutation(db, access);
   if (!isReimbursementStatus(input.reimbursementStatus)) {
     throw new ExpenseError("Choose a valid reimbursement status.");
   }
@@ -361,7 +370,7 @@ export async function attachExpenseReceipt(
   access: BusinessAccess,
   input: { expenseId: string; receiptUrl: string },
 ) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+  await requireExpenseMutation(db, access);
   const receiptUrl = input.receiptUrl.trim();
   if (!receiptUrl) {
     throw new ExpenseError("A receipt URL is required.");

@@ -6,7 +6,7 @@
  * businessId. OWNER/ADMIN only (MANAGE_REVIEWS).
  */
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import {
   advanceReviewRequestStatus,
   advanceReviewResponseStatus,
@@ -42,7 +42,7 @@ export async function createReviewRequestAction(
   formData: FormData,
 ): Promise<ReviewsActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const customerId = readString(formData, "customerId");
     const jobId = readString(formData, "jobId") || undefined;
     await createReviewRequest(prisma, access, {
@@ -65,7 +65,7 @@ export async function updateReviewRequestAction(
   formData: FormData,
 ): Promise<ReviewsActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await updateReviewRequest(prisma, access, {
       requestId: readString(formData, "requestId"),
       intendedPlatform: formData.has("intendedPlatform")
@@ -87,7 +87,7 @@ export async function advanceReviewRequestAction(
   formData: FormData,
 ): Promise<ReviewsActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const updated = await advanceReviewRequestStatus(prisma, access, {
       requestId: readString(formData, "requestId"),
     });
@@ -108,7 +108,7 @@ export async function cancelReviewRequestAction(
   formData: FormData,
 ): Promise<ReviewsActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await cancelReviewRequest(prisma, access, {
       requestId: readString(formData, "requestId"),
     });
@@ -124,7 +124,7 @@ export async function recordReceivedReviewAction(
   formData: FormData,
 ): Promise<ReviewsActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const customerId = readString(formData, "customerId");
     const jobId = readString(formData, "jobId") || undefined;
     await recordReceivedReview(prisma, access, {
@@ -151,7 +151,7 @@ export async function updateReviewRecoveryAction(
   formData: FormData,
 ): Promise<ReviewsActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await updateReviewRecovery(prisma, access, {
       reviewId: readString(formData, "reviewId"),
       recoveryNotes: readString(formData, "recoveryNotes"),
@@ -168,7 +168,7 @@ export async function upsertReviewResponseAction(
   formData: FormData,
 ): Promise<ReviewsActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await upsertReviewResponse(prisma, access, {
       reviewId: readString(formData, "reviewId"),
       body: readString(formData, "body") || undefined,
@@ -185,7 +185,7 @@ export async function advanceReviewResponseAction(
   formData: FormData,
 ): Promise<ReviewsActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const updated = await advanceReviewResponseStatus(prisma, access, {
       responseId: readString(formData, "responseId"),
     });

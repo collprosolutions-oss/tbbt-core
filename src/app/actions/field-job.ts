@@ -17,10 +17,15 @@
  */
 import { revalidatePath } from "next/cache";
 import { findAssignedJob } from "@/lib/field-access";
+import { prisma } from "@/lib/prisma";
+import {
+  requireSaasOperatingEntitlement,
+  saasOperatingErrorMessage,
+  SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE,
+} from "@/lib/saas-billing/entitlement";
 import { CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT, startJobRequiresCustomerConfirmation } from "@/lib/appointment-confirmation";
 import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
-import { prisma } from "@/lib/prisma";
 import {
   isStorageConfigured,
   isSupportedImageMimeType,
@@ -41,6 +46,23 @@ function readString(formData: FormData, key: string) {
 const NOT_ASSIGNED_ERROR = "That job isn't assigned to you.";
 const MAX_TEXT_LENGTH = 2000;
 
+async function requireAssignedJobOperating(jobId: string) {
+  const result = await findAssignedJob(jobId);
+  if (!result.job) {
+    return { ...result, error: NOT_ASSIGNED_ERROR };
+  }
+  try {
+    await requireSaasOperatingEntitlement(prisma, result);
+  } catch (error) {
+    return {
+      ...result,
+      job: null,
+      error: saasOperatingErrorMessage(error) ?? SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE,
+    };
+  }
+  return { ...result, error: undefined as string | undefined };
+}
+
 function revalidateFieldJob(jobId: string) {
   revalidatePath(`/field/jobs/${jobId}`);
   revalidatePath("/field");
@@ -55,10 +77,11 @@ export async function startAssignedJob(
     return { error: "That job could not be found." };
   }
 
-  const { job } = await findAssignedJob(jobId);
-  if (!job) {
-    return { error: NOT_ASSIGNED_ERROR };
+  const assigned = await requireAssignedJobOperating(jobId);
+  if (!assigned.job) {
+    return { error: assigned.error ?? NOT_ASSIGNED_ERROR };
   }
+  const { job } = assigned;
 
   await ensureAppointmentConfirmationSchema(prisma);
   const result = evaluateStartJob(job.status);
@@ -90,10 +113,11 @@ export async function completeAssignedJob(
     return { error: "That job could not be found." };
   }
 
-  const { job } = await findAssignedJob(jobId);
-  if (!job) {
-    return { error: NOT_ASSIGNED_ERROR };
+  const assigned = await requireAssignedJobOperating(jobId);
+  if (!assigned.job) {
+    return { error: assigned.error ?? NOT_ASSIGNED_ERROR };
   }
+  const { job } = assigned;
 
   const result = evaluateCompleteJob(job.status);
   if (!result.ok) {
@@ -154,10 +178,11 @@ export async function addAssignedJobPhoto(
     return { error: STORAGE_NOT_CONFIGURED_ERROR };
   }
 
-  const { job, businessId } = await findAssignedJob(jobId);
-  if (!job) {
-    return { error: NOT_ASSIGNED_ERROR };
+  const assigned = await requireAssignedJobOperating(jobId);
+  if (!assigned.job) {
+    return { error: assigned.error ?? NOT_ASSIGNED_ERROR };
   }
+  const { job, businessId } = assigned;
 
   let uploaded: { url: string };
   try {
@@ -200,10 +225,11 @@ export async function reportJobProblem(
     return { error: "Describe the problem." };
   }
 
-  const { job, businessId, membershipId } = await findAssignedJob(jobId);
-  if (!job) {
-    return { error: NOT_ASSIGNED_ERROR };
+  const assigned = await requireAssignedJobOperating(jobId);
+  if (!assigned.job) {
+    return { error: assigned.error ?? NOT_ASSIGNED_ERROR };
   }
+  const { job, businessId, membershipId } = assigned;
 
   // membershipId is the caller's OWN membership, derived server-side from
   // the session (see requireFieldWorkspace() in src/lib/field-access.ts) --
@@ -238,10 +264,11 @@ export async function requestAdditionalWorkFromField(
     return { error: "Describe what the customer asked for." };
   }
 
-  const { job, businessId } = await findAssignedJob(jobId);
-  if (!job) {
-    return { error: NOT_ASSIGNED_ERROR };
+  const assigned = await requireAssignedJobOperating(jobId);
+  if (!assigned.job) {
+    return { error: assigned.error ?? NOT_ASSIGNED_ERROR };
   }
+  const { job, businessId } = assigned;
 
   // This NEVER changes approved scope, project total, or the invoice, and
   // never creates or approves a Change Order by itself -- it only creates

@@ -42,7 +42,9 @@ export function SaasEntitlementBanner({
       ) : null}
       {entitlement.state === "subscription_required" ? (
         <p className="mt-1 text-sm text-muted-foreground">
-          Customers, jobs, estimates, invoices, and other business records are retained.
+          The free trial has ended and a subscription is required to keep creating or changing
+          business records. Existing customers, jobs, estimates, invoices, and other records are
+          retained.
         </p>
       ) : null}
       {ownerCanSubscribe && entitlement.state === "subscription_required" ? (

@@ -4,7 +4,11 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
-import { requireBusinessAccess, type BusinessAccess } from "@/lib/access";
+import { type BusinessAccess } from "@/lib/access";
+import {
+  requireOperatingBusinessAccess,
+  requireOperatingBusinessAccessForForm,
+} from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
   buildEstimateReadyEmail,
@@ -167,7 +171,7 @@ function parseDecimal(raw: string, allowZero = false) {
 }
 
 export async function createEstimate(serviceRequestId: string) {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const request = access.assertOwned(
     await prisma.serviceRequest.findFirst({
@@ -387,7 +391,9 @@ export async function createManualEstimate(
   _prev: EstimateActionState,
   formData: FormData,
 ): Promise<EstimateActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const mode = readString(formData, "mode");
 
@@ -495,7 +501,9 @@ export async function addCatalogLineItem(
   _prev: EstimateActionState,
   formData: FormData,
 ): Promise<EstimateActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
   const catalogItemId = readString(formData, "catalogItemId");
@@ -524,7 +532,9 @@ export async function addCustomLineItem(
   _prev: EstimateActionState,
   formData: FormData,
 ): Promise<EstimateActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
   const description = readString(formData, "description");
@@ -583,7 +593,7 @@ export async function priceEstimateLineItem(
   formData: FormData,
 ): Promise<EstimateActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await priceDraftEstimateLine(prisma, access, {
       estimateId: readString(formData, "estimateId"),
       lineItemId: readString(formData, "lineItemId"),
@@ -603,7 +613,7 @@ export async function updateEstimateLineIncludedWork(
 ): Promise<EstimateActionState> {
   try {
     const estimateId = readString(formData, "estimateId");
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await updateDraftEstimateLineIncludedWork(prisma, access, {
       estimateId,
       lineItemId: readString(formData, "lineItemId"),
@@ -626,7 +636,7 @@ export async function updateEstimateMaterialCustomerLine(
 ): Promise<EstimateActionState> {
   try {
     const estimateId = readString(formData, "estimateId");
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await updateDraftMaterialCustomerLine(prisma, access, {
       estimateId,
       lineItemId: readString(formData, "lineItemId"),
@@ -648,7 +658,7 @@ export async function applyEstimateCalculator(
 ): Promise<EstimateActionState> {
   try {
     const estimateId = readString(formData, "estimateId");
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const calculatorFields =
       readVariableScopePayload(formData) ?? decorativeWallPanelingFormFields(formData);
     await applyDraftEstimateCalculator(prisma, access, {
@@ -683,7 +693,7 @@ export async function saveEstimateBusinessEstimatingDefaults(
     if (!snapshot) {
       return { error: "Calculate or enter reusable pricing before saving a business default." };
     }
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const saved = await saveBusinessEstimatingDefaultsFromTakeoff(prisma, access, {
       workspaceId: readString(formData, "workspaceId"),
       snapshot,
@@ -709,7 +719,7 @@ export async function persistEstimateCalculatorRates(
   try {
     const payload = readVariableScopePayload(formData);
     const calculatorFields = payload ?? decorativeWallPanelingFormFields(formData);
-    await persistDraftEstimateCalculatorRates(prisma, await requireBusinessAccess(), {
+    await persistDraftEstimateCalculatorRates(prisma, await requireOperatingBusinessAccess(), {
       estimateId: readString(formData, "estimateId"),
       lineItemId: readString(formData, "lineItemId"),
       rates: calculatorFields.rates,
@@ -744,7 +754,7 @@ export async function saveEstimateMaterialTakeoff(
     if (!snapshot) {
       return { error: "Calculate or enter a material takeoff before saving." };
     }
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await saveDraftMaterialTakeoff(prisma, access, {
       estimateId,
       lineItemId: readString(formData, "lineItemId"),
@@ -770,7 +780,7 @@ export async function recalculateEstimateMaterialTakeoff(
       return { error: "Choose a material takeoff type." };
     }
     const snapshot = parseTakeoffFormSnapshot(readString(formData, "takeoffJson"));
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await recalculateDraftMaterialTakeoff(prisma, access, {
       estimateId,
       lineItemId: readString(formData, "lineItemId"),
@@ -797,7 +807,7 @@ export async function convertEstimateMaterialTakeoff(
   try {
     const estimateId = readString(formData, "estimateId");
     const snapshot = parseTakeoffFormSnapshot(readString(formData, "takeoffJson"));
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const result = await convertDraftMaterialTakeoff(prisma, access, {
       estimateId,
       lineItemId: readString(formData, "lineItemId"),
@@ -833,7 +843,7 @@ export async function applyEstimateTakeoffRecommendedLabor(
     if (!snapshot) {
       return { error: "Calculate a material takeoff before applying labor." };
     }
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const result = await applyDraftTakeoffRecommendedLabor(prisma, access, {
       estimateId,
       lineItemId: readString(formData, "lineItemId"),
@@ -859,7 +869,7 @@ export async function resetEstimateTakeoffAndGeneratedMaterials(
 ): Promise<EstimateActionState> {
   try {
     const estimateId = readString(formData, "estimateId");
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const result = await resetDraftTakeoffAndGeneratedMaterials(prisma, access, {
       estimateId,
       lineItemId: readString(formData, "lineItemId"),
@@ -887,7 +897,7 @@ export async function restoreEstimateOriginalRequestPricing(
 ): Promise<EstimateActionState> {
   try {
     const estimateId = readString(formData, "estimateId");
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await restoreDraftOriginalRequestPricing(prisma, access, {
       estimateId,
       lineItemId: readString(formData, "lineItemId") || null,
@@ -913,7 +923,7 @@ export async function overrideEstimateLinePrice(
 ): Promise<EstimateActionState> {
   try {
     const estimateId = readString(formData, "estimateId");
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await overrideDraftEstimateLinePrice(prisma, access, {
       estimateId,
       lineItemId: readString(formData, "lineItemId"),
@@ -934,7 +944,7 @@ export async function saveEstimateLineForReuse(
 ): Promise<EstimateActionState> {
   try {
     const estimateId = readString(formData, "estimateId");
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const catalog = await saveDraftEstimateLineAsCatalog(prisma, access, {
       estimateId,
       lineItemId: readString(formData, "lineItemId"),
@@ -954,7 +964,9 @@ export async function setEstimateLaborMinimumWaived(
   estimateId: string,
   waived: boolean,
 ): Promise<EstimateActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimate = access.assertOwned(
     await prisma.estimate.findFirst({
@@ -985,7 +997,7 @@ export async function setEstimateCustomerMaterialsTotal(
   try {
     const estimateId = readString(formData, "estimateId");
     const mode = readString(formData, "mode");
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const result = await setDraftEstimateCustomerMaterialsTotal(prisma, access, {
       estimateId,
       amount: readString(formData, "amount"),
@@ -1014,7 +1026,7 @@ export async function updateEstimateTerms(
 ): Promise<EstimateActionState> {
   try {
     const estimateId = readString(formData, "estimateId");
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
     if (!estimateId) {
       return { error: "Those terms could not be saved." };
@@ -1054,7 +1066,7 @@ export async function setEstimateMaterialDeposit(
   try {
     const estimateId = readString(formData, "estimateId");
     const mode = readString(formData, "mode");
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const result = await setDraftEstimateMaterialDeposit(prisma, access, {
       estimateId,
       amount: mode === "none" ? "0" : readString(formData, "amount"),
@@ -1081,7 +1093,9 @@ export async function removeEstimateLineItem(
   _prev: EstimateActionState,
   formData: FormData,
 ): Promise<EstimateActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
   const lineItemId = readString(formData, "lineItemId");
@@ -1149,7 +1163,9 @@ export async function clearDraftEstimate(
   _prev: EstimateActionState,
   formData: FormData,
 ): Promise<EstimateActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
 
@@ -1185,7 +1201,9 @@ export async function sendEstimate(
   _prev: EstimateActionState,
   formData: FormData,
 ): Promise<EstimateActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
 
@@ -1266,7 +1284,9 @@ export async function returnEstimateToDraft(
   _prev: EstimateActionState,
   formData: FormData,
 ): Promise<EstimateActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
 
@@ -1308,7 +1328,9 @@ export async function emailSentEstimate(
   _prev: EstimateActionState,
   formData: FormData,
 ): Promise<EstimateActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
   const estimateId = readString(formData, "estimateId");
   const sendAttemptId = readString(formData, "sendAttemptId");

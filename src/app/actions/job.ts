@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccessForForm } from "@/lib/saas-billing/enforce";
 import { readAccessArrangementFromFormData } from "@/lib/access-arrangement-form";
 import {
   CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
@@ -59,7 +59,9 @@ export async function createJobFromEstimate(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
   const estimateId =
     typeof formData.get("estimateId") === "string"
@@ -143,7 +145,9 @@ export async function scheduleJob(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
   await ensureAppointmentConfirmationSchema(prisma);
   const jobId = readString(formData, "jobId");
@@ -267,7 +271,9 @@ export async function retryAppointmentNotification(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
   await ensureAppointmentConfirmationSchema(prisma);
   const jobId = readString(formData, "jobId");
@@ -310,7 +316,9 @@ export async function recordOwnerAppointmentConfirmation(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
   await ensureAppointmentConfirmationSchema(prisma);
   const jobId = readString(formData, "jobId");
@@ -383,7 +391,9 @@ export async function startJob(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.OPERATE_JOBS);
   await ensureAppointmentConfirmationSchema(prisma);
   const jobId = readString(formData, "jobId");
@@ -464,7 +474,9 @@ export async function markJobComplete(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.OPERATE_JOBS);
   const jobId = readString(formData, "jobId");
 
@@ -523,7 +535,9 @@ export async function assignJobMember(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
   const jobId = readString(formData, "jobId");
   const membershipId = readString(formData, "membershipId");

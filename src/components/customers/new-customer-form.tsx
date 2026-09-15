@@ -15,6 +15,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { OperatingWriteGate, useSaasOperating } from "@/components/saas/saas-operating-context";
 import type { VariantProps } from "class-variance-authority";
 
 const initialState: CustomerActionState = {};
@@ -45,6 +46,7 @@ export function NewCustomerForm({
   const [open, setOpen] = useState(false);
   const [state, formAction, pending] = useActionState(createCustomer, initialState);
   const wasPending = useRef(false);
+  const operating = useSaasOperating();
 
   useEffect(() => {
     if (wasPending.current && !pending && !state.error) {
@@ -52,6 +54,10 @@ export function NewCustomerForm({
     }
     wasPending.current = pending;
   }, [pending, state]);
+
+  if (!operating.canOperate) {
+    return <OperatingWriteGate fallbackLabel={label} />;
+  }
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>

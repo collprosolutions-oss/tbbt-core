@@ -18,6 +18,7 @@ import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
+import { OperatingWriteGate } from "@/components/saas/saas-operating-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
@@ -334,9 +335,11 @@ export default async function EstimatesPage({
        */}
       <PageHeaderControls
         actions={
-          <Button asChild size="sm">
-            <Link href="/estimates/new">New Estimate</Link>
-          </Button>
+          <OperatingWriteGate fallbackLabel="New Estimate">
+            <Button asChild size="sm">
+              <Link href="/estimates/new">New Estimate</Link>
+            </Button>
+          </OperatingWriteGate>
         }
         search={
           <form action="/estimates" method="GET" className="flex items-center gap-2">

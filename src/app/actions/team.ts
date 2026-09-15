@@ -12,7 +12,7 @@
  */
 import { revalidatePath } from "next/cache";
 import { createSecureToken, hashPassword, hashToken } from "@/lib/auth";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
   getAppUrl,
@@ -53,7 +53,7 @@ export async function addTeamMember(
   _prev: TeamActionState,
   formData: FormData,
 ): Promise<TeamActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_MEMBERS);
 
   const name = readString(formData, "name");
@@ -205,7 +205,7 @@ export async function setTeamMemberActive(
   _prev: TeamActionState,
   formData: FormData,
 ): Promise<TeamActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_MEMBERS);
 
   const membershipId = readString(formData, "membershipId");

@@ -21,6 +21,8 @@ export type SettingsWorkspaceProps = {
   integrations: IntegrationCard[];
   canEditConsequential: boolean;
   canEditPreferences: boolean;
+  canOperate: boolean;
+  operatingBlockedMessage: string;
   websitePhotos?: {
     storageConfigured: boolean;
     storageUsage?: { usedBytes: number; limitBytes: number } | null;

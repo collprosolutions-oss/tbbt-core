@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import {
   deleteStoredAsset,
   isBusinessStorageConfigured,
@@ -54,7 +54,7 @@ export async function replacePublicSiteImage(
   formData: FormData,
 ): Promise<PublicSiteImageActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     assertSettingsBusinessScope(access, readString(formData, "businessId") || null);
     const page = readString(formData, "page") || PUBLIC_SITE_HOME_PAGE;
     const slot = readString(formData, "slot");
@@ -111,7 +111,7 @@ export async function repositionPublicSiteImage(
   formData: FormData,
 ): Promise<PublicSiteImageActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     assertSettingsBusinessScope(access, readString(formData, "businessId") || null);
     const page = readString(formData, "page") || PUBLIC_SITE_HOME_PAGE;
     const slot = readString(formData, "slot");
@@ -145,7 +145,7 @@ export async function resetPublicSiteImage(
   formData: FormData,
 ): Promise<PublicSiteImageActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     assertSettingsBusinessScope(access, readString(formData, "businessId") || null);
     const page = readString(formData, "page") || PUBLIC_SITE_HOME_PAGE;
     const slot = readString(formData, "slot");
