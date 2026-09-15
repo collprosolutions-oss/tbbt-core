@@ -3,6 +3,8 @@
     "AllowedOrigins": [
       "https://www.collproreno.com",
       "https://collproreno.com",
+      "https://tbbtools.com",
+      "https://www.tbbtools.com",
       "https://collpro-reno.vercel.app",
       "https://collpro-reno-git-cursor-estimate-pri-d221ac-collpro-s-projects5.vercel.app",
       "http://localhost:43217",
