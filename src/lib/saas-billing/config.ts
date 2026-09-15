@@ -8,8 +8,8 @@
  */
 import { getStripeWebhookSecret } from "@/lib/payments/config";
 
-export const TBBT_SAAS_PLAN_CODE = "tbbt_handyman";
-export const TBBT_SAAS_PLAN_NAME = "TBBT Handyman";
+export const TBBT_SAAS_PLAN_CODE = "tbbt_founder";
+export const TBBT_SAAS_PLAN_NAME = "Founder Plan";
 export const SAAS_CHECKOUT_PURPOSE = "tbbt_saas_subscription";
 export const SAAS_BILLING_SETTINGS_HREF = "/settings?section=tbbt-billing";
 

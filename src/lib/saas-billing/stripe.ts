@@ -1,6 +1,6 @@
 import Stripe from "stripe";
 import { getStripeSecretKey } from "@/lib/payments/config";
-import { SAAS_CHECKOUT_PURPOSE } from "@/lib/saas-billing/config";
+import { SAAS_CHECKOUT_PURPOSE, TBBT_SAAS_PLAN_CODE } from "@/lib/saas-billing/config";
 import type {
   CreateSaasCheckoutInput,
   CreateSaasCustomerInput,
@@ -55,6 +55,7 @@ export function createStripeSaasBillingProvider(): SaasBillingProvider {
           metadata: {
             purpose: SAAS_CHECKOUT_PURPOSE,
             businessId: input.businessId,
+            planCode: TBBT_SAAS_PLAN_CODE,
           },
         },
       });

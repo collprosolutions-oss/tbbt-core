@@ -16,6 +16,9 @@ import {
 } from "@/lib/website-setup";
 import { getTrade } from "@/lib/trades";
 import { requireWorkspace } from "@/lib/workspace";
+import { prisma } from "@/lib/prisma";
+import { loadSaasEntitlement } from "@/lib/saas-billing";
+import { SaasEntitlementBanner } from "@/components/settings/saas-entitlement-banner";
 
 export default async function AppLayout({
   children,
@@ -54,6 +57,7 @@ export default async function AppLayout({
 
   const trade = getTrade(workspace.business.tradeCode);
   const businessLogoSrc = getBusinessLogoSrc(workspace.business.slug);
+  const entitlement = await loadSaasEntitlement(prisma, workspace.business);
 
   return (
     <AppShell
@@ -63,6 +67,9 @@ export default async function AppLayout({
       userName={workspace.user.name}
       userEmail={workspace.user.email}
       role={workspace.role}
+      banner={
+        <SaasEntitlementBanner entitlement={entitlement} role={workspace.role} />
+      }
     >
       {children}
     </AppShell>

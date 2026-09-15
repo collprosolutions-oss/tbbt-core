@@ -168,6 +168,12 @@ export const TBBT_SAAS_CHECKOUT_CANCELED_MESSAGE =
 export const TBBT_SAAS_BILLING_UNCONFIGURED_MESSAGE =
   "TBBT subscription billing is not configured on this environment. Set STRIPE_SAAS_PRICE_ID (and STRIPE_SECRET_KEY) to enable Checkout.";
 
+export const TBBT_FOUNDER_PLAN_DESCRIPTION =
+  "Founder Plan is $49/month. New businesses get a 30-day free trial with no credit card required. The founder rate stays $49/month while you remain continuously subscribed.";
+
+export const TBBT_FOUNDER_TRIAL_NO_CARD_MESSAGE =
+  "No credit card is required to start or continue the free trial.";
+
 export const PAYMENT_PROVIDER_PLATFORM_UNCONFIGURED_MESSAGE =
   "Stripe is not configured on this TBBT environment. Set STRIPE_SECRET_KEY to enable Connect onboarding.";
 

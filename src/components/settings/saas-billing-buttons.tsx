@@ -29,7 +29,7 @@ export function SaasSubscribeButton({
         </Alert>
       ) : null}
       <Button type="submit" size="sm" disabled={disabled || pending}>
-        {pending ? "Opening Stripe…" : "Subscribe to TBBT"}
+        {pending ? "Opening Stripe…" : "Start subscription"}
       </Button>
     </form>
   );

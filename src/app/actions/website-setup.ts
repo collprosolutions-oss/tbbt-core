@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
 import { postAuthenticationPath } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
+import { startFounderTrialIfEligible } from "@/lib/saas-billing";
 import { settingsErrorMessage } from "@/lib/settings-ops";
 import {
   completeWebsiteSetupOp,
@@ -27,13 +28,20 @@ export async function completeWebsiteSetupAction(
 ): Promise<WebsiteSetupState> {
   try {
     const access = await requireBusinessAccess();
-    await completeWebsiteSetupOp(prisma, access, {
+    const result = await completeWebsiteSetupOp(prisma, access, {
       name: readString(formData, "businessName"),
       phone: readString(formData, "publicPhone"),
       email: readString(formData, "publicEmail"),
       about: readString(formData, "approvedPublicAboutCopy"),
       serviceArea: readString(formData, "publicServiceAreaLabel"),
     });
+    if (!result.alreadyComplete) {
+      await startFounderTrialIfEligible(prisma, {
+        businessId: access.businessId,
+        slug: access.workspace.business.slug,
+        changedByMembershipId: access.workspace.membership.id,
+      });
+    }
     revalidatePath("/settings");
     revalidatePath(`/hire/${access.workspace.business.slug}`);
     revalidatePath(`/hire/${access.workspace.business.slug}/about`);
@@ -50,7 +58,14 @@ export async function completeWebsiteSetupAction(
 
 export async function skipWebsiteSetupAction(): Promise<void> {
   const access = await requireBusinessAccess();
-  await skipWebsiteSetupOp(prisma, access);
+  const result = await skipWebsiteSetupOp(prisma, access);
+  if (!result.alreadyComplete) {
+    await startFounderTrialIfEligible(prisma, {
+      businessId: access.businessId,
+      slug: access.workspace.business.slug,
+      changedByMembershipId: access.workspace.membership.id,
+    });
+  }
   redirect(
     postAuthenticationPath({
       role: access.workspace.role,

@@ -19,6 +19,12 @@ import {
   TBBT_SAAS_PLAN_NAME,
 } from "@/lib/saas-billing/config";
 import { parseSaasBillingEvent } from "@/lib/saas-billing/events";
+import {
+  inspectConfiguredFounderPrice,
+  TBBT_FOUNDER_PLAN_PRICE_LABEL,
+} from "@/lib/saas-billing/founder-price";
+import { resolveSaasEntitlement, type SaasEntitlement } from "@/lib/saas-billing/entitlement";
+import { applyFounderSubscriptionTransition } from "@/lib/saas-billing/trial";
 import type { ParsedSaasBillingEvent, SaasSubscriptionSnapshot } from "@/lib/saas-billing/types";
 import {
   isBlockingSaasStatus,
@@ -46,6 +52,15 @@ export type SaasBillingSnapshot = {
   appUrlConfigured: boolean;
   checkoutPossible: boolean;
   portalPossible: boolean;
+  trialStartedAt: string | null;
+  trialEndsAt: string | null;
+  trialDaysRemaining: number | null;
+  founderEligible: boolean;
+  founderConvertedAt: string | null;
+  founderPriceLabel: string;
+  showFounderPrice: boolean;
+  founderPriceWarning: string | null;
+  entitlement: SaasEntitlement;
 };
 
 function billingSettingsUrl(query = "") {
@@ -106,12 +121,33 @@ export async function loadSaasBillingSnapshot(
   businessId: string,
 ): Promise<SaasBillingSnapshot> {
   await ensureSaasBillingSchema(db);
-  const row = await loadRow(db, businessId);
+  const [row, business, founderPrice] = await Promise.all([
+    loadRow(db, businessId),
+    db.business.findFirst({
+      where: { id: businessId },
+      select: { slug: true },
+    }),
+    inspectConfiguredFounderPrice(),
+  ]);
   const fakeAdapter = process.env.TBBT_SAAS_BILLING_ADAPTER === "fake";
   const stripeReady = fakeAdapter || Boolean(getStripeSecretKey());
   const configured = isSaasBillingConfigured() && stripeReady;
   const appUrlConfigured = Boolean(getAppUrl());
   const status = row?.status ?? SAAS_SUBSCRIPTION_STATUS_NONE;
+  const entitlement = resolveSaasEntitlement({
+    slug: business?.slug ?? "",
+    row: row
+      ? {
+          status: row.status,
+          trialStartedAt: row.trialStartedAt,
+          trialEndsAt: row.trialEndsAt,
+          founderEligible: row.founderEligible,
+          founderConvertedAt: row.founderConvertedAt,
+          founderEligibilityEndedAt: row.founderEligibilityEndedAt,
+          legacyExempt: row.legacyExempt,
+        }
+      : null,
+  });
   return {
     planCode: TBBT_SAAS_PLAN_CODE,
     planName: TBBT_SAAS_PLAN_NAME,
@@ -126,6 +162,15 @@ export async function loadSaasBillingSnapshot(
     appUrlConfigured,
     checkoutPossible: configured && appUrlConfigured && !isBlockingSaasStatus(status),
     portalPossible: Boolean(row?.stripeCustomerId) && stripeReady && appUrlConfigured,
+    trialStartedAt: entitlement.trialStartedAt,
+    trialEndsAt: entitlement.trialEndsAt,
+    trialDaysRemaining: entitlement.trialDaysRemaining,
+    founderEligible: entitlement.founderEligible,
+    founderConvertedAt: entitlement.founderConvertedAt,
+    founderPriceLabel: TBBT_FOUNDER_PLAN_PRICE_LABEL,
+    showFounderPrice: founderPrice.showFounderPrice,
+    founderPriceWarning: founderPrice.warning,
+    entitlement,
   };
 }
 
@@ -298,6 +343,7 @@ export async function applyParsedSaasBillingEvent(
       ? parsed.snapshot.cancelAtPeriodEnd
       : current?.cancelAtPeriodEnd ?? false,
   });
+  await applyFounderSubscriptionTransition(db, businessId, nextStatus);
 
   try {
     await db.saasBillingWebhookEvent.create({

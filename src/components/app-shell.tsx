@@ -44,6 +44,7 @@ type AppShellProps = {
   userName: string;
   userEmail: string;
   role: MembershipRole;
+  banner?: ReactNode;
   children: ReactNode;
 };
 
@@ -381,6 +382,7 @@ export function AppShell({
   userName,
   userEmail,
   role,
+  banner,
   children,
 }: AppShellProps) {
   const pathname = usePathname();
@@ -453,6 +455,7 @@ export function AppShell({
         </aside>
 
         <main className="min-w-0 flex-1 overflow-y-auto px-4 py-6 md:px-8 md:py-8">
+          {banner}
           {children}
         </main>
       </div>

@@ -671,9 +671,12 @@ try {
   });
   check("Existing business remains queryable after billing tables exist", Boolean(existingStillThere));
   check(
-    "No silent Stripe subscription rows were created for existing tenants",
+    "Existing tenants were not silently given Stripe Customer or Subscription ids",
     (await prisma.businessSaasSubscription.count({
-      where: { businessId: { in: [existing.business.id, collpro.business.id] } },
+      where: {
+        businessId: { in: [existing.business.id, collpro.business.id] },
+        OR: [{ stripeCustomerId: { not: null } }, { stripeSubscriptionId: { not: null } }],
+      },
     })) === 0,
   );
 } catch (error) {
