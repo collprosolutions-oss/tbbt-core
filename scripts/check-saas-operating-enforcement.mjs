@@ -246,7 +246,7 @@ try {
   resetSaasBillingSchemaEnsure();
   const provider = createFakeSaasBillingProvider();
   setSaasBillingProvider(provider);
-  const now = new Date("2026-09-15T12:00:00.000Z");
+  const now = new Date();
   const pastStart = new Date(now.getTime() - TBBT_FOUNDER_TRIAL_MS - 60_000);
   const pastEnd = new Date(now.getTime() - 60_000);
   const futureEnd = new Date(now.getTime() + TBBT_FOUNDER_TRIAL_MS);
