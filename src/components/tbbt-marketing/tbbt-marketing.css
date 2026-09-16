@@ -52,16 +52,15 @@
 }
 
 .tbbt-brand {
-  display: grid;
-  place-items: center;
+  display: block;
   margin-right: auto;
   z-index: 70;
-  width: var(--tbbt-logo-w);
   height: var(--tbbt-logo-h);
-  overflow: hidden;
+  width: auto;
+  overflow: visible;
   text-decoration: none;
-  background: #07101d;
   flex: 0 0 auto;
+  line-height: 0;
 }
 
 .tbbt-brand img {
@@ -69,6 +68,7 @@
   width: auto;
   height: var(--tbbt-logo-h);
   max-width: none;
+  object-fit: contain;
 }
 
 .tbbt-logo {
@@ -712,30 +712,30 @@
 
 @media (min-width: 900px) {
   .tbbt-site {
-    --tbbt-logo-h: 6.15rem;
-    --tbbt-logo-w: 10.6rem;
+    --tbbt-logo-h: 6.2rem;
+    --tbbt-logo-w: calc(var(--tbbt-logo-h) * 1.75);
   }
 
   .tbbt-brand {
     position: absolute;
     left: 0;
-    top: 0.28rem;
+    top: 0.22rem;
     margin-right: 0;
-    border-radius: 0 0 0.7rem 0.7rem;
-    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.42);
+    overflow: hidden;
+    border-radius: 0 0 0.55rem 0.55rem;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
   }
 
   .tbbt-brand img {
-    width: 148%;
-    height: 148%;
-    object-fit: cover;
-    object-position: 50% 46%;
-    transform: translateY(-1%);
+    width: auto;
+    height: var(--tbbt-logo-h);
+    object-fit: contain;
+    transform: none;
   }
 
   .tbbt-nav {
     display: flex;
-    margin-left: calc(var(--tbbt-logo-w) + 1.15rem);
+    margin-left: calc(var(--tbbt-logo-w) + 1.05rem);
     margin-right: auto;
   }
 
@@ -780,8 +780,8 @@
 
 @media (min-width: 1100px) {
   .tbbt-site {
-    --tbbt-logo-h: 8.9rem;
-    --tbbt-logo-w: 14.4rem;
+    --tbbt-logo-h: 8.75rem;
+    --tbbt-logo-w: calc(var(--tbbt-logo-h) * 1.75);
   }
 
   .tbbt-nav a {
