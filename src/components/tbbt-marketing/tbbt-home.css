@@ -830,7 +830,7 @@
   overflow: hidden;
   background:
     linear-gradient(90deg, rgba(5, 8, 14, 0.12) 0%, rgba(5, 8, 14, 0.42) 46%, rgba(5, 8, 14, 0.58) 100%),
-    url("/brand/tbbt-marketing/cta-sunset.png") 22% 42% / cover no-repeat;
+    url("/brand/tbbt-marketing/cta-sunset.png") 58% 42% / cover no-repeat;
 }
 
 .tbbt-final-inner {
@@ -910,15 +910,19 @@
 
 @media (min-width: 1100px) {
   .tbbt-hero-cinematic {
-    min-height: 27.5rem;
+    min-height: 0;
+  }
+
+  .tbbt-hero-cinematic::after {
+    height: 2.4rem;
   }
 
   .tbbt-hero-stage {
-    grid-template-columns: var(--tbbt-logo-w) minmax(20rem, 0.92fr) minmax(34rem, 1.28fr);
+    grid-template-columns: var(--tbbt-logo-w) minmax(21rem, 1fr) minmax(34rem, 1.22fr);
     grid-template-rows: 1fr auto;
     align-items: stretch;
-    min-height: 26.5rem;
-    padding: 0.35rem 0 0.35rem;
+    min-height: 16.2rem;
+    padding: 0 0 0;
     gap: 0;
   }
 
@@ -945,28 +949,37 @@
 
   .tbbt-hero-copy .tbbt-hero-actions {
     flex-wrap: nowrap;
-    margin-top: 0.7rem;
-    gap: 0.55rem;
+    margin-top: 0.55rem;
+    gap: 0.45rem;
+  }
+
+  .tbbt-hero-cinematic .tbbt-btn {
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .tbbt-hero-cinematic .tbbt-btn--lg {
-    min-height: 2.55rem;
-    padding: 0.42rem 1.05rem;
-    font-size: 0.88rem;
+    min-height: 2.4rem;
+    padding: 0.35rem 0.9rem;
+    font-size: 0.82rem;
   }
 
   .tbbt-hero-visual {
     grid-column: 3;
     grid-row: 1;
-    min-height: 24.5rem;
+    min-height: 16.2rem;
   }
 
   .tbbt-benefit-row {
     grid-column: 2 / 4;
     grid-row: 2;
-    max-width: 44rem;
-    padding: 0 0 0.45rem;
-    gap: 0.55rem 0.9rem;
+    max-width: 46rem;
+    padding: 0.15rem 0 0.2rem;
+    gap: 0.4rem 0.8rem;
+  }
+
+  .tbbt-benefit {
+    font-size: 0.82rem;
   }
 
   .tbbt-hero-script {
@@ -978,10 +991,10 @@
 
   .tbbt-hero-pro {
     position: absolute;
-    left: -16%;
-    bottom: -0.4rem;
-    width: 48%;
-    height: 104%;
+    left: -6%;
+    bottom: -0.2rem;
+    width: 42%;
+    height: 102%;
     margin: 0;
     z-index: 2;
   }
@@ -1002,48 +1015,65 @@
   .tbbt-dash-stack {
     position: absolute;
     right: -2%;
-    bottom: 7%;
-    width: 78%;
-    min-height: 16.5rem;
+    top: 5.1rem;
+    bottom: 1.1rem;
+    width: 72%;
+    min-height: 0;
     margin-top: 0;
     z-index: 4;
   }
 
   .tbbt-laptop--hero {
-    width: 92%;
+    width: 100%;
+    height: 100%;
+  }
+
+  .tbbt-laptop-lid {
+    height: calc(100% - 0.95rem);
   }
 
   .tbbt-laptop-screen,
   .tbbt-dash {
-    min-height: 15.2rem;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .tbbt-dash-kpis b {
+    font-size: 0.78rem;
+    white-space: nowrap;
+  }
+
+  .tbbt-dash-kpis div {
+    padding: 0.38rem 0.35rem;
   }
 
   .tbbt-dash-main {
-    padding: 0.55rem 0.6rem 0.6rem;
-    gap: 0.38rem;
+    padding: 0.45rem 0.5rem 0.5rem;
+    gap: 0.32rem;
   }
 
   .tbbt-hero-phone {
-    right: -0.15rem;
-    bottom: -0.15rem;
+    right: -0.55rem;
+    bottom: -0.55rem;
   }
 
   .tbbt-hero-phone .tbbt-phone-ui {
-    width: 10.1rem;
-    padding: 0.5rem 0.45rem 0.55rem;
+    width: 8.2rem;
+    padding: 0.35rem 0.35rem 0.4rem;
   }
 
   .tbbt-platform-card {
     position: absolute;
-    right: 0.15rem;
-    top: 0.15rem;
+    right: 0;
+    top: 0.2rem;
+    z-index: 6;
     margin: 0;
-    width: 15.6rem;
-    padding: 0.65rem 0.75rem;
+    width: 15.2rem;
+    padding: 0.5rem 0.65rem;
   }
 
   .tbbt-band--trades {
-    padding: 0.95rem 0 1.05rem;
+    padding: 0.4rem 0 0.45rem;
   }
 
   .tbbt-split-head {
@@ -1061,8 +1091,8 @@
 
   .tbbt-thumb-photo {
     aspect-ratio: 5 / 4;
-    min-height: 4.35rem;
-    border-radius: 0.65rem;
+    min-height: 3.7rem;
+    border-radius: 0.55rem;
   }
 
   .tbbt-thumb figcaption {
@@ -1071,15 +1101,23 @@
   }
 
   .tbbt-band--brg {
-    padding: 1.05rem 0 1.15rem;
+    padding: 0.55rem 0 0.6rem;
   }
 
   .tbbt-brg-head {
-    margin-bottom: 0.65rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.9rem;
+    margin-bottom: 0.5rem;
   }
 
   .tbbt-brg-head h2 {
-    font-size: 1.85rem;
+    font-size: 1.7rem;
+    margin: 0;
+  }
+
+  .tbbt-brg-head p {
+    margin: 0;
   }
 
   .tbbt-brg {
@@ -1087,9 +1125,10 @@
   }
 
   .tbbt-brg-card {
-    padding: 0.85rem 0.8rem 0.85rem;
-    gap: 0.48rem;
-    border-radius: 0.95rem;
+    padding: 0.45rem 0.55rem 0.45rem;
+    gap: 0.22rem;
+    border-radius: 0.75rem;
+    align-content: start;
   }
 
   .tbbt-brg-card .tbbt-kicker {
@@ -1102,8 +1141,8 @@
 
   .tbbt-brg-body {
     grid-template-columns: 1.12fr 0.88fr;
-    min-height: 10.2rem;
-    gap: 0.55rem;
+    min-height: 5.6rem;
+    gap: 0.35rem;
   }
 
   .tbbt-brg-points {
@@ -1115,20 +1154,44 @@
   .tbbt-device-run,
   .tbbt-run-phones,
   .tbbt-grow-ui {
-    min-height: 10.2rem;
+    min-height: 5.6rem;
   }
 
-  .tbbt-site-mock img {
-    height: 5.1rem;
+  .tbbt-run-phones {
+    height: 5.6rem;
+    overflow: hidden;
+    align-items: start;
   }
 
   .tbbt-run-phones .tbbt-phone-ui {
-    width: 7.4rem;
-    transform: scale(0.78);
+    width: 6.4rem;
+    transform: scale(0.5);
+    transform-origin: top center;
+  }
+
+  .tbbt-site-mock img {
+    height: 2.15rem;
+  }
+
+  .tbbt-site-mock-body {
+    padding: 0.22rem 0.35rem 0.28rem;
+  }
+
+  .tbbt-site-mock-body em {
+    display: none;
+  }
+
+  .tbbt-site-tiles {
+    display: none;
+  }
+
+  .tbbt-grow-ui {
+    padding: 0.55rem;
+    gap: 0.4rem;
   }
 
   .tbbt-grow-cols {
-    height: 4.4rem;
+    height: 2.8rem;
   }
 
   .tbbt-grow-chart strong {
@@ -1137,17 +1200,7 @@
   }
 
   .tbbt-grow-coach {
-    padding-top: 0.4rem;
-    gap: 0.45rem;
-  }
-
-  .tbbt-grow-coach img {
-    width: 2.2rem;
-    height: 2.2rem;
-  }
-
-  .tbbt-grow-coach p {
-    font-size: 0.68rem;
+    display: none;
   }
 
   .tbbt-brg-card .tbbt-btn {
@@ -1158,12 +1211,12 @@
   }
 
   .tbbt-connected {
-    padding: 0.85rem 0 0.9rem;
+    padding: 0.35rem 0 0.35rem;
   }
 
   .tbbt-connected-head {
-    margin-bottom: 0.65rem;
-    gap: 0.55rem;
+    margin-bottom: 0.4rem;
+    gap: 0.45rem;
   }
 
   .tbbt-connected-head h2 {
@@ -1171,8 +1224,8 @@
   }
 
   .tbbt-connected-icon {
-    width: 2.85rem;
-    height: 2.85rem;
+    width: 2.45rem;
+    height: 2.45rem;
   }
 
   .tbbt-connected-step {
@@ -1187,24 +1240,35 @@
   }
 
   .tbbt-final-cta {
-    min-height: 12.4rem;
+    min-height: 7.5rem;
   }
 
   .tbbt-final-inner {
     grid-template-columns: 0.9fr 1.45fr 0.95fr;
     text-align: center;
     align-items: center;
-    padding: 1.7rem 0;
-    gap: 1rem;
+    padding: 0.7rem 0 0.75rem;
+    gap: 0.45rem;
   }
 
   .tbbt-final-inner h2 {
-    font-size: clamp(1.7rem, 2.8vw, 2.35rem);
+    font-size: clamp(1.45rem, 2.4vw, 1.9rem);
   }
 
   .tbbt-final-lead {
-    margin-top: 0.45rem;
-    font-size: 0.92rem;
+    margin-top: 0.25rem;
+    font-size: 0.8rem;
+    max-width: 34rem;
+  }
+
+  .tbbt-final-actions {
+    margin-top: 0.35rem;
+  }
+
+  .tbbt-final-cta .tbbt-btn--lg {
+    min-height: 2.35rem;
+    padding: 0.32rem 0.9rem;
+    font-size: 0.82rem;
   }
 
   .tbbt-final-side {
@@ -1223,7 +1287,7 @@
   }
 
   .tbbt-final-script {
-    font-size: clamp(2.2rem, 3.6vw, 3.15rem);
+    font-size: clamp(1.8rem, 3vw, 2.55rem);
   }
 }
 

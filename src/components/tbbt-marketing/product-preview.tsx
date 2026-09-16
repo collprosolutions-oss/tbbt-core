@@ -1,17 +1,6 @@
 export function TbbtDashboardMock() {
   return (
     <div className="tbbt-dash-stack" aria-hidden="true">
-      <aside className="tbbt-platform-card">
-        <strong>One platform. Any trade.</strong>
-        <ul>
-          <li>Simple to use</li>
-          <li>Professional results</li>
-          <li>Built for real work</li>
-          <li>Affordable</li>
-          <li>No long-term contracts</li>
-          <li>Grows with you</li>
-        </ul>
-      </aside>
       <div className="tbbt-laptop tbbt-laptop--hero">
         <div className="tbbt-laptop-lid">
           <span className="tbbt-laptop-cam" />

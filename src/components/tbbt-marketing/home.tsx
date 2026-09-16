@@ -89,6 +89,17 @@ export function TbbtHomePage() {
 
           <div className="tbbt-hero-visual">
             <p className="tbbt-script tbbt-hero-script">{TBBT_HERO_SCRIPT}</p>
+            <aside className="tbbt-platform-card" aria-hidden="true">
+              <strong>One platform. Any trade.</strong>
+              <ul>
+                <li>Simple to use</li>
+                <li>Professional results</li>
+                <li>Built for real work</li>
+                <li>Affordable</li>
+                <li>No long-term contracts</li>
+                <li>Grows with you</li>
+              </ul>
+            </aside>
             <div className="tbbt-hero-pro">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img

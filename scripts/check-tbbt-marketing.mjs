@@ -334,7 +334,8 @@ if (!reachable) {
       pricing &&
         pricing.body.includes("$49/month") &&
         pricing.body.includes("/sign-up") &&
-        !pricing.body.includes("$29"),
+        !pricing.body.includes("$29/month") &&
+        !pricing.body.includes("$29 /month"),
     ),
   );
   const homePreview = await fetchMaybe("/home");
