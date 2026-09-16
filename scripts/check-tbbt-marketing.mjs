@@ -183,6 +183,8 @@ const resourcesSrc = readRepo("src/components/tbbt-marketing/resources.tsx");
 const aboutSrc = readRepo("src/components/tbbt-marketing/about.tsx");
 const videoSrc = readRepo("src/components/tbbt-marketing/watch-video.tsx");
 const r2Src = readRepo("src/lib/business-storage/r2-cors.ts");
+const headerSrc = readRepo("src/components/tbbt-marketing/header.tsx");
+const marketingCssSrc = readRepo("src/components/tbbt-marketing/tbbt-marketing.css");
 check(
   "Pricing page does not invent Starter / Business / Enterprise prices",
   !pricingSrc.includes("$29") &&
@@ -210,6 +212,15 @@ check(
     aboutSrc.includes("third-generation carpenter") &&
     !aboutSrc.includes("customers served") &&
     !aboutSrc.includes("employees"),
+);
+check(
+  "Header uses the real TBBT logo with an oversized overlapping treatment",
+  headerSrc.includes('src="/brand/tbbt-logo.png"') &&
+    headerSrc.includes("tbbt-brand") &&
+    !headerSrc.includes("tbbt-logo-text") &&
+    marketingCssSrc.includes("--tbbt-logo-h: 8.9rem") &&
+    marketingCssSrc.includes("overflow: visible") &&
+    marketingCssSrc.includes("position: absolute"),
 );
 check(
   "Home keeps BUILD / RUN / GROW and the connected lifecycle",

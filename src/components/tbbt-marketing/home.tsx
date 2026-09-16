@@ -118,8 +118,7 @@ export function TbbtHomePage() {
           <div className="tbbt-split-head">
             <h2>Built for every trade</h2>
             <p className="tbbt-muted">
-              TBBT is not just for Handyman. Same operating system. Customized
-              for your trade.
+              Same powerful platform. Customized for your trade.
             </p>
           </div>
           <div className="tbbt-trade-strip">

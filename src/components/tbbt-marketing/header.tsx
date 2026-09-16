@@ -29,18 +29,14 @@ export function TbbtMarketingHeader({ homeHref }: { homeHref: string }) {
   return (
     <header className="tbbt-header">
       <div className="tbbt-wrap tbbt-header-inner">
-        <Link href={homeHref} className="tbbt-logo" onClick={() => setOpen(false)}>
+        <Link href={homeHref} className="tbbt-brand" onClick={() => setOpen(false)}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/brand/tbbt-logo.png"
-            alt={TBBT_PRODUCT_NAME}
+            alt={`${TBBT_PRODUCT_NAME} — ${TBBT_PRODUCT_LONG_NAME}`}
             width={TBBT_LOGO_SIZE.width}
             height={TBBT_LOGO_SIZE.height}
           />
-          <span className="tbbt-logo-text">
-            <strong>{TBBT_PRODUCT_NAME}</strong>
-            <span>{TBBT_PRODUCT_LONG_NAME}</span>
-          </span>
         </Link>
 
         <nav className="tbbt-nav" aria-label="TBBT">
