@@ -2,6 +2,10 @@
   --tbbt-script: var(--font-tbbt-script), "Palatino Linotype", Palatino, serif;
 }
 
+.tbbt-site:has(.tbbt-home) .tbbt-preview-note {
+  display: none;
+}
+
 .tbbt-hero-cinematic {
   position: relative;
   overflow: hidden;
@@ -911,18 +915,20 @@
 @media (min-width: 1100px) {
   .tbbt-hero-cinematic {
     min-height: 0;
+    overflow: hidden;
   }
 
   .tbbt-hero-cinematic::after {
-    height: 2.4rem;
+    height: 1.15rem;
   }
 
   .tbbt-hero-stage {
-    grid-template-columns: var(--tbbt-logo-w) minmax(21rem, 1fr) minmax(34rem, 1.22fr);
+    grid-template-columns: var(--tbbt-logo-w) minmax(20rem, 0.78fr) minmax(40rem, 1.42fr);
     grid-template-rows: 1fr auto;
     align-items: stretch;
-    min-height: 16.2rem;
-    padding: 0 0 0;
+    min-height: 22.55rem;
+    height: 22.55rem;
+    padding: 0.08rem 0 0;
     gap: 0;
   }
 
@@ -930,27 +936,36 @@
     grid-column: 2;
     grid-row: 1;
     z-index: 6;
-    padding-top: 0.15rem;
-    padding-right: 0.6rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    padding-top: 0.28rem;
+    padding-right: 0.15rem;
     max-width: none;
     overflow: visible;
   }
 
+  .tbbt-eyebrow {
+    font-size: 0.62rem;
+    letter-spacing: 0.18em;
+  }
+
   .tbbt-hero-copy h1 {
-    margin: 0.35rem 0 0.55rem;
-    font-size: clamp(2.15rem, 2.5vw, 2.62rem);
+    margin: 0.18rem 0 0.38rem;
+    font-size: clamp(2.12rem, 2.45vw, 2.58rem);
+    line-height: 0.94;
   }
 
   .tbbt-hero-support {
-    font-size: 0.92rem;
-    line-height: 1.42;
-    max-width: 28rem;
+    font-size: 0.82rem;
+    line-height: 1.38;
+    max-width: 24.5rem;
   }
 
   .tbbt-hero-copy .tbbt-hero-actions {
     flex-wrap: nowrap;
-    margin-top: 0.55rem;
-    gap: 0.45rem;
+    margin-top: 0.72rem;
+    gap: 0.48rem;
   }
 
   .tbbt-hero-cinematic .tbbt-btn {
@@ -959,42 +974,47 @@
   }
 
   .tbbt-hero-cinematic .tbbt-btn--lg {
-    min-height: 2.4rem;
-    padding: 0.35rem 0.9rem;
-    font-size: 0.82rem;
+    min-height: 2.35rem;
+    padding: 0.34rem 0.9rem;
+    font-size: 0.8rem;
   }
 
   .tbbt-hero-visual {
     grid-column: 3;
-    grid-row: 1;
-    min-height: 16.2rem;
+    grid-row: 1 / 3;
+    min-height: 0;
+    height: auto;
+    overflow: visible;
   }
 
   .tbbt-benefit-row {
     grid-column: 2 / 4;
     grid-row: 2;
-    max-width: 46rem;
-    padding: 0.15rem 0 0.2rem;
-    gap: 0.4rem 0.8rem;
+    max-width: 36rem;
+    padding: 0.12rem 0 0.38rem;
+    gap: 0.25rem 0.7rem;
+    z-index: 6;
   }
 
   .tbbt-benefit {
-    font-size: 0.82rem;
+    font-size: 0.66rem;
+    gap: 0.28rem;
+    white-space: nowrap;
   }
 
   .tbbt-hero-script {
-    left: 4%;
-    top: 7%;
-    font-size: 1.55rem;
-    max-width: 11.5rem;
+    left: -2%;
+    top: 3.5%;
+    font-size: 1.38rem;
+    max-width: 10.5rem;
   }
 
   .tbbt-hero-pro {
     position: absolute;
-    left: -6%;
-    bottom: -0.2rem;
-    width: 42%;
-    height: 102%;
+    left: -16%;
+    bottom: 0;
+    width: 52%;
+    height: 106%;
     margin: 0;
     z-index: 2;
   }
@@ -1003,21 +1023,22 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
-    object-position: 50% 6%;
-    -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 14%, #000 78%, transparent 100%),
-      linear-gradient(to top, transparent 0%, #000 10%, #000 92%, transparent 100%);
+    object-position: 50% 8%;
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 86%, transparent 100%),
+      linear-gradient(to top, transparent 0%, #000 6%, #000 94%, transparent 100%);
     -webkit-mask-composite: source-in;
-    mask-image: linear-gradient(to right, transparent 0%, #000 14%, #000 78%, transparent 100%),
-      linear-gradient(to top, transparent 0%, #000 10%, #000 92%, transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 86%, transparent 100%),
+      linear-gradient(to top, transparent 0%, #000 6%, #000 94%, transparent 100%);
     mask-composite: intersect;
   }
 
   .tbbt-dash-stack {
     position: absolute;
-    right: -2%;
-    top: 5.1rem;
-    bottom: 1.1rem;
-    width: 72%;
+    right: 9.5%;
+    top: 3.45rem;
+    bottom: auto;
+    width: 60%;
+    height: 15.1rem;
     min-height: 0;
     margin-top: 0;
     z-index: 4;
@@ -1028,8 +1049,13 @@
     height: 100%;
   }
 
+  .tbbt-laptop--hero .tbbt-dash {
+    grid-template-columns: 4.15rem 1fr;
+  }
+
   .tbbt-laptop-lid {
-    height: calc(100% - 0.95rem);
+    height: calc(100% - 0.72rem);
+    padding: 0.32rem 0.32rem 0;
   }
 
   .tbbt-laptop-screen,
@@ -1038,165 +1064,299 @@
     height: 100%;
   }
 
+  .tbbt-dash-rail {
+    padding: 0.4rem 0.22rem;
+    gap: 0.22rem;
+  }
+
+  .tbbt-dash-rail span {
+    font-size: 0.46rem;
+    padding: 0.22rem 0.1rem;
+  }
+
   .tbbt-dash-kpis b {
-    font-size: 0.78rem;
+    font-size: 0.92rem;
     white-space: nowrap;
   }
 
+  .tbbt-dash-kpis span {
+    font-size: 0.52rem;
+  }
+
   .tbbt-dash-kpis div {
-    padding: 0.38rem 0.35rem;
+    padding: 0.28rem 0.28rem;
   }
 
   .tbbt-dash-main {
-    padding: 0.45rem 0.5rem 0.5rem;
-    gap: 0.32rem;
+    padding: 0.38rem 0.42rem 0.32rem;
+    gap: 0.28rem;
+  }
+
+  .tbbt-dash-hello {
+    font-size: 0.62rem;
+  }
+
+  .tbbt-dash-hello strong {
+    font-size: 0.86rem;
+  }
+
+  .tbbt-dash-row {
+    padding: 0.28rem 0.38rem;
+    font-size: 0.62rem;
+  }
+
+  .tbbt-dash-split em {
+    font-size: 0.54rem;
+    margin-bottom: 0.22rem;
   }
 
   .tbbt-hero-phone {
-    right: -0.55rem;
-    bottom: -0.55rem;
+    right: -1.7rem;
+    bottom: -0.45rem;
   }
 
   .tbbt-hero-phone .tbbt-phone-ui {
-    width: 8.2rem;
-    padding: 0.35rem 0.35rem 0.4rem;
+    width: 6.45rem;
+    padding: 0.32rem 0.28rem 0.32rem;
+    border-width: 2px;
+    border-radius: 1.15rem;
+  }
+
+  .tbbt-hero-phone .tbbt-phone-ui h3 {
+    font-size: 0.68rem;
+    margin-bottom: 0.28rem;
+  }
+
+  .tbbt-hero-phone .tbbt-phone-item {
+    font-size: 0.5rem;
+    padding: 0.22rem 0.28rem;
+    margin-bottom: 0.18rem;
+  }
+
+  .tbbt-hero-phone .tbbt-phone-nav {
+    font-size: 0.38rem;
   }
 
   .tbbt-platform-card {
     position: absolute;
-    right: 0;
-    top: 0.2rem;
-    z-index: 6;
+    right: 0.05rem;
+    top: 0;
+    z-index: 7;
     margin: 0;
-    width: 15.2rem;
-    padding: 0.5rem 0.65rem;
+    width: 11.8rem;
+    padding: 0.32rem 0.42rem;
+  }
+
+  .tbbt-platform-card strong {
+    font-size: 0.62rem;
+    margin-bottom: 0.32rem;
+  }
+
+  .tbbt-platform-card ul {
+    font-size: 0.62rem;
+    gap: 0.22rem 0.45rem;
   }
 
   .tbbt-band--trades {
-    padding: 0.4rem 0 0.45rem;
+    padding: 0.28rem 0 0.3rem;
   }
 
   .tbbt-split-head {
-    margin-bottom: 0.55rem;
+    margin-bottom: 0.16rem;
   }
 
   .tbbt-split-head h2 {
-    font-size: 1.12rem;
+    font-size: 0.92rem;
+  }
+
+  .tbbt-split-head p {
+    font-size: 0.72rem;
   }
 
   .tbbt-trade-strip {
     grid-template-columns: repeat(12, minmax(0, 1fr));
-    gap: 0.55rem;
+    gap: 0.38rem;
+  }
+
+  .tbbt-thumb {
+    gap: 0.22rem;
   }
 
   .tbbt-thumb-photo {
-    aspect-ratio: 5 / 4;
-    min-height: 3.7rem;
-    border-radius: 0.55rem;
+    aspect-ratio: 16 / 11;
+    min-height: 2.85rem;
+    border-radius: 0.42rem;
   }
 
   .tbbt-thumb figcaption {
-    font-size: 0.68rem;
-    gap: 0.16rem;
+    font-size: 0.58rem;
+    gap: 0.08rem;
+  }
+
+  .tbbt-thumb .tbbt-badge {
+    font-size: 0.48rem;
+    padding: 0.06rem 0.28rem;
   }
 
   .tbbt-band--brg {
-    padding: 0.55rem 0 0.6rem;
+    padding: 0.26rem 0 0.28rem;
   }
 
   .tbbt-brg-head {
     display: flex;
     align-items: baseline;
-    gap: 0.9rem;
-    margin-bottom: 0.5rem;
+    gap: 0.7rem;
+    margin-bottom: 0.16rem;
   }
 
   .tbbt-brg-head h2 {
-    font-size: 1.7rem;
+    font-size: 1.42rem;
     margin: 0;
   }
 
   .tbbt-brg-head p {
     margin: 0;
+    font-size: 0.78rem;
   }
 
   .tbbt-brg {
-    gap: 0.7rem;
+    gap: 0.5rem;
   }
 
   .tbbt-brg-card {
-    padding: 0.45rem 0.55rem 0.45rem;
-    gap: 0.22rem;
-    border-radius: 0.75rem;
-    align-content: start;
+    padding: 0.42rem 0.5rem 0.42rem;
+    gap: 0.2rem;
+    border-radius: 0.8rem;
+    align-content: space-between;
+    overflow: hidden;
   }
 
   .tbbt-brg-card .tbbt-kicker {
-    font-size: 1.05rem;
+    font-size: 0.92rem;
   }
 
   .tbbt-brg-card h3 {
-    font-size: 1.08rem;
+    font-size: 0.92rem;
   }
 
   .tbbt-brg-body {
-    grid-template-columns: 1.12fr 0.88fr;
-    min-height: 5.6rem;
-    gap: 0.35rem;
+    grid-template-columns: 1.2fr 0.8fr;
+    min-height: 7.05rem;
+    gap: 0.28rem;
   }
 
   .tbbt-brg-points {
-    font-size: 0.78rem;
-    gap: 0.26rem;
+    font-size: 0.68rem;
+    gap: 0.16rem;
+  }
+
+  .tbbt-brg-points li {
+    padding-left: 0.78rem;
+  }
+
+  .tbbt-brg-points li::before {
+    top: 0.32rem;
+    width: 0.32rem;
+    height: 0.32rem;
   }
 
   .tbbt-device-web,
   .tbbt-device-run,
-  .tbbt-run-phones,
   .tbbt-grow-ui {
-    min-height: 5.6rem;
+    min-height: 7.05rem;
   }
 
   .tbbt-run-phones {
-    height: 5.6rem;
+    height: 7.05rem;
+    min-height: 7.05rem;
     overflow: hidden;
-    align-items: start;
+    align-items: end;
+    justify-content: flex-start;
+    gap: 0;
   }
 
   .tbbt-run-phones .tbbt-phone-ui {
-    width: 6.4rem;
-    transform: scale(0.5);
-    transform-origin: top center;
+    width: 7.45rem;
+    transform: none;
+    padding: 0.28rem 0.24rem 0.28rem;
+    border-width: 2px;
+    border-radius: 1.05rem;
+  }
+
+  .tbbt-run-phones .tbbt-phone-ui h3 {
+    font-size: 0.58rem;
+    margin-bottom: 0.18rem;
+  }
+
+  .tbbt-run-phones .tbbt-phone-item {
+    font-size: 0.46rem;
+    padding: 0.16rem 0.22rem;
+    margin-bottom: 0.12rem;
+  }
+
+  .tbbt-run-phones .tbbt-phone-nav {
+    font-size: 0.34rem;
+    margin-top: 0.18rem;
+  }
+
+  .tbbt-run-phones .tbbt-phone-ui:last-child {
+    margin-left: -1.35rem;
+    transform: translateY(0.42rem);
+    z-index: 2;
   }
 
   .tbbt-site-mock img {
-    height: 2.15rem;
+    height: 4.55rem;
   }
 
   .tbbt-site-mock-body {
-    padding: 0.22rem 0.35rem 0.28rem;
+    padding: 0.28rem 0.35rem 0.32rem;
+  }
+
+  .tbbt-site-mock-body strong {
+    font-size: 0.62rem;
   }
 
   .tbbt-site-mock-body em {
-    display: none;
+    font-size: 0.5rem;
+  }
+
+  .tbbt-site-mock-body span {
+    margin-top: 0.22rem;
+    font-size: 0.5rem;
+    padding: 0.16rem 0.38rem;
   }
 
   .tbbt-site-tiles {
-    display: none;
+    margin-top: 0.28rem;
+    font-size: 0.46rem;
   }
 
   .tbbt-grow-ui {
-    padding: 0.55rem;
-    gap: 0.4rem;
-  }
-
-  .tbbt-grow-cols {
-    height: 2.8rem;
+    padding: 0.4rem 0.42rem;
+    gap: 0.28rem;
   }
 
   .tbbt-grow-chart strong {
-    font-size: 0.92rem;
-    margin-bottom: 0.35rem;
+    margin: 0.08rem 0 0.32rem;
+    font-size: 0.82rem;
+  }
+
+  .tbbt-grow-cols {
+    height: 3.55rem;
+  }
+
+  .tbbt-grow-kpis {
+    grid-template-columns: 1fr 1fr;
+    margin-top: 0.22rem;
+  }
+
+  .tbbt-grow-kpis div {
+    padding: 0.28rem 0.32rem;
+  }
+
+  .tbbt-grow-kpis b {
+    font-size: 0.78rem;
   }
 
   .tbbt-grow-coach {
@@ -1204,82 +1364,114 @@
   }
 
   .tbbt-brg-card .tbbt-btn {
-    min-height: 2.2rem;
-    font-size: 0.8rem;
-    padding: 0.32rem 0.75rem;
+    min-height: 1.85rem;
+    font-size: 0.68rem;
+    padding: 0.18rem 0.55rem;
     justify-self: start;
   }
 
   .tbbt-connected {
-    padding: 0.35rem 0 0.35rem;
+    padding: 0.16rem 0 0.18rem;
   }
 
   .tbbt-connected-head {
-    margin-bottom: 0.4rem;
-    gap: 0.45rem;
+    margin-bottom: 0.12rem;
+    gap: 0.4rem;
   }
 
   .tbbt-connected-head h2 {
-    font-size: 1.28rem;
+    font-size: 1.05rem;
+  }
+
+  .tbbt-connected-head p {
+    font-size: 0.72rem;
+  }
+
+  .tbbt-connected-flow {
+    padding: 0.08rem 0 0.12rem;
   }
 
   .tbbt-connected-icon {
-    width: 2.45rem;
-    height: 2.45rem;
+    width: 1.95rem;
+    height: 1.95rem;
+    box-shadow: 0 0 0 3px rgba(242, 101, 34, 0.06);
+  }
+
+  .tbbt-connected-icon svg {
+    width: 0.95rem;
+    height: 0.95rem;
   }
 
   .tbbt-connected-step {
-    min-width: 5.1rem;
-    font-size: 0.72rem;
-    gap: 0.35rem;
+    min-width: 4.2rem;
+    font-size: 0.58rem;
+    gap: 0.18rem;
   }
 
   .tbbt-connected-arrow {
-    font-size: 1.05rem;
-    padding: 0 0.05rem 1.1rem;
+    font-size: 0.92rem;
+    padding: 0 0.02rem 0.85rem;
   }
 
   .tbbt-final-cta {
-    min-height: 7.5rem;
+    min-height: 6.85rem;
+    height: 6.85rem;
+    background:
+      linear-gradient(90deg, rgba(5, 8, 14, 0.08) 0%, rgba(5, 8, 14, 0.38) 42%, rgba(5, 8, 14, 0.55) 100%),
+      url("/brand/tbbt-marketing/cta-sunset.png") 46% 38% / cover no-repeat;
   }
 
   .tbbt-final-inner {
-    grid-template-columns: 0.9fr 1.45fr 0.95fr;
+    grid-template-columns: 0.7fr 1.55fr 0.95fr;
     text-align: center;
     align-items: center;
-    padding: 0.7rem 0 0.75rem;
-    gap: 0.45rem;
+    padding: 0.28rem 0;
+    gap: 0.4rem;
+    height: 6.85rem;
   }
 
   .tbbt-final-inner h2 {
-    font-size: clamp(1.45rem, 2.4vw, 1.9rem);
+    font-size: clamp(1.22rem, 2vw, 1.58rem);
   }
 
   .tbbt-final-lead {
-    margin-top: 0.25rem;
-    font-size: 0.8rem;
-    max-width: 34rem;
+    margin-top: 0.1rem;
+    font-size: 0.66rem;
+    max-width: 32rem;
   }
 
   .tbbt-final-actions {
-    margin-top: 0.35rem;
+    margin-top: 0.18rem;
   }
 
   .tbbt-final-cta .tbbt-btn--lg {
-    min-height: 2.35rem;
-    padding: 0.32rem 0.9rem;
-    font-size: 0.82rem;
+    min-height: 2.15rem;
+    padding: 0.28rem 0.85rem;
+    font-size: 0.76rem;
   }
 
   .tbbt-final-side {
     display: block;
-    visibility: hidden;
+    visibility: visible;
+    position: relative;
+    height: 6.85rem;
+    max-width: none;
+    overflow: hidden;
     text-align: left;
-    font-size: 0.82rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    font-weight: 800;
-    max-width: 12rem;
+    color: transparent;
+  }
+
+  .tbbt-final-side img {
+    position: absolute;
+    left: -18%;
+    bottom: -42%;
+    width: 168%;
+    max-width: none;
+    height: auto;
+    object-fit: cover;
+    object-position: 62% 20%;
+    -webkit-mask-image: linear-gradient(to right, #000 48%, transparent 88%);
+    mask-image: linear-gradient(to right, #000 48%, transparent 88%);
   }
 
   .tbbt-final-motto {
@@ -1287,7 +1479,24 @@
   }
 
   .tbbt-final-script {
-    font-size: clamp(1.8rem, 3vw, 2.55rem);
+    font-size: clamp(1.55rem, 2.6vw, 2.15rem);
+  }
+
+  .tbbt-final-tagline {
+    margin-top: 0.18rem;
+    font-size: 0.72rem;
+  }
+
+  .tbbt-site:has(.tbbt-home) .tbbt-footer {
+    padding: 0.16rem 0 0.18rem;
+  }
+
+  .tbbt-site:has(.tbbt-home) .tbbt-footer .tbbt-logo img {
+    height: 1.85rem;
+  }
+
+  .tbbt-site:has(.tbbt-home) .tbbt-logo-text span {
+    display: none;
   }
 }
 

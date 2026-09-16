@@ -780,8 +780,16 @@
 
 @media (min-width: 1100px) {
   .tbbt-site {
+    --tbbt-header-h: 3.45rem;
     --tbbt-logo-h: 9.8rem;
     --tbbt-logo-w: calc(var(--tbbt-logo-h) * 1.75);
+  }
+
+  .tbbt-brand {
+    top: 0.08rem;
+    overflow: visible;
+    border-radius: 0 0 0.55rem 0.55rem;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
   }
 
   .tbbt-nav a {

@@ -264,13 +264,10 @@ export function TbbtHomePage() {
 
       <section className="tbbt-final-cta">
         <div className="tbbt-wrap tbbt-final-inner">
-          <p className="tbbt-final-side">
-            TBBT
-            <br />
-            Build today.
-            <br />
-            A stronger tomorrow.
-          </p>
+          <div className="tbbt-final-side" aria-hidden="true">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/brand/tbbt-marketing/cta-sunset.png" alt="" />
+          </div>
           <div>
             <h2>Ready to Build a Better Business?</h2>
             <p className="tbbt-muted tbbt-final-lead">

@@ -23,19 +23,19 @@ export function TbbtDashboardMock() {
                 <div className="tbbt-dash-kpis tbbt-dash-kpis--4">
                   <div>
                     <span>Jobs today</span>
-                    <b>On deck</b>
+                    <b>12</b>
                   </div>
                   <div>
                     <span>Estimates</span>
-                    <b>To review</b>
+                    <b>8</b>
                   </div>
                   <div>
                     <span>Schedule</span>
-                    <b>This week</b>
+                    <b>5</b>
                   </div>
                   <div>
                     <span>Invoices</span>
-                    <b>Ready</b>
+                    <b>6</b>
                   </div>
                 </div>
                 <div className="tbbt-dash-split">
@@ -153,7 +153,7 @@ export function TbbtGrowMock() {
   return (
     <div className="tbbt-grow-ui" aria-hidden="true">
       <div className="tbbt-grow-chart">
-        <span>Business activity</span>
+        <span>Business growth</span>
         <strong>Last 6 months</strong>
         <div className="tbbt-grow-cols">
           <i style={{ height: "32%" }} />
@@ -163,7 +163,16 @@ export function TbbtGrowMock() {
           <i style={{ height: "67%" }} />
           <i style={{ height: "84%" }} />
         </div>
-        <em>Jobs, invoices, and hours from TBBT records</em>
+        <div className="tbbt-grow-kpis">
+          <div>
+            <span>Jobs</span>
+            <b>On record</b>
+          </div>
+          <div>
+            <span>Pace</span>
+            <b>Up</b>
+          </div>
+        </div>
       </div>
       <div className="tbbt-grow-coach">
         {/* eslint-disable-next-line @next/next/no-img-element */}
