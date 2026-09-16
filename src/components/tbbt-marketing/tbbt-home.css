@@ -515,12 +515,19 @@
 }
 
 .tbbt-brg-card--build-photo img,
-.tbbt-brg-card--run-photo img,
-.tbbt-brg-card--grow-photo img {
+.tbbt-brg-card--run-photo img {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center center;
+}
+
+.tbbt-brg-card--grow-photo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   object-position: center center;
 }
 
