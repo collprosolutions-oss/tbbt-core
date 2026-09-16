@@ -15,6 +15,12 @@ import {
   type WorkAreaIntakeAnswer,
 } from "@/lib/work-area-intake";
 import {
+  appendIntakeIdentityReview,
+  decideCustomerMatch,
+  normalizeEmail,
+  type CustomerIdentityRecord,
+} from "@/lib/customer-identity";
+import {
   findReusableLegacyProperty,
   findReusableProperty,
   hasStructuredAddressInput,
@@ -122,9 +128,10 @@ export type PublicIntakeDb = {
 
 export type PublicIntakeTx = {
   customer: {
-    findFirst: (args: {
-      where: { businessId: string; email?: string; phone?: string };
-    }) => Promise<{ id: string } | null>;
+    findMany: (args: {
+      where: { businessId: string };
+      select: { id: true; name: true; email: true; phone: true };
+    }) => Promise<CustomerIdentityRecord[]>;
     create: (args: {
       data: {
         businessId: string;
@@ -258,7 +265,7 @@ async function createPublicServiceRequestInner(
   }
 
   const name = input.name.trim();
-  const email = input.email.trim().toLowerCase();
+  const email = normalizeEmail(input.email);
   const phone = input.phone.trim();
   const address = input.address.trim();
   const structuredInput: StructuredServiceAddress = {
@@ -447,29 +454,26 @@ async function createPublicServiceRequestInner(
         if (existing) return existing.id;
       }
 
-      let customer =
-        email
-          ? await tx.customer.findFirst({
-              where: { businessId: business.id, email },
-            })
-          : null;
-
-      if (!customer && phone) {
-        customer = await tx.customer.findFirst({
-          where: { businessId: business.id, phone },
-        });
-      }
-
-      if (!customer) {
-        customer = await tx.customer.create({
-          data: {
-            businessId: business.id,
-            name,
-            email: email || null,
-            phone: phone || null,
-          },
-        });
-      }
+      const existingCustomers = await tx.customer.findMany({
+        where: { businessId: business.id },
+        select: { id: true, name: true, email: true, phone: true },
+      });
+      const match = decideCustomerMatch(existingCustomers, { email, phone });
+      const identityReview = match.kind === "ambiguous" ? match.review : null;
+      const customer =
+        match.kind === "reuse"
+          ? { id: match.customer.id }
+          : await tx.customer.create({
+              data: {
+                businessId: business.id,
+                name,
+                email: email || null,
+                phone: phone || null,
+              },
+            });
+      // Repeat matches keep the stored name/email/phone even when the
+      // submitted form disagrees. Conflicting identifiers create a new
+      // customer and flag the request instead of merging anyone.
 
       let propertyId: string | null = null;
       if (structured?.ok) {
@@ -537,7 +541,9 @@ async function createPublicServiceRequestInner(
           businessId: business.id,
           customerId: customer.id,
           propertyId,
-          description,
+          description: identityReview
+            ? appendIntakeIdentityReview(description, identityReview)
+            : description,
           summary,
           serviceCatalogItemId: firstCatalogId,
         },

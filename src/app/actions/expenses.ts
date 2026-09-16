@@ -6,13 +6,15 @@
  * businessId. OWNER/ADMIN only (MANAGE_EXPENSES).
  */
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import {
   attachExpenseReceipt,
   createExpense,
   expenseErrorMessage,
   reviewExpense,
   setReimbursementStatus,
+  updateExpense,
+  voidExpense,
 } from "@/lib/expense-ops";
 import { prisma } from "@/lib/prisma";
 import {
@@ -69,7 +71,7 @@ export async function createExpenseAction(
   formData: FormData,
 ): Promise<ExpenseActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const expense = await createExpense(prisma, access, {
       occurredOn: readString(formData, "occurredOn"),
       description: readString(formData, "description"),
@@ -80,6 +82,7 @@ export async function createExpenseAction(
       jobId: readString(formData, "jobId") || undefined,
       customerId: readString(formData, "customerId") || undefined,
       reimbursable: readChecked(formData, "reimbursable"),
+      customerBillable: readChecked(formData, "customerBillable"),
       paymentMethod: readString(formData, "paymentMethod") || undefined,
       taxCategory: readString(formData, "taxCategory") || undefined,
       recurring: readChecked(formData, "recurring"),
@@ -108,7 +111,7 @@ export async function createMileageExpenseAction(
   formData: FormData,
 ): Promise<ExpenseActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await createExpense(prisma, access, {
       occurredOn: readString(formData, "occurredOn"),
       description: readString(formData, "description") || "Mileage",
@@ -118,6 +121,7 @@ export async function createMileageExpenseAction(
       jobId: readString(formData, "jobId") || undefined,
       customerId: readString(formData, "customerId") || undefined,
       reimbursable: readChecked(formData, "reimbursable"),
+      customerBillable: readChecked(formData, "customerBillable"),
       mileageMiles: readString(formData, "mileageMiles"),
       notes: readString(formData, "notes") || undefined,
     });
@@ -128,12 +132,62 @@ export async function createMileageExpenseAction(
   }
 }
 
+export async function updateExpenseAction(
+  _prev: ExpenseActionState,
+  formData: FormData,
+): Promise<ExpenseActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const expenseId = readString(formData, "expenseId");
+    if (!expenseId) return { error: "That expense could not be found." };
+    await updateExpense(prisma, access, {
+      expenseId,
+      occurredOn: readString(formData, "occurredOn"),
+      description: readString(formData, "description"),
+      amount: readString(formData, "amount"),
+      category: readString(formData, "category"),
+      vendor: readString(formData, "vendor"),
+      purchaserMembershipId: readString(formData, "purchaserMembershipId") || undefined,
+      jobId: readString(formData, "jobId") || undefined,
+      customerId: readString(formData, "customerId") || undefined,
+      reimbursable: readChecked(formData, "reimbursable"),
+      customerBillable: readChecked(formData, "customerBillable"),
+      paymentMethod: readString(formData, "paymentMethod") || undefined,
+      taxCategory: readString(formData, "taxCategory") || undefined,
+      recurring: readChecked(formData, "recurring"),
+      recurringNote: readString(formData, "recurringNote") || undefined,
+      mileageMiles: readString(formData, "mileageMiles") || undefined,
+      notes: readString(formData, "notes") || undefined,
+    });
+    revalidateExpenses();
+    return { message: "Expense updated." };
+  } catch (error) {
+    return { error: expenseErrorMessage(error, "Could not update that expense.") };
+  }
+}
+
+export async function voidExpenseAction(
+  _prev: ExpenseActionState,
+  formData: FormData,
+): Promise<ExpenseActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const expenseId = readString(formData, "expenseId");
+    if (!expenseId) return { error: "That expense could not be found." };
+    await voidExpense(prisma, access, { expenseId });
+    revalidateExpenses();
+    return { message: "Expense voided." };
+  } catch (error) {
+    return { error: expenseErrorMessage(error, "Could not void that expense.") };
+  }
+}
+
 export async function reviewExpenseAction(
   _prev: ExpenseActionState,
   formData: FormData,
 ): Promise<ExpenseActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await reviewExpense(prisma, access, {
       expenseId: readString(formData, "expenseId"),
       reviewStatus: readString(formData, "reviewStatus"),
@@ -150,7 +204,7 @@ export async function setReimbursementStatusAction(
   formData: FormData,
 ): Promise<ExpenseActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await setReimbursementStatus(prisma, access, {
       expenseId: readString(formData, "expenseId"),
       reimbursementStatus: readString(formData, "reimbursementStatus"),
@@ -167,7 +221,7 @@ export async function attachExpenseReceiptAction(
   formData: FormData,
 ): Promise<ExpenseActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const expenseId = readString(formData, "expenseId");
     if (!expenseId) return { error: "That expense could not be found." };
     const receiptUrl = await maybeUploadReceipt(access.businessId, expenseId, formData.get("receipt"));

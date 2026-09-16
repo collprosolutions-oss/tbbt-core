@@ -16,12 +16,14 @@ export function BusinessPublicContactForm({
   phone,
   email,
   website,
+  serviceArea,
   fallbackPhone,
   canEdit,
 }: {
   phone: string;
   email: string;
   website: string;
+  serviceArea: string;
   fallbackPhone: string | null;
   canEdit: boolean;
 }) {
@@ -49,6 +51,12 @@ export function BusinessPublicContactForm({
             {website || "Not set"}
           </span>
         </p>
+        <p>
+          Service area:{" "}
+          <span className="font-medium text-foreground">
+            {serviceArea || "Not set"}
+          </span>
+        </p>
         <p className="text-muted-foreground">
           Only the owner can change customer-facing contact information.
         </p>
@@ -72,8 +80,9 @@ export function BusinessPublicContactForm({
         Shown on customer estimates, invoices, and the public website. Leave
         phone blank to keep the existing public number
         {fallbackPhone ? ` (${fallbackPhone})` : " if one is already on file"}.
-        Email and website appear only after they are saved. This does not
-        rewrite sent prices or paid invoices.
+        Email and website appear only after they are saved. Service area is the
+        short label shown on the public site. This does not rewrite sent prices
+        or paid invoices.
       </p>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
@@ -103,6 +112,15 @@ export function BusinessPublicContactForm({
             type="url"
             defaultValue={website}
             placeholder="https://www.collproreno.com"
+          />
+        </div>
+        <div className="space-y-2 sm:col-span-2">
+          <Label htmlFor="publicServiceAreaLabel">Primary service area</Label>
+          <Input
+            id="publicServiceAreaLabel"
+            name="publicServiceAreaLabel"
+            defaultValue={serviceArea}
+            placeholder="e.g. Reno, NV"
           />
         </div>
       </div>

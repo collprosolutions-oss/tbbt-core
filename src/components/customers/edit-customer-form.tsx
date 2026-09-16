@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useSaasOperating } from "@/components/saas/saas-operating-context";
 
 const initialState: CustomerActionState = {};
 
@@ -23,6 +24,7 @@ export function EditCustomerForm({
     initialState,
   );
   const wasPending = useRef(false);
+  const operating = useSaasOperating();
 
   useEffect(() => {
     if (wasPending.current && !pending && !state.error) {
@@ -37,6 +39,7 @@ export function EditCustomerForm({
         <p>Name: {customer.name}</p>
         <p>Phone: {customer.phone || "None"}</p>
         <p>Email: {customer.email || "None"}</p>
+        {operating.canOperate ? (
         <Button
           type="button"
           size="sm"
@@ -45,6 +48,9 @@ export function EditCustomerForm({
         >
           Edit
         </Button>
+        ) : (
+          <p className="text-sm text-muted-foreground">{operating.blockedMessage}</p>
+        )}
       </div>
     );
   }

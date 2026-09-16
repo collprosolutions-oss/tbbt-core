@@ -151,6 +151,203 @@ check(
     availabilityData.includes("ensureBusinessAvailabilitySchema"),
 );
 
+const appointmentMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260913200000_add_appointment_confirmation/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Appointment confirmation migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(appointmentMigration) &&
+    appointmentMigration.includes('ADD COLUMN IF NOT EXISTS "appointmentConfirmationStatus"') &&
+    appointmentMigration.includes('ADD COLUMN IF NOT EXISTS "propertyAccessMethod"') &&
+    appointmentMigration.includes('ADD COLUMN IF NOT EXISTS "appointmentChangeRequestNote"') &&
+    appointmentMigration.includes('CREATE TABLE IF NOT EXISTS "JobAppointmentEvent"'),
+);
+
+const appointmentData = readFileSync(
+  new URL("../src/lib/appointment-data.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers appointment confirmation columns/table skipped by migrate",
+  appointmentData.includes("Preview shares Production and skips migrate") &&
+    appointmentData.includes('ADD COLUMN IF NOT EXISTS "appointmentConfirmationStatus"') &&
+    appointmentData.includes('ADD COLUMN IF NOT EXISTS "appointmentChangeRequestNote"') &&
+    appointmentData.includes('CREATE TABLE IF NOT EXISTS "JobAppointmentEvent"') &&
+    appointmentData.includes("ensureAppointmentConfirmationSchema"),
+);
+
+check(
+  "Authenticated workspace load ensures appointment columns before Job SELECT",
+  workspaceLoader.includes("ensureAppointmentConfirmationSchema"),
+);
+
+const firstRunMigration = readFileSync(
+  new URL("../prisma/migrations/20260915120000_add_first_run_setup/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "First-run setup migration is additive and one-shot",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(firstRunMigration) &&
+    firstRunMigration.includes('ADD COLUMN "firstRunSetupCompletedAt"') &&
+    firstRunMigration.includes('UPDATE "Business"') &&
+    firstRunMigration.includes("information_schema.columns") &&
+    firstRunMigration.includes("IF NOT EXISTS"),
+);
+
+const firstRunSetup = readFileSync(
+  new URL("../src/lib/first-run-setup.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers first-run setup column skipped by migrate",
+  firstRunSetup.includes("Preview shares Production and skips migrate") &&
+    firstRunSetup.includes("ensureFirstRunSetupSchema") &&
+    firstRunSetup.includes("FIRST_RUN_SETUP_ENSURE_SQL") &&
+    firstRunSetup.includes('ADD COLUMN "firstRunSetupCompletedAt"'),
+);
+
+check(
+  "Authenticated workspace load ensures first-run setup column before Business SELECT",
+  workspaceLoader.includes("ensureFirstRunSetupSchema"),
+);
+
+const starterServicesMigration = readFileSync(
+  new URL("../prisma/migrations/20260915140000_add_starter_services_setup/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Starter-services setup migration is additive and one-shot",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(starterServicesMigration) &&
+    starterServicesMigration.includes('ADD COLUMN "starterServicesSetupCompletedAt"') &&
+    starterServicesMigration.includes('ADD COLUMN "starterServicesSetupChoice"') &&
+    starterServicesMigration.includes("information_schema.columns") &&
+    starterServicesMigration.includes("IF NOT EXISTS"),
+);
+
+const starterServicesSetup = readFileSync(
+  new URL("../src/lib/starter-services-setup.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers starter-services setup columns skipped by migrate",
+  starterServicesSetup.includes("Preview shares Production and skips migrate") &&
+    starterServicesSetup.includes("ensureStarterServicesSetupSchema") &&
+    starterServicesSetup.includes("STARTER_SERVICES_SETUP_ENSURE_SQL") &&
+    starterServicesSetup.includes('ADD COLUMN "starterServicesSetupCompletedAt"'),
+);
+
+check(
+  "Authenticated workspace load ensures starter-services setup columns before Business SELECT",
+  workspaceLoader.includes("ensureStarterServicesSetupSchema"),
+);
+
+const websiteSetupMigration = readFileSync(
+  new URL("../prisma/migrations/20260915160000_add_website_setup/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Website setup migration is additive and one-shot",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(websiteSetupMigration) &&
+    websiteSetupMigration.includes('ADD COLUMN "websiteSetupCompletedAt"') &&
+    websiteSetupMigration.includes('ADD COLUMN "websiteSetupChoice"') &&
+    websiteSetupMigration.includes("publicServiceAreaLabel") &&
+    websiteSetupMigration.includes("information_schema.columns") &&
+    websiteSetupMigration.includes("IF NOT EXISTS"),
+);
+
+const websiteSetup = readFileSync(
+  new URL("../src/lib/website-setup.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers website setup columns skipped by migrate",
+  websiteSetup.includes("Preview shares Production and skips migrate") &&
+    websiteSetup.includes("ensureWebsiteSetupSchema") &&
+    websiteSetup.includes("WEBSITE_SETUP_ENSURE_SQL") &&
+    websiteSetup.includes('ADD COLUMN "websiteSetupCompletedAt"'),
+);
+
+check(
+  "Authenticated workspace load ensures website setup columns before Business SELECT",
+  workspaceLoader.includes("ensureWebsiteSetupSchema"),
+);
+
+const saasBillingMigration = readFileSync(
+  new URL("../prisma/migrations/20260915180000_add_saas_billing/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "SaaS billing migration is additive and distinct from Connect",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(saasBillingMigration) &&
+    saasBillingMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessSaasSubscription"') &&
+    saasBillingMigration.includes('CREATE TABLE IF NOT EXISTS "SaasBillingWebhookEvent"') &&
+    saasBillingMigration.includes("Do not backfill Stripe Customer") &&
+    saasBillingMigration.includes("BusinessPaymentAccount") &&
+    !saasBillingMigration.includes("UPDATE \"Business\""),
+);
+
+const saasBillingSchema = readFileSync(
+  new URL("../src/lib/saas-billing/schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers SaaS billing tables skipped by migrate",
+  saasBillingSchema.includes("Preview shares Production and skips migrate") &&
+    saasBillingSchema.includes("ensureSaasBillingSchema") &&
+    saasBillingSchema.includes("SAAS_BILLING_ENSURE_SQL") &&
+    saasBillingSchema.includes('CREATE TABLE IF NOT EXISTS "BusinessSaasSubscription"'),
+);
+
+check(
+  "Authenticated workspace load ensures SaaS billing tables before Business SELECT",
+  workspaceLoader.includes("ensureSaasBillingSchema"),
+);
+
+const founderTrialMigration = readFileSync(
+  new URL("../prisma/migrations/20260915200000_add_saas_founder_trial/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Founder trial migration is additive and does not rewrite Business rows",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(founderTrialMigration) &&
+    founderTrialMigration.includes('ADD COLUMN IF NOT EXISTS "trialStartedAt"') &&
+    founderTrialMigration.includes('ADD COLUMN IF NOT EXISTS "founderEligible"') &&
+    founderTrialMigration.includes('ADD COLUMN IF NOT EXISTS "legacyExempt"') &&
+    founderTrialMigration.includes("legacyExempt") &&
+    !/UPDATE "Business"\s/.test(founderTrialMigration) &&
+    founderTrialMigration.includes("Does not create Stripe Customers"),
+);
+check(
+  "Preview runtime ensure covers Founder trial columns skipped by migrate",
+  saasBillingSchema.includes("SAAS_FOUNDER_TRIAL_ENSURE_SQL") &&
+    saasBillingSchema.includes("SAAS_FOUNDER_TRIAL_BACKFILL_SQL") &&
+    saasBillingSchema.includes("legacyExempt") &&
+    saasBillingSchema.includes("trialStartedAt"),
+);
+
+const saasLifecycleMigration = readFileSync(
+  new URL("../prisma/migrations/20260915220000_add_saas_subscription_lifecycle/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "SaaS subscription lifecycle migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(saasLifecycleMigration) &&
+    saasLifecycleMigration.includes('ADD COLUMN IF NOT EXISTS "lastStripeEventCreatedAt"') &&
+    saasLifecycleMigration.includes('ADD COLUMN IF NOT EXISTS "stripeEventCreatedAt"') &&
+    saasLifecycleMigration.includes("Does not rewrite Business") &&
+    !/UPDATE "Business"/i.test(saasLifecycleMigration),
+);
+check(
+  "Preview runtime ensure covers SaaS lifecycle timestamps skipped by migrate",
+  saasBillingSchema.includes("SAAS_SUBSCRIPTION_LIFECYCLE_ENSURE_SQL") &&
+    saasBillingSchema.includes("lastStripeEventCreatedAt") &&
+    saasBillingSchema.includes("stripeEventCreatedAt"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

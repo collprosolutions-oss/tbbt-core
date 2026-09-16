@@ -11,6 +11,7 @@ import type {
 } from "@/lib/settings";
 import type { PublicSiteImageEditorSlot } from "@/lib/public-site-images";
 import type { SupplierPricingContextPayload } from "@/lib/material-pricing/types";
+import type { TestDataCleanupPreview } from "@/lib/test-data-cleanup-constants";
 
 export type SettingsWorkspaceProps = {
   section: SettingsSection;
@@ -20,12 +21,17 @@ export type SettingsWorkspaceProps = {
   integrations: IntegrationCard[];
   canEditConsequential: boolean;
   canEditPreferences: boolean;
+  canOperate: boolean;
+  operatingBlockedMessage: string;
   websitePhotos?: {
     storageConfigured: boolean;
     storageUsage?: { usedBytes: number; limitBytes: number } | null;
     slots: PublicSiteImageEditorSlot[];
   };
   supplierPricing?: SupplierPricingContextPayload | null;
+  canClearTestData?: boolean;
+  testDataCleanupPreview?: TestDataCleanupPreview | null;
+  checkoutStatus?: "success" | "canceled" | null;
 };
 
 export type {

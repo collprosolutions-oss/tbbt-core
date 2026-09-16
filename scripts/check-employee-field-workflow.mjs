@@ -34,6 +34,10 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 const { evaluateCompleteJob, evaluateStartJob } = await import(
   "../src/lib/job-lifecycle.ts"
 );
+const {
+  CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
+  startJobRequiresCustomerConfirmation,
+} = await import("../src/lib/appointment-confirmation.ts");
 const { groupFieldJobs } = await import("../src/lib/field-jobs.ts");
 const { directionsUrl, telHref } = await import("../src/lib/directions.ts");
 const { groupJobsByAssignedMember } = await import("../src/lib/schedule.ts");
@@ -231,6 +235,9 @@ async function simulateStartAssignedJob(jobId, businessId, membershipId) {
   if (!result.ok) {
     return { ok: false, reason: result.error };
   }
+  if (result.nextStatus && startJobRequiresCustomerConfirmation(job)) {
+    return { ok: false, reason: CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT };
+  }
   if (result.nextStatus) {
     await prisma.job.update({ where: { id: job.id }, data: { status: result.nextStatus } });
   }
@@ -374,6 +381,11 @@ try {
       status: "SCHEDULED",
       scheduledAt: new Date(),
       scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      appointmentConfirmationStatus: "CONFIRMED",
+      appointmentConfirmedForProposalId: 1,
+      appointmentConfirmationSource: "PORTAL",
+      propertyAccessMethod: "CUSTOMER_PRESENT",
     },
   });
 
@@ -420,6 +432,31 @@ try {
   console.log("\nTEST 18/19 — Start Job: only the assigned member, only when the lifecycle allows it");
   const startByAssigned = await simulateStartAssignedJob(assignedJob.id, businessA.id, member1Membership.id);
   check("TEST 18 - Assigned member (member1) can Start the job", startByAssigned.ok === true && startByAssigned.job.status === "IN_PROGRESS");
+
+  const unconfirmedFieldJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "SCHEDULED",
+      scheduledAt: new Date(),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+      assignedMembershipId: member1Membership.id,
+    },
+  });
+  const startUnconfirmed = await simulateStartAssignedJob(
+    unconfirmedFieldJob.id,
+    businessA.id,
+    member1Membership.id,
+  );
+  check(
+    "Assigned member cannot Start an unconfirmed appointment",
+    startUnconfirmed.ok === false &&
+      startUnconfirmed.reason === CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
+  );
 
   const otherJob = await prisma.job.create({
     data: {

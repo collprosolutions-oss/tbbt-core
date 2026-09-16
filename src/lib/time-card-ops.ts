@@ -9,6 +9,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, ForbiddenError, requireBusinessCapability } from "@/lib/authorization";
+import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
 import {
   approvalSnapshot,
   canApproveWeek,
@@ -192,6 +193,7 @@ export async function clockInTime(
   access: BusinessAccess,
   input: ClockInInput,
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   const actorRole = access.workspace.role;
   const actorMembershipId = access.workspace.membership.id;
   const workerMembershipId = input.membershipId;
@@ -290,6 +292,7 @@ export async function clockOutTime(
   access: BusinessAccess,
   input: { membershipId: string; endedAt?: Date; note?: string | null },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   const actorRole = access.workspace.role;
   const actorMembershipId = access.workspace.membership.id;
   const endedAt = input.endedAt ?? new Date();
@@ -358,6 +361,7 @@ export async function createManualTimeEntry(
   access: BusinessAccess,
   input: ManualEntryInput,
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_TIME_CARDS);
   if (!isTimeActivityType(input.activityType)) {
     throw new TimeCardError("Choose a valid activity.");
@@ -434,6 +438,7 @@ export async function correctTimeEntry(
   access: BusinessAccess,
   input: CorrectEntryInput,
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_TIME_CARDS);
   const reason = input.reason.trim();
   if (!reason) {
@@ -519,6 +524,7 @@ export async function requestTimeCorrection(
   access: BusinessAccess,
   input: { timeEntryId: string; reason: string },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   const reason = input.reason.trim();
   if (!reason) {
     throw new TimeCardError("Describe the correction you need.");
@@ -570,6 +576,7 @@ export async function updateMembershipWage(
   access: BusinessAccess,
   input: { membershipId: string; hourlyWage: string },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_TIME_CARDS);
   const parsed = parseHourlyWage(input.hourlyWage);
   if (parsed && typeof parsed === "object" && "error" in parsed) {
@@ -590,6 +597,7 @@ export async function approveTimesheetWeek(
   access: BusinessAccess,
   input: { membershipId: string; weekStartedAt: Date },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_TIME_CARDS);
   const actorMembershipId = access.workspace.membership.id;
   const { start, end } = weekRange(input.weekStartedAt);
@@ -698,6 +706,7 @@ export async function reopenTimesheetWeek(
   access: BusinessAccess,
   input: { membershipId: string; weekStartedAt: Date; reason: string },
 ) {
+  await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_TIME_CARDS);
   const reason = input.reason.trim();
   if (!reason) {
@@ -772,5 +781,8 @@ export function isTimeCardError(error: unknown): error is TimeCardError {
 export function timeCardErrorMessage(error: unknown, fallback = "That time card action could not be completed.") {
   if (error instanceof TimeCardError) return error.message;
   if (error instanceof ForbiddenError) return error.message;
+  if (error instanceof Error && error.name === "SaasSubscriptionRequiredError") {
+    return error.message;
+  }
   return fallback;
 }

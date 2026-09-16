@@ -24,6 +24,7 @@ export const SETTINGS_SECTIONS = [
   "pricing",
   "scheduling",
   "estimates-payments",
+  "tbbt-billing",
   "payroll",
   "banking",
   "vendors",
@@ -47,6 +48,7 @@ export const SETTINGS_SECTION_LABELS: Record<SettingsSection, string> = {
   pricing: "Services & Pricing Rules",
   scheduling: "Scheduling",
   "estimates-payments": "Estimates & Payments",
+  "tbbt-billing": "TBBT Billing",
   payroll: "Payroll",
   banking: "Banking & Financial Connections",
   vendors: "Vendors & Purchasing",
@@ -149,7 +151,35 @@ export const PAYMENT_PROVIDER_SETUP_REQUIRED_MESSAGE =
   "Stripe is connected but setup is not finished. Complete Stripe onboarding before customers can pay invoices online.";
 
 export const PAYMENT_PROVIDER_CONNECTED_MESSAGE =
-  "Stripe is connected. Customers can pay sent invoices online. Cash, check, Zelle / bank transfer, and other offline payments can still be recorded manually.";
+  "Stripe is connected. Customers can pay sent invoices online. Cash, check, Zelle / bank transfer, and other offline payments can still be recorded manually. This is not TBBT software billing.";
+
+export const TBBT_SAAS_BILLING_DESCRIPTION =
+  "This is what your business pays TBBT for software access. It is separate from Stripe Connect, which is how your customers pay you for invoices and deposits.";
+
+export const TBBT_SAAS_BILLING_OWNER_ONLY_MESSAGE =
+  "Only the business owner can start or manage the TBBT subscription.";
+
+export const TBBT_SAAS_CHECKOUT_SUCCESS_MESSAGE =
+  "Checkout finished. Subscription status updates when Stripe confirms it. This page does not mark the business subscribed from the redirect.";
+
+export const TBBT_SAAS_CHECKOUT_CANCELED_MESSAGE =
+  "Checkout was canceled. You can start again when you are ready.";
+
+export const TBBT_SAAS_BILLING_UNCONFIGURED_MESSAGE =
+  "TBBT subscription billing is not configured on this environment. Set STRIPE_SAAS_PRICE_ID (and STRIPE_SECRET_KEY) to enable Checkout.";
+
+export const TBBT_FOUNDER_PLAN_DESCRIPTION =
+  "Founder Plan is $49/month. New businesses get a 30-day free trial with no credit card required. The founder rate stays $49/month while you remain continuously subscribed.";
+
+export const TBBT_FOUNDER_TRIAL_NO_CARD_MESSAGE =
+  "No credit card is required to start or continue the free trial.";
+
+export {
+  SAAS_PAYMENT_PROBLEM_OWNER_MESSAGE as TBBT_SAAS_PAYMENT_PROBLEM_OWNER_MESSAGE,
+  SAAS_PAYMENT_PROBLEM_TEAM_MESSAGE as TBBT_SAAS_PAYMENT_PROBLEM_TEAM_MESSAGE,
+  SAAS_CANCELLATION_SCHEDULED_OWNER_MESSAGE as TBBT_SAAS_CANCELLATION_SCHEDULED_MESSAGE,
+  SAAS_CANCELLATION_SCHEDULED_TEAM_MESSAGE as TBBT_SAAS_CANCELLATION_SCHEDULED_TEAM_MESSAGE,
+} from "@/lib/saas-billing/messages";
 
 export const PAYMENT_PROVIDER_PLATFORM_UNCONFIGURED_MESSAGE =
   "Stripe is not configured on this TBBT environment. Set STRIPE_SECRET_KEY to enable Connect onboarding.";

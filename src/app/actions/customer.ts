@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccessForForm } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { isUsableEmail } from "@/lib/mail";
 import { prisma } from "@/lib/prisma";
@@ -59,7 +59,9 @@ export async function createCustomer(
   _prev: CustomerActionState,
   formData: FormData,
 ): Promise<CustomerActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CUSTOMERS);
 
   const name = readString(formData, "name");
@@ -109,7 +111,9 @@ export async function updateCustomer(
   _prev: CustomerActionState,
   formData: FormData,
 ): Promise<CustomerActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CUSTOMERS);
   const customerId = readString(formData, "customerId");
   const name = readString(formData, "name");

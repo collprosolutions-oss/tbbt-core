@@ -8,10 +8,15 @@ import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { ConnectStripeButton } from "@/components/settings/connect-stripe-button";
+import {
+  SaasBillingPortalButton,
+  SaasSubscribeButton,
+} from "@/components/settings/saas-billing-buttons";
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import { SchedulingSettingsForm } from "@/components/settings/scheduling-settings-form";
 import { SupplierPricingSettingsForm } from "@/components/settings/supplier-pricing-form";
+import { ClearTestDataForm } from "@/components/settings/clear-test-data-form";
 import type { SettingsWorkspaceProps } from "@/components/settings/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,10 +48,22 @@ import {
   SETTINGS_SECTION_LABELS,
   SETTINGS_SECTIONS,
   SMS_DELIVERY_UNAVAILABLE_MESSAGE,
+  TBBT_SAAS_BILLING_DESCRIPTION,
+  TBBT_SAAS_BILLING_OWNER_ONLY_MESSAGE,
+  TBBT_SAAS_BILLING_UNCONFIGURED_MESSAGE,
+  TBBT_SAAS_CANCELLATION_SCHEDULED_MESSAGE,
+  TBBT_SAAS_CANCELLATION_SCHEDULED_TEAM_MESSAGE,
+  TBBT_SAAS_CHECKOUT_CANCELED_MESSAGE,
+  TBBT_SAAS_CHECKOUT_SUCCESS_MESSAGE,
+  TBBT_SAAS_PAYMENT_PROBLEM_OWNER_MESSAGE,
+  TBBT_SAAS_PAYMENT_PROBLEM_TEAM_MESSAGE,
+  TBBT_FOUNDER_PLAN_DESCRIPTION,
+  TBBT_FOUNDER_TRIAL_NO_CARD_MESSAGE,
   type SettingsReadinessStatus,
   type SettingsSection,
 } from "@/lib/settings";
 import { explainPaymentsGoLive } from "@/lib/payments/go-live";
+import { stripeConnectActionLabel } from "@/lib/payments/readiness";
 import { cn } from "@/lib/utils";
 
 function readinessVariant(status: SettingsReadinessStatus) {
@@ -160,8 +177,13 @@ function SectionBody(props: SettingsWorkspaceProps) {
     integrations,
     canEditConsequential,
     canEditPreferences,
+    canOperate,
+    operatingBlockedMessage,
     websitePhotos,
     supplierPricing,
+    canClearTestData,
+    testDataCleanupPreview,
+    checkoutStatus,
   } = props;
 
   if (section === "overview") {
@@ -180,11 +202,14 @@ function SectionBody(props: SettingsWorkspaceProps) {
             slots={websitePhotos.slots}
             storageConfigured={websitePhotos.storageConfigured}
             storageUsage={websitePhotos.storageUsage}
-            canEdit={canEditPreferences}
+            canEdit={canEditPreferences && canOperate}
           />
         ) : (
           <p className="text-sm text-muted-foreground">Website photo slots are not available.</p>
         )}
+        {!canOperate ? (
+          <p className="mt-2 text-sm text-muted-foreground">{operatingBlockedMessage}</p>
+        ) : null}
       </SectionCard>
     );
   }
@@ -195,13 +220,15 @@ function SectionBody(props: SettingsWorkspaceProps) {
         title="Website Story"
         description="Owner and admin only. Raw background stays private until you approve public About copy."
       >
-        {canEditPreferences ? (
+        {canEditPreferences && canOperate ? (
           <WebsiteStoryForm
             businessId={snapshot.business.id}
             rawOwnerStory={snapshot.websiteStory.rawOwnerStory}
             approvedPublicAboutCopy={snapshot.websiteStory.approvedPublicAboutCopy}
             canEdit={canEditPreferences}
           />
+        ) : canEditPreferences ? (
+          <p className="text-sm text-muted-foreground">{operatingBlockedMessage}</p>
         ) : (
           <p className="text-sm text-muted-foreground">
             Members cannot manage Website Story or public About copy.
@@ -247,12 +274,12 @@ function SectionBody(props: SettingsWorkspaceProps) {
               phone={snapshot.business.publicPhone}
               email={snapshot.business.publicEmail}
               website={snapshot.business.publicWebsite}
+              serviceArea={snapshot.business.publicServiceAreaLabel}
               fallbackPhone={snapshot.business.fallbackPhone}
               canEdit={canEditConsequential}
             />
           </div>
           <DeferredField label="Business address" detail="Not stored on the Business record yet." />
-          <DeferredField label="Service area" detail="Not stored as a business-level field yet." />
         </SectionCard>
       </div>
     );
@@ -298,7 +325,8 @@ function SectionBody(props: SettingsWorkspaceProps) {
         <LaborMinimumSettingsForm
           enabled={snapshot.business.laborMinimumEnabled}
           amount={snapshot.business.laborMinimumAmount}
-          canEdit={canEditConsequential}
+          canEdit={canEditConsequential && canOperate}
+          blockedMessage={canOperate ? undefined : operatingBlockedMessage}
         />
         <p className="text-sm text-muted-foreground">{LABOR_MINIMUM_FUTURE_RULE_MESSAGE}</p>
         <Button asChild variant="outline">
@@ -317,8 +345,11 @@ function SectionBody(props: SettingsWorkspaceProps) {
         <p className="text-sm">{snapshot.scheduling.summary}</p>
         <SchedulingSettingsForm
           settings={snapshot.scheduling}
-          canEdit={canEditPreferences}
+          canEdit={canEditPreferences && canOperate}
         />
+        {!canOperate ? (
+          <p className="text-sm text-muted-foreground">{operatingBlockedMessage}</p>
+        ) : null}
         <Button asChild variant="outline">
           <Link href="/jobs">Open Schedule / Jobs</Link>
         </Button>
@@ -373,7 +404,10 @@ function SectionBody(props: SettingsWorkspaceProps) {
           description={paymentProviderDescription}
         >
           <div className="space-y-3">
-            <OwnerPaymentsGoLiveBanner explanation={paymentsGoLive} />
+            <OwnerPaymentsGoLiveBanner
+              explanation={paymentsGoLive}
+              showSettingsLink={false}
+            />
             <p className="text-sm font-medium">Stripe</p>
             <p className="text-sm">
               Status: {PAYMENT_PROVIDER_STATUS_LABELS[snapshot.payment.status]}
@@ -391,9 +425,8 @@ function SectionBody(props: SettingsWorkspaceProps) {
             {canEditPreferences && snapshot.payment.offerOnboarding ? (
               <ConnectStripeButton
                 label={
-                  snapshot.payment.status === "not_connected"
-                    ? "Connect Stripe"
-                    : "Continue Setup"
+                  stripeConnectActionLabel(snapshot.payment.status) ??
+                  "Connect Stripe"
                 }
                 disabled={
                   !snapshot.payment.platformConfigured ||
@@ -401,9 +434,142 @@ function SectionBody(props: SettingsWorkspaceProps) {
                 }
               />
             ) : null}
+            <p className="text-sm text-muted-foreground">
+              Customer invoice and deposit payments are separate from TBBT software billing.
+            </p>
           </div>
         </SectionCard>
       </div>
+    );
+  }
+
+  if (section === "tbbt-billing") {
+    const billing = snapshot.saasBilling;
+    const periodLabel = billing.currentPeriodEnd
+      ? new Date(billing.currentPeriodEnd).toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        })
+      : null;
+    const trialEndLabel = billing.trialEndsAt
+      ? new Date(billing.trialEndsAt).toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        })
+      : null;
+    const priceLabel = billing.showFounderPrice ? billing.founderPriceLabel : "Set by Stripe Price";
+    return (
+      <SectionCard title="TBBT software subscription" description={TBBT_SAAS_BILLING_DESCRIPTION}>
+        {checkoutStatus === "success" ? (
+          <p className="rounded-lg border bg-muted/40 p-3 text-sm">{TBBT_SAAS_CHECKOUT_SUCCESS_MESSAGE}</p>
+        ) : null}
+        {checkoutStatus === "canceled" ? (
+          <p className="rounded-lg border bg-muted/40 p-3 text-sm">{TBBT_SAAS_CHECKOUT_CANCELED_MESSAGE}</p>
+        ) : null}
+        <p className="text-sm">{TBBT_FOUNDER_PLAN_DESCRIPTION}</p>
+        <p className="text-sm text-muted-foreground">{TBBT_FOUNDER_TRIAL_NO_CARD_MESSAGE}</p>
+        {billing.founderPriceWarning ? (
+          <p className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+            {billing.founderPriceWarning}
+          </p>
+        ) : null}
+        {billing.entitlement.state === "payment_problem" ? (
+          <p className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+            {canEditConsequential
+              ? TBBT_SAAS_PAYMENT_PROBLEM_OWNER_MESSAGE
+              : TBBT_SAAS_PAYMENT_PROBLEM_TEAM_MESSAGE}
+          </p>
+        ) : null}
+        {billing.cancelAtPeriodEnd && billing.entitlement.state === "subscribed_active" ? (
+          <p className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+            {canEditConsequential
+              ? TBBT_SAAS_CANCELLATION_SCHEDULED_MESSAGE
+              : TBBT_SAAS_CANCELLATION_SCHEDULED_TEAM_MESSAGE}
+            {periodLabel ? ` Access through ${periodLabel}.` : ""}
+          </p>
+        ) : null}
+        {billing.entitlement.state === "subscription_required" ? (
+          <p className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
+            A TBBT subscription is required to keep operating. Existing records are retained.
+          </p>
+        ) : null}
+        <dl className="grid gap-3 text-sm sm:grid-cols-2">
+          <div>
+            <dt className="text-muted-foreground">Plan</dt>
+            <dd className="font-medium">{billing.planName}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Price</dt>
+            <dd className="font-medium">{priceLabel}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Access</dt>
+            <dd className="font-medium">{billing.entitlement.label}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Subscription status</dt>
+            <dd className="font-medium">
+              {billing.entitlement.state === "subscribed_active" && billing.cancelAtPeriodEnd
+                ? "Active · cancellation scheduled"
+                : billing.statusLabel}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Trial status</dt>
+            <dd className="font-medium">
+              {billing.entitlement.trialActive
+                ? "Active"
+                : billing.trialEndsAt
+                  ? "Ended"
+                  : "Not on a Founder trial"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Trial expires</dt>
+            <dd className="font-medium">{trialEndLabel ?? "Not applicable"}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Days remaining</dt>
+            <dd className="font-medium">
+              {billing.entitlement.trialActive
+                ? String(billing.trialDaysRemaining ?? 0)
+                : "Not applicable"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Founder eligibility</dt>
+            <dd className="font-medium">{billing.founderEligible ? "Yes, while continuously subscribed" : "No"}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">
+              {billing.cancelAtPeriodEnd ? "Access through" : "Current period ends"}
+            </dt>
+            <dd className="font-medium">{periodLabel ?? "Not available yet"}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Cancellation scheduled</dt>
+            <dd className="font-medium">{billing.cancelAtPeriodEnd ? "Yes" : "No"}</dd>
+          </div>
+        </dl>
+        {!billing.configured ? (
+          <p className="text-sm text-muted-foreground">{TBBT_SAAS_BILLING_UNCONFIGURED_MESSAGE}</p>
+        ) : null}
+        {billing.configured && !billing.appUrlConfigured ? (
+          <p className="text-sm text-muted-foreground">
+            Checkout needs NEXT_PUBLIC_APP_URL so Stripe can return to TBBT.
+          </p>
+        ) : null}
+        {canEditConsequential ? (
+          <div className="flex flex-wrap gap-3">
+            {billing.checkoutPossible ? <SaasSubscribeButton /> : null}
+            {billing.portalPossible ? <SaasBillingPortalButton /> : null}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">{TBBT_SAAS_BILLING_OWNER_ONLY_MESSAGE}</p>
+        )}
+      </SectionCard>
     );
   }
 
@@ -468,7 +634,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
         {supplierPricing ? (
           <SupplierPricingSettingsForm
             context={supplierPricing}
-            canEdit={canEditPreferences}
+            canEdit={canEditPreferences && canOperate}
           />
         ) : null}
         <DeferredField
@@ -650,6 +816,19 @@ function SectionBody(props: SettingsWorkspaceProps) {
           </div>
         ))}
       </div>
+      {canClearTestData && testDataCleanupPreview ? (
+        <div className="rounded-lg border border-destructive/30 p-3">
+          <p className="font-medium">Clear test data</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Pre-launch only. Removes fake customers, requests, estimates, jobs, invoices, and
+            payments from this workspace. Does not run automatically and does not change Stripe,
+            Resend, website, or catalog configuration.
+          </p>
+          <div className="mt-3">
+            <ClearTestDataForm preview={testDataCleanupPreview} />
+          </div>
+        </div>
+      ) : null}
       <p className="text-sm text-muted-foreground">{FULL_EXPORT_PLANNED_MESSAGE}</p>
       <p className="text-sm text-muted-foreground">{ACCOUNT_DELETION_UNAVAILABLE_MESSAGE}</p>
     </SectionCard>

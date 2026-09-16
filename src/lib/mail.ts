@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { isTrustedVercelAppHost } from "@/lib/vercel-app-host";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -42,10 +43,7 @@ function vercelPreviewOrigin(): string | null {
     return null;
   }
   const host = (process.env.VERCEL_BRANCH_URL || process.env.VERCEL_URL || "").trim();
-  if (!host || host.includes("/") || host.includes("@") || host.includes(":")) {
-    return null;
-  }
-  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.vercel\.app$/i.test(host)) {
+  if (!isTrustedVercelAppHost(host)) {
     return null;
   }
   return parseAppUrl(`https://${host}`);
@@ -138,7 +136,19 @@ export function invoiceReadyIdempotencyKey(invoiceId: string) {
   return `invoice-ready/${invoiceId}`;
 }
 
-export type TransactionalEmailKind = "estimate" | "invoice" | "team";
+/**
+ * Appointment proposal/reschedule email. Automatic send uses attempt
+ * "auto" for that proposal. Owner retry supplies a new sendAttemptId.
+ */
+export function appointmentProposedEmailIdempotencyKey(
+  jobId: string,
+  proposalId: number,
+  sendAttemptId: string,
+) {
+  return `appointment-proposed/${jobId}/${proposalId}/${sendAttemptId}`;
+}
+
+export type TransactionalEmailKind = "estimate" | "invoice" | "team" | "appointment";
 
 export function transactionalEmailFailureMessage(kind: TransactionalEmailKind) {
   if (kind === "estimate") {
@@ -146,6 +156,9 @@ export function transactionalEmailFailureMessage(kind: TransactionalEmailKind) {
   }
   if (kind === "invoice") {
     return "The invoice email could not be sent.";
+  }
+  if (kind === "appointment") {
+    return "The appointment email could not be sent.";
   }
   return "The team invitation email could not be sent.";
 }

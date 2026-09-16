@@ -8,9 +8,17 @@ import {
   setWorkspaceCookie,
   verifyPassword,
 } from "@/lib/auth";
+import { ensureBusinessPublicContactSchema } from "@/lib/business-contact";
+import {
+  ensureFirstRunSetupSchema,
+  FIRST_RUN_SETUP_PATH,
+  postAuthenticationPath,
+} from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
-import { allocateBusinessSlug } from "@/lib/slug";
-import { DEFAULT_TRADE } from "@/lib/trades";
+import { provisionOwnerWorkspace } from "@/lib/signup-provision";
+import { ensureStarterServicesSetupSchema } from "@/lib/starter-services-setup";
+import { ensureWebsiteSetupSchema } from "@/lib/website-setup";
+import { ensureSaasBillingSchema } from "@/lib/saas-billing";
 
 export type AuthFormState = {
   error?: string;
@@ -48,34 +56,16 @@ export async function signUpAction(
   }
 
   const passwordHash = await hashPassword(password);
-
-  const user = await prisma.$transaction(async (tx) => {
-    const createdUser = await tx.user.create({
-      data: { name, email, passwordHash },
-    });
-
-    const business = await tx.business.create({
-      data: {
-        name: businessName,
-        slug: await allocateBusinessSlug(businessName, tx),
-        tradeCode: DEFAULT_TRADE,
-      },
-    });
-
-    await tx.membership.create({
-      data: {
-        userId: createdUser.id,
-        businessId: business.id,
-        role: "OWNER",
-      },
-    });
-
-    return { user: createdUser, business };
+  const provisioned = await provisionOwnerWorkspace(prisma, {
+    name,
+    email,
+    passwordHash,
+    businessName,
   });
 
-  await createSession(user.user.id);
-  await setWorkspaceCookie(user.business.id);
-  redirect("/dashboard");
+  await createSession(provisioned.user.id);
+  await setWorkspaceCookie(provisioned.business.id);
+  redirect(FIRST_RUN_SETUP_PATH);
 }
 
 export async function signInAction(
@@ -89,6 +79,12 @@ export async function signInAction(
     return { error: "Email and password are required." };
   }
 
+  await ensureBusinessPublicContactSchema(prisma);
+  await ensureFirstRunSetupSchema(prisma);
+  await ensureStarterServicesSetupSchema(prisma);
+  await ensureWebsiteSetupSchema(prisma);
+  await ensureSaasBillingSchema(prisma);
+
   const user = await prisma.user.findUnique({
     where: { email },
     include: {
@@ -96,7 +92,11 @@ export async function signInAction(
       // requireWorkspace() in src/lib/workspace.ts, so a deactivated
       // MEMBER (see removeTeamMember() in src/app/actions/team.ts) is
       // rejected here too, not just bounced later.
-      memberships: { where: { active: true }, orderBy: { createdAt: "asc" } },
+      memberships: {
+        where: { active: true },
+        orderBy: { createdAt: "asc" },
+        include: { business: true },
+      },
     },
   });
 
@@ -116,7 +116,14 @@ export async function signInAction(
   // read access (see canAccessManagementConsole() in
   // src/lib/authorization.ts), so sending them to /dashboard first would
   // just bounce them through /access-restricted for no reason.
-  redirect(membership.role === "MEMBER" ? "/field" : "/dashboard");
+  // A brand-new OWNER who has not finished first-run setup is sent to
+  // /setup instead of an unfinished Dashboard.
+  redirect(
+    postAuthenticationPath({
+      role: membership.role,
+      business: membership.business,
+    }),
+  );
 }
 
 export async function signOutAction() {

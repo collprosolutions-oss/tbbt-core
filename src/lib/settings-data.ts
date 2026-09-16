@@ -10,10 +10,14 @@ import {
   ensureBusinessPublicContactSchema,
   resolveBusinessPublicContact,
 } from "@/lib/business-contact";
-import { projectedOperatingBalance } from "@/lib/expenses";
+import { ACTIVE_EXPENSE_WHERE, projectedOperatingBalance } from "@/lib/expenses";
 import { PAYMENT_METHODS } from "@/lib/invoice-payment";
 import { getBusinessPaymentStatus } from "@/lib/payments";
 import { shouldOfferStripeOnboarding } from "@/lib/payments/readiness";
+import {
+  loadSaasBillingSnapshot,
+  type SaasBillingSnapshot,
+} from "@/lib/saas-billing";
 import type { PaymentProviderStatus } from "@/lib/settings";
 import {
   CHANNELS_DISCONNECTED_MESSAGE,
@@ -68,6 +72,7 @@ export type SettingsSnapshot = {
     publicPhone: string;
     publicEmail: string;
     publicWebsite: string;
+    publicServiceAreaLabel: string;
     displayedPhone: string | null;
     fallbackPhone: string | null;
   };
@@ -99,6 +104,7 @@ export type SettingsSnapshot = {
     paymentReady: boolean;
     onlineCheckoutPossible: boolean;
   };
+  saasBilling: SaasBillingSnapshot;
   bank: {
     connected: false;
     lastVerifiedBalance: null;
@@ -145,6 +151,7 @@ export async function loadSettingsSnapshot(
     expenses,
     auditRows,
     unavailableDates,
+    saasBilling,
   ] = await Promise.all([
     prisma.business.findFirst({
       where: { id: businessId },
@@ -158,6 +165,7 @@ export async function loadSettingsSnapshot(
         publicPhone: true,
         publicEmail: true,
         publicWebsite: true,
+        publicServiceAreaLabel: true,
       },
     }),
     prisma.businessSettings.findUnique({
@@ -175,7 +183,7 @@ export async function loadSettingsSnapshot(
     }),
     prisma.serviceCatalogItem.count({ where: scope }),
     prisma.expense.findMany({
-      where: { ...scope, vendor: { not: null } },
+      where: { ...scope, ...ACTIVE_EXPENSE_WHERE, vendor: { not: null } },
       select: { vendor: true },
       distinct: ["vendor"],
       orderBy: { vendor: "asc" },
@@ -205,7 +213,7 @@ export async function loadSettingsSnapshot(
       _sum: { total: true },
     }),
     prisma.expense.aggregate({
-      where: scope,
+      where: { ...scope, ...ACTIVE_EXPENSE_WHERE },
       _sum: { amount: true },
     }),
     prisma.settingsAuditLog.findMany({
@@ -227,6 +235,7 @@ export async function loadSettingsSnapshot(
       select: { date: true },
       orderBy: { date: "asc" },
     }),
+    loadSaasBillingSnapshot(prisma, businessId),
   ]);
 
   if (!business) {
@@ -278,6 +287,7 @@ export async function loadSettingsSnapshot(
       publicPhone: business.publicPhone ?? "",
       publicEmail: business.publicEmail ?? "",
       publicWebsite: business.publicWebsite ?? "",
+      publicServiceAreaLabel: business.publicServiceAreaLabel ?? "",
       displayedPhone: contact.phone,
       fallbackPhone: publicPhone(business.slug),
     },
@@ -315,6 +325,12 @@ export async function loadSettingsSnapshot(
       appUrlConfigured: payment.appUrlConfigured,
       paymentReady: payment.paymentReady,
       onlineCheckoutPossible: payment.onlineCheckoutPossible,
+    },
+    saasBilling: {
+      ...saasBilling,
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+      stripePriceId: null,
     },
     bank: {
       connected: false,

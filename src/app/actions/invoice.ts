@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccessForForm } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { sendDraftInvoiceIfNeeded } from "@/lib/complete-job-invoice";
 import { persistDraftInvoiceFromCompletedJob } from "@/lib/invoice-carry-forward";
@@ -47,7 +47,9 @@ function readString(formData: FormData, key: string) {
 export async function createInvoiceFromJob(
   jobId: string,
 ): Promise<InvoiceActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
   const job = access.assertOwned(
     await prisma.job.findFirst({
@@ -110,7 +112,9 @@ export async function createInvoiceFromJob(
 export async function markInvoiceSent(
   invoiceId: string,
 ): Promise<InvoiceActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
   const invoice = access.assertOwned(
     await prisma.invoice.findFirst({
@@ -140,7 +144,9 @@ export async function markInvoicePaid(
   _prev: InvoiceActionState,
   formData: FormData,
 ): Promise<InvoiceActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
   const invoiceId = readString(formData, "invoiceId");
   const paymentMethod = readString(formData, "paymentMethod");

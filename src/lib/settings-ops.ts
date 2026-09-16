@@ -17,6 +17,7 @@ import {
   requireBusinessCapability,
   requireBusinessRole,
 } from "@/lib/authorization";
+import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import { ensureBusinessAvailabilitySchema } from "@/lib/availability-data";
 import {
@@ -28,6 +29,7 @@ import {
 import {
   parsePublicEmail,
   parsePublicPhone,
+  parsePublicServiceAreaLabel,
   parsePublicWebsite,
   ensureBusinessPublicContactSchema,
 } from "@/lib/business-contact";
@@ -48,6 +50,9 @@ export class SettingsError extends Error {
 
 export function settingsErrorMessage(error: unknown, fallback: string) {
   if (error instanceof SettingsError || error instanceof ForbiddenError) {
+    return error.message;
+  }
+  if (error instanceof Error && error.name === "SaasSubscriptionRequiredError") {
     return error.message;
   }
   return fallback;
@@ -109,6 +114,7 @@ export async function updateLaborMinimumSettingsOp(
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
   requireBusinessRole(access, "OWNER");
+  await requireSaasOperatingEntitlement(db, access);
 
   if (input.enabled && (!input.amount || input.amount.lte(0))) {
     throw new SettingsError("Enter a minimum amount to turn this on.");
@@ -217,7 +223,7 @@ export async function updateBusinessProfileOp(
 export async function updateBusinessPublicContactOp(
   db: PrismaClient,
   access: BusinessAccess,
-  input: { phone: string; email: string; website: string },
+  input: { phone: string; email: string; website: string; serviceArea?: string },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
   requireBusinessRole(access, "OWNER");
@@ -226,10 +232,14 @@ export async function updateBusinessPublicContactOp(
   let publicPhone: string | null;
   let publicEmail: string | null;
   let publicWebsite: string | null;
+  let publicServiceAreaLabel: string | null | undefined;
   try {
     publicPhone = parsePublicPhone(input.phone);
     publicEmail = parsePublicEmail(input.email);
     publicWebsite = parsePublicWebsite(input.website);
+    if (input.serviceArea !== undefined) {
+      publicServiceAreaLabel = parsePublicServiceAreaLabel(input.serviceArea);
+    }
   } catch (error) {
     throw new SettingsError(
       error instanceof Error ? error.message : "That contact information could not be saved.",
@@ -243,17 +253,27 @@ export async function updateBusinessPublicContactOp(
       publicPhone: true,
       publicEmail: true,
       publicWebsite: true,
+      publicServiceAreaLabel: true,
     },
   });
   if (!business) {
     throw new SettingsError("Business was not found.");
   }
 
-  const next = { publicPhone, publicEmail, publicWebsite };
+  const next = {
+    publicPhone,
+    publicEmail,
+    publicWebsite,
+    ...(publicServiceAreaLabel !== undefined
+      ? { publicServiceAreaLabel }
+      : {}),
+  };
   const unchanged =
     (business.publicPhone ?? null) === next.publicPhone &&
     (business.publicEmail ?? null) === next.publicEmail &&
-    (business.publicWebsite ?? null) === next.publicWebsite;
+    (business.publicWebsite ?? null) === next.publicWebsite &&
+    (publicServiceAreaLabel === undefined ||
+      (business.publicServiceAreaLabel ?? null) === publicServiceAreaLabel);
   if (unchanged) {
     return { unchanged: true as const };
   }
@@ -263,11 +283,14 @@ export async function updateBusinessPublicContactOp(
       where: { id: access.businessId },
       data: next,
     });
-    const fields = [
+    const fields: Array<[string, string | null, string | null]> = [
       ["publicPhone", business.publicPhone, next.publicPhone],
       ["publicEmail", business.publicEmail, next.publicEmail],
       ["publicWebsite", business.publicWebsite, next.publicWebsite],
-    ] as const;
+    ];
+    if (publicServiceAreaLabel !== undefined) {
+      fields.push(["publicServiceAreaLabel", business.publicServiceAreaLabel, publicServiceAreaLabel]);
+    }
     for (const [settingKey, previousValue, newValue] of fields) {
       if ((previousValue ?? null) === (newValue ?? null)) continue;
       await writeSettingsAuditLog(tx, {
@@ -354,6 +377,7 @@ export async function updateWebsiteStoryOp(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  await requireSaasOperatingEntitlement(db, access);
 
   const rawOwnerStory = normalizeAboutCopy(input.rawOwnerStory, MAX_OWNER_STORY_LENGTH);
   const approvedPublicAboutCopy = normalizeAboutCopy(
@@ -410,6 +434,7 @@ export async function updateSchedulingSettingsOp(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  await requireSaasOperatingEntitlement(db, access);
 
   if (input.workingWeekdays.length === 0) {
     throw new SettingsError("Choose at least one working day.");

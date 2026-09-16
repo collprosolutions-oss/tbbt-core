@@ -17,6 +17,7 @@ export function PublicFooter({
   contactHref,
   smsHref,
   categories,
+  serviceAreaCopy = SERVICE_AREA_COPY,
 }: {
   name: string;
   logoSrc: string | null;
@@ -31,6 +32,7 @@ export function PublicFooter({
   contactHref: string;
   smsHref: string | null;
   categories: PopularPublicCategory[];
+  serviceAreaCopy?: string;
 }) {
   return (
     <footer className="public-footer">
@@ -81,7 +83,7 @@ export function PublicFooter({
         </div>
         <div>
           <h2>Service Area</h2>
-          <p>{SERVICE_AREA_COPY}</p>
+          <p>{serviceAreaCopy}</p>
         </div>
         <div>
           <h2>{TEXT_US_LABEL}</h2>

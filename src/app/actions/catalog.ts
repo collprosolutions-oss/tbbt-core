@@ -2,13 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
-import { requireBusinessAccess } from "@/lib/access";
-import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
-  planStarterCatalogInstall,
-  starterIntakeFields,
-  starterPricingMode,
-} from "@/lib/handyman-starter-catalog";
+  requireOperatingBusinessAccess,
+  requireOperatingBusinessAccessForForm,
+} from "@/lib/saas-billing/enforce";
+import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { installHandymanStarterCatalogForBusiness } from "@/lib/starter-catalog-install";
 import {
   deleteOwnedServiceCatalogItem,
   setOwnedServiceCatalogItemActive,
@@ -75,7 +74,9 @@ export async function createServiceCatalogItem(
   _prev: CatalogActionState,
   formData: FormData,
 ): Promise<CatalogActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
   const name = readString(formData, "name");
   const description = readString(formData, "description");
@@ -115,7 +116,7 @@ export async function updateServiceCatalogItem(
   _prev: CatalogActionState,
   formData: FormData,
 ): Promise<CatalogActionState> {
-  const access = await requireBusinessAccess();
+  const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
   const id = readString(formData, "id");
   const name = readString(formData, "name");
@@ -164,7 +165,7 @@ export async function setServiceCatalogItemActive(
   active: boolean,
 ): Promise<CatalogActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await setOwnedServiceCatalogItemActive(prisma, access, { id, active });
     revalidatePath("/services");
     return {};
@@ -182,7 +183,7 @@ export async function deleteServiceCatalogItem(
   id: string,
 ): Promise<CatalogActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await deleteOwnedServiceCatalogItem(prisma, access, { id });
     revalidatePath("/services");
     return { message: "Catalog service deleted. Existing estimates keep their recorded lines." };
@@ -197,7 +198,9 @@ export async function deleteServiceCatalogItem(
 }
 
 export async function installHandymanStarterCatalog(): Promise<CatalogActionState> {
-  const access = await requireBusinessAccess();
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
 
   if (!isActiveTrade(access.workspace.business.tradeCode)) {
@@ -206,41 +209,15 @@ export async function installHandymanStarterCatalog(): Promise<CatalogActionStat
     };
   }
 
-  const existing = await prisma.serviceCatalogItem.findMany({
-    where: access.scope,
-    select: { name: true },
-  });
-
-  const plan = planStarterCatalogInstall(existing.map((item) => item.name));
-
-  if (plan.add.length > 0) {
-    await prisma.$transaction(
-      plan.add.map((service) =>
-        prisma.serviceCatalogItem.create({
-          data: {
-            businessId: access.businessId,
-            name: service.name,
-            description: service.description,
-            pricingMode: starterPricingMode(service),
-            price:
-              service.startingPrice == null
-                ? null
-                : new Prisma.Decimal(service.startingPrice),
-            // Stored directly from the starter template's own category
-            // field, not derived later from the name.
-            category: service.category,
-            active: true,
-            ...starterIntakeFields(service),
-          },
-        }),
-      ),
-    );
-  }
+  const plan = await installHandymanStarterCatalogForBusiness(
+    prisma,
+    access.businessId,
+  );
 
   revalidatePath("/services");
   return {
-    added: plan.add.length,
-    skipped: plan.skip.length,
-    message: `Added ${plan.add.length}. Skipped ${plan.skip.length} already on your list.`,
+    added: plan.added,
+    skipped: plan.skipped,
+    message: `Added ${plan.added}. Skipped ${plan.skipped} already on your list.`,
   };
 }

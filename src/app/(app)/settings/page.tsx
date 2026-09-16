@@ -14,12 +14,14 @@ import type { CuratedIconId } from "@/lib/founder-icons";
 import { prisma } from "@/lib/prisma";
 import { isBusinessStorageConfigured } from "@/lib/business-storage";
 import { loadWebsitePhotoStorageSummary } from "@/lib/business-storage/website-photos";
+import { loadSaasEntitlement, saasOperatingUiState } from "@/lib/saas-billing";
 import { parseSettingsSection } from "@/lib/settings";
 import {
   loadSettingsSnapshot,
   settingsIntegrationCardsFromSnapshot,
   settingsReadinessFromSnapshot,
 } from "@/lib/settings-data";
+import { previewOperationalTestData } from "@/lib/test-data-cleanup";
 import { loadPublicCatalog } from "@/lib/public-site-data";
 import { loadWebsitePhotoEditorSlots } from "@/lib/public-site-images";
 import { loadSupplierPricingContextPayload } from "@/lib/material-pricing/db";
@@ -31,11 +33,15 @@ export const metadata: Metadata = {
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ section?: string }>;
+  searchParams: Promise<{ section?: string; checkout?: string }>;
 }) {
   const access = await requireManagementPageAccess();
   const params = await searchParams;
   const section = parseSettingsSection(params.section);
+  const checkoutStatus =
+    params.checkout === "success" || params.checkout === "canceled"
+      ? params.checkout
+      : null;
 
   const snapshot = await loadSettingsSnapshot(prisma, access.businessId);
   const readiness = settingsReadinessFromSnapshot(snapshot);
@@ -43,6 +49,8 @@ export default async function SettingsPage({
   const role = access.workspace.role;
   const canEditPreferences = roleHasCapability(role, CAPABILITIES.MANAGE_SETTINGS);
   const canEditConsequential = role === "OWNER";
+  const entitlement = await loadSaasEntitlement(prisma, access.workspace.business);
+  const operating = saasOperatingUiState(entitlement, role);
   let websitePhotos:
     | {
         storageConfigured: boolean;
@@ -73,6 +81,11 @@ export default async function SettingsPage({
       : null;
 
   const founder = await checkFounderAccess();
+  const canClearTestData = Boolean(founder) && role === "OWNER";
+  const testDataCleanupPreview =
+    canClearTestData && section === "data-export"
+      ? await previewOperationalTestData(prisma, access.businessId)
+      : null;
   const founderOverride = founder
     ? await prisma.founderDesignOverride.findUnique({
         where: { userId_pageKey: { userId: founder.id, pageKey: "settings" } },
@@ -163,8 +176,13 @@ export default async function SettingsPage({
           integrations={integrations}
           canEditConsequential={canEditConsequential}
           canEditPreferences={canEditPreferences}
+          canOperate={operating.canOperate}
+          operatingBlockedMessage={operating.blockedMessage}
           websitePhotos={websitePhotos}
           supplierPricing={supplierPricing}
+          canClearTestData={canClearTestData}
+          testDataCleanupPreview={testDataCleanupPreview}
+          checkoutStatus={checkoutStatus}
         />
       </FounderDesignRoot>
     </PageContainer>

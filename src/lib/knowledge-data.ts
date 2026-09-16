@@ -7,6 +7,7 @@
  */
 
 import type { PrismaClient } from "@prisma/client";
+import { ACTIVE_EXPENSE_WHERE } from "@/lib/expenses";
 import {
   AREA_TO_CATEGORY,
   KNOWLEDGE_CATEGORIES,
@@ -200,7 +201,7 @@ export async function loadKnowledgeSource(
       take: 40,
     }),
     prisma.expense.findMany({
-      where: scope,
+      where: { ...scope, ...ACTIVE_EXPENSE_WHERE },
       select: {
         id: true,
         description: true,

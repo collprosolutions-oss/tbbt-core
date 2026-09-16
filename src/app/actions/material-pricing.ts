@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import {
   applyCurrentSupplierPriceToDraft,
   confirmSupplierStorePrice,
@@ -34,7 +34,7 @@ export async function saveBusinessSupplierPricingSettings(
   formData: FormData,
 ): Promise<MaterialPricingActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     await saveSupplierPreference(prisma, access, {
       providerId: readString(formData, "providerId") || "home-depot",
       enabled: readString(formData, "enabled") !== "0",
@@ -60,7 +60,7 @@ export async function refreshBusinessSupplierPrices(
   formData: FormData,
 ): Promise<MaterialPricingActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const result = await refreshSupplierPrices(prisma, access, {
       providerId: readString(formData, "providerId") || "home-depot",
     });
@@ -90,7 +90,7 @@ export async function applyEstimateCurrentSupplierPrice(
     if (!snapshot || !itemId) {
       return { error: "Calculate the takeoff before using a supplier price." };
     }
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const cost = parsePositiveNumber(readString(formData, "supplierUnitCost"));
     const result = await applyCurrentSupplierPriceToDraft(prisma, access, {
       estimateId,
@@ -115,7 +115,7 @@ export async function confirmEstimateSupplierStorePrice(
   formData: FormData,
 ): Promise<MaterialPricingActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingBusinessAccess();
     const price = parsePositiveNumber(readString(formData, "storePrice"));
     if (price == null) {
       return { error: "Enter a store price greater than 0." };

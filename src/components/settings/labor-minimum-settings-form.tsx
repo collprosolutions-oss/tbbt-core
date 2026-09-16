@@ -24,10 +24,12 @@ export function LaborMinimumSettingsForm({
   enabled,
   amount,
   canEdit,
+  blockedMessage,
 }: {
   enabled: boolean;
   amount: string;
   canEdit: boolean;
+  blockedMessage?: string;
 }) {
   const [state, action, pending] = useActionState(
     updateLaborMinimumSettings,
@@ -43,7 +45,8 @@ export function LaborMinimumSettingsForm({
           <span className="font-medium">{formatCurrent(amount, enabled)}</span>
         </p>
         <p className="text-muted-foreground">
-          Only the owner can change this pricing rule. {LABOR_MINIMUM_FUTURE_RULE_MESSAGE}
+          {blockedMessage ??
+            `Only the owner can change this pricing rule. ${LABOR_MINIMUM_FUTURE_RULE_MESSAGE}`}
         </p>
       </div>
     );

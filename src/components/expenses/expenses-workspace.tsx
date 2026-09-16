@@ -8,6 +8,7 @@ import {
   ChevronDown,
   Flag,
   Filter,
+  Pencil,
   Plus,
   Receipt,
   Repeat,
@@ -16,6 +17,7 @@ import {
 import {
   reviewExpenseAction,
   setReimbursementStatusAction,
+  voidExpenseAction,
   type ExpenseActionState,
 } from "@/app/actions/expenses";
 import {
@@ -45,6 +47,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { EXPENSE_CATEGORY_ACCENTS } from "@/lib/expenses";
 import { ICON_COLOR_CLASSES } from "@/lib/founder-icons";
 import { cn } from "@/lib/utils";
+import { OperatingWriteGate, useSaasOperating } from "@/components/saas/saas-operating-context";
 
 const CATEGORY_ACCENT: Record<string, string> = {
   purple: ICON_COLOR_CLASSES.purple,
@@ -73,6 +76,11 @@ export function ExpensesHeaderActions({
   storageConfigured: boolean;
   onAdd: (mode: ExpenseSheetMode) => void;
 }) {
+  const operating = useSaasOperating();
+  if (!operating.canOperate) {
+    return <OperatingWriteGate fallbackLabel="Add Expense" />;
+  }
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <DropdownMenu>
@@ -92,7 +100,7 @@ export function ExpensesHeaderActions({
       <Button
         variant="outline"
         size="lg"
-        onClick={() => onAdd(storageConfigured ? "expense" : "expense")}
+        onClick={() => onAdd("receipt")}
       >
         <Upload />
         Upload Receipt
@@ -114,6 +122,7 @@ export function ExpensesWorkspace({
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sheetMode, setSheetMode] = useState<ExpenseSheetMode | null>(null);
   const selected = workspace.items.find((item) => item.id === selectedId) ?? null;
+  const operating = useSaasOperating();
 
   function selectExpense(id: string) {
     setSelectedId(id);
@@ -186,10 +195,14 @@ export function ExpensesWorkspace({
               title="No expenses match your filters"
               description="Add an expense, or try a different date range, category, or search."
               action={
+                operating.canOperate ? (
                 <Button onClick={() => setSheetMode("expense")}>
                   <Plus />
                   Add Expense
                 </Button>
+                ) : (
+                  <OperatingWriteGate fallbackLabel="Add Expense" />
+                )
               }
             />
           ) : (
@@ -238,7 +251,20 @@ export function ExpensesWorkspace({
           <SheetHeader className="sr-only">
             <SheetTitle>Expense details</SheetTitle>
           </SheetHeader>
-          {selected ? <ExpenseDetails expense={selected} storageConfigured={workspace.storageConfigured} /> : null}
+          {selected ? (
+            <ExpenseDetails
+              expense={selected}
+              storageConfigured={workspace.storageConfigured}
+              onEdit={() => {
+                setMobileOpen(false);
+                setSheetMode("edit");
+              }}
+              onAttach={() => {
+                setMobileOpen(false);
+                setSheetMode("receipt");
+              }}
+            />
+          ) : null}
         </SheetContent>
       </Sheet>
 
@@ -255,6 +281,7 @@ export function ExpensesWorkspace({
           defaultDate={workspace.defaultDate}
           storageConfigured={workspace.storageConfigured}
           attachExpenseId={selected?.id}
+          editingExpense={selected}
         />
       ) : null}
     </>
@@ -421,6 +448,7 @@ function ExpensesMobileList({
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
             <Badge variant="outline">{item.categoryLabel}</Badge>
             {item.reimbursable ? <Badge variant="success">Reimbursable</Badge> : null}
+            {item.customerBillable ? <Badge variant="outline">Customer billable</Badge> : null}
             {item.jobLabel ? <span className="text-muted-foreground">{item.jobLabel}</span> : null}
           </div>
         </button>
@@ -482,6 +510,7 @@ function RightRail({
           <CardTitle>Quick Actions</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
+          <OperatingWriteGate fallbackLabel="Add Expense">
           <Button variant="ghost" className="justify-start" onClick={() => onAdd("expense")}>
             <Plus />
             Add Expense
@@ -494,6 +523,7 @@ function RightRail({
             <Repeat />
             Add Recurring Expense
           </Button>
+          </OperatingWriteGate>
         </CardContent>
       </Card>
 
@@ -519,8 +549,13 @@ function RightRail({
         </Card>
       ) : null}
 
-      {selected && !mobileSummary ? (
-        <ExpenseDetails expense={selected} storageConfigured={workspace.storageConfigured} />
+        {selected && !mobileSummary ? (
+        <ExpenseDetails
+          expense={selected}
+          storageConfigured={workspace.storageConfigured}
+          onEdit={() => onAdd("edit")}
+          onAttach={() => onAdd("receipt")}
+        />
       ) : null}
     </div>
   );
@@ -562,15 +597,20 @@ function OverviewRow({
 function ExpenseDetails({
   expense,
   storageConfigured,
+  onEdit,
+  onAttach,
 }: {
   expense: ExpenseListItem;
   storageConfigured: boolean;
+  onEdit?: () => void;
+  onAttach?: () => void;
 }) {
   const [reviewState, reviewAction, reviewPending] = useActionState(reviewExpenseAction, {} as ExpenseActionState);
   const [reimbState, reimbAction, reimbPending] = useActionState(
     setReimbursementStatusAction,
     {} as ExpenseActionState,
   );
+  const [voidState, voidAction, voidPending] = useActionState(voidExpenseAction, {} as ExpenseActionState);
 
   return (
     <Card className="border-border/70 shadow-sm">
@@ -584,6 +624,7 @@ function ExpenseDetails({
           <Badge variant="outline">{expense.categoryLabel}</Badge>
           <StatusBadge status={expense.reviewStatus} />
           {expense.reimbursable ? <Badge variant="success">{expense.reimbursementLabel}</Badge> : null}
+          {expense.customerBillable ? <Badge variant="outline">Customer billable</Badge> : null}
         </div>
         <p className="text-muted-foreground">{expense.occurredOnLabel}</p>
         {expense.vendor ? <p>Vendor: {expense.vendor}</p> : null}
@@ -603,6 +644,21 @@ function ExpenseDetails({
             {storageConfigured ? "No receipt attached." : "No receipt. Storage is not connected."}
           </p>
         )}
+
+        <div className="flex flex-wrap gap-2">
+          {onEdit ? (
+            <Button type="button" size="sm" variant="outline" onClick={onEdit}>
+              <Pencil />
+              Edit
+            </Button>
+          ) : null}
+          {onAttach ? (
+            <Button type="button" size="sm" variant="outline" onClick={onAttach}>
+              <Upload />
+              {expense.hasReceipt ? "Replace receipt" : "Attach receipt"}
+            </Button>
+          ) : null}
+        </div>
 
         <form action={reviewAction} className="flex flex-wrap gap-2">
           <input type="hidden" name="expenseId" value={expense.id} />
@@ -640,6 +696,26 @@ function ExpenseDetails({
           </form>
         ) : null}
         {reimbState.error ? <p className="text-sm text-destructive">{reimbState.error}</p> : null}
+
+        <form
+          action={voidAction}
+          onSubmit={(event) => {
+            if (
+              !window.confirm(
+                "Void this expense? It stays on file for job cost history but is hidden from totals and the list.",
+              )
+            ) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <input type="hidden" name="expenseId" value={expense.id} />
+          <Button type="submit" size="sm" variant="outline" disabled={voidPending}>
+            Void expense
+          </Button>
+        </form>
+        {voidState.error ? <p className="text-sm text-destructive">{voidState.error}</p> : null}
+        {voidState.message ? <p className="text-sm text-emerald-400">{voidState.message}</p> : null}
       </CardContent>
     </Card>
   );

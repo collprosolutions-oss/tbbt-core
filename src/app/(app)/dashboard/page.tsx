@@ -17,10 +17,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { DashboardAppointmentAttentionItems } from "@/components/dashboard/appointment-attention-items";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { FounderDesignRoot } from "@/components/founder-design/root";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { requireManagementPageAccess } from "@/lib/access";
+import {
+  DASHBOARD_APPOINTMENT_ATTENTION_SELECT,
+  DASHBOARD_APPOINTMENT_ATTENTION_TAKE,
+  dashboardAppointmentAttentionCandidateWhere,
+  dashboardAppointmentAttentionItems,
+} from "@/lib/dashboard-appointment-attention";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatDate, formatDateTime, formatMoney, formatTime } from "@/lib/format";
@@ -79,6 +86,7 @@ export default async function DashboardPage() {
     recentJobs,
     recentRequests,
     paymentStatus,
+    appointmentAttentionJobs,
   ] = await Promise.all([
     prisma.serviceRequest.count({ where: { ...access.scope, status: "OPEN" } }),
     prisma.estimate.count({ where: { ...access.scope, status: "SENT" } }),
@@ -160,10 +168,23 @@ export default async function DashboardPage() {
       take: RECENT_TAKE,
     }),
     getBusinessPaymentStatus(prisma, access.businessId),
+    prisma.job.findMany({
+      where: {
+        ...access.scope,
+        ...dashboardAppointmentAttentionCandidateWhere(),
+      },
+      select: DASHBOARD_APPOINTMENT_ATTENTION_SELECT,
+      orderBy: { updatedAt: "desc" },
+      take: DASHBOARD_APPOINTMENT_ATTENTION_TAKE,
+    }),
   ]);
 
   const outstandingTotal = outstandingAgg._sum.total ?? 0;
   const paymentsGoLive = explainPaymentsGoLiveFromStatus(paymentStatus);
+  const appointmentAttention = dashboardAppointmentAttentionItems(
+    appointmentAttentionJobs,
+    access.businessId,
+  );
 
   const kpis: KpiCardProps[] = [
     {
@@ -287,7 +308,9 @@ export default async function DashboardPage() {
     },
   ].filter((group) => group.count > 0);
 
-  const attentionTotal = attentionGroups.reduce((sum, group) => sum + group.count, 0);
+  const attentionTotal =
+    appointmentAttention.length +
+    attentionGroups.reduce((sum, group) => sum + group.count, 0);
 
   return (
     <PageContainer width="xl">
@@ -366,13 +389,18 @@ export default async function DashboardPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {attentionGroups.length === 0 ? (
+            {attentionTotal === 0 ? (
               <p className="text-sm text-muted-foreground">Nothing waiting right now.</p>
             ) : (
-              <div className="grid gap-5 sm:grid-cols-2">
-                {attentionGroups.map((group) => (
-                  <AttentionGroup key={group.title} group={group} />
-                ))}
+              <div className="space-y-5">
+                <DashboardAppointmentAttentionItems items={appointmentAttention} />
+                {attentionGroups.length > 0 ? (
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    {attentionGroups.map((group) => (
+                      <AttentionGroup key={group.title} group={group} />
+                    ))}
+                  </div>
+                ) : null}
               </div>
             )}
           </CardContent>

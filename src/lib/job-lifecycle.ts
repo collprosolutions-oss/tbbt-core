@@ -19,10 +19,9 @@ export type JobLifecycleResult =
  * A completed Job can never be (re)started. Already-IN_PROGRESS is a
  * successful no-op (nextStatus: null) rather than an error, matching the
  * existing startJob() behavior -- pressing Start twice is harmless.
- * Otherwise (SCHEDULED or UNSCHEDULED) starts it. Deliberately does not
- * special-case UNSCHEDULED: the existing app already allows starting an
- * unscheduled Job (see startJob() in src/app/actions/job.ts predating this
- * step), and this preserves that rule rather than expanding or narrowing it.
+ * Otherwise (SCHEDULED or UNSCHEDULED) starts it. Appointment confirmation
+ * is a separate gate (see startJobRequiresCustomerConfirmation in
+ * src/lib/appointment-confirmation.ts) and is not encoded in Job.status.
  */
 export function evaluateStartJob(status: string): JobLifecycleResult {
   if (status === "COMPLETED") {
