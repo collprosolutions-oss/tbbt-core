@@ -17,7 +17,6 @@ import {
 import {
   TbbtGrowMock,
   TbbtRunPhones,
-  TbbtWebsiteMock,
 } from "@/components/tbbt-marketing/product-preview";
 import { TbbtWatchVideoButton } from "@/components/tbbt-marketing/watch-video";
 import "@/components/tbbt-marketing/tbbt-home.css";
@@ -51,7 +50,7 @@ const WORKFLOW_ICONS = [
   RefreshCw,
 ] as const;
 
-const [buildPillar, runPillar, growPillar] = TBBT_PILLARS;
+const [, runPillar, growPillar] = TBBT_PILLARS;
 
 function tradeBadgeClass(status: (typeof TBBT_TRADES)[number]["status"]) {
   if (status === "available") return "tbbt-badge tbbt-badge--available";
@@ -164,22 +163,13 @@ export function TbbtHomePage() {
             </p>
           </div>
           <div className="tbbt-brg">
-            <article className="tbbt-brg-card">
-              <p className="tbbt-kicker">{buildPillar.kicker}</p>
-              <h3>{buildPillar.title}</h3>
-              <div className="tbbt-brg-body">
-                <div className="tbbt-device-web">
-                  <TbbtWebsiteMock />
-                </div>
-                <ul className="tbbt-brg-points">
-                  {buildPillar.points.map((point) => (
-                    <li key={point}>{point}</li>
-                  ))}
-                </ul>
-              </div>
-              <Link href="/features#website-builder" className="tbbt-btn tbbt-btn--ghost">
-                See Website Builder
-                <ArrowRight size={16} />
+            <article className="tbbt-brg-card tbbt-brg-card--build-photo">
+              <Link href="/features#website-builder" className="tbbt-brg-build-photo">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/brand/tbbt-marketing/build-card.png"
+                  alt="BUILD — A Professional Website for Your Business"
+                />
               </Link>
             </article>
             <article className="tbbt-brg-card">

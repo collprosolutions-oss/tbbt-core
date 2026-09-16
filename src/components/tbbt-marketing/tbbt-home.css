@@ -498,6 +498,26 @@
   align-content: start;
 }
 
+.tbbt-brg-card--build-photo {
+  padding: 0;
+  overflow: hidden;
+  align-content: stretch;
+  grid-template-rows: 1fr;
+}
+
+.tbbt-brg-build-photo {
+  display: block;
+  height: 100%;
+}
+
+.tbbt-brg-card--build-photo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center center;
+}
+
 .tbbt-brg-body {
   display: grid;
   gap: 0.9rem;
@@ -1230,7 +1250,7 @@
   }
 
   .tbbt-band--brg {
-    padding: 0.26rem 0 0.28rem;
+    padding: 0.95rem 0 0.28rem;
   }
 
   .tbbt-brg-head {
@@ -1260,6 +1280,11 @@
     border-radius: 0.8rem;
     align-content: space-between;
     overflow: hidden;
+  }
+
+  .tbbt-brg-card--build-photo {
+    padding: 0;
+    align-content: stretch;
   }
 
   .tbbt-brg-card .tbbt-kicker {
@@ -1555,6 +1580,10 @@
 
   .tbbt-brg-card {
     padding: 1.1rem 1rem 1.2rem;
+  }
+
+  .tbbt-brg-card--build-photo {
+    padding: 0;
   }
 
   .tbbt-dash-kpis--4 {
