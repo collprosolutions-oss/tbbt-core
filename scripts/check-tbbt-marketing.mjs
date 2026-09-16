@@ -224,7 +224,10 @@ check(
 );
 check(
   "Home keeps BUILD / RUN / GROW and the connected lifecycle",
-  homeMarketingSrc.includes("TBBT_PILLARS") &&
+  homeMarketingSrc.includes("Build. Run. Grow.") &&
+    homeMarketingSrc.includes("build-card.png") &&
+    homeMarketingSrc.includes("run-card.png") &&
+    homeMarketingSrc.includes("grow-card.png") &&
     homeMarketingSrc.includes("TBBT_WORKFLOW_STEPS") &&
     homeMarketingSrc.includes("TBBT_TRIAL_CTA_LABEL") &&
     homeMarketingSrc.includes("tbbt-hero-cinematic") &&
