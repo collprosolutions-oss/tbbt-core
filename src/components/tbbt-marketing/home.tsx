@@ -158,44 +158,62 @@ export function TbbtHomePage() {
           <div className="tbbt-brg-head">
             <h2>Build. Run. Grow.</h2>
             <p className="tbbt-muted">
-              Website, operations, and business insight — one connected system.
+              Everything you need for a stronger, more profitable business.
             </p>
           </div>
           <div className="tbbt-brg">
             <article className="tbbt-brg-card">
-            <p className="tbbt-kicker">{buildPillar.kicker}</p>
-            <h3>{buildPillar.title}</h3>
-            <p>{buildPillar.body}</p>
-            <div className="tbbt-device-web">
-              <TbbtWebsiteMock />
-            </div>
-            <Link href="/features#website-builder" className="tbbt-btn tbbt-btn--ghost">
-              See Website Builder
-              <ArrowRight size={16} />
-            </Link>
-          </article>
+              <p className="tbbt-kicker">{buildPillar.kicker}</p>
+              <h3>{buildPillar.title}</h3>
+              <div className="tbbt-brg-body">
+                <div className="tbbt-device-web">
+                  <TbbtWebsiteMock />
+                </div>
+                <ul className="tbbt-brg-points">
+                  {buildPillar.points.map((point) => (
+                    <li key={point}>{point}</li>
+                  ))}
+                </ul>
+              </div>
+              <Link href="/features#website-builder" className="tbbt-btn tbbt-btn--ghost">
+                See Website Builder
+                <ArrowRight size={16} />
+              </Link>
+            </article>
             <article className="tbbt-brg-card">
-            <p className="tbbt-kicker">{runPillar.kicker}</p>
-            <h3>{runPillar.title}</h3>
-            <p>{runPillar.body}</p>
-            <div className="tbbt-device-run">
-              <TbbtRunPhones />
-            </div>
-            <Link href="#connected" className="tbbt-btn tbbt-btn--ghost">
-              See How It Works
-              <ArrowRight size={16} />
-            </Link>
-          </article>
+              <p className="tbbt-kicker">{runPillar.kicker}</p>
+              <h3>{runPillar.title}</h3>
+              <div className="tbbt-brg-body">
+                <div className="tbbt-device-run">
+                  <TbbtRunPhones />
+                </div>
+                <ul className="tbbt-brg-points">
+                  {runPillar.points.map((point) => (
+                    <li key={point}>{point}</li>
+                  ))}
+                </ul>
+              </div>
+              <Link href="#connected" className="tbbt-btn tbbt-btn--ghost">
+                See How It Works
+                <ArrowRight size={16} />
+              </Link>
+            </article>
             <article className="tbbt-brg-card">
-            <p className="tbbt-kicker">{growPillar.kicker}</p>
-            <h3>{growPillar.title}</h3>
-            <p>{growPillar.body}</p>
-            <TbbtGrowMock />
-            <Link href="/features" className="tbbt-btn tbbt-btn--ghost">
-              See Reports
-              <ArrowRight size={16} />
-            </Link>
-          </article>
+              <p className="tbbt-kicker">{growPillar.kicker}</p>
+              <h3>{growPillar.title}</h3>
+              <div className="tbbt-brg-body">
+                <TbbtGrowMock />
+                <ul className="tbbt-brg-points">
+                  {growPillar.points.map((point) => (
+                    <li key={point}>{point}</li>
+                  ))}
+                </ul>
+              </div>
+              <Link href="/features" className="tbbt-btn tbbt-btn--ghost">
+                See the Coach
+                <ArrowRight size={16} />
+              </Link>
+            </article>
           </div>
         </div>
       </section>
@@ -205,7 +223,7 @@ export function TbbtHomePage() {
           <div className="tbbt-connected-head">
             <h2>It&apos;s all connected</h2>
             <p className="tbbt-muted">
-              From the first customer inquiry to the final payment, everything
+              From the first customer inquiry to the final payment — everything
               works together.
             </p>
             <Link href="/features" className="tbbt-btn tbbt-btn--primary">
@@ -221,7 +239,7 @@ export function TbbtHomePage() {
                 <div className="tbbt-connected-item" key={step}>
                   <div className="tbbt-connected-step">
                     <span className="tbbt-connected-icon">
-                      <Icon size={18} />
+                      <Icon size={22} />
                     </span>
                     {step}
                   </div>
@@ -245,8 +263,8 @@ export function TbbtHomePage() {
           <div>
             <h2>Ready to Build a Better Business?</h2>
             <p className="tbbt-muted tbbt-final-lead">
-              Start the 30-day Founder Plan trial. No credit card required to
-              begin. Handyman is the first available trade.
+              Join trades professionals who are saving time, winning more work,
+              and building the business they want — with TBBT.
             </p>
             <div className="tbbt-hero-actions tbbt-final-actions">
               <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">

@@ -218,7 +218,7 @@ check(
   headerSrc.includes('src="/brand/tbbt-logo.png"') &&
     headerSrc.includes("tbbt-brand") &&
     !headerSrc.includes("tbbt-logo-text") &&
-    marketingCssSrc.includes("--tbbt-logo-h: 8.75rem") &&
+    marketingCssSrc.includes("--tbbt-logo-h: 9.8rem") &&
     marketingCssSrc.includes("overflow: visible") &&
     marketingCssSrc.includes("position: absolute"),
 );

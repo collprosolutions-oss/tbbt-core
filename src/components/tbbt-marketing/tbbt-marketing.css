@@ -9,9 +9,9 @@
   --tbbt-muted: #9aa6bd;
   --tbbt-line: rgba(255, 255, 255, 0.1);
   --tbbt-line-strong: rgba(255, 255, 255, 0.16);
-  --tbbt-max: 88rem;
-  --tbbt-header-h: 4.85rem;
-  --tbbt-logo-h: 2.8rem;
+  --tbbt-max: 90rem;
+  --tbbt-header-h: 4.15rem;
+  --tbbt-logo-h: 2.9rem;
   --tbbt-logo-w: auto;
   color: var(--tbbt-ink);
   background:
@@ -84,7 +84,7 @@
 }
 
 .tbbt-footer .tbbt-logo img {
-  height: 2.55rem;
+  height: 3.6rem;
   width: auto;
 }
 
@@ -606,7 +606,7 @@
 
 .tbbt-footer {
   border-top: 1px solid var(--tbbt-line);
-  padding: 1.2rem 0;
+  padding: 2.1rem 0 2.25rem;
   background: #05080f;
 }
 
@@ -712,7 +712,7 @@
 
 @media (min-width: 900px) {
   .tbbt-site {
-    --tbbt-logo-h: 6.2rem;
+    --tbbt-logo-h: 6.8rem;
     --tbbt-logo-w: calc(var(--tbbt-logo-h) * 1.75);
   }
 
@@ -780,7 +780,7 @@
 
 @media (min-width: 1100px) {
   .tbbt-site {
-    --tbbt-logo-h: 8.75rem;
+    --tbbt-logo-h: 9.8rem;
     --tbbt-logo-w: calc(var(--tbbt-logo-h) * 1.75);
   }
 
