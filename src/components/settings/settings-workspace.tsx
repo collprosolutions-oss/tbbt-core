@@ -63,6 +63,7 @@ import {
   type SettingsSection,
 } from "@/lib/settings";
 import { explainPaymentsGoLive } from "@/lib/payments/go-live";
+import { stripeConnectActionLabel } from "@/lib/payments/readiness";
 import { cn } from "@/lib/utils";
 
 function readinessVariant(status: SettingsReadinessStatus) {
@@ -403,7 +404,10 @@ function SectionBody(props: SettingsWorkspaceProps) {
           description={paymentProviderDescription}
         >
           <div className="space-y-3">
-            <OwnerPaymentsGoLiveBanner explanation={paymentsGoLive} />
+            <OwnerPaymentsGoLiveBanner
+              explanation={paymentsGoLive}
+              showSettingsLink={false}
+            />
             <p className="text-sm font-medium">Stripe</p>
             <p className="text-sm">
               Status: {PAYMENT_PROVIDER_STATUS_LABELS[snapshot.payment.status]}
@@ -421,9 +425,8 @@ function SectionBody(props: SettingsWorkspaceProps) {
             {canEditPreferences && snapshot.payment.offerOnboarding ? (
               <ConnectStripeButton
                 label={
-                  snapshot.payment.status === "not_connected"
-                    ? "Connect Stripe"
-                    : "Continue Setup"
+                  stripeConnectActionLabel(snapshot.payment.status) ??
+                  "Connect Stripe"
                 }
                 disabled={
                   !snapshot.payment.platformConfigured ||

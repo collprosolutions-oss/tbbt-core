@@ -16,6 +16,12 @@ import {
   requiredDepositFromLines,
 } from "@/lib/project-payments";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
+import {
+  connectedAccountReplacementBlockReason,
+  isUnknownConnectedAccountError,
+  logStripeConnectOnboardingError,
+  stripeConnectOnboardingFailureMessage,
+} from "@/lib/payments/stripe-errors";
 import type {
   BusinessPaymentStatus,
   CheckoutSessionResult,
@@ -162,16 +168,82 @@ export async function startStripeConnectOnboarding(
 
   let stripeAccountId = business.paymentAccount?.stripeAccountId ?? null;
   if (!stripeAccountId) {
-    const owner = await db.membership.findFirst({
-      where: { businessId: access.businessId, role: "OWNER", active: true },
-      select: { user: { select: { email: true } } },
-      orderBy: { createdAt: "asc" },
+    stripeAccountId = await createBusinessConnectedAccount(db, access, business, provider);
+  }
+
+  const returnUrl = `${appUrl}/settings?section=estimates-payments`;
+  const refreshUrl = `${appUrl}/settings/stripe/refresh`;
+  try {
+    const link = await provider.createAccountOnboardingLink({
+      accountId: stripeAccountId,
+      returnUrl,
+      refreshUrl,
     });
-    const created = await provider.createConnectedAccount({
-      businessId: access.businessId,
-      displayName: business.name,
-      contactEmail: owner?.user.email ?? null,
+    return { url: link.url };
+  } catch (error) {
+    logStripeConnectOnboardingError(error);
+    if (!isUnknownConnectedAccountError(error)) {
+      throw new PaymentError(stripeConnectOnboardingFailureMessage(error));
+    }
+    const stripePayments = await db.payment.findMany({
+      where: { businessId: access.businessId, method: "STRIPE" },
+      select: { stripeCheckoutSessionId: true },
     });
+    const replacementBlock = connectedAccountReplacementBlockReason(stripePayments);
+    if (replacementBlock === "live") {
+      throw new PaymentError(
+        "This business's Stripe account could not be loaded on the current platform. Do not create a second connected account while live Stripe payments already exist.",
+      );
+    }
+    if (replacementBlock === "unknown") {
+      throw new PaymentError(
+        "This business's Stripe account could not be loaded on the current platform. Do not create a second connected account while Stripe payment history cannot be confirmed as test-mode.",
+      );
+    }
+    const previousAccountId = stripeAccountId;
+    stripeAccountId = await createBusinessConnectedAccount(db, access, business, provider, {
+      replaceAccountId: previousAccountId,
+    });
+    try {
+      const link = await provider.createAccountOnboardingLink({
+        accountId: stripeAccountId,
+        returnUrl,
+        refreshUrl,
+      });
+      return { url: link.url };
+    } catch (retryError) {
+      logStripeConnectOnboardingError(retryError);
+      throw new PaymentError(stripeConnectOnboardingFailureMessage(retryError));
+    }
+  }
+}
+
+async function createBusinessConnectedAccount(
+  db: PrismaClient,
+  access: BusinessAccess,
+  business: { id: string; name: string; paymentAccount: { stripeAccountId: string } | null },
+  provider: PaymentProvider,
+  options: { replaceAccountId?: string | null } = {},
+) {
+  const owner = await db.membership.findFirst({
+    where: { businessId: access.businessId, role: "OWNER", active: true },
+    select: { user: { select: { email: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  const created = await provider.createConnectedAccount({
+    businessId: access.businessId,
+    displayName: business.name,
+    contactEmail: owner?.user.email ?? null,
+  });
+  if (options.replaceAccountId) {
+    await db.businessPaymentAccount.update({
+      where: { businessId: access.businessId },
+      data: {
+        provider: provider.id,
+        stripeAccountId: created.accountId,
+      },
+    });
+  } else {
     await db.businessPaymentAccount.create({
       data: {
         businessId: access.businessId,
@@ -179,23 +251,16 @@ export async function startStripeConnectOnboarding(
         stripeAccountId: created.accountId,
       },
     });
-    await writeSettingsAuditLog(db, {
-      businessId: access.businessId,
-      changedByMembershipId: access.workspace.membership.id,
-      settingArea: "payments",
-      settingKey: "stripeAccountId",
-      previousValue: null,
-      newValue: created.accountId,
-    });
-    stripeAccountId = created.accountId;
   }
-
-  const link = await provider.createAccountOnboardingLink({
-    accountId: stripeAccountId,
-    returnUrl: `${appUrl}/settings?section=estimates-payments`,
-    refreshUrl: `${appUrl}/settings/stripe/refresh`,
+  await writeSettingsAuditLog(db, {
+    businessId: access.businessId,
+    changedByMembershipId: access.workspace.membership.id,
+    settingArea: "payments",
+    settingKey: "stripeAccountId",
+    previousValue: options.replaceAccountId ?? null,
+    newValue: created.accountId,
   });
-  return { url: link.url };
+  return created.accountId;
 }
 
 function centsToDecimal(cents: number) {
