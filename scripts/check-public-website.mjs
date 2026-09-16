@@ -218,6 +218,15 @@ check("Public hire, intake, and stored website photos stay public",
     isPublicWebsitePath("/r/collpro-reno") &&
     isPublicWebsitePath("/api/storage/public/asset_workshop"));
 check(
+  "TBBT marketing routes are public and do not replace CollPro /hire or /r",
+  isPublicWebsitePath("/features") &&
+    isPublicWebsitePath("/pricing") &&
+    isPublicWebsitePath("/about") &&
+    !isPublicWebsitePath("/dashboard") &&
+    homeSrc.includes("PublicHome") &&
+    homeSrc.includes("shouldServeTbbtMarketingHome"),
+);
+check(
   "Stripe webhook path is not a public website path and is an exact route",
   !isPublicWebsitePath("/api/stripe/webhook") &&
     isStripeWebhookPath("/api/stripe/webhook") &&

@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import "@/components/public/public-site.css";
+import { TbbtHomePage } from "@/components/tbbt-marketing/home";
+import { TbbtMarketingShell } from "@/components/tbbt-marketing/shell";
 import { PublicHome } from "@/components/public/public-home";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
 import {
@@ -12,16 +14,34 @@ import {
 import { loadPublicHomeImages } from "@/lib/public-site-images";
 import { prisma } from "@/lib/prisma";
 import { loadDefaultPublicBusiness, loadPublicCatalog } from "@/lib/public-site-data";
+import { readRequestHost } from "@/lib/request-host";
+import { shouldServeTbbtMarketingHome } from "@/lib/tbbt-marketing-host";
+import { tbbtMarketingMetadata } from "@/lib/tbbt-marketing-seo";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: { absolute: `${COLLPRO_RENO_DISPLAY_NAME} | Handyman Services` },
-  description:
-    "Request handyman services from CollPro Reno Handyman Services. Choose one or more tasks for a single visit request.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const host = await readRequestHost();
+  if (shouldServeTbbtMarketingHome(host)) {
+    return tbbtMarketingMetadata({ page: "home", pathname: "/", host });
+  }
+  return {
+    title: { absolute: `${COLLPRO_RENO_DISPLAY_NAME} | Handyman Services` },
+    description:
+      "Request handyman services from CollPro Reno Handyman Services. Choose one or more tasks for a single visit request.",
+  };
+}
 
 export default async function HomePage() {
+  const host = await readRequestHost();
+  if (shouldServeTbbtMarketingHome(host)) {
+    return (
+      <TbbtMarketingShell host={host}>
+        <TbbtHomePage />
+      </TbbtMarketingShell>
+    );
+  }
+
   const business = await loadDefaultPublicBusiness();
 
   if (!business) {

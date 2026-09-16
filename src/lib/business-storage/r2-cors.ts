@@ -15,14 +15,17 @@ import {
  * R2 AllowedOrigins must be exact Origin values (`scheme://host[:port]`).
  * Unique Vercel Preview hostnames change every deploy, and R2 does not
  * document a safe project-scoped wildcard. This list therefore names
- * Production CollPro origins, the stable git-branch Preview used for
- * founder testing, and the local Next port. It does not use a wildcard
+ * Production CollPro and TBBT corporate origins, the stable git-branch
+ * Preview used for founder testing, and the local Next port. It does not
+ * use a wildcard
  * origin or an unrestricted vercel.app pattern.
  */
 
 export const R2_BROWSER_UPLOAD_ALLOWED_ORIGINS = [
   "https://www.collproreno.com",
   "https://collproreno.com",
+  "https://tbbtools.com",
+  "https://www.tbbtools.com",
   "https://collpro-reno.vercel.app",
   "https://collpro-reno-git-cursor-estimate-pri-d221ac-collpro-s-projects5.vercel.app",
   "http://localhost:43217",
