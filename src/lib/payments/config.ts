@@ -12,8 +12,20 @@ export function getStripeWebhookSecret(): string | null {
   return value || null;
 }
 
+/**
+ * The fake adapter is for local/script tests only. Production must talk
+ * to Stripe with STRIPE_SECRET_KEY. Never treat a fake adapter as a
+ * live payment platform.
+ */
+export function isFakePaymentsAdapterEnabled(): boolean {
+  if (process.env.VERCEL_ENV === "production") {
+    return false;
+  }
+  return process.env.TBBT_PAYMENTS_ADAPTER === "fake";
+}
+
 export function isStripePlatformConfigured(): boolean {
-  if (process.env.TBBT_PAYMENTS_ADAPTER === "fake") {
+  if (isFakePaymentsAdapterEnabled()) {
     return true;
   }
   return Boolean(getStripeSecretKey());

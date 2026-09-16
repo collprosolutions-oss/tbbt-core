@@ -2,6 +2,7 @@
  * Focused check for getAppUrl() preview-safe resolution.
  *
  * NEXT_PUBLIC_APP_URL wins when set (production: www.collproreno.com).
+ * On Vercel production without that env, the canonical origin is used.
  * When it is absent on a Vercel preview, only platform-supplied
  * VERCEL_URL / VERCEL_BRANCH_URL hostnames on *.vercel.app are used.
  * Request Host headers are never read.
@@ -102,8 +103,8 @@ setEnv({
   VERCEL_BRANCH_URL: null,
 });
 check(
-  "production does not silently adopt a Vercel deployment host",
-  getAppUrl() === null,
+  "production without NEXT_PUBLIC_APP_URL uses www.collproreno.com, not the Vercel host",
+  getAppUrl() === "https://www.collproreno.com",
 );
 
 setEnv({

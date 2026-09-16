@@ -11,7 +11,12 @@ import { readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
+const {
+  isFakePaymentsAdapterEnabled,
+  isStripePlatformConfigured,
+} = await import("@/lib/payments/config");
 const { explainPaymentsGoLive } = await import("@/lib/payments/go-live");
+const { stripeConnectActionLabel } = await import("@/lib/payments/readiness");
 const { shouldShowPayDeposit, shouldShowPayInvoice } = await import(
   "@/lib/payments/service"
 );
@@ -91,6 +96,37 @@ const setupRequired = explainPaymentsGoLive({
 });
 check("incomplete onboarding is the setup blocker", setupRequired.blocker === "setup");
 
+console.log("\nUNIT — fake adapter never counts as live Stripe in production");
+const savedPaymentsEnv = {
+  VERCEL_ENV: process.env.VERCEL_ENV,
+  TBBT_PAYMENTS_ADAPTER: process.env.TBBT_PAYMENTS_ADAPTER,
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+};
+function restorePaymentsEnv() {
+  for (const [key, value] of Object.entries(savedPaymentsEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+process.env.VERCEL_ENV = "production";
+process.env.TBBT_PAYMENTS_ADAPTER = "fake";
+delete process.env.STRIPE_SECRET_KEY;
+check(
+  "production ignores TBBT_PAYMENTS_ADAPTER=fake",
+  isFakePaymentsAdapterEnabled() === false,
+);
+check(
+  "production fake adapter does not mark the platform configured",
+  isStripePlatformConfigured() === false,
+);
+process.env.VERCEL_ENV = "preview";
+process.env.TBBT_PAYMENTS_ADAPTER = "fake";
+check(
+  "preview still allows the fake adapter for tests",
+  isFakePaymentsAdapterEnabled() === true && isStripePlatformConfigured() === true,
+);
+restorePaymentsEnv();
+
 console.log("\nUNIT — customer Pay CTAs stay hidden without an app URL");
 check(
   "Pay Invoice requires app URL even when Stripe is ready",
@@ -155,6 +191,26 @@ const goLiveSrc = readFileSync(
   new URL("../src/lib/payments/go-live.ts", import.meta.url),
   "utf8",
 );
+const envExampleSrc = readFileSync(
+  new URL("../.env.example", import.meta.url),
+  "utf8",
+);
+const serviceSrc = readFileSync(
+  new URL("../src/lib/payments/service.ts", import.meta.url),
+  "utf8",
+);
+const adapterSrc = readFileSync(
+  new URL("../src/lib/payments/stripe-adapter.ts", import.meta.url),
+  "utf8",
+);
+const providerSrc = readFileSync(
+  new URL("../src/lib/payments/provider.ts", import.meta.url),
+  "utf8",
+);
+const configSrc = readFileSync(
+  new URL("../src/lib/payments/config.ts", import.meta.url),
+  "utf8",
+);
 
 check(
   "dashboard shows owner go-live honesty",
@@ -170,6 +226,110 @@ check(
   "Connect Stripe is disabled when the app URL is missing",
   settingsSrc.includes("!snapshot.payment.platformConfigured") &&
     settingsSrc.includes("!snapshot.payment.appUrlConfigured"),
+);
+check(
+  "not created shows Connect Stripe",
+  stripeConnectActionLabel("not_connected") === "Connect Stripe",
+);
+check(
+  "incomplete onboarding shows Continue Stripe setup",
+  stripeConnectActionLabel("setup_required", "retrieve_failed") === "Continue Stripe setup" &&
+    stripeConnectActionLabel("setup_required", "not_ready") === "Continue Stripe setup",
+);
+check(
+  "complete onboarding hides the setup action",
+  stripeConnectActionLabel("connected", "v1_charges_enabled") === null,
+);
+check(
+  "Settings Setup Required has Continue Stripe setup instead of a circular Open Estimates link",
+  settingsSrc.includes("stripeConnectActionLabel") &&
+    settingsSrc.includes("ConnectStripeButton") &&
+    settingsSrc.includes("snapshot.payment.offerOnboarding") &&
+    settingsSrc.includes("showSettingsLink={false}"),
+);
+check(
+  "hosted Checkout still charges the business connected account",
+  readFileSync(new URL("../src/lib/payments/stripe-adapter.ts", import.meta.url), "utf8").includes(
+    "{ stripeAccount: input.connectedAccountId }",
+  ) &&
+    readFileSync(new URL("../src/app/api/stripe/webhook/route.ts", import.meta.url), "utf8").includes(
+      "verifyStripeWebhookPayload",
+    ) &&
+    readFileSync(new URL("../src/lib/stripe-webhook-dispatch.ts", import.meta.url), "utf8").includes(
+      "constructStripeWebhookEvent",
+    ) &&
+    readFileSync(new URL("../src/lib/stripe-webhook-dispatch.ts", import.meta.url), "utf8").includes(
+      "applyVerifiedCheckoutPayment",
+    ),
+);
+check(
+  "Connect onboarding logs a redacted Stripe type/code instead of swallowing the failure",
+  readFileSync(new URL("../src/app/actions/payments.ts", import.meta.url), "utf8").includes(
+    "logStripeConnectOnboardingError",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "isUnknownConnectedAccountError",
+    ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      '"not_found"',
+    ) &&
+    !readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      "acct_",
+    ),
+);
+check(
+  "v2 Account Link forbidden falls back to v1 instead of replacing the stored account",
+  readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+    "shouldFallBackToV1AccountLink",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      '"forbidden"',
+    ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-adapter.ts", import.meta.url), "utf8").includes(
+      "stripe.accountLinks.create",
+    ) &&
+    !readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      "acct_",
+    ),
+);
+check(
+  "Connect onboarding UI includes type/param/status when Stripe omits a code",
+  readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+    "stripeConnectOnboardingFailureIdentifier",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      "redactedStripeErrorMessage",
+    ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      "param=${",
+    ),
+);
+check(
+  "v1 Account Link for an account not on this platform is treated as stale",
+  readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+    "not connected to your platform or does not exist",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "isUnknownConnectedAccountError",
+    ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "replaceAccountId",
+    ),
+);
+check(
+  "stale-account replacement allows cs_test_ history and blocks cs_live_ or unknown sessions",
+  readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+    "connectedAccountReplacementBlockReason",
+  ) &&
+    readFileSync(new URL("../src/lib/payments/stripe-errors.ts", import.meta.url), "utf8").includes(
+      '"cs_live_"',
+    ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "connectedAccountReplacementBlockReason",
+    ) &&
+    readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8").includes(
+      "live Stripe payments already exist",
+    ),
 );
 check(
   "owner invoice ops copies /p/{token}/invoice",
@@ -211,6 +371,30 @@ check(
 check(
   "go-live helper does not invent a fake payment provider",
   !goLiveSrc.includes("TBBT_PAYMENTS_ADAPTER") && !goLiveSrc.includes("fake"),
+);
+check(
+  "production webhook destination is documented",
+  envExampleSrc.includes("https://www.collproreno.com/api/stripe/webhook") &&
+    envExampleSrc.includes("checkout.session.completed") &&
+    envExampleSrc.includes("Connected accounts"),
+);
+check(
+  "hosted Checkout does not require a publishable key",
+  !adapterSrc.includes("NEXT_PUBLIC_STRIPE") &&
+    !adapterSrc.includes("publishable") &&
+    envExampleSrc.includes("never a publishable key"),
+);
+check(
+  "deposit apply rejects amount mismatches against remaining due",
+  serviceSrc.includes("async function applyVerifiedDepositPayment") &&
+    serviceSrc.includes('reason: "amount_mismatch"') &&
+    serviceSrc.includes("requiredDepositFromLines"),
+);
+check(
+  "production never enables the fake payments adapter",
+  configSrc.includes('process.env.VERCEL_ENV === "production"') &&
+    providerSrc.includes("isFakePaymentsAdapterEnabled") &&
+    envExampleSrc.includes("Never set TBBT_PAYMENTS_ADAPTER=fake"),
 );
 
 console.log(`\n${passed} passed, ${failed} failed`);
