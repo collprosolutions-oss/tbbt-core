@@ -15,7 +15,6 @@ import {
   Wrench,
 } from "lucide-react";
 import {
-  TbbtDashboardMock,
   TbbtGrowMock,
   TbbtRunPhones,
   TbbtWebsiteMock,
@@ -88,26 +87,18 @@ export function TbbtHomePage() {
           </div>
 
           <div className="tbbt-hero-visual">
-            <p className="tbbt-script tbbt-hero-script">{TBBT_HERO_SCRIPT}</p>
-            <aside className="tbbt-platform-card" aria-hidden="true">
-              <strong>One platform. Any trade.</strong>
-              <ul>
-                <li>Simple to use</li>
-                <li>Professional results</li>
-                <li>Built for real work</li>
-                <li>Affordable</li>
-                <li>No long-term contracts</li>
-                <li>Grows with you</li>
-              </ul>
-            </aside>
             <div className="tbbt-hero-pro">
+              <p className="tbbt-script tbbt-hero-script">{TBBT_HERO_SCRIPT}</p>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src="/brand/tbbt-marketing/hero-tradespro.png"
                 alt="Trades professional in the shop"
               />
             </div>
-            <TbbtDashboardMock />
+            <div className="tbbt-hero-devices" aria-hidden="true">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/brand/tbbt-marketing/hero-devices.png" alt="" />
+            </div>
           </div>
 
           <div className="tbbt-benefit-row">
