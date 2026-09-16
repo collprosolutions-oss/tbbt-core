@@ -1,0 +1,795 @@
+.tbbt-site {
+  --tbbt-bg: #070b14;
+  --tbbt-navy: #0c1424;
+  --tbbt-panel: #121b2e;
+  --tbbt-panel-2: #18233a;
+  --tbbt-orange: #f26522;
+  --tbbt-orange-hot: #ff7a38;
+  --tbbt-ink: #f5f7fb;
+  --tbbt-muted: #9aa6bd;
+  --tbbt-line: rgba(255, 255, 255, 0.1);
+  --tbbt-line-strong: rgba(255, 255, 255, 0.16);
+  --tbbt-max: 88rem;
+  --tbbt-header-h: 4.85rem;
+  --tbbt-logo-h: 2.8rem;
+  --tbbt-logo-w: auto;
+  color: var(--tbbt-ink);
+  background:
+    radial-gradient(1200px 480px at 80% -10%, rgba(242, 101, 34, 0.12), transparent 55%),
+    radial-gradient(900px 500px at 0% 20%, rgba(36, 72, 140, 0.22), transparent 50%),
+    var(--tbbt-bg);
+  min-height: 100%;
+  overflow: visible;
+}
+
+.tbbt-site a {
+  color: inherit;
+}
+
+.tbbt-wrap {
+  width: min(100% - 2rem, var(--tbbt-max));
+  margin-inline: auto;
+}
+
+.tbbt-header {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  overflow: visible;
+  border-bottom: 1px solid var(--tbbt-line);
+  background: color-mix(in srgb, var(--tbbt-bg) 92%, transparent);
+  backdrop-filter: blur(16px);
+}
+
+.tbbt-header-inner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  height: var(--tbbt-header-h);
+  min-height: var(--tbbt-header-h);
+}
+
+.tbbt-brand {
+  display: grid;
+  place-items: center;
+  margin-right: auto;
+  z-index: 70;
+  width: var(--tbbt-logo-w);
+  height: var(--tbbt-logo-h);
+  overflow: hidden;
+  text-decoration: none;
+  background: #07101d;
+  flex: 0 0 auto;
+}
+
+.tbbt-brand img {
+  display: block;
+  width: auto;
+  height: var(--tbbt-logo-h);
+  max-width: none;
+}
+
+.tbbt-logo {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  text-decoration: none;
+}
+
+.tbbt-logo img {
+  height: 2.55rem;
+  width: auto;
+}
+
+.tbbt-footer .tbbt-logo img {
+  height: 2.55rem;
+  width: auto;
+}
+
+.tbbt-logo-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.tbbt-logo-text strong {
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+}
+
+.tbbt-logo-text span {
+  color: var(--tbbt-muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+}
+
+.tbbt-nav {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.05rem;
+}
+
+.tbbt-nav a {
+  text-decoration: none;
+  color: var(--tbbt-muted);
+  font-size: 0.95rem;
+  font-weight: 550;
+  padding: 0.45rem 0.85rem;
+  border-radius: 999px;
+}
+
+.tbbt-nav a[aria-current="page"],
+.tbbt-nav a:hover {
+  color: var(--tbbt-ink);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tbbt-header-actions {
+  display: none;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.tbbt-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid var(--tbbt-line);
+  border-radius: 0.7rem;
+  background: var(--tbbt-panel);
+  color: var(--tbbt-ink);
+}
+
+.tbbt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.95rem;
+  padding: 0.62rem 1.28rem;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.94rem;
+  text-decoration: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.tbbt-btn--primary {
+  background: var(--tbbt-orange);
+  color: #1a0d06;
+  box-shadow: 0 8px 24px rgba(242, 101, 34, 0.22);
+}
+
+.tbbt-btn--primary:hover {
+  background: var(--tbbt-orange-hot);
+}
+
+.tbbt-btn--ghost {
+  background: transparent;
+  color: var(--tbbt-ink);
+  border-color: var(--tbbt-line-strong);
+}
+
+.tbbt-btn--ghost:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tbbt-btn--lg {
+  min-height: 3.5rem;
+  padding-inline: 1.55rem;
+  font-size: 1.05rem;
+}
+
+.tbbt-soon {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tbbt-orange);
+}
+
+.tbbt-mobile-panel {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.75rem 0 1.25rem;
+  border-top: 1px solid var(--tbbt-line);
+}
+
+.tbbt-mobile-panel a {
+  text-decoration: none;
+  padding: 0.7rem 0.2rem;
+  color: var(--tbbt-ink);
+}
+
+.tbbt-preview-note {
+  border-bottom: 1px solid var(--tbbt-line);
+  background: #141c2f;
+  color: var(--tbbt-muted);
+  font-size: 0.8rem;
+  padding: 0.45rem 0;
+  text-align: center;
+}
+
+.tbbt-hero {
+  display: grid;
+  gap: 2.5rem;
+  padding: 3.2rem 0 2.5rem;
+  align-items: center;
+}
+
+.tbbt-kicker {
+  color: var(--tbbt-orange);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.tbbt-hero h1 {
+  margin: 0.7rem 0 1rem;
+  font-size: clamp(2.4rem, 6vw, 4.4rem);
+  line-height: 0.98;
+  letter-spacing: -0.04em;
+  font-weight: 750;
+}
+
+.tbbt-lead {
+  color: var(--tbbt-muted);
+  font-size: 1.05rem;
+  line-height: 1.6;
+  max-width: 40rem;
+}
+
+.tbbt-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.tbbt-help-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 1.4rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tbbt-help-list li {
+  border: 1px solid var(--tbbt-line);
+  background: rgba(18, 27, 46, 0.7);
+  border-radius: 999px;
+  padding: 0.28rem 0.7rem;
+  font-size: 0.8rem;
+  color: #d5dceb;
+}
+
+.tbbt-product {
+  position: relative;
+  border: 1px solid var(--tbbt-line);
+  border-radius: 1.25rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 28%),
+    var(--tbbt-panel);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  min-height: 22rem;
+}
+
+.tbbt-product-chrome {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--tbbt-line);
+  color: var(--tbbt-muted);
+  font-size: 0.75rem;
+}
+
+.tbbt-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: #3a4660;
+}
+
+.tbbt-dot:first-child { background: #f26522; }
+
+.tbbt-product-grid {
+  display: grid;
+  grid-template-columns: 4.6rem 1fr;
+  min-height: 18rem;
+}
+
+.tbbt-product-rail {
+  border-right: 1px solid var(--tbbt-line);
+  padding: 0.7rem 0.45rem;
+  display: grid;
+  align-content: start;
+  gap: 0.45rem;
+}
+
+.tbbt-rail-item {
+  height: 0.55rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tbbt-rail-item.is-active {
+  background: var(--tbbt-orange);
+}
+
+.tbbt-product-main {
+  padding: 0.9rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.tbbt-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.tbbt-kpi {
+  border: 1px solid var(--tbbt-line);
+  border-radius: 0.75rem;
+  padding: 0.65rem;
+  background: var(--tbbt-panel-2);
+}
+
+.tbbt-kpi span {
+  display: block;
+  color: var(--tbbt-muted);
+  font-size: 0.68rem;
+}
+
+.tbbt-kpi strong {
+  font-size: 1.05rem;
+}
+
+.tbbt-rows {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tbbt-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  border: 1px solid var(--tbbt-line);
+  border-radius: 0.65rem;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.78rem;
+  background: rgba(7, 11, 20, 0.35);
+}
+
+.tbbt-phone {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  width: 8.4rem;
+  border: 1px solid var(--tbbt-line-strong);
+  border-radius: 1.1rem;
+  background: #0a101c;
+  padding: 0.55rem 0.5rem 0.7rem;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+}
+
+.tbbt-phone-bar {
+  width: 2.4rem;
+  height: 0.28rem;
+  border-radius: 999px;
+  background: #2b354b;
+  margin: 0 auto 0.55rem;
+}
+
+.tbbt-phone-card {
+  border: 1px solid var(--tbbt-line);
+  border-radius: 0.55rem;
+  padding: 0.45rem;
+  font-size: 0.62rem;
+  margin-bottom: 0.35rem;
+  background: var(--tbbt-panel);
+}
+
+.tbbt-trades-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  position: absolute;
+  left: 1rem;
+  bottom: 1rem;
+  max-width: calc(100% - 10.5rem);
+}
+
+.tbbt-chip {
+  font-size: 0.68rem;
+  border-radius: 999px;
+  border: 1px solid var(--tbbt-line);
+  padding: 0.22rem 0.5rem;
+  background: rgba(12, 20, 36, 0.88);
+}
+
+.tbbt-section {
+  padding: 3.25rem 0;
+}
+
+.tbbt-section h2 {
+  margin: 0.55rem 0 0.8rem;
+  font-size: clamp(1.8rem, 4vw, 2.7rem);
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+.tbbt-muted {
+  color: var(--tbbt-muted);
+}
+
+.tbbt-promises {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.tbbt-card,
+.tbbt-panel {
+  border: 1px solid var(--tbbt-line);
+  border-radius: 1.1rem;
+  background: color-mix(in srgb, var(--tbbt-panel) 88%, transparent);
+}
+
+.tbbt-promise {
+  padding: 1.15rem 1.2rem;
+}
+
+.tbbt-promise strong {
+  display: block;
+  letter-spacing: 0.08em;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  color: var(--tbbt-orange);
+  margin-bottom: 0.4rem;
+}
+
+.tbbt-trade-grid,
+.tbbt-feature-grid,
+.tbbt-value-grid,
+.tbbt-resource-grid {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.tbbt-trade-card,
+.tbbt-feature-card,
+.tbbt-value-card,
+.tbbt-resource-card {
+  padding: 1.15rem 1.2rem;
+}
+
+.tbbt-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.18rem 0.5rem;
+  border: 1px solid var(--tbbt-line);
+  color: var(--tbbt-muted);
+}
+
+.tbbt-badge--available {
+  color: #1a0d06;
+  background: var(--tbbt-orange);
+  border-color: transparent;
+}
+
+.tbbt-badge--coming {
+  color: var(--tbbt-ink);
+  background: rgba(242, 101, 34, 0.16);
+  border-color: rgba(242, 101, 34, 0.35);
+}
+
+.tbbt-pillars {
+  display: grid;
+  gap: 1rem;
+}
+
+.tbbt-pillar {
+  padding: 1.4rem 1.35rem;
+}
+
+.tbbt-pillar h3 {
+  margin: 0.2rem 0 0.7rem;
+  font-size: 1.45rem;
+}
+
+.tbbt-pillar ul {
+  margin: 0.9rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tbbt-pillar li {
+  color: #d7deec;
+  padding-left: 0.9rem;
+  position: relative;
+}
+
+.tbbt-pillar li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55rem;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 999px;
+  background: var(--tbbt-orange);
+}
+
+.tbbt-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.tbbt-flow-step {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.tbbt-flow-node {
+  border: 1px solid var(--tbbt-line);
+  background: var(--tbbt-panel-2);
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.tbbt-flow-arrow {
+  color: var(--tbbt-orange);
+  font-weight: 700;
+}
+
+.tbbt-cta-band {
+  padding: 1.6rem;
+  display: grid;
+  gap: 1rem;
+  background:
+    linear-gradient(90deg, rgba(242, 101, 34, 0.16), transparent 55%),
+    var(--tbbt-panel);
+}
+
+.tbbt-price {
+  max-width: 36rem;
+  padding: 1.8rem 1.5rem;
+}
+
+.tbbt-price .tbbt-amount {
+  font-size: 3rem;
+  letter-spacing: -0.04em;
+  margin: 0.4rem 0;
+}
+
+.tbbt-price ul {
+  margin: 1.1rem 0 1.4rem;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tbbt-price li {
+  padding-left: 1rem;
+  position: relative;
+  color: #d7deec;
+}
+
+.tbbt-price li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  color: var(--tbbt-orange);
+}
+
+.tbbt-footer {
+  border-top: 1px solid var(--tbbt-line);
+  padding: 1.2rem 0;
+  background: #05080f;
+}
+
+.tbbt-footer-grid {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.tbbt-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem 1.1rem;
+}
+
+.tbbt-footer a {
+  color: var(--tbbt-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+
+.tbbt-footer a:hover {
+  color: var(--tbbt-ink);
+}
+
+.tbbt-motto {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.tbbt-page-hero {
+  padding: 2.8rem 0 1.2rem;
+}
+
+.tbbt-page-hero h1 {
+  margin: 0.45rem 0 0.7rem;
+  font-size: clamp(2.1rem, 5vw, 3.4rem);
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+}
+
+.tbbt-legal {
+  max-width: 44rem;
+  display: grid;
+  gap: 0.9rem;
+  padding-bottom: 3rem;
+}
+
+.tbbt-legal h2 {
+  font-size: 1.2rem;
+  margin: 0.6rem 0 0;
+}
+
+.tbbt-video-note {
+  margin-top: 0.85rem;
+  border: 1px dashed var(--tbbt-line-strong);
+  border-radius: 0.9rem;
+  padding: 0.9rem 1rem;
+  color: var(--tbbt-muted);
+  font-size: 0.92rem;
+  background: rgba(18, 27, 46, 0.55);
+}
+
+.tbbt-asset-slot {
+  border: 1px dashed var(--tbbt-line-strong);
+  border-radius: 0.9rem;
+  min-height: 8rem;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: var(--tbbt-muted);
+  font-size: 0.78rem;
+  padding: 1rem;
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255, 255, 255, 0.015),
+      rgba(255, 255, 255, 0.015) 8px,
+      transparent 8px,
+      transparent 16px
+    );
+}
+
+@media (min-width: 720px) {
+  .tbbt-promises {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tbbt-trade-grid,
+  .tbbt-feature-grid,
+  .tbbt-value-grid,
+  .tbbt-resource-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tbbt-footer-grid {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  .tbbt-footer nav {
+    justify-content: center;
+  }
+}
+
+@media (min-width: 900px) {
+  .tbbt-site {
+    --tbbt-logo-h: 6.15rem;
+    --tbbt-logo-w: 10.6rem;
+  }
+
+  .tbbt-brand {
+    position: absolute;
+    left: 0;
+    top: 0.28rem;
+    margin-right: 0;
+    border-radius: 0 0 0.7rem 0.7rem;
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.42);
+  }
+
+  .tbbt-brand img {
+    width: 148%;
+    height: 148%;
+    object-fit: cover;
+    object-position: 50% 46%;
+    transform: translateY(-1%);
+  }
+
+  .tbbt-nav {
+    display: flex;
+    margin-left: calc(var(--tbbt-logo-w) + 1.15rem);
+    margin-right: auto;
+  }
+
+  .tbbt-header-actions {
+    display: flex;
+  }
+
+  .tbbt-menu-btn {
+    display: none;
+  }
+
+  .tbbt-nav a {
+    padding: 0.4rem 0.62rem;
+    font-size: 0.9rem;
+  }
+}
+
+@media (min-width: 960px) {
+  .tbbt-hero {
+    grid-template-columns: 1.05fr 0.95fr;
+    padding-top: 4.2rem;
+  }
+
+  .tbbt-promises {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .tbbt-trade-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .tbbt-feature-grid,
+  .tbbt-value-grid,
+  .tbbt-resource-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tbbt-pillars {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  .tbbt-site {
+    --tbbt-logo-h: 8.9rem;
+    --tbbt-logo-w: 14.4rem;
+  }
+
+  .tbbt-nav a {
+    padding: 0.45rem 0.85rem;
+    font-size: 0.95rem;
+  }
+
+  .tbbt-feature-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
