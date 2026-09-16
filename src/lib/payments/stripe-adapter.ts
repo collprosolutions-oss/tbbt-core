@@ -7,7 +7,9 @@ import {
 } from "@/lib/payments/readiness";
 import {
   logStripeConnectOnboardingError,
+  redactedStripeErrorMessage,
   shouldFallBackToV1AccountLink,
+  summarizeStripeError,
 } from "@/lib/payments/stripe-errors";
 import type {
   CreateConnectedAccountInput,
@@ -33,15 +35,14 @@ const ACCOUNT_READINESS_INCLUDE = [
 ] as const;
 
 /**
- * Deterministic invoice Checkout methods. Apple Pay / Google Pay stay
- * available through `card` when the customer device is eligible. Link is
- * omitted so Klarna-on-Link cannot appear.
+ * Checkout methods this connected account can actually charge.
+ * Account creation only requests merchant card_payments. Asking Stripe
+ * for ACH or Cash App, or mixing an explicit method list with Link wallet
+ * display options, makes live Checkout session create fail; Pay Invoice
+ * then redirects to checkout=unavailable. Apple Pay / Google Pay stay on
+ * card. Link / Klarna / Affirm are omitted.
  */
-export const INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES = [
-  "card",
-  "cashapp",
-  "us_bank_account",
-] as const;
+export const INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES = ["card"] as const;
 
 function v1RequirementKeys(
   requirements: Stripe.Account.Requirements | null | undefined,
@@ -84,40 +85,52 @@ async function createStripeCheckout(input: {
 }) {
   const stripe = requireStripe();
   const metadata = checkoutMetadata(input);
-  const session = await stripe.checkout.sessions.create(
-    {
-      mode: "payment",
-      payment_method_types: [...INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES],
-      wallet_options: {
-        link: { display: "never" },
-      },
-      line_items: [
-        {
-          quantity: 1,
-          price_data: {
-            currency: input.currency,
-            unit_amount: input.amountCents,
-            product_data: { name: input.description },
+  try {
+    const session = await stripe.checkout.sessions.create(
+      {
+        mode: "payment",
+        payment_method_types: [...INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES],
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: input.currency,
+              unit_amount: input.amountCents,
+              product_data: { name: input.description },
+            },
           },
-        },
-      ],
-      success_url: input.successUrl,
-      cancel_url: input.cancelUrl,
-      metadata,
-      payment_intent_data: { metadata },
-    },
-    { stripeAccount: input.connectedAccountId },
-  );
-  if (!session.url) {
-    throw new Error("Stripe did not return a checkout URL.");
+        ],
+        success_url: input.successUrl,
+        cancel_url: input.cancelUrl,
+        metadata,
+        payment_intent_data: { metadata },
+      },
+      { stripeAccount: input.connectedAccountId },
+    );
+    if (!session.url) {
+      throw new Error("Stripe did not return a checkout URL.");
+    }
+    return {
+      id: session.id,
+      url: session.url,
+      connectedAccountId: input.connectedAccountId,
+      amountCents: input.amountCents,
+      currency: input.currency,
+    };
+  } catch (error) {
+    const summary = summarizeStripeError(error);
+    console.info(
+      "[payments] checkout.sessions.create",
+      JSON.stringify({
+        type: summary.type,
+        code: summary.code,
+        statusCode: summary.statusCode,
+        param: summary.param,
+        message: redactedStripeErrorMessage(error),
+      }),
+    );
+    throw error;
   }
-  return {
-    id: session.id,
-    url: session.url,
-    connectedAccountId: input.connectedAccountId,
-    amountCents: input.amountCents,
-    currency: input.currency,
-  };
 }
 
 function verifiedFromSession(

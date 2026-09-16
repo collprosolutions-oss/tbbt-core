@@ -645,18 +645,20 @@ try {
       proxySrc.includes("isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname)"),
   );
   check(
-    "invoice checkout uses an explicit card/cashapp/us_bank_account allowlist",
-    INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.join(",") === "card,cashapp,us_bank_account" &&
+    "invoice checkout uses an explicit card allowlist the connected account can charge",
+    INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.join(",") === "card" &&
       adapterSrc.includes("payment_method_types: [...INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES]"),
   );
   check(
-    "invoice checkout does not enable Link, Affirm, Klarna, or a payment method configuration",
+    "invoice checkout does not enable Link, Affirm, Klarna, Cash App, ACH, or a payment method configuration",
     !INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.includes("link") &&
       !INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.includes("affirm") &&
       !INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.includes("klarna") &&
+      !INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.includes("cashapp") &&
+      !INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES.includes("us_bank_account") &&
       !adapterSrc.includes("payment_method_configuration") &&
       !adapterSrc.includes("paymentMethodConfigurations") &&
-      adapterSrc.includes('display: "never"'),
+      !adapterSrc.includes("wallet_options"),
   );
   check(
     "Settings payment card does not render Stripe readiness diagnostics",
