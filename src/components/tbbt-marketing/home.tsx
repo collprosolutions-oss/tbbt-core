@@ -14,10 +14,6 @@ import {
   Users,
   Wrench,
 } from "lucide-react";
-import {
-  TbbtGrowMock,
-  TbbtRunPhones,
-} from "@/components/tbbt-marketing/product-preview";
 import { TbbtWatchVideoButton } from "@/components/tbbt-marketing/watch-video";
 import "@/components/tbbt-marketing/tbbt-home.css";
 import {
@@ -26,7 +22,6 @@ import {
   TBBT_HERO_HEADLINE,
   TBBT_HERO_SCRIPT,
   TBBT_HERO_SUPPORT_LINES,
-  TBBT_PILLARS,
   TBBT_PROMISE_STRIP,
   TBBT_SIGN_UP_HREF,
   TBBT_TRADE_STATUS_LABEL,
@@ -49,8 +44,6 @@ const WORKFLOW_ICONS = [
   Smile,
   RefreshCw,
 ] as const;
-
-const [, runPillar, growPillar] = TBBT_PILLARS;
 
 function tradeBadgeClass(status: (typeof TBBT_TRADES)[number]["status"]) {
   if (status === "available") return "tbbt-badge tbbt-badge--available";
@@ -172,38 +165,22 @@ export function TbbtHomePage() {
                 />
               </Link>
             </article>
-            <article className="tbbt-brg-card">
-              <p className="tbbt-kicker">{runPillar.kicker}</p>
-              <h3>{runPillar.title}</h3>
-              <div className="tbbt-brg-body">
-                <div className="tbbt-device-run">
-                  <TbbtRunPhones />
-                </div>
-                <ul className="tbbt-brg-points">
-                  {runPillar.points.map((point) => (
-                    <li key={point}>{point}</li>
-                  ))}
-                </ul>
-              </div>
-              <Link href="#connected" className="tbbt-btn tbbt-btn--ghost">
-                See How It Works
-                <ArrowRight size={16} />
+            <article className="tbbt-brg-card tbbt-brg-card--run-photo">
+              <Link href="#connected" className="tbbt-brg-run-photo">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/brand/tbbt-marketing/run-card.png"
+                  alt="RUN — Manage Your Day With Ease"
+                />
               </Link>
             </article>
-            <article className="tbbt-brg-card">
-              <p className="tbbt-kicker">{growPillar.kicker}</p>
-              <h3>{growPillar.title}</h3>
-              <div className="tbbt-brg-body">
-                <TbbtGrowMock />
-                <ul className="tbbt-brg-points">
-                  {growPillar.points.map((point) => (
-                    <li key={point}>{point}</li>
-                  ))}
-                </ul>
-              </div>
-              <Link href="/features" className="tbbt-btn tbbt-btn--ghost">
-                See the Coach
-                <ArrowRight size={16} />
+            <article className="tbbt-brg-card tbbt-brg-card--grow-photo">
+              <Link href="/features" className="tbbt-brg-grow-photo">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/brand/tbbt-marketing/grow-card.png"
+                  alt="GROW — A Business Partner That Works for You"
+                />
               </Link>
             </article>
           </div>

@@ -498,19 +498,25 @@
   align-content: start;
 }
 
-.tbbt-brg-card--build-photo {
+.tbbt-brg-card--build-photo,
+.tbbt-brg-card--run-photo,
+.tbbt-brg-card--grow-photo {
   padding: 0;
   overflow: hidden;
   align-content: stretch;
   grid-template-rows: 1fr;
 }
 
-.tbbt-brg-build-photo {
+.tbbt-brg-build-photo,
+.tbbt-brg-run-photo,
+.tbbt-brg-grow-photo {
   display: block;
   height: 100%;
 }
 
-.tbbt-brg-card--build-photo img {
+.tbbt-brg-card--build-photo img,
+.tbbt-brg-card--run-photo img,
+.tbbt-brg-card--grow-photo img {
   display: block;
   width: 100%;
   height: 100%;
@@ -1282,7 +1288,9 @@
     overflow: hidden;
   }
 
-  .tbbt-brg-card--build-photo {
+  .tbbt-brg-card--build-photo,
+  .tbbt-brg-card--run-photo,
+  .tbbt-brg-card--grow-photo {
     padding: 0;
     align-content: stretch;
   }
@@ -1582,7 +1590,9 @@
     padding: 1.1rem 1rem 1.2rem;
   }
 
-  .tbbt-brg-card--build-photo {
+  .tbbt-brg-card--build-photo,
+  .tbbt-brg-card--run-photo,
+  .tbbt-brg-card--grow-photo {
     padding: 0;
   }
 
