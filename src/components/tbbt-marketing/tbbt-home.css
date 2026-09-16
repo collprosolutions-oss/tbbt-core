@@ -1057,15 +1057,16 @@
   .tbbt-hero-devices {
     position: absolute;
     right: -0.4rem;
-    top: 0.15rem;
+    top: 0;
+    bottom: 0;
     width: 76%;
-    height: 19.15rem;
+    height: auto;
     margin-top: 0;
     z-index: 4;
     pointer-events: none;
     display: flex;
     justify-content: flex-end;
-    align-items: flex-start;
+    align-items: stretch;
   }
 
   .tbbt-hero-devices img {
@@ -1074,7 +1075,7 @@
     min-width: 0;
     min-height: 0;
     object-fit: contain;
-    object-position: top right;
+    object-position: right bottom;
   }
 
   .tbbt-hero-pro {
