@@ -28,8 +28,8 @@ export function TbbtMarketingShell({
     <div className={`tbbt-site ${tbbtScript.variable}`}>
       {preview ? (
         <div className="tbbt-preview-note">
-          Previewing TBBT marketing pages. Canonical site: tbbtools.com. CollPro
-          remains at collproreno.com.
+          Previewing TBBT marketing pages. Canonical site: www.tbbtool.com.
+          CollPro remains at collproreno.com.
         </div>
       ) : null}
       <TbbtMarketingHeader homeHref={homeHref} />

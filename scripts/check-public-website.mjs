@@ -57,6 +57,7 @@ const {
 const { groupServiceCatalogItemsByCategory } = await import("@/lib/service-catalog-category");
 const { isPublicWebsitePath } = await import("@/lib/public-website-paths");
 const { isStripeWebhookPath, STRIPE_WEBHOOK_PATH } = await import("@/lib/stripe-webhook-path");
+const { shouldServeTbbtMarketingHome } = await import("@/lib/tbbt-marketing-host");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:43217";
 const baseUrl = process.env.DATABASE_URL;
@@ -225,6 +226,12 @@ check(
     !isPublicWebsitePath("/dashboard") &&
     homeSrc.includes("PublicHome") &&
     homeSrc.includes("shouldServeTbbtMarketingHome"),
+);
+check(
+  "CollPro production hosts keep CollPro `/` while www.tbbtool.com gets TBBT `/`",
+  !shouldServeTbbtMarketingHome("www.collproreno.com") &&
+    !shouldServeTbbtMarketingHome("collproreno.com") &&
+    shouldServeTbbtMarketingHome("www.tbbtool.com"),
 );
 check(
   "Stripe webhook path is not a public website path and is an exact route",

@@ -4,6 +4,8 @@ import { SESSION_COOKIE } from "@/lib/cookies";
 import { navigationRedirectUrl } from "@/lib/navigation-origin";
 import { isPublicWebsitePath } from "@/lib/public-website-paths";
 import { isStripeWebhookPath } from "@/lib/stripe-webhook-path";
+import { tbbtApexWwwRedirectLocation } from "@/lib/tbbt-marketing-host";
+import { firstHeaderHost } from "@/lib/vercel-app-host";
 
 const AUTH_PATHS = ["/sign-in", "/sign-up"];
 
@@ -29,6 +31,15 @@ function redirectOnCurrentDeployment(path: string, request: NextRequest) {
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const apexLocation = tbbtApexWwwRedirectLocation(
+    firstHeaderHost(request.headers.get("host")),
+    pathname,
+    request.nextUrl.search,
+  );
+  if (apexLocation) {
+    return NextResponse.redirect(apexLocation, 308);
+  }
+
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
 
   // `/` is always the public website. A signed-in owner still reaches

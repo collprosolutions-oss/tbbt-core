@@ -2,15 +2,17 @@
  * Hostname routing for the TBBT corporate marketing site vs CollPro's
  * public tenant website.
  *
- * Intended production split:
- *   tbbtools.com / www.tbbtools.com  → TBBT marketing homepage at `/`
+ * Intended production split (same Vercel project):
+ *   tbbtool.com                     → 308 to https://www.tbbtool.com
+ *   www.tbbtool.com                 → TBBT marketing homepage at `/`
  *   collproreno.com / www.collproreno.com → CollPro public website at `/`
  *
- * Marketing inner routes (/features, /trades, /pricing, /about,
- * /resources, /privacy, /terms, /contact, and preview-only /home) are
- * always rendered so local and Vercel Preview can review them without
- * the corporate domain. Those hosts must noindex that copy; canonical
- * URLs always point at https://tbbtools.com.
+ * Legacy tbbtools.com hosts still render TBBT if they ever resolve, but
+ * they are not canonical. Marketing inner routes (/features, /trades,
+ * /pricing, /about, /resources, /privacy, /terms, /contact, and
+ * preview-only /home) are always rendered so local and Vercel Preview
+ * can review them without the corporate domain. Those hosts must
+ * noindex that copy; canonical URLs always point at https://www.tbbtool.com.
  *
  * Local `/` stays CollPro unless TBBT_MARKETING_SITE=1 or the Host is
  * listed in TBBT_MARKETING_HOST. CollPro production hosts never serve
@@ -21,12 +23,15 @@
  */
 import { firstHeaderHost } from "@/lib/vercel-app-host";
 
-export const TBBT_MARKETING_CANONICAL_HOST = "tbbtools.com";
-export const TBBT_MARKETING_CANONICAL_ORIGIN = "https://tbbtools.com";
+export const TBBT_MARKETING_APEX_HOST = "tbbtool.com";
+export const TBBT_MARKETING_CANONICAL_HOST = "www.tbbtool.com";
+export const TBBT_MARKETING_CANONICAL_ORIGIN = "https://www.tbbtool.com";
 
 export const TBBT_MARKETING_PRODUCTION_HOSTS = [
-  "tbbtools.com",
+  "www.tbbtool.com",
+  "tbbtool.com",
   "www.tbbtools.com",
+  "tbbtools.com",
 ] as const;
 
 export const COLLPRO_PUBLIC_HOSTS = [
@@ -96,12 +101,33 @@ export function isTbbtMarketingIndexableHost(
   host: string | null | undefined,
 ): boolean {
   const normalized = firstHeaderHost(host);
-  return Boolean(
-    normalized &&
-      (TBBT_MARKETING_PRODUCTION_HOSTS as readonly string[]).includes(
-        normalized,
-      ),
-  );
+  return normalized === TBBT_MARKETING_CANONICAL_HOST;
+}
+
+export function isTbbtMarketingApexHost(
+  host: string | null | undefined,
+): boolean {
+  return firstHeaderHost(host) === TBBT_MARKETING_APEX_HOST;
+}
+
+/**
+ * Permanent apex → www redirect for tbbtool.com only.
+ * CollPro apex (collproreno.com) is not rewritten here.
+ */
+export function tbbtApexWwwRedirectLocation(
+  host: string | null | undefined,
+  pathname: string,
+  search = "",
+): string | null {
+  if (!isTbbtMarketingApexHost(host)) return null;
+  const path = !pathname || pathname === "/" ? "/" : pathname.startsWith("/") ? pathname : `/${pathname}`;
+  const suffix =
+    !search || search === "?"
+      ? ""
+      : search.startsWith("?")
+        ? search
+        : `?${search}`;
+  return `${TBBT_MARKETING_CANONICAL_ORIGIN}${path}${suffix}`;
 }
 
 function isEnabledFlag(value: string | null | undefined): boolean {

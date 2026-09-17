@@ -26,6 +26,8 @@ export const R2_BROWSER_UPLOAD_ALLOWED_ORIGINS = [
   "https://collproreno.com",
   "https://tbbtools.com",
   "https://www.tbbtools.com",
+  "https://tbbtool.com",
+  "https://www.tbbtool.com",
   "https://collpro-reno.vercel.app",
   "https://collpro-reno-git-cursor-estimate-pri-d221ac-collpro-s-projects5.vercel.app",
   "http://localhost:43217",
