@@ -15,10 +15,12 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 const {
   extraTbbtMarketingHosts,
   isCollProPublicHost,
+  isTbbtMarketingApexHost,
   isTbbtMarketingHost,
   isTbbtMarketingIndexableHost,
   isTbbtMarketingPublicPath,
   shouldServeTbbtMarketingHome,
+  tbbtApexWwwRedirectLocation,
   tbbtCanonicalUrl,
   tbbtMarketingHomeHref,
   tbbtMarketingRobots,
@@ -61,20 +63,51 @@ function readRepo(path) {
 
 console.log("\nUNIT — Hostname routing");
 check(
-  "tbbtools.com is the TBBT marketing host and is indexable",
+  "www.tbbtool.com is the TBBT marketing host and is indexable",
+  isTbbtMarketingHost("www.tbbtool.com") &&
+    isTbbtMarketingHost("tbbtool.com") &&
+    isTbbtMarketingIndexableHost("www.tbbtool.com") &&
+    isTbbtMarketingIndexableHost("www.tbbtool.com:443") &&
+    !isTbbtMarketingIndexableHost("tbbtool.com"),
+);
+check(
+  "Legacy tbbtools.com hosts still render TBBT but are not canonical",
   isTbbtMarketingHost("tbbtools.com") &&
     isTbbtMarketingHost("www.tbbtools.com") &&
-    isTbbtMarketingIndexableHost("tbbtools.com") &&
-    isTbbtMarketingIndexableHost("www.tbbtools.com:443"),
+    !isTbbtMarketingIndexableHost("tbbtools.com") &&
+    !isTbbtMarketingIndexableHost("www.tbbtools.com"),
 );
 check(
   "collproreno.com is never the TBBT marketing homepage",
   isCollProPublicHost("www.collproreno.com") &&
+    isCollProPublicHost("collproreno.com") &&
     !shouldServeTbbtMarketingHome("collproreno.com") &&
     !shouldServeTbbtMarketingHome("www.collproreno.com", {
       marketingSite: "1",
       extraHosts: "collproreno.com",
-    }),
+    }) &&
+    !isTbbtMarketingHost("www.collproreno.com"),
+);
+check(
+  "Same-project coexistence: TBBT and CollPro hosts never share a homepage",
+  shouldServeTbbtMarketingHome("www.tbbtool.com") &&
+    shouldServeTbbtMarketingHome("tbbtool.com") &&
+    !shouldServeTbbtMarketingHome("www.collproreno.com") &&
+    !shouldServeTbbtMarketingHome("collproreno.com") &&
+    tbbtMarketingHomeHref("www.tbbtool.com") === "/" &&
+    tbbtMarketingHomeHref("www.collproreno.com") === "/home",
+);
+check(
+  "tbbtool.com apex 308s to www.tbbtool.com; CollPro apex is unchanged",
+  isTbbtMarketingApexHost("tbbtool.com") &&
+    !isTbbtMarketingApexHost("www.tbbtool.com") &&
+    !isTbbtMarketingApexHost("collproreno.com") &&
+    tbbtApexWwwRedirectLocation("tbbtool.com", "/") === "https://www.tbbtool.com/" &&
+    tbbtApexWwwRedirectLocation("tbbtool.com", "/pricing", "?ref=1") ===
+      "https://www.tbbtool.com/pricing?ref=1" &&
+    tbbtApexWwwRedirectLocation("www.tbbtool.com", "/") === null &&
+    tbbtApexWwwRedirectLocation("collproreno.com", "/") === null &&
+    tbbtApexWwwRedirectLocation("www.collproreno.com", "/home") === null,
 );
 check(
   "localhost stays CollPro unless TBBT_MARKETING_SITE or TBBT_MARKETING_HOST is set",
@@ -96,21 +129,22 @@ check(
     "preview.example" && extraTbbtMarketingHosts("https://evil.example/path").length === 0,
 );
 check(
-  "Marketing home href is / on tbbtools.com and /home elsewhere",
-  tbbtMarketingHomeHref("tbbtools.com") === "/" &&
+  "Marketing home href is / on www.tbbtool.com and /home elsewhere",
+  tbbtMarketingHomeHref("www.tbbtool.com") === "/" &&
     tbbtMarketingHomeHref("localhost") === "/home",
 );
 check(
-  "Canonical URLs always point at https://tbbtools.com",
-  tbbtCanonicalUrl("/") === "https://tbbtools.com/" &&
-    tbbtCanonicalUrl("/home") === "https://tbbtools.com/" &&
-    tbbtCanonicalUrl("/pricing") === "https://tbbtools.com/pricing",
+  "Canonical URLs always point at https://www.tbbtool.com",
+  tbbtCanonicalUrl("/") === "https://www.tbbtool.com/" &&
+    tbbtCanonicalUrl("/home") === "https://www.tbbtool.com/" &&
+    tbbtCanonicalUrl("/pricing") === "https://www.tbbtool.com/pricing",
 );
 check(
-  "Off-canonical hosts noindex TBBT marketing; tbbtools.com indexes",
+  "Off-canonical hosts noindex TBBT marketing; www.tbbtool.com indexes",
   tbbtMarketingRobots("localhost").index === false &&
     tbbtMarketingRobots("www.collproreno.com").index === false &&
-    tbbtMarketingRobots("tbbtools.com").index === true,
+    tbbtMarketingRobots("tbbtool.com").index === false &&
+    tbbtMarketingRobots("www.tbbtool.com").index === true,
 );
 
 console.log("\nUNIT — Public paths and CollPro safety");
@@ -140,6 +174,11 @@ check(
 check(
   "Auth proxy still treats public website paths as unauthenticated-safe",
   proxySrc.includes("isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname)"),
+);
+check(
+  "Auth proxy 308s tbbtool.com apex to www before serving any homepage",
+  proxySrc.includes("tbbtApexWwwRedirectLocation") &&
+    proxySrc.includes("NextResponse.redirect(apexLocation, 308)"),
 );
 
 console.log("\nSTATIC — Honest product claims");
@@ -257,8 +296,8 @@ check(
 );
 check(
   "TBBT production origins are in the R2 browser-upload CORS list",
-  r2Src.includes("https://tbbtools.com") &&
-    r2Src.includes("https://www.tbbtools.com") &&
+  r2Src.includes("https://tbbtool.com") &&
+    r2Src.includes("https://www.tbbtool.com") &&
     r2Src.includes("https://www.collproreno.com"),
 );
 
@@ -268,18 +307,19 @@ const seo = tbbtMarketingMetadata({
   host: "www.collproreno.com",
 });
 check(
-  "Marketing metadata canonicalizes to tbbtools.com and noindexes CollPro hosts",
-  seo.alternates?.canonical === "https://tbbtools.com/pricing" &&
+  "Marketing metadata canonicalizes to www.tbbtool.com and noindexes CollPro hosts",
+  seo.alternates?.canonical === "https://www.tbbtool.com/pricing" &&
     seo.robots?.index === false,
 );
 const liveSeo = tbbtMarketingMetadata({
   page: "home",
   pathname: "/",
-  host: "tbbtools.com",
+  host: "www.tbbtool.com",
 });
 check(
-  "tbbtools.com homepage metadata is indexable with an absolute title",
+  "www.tbbtool.com homepage metadata is indexable with an absolute title",
   liveSeo.robots?.index === true &&
+    liveSeo.alternates?.canonical === "https://www.tbbtool.com/" &&
     typeof liveSeo.title === "object" &&
     liveSeo.title !== null &&
     "absolute" in liveSeo.title,
@@ -305,7 +345,7 @@ if (!reachable) {
   console.log("\nHTTP — TBBT marketing routes");
   const collproHome = await fetchMaybe("/");
   check(
-    "Default / is not the TBBT marketing homepage off tbbtools.com",
+    "Default / is not the TBBT marketing homepage off www.tbbtool.com",
     Boolean(
       collproHome &&
         !collproHome.body.includes("tbbt-site") &&

@@ -10,7 +10,13 @@ const nextConfig: NextConfig = {
       // Preview Host is *.vercel.app while x-forwarded-host can be the
       // production domain. Allow the Preview origin so sign-in stays on
       // the current deployment instead of aborting the Server Action.
-      allowedOrigins: ["*.vercel.app", "tbbtools.com", "www.tbbtools.com"],
+      allowedOrigins: [
+        "*.vercel.app",
+        "tbbtool.com",
+        "www.tbbtool.com",
+        "tbbtools.com",
+        "www.tbbtools.com",
+      ],
     },
   },
   images: {

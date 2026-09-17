@@ -28,7 +28,7 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
         disallow: ["/home", ...APP_DISALLOW],
       },
       sitemap: `${TBBT_MARKETING_CANONICAL_ORIGIN}/sitemap.xml`,
-      host: "tbbtools.com",
+      host: "www.tbbtool.com",
     };
   }
 
