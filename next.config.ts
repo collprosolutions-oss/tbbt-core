@@ -16,6 +16,8 @@ const nextConfig: NextConfig = {
         "www.tbbtool.com",
         "tbbtools.com",
         "www.tbbtools.com",
+        "collproreno.com",
+        "www.collproreno.com",
       ],
     },
   },
