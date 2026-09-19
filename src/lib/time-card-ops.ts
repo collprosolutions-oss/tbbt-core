@@ -14,6 +14,7 @@ import {
   approvalSnapshot,
   canApproveWeek,
   canEditTimeEntry,
+  coerceHourlyWage,
   hasOverlappingEntry,
   isTimeActivityType,
   jobRequiredForActivity,
@@ -36,13 +37,8 @@ export class TimeCardError extends Error {
 }
 
 function decimal(value: number | null | undefined): Prisma.Decimal | null {
-  if (value == null) return null;
+  if (value == null || !Number.isFinite(value)) return null;
   return new Prisma.Decimal(value);
-}
-
-function asNumber(value: Prisma.Decimal | number | null | undefined): number | null {
-  if (value == null) return null;
-  return Number(value.toString());
 }
 
 async function loadMembershipInBusiness(
@@ -619,7 +615,7 @@ export async function approveTimesheetWeek(
       throw new TimeCardError(gate.error ?? "This week is not ready to approve.");
     }
 
-    const wage = asNumber(membership.hourlyWage);
+    const wage = coerceHourlyWage(membership.hourlyWage);
     let totalCost = 0;
     let hasCost = false;
 
@@ -632,7 +628,7 @@ export async function approveTimesheetWeek(
         startedAt: entry.startedAt,
         endedAt: entry.endedAt,
         activityType: entry.activityType,
-        hourlyWage: wage,
+        hourlyWage: membership.hourlyWage,
       });
       if (snapshot.approvedLaborCost != null) {
         totalCost += snapshot.approvedLaborCost;
