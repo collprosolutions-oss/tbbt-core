@@ -4,8 +4,8 @@
  */
 import { formatMoney } from "@/lib/format";
 import {
+  CUSTOM_QUOTE_DRAFT_MARKER,
   STARTING_AT_DRAFT_MARKER,
-  isUnpricedCustomQuoteDraftLine,
 } from "@/lib/request-estimate-draft";
 import { lineItemIncludedWork } from "@/lib/estimate-line-scope";
 import { coerceRequestQuantity, OTHER_TASK_LABEL } from "@/lib/service-request-work";
@@ -96,9 +96,10 @@ function laborUnitAmount(unitPrice: RequestHandoffLaborLine["unitPrice"]) {
 }
 
 function startingLaborLabelForLine(line: RequestHandoffLaborLine) {
-  if (isUnpricedCustomQuoteDraftLine(line)) return null;
   const amount = laborUnitAmount(line.unitPrice);
-  if (amount <= 0) return null;
+  if (amount <= 0 || line.description.includes(CUSTOM_QUOTE_DRAFT_MARKER)) {
+    return null;
+  }
   const money = formatMoney(amount);
   if (line.description.includes(STARTING_AT_DRAFT_MARKER)) {
     return `Starting labor: ${money}`;
