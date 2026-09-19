@@ -160,7 +160,7 @@ check(
 check(
   "Public submit notifies the tenant company email after the request persists",
   intakeActionSrc.indexOf("createPublicServiceRequest(prisma") <
-    intakeActionSrc.indexOf("notifyBusinessNewPublicRequest") &&
+    intakeActionSrc.indexOf("notifyBusinessNewPublicRequest(prisma") &&
     intakeActionSrc.includes("notifyBusinessNewPublicRequest(prisma, {") &&
     intakeActionSrc.includes("businessId: notifyBusiness.id") &&
     intakeActionSrc.includes("requestId: created.requestId") &&
