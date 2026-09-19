@@ -54,6 +54,7 @@
     "test:request-intake": "node --experimental-strip-types scripts/check-request-intake.mjs",
     "test:work-area-intake": "node --experimental-strip-types scripts/check-work-area-intake.mjs",
     "test:intake-quote-handoff": "node --experimental-strip-types scripts/check-intake-quote-handoff.mjs",
+    "test:request-estimate-handoff": "node --experimental-strip-types scripts/check-request-estimate-handoff.mjs",
     "test:material-takeoff": "node --experimental-strip-types scripts/check-material-takeoff.mjs",
     "test:estimating-business-defaults": "node --experimental-strip-types scripts/check-estimating-business-defaults.mjs",
     "test:public-site-images": "node --experimental-strip-types scripts/check-public-site-images.mjs",
