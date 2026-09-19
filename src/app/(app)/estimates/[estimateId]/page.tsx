@@ -86,8 +86,14 @@ import {
   customQuoteDisplayDescription,
   isUnpricedCustomQuoteDraftLine,
 } from "@/lib/request-estimate-draft";
-import { requestedWorkLabels } from "@/lib/service-request-work";
-import { RequestIntakeContext } from "@/components/estimates/request-intake-context";
+import { RequestEstimateHandoff } from "@/components/estimates/request-estimate-handoff";
+import {
+  associateRequestedWorkWithStarterLabor,
+  isPopulatedCustomerRequest,
+  requestedWorkForHandoff,
+  shouldCollapseRequestEstimateBuilder,
+  EDIT_BUILD_ESTIMATE_LABEL,
+} from "@/lib/request-estimate-handoff";
 import {
   formatWorkAreaIntakeLabels,
   parseWorkAreaIntake,
@@ -132,7 +138,7 @@ export default async function EstimateBuilderPage({
   const estimate = await prisma.estimate.findFirst({
     where: { id: estimateId, ...access.scope },
     include: {
-      customer: { select: { name: true, email: true } },
+      customer: { select: { name: true, email: true, phone: true } },
       property: {
         select: {
           addressLine1: true,
@@ -151,6 +157,7 @@ export default async function EstimateBuilderPage({
           items: {
             orderBy: { sortOrder: "asc" },
             select: {
+              quantity: true,
               customDescription: true,
               serviceCatalogItem: { select: { id: true, name: true } },
             },
@@ -333,6 +340,28 @@ export default async function EstimateBuilderPage({
         row.serviceRequestId === estimate.serviceRequestId,
     )
     .map((row) => toStoredIntakeMeasurement(row));
+  const populatedCustomerRequest = isPopulatedCustomerRequest(
+    estimate.serviceRequest,
+  );
+  const collapseBuilder = shouldCollapseRequestEstimateBuilder({
+    fromCustomerRequest,
+    populated: populatedCustomerRequest,
+  });
+  const requestStarterRows = associateRequestedWorkWithStarterLabor(
+    requestedWorkForHandoff(estimate.serviceRequest),
+    laborLines,
+  );
+  const requestWorkAreaLabels = formatWorkAreaIntakeLabels(
+    parseWorkAreaIntake(estimate.serviceRequest?.description),
+    Object.fromEntries(
+      (estimate.serviceRequest?.items ?? []).flatMap((item) =>
+        item.serviceCatalogItem
+          ? [[item.serviceCatalogItem.id, item.serviceCatalogItem.name]]
+          : [],
+      ),
+    ),
+  );
+  const requestNotes = requestNotesText(estimate.serviceRequest?.description);
 
   const catalogItems = await prisma.serviceCatalogItem.findMany({
     where: { ...access.scope, active: true },
@@ -611,6 +640,85 @@ export default async function EstimateBuilderPage({
     </Card>
   );
 
+  const laborAndMaterials = originalTakeoffWorkspace ? (
+    <EstimatingTakeoffProvider
+      key={originalTakeoffWorkspace.lineItemId}
+      estimateId={estimate.id}
+      lineItemId={originalTakeoffWorkspace.lineItemId}
+      snapshot={originalTakeoffWorkspace.snapshot}
+      suggestedType={originalTakeoffWorkspace.suggestedType}
+      suggestedInputs={originalTakeoffWorkspace.suggestedInputs}
+      measurementSource={originalTakeoffWorkspace.measurementSource}
+      skippedMeasurements={originalTakeoffWorkspace.skippedMeasurements}
+      workspaceTitle={originalTakeoffWorkspace.workspaceTitle}
+      workspaceId={originalTakeoffWorkspace.workspaceId}
+      businessDefaults={businessDefaults}
+      supplierPricing={supplierPricing}
+      isDraft={isDraft}
+    >
+      {laborSection}
+      {materialsSection}
+    </EstimatingTakeoffProvider>
+  ) : (
+    <>
+      {laborSection}
+      {materialsSection}
+    </>
+  );
+
+  const addCatalogAndCustom = isDraft ? (
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle>Add catalog item</CardTitle>
+          <CardDescription>
+            Uses the current catalog price and copies Scope / Included Work
+            onto this estimate. Custom Quote services need a job price when
+            added. The line is a snapshot and will not change if the catalog
+            is edited later.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AddCatalogLineForm
+            estimateId={estimate.id}
+            items={catalogItems.map((item) => ({
+              id: item.id,
+              name: item.name,
+              pricingMode: item.pricingMode,
+              priceLabel: formatCatalogPriceLabel(item.pricingMode, item.price),
+              includedWork: catalogScopeText(item.description),
+              hasCalculator: Boolean(
+                resolveCalculatorId({
+                  title: item.name,
+                  definition: catalogCalculatorDefinition(item.description),
+                }),
+              ),
+              defaultPrice:
+                item.price && item.price.gt(0) ? item.price.toString() : null,
+            }))}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Add custom item</CardTitle>
+          <CardDescription>
+            Choose Labor, Material, or Other. Add Scope / Included Work on
+            labor/service lines if you want the customer to see what the price
+            includes. Material lines stay compact — the customer sees quantity
+            and one Materials Total. Saving the service and scope to the catalog
+            is optional and never automatic. The labor minimum uses labor lines
+            only.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AddCustomLineForm estimateId={estimate.id} />
+        </CardContent>
+      </Card>
+    </>
+  ) : null;
+
   return (
     <PageContainer>
       <PageHeader
@@ -656,63 +764,20 @@ export default async function EstimateBuilderPage({
           </p>
         ) : null}
         {estimate.serviceRequestId ? (
-          <div className="mt-2 space-y-1 text-sm text-foreground">
-            {(() => {
-              const tasks = estimate.serviceRequest
-                ? requestedWorkLabels(estimate.serviceRequest)
-                : [];
-              if (tasks.length === 0) return null;
-              return (
-                <div>
-                  <p className="font-medium">Requested work</p>
-                  <ul className="list-disc pl-5">
-                    {tasks.map((task) => (
-                      <li key={task}>{task}</li>
-                    ))}
-                  </ul>
-                  <p className="mt-1 text-muted-foreground">
-                    Customer request is context for this draft.
-                  </p>
-                </div>
-              );
-            })()}
-            {requestNotesText(estimate.serviceRequest?.description) ? (
-              <p>{requestNotesText(estimate.serviceRequest?.description)}</p>
-            ) : null}
-            {(() => {
-              const workAreaLabels = formatWorkAreaIntakeLabels(
-                parseWorkAreaIntake(estimate.serviceRequest?.description),
-                Object.fromEntries(
-                  (estimate.serviceRequest?.items ?? []).flatMap((item) =>
-                    item.serviceCatalogItem
-                      ? [[item.serviceCatalogItem.id, item.serviceCatalogItem.name]]
-                      : [],
-                  ),
-                ),
-              );
-              if (workAreaLabels.length === 0) return null;
-              return (
-                <div className="mt-2">
-                  <p className="font-medium">Customer work-area answers</p>
-                  <ul className="list-disc pl-5">
-                    {workAreaLabels.map((label) => (
-                      <li key={label}>{label}</li>
-                    ))}
-                  </ul>
-                </div>
-              );
-            })()}
-            <RequestIntakeContext photos={intakePhotos} measurements={intakeMeasurements} />
-          </div>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Created from a customer request.
+          </p>
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">Manual estimate</p>
         )}
-        <p className="mt-2 text-sm text-muted-foreground">
-          Service address:{" "}
-          {estimate.property
-            ? formatAddress(estimate.property)
-            : "None selected"}
-        </p>
+        {!estimate.serviceRequestId ? (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Service address:{" "}
+            {estimate.property
+              ? formatAddress(estimate.property)
+              : "None selected"}
+          </p>
+        ) : null}
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {isDraft ? (
             <SendEstimateButton
@@ -747,30 +812,34 @@ export default async function EstimateBuilderPage({
         </div>
       </PageHeader>
 
-      {originalTakeoffWorkspace ? (
-        <EstimatingTakeoffProvider
-          key={originalTakeoffWorkspace.lineItemId}
-          estimateId={estimate.id}
-          lineItemId={originalTakeoffWorkspace.lineItemId}
-          snapshot={originalTakeoffWorkspace.snapshot}
-          suggestedType={originalTakeoffWorkspace.suggestedType}
-          suggestedInputs={originalTakeoffWorkspace.suggestedInputs}
-          measurementSource={originalTakeoffWorkspace.measurementSource}
-          skippedMeasurements={originalTakeoffWorkspace.skippedMeasurements}
-          workspaceTitle={originalTakeoffWorkspace.workspaceTitle}
-          workspaceId={originalTakeoffWorkspace.workspaceId}
-          businessDefaults={businessDefaults}
-          supplierPricing={supplierPricing}
-          isDraft={isDraft}
-        >
-          {laborSection}
-          {materialsSection}
-        </EstimatingTakeoffProvider>
+      {fromCustomerRequest ? (
+        <RequestEstimateHandoff
+          rows={requestStarterRows}
+          notes={requestNotes}
+          customerName={estimate.customer?.name ?? null}
+          customerEmail={estimate.customer?.email ?? null}
+          customerPhone={estimate.customer?.phone ?? null}
+          serviceAddress={
+            estimate.property ? formatAddress(estimate.property) : null
+          }
+          workAreaLabels={requestWorkAreaLabels}
+          photos={intakePhotos}
+          measurements={intakeMeasurements}
+        />
+      ) : null}
+
+      {collapseBuilder ? (
+        <details className="rounded-xl border border-border/70 bg-card text-card-foreground shadow-sm">
+          <summary className="cursor-pointer px-6 py-4 text-base font-semibold">
+            {EDIT_BUILD_ESTIMATE_LABEL}
+          </summary>
+          <div className="space-y-6 border-t border-border/60 p-6">
+            {laborAndMaterials}
+            {addCatalogAndCustom}
+          </div>
+        </details>
       ) : (
-        <>
-          {laborSection}
-          {materialsSection}
-        </>
+        laborAndMaterials
       )}
 
       <Card>
@@ -924,58 +993,7 @@ export default async function EstimateBuilderPage({
         </Card>
       ) : null}
 
-      {isDraft ? (
-        <>
-      <Card>
-        <CardHeader>
-          <CardTitle>Add catalog item</CardTitle>
-          <CardDescription>
-            Uses the current catalog price and copies Scope / Included Work
-            onto this estimate. Custom Quote services need a job price when
-            added. The line is a snapshot and will not change if the catalog
-            is edited later.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <AddCatalogLineForm
-            estimateId={estimate.id}
-            items={catalogItems.map((item) => ({
-              id: item.id,
-              name: item.name,
-              pricingMode: item.pricingMode,
-              priceLabel: formatCatalogPriceLabel(item.pricingMode, item.price),
-              includedWork: catalogScopeText(item.description),
-              hasCalculator: Boolean(
-                resolveCalculatorId({
-                  title: item.name,
-                  definition: catalogCalculatorDefinition(item.description),
-                }),
-              ),
-              defaultPrice:
-                item.price && item.price.gt(0) ? item.price.toString() : null,
-            }))}
-          />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Add custom item</CardTitle>
-          <CardDescription>
-            Choose Labor, Material, or Other. Add Scope / Included Work on
-            labor/service lines if you want the customer to see what the price
-            includes. Material lines stay compact — the customer sees quantity
-            and one Materials Total. Saving the service and scope to the catalog
-            is optional and never automatic. The labor minimum uses labor lines
-            only.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <AddCustomLineForm estimateId={estimate.id} />
-        </CardContent>
-      </Card>
-        </>
-      ) : null}
+      {isDraft && !collapseBuilder ? addCatalogAndCustom : null}
 
       <EstimateVersionHistory versions={estimate.versions} />
     </PageContainer>
