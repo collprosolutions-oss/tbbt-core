@@ -5,7 +5,10 @@ import { navigationRedirectUrl } from "@/lib/navigation-origin";
 import { isPublicWebsitePath } from "@/lib/public-website-paths";
 import { isStripeWebhookPath } from "@/lib/stripe-webhook-path";
 import { tbbtApexWwwRedirectLocation } from "@/lib/tbbt-marketing-host";
-import { firstHeaderHost } from "@/lib/vercel-app-host";
+import {
+  firstHeaderHost,
+  firstHeaderHostWithPort,
+} from "@/lib/vercel-app-host";
 
 const AUTH_PATHS = ["/sign-in", "/sign-up"];
 
@@ -45,7 +48,20 @@ export function proxy(request: NextRequest) {
   // `/` is always the public website. A signed-in owner still reaches
   // /dashboard by going there directly; the session must not hijack Home.
   if (isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname)) {
-    return NextResponse.next();
+    // Vercel may set x-forwarded-host to the primary production domain
+    // (www.collproreno.com) while the browser Origin is the custom host
+    // (www.tbbtool.com). Next.js Server Action CSRF then aborts with
+    // "Invalid Server Actions request." (E80) before intake.ts runs, and
+    // the client maps that throw to PUBLIC_INTAKE_SUBMIT_ERROR.
+    const csrfHost = firstHeaderHostWithPort(request.headers.get("host"));
+    if (!csrfHost) {
+      return NextResponse.next();
+    }
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.set("x-forwarded-host", csrfHost);
+    return NextResponse.next({
+      request: { headers: requestHeaders },
+    });
   }
 
   if (!hasSession && !isAuthPath(pathname)) {

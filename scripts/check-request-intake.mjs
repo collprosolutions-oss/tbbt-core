@@ -28,6 +28,10 @@ const {
   resolveCatalogIntakeConfig,
   validateCustomerMeasurementInput,
 } = await import("@/lib/catalog-intake");
+const { firstHeaderHostWithPort } = await import("@/lib/vercel-app-host");
+const { submitPublicIntakeForm, PUBLIC_INTAKE_SUBMIT_ERROR } = await import(
+  "@/lib/public-request-submit"
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -93,6 +97,65 @@ check(
   readRepo("src/lib/storage.ts").includes("MAX_JOB_PHOTO_UPLOAD_BYTES = 4 * 1024 * 1024") &&
     readRepo("src/app/actions/job-photo.ts").includes("MAX_JOB_PHOTO_UPLOAD_BYTES") &&
     readRepo("src/app/actions/expenses.ts").includes("MAX_JOB_PHOTO_UPLOAD_BYTES"),
+);
+
+const nextConfigSrc = readRepo("next.config.ts");
+const proxySrc = readRepo("src/proxy.ts");
+check(
+  "Server Actions allow www.tbbtool.com origin used by public hire submit",
+  nextConfigSrc.includes('"www.tbbtool.com"') &&
+    nextConfigSrc.includes('"tbbtool.com"') &&
+    nextConfigSrc.includes("allowedOrigins"),
+);
+check(
+  "Public website proxy copies Host onto x-forwarded-host before Server Actions",
+  proxySrc.includes("firstHeaderHostWithPort") &&
+    proxySrc.includes('requestHeaders.set("x-forwarded-host", csrfHost)') &&
+    proxySrc.includes("isPublicWebsitePath"),
+);
+check(
+  "Host-with-port helper keeps local ports and takes the first forwarded host",
+  firstHeaderHostWithPort("www.tbbtool.com") === "www.tbbtool.com" &&
+    firstHeaderHostWithPort("www.tbbtool.com, www.collproreno.com") ===
+      "www.tbbtool.com" &&
+    firstHeaderHostWithPort("localhost:43217") === "localhost:43217",
+);
+
+const csrfThrownSubmit = await submitPublicIntakeForm(
+  async () => {
+    throw new Error("Invalid Server Actions request.");
+  },
+  "handy-handyman-services",
+  new FormData(),
+);
+check(
+  "Thrown Server Action CSRF abort maps to the public submit retry error",
+  csrfThrownSubmit.ok === false &&
+    csrfThrownSubmit.error === PUBLIC_INTAKE_SUBMIT_ERROR &&
+    PUBLIC_INTAKE_SUBMIT_ERROR ===
+      "This request could not be submitted. Please try again.",
+);
+
+const r2CorsSrc = readRepo("src/lib/business-storage/r2-cors.ts");
+const r2CorsJson = readRepo("src/lib/business-storage/r2-browser-upload-cors.json");
+const requestFlowSrc = readRepo("src/components/public/request-flow.tsx");
+const intakeActionSrc = readRepo("src/app/actions/intake.ts");
+const applyCorsSrc = readRepo("scripts/apply-r2-browser-upload-cors.mjs");
+check(
+  "R2 browser-upload CORS allowlist includes https://www.tbbtool.com",
+  r2CorsSrc.includes('"https://www.tbbtool.com"') &&
+    r2CorsSrc.includes('"https://tbbtool.com"') &&
+    r2CorsJson.includes("https://www.tbbtool.com") &&
+    r2CorsJson.includes("https://tbbtool.com") &&
+    applyCorsSrc.includes('"https://www.tbbtool.com"'),
+);
+check(
+  "Public hire photo PUT CORS failure falls back to server-side photos FormData",
+  requestFlowSrc.includes("authorized.uploadUrl") &&
+    requestFlowSrc.includes('formData.append("photos", photo.file)') &&
+    requestFlowSrc.includes("abortPublicRequestPhotoUpload") &&
+    intakeActionSrc.includes('.getAll("photos")') &&
+    intakeActionSrc.includes("putPublicRequestPhotoFromBytes"),
 );
 
 const noneConfig = resolveCatalogIntakeConfig({ intakeMeasurementMode: "NONE" });

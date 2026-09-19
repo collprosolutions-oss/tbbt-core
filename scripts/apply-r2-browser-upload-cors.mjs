@@ -64,6 +64,8 @@ const probeHosts = [
 ];
 const sampleOrigins = [
   "https://www.collproreno.com",
+  "https://www.tbbtool.com",
+  "https://tbbtool.com",
   "https://collpro-reno-git-cursor-estimate-pri-d221ac-collpro-s-projects5.vercel.app",
   "http://localhost:43217",
 ];
