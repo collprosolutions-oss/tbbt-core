@@ -415,7 +415,10 @@ try {
     (error) => error instanceof ForbiddenError,
   );
 
-  const betaTravel = nextInterval(1);
+  const betaTravel = {
+    startedAt: new Date(weekStart.getTime() + 10 * 60 * 60 * 1000),
+    endedAt: new Date(weekStart.getTime() + 11 * 60 * 60 * 1000),
+  };
   await createManualTimeEntry(prisma, betaOwnerAccess, {
     membershipId: betaMemberMem.id,
     activityType: "TRAVEL",
