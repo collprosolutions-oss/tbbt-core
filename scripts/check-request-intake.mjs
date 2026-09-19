@@ -136,6 +136,28 @@ check(
       "This request could not be submitted. Please try again.",
 );
 
+const r2CorsSrc = readRepo("src/lib/business-storage/r2-cors.ts");
+const r2CorsJson = readRepo("src/lib/business-storage/r2-browser-upload-cors.json");
+const requestFlowSrc = readRepo("src/components/public/request-flow.tsx");
+const intakeActionSrc = readRepo("src/app/actions/intake.ts");
+const applyCorsSrc = readRepo("scripts/apply-r2-browser-upload-cors.mjs");
+check(
+  "R2 browser-upload CORS allowlist includes https://www.tbbtool.com",
+  r2CorsSrc.includes('"https://www.tbbtool.com"') &&
+    r2CorsSrc.includes('"https://tbbtool.com"') &&
+    r2CorsJson.includes("https://www.tbbtool.com") &&
+    r2CorsJson.includes("https://tbbtool.com") &&
+    applyCorsSrc.includes('"https://www.tbbtool.com"'),
+);
+check(
+  "Public hire photo PUT CORS failure falls back to server-side photos FormData",
+  requestFlowSrc.includes("authorized.uploadUrl") &&
+    requestFlowSrc.includes('formData.append("photos", photo.file)') &&
+    requestFlowSrc.includes("abortPublicRequestPhotoUpload") &&
+    intakeActionSrc.includes('.getAll("photos")') &&
+    intakeActionSrc.includes("putPublicRequestPhotoFromBytes"),
+);
+
 const noneConfig = resolveCatalogIntakeConfig({ intakeMeasurementMode: "NONE" });
 const blindsConfig = resolveCatalogIntakeConfig({
   intakeMeasurementMode: "RECOMMENDED",

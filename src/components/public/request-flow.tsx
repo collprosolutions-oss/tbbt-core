@@ -229,26 +229,31 @@ export function MultiServiceRequestFlow({
         setError(authorized.error || "That photo could not be uploaded.");
         return;
       }
-      const uploaded = await fetch(authorized.uploadUrl, {
-        method: authorized.uploadMethod || "PUT",
-        headers: authorized.uploadHeaders,
-        body: photo.file,
-      });
-      if (!uploaded.ok) {
+      try {
+        const uploaded = await fetch(authorized.uploadUrl, {
+          method: authorized.uploadMethod || "PUT",
+          headers: authorized.uploadHeaders,
+          body: photo.file,
+        });
+        if (!uploaded.ok) {
+          await abortPublicRequestPhotoUpload({ slug, assetId: authorized.assetId });
+          formData.append("photos", photo.file);
+          continue;
+        }
+        const finalized = await finalizePublicRequestPhotoUpload({
+          slug,
+          assetId: authorized.assetId,
+        });
+        if (!finalized.assetId) {
+          await abortPublicRequestPhotoUpload({ slug, assetId: authorized.assetId });
+          formData.append("photos", photo.file);
+          continue;
+        }
+        formData.append("photoAssetId", finalized.assetId);
+      } catch {
         await abortPublicRequestPhotoUpload({ slug, assetId: authorized.assetId });
-        setError("That photo could not be uploaded.");
-        return;
+        formData.append("photos", photo.file);
       }
-      const finalized = await finalizePublicRequestPhotoUpload({
-        slug,
-        assetId: authorized.assetId,
-      });
-      if (!finalized.assetId) {
-        await abortPublicRequestPhotoUpload({ slug, assetId: authorized.assetId });
-        setError(finalized.error || "That photo could not be saved.");
-        return;
-      }
-      formData.append("photoAssetId", finalized.assetId);
     }
     const preference =
       preferredContact === "text"
