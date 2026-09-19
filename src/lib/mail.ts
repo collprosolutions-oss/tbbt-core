@@ -137,6 +137,15 @@ export function invoiceReadyIdempotencyKey(invoiceId: string) {
 }
 
 /**
+ * Company notification for a new public service request. One send per
+ * request id so public-form retries with the same submission do not
+ * mail the business twice.
+ */
+export function newRequestCompanyEmailIdempotencyKey(requestId: string) {
+  return `new-request/${requestId}`;
+}
+
+/**
  * Appointment proposal/reschedule email. Automatic send uses attempt
  * "auto" for that proposal. Owner retry supplies a new sendAttemptId.
  */
@@ -148,7 +157,12 @@ export function appointmentProposedEmailIdempotencyKey(
   return `appointment-proposed/${jobId}/${proposalId}/${sendAttemptId}`;
 }
 
-export type TransactionalEmailKind = "estimate" | "invoice" | "team" | "appointment";
+export type TransactionalEmailKind =
+  | "estimate"
+  | "invoice"
+  | "team"
+  | "appointment"
+  | "request";
 
 export function transactionalEmailFailureMessage(kind: TransactionalEmailKind) {
   if (kind === "estimate") {
@@ -159,6 +173,9 @@ export function transactionalEmailFailureMessage(kind: TransactionalEmailKind) {
   }
   if (kind === "appointment") {
     return "The appointment email could not be sent.";
+  }
+  if (kind === "request") {
+    return "The new-request email could not be sent.";
   }
   return "The team invitation email could not be sent.";
 }
