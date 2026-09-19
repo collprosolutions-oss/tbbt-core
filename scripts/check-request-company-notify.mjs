@@ -91,10 +91,10 @@ console.log("\nSTATIC — Company notify is wired after persist, tenant-scoped")
 check(
   "Public submit persists the request before company notify",
   intakeSrc.indexOf("createPublicServiceRequest(prisma") <
-    intakeSrc.indexOf("notifyBusinessNewPublicRequest") &&
+    intakeSrc.indexOf("notifyBusinessNewPublicRequest(prisma") &&
     intakeSrc.includes("if (!created.ok)") &&
     intakeSrc.indexOf("if (!created.ok)") <
-      intakeSrc.indexOf("notifyBusinessNewPublicRequest"),
+      intakeSrc.indexOf("notifyBusinessNewPublicRequest(prisma"),
 );
 check(
   "Company notify looks up the tenant by the public slug, not a form businessId",
