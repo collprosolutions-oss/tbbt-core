@@ -52,6 +52,7 @@
     "test:customer-estimate-layout": "node scripts/check-customer-estimate-layout.mjs",
     "test:production-migrate": "node scripts/check-production-migrate.mjs",
     "test:request-intake": "node --experimental-strip-types scripts/check-request-intake.mjs",
+    "test:request-company-notify": "node --experimental-strip-types scripts/check-request-company-notify.mjs",
     "test:work-area-intake": "node --experimental-strip-types scripts/check-work-area-intake.mjs",
     "test:intake-quote-handoff": "node --experimental-strip-types scripts/check-intake-quote-handoff.mjs",
     "test:material-takeoff": "node --experimental-strip-types scripts/check-material-takeoff.mjs",

@@ -6,6 +6,7 @@ import { putPublicRequestPhotoFromBytes } from "@/lib/business-storage/request-p
 import { privateAssetPath } from "@/lib/business-storage/keys";
 import { prisma } from "@/lib/prisma";
 import { readFormStrings } from "@/lib/public-request-submit";
+import { notifyBusinessNewPublicRequest } from "@/lib/request-notify";
 import { parseWorkAreaFormAnswers } from "@/lib/work-area-intake";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
 import { resolveSupportedImageMimeType } from "@/lib/storage";
@@ -121,6 +122,21 @@ async function submitServiceRequestInner(
 
   if (!created.ok) {
     return { error: created.error };
+  }
+
+  const notifyBusiness = await prisma.business.findUnique({
+    where: { slug: safeSlug },
+    select: { id: true },
+  });
+  if (notifyBusiness) {
+    try {
+      await notifyBusinessNewPublicRequest(prisma, {
+        businessId: notifyBusiness.id,
+        requestId: created.requestId,
+      });
+    } catch {
+      // Request already persisted. Company email must not fail submit.
+    }
   }
 
   const files = readPhotoFiles(formData).slice(0, MAX_INTAKE_PHOTOS);

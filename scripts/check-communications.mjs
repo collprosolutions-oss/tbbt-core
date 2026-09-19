@@ -19,6 +19,7 @@ const {
   getMailConfig,
   invoiceReadyIdempotencyKey,
   isMailSendAttemptId,
+  newRequestCompanyEmailIdempotencyKey,
   teamInviteIdempotencyKey,
   transactionalEmailFailureMessage,
 } = await import("@/lib/mail");
@@ -149,6 +150,16 @@ check(
   appointmentProposedEmailIdempotencyKey("job-1", 1, "auto") !==
     appointmentProposedEmailIdempotencyKey("job-1", 2, "auto"),
 );
+check(
+  "new-request company key is stable for the request",
+  newRequestCompanyEmailIdempotencyKey("req-1") ===
+    newRequestCompanyEmailIdempotencyKey("req-1"),
+);
+check(
+  "new-request company key differs across requests",
+  newRequestCompanyEmailIdempotencyKey("req-1") !==
+    newRequestCompanyEmailIdempotencyKey("req-2"),
+);
 
 console.log("\nSTATIC — Source contracts");
 check(
@@ -226,6 +237,11 @@ check(
   "appointment failure is appointment-specific",
   transactionalEmailFailureMessage("appointment") ===
     "The appointment email could not be sent.",
+);
+check(
+  "new-request company notify failure is request-specific",
+  transactionalEmailFailureMessage("request") ===
+    "The new-request email could not be sent.",
 );
 
 console.log("\nSTATIC — Templates and customer-safe content");
