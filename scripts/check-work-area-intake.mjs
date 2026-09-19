@@ -230,7 +230,10 @@ check(
   requestsPage.includes("requestNotesText") &&
     requestsPage.includes("formatWorkAreaIntakeLabels") &&
     requestsWorkspace.includes("Customer work-area answers") &&
-    estimatePage.includes("Customer work-area answers") &&
+    (estimatePage.includes("Customer work-area answers") ||
+      readRepo("src/components/estimates/request-estimate-handoff.tsx").includes(
+        "Customer work-area answers",
+      )) &&
     estimatePage.includes("formCalculatorInputs") &&
     !customerPage.includes("RequestWorkAreaFields") &&
     !customerPage.includes("contentsHandlingLightRate") &&

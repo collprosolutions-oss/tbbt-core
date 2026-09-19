@@ -94,9 +94,12 @@ const storageBlob = readRepo("src/lib/storage.ts");
 
 check(
   "Owner estimate builder renders RequestIntakeContext",
-  ownerPage.includes("RequestIntakeContext") &&
+  ownerPage.includes("RequestEstimateHandoff") &&
     ownerPage.includes("ownerVisibleRequestPhotos") &&
-    ownerPage.includes("ownerVisibleRequestMeasurements"),
+    ownerPage.includes("ownerVisibleRequestMeasurements") &&
+    readRepo("src/components/estimates/request-estimate-handoff.tsx").includes(
+      "RequestIntakeContext",
+    ),
 );
 check(
   "Owner measurement list keys by persisted measurement id",
