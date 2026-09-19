@@ -635,11 +635,11 @@ try {
     !handyReport.attention.some((item) => item.detail.includes("no wage snapshot")),
   );
 
-  const leaked = await loadReportSource(prisma, businessB.id);
+  const foreignSource = await loadReportSource(prisma, businessB.id);
   check(
     "Other tenant report source does not include Handy job labor",
-    leaked.approvedTimeEntries.every((entry) => entry.id !== joeEntry.id) &&
-      leaked.invoices.every((invoice) => invoice.jobId !== handyJob.id),
+    foreignSource.approvedTimeEntries.every((entry) => entry.id !== joeEntry.id) &&
+      foreignSource.invoices.every((invoice) => invoice.jobId !== handyJob.id),
   );
 
   console.log(
