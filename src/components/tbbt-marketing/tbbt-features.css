@@ -173,6 +173,15 @@
   object-position: center;
 }
 
+.tbbt-feat-shot--crm img,
+.tbbt-feat-shot--schedule img {
+  object-position: center 18%;
+}
+
+.tbbt-feat-shot--reports img {
+  object-position: center 38%;
+}
+
 .tbbt-feat-shot span,
 .tbbt-feat-graphic span:last-child {
   position: absolute;
@@ -231,12 +240,48 @@
   background: #10192b;
 }
 
-.tbbt-feat-extra-card h3 {
+.tbbt-feat-extra-card h3,
+.tbbt-feat-coming-card h3 {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
   margin-bottom: 0.28rem;
+}
+
+.tbbt-feat-coming {
+  padding: 1.35rem 0 1.7rem;
+  border-top: 1px solid var(--tbbt-line);
+  background:
+    radial-gradient(640px 160px at 92% 0%, rgba(242, 101, 34, 0.1), transparent 62%),
+    #0a1220;
+}
+
+.tbbt-feat-coming-grid {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.tbbt-feat-coming-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.65rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--tbbt-line);
+  border-radius: 0.85rem;
+  background: #10192b;
+}
+
+.tbbt-feat-coming-card h3 {
+  margin: 0 0 0.18rem;
+  font-size: 0.94rem;
+  font-weight: 750;
+}
+
+.tbbt-feat-coming-card p {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
 }
 
 .tbbt-feat-cta {
@@ -288,7 +333,8 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .tbbt-feat-extra-grid {
+  .tbbt-feat-extra-grid,
+  .tbbt-feat-coming-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -308,7 +354,8 @@
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
-  .tbbt-feat-extra-grid {
+  .tbbt-feat-extra-grid,
+  .tbbt-feat-coming-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 

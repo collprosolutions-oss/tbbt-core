@@ -380,12 +380,50 @@ export const TBBT_ADDITIONAL_FEATURES = [
     body: "Messaging foundation for customer follow-up. SMS sends only when that business has a connected number.",
     status: "live" as const,
   },
+] as const;
+
+export const TBBT_COMING_FEATURES = [
   {
-    title: "Business Success / AI coaching",
-    body: "Direction for later. Not a production feature today.",
-    status: "planned" as const,
+    title: "Customer Portal",
+    body: "A customer-facing place to review estimates, jobs, and invoices. Not in the workspace today.",
+    badge: "coming-soon" as const,
+  },
+  {
+    title: "Multi-Location",
+    body: "Support for businesses that operate more than one location. One workspace per business today.",
+    badge: "planned" as const,
+  },
+  {
+    title: "Local Service / SEO Pages",
+    body: "More local service pages to help customers find the business. Not a live SEO product today.",
+    badge: "planned" as const,
+  },
+  {
+    title: "Expanded Integrations",
+    body: "More connections over time. Stripe, SMS, banking, and payroll are not automatic — they still have to be set up per business.",
+    badge: "planned" as const,
+  },
+  {
+    title: "Deeper Marketing Automation",
+    body: "More follow-up after the current marketing content workspace. TBBT does not currently publish posts for you.",
+    badge: "planned" as const,
+  },
+  {
+    title: "Expanded Data Export",
+    body: "Richer export of workspace records over time. Not a full accounting or payroll export suite today.",
+    badge: "planned" as const,
+  },
+  {
+    title: "Business Success / AI Coaching",
+    body: "Direction for later coaching inside TBBT. Not a production feature today.",
+    badge: "planned" as const,
   },
 ] as const;
+
+export const TBBT_COMING_BADGE_LABEL = {
+  "coming-soon": "Coming Soon",
+  planned: "Planned",
+} as const;
 
 export const TBBT_FOUNDER_PRICE_LABEL = TBBT_FOUNDER_PLAN_PRICE_LABEL;
 export const TBBT_FOUNDER_PLAN_DISPLAY_NAME = TBBT_SAAS_PLAN_NAME;

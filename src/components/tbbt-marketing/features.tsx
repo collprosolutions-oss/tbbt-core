@@ -3,17 +3,23 @@ import {
   ArrowRight,
   BarChart3,
   BookOpen,
+  Building2,
   CalendarClock,
   Camera,
   CircleDollarSign,
   ClipboardList,
   CreditCard,
+  Download,
   FileText,
   Globe,
   Hammer,
   Inbox,
+  KeyRound,
+  MapPinned,
+  Megaphone,
   MessageSquare,
   Notebook,
+  Plug,
   Receipt,
   Ruler,
   Settings,
@@ -30,6 +36,8 @@ import "@/components/tbbt-marketing/tbbt-features.css";
 import {
   TBBT_ADDITIONAL_FEATURES,
   TBBT_BRAND_MOTTO,
+  TBBT_COMING_BADGE_LABEL,
+  TBBT_COMING_FEATURES,
   TBBT_CORE_FEATURES,
   TBBT_FEATURES_HERO_EYEBROW,
   TBBT_FEATURES_HERO_HEADLINE,
@@ -68,51 +76,59 @@ const EXTRA_ICONS = [
   Notebook,
   Ruler,
   MessageSquare,
+] as const;
+
+const COMING_ICONS = [
+  KeyRound,
+  Building2,
+  MapPinned,
+  Plug,
+  Megaphone,
+  Download,
   Sparkles,
 ] as const;
+
+const CORE_UI_SHOTS = {
+  website: {
+    src: "/brand/tbbt-marketing/build-house.png",
+    label: "Public business website",
+  },
+  crm: {
+    src: "/brand/tbbt-marketing/feat-ui-crm.png",
+    label: null,
+  },
+  schedule: {
+    src: "/brand/tbbt-marketing/feat-ui-schedule.png",
+    label: null,
+  },
+  marketing: {
+    src: "/brand/tbbt-marketing/trade-handyman.png",
+    label: "Job photos for content",
+  },
+  reports: {
+    src: "/brand/tbbt-marketing/feat-ui-reports.png",
+    label: null,
+  },
+} as const;
 
 function FeatureVisual({
   visual,
 }: {
   visual: (typeof TBBT_CORE_FEATURES)[number]["visual"];
 }) {
+  const shot = visual in CORE_UI_SHOTS ? CORE_UI_SHOTS[visual as keyof typeof CORE_UI_SHOTS] : null;
+
+  if (shot) {
+    return (
+      <div className={`tbbt-feat-shot tbbt-feat-shot--${visual}`}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={shot.src} alt="" />
+        {shot.label ? <span>{shot.label}</span> : null}
+      </div>
+    );
+  }
+
   const Icon = CORE_ICONS[visual];
-
-  if (visual === "website") {
-    return (
-      <div className="tbbt-feat-shot">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/brand/tbbt-marketing/build-house.png" alt="" />
-        <span>Public business website</span>
-      </div>
-    );
-  }
-
-  if (visual === "marketing") {
-    return (
-      <div className="tbbt-feat-shot">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/brand/tbbt-marketing/trade-handyman.png" alt="" />
-        <span>Job photos for content</span>
-      </div>
-    );
-  }
-
-  if (visual === "reports") {
-    return (
-      <div className="tbbt-feat-graphic tbbt-feat-graphic--chart" aria-hidden="true">
-        <div className="tbbt-feat-bars">
-          <i style={{ height: "38%" }} />
-          <i style={{ height: "52%" }} />
-          <i style={{ height: "46%" }} />
-          <i style={{ height: "68%" }} />
-          <i style={{ height: "84%" }} />
-        </div>
-        <span>Workspace reports</span>
-      </div>
-    );
-  }
-
   return (
     <div className="tbbt-feat-graphic" aria-hidden="true">
       <span className="tbbt-feat-graphic-icon">
@@ -221,6 +237,44 @@ export function TbbtFeaturesPage() {
                       {feature.status === "planned" ? (
                         <span className="tbbt-badge">Planned</span>
                       ) : null}
+                    </h3>
+                    <p className="tbbt-muted">{feature.body}</p>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      <section className="tbbt-feat-coming" id="coming-to-tbbt">
+        <div className="tbbt-wrap">
+          <div className="tbbt-feat-core-head">
+            <h2>Coming to TBBT</h2>
+            <p className="tbbt-muted">
+              Roadmap directions — not live in the workspace today.
+            </p>
+          </div>
+          <div className="tbbt-feat-coming-grid">
+            {TBBT_COMING_FEATURES.map((feature, index) => {
+              const Icon = COMING_ICONS[index] ?? Sparkles;
+              return (
+                <article className="tbbt-feat-coming-card" key={feature.title}>
+                  <span className="tbbt-feat-card-icon">
+                    <Icon size={16} />
+                  </span>
+                  <div>
+                    <h3>
+                      {feature.title}
+                      <span
+                        className={
+                          feature.badge === "coming-soon"
+                            ? "tbbt-badge tbbt-badge--coming"
+                            : "tbbt-badge"
+                        }
+                      >
+                        {TBBT_COMING_BADGE_LABEL[feature.badge]}
+                      </span>
                     </h3>
                     <p className="tbbt-muted">{feature.body}</p>
                   </div>
