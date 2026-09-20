@@ -182,7 +182,7 @@ export function createTwilioCustomerMessagingProvider(
 
       return {
         ok: true,
-        status: mapped === "SENT" || mapped === "DELIVERED" ? mapped : "ACCEPTED",
+        status: mapped === "SENT" ? "SENT" : "ACCEPTED",
         providerMessageId: sid,
         providerMetadata: {
           adapter: TWILIO_CUSTOMER_MESSAGING_PROVIDER,

@@ -245,7 +245,8 @@ try {
       webhookHandlerSrc.includes("parseWebhook") &&
       webhookHandlerSrc.includes("Invalid signature") &&
       webhookRouteSrc.includes("handleCustomerMessagingWebhookRequest") &&
-      !webhookRouteSrc.includes("businessId"),
+      webhookRouteSrc.includes("NextResponse.json") &&
+      !webhookHandlerSrc.includes("businessId"),
   );
   check(
     "Public request opt-in checkbox starts unchecked",

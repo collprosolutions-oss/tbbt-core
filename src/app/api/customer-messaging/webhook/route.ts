@@ -3,11 +3,9 @@
  * Signature is checked before any payload is trusted. Responses never
  * include tenant or customer identifiers.
  */
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import {
-  customerMessagingWebhookResponse,
-  handleCustomerMessagingWebhookRequest,
-} from "@/lib/customer-messaging/webhook";
+import { handleCustomerMessagingWebhookRequest } from "@/lib/customer-messaging/webhook";
 
 export async function POST(request: Request) {
   const result = await handleCustomerMessagingWebhookRequest(prisma, {
@@ -17,5 +15,5 @@ export async function POST(request: Request) {
     rawBody: await request.text(),
     contentType: request.headers.get("content-type"),
   });
-  return customerMessagingWebhookResponse(result);
+  return NextResponse.json(result.body, { status: result.status });
 }

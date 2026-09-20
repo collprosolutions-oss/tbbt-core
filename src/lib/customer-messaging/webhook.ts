@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { applyInboundConsentEvent } from "@/lib/customer-messaging/inbound";
 import { applyCustomerMessageDeliveryUpdate } from "@/lib/customer-messaging/ops";
 import { getCustomerMessagingProvider } from "@/lib/customer-messaging/provider";
@@ -18,6 +17,11 @@ export type CustomerMessagingWebhookRequest = {
   contentType: string | null;
 };
 
+export type CustomerMessagingWebhookResult = {
+  status: number;
+  body: { ok?: true; error?: string };
+};
+
 export async function handleParsedCustomerMessagingWebhook(
   db: PrismaClient,
   parsed: ParsedCustomerMessagingWebhook,
@@ -33,7 +37,7 @@ export async function handleParsedCustomerMessagingWebhook(
 export async function handleCustomerMessagingWebhookRequest(
   db: PrismaClient,
   request: CustomerMessagingWebhookRequest,
-): Promise<{ status: number; body: { ok?: true; error?: string } }> {
+): Promise<CustomerMessagingWebhookResult> {
   const provider = getCustomerMessagingProvider();
   if (!provider.connected) {
     return { status: 404, body: GENERIC_NOT_FOUND };
@@ -63,11 +67,4 @@ export async function handleCustomerMessagingWebhookRequest(
   }
   await applyCustomerMessageDeliveryUpdate(db, update);
   return { status: 200, body: GENERIC_OK };
-}
-
-export function customerMessagingWebhookResponse(result: {
-  status: number;
-  body: { ok?: true; error?: string };
-}) {
-  return NextResponse.json(result.body, { status: result.status });
 }
