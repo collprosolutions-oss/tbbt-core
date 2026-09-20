@@ -12,7 +12,7 @@
  * and isolation check scripts can import it directly.
  */
 
-import { addDays, startOfDay, startOfWeek } from "@/lib/schedule";
+import { addDays, formatISODate, parseScheduleDate, startOfWeek } from "@/lib/schedule";
 import { estimateLaborCost, overtimeHours, roundHours, roundMoney } from "@/lib/time-cards";
 
 export const PAYROLL_RUN_STATUSES = [
@@ -113,33 +113,40 @@ export function isFinalizedPayrollStatus(status: string): boolean {
  * following Sunday). Callers may pass any start/end; discovery is
  * range-based so biweekly periods work without a weekly hardcode.
  */
-export function defaultPayPeriod(date: Date = new Date()): { start: Date; end: Date } {
-  const start = startOfWeek(date);
-  return { start, end: addDays(start, 7) };
+export function defaultPayPeriod(date: Date = new Date(), timeZone?: string): { start: Date; end: Date } {
+  const start = startOfWeek(date, timeZone);
+  return { start, end: addDays(start, 7, timeZone) };
 }
 
 export function parsePayPeriodDates(
   startRaw: string,
   endRaw: string,
+  timeZone?: string,
 ): { start: Date; end: Date } | { error: string } {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(startRaw) || !/^\d{4}-\d{2}-\d{2}$/.test(endRaw)) {
     return { error: "Enter a valid pay-period start and end." };
   }
-  const [sy, sm, sd] = startRaw.split("-").map(Number);
-  const [ey, em, ed] = endRaw.split("-").map(Number);
-  const start = startOfDay(new Date(sy, sm - 1, sd));
-  const endInclusive = startOfDay(new Date(ey, em - 1, ed));
-  if (
-    start.getFullYear() !== sy ||
-    start.getMonth() !== sm - 1 ||
-    start.getDate() !== sd ||
-    endInclusive.getFullYear() !== ey ||
-    endInclusive.getMonth() !== em - 1 ||
-    endInclusive.getDate() !== ed
-  ) {
-    return { error: "Enter a valid pay-period start and end." };
+  const start = parseScheduleDate(startRaw, timeZone);
+  const endInclusive = parseScheduleDate(endRaw, timeZone);
+  if (timeZone) {
+    if (formatISODate(start, timeZone) !== startRaw || formatISODate(endInclusive, timeZone) !== endRaw) {
+      return { error: "Enter a valid pay-period start and end." };
+    }
+  } else {
+    const [sy, sm, sd] = startRaw.split("-").map(Number);
+    const [ey, em, ed] = endRaw.split("-").map(Number);
+    if (
+      start.getFullYear() !== sy ||
+      start.getMonth() !== sm - 1 ||
+      start.getDate() !== sd ||
+      endInclusive.getFullYear() !== ey ||
+      endInclusive.getMonth() !== em - 1 ||
+      endInclusive.getDate() !== ed
+    ) {
+      return { error: "Enter a valid pay-period start and end." };
+    }
   }
-  const end = addDays(endInclusive, 1);
+  const end = addDays(endInclusive, 1, timeZone);
   if (start.getTime() >= end.getTime()) {
     return { error: "Pay period end must be after the start." };
   }

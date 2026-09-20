@@ -44,6 +44,7 @@ export type TimeCardEntry = {
   startTime: string;
   endDate: string;
   endTime: string;
+  calendarDate: string;
   canEdit: boolean;
 };
 

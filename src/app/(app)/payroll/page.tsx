@@ -8,6 +8,7 @@ import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { requireManagementPageAccess } from "@/lib/access";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { roleHasCapability, CAPABILITIES } from "@/lib/authorization";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
@@ -41,6 +42,7 @@ export default async function PayrollPage({
   searchParams: Promise<{ run?: string; item?: string; start?: string; end?: string }>;
 }) {
   const access = await requireManagementPageAccess();
+  const timeZone = resolveBusinessTimeZone(access.workspace.business);
   const params = await searchParams;
   const founder = await checkFounderAccess();
   const founderOverride = founder
@@ -50,8 +52,8 @@ export default async function PayrollPage({
     : null;
   const founderTokens = sanitizeFounderPageTokens("payroll", founderOverride?.tokens ?? {});
 
-  const parsedPeriod = params.start && params.end ? parsePayPeriodDates(params.start, params.end) : null;
-  const fallbackPeriod = defaultPayPeriod();
+  const parsedPeriod = params.start && params.end ? parsePayPeriodDates(params.start, params.end, timeZone) : null;
+  const fallbackPeriod = defaultPayPeriod(new Date(), timeZone);
   const requestedPeriod =
     parsedPeriod && !("error" in parsedPeriod) ? parsedPeriod : fallbackPeriod;
 
@@ -106,7 +108,7 @@ export default async function PayrollPage({
   const canAuthorize = roleHasCapability(role, CAPABILITIES.AUTHORIZE_PAYROLL);
   const periodStart = selected?.payPeriodStart ?? requestedPeriod.start;
   const periodEnd = selected?.payPeriodEnd ?? requestedPeriod.end;
-  const periodEndInclusive = addDays(periodEnd, -1);
+  const periodEndInclusive = addDays(periodEnd, -1, timeZone);
 
   const finalizedWeekIds = new Set(
     runs
@@ -138,8 +140,8 @@ export default async function PayrollPage({
       workerName: membership?.user.name ?? "Worker",
       workerRole: membership?.role ?? "MEMBER",
       workerActive: membership?.active ?? false,
-      weekStartedAt: formatISODate(item.weekStartedAt),
-      weekLabel: formatDate(item.weekStartedAt),
+      weekStartedAt: formatISODate(item.weekStartedAt, timeZone),
+      weekLabel: formatDate(item.weekStartedAt, timeZone),
       approvedHours: hours,
       approvedHoursLabel: formatDurationClock(hours),
       regularHours: asNumber(item.regularHours) ?? 0,
@@ -196,7 +198,7 @@ export default async function PayrollPage({
       timesheetWeekId: week.id,
       membershipId: week.membershipId,
       workerName: week.membership.user.name,
-      weekLabel: formatDate(week.weekStartedAt),
+      weekLabel: formatDate(week.weekStartedAt, timeZone),
       hoursLabel: formatDurationClock(asNumber(week.approvedHours) ?? 0),
     }));
 
@@ -217,9 +219,9 @@ export default async function PayrollPage({
     runId: selected?.id ?? null,
     status,
     statusLabel: PAYROLL_STATUS_LABELS[status],
-    periodStart: formatISODate(periodStart),
-    periodEndInclusive: formatISODate(periodEndInclusive),
-    periodLabel: `${formatDate(periodStart)} – ${formatDate(periodEndInclusive)}`,
+    periodStart: formatISODate(periodStart, timeZone),
+    periodEndInclusive: formatISODate(periodEndInclusive, timeZone),
+    periodLabel: `${formatDate(periodStart, timeZone)} – ${formatDate(periodEndInclusive, timeZone)}`,
     editable: selected ? isEditablePayrollStatus(selected.status) : true,
     locked: selected ? isLockedPayrollStatus(selected.status) : false,
     canReview: selected?.status === "READY_FOR_REVIEW",
@@ -250,14 +252,14 @@ export default async function PayrollPage({
           : null);
       return {
         id: run.id,
-        periodLabel: `${formatDate(run.payPeriodStart)} – ${formatDate(addDays(run.payPeriodEnd, -1))}`,
+        periodLabel: `${formatDate(run.payPeriodStart, timeZone)} – ${formatDate(addDays(run.payPeriodEnd, -1, timeZone), timeZone)}`,
         status: run.status,
         statusLabel: PAYROLL_STATUS_LABELS[run.status as PayrollRunStatus] ?? run.status,
         workerCount: run.authorizedWorkerCount ?? run.items.length,
         approvedHoursLabel: formatDurationClock(hours),
         grossLabel: gross != null ? formatMoney(gross) : "—",
-        authorizedAtLabel: run.authorizedAt ? formatDateTime(run.authorizedAt) : null,
-        processedAtLabel: run.processedAt ? formatDateTime(run.processedAt) : null,
+        authorizedAtLabel: run.authorizedAt ? formatDateTime(run.authorizedAt, timeZone) : null,
+        processedAtLabel: run.processedAt ? formatDateTime(run.processedAt, timeZone) : null,
       };
     }),
     fundingLabel: "Funding verification not connected",

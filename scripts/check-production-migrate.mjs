@@ -348,6 +348,33 @@ check(
     saasBillingSchema.includes("stripeEventCreatedAt"),
 );
 
+const businessTimezoneMigration = readFileSync(
+  new URL("../prisma/migrations/20260919200000_add_business_timezone/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Business timezone migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(businessTimezoneMigration) &&
+    businessTimezoneMigration.includes('ADD COLUMN IF NOT EXISTS "timezone"') &&
+    !/UPDATE "Business"/i.test(businessTimezoneMigration),
+);
+
+const businessTimezone = readFileSync(
+  new URL("../src/lib/business-timezone.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers business timezone column skipped by migrate",
+  businessTimezone.includes("Preview shares Production and skips migrate") &&
+    businessTimezone.includes("ensureBusinessTimezoneSchema") &&
+    businessTimezone.includes("BUSINESS_TIMEZONE_ENSURE_SQL") &&
+    businessTimezone.includes('ADD COLUMN IF NOT EXISTS "timezone"'),
+);
+check(
+  "Authenticated workspace load ensures business timezone column before Business SELECT",
+  workspaceLoader.includes("ensureBusinessTimezoneSchema"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

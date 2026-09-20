@@ -18,11 +18,13 @@ const VIEW_LABELS: Record<ScheduleView, string> = {
 export function ScheduleViewTabs({
   view,
   date,
+  timeZone,
 }: {
   view: ScheduleView;
   date: Date;
+  timeZone?: string;
 }) {
-  const iso = formatISODate(date);
+  const iso = formatISODate(date, timeZone);
   return (
     <div className="flex flex-wrap gap-1 rounded-lg border bg-muted/30 p-1">
       {SCHEDULE_VIEWS.map((candidate) => (

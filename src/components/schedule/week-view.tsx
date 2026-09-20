@@ -26,30 +26,32 @@ export function WeekView({
   today,
   jobsByDay,
   conflicts,
+  timeZone,
 }: {
   days: Date[];
   today: Date;
   jobsByDay: Map<string, ScheduleJob[]>;
   conflicts: Map<string, ScheduleJob[]>;
+  timeZone?: string;
 }) {
   return (
     <div className="grid gap-3 sm:grid-cols-7">
       {days.map((day) => {
-        const iso = formatISODate(day);
-        const tone = dayTone(day, today);
+        const iso = formatISODate(day, timeZone);
+        const tone = dayTone(day, today, timeZone);
         const dayJobs = jobsByDay.get(iso) ?? [];
         return (
           <Card key={iso} className={cn("sm:col-span-1", dayToneClasses(tone))}>
             <CardHeader className="pb-2">
               <CardDescription>
-                {day.toLocaleDateString("en-US", { weekday: "short" })}
+                {day.toLocaleDateString("en-US", { weekday: "short", timeZone })}
               </CardDescription>
               <CardTitle className="text-base">
                 <Link
                   href={`/jobs?view=day&date=${iso}`}
                   className="underline-offset-4 hover:underline"
                 >
-                  {formatDate(day)}
+                  {formatDate(day, timeZone)}
                 </Link>
               </CardTitle>
             </CardHeader>
@@ -64,6 +66,7 @@ export function WeekView({
                     key={job.id}
                     job={job}
                     hasConflict={conflicts.has(job.id)}
+                    timeZone={timeZone}
                   />
                 ))
               )}

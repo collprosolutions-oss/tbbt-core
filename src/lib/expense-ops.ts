@@ -8,6 +8,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
 import {
   defaultReimbursementStatus,
@@ -147,7 +148,10 @@ async function resolveExpenseJobAndCustomer(
 }
 
 async function resolveExpenseFields(db: Db, access: BusinessAccess, input: CreateExpenseInput) {
-  const occurredOn = parseExpenseDate(input.occurredOn);
+  const occurredOn = parseExpenseDate(
+    input.occurredOn,
+    resolveBusinessTimeZone(access.workspace.business),
+  );
   if (!occurredOn) {
     throw new ExpenseError("Enter a valid expense date.");
   }

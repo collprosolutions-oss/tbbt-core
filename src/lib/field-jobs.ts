@@ -70,9 +70,10 @@ function byScheduledAtDesc(a: FieldJob, b: FieldJob) {
 export function groupFieldJobs<T extends FieldJob>(
   jobs: T[],
   today: Date,
+  timeZone?: string,
 ): FieldJobGroups<T> {
-  const start = startOfDay(today);
-  const end = addDays(start, 1);
+  const start = startOfDay(today, timeZone);
+  const end = addDays(start, 1, timeZone);
 
   const groups: FieldJobGroups<T> = { today: [], upcoming: [], completed: [] };
 

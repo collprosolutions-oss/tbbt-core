@@ -9,6 +9,7 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
 import { requireManagementPageAccess } from "@/lib/access";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import type { CuratedIconId } from "@/lib/founder-icons";
@@ -24,7 +25,7 @@ import {
   resolveReportRange,
 } from "@/lib/reports";
 import { formatDurationClock } from "@/lib/time-cards";
-import { formatISODate } from "@/lib/schedule";
+import { addDays, formatISODate } from "@/lib/schedule";
 
 export const metadata: Metadata = {
   title: "Reports",
@@ -46,11 +47,12 @@ export default async function ReportsPage({
   const founderTokens = sanitizeFounderPageTokens("reports", founderOverride?.tokens ?? {});
 
   const params = await searchParams;
+  const timeZone = resolveBusinessTimeZone(access.workspace.business);
   const area = parseReportArea(params.area);
   const rangePreset = parseDatePreset(params.range);
-  const range = resolveReportRange(rangePreset, params.from, params.to);
-  const from = rangePreset === "custom" && parseReportDate(params.from) ? params.from! : "";
-  const to = rangePreset === "custom" && parseReportDate(params.to) ? params.to! : "";
+  const range = resolveReportRange(rangePreset, params.from, params.to, new Date(), timeZone);
+  const from = rangePreset === "custom" && parseReportDate(params.from, timeZone) ? params.from! : "";
+  const to = rangePreset === "custom" && parseReportDate(params.to, timeZone) ? params.to! : "";
 
   const source = await loadReportSource(prisma, access.businessId);
   const report = buildReport(source, range);
@@ -141,8 +143,8 @@ export default async function ReportsPage({
         <ReportsWorkspace
           area={area}
           rangePreset={range.start && rangePreset === "custom" ? "custom" : range.preset}
-          from={from || (range.start ? formatISODate(range.start) : "")}
-          to={to || (range.end ? formatISODate(new Date(range.end.getTime() - 86_400_000)) : "")}
+          from={from || (range.start ? formatISODate(range.start, timeZone) : "")}
+          to={to || (range.end ? formatISODate(addDays(range.end, -1, timeZone), timeZone) : "")}
           report={report}
         />
       </FounderDesignRoot>

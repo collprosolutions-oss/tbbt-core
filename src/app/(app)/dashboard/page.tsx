@@ -22,6 +22,7 @@ import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-
 import { FounderDesignRoot } from "@/components/founder-design/root";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { requireManagementPageAccess } from "@/lib/access";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   DASHBOARD_APPOINTMENT_ATTENTION_SELECT,
   DASHBOARD_APPOINTMENT_ATTENTION_TAKE,
@@ -50,10 +51,11 @@ const ATTENTION_TAKE = 5;
 export default async function DashboardPage() {
   const access = await requireManagementPageAccess();
   const business = access.workspace.business;
+  const timeZone = resolveBusinessTimeZone(business);
   const trade = getTrade(business.tradeCode);
-  const today = startOfDay(new Date());
-  const todayRange = dayRange(today);
-  const todayIso = formatISODate(today);
+  const today = startOfDay(new Date(), timeZone);
+  const todayRange = dayRange(today, timeZone);
+  const todayIso = formatISODate(today, timeZone);
 
   // Founder Design Mode: platform-level, independent of Membership/role
   // (see src/lib/founder-access.ts) -- never derived from OWNER/ADMIN.
@@ -415,7 +417,7 @@ export default async function DashboardPage() {
                 <FounderRegionIcon regionId="today" defaultIcon="calendar-clock" className="size-4 text-muted-foreground" />
                 Today
               </CardTitle>
-              <CardDescription>Scheduled work for {formatDate(today)}.</CardDescription>
+              <CardDescription>Scheduled work for {formatDate(today, timeZone)}.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
               {todayJobs.length === 0 ? (
@@ -432,7 +434,7 @@ export default async function DashboardPage() {
                     </span>
                     <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
                       {job.scheduledAt ? (
-                        <span className="tabular-nums">{formatTime(job.scheduledAt)}</span>
+                        <span className="tabular-nums">{formatTime(job.scheduledAt, timeZone)}</span>
                       ) : null}
                       <StatusBadge status={job.status} />
                     </span>

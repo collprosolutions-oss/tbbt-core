@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { FieldJobCard } from "@/components/field/field-job-card";
 import { FieldTimeClock } from "@/components/field/field-time-clock";
 import { FIELD_JOB_SELECT, groupFieldJobs } from "@/lib/field-jobs";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatTime } from "@/lib/format";
 import { startOfDay } from "@/lib/schedule";
 import { requireFieldWorkspace } from "@/lib/field-access";
@@ -22,6 +23,7 @@ export const metadata: Metadata = {
  */
 export default async function FieldHomePage() {
   const field = await requireFieldWorkspace();
+  const timeZone = resolveBusinessTimeZone(field.workspace.business);
 
   const jobs = await prisma.job.findMany({
     where: {
@@ -32,7 +34,7 @@ export default async function FieldHomePage() {
     orderBy: { scheduledAt: "asc" },
   });
 
-  const groups = groupFieldJobs(jobs, startOfDay(new Date()));
+  const groups = groupFieldJobs(jobs, startOfDay(new Date(), timeZone), timeZone);
   const running = await prisma.timeEntry.findFirst({
     where: {
       businessId: field.businessId,
@@ -71,7 +73,7 @@ export default async function FieldHomePage() {
                     isTimeActivityType(running.activityType) ? running.activityType : "OTHER"
                   ],
                 jobLabel: running.job?.customer?.name ?? running.job?.property?.addressLine1 ?? null,
-                startedAtLabel: formatTime(running.startedAt),
+                startedAtLabel: formatTime(running.startedAt, timeZone),
               }
             : null
         }

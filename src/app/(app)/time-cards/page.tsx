@@ -16,6 +16,7 @@ import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { requireManagementPageAccess } from "@/lib/access";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatDate, formatMoney, formatTime } from "@/lib/format";
@@ -69,13 +70,16 @@ export default async function TimeCardsPage({
   searchParams: Promise<{ view?: string; date?: string; week?: string; worker?: string }>;
 }) {
   const access = await requireManagementPageAccess();
+  const timeZone = resolveBusinessTimeZone(access.workspace.business);
   const params = await searchParams;
   const view = parseView(params.view);
-  const selectedDate = startOfDay(parseScheduleDate(params.date));
-  const weekAnchor = params.week ? startOfDay(parseScheduleDate(params.week)) : selectedDate;
-  const { start: weekStart, end: weekEnd } = weekRange(weekAnchor);
+  const selectedDate = startOfDay(parseScheduleDate(params.date, timeZone), timeZone);
+  const weekAnchor = params.week
+    ? startOfDay(parseScheduleDate(params.week, timeZone), timeZone)
+    : selectedDate;
+  const { start: weekStart, end: weekEnd } = weekRange(weekAnchor, timeZone);
   const dayStart = selectedDate;
-  const dayEnd = addDays(dayStart, 1);
+  const dayEnd = addDays(dayStart, 1, timeZone);
   const now = new Date();
 
   const founder = await checkFounderAccess();
@@ -167,11 +171,11 @@ export default async function TimeCardsPage({
       source: entry.source,
       startedAt: entry.startedAt.toISOString(),
       endedAt: entry.endedAt?.toISOString() ?? null,
-      startedAtLabel: formatTime(entry.startedAt),
-      endedAtLabel: entry.endedAt ? formatTime(entry.endedAt) : null,
+      startedAtLabel: formatTime(entry.startedAt, timeZone),
+      endedAtLabel: entry.endedAt ? formatTime(entry.endedAt, timeZone) : null,
       clockLabel: entry.endedAt
-        ? `${formatTime(entry.startedAt)} – ${formatTime(entry.endedAt)}`
-        : `${formatTime(entry.startedAt)} – Now`,
+        ? `${formatTime(entry.startedAt, timeZone)} – ${formatTime(entry.endedAt, timeZone)}`
+        : `${formatTime(entry.startedAt, timeZone)} – Now`,
       totalHours: hours,
       totalLabel: formatDurationClock(hours),
       note: entry.note,
@@ -179,6 +183,7 @@ export default async function TimeCardsPage({
       startTime: toEntryTimeInput(entry.startedAt),
       endDate: entry.endedAt ? toEntryDateInput(entry.endedAt) : "",
       endTime: entry.endedAt ? toEntryTimeInput(entry.endedAt) : "",
+      calendarDate: formatISODate(entry.startedAt, timeZone),
       canEdit: canEditTimeEntry(entry.status),
     };
   });
@@ -209,7 +214,7 @@ export default async function TimeCardsPage({
     timeEntryId: item.timeEntryId,
     action: item.action,
     reason: item.reason,
-    createdAtLabel: formatTime(item.createdAt),
+    createdAtLabel: formatTime(item.createdAt, timeZone),
     actorName: item.actor.user.name,
   }));
 
@@ -322,9 +327,9 @@ export default async function TimeCardsPage({
 
         <TimeCardsWorkspace
           view={view}
-          date={formatISODate(selectedDate)}
-          weekStartedAt={formatISODate(weekStart)}
-          weekLabel={formatDate(weekStart)}
+          date={formatISODate(selectedDate, timeZone)}
+          weekStartedAt={formatISODate(weekStart, timeZone)}
+          weekLabel={formatDate(weekStart, timeZone)}
           workers={workers}
           jobs={jobOptions}
           entries={entryDtos}

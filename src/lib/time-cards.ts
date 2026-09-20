@@ -96,9 +96,9 @@ export function jobRequiredForActivity(activityType: TimeActivityType): boolean 
  * Sunday 00:00 local through the following Sunday 00:00, matching
  * startOfWeek() already used by Schedule.
  */
-export function weekRange(date: Date): { start: Date; end: Date } {
-  const start = startOfWeek(date);
-  return { start, end: addDays(start, 7) };
+export function weekRange(date: Date, timeZone?: string): { start: Date; end: Date } {
+  const start = startOfWeek(date, timeZone);
+  return { start, end: addDays(start, 7, timeZone) };
 }
 
 export function entryOverlapsWeek(

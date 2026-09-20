@@ -28,6 +28,7 @@ import { UnscheduledJobsPanel } from "@/components/schedule/unscheduled-jobs-pan
 import { WeekView } from "@/components/schedule/week-view";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
+import { resolveBusinessTimeZone, formatZonedTimeInput } from "@/lib/business-timezone";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
@@ -181,6 +182,7 @@ export default async function JobsPage({
 }) {
   const params = await searchParams;
   const access = await requireManagementPageAccess();
+  const timeZone = resolveBusinessTimeZone(access.workspace.business);
 
   // Founder Design Mode: platform-level, independent of Membership/role
   // (see src/lib/founder-access.ts) -- never derived from OWNER/ADMIN.
@@ -193,10 +195,10 @@ export default async function JobsPage({
   const founderTokens = sanitizeFounderPageTokens("jobs", founderOverride?.tokens ?? {});
 
   const view = parseScheduleView(params.view);
-  const anchorDate = parseScheduleDate(params.date);
-  const today = startOfDay(new Date());
-  const todayRange = dayRange(today);
-  const thisWeek = weekRange(today);
+  const anchorDate = parseScheduleDate(params.date, timeZone);
+  const today = startOfDay(new Date(), timeZone);
+  const todayRange = dayRange(today, timeZone);
+  const thisWeek = weekRange(today, timeZone);
 
   const q = (params.q ?? "").trim();
   const tab = parseTab(params.status);
@@ -259,16 +261,16 @@ export default async function JobsPage({
   }
   const defaultRangeWhere =
     view === "month"
-      ? boundedOrUnscheduled(monthGridRange(anchorDate))
+      ? boundedOrUnscheduled(monthGridRange(anchorDate, timeZone))
       : view === "crew"
         ? boundedOrUnscheduled({
-            start: monthGridRange(anchorDate).monthStart,
-            end: monthGridRange(anchorDate).monthEnd,
+            start: monthGridRange(anchorDate, timeZone).monthStart,
+            end: monthGridRange(anchorDate, timeZone).monthEnd,
           })
         : view === "week"
-          ? boundedOrUnscheduled(weekRange(anchorDate))
+          ? boundedOrUnscheduled(weekRange(anchorDate, timeZone))
           : view === "day"
-            ? boundedOrUnscheduled(dayRange(anchorDate))
+            ? boundedOrUnscheduled(dayRange(anchorDate, timeZone))
             : {};
   const rangeWhere = rangePreset ? explicitRangeWhere : defaultRangeWhere;
 
@@ -367,16 +369,6 @@ export default async function JobsPage({
     new Prisma.Decimal(0),
   );
 
-  function pad(part: number) {
-    return String(part).padStart(2, "0");
-  }
-  function toDateInput(value: Date) {
-    return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
-  }
-  function toTimeInput(value: Date) {
-    return `${pad(value.getHours())}:${pad(value.getMinutes())}`;
-  }
-
   const jobsRawForList = jobsRaw;
   const depositPaid = await depositPaidByEstimateIds(
     prisma,
@@ -433,7 +425,7 @@ export default async function JobsPage({
       customer: job.customer,
       propertyLabel: job.property ? formatAddress(job.property) : null,
       scopeSummary: jobScopeSummary(job),
-      scheduledAtLabel: job.scheduledAt ? formatDateTime(job.scheduledAt) : null,
+      scheduledAtLabel: job.scheduledAt ? formatDateTime(job.scheduledAt, timeZone) : null,
       durationLabel: job.scheduledDurationMinutes
         ? formatDurationMinutes(job.scheduledDurationMinutes)
         : null,
@@ -444,8 +436,8 @@ export default async function JobsPage({
       projectToken: job.projectToken,
       photoCount: job.photos.length,
       additionalWorkRequestCount: job.additionalWorkRequests.length,
-      scheduleDate: job.scheduledAt ? toDateInput(job.scheduledAt) : "",
-      scheduleTime: job.scheduledAt ? toTimeInput(job.scheduledAt) : "",
+      scheduleDate: job.scheduledAt ? formatISODate(job.scheduledAt, timeZone) : "",
+      scheduleTime: job.scheduledAt ? formatZonedTimeInput(job.scheduledAt, timeZone) : "",
       durationPreset,
       customHours:
         durationPreset === "custom" && job.scheduledDurationMinutes
@@ -471,7 +463,7 @@ export default async function JobsPage({
     };
   });
 
-  const todayIso = formatISODate(today);
+  const todayIso = formatISODate(today, timeZone);
   const headerDescription = (
     <span>
       Jobs for {access.workspace.business.name}.{" "}
@@ -488,41 +480,58 @@ export default async function JobsPage({
   let dateNavLabel: string | null = null;
 
   if (view === "month") {
-    const range = monthGridRange(anchorDate);
+    const range = monthGridRange(anchorDate, timeZone);
     const calendarJobs = await prisma.job.findMany({
       where: { ...access.scope, scheduledAt: { gte: range.start, lt: range.end } },
       select: SCHEDULE_JOB_SELECT,
       orderBy: { scheduledAt: "asc" },
     });
-    const jobsByDay = groupJobsByDay(calendarJobs);
+    const jobsByDay = groupJobsByDay(calendarJobs, timeZone);
     const conflicts = findScheduleConflicts(calendarJobs, scheduleBufferMinutes);
-    dateNavLabel = monthLabel(anchorDate);
+    dateNavLabel = monthLabel(anchorDate, timeZone);
     content = (
-      <MonthView days={range.days} monthStart={range.monthStart} monthEnd={range.monthEnd} today={today} jobsByDay={jobsByDay} conflicts={conflicts} />
+      <MonthView
+        days={range.days}
+        monthStart={range.monthStart}
+        monthEnd={range.monthEnd}
+        today={today}
+        jobsByDay={jobsByDay}
+        conflicts={conflicts}
+        timeZone={timeZone}
+      />
     );
   } else if (view === "week") {
-    const range = weekRange(anchorDate);
+    const range = weekRange(anchorDate, timeZone);
     const calendarJobs = await prisma.job.findMany({
       where: { ...access.scope, scheduledAt: { gte: range.start, lt: range.end } },
       select: SCHEDULE_JOB_SELECT,
       orderBy: { scheduledAt: "asc" },
     });
-    const jobsByDay = groupJobsByDay(calendarJobs);
+    const jobsByDay = groupJobsByDay(calendarJobs, timeZone);
     const conflicts = findScheduleConflicts(calendarJobs, scheduleBufferMinutes);
-    dateNavLabel = weekLabel(range);
-    content = <WeekView days={range.days} today={today} jobsByDay={jobsByDay} conflicts={conflicts} />;
+    dateNavLabel = weekLabel(range, timeZone);
+    content = (
+      <WeekView days={range.days} today={today} jobsByDay={jobsByDay} conflicts={conflicts} timeZone={timeZone} />
+    );
   } else if (view === "day") {
-    const range = dayRange(anchorDate);
+    const range = dayRange(anchorDate, timeZone);
     const calendarJobs = await prisma.job.findMany({
       where: { ...access.scope, scheduledAt: { gte: range.start, lt: range.end } },
       select: SCHEDULE_JOB_SELECT,
       orderBy: { scheduledAt: "asc" },
     });
     const conflicts = findScheduleConflicts(calendarJobs, scheduleBufferMinutes);
-    dateNavLabel = dayLabel(anchorDate);
-    content = <DayView jobs={calendarJobs} conflicts={conflicts} isToday={isSameDay(anchorDate, today)} />;
+    dateNavLabel = dayLabel(anchorDate, timeZone);
+    content = (
+      <DayView
+        jobs={calendarJobs}
+        conflicts={conflicts}
+        isToday={isSameDay(anchorDate, today, timeZone)}
+        timeZone={timeZone}
+      />
+    );
   } else if (view === "crew") {
-    const range = monthGridRange(anchorDate);
+    const range = monthGridRange(anchorDate, timeZone);
     const calendarJobs = await prisma.job.findMany({
       where: {
         ...access.scope,
@@ -532,8 +541,10 @@ export default async function JobsPage({
       select: SCHEDULE_JOB_SELECT,
       orderBy: { scheduledAt: "asc" },
     });
-    dateNavLabel = monthLabel(anchorDate);
-    content = <CrewView jobs={calendarJobs} monthLabel={monthLabel(anchorDate)} />;
+    dateNavLabel = monthLabel(anchorDate, timeZone);
+    content = (
+      <CrewView jobs={calendarJobs} monthLabel={monthLabel(anchorDate, timeZone)} timeZone={timeZone} />
+    );
   } else {
     const listJobs: JobsListItem[] = await prisma.job.findMany({
       where: access.scope,
@@ -630,8 +641,16 @@ export default async function JobsPage({
     <>
       <FounderRegion id="calendar" className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <ScheduleViewTabs view={view} date={anchorDate} />
-        {dateNavLabel ? <ScheduleDateNav view={view} date={anchorDate} label={dateNavLabel} /> : null}
+        <ScheduleViewTabs view={view} date={anchorDate} timeZone={timeZone} />
+        {dateNavLabel ? (
+          <ScheduleDateNav
+            view={view}
+            date={anchorDate}
+            label={dateNavLabel}
+            todayIso={todayIso}
+            timeZone={timeZone}
+          />
+        ) : null}
       </div>
 
       {showUnscheduledPanel ? (

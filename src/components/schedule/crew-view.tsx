@@ -25,9 +25,11 @@ import { groupJobsByAssignedMember, type ScheduleJob } from "@/lib/schedule";
 export function CrewView({
   jobs,
   monthLabel,
+  timeZone,
 }: {
   jobs: ScheduleJob[];
   monthLabel: string;
+  timeZone?: string;
 }) {
   const groups = groupJobsByAssignedMember(jobs);
 
@@ -52,7 +54,9 @@ export function CrewView({
                 No scheduled or in-progress jobs this month.
               </p>
             ) : (
-              group.jobs.map((job) => <JobScheduleRow key={job.id} job={job} />)
+              group.jobs.map((job) => (
+                <JobScheduleRow key={job.id} job={job} timeZone={timeZone} />
+              ))
             )}
           </CardContent>
         </Card>
