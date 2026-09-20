@@ -339,6 +339,29 @@ check(
     TBBT_CORE_FEATURES.some((item) => item.title === "Website Builder") &&
     TBBT_CORE_FEATURES.some((item) => item.title === "Reports & Business Insights"),
 );
+const featuresPageSrc = readRepo("src/components/tbbt-marketing/features.tsx");
+check(
+  "Features page uses the visual rebuild without unsupported claims or fake Learn More",
+  featuresPageSrc.includes("tbbt-feat-hero") &&
+    featuresPageSrc.includes("hero-devices.png") &&
+    featuresPageSrc.includes("build-house.png") &&
+    featuresPageSrc.includes("TBBT_FEATURES_VALUE_POINTS") &&
+    featuresPageSrc.includes("TBBT_SIGN_UP_HREF") &&
+    featuresPageSrc.includes("TBBT_TRIAL_CTA_LABEL") &&
+    featuresPageSrc.includes("id=\"core-features\"") &&
+    !featuresPageSrc.includes("Learn More") &&
+    !featuresPageSrc.includes("Customer Portal") &&
+    !featuresPageSrc.includes("Multi-Location") &&
+    !featuresPageSrc.includes("already saving time") &&
+    !featuresPageSrc.includes("Join trades professionals"),
+);
+check(
+  "Homepage from Task #82 is unchanged by the Features rebuild",
+  homeMarketingSrc.includes("tbbt-hero-cinematic") &&
+    homeMarketingSrc.includes("id=\"founder-plan\"") &&
+    homeMarketingSrc.includes("TBBT_HOW_IT_WORKS") &&
+    !homeMarketingSrc.includes("tbbt-feat-hero"),
+);
 check(
   "TBBT production origins are in the R2 browser-upload CORS list",
   r2Src.includes("https://tbbtool.com") &&

@@ -1,79 +1,260 @@
 import Link from "next/link";
 import {
+  ArrowRight,
+  BarChart3,
+  BookOpen,
+  CalendarClock,
+  Camera,
+  CircleDollarSign,
+  ClipboardList,
+  CreditCard,
+  FileText,
+  Globe,
+  Hammer,
+  Inbox,
+  MessageSquare,
+  Notebook,
+  Receipt,
+  Ruler,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Star,
+  Timer,
+  UserCog,
+  Users,
+  Wrench,
+} from "lucide-react";
+import { TbbtWatchVideoButton } from "@/components/tbbt-marketing/watch-video";
+import "@/components/tbbt-marketing/tbbt-features.css";
+import {
   TBBT_ADDITIONAL_FEATURES,
+  TBBT_BRAND_MOTTO,
   TBBT_CORE_FEATURES,
+  TBBT_FEATURES_HERO_EYEBROW,
+  TBBT_FEATURES_HERO_HEADLINE,
+  TBBT_FEATURES_HERO_SUPPORT,
+  TBBT_FEATURES_VALUE_POINTS,
+  TBBT_HERO_OFFER,
+  TBBT_HERO_SCRIPT,
   TBBT_SIGN_UP_HREF,
+  TBBT_TAGLINE,
   TBBT_TRIAL_CTA_LABEL,
 } from "@/lib/tbbt-marketing";
 
+const VALUE_ICONS = [Timer, Sparkles, ShieldCheck, Hammer] as const;
+
+const CORE_ICONS = {
+  website: Globe,
+  crm: Users,
+  schedule: CalendarClock,
+  estimate: FileText,
+  jobs: Hammer,
+  invoice: CreditCard,
+  time: Timer,
+  team: UserCog,
+  marketing: ClipboardList,
+  reports: BarChart3,
+} as const;
+
+const EXTRA_ICONS = [
+  Wrench,
+  Camera,
+  BookOpen,
+  Inbox,
+  Settings,
+  CircleDollarSign,
+  Receipt,
+  Star,
+  Notebook,
+  Ruler,
+  MessageSquare,
+  Sparkles,
+] as const;
+
+function FeatureVisual({
+  visual,
+  title,
+}: {
+  visual: (typeof TBBT_CORE_FEATURES)[number]["visual"];
+  title: string;
+}) {
+  const Icon = CORE_ICONS[visual];
+
+  if (visual === "website") {
+    return (
+      <div className="tbbt-feat-shot">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/brand/tbbt-marketing/build-house.png" alt="" />
+        <span>Public business website</span>
+      </div>
+    );
+  }
+
+  if (visual === "marketing") {
+    return (
+      <div className="tbbt-feat-shot">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/brand/tbbt-marketing/trade-handyman.png" alt="" />
+        <span>Job photos for content</span>
+      </div>
+    );
+  }
+
+  if (visual === "reports") {
+    return (
+      <div className="tbbt-feat-graphic tbbt-feat-graphic--chart" aria-hidden="true">
+        <div className="tbbt-feat-bars">
+          <i style={{ height: "38%" }} />
+          <i style={{ height: "52%" }} />
+          <i style={{ height: "46%" }} />
+          <i style={{ height: "68%" }} />
+          <i style={{ height: "84%" }} />
+        </div>
+        <span>Workspace reports</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="tbbt-feat-graphic" aria-hidden="true">
+      <span className="tbbt-feat-graphic-icon">
+        <Icon size={28} />
+      </span>
+      <span>{title}</span>
+    </div>
+  );
+}
+
 export function TbbtFeaturesPage() {
   return (
-    <>
-      <header className="tbbt-wrap tbbt-page-hero">
-        <p className="tbbt-kicker">Features</p>
-        <h1>The operating system, not a pile of apps.</h1>
-        <p className="tbbt-lead">
-          These cards describe capabilities that exist in TBBT today. Where a
-          direction is not yet production software, it is labeled planned.
-        </p>
-      </header>
-
-      <section className="tbbt-wrap tbbt-section" style={{ paddingTop: 0 }}>
-        <div className="tbbt-feature-grid">
-          {TBBT_CORE_FEATURES.map((feature) => (
-            <article
-              key={feature.title}
-              id={feature.href.replace("/features#", "")}
-              className="tbbt-card tbbt-feature-card"
-            >
-              <span className="tbbt-badge tbbt-badge--available">In product</span>
-              <h2 style={{ margin: "0.7rem 0 0.45rem", fontSize: "1.35rem" }}>
-                {feature.title}
-              </h2>
-              <p className="tbbt-muted">{feature.body}</p>
-            </article>
-          ))}
+    <div className="tbbt-features">
+      <section className="tbbt-feat-hero">
+        <div className="tbbt-wrap tbbt-feat-hero-inner">
+          <div className="tbbt-feat-hero-copy">
+            <p className="tbbt-kicker">{TBBT_FEATURES_HERO_EYEBROW}</p>
+            <h1>
+              {TBBT_FEATURES_HERO_HEADLINE[0]}
+              <br />
+              <span className="tbbt-feat-hero-accent">{TBBT_FEATURES_HERO_HEADLINE[1]}</span>
+            </h1>
+            <p className="tbbt-feat-hero-support">{TBBT_FEATURES_HERO_SUPPORT}</p>
+            <div className="tbbt-hero-actions">
+              <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
+                {TBBT_TRIAL_CTA_LABEL}
+                <ArrowRight size={16} />
+              </Link>
+              <Link href="#core-features" className="tbbt-btn tbbt-btn--ghost tbbt-btn--lg">
+                See Core Features
+              </Link>
+            </div>
+          </div>
+          <div className="tbbt-feat-hero-visual">
+            <p className="tbbt-script tbbt-feat-hero-script">{TBBT_HERO_SCRIPT}</p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/brand/tbbt-marketing/hero-devices.png"
+              alt="TBBT workspace on desktop and phone"
+            />
+          </div>
+        </div>
+        <div className="tbbt-wrap tbbt-feat-values">
+          {TBBT_FEATURES_VALUE_POINTS.map((item, index) => {
+            const Icon = VALUE_ICONS[index] ?? Sparkles;
+            return (
+              <article className="tbbt-feat-value" key={item.kicker}>
+                <Icon size={18} />
+                <div>
+                  <strong>{item.kicker}</strong>
+                  <p>{item.body}</p>
+                </div>
+              </article>
+            );
+          })}
         </div>
       </section>
 
-      <section className="tbbt-wrap tbbt-section">
-        <p className="tbbt-kicker">Also in the workspace</p>
-        <h2>Related tools, labeled honestly.</h2>
-        <div className="tbbt-feature-grid" style={{ marginTop: "1.3rem" }}>
-          {TBBT_ADDITIONAL_FEATURES.map((feature) => (
-            <article key={feature.title} className="tbbt-card tbbt-feature-card">
-              <span
-                className={
-                  feature.status === "live"
-                    ? "tbbt-badge tbbt-badge--available"
-                    : "tbbt-badge"
-                }
-              >
-                {feature.status === "live" ? "In product" : "Planned"}
-              </span>
-              <h3 style={{ margin: "0.7rem 0 0.45rem", fontSize: "1.2rem" }}>
-                {feature.title}
-              </h3>
-              <p className="tbbt-muted">{feature.body}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="tbbt-wrap tbbt-section">
-        <div className="tbbt-panel tbbt-cta-band">
-          <div>
-            <h2 style={{ marginBottom: 0 }}>See it in your own workspace.</h2>
-            <p className="tbbt-muted" style={{ marginTop: "0.5rem" }}>
-              Sign up uses the existing TBBT account path and 30-day Founder
-              Plan trial.
+      <section className="tbbt-feat-core" id="core-features">
+        <div className="tbbt-wrap">
+          <div className="tbbt-feat-core-head">
+            <h2>Core Features</h2>
+            <p className="tbbt-muted">
+              The operating tools in TBBT today — not a pile of separate apps.
             </p>
           </div>
-          <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
-            {TBBT_TRIAL_CTA_LABEL}
-          </Link>
+          <div className="tbbt-feat-core-grid">
+            {TBBT_CORE_FEATURES.map((feature) => {
+              const Icon = CORE_ICONS[feature.visual];
+              return (
+                <article
+                  key={feature.id}
+                  id={feature.id}
+                  className="tbbt-feat-card"
+                >
+                  <div className="tbbt-feat-card-top">
+                    <span className="tbbt-feat-card-icon">
+                      <Icon size={16} />
+                    </span>
+                    <h3>{feature.title}</h3>
+                  </div>
+                  <FeatureVisual visual={feature.visual} title={feature.title} />
+                  <p className="tbbt-muted">{feature.body}</p>
+                </article>
+              );
+            })}
+          </div>
         </div>
       </section>
-    </>
+
+      <section className="tbbt-feat-extra">
+        <div className="tbbt-wrap">
+          <div className="tbbt-feat-core-head">
+            <h2>Additional Features</h2>
+            <p className="tbbt-muted">More of the workspace, labeled honestly.</p>
+          </div>
+          <div className="tbbt-feat-extra-grid">
+            {TBBT_ADDITIONAL_FEATURES.map((feature, index) => {
+              const Icon = EXTRA_ICONS[index] ?? Sparkles;
+              return (
+                <article className="tbbt-feat-extra-card" key={feature.title}>
+                  <span className="tbbt-feat-card-icon">
+                    <Icon size={16} />
+                  </span>
+                  <div>
+                    <h3>
+                      {feature.title}
+                      {feature.status === "planned" ? (
+                        <span className="tbbt-badge">Planned</span>
+                      ) : null}
+                    </h3>
+                    <p className="tbbt-muted">{feature.body}</p>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      <section className="tbbt-feat-cta">
+        <div className="tbbt-wrap tbbt-feat-cta-inner">
+          <div>
+            <h2>Ready to Run Your Business From One Place?</h2>
+            <p className="tbbt-muted tbbt-feat-cta-lead">{TBBT_HERO_OFFER}</p>
+            <div className="tbbt-hero-actions tbbt-feat-cta-actions">
+              <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
+                {TBBT_TRIAL_CTA_LABEL}
+                <ArrowRight size={16} />
+              </Link>
+              <TbbtWatchVideoButton />
+            </div>
+          </div>
+          <div className="tbbt-feat-cta-motto">
+            <p className="tbbt-script">{TBBT_BRAND_MOTTO}</p>
+            <p>{TBBT_TAGLINE}</p>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
