@@ -5,7 +5,6 @@ import "@/components/public/public-site.css";
 import { PublicCtaBar } from "@/components/public/public-cta-bar";
 import { PublicPageHero } from "@/components/public/public-page-hero";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
-import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { smsHref } from "@/lib/directions";
 import {
   EXTENDED_SERVICE_AREA_COPY,
@@ -22,9 +21,11 @@ import {
   publicHomePath,
   publicPhone,
   publicRequestPath,
+  publicServiceAreaPath,
   resolvePublicServiceAreaCopy,
 } from "@/lib/public-site";
-import { loadPublicSite } from "@/lib/public-site-data";
+import { requirePublicSite } from "@/lib/require-public-site";
+import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { resolveBusinessServiceArea } from "@/lib/business-service-area";
 
 export const dynamic = "force-dynamic";
@@ -33,14 +34,14 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  const name = site ? publicDisplayName(site.business) : "Service Area";
-  return {
-    title: { absolute: `Service Area | ${name}` },
-    description: site
-      ? resolvePublicServiceAreaCopy(site.business)
-      : SERVICE_AREA_COPY,
-  };
+  const site = await requirePublicSite(slug);
+  const name = publicDisplayName(site.business);
+  return publicTenantPageMetadata({
+    business: site.business,
+    title: `Service Area | ${name}`,
+    description: resolvePublicServiceAreaCopy(site.business),
+    pathname: publicServiceAreaPath(site.business.slug),
+  });
 }
 
 const POINTS = [
@@ -51,10 +52,7 @@ const POINTS = [
 
 export default async function PublicServiceAreaPage({ params }: PageProps) {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  if (!site) {
-    return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
-  }
+  const site = await requirePublicSite(slug);
   const phone = publicPhone(site.business);
   const textHref = smsHref(phone);
   const requestHref = publicRequestPath(site.business.slug);

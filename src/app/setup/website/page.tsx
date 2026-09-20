@@ -25,6 +25,7 @@ import {
 import {
   ownerNeedsWebsiteSetup,
   WEBSITE_SETUP_SAVED,
+  WEBSITE_SETUP_SKIPPED,
 } from "@/lib/website-setup";
 import { requireWorkspace } from "@/lib/workspace";
 
@@ -47,37 +48,39 @@ export default async function WebsiteSetupPage() {
     redirect(STARTER_SERVICES_SETUP_PATH);
   }
 
-  const saved =
-    workspace.business.websiteSetupChoice === WEBSITE_SETUP_SAVED;
+  const completed =
+    workspace.business.websiteSetupChoice === WEBSITE_SETUP_SAVED ||
+    workspace.business.websiteSetupChoice === WEBSITE_SETUP_SKIPPED;
   const previewHref = publicHomePath(workspace.business.slug);
 
-  if (!ownerNeedsWebsiteSetup(workspace) && !saved) {
+  if (!ownerNeedsWebsiteSetup(workspace) && !completed) {
     redirect(postAuthenticationPath(workspace));
   }
 
-  if (saved) {
+  if (completed) {
     return (
       <Card>
         <CardHeader>
           <CardTitle>Public website ready</CardTitle>
           <CardDescription>
-            Homeowners can view this business at its existing TBBT public site.
-            You can change these details later in Settings.
+            Homeowners can visit this business at its TBBT public site. You can
+            change these details later in Settings.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <Alert>
             <AlertDescription>
-              Preview the public site, then continue to the Dashboard.
+              Your public website is live. Open it, then continue to the Dashboard.
             </AlertDescription>
           </Alert>
+          <p className="break-all text-sm text-muted-foreground">{previewHref}</p>
           <Link
             href={previewHref}
             target="_blank"
             rel="noreferrer"
             className={buttonVariants({ variant: "outline", className: "w-full" })}
           >
-            Preview public site
+            View Public Website
           </Link>
           <Link href="/dashboard" className={buttonVariants({ className: "w-full" })}>
             Continue to Dashboard

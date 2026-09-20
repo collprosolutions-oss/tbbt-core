@@ -6,6 +6,7 @@ import { BusinessProfileForm } from "@/components/settings/business-profile-form
 import { BusinessPublicContactForm } from "@/components/settings/business-public-contact-form";
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
+import { ViewPublicWebsiteLink } from "@/components/settings/view-public-website-link";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { ConnectStripeButton } from "@/components/settings/connect-stripe-button";
 import {
@@ -196,6 +197,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
         title="Edit Website Photos"
         description="Owner and admin only. Replace photos or adjust zoom and position for Home, Services, About, and Reviews. This is not a page builder."
       >
+        <ViewPublicWebsiteLink slug={snapshot.business.slug} className="mb-4" />
         {websitePhotos ? (
           <WebsitePhotosEditor
             businessId={snapshot.business.id}
@@ -220,6 +222,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
         title="Website Story"
         description="Owner and admin only. Raw background stays private until you approve public About copy."
       >
+        <ViewPublicWebsiteLink slug={snapshot.business.slug} className="mb-4" />
         {canEditPreferences && canOperate ? (
           <WebsiteStoryForm
             businessId={snapshot.business.id}
@@ -245,6 +248,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
           title="Business identity"
           description="Uses the existing Business record. Tenant scope comes from the signed-in workspace, never a browser-submitted business id."
         >
+          <ViewPublicWebsiteLink slug={snapshot.business.slug} className="mb-4" />
           <BusinessProfileForm name={snapshot.business.name} canEdit={canEditConsequential} />
           <dl className="grid gap-3 text-sm sm:grid-cols-2">
             <div>

@@ -4,16 +4,17 @@ import { PublicCtaBar } from "@/components/public/public-cta-bar";
 import { PublicPageHero } from "@/components/public/public-page-hero";
 import { PublicProjectsGallery } from "@/components/public/public-projects-gallery";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
-import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { smsHref } from "@/lib/directions";
 import {
   PUBLIC_PROJECTS_HERO_IMAGE,
   publicDisplayName,
   publicHomePath,
   publicPhone,
+  publicProjectsPath,
   publicRequestPath,
 } from "@/lib/public-site";
-import { loadPublicSite } from "@/lib/public-site-data";
+import { requirePublicSite } from "@/lib/require-public-site";
+import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 
 export const dynamic = "force-dynamic";
 
@@ -21,20 +22,19 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  const name = site ? publicDisplayName(site.business) : "Projects";
-  return {
-    title: { absolute: `Projects | ${name}` },
+  const site = await requirePublicSite(slug);
+  const name = publicDisplayName(site.business);
+  return publicTenantPageMetadata({
+    business: site.business,
+    title: `Projects | ${name}`,
     description: `Recent handyman and home-improvement project photos from ${name}.`,
-  };
+    pathname: publicProjectsPath(site.business.slug),
+  });
 }
 
 export default async function PublicProjectsPage({ params }: PageProps) {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  if (!site) {
-    return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
-  }
+  const site = await requirePublicSite(slug);
   const phone = publicPhone(site.business);
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>

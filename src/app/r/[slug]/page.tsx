@@ -5,7 +5,6 @@ import { PublicCtaBar } from "@/components/public/public-cta-bar";
 import { PublicPageHero } from "@/components/public/public-page-hero";
 import { MultiServiceRequestFlow } from "@/components/public/request-flow";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
-import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { smsHref } from "@/lib/directions";
 import {
   publicDisplayName,
@@ -16,7 +15,8 @@ import {
   publicRequestPath,
 } from "@/lib/public-site";
 import { resolveBusinessServiceArea } from "@/lib/business-service-area";
-import { loadPublicSite } from "@/lib/public-site-data";
+import { requirePublicSite } from "@/lib/require-public-site";
+import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { parseSelectedWorkSearch } from "@/lib/selected-work";
 import { isBusinessStorageConfigured } from "@/lib/business-storage";
 import { loadPublicNextAvailableLabel } from "@/lib/availability-data";
@@ -36,21 +36,20 @@ type PageProps = {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  const name = site ? publicDisplayName(site.business) : "Request service";
-  return {
-    title: { absolute: `Request Service | ${name}` },
+  const site = await requirePublicSite(slug);
+  const name = publicDisplayName(site.business);
+  return publicTenantPageMetadata({
+    business: site.business,
+    title: `Request Service | ${name}`,
     description: `Request one or more handyman tasks from ${name} in a single visit request.`,
-  };
+    pathname: publicRequestPath(site.business.slug),
+  });
 }
 
 export default async function PublicIntakePage({ params, searchParams }: PageProps) {
   const { slug } = await params;
   const query = await searchParams;
-  const site = await loadPublicSite(slug);
-  if (!site) {
-    return <PublicUnavailable title="Request unavailable" body="This request could not be submitted." />;
-  }
+  const site = await requirePublicSite(slug);
 
   const initialSelected = parseSelectedWorkSearch(
     query,

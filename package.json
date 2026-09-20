@@ -46,6 +46,7 @@
     "test:navigation-origin": "node --experimental-strip-types scripts/check-navigation-origin.mjs",
     "test:field-time-cards-flow": "node --experimental-strip-types scripts/check-field-time-cards-flow.mjs",
     "test:public-website": "node --experimental-strip-types scripts/check-public-website.mjs",
+    "test:live-public-website": "node --experimental-strip-types scripts/check-live-public-website.mjs",
     "test:tbbt-marketing": "node --experimental-strip-types scripts/check-tbbt-marketing.mjs",
     "test:service-address": "node --experimental-strip-types scripts/check-service-address.mjs",
     "test:project-portal-layout": "node scripts/check-project-portal-layout.mjs",

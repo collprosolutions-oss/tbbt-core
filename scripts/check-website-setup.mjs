@@ -138,6 +138,16 @@ check(
     websiteForm.includes("Skip for now"),
 );
 check(
+  "Save and skip both land on the public-site handoff with View Public Website",
+  websitePage.includes("WEBSITE_SETUP_SKIPPED") &&
+    websitePage.includes("View Public Website") &&
+    websitePage.includes("Continue to Dashboard") &&
+    websitePage.includes("Public website ready") &&
+    (readRepo("src/app/actions/website-setup.ts").match(/redirect\(WEBSITE_SETUP_PATH\)/g) || [])
+      .length === 2 &&
+    !readRepo("src/app/actions/website-setup.ts").includes("postAuthenticationPath"),
+);
+check(
   "Task 3 does not add custom domains, Stripe Billing, Cleaning, AI copy, or a site builder",
   !websitePage.includes("custom domain") &&
     !websiteForm.includes("subdomain") &&

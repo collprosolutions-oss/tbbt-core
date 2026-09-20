@@ -4,7 +4,6 @@ import "@/components/public/public-site.css";
 import { PublicCtaBar } from "@/components/public/public-cta-bar";
 import { PublicPageHero } from "@/components/public/public-page-hero";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
-import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { smsHref } from "@/lib/directions";
 import {
   REVIEWS_PLACEHOLDER_COPY,
@@ -14,9 +13,11 @@ import {
   publicHomePath,
   publicPhone,
   publicRequestPath,
+  publicReviewsPath,
 } from "@/lib/public-site";
 import { prisma } from "@/lib/prisma";
-import { loadPublicSite } from "@/lib/public-site-data";
+import { requirePublicSite } from "@/lib/require-public-site";
+import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { loadPublicReviewsImages } from "@/lib/public-site-images";
 
 export const dynamic = "force-dynamic";
@@ -25,22 +26,21 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  const name = site ? publicDisplayName(site.business) : "Reviews";
-  return {
-    title: { absolute: `Reviews | ${name}` },
+  const site = await requirePublicSite(slug);
+  const name = publicDisplayName(site.business);
+  return publicTenantPageMetadata({
+    business: site.business,
+    title: `Reviews | ${name}`,
     description: `Customer feedback for ${name} will appear here when it is approved for public display.`,
-  };
+    pathname: publicReviewsPath(site.business.slug),
+  });
 }
 
 const TRUST_ICONS = [Shield, Clock, Handshake, Users] as const;
 
 export default async function PublicReviewsPage({ params }: PageProps) {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  if (!site) {
-    return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
-  }
+  const site = await requirePublicSite(slug);
   const phone = publicPhone(site.business);
   const images = await loadPublicReviewsImages(prisma, site.business.id, site.business.slug);
 

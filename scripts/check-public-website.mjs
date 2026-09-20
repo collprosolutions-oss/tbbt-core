@@ -311,7 +311,16 @@ check("Website Story keeps raw owner notes separate from approved public copy",
 
 console.log("\nSTATIC — Catalog and intake architecture");
 check("Public catalog uses persisted categories",
-  hireSrc.includes("loadPublicSite") && readRepo("src/lib/public-site.ts").includes("groupServiceCatalogItemsByCategory"));
+  (hireSrc.includes("requirePublicSite") || hireSrc.includes("loadPublicSite")) &&
+    readRepo("src/lib/public-site.ts").includes("groupServiceCatalogItemsByCategory"));
+check("Unknown hire slugs return a real 404 instead of a 200 placeholder",
+  hireSrc.includes("requirePublicSite") &&
+    readRepo("src/lib/require-public-site.ts").includes("notFound()") &&
+    readRepo("src/app/hire/[slug]/not-found.tsx").includes("This business could not be found.") &&
+    !hireSrc.includes("PublicUnavailable"));
+check("Hire pages publish a tenant canonical URL",
+  hireSrc.includes("publicTenantPageMetadata") &&
+    readRepo("src/lib/public-site-seo.ts").includes("alternates: { canonical }"));
 check("Intake creates ServiceRequestItem rows, not comma-separated IDs",
   readRepo("src/lib/public-intake.ts").includes("serviceRequestItem.createMany") &&
     !readRepo("src/lib/public-intake.ts").includes("join(\",\")"));
@@ -925,6 +934,9 @@ try {
     const hire = await fetchMaybe("/hire/collpro-reno");
     check("Existing /hire/collpro-reno homepage still loads",
       Boolean(hire && hire.status === 200 && hire.body.includes(COLLPRO_RENO_DISPLAY_NAME)));
+    const missingHire = await fetchMaybe("/hire/no-such-tbbt-business");
+    check("Unknown public hire slug returns HTTP 404",
+      Boolean(missingHire && missingHire.status === 404));
 
     const services = await fetchMaybe("/hire/collpro-reno/services");
     check("Services page loads",

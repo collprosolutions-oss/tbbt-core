@@ -3,16 +3,17 @@ import "@/components/public/public-site.css";
 import { PublicPageHero } from "@/components/public/public-page-hero";
 import { PublicServicesBrowser } from "@/components/public/public-services-browser";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
-import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { smsHref } from "@/lib/directions";
 import {
   publicDisplayName,
   publicHomePath,
   publicPhone,
   publicRequestPath,
+  publicServicesPath,
 } from "@/lib/public-site";
 import { prisma } from "@/lib/prisma";
-import { loadPublicSite } from "@/lib/public-site-data";
+import { requirePublicSite } from "@/lib/require-public-site";
+import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { loadPublicServicesImages } from "@/lib/public-site-images";
 import { parseSelectedWorkSearch } from "@/lib/selected-work";
 
@@ -31,21 +32,20 @@ type PageProps = {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  const name = site ? publicDisplayName(site.business) : "Services";
-  return {
-    title: { absolute: `Services | ${name}` },
+  const site = await requirePublicSite(slug);
+  const name = publicDisplayName(site.business);
+  return publicTenantPageMetadata({
+    business: site.business,
+    title: `Services | ${name}`,
     description: `Browse handyman services from ${name}. Select one or more tasks, then continue to request service.`,
-  };
+    pathname: publicServicesPath(site.business.slug),
+  });
 }
 
 export default async function PublicServicesPage({ params, searchParams }: PageProps) {
   const { slug } = await params;
   const query = await searchParams;
-  const site = await loadPublicSite(slug);
-  if (!site) {
-    return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
-  }
+  const site = await requirePublicSite(slug);
   const phone = publicPhone(site.business);
   const requestHref = publicRequestPath(site.business.slug);
   const textHref = smsHref(phone);

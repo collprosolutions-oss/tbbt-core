@@ -151,6 +151,14 @@ try {
       !settingsSource.includes('DeferredField label="Phone"') &&
       !settingsSource.includes('DeferredField label="Service area"'),
   );
+  check(
+    "Owner can open the live public website from Settings",
+    settingsSource.includes("ViewPublicWebsiteLink") &&
+      readFileSync(
+        new URL("../src/components/settings/view-public-website-link.tsx", import.meta.url),
+        "utf8",
+      ).includes("View Public Website"),
+  );
 
   const readiness = buildSettingsReadiness({
     businessName: "CollPro",
