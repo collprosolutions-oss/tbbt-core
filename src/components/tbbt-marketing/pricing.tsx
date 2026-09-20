@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {
+  TBBT_FOUNDER_NO_CARD,
   TBBT_FOUNDER_PLAN_DISPLAY_NAME,
   TBBT_FOUNDER_PRICE_LABEL,
   TBBT_FOUNDER_TRIAL_LABEL,
@@ -26,7 +27,7 @@ export function TbbtPricingPage() {
           <p className="tbbt-kicker">TBBT {TBBT_FOUNDER_PLAN_DISPLAY_NAME}</p>
           <p className="tbbt-amount">{TBBT_FOUNDER_PRICE_LABEL}</p>
           <p className="tbbt-muted">
-            {TBBT_FOUNDER_TRIAL_LABEL}. No credit card required to begin. The
+            {TBBT_FOUNDER_TRIAL_LABEL}. {TBBT_FOUNDER_NO_CARD} The
             Founder rate is protected while you stay continuously subscribed.
           </p>
           <ul>

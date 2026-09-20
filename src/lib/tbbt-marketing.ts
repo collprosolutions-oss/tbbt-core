@@ -19,8 +19,10 @@ export const TBBT_POSITIONING =
   "The All-In-One Business Operating System for the Trades.";
 export const TBBT_SIGN_IN_HREF = "/sign-in";
 export const TBBT_SIGN_UP_HREF = "/sign-up";
-export const TBBT_TRIAL_CTA_LABEL = "Start Your Free 30-Day Trial";
-export const TBBT_TRIAL_NAV_LABEL = "Start Free Trial";
+export const TBBT_TRIAL_CTA_LABEL = "Start Free for 30 Days";
+export const TBBT_TRIAL_NAV_LABEL = "Start Free";
+export const TBBT_SEE_WHAT_YOU_GET_HREF = "#what-you-get";
+export const TBBT_SEE_WHAT_YOU_GET_LABEL = "See What You Get";
 
 export const TBBT_NAV = [
   { href: "/", label: "Home", key: "home" },
@@ -38,21 +40,23 @@ export const TBBT_LEGAL_NAV = [
 ] as const;
 
 export const TBBT_HERO_HEADLINE = [
-  "The All-In-One",
-  "Business Operating",
-  "System",
+  "Build your trades",
+  "business.",
+  "Run it from",
 ] as const;
 
-export const TBBT_HERO_ACCENT = "for the Trades.";
+export const TBBT_HERO_ACCENT = "one place.";
 
 export const TBBT_HERO_SCRIPT = "Built for the Trades. By a Tradesman.";
 
 export const TBBT_HERO_SUPPORT_LINES = [
-  "Build your website. Manage your customers.",
-  "Schedule your work. Create estimates and invoices.",
-  "Track your time and payments. Market your business.",
-  "All in one powerful platform.",
+  "Website, customers, estimates, jobs, scheduling, invoices — and the tools you need to operate your business.",
 ] as const;
+
+export const TBBT_HERO_OFFER = "30 days free. No credit card required.";
+
+export const TBBT_HERO_EYEBROW =
+  "The operating system for trades and service businesses";
 
 export const TBBT_PROMISE_STRIP = [
   { kicker: "Save Time", body: "Stop jumping between disconnected tools for the same customer." },
@@ -316,6 +320,74 @@ export const TBBT_ADDITIONAL_FEATURES = [
 export const TBBT_FOUNDER_PRICE_LABEL = TBBT_FOUNDER_PLAN_PRICE_LABEL;
 export const TBBT_FOUNDER_PLAN_DISPLAY_NAME = TBBT_SAAS_PLAN_NAME;
 export const TBBT_FOUNDER_TRIAL_LABEL = `${TBBT_FOUNDER_TRIAL_DAYS}-Day Free Trial`;
+export const TBBT_FOUNDER_NO_CARD = "No credit card required.";
+export const TBBT_FOUNDER_PROTECTION =
+  "Founder pricing stays protected while your subscription remains continuously active.";
+
+export const TBBT_HOW_IT_WORKS = [
+  {
+    step: "1",
+    title: "Create your business",
+    body: "Enter your business information.",
+  },
+  {
+    step: "2",
+    title: "Choose your services",
+    body: "Start with TBBT's Handyman service catalog and customize it.",
+  },
+  {
+    step: "3",
+    title: "Get your website",
+    body: "TBBT creates your public business website and request-service path.",
+  },
+  {
+    step: "4",
+    title: "Run the work",
+    body: "Manage customers, estimates, jobs, scheduling, invoices, expenses and time.",
+  },
+] as const;
+
+export const TBBT_OS_GROUPS = [
+  {
+    kicker: "Get online",
+    title: "Show up as a real business",
+    points: [
+      "Public business website",
+      "Services customers can request",
+      "Customer request intake",
+    ],
+  },
+  {
+    kicker: "Run the business",
+    title: "Operate from one workspace",
+    points: [
+      "Customers and CRM",
+      "Estimates, jobs, and scheduling",
+      "Invoices, expenses, time cards, and reporting",
+    ],
+  },
+  {
+    kicker: "Grow",
+    title: "Use the work you already recorded",
+    points: [
+      "Reviews workflow",
+      "Marketing content workspace",
+      "Customer follow-up foundation",
+    ],
+  },
+] as const;
+
+export const TBBT_DIFFERENTIATION = {
+  title: "One workspace instead of a pile of tools",
+  body: "Most small tradespeople end up piecing together a website, scheduling, customer records, estimates, invoices, time tracking, job records, and marketing. TBBT brings those operating pieces into one business workspace.",
+} as const;
+
+export const TBBT_HOMEPAGE_PRICING_POINTS = [
+  "Public website and request-service path",
+  "Customers, estimates, jobs, and scheduling",
+  "Invoices, expenses, time cards, and reporting",
+  "Reviews and marketing content workspace",
+] as const;
 
 export const TBBT_PRICING_FEATURES = [
   "Public website setup with the Handyman trade template",
@@ -539,7 +611,7 @@ export function tbbtPageTitle(page: string): string {
 export function tbbtPageDescription(page: string): string {
   switch (page) {
     case "home":
-      return "TBBT is the all-in-one business operating system for the trades. Build the website, run the work, and grow the business from one connected system.";
+      return "TBBT is the business operating system for trades. Website, customers, estimates, jobs, scheduling, and invoices in one workspace. Founder Plan $49/month. 30-day free trial. No credit card required.";
     case "features":
       return "Website builder, CRM, scheduling, estimates, jobs, invoices, time tracking, team, marketing, and reports — the TBBT operating system for trades businesses.";
     case "trades":

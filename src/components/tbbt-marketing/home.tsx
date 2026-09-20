@@ -18,11 +18,23 @@ import { TbbtWatchVideoButton } from "@/components/tbbt-marketing/watch-video";
 import "@/components/tbbt-marketing/tbbt-home.css";
 import {
   TBBT_BRAND_MOTTO,
+  TBBT_DIFFERENTIATION,
+  TBBT_FOUNDER_NO_CARD,
+  TBBT_FOUNDER_PLAN_DISPLAY_NAME,
+  TBBT_FOUNDER_PRICE_LABEL,
+  TBBT_FOUNDER_PROTECTION,
+  TBBT_FOUNDER_TRIAL_LABEL,
   TBBT_HERO_ACCENT,
+  TBBT_HERO_EYEBROW,
   TBBT_HERO_HEADLINE,
+  TBBT_HERO_OFFER,
   TBBT_HERO_SCRIPT,
   TBBT_HERO_SUPPORT_LINES,
+  TBBT_HOMEPAGE_PRICING_POINTS,
+  TBBT_HOW_IT_WORKS,
   TBBT_PROMISE_STRIP,
+  TBBT_SEE_WHAT_YOU_GET_HREF,
+  TBBT_SEE_WHAT_YOU_GET_LABEL,
   TBBT_SIGN_UP_HREF,
   TBBT_TRADE_STATUS_LABEL,
   TBBT_TRADE_THUMBS,
@@ -57,7 +69,7 @@ export function TbbtHomePage() {
       <section className="tbbt-hero-cinematic">
         <div className="tbbt-wrap tbbt-hero-stage">
           <div className="tbbt-hero-copy">
-            <p className="tbbt-eyebrow">More than tools. A better way to build your business.</p>
+            <p className="tbbt-eyebrow">{TBBT_HERO_EYEBROW}</p>
             <h1>
               {TBBT_HERO_HEADLINE[0]}
               <br />
@@ -69,12 +81,15 @@ export function TbbtHomePage() {
               </span>
             </h1>
             <p className="tbbt-hero-support">{TBBT_HERO_SUPPORT_LINES.join(" ")}</p>
+            <p className="tbbt-hero-offer">{TBBT_HERO_OFFER}</p>
             <div className="tbbt-hero-actions">
               <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
                 {TBBT_TRIAL_CTA_LABEL}
                 <ArrowRight size={16} />
               </Link>
-              <TbbtWatchVideoButton />
+              <Link href={TBBT_SEE_WHAT_YOU_GET_HREF} className="tbbt-btn tbbt-btn--ghost tbbt-btn--lg">
+                {TBBT_SEE_WHAT_YOU_GET_LABEL}
+              </Link>
             </div>
           </div>
 
@@ -110,9 +125,10 @@ export function TbbtHomePage() {
       <section className="tbbt-band tbbt-band--trades">
         <div className="tbbt-wrap">
           <div className="tbbt-split-head">
-            <h2>Built for every trade</h2>
+            <h2>Built for trades businesses</h2>
             <p className="tbbt-muted">
-              Same powerful platform. Customized for your trade.
+              Handyman is the live starting setup today. Cleaning and other
+              trades are planned on the same system — they are not launched yet.
             </p>
           </div>
           <div className="tbbt-trade-strip">
@@ -147,12 +163,13 @@ export function TbbtHomePage() {
         </div>
       </section>
 
-      <section className="tbbt-band tbbt-band--brg">
+      <section className="tbbt-band tbbt-band--brg" id="what-you-get">
         <div className="tbbt-wrap">
           <div className="tbbt-brg-head">
             <h2>Build. Run. Grow.</h2>
             <p className="tbbt-muted">
-              Everything you need for a stronger, more profitable business.
+              One system to get online, run the work, and grow from records you
+              already keep.
             </p>
           </div>
           <div className="tbbt-brg">
@@ -184,6 +201,51 @@ export function TbbtHomePage() {
               </Link>
             </article>
           </div>
+        </div>
+      </section>
+
+      <section className="tbbt-band tbbt-how" id="how-it-works">
+        <div className="tbbt-wrap">
+          <div className="tbbt-split-head">
+            <h2>How it works</h2>
+            <p className="tbbt-muted">
+              Self-serve setup. No custom domain is included automatically.
+            </p>
+          </div>
+          <ol className="tbbt-how-grid">
+            {TBBT_HOW_IT_WORKS.map((item) => (
+              <li className="tbbt-how-card" key={item.step}>
+                <span className="tbbt-how-step">{item.step}</span>
+                <h3>{item.title}</h3>
+                <p className="tbbt-muted">{item.body}</p>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+
+      <section className="tbbt-band tbbt-offer" id="founder-plan">
+        <div className="tbbt-wrap tbbt-offer-grid">
+          <div className="tbbt-offer-copy">
+            <h2>{TBBT_DIFFERENTIATION.title}</h2>
+            <p className="tbbt-muted">{TBBT_DIFFERENTIATION.body}</p>
+          </div>
+          <article className="tbbt-panel tbbt-price tbbt-offer-price">
+            <p className="tbbt-kicker">{TBBT_FOUNDER_PLAN_DISPLAY_NAME}</p>
+            <p className="tbbt-amount">{TBBT_FOUNDER_PRICE_LABEL}</p>
+            <p className="tbbt-muted">
+              {TBBT_FOUNDER_TRIAL_LABEL}. {TBBT_FOUNDER_NO_CARD}
+            </p>
+            <ul>
+              {TBBT_HOMEPAGE_PRICING_POINTS.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+            <p className="tbbt-muted tbbt-offer-protect">{TBBT_FOUNDER_PROTECTION}</p>
+            <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
+              {TBBT_TRIAL_CTA_LABEL}
+            </Link>
+          </article>
         </div>
       </section>
 
@@ -220,6 +282,20 @@ export function TbbtHomePage() {
         </div>
       </section>
 
+      <section className="tbbt-band tbbt-founder-note">
+        <div className="tbbt-wrap tbbt-founder-note-inner">
+          <p className="tbbt-kicker">Built from the trade</p>
+          <h2>TBBT is being built from real trades operating experience.</h2>
+          <p className="tbbt-muted">
+            Not a generic software experiment. The workflows follow how the
+            work actually moves: request, estimate, job, invoice.
+          </p>
+          <Link href="/about" className="tbbt-btn tbbt-btn--ghost">
+            About TBBT
+          </Link>
+        </div>
+      </section>
+
       <section className="tbbt-final-cta">
         <div className="tbbt-wrap tbbt-final-inner">
           <div className="tbbt-final-side" aria-hidden="true">
@@ -227,10 +303,9 @@ export function TbbtHomePage() {
             <img src="/brand/tbbt-marketing/cta-sunset.png" alt="" />
           </div>
           <div>
-            <h2>Ready to Build a Better Business?</h2>
+            <h2>Ready to run the business from one place?</h2>
             <p className="tbbt-muted tbbt-final-lead">
-              Join trades professionals who are saving time, winning more work,
-              and building the business they want — with TBBT.
+              Start the 30-day Founder trial. No credit card required.
             </p>
             <div className="tbbt-hero-actions tbbt-final-actions">
               <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">

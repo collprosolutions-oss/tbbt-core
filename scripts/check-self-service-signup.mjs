@@ -96,10 +96,10 @@ const signupForm = readRepo("src/components/auth/sign-up-form.tsx");
 
 console.log("\nSTATIC — Public CTA enters the real signup flow");
 check(
-  "Start Free Trial CTAs reuse /sign-up",
+  "Start Free CTAs reuse /sign-up",
   TBBT_SIGN_UP_HREF === "/sign-up" &&
-    TBBT_TRIAL_NAV_LABEL === "Start Free Trial" &&
-    TBBT_TRIAL_CTA_LABEL.includes("30-Day") &&
+    TBBT_TRIAL_NAV_LABEL === "Start Free" &&
+    TBBT_TRIAL_CTA_LABEL.includes("30 Days") &&
     headerSrc.includes("TBBT_SIGN_UP_HREF") &&
     homeSrc.includes("TBBT_SIGN_UP_HREF") &&
     pricingSrc.includes("TBBT_SIGN_UP_HREF") &&
