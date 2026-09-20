@@ -201,6 +201,23 @@ function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
 }
 
+async function withEnv(overrides, fn) {
+  const previous = {};
+  for (const key of Object.keys(overrides)) {
+    previous[key] = process.env[key];
+    if (overrides[key] === undefined) delete process.env[key];
+    else process.env[key] = overrides[key];
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const key of Object.keys(overrides)) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  }
+}
+
 const websiteLib = readRepo("src/lib/website-setup.ts");
 const websiteAction = readRepo("src/app/actions/website-setup.ts");
 const firstRunSrc = readRepo("src/lib/first-run-setup.ts");
@@ -271,6 +288,13 @@ check(
     readRepo("src/components/settings/saas-billing-buttons.tsx").includes("Start subscription") &&
     bannerSrc.includes("SaasSubscribeButton") &&
     bannerSrc.includes("Open TBBT Billing"),
+);
+check(
+  "TBBT Billing shows the Price ID setup warning only from founderPriceWarning and keeps Start subscription on checkoutPossible",
+  settingsWorkspace.includes("{billing.founderPriceWarning ? (") &&
+    settingsWorkspace.includes("{billing.founderPriceWarning}") &&
+    settingsWorkspace.includes("{billing.checkoutPossible ? <SaasSubscribeButton /> : null}") &&
+    !settingsWorkspace.includes("TBBT_FOUNDER_PRICE_OPERATIONAL_REQUIREMENT"),
 );
 check(
   "Schema persists explicit trial dates and founder eligibility, not Business.createdAt",
@@ -747,6 +771,50 @@ try {
   check(
     "Operational Stripe Price requirement is documented for production Checkout",
     TBBT_FOUNDER_PRICE_OPERATIONAL_REQUIREMENT.includes("recurring $49 USD/month"),
+  );
+  check(
+    "Configured STRIPE_SAAS_PRICE_ID keeps Start subscription available without the setup warning",
+    billing.checkoutPossible === true &&
+      billing.founderPriceWarning === null &&
+      billing.configured === true,
+  );
+
+  const missingPriceWarning = await withEnv(
+    { TBBT_SAAS_BILLING_ADAPTER: undefined, STRIPE_SAAS_PRICE_ID: undefined },
+    () => inspectConfiguredFounderPrice(),
+  );
+  check(
+    "Missing STRIPE_SAAS_PRICE_ID shows the configuration warning",
+    missingPriceWarning.warning === TBBT_FOUNDER_PRICE_OPERATIONAL_REQUIREMENT &&
+      missingPriceWarning.configuredPriceId === null,
+  );
+
+  const configuredPriceInspection = await withEnv(
+    {
+      TBBT_SAAS_BILLING_ADAPTER: undefined,
+      STRIPE_SAAS_PRICE_ID: "price_saas_configured",
+      STRIPE_SECRET_KEY: undefined,
+    },
+    () => inspectConfiguredFounderPrice(),
+  );
+  check(
+    "Configured STRIPE_SAAS_PRICE_ID does not show the configuration warning",
+    configuredPriceInspection.configuredPriceId === "price_saas_configured" &&
+      configuredPriceInspection.warning === null,
+  );
+
+  const retrieveFailureInspection = await withEnv(
+    {
+      TBBT_SAAS_BILLING_ADAPTER: undefined,
+      STRIPE_SAAS_PRICE_ID: "price_saas_configured",
+    },
+    () => inspectConfiguredFounderPrice(),
+  );
+  check(
+    "Configured STRIPE_SAAS_PRICE_ID stays warning-free if Stripe Price retrieve fails",
+    retrieveFailureInspection.configuredPriceId === "price_saas_configured" &&
+      retrieveFailureInspection.verified === false &&
+      retrieveFailureInspection.warning === null,
   );
 } catch (error) {
   console.error(error);
