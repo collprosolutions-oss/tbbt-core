@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { recordAppointmentEvent } from "@/lib/appointment-data";
 import { buildAppointmentProposedEmail } from "@/lib/appointment-mail";
+import { attemptAppointmentSms } from "@/lib/customer-messaging";
 import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { formatMailingAddress } from "@/lib/format";
 import {
@@ -43,7 +44,7 @@ export async function notifyCustomerAppointmentProposed(
       projectToken: true,
       scheduledAt: true,
       scheduledDurationMinutes: true,
-      customer: { select: { name: true, email: true } },
+      customer: { select: { id: true, name: true, email: true } },
       property: {
         select: {
           addressLine1: true,
@@ -78,6 +79,18 @@ export async function notifyCustomerAppointmentProposed(
     return { sent: false, warning: "That appointment could not be notified." };
   }
 
+  const queueSms = () =>
+    attemptAppointmentSms(db, {
+      businessId: input.businessId,
+      jobId: job.id,
+      customerId: job.customer?.id ?? null,
+      businessName: input.businessName,
+      proposalId: input.proposalId,
+      rescheduled: input.rescheduled,
+      projectToken: job.projectToken,
+      initiatedByMembershipId: input.actorMembershipId,
+    });
+
   const fail = async (
     status: "FAILED" | "SKIPPED_NO_EMAIL" | "NOT_CONFIGURED",
     warning: string,
@@ -107,26 +120,32 @@ export async function notifyCustomerAppointmentProposed(
 
   const config = getMailConfig();
   if ("error" in config) {
-    return fail(
+    const result = await fail(
       "NOT_CONFIGURED",
       "Email delivery is not configured, so the customer was not notified.",
     );
+    await queueSms();
+    return result;
   }
 
   const recipient = job.customer?.email?.trim() ?? "";
   if (!isUsableEmail(recipient)) {
-    return fail(
+    const result = await fail(
       "SKIPPED_NO_EMAIL",
       "This customer has no usable email. Copy the project link so they can confirm in the project portal.",
     );
+    await queueSms();
+    return result;
   }
 
   const appUrl = config.appUrl || getAppUrl();
   if (!appUrl) {
-    return fail(
+    const result = await fail(
       "NOT_CONFIGURED",
       "Email delivery is not configured, so the customer was not notified.",
     );
+    await queueSms();
+    return result;
   }
 
   const email = buildAppointmentProposedEmail({
@@ -158,7 +177,9 @@ export async function notifyCustomerAppointmentProposed(
   });
 
   if (sent.error) {
-    return fail("FAILED", "The appointment email could not be sent.");
+    const failed = await fail("FAILED", "The appointment email could not be sent.");
+    await queueSms();
+    return failed;
   }
 
   await db.job.update({
@@ -181,5 +202,6 @@ export async function notifyCustomerAppointmentProposed(
     actorMembershipId: input.actorMembershipId,
     payload: { notificationStatus: "SENT" },
   });
+  await queueSms();
   return { sent: true };
 }

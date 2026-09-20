@@ -229,6 +229,7 @@ model Business {
   supplierPreferences      BusinessSupplierPreference[]
   materialSupplierMappings BusinessMaterialSupplierMapping[]
   supplierPriceRecords     SupplierPriceRecord[]
+  customerCommunications   CustomerCommunication[]
 }
 
 model Membership {
@@ -293,6 +294,7 @@ model Membership {
   createdKnowledgeEntries  KnowledgeEntry[]   @relation("KnowledgeEntryCreator")
   reviewedKnowledgeEntries KnowledgeEntry[]   @relation("KnowledgeEntryReviewer")
   verifiedMeasurements     ServiceRequestMeasurement[] @relation("MeasurementVerifier")
+  initiatedCustomerCommunications CustomerCommunication[] @relation("CustomerCommunicationInitiator")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -304,6 +306,9 @@ model Customer {
   name       String
   email      String?
   phone      String?
+  /// UNKNOWN | GRANTED | REVOKED. Never inferred from phone being present.
+  smsConsentStatus    String    @default("UNKNOWN")
+  smsConsentUpdatedAt DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -317,8 +322,51 @@ model Customer {
   expenses        Expense[]
   reviewRequests  ReviewRequest[]
   reviews         Review[]
+  communications  CustomerCommunication[]
 
   @@index([businessId])
+}
+
+/// Durable audit trail for attempted external customer communications.
+/// One row belongs to exactly one Business. Destination is stored as a
+/// fingerprint + last-4, not the raw phone. Status never claims provider
+/// delivery unless a connected adapter reported it.
+model CustomerCommunication {
+  id                       String    @id @default(cuid())
+  businessId               String
+  customerId               String
+  /// SMS for this foundation. EMAIL remains on the existing Resend path.
+  channel                  String    @default("SMS")
+  /// ESTIMATE_READY | APPOINTMENT_CONFIRMATION | APPOINTMENT_REMINDER |
+  /// SCHEDULE_CHANGE | INVOICE_READY | PAYMENT_REMINDER | REVIEW_REQUEST
+  purpose                  String
+  /// ESTIMATE | JOB | INVOICE | REVIEW_REQUEST
+  relatedType              String?
+  relatedId                String?
+  idempotencyKey           String
+  destinationLast4         String?
+  destinationFingerprint   String?
+  bodySnapshot             String    @default("")
+  /// DRAFT | READY | QUEUED | ACCEPTED | SENT | DELIVERED | FAILED | BLOCKED | NOT_SENT
+  status                   String
+  provider                 String
+  providerMessageId        String?
+  providerMetadata         Json?
+  failureReason            String?
+  initiatedByMembershipId  String?
+  createdAt                DateTime  @default(now())
+  attemptedAt              DateTime?
+  updatedAt                DateTime  @updatedAt
+
+  business     Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer     Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  initiatedBy  Membership? @relation("CustomerCommunicationInitiator", fields: [initiatedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([customerId])
+  @@index([provider, providerMessageId])
+  @@index([businessId, relatedType, relatedId])
 }
 
 model Property {

@@ -4,6 +4,7 @@ import { getSessionUser, getWorkspaceCookie, setWorkspaceCookie } from "@/lib/au
 import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { loadActiveWorkspaceMemberships } from "@/lib/business-contact";
 import { ensureBusinessTimezoneSchema } from "@/lib/business-timezone";
+import { ensureCustomerMessagingSchema } from "@/lib/customer-messaging";
 import { ensureFirstRunSetupSchema } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
 import { ensureStarterServicesSetupSchema } from "@/lib/starter-services-setup";
@@ -34,6 +35,7 @@ export async function requireWorkspace(): Promise<WorkspaceContext> {
   await ensureWebsiteSetupSchema(prisma);
   await ensureSaasBillingSchema(prisma);
   await ensureBusinessTimezoneSchema(prisma);
+  await ensureCustomerMessagingSchema(prisma);
   const memberships = await loadActiveWorkspaceMemberships(prisma, user.id);
 
   if (memberships.length === 0) {

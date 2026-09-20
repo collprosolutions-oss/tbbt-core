@@ -80,6 +80,7 @@
     "test:saas-lifecycle": "node --experimental-strip-types scripts/check-saas-subscription-lifecycle.mjs",
     "test:public-intake-identity": "node --experimental-strip-types scripts/check-public-intake-identity.mjs",
     "test:business-timezone": "node --experimental-strip-types scripts/check-business-timezone.mjs",
+    "test:customer-messaging": "node --experimental-strip-types scripts/check-customer-messaging.mjs",
     "test:test-data-cleanup": "node --experimental-strip-types scripts/check-test-data-cleanup.mjs"
   },
   "dependencies": {
