@@ -51,19 +51,6 @@
   height: auto;
 }
 
-.tbbt-feat-hero-script {
-  position: absolute;
-  right: 0.4rem;
-  top: 0.2rem;
-  z-index: 2;
-  max-width: 11rem;
-  font-size: clamp(1.35rem, 2.4vw, 1.85rem);
-  line-height: 1.05;
-  text-align: right;
-  color: #fff;
-  text-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-}
-
 .tbbt-feat-values {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -352,11 +339,6 @@
   .tbbt-feat-cta-actions .tbbt-btn--lg {
     width: 100%;
     justify-content: center;
-  }
-
-  .tbbt-feat-hero-script {
-    font-size: 1.2rem;
-    max-width: 8.5rem;
   }
 
   .tbbt-feat-shot img,

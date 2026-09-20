@@ -36,7 +36,6 @@ import {
   TBBT_FEATURES_HERO_SUPPORT,
   TBBT_FEATURES_VALUE_POINTS,
   TBBT_HERO_OFFER,
-  TBBT_HERO_SCRIPT,
   TBBT_SIGN_UP_HREF,
   TBBT_TAGLINE,
   TBBT_TRIAL_CTA_LABEL,
@@ -74,10 +73,8 @@ const EXTRA_ICONS = [
 
 function FeatureVisual({
   visual,
-  title,
 }: {
   visual: (typeof TBBT_CORE_FEATURES)[number]["visual"];
-  title: string;
 }) {
   const Icon = CORE_ICONS[visual];
 
@@ -119,9 +116,8 @@ function FeatureVisual({
   return (
     <div className="tbbt-feat-graphic" aria-hidden="true">
       <span className="tbbt-feat-graphic-icon">
-        <Icon size={28} />
+        <Icon size={34} />
       </span>
-      <span>{title}</span>
     </div>
   );
 }
@@ -150,7 +146,6 @@ export function TbbtFeaturesPage() {
             </div>
           </div>
           <div className="tbbt-feat-hero-visual">
-            <p className="tbbt-script tbbt-feat-hero-script">{TBBT_HERO_SCRIPT}</p>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/brand/tbbt-marketing/hero-devices.png"
@@ -197,7 +192,7 @@ export function TbbtFeaturesPage() {
                     </span>
                     <h3>{feature.title}</h3>
                   </div>
-                  <FeatureVisual visual={feature.visual} title={feature.title} />
+                  <FeatureVisual visual={feature.visual} />
                   <p className="tbbt-muted">{feature.body}</p>
                 </article>
               );
