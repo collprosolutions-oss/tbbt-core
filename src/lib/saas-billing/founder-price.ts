@@ -56,7 +56,7 @@ export async function inspectConfiguredFounderPrice(): Promise<FounderPriceInspe
     };
   }
   const secret = getStripeSecretKey();
-  if (!configuredPriceId || !secret) {
+  if (!configuredPriceId) {
     return {
       configuredPriceId,
       verified: false,
@@ -66,6 +66,18 @@ export async function inspectConfiguredFounderPrice(): Promise<FounderPriceInspe
       stripeInterval: null,
       showFounderPrice: true,
       warning: TBBT_FOUNDER_PRICE_OPERATIONAL_REQUIREMENT,
+    };
+  }
+  if (!secret) {
+    return {
+      configuredPriceId,
+      verified: false,
+      matchesFounderPrice: null,
+      stripeUnitAmount: null,
+      stripeCurrency: null,
+      stripeInterval: null,
+      showFounderPrice: true,
+      warning: null,
     };
   }
   try {
@@ -97,7 +109,7 @@ export async function inspectConfiguredFounderPrice(): Promise<FounderPriceInspe
       stripeCurrency: null,
       stripeInterval: null,
       showFounderPrice: true,
-      warning: TBBT_FOUNDER_PRICE_OPERATIONAL_REQUIREMENT,
+      warning: null,
     };
   }
 }
