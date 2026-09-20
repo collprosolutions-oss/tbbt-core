@@ -588,50 +588,15 @@
   line-height: 1.5;
 }
 
-.tbbt-os-grid {
-  display: grid;
-  gap: 0.9rem;
-  margin-top: 1.15rem;
-}
-
-.tbbt-os-card {
-  border: 1px solid var(--tbbt-line);
-  border-radius: 1.1rem;
-  background: #10192b;
-  padding: 1.15rem 1.1rem 1.2rem;
-}
-
-.tbbt-os-card h3 {
-  margin: 0.35rem 0 0.7rem;
-  font-size: 1.15rem;
-}
-
-.tbbt-os-card ul {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 0.38rem;
-}
-
-.tbbt-os-card li {
-  color: #d7deec;
-  font-size: 0.92rem;
-  padding-left: 1rem;
-  position: relative;
-}
-
-.tbbt-os-card li::before {
-  content: "•";
-  position: absolute;
-  left: 0;
-  color: var(--tbbt-orange);
+.tbbt-how {
+  padding: 1.45rem 0 1.35rem;
+  border-top: 1px solid var(--tbbt-line);
 }
 
 .tbbt-how-grid {
   display: grid;
-  gap: 0.85rem;
-  margin: 1.15rem 0 0;
+  gap: 0.75rem;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
@@ -640,7 +605,7 @@
   border: 1px solid var(--tbbt-line);
   border-radius: 1.1rem;
   background: #10192b;
-  padding: 1.1rem 1.05rem 1.15rem;
+  padding: 1rem 1.05rem 1.05rem;
 }
 
 .tbbt-how-step {
@@ -656,7 +621,7 @@
 }
 
 .tbbt-how-card h3 {
-  margin: 0.65rem 0 0.35rem;
+  margin: 0.55rem 0 0.3rem;
   font-size: 1.12rem;
 }
 
@@ -664,26 +629,105 @@
   margin: 0;
 }
 
-.tbbt-diff-inner,
-.tbbt-founder-note-inner {
-  max-width: 44rem;
+.tbbt-offer {
+  padding: 1.35rem 0 1.45rem;
+  border-top: 1px solid var(--tbbt-line);
+  background:
+    radial-gradient(900px 180px at 50% 0%, rgba(242, 101, 34, 0.1), transparent 70%),
+    #0a1220;
 }
 
-.tbbt-founder-home .tbbt-price {
-  margin-inline: auto;
+.tbbt-offer-grid {
+  display: grid;
+  gap: 1.15rem;
+  align-items: center;
+}
+
+.tbbt-offer-copy h2 {
+  margin: 0 0 0.7rem;
+  font-size: clamp(1.65rem, 3.6vw, 2.35rem);
+  letter-spacing: -0.03em;
+  line-height: 1.12;
+}
+
+.tbbt-offer-copy p {
+  margin: 0;
+  max-width: 36rem;
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.tbbt-offer-price {
+  max-width: none;
+  width: 100%;
+  margin: 0;
+}
+
+.tbbt-offer-protect {
+  margin: 0 0 1.15rem;
+}
+
+.tbbt-offer-price ul {
+  margin: 0.95rem 0 0.7rem;
+}
+
+.tbbt-founder-note {
+  padding: 1.15rem 0 1.2rem;
+}
+
+.tbbt-founder-note-inner {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.tbbt-founder-note-inner h2 {
+  margin: 0;
+  font-size: clamp(1.25rem, 2.6vw, 1.65rem);
+}
+
+.tbbt-founder-note-inner p.tbbt-muted {
+  margin: 0;
+  max-width: 40rem;
 }
 
 .tbbt-founder-note-inner .tbbt-btn {
-  margin-top: 1rem;
+  justify-self: start;
 }
 
 @media (min-width: 880px) {
-  .tbbt-os-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .tbbt-how-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .tbbt-offer-grid {
+    grid-template-columns: minmax(0, 1.08fr) minmax(20rem, 0.92fr);
+    gap: 1.7rem;
+    align-items: stretch;
+  }
+
+  .tbbt-offer-copy {
+    display: grid;
+    align-content: center;
+    padding: 0.4rem 0.2rem 0.4rem 0;
+  }
+
+  .tbbt-founder-note-inner {
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    column-gap: 1.4rem;
+  }
+
+  .tbbt-founder-note-inner .tbbt-kicker,
+  .tbbt-founder-note-inner h2,
+  .tbbt-founder-note-inner p.tbbt-muted {
+    grid-column: 1;
+  }
+
+  .tbbt-founder-note-inner .tbbt-btn {
+    grid-column: 2;
+    grid-row: 1 / span 3;
+    justify-self: end;
+    align-self: center;
   }
 }
 
@@ -1341,15 +1385,15 @@
     padding: 0.28rem 0 0.3rem;
   }
 
-  .tbbt-split-head {
+  .tbbt-band--trades .tbbt-split-head {
     margin-bottom: 0.16rem;
   }
 
-  .tbbt-split-head h2 {
+  .tbbt-band--trades .tbbt-split-head h2 {
     font-size: 0.92rem;
   }
 
-  .tbbt-split-head p {
+  .tbbt-band--trades .tbbt-split-head p {
     font-size: 0.72rem;
   }
 
@@ -1557,6 +1601,100 @@
     justify-self: start;
   }
 
+  .tbbt-how {
+    padding: 0.7rem 0 0.65rem;
+  }
+
+  .tbbt-how .tbbt-split-head {
+    margin-bottom: 0.45rem;
+  }
+
+  .tbbt-how .tbbt-split-head h2 {
+    font-size: 1.05rem;
+  }
+
+  .tbbt-how .tbbt-split-head p {
+    font-size: 0.72rem;
+  }
+
+  .tbbt-how-card {
+    padding: 0.7rem 0.75rem 0.75rem;
+  }
+
+  .tbbt-how-card h3 {
+    margin: 0.4rem 0 0.2rem;
+    font-size: 0.92rem;
+  }
+
+  .tbbt-how-card p {
+    font-size: 0.72rem;
+  }
+
+  .tbbt-how-step {
+    width: 1.4rem;
+    height: 1.4rem;
+    font-size: 0.7rem;
+  }
+
+  .tbbt-offer {
+    padding: 0.7rem 0 0.75rem;
+  }
+
+  .tbbt-offer-grid {
+    gap: 1.1rem;
+  }
+
+  .tbbt-offer-copy {
+    padding: 0.15rem 0;
+  }
+
+  .tbbt-offer-copy h2 {
+    font-size: 1.35rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .tbbt-offer-copy p {
+    font-size: 0.82rem;
+  }
+
+  .tbbt-offer-price {
+    padding: 0.95rem 1.05rem 1rem;
+  }
+
+  .tbbt-offer-price .tbbt-amount {
+    font-size: 2.15rem;
+    margin: 0.15rem 0 0.2rem;
+  }
+
+  .tbbt-offer-price ul {
+    margin: 0.55rem 0 0.4rem;
+    gap: 0.28rem;
+    font-size: 0.78rem;
+  }
+
+  .tbbt-offer-protect {
+    margin: 0 0 0.7rem;
+    font-size: 0.72rem;
+  }
+
+  .tbbt-offer-price .tbbt-btn--lg {
+    min-height: 2.35rem;
+    padding: 0.34rem 0.9rem;
+    font-size: 0.8rem;
+  }
+
+  .tbbt-founder-note {
+    padding: 0.55rem 0 0.6rem;
+  }
+
+  .tbbt-founder-note-inner h2 {
+    font-size: 1.05rem;
+  }
+
+  .tbbt-founder-note-inner p.tbbt-muted {
+    font-size: 0.72rem;
+  }
+
   .tbbt-connected {
     padding: 0.16rem 0 0.18rem;
   }
@@ -1697,6 +1835,11 @@
   }
 
   .tbbt-hero-actions .tbbt-btn--lg {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .tbbt-offer-price .tbbt-btn--lg {
     width: 100%;
     justify-content: center;
   }

@@ -298,10 +298,14 @@ check(
   "Homepage conversion sections cover Founder Plan, How it works, and /sign-up",
   homeMarketingSrc.includes("TBBT_HOW_IT_WORKS") &&
     homeMarketingSrc.includes("id=\"founder-plan\"") &&
+    homeMarketingSrc.includes("TBBT_DIFFERENTIATION") &&
+    homeMarketingSrc.includes("tbbt-offer-grid") &&
     homeMarketingSrc.includes("TBBT_SEE_WHAT_YOU_GET_LABEL") &&
     homeMarketingSrc.includes("TBBT_SIGN_UP_HREF") &&
     TBBT_HOW_IT_WORKS.length === 4 &&
     TBBT_HOW_IT_WORKS[2].body.includes("public business website") &&
+    !homeMarketingSrc.includes("tbbt-os-grid") &&
+    !homeMarketingSrc.includes("TBBT_OS_GROUPS") &&
     !homeMarketingSrc.includes("custom domain is automatically") &&
     !homeMarketingSrc.includes("#1") &&
     !homeMarketingSrc.includes("guaranteed") &&

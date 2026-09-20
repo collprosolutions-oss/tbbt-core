@@ -32,7 +32,6 @@ import {
   TBBT_HERO_SUPPORT_LINES,
   TBBT_HOMEPAGE_PRICING_POINTS,
   TBBT_HOW_IT_WORKS,
-  TBBT_OS_GROUPS,
   TBBT_PROMISE_STRIP,
   TBBT_SEE_WHAT_YOU_GET_HREF,
   TBBT_SEE_WHAT_YOU_GET_LABEL,
@@ -202,19 +201,6 @@ export function TbbtHomePage() {
               </Link>
             </article>
           </div>
-          <div className="tbbt-os-grid">
-            {TBBT_OS_GROUPS.map((group) => (
-              <article className="tbbt-os-card" key={group.kicker}>
-                <p className="tbbt-kicker">{group.kicker}</p>
-                <h3>{group.title}</h3>
-                <ul>
-                  {group.points.map((point) => (
-                    <li key={point}>{point}</li>
-                  ))}
-                </ul>
-              </article>
-            ))}
-          </div>
         </div>
       </section>
 
@@ -238,27 +224,24 @@ export function TbbtHomePage() {
         </div>
       </section>
 
-      <section className="tbbt-band tbbt-diff">
-        <div className="tbbt-wrap tbbt-diff-inner">
-          <h2>{TBBT_DIFFERENTIATION.title}</h2>
-          <p className="tbbt-muted">{TBBT_DIFFERENTIATION.body}</p>
-        </div>
-      </section>
-
-      <section className="tbbt-band tbbt-founder-home" id="founder-plan">
-        <div className="tbbt-wrap">
-          <article className="tbbt-panel tbbt-price">
+      <section className="tbbt-band tbbt-offer" id="founder-plan">
+        <div className="tbbt-wrap tbbt-offer-grid">
+          <div className="tbbt-offer-copy">
+            <h2>{TBBT_DIFFERENTIATION.title}</h2>
+            <p className="tbbt-muted">{TBBT_DIFFERENTIATION.body}</p>
+          </div>
+          <article className="tbbt-panel tbbt-price tbbt-offer-price">
             <p className="tbbt-kicker">{TBBT_FOUNDER_PLAN_DISPLAY_NAME}</p>
             <p className="tbbt-amount">{TBBT_FOUNDER_PRICE_LABEL}</p>
             <p className="tbbt-muted">
               {TBBT_FOUNDER_TRIAL_LABEL}. {TBBT_FOUNDER_NO_CARD}
             </p>
-            <p className="tbbt-muted">{TBBT_FOUNDER_PROTECTION}</p>
             <ul>
               {TBBT_HOMEPAGE_PRICING_POINTS.map((item) => (
                 <li key={item}>{item}</li>
               ))}
             </ul>
+            <p className="tbbt-muted tbbt-offer-protect">{TBBT_FOUNDER_PROTECTION}</p>
             <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
               {TBBT_TRIAL_CTA_LABEL}
             </Link>
