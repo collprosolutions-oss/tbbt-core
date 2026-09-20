@@ -10,6 +10,17 @@
  * already uses for its own overlap warning (see src/lib/job-schedule.ts and
  * src/app/actions/job.ts). Do not add a second scheduling data source here.
  */
+import {
+  addZonedCalendarDays,
+  addZonedCalendarMonths,
+  formatISODateInTimeZone,
+  parseCivilDateInTimeZone,
+  startOfZonedDay,
+  startOfZonedMonth,
+  startOfZonedWeek,
+  zonedDateParts,
+  zonedWeekday,
+} from "@/lib/business-timezone";
 import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { durationWithBuffer, schedulesOverlap } from "@/lib/job-schedule";
 
@@ -36,28 +47,35 @@ function pad2(value: number) {
   return String(value).padStart(2, "0");
 }
 
-/** yyyy-mm-dd in the server's local time -- matches the <input type="date"> shape already used by ScheduleJobForm. */
-export function formatISODate(date: Date) {
+/** yyyy-mm-dd. Pass `timeZone` so UTC midnight does not become the next business day. */
+export function formatISODate(date: Date, timeZone?: string) {
+  if (timeZone) return formatISODateInTimeZone(date, timeZone);
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 }
 
-export function startOfDay(date: Date) {
+export function startOfDay(date: Date, timeZone?: string) {
+  if (timeZone) return startOfZonedDay(date, timeZone);
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
-export function addDays(date: Date, amount: number) {
+export function addDays(date: Date, amount: number, timeZone?: string) {
+  if (timeZone) return addZonedCalendarDays(date, amount, timeZone);
   const next = new Date(date);
   next.setDate(next.getDate() + amount);
   return next;
 }
 
-export function addMonths(date: Date, amount: number) {
+export function addMonths(date: Date, amount: number, timeZone?: string) {
+  if (timeZone) return addZonedCalendarMonths(date, amount, timeZone);
   const next = new Date(date);
   next.setMonth(next.getMonth() + amount);
   return next;
 }
 
-export function isSameDay(a: Date, b: Date) {
+export function isSameDay(a: Date, b: Date, timeZone?: string) {
+  if (timeZone) {
+    return formatISODate(a, timeZone) === formatISODate(b, timeZone);
+  }
   return (
     a.getFullYear() === b.getFullYear() &&
     a.getMonth() === b.getMonth() &&
@@ -65,14 +83,16 @@ export function isSameDay(a: Date, b: Date) {
   );
 }
 
-export function startOfMonth(date: Date) {
+export function startOfMonth(date: Date, timeZone?: string) {
+  if (timeZone) return startOfZonedMonth(date, timeZone);
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
 
 /** Sunday-first week, matching the en-US calendar convention used elsewhere in this app. */
-export function startOfWeek(date: Date) {
-  const start = startOfDay(date);
-  return addDays(start, -start.getDay());
+export function startOfWeek(date: Date, timeZone?: string) {
+  const start = startOfDay(date, timeZone);
+  const weekday = timeZone ? zonedWeekday(start, timeZone) : start.getDay();
+  return addDays(start, -weekday, timeZone);
 }
 
 /**
@@ -81,20 +101,28 @@ export function startOfWeek(date: Date) {
  * 2026-02-30), falls back to today -- never throws, never silently produces
  * an off-by-one date via Date's normalizing constructor.
  */
-export function parseScheduleDate(raw: string | string[] | undefined): Date {
+export function parseScheduleDate(
+  raw: string | string[] | undefined,
+  timeZone?: string,
+): Date {
   const value = Array.isArray(raw) ? raw[0] : raw;
   if (value && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
     const [year, month, day] = value.split("-").map(Number);
-    const candidate = new Date(year, month - 1, day);
-    if (
-      candidate.getFullYear() === year &&
-      candidate.getMonth() === month - 1 &&
-      candidate.getDate() === day
-    ) {
-      return candidate;
+    if (timeZone) {
+      const candidate = parseCivilDateInTimeZone(year, month, day, timeZone);
+      if (candidate) return candidate;
+    } else {
+      const candidate = new Date(year, month - 1, day);
+      if (
+        candidate.getFullYear() === year &&
+        candidate.getMonth() === month - 1 &&
+        candidate.getDate() === day
+      ) {
+        return candidate;
+      }
     }
   }
-  return startOfDay(new Date());
+  return startOfDay(new Date(), timeZone);
 }
 
 export type DateRange = { start: Date; end: Date };
@@ -106,19 +134,37 @@ export type DateRange = { start: Date; end: Date };
  * the ONE query Month view runs -- never the entire Job history (see the
  * PERFORMANCE section of the Phase 3 / Step 3 spec).
  */
-export function monthGridRange(anchor: Date): DateRange & {
+export function monthGridRange(
+  anchor: Date,
+  timeZone?: string,
+): DateRange & {
   monthStart: Date;
   monthEnd: Date;
   days: Date[];
 } {
-  const monthStart = startOfMonth(anchor);
-  const monthEnd = startOfMonth(addMonths(anchor, 1));
-  const gridStart = startOfWeek(monthStart);
+  const monthStart = startOfMonth(anchor, timeZone);
+  const monthEnd = startOfMonth(addMonths(anchor, 1, timeZone), timeZone);
+  const gridStart = startOfWeek(monthStart, timeZone);
+  const days: Date[] = [];
+  if (timeZone) {
+    let cursor = gridStart;
+    while (cursor.getTime() < monthEnd.getTime() || days.length % 7 !== 0) {
+      days.push(cursor);
+      cursor = addDays(cursor, 1, timeZone);
+      if (days.length >= 42) break;
+    }
+    return {
+      start: gridStart,
+      end: addDays(gridStart, days.length, timeZone),
+      monthStart,
+      monthEnd,
+      days,
+    };
+  }
   const rawDayCount = Math.round(
     (monthEnd.getTime() - gridStart.getTime()) / (24 * 60 * 60 * 1000),
   );
   const totalCells = Math.ceil(rawDayCount / 7) * 7;
-  const days: Date[] = [];
   for (let i = 0; i < totalCells; i += 1) {
     days.push(addDays(gridStart, i));
   }
@@ -131,56 +177,63 @@ export function monthGridRange(anchor: Date): DateRange & {
   };
 }
 
-export function weekRange(anchor: Date): DateRange & { days: Date[] } {
-  const start = startOfWeek(anchor);
-  const end = addDays(start, 7);
+export function weekRange(anchor: Date, timeZone?: string): DateRange & { days: Date[] } {
+  const start = startOfWeek(anchor, timeZone);
+  const end = addDays(start, 7, timeZone);
   const days: Date[] = [];
   for (let i = 0; i < 7; i += 1) {
-    days.push(addDays(start, i));
+    days.push(addDays(start, i, timeZone));
   }
   return { start, end, days };
 }
 
-export function dayRange(anchor: Date): DateRange {
-  const start = startOfDay(anchor);
-  return { start, end: addDays(start, 1) };
+export function dayRange(anchor: Date, timeZone?: string): DateRange {
+  const start = startOfDay(anchor, timeZone);
+  return { start, end: addDays(start, 1, timeZone) };
 }
 
-export function monthLabel(date: Date) {
-  return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+export function monthLabel(date: Date, timeZone?: string) {
+  return date.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone });
 }
 
-export function weekLabel(range: DateRange) {
-  const lastDay = addDays(range.end, -1);
-  const sameMonth = range.start.getMonth() === lastDay.getMonth();
+export function weekLabel(range: DateRange, timeZone?: string) {
+  const lastDay = addDays(range.end, -1, timeZone);
+  const startParts = timeZone ? zonedDateParts(range.start, timeZone) : null;
+  const endParts = timeZone ? zonedDateParts(lastDay, timeZone) : null;
+  const sameMonth = startParts
+    ? startParts.month === endParts!.month
+    : range.start.getMonth() === lastDay.getMonth();
   const startLabel = range.start.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
+    timeZone,
   });
   const endLabel = lastDay.toLocaleDateString("en-US", {
     month: sameMonth ? undefined : "short",
     day: "numeric",
     year: "numeric",
+    timeZone,
   });
   return `${startLabel} - ${endLabel}`;
 }
 
-export function dayLabel(date: Date) {
+export function dayLabel(date: Date, timeZone?: string) {
   return date.toLocaleDateString("en-US", {
     weekday: "long",
     month: "long",
     day: "numeric",
     year: "numeric",
+    timeZone,
   });
 }
 
 export type DayTone = "past" | "today" | "future";
 
-export function dayTone(day: Date, today: Date): DayTone {
-  if (isSameDay(day, today)) {
+export function dayTone(day: Date, today: Date, timeZone?: string): DayTone {
+  if (isSameDay(day, today, timeZone)) {
     return "today";
   }
-  return startOfDay(day) < startOfDay(today) ? "past" : "future";
+  return startOfDay(day, timeZone) < startOfDay(today, timeZone) ? "past" : "future";
 }
 
 /**
@@ -317,13 +370,14 @@ export function jobScopeSummary(job: {
 
 export function groupJobsByDay<T extends { scheduledAt: Date | null }>(
   jobs: T[],
+  timeZone?: string,
 ): Map<string, T[]> {
   const groups = new Map<string, T[]>();
   for (const job of jobs) {
     if (!job.scheduledAt) {
       continue;
     }
-    const key = formatISODate(job.scheduledAt);
+    const key = formatISODate(job.scheduledAt, timeZone);
     const existing = groups.get(key);
     if (existing) {
       existing.push(job);

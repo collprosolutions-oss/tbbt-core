@@ -25,6 +25,7 @@ export function MonthView({
   today,
   jobsByDay,
   conflicts,
+  timeZone,
 }: {
   days: Date[];
   monthStart: Date;
@@ -32,6 +33,7 @@ export function MonthView({
   today: Date;
   jobsByDay: Map<string, ScheduleJob[]>;
   conflicts: Map<string, ScheduleJob[]>;
+  timeZone?: string;
 }) {
   return (
     <Card>
@@ -45,9 +47,9 @@ export function MonthView({
         </div>
         <div className="grid grid-cols-7">
           {days.map((day) => {
-            const iso = formatISODate(day);
+            const iso = formatISODate(day, timeZone);
             const inMonth = day >= monthStart && day < monthEnd;
-            const tone = dayTone(day, today);
+            const tone = dayTone(day, today, timeZone);
             const dayJobs = jobsByDay.get(iso) ?? [];
             const visibleJobs = dayJobs.slice(0, MAX_VISIBLE_PER_DAY);
             const hiddenCount = dayJobs.length - visibleJobs.length;
@@ -67,7 +69,7 @@ export function MonthView({
                     tone === "today" && "bg-green-600 text-white",
                   )}
                 >
-                  {day.getDate()}
+                  {Number(iso.slice(8, 10))}
                 </Link>
                 <div className="mt-1 space-y-0.5">
                   {visibleJobs.map((job) => (
@@ -75,6 +77,7 @@ export function MonthView({
                       key={job.id}
                       job={job}
                       hasConflict={conflicts.has(job.id)}
+                      timeZone={timeZone}
                     />
                   ))}
                   {hiddenCount > 0 ? (

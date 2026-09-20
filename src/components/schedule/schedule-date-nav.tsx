@@ -4,7 +4,6 @@ import {
   addDays,
   addMonths,
   formatISODate,
-  startOfDay,
   type ScheduleView,
 } from "@/lib/schedule";
 
@@ -17,26 +16,29 @@ export function ScheduleDateNav({
   view,
   date,
   label,
+  todayIso,
+  timeZone,
 }: {
   view: ScheduleView;
   date: Date;
   label: string;
+  todayIso: string;
+  timeZone?: string;
 }) {
   const step = view === "week" ? 7 : 1;
   const prevDate =
     view === "month" || view === "crew"
-      ? addMonths(date, -1)
-      : addDays(date, -step);
+      ? addMonths(date, -1, timeZone)
+      : addDays(date, -step, timeZone);
   const nextDate =
     view === "month" || view === "crew"
-      ? addMonths(date, 1)
-      : addDays(date, step);
-  const todayIso = formatISODate(startOfDay(new Date()));
+      ? addMonths(date, 1, timeZone)
+      : addDays(date, step, timeZone);
 
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button asChild size="sm" variant="outline">
-        <Link href={`/jobs?view=${view}&date=${formatISODate(prevDate)}`}>
+        <Link href={`/jobs?view=${view}&date=${formatISODate(prevDate, timeZone)}`}>
           ← Prev
         </Link>
       </Button>
@@ -44,7 +46,7 @@ export function ScheduleDateNav({
         <Link href={`/jobs?view=${view}&date=${todayIso}`}>Today</Link>
       </Button>
       <Button asChild size="sm" variant="outline">
-        <Link href={`/jobs?view=${view}&date=${formatISODate(nextDate)}`}>
+        <Link href={`/jobs?view=${view}&date=${formatISODate(nextDate, timeZone)}`}>
           Next →
         </Link>
       </Button>

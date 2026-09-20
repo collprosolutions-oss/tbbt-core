@@ -9,6 +9,7 @@
  */
 import { revalidatePath } from "next/cache";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { parsePayPeriodDates } from "@/lib/payroll";
 import {
   addPayrollItem,
@@ -40,10 +41,10 @@ function revalidatePayroll() {
   revalidatePath("/time-cards");
 }
 
-function readPeriod(formData: FormData) {
+function readPeriod(formData: FormData, timeZone?: string) {
   const startRaw = readString(formData, "payPeriodStart");
   const endRaw = readString(formData, "payPeriodEnd");
-  const parsed = parsePayPeriodDates(startRaw, endRaw);
+  const parsed = parsePayPeriodDates(startRaw, endRaw, timeZone);
   if ("error" in parsed) {
     return parsed;
   }
@@ -56,7 +57,7 @@ export async function createPayrollRunAction(
 ): Promise<PayrollActionState> {
   try {
     const access = await requireOperatingBusinessAccess();
-    const period = readPeriod(formData);
+    const period = readPeriod(formData, resolveBusinessTimeZone(access.workspace.business));
     if ("error" in period) return { error: period.error };
     await createPayrollRun(prisma, access, {
       payPeriodStart: period.start,
@@ -78,7 +79,7 @@ export async function changePayrollPeriodAction(
     const access = await requireOperatingBusinessAccess();
     const payrollRunId = readString(formData, "payrollRunId");
     if (!payrollRunId) return { error: "Choose a payroll run." };
-    const period = readPeriod(formData);
+    const period = readPeriod(formData, resolveBusinessTimeZone(access.workspace.business));
     if ("error" in period) return { error: period.error };
     await changePayrollPeriod(prisma, access, {
       payrollRunId,
@@ -209,7 +210,9 @@ export async function markPayrollProcessedAction(
       payrollRunId,
       confirmed,
       providerReference,
-      processedAt: processedAtRaw ? parseScheduleDate(processedAtRaw) : undefined,
+      processedAt: processedAtRaw
+        ? parseScheduleDate(processedAtRaw, resolveBusinessTimeZone(access.workspace.business))
+        : undefined,
     });
     revalidatePayroll();
     return { message: "Recorded as processed externally. TBBT did not move funds." };

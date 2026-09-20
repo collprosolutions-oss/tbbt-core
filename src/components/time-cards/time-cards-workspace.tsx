@@ -79,7 +79,7 @@ export function TimeCardsWorkspace({
 
   const todayEntries = useMemo(() => {
     return entries.filter((entry) => {
-      const day = entry.startDate;
+      const day = entry.calendarDate;
       if (day !== date) return false;
       if (workerFilter !== "all" && entry.membershipId !== workerFilter) return false;
       if (jobFilter !== "all" && entry.jobId !== jobFilter) return false;
@@ -204,6 +204,7 @@ export function TimeCardsWorkspace({
             entries={selectedEntries}
             adjustments={selectedAdjustments}
             jobs={jobs}
+            date={date}
             weekStartedAt={weekStartedAt}
             weekLabel={weekLabel}
           />
@@ -221,6 +222,7 @@ export function TimeCardsWorkspace({
               entries={selectedEntries}
               adjustments={selectedAdjustments}
               jobs={jobs}
+              date={date}
               weekStartedAt={weekStartedAt}
               weekLabel={weekLabel}
             />
@@ -374,9 +376,9 @@ function TimesheetsView({
 }) {
   const byDay = new Map<string, TimeCardEntry[]>();
   for (const entry of entries) {
-    const list = byDay.get(entry.startDate) ?? [];
+    const list = byDay.get(entry.calendarDate) ?? [];
     list.push(entry);
-    byDay.set(entry.startDate, list);
+    byDay.set(entry.calendarDate, list);
   }
 
   return (
@@ -540,6 +542,7 @@ function WorkerDetailPanel({
   entries,
   adjustments,
   jobs,
+  date,
   weekStartedAt,
   weekLabel,
 }: {
@@ -547,6 +550,7 @@ function WorkerDetailPanel({
   entries: TimeCardEntry[];
   adjustments: TimeCardAdjustment[];
   jobs: TimeCardJobOption[];
+  date: string;
   weekStartedAt: string;
   weekLabel: string;
 }) {
@@ -562,7 +566,7 @@ function WorkerDetailPanel({
   }
 
   const dayHours = entries
-    .filter((entry) => entry.startDate === new Date().toISOString().slice(0, 10) || entry.status === "RUNNING")
+    .filter((entry) => entry.calendarDate === date || entry.status === "RUNNING")
     .reduce((sum, entry) => sum + entry.totalHours, 0);
   const weekHours = entries.reduce((sum, entry) => sum + entry.totalHours, 0);
   const breaks = entries

@@ -243,6 +243,9 @@ try {
   });
 
   const weekStart = weekRange(new Date()).start;
+  // Keep generated time inside this week. Date.now() near UTC Sunday
+  // midnight would otherwise place the 20-hour lookback in Saturday.
+  clockCursor = weekStart.getTime() + 9 * 3_600_000;
   const period = { payPeriodStart: weekStart, payPeriodEnd: new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000) };
 
   console.log("\nTEST — Time Cards handoff: only APPROVED weeks feed payroll");

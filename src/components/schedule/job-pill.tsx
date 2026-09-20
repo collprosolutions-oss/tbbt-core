@@ -19,9 +19,11 @@ const STATUS_PILL_CLASSES: Record<string, string> = {
 export function JobPill({
   job,
   hasConflict,
+  timeZone,
 }: {
   job: ScheduleJob;
   hasConflict?: boolean;
+  timeZone?: string;
 }) {
   return (
     <Link
@@ -37,7 +39,7 @@ export function JobPill({
       ) : null}
       {job.scheduledAt ? (
         <span className="shrink-0 tabular-nums">
-          {formatTime(job.scheduledAt)}
+          {formatTime(job.scheduledAt, timeZone)}
         </span>
       ) : null}
       <span className="truncate">{job.customer?.name ?? "Customer"}</span>

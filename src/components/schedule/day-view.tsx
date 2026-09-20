@@ -16,10 +16,12 @@ export function DayView({
   jobs,
   conflicts,
   isToday,
+  timeZone,
 }: {
   jobs: ScheduleJob[];
   conflicts: Map<string, ScheduleJob[]>;
   isToday: boolean;
+  timeZone?: string;
 }) {
   return (
     <Card>
@@ -44,6 +46,7 @@ export function DayView({
               key={job.id}
               job={job}
               hasConflict={conflicts.has(job.id)}
+              timeZone={timeZone}
             />
           ))
         )}

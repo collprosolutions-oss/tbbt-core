@@ -10,6 +10,7 @@
  */
 import { revalidatePath } from "next/cache";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { prisma } from "@/lib/prisma";
 import { parseScheduleDate } from "@/lib/schedule";
 import { parseDateTimeInput } from "@/lib/time-cards";
@@ -197,7 +198,10 @@ export async function approveTimesheetWeekAction(
     if (!membershipId || !weekStartedAtRaw) {
       return { error: "Choose a worker and week." };
     }
-    const weekStartedAt = parseScheduleDate(weekStartedAtRaw);
+    const weekStartedAt = parseScheduleDate(
+      weekStartedAtRaw,
+      resolveBusinessTimeZone(access.workspace.business),
+    );
     await approveTimesheetWeek(prisma, access, { membershipId, weekStartedAt });
     revalidateTimeCards();
     return { message: "Week approved — payroll ready." };
@@ -218,7 +222,10 @@ export async function reopenTimesheetWeekAction(
     if (!membershipId || !weekStartedAtRaw) {
       return { error: "Choose a worker and week." };
     }
-    const weekStartedAt = parseScheduleDate(weekStartedAtRaw);
+    const weekStartedAt = parseScheduleDate(
+      weekStartedAtRaw,
+      resolveBusinessTimeZone(access.workspace.business),
+    );
     await reopenTimesheetWeek(prisma, access, { membershipId, weekStartedAt, reason });
     revalidateTimeCards();
     return { message: "Week reopened." };

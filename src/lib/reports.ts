@@ -16,7 +16,7 @@
  */
 
 import { expenseCategoryLabel } from "@/lib/expenses";
-import { addDays, addMonths, formatISODate, startOfDay, startOfMonth, startOfWeek } from "@/lib/schedule";
+import { addDays, addMonths, formatISODate, parseScheduleDate, startOfDay, startOfMonth, startOfWeek } from "@/lib/schedule";
 import { isPaidActivity, roundHours, roundMoney } from "@/lib/time-cards";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 
@@ -87,6 +87,7 @@ export type ReportDateRange = {
   comparable: boolean;
   prior: { start: Date; end: Date } | null;
   label: string;
+  timeZone?: string;
 };
 
 export function isReportArea(value: string | undefined): value is ReportArea {
@@ -115,18 +116,22 @@ export function recordedVendor(vendor: string | null | undefined): string | null
  * Strict yyyy-mm-dd parse. Invalid or missing values return null --
  * never Date's normalizing constructor (2026-02-30 must not become March 2).
  */
-export function parseReportDate(raw: string | undefined): Date | null {
+export function parseReportDate(raw: string | undefined, timeZone?: string): Date | null {
   if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
   const [year, month, day] = raw.split("-").map(Number);
-  const candidate = new Date(year, month - 1, day);
-  if (
+  const candidate = timeZone
+    ? parseScheduleDate(raw, timeZone)
+    : new Date(year, month - 1, day);
+  if (timeZone) {
+    if (formatISODate(candidate, timeZone) !== raw) return null;
+  } else if (
     candidate.getFullYear() !== year ||
     candidate.getMonth() !== month - 1 ||
     candidate.getDate() !== day
   ) {
     return null;
   }
-  return startOfDay(candidate);
+  return startOfDay(candidate, timeZone);
 }
 
 export function inRange(date: Date | null | undefined, range: { start: Date | null; end: Date | null }): boolean {
@@ -154,8 +159,9 @@ export function resolveReportRange(
   fromRaw: string | undefined,
   toRaw: string | undefined,
   now: Date = new Date(),
+  timeZone?: string,
 ): ReportDateRange {
-  const today = startOfDay(now);
+  const today = startOfDay(now, timeZone);
 
   if (preset === "all") {
     return {
@@ -165,16 +171,17 @@ export function resolveReportRange(
       comparable: false,
       prior: null,
       label: DATE_PRESET_LABELS.all,
+      timeZone,
     };
   }
 
   if (preset === "custom") {
-    const from = parseReportDate(fromRaw);
-    const toInclusive = parseReportDate(toRaw);
+    const from = parseReportDate(fromRaw, timeZone);
+    const toInclusive = parseReportDate(toRaw, timeZone);
     if (!from || !toInclusive || toInclusive < from) {
-      return resolveReportRange("month", undefined, undefined, now);
+      return resolveReportRange("month", undefined, undefined, now, timeZone);
     }
-    const end = addDays(toInclusive, 1);
+    const end = addDays(toInclusive, 1, timeZone);
     const durationMs = end.getTime() - from.getTime();
     return {
       start: from,
@@ -182,41 +189,53 @@ export function resolveReportRange(
       preset,
       comparable: true,
       prior: { start: new Date(from.getTime() - durationMs), end: from },
-      label: `${formatISODate(from)} – ${formatISODate(toInclusive)}`,
+      label: `${formatISODate(from, timeZone)} – ${formatISODate(toInclusive, timeZone)}`,
+      timeZone,
     };
   }
 
   let start: Date;
   let end: Date;
   if (preset === "30d") {
-    end = addDays(today, 1);
-    start = addDays(end, -30);
+    end = addDays(today, 1, timeZone);
+    start = addDays(end, -30, timeZone);
   } else if (preset === "90d") {
-    end = addDays(today, 1);
-    start = addDays(end, -90);
+    end = addDays(today, 1, timeZone);
+    start = addDays(end, -90, timeZone);
   } else if (preset === "month") {
-    start = startOfMonth(today);
-    end = addMonths(start, 1);
+    start = startOfMonth(today, timeZone);
+    end = addMonths(start, 1, timeZone);
   } else if (preset === "last-month") {
-    end = startOfMonth(today);
-    start = addMonths(end, -1);
+    end = startOfMonth(today, timeZone);
+    start = addMonths(end, -1, timeZone);
   } else if (preset === "year") {
-    start = new Date(today.getFullYear(), 0, 1);
-    end = new Date(today.getFullYear() + 1, 0, 1);
+    if (timeZone) {
+      const year = Number(formatISODate(today, timeZone).slice(0, 4));
+      start = parseScheduleDate(`${year}-01-01`, timeZone);
+      end = parseScheduleDate(`${year + 1}-01-01`, timeZone);
+    } else {
+      start = new Date(today.getFullYear(), 0, 1);
+      end = new Date(today.getFullYear() + 1, 0, 1);
+    }
+  } else if (timeZone) {
+    const year = Number(formatISODate(today, timeZone).slice(0, 4));
+    start = parseScheduleDate(`${year - 1}-01-01`, timeZone);
+    end = parseScheduleDate(`${year}-01-01`, timeZone);
   } else {
     start = new Date(today.getFullYear() - 1, 0, 1);
     end = new Date(today.getFullYear(), 0, 1);
   }
 
   const durationMs = end.getTime() - start.getTime();
-  const lastInclusive = addDays(end, -1);
+  const lastInclusive = addDays(end, -1, timeZone);
   return {
     start,
     end,
     preset,
     comparable: true,
     prior: { start: new Date(start.getTime() - durationMs), end: start },
-    label: `${formatISODate(start)} – ${formatISODate(lastInclusive)}`,
+    label: `${formatISODate(start, timeZone)} – ${formatISODate(lastInclusive, timeZone)}`,
+    timeZone,
   };
 }
 
@@ -624,20 +643,20 @@ function bucketGrain(range: ReportDateRange): "day" | "week" | "month" {
   return "month";
 }
 
-function bucketStart(date: Date, grain: "day" | "week" | "month"): Date {
-  if (grain === "day") return startOfDay(date);
-  if (grain === "week") return startOfWeek(date);
-  return startOfMonth(date);
+function bucketStart(date: Date, grain: "day" | "week" | "month", timeZone?: string): Date {
+  if (grain === "day") return startOfDay(date, timeZone);
+  if (grain === "week") return startOfWeek(date, timeZone);
+  return startOfMonth(date, timeZone);
 }
 
-function bucketLabel(date: Date, grain: "day" | "week" | "month"): string {
+function bucketLabel(date: Date, grain: "day" | "week" | "month", timeZone?: string): string {
   if (grain === "day") {
-    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone });
   }
   if (grain === "week") {
-    return `Week of ${date.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+    return `Week of ${date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone })}`;
   }
-  return date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+  return date.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone });
 }
 
 export function revenueTimeSeries(invoices: readonly ReportInvoice[], range: ReportDateRange): TimePoint[] {
@@ -645,15 +664,15 @@ export function revenueTimeSeries(invoices: readonly ReportInvoice[], range: Rep
   const grain = bucketGrain(range);
   const buckets = new Map<number, TimePoint>();
   for (const invoice of paid) {
-    const start = bucketStart(invoice.paidAt as Date, grain);
+    const start = bucketStart(invoice.paidAt as Date, grain, range.timeZone);
     const key = start.getTime();
     const existing = buckets.get(key);
     if (existing) {
       existing.amount = roundMoney(existing.amount + invoice.total);
     } else {
       buckets.set(key, {
-        key: formatISODate(start),
-        label: bucketLabel(start, grain),
+        key: formatISODate(start, range.timeZone),
+        label: bucketLabel(start, grain, range.timeZone),
         amount: roundMoney(invoice.total),
       });
     }
@@ -668,15 +687,15 @@ export function expenseTimeSeries(expenses: readonly ReportExpense[], range: Rep
   const grain = bucketGrain(range);
   const buckets = new Map<number, TimePoint>();
   for (const expense of inPeriod) {
-    const start = bucketStart(expense.occurredOn, grain);
+    const start = bucketStart(expense.occurredOn, grain, range.timeZone);
     const key = start.getTime();
     const existing = buckets.get(key);
     if (existing) {
       existing.amount = roundMoney(existing.amount + expense.amount);
     } else {
       buckets.set(key, {
-        key: formatISODate(start),
-        label: bucketLabel(start, grain),
+        key: formatISODate(start, range.timeZone),
+        label: bucketLabel(start, grain, range.timeZone),
         amount: roundMoney(expense.amount),
       });
     }
@@ -1025,7 +1044,7 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
     ...paid.map((invoice) => ({
       kind: "invoice" as const,
       id: invoice.id,
-      dateLabel: invoice.paidAt ? formatISODate(invoice.paidAt) : formatISODate(invoice.createdAt),
+      dateLabel: invoice.paidAt ? formatISODate(invoice.paidAt, range.timeZone) : formatISODate(invoice.createdAt, range.timeZone),
       description: `Paid invoice · ${customerName(invoice.customerId, source)}`,
       amount: invoice.total,
       extra: [paymentMethodLabel(invoice.paymentMethod), invoice.paymentReference]
@@ -1036,7 +1055,7 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
     ...recordedPayroll.map((run) => ({
       kind: "payroll" as const,
       id: run.id,
-      dateLabel: formatISODate(run.authorizedAt ?? run.payPeriodStart),
+      dateLabel: formatISODate(run.authorizedAt ?? run.payPeriodStart, range.timeZone),
       description: `Payroll ${run.status === "PROCESSED" ? "processed" : "authorized"}`,
       amount: run.authorizedGrossLaborAmount,
       extra: `${run.authorizedWorkerCount ?? 0} workers · ${run.authorizedApprovedHours ?? 0} approved hours`,
@@ -1120,7 +1139,7 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
       ...run,
       hours: run.authorizedApprovedHours,
       gross: run.authorizedGrossLaborAmount,
-      periodLabel: `${formatISODate(run.payPeriodStart)} – ${formatISODate(addDays(run.payPeriodEnd, -1))}`,
+      periodLabel: `${formatISODate(run.payPeriodStart, range.timeZone)} – ${formatISODate(addDays(run.payPeriodEnd, -1, range.timeZone), range.timeZone)}`,
     })),
     customers,
     services,
@@ -1132,11 +1151,12 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
 }
 
 export function reportCsvRows(area: ReportArea, report: BuiltReport): { headers: string[]; rows: string[][] } {
+  const timeZone = report.range.timeZone;
   if (area === "expenses") {
     return {
       headers: ["Date", "Description", "Category", "Vendor", "Amount", "Job"],
       rows: report.expenseRecords.map((row) => [
-        formatISODate(row.occurredOn),
+        formatISODate(row.occurredOn, timeZone),
         row.description,
         row.categoryLabel,
         row.vendor ?? "",
@@ -1174,8 +1194,8 @@ export function reportCsvRows(area: ReportArea, report: BuiltReport): { headers:
         invoice.status,
         invoice.customerName,
         String(invoice.total),
-        invoice.paidAt ? formatISODate(invoice.paidAt) : "",
-        formatISODate(invoice.createdAt),
+        invoice.paidAt ? formatISODate(invoice.paidAt, timeZone) : "",
+        formatISODate(invoice.createdAt, timeZone),
       ]),
     };
   }

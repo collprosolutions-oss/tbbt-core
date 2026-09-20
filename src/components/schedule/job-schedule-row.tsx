@@ -12,9 +12,11 @@ import { jobScopeSummary, type ScheduleJob } from "@/lib/schedule";
 export function JobScheduleRow({
   job,
   hasConflict,
+  timeZone,
 }: {
   job: ScheduleJob;
   hasConflict?: boolean;
+  timeZone?: string;
 }) {
   const scope = jobScopeSummary(job);
   return (
@@ -39,7 +41,7 @@ export function JobScheduleRow({
         <div className="flex flex-col items-end gap-1 text-right">
           {job.scheduledAt ? (
             <span className="text-xs font-semibold">
-              {formatTime(job.scheduledAt)}
+              {formatTime(job.scheduledAt, timeZone)}
             </span>
           ) : (
             <span className="text-xs text-muted-foreground">No time set</span>

@@ -9,28 +9,31 @@ export function formatMoney(value: { toString(): string } | string | number) {
   }).format(amount);
 }
 
-export function formatDate(value: Date) {
+export function formatDate(value: Date, timeZone?: string) {
   return value.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
+    timeZone,
   });
 }
 
-export function formatDateTime(value: Date) {
+export function formatDateTime(value: Date, timeZone?: string) {
   return value.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone,
   });
 }
 
-export function formatTime(value: Date) {
+export function formatTime(value: Date, timeZone?: string) {
   return value.toLocaleTimeString("en-US", {
     hour: "numeric",
     minute: "2-digit",
+    timeZone,
   });
 }
 

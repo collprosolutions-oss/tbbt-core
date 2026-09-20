@@ -3,6 +3,7 @@ import type { Business, Membership, MembershipRole } from "@prisma/client";
 import { getSessionUser, getWorkspaceCookie, setWorkspaceCookie } from "@/lib/auth";
 import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { loadActiveWorkspaceMemberships } from "@/lib/business-contact";
+import { ensureBusinessTimezoneSchema } from "@/lib/business-timezone";
 import { ensureFirstRunSetupSchema } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
 import { ensureStarterServicesSetupSchema } from "@/lib/starter-services-setup";
@@ -32,6 +33,7 @@ export async function requireWorkspace(): Promise<WorkspaceContext> {
   await ensureStarterServicesSetupSchema(prisma);
   await ensureWebsiteSetupSchema(prisma);
   await ensureSaasBillingSchema(prisma);
+  await ensureBusinessTimezoneSchema(prisma);
   const memberships = await loadActiveWorkspaceMemberships(prisma, user.id);
 
   if (memberships.length === 0) {

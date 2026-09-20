@@ -33,6 +33,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Prisma } from "@prisma/client";
 import { requireManagementPageAccess } from "@/lib/access";
+import { formatZonedTimeInput, resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   appointmentConfirmationLabel,
   confirmationSourceLabel,
@@ -72,18 +73,7 @@ import {
   unpaidMaterialDepositWarning,
 } from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
-
-function pad(part: number) {
-  return String(part).padStart(2, "0");
-}
-
-function toDateInput(value: Date) {
-  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
-}
-
-function toTimeInput(value: Date) {
-  return `${pad(value.getHours())}:${pad(value.getMinutes())}`;
-}
+import { formatISODate } from "@/lib/schedule";
 
 export const metadata: Metadata = {
   title: "Work Order",
@@ -104,6 +94,7 @@ export default async function JobPage({
 }) {
   const { jobId } = await params;
   const access = await requireManagementPageAccess();
+  const timeZone = resolveBusinessTimeZone(access.workspace.business);
   await ensureAppointmentConfirmationSchema(prisma);
   const job = await prisma.job.findFirst({
     where: { id: jobId, ...access.scope },
@@ -278,7 +269,7 @@ export default async function JobPage({
             <span>Work Order</span>
             <StatusBadge status={job.status} />
             {job.scheduledAt ? (
-              <span>{formatDateTime(job.scheduledAt)}</span>
+              <span>{formatDateTime(job.scheduledAt, timeZone)}</span>
             ) : (
               <span>Unscheduled</span>
             )}
@@ -591,8 +582,8 @@ export default async function JobPage({
               <ScheduleJobForm
               key={job.id}
               jobId={job.id}
-              date={job.scheduledAt ? toDateInput(job.scheduledAt) : ""}
-              time={job.scheduledAt ? toTimeInput(job.scheduledAt) : ""}
+              date={job.scheduledAt ? formatISODate(job.scheduledAt, timeZone) : ""}
+              time={job.scheduledAt ? formatZonedTimeInput(job.scheduledAt, timeZone) : ""}
               durationPreset={durationPreset}
               customHours={customHours}
               isScheduled={isScheduled}

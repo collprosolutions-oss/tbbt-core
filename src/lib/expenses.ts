@@ -7,7 +7,7 @@
  */
 import { Prisma } from "@prisma/client";
 import { isPaymentMethodValue, type PaymentMethodValue } from "@/lib/invoice-payment";
-import { parseScheduleDate, startOfDay } from "@/lib/schedule";
+import { addDays, addMonths, formatISODate, parseScheduleDate, startOfDay, startOfMonth, startOfWeek } from "@/lib/schedule";
 
 export const EXPENSE_CATEGORIES = [
   "MATERIALS",
@@ -139,18 +139,22 @@ export function parseMileageMiles(raw: string): Prisma.Decimal | null {
   }
 }
 
-export function parseExpenseDate(raw: string): Date | null {
+export function parseExpenseDate(raw: string, timeZone?: string): Date | null {
   if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
-  const parsed = parseScheduleDate(raw);
-  const [year, month, day] = raw.split("-").map(Number);
-  if (
-    parsed.getFullYear() !== year ||
-    parsed.getMonth() !== month - 1 ||
-    parsed.getDate() !== day
-  ) {
-    return null;
+  const parsed = parseScheduleDate(raw, timeZone);
+  if (timeZone) {
+    if (formatISODate(parsed, timeZone) !== raw) return null;
+  } else {
+    const [year, month, day] = raw.split("-").map(Number);
+    if (
+      parsed.getFullYear() !== year ||
+      parsed.getMonth() !== month - 1 ||
+      parsed.getDate() !== day
+    ) {
+      return null;
+    }
   }
-  return startOfDay(parsed);
+  return startOfDay(parsed, timeZone);
 }
 
 export function asMoneyNumber(value: Prisma.Decimal | number | null | undefined): number {
@@ -164,26 +168,32 @@ export type ExpenseRange = { start: Date; end: Date } | null;
  * Inclusive start / exclusive end for the selected preset. `all` returns
  * null so the query does not invent a window.
  */
-export function expenseRangeBounds(preset: ExpenseDateRange, now = new Date()): ExpenseRange {
-  const today = startOfDay(now);
+export function expenseRangeBounds(
+  preset: ExpenseDateRange,
+  now = new Date(),
+  timeZone?: string,
+): ExpenseRange {
+  const today = startOfDay(now, timeZone);
   if (preset === "all") return null;
   if (preset === "week") {
-    const start = new Date(today);
-    start.setDate(today.getDate() - today.getDay());
-    const end = new Date(start);
-    end.setDate(start.getDate() + 7);
-    return { start, end };
+    const start = startOfWeek(today, timeZone);
+    return { start, end: addDays(start, 7, timeZone) };
   }
   if (preset === "30d") {
-    const start = new Date(today);
-    start.setDate(today.getDate() - 29);
-    const end = new Date(today);
-    end.setDate(today.getDate() + 1);
+    const start = addDays(today, -29, timeZone);
+    const end = addDays(today, 1, timeZone);
     return { start, end };
   }
   if (preset === "month") {
-    const start = new Date(today.getFullYear(), today.getMonth(), 1);
-    const end = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    const start = startOfMonth(today, timeZone);
+    return { start, end: addMonths(start, 1, timeZone) };
+  }
+  const year = timeZone
+    ? Number(formatISODate(today, timeZone).slice(0, 4))
+    : today.getFullYear();
+  if (timeZone) {
+    const start = parseScheduleDate(`${year}-01-01`, timeZone);
+    const end = parseScheduleDate(`${year + 1}-01-01`, timeZone);
     return { start, end };
   }
   const start = new Date(today.getFullYear(), 0, 1);

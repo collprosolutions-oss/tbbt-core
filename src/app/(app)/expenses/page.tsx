@@ -16,6 +16,7 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   ACTIVE_EXPENSE_WHERE,
   EXPENSE_CATEGORIES,
@@ -91,6 +92,7 @@ export default async function ExpensesPage({
   }>;
 }) {
   const access = await requireManagementPageAccess();
+  const timeZone = resolveBusinessTimeZone(access.workspace.business);
   const founder = await checkFounderAccess();
   const founderOverride = founder
     ? await prisma.founderDesignOverride.findUnique({
@@ -119,7 +121,7 @@ export default async function ExpensesPage({
   const showFilters = params.filters === "1";
 
   const now = new Date();
-  const bounds = expenseRangeBounds(rangePreset, now);
+  const bounds = expenseRangeBounds(rangePreset, now, timeZone);
   const rangeWhere = bounds ? { occurredOn: { gte: bounds.start, lt: bounds.end } } : {};
   const searchWhere = q
     ? {
@@ -153,8 +155,8 @@ export default async function ExpensesPage({
   };
   const summaryWhere = { ...access.scope, ...ACTIVE_EXPENSE_WHERE, ...rangeWhere };
 
-  const horizonStart = startOfDay(now);
-  const horizonEnd = addDays(horizonStart, 30);
+  const horizonStart = startOfDay(now, timeZone);
+  const horizonEnd = addDays(horizonStart, 30, timeZone);
 
   const [
     rangeExpenses,
@@ -264,7 +266,7 @@ export default async function ExpensesPage({
   }
 
   const rangeLabel = bounds
-    ? `${formatDate(bounds.start)} – ${formatDate(addDays(bounds.end, -1))}`
+    ? `${formatDate(bounds.start, timeZone)} – ${formatDate(addDays(bounds.end, -1, timeZone), timeZone)}`
     : "All dates";
 
   const kpis: ExpenseKpi[] = [
@@ -318,8 +320,8 @@ export default async function ExpensesPage({
     const purchaserName = expense.purchaser?.user.name ?? null;
     return {
       id: expense.id,
-      occurredOnLabel: formatDate(expense.occurredOn),
-      occurredOnValue: formatISODate(expense.occurredOn),
+      occurredOnLabel: formatDate(expense.occurredOn, timeZone),
+      occurredOnValue: formatISODate(expense.occurredOn, timeZone),
       description: expense.description,
       vendor: expense.vendor,
       category: expense.category,
@@ -452,7 +454,7 @@ export default async function ExpensesPage({
     },
     filters,
     storageConfigured: isStorageConfigured(),
-    defaultDate: formatISODate(now),
+    defaultDate: formatISODate(now, timeZone),
     page,
     totalPages,
     pageSize,
