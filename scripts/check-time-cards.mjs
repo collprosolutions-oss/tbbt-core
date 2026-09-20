@@ -36,6 +36,7 @@ const {
   hoursBetween,
   intervalsOverlap,
   isPaidActivity,
+  missingApprovalSnapshotPatch,
   paidHours,
   parseDateTimeInput,
   weekRange,
@@ -166,6 +167,48 @@ try {
       noWageSnap.approvedHourlyWage === null &&
       noWageSnap.approvedLaborCost === null,
   );
+  const repairExact = missingApprovalSnapshotPatch({
+    startedAt: parseDateTimeInput("2026-09-19", "09:00"),
+    endedAt: parseDateTimeInput("2026-09-19", "10:00"),
+    activityType: "JOB",
+    approvedHours: 1,
+    approvedHourlyWage: null,
+    approvedLaborCost: null,
+    hourlyWage: new Prisma.Decimal("25.00"),
+  });
+  check(
+    "Already-approved 1h with null wage/cost patches 1.0 × $25 = $25",
+    repairExact.changed &&
+      repairExact.patch.approvedHours === undefined &&
+      repairExact.patch.approvedHourlyWage === 25 &&
+      repairExact.patch.approvedLaborCost === 25,
+  );
+  const keepExisting = missingApprovalSnapshotPatch({
+    startedAt: parseDateTimeInput("2026-09-19", "09:00"),
+    endedAt: parseDateTimeInput("2026-09-19", "10:00"),
+    activityType: "JOB",
+    approvedHours: 1,
+    approvedHourlyWage: 25,
+    approvedLaborCost: 25,
+    hourlyWage: 40,
+  });
+  check(
+    "Existing $25 snapshot is not overwritten by a later $40 wage",
+    !keepExisting.changed && keepExisting.wage === 25 && keepExisting.cost === 25,
+  );
+  const noWageRepair = missingApprovalSnapshotPatch({
+    startedAt: parseDateTimeInput("2026-09-19", "09:00"),
+    endedAt: parseDateTimeInput("2026-09-19", "10:00"),
+    activityType: "JOB",
+    approvedHours: 1,
+    approvedHourlyWage: null,
+    approvedLaborCost: null,
+    hourlyWage: null,
+  });
+  check(
+    "Re-approval without a membership wage leaves snapshot missing",
+    !noWageRepair.changed && noWageRepair.wage == null && noWageRepair.cost == null,
+  );
   check(
     "ISO date + local 17:00 is not used for form format (would be 32h in US timezones)",
     formatDateInput(nineToFive.endedAt) === "2026-08-24" && formatTimeInput(nineToFive.endedAt) === "17:00",
@@ -221,7 +264,7 @@ try {
   const helperMem = await prisma.membership.create({
     data: { userId: helperUser.id, businessId: businessA.id, role: "MEMBER" },
   });
-  await prisma.membership.create({
+  const betaOwnerMem = await prisma.membership.create({
     data: { userId: betaOwner.id, businessId: businessB.id, role: "OWNER", hourlyWage: new Prisma.Decimal(40) },
   });
   const betaMemberMem = await prisma.membership.create({
@@ -232,6 +275,7 @@ try {
   const adminA = makeAccess(businessA.id, "ADMIN", adminMem.id);
   const memberA = makeAccess(businessA.id, "MEMBER", memberMem.id);
   const helperA = makeAccess(businessA.id, "MEMBER", helperMem.id);
+  const ownerB = makeAccess(businessB.id, "OWNER", betaOwnerMem.id);
   const customerA = await prisma.customer.create({
     data: { businessId: businessA.id, name: "Alpha Customer" },
   });
@@ -618,6 +662,16 @@ try {
     Number(afterWageChange.approvedHourlyWage) === 25 &&
       Number(afterWageChange.approvedLaborCost) === 25,
   );
+  await approveTimesheetWeek(prisma, joeAccess, {
+    membershipId: joeMem.id,
+    weekStartedAt: handyWeek,
+  });
+  const afterExplicitReapprove = await prisma.timeEntry.findUnique({ where: { id: joeEntry.id } });
+  check(
+    "Explicit re-approval does not overwrite an existing $25 snapshot",
+    Number(afterExplicitReapprove.approvedHourlyWage) === 25 &&
+      Number(afterExplicitReapprove.approvedLaborCost) === 25,
+  );
 
   await createExpense(prisma, joeAccess, {
     occurredOn: "2026-09-19",
@@ -645,6 +699,106 @@ try {
     "Other tenant report source does not include Handy job labor",
     foreignSource.approvedTimeEntries.every((entry) => entry.id !== joeEntry.id) &&
       foreignSource.invoices.every((invoice) => invoice.jobId !== handyJob.id),
+  );
+
+  console.log("\nTEST — Explicit re-approval repairs already-APPROVED missing snapshots");
+  const legacyStart = parseDateTimeInput("2026-09-19", "13:00");
+  const legacyEnd = parseDateTimeInput("2026-09-19", "14:00");
+  const legacyEntry = await prisma.timeEntry.create({
+    data: {
+      businessId: handy.id,
+      membershipId: joeMem.id,
+      jobId: handyJob.id,
+      activityType: "JOB",
+      status: "APPROVED",
+      source: "MANUAL",
+      startedAt: legacyStart,
+      endedAt: legacyEnd,
+      approvedHours: new Prisma.Decimal("1.0"),
+      approvedHourlyWage: null,
+      approvedLaborCost: null,
+      note: "Pre-snapshot approved hour",
+    },
+  });
+  await prisma.membership.update({
+    where: { id: joeMem.id },
+    data: { hourlyWage: new Prisma.Decimal("25.00") },
+  });
+  await approveTimesheetWeek(prisma, joeAccess, {
+    membershipId: joeMem.id,
+    weekStartedAt: handyWeek,
+  });
+  const repairedLegacy = await prisma.timeEntry.findUnique({ where: { id: legacyEntry.id } });
+  check(
+    "Already APPROVED entry + null wage/cost + $25 membership → explicit re-approval snapshots $25",
+    repairedLegacy?.status === "APPROVED" &&
+      Number(repairedLegacy.approvedHours) === 1 &&
+      Number(repairedLegacy.approvedHourlyWage) === 25 &&
+      Number(repairedLegacy.approvedLaborCost) === 25,
+  );
+  const originalJoeAfterRepair = await prisma.timeEntry.findUnique({ where: { id: joeEntry.id } });
+  check(
+    "Repairing a missing snapshot does not rewrite a sibling entry's existing snapshot",
+    Number(originalJoeAfterRepair.approvedHourlyWage) === 25 &&
+      Number(originalJoeAfterRepair.approvedLaborCost) === 25,
+  );
+
+  const nowageUser = await prisma.user.create({
+    data: { name: "No Wage Worker", email: `nowage-${randomUUID().slice(0, 8)}@example.com`, passwordHash: "x" },
+  });
+  const nowageMem = await prisma.membership.create({
+    data: { userId: nowageUser.id, businessId: handy.id, role: "MEMBER", hourlyWage: null },
+  });
+  const nowageEntry = await prisma.timeEntry.create({
+    data: {
+      businessId: handy.id,
+      membershipId: nowageMem.id,
+      activityType: "JOB",
+      status: "APPROVED",
+      source: "MANUAL",
+      startedAt: legacyStart,
+      endedAt: legacyEnd,
+      approvedHours: new Prisma.Decimal("1.0"),
+      approvedHourlyWage: null,
+      approvedLaborCost: null,
+    },
+  });
+  await approveTimesheetWeek(prisma, joeAccess, {
+    membershipId: nowageMem.id,
+    weekStartedAt: handyWeek,
+  });
+  const stillMissing = await prisma.timeEntry.findUnique({ where: { id: nowageEntry.id } });
+  check(
+    "Re-approval with no membership wage leaves wage/cost snapshot missing",
+    stillMissing?.status === "APPROVED" &&
+      stillMissing.approvedHourlyWage == null &&
+      stillMissing.approvedLaborCost == null,
+  );
+
+  await expectError(
+    "Business B cannot re-approve / repair Business A's timesheet week",
+    () =>
+      approveTimesheetWeek(prisma, ownerB, {
+        membershipId: joeMem.id,
+        weekStartedAt: handyWeek,
+      }),
+    (error) => error instanceof TimeCardError,
+  );
+  const afterIsolation = await prisma.timeEntry.findUnique({ where: { id: legacyEntry.id } });
+  check(
+    "Failed cross-tenant re-approval did not change A's repaired snapshot",
+    Number(afterIsolation.approvedHourlyWage) === 25 &&
+      Number(afterIsolation.approvedLaborCost) === 25,
+  );
+  const repairedSource = await loadReportSource(prisma, handy.id);
+  const repairedReport = buildReport(repairedSource, resolveReportRange("all"));
+  check(
+    "Reports stop flagging the repaired approved hour as missing a wage snapshot",
+    !repairedReport.attention.some((item) => item.key === `wage:${legacyEntry.id}`),
+  );
+  check(
+    "Reports still flag approved time when no membership wage exists",
+    repairedReport.attention.some((item) => item.key === `wage:${nowageEntry.id}`),
   );
 
   console.log(

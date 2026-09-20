@@ -15,6 +15,7 @@ import {
   canApproveWeek,
   canEditTimeEntry,
   coerceHourlyWage,
+  missingApprovalSnapshotPatch,
   hasOverlappingEntry,
   isTimeActivityType,
   jobRequiredForActivity,
@@ -591,12 +592,12 @@ export async function updateMembershipWage(
 export async function approveTimesheetWeek(
   db: PrismaClient,
   access: BusinessAccess,
-  input: { membershipId: string; weekStartedAt: Date },
+  input: { membershipId: string; weekStartedAt: Date; timeZone?: string },
 ) {
   await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_TIME_CARDS);
   const actorMembershipId = access.workspace.membership.id;
-  const { start, end } = weekRange(input.weekStartedAt);
+  const { start, end } = weekRange(input.weekStartedAt, input.timeZone);
 
   return db.$transaction(async (tx) => {
     const membership = await loadMembershipInBusiness(tx, access.businessId, input.membershipId);
@@ -620,10 +621,52 @@ export async function approveTimesheetWeek(
     let hasCost = false;
 
     for (const entry of entries) {
-      if (entry.status === "APPROVED") continue;
       if (!entry.endedAt) {
         throw new TimeCardError("Stop every running clock before approving this week.");
       }
+
+      if (entry.status === "APPROVED") {
+        const repair = missingApprovalSnapshotPatch({
+          startedAt: entry.startedAt,
+          endedAt: entry.endedAt,
+          activityType: entry.activityType,
+          approvedHours: entry.approvedHours,
+          approvedHourlyWage: entry.approvedHourlyWage,
+          approvedLaborCost: entry.approvedLaborCost,
+          hourlyWage: membership.hourlyWage,
+        });
+        if (repair.cost != null) {
+          totalCost += repair.cost;
+          hasCost = true;
+        }
+        if (!repair.changed) continue;
+        const previous = toAuditSnapshot(entry);
+        const updated = await tx.timeEntry.update({
+          where: { id: entry.id },
+          data: {
+            ...(repair.patch.approvedHours !== undefined
+              ? { approvedHours: decimal(repair.patch.approvedHours) }
+              : {}),
+            ...(repair.patch.approvedHourlyWage !== undefined
+              ? { approvedHourlyWage: decimal(repair.patch.approvedHourlyWage) }
+              : {}),
+            ...(repair.patch.approvedLaborCost !== undefined
+              ? { approvedLaborCost: decimal(repair.patch.approvedLaborCost) }
+              : {}),
+          },
+        });
+        await writeAdjustment(tx, {
+          businessId: access.businessId,
+          timeEntryId: updated.id,
+          actorMembershipId,
+          action: "APPROVE",
+          reason: "Week approved — payroll ready.",
+          previous,
+          next: toAuditSnapshot(updated),
+        });
+        continue;
+      }
+
       const snapshot = approvalSnapshot({
         startedAt: entry.startedAt,
         endedAt: entry.endedAt,
@@ -663,6 +706,20 @@ export async function approveTimesheetWeek(
       })),
     );
 
+    const existingWeek = await tx.timesheetWeek.findUnique({
+      where: {
+        businessId_membershipId_weekStartedAt: {
+          businessId: access.businessId,
+          membershipId: input.membershipId,
+          weekStartedAt: start,
+        },
+      },
+    });
+    const weekWage = coerceHourlyWage(existingWeek?.approvedHourlyWage) ?? wage;
+    const weekCost = hasCost
+      ? Math.round((totalCost + Number.EPSILON) * 100) / 100
+      : coerceHourlyWage(existingWeek?.approvedLaborCost);
+
     const week = await tx.timesheetWeek.upsert({
       where: {
         businessId_membershipId_weekStartedAt: {
@@ -680,15 +737,15 @@ export async function approveTimesheetWeek(
         approvedByMembershipId: actorMembershipId,
         approvedHours: decimal(approvedHours),
         approvedHourlyWage: decimal(wage),
-        approvedLaborCost: hasCost ? decimal(Math.round((totalCost + Number.EPSILON) * 100) / 100) : null,
+        approvedLaborCost: hasCost ? decimal(weekCost) : null,
       },
       update: {
         status: "APPROVED",
         approvedAt: new Date(),
         approvedByMembershipId: actorMembershipId,
         approvedHours: decimal(approvedHours),
-        approvedHourlyWage: decimal(wage),
-        approvedLaborCost: hasCost ? decimal(Math.round((totalCost + Number.EPSILON) * 100) / 100) : null,
+        approvedHourlyWage: decimal(weekWage),
+        approvedLaborCost: weekCost != null ? decimal(weekCost) : null,
       },
     });
     const { refreshPayrollAfterTimesheetChange } = await import("@/lib/payroll-ops");
@@ -700,7 +757,7 @@ export async function approveTimesheetWeek(
 export async function reopenTimesheetWeek(
   db: PrismaClient,
   access: BusinessAccess,
-  input: { membershipId: string; weekStartedAt: Date; reason: string },
+  input: { membershipId: string; weekStartedAt: Date; reason: string; timeZone?: string },
 ) {
   await requireSaasOperatingEntitlement(db, access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_TIME_CARDS);
@@ -709,7 +766,7 @@ export async function reopenTimesheetWeek(
     throw new TimeCardError("A reason is required to reopen an approved week.");
   }
   const actorMembershipId = access.workspace.membership.id;
-  const { start, end } = weekRange(input.weekStartedAt);
+  const { start, end } = weekRange(input.weekStartedAt, input.timeZone);
 
   return db.$transaction(async (tx) => {
     const week = await tx.timesheetWeek.findUnique({

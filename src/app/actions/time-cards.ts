@@ -198,11 +198,9 @@ export async function approveTimesheetWeekAction(
     if (!membershipId || !weekStartedAtRaw) {
       return { error: "Choose a worker and week." };
     }
-    const weekStartedAt = parseScheduleDate(
-      weekStartedAtRaw,
-      resolveBusinessTimeZone(access.workspace.business),
-    );
-    await approveTimesheetWeek(prisma, access, { membershipId, weekStartedAt });
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    const weekStartedAt = parseScheduleDate(weekStartedAtRaw, timeZone);
+    await approveTimesheetWeek(prisma, access, { membershipId, weekStartedAt, timeZone });
     revalidateTimeCards();
     return { message: "Week approved — payroll ready." };
   } catch (error) {
@@ -222,11 +220,9 @@ export async function reopenTimesheetWeekAction(
     if (!membershipId || !weekStartedAtRaw) {
       return { error: "Choose a worker and week." };
     }
-    const weekStartedAt = parseScheduleDate(
-      weekStartedAtRaw,
-      resolveBusinessTimeZone(access.workspace.business),
-    );
-    await reopenTimesheetWeek(prisma, access, { membershipId, weekStartedAt, reason });
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    const weekStartedAt = parseScheduleDate(weekStartedAtRaw, timeZone);
+    await reopenTimesheetWeek(prisma, access, { membershipId, weekStartedAt, reason, timeZone });
     revalidateTimeCards();
     return { message: "Week reopened." };
   } catch (error) {
