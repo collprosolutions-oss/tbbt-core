@@ -16,10 +16,12 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 const {
   estimateEmailIdempotencyKey,
   appointmentProposedEmailIdempotencyKey,
+  getAppUrl,
   getMailConfig,
   invoiceReadyIdempotencyKey,
   isMailSendAttemptId,
   newRequestCompanyEmailIdempotencyKey,
+  PRODUCTION_APP_ORIGIN,
   teamInviteIdempotencyKey,
   transactionalEmailFailureMessage,
 } = await import("@/lib/mail");
@@ -371,9 +373,14 @@ setEnv({
   VERCEL_URL: "collpro-reno.vercel.app",
   VERCEL_BRANCH_URL: null,
 });
+const productionWithoutAppUrl = getMailConfig();
 check(
-  "Production keys without NEXT_PUBLIC_APP_URL stay unconfigured",
-  isEmailDeliveryConfigured() === false && "error" in getMailConfig(),
+  "Production keys without NEXT_PUBLIC_APP_URL use the canonical origin",
+  isEmailDeliveryConfigured() === true &&
+    !("error" in productionWithoutAppUrl) &&
+    productionWithoutAppUrl.appUrl === PRODUCTION_APP_ORIGIN &&
+    getAppUrl() === "https://www.collproreno.com" &&
+    !String(productionWithoutAppUrl.appUrl).includes("vercel.app"),
 );
 
 setEnv({
