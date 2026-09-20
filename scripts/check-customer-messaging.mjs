@@ -143,8 +143,14 @@ function smsInput(overrides) {
   };
 }
 
+function uniqueSmsDigits(lead) {
+  const rest = randomUUID().replace(/[^0-9]/g, "8").slice(0, 7);
+  return `${lead}${rest}`.slice(0, 10);
+}
+
 const opsSrc = readFileSync(new URL("../src/lib/customer-messaging/ops.ts", import.meta.url), "utf8");
 const configSrc = readFileSync(new URL("../src/lib/customer-messaging/config.ts", import.meta.url), "utf8");
+const twilioSrc = readFileSync(new URL("../src/lib/customer-messaging/twilio.ts", import.meta.url), "utf8");
 const proxySrc = readFileSync(new URL("../src/proxy.ts", import.meta.url), "utf8");
 const estimateActionSrc = readFileSync(new URL("../src/app/actions/estimate.ts", import.meta.url), "utf8");
 const sendEstimateSrc = estimateActionSrc.slice(
@@ -293,6 +299,12 @@ try {
       !configSrc.includes("STRIPE_SAAS_PRICE_ID") &&
       saasOpsSrc.includes("createSubscriptionCheckout") &&
       paymentsServiceSrc.includes("connectedAccountId"),
+  );
+  check(
+    "Twilio send does not use a shared env FROM for every tenant",
+    !twilioSrc.includes("config.fromNumber") &&
+      twilioSrc.includes("This business has no assigned SMS number.") &&
+      opsSrc.includes("operationalSmsNumber"),
   );
   check(
     "Preview ensure SQL is additive",
@@ -654,26 +666,34 @@ try {
   delete process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER;
   resetCustomerMessagingProvider();
 
+  const alphaSms = uniqueSmsDigits("855");
+  const betaSms = uniqueSmsDigits("856");
+  const alphaE164 = `+1${alphaSms}`;
+  const sharedEnvFrom = "+19998887777";
+
+  const twilioSid = `SM${randomUUID().replace(/-/g, "")}`;
+  let lastTwilioBody = "";
   let twilioFetches = 0;
   const twilio = createTwilioCustomerMessagingProvider(
     {
       accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       authToken: "twilio_test_token",
       messagingServiceSid: "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      fromNumber: null,
+      fromNumber: sharedEnvFrom,
     },
-    async () => {
+    async (_url, init) => {
       twilioFetches += 1;
+      lastTwilioBody = init.body;
       return {
         ok: true,
         status: 201,
         async json() {
-          return { sid: "SM_real_provider_id", status: "queued" };
+          return { sid: twilioSid, status: "queued" };
         },
       };
     },
   );
-  const queued = await twilio.send({
+  const missingFrom = await twilio.send({
     businessId: alpha.business.id,
     communicationId: "pending",
     channel: "SMS",
@@ -681,8 +701,56 @@ try {
     body: "Your estimate is ready.",
     purpose: "ESTIMATE_READY",
   });
+  check(
+    "Twilio send without a tenant number does not hit the provider",
+    missingFrom.ok === false &&
+      missingFrom.status === "NOT_SENT" &&
+      twilioFetches === 0 &&
+      /no assigned SMS number/i.test(missingFrom.error),
+  );
+
+  setCustomerMessagingProvider(twilio);
+  const sharedFromBlocked = await attemptCustomerSms(prisma, smsInput({
+    businessId: alpha.business.id,
+    customerId: customerA.id,
+    relatedType: "ESTIMATE",
+    relatedId: estimateA.id,
+    idempotencyKey: `sms:twilio-no-number:${randomUUID()}`,
+  }));
+  check(
+    "Shared TWILIO_FROM_NUMBER cannot send for a business without operationalSmsNumber",
+    sharedFromBlocked.status === "NOT_SENT" &&
+      sharedFromBlocked.providerMessageId === null &&
+      twilioFetches === 0,
+  );
+
+  await prisma.business.update({
+    where: { id: alpha.business.id },
+    data: { operationalSmsNumber: alphaSms },
+  });
+  await prisma.business.update({
+    where: { id: beta.business.id },
+    data: { operationalSmsNumber: betaSms },
+  });
+
+  const queued = await twilio.send({
+    businessId: alpha.business.id,
+    communicationId: "pending",
+    channel: "SMS",
+    to: "2395550100",
+    from: alphaSms,
+    body: "Your estimate is ready.",
+    purpose: "ESTIMATE_READY",
+  });
+  const queuedParams = new URLSearchParams(lastTwilioBody);
   check("Provider queued/accepted is not recorded as delivered", queued.ok && queued.status === "ACCEPTED");
-  check("Accepted Twilio send persists the real provider message id", queued.providerMessageId === "SM_real_provider_id");
+  check("Accepted Twilio send persists the real provider message id", queued.providerMessageId === twilioSid);
+  check(
+    "Outbound From is the tenant dedicated number, not a shared env FROM",
+    queuedParams.get("From") === alphaE164 &&
+      queuedParams.get("From") !== sharedEnvFrom &&
+      queuedParams.get("MessagingServiceSid") === "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  );
   check(
     "Transactional STOP footer is appended once",
     /Reply STOP to opt out/i.test(withTransactionalOptOutFooter("Your estimate is ready.")),
@@ -696,7 +764,7 @@ try {
       accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       authToken: "twilio_test_token",
       messagingServiceSid: "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      fromNumber: null,
+      fromNumber: sharedEnvFrom,
     },
     async () => ({
       ok: false,
@@ -728,14 +796,19 @@ try {
     relatedId: estimateA.id,
     idempotencyKey: `sms:twilio-ok:${randomUUID()}`,
   }));
-  check("Twilio accepted send stores provider message id on the communication", twilioSent.ok && twilioSent.providerMessageId === "SM_real_provider_id");
+  const sentParams = new URLSearchParams(lastTwilioBody);
+  check("Twilio accepted send stores provider message id on the communication", twilioSent.ok && twilioSent.providerMessageId === twilioSid);
+  check(
+    "Ops send uses the tenant operationalSmsNumber as From",
+    sentParams.get("From") === alphaE164,
+  );
 
   console.log("\nTEST — Delivery callback signature, tenant, and idempotency");
   const webhookUrl = "http://customer-messaging.test/api/customer-messaging/webhook";
   const deliveryParams = {
-    MessageSid: "SM_real_provider_id",
+    MessageSid: twilioSid,
     MessageStatus: "delivered",
-    From: "+18555550100",
+    From: alphaE164,
     To: "+12395550100",
     AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
   };
@@ -766,15 +839,6 @@ try {
   });
   check("HTTP webhook rejects invalid signature without tenant details", unsignedHttp.status === 400 && unsignedHttp.body.error === "Invalid signature." && !("businessId" in unsignedHttp.body));
 
-  await prisma.business.update({
-    where: { id: alpha.business.id },
-    data: { operationalSmsNumber: "8555550100" },
-  });
-  await prisma.business.update({
-    where: { id: beta.business.id },
-    data: { operationalSmsNumber: "8555550199" },
-  });
-
   const firstCallback = await handleCustomerMessagingWebhookRequest(prisma, {
     url: webhookUrl,
     twilioSignature: validDeliverySig,
@@ -804,10 +868,10 @@ try {
 
   const betaClaim = await applyCustomerMessageDeliveryUpdate(prisma, {
     provider: "twilio",
-    providerMessageId: "SM_real_provider_id",
+    providerMessageId: twilioSid,
     status: "FAILED",
     claimedBusinessId: beta.business.id,
-    providerEventId: `SM_real_provider_id:FAILED:${randomUUID()}`,
+    providerEventId: `${twilioSid}:FAILED:${randomUUID()}`,
   });
   check("Cross-tenant callback cannot mutate another tenant", betaClaim.applied === false && betaClaim.reason === "tenant_mismatch");
   check(
@@ -831,7 +895,7 @@ try {
     provider: "twilio",
     providerEventId: `SM_stop_${randomUUID()}`,
     from: "+12395550100",
-    to: "+18555550100",
+    to: alphaE164,
     body: "STOP",
     optOutType: "STOP",
   });
@@ -843,7 +907,7 @@ try {
     provider: "twilio",
     providerEventId: `SM_stop_again_${randomUUID()}`,
     from: "+12395550100",
-    to: "+18555550100",
+    to: alphaE164,
     body: "STOP",
     optOutType: "STOP",
   });
@@ -867,7 +931,7 @@ try {
     provider: "twilio",
     providerEventId: `SM_start_unknown_${randomUUID()}`,
     from: "+12395550101",
-    to: "+18555550100",
+    to: alphaE164,
     body: "START",
     optOutType: "START",
   });
@@ -880,7 +944,7 @@ try {
     provider: "twilio",
     providerEventId: `SM_hello_${randomUUID()}`,
     from: "+12395550100",
-    to: "+18555550100",
+    to: alphaE164,
     body: "Can you come tomorrow?",
     optOutType: null,
   });
@@ -890,7 +954,7 @@ try {
     provider: "twilio",
     providerEventId: `SM_help_${randomUUID()}`,
     from: "+12395550100",
-    to: "+18555550100",
+    to: alphaE164,
     body: "HELP",
     optOutType: "HELP",
   });
@@ -899,7 +963,7 @@ try {
     provider: "twilio",
     providerEventId: `SM_start_ok_${randomUUID()}`,
     from: "+12395550100",
-    to: "+18555550100",
+    to: alphaE164,
     body: "START",
     optOutType: "START",
   });
@@ -913,7 +977,7 @@ try {
     MessageSid: `SM_http_stop_${randomUUID()}`,
     SmsStatus: "received",
     From: "+12395550102",
-    To: "+18555550100",
+    To: alphaE164,
     Body: "STOP",
     OptOutType: "STOP",
     AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",

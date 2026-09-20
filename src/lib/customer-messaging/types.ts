@@ -48,6 +48,8 @@ export type CustomerMessageSendInput = {
   communicationId: string;
   channel: CustomerMessageChannel;
   to: string;
+  /** Tenant sending/receiving identity (normalized digits). Required for Twilio. */
+  from?: string | null;
   body: string;
   purpose: CustomerMessagePurpose;
 };

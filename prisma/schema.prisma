@@ -179,9 +179,11 @@ model Business {
   /// reports, expenses, payroll, dashboard "today"). Null means
   /// America/New_York (Fort Myers / Eastern). Never a hard-coded offset.
   timezone            String?
-  /// Normalized US digits of the Twilio number that receives inbound
-  /// STOP/START/HELP for THIS business. Unique so inbound To cannot
-  /// match two tenants. Null means this tenant has no SMS identity yet.
+  /// Normalized US digits of THIS business's dedicated Twilio long code.
+  /// Used as both the outbound From and the inbound To routing key so
+  /// STOP/START/HELP cannot be attributed to the wrong tenant. Unique.
+  /// Null means this tenant has no SMS identity (inbound disabled; Twilio
+  /// outbound will not use a shared/pool sender).
   operationalSmsNumber String? @unique
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt

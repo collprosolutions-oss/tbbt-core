@@ -5,6 +5,7 @@ import {
   type TwilioMessagingConfig,
 } from "@/lib/customer-messaging/config";
 import { SMS_TRANSACTIONAL_OPT_OUT_FOOTER } from "@/lib/customer-messaging/compliance";
+import { isUsableNormalizedPhone, normalizePhone } from "@/lib/customer-identity";
 import type {
   CustomerMessageSendInput,
   CustomerMessageSendResult,
@@ -133,14 +134,21 @@ export function createTwilioCustomerMessagingProvider(
     connected: true,
     config,
     async send(input: CustomerMessageSendInput): Promise<CustomerMessageSendResult> {
+      const fromDigits = normalizePhone(input.from);
+      if (!isUsableNormalizedPhone(fromDigits)) {
+        return {
+          ok: false,
+          status: "NOT_SENT",
+          error: "This business has no assigned SMS number.",
+        };
+      }
       const to = toTwilioE164(input.to);
       const body = new URLSearchParams();
       body.set("To", to);
+      body.set("From", toTwilioE164(fromDigits));
       body.set("Body", withTransactionalOptOutFooter(input.body));
       if (config.messagingServiceSid) {
         body.set("MessagingServiceSid", config.messagingServiceSid);
-      } else if (config.fromNumber) {
-        body.set("From", config.fromNumber);
       }
       const callback = statusCallbackUrl();
       if (callback) body.set("StatusCallback", callback);

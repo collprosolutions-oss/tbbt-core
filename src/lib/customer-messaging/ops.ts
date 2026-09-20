@@ -1,6 +1,9 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { DISCONNECTED_CUSTOMER_MESSAGING_PROVIDER } from "@/lib/customer-messaging/config";
-import { normalizePhone } from "@/lib/customer-identity";
+import {
+  DISCONNECTED_CUSTOMER_MESSAGING_PROVIDER,
+  TWILIO_CUSTOMER_MESSAGING_PROVIDER,
+} from "@/lib/customer-messaging/config";
+import { isUsableNormalizedPhone, normalizePhone } from "@/lib/customer-identity";
 import {
   evaluateSmsEligibility,
   smsBlockFailureReason,
@@ -229,6 +232,12 @@ export async function attemptCustomerSms(
     preferences: settings ?? DEFAULT_SETTINGS_PREFERENCES,
   });
 
+  const sendingIdentity = await db.business.findFirst({
+    where: { id: input.businessId },
+    select: { operationalSmsNumber: true },
+  });
+  const fromDigits = normalizePhone(sendingIdentity?.operationalSmsNumber);
+
   const provider = getCustomerMessagingProvider();
   const now = new Date();
   const baseData = {
@@ -258,6 +267,12 @@ export async function attemptCustomerSms(
   } else if (!provider.connected) {
     status = "NOT_SENT";
     failureReason = "SMS delivery is not connected.";
+  } else if (
+    provider.id === TWILIO_CUSTOMER_MESSAGING_PROVIDER &&
+    !isUsableNormalizedPhone(fromDigits)
+  ) {
+    status = "NOT_SENT";
+    failureReason = "This business has no assigned SMS number.";
   } else {
     try {
       const sent = await provider.send({
@@ -265,6 +280,7 @@ export async function attemptCustomerSms(
         communicationId: existing?.id ?? "pending",
         channel: "SMS",
         to: eligibility.normalizedPhone,
+        from: fromDigits || null,
         body: input.body,
         purpose: input.purpose,
       });

@@ -3,6 +3,12 @@
  * adapter when its env vars are set. Otherwise the app stays disconnected
  * and never fabricates delivery. The fake adapter is local/script tests
  * only and cannot enable in Vercel production.
+ *
+ * Platform credentials (account + Messaging Service) are shared. The
+ * sending/receiving number is never shared: each SMS-enabled Business
+ * must have its own dedicated number in Business.operationalSmsNumber.
+ * TWILIO_FROM_NUMBER only activates the adapter locally; it is not a
+ * multi-tenant From.
  */
 export const CUSTOMER_MESSAGING_WEBHOOK_PATH = "/api/customer-messaging/webhook";
 export const DISCONNECTED_CUSTOMER_MESSAGING_PROVIDER = "disconnected";
