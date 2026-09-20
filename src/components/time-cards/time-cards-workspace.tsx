@@ -684,7 +684,7 @@ function WageForm({ worker }: { worker: TimeCardWorker }) {
         <Input
           name="hourlyWage"
           defaultValue={worker.hourlyWageInput}
-          placeholder="25.00"
+          placeholder="Hourly rate"
           inputMode="decimal"
         />
         <Button type="submit" size="sm" disabled={pending}>
