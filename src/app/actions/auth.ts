@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { Prisma } from "@prisma/client";
 import {
   createSession,
   destroySession,
@@ -11,11 +12,10 @@ import {
 import { ensureBusinessPublicContactSchema } from "@/lib/business-contact";
 import {
   ensureFirstRunSetupSchema,
-  FIRST_RUN_SETUP_PATH,
   postAuthenticationPath,
 } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
-import { provisionOwnerWorkspace } from "@/lib/signup-provision";
+import { provisionNewOwnerWithFounderTrial } from "@/lib/public-signup-handoff";
 import { ensureStarterServicesSetupSchema } from "@/lib/starter-services-setup";
 import { ensureWebsiteSetupSchema } from "@/lib/website-setup";
 import { ensureSaasBillingSchema } from "@/lib/saas-billing";
@@ -56,16 +56,27 @@ export async function signUpAction(
   }
 
   const passwordHash = await hashPassword(password);
-  const provisioned = await provisionOwnerWorkspace(prisma, {
-    name,
-    email,
-    passwordHash,
-    businessName,
-  });
+  let result: Awaited<ReturnType<typeof provisionNewOwnerWithFounderTrial>>;
+  try {
+    result = await provisionNewOwnerWithFounderTrial(prisma, {
+      name,
+      email,
+      passwordHash,
+      businessName,
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      return { error: "An account with that email already exists." };
+    }
+    throw error;
+  }
 
-  await createSession(provisioned.user.id);
-  await setWorkspaceCookie(provisioned.business.id);
-  redirect(FIRST_RUN_SETUP_PATH);
+  await createSession(result.user.id);
+  await setWorkspaceCookie(result.business.id);
+  redirect(result.nextPath);
 }
 
 export async function signInAction(

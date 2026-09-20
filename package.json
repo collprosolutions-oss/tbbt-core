@@ -71,6 +71,7 @@
     "test:appointment-confirmation": "node --experimental-strip-types scripts/check-appointment-confirmation.mjs",
     "test:dashboard-attention": "node --experimental-strip-types scripts/check-dashboard-attention.mjs",
     "test:first-run-setup": "node --experimental-strip-types scripts/check-first-run-setup.mjs",
+    "test:self-service-signup": "node --experimental-strip-types scripts/check-self-service-signup.mjs",
     "test:starter-services-setup": "node --experimental-strip-types scripts/check-starter-services-setup.mjs",
     "test:website-setup": "node --experimental-strip-types scripts/check-website-setup.mjs",
     "test:saas-billing": "node --experimental-strip-types scripts/check-saas-billing.mjs",
