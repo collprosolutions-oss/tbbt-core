@@ -349,11 +349,11 @@ try {
     },
   });
 
-  const unknown = await loadPublicSite("no-such-tbbt-business");
+  const unknown = await loadPublicSite("no-such-tbbt-business", prisma);
   check("Unknown slug resolves to null so the page can 404", unknown === null);
 
-  const cedarSite = await loadPublicSite(cedar.business.slug);
-  const mapleSite = await loadPublicSite(maple.business.slug);
+  const cedarSite = await loadPublicSite(cedar.business.slug, prisma);
+  const mapleSite = await loadPublicSite(maple.business.slug, prisma);
   check(
     "Each business resolves only its own public site",
     cedarSite?.business.id === cedar.business.id &&
@@ -401,7 +401,7 @@ try {
     where: { id: cedar.business.id },
     include: { settings: true },
   });
-  const savedSite = await loadPublicSite(saved.slug);
+  const savedSite = await loadPublicSite(saved.slug, prisma);
   check(
     "Saved story and profile data render on that tenant's public site",
     saved?.websiteSetupChoice === WEBSITE_SETUP_SAVED &&
@@ -419,7 +419,7 @@ try {
     where: { id: maple.business.id },
     include: { settings: true },
   });
-  const skippedSite = await loadPublicSite(skippedBiz.slug);
+  const skippedSite = await loadPublicSite(skippedBiz.slug, prisma);
   check(
     "Skip still publishes the live /hire/{slug} URL without inventing content",
     skippedOnce.alreadyComplete === false &&
@@ -482,12 +482,15 @@ try {
       publicServicesPath(saved.slug).startsWith(`/hire/${saved.slug}/services`),
   );
 
-  const emptyCatalog = await loadPublicCatalog({
-    id: maple.business.id,
-    name: "Maple Handyman",
-    slug: maple.business.slug,
-    tradeCode: "HANDYMAN",
-  });
+  const emptyCatalog = await loadPublicCatalog(
+    {
+      id: maple.business.id,
+      name: "Maple Handyman",
+      slug: maple.business.slug,
+      tradeCode: "HANDYMAN",
+    },
+    prisma,
+  );
   check(
     "Empty optional sections stay omitted rather than fabricating reviews",
     emptyCatalog.items.every((item) => item.name !== "Customer testimonials") &&
@@ -501,7 +504,7 @@ try {
       tradeCode: "HANDYMAN",
     },
   });
-  const collproSite = await loadPublicSite("collpro-reno");
+  const collproSite = await loadPublicSite("collpro-reno", prisma);
   check(
     "Existing CollPro public slug still resolves independently of new tenants",
     collproSite?.business.id === collpro.id &&
