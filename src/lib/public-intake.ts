@@ -20,6 +20,7 @@ import {
   normalizeEmail,
   type CustomerIdentityRecord,
 } from "@/lib/customer-identity";
+import { smsConsentFromPublicOptIn } from "@/lib/customer-messaging/opt-in";
 import {
   findReusableLegacyProperty,
   findReusableProperty,
@@ -74,6 +75,7 @@ export type PublicIntakeInput = {
     belongingsCleanup?: string;
   }>;
   submissionId?: string | null;
+  smsOptIn?: unknown;
 };
 
 export type PublicIntakeDb = {
@@ -138,6 +140,15 @@ export type PublicIntakeTx = {
         name: string;
         email: string | null;
         phone: string | null;
+        smsConsentStatus?: "GRANTED" | "UNKNOWN" | "REVOKED";
+        smsConsentUpdatedAt?: Date | null;
+      };
+    }) => Promise<{ id: string }>;
+    update: (args: {
+      where: { id: string };
+      data: {
+        smsConsentStatus?: "GRANTED" | "UNKNOWN" | "REVOKED";
+        smsConsentUpdatedAt?: Date | null;
       };
     }) => Promise<{ id: string }>;
   };
@@ -460,6 +471,10 @@ async function createPublicServiceRequestInner(
       });
       const match = decideCustomerMatch(existingCustomers, { email, phone });
       const identityReview = match.kind === "ambiguous" ? match.review : null;
+      const smsConsentGrant = smsConsentFromPublicOptIn({
+        smsOptIn: input.smsOptIn,
+        phone,
+      });
       const customer =
         match.kind === "reuse"
           ? { id: match.customer.id }
@@ -469,11 +484,20 @@ async function createPublicServiceRequestInner(
                 name,
                 email: email || null,
                 phone: phone || null,
+                ...(smsConsentGrant ?? {}),
               },
             });
       // Repeat matches keep the stored name/email/phone even when the
       // submitted form disagrees. Conflicting identifiers create a new
       // customer and flag the request instead of merging anyone.
+      // Explicit public SMS opt-in may grant consent without rewriting
+      // identity fields.
+      if (match.kind === "reuse" && smsConsentGrant) {
+        await tx.customer.update({
+          where: { id: customer.id },
+          data: smsConsentGrant,
+        });
+      }
 
       let propertyId: string | null = null;
       if (structured?.ok) {

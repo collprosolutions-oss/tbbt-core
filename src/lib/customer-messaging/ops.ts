@@ -1,9 +1,14 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { DISCONNECTED_CUSTOMER_MESSAGING_PROVIDER } from "@/lib/customer-messaging/config";
+import {
+  DISCONNECTED_CUSTOMER_MESSAGING_PROVIDER,
+  TWILIO_CUSTOMER_MESSAGING_PROVIDER,
+} from "@/lib/customer-messaging/config";
+import { isUsableNormalizedPhone, normalizePhone } from "@/lib/customer-identity";
 import {
   evaluateSmsEligibility,
   smsBlockFailureReason,
 } from "@/lib/customer-messaging/eligibility";
+import { rememberCustomerMessagingWebhookEvent } from "@/lib/customer-messaging/inbound";
 import { getCustomerMessagingProvider } from "@/lib/customer-messaging/provider";
 import { ensureCustomerMessagingSchema } from "@/lib/customer-messaging/schema";
 import {
@@ -79,10 +84,20 @@ function nextDeliveryStatus(
   incoming: CustomerMessageDeliveryUpdate["status"],
 ): string {
   if (current === "DELIVERED") return "DELIVERED";
-  if (current === "FAILED" && incoming !== "FAILED") return current;
+  if (current === "FAILED") return "FAILED";
   if (current === "BLOCKED" || current === "NOT_SENT" || current === "DRAFT") {
     return current;
   }
+  if (incoming === "FAILED") return "FAILED";
+  const rank: Record<string, number> = {
+    QUEUED: 1,
+    ACCEPTED: 1,
+    SENT: 2,
+    DELIVERED: 3,
+  };
+  const currentRank = rank[current] ?? 0;
+  const incomingRank = rank[incoming] ?? 0;
+  if (incomingRank < currentRank) return current;
   return incoming;
 }
 
@@ -217,6 +232,12 @@ export async function attemptCustomerSms(
     preferences: settings ?? DEFAULT_SETTINGS_PREFERENCES,
   });
 
+  const sendingIdentity = await db.business.findFirst({
+    where: { id: input.businessId },
+    select: { operationalSmsNumber: true },
+  });
+  const fromDigits = normalizePhone(sendingIdentity?.operationalSmsNumber);
+
   const provider = getCustomerMessagingProvider();
   const now = new Date();
   const baseData = {
@@ -246,6 +267,12 @@ export async function attemptCustomerSms(
   } else if (!provider.connected) {
     status = "NOT_SENT";
     failureReason = "SMS delivery is not connected.";
+  } else if (
+    provider.id === TWILIO_CUSTOMER_MESSAGING_PROVIDER &&
+    !isUsableNormalizedPhone(fromDigits)
+  ) {
+    status = "NOT_SENT";
+    failureReason = "This business has no assigned SMS number.";
   } else {
     try {
       const sent = await provider.send({
@@ -253,6 +280,7 @@ export async function attemptCustomerSms(
         communicationId: existing?.id ?? "pending",
         channel: "SMS",
         to: eligibility.normalizedPhone,
+        from: fromDigits || null,
         body: input.body,
         purpose: input.purpose,
       });
@@ -342,6 +370,18 @@ export async function applyCustomerMessageDeliveryUpdate(
     return { applied: false, reason: "missing_provider_message" };
   }
 
+  let claimedBusinessId = update.claimedBusinessId ?? null;
+  if (!claimedBusinessId && update.routingNumber) {
+    const digits = normalizePhone(update.routingNumber);
+    if (digits) {
+      const routed = await db.business.findFirst({
+        where: { operationalSmsNumber: digits },
+        select: { id: true },
+      });
+      if (routed) claimedBusinessId = routed.id;
+    }
+  }
+
   const row = await db.customerCommunication.findFirst({
     where: {
       provider: update.provider,
@@ -351,15 +391,26 @@ export async function applyCustomerMessageDeliveryUpdate(
   if (!row) {
     return { applied: false, reason: "not_found" };
   }
-  if (update.claimedBusinessId && update.claimedBusinessId !== row.businessId) {
+  if (claimedBusinessId && claimedBusinessId !== row.businessId) {
     return { applied: false, reason: "tenant_mismatch" };
   }
+
+  const eventId = update.providerEventId ?? `${update.providerMessageId}:${update.status}`;
+  const duplicate = await rememberCustomerMessagingWebhookEvent(db, {
+    provider: update.provider,
+    providerEventId: eventId,
+    eventKind: "delivery",
+    businessId: row.businessId,
+  });
 
   const nextStatus = nextDeliveryStatus(row.status, update.status);
   const nextFailure =
     nextStatus === "FAILED" ? update.failureReason ?? row.failureReason : row.failureReason;
 
-  if (nextStatus === row.status && nextFailure === row.failureReason) {
+  if (
+    duplicate === "duplicate" ||
+    (nextStatus === row.status && nextFailure === row.failureReason)
+  ) {
     return {
       applied: true,
       reason: "idempotent",

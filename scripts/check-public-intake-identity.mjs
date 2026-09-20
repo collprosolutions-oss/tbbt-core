@@ -70,7 +70,9 @@ check(
 check(
   "Repeat matches do not update stored name/email/phone",
   publicIntake.includes("Repeat matches keep the stored name/email/phone") &&
-    !/customer\.update\(/.test(publicIntake),
+    /customer\.update\(/.test(publicIntake) &&
+    publicIntake.includes("smsConsentFromPublicOptIn") &&
+    publicIntake.includes("Explicit public SMS opt-in may grant consent without rewriting"),
 );
 
 console.log("\nUNIT — normalize and match decisions");

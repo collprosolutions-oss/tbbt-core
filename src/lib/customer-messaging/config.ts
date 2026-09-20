@@ -1,11 +1,19 @@
 /**
- * Customer messaging is provider-neutral. No SMS vendor is configured
- * in production yet. The fake adapter is for local/script tests only
- * and is never treated as live delivery in Vercel production.
+ * Customer messaging is provider-neutral. Twilio is the production SMS
+ * adapter when its env vars are set. Otherwise the app stays disconnected
+ * and never fabricates delivery. The fake adapter is local/script tests
+ * only and cannot enable in Vercel production.
+ *
+ * Platform credentials (account + Messaging Service) are shared. The
+ * sending/receiving number is never shared: each SMS-enabled Business
+ * must have its own dedicated number in Business.operationalSmsNumber.
+ * TWILIO_FROM_NUMBER only activates the adapter locally; it is not a
+ * multi-tenant From.
  */
 export const CUSTOMER_MESSAGING_WEBHOOK_PATH = "/api/customer-messaging/webhook";
 export const DISCONNECTED_CUSTOMER_MESSAGING_PROVIDER = "disconnected";
 export const FAKE_CUSTOMER_MESSAGING_PROVIDER = "fake";
+export const TWILIO_CUSTOMER_MESSAGING_PROVIDER = "twilio";
 
 export function isFakeCustomerMessagingAdapterEnabled() {
   if (process.env.VERCEL_ENV === "production") {
@@ -19,8 +27,45 @@ export function getCustomerMessagingWebhookSecret(): string | null {
   return value || null;
 }
 
+export function getTwilioAccountSid(): string | null {
+  return process.env.TWILIO_ACCOUNT_SID?.trim() || null;
+}
+
+export function getTwilioAuthToken(): string | null {
+  return process.env.TWILIO_AUTH_TOKEN?.trim() || null;
+}
+
+export function getTwilioMessagingServiceSid(): string | null {
+  return process.env.TWILIO_MESSAGING_SERVICE_SID?.trim() || null;
+}
+
+export function getTwilioFromNumber(): string | null {
+  return process.env.TWILIO_FROM_NUMBER?.trim() || null;
+}
+
+export type TwilioMessagingConfig = {
+  accountSid: string;
+  authToken: string;
+  messagingServiceSid: string | null;
+  fromNumber: string | null;
+};
+
+export function getTwilioMessagingConfig(): TwilioMessagingConfig | null {
+  const accountSid = getTwilioAccountSid();
+  const authToken = getTwilioAuthToken();
+  if (!accountSid || !authToken) return null;
+  const messagingServiceSid = getTwilioMessagingServiceSid();
+  const fromNumber = getTwilioFromNumber();
+  if (!messagingServiceSid && !fromNumber) return null;
+  return { accountSid, authToken, messagingServiceSid, fromNumber };
+}
+
+export function isTwilioCustomerMessagingConfigured() {
+  return getTwilioMessagingConfig() !== null;
+}
+
 export function isCustomerMessagingConfigured() {
-  return isFakeCustomerMessagingAdapterEnabled();
+  return isFakeCustomerMessagingAdapterEnabled() || isTwilioCustomerMessagingConfigured();
 }
 
 export function isCustomerMessagingWebhookPath(pathname: string) {
