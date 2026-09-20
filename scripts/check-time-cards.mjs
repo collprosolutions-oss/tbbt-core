@@ -24,8 +24,10 @@ const {
 } = await import("@/lib/authorization");
 const {
   TIME_ACTIVITY_TYPES,
+  approvalSnapshot,
   canApproveWeek,
   canEditTimeEntry,
+  coerceHourlyWage,
   estimateLaborCost,
   formatDateInput,
   formatDurationClock,
@@ -49,6 +51,9 @@ const {
   TimeCardError,
   updateMembershipWage,
 } = await import("@/lib/time-card-ops");
+const { createExpense } = await import("@/lib/expense-ops");
+const { buildReport, resolveReportRange } = await import("@/lib/reports");
+const { loadReportSource } = await import("@/lib/reports-data");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -133,6 +138,34 @@ try {
   check("9 AM–5 PM = 8 hours", hoursBetween(nineToFive.startedAt, nineToFive.endedAt) === 8);
   check("9 AM–5 PM with seconds still 8 hours", hoursBetween(parseDateTimeInput("2026-08-24", "09:00:00"), parseDateTimeInput("2026-08-24", "17:00:00")) === 8);
   check("8 hours × $30 = $240", estimateLaborCost(8, 30) === 240);
+  check("Labor cost is hours × wage", estimateLaborCost(4, 25) === 100);
+  check("Labor cost is null without wage", estimateLaborCost(4, null) === null);
+  check("Labor cost is not invented from a placeholder", coerceHourlyWage("") === null && coerceHourlyWage(undefined) === null);
+  check("Prisma Decimal $25 is a usable wage", coerceHourlyWage(new Prisma.Decimal(25)) === 25);
+  const oneHourJob = approvalSnapshot({
+    startedAt: parseDateTimeInput("2026-09-19", "09:00"),
+    endedAt: parseDateTimeInput("2026-09-19", "10:00"),
+    activityType: "JOB",
+    hourlyWage: new Prisma.Decimal("25.00"),
+  });
+  check(
+    "1 hour × $25 snapshots $25 labor",
+    oneHourJob.approvedHours === 1 &&
+      oneHourJob.approvedHourlyWage === 25 &&
+      oneHourJob.approvedLaborCost === 25,
+  );
+  const noWageSnap = approvalSnapshot({
+    startedAt: parseDateTimeInput("2026-09-19", "09:00"),
+    endedAt: parseDateTimeInput("2026-09-19", "10:00"),
+    activityType: "JOB",
+    hourlyWage: null,
+  });
+  check(
+    "Hours still snapshot when no wage is on file",
+    noWageSnap.approvedHours === 1 &&
+      noWageSnap.approvedHourlyWage === null &&
+      noWageSnap.approvedLaborCost === null,
+  );
   check(
     "ISO date + local 17:00 is not used for form format (would be 32h in US timezones)",
     formatDateInput(nineToFive.endedAt) === "2026-08-24" && formatTimeInput(nineToFive.endedAt) === "17:00",
@@ -436,6 +469,17 @@ try {
     where: { membershipId: helperMem.id, status: "APPROVED" },
   });
   check("Helper entries are APPROVED and snapshotted", approvedEntries.length >= 2 && approvedEntries.every((entry) => entry.approvedHours != null));
+  const paidHelper = approvedEntries.filter((entry) => isPaidActivity(entry.activityType));
+  check(
+    "Paid helper entries snapshot the live $20 wage onto hourly wage and labor cost",
+    paidHelper.length > 0 &&
+      paidHelper.every(
+        (entry) =>
+          Number(entry.approvedHourlyWage) === 20 &&
+          entry.approvedLaborCost != null &&
+          Number(entry.approvedLaborCost) === Number(entry.approvedHours) * 20,
+      ),
+  );
 
   await expectError(
     "Approved entry cannot be silently edited",
@@ -496,6 +540,107 @@ try {
   } catch (error) {
     check("MEMBER requireBusinessCapability(MANAGE_TIME_CARDS) throws", error instanceof ForbiddenError);
   }
+
+  console.log("\nTEST — $25 wage snapshot, immutable history, job profitability");
+  const handy = await prisma.business.create({
+    data: { name: "Handy Handyman Services", slug: "handy-wage-snapshot", tradeCode: "HANDYMAN" },
+  });
+  const joeUser = await prisma.user.create({
+    data: { name: "Joe LeBlanc", email: "joe-wage-snapshot@example.com", passwordHash: "x" },
+  });
+  const joeMem = await prisma.membership.create({
+    data: {
+      userId: joeUser.id,
+      businessId: handy.id,
+      role: "OWNER",
+      hourlyWage: new Prisma.Decimal("25.00"),
+    },
+  });
+  const joeAccess = makeAccess(handy.id, "OWNER", joeMem.id);
+  const handyCustomer = await prisma.customer.create({
+    data: { businessId: handy.id, name: "Test Homeowner" },
+  });
+  const handyJob = await prisma.job.create({
+    data: {
+      businessId: handy.id,
+      customerId: handyCustomer.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  await prisma.invoice.create({
+    data: {
+      businessId: handy.id,
+      customerId: handyCustomer.id,
+      jobId: handyJob.id,
+      status: "PAID",
+      total: new Prisma.Decimal("125.00"),
+      paidAt: new Date(),
+      paymentMethod: "CASH",
+    },
+  });
+  const hourStart = parseDateTimeInput("2026-09-19", "09:00");
+  const hourEnd = parseDateTimeInput("2026-09-19", "10:00");
+  check("Acceptance-test hour timestamps parsed", Boolean(hourStart && hourEnd));
+  const joeEntry = await createManualTimeEntry(prisma, joeAccess, {
+    membershipId: joeMem.id,
+    activityType: "JOB",
+    jobId: handyJob.id,
+    startedAt: hourStart,
+    endedAt: hourEnd,
+    note: "Acceptance test hour",
+  });
+  const handyWeek = weekRange(hourStart).start;
+  await approveTimesheetWeek(prisma, joeAccess, {
+    membershipId: joeMem.id,
+    weekStartedAt: handyWeek,
+  });
+  const approvedJoe = await prisma.timeEntry.findUnique({ where: { id: joeEntry.id } });
+  check(
+    "Approved 1-hour entry snapshots $25/hour and $25 labor",
+    approvedJoe?.status === "APPROVED" &&
+      Number(approvedJoe.approvedHours) === 1 &&
+      Number(approvedJoe.approvedHourlyWage) === 25 &&
+      Number(approvedJoe.approvedLaborCost) === 25,
+  );
+
+  await updateMembershipWage(prisma, joeAccess, { membershipId: joeMem.id, hourlyWage: "40.00" });
+  const afterWageChange = await prisma.timeEntry.findUnique({ where: { id: joeEntry.id } });
+  const liveWage = await prisma.membership.findUnique({ where: { id: joeMem.id } });
+  check("Live membership wage can change after approval", Number(liveWage.hourlyWage) === 40);
+  check(
+    "Approved wage snapshot stays $25 after a later wage change",
+    Number(afterWageChange.approvedHourlyWage) === 25 &&
+      Number(afterWageChange.approvedLaborCost) === 25,
+  );
+
+  await createExpense(prisma, joeAccess, {
+    occurredOn: "2026-09-19",
+    description: "Test job materials",
+    amount: "25.00",
+    category: "MATERIALS",
+    vendor: "Test Vendor",
+    jobId: handyJob.id,
+  });
+  const handySource = await loadReportSource(prisma, handy.id);
+  const handyReport = buildReport(handySource, resolveReportRange("all"));
+  const profit = handyReport.jobProfitability.find((row) => row.jobId === handyJob.id);
+  check("Job paid revenue is $125", profit?.paidRevenue === 125);
+  check("Approved labor is $25, not incomplete", profit?.laborCost === 25 && profit?.laborCostIncomplete === false);
+  check("Approved hours are 1:00", profit?.approvedHours === 1);
+  check("Job expenses are $25", profit?.recordedJobExpense === 25);
+  check("Recorded job margin is $125 − $25 − $25 = $75", profit?.recordedMargin === 75);
+  check(
+    "Needs attention does not claim a missing wage snapshot for Joe",
+    !handyReport.attention.some((item) => item.detail.includes("no wage snapshot")),
+  );
+
+  const foreignSource = await loadReportSource(prisma, businessB.id);
+  check(
+    "Other tenant report source does not include Handy job labor",
+    foreignSource.approvedTimeEntries.every((entry) => entry.id !== joeEntry.id) &&
+      foreignSource.invoices.every((invoice) => invoice.jobId !== handyJob.id),
+  );
 
   console.log(
     failures === 0

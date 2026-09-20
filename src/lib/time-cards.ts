@@ -201,12 +201,39 @@ export function billableHours(
  * Estimated gross labor cost: paid hours × hourly wage.
  * Returns null when no wage is on file -- never invents a rate.
  * Label this as a labor-cost / gross-wage estimate, not net pay.
+ *
+ * Membership.hourlyWage (and approval snapshots) may arrive as a number,
+ * Prisma Decimal, or numeric string. Never invent a rate: missing,
+ * negative, or non-finite values are "no wage on file".
  */
-export function estimateLaborCost(hours: number, hourlyWage: number | null | undefined): number | null {
-  if (hourlyWage == null || !Number.isFinite(hourlyWage) || hourlyWage < 0) {
+export function coerceHourlyWage(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  let amount: number;
+  if (typeof value === "number") {
+    amount = value;
+  } else if (
+    typeof value === "object" &&
+    "toNumber" in value &&
+    typeof (value as { toNumber?: unknown }).toNumber === "function"
+  ) {
+    try {
+      amount = (value as { toNumber: () => number }).toNumber();
+    } catch {
+      return null;
+    }
+  } else {
+    amount = Number(String(value));
+  }
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  return roundMoney(amount);
+}
+
+export function estimateLaborCost(hours: number, hourlyWage: unknown): number | null {
+  const wage = coerceHourlyWage(hourlyWage);
+  if (wage == null) {
     return null;
   }
-  return roundMoney(hours * hourlyWage);
+  return roundMoney(hours * wage);
 }
 
 export const OVERTIME_WEEKLY_THRESHOLD = 40;
@@ -236,12 +263,12 @@ export function approvalSnapshot(input: {
   startedAt: Date;
   endedAt: Date;
   activityType: string;
-  hourlyWage: number | null | undefined;
+  hourlyWage: unknown;
 }): { approvedHours: number; approvedHourlyWage: number | null; approvedLaborCost: number | null } {
   const hours = isPaidActivity(input.activityType)
     ? hoursBetween(input.startedAt, input.endedAt)
     : 0;
-  const wage = input.hourlyWage ?? null;
+  const wage = coerceHourlyWage(input.hourlyWage);
   return {
     approvedHours: hours,
     approvedHourlyWage: wage,
