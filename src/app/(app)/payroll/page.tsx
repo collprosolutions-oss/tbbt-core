@@ -158,7 +158,7 @@ export default async function PayrollPage({
       exceptions,
       exceptionLabels: exceptions.map((code) => PAYROLL_EXCEPTION_LABELS[code]),
       canRemove: Boolean(selected && isEditablePayrollStatus(selected.status)),
-      timesheetHref: `/time-cards?view=timesheets&week=${formatISODate(item.weekStartedAt)}&worker=${item.membershipId}`,
+      timesheetHref: `/time-cards?view=timesheets&week=${formatISODate(item.weekStartedAt, timeZone)}&worker=${item.membershipId}`,
     };
   });
 

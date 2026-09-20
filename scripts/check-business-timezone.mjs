@@ -33,7 +33,7 @@ const {
   startOfDay,
 } = await import("@/lib/schedule");
 const { parseDateTimeInput, hoursBetween, weekRange } = await import("@/lib/time-cards");
-const { resolveReportRange } = await import("@/lib/reports");
+const { reportCsvRows, resolveReportRange } = await import("@/lib/reports");
 const { expenseRangeBounds } = await import("@/lib/expenses");
 const { defaultPayPeriod } = await import("@/lib/payroll");
 
@@ -157,6 +157,40 @@ check(
 check(
   "Reports month range does not start at UTC Sep 20 because of 8 PM NY",
   formatISODate(startOfDay(eightPmSep19Ny, NY), NY) === "2026-09-19",
+);
+const revenueCsv = reportCsvRows("revenue", {
+  range: reportRange,
+  invoices: [
+    {
+      id: "inv-evening",
+      status: "PAID",
+      customerName: "Fort Myers",
+      total: 100,
+      paidAt: eightPmSep19Ny,
+      createdAt: eightPmSep19Ny,
+    },
+  ],
+});
+check(
+  "Reports CSV paidAt at 8 PM NY stays Sep 19, not the UTC date",
+  revenueCsv.rows[0]?.[4] === "2026-09-19" && revenueCsv.rows[0]?.[5] === "2026-09-19",
+);
+const expenseCsv = reportCsvRows("expenses", {
+  range: reportRange,
+  expenseRecords: [
+    {
+      occurredOn: eightPmSep19Ny,
+      description: "Fuel",
+      categoryLabel: "Fuel",
+      vendor: null,
+      amount: 20,
+      jobId: null,
+    },
+  ],
+});
+check(
+  "Reports expense CSV date at 8 PM NY stays Sep 19",
+  expenseCsv.rows[0]?.[0] === "2026-09-19",
 );
 
 console.log("\nUNIT — Expenses date ranges");

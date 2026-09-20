@@ -1139,7 +1139,7 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
       ...run,
       hours: run.authorizedApprovedHours,
       gross: run.authorizedGrossLaborAmount,
-      periodLabel: `${formatISODate(run.payPeriodStart)} – ${formatISODate(addDays(run.payPeriodEnd, -1))}`,
+      periodLabel: `${formatISODate(run.payPeriodStart, range.timeZone)} – ${formatISODate(addDays(run.payPeriodEnd, -1, range.timeZone), range.timeZone)}`,
     })),
     customers,
     services,
@@ -1151,11 +1151,12 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
 }
 
 export function reportCsvRows(area: ReportArea, report: BuiltReport): { headers: string[]; rows: string[][] } {
+  const timeZone = report.range.timeZone;
   if (area === "expenses") {
     return {
       headers: ["Date", "Description", "Category", "Vendor", "Amount", "Job"],
       rows: report.expenseRecords.map((row) => [
-        formatISODate(row.occurredOn),
+        formatISODate(row.occurredOn, timeZone),
         row.description,
         row.categoryLabel,
         row.vendor ?? "",
@@ -1193,8 +1194,8 @@ export function reportCsvRows(area: ReportArea, report: BuiltReport): { headers:
         invoice.status,
         invoice.customerName,
         String(invoice.total),
-        invoice.paidAt ? formatISODate(invoice.paidAt) : "",
-        formatISODate(invoice.createdAt),
+        invoice.paidAt ? formatISODate(invoice.paidAt, timeZone) : "",
+        formatISODate(invoice.createdAt, timeZone),
       ]),
     };
   }

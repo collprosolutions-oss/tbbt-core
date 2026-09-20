@@ -107,7 +107,7 @@ export default async function ReportsPage({
       <PageHeaderControls
         actions={
           <ExportReportButton
-            filename={`tbbt-${area}-${new Date().toISOString().slice(0, 10)}.csv`}
+            filename={`tbbt-${area}-${formatISODate(new Date(), timeZone)}.csv`}
             {...reportCsvRows(area, report)}
           />
         }
