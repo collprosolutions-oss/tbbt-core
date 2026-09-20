@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { FAKE_CUSTOMER_MESSAGING_PROVIDER } from "@/lib/customer-messaging/config";
 import type {
   CustomerMessageDeliveryUpdate,
@@ -27,7 +27,6 @@ export function createFakeCustomerMessagingProvider(
   webhookSecret: string | null = process.env.TBBT_CUSTOMER_MESSAGING_WEBHOOK_SECRET?.trim() || null,
 ): FakeCustomerMessagingProvider {
   const sent: CustomerMessageSendInput[] = [];
-  let seq = 0;
 
   const provider: FakeCustomerMessagingProvider = {
     id: FAKE_CUSTOMER_MESSAGING_PROVIDER,
@@ -50,12 +49,11 @@ export function createFakeCustomerMessagingProvider(
         provider.failNext = false;
         return { ok: false, status: "FAILED", error: "Fake SMS provider rejected the message." };
       }
-      seq += 1;
       sent.push(input);
       return {
         ok: true,
         status: "ACCEPTED",
-        providerMessageId: `fake_sms_${seq}`,
+        providerMessageId: `fake_sms_${randomUUID()}`,
         providerMetadata: { adapter: FAKE_CUSTOMER_MESSAGING_PROVIDER },
       };
     },
