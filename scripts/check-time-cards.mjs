@@ -13,6 +13,7 @@ import { register } from "node:module";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -39,6 +40,7 @@ const {
   missingApprovalSnapshotPatch,
   paidHours,
   parseDateTimeInput,
+  parseHourlyWage,
   weekRange,
 } = await import("@/lib/time-cards");
 const {
@@ -208,6 +210,19 @@ try {
   check(
     "Re-approval without a membership wage leaves snapshot missing",
     !noWageRepair.changed && noWageRepair.wage == null && noWageRepair.cost == null,
+  );
+  check(
+    "Empty wage form is not a stored $25 (placeholder is not submitted)",
+    parseHourlyWage("")?.error === "Enter a valid hourly wage." && parseHourlyWage("25.00") === 25,
+  );
+  const wageUiSrc = readFileSync(new URL("../src/components/time-cards/time-cards-workspace.tsx", import.meta.url), "utf8");
+  const wagePageSrc = readFileSync(new URL("../src/app/(app)/time-cards/page.tsx", import.meta.url), "utf8");
+  check(
+    "Time Cards wage input does not use placeholder 25.00 as a fake stored wage",
+    !wageUiSrc.includes('placeholder="25.00"') &&
+      wageUiSrc.includes("{worker.hourlyWageLabel ?? \"No wage on file\"}") &&
+      wagePageSrc.includes("membership.hourlyWage") &&
+      wagePageSrc.includes("hourlyWageInput"),
   );
   check(
     "ISO date + local 17:00 is not used for form format (would be 32h in US timezones)",
@@ -799,6 +814,149 @@ try {
   check(
     "Reports still flag approved time when no membership wage exists",
     repairedReport.attention.some((item) => item.key === `wage:${nowageEntry.id}`),
+  );
+
+  console.log("\nTEST — Production path: missing snapshot, stored $25, reopen, READY → APPROVE, DB row");
+  const persistBiz = await prisma.business.create({
+    data: { name: "Handy Persist Wage", slug: `handy-persist-wage-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
+  });
+  const persistUser = await prisma.user.create({
+    data: { name: "Joe Persist", email: `joe-persist-${randomUUID().slice(0, 8)}@example.com`, passwordHash: "x" },
+  });
+  const persistMem = await prisma.membership.create({
+    data: { userId: persistUser.id, businessId: persistBiz.id, role: "OWNER", hourlyWage: null },
+  });
+  const persistAccess = makeAccess(persistBiz.id, "OWNER", persistMem.id);
+  const persistCustomer = await prisma.customer.create({
+    data: { businessId: persistBiz.id, name: "Persist Homeowner" },
+  });
+  const persistJob = await prisma.job.create({
+    data: {
+      businessId: persistBiz.id,
+      customerId: persistCustomer.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  await prisma.invoice.create({
+    data: {
+      businessId: persistBiz.id,
+      customerId: persistCustomer.id,
+      jobId: persistJob.id,
+      status: "PAID",
+      total: new Prisma.Decimal("125.00"),
+      paidAt: new Date(),
+      paymentMethod: "CASH",
+    },
+  });
+  const persistStart = parseDateTimeInput("2026-09-19", "09:00");
+  const persistEnd = parseDateTimeInput("2026-09-19", "10:00");
+  const persistEntry = await createManualTimeEntry(prisma, persistAccess, {
+    membershipId: persistMem.id,
+    activityType: "JOB",
+    jobId: persistJob.id,
+    startedAt: persistStart,
+    endedAt: persistEnd,
+    note: "Persist hour",
+  });
+  const persistWeek = weekRange(persistStart).start;
+  await approveTimesheetWeek(prisma, persistAccess, {
+    membershipId: persistMem.id,
+    weekStartedAt: persistWeek,
+  });
+  const originallyApproved = await prisma.timeEntry.findUnique({ where: { id: persistEntry.id } });
+  check(
+    "Original approval with no membership wage leaves wage/cost null on the row",
+    originallyApproved?.status === "APPROVED" &&
+      Number(originallyApproved.approvedHours) === 1 &&
+      originallyApproved.approvedHourlyWage == null &&
+      originallyApproved.approvedLaborCost == null,
+  );
+
+  await expectError(
+    "Empty wage submit cannot persist a placeholder 25.00",
+    () => updateMembershipWage(prisma, persistAccess, { membershipId: persistMem.id, hourlyWage: "" }),
+    (error) => error instanceof TimeCardError,
+  );
+  const stillNoWage = await prisma.membership.findUnique({ where: { id: persistMem.id } });
+  check("Empty wage submit leaves Membership.hourlyWage null", stillNoWage.hourlyWage == null);
+
+  await updateMembershipWage(prisma, persistAccess, {
+    membershipId: persistMem.id,
+    hourlyWage: "25.00",
+  });
+  const storedMembership = await prisma.membership.findUnique({ where: { id: persistMem.id } });
+  const pageWage =
+    storedMembership.hourlyWage != null ? Number(storedMembership.hourlyWage.toString()) : null;
+  check(
+    "Approval reads the same Membership.hourlyWage the Time Cards page uses",
+    coerceHourlyWage(storedMembership.hourlyWage) === 25 &&
+      pageWage === 25 &&
+      pageWage.toFixed(2) === "25.00",
+  );
+
+  await reopenTimesheetWeek(prisma, persistAccess, {
+    membershipId: persistMem.id,
+    weekStartedAt: persistWeek,
+    reason: "Repair missing wage snapshot",
+  });
+  const persistAfterReopen = await prisma.timeEntry.findUnique({ where: { id: persistEntry.id } });
+  check(
+    "Reopen moves the entry to READY and does not invent a snapshot",
+    persistAfterReopen.status === "READY" &&
+      persistAfterReopen.approvedHourlyWage == null &&
+      persistAfterReopen.approvedLaborCost == null,
+  );
+
+  await approveTimesheetWeek(prisma, persistAccess, {
+    membershipId: persistMem.id,
+    weekStartedAt: persistWeek,
+  });
+  const dbRow = await prisma.timeEntry.findUnique({ where: { id: persistEntry.id } });
+  check(
+    "DATABASE ROW after reopen→approve: hours=1.0 wage=25.00 cost=25.00",
+    dbRow?.status === "APPROVED" &&
+      Number(dbRow.approvedHours) === 1 &&
+      Number(dbRow.approvedHourlyWage) === 25 &&
+      Number(dbRow.approvedLaborCost) === 25,
+  );
+
+  await createExpense(prisma, persistAccess, {
+    occurredOn: "2026-09-19",
+    description: "Persist job materials",
+    amount: "25.00",
+    category: "MATERIALS",
+    vendor: "Test Vendor",
+    jobId: persistJob.id,
+  });
+  const persistReport = buildReport(
+    await loadReportSource(prisma, persistBiz.id),
+    resolveReportRange("all"),
+  );
+  const persistProfit = persistReport.jobProfitability.find((row) => row.jobId === persistJob.id);
+  check("Paid revenue = $125", persistProfit?.paidRevenue === 125);
+  check("Approved labor = $25", persistProfit?.laborCost === 25 && persistProfit?.laborCostIncomplete === false);
+  check("Job expenses = $25", persistProfit?.recordedJobExpense === 25);
+  check("Recorded job margin = $75", persistProfit?.recordedMargin === 75);
+  check(
+    "Reports no longer flag this persisted snapshot as missing",
+    !persistReport.attention.some((item) => item.key === `wage:${persistEntry.id}`),
+  );
+
+  await expectError(
+    "Business B cannot approve the persist-wage worker's week",
+    () =>
+      approveTimesheetWeek(prisma, ownerB, {
+        membershipId: persistMem.id,
+        weekStartedAt: persistWeek,
+      }),
+    (error) => error instanceof TimeCardError,
+  );
+  const persistAfterIsolation = await prisma.timeEntry.findUnique({ where: { id: persistEntry.id } });
+  check(
+    "Cross-tenant approve did not change the persisted $25 snapshot",
+    Number(persistAfterIsolation.approvedHourlyWage) === 25 &&
+      Number(persistAfterIsolation.approvedLaborCost) === 25,
   );
 
   console.log(

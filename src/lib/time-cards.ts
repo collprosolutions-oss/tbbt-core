@@ -392,7 +392,9 @@ export function toAuditSnapshot(entry: {
 
 export function parseHourlyWage(raw: string): number | null | { error: string } {
   const trimmed = raw.trim();
-  if (trimmed === "") return null;
+  if (trimmed === "") {
+    return { error: "Enter a valid hourly wage." };
+  }
   const value = Number(trimmed);
   if (!Number.isFinite(value) || value < 0 || value > 10_000) {
     return { error: "Enter a valid hourly wage." };
