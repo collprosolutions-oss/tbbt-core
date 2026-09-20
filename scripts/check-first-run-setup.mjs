@@ -85,7 +85,7 @@ const authSrc = readRepo("src/app/actions/auth.ts");
 const provisionSrc = readRepo("src/lib/signup-provision.ts");
 check(
   "Signup uses the extracted atomic provision helper",
-  authSrc.includes("provisionOwnerWorkspace") &&
+  authSrc.includes("provisionNewOwnerWithFounderTrial") &&
     provisionSrc.includes("tx.user.create") &&
     provisionSrc.includes("tx.business.create") &&
     provisionSrc.includes('role: "OWNER"') &&
@@ -103,7 +103,8 @@ check(
 );
 check(
   "Successful signup redirects into first-run setup, not Dashboard",
-  authSrc.includes("redirect(FIRST_RUN_SETUP_PATH)") &&
+  authSrc.includes("provisionNewOwnerWithFounderTrial") &&
+    authSrc.includes("redirect(result.nextPath)") &&
     FIRST_RUN_SETUP_PATH === "/setup",
 );
 check(
