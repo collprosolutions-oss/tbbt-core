@@ -7,6 +7,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { attemptReviewRequestSms } from "@/lib/customer-messaging";
 import {
   isReviewPlatform,
   isReviewReceivedPlatform,
@@ -242,13 +243,28 @@ export async function advanceReviewRequestStatus(
   if (!isReviewRequestStatus(next)) {
     throw new ReviewsError("Invalid review request status.");
   }
-  return db.reviewRequest.update({
+  const updated = await db.reviewRequest.update({
     where: { id: request.id },
     data: {
       status: next,
       requestedAt: next === "SENT" ? request.requestedAt ?? new Date() : request.requestedAt,
     },
   });
+  if (next === "SENT") {
+    const business = await db.business.findFirst({
+      where: { id: access.businessId },
+      select: { name: true },
+    });
+    await attemptReviewRequestSms(db, {
+      businessId: access.businessId,
+      reviewRequestId: updated.id,
+      customerId: updated.customerId,
+      businessName: business?.name ?? "us",
+      requestText: updated.requestText,
+      initiatedByMembershipId: access.workspace.membership.id,
+    });
+  }
+  return updated;
 }
 
 export async function cancelReviewRequest(

@@ -69,6 +69,7 @@ import {
   senderFrom,
   sendTransactionalEmail,
 } from "@/lib/mail";
+import { attemptEstimateReadySms } from "@/lib/customer-messaging";
 import { prisma } from "@/lib/prisma";
 
 export type EstimateActionState = {
@@ -1273,6 +1274,15 @@ export async function sendEstimate(
     return result;
   }
 
+  await attemptEstimateReadySms(prisma, {
+    businessId: access.businessId,
+    estimateId: estimate.id,
+    businessName: access.workspace.business.name,
+    publicToken: estimate.publicToken,
+    customerId: estimate.customerId,
+    initiatedByMembershipId: access.workspace.membership.id,
+  });
+
   revalidatePath("/estimates");
   revalidatePath(`/estimates/${estimate.id}`);
   revalidatePath(`/e/${estimate.publicToken}`);
@@ -1399,6 +1409,15 @@ export async function emailSentEstimate(
   if (sent.error) {
     return { error: sent.error };
   }
+
+  await attemptEstimateReadySms(prisma, {
+    businessId: access.businessId,
+    estimateId: estimate.id,
+    businessName: access.workspace.business.name,
+    publicToken: estimate.publicToken,
+    customerId: estimate.customerId,
+    initiatedByMembershipId: access.workspace.membership.id,
+  });
 
   revalidatePath(`/estimates/${estimate.id}`);
   return { message: `Estimate emailed to ${recipient}` };

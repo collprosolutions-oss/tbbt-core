@@ -392,6 +392,36 @@ check(
   workspaceLoader.includes("ensureBusinessTimezoneSchema"),
 );
 
+const customerMessagingMigration = readFileSync(
+  new URL("../prisma/migrations/20260920180000_add_customer_messaging/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Customer messaging migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(customerMessagingMigration) &&
+    customerMessagingMigration.includes('ADD COLUMN IF NOT EXISTS "smsConsentStatus"') &&
+    customerMessagingMigration.includes('CREATE TABLE IF NOT EXISTS "CustomerCommunication"') &&
+    !/UPDATE "Business"/i.test(customerMessagingMigration) &&
+    !/UPDATE "Customer"/i.test(customerMessagingMigration),
+);
+
+const customerMessagingSchema = readFileSync(
+  new URL("../src/lib/customer-messaging/schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers customer messaging schema skipped by migrate",
+  customerMessagingSchema.includes("Preview shares Production and skips migrate") &&
+    customerMessagingSchema.includes("ensureCustomerMessagingSchema") &&
+    customerMessagingSchema.includes("CUSTOMER_MESSAGING_ENSURE_SQL") &&
+    customerMessagingSchema.includes('ADD COLUMN IF NOT EXISTS "smsConsentStatus"') &&
+    customerMessagingSchema.includes("CustomerCommunication"),
+);
+check(
+  "Authenticated workspace load ensures customer messaging schema before Business SELECT",
+  workspaceLoader.includes("ensureCustomerMessagingSchema"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

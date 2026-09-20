@@ -16,6 +16,7 @@ import {
   formatInvoiceServiceAddress,
 } from "@/lib/invoice-mail";
 import { evaluateCompleteJob } from "@/lib/job-lifecycle";
+import { attemptInvoiceReadySms } from "@/lib/customer-messaging";
 import {
   getAppUrl,
   getMailConfig,
@@ -79,7 +80,7 @@ export async function sendDraftInvoiceIfNeeded(
       id: true,
       status: true,
       total: true,
-      customer: { select: { name: true, email: true } },
+      customer: { select: { id: true, name: true, email: true } },
       job: {
         select: {
           projectToken: true,
@@ -136,6 +137,7 @@ export async function sendDraftInvoiceIfNeeded(
     invoiceId: invoice.id,
     businessName: input.businessName,
     total: invoice.total,
+    customerId: invoice.customer?.id ?? null,
     customerName: invoice.customer?.name ?? null,
     customerEmail: invoice.customer?.email ?? null,
     projectToken: invoice.job?.projectToken ?? null,
@@ -152,30 +154,43 @@ export async function sendDraftInvoiceIfNeeded(
 }
 
 async function notifyCustomerInvoiceReady(
-  _db: PrismaClient,
+  db: PrismaClient,
   input: {
     businessId: string;
     invoiceId: string;
     businessName: string;
     total: { toString(): string };
+    customerId: string | null;
     customerName: string | null;
     customerEmail: string | null;
     projectToken: string | null;
     address: string | null;
   },
 ): Promise<{ sent: boolean; warning?: string }> {
+  const queueSms = () =>
+    attemptInvoiceReadySms(db, {
+      businessId: input.businessId,
+      invoiceId: input.invoiceId,
+      customerId: input.customerId,
+      businessName: input.businessName,
+      projectToken: input.projectToken,
+    });
+
   const config = getMailConfig();
   if ("error" in config) {
+    await queueSms();
     return { sent: false };
   }
 
   const recipient = input.customerEmail?.trim() ?? "";
   if (!isUsableEmail(recipient)) {
+    await queueSms();
     return { sent: false };
   }
 
   const appUrl = config.appUrl || getAppUrl();
   if (!appUrl || !input.projectToken) {
+    await queueSms();
     return {
       sent: false,
       warning:
@@ -201,6 +216,8 @@ async function notifyCustomerInvoiceReady(
     kind: "invoice",
     idempotencyKey: invoiceReadyIdempotencyKey(input.invoiceId),
   });
+
+  await queueSms();
 
   if (sent.error) {
     return {
