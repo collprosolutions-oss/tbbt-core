@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { TBBT_SIGN_IN_HREF, TBBT_SIGN_UP_HREF } from "@/lib/tbbt-marketing";
+import { TBBT_SIGN_IN_HREF, TBBT_SIGN_UP_HREF, TBBT_TRIAL_CTA_LABEL } from "@/lib/tbbt-marketing";
 
 export function TbbtContactPage() {
   return (
@@ -22,7 +22,7 @@ export function TbbtContactPage() {
           </p>
           <div className="tbbt-hero-actions">
             <Link href={TBBT_SIGN_UP_HREF} className="tbbt-btn tbbt-btn--primary tbbt-btn--lg">
-              Start Free Trial
+              {TBBT_TRIAL_CTA_LABEL}
             </Link>
             <Link href={TBBT_SIGN_IN_HREF} className="tbbt-btn tbbt-btn--ghost tbbt-btn--lg">
               Sign In

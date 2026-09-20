@@ -66,6 +66,13 @@
   max-width: 36rem;
 }
 
+.tbbt-hero-offer {
+  margin: 0.85rem 0 0;
+  color: #f3f6fb;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
 .tbbt-hero-actions {
   display: flex;
   flex-wrap: wrap;
@@ -581,6 +588,105 @@
   line-height: 1.5;
 }
 
+.tbbt-os-grid {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 1.15rem;
+}
+
+.tbbt-os-card {
+  border: 1px solid var(--tbbt-line);
+  border-radius: 1.1rem;
+  background: #10192b;
+  padding: 1.15rem 1.1rem 1.2rem;
+}
+
+.tbbt-os-card h3 {
+  margin: 0.35rem 0 0.7rem;
+  font-size: 1.15rem;
+}
+
+.tbbt-os-card ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.38rem;
+}
+
+.tbbt-os-card li {
+  color: #d7deec;
+  font-size: 0.92rem;
+  padding-left: 1rem;
+  position: relative;
+}
+
+.tbbt-os-card li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: var(--tbbt-orange);
+}
+
+.tbbt-how-grid {
+  display: grid;
+  gap: 0.85rem;
+  margin: 1.15rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tbbt-how-card {
+  border: 1px solid var(--tbbt-line);
+  border-radius: 1.1rem;
+  background: #10192b;
+  padding: 1.1rem 1.05rem 1.15rem;
+}
+
+.tbbt-how-step {
+  display: inline-grid;
+  place-items: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 999px;
+  background: var(--tbbt-orange);
+  color: #140b07;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.tbbt-how-card h3 {
+  margin: 0.65rem 0 0.35rem;
+  font-size: 1.12rem;
+}
+
+.tbbt-how-card p {
+  margin: 0;
+}
+
+.tbbt-diff-inner,
+.tbbt-founder-note-inner {
+  max-width: 44rem;
+}
+
+.tbbt-founder-home .tbbt-price {
+  margin-inline: auto;
+}
+
+.tbbt-founder-note-inner .tbbt-btn {
+  margin-top: 1rem;
+}
+
+@media (min-width: 880px) {
+  .tbbt-os-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .tbbt-how-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 .tbbt-device-web,
 .tbbt-device-run {
   display: grid;
@@ -1005,6 +1111,11 @@
     font-size: 0.82rem;
     line-height: 1.38;
     max-width: 24.5rem;
+  }
+
+  .tbbt-hero-offer {
+    margin: 0.28rem 0 0;
+    font-size: 0.72rem;
   }
 
   .tbbt-hero-copy .tbbt-hero-actions {
@@ -1583,6 +1694,11 @@
 
   .tbbt-hero-lastline {
     white-space: normal;
+  }
+
+  .tbbt-hero-actions .tbbt-btn--lg {
+    width: 100%;
+    justify-content: center;
   }
 
   .tbbt-dash-stack {

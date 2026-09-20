@@ -28,13 +28,21 @@ const {
 } = await import("@/lib/tbbt-marketing-host");
 const {
   TBBT_CORE_FEATURES,
+  TBBT_FOUNDER_NO_CARD,
   TBBT_FOUNDER_PRICE_LABEL,
+  TBBT_FOUNDER_PROTECTION,
+  TBBT_HERO_OFFER,
+  TBBT_HOW_IT_WORKS,
+  TBBT_LEGAL_NAV,
   TBBT_NAV,
   TBBT_POSITIONING,
   TBBT_PRICING_FEATURES,
+  TBBT_SEE_WHAT_YOU_GET_LABEL,
   TBBT_SIGN_IN_HREF,
   TBBT_SIGN_UP_HREF,
   TBBT_TRADES,
+  TBBT_TRIAL_CTA_LABEL,
+  TBBT_TRIAL_NAV_LABEL,
 } = await import("@/lib/tbbt-marketing");
 const { tbbtMarketingMetadata } = await import("@/lib/tbbt-marketing-seo");
 const { isPublicWebsitePath } = await import("@/lib/public-website-paths");
@@ -210,7 +218,19 @@ check(
   TBBT_FOUNDER_PRICE_LABEL === TBBT_FOUNDER_PLAN_PRICE_LABEL &&
     TBBT_FOUNDER_PRICE_LABEL === "$49/month" &&
     TBBT_FOUNDER_TRIAL_DAYS === 30 &&
-    TBBT_PRICING_FEATURES.some((item) => item.includes("30-day")),
+    TBBT_PRICING_FEATURES.some((item) => item.includes("30-day")) &&
+    TBBT_HERO_OFFER.includes("No credit card") &&
+    TBBT_FOUNDER_NO_CARD.toLowerCase().includes("no credit card") &&
+    TBBT_FOUNDER_PROTECTION.includes("continuously active"),
+);
+check(
+  "Primary signup CTAs use Start Free language and /sign-up",
+  TBBT_SIGN_UP_HREF === "/sign-up" &&
+    TBBT_TRIAL_NAV_LABEL === "Start Free" &&
+    TBBT_TRIAL_CTA_LABEL === "Start Free for 30 Days" &&
+    TBBT_SEE_WHAT_YOU_GET_LABEL === "See What You Get" &&
+    !TBBT_TRIAL_CTA_LABEL.includes("Book Demo") &&
+    !TBBT_TRIAL_CTA_LABEL.includes("Buy Now"),
 );
 
 const pricingSrc = readRepo("src/components/tbbt-marketing/pricing.tsx");
@@ -273,6 +293,27 @@ check(
     homeCssSrc.includes("hero-workshop.png") &&
     homeMarketingSrc.includes("hero-tradespro.png") &&
     homeMarketingSrc.includes("tbbt-connected-arrow"),
+);
+check(
+  "Homepage conversion sections cover Founder Plan, How it works, and /sign-up",
+  homeMarketingSrc.includes("TBBT_HOW_IT_WORKS") &&
+    homeMarketingSrc.includes("id=\"founder-plan\"") &&
+    homeMarketingSrc.includes("TBBT_SEE_WHAT_YOU_GET_LABEL") &&
+    homeMarketingSrc.includes("TBBT_SIGN_UP_HREF") &&
+    TBBT_HOW_IT_WORKS.length === 4 &&
+    TBBT_HOW_IT_WORKS[2].body.includes("public business website") &&
+    !homeMarketingSrc.includes("custom domain is automatically") &&
+    !homeMarketingSrc.includes("#1") &&
+    !homeMarketingSrc.includes("guaranteed") &&
+    !homeMarketingSrc.includes("AI-powered everything") &&
+    !homeMarketingSrc.includes("testimonial"),
+);
+check(
+  "Privacy and Terms routes exist in the footer and as public pages",
+  TBBT_LEGAL_NAV.some((item) => item.href === "/privacy") &&
+    TBBT_LEGAL_NAV.some((item) => item.href === "/terms") &&
+    readRepo("src/app/(tbbt)/privacy/page.tsx").includes("TbbtPrivacyPage") &&
+    readRepo("src/app/(tbbt)/terms/page.tsx").includes("TbbtTermsPage"),
 );
 check(
   "Homepage trade strip uses dedicated visual thumbnails, not chips",
@@ -388,7 +429,7 @@ if (!reachable) {
       homePreview &&
         homePreview.body.includes("/sign-up") &&
         homePreview.body.includes("/sign-in") &&
-        homePreview.body.includes("Start Your Free 30-Day Trial"),
+        homePreview.body.includes("Start Free for 30 Days"),
     ),
   );
   const robots = await fetchMaybe("/robots.txt");

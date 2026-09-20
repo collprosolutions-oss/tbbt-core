@@ -24,11 +24,12 @@ export function TbbtAboutPage() {
           <h2 style={{ marginTop: 0 }}>Daniel LeBlanc</h2>
           <p>
             Daniel is a third-generation carpenter with decades of hands-on
-            trades and business experience. TBBT was built from problems that
-            show up in the field and in the office: scattered leads, estimates
-            that live in a different place than the job, invoices that do not
-            follow the work, and a public presence that does not match how the
-            business actually operates.
+            trades and business experience. TBBT is being built from real
+            trades operating experience, not as a generic software experiment.
+            The problems it addresses show up in the field and in the office:
+            scattered leads, estimates that live in a different place than the
+            job, invoices that do not follow the work, and a public presence
+            that does not match how the business actually operates.
           </p>
           <p className="tbbt-muted">
             This page does not publish customer counts, revenue, awards, or
