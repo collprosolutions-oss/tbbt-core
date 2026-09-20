@@ -99,6 +99,7 @@ const CORE_UI_SHOTS: Partial<
   invoice: "/brand/tbbt-marketing/feat-core-invoices.png",
   time: "/brand/tbbt-marketing/feat-core-time.png",
   team: "/brand/tbbt-marketing/feat-core-team.png",
+  marketing: "/brand/tbbt-marketing/feat-core-marketing.png",
   reports: "/brand/tbbt-marketing/feat-core-reports.png",
 };
 

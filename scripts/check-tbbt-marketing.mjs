@@ -354,6 +354,7 @@ check(
     featuresPageSrc.includes("feat-core-invoices.png") &&
     featuresPageSrc.includes("feat-core-time.png") &&
     featuresPageSrc.includes("feat-core-team.png") &&
+    featuresPageSrc.includes("feat-core-marketing.png") &&
     featuresPageSrc.includes("feat-core-reports.png") &&
     featuresPageSrc.includes("TBBT_FEATURES_VALUE_POINTS") &&
     featuresPageSrc.includes("TBBT_COMING_FEATURES") &&
