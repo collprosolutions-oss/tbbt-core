@@ -5,9 +5,12 @@
  *   node scripts/check-production-migrate.mjs
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   COLLPRO_RENO_VERCEL_PROJECT_ID,
   WORKSPACE_VERCEL_PROJECT_ID,
+  listLocalMigrationNames,
+  planProductionMigrateDeploy,
   shouldRunProductionMigrate,
 } from "./production-migrate-policy.mjs";
 
@@ -32,6 +35,20 @@ const migration = readFileSync(
 console.log("\nSTATIC — Production migrate lock policy");
 check("Preview still skips migrate", runner.includes("shouldRunProductionMigrate"));
 check("Prisma advisory locking is not disabled", !runner.includes("PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK"));
+check(
+  "Production runner does not use db push or disable migrate safety",
+  !runner.includes("db push") &&
+    !runner.includes("prisma migrate reset") &&
+    runner.includes('spawnSync("npx", ["prisma", "migrate", "deploy"]'),
+);
+check(
+  "Code-only production builds skip migrate deploy without taking the advisory lock",
+  runner.includes("planProductionMigrateDeploy") &&
+    runner.includes("readAppliedMigrationRows") &&
+    runner.includes("_prisma_migrations") &&
+    runner.includes("Skipping prisma migrate deploy (${plan.reason})") &&
+    !runner.includes("prisma migrate status"),
+);
 check(
   "Intake measurement migration is still additive",
   !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migration) &&
@@ -419,6 +436,61 @@ check(
     projectId: "prj_other",
     productionUrl: "other.vercel.app",
   }).run === false,
+);
+
+const localNames = listLocalMigrationNames(
+  fileURLToPath(new URL("../prisma/migrations", import.meta.url)),
+);
+const appliedCurrent = localNames.map((migration_name) => ({
+  migration_name,
+  finished_at: "2026-09-01T00:00:00.000Z",
+  rolled_back_at: null,
+}));
+check(
+  "Local migration names are folder names with SQL, not the lockfile",
+  localNames.includes("20260823000000_init") &&
+    localNames.includes("20260919200000_add_business_timezone") &&
+    !localNames.includes("migration_lock.toml"),
+);
+check(
+  "Code-only production skips migrate deploy when _prisma_migrations is current",
+  planProductionMigrateDeploy({ localNames, appliedRows: appliedCurrent }).run === false &&
+    planProductionMigrateDeploy({ localNames, appliedRows: appliedCurrent }).reason ===
+      "no pending migrations",
+);
+check(
+  "A real pending migration still runs prisma migrate deploy",
+  planProductionMigrateDeploy({
+    localNames: [...localNames, "20990101000000_future_schema"],
+    appliedRows: appliedCurrent,
+  }).run === true &&
+    planProductionMigrateDeploy({
+      localNames: [...localNames, "20990101000000_future_schema"],
+      appliedRows: appliedCurrent,
+    }).reason.includes("20990101000000_future_schema"),
+);
+check(
+  "Unfinished _prisma_migrations rows still run migrate deploy",
+  planProductionMigrateDeploy({
+    localNames,
+    appliedRows: [
+      ...appliedCurrent.slice(0, -1),
+      {
+        migration_name: localNames.at(-1),
+        finished_at: null,
+        rolled_back_at: null,
+      },
+    ],
+  }).run === true,
+);
+check(
+  "Unreadable _prisma_migrations falls through to migrate deploy instead of skipping",
+  planProductionMigrateDeploy({
+    localNames,
+    appliedRows: undefined,
+    appliedQueryError: true,
+  }).run === true &&
+    planProductionMigrateDeploy({ localNames }).run === true,
 );
 
 console.log(
