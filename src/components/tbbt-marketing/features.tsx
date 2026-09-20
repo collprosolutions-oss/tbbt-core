@@ -232,12 +232,7 @@ export function TbbtFeaturesPage() {
                     <Icon size={16} />
                   </span>
                   <div>
-                    <h3>
-                      {feature.title}
-                      {feature.status === "planned" ? (
-                        <span className="tbbt-badge">Planned</span>
-                      ) : null}
-                    </h3>
+                    <h3>{feature.title}</h3>
                     <p className="tbbt-muted">{feature.body}</p>
                   </div>
                 </article>
