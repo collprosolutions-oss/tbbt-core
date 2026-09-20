@@ -900,12 +900,12 @@ try {
     weekStartedAt: persistWeek,
     reason: "Repair missing wage snapshot",
   });
-  const afterReopen = await prisma.timeEntry.findUnique({ where: { id: persistEntry.id } });
+  const persistAfterReopen = await prisma.timeEntry.findUnique({ where: { id: persistEntry.id } });
   check(
     "Reopen moves the entry to READY and does not invent a snapshot",
-    afterReopen.status === "READY" &&
-      afterReopen.approvedHourlyWage == null &&
-      afterReopen.approvedLaborCost == null,
+    persistAfterReopen.status === "READY" &&
+      persistAfterReopen.approvedHourlyWage == null &&
+      persistAfterReopen.approvedLaborCost == null,
   );
 
   await approveTimesheetWeek(prisma, persistAccess, {
