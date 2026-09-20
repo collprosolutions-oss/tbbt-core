@@ -458,7 +458,11 @@ try {
     (error) => error instanceof ForbiddenError,
   );
 
-  const weekStart = weekRange(new Date()).start;
+  const helperSample = await prisma.timeEntry.findFirst({
+    where: { membershipId: helperMem.id },
+    orderBy: { startedAt: "asc" },
+  });
+  const weekStart = weekRange(helperSample?.startedAt ?? new Date()).start;
   const approved = await approveTimesheetWeek(prisma, ownerA, {
     membershipId: helperMem.id,
     weekStartedAt: weekStart,
@@ -522,9 +526,10 @@ try {
     where: { membershipId: memberMem.id, status: "RUNNING" },
   });
   check("Current-clock status is RUNNING travel", current?.activityType === "TRAVEL");
+  const runningWeekStart = weekRange(current?.startedAt ?? new Date()).start;
   await expectError(
     "Cannot approve a week while a clock is running",
-    () => approveTimesheetWeek(prisma, ownerA, { membershipId: memberMem.id, weekStartedAt: weekStart }),
+    () => approveTimesheetWeek(prisma, ownerA, { membershipId: memberMem.id, weekStartedAt: runningWeekStart }),
     (error) => error instanceof TimeCardError,
   );
 

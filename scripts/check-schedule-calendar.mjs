@@ -337,10 +337,28 @@ let serverProcess;
 
 try {
   const businessA = await prisma.business.create({
-    data: { name: "Alpha Handyman", slug: "alpha-handyman-schedule", tradeCode: "HANDYMAN" },
+    data: {
+      name: "Alpha Handyman",
+      slug: "alpha-handyman-schedule",
+      tradeCode: "HANDYMAN",
+      firstRunSetupCompletedAt: new Date(),
+      starterServicesSetupCompletedAt: new Date(),
+      starterServicesSetupChoice: "SKIPPED",
+      websiteSetupCompletedAt: new Date(),
+      websiteSetupChoice: "SKIPPED",
+    },
   });
   const businessB = await prisma.business.create({
-    data: { name: "Beta Handyman", slug: "beta-handyman-schedule", tradeCode: "HANDYMAN" },
+    data: {
+      name: "Beta Handyman",
+      slug: "beta-handyman-schedule",
+      tradeCode: "HANDYMAN",
+      firstRunSetupCompletedAt: new Date(),
+      starterServicesSetupCompletedAt: new Date(),
+      starterServicesSetupChoice: "SKIPPED",
+      websiteSetupCompletedAt: new Date(),
+      websiteSetupChoice: "SKIPPED",
+    },
   });
 
   const ownerUser = await prisma.user.create({
