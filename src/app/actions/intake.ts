@@ -118,6 +118,7 @@ async function submitServiceRequestInner(
     workAreaAnswers: parseWorkAreaFormAnswers(readFormStrings(formData, "workArea")),
     measurements: parseMeasurementFields(formData),
     submissionId: readString(formData, "submissionId") || null,
+    smsOptIn: readString(formData, "smsOptIn") || formData.get("smsOptIn"),
   });
 
   if (!created.ok) {

@@ -44,6 +44,11 @@ import { submitPublicIntakeForm } from "@/lib/public-request-submit";
 import { publicServicesPath } from "@/lib/public-site";
 import { formatPublicPhoneDisplay } from "@/lib/format";
 import {
+  SMS_CONSENT_PRIVACY_URL,
+  SMS_CONSENT_TERMS_URL,
+  SMS_OPT_IN_LABEL,
+} from "@/lib/customer-messaging/compliance";
+import {
   formatStructuredAddress,
   formatStructuredMailingAddress,
   validateStructuredAddress,
@@ -100,6 +105,7 @@ export function MultiServiceRequestFlow({
   });
   const [notes, setNotes] = useState("");
   const [preferredContact, setPreferredContact] = useState("text");
+  const [smsOptIn, setSmsOptIn] = useState(false);
   const [photos, setPhotos] = useState<SelectedRequestPhoto[]>([]);
   const [measurements, setMeasurements] = useState<Record<string, MeasurementDraft>>({});
   const [workArea, setWorkArea] = useState<Record<string, WorkAreaDraft>>({});
@@ -262,6 +268,9 @@ export function MultiServiceRequestFlow({
           ? "Preferred contact: Phone"
           : "Preferred contact: Email";
     formData.set("description", [notes, preference].filter(Boolean).join("\n\n"));
+    if (smsOptIn) {
+      formData.set("smsOptIn", "true");
+    }
     const quantities = catalogQuantitiesFromState(selected);
     for (const id of selected.catalogIds) {
       formData.append("serviceCatalogItemId", id);
@@ -488,6 +497,27 @@ export function MultiServiceRequestFlow({
               </label>
             </div>
           </fieldset>
+          <label className="flex items-start gap-3 text-sm leading-6">
+            <input
+              type="checkbox"
+              name="smsOptIn"
+              value="true"
+              checked={smsOptIn}
+              onChange={(event) => setSmsOptIn(event.target.checked)}
+              className="mt-1 size-4 shrink-0"
+            />
+            <span>
+              {SMS_OPT_IN_LABEL}{" "}
+              <a href={SMS_CONSENT_TERMS_URL} className="underline" target="_blank" rel="noreferrer">
+                Terms
+              </a>{" "}
+              and{" "}
+              <a href={SMS_CONSENT_PRIVACY_URL} className="underline" target="_blank" rel="noreferrer">
+                Privacy
+              </a>
+              .
+            </span>
+          </label>
           <div className="flex flex-col gap-3 sm:flex-row">
             <button type="button" className="public-btn public-btn-outline flex-1" onClick={() => setStep("details")}>
               Back
@@ -521,6 +551,7 @@ export function MultiServiceRequestFlow({
             </p>
             <p>{email || "No email provided"}</p>
             <p>Preferred: {preferredContact === "text" ? "Text" : preferredContact === "phone" ? "Phone" : "Email"}</p>
+            <p>Operational texts: {smsOptIn ? "Yes, I opted in" : "Not opted in"}</p>
           </ReviewBlock>
           <ReviewBlock title="Property">
             <p className="whitespace-pre-line">
@@ -540,6 +571,27 @@ export function MultiServiceRequestFlow({
                 : "Photo upload is not available"}
             </p>
           </ReviewBlock>
+          <label className="flex items-start gap-3 text-sm leading-6">
+            <input
+              type="checkbox"
+              name="smsOptIn"
+              value="true"
+              checked={smsOptIn}
+              onChange={(event) => setSmsOptIn(event.target.checked)}
+              className="mt-1 size-4 shrink-0"
+            />
+            <span>
+              {SMS_OPT_IN_LABEL}{" "}
+              <a href={SMS_CONSENT_TERMS_URL} className="underline" target="_blank" rel="noreferrer">
+                Terms
+              </a>{" "}
+              and{" "}
+              <a href={SMS_CONSENT_PRIVACY_URL} className="underline" target="_blank" rel="noreferrer">
+                Privacy
+              </a>
+              .
+            </span>
+          </label>
           <div className="flex flex-col gap-3 sm:flex-row">
             <button
               type="button"

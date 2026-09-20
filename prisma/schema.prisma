@@ -179,6 +179,10 @@ model Business {
   /// reports, expenses, payroll, dashboard "today"). Null means
   /// America/New_York (Fort Myers / Eastern). Never a hard-coded offset.
   timezone            String?
+  /// Normalized US digits of the Twilio number that receives inbound
+  /// STOP/START/HELP for THIS business. Unique so inbound To cannot
+  /// match two tenants. Null means this tenant has no SMS identity yet.
+  operationalSmsNumber String? @unique
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -230,6 +234,7 @@ model Business {
   materialSupplierMappings BusinessMaterialSupplierMapping[]
   supplierPriceRecords     SupplierPriceRecord[]
   customerCommunications   CustomerCommunication[]
+  messagingWebhookEvents   CustomerMessagingWebhookEvent[]
 }
 
 model Membership {
@@ -367,6 +372,25 @@ model CustomerCommunication {
   @@index([customerId])
   @@index([provider, providerMessageId])
   @@index([businessId, relatedType, relatedId])
+}
+
+/// Idempotency for provider webhooks (delivery + inbound STOP/START/HELP).
+/// Inbound providerEventId is the Twilio MessageSid. Delivery events use
+/// `{MessageSid}:{mappedStatus}` so queued → delivered can both apply.
+/// Never trusts a browser-supplied businessId.
+model CustomerMessagingWebhookEvent {
+  id              String   @id @default(cuid())
+  provider        String
+  providerEventId String
+  /// delivery | inbound
+  eventKind       String
+  businessId      String?
+  processedAt     DateTime @default(now())
+
+  business Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, providerEventId, eventKind])
+  @@index([businessId])
 }
 
 model Property {

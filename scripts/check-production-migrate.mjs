@@ -415,7 +415,22 @@ check(
     customerMessagingSchema.includes("ensureCustomerMessagingSchema") &&
     customerMessagingSchema.includes("CUSTOMER_MESSAGING_ENSURE_SQL") &&
     customerMessagingSchema.includes('ADD COLUMN IF NOT EXISTS "smsConsentStatus"') &&
-    customerMessagingSchema.includes("CustomerCommunication"),
+    customerMessagingSchema.includes("CustomerCommunication") &&
+    customerMessagingSchema.includes('ADD COLUMN IF NOT EXISTS "operationalSmsNumber"') &&
+    customerMessagingSchema.includes("CustomerMessagingWebhookEvent"),
+);
+
+const twilioSmsMigration = readFileSync(
+  new URL("../prisma/migrations/20260920190000_add_twilio_sms_routing/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Twilio SMS routing migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(twilioSmsMigration) &&
+    twilioSmsMigration.includes('ADD COLUMN IF NOT EXISTS "operationalSmsNumber"') &&
+    twilioSmsMigration.includes('CREATE TABLE IF NOT EXISTS "CustomerMessagingWebhookEvent"') &&
+    !/UPDATE "Business"/i.test(twilioSmsMigration) &&
+    !/UPDATE "Customer"/i.test(twilioSmsMigration),
 );
 check(
   "Authenticated workspace load ensures customer messaging schema before Business SELECT",

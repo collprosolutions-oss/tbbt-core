@@ -69,10 +69,34 @@ export type CustomerMessageSendResult =
 export type CustomerMessageDeliveryUpdate = {
   provider: string;
   providerMessageId: string;
-  status: "SENT" | "DELIVERED" | "FAILED";
+  status: "QUEUED" | "ACCEPTED" | "SENT" | "DELIVERED" | "FAILED";
   failureReason?: string;
   claimedBusinessId?: string | null;
+  providerEventId?: string;
+  routingNumber?: string | null;
   providerMetadata?: Record<string, unknown>;
+};
+
+export type InboundSmsOptOutType = "STOP" | "START" | "HELP";
+
+export type InboundSmsEvent = {
+  provider: string;
+  providerEventId: string;
+  from: string;
+  to: string;
+  body: string;
+  optOutType: InboundSmsOptOutType | null;
+};
+
+export type ParsedCustomerMessagingWebhook =
+  | { kind: "delivery"; update: CustomerMessageDeliveryUpdate; providerEventId: string }
+  | { kind: "inbound"; inbound: InboundSmsEvent };
+
+export type CustomerMessagingWebhookParseInput = {
+  url: string;
+  signature: string | null;
+  rawBody: string;
+  contentType: string | null;
 };
 
 export type CustomerMessagingProvider = {
@@ -83,6 +107,9 @@ export type CustomerMessagingProvider = {
     payload: string,
     signature: string | null,
   ): CustomerMessageDeliveryUpdate | null;
+  parseWebhook?(
+    input: CustomerMessagingWebhookParseInput,
+  ): ParsedCustomerMessagingWebhook | null;
 };
 
 export type AttemptCustomerSmsInput = {

@@ -6,6 +6,7 @@ import { requireOperatingBusinessAccessForForm } from "@/lib/saas-billing/enforc
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { isUsableEmail } from "@/lib/mail";
 import { prisma } from "@/lib/prisma";
+import { smsConsentAfterOwnerPhoneEdit } from "@/lib/customer-messaging/opt-in";
 
 export type CustomerActionState = {
   error?: string;
@@ -140,12 +141,15 @@ export async function updateCustomer(
 
   // Update in place so every existing request, estimate, job, invoice, and
   // property relation (all keyed by this customer's id) stays intact.
+  // Phone edits never grant consent; a new number stays UNKNOWN.
+  const consentReset = smsConsentAfterOwnerPhoneEdit(customer.phone, phone);
   await prisma.customer.update({
     where: { id: customer.id },
     data: {
       name,
       email: email || null,
       phone: phone || null,
+      ...(consentReset ?? {}),
     },
   });
 
