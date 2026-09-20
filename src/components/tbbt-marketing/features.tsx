@@ -88,42 +88,32 @@ const COMING_ICONS = [
   Sparkles,
 ] as const;
 
-const CORE_UI_SHOTS = {
-  website: {
-    src: "/brand/tbbt-marketing/build-house.png",
-    label: "Public business website",
-  },
-  crm: {
-    src: "/brand/tbbt-marketing/feat-ui-crm.png",
-    label: null,
-  },
-  schedule: {
-    src: "/brand/tbbt-marketing/feat-ui-schedule.png",
-    label: null,
-  },
-  marketing: {
-    src: "/brand/tbbt-marketing/trade-handyman.png",
-    label: "Job photos for content",
-  },
-  reports: {
-    src: "/brand/tbbt-marketing/feat-ui-reports.png",
-    label: null,
-  },
-} as const;
+const CORE_UI_SHOTS: Partial<
+  Record<(typeof TBBT_CORE_FEATURES)[number]["visual"], string>
+> = {
+  website: "/brand/tbbt-marketing/feat-core-website.png",
+  crm: "/brand/tbbt-marketing/feat-core-crm.png",
+  schedule: "/brand/tbbt-marketing/feat-core-schedule.png",
+  estimate: "/brand/tbbt-marketing/feat-core-estimates.png",
+  jobs: "/brand/tbbt-marketing/feat-core-jobs.png",
+  invoice: "/brand/tbbt-marketing/feat-core-invoices.png",
+  time: "/brand/tbbt-marketing/feat-core-time.png",
+  team: "/brand/tbbt-marketing/feat-core-team.png",
+  reports: "/brand/tbbt-marketing/feat-core-reports.png",
+};
 
 function FeatureVisual({
   visual,
 }: {
   visual: (typeof TBBT_CORE_FEATURES)[number]["visual"];
 }) {
-  const shot = visual in CORE_UI_SHOTS ? CORE_UI_SHOTS[visual as keyof typeof CORE_UI_SHOTS] : null;
+  const src = CORE_UI_SHOTS[visual];
 
-  if (shot) {
+  if (src) {
     return (
-      <div className={`tbbt-feat-shot tbbt-feat-shot--${visual}`}>
+      <div className="tbbt-feat-shot">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={shot.src} alt="" />
-        {shot.label ? <span>{shot.label}</span> : null}
+        <img src={src} alt="" />
       </div>
     );
   }

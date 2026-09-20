@@ -346,10 +346,15 @@ check(
   "Features page uses the visual rebuild without unsupported claims or fake Learn More",
   featuresPageSrc.includes("tbbt-feat-hero") &&
     featuresPageSrc.includes("hero-devices.png") &&
-    featuresPageSrc.includes("build-house.png") &&
-    featuresPageSrc.includes("feat-ui-crm.png") &&
-    featuresPageSrc.includes("feat-ui-schedule.png") &&
-    featuresPageSrc.includes("feat-ui-reports.png") &&
+    featuresPageSrc.includes("feat-core-website.png") &&
+    featuresPageSrc.includes("feat-core-crm.png") &&
+    featuresPageSrc.includes("feat-core-schedule.png") &&
+    featuresPageSrc.includes("feat-core-estimates.png") &&
+    featuresPageSrc.includes("feat-core-jobs.png") &&
+    featuresPageSrc.includes("feat-core-invoices.png") &&
+    featuresPageSrc.includes("feat-core-time.png") &&
+    featuresPageSrc.includes("feat-core-team.png") &&
+    featuresPageSrc.includes("feat-core-reports.png") &&
     featuresPageSrc.includes("TBBT_FEATURES_VALUE_POINTS") &&
     featuresPageSrc.includes("TBBT_COMING_FEATURES") &&
     featuresPageSrc.includes("id=\"coming-to-tbbt\"") &&
