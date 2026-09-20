@@ -3,7 +3,6 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
-import { postAuthenticationPath } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
 import { startFounderTrialIfEligible } from "@/lib/saas-billing";
 import { settingsErrorMessage } from "@/lib/settings-ops";
@@ -66,13 +65,10 @@ export async function skipWebsiteSetupAction(): Promise<void> {
       changedByMembershipId: access.workspace.membership.id,
     });
   }
-  redirect(
-    postAuthenticationPath({
-      role: access.workspace.role,
-      business: {
-        ...access.workspace.business,
-        websiteSetupCompletedAt: new Date(),
-      },
-    }),
-  );
+  revalidatePath("/settings");
+  revalidatePath(`/hire/${access.workspace.business.slug}`);
+  revalidatePath(`/hire/${access.workspace.business.slug}/about`);
+  revalidatePath(`/hire/${access.workspace.business.slug}/service-area`);
+  revalidatePath(`/hire/${access.workspace.business.slug}/contact`);
+  redirect(WEBSITE_SETUP_PATH);
 }

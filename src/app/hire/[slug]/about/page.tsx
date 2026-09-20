@@ -4,17 +4,18 @@ import { PublicAbout } from "@/components/public/public-about";
 import { PublicCtaBar } from "@/components/public/public-cta-bar";
 import { PublicPageHero } from "@/components/public/public-page-hero";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
-import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { smsHref } from "@/lib/directions";
 import {
   ABOUT_COPY,
+  publicAboutPath,
   publicDisplayName,
   publicHomePath,
   publicPhone,
   publicRequestPath,
 } from "@/lib/public-site";
 import { prisma } from "@/lib/prisma";
-import { loadPublicSite } from "@/lib/public-site-data";
+import { requirePublicSite } from "@/lib/require-public-site";
+import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { loadPublicAboutImages } from "@/lib/public-site-images";
 import { resolvePublishedAboutCopy } from "@/lib/website-story";
 
@@ -24,20 +25,19 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  const name = site ? publicDisplayName(site.business) : "About";
-  return {
-    title: { absolute: `About Us | ${name}` },
+  const site = await requirePublicSite(slug);
+  const name = publicDisplayName(site.business);
+  return publicTenantPageMetadata({
+    business: site.business,
+    title: `About Us | ${name}`,
     description: `Learn how ${name} helps homeowners with handyman projects and written estimates.`,
-  };
+    pathname: publicAboutPath(site.business.slug),
+  });
 }
 
 export default async function PublicAboutPage({ params }: PageProps) {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  if (!site) {
-    return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
-  }
+  const site = await requirePublicSite(slug);
   const phone = publicPhone(site.business);
   const [images, settings] = await Promise.all([
     loadPublicAboutImages(prisma, site.business.id, site.business.slug),

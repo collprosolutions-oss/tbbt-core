@@ -71,3 +71,11 @@ export async function loadPublicSite(slug: string): Promise<PublicSitePayload | 
   const catalog = await loadPublicCatalog(business);
   return { business, ...catalog };
 }
+
+export async function loadPublicAboutCopy(businessId: string) {
+  const settings = await prisma.businessSettings.findUnique({
+    where: { businessId },
+    select: { approvedPublicAboutCopy: true },
+  });
+  return settings?.approvedPublicAboutCopy ?? "";
+}

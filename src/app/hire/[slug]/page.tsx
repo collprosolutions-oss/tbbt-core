@@ -5,12 +5,19 @@ import { PublicSiteShell } from "@/components/public/public-site-shell";
 import {
   localBusinessJsonLd,
   publicDisplayName,
+  publicHomePath,
   publicLogoSrc,
   publicPhone,
 } from "@/lib/public-site";
 import { loadPublicHomeImages } from "@/lib/public-site-images";
 import { prisma } from "@/lib/prisma";
-import { loadPublicSite } from "@/lib/public-site-data";
+import { loadPublicAboutCopy } from "@/lib/public-site-data";
+import { requirePublicSite } from "@/lib/require-public-site";
+import {
+  publicSiteMetaDescription,
+  publicTenantPageMetadata,
+} from "@/lib/public-site-seo";
+import { resolvePublishedAboutCopy } from "@/lib/website-story";
 
 export const dynamic = "force-dynamic";
 
@@ -20,36 +27,23 @@ type PageProps = {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  if (!site) {
-    return {
-      title: { absolute: "Page unavailable" },
-      description: "This business website could not be found.",
-    };
-  }
+  const site = await requirePublicSite(slug);
+  const about = resolvePublishedAboutCopy(
+    await loadPublicAboutCopy(site.business.id),
+    site.business.slug,
+  );
   const name = publicDisplayName(site.business);
-  return {
-    title: { absolute: `${name} | Handyman Services` },
-    description: `Request handyman services from ${name}. Choose one or more tasks for a single visit request.`,
-  };
+  return publicTenantPageMetadata({
+    business: site.business,
+    title: `${name} | Handyman Services`,
+    description: publicSiteMetaDescription(site.business, about),
+    pathname: publicHomePath(site.business.slug),
+  });
 }
 
 export default async function PublicHirePage({ params }: PageProps) {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-
-  if (!site) {
-    return (
-      <main className="public-site mx-auto flex min-h-full max-w-md items-center px-4 py-16">
-        <div className="rounded-xl border border-border bg-white p-6">
-          <h1 className="text-xl font-semibold">Page unavailable</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            This business could not be found.
-          </p>
-        </div>
-      </main>
-    );
-  }
+  const site = await requirePublicSite(slug);
 
   const homeImages = await loadPublicHomeImages(prisma, site.business.id, site.groups);
   const name = publicDisplayName(site.business);

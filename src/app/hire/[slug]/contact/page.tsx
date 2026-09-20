@@ -5,18 +5,19 @@ import { PublicContactForm } from "@/components/public/public-contact-form";
 import { PublicCtaBar } from "@/components/public/public-cta-bar";
 import { PublicPageHero } from "@/components/public/public-page-hero";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
-import { PublicUnavailable } from "@/components/public/public-unavailable";
 import { smsHref } from "@/lib/directions";
 import {
   PUBLIC_CONTACT_HERO_IMAGE,
   TEXT_US_LABEL,
+  publicContactPath,
   publicDisplayName,
   publicHomePath,
   publicPhone,
   publicRequestPath,
   resolvePublicServiceAreaCopy,
 } from "@/lib/public-site";
-import { loadPublicSite } from "@/lib/public-site-data";
+import { requirePublicSite } from "@/lib/require-public-site";
+import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { resolveBusinessPublicContact } from "@/lib/business-contact";
 
 export const dynamic = "force-dynamic";
@@ -25,21 +26,20 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  const name = site ? publicDisplayName(site.business) : "Contact";
-  const phone = site ? publicPhone(site.business) : null;
-  return {
-    title: { absolute: `Contact Us | ${name}` },
+  const site = await requirePublicSite(slug);
+  const name = publicDisplayName(site.business);
+  const phone = publicPhone(site.business);
+  return publicTenantPageMetadata({
+    business: site.business,
+    title: `Contact Us | ${name}`,
     description: `Text ${name}${phone ? ` at ${phone}` : ""} or send a project request online.`,
-  };
+    pathname: publicContactPath(site.business.slug),
+  });
 }
 
 export default async function PublicContactPage({ params }: PageProps) {
   const { slug } = await params;
-  const site = await loadPublicSite(slug);
-  if (!site) {
-    return <PublicUnavailable title="Page unavailable" body="This business could not be found." />;
-  }
+  const site = await requirePublicSite(slug);
   const phone = publicPhone(site.business);
   const contact = resolveBusinessPublicContact(site.business);
   const textHref = smsHref(phone);
