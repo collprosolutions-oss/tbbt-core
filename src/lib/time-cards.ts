@@ -11,6 +11,8 @@
  * Historical safety: once a TimesheetWeek is APPROVED, each entry's
  * approvedHours / approvedHourlyWage / approvedLaborCost are frozen.
  * Later wage, job, or catalog edits must not rewrite those snapshots.
+ * Explicit owner/admin week re-approval may fill missing snapshot fields
+ * only; it never overwrites a value that is already present.
  */
 
 import { addDays, startOfWeek } from "@/lib/schedule";
@@ -259,6 +261,28 @@ export function canApproveWeek(entries: readonly { status: string; endedAt: Date
   return { ok: true };
 }
 
+export function coerceApprovedHours(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  let amount: number;
+  if (typeof value === "number") {
+    amount = value;
+  } else if (
+    typeof value === "object" &&
+    "toNumber" in value &&
+    typeof (value as { toNumber?: unknown }).toNumber === "function"
+  ) {
+    try {
+      amount = (value as { toNumber: () => number }).toNumber();
+    } catch {
+      return null;
+    }
+  } else {
+    amount = Number(String(value));
+  }
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  return roundHours(amount);
+}
+
 export function approvalSnapshot(input: {
   startedAt: Date;
   endedAt: Date;
@@ -273,6 +297,60 @@ export function approvalSnapshot(input: {
     approvedHours: hours,
     approvedHourlyWage: wage,
     approvedLaborCost: estimateLaborCost(hours, wage),
+  };
+}
+
+/**
+ * Explicit week re-approval may fill ONLY missing snapshot fields on an
+ * already-APPROVED entry. Existing approvedHours / wage / labor cost are
+ * never overwritten. A current membership wage is applied only when the
+ * matching field is null; missing wage stays missing (never invented).
+ */
+export function missingApprovalSnapshotPatch(input: {
+  startedAt: Date;
+  endedAt: Date;
+  activityType: string;
+  approvedHours: unknown;
+  approvedHourlyWage: unknown;
+  approvedLaborCost: unknown;
+  hourlyWage: unknown;
+}): {
+  hours: number;
+  wage: number | null;
+  cost: number | null;
+  patch: {
+    approvedHours?: number;
+    approvedHourlyWage?: number;
+    approvedLaborCost?: number;
+  };
+  changed: boolean;
+} {
+  const computed = approvalSnapshot({
+    startedAt: input.startedAt,
+    endedAt: input.endedAt,
+    activityType: input.activityType,
+    hourlyWage: input.hourlyWage,
+  });
+  const existingHours = coerceApprovedHours(input.approvedHours);
+  const existingWage = coerceHourlyWage(input.approvedHourlyWage);
+  const existingCost = coerceHourlyWage(input.approvedLaborCost);
+  const hours = existingHours ?? computed.approvedHours;
+  const wage = existingWage ?? computed.approvedHourlyWage;
+  const cost = existingCost ?? estimateLaborCost(hours, wage);
+  const patch: {
+    approvedHours?: number;
+    approvedHourlyWage?: number;
+    approvedLaborCost?: number;
+  } = {};
+  if (existingHours == null) patch.approvedHours = hours;
+  if (existingWage == null && wage != null) patch.approvedHourlyWage = wage;
+  if (existingCost == null && cost != null) patch.approvedLaborCost = cost;
+  return {
+    hours,
+    wage,
+    cost,
+    patch,
+    changed: Object.keys(patch).length > 0,
   };
 }
 
