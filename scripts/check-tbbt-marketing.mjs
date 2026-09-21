@@ -258,8 +258,18 @@ check(
   !pricingSrc.includes("$29") &&
     !pricingSrc.includes("$79") &&
     !pricingSrc.includes("$129") &&
+    !marketingLibSrc.includes("$29") &&
     pricingSrc.includes("TBBT_FOUNDER_PLAN_DISPLAY_NAME") &&
-    pricingSrc.includes("No invented tiers"),
+    pricingSrc.includes("TBBT_SIGN_UP_HREF") &&
+    pricingSrc.includes("Starter") &&
+    pricingSrc.includes("Business") &&
+    pricingSrc.includes("Enterprise") &&
+    pricingSrc.includes("Coming Soon") &&
+    pricingSrc.includes("TBBT_PRICING_PLANNED_LABEL") &&
+    pricingSrc.includes("TBBT_PRICING_AVAILABLE_NOW_LABEL") &&
+    pricingSrc.includes("Pricing to be announced") === false &&
+    marketingLibSrc.includes("Pricing to be announced") &&
+    !pricingSrc.includes("No invented tiers"),
 );
 check(
   "Watch Video exists without a fabricated video URL",
@@ -565,6 +575,11 @@ if (!reachable) {
       pricing &&
         pricing.body.includes("$49/month") &&
         pricing.body.includes("/sign-up") &&
+        pricing.body.includes("Coming Soon") &&
+        pricing.body.includes("Available Now") &&
+        pricing.body.includes("Starter") &&
+        pricing.body.includes("Business") &&
+        pricing.body.includes("Enterprise") &&
         !pricing.body.includes("$29/month") &&
         !pricing.body.includes("$29 /month"),
     ),

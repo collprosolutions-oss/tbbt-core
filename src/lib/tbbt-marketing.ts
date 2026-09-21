@@ -638,6 +638,138 @@ export const TBBT_PRICING_FEATURES = [
   "Founder rate protected while you stay continuously subscribed",
 ] as const;
 
+export const TBBT_PRICING_PAGE_EYEBROW = "Simple. Transparent. Built for Trades.";
+export const TBBT_PRICING_PAGE_HEADLINE = ["Plans That Grow", "With Your Business."] as const;
+export const TBBT_PRICING_PAGE_SUPPORT = [
+  "Everything you need to build, run and grow your trades business.",
+  "One platform. No hidden fees. Cancel anytime.",
+] as const;
+export const TBBT_PRICING_PAGE_SCRIPT = "Invest in a Better Tomorrow.";
+export const TBBT_PRICING_PAGE_HERO_SRC = "/brand/tbbt-marketing/pricing-page-hero.png";
+export const TBBT_PRICING_PAGE_CTA_SRC = "/brand/tbbt-marketing/cta-sunset.png";
+export const TBBT_PRICING_PAGE_CTA_HEADLINE = "Ready to Build a Better Business?";
+export const TBBT_PRICING_PAGE_CTA_SUPPORT =
+  "Join trades professionals who are taking control of their business with TBBT. Start free today and see the difference.";
+export const TBBT_PRICING_PAGE_CTA_BUTTON = "Start Your Free 30-Day Trial";
+export const TBBT_PRICING_PAGE_FOUNDER_CTA = "Start Free Trial";
+
+export const TBBT_PRICING_PAGE_VALUE_POINTS = [
+  { kicker: "Get Started", body: "In Minutes" },
+  { kicker: "All Features", body: "Included" },
+  { kicker: "No Long-Term", body: "Contracts" },
+  { kicker: "Real Support", body: "From Real People" },
+] as const;
+
+export const TBBT_PRICING_PAGE_HERO_CHECKS = [
+  "For Any Trade",
+  "All the Tools You Need",
+  "Built for Real Work",
+  "Affordable & Scalable",
+] as const;
+
+export const TBBT_PRICING_PAGE_INTRO = {
+  heading: ["Choose the Plan", "That Fits Your Business"] as const,
+  body: "All plans include the core tools you need to run a professional trades business. Upgrade or add tools as you grow.",
+  compare: "Compare Plans",
+  compareLead: "See what's included in each plan.",
+} as const;
+
+export const TBBT_PRICING_COMING_SOON_LABEL = "Coming Soon";
+export const TBBT_PRICING_PLANNED_LABEL = "Planned";
+export const TBBT_PRICING_AVAILABLE_NOW_LABEL = "Available Now";
+
+/** Truthful current Founder capabilities shown on the live plan card. */
+export const TBBT_PRICING_FOUNDER_CARD_FEATURES = [
+  "Handyman starting setup",
+  "Public business website",
+  "Customer request intake",
+  "Customers / CRM",
+  "Scheduling",
+  "Estimates",
+  "Jobs",
+  "Invoices",
+  "Team management",
+  "Reports and business insights",
+] as const;
+
+export const TBBT_PRICING_STARTER_CARD_FEATURES = [
+  "1 Trade / Industry",
+  "Website Builder",
+  "Basic CRM",
+  "Scheduling & Calendar",
+  "Estimates & Invoices",
+  "Time Tracking",
+  "Mobile Access",
+] as const;
+
+export const TBBT_PRICING_BUSINESS_CARD_FEATURES = [
+  "More trades",
+  "Everything in Founder",
+  "Multi-Location Support",
+  "Advanced Reporting",
+  "Client Portal",
+  "Document Storage",
+  "Expanded Team Roles & Permissions",
+  "Priority Support",
+] as const;
+
+export const TBBT_PRICING_ENTERPRISE_CARD_FEATURES = [
+  "Expanded trade support",
+  "Everything in Business",
+  "Custom Integrations",
+  "Advanced Automation",
+  "White Label Options",
+  "Dedicated Account Support",
+  "Priority Development Requests",
+  "Highest Priority Support",
+] as const;
+
+export const TBBT_PRICING_COMPARE_ROWS = [
+  { label: "Number of Trades", values: ["1", "3", "10", "Unlimited"] },
+  { label: "Website Builder", values: ["check", "check", "check", "check"] },
+  { label: "CRM & Customer Management", values: ["check", "check", "check", "check"] },
+  { label: "Scheduling & Calendar", values: ["check", "check", "check", "check"] },
+  { label: "Estimates, Quotes & Invoices", values: ["check", "check", "check", "check"] },
+  { label: "Time Tracking", values: ["check", "check", "check", "check"] },
+  { label: "Jobs & Task Management", values: ["dash", "check", "check", "check"] },
+  { label: "Team Management", values: ["dash", "check", "check", "check"] },
+  { label: "Marketing Tools", values: ["dash", "check", "check", "check"] },
+  { label: "Reporting & Business Insights", values: ["dash", "check", "check", "check"] },
+  { label: "Client Portal", values: ["dash", "dash", "check", "check"] },
+  { label: "Multi-Location Support", values: ["dash", "dash", "check", "check"] },
+  { label: "Custom Integrations / White Label", values: ["dash", "dash", "dash", "check"] },
+] as const;
+
+export const TBBT_PRICING_ADDONS = [
+  { title: "Additional Trade", icon: "trade" },
+  { title: "SMS Messaging", icon: "sms" },
+  { title: "AI Business Coach", icon: "coach" },
+  { title: "Additional Users", icon: "users" },
+  { title: "Extra Storage", icon: "storage" },
+  { title: "Custom Domain / Email", icon: "domain" },
+] as const;
+
+export const TBBT_PRICING_ADDON_STATUS = "Coming Soon";
+export const TBBT_PRICING_ADDON_PRICE = "Pricing to be announced";
+
+export const TBBT_PRICING_TRUST = [
+  {
+    title: "30-Day Free Trial",
+    body: "Try TBBT risk-free for 30 days. No credit card required. Cancel anytime.",
+    icon: "shield",
+  },
+  {
+    title: "Fair & Transparent",
+    body: "Simple pricing. No hidden fees. Upgrade, downgrade or cancel anytime.",
+    icon: "handshake",
+  },
+  {
+    title: "Real Human Support",
+    body: "Get help from a real person who understands the trades.",
+    icon: "headset",
+  },
+] as const;
+
 export const TBBT_VALUES = [
   {
     title: "Simplicity",
@@ -835,6 +967,12 @@ export const TBBT_MARKETING_ASSET_SLOTS = [
     ratio: "21 / 9",
     pixelHint: "1938 × 812",
     usage: "Supplied painting photograph. Not used as hero/CTA. Trade photos stay on their cards.",
+  },
+  {
+    file: "pricing-page-hero.png",
+    ratio: "333 / 296",
+    pixelHint: "333 × 296",
+    usage: "Pricing hero: back-facing tradesman in TBBT BUILD / MANAGE / GROW shirt.",
   },
   {
     file: "og-default.jpg",
