@@ -27,6 +27,8 @@ const {
   TBBT_MARKETING_PUBLIC_PATHS,
 } = await import("@/lib/tbbt-marketing-host");
 const {
+  TBBT_ADDITIONAL_FEATURES,
+  TBBT_COMING_FEATURES,
   TBBT_CORE_FEATURES,
   TBBT_FOUNDER_NO_CARD,
   TBBT_FOUNDER_PRICE_LABEL,
@@ -339,6 +341,54 @@ check(
     TBBT_CORE_FEATURES.some((item) => item.title === "Website Builder") &&
     TBBT_CORE_FEATURES.some((item) => item.title === "Reports & Business Insights"),
 );
+const featuresPageSrc = readRepo("src/components/tbbt-marketing/features.tsx");
+check(
+  "Features page uses the visual rebuild without unsupported claims or fake Learn More",
+  featuresPageSrc.includes("tbbt-feat-hero") &&
+    featuresPageSrc.includes("hero-devices.png") &&
+    featuresPageSrc.includes("feat-core-website.png") &&
+    featuresPageSrc.includes("feat-core-crm.png") &&
+    featuresPageSrc.includes("feat-core-schedule.png") &&
+    featuresPageSrc.includes("feat-core-estimates.png") &&
+    featuresPageSrc.includes("feat-core-jobs.png") &&
+    featuresPageSrc.includes("feat-core-invoices.png") &&
+    featuresPageSrc.includes("feat-core-time.png") &&
+    featuresPageSrc.includes("feat-core-team.png") &&
+    featuresPageSrc.includes("feat-core-marketing.png") &&
+    featuresPageSrc.includes("feat-core-reports.png") &&
+    featuresPageSrc.includes("TBBT_FEATURES_VALUE_POINTS") &&
+    featuresPageSrc.includes("TBBT_COMING_FEATURES") &&
+    featuresPageSrc.includes("id=\"coming-to-tbbt\"") &&
+    featuresPageSrc.includes("TBBT_SIGN_UP_HREF") &&
+    featuresPageSrc.includes("TBBT_TRIAL_CTA_LABEL") &&
+    featuresPageSrc.includes("id=\"core-features\"") &&
+    !featuresPageSrc.includes("Learn More") &&
+    !featuresPageSrc.includes("already saving time") &&
+    !featuresPageSrc.includes("Join trades professionals"),
+);
+check(
+  "Coming to TBBT is labeled roadmap, not live, with no launch dates",
+  TBBT_COMING_FEATURES.length === 7 &&
+    TBBT_COMING_FEATURES.some((item) => item.title === "Customer Portal" && item.badge === "coming-soon") &&
+    TBBT_COMING_FEATURES.some((item) => item.title === "Multi-Location" && item.badge === "planned") &&
+    TBBT_COMING_FEATURES.some((item) => item.title === "Business Success / AI Coaching") &&
+    TBBT_COMING_FEATURES.every((item) => item.body.toLowerCase().includes("today") || item.body.toLowerCase().includes("not")) &&
+    TBBT_ADDITIONAL_FEATURES.every((item) => item.status === "live") &&
+    !TBBT_COMING_FEATURES.some((item) => /\b20\d{2}\b|Q[1-4]|launch date/.test(item.body)),
+);
+check(
+  "Live feature copy keeps Stripe, SMS, and publishing provider-dependent",
+  TBBT_CORE_FEATURES.some((item) => item.body.includes("Stripe Connect")) &&
+    TBBT_CORE_FEATURES.some((item) => item.body.includes("does not currently publish")) &&
+    TBBT_ADDITIONAL_FEATURES.some((item) => item.body.includes("connected number")),
+);
+check(
+  "Homepage from Task #82 is unchanged by the Features rebuild",
+  homeMarketingSrc.includes("tbbt-hero-cinematic") &&
+    homeMarketingSrc.includes("id=\"founder-plan\"") &&
+    homeMarketingSrc.includes("TBBT_HOW_IT_WORKS") &&
+    !homeMarketingSrc.includes("tbbt-feat-hero"),
+);
 check(
   "TBBT production origins are in the R2 browser-upload CORS list",
   r2Src.includes("https://tbbtool.com") &&
@@ -411,8 +461,11 @@ if (!reachable) {
     "Features page labels AI coaching as planned",
     Boolean(
       features &&
-        features.body.includes("AI coaching") &&
-        features.body.includes("Planned"),
+        features.body.includes("Coming to TBBT") &&
+        features.body.includes("AI Coaching") &&
+        features.body.includes("Planned") &&
+        features.body.includes("Coming Soon") &&
+        features.body.includes("Customer Portal"),
     ),
   );
   const pricing = await fetchMaybe("/pricing");

@@ -228,71 +228,141 @@ export const TBBT_WORKFLOW_STEPS = [
 
 export const TBBT_CORE_FEATURES = [
   {
+    id: "website-builder",
     title: "Website Builder",
     body: "Set up the public business website: services, service area, photos, about copy, and a request path that creates a real lead.",
     href: "/features#website-builder",
     status: "live" as const,
+    visual: "website" as const,
   },
   {
+    id: "leads-crm",
     title: "Leads & CRM",
     body: "Public requests become customers and pipeline records you can work — not a disconnected inbox.",
     href: "/features#leads-crm",
     status: "live" as const,
+    visual: "crm" as const,
   },
   {
+    id: "scheduling",
     title: "Scheduling",
     body: "Put approved work on the calendar, see today's jobs, and keep the field and office on the same schedule.",
     href: "/features#scheduling",
     status: "live" as const,
+    visual: "schedule" as const,
   },
   {
+    id: "estimates",
     title: "Estimates & Quotes",
     body: "Build written estimates from catalog work, send them for approval, and turn approved scope into a job.",
     href: "/features#estimates",
     status: "live" as const,
+    visual: "estimate" as const,
   },
   {
+    id: "jobs",
     title: "Jobs & Task Management",
     body: "Run the job after the estimate is approved: status, photos, additional work, and completion into invoicing.",
     href: "/features#jobs",
     status: "live" as const,
+    visual: "jobs" as const,
   },
   {
+    id: "invoices",
     title: "Invoices & Payments",
-    body: "Invoice from completed work and collect customer payments when Stripe Connect is configured for that business.",
+    body: "Invoice from completed work. Collect customer card payments when Stripe Connect is configured for that business.",
     href: "/features#invoices",
     status: "live" as const,
+    visual: "invoice" as const,
   },
   {
+    id: "time-tracking",
     title: "Time Tracking",
     body: "Time cards for the people doing the work, with payroll support from recorded hours — not guessed totals.",
     href: "/features#time-tracking",
     status: "live" as const,
+    visual: "time" as const,
   },
   {
+    id: "team",
     title: "Team Management",
     body: "Invite team members, assign roles, and keep field access separate from owner/admin work.",
     href: "/features#team",
     status: "live" as const,
+    visual: "team" as const,
   },
   {
+    id: "marketing",
     title: "Marketing Tools",
     body: "Prepare content from completed jobs and approved photos. Social channels are intent/draft only — TBBT does not currently publish posts for you.",
     href: "/features#marketing",
     status: "live" as const,
+    visual: "marketing" as const,
   },
   {
+    id: "reports",
     title: "Reports & Business Insights",
     body: "Reports over invoices, jobs, customers, time, and expenses recorded in TBBT. This is not a full accounting suite.",
     href: "/features#reports",
     status: "live" as const,
+    visual: "reports" as const,
   },
+] as const;
+
+export const TBBT_FEATURES_HERO_EYEBROW = "Features";
+export const TBBT_FEATURES_HERO_HEADLINE = [
+  "Everything You Need",
+  "to Run Your Trades Business.",
+] as const;
+export const TBBT_FEATURES_HERO_SUPPORT =
+  "TBBT brings the main operating tools of a trades business into one workspace: website, customers, estimates, jobs, scheduling, invoices, time, and the records you need to run the day.";
+
+export const TBBT_FEATURES_VALUE_POINTS = [
+  { kicker: "Save Time", body: "Stop jumping between disconnected tools for the same customer." },
+  { kicker: "Look Professional", body: "A public website, written estimates, and invoices from one system." },
+  { kicker: "Run the Business", body: "Customers, schedule, jobs, time, and money stay in one workspace." },
+  { kicker: "Built for the Trades", body: "Workflows follow how the work actually moves: request, estimate, job, invoice." },
 ] as const;
 
 export const TBBT_ADDITIONAL_FEATURES = [
   {
+    title: "Service Catalog",
+    body: "Start from TBBT's Handyman catalog and customize the work you sell.",
+    status: "live" as const,
+  },
+  {
+    title: "Website Photos",
+    body: "Add business and job photos to the public website.",
+    status: "live" as const,
+  },
+  {
+    title: "Website Story",
+    body: "About copy and service-area pages for the public site.",
+    status: "live" as const,
+  },
+  {
+    title: "Customer Request Intake",
+    body: "A public request path that creates a real lead in the workspace.",
+    status: "live" as const,
+  },
+  {
+    title: "Business Settings",
+    body: "Business profile, team, and operating preferences.",
+    status: "live" as const,
+  },
+  {
+    title: "Pricing Rules",
+    body: "Catalog prices and business-wide pricing rules for new work. They do not rewrite sent estimates.",
+    status: "live" as const,
+  },
+  {
     title: "Expenses",
     body: "Record job and business expenses inside the workspace.",
+    status: "live" as const,
+  },
+  {
+    title: "Reviews Workflow",
+    body: "Record customer reviews and draft responses. TBBT does not invent testimonials or post them for you.",
     status: "live" as const,
   },
   {
@@ -301,21 +371,59 @@ export const TBBT_ADDITIONAL_FEATURES = [
     status: "live" as const,
   },
   {
-    title: "Reviews",
-    body: "Record customer reviews and draft responses. TBBT does not invent testimonials.",
-    status: "live" as const,
-  },
-  {
     title: "Material takeoff helpers",
     body: "Takeoff worksheets for scoped estimate lines. They do not invent production rates.",
     status: "live" as const,
   },
   {
-    title: "Business Success / AI coaching",
-    body: "Direction for later. Not a production feature today.",
-    status: "planned" as const,
+    title: "Customer communications",
+    body: "Messaging foundation for customer follow-up. SMS sends only when that business has a connected number.",
+    status: "live" as const,
   },
 ] as const;
+
+export const TBBT_COMING_FEATURES = [
+  {
+    title: "Customer Portal",
+    body: "A customer-facing place to review estimates, jobs, and invoices. Not in the workspace today.",
+    badge: "coming-soon" as const,
+  },
+  {
+    title: "Multi-Location",
+    body: "Support for businesses that operate more than one location. One workspace per business today.",
+    badge: "planned" as const,
+  },
+  {
+    title: "Local Service / SEO Pages",
+    body: "More local service pages to help customers find the business. Not a live SEO product today.",
+    badge: "planned" as const,
+  },
+  {
+    title: "Expanded Integrations",
+    body: "More connections over time. Stripe, SMS, banking, and payroll are not automatic — they still have to be set up per business.",
+    badge: "planned" as const,
+  },
+  {
+    title: "Deeper Marketing Automation",
+    body: "More follow-up after the current marketing content workspace. TBBT does not currently publish posts for you.",
+    badge: "planned" as const,
+  },
+  {
+    title: "Expanded Data Export",
+    body: "Richer export of workspace records over time. Not a full accounting or payroll export suite today.",
+    badge: "planned" as const,
+  },
+  {
+    title: "Business Success / AI Coaching",
+    body: "Direction for later coaching inside TBBT. Not a production feature today.",
+    badge: "planned" as const,
+  },
+] as const;
+
+export const TBBT_COMING_BADGE_LABEL = {
+  "coming-soon": "Coming Soon",
+  planned: "Planned",
+} as const;
 
 export const TBBT_FOUNDER_PRICE_LABEL = TBBT_FOUNDER_PLAN_PRICE_LABEL;
 export const TBBT_FOUNDER_PLAN_DISPLAY_NAME = TBBT_SAAS_PLAN_NAME;
@@ -613,7 +721,7 @@ export function tbbtPageDescription(page: string): string {
     case "home":
       return "TBBT is the business operating system for trades. Website, customers, estimates, jobs, scheduling, and invoices in one workspace. Founder Plan $49/month. 30-day free trial. No credit card required.";
     case "features":
-      return "Website builder, CRM, scheduling, estimates, jobs, invoices, time tracking, team, marketing, and reports — the TBBT operating system for trades businesses.";
+      return "TBBT features: public website, customers, scheduling, estimates, jobs, invoices, time cards, team, reports, reviews, and marketing content in one trades workspace.";
     case "trades":
       return "One TBBT platform for every trade. Handyman is available now. Cleaning is next. Other trades are planned on the same operating system.";
     case "pricing":
