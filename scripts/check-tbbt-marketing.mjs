@@ -396,7 +396,7 @@ check(
   homeMarketingSrc.includes("tbbt-hero-cinematic") &&
     homeMarketingSrc.includes("tbbt-trade-strip") &&
     !homeMarketingSrc.includes("trades-page-handyman.png") &&
-    featuresPageSrc.includes("The operating system, not a pile of apps.") &&
+    featuresPageSrc.includes("tbbt-feat-hero") &&
     !featuresPageSrc.includes("trades-page-platform.png"),
 );
 check(
@@ -411,7 +411,6 @@ check(
     TBBT_CORE_FEATURES.some((item) => item.title === "Website Builder") &&
     TBBT_CORE_FEATURES.some((item) => item.title === "Reports & Business Insights"),
 );
-const featuresPageSrc = readRepo("src/components/tbbt-marketing/features.tsx");
 check(
   "Features page uses the visual rebuild without unsupported claims or fake Learn More",
   featuresPageSrc.includes("tbbt-feat-hero") &&
