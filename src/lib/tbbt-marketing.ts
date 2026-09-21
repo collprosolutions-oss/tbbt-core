@@ -970,8 +970,8 @@ export const TBBT_MARKETING_ASSET_SLOTS = [
   },
   {
     file: "pricing-page-hero.png",
-    ratio: "333 / 296",
-    pixelHint: "333 × 296",
+    ratio: "267 / 298",
+    pixelHint: "267 × 298",
     usage: "Pricing hero: back-facing tradesman in TBBT BUILD / MANAGE / GROW shirt.",
   },
   {

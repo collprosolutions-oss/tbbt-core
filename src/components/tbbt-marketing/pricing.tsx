@@ -1,13 +1,13 @@
 import Link from "next/link";
 import {
   ArrowRight,
-  Ban,
   BarChart3,
   Brain,
   Briefcase,
   CalendarDays,
   CircleCheck,
   CirclePlus,
+  CircleX,
   Clock3,
   FileText,
   Globe,
@@ -63,7 +63,7 @@ import {
   TBBT_TAGLINE,
 } from "@/lib/tbbt-marketing";
 
-const VALUE_ICONS = [Zap, Users, Ban, Headphones] as const;
+const VALUE_ICONS = [Zap, Users, CircleX, Headphones] as const;
 const COMPARE_ICONS = [
   LayoutGrid,
   Globe,
@@ -174,7 +174,23 @@ export function TbbtPricingPage() {
             <a className="tbbt-prc-compare-link" href="#compare-plans">
               <strong>{TBBT_PRICING_PAGE_INTRO.compare}</strong>
               <span>{TBBT_PRICING_PAGE_INTRO.compareLead}</span>
-              <b aria-hidden="true" />
+              <svg className="tbbt-prc-arrow" viewBox="0 0 72 40" aria-hidden="true">
+                <path
+                  d="M4 8c18 2 40 4 52 18"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="3.2"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M46 20l12 8-14 2"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="3.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
             </a>
           </article>
 
