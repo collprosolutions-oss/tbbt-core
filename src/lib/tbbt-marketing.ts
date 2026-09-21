@@ -230,8 +230,8 @@ export const TBBT_TRADES_PAGE_CAPABILITIES = [
 
 export const TBBT_TRADES_PAGE_CTA_HEADLINE = "Ready to Build Your Trade Business?";
 
-export const TBBT_TRADES_PAGE_HERO_PRO_SRC = "/brand/tbbt-marketing/hero-tradespro.png";
-export const TBBT_TRADES_PAGE_PLATFORM_SRC = "/brand/tbbt-marketing/trades-page-platform.png";
+export const TBBT_TRADES_PAGE_HERO_PRO_SRC = "/brand/tbbt-marketing/trades-page-hero.png";
+export const TBBT_TRADES_PAGE_PLATFORM_SRC = "/brand/tbbt-marketing/trades-page-platform-devices.png";
 export const TBBT_TRADES_PAGE_CTA_SRC = "/brand/tbbt-marketing/cta-sunset.png";
 
 export type TbbtTradesPageCard = {
@@ -813,10 +813,22 @@ export const TBBT_MARKETING_ASSET_SLOTS = [
     usage: "Task #84 /trades Handyman card. Do not reuse on Homepage.",
   },
   {
+    file: "trades-page-hero.png",
+    ratio: "16 / 9",
+    pixelHint: "535 × 288",
+    usage: "Task #84 /trades hero: back-facing tradesman in TBBT shirt from the supplied master.",
+  },
+  {
     file: "trades-page-platform.png",
     ratio: "3 / 1",
     pixelHint: "2000 × 667",
-    usage: "Task #84 /trades platform/product visual.",
+    usage: "Supplied Task #84 platform banner. Source only — page displays the devices crop.",
+  },
+  {
+    file: "trades-page-platform-devices.png",
+    ratio: "918 / 667",
+    pixelHint: "918 × 667",
+    usage: "Task #84 /trades center visual: laptop + phone crop from the supplied platform banner.",
   },
   {
     file: "trades-page-promo.png",

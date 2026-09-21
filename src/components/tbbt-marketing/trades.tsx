@@ -40,7 +40,6 @@ import {
   TBBT_TRADES_PAGE_PLATFORM_SUPPORT,
   TBBT_TRADES_PAGE_ROADMAP_LABEL,
   TBBT_TRADES_PAGE_SEE_FEATURES_LABEL,
-  TBBT_TRADES_PAGE_SIDE_LINE,
   TBBT_TRADES_PAGE_SUPPORT,
   TBBT_TRADES_PAGE_VALUE_POINTS,
   TBBT_TRIAL_CTA_LABEL,
@@ -107,8 +106,10 @@ export function TbbtTradesPage() {
           </div>
           <div className="tbbt-trd-hero-figure">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={TBBT_TRADES_PAGE_HERO_PRO_SRC} alt="" />
-            <p className="tbbt-trd-hero-side">{TBBT_TRADES_PAGE_SIDE_LINE}</p>
+            <img
+              src={TBBT_TRADES_PAGE_HERO_PRO_SRC}
+              alt="Tradesman from behind wearing a TBBT shirt that reads Build, Manage, Grow"
+            />
           </div>
         </div>
       </section>
