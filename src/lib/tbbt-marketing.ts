@@ -175,6 +175,134 @@ export const TBBT_TRADE_STATUS_LABEL: Record<TbbtTradeAvailability, string> = {
   planned: "Planned",
 };
 
+export const TBBT_TRADES_PAGE_ROADMAP_LABEL = "Roadmap";
+
+export const TBBT_TRADES_PAGE_EYEBROW = "Built for the Trades";
+export const TBBT_TRADES_PAGE_HEADLINE = ["One Platform.", "Every Trade."] as const;
+export const TBBT_TRADES_PAGE_SUPPORT =
+  "TBBT gives trades businesses one place to build their presence, manage customers and work, and grow the business.";
+export const TBBT_TRADES_PAGE_SIDE_LINE = "Different Trades. Same Powerful Platform.";
+
+export const TBBT_TRADES_PAGE_VALUE_POINTS = [
+  {
+    kicker: "Trade-Specific Setup",
+    body: "Start from the live Handyman setup. More trades follow on the same platform.",
+  },
+  {
+    kicker: "Industry Best Practices",
+    body: "Workflows follow how trades work actually moves.",
+  },
+  {
+    kicker: "Grows With You",
+    body: "Start simple. Add more of the workspace as the business expands.",
+  },
+] as const;
+
+export const TBBT_TRADES_PAGE_GRID_HEADING = "Supported Trades";
+export const TBBT_TRADES_PAGE_GRID_LEAD =
+  "Handyman is live today. Cleaning is next. Other trades are planned on the same platform.";
+
+export const TBBT_TRADES_PAGE_PLATFORM_KICKER = "One Platform. Endless Possibilities.";
+export const TBBT_TRADES_PAGE_PLATFORM_HEADLINE = [
+  "All the Tools You Need",
+  "For Your Trade.",
+] as const;
+export const TBBT_TRADES_PAGE_PLATFORM_SUPPORT =
+  "Every trade uses the same TBBT workspace. Handyman is live today — public website, catalog, customers, scheduling, estimates, jobs, invoices, and the rest of the operating tools. More trade setups follow on this same platform.";
+export const TBBT_TRADES_PAGE_SEE_FEATURES_LABEL = "See All Features";
+
+export const TBBT_TRADES_PAGE_CAPABILITIES = [
+  "Public business website",
+  "Service catalog and pricing",
+  "Customer request intake",
+  "Customers / CRM",
+  "Scheduling",
+  "Estimates",
+  "Jobs",
+  "Invoices",
+  "Expenses",
+  "Time cards",
+  "Team management",
+  "Reviews workflow",
+  "Marketing content workspace",
+  "Reports and business insights",
+] as const;
+
+export const TBBT_TRADES_PAGE_CTA_HEADLINE = "Ready to Build Your Trade Business?";
+
+export const TBBT_TRADES_PAGE_PROMO_SRC = "/brand/tbbt-marketing/trades-page-promo.png";
+export const TBBT_TRADES_PAGE_PLATFORM_SRC = "/brand/tbbt-marketing/trades-page-platform.png";
+
+export type TbbtTradesPageCard = {
+  src?: string;
+  position?: string;
+  summary: string;
+  badge?: string;
+};
+
+/** Individual supplied Task #84 photos. Homepage still uses TBBT_TRADE_THUMBS. */
+export const TBBT_TRADES_PAGE_CARDS: Record<string, TbbtTradesPageCard> = {
+  Handyman: {
+    src: "/brand/tbbt-marketing/trades-page-handyman.png",
+    position: "18% 50%",
+    summary: "General repairs, maintenance and home services.",
+  },
+  Cleaning: {
+    src: "/brand/tbbt-marketing/trades-page-cleaning.png",
+    position: "38% 50%",
+    summary: "Residential and commercial cleaning services.",
+  },
+  Electrical: {
+    src: "/brand/tbbt-marketing/trades-page-electrical.png",
+    position: "42% 50%",
+    summary: "Installations, repairs and electrical services.",
+  },
+  Plumbing: {
+    src: "/brand/tbbt-marketing/trades-page-plumbing.png",
+    position: "58% 50%",
+    summary: "Installations, repairs and plumbing services.",
+  },
+  HVAC: {
+    src: "/brand/tbbt-marketing/trades-page-hvac.png",
+    position: "62% 50%",
+    summary: "Heating, cooling and air quality services.",
+  },
+  Painting: {
+    src: "/brand/tbbt-marketing/trades-page-painting.png",
+    position: "48% 50%",
+    summary: "Interior and exterior painting services.",
+  },
+  Landscaping: {
+    src: "/brand/tbbt-marketing/trades-page-landscaping.png",
+    position: "36% 50%",
+    summary: "Lawn care, maintenance and outdoor services.",
+  },
+  Roofing: {
+    src: "/brand/tbbt-marketing/trades-page-roofing.png",
+    position: "50% 42%",
+    summary: "Roof repair, replacement and maintenance.",
+  },
+  Remodeling: {
+    src: "/brand/tbbt-marketing/trades-page-remodeling.png",
+    position: "40% 50%",
+    summary: "Kitchens, bathrooms and home renovations.",
+  },
+  Concrete: {
+    src: "/brand/tbbt-marketing/trades-page-concrete.png",
+    position: "52% 50%",
+    summary: "Driveways, patios, foundations and concrete work.",
+  },
+  Carpentry: {
+    src: "/brand/tbbt-marketing/trades-page-carpentry.png",
+    position: "36% 50%",
+    summary: "Custom builds, framing and finish work.",
+  },
+  "And More": {
+    summary: "New trades added regularly. Additional trades are not live today.",
+    badge: TBBT_TRADES_PAGE_ROADMAP_LABEL,
+  },
+};
+
 export const TBBT_PILLARS = [
   {
     kicker: "Build",
@@ -676,6 +804,24 @@ export const TBBT_MARKETING_ASSET_SLOTS = [
     ratio: "1 / 1",
     pixelHint: "800 × 800",
     usage: "GROW coaching portrait inside the homepage mock. Feature is Planned.",
+  },
+  {
+    file: "trades-page-handyman.png",
+    ratio: "21 / 9",
+    pixelHint: "1938 × 812",
+    usage: "Task #84 /trades Handyman card. Do not reuse on Homepage.",
+  },
+  {
+    file: "trades-page-platform.png",
+    ratio: "3 / 1",
+    pixelHint: "2000 × 667",
+    usage: "Task #84 /trades platform/product visual.",
+  },
+  {
+    file: "trades-page-promo.png",
+    ratio: "21 / 9",
+    pixelHint: "1938 × 812",
+    usage: "Task #84 /trades hero and CTA promotional photograph.",
   },
   {
     file: "og-default.jpg",
