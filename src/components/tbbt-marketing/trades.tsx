@@ -2,6 +2,7 @@ import Link from "next/link";
 import {
   ArrowRight,
   BookOpen,
+  CircleCheck,
   Droplets,
   Hammer,
   Home,
@@ -82,7 +83,8 @@ export function TbbtTradesPage() {
           <div className="tbbt-trd-hero-copy">
             <p className="tbbt-kicker">{TBBT_TRADES_PAGE_EYEBROW}</p>
             <h1>
-              {TBBT_TRADES_PAGE_HEADLINE[0]}{" "}
+              {TBBT_TRADES_PAGE_HEADLINE[0]}
+              <br />
               <span className="tbbt-trd-hero-accent">{TBBT_TRADES_PAGE_HEADLINE[1]}</span>
             </h1>
             <p className="tbbt-trd-hero-support">{TBBT_TRADES_PAGE_SUPPORT}</p>
@@ -202,7 +204,10 @@ export function TbbtTradesPage() {
           </div>
           <ul className="tbbt-trd-caps">
             {TBBT_TRADES_PAGE_CAPABILITIES.map((item) => (
-              <li key={item}>{item}</li>
+              <li key={item}>
+                <CircleCheck size={16} aria-hidden="true" />
+                {item}
+              </li>
             ))}
           </ul>
         </div>

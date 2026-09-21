@@ -264,7 +264,7 @@ export const TBBT_TRADES_PAGE_CARDS: Record<string, TbbtTradesPageCard> = {
   },
   HVAC: {
     src: "/brand/tbbt-marketing/trades-page-hvac.png",
-    position: "62% 50%",
+    position: "82% 50%",
     summary: "Heating, cooling and air quality services.",
   },
   Painting: {
