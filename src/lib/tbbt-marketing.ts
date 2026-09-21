@@ -725,7 +725,7 @@ export const TBBT_PRICING_ENTERPRISE_CARD_FEATURES = [
 ] as const;
 
 export const TBBT_PRICING_COMPARE_ROWS = [
-  { label: "Number of Trades", values: ["Coming Soon", "Available Now", "Coming Soon", "Planned"] },
+  { label: "Trade Availability", values: ["Coming Soon", "Available Now", "Coming Soon", "Planned"] },
   { label: "Website Builder", values: ["check", "check", "check", "check"] },
   { label: "CRM & Customer Management", values: ["check", "check", "check", "check"] },
   { label: "Scheduling & Calendar", values: ["check", "check", "check", "check"] },

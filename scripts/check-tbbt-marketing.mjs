@@ -288,7 +288,7 @@ check(
       "Take control of your trades business with TBBT. Start free today and see the difference." &&
     TBBT_PRICING_ADDONS.some((item) => item.title === "Business Email") &&
     !TBBT_PRICING_ADDONS.some((item) => item.title.includes("Custom Domain")) &&
-    TBBT_PRICING_COMPARE_ROWS[0].label === "Number of Trades" &&
+    TBBT_PRICING_COMPARE_ROWS[0].label === "Trade Availability" &&
     TBBT_PRICING_COMPARE_ROWS[0].values[0] === TBBT_PRICING_COMING_SOON_LABEL &&
     TBBT_PRICING_COMPARE_ROWS[0].values[1] === TBBT_PRICING_AVAILABLE_NOW_LABEL &&
     TBBT_PRICING_COMPARE_ROWS[0].values[2] === TBBT_PRICING_COMING_SOON_LABEL &&
