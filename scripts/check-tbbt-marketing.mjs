@@ -7,7 +7,7 @@
  * Run with:
  *   node --experimental-strip-types scripts/check-tbbt-marketing.mjs
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { register } from "node:module";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
@@ -43,6 +43,13 @@ const {
   TBBT_SIGN_IN_HREF,
   TBBT_SIGN_UP_HREF,
   TBBT_TRADES,
+  TBBT_TRADES_PAGE_CAPABILITIES,
+  TBBT_TRADES_PAGE_CARDS,
+  TBBT_TRADES_PAGE_CTA_HEADLINE,
+  TBBT_TRADES_PAGE_CTA_SRC,
+  TBBT_TRADES_PAGE_HERO_PRO_SRC,
+  TBBT_TRADES_PAGE_PLATFORM_SRC,
+  TBBT_TRADES_PAGE_ROADMAP_LABEL,
   TBBT_TRIAL_CTA_LABEL,
   TBBT_TRIAL_NAV_LABEL,
 } = await import("@/lib/tbbt-marketing");
@@ -329,6 +336,69 @@ check(
     homeMarketingSrc.includes("tbbt-trade-strip") &&
     !homeMarketingSrc.includes("tbbt-chip"),
 );
+const tradesPageSrc = readRepo("src/components/tbbt-marketing/trades.tsx");
+const tradesCssSrc = readRepo("src/components/tbbt-marketing/tbbt-trades.css");
+const featuresPageSrc = readRepo("src/components/tbbt-marketing/features.tsx");
+const expectedTradePhotos = {
+  Handyman: "trades-page-handyman.png",
+  Cleaning: "trades-page-cleaning.png",
+  Electrical: "trades-page-electrical.png",
+  Plumbing: "trades-page-plumbing.png",
+  HVAC: "trades-page-hvac.png",
+  Painting: "trades-page-painting.png",
+  Landscaping: "trades-page-landscaping.png",
+  Roofing: "trades-page-roofing.png",
+  Remodeling: "trades-page-remodeling.png",
+  Concrete: "trades-page-concrete.png",
+  Carpentry: "trades-page-carpentry.png",
+};
+check(
+  "Trades page uses the supplied Task #84 photos, not homepage thumbs or reference crops",
+  Object.entries(expectedTradePhotos).every(([name, file]) =>
+    TBBT_TRADES_PAGE_CARDS[name]?.src?.endsWith(file),
+  ) &&
+    TBBT_TRADES_PAGE_HERO_PRO_SRC.endsWith("trades-page-hero.png") &&
+    TBBT_TRADES_PAGE_CTA_SRC.endsWith("cta-sunset.png") &&
+    TBBT_TRADES_PAGE_PLATFORM_SRC.endsWith("trades-page-platform-devices.png") &&
+    !TBBT_TRADES_PAGE_HERO_PRO_SRC.endsWith("hero-tradespro.png") &&
+    tradesPageSrc.includes("TBBT_TRADES_PAGE_CARDS") &&
+    tradesPageSrc.includes("tbbt-trd-hero") &&
+    tradesCssSrc.includes("hero-workshop.png") &&
+    tradesCssSrc.includes("object-fit: cover") &&
+    !tradesPageSrc.includes("trades-page-promo.png") &&
+    !tradesCssSrc.includes("trades-page-promo.png") &&
+    !tradesPageSrc.includes("hero-tradespro.png") &&
+    !tradesPageSrc.includes("trade-handyman.png") &&
+    !tradesPageSrc.includes("Join thousands") &&
+    Object.values(expectedTradePhotos).every((file) =>
+      existsSync(new URL(`../public/brand/tbbt-marketing/${file}`, import.meta.url)),
+    ) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/trades-page-hero.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/trades-page-platform-devices.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/trades-page-platform.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/hero-tradespro.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/cta-sunset.png", import.meta.url)),
+);
+check(
+  "Trades page keeps Handyman available, Cleaning next, others planned, And More as roadmap",
+  TBBT_TRADES.find((trade) => trade.name === "Handyman")?.status === "available" &&
+    TBBT_TRADES.find((trade) => trade.name === "Cleaning")?.status === "coming-next" &&
+    TBBT_TRADES.filter((trade) => trade.status === "available").length === 1 &&
+    TBBT_TRADES_PAGE_CARDS["And More"]?.badge === TBBT_TRADES_PAGE_ROADMAP_LABEL &&
+    !TBBT_TRADES_PAGE_CARDS["And More"]?.src &&
+    TBBT_TRADES_PAGE_CTA_HEADLINE === "Ready to Build Your Trade Business?" &&
+    TBBT_TRADES_PAGE_CAPABILITIES.includes("Public business website") &&
+    TBBT_TRADES_PAGE_CAPABILITIES.includes("Marketing content workspace") &&
+    !TBBT_TRADES_PAGE_CAPABILITIES.some((item) => /online booking|payroll|bank/i.test(item)),
+);
+check(
+  "Homepage and Features stay on their own pages during the Trades rebuild",
+  homeMarketingSrc.includes("tbbt-hero-cinematic") &&
+    homeMarketingSrc.includes("tbbt-trade-strip") &&
+    !homeMarketingSrc.includes("trades-page-handyman.png") &&
+    featuresPageSrc.includes("tbbt-feat-hero") &&
+    !featuresPageSrc.includes("trades-page-platform.png"),
+);
 check(
   "GROW coaching visual is labeled Planned",
   previewSrc.includes("Planned") &&
@@ -341,7 +411,6 @@ check(
     TBBT_CORE_FEATURES.some((item) => item.title === "Website Builder") &&
     TBBT_CORE_FEATURES.some((item) => item.title === "Reports & Business Insights"),
 );
-const featuresPageSrc = readRepo("src/components/tbbt-marketing/features.tsx");
 check(
   "Features page uses the visual rebuild without unsupported claims or fake Learn More",
   featuresPageSrc.includes("tbbt-feat-hero") &&
@@ -466,6 +535,27 @@ if (!reachable) {
         features.body.includes("Planned") &&
         features.body.includes("Coming Soon") &&
         features.body.includes("Customer Portal"),
+    ),
+  );
+  const trades = await fetchMaybe("/trades");
+  check(
+    "Trades page shows supplied photos, honest status, and signup without fake volume claims",
+    Boolean(
+      trades &&
+        trades.body.includes("One Platform") &&
+        trades.body.includes("Every Trade") &&
+        trades.body.includes("trades-page-handyman.png") &&
+        trades.body.includes("trades-page-cleaning.png") &&
+        trades.body.includes("trades-page-platform-devices.png") &&
+        trades.body.includes("trades-page-hero.png") &&
+        !trades.body.includes("hero-tradespro.png") &&
+        trades.body.includes("cta-sunset.png") &&
+        !trades.body.includes("trades-page-promo.png") &&
+        trades.body.includes("Available") &&
+        trades.body.includes("Coming Next") &&
+        trades.body.includes("Roadmap") &&
+        trades.body.includes("/sign-up") &&
+        !trades.body.includes("Join thousands"),
     ),
   );
   const pricing = await fetchMaybe("/pricing");
