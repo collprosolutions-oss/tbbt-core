@@ -649,19 +649,19 @@ export const TBBT_PRICING_PAGE_HERO_SRC = "/brand/tbbt-marketing/pricing-page-he
 export const TBBT_PRICING_PAGE_CTA_SRC = "/brand/tbbt-marketing/cta-sunset.png";
 export const TBBT_PRICING_PAGE_CTA_HEADLINE = "Ready to Build a Better Business?";
 export const TBBT_PRICING_PAGE_CTA_SUPPORT =
-  "Join trades professionals who are taking control of their business with TBBT. Start free today and see the difference.";
+  "Take control of your trades business with TBBT. Start free today and see the difference.";
 export const TBBT_PRICING_PAGE_CTA_BUTTON = "Start Your Free 30-Day Trial";
 export const TBBT_PRICING_PAGE_FOUNDER_CTA = "Start Free Trial";
 
 export const TBBT_PRICING_PAGE_VALUE_POINTS = [
   { kicker: "Get Started", body: "In Minutes" },
-  { kicker: "All Features", body: "Included" },
+  { kicker: "All Core Tools", body: "Included" },
   { kicker: "No Long-Term", body: "Contracts" },
   { kicker: "Real Support", body: "From Real People" },
 ] as const;
 
 export const TBBT_PRICING_PAGE_HERO_CHECKS = [
-  "For Any Trade",
+  "Built for the Trades",
   "All the Tools You Need",
   "Built for Real Work",
   "Affordable & Scalable",
@@ -725,7 +725,7 @@ export const TBBT_PRICING_ENTERPRISE_CARD_FEATURES = [
 ] as const;
 
 export const TBBT_PRICING_COMPARE_ROWS = [
-  { label: "Number of Trades", values: ["1", "3", "10", "Unlimited"] },
+  { label: "Number of Trades", values: ["Coming Soon", "Available Now", "Coming Soon", "Planned"] },
   { label: "Website Builder", values: ["check", "check", "check", "check"] },
   { label: "CRM & Customer Management", values: ["check", "check", "check", "check"] },
   { label: "Scheduling & Calendar", values: ["check", "check", "check", "check"] },
@@ -746,7 +746,7 @@ export const TBBT_PRICING_ADDONS = [
   { title: "AI Business Coach", icon: "coach" },
   { title: "Additional Users", icon: "users" },
   { title: "Extra Storage", icon: "storage" },
-  { title: "Custom Domain / Email", icon: "domain" },
+  { title: "Business Email", icon: "domain" },
 ] as const;
 
 export const TBBT_PRICING_ADDON_STATUS = "Coming Soon";

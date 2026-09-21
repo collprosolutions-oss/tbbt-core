@@ -38,7 +38,15 @@ const {
   TBBT_LEGAL_NAV,
   TBBT_NAV,
   TBBT_POSITIONING,
+  TBBT_PRICING_ADDONS,
+  TBBT_PRICING_AVAILABLE_NOW_LABEL,
+  TBBT_PRICING_COMING_SOON_LABEL,
+  TBBT_PRICING_COMPARE_ROWS,
   TBBT_PRICING_FEATURES,
+  TBBT_PRICING_PAGE_CTA_SUPPORT,
+  TBBT_PRICING_PAGE_HERO_CHECKS,
+  TBBT_PRICING_PAGE_VALUE_POINTS,
+  TBBT_PRICING_PLANNED_LABEL,
   TBBT_SEE_WHAT_YOU_GET_LABEL,
   TBBT_SIGN_IN_HREF,
   TBBT_SIGN_UP_HREF,
@@ -270,6 +278,26 @@ check(
     pricingSrc.includes("Pricing to be announced") === false &&
     marketingLibSrc.includes("Pricing to be announced") &&
     !pricingSrc.includes("No invented tiers"),
+);
+check(
+  "Pricing copy uses approved trade, tools, CTA, and add-on wording",
+  TBBT_PRICING_PAGE_HERO_CHECKS[0] === "Built for the Trades" &&
+    TBBT_PRICING_PAGE_VALUE_POINTS[1].kicker === "All Core Tools" &&
+    TBBT_PRICING_PAGE_VALUE_POINTS[1].body === "Included" &&
+    TBBT_PRICING_PAGE_CTA_SUPPORT ===
+      "Take control of your trades business with TBBT. Start free today and see the difference." &&
+    TBBT_PRICING_ADDONS.some((item) => item.title === "Business Email") &&
+    !TBBT_PRICING_ADDONS.some((item) => item.title.includes("Custom Domain")) &&
+    TBBT_PRICING_COMPARE_ROWS[0].label === "Number of Trades" &&
+    TBBT_PRICING_COMPARE_ROWS[0].values[0] === TBBT_PRICING_COMING_SOON_LABEL &&
+    TBBT_PRICING_COMPARE_ROWS[0].values[1] === TBBT_PRICING_AVAILABLE_NOW_LABEL &&
+    TBBT_PRICING_COMPARE_ROWS[0].values[2] === TBBT_PRICING_COMING_SOON_LABEL &&
+    TBBT_PRICING_COMPARE_ROWS[0].values[3] === TBBT_PRICING_PLANNED_LABEL &&
+    !TBBT_PRICING_COMPARE_ROWS[0].values.includes("3") &&
+    !TBBT_PRICING_COMPARE_ROWS[0].values.includes("10") &&
+    !TBBT_PRICING_COMPARE_ROWS[0].values.includes("Unlimited") &&
+    !marketingLibSrc.includes("For Any Trade") &&
+    !marketingLibSrc.includes("Join trades professionals who are taking control"),
 );
 check(
   "Watch Video exists without a fabricated video URL",
@@ -581,7 +609,14 @@ if (!reachable) {
         pricing.body.includes("Business") &&
         pricing.body.includes("Enterprise") &&
         !pricing.body.includes("$29/month") &&
-        !pricing.body.includes("$29 /month"),
+        !pricing.body.includes("$29 /month") &&
+        pricing.body.includes("Built for the Trades") &&
+        pricing.body.includes("All Core Tools") &&
+        pricing.body.includes("Take control of your trades business with TBBT") &&
+        pricing.body.includes("Business Email") &&
+        !pricing.body.includes("For Any Trade") &&
+        !pricing.body.includes("Join trades professionals") &&
+        !pricing.body.includes("Custom Domain / Email"),
     ),
   );
   const homePreview = await fetchMaybe("/home");
