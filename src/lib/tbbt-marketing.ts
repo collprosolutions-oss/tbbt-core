@@ -230,8 +230,9 @@ export const TBBT_TRADES_PAGE_CAPABILITIES = [
 
 export const TBBT_TRADES_PAGE_CTA_HEADLINE = "Ready to Build Your Trade Business?";
 
-export const TBBT_TRADES_PAGE_PROMO_SRC = "/brand/tbbt-marketing/trades-page-promo.png";
+export const TBBT_TRADES_PAGE_HERO_PRO_SRC = "/brand/tbbt-marketing/hero-tradespro.png";
 export const TBBT_TRADES_PAGE_PLATFORM_SRC = "/brand/tbbt-marketing/trades-page-platform.png";
+export const TBBT_TRADES_PAGE_CTA_SRC = "/brand/tbbt-marketing/cta-sunset.png";
 
 export type TbbtTradesPageCard = {
   src?: string;
@@ -821,7 +822,7 @@ export const TBBT_MARKETING_ASSET_SLOTS = [
     file: "trades-page-promo.png",
     ratio: "21 / 9",
     pixelHint: "1938 × 812",
-    usage: "Task #84 /trades hero and CTA promotional photograph.",
+    usage: "Supplied painting photograph. Not used as hero/CTA. Trade photos stay on their cards.",
   },
   {
     file: "og-default.jpg",

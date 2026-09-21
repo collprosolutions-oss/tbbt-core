@@ -46,8 +46,9 @@ const {
   TBBT_TRADES_PAGE_CAPABILITIES,
   TBBT_TRADES_PAGE_CARDS,
   TBBT_TRADES_PAGE_CTA_HEADLINE,
+  TBBT_TRADES_PAGE_CTA_SRC,
+  TBBT_TRADES_PAGE_HERO_PRO_SRC,
   TBBT_TRADES_PAGE_PLATFORM_SRC,
-  TBBT_TRADES_PAGE_PROMO_SRC,
   TBBT_TRADES_PAGE_ROADMAP_LABEL,
   TBBT_TRIAL_CTA_LABEL,
   TBBT_TRIAL_NAV_LABEL,
@@ -356,18 +357,23 @@ check(
   Object.entries(expectedTradePhotos).every(([name, file]) =>
     TBBT_TRADES_PAGE_CARDS[name]?.src?.endsWith(file),
   ) &&
-    TBBT_TRADES_PAGE_PROMO_SRC.endsWith("trades-page-promo.png") &&
+    TBBT_TRADES_PAGE_HERO_PRO_SRC.endsWith("hero-tradespro.png") &&
+    TBBT_TRADES_PAGE_CTA_SRC.endsWith("cta-sunset.png") &&
     TBBT_TRADES_PAGE_PLATFORM_SRC.endsWith("trades-page-platform.png") &&
     tradesPageSrc.includes("TBBT_TRADES_PAGE_CARDS") &&
     tradesPageSrc.includes("tbbt-trd-hero") &&
+    tradesCssSrc.includes("hero-workshop.png") &&
     tradesCssSrc.includes("object-fit: cover") &&
+    !tradesPageSrc.includes("trades-page-promo.png") &&
+    !tradesCssSrc.includes("trades-page-promo.png") &&
     !tradesPageSrc.includes("trade-handyman.png") &&
     !tradesPageSrc.includes("Join thousands") &&
     Object.values(expectedTradePhotos).every((file) =>
       existsSync(new URL(`../public/brand/tbbt-marketing/${file}`, import.meta.url)),
     ) &&
     existsSync(new URL("../public/brand/tbbt-marketing/trades-page-platform.png", import.meta.url)) &&
-    existsSync(new URL("../public/brand/tbbt-marketing/trades-page-promo.png", import.meta.url)),
+    existsSync(new URL("../public/brand/tbbt-marketing/hero-tradespro.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/cta-sunset.png", import.meta.url)),
 );
 check(
   "Trades page keeps Handyman available, Cleaning next, others planned, And More as roadmap",
@@ -538,7 +544,9 @@ if (!reachable) {
         trades.body.includes("trades-page-handyman.png") &&
         trades.body.includes("trades-page-cleaning.png") &&
         trades.body.includes("trades-page-platform.png") &&
-        trades.body.includes("trades-page-promo.png") &&
+        trades.body.includes("hero-tradespro.png") &&
+        trades.body.includes("cta-sunset.png") &&
+        !trades.body.includes("trades-page-promo.png") &&
         trades.body.includes("Available") &&
         trades.body.includes("Coming Next") &&
         trades.body.includes("Roadmap") &&

@@ -28,15 +28,16 @@ import {
   TBBT_TRADES_PAGE_CAPABILITIES,
   TBBT_TRADES_PAGE_CARDS,
   TBBT_TRADES_PAGE_CTA_HEADLINE,
+  TBBT_TRADES_PAGE_CTA_SRC,
   TBBT_TRADES_PAGE_EYEBROW,
   TBBT_TRADES_PAGE_GRID_HEADING,
   TBBT_TRADES_PAGE_GRID_LEAD,
   TBBT_TRADES_PAGE_HEADLINE,
+  TBBT_TRADES_PAGE_HERO_PRO_SRC,
   TBBT_TRADES_PAGE_PLATFORM_HEADLINE,
   TBBT_TRADES_PAGE_PLATFORM_KICKER,
   TBBT_TRADES_PAGE_PLATFORM_SRC,
   TBBT_TRADES_PAGE_PLATFORM_SUPPORT,
-  TBBT_TRADES_PAGE_PROMO_SRC,
   TBBT_TRADES_PAGE_ROADMAP_LABEL,
   TBBT_TRADES_PAGE_SEE_FEATURES_LABEL,
   TBBT_TRADES_PAGE_SIDE_LINE,
@@ -83,8 +84,7 @@ export function TbbtTradesPage() {
           <div className="tbbt-trd-hero-copy">
             <p className="tbbt-kicker">{TBBT_TRADES_PAGE_EYEBROW}</p>
             <h1>
-              {TBBT_TRADES_PAGE_HEADLINE[0]}
-              <br />
+              {TBBT_TRADES_PAGE_HEADLINE[0]}{" "}
               <span className="tbbt-trd-hero-accent">{TBBT_TRADES_PAGE_HEADLINE[1]}</span>
             </h1>
             <p className="tbbt-trd-hero-support">{TBBT_TRADES_PAGE_SUPPORT}</p>
@@ -94,7 +94,7 @@ export function TbbtTradesPage() {
                 return (
                   <article className="tbbt-trd-value" key={item.kicker}>
                     <span className="tbbt-trd-value-icon" aria-hidden="true">
-                      <Icon size={18} />
+                      <Icon size={16} />
                     </span>
                     <div>
                       <strong>{item.kicker}</strong>
@@ -105,12 +105,10 @@ export function TbbtTradesPage() {
               })}
             </div>
           </div>
-          <div className="tbbt-trd-hero-visual">
+          <div className="tbbt-trd-hero-figure">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={TBBT_TRADES_PAGE_PROMO_SRC} alt="" />
-            <p className="tbbt-trd-hero-side">
-              {TBBT_TRADES_PAGE_SIDE_LINE}
-            </p>
+            <img src={TBBT_TRADES_PAGE_HERO_PRO_SRC} alt="" />
+            <p className="tbbt-trd-hero-side">{TBBT_TRADES_PAGE_SIDE_LINE}</p>
           </div>
         </div>
       </section>
@@ -152,13 +150,13 @@ export function TbbtTradesPage() {
                   ) : (
                     <div className="tbbt-trd-photo tbbt-trd-photo--more" aria-hidden="true">
                       <span>
-                        <Plus size={36} />
+                        <Plus size={28} />
                       </span>
                     </div>
                   )}
                   <div className="tbbt-trd-card-body">
                     <h3>
-                      <Icon size={16} />
+                      <Icon size={14} />
                       {trade.name}
                     </h3>
                     <p>{card?.summary ?? trade.summary}</p>
@@ -205,7 +203,7 @@ export function TbbtTradesPage() {
           <ul className="tbbt-trd-caps">
             {TBBT_TRADES_PAGE_CAPABILITIES.map((item) => (
               <li key={item}>
-                <CircleCheck size={16} aria-hidden="true" />
+                <CircleCheck size={15} aria-hidden="true" />
                 {item}
               </li>
             ))}
@@ -214,6 +212,8 @@ export function TbbtTradesPage() {
       </section>
 
       <section className="tbbt-trd-cta">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img className="tbbt-trd-cta-photo" src={TBBT_TRADES_PAGE_CTA_SRC} alt="" />
         <div className="tbbt-wrap tbbt-trd-cta-inner">
           <div>
             <h2>{TBBT_TRADES_PAGE_CTA_HEADLINE}</h2>
