@@ -859,31 +859,109 @@ export const TBBT_ABOUT_PAGE_CTA_SUPPORT =
   "Take control of your trades business with TBBT. Start free today and see the difference.";
 export const TBBT_ABOUT_PAGE_CTA_BUTTON = "Start Your Free 30-Day Trial";
 
+export const TBBT_RESOURCES_PAGE_EYEBROW = "Resources";
+export const TBBT_RESOURCES_PAGE_HEADLINE = ["Tools, Guides and", "Knowledge"] as const;
+export const TBBT_RESOURCES_PAGE_HEADLINE_ACCENT = "for the Trades.";
+export const TBBT_RESOURCES_PAGE_SUPPORT = [
+  "Practical resources to help you start, run and grow your trades business.",
+  "Tips, templates, checklists and expert guidance — all in one place.",
+] as const;
+export const TBBT_RESOURCES_PAGE_SCRIPT = [
+  "Knowledge",
+  "Builds",
+  "Better",
+  "Businesses.",
+] as const;
+export const TBBT_RESOURCES_PAGE_HERO_SRC = "/brand/tbbt-marketing/resources-page-hero.png";
+export const TBBT_RESOURCES_PAGE_CTA_SRC = "/brand/tbbt-marketing/resources-page-cta.png";
+export const TBBT_RESOURCES_PAGE_CTA_HEADLINE = "Keep Learning. Keep Growing.";
+export const TBBT_RESOURCES_PAGE_CTA_SUPPORT =
+  "New resources are added regularly to help you get the most out of TBBT and grow your business.";
+export const TBBT_RESOURCES_PAGE_CTA_BUTTON = "Start Free Trial";
+export const TBBT_RESOURCES_PAGE_WATCH_LABEL = "Watch Overview";
+export const TBBT_RESOURCES_FEATURED_HEADING = "Featured Resources";
+export const TBBT_RESOURCES_FEATURED_LEAD =
+  "Start with our most popular guides, templates and tools.";
+export const TBBT_RESOURCES_FEATURED_VIEW_ALL = "View All Resources";
+export const TBBT_RESOURCES_BROWSE_HEADING = "Browse by Category";
+export const TBBT_RESOURCES_BROWSE_LEAD = "Find the resources you need, faster.";
+export const TBBT_RESOURCES_DOWNLOADS_HEADING = "Popular Downloads";
+export const TBBT_RESOURCES_FAQ_HEADING = "FAQs";
+export const TBBT_RESOURCES_FAQ_LEAD = "Quick answers to common questions.";
+export const TBBT_RESOURCES_FAQ_VIEW_ALL = "View All FAQs";
+
+export const TBBT_RESOURCES_VALUE_POINTS = [
+  { title: "Learn at Your Pace", icon: "learn" },
+  { title: "Real-World Tools & Templates", icon: "tools" },
+  { title: "Built for Trades Professionals", icon: "trades" },
+  { title: "Grow a Stronger Business", icon: "grow" },
+] as const;
+
+export const TBBT_RESOURCES_FEATURED = [
+  {
+    key: "guide",
+    title: "How to Price Your Handyman Services",
+    body: "A practical guide to setting profitable, competitive prices for common handyman jobs.",
+    action: "Read Guide",
+    src: "/brand/tbbt-marketing/resources-page-guide.png",
+    alt: "Suburban house used as the guide card photograph",
+  },
+  {
+    key: "template",
+    title: "Free Estimate Template",
+    body: "Use our professional estimate template to win more jobs and look professional.",
+    action: "Download Template",
+    src: "/brand/tbbt-marketing/resources-page-template.png",
+    alt: "Estimate template document used as the template card photograph",
+  },
+  {
+    key: "checklist",
+    title: "Job Site Checklist",
+    body: "Stay organized and professional with our field-ready checklist.",
+    action: "Get Checklist",
+    src: "/brand/tbbt-marketing/resources-page-checklist.png",
+    alt: "Job site checklist clipboard used as the checklist card photograph",
+  },
+  {
+    key: "video",
+    title: "Getting Started with TBBT",
+    body: "Watch a quick overview of how TBBT helps you build, run and grow your trades business.",
+    action: "Watch Video",
+    src: "/brand/tbbt-marketing/resources-page-video.png",
+    alt: "Tradesman in a TBBT cap used as the video card photograph",
+  },
+  {
+    key: "article",
+    title: "Common Materials & Cost Guide",
+    body: "A helpful reference for common materials, average costs, and project planning tips.",
+    action: "Read Article",
+    src: "/brand/tbbt-marketing/resources-page-article.png",
+    alt: "Tape measure on a blueprint used as the article card photograph",
+  },
+] as const;
+
 export const TBBT_RESOURCE_CATEGORIES = [
-  {
-    title: "Business Setup",
-    body: "Getting a trades business organized online and in the shop.",
-  },
-  {
-    title: "Pricing & Estimating",
-    body: "How to quote work without guessing the whole job from a text message.",
-  },
-  {
-    title: "Marketing & Growth",
-    body: "Showing the work, asking for reviews, and turning one job into the next.",
-  },
-  {
-    title: "Templates & Forms",
-    body: "Reusable checklists and forms for the field and the office.",
-  },
-  {
-    title: "Operations & Scheduling",
-    body: "Keeping the calendar honest when the work changes mid-day.",
-  },
-  {
-    title: "Industry Insights",
-    body: "Notes from the trades, not generic startup advice.",
-  },
+  { title: "Business Setup Guides", icon: "setup" },
+  { title: "Pricing & Estimating", icon: "pricing" },
+  { title: "Marketing & Growth", icon: "marketing" },
+  { title: "Templates & Forms", icon: "templates" },
+  { title: "Operations & Scheduling", icon: "operations" },
+  { title: "Industry Insights", icon: "insights" },
+] as const;
+
+export const TBBT_RESOURCES_DOWNLOADS = [
+  { title: "Estimate Template", format: "PDF" },
+  { title: "Job Site Checklist", format: "PDF" },
+  { title: "Client Intake Form", format: "PDF" },
+  { title: "Time Card Template", format: "Excel" },
+  { title: "Service Price List", format: "PDF" },
+] as const;
+
+export const TBBT_RESOURCES_FAQS = [
+  "How do I use TBBT for multiple trades?",
+  "How do I send a contract?",
+  "Can I cancel anytime?",
+  "Do you offer support?",
 ] as const;
 
 /**
@@ -1055,6 +1133,48 @@ export const TBBT_MARKETING_ASSET_SLOTS = [
     usage: "Daniel LeBlanc supplied photograph for /about Meet the Founder. Use as supplied; do not crop or generate a replacement.",
   },
   {
+    file: "resources-page-hero.png",
+    ratio: "753 / 287",
+    pixelHint: "753 × 287",
+    usage: "Resources hero: supplied mug, tools, and workbench crop from the master. Use as supplied; do not generate a replacement.",
+  },
+  {
+    file: "resources-page-guide.png",
+    ratio: "219 / 131",
+    pixelHint: "219 × 131",
+    usage: "Resources featured Guide card crop from the master. Use as supplied.",
+  },
+  {
+    file: "resources-page-template.png",
+    ratio: "218 / 131",
+    pixelHint: "218 × 131",
+    usage: "Resources featured Template card crop from the master. Use as supplied.",
+  },
+  {
+    file: "resources-page-checklist.png",
+    ratio: "215 / 131",
+    pixelHint: "215 × 131",
+    usage: "Resources featured Checklist card crop from the master. Use as supplied.",
+  },
+  {
+    file: "resources-page-video.png",
+    ratio: "216 / 131",
+    pixelHint: "216 × 131",
+    usage: "Resources featured Video card crop from the master. Use as supplied.",
+  },
+  {
+    file: "resources-page-article.png",
+    ratio: "210 / 131",
+    pixelHint: "210 × 131",
+    usage: "Resources featured Article card crop from the master. Use as supplied.",
+  },
+  {
+    file: "resources-page-cta.png",
+    ratio: "410 / 183",
+    pixelHint: "410 × 183",
+    usage: "Resources CTA: supplied back-facing tradesman crop from the master. Use as supplied.",
+  },
+  {
     file: "og-default.jpg",
     ratio: "1.91 / 1",
     pixelHint: "1200 × 630",
@@ -1106,7 +1226,7 @@ export function tbbtPageDescription(page: string): string {
     case "about":
       return "TBBT was built by a tradesman for the trades. Founder Daniel LeBlanc is a third-generation carpenter who built TBBT from real field and business problems.";
     case "resources":
-      return "TBBT resource hub for business setup, estimating, marketing, operations, and industry insights. Library content is being added.";
+      return "TBBT resource hub: guides, templates, checklists, and tools to start, run, and grow a trades business.";
     case "privacy":
       return "Privacy practices for TBBT, the Trades Business Builder Tool.";
     case "terms":

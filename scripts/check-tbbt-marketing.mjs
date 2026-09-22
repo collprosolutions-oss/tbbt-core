@@ -53,6 +53,13 @@ const {
   TBBT_PRICING_PAGE_HERO_CHECKS,
   TBBT_PRICING_PAGE_VALUE_POINTS,
   TBBT_PRICING_PLANNED_LABEL,
+  TBBT_RESOURCE_CATEGORIES,
+  TBBT_RESOURCES_DOWNLOADS,
+  TBBT_RESOURCES_FAQS,
+  TBBT_RESOURCES_FEATURED,
+  TBBT_RESOURCES_PAGE_CTA_SRC,
+  TBBT_RESOURCES_PAGE_HERO_SRC,
+  TBBT_RESOURCES_VALUE_POINTS,
   TBBT_SEE_WHAT_YOU_GET_LABEL,
   TBBT_SIGN_IN_HREF,
   TBBT_SIGN_UP_HREF,
@@ -313,10 +320,38 @@ check(
     !videoSrc.includes("http"),
 );
 check(
-  "Resources categories are coming soon, not fake articles",
-  resourcesSrc.includes("Coming soon") &&
-    !resourcesSrc.includes("download now") &&
-    !resourcesSrc.includes(".pdf"),
+  "Resources page uses the supplied visual hub without fake article routes or file downloads",
+  resourcesSrc.includes("tbbt-res-hero") &&
+    resourcesSrc.includes("TBBT_RESOURCES_PAGE_HERO_SRC") &&
+    resourcesSrc.includes("TBBT_RESOURCES_FEATURED") &&
+    resourcesSrc.includes("TBBT_RESOURCE_CATEGORIES") &&
+    resourcesSrc.includes("TBBT_RESOURCES_DOWNLOADS") &&
+    resourcesSrc.includes("TBBT_RESOURCES_FAQS") &&
+    resourcesSrc.includes("TBBT_SIGN_UP_HREF") &&
+    resourcesSrc.includes("TBBT_RESOURCES_PAGE_WATCH_LABEL") &&
+    TBBT_RESOURCES_PAGE_HERO_SRC.endsWith("resources-page-hero.png") &&
+    TBBT_RESOURCES_PAGE_CTA_SRC.endsWith("resources-page-cta.png") &&
+    TBBT_RESOURCES_FEATURED.length === 5 &&
+    TBBT_RESOURCES_FEATURED[0].title === "How to Price Your Handyman Services" &&
+    TBBT_RESOURCES_FEATURED.every((item) => item.src.includes("resources-page-")) &&
+    TBBT_RESOURCE_CATEGORIES.some((item) => item.title === "Business Setup Guides") &&
+    TBBT_RESOURCE_CATEGORIES.some((item) => item.title === "Industry Insights") &&
+    TBBT_RESOURCES_VALUE_POINTS[0].title === "Learn at Your Pace" &&
+    TBBT_RESOURCES_DOWNLOADS.some((item) => item.title === "Estimate Template") &&
+    TBBT_RESOURCES_FAQS.includes("Do you offer support?") &&
+    existsSync(new URL("../public/brand/tbbt-marketing/resources-page-hero.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/resources-page-guide.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/resources-page-template.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/resources-page-checklist.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/resources-page-video.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/resources-page-article.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/resources-page-cta.png", import.meta.url)) &&
+    !resourcesSrc.includes("A real hub. No invented library") &&
+    !resourcesSrc.includes("Coming soon") &&
+    !resourcesSrc.includes(".pdf\"") &&
+    !resourcesSrc.includes(".xlsx") &&
+    !resourcesSrc.includes("href=\"/resources/") &&
+    !existsSync(new URL("../public/brand/tbbt-marketing/estimate-template.pdf", import.meta.url)),
 );
 check(
   "About page uses the visual rebuild with Daniel's real photo and no fake volume claims",
@@ -542,6 +577,21 @@ check(
     !pricingSrc.includes("tbbt-abt-hero"),
 );
 check(
+  "Homepage, Features, Trades, Pricing, and About stay on their own pages during the Resources rebuild",
+  homeMarketingSrc.includes("tbbt-hero-cinematic") &&
+    featuresPageSrc.includes("tbbt-feat-hero") &&
+    tradesPageSrc.includes("tbbt-trd-hero") &&
+    pricingSrc.includes("tbbt-prc-hero") &&
+    aboutSrc.includes("tbbt-abt-hero") &&
+    !homeMarketingSrc.includes("tbbt-res-hero") &&
+    !featuresPageSrc.includes("tbbt-res-hero") &&
+    !tradesPageSrc.includes("tbbt-res-hero") &&
+    !pricingSrc.includes("tbbt-res-hero") &&
+    !aboutSrc.includes("tbbt-res-hero") &&
+    !homeMarketingSrc.includes("resources-page-hero.png") &&
+    !aboutSrc.includes("resources-page-hero.png"),
+);
+check(
   "TBBT production origins are in the R2 browser-upload CORS list",
   r2Src.includes("https://tbbtool.com") &&
     r2Src.includes("https://www.tbbtool.com") &&
@@ -662,6 +712,29 @@ if (!reachable) {
         !pricing.body.includes("For Any Trade") &&
         !pricing.body.includes("Join trades professionals") &&
         !pricing.body.includes("Custom Domain / Email"),
+    ),
+  );
+  const resources = await fetchMaybe("/resources");
+  check(
+    "Resources HTTP page uses the supplied visual hub and signup without fake downloads",
+    Boolean(
+      resources &&
+        resources.body.includes("Tools, Guides and") &&
+        resources.body.includes("Knowledge") &&
+        resources.body.includes("Featured Resources") &&
+        resources.body.includes("resources-page-hero.png") &&
+        resources.body.includes("resources-page-guide.png") &&
+        resources.body.includes("resources-page-template.png") &&
+        resources.body.includes("resources-page-checklist.png") &&
+        resources.body.includes("resources-page-video.png") &&
+        resources.body.includes("resources-page-article.png") &&
+        resources.body.includes("resources-page-cta.png") &&
+        resources.body.includes("Keep Learning") &&
+        resources.body.includes("/sign-up") &&
+        resources.body.includes("Watch Overview") &&
+        !resources.body.includes("A real hub. No invented library") &&
+        !resources.body.includes(".pdf\"") &&
+        !resources.body.includes("href=\"/resources/"),
     ),
   );
   const about = await fetchMaybe("/about");
