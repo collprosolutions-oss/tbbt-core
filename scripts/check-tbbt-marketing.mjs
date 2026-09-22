@@ -27,6 +27,12 @@ const {
   TBBT_MARKETING_PUBLIC_PATHS,
 } = await import("@/lib/tbbt-marketing-host");
 const {
+  TBBT_ABOUT_DIRECTION,
+  TBBT_ABOUT_FOUNDER_NAME,
+  TBBT_ABOUT_PAGE_CTA_SUPPORT,
+  TBBT_ABOUT_PAGE_FOUNDER_SRC,
+  TBBT_ABOUT_PAGE_HERO_SRC,
+  TBBT_ABOUT_VALUES,
   TBBT_ADDITIONAL_FEATURES,
   TBBT_COMING_FEATURES,
   TBBT_CORE_FEATURES,
@@ -313,11 +319,39 @@ check(
     !resourcesSrc.includes(".pdf"),
 );
 check(
-  "About names Daniel LeBlanc and does not invent stats",
-  aboutSrc.includes("Daniel LeBlanc") &&
-    aboutSrc.includes("third-generation carpenter") &&
+  "About page uses the visual rebuild with Daniel's real photo and no fake volume claims",
+  aboutSrc.includes("tbbt-abt-hero") &&
+    aboutSrc.includes("TBBT_ABOUT_PAGE_HERO_SRC") &&
+    aboutSrc.includes("TBBT_ABOUT_PAGE_FOUNDER_SRC") &&
+    aboutSrc.includes("TBBT_ABOUT_FOUNDER_NAME") &&
+    aboutSrc.includes("TBBT_ABOUT_MISSION") &&
+    aboutSrc.includes("TBBT_ABOUT_VISION") &&
+    aboutSrc.includes("TBBT_ABOUT_VALUES") &&
+    aboutSrc.includes("TBBT_SIGN_UP_HREF") &&
+    aboutSrc.includes("TBBT_ABOUT_PAGE_WATCH_STORY_LABEL") &&
+    TBBT_ABOUT_FOUNDER_NAME === "Daniel LeBlanc" &&
+    TBBT_ABOUT_PAGE_HERO_SRC.endsWith("about-page-hero.png") &&
+    TBBT_ABOUT_PAGE_FOUNDER_SRC.endsWith("about-page-founder.png") &&
+    existsSync(new URL("../public/brand/tbbt-marketing/about-page-hero.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/about-page-mission.png", import.meta.url)) &&
+    existsSync(new URL("../public/brand/tbbt-marketing/about-page-founder.png", import.meta.url)) &&
+    TBBT_ABOUT_VALUES.some((item) => item.title === "Simplicity") &&
+    TBBT_ABOUT_VALUES.some((item) => item.title === "Built for Trades") &&
+    TBBT_ABOUT_VALUES.some((item) => item.title === "Continuous Improvement") &&
+    TBBT_ABOUT_DIRECTION.some((item) => item.kicker === "1 Platform") &&
+    TBBT_ABOUT_DIRECTION.some((item) => item.body === "More trades on the roadmap") &&
+    TBBT_ABOUT_DIRECTION.some((item) => item.body === "Trades businesses we aim to support") &&
+    TBBT_ABOUT_PAGE_CTA_SUPPORT ===
+      "Take control of your trades business with TBBT. Start free today and see the difference." &&
+    marketingLibSrc.includes("third-generation carpenter") &&
+    !aboutSrc.includes("founder.jpg") &&
+    !aboutSrc.includes("Founder portrait slot") &&
     !aboutSrc.includes("customers served") &&
-    !aboutSrc.includes("employees"),
+    !aboutSrc.includes("employees") &&
+    !aboutSrc.includes("10+") &&
+    !aboutSrc.includes("Thousands") &&
+    !aboutSrc.includes("Join thousands") &&
+    !TBBT_ABOUT_DIRECTION.some((item) => /thousand|10\+|award|revenue/i.test(`${item.kicker} ${item.body}`)),
 );
 check(
   "Header uses the real TBBT logo with an oversized overlapping treatment",
@@ -497,6 +531,17 @@ check(
     !homeMarketingSrc.includes("tbbt-feat-hero"),
 );
 check(
+  "Homepage, Features, Trades, and Pricing stay on their own pages during the About rebuild",
+  homeMarketingSrc.includes("tbbt-hero-cinematic") &&
+    featuresPageSrc.includes("tbbt-feat-hero") &&
+    tradesPageSrc.includes("tbbt-trd-hero") &&
+    pricingSrc.includes("tbbt-prc-hero") &&
+    !homeMarketingSrc.includes("tbbt-abt-hero") &&
+    !featuresPageSrc.includes("tbbt-abt-hero") &&
+    !tradesPageSrc.includes("tbbt-abt-hero") &&
+    !pricingSrc.includes("tbbt-abt-hero"),
+);
+check(
   "TBBT production origins are in the R2 browser-upload CORS list",
   r2Src.includes("https://tbbtool.com") &&
     r2Src.includes("https://www.tbbtool.com") &&
@@ -617,6 +662,29 @@ if (!reachable) {
         !pricing.body.includes("For Any Trade") &&
         !pricing.body.includes("Join trades professionals") &&
         !pricing.body.includes("Custom Domain / Email"),
+    ),
+  );
+  const about = await fetchMaybe("/about");
+  check(
+    "About HTTP page uses Daniel's real photo, mission layout, and no fake volume claims",
+    Boolean(
+      about &&
+        about.body.includes("Built by a Tradesman") &&
+        about.body.includes("Meet the Founder") &&
+        about.body.includes("Daniel LeBlanc") &&
+        about.body.includes("about-page-founder.png") &&
+        about.body.includes("about-page-hero.png") &&
+        about.body.includes("Our Mission") &&
+        about.body.includes("Our Vision") &&
+        about.body.includes("Watch Our Story") &&
+        about.body.includes("/sign-up") &&
+        about.body.includes("Coming Soon") &&
+        about.body.includes("Expanding Support") &&
+        about.body.includes("Built to Serve") &&
+        !about.body.includes("Join thousands") &&
+        !about.body.includes("10+") &&
+        !about.body.includes("Thousands") &&
+        !about.body.includes("founder.jpg"),
     ),
   );
   const homePreview = await fetchMaybe("/home");
