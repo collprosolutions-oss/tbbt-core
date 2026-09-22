@@ -954,12 +954,13 @@ export const TBBT_RESOURCES_DOWNLOADS = [
   { title: "Job Site Checklist", format: "PDF" },
   { title: "Client Intake Form", format: "PDF" },
   { title: "Time Card Template", format: "Excel" },
-  { title: "Service Price List", format: "PDF" },
+  { title: "Service Price List", format: "Excel" },
 ] as const;
 
 export const TBBT_RESOURCES_FAQS = [
-  "How do I use TBBT for multiple trades?",
-  "How do I send a contract?",
+  "How does TBBT work?",
+  "Can I use it for multiple trades?",
+  "Is there a contract?",
   "Can I cancel anytime?",
   "Do you offer support?",
 ] as const;

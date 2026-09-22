@@ -127,36 +127,56 @@
 .tbbt-res-card {
   display: grid;
   align-content: start;
-  gap: 0.45rem;
+  grid-template-rows: auto auto 1fr auto;
+  overflow: hidden;
+  border: 1px solid var(--tbbt-line);
+  border-radius: 0.85rem;
+  background: #10192b;
 }
 
 .tbbt-res-card-media {
   overflow: hidden;
-  border-radius: 0.75rem;
-  background: #10192b;
-  aspect-ratio: 218 / 131;
+  background: #0a111e;
 }
 
 .tbbt-res-card-media img {
   display: block;
   width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center;
+  height: auto;
+  object-fit: contain;
+  object-position: top center;
 }
 
 .tbbt-res-card h3 {
-  margin: 0.15rem 0 0;
+  margin: 0.75rem 0.85rem 0;
   font-size: 0.98rem;
   font-weight: 750;
   line-height: 1.25;
 }
 
 .tbbt-res-card p {
-  margin: 0;
+  margin: 0.4rem 0.85rem 0;
   color: var(--tbbt-muted);
   font-size: 0.78rem;
   line-height: 1.4;
+}
+
+.tbbt-res-card-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.28rem;
+  width: calc(100% - 1.7rem);
+  min-height: 2.15rem;
+  margin: 0.75rem 0.85rem 0.9rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--tbbt-orange);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--tbbt-orange);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: default;
 }
 
 .tbbt-res-text-link {
@@ -182,22 +202,29 @@
 .tbbt-res-category-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.7rem 0.9rem;
+  gap: 0.55rem;
   margin-top: 0.85rem;
 }
 
 .tbbt-res-category {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.5rem;
+  min-height: 2.85rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--tbbt-line);
+  border-radius: 0.7rem;
+  background: #0c1424;
   color: #e8edf7;
-  font-size: 0.86rem;
+  font-size: 0.8rem;
   font-weight: 650;
+  line-height: 1.25;
   text-decoration: none;
 }
 
-.tbbt-res-category svg,
-.tbbt-res-downloads svg {
+.tbbt-res-category svg:first-of-type,
+.tbbt-res-category svg:last-of-type {
   color: var(--tbbt-orange);
   flex-shrink: 0;
 }
@@ -205,7 +232,7 @@
 .tbbt-res-downloads,
 .tbbt-res-faqs {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.7rem;
   margin: 0.8rem 0 0;
   padding: 0;
   list-style: none;
@@ -213,15 +240,50 @@
 
 .tbbt-res-downloads li,
 .tbbt-res-faqs li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
   color: #d8deec;
   font-size: 0.84rem;
   line-height: 1.35;
 }
 
-.tbbt-res-downloads li {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+.tbbt-res-faqs li {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.tbbt-res-file-icon {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.tbbt-res-file-icon--pdf path:first-child {
+  fill: #d32f2f;
+}
+
+.tbbt-res-file-icon--excel path:first-child {
+  fill: #1d6f42;
+}
+
+.tbbt-res-file-icon-fold {
+  fill: rgba(255, 255, 255, 0.28);
+}
+
+.tbbt-res-file-icon text {
+  fill: #fff;
+  font-size: 6.2px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.tbbt-res-downloads svg:last-child {
+  color: #c5cddd;
+}
+
+.tbbt-res-faqs svg {
+  color: var(--tbbt-orange);
 }
 
 .tbbt-res-cta {

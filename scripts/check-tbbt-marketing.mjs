@@ -338,7 +338,20 @@ check(
     TBBT_RESOURCE_CATEGORIES.some((item) => item.title === "Industry Insights") &&
     TBBT_RESOURCES_VALUE_POINTS[0].title === "Learn at Your Pace" &&
     TBBT_RESOURCES_DOWNLOADS.some((item) => item.title === "Estimate Template") &&
-    TBBT_RESOURCES_FAQS.includes("Do you offer support?") &&
+    TBBT_RESOURCES_DOWNLOADS.filter((item) => item.format === "PDF").map((item) => item.title).join(" | ") ===
+      "Estimate Template | Job Site Checklist | Client Intake Form" &&
+    TBBT_RESOURCES_DOWNLOADS.filter((item) => item.format === "Excel").map((item) => item.title).join(" | ") ===
+      "Time Card Template | Service Price List" &&
+    TBBT_RESOURCES_FAQS.join(" | ") ===
+      "How does TBBT work? | Can I use it for multiple trades? | Is there a contract? | Can I cancel anytime? | Do you offer support?" &&
+    resourcesSrc.includes("tbbt-res-card-cta") &&
+    resourcesSrc.includes("tbbt-res-file-icon--pdf") &&
+    resourcesSrc.includes("tbbt-res-file-icon--excel") &&
+    resourcesSrc.includes("DownloadFileIcon") &&
+    resourcesSrc.includes("ChevronRight") &&
+    resourcesSrc.includes("tbbt-res-category") &&
+    !resourcesSrc.includes("How do I send a contract?") &&
+    !TBBT_RESOURCES_DOWNLOADS.some((item) => item.title === "Service Price List" && item.format === "PDF") &&
     existsSync(new URL("../public/brand/tbbt-marketing/resources-page-hero.png", import.meta.url)) &&
     existsSync(new URL("../public/brand/tbbt-marketing/resources-page-guide.png", import.meta.url)) &&
     existsSync(new URL("../public/brand/tbbt-marketing/resources-page-template.png", import.meta.url)) &&
@@ -732,9 +745,17 @@ if (!reachable) {
         resources.body.includes("Keep Learning") &&
         resources.body.includes("/sign-up") &&
         resources.body.includes("Watch Overview") &&
+        resources.body.includes("How does TBBT work?") &&
+        resources.body.includes("Can I use it for multiple trades?") &&
+        resources.body.includes("Is there a contract?") &&
+        resources.body.includes("tbbt-res-card-cta") &&
+        resources.body.includes("tbbt-res-file-icon--pdf") &&
+        resources.body.includes("tbbt-res-file-icon--excel") &&
+        resources.body.includes("Service Price List (Excel)") &&
         !resources.body.includes("A real hub. No invented library") &&
         !resources.body.includes(".pdf\"") &&
-        !resources.body.includes("href=\"/resources/"),
+        !resources.body.includes("href=\"/resources/") &&
+        !resources.body.includes("How do I send a contract?"),
     ),
   );
   const about = await fetchMaybe("/about");

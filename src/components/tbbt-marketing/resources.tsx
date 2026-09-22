@@ -4,8 +4,10 @@ import {
   BookOpen,
   Building2,
   CalendarClock,
+  ChevronRight,
   CircleDollarSign,
   ClipboardList,
+  Download,
   FileText,
   Lightbulb,
   Megaphone,
@@ -58,6 +60,24 @@ const CATEGORY_ICONS = {
   operations: CalendarClock,
   insights: Lightbulb,
 } as const;
+
+function DownloadFileIcon({ format }: { format: "PDF" | "Excel" }) {
+  const label = format === "PDF" ? "PDF" : "XLS";
+  return (
+    <span
+      className={`tbbt-res-file-icon ${format === "PDF" ? "tbbt-res-file-icon--pdf" : "tbbt-res-file-icon--excel"}`}
+      aria-hidden="true"
+    >
+      <svg viewBox="0 0 24 28" width="16" height="19">
+        <path d="M3 2.4h11.1L21 9.2v16.4H3z" />
+        <path className="tbbt-res-file-icon-fold" d="M14.1 2.4V9.2H21" />
+        <text x="12" y="19.2" textAnchor="middle">
+          {label}
+        </text>
+      </svg>
+    </span>
+  );
+}
 
 export function TbbtResourcesPage() {
   const [taglineLead, taglineAccent] = TBBT_TAGLINE.split(". ");
@@ -122,10 +142,10 @@ export function TbbtResourcesPage() {
                 </div>
                 <h3>{item.title}</h3>
                 <p>{item.body}</p>
-                <span className="tbbt-res-text-link">
+                <button type="button" className="tbbt-res-card-cta">
                   {item.action}
                   <ArrowRight size={14} />
-                </span>
+                </button>
               </article>
             ))}
           </div>
@@ -143,9 +163,10 @@ export function TbbtResourcesPage() {
                 return (
                   <a key={category.title} className="tbbt-res-category" href="#featured-resources">
                     <span aria-hidden="true">
-                      <Icon size={20} />
+                      <Icon size={18} />
                     </span>
-                    {category.title}
+                    <span>{category.title}</span>
+                    <ArrowRight size={14} aria-hidden="true" />
                   </a>
                 );
               })}
@@ -157,10 +178,11 @@ export function TbbtResourcesPage() {
             <ul className="tbbt-res-downloads">
               {TBBT_RESOURCES_DOWNLOADS.map((item) => (
                 <li key={item.title}>
-                  <span aria-hidden="true">
-                    <FileText size={16} />
+                  <DownloadFileIcon format={item.format} />
+                  <span>
+                    {item.title} ({item.format})
                   </span>
-                  {item.title} ({item.format})
+                  <Download size={15} aria-hidden="true" />
                 </li>
               ))}
             </ul>
@@ -171,7 +193,10 @@ export function TbbtResourcesPage() {
             <p>{TBBT_RESOURCES_FAQ_LEAD}</p>
             <ul className="tbbt-res-faqs">
               {TBBT_RESOURCES_FAQS.map((question) => (
-                <li key={question}>{question}</li>
+                <li key={question}>
+                  <span>{question}</span>
+                  <ChevronRight size={16} aria-hidden="true" />
+                </li>
               ))}
             </ul>
             <a className="tbbt-res-text-link" href="#resources-faqs">
