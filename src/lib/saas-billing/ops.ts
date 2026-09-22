@@ -10,11 +10,9 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import { getAppUrl } from "@/lib/mail";
-import { getStripeSecretKey } from "@/lib/payments/config";
 import {
   getSaasPriceId,
   isFakeSaasBillingAdapterEnabled,
-  isSaasBillingConfigured,
   SAAS_BILLING_SETTINGS_HREF,
   TBBT_SAAS_PLAN_CODE,
   TBBT_SAAS_PLAN_NAME,
@@ -25,6 +23,10 @@ import {
   TBBT_FOUNDER_PLAN_PRICE_LABEL,
 } from "@/lib/saas-billing/founder-price";
 import { resolveSaasEntitlement, type SaasEntitlement } from "@/lib/saas-billing/entitlement";
+import {
+  resolveSaasBillingReadiness,
+  type SaasBillingReadinessReason,
+} from "@/lib/saas-billing/readiness";
 import { applyFounderSubscriptionTransition } from "@/lib/saas-billing/trial";
 import {
   isStaleSaasStripeEvent,
@@ -58,6 +60,8 @@ export type SaasBillingSnapshot = {
   appUrlConfigured: boolean;
   checkoutPossible: boolean;
   portalPossible: boolean;
+  billingReadinessReason: SaasBillingReadinessReason;
+  billingNotReadyMessage: string | null;
   trialStartedAt: string | null;
   trialEndsAt: string | null;
   trialDaysRemaining: number | null;
@@ -142,10 +146,7 @@ export async function loadSaasBillingSnapshot(
     }),
     inspectConfiguredFounderPrice(),
   ]);
-  const fakeAdapter = isFakeSaasBillingAdapterEnabled();
-  const stripeReady = fakeAdapter || Boolean(getStripeSecretKey());
-  const configured = isSaasBillingConfigured() && stripeReady;
-  const appUrlConfigured = Boolean(getAppUrl());
+  const readiness = resolveSaasBillingReadiness({ founderPrice });
   const status = row?.status ?? SAAS_SUBSCRIPTION_STATUS_NONE;
   const entitlement = resolveSaasEntitlement({
     slug: business?.slug ?? "",
@@ -173,10 +174,12 @@ export async function loadSaasBillingSnapshot(
     stripePriceId: row?.stripePriceId ?? getSaasPriceId(),
     currentPeriodEnd: row?.currentPeriodEnd?.toISOString() ?? null,
     cancelAtPeriodEnd: row?.cancelAtPeriodEnd ?? false,
-    configured,
-    appUrlConfigured,
-    checkoutPossible: configured && appUrlConfigured && !isBlockingSaasStatus(status),
-    portalPossible: Boolean(row?.stripeCustomerId) && stripeReady && appUrlConfigured,
+    configured: readiness.configured,
+    appUrlConfigured: readiness.appUrlConfigured,
+    checkoutPossible: readiness.checkoutReady && !isBlockingSaasStatus(status),
+    portalPossible: Boolean(row?.stripeCustomerId) && readiness.portalReady,
+    billingReadinessReason: readiness.reason,
+    billingNotReadyMessage: readiness.ownerMessage,
     trialStartedAt: entitlement.trialStartedAt,
     trialEndsAt: entitlement.trialEndsAt,
     trialDaysRemaining: entitlement.trialDaysRemaining,
@@ -197,16 +200,18 @@ export async function startSaasSubscriptionCheckout(
   requireBusinessRole(access, "OWNER");
   await ensureSaasBillingSchema(db);
 
-  if (!isSaasBillingConfigured()) {
-    throw new SaasBillingError("TBBT subscription billing is not configured on this environment.");
+  const founderPrice = await inspectConfiguredFounderPrice();
+  const appUrl = getAppUrl();
+  const readiness = resolveSaasBillingReadiness({ founderPrice, appUrl });
+  if (!readiness.checkoutReady) {
+    throw new SaasBillingError(
+      readiness.ownerMessage ??
+        "TBBT subscription billing is not configured correctly on this environment.",
+    );
   }
   const priceId = getSaasPriceId() ?? (isFakeSaasBillingAdapterEnabled() ? "price_saas_test" : null);
   if (!priceId) {
     throw new SaasBillingError("TBBT subscription price is not configured.");
-  }
-  const appUrl = getAppUrl();
-  if (!appUrl) {
-    throw new SaasBillingError("App URL is not configured, so Checkout cannot return to TBBT.");
   }
 
   const business = await db.business.findFirst({
@@ -276,8 +281,12 @@ export async function startSaasBillingPortal(
   await ensureSaasBillingSchema(db);
 
   const appUrl = getAppUrl();
-  if (!appUrl) {
-    throw new SaasBillingError("App URL is not configured, so Billing Portal cannot return to TBBT.");
+  const readiness = resolveSaasBillingReadiness({ appUrl });
+  if (!readiness.portalReady || !appUrl) {
+    throw new SaasBillingError(
+      readiness.ownerMessage ??
+        "TBBT subscription billing is not configured correctly on this environment.",
+    );
   }
   const current = await loadRow(db, access.businessId);
   if (!current?.stripeCustomerId) {

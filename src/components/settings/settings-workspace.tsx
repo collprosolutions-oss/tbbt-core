@@ -51,7 +51,6 @@ import {
   SMS_DELIVERY_UNAVAILABLE_MESSAGE,
   TBBT_SAAS_BILLING_DESCRIPTION,
   TBBT_SAAS_BILLING_OWNER_ONLY_MESSAGE,
-  TBBT_SAAS_BILLING_UNCONFIGURED_MESSAGE,
   TBBT_SAAS_CANCELLATION_SCHEDULED_MESSAGE,
   TBBT_SAAS_CANCELLATION_SCHEDULED_TEAM_MESSAGE,
   TBBT_SAAS_CHECKOUT_CANCELED_MESSAGE,
@@ -479,6 +478,12 @@ function SectionBody(props: SettingsWorkspaceProps) {
             {billing.founderPriceWarning}
           </p>
         ) : null}
+        {billing.billingNotReadyMessage &&
+        billing.billingNotReadyMessage !== billing.founderPriceWarning ? (
+          <p className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+            {billing.billingNotReadyMessage}
+          </p>
+        ) : null}
         {billing.entitlement.state === "payment_problem" ? (
           <p className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
             {canEditConsequential
@@ -557,14 +562,6 @@ function SectionBody(props: SettingsWorkspaceProps) {
             <dd className="font-medium">{billing.cancelAtPeriodEnd ? "Yes" : "No"}</dd>
           </div>
         </dl>
-        {!billing.configured ? (
-          <p className="text-sm text-muted-foreground">{TBBT_SAAS_BILLING_UNCONFIGURED_MESSAGE}</p>
-        ) : null}
-        {billing.configured && !billing.appUrlConfigured ? (
-          <p className="text-sm text-muted-foreground">
-            Checkout needs NEXT_PUBLIC_APP_URL so Stripe can return to TBBT.
-          </p>
-        ) : null}
         {canEditConsequential ? (
           <div className="flex flex-wrap gap-3">
             {billing.checkoutPossible ? <SaasSubscribeButton /> : null}

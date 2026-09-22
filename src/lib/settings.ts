@@ -165,9 +165,6 @@ export const TBBT_SAAS_CHECKOUT_SUCCESS_MESSAGE =
 export const TBBT_SAAS_CHECKOUT_CANCELED_MESSAGE =
   "Checkout was canceled. You can start again when you are ready.";
 
-export const TBBT_SAAS_BILLING_UNCONFIGURED_MESSAGE =
-  "TBBT subscription billing is not configured on this environment. Set STRIPE_SAAS_PRICE_ID (and STRIPE_SECRET_KEY) to enable Checkout.";
-
 export const TBBT_FOUNDER_PLAN_DESCRIPTION =
   "Founder Plan is $49/month. New businesses get a 30-day free trial with no credit card required. The founder rate stays $49/month while you remain continuously subscribed.";
 
@@ -175,6 +172,8 @@ export const TBBT_FOUNDER_TRIAL_NO_CARD_MESSAGE =
   "No credit card is required to start or continue the free trial.";
 
 export {
+  SAAS_BILLING_NOT_READY_OWNER_MESSAGE as TBBT_SAAS_BILLING_UNCONFIGURED_MESSAGE,
+  SAAS_BILLING_APP_URL_OWNER_MESSAGE as TBBT_SAAS_BILLING_APP_URL_MESSAGE,
   SAAS_PAYMENT_PROBLEM_OWNER_MESSAGE as TBBT_SAAS_PAYMENT_PROBLEM_OWNER_MESSAGE,
   SAAS_PAYMENT_PROBLEM_TEAM_MESSAGE as TBBT_SAAS_PAYMENT_PROBLEM_TEAM_MESSAGE,
   SAAS_CANCELLATION_SCHEDULED_OWNER_MESSAGE as TBBT_SAAS_CANCELLATION_SCHEDULED_MESSAGE,

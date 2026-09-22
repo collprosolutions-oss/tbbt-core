@@ -63,6 +63,9 @@ const {
   isFakeSaasBillingAdapterEnabled,
   isSaasBillingConfigured,
   loadSaasBillingSnapshot,
+  resolveSaasBillingReadiness,
+  SAAS_BILLING_APP_URL_OWNER_MESSAGE,
+  SAAS_BILLING_NOT_READY_OWNER_MESSAGE,
   loadSaasEntitlement,
   parseSaasBillingEvent,
   resetSaasBillingProvider,
@@ -213,6 +216,19 @@ const saasFounderPriceSrc = readFileSync(
   new URL("../src/lib/saas-billing/founder-price.ts", import.meta.url),
   "utf8",
 );
+const saasReadinessSrc = readFileSync(
+  new URL("../src/lib/saas-billing/readiness.ts", import.meta.url),
+  "utf8",
+);
+const saasBannerSrc = readFileSync(
+  new URL("../src/components/settings/saas-entitlement-banner.tsx", import.meta.url),
+  "utf8",
+);
+const marketingHomeSrc = readFileSync(
+  new URL("../src/app/(tbbt)/home/page.tsx", import.meta.url),
+  "utf8",
+);
+const signUpSrc = readFileSync(new URL("../src/app/(auth)/sign-up/page.tsx", import.meta.url), "utf8");
 const saasEvents = readFileSync(new URL("../src/lib/saas-billing/events.ts", import.meta.url), "utf8");
 const webhookSrc = readFileSync(new URL("../src/app/api/stripe/webhook/route.ts", import.meta.url), "utf8");
 const webhookDispatchSrc = readFileSync(
@@ -314,8 +330,35 @@ check(
     !saasOps.includes('process.env.TBBT_SAAS_BILLING_ADAPTER === "fake"') &&
     saasFounderPriceSrc.includes("isFakeSaasBillingAdapterEnabled()") &&
     !saasFounderPriceSrc.includes('process.env.TBBT_SAAS_BILLING_ADAPTER === "fake"') &&
+    saasReadinessSrc.includes("isFakeSaasBillingAdapterEnabled") &&
+    !saasReadinessSrc.includes('process.env.TBBT_SAAS_BILLING_ADAPTER === "fake"') &&
     paymentsConfigSrc.includes("isFakePaymentsAdapterEnabled") &&
     paymentsConfigSrc.includes('process.env.VERCEL_ENV === "production"'),
+);
+check(
+  "Checkout and Portal use the canonical production readiness check",
+  saasReadinessSrc.includes("resolveSaasBillingReadiness") &&
+    saasOps.includes("resolveSaasBillingReadiness") &&
+    saasOps.includes("checkoutReady") &&
+    saasOps.includes("portalReady") &&
+    saasReadinessSrc.includes("invalid_founder_price") &&
+    saasReadinessSrc.includes("This does not throw at import time"),
+);
+check(
+  "OWNER billing UI shows a configuration problem and hides Checkout that cannot start",
+  settingsSrc.includes("billingNotReadyMessage") &&
+    settingsSrc.includes("{billing.checkoutPossible ? <SaasSubscribeButton /> : null}") &&
+    settingsSrc.includes("{billing.portalPossible ? <SaasBillingPortalButton /> : null}") &&
+    saasBannerSrc.includes("readiness.checkoutReady") &&
+    saasBannerSrc.includes("readiness.portalReady"),
+);
+check(
+  "Marketing, signup, and first-run setup do not import SaaS billing readiness",
+  !marketingHomeSrc.includes("resolveSaasBillingReadiness") &&
+    !signUpSrc.includes("resolveSaasBillingReadiness") &&
+    !firstRunSrc.includes("resolveSaasBillingReadiness") &&
+    !starterSrc.includes("resolveSaasBillingReadiness") &&
+    !websiteSrc.includes("resolveSaasBillingReadiness"),
 );
 check(
   "SaaS module does not hardcode a production dollar amount",
@@ -398,6 +441,162 @@ check(
 check(
   "real Stripe configuration still selects the Stripe SaaS provider",
   isInjectedFakeProvider(getSaasBillingProvider()) === false,
+);
+
+async function withSaasEnv(overrides, fn) {
+  const previous = {};
+  for (const key of Object.keys(overrides)) {
+    previous[key] = process.env[key];
+    if (overrides[key] === undefined) delete process.env[key];
+    else process.env[key] = overrides[key];
+  }
+  resetSaasBillingProvider();
+  try {
+    return await fn();
+  } finally {
+    for (const key of Object.keys(overrides)) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+    resetSaasBillingProvider();
+  }
+}
+
+console.log("\nUNIT — production Founder billing readiness fails closed");
+await withSaasEnv(
+  {
+    VERCEL_ENV: "production",
+    TBBT_SAAS_BILLING_ADAPTER: "fake",
+    STRIPE_SAAS_PRICE_ID: undefined,
+    STRIPE_SECRET_KEY: "sk_test_saas_billing_check",
+    NEXT_PUBLIC_APP_URL: "https://www.collproreno.com",
+  },
+  () => {
+    const ready = resolveSaasBillingReadiness();
+    check(
+      "production with no STRIPE_SAAS_PRICE_ID is not checkout-ready",
+      ready.reason === "missing_price" &&
+        ready.checkoutReady === false &&
+        ready.configured === false &&
+        ready.ownerMessage === SAAS_BILLING_NOT_READY_OWNER_MESSAGE &&
+        !String(ready.ownerMessage).includes("sk_"),
+    );
+  },
+);
+await withSaasEnv(
+  {
+    VERCEL_ENV: "production",
+    TBBT_SAAS_BILLING_ADAPTER: "fake",
+    STRIPE_SAAS_PRICE_ID: "price_saas_configured",
+    STRIPE_SECRET_KEY: undefined,
+    NEXT_PUBLIC_APP_URL: "https://www.collproreno.com",
+  },
+  () => {
+    const ready = resolveSaasBillingReadiness();
+    check(
+      "production with no Stripe secret key is not checkout-ready",
+      ready.reason === "missing_secret" &&
+        ready.checkoutReady === false &&
+        ready.portalReady === false &&
+        ready.configured === false &&
+        ready.ownerMessage === SAAS_BILLING_NOT_READY_OWNER_MESSAGE,
+    );
+  },
+);
+await withSaasEnv(
+  {
+    VERCEL_ENV: "production",
+    TBBT_SAAS_BILLING_ADAPTER: "fake",
+    STRIPE_SAAS_PRICE_ID: "price_saas_wrong",
+    STRIPE_SECRET_KEY: "sk_test_saas_billing_check",
+    NEXT_PUBLIC_APP_URL: "https://www.collproreno.com",
+  },
+  () => {
+    const warning =
+      "The configured Stripe Price does not match the approved Founder Plan of $49/month. Checkout still uses STRIPE_SAAS_PRICE_ID and will not pretend the charge is $49.";
+    const ready = resolveSaasBillingReadiness({
+      founderPrice: { matchesFounderPrice: false, warning },
+    });
+    check(
+      "invalid Founder Price does not pass readiness",
+      ready.reason === "invalid_founder_price" &&
+        ready.checkoutReady === false &&
+        ready.configured === true &&
+        ready.ownerMessage === warning,
+    );
+    const unverified = resolveSaasBillingReadiness({
+      founderPrice: { matchesFounderPrice: null, warning: null },
+    });
+    check(
+      "unverified Founder Price retrieve does not fail closed by itself",
+      unverified.reason === "ready" && unverified.checkoutReady === true,
+    );
+  },
+);
+await withSaasEnv(
+  {
+    VERCEL_ENV: "preview",
+    TBBT_SAAS_BILLING_ADAPTER: undefined,
+    STRIPE_SAAS_PRICE_ID: "price_saas_configured",
+    STRIPE_SECRET_KEY: "sk_test_saas_billing_check",
+    NEXT_PUBLIC_APP_URL: undefined,
+    VERCEL_URL: undefined,
+    VERCEL_BRANCH_URL: undefined,
+  },
+  () => {
+    const ready = resolveSaasBillingReadiness({ appUrl: null });
+    check(
+      "missing application URL is not checkout-ready",
+      ready.reason === "missing_app_url" &&
+        ready.checkoutReady === false &&
+        ready.portalReady === false &&
+        ready.ownerMessage === SAAS_BILLING_APP_URL_OWNER_MESSAGE,
+    );
+  },
+);
+await withSaasEnv(
+  {
+    VERCEL_ENV: "production",
+    TBBT_SAAS_BILLING_ADAPTER: "fake",
+    STRIPE_SAAS_PRICE_ID: "price_saas_configured",
+    STRIPE_SECRET_KEY: "sk_test_saas_billing_check",
+    NEXT_PUBLIC_APP_URL: "https://www.collproreno.com",
+  },
+  () => {
+    const ready = resolveSaasBillingReadiness({
+      founderPrice: { matchesFounderPrice: true, warning: null },
+    });
+    check(
+      "properly configured production Stripe billing remains usable",
+      ready.reason === "ready" &&
+        ready.checkoutReady === true &&
+        ready.portalReady === true &&
+        ready.configured === true &&
+        ready.ownerMessage === null &&
+        isFakeSaasBillingAdapterEnabled() === false &&
+        isSaasBillingConfigured() === true &&
+        isInjectedFakeProvider(getSaasBillingProvider()) === false,
+    );
+  },
+);
+await withSaasEnv(
+  {
+    VERCEL_ENV: "preview",
+    TBBT_SAAS_BILLING_ADAPTER: "fake",
+    STRIPE_SAAS_PRICE_ID: undefined,
+    STRIPE_SECRET_KEY: undefined,
+    NEXT_PUBLIC_APP_URL: "http://saas-billing.test",
+  },
+  () => {
+    const ready = resolveSaasBillingReadiness();
+    check(
+      "preview/local fake billing still works for tests",
+      ready.reason === "ready" &&
+        ready.checkoutReady === true &&
+        isFakeSaasBillingAdapterEnabled() === true &&
+        isSaasBillingConfigured() === true,
+    );
+  },
 );
 
 restoreSaasEnv();
@@ -567,6 +766,170 @@ try {
   process.env.TBBT_SAAS_BILLING_ADAPTER = "fake";
   resetSaasBillingProvider();
   setSaasBillingProvider(provider);
+
+  console.log("\nTEST — production Checkout/Portal fail closed without live Stripe readiness");
+  const failClosed = await seedBusiness("Fail Closed SaaS");
+  const failClosedAccess = makeAccess(
+    failClosed.business.id,
+    "OWNER",
+    failClosed.membership.id,
+    failClosed.ownerUser.email,
+  );
+  const savedFailClosed = {
+    VERCEL_ENV: process.env.VERCEL_ENV,
+    TBBT_SAAS_BILLING_ADAPTER: process.env.TBBT_SAAS_BILLING_ADAPTER,
+    STRIPE_SAAS_PRICE_ID: process.env.STRIPE_SAAS_PRICE_ID,
+    STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+  };
+  function restoreFailClosedEnv() {
+    for (const [key, value] of Object.entries(savedFailClosed)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetSaasBillingProvider();
+    setSaasBillingProvider(provider);
+  }
+
+  process.env.VERCEL_ENV = "production";
+  process.env.TBBT_SAAS_BILLING_ADAPTER = "fake";
+  delete process.env.STRIPE_SAAS_PRICE_ID;
+  process.env.STRIPE_SECRET_KEY = "sk_test_saas_billing_check";
+  resetSaasBillingProvider();
+  const missingPriceCheckouts = provider.checkouts.length;
+  try {
+    await startSaasSubscriptionCheckout(prisma, failClosedAccess);
+    check("production with no STRIPE_SAAS_PRICE_ID cannot start Checkout", false);
+  } catch (error) {
+    check(
+      "production with no STRIPE_SAAS_PRICE_ID cannot start Checkout",
+      error instanceof SaasBillingError &&
+        error.message === SAAS_BILLING_NOT_READY_OWNER_MESSAGE,
+    );
+  }
+  check(
+    "production missing Price ID does not record a fake Checkout session",
+    provider.checkouts.length === missingPriceCheckouts,
+  );
+
+  process.env.STRIPE_SAAS_PRICE_ID = "price_saas_configured";
+  delete process.env.STRIPE_SECRET_KEY;
+  resetSaasBillingProvider();
+  const missingSecretCheckouts = provider.checkouts.length;
+  try {
+    await startSaasSubscriptionCheckout(prisma, failClosedAccess);
+    check("production with no Stripe secret key cannot start Checkout", false);
+  } catch (error) {
+    check(
+      "production with no Stripe secret key cannot start Checkout",
+      error instanceof SaasBillingError &&
+        error.message === SAAS_BILLING_NOT_READY_OWNER_MESSAGE,
+    );
+  }
+  check(
+    "production missing secret does not record a fake Checkout session",
+    provider.checkouts.length === missingSecretCheckouts,
+  );
+
+  await prisma.businessSaasSubscription.upsert({
+    where: { businessId: failClosed.business.id },
+    create: {
+      businessId: failClosed.business.id,
+      stripeCustomerId: "cus_fail_closed",
+      status: "none",
+    },
+    update: { stripeCustomerId: "cus_fail_closed", status: "none" },
+  });
+  try {
+    await startSaasBillingPortal(prisma, failClosedAccess);
+    check("production without a Stripe secret cannot open Billing Portal", false);
+  } catch (error) {
+    check(
+      "production without a Stripe secret cannot open Billing Portal",
+      error instanceof SaasBillingError &&
+        error.message === SAAS_BILLING_NOT_READY_OWNER_MESSAGE,
+    );
+  }
+
+  const failClosedRow = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: failClosed.business.id },
+  });
+  const failClosedEntitlement = await loadSaasEntitlement(prisma, failClosed.business);
+  const failClosedSnapshot = await loadSaasBillingSnapshot(prisma, failClosed.business.id);
+  check(
+    "failed Checkout/readiness cannot transition entitlement to subscribed_active",
+    failClosedEntitlement.state !== "subscribed_active" &&
+      failClosedSnapshot.entitlement.state !== "subscribed_active" &&
+      failClosedSnapshot.checkoutPossible === false &&
+      failClosedRow?.status !== "active" &&
+      failClosedRow?.stripeSubscriptionId == null,
+  );
+  check(
+    "missing production billing configuration still loads billing and entitlement",
+    failClosedSnapshot.billingReadinessReason === "missing_secret" &&
+      failClosedSnapshot.billingNotReadyMessage === SAAS_BILLING_NOT_READY_OWNER_MESSAGE &&
+      failClosedEntitlement.state !== "subscribed_active" &&
+      failClosedEntitlement.canOperate === true,
+  );
+
+  const unconfiguredTenant = await seedBusiness("Existing Trial SaaS");
+  process.env.VERCEL_ENV = "production";
+  process.env.TBBT_SAAS_BILLING_ADAPTER = "fake";
+  delete process.env.STRIPE_SAAS_PRICE_ID;
+  delete process.env.STRIPE_SECRET_KEY;
+  resetSaasBillingProvider();
+  const unconfiguredSnapshot = await loadSaasBillingSnapshot(prisma, unconfiguredTenant.business.id);
+  const unconfiguredEntitlement = await loadSaasEntitlement(prisma, unconfiguredTenant.business);
+  check(
+    "missing production billing configuration does not break unrelated app routes",
+    unconfiguredSnapshot.checkoutPossible === false &&
+      unconfiguredSnapshot.entitlement.state !== "subscribed_active" &&
+      unconfiguredEntitlement.canOperate === true &&
+      postAuthenticationPath({
+        role: "OWNER",
+        business: {
+          slug: "brand-new-unconfigured",
+          tradeCode: "HANDYMAN",
+          firstRunSetupCompletedAt: null,
+          starterServicesSetupCompletedAt: null,
+          websiteSetupCompletedAt: null,
+        },
+      }) === "/setup",
+  );
+
+  process.env.STRIPE_SAAS_PRICE_ID = "price_saas_configured";
+  process.env.STRIPE_SECRET_KEY = "sk_test_saas_billing_check";
+  process.env.TBBT_SAAS_BILLING_ADAPTER = "fake";
+  resetSaasBillingProvider();
+  setSaasBillingProvider(provider);
+  const readyProd = await seedBusiness("Ready Prod SaaS");
+  const readyProdAccess = makeAccess(
+    readyProd.business.id,
+    "OWNER",
+    readyProd.membership.id,
+    readyProd.ownerUser.email,
+  );
+  const readySnapshot = await loadSaasBillingSnapshot(prisma, readyProd.business.id);
+  const readyCheckout = await startSaasSubscriptionCheckout(prisma, readyProdAccess);
+  check(
+    "properly configured production Stripe billing can still start Checkout",
+    readySnapshot.billingReadinessReason === "ready" &&
+      readySnapshot.checkoutPossible === true &&
+      readyCheckout.url.startsWith("https://checkout.stripe.test/subscribe/") &&
+      isFakeSaasBillingAdapterEnabled() === false,
+  );
+  check(
+    "configured production Checkout still does not mark subscribed_active from start",
+    (await prisma.businessSaasSubscription.findUnique({
+      where: { businessId: readyProd.business.id },
+    }))?.status === "none",
+  );
+
+  restoreFailClosedEnv();
+  check(
+    "preview/local fake billing still starts Checkout after the production readiness tests",
+    isFakeSaasBillingAdapterEnabled() === true,
+  );
 
   console.log("\nTEST — Duplicate active subscriptions are prevented");
   provider.addSubscription({

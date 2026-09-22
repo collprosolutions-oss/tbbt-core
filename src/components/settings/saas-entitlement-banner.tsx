@@ -11,6 +11,7 @@ import {
   SAAS_PAYMENT_PROBLEM_OWNER_MESSAGE,
   SAAS_PAYMENT_PROBLEM_TEAM_MESSAGE,
 } from "@/lib/saas-billing/messages";
+import { resolveSaasBillingReadiness } from "@/lib/saas-billing/readiness";
 import { cn } from "@/lib/utils";
 
 function accessThroughLabel(value: string | null) {
@@ -39,6 +40,7 @@ export function SaasEntitlementBanner({
   }
 
   const ownerCanManage = role === "OWNER";
+  const readiness = resolveSaasBillingReadiness();
   const tone =
     entitlement.state === "subscription_required"
       ? "border-destructive/40 bg-destructive/5"
@@ -85,7 +87,9 @@ export function SaasEntitlementBanner({
           Existing customers, jobs, estimates, invoices, and other records are retained.
         </p>
       ) : null}
-      {ownerCanManage && entitlement.state === "subscription_required" ? (
+      {ownerCanManage &&
+      entitlement.state === "subscription_required" &&
+      readiness.checkoutReady ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <SaasSubscribeButton />
           <Link href={SAAS_BILLING_SETTINGS_HREF} className="text-sm font-medium text-primary underline-offset-4 hover:underline">
@@ -93,7 +97,8 @@ export function SaasEntitlementBanner({
           </Link>
         </div>
       ) : ownerCanManage &&
-        (entitlement.state === "payment_problem" || cancellationScheduled) ? (
+        (entitlement.state === "payment_problem" || cancellationScheduled) &&
+        readiness.portalReady ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <SaasBillingPortalButton />
           <Link href={SAAS_BILLING_SETTINGS_HREF} className="text-sm font-medium text-primary underline-offset-4 hover:underline">
