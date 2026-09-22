@@ -36,7 +36,6 @@ import {
   TBBT_RESOURCES_PAGE_HEADLINE,
   TBBT_RESOURCES_PAGE_HEADLINE_ACCENT,
   TBBT_RESOURCES_PAGE_HERO_SRC,
-  TBBT_RESOURCES_PAGE_SCRIPT,
   TBBT_RESOURCES_PAGE_SUPPORT,
   TBBT_RESOURCES_PAGE_WATCH_LABEL,
   TBBT_RESOURCES_VALUE_POINTS,
@@ -80,19 +79,6 @@ export function TbbtResourcesPage() {
                 <span key={line}>{line}</span>
               ))}
             </p>
-            <ul className="tbbt-res-values">
-              {TBBT_RESOURCES_VALUE_POINTS.map((item) => {
-                const Icon = VALUE_ICONS[item.icon];
-                return (
-                  <li key={item.title}>
-                    <span aria-hidden="true">
-                      <Icon size={18} />
-                    </span>
-                    {item.title}
-                  </li>
-                );
-              })}
-            </ul>
           </div>
           <div className="tbbt-res-hero-figure">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -100,12 +86,20 @@ export function TbbtResourcesPage() {
               src={TBBT_RESOURCES_PAGE_HERO_SRC}
               alt="TBBT mug, tools, and tape measure on a workbench"
             />
-            <p className="tbbt-res-script">
-              {TBBT_RESOURCES_PAGE_SCRIPT.map((line) => (
-                <span key={line}>{line}</span>
-              ))}
-            </p>
           </div>
+          <ul className="tbbt-res-values">
+            {TBBT_RESOURCES_VALUE_POINTS.map((item) => {
+              const Icon = VALUE_ICONS[item.icon];
+              return (
+                <li key={item.title}>
+                  <span aria-hidden="true">
+                    <Icon size={18} />
+                  </span>
+                  {item.title}
+                </li>
+              );
+            })}
+          </ul>
         </div>
       </section>
 
