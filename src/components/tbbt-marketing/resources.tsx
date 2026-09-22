@@ -179,9 +179,7 @@ export function TbbtResourcesPage() {
               {TBBT_RESOURCES_DOWNLOADS.map((item) => (
                 <li key={item.title}>
                   <DownloadFileIcon format={item.format} />
-                  <span>
-                    {item.title} ({item.format})
-                  </span>
+                  <span>{`${item.title} (${item.format})`}</span>
                   <Download size={15} aria-hidden="true" />
                 </li>
               ))}
