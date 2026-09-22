@@ -70,6 +70,7 @@ const {
   parseSaasBillingEvent,
   resetSaasBillingProvider,
   resetSaasBillingSchemaEnsure,
+  saasBillingWebhookSecrets,
   SAAS_CHECKOUT_PURPOSE,
   setSaasBillingProvider,
   startSaasBillingPortal,
@@ -79,6 +80,7 @@ const {
 } = await import("@/lib/saas-billing");
 const {
   dispatchStripeWebhookEvent,
+  stripeWebhookSecretsConfigured,
   verifyStripeWebhookPayload,
 } = await import("@/lib/stripe-webhook-dispatch");
 
@@ -289,7 +291,22 @@ check(
     webhookStack.includes("parseSaasBillingEvent") &&
     webhookStack.includes("parseCheckoutPaymentEvent") &&
     webhookSrc.includes("Invalid signature.") &&
-    webhookDispatchSrc.includes("system: \"saas\""),
+    webhookDispatchSrc.includes("system: \"saas\"") &&
+    saasEvents.includes('"checkout.session.async_payment_succeeded"') &&
+    saasEvents.includes('"customer.subscription.resumed"') &&
+    saasEvents.includes('"invoice.paid"') &&
+    saasEvents.includes('"invoice.payment_succeeded"'),
+);
+check(
+  "Webhook apply path never uses fake Stripe adapters",
+  !webhookSrc.includes("createFakeSaasBillingProvider") &&
+    !webhookSrc.includes("createFakePaymentProvider") &&
+    !webhookDispatchSrc.includes("createFakeSaasBillingProvider") &&
+    !webhookDispatchSrc.includes("createFakePaymentProvider") &&
+    !webhookDispatchSrc.includes("isFakeSaasBillingAdapterEnabled") &&
+    !webhookDispatchSrc.includes("isFakePaymentsAdapterEnabled") &&
+    !webhookDispatchSrc.includes("getSaasBillingProvider") &&
+    !webhookDispatchSrc.includes("getPaymentProvider"),
 );
 check(
   "Auth proxy lets Stripe reach /api/stripe/webhook without a session cookie",
@@ -319,6 +336,10 @@ check(
     envExample.includes("the trade business pays TBBT") &&
     envExample.includes("This is not Stripe Connect") &&
     envExample.includes("customer.subscription.updated") &&
+    envExample.includes("customer.subscription.resumed") &&
+    envExample.includes("checkout.session.async_payment_succeeded") &&
+    envExample.includes("A signature that matches") &&
+    envExample.includes("neither secret is rejected") &&
     envExample.includes("ignores TBBT_SAAS_BILLING_ADAPTER=fake") &&
     envExample.includes("A missing Price ID alone does not") &&
     envExample.includes("block Billing Portal") &&
@@ -626,6 +647,85 @@ await withSaasEnv(
         ready.checkoutReady === true &&
         isFakeSaasBillingAdapterEnabled() === true &&
         isSaasBillingConfigured() === true,
+    );
+  },
+);
+
+console.log("\nUNIT — production webhook secrets verify before any business write");
+function signWebhookPayload(payload, secret) {
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "sk_test_saas_billing_check");
+  return stripe.webhooks.generateTestHeaderString({ payload, secret });
+}
+await withSaasEnv(
+  {
+    STRIPE_SECRET_KEY: "sk_test_saas_billing_check",
+    STRIPE_WEBHOOK_SECRET: "whsec_shared_destination",
+    STRIPE_SAAS_WEBHOOK_SECRET: undefined,
+  },
+  () => {
+    const payload = JSON.stringify({ id: "evt_shared_secret", type: "ping" });
+    check(
+      "one shared destination secret is enough to verify",
+      stripeWebhookSecretsConfigured() === true &&
+        saasBillingWebhookSecrets().length === 1 &&
+        verifyStripeWebhookPayload(payload, signWebhookPayload(payload, "whsec_shared_destination")).id ===
+          "evt_shared_secret",
+    );
+  },
+);
+await withSaasEnv(
+  {
+    STRIPE_SECRET_KEY: "sk_test_saas_billing_check",
+    STRIPE_WEBHOOK_SECRET: "whsec_connect_destination",
+    STRIPE_SAAS_WEBHOOK_SECRET: "whsec_saas_destination",
+  },
+  () => {
+    const payload = JSON.stringify({ id: "evt_dual_secret", type: "ping" });
+    check(
+      "dedicated SaaS secret verifies when destinations differ",
+      stripeWebhookSecretsConfigured() === true &&
+        saasBillingWebhookSecrets().length === 2 &&
+        verifyStripeWebhookPayload(payload, signWebhookPayload(payload, "whsec_saas_destination")).id ===
+          "evt_dual_secret",
+    );
+    check(
+      "Connect destination secret still verifies when a SaaS secret is also set",
+      verifyStripeWebhookPayload(payload, signWebhookPayload(payload, "whsec_connect_destination")).id ===
+        "evt_dual_secret",
+    );
+    try {
+      verifyStripeWebhookPayload(payload, signWebhookPayload(payload, "whsec_neither_destination"));
+      check("signature that matches neither secret is rejected", false);
+    } catch {
+      check("signature that matches neither secret is rejected", true);
+    }
+  },
+);
+await withSaasEnv(
+  {
+    STRIPE_SECRET_KEY: "sk_test_saas_billing_check",
+    STRIPE_WEBHOOK_SECRET: undefined,
+    STRIPE_SAAS_WEBHOOK_SECRET: "whsec_saas_only",
+  },
+  () => {
+    const payload = JSON.stringify({ id: "evt_saas_only", type: "ping" });
+    check(
+      "SaaS-only webhook secret still configures the shared endpoint",
+      stripeWebhookSecretsConfigured() === true &&
+        verifyStripeWebhookPayload(payload, signWebhookPayload(payload, "whsec_saas_only")).id ===
+          "evt_saas_only",
+    );
+  },
+);
+await withSaasEnv(
+  {
+    STRIPE_WEBHOOK_SECRET: undefined,
+    STRIPE_SAAS_WEBHOOK_SECRET: undefined,
+  },
+  () => {
+    check(
+      "missing both webhook secrets leaves the endpoint unconfigured",
+      stripeWebhookSecretsConfigured() === false,
     );
   },
 );
@@ -1166,6 +1266,150 @@ try {
   } catch (error) {
     check("ADMIN cannot open Billing Portal", error instanceof ForbiddenError);
   }
+
+  console.log("\nTEST — SaaS and Connect webhook dispatch stay isolated");
+  const isolation = await seedBusiness("Webhook Isolation SaaS");
+  const isolationCustomer = await prisma.customer.create({
+    data: { businessId: isolation.business.id, name: "Isolation Customer" },
+  });
+  const isolationProperty = await prisma.property.create({
+    data: {
+      businessId: isolation.business.id,
+      customerId: isolationCustomer.id,
+      addressLine1: "1 Isolation St",
+    },
+  });
+  const isolationJob = await prisma.job.create({
+    data: {
+      businessId: isolation.business.id,
+      customerId: isolationCustomer.id,
+      propertyId: isolationProperty.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  const isolationInvoice = await prisma.invoice.create({
+    data: {
+      businessId: isolation.business.id,
+      customerId: isolationCustomer.id,
+      jobId: isolationJob.id,
+      status: "SENT",
+      total: "50.00",
+    },
+  });
+  await prisma.businessPaymentAccount.create({
+    data: {
+      businessId: isolation.business.id,
+      provider: "stripe",
+      stripeAccountId: "acct_isolation",
+    },
+  });
+  const saasIsolation = await dispatchStripeWebhookEvent(
+    prisma,
+    saasCheckoutEvent({
+      id: "evt_isolation_saas",
+      businessId: isolation.business.id,
+      customerId: "cus_isolation",
+      subscriptionId: "sub_isolation",
+    }),
+  );
+  const invoiceAfterSaas = await prisma.invoice.findUnique({
+    where: { id: isolationInvoice.id },
+  });
+  const paymentsAfterSaas = await prisma.payment.count({
+    where: { invoiceId: isolationInvoice.id },
+  });
+  check(
+    "SaaS webhook is routed to the SaaS handler",
+    saasIsolation.system === "saas" && saasIsolation.applied === true,
+  );
+  check(
+    "SaaS webhook does not mark a customer invoice paid",
+    invoiceAfterSaas?.status === "SENT" && paymentsAfterSaas === 0,
+  );
+  const saasBeforeConnect = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: isolation.business.id },
+  });
+  const connectIsolation = await dispatchStripeWebhookEvent(prisma, {
+    id: "evt_isolation_connect",
+    type: "checkout.session.completed",
+    account: "acct_isolation",
+    data: {
+      object: {
+        object: "checkout.session",
+        id: "cs_isolation_1",
+        mode: "payment",
+        payment_status: "paid",
+        amount_total: 5000,
+        currency: "usd",
+        payment_intent: "pi_isolation_1",
+        metadata: {
+          purpose: "invoice_balance",
+          businessId: isolation.business.id,
+          invoiceId: isolationInvoice.id,
+          connectedAccountId: "acct_isolation",
+        },
+      },
+    },
+  });
+  const saasAfterConnect = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: isolation.business.id },
+  });
+  const invoiceAfterConnect = await prisma.invoice.findUnique({
+    where: { id: isolationInvoice.id },
+  });
+  check(
+    "Connect webhook is routed to the payment handler",
+    connectIsolation.system === "connect" && connectIsolation.applied === true,
+  );
+  check(
+    "Connect webhook marks only the customer invoice paid",
+    invoiceAfterConnect?.status === "PAID",
+  );
+  check(
+    "Connect webhook does not change TBBT SaaS subscription state",
+    saasAfterConnect?.status === saasBeforeConnect?.status &&
+      saasAfterConnect?.stripeSubscriptionId === saasBeforeConnect?.stripeSubscriptionId,
+  );
+  const replaySaas = await dispatchStripeWebhookEvent(
+    prisma,
+    saasCheckoutEvent({
+      id: "evt_isolation_saas",
+      businessId: isolation.business.id,
+      customerId: "cus_isolation",
+      subscriptionId: "sub_isolation",
+    }),
+  );
+  const replayConnect = await dispatchStripeWebhookEvent(prisma, {
+    id: "evt_isolation_connect",
+    type: "checkout.session.completed",
+    account: "acct_isolation",
+    data: {
+      object: {
+        object: "checkout.session",
+        id: "cs_isolation_1",
+        mode: "payment",
+        payment_status: "paid",
+        amount_total: 5000,
+        currency: "usd",
+        payment_intent: "pi_isolation_1",
+        metadata: {
+          purpose: "invoice_balance",
+          businessId: isolation.business.id,
+          invoiceId: isolationInvoice.id,
+          connectedAccountId: "acct_isolation",
+        },
+      },
+    },
+  });
+  check(
+    "Replayed SaaS event is idempotent",
+    replaySaas.applied === false && replaySaas.reason === "already_processed",
+  );
+  check(
+    "Replayed Connect event is idempotent",
+    replayConnect.applied === false && replayConnect.reason === "already_paid",
+  );
 
   console.log("\nTEST — Existing tenants remain usable and are not silently subscribed");
   const now = new Date();
