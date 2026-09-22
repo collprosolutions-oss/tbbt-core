@@ -32,8 +32,21 @@ export function saasBillingWebhookSecrets(): string[] {
   return [...new Set(secrets)];
 }
 
+/**
+ * The fake adapter is for local/script tests only. Production must talk
+ * to Stripe with STRIPE_SAAS_PRICE_ID. Never treat a fake adapter as a
+ * live TBBT subscription platform. Same production-safety pattern as
+ * Connect payments (`isFakePaymentsAdapterEnabled`) and customer SMS.
+ */
+export function isFakeSaasBillingAdapterEnabled(): boolean {
+  if (process.env.VERCEL_ENV === "production") {
+    return false;
+  }
+  return process.env.TBBT_SAAS_BILLING_ADAPTER === "fake";
+}
+
 export function isSaasBillingConfigured(): boolean {
-  if (process.env.TBBT_SAAS_BILLING_ADAPTER === "fake") {
+  if (isFakeSaasBillingAdapterEnabled()) {
     return true;
   }
   return Boolean(getSaasPriceId());

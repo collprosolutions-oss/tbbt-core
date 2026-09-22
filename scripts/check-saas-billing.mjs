@@ -58,7 +58,12 @@ const {
   applyParsedSaasBillingEvent,
   applySaasBillingStripeEvent,
   constructStripeWebhookEventWithSecrets,
+  getSaasBillingProvider,
+  inspectConfiguredFounderPrice,
+  isFakeSaasBillingAdapterEnabled,
+  isSaasBillingConfigured,
   loadSaasBillingSnapshot,
+  loadSaasEntitlement,
   parseSaasBillingEvent,
   resetSaasBillingProvider,
   resetSaasBillingSchemaEnsure,
@@ -67,6 +72,7 @@ const {
   startSaasBillingPortal,
   startSaasSubscriptionCheckout,
   SaasBillingError,
+  TBBT_FOUNDER_PRICE_OPERATIONAL_REQUIREMENT,
 } = await import("@/lib/saas-billing");
 const {
   dispatchStripeWebhookEvent,
@@ -193,7 +199,20 @@ async function verifyAndDispatch(event, secret = process.env.STRIPE_WEBHOOK_SECR
 }
 
 const saasDir = readFileSync(new URL("../src/lib/saas-billing/stripe.ts", import.meta.url), "utf8");
+const saasConfig = readFileSync(new URL("../src/lib/saas-billing/config.ts", import.meta.url), "utf8");
+const saasProviderSrc = readFileSync(
+  new URL("../src/lib/saas-billing/provider.ts", import.meta.url),
+  "utf8",
+);
+const paymentsConfigSrc = readFileSync(
+  new URL("../src/lib/payments/config.ts", import.meta.url),
+  "utf8",
+);
 const saasOps = readFileSync(new URL("../src/lib/saas-billing/ops.ts", import.meta.url), "utf8");
+const saasFounderPriceSrc = readFileSync(
+  new URL("../src/lib/saas-billing/founder-price.ts", import.meta.url),
+  "utf8",
+);
 const saasEvents = readFileSync(new URL("../src/lib/saas-billing/events.ts", import.meta.url), "utf8");
 const webhookSrc = readFileSync(new URL("../src/app/api/stripe/webhook/route.ts", import.meta.url), "utf8");
 const webhookDispatchSrc = readFileSync(
@@ -281,7 +300,22 @@ check(
   envExample.includes("STRIPE_SAAS_PRICE_ID") &&
     envExample.includes("the trade business pays TBBT") &&
     envExample.includes("This is not Stripe Connect") &&
-    envExample.includes("customer.subscription.updated"),
+    envExample.includes("customer.subscription.updated") &&
+    envExample.includes("ignores TBBT_SAAS_BILLING_ADAPTER=fake"),
+);
+check(
+  "SaaS fake adapter uses the same Vercel production guard as Connect payments",
+  saasConfig.includes("isFakeSaasBillingAdapterEnabled") &&
+    saasConfig.includes('process.env.VERCEL_ENV === "production"') &&
+    saasConfig.includes("isFakePaymentsAdapterEnabled") &&
+    saasProviderSrc.includes("isFakeSaasBillingAdapterEnabled()") &&
+    !saasProviderSrc.includes('process.env.TBBT_SAAS_BILLING_ADAPTER === "fake"') &&
+    saasOps.includes("isFakeSaasBillingAdapterEnabled()") &&
+    !saasOps.includes('process.env.TBBT_SAAS_BILLING_ADAPTER === "fake"') &&
+    saasFounderPriceSrc.includes("isFakeSaasBillingAdapterEnabled()") &&
+    !saasFounderPriceSrc.includes('process.env.TBBT_SAAS_BILLING_ADAPTER === "fake"') &&
+    paymentsConfigSrc.includes("isFakePaymentsAdapterEnabled") &&
+    paymentsConfigSrc.includes('process.env.VERCEL_ENV === "production"'),
 );
 check(
   "SaaS module does not hardcode a production dollar amount",
@@ -290,6 +324,86 @@ check(
 check(
   "SaaS events ignore Connect-account payloads",
   saasEvents.includes("Connect-account events belong to customer invoice/deposit"),
+);
+
+console.log("\nUNIT — fake SaaS adapter never operates in Vercel production");
+const savedSaasEnv = {
+  VERCEL_ENV: process.env.VERCEL_ENV,
+  TBBT_SAAS_BILLING_ADAPTER: process.env.TBBT_SAAS_BILLING_ADAPTER,
+  STRIPE_SAAS_PRICE_ID: process.env.STRIPE_SAAS_PRICE_ID,
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+};
+function restoreSaasEnv() {
+  for (const [key, value] of Object.entries(savedSaasEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  resetSaasBillingProvider();
+}
+function isInjectedFakeProvider(provider) {
+  return Boolean(provider && typeof provider === "object" && "customers" in provider);
+}
+
+process.env.VERCEL_ENV = "production";
+process.env.TBBT_SAAS_BILLING_ADAPTER = "fake";
+delete process.env.STRIPE_SAAS_PRICE_ID;
+resetSaasBillingProvider();
+check(
+  "production ignores TBBT_SAAS_BILLING_ADAPTER=fake",
+  isFakeSaasBillingAdapterEnabled() === false,
+);
+check(
+  "production fake adapter does not mark SaaS billing configured",
+  isSaasBillingConfigured() === false,
+);
+check(
+  "production selects the Stripe SaaS provider, not the fake",
+  isInjectedFakeProvider(getSaasBillingProvider()) === false,
+);
+const productionFakePrice = await inspectConfiguredFounderPrice();
+check(
+  "production fake adapter does not skip Founder Price inspection",
+  productionFakePrice.warning === TBBT_FOUNDER_PRICE_OPERATIONAL_REQUIREMENT &&
+    productionFakePrice.configuredPriceId === null,
+);
+
+process.env.VERCEL_ENV = "preview";
+process.env.TBBT_SAAS_BILLING_ADAPTER = "fake";
+resetSaasBillingProvider();
+check(
+  "preview still allows the fake SaaS adapter for tests",
+  isFakeSaasBillingAdapterEnabled() === true && isSaasBillingConfigured() === true,
+);
+check(
+  "non-production still selects the fake SaaS provider",
+  isInjectedFakeProvider(getSaasBillingProvider()) === true,
+);
+
+delete process.env.VERCEL_ENV;
+process.env.TBBT_SAAS_BILLING_ADAPTER = "fake";
+resetSaasBillingProvider();
+check(
+  "local/test without VERCEL_ENV still allows the fake SaaS adapter",
+  isFakeSaasBillingAdapterEnabled() === true &&
+    isInjectedFakeProvider(getSaasBillingProvider()) === true,
+);
+
+delete process.env.TBBT_SAAS_BILLING_ADAPTER;
+process.env.STRIPE_SAAS_PRICE_ID = "price_saas_configured";
+resetSaasBillingProvider();
+check(
+  "real Stripe Price ID still configures SaaS billing without the fake adapter",
+  isFakeSaasBillingAdapterEnabled() === false && isSaasBillingConfigured() === true,
+);
+check(
+  "real Stripe configuration still selects the Stripe SaaS provider",
+  isInjectedFakeProvider(getSaasBillingProvider()) === false,
+);
+
+restoreSaasEnv();
+check(
+  "SaaS test harness restores the fake adapter after the production guard",
+  isFakeSaasBillingAdapterEnabled() === true && isSaasBillingConfigured() === true,
 );
 
 try {
@@ -398,6 +512,61 @@ try {
     "MEMBER/ADMIN attempts did not create extra Stripe Customers",
     provider.customers.size === 2,
   );
+
+  console.log("\nTEST — production cannot become subscribed_active through the fake provider");
+  const prodGuard = await seedBusiness("Prod Guard SaaS");
+  const prodAccess = makeAccess(
+    prodGuard.business.id,
+    "OWNER",
+    prodGuard.membership.id,
+    prodGuard.ownerUser.email,
+  );
+  const savedProdVercel = process.env.VERCEL_ENV;
+  const savedProdSecret = process.env.STRIPE_SECRET_KEY;
+  process.env.VERCEL_ENV = "production";
+  process.env.TBBT_SAAS_BILLING_ADAPTER = "fake";
+  delete process.env.STRIPE_SECRET_KEY;
+  resetSaasBillingProvider();
+  check(
+    "production still rejects the fake adapter during Checkout",
+    isFakeSaasBillingAdapterEnabled() === false,
+  );
+  check(
+    "production Checkout still uses the Stripe provider",
+    isInjectedFakeProvider(getSaasBillingProvider()) === false,
+  );
+  const fakeCheckoutsBeforeProd = provider.checkouts.length;
+  try {
+    await startSaasSubscriptionCheckout(prisma, prodAccess);
+    check("production Checkout does not complete through the fake provider", false);
+  } catch (error) {
+    check(
+      "production Checkout does not complete through the fake provider",
+      error instanceof SaasBillingError,
+    );
+  }
+  const prodRow = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: prodGuard.business.id },
+  });
+  const prodEntitlement = await loadSaasEntitlement(prisma, prodGuard.business);
+  const prodSnapshot = await loadSaasBillingSnapshot(prisma, prodGuard.business.id);
+  check(
+    "production fake Checkout does not mark subscribed_active",
+    prodEntitlement.state !== "subscribed_active" &&
+      prodSnapshot.entitlement.state !== "subscribed_active" &&
+      (prodRow == null || prodRow.status !== "active"),
+  );
+  check(
+    "production fake Checkout does not record a fake provider session",
+    provider.checkouts.length === fakeCheckoutsBeforeProd,
+  );
+  if (savedProdVercel === undefined) delete process.env.VERCEL_ENV;
+  else process.env.VERCEL_ENV = savedProdVercel;
+  if (savedProdSecret === undefined) delete process.env.STRIPE_SECRET_KEY;
+  else process.env.STRIPE_SECRET_KEY = savedProdSecret;
+  process.env.TBBT_SAAS_BILLING_ADAPTER = "fake";
+  resetSaasBillingProvider();
+  setSaasBillingProvider(provider);
 
   console.log("\nTEST — Duplicate active subscriptions are prevented");
   provider.addSubscription({

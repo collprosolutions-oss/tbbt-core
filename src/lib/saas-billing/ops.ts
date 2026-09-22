@@ -13,6 +13,7 @@ import { getAppUrl } from "@/lib/mail";
 import { getStripeSecretKey } from "@/lib/payments/config";
 import {
   getSaasPriceId,
+  isFakeSaasBillingAdapterEnabled,
   isSaasBillingConfigured,
   SAAS_BILLING_SETTINGS_HREF,
   TBBT_SAAS_PLAN_CODE,
@@ -141,7 +142,7 @@ export async function loadSaasBillingSnapshot(
     }),
     inspectConfiguredFounderPrice(),
   ]);
-  const fakeAdapter = process.env.TBBT_SAAS_BILLING_ADAPTER === "fake";
+  const fakeAdapter = isFakeSaasBillingAdapterEnabled();
   const stripeReady = fakeAdapter || Boolean(getStripeSecretKey());
   const configured = isSaasBillingConfigured() && stripeReady;
   const appUrlConfigured = Boolean(getAppUrl());
@@ -199,7 +200,7 @@ export async function startSaasSubscriptionCheckout(
   if (!isSaasBillingConfigured()) {
     throw new SaasBillingError("TBBT subscription billing is not configured on this environment.");
   }
-  const priceId = getSaasPriceId() ?? (process.env.TBBT_SAAS_BILLING_ADAPTER === "fake" ? "price_saas_test" : null);
+  const priceId = getSaasPriceId() ?? (isFakeSaasBillingAdapterEnabled() ? "price_saas_test" : null);
   if (!priceId) {
     throw new SaasBillingError("TBBT subscription price is not configured.");
   }
