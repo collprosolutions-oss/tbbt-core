@@ -1050,9 +1050,9 @@ export const TBBT_MARKETING_ASSET_SLOTS = [
   },
   {
     file: "about-page-founder.png",
-    ratio: "1 / 1",
-    pixelHint: "720 × 720",
-    usage: "Daniel LeBlanc real photograph for /about Meet the Founder. Do not generate a replacement face.",
+    ratio: "412 / 233",
+    pixelHint: "412 × 233",
+    usage: "Daniel LeBlanc supplied photograph for /about Meet the Founder. Use as supplied; do not crop or generate a replacement.",
   },
   {
     file: "og-default.jpg",
