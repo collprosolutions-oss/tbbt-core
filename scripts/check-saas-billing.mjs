@@ -229,6 +229,8 @@ const marketingHomeSrc = readFileSync(
   "utf8",
 );
 const signUpSrc = readFileSync(new URL("../src/app/(auth)/sign-up/page.tsx", import.meta.url), "utf8");
+const appLayoutSrc = readFileSync(new URL("../src/app/(app)/layout.tsx", import.meta.url), "utf8");
+const fieldLayoutSrc = readFileSync(new URL("../src/app/field/layout.tsx", import.meta.url), "utf8");
 const saasEvents = readFileSync(new URL("../src/lib/saas-billing/events.ts", import.meta.url), "utf8");
 const webhookSrc = readFileSync(new URL("../src/app/api/stripe/webhook/route.ts", import.meta.url), "utf8");
 const webhookDispatchSrc = readFileSync(
@@ -317,7 +319,11 @@ check(
     envExample.includes("the trade business pays TBBT") &&
     envExample.includes("This is not Stripe Connect") &&
     envExample.includes("customer.subscription.updated") &&
-    envExample.includes("ignores TBBT_SAAS_BILLING_ADAPTER=fake"),
+    envExample.includes("ignores TBBT_SAAS_BILLING_ADAPTER=fake") &&
+    envExample.includes("A missing Price ID alone does not") &&
+    envExample.includes("block Billing Portal") &&
+    envExample.includes("Production Checkout fails closed") &&
+    !envExample.includes("Production Checkout and Billing Portal fail closed"),
 );
 check(
   "SaaS fake adapter uses the same Vercel production guard as Connect payments",
@@ -349,8 +355,19 @@ check(
   settingsSrc.includes("billingNotReadyMessage") &&
     settingsSrc.includes("{billing.checkoutPossible ? <SaasSubscribeButton /> : null}") &&
     settingsSrc.includes("{billing.portalPossible ? <SaasBillingPortalButton /> : null}") &&
-    saasBannerSrc.includes("readiness.checkoutReady") &&
     saasBannerSrc.includes("readiness.portalReady"),
+);
+check(
+  "global entitlement banner cannot expose Subscribe without Founder Price inspection",
+  !saasBannerSrc.includes("SaasSubscribeButton") &&
+    !saasBannerSrc.includes("inspectConfiguredFounderPrice") &&
+    saasBannerSrc.includes("Open TBBT Billing") &&
+    saasBannerSrc.includes("resolveSaasBillingReadiness()") &&
+    !saasBannerSrc.includes("founderPrice") &&
+    appLayoutSrc.includes("SaasEntitlementBanner") &&
+    fieldLayoutSrc.includes("SaasEntitlementBanner") &&
+    !appLayoutSrc.includes("inspectConfiguredFounderPrice") &&
+    !fieldLayoutSrc.includes("inspectConfiguredFounderPrice"),
 );
 check(
   "Marketing, signup, and first-run setup do not import SaaS billing readiness",
@@ -531,6 +548,13 @@ await withSaasEnv(
       "unverified Founder Price retrieve does not fail closed by itself",
       unverified.reason === "ready" && unverified.checkoutReady === true,
     );
+    const bannerStyleReady = resolveSaasBillingReadiness();
+    check(
+      "confirmed-invalid Founder Price cannot leave global banner Checkout ready",
+      ready.checkoutReady === false &&
+        bannerStyleReady.checkoutReady === false &&
+        !saasBannerSrc.includes("SaasSubscribeButton"),
+    );
   },
 );
 await withSaasEnv(
@@ -576,6 +600,13 @@ await withSaasEnv(
         isFakeSaasBillingAdapterEnabled() === false &&
         isSaasBillingConfigured() === true &&
         isInjectedFakeProvider(getSaasBillingProvider()) === false,
+    );
+    const bannerStyleConfigured = resolveSaasBillingReadiness();
+    check(
+      "global banner-style readiness without Founder Price inspection is not checkout-ready",
+      bannerStyleConfigured.checkoutReady === false &&
+        bannerStyleConfigured.portalReady === true &&
+        bannerStyleConfigured.configured === true,
     );
   },
 );

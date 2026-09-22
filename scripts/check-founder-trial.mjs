@@ -287,8 +287,11 @@ check(
     settingsWorkspace.includes("Founder eligibility") &&
     settingsLib.includes("$49/month") &&
     readRepo("src/components/settings/saas-billing-buttons.tsx").includes("Start subscription") &&
-    bannerSrc.includes("SaasSubscribeButton") &&
-    bannerSrc.includes("Open TBBT Billing"),
+    bannerSrc.includes("Open TBBT Billing") &&
+    !bannerSrc.includes("SaasSubscribeButton") &&
+    !bannerSrc.includes("inspectConfiguredFounderPrice") &&
+    !appLayout.includes("inspectConfiguredFounderPrice") &&
+    !fieldLayout.includes("inspectConfiguredFounderPrice"),
 );
 check(
   "TBBT Billing shows the Price ID setup warning only from founderPriceWarning and keeps Start subscription on checkoutPossible",

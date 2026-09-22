@@ -44,6 +44,7 @@ export {
 } from "@/lib/saas-billing/messages";
 export {
   founderPriceBlocksCheckout,
+  founderPriceInspectionProvided,
   resolveSaasBillingReadiness,
 } from "@/lib/saas-billing/readiness";
 export type {

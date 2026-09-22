@@ -9,6 +9,11 @@
  * Public pages, signup, first-run, and operating entitlement stay on
  * their existing paths. Webhook signature secrets are required only by
  * the Stripe webhook route, not by Checkout/Portal start.
+ *
+ * Live Checkout readiness requires the caller to pass the result of
+ * inspectConfiguredFounderPrice(). Omitting that inspection must not be
+ * treated as checkout-ready. Global banners must not call inspect on
+ * every page render; Checkout stays authoritative on TBBT Billing.
  */
 import { getAppUrl } from "@/lib/mail";
 import { getStripeSecretKey } from "@/lib/payments/config";
@@ -50,6 +55,12 @@ export function founderPriceBlocksCheckout(
   return founderPrice?.matchesFounderPrice === false;
 }
 
+export function founderPriceInspectionProvided(
+  founderPrice: SaasBillingReadinessInput["founderPrice"],
+) {
+  return founderPrice !== undefined;
+}
+
 export function resolveSaasBillingReadiness(
   input: SaasBillingReadinessInput = {},
 ): SaasBillingReadiness {
@@ -62,6 +73,7 @@ export function resolveSaasBillingReadiness(
   const priceConfigured = fake || Boolean(priceId);
   const configured = stripeReady && priceConfigured;
   const invalidFounderPrice = founderPriceBlocksCheckout(input.founderPrice);
+  const inspectionProvided = fake || founderPriceInspectionProvided(input.founderPrice);
 
   if (!priceConfigured) {
     return {
@@ -113,7 +125,7 @@ export function resolveSaasBillingReadiness(
     configured: true,
     stripeReady: true,
     appUrlConfigured: true,
-    checkoutReady: true,
+    checkoutReady: inspectionProvided,
     portalReady: true,
     ownerMessage: null,
   };

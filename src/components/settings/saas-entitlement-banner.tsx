@@ -1,8 +1,5 @@
 import Link from "next/link";
-import {
-  SaasBillingPortalButton,
-  SaasSubscribeButton,
-} from "@/components/settings/saas-billing-buttons";
+import { SaasBillingPortalButton } from "@/components/settings/saas-billing-buttons";
 import { SAAS_BILLING_SETTINGS_HREF } from "@/lib/saas-billing/config";
 import type { SaasEntitlement } from "@/lib/saas-billing/entitlement";
 import {
@@ -88,17 +85,8 @@ export function SaasEntitlementBanner({
         </p>
       ) : null}
       {ownerCanManage &&
-      entitlement.state === "subscription_required" &&
-      readiness.checkoutReady ? (
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <SaasSubscribeButton />
-          <Link href={SAAS_BILLING_SETTINGS_HREF} className="text-sm font-medium text-primary underline-offset-4 hover:underline">
-            Open TBBT Billing
-          </Link>
-        </div>
-      ) : ownerCanManage &&
-        (entitlement.state === "payment_problem" || cancellationScheduled) &&
-        readiness.portalReady ? (
+      (entitlement.state === "payment_problem" || cancellationScheduled) &&
+      readiness.portalReady ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <SaasBillingPortalButton />
           <Link href={SAAS_BILLING_SETTINGS_HREF} className="text-sm font-medium text-primary underline-offset-4 hover:underline">
