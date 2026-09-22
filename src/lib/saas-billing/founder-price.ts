@@ -6,7 +6,7 @@
  */
 import Stripe from "stripe";
 import { getStripeSecretKey } from "@/lib/payments/config";
-import { getSaasPriceId } from "@/lib/saas-billing/config";
+import { getSaasPriceId, isFakeSaasBillingAdapterEnabled } from "@/lib/saas-billing/config";
 
 export const TBBT_FOUNDER_PLAN_AMOUNT_CENTS = 4900;
 export const TBBT_FOUNDER_PLAN_CURRENCY = "usd";
@@ -43,7 +43,7 @@ function isFounderRecurringPrice(price: {
 
 export async function inspectConfiguredFounderPrice(): Promise<FounderPriceInspection> {
   const configuredPriceId = getSaasPriceId();
-  if (process.env.TBBT_SAAS_BILLING_ADAPTER === "fake") {
+  if (isFakeSaasBillingAdapterEnabled()) {
     return {
       configuredPriceId,
       verified: false,

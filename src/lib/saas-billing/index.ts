@@ -1,5 +1,6 @@
 export {
   getSaasPriceId,
+  isFakeSaasBillingAdapterEnabled,
   isSaasBillingConfigured,
   saasBillingWebhookSecrets,
   SAAS_BILLING_SETTINGS_HREF,
