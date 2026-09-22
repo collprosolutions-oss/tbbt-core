@@ -6,7 +6,7 @@
  * may be shared; Connect account records must never represent a TBBT
  * subscription.
  */
-import { getStripeWebhookSecret } from "@/lib/payments/config";
+import { getStripeSecretKey, getStripeWebhookSecret } from "@/lib/payments/config";
 
 export const TBBT_SAAS_PLAN_CODE = "tbbt_founder";
 export const TBBT_SAAS_PLAN_NAME = "Founder Plan";
@@ -49,5 +49,5 @@ export function isSaasBillingConfigured(): boolean {
   if (isFakeSaasBillingAdapterEnabled()) {
     return true;
   }
-  return Boolean(getSaasPriceId());
+  return Boolean(getSaasPriceId() && getStripeSecretKey());
 }

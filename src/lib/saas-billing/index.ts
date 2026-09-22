@@ -39,7 +39,18 @@ export {
   SAAS_PAYMENT_PROBLEM_TEAM_MESSAGE,
   SAAS_CANCELLATION_SCHEDULED_OWNER_MESSAGE,
   SAAS_CANCELLATION_SCHEDULED_TEAM_MESSAGE,
+  SAAS_BILLING_NOT_READY_OWNER_MESSAGE,
+  SAAS_BILLING_APP_URL_OWNER_MESSAGE,
 } from "@/lib/saas-billing/messages";
+export {
+  founderPriceBlocksCheckout,
+  founderPriceInspectionProvided,
+  resolveSaasBillingReadiness,
+} from "@/lib/saas-billing/readiness";
+export type {
+  SaasBillingReadiness,
+  SaasBillingReadinessReason,
+} from "@/lib/saas-billing/readiness";
 export {
   inspectConfiguredFounderPrice,
   TBBT_FOUNDER_PLAN_AMOUNT_CENTS,

@@ -19,3 +19,9 @@ export const SAAS_CANCELLATION_SCHEDULED_OWNER_MESSAGE =
 
 export const SAAS_CANCELLATION_SCHEDULED_TEAM_MESSAGE =
   "Cancellation is scheduled for this TBBT subscription. Access continues until the paid period ends. Only the business owner can manage billing.";
+
+export const SAAS_BILLING_NOT_READY_OWNER_MESSAGE =
+  "TBBT subscription billing is not configured correctly on this environment. Checkout and billing portal stay unavailable until live Stripe subscription billing is ready.";
+
+export const SAAS_BILLING_APP_URL_OWNER_MESSAGE =
+  "Checkout needs NEXT_PUBLIC_APP_URL so Stripe can return to TBBT.";

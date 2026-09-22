@@ -61,6 +61,7 @@ const {
   inspectConfiguredFounderPrice,
   loadSaasBillingSnapshot,
   loadSaasEntitlement,
+  resolveSaasBillingReadiness,
   parseSaasBillingEvent,
   resetSaasBillingProvider,
   resetSaasBillingSchemaEnsure,
@@ -286,8 +287,11 @@ check(
     settingsWorkspace.includes("Founder eligibility") &&
     settingsLib.includes("$49/month") &&
     readRepo("src/components/settings/saas-billing-buttons.tsx").includes("Start subscription") &&
-    bannerSrc.includes("SaasSubscribeButton") &&
-    bannerSrc.includes("Open TBBT Billing"),
+    bannerSrc.includes("Open TBBT Billing") &&
+    !bannerSrc.includes("SaasSubscribeButton") &&
+    !bannerSrc.includes("inspectConfiguredFounderPrice") &&
+    !appLayout.includes("inspectConfiguredFounderPrice") &&
+    !fieldLayout.includes("inspectConfiguredFounderPrice"),
 );
 check(
   "TBBT Billing shows the Price ID setup warning only from founderPriceWarning and keeps Start subscription on checkoutPossible",
@@ -815,6 +819,29 @@ try {
     retrieveFailureInspection.configuredPriceId === "price_saas_configured" &&
       retrieveFailureInspection.verified === false &&
       retrieveFailureInspection.warning === null,
+  );
+  const invalidFounderReady = await withEnv(
+    {
+      VERCEL_ENV: "production",
+      TBBT_SAAS_BILLING_ADAPTER: "fake",
+      STRIPE_SAAS_PRICE_ID: "price_saas_wrong_amount",
+      STRIPE_SECRET_KEY: "sk_test_founder_trial_check",
+      NEXT_PUBLIC_APP_URL: "https://www.collproreno.com",
+    },
+    () =>
+      resolveSaasBillingReadiness({
+        founderPrice: {
+          matchesFounderPrice: false,
+          warning:
+            "The configured Stripe Price does not match the approved Founder Plan of $49/month. Checkout still uses STRIPE_SAAS_PRICE_ID and will not pretend the charge is $49.",
+        },
+      }),
+  );
+  check(
+    "invalid Founder Price does not pass production billing readiness",
+    invalidFounderReady.reason === "invalid_founder_price" &&
+      invalidFounderReady.checkoutReady === false &&
+      invalidFounderReady.ownerMessage?.includes("$49/month") === true,
   );
 } catch (error) {
   console.error(error);
