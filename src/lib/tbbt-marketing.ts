@@ -797,6 +797,68 @@ export const TBBT_VALUES = [
   },
 ] as const;
 
+export const TBBT_ABOUT_PAGE_EYEBROW = "Our Story";
+export const TBBT_ABOUT_PAGE_HEADLINE = ["Built by a Tradesman.", "For the Trades."] as const;
+export const TBBT_ABOUT_PAGE_SUPPORT =
+  "TBBT was created by a third-generation carpenter who understands the real challenges trades professionals face — because he's lived them. After years in the field, running crews, managing jobs and dealing with multiple disconnected tools, the solution was clear: trades need one simple, powerful platform built specifically for them.";
+export const TBBT_ABOUT_PAGE_SCRIPT = [
+  "Real Experience.",
+  "Real Solutions.",
+  "A Better Future",
+  "for the Trades.",
+] as const;
+export const TBBT_ABOUT_PAGE_MISSION_CTA = "Our Mission";
+export const TBBT_ABOUT_PAGE_WATCH_STORY_LABEL = "Watch Our Story";
+export const TBBT_ABOUT_PAGE_HERO_SRC = "/brand/tbbt-marketing/about-page-hero.png";
+export const TBBT_ABOUT_PAGE_MISSION_SRC = "/brand/tbbt-marketing/about-page-mission.png";
+export const TBBT_ABOUT_PAGE_FOUNDER_SRC = "/brand/tbbt-marketing/about-page-founder.png";
+export const TBBT_ABOUT_PAGE_CTA_SRC = "/brand/tbbt-marketing/cta-sunset.png";
+
+export const TBBT_ABOUT_VALUES_INTRO = {
+  heading: "Our Values",
+  body: "The principles that guide everything we do.",
+} as const;
+
+export const TBBT_ABOUT_VALUES = [
+  { title: "Simplicity", body: "Easy to use.\nNo tech headaches.", icon: "simplicity" },
+  { title: "Built for Trades", body: "Designed for real\nworld needs.", icon: "trades" },
+  { title: "Fair & Transparent", body: "Honest pricing.\nNo hidden fees.", icon: "fair" },
+  { title: "Growth", body: "Help trades businesses\nwin more work.", icon: "growth" },
+  { title: "Support", body: "Real people.\nReal help.", icon: "support" },
+  { title: "Continuous Improvement", body: "Always listening.\nAlways getting better.", icon: "improve" },
+] as const;
+
+export const TBBT_ABOUT_MISSION = {
+  heading: "Our Mission",
+  body: "To empower trades professionals with the tools, technology and support they need to build stronger businesses, create more freedom, and take control of their future.",
+} as const;
+
+export const TBBT_ABOUT_VISION = {
+  heading: "Our Vision",
+  body: "To become the leading business operating system for the trades — helping contractors, service professionals and trade businesses around the world run smarter, work more efficiently, and achieve the freedom they deserve.",
+} as const;
+
+export const TBBT_ABOUT_DIRECTION = [
+  { kicker: "1 Platform", body: "Built for the Trades", icon: "platform" },
+  { kicker: "Expanding Support", body: "More trades on the roadmap", icon: "trades" },
+  { kicker: "Built to Serve", body: "Trades businesses we aim to support", icon: "serve" },
+  { kicker: "Real World Experience", body: "Built by a Tradesman", icon: "experience" },
+  { kicker: "A Stronger Future", body: "For the Trades", icon: "future" },
+] as const;
+
+export const TBBT_ABOUT_FOUNDER_HEADING = "Meet the Founder";
+export const TBBT_ABOUT_FOUNDER_NAME = "Daniel LeBlanc";
+export const TBBT_ABOUT_FOUNDER_ROLE = "Founder, TBBT";
+export const TBBT_ABOUT_FOUNDER_BIO =
+  "Third-generation carpenter, business owner, and builder at heart. TBBT is being built from real field and trades-business experience — not as a generic software experiment. The goal is to help other trades business owners run a simpler, more professional operation and take back time, freedom, and control.";
+export const TBBT_ABOUT_FOUNDER_QUOTE =
+  "I built TBBT because I know what it's like in the field. Trades deserve better tools, better support, and a better future.";
+
+export const TBBT_ABOUT_PAGE_CTA_HEADLINE = "Let's Build a Better Future for the Trades.";
+export const TBBT_ABOUT_PAGE_CTA_SUPPORT =
+  "Take control of your trades business with TBBT. Start free today and see the difference.";
+export const TBBT_ABOUT_PAGE_CTA_BUTTON = "Start Your Free 30-Day Trial";
+
 export const TBBT_RESOURCE_CATEGORIES = [
   {
     title: "Business Setup",
@@ -975,6 +1037,24 @@ export const TBBT_MARKETING_ASSET_SLOTS = [
     usage: "Pricing hero: back-facing tradesman in TBBT BUILD / MANAGE / GROW shirt.",
   },
   {
+    file: "about-page-hero.png",
+    ratio: "141 / 100",
+    pixelHint: "846 × 600",
+    usage: "About hero: back-facing tradesman in TBBT BUILD / MANAGE / GROW shirt from the supplied master.",
+  },
+  {
+    file: "about-page-mission.png",
+    ratio: "98 / 90",
+    pixelHint: "392 × 360",
+    usage: "About mission panel: house blueprint crop. Tagline is HTML, not baked into the image.",
+  },
+  {
+    file: "about-page-founder.png",
+    ratio: "412 / 233",
+    pixelHint: "412 × 233",
+    usage: "Daniel LeBlanc supplied photograph for /about Meet the Founder. Use as supplied; do not crop or generate a replacement.",
+  },
+  {
     file: "og-default.jpg",
     ratio: "1.91 / 1",
     pixelHint: "1200 × 630",
@@ -984,7 +1064,7 @@ export const TBBT_MARKETING_ASSET_SLOTS = [
     file: "founder.jpg",
     ratio: "4 / 5",
     pixelHint: "1200 × 1500",
-    usage: "Optional founder portrait for /about. Not shipped yet.",
+    usage: "Legacy founder slot. /about uses about-page-founder.png.",
   },
 ] as const;
 

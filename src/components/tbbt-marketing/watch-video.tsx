@@ -3,7 +3,13 @@
 import { useState } from "react";
 import { Play } from "lucide-react";
 
-export function TbbtWatchVideoButton({ className = "tbbt-btn tbbt-btn--ghost tbbt-btn--lg" }: { className?: string }) {
+export function TbbtWatchVideoButton({
+  className = "tbbt-btn tbbt-btn--ghost tbbt-btn--lg",
+  label = "Watch Video",
+}: {
+  className?: string;
+  label?: string;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -15,7 +21,7 @@ export function TbbtWatchVideoButton({ className = "tbbt-btn tbbt-btn--ghost tbb
         onClick={() => setOpen((value) => !value)}
       >
         <Play size={16} />
-        Watch Video
+        {label}
         <span className="tbbt-soon">Coming Soon</span>
       </button>
       {open ? (
