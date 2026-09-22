@@ -21,6 +21,8 @@ const { isPaymentMethodValue, paymentMethodLabel, PAYMENT_METHODS } =
 const { invoiceAmountDue } = await import("@/lib/invoice-document");
 const { createFakePaymentProvider } = await import("@/lib/payments/fake");
 const { parseCheckoutPaymentEvent } = await import("@/lib/payments/events");
+const { dispatchStripeWebhookEvent } = await import("@/lib/stripe-webhook-dispatch");
+const { SAAS_CHECKOUT_PURPOSE } = await import("@/lib/saas-billing");
 const {
   explainMerchantReadiness,
   isMerchantPaymentReady,
@@ -637,6 +639,17 @@ try {
   check("pay route creates checkout from the token only", payRouteSrc.includes("createCustomerInvoiceCheckout(prisma, token)"));
   check("webhook verifies the Stripe signature", webhookStack.includes("constructStripeWebhookEvent"));
   check("webhook applies only a parsed checkout payment", webhookStack.includes("parseCheckoutPaymentEvent"));
+  const paymentEventsSrc = readFileSync(
+    new URL("../src/lib/payments/events.ts", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Connect webhook consumes only paid Checkout completion events",
+    paymentEventsSrc.includes('"checkout.session.completed"') &&
+      paymentEventsSrc.includes('"checkout.session.async_payment_succeeded"') &&
+      !paymentEventsSrc.includes("customer.subscription") &&
+      !paymentEventsSrc.includes("invoice.paid"),
+  );
   const proxySrc = readFileSync(new URL("../src/proxy.ts", import.meta.url), "utf8");
   check(
     "Auth proxy does not redirect unauthenticated Stripe webhook POSTs to sign-in",
@@ -1398,6 +1411,43 @@ try {
     ),
   );
   check("wrong business metadata is rejected", wrongBusiness.reason === "business_mismatch");
+
+  console.log("\nTEST — Shared webhook dispatch keeps Connect payments off SaaS rows");
+  const saasOnConnectInvoice = await dispatchStripeWebhookEvent(prisma, {
+    id: "evt_payments_saas_ignored_invoice",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        object: "checkout.session",
+        id: "cs_payments_saas",
+        mode: "subscription",
+        status: "complete",
+        payment_status: "paid",
+        customer: "cus_payments_saas",
+        subscription: "sub_payments_saas",
+        metadata: {
+          purpose: SAAS_CHECKOUT_PURPOSE,
+          businessId: "biz_does_not_exist",
+          invoiceId: cancelledInvoice.invoice.id,
+        },
+      },
+    },
+  });
+  const cancelledAfterSaas = await prisma.invoice.findUnique({
+    where: { id: cancelledInvoice.invoice.id },
+  });
+  check(
+    "SaaS Checkout through the shared dispatcher does not pay a Connect invoice",
+    saasOnConnectInvoice.system === "saas" &&
+      cancelledAfterSaas?.status === "SENT",
+  );
+  check(
+    "unknown SaaS business does not invent a subscription from a Connect invoice id",
+    saasOnConnectInvoice.applied === false &&
+      (await prisma.businessSaasSubscription.count({
+        where: { stripeSubscriptionId: "sub_payments_saas" },
+      })) === 0,
+  );
 
   console.log("\nTEST — Server-side Stripe checkout reconcile");
   const reconcileInvoice = await seedSentInvoice({
