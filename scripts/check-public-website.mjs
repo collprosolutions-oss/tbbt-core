@@ -218,6 +218,9 @@ check("Public hire, intake, and stored website photos stay public",
   isPublicWebsitePath("/hire/collpro-reno") &&
     isPublicWebsitePath("/r/collpro-reno") &&
     isPublicWebsitePath("/api/storage/public/asset_workshop"));
+check("Password reset links stay public like team set-password links",
+  isPublicWebsitePath("/reset-password/abc") &&
+    isPublicWebsitePath("/set-password/abc"));
 check(
   "TBBT marketing routes are public and do not replace CollPro /hire or /r",
   isPublicWebsitePath("/features") &&

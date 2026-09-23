@@ -31,6 +31,7 @@
     "test:estimate-terms": "node --experimental-strip-types scripts/check-estimate-terms.mjs",
     "test:employee-field-workflow": "node --experimental-strip-types scripts/check-employee-field-workflow.mjs",
     "test:team-onboarding": "node --experimental-strip-types scripts/check-team-onboarding.mjs",
+    "test:password-recovery": "node --experimental-strip-types scripts/check-password-recovery.mjs",
     "test:time-cards": "node --experimental-strip-types scripts/check-time-cards.mjs",
     "test:payroll": "node --experimental-strip-types scripts/check-payroll.mjs",
     "test:reports": "node --experimental-strip-types scripts/check-reports.mjs",

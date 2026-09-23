@@ -2,22 +2,33 @@
 
 import { useActionState } from "react";
 import Link from "next/link";
-import { signInAction, type AuthFormState } from "@/app/actions/auth";
+import {
+  requestPasswordResetAction,
+  type PasswordResetRequestState,
+} from "@/app/actions/password-reset";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-const initialState: AuthFormState = {};
+const initialState: PasswordResetRequestState = {};
 
-export function SignInForm() {
-  const [state, action, pending] = useActionState(signInAction, initialState);
+export function ForgotPasswordForm() {
+  const [state, action, pending] = useActionState(
+    requestPasswordResetAction,
+    initialState,
+  );
 
   return (
     <form action={action} className="space-y-4">
       {state.error ? (
         <Alert variant="destructive">
           <AlertDescription>{state.error}</AlertDescription>
+        </Alert>
+      ) : null}
+      {state.message ? (
+        <Alert>
+          <AlertDescription>{state.message}</AlertDescription>
         </Alert>
       ) : null}
 
@@ -32,33 +43,13 @@ export function SignInForm() {
         />
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="password">Password</Label>
-        <Input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          required
-        />
-        <p className="text-sm">
-          <Link
-            href="/forgot-password"
-            className="text-muted-foreground underline underline-offset-4 hover:text-foreground"
-          >
-            Forgot password?
-          </Link>
-        </p>
-      </div>
-
       <Button type="submit" className="w-full" disabled={pending}>
-        {pending ? "Signing in…" : "Sign in"}
+        {pending ? "Sending…" : "Send reset link"}
       </Button>
 
       <p className="text-center text-sm text-muted-foreground">
-        Need an account?{" "}
-        <Link href="/sign-up" className="text-foreground underline underline-offset-4">
-          Create a business workspace
+        <Link href="/sign-in" className="text-foreground underline underline-offset-4">
+          Back to sign in
         </Link>
       </p>
     </form>

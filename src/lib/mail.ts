@@ -162,7 +162,17 @@ export type TransactionalEmailKind =
   | "invoice"
   | "team"
   | "appointment"
-  | "request";
+  | "request"
+  | "password-reset";
+
+/**
+ * Password-reset mail is sent once per issued token. The key is the
+ * token row id (not the raw token, not the email) so a later request
+ * that replaces the unused token is a new send.
+ */
+export function passwordResetIdempotencyKey(userId: string, tokenId: string) {
+  return `password-reset/${userId}/${tokenId}`;
+}
 
 export function transactionalEmailFailureMessage(kind: TransactionalEmailKind) {
   if (kind === "estimate") {
@@ -176,6 +186,9 @@ export function transactionalEmailFailureMessage(kind: TransactionalEmailKind) {
   }
   if (kind === "request") {
     return "The new-request email could not be sent.";
+  }
+  if (kind === "password-reset") {
+    return "The password reset email could not be sent.";
   }
   return "The team invitation email could not be sent.";
 }
