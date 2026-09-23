@@ -18,6 +18,7 @@ import { PreferenceSettingsForm } from "@/components/settings/preference-setting
 import { SchedulingSettingsForm } from "@/components/settings/scheduling-settings-form";
 import { SupplierPricingSettingsForm } from "@/components/settings/supplier-pricing-form";
 import { ClearTestDataForm } from "@/components/settings/clear-test-data-form";
+import { ChangePasswordForm } from "@/components/settings/change-password-form";
 import type { SettingsWorkspaceProps } from "@/components/settings/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -773,7 +774,8 @@ function SectionBody(props: SettingsWorkspaceProps) {
   if (section === "security") {
     const activeCount = snapshot.team.filter((member) => member.active).length;
     return (
-      <SectionCard title="Security & Privacy" description="Owner-controlled. ADMIN may view this explanation; there are no security mutations in this build.">
+      <SectionCard title="Security & Privacy" description="Change the password on the signed-in account. This does not change roles, workspace, or billing.">
+        <ChangePasswordForm />
         <ul className="space-y-2 text-sm">
           <li>Tenant isolation: every Settings read and write uses the signed-in workspace business, never a browser businessId.</li>
           <li>Role / access model: OWNER, ADMIN, MEMBER. MEMBER cannot open Settings or receive private configuration.</li>

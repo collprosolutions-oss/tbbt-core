@@ -63,6 +63,10 @@ model User {
   /// see PasswordSetupToken below. Empty for every user who signed up
   /// themselves (signUpAction already sets a real password).
   passwordSetupTokens  PasswordSetupToken[]
+  /// One-time password-recovery links -- see PasswordResetToken below.
+  /// Empty until the user requests a reset. Distinct from team onboarding
+  /// PasswordSetupToken rows so a 7-day invite cannot be reused as a reset.
+  passwordResetTokens  PasswordResetToken[]
   /// Founder Design Mode cosmetic overrides this user has saved -- see
   /// FounderDesignOverride below. Empty for every non-founder User.
   founderDesignOverrides FounderDesignOverride[]
@@ -124,6 +128,26 @@ model Session {
 /// work. `usedAt` makes the link single-use; `expiresAt` bounds its
 /// lifetime the same way a Session's `expiresAt` does.
 model PasswordSetupToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// A single-use, expiring, unguessable link letting a user recover access
+/// after forgetting their password (see requestPasswordResetOp in
+/// src/lib/password-reset.ts). Mirrors PasswordSetupToken / Session:
+/// store only sha256(tokenHash), never the raw token; `usedAt` makes the
+/// link single-use; `expiresAt` bounds its lifetime. The raw token is
+/// mailed exactly once and is the only identifier in the reset URL --
+/// no business, tenant, or user ids.
+model PasswordResetToken {
   id        String    @id @default(cuid())
   userId    String
   tokenHash String    @unique

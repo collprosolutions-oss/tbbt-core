@@ -29,6 +29,7 @@ const { isEmailDeliveryConfigured } = await import("@/lib/settings");
 const { buildEstimateReadyEmail } = await import("@/lib/estimate-mail");
 const { buildInvoiceReadyEmail } = await import("@/lib/invoice-mail");
 const { buildTeamInviteEmail } = await import("@/lib/team-mail");
+const { buildPasswordResetEmail } = await import("@/lib/password-reset-mail");
 const { buildAppointmentProposedEmail } = await import("@/lib/appointment-mail");
 
 let passed = 0;
@@ -245,6 +246,11 @@ check(
   transactionalEmailFailureMessage("request") ===
     "The new-request email could not be sent.",
 );
+check(
+  "password-reset failure is reset-specific",
+  transactionalEmailFailureMessage("password-reset") ===
+    "The password reset email could not be sent.",
+);
 
 console.log("\nSTATIC — Templates and customer-safe content");
 const estimateEmail = buildEstimateReadyEmail({
@@ -289,6 +295,20 @@ const teamEmail = buildTeamInviteEmail({
 check(
   "team invite links to the password-setup URL",
   teamEmail.text.includes("https://www.collproreno.com/set-password/setup-token"),
+);
+
+const passwordResetEmail = buildPasswordResetEmail({
+  resetUrl: "https://www.collproreno.com/reset-password/reset-token",
+});
+check(
+  "password-reset email links to the public reset URL",
+  passwordResetEmail.text.includes("https://www.collproreno.com/reset-password/reset-token") &&
+    passwordResetEmail.html.includes("https://www.collproreno.com/reset-password/reset-token"),
+);
+check(
+  "password-reset email does not include business or tenant ids",
+  !passwordResetEmail.text.includes("businessId") &&
+    !passwordResetEmail.html.includes("/set-password/"),
 );
 
 const appointmentEmail = buildAppointmentProposedEmail({

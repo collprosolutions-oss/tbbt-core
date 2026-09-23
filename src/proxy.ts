@@ -11,7 +11,7 @@ import {
   firstHeaderHostWithPort,
 } from "@/lib/vercel-app-host";
 
-const AUTH_PATHS = ["/sign-in", "/sign-up"];
+const AUTH_PATHS = ["/sign-in", "/sign-up", "/forgot-password"];
 
 function isAuthPath(pathname: string) {
   return AUTH_PATHS.some(

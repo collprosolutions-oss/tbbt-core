@@ -111,6 +111,7 @@ const settingsSource = [
   readFileSync(new URL("../src/app/actions/settings.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/components/settings/settings-workspace.tsx", import.meta.url), "utf8"),
   readFileSync(new URL("../src/components/settings/business-public-contact-form.tsx", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/components/settings/change-password-form.tsx", import.meta.url), "utf8"),
 ].join("\n");
 
 try {
@@ -150,6 +151,11 @@ try {
       settingsSource.includes("updateBusinessPublicContactOp") &&
       !settingsSource.includes('DeferredField label="Phone"') &&
       !settingsSource.includes('DeferredField label="Service area"'),
+  );
+  check(
+    "Security section includes signed-in change password",
+    settingsSource.includes("ChangePasswordForm") &&
+      settingsSource.includes("Change the password on the signed-in account"),
   );
   check(
     "Owner can open the live public website from Settings",
