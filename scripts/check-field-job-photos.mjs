@@ -97,9 +97,13 @@ check(
     fieldActionSrc.includes("fileSizeBytes: input.fileSizeBytes") &&
     fieldActionSrc.includes("The image body never enters this"),
 );
+const authorizeSig = fieldActionSrc.match(
+  /export async function authorizeAssignedJobPhotoUpload\(input: \{[^}]+\}\)/,
+);
 check(
   "Field photo authorize input has no client-supplied businessId",
-  !/authorizeAssignedJobPhotoUpload\(input: \{[\s\S]*?businessId/.test(fieldActionSrc) &&
+  Boolean(authorizeSig) &&
+    !authorizeSig[0].includes("businessId") &&
     !fieldActionSrc.includes('formData.get("businessId")') &&
     !fieldActionSrc.includes("input.businessId"),
 );

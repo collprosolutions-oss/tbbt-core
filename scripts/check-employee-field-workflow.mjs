@@ -161,10 +161,12 @@ check(
     !fieldJobActionsSrc.includes('formData.get("file")') &&
     !fieldJobActionsSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES"),
 );
+const authorizePhotoSig = fieldJobActionsSrc.match(
+  /export async function authorizeAssignedJobPhotoUpload\(input: \{[^}]+\}\)/,
+);
 check(
   "Field photo authorize input has no client-supplied businessId",
-  /export async function authorizeAssignedJobPhotoUpload\(input: \{[\s\S]*?\}\)/.test(fieldJobActionsSrc) &&
-    !/export async function authorizeAssignedJobPhotoUpload\(input: \{[\s\S]*?businessId/.test(fieldJobActionsSrc),
+  Boolean(authorizePhotoSig) && !authorizePhotoSig[0].includes("businessId"),
 );
 const fieldPhotoFormSrc = readFileSync(new URL("../src/components/field/add-field-job-photo-form.tsx", import.meta.url), "utf8");
 check(
