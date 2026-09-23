@@ -2,7 +2,7 @@
  * Pure workspace-scoping helpers.
  *
  * These are the query/guard primitives used by requireBusinessAccess()
- * (src/lib/access.ts). They have no next/headers dependency so Node
+ * (src/lib/access.ts). They have no request-cookie dependency so Node
  * isolation scripts can import the exact production helpers.
  */
 
