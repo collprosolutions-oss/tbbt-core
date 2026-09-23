@@ -176,6 +176,21 @@ check(
     fieldPhotoFormSrc.includes("fetch(authorized.uploadUrl") &&
     fieldPhotoFormSrc.includes("abortAssignedJobPhotoUpload"),
 );
+const privatePhotoRouteSrc = readFileSync(
+  new URL("../src/app/api/storage/private/[assetId]/route.ts", import.meta.url),
+  "utf8",
+);
+const privatePhotoServeSrc = readFileSync(
+  new URL("../src/lib/business-storage/private-serve.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Private Job photo reads for MEMBER are assignment-scoped, not business-wide",
+  privatePhotoRouteSrc.includes("access.workspace.membership.id") &&
+    privatePhotoServeSrc.includes("canAccessManagementConsole") &&
+    privatePhotoServeSrc.includes('category !== "JOB_PHOTO"') &&
+    privatePhotoServeSrc.includes("assignedMembershipId"),
+);
 const fieldAccessSrc = readFileSync(new URL("../src/lib/field-access.ts", import.meta.url), "utf8");
 check(
   "src/lib/field-access.ts scopes every Job lookup by businessId AND assignedMembershipId in one query",

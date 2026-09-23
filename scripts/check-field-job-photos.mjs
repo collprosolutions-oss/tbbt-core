@@ -26,7 +26,14 @@ const {
   jobPhotoSrc,
   privateAssetPath,
   putAssignedFieldJobPhotoFromBytes,
+  servePrivateStoredAsset,
 } = await import("@/lib/business-storage/index");
+const { authorizeManagedUpload, finalizeManagedUpload } = await import(
+  "@/lib/business-storage/service"
+);
+const { putPublicRequestPhotoFromBytes } = await import(
+  "@/lib/business-storage/request-photos"
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -79,6 +86,8 @@ function readRepo(path) {
 const fieldActionSrc = readRepo("src/app/actions/field-job.ts");
 const fieldFormSrc = readRepo("src/components/field/add-field-job-photo-form.tsx");
 const fieldPhotoLibSrc = readRepo("src/lib/business-storage/field-job-photos.ts");
+const privateServeSrc = readRepo("src/lib/business-storage/private-serve.ts");
+const privateRouteSrc = readRepo("src/app/api/storage/private/[assetId]/route.ts");
 const storageSrc = readRepo("src/lib/storage.ts");
 const ownerPhotoSrc = readRepo("src/app/actions/job-photo.ts");
 
@@ -131,6 +140,21 @@ check(
   "Missing R2 configuration returns a clear operational error",
   fieldActionSrc.includes("isBusinessStorageConfigured()") &&
     fieldActionSrc.includes("Ask an admin to connect platform file storage (Cloudflare R2)"),
+);
+check(
+  "Private asset route derives viewer role and membership from the session workspace",
+  privateRouteSrc.includes("access.workspace.role") &&
+    privateRouteSrc.includes("access.workspace.membership.id") &&
+    privateRouteSrc.includes("access.businessId") &&
+    !privateRouteSrc.includes("searchParams") &&
+    !privateRouteSrc.includes("businessId="),
+);
+check(
+  "MEMBER private reads require an assigned JOB_PHOTO; OWNER/ADMIN stay business-wide",
+  privateServeSrc.includes("canAccessManagementConsole") &&
+    privateServeSrc.includes('category !== "JOB_PHOTO"') &&
+    privateServeSrc.includes("assignedMembershipId: input.membershipId") &&
+    privateServeSrc.includes('body: "Not found"'),
 );
 
 const savedR2 = {
@@ -208,6 +232,9 @@ try {
   const ownerUser = await prisma.user.create({
     data: { name: "Olivia Owner", email: `owner-fjp-${randomUUID()}@example.com`, passwordHash: "x" },
   });
+  const adminUser = await prisma.user.create({
+    data: { name: "Amir Admin", email: `admin-fjp-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
   const memberUser = await prisma.user.create({
     data: { name: "Mia Member", email: `member-fjp-${randomUUID()}@example.com`, passwordHash: "x" },
   });
@@ -225,6 +252,9 @@ try {
   });
   const ownerMem = await prisma.membership.create({
     data: { userId: ownerUser.id, businessId: businessA.id, role: "OWNER" },
+  });
+  const adminMem = await prisma.membership.create({
+    data: { userId: adminUser.id, businessId: businessA.id, role: "ADMIN" },
   });
   const memberMem = await prisma.membership.create({
     data: { userId: memberUser.id, businessId: businessA.id, role: "MEMBER" },
@@ -266,6 +296,16 @@ try {
       projectToken: randomUUID(),
       status: "SCHEDULED",
       assignedMembershipId: ownerMem.id,
+    },
+  });
+  const otherAssignedJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "SCHEDULED",
+      assignedMembershipId: otherMem.id,
     },
   });
   const unassignedJob = await prisma.job.create({
@@ -476,9 +516,150 @@ try {
       saved.asset.visibility === "PRIVATE" &&
       saved.asset.publicPath == null,
   );
+  const assignedViewer = { role: "MEMBER", membershipId: memberMem.id };
+  const otherViewer = { role: "MEMBER", membershipId: otherMem.id };
+  const ownerViewer = { role: "OWNER", membershipId: ownerMem.id };
+  const adminViewer = { role: "ADMIN", membershipId: adminMem.id };
+  const betaViewer = { role: "OWNER", membershipId: betaMem.id };
+
+  const assignedRead = await servePrivateStoredAsset(
+    prisma,
+    saved.asset.id,
+    businessA.id,
+    { provider, viewer: assignedViewer },
+  );
   check(
-    "New R2-backed job photo renders through the private serve path",
-    jobPhotoSrc(saved.photo) === `/api/storage/private/${saved.asset.id}`,
+    "Assigned MEMBER can retrieve their R2-backed Job photo bytes",
+    assignedRead.ok === true &&
+      assignedRead.status === 200 &&
+      assignedRead.contentType === "image/jpeg" &&
+      Buffer.from(assignedRead.body).equals(jpeg) &&
+      jobPhotoSrc(saved.photo) === privateAssetPath(saved.asset.id),
+  );
+
+  const otherRead = await servePrivateStoredAsset(
+    prisma,
+    saved.asset.id,
+    businessA.id,
+    { provider, viewer: otherViewer },
+  );
+  check(
+    "Another MEMBER in the same business cannot read that Job photo",
+    otherRead.ok === false && otherRead.status === 404 && otherRead.body === "Not found",
+  );
+
+  const otherSaved = await putAssignedFieldJobPhotoFromBytes(deps, otherField, {
+    jobId: otherAssignedJob.id,
+    originalFilename: "other.jpg",
+    mimeType: "image/jpeg",
+    body: jpeg,
+    stage: "BEFORE",
+  });
+  const otherJobReadByAssigned = await servePrivateStoredAsset(
+    prisma,
+    otherSaved.asset.id,
+    businessA.id,
+    { provider, viewer: assignedViewer },
+  );
+  check(
+    "MEMBER cannot retrieve another member's assigned Job photo",
+    otherJobReadByAssigned.ok === false && otherJobReadByAssigned.status === 404,
+  );
+
+  const unassignedAuth = await authorizeManagedUpload(deps, businessA.id, {
+    category: "JOB_PHOTO",
+    purpose: "unassigned-job-photo",
+    originalFilename: "unassigned.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+    visibility: "PRIVATE",
+    jobId: unassignedJob.id,
+  });
+  await provider.putObject({
+    bucket: unassignedAuth.account.bucketName,
+    key: unassignedAuth.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  const unassignedAsset = await finalizeManagedUpload(
+    deps,
+    businessA.id,
+    unassignedAuth.asset.id,
+  );
+  const unassignedRead = await servePrivateStoredAsset(
+    prisma,
+    unassignedAsset.id,
+    businessA.id,
+    { provider, viewer: assignedViewer },
+  );
+  check(
+    "MEMBER cannot retrieve an unassigned Job photo",
+    unassignedRead.ok === false && unassignedRead.status === 404,
+  );
+
+  const requestPhoto = await putPublicRequestPhotoFromBytes(deps, businessA.slug, {
+    originalFilename: "intake.jpg",
+    mimeType: "image/jpeg",
+    body: jpeg,
+  });
+  const customerPhotoRead = await servePrivateStoredAsset(
+    prisma,
+    requestPhoto.id,
+    businessA.id,
+    { provider, viewer: assignedViewer },
+  );
+  check(
+    "MEMBER cannot retrieve a CUSTOMER_PHOTO from the same business",
+    customerPhotoRead.ok === false &&
+      customerPhotoRead.status === 404 &&
+      customerPhotoRead.body === "Not found",
+  );
+
+  const ownerRead = await servePrivateStoredAsset(
+    prisma,
+    saved.asset.id,
+    businessA.id,
+    { provider, viewer: ownerViewer },
+  );
+  const adminRead = await servePrivateStoredAsset(
+    prisma,
+    saved.asset.id,
+    businessA.id,
+    { provider, viewer: adminViewer },
+  );
+  const ownerRequestRead = await servePrivateStoredAsset(
+    prisma,
+    requestPhoto.id,
+    businessA.id,
+    { provider, viewer: ownerViewer },
+  );
+  check(
+    "OWNER/ADMIN can still retrieve the Job photo and management private assets",
+    ownerRead.ok === true &&
+      Buffer.from(ownerRead.body).equals(jpeg) &&
+      adminRead.ok === true &&
+      Buffer.from(adminRead.body).equals(jpeg) &&
+      ownerRequestRead.ok === true,
+  );
+
+  const crossRead = await servePrivateStoredAsset(
+    prisma,
+    saved.asset.id,
+    businessB.id,
+    { provider, viewer: betaViewer },
+  );
+  const forgedRead = await servePrivateStoredAsset(
+    prisma,
+    saved.asset.id,
+    businessB.id,
+    { provider, viewer: { role: "MEMBER", membershipId: memberMem.id } },
+  );
+  check(
+    "Cross-business private Job photo access remains denied",
+    crossRead.ok === false &&
+      crossRead.status === 404 &&
+      forgedRead.ok === false &&
+      forgedRead.status === 404,
   );
 
   const legacy = await prisma.jobPhoto.create({

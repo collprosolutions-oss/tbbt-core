@@ -17,6 +17,7 @@ export {
   privateAssetContentDisposition,
   servePrivateStoredAsset,
 } from "@/lib/business-storage/private-serve";
+export type { PrivateAssetViewer } from "@/lib/business-storage/private-serve";
 export { servePublicStoredAsset } from "@/lib/business-storage/public-serve";
 export {
   R2_BROWSER_UPLOAD_ALLOWED_HEADERS,

@@ -18,7 +18,12 @@ export async function GET(
   }
 
   const { assetId } = await context.params;
-  const result = await servePrivateStoredAsset(prisma, assetId, access.businessId);
+  const result = await servePrivateStoredAsset(prisma, assetId, access.businessId, {
+    viewer: {
+      role: access.workspace.role,
+      membershipId: access.workspace.membership.id,
+    },
+  });
   if (!result.ok) {
     return new NextResponse(result.body, { status: result.status });
   }

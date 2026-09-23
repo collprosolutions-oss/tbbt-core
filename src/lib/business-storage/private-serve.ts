@@ -1,10 +1,16 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { MembershipRole, Prisma, PrismaClient } from "@prisma/client";
+import { canAccessManagementConsole } from "@/lib/authorization";
 import {
   resolveStorageProvider,
   type StorageServiceDeps,
 } from "@/lib/business-storage/service";
 
 type Db = PrismaClient | Prisma.TransactionClient;
+
+export type PrivateAssetViewer = {
+  role: MembershipRole;
+  membershipId: string;
+};
 
 export type PrivateStoredAssetServeResult =
   | {
@@ -46,15 +52,16 @@ export function privateAssetContentDisposition(input: {
 }
 
 /**
- * Authenticated owner/admin delivery of PRIVATE (or any READY) assets
- * that belong to the workspace. Never used for unauthenticated public
- * website photos.
+ * Authenticated private-asset delivery. OWNER/ADMIN keep business-wide
+ * workspace reads used by management pages. MEMBER may read only a
+ * READY JOB_PHOTO whose job is assigned to that exact membership.
+ * Missing or unauthorized assets both return 404.
  */
 export async function servePrivateStoredAsset(
   db: Db,
   assetId: string,
   businessId: string,
-  deps?: Pick<StorageServiceDeps, "provider">,
+  deps?: Pick<StorageServiceDeps, "provider"> & { viewer?: PrivateAssetViewer },
 ): Promise<PrivateStoredAssetServeResult> {
   const id = assetId.trim();
   if (!id || !businessId.trim()) {
@@ -72,6 +79,17 @@ export async function servePrivateStoredAsset(
   });
   if (!asset) {
     return { ok: false, status: 404, body: "Not found" };
+  }
+
+  if (deps?.viewer && !canAccessManagementConsole(deps.viewer.role)) {
+    const allowed = await memberCanReadAssignedJobPhoto(db, {
+      businessId,
+      membershipId: deps.viewer.membershipId,
+      asset,
+    });
+    if (!allowed) {
+      return { ok: false, status: 404, body: "Not found" };
+    }
   }
 
   let provider;
@@ -108,4 +126,30 @@ export async function servePrivateStoredAsset(
   } catch {
     return { ok: false, status: 502, body: "Storage read failed" };
   }
+}
+
+async function memberCanReadAssignedJobPhoto(
+  db: Db,
+  input: {
+    businessId: string;
+    membershipId: string;
+    asset: { category: string; jobId: string | null };
+  },
+) {
+  if (
+    input.asset.category !== "JOB_PHOTO" ||
+    !input.asset.jobId ||
+    !input.membershipId.trim()
+  ) {
+    return false;
+  }
+  const job = await db.job.findFirst({
+    where: {
+      id: input.asset.jobId,
+      businessId: input.businessId,
+      assignedMembershipId: input.membershipId,
+    },
+    select: { id: true },
+  });
+  return Boolean(job);
 }

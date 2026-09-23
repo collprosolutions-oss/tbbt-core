@@ -138,6 +138,13 @@ check("Field job photos reuse private R2 authorize/PUT/finalize",
     fieldJobPhotoSrc.includes('visibility: "PRIVATE"') &&
     fieldJobActionSrc.includes("authorizeAssignedFieldJobPhoto") &&
     !fieldJobActionSrc.includes("uploadJobPhoto"));
+const privateRouteSrc = readRepo("src/app/api/storage/private/[assetId]/route.ts");
+const privateServeSrc = readRepo("src/lib/business-storage/private-serve.ts");
+check("Private asset reads are role-aware: MEMBER is assignment-scoped, OWNER/ADMIN stay business-wide",
+  privateRouteSrc.includes("access.workspace.role") &&
+    privateRouteSrc.includes("access.workspace.membership.id") &&
+    privateServeSrc.includes("canAccessManagementConsole") &&
+    privateServeSrc.includes("assignedMembershipId"));
 check("Public website assets use an explicit public path",
   isManagedPublicAssetPath("/api/storage/public/asset123") &&
     !isManagedPublicAssetPath("/api/storage/public/../secret"));
