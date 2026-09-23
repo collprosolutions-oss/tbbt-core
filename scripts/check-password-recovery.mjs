@@ -169,11 +169,14 @@ check(
     resetOpSrc.indexOf("passwordResetToken.updateMany") < resetOpSrc.indexOf("session.deleteMany") &&
     resetOpSrc.indexOf("tx.user.update") < resetOpSrc.indexOf("session.deleteMany"),
 );
+const completeActionSrc = resetActionSrc.slice(
+  resetActionSrc.indexOf("export async function completePasswordResetAction"),
+);
 check(
   "Recovery action creates the fresh session only after a successful reset",
-  resetActionSrc.indexOf("completePasswordResetOp") < resetActionSrc.indexOf("createSession") &&
-    resetActionSrc.includes("if (!result.ok)") &&
-    resetActionSrc.indexOf("if (!result.ok)") < resetActionSrc.indexOf("createSession"),
+  completeActionSrc.includes("if (!result.ok)") &&
+    completeActionSrc.indexOf("if (!result.ok)") < completeActionSrc.indexOf("createSession") &&
+    completeActionSrc.indexOf("completePasswordResetOp") < completeActionSrc.indexOf("createSession"),
 );
 check(
   "Signed-in change password does not revoke sessions",
