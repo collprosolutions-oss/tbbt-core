@@ -578,9 +578,12 @@ try {
       !privateServeSrc.includes("Buffer.from"),
   );
   check(
-    "recordSucceededPayment asserts related customer/estimate/job/invoice ownership before create",
+    "recordSucceededPayment and attachEstimatePaymentsToInvoice share the related-record ownership guard",
     projectPaymentsSrc.includes("assertRelatedPaymentRecordsOwned") &&
-      projectPaymentsSrc.includes("That payment could not be recorded."),
+      projectPaymentsSrc.includes("That payment could not be recorded.") &&
+      /export async function attachEstimatePaymentsToInvoice[\s\S]*await assertRelatedPaymentRecordsOwned\(db, input\);[\s\S]*updateMany/.test(
+        projectPaymentsSrc,
+      ),
   );
   check(
     "publicToken / projectToken are not treated as workspace IDs in access.ts",
@@ -735,7 +738,17 @@ try {
   });
   check("Payment A amount is unchanged", paymentAAfter.amount.toString() === "50");
 
-  await expectAllowedPositiveControls();
+  console.log("\nPOSITIVE — Same-tenant production guards still succeed");
+  await mirrorUpdateCustomer(accessA, tenantA.customer.id, { name: "Alpha Customer" });
+  check("A can update Customer A (updateCustomer)", true);
+  const persistA = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: accessA.businessId,
+    jobId: tenantA.job.id,
+  });
+  check(
+    "persistDraftInvoiceFromCompletedJob(A, Job A) reuses A's invoice",
+    persistA.ok === true && persistA.reused === true,
+  );
 
   console.log("\nATTACH — Relation isolation (FKs alone are not enough)");
   await expectRejects(
@@ -909,24 +922,113 @@ try {
       }),
   );
 
-  const attached = await attachEstimatePaymentsToInvoice(prisma, {
-    businessId: accessB.businessId,
-    estimateId: tenantA.estimate.id,
-    jobId: tenantA.job.id,
-    invoiceId: tenantB.invoice.id,
+  await expectRejects(
+    "attachEstimatePaymentsToInvoice(B, Estimate/Job A → Invoice B) is rejected",
+    () =>
+      attachEstimatePaymentsToInvoice(prisma, {
+        businessId: accessB.businessId,
+        estimateId: tenantA.estimate.id,
+        jobId: tenantA.job.id,
+        invoiceId: tenantB.invoice.id,
+      }),
+    (error) =>
+      error instanceof ProjectPaymentError &&
+      error.message === "That payment could not be recorded.",
+  );
+
+  const unattachedA = await prisma.payment.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      estimateId: tenantA.estimate.id,
+      purpose: PAYMENT_PURPOSE_MATERIAL_DEPOSIT,
+      amount: new Prisma.Decimal(20),
+      method: "CASH",
+    },
   });
   check(
-    "attachEstimatePaymentsToInvoice(B, Estimate/Job A → Invoice B) updates 0 rows",
-    attached === 0,
+    "Unattached Payment A is ready to be claimed by same-tenant attach",
+    unattachedA.invoiceId === null && unattachedA.jobId === null,
   );
+
+  await expectRejects(
+    "Payment A / Estimate A → Invoice B is rejected",
+    () =>
+      attachEstimatePaymentsToInvoice(prisma, {
+        businessId: accessA.businessId,
+        estimateId: tenantA.estimate.id,
+        invoiceId: tenantB.invoice.id,
+      }),
+    (error) =>
+      error instanceof ProjectPaymentError &&
+      error.message === "That payment could not be recorded.",
+  );
+  await expectRejects(
+    "Payment A / Estimate A → Job B is rejected",
+    () =>
+      attachEstimatePaymentsToInvoice(prisma, {
+        businessId: accessA.businessId,
+        estimateId: tenantA.estimate.id,
+        jobId: tenantB.job.id,
+        invoiceId: tenantA.invoice.id,
+      }),
+    (error) =>
+      error instanceof ProjectPaymentError &&
+      error.message === "That payment could not be recorded.",
+  );
+  await expectRejects(
+    "Payment A → Invoice B + Job B is rejected",
+    () =>
+      attachEstimatePaymentsToInvoice(prisma, {
+        businessId: accessA.businessId,
+        estimateId: tenantA.estimate.id,
+        jobId: tenantB.job.id,
+        invoiceId: tenantB.invoice.id,
+      }),
+    (error) =>
+      error instanceof ProjectPaymentError &&
+      error.message === "That payment could not be recorded.",
+  );
+
   const paymentAUnmoved = await prisma.payment.findUnique({
     where: { id: tenantA.payment.id },
   });
+  const unattachedAfterReject = await prisma.payment.findUnique({
+    where: { id: unattachedA.id },
+  });
   check(
-    "Payment A is still attached to Invoice/Job A, not Invoice B",
+    "Payment A remains attached only to A records after rejected attach",
     paymentAUnmoved.invoiceId === tenantA.invoice.id &&
       paymentAUnmoved.jobId === tenantA.job.id &&
+      paymentAUnmoved.estimateId === tenantA.estimate.id &&
       paymentAUnmoved.businessId === tenantA.business.id,
+  );
+  check(
+    "Unattached Payment A was not mutated by the rejected foreign attach",
+    unattachedAfterReject.invoiceId === null &&
+      unattachedAfterReject.jobId === null &&
+      unattachedAfterReject.estimateId === tenantA.estimate.id &&
+      unattachedAfterReject.businessId === tenantA.business.id,
+  );
+
+  const attachedSameTenant = await attachEstimatePaymentsToInvoice(prisma, {
+    businessId: accessA.businessId,
+    estimateId: tenantA.estimate.id,
+    jobId: tenantA.job.id,
+    invoiceId: tenantA.invoice.id,
+  });
+  check(
+    "attachEstimatePaymentsToInvoice(A → A) still succeeds",
+    attachedSameTenant === 1,
+  );
+  const attachedNow = await prisma.payment.findUnique({
+    where: { id: unattachedA.id },
+  });
+  check(
+    "Same-tenant attach writes Invoice A and Job A onto the unattached Payment A",
+    attachedNow.invoiceId === tenantA.invoice.id &&
+      attachedNow.jobId === tenantA.job.id &&
+      attachedNow.businessId === tenantA.business.id,
   );
 
   const prismaLeak = await prisma.payment.create({
@@ -950,8 +1052,10 @@ try {
   });
   check(
     "A's financial query is unchanged after the Prisma leak probe was deleted",
-    aPaymentsAfterLeakProbe.length === 1 &&
-      aPaymentsAfterLeakProbe[0].id === tenantA.payment.id,
+    aPaymentsAfterLeakProbe.length === 2 &&
+      aPaymentsAfterLeakProbe.every((row) =>
+        [tenantA.payment.id, unattachedA.id].includes(row.id),
+      ),
   );
 
   const ownPayment = await recordSucceededPayment(prisma, {
@@ -1140,27 +1244,4 @@ try {
   } finally {
     await cleanup.$disconnect();
   }
-}
-
-async function expectAllowedPositiveControls() {
-  console.log("\nPOSITIVE — Same-tenant production guards still succeed");
-  const accessA = makeAccess(
-    (await prisma.customer.findFirst({ where: { name: "Alpha Customer" } })).businessId,
-    "OWNER",
-  );
-  await mirrorUpdateCustomer(accessA, (await prisma.customer.findFirst({
-    where: { name: "Alpha Customer" },
-  })).id, { name: "Alpha Customer" });
-  check("A can update Customer A (updateCustomer)", true);
-
-  const persistA = await persistDraftInvoiceFromCompletedJob(prisma, {
-    businessId: accessA.businessId,
-    jobId: (await prisma.job.findFirst({
-      where: { businessId: accessA.businessId },
-    })).id,
-  });
-  check(
-    "persistDraftInvoiceFromCompletedJob(A, Job A) reuses A's invoice",
-    persistA.ok === true && persistA.reused === true,
-  );
 }

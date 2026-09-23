@@ -374,8 +374,10 @@ export type RecordedPayment = {
 
 /**
  * Payment FKs to Customer/Estimate/Job/Invoice are not composite with
- * businessId. Prisma will persist a Payment for Business B that points at
- * Invoice A unless this helper rejects the related IDs first.
+ * businessId. Prisma will persist or retarget a Payment across tenants
+ * unless this helper rejects the related IDs first. Used by both
+ * recordSucceededPayment (create) and attachEstimatePaymentsToInvoice
+ * (updateMany).
  */
 async function assertRelatedPaymentRecordsOwned(
   db: PaymentsDb,
@@ -523,6 +525,7 @@ export async function attachEstimatePaymentsToInvoice(
   },
 ) {
   await ensurePaymentTable(db);
+  await assertRelatedPaymentRecordsOwned(db, input);
   const or: Prisma.PaymentWhereInput[] = [];
   if (input.estimateId) or.push({ estimateId: input.estimateId, invoiceId: null });
   if (input.jobId) or.push({ jobId: input.jobId, invoiceId: null });
