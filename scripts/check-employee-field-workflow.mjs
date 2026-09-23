@@ -153,6 +153,27 @@ check(
   "Every field action derives its Job through findAssignedJob() (assignment-scoped), not requireBusinessCapability() (business-wide)",
   fieldJobActionsSrc.includes("findAssignedJob(") && !fieldJobActionsSrc.includes("requireBusinessCapability("),
 );
+check(
+  "Field job photos authorize through R2, not a File body on the server action",
+  fieldJobActionsSrc.includes("authorizeAssignedJobPhotoUpload") &&
+    fieldJobActionsSrc.includes("finalizeAssignedJobPhotoUpload") &&
+    !fieldJobActionsSrc.includes("uploadJobPhoto") &&
+    !fieldJobActionsSrc.includes('formData.get("file")') &&
+    !fieldJobActionsSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES"),
+);
+check(
+  "Field photo authorize input has no client-supplied businessId",
+  /export async function authorizeAssignedJobPhotoUpload\(input: \{[\s\S]*?\}\)/.test(fieldJobActionsSrc) &&
+    !/export async function authorizeAssignedJobPhotoUpload\(input: \{[\s\S]*?businessId/.test(fieldJobActionsSrc),
+);
+const fieldPhotoFormSrc = readFileSync(new URL("../src/components/field/add-field-job-photo-form.tsx", import.meta.url), "utf8");
+check(
+  "Field photo form keeps capture=environment and PUTs the file to storage",
+  fieldPhotoFormSrc.includes('capture="environment"') &&
+    fieldPhotoFormSrc.includes("authorizeAssignedJobPhotoUpload") &&
+    fieldPhotoFormSrc.includes("fetch(authorized.uploadUrl") &&
+    fieldPhotoFormSrc.includes("abortAssignedJobPhotoUpload"),
+);
 const fieldAccessSrc = readFileSync(new URL("../src/lib/field-access.ts", import.meta.url), "utf8");
 check(
   "src/lib/field-access.ts scopes every Job lookup by businessId AND assignedMembershipId in one query",
@@ -487,10 +508,16 @@ try {
   check("A different member cannot Complete member1's job either", completeByWrongMember.ok === false);
 
   console.log("\nTEST 22/23 — Job Photos: assignment-scoped, mirroring the existing private JobPhoto model");
+  const { jobPhotoSrc } = await import("@/lib/business-storage/field-job-photos");
   const photoByAssigned = await prisma.jobPhoto.create({
     data: { businessId: businessA.id, jobId: assignedJob.id, stage: "BEFORE", url: "https://example.blob.vercel-storage.com/canary.jpg" },
   });
   check("TEST 22 - Assigned member's photo is created against the correct job", photoByAssigned.jobId === assignedJob.id);
+  check(
+    "TEST 22 - Legacy Blob-backed job photos still render from the stored URL",
+    jobPhotoSrc(photoByAssigned) === photoByAssigned.url &&
+      photoByAssigned.storedAssetId == null,
+  );
   const lookupForWrongMemberPhoto = await findAssignedJobLike(assignedJob.id, businessA.id, member2Membership.id);
   check("TEST 23 - A different member's assignment-scoped lookup of member1's job finds nothing (upload would be rejected before any write)", lookupForWrongMemberPhoto === null);
 

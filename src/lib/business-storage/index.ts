@@ -65,3 +65,12 @@ export type {
   StoredAssetCategory,
   StoredAssetVisibility,
 } from "@/lib/business-storage/types";
+export {
+  FIELD_JOB_PHOTO_MAX_BYTES,
+  abortAssignedFieldJobPhoto,
+  authorizeAssignedFieldJobPhoto,
+  finalizeAssignedFieldJobPhoto,
+  inspectFieldJobPhotoUpload,
+  jobPhotoSrc,
+  putAssignedFieldJobPhotoFromBytes,
+} from "@/lib/business-storage/field-job-photos";

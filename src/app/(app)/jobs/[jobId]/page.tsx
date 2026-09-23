@@ -18,6 +18,7 @@ import { CreateChangeOrderForm } from "@/components/jobs/create-change-order-for
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
 import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
+import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
 import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
@@ -136,7 +137,7 @@ export default async function JobPage({
         orderBy: { createdAt: "asc" },
       },
       photos: {
-        select: { id: true, stage: true, url: true, caption: true, createdAt: true },
+        select: { id: true, stage: true, url: true, storedAssetId: true, caption: true, createdAt: true },
         orderBy: { createdAt: "asc" },
       },
       changeOrders: {
@@ -257,7 +258,12 @@ export default async function JobPage({
     AFTER: [],
   };
   for (const photo of job.photos) {
-    photosByStage[photo.stage].push(photo);
+    photosByStage[photo.stage].push({
+      id: photo.id,
+      url: jobPhotoSrc(photo),
+      caption: photo.caption,
+      createdAt: photo.createdAt,
+    });
   }
 
   return (

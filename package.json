@@ -62,6 +62,7 @@
     "test:estimating-business-defaults": "node --experimental-strip-types scripts/check-estimating-business-defaults.mjs",
     "test:public-site-images": "node --experimental-strip-types scripts/check-public-site-images.mjs",
     "test:business-storage": "node --experimental-strip-types scripts/check-business-storage.mjs",
+    "test:field-job-photos": "node --experimental-strip-types scripts/check-field-job-photos.mjs",
     "test:r2-cors": "node --experimental-strip-types scripts/check-r2-browser-upload-cors.mjs",
     "test:invoice-document": "node --experimental-strip-types scripts/check-invoice-document.mjs",
     "test:complete-job-invoice": "node --experimental-strip-types scripts/check-complete-job-invoice.mjs",

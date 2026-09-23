@@ -25,6 +25,7 @@ import {
 import { formatAddress, formatDateTime, formatTime } from "@/lib/format";
 import { ownerAccessSummaryLines } from "@/lib/property-access";
 import { TIME_ACTIVITY_LABELS, isTimeActivityType } from "@/lib/time-cards";
+import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { prisma } from "@/lib/prisma";
 
@@ -121,7 +122,7 @@ export default async function FieldJobPage({
         select: { id: true, title: true, status: true },
       },
       photos: {
-        select: { id: true, stage: true, url: true, caption: true, createdAt: true },
+        select: { id: true, stage: true, url: true, storedAssetId: true, caption: true, createdAt: true },
         orderBy: { createdAt: "asc" },
       },
     },
@@ -159,13 +160,20 @@ export default async function FieldJobPage({
   const directions = directionsUrl(job.property);
   const tel = telHref(job.customer?.phone ?? null);
 
-  const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", typeof job.photos> = {
+  const photosByStage: Record<
+    "BEFORE" | "DURING" | "AFTER",
+    Array<{ id: string; url: string; caption: string | null }>
+  > = {
     BEFORE: [],
     DURING: [],
     AFTER: [],
   };
   for (const photo of job.photos) {
-    photosByStage[photo.stage].push(photo);
+    photosByStage[photo.stage].push({
+      id: photo.id,
+      url: jobPhotoSrc(photo),
+      caption: photo.caption,
+    });
   }
 
   return (
