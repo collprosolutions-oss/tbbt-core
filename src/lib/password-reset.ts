@@ -11,7 +11,7 @@ import {
   hashPassword,
   hashToken,
   verifyPassword,
-} from "@/lib/auth";
+} from "@/lib/auth-crypto";
 import {
   getAppUrl,
   getMailConfig,

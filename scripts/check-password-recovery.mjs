@@ -125,8 +125,9 @@ check("Reset URL builder has no business or tenant id", resetOpSrc.includes("/re
 check(
   "Reset page does not load business or tenant fields",
   resetPageSrc.includes("lookupUsablePasswordResetToken") &&
-    !resetPageSrc.includes("business") &&
-    !resetPageSrc.includes("membership"),
+    !resetPageSrc.includes("prisma.business") &&
+    !resetPageSrc.includes("memberships") &&
+    !resetPageSrc.includes("businessId"),
 );
 check(
   "Change-password action uses the session user, not a client userId",

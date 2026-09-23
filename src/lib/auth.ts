@@ -1,49 +1,23 @@
-import { createHash, randomBytes } from "node:crypto";
-import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
+import {
+  createSecureToken,
+  hashPassword,
+  hashToken,
+  verifyPassword,
+} from "@/lib/auth-crypto";
 import { SESSION_COOKIE, WORKSPACE_COOKIE } from "@/lib/cookies";
 import { prisma } from "@/lib/prisma";
 
 export { SESSION_COOKIE, WORKSPACE_COOKIE };
+export { createSecureToken, hashPassword, hashToken, verifyPassword };
 
 const SESSION_DAYS = 30;
-const SALT_ROUNDS = 10;
 
 export type SessionUser = {
   id: string;
   email: string;
   name: string;
 };
-
-/**
- * Exported so any other single-use, expiring, unguessable-token flow can
- * reuse this exact hashing scheme instead of inventing a new one -- see
- * PasswordSetupToken in prisma/schema.prisma and
- * src/app/actions/team.ts::addTeamMember(), which mirrors Session's
- * "store only the hash, mail/display only the raw token" pattern.
- */
-export function hashToken(token: string) {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-export async function hashPassword(password: string) {
-  return bcrypt.hash(password, SALT_ROUNDS);
-}
-
-export async function verifyPassword(password: string, passwordHash: string) {
-  return bcrypt.compare(password, passwordHash);
-}
-
-/**
- * A cryptographically random, URL-safe raw token. Callers store only
- * `hashToken(token)` and hand the raw value to the user exactly once (a
- * cookie for a session, a URL for a PasswordSetupToken) -- see
- * createSessionToken() below and addTeamMember() in
- * src/app/actions/team.ts.
- */
-export function createSecureToken() {
-  return randomBytes(32).toString("hex");
-}
 
 export function createSessionToken() {
   return createSecureToken();
