@@ -277,6 +277,13 @@ export async function completePasswordResetOp(
         data: { passwordHash },
       });
       await invalidateUnusedResetTokens(tx, resetToken.userId, now);
+      // Forgot-password reset is an account-recovery event: any existing
+      // session (including a stolen cookie) must die in the same
+      // transaction. The server action may create one fresh session after
+      // this returns. A failed claim never reaches this delete.
+      await tx.session.deleteMany({
+        where: { userId: resetToken.userId },
+      });
       return resetToken.userId;
     });
 

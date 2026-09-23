@@ -163,6 +163,23 @@ check(
     resetOpSrc.indexOf("passwordResetToken.updateMany") < resetOpSrc.indexOf("tx.user.update") &&
     !/const resetToken = await db\.passwordResetToken\.findUnique/.test(resetOpSrc),
 );
+check(
+  "Successful reset revokes existing sessions inside the same transaction",
+  resetOpSrc.includes("session.deleteMany") &&
+    resetOpSrc.indexOf("passwordResetToken.updateMany") < resetOpSrc.indexOf("session.deleteMany") &&
+    resetOpSrc.indexOf("tx.user.update") < resetOpSrc.indexOf("session.deleteMany"),
+);
+check(
+  "Recovery action creates the fresh session only after a successful reset",
+  resetActionSrc.indexOf("completePasswordResetOp") < resetActionSrc.indexOf("createSession") &&
+    resetActionSrc.includes("if (!result.ok)") &&
+    resetActionSrc.indexOf("if (!result.ok)") < resetActionSrc.indexOf("createSession"),
+);
+check(
+  "Signed-in change password does not revoke sessions",
+  !changeActionSrc.includes("session.delete") &&
+    !resetOpSrc.slice(resetOpSrc.indexOf("changeSignedInPasswordOp")).includes("session.deleteMany"),
+);
 
 const resetEmail = buildPasswordResetEmail({
   resetUrl: "https://app.example.test/reset-password/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -533,6 +550,102 @@ try {
     racedReplay.ok === false && racedReplay.error === PASSWORD_RESET_TOKEN_ERROR,
   );
 
+  console.log("\nTEST — successful reset revokes old sessions; failed reset does not");
+  async function createSessionRow(userId) {
+    const tokenHash = hashToken(`${userId}:${randomUUID()}`);
+    await prisma.session.create({
+      data: {
+        userId,
+        tokenHash,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+    });
+    return tokenHash;
+  }
+  const sessionUserPassword = "session-old-pass";
+  const sessionUser = await prisma.user.create({
+    data: {
+      name: "Seth Session",
+      email: `session-reset-${suffix}@example.com`,
+      passwordHash: await hashPassword(sessionUserPassword),
+    },
+  });
+  await prisma.membership.create({
+    data: { userId: sessionUser.id, businessId: business.id, role: "OWNER" },
+  });
+  const bystander = await prisma.user.create({
+    data: {
+      name: "Bea Bystander",
+      email: `bystander-reset-${suffix}@example.com`,
+      passwordHash: await hashPassword("bystander-pass"),
+    },
+  });
+  const oldSessionHashes = [
+    await createSessionRow(sessionUser.id),
+    await createSessionRow(sessionUser.id),
+  ];
+  const bystanderSessionHash = await createSessionRow(bystander.id);
+  check(
+    "User has multiple active sessions before reset",
+    (await prisma.session.count({ where: { userId: sessionUser.id } })) === 2,
+  );
+  const sessionMailer = makeMailer();
+  const sessionRequest = await requestPasswordResetOp(prisma, sessionUser.email, sessionMailer);
+  const sessionRaw = rawTokenFromSend(sessionMailer.sends[0]);
+  check("Session user received a usable reset token", sessionRequest.outcome === "sent" && Boolean(sessionRaw));
+  const invalidWhileSessionsLive = await completePasswordResetOp(prisma, {
+    token: "not-a-token",
+    password: "session-new-pass",
+    confirmPassword: "session-new-pass",
+  });
+  check(
+    "Invalid reset does not remove valid sessions",
+    invalidWhileSessionsLive.ok === false &&
+      invalidWhileSessionsLive.error === PASSWORD_RESET_TOKEN_ERROR &&
+      (await prisma.session.count({ where: { userId: sessionUser.id } })) === 2 &&
+      (await prisma.session.count({ where: { tokenHash: { in: oldSessionHashes } } })) === 2,
+  );
+  const sessionReset = await completePasswordResetOp(prisma, {
+    token: sessionRaw,
+    password: "session-new-pass",
+    confirmPassword: "session-new-pass",
+  });
+  check("Successful forgot-password reset still succeeds", sessionReset.ok === true);
+  check(
+    "Successful reset removes all old sessions for that user",
+    (await prisma.session.count({ where: { userId: sessionUser.id } })) === 0 &&
+      (await prisma.session.count({ where: { tokenHash: { in: oldSessionHashes } } })) === 0,
+  );
+  check(
+    "Reset does not revoke another user's sessions",
+    (await prisma.session.count({ where: { tokenHash: bystanderSessionHash } })) === 1,
+  );
+  const recoverySessionHash = hashToken(`recovery:${sessionUser.id}:${randomUUID()}`);
+  await prisma.session.create({
+    data: {
+      userId: sessionUser.id,
+      tokenHash: recoverySessionHash,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    },
+  });
+  check(
+    "Recovery flow creates only the new post-reset session afterward",
+    (await prisma.session.count({ where: { userId: sessionUser.id } })) === 1 &&
+      (await prisma.session.findUnique({ where: { tokenHash: recoverySessionHash } })) !== null,
+  );
+  const reusedAfterSessionReset = await completePasswordResetOp(prisma, {
+    token: sessionRaw,
+    password: "session-replay-pass",
+    confirmPassword: "session-replay-pass",
+  });
+  check(
+    "Reused reset does not remove the new recovery session",
+    reusedAfterSessionReset.ok === false &&
+      reusedAfterSessionReset.error === PASSWORD_RESET_TOKEN_ERROR &&
+      (await prisma.session.count({ where: { userId: sessionUser.id } })) === 1 &&
+      (await prisma.session.findUnique({ where: { tokenHash: recoverySessionHash } })) !== null,
+  );
+
   console.log("\nTEST — MEMBER / ADMIN / OWNER can recover their own password without authz changes");
   for (const account of [
     { user: admin, role: "ADMIN", oldPassword: adminPassword, nextPassword: "admin-new-pass" },
@@ -574,6 +687,7 @@ try {
   check("OWNER still can manage settings after recovery", roleHasCapability("OWNER", CAPABILITIES.MANAGE_SETTINGS));
 
   console.log("\nTEST — signed-in change password requires the current password");
+  const changeSessionHash = await createSessionRow(owner.id);
   const changeBefore = await snapshotAuthz(owner.id, business.id);
   const wrongCurrent = await changeSignedInPasswordOp(prisma, {
     userId: owner.id,
@@ -614,6 +728,10 @@ try {
     "Changed password authenticates and the previous one does not",
     (await verifyPassword("owner-changed-pass", changeAfter.user.passwordHash)) === true &&
       (await verifyPassword(ownerNewPassword, changeAfter.user.passwordHash)) === false,
+  );
+  check(
+    "Signed-in change password leaves existing sessions in place",
+    (await prisma.session.findUnique({ where: { tokenHash: changeSessionHash } })) !== null,
   );
   check(
     "Change password does not alter role / business / tenant / subscription state",
