@@ -218,6 +218,13 @@ export async function lookupUsablePasswordResetToken(
   return token;
 }
 
+class PasswordResetTokenClaimError extends Error {
+  constructor() {
+    super(PASSWORD_RESET_TOKEN_ERROR);
+    this.name = "PasswordResetTokenClaimError";
+  }
+}
+
 export async function completePasswordResetOp(
   db: PrismaClient,
   input: { token: string; password: string; confirmPassword: string },
@@ -237,24 +244,49 @@ export async function completePasswordResetOp(
     return { ok: false, error: "Passwords do not match." };
   }
 
-  const resetToken = await db.passwordResetToken.findUnique({
-    where: { tokenHash: hashToken(token) },
-  });
-
-  if (!resetToken || resetToken.usedAt || resetToken.expiresAt <= now) {
-    return { ok: false, error: PASSWORD_RESET_TOKEN_ERROR };
-  }
-
+  const tokenHash = hashToken(token);
   const passwordHash = await hashPassword(password);
-  await db.$transaction(async (tx) => {
-    await tx.user.update({
-      where: { id: resetToken.userId },
-      data: { passwordHash },
-    });
-    await invalidateUnusedResetTokens(tx, resetToken.userId, now);
-  });
 
-  return { ok: true, userId: resetToken.userId };
+  try {
+    const userId = await db.$transaction(async (tx) => {
+      // Atomic claim: only one concurrent reset can flip this row.
+      // usedAt IS NULL + expiresAt still in the future must both hold
+      // at UPDATE time, not from a pre-transaction read.
+      const claimed = await tx.passwordResetToken.updateMany({
+        where: {
+          tokenHash,
+          usedAt: null,
+          expiresAt: { gt: now },
+        },
+        data: { usedAt: now },
+      });
+      if (claimed.count !== 1) {
+        throw new PasswordResetTokenClaimError();
+      }
+
+      const resetToken = await tx.passwordResetToken.findUnique({
+        where: { tokenHash },
+        select: { userId: true },
+      });
+      if (!resetToken) {
+        throw new PasswordResetTokenClaimError();
+      }
+
+      await tx.user.update({
+        where: { id: resetToken.userId },
+        data: { passwordHash },
+      });
+      await invalidateUnusedResetTokens(tx, resetToken.userId, now);
+      return resetToken.userId;
+    });
+
+    return { ok: true, userId };
+  } catch (error) {
+    if (error instanceof PasswordResetTokenClaimError) {
+      return { ok: false, error: PASSWORD_RESET_TOKEN_ERROR };
+    }
+    throw error;
+  }
 }
 
 export async function changeSignedInPasswordOp(

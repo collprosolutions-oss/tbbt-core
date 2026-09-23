@@ -156,6 +156,13 @@ check(
     !/console\.(log|error|info|warn)\([^)]*password/i.test(changeActionSrc) &&
     !/console\.(log|error|info|warn)\([^)]*token/i.test(resetActionSrc),
 );
+check(
+  "Reset consumes the token atomically inside the password-write transaction",
+  resetOpSrc.includes("claimed.count !== 1") &&
+    /updateMany\([\s\S]*tokenHash[\s\S]*usedAt:\s*null[\s\S]*expiresAt:/.test(resetOpSrc) &&
+    resetOpSrc.indexOf("passwordResetToken.updateMany") < resetOpSrc.indexOf("tx.user.update") &&
+    !/const resetToken = await db\.passwordResetToken\.findUnique/.test(resetOpSrc),
+);
 
 const resetEmail = buildPasswordResetEmail({
   resetUrl: "https://app.example.test/reset-password/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -463,6 +470,68 @@ try {
       malformed.ok === false && malformed.error === PASSWORD_RESET_TOKEN_ERROR,
     );
   }
+
+  console.log("\nTEST — concurrent submissions of the same token claim it once");
+  const racerPassword = "racer-old-pass";
+  const racer = await prisma.user.create({
+    data: {
+      name: "Riley Racer",
+      email: `racer-reset-${suffix}@example.com`,
+      passwordHash: await hashPassword(racerPassword),
+    },
+  });
+  await prisma.membership.create({
+    data: { userId: racer.id, businessId: business.id, role: "OWNER" },
+  });
+  const racerMailer = makeMailer();
+  const racerRequest = await requestPasswordResetOp(prisma, racer.email, racerMailer);
+  const racerRaw = rawTokenFromSend(racerMailer.sends[0]);
+  check("Racer received a usable reset token", racerRequest.outcome === "sent" && Boolean(racerRaw));
+  const [firstRace, secondRace] = await Promise.all([
+    completePasswordResetOp(prisma, {
+      token: racerRaw,
+      password: "racer-win-pass-1",
+      confirmPassword: "racer-win-pass-1",
+    }),
+    completePasswordResetOp(prisma, {
+      token: racerRaw,
+      password: "racer-win-pass-2",
+      confirmPassword: "racer-win-pass-2",
+    }),
+  ]);
+  const raceWins = [firstRace, secondRace].filter((result) => result.ok);
+  const raceFails = [firstRace, secondRace].filter((result) => !result.ok);
+  check("Exactly one concurrent reset succeeds", raceWins.length === 1 && raceWins[0].userId === racer.id);
+  check(
+    "Exactly one concurrent reset fails with the generic token error",
+    raceFails.length === 1 && raceFails[0].error === PASSWORD_RESET_TOKEN_ERROR,
+  );
+  const racerAfter = await prisma.user.findUnique({ where: { id: racer.id } });
+  const winningPassword = firstRace.ok ? "racer-win-pass-1" : "racer-win-pass-2";
+  const losingPassword = firstRace.ok ? "racer-win-pass-2" : "racer-win-pass-1";
+  check(
+    "Only the winning password authenticates",
+    (await verifyPassword(winningPassword, racerAfter.passwordHash)) === true &&
+      (await verifyPassword(losingPassword, racerAfter.passwordHash)) === false &&
+      (await verifyPassword(racerPassword, racerAfter.passwordHash)) === false,
+  );
+  const racerToken = await prisma.passwordResetToken.findUnique({
+    where: { tokenHash: hashToken(racerRaw) },
+  });
+  check(
+    "The raced token remains single-use",
+    Boolean(racerToken?.usedAt) &&
+      (await prisma.passwordResetToken.count({ where: { userId: racer.id, usedAt: null } })) === 0,
+  );
+  const racedReplay = await completePasswordResetOp(prisma, {
+    token: racerRaw,
+    password: "racer-replay-pass",
+    confirmPassword: "racer-replay-pass",
+  });
+  check(
+    "A later replay of the raced token is still the generic error",
+    racedReplay.ok === false && racedReplay.error === PASSWORD_RESET_TOKEN_ERROR,
+  );
 
   console.log("\nTEST — MEMBER / ADMIN / OWNER can recover their own password without authz changes");
   for (const account of [
