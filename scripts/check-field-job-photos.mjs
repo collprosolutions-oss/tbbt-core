@@ -25,8 +25,9 @@ const {
   isBusinessStorageConfigured,
   jobPhotoSrc,
   privateAssetPath,
+  PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
   putAssignedFieldJobPhotoFromBytes,
-  servePrivateStoredAsset,
+  authorizePrivateStoredAssetDownload,
 } = await import("@/lib/business-storage/index");
 const { authorizeManagedUpload, finalizeManagedUpload } = await import(
   "@/lib/business-storage/service"
@@ -155,6 +156,16 @@ check(
     privateServeSrc.includes('category !== "JOB_PHOTO"') &&
     privateServeSrc.includes("assignedMembershipId: input.membershipId") &&
     privateServeSrc.includes('body: "Not found"'),
+);
+check(
+  "Private route redirects to a short-lived signed GET and never streams R2 bytes through Next",
+  privateRouteSrc.includes("authorizePrivateStoredAssetDownload") &&
+    privateRouteSrc.includes("NextResponse.redirect") &&
+    !privateRouteSrc.includes("servePrivateStoredAsset") &&
+    !privateRouteSrc.includes("Buffer.from") &&
+    !privateRouteSrc.includes("getObject(") &&
+    privateServeSrc.includes("createDownloadUrl") &&
+    privateServeSrc.includes("getObjectMetadata"),
 );
 
 const savedR2 = {
@@ -522,22 +533,23 @@ try {
   const adminViewer = { role: "ADMIN", membershipId: adminMem.id };
   const betaViewer = { role: "OWNER", membershipId: betaMem.id };
 
-  const assignedRead = await servePrivateStoredAsset(
+  const assignedRead = await authorizePrivateStoredAssetDownload(
     prisma,
     saved.asset.id,
     businessA.id,
     { provider, viewer: assignedViewer },
   );
   check(
-    "Assigned MEMBER can retrieve their R2-backed Job photo bytes",
+    "Assigned MEMBER gets an authorized private download redirect, not object bytes",
     assignedRead.ok === true &&
-      assignedRead.status === 200 &&
-      assignedRead.contentType === "image/jpeg" &&
-      Buffer.from(assignedRead.body).equals(jpeg) &&
+      assignedRead.status === 302 &&
+      assignedRead.url === `memory://download/tbbt-field-photos-test/${saved.asset.storageKey}` &&
+      assignedRead.expiresInSeconds === PRIVATE_DOWNLOAD_URL_TTL_SECONDS &&
+      !("body" in assignedRead) &&
       jobPhotoSrc(saved.photo) === privateAssetPath(saved.asset.id),
   );
 
-  const otherRead = await servePrivateStoredAsset(
+  const otherRead = await authorizePrivateStoredAssetDownload(
     prisma,
     saved.asset.id,
     businessA.id,
@@ -555,7 +567,7 @@ try {
     body: jpeg,
     stage: "BEFORE",
   });
-  const otherJobReadByAssigned = await servePrivateStoredAsset(
+  const otherJobReadByAssigned = await authorizePrivateStoredAssetDownload(
     prisma,
     otherSaved.asset.id,
     businessA.id,
@@ -586,7 +598,7 @@ try {
     businessA.id,
     unassignedAuth.asset.id,
   );
-  const unassignedRead = await servePrivateStoredAsset(
+  const unassignedRead = await authorizePrivateStoredAssetDownload(
     prisma,
     unassignedAsset.id,
     businessA.id,
@@ -602,7 +614,7 @@ try {
     mimeType: "image/jpeg",
     body: jpeg,
   });
-  const customerPhotoRead = await servePrivateStoredAsset(
+  const customerPhotoRead = await authorizePrivateStoredAssetDownload(
     prisma,
     requestPhoto.id,
     businessA.id,
@@ -615,40 +627,70 @@ try {
       customerPhotoRead.body === "Not found",
   );
 
-  const ownerRead = await servePrivateStoredAsset(
+  const ownerRead = await authorizePrivateStoredAssetDownload(
     prisma,
     saved.asset.id,
     businessA.id,
     { provider, viewer: ownerViewer },
   );
-  const adminRead = await servePrivateStoredAsset(
+  const adminRead = await authorizePrivateStoredAssetDownload(
     prisma,
     saved.asset.id,
     businessA.id,
     { provider, viewer: adminViewer },
   );
-  const ownerRequestRead = await servePrivateStoredAsset(
+  const ownerRequestRead = await authorizePrivateStoredAssetDownload(
     prisma,
     requestPhoto.id,
     businessA.id,
     { provider, viewer: ownerViewer },
   );
   check(
-    "OWNER/ADMIN can still retrieve the Job photo and management private assets",
+    "OWNER/ADMIN still get an authorized private download for Job and management assets",
     ownerRead.ok === true &&
-      Buffer.from(ownerRead.body).equals(jpeg) &&
+      ownerRead.url === `memory://download/tbbt-field-photos-test/${saved.asset.storageKey}` &&
+      !("body" in ownerRead) &&
       adminRead.ok === true &&
-      Buffer.from(adminRead.body).equals(jpeg) &&
-      ownerRequestRead.ok === true,
+      adminRead.url === ownerRead.url &&
+      ownerRequestRead.ok === true &&
+      ownerRequestRead.url.startsWith("memory://download/"),
   );
 
-  const crossRead = await servePrivateStoredAsset(
+  const largePhoto = Buffer.alloc(5 * 1024 * 1024 + 64, 7);
+  largePhoto[0] = 0xff;
+  largePhoto[1] = 0xd8;
+  largePhoto[2] = 0xff;
+  largePhoto[3] = 0xd9;
+  const largeSaved = await putAssignedFieldJobPhotoFromBytes(deps, assignedField, {
+    jobId: assignedJob.id,
+    originalFilename: "phone-5mb.jpg",
+    mimeType: "image/jpeg",
+    body: largePhoto,
+    stage: "DURING",
+  });
+  const largeRead = await authorizePrivateStoredAssetDownload(
+    prisma,
+    largeSaved.asset.id,
+    businessA.id,
+    { provider, viewer: assignedViewer },
+  );
+  check(
+    "A 5+ MB field photo authorizes a signed download without a Vercel response body",
+    largeSaved.asset.fileSizeBytes > 4 * 1024 * 1024 &&
+      largeRead.ok === true &&
+      largeRead.status === 302 &&
+      largeRead.url === `memory://download/tbbt-field-photos-test/${largeSaved.asset.storageKey}` &&
+      !("body" in largeRead) &&
+      !("contentLength" in largeRead),
+  );
+
+  const crossRead = await authorizePrivateStoredAssetDownload(
     prisma,
     saved.asset.id,
     businessB.id,
     { provider, viewer: betaViewer },
   );
-  const forgedRead = await servePrivateStoredAsset(
+  const forgedRead = await authorizePrivateStoredAssetDownload(
     prisma,
     saved.asset.id,
     businessB.id,

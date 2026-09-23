@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireBusinessAccess } from "@/lib/access";
-import { servePrivateStoredAsset } from "@/lib/business-storage/private-serve";
+import { authorizePrivateStoredAssetDownload } from "@/lib/business-storage/private-serve";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -18,23 +18,22 @@ export async function GET(
   }
 
   const { assetId } = await context.params;
-  const result = await servePrivateStoredAsset(prisma, assetId, access.businessId, {
-    viewer: {
-      role: access.workspace.role,
-      membershipId: access.workspace.membership.id,
+  const result = await authorizePrivateStoredAssetDownload(
+    prisma,
+    assetId,
+    access.businessId,
+    {
+      viewer: {
+        role: access.workspace.role,
+        membershipId: access.workspace.membership.id,
+      },
     },
-  });
+  );
   if (!result.ok) {
     return new NextResponse(result.body, { status: result.status });
   }
 
-  return new NextResponse(Buffer.from(result.body), {
-    status: 200,
-    headers: {
-      "Content-Type": result.contentType,
-      "Content-Length": String(result.contentLength),
-      "Content-Disposition": result.contentDisposition,
-      "Cache-Control": "private, no-store",
-    },
-  });
+  const response = NextResponse.redirect(result.url, 302);
+  response.headers.set("Cache-Control", "private, no-store");
+  return response;
 }

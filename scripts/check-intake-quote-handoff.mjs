@@ -125,10 +125,12 @@ check(
     storageBlob.includes("MAX_JOB_PHOTO_UPLOAD_BYTES = 4 * 1024 * 1024"),
 );
 check(
-  "Private photo route sends Content-Disposition",
+  "Private photo route redirects to a presigned download instead of streaming bytes",
   readRepo("src/app/api/storage/private/[assetId]/route.ts").includes(
-    "Content-Disposition",
-  ),
+    "authorizePrivateStoredAssetDownload",
+  ) &&
+    readRepo("src/app/api/storage/private/[assetId]/route.ts").includes("NextResponse.redirect") &&
+    !readRepo("src/app/api/storage/private/[assetId]/route.ts").includes("Buffer.from"),
 );
 
 console.log("\nUNIT — Phone photo acceptance");

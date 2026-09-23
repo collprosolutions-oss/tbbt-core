@@ -191,6 +191,12 @@ check(
     privatePhotoServeSrc.includes('category !== "JOB_PHOTO"') &&
     privatePhotoServeSrc.includes("assignedMembershipId"),
 );
+check(
+  "Private Job photo route redirects to signed R2 instead of proxying bytes",
+  privatePhotoRouteSrc.includes("authorizePrivateStoredAssetDownload") &&
+    privatePhotoRouteSrc.includes("NextResponse.redirect") &&
+    !privatePhotoRouteSrc.includes("Buffer.from"),
+);
 const fieldAccessSrc = readFileSync(new URL("../src/lib/field-access.ts", import.meta.url), "utf8");
 check(
   "src/lib/field-access.ts scopes every Job lookup by businessId AND assignedMembershipId in one query",

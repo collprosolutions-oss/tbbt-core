@@ -145,6 +145,11 @@ check("Private asset reads are role-aware: MEMBER is assignment-scoped, OWNER/AD
     privateRouteSrc.includes("access.workspace.membership.id") &&
     privateServeSrc.includes("canAccessManagementConsole") &&
     privateServeSrc.includes("assignedMembershipId"));
+check("Private asset route redirects to a presigned GET instead of streaming object bytes",
+  privateRouteSrc.includes("authorizePrivateStoredAssetDownload") &&
+    privateRouteSrc.includes("NextResponse.redirect") &&
+    !privateRouteSrc.includes("Buffer.from") &&
+    !privateRouteSrc.includes("servePrivateStoredAsset"));
 check("Public website assets use an explicit public path",
   isManagedPublicAssetPath("/api/storage/public/asset123") &&
     !isManagedPublicAssetPath("/api/storage/public/../secret"));

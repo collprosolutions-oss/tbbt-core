@@ -4,6 +4,7 @@ import {
   resolveStorageProvider,
   type StorageServiceDeps,
 } from "@/lib/business-storage/service";
+import { PRIVATE_DOWNLOAD_URL_TTL_SECONDS } from "@/lib/business-storage/types";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -20,6 +21,19 @@ export type PrivateStoredAssetServeResult =
       contentType: string;
       contentLength: number;
       contentDisposition: string;
+    }
+  | {
+      ok: false;
+      status: 401 | 404 | 502 | 503;
+      body: string;
+    };
+
+export type PrivateStoredAssetDownloadResult =
+  | {
+      ok: true;
+      status: 302;
+      url: string;
+      expiresInSeconds: number;
     }
   | {
       ok: false;
@@ -51,18 +65,23 @@ export function privateAssetContentDisposition(input: {
   return `${disposition}; filename="${filename}"`;
 }
 
-/**
- * Authenticated private-asset delivery. OWNER/ADMIN keep business-wide
- * workspace reads used by management pages. MEMBER may read only a
- * READY JOB_PHOTO whose job is assigned to that exact membership.
- * Missing or unauthorized assets both return 404.
- */
-export async function servePrivateStoredAsset(
+type AuthorizedPrivateAsset = {
+  ok: true;
+  asset: {
+    id: string;
+    originalFilename: string;
+    mimeType: string;
+    storageKey: string;
+    storageAccount: { bucketName: string };
+  };
+};
+
+async function authorizePrivateStoredAsset(
   db: Db,
   assetId: string,
   businessId: string,
-  deps?: Pick<StorageServiceDeps, "provider"> & { viewer?: PrivateAssetViewer },
-): Promise<PrivateStoredAssetServeResult> {
+  viewer?: PrivateAssetViewer,
+): Promise<AuthorizedPrivateAsset | Extract<PrivateStoredAssetServeResult, { ok: false }>> {
   const id = assetId.trim();
   if (!id || !businessId.trim()) {
     return { ok: false, status: 404, body: "Not found" };
@@ -81,16 +100,87 @@ export async function servePrivateStoredAsset(
     return { ok: false, status: 404, body: "Not found" };
   }
 
-  if (deps?.viewer && !canAccessManagementConsole(deps.viewer.role)) {
+  if (viewer && !canAccessManagementConsole(viewer.role)) {
     const allowed = await memberCanReadAssignedJobPhoto(db, {
       businessId,
-      membershipId: deps.viewer.membershipId,
+      membershipId: viewer.membershipId,
       asset,
     });
     if (!allowed) {
       return { ok: false, status: 404, body: "Not found" };
     }
   }
+
+  return { ok: true, asset };
+}
+
+/**
+ * Authorize a private asset, then return a short-lived presigned GET URL.
+ * The object bytes are never loaded into the server process.
+ */
+export async function authorizePrivateStoredAssetDownload(
+  db: Db,
+  assetId: string,
+  businessId: string,
+  deps?: Pick<StorageServiceDeps, "provider"> & { viewer?: PrivateAssetViewer },
+): Promise<PrivateStoredAssetDownloadResult> {
+  const authorized = await authorizePrivateStoredAsset(
+    db,
+    assetId,
+    businessId,
+    deps?.viewer,
+  );
+  if (!authorized.ok) return authorized;
+
+  let provider;
+  try {
+    provider = await resolveStorageProvider(deps);
+  } catch {
+    return { ok: false, status: 503, body: "Storage is not configured" };
+  }
+
+  try {
+    const meta = await provider.getObjectMetadata({
+      bucket: authorized.asset.storageAccount.bucketName,
+      key: authorized.asset.storageKey,
+    });
+    if (!meta || meta.sizeBytes <= 0) {
+      return { ok: false, status: 404, body: "Not found" };
+    }
+    const download = await provider.createDownloadUrl({
+      bucket: authorized.asset.storageAccount.bucketName,
+      key: authorized.asset.storageKey,
+      expiresInSeconds: PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
+    });
+    return {
+      ok: true,
+      status: 302,
+      url: download.url,
+      expiresInSeconds: download.expiresInSeconds,
+    };
+  } catch {
+    return { ok: false, status: 502, body: "Storage read failed" };
+  }
+}
+
+/**
+ * In-process private-asset byte read for tests and non-HTTP callers.
+ * Authenticated browser delivery must use authorizePrivateStoredAssetDownload
+ * so large photos never pass through a Vercel Function body.
+ */
+export async function servePrivateStoredAsset(
+  db: Db,
+  assetId: string,
+  businessId: string,
+  deps?: Pick<StorageServiceDeps, "provider"> & { viewer?: PrivateAssetViewer },
+): Promise<PrivateStoredAssetServeResult> {
+  const authorized = await authorizePrivateStoredAsset(
+    db,
+    assetId,
+    businessId,
+    deps?.viewer,
+  );
+  if (!authorized.ok) return authorized;
 
   let provider;
   try {
@@ -101,8 +191,8 @@ export async function servePrivateStoredAsset(
 
   try {
     const object = await provider.getObject({
-      bucket: asset.storageAccount.bucketName,
-      key: asset.storageKey,
+      bucket: authorized.asset.storageAccount.bucketName,
+      key: authorized.asset.storageKey,
     });
     if (!object || object.body.byteLength <= 0) {
       return { ok: false, status: 404, body: "Not found" };
@@ -111,7 +201,7 @@ export async function servePrivateStoredAsset(
       object.body instanceof Uint8Array
         ? object.body
         : new Uint8Array(object.body);
-    const contentType = object.contentType || asset.mimeType || "application/octet-stream";
+    const contentType = object.contentType || authorized.asset.mimeType || "application/octet-stream";
     return {
       ok: true,
       status: 200,
@@ -120,7 +210,7 @@ export async function servePrivateStoredAsset(
       contentLength: body.byteLength,
       contentDisposition: privateAssetContentDisposition({
         mimeType: contentType,
-        originalFilename: asset.originalFilename,
+        originalFilename: authorized.asset.originalFilename,
       }),
     };
   } catch {

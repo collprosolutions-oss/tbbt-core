@@ -14,6 +14,7 @@ export {
 } from "@/lib/business-storage/keys";
 export { MemoryStorageProvider } from "@/lib/business-storage/memory-provider";
 export {
+  authorizePrivateStoredAssetDownload,
   privateAssetContentDisposition,
   servePrivateStoredAsset,
 } from "@/lib/business-storage/private-serve";
@@ -49,6 +50,7 @@ export {
   DEFAULT_MANAGED_STORAGE_LIMIT_BYTES,
   STORAGE_KEY_FOLDERS,
   STORAGE_PENDING_TTL_MS,
+  PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
   STORAGE_UPLOAD_URL_TTL_SECONDS,
   STORED_ASSET_CATEGORIES,
   StorageAccessError,
