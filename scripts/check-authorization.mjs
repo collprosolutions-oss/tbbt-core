@@ -28,6 +28,10 @@ import {
   requireBusinessCapability,
   roleHasCapability,
 } from "../src/lib/authorization.ts";
+import {
+  assertBusinessRecord,
+  businessScope,
+} from "../src/lib/access-scope.ts";
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -87,23 +91,17 @@ async function expectAllowed(label, fn) {
   }
 }
 
-// Duplicated on purpose (matches scripts/check-isolation.mjs /
-// scripts/check-estimate-versions.mjs): src/lib/access.ts pulls in
-// next/headers and cannot run in a plain script. This mirrors
-// `assertOwned`/`assertAttachable`'s exact behavior (throw a plain Error --
-// NOT ForbiddenError -- on a cross-business record), so tests can tell a
-// role rejection (ForbiddenError) apart from a tenant-isolation rejection
-// (plain Error).
+// requireBusinessAccess() cannot run here (next/headers). Scope +
+// assertOwned use the real production helpers from access-scope.ts so a
+// role rejection (ForbiddenError) stays distinct from a tenant-isolation
+// rejection (plain Error from assertBusinessRecord).
 function makeAccess(businessId, role) {
   return {
     businessId,
     workspace: { role },
-    scope: { businessId },
+    scope: businessScope(businessId),
     assertOwned(record) {
-      if (!record || record.businessId !== businessId) {
-        throw new Error("Record is not in the authorized business workspace.");
-      }
-      return record;
+      return assertBusinessRecord(record, businessId);
     },
   };
 }
