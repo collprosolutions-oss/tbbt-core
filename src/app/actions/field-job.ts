@@ -27,11 +27,15 @@ import { CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT, startJobRequiresCustomerConfirm
 import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import {
-  isStorageConfigured,
-  isSupportedImageMimeType,
-  MAX_JOB_PHOTO_UPLOAD_BYTES,
-  uploadJobPhoto,
-} from "@/lib/storage";
+  isBusinessStorageConfigured,
+  StorageError,
+  StorageQuotaError,
+} from "@/lib/business-storage";
+import {
+  abortAssignedFieldJobPhoto,
+  authorizeAssignedFieldJobPhoto,
+  finalizeAssignedFieldJobPhoto,
+} from "@/lib/business-storage/field-job-photos";
 
 export type FieldJobActionState = {
   error?: string;
@@ -140,74 +144,123 @@ export async function completeAssignedJob(
 }
 
 const STORAGE_NOT_CONFIGURED_ERROR =
-  "Photo storage isn't set up yet. Ask an admin to connect Vercel Blob (BLOB_READ_WRITE_TOKEN) before uploading job photos.";
+  "Photo storage isn't set up yet. Ask an admin to connect platform file storage (Cloudflare R2) before uploading job photos.";
 
-export async function addAssignedJobPhoto(
-  _prev: FieldJobActionState,
-  formData: FormData,
-): Promise<FieldJobActionState> {
-  const jobId = readString(formData, "jobId");
-  const stage = readString(formData, "stage");
-  const caption = readString(formData, "caption");
-  const file = formData.get("file");
+export type FieldJobPhotoUploadState = FieldJobActionState & {
+  assetId?: string;
+  uploadUrl?: string;
+  uploadHeaders?: Record<string, string>;
+  uploadMethod?: "PUT";
+};
 
+function fieldPhotoError(error: unknown) {
+  if (error instanceof StorageQuotaError || error instanceof StorageError) {
+    return error.message;
+  }
+  return "That photo could not be uploaded. Try again.";
+}
+
+async function requireAssignedFieldPhotoJob(jobId: string) {
   if (!jobId) {
-    return { error: "That job could not be found." };
+    return { error: "That job could not be found.", field: null as null };
   }
-
-  if (stage !== "BEFORE" && stage !== "DURING" && stage !== "AFTER") {
-    return { error: "Choose Before, During, or After." };
-  }
-
-  if (!(file instanceof File) || file.size === 0) {
-    return { error: "Choose a photo to upload." };
-  }
-
-  if (!isSupportedImageMimeType(file.type)) {
-    return {
-      error: "Unsupported file type. Upload a JPEG, PNG, WebP, GIF, or HEIC photo.",
-    };
-  }
-
-  if (file.size > MAX_JOB_PHOTO_UPLOAD_BYTES) {
-    const maxMb = (MAX_JOB_PHOTO_UPLOAD_BYTES / (1024 * 1024)).toFixed(0);
-    return { error: `That photo is too large. The limit is ${maxMb} MB.` };
-  }
-
-  if (!isStorageConfigured()) {
-    return { error: STORAGE_NOT_CONFIGURED_ERROR };
-  }
-
   const assigned = await requireAssignedJobOperating(jobId);
   if (!assigned.job) {
-    return { error: assigned.error ?? NOT_ASSIGNED_ERROR };
+    return { error: assigned.error ?? NOT_ASSIGNED_ERROR, field: null as null };
   }
-  const { job, businessId } = assigned;
-
-  let uploaded: { url: string };
-  try {
-    uploaded = await uploadJobPhoto({ businessId, jobId: job.id, file });
-  } catch (error) {
-    console.error("Field job photo upload failed", error);
-    return { error: "That photo could not be uploaded. Try again." };
-  }
-
-  // Uploaded photos remain PRIVATE by default, exactly like the internal
-  // Work Order's own uploads (see JobPhoto model doc comment in
-  // prisma/schema.prisma) -- an employee upload never grants customer
-  // visibility, portfolio, or marketing permission.
-  await prisma.jobPhoto.create({
-    data: {
-      businessId,
-      jobId: job.id,
-      stage,
-      url: uploaded.url,
-      caption: caption || null,
+  return {
+    error: undefined as string | undefined,
+    field: {
+      businessId: assigned.businessId,
+      membershipId: assigned.membershipId,
+      jobId: assigned.job.id,
     },
-  });
+  };
+}
 
-  revalidateFieldJob(job.id);
-  return {};
+/**
+ * Authorizes a browser-direct R2 upload. The image body never enters this
+ * server action -- only filename, MIME type, and declared size.
+ */
+export async function authorizeAssignedJobPhotoUpload(input: {
+  jobId: string;
+  originalFilename: string;
+  mimeType: string;
+  fileSizeBytes: number;
+}): Promise<FieldJobPhotoUploadState> {
+  try {
+    if (!isBusinessStorageConfigured()) {
+      return { error: STORAGE_NOT_CONFIGURED_ERROR };
+    }
+    const assigned = await requireAssignedFieldPhotoJob(input.jobId);
+    if (!assigned.field) {
+      return { error: assigned.error };
+    }
+    const authorized = await authorizeAssignedFieldJobPhoto(
+      { db: prisma },
+      assigned.field,
+      {
+        jobId: assigned.field.jobId,
+        originalFilename: input.originalFilename,
+        mimeType: input.mimeType,
+        fileSizeBytes: input.fileSizeBytes,
+      },
+    );
+    return {
+      assetId: authorized.asset.id,
+      uploadUrl: authorized.upload.url,
+      uploadHeaders: authorized.upload.headers,
+      uploadMethod: authorized.upload.method,
+    };
+  } catch (error) {
+    return { error: fieldPhotoError(error) };
+  }
+}
+
+export async function finalizeAssignedJobPhotoUpload(input: {
+  jobId: string;
+  assetId: string;
+  stage: string;
+  caption?: string;
+}): Promise<FieldJobPhotoUploadState> {
+  try {
+    if (input.stage !== "BEFORE" && input.stage !== "DURING" && input.stage !== "AFTER") {
+      return { error: "Choose Before, During, or After." };
+    }
+    const assigned = await requireAssignedFieldPhotoJob(input.jobId);
+    if (!assigned.field) {
+      return { error: assigned.error };
+    }
+    await finalizeAssignedFieldJobPhoto({ db: prisma }, assigned.field, {
+      jobId: assigned.field.jobId,
+      assetId: input.assetId,
+      stage: input.stage,
+      caption: input.caption,
+    });
+    revalidateFieldJob(assigned.field.jobId);
+    return { message: "Photo added." };
+  } catch (error) {
+    return { error: fieldPhotoError(error) };
+  }
+}
+
+export async function abortAssignedJobPhotoUpload(input: {
+  jobId: string;
+  assetId: string;
+}): Promise<FieldJobPhotoUploadState> {
+  try {
+    const assigned = await requireAssignedFieldPhotoJob(input.jobId);
+    if (!assigned.field) {
+      return { error: assigned.error };
+    }
+    await abortAssignedFieldJobPhoto({ db: prisma }, assigned.field, {
+      jobId: assigned.field.jobId,
+      assetId: input.assetId,
+    });
+    return {};
+  } catch (error) {
+    return { error: fieldPhotoError(error) };
+  }
 }
 
 export async function reportJobProblem(

@@ -14,9 +14,11 @@ export {
 } from "@/lib/business-storage/keys";
 export { MemoryStorageProvider } from "@/lib/business-storage/memory-provider";
 export {
+  authorizePrivateStoredAssetDownload,
   privateAssetContentDisposition,
   servePrivateStoredAsset,
 } from "@/lib/business-storage/private-serve";
+export type { PrivateAssetViewer } from "@/lib/business-storage/private-serve";
 export { servePublicStoredAsset } from "@/lib/business-storage/public-serve";
 export {
   R2_BROWSER_UPLOAD_ALLOWED_HEADERS,
@@ -48,6 +50,7 @@ export {
   DEFAULT_MANAGED_STORAGE_LIMIT_BYTES,
   STORAGE_KEY_FOLDERS,
   STORAGE_PENDING_TTL_MS,
+  PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
   STORAGE_UPLOAD_URL_TTL_SECONDS,
   STORED_ASSET_CATEGORIES,
   StorageAccessError,
@@ -65,3 +68,12 @@ export type {
   StoredAssetCategory,
   StoredAssetVisibility,
 } from "@/lib/business-storage/types";
+export {
+  FIELD_JOB_PHOTO_MAX_BYTES,
+  abortAssignedFieldJobPhoto,
+  authorizeAssignedFieldJobPhoto,
+  finalizeAssignedFieldJobPhoto,
+  inspectFieldJobPhotoUpload,
+  jobPhotoSrc,
+  putAssignedFieldJobPhotoFromBytes,
+} from "@/lib/business-storage/field-job-photos";

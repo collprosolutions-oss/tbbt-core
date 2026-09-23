@@ -849,6 +849,9 @@ model JobPhoto {
   jobId      String
   stage      JobPhotoStage
   url        String
+  /// New field uploads use private Business Storage (R2) via storedAssetId.
+  /// Legacy rows keep a Vercel Blob URL and no stored asset.
+  storedAssetId String?
   caption    String?
   createdAt  DateTime      @default(now())
   /// PRIVATE (default) | APPROVED. APPROVED is marketing-eligible only.
@@ -858,11 +861,13 @@ model JobPhoto {
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   job      Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  storedAsset StoredAsset? @relation(fields: [storedAssetId], references: [id], onDelete: SetNull)
   marketingPermissionGrantedBy Membership? @relation("JobPhotoMarketingGrant", fields: [marketingPermissionGrantedByMembershipId], references: [id], onDelete: SetNull)
   marketingContentPhotos MarketingContentPhoto[]
 
   @@index([businessId])
   @@index([jobId])
+  @@index([storedAssetId])
   @@index([businessId, marketingPermissionStatus])
 }
 
@@ -928,6 +933,7 @@ model StoredAsset {
   storageAccount BusinessStorageAccount @relation(fields: [storageAccountId], references: [id], onDelete: Cascade)
   publicSiteImages     PublicSiteImage[]
   serviceRequestPhotos ServiceRequestPhoto[]
+  jobPhotos            JobPhoto[]
 
   @@unique([businessId, storageKey])
   @@index([businessId, category, status])

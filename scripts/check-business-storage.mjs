@@ -128,8 +128,28 @@ check("Website Photos no longer require Vercel Blob",
   actionSrc.includes("isBusinessStorageConfigured") &&
     !actionSrc.includes("BLOB_READ_WRITE_TOKEN") &&
     !actionSrc.includes("uploadPublicSitePhoto"));
-check("Job-photo helper still exists for the later migration",
+check("Owner job-photo helper still exists for historical Blob uploads",
   storageSrc.includes("uploadJobPhoto"));
+const fieldJobPhotoSrc = readRepo("src/lib/business-storage/field-job-photos.ts");
+const fieldJobActionSrc = readRepo("src/app/actions/field-job.ts");
+check("Field job photos reuse private R2 authorize/PUT/finalize",
+  fieldJobPhotoSrc.includes("authorizeManagedUpload") &&
+    fieldJobPhotoSrc.includes('category: "JOB_PHOTO"') &&
+    fieldJobPhotoSrc.includes('visibility: "PRIVATE"') &&
+    fieldJobActionSrc.includes("authorizeAssignedFieldJobPhoto") &&
+    !fieldJobActionSrc.includes("uploadJobPhoto"));
+const privateRouteSrc = readRepo("src/app/api/storage/private/[assetId]/route.ts");
+const privateServeSrc = readRepo("src/lib/business-storage/private-serve.ts");
+check("Private asset reads are role-aware: MEMBER is assignment-scoped, OWNER/ADMIN stay business-wide",
+  privateRouteSrc.includes("access.workspace.role") &&
+    privateRouteSrc.includes("access.workspace.membership.id") &&
+    privateServeSrc.includes("canAccessManagementConsole") &&
+    privateServeSrc.includes("assignedMembershipId"));
+check("Private asset route redirects to a presigned GET instead of streaming object bytes",
+  privateRouteSrc.includes("authorizePrivateStoredAssetDownload") &&
+    privateRouteSrc.includes("NextResponse.redirect") &&
+    !privateRouteSrc.includes("Buffer.from") &&
+    !privateRouteSrc.includes("servePrivateStoredAsset"));
 check("Public website assets use an explicit public path",
   isManagedPublicAssetPath("/api/storage/public/asset123") &&
     !isManagedPublicAssetPath("/api/storage/public/../secret"));

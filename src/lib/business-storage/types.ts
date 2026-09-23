@@ -43,6 +43,8 @@ export const STORAGE_KEY_FOLDERS: Record<StoredAssetCategory, string> = {
 /** Technical managed default. Plan-specific entitlements can override later. */
 export const DEFAULT_MANAGED_STORAGE_LIMIT_BYTES = 5 * 1024 * 1024 * 1024;
 export const STORAGE_UPLOAD_URL_TTL_SECONDS = 5 * 60;
+/** Short-lived private GET after the server has already authorized the viewer. */
+export const PRIVATE_DOWNLOAD_URL_TTL_SECONDS = 2 * 60;
 export const STORAGE_PENDING_TTL_MS = 15 * 60 * 1000;
 export const WEBSITE_PHOTO_MAX_BYTES = 4 * 1024 * 1024;
 /** Practical phone stills on the existing R2 presigned PUT path. */

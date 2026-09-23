@@ -19,6 +19,7 @@ import {
 import { createR2StorageProvider } from "@/lib/business-storage/r2-provider";
 import {
   DEFAULT_MANAGED_STORAGE_LIMIT_BYTES,
+  PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
   STORAGE_PENDING_TTL_MS,
   STORAGE_UPLOAD_URL_TTL_SECONDS,
   StorageAccessError,
@@ -455,7 +456,7 @@ export async function createPrivateDownloadUrl(
   return provider.createDownloadUrl({
     bucket: account.bucketName,
     key: asset.storageKey,
-    expiresInSeconds: 120,
+    expiresInSeconds: PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
   });
 }
 
