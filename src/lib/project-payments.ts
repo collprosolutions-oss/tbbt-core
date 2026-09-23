@@ -372,6 +372,61 @@ export type RecordedPayment = {
   created: boolean;
 };
 
+/**
+ * Payment FKs to Customer/Estimate/Job/Invoice are not composite with
+ * businessId. Prisma will persist a Payment for Business B that points at
+ * Invoice A unless this helper rejects the related IDs first.
+ */
+async function assertRelatedPaymentRecordsOwned(
+  db: PaymentsDb,
+  input: {
+    businessId: string;
+    customerId?: string | null;
+    estimateId?: string | null;
+    jobId?: string | null;
+    invoiceId?: string | null;
+  },
+) {
+  const lookups: Array<Promise<{ id: string } | null>> = [];
+  if (input.customerId) {
+    lookups.push(
+      db.customer.findFirst({
+        where: { id: input.customerId, businessId: input.businessId },
+        select: { id: true },
+      }),
+    );
+  }
+  if (input.estimateId) {
+    lookups.push(
+      db.estimate.findFirst({
+        where: { id: input.estimateId, businessId: input.businessId },
+        select: { id: true },
+      }),
+    );
+  }
+  if (input.jobId) {
+    lookups.push(
+      db.job.findFirst({
+        where: { id: input.jobId, businessId: input.businessId },
+        select: { id: true },
+      }),
+    );
+  }
+  if (input.invoiceId) {
+    lookups.push(
+      db.invoice.findFirst({
+        where: { id: input.invoiceId, businessId: input.businessId },
+        select: { id: true },
+      }),
+    );
+  }
+  if (lookups.length === 0) return;
+  const rows = await Promise.all(lookups);
+  if (rows.some((row) => !row)) {
+    throw new ProjectPaymentError("That payment could not be recorded.");
+  }
+}
+
 export async function recordSucceededPayment(
   db: PaymentsDb,
   input: {
@@ -413,6 +468,7 @@ export async function recordSucceededPayment(
     });
     if (existing) return { id: existing.id, created: false };
   }
+  await assertRelatedPaymentRecordsOwned(db, input);
   try {
     const created = await db.payment.create({
       data: {

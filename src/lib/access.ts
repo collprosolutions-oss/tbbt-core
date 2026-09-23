@@ -8,26 +8,13 @@ import { redirect } from "next/navigation";
 import { canAccessManagementConsole } from "@/lib/authorization";
 import { requireWorkspace, type WorkspaceContext } from "@/lib/workspace";
 
-export function businessScope(businessId: string) {
-  return { businessId } as const;
-}
+import {
+  assertBusinessRecord,
+  belongsToBusiness,
+  businessScope,
+} from "@/lib/access-scope";
 
-export function belongsToBusiness(
-  record: { businessId: string } | null | undefined,
-  businessId: string,
-) {
-  return Boolean(record && record.businessId === businessId);
-}
-
-export function assertBusinessRecord<T extends { businessId: string }>(
-  record: T | null | undefined,
-  businessId: string,
-): T {
-  if (!record || record.businessId !== businessId) {
-    throw new Error("Record is not in the authorized business workspace.");
-  }
-  return record;
-}
+export { assertBusinessRecord, belongsToBusiness, businessScope };
 
 export type BusinessAccess = {
   workspace: WorkspaceContext;
