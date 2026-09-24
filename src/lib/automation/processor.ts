@@ -20,6 +20,8 @@ import { isAcceptedCustomerMessageStatus } from "@/lib/customer-messaging/types"
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
+export const AUTOMATION_CLAIM_LEASE_MS = 2 * 60 * 1000;
+
 type ChannelAttempt = {
   channel: "EMAIL" | "SMS";
   status: string;
@@ -175,9 +177,15 @@ async function resolveSmsTarget(
     }
     const request = await db.reviewRequest.findFirst({
       where: { id: reviewRequestId, businessId },
-      select: { id: true, requestText: true },
+      select: { id: true, requestText: true, status: true },
     });
     if (!request) return { skip: "Review request is not in this business." };
+    if (request.status === "SENT" || request.status === "COMPLETED" || request.status === "CANCELLED") {
+      return { skip: "Review request is already recorded as sent or closed. Duplicate send was not attempted." };
+    }
+    if (request.status !== "READY" && request.status !== "FAILED") {
+      return { skip: "Review request is not READY. DRAFT records are not sent automatically." };
+    }
     return {
       related: { type: "REVIEW_REQUEST", id: request.id },
       send: () =>
@@ -198,9 +206,15 @@ async function resolveSmsTarget(
     }
     const request = await db.referralRequest.findFirst({
       where: { id: referralRequestId, businessId },
-      select: { id: true, requestText: true },
+      select: { id: true, requestText: true, status: true },
     });
     if (!request) return { skip: "Referral request is not in this business." };
+    if (request.status === "SENT" || request.status === "COMPLETED" || request.status === "CANCELLED") {
+      return { skip: "Referral request is already recorded as sent or closed. Duplicate send was not attempted." };
+    }
+    if (request.status !== "READY" && request.status !== "FAILED") {
+      return { skip: "Referral request is not READY. DRAFT records are not sent automatically." };
+    }
     return {
       related: { type: "REFERRAL_REQUEST", id: request.id },
       send: () =>
@@ -221,9 +235,15 @@ async function resolveSmsTarget(
     }
     const followUp = await db.customerFollowUp.findFirst({
       where: { id: followUpId, businessId },
-      select: { id: true, kind: true },
+      select: { id: true, kind: true, status: true },
     });
     if (!followUp) return { skip: "Follow-up is not in this business." };
+    if (followUp.status === "SENT" || followUp.status === "CANCELLED") {
+      return { skip: "Follow-up is already recorded as sent or closed. Duplicate send was not attempted." };
+    }
+    if (followUp.status !== "OPEN" && followUp.status !== "FAILED") {
+      return { skip: "Follow-up is not open for send." };
+    }
     return {
       related: { type: "CUSTOMER_FOLLOW_UP", id: followUp.id },
       send: () =>
@@ -318,7 +338,123 @@ async function applyCommunicationRule(
   if (attempts.length === 0) {
     return { status: "SKIPPED" as const, summary: "No channel was attempted." };
   }
-  return combineChannelOutcome(attempts);
+  const outcome = combineChannelOutcome(attempts);
+  await recordWorkflowChannelResult(db, run.businessId, event, rule.purpose, attempts);
+  return outcome;
+}
+
+function acceptedChannel(status: string) {
+  return status === "SENT" || isAcceptedCustomerMessageStatus(status);
+}
+
+async function recordWorkflowChannelResult(
+  db: Db,
+  businessId: string,
+  event: { subjectType: string; subjectId: string },
+  purpose: string,
+  attempts: ChannelAttempt[],
+) {
+  const email = attempts.find((row) => row.channel === "EMAIL");
+  const sms = attempts.find((row) => row.channel === "SMS");
+  const accepted = attempts.some((row) => acceptedChannel(row.status));
+  const attempted = attempts.some((row) => row.status !== "SKIPPED");
+  const now = new Date();
+
+  if (event.subjectType === "REVIEW_REQUEST" && purpose === "REVIEW_REQUEST") {
+    const request = await db.reviewRequest.findFirst({
+      where: { id: event.subjectId, businessId },
+      select: { id: true, status: true, requestedAt: true },
+    });
+    if (!request || request.status === "SENT" || request.status === "COMPLETED" || request.status === "CANCELLED") {
+      return;
+    }
+    if (accepted) {
+      await db.reviewRequest.update({
+        where: { id: request.id },
+        data: {
+          status: "SENT",
+          requestedAt: request.requestedAt ?? now,
+          lastEmailStatus: email?.status ?? null,
+          lastSmsStatus: sms?.status ?? null,
+        },
+      });
+      return;
+    }
+    if (attempted && (request.status === "READY" || request.status === "FAILED")) {
+      await db.reviewRequest.update({
+        where: { id: request.id },
+        data: {
+          status: "FAILED",
+          lastEmailStatus: email?.status ?? null,
+          lastSmsStatus: sms?.status ?? null,
+        },
+      });
+    }
+    return;
+  }
+
+  if (event.subjectType === "REFERRAL_REQUEST" && purpose === "REFERRAL_REQUEST") {
+    const request = await db.referralRequest.findFirst({
+      where: { id: event.subjectId, businessId },
+      select: { id: true, status: true, requestedAt: true },
+    });
+    if (!request || request.status === "SENT" || request.status === "COMPLETED" || request.status === "CANCELLED") {
+      return;
+    }
+    if (accepted) {
+      await db.referralRequest.update({
+        where: { id: request.id },
+        data: {
+          status: "SENT",
+          requestedAt: request.requestedAt ?? now,
+          lastEmailStatus: email?.status ?? null,
+          lastSmsStatus: sms?.status ?? null,
+        },
+      });
+      return;
+    }
+    if (attempted && (request.status === "READY" || request.status === "FAILED")) {
+      await db.referralRequest.update({
+        where: { id: request.id },
+        data: {
+          status: "FAILED",
+          lastEmailStatus: email?.status ?? null,
+          lastSmsStatus: sms?.status ?? null,
+        },
+      });
+    }
+    return;
+  }
+
+  if (event.subjectType === "CUSTOMER_FOLLOW_UP" && (purpose === "JOB_FOLLOW_UP" || purpose === "REPEAT_FOLLOW_UP")) {
+    const followUp = await db.customerFollowUp.findFirst({
+      where: { id: event.subjectId, businessId },
+      select: { id: true, status: true, sentAt: true },
+    });
+    if (!followUp || followUp.status === "SENT" || followUp.status === "CANCELLED") return;
+    if (accepted) {
+      await db.customerFollowUp.update({
+        where: { id: followUp.id },
+        data: {
+          status: "SENT",
+          sentAt: followUp.sentAt ?? now,
+          lastEmailStatus: email?.status ?? null,
+          lastSmsStatus: sms?.status ?? null,
+        },
+      });
+      return;
+    }
+    if (attempted && (followUp.status === "OPEN" || followUp.status === "FAILED")) {
+      await db.customerFollowUp.update({
+        where: { id: followUp.id },
+        data: {
+          status: "FAILED",
+          lastEmailStatus: email?.status ?? null,
+          lastSmsStatus: sms?.status ?? null,
+        },
+      });
+    }
+  }
 }
 
 export async function claimAutomationRun(
@@ -326,15 +462,21 @@ export async function claimAutomationRun(
   input: { id: string; businessId: string; now?: Date },
 ) {
   const now = input.now ?? new Date();
+  const staleBefore = new Date(now.getTime() - AUTOMATION_CLAIM_LEASE_MS);
   const claimed = await db.automationRun.updateMany({
     where: {
       id: input.id,
       businessId: input.businessId,
-      status: "PENDING",
       availableAt: { lte: now },
+      OR: [
+        { status: "PENDING" },
+        { status: "PROCESSING", claimedAt: { lte: staleBefore } },
+        { status: "PROCESSING", claimedAt: null },
+      ],
     },
     data: {
       status: "PROCESSING",
+      claimedAt: now,
     },
   });
   if (claimed.count !== 1) return null;
@@ -345,11 +487,16 @@ export async function claimAutomationRun(
 }
 
 export async function processPendingAutomationRuns(db: Db, businessId: string, now = new Date()) {
+  const staleBefore = new Date(now.getTime() - AUTOMATION_CLAIM_LEASE_MS);
   const pending = await db.automationRun.findMany({
     where: {
       businessId,
-      status: "PENDING",
       availableAt: { lte: now },
+      OR: [
+        { status: "PENDING" },
+        { status: "PROCESSING", claimedAt: { lte: staleBefore } },
+        { status: "PROCESSING", claimedAt: null },
+      ],
     },
     take: 25,
     orderBy: { availableAt: "asc" },
@@ -361,7 +508,11 @@ export async function processPendingAutomationRuns(db: Db, businessId: string, n
     const nextAttempt = listed.attemptCount + 1;
     if (nextAttempt > 3) {
       const updated = await db.automationRun.updateMany({
-        where: { id: listed.id, businessId, status: "PENDING" },
+        where: {
+          id: listed.id,
+          businessId,
+          status: { in: ["PENDING", "PROCESSING"] },
+        },
         data: {
           status: "FAILED",
           attemptCount: nextAttempt,
@@ -424,6 +575,7 @@ export async function processPendingAutomationRuns(db: Db, businessId: string, n
           status: nextAttempt >= 3 ? "FAILED" : "PENDING",
           attemptCount: nextAttempt,
           lastError: error instanceof Error ? error.message : "Automation run failed.",
+          claimedAt: nextAttempt >= 3 ? now : null,
           processedAt: nextAttempt >= 3 ? now : null,
         },
       });

@@ -1,15 +1,28 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { askKnowledgeAction, type AiActionState } from "@/app/actions/ai";
 import { Button } from "@/components/ui/button";
 
 const initial: AiActionState = {};
 
+function newAttemptId() {
+  return crypto.randomUUID();
+}
+
 export function KnowledgeAskForm() {
   const [state, action, pending] = useActionState(askKnowledgeAction, initial);
+  const [attemptId, setAttemptId] = useState(newAttemptId);
+
+  useEffect(() => {
+    if (state.text || state.error || state.message) {
+      setAttemptId(newAttemptId());
+    }
+  }, [state.text, state.error, state.message]);
+
   return (
     <form action={action} className="space-y-2">
+      <input type="hidden" name="attemptId" value={attemptId} />
       <textarea
         name="question"
         required

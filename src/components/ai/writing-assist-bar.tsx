@@ -18,6 +18,7 @@ export function WritingAssistBar({
 }) {
   const [state, action, pending] = useActionState(applyWritingAction, initial);
   const [suggestion, setSuggestion] = useState<string | null>(null);
+  const [attemptId, setAttemptId] = useState(() => crypto.randomUUID());
 
   useEffect(() => {
     if (state.keptOriginal) {
@@ -27,12 +28,16 @@ export function WritingAssistBar({
     if (state.text && state.text !== original) {
       setSuggestion(state.text);
     }
-  }, [state.keptOriginal, state.text, original]);
+    if (state.text || state.error || state.keptOriginal) {
+      setAttemptId(crypto.randomUUID());
+    }
+  }, [state.keptOriginal, state.text, state.error, original]);
 
   return (
     <div className="space-y-2">
       <form action={action} className="flex flex-wrap gap-1">
         <input type="hidden" name="original" value={original} />
+        <input type="hidden" name="attemptId" value={attemptId} />
         {context ? <input type="hidden" name="context" value={context} /> : null}
         {WRITING_ACTIONS.filter((item) => item !== "KEEP_MINE").map((item) => (
           <Button

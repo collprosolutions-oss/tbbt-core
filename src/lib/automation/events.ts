@@ -104,6 +104,31 @@ export async function skipSupersededAppointmentReminders(
   }
 }
 
+async function createAutomationRun(
+  db: Db,
+  businessId: string,
+  event: { id: string },
+  rule: { id: string; kind: string },
+  availableAt: Date,
+) {
+  const idempotencyKey = `run:${event.id}:${rule.id}`;
+  try {
+    await db.automationRun.create({
+      data: {
+        businessId,
+        eventId: event.id,
+        ruleId: rule.id,
+        kind: rule.kind,
+        status: "PENDING",
+        idempotencyKey,
+        availableAt,
+      },
+    });
+  } catch {
+    // Unique (businessId, idempotencyKey) makes this retry-safe.
+  }
+}
+
 export async function queueAutomationRunsForEvent(
   db: Db,
   businessId: string,
@@ -115,23 +140,26 @@ export async function queueAutomationRunsForEvent(
   for (const rule of rules) {
     const availableAt = resolveAvailableAt(rule, event);
     if (!availableAt) continue;
-    const idempotencyKey = `run:${event.id}:${rule.id}`;
-    try {
-      await db.automationRun.create({
-        data: {
-          businessId,
-          eventId: event.id,
-          ruleId: rule.id,
-          kind: rule.kind,
-          status: "PENDING",
-          idempotencyKey,
-          availableAt,
-        },
-      });
-    } catch {
-      // Unique (businessId, idempotencyKey) makes this retry-safe.
-    }
+    await createAutomationRun(db, businessId, event, rule, availableAt);
   }
+}
+
+/**
+ * After a reschedule, queue a new reminder for the current proposal using
+ * the owner-enabled APPOINTMENT_REMINDER rule (even if that rule is bound
+ * to APPOINTMENT_SCHEDULED). The superseded run stays SKIPPED.
+ */
+export async function queueReplacementAppointmentReminder(
+  db: Db,
+  businessId: string,
+  event: { id: string; type: string; occurredAt: Date; payload: unknown },
+) {
+  const rules = await ensureDefaultAutomationRules(db, businessId);
+  const rule = rules.find((row) => row.purpose === "APPOINTMENT_REMINDER" && row.enabled);
+  if (!rule) return;
+  const availableAt = resolveAvailableAt(rule, event);
+  if (!availableAt) return;
+  await createAutomationRun(db, businessId, event, rule, availableAt);
 }
 
 /**
@@ -155,6 +183,7 @@ export async function emitAndProcessBusinessEvent(
             proposalId,
           });
         }
+        await queueReplacementAppointmentReminder(db, input.businessId, emitted.event);
       }
     }
     await processPendingAutomationRuns(db, input.businessId);

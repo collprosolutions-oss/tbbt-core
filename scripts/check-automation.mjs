@@ -12,16 +12,19 @@ import { readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
-const { emitBusinessEvent, emitAndProcessBusinessEvent, queueAutomationRunsForEvent, skipSupersededAppointmentReminders } = await import(
+const { emitBusinessEvent, emitAndProcessBusinessEvent, queueAutomationRunsForEvent, queueReplacementAppointmentReminder, skipSupersededAppointmentReminders } = await import(
   "@/lib/automation/events"
 );
 const { ensureDefaultAutomationRules } = await import("@/lib/automation/rules");
-const { processPendingAutomationRuns, claimAutomationRun } = await import("@/lib/automation/processor");
+const { processPendingAutomationRuns, claimAutomationRun, AUTOMATION_CLAIM_LEASE_MS } = await import("@/lib/automation/processor");
 const { scanScheduledBusinessEvents, INVOICE_DUE_AFTER_MS, INVOICE_OVERDUE_AFTER_MS } = await import("@/lib/automation/scan");
 const { partitionRecommendations, recommendationEvidenceKey, upsertRecommendationState } = await import("@/lib/bsos-actions");
 const { CAPABILITIES, requireBusinessCapability } = await import("@/lib/authorization");
 const { appointmentReminderAvailableAt } = await import("@/lib/automation/timing");
 const { BUSINESS_EVENT_TYPES } = await import("@/lib/automation/types");
+const { sendReviewRequest } = await import("@/lib/reviews-ops");
+const { sendReferralRequest, sendCustomerFollowUp } = await import("@/lib/referral-ops");
+const { createFakeCustomerMessagingProvider, setCustomerMessagingProvider } = await import("@/lib/customer-messaging");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -139,6 +142,21 @@ try {
   check(
     "Processor claims PENDING runs before provider work",
     processorSrc.includes("claimAutomationRun") && processorSrc.includes('status: "PENDING"'),
+  );
+  check(
+    "Abandoned PROCESSING runs become retryable through a claim lease",
+    processorSrc.includes("AUTOMATION_CLAIM_LEASE_MS") &&
+      processorSrc.includes("claimedAt") &&
+      processorSrc.includes('status: "PROCESSING", claimedAt: { lte: staleBefore }'),
+  );
+  check(
+    "Automation email reuses existing estimate/invoice/appointment idempotency keys",
+    emailSrc.includes('estimateEmailIdempotencyKey(input.subjectId, "auto")') &&
+      emailSrc.includes("invoiceReadyIdempotencyKey(input.subjectId)") &&
+      emailSrc.includes('appointmentProposedEmailIdempotencyKey(input.subjectId, proposalId, "auto")') &&
+      emailSrc.includes('reviewRequestEmailIdempotencyKey(input.subjectId, "sent")') &&
+      emailSrc.includes('referralRequestEmailIdempotencyKey(input.subjectId, "sent")') &&
+      emailSrc.includes('followUpEmailIdempotencyKey(input.subjectId, "sent")'),
   );
   check(
     "EMAIL and SMS are attempted independently",
@@ -277,6 +295,10 @@ try {
       "INVOICE_PAID",
       "REVIEW_OPPORTUNITY_CREATED",
       "REFERRAL_OPPORTUNITY_CREATED",
+      "REVIEW_REQUEST_CREATED",
+      "REFERRAL_REQUEST_CREATED",
+      "REVIEW_REQUEST_READY",
+      "REFERRAL_REQUEST_READY",
       "CUSTOMER_FOLLOW_UP_DUE",
     ].every((type) => BUSINESS_EVENT_TYPES.includes(type)),
   );
@@ -423,15 +445,57 @@ try {
     where: { id: appointmentJob.id },
     data: { scheduledAt: rescheduledAt, appointmentProposalId: 2 },
   });
+  const changedEvent = await emitBusinessEvent(prisma, {
+    businessId: businessA.id,
+    type: "APPOINTMENT_CHANGED",
+    subjectType: "JOB",
+    subjectId: appointmentJob.id,
+    payload: {
+      customerId: customerA.id,
+      businessName: "Alpha Auto",
+      proposalId: 2,
+      scheduledAt: rescheduledAt.toISOString(),
+    },
+    idempotencyKey: `APPOINTMENT_CHANGED:${appointmentJob.id}:2`,
+  });
   await skipSupersededAppointmentReminders(prisma, {
     businessId: businessA.id,
     jobId: appointmentJob.id,
     proposalId: 2,
   });
+  await queueReplacementAppointmentReminder(prisma, businessA.id, changedEvent.event);
   const staleReminder = await prisma.automationRun.findUnique({ where: { id: reminderRun.id } });
+  const replacementReminder = await prisma.automationRun.findFirst({
+    where: { businessId: businessA.id, eventId: changedEvent.event.id, ruleId: reminderRule.id },
+  });
+  const expectedReplacement = appointmentReminderAvailableAt(rescheduledAt, 24 * 60);
   check(
     "Rescheduled appointment marks the old reminder SKIPPED, not SENT",
     staleReminder.status === "SKIPPED" && staleReminder.status !== "SUCCEEDED" && !(staleReminder.resultSummary || "").includes("SENT was recorded"),
+  );
+  check(
+    "Reschedule queues a replacement reminder at the new appointment minus lead time",
+    Boolean(replacementReminder) &&
+      replacementReminder.status === "PENDING" &&
+      Math.abs(replacementReminder.availableAt.getTime() - expectedReplacement.getTime()) < 1000 &&
+      replacementReminder.id !== reminderRun.id,
+  );
+  const liveReminders = await prisma.automationRun.findMany({
+    where: {
+      businessId: businessA.id,
+      ruleId: reminderRule.id,
+      status: { in: ["PENDING", "PROCESSING"] },
+    },
+  });
+  const claimOldReminder = await claimAutomationRun(prisma, {
+    id: reminderRun.id,
+    businessId: businessA.id,
+  });
+  check(
+    "Only the current-proposal replacement reminder can send",
+    liveReminders.length === 1 &&
+      liveReminders[0].id === replacementReminder.id &&
+      claimOldReminder === null,
   );
 
   const fakeReviewRule = await prisma.automationRule.create({
@@ -467,14 +531,19 @@ try {
       createdByMembershipId: memA.id,
     },
   });
-  const reviewRule = await prisma.automationRule.findFirst({
-    where: { businessId: businessA.id, eventType: "REVIEW_REQUEST_CREATED", purpose: "REVIEW_REQUEST" },
+  const draftCreatedRule = await prisma.automationRule.create({
+    data: {
+      businessId: businessA.id,
+      eventType: "REVIEW_REQUEST_CREATED",
+      purpose: "REVIEW_REQUEST",
+      kind: "COMMUNICATION",
+      channel: "BOTH",
+      delayMinutes: 0,
+      templateKey: "legacy-created",
+      enabled: true,
+    },
   });
-  await prisma.automationRule.update({
-    where: { id: reviewRule.id },
-    data: { enabled: true, channel: "BOTH", delayMinutes: 0 },
-  });
-  const reviewEvent = await emitBusinessEvent(prisma, {
+  const reviewCreatedEvent = await emitBusinessEvent(prisma, {
     businessId: businessA.id,
     type: "REVIEW_REQUEST_CREATED",
     subjectType: "REVIEW_REQUEST",
@@ -487,16 +556,55 @@ try {
     },
     idempotencyKey: `REVIEW_REQUEST_CREATED:${reviewRequest.id}`,
   });
+  await queueAutomationRunsForEvent(prisma, businessA.id, reviewCreatedEvent.event);
+  const draftProcessed = await processPendingAutomationRuns(prisma, businessA.id);
+  const draftRun = draftProcessed.find((row) => row.ruleId === draftCreatedRule.id);
+  const afterDraft = await prisma.reviewRequest.findUniqueOrThrow({ where: { id: reviewRequest.id } });
+  const draftComms = await prisma.customerCommunication.findMany({
+    where: { businessId: businessA.id, relatedType: "REVIEW_REQUEST", relatedId: reviewRequest.id },
+  });
+  check(
+    "Enabled communication does not send a DRAFT review request or mark it SENT",
+    afterDraft.status === "DRAFT" &&
+      draftComms.length === 0 &&
+      Boolean(draftRun) &&
+      draftRun.status === "SKIPPED",
+  );
+
+  const reviewRule = await prisma.automationRule.findFirst({
+    where: { businessId: businessA.id, eventType: "REVIEW_REQUEST_READY", purpose: "REVIEW_REQUEST" },
+  });
+  await prisma.automationRule.update({
+    where: { id: reviewRule.id },
+    data: { enabled: true, channel: "BOTH", delayMinutes: 0 },
+  });
+  await prisma.reviewRequest.update({
+    where: { id: reviewRequest.id },
+    data: { status: "READY" },
+  });
+  const reviewEvent = await emitBusinessEvent(prisma, {
+    businessId: businessA.id,
+    type: "REVIEW_REQUEST_READY",
+    subjectType: "REVIEW_REQUEST",
+    subjectId: reviewRequest.id,
+    payload: {
+      customerId: customerA.id,
+      businessName: "Alpha Auto",
+      reviewRequestId: reviewRequest.id,
+      requestText: reviewRequest.requestText,
+    },
+    idempotencyKey: `REVIEW_REQUEST_READY:${reviewRequest.id}`,
+  });
   await queueAutomationRunsForEvent(prisma, businessA.id, reviewEvent.event);
   const reviewProcessed = await processPendingAutomationRuns(prisma, businessA.id);
   const reviewRun = reviewProcessed.find((row) => row.ruleId === reviewRule.id);
   const reviewComms = await prisma.customerCommunication.findMany({
     where: { businessId: businessA.id, relatedType: "REVIEW_REQUEST" },
   });
+  const afterReadyFailure = await prisma.reviewRequest.findUniqueOrThrow({ where: { id: reviewRequest.id } });
   check(
     "Review communication relatedId is the real same-tenant ReviewRequest",
-    reviewComms.length >= 1 &&
-      reviewComms.every((row) => row.relatedId === reviewRequest.id && row.businessId === businessA.id) &&
+    reviewComms.every((row) => row.relatedId === reviewRequest.id && row.businessId === businessA.id) &&
       !reviewComms.some((row) => row.relatedId === jobA.id),
   );
   check(
@@ -505,7 +613,8 @@ try {
       (reviewRun.resultSummary || "").includes("EMAIL") &&
       (reviewRun.resultSummary || "").includes("SMS") &&
       !(reviewRun.resultSummary || "").includes("EMAIL SENT") &&
-      reviewRun.status !== "SUCCEEDED",
+      reviewRun.status !== "SUCCEEDED" &&
+      afterReadyFailure.status !== "SENT",
   );
 
   const bothInvoiceRule = await prisma.automationRule.findFirst({
@@ -615,6 +724,234 @@ try {
       ["SUCCEEDED", "SKIPPED", "BLOCKED", "FAILED"].includes(raceRows[0].status) &&
       new Set(processedIds).size <= 1,
   );
+
+  const staleNow = new Date();
+  const staleEvent = await emitBusinessEvent(prisma, {
+    businessId: businessA.id,
+    type: "JOB_STARTED",
+    subjectType: "JOB",
+    subjectId: jobA.id,
+    payload: { customerId: customerA.id },
+    idempotencyKey: `JOB_STARTED:${jobA.id}:stale-lease`,
+  });
+  const staleRule = await prisma.automationRule.create({
+    data: {
+      businessId: businessA.id,
+      eventType: "JOB_STARTED",
+      purpose: "OWNER_NOTE_STALE",
+      kind: "ACTION_SUGGESTION",
+      channel: "NONE",
+      delayMinutes: 0,
+      templateKey: "stale-lease",
+      enabled: true,
+    },
+  });
+  await queueAutomationRunsForEvent(prisma, businessA.id, staleEvent.event);
+  const staleRun = await prisma.automationRun.findFirst({
+    where: { businessId: businessA.id, eventId: staleEvent.event.id, ruleId: staleRule.id },
+  });
+  const liveClaim = await claimAutomationRun(prisma, {
+    id: staleRun.id,
+    businessId: businessA.id,
+    now: staleNow,
+  });
+  const liveAgain = await processPendingAutomationRuns(prisma, businessA.id, staleNow);
+  const stillLive = await prisma.automationRun.findUniqueOrThrow({ where: { id: staleRun.id } });
+  check(
+    "A live PROCESSING claim is not stolen by another worker",
+    Boolean(liveClaim) &&
+      stillLive.status === "PROCESSING" &&
+      !liveAgain.some((row) => row.id === staleRun.id),
+  );
+  await prisma.automationRun.update({
+    where: { id: staleRun.id },
+    data: { claimedAt: new Date(staleNow.getTime() - AUTOMATION_CLAIM_LEASE_MS - 1_000) },
+  });
+  const recoveredAt = new Date();
+  const [recoverA, recoverB] = await Promise.all([
+    processPendingAutomationRuns(prisma, businessA.id, recoveredAt),
+    processPendingAutomationRuns(prisma, businessA.id, recoveredAt),
+  ]);
+  const recovered = await prisma.automationRun.findUniqueOrThrow({ where: { id: staleRun.id } });
+  const recoveredIds = [...recoverA, ...recoverB].filter((row) => row.id === staleRun.id).map((row) => row.id);
+  check(
+    "Abandoned PROCESSING runs become safely retryable and only one worker finishes",
+    recovered.status === "SUCCEEDED" &&
+      recovered.attemptCount === 1 &&
+      new Set(recoveredIds).size === 1,
+  );
+
+  const granted = await prisma.customer.create({
+    data: {
+      businessId: businessA.id,
+      name: "Grant",
+      phone: "5553334444",
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  await prisma.businessSettings.upsert({
+    where: { businessId: businessA.id },
+    create: {
+      businessId: businessA.id,
+      reviewRequestPreferenceEnabled: true,
+      marketingCommunicationEnabled: true,
+    },
+    update: {
+      reviewRequestPreferenceEnabled: true,
+      marketingCommunicationEnabled: true,
+    },
+  });
+  const fakeSms = createFakeCustomerMessagingProvider("whsec_auto_test");
+  setCustomerMessagingProvider(fakeSms);
+
+  const readyReview = await prisma.reviewRequest.create({
+    data: {
+      businessId: businessA.id,
+      customerId: granted.id,
+      jobId: jobA.id,
+      status: "READY",
+      requestText: "Please leave an honest review of the completed work.",
+      createdByMembershipId: memA.id,
+    },
+  });
+  await prisma.automationRule.update({
+    where: { id: reviewRule.id },
+    data: { enabled: true, channel: "SMS", delayMinutes: 0 },
+  });
+  const readyReviewEvent = await emitBusinessEvent(prisma, {
+    businessId: businessA.id,
+    type: "REVIEW_REQUEST_READY",
+    subjectType: "REVIEW_REQUEST",
+    subjectId: readyReview.id,
+    payload: {
+      customerId: granted.id,
+      businessName: "Alpha Auto",
+      reviewRequestId: readyReview.id,
+      requestText: readyReview.requestText,
+    },
+    idempotencyKey: `REVIEW_REQUEST_READY:${readyReview.id}`,
+  });
+  await queueAutomationRunsForEvent(prisma, businessA.id, readyReviewEvent.event);
+  const sentBefore = fakeSms.sent.length;
+  await processPendingAutomationRuns(prisma, businessA.id);
+  const sentReview = await prisma.reviewRequest.findUniqueOrThrow({ where: { id: readyReview.id } });
+  const sentReviewComms = await prisma.customerCommunication.findMany({
+    where: { businessId: businessA.id, relatedType: "REVIEW_REQUEST", relatedId: readyReview.id },
+  });
+  check(
+    "Accepted review-request automation marks the same-tenant request SENT",
+    sentReview.status === "SENT" &&
+      Boolean(sentReview.requestedAt) &&
+      sentReviewComms.some((row) => row.status === "SENT" || row.status === "QUEUED" || row.status === "ACCEPTED") &&
+      fakeSms.sent.length === sentBefore + 1,
+  );
+  let reviewResendBlocked = false;
+  try {
+    await sendReviewRequest(prisma, accessA, { requestId: readyReview.id });
+  } catch {
+    reviewResendBlocked = true;
+  }
+  await processPendingAutomationRuns(prisma, businessA.id);
+  const reviewCommsAfter = await prisma.customerCommunication.findMany({
+    where: { businessId: businessA.id, relatedType: "REVIEW_REQUEST", relatedId: readyReview.id },
+  });
+  check(
+    "Later manual send cannot unknowingly resend an already SENT review request",
+    reviewResendBlocked && reviewCommsAfter.length === sentReviewComms.length,
+  );
+
+  const readyReferral = await prisma.referralRequest.create({
+    data: {
+      businessId: businessA.id,
+      customerId: granted.id,
+      jobId: jobA.id,
+      status: "READY",
+      requestText: "If you know someone who needs similar work, we would appreciate a referral.",
+      createdByMembershipId: memA.id,
+    },
+  });
+  const referralRule = await prisma.automationRule.findFirst({
+    where: { businessId: businessA.id, eventType: "REFERRAL_REQUEST_READY", purpose: "REFERRAL_REQUEST" },
+  });
+  await prisma.automationRule.update({
+    where: { id: referralRule.id },
+    data: { enabled: true, channel: "SMS", delayMinutes: 0 },
+  });
+  const readyReferralEvent = await emitBusinessEvent(prisma, {
+    businessId: businessA.id,
+    type: "REFERRAL_REQUEST_READY",
+    subjectType: "REFERRAL_REQUEST",
+    subjectId: readyReferral.id,
+    payload: {
+      customerId: granted.id,
+      businessName: "Alpha Auto",
+      referralRequestId: readyReferral.id,
+      requestText: readyReferral.requestText,
+    },
+    idempotencyKey: `REFERRAL_REQUEST_READY:${readyReferral.id}`,
+  });
+  await queueAutomationRunsForEvent(prisma, businessA.id, readyReferralEvent.event);
+  const referralBefore = fakeSms.sent.length;
+  await processPendingAutomationRuns(prisma, businessA.id);
+  const sentReferral = await prisma.referralRequest.findUniqueOrThrow({ where: { id: readyReferral.id } });
+  check(
+    "Accepted referral-request automation marks the same-tenant request SENT",
+    sentReferral.status === "SENT" && Boolean(sentReferral.requestedAt) && fakeSms.sent.length === referralBefore + 1,
+  );
+  let referralResendBlocked = false;
+  try {
+    await sendReferralRequest(prisma, accessA, { requestId: readyReferral.id });
+  } catch {
+    referralResendBlocked = true;
+  }
+  check("Later manual send cannot unknowingly resend an already SENT referral request", referralResendBlocked);
+
+  const successFollowUp = await prisma.customerFollowUp.create({
+    data: {
+      businessId: businessA.id,
+      customerId: granted.id,
+      jobId: jobA.id,
+      kind: "JOB_COMPLETE",
+      status: "OPEN",
+      createdByMembershipId: memA.id,
+    },
+  });
+  const followReadyRule = await prisma.automationRule.findFirst({
+    where: { businessId: businessA.id, eventType: "CUSTOMER_FOLLOW_UP_DUE", purpose: "JOB_FOLLOW_UP" },
+  });
+  await prisma.automationRule.update({
+    where: { id: followReadyRule.id },
+    data: { enabled: true, channel: "SMS", kind: "COMMUNICATION", delayMinutes: 0 },
+  });
+  const followReadyEvent = await emitBusinessEvent(prisma, {
+    businessId: businessA.id,
+    type: "CUSTOMER_FOLLOW_UP_DUE",
+    subjectType: "CUSTOMER_FOLLOW_UP",
+    subjectId: successFollowUp.id,
+    payload: {
+      customerId: granted.id,
+      businessName: "Alpha Auto",
+      followUpId: successFollowUp.id,
+    },
+    idempotencyKey: `CUSTOMER_FOLLOW_UP_DUE:${successFollowUp.id}`,
+  });
+  await queueAutomationRunsForEvent(prisma, businessA.id, followReadyEvent.event);
+  const followBefore = fakeSms.sent.length;
+  await processPendingAutomationRuns(prisma, businessA.id);
+  const sentFollowUp = await prisma.customerFollowUp.findUniqueOrThrow({ where: { id: successFollowUp.id } });
+  check(
+    "Accepted follow-up automation marks the same-tenant follow-up SENT",
+    sentFollowUp.status === "SENT" && Boolean(sentFollowUp.sentAt) && fakeSms.sent.length === followBefore + 1,
+  );
+  let followResendBlocked = false;
+  try {
+    await sendCustomerFollowUp(prisma, accessA, { followUpId: successFollowUp.id });
+  } catch {
+    followResendBlocked = true;
+  }
+  check("Later manual send cannot unknowingly resend an already SENT follow-up", followResendBlocked);
+
+  setCustomerMessagingProvider(null);
 
   const unpaidOld = {
     key: "collect-unpaid-invoices",

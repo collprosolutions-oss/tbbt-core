@@ -2479,6 +2479,8 @@ model AutomationRun {
   resultSummary  String?
   idempotencyKey String
   availableAt    DateTime  @default(now())
+  /// Set when a worker claims PENDING or reclaims a stale PROCESSING run.
+  claimedAt      DateTime?
   processedAt    DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt

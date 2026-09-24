@@ -263,10 +263,31 @@ export async function advanceReviewRequestStatus(
   if (!isReviewRequestStatus(next)) {
     throw new ReviewsError("Invalid review request status.");
   }
-  return db.reviewRequest.update({
+  const updated = await db.reviewRequest.update({
     where: { id: request.id },
     data: { status: next },
   });
+  if (updated.status === "READY") {
+    const business = await db.business.findFirst({
+      where: { id: access.businessId },
+      select: { name: true },
+    });
+    await emitAndProcessBusinessEvent(db, {
+      businessId: access.businessId,
+      type: "REVIEW_REQUEST_READY",
+      subjectType: "REVIEW_REQUEST",
+      subjectId: updated.id,
+      payload: {
+        customerId: updated.customerId,
+        jobId: updated.jobId,
+        reviewRequestId: updated.id,
+        requestText: updated.requestText,
+        businessName: business?.name ?? "Your contractor",
+      },
+      idempotencyKey: `REVIEW_REQUEST_READY:${updated.id}`,
+    });
+  }
+  return updated;
 }
 
 export async function sendReviewRequest(

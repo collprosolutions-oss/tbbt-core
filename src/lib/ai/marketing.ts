@@ -128,9 +128,10 @@ export async function weeklyMarketingPlanWithAi(
   });
   return {
     ...weeklyMarketingPlanFromActivity(input),
+    status: result.status,
     mode: result.connected && result.status === "COMPLETED" ? ("AI" as const) : ("TEMPLATE" as const),
     message: result.message,
-    text: result.output?.text ?? fallbackText,
+    text: result.status === "PENDING" ? undefined : result.output?.text ?? fallbackText,
     publishable: false as const,
   };
 }
@@ -188,9 +189,10 @@ export async function campaignIdeasWithAi(
   });
   return {
     ...fallback,
+    status: result.status,
     mode: result.connected && result.status === "COMPLETED" ? ("AI" as const) : ("TEMPLATE" as const),
     message: result.message,
-    text: result.output?.text ?? fallback.ideas.join("\n"),
+    text: result.status === "PENDING" ? undefined : result.output?.text ?? fallback.ideas.join("\n"),
     publishable: false as const,
   };
 }
@@ -224,9 +226,10 @@ export async function draftMarketingVariationsWithAi(
   });
   return {
     variations: fallback,
+    status: result.status,
     mode: result.connected && result.status === "COMPLETED" ? ("AI" as const) : ("TEMPLATE" as const),
     message: result.message,
-    text: result.output?.text ?? fallback.map((row) => row.body).join("\n\n"),
+    text: result.status === "PENDING" ? undefined : result.output?.text ?? fallback.map((row) => row.body).join("\n\n"),
     publishable: false as const,
   };
 }

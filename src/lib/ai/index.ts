@@ -5,6 +5,7 @@ export {
   parseStructuredAiOutput,
   filterAuthorizedCitedFactKeys,
   loadAiUsage,
+  AI_PENDING_STALE_MS,
 } from "@/lib/ai/service";
 export { applyTemplateWriting, runWritingAssist, resolveWritingOriginal } from "@/lib/ai/writing";
 export { answerCoachFromFacts, coachSystemPrompt } from "@/lib/ai/coach";
@@ -25,8 +26,10 @@ export { describeReviewSentiment, draftReviewResponseFromRecord } from "@/lib/ai
 export {
   AI_NOT_CONNECTED_MESSAGE,
   AI_FAILURE_MESSAGE,
+  AI_IN_PROGRESS_MESSAGE,
   WRITING_ACTIONS,
   WRITING_ACTION_LABELS,
   isWritingAction,
+  isAiAttemptId,
 } from "@/lib/ai/types";
 export type { WritingAction, AiRunResult, StructuredAiOutput, CitedFact } from "@/lib/ai/types";

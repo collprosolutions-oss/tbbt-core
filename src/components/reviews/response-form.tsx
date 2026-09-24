@@ -20,14 +20,22 @@ export function ResponseForm({
   const [draft, setDraft] = useState(body);
   const [state, formAction, pending] = useActionState(upsertReviewResponseAction, initial);
   const [assist, assistAction, assistPending] = useActionState(draftReviewResponseAssistAction, assistInitial);
+  const [attemptId, setAttemptId] = useState(() => crypto.randomUUID());
 
   useEffect(() => {
     if (assist.text) setDraft(assist.text);
   }, [assist.text]);
 
+  useEffect(() => {
+    if (assist.text || assist.error || assist.message) {
+      setAttemptId(crypto.randomUUID());
+    }
+  }, [assist.text, assist.error, assist.message]);
+
   return (
     <form action={formAction} className="space-y-2">
       <input type="hidden" name="reviewId" value={reviewId} />
+      <input type="hidden" name="attemptId" value={attemptId} />
       <Label htmlFor={`response-${reviewId}`}>Response draft</Label>
       <textarea
         id={`response-${reviewId}`}

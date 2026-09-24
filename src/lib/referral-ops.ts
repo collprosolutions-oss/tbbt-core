@@ -119,10 +119,29 @@ export async function advanceReferralRequest(
         : "This referral request cannot be advanced.",
     );
   }
-  return db.referralRequest.update({
+  const updated = await db.referralRequest.update({
     where: { id: request.id },
     data: { status: "READY" },
   });
+  const business = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: { name: true },
+  });
+  await emitAndProcessBusinessEvent(db, {
+    businessId: access.businessId,
+    type: "REFERRAL_REQUEST_READY",
+    subjectType: "REFERRAL_REQUEST",
+    subjectId: updated.id,
+    payload: {
+      customerId: updated.customerId,
+      jobId: updated.jobId,
+      referralRequestId: updated.id,
+      requestText: updated.requestText,
+      businessName: business?.name ?? "Your contractor",
+    },
+    idempotencyKey: `REFERRAL_REQUEST_READY:${updated.id}`,
+  });
+  return updated;
 }
 
 async function attemptOwnedCustomerEmail(

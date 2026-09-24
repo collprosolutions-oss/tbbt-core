@@ -11,6 +11,7 @@ import { register } from "node:module";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -114,6 +115,17 @@ try {
   check("READY_FOR_REVIEW advances to APPROVED", nextContentStatus("READY_FOR_REVIEW") === "APPROVED");
   check("APPROVED has no next publish state", nextContentStatus("APPROVED") === null);
   check("AI assist is not enabled in this step", marketingAiAssistAvailable() === false);
+  const marketingDataSrc = readFileSync(new URL("../src/lib/marketing-data.ts", import.meta.url), "utf8");
+  const generatePanelSrc = readFileSync(new URL("../src/components/marketing/generate-ai-panel.tsx", import.meta.url), "utf8");
+  check(
+    "Ordinary Marketing page load does not invoke AI tasks",
+    !marketingDataSrc.includes("WithAi") && !marketingDataSrc.includes("runAiTask"),
+  );
+  check(
+    "Marketing Generate AI actions exist and stay DRAFT",
+    generatePanelSrc.includes("Generate AI variations") &&
+      generatePanelSrc.includes("Generated copy remains DRAFT"),
+  );
   const previousAiEnv = process.env.TBBT_MARKETING_AI_PROVIDER;
   process.env.TBBT_MARKETING_AI_PROVIDER = "openai";
   check(

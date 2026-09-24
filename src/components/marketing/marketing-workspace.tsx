@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
 import { formatISODate } from "@/lib/schedule";
+import { GenerateMarketingAiPanel } from "@/components/marketing/generate-ai-panel";
 import { createCampaignAction, saveBrandVoiceAction, setCampaignStatusAction } from "@/app/actions/campaigns";
 import { ActionForm } from "@/components/action-form";
 import {
@@ -132,10 +133,11 @@ function OpportunityBody({
           <CardHeader>
             <CardTitle>Marketing intelligence drafts</CardTitle>
             <CardDescription>
-              Recorded jobs, photos, reviews, service areas, and campaigns. AI drafts use a connected provider when one exists; otherwise TBBT stays in template mode. Social accounts stay Not Connected. Generated content remains DRAFT.
+              Recorded jobs, photos, reviews, service areas, and campaigns. Opening this page stays template-only. Generate AI actions call the provider only after an explicit owner click. Social accounts stay Not Connected. Generated content remains DRAFT.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
+            <GenerateMarketingAiPanel />
             <p className="text-muted-foreground">{source.activityPlan.message}</p>
             <ul className="space-y-1">
               {source.activityPlan.items.map((item) => (

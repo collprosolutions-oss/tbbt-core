@@ -46,6 +46,17 @@ export async function appendConversationMessage(
       where: { id: input.conversationId, ...access.scope },
     }),
   );
+  if (input.interactionId) {
+    const existing = await db.aiConversationMessage.findFirst({
+      where: {
+        businessId: access.businessId,
+        conversationId: conversation.id,
+        interactionId: input.interactionId,
+        role: input.role,
+      },
+    });
+    if (existing) return existing;
+  }
   const message = await db.aiConversationMessage.create({
     data: {
       businessId: access.businessId,

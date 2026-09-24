@@ -3,8 +3,14 @@ import { buildAppointmentProposedEmail } from "@/lib/appointment-mail";
 import { buildEstimateReadyEmail } from "@/lib/estimate-mail";
 import { buildInvoiceReadyEmail } from "@/lib/invoice-mail";
 import {
+  appointmentProposedEmailIdempotencyKey,
+  estimateEmailIdempotencyKey,
+  followUpEmailIdempotencyKey,
   getMailConfig,
+  invoiceReadyIdempotencyKey,
   isUsableEmail,
+  referralRequestEmailIdempotencyKey,
+  reviewRequestEmailIdempotencyKey,
   sendTransactionalEmail,
   senderFrom,
 } from "@/lib/mail";
@@ -86,7 +92,25 @@ export async function attemptAutomationEmail(
   },
 ): Promise<AutomationEmailResult> {
   const slug = await businessSlug(db, input.businessId);
-  const key = `automation-email/${input.runId}`;
+  const proposalId = typeof input.payload.proposalId === "number" ? input.payload.proposalId : 1;
+  const key =
+    input.purpose === "ESTIMATE_READY"
+      ? estimateEmailIdempotencyKey(input.subjectId, "auto")
+      : input.purpose === "INVOICE_READY"
+        ? invoiceReadyIdempotencyKey(input.subjectId)
+        : input.purpose === "APPOINTMENT_CONFIRMATION" || input.purpose === "SCHEDULE_CHANGE"
+          ? appointmentProposedEmailIdempotencyKey(input.subjectId, proposalId, "auto")
+          : input.purpose === "APPOINTMENT_REMINDER"
+            ? `appointment-reminder/${input.subjectId}/${proposalId}`
+            : input.purpose === "REVIEW_REQUEST"
+              ? reviewRequestEmailIdempotencyKey(input.subjectId, "sent")
+              : input.purpose === "REFERRAL_REQUEST"
+                ? referralRequestEmailIdempotencyKey(input.subjectId, "sent")
+                : input.purpose === "JOB_FOLLOW_UP" || input.purpose === "REPEAT_FOLLOW_UP"
+                  ? followUpEmailIdempotencyKey(input.subjectId, "sent")
+                  : input.purpose === "PAYMENT_REMINDER"
+                    ? `invoice-payment-reminder/${input.subjectId}/${input.runId}`
+                    : `automation-email/${input.runId}`;
 
   if (input.purpose === "ESTIMATE_READY") {
     const estimate = await db.estimate.findFirst({
@@ -220,18 +244,30 @@ export async function attemptAutomationEmail(
       }
       const request = await db.reviewRequest.findFirst({
         where: { id: input.subjectId, businessId: input.businessId },
-        select: { id: true },
+        select: { id: true, status: true },
       });
       if (!request) return { status: "SKIPPED", failureReason: "Review request is not in this business." };
+      if (request.status === "SENT" || request.status === "COMPLETED" || request.status === "CANCELLED") {
+        return { status: "SKIPPED", failureReason: "Review request is already recorded as sent or closed." };
+      }
+      if (request.status !== "READY" && request.status !== "FAILED") {
+        return { status: "SKIPPED", failureReason: "Review request is not READY. DRAFT records are not sent automatically." };
+      }
     } else {
       if (input.subjectType !== "REFERRAL_REQUEST") {
         return { status: "SKIPPED", failureReason: "Referral request communications require a real ReferralRequest record." };
       }
       const request = await db.referralRequest.findFirst({
         where: { id: input.subjectId, businessId: input.businessId },
-        select: { id: true },
+        select: { id: true, status: true },
       });
       if (!request) return { status: "SKIPPED", failureReason: "Referral request is not in this business." };
+      if (request.status === "SENT" || request.status === "COMPLETED" || request.status === "CANCELLED") {
+        return { status: "SKIPPED", failureReason: "Referral request is already recorded as sent or closed." };
+      }
+      if (request.status !== "READY" && request.status !== "FAILED") {
+        return { status: "SKIPPED", failureReason: "Referral request is not READY. DRAFT records are not sent automatically." };
+      }
     }
     const text =
       typeof input.payload.requestText === "string"
@@ -260,9 +296,15 @@ export async function attemptAutomationEmail(
     }
     const followUp = await db.customerFollowUp.findFirst({
       where: { id: input.subjectId, businessId: input.businessId },
-      select: { id: true },
+      select: { id: true, status: true },
     });
     if (!followUp) return { status: "SKIPPED", failureReason: "Follow-up is not in this business." };
+    if (followUp.status === "SENT" || followUp.status === "CANCELLED") {
+      return { status: "SKIPPED", failureReason: "Follow-up is already recorded as sent or closed." };
+    }
+    if (followUp.status !== "OPEN" && followUp.status !== "FAILED") {
+      return { status: "SKIPPED", failureReason: "Follow-up is not open for send." };
+    }
     const text = `Thank you again from ${input.businessName}. This is a recorded follow-up, not an automatic campaign.`;
     return sendOwnedCustomerEmail(db, {
       businessId: input.businessId,

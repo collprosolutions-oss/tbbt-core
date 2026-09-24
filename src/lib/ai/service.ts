@@ -9,6 +9,7 @@ import { resolveAiProvider } from "@/lib/ai/provider";
 import { sanitizeAiText, summarizeAiInput } from "@/lib/ai/sanitize";
 import {
   AI_FAILURE_MESSAGE,
+  AI_IN_PROGRESS_MESSAGE,
   AI_MAX_OUTPUT_TOKENS,
   AI_MAX_RETRIES,
   AI_NOT_CONNECTED_MESSAGE,
@@ -17,6 +18,8 @@ import {
   type AiTaskType,
   type StructuredAiOutput,
 } from "@/lib/ai/types";
+
+export const AI_PENDING_STALE_MS = 2 * 60 * 1000;
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -68,6 +71,19 @@ export function parseStructuredAiOutput(
   }
 }
 
+function inProgressResult(existing: { id: string; provider: string | null; model: string | null }): AiRunResult {
+  return {
+    status: "PENDING",
+    connected: isAiProviderConnected(),
+    provider: existing.provider,
+    model: existing.model,
+    output: null,
+    message: AI_IN_PROGRESS_MESSAGE,
+    retryable: true,
+    interactionId: existing.id,
+  };
+}
+
 function resultFromExistingInteraction(
   existing: {
     id: string;
@@ -80,6 +96,9 @@ function resultFromExistingInteraction(
   fallback: StructuredAiOutput,
   allowedFactKeys?: string[] | null,
 ): AiRunResult {
+  if (existing.status === "PENDING") {
+    return inProgressResult(existing);
+  }
   const output = existing.outputSummary
     ? parseStructuredAiOutput(existing.outputSummary, allowedFactKeys)
     : fallback;
@@ -96,7 +115,9 @@ function resultFromExistingInteraction(
           ? AI_FAILURE_MESSAGE
           : existing.status === "VALIDATION_FAILED"
             ? AI_VALIDATION_MESSAGE
-            : "Completed.",
+            : existing.status === "COMPLETED"
+              ? "Completed."
+              : existing.status,
     failureReason: existing.failureReason ?? undefined,
     retryable: false,
     interactionId: existing.id,
@@ -131,6 +152,50 @@ async function recordUsage(
   });
 }
 
+async function resolvePendingInteraction(
+  db: Db,
+  existing: {
+    id: string;
+    status: string;
+    provider: string | null;
+    model: string | null;
+    outputSummary: string | null;
+    failureReason: string | null;
+    createdAt: Date;
+    retryCount: number;
+  },
+  fallback: StructuredAiOutput,
+  allowedFactKeys?: string[] | null,
+): Promise<{ kind: "result"; result: AiRunResult } | { kind: "takeover" }> {
+  const staleBefore = new Date(Date.now() - AI_PENDING_STALE_MS);
+  if (existing.createdAt <= staleBefore) {
+    const took = await db.aiInteraction.updateMany({
+      where: {
+        id: existing.id,
+        status: "PENDING",
+        retryCount: existing.retryCount,
+      },
+      data: { retryCount: { increment: 1 } },
+    });
+    if (took.count === 1) {
+      return { kind: "takeover" };
+    }
+  }
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const fresh = await db.aiInteraction.findUnique({ where: { id: existing.id } });
+    if (!fresh) break;
+    if (fresh.status !== "PENDING") {
+      return {
+        kind: "result",
+        result: resultFromExistingInteraction(fresh, fallback, allowedFactKeys),
+      };
+    }
+  }
+  return { kind: "result", result: inProgressResult(existing) };
+}
+
 export async function runAiTask(
   db: Db,
   actor: AiServiceActor,
@@ -146,7 +211,7 @@ export async function runAiTask(
         allowedFactKeys?: string[] | null;
       },
     ): Promise<AiRunResult> {
-      const existing = await db.aiInteraction.findUnique({
+      let pending = await db.aiInteraction.findUnique({
         where: {
           businessId_idempotencyKey: {
             businessId: actor.businessId,
@@ -154,11 +219,13 @@ export async function runAiTask(
           },
         },
       });
-      if (existing) {
-        return resultFromExistingInteraction(existing, input.fallback, input.allowedFactKeys);
-      }
-
-      let pending;
+      if (pending) {
+        if (pending.status !== "PENDING") {
+          return resultFromExistingInteraction(pending, input.fallback, input.allowedFactKeys);
+        }
+        const resolved = await resolvePendingInteraction(db, pending, input.fallback, input.allowedFactKeys);
+        if (resolved.kind === "result") return resolved.result;
+      } else {
       try {
         pending = await db.aiInteraction.create({
           data: {
@@ -182,10 +249,21 @@ export async function runAiTask(
           },
         });
         if (raced) {
-          return resultFromExistingInteraction(raced, input.fallback, input.allowedFactKeys);
+          if (raced.status !== "PENDING") {
+            return resultFromExistingInteraction(raced, input.fallback, input.allowedFactKeys);
+          }
+          const resolved = await resolvePendingInteraction(db, raced, input.fallback, input.allowedFactKeys);
+          if (resolved.kind === "result") return resolved.result;
+          pending = raced;
+        } else {
+          throw new Error("That AI request could not be recorded.");
         }
-        throw new Error("That AI request could not be recorded.");
       }
+      }
+
+  if (!pending) {
+    throw new Error("That AI request could not be recorded.");
+  }
 
   const provider = resolveAiProvider();
   if (!provider.connected) {

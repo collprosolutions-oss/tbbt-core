@@ -18,13 +18,9 @@ import {
 import { draftMarketingContent, weeklyContentPlan } from "@/lib/marketing-draft";
 import {
   campaignIdeasFromActivity,
-  campaignIdeasWithAi,
   draftMarketingVariations,
-  draftMarketingVariationsWithAi,
   weeklyMarketingPlanFromActivity,
-  weeklyMarketingPlanWithAi,
 } from "@/lib/ai/marketing";
-import type { AiServiceActor } from "@/lib/ai/service";
 import { addDays, startOfDay, startOfWeek } from "@/lib/schedule";
 import { asNumber } from "@/lib/reports";
 
@@ -53,10 +49,8 @@ function catalogIdForEstimate(
 export async function loadMarketingSource(
   prisma: PrismaClient,
   businessId: string,
-  actor?: AiServiceActor | null,
 ) {
   const scope = { businessId } as const;
-  const dayKey = new Date().toISOString().slice(0, 10);
 
   const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices] = await Promise.all([
     prisma.business.findFirst({
@@ -288,68 +282,40 @@ export async function loadMarketingSource(
       brandVoice: settings?.marketingBrandVoice,
       identityNotes: settings?.marketingIdentityNotes,
     }),
-    draftVariations: (
-      actor
-        ? await draftMarketingVariationsWithAi(
-            prisma,
-            actor,
-            {
-              contentType: "COMPLETED_JOB",
-              businessName: business?.name ?? "Business",
-              brandVoice: settings?.marketingBrandVoice,
-              identityNotes: settings?.marketingIdentityNotes,
-              workPerformed: opportunities[0]?.workPerformed,
-              photoCount: opportunities[0]?.approvedPhotoCount,
-              city: business?.publicServiceAreaLabel,
-            },
-            `marketing-variations:${businessId}:${dayKey}`,
-          )
-        : { variations: draftMarketingVariations({
-            contentType: "COMPLETED_JOB",
-            businessName: business?.name ?? "Business",
-            brandVoice: settings?.marketingBrandVoice,
-            identityNotes: settings?.marketingIdentityNotes,
-            workPerformed: opportunities[0]?.workPerformed,
-            photoCount: opportunities[0]?.approvedPhotoCount,
-            city: business?.publicServiceAreaLabel,
-          }) }
-    ).variations,
-    activityPlan: actor
-      ? await weeklyMarketingPlanWithAi(
-          prisma,
-          actor,
-          {
-            completedJobs: opportunities.length,
-            approvedPhotos: opportunities.reduce((sum, row) => sum + row.approvedPhotoCount, 0),
-            reviews,
-            campaigns: campaigns.length,
-            serviceAreas,
-          },
-          `weekly-plan:${businessId}:${dayKey}`,
-        )
-      : weeklyMarketingPlanFromActivity({
-          completedJobs: opportunities.length,
-          approvedPhotos: opportunities.reduce((sum, row) => sum + row.approvedPhotoCount, 0),
-          reviews,
-          campaigns: campaigns.length,
-          serviceAreas,
-        }),
-    campaignIdeas: actor
-      ? await campaignIdeasWithAi(
-          prisma,
-          actor,
-          {
-            leadSources: [...new Set(serviceRequests.map((row) => row.leadSource).filter(Boolean))] as string[],
-            completedJobs: opportunities.length,
-            unpaidInvoices,
-          },
-          `campaign-ideas:${businessId}:${dayKey}`,
-        )
-      : campaignIdeasFromActivity({
-          leadSources: [...new Set(serviceRequests.map((row) => row.leadSource).filter(Boolean))] as string[],
-          completedJobs: opportunities.length,
-          unpaidInvoices,
-        }),
+    draftVariations: draftMarketingVariations({
+      contentType: "COMPLETED_JOB",
+      businessName: business?.name ?? "Business",
+      brandVoice: settings?.marketingBrandVoice,
+      identityNotes: settings?.marketingIdentityNotes,
+      workPerformed: opportunities[0]?.workPerformed,
+      photoCount: opportunities[0]?.approvedPhotoCount,
+      city: business?.publicServiceAreaLabel,
+    }),
+    activityPlan: weeklyMarketingPlanFromActivity({
+      completedJobs: opportunities.length,
+      approvedPhotos: opportunities.reduce((sum, row) => sum + row.approvedPhotoCount, 0),
+      reviews,
+      campaigns: campaigns.length,
+      serviceAreas,
+    }),
+    campaignIdeas: campaignIdeasFromActivity({
+      leadSources: [...new Set(serviceRequests.map((row) => row.leadSource).filter(Boolean))] as string[],
+      completedJobs: opportunities.length,
+      unpaidInvoices,
+    }),
+    recordedActivity: {
+      completedJobs: opportunities.length,
+      approvedPhotos: opportunities.reduce((sum, row) => sum + row.approvedPhotoCount, 0),
+      reviews,
+      campaigns: campaigns.length,
+      serviceAreas,
+      unpaidInvoices,
+      leadSources: [...new Set(serviceRequests.map((row) => row.leadSource).filter(Boolean))] as string[],
+      workPerformed: opportunities[0]?.workPerformed,
+      photoCount: opportunities[0]?.approvedPhotoCount,
+      city: business?.publicServiceAreaLabel,
+      businessName: business?.name ?? "Business",
+    },
     seo: {
       homeTitle: settings?.seoTitleHome ?? "",
       homeDescription: settings?.seoDescriptionHome ?? "",

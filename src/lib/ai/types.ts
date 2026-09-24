@@ -66,6 +66,16 @@ export const AI_FAILURE_MESSAGE =
 export const AI_VALIDATION_MESSAGE =
   "The AI response could not be used because it failed structured validation. Recorded facts were not changed.";
 
+export const AI_IN_PROGRESS_MESSAGE =
+  "That request is already in progress. TBBT did not invent a completed answer.";
+
+const AI_ATTEMPT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isAiAttemptId(value: string) {
+  return AI_ATTEMPT_ID_PATTERN.test(value);
+}
+
 export type AiUsage = {
   promptTokens?: number;
   completionTokens?: number;

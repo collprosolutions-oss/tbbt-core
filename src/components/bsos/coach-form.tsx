@@ -1,11 +1,15 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { askBsosCoachAction, type AiActionState } from "@/app/actions/ai";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 const initial: AiActionState = {};
+
+function newAttemptId() {
+  return crypto.randomUUID();
+}
 
 export function BsosCoachForm({
   conversationId,
@@ -15,10 +19,18 @@ export function BsosCoachForm({
   aiLabel: string;
 }) {
   const [state, action, pending] = useActionState(askBsosCoachAction, initial);
+  const [attemptId, setAttemptId] = useState(newAttemptId);
+
+  useEffect(() => {
+    if (state.text || state.error || state.message) {
+      setAttemptId(newAttemptId());
+    }
+  }, [state.text, state.error, state.message]);
 
   return (
     <form action={action} className="space-y-2">
       {conversationId ? <input type="hidden" name="conversationId" value={conversationId} /> : null}
+      <input type="hidden" name="attemptId" value={attemptId} />
       <p className="text-xs text-muted-foreground">AI status: {aiLabel}. Answers cite recorded TBBT facts only.</p>
       <textarea
         name="question"

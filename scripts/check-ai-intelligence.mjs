@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const {
+  AI_IN_PROGRESS_MESSAGE,
   AI_NOT_CONNECTED_MESSAGE,
   applyTemplateWriting,
   filterAuthorizedCitedFactKeys,
@@ -22,6 +23,8 @@ const {
   runAiTask,
   runWritingAssist,
 } = await import("@/lib/ai/index");
+const { appendConversationMessage } = await import("@/lib/ai/conversations");
+const { weeklyMarketingPlanWithAi } = await import("@/lib/ai/marketing");
 const { CAPABILITIES, requireBusinessCapability } = await import("@/lib/authorization");
 const { answerCoachFromFacts } = await import("@/lib/ai/coach");
 const { answerKnowledgeFromEntries, retrieveTenantKnowledge } = await import("@/lib/ai/knowledge");
@@ -126,6 +129,45 @@ try {
       marketingAiSrc.includes("draftMarketingVariationsWithAi") &&
       marketingAiSrc.includes("runAiTask") &&
       marketingAiSrc.includes('publishable: false'),
+  );
+  check(
+    "Marketing page load stays template-only and does not call the AI provider",
+    !marketingDataSrc.includes("WithAi") &&
+      !marketingDataSrc.includes("runAiTask") &&
+      marketingDataSrc.includes("weeklyMarketingPlanFromActivity") &&
+      marketingDataSrc.includes("campaignIdeasFromActivity") &&
+      marketingDataSrc.includes("draftMarketingVariations("),
+  );
+  const marketingPageSrc = readFileSync(new URL("../src/app/(app)/marketing/page.tsx", import.meta.url), "utf8");
+  const generatePanelSrc = readFileSync(new URL("../src/components/marketing/generate-ai-panel.tsx", import.meta.url), "utf8");
+  const marketingActionSrc = readFileSync(new URL("../src/app/actions/marketing.ts", import.meta.url), "utf8");
+  check(
+    "Owner Generate actions are explicit and display model output",
+    marketingPageSrc.includes("loadMarketingSource(prisma, access.businessId)") &&
+      generatePanelSrc.includes("Generate AI variations") &&
+      generatePanelSrc.includes("Generate weekly plan") &&
+      generatePanelSrc.includes("Generate campaign ideas") &&
+      generatePanelSrc.includes('name="attemptId"') &&
+      marketingActionSrc.includes("generateMarketingAiAction") &&
+      marketingActionSrc.includes("weeklyMarketingPlanWithAi") &&
+      marketingActionSrc.includes("result.text") &&
+      marketingAiSrc.includes('mode: result.connected && result.status === "COMPLETED"'),
+  );
+  check(
+    "Interactive AI actions use a stable attempt ID instead of Date.now()",
+    !writingActionSrc.includes("Date.now") &&
+      writingActionSrc.includes("readAttemptId") &&
+      writingBarSrc.includes('name="attemptId"') &&
+      readFileSync(new URL("../src/components/bsos/coach-form.tsx", import.meta.url), "utf8").includes('name="attemptId"') &&
+      readFileSync(new URL("../src/components/knowledge/ask-form.tsx", import.meta.url), "utf8").includes('name="attemptId"') &&
+      readFileSync(new URL("../src/components/reviews/response-form.tsx", import.meta.url), "utf8").includes('name="attemptId"'),
+  );
+  check(
+    "PENDING AI work is never returned as a completed fallback",
+    serviceSrc.includes("AI_IN_PROGRESS_MESSAGE") &&
+      serviceSrc.includes('if (existing.status === "PENDING")') &&
+      serviceSrc.includes("inProgressResult") &&
+      !serviceSrc.includes('existing.status === "PENDING"\n          ? "Completed."'),
   );
 
   const ownerA = await prisma.user.create({
@@ -334,6 +376,181 @@ try {
     memberWritingBlocked = true;
   }
   check("MEMBER direct invocation of generic AI writing is blocked", memberWritingBlocked);
+
+  function makeAccess(businessId, role, membershipId, userId) {
+    return {
+      businessId,
+      workspace: { role, membership: { id: membershipId }, user: { id: userId } },
+      scope: { businessId },
+      assertOwned(record) {
+        if (!record || record.businessId !== businessId) {
+          throw new Error("Record is not in the authorized business workspace.");
+        }
+        return record;
+      },
+    };
+  }
+
+  const pendingKey = `coach-pending-${randomUUID()}`;
+  await prisma.aiInteraction.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memA.id,
+      userId: ownerA.id,
+      taskType: "COACH_ASK",
+      status: "PENDING",
+      inputSummary: "pending",
+      idempotencyKey: pendingKey,
+    },
+  });
+  const pendingResult = await runAiTask(prisma, actorA, {
+    taskType: "COACH_ASK",
+    system: "unused",
+    user: "unused",
+    inputSummary: "pending",
+    idempotencyKey: pendingKey,
+    fallback: coach.output,
+  });
+  const pendingRow = await prisma.aiInteraction.findUniqueOrThrow({
+    where: { businessId_idempotencyKey: { businessId: businessA.id, idempotencyKey: pendingKey } },
+  });
+  check(
+    "Existing PENDING interaction is not returned as Completed with fallback output",
+    pendingResult.status === "PENDING" &&
+      pendingResult.output === null &&
+      pendingResult.message === AI_IN_PROGRESS_MESSAGE &&
+      pendingResult.message !== "Completed." &&
+      pendingRow.status === "PENDING" &&
+      pendingRow.outputSummary == null,
+  );
+
+  const hangKey = `coach-hang-${randomUUID()}`;
+  await prisma.aiInteraction.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memA.id,
+      userId: ownerA.id,
+      taskType: "COACH_ASK",
+      status: "PENDING",
+      inputSummary: "hang",
+      idempotencyKey: hangKey,
+    },
+  });
+  const [hangOne, hangTwo] = await Promise.all([
+    runAiTask(prisma, actorA, { ...raceInput, idempotencyKey: hangKey }),
+    runAiTask(prisma, actorA, { ...raceInput, idempotencyKey: hangKey }),
+  ]);
+  const hangRows = await prisma.aiInteraction.findMany({
+    where: { businessId: businessA.id, idempotencyKey: hangKey },
+  });
+  check(
+    "Concurrent PENDING requests stay in progress on one interaction",
+    hangRows.length === 1 &&
+      hangRows[0].status === "PENDING" &&
+      hangOne.status === "PENDING" &&
+      hangTwo.status === "PENDING" &&
+      hangOne.output === null &&
+      hangTwo.output === null &&
+      hangOne.interactionId === hangRows[0].id &&
+      hangTwo.interactionId === hangRows[0].id,
+  );
+
+  const staleKey = `coach-stale-${randomUUID()}`;
+  const stalePending = await prisma.aiInteraction.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memA.id,
+      userId: ownerA.id,
+      taskType: "COACH_ASK",
+      status: "PENDING",
+      inputSummary: "stale",
+      idempotencyKey: staleKey,
+      createdAt: new Date(Date.now() - 3 * 60 * 1000),
+    },
+  });
+  const staleResult = await runAiTask(prisma, actorA, {
+    taskType: "COACH_ASK",
+    system: "unused",
+    user: "unused",
+    inputSummary: "stale",
+    idempotencyKey: staleKey,
+    fallback: coach.output,
+  });
+  const staleRow = await prisma.aiInteraction.findUniqueOrThrow({ where: { id: stalePending.id } });
+  check(
+    "Stale PENDING AI work can be recovered without inventing a completed answer first",
+    staleResult.status === "SKIPPED_NOT_CONNECTED" &&
+      staleRow.status === "SKIPPED_NOT_CONNECTED" &&
+      staleResult.interactionId === stalePending.id,
+  );
+
+  const retryKey = `coach-retry-${randomUUID()}`;
+  const firstRetry = await runAiTask(prisma, actorA, {
+    taskType: "COACH_ASK",
+    system: "unused",
+    user: "unused",
+    inputSummary: "retry",
+    conversationId: conversationA.id,
+    idempotencyKey: retryKey,
+    fallback: coach.output,
+  });
+  const secondRetry = await runAiTask(prisma, actorA, {
+    taskType: "COACH_ASK",
+    system: "unused",
+    user: "unused",
+    inputSummary: "retry",
+    conversationId: conversationA.id,
+    idempotencyKey: retryKey,
+    fallback: coach.output,
+  });
+  const accessA = makeAccess(businessA.id, "OWNER", memA.id, ownerA.id);
+  await appendConversationMessage(prisma, accessA, {
+    conversationId: conversationA.id,
+    role: "ASSISTANT",
+    content: firstRetry.output?.text ?? coach.output.text,
+    stance: firstRetry.output?.stance ?? "FACT",
+    interactionId: firstRetry.interactionId,
+  });
+  await appendConversationMessage(prisma, accessA, {
+    conversationId: conversationA.id,
+    role: "ASSISTANT",
+    content: "A second retry must not append another assistant message.",
+    stance: "MIXED",
+    interactionId: firstRetry.interactionId,
+  });
+  const assistantRows = await prisma.aiConversationMessage.findMany({
+    where: {
+      businessId: businessA.id,
+      conversationId: conversationA.id,
+      interactionId: firstRetry.interactionId,
+      role: "ASSISTANT",
+    },
+  });
+  const retryInteractions = await prisma.aiInteraction.findMany({
+    where: { businessId: businessA.id, idempotencyKey: retryKey },
+  });
+  check(
+    "Duplicate retry causes one provider interaction and one assistant conversation message",
+    retryInteractions.length === 1 &&
+      firstRetry.interactionId === retryInteractions[0].id &&
+      secondRetry.interactionId === firstRetry.interactionId &&
+      assistantRows.length === 1 &&
+      assistantRows[0].content === (firstRetry.output?.text ?? coach.output.text),
+  );
+
+  const marketingPlan = await weeklyMarketingPlanWithAi(
+    prisma,
+    actorA,
+    { completedJobs: 1, approvedPhotos: 1, reviews: 1, campaigns: 0, serviceAreas: 1 },
+    `marketing-plan-${randomUUID()}`,
+  );
+  check(
+    "Disconnected marketing Generate actions show template output and stay unpublished",
+    marketingPlan.mode === "TEMPLATE" &&
+      Boolean(marketingPlan.text) &&
+      marketingPlan.publishable === false &&
+      marketingPlan.status === "SKIPPED_NOT_CONNECTED",
+  );
 } finally {
   await prisma.$disconnect();
   spawnSync("psql", [baseUrl, "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE);`], {
