@@ -49,6 +49,15 @@ export type CreateSaasPortalInput = {
   returnUrl: string;
 };
 
+export type ScheduleSaasCancelInput = {
+  subscriptionId: string;
+};
+
+export type ScheduleSaasCancelResult = {
+  subscriptionId: string;
+  cancelAtPeriodEnd: boolean;
+};
+
 export type ParsedSaasBillingEvent = {
   stripeEventId: string;
   eventType: string;
@@ -70,6 +79,13 @@ export type SaasBillingProvider = {
   createBillingPortalSession(
     input: CreateSaasPortalInput,
   ): Promise<{ url: string }>;
+  /**
+   * Ask Stripe (or the fake adapter) to schedule cancel-at-period-end.
+   * Local TBBT rows stay unchanged until a webhook snapshot arrives.
+   */
+  scheduleCancelAtPeriodEnd(
+    input: ScheduleSaasCancelInput,
+  ): Promise<ScheduleSaasCancelResult>;
 };
 
 export class SaasBillingError extends Error {

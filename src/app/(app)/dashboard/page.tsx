@@ -392,7 +392,29 @@ export default async function DashboardPage() {
           </CardHeader>
           <CardContent>
             {attentionTotal === 0 ? (
-              <p className="text-sm text-muted-foreground">Nothing waiting right now.</p>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>Nothing waiting right now.</p>
+                {recentGroups.length === 0 ? (
+                  <div className="rounded-lg border border-dashed p-3">
+                    <p className="font-medium text-foreground">First steps for a new workspace</p>
+                    <ol className="mt-2 list-decimal space-y-1 pl-5">
+                      <li>Confirm services on Services, then open your public site.</li>
+                      <li>
+                        Share{" "}
+                        <Link className="underline" href={`/hire/${business.slug}`}>
+                          /hire/{business.slug}
+                        </Link>{" "}
+                        or the request form at{" "}
+                        <Link className="underline" href={`/r/${business.slug}`}>
+                          /r/{business.slug}
+                        </Link>
+                        .
+                      </li>
+                      <li>Create an estimate from a request, then send it for customer approval.</li>
+                    </ol>
+                  </div>
+                ) : null}
+              </div>
             ) : (
               <div className="space-y-5">
                 <DashboardAppointmentAttentionItems items={appointmentAttention} />

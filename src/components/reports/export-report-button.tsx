@@ -34,7 +34,14 @@ export function ExportReportButton({
   }
 
   return (
-    <Button type="button" size="sm" variant="outline" onClick={handleExport} disabled={rows.length === 0}>
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      onClick={handleExport}
+      disabled={rows.length === 0}
+      title={rows.length === 0 ? "Nothing to export for this report yet" : "Download this report as CSV"}
+    >
       <Download className="size-4" />
       Export CSV
     </Button>

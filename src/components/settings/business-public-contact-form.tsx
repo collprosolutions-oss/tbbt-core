@@ -111,7 +111,7 @@ export function BusinessPublicContactForm({
             name="publicWebsite"
             type="url"
             defaultValue={website}
-            placeholder="https://www.collproreno.com"
+            placeholder="https://your-business-site.example"
           />
         </div>
         <div className="space-y-2 sm:col-span-2">

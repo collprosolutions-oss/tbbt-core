@@ -21,6 +21,25 @@ export function SignInForm() {
         </Alert>
       ) : null}
 
+      {state.totpRequired ? (
+        <>
+          <input type="hidden" name="challengeToken" value={state.challengeToken} />
+          <div className="space-y-2">
+            <Label htmlFor="totpCode">Authenticator code</Label>
+            <Input
+              id="totpCode"
+              name="totpCode"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              required
+            />
+            <p className="text-sm text-muted-foreground">
+              Enter the current authenticator code or a backup code.
+            </p>
+          </div>
+        </>
+      ) : (
+        <>
       <div className="space-y-2">
         <Label htmlFor="email">Email</Label>
         <Input
@@ -50,9 +69,11 @@ export function SignInForm() {
           </Link>
         </p>
       </div>
+        </>
+      )}
 
       <Button type="submit" className="w-full" disabled={pending}>
-        {pending ? "Signing in…" : "Sign in"}
+        {pending ? "Signing in…" : state.totpRequired ? "Verify and sign in" : "Sign in"}
       </Button>
 
       <p className="text-center text-sm text-muted-foreground">

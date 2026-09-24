@@ -113,12 +113,17 @@ export default async function BusinessHealthPage({
             </CardHeader>
             <CardContent>
               <ActionForm action={createGoalAction} className="mb-4 space-y-2">
-                <input className="w-full rounded-md border px-3 py-2 text-sm" name="title" placeholder="Goal title" />
+                <input className="w-full rounded-md border px-3 py-2 text-sm" name="title" placeholder="Goal title" required />
                 <textarea className="w-full rounded-md border px-3 py-2 text-sm" name="description" placeholder="Notes" />
                 <input className="w-full rounded-md border px-3 py-2 text-sm" name="recommendationKey" placeholder="Optional recommendation key" />
                 <Button type="submit" size="sm">Save goal</Button>
               </ActionForm>
               <ul className="space-y-2 text-sm">
+                {workspace.goals.length === 0 ? (
+                  <li className="text-sm text-muted-foreground">
+                    No owner goals yet. Add one above — TBBT does not invent targets.
+                  </li>
+                ) : null}
                 {workspace.goals.map((goal) => (
                   <li key={goal.id} className="rounded-md border p-2">
                     <p className="font-medium">{goal.title}</p>
@@ -144,12 +149,17 @@ export default async function BusinessHealthPage({
             </CardHeader>
             <CardContent>
               <ActionForm action={createActionItemAction} className="mb-4 space-y-2">
-                <input className="w-full rounded-md border px-3 py-2 text-sm" name="title" placeholder="Action title" />
+                <input className="w-full rounded-md border px-3 py-2 text-sm" name="title" placeholder="Action title" required />
                 <input className="w-full rounded-md border px-3 py-2 text-sm" name="recommendationKey" placeholder="Recommendation key" />
                 <textarea className="w-full rounded-md border px-3 py-2 text-sm" name="notes" placeholder="Notes" />
                 <Button type="submit" size="sm">Add action</Button>
               </ActionForm>
               <ul className="space-y-2 text-sm">
+                {workspace.actionItems.length === 0 ? (
+                  <li className="text-sm text-muted-foreground">
+                    No action items yet. Add one that answers a recommendation key.
+                  </li>
+                ) : null}
                 {workspace.actionItems.map((item) => (
                   <li key={item.id} className="rounded-md border p-2">
                     <p className="font-medium">{item.title}</p>

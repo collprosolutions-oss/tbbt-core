@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { submitServiceRequest } from "@/app/actions/intake";
@@ -67,6 +67,21 @@ import {
 
 type Step = "details" | "info" | "review";
 
+type PublicRequestDraft = {
+  step: Step;
+  name: string;
+  email: string;
+  phone: string;
+  serviceAddress: StructuredServiceAddress;
+  notes: string;
+  preferredContact: string;
+  smsOptIn: boolean;
+};
+
+function requestDraftKey(slug: string) {
+  return `tbbt-public-request:${slug}`;
+}
+
 const STEPS: { id: Step; title: string; caption: string }[] = [
   { id: "details", title: "Project Details", caption: "Address, notes, and photos" },
   { id: "info", title: "Your Information", caption: "How can we reach you?" },
@@ -117,17 +132,94 @@ export function MultiServiceRequestFlow({
       ? crypto.randomUUID()
       : `intake-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
   );
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(requestDraftKey(slug));
+      if (raw) {
+        const draft = JSON.parse(raw) as PublicRequestDraft;
+        if (draft.step === "details" || draft.step === "info" || draft.step === "review") {
+          setStep(draft.step);
+        }
+        if (typeof draft.name === "string") setName(draft.name);
+        if (typeof draft.email === "string") setEmail(draft.email);
+        if (typeof draft.phone === "string") setPhone(draft.phone);
+        if (draft.serviceAddress && typeof draft.serviceAddress === "object") {
+          setServiceAddress({
+            streetAddress: draft.serviceAddress.streetAddress ?? "",
+            unit: draft.serviceAddress.unit ?? "",
+            city: draft.serviceAddress.city ?? "",
+            region: draft.serviceAddress.region ?? serviceArea.region ?? "",
+            postalCode: draft.serviceAddress.postalCode ?? "",
+          });
+        }
+        if (typeof draft.notes === "string") setNotes(draft.notes);
+        if (typeof draft.preferredContact === "string") setPreferredContact(draft.preferredContact);
+        if (typeof draft.smsOptIn === "boolean") setSmsOptIn(draft.smsOptIn);
+      }
+    } catch {
+      // Ignore a corrupted draft and keep the empty form.
+    }
+    setHydrated(true);
+  }, [serviceArea.region, slug]);
+
+  useEffect(() => {
+    if (!hydrated || ok) return;
+    try {
+      const draft: PublicRequestDraft = {
+        step,
+        name,
+        email,
+        phone,
+        serviceAddress,
+        notes,
+        preferredContact,
+        smsOptIn,
+      };
+      sessionStorage.setItem(requestDraftKey(slug), JSON.stringify(draft));
+    } catch {
+      // Private mode can block sessionStorage. The in-memory form still works.
+    }
+  }, [email, hydrated, name, notes, ok, phone, preferredContact, serviceAddress, slug, smsOptIn, step]);
 
   const labels = useMemo(
     () => selectedWorkLabels(selected, items),
     [items, selected],
   );
-  const hasWork = selected.catalogIds.length > 0 || selected.includeOther;
+  const catalogEmpty = items.length === 0;
+  const hasWork =
+    selected.catalogIds.length > 0 || selected.includeOther || catalogEmpty;
   const servicesHref = publicServicesPath(slug, selected);
   const chooseServicesHref = publicServicesPath(slug);
 
-  function goInfo() {
-    const checked = validateStructuredAddress(serviceAddress, {
+  function readDetailsFromForm(form: HTMLFormElement) {
+    const data = new FormData(form);
+    const nextNotes = String(data.get("description") ?? "");
+    const citySelect = String(data.get("citySelect") ?? "");
+    const typedCity = String(data.get("city") ?? "");
+    const city =
+      typedCity && typedCity !== "__other__"
+        ? typedCity
+        : citySelect && citySelect !== "__other__"
+          ? citySelect
+          : "";
+    const nextAddress = {
+      streetAddress: String(data.get("streetAddress") ?? ""),
+      unit: String(data.get("unit") ?? ""),
+      city,
+      region: String(data.get("region") ?? ""),
+      postalCode: String(data.get("postalCode") ?? ""),
+    };
+    setNotes(nextNotes);
+    setServiceAddress(nextAddress);
+    return { notes: nextNotes, address: nextAddress };
+  }
+
+  function goInfo(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const details = readDetailsFromForm(event.currentTarget);
+    const checked = validateStructuredAddress(details.address, {
       country: serviceArea.country,
     });
     if (!checked.ok) {
@@ -167,8 +259,18 @@ export function MultiServiceRequestFlow({
     setStep("info");
   }
 
-  function goReview() {
-    if (!name.trim()) {
+  function goReview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const nextName = String(data.get("name") ?? "");
+    const nextEmail = String(data.get("email") ?? "");
+    const nextPhone = String(data.get("phone") ?? "");
+    const nextPreferred = String(data.get("preferredContact") ?? preferredContact);
+    setName(nextName);
+    setEmail(nextEmail);
+    setPhone(nextPhone);
+    setPreferredContact(nextPreferred);
+    if (!nextName.trim()) {
       setError("Name is required.");
       return;
     }
@@ -276,9 +378,12 @@ export function MultiServiceRequestFlow({
       formData.append("serviceCatalogItemId", id);
       formData.append("quantity", String(quantities[id] ?? 1));
     }
-    if (selected.includeOther) {
+    if (selected.includeOther || catalogEmpty) {
       formData.set("includeOther", "true");
-      formData.set("otherDescription", selected.otherDescription);
+      formData.set(
+        "otherDescription",
+        selected.otherDescription.trim() || notes.trim() || "Other work",
+      );
       formData.set("otherQuantity", String(selected.otherQuantity || 1));
     }
     const result = await submitPublicIntakeForm(submitServiceRequest, slug, formData);
@@ -287,6 +392,11 @@ export function MultiServiceRequestFlow({
       return;
     }
     setOk(true);
+    try {
+      sessionStorage.removeItem(requestDraftKey(slug));
+    } catch {
+      // Ignore storage failures after a successful submit.
+    }
     } catch {
       setError("This request could not be submitted. Please try again.");
     } finally {
@@ -319,10 +429,18 @@ export function MultiServiceRequestFlow({
       <section>
         <h2 className="text-2xl font-extrabold uppercase">What work do you need?</h2>
         <p className="mt-3 text-muted-foreground">No services selected yet.</p>
-        <Link href={chooseServicesHref} className="public-btn public-btn-primary mt-6">
-          Choose Services
-          <ArrowRight className="size-4" aria-hidden="true" />
-        </Link>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link href={chooseServicesHref} className="public-btn public-btn-primary">
+            Choose Services
+            <ArrowRight className="size-4" aria-hidden="true" />
+          </Link>
+          <Link
+            href={`${chooseServicesHref}?other=1`}
+            className="public-btn public-btn-outline"
+          >
+            Describe other work
+          </Link>
+        </div>
       </section>
     );
   }
@@ -331,20 +449,29 @@ export function MultiServiceRequestFlow({
     <div className="space-y-8">
       <section>
         <h2 className="text-xl font-extrabold tracking-wide uppercase">Your Selected Work</h2>
-        <ul className="mt-3 space-y-2">
-          {labels.map((label) => (
-            <li key={label} className="font-semibold">
-              {label}
-            </li>
-          ))}
-        </ul>
+        {labels.length > 0 ? (
+          <ul className="mt-3 space-y-2">
+            {labels.map((label) => (
+              <li key={label} className="font-semibold">
+                {label}
+              </li>
+            ))}
+          </ul>
+        ) : catalogEmpty ? (
+          <p className="mt-3 text-muted-foreground">
+            A published service list is not available yet. Describe the work below
+            and the business will review it.
+          </p>
+        ) : null}
         <QuotePricingNote items={items} selected={selected} />
-        <Link
-          href={servicesHref || `${chooseServicesHref}${selectedWorkQuery(selected)}`}
-          className="mt-4 inline-block font-extrabold tracking-wide text-[var(--public-blue)] uppercase"
-        >
-          Add Another Service →
-        </Link>
+        {catalogEmpty ? null : (
+          <Link
+            href={servicesHref || `${chooseServicesHref}${selectedWorkQuery(selected)}`}
+            className="mt-4 inline-block font-extrabold tracking-wide text-[var(--public-blue)] uppercase"
+          >
+            Add Another Service →
+          </Link>
+        )}
       </section>
 
       <ol className="public-step-bar" aria-label="Request steps">
@@ -365,7 +492,7 @@ export function MultiServiceRequestFlow({
       ) : null}
 
       {step === "details" ? (
-        <div className="space-y-4">
+        <form className="space-y-4" onSubmit={goInfo}>
           <h2 className="text-2xl font-extrabold tracking-tight uppercase">
             Project Details
           </h2>
@@ -414,15 +541,15 @@ export function MultiServiceRequestFlow({
               submit your request with a description.
             </p>
           )}
-          <button type="button" className="public-btn public-btn-primary w-full" onClick={goInfo}>
+          <button type="submit" className="public-btn public-btn-primary w-full">
             Next: Your Information
             <ArrowRight className="size-4" aria-hidden="true" />
           </button>
-        </div>
+        </form>
       ) : null}
 
       {step === "info" ? (
-        <div className="space-y-4">
+        <form className="space-y-4" onSubmit={goReview}>
           <h2 className="text-2xl font-extrabold tracking-tight uppercase">
             Your Information
           </h2>
@@ -522,12 +649,12 @@ export function MultiServiceRequestFlow({
             <button type="button" className="public-btn public-btn-outline flex-1" onClick={() => setStep("details")}>
               Back
             </button>
-            <button type="button" className="public-btn public-btn-primary flex-1" onClick={goReview}>
+            <button type="submit" className="public-btn public-btn-primary flex-1">
               Next: Review & Submit
               <ArrowRight className="size-4" aria-hidden="true" />
             </button>
           </div>
-        </div>
+        </form>
       ) : null}
 
       {step === "review" ? (

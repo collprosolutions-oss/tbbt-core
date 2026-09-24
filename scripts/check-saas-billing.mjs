@@ -252,6 +252,9 @@ const firstRunSrc = readFileSync(new URL("../src/lib/first-run-setup.ts", import
 const starterSrc = readFileSync(new URL("../src/lib/starter-services-setup.ts", import.meta.url), "utf8");
 const websiteSrc = readFileSync(new URL("../src/lib/website-setup.ts", import.meta.url), "utf8");
 const paymentsServiceSrc = readFileSync(new URL("../src/lib/payments/service.ts", import.meta.url), "utf8");
+const saasTypesSrc = readFileSync(new URL("../src/lib/saas-billing/types.ts", import.meta.url), "utf8");
+const saasFakeSrc = readFileSync(new URL("../src/lib/saas-billing/fake.ts", import.meta.url), "utf8");
+const offboardingSrc = readFileSync(new URL("../src/lib/offboarding.ts", import.meta.url), "utf8");
 const schemaSrc = readFileSync(new URL("../prisma/schema.prisma", import.meta.url), "utf8");
 const envExample = readFileSync(new URL("../.env.example", import.meta.url), "utf8");
 const proxySrc = readFileSync(new URL("../src/proxy.ts", import.meta.url), "utf8");
@@ -361,6 +364,16 @@ check(
     !saasReadinessSrc.includes('process.env.TBBT_SAAS_BILLING_ADAPTER === "fake"') &&
     paymentsConfigSrc.includes("isFakePaymentsAdapterEnabled") &&
     paymentsConfigSrc.includes('process.env.VERCEL_ENV === "production"'),
+);
+check(
+  "Offboarding asks the provider to schedule cancel-at-period-end and never writes it locally",
+  saasTypesSrc.includes("scheduleCancelAtPeriodEnd") &&
+    saasFakeSrc.includes("scheduleCancelAtPeriodEnd") &&
+    saasDir.includes("cancel_at_period_end: true") &&
+    offboardingSrc.includes("scheduleCancelAtPeriodEnd") &&
+    offboardingSrc.includes("billingCancellationScheduled") &&
+    !offboardingSrc.includes("cancelAtPeriodEnd: true") &&
+    offboardingSrc.includes("Billing cancellation is not yet scheduled."),
 );
 check(
   "Checkout and Portal use the canonical production readiness check",
@@ -1256,6 +1269,69 @@ try {
     data: { status: "canceled", cancelAtPeriodEnd: false },
   });
   const portal = await startSaasBillingPortal(prisma, accessA);
+  console.log("\nTEST — Provider cancel-at-period-end stays webhook-authoritative");
+  const cancelProvider = createFakeSaasBillingProvider();
+  cancelProvider.addSubscription({
+    id: "sub_cancel_boundary",
+    customerId: first.customerId,
+    priceId: "price_saas_test",
+    status: "active",
+    currentPeriodEnd: new Date("2026-10-24T00:00:00.000Z"),
+    cancelAtPeriodEnd: false,
+  });
+  await prisma.businessSaasSubscription.update({
+    where: { businessId: businessA.business.id },
+    data: {
+      status: "active",
+      stripeSubscriptionId: "sub_cancel_boundary",
+      stripeCustomerId: first.customerId,
+      cancelAtPeriodEnd: false,
+    },
+  });
+  const scheduled = await cancelProvider.scheduleCancelAtPeriodEnd({
+    subscriptionId: "sub_cancel_boundary",
+  });
+  const beforeCancelWebhook = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: businessA.business.id },
+  });
+  check(
+    "Fake provider schedules cancel in-memory without writing the local SaaS row",
+    scheduled.cancelAtPeriodEnd === true &&
+      cancelProvider.subscriptions.get("sub_cancel_boundary").cancelAtPeriodEnd === true &&
+      beforeCancelWebhook?.cancelAtPeriodEnd === false,
+  );
+  const cancelWebhook = await applyParsedSaasBillingEvent(
+    prisma,
+    parseSaasBillingEvent(
+      saasSubscriptionEvent({
+        id: "evt_sub_cancel_boundary",
+        businessId: businessA.business.id,
+        customerId: first.customerId,
+        subscriptionId: "sub_cancel_boundary",
+        status: "active",
+        cancelAtPeriodEnd: true,
+      }),
+    ),
+  );
+  const afterCancelWebhook = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: businessA.business.id },
+  });
+  check(
+    "Webhook snapshot is the only local cancelAtPeriodEnd write",
+    cancelWebhook.applied === true && afterCancelWebhook?.cancelAtPeriodEnd === true,
+  );
+  cancelProvider.failCancel = true;
+  let failCancelMessage = "";
+  try {
+    await cancelProvider.scheduleCancelAtPeriodEnd({ subscriptionId: "sub_cancel_boundary" });
+  } catch (error) {
+    failCancelMessage = error instanceof SaasBillingError ? error.message : String(error);
+  }
+  check(
+    "Fake provider cancel failure stays a provider error",
+    failCancelMessage === "Stripe could not schedule cancellation.",
+  );
+
   check("OWNER can open Billing Portal after a Stripe Customer exists", portal.url.includes("billing.stripe.test"));
   try {
     await startSaasBillingPortal(

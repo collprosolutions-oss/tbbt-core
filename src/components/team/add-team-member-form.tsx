@@ -54,10 +54,23 @@ export function AddTeamMemberForm() {
         <Label htmlFor="email">Email</Label>
         <Input id="email" name="email" type="email" autoComplete="email" required />
       </div>
-      <p className="text-xs text-muted-foreground">
-        Role: Field team member (MEMBER). They can sign in and see their
-        assigned jobs at /field, but cannot open the management console.
-      </p>
+      <div className="space-y-2">
+        <Label htmlFor="role">Role</Label>
+        <select
+          id="role"
+          name="role"
+          defaultValue="MEMBER"
+          className="h-8 w-full rounded-md border bg-transparent px-2.5 text-sm"
+        >
+          <option value="MEMBER">Field member — assigned jobs only</option>
+          <option value="ADMIN">Admin — can receive ownership later</option>
+        </select>
+        <p className="text-xs text-muted-foreground">
+          MEMBER lands on /field. ADMIN can open the management console. Only the
+          current OWNER can add an ADMIN. Ownership transfer still requires a
+          separate confirmation.
+        </p>
+      </div>
       <Button type="submit" disabled={pending}>
         {pending ? "Adding…" : "Add team member"}
       </Button>

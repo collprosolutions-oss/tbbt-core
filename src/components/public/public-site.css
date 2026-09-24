@@ -372,6 +372,9 @@
 .public-quote-hero .public-cinematic-media {
   overflow: hidden;
   background-color: #05070c;
+}
+
+.public-quote-hero-collpro .public-cinematic-media {
   background-image: url("/brand/collpro/quote-hero.png");
   background-repeat: no-repeat;
   background-position: 100% 40%;

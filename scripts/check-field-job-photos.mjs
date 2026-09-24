@@ -19,7 +19,9 @@ const {
   StorageAccessError,
   StorageError,
   abortAssignedFieldJobPhoto,
+  abortManagementJobPhoto,
   authorizeAssignedFieldJobPhoto,
+  authorizeManagementJobPhoto,
   finalizeAssignedFieldJobPhoto,
   inspectFieldJobPhotoUpload,
   isBusinessStorageConfigured,
@@ -27,6 +29,7 @@ const {
   privateAssetPath,
   PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
   putAssignedFieldJobPhotoFromBytes,
+  putManagementJobPhotoFromBytes,
   authorizePrivateStoredAssetDownload,
 } = await import("@/lib/business-storage/index");
 const { authorizeManagedUpload, finalizeManagedUpload } = await import(
@@ -91,6 +94,7 @@ const privateServeSrc = readRepo("src/lib/business-storage/private-serve.ts");
 const privateRouteSrc = readRepo("src/app/api/storage/private/[assetId]/route.ts");
 const storageSrc = readRepo("src/lib/storage.ts");
 const ownerPhotoSrc = readRepo("src/app/actions/job-photo.ts");
+const ownerFormSrc = readRepo("src/components/jobs/add-job-photo-form.tsx");
 
 console.log("\nSTATIC — Field photos leave the 4 MB server-action body path");
 check(
@@ -132,15 +136,61 @@ check(
     fieldPhotoLibSrc.includes("FIELD_JOB_PHOTO_MAX_BYTES = REQUEST_PHOTO_MAX_BYTES"),
 );
 check(
-  "Owner Blob job-photo path stays on the 4 MB server-action ceiling",
+  "Legacy Blob helper remains for historical rows only, not new owner uploads",
   storageSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES = 4 * 1024 * 1024") &&
-    ownerPhotoSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES") &&
-    ownerPhotoSrc.includes("uploadJobPhoto"),
+    storageSrc.includes("export async function uploadJobPhoto") &&
+    !ownerPhotoSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES") &&
+    !ownerPhotoSrc.includes("uploadJobPhoto") &&
+    !ownerPhotoSrc.includes("isStorageConfigured") &&
+    ownerPhotoSrc.includes("deleteJobPhotoBlob"),
+);
+check(
+  "Owner/admin photo actions never accept a File or Vercel Blob upload helper",
+  !ownerPhotoSrc.includes("uploadJobPhoto") &&
+    !ownerPhotoSrc.includes('formData.get("file")') &&
+    !ownerPhotoSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES") &&
+    !ownerPhotoSrc.includes("instanceof File") &&
+    ownerPhotoSrc.includes("authorizeManagementJobPhoto") &&
+    ownerPhotoSrc.includes("finalizeManagementJobPhoto") &&
+    ownerPhotoSrc.includes("abortManagementJobPhoto") &&
+    ownerPhotoSrc.includes("The image body never enters this"),
+);
+check(
+  "Owner/admin authorize payload is metadata only (filename / MIME / size)",
+  ownerPhotoSrc.includes("originalFilename: input.originalFilename") &&
+    ownerPhotoSrc.includes("mimeType: input.mimeType") &&
+    ownerPhotoSrc.includes("fileSizeBytes: input.fileSizeBytes") &&
+    !ownerPhotoSrc.includes("BLOB_READ_WRITE_TOKEN"),
+);
+const ownerAuthorizeSig = ownerPhotoSrc.match(
+  /export async function authorizeManagementJobPhotoUpload\(input: \{[^}]+\}\)/,
+);
+check(
+  "Owner/admin photo authorize input has no client-supplied businessId",
+  Boolean(ownerAuthorizeSig) &&
+    !ownerAuthorizeSig[0].includes("businessId") &&
+    !ownerPhotoSrc.includes('formData.get("businessId")') &&
+    !ownerPhotoSrc.includes("input.businessId"),
+);
+check(
+  "Owner form PUTs the file to the presigned URL and aborts on failure",
+  ownerFormSrc.includes("authorizeManagementJobPhotoUpload") &&
+    ownerFormSrc.includes("fetch(authorized.uploadUrl") &&
+    ownerFormSrc.includes("abortManagementJobPhotoUpload") &&
+    ownerFormSrc.includes("finalizeManagementJobPhotoUpload") &&
+    !ownerFormSrc.includes("addJobPhoto") &&
+    !ownerFormSrc.includes("useActionState"),
 );
 check(
   "Missing R2 configuration returns a clear operational error",
   fieldActionSrc.includes("isBusinessStorageConfigured()") &&
     fieldActionSrc.includes("Ask an admin to connect platform file storage (Cloudflare R2)"),
+);
+check(
+  "Owner job-photo storage error names Cloudflare R2, not Vercel Blob",
+  ownerPhotoSrc.includes("Ask an admin to connect platform file storage (Cloudflare R2)") &&
+    !ownerPhotoSrc.includes("BLOB_READ_WRITE_TOKEN") &&
+    !ownerPhotoSrc.includes("Vercel Blob"),
 );
 check(
   "Private asset route derives viewer role and membership from the session workspace",
@@ -727,8 +777,137 @@ try {
       listed.some((row) => row.id === saved.photo.id && jobPhotoSrc(row) === privateAssetPath(saved.asset.id)),
   );
 
+  console.log("\nDB — OWNER/ADMIN management photos on private R2");
+
+  const managementA = { businessId: businessA.id };
+  const managementB = { businessId: businessB.id };
+
+  const ownerUnassignedAuth = await authorizeManagementJobPhoto(deps, managementA, {
+    jobId: unassignedJob.id,
+    originalFilename: "owner-unassigned.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+  });
+  check(
+    "OWNER/ADMIN can authorize an upload for an unassigned business-owned job",
+    ownerUnassignedAuth.asset.businessId === businessA.id &&
+      ownerUnassignedAuth.asset.jobId === unassignedJob.id &&
+      ownerUnassignedAuth.asset.category === "JOB_PHOTO" &&
+      ownerUnassignedAuth.asset.visibility === "PRIVATE" &&
+      ownerUnassignedAuth.asset.status === "PENDING" &&
+      ownerUnassignedAuth.asset.storageKey.startsWith(`businesses/${businessA.id}/jobs/`) &&
+      ownerUnassignedAuth.upload.method === "PUT" &&
+      Boolean(ownerUnassignedAuth.upload.url),
+  );
+  await abortManagementJobPhoto(deps, managementA, {
+    jobId: unassignedJob.id,
+    assetId: ownerUnassignedAuth.asset.id,
+  });
+
+  const ownerAssignedAuth = await authorizeManagementJobPhoto(deps, managementA, {
+    jobId: assignedJob.id,
+    originalFilename: "owner-assigned.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+  });
+  check(
+    "OWNER/ADMIN can authorize an upload for a member-assigned job without being assigned",
+    ownerAssignedAuth.asset.jobId === assignedJob.id &&
+      ownerAssignedAuth.asset.businessId === businessA.id &&
+      ownerAssignedAuth.asset.visibility === "PRIVATE",
+  );
+  await abortManagementJobPhoto(deps, managementA, {
+    jobId: assignedJob.id,
+    assetId: ownerAssignedAuth.asset.id,
+  });
+
+  await expectThrow(
+    "Foreign-business job cannot receive an OWNER/ADMIN photo",
+    () =>
+      authorizeManagementJobPhoto(deps, managementA, {
+        jobId: foreignJob.id,
+        originalFilename: "foreign.jpg",
+        mimeType: "image/jpeg",
+        fileSizeBytes: jpeg.byteLength,
+      }),
+    (error) => error instanceof StorageAccessError && error.message.includes("could not be found"),
+  );
+  await expectThrow(
+    "Business B cannot authorize an OWNER/ADMIN photo on a Business A job",
+    () =>
+      authorizeManagementJobPhoto(deps, managementB, {
+        jobId: assignedJob.id,
+        originalFilename: "cross-tenant.jpg",
+        mimeType: "image/jpeg",
+        fileSizeBytes: jpeg.byteLength,
+      }),
+    (error) => error instanceof StorageAccessError,
+  );
+  await expectThrow(
+    "Browser-supplied business identity cannot cross tenants for owner/admin photos",
+    () =>
+      authorizeManagementJobPhoto(deps, { businessId: businessB.id }, {
+        jobId: unassignedJob.id,
+        originalFilename: "forged.jpg",
+        mimeType: "image/jpeg",
+        fileSizeBytes: jpeg.byteLength,
+      }),
+    (error) => error instanceof StorageAccessError,
+  );
+
+  const ownerSaved = await putManagementJobPhotoFromBytes(deps, managementA, {
+    jobId: unassignedJob.id,
+    originalFilename: "owner-after.jpg",
+    mimeType: "image/jpeg",
+    body: jpeg,
+    stage: "AFTER",
+    caption: "Owner photo after repair",
+  });
+  check(
+    "New OWNER/ADMIN job photo persists as a PRIVATE R2 StoredAsset",
+    ownerSaved.photo.jobId === unassignedJob.id &&
+      ownerSaved.photo.businessId === businessA.id &&
+      ownerSaved.photo.storedAssetId === ownerSaved.asset.id &&
+      ownerSaved.photo.url === privateAssetPath(ownerSaved.asset.id) &&
+      ownerSaved.photo.stage === "AFTER" &&
+      ownerSaved.photo.caption === "Owner photo after repair" &&
+      ownerSaved.asset.status === "READY" &&
+      ownerSaved.asset.visibility === "PRIVATE" &&
+      ownerSaved.asset.category === "JOB_PHOTO" &&
+      ownerSaved.asset.publicPath == null &&
+      ownerSaved.asset.storageKey.startsWith(`businesses/${businessA.id}/jobs/`),
+  );
+
+  const ownerPhotoRead = await authorizePrivateStoredAssetDownload(
+    prisma,
+    ownerSaved.asset.id,
+    businessA.id,
+    { provider, viewer: ownerViewer },
+  );
+  const adminPhotoRead = await authorizePrivateStoredAssetDownload(
+    prisma,
+    ownerSaved.asset.id,
+    businessA.id,
+    { provider, viewer: adminViewer },
+  );
+  const betaOwnerPhotoRead = await authorizePrivateStoredAssetDownload(
+    prisma,
+    ownerSaved.asset.id,
+    businessB.id,
+    { provider, viewer: betaViewer },
+  );
+  check(
+    "OWNER/ADMIN can read their private R2 job photo; foreign business cannot",
+    ownerPhotoRead.ok === true &&
+      ownerPhotoRead.status === 302 &&
+      !("body" in ownerPhotoRead) &&
+      adminPhotoRead.ok === true &&
+      betaOwnerPhotoRead.ok === false &&
+      betaOwnerPhotoRead.status === 404,
+  );
+
   const bAssets = await prisma.storedAsset.findMany({ where: { businessId: businessB.id } });
-  check("Business B stays empty when A uploads a field photo", bAssets.length === 0);
+  check("Business B stays empty when A uploads field and owner photos", bAssets.length === 0);
 } finally {
   await prisma.$disconnect();
   spawnSync("psql", [baseUrl, "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE);`], {

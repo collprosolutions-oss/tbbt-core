@@ -72,8 +72,8 @@ export function RequestsWorkspace({ requests }: { requests: RequestListItem[] })
     return (
       <FounderRegion id="table">
         <EmptyState
-          title="No requests match your filters"
-          description="Try a different status, service, or search term. New public intake submissions for this workspace will also appear here."
+          title="No requests yet"
+          description="Public website submissions for this workspace appear here. If you applied a status or search filter, clear it to see every request."
         />
       </FounderRegion>
     );

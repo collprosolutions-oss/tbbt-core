@@ -10,6 +10,7 @@ import {
   popularPublicCategories,
   publicCategoryPhoto,
   publicProjectsPath,
+  publicRequestPath,
   publicServicesPath,
   type PublicBusiness,
   type PublicCatalogGroup,
@@ -103,6 +104,25 @@ export function PublicHome({
           <h2 className="public-section-title">
             Handyman <span>Services</span> You Can Count On
           </h2>
+          {categories.length === 0 ? (
+            <div className="mt-10 rounded-xl border border-dashed p-6 text-center">
+              <p className="text-muted-foreground">
+                A published service list is not available yet. You can still describe the
+                work and send a request.
+              </p>
+              <div className="mt-6 flex flex-wrap justify-center gap-3">
+                <Link href={publicRequestPath(business.slug)} className="public-btn public-btn-primary">
+                  Request a Quote
+                  <ArrowRight className="size-4" aria-hidden="true" />
+                </Link>
+                <Link href={servicesHref} className="public-btn public-btn-outline-blue">
+                  View All Services
+                  <ArrowRight className="size-4" aria-hidden="true" />
+                </Link>
+              </div>
+            </div>
+          ) : (
+            <>
           <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {categories.map((category) => {
               const visual = images?.categories[category.category] ?? {
@@ -138,6 +158,8 @@ export function PublicHome({
               <ArrowRight className="size-4" aria-hidden="true" />
             </Link>
           </div>
+            </>
+          )}
         </div>
       </section>
 

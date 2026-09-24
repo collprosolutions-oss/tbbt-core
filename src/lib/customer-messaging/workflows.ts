@@ -14,19 +14,24 @@ import {
 } from "@/lib/customer-messaging/bodies";
 import { safeAttemptCustomerSms } from "@/lib/customer-messaging/ops";
 import type { CustomerCommunicationAttemptResult } from "@/lib/customer-messaging/types";
-import { getAppUrl } from "@/lib/mail";
+import { tenantEstimateUrl, tenantInvoiceUrl, tenantProjectUrl } from "@/lib/tenant-app-url";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-function projectUrl(token: string | null | undefined) {
-  const appUrl = getAppUrl();
-  if (!appUrl || !token) return null;
-  return `${appUrl}/p/${token}`;
+async function businessSlug(db: Db, businessId: string) {
+  const row = await db.business.findUnique({
+    where: { id: businessId },
+    select: { slug: true },
+  });
+  return row?.slug ?? null;
 }
 
-function invoicePortalUrl(token: string | null | undefined) {
-  const portal = projectUrl(token);
-  return portal ? `${portal}/invoice` : null;
+function projectUrl(slug: string | null, token: string | null | undefined) {
+  return token && slug ? tenantProjectUrl(slug, token) : null;
+}
+
+function invoicePortalUrl(slug: string | null, token: string | null | undefined) {
+  return token && slug ? tenantInvoiceUrl(slug, token) : null;
 }
 
 export async function attemptEstimateReadySms(
@@ -41,8 +46,8 @@ export async function attemptEstimateReadySms(
   },
 ): Promise<CustomerCommunicationAttemptResult | null> {
   if (!input.customerId) return null;
-  const appUrl = getAppUrl();
-  const url = appUrl && input.publicToken ? `${appUrl}/e/${input.publicToken}` : null;
+  const slug = await businessSlug(db, input.businessId);
+  const url = input.publicToken && slug ? tenantEstimateUrl(slug, input.publicToken) : null;
   return safeAttemptCustomerSms(db, {
     businessId: input.businessId,
     customerId: input.customerId,
@@ -70,6 +75,7 @@ export async function attemptAppointmentSms(
 ): Promise<CustomerCommunicationAttemptResult | null> {
   if (!input.customerId) return null;
   const purpose = input.rescheduled ? "SCHEDULE_CHANGE" : "APPOINTMENT_CONFIRMATION";
+  const slug = await businessSlug(db, input.businessId);
   return safeAttemptCustomerSms(db, {
     businessId: input.businessId,
     customerId: input.customerId,
@@ -79,7 +85,7 @@ export async function attemptAppointmentSms(
     idempotencyKey: customerSmsIdempotencyKey(purpose, input.jobId, String(input.proposalId)),
     body: appointmentConfirmationSmsBody({
       businessName: input.businessName,
-      url: projectUrl(input.projectToken),
+      url: projectUrl(slug, input.projectToken),
       rescheduled: input.rescheduled,
     }),
     initiatedByMembershipId: input.initiatedByMembershipId,
@@ -98,6 +104,7 @@ export async function attemptAppointmentReminderSms(
     initiatedByMembershipId?: string | null;
   },
 ) {
+  const slug = await businessSlug(db, input.businessId);
   return safeAttemptCustomerSms(db, {
     businessId: input.businessId,
     customerId: input.customerId,
@@ -111,7 +118,7 @@ export async function attemptAppointmentReminderSms(
     ),
     body: appointmentReminderSmsBody({
       businessName: input.businessName,
-      url: projectUrl(input.projectToken),
+      url: projectUrl(slug, input.projectToken),
     }),
     initiatedByMembershipId: input.initiatedByMembershipId,
   });
@@ -129,6 +136,7 @@ export async function attemptInvoiceReadySms(
   },
 ) {
   if (!input.customerId) return null;
+  const slug = await businessSlug(db, input.businessId);
   return safeAttemptCustomerSms(db, {
     businessId: input.businessId,
     customerId: input.customerId,
@@ -138,7 +146,7 @@ export async function attemptInvoiceReadySms(
     idempotencyKey: customerSmsIdempotencyKey("INVOICE_READY", input.invoiceId),
     body: invoiceReadySmsBody({
       businessName: input.businessName,
-      url: invoicePortalUrl(input.projectToken),
+      url: invoicePortalUrl(slug, input.projectToken),
     }),
     initiatedByMembershipId: input.initiatedByMembershipId,
   });
@@ -156,6 +164,7 @@ export async function attemptPaymentReminderSms(
     initiatedByMembershipId?: string | null;
   },
 ) {
+  const slug = await businessSlug(db, input.businessId);
   return safeAttemptCustomerSms(db, {
     businessId: input.businessId,
     customerId: input.customerId,
@@ -169,7 +178,7 @@ export async function attemptPaymentReminderSms(
     ),
     body: paymentReminderSmsBody({
       businessName: input.businessName,
-      url: invoicePortalUrl(input.projectToken),
+      url: invoicePortalUrl(slug, input.projectToken),
     }),
     initiatedByMembershipId: input.initiatedByMembershipId,
   });

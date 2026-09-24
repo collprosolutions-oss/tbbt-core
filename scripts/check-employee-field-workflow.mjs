@@ -331,11 +331,19 @@ async function simulateRequestAdditionalWorkFromField(jobId, businessId, members
 let serverProcess;
 
 try {
+  const onboardingDone = new Date();
+  const completedOnboarding = {
+    firstRunSetupCompletedAt: onboardingDone,
+    starterServicesSetupCompletedAt: onboardingDone,
+    starterServicesSetupChoice: "SKIPPED",
+    websiteSetupCompletedAt: onboardingDone,
+    websiteSetupChoice: "SKIPPED",
+  };
   const businessA = await prisma.business.create({
-    data: { name: "Alpha Handyman", slug: "alpha-handyman-field", tradeCode: "HANDYMAN" },
+    data: { name: "Alpha Handyman", slug: "alpha-handyman-field", tradeCode: "HANDYMAN", ...completedOnboarding },
   });
   const businessB = await prisma.business.create({
-    data: { name: "Beta Handyman", slug: "beta-handyman-field", tradeCode: "HANDYMAN" },
+    data: { name: "Beta Handyman", slug: "beta-handyman-field", tradeCode: "HANDYMAN", ...completedOnboarding },
   });
 
   const ownerUser = await prisma.user.create({ data: { name: "Olivia Owner", email: "owner@field-test.example", passwordHash: "x" } });

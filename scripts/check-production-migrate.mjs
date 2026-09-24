@@ -482,6 +482,29 @@ check(
     ownerIntelligenceFkMigration.includes('CustomerFollowUp_createdByMembershipId_fkey'),
 );
 
+const handyman10Migration = readFileSync(
+  new URL("../prisma/migrations/20260924070000_handyman_1_0_completion/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Handyman 1.0 completion migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(handyman10Migration) &&
+    handyman10Migration.includes('ADD COLUMN IF NOT EXISTS "totpSecret"') &&
+    handyman10Migration.includes('CREATE TABLE IF NOT EXISTS "TotpBackupCode"') &&
+    handyman10Migration.includes('CREATE TABLE IF NOT EXISTS "AuthChallenge"') &&
+    handyman10Migration.includes('ADD COLUMN IF NOT EXISTS "offboardingRequestedAt"'),
+);
+
+const authChallengeAttemptsMigration = readFileSync(
+  new URL("../prisma/migrations/20260924110000_auth_challenge_attempts/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "AuthChallenge failed-attempt migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(authChallengeAttemptsMigration) &&
+    authChallengeAttemptsMigration.includes('ADD COLUMN IF NOT EXISTS "failedAttemptCount"'),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

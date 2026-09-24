@@ -67,6 +67,7 @@ parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 process.env.DATABASE_URL = testUrl;
 process.env.NEXT_PUBLIC_APP_URL = "http://payments.test";
+delete process.env.TBBT_PAYMENTS_FAKE_READY;
 
 const push = spawnSync(
   "npx",
@@ -681,6 +682,12 @@ try {
       !settingsSrc.includes("charges_enabled") &&
       !settingsSrc.includes("stripeAccountId"),
   );
+  check(
+    "Fake provider does not treat unknown accounts as ready",
+    !readFileSync(new URL("../src/lib/payments/fake.ts", import.meta.url), "utf8").includes(
+      "TBBT_PAYMENTS_FAKE_READY",
+    ),
+  );
 
   const businessA = await seedBusiness("Alpha Payments");
   const businessB = await seedBusiness("Beta Payments");
@@ -760,6 +767,8 @@ try {
   );
 
   console.log("\nTEST — Resume onboarding when the stored account is missing on this platform");
+  process.env.TBBT_PAYMENTS_FAKE_READY = "";
+  delete process.env.TBBT_PAYMENTS_FAKE_READY;
   const stale = await seedBusiness("Stale Connect");
   const accessStale = makeAccess(stale.business.id, "OWNER", stale.membership.id);
   await prisma.businessPaymentAccount.create({

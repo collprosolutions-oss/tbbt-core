@@ -17,6 +17,8 @@ export type SessionUser = {
   id: string;
   email: string;
   name: string;
+  sessionId: string;
+  totpEnabled: boolean;
 };
 
 export function createSessionToken() {
@@ -27,15 +29,17 @@ function cookieSecure() {
   return process.env.NODE_ENV === "production";
 }
 
-export async function createSession(userId: string) {
+export async function createSession(userId: string, options?: { userAgent?: string | null }) {
   const token = createSessionToken();
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+  const userAgent = options?.userAgent?.trim().slice(0, 240) || null;
 
   await prisma.session.create({
     data: {
       tokenHash: hashToken(token),
       userId,
       expiresAt,
+      userAgent,
     },
   });
 
@@ -77,8 +81,8 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     include: { user: true },
   });
 
-  if (!session || session.expiresAt < new Date()) {
-    if (session) {
+  if (!session || session.expiresAt < new Date() || session.revokedAt) {
+    if (session && session.expiresAt < new Date() && !session.revokedAt) {
       await prisma.session.delete({ where: { id: session.id } }).catch(() => undefined);
     }
     return null;
@@ -88,6 +92,8 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     id: session.user.id,
     email: session.user.email,
     name: session.user.name,
+    sessionId: session.id,
+    totpEnabled: Boolean(session.user.totpEnabledAt && session.user.totpSecret),
   };
 }
 

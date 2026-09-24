@@ -85,8 +85,8 @@ export function InvoicesWorkspace({ invoices }: { invoices: InvoiceListItem[] })
     return (
       <FounderRegion id="table">
         <EmptyState
-          title="No invoices match your filters"
-          description="Try a different status, customer, payment method, or search term."
+          title="No invoices yet"
+          description="Invoices are created when a job is completed. If you applied filters, clear them to see every invoice."
         />
       </FounderRegion>
     );

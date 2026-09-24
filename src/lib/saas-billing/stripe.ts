@@ -6,6 +6,7 @@ import type {
   CreateSaasCustomerInput,
   CreateSaasPortalInput,
   SaasBillingProvider,
+  ScheduleSaasCancelInput,
 } from "@/lib/saas-billing/types";
 import { isBlockingSaasStatus, SaasBillingError } from "@/lib/saas-billing/types";
 
@@ -93,6 +94,22 @@ export function createStripeSaasBillingProvider(): SaasBillingProvider {
         throw new SaasBillingError(
           "Stripe Billing Portal is not available on this Stripe account yet.",
         );
+      }
+    },
+
+    async scheduleCancelAtPeriodEnd(input: ScheduleSaasCancelInput) {
+      const stripe = requireStripe();
+      try {
+        const updated = await stripe.subscriptions.update(input.subscriptionId, {
+          cancel_at_period_end: true,
+        });
+        return {
+          subscriptionId: updated.id,
+          cancelAtPeriodEnd: updated.cancel_at_period_end === true,
+        };
+      } catch (error) {
+        if (error instanceof SaasBillingError) throw error;
+        throw new SaasBillingError("Stripe could not schedule cancellation.");
       }
     },
   };

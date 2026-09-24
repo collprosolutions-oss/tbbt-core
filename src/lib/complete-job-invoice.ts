@@ -25,6 +25,7 @@ import {
   senderFrom,
   sendTransactionalEmail,
 } from "@/lib/mail";
+import { tenantInvoiceUrl } from "@/lib/tenant-app-url";
 
 export type CompleteJobInvoiceResult =
   | {
@@ -81,6 +82,7 @@ export async function sendDraftInvoiceIfNeeded(
       status: true,
       total: true,
       customer: { select: { id: true, name: true, email: true } },
+      business: { select: { slug: true } },
       job: {
         select: {
           projectToken: true,
@@ -141,6 +143,7 @@ export async function sendDraftInvoiceIfNeeded(
     customerName: invoice.customer?.name ?? null,
     customerEmail: invoice.customer?.email ?? null,
     projectToken: invoice.job?.projectToken ?? null,
+    slug: invoice.business.slug,
     address: formatInvoiceServiceAddress(invoice.job?.property ?? null),
   });
 
@@ -164,6 +167,7 @@ async function notifyCustomerInvoiceReady(
     customerName: string | null;
     customerEmail: string | null;
     projectToken: string | null;
+    slug: string;
     address: string | null;
   },
 ): Promise<{ sent: boolean; warning?: string }> {
@@ -188,8 +192,12 @@ async function notifyCustomerInvoiceReady(
     return { sent: false };
   }
 
-  const appUrl = config.appUrl || getAppUrl();
-  if (!appUrl || !input.projectToken) {
+  const invoiceUrl =
+    (input.projectToken ? tenantInvoiceUrl(input.slug, input.projectToken) : null) ??
+    ((config.appUrl || getAppUrl()) && input.projectToken
+      ? `${config.appUrl || getAppUrl()}/p/${input.projectToken}/invoice`
+      : null);
+  if (!invoiceUrl) {
     await queueSms();
     return {
       sent: false,
@@ -203,7 +211,7 @@ async function notifyCustomerInvoiceReady(
     customerName: input.customerName,
     total: input.total,
     address: input.address,
-    invoiceUrl: `${appUrl}/p/${input.projectToken}/invoice`,
+    invoiceUrl,
   });
 
   const sent = await sendTransactionalEmail({

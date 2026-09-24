@@ -70,6 +70,7 @@ import {
   sendTransactionalEmail,
 } from "@/lib/mail";
 import { attemptEstimateReadySms } from "@/lib/customer-messaging";
+import { tenantEstimateUrl } from "@/lib/tenant-app-url";
 import { prisma } from "@/lib/prisma";
 
 export type EstimateActionState = {
@@ -1396,7 +1397,9 @@ export async function emailSentEstimate(
     customerName: estimate.customer?.name ?? null,
     total: estimate.total,
     address: formatEstimateServiceAddress(estimate.property),
-    approveUrl: `${config.appUrl}/e/${estimate.publicToken}`,
+    approveUrl:
+      tenantEstimateUrl(access.workspace.business.slug, estimate.publicToken) ??
+      `${config.appUrl}/e/${estimate.publicToken}`,
   });
 
   const sent = await sendTransactionalEmail({
