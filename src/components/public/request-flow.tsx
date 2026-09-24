@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { submitServiceRequest } from "@/app/actions/intake";
@@ -67,6 +67,21 @@ import {
 
 type Step = "details" | "info" | "review";
 
+type PublicRequestDraft = {
+  step: Step;
+  name: string;
+  email: string;
+  phone: string;
+  serviceAddress: StructuredServiceAddress;
+  notes: string;
+  preferredContact: string;
+  smsOptIn: boolean;
+};
+
+function requestDraftKey(slug: string) {
+  return `tbbt-public-request:${slug}`;
+}
+
 const STEPS: { id: Step; title: string; caption: string }[] = [
   { id: "details", title: "Project Details", caption: "Address, notes, and photos" },
   { id: "info", title: "Your Information", caption: "How can we reach you?" },
@@ -117,6 +132,56 @@ export function MultiServiceRequestFlow({
       ? crypto.randomUUID()
       : `intake-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
   );
+  const restoredRef = useRef(false);
+
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    try {
+      const raw = sessionStorage.getItem(requestDraftKey(slug));
+      if (!raw) return;
+      const draft = JSON.parse(raw) as PublicRequestDraft;
+      if (draft.step === "details" || draft.step === "info" || draft.step === "review") {
+        setStep(draft.step);
+      }
+      if (typeof draft.name === "string") setName(draft.name);
+      if (typeof draft.email === "string") setEmail(draft.email);
+      if (typeof draft.phone === "string") setPhone(draft.phone);
+      if (draft.serviceAddress && typeof draft.serviceAddress === "object") {
+        setServiceAddress({
+          streetAddress: draft.serviceAddress.streetAddress ?? "",
+          unit: draft.serviceAddress.unit ?? "",
+          city: draft.serviceAddress.city ?? "",
+          region: draft.serviceAddress.region ?? serviceArea.region ?? "",
+          postalCode: draft.serviceAddress.postalCode ?? "",
+        });
+      }
+      if (typeof draft.notes === "string") setNotes(draft.notes);
+      if (typeof draft.preferredContact === "string") setPreferredContact(draft.preferredContact);
+      if (typeof draft.smsOptIn === "boolean") setSmsOptIn(draft.smsOptIn);
+    } catch {
+      // Ignore a corrupted draft and keep the empty form.
+    }
+  }, [serviceArea.region, slug]);
+
+  useEffect(() => {
+    if (!restoredRef.current || ok) return;
+    try {
+      const draft: PublicRequestDraft = {
+        step,
+        name,
+        email,
+        phone,
+        serviceAddress,
+        notes,
+        preferredContact,
+        smsOptIn,
+      };
+      sessionStorage.setItem(requestDraftKey(slug), JSON.stringify(draft));
+    } catch {
+      // Private mode can block sessionStorage. The in-memory form still works.
+    }
+  }, [email, name, notes, ok, phone, preferredContact, serviceAddress, slug, smsOptIn, step]);
 
   const labels = useMemo(
     () => selectedWorkLabels(selected, items),
@@ -292,6 +357,11 @@ export function MultiServiceRequestFlow({
       return;
     }
     setOk(true);
+    try {
+      sessionStorage.removeItem(requestDraftKey(slug));
+    } catch {
+      // Ignore storage failures after a successful submit.
+    }
     } catch {
       setError("This request could not be submitted. Please try again.");
     } finally {

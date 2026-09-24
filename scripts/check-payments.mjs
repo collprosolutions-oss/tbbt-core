@@ -67,6 +67,7 @@ parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 process.env.DATABASE_URL = testUrl;
 process.env.NEXT_PUBLIC_APP_URL = "http://payments.test";
+delete process.env.TBBT_PAYMENTS_FAKE_READY;
 
 const push = spawnSync(
   "npx",

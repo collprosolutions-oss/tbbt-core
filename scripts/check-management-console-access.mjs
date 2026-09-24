@@ -152,6 +152,7 @@ let serverProcess;
 
 try {
   const CANARY_LABOR_MINIMUM = "98765.43";
+  const onboardingDone = new Date();
   const businessA = await prisma.business.create({
     data: {
       name: "Alpha Handyman",
@@ -159,6 +160,11 @@ try {
       tradeCode: "HANDYMAN",
       laborMinimumEnabled: true,
       laborMinimumAmount: new Prisma.Decimal(CANARY_LABOR_MINIMUM),
+      firstRunSetupCompletedAt: onboardingDone,
+      starterServicesSetupCompletedAt: onboardingDone,
+      starterServicesSetupChoice: "SKIPPED",
+      websiteSetupCompletedAt: onboardingDone,
+      websiteSetupChoice: "SKIPPED",
     },
   });
 

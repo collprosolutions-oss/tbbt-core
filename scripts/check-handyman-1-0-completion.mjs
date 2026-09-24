@@ -105,6 +105,12 @@ check(
     ),
 );
 check(
+  "Public request wizard persists a tenant-scoped draft",
+  readFileSync(new URL("../src/components/public/request-flow.tsx", import.meta.url), "utf8").includes(
+    "tbbt-public-request:",
+  ),
+);
+check(
   "Settings section shortcuts redirect to the settings query",
   readFileSync(
     new URL("../src/app/(app)/settings/[section]/page.tsx", import.meta.url),
@@ -195,22 +201,24 @@ try {
   });
   check("TOTP sign-in challenge accepts a current code", verified.userId === ownerUser.id);
 
+  const currentToken = `current-session-${randomUUID()}`;
+  const otherToken = `other-session-${randomUUID()}`;
   await prisma.session.create({
     data: {
-      tokenHash: hashToken("current-session"),
+      tokenHash: hashToken(currentToken),
       userId: ownerUser.id,
       expiresAt: new Date(Date.now() + 86400000),
     },
   });
   const otherSession = await prisma.session.create({
     data: {
-      tokenHash: hashToken("other-session"),
+      tokenHash: hashToken(otherToken),
       userId: ownerUser.id,
       expiresAt: new Date(Date.now() + 86400000),
     },
   });
   const current = await prisma.session.findFirst({
-    where: { tokenHash: hashToken("current-session") },
+    where: { tokenHash: hashToken(currentToken) },
   });
   const revoked = await revokeOtherSessionsOp(prisma, {
     userId: ownerUser.id,
