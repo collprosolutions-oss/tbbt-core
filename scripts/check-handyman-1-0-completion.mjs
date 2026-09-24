@@ -485,17 +485,21 @@ try {
   const successProvider = createFakeSaasBillingProvider();
   const failProvider = createFakeSaasBillingProvider();
   failProvider.failCancel = true;
+  const successSubId = `sub_success_${randomUUID()}`;
+  const failSubId = `sub_fail_${randomUUID()}`;
+  const successCustomerId = `cus_success_${randomUUID()}`;
+  const failCustomerId = `cus_fail_${randomUUID()}`;
   successProvider.addSubscription({
-    id: "sub_success_1",
-    customerId: "cus_success_1",
+    id: successSubId,
+    customerId: successCustomerId,
     priceId: "price_saas_test",
     status: "active",
     currentPeriodEnd: new Date("2026-10-24T00:00:00.000Z"),
     cancelAtPeriodEnd: false,
   });
   failProvider.addSubscription({
-    id: "sub_fail_1",
-    customerId: "cus_fail_1",
+    id: failSubId,
+    customerId: failCustomerId,
     priceId: "price_saas_test",
     status: "active",
     currentPeriodEnd: new Date("2026-10-24T00:00:00.000Z"),
@@ -504,8 +508,8 @@ try {
   await prisma.businessSaasSubscription.create({
     data: {
       businessId: billed.business.id,
-      stripeCustomerId: "cus_success_1",
-      stripeSubscriptionId: "sub_success_1",
+      stripeCustomerId: successCustomerId,
+      stripeSubscriptionId: successSubId,
       stripePriceId: "price_saas_test",
       status: "active",
       cancelAtPeriodEnd: false,
@@ -514,8 +518,8 @@ try {
   await prisma.businessSaasSubscription.create({
     data: {
       businessId: failed.business.id,
-      stripeCustomerId: "cus_fail_1",
-      stripeSubscriptionId: "sub_fail_1",
+      stripeCustomerId: failCustomerId,
+      stripeSubscriptionId: failSubId,
       stripePriceId: "price_saas_test",
       status: "active",
       cancelAtPeriodEnd: false,
@@ -578,7 +582,7 @@ try {
       scheduled.billingCancellationMessage === OFFBOARDING_BILLING_SCHEDULED_MESSAGE &&
       billedRow.cancelAtPeriodEnd === false &&
       Boolean(billedBusiness.offboardingRequestedAt) &&
-      successProvider.subscriptions.get("sub_success_1").cancelAtPeriodEnd === true,
+      successProvider.subscriptions.get(successSubId).cancelAtPeriodEnd === true,
   );
 
   const webhookApplied = await applyParsedSaasBillingEvent(
@@ -590,9 +594,9 @@ try {
       data: {
         object: {
           object: "subscription",
-          id: "sub_success_1",
+          id: successSubId,
           status: "active",
-          customer: "cus_success_1",
+          customer: successCustomerId,
           cancel_at_period_end: true,
           items: {
             data: [
@@ -638,7 +642,7 @@ try {
       failedCancel.billingCancellationMessage === OFFBOARDING_BILLING_NOT_SCHEDULED_MESSAGE &&
       failedRow.cancelAtPeriodEnd === false &&
       Boolean(failedBusiness.offboardingRequestedAt) &&
-      failProvider.subscriptions.get("sub_fail_1").cancelAtPeriodEnd === false,
+      failProvider.subscriptions.get(failSubId).cancelAtPeriodEnd === false,
   );
   const originalRequestedAt = failedBusiness.offboardingRequestedAt;
   check(
@@ -697,7 +701,7 @@ try {
     retried.billingCancellationScheduled === true &&
       retried.billingCancellationMessage === OFFBOARDING_BILLING_SCHEDULED_MESSAGE &&
       afterRetryRow.cancelAtPeriodEnd === false &&
-      failProvider.subscriptions.get("sub_fail_1").cancelAtPeriodEnd === true &&
+      failProvider.subscriptions.get(failSubId).cancelAtPeriodEnd === true &&
       afterRetryBusiness.offboardingRequestedAt.getTime() === originalRequestedAt.getTime() &&
       retried.retryAvailable === true &&
       isOffboardingBillingRetryAvailable({
@@ -716,9 +720,9 @@ try {
       data: {
         object: {
           object: "subscription",
-          id: "sub_fail_1",
+          id: failSubId,
           status: "active",
-          customer: "cus_fail_1",
+          customer: failCustomerId,
           cancel_at_period_end: true,
           items: {
             data: [
