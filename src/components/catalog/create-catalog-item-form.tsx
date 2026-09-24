@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DEFAULT_SERVICE_CATEGORY } from "@/lib/service-catalog-category";
 import { OperatingWriteGate, useSaasOperating } from "@/components/saas/saas-operating-context";
+import { WritingAssistBar } from "@/components/ai/writing-assist-bar";
 
 const initialState: CatalogActionState = {};
 
@@ -24,6 +25,7 @@ export function CreateCatalogItemForm({
     initialState,
   );
   const [mode, setMode] = useState("STARTING_AT");
+  const [description, setDescription] = useState("");
   const operating = useSaasOperating();
 
   if (!operating.canOperate) {
@@ -86,7 +88,14 @@ export function CreateCatalogItemForm({
           id="description"
           name="description"
           rows={4}
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
           className="min-h-20 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base outline-none md:text-sm"
+        />
+        <WritingAssistBar
+          original={description}
+          context="Service catalog scope and included work. Do not invent prices, licenses, or guarantees."
+          onSuggestion={setDescription}
         />
       </div>
       <Button type="submit" disabled={pending}>

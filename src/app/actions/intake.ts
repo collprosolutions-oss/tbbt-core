@@ -10,6 +10,7 @@ import { notifyBusinessNewPublicRequest } from "@/lib/request-notify";
 import { parseWorkAreaFormAnswers } from "@/lib/work-area-intake";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
 import { resolveSupportedImageMimeType } from "@/lib/storage";
+import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 
 export type IntakeResult = {
   error?: string;
@@ -148,6 +149,13 @@ async function submitServiceRequestInner(
   }
 
   if (notifyBusiness) {
+    await emitAndProcessBusinessEvent(prisma, {
+      businessId: notifyBusiness.id,
+      type: "REQUEST_CREATED",
+      subjectType: "SERVICE_REQUEST",
+      subjectId: created.requestId,
+      idempotencyKey: `REQUEST_CREATED:${created.requestId}`,
+    });
     try {
       await notifyBusinessNewPublicRequest(prisma, {
         businessId: notifyBusiness.id,

@@ -148,6 +148,15 @@ export async function sendDraftInvoiceIfNeeded(
     address: formatInvoiceServiceAddress(invoice.job?.property ?? null),
   });
 
+  await emitAndProcessBusinessEvent(db, {
+    businessId: input.businessId,
+    type: "INVOICE_SENT",
+    subjectType: "INVOICE",
+    subjectId: invoice.id,
+    payload: { customerId: invoice.customer?.id ?? null, businessName: input.businessName },
+    idempotencyKey: `INVOICE_SENT:${invoice.id}`,
+  });
+
   return {
     ok: true,
     status: "SENT",
@@ -320,6 +329,14 @@ export async function completeJobAndSendInvoice(
     subjectId: job.id,
     payload: { customerId: job.customerId, businessName: input.businessName },
     idempotencyKey: `REVIEW_OPPORTUNITY_CREATED:${job.id}`,
+  });
+  await emitAndProcessBusinessEvent(db, {
+    businessId: input.businessId,
+    type: "REFERRAL_OPPORTUNITY_CREATED",
+    subjectType: "JOB",
+    subjectId: job.id,
+    payload: { customerId: job.customerId, businessName: input.businessName },
+    idempotencyKey: `REFERRAL_OPPORTUNITY_CREATED:${job.id}`,
   });
   if (sent.newlySent) {
     await emitAndProcessBusinessEvent(db, {

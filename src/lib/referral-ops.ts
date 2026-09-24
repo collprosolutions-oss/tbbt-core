@@ -15,6 +15,7 @@ import {
   senderFrom,
 } from "@/lib/mail";
 import { channelDeliveryAccepted } from "@/lib/reviews";
+import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -313,7 +314,7 @@ export async function createCustomerFollowUp(
       }),
     );
   }
-  return db.customerFollowUp.create({
+  const row = await db.customerFollowUp.create({
     data: {
       businessId: access.businessId,
       customerId: input.customerId,
@@ -323,6 +324,15 @@ export async function createCustomerFollowUp(
       createdByMembershipId: access.workspace.membership.id,
     },
   });
+  await emitAndProcessBusinessEvent(db, {
+    businessId: access.businessId,
+    type: "CUSTOMER_FOLLOW_UP_DUE",
+    subjectType: "CUSTOMER_FOLLOW_UP",
+    subjectId: row.id,
+    payload: { customerId: row.customerId, jobId: row.jobId, followUpId: row.id },
+    idempotencyKey: `CUSTOMER_FOLLOW_UP_DUE:${row.id}`,
+  });
+  return row;
 }
 
 export async function sendCustomerFollowUp(

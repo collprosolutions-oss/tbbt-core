@@ -6,6 +6,7 @@ import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
 import { ensureDefaultAutomationRules, updateAutomationRule } from "@/lib/automation/rules";
 import { processPendingAutomationRuns } from "@/lib/automation/processor";
+import { scanScheduledBusinessEvents } from "@/lib/automation/scan";
 
 export type AutomationActionState = { error?: string; message?: string };
 
@@ -45,6 +46,7 @@ export async function processDueAutomationsAction(
     const access = await requireOperatingBusinessAccess();
     requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
     void formData;
+    await scanScheduledBusinessEvents(prisma, access.businessId);
     const processed = await processPendingAutomationRuns(prisma, access.businessId);
     revalidatePath("/settings");
     revalidatePath("/business-health");

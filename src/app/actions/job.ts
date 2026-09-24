@@ -481,6 +481,15 @@ export async function startJob(
     });
   }
 
+  await emitAndProcessBusinessEvent(prisma, {
+    businessId: access.businessId,
+    type: "JOB_STARTED",
+    subjectType: "JOB",
+    subjectId: job.id,
+    payload: { customerId: job.customerId },
+    idempotencyKey: `JOB_STARTED:${job.id}`,
+  });
+
   revalidatePath("/jobs");
   revalidatePath("/dashboard");
   revalidatePath(`/jobs/${job.id}`);

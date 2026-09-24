@@ -1,11 +1,12 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { createReviewRequestAction, type ReviewsActionState } from "@/app/actions/reviews";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { REVIEW_PLATFORM_LABELS, REVIEW_PLATFORMS } from "@/lib/reviews";
+import { WritingAssistBar } from "@/components/ai/writing-assist-bar";
 
 const initial: ReviewsActionState = {};
 
@@ -19,6 +20,7 @@ export function PrepareRequestForm({
   requestText: string;
 }) {
   const [state, formAction, pending] = useActionState(createReviewRequestAction, initial);
+  const [text, setText] = useState(requestText);
 
   return (
     <form action={formAction} className="space-y-3">
@@ -45,8 +47,14 @@ export function PrepareRequestForm({
           id={`text-${jobId ?? customerId}`}
           name="requestText"
           rows={6}
-          defaultValue={requestText}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
           className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        />
+        <WritingAssistBar
+          original={text}
+          context="Ask for an honest review. Do not ask for 5 stars or gate who receives a request."
+          onSuggestion={setText}
         />
         <p className="text-xs text-muted-foreground">
           Ask for an honest review. Do not ask specifically for a positive or 5-star review.

@@ -16,8 +16,10 @@ const { emitBusinessEvent, emitAndProcessBusinessEvent, queueAutomationRunsForEv
 );
 const { ensureDefaultAutomationRules } = await import("@/lib/automation/rules");
 const { processPendingAutomationRuns } = await import("@/lib/automation/processor");
+const { scanScheduledBusinessEvents, INVOICE_DUE_AFTER_MS } = await import("@/lib/automation/scan");
 const { partitionRecommendations, upsertRecommendationState } = await import("@/lib/bsos-actions");
 const { CAPABILITIES, requireBusinessCapability } = await import("@/lib/authorization");
+const { BUSINESS_EVENT_TYPES } = await import("@/lib/automation/types");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -226,6 +228,63 @@ try {
   const aRuns = await prisma.automationRun.findMany({ where: { businessId: businessA.id } });
   const bRuns = await prisma.automationRun.findMany({ where: { businessId: businessB.id } });
   check("Automation runs never cross tenants", aRuns.every((row) => row.businessId === businessA.id) && bRuns.every((row) => row.businessId === businessB.id));
+
+  check(
+    "Catalog includes request, estimate, job, invoice, review, and follow-up events",
+    [
+      "REQUEST_CREATED",
+      "ESTIMATE_SENT",
+      "ESTIMATE_APPROVED",
+      "APPOINTMENT_SCHEDULED",
+      "APPOINTMENT_CHANGED",
+      "JOB_STARTED",
+      "JOB_COMPLETED",
+      "INVOICE_SENT",
+      "INVOICE_DUE",
+      "INVOICE_OVERDUE",
+      "INVOICE_PAID",
+      "REVIEW_OPPORTUNITY_CREATED",
+      "REFERRAL_OPPORTUNITY_CREATED",
+      "CUSTOMER_FOLLOW_UP_DUE",
+    ].every((type) => BUSINESS_EVENT_TYPES.includes(type)),
+  );
+
+  const oldSentAt = new Date(Date.now() - INVOICE_DUE_AFTER_MS - 60_000);
+  const invoiceA = await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "SENT",
+      total: 80,
+      createdAt: oldSentAt,
+    },
+  });
+  const invoiceB = await prisma.invoice.create({
+    data: {
+      businessId: businessB.id,
+      status: "SENT",
+      total: 999,
+      createdAt: oldSentAt,
+    },
+  });
+  await scanScheduledBusinessEvents(prisma, businessA.id);
+  const aDue = await prisma.businessEvent.findMany({
+    where: { businessId: businessA.id, type: "INVOICE_DUE" },
+  });
+  const bDue = await prisma.businessEvent.findMany({
+    where: { businessId: businessB.id, type: "INVOICE_DUE" },
+  });
+  check(
+    "Sent-age scan emits INVOICE_DUE only for the scanned business",
+    aDue.some((row) => row.subjectId === invoiceA.id) &&
+      !aDue.some((row) => row.subjectId === invoiceB.id) &&
+      bDue.length === 0,
+  );
+  await scanScheduledBusinessEvents(prisma, businessA.id);
+  const aDueAgain = await prisma.businessEvent.findMany({
+    where: { businessId: businessA.id, type: "INVOICE_DUE", subjectId: invoiceA.id },
+  });
+  check("Invoice due scan is idempotent", aDueAgain.length === 1);
 } finally {
   await prisma.$disconnect();
   spawnSync("psql", [baseUrl, "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE);`], {
