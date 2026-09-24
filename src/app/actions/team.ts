@@ -58,6 +58,11 @@ export async function addTeamMember(
 
   const name = readString(formData, "name");
   const email = readString(formData, "email").toLowerCase();
+  const requestedRole = readString(formData, "role").toUpperCase();
+  const role =
+    access.workspace.role === "OWNER" && requestedRole === "ADMIN"
+      ? "ADMIN"
+      : "MEMBER";
 
   if (!name || !email) {
     return { error: "Name and email are required." };
@@ -101,13 +106,13 @@ export async function addTeamMember(
       data: {
         userId: existingUser.id,
         businessId: access.businessId,
-        role: "MEMBER",
+        role,
       },
     });
     revalidatePath("/team");
     revalidatePath("/jobs");
     return {
-      message: `${existingUser.name} already has a TBBT account and can sign in now with their existing password.`,
+      message: `${existingUser.name} already has a TBBT account and can sign in now with their existing password as ${role}.`,
     };
   }
 
@@ -138,7 +143,7 @@ export async function addTeamMember(
       data: {
         userId: user.id,
         businessId: access.businessId,
-        role: "MEMBER",
+        role,
       },
     });
     await tx.passwordSetupToken.create({
@@ -178,7 +183,7 @@ export async function addTeamMember(
 
   revalidatePath("/team");
   return {
-    message: `${name} was added to your team.`,
+    message: `${name} was added to your team as ${role}.`,
     setupUrl,
   };
 }

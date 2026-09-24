@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { getAppUrl } from "@/lib/mail";
 import {
   isCollProRenoSlug,
   publicDisplayName,
@@ -7,6 +6,7 @@ import {
   publicSiteUrl,
   type PublicBusiness,
 } from "@/lib/public-site";
+import { tenantAbsoluteUrl } from "@/lib/tenant-app-url";
 
 const META_DESCRIPTION_MAX = 160;
 
@@ -14,8 +14,7 @@ export function publicCanonicalUrl(slug: string, pathname: string) {
   if (!pathname || pathname === "/" || pathname === publicHomePath(slug)) {
     return publicSiteUrl(slug);
   }
-  const origin = getAppUrl();
-  return origin ? `${origin}${pathname}` : pathname;
+  return tenantAbsoluteUrl(slug, pathname) ?? pathname;
 }
 
 export function publicSiteMetaDescription(

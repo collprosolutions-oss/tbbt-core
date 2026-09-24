@@ -186,7 +186,7 @@ export const PAYMENT_PROVIDER_PLATFORM_UNCONFIGURED_MESSAGE =
   "Stripe is not configured on this TBBT environment. Set STRIPE_SECRET_KEY to enable Connect onboarding.";
 
 export const PAYMENT_PROVIDER_APP_URL_UNCONFIGURED_MESSAGE =
-  "Customer checkout links need NEXT_PUBLIC_APP_URL (production: https://www.collproreno.com). Until that is set, Pay buttons stay hidden. Record cash, check, or Zelle with Mark Paid.";
+  "Customer checkout links need NEXT_PUBLIC_APP_URL so they resolve on this TBBT environment. Until that is set, Pay buttons stay hidden. Record cash, check, or Zelle with Mark Paid.";
 
 export type PaymentProviderStatus = "not_connected" | "setup_required" | "connected";
 
@@ -212,7 +212,7 @@ export const REVIEW_PLATFORMS_DISCONNECTED_MESSAGE =
   "No Google or Facebook review platform is connected. External review counts, ratings, and publishing are not available.";
 
 export const EMERGENCY_SECURITY_LOCK_DEFERRED_MESSAGE =
-  "Emergency Security Lock is not implemented. Future capability: sign out other sessions, pause publishing, freeze delegated admin, and require re-auth to resume — without deletion.";
+  "Sign out other sessions from this page. Pause-publishing and freeze-admin remain unavailable until those provider controls exist.";
 
 export const DOCUMENT_STORAGE_DEFERRED_MESSAGE =
   "Business document storage is not implemented. Knowledge Hub holds durable operational knowledge separately from Settings.";
@@ -221,10 +221,10 @@ export const SCHEDULING_FUTURE_RULE_MESSAGE =
   "Working days, hours, unavailable dates, and the travel/pickup buffer apply to future scheduling. Existing jobs keep the date and duration already saved.";
 
 export const ACCOUNT_DELETION_UNAVAILABLE_MESSAGE =
-  "Account deletion is not available. Historical business records remain preserved.";
+  "Account deletion is not available and is never silent. Request cancellation below if you want software access to end. Historical business records remain preserved.";
 
 export const FULL_EXPORT_PLANNED_MESSAGE =
-  "Full ZIP export, estimate/job/invoice PDF packs, payroll CSV, and original photo export are planned. Only working downloads are offered below.";
+  "Download a tenant-scoped ZIP of customers, properties, requests, estimates, jobs, invoices, payments, expenses, time entries, reviews, campaigns, and settings. Password hashes, session tokens, TOTP secrets, and setup/reset tokens are omitted. Estimate/job/invoice PDF packs and original photo binaries remain a later add-on.";
 
 export type IntegrationConnectionStatus = "connected" | "not_connected" | "needs_attention";
 
@@ -398,7 +398,7 @@ export function buildSettingsReadiness(input: SettingsReadinessInput): SettingsR
       label: "Data / Export",
       section: "data-export",
       status: "optional",
-      detail: "Customer CSV export is available. Full ZIP and PDF packs are planned.",
+      detail: "Tenant-scoped ZIP export is available. Secrets are omitted. Historical records are not deleted.",
       required: false,
     },
   ];

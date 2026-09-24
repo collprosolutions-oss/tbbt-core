@@ -32,6 +32,28 @@ export type SettingsWorkspaceProps = {
   canClearTestData?: boolean;
   testDataCleanupPreview?: TestDataCleanupPreview | null;
   checkoutStatus?: "success" | "canceled" | null;
+  security?: {
+    totpEnabled: boolean;
+    totpEnabledAt: string | null;
+    sessions: Array<{
+      id: string;
+      createdAt: string;
+      expiresAt: string;
+      userAgent: string | null;
+      revokedAt: string | null;
+      current: boolean;
+      active: boolean;
+    }>;
+    ownershipCandidates: Array<{
+      id: string;
+      name: string;
+      email: string;
+      role: string;
+    }>;
+    offboardingRequestedAt: string | null;
+    canTransferOwnership: boolean;
+    canRequestOffboarding: boolean;
+  };
 };
 
 export type {

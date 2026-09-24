@@ -177,7 +177,9 @@ function DesktopBoard({ source }: PipelineWorkspaceProps) {
               </header>
               <div className="flex flex-1 flex-col gap-2 p-2">
                 {column.rows.length === 0 ? (
-                  <p className="px-1 py-3 text-xs text-muted-foreground">None</p>
+                  <p className="px-1 py-3 text-xs text-muted-foreground">
+                    No deals in this stage yet. New public requests show as New Lead.
+                  </p>
                 ) : (
                   column.rows.map((row) => <OpportunityCard key={row.key} source={source} row={row} />)
                 )}
@@ -217,7 +219,10 @@ function MobileBoard({ source }: PipelineWorkspaceProps) {
         })}
       </nav>
       {column.rows.length === 0 ? (
-        <EmptyState title={`No ${PIPELINE_STAGE_LABELS[mobileStage].toLowerCase()} opportunities`} />
+        <EmptyState
+          title={`No ${PIPELINE_STAGE_LABELS[mobileStage].toLowerCase()} opportunities`}
+          description="Pipeline tracks real requests and estimates. Nothing is invented for an empty stage."
+        />
       ) : (
         <div className="space-y-2">
           {column.rows.map((row) => (

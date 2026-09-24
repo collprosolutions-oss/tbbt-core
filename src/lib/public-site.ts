@@ -6,6 +6,7 @@ import {
 } from "@/lib/handyman-starter-catalog";
 import { formatPublicPhoneDisplay } from "@/lib/format";
 import { getAppUrl } from "@/lib/mail";
+import { getTenantAppOrigin, tenantPublicSiteUrl } from "@/lib/tenant-app-url";
 import { formatCatalogPriceLabel, publicCatalogUnitAmount } from "@/lib/pricing-mode";
 import {
   selectedWorkQuery as encodeSelectedWorkQuery,
@@ -404,11 +405,7 @@ export const REVIEWS_UNRATED_STATUS = {
 } as const;
 
 export function publicSiteUrl(slug: string) {
-  const origin = getAppUrl();
-  if (isCollProRenoSlug(slug)) {
-    return origin ? `${origin}/` : "/";
-  }
-  return origin ? `${origin}/hire/${slug}` : `/hire/${slug}`;
+  return tenantPublicSiteUrl(slug);
 }
 
 export function toPublicCatalogItem(item: {
@@ -527,17 +524,13 @@ export function localBusinessJsonLd(input: {
   logoSrc: string | null;
   description: string;
 }) {
-  const origin = getAppUrl();
+  const origin = getTenantAppOrigin(input.slug);
   const data: Record<string, unknown> = {
     "@context": "https://schema.org",
     "@type": "LocalBusiness",
     name: input.name,
     description: input.description,
-    url: origin
-      ? isCollProRenoSlug(input.slug)
-        ? `${origin}/`
-        : `${origin}/hire/${input.slug}`
-      : undefined,
+    url: tenantPublicSiteUrl(input.slug),
   };
   if (input.phone) {
     data.telephone = input.phone;

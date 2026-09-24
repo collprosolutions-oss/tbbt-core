@@ -20,6 +20,9 @@ import { SchedulingSettingsForm } from "@/components/settings/scheduling-setting
 import { SupplierPricingSettingsForm } from "@/components/settings/supplier-pricing-form";
 import { ClearTestDataForm } from "@/components/settings/clear-test-data-form";
 import { ChangePasswordForm } from "@/components/settings/change-password-form";
+import { AccountSecurityPanel } from "@/components/settings/account-security-panel";
+import { OwnershipTransferForm } from "@/components/settings/ownership-transfer-form";
+import { OffboardingForm } from "@/components/settings/offboarding-form";
 import type { SettingsWorkspaceProps } from "@/components/settings/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -786,22 +789,51 @@ function SectionBody(props: SettingsWorkspaceProps) {
   if (section === "security") {
     const activeCount = snapshot.team.filter((member) => member.active).length;
     return (
-      <SectionCard title="Security & Privacy" description="Change the password on the signed-in account. This does not change roles, workspace, or billing.">
+      <SectionCard title="Security & Privacy" description="Change the password on the signed-in account. Sessions and TOTP belong to this user. Ownership transfer is OWNER-only.">
         <ChangePasswordForm />
+        {props.security ? (
+          <AccountSecurityPanel
+            totpEnabled={props.security.totpEnabled}
+            totpEnabledAt={props.security.totpEnabledAt}
+            sessions={props.security.sessions}
+          />
+        ) : null}
         <ul className="space-y-2 text-sm">
           <li>Tenant isolation: every Settings read and write uses the signed-in workspace business, never a browser businessId.</li>
           <li>Role / access model: OWNER, ADMIN, MEMBER. MEMBER cannot open Settings or receive private configuration.</li>
           <li>Active team members: {activeCount}.</li>
-          <li>Sensitive settings (pricing, identity, security) stay owner-confirmed or owner-only.</li>
+          <li>Password recovery uses the same hashed one-time reset tokens as forgot-password. Authenticator sign-in is real TOTP when enabled.</li>
         </ul>
-        <DeferredField label="Emergency Security Lock" detail={EMERGENCY_SECURITY_LOCK_DEFERRED_MESSAGE} />
+        {props.security?.canTransferOwnership ? (
+          <div className="rounded-lg border p-3">
+            <p className="font-medium">Ownership transfer</p>
+            <OwnershipTransferForm candidates={props.security.ownershipCandidates} />
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Only the current OWNER can transfer ownership to another active OWNER or ADMIN.
+          </p>
+        )}
+        <DeferredField label="Pause publishing / freeze admin" detail={EMERGENCY_SECURITY_LOCK_DEFERRED_MESSAGE} />
       </SectionCard>
     );
   }
 
   return (
-    <SectionCard title="Data / Export" description="Historical business records remain preserved. Only working downloads are offered.">
+    <SectionCard title="Data / Export" description="Historical business records remain preserved. Cancellation never deletes them.">
       <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
+          <div>
+            <p className="font-medium">Business data ZIP</p>
+            <p className="text-sm text-muted-foreground">
+              Customers, properties, requests, estimates, jobs, invoices, payments, expenses, time
+              entries, reviews, campaigns, and settings for this workspace only. Secrets omitted.
+            </p>
+          </div>
+          <Button asChild size="sm">
+            <a href="/settings/export">Download ZIP</a>
+          </Button>
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
           <div>
             <p className="font-medium">Customers CSV</p>
@@ -820,16 +852,23 @@ function SectionBody(props: SettingsWorkspaceProps) {
         </div>
         {[
           "Estimates / jobs / invoices PDF pack",
-          "Expenses / payroll CSV pack",
-          "Documents / policies",
-          "Photo originals",
-          "Full ZIP export",
+          "Original photo binaries",
         ].map((label) => (
           <div key={label} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
             <p className="text-sm">{label}</p>
             <Badge variant="secondary">Not Yet Available / Planned</Badge>
           </div>
         ))}
+        {props.security?.canRequestOffboarding ? (
+          <div className="rounded-lg border p-3">
+            <p className="font-medium">Cancel software access</p>
+            <OffboardingForm alreadyRequested={Boolean(props.security.offboardingRequestedAt)} />
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Only the OWNER can request cancellation. Records stay on file.
+          </p>
+        )}
       </div>
       {canClearTestData && testDataCleanupPreview ? (
         <div className="rounded-lg border border-destructive/30 p-3">

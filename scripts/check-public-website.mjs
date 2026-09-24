@@ -183,6 +183,17 @@ check("Public intake does not apply labor minimum",
   !intakeActionSrc.includes("labor-minimum") && !intakeActionSrc.includes("laborMinimum"));
 check("Existing /r/[slug] intake URL is preserved", requestPageSrc.includes("MultiServiceRequestFlow"));
 check(
+  "Non-CollPro public request CTA does not hardcode CollPro Reno",
+  requestPageSrc.includes("Send project details to ${name}") &&
+    !requestPageSrc.includes("Send project details to CollPro Reno"),
+);
+check(
+  "Public services browser does not hardcode CollPro in the estimate disclaimer",
+  !readRepo("src/components/public/public-services-browser.tsx").includes(
+    "CollPro reviews the request",
+  ),
+);
+check(
   "Public request Step 1 uses the structured service-address fields",
   requestFlowSrc.includes("ServiceAddressFields") &&
     requestFlowSrc.includes("streetAddress") &&

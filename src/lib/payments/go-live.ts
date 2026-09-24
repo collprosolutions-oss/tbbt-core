@@ -70,7 +70,7 @@ export function explainPaymentsGoLive(input: {
       blocker: "app_url",
       headline: "Checkout links are not ready",
       detail:
-        "Customer Pay buttons stay hidden until NEXT_PUBLIC_APP_URL is set (production: https://www.collproreno.com). Connect onboarding and checkout both need that URL. Record cash, check, or Zelle with Mark Paid until then.",
+        "Customer Pay buttons stay hidden until NEXT_PUBLIC_APP_URL is set so checkout can return to this TBBT environment. Connect onboarding and checkout both need that URL. Record cash, check, or Zelle with Mark Paid until then.",
       settingsHref: SETTINGS_HREF,
     };
   }

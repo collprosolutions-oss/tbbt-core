@@ -99,8 +99,8 @@ export function EstimatesWorkspace({ estimates }: { estimates: EstimateListItem[
     return (
       <FounderRegion id="table">
         <EmptyState
-          title="No estimates match your filters"
-          description="Try a different status, customer, service, or search term."
+          title="No estimates yet"
+          description="Create an estimate from a request or start a new estimate. If you applied filters, clear them to see every estimate."
         />
       </FounderRegion>
     );

@@ -42,9 +42,9 @@ export class ForbiddenError extends Error {
  * ADMIN. Sensitive money-movement authorization is OWNER-only
  * (AUTHORIZE_PAYROLL). Consequential Settings (labor minimum, business
  * name) are OWNER-only even though ADMIN may open Settings and edit
- * delegated preference flags. Banking, provider funding, ownership
- * transfer, billing, security mutations, and full business deletion
- * remain unbuilt.
+ * delegated preference flags. Banking and provider funding remain
+ * unbuilt. Ownership transfer, session/TOTP security, and tenant-scoped
+ * data export are implemented and OWNER-gated where they change control.
  */
 export const CAPABILITIES = {
   /** Create/edit customers and their properties (service addresses). */
@@ -163,12 +163,26 @@ export const CAPABILITIES = {
    * not assigned-job field work.
    */
   MANAGE_KNOWLEDGE: "MANAGE_KNOWLEDGE",
+  /**
+   * OWNER-only transfer of the OWNER role to another active ADMIN (or
+   * a second OWNER) on the same business. Never granted to ADMIN/MEMBER.
+   */
+  TRANSFER_OWNERSHIP: "TRANSFER_OWNERSHIP",
+  /**
+   * OWNER-only offboarding request (export + schedule cancellation).
+   * Does not delete historical records.
+   */
+  REQUEST_OFFBOARDING: "REQUEST_OFFBOARDING",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
 
 const ALL_CAPABILITIES = Object.values(CAPABILITIES) as Capability[];
-const OWNER_ONLY_CAPABILITIES = new Set<Capability>([CAPABILITIES.AUTHORIZE_PAYROLL]);
+const OWNER_ONLY_CAPABILITIES = new Set<Capability>([
+  CAPABILITIES.AUTHORIZE_PAYROLL,
+  CAPABILITIES.TRANSFER_OWNERSHIP,
+  CAPABILITIES.REQUEST_OFFBOARDING,
+]);
 
 /**
  * OWNER: ultimate authority, all capabilities including payroll

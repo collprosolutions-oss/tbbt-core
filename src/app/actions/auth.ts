@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
+import { headers } from "next/headers";
 import {
   createSession,
   destroySession,
@@ -9,6 +10,11 @@ import {
   setWorkspaceCookie,
   verifyPassword,
 } from "@/lib/auth";
+import {
+  AccountSecurityError,
+  createTotpSignInChallenge,
+  verifyTotpSignInChallenge,
+} from "@/lib/account-security";
 import { ensureBusinessPublicContactSchema } from "@/lib/business-contact";
 import {
   ensureFirstRunSetupSchema,
@@ -22,6 +28,8 @@ import { ensureSaasBillingSchema } from "@/lib/saas-billing";
 
 export type AuthFormState = {
   error?: string;
+  totpRequired?: boolean;
+  challengeToken?: string;
 };
 
 function readString(formData: FormData, key: string) {
@@ -74,7 +82,7 @@ export async function signUpAction(
     throw error;
   }
 
-  await createSession(result.user.id);
+  await createSession(result.user.id, { userAgent: await requestUserAgent() });
   await setWorkspaceCookie(result.business.id);
   redirect(result.nextPath);
 }
@@ -83,6 +91,44 @@ export async function signInAction(
   _prev: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
+  const challengeToken = readString(formData, "challengeToken");
+  const totpCode = readString(formData, "totpCode");
+  if (challengeToken) {
+    try {
+      const verified = await verifyTotpSignInChallenge(prisma, {
+        challengeToken,
+        code: totpCode,
+      });
+      const user = await prisma.user.findUnique({
+        where: { id: verified.userId },
+        include: {
+          memberships: {
+            where: { active: true },
+            orderBy: { createdAt: "asc" },
+            include: { business: true },
+          },
+        },
+      });
+      const membership = user?.memberships[0];
+      if (!user || !membership) {
+        return { error: "This account is not assigned to a business workspace." };
+      }
+      await createSession(user.id, { userAgent: await requestUserAgent() });
+      await setWorkspaceCookie(membership.businessId);
+      redirect(
+        postAuthenticationPath({
+          role: membership.role,
+          business: membership.business,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof AccountSecurityError) {
+        return { error: error.message, totpRequired: true, challengeToken };
+      }
+      throw error;
+    }
+  }
+
   const email = readString(formData, "email").toLowerCase();
   const password = readString(formData, "password");
 
@@ -120,7 +166,15 @@ export async function signInAction(
     return { error: "This account is not assigned to a business workspace." };
   }
 
-  await createSession(user.id);
+  if (user.totpEnabledAt && user.totpSecret) {
+    const token = await createTotpSignInChallenge(prisma, user.id);
+    return {
+      totpRequired: true,
+      challengeToken: token,
+    };
+  }
+
+  await createSession(user.id, { userAgent: await requestUserAgent() });
   await setWorkspaceCookie(membership.businessId);
   // OWNER/ADMIN land on the management console; MEMBER lands directly on
   // their own Field Home ("My Jobs") -- they have no management-console
@@ -140,4 +194,8 @@ export async function signInAction(
 export async function signOutAction() {
   await destroySession();
   redirect("/sign-in");
+}
+
+async function requestUserAgent() {
+  return (await headers()).get("user-agent");
 }

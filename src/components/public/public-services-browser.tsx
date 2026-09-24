@@ -185,7 +185,7 @@ export function PublicServicesBrowser({
                 <p key={line}>{line}</p>
               ))}
               <p className="public-estimate-note">
-                This is not a formal estimate. CollPro reviews the request before sending a written estimate.
+                This is not a formal estimate. The business reviews the request before sending a written estimate.
               </p>
             </div>
           ) : null}

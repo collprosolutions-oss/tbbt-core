@@ -6,7 +6,9 @@ import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
-import { requireManagementPageAccess } from "@/lib/access";
+import { requireManagementPageAccess, type BusinessAccess } from "@/lib/access";
+import { listUserSessions } from "@/lib/account-security";
+import { getSessionUser } from "@/lib/auth";
 import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
@@ -183,8 +185,62 @@ export default async function SettingsPage({
           canClearTestData={canClearTestData}
           testDataCleanupPreview={testDataCleanupPreview}
           checkoutStatus={checkoutStatus}
+          security={await loadSettingsSecurity(access)}
         />
       </FounderDesignRoot>
     </PageContainer>
   );
+}
+
+async function loadSettingsSecurity(access: BusinessAccess) {
+  const session = await getSessionUser();
+  const user = session
+    ? await prisma.user.findUnique({
+        where: { id: session.id },
+        select: { totpEnabledAt: true },
+      })
+    : null;
+  const sessions = session
+    ? await listUserSessions(prisma, {
+        userId: session.id,
+        currentSessionId: session.sessionId,
+      })
+    : [];
+  const team = await prisma.membership.findMany({
+    where: {
+      businessId: access.businessId,
+      active: true,
+      role: { in: ["OWNER", "ADMIN"] },
+      id: { not: access.workspace.membership.id },
+    },
+    select: {
+      id: true,
+      role: true,
+      user: { select: { name: true, email: true } },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  return {
+    totpEnabled: Boolean(user?.totpEnabledAt),
+    totpEnabledAt: user?.totpEnabledAt?.toISOString() ?? null,
+    sessions: sessions.map((row) => ({
+      id: row.id,
+      createdAt: row.createdAt.toISOString(),
+      expiresAt: row.expiresAt.toISOString(),
+      userAgent: row.userAgent,
+      revokedAt: row.revokedAt?.toISOString() ?? null,
+      current: row.current,
+      active: row.active,
+    })),
+    ownershipCandidates: team.map((member) => ({
+      id: member.id,
+      name: member.user.name,
+      email: member.user.email,
+      role: member.role,
+    })),
+    offboardingRequestedAt: access.workspace.business.offboardingRequestedAt?.toISOString() ?? null,
+    canTransferOwnership: roleHasCapability(access.workspace.role, CAPABILITIES.TRANSFER_OWNERSHIP),
+    canRequestOffboarding: roleHasCapability(access.workspace.role, CAPABILITIES.REQUEST_OFFBOARDING),
+  };
 }

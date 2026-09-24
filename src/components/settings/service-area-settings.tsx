@@ -27,6 +27,12 @@ export async function ServiceAreaSettings({ businessId }: { businessId: string }
         <Button type="submit" size="sm">Add service area</Button>
       </ActionForm>
       <ul className="space-y-2 text-sm">
+        {areas.length === 0 ? (
+          <li className="rounded-md border border-dashed p-3 text-muted-foreground">
+            No service areas yet. Add a city or ZIP so public local pages and intake
+            qualification can use it. This is not inferred from CollPro&apos;s map.
+          </li>
+        ) : null}
         {areas.map((area) => (
           <li key={area.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
             <div>

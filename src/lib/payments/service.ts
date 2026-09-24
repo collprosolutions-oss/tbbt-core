@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { getAppUrl } from "@/lib/mail";
+import { getTenantAppOrigin } from "@/lib/tenant-app-url";
 import { invoiceNumberFromId } from "@/lib/invoice-document";
 import { isStripePlatformConfigured } from "@/lib/payments/config";
 import { invoiceAmountToCents } from "@/lib/payments/money";
@@ -316,17 +317,13 @@ export async function createCustomerInvoiceCheckout(
   provider: PaymentProvider = getPaymentProvider(),
   options: { appUrl?: string | null } = {},
 ): Promise<CheckoutSessionResult> {
-  const appUrl = options.appUrl ?? getAppUrl();
-  if (!appUrl) {
-    throw new PaymentError("App URL is not configured.");
-  }
-
   const job = token
     ? await db.job.findUnique({
         where: { projectToken: token },
         select: {
           id: true,
           businessId: true,
+          business: { select: { slug: true } },
           invoices: {
             take: 1,
             orderBy: { createdAt: "asc" },
@@ -344,6 +341,11 @@ export async function createCustomerInvoiceCheckout(
   const invoice = job?.invoices[0] ?? null;
   if (!job || !invoice || invoice.businessId !== job.businessId) {
     throw new PaymentError("This invoice is not available.");
+  }
+
+  const appUrl = options.appUrl ?? getTenantAppOrigin(job.business.slug) ?? getAppUrl();
+  if (!appUrl) {
+    throw new PaymentError("App URL is not configured.");
   }
 
   const payment = await getBusinessPaymentStatus(db, job.businessId, provider);
@@ -553,6 +555,7 @@ async function applyVerifiedDepositPayment(
 const DEPOSIT_ESTIMATE_SELECT = {
   id: true,
   businessId: true,
+  business: { select: { slug: true } },
   status: true,
   total: true,
   approvedVersion: {
@@ -592,11 +595,14 @@ export async function createCustomerDepositCheckout(
   provider: PaymentProvider = getPaymentProvider(),
   options: { appUrl?: string | null } = {},
 ): Promise<CheckoutSessionResult> {
-  const appUrl = options.appUrl ?? getAppUrl();
+  const loaded = await loadDepositEstimateByCustomerToken(db, token);
+  const appUrl =
+    options.appUrl ??
+    (loaded ? getTenantAppOrigin(loaded.estimate.business.slug) : null) ??
+    getAppUrl();
   if (!appUrl) {
     throw new PaymentError("App URL is not configured.");
   }
-  const loaded = await loadDepositEstimateByCustomerToken(db, token);
   if (!loaded || loaded.estimate.status !== "APPROVED") {
     throw new PaymentError("This deposit cannot be paid yet.");
   }

@@ -54,6 +54,13 @@ model User {
   /// revoke only via direct database access or
   /// scripts/set-founder-access.mjs.
   isFounder    Boolean  @default(false)
+  /// Base32 TOTP secret used only after totpEnabledAt is set. Never
+  /// exported, never shown after enrollment completes.
+  totpSecret         String?
+  /// Pending secret during enrollment. Cleared when the first valid code
+  /// confirms the authenticator, or when enrollment is cancelled.
+  totpPendingSecret  String?
+  totpEnabledAt      DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -67,6 +74,8 @@ model User {
   /// Empty until the user requests a reset. Distinct from team onboarding
   /// PasswordSetupToken rows so a 7-day invite cannot be reused as a reset.
   passwordResetTokens  PasswordResetToken[]
+  totpBackupCodes      TotpBackupCode[]
+  authChallenges       AuthChallenge[]
   /// Founder Design Mode cosmetic overrides this user has saved -- see
   /// FounderDesignOverride below. Empty for every non-founder User.
   founderDesignOverrides FounderDesignOverride[]
@@ -107,6 +116,40 @@ model Session {
   id        String   @id @default(cuid())
   tokenHash String   @unique
   userId    String
+  expiresAt DateTime
+  /// Best-effort User-Agent captured at sign-in. Display only.
+  userAgent String?
+  /// Set when the owner revokes this session. getSessionUser() treats a
+  /// revoked row as signed-out without deleting the audit row.
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Hashed one-time TOTP backup codes. The raw code is shown once at
+/// enrollment and never stored.
+model TotpBackupCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String    @unique
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Short-lived sign-in challenge after password succeeds and TOTP is on.
+/// Stores only sha256(token). Raw token lives in the sign-in form.
+model AuthChallenge {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  purpose   String
   expiresAt DateTime
   createdAt DateTime @default(now())
 
@@ -209,6 +252,9 @@ model Business {
   /// Null means this tenant has no SMS identity (inbound disabled; Twilio
   /// outbound will not use a shared/pool sender).
   operationalSmsNumber String? @unique
+  /// Owner requested account/business closure. Historical financial and
+  /// job records are never deleted by this timestamp.
+  offboardingRequestedAt DateTime?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 

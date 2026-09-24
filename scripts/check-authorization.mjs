@@ -262,12 +262,17 @@ try {
     "OWNER has every currently-implemented capability",
     allCapabilities.every((capability) => roleHasCapability("OWNER", capability)),
   );
+  const ownerOnly = [
+    CAPABILITIES.AUTHORIZE_PAYROLL,
+    CAPABILITIES.TRANSFER_OWNERSHIP,
+    CAPABILITIES.REQUEST_OFFBOARDING,
+  ];
   check(
-    "ADMIN has every currently-implemented ordinary business-management capability except OWNER-only AUTHORIZE_PAYROLL",
+    "ADMIN has every currently-implemented ordinary business-management capability except OWNER-only capabilities",
     allCapabilities
-      .filter((capability) => capability !== CAPABILITIES.AUTHORIZE_PAYROLL)
+      .filter((capability) => !ownerOnly.includes(capability))
       .every((capability) => roleHasCapability("ADMIN", capability)) &&
-      !roleHasCapability("ADMIN", CAPABILITIES.AUTHORIZE_PAYROLL),
+      ownerOnly.every((capability) => !roleHasCapability("ADMIN", capability)),
   );
   check(
     "MEMBER has NO general owner/admin management capability (foundation only)",

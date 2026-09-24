@@ -7,6 +7,7 @@ import { MultiServiceRequestFlow } from "@/components/public/request-flow";
 import { PublicSiteShell } from "@/components/public/public-site-shell";
 import { smsHref } from "@/lib/directions";
 import {
+  isCollProRenoSlug,
   publicDisplayName,
   publicHomePath,
   publicPhone,
@@ -64,7 +65,7 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
     <PublicSiteShell business={site.business} groups={site.groups}>
       <main>
         <PublicPageHero
-          className="public-quote-hero"
+          className={isCollProRenoSlug(site.business.slug) ? "public-quote-hero public-quote-hero-collpro" : "public-quote-hero"}
           homeHref={publicHomePath(site.business.slug)}
           current="Request a Quote"
           title="Request a Quote"
@@ -125,7 +126,7 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
         </section>
         <PublicCtaBar
           title="Prefer to text instead?"
-          body="Send project details to CollPro Reno and we will follow up."
+          body={`Send project details to ${name} and we will follow up.`}
           requestHref={publicRequestPath(site.business.slug)}
           smsHref={textHref}
           phone={phone}

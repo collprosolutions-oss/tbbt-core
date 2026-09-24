@@ -131,8 +131,8 @@ export function JobsWorkspace({
         <FounderRegion id="table">
         {jobs.length === 0 ? (
           <EmptyState
-            title="No jobs match your filters"
-            description="Try a different status, crew member, date range, or search term."
+            title="No jobs yet"
+            description="Jobs appear after a customer approves an estimate. If you applied filters, clear them to see every job."
           />
         ) : (
           <>
