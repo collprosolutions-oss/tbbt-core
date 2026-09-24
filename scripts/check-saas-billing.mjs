@@ -1291,14 +1291,14 @@ try {
   const scheduled = await cancelProvider.scheduleCancelAtPeriodEnd({
     subscriptionId: "sub_cancel_boundary",
   });
-  const beforeWebhook = await prisma.businessSaasSubscription.findUnique({
+  const beforeCancelWebhook = await prisma.businessSaasSubscription.findUnique({
     where: { businessId: businessA.business.id },
   });
   check(
     "Fake provider schedules cancel in-memory without writing the local SaaS row",
     scheduled.cancelAtPeriodEnd === true &&
       cancelProvider.subscriptions.get("sub_cancel_boundary").cancelAtPeriodEnd === true &&
-      beforeWebhook?.cancelAtPeriodEnd === false,
+      beforeCancelWebhook?.cancelAtPeriodEnd === false,
   );
   const cancelWebhook = await applyParsedSaasBillingEvent(
     prisma,
