@@ -725,7 +725,11 @@ try {
       new Set(processedIds).size <= 1,
   );
 
-  const staleNow = new Date();
+  for (let i = 0; i < 10; i += 1) {
+    const drained = await processPendingAutomationRuns(prisma, businessA.id);
+    if (drained.length === 0) break;
+  }
+
   const staleEvent = await emitBusinessEvent(prisma, {
     businessId: businessA.id,
     type: "JOB_STARTED",
@@ -750,17 +754,27 @@ try {
   const staleRun = await prisma.automationRun.findFirst({
     where: { businessId: businessA.id, eventId: staleEvent.event.id, ruleId: staleRule.id },
   });
+  const staleNow = new Date(Math.max(Date.now(), staleRun.availableAt.getTime()));
   const liveClaim = await claimAutomationRun(prisma, {
     id: staleRun.id,
     businessId: businessA.id,
     now: staleNow,
   });
+  const afterLiveClaim = await prisma.automationRun.findUniqueOrThrow({ where: { id: staleRun.id } });
   const liveAgain = await processPendingAutomationRuns(prisma, businessA.id, staleNow);
   const stillLive = await prisma.automationRun.findUniqueOrThrow({ where: { id: staleRun.id } });
+  const secondLiveClaim = await claimAutomationRun(prisma, {
+    id: staleRun.id,
+    businessId: businessA.id,
+    now: staleNow,
+  });
   check(
     "A live PROCESSING claim is not stolen by another worker",
     Boolean(liveClaim) &&
+      afterLiveClaim.status === "PROCESSING" &&
+      afterLiveClaim.claimedAt instanceof Date &&
       stillLive.status === "PROCESSING" &&
+      secondLiveClaim === null &&
       !liveAgain.some((row) => row.id === staleRun.id),
   );
   await prisma.automationRun.update({
