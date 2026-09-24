@@ -148,7 +148,6 @@ try {
       businessId: businessA.id,
       status: "SENT",
       total: 80,
-      publicToken: randomUUID(),
     },
   });
   const workspaceA = await loadBsosWorkspace(prisma, businessA.id);

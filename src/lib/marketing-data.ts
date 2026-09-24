@@ -281,13 +281,14 @@ export async function loadMarketingSource(prisma: PrismaClient, businessId: stri
       manualCopy: SOCIAL_MANUAL_COPY_MESSAGE,
     },
     performance: {
-      available: true,
-      message:
-        "Internal performance only: recorded content, completed jobs, and paid invoices. Channel analytics are not connected.",
-      approvedContent: approved.length,
-      completedJobs: opportunities.length,
-      paidJobs: invoices.filter((invoice) => invoice.jobId).length,
-      channelAnalytics: PERFORMANCE_UNAVAILABLE_MESSAGE,
+      available: false,
+      message: PERFORMANCE_UNAVAILABLE_MESSAGE,
+      internal: {
+        approvedContent: approved.length,
+        completedJobs: opportunities.length,
+        paidInvoices: invoices.length,
+        note: "Recorded TBBT activity only. Channel analytics are not connected.",
+      },
     },
   };
 }

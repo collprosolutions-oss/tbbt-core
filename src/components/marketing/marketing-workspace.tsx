@@ -389,10 +389,10 @@ function ContentBody({
           <CardDescription>{source.performance.message}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
-          <p>Approved content: {source.performance.approvedContent}</p>
-          <p>Completed jobs: {source.performance.completedJobs}</p>
-          <p>Paid invoices linked to jobs: {source.performance.paidJobs}</p>
-          <p className="text-muted-foreground">{source.performance.channelAnalytics}</p>
+          <p>Approved content: {source.performance.internal.approvedContent}</p>
+          <p>Completed jobs: {source.performance.internal.completedJobs}</p>
+          <p>Paid invoices on file: {source.performance.internal.paidInvoices}</p>
+          <p className="text-muted-foreground">{source.performance.internal.note}</p>
         </CardContent>
       </Card>
     );

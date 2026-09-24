@@ -47,6 +47,12 @@ if (push.status !== 0) {
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
+delete process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER;
+delete process.env.VERCEL_ENV;
+delete process.env.TWILIO_ACCOUNT_SID;
+delete process.env.TWILIO_AUTH_TOKEN;
+delete process.env.TWILIO_MESSAGING_SERVICE_SID;
+delete process.env.TWILIO_FROM_NUMBER;
 
 const { REQUEST_SEND_DISCLAIMER } = await import("@/lib/reviews");
 const {

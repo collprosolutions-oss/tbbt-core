@@ -117,7 +117,6 @@ try {
       customerId: customer.id,
       status: "PAID",
       total: 200,
-      publicToken: randomUUID(),
       paidAt: new Date(),
     },
   });
@@ -127,7 +126,6 @@ try {
       customerId: customer.id,
       status: "SENT",
       total: 75,
-      publicToken: randomUUID(),
     },
   });
   await prisma.invoice.create({
@@ -135,7 +133,6 @@ try {
       businessId: businessB.id,
       status: "PAID",
       total: 9999,
-      publicToken: randomUUID(),
       paidAt: new Date(),
     },
   });

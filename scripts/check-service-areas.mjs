@@ -258,7 +258,6 @@ try {
       jobId: job.id,
       status: "PAID",
       total: 220,
-      publicToken: randomUUID(),
       paidAt: new Date(),
     },
   });
