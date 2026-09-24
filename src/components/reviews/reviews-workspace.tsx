@@ -14,7 +14,11 @@ import {
   cancelReferralRequestAction,
   createFollowUpAction,
   createReferralRequestAction,
+  markFollowUpSentManuallyAction,
+  markReferralRequestSentManuallyAction,
   recordReferralAction,
+  sendFollowUpAction,
+  sendReferralRequestAction,
   sendReviewReminderAction,
   stopReviewRemindersAction,
 } from "@/app/actions/referrals";
@@ -231,9 +235,9 @@ function RequestBody({
                 <span className="text-xs text-muted-foreground">{row.workflowLabel}</span>
               </div>
               {row.requestedAt ? (
-                <p className="text-xs text-muted-foreground">Recorded as sent {formatDate(row.requestedAt)}</p>
+                <p className="text-xs text-muted-foreground">Sent {formatDate(row.requestedAt)}</p>
               ) : (
-                <p className="text-xs text-muted-foreground">Not recorded as sent yet.</p>
+                <p className="text-xs text-muted-foreground">Not sent yet.</p>
               )}
               {area === "requests" ? (
                 <>
@@ -462,8 +466,20 @@ function GrowthBody({
             <Button type="submit" size="sm">Create follow-up</Button>
           </ActionForm>
           {source.followUps.map((row) => (
-            <div key={row.id} className="rounded-md border p-3 text-sm">
+            <div key={row.id} className="space-y-2 rounded-md border p-3 text-sm">
               <p>{row.kind} · {row.status}</p>
+              {row.status === "OPEN" || row.status === "FAILED" ? (
+                <div className="flex flex-wrap gap-2">
+                  <ActionForm action={sendFollowUpAction}>
+                    <input type="hidden" name="followUpId" value={row.id} />
+                    <Button type="submit" size="sm">Send via connected adapters</Button>
+                  </ActionForm>
+                  <ActionForm action={markFollowUpSentManuallyAction}>
+                    <input type="hidden" name="followUpId" value={row.id} />
+                    <Button type="submit" size="sm" variant="outline">Mark sent manually</Button>
+                  </ActionForm>
+                </div>
+              ) : null}
               {row.status !== "CANCELLED" ? (
                 <ActionForm action={cancelFollowUpAction}>
                   <input type="hidden" name="followUpId" value={row.id} />
@@ -495,11 +511,23 @@ function GrowthBody({
         {source.referralRequests.map((row) => (
           <div key={row.id} className="rounded-md border p-3 text-sm">
             <p>{row.customer.name} · {row.status}</p>
-            {row.status === "DRAFT" || row.status === "READY" ? (
+            {row.status === "DRAFT" ? (
               <ActionForm action={advanceReferralRequestAction}>
                 <input type="hidden" name="requestId" value={row.id} />
-                <Button type="submit" size="sm">Advance</Button>
+                <Button type="submit" size="sm">Mark ready</Button>
               </ActionForm>
+            ) : null}
+            {row.status === "READY" || row.status === "FAILED" ? (
+              <div className="flex flex-wrap gap-2">
+                <ActionForm action={sendReferralRequestAction}>
+                  <input type="hidden" name="requestId" value={row.id} />
+                  <Button type="submit" size="sm">Send via connected adapters</Button>
+                </ActionForm>
+                <ActionForm action={markReferralRequestSentManuallyAction}>
+                  <input type="hidden" name="requestId" value={row.id} />
+                  <Button type="submit" size="sm" variant="outline">Mark sent manually</Button>
+                </ActionForm>
+              </div>
             ) : null}
             {row.status !== "CANCELLED" && row.status !== "COMPLETED" ? (
               <ActionForm action={cancelReferralRequestAction}>

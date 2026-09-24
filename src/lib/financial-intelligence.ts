@@ -65,7 +65,8 @@ export type FinancialIntelligence = {
   averageTicket: number | null;
   estimateConversion: EstimateConversion;
   serviceProfitability: ServiceProfitRow[];
-  jobMarginTrend: JobMarginPoint[];
+  jobMarginSnapshot: JobMarginPoint[];
+  jobMarginKind: "selected-range-snapshot";
   laborCostTrend: JobMarginPoint[];
   vendorSpend: Array<{ name: string; amount: number; count: number }>;
   recurringExpenses: Array<{
@@ -86,10 +87,6 @@ export type FinancialIntelligence = {
     cashFlow: string;
   };
 };
-
-function monthKey(date: Date) {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
 
 export function estimateConversionFromSource(
   estimates: readonly { status: string; createdAt: Date }[],
@@ -188,28 +185,28 @@ export function buildServiceProfitability(
   return all.sort((a, b) => (b.revenue ?? 0) - (a.revenue ?? 0));
 }
 
-export function buildJobMarginTrend(report: BuiltReport): JobMarginPoint[] {
-  const buckets = new Map<string, JobMarginPoint>();
+export function buildJobMarginRangeSnapshot(report: BuiltReport): JobMarginPoint[] {
+  let jobCount = 0;
+  let paidRevenue = 0;
+  let recordedMargin: number | null = 0;
   for (const job of report.jobProfitability) {
-    const key = monthKey(new Date());
-    // Job profitability rows do not carry a date; use paid revenue presence
-    // as a recorded snapshot for the current report range only.
-    const existing = buckets.get(key) ?? {
-      key,
-      label: report.range.label,
-      jobCount: 0,
-      paidRevenue: 0,
-      recordedMargin: 0,
-    };
-    existing.jobCount += 1;
-    existing.paidRevenue = roundMoney(existing.paidRevenue + job.paidRevenue);
-    if (job.recordedMargin == null) existing.recordedMargin = null;
-    else if (existing.recordedMargin != null) {
-      existing.recordedMargin = roundMoney(existing.recordedMargin + job.recordedMargin);
+    jobCount += 1;
+    paidRevenue = roundMoney(paidRevenue + job.paidRevenue);
+    if (job.recordedMargin == null) recordedMargin = null;
+    else if (recordedMargin != null) {
+      recordedMargin = roundMoney(recordedMargin + job.recordedMargin);
     }
-    buckets.set(key, existing);
   }
-  return [...buckets.values()];
+  if (jobCount === 0) return [];
+  return [
+    {
+      key: "selected-range",
+      label: report.range.label,
+      jobCount,
+      paidRevenue,
+      recordedMargin,
+    },
+  ];
 }
 
 export function buildKnownCashFlow(input: {
@@ -287,7 +284,8 @@ export function buildFinancialIntelligence(
     averageTicket: report.averageIssuedInvoice,
     estimateConversion: estimateConversionFromSource(source.estimates, report.range),
     serviceProfitability: buildServiceProfitability(source, report.range),
-    jobMarginTrend: buildJobMarginTrend(report),
+    jobMarginSnapshot: buildJobMarginRangeSnapshot(report),
+    jobMarginKind: "selected-range-snapshot",
     laborCostTrend: [
       {
         key: "current",

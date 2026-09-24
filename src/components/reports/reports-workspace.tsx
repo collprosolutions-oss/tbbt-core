@@ -93,6 +93,12 @@ export function ReportsWorkspace({ area, rangePreset, from, to, report, intellig
               </p>
               <p>{intelligence.cashFlow.message}</p>
               <p>Recurring expense flags on file: {intelligence.recurringExpenses.length}</p>
+              <p>
+                Job margin snapshot ({intelligence.jobMarginKind}):{" "}
+                {intelligence.jobMarginSnapshot[0]
+                  ? `${intelligence.jobMarginSnapshot[0].jobCount} jobs in ${intelligence.jobMarginSnapshot[0].label}`
+                  : "no recorded jobs in this range"}
+              </p>
               <Button asChild size="sm" variant="outline">
                 <Link href="/business-health">Open BSOS recommendations</Link>
               </Button>

@@ -9,7 +9,6 @@ import { ensureFirstRunSetupSchema } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
 import { ensureStarterServicesSetupSchema } from "@/lib/starter-services-setup";
 import { ensureWebsiteSetupSchema } from "@/lib/website-setup";
-import { ensureOwnerIntelligenceSchema } from "@/lib/owner-intelligence-schema";
 import { ensureSaasBillingSchema } from "@/lib/saas-billing";
 
 export type WorkspaceContext = {
@@ -37,7 +36,6 @@ export async function requireWorkspace(): Promise<WorkspaceContext> {
   await ensureSaasBillingSchema(prisma);
   await ensureBusinessTimezoneSchema(prisma);
   await ensureCustomerMessagingSchema(prisma);
-  await ensureOwnerIntelligenceSchema(prisma);
   const memberships = await loadActiveWorkspaceMemberships(prisma, user.id);
 
   if (memberships.length === 0) {

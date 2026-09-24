@@ -5,8 +5,10 @@ import {
   customerSmsIdempotencyKey,
   estimateReadySmsBody,
   invoiceReadySmsBody,
+  jobFollowUpSmsBody,
   paymentReminderSmsBody,
   referralRequestSmsBody,
+  repeatFollowUpSmsBody,
   reviewReminderSmsBody,
   reviewRequestSmsBody,
 } from "@/lib/customer-messaging/bodies";
@@ -252,6 +254,50 @@ export async function attemptReferralRequestSms(
       requestText: input.requestText,
       businessName: input.businessName,
     }),
+    initiatedByMembershipId: input.initiatedByMembershipId,
+  });
+}
+
+export async function attemptJobFollowUpSms(
+  db: Db,
+  input: {
+    businessId: string;
+    followUpId: string;
+    customerId: string;
+    businessName: string;
+    initiatedByMembershipId?: string | null;
+  },
+) {
+  return safeAttemptCustomerSms(db, {
+    businessId: input.businessId,
+    customerId: input.customerId,
+    purpose: "JOB_FOLLOW_UP",
+    relatedType: "CUSTOMER_FOLLOW_UP",
+    relatedId: input.followUpId,
+    idempotencyKey: customerSmsIdempotencyKey("JOB_FOLLOW_UP", input.followUpId),
+    body: jobFollowUpSmsBody({ businessName: input.businessName }),
+    initiatedByMembershipId: input.initiatedByMembershipId,
+  });
+}
+
+export async function attemptRepeatFollowUpSms(
+  db: Db,
+  input: {
+    businessId: string;
+    followUpId: string;
+    customerId: string;
+    businessName: string;
+    initiatedByMembershipId?: string | null;
+  },
+) {
+  return safeAttemptCustomerSms(db, {
+    businessId: input.businessId,
+    customerId: input.customerId,
+    purpose: "REPEAT_FOLLOW_UP",
+    relatedType: "CUSTOMER_FOLLOW_UP",
+    relatedId: input.followUpId,
+    idempotencyKey: customerSmsIdempotencyKey("REPEAT_FOLLOW_UP", input.followUpId),
+    body: repeatFollowUpSmsBody({ businessName: input.businessName }),
     initiatedByMembershipId: input.initiatedByMembershipId,
   });
 }

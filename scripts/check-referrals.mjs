@@ -22,6 +22,8 @@ const { REQUEST_SEND_DISCLAIMER, NO_REVIEW_GATING_MESSAGE, suggestedRequestText 
 const {
   createReviewRequest,
   advanceReviewRequestStatus,
+  markReviewRequestSentManually,
+  sendReviewRequest,
   sendReviewRequestReminder,
   stopReviewRequestReminders,
   ReviewsError,
@@ -32,6 +34,10 @@ const {
   cancelReferralRequest,
   recordReferral,
   createCustomerFollowUp,
+  sendCustomerFollowUp,
+  markCustomerFollowUpSentManually,
+  sendReferralRequest,
+  markReferralRequestSentManually,
   cancelCustomerFollowUp,
   ReferralError,
   suggestedReferralText,
@@ -230,10 +236,17 @@ try {
 
   const ready = await advanceReferralRequest(prisma, ownerA, { requestId: referralRequest.id });
   check("DRAFT advances to READY", ready.status === "READY");
-  const sent = await advanceReferralRequest(prisma, ownerA, { requestId: referralRequest.id });
-  check("READY advances to SENT even when adapters are disconnected", sent.status === "SENT");
+  const failedSend = await sendReferralRequest(prisma, ownerA, { requestId: referralRequest.id });
+  check("READY stays FAILED when adapters are disconnected", failedSend.status === "FAILED");
+  check(
+    "Referral send attempts email and SMS",
+    (failedSend.lastSmsStatus === "NOT_SENT" || failedSend.lastSmsStatus === "BLOCKED") &&
+      (failedSend.lastEmailStatus === "NOT_CONFIGURED" || failedSend.lastEmailStatus === "SKIPPED_NO_EMAIL"),
+  );
   const surviving = await prisma.referralRequest.findUnique({ where: { id: referralRequest.id } });
-  check("Referral row survives provider failure", surviving?.status === "SENT");
+  check("Referral row survives provider failure", surviving?.id === referralRequest.id && surviving.status === "FAILED");
+  const sent = await markReferralRequestSentManually(prisma, ownerA, { requestId: referralRequest.id });
+  check("Owner can mark a referral request sent manually", sent.status === "SENT");
 
   try {
     await advanceReferralRequest(prisma, ownerA, { requestId: referralRequest.id });
@@ -281,7 +294,17 @@ try {
     kind: "JOB_COMPLETE",
   });
   check("Follow-up row is created before any send", followUp.status === "OPEN" && followUp.businessId === businessA.id);
-  const stopped = await cancelCustomerFollowUp(prisma, ownerA, { followUpId: followUp.id });
+  const followUpFailed = await sendCustomerFollowUp(prisma, ownerA, { followUpId: followUp.id });
+  check("Follow-up send stays FAILED when adapters are disconnected", followUpFailed.status === "FAILED");
+  check("Follow-up row survives provider failure", followUpFailed.id === followUp.id);
+  const followUpSent = await markCustomerFollowUpSentManually(prisma, ownerA, { followUpId: followUp.id });
+  check("Owner can mark a follow-up sent manually", followUpSent.status === "SENT");
+  const openFollowUp = await createCustomerFollowUp(prisma, ownerA, {
+    customerId: customerA.id,
+    jobId: jobA.id,
+    kind: "REPEAT",
+  });
+  const stopped = await cancelCustomerFollowUp(prisma, ownerA, { followUpId: openFollowUp.id });
   check("Owner can stop a follow-up", stopped.status === "CANCELLED" && Boolean(stopped.cancelledAt));
 
   try {
@@ -296,11 +319,13 @@ try {
     jobId: jobA.id,
   });
   await advanceReviewRequestStatus(prisma, ownerA, { requestId: reviewRequest.id });
-  const reviewSent = await advanceReviewRequestStatus(prisma, ownerA, { requestId: reviewRequest.id });
+  const reviewFailed = await sendReviewRequest(prisma, ownerA, { requestId: reviewRequest.id });
   check(
-    "Review request is recorded as SENT when adapters are disconnected",
-    reviewSent.status === "SENT",
+    "Review request stays FAILED when adapters are disconnected",
+    reviewFailed.status === "FAILED",
   );
+  const reviewSent = await markReviewRequestSentManually(prisma, ownerA, { requestId: reviewRequest.id });
+  check("Review request SENT requires a connected channel or a manual mark", reviewSent.status === "SENT");
   const firstReminder = await sendReviewRequestReminder(prisma, ownerA, { requestId: reviewRequest.id });
   check("First reminder increments the count", firstReminder.reminderCount === 1);
   const secondReminder = await sendReviewRequestReminder(prisma, ownerA, { requestId: reviewRequest.id });
@@ -320,7 +345,7 @@ try {
     customerId: customerA2.id,
   });
   await advanceReviewRequestStatus(prisma, ownerA, { requestId: otherRequest.id });
-  await advanceReviewRequestStatus(prisma, ownerA, { requestId: otherRequest.id });
+  await markReviewRequestSentManually(prisma, ownerA, { requestId: otherRequest.id });
   await stopReviewRequestReminders(prisma, ownerA, { requestId: otherRequest.id });
   try {
     await sendReviewRequestReminder(prisma, ownerA, { requestId: otherRequest.id });

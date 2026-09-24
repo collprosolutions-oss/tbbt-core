@@ -8,8 +8,12 @@ import {
   cancelReferralRequest,
   createCustomerFollowUp,
   createReferralRequest,
+  markCustomerFollowUpSentManually,
+  markReferralRequestSentManually,
   recordReferral,
   referralErrorMessage,
+  sendCustomerFollowUp,
+  sendReferralRequest,
 } from "@/lib/referral-ops";
 import { sendReviewRequestReminder, stopReviewRequestReminders, reviewsErrorMessage } from "@/lib/reviews-ops";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
@@ -54,9 +58,46 @@ export async function advanceReferralRequestAction(
     const access = await requireOperatingBusinessAccess();
     await advanceReferralRequest(prisma, access, { requestId: readString(formData, "requestId") });
     refresh();
-    return { message: "Referral request advanced. Delivery uses connected adapters only." };
+    return { message: "Referral request marked ready. The customer has not been contacted." };
   } catch (error) {
     return { error: referralErrorMessage(error, "That referral request could not be updated.") };
+  }
+}
+
+export async function sendReferralRequestAction(
+  _prev: ReferralActionState,
+  formData: FormData,
+): Promise<ReferralActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const updated = await sendReferralRequest(prisma, access, {
+      requestId: readString(formData, "requestId"),
+    });
+    refresh();
+    return {
+      message:
+        updated.status === "SENT"
+          ? "Referral request sent through a connected adapter."
+          : "No connected email or SMS accepted the referral request. It is FAILED and can be retried or marked sent manually.",
+    };
+  } catch (error) {
+    return { error: referralErrorMessage(error, "That referral request could not be sent.") };
+  }
+}
+
+export async function markReferralRequestSentManuallyAction(
+  _prev: ReferralActionState,
+  formData: FormData,
+): Promise<ReferralActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    await markReferralRequestSentManually(prisma, access, {
+      requestId: readString(formData, "requestId"),
+    });
+    refresh();
+    return { message: "Referral request marked sent manually." };
+  } catch (error) {
+    return { error: referralErrorMessage(error, "That referral request could not be marked sent.") };
   }
 }
 
@@ -108,9 +149,46 @@ export async function createFollowUpAction(
       notes: readString(formData, "notes") || undefined,
     });
     refresh();
-    return { message: "Follow-up recorded. Delivery uses connected adapters only." };
+    return { message: "Follow-up saved. It has not been sent." };
   } catch (error) {
     return { error: referralErrorMessage(error, "That follow-up could not be saved.") };
+  }
+}
+
+export async function sendFollowUpAction(
+  _prev: ReferralActionState,
+  formData: FormData,
+): Promise<ReferralActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const updated = await sendCustomerFollowUp(prisma, access, {
+      followUpId: readString(formData, "followUpId"),
+    });
+    refresh();
+    return {
+      message:
+        updated.status === "SENT"
+          ? "Follow-up sent through a connected adapter."
+          : "No connected email or SMS accepted the follow-up. It is FAILED and can be retried or marked sent manually.",
+    };
+  } catch (error) {
+    return { error: referralErrorMessage(error, "That follow-up could not be sent.") };
+  }
+}
+
+export async function markFollowUpSentManuallyAction(
+  _prev: ReferralActionState,
+  formData: FormData,
+): Promise<ReferralActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    await markCustomerFollowUpSentManually(prisma, access, {
+      followUpId: readString(formData, "followUpId"),
+    });
+    refresh();
+    return { message: "Follow-up marked sent manually." };
+  } catch (error) {
+    return { error: referralErrorMessage(error, "That follow-up could not be marked sent.") };
   }
 }
 

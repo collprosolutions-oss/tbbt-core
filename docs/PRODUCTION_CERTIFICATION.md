@@ -37,12 +37,12 @@ Do not invent passing browser results. The isolated harness is
 - SaaS Stripe (`STRIPE_SAAS_PRICE_ID`, `TBBT_SAAS_BILLING_ADAPTER`) is separate from Connect payments (`STRIPE_SECRET_KEY`, `TBBT_PAYMENTS_ADAPTER`).
 - Provider failure must not delete core records (review / referral rows stay SENT).
 - Password recovery: `/forgot-password`, `/reset-password/[token]`.
-- R2 website uploads: `R2_*` in `.env.example`. Job photos may still use Vercel Blob.
+- R2 website uploads: `R2_*` in `.env.example`. Field job photos use private R2. Legacy historical job-photo rows may still store a Vercel Blob URL for read-only rendering.
 - Resend: unset `RESEND_API_KEY` / `EMAIL_FROM` is NOT_CONFIGURED, not a fake send.
 
 ## Explicit blockers
 
 - External Facebook / Instagram / Google publishing is **not connected**. Marketing never writes `PUBLISHED`.
 - Banking / accounting are **Not Connected**. TBBT will not invent a cash balance or tax conclusion.
-- Marketing AI assist is off unless `TBBT_MARKETING_AI_PROVIDER` is set. Template drafts are still available.
+- Marketing AI is not connected. Template drafts are available. An env string does not mean a provider is called.
 - This checklist does not replace a human production walkthrough on www.collproreno.com.

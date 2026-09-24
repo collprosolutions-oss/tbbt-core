@@ -108,6 +108,25 @@ try {
   check("Unpaid invoices become a recommendation", recs.some((row) => row.key === "collect-unpaid-invoices"));
   check("Recommendations include recorded facts", recs[0].facts.length > 0 && recs[0].kind === "recommendation");
 
+  const marginRecs = buildBsosRecommendations({
+    unpaidInvoices: { count: 0, amount: 0 },
+    sentEstimates: { count: 0 },
+    draftEstimates: { count: 0 },
+    unscheduledJobs: { count: 0 },
+    completedJobsWithoutReview: { count: 0 },
+    completedJobsReadyForMarketing: { count: 0 },
+    lowMarginJobs: { count: 1 },
+    missingWageEntries: { count: 0 },
+    availableCapacityDays: { count: 0 },
+    repeatCustomers: { count: 0 },
+    outsideAreaRequests: { count: 0 },
+    recurringExpenses: { count: 1, amount: 25 },
+    paidRevenue: { amount: 40 },
+    recordedExpenses: { amount: 80 },
+  });
+  check("Negative-margin jobs become a recommendation", marginRecs.some((row) => row.key === "review-low-margin-jobs"));
+  check("Recurring expenses become a recommendation", marginRecs.some((row) => row.key === "review-recurring-expenses"));
+
   const businessA = await prisma.business.create({
     data: { name: "Alpha BSOS", slug: `alpha-bsos-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
   });
@@ -155,6 +174,59 @@ try {
   check("Unpaid invoice fact appears", workspaceA.facts.unpaidInvoices.count === 1);
   check("Recommendation explains why", workspaceA.recommendations.some((row) => /SENT invoices/.test(row.why)));
 
+  const lossJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      jobId: lossJob.id,
+      status: "PAID",
+      total: 40,
+      paidAt: new Date(),
+    },
+  });
+  await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: ownerMem.id,
+      jobId: lossJob.id,
+      activityType: "JOB",
+      status: "APPROVED",
+      startedAt: new Date(),
+      endedAt: new Date(),
+      approvedHours: 4,
+      approvedHourlyWage: 25,
+      approvedLaborCost: 100,
+    },
+  });
+  await prisma.expense.create({
+    data: {
+      businessId: businessA.id,
+      occurredOn: new Date(),
+      description: "Shop insurance",
+      amount: 25,
+      category: "OTHER",
+      vendor: "Insurer",
+      recurring: true,
+    },
+  });
+  const workspaceA2 = await loadBsosWorkspace(prisma, businessA.id);
+  check("Low-margin jobs come from recorded financials", workspaceA2.facts.lowMarginJobs.count === 1);
+  check("Recurring expenses come from recorded financials", workspaceA2.facts.recurringExpenses.count === 1 && workspaceA2.facts.recurringExpenses.amount === 25);
+  check(
+    "Negative-margin recommendation fires from recorded jobs",
+    workspaceA2.recommendations.some((row) => row.key === "review-low-margin-jobs"),
+  );
+  check(
+    "Recurring-expense recommendation fires from recorded expenses",
+    workspaceA2.recommendations.some((row) => row.key === "review-recurring-expenses"),
+  );
+
   const goal = await createBusinessGoal(prisma, ownerA, { title: "Collect overdue invoices", recommendationKey: "collect-unpaid-invoices" });
   check("Goal is tenant-scoped", goal.businessId === businessA.id);
   try {
@@ -174,6 +246,8 @@ try {
   const workspaceB = await loadBsosWorkspace(prisma, businessB.id);
   check("Business B does not see A's unpaid invoice", workspaceB.facts.unpaidInvoices.count === 0);
   check("Business B does not see A's goal", workspaceB.goals.length === 0);
+  check("Business B does not see A's low-margin job", workspaceB.facts.lowMarginJobs.count === 0);
+  check("Business B does not see A's recurring expense", workspaceB.facts.recurringExpenses.count === 0);
 
   try {
     await createBusinessActionItem(prisma, ownerB, {

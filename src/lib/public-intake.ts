@@ -101,6 +101,12 @@ export type PublicIntakeDb = {
       select: { id: true };
     }) => Promise<{ id: string } | null>;
   };
+  marketingCampaign: {
+    findFirst: (args: {
+      where: { id: string; businessId: string };
+      select: { id: true };
+    }) => Promise<{ id: string } | null>;
+  };
   serviceCatalogItem: {
     findMany: (args: {
       where: { id: { in: string[] }; businessId: string; active: boolean };
@@ -316,7 +322,7 @@ async function createPublicServiceRequestInner(
     configuredRegion: configuredAreas.find((area) => area.region)?.region ?? null,
   });
   const leadSource = parseLeadSource(input.leadSource, PUBLIC_DEFAULT_LEAD_SOURCE);
-  const campaignId = input.campaignId?.trim() || null;
+  let campaignId = input.campaignId?.trim() || null;
   const qualification = qualifyServiceAddress(configuredAreas, {
     city: structuredInput.city,
     postalCode: structuredInput.postalCode,
@@ -353,6 +359,14 @@ async function createPublicServiceRequestInner(
   });
   if (!business) {
     return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
+  }
+
+  if (campaignId) {
+    const campaign = await db.marketingCampaign.findFirst({
+      where: { id: campaignId, businessId: business.id },
+      select: { id: true },
+    });
+    campaignId = campaign?.id ?? null;
   }
 
   const catalogIds = parsed.tasks

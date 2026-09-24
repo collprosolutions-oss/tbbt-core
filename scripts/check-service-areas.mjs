@@ -26,8 +26,10 @@ const {
   matchServiceArea,
   qualifyServiceAddress,
   publicServiceCityPath,
+  resolvePublicLocalPage,
   slugifyLocalPagePart,
 } = await import("@/lib/service-areas");
+const { createPublicServiceRequest } = await import("@/lib/public-intake");
 const { upsertServiceArea, setServiceAreaEnabled, ServiceAreaError } = await import(
   "@/lib/service-area-ops"
 );
@@ -143,6 +145,33 @@ try {
   check(
     "Blank address stays UNKNOWN instead of inferring a jurisdiction",
     qualifyServiceAddress([reno], { city: "", postalCode: "" }).qualification === "UNKNOWN",
+  );
+  check(
+    "Unknown city/service combination is not a public page",
+    resolvePublicLocalPage({
+      citySlug: "nowhere",
+      serviceSlug: "ceiling-fan",
+      areas: [reno],
+      services: [{ name: "Ceiling fan", active: true }],
+    }) === null,
+  );
+  check(
+    "Disabled city is not a public page",
+    resolvePublicLocalPage({
+      citySlug: "reno",
+      serviceSlug: "ceiling-fan",
+      areas: [{ ...reno, enabled: false }],
+      services: [{ name: "Ceiling fan", active: true }],
+    }) === null,
+  );
+  check(
+    "Enabled city + known service resolves",
+    resolvePublicLocalPage({
+      citySlug: "reno",
+      serviceSlug: "ceiling-fan",
+      areas: [reno],
+      services: [{ name: "Ceiling fan", active: true }],
+    })?.service.name === "Ceiling fan",
   );
 
   const businessA = await prisma.business.create({
@@ -276,10 +305,55 @@ try {
   check("Website campaign rollup uses recorded paid revenue only", website?.paidRevenue === 220 && website?.campaignName === "Spring website");
   check("Historical request stays UNRECORDED instead of inventing a source", unrecorded?.requests === 1);
 
+  const campaignB = await createMarketingCampaign(prisma, ownerB, {
+    name: "Beta ads",
+    sourceKey: "GOOGLE",
+  });
+  const injected = await createPublicServiceRequest(prisma, {
+    slug: businessA.slug,
+    name: "Ada Public",
+    email: `ada-public-${randomUUID()}@example.com`,
+    phone: "",
+    address: "",
+    notes: "Need a fan",
+    catalogItemIds: [],
+    includeOther: true,
+    otherDescription: "Fan install",
+    campaignId: campaignB.id,
+    leadSource: "WEBSITE",
+  });
+  check("Public intake for A using B campaign still creates A's request", injected.ok === true);
+  const injectedRequest = injected.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: injected.requestId },
+        select: { id: true, businessId: true, campaignId: true, customerId: true },
+      })
+    : null;
+  check(
+    "Public A request does not store B's campaign ID",
+    injectedRequest?.businessId === businessA.id && injectedRequest.campaignId === null,
+  );
+  const injectedCustomer = injectedRequest
+    ? await prisma.customer.findUnique({
+        where: { id: injectedRequest.customerId },
+        select: { firstCampaignId: true, businessId: true },
+      })
+    : null;
+  check(
+    "Public A customer firstCampaignId is not B's campaign",
+    injectedCustomer?.businessId === businessA.id && injectedCustomer.firstCampaignId === null,
+  );
+  check(
+    "No A request references B's campaign",
+    (await prisma.serviceRequest.count({
+      where: { businessId: businessA.id, campaignId: campaignB.id },
+    })) === 0,
+  );
+
   const betaAreas = await prisma.serviceArea.findMany({ where: { businessId: businessB.id } });
   check("Business B does not see A's service areas", betaAreas.length === 0);
   const betaCampaigns = await prisma.marketingCampaign.findMany({ where: { businessId: businessB.id } });
-  check("Business B does not see A's campaigns", betaCampaigns.length === 0);
+  check("Business B does not see A's campaigns", betaCampaigns.length === 1 && betaCampaigns[0].id === campaignB.id);
 
   console.log(failures === 0 ? "\nAll service-area checks passed." : `\n${failures} service-area check(s) failed.`);
 } finally {

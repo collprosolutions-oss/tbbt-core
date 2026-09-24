@@ -41,8 +41,10 @@ const {
   advanceReviewResponseStatus,
   cancelReviewRequest,
   createReviewRequest,
+  markReviewRequestSentManually,
   recordReceivedReview,
   ReviewsError,
+  sendReviewRequest,
   updateReviewRequest,
   upsertReviewResponse,
 } = await import("@/lib/reviews-ops");
@@ -112,7 +114,7 @@ try {
   console.log("\nSTATIC — Reviews domain helpers");
   check("Invalid area falls back to overview", parseReviewArea("pipeline") === "overview");
   check("DRAFT advances to READY", nextRequestStatus("DRAFT") === "READY");
-  check("READY advances to SENT", nextRequestStatus("READY") === "SENT");
+  check("READY does not become SENT without delivery", nextRequestStatus("READY") === null);
   check("SENT has no fake external-send next step", nextRequestStatus("SENT") === null);
   check("DRAFT response advances to READY_FOR_REVIEW", nextResponseStatus("DRAFT") === "READY_FOR_REVIEW");
   check("READY_FOR_REVIEW advances to APPROVED", nextResponseStatus("READY_FOR_REVIEW") === "APPROVED");
@@ -302,11 +304,20 @@ try {
     afterCreate.opportunities.find((row) => row.jobId === job.id)?.requestStatus === "DRAFT",
   );
 
-  console.log("\nTEST — Review request lifecycle DRAFT → READY → SENT");
+  console.log("\nTEST — Review request lifecycle DRAFT → READY → send");
   const ready = await advanceReviewRequestStatus(prisma, ownerA, { requestId: draft.id });
   check("DRAFT → READY", ready.status === "READY");
-  const sent = await advanceReviewRequestStatus(prisma, ownerA, { requestId: draft.id });
-  check("READY → SENT", sent.status === "SENT");
+  const failedSend = await sendReviewRequest(prisma, ownerA, { requestId: draft.id });
+  check("Disconnected adapters leave the request FAILED", failedSend.status === "FAILED");
+  check("Failed send does not invent SENT", failedSend.requestedAt == null);
+  check(
+    "Failed send records channel statuses",
+    failedSend.lastEmailStatus === "NOT_CONFIGURED" || failedSend.lastEmailStatus === "SKIPPED_NO_EMAIL",
+  );
+  const survivingRequest = await prisma.reviewRequest.findUnique({ where: { id: draft.id } });
+  check("Review request row survives provider failure", survivingRequest?.id === draft.id && survivingRequest.status === "FAILED");
+  const sent = await markReviewRequestSentManually(prisma, ownerA, { requestId: draft.id });
+  check("Owner can mark sent manually", sent.status === "SENT");
   check("SENT records requestedAt", sent.requestedAt instanceof Date);
 
   await expectError(

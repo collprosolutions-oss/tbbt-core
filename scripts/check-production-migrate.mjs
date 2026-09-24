@@ -457,18 +457,29 @@ const ownerIntelligenceSchema = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers owner-intelligence schema skipped by migrate",
-  ownerIntelligenceSchema.includes("Preview shares Production and skips migrate") &&
-    ownerIntelligenceSchema.includes("ensureOwnerIntelligenceSchema") &&
-    ownerIntelligenceSchema.includes("OWNER_INTELLIGENCE_ENSURE_SQL") &&
-    ownerIntelligenceSchema.includes('ADD COLUMN IF NOT EXISTS "firstLeadSource"') &&
-    ownerIntelligenceSchema.includes("BusinessGoal") &&
-    ownerIntelligenceSchema.includes("ServiceArea") &&
-    ownerIntelligenceSchema.includes("ReferralRequest"),
+  "Owner-intelligence schema is migrate-only and does not run request-time DDL",
+  ownerIntelligenceSchema.includes("prisma-migrate") &&
+    !ownerIntelligenceSchema.includes("$executeRawUnsafe") &&
+    !ownerIntelligenceSchema.includes("OWNER_INTELLIGENCE_ENSURE_SQL") &&
+    !ownerIntelligenceSchema.includes("ensureOwnerIntelligenceSchema"),
 );
 check(
-  "Authenticated workspace load ensures owner-intelligence schema before Business SELECT",
-  workspaceLoader.includes("ensureOwnerIntelligenceSchema"),
+  "Authenticated workspace load does not run owner-intelligence DDL",
+  !workspaceLoader.includes("ensureOwnerIntelligenceSchema") &&
+    !workspaceLoader.includes("owner-intelligence-schema"),
+);
+
+const ownerIntelligenceFkMigration = readFileSync(
+  new URL("../prisma/migrations/20260924053000_owner_intelligence_fks/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Owner-intelligence FK migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(ownerIntelligenceFkMigration) &&
+    ownerIntelligenceFkMigration.includes('ReferralRequest_jobId_fkey') &&
+    ownerIntelligenceFkMigration.includes('CustomerFollowUp_customerId_fkey') &&
+    ownerIntelligenceFkMigration.includes('CustomerFollowUp_jobId_fkey') &&
+    ownerIntelligenceFkMigration.includes('CustomerFollowUp_createdByMembershipId_fkey'),
 );
 
 check(

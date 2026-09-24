@@ -2,9 +2,10 @@
  * Reviews workspace domain -- internal reputation workflow over real
  * TBBT completed jobs and recorded review activity.
  *
- * No Google/Facebook ingestion. No automatic SMS/email. SENT means the
- * owner recorded that a request was sent. Every eligible customer can
- * be asked for an honest review -- this module never review-gates.
+ * No Google/Facebook ingestion. SENT means a connected email/SMS channel
+ * accepted the delivery, or the owner marked the request sent manually.
+ * Every eligible customer can be asked for an honest review -- this
+ * module never review-gates.
  *
  * No next/headers dependency -- authorization/isolation check scripts
  * import these helpers directly.
@@ -49,6 +50,7 @@ export const REVIEW_REQUEST_STATUSES = [
   "DRAFT",
   "READY",
   "SENT",
+  "FAILED",
   "COMPLETED",
   "CANCELLED",
 ] as const;
@@ -57,7 +59,8 @@ export type ReviewRequestStatus = (typeof REVIEW_REQUEST_STATUSES)[number];
 export const REVIEW_REQUEST_STATUS_LABELS: Record<ReviewRequestStatus, string> = {
   DRAFT: "Draft",
   READY: "Ready",
-  SENT: "Recorded as sent",
+  SENT: "Sent",
+  FAILED: "Not sent",
   COMPLETED: "Review received",
   CANCELLED: "Cancelled",
 };
@@ -110,7 +113,7 @@ export const PLATFORMS_DISCONNECTED_MESSAGE =
   "No Google or Facebook review platform is connected. External review counts, ratings, and publishing are not available.";
 
 export const REQUEST_SEND_DISCLAIMER =
-  "Recording SENT attempts delivery through connected email and SMS adapters. If an adapter is not connected, the request is still recorded and you can copy the message. TBBT never claims a published external review.";
+  "Send attempts connected email and SMS adapters. SENT means a connected channel accepted the message, or the owner marked it sent manually. If adapters are not connected or every attempt fails, the request stays READY or FAILED. The row is kept. TBBT never claims a published external review.";
 
 export const RESPONSE_PUBLISH_DISCLAIMER =
   "Approving a response does not publish it. External reply posting is not available.";
@@ -145,8 +148,13 @@ export function parseReviewDate(raw: string | undefined): Date | null {
 
 export function nextRequestStatus(current: string): ReviewRequestStatus | null {
   if (current === "DRAFT") return "READY";
-  if (current === "READY") return "SENT";
   return null;
+}
+
+export const ACCEPTED_DELIVERY_STATUSES = ["QUEUED", "ACCEPTED", "SENT", "DELIVERED"] as const;
+
+export function channelDeliveryAccepted(status: string | null | undefined): boolean {
+  return Boolean(status && (ACCEPTED_DELIVERY_STATUSES as readonly string[]).includes(status));
 }
 
 export function nextResponseStatus(current: string): ReviewResponseStatus | null {
@@ -156,11 +164,23 @@ export function nextResponseStatus(current: string): ReviewResponseStatus | null
 }
 
 export function isActiveReviewRequestStatus(status: string): boolean {
-  return status === "DRAFT" || status === "READY" || status === "SENT" || status === "COMPLETED";
+  return (
+    status === "DRAFT" ||
+    status === "READY" ||
+    status === "FAILED" ||
+    status === "SENT" ||
+    status === "COMPLETED"
+  );
 }
 
 export function requestBlocksNewOpportunity(status: string): boolean {
-  return status === "DRAFT" || status === "READY" || status === "SENT" || status === "COMPLETED";
+  return (
+    status === "DRAFT" ||
+    status === "READY" ||
+    status === "FAILED" ||
+    status === "SENT" ||
+    status === "COMPLETED"
+  );
 }
 
 const NEGATIVE_RATING_THRESHOLD = 3;

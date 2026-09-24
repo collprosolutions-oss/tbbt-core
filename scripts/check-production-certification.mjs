@@ -28,7 +28,7 @@ const { CAPABILITIES, roleHasCapability, canAccessManagementConsole } = await im
 const { visibleAppNav } = await import("@/lib/nav");
 const { nextContentStatus } = await import("@/lib/marketing");
 const { BANK_NOT_CONNECTED_MESSAGE } = await import("@/lib/financial-intelligence");
-const { OWNER_INTELLIGENCE_ENSURE_SQL } = await import("@/lib/owner-intelligence-schema");
+const { OWNER_INTELLIGENCE_SCHEMA_SOURCE } = await import("@/lib/owner-intelligence-schema");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -127,12 +127,23 @@ try {
 
   const workspace = read("src/lib/workspace.ts");
   check(
-    "Authenticated workspace ensures owner-intelligence schema on preview",
-    workspace.includes("ensureOwnerIntelligenceSchema"),
+    "Authenticated workspace does not run owner-intelligence DDL",
+    !workspace.includes("ensureOwnerIntelligenceSchema") &&
+      !workspace.includes("owner-intelligence-schema"),
   );
   check(
-    "Preview ensure SQL is additive",
-    OWNER_INTELLIGENCE_ENSURE_SQL.every((sql) => /IF NOT EXISTS/.test(sql)),
+    "Owner-intelligence schema source is prisma migrate",
+    OWNER_INTELLIGENCE_SCHEMA_SOURCE === "prisma-migrate",
+  );
+  const localPage = read("src/app/hire/[slug]/in/[city]/[service]/page.tsx");
+  check(
+    "Invalid city/service local pages call notFound",
+    localPage.includes("notFound()") && localPage.includes("robots"),
+  );
+  const certDoc = read("docs/PRODUCTION_CERTIFICATION.md");
+  check(
+    "Production certification does not say new job photos use Vercel Blob",
+    /private R2/.test(certDoc) && !/Job photos may still use Vercel Blob/.test(certDoc),
   );
 
   const migration = read("prisma/migrations/20260924040000_add_owner_intelligence/migration.sql");
@@ -211,7 +222,7 @@ try {
   blocker("No browser walkthrough of signup → invoice → review was executed here.");
   blocker("Facebook / Instagram / Google publishing adapters are not connected; Marketing never fakes PUBLISHED.");
   blocker("Banking and accounting providers are Not Connected; cash-flow projected balance stays null.");
-  blocker("External marketing AI stays off unless TBBT_MARKETING_AI_PROVIDER is set.");
+  blocker("External marketing AI is not connected; template drafts only.");
   blocker("Resend / Twilio / R2 / live Stripe Connect+SaaS require production secrets that this local harness does not set.");
 
   console.log(

@@ -262,6 +262,25 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
     });
   }
 
+  if (facts.recurringExpenses.count > 0) {
+    items.push({
+      key: "review-recurring-expenses",
+      title: "Review recorded recurring expenses",
+      kind: "recommendation",
+      priority: 40,
+      why: "Recurring expense flags are on file. These are owner-recorded rows, not bank drafts.",
+      facts: [
+        {
+          key: "recurring",
+          label: "Recurring expenses",
+          value: `${facts.recurringExpenses.count} / ${facts.recurringExpenses.amount.toFixed(2)}`,
+          href: "/expenses",
+        },
+      ],
+      href: "/expenses",
+    });
+  }
+
   if (facts.unscheduledJobs.count > 0) {
     items.push({
       key: "schedule-unscheduled-jobs",

@@ -140,3 +140,26 @@ export function slugifyLocalPagePart(value: string) {
 export function publicServiceCityPath(slug: string, serviceSlug: string, citySlug: string) {
   return `/hire/${slug}/in/${citySlug}/${serviceSlug}`;
 }
+
+export function resolvePublicLocalPage<
+  TArea extends { enabled: boolean; kind: string; city: string | null; label: string },
+  TService extends { name: string; active?: boolean },
+>(input: {
+  citySlug: string;
+  serviceSlug: string;
+  areas: readonly TArea[];
+  services: readonly TService[];
+}): { city: TArea; service: TService } | null {
+  const city = input.areas.find(
+    (area) =>
+      area.enabled &&
+      area.kind === "CITY" &&
+      slugifyLocalPagePart(area.city || area.label) === input.citySlug,
+  );
+  const service = input.services.find(
+    (item) =>
+      slugifyLocalPagePart(item.name) === input.serviceSlug && item.active !== false,
+  );
+  if (!city || !service) return null;
+  return { city, service };
+}

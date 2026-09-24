@@ -22,6 +22,7 @@ export const CUSTOMER_MESSAGE_RELATED_TYPES = [
   "INVOICE",
   "REVIEW_REQUEST",
   "REFERRAL_REQUEST",
+  "CUSTOMER_FOLLOW_UP",
 ] as const;
 export type CustomerMessageRelatedType = (typeof CUSTOMER_MESSAGE_RELATED_TYPES)[number];
 

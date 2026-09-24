@@ -1,27 +1,26 @@
 /**
  * AI-assisted marketing draft architecture.
  *
- * External model providers are optional. When none is connected, TBBT
- * still builds an honest TEMPLATE draft from recorded job/service data.
- * Nothing here marks content PUBLISHED.
+ * No external model provider is called. TBBT builds an honest TEMPLATE
+ * draft from recorded job/service data. An env string never means a
+ * provider is connected. Nothing here marks content PUBLISHED.
  */
 
-export const MARKETING_DRAFT_MODES = ["TEMPLATE", "PROVIDER"] as const;
+export const MARKETING_DRAFT_MODES = ["TEMPLATE"] as const;
 export type MarketingDraftMode = (typeof MARKETING_DRAFT_MODES)[number];
 
 export const MARKETING_AI_DISCONNECTED_MESSAGE =
   "AI drafting is not connected. TBBT prepared a template from recorded job and service data only. Review and edit before approval.";
 
-export const MARKETING_AI_CONNECTED_MESSAGE =
-  "Provider draft assist is connected. Review the generated copy before it becomes ready for owner approval.";
+export const MARKETING_AI_NOT_CONNECTED_MESSAGE = MARKETING_AI_DISCONNECTED_MESSAGE;
 
-export function marketingAiProviderConnected(): boolean {
-  return Boolean(process.env.TBBT_MARKETING_AI_PROVIDER?.trim());
+export function marketingAiProviderConnected(): false {
+  return false;
 }
 
-/** Kept for existing checks: external AI is off unless a provider env is set. */
-export function marketingAiAssistAvailable(): boolean {
-  return marketingAiProviderConnected();
+/** External AI is not connected. Template drafts still work. */
+export function marketingAiAssistAvailable(): false {
+  return false;
 }
 
 export type MarketingDraftInput = {
@@ -55,43 +54,42 @@ export function draftMarketingContent(input: MarketingDraftInput): MarketingDraf
   const city = input.city?.trim();
   const identity = input.identityNotes?.trim();
   const photos = input.photoCount ?? 0;
-  const connected = marketingAiProviderConnected();
 
   if (input.contentType === "SERVICE_HIGHLIGHT") {
     return {
-      mode: connected ? "PROVIDER" : "TEMPLATE",
+      mode: "TEMPLATE",
       title: city ? `${work} in ${city}` : `${work} highlight`,
       body: `${voicePrefix(input)}${business} offers ${work}${city ? ` for homeowners in ${city}` : ""}. This draft uses recorded catalog and service-area data only.${identity ? ` ${identity}` : ""}`,
-      message: connected ? MARKETING_AI_CONNECTED_MESSAGE : MARKETING_AI_DISCONNECTED_MESSAGE,
+      message: MARKETING_AI_DISCONNECTED_MESSAGE,
       publishable: false,
     };
   }
 
   if (input.contentType === "BLOG_SEO") {
     return {
-      mode: connected ? "PROVIDER" : "TEMPLATE",
+      mode: "TEMPLATE",
       title: city ? `${work} in ${city}: what homeowners should know` : `${work}: what homeowners should know`,
       body: `${voicePrefix(input)}A local-page draft for ${business} about ${work}${city ? ` in ${city}` : ""}. This is an internal SEO draft — it is not published until an owner approves it and a connected website path exists.`,
-      message: connected ? MARKETING_AI_CONNECTED_MESSAGE : MARKETING_AI_DISCONNECTED_MESSAGE,
+      message: MARKETING_AI_DISCONNECTED_MESSAGE,
       publishable: false,
     };
   }
 
   if (input.contentType === "COMPLETED_JOB") {
     return {
-      mode: connected ? "PROVIDER" : "TEMPLATE",
+      mode: "TEMPLATE",
       title: `Completed ${work}`,
       body: `${voicePrefix(input)}${business} completed ${work}${city ? ` in ${city}` : ""}.${photos > 0 ? ` ${photos} marketing-approved photo${photos === 1 ? "" : "s"} can be attached.` : " No marketing-approved photos are attached yet."} Do not invent results that are not on the job record.`,
-      message: connected ? MARKETING_AI_CONNECTED_MESSAGE : MARKETING_AI_DISCONNECTED_MESSAGE,
+      message: MARKETING_AI_DISCONNECTED_MESSAGE,
       publishable: false,
     };
   }
 
   return {
-    mode: connected ? "PROVIDER" : "TEMPLATE",
+    mode: "TEMPLATE",
     title: `${business} update`,
     body: `${voicePrefix(input)}${business} update${city ? ` for ${city}` : ""}. Edit this draft before asking an owner to approve it.`,
-    message: connected ? MARKETING_AI_CONNECTED_MESSAGE : MARKETING_AI_DISCONNECTED_MESSAGE,
+    message: MARKETING_AI_DISCONNECTED_MESSAGE,
     publishable: false,
   };
 }

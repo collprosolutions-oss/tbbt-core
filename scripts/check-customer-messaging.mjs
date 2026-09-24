@@ -58,6 +58,8 @@ const { REQUEST_SEND_DISCLAIMER } = await import("@/lib/reviews");
 const {
   advanceReviewRequestStatus,
   createReviewRequest,
+  markReviewRequestSentManually,
+  sendReviewRequest,
 } = await import("@/lib/reviews-ops");
 const { sendDraftInvoiceIfNeeded } = await import("@/lib/complete-job-invoice");
 const { createPublicServiceRequest } = await import("@/lib/public-intake");
@@ -289,8 +291,9 @@ try {
       invoiceSrc.includes("attemptInvoiceReadySms"),
   );
   check(
-    "Review SENT still records internally and attempts SMS separately",
+    "Review send attempts adapters without claiming SENT on disconnect",
     reviewsOpsSrc.includes("attemptReviewRequestSms") &&
+      reviewsOpsSrc.includes('status: delivered ? "SENT" : "FAILED"') &&
       /connected email and SMS adapters/i.test(REQUEST_SEND_DISCLAIMER),
   );
   check(
@@ -587,17 +590,21 @@ try {
     requestText: "Would you share an honest review of our work?",
   });
   await advanceReviewRequestStatus(prisma, alpha.access, { requestId: reviewDraft.id });
-  const reviewSent = await advanceReviewRequestStatus(prisma, alpha.access, { requestId: reviewDraft.id });
+  const reviewFailed = await sendReviewRequest(prisma, alpha.access, { requestId: reviewDraft.id });
   const reviewComms = await listCustomerCommunications(prisma, {
     businessId: alpha.business.id,
     customerId: customerA.id,
   });
   const reviewSms = reviewComms.filter((row) => row.purpose === "REVIEW_REQUEST");
-  check("Review request SENT is still owner-recorded", reviewSent.status === "SENT");
+  check("Disconnected send leaves the review request FAILED", reviewFailed.status === "FAILED");
   check(
     "Unavailable messaging leaves review SMS NOT_SENT or BLOCKED",
     reviewSms.length === 1 && (reviewSms[0].status === "NOT_SENT" || reviewSms[0].status === "BLOCKED"),
   );
+  const reviewSent = await markReviewRequestSentManually(prisma, alpha.access, {
+    requestId: reviewDraft.id,
+  });
+  check("Owner can mark a review request sent manually", reviewSent.status === "SENT");
   check(
     "Review disclaimer is honest about connected adapters",
     /connected email and SMS adapters/i.test(REQUEST_SEND_DISCLAIMER),

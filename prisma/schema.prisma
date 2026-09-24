@@ -338,6 +338,7 @@ model Membership {
   createdCampaigns                MarketingCampaign[]     @relation("MarketingCampaignCreator")
   createdServiceAreas             ServiceArea[]           @relation("ServiceAreaCreator")
   createdReferralRequests         ReferralRequest[]       @relation("ReferralRequestCreator")
+  createdCustomerFollowUps        CustomerFollowUp[]      @relation("CustomerFollowUpCreator")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -371,6 +372,7 @@ model Customer {
   reviews         Review[]
   communications  CustomerCommunication[]
   referralRequests ReferralRequest[]
+  customerFollowUps CustomerFollowUp[]
   referralsGiven   Referral[] @relation("ReferralSourceCustomer")
   referralsReceived Referral[] @relation("ReferralReferredCustomer")
 
@@ -841,6 +843,8 @@ model Job {
   marketingContents       MarketingContent[]
   reviewRequests          ReviewRequest[]
   reviews                 Review[]
+  referralRequests        ReferralRequest[]
+  customerFollowUps       CustomerFollowUp[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -2137,24 +2141,28 @@ model ReferralRequest {
   businessId            String
   customerId            String
   jobId                 String?
-  /// DRAFT | READY | SENT | COMPLETED | CANCELLED
+  /// DRAFT | READY | SENT | FAILED | COMPLETED | CANCELLED
   status                String    @default("DRAFT")
   requestText           String    @default("")
   notes                 String?
   requestedAt           DateTime?
   remindersStoppedAt    DateTime?
+  lastEmailStatus       String?
+  lastSmsStatus         String?
   createdByMembershipId String
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
   business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
   customer  Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  job       Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
   createdBy Membership @relation("ReferralRequestCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
   referrals Referral[]
 
   @@index([businessId])
   @@index([businessId, status])
   @@index([customerId])
+  @@index([jobId])
 }
 
 /// Recorded referral source. Never invents a referred customer.
@@ -2191,17 +2199,25 @@ model CustomerFollowUp {
   jobId                 String?
   /// JOB_COMPLETE | REPEAT
   kind                  String
-  /// OPEN | SENT | CANCELLED
+  /// OPEN | SENT | FAILED | CANCELLED
   status                String    @default("OPEN")
   notes                 String    @default("")
   cancelledAt           DateTime?
+  sentAt                DateTime?
+  lastEmailStatus       String?
+  lastSmsStatus         String?
   createdByMembershipId String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer  Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  job       Job?        @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  createdBy Membership? @relation("CustomerFollowUpCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
 
   @@index([businessId])
   @@index([businessId, kind, status])
   @@index([customerId])
+  @@index([jobId])
+  @@index([createdByMembershipId])
 }

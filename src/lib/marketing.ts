@@ -151,7 +151,7 @@ export const SOCIAL_MANUAL_COPY_MESSAGE =
 export const COMING_NEXT_MESSAGE =
   "Coming next. This area is reserved for a later Marketing step and is not fabricating data.";
 
-/** External AI provider only. Template drafts still work when this is false. */
+/** External AI is not connected. Template drafts still work. */
 export function marketingAiAssistAvailable(): boolean {
   return providerAssistAvailable();
 }

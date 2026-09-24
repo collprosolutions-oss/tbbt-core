@@ -157,6 +157,11 @@ try {
   const range = resolveReportRange("all", undefined, undefined, new Date());
   const report = buildReport(sourceA, range);
   const intel = buildFinancialIntelligence(sourceA, report, new Date("2026-09-01"));
+  check("Job margin is a selected-range snapshot, not a dated trend", intel.jobMarginKind === "selected-range-snapshot");
+  check(
+    "Job margin snapshot uses the selected report range label",
+    intel.jobMarginSnapshot.every((row) => row.key === "selected-range" && row.label === report.range.label),
+  );
   check("Bank and accounting stay Not Connected", intel.bankConnected === false && intel.accountingConnected === false);
   check("Projected balance is never invented", intel.cashFlow.projectedBalance === null);
   check("Outstanding receivables use SENT invoices", intel.outstandingReceivables.count === 1 && intel.outstandingReceivables.amount === 75);

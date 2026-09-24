@@ -33,6 +33,7 @@ const {
   nextContentStatus,
   parseMarketingArea,
 } = await import("@/lib/marketing");
+const { draftMarketingContent } = await import("@/lib/marketing-draft");
 const {
   createMarketingContent,
   grantJobPhotoMarketingPermission,
@@ -113,6 +114,15 @@ try {
   check("READY_FOR_REVIEW advances to APPROVED", nextContentStatus("READY_FOR_REVIEW") === "APPROVED");
   check("APPROVED has no next publish state", nextContentStatus("APPROVED") === null);
   check("AI assist is not enabled in this step", marketingAiAssistAvailable() === false);
+  const previousAiEnv = process.env.TBBT_MARKETING_AI_PROVIDER;
+  process.env.TBBT_MARKETING_AI_PROVIDER = "openai";
+  check(
+    "Env string does not claim a connected provider",
+    marketingAiAssistAvailable() === false &&
+      draftMarketingContent({ contentType: "GENERAL_POST", businessName: "CollPro" }).mode === "TEMPLATE",
+  );
+  if (previousAiEnv == null) delete process.env.TBBT_MARKETING_AI_PROVIDER;
+  else process.env.TBBT_MARKETING_AI_PROVIDER = previousAiEnv;
   check("FOUNDER_PAGE_KEYS includes marketing", FOUNDER_PAGE_KEYS.includes("marketing"));
   check("Marketing has 4 KPI cards", KPI_CARD_COUNTS.marketing === 4);
   check(

@@ -10,7 +10,9 @@ import {
   coachSummary,
   type BsosFacts,
 } from "@/lib/bsos";
-import { asNumber } from "@/lib/reports";
+import { buildFinancialIntelligence } from "@/lib/financial-intelligence";
+import { asNumber, buildReport, resolveReportRange } from "@/lib/reports";
+import { loadReportSource } from "@/lib/reports-data";
 import { isPaidActivity } from "@/lib/time-cards";
 
 export async function loadBsosFacts(
@@ -36,6 +38,7 @@ export async function loadBsosFacts(
     settings,
     paidInvoices,
     expenses,
+    reportSource,
     outsideArea,
     customers,
     jobs,
@@ -56,7 +59,7 @@ export async function loadBsosFacts(
       },
     }),
     prisma.reviewRequest.findMany({
-      where: { ...scope, status: { in: ["DRAFT", "READY", "SENT", "COMPLETED"] } },
+      where: { ...scope, status: { in: ["DRAFT", "READY", "FAILED", "SENT", "COMPLETED"] } },
       select: { jobId: true },
     }),
     prisma.marketingContent.findMany({
@@ -90,6 +93,7 @@ export async function loadBsosFacts(
       where: { ...scope, voidedAt: null },
       _sum: { amount: true },
     }),
+    loadReportSource(prisma, businessId),
     prisma.serviceRequest.count({
       where: { ...scope, serviceAreaQualification: "OUTSIDE_PREFERRED" },
     }),
@@ -151,6 +155,17 @@ export async function loadBsosFacts(
     return (completedByCustomer.get(customer.id) ?? 0) > 1 || (paidByCustomer.get(customer.id) ?? 0) > 1;
   }).length;
 
+  const range = resolveReportRange("all", undefined, undefined, now);
+  const report = buildReport(reportSource, range);
+  const intel = buildFinancialIntelligence(reportSource, report, now);
+  const lowMarginJobs = report.jobProfitability.filter(
+    (job) => job.recordedMargin != null && job.recordedMargin < 0,
+  ).length;
+  const recurring = {
+    count: intel.recurringExpenses.length,
+    amount: intel.recurringExpenses.reduce((sum, row) => sum + row.amount, 0),
+  };
+
   return {
     unpaidInvoices: {
       count: unpaid.length,
@@ -161,12 +176,12 @@ export async function loadBsosFacts(
     unscheduledJobs: { count: unscheduledJobs },
     completedJobsWithoutReview: { count: completedJobsWithoutReview },
     completedJobsReadyForMarketing: { count: completedJobsReadyForMarketing },
-    lowMarginJobs: { count: 0 },
+    lowMarginJobs: { count: lowMarginJobs },
     missingWageEntries: { count: missingWageEntries + memberships.filter((row) => row.hourlyWage == null).length },
     availableCapacityDays: { count: availableCapacityDays },
     repeatCustomers: { count: repeatCustomers },
     outsideAreaRequests: { count: outsideArea },
-    recurringExpenses: { count: 0, amount: 0 },
+    recurringExpenses: { count: recurring.count, amount: recurring.amount },
     paidRevenue: { amount: asNumber(paidInvoices._sum.total) },
     recordedExpenses: { amount: asNumber(expenses._sum.amount) },
   };

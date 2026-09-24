@@ -165,7 +165,8 @@ export type TransactionalEmailKind =
   | "request"
   | "password-reset"
   | "review"
-  | "referral";
+  | "referral"
+  | "follow-up";
 
 /**
  * Password-reset mail is sent once per issued token. The key is the
@@ -178,6 +179,14 @@ export function passwordResetIdempotencyKey(userId: string, tokenId: string) {
 
 export function reviewRequestEmailIdempotencyKey(reviewRequestId: string, attemptKey = "sent") {
   return `review-request/${reviewRequestId}/${attemptKey}`;
+}
+
+export function referralRequestEmailIdempotencyKey(referralRequestId: string, attemptKey = "sent") {
+  return `referral-request/${referralRequestId}/${attemptKey}`;
+}
+
+export function followUpEmailIdempotencyKey(followUpId: string, attemptKey = "sent") {
+  return `customer-follow-up/${followUpId}/${attemptKey}`;
 }
 
 export function transactionalEmailFailureMessage(kind: TransactionalEmailKind) {
@@ -201,6 +210,9 @@ export function transactionalEmailFailureMessage(kind: TransactionalEmailKind) {
   }
   if (kind === "referral") {
     return "The referral request email could not be sent.";
+  }
+  if (kind === "follow-up") {
+    return "The follow-up email could not be sent.";
   }
   return "The team invitation email could not be sent.";
 }
