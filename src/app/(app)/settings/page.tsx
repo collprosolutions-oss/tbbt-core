@@ -8,6 +8,7 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { requireManagementPageAccess, type BusinessAccess } from "@/lib/access";
 import { listUserSessions } from "@/lib/account-security";
+import { isOffboardingBillingRetryAvailable } from "@/lib/offboarding";
 import { getSessionUser } from "@/lib/auth";
 import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { checkFounderAccess } from "@/lib/founder-access";
@@ -206,6 +207,10 @@ async function loadSettingsSecurity(access: BusinessAccess) {
         currentSessionId: session.sessionId,
       })
     : [];
+  const saasSubscription = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: access.businessId },
+    select: { stripeSubscriptionId: true, cancelAtPeriodEnd: true },
+  });
   const team = await prisma.membership.findMany({
     where: {
       businessId: access.businessId,
@@ -240,6 +245,12 @@ async function loadSettingsSecurity(access: BusinessAccess) {
       role: member.role,
     })),
     offboardingRequestedAt: access.workspace.business.offboardingRequestedAt?.toISOString() ?? null,
+    billingRetryAvailable: isOffboardingBillingRetryAvailable({
+      offboardingRequestedAt: access.workspace.business.offboardingRequestedAt,
+      stripeSubscriptionId: saasSubscription?.stripeSubscriptionId,
+      cancelAtPeriodEnd: saasSubscription?.cancelAtPeriodEnd,
+    }),
+    billingCancellationConfirmed: saasSubscription?.cancelAtPeriodEnd === true,
     canTransferOwnership: roleHasCapability(access.workspace.role, CAPABILITIES.TRANSFER_OWNERSHIP),
     canRequestOffboarding: roleHasCapability(access.workspace.role, CAPABILITIES.REQUEST_OFFBOARDING),
   };

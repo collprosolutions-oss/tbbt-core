@@ -868,6 +868,8 @@ function SectionBody(props: SettingsWorkspaceProps) {
             <OffboardingForm
               alreadyRequested={Boolean(props.security.offboardingRequestedAt)}
               totpEnabled={props.security.totpEnabled}
+              billingRetryAvailable={props.security.billingRetryAvailable}
+              billingCancellationConfirmed={props.security.billingCancellationConfirmed}
             />
           </div>
         ) : (

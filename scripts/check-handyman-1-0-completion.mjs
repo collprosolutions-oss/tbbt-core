@@ -36,6 +36,8 @@ const { transferBusinessOwnershipOp, OWNERSHIP_TRANSFER_CONFIRMATION } = await i
 );
 const {
   requestBusinessOffboardingOp,
+  retryOffboardingBillingCancellationOp,
+  isOffboardingBillingRetryAvailable,
   OFFBOARDING_CONFIRMATION,
   OFFBOARDING_BILLING_NOT_SCHEDULED_MESSAGE,
   OFFBOARDING_BILLING_SCHEDULED_MESSAGE,
@@ -142,14 +144,34 @@ check(
     settingsSrc.includes("Tenant-scoped ZIP export is available"),
 );
 const offboardingSrc = readFileSync(new URL("../src/lib/offboarding.ts", import.meta.url), "utf8");
+const offboardingFormSrc = readFileSync(
+  new URL("../src/components/settings/offboarding-form.tsx", import.meta.url),
+  "utf8",
+);
 const securitySrc = readFileSync(new URL("../src/lib/account-security.ts", import.meta.url), "utf8");
 const ownershipSrc = readFileSync(new URL("../src/lib/ownership-transfer.ts", import.meta.url), "utf8");
+const ownerPhotoSrc = readFileSync(new URL("../src/app/actions/job-photo.ts", import.meta.url), "utf8");
 check(
   "Offboarding never writes cancelAtPeriodEnd locally",
   !offboardingSrc.includes("cancelAtPeriodEnd: true") &&
     offboardingSrc.includes("scheduleCancelAtPeriodEnd") &&
     offboardingSrc.includes("billingCancellationScheduled") &&
     offboardingSrc.includes("Billing cancellation is not yet scheduled."),
+);
+check(
+  "Offboarding retry is available after a recorded request until webhook confirmation",
+  offboardingSrc.includes("retryOffboardingBillingCancellationOp") &&
+    offboardingSrc.includes("isOffboardingBillingRetryAvailable") &&
+    offboardingFormSrc.includes("Retry billing cancellation") &&
+    offboardingFormSrc.includes("retryOffboardingBillingAction") &&
+    offboardingFormSrc.includes("billingRetryAvailable") &&
+    offboardingFormSrc.includes("billingCancellationConfirmed"),
+);
+check(
+  "Owner job-photo storage error names Cloudflare R2, not Vercel Blob",
+  ownerPhotoSrc.includes("Cloudflare R2") &&
+    !ownerPhotoSrc.includes("BLOB_READ_WRITE_TOKEN") &&
+    !ownerPhotoSrc.includes("Vercel Blob"),
 );
 check(
   "Offboarding and ownership require step-up proof before typed confirmation",
@@ -617,6 +639,119 @@ try {
       failedRow.cancelAtPeriodEnd === false &&
       Boolean(failedBusiness.offboardingRequestedAt) &&
       failProvider.subscriptions.get("sub_fail_1").cancelAtPeriodEnd === false,
+  );
+  const originalRequestedAt = failedBusiness.offboardingRequestedAt;
+  check(
+    "Retry remains available after provider cancel failure",
+    isOffboardingBillingRetryAvailable({
+      offboardingRequestedAt: originalRequestedAt,
+      stripeSubscriptionId: failedRow.stripeSubscriptionId,
+      cancelAtPeriodEnd: failedRow.cancelAtPeriodEnd,
+    }) === true,
+  );
+
+  let retryNeedsPassword = false;
+  try {
+    await retryOffboardingBillingCancellationOp(
+      prisma,
+      accessFor(failed.membership, failed.business),
+      { currentPassword: "" },
+      { provider: failProvider },
+    );
+  } catch (error) {
+    retryNeedsPassword = error.message === SENSITIVE_PASSWORD_REQUIRED;
+  }
+  check("Billing cancel retry requires current-password step-up", retryNeedsPassword);
+
+  const stillFailed = await retryOffboardingBillingCancellationOp(
+    prisma,
+    accessFor(failed.membership, failed.business),
+    { currentPassword: "password12" },
+    { provider: failProvider },
+  );
+  const stillFailedBusiness = await prisma.business.findUnique({
+    where: { id: failed.business.id },
+  });
+  check(
+    "Failed retry preserves the original offboarding timestamp",
+    stillFailed.billingCancellationScheduled === false &&
+      stillFailed.retryAvailable === true &&
+      stillFailedBusiness.offboardingRequestedAt.getTime() === originalRequestedAt.getTime(),
+  );
+
+  failProvider.failCancel = false;
+  const retried = await retryOffboardingBillingCancellationOp(
+    prisma,
+    accessFor(failed.membership, failed.business),
+    { currentPassword: "password12" },
+    { provider: failProvider },
+  );
+  const afterRetryRow = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: failed.business.id },
+  });
+  const afterRetryBusiness = await prisma.business.findUnique({
+    where: { id: failed.business.id },
+  });
+  check(
+    "Provider retry success does not write local cancelAtPeriodEnd",
+    retried.billingCancellationScheduled === true &&
+      retried.billingCancellationMessage === OFFBOARDING_BILLING_SCHEDULED_MESSAGE &&
+      afterRetryRow.cancelAtPeriodEnd === false &&
+      failProvider.subscriptions.get("sub_fail_1").cancelAtPeriodEnd === true &&
+      afterRetryBusiness.offboardingRequestedAt.getTime() === originalRequestedAt.getTime() &&
+      retried.retryAvailable === true &&
+      isOffboardingBillingRetryAvailable({
+        offboardingRequestedAt: afterRetryBusiness.offboardingRequestedAt,
+        stripeSubscriptionId: afterRetryRow.stripeSubscriptionId,
+        cancelAtPeriodEnd: afterRetryRow.cancelAtPeriodEnd,
+      }) === true,
+  );
+
+  const retryWebhook = await applyParsedSaasBillingEvent(
+    prisma,
+    parseSaasBillingEvent({
+      id: `evt_offboard_retry_${randomUUID()}`,
+      type: "customer.subscription.updated",
+      created: Math.floor(Date.now() / 1000),
+      data: {
+        object: {
+          object: "subscription",
+          id: "sub_fail_1",
+          status: "active",
+          customer: "cus_fail_1",
+          cancel_at_period_end: true,
+          items: {
+            data: [
+              {
+                current_period_end: 1_800_000_000,
+                price: { id: "price_saas_test" },
+              },
+            ],
+          },
+          metadata: {
+            purpose: SAAS_CHECKOUT_PURPOSE,
+            businessId: failed.business.id,
+          },
+        },
+      },
+    }),
+  );
+  const confirmedRow = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: failed.business.id },
+  });
+  const confirmedBusiness = await prisma.business.findUnique({
+    where: { id: failed.business.id },
+  });
+  check(
+    "Webhook confirmation is the only local cancelAtPeriodEnd write and hides retry",
+    retryWebhook.applied === true &&
+      confirmedRow.cancelAtPeriodEnd === true &&
+      confirmedBusiness.offboardingRequestedAt.getTime() === originalRequestedAt.getTime() &&
+      isOffboardingBillingRetryAvailable({
+        offboardingRequestedAt: confirmedBusiness.offboardingRequestedAt,
+        stripeSubscriptionId: confirmedRow.stripeSubscriptionId,
+        cancelAtPeriodEnd: confirmedRow.cancelAtPeriodEnd,
+      }) === false,
   );
 } catch (error) {
   console.error(error);

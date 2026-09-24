@@ -51,6 +51,8 @@ export type SettingsWorkspaceProps = {
       role: string;
     }>;
     offboardingRequestedAt: string | null;
+    billingRetryAvailable: boolean;
+    billingCancellationConfirmed: boolean;
     canTransferOwnership: boolean;
     canRequestOffboarding: boolean;
   };

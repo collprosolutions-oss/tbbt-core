@@ -1,27 +1,92 @@
 "use client";
 
 import { useActionState } from "react";
-import { requestOffboardingAction, type OffboardingActionState } from "@/app/actions/offboarding";
+import {
+  requestOffboardingAction,
+  retryOffboardingBillingAction,
+  type OffboardingActionState,
+} from "@/app/actions/offboarding";
 import { Button } from "@/components/ui/button";
-import { OFFBOARDING_CONFIRMATION, OFFBOARDING_PRESERVE_MESSAGE } from "@/lib/offboarding";
+import {
+  OFFBOARDING_BILLING_NOT_SCHEDULED_MESSAGE,
+  OFFBOARDING_BILLING_WEBHOOK_CONFIRMED_MESSAGE,
+  OFFBOARDING_CONFIRMATION,
+  OFFBOARDING_PRESERVE_MESSAGE,
+} from "@/lib/offboarding";
 
 export function OffboardingForm({
   alreadyRequested,
   totpEnabled,
+  billingRetryAvailable,
+  billingCancellationConfirmed,
 }: {
   alreadyRequested: boolean;
   totpEnabled: boolean;
+  billingRetryAvailable: boolean;
+  billingCancellationConfirmed: boolean;
 }) {
   const [state, action, pending] = useActionState(
     requestOffboardingAction,
     {} as OffboardingActionState,
   );
+  const [retryState, retryAction, retryPending] = useActionState(
+    retryOffboardingBillingAction,
+    {} as OffboardingActionState,
+  );
+
+  if (alreadyRequested && billingCancellationConfirmed) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Cancellation is recorded. {OFFBOARDING_BILLING_WEBHOOK_CONFIRMED_MESSAGE}
+      </p>
+    );
+  }
+
+  if (alreadyRequested && billingRetryAvailable) {
+    return (
+      <form action={retryAction} className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Cancellation is already recorded. Historical records remain on file.{" "}
+          {OFFBOARDING_BILLING_NOT_SCHEDULED_MESSAGE} Retry billing cancellation
+          only — this does not create a new offboarding request.
+        </p>
+        <label className="block text-sm">
+          Current password
+          <input
+            type="password"
+            name="currentPassword"
+            autoComplete="current-password"
+            className="mt-1 w-full rounded-md border px-3 py-2"
+            required
+          />
+        </label>
+        {totpEnabled ? (
+          <label className="block text-sm">
+            Authenticator or backup code
+            <input
+              name="totpOrBackupCode"
+              autoComplete="one-time-code"
+              className="mt-1 w-full rounded-md border px-3 py-2"
+              required
+            />
+          </label>
+        ) : null}
+        <Button type="submit" size="sm" variant="outline" disabled={retryPending}>
+          {retryPending ? "Retrying…" : "Retry billing cancellation"}
+        </Button>
+        {retryState.error ? <p className="text-sm text-destructive">{retryState.error}</p> : null}
+        {retryState.message ? (
+          <p className="text-sm text-muted-foreground">{retryState.message}</p>
+        ) : null}
+      </form>
+    );
+  }
 
   if (alreadyRequested) {
     return (
       <p className="text-sm text-muted-foreground">
-        Cancellation is already recorded. Historical records remain on file. Billing
-        cancellation is only shown as scheduled after Stripe confirms it.
+        Cancellation is already recorded. Historical records remain on file.{" "}
+        {OFFBOARDING_BILLING_NOT_SCHEDULED_MESSAGE}
       </p>
     );
   }

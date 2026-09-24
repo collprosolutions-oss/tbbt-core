@@ -6,6 +6,7 @@ import { ForbiddenError } from "@/lib/authorization";
 import {
   OffboardingError,
   requestBusinessOffboardingOp,
+  retryOffboardingBillingCancellationOp,
 } from "@/lib/offboarding";
 import { prisma } from "@/lib/prisma";
 
@@ -36,6 +37,30 @@ export async function requestOffboardingAction(
       message: result.recordsDeleted
         ? "Unexpected delete."
         : `Cancellation is recorded. Historical customers, jobs, invoices, payments, and time cards stay on file. ${result.billingCancellationMessage}`,
+    };
+  } catch (error) {
+    if (error instanceof OffboardingError || error instanceof ForbiddenError) {
+      return { error: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function retryOffboardingBillingAction(
+  _prev: OffboardingActionState,
+  formData: FormData,
+): Promise<OffboardingActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    const result = await retryOffboardingBillingCancellationOp(prisma, access, {
+      currentPassword: readString(formData, "currentPassword"),
+      totpOrBackupCode: readString(formData, "totpOrBackupCode") || undefined,
+    });
+    revalidatePath("/settings");
+    return {
+      message: result.recordsDeleted
+        ? "Unexpected delete."
+        : `The original cancellation request is unchanged. ${result.billingCancellationMessage}`,
     };
   } catch (error) {
     if (error instanceof OffboardingError || error instanceof ForbiddenError) {

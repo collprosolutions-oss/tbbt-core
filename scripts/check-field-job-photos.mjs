@@ -143,6 +143,12 @@ check(
     fieldActionSrc.includes("Ask an admin to connect platform file storage (Cloudflare R2)"),
 );
 check(
+  "Owner job-photo storage error names Cloudflare R2, not Vercel Blob",
+  ownerPhotoSrc.includes("Ask an admin to connect platform file storage (Cloudflare R2)") &&
+    !ownerPhotoSrc.includes("BLOB_READ_WRITE_TOKEN") &&
+    !ownerPhotoSrc.includes("Vercel Blob"),
+);
+check(
   "Private asset route derives viewer role and membership from the session workspace",
   privateRouteSrc.includes("access.workspace.role") &&
     privateRouteSrc.includes("access.workspace.membership.id") &&

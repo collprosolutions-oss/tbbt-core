@@ -22,7 +22,7 @@ function readString(formData: FormData, key: string) {
 }
 
 const STORAGE_NOT_CONFIGURED_ERROR =
-  "Photo storage isn't set up yet. Ask an admin to connect Vercel Blob (BLOB_READ_WRITE_TOKEN) before uploading job photos.";
+  "Photo storage isn't set up yet. Ask an admin to connect platform file storage (Cloudflare R2) before uploading job photos.";
 
 export async function addJobPhoto(
   _prev: JobPhotoActionState,
