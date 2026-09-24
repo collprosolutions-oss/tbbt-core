@@ -33,7 +33,12 @@ export type FieldJobPhotoScope = {
   membershipId: string;
 };
 
+export type ManagementJobPhotoScope = {
+  businessId: string;
+};
+
 const NOT_ASSIGNED_ERROR = "That job isn't assigned to you.";
+const NOT_FOUND_ERROR = "That job could not be found.";
 
 async function findAssignedJobForPhoto(
   db: PrismaClient,
@@ -121,28 +126,7 @@ export async function finalizeAssignedFieldJobPhoto(
     throw new StorageError("That photo is not a private field job photo.");
   }
 
-  const existing = await deps.db.jobPhoto.findFirst({
-    where: { storedAssetId: asset.id, businessId: field.businessId },
-    select: { id: true },
-  });
-  if (existing) {
-    return {
-      photo: await deps.db.jobPhoto.findUniqueOrThrow({ where: { id: existing.id } }),
-      asset,
-    };
-  }
-
-  const photo = await deps.db.jobPhoto.create({
-    data: {
-      businessId: field.businessId,
-      jobId: job.id,
-      stage: input.stage,
-      url: privateAssetPath(asset.id),
-      storedAssetId: asset.id,
-      caption: input.caption?.trim() || null,
-    },
-  });
-  return { photo, asset };
+  return persistReadyJobPhoto(deps.db, field.businessId, job.id, asset, input.stage, input.caption);
 }
 
 export async function abortAssignedFieldJobPhoto(
@@ -202,6 +186,188 @@ export async function putAssignedFieldJobPhotoFromBytes(
     });
   } catch (error) {
     await abortAssignedFieldJobPhoto(deps, field, {
+      jobId: input.jobId,
+      assetId: authorized.asset.id,
+    });
+    throw error;
+  }
+}
+
+async function findOwnedJobForPhoto(
+  db: PrismaClient,
+  businessId: string,
+  jobId: string,
+) {
+  return db.job.findFirst({
+    where: { id: jobId, businessId },
+    select: { id: true, businessId: true, customerId: true, propertyId: true },
+  });
+}
+
+async function persistReadyJobPhoto(
+  db: PrismaClient,
+  businessId: string,
+  jobId: string,
+  asset: { id: string },
+  stage: "BEFORE" | "DURING" | "AFTER",
+  caption?: string | null,
+) {
+  const existing = await db.jobPhoto.findFirst({
+    where: { storedAssetId: asset.id, businessId },
+    select: { id: true },
+  });
+  if (existing) {
+    return {
+      photo: await db.jobPhoto.findUniqueOrThrow({ where: { id: existing.id } }),
+      asset,
+    };
+  }
+
+  const photo = await db.jobPhoto.create({
+    data: {
+      businessId,
+      jobId,
+      stage,
+      url: privateAssetPath(asset.id),
+      storedAssetId: asset.id,
+      caption: caption?.trim() || null,
+    },
+  });
+  return { photo, asset };
+}
+
+/**
+ * OWNER/ADMIN job photos on the same private R2 path as field photos.
+ * Scoped to the workspace business, not Job.assignedMembershipId.
+ */
+export async function authorizeManagementJobPhoto(
+  deps: StorageServiceDeps,
+  management: ManagementJobPhotoScope,
+  input: {
+    jobId: string;
+    originalFilename: string;
+    mimeType: string;
+    fileSizeBytes: number;
+  },
+) {
+  const job = await findOwnedJobForPhoto(deps.db, management.businessId, input.jobId);
+  if (!job) {
+    throw new StorageAccessError(NOT_FOUND_ERROR);
+  }
+
+  const inspection = inspectRequestPhotoUpload({
+    type: input.mimeType,
+    name: input.originalFilename,
+    size: input.fileSizeBytes,
+  });
+  if (!inspection.ok) {
+    throw new StorageError(inspection.error);
+  }
+
+  return authorizeManagedUpload(deps, management.businessId, {
+    category: "JOB_PHOTO",
+    purpose: "management-job-photo",
+    originalFilename: inspection.fileName,
+    mimeType: inspection.mimeType,
+    fileSizeBytes: inspection.fileSizeBytes,
+    visibility: "PRIVATE",
+    jobId: job.id,
+    customerId: job.customerId,
+    propertyId: job.propertyId,
+  });
+}
+
+export async function finalizeManagementJobPhoto(
+  deps: StorageServiceDeps,
+  management: ManagementJobPhotoScope,
+  input: {
+    jobId: string;
+    assetId: string;
+    stage: "BEFORE" | "DURING" | "AFTER";
+    caption?: string | null;
+  },
+) {
+  const job = await findOwnedJobForPhoto(deps.db, management.businessId, input.jobId);
+  if (!job) {
+    throw new StorageAccessError(NOT_FOUND_ERROR);
+  }
+
+  const asset = await finalizeManagedUpload(deps, management.businessId, input.assetId);
+  if (
+    asset.visibility !== "PRIVATE" ||
+    asset.category !== "JOB_PHOTO" ||
+    asset.jobId !== job.id
+  ) {
+    throw new StorageError("That photo is not a private job photo.");
+  }
+
+  return persistReadyJobPhoto(
+    deps.db,
+    management.businessId,
+    job.id,
+    asset,
+    input.stage,
+    input.caption,
+  );
+}
+
+export async function abortManagementJobPhoto(
+  deps: StorageServiceDeps,
+  management: ManagementJobPhotoScope,
+  input: { jobId: string; assetId: string },
+) {
+  const job = await findOwnedJobForPhoto(deps.db, management.businessId, input.jobId);
+  if (!job) {
+    throw new StorageAccessError(NOT_FOUND_ERROR);
+  }
+  const pending = await deps.db.storedAsset.findFirst({
+    where: {
+      id: input.assetId,
+      businessId: management.businessId,
+      jobId: job.id,
+    },
+    select: { id: true },
+  });
+  if (!pending) {
+    throw new StorageAccessError(NOT_FOUND_ERROR);
+  }
+  return abortManagedUpload(deps, management.businessId, pending.id);
+}
+
+export async function putManagementJobPhotoFromBytes(
+  deps: StorageServiceDeps,
+  management: ManagementJobPhotoScope,
+  input: {
+    jobId: string;
+    originalFilename: string;
+    mimeType: string;
+    body: Buffer | Uint8Array;
+    stage: "BEFORE" | "DURING" | "AFTER";
+    caption?: string | null;
+  },
+) {
+  const authorized = await authorizeManagementJobPhoto(deps, management, {
+    jobId: input.jobId,
+    originalFilename: input.originalFilename,
+    mimeType: input.mimeType,
+    fileSizeBytes: input.body.byteLength,
+  });
+  const provider = await resolveStorageProvider(deps);
+  try {
+    await provider.putObject({
+      bucket: authorized.account.bucketName,
+      key: authorized.asset.storageKey,
+      body: input.body,
+      contentType: input.mimeType,
+    });
+    return finalizeManagementJobPhoto(deps, management, {
+      jobId: input.jobId,
+      assetId: authorized.asset.id,
+      stage: input.stage,
+      caption: input.caption,
+    });
+  } catch (error) {
+    await abortManagementJobPhoto(deps, management, {
       jobId: input.jobId,
       assetId: authorized.asset.id,
     });

@@ -71,9 +71,13 @@ export type {
 export {
   FIELD_JOB_PHOTO_MAX_BYTES,
   abortAssignedFieldJobPhoto,
+  abortManagementJobPhoto,
   authorizeAssignedFieldJobPhoto,
+  authorizeManagementJobPhoto,
   finalizeAssignedFieldJobPhoto,
+  finalizeManagementJobPhoto,
   inspectFieldJobPhotoUpload,
   jobPhotoSrc,
   putAssignedFieldJobPhotoFromBytes,
+  putManagementJobPhotoFromBytes,
 } from "@/lib/business-storage/field-job-photos";

@@ -168,10 +168,16 @@ check(
     offboardingFormSrc.includes("billingCancellationConfirmed"),
 );
 check(
-  "Owner job-photo storage error names Cloudflare R2, not Vercel Blob",
+  "Owner job-photo uploads use private R2, not Vercel Blob",
   ownerPhotoSrc.includes("Cloudflare R2") &&
+    ownerPhotoSrc.includes("authorizeManagementJobPhoto") &&
+    ownerPhotoSrc.includes("finalizeManagementJobPhoto") &&
+    ownerPhotoSrc.includes("The image body never enters this") &&
     !ownerPhotoSrc.includes("BLOB_READ_WRITE_TOKEN") &&
-    !ownerPhotoSrc.includes("Vercel Blob"),
+    !ownerPhotoSrc.includes("Vercel Blob") &&
+    !ownerPhotoSrc.includes("uploadJobPhoto") &&
+    !ownerPhotoSrc.includes("instanceof File") &&
+    !ownerPhotoSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES"),
 );
 check(
   "Offboarding and ownership require step-up proof before typed confirmation",

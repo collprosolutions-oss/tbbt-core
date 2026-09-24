@@ -4,16 +4,29 @@ import { revalidatePath } from "next/cache";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
+import { deleteJobPhotoBlob } from "@/lib/storage";
 import {
-  deleteJobPhotoBlob,
-  isStorageConfigured,
-  isSupportedImageMimeType,
-  MAX_JOB_PHOTO_UPLOAD_BYTES,
-  uploadJobPhoto,
-} from "@/lib/storage";
+  deleteStoredAsset,
+  isBusinessStorageConfigured,
+  StorageError,
+  StorageQuotaError,
+} from "@/lib/business-storage";
+import {
+  abortManagementJobPhoto,
+  authorizeManagementJobPhoto,
+  finalizeManagementJobPhoto,
+} from "@/lib/business-storage/field-job-photos";
 
 export type JobPhotoActionState = {
   error?: string;
+  message?: string;
+};
+
+export type JobPhotoUploadState = JobPhotoActionState & {
+  assetId?: string;
+  uploadUrl?: string;
+  uploadHeaders?: Record<string, string>;
+  uploadMethod?: "PUT";
 };
 
 function readString(formData: FormData, key: string) {
@@ -24,80 +37,109 @@ function readString(formData: FormData, key: string) {
 const STORAGE_NOT_CONFIGURED_ERROR =
   "Photo storage isn't set up yet. Ask an admin to connect platform file storage (Cloudflare R2) before uploading job photos.";
 
-export async function addJobPhoto(
-  _prev: JobPhotoActionState,
-  formData: FormData,
-): Promise<JobPhotoActionState> {
+function managementPhotoError(error: unknown) {
+  if (error instanceof StorageQuotaError || error instanceof StorageError) {
+    return error.message;
+  }
+  return "That photo could not be uploaded. Try again.";
+}
+
+async function requireManagementPhotoAccess() {
   const access = await requireOperatingBusinessAccess();
-  // FUTURE: once Jobs carry an assignment, MEMBER should get this
-  // capability scoped to their own assigned job(s). See OPERATE_JOBS in
-  // src/lib/authorization.ts for details.
+  // OWNER/ADMIN business-wide job photos. MEMBER stays on the assignment-
+  // scoped field upload path and never receives OPERATE_JOBS.
   requireBusinessCapability(access, CAPABILITIES.OPERATE_JOBS);
-  const jobId = readString(formData, "jobId");
-  const stage = readString(formData, "stage");
-  const caption = readString(formData, "caption");
-  const file = formData.get("file");
+  return access;
+}
 
-  if (!jobId) {
-    return { error: "That job could not be found." };
-  }
-
-  if (stage !== "BEFORE" && stage !== "DURING" && stage !== "AFTER") {
-    return { error: "Choose Before, During, or After." };
-  }
-
-  if (!(file instanceof File) || file.size === 0) {
-    return { error: "Choose a photo to upload." };
-  }
-
-  if (!isSupportedImageMimeType(file.type)) {
-    return {
-      error: "Unsupported file type. Upload a JPEG, PNG, WebP, GIF, or HEIC photo.",
-    };
-  }
-
-  if (file.size > MAX_JOB_PHOTO_UPLOAD_BYTES) {
-    const maxMb = (MAX_JOB_PHOTO_UPLOAD_BYTES / (1024 * 1024)).toFixed(0);
-    return { error: `That photo is too large. The limit is ${maxMb} MB.` };
-  }
-
-  // Fail gracefully (and before touching the job/database) if the storage
-  // provider isn't configured, so an unconfigured environment never
-  // crashes the Job page - it just can't accept new uploads yet.
-  if (!isStorageConfigured()) {
-    return { error: STORAGE_NOT_CONFIGURED_ERROR };
-  }
-
-  const job = access.assertOwned(
-    await prisma.job.findFirst({
-      where: { id: jobId, ...access.scope },
-    }),
-  );
-
-  let uploaded: { url: string };
+/**
+ * Authorizes a browser-direct R2 upload. The image body never enters this
+ * server action -- only filename, MIME type, and declared size.
+ */
+export async function authorizeManagementJobPhotoUpload(input: {
+  jobId: string;
+  originalFilename: string;
+  mimeType: string;
+  fileSizeBytes: number;
+}): Promise<JobPhotoUploadState> {
   try {
-    uploaded = await uploadJobPhoto({
-      businessId: access.businessId,
-      jobId: job.id,
-      file,
-    });
+    if (!isBusinessStorageConfigured()) {
+      return { error: STORAGE_NOT_CONFIGURED_ERROR };
+    }
+    if (!input.jobId) {
+      return { error: "That job could not be found." };
+    }
+    const access = await requireManagementPhotoAccess();
+    const authorized = await authorizeManagementJobPhoto(
+      { db: prisma },
+      { businessId: access.businessId },
+      {
+        jobId: input.jobId,
+        originalFilename: input.originalFilename,
+        mimeType: input.mimeType,
+        fileSizeBytes: input.fileSizeBytes,
+      },
+    );
+    return {
+      assetId: authorized.asset.id,
+      uploadUrl: authorized.upload.url,
+      uploadHeaders: authorized.upload.headers,
+      uploadMethod: authorized.upload.method,
+    };
   } catch (error) {
-    console.error("Job photo upload failed", error);
-    return { error: "That photo could not be uploaded. Try again." };
+    return { error: managementPhotoError(error) };
   }
+}
 
-  await prisma.jobPhoto.create({
-    data: {
-      businessId: access.businessId,
-      jobId: job.id,
-      stage,
-      url: uploaded.url,
-      caption: caption || null,
-    },
-  });
+export async function finalizeManagementJobPhotoUpload(input: {
+  jobId: string;
+  assetId: string;
+  stage: string;
+  caption?: string;
+}): Promise<JobPhotoUploadState> {
+  try {
+    if (input.stage !== "BEFORE" && input.stage !== "DURING" && input.stage !== "AFTER") {
+      return { error: "Choose Before, During, or After." };
+    }
+    if (!input.jobId) {
+      return { error: "That job could not be found." };
+    }
+    const access = await requireManagementPhotoAccess();
+    await finalizeManagementJobPhoto(
+      { db: prisma },
+      { businessId: access.businessId },
+      {
+        jobId: input.jobId,
+        assetId: input.assetId,
+        stage: input.stage,
+        caption: input.caption,
+      },
+    );
+    revalidatePath(`/jobs/${input.jobId}`);
+    return { message: "Photo added." };
+  } catch (error) {
+    return { error: managementPhotoError(error) };
+  }
+}
 
-  revalidatePath(`/jobs/${job.id}`);
-  return {};
+export async function abortManagementJobPhotoUpload(input: {
+  jobId: string;
+  assetId: string;
+}): Promise<JobPhotoUploadState> {
+  try {
+    if (!input.jobId) {
+      return { error: "That job could not be found." };
+    }
+    const access = await requireManagementPhotoAccess();
+    await abortManagementJobPhoto(
+      { db: prisma },
+      { businessId: access.businessId },
+      { jobId: input.jobId, assetId: input.assetId },
+    );
+    return {};
+  } catch (error) {
+    return { error: managementPhotoError(error) };
+  }
 }
 
 export async function deleteJobPhoto(
@@ -124,7 +166,14 @@ export async function deleteJobPhoto(
 
   // Best-effort: the owner-facing photo is already gone once the row above
   // is deleted, so a storage-side failure here is logged, not surfaced.
-  await deleteJobPhotoBlob(photo.url);
+  // New rows are private R2 StoredAssets; legacy rows still have a Blob URL.
+  if (photo.storedAssetId) {
+    await deleteStoredAsset({ db: prisma }, access, photo.storedAssetId).catch((error) => {
+      console.error("Job photo stored asset delete failed", error);
+    });
+  } else {
+    await deleteJobPhotoBlob(photo.url);
+  }
 
   revalidatePath(`/jobs/${photo.jobId}`);
   return {};
