@@ -71,7 +71,54 @@ export function PublicServicesBrowser({
   }
 
   if (!group) {
-    return <p>Services will appear here when the catalog is available.</p>;
+    return (
+      <div className="space-y-4">
+        <p>Services will appear here when the catalog is available.</p>
+        <p className="text-sm text-muted-foreground">
+          You can still describe the work in your own words. The business reviews
+          the request before preparing a written estimate.
+        </p>
+        <button
+          type="button"
+          aria-pressed={selected.includeOther}
+          onClick={() =>
+            setSelected((current) => ({
+              ...current,
+              includeOther: !current.includeOther,
+              otherQuantity: current.includeOther
+                ? 1
+                : coerceRequestQuantity(current.otherQuantity, 1),
+            }))
+          }
+          className="public-service-row public-service-other"
+        >
+          <strong>{OTHER_TASK_LABEL}</strong>
+          <span className="text-sm text-muted-foreground">
+            Not sure of the service name? Describe the work in your own words.
+          </span>
+        </button>
+        {selected.includeOther ? (
+          <div className="flex flex-wrap items-start gap-3">
+            <textarea
+              className="min-w-0 flex-1 rounded-md border px-3 py-2"
+              rows={3}
+              value={selected.otherDescription}
+              onChange={(event) =>
+                setSelected((current) => ({ ...current, otherDescription: event.target.value }))
+              }
+              placeholder="What needs to be done?"
+            />
+            <Link href={href} className="public-btn public-btn-primary">
+              Continue to request
+            </Link>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Select other work to continue, even before services are published.
+          </p>
+        )}
+      </div>
+    );
   }
 
   return (

@@ -194,6 +194,16 @@ check(
   ),
 );
 check(
+  "Empty public catalog still allows other-work requests",
+  readRepo("src/components/public/public-services-browser.tsx").includes(
+    "Select other work to continue",
+  ) &&
+    readRepo("src/components/public/request-flow.tsx").includes("catalogEmpty") &&
+    readRepo("src/components/public/public-home.tsx").includes(
+      "A published service list is not available yet",
+    ),
+);
+check(
   "Public request Step 1 uses the structured service-address fields",
   requestFlowSrc.includes("ServiceAddressFields") &&
     requestFlowSrc.includes("streetAddress") &&

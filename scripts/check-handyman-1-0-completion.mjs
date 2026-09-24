@@ -95,6 +95,23 @@ check(
     !browserSrc.includes("CollPro reviews the request"),
 );
 check(
+  "Empty catalog still offers other-work intake",
+  browserSrc.includes("Select other work to continue") &&
+    readFileSync(new URL("../src/components/public/request-flow.tsx", import.meta.url), "utf8").includes(
+      "catalogEmpty",
+    ) &&
+    readFileSync(new URL("../src/components/public/public-home.tsx", import.meta.url), "utf8").includes(
+      "A published service list is not available yet",
+    ),
+);
+check(
+  "Settings section shortcuts redirect to the settings query",
+  readFileSync(
+    new URL("../src/app/(app)/settings/[section]/page.tsx", import.meta.url),
+    "utf8",
+  ).includes("/settings?section="),
+);
+check(
   "Settings export copy no longer says ZIP is only planned",
   settingsSrc.includes("Download a tenant-scoped ZIP") ||
     settingsSrc.includes("Tenant-scoped ZIP export is available"),

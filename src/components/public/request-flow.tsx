@@ -122,7 +122,9 @@ export function MultiServiceRequestFlow({
     () => selectedWorkLabels(selected, items),
     [items, selected],
   );
-  const hasWork = selected.catalogIds.length > 0 || selected.includeOther;
+  const catalogEmpty = items.length === 0;
+  const hasWork =
+    selected.catalogIds.length > 0 || selected.includeOther || catalogEmpty;
   const servicesHref = publicServicesPath(slug, selected);
   const chooseServicesHref = publicServicesPath(slug);
 
@@ -276,9 +278,12 @@ export function MultiServiceRequestFlow({
       formData.append("serviceCatalogItemId", id);
       formData.append("quantity", String(quantities[id] ?? 1));
     }
-    if (selected.includeOther) {
+    if (selected.includeOther || catalogEmpty) {
       formData.set("includeOther", "true");
-      formData.set("otherDescription", selected.otherDescription);
+      formData.set(
+        "otherDescription",
+        selected.otherDescription.trim() || notes.trim() || "Other work",
+      );
       formData.set("otherQuantity", String(selected.otherQuantity || 1));
     }
     const result = await submitPublicIntakeForm(submitServiceRequest, slug, formData);
@@ -319,10 +324,18 @@ export function MultiServiceRequestFlow({
       <section>
         <h2 className="text-2xl font-extrabold uppercase">What work do you need?</h2>
         <p className="mt-3 text-muted-foreground">No services selected yet.</p>
-        <Link href={chooseServicesHref} className="public-btn public-btn-primary mt-6">
-          Choose Services
-          <ArrowRight className="size-4" aria-hidden="true" />
-        </Link>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link href={chooseServicesHref} className="public-btn public-btn-primary">
+            Choose Services
+            <ArrowRight className="size-4" aria-hidden="true" />
+          </Link>
+          <Link
+            href={`${chooseServicesHref}?other=1`}
+            className="public-btn public-btn-outline"
+          >
+            Describe other work
+          </Link>
+        </div>
       </section>
     );
   }
@@ -331,20 +344,29 @@ export function MultiServiceRequestFlow({
     <div className="space-y-8">
       <section>
         <h2 className="text-xl font-extrabold tracking-wide uppercase">Your Selected Work</h2>
-        <ul className="mt-3 space-y-2">
-          {labels.map((label) => (
-            <li key={label} className="font-semibold">
-              {label}
-            </li>
-          ))}
-        </ul>
+        {labels.length > 0 ? (
+          <ul className="mt-3 space-y-2">
+            {labels.map((label) => (
+              <li key={label} className="font-semibold">
+                {label}
+              </li>
+            ))}
+          </ul>
+        ) : catalogEmpty ? (
+          <p className="mt-3 text-muted-foreground">
+            A published service list is not available yet. Describe the work below
+            and the business will review it.
+          </p>
+        ) : null}
         <QuotePricingNote items={items} selected={selected} />
-        <Link
-          href={servicesHref || `${chooseServicesHref}${selectedWorkQuery(selected)}`}
-          className="mt-4 inline-block font-extrabold tracking-wide text-[var(--public-blue)] uppercase"
-        >
-          Add Another Service →
-        </Link>
+        {catalogEmpty ? null : (
+          <Link
+            href={servicesHref || `${chooseServicesHref}${selectedWorkQuery(selected)}`}
+            className="mt-4 inline-block font-extrabold tracking-wide text-[var(--public-blue)] uppercase"
+          >
+            Add Another Service →
+          </Link>
+        )}
       </section>
 
       <ol className="public-step-bar" aria-label="Request steps">
