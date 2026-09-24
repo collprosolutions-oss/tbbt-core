@@ -96,6 +96,25 @@ async function submitServiceRequestInner(
     else if (paired) catalogQuantities[id] = paired;
   });
 
+  const notifyBusiness = await prisma.business.findUnique({
+    where: { slug: safeSlug },
+    select: { id: true },
+  });
+  const configuredAreas = notifyBusiness
+    ? (await prisma.serviceArea.findMany({ where: { businessId: notifyBusiness.id } })).map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        label: row.label,
+        city: row.city,
+        region: row.region,
+        postalCode: row.postalCode,
+        enabled: row.enabled,
+        travelAdjustment: row.travelAdjustment ? Number(row.travelAdjustment) : null,
+        minimumAdjustment: row.minimumAdjustment ? Number(row.minimumAdjustment) : null,
+        notes: row.notes,
+      }))
+    : [];
+
   const created = await createPublicServiceRequest(prisma, {
     slug: safeSlug,
     businessId: readString(formData, "businessId") || null,
@@ -119,16 +138,15 @@ async function submitServiceRequestInner(
     measurements: parseMeasurementFields(formData),
     submissionId: readString(formData, "submissionId") || null,
     smsOptIn: readString(formData, "smsOptIn") || formData.get("smsOptIn"),
+    leadSource: readString(formData, "leadSource") || "WEBSITE",
+    campaignId: readString(formData, "campaignId") || null,
+    configuredAreas,
   });
 
   if (!created.ok) {
     return { error: created.error };
   }
 
-  const notifyBusiness = await prisma.business.findUnique({
-    where: { slug: safeSlug },
-    select: { id: true },
-  });
   if (notifyBusiness) {
     try {
       await notifyBusinessNewPublicRequest(prisma, {

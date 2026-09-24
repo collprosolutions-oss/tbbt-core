@@ -261,6 +261,13 @@ model Business {
   supplierPriceRecords     SupplierPriceRecord[]
   customerCommunications   CustomerCommunication[]
   messagingWebhookEvents   CustomerMessagingWebhookEvent[]
+  goals                    BusinessGoal[]
+  actionItems              BusinessActionItem[]
+  campaigns                MarketingCampaign[]
+  serviceAreas             ServiceArea[]
+  referralRequests         ReferralRequest[]
+  referrals                Referral[]
+  customerFollowUps        CustomerFollowUp[]
 }
 
 model Membership {
@@ -326,6 +333,11 @@ model Membership {
   reviewedKnowledgeEntries KnowledgeEntry[]   @relation("KnowledgeEntryReviewer")
   verifiedMeasurements     ServiceRequestMeasurement[] @relation("MeasurementVerifier")
   initiatedCustomerCommunications CustomerCommunication[] @relation("CustomerCommunicationInitiator")
+  createdBusinessGoals            BusinessGoal[]          @relation("BusinessGoalCreator")
+  createdBusinessActionItems      BusinessActionItem[]    @relation("BusinessActionItemCreator")
+  createdCampaigns                MarketingCampaign[]     @relation("MarketingCampaignCreator")
+  createdServiceAreas             ServiceArea[]           @relation("ServiceAreaCreator")
+  createdReferralRequests         ReferralRequest[]       @relation("ReferralRequestCreator")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -340,10 +352,14 @@ model Customer {
   /// UNKNOWN | GRANTED | REVOKED. Never inferred from phone being present.
   smsConsentStatus    String    @default("UNKNOWN")
   smsConsentUpdatedAt DateTime?
+  /// First-touch recorded source only. Never overwritten by later requests.
+  firstLeadSource     String?
+  firstCampaignId     String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   business        Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  firstCampaign   MarketingCampaign? @relation("CustomerFirstCampaign", fields: [firstCampaignId], references: [id], onDelete: SetNull)
   properties      Property[]
   serviceRequests ServiceRequest[]
   estimates       Estimate[]
@@ -354,8 +370,12 @@ model Customer {
   reviewRequests  ReviewRequest[]
   reviews         Review[]
   communications  CustomerCommunication[]
+  referralRequests ReferralRequest[]
+  referralsGiven   Referral[] @relation("ReferralSourceCustomer")
+  referralsReceived Referral[] @relation("ReferralReferredCustomer")
 
   @@index([businessId])
+  @@index([firstCampaignId])
 }
 
 /// Durable audit trail for attempted external customer communications.
@@ -369,9 +389,10 @@ model CustomerCommunication {
   /// SMS for this foundation. EMAIL remains on the existing Resend path.
   channel                  String    @default("SMS")
   /// ESTIMATE_READY | APPOINTMENT_CONFIRMATION | APPOINTMENT_REMINDER |
-  /// SCHEDULE_CHANGE | INVOICE_READY | PAYMENT_REMINDER | REVIEW_REQUEST
+  /// SCHEDULE_CHANGE | INVOICE_READY | PAYMENT_REMINDER | REVIEW_REQUEST |
+  /// REVIEW_REMINDER | REFERRAL_REQUEST | JOB_FOLLOW_UP | REPEAT_FOLLOW_UP
   purpose                  String
-  /// ESTIMATE | JOB | INVOICE | REVIEW_REQUEST
+  /// ESTIMATE | JOB | INVOICE | REVIEW_REQUEST | REFERRAL_REQUEST
   relatedType              String?
   relatedId                String?
   idempotencyKey           String
@@ -497,8 +518,17 @@ model ServiceRequest {
 
   /// Selected catalog service at intake time, if any. "Other / Not sure" leaves this null.
   serviceCatalogItemId String?
+  /// Recorded acquisition source. WEBSITE | REFERRAL | CAMPAIGN | MANUAL |
+  /// GOOGLE | FACEBOOK | OTHER. Never inferred from an address.
+  leadSource String?
+  campaignId String?
+  /// IN_AREA | OUTSIDE_PREFERRED | UNKNOWN. Historical rows stay UNKNOWN.
+  serviceAreaQualification String @default("UNKNOWN")
+  matchedServiceAreaId String?
 
   business           Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  campaign           MarketingCampaign?  @relation("ServiceRequestCampaign", fields: [campaignId], references: [id], onDelete: SetNull)
+  matchedServiceArea ServiceArea?        @relation("ServiceRequestMatchedArea", fields: [matchedServiceAreaId], references: [id], onDelete: SetNull)
   customer           Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
   property           Property?           @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   serviceCatalogItem ServiceCatalogItem? @relation(fields: [serviceCatalogItemId], references: [id], onDelete: SetNull)
@@ -515,6 +545,8 @@ model ServiceRequest {
   pipelineOpportunity PipelineOpportunity?
 
   @@index([businessId])
+  @@index([campaignId])
+  @@index([matchedServiceAreaId])
 }
 
 /// One requested task on a public intake ServiceRequest. A customer can
@@ -610,10 +642,13 @@ model Estimate {
   /// exactly once, in the same transaction that flips status SENT ->
   /// APPROVED, and never changed afterward.
   approvedVersionId      String?
+  leadSource             String?
+  campaignId             String?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
   business        Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  campaign        MarketingCampaign? @relation("EstimateCampaign", fields: [campaignId], references: [id], onDelete: SetNull)
   customer        Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
   property        Property?         @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   serviceRequest  ServiceRequest?   @relation(fields: [serviceRequestId], references: [id], onDelete: SetNull)
@@ -631,6 +666,7 @@ model Estimate {
 
   @@index([businessId])
   @@index([propertyId])
+  @@index([campaignId])
 }
 
 /// Immutable historical snapshot of an Estimate exactly as it was SENT to a
@@ -775,10 +811,13 @@ model Job {
   startWithoutConfirmationAt DateTime?
   startWithoutConfirmationReason String?
   startWithoutConfirmationByMembershipId String?
+  leadSource                String?
+  campaignId                String?
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
 
   business                Business                @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  campaign                MarketingCampaign?      @relation("JobCampaign", fields: [campaignId], references: [id], onDelete: SetNull)
   customer                Customer?               @relation(fields: [customerId], references: [id], onDelete: SetNull)
   property                Property?               @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   estimate                Estimate?               @relation(fields: [estimateId], references: [id], onDelete: SetNull)
@@ -807,6 +846,7 @@ model Job {
   @@index([assignedMembershipId])
   @@index([appointmentConfirmedByMembershipId])
   @@index([startWithoutConfirmationByMembershipId])
+  @@index([campaignId])
 }
 
 /// Append-only appointment communication/confirmation history for one Job.
@@ -1552,10 +1592,13 @@ model MarketingContent {
   /// Optional future Marketing link from a recorded Review. Never auto-copies
   /// review text and never publishes a testimonial.
   reviewId               String?
+  campaignId             String?
+  catalogItemId          String?
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
   business  Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  campaign  MarketingCampaign?       @relation("MarketingContentCampaign", fields: [campaignId], references: [id], onDelete: SetNull)
   job       Job?                     @relation(fields: [jobId], references: [id], onDelete: SetNull)
   createdBy Membership               @relation("MarketingContentCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
   reviewedBy Membership?             @relation("MarketingContentReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
@@ -1567,6 +1610,7 @@ model MarketingContent {
   @@index([businessId, plannedFor])
   @@index([jobId])
   @@index([reviewId])
+  @@index([campaignId])
 }
 
 /// Selected marketing-approved JobPhoto on a content draft.
@@ -1605,8 +1649,13 @@ model ReviewRequest {
   notes                 String?
   /// Set when the owner records SENT. Not an automated send timestamp.
   requestedAt           DateTime?
-  /// Owner workflow reminder only. Never triggers SMS/email.
+  /// Owner workflow reminder date. Delivery uses connected adapters only.
   reminderAt            DateTime?
+  reminderCount         Int       @default(0)
+  lastReminderAt        DateTime?
+  remindersStoppedAt    DateTime?
+  lastEmailStatus       String?
+  lastSmsStatus         String?
   createdByMembershipId String
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
@@ -1854,6 +1903,17 @@ model BusinessSettings {
   /// Owner-approved About story shown on the public website.
   approvedPublicAboutCopy String?
 
+  marketingBrandVoice String?
+  marketingIdentityNotes String?
+  reviewGoogleUrl String?
+  reviewFacebookUrl String?
+  reviewOtherUrl String?
+  reviewReminderMaxCount Int @default(2)
+  seoTitleHome String?
+  seoDescriptionHome String?
+  seoTitleServices String?
+  seoDescriptionServices String?
+
   /// Minutes from midnight for the normal workday start (default 08:00).
   workStartMinutes Int @default(480)
   /// Minutes from midnight for the normal workday end (default 17:00).
@@ -1971,4 +2031,177 @@ model KnowledgeEntry {
   @@index([businessId, category])
   @@index([businessId, trustState])
   @@index([businessId, archived])
+}
+
+/// Owner-authored business goal. Recommendations never invent the target
+/// number; title/notes are owner text over recorded TBBT activity.
+model BusinessGoal {
+  id                    String   @id @default(cuid())
+  businessId            String
+  title                 String
+  description           String   @default("")
+  /// ACTIVE | DONE | PAUSED
+  status                String   @default("ACTIVE")
+  recommendationKey     String?
+  createdByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business    Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy   Membership?          @relation("BusinessGoalCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  actionItems BusinessActionItem[]
+
+  @@index([businessId])
+  @@index([businessId, status])
+}
+
+/// Owner action plan item, optionally linked to a computed recommendation.
+model BusinessActionItem {
+  id                    String   @id @default(cuid())
+  businessId            String
+  goalId                String?
+  recommendationKey     String
+  title                 String
+  notes                 String   @default("")
+  /// OPEN | DONE | DISMISSED
+  status                String   @default("OPEN")
+  createdByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  goal      BusinessGoal? @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  createdBy Membership? @relation("BusinessActionItemCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([businessId, status])
+  @@index([goalId])
+}
+
+/// Internal campaign record. Never implies an external ad account.
+model MarketingCampaign {
+  id                    String   @id @default(cuid())
+  businessId            String
+  name                  String
+  /// WEBSITE | REFERRAL | GOOGLE | FACEBOOK | MANUAL | OTHER
+  sourceKey             String   @default("OTHER")
+  /// DRAFT | ACTIVE | PAUSED | COMPLETED
+  status                String   @default("DRAFT")
+  notes                 String   @default("")
+  createdByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business          Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy         Membership?        @relation("MarketingCampaignCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  requests          ServiceRequest[]   @relation("ServiceRequestCampaign")
+  estimates         Estimate[]         @relation("EstimateCampaign")
+  jobs              Job[]              @relation("JobCampaign")
+  firstTouchCustomers Customer[]       @relation("CustomerFirstCampaign")
+  contents          MarketingContent[] @relation("MarketingContentCampaign")
+  referrals         Referral[]
+
+  @@index([businessId])
+  @@index([businessId, status])
+}
+
+/// Owner-configured city or postal service area. Not a GIS engine.
+model ServiceArea {
+  id                    String   @id @default(cuid())
+  businessId            String
+  /// CITY | POSTAL
+  kind                  String
+  label                 String
+  city                  String?
+  region                String?
+  postalCode            String?
+  enabled               Boolean  @default(true)
+  travelAdjustment      Decimal?
+  minimumAdjustment     Decimal?
+  notes                 String   @default("")
+  createdByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy Membership?    @relation("ServiceAreaCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  matchedRequests ServiceRequest[] @relation("ServiceRequestMatchedArea")
+
+  @@index([businessId])
+  @@index([businessId, enabled])
+}
+
+/// Referral request to an existing customer. Delivery uses connected adapters.
+model ReferralRequest {
+  id                    String    @id @default(cuid())
+  businessId            String
+  customerId            String
+  jobId                 String?
+  /// DRAFT | READY | SENT | COMPLETED | CANCELLED
+  status                String    @default("DRAFT")
+  requestText           String    @default("")
+  notes                 String?
+  requestedAt           DateTime?
+  remindersStoppedAt    DateTime?
+  createdByMembershipId String
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer  Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdBy Membership @relation("ReferralRequestCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  referrals Referral[]
+
+  @@index([businessId])
+  @@index([businessId, status])
+  @@index([customerId])
+}
+
+/// Recorded referral source. Never invents a referred customer.
+model Referral {
+  id                 String   @id @default(cuid())
+  businessId         String
+  sourceCustomerId   String
+  referredCustomerId String?
+  referralRequestId  String?
+  campaignId         String?
+  /// RECORDED | CONVERTED | CANCELLED
+  status             String   @default("RECORDED")
+  notes              String   @default("")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  business         Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  sourceCustomer   Customer         @relation("ReferralSourceCustomer", fields: [sourceCustomerId], references: [id], onDelete: Cascade)
+  referredCustomer Customer?        @relation("ReferralReferredCustomer", fields: [referredCustomerId], references: [id], onDelete: SetNull)
+  referralRequest  ReferralRequest? @relation(fields: [referralRequestId], references: [id], onDelete: SetNull)
+  campaign         MarketingCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([sourceCustomerId])
+  @@index([referredCustomerId])
+}
+
+/// Owner-controlled follow-up for a completed job or repeat customer.
+/// Delivery uses connected adapters; the row survives provider failure.
+model CustomerFollowUp {
+  id                    String    @id @default(cuid())
+  businessId            String
+  customerId            String
+  jobId                 String?
+  /// JOB_COMPLETE | REPEAT
+  kind                  String
+  /// OPEN | SENT | CANCELLED
+  status                String    @default("OPEN")
+  notes                 String    @default("")
+  cancelledAt           DateTime?
+  createdByMembershipId String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([businessId, kind, status])
+  @@index([customerId])
 }

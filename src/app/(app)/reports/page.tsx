@@ -16,6 +16,7 @@ import type { CuratedIconId } from "@/lib/founder-icons";
 import { formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { loadReportSource } from "@/lib/reports-data";
+import { buildFinancialIntelligence, managementReportCsvRows } from "@/lib/financial-intelligence";
 import {
   buildReport,
   parseDatePreset,
@@ -56,6 +57,7 @@ export default async function ReportsPage({
 
   const source = await loadReportSource(prisma, access.businessId);
   const report = buildReport(source, range);
+  const intelligence = buildFinancialIntelligence(source, report);
 
   const laborHint = report.labor.laborCostIncomplete
     ? "Wage snapshot missing on some approved time"
@@ -106,10 +108,16 @@ export default async function ReportsPage({
     <PageContainer width="2xl">
       <PageHeaderControls
         actions={
-          <ExportReportButton
-            filename={`tbbt-${area}-${formatISODate(new Date(), timeZone)}.csv`}
-            {...reportCsvRows(area, report)}
-          />
+          <div className="flex flex-wrap gap-2">
+            <ExportReportButton
+              filename={`tbbt-${area}-${formatISODate(new Date(), timeZone)}.csv`}
+              {...reportCsvRows(area, report)}
+            />
+            <ExportReportButton
+              filename={`tbbt-management-${formatISODate(new Date(), timeZone)}.csv`}
+              {...managementReportCsvRows(intelligence)}
+            />
+          </div>
         }
       />
       <PageHeader
@@ -146,6 +154,7 @@ export default async function ReportsPage({
           from={from || (range.start ? formatISODate(range.start, timeZone) : "")}
           to={to || (range.end ? formatISODate(addDays(range.end, -1, timeZone), timeZone) : "")}
           report={report}
+          intelligence={intelligence}
         />
       </FounderDesignRoot>
     </PageContainer>

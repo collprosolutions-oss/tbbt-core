@@ -1,4 +1,6 @@
 import { resolveBusinessServiceArea } from "@/lib/business-service-area";
+import { parseLeadSource, PUBLIC_DEFAULT_LEAD_SOURCE } from "@/lib/lead-attribution";
+import { qualifyServiceAddress, serviceAreaCities } from "@/lib/service-areas";
 import { privateAssetPath } from "@/lib/business-storage/keys";
 import {
   CUSTOMER_REPORTED_MEASUREMENT,
@@ -76,6 +78,20 @@ export type PublicIntakeInput = {
   }>;
   submissionId?: string | null;
   smsOptIn?: unknown;
+  leadSource?: string | null;
+  campaignId?: string | null;
+  configuredAreas?: Array<{
+    id: string;
+    kind: string;
+    label: string;
+    city: string | null;
+    region: string | null;
+    postalCode: string | null;
+    enabled: boolean;
+    travelAdjustment: number | null;
+    minimumAdjustment: number | null;
+    notes: string;
+  }>;
 };
 
 export type PublicIntakeDb = {
@@ -142,6 +158,8 @@ export type PublicIntakeTx = {
         phone: string | null;
         smsConsentStatus?: "GRANTED" | "UNKNOWN" | "REVOKED";
         smsConsentUpdatedAt?: Date | null;
+        firstLeadSource?: string | null;
+        firstCampaignId?: string | null;
       };
     }) => Promise<{ id: string }>;
     update: (args: {
@@ -198,6 +216,10 @@ export type PublicIntakeTx = {
         description: string | null;
         summary: string | null;
         serviceCatalogItemId: string | null;
+        leadSource?: string | null;
+        campaignId?: string | null;
+        serviceAreaQualification?: string;
+        matchedServiceAreaId?: string | null;
       };
     }) => Promise<{ id: string }>;
   };
@@ -287,7 +309,18 @@ async function createPublicServiceRequestInner(
     postalCode: input.postalCode ?? "",
   };
   const notes = input.notes.trim();
-  const serviceArea = resolveBusinessServiceArea({ slug: safeSlug });
+  const configuredAreas = input.configuredAreas ?? [];
+  const serviceArea = resolveBusinessServiceArea({
+    slug: safeSlug,
+    configuredCities: serviceAreaCities(configuredAreas),
+    configuredRegion: configuredAreas.find((area) => area.region)?.region ?? null,
+  });
+  const leadSource = parseLeadSource(input.leadSource, PUBLIC_DEFAULT_LEAD_SOURCE);
+  const campaignId = input.campaignId?.trim() || null;
+  const qualification = qualifyServiceAddress(configuredAreas, {
+    city: structuredInput.city,
+    postalCode: structuredInput.postalCode,
+  });
   const usingStructured = hasStructuredAddressInput(structuredInput);
   const structured = usingStructured
     ? validateStructuredAddress(structuredInput, { country: serviceArea.country })
@@ -485,6 +518,8 @@ async function createPublicServiceRequestInner(
                 email: email || null,
                 phone: phone || null,
                 ...(smsConsentGrant ?? {}),
+                firstLeadSource: leadSource,
+                firstCampaignId: campaignId,
               },
             });
       // Repeat matches keep the stored name/email/phone even when the
@@ -570,6 +605,10 @@ async function createPublicServiceRequestInner(
             : description,
           summary,
           serviceCatalogItemId: firstCatalogId,
+          leadSource,
+          campaignId,
+          serviceAreaQualification: qualification.qualification,
+          matchedServiceAreaId: qualification.matchedAreaId,
         },
       });
 

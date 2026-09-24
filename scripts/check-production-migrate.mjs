@@ -437,6 +437,40 @@ check(
   workspaceLoader.includes("ensureCustomerMessagingSchema"),
 );
 
+const ownerIntelligenceMigration = readFileSync(
+  new URL("../prisma/migrations/20260924040000_add_owner_intelligence/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Owner-intelligence migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(ownerIntelligenceMigration) &&
+    ownerIntelligenceMigration.includes('ADD COLUMN IF NOT EXISTS "firstLeadSource"') &&
+    ownerIntelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessGoal"') &&
+    ownerIntelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "ServiceArea"') &&
+    ownerIntelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "ReferralRequest"') &&
+    !/UPDATE "Business"/i.test(ownerIntelligenceMigration) &&
+    !/UPDATE "Customer"/i.test(ownerIntelligenceMigration),
+);
+
+const ownerIntelligenceSchema = readFileSync(
+  new URL("../src/lib/owner-intelligence-schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers owner-intelligence schema skipped by migrate",
+  ownerIntelligenceSchema.includes("Preview shares Production and skips migrate") &&
+    ownerIntelligenceSchema.includes("ensureOwnerIntelligenceSchema") &&
+    ownerIntelligenceSchema.includes("OWNER_INTELLIGENCE_ENSURE_SQL") &&
+    ownerIntelligenceSchema.includes('ADD COLUMN IF NOT EXISTS "firstLeadSource"') &&
+    ownerIntelligenceSchema.includes("BusinessGoal") &&
+    ownerIntelligenceSchema.includes("ServiceArea") &&
+    ownerIntelligenceSchema.includes("ReferralRequest"),
+);
+check(
+  "Authenticated workspace load ensures owner-intelligence schema before Business SELECT",
+  workspaceLoader.includes("ensureOwnerIntelligenceSchema"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

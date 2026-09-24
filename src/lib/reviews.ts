@@ -18,6 +18,9 @@ export const REVIEW_AREAS = [
   "requests",
   "reviews",
   "responses",
+  "referrals",
+  "follow-up",
+  "history",
   "performance",
 ] as const;
 export type ReviewArea = (typeof REVIEW_AREAS)[number];
@@ -28,6 +31,9 @@ export const REVIEW_AREA_LABELS: Record<ReviewArea, string> = {
   requests: "Requests",
   reviews: "Reviews",
   responses: "Responses",
+  referrals: "Referrals",
+  "follow-up": "Follow-up",
+  history: "Communication history",
   performance: "Performance",
 };
 
@@ -104,7 +110,7 @@ export const PLATFORMS_DISCONNECTED_MESSAGE =
   "No Google or Facebook review platform is connected. External review counts, ratings, and publishing are not available.";
 
 export const REQUEST_SEND_DISCLAIMER =
-  "Recording SENT means you asked the customer. TBBT did not send SMS or email — no messaging integration is connected.";
+  "Recording SENT attempts delivery through connected email and SMS adapters. If an adapter is not connected, the request is still recorded and you can copy the message. TBBT never claims a published external review.";
 
 export const RESPONSE_PUBLISH_DISCLAIMER =
   "Approving a response does not publish it. External reply posting is not available.";

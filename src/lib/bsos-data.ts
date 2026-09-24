@@ -1,0 +1,200 @@
+/**
+ * Tenant-scoped BSOS loader. Every query uses the workspace businessId.
+ */
+
+import type { PrismaClient } from "@prisma/client";
+import { addDays, startOfDay } from "@/lib/schedule";
+import {
+  buildBsosHealthMetrics,
+  buildBsosRecommendations,
+  coachSummary,
+  type BsosFacts,
+} from "@/lib/bsos";
+import { asNumber } from "@/lib/reports";
+import { isPaidActivity } from "@/lib/time-cards";
+
+export async function loadBsosFacts(
+  prisma: PrismaClient,
+  businessId: string,
+  now: Date = new Date(),
+): Promise<BsosFacts> {
+  const scope = { businessId } as const;
+  const today = startOfDay(now);
+  const weekEnd = addDays(today, 7);
+
+  const [
+    unpaid,
+    sentEstimates,
+    draftEstimates,
+    unscheduledJobs,
+    completedJobs,
+    reviewRequests,
+    marketingContents,
+    approvedTime,
+    memberships,
+    scheduledJobs,
+    settings,
+    paidInvoices,
+    expenses,
+    outsideArea,
+    customers,
+    jobs,
+    invoices,
+  ] = await Promise.all([
+    prisma.invoice.findMany({
+      where: { ...scope, status: "SENT" },
+      select: { total: true },
+    }),
+    prisma.estimate.count({ where: { ...scope, status: "SENT" } }),
+    prisma.estimate.count({ where: { ...scope, status: "DRAFT" } }),
+    prisma.job.count({ where: { ...scope, status: "UNSCHEDULED" } }),
+    prisma.job.findMany({
+      where: { ...scope, status: "COMPLETED" },
+      select: {
+        id: true,
+        photos: { select: { marketingPermissionStatus: true } },
+      },
+    }),
+    prisma.reviewRequest.findMany({
+      where: { ...scope, status: { in: ["DRAFT", "READY", "SENT", "COMPLETED"] } },
+      select: { jobId: true },
+    }),
+    prisma.marketingContent.findMany({
+      where: { ...scope, status: "APPROVED" },
+      select: { jobId: true },
+    }),
+    prisma.timeEntry.findMany({
+      where: { ...scope, status: "APPROVED" },
+      select: { activityType: true, approvedLaborCost: true },
+    }),
+    prisma.membership.findMany({
+      where: { ...scope, active: true },
+      select: { hourlyWage: true },
+    }),
+    prisma.job.findMany({
+      where: {
+        ...scope,
+        scheduledAt: { gte: today, lt: weekEnd },
+      },
+      select: { scheduledAt: true },
+    }),
+    prisma.businessSettings.findUnique({
+      where: { businessId },
+      select: { workingWeekdays: true },
+    }),
+    prisma.invoice.aggregate({
+      where: { ...scope, status: "PAID" },
+      _sum: { total: true },
+    }),
+    prisma.expense.aggregate({
+      where: { ...scope, voidedAt: null },
+      _sum: { amount: true },
+    }),
+    prisma.serviceRequest.count({
+      where: { ...scope, serviceAreaQualification: "OUTSIDE_PREFERRED" },
+    }),
+    prisma.customer.findMany({
+      where: scope,
+      select: { id: true },
+    }),
+    prisma.job.findMany({
+      where: scope,
+      select: { customerId: true, status: true },
+    }),
+    prisma.invoice.findMany({
+      where: { ...scope, status: "PAID" },
+      select: { customerId: true },
+    }),
+  ]);
+
+  const reviewJobIds = new Set(reviewRequests.map((row) => row.jobId).filter(Boolean));
+  const marketedJobIds = new Set(marketingContents.map((row) => row.jobId).filter(Boolean));
+  const completedJobsWithoutReview = completedJobs.filter((job) => !reviewJobIds.has(job.id)).length;
+  const completedJobsReadyForMarketing = completedJobs.filter((job) => {
+    const approved = job.photos.some((photo) => photo.marketingPermissionStatus === "APPROVED");
+    return approved && !marketedJobIds.has(job.id);
+  }).length;
+
+  const missingWageEntries = approvedTime.filter(
+    (entry) => isPaidActivity(entry.activityType) && entry.approvedLaborCost == null,
+  ).length;
+
+  const working = new Set(
+    (settings?.workingWeekdays ?? "1,2,3,4,5")
+      .split(",")
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isInteger(value)),
+  );
+  const scheduledDays = new Set(
+    scheduledJobs
+      .map((job) => (job.scheduledAt ? startOfDay(job.scheduledAt).toISOString() : null))
+      .filter(Boolean),
+  );
+  let availableCapacityDays = 0;
+  for (let i = 0; i < 7; i += 1) {
+    const day = addDays(today, i);
+    if (!working.has(day.getDay())) continue;
+    if (!scheduledDays.has(startOfDay(day).toISOString())) availableCapacityDays += 1;
+  }
+
+  const completedByCustomer = new Map<string, number>();
+  for (const job of jobs) {
+    if (job.status !== "COMPLETED" || !job.customerId) continue;
+    completedByCustomer.set(job.customerId, (completedByCustomer.get(job.customerId) ?? 0) + 1);
+  }
+  const paidByCustomer = new Map<string, number>();
+  for (const invoice of invoices) {
+    if (!invoice.customerId) continue;
+    paidByCustomer.set(invoice.customerId, (paidByCustomer.get(invoice.customerId) ?? 0) + 1);
+  }
+  const repeatCustomers = customers.filter((customer) => {
+    return (completedByCustomer.get(customer.id) ?? 0) > 1 || (paidByCustomer.get(customer.id) ?? 0) > 1;
+  }).length;
+
+  return {
+    unpaidInvoices: {
+      count: unpaid.length,
+      amount: unpaid.reduce((sum, row) => sum + asNumber(row.total), 0),
+    },
+    sentEstimates: { count: sentEstimates },
+    draftEstimates: { count: draftEstimates },
+    unscheduledJobs: { count: unscheduledJobs },
+    completedJobsWithoutReview: { count: completedJobsWithoutReview },
+    completedJobsReadyForMarketing: { count: completedJobsReadyForMarketing },
+    lowMarginJobs: { count: 0 },
+    missingWageEntries: { count: missingWageEntries + memberships.filter((row) => row.hourlyWage == null).length },
+    availableCapacityDays: { count: availableCapacityDays },
+    repeatCustomers: { count: repeatCustomers },
+    outsideAreaRequests: { count: outsideArea },
+    recurringExpenses: { count: 0, amount: 0 },
+    paidRevenue: { amount: asNumber(paidInvoices._sum.total) },
+    recordedExpenses: { amount: asNumber(expenses._sum.amount) },
+  };
+}
+
+export async function loadBsosWorkspace(prisma: PrismaClient, businessId: string) {
+  const [facts, goals, actionItems] = await Promise.all([
+    loadBsosFacts(prisma, businessId),
+    prisma.businessGoal.findMany({
+      where: { businessId },
+      orderBy: { updatedAt: "desc" },
+    }),
+    prisma.businessActionItem.findMany({
+      where: { businessId },
+      orderBy: { updatedAt: "desc" },
+    }),
+  ]);
+
+  const recommendations = buildBsosRecommendations(facts);
+  return {
+    businessId,
+    facts,
+    metrics: buildBsosHealthMetrics(facts),
+    recommendations,
+    coach: coachSummary(recommendations),
+    goals,
+    actionItems,
+  };
+}
+
+export type BsosWorkspace = Awaited<ReturnType<typeof loadBsosWorkspace>>;

@@ -285,7 +285,7 @@ try {
   check(
     "Review SENT still records internally and attempts SMS separately",
     reviewsOpsSrc.includes("attemptReviewRequestSms") &&
-      /did not send/i.test(REQUEST_SEND_DISCLAIMER),
+      /connected email and SMS adapters/i.test(REQUEST_SEND_DISCLAIMER),
   );
   check(
     "Settings workspace does not send messages",
@@ -593,8 +593,8 @@ try {
     reviewSms.length === 1 && (reviewSms[0].status === "NOT_SENT" || reviewSms[0].status === "BLOCKED"),
   );
   check(
-    "Review disclaimer still says TBBT did not send SMS or email",
-    /did not send sms or email/i.test(REQUEST_SEND_DISCLAIMER),
+    "Review disclaimer is honest about connected adapters",
+    /connected email and SMS adapters/i.test(REQUEST_SEND_DISCLAIMER),
   );
 
   console.log("\nTEST — Invoice email path stays independent of SMS");

@@ -40,6 +40,7 @@ const PURPOSE_PREFERENCE: Record<
     | "scheduleNotificationEnabled"
     | "invoiceCommunicationEnabled"
     | "reviewRequestPreferenceEnabled"
+    | "marketingCommunicationEnabled"
   >
 > = {
   ESTIMATE_READY: "estimateCommunicationEnabled",
@@ -49,6 +50,10 @@ const PURPOSE_PREFERENCE: Record<
   INVOICE_READY: "invoiceCommunicationEnabled",
   PAYMENT_REMINDER: "invoiceCommunicationEnabled",
   REVIEW_REQUEST: "reviewRequestPreferenceEnabled",
+  REVIEW_REMINDER: "reviewRequestPreferenceEnabled",
+  REFERRAL_REQUEST: "marketingCommunicationEnabled",
+  JOB_FOLLOW_UP: "marketingCommunicationEnabled",
+  REPEAT_FOLLOW_UP: "marketingCommunicationEnabled",
 };
 
 export function destinationFingerprint(businessId: string, normalizedPhone: string) {

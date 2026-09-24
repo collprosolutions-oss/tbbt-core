@@ -294,6 +294,28 @@ export async function loadReviewsSource(prisma: PrismaClient, businessId: string
       requestToReviewRate: rateWhenValid(reviewRows.length, sentCount),
       responseCompletionRate: rateWhenValid(approvedResponses.length, reviewRows.length),
     },
+    referrals: await prisma.referral.findMany({
+      where: scope,
+      include: {
+        sourceCustomer: { select: { name: true } },
+        referredCustomer: { select: { name: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+    referralRequests: await prisma.referralRequest.findMany({
+      where: scope,
+      include: { customer: { select: { name: true } } },
+      orderBy: { updatedAt: "desc" },
+    }),
+    followUps: await prisma.customerFollowUp.findMany({
+      where: scope,
+      orderBy: { updatedAt: "desc" },
+    }),
+    communications: await prisma.customerCommunication.findMany({
+      where: scope,
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
     customers: [
       ...new Map(
         [

@@ -356,6 +356,7 @@ export type ReportExpense = {
   category: string;
   vendor: string | null;
   jobId: string | null;
+  recurring: boolean;
 };
 
 export type ReportSource = {

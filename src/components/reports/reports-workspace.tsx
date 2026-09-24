@@ -30,7 +30,7 @@ function Money({ value }: { value: number | null | undefined }) {
   return <span className="tabular-nums">{formatMoney(value)}</span>;
 }
 
-export function ReportsWorkspace({ area, rangePreset, from, to, report }: ReportsWorkspaceProps) {
+export function ReportsWorkspace({ area, rangePreset, from, to, report, intelligence }: ReportsWorkspaceProps) {
   const otherParams = new URLSearchParams();
   if (rangePreset !== "month") otherParams.set("range", rangePreset);
   if (rangePreset === "custom" && from) otherParams.set("from", from);
@@ -70,6 +70,35 @@ export function ReportsWorkspace({ area, rangePreset, from, to, report }: Report
             {report.range.comparable ? " · compared with the prior equivalent period" : " · no prior-period comparison"}
           </p>
         </FounderRegion>
+
+        {intelligence && area === "overview" ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Financial intelligence</CardTitle>
+              <CardDescription>
+                {intelligence.messages.bank} {intelligence.messages.accounting}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <p>Average ticket (issued invoices): {intelligence.averageTicket == null ? "—" : formatMoney(intelligence.averageTicket)}</p>
+              <p>
+                Estimate conversion: {intelligence.estimateConversion.approved}/{intelligence.estimateConversion.sent}
+                {intelligence.estimateConversion.conversionRate != null
+                  ? ` (${intelligence.estimateConversion.conversionRate}%)`
+                  : ""}
+              </p>
+              <p>
+                Known future inflows: {formatMoney(intelligence.cashFlow.knownInflows)} · known outflows:{" "}
+                {formatMoney(intelligence.cashFlow.knownOutflows)}. Projected bank balance: Not Connected.
+              </p>
+              <p>{intelligence.cashFlow.message}</p>
+              <p>Recurring expense flags on file: {intelligence.recurringExpenses.length}</p>
+              <Button asChild size="sm" variant="outline">
+                <Link href="/business-health">Open BSOS recommendations</Link>
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <FounderRegion id="charts">
           <ReportCharts area={area} report={report} />

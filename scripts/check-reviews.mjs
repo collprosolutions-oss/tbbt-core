@@ -135,7 +135,11 @@ try {
   check("Reviews nav is visible to ADMIN", visibleAppNav("ADMIN").some((item) => item.href === "/reviews"));
   check("Reviews nav is hidden from MEMBER", !visibleAppNav("MEMBER").some((item) => item.href === "/reviews"));
   check("MEMBER does not have MANAGE_REVIEWS", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_REVIEWS));
-  check("Send disclaimer does not claim an external send", /did not send/i.test(REQUEST_SEND_DISCLAIMER));
+  check(
+    "Send disclaimer is honest about adapters",
+    /connected email and SMS adapters/i.test(REQUEST_SEND_DISCLAIMER) &&
+      /never claims a published/i.test(REQUEST_SEND_DISCLAIMER),
+  );
   check("Response disclaimer does not claim publishing", /does not publish/i.test(RESPONSE_PUBLISH_DISCLAIMER));
   check(
     "Completed job with no request recommends prepare",
@@ -308,7 +312,7 @@ try {
   await expectError(
     "SENT has no fake external-send next step",
     () => advanceReviewRequestStatus(prisma, ownerA, { requestId: draft.id }),
-    (error) => error instanceof ReviewsError && /did not send/.test(error.message),
+    (error) => error instanceof ReviewsError && /already recorded as sent/.test(error.message),
   );
 
   const reminderUpdated = await updateReviewRequest(prisma, ownerA, {

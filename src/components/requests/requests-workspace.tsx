@@ -46,6 +46,7 @@ export type RequestListItem = {
   identityReview: { reason: string; message: string } | null;
   /** Pre-formatted (Decimal -> string) server-side -- never passed as a Decimal instance across the client boundary. */
   estimate: { id: string; status: string; totalLabel: string } | null;
+  serviceAreaNote: string | null;
 };
 
 /**
@@ -332,6 +333,12 @@ function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
           <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
             <p className="font-medium">Needs identity review</p>
             <p className="mt-1">{request.identityReview.message}</p>
+          </div>
+        ) : null}
+        {request.serviceAreaNote ? (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+            <p className="font-medium">Service area</p>
+            <p className="mt-1">{request.serviceAreaNote}</p>
           </div>
         ) : null}
         <DetailField icon={Wrench} label="Requested Work">

@@ -9,6 +9,10 @@ export const CUSTOMER_MESSAGE_PURPOSES = [
   "INVOICE_READY",
   "PAYMENT_REMINDER",
   "REVIEW_REQUEST",
+  "REVIEW_REMINDER",
+  "REFERRAL_REQUEST",
+  "JOB_FOLLOW_UP",
+  "REPEAT_FOLLOW_UP",
 ] as const;
 export type CustomerMessagePurpose = (typeof CUSTOMER_MESSAGE_PURPOSES)[number];
 
@@ -17,6 +21,7 @@ export const CUSTOMER_MESSAGE_RELATED_TYPES = [
   "JOB",
   "INVOICE",
   "REVIEW_REQUEST",
+  "REFERRAL_REQUEST",
 ] as const;
 export type CustomerMessageRelatedType = (typeof CUSTOMER_MESSAGE_RELATED_TYPES)[number];
 

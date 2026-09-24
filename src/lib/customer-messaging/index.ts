@@ -90,6 +90,8 @@ export {
   estimateReadySmsBody,
   invoiceReadySmsBody,
   paymentReminderSmsBody,
+  referralRequestSmsBody,
+  reviewReminderSmsBody,
   reviewRequestSmsBody,
 } from "@/lib/customer-messaging/bodies";
 export {
@@ -98,5 +100,7 @@ export {
   attemptEstimateReadySms,
   attemptInvoiceReadySms,
   attemptPaymentReminderSms,
+  attemptReferralRequestSms,
+  attemptReviewReminderSms,
   attemptReviewRequestSms,
 } from "@/lib/customer-messaging/workflows";

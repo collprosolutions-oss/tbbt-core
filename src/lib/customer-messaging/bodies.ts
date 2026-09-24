@@ -50,6 +50,26 @@ export function reviewRequestSmsBody(input: { requestText: string; businessName:
   return text || `${input.businessName} would value an honest review.`;
 }
 
+export function reviewReminderSmsBody(input: { requestText: string; businessName: string }) {
+  const text = input.requestText.trim();
+  return text
+    ? `Reminder from ${input.businessName}: ${text}`
+    : `Reminder: ${input.businessName} would still value an honest review.`;
+}
+
+export function referralRequestSmsBody(input: { requestText: string; businessName: string }) {
+  const text = input.requestText.trim();
+  return text || `${input.businessName} would appreciate a referral if you are comfortable sharing.`;
+}
+
+export function jobFollowUpSmsBody(input: { businessName: string }) {
+  return `${input.businessName} is checking in after your recent job. Reply STOP to opt out of SMS.`;
+}
+
+export function repeatFollowUpSmsBody(input: { businessName: string }) {
+  return `${input.businessName} would be glad to help with your next project. Reply STOP to opt out of SMS.`;
+}
+
 export function customerSmsIdempotencyKey(purpose: string, relatedId: string, extra?: string) {
   return extra ? `sms:${purpose}:${relatedId}:${extra}` : `sms:${purpose}:${relatedId}`;
 }

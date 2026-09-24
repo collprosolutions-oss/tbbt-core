@@ -1,0 +1,84 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { bsosErrorMessage, createBusinessActionItem, createBusinessGoal, updateBusinessActionStatus, updateBusinessGoalStatus } from "@/lib/bsos-ops";
+import { prisma } from "@/lib/prisma";
+import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
+
+export type BsosActionState = { error?: string; message?: string };
+
+function readString(formData: FormData, key: string) {
+  const value = formData.get(key);
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export async function createGoalAction(
+  _prev: BsosActionState,
+  formData: FormData,
+): Promise<BsosActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    await createBusinessGoal(prisma, access, {
+      title: readString(formData, "title"),
+      description: readString(formData, "description"),
+      recommendationKey: readString(formData, "recommendationKey") || undefined,
+    });
+    revalidatePath("/business-health");
+    return { message: "Goal saved from owner input. It is not a recorded financial fact." };
+  } catch (error) {
+    return { error: bsosErrorMessage(error, "That goal could not be saved.") };
+  }
+}
+
+export async function updateGoalStatusAction(
+  _prev: BsosActionState,
+  formData: FormData,
+): Promise<BsosActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    await updateBusinessGoalStatus(prisma, access, {
+      goalId: readString(formData, "goalId"),
+      status: readString(formData, "status"),
+    });
+    revalidatePath("/business-health");
+    return { message: "Goal status updated." };
+  } catch (error) {
+    return { error: bsosErrorMessage(error, "That goal could not be updated.") };
+  }
+}
+
+export async function createActionItemAction(
+  _prev: BsosActionState,
+  formData: FormData,
+): Promise<BsosActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    await createBusinessActionItem(prisma, access, {
+      title: readString(formData, "title"),
+      recommendationKey: readString(formData, "recommendationKey"),
+      notes: readString(formData, "notes"),
+      goalId: readString(formData, "goalId") || undefined,
+    });
+    revalidatePath("/business-health");
+    return { message: "Action item added to the owner plan." };
+  } catch (error) {
+    return { error: bsosErrorMessage(error, "That action item could not be saved.") };
+  }
+}
+
+export async function updateActionStatusAction(
+  _prev: BsosActionState,
+  formData: FormData,
+): Promise<BsosActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    await updateBusinessActionStatus(prisma, access, {
+      actionId: readString(formData, "actionId"),
+      status: readString(formData, "status"),
+    });
+    revalidatePath("/business-health");
+    return { message: "Action item updated." };
+  } catch (error) {
+    return { error: bsosErrorMessage(error, "That action item could not be updated.") };
+  }
+}
