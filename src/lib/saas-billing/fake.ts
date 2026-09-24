@@ -4,6 +4,7 @@ import type {
   CreateSaasPortalInput,
   SaasBillingProvider,
   SaasCheckoutSessionResult,
+  ScheduleSaasCancelInput,
 } from "@/lib/saas-billing/types";
 import { isBlockingSaasStatus, SaasBillingError } from "@/lib/saas-billing/types";
 
@@ -36,6 +37,7 @@ export type FakeSaasBillingProvider = SaasBillingProvider & {
   checkouts: FakeSaasCheckout[];
   portalSessions: Array<{ customerId: string; url: string }>;
   failPortal: boolean;
+  failCancel: boolean;
   addSubscription(input: FakeSaasSubscription): void;
 };
 
@@ -54,6 +56,7 @@ export function createFakeSaasBillingProvider(): FakeSaasBillingProvider {
     checkouts,
     portalSessions,
     failPortal: false,
+    failCancel: false,
     addSubscription(input) {
       subscriptions.set(input.id, input);
     },
@@ -101,6 +104,17 @@ export function createFakeSaasBillingProvider(): FakeSaasBillingProvider {
       const url = `https://billing.stripe.test/session/${input.customerId}`;
       portalSessions.push({ customerId: input.customerId, url });
       return { url };
+    },
+    async scheduleCancelAtPeriodEnd(input: ScheduleSaasCancelInput) {
+      if (provider.failCancel) {
+        throw new SaasBillingError("Stripe could not schedule cancellation.");
+      }
+      const row = subscriptions.get(input.subscriptionId);
+      if (!row) {
+        throw new SaasBillingError("Stripe subscription was not found.");
+      }
+      row.cancelAtPeriodEnd = true;
+      return { subscriptionId: row.id, cancelAtPeriodEnd: true };
     },
   };
 

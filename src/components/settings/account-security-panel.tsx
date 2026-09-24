@@ -70,7 +70,17 @@ function TotpSection({
       </div>
       {!totpEnabled ? (
         <>
-          <form action={startAction}>
+          <form action={startAction} className="space-y-2">
+            <label className="block text-sm">
+              Current password
+              <input
+                type="password"
+                name="currentPassword"
+                autoComplete="current-password"
+                className="mt-1 w-full rounded-md border px-3 py-2"
+                required
+              />
+            </label>
             <Button type="submit" size="sm" variant="outline" disabled={startPending}>
               {startPending ? "Starting…" : "Start authenticator setup"}
             </Button>

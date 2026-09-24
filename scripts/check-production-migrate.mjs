@@ -495,6 +495,16 @@ check(
     handyman10Migration.includes('ADD COLUMN IF NOT EXISTS "offboardingRequestedAt"'),
 );
 
+const authChallengeAttemptsMigration = readFileSync(
+  new URL("../prisma/migrations/20260924110000_auth_challenge_attempts/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "AuthChallenge failed-attempt migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(authChallengeAttemptsMigration) &&
+    authChallengeAttemptsMigration.includes('ADD COLUMN IF NOT EXISTS "failedAttemptCount"'),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

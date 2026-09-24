@@ -807,7 +807,10 @@ function SectionBody(props: SettingsWorkspaceProps) {
         {props.security?.canTransferOwnership ? (
           <div className="rounded-lg border p-3">
             <p className="font-medium">Ownership transfer</p>
-            <OwnershipTransferForm candidates={props.security.ownershipCandidates} />
+            <OwnershipTransferForm
+              candidates={props.security.ownershipCandidates}
+              totpEnabled={props.security.totpEnabled}
+            />
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
@@ -862,7 +865,10 @@ function SectionBody(props: SettingsWorkspaceProps) {
         {props.security?.canRequestOffboarding ? (
           <div className="rounded-lg border p-3">
             <p className="font-medium">Cancel software access</p>
-            <OffboardingForm alreadyRequested={Boolean(props.security.offboardingRequestedAt)} />
+            <OffboardingForm
+              alreadyRequested={Boolean(props.security.offboardingRequestedAt)}
+              totpEnabled={props.security.totpEnabled}
+            />
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">

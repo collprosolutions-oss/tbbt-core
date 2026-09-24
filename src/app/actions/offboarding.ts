@@ -28,12 +28,14 @@ export async function requestOffboardingAction(
     const result = await requestBusinessOffboardingOp(prisma, access, {
       confirmation: readString(formData, "confirmation"),
       acknowledgedExport: formData.get("acknowledgedExport") === "1",
+      currentPassword: readString(formData, "currentPassword"),
+      totpOrBackupCode: readString(formData, "totpOrBackupCode") || undefined,
     });
     revalidatePath("/settings");
     return {
       message: result.recordsDeleted
         ? "Unexpected delete."
-        : "Cancellation is recorded. Historical customers, jobs, invoices, payments, and time cards stay on file. Software access ends at the current period if a paid subscription is scheduled to cancel.",
+        : `Cancellation is recorded. Historical customers, jobs, invoices, payments, and time cards stay on file. ${result.billingCancellationMessage}`,
     };
   } catch (error) {
     if (error instanceof OffboardingError || error instanceof ForbiddenError) {

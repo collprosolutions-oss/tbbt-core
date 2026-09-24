@@ -19,17 +19,30 @@ const { verifyTotpCode, generateTotpSecret, currentTotpCode } = await import("@/
 const {
   startTotpEnrollmentOp,
   confirmTotpEnrollmentOp,
+  consumeBackupCode,
   createTotpSignInChallenge,
   verifyTotpSignInChallenge,
   revokeOtherSessionsOp,
+  SENSITIVE_PASSWORD_REQUIRED,
+  SENSITIVE_PASSWORD_WRONG,
+  SENSITIVE_TOTP_REQUIRED,
+  TOTP_CHALLENGE_EXPIRED_MESSAGE,
+  TOTP_CHALLENGE_LOCKED_MESSAGE,
+  TOTP_CHALLENGE_MAX_ATTEMPTS,
 } = await import("@/lib/account-security");
 const { buildBusinessExportZip, isExportableField } = await import("@/lib/business-export");
 const { transferBusinessOwnershipOp, OWNERSHIP_TRANSFER_CONFIRMATION } = await import(
   "@/lib/ownership-transfer"
 );
-const { requestBusinessOffboardingOp, OFFBOARDING_CONFIRMATION } = await import(
-  "@/lib/offboarding"
-);
+const {
+  requestBusinessOffboardingOp,
+  OFFBOARDING_CONFIRMATION,
+  OFFBOARDING_BILLING_NOT_SCHEDULED_MESSAGE,
+  OFFBOARDING_BILLING_SCHEDULED_MESSAGE,
+} = await import("@/lib/offboarding");
+const { createFakeSaasBillingProvider } = await import("@/lib/saas-billing/fake");
+const { applyParsedSaasBillingEvent, parseSaasBillingEvent, SAAS_CHECKOUT_PURPOSE } =
+  await import("@/lib/saas-billing");
 const { getTenantAppOrigin, tenantPublicSiteUrl, tenantEstimateUrl } = await import(
   "@/lib/tenant-app-url"
 );
@@ -128,6 +141,28 @@ check(
   settingsSrc.includes("Download a tenant-scoped ZIP") ||
     settingsSrc.includes("Tenant-scoped ZIP export is available"),
 );
+const offboardingSrc = readFileSync(new URL("../src/lib/offboarding.ts", import.meta.url), "utf8");
+const securitySrc = readFileSync(new URL("../src/lib/account-security.ts", import.meta.url), "utf8");
+const ownershipSrc = readFileSync(new URL("../src/lib/ownership-transfer.ts", import.meta.url), "utf8");
+check(
+  "Offboarding never writes cancelAtPeriodEnd locally",
+  !offboardingSrc.includes("cancelAtPeriodEnd: true") &&
+    offboardingSrc.includes("scheduleCancelAtPeriodEnd") &&
+    offboardingSrc.includes("billingCancellationScheduled") &&
+    offboardingSrc.includes("Billing cancellation is not yet scheduled."),
+);
+check(
+  "Offboarding and ownership require step-up proof before typed confirmation",
+  offboardingSrc.includes("requireSensitiveActionProof") &&
+    ownershipSrc.includes("requireSensitiveActionProof") &&
+    securitySrc.includes("usedAt: null"),
+);
+check(
+  "TOTP challenges persist a failed-attempt counter",
+  readFileSync(new URL("../prisma/schema.prisma", import.meta.url), "utf8").includes(
+    "failedAttemptCount",
+  ) && securitySrc.includes("failedAttemptCount"),
+);
 
 const previousAppUrl = process.env.NEXT_PUBLIC_APP_URL;
 process.env.NEXT_PUBLIC_APP_URL = "https://www.collproreno.com";
@@ -191,21 +226,88 @@ try {
   check("Export excludes the other tenant customer", !zipText.includes("Other Customer"));
   check("Export zip is non-empty", exported.bytes.length > 100);
 
+  let enrollmentNeedsPassword = false;
+  try {
+    await startTotpEnrollmentOp(prisma, {
+      userId: ownerUser.id,
+      accountName: ownerUser.email,
+      password: "",
+    });
+  } catch (error) {
+    enrollmentNeedsPassword = error.message === SENSITIVE_PASSWORD_REQUIRED;
+  }
+  check("TOTP enrollment requires the current password", enrollmentNeedsPassword);
+
   const started = await startTotpEnrollmentOp(prisma, {
     userId: ownerUser.id,
     accountName: ownerUser.email,
+    password: "password12",
   });
   const confirmed = await confirmTotpEnrollmentOp(prisma, {
     userId: ownerUser.id,
     code: currentTotpCode(started.secret),
   });
   check("TOTP enrollment returns backup codes", confirmed.backupCodes.length >= 8);
+
   const challenge = await createTotpSignInChallenge(prisma, ownerUser.id);
   const verified = await verifyTotpSignInChallenge(prisma, {
     challengeToken: challenge,
     code: currentTotpCode(started.secret),
   });
   check("TOTP sign-in challenge accepts a current code", verified.userId === ownerUser.id);
+
+  const limitedToken = await createTotpSignInChallenge(prisma, ownerUser.id);
+  let lockedMessage = "";
+  for (let attempt = 0; attempt < TOTP_CHALLENGE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await verifyTotpSignInChallenge(prisma, {
+        challengeToken: limitedToken,
+        code: "000000",
+      });
+    } catch (error) {
+      lockedMessage = error.message;
+    }
+  }
+  const leftoverLimited = await prisma.authChallenge.findMany({
+    where: { userId: ownerUser.id, purpose: "TOTP_SIGN_IN" },
+  });
+  check(
+    "Five wrong TOTP codes invalidate the challenge",
+    lockedMessage === TOTP_CHALLENGE_LOCKED_MESSAGE && leftoverLimited.length === 0,
+  );
+
+  const expiredToken = await createTotpSignInChallenge(prisma, ownerUser.id);
+  await prisma.authChallenge.updateMany({
+    where: { userId: ownerUser.id, purpose: "TOTP_SIGN_IN" },
+    data: { expiresAt: new Date(Date.now() - 1000) },
+  });
+  let expiredMessage = "";
+  try {
+    await verifyTotpSignInChallenge(prisma, {
+      challengeToken: expiredToken,
+      code: currentTotpCode(started.secret),
+    });
+  } catch (error) {
+    expiredMessage = error.message;
+  }
+  const leftoverExpired = await prisma.authChallenge.findMany({
+    where: { userId: ownerUser.id, purpose: "TOTP_SIGN_IN" },
+  });
+  check(
+    "Expired TOTP challenges are rejected and cleaned up",
+    expiredMessage === TOTP_CHALLENGE_EXPIRED_MESSAGE && leftoverExpired.length === 0,
+  );
+
+  const backupCode = confirmed.backupCodes[0];
+  const [firstUse, secondUse] = await Promise.all([
+    consumeBackupCode(prisma, ownerUser.id, backupCode),
+    consumeBackupCode(prisma, ownerUser.id, backupCode),
+  ]);
+  const reused = await consumeBackupCode(prisma, ownerUser.id, backupCode);
+  check(
+    "Backup codes are consumed once under concurrency",
+    (firstUse ? 1 : 0) + (secondUse ? 1 : 0) === 1 && reused === false,
+  );
 
   const currentToken = `current-session-${randomUUID()}`;
   const otherToken = `other-session-${randomUUID()}`;
@@ -238,15 +340,55 @@ try {
     await transferBusinessOwnershipOp(prisma, accessFor(admin, business), {
       targetMembershipId: owner.id,
       confirmation: OWNERSHIP_TRANSFER_CONFIRMATION,
+      currentPassword: "password12",
     });
   } catch {
     adminBlocked = true;
   }
   check("ADMIN cannot transfer ownership", adminBlocked);
 
+  let transferNeedsPassword = false;
+  try {
+    await transferBusinessOwnershipOp(prisma, accessFor(owner, business), {
+      targetMembershipId: admin.id,
+      confirmation: OWNERSHIP_TRANSFER_CONFIRMATION,
+      currentPassword: "",
+    });
+  } catch (error) {
+    transferNeedsPassword = error.message === SENSITIVE_PASSWORD_REQUIRED;
+  }
+  check("TRANSFER confirmation is not identity proof", transferNeedsPassword);
+
+  let transferNeedsTotp = false;
+  try {
+    await transferBusinessOwnershipOp(prisma, accessFor(owner, business), {
+      targetMembershipId: admin.id,
+      confirmation: OWNERSHIP_TRANSFER_CONFIRMATION,
+      currentPassword: "password12",
+    });
+  } catch (error) {
+    transferNeedsTotp = error.message === SENSITIVE_TOTP_REQUIRED;
+  }
+  check("Ownership transfer requires TOTP when it is enabled", transferNeedsTotp);
+
+  let wrongPasswordBlocked = false;
+  try {
+    await transferBusinessOwnershipOp(prisma, accessFor(owner, business), {
+      targetMembershipId: admin.id,
+      confirmation: OWNERSHIP_TRANSFER_CONFIRMATION,
+      currentPassword: "wrong-password",
+      totpOrBackupCode: currentTotpCode(started.secret),
+    });
+  } catch (error) {
+    wrongPasswordBlocked = error.message === SENSITIVE_PASSWORD_WRONG;
+  }
+  check("Wrong current password blocks ownership transfer", wrongPasswordBlocked);
+
   const transferred = await transferBusinessOwnershipOp(prisma, accessFor(owner, business), {
     targetMembershipId: admin.id,
     confirmation: OWNERSHIP_TRANSFER_CONFIRMATION,
+    currentPassword: "password12",
+    totpOrBackupCode: currentTotpCode(started.secret),
   });
   const ownerAfter = await prisma.membership.findUnique({ where: { id: owner.id } });
   const adminAfter = await prisma.membership.findUnique({ where: { id: admin.id } });
@@ -262,14 +404,220 @@ try {
   );
 
   const customerCountBefore = await prisma.customer.count({ where: { businessId: business.id } });
+  let cancelIsNotProof = false;
+  try {
+    await requestBusinessOffboardingOp(prisma, accessFor(adminAfter, business), {
+      confirmation: OFFBOARDING_CONFIRMATION,
+      acknowledgedExport: true,
+      currentPassword: "",
+    });
+  } catch (error) {
+    cancelIsNotProof = error.message === SENSITIVE_PASSWORD_REQUIRED;
+  }
+  check("CANCEL confirmation is not identity proof", cancelIsNotProof);
+
   const offboarded = await requestBusinessOffboardingOp(prisma, accessFor(adminAfter, business), {
     confirmation: OFFBOARDING_CONFIRMATION,
     acknowledgedExport: true,
+    currentPassword: "password12",
   });
   const customerCountAfter = await prisma.customer.count({ where: { businessId: business.id } });
-  const businessAfter = await prisma.business.findUnique({ where: { id: business.id } });
+  const businessAfter = await prisma.business.findUnique({
+    where: { id: business.id },
+    include: { saasSubscription: true },
+  });
   check("Offboarding does not delete customers", customerCountBefore === customerCountAfter && customerCountAfter === 1);
-  check("Offboarding records a timestamp and does not claim deletion", Boolean(businessAfter.offboardingRequestedAt) && offboarded.recordsDeleted === false);
+  check(
+    "Offboarding without a Stripe subscription records the request and does not claim billing cancel",
+    Boolean(businessAfter.offboardingRequestedAt) &&
+      offboarded.recordsDeleted === false &&
+      offboarded.billingCancellationScheduled === false &&
+      offboarded.billingCancellationMessage === OFFBOARDING_BILLING_NOT_SCHEDULED_MESSAGE &&
+      businessAfter.saasSubscription == null,
+  );
+
+  async function seedOwnedBusiness(name) {
+    const user = await prisma.user.create({
+      data: {
+        email: `${name}-${randomUUID()}@example.com`,
+        name,
+        passwordHash,
+      },
+    });
+    const row = await prisma.business.create({
+      data: {
+        name,
+        slug: `${name.toLowerCase().replace(/\s+/g, "-")}-${randomUUID().slice(0, 8)}`,
+        tradeCode: "HANDYMAN",
+      },
+    });
+    const membership = await prisma.membership.create({
+      data: { userId: user.id, businessId: row.id, role: "OWNER" },
+    });
+    return { user, business: row, membership };
+  }
+
+  const billed = await seedOwnedBusiness("Billing Success");
+  const failed = await seedOwnedBusiness("Billing Fail");
+  const totpOffboard = await seedOwnedBusiness("Totp Offboard");
+  const successProvider = createFakeSaasBillingProvider();
+  const failProvider = createFakeSaasBillingProvider();
+  failProvider.failCancel = true;
+  successProvider.addSubscription({
+    id: "sub_success_1",
+    customerId: "cus_success_1",
+    priceId: "price_saas_test",
+    status: "active",
+    currentPeriodEnd: new Date("2026-10-24T00:00:00.000Z"),
+    cancelAtPeriodEnd: false,
+  });
+  failProvider.addSubscription({
+    id: "sub_fail_1",
+    customerId: "cus_fail_1",
+    priceId: "price_saas_test",
+    status: "active",
+    currentPeriodEnd: new Date("2026-10-24T00:00:00.000Z"),
+    cancelAtPeriodEnd: false,
+  });
+  await prisma.businessSaasSubscription.create({
+    data: {
+      businessId: billed.business.id,
+      stripeCustomerId: "cus_success_1",
+      stripeSubscriptionId: "sub_success_1",
+      stripePriceId: "price_saas_test",
+      status: "active",
+      cancelAtPeriodEnd: false,
+    },
+  });
+  await prisma.businessSaasSubscription.create({
+    data: {
+      businessId: failed.business.id,
+      stripeCustomerId: "cus_fail_1",
+      stripeSubscriptionId: "sub_fail_1",
+      stripePriceId: "price_saas_test",
+      status: "active",
+      cancelAtPeriodEnd: false,
+    },
+  });
+
+  const totpStarted = await startTotpEnrollmentOp(prisma, {
+    userId: totpOffboard.user.id,
+    accountName: totpOffboard.user.email,
+    password: "password12",
+  });
+  await confirmTotpEnrollmentOp(prisma, {
+    userId: totpOffboard.user.id,
+    code: currentTotpCode(totpStarted.secret),
+  });
+  let offboardNeedsTotp = false;
+  try {
+    await requestBusinessOffboardingOp(prisma, accessFor(totpOffboard.membership, totpOffboard.business), {
+      confirmation: OFFBOARDING_CONFIRMATION,
+      acknowledgedExport: true,
+      currentPassword: "password12",
+    });
+  } catch (error) {
+    offboardNeedsTotp = error.message === SENSITIVE_TOTP_REQUIRED;
+  }
+  check("Offboarding requires TOTP when it is enabled", offboardNeedsTotp);
+  const totpOffboarded = await requestBusinessOffboardingOp(
+    prisma,
+    accessFor(totpOffboard.membership, totpOffboard.business),
+    {
+      confirmation: OFFBOARDING_CONFIRMATION,
+      acknowledgedExport: true,
+      currentPassword: "password12",
+      totpOrBackupCode: currentTotpCode(totpStarted.secret),
+    },
+  );
+  check(
+    "TOTP-proven offboarding still preserves records when billing is unavailable",
+    totpOffboarded.recordsDeleted === false &&
+      totpOffboarded.billingCancellationScheduled === false,
+  );
+
+  const scheduled = await requestBusinessOffboardingOp(
+    prisma,
+    accessFor(billed.membership, billed.business),
+    {
+      confirmation: OFFBOARDING_CONFIRMATION,
+      acknowledgedExport: true,
+      currentPassword: "password12",
+    },
+    { provider: successProvider },
+  );
+  const billedRow = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: billed.business.id },
+  });
+  const billedBusiness = await prisma.business.findUnique({ where: { id: billed.business.id } });
+  check(
+    "Fake provider success schedules cancel in-memory only",
+    scheduled.billingCancellationScheduled === true &&
+      scheduled.billingCancellationMessage === OFFBOARDING_BILLING_SCHEDULED_MESSAGE &&
+      billedRow.cancelAtPeriodEnd === false &&
+      Boolean(billedBusiness.offboardingRequestedAt) &&
+      successProvider.subscriptions.get("sub_success_1").cancelAtPeriodEnd === true,
+  );
+
+  const webhookApplied = await applyParsedSaasBillingEvent(
+    prisma,
+    parseSaasBillingEvent({
+      id: `evt_offboard_${randomUUID()}`,
+      type: "customer.subscription.updated",
+      created: Math.floor(Date.now() / 1000),
+      data: {
+        object: {
+          object: "subscription",
+          id: "sub_success_1",
+          status: "active",
+          customer: "cus_success_1",
+          cancel_at_period_end: true,
+          items: {
+            data: [
+              {
+                current_period_end: 1_800_000_000,
+                price: { id: "price_saas_test" },
+              },
+            ],
+          },
+          metadata: {
+            purpose: SAAS_CHECKOUT_PURPOSE,
+            businessId: billed.business.id,
+          },
+        },
+      },
+    }),
+  );
+  const billedAfterWebhook = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: billed.business.id },
+  });
+  check(
+    "Webhook snapshot is the authoritative cancelAtPeriodEnd write",
+    webhookApplied.applied === true && billedAfterWebhook.cancelAtPeriodEnd === true,
+  );
+
+  const failedCancel = await requestBusinessOffboardingOp(
+    prisma,
+    accessFor(failed.membership, failed.business),
+    {
+      confirmation: OFFBOARDING_CONFIRMATION,
+      acknowledgedExport: true,
+      currentPassword: "password12",
+    },
+    { provider: failProvider },
+  );
+  const failedRow = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: failed.business.id },
+  });
+  const failedBusiness = await prisma.business.findUnique({ where: { id: failed.business.id } });
+  check(
+    "Provider cancel failure preserves the offboarding request and does not claim billing cancel",
+    failedCancel.billingCancellationScheduled === false &&
+      failedCancel.billingCancellationMessage === OFFBOARDING_BILLING_NOT_SCHEDULED_MESSAGE &&
+      failedRow.cancelAtPeriodEnd === false &&
+      Boolean(failedBusiness.offboardingRequestedAt) &&
+      failProvider.subscriptions.get("sub_fail_1").cancelAtPeriodEnd === false,
+  );
 } catch (error) {
   console.error(error);
   failures += 1;

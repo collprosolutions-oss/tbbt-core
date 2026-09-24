@@ -7,8 +7,10 @@ import { OWNERSHIP_TRANSFER_CONFIRMATION } from "@/lib/ownership-transfer";
 
 export function OwnershipTransferForm({
   candidates,
+  totpEnabled,
 }: {
   candidates: Array<{ id: string; name: string; email: string; role: string }>;
+  totpEnabled: boolean;
 }) {
   const [state, action, pending] = useActionState(
     transferOwnershipAction,
@@ -37,6 +39,27 @@ export function OwnershipTransferForm({
         </select>
       </label>
       <label className="block text-sm">
+        Current password
+        <input
+          type="password"
+          name="currentPassword"
+          autoComplete="current-password"
+          className="mt-1 w-full rounded-md border px-3 py-2"
+          required
+        />
+      </label>
+      {totpEnabled ? (
+        <label className="block text-sm">
+          Authenticator or backup code
+          <input
+            name="totpOrBackupCode"
+            autoComplete="one-time-code"
+            className="mt-1 w-full rounded-md border px-3 py-2"
+            required
+          />
+        </label>
+      ) : null}
+      <label className="block text-sm">
         Type {OWNERSHIP_TRANSFER_CONFIRMATION} to confirm
         <input
           name="confirmation"
@@ -47,7 +70,8 @@ export function OwnershipTransferForm({
       </label>
       <p className="text-sm text-muted-foreground">
         You become ADMIN. The new owner becomes OWNER. Audit history is preserved. Financial
-        records are not rewritten.
+        records are not rewritten. Typing {OWNERSHIP_TRANSFER_CONFIRMATION} confirms intent. It
+        is not identity proof.
       </p>
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Transferring…" : "Transfer ownership"}

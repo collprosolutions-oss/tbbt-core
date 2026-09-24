@@ -146,12 +146,15 @@ model TotpBackupCode {
 /// Short-lived sign-in challenge after password succeeds and TOTP is on.
 /// Stores only sha256(token). Raw token lives in the sign-in form.
 model AuthChallenge {
-  id        String   @id @default(cuid())
-  userId    String
-  tokenHash String   @unique
-  purpose   String
-  expiresAt DateTime
-  createdAt DateTime @default(now())
+  id                 String   @id @default(cuid())
+  userId             String
+  tokenHash          String   @unique
+  purpose            String
+  expiresAt          DateTime
+  /// Failed TOTP/backup attempts against this challenge. Five failures
+  /// invalidate the challenge. This is not a user lockout.
+  failedAttemptCount Int      @default(0)
+  createdAt          DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

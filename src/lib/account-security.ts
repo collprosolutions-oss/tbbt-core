@@ -1,5 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { createSecureToken, hashToken } from "@/lib/auth-crypto";
+import { createSecureToken, hashToken, verifyPassword } from "@/lib/auth-crypto";
 import {
   generateBackupCodes,
   generateTotpSecret,
@@ -11,6 +11,18 @@ type Db = PrismaClient | Prisma.TransactionClient;
 
 export const TOTP_CHALLENGE_PURPOSE = "TOTP_SIGN_IN";
 export const TOTP_CHALLENGE_MINUTES = 10;
+export const TOTP_CHALLENGE_MAX_ATTEMPTS = 5;
+
+export const SENSITIVE_PASSWORD_REQUIRED = "Current password is required.";
+export const SENSITIVE_PASSWORD_WRONG = "Current password is incorrect.";
+export const SENSITIVE_TOTP_REQUIRED =
+  "Enter a current authenticator or backup code.";
+export const SENSITIVE_TOTP_WRONG =
+  "That authenticator or backup code is not valid.";
+export const TOTP_CHALLENGE_EXPIRED_MESSAGE =
+  "That sign-in challenge expired. Sign in again.";
+export const TOTP_CHALLENGE_LOCKED_MESSAGE =
+  "Too many failed attempts. Sign in again.";
 
 export class AccountSecurityError extends Error {
   constructor(message: string) {
@@ -79,10 +91,47 @@ export async function revokeSessionOp(
   });
 }
 
-export async function startTotpEnrollmentOp(
-  db: Db,
-  input: { userId: string; accountName: string },
+export async function requireSensitiveActionProof(
+  db: PrismaClient,
+  userId: string,
+  input: { password: string; totpOrBackupCode?: string },
 ) {
+  const user = await db.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      passwordHash: true,
+      totpEnabledAt: true,
+      totpSecret: true,
+    },
+  });
+  if (!user) {
+    throw new AccountSecurityError("You need to sign in again.");
+  }
+  if (!input.password.trim()) {
+    throw new AccountSecurityError(SENSITIVE_PASSWORD_REQUIRED);
+  }
+  if (!(await verifyPassword(input.password, user.passwordHash))) {
+    throw new AccountSecurityError(SENSITIVE_PASSWORD_WRONG);
+  }
+  if (user.totpEnabledAt && user.totpSecret) {
+    const code = (input.totpOrBackupCode ?? "").trim();
+    if (!code) {
+      throw new AccountSecurityError(SENSITIVE_TOTP_REQUIRED);
+    }
+    const totpOk = verifyTotpCode(user.totpSecret, code);
+    const backupOk = totpOk ? false : await consumeBackupCode(db, user.id, code);
+    if (!totpOk && !backupOk) {
+      throw new AccountSecurityError(SENSITIVE_TOTP_WRONG);
+    }
+  }
+}
+
+export async function startTotpEnrollmentOp(
+  db: PrismaClient,
+  input: { userId: string; accountName: string; password: string },
+) {
+  await requireSensitiveActionProof(db, input.userId, { password: input.password });
   const user = await db.user.findUnique({ where: { id: input.userId } });
   if (!user) {
     throw new AccountSecurityError("You need to sign in again.");
@@ -168,6 +217,13 @@ export async function createTotpSignInChallenge(
   userId: string,
 ): Promise<string> {
   const token = createSecureToken();
+  await db.authChallenge.deleteMany({
+    where: {
+      userId,
+      purpose: TOTP_CHALLENGE_PURPOSE,
+      expiresAt: { lt: new Date() },
+    },
+  });
   await db.authChallenge.create({
     data: {
       userId,
@@ -185,16 +241,18 @@ export async function verifyTotpSignInChallenge(
 ): Promise<{ userId: string }> {
   const challenge = await db.authChallenge.findUnique({
     where: { tokenHash: hashToken(input.challengeToken) },
-    include: {
-      user: { include: { totpBackupCodes: { where: { usedAt: null } } } },
-    },
+    include: { user: true },
   });
   if (!challenge || challenge.purpose !== TOTP_CHALLENGE_PURPOSE) {
     throw new AccountSecurityError("That sign-in challenge is not valid.");
   }
   if (challenge.expiresAt < new Date()) {
     await db.authChallenge.delete({ where: { id: challenge.id } }).catch(() => undefined);
-    throw new AccountSecurityError("That sign-in challenge expired. Sign in again.");
+    throw new AccountSecurityError(TOTP_CHALLENGE_EXPIRED_MESSAGE);
+  }
+  if (challenge.failedAttemptCount >= TOTP_CHALLENGE_MAX_ATTEMPTS) {
+    await db.authChallenge.delete({ where: { id: challenge.id } }).catch(() => undefined);
+    throw new AccountSecurityError(TOTP_CHALLENGE_LOCKED_MESSAGE);
   }
   const user = challenge.user;
   if (!user.totpEnabledAt || !user.totpSecret) {
@@ -203,22 +261,26 @@ export async function verifyTotpSignInChallenge(
   const totpOk = verifyTotpCode(user.totpSecret, input.code);
   const backupOk = totpOk ? false : await consumeBackupCode(db, user.id, input.code);
   if (!totpOk && !backupOk) {
+    const updated = await db.authChallenge.update({
+      where: { id: challenge.id },
+      data: { failedAttemptCount: { increment: 1 } },
+    });
+    if (updated.failedAttemptCount >= TOTP_CHALLENGE_MAX_ATTEMPTS) {
+      await db.authChallenge.delete({ where: { id: challenge.id } }).catch(() => undefined);
+      throw new AccountSecurityError(TOTP_CHALLENGE_LOCKED_MESSAGE);
+    }
     throw new AccountSecurityError("That authenticator or backup code is not valid.");
   }
   await db.authChallenge.delete({ where: { id: challenge.id } });
   return { userId: user.id };
 }
 
-async function consumeBackupCode(db: PrismaClient, userId: string, code: string) {
+export async function consumeBackupCode(db: PrismaClient, userId: string, code: string) {
   const normalized = code.replace(/\s+/g, "").toUpperCase();
   if (!normalized) return false;
-  const match = await db.totpBackupCode.findFirst({
+  const result = await db.totpBackupCode.updateMany({
     where: { userId, codeHash: hashToken(normalized), usedAt: null },
-  });
-  if (!match) return false;
-  await db.totpBackupCode.update({
-    where: { id: match.id },
     data: { usedAt: new Date() },
   });
-  return true;
+  return result.count === 1;
 }

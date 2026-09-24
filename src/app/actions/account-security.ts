@@ -46,7 +46,7 @@ async function audit(settingKey: string, previousValue: unknown, newValue: unkno
 
 export async function startTotpEnrollmentAction(
   _prev: AccountSecurityState,
-  _formData: FormData,
+  formData: FormData,
 ): Promise<AccountSecurityState> {
   const session = await getSessionUser();
   if (!session) return { error: "You need to sign in again." };
@@ -54,6 +54,7 @@ export async function startTotpEnrollmentAction(
     const started = await startTotpEnrollmentOp(prisma, {
       userId: session.id,
       accountName: session.email,
+      password: readString(formData, "currentPassword"),
     });
     await audit("totpEnrollment", "off", "pending");
     revalidatePath("/settings");

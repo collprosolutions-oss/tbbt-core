@@ -1,6 +1,10 @@
 import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import {
+  AccountSecurityError,
+  requireSensitiveActionProof,
+} from "@/lib/account-security";
+import {
   CAPABILITIES,
   ForbiddenError,
   requireBusinessCapability,
@@ -17,16 +21,38 @@ export class OwnershipTransferError extends Error {
   }
 }
 
+function actorUserId(access: BusinessAccess) {
+  return access.workspace.user?.id ?? access.workspace.membership.userId;
+}
+
 export async function transferBusinessOwnershipOp(
   prisma: PrismaClient,
   access: BusinessAccess,
   input: {
     targetMembershipId: string;
     confirmation: string;
+    currentPassword: string;
+    totpOrBackupCode?: string;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.TRANSFER_OWNERSHIP);
   requireBusinessRole(access, "OWNER");
+
+  const userId = actorUserId(access);
+  if (!userId) {
+    throw new OwnershipTransferError("You need to sign in again.");
+  }
+  try {
+    await requireSensitiveActionProof(prisma, userId, {
+      password: input.currentPassword,
+      totpOrBackupCode: input.totpOrBackupCode,
+    });
+  } catch (error) {
+    if (error instanceof AccountSecurityError) {
+      throw new OwnershipTransferError(error.message);
+    }
+    throw error;
+  }
 
   if (input.confirmation.trim().toUpperCase() !== OWNERSHIP_TRANSFER_CONFIRMATION) {
     throw new OwnershipTransferError(

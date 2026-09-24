@@ -28,6 +28,8 @@ export async function transferOwnershipAction(
     const result = await transferBusinessOwnershipOp(prisma, access, {
       targetMembershipId: readString(formData, "targetMembershipId"),
       confirmation: readString(formData, "confirmation"),
+      currentPassword: readString(formData, "currentPassword"),
+      totpOrBackupCode: readString(formData, "totpOrBackupCode") || undefined,
     });
     revalidatePath("/settings");
     revalidatePath("/team");
