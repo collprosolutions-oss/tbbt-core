@@ -2,6 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import { bsosErrorMessage, createBusinessActionItem, createBusinessGoal, updateBusinessActionStatus, updateBusinessGoalStatus } from "@/lib/bsos-ops";
+import { createActionFromRecommendation, upsertRecommendationState } from "@/lib/bsos-actions";
+import { buildBsosRecommendations } from "@/lib/bsos";
+import { loadBsosFacts } from "@/lib/bsos-data";
 import { prisma } from "@/lib/prisma";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 
@@ -80,5 +83,63 @@ export async function updateActionStatusAction(
     return { message: "Action item updated." };
   } catch (error) {
     return { error: bsosErrorMessage(error, "That action item could not be updated.") };
+  }
+}
+
+export async function createRecommendationActionAction(
+  _prev: BsosActionState,
+  formData: FormData,
+): Promise<BsosActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const key = readString(formData, "recommendationKey");
+    const facts = await loadBsosFacts(prisma, access.businessId);
+    const recommendation = buildBsosRecommendations(facts).find((item) => item.key === key);
+    if (!recommendation) {
+      return { error: "That recommendation is not active from recorded facts." };
+    }
+    await createActionFromRecommendation(prisma, access, recommendation);
+    revalidatePath("/business-health");
+    return { message: "Action added to the owner plan. TBBT did not execute the work." };
+  } catch (error) {
+    return { error: bsosErrorMessage(error, "That recommendation could not become an action.") };
+  }
+}
+
+export async function dismissRecommendationAction(
+  _prev: BsosActionState,
+  formData: FormData,
+): Promise<BsosActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const key = readString(formData, "recommendationKey");
+    if (!key) return { error: "Choose a recommendation." };
+    await upsertRecommendationState(prisma, access, {
+      recommendationKey: key,
+      status: "DISMISSED",
+    });
+    revalidatePath("/business-health");
+    return { message: "Recommendation dismissed. It will stay in history until facts change." };
+  } catch (error) {
+    return { error: bsosErrorMessage(error, "That recommendation could not be dismissed.") };
+  }
+}
+
+export async function completeRecommendationAction(
+  _prev: BsosActionState,
+  formData: FormData,
+): Promise<BsosActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const key = readString(formData, "recommendationKey");
+    if (!key) return { error: "Choose a recommendation." };
+    await upsertRecommendationState(prisma, access, {
+      recommendationKey: key,
+      status: "COMPLETED",
+    });
+    revalidatePath("/business-health");
+    return { message: "Recommendation marked complete for this business." };
+  } catch (error) {
+    return { error: bsosErrorMessage(error, "That recommendation could not be completed.") };
   }
 }

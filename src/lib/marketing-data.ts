@@ -16,6 +16,11 @@ import {
   SOCIAL_MANUAL_COPY_MESSAGE,
 } from "@/lib/marketing";
 import { draftMarketingContent, weeklyContentPlan } from "@/lib/marketing-draft";
+import {
+  campaignIdeasFromActivity,
+  draftMarketingVariations,
+  weeklyMarketingPlanFromActivity,
+} from "@/lib/ai/marketing";
 import { addDays, startOfDay, startOfWeek } from "@/lib/schedule";
 import { asNumber } from "@/lib/reports";
 
@@ -270,6 +275,26 @@ export async function loadMarketingSource(prisma: PrismaClient, businessId: stri
       businessName: business?.name ?? "Business",
       brandVoice: settings?.marketingBrandVoice,
       identityNotes: settings?.marketingIdentityNotes,
+    }),
+    draftVariations: draftMarketingVariations({
+      contentType: "COMPLETED_JOB",
+      businessName: business?.name ?? "Business",
+      brandVoice: settings?.marketingBrandVoice,
+      identityNotes: settings?.marketingIdentityNotes,
+      workPerformed: opportunities[0]?.workPerformed,
+      photoCount: opportunities[0]?.approvedPhotoCount,
+    }),
+    activityPlan: weeklyMarketingPlanFromActivity({
+      completedJobs: opportunities.length,
+      approvedPhotos: opportunities.reduce((sum, row) => sum + row.approvedPhotoCount, 0),
+      reviews: 0,
+      campaigns: campaigns.length,
+      serviceAreas: 0,
+    }),
+    campaignIdeas: campaignIdeasFromActivity({
+      leadSources: [...new Set(serviceRequests.map((row) => row.leadSource).filter(Boolean))] as string[],
+      completedJobs: opportunities.length,
+      unpaidInvoices: 0,
     }),
     seo: {
       homeTitle: settings?.seoTitleHome ?? "",

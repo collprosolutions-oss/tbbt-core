@@ -250,7 +250,7 @@ export async function createKnowledgeEntry(
     sourceLabel = provenance.sourceLabel || resolved.sourceLabel;
   }
 
-  return db.knowledgeEntry.create({
+  const entry = await db.knowledgeEntry.create({
     data: {
       businessId: access.businessId,
       title,
@@ -261,9 +261,42 @@ export async function createKnowledgeEntry(
       sourceReferenceId,
       sourceLabel,
       trustState,
+      scope: "BUSINESS",
       createdByMembershipId: access.workspace.membership.id,
     },
   });
+  await persistKnowledgeFoundation(db, access.businessId, entry);
+  return entry;
+}
+
+async function persistKnowledgeFoundation(
+  db: Db,
+  businessId: string,
+  entry: { id: string; title: string; body: string; category: string },
+) {
+  const { extractKnowledgeFoundation } = await import("@/lib/ai/knowledge");
+  const extracted = extractKnowledgeFoundation(entry);
+  if (extracted.concepts.length) {
+    await db.knowledgeConcept.createMany({
+      data: extracted.concepts.map((concept) => ({
+        businessId,
+        entryId: entry.id,
+        label: concept.label.slice(0, 80),
+        kind: concept.kind,
+      })),
+    });
+  }
+  if (extracted.assertions.length) {
+    await db.knowledgeAssertion.createMany({
+      data: extracted.assertions.map((assertion) => ({
+        businessId,
+        entryId: entry.id,
+        statement: assertion.statement,
+        stance: assertion.stance,
+        confidence: assertion.confidence,
+      })),
+    });
+  }
 }
 
 export type UpdateKnowledgeEntryInput = {

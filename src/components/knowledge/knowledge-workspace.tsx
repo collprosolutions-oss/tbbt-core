@@ -3,6 +3,7 @@ import { KnowledgeArchiveButton } from "@/components/knowledge/archive-button";
 import { KnowledgeCreateForm } from "@/components/knowledge/create-form";
 import { KnowledgeEditForm } from "@/components/knowledge/edit-form";
 import { KnowledgeReviewButton } from "@/components/knowledge/review-button";
+import { KnowledgeAskForm } from "@/components/knowledge/ask-form";
 import type { KnowledgeWorkspaceProps } from "@/components/knowledge/types";
 import { EmptyState } from "@/components/empty-state";
 import { FounderRegion } from "@/components/founder-design/region";
@@ -165,6 +166,7 @@ function OverviewBody({ source }: { source: KnowledgeSource }) {
             <CardDescription>Owner-recorded entries only. Age is shown; staleness is not invented.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            <KnowledgeAskForm />
             {source.recent.length === 0 ? (
               <p className="text-sm text-muted-foreground">No knowledge entries yet.</p>
             ) : (

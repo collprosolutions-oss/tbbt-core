@@ -14,6 +14,8 @@ import { buildFinancialIntelligence } from "@/lib/financial-intelligence";
 import { asNumber, buildReport, resolveReportRange } from "@/lib/reports";
 import { loadReportSource } from "@/lib/reports-data";
 import { isPaidActivity } from "@/lib/time-cards";
+import { partitionRecommendations } from "@/lib/bsos-actions";
+import { aiConnectionLabel, isAiProviderConnected } from "@/lib/ai/config";
 
 export async function loadBsosFacts(
   prisma: PrismaClient,
@@ -187,8 +189,12 @@ export async function loadBsosFacts(
   };
 }
 
-export async function loadBsosWorkspace(prisma: PrismaClient, businessId: string) {
-  const [facts, goals, actionItems] = await Promise.all([
+export async function loadBsosWorkspace(
+  prisma: PrismaClient,
+  businessId: string,
+  membershipId?: string,
+) {
+  const [facts, goals, actionItems, recommendationStates, conversation] = await Promise.all([
     loadBsosFacts(prisma, businessId),
     prisma.businessGoal.findMany({
       where: { businessId },
@@ -198,17 +204,33 @@ export async function loadBsosWorkspace(prisma: PrismaClient, businessId: string
       where: { businessId },
       orderBy: { updatedAt: "desc" },
     }),
+    prisma.bsosRecommendationState.findMany({
+      where: { businessId },
+    }),
+    membershipId
+      ? prisma.aiConversation.findFirst({
+          where: { businessId, membershipId, area: "COACH" },
+          orderBy: { updatedAt: "desc" },
+          include: { messages: { orderBy: { createdAt: "asc" }, take: 40 } },
+        })
+      : Promise.resolve(null),
   ]);
 
   const recommendations = buildBsosRecommendations(facts);
+  const { active, history } = partitionRecommendations(recommendations, recommendationStates);
   return {
     businessId,
     facts,
     metrics: buildBsosHealthMetrics(facts),
-    recommendations,
-    coach: coachSummary(recommendations),
+    recommendations: active,
+    recommendationHistory: history,
+    recommendationStates,
+    coach: coachSummary(active),
     goals,
     actionItems,
+    conversation,
+    aiConnected: isAiProviderConnected(),
+    aiLabel: aiConnectionLabel(),
   };
 }
 

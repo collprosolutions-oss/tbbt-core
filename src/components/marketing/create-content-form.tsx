@@ -12,11 +12,13 @@ import {
   MARKETING_CONTENT_TYPES,
 } from "@/lib/marketing";
 import type { MarketingSource } from "@/lib/marketing-data";
+import { WritingAssistBar } from "@/components/ai/writing-assist-bar";
 
 const initial: MarketingActionState = {};
 
 export function CreateContentForm({ source }: { source: MarketingSource }) {
   const [jobId, setJobId] = useState("");
+  const [body, setBody] = useState("");
   const [state, formAction, pending] = useActionState(createMarketingContentAction, initial);
 
   const approvedPhotos = useMemo(() => {
@@ -80,9 +82,17 @@ export function CreateContentForm({ source }: { source: MarketingSource }) {
           id="body"
           name="body"
           rows={4}
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
           placeholder="Write the post yourself. Do not include customer names, phones, addresses, or private notes."
           className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
         />
+        <WritingAssistBar
+          original={body}
+          context={source.draftAssist.body}
+          onSuggestion={(text) => setBody(text)}
+        />
+        <p className="text-xs text-muted-foreground">{source.draftAssist.message}</p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">

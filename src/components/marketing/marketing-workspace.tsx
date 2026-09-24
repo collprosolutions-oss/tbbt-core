@@ -130,6 +130,40 @@ function OpportunityBody({
         />
         <Card>
           <CardHeader>
+            <CardTitle>Marketing intelligence drafts</CardTitle>
+            <CardDescription>
+              Templates from recorded jobs, photos, and campaigns. Social accounts stay Not Connected. Nothing is published.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <p className="text-muted-foreground">{source.activityPlan.message}</p>
+            <ul className="space-y-1">
+              {source.activityPlan.items.map((item) => (
+                <li key={`${item.day}-${item.title}`}>
+                  <span className="font-medium">{item.day}:</span> {item.title} — {item.why}
+                </li>
+              ))}
+            </ul>
+            <p className="font-medium">Campaign ideas</p>
+            <ul className="list-disc pl-4">
+              {source.campaignIdeas.ideas.map((idea) => (
+                <li key={idea}>{idea}</li>
+              ))}
+            </ul>
+            <p className="font-medium">Draft variations</p>
+            <ul className="space-y-2">
+              {source.draftVariations.map((draft) => (
+                <li key={draft.variation} className="rounded-md border p-2">
+                  <p className="font-medium">{draft.variation}: {draft.title}</p>
+                  <p className="text-muted-foreground">{draft.body}</p>
+                  <p className="text-xs">{draft.hashtags.join(" ")} · CTA: {draft.cta}</p>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
             <CardTitle>Reviews &amp; referrals</CardTitle>
             <CardDescription>
               Review requests and recorded reviews live in the Reviews workspace. Marketing does not copy review text automatically.

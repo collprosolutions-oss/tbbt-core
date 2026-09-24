@@ -505,6 +505,35 @@ check(
     authChallengeAttemptsMigration.includes('ADD COLUMN IF NOT EXISTS "failedAttemptCount"'),
 );
 
+const intelligenceMigration = readFileSync(
+  new URL("../prisma/migrations/20260924120000_bsos_intelligence_automation/migration.sql", import.meta.url),
+  "utf8",
+);
+const intelligenceSchema = readFileSync(
+  new URL("../src/lib/intelligence-schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Intelligence + automation migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(intelligenceMigration) &&
+    intelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "AiInteraction"') &&
+    intelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessEvent"') &&
+    intelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "AutomationRule"') &&
+    intelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "BsosRecommendationState"') &&
+    intelligenceMigration.includes('ADD COLUMN IF NOT EXISTS "scope"'),
+);
+check(
+  "Intelligence schema is migrate-only and does not run request-time DDL",
+  intelligenceSchema.includes("prisma-migrate") &&
+    !intelligenceSchema.includes("$executeRawUnsafe") &&
+    !intelligenceSchema.includes("ensureIntelligenceSchema"),
+);
+check(
+  "Authenticated workspace load does not run intelligence DDL",
+  !workspaceLoader.includes("ensureIntelligenceSchema") &&
+    !workspaceLoader.includes("intelligence-schema"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

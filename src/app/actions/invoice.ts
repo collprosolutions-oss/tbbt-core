@@ -14,6 +14,7 @@ import {
   recordSucceededPayment,
 } from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
+import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 
 export type InvoiceActionState = {
   error?: string;
@@ -218,6 +219,15 @@ export async function markInvoicePaid(
   if (updated.count !== 1) {
     return { error: "Send the invoice before marking it paid." };
   }
+
+  await emitAndProcessBusinessEvent(prisma, {
+    businessId: access.businessId,
+    type: "INVOICE_PAID",
+    subjectType: "INVOICE",
+    subjectId: invoice.id,
+    payload: { customerId: invoice.customerId },
+    idempotencyKey: `INVOICE_PAID:${invoice.id}`,
+  });
 
   revalidatePath("/invoices");
   revalidatePath(`/invoices/${invoice.id}`);

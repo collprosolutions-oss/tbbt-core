@@ -90,7 +90,9 @@
     "test:business-timezone": "node --experimental-strip-types scripts/check-business-timezone.mjs",
     "test:customer-messaging": "node --experimental-strip-types scripts/check-customer-messaging.mjs",
     "test:test-data-cleanup": "node --experimental-strip-types scripts/check-test-data-cleanup.mjs",
-    "test:handyman-1-0-completion": "node --experimental-strip-types scripts/check-handyman-1-0-completion.mjs"
+    "test:handyman-1-0-completion": "node --experimental-strip-types scripts/check-handyman-1-0-completion.mjs",
+    "test:ai-intelligence": "node --experimental-strip-types scripts/check-ai-intelligence.mjs",
+    "test:automation": "node --experimental-strip-types scripts/check-automation.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",

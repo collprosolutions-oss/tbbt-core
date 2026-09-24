@@ -17,6 +17,7 @@ import {
 } from "@/lib/invoice-mail";
 import { evaluateCompleteJob } from "@/lib/job-lifecycle";
 import { attemptInvoiceReadySms } from "@/lib/customer-messaging";
+import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import {
   getAppUrl,
   getMailConfig,
@@ -244,7 +245,7 @@ export async function completeJobAndSendInvoice(
 ): Promise<CompleteJobInvoiceResult> {
   const job = await db.job.findFirst({
     where: { id: input.jobId, businessId: input.businessId },
-    select: { id: true, status: true },
+    select: { id: true, status: true, customerId: true },
   });
 
   if (!job) {
@@ -302,6 +303,33 @@ export async function completeJobAndSendInvoice(
       jobCompleted: true,
       invoiceId: persist.invoiceId,
     };
+  }
+
+  await emitAndProcessBusinessEvent(db, {
+    businessId: input.businessId,
+    type: "JOB_COMPLETED",
+    subjectType: "JOB",
+    subjectId: job.id,
+    payload: { customerId: job.customerId, businessName: input.businessName },
+    idempotencyKey: `JOB_COMPLETED:${job.id}`,
+  });
+  await emitAndProcessBusinessEvent(db, {
+    businessId: input.businessId,
+    type: "REVIEW_OPPORTUNITY_CREATED",
+    subjectType: "JOB",
+    subjectId: job.id,
+    payload: { customerId: job.customerId, businessName: input.businessName },
+    idempotencyKey: `REVIEW_OPPORTUNITY_CREATED:${job.id}`,
+  });
+  if (sent.newlySent) {
+    await emitAndProcessBusinessEvent(db, {
+      businessId: input.businessId,
+      type: "INVOICE_SENT",
+      subjectType: "INVOICE",
+      subjectId: persist.invoiceId,
+      payload: { customerId: job.customerId, businessName: input.businessName },
+      idempotencyKey: `INVOICE_SENT:${persist.invoiceId}`,
+    });
   }
 
   return {

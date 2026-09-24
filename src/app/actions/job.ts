@@ -21,6 +21,7 @@ import {
 import { notifyCustomerAppointmentProposed } from "@/lib/appointment-notify";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { completeJobAndSendInvoice } from "@/lib/complete-job-invoice";
+import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { evaluateStartJob } from "@/lib/job-lifecycle";
 import {
   parseDurationMinutes,
@@ -235,6 +236,20 @@ export async function scheduleJob(
           }
         : {}),
     },
+  });
+
+  await emitAndProcessBusinessEvent(prisma, {
+    businessId: access.businessId,
+    type: rescheduled ? "APPOINTMENT_CHANGED" : "APPOINTMENT_SCHEDULED",
+    subjectType: "JOB",
+    subjectId: job.id,
+    payload: {
+      customerId: job.customerId,
+      businessName: access.workspace.business.name,
+      proposalId,
+      projectToken: job.projectToken,
+    },
+    idempotencyKey: `${rescheduled ? "APPOINTMENT_CHANGED" : "APPOINTMENT_SCHEDULED"}:${job.id}:${proposalId}`,
   });
 
   if (materialChange) {

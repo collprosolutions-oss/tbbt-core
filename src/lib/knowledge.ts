@@ -10,6 +10,8 @@
  * UNKNOWN → say it is unknown.
  */
 
+import { isAiProviderConnected } from "@/lib/ai/config";
+
 export const KNOWLEDGE_AREAS = [
   "overview",
   "services",
@@ -152,12 +154,15 @@ export function needsKnowledgeReview(trustState: string): boolean {
   return trustState === "NEEDS_REVIEW" || trustState === "CONFLICT";
 }
 
-export function knowledgeAiAvailable(): false {
-  return false;
+export function knowledgeAiAvailable() {
+  return isAiProviderConnected();
 }
 
 export const NO_AI_MESSAGE =
   "TBBT does not generate business knowledge automatically. Entries are owner-created or referenced from existing records.";
+
+export const KNOWLEDGE_ASK_DISCONNECTED_MESSAGE =
+  "AI is not connected. Answers use this business's Knowledge entries only, and never another tenant's records.";
 
 export const TAKEOFF_UNAVAILABLE_MESSAGE =
   "Material takeoff learning is not available. TBBT does not have a takeoff model in this step.";
