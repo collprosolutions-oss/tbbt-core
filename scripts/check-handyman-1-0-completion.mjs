@@ -111,6 +111,12 @@ check(
   ),
 );
 check(
+  "Public request wizard reads submitted FormData on next-step",
+  readFileSync(new URL("../src/components/public/request-flow.tsx", import.meta.url), "utf8").includes(
+    "readDetailsFromForm",
+  ),
+);
+check(
   "Settings section shortcuts redirect to the settings query",
   readFileSync(
     new URL("../src/app/(app)/settings/[section]/page.tsx", import.meta.url),
