@@ -437,6 +437,51 @@ check(
   workspaceLoader.includes("ensureCustomerMessagingSchema"),
 );
 
+const ownerIntelligenceMigration = readFileSync(
+  new URL("../prisma/migrations/20260924040000_add_owner_intelligence/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Owner-intelligence migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(ownerIntelligenceMigration) &&
+    ownerIntelligenceMigration.includes('ADD COLUMN IF NOT EXISTS "firstLeadSource"') &&
+    ownerIntelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessGoal"') &&
+    ownerIntelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "ServiceArea"') &&
+    ownerIntelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "ReferralRequest"') &&
+    !/UPDATE "Business"/i.test(ownerIntelligenceMigration) &&
+    !/UPDATE "Customer"/i.test(ownerIntelligenceMigration),
+);
+
+const ownerIntelligenceSchema = readFileSync(
+  new URL("../src/lib/owner-intelligence-schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Owner-intelligence schema is migrate-only and does not run request-time DDL",
+  ownerIntelligenceSchema.includes("prisma-migrate") &&
+    !ownerIntelligenceSchema.includes("$executeRawUnsafe") &&
+    !ownerIntelligenceSchema.includes("OWNER_INTELLIGENCE_ENSURE_SQL") &&
+    !ownerIntelligenceSchema.includes("ensureOwnerIntelligenceSchema"),
+);
+check(
+  "Authenticated workspace load does not run owner-intelligence DDL",
+  !workspaceLoader.includes("ensureOwnerIntelligenceSchema") &&
+    !workspaceLoader.includes("owner-intelligence-schema"),
+);
+
+const ownerIntelligenceFkMigration = readFileSync(
+  new URL("../prisma/migrations/20260924053000_owner_intelligence_fks/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Owner-intelligence FK migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(ownerIntelligenceFkMigration) &&
+    ownerIntelligenceFkMigration.includes('ReferralRequest_jobId_fkey') &&
+    ownerIntelligenceFkMigration.includes('CustomerFollowUp_customerId_fkey') &&
+    ownerIntelligenceFkMigration.includes('CustomerFollowUp_jobId_fkey') &&
+    ownerIntelligenceFkMigration.includes('CustomerFollowUp_createdByMembershipId_fkey'),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

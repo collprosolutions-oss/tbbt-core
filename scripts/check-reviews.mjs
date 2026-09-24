@@ -41,8 +41,10 @@ const {
   advanceReviewResponseStatus,
   cancelReviewRequest,
   createReviewRequest,
+  markReviewRequestSentManually,
   recordReceivedReview,
   ReviewsError,
+  sendReviewRequest,
   updateReviewRequest,
   upsertReviewResponse,
 } = await import("@/lib/reviews-ops");
@@ -112,7 +114,7 @@ try {
   console.log("\nSTATIC — Reviews domain helpers");
   check("Invalid area falls back to overview", parseReviewArea("pipeline") === "overview");
   check("DRAFT advances to READY", nextRequestStatus("DRAFT") === "READY");
-  check("READY advances to SENT", nextRequestStatus("READY") === "SENT");
+  check("READY does not become SENT without delivery", nextRequestStatus("READY") === null);
   check("SENT has no fake external-send next step", nextRequestStatus("SENT") === null);
   check("DRAFT response advances to READY_FOR_REVIEW", nextResponseStatus("DRAFT") === "READY_FOR_REVIEW");
   check("READY_FOR_REVIEW advances to APPROVED", nextResponseStatus("READY_FOR_REVIEW") === "APPROVED");
@@ -135,7 +137,11 @@ try {
   check("Reviews nav is visible to ADMIN", visibleAppNav("ADMIN").some((item) => item.href === "/reviews"));
   check("Reviews nav is hidden from MEMBER", !visibleAppNav("MEMBER").some((item) => item.href === "/reviews"));
   check("MEMBER does not have MANAGE_REVIEWS", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_REVIEWS));
-  check("Send disclaimer does not claim an external send", /did not send/i.test(REQUEST_SEND_DISCLAIMER));
+  check(
+    "Send disclaimer is honest about adapters",
+    /connected email and SMS adapters/i.test(REQUEST_SEND_DISCLAIMER) &&
+      /never claims a published/i.test(REQUEST_SEND_DISCLAIMER),
+  );
   check("Response disclaimer does not claim publishing", /does not publish/i.test(RESPONSE_PUBLISH_DISCLAIMER));
   check(
     "Completed job with no request recommends prepare",
@@ -298,17 +304,26 @@ try {
     afterCreate.opportunities.find((row) => row.jobId === job.id)?.requestStatus === "DRAFT",
   );
 
-  console.log("\nTEST — Review request lifecycle DRAFT → READY → SENT");
+  console.log("\nTEST — Review request lifecycle DRAFT → READY → send");
   const ready = await advanceReviewRequestStatus(prisma, ownerA, { requestId: draft.id });
   check("DRAFT → READY", ready.status === "READY");
-  const sent = await advanceReviewRequestStatus(prisma, ownerA, { requestId: draft.id });
-  check("READY → SENT", sent.status === "SENT");
+  const failedSend = await sendReviewRequest(prisma, ownerA, { requestId: draft.id });
+  check("Disconnected adapters leave the request FAILED", failedSend.status === "FAILED");
+  check("Failed send does not invent SENT", failedSend.requestedAt == null);
+  check(
+    "Failed send records channel statuses",
+    failedSend.lastEmailStatus === "NOT_CONFIGURED" || failedSend.lastEmailStatus === "SKIPPED_NO_EMAIL",
+  );
+  const survivingRequest = await prisma.reviewRequest.findUnique({ where: { id: draft.id } });
+  check("Review request row survives provider failure", survivingRequest?.id === draft.id && survivingRequest.status === "FAILED");
+  const sent = await markReviewRequestSentManually(prisma, ownerA, { requestId: draft.id });
+  check("Owner can mark sent manually", sent.status === "SENT");
   check("SENT records requestedAt", sent.requestedAt instanceof Date);
 
   await expectError(
     "SENT has no fake external-send next step",
     () => advanceReviewRequestStatus(prisma, ownerA, { requestId: draft.id }),
-    (error) => error instanceof ReviewsError && /did not send/.test(error.message),
+    (error) => error instanceof ReviewsError && /already recorded as sent/.test(error.message),
   );
 
   const reminderUpdated = await updateReviewRequest(prisma, ownerA, {

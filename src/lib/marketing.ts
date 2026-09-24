@@ -10,6 +10,7 @@
  * import these helpers directly.
  */
 
+import { marketingAiAssistAvailable as providerAssistAvailable } from "@/lib/marketing-draft";
 import { parseScheduleDate, startOfDay } from "@/lib/schedule";
 
 export const MARKETING_AREAS = [
@@ -48,7 +49,10 @@ export const IMPLEMENTED_MARKETING_AREAS: readonly MarketingArea[] = [
   "create-content",
   "calendar",
   "social-posts",
+  "website-seo",
+  "campaigns",
   "lead-sources",
+  "performance",
   "brand-library",
 ];
 
@@ -64,13 +68,19 @@ export function isImplementedMarketingArea(area: MarketingArea): boolean {
   return IMPLEMENTED_MARKETING_AREAS.includes(area);
 }
 
-export const MARKETING_CONTENT_TYPES = ["COMPLETED_JOB", "SERVICE_HIGHLIGHT", "GENERAL_POST"] as const;
+export const MARKETING_CONTENT_TYPES = [
+  "COMPLETED_JOB",
+  "SERVICE_HIGHLIGHT",
+  "GENERAL_POST",
+  "BLOG_SEO",
+] as const;
 export type MarketingContentType = (typeof MARKETING_CONTENT_TYPES)[number];
 
 export const MARKETING_CONTENT_TYPE_LABELS: Record<MarketingContentType, string> = {
   COMPLETED_JOB: "Completed Job / Before & After",
   SERVICE_HIGHLIGHT: "Service Highlight",
   GENERAL_POST: "General Business Post",
+  BLOG_SEO: "Blog / SEO draft",
 };
 
 export function isMarketingContentType(value: string): value is MarketingContentType {
@@ -130,14 +140,20 @@ export const CALENDAR_INTERNAL_MESSAGE =
   "This is an internal planning date only. TBBT will not publish this item automatically — no social channel is connected.";
 
 export const LEAD_SOURCE_UNTRACKED_MESSAGE =
-  "Lead source is not tracked on Requests yet. TBBT will not invent attribution.";
+  "No recorded lead source is on file yet. TBBT will not invent attribution.";
+
+export const LEAD_SOURCE_TRACKED_MESSAGE =
+  "Lead sources below are recorded on ServiceRequest, Estimate, Job, and Customer first-touch fields only.";
+
+export const SOCIAL_MANUAL_COPY_MESSAGE =
+  "No Facebook, Instagram, or Google account is connected. Copy approved text and post it yourself. TBBT will not mark this PUBLISHED.";
 
 export const COMING_NEXT_MESSAGE =
   "Coming next. This area is reserved for a later Marketing step and is not fabricating data.";
 
-/** Extension point only — no AI provider is called in this step. */
-export function marketingAiAssistAvailable(): false {
-  return false;
+/** External AI is not connected. Template drafts still work. */
+export function marketingAiAssistAvailable(): boolean {
+  return providerAssistAvailable();
 }
 
 export function parseMarketingDate(raw: string | undefined): Date | null {

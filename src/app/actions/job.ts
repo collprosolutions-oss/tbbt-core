@@ -132,6 +132,8 @@ export async function createJobFromEstimate(
       approvedEstimateVersionId: estimate.approvedVersionId,
       projectToken: randomUUID(),
       status: "UNSCHEDULED",
+      leadSource: estimate.leadSource,
+      campaignId: estimate.campaignId,
     },
   });
 

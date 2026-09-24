@@ -52,7 +52,19 @@ async function loadRelatedRecord(
       select: RELATED_CUSTOMER_SELECT,
     });
   }
-  return db.reviewRequest.findFirst({
+  if (input.relatedType === "REVIEW_REQUEST") {
+    return db.reviewRequest.findFirst({
+      where: { id: input.relatedId, businessId: input.businessId },
+      select: RELATED_CUSTOMER_SELECT,
+    });
+  }
+  if (input.relatedType === "CUSTOMER_FOLLOW_UP") {
+    return db.customerFollowUp.findFirst({
+      where: { id: input.relatedId, businessId: input.businessId },
+      select: RELATED_CUSTOMER_SELECT,
+    });
+  }
+  return db.referralRequest.findFirst({
     where: { id: input.relatedId, businessId: input.businessId },
     select: RELATED_CUSTOMER_SELECT,
   });

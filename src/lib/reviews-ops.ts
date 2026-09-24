@@ -7,8 +7,10 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
-import { attemptReviewRequestSms } from "@/lib/customer-messaging";
+import { attemptReviewReminderSms, attemptReviewRequestSms } from "@/lib/customer-messaging";
+import { getMailConfig, isUsableEmail, reviewRequestEmailIdempotencyKey, sendTransactionalEmail, senderFrom } from "@/lib/mail";
 import {
+  channelDeliveryAccepted,
   isReviewPlatform,
   isReviewReceivedPlatform,
   isReviewRequestStatus,
@@ -95,7 +97,7 @@ async function assertNoActiveRequestForJob(
     where: {
       jobId,
       ...access.scope,
-      status: { in: ["DRAFT", "READY", "SENT", "COMPLETED"] },
+      status: { in: ["DRAFT", "READY", "FAILED", "SENT", "COMPLETED"] },
       ...(exceptRequestId ? { id: { not: exceptRequestId } } : {}),
     },
     select: { id: true, status: true },
@@ -236,35 +238,196 @@ export async function advanceReviewRequestStatus(
   if (!next) {
     throw new ReviewsError(
       request.status === "SENT"
-        ? "This request is already recorded as sent. TBBT did not send a message."
-        : "This review request cannot be advanced.",
+        ? "This request is already recorded as sent."
+        : request.status === "READY" || request.status === "FAILED"
+          ? "Use send or mark sent manually."
+          : "This review request cannot be advanced.",
     );
   }
   if (!isReviewRequestStatus(next)) {
     throw new ReviewsError("Invalid review request status.");
   }
-  const updated = await db.reviewRequest.update({
+  return db.reviewRequest.update({
+    where: { id: request.id },
+    data: { status: next },
+  });
+}
+
+export async function sendReviewRequest(
+  db: Db,
+  access: BusinessAccess,
+  input: { requestId: string },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_REVIEWS);
+  const request = access.assertOwned(
+    await db.reviewRequest.findFirst({
+      where: { id: input.requestId, ...access.scope },
+    }),
+  );
+  if (request.status !== "READY" && request.status !== "FAILED") {
+    throw new ReviewsError("Only a ready or failed request can be sent.");
+  }
+  const business = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: { name: true },
+  });
+  const sms = await attemptReviewRequestSms(db, {
+    businessId: access.businessId,
+    reviewRequestId: request.id,
+    customerId: request.customerId,
+    businessName: business?.name ?? "us",
+    requestText: request.requestText,
+    initiatedByMembershipId: access.workspace.membership.id,
+  });
+  const emailStatus = await attemptReviewRequestEmail(db, {
+    businessId: access.businessId,
+    reviewRequestId: request.id,
+    customerId: request.customerId,
+    businessName: business?.name ?? "us",
+    requestText: request.requestText,
+    attemptKey: "sent",
+  });
+  const delivered = channelDeliveryAccepted(sms?.status) || emailStatus === "SENT";
+  return db.reviewRequest.update({
     where: { id: request.id },
     data: {
-      status: next,
-      requestedAt: next === "SENT" ? request.requestedAt ?? new Date() : request.requestedAt,
+      status: delivered ? "SENT" : "FAILED",
+      requestedAt: delivered ? request.requestedAt ?? new Date() : request.requestedAt,
+      lastSmsStatus: sms?.status ?? "NOT_SENT",
+      lastEmailStatus: emailStatus,
     },
   });
-  if (next === "SENT") {
-    const business = await db.business.findFirst({
-      where: { id: access.businessId },
-      select: { name: true },
-    });
-    await attemptReviewRequestSms(db, {
-      businessId: access.businessId,
-      reviewRequestId: updated.id,
-      customerId: updated.customerId,
-      businessName: business?.name ?? "us",
-      requestText: updated.requestText,
-      initiatedByMembershipId: access.workspace.membership.id,
-    });
+}
+
+export async function markReviewRequestSentManually(
+  db: Db,
+  access: BusinessAccess,
+  input: { requestId: string },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_REVIEWS);
+  const request = access.assertOwned(
+    await db.reviewRequest.findFirst({
+      where: { id: input.requestId, ...access.scope },
+    }),
+  );
+  if (request.status !== "READY" && request.status !== "FAILED") {
+    throw new ReviewsError("Only a ready or failed request can be marked sent manually.");
   }
-  return updated;
+  return db.reviewRequest.update({
+    where: { id: request.id },
+    data: {
+      status: "SENT",
+      requestedAt: request.requestedAt ?? new Date(),
+      lastEmailStatus: request.lastEmailStatus ?? "MANUAL",
+      lastSmsStatus: request.lastSmsStatus ?? "MANUAL",
+    },
+  });
+}
+
+export async function sendReviewRequestReminder(
+  db: Db,
+  access: BusinessAccess,
+  input: { requestId: string },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_REVIEWS);
+  const request = access.assertOwned(
+    await db.reviewRequest.findFirst({
+      where: { id: input.requestId, ...access.scope },
+    }),
+  );
+  if (request.status !== "SENT") {
+    throw new ReviewsError("Reminders can only be sent after the request is recorded as sent.");
+  }
+  if (request.remindersStoppedAt) {
+    throw new ReviewsError("Reminders were stopped for this request.");
+  }
+  const settings = await db.businessSettings.findFirst({
+    where: { businessId: access.businessId },
+    select: { reviewReminderMaxCount: true },
+  });
+  const max = settings?.reviewReminderMaxCount ?? 2;
+  if (request.reminderCount >= max) {
+    throw new ReviewsError(`Reminder limit of ${max} has been reached.`);
+  }
+  const business = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: { name: true },
+  });
+  const reminderKey = String(request.reminderCount + 1);
+  const sms = await attemptReviewReminderSms(db, {
+    businessId: access.businessId,
+    reviewRequestId: request.id,
+    customerId: request.customerId,
+    businessName: business?.name ?? "us",
+    requestText: request.requestText,
+    reminderKey,
+    initiatedByMembershipId: access.workspace.membership.id,
+  });
+  const emailStatus = await attemptReviewRequestEmail(db, {
+    businessId: access.businessId,
+    reviewRequestId: request.id,
+    customerId: request.customerId,
+    businessName: business?.name ?? "us",
+    requestText: request.requestText,
+    attemptKey: `reminder-${reminderKey}`,
+  });
+  return db.reviewRequest.update({
+    where: { id: request.id },
+    data: {
+      reminderCount: request.reminderCount + 1,
+      lastReminderAt: new Date(),
+      lastSmsStatus: sms?.status ?? "NOT_SENT",
+      lastEmailStatus: emailStatus,
+    },
+  });
+}
+
+export async function stopReviewRequestReminders(
+  db: Db,
+  access: BusinessAccess,
+  input: { requestId: string },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_REVIEWS);
+  const request = access.assertOwned(
+    await db.reviewRequest.findFirst({
+      where: { id: input.requestId, ...access.scope },
+    }),
+  );
+  return db.reviewRequest.update({
+    where: { id: request.id },
+    data: { remindersStoppedAt: new Date() },
+  });
+}
+
+async function attemptReviewRequestEmail(
+  db: Db,
+  input: {
+    businessId: string;
+    reviewRequestId: string;
+    customerId: string;
+    businessName: string;
+    requestText: string;
+    attemptKey: string;
+  },
+) {
+  const customer = await db.customer.findFirst({
+    where: { id: input.customerId, businessId: input.businessId },
+    select: { email: true },
+  });
+  if (!isUsableEmail(customer?.email)) return "SKIPPED_NO_EMAIL";
+  const config = getMailConfig();
+  if ("error" in config) return "NOT_CONFIGURED";
+  const sent = await sendTransactionalEmail({
+    apiKey: config.apiKey,
+    from: senderFrom(input.businessName, config.fromAddress),
+    to: customer!.email!.trim(),
+    subject: `${input.businessName} would value an honest review`,
+    text: input.requestText,
+    html: `<p>${input.requestText.replace(/\n/g, "<br />")}</p>`,
+    idempotencyKey: reviewRequestEmailIdempotencyKey(input.reviewRequestId, input.attemptKey),
+    kind: "review",
+  });
+  return "error" in sent ? "FAILED" : "SENT";
 }
 
 export async function cancelReviewRequest(

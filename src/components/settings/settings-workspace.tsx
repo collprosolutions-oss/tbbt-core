@@ -5,6 +5,7 @@ import { FounderRegion } from "@/components/founder-design/region";
 import { BusinessProfileForm } from "@/components/settings/business-profile-form";
 import { BusinessPublicContactForm } from "@/components/settings/business-public-contact-form";
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
+import { ServiceAreaSettings } from "@/components/settings/service-area-settings";
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
 import { ViewPublicWebsiteLink } from "@/components/settings/view-public-website-link";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
@@ -212,6 +213,17 @@ function SectionBody(props: SettingsWorkspaceProps) {
         {!canOperate ? (
           <p className="mt-2 text-sm text-muted-foreground">{operatingBlockedMessage}</p>
         ) : null}
+      </SectionCard>
+    );
+  }
+
+  if (section === "service-area") {
+    return (
+      <SectionCard
+        title="Service Area"
+        description="Owner-configured cities and postal codes for intake qualification."
+      >
+        <ServiceAreaSettings businessId={snapshot.business.id} />
       </SectionCard>
     );
   }

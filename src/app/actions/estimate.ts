@@ -275,6 +275,8 @@ export async function createEstimate(serviceRequestId: string) {
         propertyId: request.propertyId,
         total: new Prisma.Decimal(0),
         publicToken: randomUUID(),
+        leadSource: request.leadSource,
+        campaignId: request.campaignId,
       },
     });
 
@@ -433,6 +435,7 @@ export async function createManualEstimate(
         propertyId: property.id,
         total: new Prisma.Decimal(0),
         publicToken: randomUUID(),
+        leadSource: "MANUAL",
       },
     });
 
@@ -488,6 +491,7 @@ export async function createManualEstimate(
         propertyId,
         total: new Prisma.Decimal(0),
         publicToken: randomUUID(),
+        leadSource: "MANUAL",
       },
     });
   });

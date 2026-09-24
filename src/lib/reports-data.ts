@@ -117,6 +117,7 @@ export async function loadReportSource(
         category: true,
         vendor: true,
         jobId: true,
+        recurring: true,
       },
     }),
   ]);
@@ -165,6 +166,7 @@ export async function loadReportSource(
       category: expense.category,
       vendor: expense.vendor,
       jobId: expense.jobId,
+      recurring: expense.recurring,
     })),
   };
 }

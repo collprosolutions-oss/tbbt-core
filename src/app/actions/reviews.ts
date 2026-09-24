@@ -12,8 +12,10 @@ import {
   advanceReviewResponseStatus,
   cancelReviewRequest,
   createReviewRequest,
+  markReviewRequestSentManually,
   recordReceivedReview,
   reviewsErrorMessage,
+  sendReviewRequest,
   updateReviewRecovery,
   updateReviewRequest,
   upsertReviewResponse,
@@ -88,18 +90,50 @@ export async function advanceReviewRequestAction(
 ): Promise<ReviewsActionState> {
   try {
     const access = await requireOperatingBusinessAccess();
-    const updated = await advanceReviewRequestStatus(prisma, access, {
+    await advanceReviewRequestStatus(prisma, access, {
+      requestId: readString(formData, "requestId"),
+    });
+    revalidateReviews();
+    return { message: "Request marked ready. The customer has not been contacted." };
+  } catch (error) {
+    return { error: reviewsErrorMessage(error, "That review request status could not be updated.") };
+  }
+}
+
+export async function sendReviewRequestAction(
+  _prev: ReviewsActionState,
+  formData: FormData,
+): Promise<ReviewsActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const updated = await sendReviewRequest(prisma, access, {
       requestId: readString(formData, "requestId"),
     });
     revalidateReviews();
     return {
       message:
         updated.status === "SENT"
-          ? "Request recorded as sent. TBBT did not send SMS or email."
-          : "Request marked ready. The customer has not been contacted.",
+          ? "Request sent through a connected adapter."
+          : "No connected email or SMS accepted the request. It is FAILED and can be retried or marked sent manually.",
     };
   } catch (error) {
-    return { error: reviewsErrorMessage(error, "That review request status could not be updated.") };
+    return { error: reviewsErrorMessage(error, "That review request could not be sent.") };
+  }
+}
+
+export async function markReviewRequestSentManuallyAction(
+  _prev: ReviewsActionState,
+  formData: FormData,
+): Promise<ReviewsActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    await markReviewRequestSentManually(prisma, access, {
+      requestId: readString(formData, "requestId"),
+    });
+    revalidateReviews();
+    return { message: "Request marked sent manually. No adapter was required." };
+  } catch (error) {
+    return { error: reviewsErrorMessage(error, "That review request could not be marked sent.") };
   }
 }
 

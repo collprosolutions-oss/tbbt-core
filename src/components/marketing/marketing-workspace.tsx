@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
 import { formatISODate } from "@/lib/schedule";
+import { createCampaignAction, saveBrandVoiceAction, setCampaignStatusAction } from "@/app/actions/campaigns";
+import { ActionForm } from "@/components/action-form";
 import {
   CALENDAR_INTERNAL_MESSAGE,
   COMING_NEXT_MESSAGE,
@@ -66,6 +68,9 @@ export function MarketingWorkspace({ area, source }: MarketingWorkspaceProps) {
           area === "overview" ||
           area === "brand-library" ||
           area === "lead-sources" ||
+          area === "campaigns" ||
+          area === "website-seo" ||
+          area === "performance" ||
           !isImplementedMarketingArea(area) ? (
             <ContentBody area={area} source={source} />
           ) : null}
@@ -289,9 +294,14 @@ function ContentBody({
               <p>No logo is stored on the Business record yet.</p>
             )}
           </div>
-          <p>Service area is not stored on the Business record.</p>
-          <p>Business description / tagline is not stored on the Business record.</p>
-          <p>Public marketing contact is not stored on the Business record.</p>
+          <p>Service area on file: {source.brand.serviceAreaOnFile ? "yes" : "not on file"}</p>
+          <p>Description on file: {source.brand.descriptionOnFile ? "yes" : "not on file"}</p>
+          <p>Public contact on file: {source.brand.publicContactOnFile ? "yes" : "not on file"}</p>
+          <ActionForm action={saveBrandVoiceAction} className="space-y-2">
+            <textarea className="w-full rounded-md border px-3 py-2 text-sm" name="brandVoice" defaultValue={source.brand.voice} placeholder="Brand voice" />
+            <textarea className="w-full rounded-md border px-3 py-2 text-sm" name="identityNotes" defaultValue={source.brand.identityNotes} placeholder="Business identity notes" />
+            <Button type="submit" size="sm">Save brand voice</Button>
+          </ActionForm>
         </CardContent>
       </Card>
     );
@@ -299,7 +309,92 @@ function ContentBody({
 
   if (area === "lead-sources") {
     return (
-      <EmptyState title="Lead sources" description={source.leadSources.message} />
+      <Card>
+        <CardHeader>
+          <CardTitle>Lead sources</CardTitle>
+          <CardDescription>{source.leadSources.message}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          {source.leadSources.rows.length === 0 ? (
+            <p className="text-muted-foreground">No recorded attribution yet.</p>
+          ) : (
+            source.leadSources.rows.map((row) => (
+              <p key={`${row.source}:${row.campaignId ?? ""}`}>
+                {row.source}
+                {row.campaignName ? ` / ${row.campaignName}` : ""}: {row.requests} request{row.requests === 1 ? "" : "s"}, {row.jobs} job{row.jobs === 1 ? "" : "s"}, recorded paid ${row.paidRevenue.toFixed(2)}
+              </p>
+            ))
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (area === "campaigns") {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Campaigns</CardTitle>
+          <CardDescription>Internal records only. No ad network is connected.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <ActionForm action={createCampaignAction} className="space-y-2">
+            <input className="w-full rounded-md border px-3 py-2 text-sm" name="name" placeholder="Campaign name" />
+            <input className="w-full rounded-md border px-3 py-2 text-sm" name="sourceKey" placeholder="WEBSITE / GOOGLE / OTHER" />
+            <Button type="submit" size="sm">Create campaign</Button>
+          </ActionForm>
+          {source.campaigns.map((campaign) => (
+            <div key={campaign.id} className="rounded-md border p-3 text-sm">
+              <p className="font-medium">{campaign.name}</p>
+              <p className="text-muted-foreground">{campaign.sourceKey} · {campaign.status}</p>
+              <ActionForm action={setCampaignStatusAction} className="mt-2 flex gap-2">
+                <input type="hidden" name="campaignId" value={campaign.id} />
+                <select name="status" defaultValue={campaign.status} className="rounded-md border px-2 py-1">
+                  <option value="DRAFT">DRAFT</option>
+                  <option value="ACTIVE">ACTIVE</option>
+                  <option value="PAUSED">PAUSED</option>
+                  <option value="COMPLETED">COMPLETED</option>
+                </select>
+                <Button type="submit" size="sm" variant="outline">Update</Button>
+              </ActionForm>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (area === "website-seo") {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Website / SEO drafts</CardTitle>
+          <CardDescription>Template draft only. Nothing is published from this screen.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <p>{source.draftAssist.message}</p>
+          <p className="font-medium">{source.draftAssist.title}</p>
+          <p className="whitespace-pre-wrap">{source.draftAssist.body}</p>
+          <p>Home SEO title on file: {source.seo.homeTitle || "not set"}</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (area === "performance") {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Performance</CardTitle>
+          <CardDescription>{source.performance.message}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <p>Approved content: {source.performance.internal.approvedContent}</p>
+          <p>Completed jobs: {source.performance.internal.completedJobs}</p>
+          <p>Paid invoices on file: {source.performance.internal.paidInvoices}</p>
+          <p className="text-muted-foreground">{source.performance.internal.note}</p>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -314,7 +409,7 @@ function ContentBody({
         <Card>
           <CardHeader>
             <CardTitle>Social-ready posts</CardTitle>
-            <CardDescription>{source.channels.message}</CardDescription>
+            <CardDescription>{source.channels.manualCopy ?? source.channels.message}</CardDescription>
           </CardHeader>
         </Card>
       ) : null}
@@ -379,7 +474,9 @@ function CalendarBody({
     <Card>
       <CardHeader>
         <CardTitle>Content calendar</CardTitle>
-        <CardDescription>{CALENDAR_INTERNAL_MESSAGE}</CardDescription>
+        <CardDescription>
+          {CALENDAR_INTERNAL_MESSAGE} This week has {source.weeklyPlan.length} planned item{source.weeklyPlan.length === 1 ? "" : "s"}.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {items.length === 0 ? (

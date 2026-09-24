@@ -8,6 +8,21 @@ import { RequestEditForm } from "@/components/reviews/request-edit-form";
 import { RequestStatusButton } from "@/components/reviews/request-status-button";
 import { ResponseForm } from "@/components/reviews/response-form";
 import { ResponseStatusButton } from "@/components/reviews/response-status-button";
+import {
+  advanceReferralRequestAction,
+  cancelFollowUpAction,
+  cancelReferralRequestAction,
+  createFollowUpAction,
+  createReferralRequestAction,
+  markFollowUpSentManuallyAction,
+  markReferralRequestSentManuallyAction,
+  recordReferralAction,
+  sendFollowUpAction,
+  sendReferralRequestAction,
+  sendReviewReminderAction,
+  stopReviewRemindersAction,
+} from "@/app/actions/referrals";
+import { ActionForm } from "@/components/action-form";
 import type { ReviewsWorkspaceProps } from "@/components/reviews/types";
 import { EmptyState } from "@/components/empty-state";
 import { FounderRegion } from "@/components/founder-design/region";
@@ -78,6 +93,9 @@ export function ReviewsWorkspace({ area, source }: ReviewsWorkspaceProps) {
         <FounderRegion id="reviews">
           {area === "overview" || area === "reviews" || area === "responses" || area === "performance" ? (
             <ReviewBody area={area} source={source} />
+          ) : null}
+          {area === "referrals" || area === "follow-up" || area === "history" ? (
+            <GrowthBody area={area} source={source} />
           ) : null}
         </FounderRegion>
       </div>
@@ -217,9 +235,9 @@ function RequestBody({
                 <span className="text-xs text-muted-foreground">{row.workflowLabel}</span>
               </div>
               {row.requestedAt ? (
-                <p className="text-xs text-muted-foreground">Recorded as sent {formatDate(row.requestedAt)}</p>
+                <p className="text-xs text-muted-foreground">Sent {formatDate(row.requestedAt)}</p>
               ) : (
-                <p className="text-xs text-muted-foreground">Not recorded as sent yet.</p>
+                <p className="text-xs text-muted-foreground">Not sent yet.</p>
               )}
               {area === "requests" ? (
                 <>
@@ -236,6 +254,18 @@ function RequestBody({
                         requestId={row.id}
                         reminderAt={row.reminderAt ? formatISODate(row.reminderAt) : ""}
                       />
+                      {row.status === "SENT" ? (
+                        <div className="flex flex-wrap gap-2">
+                          <ActionForm action={sendReviewReminderAction}>
+                            <input type="hidden" name="requestId" value={row.id} />
+                            <Button type="submit" size="sm" variant="outline">Send reminder</Button>
+                          </ActionForm>
+                          <ActionForm action={stopReviewRemindersAction}>
+                            <input type="hidden" name="requestId" value={row.id} />
+                            <Button type="submit" size="sm" variant="ghost">Stop reminders</Button>
+                          </ActionForm>
+                        </div>
+                      ) : null}
                     </>
                   ) : null}
                   <RequestStatusButton requestId={row.id} status={row.status} />
@@ -382,6 +412,152 @@ function ReviewBody({
         ))
       )}
     </div>
+  );
+}
+
+function GrowthBody({
+  area,
+  source,
+}: {
+  area: ReviewArea;
+  source: ReviewsWorkspaceProps["source"];
+}) {
+  if (area === "history") {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Communication history</CardTitle>
+          <CardDescription>Recorded CustomerCommunication rows only. Provider failure still leaves the core request.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          {source.communications.length === 0 ? (
+            <p className="text-muted-foreground">No communication attempts recorded.</p>
+          ) : (
+            source.communications.map((row) => (
+              <p key={row.id}>
+                {row.purpose} · {row.channel} · {row.status} · {row.provider}
+                {row.failureReason ? ` · ${row.failureReason}` : ""}
+              </p>
+            ))
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (area === "follow-up") {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Follow-up</CardTitle>
+          <CardDescription>Completed-job and repeat-customer follow-up. Owner can cancel anytime.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <ActionForm action={createFollowUpAction} className="space-y-2">
+            <select name="customerId" className="w-full rounded-md border px-3 py-2 text-sm">
+              {source.customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>{customer.name}</option>
+              ))}
+            </select>
+            <select name="kind" className="w-full rounded-md border px-3 py-2 text-sm">
+              <option value="JOB_COMPLETE">Completed job</option>
+              <option value="REPEAT">Repeat customer</option>
+            </select>
+            <Button type="submit" size="sm">Create follow-up</Button>
+          </ActionForm>
+          {source.followUps.map((row) => (
+            <div key={row.id} className="space-y-2 rounded-md border p-3 text-sm">
+              <p>{row.kind} · {row.status}</p>
+              {row.status === "OPEN" || row.status === "FAILED" ? (
+                <div className="flex flex-wrap gap-2">
+                  <ActionForm action={sendFollowUpAction}>
+                    <input type="hidden" name="followUpId" value={row.id} />
+                    <Button type="submit" size="sm">Send via connected adapters</Button>
+                  </ActionForm>
+                  <ActionForm action={markFollowUpSentManuallyAction}>
+                    <input type="hidden" name="followUpId" value={row.id} />
+                    <Button type="submit" size="sm" variant="outline">Mark sent manually</Button>
+                  </ActionForm>
+                </div>
+              ) : null}
+              {row.status !== "CANCELLED" ? (
+                <ActionForm action={cancelFollowUpAction}>
+                  <input type="hidden" name="followUpId" value={row.id} />
+                  <Button type="submit" size="sm" variant="outline">Cancel</Button>
+                </ActionForm>
+              ) : null}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Referrals</CardTitle>
+        <CardDescription>Ask existing customers. Never request only positive reviews. No fake publishing.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <ActionForm action={createReferralRequestAction} className="space-y-2">
+          <select name="customerId" className="w-full rounded-md border px-3 py-2 text-sm">
+            {source.customers.map((customer) => (
+              <option key={customer.id} value={customer.id}>{customer.name}</option>
+            ))}
+          </select>
+          <Button type="submit" size="sm">Prepare referral request</Button>
+        </ActionForm>
+        {source.referralRequests.map((row) => (
+          <div key={row.id} className="rounded-md border p-3 text-sm">
+            <p>{row.customer.name} · {row.status}</p>
+            {row.status === "DRAFT" ? (
+              <ActionForm action={advanceReferralRequestAction}>
+                <input type="hidden" name="requestId" value={row.id} />
+                <Button type="submit" size="sm">Mark ready</Button>
+              </ActionForm>
+            ) : null}
+            {row.status === "READY" || row.status === "FAILED" ? (
+              <div className="flex flex-wrap gap-2">
+                <ActionForm action={sendReferralRequestAction}>
+                  <input type="hidden" name="requestId" value={row.id} />
+                  <Button type="submit" size="sm">Send via connected adapters</Button>
+                </ActionForm>
+                <ActionForm action={markReferralRequestSentManuallyAction}>
+                  <input type="hidden" name="requestId" value={row.id} />
+                  <Button type="submit" size="sm" variant="outline">Mark sent manually</Button>
+                </ActionForm>
+              </div>
+            ) : null}
+            {row.status !== "CANCELLED" && row.status !== "COMPLETED" ? (
+              <ActionForm action={cancelReferralRequestAction}>
+                <input type="hidden" name="requestId" value={row.id} />
+                <Button type="submit" size="sm" variant="outline">Cancel</Button>
+              </ActionForm>
+            ) : null}
+          </div>
+        ))}
+        <ActionForm action={recordReferralAction} className="space-y-2">
+          <p className="text-xs text-muted-foreground">Record a referred customer already on file.</p>
+          <select name="sourceCustomerId" className="w-full rounded-md border px-3 py-2 text-sm">
+            {source.customers.map((customer) => (
+              <option key={customer.id} value={customer.id}>{customer.name}</option>
+            ))}
+          </select>
+          <select name="referredCustomerId" className="w-full rounded-md border px-3 py-2 text-sm">
+            {source.customers.map((customer) => (
+              <option key={`ref-${customer.id}`} value={customer.id}>{customer.name}</option>
+            ))}
+          </select>
+          <Button type="submit" size="sm">Record referral</Button>
+        </ActionForm>
+        {source.referrals.map((row) => (
+          <p key={row.id} className="text-sm">
+            {row.sourceCustomer.name} → {row.referredCustomer?.name ?? "not linked yet"} · {row.status}
+          </p>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 

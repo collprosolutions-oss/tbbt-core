@@ -6,12 +6,18 @@
 import type { PrismaClient } from "@prisma/client";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
 import { getTrade } from "@/lib/trades";
+import { rollupAttribution } from "@/lib/lead-attribution";
 import {
   CHANNELS_DISCONNECTED_MESSAGE,
   jobMarketingReadiness,
+  LEAD_SOURCE_TRACKED_MESSAGE,
   LEAD_SOURCE_UNTRACKED_MESSAGE,
   PERFORMANCE_UNAVAILABLE_MESSAGE,
+  SOCIAL_MANUAL_COPY_MESSAGE,
 } from "@/lib/marketing";
+import { draftMarketingContent, weeklyContentPlan } from "@/lib/marketing-draft";
+import { addDays, startOfDay, startOfWeek } from "@/lib/schedule";
+import { asNumber } from "@/lib/reports";
 
 function catalogIdForEstimate(
   estimate: {
@@ -38,10 +44,18 @@ function catalogIdForEstimate(
 export async function loadMarketingSource(prisma: PrismaClient, businessId: string) {
   const scope = { businessId } as const;
 
-  const [business, jobs, contents, catalogItems, serviceRequests] = await Promise.all([
+  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices] = await Promise.all([
     prisma.business.findFirst({
       where: { id: businessId },
-      select: { id: true, name: true, slug: true, tradeCode: true },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        tradeCode: true,
+        publicServiceAreaLabel: true,
+        publicPhone: true,
+        publicEmail: true,
+      },
     }),
     prisma.job.findMany({
       where: { ...scope, status: "COMPLETED" },
@@ -104,7 +118,30 @@ export async function loadMarketingSource(prisma: PrismaClient, businessId: stri
     }),
     prisma.serviceRequest.findMany({
       where: scope,
-      select: { id: true, serviceCatalogItemId: true },
+      select: {
+        id: true,
+        serviceCatalogItemId: true,
+        leadSource: true,
+        campaignId: true,
+      },
+    }),
+    prisma.marketingCampaign.findMany({
+      where: scope,
+      orderBy: { updatedAt: "desc" },
+    }),
+    prisma.businessSettings.findUnique({
+      where: { businessId },
+      select: {
+        marketingBrandVoice: true,
+        marketingIdentityNotes: true,
+        seoTitleHome: true,
+        seoDescriptionHome: true,
+        approvedPublicAboutCopy: true,
+      },
+    }),
+    prisma.invoice.findMany({
+      where: { ...scope, status: "PAID" },
+      select: { total: true, jobId: true },
     }),
   ]);
 
@@ -163,9 +200,11 @@ export async function loadMarketingSource(prisma: PrismaClient, businessId: stri
       slug: business?.slug ?? "",
       tradeLabel: trade?.name ?? "Handyman",
       logoSrc: business ? getBusinessLogoSrc(business.slug) : null,
-      serviceAreaOnFile: false,
-      descriptionOnFile: false,
-      publicContactOnFile: false,
+      serviceAreaOnFile: Boolean(business?.publicServiceAreaLabel?.trim()),
+      descriptionOnFile: Boolean(settings?.approvedPublicAboutCopy?.trim() || settings?.marketingIdentityNotes?.trim()),
+      publicContactOnFile: Boolean(business?.publicPhone?.trim() || business?.publicEmail?.trim()),
+      voice: settings?.marketingBrandVoice ?? "",
+      identityNotes: settings?.marketingIdentityNotes ?? "",
     },
     opportunities,
     contents: contents.map((content) => ({
@@ -203,16 +242,53 @@ export async function loadMarketingSource(prisma: PrismaClient, businessId: stri
       servicesWithoutContent,
     },
     leadSources: {
-      tracked: false,
-      message: LEAD_SOURCE_UNTRACKED_MESSAGE,
+      tracked: serviceRequests.some((row) => row.leadSource),
+      message: serviceRequests.some((row) => row.leadSource)
+        ? LEAD_SOURCE_TRACKED_MESSAGE
+        : LEAD_SOURCE_UNTRACKED_MESSAGE,
+      rows: rollupAttribution({
+        requests: serviceRequests,
+        estimates: [],
+        jobs: jobs.map((job) => ({
+          leadSource: null,
+          campaignId: null,
+          paidRevenue: invoices
+            .filter((invoice) => invoice.jobId === job.id)
+            .reduce((sum, invoice) => sum + asNumber(invoice.total), 0),
+        })),
+        campaigns: campaigns.map((row) => ({ id: row.id, name: row.name })),
+      }),
+    },
+    campaigns,
+    weeklyPlan: weeklyContentPlan(
+      contents,
+      startOfWeek(startOfDay(new Date())),
+      addDays(startOfWeek(startOfDay(new Date())), 7),
+    ),
+    draftAssist: draftMarketingContent({
+      contentType: "GENERAL_POST",
+      businessName: business?.name ?? "Business",
+      brandVoice: settings?.marketingBrandVoice,
+      identityNotes: settings?.marketingIdentityNotes,
+    }),
+    seo: {
+      homeTitle: settings?.seoTitleHome ?? "",
+      homeDescription: settings?.seoDescriptionHome ?? "",
     },
     channels: {
       connected: false,
       message: CHANNELS_DISCONNECTED_MESSAGE,
+      manualCopy: SOCIAL_MANUAL_COPY_MESSAGE,
     },
     performance: {
       available: false,
       message: PERFORMANCE_UNAVAILABLE_MESSAGE,
+      internal: {
+        approvedContent: approved.length,
+        completedJobs: opportunities.length,
+        paidInvoices: invoices.length,
+        note: "Recorded TBBT activity only. Channel analytics are not connected.",
+      },
     },
   };
 }

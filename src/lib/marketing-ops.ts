@@ -41,6 +41,8 @@ export type CreateMarketingContentInput = {
   jobId?: string;
   photoIds?: string[];
   plannedFor?: string;
+  campaignId?: string;
+  catalogItemId?: string;
 };
 
 export async function grantJobPhotoMarketingPermission(
@@ -141,11 +143,33 @@ export async function createMarketingContent(
   }
 
   const plannedFor = input.plannedFor ? parseMarketingDate(input.plannedFor) : null;
+  let campaignId: string | null = null;
+  if (input.campaignId) {
+    const campaign = access.assertOwned(
+      await db.marketingCampaign.findFirst({
+        where: { id: input.campaignId, ...access.scope },
+        select: { id: true, businessId: true },
+      }),
+    );
+    campaignId = campaign.id;
+  }
+  let catalogItemId: string | null = null;
+  if (input.catalogItemId) {
+    const catalog = access.assertOwned(
+      await db.serviceCatalogItem.findFirst({
+        where: { id: input.catalogItemId, ...access.scope },
+        select: { id: true, businessId: true },
+      }),
+    );
+    catalogItemId = catalog.id;
+  }
 
   return db.marketingContent.create({
     data: {
       businessId: access.businessId,
       jobId,
+      campaignId,
+      catalogItemId,
       contentType: input.contentType,
       title,
       body,
@@ -210,5 +234,65 @@ export async function setMarketingContentPlannedFor(
   return db.marketingContent.update({
     where: { id: content.id },
     data: { plannedFor },
+  });
+}
+
+export async function createMarketingCampaign(
+  db: Db,
+  access: BusinessAccess,
+  input: { name: string; sourceKey?: string; notes?: string },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+  const name = input.name.trim();
+  if (!name) throw new MarketingError("A campaign needs a name.");
+  return db.marketingCampaign.create({
+    data: {
+      businessId: access.businessId,
+      name,
+      sourceKey: input.sourceKey?.trim() || "OTHER",
+      notes: input.notes?.trim() ?? "",
+      createdByMembershipId: access.workspace.membership.id,
+    },
+  });
+}
+
+export async function setMarketingCampaignStatus(
+  db: Db,
+  access: BusinessAccess,
+  input: { campaignId: string; status: string },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+  const allowed = ["DRAFT", "ACTIVE", "PAUSED", "COMPLETED"];
+  if (!allowed.includes(input.status)) {
+    throw new MarketingError("Choose a valid campaign status.");
+  }
+  const campaign = access.assertOwned(
+    await db.marketingCampaign.findFirst({
+      where: { id: input.campaignId, ...access.scope },
+    }),
+  );
+  return db.marketingCampaign.update({
+    where: { id: campaign.id },
+    data: { status: input.status },
+  });
+}
+
+export async function saveMarketingBrandVoice(
+  db: Db,
+  access: BusinessAccess,
+  input: { brandVoice?: string; identityNotes?: string },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+  return db.businessSettings.upsert({
+    where: { businessId: access.businessId },
+    create: {
+      businessId: access.businessId,
+      marketingBrandVoice: input.brandVoice?.trim() || null,
+      marketingIdentityNotes: input.identityNotes?.trim() || null,
+    },
+    update: {
+      marketingBrandVoice: input.brandVoice?.trim() || null,
+      marketingIdentityNotes: input.identityNotes?.trim() || null,
+    },
   });
 }

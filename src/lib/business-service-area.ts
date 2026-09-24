@@ -40,7 +40,17 @@ const SERVICE_AREA_BY_SLUG: Record<string, BusinessServiceArea> = {
 
 export function resolveBusinessServiceArea(business: {
   slug: string;
+  configuredCities?: string[];
+  configuredRegion?: string | null;
 }): BusinessServiceArea {
+  const fromSettings = (business.configuredCities ?? []).map((city) => city.trim()).filter(Boolean);
+  if (fromSettings.length > 0) {
+    return {
+      cities: [...new Set(fromSettings)],
+      region: business.configuredRegion ?? null,
+      country: "US",
+    };
+  }
   const configured = SERVICE_AREA_BY_SLUG[business.slug.trim().toLowerCase()];
   if (!configured) {
     return EMPTY_BUSINESS_SERVICE_AREA;

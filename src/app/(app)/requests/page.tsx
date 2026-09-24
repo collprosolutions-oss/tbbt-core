@@ -309,6 +309,12 @@ export default async function RequestsPage({
             totalLabel: formatMoney(request.estimates[0].total),
           }
         : null,
+      serviceAreaNote:
+        request.serviceAreaQualification === "OUTSIDE_PREFERRED"
+          ? "This lead is outside the preferred service area recorded on the request."
+          : request.serviceAreaQualification === "IN_AREA"
+            ? "This lead matched an enabled service area."
+            : null,
     };
   });
 
