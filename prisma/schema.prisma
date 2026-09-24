@@ -79,6 +79,7 @@ model User {
   /// Founder Design Mode cosmetic overrides this user has saved -- see
   /// FounderDesignOverride below. Empty for every non-founder User.
   founderDesignOverrides FounderDesignOverride[]
+  aiInteractions         AiInteraction[]
 }
 
 /// Founder/developer-only cosmetic design-token overrides for the
@@ -2143,6 +2144,7 @@ model BusinessActionItem {
   business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
   goal      BusinessGoal? @relation(fields: [goalId], references: [id], onDelete: SetNull)
   createdBy Membership? @relation("BusinessActionItemCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  recommendationStates BsosRecommendationState[]
 
   @@index([businessId])
   @@index([businessId, status])
@@ -2323,8 +2325,9 @@ model AiConversationMessage {
   interactionId  String?
   createdAt      DateTime @default(now())
 
-  business     Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  business     Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  conversation AiConversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  interaction  AiInteraction?  @relation("AiMessageInteraction", fields: [interactionId], references: [id], onDelete: SetNull)
 
   @@index([businessId])
   @@index([conversationId])
@@ -2356,6 +2359,8 @@ model AiInteraction {
   business     Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
   membership   Membership?     @relation("AiInteractionMembership", fields: [membershipId], references: [id], onDelete: SetNull)
   conversation AiConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  user         User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  messages     AiConversationMessage[] @relation("AiMessageInteraction")
 
   @@unique([businessId, idempotencyKey])
   @@index([businessId])
@@ -2467,7 +2472,7 @@ model AutomationRun {
   eventId        String
   ruleId         String?
   kind           String
-  /// PENDING | SUCCEEDED | FAILED | SKIPPED | BLOCKED
+  /// PENDING | PROCESSING | SUCCEEDED | FAILED | SKIPPED | BLOCKED
   status         String    @default("PENDING")
   attemptCount   Int       @default(0)
   lastError      String?
@@ -2496,13 +2501,18 @@ model BsosRecommendationState {
   recommendationKey       String
   /// OPEN | DISMISSED | COMPLETED
   status                  String   @default("OPEN")
+  /// Fingerprint of the supporting facts when this status was recorded.
+  evidenceKey             String   @default("")
+  /// Prior dismiss/complete acknowledgments for older fact fingerprints.
+  history                 Json?
   actionItemId            String?
   updatedByMembershipId   String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
-  business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  updatedBy Membership? @relation("BsosRecommendationStateActor", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
+  business   Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  updatedBy  Membership?         @relation("BsosRecommendationStateActor", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
+  actionItem BusinessActionItem? @relation(fields: [actionItemId], references: [id], onDelete: SetNull)
 
   @@unique([businessId, recommendationKey])
   @@index([businessId])

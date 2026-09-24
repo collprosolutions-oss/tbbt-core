@@ -248,6 +248,8 @@ export async function scheduleJob(
       businessName: access.workspace.business.name,
       proposalId,
       projectToken: job.projectToken,
+      scheduledAt: start.toISOString(),
+      scheduledDurationMinutes: duration.minutes,
     },
     idempotencyKey: `${rescheduled ? "APPOINTMENT_CHANGED" : "APPOINTMENT_SCHEDULED"}:${job.id}:${proposalId}`,
   });

@@ -21,6 +21,7 @@ export type AiActionState = {
   message?: string;
   text?: string;
   stance?: string;
+  keptOriginal?: boolean;
 };
 
 function readString(formData: FormData, key: string) {
@@ -86,6 +87,7 @@ export async function askBsosCoachAction(
         conversationId: conversation.id,
         idempotencyKey: `coach:${access.businessId}:${conversation.id}:${question.slice(0, 80)}:${Date.now()}`,
         fallback: grounded.output,
+        allowedFactKeys: grounded.citedFacts.map((fact) => fact.key),
       },
     );
     const output = result.output ?? grounded.output;
@@ -144,6 +146,7 @@ export async function askKnowledgeAction(
         conversationId: conversation.id,
         idempotencyKey: `knowledge:${access.businessId}:${question.slice(0, 80)}:${Date.now()}`,
         fallback,
+        allowedFactKeys: hits.map((hit) => hit.id),
       },
     );
     const output = result.output ?? fallback;
@@ -173,9 +176,13 @@ export async function applyWritingAction(
 ): Promise<AiActionState> {
   try {
     const access = await requireOperatingBusinessAccess();
+    requireBusinessCapability(access, CAPABILITIES.USE_AI_ASSIST);
     const action = readString(formData, "writingAction");
     if (!isWritingAction(action)) return { error: "Choose a writing action." };
     const writingAction = action;
+    if (writingAction === "KEEP_MINE") {
+      return { keptOriginal: true, text: readString(formData, "original"), message: "Owner text kept." };
+    }
     const original = readString(formData, "original");
     const result = await runWritingAssist(
       prisma,

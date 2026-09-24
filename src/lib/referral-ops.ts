@@ -68,21 +68,37 @@ export async function createReferralRequest(
     where: { id: access.businessId },
     select: { name: true },
   });
-  return db.referralRequest.create({
+  const requestText =
+    input.requestText?.trim() ||
+    suggestedReferralText({
+      customerName: customer.name,
+      businessName: business?.name ?? "us",
+    });
+  const request = await db.referralRequest.create({
     data: {
       businessId: access.businessId,
       customerId: customer.id,
       jobId: input.jobId || null,
-      requestText:
-        input.requestText?.trim() ||
-        suggestedReferralText({
-          customerName: customer.name,
-          businessName: business?.name ?? "us",
-        }),
+      requestText,
       notes: input.notes?.trim() || null,
       createdByMembershipId: access.workspace.membership.id,
     },
   });
+  await emitAndProcessBusinessEvent(db, {
+    businessId: access.businessId,
+    type: "REFERRAL_REQUEST_CREATED",
+    subjectType: "REFERRAL_REQUEST",
+    subjectId: request.id,
+    payload: {
+      customerId: customer.id,
+      jobId: request.jobId,
+      referralRequestId: request.id,
+      requestText,
+      businessName: business?.name ?? "Your contractor",
+    },
+    idempotencyKey: `REFERRAL_REQUEST_CREATED:${request.id}`,
+  });
+  return request;
 }
 
 export async function advanceReferralRequest(
@@ -324,12 +340,21 @@ export async function createCustomerFollowUp(
       createdByMembershipId: access.workspace.membership.id,
     },
   });
+  const business = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: { name: true },
+  });
   await emitAndProcessBusinessEvent(db, {
     businessId: access.businessId,
     type: "CUSTOMER_FOLLOW_UP_DUE",
     subjectType: "CUSTOMER_FOLLOW_UP",
     subjectId: row.id,
-    payload: { customerId: row.customerId, jobId: row.jobId, followUpId: row.id },
+    payload: {
+      customerId: row.customerId,
+      jobId: row.jobId,
+      followUpId: row.id,
+      businessName: business?.name ?? "Your contractor",
+    },
     idempotencyKey: `CUSTOMER_FOLLOW_UP_DUE:${row.id}`,
   });
   return row;

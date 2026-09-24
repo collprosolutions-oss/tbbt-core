@@ -55,7 +55,7 @@ export async function updateAutomationRule(
       where: { id: input.ruleId, ...access.scope },
     }),
   );
-  const channel = input.channel;
+  const channel = rule.kind === "ACTION_SUGGESTION" ? "NONE" : input.channel;
   if (
     channel &&
     channel !== "EMAIL" &&

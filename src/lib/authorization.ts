@@ -173,6 +173,12 @@ export const CAPABILITIES = {
    * Does not delete historical records.
    */
   REQUEST_OFFBOARDING: "REQUEST_OFFBOARDING",
+  /**
+   * Owner/admin generic AI writing assistance (rewrite/draft suggestions).
+   * MEMBER must never receive this -- hiding the management UI is not enough.
+   * AI never authorizes actions or changes tenant access.
+   */
+  USE_AI_ASSIST: "USE_AI_ASSIST",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];

@@ -77,6 +77,21 @@ export function applyTemplateWriting(
   };
 }
 
+/**
+ * Generation never mutates owner text. Only an explicit APPLY choice
+ * replaces the original. KEEP_MINE / IGNORE leave it untouched.
+ */
+export function resolveWritingOriginal(
+  original: string,
+  suggestion: string | null | undefined,
+  choice: "APPLY" | "KEEP_MINE" | "IGNORE",
+) {
+  if (choice === "APPLY" && typeof suggestion === "string") {
+    return suggestion;
+  }
+  return original;
+}
+
 export async function runWritingAssist(
   db: Db,
   actor: AiServiceActor,

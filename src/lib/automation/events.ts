@@ -1,9 +1,28 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { ensureDefaultAutomationRules } from "@/lib/automation/rules";
+import { appointmentReminderAvailableAt, parseServerScheduledAt } from "@/lib/automation/timing";
 import type { BusinessEventType } from "@/lib/automation/types";
 import { processPendingAutomationRuns } from "@/lib/automation/processor";
 
 type Db = PrismaClient | Prisma.TransactionClient;
+
+function eventPayload(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function resolveAvailableAt(
+  rule: { purpose: string; delayMinutes: number },
+  event: { type: string; occurredAt: Date; payload: unknown },
+) {
+  if (rule.purpose === "APPOINTMENT_REMINDER") {
+    const scheduledAt = parseServerScheduledAt(eventPayload(event.payload).scheduledAt);
+    if (!scheduledAt) return null;
+    return appointmentReminderAvailableAt(scheduledAt, rule.delayMinutes);
+  }
+  return new Date(event.occurredAt.getTime() + rule.delayMinutes * 60_000);
+}
 
 export async function emitBusinessEvent(
   db: Db,
@@ -54,24 +73,54 @@ export async function emitBusinessEvent(
   }
 }
 
+export async function skipSupersededAppointmentReminders(
+  db: Db,
+  input: { businessId: string; jobId: string; proposalId: number },
+) {
+  const pending = await db.automationRun.findMany({
+    where: {
+      businessId: input.businessId,
+      status: { in: ["PENDING", "PROCESSING"] },
+    },
+    include: { event: true, rule: true },
+  });
+  for (const run of pending) {
+    if (run.rule?.purpose !== "APPOINTMENT_REMINDER") continue;
+    if (run.event.subjectType !== "JOB" || run.event.subjectId !== input.jobId) continue;
+    const proposalId = eventPayload(run.event.payload).proposalId;
+    if (proposalId === input.proposalId) continue;
+    await db.automationRun.updateMany({
+      where: {
+        id: run.id,
+        businessId: input.businessId,
+        status: { in: ["PENDING", "PROCESSING"] },
+      },
+      data: {
+        status: "SKIPPED",
+        resultSummary: "Superseded by a later appointment proposal. SENT was not recorded.",
+        processedAt: new Date(),
+      },
+    });
+  }
+}
+
 export async function queueAutomationRunsForEvent(
   db: Db,
   businessId: string,
-  eventId: string,
-  eventType: string,
-  occurredAt: Date,
+  event: { id: string; type: string; occurredAt: Date; payload: unknown },
 ) {
   const rules = (await ensureDefaultAutomationRules(db, businessId)).filter(
-    (rule) => rule.eventType === eventType && rule.enabled,
+    (rule) => rule.eventType === event.type && rule.enabled,
   );
   for (const rule of rules) {
-    const availableAt = new Date(occurredAt.getTime() + rule.delayMinutes * 60_000);
-    const idempotencyKey = `run:${eventId}:${rule.id}`;
+    const availableAt = resolveAvailableAt(rule, event);
+    if (!availableAt) continue;
+    const idempotencyKey = `run:${event.id}:${rule.id}`;
     try {
       await db.automationRun.create({
         data: {
           businessId,
-          eventId,
+          eventId: event.id,
           ruleId: rule.id,
           kind: rule.kind,
           status: "PENDING",
@@ -96,13 +145,17 @@ export async function emitAndProcessBusinessEvent(
   try {
     const emitted = await emitBusinessEvent(db, input);
     if (emitted.created) {
-      await queueAutomationRunsForEvent(
-        db,
-        input.businessId,
-        emitted.event.id,
-        emitted.event.type,
-        emitted.event.occurredAt,
-      );
+      await queueAutomationRunsForEvent(db, input.businessId, emitted.event);
+      if (input.type === "APPOINTMENT_CHANGED") {
+        const proposalId = eventPayload(input.payload).proposalId;
+        if (typeof proposalId === "number") {
+          await skipSupersededAppointmentReminders(db, {
+            businessId: input.businessId,
+            jobId: input.subjectId,
+            proposalId,
+          });
+        }
+      }
     }
     await processPendingAutomationRuns(db, input.businessId);
     return emitted;

@@ -132,7 +132,7 @@ function OpportunityBody({
           <CardHeader>
             <CardTitle>Marketing intelligence drafts</CardTitle>
             <CardDescription>
-              Templates from recorded jobs, photos, and campaigns. Social accounts stay Not Connected. Nothing is published.
+              Recorded jobs, photos, reviews, service areas, and campaigns. AI drafts use a connected provider when one exists; otherwise TBBT stays in template mode. Social accounts stay Not Connected. Generated content remains DRAFT.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">

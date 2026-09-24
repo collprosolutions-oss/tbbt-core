@@ -534,6 +534,21 @@ check(
     !workspaceLoader.includes("intelligence-schema"),
 );
 
+const intelligenceHardeningMigration = readFileSync(
+  new URL("../prisma/migrations/20260924220000_intelligence_hardening/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Intelligence hardening migration is additive and adds recommendation evidence plus FKs",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(intelligenceHardeningMigration) &&
+    intelligenceHardeningMigration.includes('ADD COLUMN IF NOT EXISTS "evidenceKey"') &&
+    intelligenceHardeningMigration.includes('ADD COLUMN IF NOT EXISTS "history"') &&
+    intelligenceHardeningMigration.includes("AiConversationMessage_interactionId_fkey") &&
+    intelligenceHardeningMigration.includes("AiInteraction_userId_fkey") &&
+    intelligenceHardeningMigration.includes("BsosRecommendationState_actionItemId_fkey") &&
+    intelligenceHardeningMigration.includes("IF NOT EXISTS"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

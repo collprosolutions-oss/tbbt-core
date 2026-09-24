@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { createBusinessActionItem } from "@/lib/bsos-ops";
@@ -24,12 +24,45 @@ export function actionTitleForRecommendation(recommendation: BsosRecommendation)
   return RECOMMENDATION_ACTION_TITLES[recommendation.key] ?? recommendation.title;
 }
 
+export function recommendationEvidenceKey(recommendation: BsosRecommendation) {
+  return recommendation.facts
+    .map((fact) => `${fact.key}:${fact.value}`)
+    .sort()
+    .join("|");
+}
+
 export async function upsertRecommendationState(
   db: Db,
   access: BusinessAccess,
-  input: { recommendationKey: string; status: "OPEN" | "DISMISSED" | "COMPLETED"; actionItemId?: string },
+  input: {
+    recommendationKey: string;
+    status: "OPEN" | "DISMISSED" | "COMPLETED";
+    actionItemId?: string;
+    evidenceKey?: string;
+  },
 ) {
   requireBusinessCapability(access, CAPABILITIES.VIEW_REPORTS);
+  const existing = await db.bsosRecommendationState.findUnique({
+    where: {
+      businessId_recommendationKey: {
+        businessId: access.businessId,
+        recommendationKey: input.recommendationKey,
+      },
+    },
+  });
+  const evidenceKey = input.evidenceKey ?? existing?.evidenceKey ?? "";
+  const history =
+    existing && existing.evidenceKey && existing.evidenceKey !== evidenceKey
+      ? [
+          ...((Array.isArray(existing.history) ? existing.history : []) as Array<Record<string, unknown>>),
+          {
+            evidenceKey: existing.evidenceKey,
+            status: existing.status,
+            actionItemId: existing.actionItemId,
+            at: existing.updatedAt.toISOString(),
+          },
+        ]
+      : existing?.history;
   return db.bsosRecommendationState.upsert({
     where: {
       businessId_recommendationKey: {
@@ -41,11 +74,15 @@ export async function upsertRecommendationState(
       businessId: access.businessId,
       recommendationKey: input.recommendationKey,
       status: input.status,
+      evidenceKey,
+      history: history === undefined ? undefined : (history as Prisma.InputJsonValue),
       actionItemId: input.actionItemId ?? null,
       updatedByMembershipId: access.workspace.membership.id,
     },
     update: {
       status: input.status,
+      evidenceKey,
+      history: history === undefined ? undefined : (history as Prisma.InputJsonValue),
       actionItemId: input.actionItemId ?? undefined,
       updatedByMembershipId: access.workspace.membership.id,
     },
@@ -66,6 +103,7 @@ export async function createActionFromRecommendation(
   await upsertRecommendationState(db, access, {
     recommendationKey: recommendation.key,
     status: "OPEN",
+    evidenceKey: recommendationEvidenceKey(recommendation),
     actionItemId: action.id,
   });
   return action;
@@ -73,16 +111,21 @@ export async function createActionFromRecommendation(
 
 export function partitionRecommendations(
   recommendations: BsosRecommendation[],
-  states: Array<{ recommendationKey: string; status: string }>,
+  states: Array<{ recommendationKey: string; status: string; evidenceKey?: string | null }>,
 ) {
-  const byKey = new Map(states.map((row) => [row.recommendationKey, row.status]));
   const active = recommendations.filter((item) => {
-    const status = byKey.get(item.key);
-    return status !== "DISMISSED" && status !== "COMPLETED";
+    const evidenceKey = recommendationEvidenceKey(item);
+    const match = states.find(
+      (row) => row.recommendationKey === item.key && (row.evidenceKey ?? "") === evidenceKey,
+    );
+    return match?.status !== "DISMISSED" && match?.status !== "COMPLETED";
   });
   const history = recommendations.filter((item) => {
-    const status = byKey.get(item.key);
-    return status === "DISMISSED" || status === "COMPLETED";
+    const evidenceKey = recommendationEvidenceKey(item);
+    const match = states.find(
+      (row) => row.recommendationKey === item.key && (row.evidenceKey ?? "") === evidenceKey,
+    );
+    return match?.status === "DISMISSED" || match?.status === "COMPLETED";
   });
   return { active, history };
 }

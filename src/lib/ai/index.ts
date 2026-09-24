@@ -1,7 +1,12 @@
 export { isAiProviderConnected, aiConnectionLabel, readAiModel } from "@/lib/ai/config";
 export { resolveAiProvider } from "@/lib/ai/provider";
-export { runAiTask, parseStructuredAiOutput, loadAiUsage } from "@/lib/ai/service";
-export { applyTemplateWriting, runWritingAssist } from "@/lib/ai/writing";
+export {
+  runAiTask,
+  parseStructuredAiOutput,
+  filterAuthorizedCitedFactKeys,
+  loadAiUsage,
+} from "@/lib/ai/service";
+export { applyTemplateWriting, runWritingAssist, resolveWritingOriginal } from "@/lib/ai/writing";
 export { answerCoachFromFacts, coachSystemPrompt } from "@/lib/ai/coach";
 export {
   retrieveTenantKnowledge,
@@ -12,6 +17,9 @@ export {
   draftMarketingVariations,
   weeklyMarketingPlanFromActivity,
   campaignIdeasFromActivity,
+  draftMarketingVariationsWithAi,
+  weeklyMarketingPlanWithAi,
+  campaignIdeasWithAi,
 } from "@/lib/ai/marketing";
 export { describeReviewSentiment, draftReviewResponseFromRecord } from "@/lib/ai/reviews";
 export {

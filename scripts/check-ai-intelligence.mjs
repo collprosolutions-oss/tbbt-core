@@ -15,11 +15,14 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 const {
   AI_NOT_CONNECTED_MESSAGE,
   applyTemplateWriting,
+  filterAuthorizedCitedFactKeys,
   isAiProviderConnected,
   parseStructuredAiOutput,
+  resolveWritingOriginal,
   runAiTask,
   runWritingAssist,
 } = await import("@/lib/ai/index");
+const { CAPABILITIES, requireBusinessCapability } = await import("@/lib/authorization");
 const { answerCoachFromFacts } = await import("@/lib/ai/coach");
 const { answerKnowledgeFromEntries, retrieveTenantKnowledge } = await import("@/lib/ai/knowledge");
 const { describeReviewSentiment } = await import("@/lib/ai/reviews");
@@ -82,6 +85,48 @@ try {
     "Keep Mine returns the owner text",
     applyTemplateWriting("KEEP_MINE", "Owner copy").text === "Owner copy",
   );
+  const writingBarSrc = readFileSync(new URL("../src/components/ai/writing-assist-bar.tsx", import.meta.url), "utf8");
+  const writingActionSrc = readFileSync(new URL("../src/app/actions/ai.ts", import.meta.url), "utf8");
+  check(
+    "Generation alone cannot modify the owner's original field value",
+    !writingBarSrc.includes("onSuggestion(state.text)") &&
+      writingBarSrc.includes("Apply suggestion") &&
+      resolveWritingOriginal("Owner original", "Generated rewrite", "IGNORE") === "Owner original" &&
+      resolveWritingOriginal("Owner original", "Generated rewrite", "KEEP_MINE") === "Owner original" &&
+      resolveWritingOriginal("Owner original", "Generated rewrite", "APPLY") === "Generated rewrite",
+  );
+  check(
+    "Generic writing action requires USE_AI_ASSIST",
+    writingActionSrc.includes("USE_AI_ASSIST"),
+  );
+  check(
+    "Unknown citation keys are removed",
+    filterAuthorizedCitedFactKeys(["paidRevenue", "secret-other-tenant"], ["paidRevenue"]).join(",") ===
+      "paidRevenue" &&
+      parseStructuredAiOutput(
+        JSON.stringify({ text: "ok", stance: "FACT", citedFactKeys: ["paidRevenue", "invented"] }),
+        ["paidRevenue"],
+      )?.citedFactKeys.join(",") === "paidRevenue",
+  );
+  const marketingDataSrc = readFileSync(new URL("../src/lib/marketing-data.ts", import.meta.url), "utf8");
+  const marketingAiSrc = readFileSync(new URL("../src/lib/ai/marketing.ts", import.meta.url), "utf8");
+  check(
+    "Marketing source loads recorded review, service-area, and unpaid-invoice counts",
+    marketingDataSrc.includes("prisma.review.count") &&
+      marketingDataSrc.includes("prisma.serviceArea.count") &&
+      marketingDataSrc.includes('status: "SENT"') &&
+      !marketingDataSrc.includes("reviews: 0") &&
+      !marketingDataSrc.includes("serviceAreas: 0") &&
+      !marketingDataSrc.includes("unpaidInvoices: 0"),
+  );
+  check(
+    "Marketing drafts, weekly plans, and campaign ideas use the AI provider boundary",
+    marketingAiSrc.includes("weeklyMarketingPlanWithAi") &&
+      marketingAiSrc.includes("campaignIdeasWithAi") &&
+      marketingAiSrc.includes("draftMarketingVariationsWithAi") &&
+      marketingAiSrc.includes("runAiTask") &&
+      marketingAiSrc.includes('publishable: false'),
+  );
 
   const ownerA = await prisma.user.create({
     data: { name: "A Owner", email: `a-ai-${randomUUID()}@example.com`, passwordHash: "x" },
@@ -100,6 +145,12 @@ try {
   });
   await prisma.membership.create({
     data: { userId: ownerB.id, businessId: businessB.id, role: "OWNER" },
+  });
+  const memberUser = await prisma.user.create({
+    data: { name: "A Member", email: `a-member-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const memMember = await prisma.membership.create({
+    data: { userId: memberUser.id, businessId: businessA.id, role: "MEMBER" },
   });
 
   const conversationA = await prisma.aiConversation.create({
@@ -240,6 +291,49 @@ try {
   const aUsage = await prisma.aiUsagePeriod.findMany({ where: { businessId: businessA.id } });
   const bUsage = await prisma.aiUsagePeriod.findMany({ where: { businessId: businessB.id } });
   check("Usage totals stay on the requesting business", aUsage.length >= 1 && bUsage.length === 0);
+
+  const raceKey = `coach-race-${randomUUID()}`;
+  const raceInput = {
+    taskType: "COACH_ASK",
+    system: "unused",
+    user: "unused",
+    inputSummary: "race",
+    idempotencyKey: raceKey,
+    fallback: coach.output,
+    allowedFactKeys: ["paidRevenue"],
+  };
+  const actorA = { businessId: businessA.id, membershipId: memA.id, userId: ownerA.id };
+  const [raceOne, raceTwo] = await Promise.all([
+    runAiTask(prisma, actorA, raceInput),
+    runAiTask(prisma, actorA, raceInput),
+  ]);
+  const raceRows = await prisma.aiInteraction.findMany({
+    where: { businessId: businessA.id, idempotencyKey: raceKey },
+  });
+  check(
+    "Concurrent identical AI idempotency keys create or load a single interaction",
+    raceRows.length === 1 &&
+      raceOne.interactionId === raceRows[0].id &&
+      raceTwo.interactionId === raceRows[0].id,
+  );
+
+  let memberWritingBlocked = false;
+  try {
+    requireBusinessCapability(
+      {
+        businessId: businessA.id,
+        workspace: { role: "MEMBER", membership: { id: memMember.id }, user: { id: memberUser.id } },
+        scope: { businessId: businessA.id },
+        assertOwned(record) {
+          return record;
+        },
+      },
+      CAPABILITIES.USE_AI_ASSIST,
+    );
+  } catch {
+    memberWritingBlocked = true;
+  }
+  check("MEMBER direct invocation of generic AI writing is blocked", memberWritingBlocked);
 } finally {
   await prisma.$disconnect();
   spawnSync("psql", [baseUrl, "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE);`], {

@@ -7,6 +7,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { attemptReviewReminderSms, attemptReviewRequestSms } from "@/lib/customer-messaging";
 import { getMailConfig, isUsableEmail, reviewRequestEmailIdempotencyKey, sendTransactionalEmail, senderFrom } from "@/lib/mail";
 import {
@@ -156,7 +157,7 @@ export async function createReviewRequest(
     throw new ReviewsError("Enter a valid follow-up date.");
   }
 
-  return db.reviewRequest.create({
+  const request = await db.reviewRequest.create({
     data: {
       businessId: access.businessId,
       customerId: customer.id,
@@ -169,6 +170,21 @@ export async function createReviewRequest(
       createdByMembershipId: access.workspace.membership.id,
     },
   });
+  await emitAndProcessBusinessEvent(db, {
+    businessId: access.businessId,
+    type: "REVIEW_REQUEST_CREATED",
+    subjectType: "REVIEW_REQUEST",
+    subjectId: request.id,
+    payload: {
+      customerId: customer.id,
+      jobId,
+      reviewRequestId: request.id,
+      requestText,
+      businessName: business?.name ?? "Your contractor",
+    },
+    idempotencyKey: `REVIEW_REQUEST_CREATED:${request.id}`,
+  });
+  return request;
 }
 
 export async function updateReviewRequest(

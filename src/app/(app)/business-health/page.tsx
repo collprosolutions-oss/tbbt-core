@@ -197,12 +197,16 @@ export default async function BusinessHealthPage({
                       <option value="false">disabled</option>
                       <option value="true">enabled</option>
                     </select>
-                    <select name="channel" defaultValue={rule.channel} className="rounded-md border px-2 py-1">
-                      <option value="NONE">NONE</option>
-                      <option value="SMS">SMS</option>
-                      <option value="EMAIL">EMAIL</option>
-                      <option value="BOTH">BOTH</option>
-                    </select>
+                    {rule.kind === "ACTION_SUGGESTION" ? (
+                      <p className="text-xs text-muted-foreground">Owner action only. Changing a channel would not send a message.</p>
+                    ) : (
+                      <select name="channel" defaultValue={rule.channel} className="rounded-md border px-2 py-1">
+                        <option value="NONE">NONE</option>
+                        <option value="SMS">SMS</option>
+                        <option value="EMAIL">EMAIL</option>
+                        <option value="BOTH">BOTH</option>
+                      </select>
+                    )}
                     <input
                       type="number"
                       name="delayMinutes"

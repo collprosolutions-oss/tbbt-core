@@ -30,7 +30,19 @@ function monthStart(now: Date) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
 
-export function parseStructuredAiOutput(raw: string): StructuredAiOutput | null {
+export function filterAuthorizedCitedFactKeys(
+  citedFactKeys: string[],
+  allowedFactKeys?: string[] | null,
+) {
+  if (!allowedFactKeys) return citedFactKeys.slice(0, 20);
+  const allowed = new Set(allowedFactKeys);
+  return citedFactKeys.filter((key) => allowed.has(key)).slice(0, 20);
+}
+
+export function parseStructuredAiOutput(
+  raw: string,
+  allowedFactKeys?: string[] | null,
+): StructuredAiOutput | null {
   try {
     const parsed = JSON.parse(raw) as Partial<StructuredAiOutput>;
     const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
@@ -39,9 +51,12 @@ export function parseStructuredAiOutput(raw: string): StructuredAiOutput | null 
       parsed.stance === "FACT" || parsed.stance === "RECOMMENDATION" || parsed.stance === "MIXED"
         ? parsed.stance
         : "MIXED";
-    const citedFactKeys = Array.isArray(parsed.citedFactKeys)
-      ? parsed.citedFactKeys.filter((key): key is string => typeof key === "string").slice(0, 20)
-      : [];
+    const citedFactKeys = filterAuthorizedCitedFactKeys(
+      Array.isArray(parsed.citedFactKeys)
+        ? parsed.citedFactKeys.filter((key): key is string => typeof key === "string")
+        : [],
+      allowedFactKeys,
+    );
     return {
       text: sanitizeAiText(text, 4_000),
       stance,
@@ -51,6 +66,41 @@ export function parseStructuredAiOutput(raw: string): StructuredAiOutput | null 
   } catch {
     return null;
   }
+}
+
+function resultFromExistingInteraction(
+  existing: {
+    id: string;
+    status: string;
+    provider: string | null;
+    model: string | null;
+    outputSummary: string | null;
+    failureReason: string | null;
+  },
+  fallback: StructuredAiOutput,
+  allowedFactKeys?: string[] | null,
+): AiRunResult {
+  const output = existing.outputSummary
+    ? parseStructuredAiOutput(existing.outputSummary, allowedFactKeys)
+    : fallback;
+  return {
+    status: existing.status as AiRunResult["status"],
+    connected: isAiProviderConnected(),
+    provider: existing.provider,
+    model: existing.model,
+    output: output ?? fallback,
+    message:
+      existing.status === "SKIPPED_NOT_CONNECTED"
+        ? AI_NOT_CONNECTED_MESSAGE
+        : existing.status === "FAILED"
+          ? AI_FAILURE_MESSAGE
+          : existing.status === "VALIDATION_FAILED"
+            ? AI_VALIDATION_MESSAGE
+            : "Completed.",
+    failureReason: existing.failureReason ?? undefined,
+    retryable: false,
+    interactionId: existing.id,
+  };
 }
 
 async function recordUsage(
@@ -91,52 +141,51 @@ export async function runAiTask(
     inputSummary: string;
     conversationId?: string | null;
     idempotencyKey: string;
-    fallback: StructuredAiOutput;
-    allowRetry?: boolean;
-  },
-): Promise<AiRunResult> {
-  const existing = await db.aiInteraction.findUnique({
-    where: {
-      businessId_idempotencyKey: {
-        businessId: actor.businessId,
-        idempotencyKey: input.idempotencyKey,
+        fallback: StructuredAiOutput;
+        allowRetry?: boolean;
+        allowedFactKeys?: string[] | null;
       },
-    },
-  });
-  if (existing) {
-    const output = existing.outputSummary ? parseStructuredAiOutput(existing.outputSummary) : input.fallback;
-    return {
-      status: existing.status as AiRunResult["status"],
-      connected: isAiProviderConnected(),
-      provider: existing.provider,
-      model: existing.model,
-      output: output ?? input.fallback,
-      message:
-        existing.status === "SKIPPED_NOT_CONNECTED"
-          ? AI_NOT_CONNECTED_MESSAGE
-          : existing.status === "FAILED"
-            ? AI_FAILURE_MESSAGE
-            : existing.status === "VALIDATION_FAILED"
-              ? AI_VALIDATION_MESSAGE
-              : "Completed.",
-      failureReason: existing.failureReason ?? undefined,
-      retryable: false,
-      interactionId: existing.id,
-    };
-  }
+    ): Promise<AiRunResult> {
+      const existing = await db.aiInteraction.findUnique({
+        where: {
+          businessId_idempotencyKey: {
+            businessId: actor.businessId,
+            idempotencyKey: input.idempotencyKey,
+          },
+        },
+      });
+      if (existing) {
+        return resultFromExistingInteraction(existing, input.fallback, input.allowedFactKeys);
+      }
 
-  const pending = await db.aiInteraction.create({
-    data: {
-      businessId: actor.businessId,
-      membershipId: actor.membershipId ?? null,
-      userId: actor.userId ?? null,
-      conversationId: input.conversationId ?? null,
-      taskType: input.taskType,
-      status: "PENDING",
-      inputSummary: summarizeAiInput(input.taskType, input.inputSummary),
-      idempotencyKey: input.idempotencyKey,
-    },
-  });
+      let pending;
+      try {
+        pending = await db.aiInteraction.create({
+          data: {
+            businessId: actor.businessId,
+            membershipId: actor.membershipId ?? null,
+            userId: actor.userId ?? null,
+            conversationId: input.conversationId ?? null,
+            taskType: input.taskType,
+            status: "PENDING",
+            inputSummary: summarizeAiInput(input.taskType, input.inputSummary),
+            idempotencyKey: input.idempotencyKey,
+          },
+        });
+      } catch {
+        const raced = await db.aiInteraction.findUnique({
+          where: {
+            businessId_idempotencyKey: {
+              businessId: actor.businessId,
+              idempotencyKey: input.idempotencyKey,
+            },
+          },
+        });
+        if (raced) {
+          return resultFromExistingInteraction(raced, input.fallback, input.allowedFactKeys);
+        }
+        throw new Error("That AI request could not be recorded.");
+      }
 
   const provider = resolveAiProvider();
   if (!provider.connected) {
@@ -178,7 +227,7 @@ export async function runAiTask(
       maxOutputTokens: AI_MAX_OUTPUT_TOKENS,
     });
     if (completed.ok) {
-      const parsed = parseStructuredAiOutput(completed.text);
+      const parsed = parseStructuredAiOutput(completed.text, input.allowedFactKeys);
       if (!parsed) {
         lastFailure = AI_VALIDATION_MESSAGE;
         lastUsage = completed.usage;

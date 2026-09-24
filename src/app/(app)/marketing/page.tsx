@@ -35,7 +35,11 @@ export default async function MarketingPage({
 
   const params = await searchParams;
   const area = parseMarketingArea(params.area);
-  const source = await loadMarketingSource(prisma, access.businessId);
+  const source = await loadMarketingSource(prisma, access.businessId, {
+    businessId: access.businessId,
+    membershipId: access.workspace.membership.id,
+    userId: access.workspace.user.id,
+  });
 
   const kpis: Array<{
     label: string;

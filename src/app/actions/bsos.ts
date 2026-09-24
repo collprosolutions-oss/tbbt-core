@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { bsosErrorMessage, createBusinessActionItem, createBusinessGoal, updateBusinessActionStatus, updateBusinessGoalStatus } from "@/lib/bsos-ops";
-import { createActionFromRecommendation, upsertRecommendationState } from "@/lib/bsos-actions";
+import { createActionFromRecommendation, recommendationEvidenceKey, upsertRecommendationState } from "@/lib/bsos-actions";
 import { buildBsosRecommendations } from "@/lib/bsos";
 import { loadBsosFacts } from "@/lib/bsos-data";
 import { prisma } from "@/lib/prisma";
@@ -114,9 +114,12 @@ export async function dismissRecommendationAction(
     const access = await requireOperatingBusinessAccess();
     const key = readString(formData, "recommendationKey");
     if (!key) return { error: "Choose a recommendation." };
+    const facts = await loadBsosFacts(prisma, access.businessId);
+    const recommendation = buildBsosRecommendations(facts).find((item) => item.key === key);
     await upsertRecommendationState(prisma, access, {
       recommendationKey: key,
       status: "DISMISSED",
+      evidenceKey: recommendation ? recommendationEvidenceKey(recommendation) : undefined,
     });
     revalidatePath("/business-health");
     return { message: "Recommendation dismissed. It will stay in history until facts change." };
@@ -133,9 +136,12 @@ export async function completeRecommendationAction(
     const access = await requireOperatingBusinessAccess();
     const key = readString(formData, "recommendationKey");
     if (!key) return { error: "Choose a recommendation." };
+    const facts = await loadBsosFacts(prisma, access.businessId);
+    const recommendation = buildBsosRecommendations(facts).find((item) => item.key === key);
     await upsertRecommendationState(prisma, access, {
       recommendationKey: key,
       status: "COMPLETED",
+      evidenceKey: recommendation ? recommendationEvidenceKey(recommendation) : undefined,
     });
     revalidatePath("/business-health");
     return { message: "Recommendation marked complete for this business." };

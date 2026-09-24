@@ -12,6 +12,8 @@ export const BUSINESS_EVENT_TYPES = [
   "INVOICE_PAID",
   "REVIEW_OPPORTUNITY_CREATED",
   "REFERRAL_OPPORTUNITY_CREATED",
+  "REVIEW_REQUEST_CREATED",
+  "REFERRAL_REQUEST_CREATED",
   "CUSTOMER_FOLLOW_UP_DUE",
 ] as const;
 export type BusinessEventType = (typeof BUSINESS_EVENT_TYPES)[number];
@@ -21,6 +23,7 @@ export type AutomationChannel = (typeof AUTOMATION_CHANNELS)[number];
 
 export const AUTOMATION_RUN_STATUSES = [
   "PENDING",
+  "PROCESSING",
   "SUCCEEDED",
   "FAILED",
   "SKIPPED",
@@ -44,9 +47,11 @@ export const DEFAULT_AUTOMATION_RULES: Array<{
   { eventType: "INVOICE_SENT", purpose: "INVOICE_READY", kind: "COMMUNICATION", channel: "EMAIL", delayMinutes: 0, templateKey: "invoice-ready", enabled: false },
   { eventType: "INVOICE_DUE", purpose: "PAYMENT_REMINDER", kind: "COMMUNICATION", channel: "SMS", delayMinutes: 0, templateKey: "payment-reminder", enabled: false },
   { eventType: "INVOICE_OVERDUE", purpose: "PAYMENT_REMINDER", kind: "COMMUNICATION", channel: "SMS", delayMinutes: 0, templateKey: "payment-overdue", enabled: false },
-  { eventType: "JOB_COMPLETED", purpose: "REVIEW_REQUEST", kind: "COMMUNICATION", channel: "NONE", delayMinutes: 0, templateKey: "review-request", enabled: false },
   { eventType: "REVIEW_OPPORTUNITY_CREATED", purpose: "REVIEW_REQUEST", kind: "ACTION_SUGGESTION", channel: "NONE", delayMinutes: 0, templateKey: "review-opportunity", enabled: true },
   { eventType: "REFERRAL_OPPORTUNITY_CREATED", purpose: "REFERRAL_REQUEST", kind: "ACTION_SUGGESTION", channel: "NONE", delayMinutes: 0, templateKey: "referral-opportunity", enabled: true },
-  { eventType: "JOB_COMPLETED", purpose: "JOB_FOLLOW_UP", kind: "COMMUNICATION", channel: "NONE", delayMinutes: 3 * 24 * 60, templateKey: "job-follow-up", enabled: false },
+  { eventType: "JOB_COMPLETED", purpose: "JOB_FOLLOW_UP", kind: "ACTION_SUGGESTION", channel: "NONE", delayMinutes: 0, templateKey: "job-follow-up-opportunity", enabled: true },
+  { eventType: "REVIEW_REQUEST_CREATED", purpose: "REVIEW_REQUEST", kind: "COMMUNICATION", channel: "NONE", delayMinutes: 0, templateKey: "review-request", enabled: false },
+  { eventType: "REFERRAL_REQUEST_CREATED", purpose: "REFERRAL_REQUEST", kind: "COMMUNICATION", channel: "NONE", delayMinutes: 0, templateKey: "referral-request", enabled: false },
+  { eventType: "CUSTOMER_FOLLOW_UP_DUE", purpose: "JOB_FOLLOW_UP", kind: "COMMUNICATION", channel: "NONE", delayMinutes: 0, templateKey: "job-follow-up", enabled: false },
   { eventType: "CUSTOMER_FOLLOW_UP_DUE", purpose: "REPEAT_FOLLOW_UP", kind: "COMMUNICATION", channel: "NONE", delayMinutes: 0, templateKey: "repeat-follow-up", enabled: false },
 ];
