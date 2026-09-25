@@ -40,6 +40,7 @@ import {
 import { formatMoney } from "@/lib/format";
 import {
   ACCOUNT_DELETION_UNAVAILABLE_MESSAGE,
+  ACCOUNTING_EXPORT_MESSAGE,
   DOCUMENT_STORAGE_DEFERRED_MESSAGE,
   EMAIL_DELIVERY_UNCONFIGURED_MESSAGE,
   EMERGENCY_SECURITY_LOCK_DEFERRED_MESSAGE,
@@ -991,10 +992,20 @@ function SectionBody(props: SettingsWorkspaceProps) {
             <p className="text-sm text-muted-foreground">
               Customers, properties, requests, estimates, jobs, invoices, payments, expenses, time
               entries, reviews, campaigns, and settings for this workspace only. Secrets omitted.
+              Invoice, payment, and expense CSVs are accountant-ready recorded TBBT truth.
             </p>
           </div>
           <Button asChild size="sm">
             <a href="/settings/export">Download ZIP</a>
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
+          <div>
+            <p className="font-medium">Accounting CSVs</p>
+            <p className="text-sm text-muted-foreground">{ACCOUNTING_EXPORT_MESSAGE}</p>
+          </div>
+          <Button asChild size="sm" variant="outline">
+            <a href="/settings/export/accounting">Download accounting ZIP</a>
           </Button>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">

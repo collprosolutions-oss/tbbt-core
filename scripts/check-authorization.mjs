@@ -638,7 +638,21 @@ try {
     requireBusinessCapability(adminA, CAPABILITIES.USE_AI_ASSIST);
   });
 
-  console.log("\nTEST 18 — Communications is OWNER/ADMIN-only");
+  console.log("\nTEST 18 — Business data / accounting export is OWNER/ADMIN; MEMBER blocked");
+  check("OWNER has MANAGE_SETTINGS for export", roleHasCapability("OWNER", CAPABILITIES.MANAGE_SETTINGS));
+  check("ADMIN has MANAGE_SETTINGS for export", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_SETTINGS));
+  check("MEMBER does not have MANAGE_SETTINGS for export", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_SETTINGS));
+  await expectForbidden("MEMBER cannot pass the data-export capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_SETTINGS);
+  });
+  await expectAllowed("ADMIN can pass the data-export capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_SETTINGS);
+  });
+  await expectAllowed("OWNER can pass the data-export capability gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.MANAGE_SETTINGS);
+  });
+
+  console.log("\nTEST 19 — Communications is OWNER/ADMIN-only");
   check("OWNER has MANAGE_COMMUNICATIONS", roleHasCapability("OWNER", CAPABILITIES.MANAGE_COMMUNICATIONS));
   check("ADMIN has MANAGE_COMMUNICATIONS", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_COMMUNICATIONS));
   check("MEMBER does not have MANAGE_COMMUNICATIONS", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_COMMUNICATIONS));

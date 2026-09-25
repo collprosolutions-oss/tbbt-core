@@ -47,6 +47,13 @@ const { persistDraftInvoiceFromCompletedJob } = await import(
   "@/lib/invoice-carry-forward"
 );
 const {
+  accountingExpensesCsv,
+  accountingInvoicesCsv,
+  accountingPaymentsCsv,
+  loadAccountingExportSource,
+} = await import("@/lib/accounting-export");
+const { buildBusinessExportZip } = await import("@/lib/business-export");
+const {
   PAYMENT_PURPOSE_INVOICE_BALANCE,
   PAYMENT_PURPOSE_MATERIAL_DEPOSIT,
   ProjectPaymentError,
@@ -1239,6 +1246,78 @@ try {
   });
   check("MEMBER A assignedJobWhere finds Job A after assignment", assignedToA?.id === tenantA.job.id);
   check("MEMBER B assignedJobWhere cannot see Job A", assignedToB === null);
+
+  console.log("\nAccounting CSV export isolation");
+  await prisma.expense.create({
+    data: {
+      businessId: tenantA.business.id,
+      occurredOn: new Date("2026-09-01T00:00:00.000Z"),
+      description: "Alpha only paint",
+      amount: new Prisma.Decimal("12.50"),
+      category: "MATERIALS",
+      customerId: tenantA.customer.id,
+      jobId: tenantA.job.id,
+    },
+  });
+  await prisma.expense.create({
+    data: {
+      businessId: tenantB.business.id,
+      occurredOn: new Date("2026-09-01T00:00:00.000Z"),
+      description: "Beta only fuel",
+      amount: new Prisma.Decimal("9.00"),
+      category: "GAS_FUEL",
+      customerId: tenantB.customer.id,
+      jobId: tenantB.job.id,
+    },
+  });
+  const exportA = await loadAccountingExportSource(prisma, tenantA.business.id);
+  const exportB = await loadAccountingExportSource(prisma, tenantB.business.id);
+  const invoicesA = accountingInvoicesCsv(exportA);
+  const paymentsA = accountingPaymentsCsv(exportA);
+  const expensesA = accountingExpensesCsv(exportA);
+  const invoicesB = accountingInvoicesCsv(exportB);
+  const paymentsB = accountingPaymentsCsv(exportB);
+  const expensesB = accountingExpensesCsv(exportB);
+  check(
+    "Accounting invoices for A never include B's customer or invoice",
+    invoicesA.includes(tenantA.customer.name) &&
+      invoicesA.includes(tenantA.invoice.id) &&
+      !invoicesA.includes(tenantB.customer.name) &&
+      !invoicesA.includes(tenantB.invoice.id),
+  );
+  check(
+    "Accounting payments for A are recorded Payment rows for A only",
+    paymentsA.includes(tenantA.payment.id) &&
+      paymentsA.includes("50.00") &&
+      !paymentsA.includes(tenantB.payment.id),
+  );
+  check(
+    "Accounting expenses for A omit B and stay business-scoped",
+    expensesA.includes("Alpha only paint") && !expensesA.includes("Beta only fuel"),
+  );
+  check(
+    "Accounting export for B never includes A's invoices, payments, or expenses",
+    invoicesB.includes(tenantB.customer.name) &&
+      !invoicesB.includes(tenantA.customer.name) &&
+      paymentsB.includes(tenantB.payment.id) &&
+      !paymentsB.includes(tenantA.payment.id) &&
+      expensesB.includes("Beta only fuel") &&
+      !expensesB.includes("Alpha only paint"),
+  );
+  const zipA = await buildBusinessExportZip(prisma, tenantA.business.id);
+  const zipB = await buildBusinessExportZip(prisma, tenantB.business.id);
+  check(
+    "Business ZIP for A excludes B financial records",
+    zipA.bytes.toString("utf8").includes(tenantA.payment.id) &&
+      !zipA.bytes.toString("utf8").includes(tenantB.payment.id) &&
+      !zipA.bytes.toString("utf8").includes("Beta only fuel"),
+  );
+  check(
+    "Business ZIP for B excludes A financial records",
+    zipB.bytes.toString("utf8").includes(tenantB.payment.id) &&
+      !zipB.bytes.toString("utf8").includes(tenantA.payment.id) &&
+      !zipB.bytes.toString("utf8").includes("Alpha only paint"),
+  );
 
   console.log(`\nIsolation cases: ${passed} passed, ${failures} failed.`);
   if (failures > 0) {

@@ -5,6 +5,12 @@
  * are never included.
  */
 import type { PrismaClient } from "@prisma/client";
+import {
+  accountingExpensesCsv,
+  accountingInvoicesCsv,
+  accountingPaymentsCsv,
+  type AccountingExportSource,
+} from "@/lib/accounting-export";
 import { VAULT_DOCUMENT_PURPOSE } from "@/lib/business-protection";
 import { resolveStorageProvider } from "@/lib/business-storage/service";
 import type { StorageProvider } from "@/lib/business-storage/types";
@@ -230,10 +236,11 @@ export async function buildBusinessExportZip(
         total: true,
         paidAt: true,
         paymentMethod: true,
+        paymentReference: true,
         createdAt: true,
         updatedAt: true,
       },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
     prisma.payment.findMany({
       where: { businessId },
@@ -241,13 +248,15 @@ export async function buildBusinessExportZip(
         id: true,
         customerId: true,
         invoiceId: true,
+        jobId: true,
         purpose: true,
         amount: true,
         method: true,
         receivedAt: true,
+        note: true,
         createdAt: true,
       },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
     }),
     prisma.expense.findMany({
       where: { businessId },
@@ -258,9 +267,16 @@ export async function buildBusinessExportZip(
         amount: true,
         category: true,
         occurredOn: true,
+        jobId: true,
+        customerId: true,
+        paymentMethod: true,
+        taxCategory: true,
+        reimbursementStatus: true,
+        reviewStatus: true,
+        voidedAt: true,
         createdAt: true,
       },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ occurredOn: "asc" }, { id: "asc" }],
     }),
     prisma.timeEntry.findMany({
       where: { businessId },
@@ -666,6 +682,17 @@ export async function buildBusinessExportZip(
       },
     }),
   ]);
+  const accountingSource: AccountingExportSource = {
+    businessId: business.id,
+    businessName: business.name,
+    slug: business.slug,
+    invoices,
+    payments,
+    expenses,
+    customers: customers.map((customer) => ({ id: customer.id, name: customer.name })),
+    jobs: jobs.map((job) => ({ id: job.id })),
+  };
+
   const files = [
     {
       name: "manifest.json",
@@ -676,7 +703,7 @@ export async function buildBusinessExportZip(
           businessName: business.name,
           slug: business.slug,
           note:
-            "Tenant-scoped export. Password hashes, session tokens, TOTP secrets, and setup/reset tokens are omitted.",
+            "Tenant-scoped export. Password hashes, session tokens, TOTP secrets, and setup/reset tokens are omitted. invoices.csv, payments.csv, and expenses.csv are recorded TBBT truth for an accountant: Payment rows are never inferred from PAID invoice status, and voided expenses are omitted.",
           documentExport,
           documentExportError: documentExportError ?? null,
           exportedDocumentCount,
@@ -706,9 +733,9 @@ export async function buildBusinessExportZip(
     { name: "requests.csv", data: toCsv(headersOf(requests), requests) },
     { name: "estimates.csv", data: toCsv(headersOf(estimates), estimates) },
     { name: "jobs.csv", data: toCsv(headersOf(jobs), jobs) },
-    { name: "invoices.csv", data: toCsv(headersOf(invoices), invoices) },
-    { name: "payments.csv", data: toCsv(headersOf(payments), payments) },
-    { name: "expenses.csv", data: toCsv(headersOf(expenses), expenses) },
+    { name: "invoices.csv", data: accountingInvoicesCsv(accountingSource) },
+    { name: "payments.csv", data: accountingPaymentsCsv(accountingSource) },
+    { name: "expenses.csv", data: accountingExpensesCsv(accountingSource) },
     { name: "time-entries.csv", data: toCsv(headersOf(timeEntries), timeEntries) },
     { name: "reviews.csv", data: toCsv(headersOf(reviews), reviews) },
     { name: "review-requests.csv", data: toCsv(headersOf(reviewRequests), reviewRequests) },
