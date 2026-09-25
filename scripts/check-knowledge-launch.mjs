@@ -658,13 +658,13 @@ try {
     data: [
       {
         businessId: businessA.id,
-        summary: "How much does a door latch replacement cost",
-        description: "Customer asked about latch replacement cost before booking.",
+        summary: "Customers keep asking about latch replacement cost",
+        description: "Customers keep asking about latch replacement before booking.",
       },
       {
         businessId: businessA.id,
-        summary: "How much does a door latch replacement take",
-        description: "Another customer asked about latch replacement timing.",
+        summary: "Customers keep asking about latch replacement timing",
+        description: "Customers keep asking about latch replacement on the first visit.",
       },
     ],
   });
