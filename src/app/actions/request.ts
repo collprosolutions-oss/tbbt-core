@@ -51,6 +51,7 @@ export async function logLead(
     notes: readString(formData, "notes"),
     channel: readString(formData, "channel"),
     serviceCatalogItemId: readString(formData, "serviceCatalogItemId") || null,
+    tradeCode: readString(formData, "tradeCode") || null,
     submissionId: readString(formData, "submissionId") || null,
   });
 

@@ -225,6 +225,16 @@ check(
     readRepo("src/app/actions/estimate.ts").includes("customerId: request.customerId") &&
     readRepo("src/app/actions/estimate.ts").includes("propertyId: request.propertyId"),
 );
+check(
+  "Log lead resolves trade from ACTIVE BusinessTrade and does not invent a Handyman fallback",
+  ownerLogLeadSrc.includes("resolvePublicRequestTrade") &&
+    ownerLogLeadSrc.includes("listActiveBusinessTrades") &&
+    ownerLogLeadSrc.includes("authorizedOwnerLogLeadTradeCodes") &&
+    !ownerLogLeadSrc.includes("DEFAULT_TRADE") &&
+    logLeadPageSrc.includes("catalogItemIsPubliclyOffered") &&
+    logLeadFormSrc.includes('name="tradeCode"') &&
+    logLeadFormSrc.includes("activeTrades.length > 1"),
+);
 
 const noneConfig = resolveCatalogIntakeConfig({ intakeMeasurementMode: "NONE" });
 const blindsConfig = resolveCatalogIntakeConfig({
@@ -520,6 +530,8 @@ try {
     (phoneRequest?.description ?? "").includes("Logged lead origin: Phone"));
   check("Client businessId was ignored; request stayed on the access tenant",
     phoneRequest?.businessId === business.id && phoneRequest?.businessId !== other.id);
+  check("Existing Handyman Log lead stores HANDYMAN without a selected service",
+    phoneRequest?.tradeCode === "HANDYMAN");
 
   const pipeline = await loadPipelineSource(prisma, business.id);
   check("Logged lead appears on the Pipeline New Lead path",

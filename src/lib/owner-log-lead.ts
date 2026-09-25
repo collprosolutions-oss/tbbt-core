@@ -11,6 +11,8 @@
  * keep a truthful origin note in description.
  *
  * Browser-supplied businessId is never authorization.
+ * Browser-supplied tradeCode is only a requested choice and is
+ * validated against this tenant's ACTIVE BusinessTrade rows.
  */
 import {
   appendIntakeIdentityReview,
@@ -29,8 +31,14 @@ import {
   validateStructuredAddress,
   type StructuredServiceAddress,
 } from "@/lib/service-address";
+import type { Prisma, PrismaClient } from "@prisma/client";
+import { listActiveBusinessTrades } from "@/lib/business-trades";
+import {
+  resolvePublicRequestTrade,
+  catalogItemTradeCode,
+} from "@/lib/public-request-trade";
 import { MAX_NOTES_LENGTH } from "@/lib/service-request-work";
-import { DEFAULT_TRADE, isConfiguredTrade } from "@/lib/trades";
+import { isConfiguredTrade, type TradeCode } from "@/lib/trades";
 import { joinRequestDescription } from "@/lib/work-area-intake";
 
 export const OWNER_LOG_LEAD_GENERIC_ERROR = "That lead could not be logged.";
@@ -78,6 +86,12 @@ export type OwnerLogLeadInput = {
   notes?: string | null;
   channel?: string | null;
   serviceCatalogItemId?: string | null;
+  /**
+   * Browser-supplied trade choice only. Never authorization.
+   * Validated against this tenant's ACTIVE BusinessTrade rows
+   * (or the compatibility Business.tradeCode when no ACTIVE rows exist).
+   */
+  tradeCode?: string | null;
   submissionId?: string | null;
 };
 
@@ -114,6 +128,29 @@ export type OwnerLogLeadDb = {
       name: string;
       tradeCode: string;
     } | null>;
+  };
+  business: {
+    findFirst: (args: {
+      where: { id: string };
+      select: { tradeCode: true };
+    }) => Promise<{ tradeCode: string } | null>;
+  };
+  businessTrade: {
+    findMany: (args: {
+      where: { businessId: string; status: string };
+      orderBy?: Array<Record<string, "asc" | "desc">>;
+    }) => Promise<
+      Array<{
+        id: string;
+        businessId: string;
+        tradeCode: string;
+        status: string;
+        configOverridesJson: string;
+        intakeSchemaVersion: number;
+        activatedAt: Date;
+        deactivatedAt: Date | null;
+      }>
+    >;
   };
   $transaction: <T>(fn: (tx: OwnerLogLeadTx) => Promise<T>) => Promise<T>;
 };
@@ -226,6 +263,32 @@ export function leadOriginNote(channel: OwnerLeadChannel): string | null {
   return null;
 }
 
+/**
+ * Trades this tenant may truthfully log a lead against.
+ *
+ * ACTIVE BusinessTrade rows are the authority (same membership set
+ * listActiveBusinessTrades / listActiveTradeCodes read). Compatibility
+ * Business.tradeCode is used only when no ACTIVE rows exist, so existing
+ * Handyman-only tenants stay simple. Unlike listActiveTradeCodes, this
+ * does not invent a Handyman fallback when nothing is configured.
+ */
+export async function authorizedOwnerLogLeadTradeCodes(
+  db: OwnerLogLeadDb,
+  businessId: string,
+): Promise<TradeCode[]> {
+  const active = await listActiveBusinessTrades(
+    db as PrismaClient | Prisma.TransactionClient,
+    businessId,
+  );
+  if (active.length > 0) return active.map((row) => row.tradeCode);
+  const business = await db.business.findFirst({
+    where: { id: businessId },
+    select: { tradeCode: true },
+  });
+  const fallback = business?.tradeCode ?? "";
+  return isConfiguredTrade(fallback) ? [fallback] : [];
+}
+
 function readStructuredAddress(input: OwnerLogLeadInput): StructuredServiceAddress {
   return {
     streetAddress: input.streetAddress ?? "",
@@ -258,6 +321,7 @@ export async function createOwnerLoggedLead(
   const leadSource = recordedLeadSourceForChannel(channel);
   const propertyChoice = (input.propertyChoice ?? "none").trim() || "none";
   const catalogItemId = (input.serviceCatalogItemId ?? "").trim();
+  const requestedTradeCode = (input.tradeCode ?? "").trim() || null;
   const submissionId = (input.submissionId ?? "").trim() || null;
   const structuredInput = readStructuredAddress(input);
 
@@ -353,10 +417,20 @@ export async function createOwnerLoggedLead(
 
   const origin = leadOriginNote(channel);
   const descriptionNotes = [notes, origin].filter(Boolean).join("\n\n");
-  const tradeCode =
-    catalogItem && isConfiguredTrade(catalogItem.tradeCode)
-      ? catalogItem.tradeCode
-      : DEFAULT_TRADE;
+  const authorizedActiveTradeCodes = await authorizedOwnerLogLeadTradeCodes(
+    db,
+    businessId,
+  );
+  const resolvedTrade = resolvePublicRequestTrade({
+    catalogTradeCodes: catalogItem ? [catalogItemTradeCode(catalogItem)] : [],
+    authorizedActiveTradeCodes,
+    requestedTradeCode,
+    includeOther: false,
+  });
+  if (!resolvedTrade.ok) {
+    return resolvedTrade;
+  }
+  const tradeCode = resolvedTrade.tradeCode;
 
   try {
     const created = await db.$transaction(async (tx) => {

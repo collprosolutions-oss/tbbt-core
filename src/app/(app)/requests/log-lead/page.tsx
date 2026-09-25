@@ -13,9 +13,12 @@ import {
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
 import { formatAddress } from "@/lib/format";
+import { authorizedOwnerLogLeadTradeCodes } from "@/lib/owner-log-lead";
 import { prisma } from "@/lib/prisma";
+import { catalogItemIsPubliclyOffered } from "@/lib/public-request-trade";
 import { loadSaasEntitlement, saasOperatingUiState } from "@/lib/saas-billing";
 import { SAAS_BILLING_SETTINGS_HREF } from "@/lib/saas-billing/config";
+import { tradeLabel } from "@/lib/trades";
 
 export const metadata: Metadata = {
   title: "Log lead",
@@ -25,7 +28,7 @@ export default async function LogLeadPage() {
   const access = await requireManagementPageAccess();
   const entitlement = await loadSaasEntitlement(prisma, access.workspace.business);
   const operating = saasOperatingUiState(entitlement, access.workspace.role);
-  const [customers, catalogItems] = await Promise.all([
+  const [customers, catalogRows, activeTradeCodes] = await Promise.all([
     prisma.customer.findMany({
       where: access.scope,
       select: {
@@ -49,10 +52,18 @@ export default async function LogLeadPage() {
     }),
     prisma.serviceCatalogItem.findMany({
       where: { ...access.scope, active: true },
-      select: { id: true, name: true },
+      select: { id: true, name: true, tradeCode: true },
       orderBy: { name: "asc" },
     }),
+    authorizedOwnerLogLeadTradeCodes(prisma, access.businessId),
   ]);
+  const catalogItems = catalogRows.filter((item) =>
+    catalogItemIsPubliclyOffered(item, activeTradeCodes),
+  );
+  const activeTrades = activeTradeCodes.map((code) => ({
+    code,
+    label: tradeLabel(code),
+  }));
 
   return (
     <PageContainer width="narrow">
@@ -106,6 +117,7 @@ export default async function LogLeadPage() {
                 })),
               }))}
               catalogItems={catalogItems}
+              activeTrades={activeTrades}
             />
           </CardContent>
         </Card>

@@ -30,6 +30,12 @@ type CustomerOption = {
 type CatalogOption = {
   id: string;
   name: string;
+  tradeCode: string;
+};
+
+type TradeOption = {
+  code: string;
+  label: string;
 };
 
 function customerLabel(customer: CustomerOption) {
@@ -40,9 +46,11 @@ function customerLabel(customer: CustomerOption) {
 export function LogLeadForm({
   customers,
   catalogItems,
+  activeTrades,
 }: {
   customers: CustomerOption[];
   catalogItems: CatalogOption[];
+  activeTrades: TradeOption[];
 }) {
   const [mode, setMode] = useState<"existing" | "new">(
     customers.length > 0 ? "existing" : "new",
@@ -50,6 +58,10 @@ export function LogLeadForm({
   const [customerId, setCustomerId] = useState(customers[0]?.id ?? "");
   const [propertyChoice, setPropertyChoice] = useState(
     customers[0]?.properties[0]?.id ?? "none",
+  );
+  const [serviceCatalogItemId, setServiceCatalogItemId] = useState("");
+  const [tradeCode, setTradeCode] = useState(
+    activeTrades.length === 1 ? activeTrades[0].code : "",
   );
   const [state, action, pending] = useActionState(logLead, initialState);
   const submissionIdRef = useRef(
@@ -75,6 +87,22 @@ export function LogLeadForm({
       setPropertyChoice("none");
     } else {
       setPropertyChoice(selectedCustomer?.properties[0]?.id ?? "none");
+    }
+  }
+
+  function handleServiceChange(nextId: string) {
+    setServiceCatalogItemId(nextId);
+    const item = catalogItems.find((row) => row.id === nextId);
+    if (item?.tradeCode) {
+      setTradeCode(item.tradeCode);
+    }
+  }
+
+  function handleTradeChange(nextCode: string) {
+    setTradeCode(nextCode);
+    const item = catalogItems.find((row) => row.id === serviceCatalogItemId);
+    if (item && item.tradeCode !== nextCode) {
+      setServiceCatalogItemId("");
     }
   }
 
@@ -247,13 +275,39 @@ export function LogLeadForm({
         />
       </div>
 
+      {activeTrades.length > 1 ? (
+        <div className="space-y-2">
+          <Label htmlFor="tradeCode">Trade</Label>
+          <select
+            id="tradeCode"
+            name="tradeCode"
+            required
+            value={tradeCode}
+            onChange={(event) => handleTradeChange(event.target.value)}
+            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+          >
+            <option value="" disabled>
+              Choose a trade
+            </option>
+            {activeTrades.map((trade) => (
+              <option key={trade.code} value={trade.code}>
+                {trade.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : activeTrades[0] ? (
+        <input type="hidden" name="tradeCode" value={activeTrades[0].code} />
+      ) : null}
+
       {catalogItems.length > 0 ? (
         <div className="space-y-2">
           <Label htmlFor="serviceCatalogItemId">Service (optional)</Label>
           <select
             id="serviceCatalogItemId"
             name="serviceCatalogItemId"
-            defaultValue=""
+            value={serviceCatalogItemId}
+            onChange={(event) => handleServiceChange(event.target.value)}
             className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
           >
             <option value="">No service yet</option>
