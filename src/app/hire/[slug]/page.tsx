@@ -9,15 +9,15 @@ import {
   publicLogoSrc,
   publicPhone,
 } from "@/lib/public-site";
-import { loadPublicHomeImages } from "@/lib/public-site-images";
+import { buildPublicHomeImagePresentation, loadPublicHomeImages } from "@/lib/public-site-images";
 import { prisma } from "@/lib/prisma";
-import { loadPublicAboutCopy } from "@/lib/public-site-data";
-import { requirePublicSite } from "@/lib/require-public-site";
+import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import {
   publicSiteMetaDescription,
   publicTenantPageMetadata,
 } from "@/lib/public-site-seo";
-import { resolvePublishedAboutCopy } from "@/lib/website-story";
+import { snapshotToImageRows } from "@/lib/website-engine/public";
+import { viewHomeMetadata } from "@/lib/website-engine/seo";
 
 export const dynamic = "force-dynamic";
 
@@ -27,25 +27,26 @@ type PageProps = {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
-  const about = resolvePublishedAboutCopy(
-    await loadPublicAboutCopy(site.business.id),
-    site.business.slug,
-  );
-  const name = publicDisplayName(site.business);
+  const view = await requirePublicWebsiteView(slug);
+  const snapshotMeta = viewHomeMetadata(view, publicHomePath(view.site.business.slug));
+  if (snapshotMeta) return snapshotMeta;
+  const name = publicDisplayName(view.site.business);
   return publicTenantPageMetadata({
-    business: site.business,
-    title: `${name} | Handyman Services`,
-    description: publicSiteMetaDescription(site.business, about),
-    pathname: publicHomePath(site.business.slug),
+    business: view.site.business,
+    title: `${name} | Services`,
+    description: publicSiteMetaDescription(view.site.business, view.about),
+    pathname: publicHomePath(view.site.business.slug),
   });
 }
 
 export default async function PublicHirePage({ params }: PageProps) {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
+  const view = await requirePublicWebsiteView(slug);
+  const site = view.site;
 
-  const homeImages = await loadPublicHomeImages(prisma, site.business.id, site.groups);
+  const homeImages = view.snapshot
+    ? buildPublicHomeImagePresentation(site.groups, snapshotToImageRows(view.snapshot))
+    : await loadPublicHomeImages(prisma, site.business.id, site.groups);
   const name = publicDisplayName(site.business);
   const jsonLd = localBusinessJsonLd({
     name,
@@ -66,6 +67,8 @@ export default async function PublicHirePage({ params }: PageProps) {
         items={site.items}
         groups={site.groups}
         images={homeImages}
+        headline={view.snapshot?.home.headline}
+        supporting={view.snapshot?.home.supporting}
       />
     </PublicSiteShell>
   );

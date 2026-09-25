@@ -13,7 +13,7 @@ import {
   publicProjectsPath,
   publicRequestPath,
 } from "@/lib/public-site";
-import { requirePublicSite } from "@/lib/require-public-site";
+import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +22,8 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
+  const view = await requirePublicWebsiteView(slug);
+  const site = view.site;
   const name = publicDisplayName(site.business);
   return publicTenantPageMetadata({
     business: site.business,
@@ -34,8 +35,10 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
 export default async function PublicProjectsPage({ params }: PageProps) {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
+  const view = await requirePublicWebsiteView(slug);
+  const site = view.site;
   const phone = publicPhone(site.business);
+  const gallery = view.snapshot?.gallery ?? [];
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>
       <main>
@@ -49,7 +52,24 @@ export default async function PublicProjectsPage({ params }: PageProps) {
           smsHref={smsHref(phone)}
           requestHref={publicRequestPath(site.business.slug)}
         />
-        <PublicProjectsGallery slug={site.business.slug} />
+        {gallery.length > 0 ? (
+          <section className="public-container py-8 grid gap-4 md:grid-cols-2">
+            {gallery.map((item) => (
+              <figure key={item.id}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={item.imageUrl} alt={item.title || "Project photo"} />
+                {item.title || item.caption ? (
+                  <figcaption className="mt-2 text-sm">
+                    {item.title}
+                    {item.caption ? ` — ${item.caption}` : ""}
+                  </figcaption>
+                ) : null}
+              </figure>
+            ))}
+          </section>
+        ) : (
+          <PublicProjectsGallery slug={site.business.slug} />
+        )}
         <PublicCtaBar
           title="Have a project in mind?"
           body="Let's make it happen. We're here to help."

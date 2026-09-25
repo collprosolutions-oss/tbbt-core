@@ -589,6 +589,24 @@ check(
     !workspaceLoader.includes("multi_trade_core"),
 );
 
+const websiteEngineMigration = readFileSync(
+  new URL("../prisma/migrations/20260925180000_website_engine/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Website engine migration is additive and idempotent",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(websiteEngineMigration) &&
+    websiteEngineMigration.includes('CREATE TABLE IF NOT EXISTS "WebsitePublish"') &&
+    websiteEngineMigration.includes('ADD COLUMN IF NOT EXISTS "publishedWebsiteId"') &&
+    websiteEngineMigration.includes('ADD COLUMN IF NOT EXISTS "websiteSelected"') &&
+    websiteEngineMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run website-engine DDL",
+  !workspaceLoader.includes("WebsitePublish") &&
+    !workspaceLoader.includes("website_engine"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

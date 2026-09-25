@@ -518,6 +518,10 @@ export function selectedWorkQuery(input: SelectedWorkQueryInput) {
   return encodeSelectedWorkQuery(input);
 }
 
+export function publicServiceDetailPath(slug: string, serviceSlug: string) {
+  return `/hire/${slug}/services/${serviceSlug}`;
+}
+
 export function publicServicesPath(
   slug: string,
   selected?: {

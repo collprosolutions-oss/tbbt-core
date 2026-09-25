@@ -64,6 +64,9 @@ export async function buildBusinessExportZip(
     referralRequests,
     marketingContents,
     settingsAudit,
+    websitePublishes,
+    websiteGallery,
+    websiteLocalDrafts,
   ] = await Promise.all([
     prisma.customer.findMany({
       where: { businessId },
@@ -202,6 +205,8 @@ export async function buildBusinessExportZip(
         customerId: true,
         rating: true,
         platform: true,
+        reviewText: true,
+        websiteSelected: true,
         createdAt: true,
       },
       orderBy: { createdAt: "asc" },
@@ -304,6 +309,45 @@ export async function buildBusinessExportZip(
       },
       orderBy: { changedAt: "asc" },
     }),
+    prisma.websitePublish.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        versionNumber: true,
+        status: true,
+        schemaVersion: true,
+        snapshotJson: true,
+        summary: true,
+        publishedAt: true,
+        sourcePublishId: true,
+      },
+      orderBy: { versionNumber: "asc" },
+    }),
+    prisma.websiteGalleryItem.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        storedAssetId: true,
+        title: true,
+        caption: true,
+        sortOrder: true,
+        catalogItemId: true,
+        createdAt: true,
+      },
+      orderBy: { sortOrder: "asc" },
+    }),
+    prisma.websiteLocalPageDraft.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        serviceAreaId: true,
+        catalogItemId: true,
+        draftCopy: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { createdAt: "asc" },
+    }),
   ]);
 
   const safeSettings = settings
@@ -365,6 +409,28 @@ export async function buildBusinessExportZip(
       data: toCsv(Object.keys(safeSettings), [safeSettings]),
     },
     { name: "settings-audit.csv", data: toCsv(headersOf(settingsAudit), settingsAudit) },
+    {
+      name: "website-publishes.json",
+      data: JSON.stringify(
+        websitePublishes.map((row) => ({
+          id: row.id,
+          versionNumber: row.versionNumber,
+          status: row.status,
+          schemaVersion: row.schemaVersion,
+          summary: row.summary,
+          publishedAt: row.publishedAt,
+          sourcePublishId: row.sourcePublishId,
+          snapshot: JSON.parse(row.snapshotJson),
+        })),
+        null,
+        2,
+      ),
+    },
+    { name: "website-gallery.csv", data: toCsv(headersOf(websiteGallery), websiteGallery) },
+    {
+      name: "website-local-drafts.csv",
+      data: toCsv(headersOf(websiteLocalDrafts), websiteLocalDrafts),
+    },
   ];
 
   return {

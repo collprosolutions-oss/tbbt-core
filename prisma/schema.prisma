@@ -264,6 +264,10 @@ model Business {
   /// Owner requested account/business closure. Historical financial and
   /// job records are never deleted by this timestamp.
   offboardingRequestedAt DateTime?
+  /// Current published website snapshot. Null means this business still
+  /// uses the live-assembled compatibility public site. Application code
+  /// must only point this at a WebsitePublish owned by THIS business.
+  publishedWebsiteId String? @unique
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -334,6 +338,11 @@ model Business {
   automationRules          AutomationRule[]
   automationRuns           AutomationRun[]
   recommendationStates     BsosRecommendationState[]
+  publishedWebsite         WebsitePublish?          @relation("CurrentPublishedWebsite", fields: [publishedWebsiteId], references: [id], onDelete: SetNull)
+  websitePublishes         WebsitePublish[]         @relation("BusinessWebsitePublishes")
+  websiteGalleryItems      WebsiteGalleryItem[]
+  websiteHostBindings      WebsiteHostBinding[]
+  websiteLocalPageDrafts   WebsiteLocalPageDraft[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -439,6 +448,8 @@ model Membership {
   aiConversations                 AiConversation[]        @relation("AiConversationMembership")
   aiInteractions                  AiInteraction[]         @relation("AiInteractionMembership")
   recommendationStates            BsosRecommendationState[] @relation("BsosRecommendationStateActor")
+  websitePublishes                WebsitePublish[]          @relation("WebsitePublishAuthor")
+  websiteGalleryItems             WebsiteGalleryItem[]      @relation("WebsiteGalleryCreator")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -613,6 +624,8 @@ model ServiceCatalogItem {
   serviceRequests              ServiceRequest[]
   requestItems                 ServiceRequestItem[]
   additionalWorkRequestItems   AdditionalWorkRequestItem[]
+  websiteGalleryItems          WebsiteGalleryItem[]
+  websiteLocalPageDrafts       WebsiteLocalPageDraft[]
 
   @@index([businessId])
   @@index([businessId, tradeCode])
@@ -1121,6 +1134,7 @@ model StoredAsset {
   publicSiteImages     PublicSiteImage[]
   serviceRequestPhotos ServiceRequestPhoto[]
   jobPhotos            JobPhoto[]
+  websiteGalleryItems  WebsiteGalleryItem[]
 
   @@unique([businessId, storageKey])
   @@index([businessId, category, status])
@@ -1844,6 +1858,9 @@ model Review {
   /// Eligible for a future Marketing opportunity. Never auto-copies
   /// review text into public content and never publishes a testimonial.
   marketingEligible        Boolean   @default(false)
+  /// Owner explicitly selected this recorded review for the next website
+  /// publish. Never inferred. Does not rewrite reviewText.
+  websiteSelected          Boolean   @default(false)
   recordedByMembershipId   String
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
@@ -2060,6 +2077,13 @@ model BusinessSettings {
   seoDescriptionHome String?
   seoTitleServices String?
   seoDescriptionServices String?
+  seoTitleAbout String?
+  seoDescriptionAbout String?
+  seoTitleRequest String?
+  seoDescriptionRequest String?
+  /// Owner-approved homepage hero copy. Empty uses safe trade/name defaults.
+  websiteHeroHeadline String?
+  websiteHeroSupporting String?
 
   /// Minutes from midnight for the normal workday start (default 08:00).
   workStartMinutes Int @default(480)
@@ -2279,6 +2303,7 @@ model ServiceArea {
   business Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
   createdBy Membership?    @relation("ServiceAreaCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
   matchedRequests ServiceRequest[] @relation("ServiceRequestMatchedArea")
+  websiteLocalPageDrafts WebsiteLocalPageDraft[]
 
   @@index([businessId])
   @@index([businessId, enabled])
@@ -2599,5 +2624,98 @@ model BsosRecommendationState {
   actionItem BusinessActionItem? @relation(fields: [actionItemId], references: [id], onDelete: SetNull)
 
   @@unique([businessId, recommendationKey])
+  @@index([businessId])
+}
+
+/// Immutable published public-website snapshot. Application code must
+/// never update snapshotJson / schemaVersion / versionNumber after insert.
+/// Rollback copies this payload into a new row and moves the current pointer.
+model WebsitePublish {
+  id                       String   @id @default(cuid())
+  businessId               String
+  versionNumber            Int
+  /// PUBLISHED. Historical rows stay PUBLISHED even after a later version
+  /// becomes current. The current pointer is Business.publishedWebsiteId.
+  status                   String   @default("PUBLISHED")
+  schemaVersion            Int
+  snapshotJson             String
+  summary                  String   @default("")
+  publishedAt              DateTime @default(now())
+  publishedByMembershipId  String?
+  sourcePublishId          String?
+  idempotencyKey           String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  business      Business          @relation("BusinessWebsitePublishes", fields: [businessId], references: [id], onDelete: Cascade)
+  publishedBy   Membership?       @relation("WebsitePublishAuthor", fields: [publishedByMembershipId], references: [id], onDelete: SetNull)
+  sourcePublish WebsitePublish?   @relation("WebsitePublishLineage", fields: [sourcePublishId], references: [id], onDelete: SetNull)
+  derivedPublishes WebsitePublish[] @relation("WebsitePublishLineage")
+  currentFor    Business?         @relation("CurrentPublishedWebsite")
+
+  @@unique([businessId, versionNumber])
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId, publishedAt])
+  @@index([publishedByMembershipId])
+  @@index([sourcePublishId])
+}
+
+/// Owner-selected public gallery/project image. Draft state only —
+/// published sites read the frozen snapshot projection.
+model WebsiteGalleryItem {
+  id                      String   @id @default(cuid())
+  businessId              String
+  storedAssetId           String
+  title                   String   @default("")
+  caption                 String   @default("")
+  sortOrder               Int      @default(0)
+  catalogItemId           String?
+  createdByMembershipId   String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  business    Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  storedAsset StoredAsset         @relation(fields: [storedAssetId], references: [id], onDelete: Cascade)
+  catalogItem ServiceCatalogItem? @relation(fields: [catalogItemId], references: [id], onDelete: SetNull)
+  createdBy   Membership?         @relation("WebsiteGalleryCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, sortOrder])
+  @@index([storedAssetId])
+  @@index([catalogItemId])
+}
+
+/// Future custom-domain binding. UNVERIFIED rows never authorize public
+/// host resolution. This PR does not provision DNS or mark verified.
+model WebsiteHostBinding {
+  id         String   @id @default(cuid())
+  businessId String
+  hostname   String
+  /// UNVERIFIED | VERIFIED | FAILED
+  status     String   @default("UNVERIFIED")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([hostname])
+  @@index([businessId])
+}
+
+/// Owner/AI draft copy for a local service-area page. Never public until
+/// the owner publishes a snapshot that includes it.
+model WebsiteLocalPageDraft {
+  id             String   @id @default(cuid())
+  businessId     String
+  serviceAreaId  String
+  catalogItemId  String
+  draftCopy      String   @default("")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  business    Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  serviceArea ServiceArea        @relation(fields: [serviceAreaId], references: [id], onDelete: Cascade)
+  catalogItem ServiceCatalogItem @relation(fields: [catalogItemId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, serviceAreaId, catalogItemId])
   @@index([businessId])
 }

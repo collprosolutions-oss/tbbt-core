@@ -14,10 +14,11 @@ import {
   publicRequestPath,
 } from "@/lib/public-site";
 import { prisma } from "@/lib/prisma";
-import { requirePublicSite } from "@/lib/require-public-site";
+import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
-import { loadPublicAboutImages } from "@/lib/public-site-images";
-import { resolvePublishedAboutCopy } from "@/lib/website-story";
+import { buildPublicAboutImagePresentation, loadPublicAboutImages } from "@/lib/public-site-images";
+import { snapshotToImageRows } from "@/lib/website-engine/public";
+import { snapshotPageMetadata } from "@/lib/website-engine/seo";
 
 export const dynamic = "force-dynamic";
 
@@ -25,31 +26,32 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
-  const name = publicDisplayName(site.business);
+  const view = await requirePublicWebsiteView(slug);
+  if (view.snapshot) {
+    return snapshotPageMetadata({
+      snapshot: view.snapshot,
+      page: view.snapshot.seo.about,
+      pathname: publicAboutPath(view.site.business.slug),
+    });
+  }
+  const name = publicDisplayName(view.site.business);
   return publicTenantPageMetadata({
-    business: site.business,
+    business: view.site.business,
     title: `About Us | ${name}`,
-    description: `Learn how ${name} helps homeowners with handyman projects and written estimates.`,
-    pathname: publicAboutPath(site.business.slug),
+    description: `Learn how ${name} helps homeowners with projects and written estimates.`,
+    pathname: publicAboutPath(view.site.business.slug),
   });
 }
 
 export default async function PublicAboutPage({ params }: PageProps) {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
+  const view = await requirePublicWebsiteView(slug);
+  const site = view.site;
   const phone = publicPhone(site.business);
-  const [images, settings] = await Promise.all([
-    loadPublicAboutImages(prisma, site.business.id, site.business.slug),
-    prisma.businessSettings.findUnique({
-      where: { businessId: site.business.id },
-      select: { approvedPublicAboutCopy: true },
-    }),
-  ]);
-  const storyCopy = resolvePublishedAboutCopy(
-    settings?.approvedPublicAboutCopy,
-    site.business.slug,
-  );
+  const images = view.snapshot
+    ? buildPublicAboutImagePresentation(snapshotToImageRows(view.snapshot), site.business.slug)
+    : await loadPublicAboutImages(prisma, site.business.id, site.business.slug);
+  const storyCopy = view.about;
 
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>

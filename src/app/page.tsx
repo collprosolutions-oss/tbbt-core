@@ -11,12 +11,13 @@ import {
   publicLogoSrc,
   publicPhone,
 } from "@/lib/public-site";
-import { loadPublicHomeImages } from "@/lib/public-site-images";
+import { buildPublicHomeImagePresentation, loadPublicHomeImages } from "@/lib/public-site-images";
 import { prisma } from "@/lib/prisma";
 import { loadDefaultPublicBusiness, loadPublicCatalog } from "@/lib/public-site-data";
 import { readRequestHost } from "@/lib/request-host";
 import { shouldServeTbbtMarketingHome } from "@/lib/tbbt-marketing-host";
 import { tbbtMarketingMetadata } from "@/lib/tbbt-marketing-seo";
+import { loadPublicWebsiteView, snapshotToImageRows } from "@/lib/website-engine/public";
 
 export const dynamic = "force-dynamic";
 
@@ -58,28 +59,33 @@ export default async function HomePage() {
     );
   }
 
-  const catalog = await loadPublicCatalog(business);
-  const homeImages = await loadPublicHomeImages(prisma, business.id, catalog.groups);
-  const name = publicDisplayName(business);
+  const view = await loadPublicWebsiteView(business.slug);
+  const catalog = view?.site ?? (await loadPublicCatalog(business));
+  const homeImages = view?.snapshot
+    ? buildPublicHomeImagePresentation(catalog.groups, snapshotToImageRows(view.snapshot))
+    : await loadPublicHomeImages(prisma, business.id, catalog.groups);
+  const name = publicDisplayName(catalog.business);
   const jsonLd = localBusinessJsonLd({
     name,
-    slug: business.slug,
-    phone: publicPhone(business),
-    logoSrc: publicLogoSrc(business.slug),
+    slug: catalog.business.slug,
+    phone: publicPhone(catalog.business),
+    logoSrc: publicLogoSrc(catalog.business.slug),
     description: `Handyman services from ${name}. Request repairs, installations, mounting, carpentry, and other home projects.`,
   });
 
   return (
-    <PublicSiteShell business={business} groups={catalog.groups}>
+    <PublicSiteShell business={catalog.business} groups={catalog.groups}>
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
       <PublicHome
-        business={business}
+        business={catalog.business}
         items={catalog.items}
         groups={catalog.groups}
         images={homeImages}
+        headline={view?.snapshot?.home.headline}
+        supporting={view?.snapshot?.home.supporting}
       />
     </PublicSiteShell>
   );
