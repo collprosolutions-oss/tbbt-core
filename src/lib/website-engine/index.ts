@@ -18,11 +18,39 @@ export {
   publicServiceFromView,
   publicLocalPageFromView,
   snapshotToImageRows,
+  snapshotIntakeSchemasByTrade,
+  snapshotIntakeSchemaForTrade,
   missingWebsiteEngineSchema,
 } from "@/lib/website-engine/public";
-export { resolvePublicHost } from "@/lib/website-engine/hosts";
+export {
+  resolvePublicHost,
+  resolvePublicRoot,
+  authorizedPublicOrigin,
+  publicOriginForSlug,
+} from "@/lib/website-engine/hosts";
 export { publishedSitemapPaths, snapshotPageMetadata, viewHomeMetadata } from "@/lib/website-engine/seo";
-export { allocateUniqueServiceSlugs, websiteServiceSlug } from "@/lib/website-engine/slugs";
+export {
+  allocateUniqueServiceSlugs,
+  allocateUnusedWebsiteSlug,
+  ensureCatalogWebsiteSlugs,
+  nextUniqueWebsiteSlug,
+  websiteServiceSlug,
+} from "@/lib/website-engine/slugs";
+export {
+  publishedHeroImageAlt,
+  publishedLocalBusinessDescription,
+  publishedProjectsDescription,
+  publishedRequestAccent,
+  publishedServicesHeadline,
+  publishedServicesHeroDescription,
+  publishedTradePhrase,
+  snapshotContainsHandymanClaim,
+} from "@/lib/website-engine/copy";
+export {
+  publishWebsiteFromForm,
+  readWebsiteEngineIdempotencyKey,
+  rollbackWebsiteFromForm,
+} from "@/lib/website-engine/form";
 export { summarizeWebsiteSnapshotChange } from "@/lib/website-engine/summary";
 export {
   addWebsiteGalleryItem,

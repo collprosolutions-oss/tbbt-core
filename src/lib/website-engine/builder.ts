@@ -14,7 +14,12 @@ import { slugifyLocalPagePart } from "@/lib/service-areas";
 import { publicTradeProjection } from "@/lib/trade-config";
 import { tradeLabel } from "@/lib/trades";
 import { resolvePublishedAboutCopy } from "@/lib/website-story";
-import { allocateUniqueServiceSlugs } from "@/lib/website-engine/slugs";
+import { ensureCatalogWebsiteSlugs, websiteServiceSlug } from "@/lib/website-engine/slugs";
+import {
+  currentIntakeSchema,
+  publicIntakeSchemaProjection,
+} from "@/lib/intake-schema";
+import { catalogAsksWorkAreaIntake } from "@/lib/work-area-intake";
 import {
   WEBSITE_SNAPSHOT_SCHEMA_VERSION,
   type PublishedGalleryItem,
@@ -76,12 +81,12 @@ export async function buildWebsiteSnapshot(
 
   const catalog = await db.serviceCatalogItem.findMany({
     where: { businessId: access.businessId, active: true },
-    orderBy: { name: "asc" },
+    orderBy: [{ createdAt: "asc" }, { name: "asc" }],
   });
   const offered = catalog.filter((row) =>
     catalogItemIsPubliclyOffered(row, activeTradeCodes),
   );
-  const slugs = allocateUniqueServiceSlugs(offered.map((row) => row.name));
+  const slugs = await ensureCatalogWebsiteSlugs(db, access.businessId, offered);
 
   const galleryRows = await db.websiteGalleryItem.findMany({
     where: { businessId: access.businessId },
@@ -131,18 +136,27 @@ export async function buildWebsiteSnapshot(
         !asset ||
         asset.businessId !== access.businessId ||
         asset.visibility !== "PUBLIC" ||
-        asset.category !== "WEBSITE_IMAGE"
+        asset.category !== "WEBSITE_IMAGE" ||
+        asset.status !== "READY" ||
+        !asset.publicPath
       ) {
-        throw new WebsitePublishError(
-          "Website images must be PUBLIC website assets owned by this business.",
-        );
+        continue;
       }
+      images.push({
+        page: row.page,
+        slot: row.slot,
+        imageUrl: asset.publicPath,
+        assetId: asset.id,
+        objectPosition: row.objectPosition,
+        objectZoom: row.objectZoom,
+      });
+      continue;
     }
     images.push({
       page: row.page,
       slot: row.slot,
       imageUrl: row.imageUrl,
-      assetId: row.storedAssetId,
+      assetId: null,
       objectPosition: row.objectPosition,
       objectZoom: row.objectZoom,
     });
@@ -185,14 +199,14 @@ export async function buildWebsiteSnapshot(
     where: { businessId: access.businessId },
   });
 
-  const services = offered.map((row, index) => {
+  const services = offered.map((row) => {
     const image =
       gallery.find((item) => item.catalogItemId === row.id)?.imageUrl ??
       images.find((item) => item.page === "services" && item.slot === row.id)?.imageUrl ??
       null;
     return {
       id: row.id,
-      slug: slugs[index]!,
+      slug: slugs.get(row.id) || websiteServiceSlug(row.name),
       name: row.name,
       tradeCode: row.tradeCode,
       tradeLabel: tradeLabel(row.tradeCode),
@@ -203,6 +217,10 @@ export async function buildWebsiteSnapshot(
       recurrenceEligible: row.recurrenceEligible,
       unitLabel: row.unitLabel,
       imageUrl: image,
+      intakeMeasurementMode: row.intakeMeasurementMode ?? "NONE",
+      intakeMeasurementAxes: row.intakeMeasurementAxes ?? "",
+      intakeMeasurementUnit: row.intakeMeasurementUnit ?? "IN",
+      asksWorkAreaIntake: catalogAsksWorkAreaIntake(row.description, row.name),
     };
   });
 
@@ -253,11 +271,20 @@ export async function buildWebsiteSnapshot(
       publicWebsite: safeHttpUrl(business.publicWebsite),
       publicServiceAreaLabel: business.publicServiceAreaLabel,
     },
-    trades: publicTrades.map((row) => ({
-      code: row.code,
-      label: row.label,
-      customerFacingLabel: row.label,
-    })),
+    trades: publicTrades.map((row) => {
+      const projection = publicIntakeSchemaProjection(currentIntakeSchema(row.code));
+      return {
+        code: row.code,
+        label: row.label,
+        customerFacingLabel: row.label,
+        intake: {
+          key: projection.key,
+          version: projection.version,
+          title: projection.title,
+          fields: projection.fields,
+        },
+      };
+    }),
     services,
     about: { copy: aboutCopy },
     home: {

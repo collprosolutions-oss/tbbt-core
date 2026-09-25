@@ -1,10 +1,11 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { WritingAssistBar } from "@/components/ai/writing-assist-bar";
 import {
   addWebsiteGalleryItemAction,
   publishWebsiteAction,
+  removeWebsiteGalleryItemAction,
   rollbackWebsiteAction,
   saveWebsiteLocalPageDraftAction,
   saveWebsiteSeoDraftAction,
@@ -19,6 +20,24 @@ import { ViewPublicWebsiteLink } from "@/components/settings/view-public-website
 
 const initial: WebsiteEngineActionState = {};
 
+function newAttemptKey() {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `attempt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function useFormAttemptKey(successToken?: string) {
+  const [key, setKey] = useState(newAttemptKey);
+  const seen = useRef<string | null>(null);
+  useEffect(() => {
+    if (successToken && successToken !== seen.current) {
+      seen.current = successToken;
+      setKey(newAttemptKey());
+    }
+  }, [successToken]);
+  return key;
+}
+
 export function WebsitePublishPanel({
   slug,
   canEdit,
@@ -27,6 +46,7 @@ export function WebsitePublishPanel({
   versions,
   reviews,
   galleryAssets,
+  galleryItems,
   localPairs,
   seo,
 }: {
@@ -45,6 +65,7 @@ export function WebsitePublishPanel({
   }>;
   reviews: Array<{ id: string; reviewText: string; websiteSelected: boolean }>;
   galleryAssets: Array<{ id: string; publicPath: string | null }>;
+  galleryItems: Array<{ id: string; title: string; caption: string; imageUrl: string | null }>;
   localPairs: Array<{ serviceAreaId: string; catalogItemId: string; label: string; draftCopy: string }>;
   seo: {
     websiteHeroHeadline: string;
@@ -67,7 +88,15 @@ export function WebsitePublishPanel({
   const [heroHeadline, setHeroHeadline] = useState(seo.websiteHeroHeadline);
   const [heroSupporting, setHeroSupporting] = useState(seo.websiteHeroSupporting);
   const [seoHomeDescription, setSeoHomeDescription] = useState(seo.seoDescriptionHome);
-  const [localCopy, setLocalCopy] = useState(localPairs[0]?.draftCopy ?? "");
+  const [localPairKey, setLocalPairKey] = useState(
+    localPairs[0] ? `${localPairs[0].serviceAreaId}:${localPairs[0].catalogItemId}` : "",
+  );
+  const selectedLocalPair =
+    localPairs.find((pair) => `${pair.serviceAreaId}:${pair.catalogItemId}` === localPairKey) ??
+    localPairs[0];
+  const [localCopy, setLocalCopy] = useState(selectedLocalPair?.draftCopy ?? "");
+  const publishKey = useFormAttemptKey(publishState.message);
+  const rollbackKey = useFormAttemptKey(rollbackState.message);
 
   return (
     <div className="space-y-6">
@@ -91,6 +120,7 @@ export function WebsitePublishPanel({
 
       {canEdit ? (
         <form action={publishAction}>
+          <input type="hidden" name="idempotencyKey" value={publishKey} />
           <Button type="submit" disabled={publishing}>
             {publishing ? "Publishing…" : "Publish website"}
           </Button>
@@ -174,28 +204,69 @@ export function WebsitePublishPanel({
       </div>
 
       {canEdit ? (
-        <form action={galleryAction} className="space-y-2">
-          <h3 className="font-medium">Add gallery photo</h3>
-          <Label>Public website asset ID</Label>
-          <select name="storedAssetId" className="h-8 w-full rounded-lg border border-input px-2.5 text-sm">
-            {galleryAssets.map((asset) => (
-              <option key={asset.id} value={asset.id}>
-                {asset.id}
-              </option>
-            ))}
-          </select>
-          <Input name="title" placeholder="Title" />
-          <Input name="caption" placeholder="Caption" />
-          <Button type="submit" variant="outline" disabled={addingGallery || galleryAssets.length === 0}>
-            Add to gallery draft
-          </Button>
-        </form>
+        <div className="space-y-3">
+          <div>
+            <h3 className="font-medium">Gallery draft</h3>
+            <ul className="mt-2 space-y-2">
+              {galleryItems.map((item) => (
+                <li key={item.id} className="flex items-start justify-between gap-3 text-sm">
+                  <span>
+                    {item.title || "Gallery photo"}
+                    {item.caption ? ` — ${item.caption}` : ""}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      void removeWebsiteGalleryItemAction(item.id);
+                    }}
+                  >
+                    Remove
+                  </Button>
+                </li>
+              ))}
+              {galleryItems.length === 0 ? (
+                <li className="text-sm text-muted-foreground">No gallery photos in the next publish yet.</li>
+              ) : null}
+            </ul>
+          </div>
+          <form action={galleryAction} className="space-y-2">
+            <h3 className="font-medium">Add gallery photo</h3>
+            <Label>Public website asset ID</Label>
+            <select name="storedAssetId" className="h-8 w-full rounded-lg border border-input px-2.5 text-sm">
+              {galleryAssets.map((asset) => (
+                <option key={asset.id} value={asset.id}>
+                  {asset.id}
+                </option>
+              ))}
+            </select>
+            <Input name="title" placeholder="Title" />
+            <Input name="caption" placeholder="Caption" />
+            <Button type="submit" variant="outline" disabled={addingGallery || galleryAssets.length === 0}>
+              Add to gallery draft
+            </Button>
+          </form>
+        </div>
       ) : null}
 
       {canEdit && localPairs.length > 0 ? (
         <form action={localAction} className="space-y-2">
           <h3 className="font-medium">Local page draft</h3>
-          <select name="pair" className="h-8 w-full rounded-lg border border-input px-2.5 text-sm" id="local-pair">
+          <select
+            name="pair"
+            className="h-8 w-full rounded-lg border border-input px-2.5 text-sm"
+            id="local-pair"
+            value={localPairKey}
+            onChange={(event) => {
+              const next = event.target.value;
+              setLocalPairKey(next);
+              const pair = localPairs.find(
+                (row) => `${row.serviceAreaId}:${row.catalogItemId}` === next,
+              );
+              setLocalCopy(pair?.draftCopy ?? "");
+            }}
+          >
             {localPairs.map((pair) => (
               <option key={`${pair.serviceAreaId}:${pair.catalogItemId}`} value={`${pair.serviceAreaId}:${pair.catalogItemId}`}>
                 {pair.label}
@@ -236,6 +307,7 @@ export function WebsitePublishPanel({
               {canEdit && !version.isCurrent ? (
                 <form action={rollbackAction} className="mt-2">
                   <input type="hidden" name="publishId" value={version.id} />
+                  <input type="hidden" name="idempotencyKey" value={`${rollbackKey}:${version.id}`} />
                   <Button type="submit" size="sm" variant="outline" disabled={rolling}>
                     Roll back to this version
                   </Button>

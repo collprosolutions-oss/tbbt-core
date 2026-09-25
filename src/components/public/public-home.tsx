@@ -30,6 +30,8 @@ export function PublicHome({
   images,
   headline,
   supporting,
+  servicesHeading,
+  heroImageAlt,
 }: {
   business: PublicBusiness;
   items: PublicCatalogItem[];
@@ -37,6 +39,8 @@ export function PublicHome({
   images?: PublicHomeImagePresentation;
   headline?: string | null;
   supporting?: string | null;
+  servicesHeading?: string | null;
+  heroImageAlt?: string | null;
 }) {
   const servicesHref = publicServicesPath(business.slug);
   const projectsHref = publicProjectsPath(business.slug);
@@ -57,7 +61,7 @@ export function PublicHome({
         <div className="public-cinematic-media">
           <PublicFittedImage
             src={hero.src}
-            alt="Handyman working with tools in a workshop"
+            alt={heroImageAlt || "Handyman working with tools in a workshop"}
             objectPosition={hero.objectPosition}
             objectZoom={hero.objectZoom}
             sizes="100vw"
@@ -110,7 +114,11 @@ export function PublicHome({
       <section className="public-section">
         <div className="public-container">
           <h2 className="public-section-title">
-            Handyman <span>Services</span> You Can Count On
+            {servicesHeading || (
+              <>
+                Handyman <span>Services</span> You Can Count On
+              </>
+            )}
           </h2>
           {categories.length === 0 ? (
             <div className="mt-10 rounded-xl border border-dashed p-6 text-center">

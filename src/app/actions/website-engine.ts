@@ -1,21 +1,22 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { randomUUID } from "node:crypto";
 import { requireOperatingBusinessAccessForForm } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
 import {
   addWebsiteGalleryItem,
   listWebsitePublishes,
-  publishWebsite,
   removeWebsiteGalleryItem,
-  rollbackWebsite,
   saveWebsiteLocalPageDraft,
   saveWebsiteSeoDraft,
   setReviewWebsiteSelected,
   WebsitePublishError,
 } from "@/lib/website-engine";
+import {
+  publishWebsiteFromForm,
+  rollbackWebsiteFromForm,
+} from "@/lib/website-engine/form";
 
 export type WebsiteEngineActionState = {
   error?: string;
@@ -42,9 +43,7 @@ export async function publishWebsiteAction(
   if (!operating.ok) return { error: operating.error };
   requireBusinessCapability(operating.access, CAPABILITIES.MANAGE_SETTINGS);
   try {
-    const result = await publishWebsite(prisma, operating.access, {
-      idempotencyKey: readString(formData, "idempotencyKey") || randomUUID(),
-    });
+    const result = await publishWebsiteFromForm(prisma, operating.access, formData);
     revalidatePath("/settings");
     revalidatePath(`/hire/${operating.access.workspace.business.slug}`);
     return { message: `Published version ${result.versionNumber}.` };
@@ -61,10 +60,7 @@ export async function rollbackWebsiteAction(
   if (!operating.ok) return { error: operating.error };
   requireBusinessCapability(operating.access, CAPABILITIES.MANAGE_SETTINGS);
   try {
-    const result = await rollbackWebsite(prisma, operating.access, {
-      publishId: readString(formData, "publishId"),
-      idempotencyKey: readString(formData, "idempotencyKey") || randomUUID(),
-    });
+    const result = await rollbackWebsiteFromForm(prisma, operating.access, formData);
     revalidatePath("/settings");
     revalidatePath(`/hire/${operating.access.workspace.business.slug}`);
     return { message: `Rolled back. Current version is ${result.versionNumber}.` };

@@ -20,6 +20,8 @@ import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { buildPublicReviewsImagePresentation, loadPublicReviewsImages } from "@/lib/public-site-images";
 import { snapshotToImageRows } from "@/lib/website-engine/public";
+import { publicOriginForSlug } from "@/lib/website-engine/hosts";
+import { readRequestHost } from "@/lib/request-host";
 
 export const dynamic = "force-dynamic";
 
@@ -30,11 +32,13 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const view = await requirePublicWebsiteView(slug);
   const site = view.site;
   const name = publicDisplayName(site.business);
+  const origin = await publicOriginForSlug(prisma, site.business.slug, await readRequestHost());
   return publicTenantPageMetadata({
     business: site.business,
     title: `Reviews | ${name}`,
     description: `Customer feedback for ${name} will appear here when it is approved for public display.`,
     pathname: publicReviewsPath(site.business.slug),
+    origin,
   });
 }
 

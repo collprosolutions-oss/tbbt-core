@@ -17,6 +17,8 @@ import { prisma } from "@/lib/prisma";
 import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { publicLocalPageFromView } from "@/lib/website-engine/public";
+import { publicOriginForSlug } from "@/lib/website-engine/hosts";
+import { readRequestHost } from "@/lib/request-host";
 
 export const dynamic = "force-dynamic";
 
@@ -65,11 +67,17 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const description =
     loaded.snapshotLocal?.copy ||
     `Request ${loaded.catalog.name} in ${loaded.matchedCity.label} from ${name}.`;
+  const origin = await publicOriginForSlug(
+    prisma,
+    loaded.site.business.slug,
+    await readRequestHost(),
+  );
   return publicTenantPageMetadata({
     business: loaded.site.business,
     title,
     description,
     pathname: publicServiceCityPath(loaded.site.business.slug, service, city),
+    origin,
   });
 }
 

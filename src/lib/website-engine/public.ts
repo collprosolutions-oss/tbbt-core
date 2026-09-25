@@ -10,8 +10,19 @@ import {
 } from "@/lib/public-site-data";
 import { groupPublicCatalog, type PublicBusiness, type PublicCatalogItem } from "@/lib/public-site";
 import { resolvePublishedAboutCopy } from "@/lib/website-story";
-import { parseWebsiteSnapshot, type PublishedWebsiteSnapshot } from "@/lib/website-engine/snapshot";
+import {
+  parseWebsiteSnapshot,
+  type PublishedTrade,
+  type PublishedWebsiteSnapshot,
+} from "@/lib/website-engine/snapshot";
 import type { PublicSiteImageRow } from "@/lib/public-site-images";
+import {
+  currentIntakeSchema,
+  intakeSchemaFromPublicProjection,
+  publicIntakeSchemaProjection,
+  type PublicIntakeSchemaProjection,
+} from "@/lib/intake-schema";
+import { isConfiguredTrade } from "@/lib/trades";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -24,6 +35,39 @@ export type PublicWebsiteView = {
   about: string;
 };
 
+function snapshotTradeProjection(trade: PublishedTrade): PublicIntakeSchemaProjection {
+  if (trade.intake?.key && trade.intake.fields.length > 0) {
+    return {
+      key: trade.intake.key,
+      version: trade.intake.version,
+      tradeCode: trade.code,
+      title: trade.intake.title,
+      fields: trade.intake.fields,
+    };
+  }
+  return publicIntakeSchemaProjection(currentIntakeSchema(trade.code));
+}
+
+export function snapshotIntakeSchemasByTrade(
+  snapshot: PublishedWebsiteSnapshot,
+): Record<string, PublicIntakeSchemaProjection> {
+  return Object.fromEntries(
+    snapshot.trades
+      .filter((trade) => isConfiguredTrade(trade.code))
+      .map((trade) => [trade.code, snapshotTradeProjection(trade)]),
+  );
+}
+
+export function snapshotIntakeSchemaForTrade(
+  snapshot: PublishedWebsiteSnapshot,
+  tradeCode: string,
+) {
+  const projection =
+    snapshotIntakeSchemasByTrade(snapshot)[tradeCode] ??
+    publicIntakeSchemaProjection(currentIntakeSchema(tradeCode));
+  return intakeSchemaFromPublicProjection(projection);
+}
+
 function snapshotToSite(snapshot: PublishedWebsiteSnapshot): PublicSitePayload {
   const items: PublicCatalogItem[] = snapshot.services.map((service) => ({
     id: service.id,
@@ -33,10 +77,10 @@ function snapshotToSite(snapshot: PublishedWebsiteSnapshot): PublicSitePayload {
     pricingMode: service.pricingMode,
     priceLabel: service.priceLabel,
     unitAmount: null,
-    intakeMeasurementMode: "NONE",
-    intakeMeasurementAxes: "",
-    intakeMeasurementUnit: "IN",
-    asksWorkAreaIntake: false,
+    intakeMeasurementMode: service.intakeMeasurementMode,
+    intakeMeasurementAxes: service.intakeMeasurementAxes,
+    intakeMeasurementUnit: service.intakeMeasurementUnit,
+    asksWorkAreaIntake: service.asksWorkAreaIntake,
     tradeCode: service.tradeCode,
     recurrenceEligible: service.recurrenceEligible,
     unitLabel: service.unitLabel,
@@ -155,6 +199,10 @@ export function publicServiceFromView(view: PublicWebsiteView, serviceSlug: stri
     recurrenceEligible: Boolean(item.recurrenceEligible),
     unitLabel: item.unitLabel ?? "",
     imageUrl: null,
+    intakeMeasurementMode: item.intakeMeasurementMode,
+    intakeMeasurementAxes: item.intakeMeasurementAxes,
+    intakeMeasurementUnit: item.intakeMeasurementUnit,
+    asksWorkAreaIntake: item.asksWorkAreaIntake,
   };
 }
 

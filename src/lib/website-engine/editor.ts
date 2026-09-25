@@ -11,7 +11,7 @@ import { listWebsitePublishes, websiteHasUnpublishedChanges } from "@/lib/websit
 type Db = PrismaClient;
 
 export async function loadWebsitePublishPanelData(db: Db, access: BusinessAccess) {
-  const [history, unpublished, reviews, galleryAssets, settings, areas, catalog, trades] =
+  const [history, unpublished, reviews, galleryAssets, galleryItems, settings, areas, catalog, trades] =
     await Promise.all([
       listWebsitePublishes(db, access),
       websiteHasUnpublishedChanges(db, access),
@@ -30,6 +30,11 @@ export async function loadWebsitePublishPanelData(db: Db, access: BusinessAccess
         },
         select: { id: true, publicPath: true },
         orderBy: { createdAt: "desc" },
+      }),
+      db.websiteGalleryItem.findMany({
+        where: { businessId: access.businessId },
+        include: { storedAsset: { select: { publicPath: true } } },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       }),
       db.businessSettings.findUnique({ where: { businessId: access.businessId } }),
       db.serviceArea.findMany({
@@ -72,6 +77,12 @@ export async function loadWebsitePublishPanelData(db: Db, access: BusinessAccess
     })),
     reviews,
     galleryAssets,
+    galleryItems: galleryItems.map((row) => ({
+      id: row.id,
+      title: row.title,
+      caption: row.caption,
+      imageUrl: row.storedAsset.publicPath,
+    })),
     localPairs,
     seo: {
       websiteHeroHeadline: settings?.websiteHeroHeadline ?? "",

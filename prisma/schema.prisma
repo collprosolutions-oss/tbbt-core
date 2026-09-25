@@ -616,6 +616,10 @@ model ServiceCatalogItem {
   /// Unit label for VARIABLE / unit-based pricing (for example "room").
   /// Empty when the pricing mode does not use a unit.
   unitLabel String @default("")
+  /// Stable customer-facing website slug. Generated once, kept when the
+  /// display name changes, unique within the business. Null until first
+  /// persist/publish so existing rows can be lazily initialized.
+  websiteSlug String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -627,6 +631,7 @@ model ServiceCatalogItem {
   websiteGalleryItems          WebsiteGalleryItem[]
   websiteLocalPageDrafts       WebsiteLocalPageDraft[]
 
+  @@unique([businessId, websiteSlug])
   @@index([businessId])
   @@index([businessId, tradeCode])
 }

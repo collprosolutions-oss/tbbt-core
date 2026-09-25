@@ -28,6 +28,7 @@ import {
 } from "@/lib/catalog-item-fields";
 import { installStarterCatalogForTrade } from "@/lib/trade-catalog";
 import { pricingModeAllowedForTrade, tradeOffersStarterCatalog } from "@/lib/trade-config";
+import { allocateUnusedWebsiteSlug } from "@/lib/website-engine/slugs";
 import { isConfiguredTrade } from "@/lib/trades";
 
 export type CatalogActionState = {
@@ -123,11 +124,14 @@ export async function createServiceCatalogItem(
     return { error: priced.error };
   }
 
+  const websiteSlug = await allocateUnusedWebsiteSlug(prisma, access.businessId, name);
+
   await prisma.serviceCatalogItem.create({
     data: {
       businessId: access.businessId,
       tradeCode,
       name,
+      websiteSlug,
       pricingMode,
       price: priced.price,
       description: joinCatalogDescription(

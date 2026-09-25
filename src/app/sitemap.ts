@@ -6,7 +6,7 @@ import {
   TBBT_MARKETING_PUBLIC_PATHS,
 } from "@/lib/tbbt-marketing-host";
 import { prisma } from "@/lib/prisma";
-import { resolvePublicHost } from "@/lib/website-engine/hosts";
+import { authorizedPublicOrigin, resolvePublicHost } from "@/lib/website-engine/hosts";
 import { loadPublicWebsiteView } from "@/lib/website-engine/public";
 import { publishedSitemapPaths } from "@/lib/website-engine/seo";
 import { publicCanonicalUrl } from "@/lib/public-site-seo";
@@ -34,6 +34,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   const view = await loadPublicWebsiteView(slug);
   if (!view) return [];
+  const origin = authorizedPublicOrigin(resolved, host);
   const paths = view.snapshot
     ? publishedSitemapPaths(view.snapshot)
     : [
@@ -42,8 +43,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         publicAboutPath(view.site.business.slug),
         publicRequestPath(view.site.business.slug),
       ];
+  if (resolved.kind === "tenant" && !paths.includes("/")) {
+    paths.unshift("/");
+  }
   return paths.map((path) => ({
-    url: publicCanonicalUrl(view.site.business.slug, path),
+    url: publicCanonicalUrl(view.site.business.slug, path, origin),
     changeFrequency: "weekly" as const,
     priority: path === publicHomePath(view.site.business.slug) || path === "/" ? 1 : 0.6,
   }));

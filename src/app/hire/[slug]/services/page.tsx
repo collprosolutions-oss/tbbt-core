@@ -17,6 +17,9 @@ import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { buildPublicServicesImagePresentation, loadPublicServicesImages } from "@/lib/public-site-images";
 import { snapshotToImageRows } from "@/lib/website-engine/public";
 import { snapshotPageMetadata } from "@/lib/website-engine/seo";
+import { publishedServicesHeroDescription } from "@/lib/website-engine/copy";
+import { publicOriginForSlug } from "@/lib/website-engine/hosts";
+import { readRequestHost } from "@/lib/request-host";
 import { parseSelectedWorkSearch } from "@/lib/selected-work";
 
 export const dynamic = "force-dynamic";
@@ -35,11 +38,13 @@ type PageProps = {
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
   const view = await requirePublicWebsiteView(slug);
+  const origin = await publicOriginForSlug(prisma, view.site.business.slug, await readRequestHost());
   if (view.snapshot) {
     return snapshotPageMetadata({
       snapshot: view.snapshot,
       page: view.snapshot.seo.services,
       pathname: publicServicesPath(view.site.business.slug),
+      origin,
     });
   }
   const name = publicDisplayName(view.site.business);
@@ -48,6 +53,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     title: `Services | ${name}`,
     description: `Browse handyman services from ${name}. Select one or more tasks, then continue to request service.`,
     pathname: publicServicesPath(view.site.business.slug),
+    origin,
   });
 }
 
@@ -71,7 +77,15 @@ export default async function PublicServicesPage({ params, searchParams }: PageP
           homeHref={publicHomePath(site.business.slug)}
           current="Services"
           title="Services"
-          description="Professional handyman services to keep your home running smoothly and looking its best."
+          description={
+            view.snapshot
+              ? view.snapshot.seo.services.description ||
+                publishedServicesHeroDescription({
+                  name: publicDisplayName(site.business),
+                  trades: view.snapshot.trades,
+                })
+              : "Professional handyman services to keep your home running smoothly and looking its best."
+          }
           imageSrc={images.hero.src}
           objectPosition={images.hero.objectPosition}
           objectZoom={images.hero.objectZoom}

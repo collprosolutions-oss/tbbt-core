@@ -385,3 +385,26 @@ export function publicIntakeSchemaProjection(schema: IntakeSchema) {
 }
 
 export type PublicIntakeSchemaProjection = ReturnType<typeof publicIntakeSchemaProjection>;
+
+export function intakeSchemaFromPublicProjection(
+  projection: PublicIntakeSchemaProjection,
+): IntakeSchema {
+  return {
+    key: projection.key,
+    version: projection.version,
+    tradeCode: isConfiguredTrade(projection.tradeCode)
+      ? projection.tradeCode
+      : DEFAULT_TRADE,
+    title: projection.title,
+    fields: projection.fields.map((field) => ({
+      key: field.key,
+      type: field.type,
+      label: field.label,
+      required: field.required,
+      help: field.help ?? undefined,
+      options: field.options,
+      visibleWhen: field.visibleWhen ?? undefined,
+      render: "trade" as const,
+    })),
+  };
+}

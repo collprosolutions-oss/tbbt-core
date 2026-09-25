@@ -19,10 +19,28 @@ export const WEBSITE_SNAPSHOT_SECRET_KEYS = [
   "refreshToken",
 ] as const;
 
+export type PublishedTradeIntakeField = {
+  key: string;
+  type: string;
+  label: string;
+  required: boolean;
+  help: string | null;
+  options: Array<{ value: string; label: string }>;
+  visibleWhen: { field: string; value: string } | null;
+};
+
+export type PublishedTradeIntake = {
+  key: string;
+  version: number;
+  title: string;
+  fields: PublishedTradeIntakeField[];
+};
+
 export type PublishedTrade = {
   code: string;
   label: string;
   customerFacingLabel: string;
+  intake: PublishedTradeIntake;
 };
 
 export type PublishedService = {
@@ -38,6 +56,10 @@ export type PublishedService = {
   recurrenceEligible: boolean;
   unitLabel: string;
   imageUrl: string | null;
+  intakeMeasurementMode: string;
+  intakeMeasurementAxes: string;
+  intakeMeasurementUnit: string;
+  asksWorkAreaIntake: boolean;
 };
 
 export type PublishedImage = {
@@ -183,6 +205,48 @@ function parseService(value: unknown): PublishedService | null {
     recurrenceEligible: asBoolean(value.recurrenceEligible),
     unitLabel: asString(value.unitLabel),
     imageUrl: asNullableString(value.imageUrl),
+    intakeMeasurementMode: asString(value.intakeMeasurementMode, "NONE"),
+    intakeMeasurementAxes: asString(value.intakeMeasurementAxes),
+    intakeMeasurementUnit: asString(value.intakeMeasurementUnit, "IN"),
+    asksWorkAreaIntake: asBoolean(value.asksWorkAreaIntake),
+  };
+}
+
+function parseTradeIntake(value: unknown, fallbackTitle: string): PublishedTradeIntake {
+  const row = isRecord(value) ? value : {};
+  const fields = Array.isArray(row.fields)
+    ? row.fields
+        .filter(isRecord)
+        .map((field) => ({
+          key: asString(field.key),
+          type: asString(field.type),
+          label: asString(field.label),
+          required: asBoolean(field.required),
+          help: asNullableString(field.help),
+          options: Array.isArray(field.options)
+            ? field.options
+                .filter(isRecord)
+                .map((option) => ({
+                  value: asString(option.value),
+                  label: asString(option.label, asString(option.value)),
+                }))
+                .filter((option) => option.value)
+            : [],
+          visibleWhen:
+            isRecord(field.visibleWhen) && asString(field.visibleWhen.field)
+              ? {
+                  field: asString(field.visibleWhen.field),
+                  value: asString(field.visibleWhen.value),
+                }
+              : null,
+        }))
+        .filter((field) => field.key && field.label)
+    : [];
+  return {
+    key: asString(row.key),
+    version: asNumber(row.version, 1),
+    title: asString(row.title, fallbackTitle),
+    fields,
   };
 }
 
@@ -217,11 +281,16 @@ export function parseWebsiteSnapshot(raw: string | unknown): PublishedWebsiteSna
   const trades = Array.isArray(parsed.trades)
     ? parsed.trades
         .filter(isRecord)
-        .map((row) => ({
-          code: asString(row.code),
-          label: asString(row.label),
-          customerFacingLabel: asString(row.customerFacingLabel, asString(row.label)),
-        }))
+        .map((row) => {
+          const code = asString(row.code);
+          const label = asString(row.label);
+          return {
+            code,
+            label,
+            customerFacingLabel: asString(row.customerFacingLabel, label),
+            intake: parseTradeIntake(row.intake, label),
+          };
+        })
         .filter((row) => row.code && row.label)
     : [];
 

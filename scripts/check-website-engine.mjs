@@ -46,12 +46,27 @@ const {
   publicServiceFromView,
   publicLocalPageFromView,
   resolvePublicHost,
+  resolvePublicRoot,
+  authorizedPublicOrigin,
   publishedSitemapPaths,
+  snapshotPageMetadata,
+  snapshotIntakeSchemasByTrade,
+  publishWebsiteFromForm,
+  rollbackWebsiteFromForm,
+  publishedLocalBusinessDescription,
+  publishedServicesHeroDescription,
+  publishedProjectsDescription,
+  snapshotContainsHandymanClaim,
   addWebsiteGalleryItem,
   saveWebsiteSeoDraft,
   setReviewWebsiteSelected,
   WebsitePublishError,
 } = await import("@/lib/website-engine");
+const { createPublicServiceRequest } = await import("@/lib/public-intake");
+const { publicCanonicalUrl } = await import("@/lib/public-site-seo");
+const { DECORATIVE_WALL_PANELING_TITLE } = await import(
+  "@/lib/estimate-calculators/decorative-wall-paneling"
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -116,6 +131,13 @@ const publish = read("src/lib/website-engine/publish.ts");
 const snapshot = read("src/lib/website-engine/snapshot.ts");
 const hosts = read("src/lib/website-engine/hosts.ts");
 const publicView = read("src/lib/website-engine/public.ts");
+const formSrc = read("src/lib/website-engine/form.ts");
+const copySrc = read("src/lib/website-engine/copy.ts");
+const slugSrc = read("src/lib/website-engine/slugs.ts");
+const intakeSrc = read("src/lib/public-intake.ts");
+const requestPage = read("src/app/r/[slug]/page.tsx");
+const servicesPage = read("src/app/hire/[slug]/services/page.tsx");
+const slugMigration = read("prisma/migrations/20260925191000_website_service_slug/migration.sql");
 const panel = read("src/components/settings/website-publish-panel.tsx");
 const settingsPage = read("src/app/(app)/settings/page.tsx");
 const settingsWorkspace = read("src/components/settings/settings-workspace.tsx");
@@ -194,9 +216,61 @@ check(
 );
 check(
   "Host resolution never uses a browser businessId and UNVERIFIED never routes",
-  hosts.includes('status: "VERIFIED"') &&
+  hosts.includes('status !== "VERIFIED"') &&
+    hosts.includes('kind: "unverified"') &&
     hosts.includes('kind: "unknown"') &&
+    hosts.includes("resolvePublicRoot") &&
+    hosts.includes("authorizedPublicOrigin") &&
     !hosts.includes("businessId:") === false,
+);
+check(
+  "Stable websiteSlug is additive and unique within a business",
+  schema.includes("websiteSlug") &&
+    schema.includes("@@unique([businessId, websiteSlug])") &&
+    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(slugMigration) &&
+    slugMigration.includes('ADD COLUMN IF NOT EXISTS "websiteSlug"') &&
+    slugMigration.includes("IF NOT EXISTS") &&
+    slugSrc.includes("ensureCatalogWebsiteSlugs") &&
+    builder.includes("ensureCatalogWebsiteSlugs"),
+);
+check(
+  "Snapshot freezes public intake and skips stale managed images",
+  snapshot.includes("intakeMeasurementMode") &&
+    snapshot.includes("asksWorkAreaIntake") &&
+    snapshot.includes("PublishedTradeIntake") &&
+    builder.includes("publicIntakeSchemaProjection") &&
+    builder.includes("catalogAsksWorkAreaIntake") &&
+    builder.includes("continue") &&
+    publicView.includes("snapshotIntakeSchemasByTrade") &&
+    intakeSrc.includes("publishedSnapshot") &&
+    intakeSrc.includes("snapshotIntakeSchemaForTrade") &&
+    requestPage.includes("snapshot.seo.request") &&
+    requestPage.includes("snapshotIntakeSchemasByTrade"),
+);
+check(
+  "Publish/rollback forms send a stable client attempt id",
+  formSrc.includes("readWebsiteEngineIdempotencyKey") &&
+    formSrc.includes("Publish attempt is missing an idempotency key") &&
+    panel.includes('name="idempotencyKey"') &&
+    panel.includes("useFormAttemptKey") &&
+    !read("src/app/actions/website-engine.ts").includes("randomUUID()"),
+);
+check(
+  "Owner editor lists gallery drafts and switches local-pair copy",
+  panel.includes("galleryItems") &&
+    panel.includes("removeWebsiteGalleryItemAction") &&
+    panel.includes("setLocalPairKey") &&
+    panel.includes("setLocalCopy(pair?.draftCopy ??") &&
+    settingsWorkspace.includes("galleryItems={websitePublish.galleryItems}"),
+);
+check(
+  "Snapshot public copy is derived from published trades",
+  copySrc.includes("publishedLocalBusinessDescription") &&
+    hireHome.includes("publishedLocalBusinessDescription") &&
+    collproHome.includes("publishedLocalBusinessDescription") &&
+    servicesPage.includes("publishedServicesHeroDescription") &&
+    collproHome.includes("viewHomeMetadata") &&
+    requestPage.includes("snapshot.seo.request"),
 );
 check(
   "Rollback copies source snapshot into a new version",
@@ -235,6 +309,21 @@ check(
     } catch (error) {
       return error instanceof WebsiteSnapshotError;
     }
+  })(),
+);
+check(
+  "Older snapshots default missing intake fields instead of crashing",
+  (() => {
+    const parsed = parseWebsiteSnapshot({
+      schemaVersion: 1,
+      business: { id: "b", slug: "s", name: "N" },
+      services: [{ id: "1", slug: "old", name: "Old" }],
+    });
+    return (
+      parsed.services[0].intakeMeasurementMode === "NONE" &&
+      parsed.services[0].asksWorkAreaIntake === false &&
+      parsed.services[0].intakeMeasurementAxes === ""
+    );
   })(),
 );
 check(
@@ -292,6 +381,20 @@ try {
       category: "Mounting",
       pricingMode: "STARTING_AT",
       price: new Prisma.Decimal(125),
+      tradeCode: "HANDYMAN",
+      active: true,
+      intakeMeasurementMode: "RECOMMENDED",
+      intakeMeasurementAxes: "width,height",
+      intakeMeasurementUnit: "IN",
+    },
+  });
+  const workAreaService = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: DECORATIVE_WALL_PANELING_TITLE,
+      description: "Finish carpentry for decorative wall paneling.",
+      category: "Trim & Carpentry",
+      pricingMode: "CUSTOM_QUOTE",
       tradeCode: "HANDYMAN",
       active: true,
     },
@@ -475,6 +578,21 @@ try {
   const afterFirst = await loadPublicWebsiteView(businessA.slug, prisma);
   check("First publish switches to snapshot mode", afterFirst?.source === "snapshot" && afterFirst.versionNumber === 1);
   check("Handyman-only first snapshot includes Handyman service", afterFirst?.snapshot?.services.some((row) => row.id === handyService.id) === true);
+  const publishedTv = afterFirst?.snapshot?.services.find((row) => row.id === handyService.id);
+  const publishedWorkArea = afterFirst?.snapshot?.services.find((row) => row.id === workAreaService.id);
+  check(
+    "Published snapshot freezes measurement intake",
+    publishedTv?.intakeMeasurementMode === "RECOMMENDED" &&
+      publishedTv?.intakeMeasurementAxes.includes("width") &&
+      publishedTv?.intakeMeasurementUnit === "IN",
+  );
+  check("Published snapshot freezes work-area intake", publishedWorkArea?.asksWorkAreaIntake === true);
+  check(
+    "Published trade intake is a public projection without calculator rates",
+    afterFirst?.snapshot?.trades.some((row) => row.intake?.key === "handyman.public" && row.intake.fields.some((field) => field.key === "frequency")) === true &&
+      !JSON.stringify(afterFirst.snapshot).includes("hourlyRate") &&
+      !JSON.stringify(afterFirst.snapshot).includes("DEFAULT_CONTENTS_HANDLING_RATES"),
+  );
   check("Cleaning service is excluded while Cleaning trade is inactive", afterFirst?.snapshot?.services.some((row) => row.id === cleaningService.id) !== true);
   check("Inactive service cannot enter a new snapshot", afterFirst?.snapshot?.services.some((row) => row.id === inactiveService.id) !== true);
   check("Inactive service area cannot enter new local pages", afterFirst?.snapshot?.localPages.some((row) => row.citySlug === "sparks") !== true);
@@ -491,6 +609,62 @@ try {
   const leaked = await loadPublicWebsiteView(businessA.slug, prisma);
   check("Draft edit after Publish does not change public snapshot", leaked?.snapshot?.about.copy === frozenAbout);
   check("Draft hero after Publish does not leak", leaked?.snapshot?.home.headline !== "Draft headline after publish");
+  await prisma.serviceCatalogItem.update({
+    where: { id: handyService.id },
+    data: {
+      name: "Draft TV Name",
+      intakeMeasurementMode: "NONE",
+      intakeMeasurementAxes: "",
+      active: false,
+    },
+  });
+  const leakedIntake = await loadPublicWebsiteView(businessA.slug, prisma);
+  const leakedTv = leakedIntake?.site.items.find((row) => row.id === handyService.id);
+  check(
+    "Draft catalog edits do not change published request intake",
+    leakedTv?.name === "TV Mounting" &&
+      leakedTv?.intakeMeasurementMode === "RECOMMENDED" &&
+      leakedTv?.intakeMeasurementAxes.includes("width"),
+  );
+  check(
+    "Deactivated published service stays on the current public form",
+    leakedIntake?.site.items.some((row) => row.id === handyService.id) === true,
+  );
+  const frozenSubmit = await createPublicServiceRequest(prisma, {
+    slug: businessA.slug,
+    name: "Frozen Intake",
+    email: `frozen-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "555-0100",
+    address: "",
+    streetAddress: "10 Snapshot St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Keep the published TV mount.",
+    catalogItemIds: [handyService.id],
+    includeOther: false,
+    otherDescription: "",
+    measurements: [{ catalogItemId: handyService.id, width: "40", height: "24", unit: "IN" }],
+    intakeAnswers: { frequency: "ONE_TIME" },
+  });
+  check("Published service remains submittable after draft deactivation", frozenSubmit.ok === true);
+  const frozenRequest = frozenSubmit.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: frozenSubmit.requestId } })
+    : null;
+  check(
+    "Historical ServiceRequest freezes the published intake schema",
+    frozenRequest?.intakeSchemaKey === "handyman.public" &&
+      frozenRequest?.intakeSchemaJson?.includes("handyman.public") === true,
+  );
+  await prisma.serviceCatalogItem.update({
+    where: { id: handyService.id },
+    data: {
+      name: "TV Mounting",
+      intakeMeasurementMode: "RECOMMENDED",
+      intakeMeasurementAxes: "width,height",
+      active: true,
+    },
+  });
   check("Unpublished changes are detected", (await websiteHasUnpublishedChanges(prisma, accessA)) === true);
 
   const sameKey = await publishWebsite(prisma, accessA, { idempotencyKey: "pub-1" });
@@ -631,6 +805,56 @@ try {
   const service = publicServiceFromView(reView, "tv-mounting");
   check("Service slug resolves the tenant service", service?.id === handyService.id);
   check("Unknown service slug is not found", publicServiceFromView(reView, "not-a-service") == null);
+  const persistedSlug = await prisma.serviceCatalogItem.findUnique({
+    where: { id: handyService.id },
+    select: { websiteSlug: true },
+  });
+  check("First publish persists a stable websiteSlug", persistedSlug?.websiteSlug === "tv-mounting");
+  await prisma.serviceCatalogItem.update({
+    where: { id: handyService.id },
+    data: { name: "Living Room Television Install" },
+  });
+  await publishWebsite(prisma, accessA, { idempotencyKey: "pub-rename" });
+  const renamedView = await loadPublicWebsiteView(businessA.slug, prisma);
+  check(
+    "Rename plus republish keeps the same service URL slug",
+    publicServiceFromView(renamedView, "tv-mounting")?.id === handyService.id &&
+      publicServiceFromView(renamedView, "living-room-television-install") == null &&
+      renamedView?.snapshot?.services.find((row) => row.id === handyService.id)?.name ===
+        "Living Room Television Install",
+  );
+  await prisma.serviceCatalogItem.update({
+    where: { id: handyService.id },
+    data: { name: "TV Mounting" },
+  });
+  const dupOne = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Same Name Service",
+      category: "Other Services",
+      tradeCode: "HANDYMAN",
+      active: true,
+    },
+  });
+  const dupTwo = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Same Name Service",
+      category: "Other Services",
+      tradeCode: "HANDYMAN",
+      active: true,
+    },
+  });
+  await publishWebsite(prisma, accessA, { idempotencyKey: "pub-dups" });
+  const dupView = await loadPublicWebsiteView(businessA.slug, prisma);
+  const dupSlugs = (dupView?.snapshot?.services ?? [])
+    .filter((row) => row.id === dupOne.id || row.id === dupTwo.id)
+    .map((row) => row.slug)
+    .sort();
+  check(
+    "Two same-name services receive different stable slugs",
+    dupSlugs.length === 2 && dupSlugs[0] !== dupSlugs[1],
+  );
   check(
     "Local route cannot combine A service and B location",
     publicLocalPageFromView(reView, "tahoe", "tv-mounting") == null,
@@ -668,9 +892,49 @@ try {
   const hostB = await resolvePublicHost(prisma, hostBName);
   const hostUnknown = await resolvePublicHost(prisma, `nobody-${randomUUID().slice(0, 8)}.example.test`);
   check("Verified host for A resolves A", hostA.kind === "tenant" && hostA.businessId === businessA.id && hostA.slug === businessA.slug);
-  check("UNVERIFIED host for B does not resolve", hostB.kind === "unknown");
+  check("UNVERIFIED host for B does not resolve", hostB.kind === "unverified");
   check("Unknown host fails closed", hostUnknown.kind === "unknown");
   check("Host for A cannot resolve B snapshot", hostA.kind !== "tenant" || hostA.businessId !== businessB.id);
+  const hostBVerifiedName = `beta-ok-${randomUUID().slice(0, 8)}.example.test`;
+  await prisma.websiteHostBinding.create({
+    data: { businessId: businessB.id, hostname: hostBVerifiedName, status: "VERIFIED" },
+  });
+  const rootA = await resolvePublicRoot(prisma, hostAName);
+  const rootB = await resolvePublicRoot(prisma, hostBVerifiedName);
+  const rootUnverified = await resolvePublicRoot(prisma, hostBName);
+  const rootUnknown = await resolvePublicRoot(prisma, `nobody-${randomUUID().slice(0, 8)}.example.test`);
+  const rootMarketing = await resolvePublicRoot(prisma, "www.tbbtool.com");
+  const rootCollpro = await resolvePublicRoot(prisma, "www.collproreno.com");
+  check(
+    "Verified host A root renders tenant A",
+    rootA.kind === "site" && rootA.slug === businessA.slug && rootA.origin === `https://${hostAName}`,
+  );
+  check(
+    "Verified host B root renders tenant B",
+    rootB.kind === "site" && rootB.slug === businessB.slug && rootB.origin === `https://${hostBVerifiedName}`,
+  );
+  check("Unverified custom host fails closed at /", rootUnverified.kind === "unknown");
+  check("Unknown custom host fails closed at /", rootUnknown.kind === "unknown");
+  check("Marketing host stays on TBBT marketing", rootMarketing.kind === "marketing");
+  check("CollPro host stays on CollPro", rootCollpro.kind === "site" && rootCollpro.slug === "collpro-reno");
+  const originA = authorizedPublicOrigin(hostA, hostAName);
+  const originB = authorizedPublicOrigin(await resolvePublicHost(prisma, hostBVerifiedName), hostBVerifiedName);
+  check(
+    "Canonical host isolation uses the authorized public origin",
+    originA === `https://${hostAName}` &&
+      originB === `https://${hostBVerifiedName}` &&
+      publicCanonicalUrl(businessA.slug, "/", originA) === `https://${hostAName}/` &&
+      publicCanonicalUrl(businessB.slug, "/", originB) === `https://${hostBVerifiedName}/` &&
+      publicCanonicalUrl(businessA.slug, "/", originA) !== publicCanonicalUrl(businessB.slug, "/", originB),
+  );
+  const sitemapA = publishedSitemapPaths(dupView.snapshot ?? reView.snapshot).map((path) =>
+    publicCanonicalUrl(businessA.slug, path, originA),
+  );
+  check(
+    "Sitemap host isolation keeps tenant A URLs on host A",
+    sitemapA.every((url) => url.startsWith(`https://${hostAName}`)) &&
+      !sitemapA.some((url) => url.includes(hostBVerifiedName) || url.includes(businessB.slug)),
+  );
 
   const [c1, c2] = await Promise.all([
     publishWebsite(prisma, accessA, { idempotencyKey: "conc-1" }),
@@ -722,6 +986,114 @@ try {
   const publicAfterLaterDraft = await loadPublicWebsiteView(businessA.slug, prisma);
   check("Later AI draft does not alter current public snapshot", publicAfterLaterDraft?.snapshot?.home.headline === appliedText);
 
+  const formRetry = new FormData();
+  formRetry.set("idempotencyKey", "form-retry-1");
+  const formFirst = await publishWebsiteFromForm(prisma, accessA, formRetry);
+  const formSecond = await publishWebsiteFromForm(prisma, accessA, formRetry);
+  check(
+    "Same publish form retry keeps one logical version",
+    formFirst.id === formSecond.id && formFirst.versionNumber === formSecond.versionNumber,
+  );
+  await expectError(
+    "Publish form without a client attempt key is rejected",
+    () => publishWebsiteFromForm(prisma, accessA, new FormData()),
+    (error) => error instanceof WebsitePublishError,
+  );
+  const formNext = new FormData();
+  formNext.set("idempotencyKey", "form-retry-2");
+  const formThird = await publishWebsiteFromForm(prisma, accessA, formNext);
+  check(
+    "A new publish form attempt id creates the next version",
+    formThird.versionNumber === formFirst.versionNumber + 1 && formThird.id !== formFirst.id,
+  );
+  const rollbackForm = new FormData();
+  rollbackForm.set("publishId", first.id);
+  rollbackForm.set("idempotencyKey", "form-rb-1");
+  const formRollback = await rollbackWebsiteFromForm(prisma, accessA, rollbackForm);
+  const formRollbackRetry = await rollbackWebsiteFromForm(prisma, accessA, rollbackForm);
+  check(
+    "Same rollback form retry keeps one logical version",
+    formRollback.id === formRollbackRetry.id && formRollback.versionNumber === formRollbackRetry.versionNumber,
+  );
+  await expectError(
+    "Rollback form without a client attempt key is rejected",
+    () => {
+      const missing = new FormData();
+      missing.set("publishId", first.id);
+      return rollbackWebsiteFromForm(prisma, accessA, missing);
+    },
+    (error) => error instanceof WebsitePublishError,
+  );
+  const staleAsset = await prisma.storedAsset.create({
+    data: {
+      businessId: businessA.id,
+      storageAccountId: storageA.id,
+      category: "WEBSITE_IMAGE",
+      originalFilename: "stale.jpg",
+      storageKey: `public/${randomUUID()}.jpg`,
+      mimeType: "image/jpeg",
+      fileSizeBytes: 400,
+      visibility: "PRIVATE",
+      status: "DELETED",
+      publicPath: null,
+    },
+  });
+  await prisma.publicSiteImage.create({
+    data: {
+      businessId: businessA.id,
+      page: "home",
+      slot: "stale-hero",
+      imageUrl: "/stale-old.jpg",
+      storedAssetId: staleAsset.id,
+    },
+  });
+  const stalePub = await publishWebsite(prisma, accessA, { idempotencyKey: "pub-stale-skip" });
+  const staleView = await loadPublicWebsiteView(businessA.slug, prisma);
+  check(
+    "Stale managed PublicSiteImage is not snapshotted",
+    stalePub.versionNumber > 0 &&
+      staleView?.snapshot?.images.every((row) => row.assetId !== staleAsset.id && row.imageUrl !== "/stale-old.jpg") === true,
+  );
+  await saveWebsiteSeoDraft(prisma, accessA, {
+    websiteHeroHeadline: "SEO home headline",
+    websiteHeroSupporting: "SEO home supporting",
+    seoTitleHome: "Alpha Home SEO",
+    seoDescriptionHome: "Frozen home SEO for Alpha.",
+    seoTitleServices: "Alpha Services SEO",
+    seoDescriptionServices: "Frozen services SEO.",
+    seoTitleAbout: "Alpha About SEO",
+    seoDescriptionAbout: "Frozen about SEO.",
+    seoTitleRequest: "Ask Alpha",
+    seoDescriptionRequest: "Frozen request SEO for Alpha.",
+  });
+  await publishWebsite(prisma, accessA, { idempotencyKey: "pub-seo" });
+  const seoView = await loadPublicWebsiteView(businessA.slug, prisma);
+  const requestMeta = seoView?.snapshot
+    ? snapshotPageMetadata({
+        snapshot: seoView.snapshot,
+        page: seoView.snapshot.seo.request,
+        pathname: `/r/${businessA.slug}`,
+        origin: originA,
+      })
+    : null;
+  check(
+    "Snapshot request SEO is frozen and used for /r metadata",
+    seoView?.snapshot?.seo.request.title === "Ask Alpha" &&
+      seoView?.snapshot?.seo.request.description === "Frozen request SEO for Alpha." &&
+      requestMeta?.title?.absolute === "Ask Alpha" &&
+      requestMeta?.openGraph?.url === `https://${hostAName}/r/${businessA.slug}`,
+  );
+  check(
+    "Snapshot home SEO is frozen for the published site",
+    seoView?.snapshot?.seo.home.title === "Alpha Home SEO",
+  );
+  const requestSchemas = seoView?.snapshot ? snapshotIntakeSchemasByTrade(seoView.snapshot) : {};
+  check(
+    "Snapshot request page uses the frozen trade intake projection",
+    requestSchemas.HANDYMAN?.key === "handyman.public" &&
+      requestSchemas.HANDYMAN?.fields.some((field) => field.key === "frequency") === true,
+  );
+
   const exported = await buildBusinessExportZip(prisma, businessA.id);
   const zipText = exported.bytes.toString("utf8");
   check("Export includes website publish snapshots", zipText.includes("website-publishes.json") && zipText.includes("TV Mounting"));
@@ -757,6 +1129,117 @@ try {
   const cleanView = await loadPublicWebsiteView(cleaningOnly.slug, prisma);
   check("Cleaning-only publish works", cleanPub.versionNumber === 1 && cleanView?.snapshot?.trades.every((row) => row.code === "CLEANING"));
   check("Cleaning-only snapshot has the Cleaning service", cleanView?.snapshot?.services.some((row) => row.name === "Move-out Clean") === true);
+  const cleaningCopy = publishedLocalBusinessDescription({
+    name: "Gamma Clean",
+    trades: cleanView?.snapshot?.trades ?? [],
+  });
+  const cleaningHero = publishedServicesHeroDescription({
+    name: "Gamma Clean",
+    trades: cleanView?.snapshot?.trades ?? [],
+  });
+  const cleaningProjects = publishedProjectsDescription({
+    name: "Gamma Clean",
+    trades: cleanView?.snapshot?.trades ?? [],
+  });
+  check(
+    "Cleaning-only public copy is never labeled Handyman",
+    cleaningCopy.includes("Cleaning") &&
+      !snapshotContainsHandymanClaim(cleaningCopy) &&
+      !snapshotContainsHandymanClaim(cleaningHero) &&
+      !snapshotContainsHandymanClaim(cleaningProjects) &&
+      !snapshotContainsHandymanClaim(JSON.stringify(cleanView?.snapshot?.seo ?? {})),
+  );
+
+  const liveOnly = await prisma.business.create({
+    data: { name: "Live Compat", slug: `live-we-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
+  });
+  const liveUser = await prisma.user.create({
+    data: { name: "Live", email: `we-l-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const memL = await prisma.membership.create({
+    data: { userId: liveUser.id, businessId: liveOnly.id, role: "OWNER" },
+  });
+  const accessL = makeAccess(liveOnly.id, memL.id);
+  await activateBusinessTradeOp(prisma, accessL, "HANDYMAN");
+  const liveService = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: liveOnly.id,
+      name: "Live Only Job",
+      category: "Other Services",
+      tradeCode: "HANDYMAN",
+      active: true,
+      intakeMeasurementMode: "RECOMMENDED",
+      intakeMeasurementAxes: "width,height",
+    },
+  });
+  const liveView = await loadPublicWebsiteView(liveOnly.slug, prisma);
+  check("Compatibility tenant still uses the live catalog", liveView?.source === "compatibility");
+  await prisma.serviceCatalogItem.update({
+    where: { id: liveService.id },
+    data: { name: "Live Changed Job", intakeMeasurementMode: "NONE", active: false },
+  });
+  const liveAfter = await loadPublicWebsiteView(liveOnly.slug, prisma);
+  check(
+    "Compatibility tenant follows live draft rules",
+    liveAfter?.source === "compatibility" &&
+      liveAfter?.site.items.some((row) => row.id === liveService.id) !== true,
+  );
+
+  const ghost = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Published Then Hidden",
+      category: "Other Services",
+      tradeCode: "HANDYMAN",
+      active: true,
+      intakeMeasurementMode: "RECOMMENDED",
+      intakeMeasurementAxes: "width,height",
+      intakeMeasurementUnit: "IN",
+    },
+  });
+  await publishWebsite(prisma, accessA, { idempotencyKey: "pub-ghost" });
+  await prisma.serviceCatalogItem.update({
+    where: { id: ghost.id },
+    data: { active: false, name: "Hidden Draft", intakeMeasurementMode: "NONE" },
+  });
+  const ghostView = await loadPublicWebsiteView(businessA.slug, prisma);
+  check(
+    "Current public form keeps the currently published service",
+    ghostView?.source === "snapshot" &&
+      ghostView.site.items.some((row) => row.id === ghost.id && row.name === "Published Then Hidden") === true,
+  );
+  const ghostSubmit = await createPublicServiceRequest(prisma, {
+    slug: businessA.slug,
+    name: "Ghost Keep",
+    email: `ghost-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "555-0101",
+    address: "",
+    streetAddress: "11 Snapshot St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Still the published service.",
+    catalogItemIds: [ghost.id],
+    includeOther: false,
+    otherDescription: "",
+    measurements: [{ catalogItemId: ghost.id, width: "12", height: "8", unit: "IN" }],
+    intakeAnswers: { frequency: "ONE_TIME" },
+  });
+  check("Request for the currently published service stays consistent", ghostSubmit.ok === true);
+  await publishWebsite(prisma, accessA, { idempotencyKey: "pub-ghost-gone" });
+  const goneView = await loadPublicWebsiteView(businessA.slug, prisma);
+  check(
+    "Next Publish removes a service that is no longer offered",
+    goneView?.site.items.some((row) => row.id === ghost.id) !== true,
+  );
+  const tenantASlug = publicServiceFromView(goneView, "tv-mounting");
+  const viewB = await loadPublicWebsiteView(businessB.slug, prisma);
+  check(
+    "Tenant A slug never resolves tenant B service",
+    tenantASlug?.id === handyService.id &&
+      publicServiceFromView(goneView, "beta-fence-repair")?.id !== serviceB.id &&
+      publicServiceFromView(viewB, "tv-mounting")?.id !== handyService.id,
+  );
 } catch (error) {
   failed += 1;
   console.error("FAIL - website engine live suite", error);

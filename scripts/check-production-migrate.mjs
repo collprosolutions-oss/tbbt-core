@@ -607,6 +607,17 @@ check(
     !workspaceLoader.includes("website_engine"),
 );
 
+const websiteSlugMigration = readFileSync(
+  new URL("../prisma/migrations/20260925191000_website_service_slug/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Website service slug migration is additive and lazily backfills",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(websiteSlugMigration) &&
+    websiteSlugMigration.includes('ADD COLUMN IF NOT EXISTS "websiteSlug"') &&
+    websiteSlugMigration.includes("IF NOT EXISTS"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

@@ -37,6 +37,7 @@ export type SettingsWorkspaceProps = {
     }>;
     reviews: Array<{ id: string; reviewText: string; websiteSelected: boolean }>;
     galleryAssets: Array<{ id: string; publicPath: string | null }>;
+    galleryItems: Array<{ id: string; title: string; caption: string; imageUrl: string | null }>;
     localPairs: Array<{
       serviceAreaId: string;
       catalogItemId: string;

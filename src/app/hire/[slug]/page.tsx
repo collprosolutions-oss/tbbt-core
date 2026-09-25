@@ -18,6 +18,13 @@ import {
 } from "@/lib/public-site-seo";
 import { snapshotToImageRows } from "@/lib/website-engine/public";
 import { viewHomeMetadata } from "@/lib/website-engine/seo";
+import {
+  publishedHeroImageAlt,
+  publishedLocalBusinessDescription,
+  publishedServicesHeadline,
+} from "@/lib/website-engine/copy";
+import { publicOriginForSlug } from "@/lib/website-engine/hosts";
+import { readRequestHost } from "@/lib/request-host";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +36,8 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const { slug } = await params;
   const view = await requirePublicWebsiteView(slug);
   const site: Awaited<ReturnType<typeof requirePublicSite>> = view.site;
-  const snapshotMeta = viewHomeMetadata(view, publicHomePath(site.business.slug));
+  const origin = await publicOriginForSlug(prisma, site.business.slug, await readRequestHost());
+  const snapshotMeta = viewHomeMetadata(view, publicHomePath(site.business.slug), origin);
   if (snapshotMeta) return snapshotMeta;
   const name = publicDisplayName(site.business);
   return publicTenantPageMetadata({
@@ -37,6 +45,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     title: `${name} | Services`,
     description: publicSiteMetaDescription(site.business, view.about),
     pathname: publicHomePath(site.business.slug),
+    origin,
   });
 }
 
@@ -49,12 +58,20 @@ export default async function PublicHirePage({ params }: PageProps) {
     ? buildPublicHomeImagePresentation(site.groups, snapshotToImageRows(view.snapshot))
     : await loadPublicHomeImages(prisma, site.business.id, site.groups);
   const name = publicDisplayName(site.business);
+  const origin = await publicOriginForSlug(prisma, site.business.slug, await readRequestHost());
   const jsonLd = localBusinessJsonLd({
     name,
     slug: site.business.slug,
     phone: publicPhone(site.business),
     logoSrc: publicLogoSrc(site.business.slug),
-    description: `Handyman services from ${name}. Request repairs, installations, mounting, carpentry, and other home projects.`,
+    description: view.snapshot
+      ? publishedLocalBusinessDescription({
+          name,
+          trades: view.snapshot.trades,
+          area: view.snapshot.business.publicServiceAreaLabel,
+        })
+      : `Handyman services from ${name}. Request repairs, installations, mounting, carpentry, and other home projects.`,
+    origin,
   });
 
   return (
@@ -70,6 +87,12 @@ export default async function PublicHirePage({ params }: PageProps) {
         images={homeImages}
         headline={view.snapshot?.home.headline}
         supporting={view.snapshot?.home.supporting}
+        servicesHeading={
+          view.snapshot ? publishedServicesHeadline(view.snapshot.trades) : undefined
+        }
+        heroImageAlt={
+          view.snapshot ? publishedHeroImageAlt(view.snapshot.trades) : undefined
+        }
       />
     </PublicSiteShell>
   );

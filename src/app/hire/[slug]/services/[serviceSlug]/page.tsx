@@ -17,6 +17,9 @@ import {
 import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { publicServiceFromView } from "@/lib/website-engine/public";
+import { publicOriginForSlug } from "@/lib/website-engine/hosts";
+import { readRequestHost } from "@/lib/request-host";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -30,11 +33,13 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     return { title: { absolute: "Not found" }, robots: { index: false, follow: false } };
   }
   const name = publicDisplayName(view.site.business);
+  const origin = await publicOriginForSlug(prisma, view.site.business.slug, await readRequestHost());
   return publicTenantPageMetadata({
     business: view.site.business,
     title: `${service.name} | ${name}`,
     description: service.description || `Request ${service.name} from ${name}.`,
     pathname: publicServiceDetailPath(view.site.business.slug, service.slug),
+    origin,
   });
 }
 

@@ -15,6 +15,10 @@ import {
 } from "@/lib/public-site";
 import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
+import { publishedProjectsDescription } from "@/lib/website-engine/copy";
+import { publicOriginForSlug } from "@/lib/website-engine/hosts";
+import { readRequestHost } from "@/lib/request-host";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -25,11 +29,15 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const view = await requirePublicWebsiteView(slug);
   const site = view.site;
   const name = publicDisplayName(site.business);
+  const origin = await publicOriginForSlug(prisma, site.business.slug, await readRequestHost());
   return publicTenantPageMetadata({
     business: site.business,
     title: `Projects | ${name}`,
-    description: `Recent handyman and home-improvement project photos from ${name}.`,
+    description: view.snapshot
+      ? publishedProjectsDescription({ name, trades: view.snapshot.trades })
+      : `Recent handyman and home-improvement project photos from ${name}.`,
     pathname: publicProjectsPath(site.business.slug),
+    origin,
   });
 }
 

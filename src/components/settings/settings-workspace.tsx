@@ -249,6 +249,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
             versions={websitePublish.versions}
             reviews={websitePublish.reviews}
             galleryAssets={websitePublish.galleryAssets}
+            galleryItems={websitePublish.galleryItems}
             localPairs={websitePublish.localPairs}
             seo={websitePublish.seo}
           />

@@ -567,20 +567,25 @@ export function localBusinessJsonLd(input: {
   phone: string | null;
   logoSrc: string | null;
   description: string;
+  origin?: string | null;
+  url?: string | null;
 }) {
-  const origin = getTenantAppOrigin(input.slug);
+  const origin = input.origin || getTenantAppOrigin(input.slug);
   const data: Record<string, unknown> = {
     "@context": "https://schema.org",
     "@type": "LocalBusiness",
     name: input.name,
     description: input.description,
-    url: tenantPublicSiteUrl(input.slug),
+    url: input.url || tenantPublicSiteUrl(input.slug),
   };
   if (input.phone) {
     data.telephone = input.phone;
   }
   if (input.logoSrc && origin) {
-    data.image = `${origin}${input.logoSrc}`;
+    const imageOrigin = origin.replace(/\/$/, "");
+    data.image = input.logoSrc.startsWith("http")
+      ? input.logoSrc
+      : `${imageOrigin}${input.logoSrc}`;
   }
   return data;
 }
