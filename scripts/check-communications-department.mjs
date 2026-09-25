@@ -180,11 +180,11 @@ try {
   const pageSrc = readFileSync(new URL("../src/app/(app)/communications/page.tsx", import.meta.url), "utf8");
   const actionSrc = readFileSync(new URL("../src/app/actions/communications.ts", import.meta.url), "utf8");
   const migrationSrc = readFileSync(
-    new URL("../prisma/migrations/20260925220000_communications_department/migration.sql", import.meta.url),
+    new URL("../prisma/migrations/20260926020000_communications_department/migration.sql", import.meta.url),
     "utf8",
   );
   const relationMigrationSrc = readFileSync(
-    new URL("../prisma/migrations/20260925230000_phone_interaction_relations/migration.sql", import.meta.url),
+    new URL("../prisma/migrations/20260926030000_phone_interaction_relations/migration.sql", import.meta.url),
     "utf8",
   );
   const capabilitiesSrc = readFileSync(

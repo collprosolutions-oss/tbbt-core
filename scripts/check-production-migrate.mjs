@@ -690,7 +690,7 @@ check(
 );
 
 const communicationsDepartmentMigration = readFileSync(
-  new URL("../prisma/migrations/20260925220000_communications_department/migration.sql", import.meta.url),
+  new URL("../prisma/migrations/20260926020000_communications_department/migration.sql", import.meta.url),
   "utf8",
 );
 check(
@@ -721,7 +721,7 @@ check(
 );
 
 const phoneInteractionRelationsMigration = readFileSync(
-  new URL("../prisma/migrations/20260925230000_phone_interaction_relations/migration.sql", import.meta.url),
+  new URL("../prisma/migrations/20260926030000_phone_interaction_relations/migration.sql", import.meta.url),
   "utf8",
 );
 check(
@@ -854,6 +854,21 @@ check(
       localNames.indexOf("20260926011500_add_materials_suppliers_operations") &&
     localNames.indexOf("20260925230000_financial_truth_corrections") <
       localNames.indexOf("20260926011500_add_materials_suppliers_operations"),
+);
+check(
+  "Communications migrations stay after Financial, Workforce, and Materials",
+  localNames.includes("20260926020000_communications_department") &&
+    localNames.includes("20260926030000_phone_interaction_relations") &&
+    localNames.indexOf("20260925220000_financial_profit_intelligence") <
+      localNames.indexOf("20260926020000_communications_department") &&
+    localNames.indexOf("20260925220000_scheduling_workforce_intelligence") <
+      localNames.indexOf("20260926020000_communications_department") &&
+    localNames.indexOf("20260925230000_workforce_foreign_keys") <
+      localNames.indexOf("20260926020000_communications_department") &&
+    localNames.indexOf("20260926011500_add_materials_suppliers_operations") <
+      localNames.indexOf("20260926020000_communications_department") &&
+    localNames.indexOf("20260926020000_communications_department") <
+      localNames.indexOf("20260926030000_phone_interaction_relations"),
 );
 
 const materialsMigration = readFileSync(
