@@ -277,7 +277,7 @@ export async function authorizedOwnerLogLeadTradeCodes(
   businessId: string,
 ): Promise<TradeCode[]> {
   const active = await listActiveBusinessTrades(
-    db as PrismaClient | Prisma.TransactionClient,
+    db as unknown as PrismaClient | Prisma.TransactionClient,
     businessId,
   );
   if (active.length > 0) return active.map((row) => row.tradeCode);
