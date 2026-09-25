@@ -735,11 +735,18 @@ export async function loadMaterialsProjection(input: {
       prices.push(ref);
     }
     if (materialPrices.length > 0) {
-      pricesByIdentity.set(mapping.materialIdentity, materialPrices);
-      freshnessRows.push({
-        materialKey: mapping.materialIdentity,
-        freshness: materialPrices[0]?.freshness ?? "unavailable",
-      });
+      const existing = pricesByIdentity.get(mapping.materialIdentity) ?? [];
+      const merged = capInMemory(
+        [...existing, ...materialPrices],
+        MATERIALS_CONTEXT_CAPS.pricesPerMaterial,
+      );
+      pricesByIdentity.set(mapping.materialIdentity, merged);
+      if (existing.length === 0) {
+        freshnessRows.push({
+          materialKey: mapping.materialIdentity,
+          freshness: materialPrices[0]?.freshness ?? "unavailable",
+        });
+      }
     }
   }
 
