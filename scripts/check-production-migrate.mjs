@@ -766,7 +766,7 @@ check(
 );
 
 const knowledgeLaunchMigration = readFileSync(
-  new URL("../prisma/migrations/20260925220000_knowledge_business_launch/migration.sql", import.meta.url),
+  new URL("../prisma/migrations/20260926060000_knowledge_business_launch/migration.sql", import.meta.url),
   "utf8",
 );
 check(
@@ -785,7 +785,7 @@ check(
 );
 
 const knowledgeLaunchHardeningMigration = readFileSync(
-  new URL("../prisma/migrations/20260925230000_knowledge_launch_hardening/migration.sql", import.meta.url),
+  new URL("../prisma/migrations/20260926070000_knowledge_launch_hardening/migration.sql", import.meta.url),
   "utf8",
 );
 check(
@@ -942,6 +942,15 @@ check(
       localNames.indexOf("20260926040000_growth_department") &&
     localNames.indexOf("20260926040000_growth_department") <
       localNames.indexOf("20260926050000_growth_department_hardening"),
+);
+check(
+  "Knowledge/Business Launch migrations stay after Growth",
+  localNames.includes("20260926060000_knowledge_business_launch") &&
+    localNames.includes("20260926070000_knowledge_launch_hardening") &&
+    localNames.indexOf("20260926050000_growth_department_hardening") <
+      localNames.indexOf("20260926060000_knowledge_business_launch") &&
+    localNames.indexOf("20260926060000_knowledge_business_launch") <
+      localNames.indexOf("20260926070000_knowledge_launch_hardening"),
 );
 
 const materialsMigration = readFileSync(
