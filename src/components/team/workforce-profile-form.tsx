@@ -75,7 +75,7 @@ export function WorkforceProfileForm({ member }: { member: WorkforceMember }) {
           <Input
             id={`notes-${member.membershipId}`}
             name="workforceNotes"
-            defaultValue=""
+            defaultValue={member.workforceNotes}
             placeholder="Owner notes only"
           />
         </div>

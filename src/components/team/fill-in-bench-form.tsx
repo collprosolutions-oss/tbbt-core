@@ -138,8 +138,12 @@ export function StaffingOutreachForm({
       <input type="hidden" name="explanation" value={explanation} />
       <input type="hidden" name="approve" value="1" />
       <Button type="submit" size="sm" variant="outline" disabled={pending}>
-        {pending ? "Saving…" : "Create owner-approved outreach task"}
+        {pending ? "Saving…" : "Create staffing outreach task"}
       </Button>
+      <p className="text-xs text-muted-foreground">
+        Creates one outreach task. Owner approval is recorded only when an owner
+        submits. No message is sent.
+      </p>
       {state.message ? <p className="text-xs text-muted-foreground">{state.message}</p> : null}
       {state.error ? <p className="text-xs text-destructive">{state.error}</p> : null}
     </form>

@@ -17,7 +17,7 @@ import {
 } from "@/lib/availability";
 import { DURATION_PRESETS, parseDurationMinutes } from "@/lib/job-schedule";
 import { formatISODate } from "@/lib/schedule";
-import { WORKFORCE_SKILLS } from "@/lib/workforce";
+import { WORKFORCE_PROGRESSIONS, WORKFORCE_SKILLS, formatProgression } from "@/lib/workforce";
 
 const initialState: JobActionState = {};
 
@@ -40,6 +40,7 @@ export function ScheduleJobForm({
   availability,
   pickupDurationMinutes = 0,
   requiredSkills = [],
+  requiredProgression = "",
   appointmentNote,
 }: {
   jobId: string;
@@ -52,6 +53,7 @@ export function ScheduleJobForm({
   availability?: AvailabilitySnapshot | null;
   pickupDurationMinutes?: number;
   requiredSkills?: string[];
+  requiredProgression?: string;
   appointmentNote?: string | null;
 }) {
   const [state, formAction, pending] = useActionState(
@@ -228,6 +230,25 @@ export function ScheduleJobForm({
       </div>
       {appointmentNote ? <p className="text-xs text-muted-foreground">{appointmentNote}</p> : null}
       <div className="space-y-2">
+        <Label htmlFor={`progression-${jobId}`}>Required progression</Label>
+        <select
+          id={`progression-${jobId}`}
+          name="requiredProgression"
+          defaultValue={requiredProgression}
+          className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+        >
+          <option value="">No progression floor</option>
+          {WORKFORCE_PROGRESSIONS.map((value) => (
+            <option key={value} value={value}>
+              {formatProgression(value)}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-muted-foreground">
+          Recommendations honor this floor. The owner can still assign any active MEMBER.
+        </p>
+      </div>
+      <div className="space-y-2">
         <p className="text-sm font-medium">Required skills</p>
         <div className="grid gap-2 sm:grid-cols-2">
           {WORKFORCE_SKILLS.map((skill) => (
@@ -252,16 +273,13 @@ export function ScheduleJobForm({
               ? "Reschedule"
               : "Schedule Job"}
         </Button>
-        {state.warning ? (
-          <Button
-            type="submit"
-            name="confirmOverlap"
-            value="1"
-            variant="outline"
-            disabled={pending}
-          >
-            Schedule anyway
-          </Button>
+        {state.warning && state.conflictAck ? (
+          <>
+            <input type="hidden" name="confirmOverlapAck" value={state.conflictAck} />
+            <Button type="submit" variant="outline" disabled={pending}>
+              Schedule anyway
+            </Button>
+          </>
         ) : null}
       </div>
     </form>

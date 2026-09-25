@@ -1,21 +1,24 @@
 /**
  * Tenant-scoped workforce / capacity loaders.
  * Every query is keyed by the authenticated businessId.
+ * Schema ownership is the Prisma migration — these paths never run DDL.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { loadAvailabilitySettings } from "@/lib/availability-data";
-import { addDays, startOfDay } from "@/lib/schedule";
+import { resolveBusinessTimeZone, startOfZonedDay, addZonedCalendarDays } from "@/lib/business-timezone";
 import {
+  isAssignableFieldMember,
   parseSkillList,
   parseWorkforceProgression,
   schedulingPolicyFromRow,
   type FillInBenchRecord,
   type SchedulingPolicy,
   type WorkforceMember,
+  type WorkforceMemberRole,
 } from "@/lib/workforce";
 import { buildWorkforceRecommendations } from "@/lib/workforce-agent";
 import {
-  calculateWeeklyCapacity,
+  calculateTeamWeeklyCapacity,
   type CapacityJob,
 } from "@/lib/workforce-capacity";
 import {
@@ -26,52 +29,10 @@ import { recommendAssignees } from "@/lib/workforce-matching";
 
 type WorkforceClient = PrismaClient | Prisma.TransactionClient;
 
-const ENSURE_WORKFORCE_SQL = [
-  `ALTER TABLE "Membership" ADD COLUMN IF NOT EXISTS "schedulingActive" BOOLEAN NOT NULL DEFAULT true`,
-  `ALTER TABLE "Membership" ADD COLUMN IF NOT EXISTS "progression" TEXT NOT NULL DEFAULT 'CAPABLE'`,
-  `ALTER TABLE "Membership" ADD COLUMN IF NOT EXISTS "maxDailyJobMinutes" INTEGER`,
-  `ALTER TABLE "Membership" ADD COLUMN IF NOT EXISTS "preferredJobTypes" TEXT NOT NULL DEFAULT ''`,
-  `ALTER TABLE "Membership" ADD COLUMN IF NOT EXISTS "allowedJobTypes" TEXT NOT NULL DEFAULT ''`,
-  `ALTER TABLE "Membership" ADD COLUMN IF NOT EXISTS "workforceNotes" TEXT NOT NULL DEFAULT ''`,
-  `ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "pickupDurationMinutes" INTEGER`,
-  `ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "arrivalWindowMinutes" INTEGER`,
-  `ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "requiredSkills" TEXT NOT NULL DEFAULT ''`,
-  `ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "requiredProgression" TEXT NOT NULL DEFAULT ''`,
-  `ALTER TABLE "BusinessSettings" ADD COLUMN IF NOT EXISTS "firstAppointmentMode" TEXT NOT NULL DEFAULT 'EXACT'`,
-  `ALTER TABLE "BusinessSettings" ADD COLUMN IF NOT EXISTS "laterAppointmentMode" TEXT NOT NULL DEFAULT 'WINDOW'`,
-  `ALTER TABLE "BusinessSettings" ADD COLUMN IF NOT EXISTS "defaultArrivalWindowMinutes" INTEGER NOT NULL DEFAULT 120`,
-  `ALTER TABLE "BusinessSettings" ADD COLUMN IF NOT EXISTS "dayBeforeChangeCutoffHours" INTEGER NOT NULL DEFAULT 24`,
-  `ALTER TABLE "BusinessSettings" ADD COLUMN IF NOT EXISTS "defaultPickupMinutes" INTEGER NOT NULL DEFAULT 0`,
-  `ALTER TABLE "BusinessSettings" ADD COLUMN IF NOT EXISTS "travelPlaceholderMinutes" INTEGER NOT NULL DEFAULT 0`,
-  `ALTER TABLE "BusinessSettings" ADD COLUMN IF NOT EXISTS "helperRecommendationThresholdMinutes" INTEGER NOT NULL DEFAULT 60`,
-  `ALTER TABLE "BusinessSettings" ADD COLUMN IF NOT EXISTS "overloadThresholdPercent" INTEGER NOT NULL DEFAULT 90`,
-];
-
-let ensureSchemaPromise: Promise<void> | null = null;
-
-export function resetWorkforceSchemaEnsure() {
-  ensureSchemaPromise = null;
-}
-
-export async function ensureWorkforceSchema(db: WorkforceClient) {
-  if (!ensureSchemaPromise) {
-    ensureSchemaPromise = (async () => {
-      for (const statement of ENSURE_WORKFORCE_SQL) {
-        await db.$executeRawUnsafe(statement);
-      }
-    })().catch((error) => {
-      ensureSchemaPromise = null;
-      throw error;
-    });
-  }
-  await ensureSchemaPromise;
-}
-
 export async function loadSchedulingPolicy(
   db: WorkforceClient,
   businessId: string,
 ): Promise<SchedulingPolicy> {
-  await ensureWorkforceSchema(db);
   const row = await db.businessSettings.findUnique({
     where: { businessId },
     select: {
@@ -90,12 +51,14 @@ export async function loadSchedulingPolicy(
 
 function toWorkforceMember(row: {
   id: string;
+  role: string;
   active: boolean;
   schedulingActive: boolean;
   progression: string;
   maxDailyJobMinutes: number | null;
   preferredJobTypes: string;
   allowedJobTypes: string;
+  workforceNotes: string;
   user: { name: string };
   workforceSkills: Array<{ skillKey: string; proficiency: string }>;
   weeklyAvailability: Array<{ weekday: number; startMinutes: number; endMinutes: number }>;
@@ -109,22 +72,24 @@ function toWorkforceMember(row: {
   return {
     membershipId: row.id,
     name: row.user.name,
+    role: row.role as WorkforceMemberRole,
     active: row.active,
     schedulingActive: row.schedulingActive,
     progression: parseWorkforceProgression(row.progression),
     maxDailyJobMinutes: row.maxDailyJobMinutes,
     preferredJobTypes: parseSkillList(row.preferredJobTypes),
     allowedJobTypes: parseSkillList(row.allowedJobTypes),
+    workforceNotes: row.workforceNotes,
     skills: row.workforceSkills.map((skill) => ({
       skillKey: skill.skillKey,
       proficiency: parseWorkforceProgression(skill.proficiency),
     })),
     weeklyAvailability: row.weeklyAvailability,
-    exceptions: row.availabilityExceptions.map((row) => ({
-      date: row.date,
-      kind: row.kind === "AVAILABLE" ? "AVAILABLE" : "UNAVAILABLE",
-      startMinutes: row.startMinutes,
-      endMinutes: row.endMinutes,
+    exceptions: row.availabilityExceptions.map((exception) => ({
+      date: exception.date,
+      kind: exception.kind === "AVAILABLE" ? "AVAILABLE" : "UNAVAILABLE",
+      startMinutes: exception.startMinutes,
+      endMinutes: exception.endMinutes,
     })),
   };
 }
@@ -133,17 +98,18 @@ export async function loadWorkforceMembers(
   db: WorkforceClient,
   businessId: string,
 ): Promise<WorkforceMember[]> {
-  await ensureWorkforceSchema(db);
   const rows = await db.membership.findMany({
     where: { businessId },
     select: {
       id: true,
+      role: true,
       active: true,
       schedulingActive: true,
       progression: true,
       maxDailyJobMinutes: true,
       preferredJobTypes: true,
       allowedJobTypes: true,
+      workforceNotes: true,
       user: { select: { name: true } },
       workforceSkills: { select: { skillKey: true, proficiency: true } },
       weeklyAvailability: { select: { weekday: true, startMinutes: true, endMinutes: true } },
@@ -160,7 +126,6 @@ export async function loadFillInBench(
   db: WorkforceClient,
   businessId: string,
 ): Promise<FillInBenchRecord[]> {
-  await ensureWorkforceSchema(db);
   const rows = await db.fillInBenchWorker.findMany({
     where: { businessId },
     orderBy: [{ lastUsedAt: "desc" }, { displayName: "asc" }],
@@ -195,6 +160,7 @@ export function capacityJobsFromRows(
     recurrenceSourceJobId?: string | null;
     customer?: { name: string } | null;
     requiredSkills?: string | null;
+    requiredProgression?: string | null;
   }>,
 ): ConflictJob[] {
   return rows.flatMap((row) =>
@@ -214,6 +180,7 @@ export function capacityJobsFromRows(
             recurrenceSourceJobId: row.recurrenceSourceJobId ?? null,
             customerName: row.customer?.name ?? null,
             requiredSkills: parseSkillList(row.requiredSkills),
+            requiredProgression: row.requiredProgression ?? "",
           } satisfies ConflictJob,
         ]
       : [],
@@ -233,6 +200,7 @@ const CAPACITY_JOB_SELECT = {
   nextOccurrenceAt: true,
   recurrenceSourceJobId: true,
   requiredSkills: true,
+  requiredProgression: true,
   customer: { select: { name: true } },
 } as const;
 
@@ -241,7 +209,6 @@ export async function loadCapacityJobs(
   businessId: string,
   range?: { start: Date; end: Date },
 ): Promise<ConflictJob[]> {
-  await ensureWorkforceSchema(db);
   const rows = await db.job.findMany({
     where: {
       businessId,
@@ -264,8 +231,17 @@ export async function loadCapacityJobs(
   return capacityJobsFromRows(rows);
 }
 
+export async function loadWorkforceTimeZone(db: WorkforceClient, businessId: string) {
+  const business = await db.business.findUnique({
+    where: { id: businessId },
+    select: { timezone: true },
+  });
+  return resolveBusinessTimeZone(business);
+}
+
 export async function loadWorkforceSnapshot(db: WorkforceClient, businessId: string, now = new Date()) {
-  const range = { start: startOfDay(now), end: addDays(startOfDay(now), 21) };
+  const timeZone = await loadWorkforceTimeZone(db, businessId);
+  const range = { start: startOfZonedDay(now, timeZone), end: addZonedCalendarDays(startOfZonedDay(now, timeZone), 21, timeZone) };
   const [settings, policy, members, bench, jobs] = await Promise.all([
     loadAvailabilitySettings(db, businessId),
     loadSchedulingPolicy(db, businessId),
@@ -273,13 +249,15 @@ export async function loadWorkforceSnapshot(db: WorkforceClient, businessId: str
     loadFillInBench(db, businessId),
     loadCapacityJobs(db, businessId, range),
   ]);
-  const week = calculateWeeklyCapacity({
+  const week = calculateTeamWeeklyCapacity({
     start: range.start,
     settings,
     policy,
     jobs,
+    members,
+    timeZone,
   });
-  const conflicts = detectScheduleConflicts({ jobs, settings, policy, members });
+  const conflicts = detectScheduleConflicts({ jobs, settings, policy, members, timeZone });
   const recommendations = buildWorkforceRecommendations({
     now,
     settings,
@@ -287,8 +265,9 @@ export async function loadWorkforceSnapshot(db: WorkforceClient, businessId: str
     jobs,
     members,
     bench,
+    timeZone,
   });
-  return { settings, policy, members, bench, jobs, week, conflicts, recommendations };
+  return { settings, policy, members, bench, jobs, week, conflicts, recommendations, timeZone };
 }
 
 export async function loadJobAssignmentSuggestions(
@@ -300,24 +279,28 @@ export async function loadJobAssignmentSuggestions(
     scheduledDurationMinutes: number | null;
     pickupDurationMinutes?: number | null;
     requiredSkills?: string | null;
+    requiredProgression?: string | null;
   },
 ) {
-  const [settings, policy, members, jobs] = await Promise.all([
+  const [settings, policy, members, jobs, timeZone] = await Promise.all([
     loadAvailabilitySettings(db, businessId),
     loadSchedulingPolicy(db, businessId),
     loadWorkforceMembers(db, businessId),
     loadCapacityJobs(db, businessId),
+    loadWorkforceTimeZone(db, businessId),
   ]);
   return recommendAssignees({
     start: job.scheduledAt,
     durationMinutes: job.scheduledDurationMinutes,
     pickupMinutes: job.pickupDurationMinutes ?? 0,
     requiredSkills: parseSkillList(job.requiredSkills),
-    members: members.filter((member) => member.active),
+    requiredProgression: job.requiredProgression ?? "",
+    members: members.filter((member) => isAssignableFieldMember(member)),
     jobs,
     settings,
     policy,
     excludeJobId: job.id,
+    timeZone,
   });
 }
 

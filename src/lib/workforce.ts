@@ -79,15 +79,19 @@ export const DEFAULT_SCHEDULING_POLICY: SchedulingPolicy = {
   overloadThresholdPercent: DEFAULT_OVERLOAD_THRESHOLD_PERCENT,
 };
 
+export type WorkforceMemberRole = "OWNER" | "ADMIN" | "MEMBER";
+
 export type WorkforceMember = {
   membershipId: string;
   name: string;
+  role: WorkforceMemberRole;
   active: boolean;
   schedulingActive: boolean;
   progression: WorkforceProgression;
   maxDailyJobMinutes: number | null;
   preferredJobTypes: string[];
   allowedJobTypes: string[];
+  workforceNotes: string;
   skills: Array<{ skillKey: string; proficiency: WorkforceProgression }>;
   weeklyAvailability: Array<{
     weekday: number;
@@ -101,6 +105,10 @@ export type WorkforceMember = {
     endMinutes: number | null;
   }>;
 };
+
+export function isAssignableFieldMember(member: Pick<WorkforceMember, "role" | "active">) {
+  return member.role === "MEMBER" && member.active;
+}
 
 export type FillInBenchRecord = {
   id: string;
@@ -199,6 +207,83 @@ export function parseOptionalBoundedInt(
   return value;
 }
 
+export class WorkforceValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkforceValidationError";
+  }
+}
+
+export function requireWorkforceProgression(value: string | null | undefined): WorkforceProgression {
+  if (!isWorkforceProgression(value)) {
+    throw new WorkforceValidationError("Choose Learning, Capable, or Lead-qualified.");
+  }
+  return value;
+}
+
+export function requireOptionalWorkforceProgression(
+  value: string | null | undefined,
+): WorkforceProgression | "" {
+  const raw = (value ?? "").trim();
+  if (!raw) return "";
+  return requireWorkforceProgression(raw);
+}
+
+export function requireWorkforceSkillKey(value: string): WorkforceSkillKey {
+  if (!isWorkforceSkillKey(value)) {
+    throw new WorkforceValidationError("Choose a recorded skill from the workforce catalog.");
+  }
+  return value;
+}
+
+export function requireAppointmentMode(value: string | null | undefined): AppointmentMode {
+  if (!(APPOINTMENT_MODES as readonly string[]).includes(value ?? "")) {
+    throw new WorkforceValidationError("First and later appointment modes must be Exact or Window.");
+  }
+  return value as AppointmentMode;
+}
+
+export function requireBenchContactPreference(value: string | null | undefined): BenchContactPreference {
+  if (!(BENCH_CONTACT_PREFERENCES as readonly string[]).includes(value ?? "")) {
+    throw new WorkforceValidationError("Choose a valid bench contact preference.");
+  }
+  return value as BenchContactPreference;
+}
+
+export function requireWeekday(value: number): number {
+  if (!Number.isInteger(value) || value < 0 || value > 6) {
+    throw new WorkforceValidationError("Weekday must be Sunday (0) through Saturday (6).");
+  }
+  return value;
+}
+
+export function requireDayMinutesRange(startMinutes: number, endMinutes: number) {
+  if (
+    !Number.isInteger(startMinutes) ||
+    !Number.isInteger(endMinutes) ||
+    startMinutes < 0 ||
+    endMinutes > MAX_POLICY_MINUTES ||
+    startMinutes >= endMinutes
+  ) {
+    throw new WorkforceValidationError("Availability start must be before end, within the same day.");
+  }
+  return { startMinutes, endMinutes };
+}
+
+export function requireExceptionKind(value: string | null | undefined): "AVAILABLE" | "UNAVAILABLE" {
+  if (value !== "AVAILABLE" && value !== "UNAVAILABLE") {
+    throw new WorkforceValidationError("Availability exception must be available or unavailable.");
+  }
+  return value;
+}
+
+export function requireIsoDate(value: string | null | undefined): string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new WorkforceValidationError("Choose a valid date.");
+  }
+  return value;
+}
+
 export function schedulingPolicyFromRow(
   row:
     | {
@@ -263,26 +348,85 @@ export function schedulingPolicyFromRow(
   };
 }
 
-export function appointmentModeForJob(input: {
-  alreadyScheduled: boolean;
-  policy: SchedulingPolicy;
-}): AppointmentMode {
-  return input.alreadyScheduled
-    ? input.policy.laterAppointmentMode
-    : input.policy.firstAppointmentMode;
+export type AppointmentPosition = "first" | "later";
+export type PickupKind = "known" | "configured" | "none";
+
+export function scheduleLaneKey(assignedMembershipId?: string | null) {
+  return assignedMembershipId ?? "unassigned";
 }
 
+export function appointmentPositionOnDay(input: {
+  start: Date;
+  jobId?: string;
+  assignedMembershipId?: string | null;
+  jobs: Array<{
+    id: string;
+    scheduledAt: Date | null;
+    assignedMembershipId?: string | null;
+    status?: string | null;
+  }>;
+  dateKey: (date: Date) => string;
+}): AppointmentPosition {
+  const lane = scheduleLaneKey(input.assignedMembershipId);
+  const dayKey = input.dateKey(input.start);
+  const peers = input.jobs.filter((job) => {
+    if (!job.scheduledAt || job.status === "COMPLETED") return false;
+    if (job.id === input.jobId) return false;
+    if (input.dateKey(job.scheduledAt) !== dayKey) return false;
+    return scheduleLaneKey(job.assignedMembershipId) === lane;
+  });
+  const earliestPeer = peers.reduce<Date | null>((earliest, job) => {
+    if (!job.scheduledAt) return earliest;
+    if (!earliest || job.scheduledAt.getTime() < earliest.getTime()) return job.scheduledAt;
+    return earliest;
+  }, null);
+  if (earliestPeer && earliestPeer.getTime() < input.start.getTime()) return "later";
+  return "first";
+}
+
+export function appointmentModeForPosition(
+  position: AppointmentPosition,
+  policy: SchedulingPolicy,
+): AppointmentMode {
+  return position === "later" ? policy.laterAppointmentMode : policy.firstAppointmentMode;
+}
+
+/** @deprecated Use appointmentPositionOnDay + appointmentModeForPosition. */
+export function appointmentModeForJob(input: {
+  alreadyScheduled?: boolean;
+  position?: AppointmentPosition;
+  policy: SchedulingPolicy;
+}): AppointmentMode {
+  if (input.position) return appointmentModeForPosition(input.position, input.policy);
+  return input.policy.firstAppointmentMode;
+}
+
+/**
+ * Pickup minutes for occupied-window math.
+ *
+ * Known = Job.pickupDurationMinutes > 0.
+ * None = owner recorded 0 (no pickup).
+ * Configured = null/omitted and the business default is > 0. That default
+ * is an assumption, not a known supplier pickup.
+ *
+ * The independent Materials pickup-requirement API is not consumed here.
+ * When that lands, resolve it before this helper and persist the known
+ * minutes on the job. Do not invent supplier state in this branch.
+ */
 export function pickupMinutesForJob(
   jobPickupMinutes: number | null | undefined,
   policy: SchedulingPolicy,
-): { minutes: number; kind: "known" | "configured" } {
+): { minutes: number; kind: PickupKind } {
   if (jobPickupMinutes != null && jobPickupMinutes > 0) {
     return { minutes: jobPickupMinutes, kind: "known" };
+  }
+  if (jobPickupMinutes === 0) {
+    return { minutes: 0, kind: "none" };
   }
   if (policy.defaultPickupMinutes > 0) {
     return { minutes: policy.defaultPickupMinutes, kind: "configured" };
   }
-  return { minutes: 0, kind: "configured" };
+  return { minutes: 0, kind: "none" };
 }
 
 export function formatProgression(value: WorkforceProgression): string {

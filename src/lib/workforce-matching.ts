@@ -1,10 +1,11 @@
 /**
  * Assignee recommendations only. The owner / admin assigns.
+ * Candidates are active MEMBER rows only — the same invariant as assignJobMember().
  */
 import type { AvailabilitySettings } from "@/lib/availability";
-import { schedulesOverlap } from "@/lib/job-schedule";
-import { formatISODate } from "@/lib/schedule";
+import { DEFAULT_BUSINESS_TIMEZONE, formatISODateInTimeZone } from "@/lib/business-timezone";
 import {
+  isAssignableFieldMember,
   parseSkillList,
   progressionMeets,
   type SchedulingPolicy,
@@ -12,11 +13,12 @@ import {
   type WorkforceProgression,
 } from "@/lib/workforce";
 import {
-  availableMinutesForDay,
   calculateDailyCapacity,
   memberWindowForDay,
+  minutesOfZonedDay,
   type CapacityJob,
 } from "@/lib/workforce-capacity";
+import { occupiedWindow, windowsOverlap, withConfiguredBuffer } from "@/lib/workforce-window";
 
 export type AssigneeRecommendation = {
   membershipId: string;
@@ -25,6 +27,7 @@ export type AssigneeRecommendation = {
   available: boolean;
   skillMatch: "none" | "partial" | "full" | "unneeded";
   missingSkills: string[];
+  meetsProgression: boolean;
   workloadMinutes: number;
   conflict: boolean;
   progression: WorkforceProgression;
@@ -56,14 +59,32 @@ function workerConflicted(
   durationMinutes: number | null,
   pickupMinutes: number,
   jobs: CapacityJob[],
+  policy: SchedulingPolicy,
+  bufferMinutes: number,
   excludeJobId?: string,
 ): boolean {
-  const duration = (durationMinutes ?? 0) + pickupMinutes;
+  const proposed = withConfiguredBuffer(
+    occupiedWindow({
+      scheduledAt: start,
+      scheduledDurationMinutes: durationMinutes,
+      pickupDurationMinutes: pickupMinutes,
+      policy,
+    }),
+    bufferMinutes,
+  );
   return jobs.some((job) => {
     if (!job.scheduledAt || job.status === "COMPLETED") return false;
     if (job.id === excludeJobId) return false;
     if (job.assignedMembershipId !== member.membershipId) return false;
-    return schedulesOverlap(start, duration, job.scheduledAt, job.scheduledDurationMinutes);
+    return windowsOverlap(
+      proposed,
+      occupiedWindow({
+        scheduledAt: job.scheduledAt,
+        scheduledDurationMinutes: job.scheduledDurationMinutes,
+        pickupDurationMinutes: job.pickupDurationMinutes,
+        policy,
+      }),
+    );
   });
 }
 
@@ -78,17 +99,19 @@ export function recommendAssignees(input: {
   settings: AvailabilitySettings;
   policy: SchedulingPolicy;
   excludeJobId?: string;
+  timeZone?: string;
 }): AssigneeRecommendation[] {
   const required = input.requiredSkills ?? [];
   const pickupMinutes = input.pickupMinutes ?? 0;
+  const zone = input.timeZone || DEFAULT_BUSINESS_TIMEZONE;
   const recommendations: AssigneeRecommendation[] = [];
 
   for (const member of input.members) {
-    if (!member.active) continue;
+    if (!isAssignableFieldMember(member)) continue;
     const match = skillMatchQuality(member, required);
     const missing = missingRequiredSkills(member, required);
     const day = input.start ?? new Date();
-    const window = memberWindowForDay(day, input.settings, member);
+    const window = memberWindowForDay(day, input.settings, member, zone);
     const conflict = input.start
       ? workerConflicted(
           member,
@@ -96,6 +119,8 @@ export function recommendAssignees(input: {
           input.durationMinutes,
           pickupMinutes,
           input.jobs,
+          input.policy,
+          input.settings.schedulingBufferMinutes,
           input.excludeJobId,
         )
       : false;
@@ -105,20 +130,36 @@ export function recommendAssignees(input: {
       policy: input.policy,
       jobs: input.jobs.filter((job) => job.id !== input.excludeJobId),
       member,
+      timeZone: zone,
     });
+    const meetsProgression = progressionMeets(member.progression, input.requiredProgression ?? "");
+    let endsInsideWindow = true;
+    if (input.start) {
+      const occupied = occupiedWindow({
+        scheduledAt: input.start,
+        scheduledDurationMinutes: input.durationMinutes,
+        pickupDurationMinutes: pickupMinutes,
+        policy: input.policy,
+      });
+      const startMinutes = minutesOfZonedDay(occupied.occupiedStart, zone);
+      const endMinutes = minutesOfZonedDay(occupied.occupiedEnd, zone) + input.settings.schedulingBufferMinutes;
+      endsInsideWindow = startMinutes >= window.startMinutes && endMinutes <= window.endMinutes;
+    }
     const available =
       member.schedulingActive &&
       window.available &&
       !conflict &&
+      endsInsideWindow &&
       capacity.remainingMinutes >= (input.durationMinutes ?? 0) + pickupMinutes &&
-      progressionMeets(member.progression, input.requiredProgression ?? "");
+      meetsProgression;
 
     let score = 0;
     if (member.schedulingActive) score += 10;
     if (match === "full") score += 100;
     else if (match === "partial") score += 40;
     else if (match === "unneeded") score += 20;
-    if (progressionMeets(member.progression, input.requiredProgression ?? "")) score += 20;
+    if (meetsProgression) score += 20;
+    else score -= 25;
     if (available) score += 30;
     if (conflict) score -= 80;
     if (!member.schedulingActive) score -= 40;
@@ -128,9 +169,11 @@ export function recommendAssignees(input: {
     if (match === "full") reasons.push("has the required skills");
     else if (match === "partial") reasons.push(`missing ${missing.join(", ")}`);
     else if (match === "none") reasons.push("does not have the required skills");
+    if (!meetsProgression) reasons.push("does not meet the required progression");
     if (conflict) reasons.push("already booked at this time");
     else if (!member.schedulingActive) reasons.push("not active for scheduling");
     else if (!window.available) reasons.push("unavailable that day");
+    else if (!endsInsideWindow) reasons.push("the occupied window runs past their shift");
     else if (capacity.overloaded) reasons.push("already overloaded");
     else reasons.push(`${capacity.remainingMinutes} minutes still open`);
 
@@ -141,6 +184,7 @@ export function recommendAssignees(input: {
       available,
       skillMatch: match,
       missingSkills: missing,
+      meetsProgression,
       workloadMinutes: capacity.knownScheduledMinutes,
       conflict,
       progression: member.progression,
@@ -157,6 +201,7 @@ export function staffingShortage(input: {
   pickupMinutes?: number;
   start: Date | null;
   recommendations: AssigneeRecommendation[];
+  timeZone?: string;
 }): {
   shortage: boolean;
   missingSkills: string[];
@@ -179,10 +224,11 @@ export function staffingShortage(input: {
     input.recommendations.every((row) => row.missingSkills.includes(skill) || row.skillMatch === "none"),
   );
   const anySkillHolder = input.recommendations.some((row) => row.skillMatch === "full" || row.skillMatch === "partial");
+  const zone = input.timeZone || DEFAULT_BUSINESS_TIMEZONE;
   const explanation = !anySkillHolder && input.requiredSkills.length > 0
     ? `No scheduled worker has ${input.requiredSkills.join(", ")}.`
     : input.start
-      ? `No worker with the right skills is free on ${formatISODate(input.start)}.`
+      ? `No worker with the right skills is free on ${formatISODateInTimeZone(input.start, zone)}.`
       : "No worker with the right skills and time is available.";
   return {
     shortage: true,
@@ -195,12 +241,4 @@ export function staffingShortage(input: {
 export function parseRequiredSkills(raw: string | string[] | null | undefined): string[] {
   if (Array.isArray(raw)) return parseSkillList(raw.join(","));
   return parseSkillList(raw);
-}
-
-export function availableMinutesOnDay(
-  day: Date,
-  settings: AvailabilitySettings,
-  member: WorkforceMember,
-) {
-  return availableMinutesForDay(day, settings, member);
 }

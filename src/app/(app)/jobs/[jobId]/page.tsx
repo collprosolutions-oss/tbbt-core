@@ -34,7 +34,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Prisma } from "@prisma/client";
 import { requireManagementPageAccess } from "@/lib/access";
-import { formatZonedTimeInput, resolveBusinessTimeZone } from "@/lib/business-timezone";
+import { formatISODateInTimeZone, formatZonedTimeInput, resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   appointmentConfirmationLabel,
   confirmationSourceLabel,
@@ -46,8 +46,9 @@ import {
 } from "@/lib/appointment-confirmation";
 import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { loadAvailabilitySnapshot } from "@/lib/availability-data";
-import { appointmentModeForJob, parseSkillList } from "@/lib/workforce";
+import { appointmentModeForPosition, appointmentPositionOnDay, parseSkillList } from "@/lib/workforce";
 import {
+  loadCapacityJobs,
   loadJobAssignmentSuggestions,
   loadSchedulingPolicy,
 } from "@/lib/workforce-data";
@@ -267,6 +268,7 @@ export default async function JobPage({
         scheduledDurationMinutes: job.scheduledDurationMinutes,
         pickupDurationMinutes: job.pickupDurationMinutes,
         requiredSkills: job.requiredSkills,
+        requiredProgression: job.requiredProgression,
       });
   const shortage = staffingShortage({
     requiredSkills: parseSkillList(job.requiredSkills),
@@ -275,11 +277,27 @@ export default async function JobPage({
     start: job.scheduledAt,
     recommendations: assignmentSuggestions,
   });
-  const appointmentNote = `${
-    appointmentModeForJob({ alreadyScheduled: Boolean(job.scheduledAt), policy }) === "EXACT"
-      ? "First appointment uses an exact start time"
-      : "Later work may use an arrival window"
-  } for this business. Pickup time is included in capacity.`;
+  const capacityJobs = isCompleted
+    ? []
+    : await loadCapacityJobs(prisma, access.businessId);
+  const position = job.scheduledAt
+    ? appointmentPositionOnDay({
+        start: job.scheduledAt,
+        jobId: job.id,
+        assignedMembershipId: job.assignedMembershipId,
+        jobs: capacityJobs,
+        dateKey: (date) => formatISODateInTimeZone(date, timeZone),
+      })
+    : "first";
+  const mode = appointmentModeForPosition(position, policy);
+  const appointmentNote =
+    position === "first"
+      ? `This is the first appointment in this worker's day and uses ${
+          mode === "EXACT" ? "an exact start time" : "an arrival window"
+        }. Pickup occupies time before the appointment.`
+      : `This is a later appointment that day and uses ${
+          mode === "WINDOW" ? "an arrival window" : "an exact start time"
+        }. Pickup occupies time before the appointment.`;
 
   const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
     BEFORE: [],
@@ -626,6 +644,7 @@ export default async function JobPage({
               availability={availability}
               pickupDurationMinutes={job.pickupDurationMinutes ?? 0}
               requiredSkills={parseSkillList(job.requiredSkills)}
+              requiredProgression={job.requiredProgression ?? ""}
               appointmentNote={appointmentNote}
             />
             </>

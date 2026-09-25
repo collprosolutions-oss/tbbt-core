@@ -10,14 +10,13 @@ import {
   parseBoundedInt,
   parseOptionalBoundedInt,
   parseSkillList,
-  parseWorkforceProgression,
-  WORKFORCE_SKILL_KEYS,
   type OutreachTaskKind,
 } from "@/lib/workforce";
 import {
   createWorkforceOutreachTaskOp,
-  markFillInBenchUsedOp,
   setMemberAvailabilityExceptionOp,
+  setMemberWeeklyAvailabilityOp,
+  markFillInBenchUsedOp,
   updateWorkforceProfileOp,
   upsertFillInBenchWorkerOp,
   WorkforceError,
@@ -40,6 +39,15 @@ function revalidateWorkforce() {
   revalidatePath("/business-health");
 }
 
+function timeToMinutes(value: string) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
 export async function updateWorkforceProfile(
   _prev: WorkforceActionState,
   formData: FormData,
@@ -55,20 +63,17 @@ export async function updateWorkforceProfile(
   const skills = formData
     .getAll("skillKey")
     .filter((value): value is string => typeof value === "string")
-    .filter((value) => WORKFORCE_SKILL_KEYS.includes(value as (typeof WORKFORCE_SKILL_KEYS)[number]))
     .map((skillKey) => ({
       skillKey,
-      proficiency: parseWorkforceProgression(readString(formData, `proficiency-${skillKey}`)),
+      proficiency: readString(formData, `proficiency-${skillKey}`),
     }));
 
   try {
     await updateWorkforceProfileOp(prisma, access, {
       membershipId,
       schedulingActive: readString(formData, "schedulingActive") !== "0",
-      progression: parseWorkforceProgression(readString(formData, "progression")),
+      progression: readString(formData, "progression"),
       maxDailyJobMinutes: parseOptionalBoundedInt(readString(formData, "maxDailyJobMinutes"), 30, 24 * 60),
-      preferredJobTypes: parseSkillList(readString(formData, "preferredJobTypes")),
-      allowedJobTypes: parseSkillList(readString(formData, "allowedJobTypes")),
       workforceNotes: readString(formData, "workforceNotes"),
       skills,
     });
@@ -79,6 +84,44 @@ export async function updateWorkforceProfile(
 
   revalidateWorkforce();
   return { message: "Workforce profile saved. This does not change any job assignment." };
+}
+
+export async function saveMemberWeeklyAvailability(
+  _prev: WorkforceActionState,
+  formData: FormData,
+): Promise<WorkforceActionState> {
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.TEAM_MANAGEMENT);
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MEMBERS);
+
+  const membershipId = readString(formData, "membershipId");
+  if (!membershipId) return { error: "That team member could not be found." };
+
+  const inherit = readString(formData, "inheritBusinessHours") === "1";
+  const slots = inherit
+    ? []
+    : [0, 1, 2, 3, 4, 5, 6].flatMap((weekday) => {
+        const enabled = readString(formData, `weekday-${weekday}`) === "1";
+        if (!enabled) return [];
+        const startMinutes = timeToMinutes(readString(formData, `start-${weekday}`));
+        const endMinutes = timeToMinutes(readString(formData, `end-${weekday}`));
+        if (startMinutes == null || endMinutes == null) return [];
+        return [{ weekday, startMinutes, endMinutes }];
+      });
+
+  try {
+    await setMemberWeeklyAvailabilityOp(prisma, access, { membershipId, slots });
+  } catch (error) {
+    if (error instanceof WorkforceError) return { error: error.message };
+    throw error;
+  }
+  revalidateWorkforce();
+  return {
+    message: inherit || slots.length === 0
+      ? "Weekly hours cleared. This member inherits business hours when schedulable."
+      : "Weekly availability saved.",
+  };
 }
 
 export async function saveMemberAvailabilityException(
@@ -96,13 +139,18 @@ export async function saveMemberAvailabilityException(
     return { error: "Choose a team member and a valid date." };
   }
 
-  await setMemberAvailabilityExceptionOp(prisma, access, {
-    membershipId,
-    date,
-    kind: readString(formData, "kind") === "AVAILABLE" ? "AVAILABLE" : "UNAVAILABLE",
-  });
+  try {
+    await setMemberAvailabilityExceptionOp(prisma, access, {
+      membershipId,
+      date,
+      kind: readString(formData, "kind") === "AVAILABLE" ? "AVAILABLE" : "UNAVAILABLE",
+    });
+  } catch (error) {
+    if (error instanceof WorkforceError) return { error: error.message };
+    throw error;
+  }
   revalidateWorkforce();
-  return { message: "Availability exception saved." };
+  return { message: "Date exception saved. It overrides weekly hours for that day only." };
 }
 
 export async function saveFillInBenchWorker(
@@ -148,7 +196,12 @@ export async function markFillInBenchUsed(
   requireBusinessCapability(access, CAPABILITIES.MANAGE_MEMBERS);
   const id = readString(formData, "benchWorkerId");
   if (!id) return { error: "That bench worker could not be found." };
-  await markFillInBenchUsedOp(prisma, access, id);
+  try {
+    await markFillInBenchUsedOp(prisma, access, id);
+  } catch (error) {
+    if (error instanceof WorkforceError) return { error: error.message };
+    throw error;
+  }
   revalidateWorkforce();
   return { message: "Marked as last used. No message was sent." };
 }
@@ -167,18 +220,25 @@ export async function createWorkforceOutreachTask(
     ? (kindRaw as OutreachTaskKind)
     : "STAFFING_SHORTAGE";
 
-  await createWorkforceOutreachTaskOp(prisma, access, {
-    kind,
-    jobId: readString(formData, "jobId") || null,
-    benchWorkerId: readString(formData, "benchWorkerId") || null,
-    missingSkills: parseSkillList(readString(formData, "missingSkills")),
-    missingMinutes: parseBoundedInt(readString(formData, "missingMinutes"), 0, 0, 24 * 60),
-    explanation: readString(formData, "explanation") || "Owner-approved staffing outreach task.",
-    approve: readString(formData, "approve") === "1",
-  });
-  revalidateWorkforce();
-  return {
-    message:
-      "Outreach task recorded for the owner. No worker was contacted automatically.",
-  };
+  try {
+    const task = await createWorkforceOutreachTaskOp(prisma, access, {
+      kind,
+      jobId: readString(formData, "jobId") || null,
+      benchWorkerId: readString(formData, "benchWorkerId") || null,
+      missingSkills: parseSkillList(readString(formData, "missingSkills")),
+      missingMinutes: parseBoundedInt(readString(formData, "missingMinutes"), 0, 0, 24 * 60),
+      explanation: readString(formData, "explanation") || "Staffing outreach task.",
+      approve: readString(formData, "approve") === "1",
+    });
+    revalidateWorkforce();
+    return {
+      message:
+        task.status === "APPROVED"
+          ? "Owner-approved outreach task recorded. No worker was contacted."
+          : "Outreach task recorded as a draft. Owner approval is required before anyone is contacted. No worker was contacted.",
+    };
+  } catch (error) {
+    if (error instanceof WorkforceError) return { error: error.message };
+    throw error;
+  }
 }

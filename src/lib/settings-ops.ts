@@ -20,7 +20,10 @@ import {
 import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import { ensureBusinessAvailabilitySchema } from "@/lib/availability-data";
-import { ensureWorkforceSchema } from "@/lib/workforce-data";
+import {
+  requireAppointmentMode,
+  WorkforceValidationError,
+} from "@/lib/workforce";
 import {
   DEFAULT_SETTINGS_PREFERENCES,
   SCHEDULING_FUTURE_RULE_MESSAGE,
@@ -64,7 +67,6 @@ export async function ensureBusinessSettings(
   businessId: string,
 ) {
   await ensureBusinessAvailabilitySchema(db);
-  await ensureWorkforceSchema(db);
   const existing = await db.businessSettings.findUnique({
     where: { businessId },
   });
@@ -480,6 +482,17 @@ export async function updateSchedulingSettingsOp(
   ) {
     throw new SettingsError("Overload threshold must be between 1 and 200 percent.");
   }
+  let firstAppointmentMode = input.firstAppointmentMode?.trim() || undefined;
+  let laterAppointmentMode = input.laterAppointmentMode?.trim() || undefined;
+  try {
+    if (firstAppointmentMode != null) firstAppointmentMode = requireAppointmentMode(firstAppointmentMode);
+    if (laterAppointmentMode != null) laterAppointmentMode = requireAppointmentMode(laterAppointmentMode);
+  } catch (error) {
+    if (error instanceof WorkforceValidationError) {
+      throw new SettingsError(error.message);
+    }
+    throw error;
+  }
 
   const current = await ensureBusinessSettings(db, access.businessId);
   const currentDates = await db.businessUnavailableDate.findMany({
@@ -509,8 +522,8 @@ export async function updateSchedulingSettingsOp(
     workingWeekdays: input.workingWeekdays.join(","),
     schedulingBufferMinutes: input.schedulingBufferMinutes,
     unavailableDates: nextDates,
-    firstAppointmentMode: input.firstAppointmentMode ?? current.firstAppointmentMode,
-    laterAppointmentMode: input.laterAppointmentMode ?? current.laterAppointmentMode,
+    firstAppointmentMode: firstAppointmentMode ?? current.firstAppointmentMode,
+    laterAppointmentMode: laterAppointmentMode ?? current.laterAppointmentMode,
     defaultArrivalWindowMinutes:
       input.defaultArrivalWindowMinutes ?? current.defaultArrivalWindowMinutes,
     dayBeforeChangeCutoffHours:

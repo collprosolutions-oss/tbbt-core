@@ -38,7 +38,6 @@ import {
   ensureBusinessAvailabilitySchema,
 } from "@/lib/availability-data";
 import { schedulingPolicyFromRow } from "@/lib/workforce";
-import { ensureWorkforceSchema } from "@/lib/workforce-data";
 import { listActiveBusinessTrades } from "@/lib/business-trades";
 import { workspaceTradeLabel } from "@/lib/trade-config";
 import { publicPhone } from "@/lib/public-site";
@@ -150,7 +149,6 @@ export async function loadSettingsSnapshot(
 ): Promise<SettingsSnapshot> {
   const scope = { businessId } as const;
   await ensureBusinessAvailabilitySchema(prisma);
-  await ensureWorkforceSchema(prisma);
   await ensureBusinessPublicContactSchema(prisma);
 
   const [

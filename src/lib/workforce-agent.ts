@@ -5,7 +5,7 @@
  * workers or rewrite schedules from this layer.
  */
 import type { AvailabilitySettings } from "@/lib/availability";
-import { addDays, formatISODate, startOfDay } from "@/lib/schedule";
+import { addZonedCalendarDays, DEFAULT_BUSINESS_TIMEZONE, formatISODateInTimeZone, startOfZonedDay } from "@/lib/business-timezone";
 import type { BsosRecommendation } from "@/lib/bsos";
 import {
   type FillInBenchRecord,
@@ -13,8 +13,7 @@ import {
   type WorkforceMember,
 } from "@/lib/workforce";
 import {
-  calculateDailyCapacity,
-  calculateWeeklyCapacity,
+  calculateTeamWeeklyCapacity,
   type CapacityJob,
 } from "@/lib/workforce-capacity";
 import { detectScheduleConflicts, type ConflictJob } from "@/lib/workforce-conflicts";
@@ -40,24 +39,29 @@ export type WorkforceAgentContext = {
   jobs: ConflictJob[];
   members: WorkforceMember[];
   bench: FillInBenchRecord[];
+  timeZone?: string;
 };
 
 export function buildWorkforceRecommendations(
   context: WorkforceAgentContext,
 ): BsosRecommendation[] {
   const items: BsosRecommendation[] = [];
-  const weekStart = startOfDay(context.now);
-  const week = calculateWeeklyCapacity({
+  const zone = context.timeZone || DEFAULT_BUSINESS_TIMEZONE;
+  const weekStart = startOfZonedDay(context.now, zone);
+  const week = calculateTeamWeeklyCapacity({
     start: weekStart,
     settings: context.settings,
     policy: context.policy,
     jobs: context.jobs,
+    members: context.members,
+    timeZone: zone,
   });
   const conflicts = detectScheduleConflicts({
     jobs: context.jobs,
     settings: context.settings,
     policy: context.policy,
     members: context.members,
+    timeZone: zone,
   });
 
   const overloaded = week.days.filter((day) => day.overloaded && day.working);
@@ -155,8 +159,8 @@ export function buildWorkforceRecommendations(
       !day.overloaded &&
       day.knownScheduledMinutes === 0 &&
       day.forecastRecurringMinutes === 0 &&
-      day.date >= formatISODate(weekStart) &&
-      day.date < formatISODate(addDays(weekStart, 7)),
+      day.date >= formatISODateInTimeZone(weekStart, zone) &&
+      day.date < formatISODateInTimeZone(addZonedCalendarDays(weekStart, 7, zone), zone),
   );
   if (gapDays.length > 0) {
     items.push({
@@ -186,7 +190,9 @@ export function buildWorkforceRecommendations(
       durationMinutes: job.scheduledDurationMinutes,
       pickupMinutes: job.pickupDurationMinutes ?? 0,
       requiredSkills: job.requiredSkills ?? [],
+      requiredProgression: (job.requiredProgression as "" | undefined) ?? "",
       members: context.members,
+      timeZone: zone,
       jobs: context.jobs,
       settings: context.settings,
       policy: context.policy,

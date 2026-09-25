@@ -5,6 +5,12 @@
  * relationship, and later cancel/skip semantics. They are not a recurring
  * billing engine and do not charge customers automatically.
  */
+import {
+  addZonedCalendarDays,
+  addZonedCalendarMonths,
+  zonedCivilToUtc,
+  zonedDateParts,
+} from "@/lib/business-timezone";
 
 export const SERVICE_INTENTS = ["ONE_TIME", "RECURRING"] as const;
 export type ServiceIntent = (typeof SERVICE_INTENTS)[number];
@@ -143,23 +149,60 @@ function addCalendarMonths(start: Date, months: number): Date {
   return next;
 }
 
+function addOccurrence(
+  scheduledAt: Date,
+  days: number,
+  timeZone?: string,
+): Date {
+  if (!timeZone) {
+    return new Date(scheduledAt.getTime() + days * 24 * 60 * 60 * 1000);
+  }
+  const parts = zonedDateParts(scheduledAt, timeZone);
+  const nextMidnight = addZonedCalendarDays(scheduledAt, days, timeZone);
+  const next = zonedDateParts(nextMidnight, timeZone);
+  return zonedCivilToUtc(
+    next.year,
+    next.month,
+    next.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+    timeZone,
+  );
+}
+
 /**
  * Next known occurrence after a scheduled recurring job.
  * CUSTOM cadence keeps an owner-set nextOccurrenceAt; it is not guessed.
+ * When timeZone is provided, weekly/monthly steps keep the local wall clock
+ * through DST instead of adding a fixed 24-hour multiple.
  */
 export function computeNextOccurrenceAt(
   scheduledAt: Date,
   cadence: RecurrenceCadence | "",
   existingNext?: Date | null,
+  timeZone?: string,
 ): Date | null {
   if (cadence === "WEEKLY") {
-    return new Date(scheduledAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+    return addOccurrence(scheduledAt, 7, timeZone);
   }
   if (cadence === "BIWEEKLY") {
-    return new Date(scheduledAt.getTime() + 14 * 24 * 60 * 60 * 1000);
+    return addOccurrence(scheduledAt, 14, timeZone);
   }
   if (cadence === "MONTHLY") {
-    return addCalendarMonths(scheduledAt, 1);
+    if (!timeZone) return addCalendarMonths(scheduledAt, 1);
+    const parts = zonedDateParts(scheduledAt, timeZone);
+    const nextMidnight = addZonedCalendarMonths(scheduledAt, 1, timeZone);
+    const next = zonedDateParts(nextMidnight, timeZone);
+    return zonedCivilToUtc(
+      next.year,
+      next.month,
+      next.day,
+      parts.hour,
+      parts.minute,
+      parts.second,
+      timeZone,
+    );
   }
   if (cadence === "CUSTOM") {
     return existingNext && existingNext.getTime() > scheduledAt.getTime() ? existingNext : null;
@@ -197,6 +240,7 @@ export function projectRecurrenceOccurrences(input: {
   from: Date;
   until: Date;
   maxOccurrences?: number;
+  timeZone?: string;
 }): RecurrenceForecastOccurrence[] {
   const cadence = parseRecurrenceCadence(input.cadence);
   const maxOccurrences = input.maxOccurrences ?? 12;
@@ -204,7 +248,7 @@ export function projectRecurrenceOccurrences(input: {
   let cursor =
     input.nextOccurrenceAt && input.nextOccurrenceAt.getTime() > input.scheduledAt.getTime()
       ? input.nextOccurrenceAt
-      : computeNextOccurrenceAt(input.scheduledAt, cadence, input.nextOccurrenceAt);
+      : computeNextOccurrenceAt(input.scheduledAt, cadence, input.nextOccurrenceAt, input.timeZone);
   while (cursor && occurrences.length < maxOccurrences && cursor.getTime() < input.until.getTime()) {
     if (cursor.getTime() >= input.from.getTime()) {
       occurrences.push({
@@ -214,7 +258,7 @@ export function projectRecurrenceOccurrences(input: {
         cadence,
       });
     }
-    const next = computeNextOccurrenceAt(cursor, cadence, null);
+    const next = computeNextOccurrenceAt(cursor, cadence, null, input.timeZone);
     if (!next || next.getTime() <= cursor.getTime()) break;
     cursor = next;
   }

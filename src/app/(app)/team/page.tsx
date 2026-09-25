@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { AddTeamMemberForm } from "@/components/team/add-team-member-form";
 import { SetTeamMemberActiveForm } from "@/components/team/set-team-member-active-form";
 import { FillInBenchForm, FillInBenchUseButton } from "@/components/team/fill-in-bench-form";
+import { WeeklyAvailabilityForm } from "@/components/team/weekly-availability-form";
 import { WorkforceProfileForm } from "@/components/team/workforce-profile-form";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
@@ -16,6 +17,8 @@ import {
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
 import { prisma } from "@/lib/prisma";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { hasProductCapability } from "@/lib/product-entitlements";
 import { formatProgression, skillLabel } from "@/lib/workforce";
 import { loadFillInBench, loadWorkforceMembers } from "@/lib/workforce-data";
 
@@ -46,10 +49,17 @@ export default async function TeamPage() {
     },
     orderBy: [{ role: "asc" }, { createdAt: "asc" }],
   });
-  const [workforceMembers, bench] = await Promise.all([
-    loadWorkforceMembers(prisma, access.businessId),
-    loadFillInBench(prisma, access.businessId),
-  ]);
+  const canManageWorkforce = await hasProductCapability(
+    prisma,
+    access.businessId,
+    PRODUCT_CAPABILITIES.TEAM_MANAGEMENT,
+  );
+  const [workforceMembers, bench] = canManageWorkforce
+    ? await Promise.all([
+        loadWorkforceMembers(prisma, access.businessId),
+        loadFillInBench(prisma, access.businessId),
+      ])
+    : [[], []];
 
   return (
     <PageContainer>
@@ -107,13 +117,15 @@ export default async function TeamPage() {
         </CardContent>
       </Card>
 
+      {canManageWorkforce ? (
       <Card>
         <CardHeader>
           <CardTitle>Workforce profiles</CardTitle>
           <CardDescription>
-            Skills, progression, and scheduling status live on the existing
-            Membership. This is not a second employee identity and not a
-            performance-rating system.
+            Skills, progression, weekly hours, and scheduling status live on the
+            existing Membership. This is not a second employee identity and not a
+            performance-rating system. Preferred/allowed job types stay as
+            owner notes until a canonical job-type identity exists.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -126,11 +138,14 @@ export default async function TeamPage() {
                   : ""}
               </p>
               <WorkforceProfileForm member={member} />
+              <WeeklyAvailabilityForm member={member} />
             </div>
           ))}
         </CardContent>
       </Card>
+      ) : null}
 
+      {canManageWorkforce ? (
       <Card>
         <CardHeader>
           <CardTitle>Internal Fill-In Bench</CardTitle>
@@ -158,6 +173,7 @@ export default async function TeamPage() {
           ))}
         </CardContent>
       </Card>
+      ) : null}
     </PageContainer>
   );
 }

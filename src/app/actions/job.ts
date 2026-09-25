@@ -43,11 +43,16 @@ import {
   parseRecurrenceCadence,
   recurrenceForecastActive,
 } from "@/lib/recurrence";
+import { formatISODateInTimeZone } from "@/lib/business-timezone";
 import {
-  appointmentModeForJob,
+  appointmentModeForPosition,
+  appointmentPositionOnDay,
   parseBoundedInt,
   parseSkillList,
+  requireOptionalWorkforceProgression,
+  requireWorkforceSkillKey,
   serializeSkillList,
+  WorkforceValidationError,
 } from "@/lib/workforce";
 import { laterJobsHurtByMove } from "@/lib/workforce-capacity";
 import { describeConflicts, detectScheduleConflicts } from "@/lib/workforce-conflicts";
@@ -55,11 +60,17 @@ import {
   loadCapacityJobs,
   loadSchedulingPolicy,
   loadWorkforceMembers,
+  loadWorkforceTimeZone,
 } from "@/lib/workforce-data";
+import {
+  conflictAcknowledgement,
+  shouldAcceptConflictAcknowledgement,
+} from "@/lib/workforce-window";
 
 export type JobActionState = {
   error?: string;
   warning?: string;
+  conflictAck?: string;
   notificationWarning?: string;
   message?: string;
 };
@@ -199,21 +210,33 @@ export async function scheduleJob(
   const time = readString(formData, "time");
   const durationPreset = readString(formData, "durationPreset");
   const customHours = readString(formData, "customHours");
-  const confirmOverlap = readString(formData, "confirmOverlap") === "1";
+  const submittedAck = readString(formData, "confirmOverlapAck");
   const pickupDurationMinutes = parseBoundedInt(
     readString(formData, "pickupDurationMinutes"),
     0,
     0,
     24 * 60,
   );
-  const requiredSkills = serializeSkillList(
-    parseSkillList(
-      formData
-        .getAll("requiredSkill")
-        .filter((value): value is string => typeof value === "string")
-        .join(","),
-    ),
-  );
+  let requiredSkills: string;
+  let requiredProgression: string;
+  try {
+    requiredSkills = serializeSkillList(
+      parseSkillList(
+        formData
+          .getAll("requiredSkill")
+          .filter((value): value is string => typeof value === "string")
+          .join(","),
+      ).map((skill) => requireWorkforceSkillKey(skill)),
+    );
+    requiredProgression = requireOptionalWorkforceProgression(
+      readString(formData, "requiredProgression"),
+    );
+  } catch (error) {
+    if (error instanceof WorkforceValidationError) {
+      return { error: error.message };
+    }
+    throw error;
+  }
 
   if (!jobId) {
     return { error: "That job could not be scheduled." };
@@ -239,54 +262,73 @@ export async function scheduleJob(
     return { error: duration.error };
   }
 
-  if (!confirmOverlap) {
-    const [settings, others, policy, members, capacityJobs] = await Promise.all([
-      loadAvailabilitySettings(prisma, access.businessId),
-      loadOccupiedJobs(prisma, access.businessId, job.id),
-      loadSchedulingPolicy(prisma, access.businessId),
-      loadWorkforceMembers(prisma, access.businessId),
-      loadCapacityJobs(prisma, access.businessId),
-    ]);
-    const evaluation = evaluateProposedSchedule({
-      start,
-      durationMinutes: duration.minutes,
-      settings,
-      existing: others,
-    });
-    const conflicts = detectScheduleConflicts({
-      jobs: capacityJobs,
-      settings,
-      policy,
-      members,
-      proposed: {
-        jobId: job.id,
-        start,
-        durationMinutes: duration.minutes,
-        pickupMinutes: pickupDurationMinutes,
-        assignedMembershipId: job.assignedMembershipId,
-        alreadyScheduled: Boolean(job.scheduledAt),
-      },
-      now: new Date(),
-    });
-    const cascade = laterJobsHurtByMove({
+  const [settings, others, policy, members, capacityJobs, timeZone] = await Promise.all([
+    loadAvailabilitySettings(prisma, access.businessId),
+    loadOccupiedJobs(prisma, access.businessId, job.id),
+    loadSchedulingPolicy(prisma, access.businessId),
+    loadWorkforceMembers(prisma, access.businessId),
+    loadCapacityJobs(prisma, access.businessId),
+    loadWorkforceTimeZone(prisma, access.businessId),
+  ]);
+  const evaluation = evaluateProposedSchedule({
+    start,
+    durationMinutes: duration.minutes,
+    settings,
+    existing: others,
+  });
+  const conflicts = detectScheduleConflicts({
+    jobs: capacityJobs,
+    settings,
+    policy,
+    members,
+    timeZone,
+    proposed: {
+      jobId: job.id,
       start,
       durationMinutes: duration.minutes,
       pickupMinutes: pickupDurationMinutes,
-      settings,
-      existing: capacityJobs.filter((row) => row.id !== job.id),
-      membershipId: job.assignedMembershipId,
-    });
-    const warning =
-      (hasScheduleWarning(evaluation)
-        ? describeScheduleWarning(evaluation, start, formatDateTime, settings)
-        : null) ?? describeConflicts(conflicts);
-    if (warning) {
-      return {
-        warning: cascade.length
-          ? `${warning} Later jobs were not moved.`
-          : warning,
-      };
-    }
+      assignedMembershipId: job.assignedMembershipId,
+      originalScheduledAt: job.scheduledAt,
+    },
+    now: new Date(),
+  });
+  const cascade = laterJobsHurtByMove({
+    start,
+    durationMinutes: duration.minutes,
+    pickupMinutes: pickupDurationMinutes,
+    settings,
+    policy,
+    existing: capacityJobs.filter((row) => row.id !== job.id),
+    membershipId: job.assignedMembershipId,
+  });
+  const warning =
+    (hasScheduleWarning(evaluation)
+      ? describeScheduleWarning(evaluation, start, formatDateTime, settings)
+      : null) ?? describeConflicts(conflicts);
+  const currentAck = conflictAcknowledgement({
+    jobId: job.id,
+    start,
+    durationMinutes: duration.minutes,
+    pickupMinutes: pickupDurationMinutes,
+    assignedMembershipId: job.assignedMembershipId,
+    conflicts: warning
+      ? conflicts.length > 0
+        ? conflicts
+        : [{ kind: "AVAILABILITY", jobId: job.id, severity: "WARNING" }]
+      : [],
+  });
+  if (
+    warning &&
+    shouldAcceptConflictAcknowledgement({
+      submittedAck,
+      currentAck,
+      conflicts: warning ? [warning] : [],
+    }) === "warn"
+  ) {
+    return {
+      warning: cascade.length ? `${warning} Later jobs were not moved.` : warning,
+      conflictAck: currentAck,
+    };
   }
 
   const materialChange = isMaterialAppointmentChange(
@@ -299,16 +341,20 @@ export async function scheduleJob(
     : job.appointmentProposalId;
   const rescheduled = Boolean(job.scheduledAt) && materialChange;
 
-  const policy = await loadSchedulingPolicy(prisma, access.businessId);
-  const mode = appointmentModeForJob({
-    alreadyScheduled: Boolean(job.scheduledAt),
-    policy,
+  const position = appointmentPositionOnDay({
+    start,
+    jobId: job.id,
+    assignedMembershipId: job.assignedMembershipId,
+    jobs: capacityJobs,
+    dateKey: (date) => formatISODateInTimeZone(date, timeZone),
   });
+  const mode = appointmentModeForPosition(position, policy);
   const nextOccurrenceAt = recurrenceForecastActive(job)
     ? computeNextOccurrenceAt(
         start,
         parseRecurrenceCadence(job.recurrenceCadence),
         job.nextOccurrenceAt,
+        timeZone,
       )
     : job.nextOccurrenceAt;
 
@@ -319,6 +365,7 @@ export async function scheduleJob(
       scheduledDurationMinutes: duration.minutes,
       pickupDurationMinutes: pickupDurationMinutes || null,
       requiredSkills,
+      requiredProgression,
       arrivalWindowMinutes: mode === "WINDOW" ? policy.defaultArrivalWindowMinutes : null,
       nextOccurrenceAt,
       ...(job.status === "UNSCHEDULED" ? { status: "SCHEDULED" } : {}),

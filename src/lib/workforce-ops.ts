@@ -1,6 +1,7 @@
 /**
  * Workforce mutations. Tenant-scoped from BusinessAccess.scope.
  * Never assign workers or rewrite schedules from recommendation helpers.
+ * Schema ownership is the Prisma migration — these paths never run DDL.
  */
 import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
@@ -9,12 +10,19 @@ import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireProductCapability } from "@/lib/product-entitlements";
 import {
   parseSkillList,
-  parseWorkforceProgression,
+  requireBenchContactPreference,
+  requireDayMinutesRange,
+  requireExceptionKind,
+  requireIsoDate,
+  requireWeekday,
+  requireWorkforceProgression,
+  requireWorkforceSkillKey,
   serializeSkillList,
+  WorkforceValidationError,
   type OutreachTaskKind,
-  type WorkforceProgression,
 } from "@/lib/workforce";
-import { ensureWorkforceSchema } from "@/lib/workforce-data";
+import { loadJobAssignmentSuggestions } from "@/lib/workforce-data";
+import { staffingShortage } from "@/lib/workforce-matching";
 
 export class WorkforceError extends Error {
   constructor(message: string) {
@@ -23,10 +31,14 @@ export class WorkforceError extends Error {
   }
 }
 
-function readOwnedMembership(
-  access: BusinessAccess,
-  membershipId: string,
-) {
+function asWorkforceError(error: unknown): never {
+  if (error instanceof WorkforceValidationError || error instanceof WorkforceError) {
+    throw new WorkforceError(error.message);
+  }
+  throw error;
+}
+
+function readOwnedMembership(access: BusinessAccess, membershipId: string) {
   return {
     id: membershipId,
     businessId: access.businessId,
@@ -39,55 +51,125 @@ export async function updateWorkforceProfileOp(
   input: {
     membershipId: string;
     schedulingActive: boolean;
-    progression: WorkforceProgression;
+    progression: string;
     maxDailyJobMinutes: number | null;
-    preferredJobTypes: string[];
-    allowedJobTypes: string[];
-    workforceNotes: string;
-    skills: Array<{ skillKey: string; proficiency: WorkforceProgression }>;
+    preferredJobTypes?: string[];
+    allowedJobTypes?: string[];
+    workforceNotes?: string;
+    skills: Array<{ skillKey: string; proficiency: string }>;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_MEMBERS);
   await requireProductCapability(db, access.businessId, PRODUCT_CAPABILITIES.TEAM_MANAGEMENT);
-  await ensureWorkforceSchema(db);
 
   const membership = await db.membership.findFirst({
     where: { id: input.membershipId, businessId: access.businessId },
-    select: { id: true, businessId: true },
+    select: {
+      id: true,
+      businessId: true,
+      active: true,
+      preferredJobTypes: true,
+      allowedJobTypes: true,
+      workforceNotes: true,
+    },
   });
   if (!membership) {
     throw new ForbiddenError();
   }
   access.assertOwned(membership);
 
-  await db.$transaction(async (tx) => {
-    await tx.membership.update({
-      where: { id: membership.id },
-      data: {
-        schedulingActive: input.schedulingActive,
-        progression: input.progression,
-        maxDailyJobMinutes: input.maxDailyJobMinutes,
-        preferredJobTypes: serializeSkillList(input.preferredJobTypes),
-        allowedJobTypes: serializeSkillList(input.allowedJobTypes),
-        workforceNotes: input.workforceNotes.slice(0, 500),
-      },
-    });
-    await tx.membershipSkill.deleteMany({
-      where: { membershipId: membership.id, businessId: access.businessId },
-    });
-    if (input.skills.length > 0) {
-      await tx.membershipSkill.createMany({
-        data: input.skills.map((skill) => ({
-          businessId: access.businessId,
-          membershipId: membership.id,
-          skillKey: skill.skillKey,
-          proficiency: skill.proficiency,
-        })),
-      });
+  try {
+    requireWorkforceProgression(input.progression);
+    if (input.maxDailyJobMinutes != null && (!Number.isInteger(input.maxDailyJobMinutes) || input.maxDailyJobMinutes < 30 || input.maxDailyJobMinutes > 24 * 60)) {
+      throw new WorkforceError("Max daily minutes must be between 30 and 1440.");
     }
-  });
+    const skills = input.skills.map((skill) => ({
+      skillKey: requireWorkforceSkillKey(skill.skillKey),
+      proficiency: requireWorkforceProgression(skill.proficiency),
+    }));
+
+    await db.$transaction(async (tx) => {
+      await tx.membership.update({
+        where: { id: membership.id },
+        data: {
+          schedulingActive: membership.active ? input.schedulingActive : false,
+          progression: input.progression,
+          maxDailyJobMinutes: input.maxDailyJobMinutes,
+          preferredJobTypes:
+            input.preferredJobTypes == null
+              ? membership.preferredJobTypes
+              : serializeSkillList(input.preferredJobTypes),
+          allowedJobTypes:
+            input.allowedJobTypes == null
+              ? membership.allowedJobTypes
+              : serializeSkillList(input.allowedJobTypes),
+          workforceNotes:
+            input.workforceNotes == null ? membership.workforceNotes : input.workforceNotes.slice(0, 500),
+        },
+      });
+      await tx.membershipSkill.deleteMany({
+        where: { membershipId: membership.id, businessId: access.businessId },
+      });
+      if (skills.length > 0) {
+        await tx.membershipSkill.createMany({
+          data: skills.map((skill) => ({
+            businessId: access.businessId,
+            membershipId: membership.id,
+            skillKey: skill.skillKey,
+            proficiency: skill.proficiency,
+          })),
+        });
+      }
+    });
+  } catch (error) {
+    asWorkforceError(error);
+  }
 
   return { membershipId: membership.id };
+}
+
+export async function setMemberWeeklyAvailabilityOp(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: {
+    membershipId: string;
+    slots: Array<{ weekday: number; startMinutes: number; endMinutes: number }>;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MEMBERS);
+  await requireProductCapability(db, access.businessId, PRODUCT_CAPABILITIES.TEAM_MANAGEMENT);
+  const membership = await db.membership.findFirst({
+    where: readOwnedMembership(access, input.membershipId),
+    select: { id: true, businessId: true },
+  });
+  if (!membership) throw new ForbiddenError();
+  access.assertOwned(membership);
+
+  try {
+    const slots = input.slots.map((slot) => {
+      const weekday = requireWeekday(slot.weekday);
+      const range = requireDayMinutesRange(slot.startMinutes, slot.endMinutes);
+      return { weekday, ...range };
+    });
+    await db.$transaction(async (tx) => {
+      await tx.membershipWeeklyAvailability.deleteMany({
+        where: { membershipId: membership.id, businessId: access.businessId },
+      });
+      if (slots.length > 0) {
+        await tx.membershipWeeklyAvailability.createMany({
+          data: slots.map((slot) => ({
+            businessId: access.businessId,
+            membershipId: membership.id,
+            weekday: slot.weekday,
+            startMinutes: slot.startMinutes,
+            endMinutes: slot.endMinutes,
+          })),
+        });
+      }
+    });
+  } catch (error) {
+    asWorkforceError(error);
+  }
 }
 
 export async function setMemberAvailabilityExceptionOp(
@@ -103,7 +185,6 @@ export async function setMemberAvailabilityExceptionOp(
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_MEMBERS);
   await requireProductCapability(db, access.businessId, PRODUCT_CAPABILITIES.TEAM_MANAGEMENT);
-  await ensureWorkforceSchema(db);
   const membership = await db.membership.findFirst({
     where: readOwnedMembership(access, input.membershipId),
     select: { id: true, businessId: true },
@@ -111,22 +192,31 @@ export async function setMemberAvailabilityExceptionOp(
   if (!membership) throw new ForbiddenError();
   access.assertOwned(membership);
 
-  await db.membershipAvailabilityException.upsert({
-    where: { membershipId_date: { membershipId: membership.id, date: input.date } },
-    create: {
-      businessId: access.businessId,
-      membershipId: membership.id,
-      date: input.date,
-      kind: input.kind,
-      startMinutes: input.startMinutes ?? null,
-      endMinutes: input.endMinutes ?? null,
-    },
-    update: {
-      kind: input.kind,
-      startMinutes: input.startMinutes ?? null,
-      endMinutes: input.endMinutes ?? null,
-    },
-  });
+  try {
+    const date = requireIsoDate(input.date);
+    const kind = requireExceptionKind(input.kind);
+    if (kind === "AVAILABLE" && input.startMinutes != null && input.endMinutes != null) {
+      requireDayMinutesRange(input.startMinutes, input.endMinutes);
+    }
+    await db.membershipAvailabilityException.upsert({
+      where: { membershipId_date: { membershipId: membership.id, date } },
+      create: {
+        businessId: access.businessId,
+        membershipId: membership.id,
+        date,
+        kind,
+        startMinutes: input.startMinutes ?? null,
+        endMinutes: input.endMinutes ?? null,
+      },
+      update: {
+        kind,
+        startMinutes: input.startMinutes ?? null,
+        endMinutes: input.endMinutes ?? null,
+      },
+    });
+  } catch (error) {
+    asWorkforceError(error);
+  }
 }
 
 export async function upsertFillInBenchWorkerOp(
@@ -147,10 +237,16 @@ export async function upsertFillInBenchWorkerOp(
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_MEMBERS);
   await requireProductCapability(db, access.businessId, PRODUCT_CAPABILITIES.TEAM_MANAGEMENT);
-  await ensureWorkforceSchema(db);
 
   if (!input.displayName.trim()) {
     throw new WorkforceError("Enter a name for this bench worker.");
+  }
+  let contactPreference;
+  try {
+    contactPreference = requireBenchContactPreference(input.contactPreference);
+    input.skills.forEach((skill) => requireWorkforceSkillKey(skill));
+  } catch (error) {
+    asWorkforceError(error);
   }
   if (input.membershipId) {
     const linked = await db.membership.findFirst({
@@ -163,7 +259,7 @@ export async function upsertFillInBenchWorkerOp(
 
   const data = {
     displayName: input.displayName.trim().slice(0, 80),
-    contactPreference: input.contactPreference,
+    contactPreference,
     contactValue: input.contactValue.trim().slice(0, 120),
     skills: serializeSkillList(input.skills),
     availabilityNotes: input.availabilityNotes.slice(0, 240),
@@ -226,47 +322,77 @@ export async function createWorkforceOutreachTaskOp(
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
   await requireProductCapability(db, access.businessId, PRODUCT_CAPABILITIES.SCHEDULING);
-  await ensureWorkforceSchema(db);
+  if (input.jobId) {
+    await requireProductCapability(db, access.businessId, PRODUCT_CAPABILITIES.JOBS_TASKS);
+  }
+
+  let missingSkills = input.missingSkills;
+  let explanation = input.explanation;
+  let missingMinutes = input.missingMinutes ?? null;
 
   if (input.jobId) {
     const job = await db.job.findFirst({
       where: { id: input.jobId, businessId: access.businessId },
-      select: { id: true, businessId: true },
+      select: {
+        id: true,
+        businessId: true,
+        scheduledAt: true,
+        scheduledDurationMinutes: true,
+        pickupDurationMinutes: true,
+        requiredSkills: true,
+        requiredProgression: true,
+      },
     });
     if (!job) throw new ForbiddenError();
     access.assertOwned(job);
+    const recommendations = await loadJobAssignmentSuggestions(db, access.businessId, job);
+    const shortage = staffingShortage({
+      requiredSkills: parseSkillList(job.requiredSkills),
+      durationMinutes: job.scheduledDurationMinutes,
+      pickupMinutes: job.pickupDurationMinutes ?? 0,
+      start: job.scheduledAt,
+      recommendations,
+    });
+    missingSkills = shortage.missingSkills;
+    explanation = shortage.explanation;
+    missingMinutes = shortage.missingMinutes;
   }
+
   if (input.benchWorkerId) {
     const bench = await db.fillInBenchWorker.findFirst({
       where: { id: input.benchWorkerId, businessId: access.businessId },
-      select: { id: true, businessId: true },
+      select: { id: true, businessId: true, approved: true, active: true },
     });
     if (!bench) throw new ForbiddenError();
     access.assertOwned(bench);
+    if (input.approve && access.workspace.role === "OWNER" && (!bench.approved || !bench.active)) {
+      throw new WorkforceError("Approved outreach can only attach an active, approved bench worker.");
+    }
   }
+
+  const ownerApproved = input.approve && access.workspace.role === "OWNER";
+  const idempotencyKey = input.jobId
+    ? `job:${input.jobId}:${input.kind}`
+    : `adhoc:${access.workspace.membership.id}:${input.kind}:${new Date().toISOString().slice(0, 10)}`;
+
+  const existing = await db.workforceOutreachTask.findFirst({
+    where: { businessId: access.businessId, idempotencyKey },
+  });
+  if (existing) return existing;
 
   return db.workforceOutreachTask.create({
     data: {
       businessId: access.businessId,
-      status: input.approve ? "APPROVED" : "DRAFT",
+      status: ownerApproved ? "APPROVED" : "DRAFT",
       kind: input.kind,
       jobId: input.jobId ?? null,
       benchWorkerId: input.benchWorkerId ?? null,
-      missingSkills: serializeSkillList(input.missingSkills),
-      missingMinutes: input.missingMinutes ?? null,
-      explanation: input.explanation.slice(0, 500),
+      missingSkills: serializeSkillList(missingSkills),
+      missingMinutes,
+      explanation: explanation.slice(0, 500),
       createdByMembershipId: access.workspace.membership.id,
-      approvedByMembershipId: input.approve ? access.workspace.membership.id : null,
+      approvedByMembershipId: ownerApproved ? access.workspace.membership.id : null,
+      idempotencyKey,
     },
   });
-}
-
-export function parseProfileSkills(raw: string[]): Array<{
-  skillKey: string;
-  proficiency: WorkforceProgression;
-}> {
-  return parseSkillList(raw.join(",")).map((skillKey) => ({
-    skillKey,
-    proficiency: parseWorkforceProgression("CAPABLE"),
-  }));
 }

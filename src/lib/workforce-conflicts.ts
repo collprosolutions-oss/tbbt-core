@@ -5,18 +5,13 @@
  */
 import {
   datesCoveredBySchedule,
-  evaluateProposedSchedule,
   isUnavailableDate,
-  isWorkingWeekday,
-  minutesOfDay,
   workDayLengthMinutes,
   type AvailabilitySettings,
 } from "@/lib/availability";
-import { durationWithBuffer, scheduleWindow, schedulesOverlap } from "@/lib/job-schedule";
-import { formatISODate } from "@/lib/schedule";
+import { DEFAULT_BUSINESS_TIMEZONE, formatISODateInTimeZone } from "@/lib/business-timezone";
 import {
   dayBeforeCutoffPassed,
-  pickupMinutesForJob,
   type SchedulingPolicy,
   type WorkforceMember,
 } from "@/lib/workforce";
@@ -24,8 +19,10 @@ import {
   availableMinutesForDay,
   laterJobsHurtByMove,
   memberWindowForDay,
+  minutesOfZonedDay,
   type CapacityJob,
 } from "@/lib/workforce-capacity";
+import { occupiedWindow, windowsOverlap, withConfiguredBuffer } from "@/lib/workforce-window";
 
 export const CONFLICT_KINDS = [
   "OVERLAP",
@@ -53,10 +50,20 @@ export type ScheduleConflict = {
 export type ConflictJob = CapacityJob & {
   customerName?: string | null;
   requiredSkills?: string[];
+  requiredProgression?: string | null;
 };
 
 function labelFor(job: ConflictJob): string {
   return job.customerName ?? "another job";
+}
+
+function windowForJob(job: ConflictJob, policy: SchedulingPolicy) {
+  return occupiedWindow({
+    scheduledAt: job.scheduledAt,
+    scheduledDurationMinutes: job.scheduledDurationMinutes,
+    pickupDurationMinutes: job.pickupDurationMinutes,
+    policy,
+  });
 }
 
 export function detectScheduleConflicts(input: {
@@ -64,16 +71,18 @@ export function detectScheduleConflicts(input: {
   settings: AvailabilitySettings;
   policy: SchedulingPolicy;
   members?: WorkforceMember[];
+  timeZone?: string;
   proposed?: {
     jobId: string;
     start: Date;
     durationMinutes: number | null;
     pickupMinutes?: number | null;
     assignedMembershipId?: string | null;
-    alreadyScheduled?: boolean;
+    originalScheduledAt?: Date | null;
   };
   now?: Date;
 }): ScheduleConflict[] {
+  const zone = input.timeZone || DEFAULT_BUSINESS_TIMEZONE;
   const conflicts: ScheduleConflict[] = [];
   const active = input.jobs.filter((job) => job.scheduledAt && job.status !== "COMPLETED");
   const members = new Map((input.members ?? []).map((member) => [member.membershipId, member]));
@@ -82,21 +91,12 @@ export function detectScheduleConflicts(input: {
     for (let j = i + 1; j < active.length; j += 1) {
       const a = active[i]!;
       const b = active[j]!;
-      const aPickup = pickupMinutesForJob(a.pickupDurationMinutes, input.policy).minutes;
-      const bPickup = pickupMinutesForJob(b.pickupDurationMinutes, input.policy).minutes;
-      const aDuration = (a.scheduledDurationMinutes ?? 0) + aPickup;
-      const bDuration = (b.scheduledDurationMinutes ?? 0) + bPickup;
-      const overlap = schedulesOverlap(
-        a.scheduledAt,
-        durationWithBuffer(aDuration, 0),
-        b.scheduledAt,
-        durationWithBuffer(bDuration, 0),
-      );
-      const turnaroundOverlap = schedulesOverlap(
-        a.scheduledAt,
-        durationWithBuffer(aDuration, input.settings.schedulingBufferMinutes),
-        b.scheduledAt,
-        durationWithBuffer(bDuration, 0),
+      const aWindow = windowForJob(a, input.policy);
+      const bWindow = windowForJob(b, input.policy);
+      const overlap = windowsOverlap(aWindow, bWindow);
+      const turnaroundOverlap = windowsOverlap(
+        withConfiguredBuffer(aWindow, input.settings.schedulingBufferMinutes),
+        bWindow,
       );
       const sameWorker = Boolean(
         a.assignedMembershipId && a.assignedMembershipId === b.assignedMembershipId,
@@ -126,20 +126,25 @@ export function detectScheduleConflicts(input: {
   }
 
   for (const job of active) {
-    const pickup = pickupMinutesForJob(job.pickupDurationMinutes, input.policy).minutes;
-    const duration = (job.scheduledDurationMinutes ?? 0) + pickup;
+    const window = windowForJob(job, input.policy);
     const member = job.assignedMembershipId ? members.get(job.assignedMembershipId) : undefined;
-    const window = memberWindowForDay(job.scheduledAt, input.settings, member);
-    const startMinutes = minutesOfDay(job.scheduledAt);
-    const available = availableMinutesForDay(job.scheduledAt, input.settings, member);
-    if (!window.available || startMinutes < window.startMinutes || startMinutes >= window.endMinutes) {
+    const memberWindow = memberWindowForDay(job.scheduledAt, input.settings, member, zone);
+    const startMinutes = minutesOfZonedDay(window.occupiedStart, zone);
+    const endMinutes = minutesOfZonedDay(window.occupiedEnd, zone);
+    const available = availableMinutesForDay(job.scheduledAt, input.settings, member, zone);
+    const duration = window.durationMinutes + window.pickupMinutes;
+    if (
+      !memberWindow.available ||
+      startMinutes < memberWindow.startMinutes ||
+      endMinutes > memberWindow.endMinutes
+    ) {
       conflicts.push({
         kind: "OUTSIDE_AVAILABILITY",
         severity: "WARNING",
         jobId: job.id,
         membershipId: member?.membershipId,
         explanation: member
-          ? `${labelFor(job)} starts outside ${member.name}'s availability.`
+          ? `${labelFor(job)} occupies time outside ${member.name}'s availability.`
           : `${labelFor(job)} is outside working hours or on a blocked day.`,
       });
     }
@@ -159,12 +164,12 @@ export function detectScheduleConflicts(input: {
         explanation: `${labelFor(job)} is longer than the configured working day.`,
       });
     }
-    const covered = datesCoveredBySchedule(job.scheduledAt, duration);
+    const covered = datesCoveredBySchedule(window.occupiedStart, duration);
     if (
       covered.some(
         (day) =>
-          formatISODate(day) !== formatISODate(job.scheduledAt) &&
-          (isUnavailableDate(day, input.settings) || !isWorkingWeekday(day, input.settings)),
+          formatISODateInTimeZone(day, zone) !== formatISODateInTimeZone(job.scheduledAt, zone) &&
+          (isUnavailableDate(day, input.settings) || !input.settings.workingWeekdays.includes(day.getDay())),
       )
     ) {
       conflicts.push({
@@ -179,57 +184,41 @@ export function detectScheduleConflicts(input: {
   if (input.proposed) {
     const proposedPickup = input.proposed.pickupMinutes ?? 0;
     const others = active.filter((job) => job.id !== input.proposed!.jobId);
-    const evaluation = evaluateProposedSchedule({
-      start: input.proposed.start,
-      durationMinutes: (input.proposed.durationMinutes ?? 0) + proposedPickup,
-      settings: input.settings,
-      existing: others.map((job) => ({
-        id: job.id,
-        scheduledAt: job.scheduledAt,
-        scheduledDurationMinutes:
-          (job.scheduledDurationMinutes ?? 0) +
-          pickupMinutesForJob(job.pickupDurationMinutes, input.policy).minutes,
-        customerName: job.customerName,
-      })),
+    const proposedWindow = occupiedWindow({
+      scheduledAt: input.proposed.start,
+      scheduledDurationMinutes: input.proposed.durationMinutes,
+      pickupDurationMinutes: proposedPickup,
+      policy: input.policy,
     });
-    if (evaluation.overlap) {
-      conflicts.push({
-        kind: "OVERLAP",
-        severity: "WARNING",
-        jobId: input.proposed.jobId,
-        explanation: `Proposed time overlaps ${evaluation.overlap.customerName ?? "another job"}. The later job was not moved.`,
-      });
+    for (const other of others) {
+      if (windowsOverlap(proposedWindow, windowForJob(other, input.policy))) {
+        conflicts.push({
+          kind: other.assignedMembershipId &&
+            other.assignedMembershipId === input.proposed.assignedMembershipId
+            ? "DOUBLE_BOOKING"
+            : "OVERLAP",
+          severity:
+            other.assignedMembershipId &&
+            other.assignedMembershipId === input.proposed.assignedMembershipId
+              ? "ERROR"
+              : "WARNING",
+          jobId: input.proposed.jobId,
+          otherJobId: other.id,
+          membershipId: input.proposed.assignedMembershipId ?? undefined,
+          explanation: `Proposed time overlaps ${labelFor(other)}. The later job was not moved.`,
+        });
+      }
     }
     if (input.proposed.assignedMembershipId) {
       const workerJobs = others.filter(
         (job) => job.assignedMembershipId === input.proposed!.assignedMembershipId,
       );
-      const proposedDuration = (input.proposed.durationMinutes ?? 0) + proposedPickup;
-      for (const other of workerJobs) {
-        const otherPickup = pickupMinutesForJob(other.pickupDurationMinutes, input.policy).minutes;
-        if (
-          schedulesOverlap(
-            input.proposed.start,
-            proposedDuration,
-            other.scheduledAt,
-            (other.scheduledDurationMinutes ?? 0) + otherPickup,
-          )
-        ) {
-          conflicts.push({
-            kind: "DOUBLE_BOOKING",
-            severity: "ERROR",
-            jobId: input.proposed.jobId,
-            otherJobId: other.id,
-            membershipId: input.proposed.assignedMembershipId,
-            explanation: `This worker is already booked for ${labelFor(other)} at the proposed time.`,
-          });
-        }
-      }
       const cascade = laterJobsHurtByMove({
         start: input.proposed.start,
         durationMinutes: input.proposed.durationMinutes,
         pickupMinutes: proposedPickup,
         settings: input.settings,
+        policy: input.policy,
         existing: workerJobs,
         membershipId: input.proposed.assignedMembershipId,
       });
@@ -245,10 +234,11 @@ export function detectScheduleConflicts(input: {
       }
     }
     const now = input.now ?? new Date();
+    const cutoffAgainst = input.proposed.originalScheduledAt;
     if (
-      input.proposed.alreadyScheduled &&
+      cutoffAgainst &&
       dayBeforeCutoffPassed({
-        scheduledAt: input.proposed.start,
+        scheduledAt: cutoffAgainst,
         now,
         cutoffHours: input.policy.dayBeforeChangeCutoffHours,
       })
@@ -257,7 +247,7 @@ export function detectScheduleConflicts(input: {
         kind: "DAY_BEFORE_CUTOFF",
         severity: "INFO",
         jobId: input.proposed.jobId,
-        explanation: `This change is inside the ${input.policy.dayBeforeChangeCutoffHours}-hour day-before cutoff. The owner still has to confirm it.`,
+        explanation: `This change is inside the ${input.policy.dayBeforeChangeCutoffHours}-hour day-before cutoff for the current appointment. The owner still has to confirm it.`,
       });
     }
   }
@@ -287,12 +277,4 @@ export function highestSeverity(conflicts: ScheduleConflict[]): ConflictSeverity
 export function describeConflicts(conflicts: ScheduleConflict[]): string | null {
   if (conflicts.length === 0) return null;
   return conflicts.map((row) => row.explanation).join(" ");
-}
-
-export function jobWindowWithPickup(
-  start: Date,
-  durationMinutes: number | null,
-  pickupMinutes: number,
-) {
-  return scheduleWindow(start, (durationMinutes ?? 0) + pickupMinutes);
 }

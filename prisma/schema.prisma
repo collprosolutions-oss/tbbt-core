@@ -2918,6 +2918,8 @@ model WorkforceOutreachTask {
   explanation              String
   createdByMembershipId    String?
   approvedByMembershipId   String?
+  /// Stable retry key for one logical outreach click. Unique per business.
+  idempotencyKey           String
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 
@@ -2927,6 +2929,7 @@ model WorkforceOutreachTask {
   createdBy  Membership?       @relation("WorkforceOutreachCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
   approvedBy Membership?       @relation("WorkforceOutreachApprover", fields: [approvedByMembershipId], references: [id], onDelete: SetNull)
 
+  @@unique([businessId, idempotencyKey])
   @@index([businessId])
   @@index([jobId])
   @@index([benchWorkerId])
