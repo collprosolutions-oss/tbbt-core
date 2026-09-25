@@ -18,6 +18,8 @@ import { partitionRecommendations } from "@/lib/bsos-actions";
 import { aiConnectionLabel, isAiProviderConnected } from "@/lib/ai/config";
 import { listActiveBusinessTrades } from "@/lib/business-trades";
 import { publicTradeProjection } from "@/lib/trade-config";
+import { loadGrowthSource } from "@/lib/growth-data";
+import { buildReactivationCandidates, buildRecoveryQueue } from "@/lib/growth-engine";
 
 export async function loadBsosFacts(
   prisma: PrismaClient,
@@ -47,6 +49,7 @@ export async function loadBsosFacts(
     customers,
     jobs,
     invoices,
+    growthSource,
   ] = await Promise.all([
     prisma.invoice.findMany({
       where: { ...scope, status: "SENT" },
@@ -113,6 +116,7 @@ export async function loadBsosFacts(
       where: { ...scope, status: "PAID" },
       select: { customerId: true },
     }),
+    loadGrowthSource(prisma, businessId, now),
   ]);
 
   const reviewJobIds = new Set(reviewRequests.map((row) => row.jobId).filter(Boolean));
@@ -188,6 +192,10 @@ export async function loadBsosFacts(
     recurringExpenses: { count: recurring.count, amount: recurring.amount },
     paidRevenue: { amount: asNumber(paidInvoices._sum.total) },
     recordedExpenses: { amount: asNumber(expenses._sum.amount) },
+    growthRecoveryOpen: { count: buildRecoveryQueue(growthSource).length },
+    growthReactivationEligible: {
+      count: buildReactivationCandidates(growthSource).filter((row) => row.consentEligible).length,
+    },
   };
 }
 

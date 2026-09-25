@@ -76,6 +76,8 @@ export async function loadMarketingSource(
         updatedAt: true,
         customerId: true,
         estimateId: true,
+        leadSource: true,
+        campaignId: true,
         customer: { select: { id: true, name: true } },
         estimate: {
           select: {
@@ -132,6 +134,8 @@ export async function loadMarketingSource(
         serviceCatalogItemId: true,
         leadSource: true,
         campaignId: true,
+        originalLeadSource: true,
+        originalCampaignId: true,
       },
     }),
     prisma.marketingCampaign.findMany({
@@ -261,11 +265,14 @@ export async function loadMarketingSource(
         ? LEAD_SOURCE_TRACKED_MESSAGE
         : LEAD_SOURCE_UNTRACKED_MESSAGE,
       rows: rollupAttribution({
-        requests: serviceRequests,
+        requests: serviceRequests.map((row) => ({
+          leadSource: row.originalLeadSource ?? row.leadSource,
+          campaignId: row.originalCampaignId ?? row.campaignId,
+        })),
         estimates: [],
         jobs: jobs.map((job) => ({
-          leadSource: null,
-          campaignId: null,
+          leadSource: job.leadSource,
+          campaignId: job.campaignId,
           paidRevenue: invoices
             .filter((invoice) => invoice.jobId === job.id)
             .reduce((sum, invoice) => sum + asNumber(invoice.total), 0),

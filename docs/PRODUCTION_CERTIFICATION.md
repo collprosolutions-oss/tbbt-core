@@ -27,7 +27,7 @@ Do not invent passing browser results. The isolated harness is
 8. Time cards → job photos → additional work / change order.
 9. Complete → invoice → payment (`/invoices`, `/p/[token]/invoice`).
 10. Expense → job profitability / reports (`/expenses`, `/reports`).
-11. Review request → marketing opportunity → BSOS recommendation (`/reviews`, `/marketing`, `/business-health`).
+11. Review request → marketing opportunity → Growth loop → BSOS recommendation (`/reviews`, `/marketing`, `/growth`, `/business-health`).
 
 ## Cross-cutting proofs
 
@@ -43,7 +43,7 @@ Do not invent passing browser results. The isolated harness is
 
 ## Explicit blockers
 
-- External Facebook / Instagram / Google publishing is **not connected**. Marketing never writes `PUBLISHED`.
+- External Facebook / Instagram / Google publishing is **not connected**. Marketing never writes `PUBLISHED`. Growth does not claim social publishing or Google rankings.
 - Banking / accounting are **Not Connected**. TBBT will not invent a cash balance or tax conclusion.
 - Marketing AI is not connected. Template drafts are available. An env string does not mean a provider is called.
 - This checklist does not replace a human production walkthrough on www.collproreno.com.

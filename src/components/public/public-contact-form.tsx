@@ -30,6 +30,9 @@ export function PublicContactForm({ slug }: { slug: string }) {
     formData.set("otherDescription", OTHER_TASK_LABEL);
     formData.set("description", message);
     formData.set("address", "");
+    if (typeof window !== "undefined") {
+      formData.set("landingPagePath", window.location.pathname);
+    }
     const result = await submitServiceRequest(slug, formData);
     setPending(false);
     if (result.error) {

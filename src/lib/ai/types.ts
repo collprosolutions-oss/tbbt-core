@@ -11,6 +11,8 @@ export const AI_TASK_TYPES = [
   "KNOWLEDGE_ASK",
   "WEEKLY_PLAN",
   "CAMPAIGN_IDEAS",
+  "GROWTH_EXPLAIN",
+  "GROWTH_CAMPAIGN_ANGLE",
 ] as const;
 export type AiTaskType = (typeof AI_TASK_TYPES)[number];
 

@@ -87,14 +87,14 @@ export const PRODUCT_CAPABILITY_DEFINITIONS: Record<
     displayName: "Marketing Tools",
     implementationStatus: CAPABILITY_IMPLEMENTATION_STATUSES.LIVE,
     enforcementBoundary: true,
-    enforcementNotes: "Marketing content workspace mutations.",
+    enforcementNotes: "Marketing content workspace and Growth department mutations.",
   },
   [PRODUCT_CAPABILITIES.REPORTING_INSIGHTS]: {
     code: PRODUCT_CAPABILITIES.REPORTING_INSIGHTS,
     displayName: "Reporting & Business Insights",
     implementationStatus: CAPABILITY_IMPLEMENTATION_STATUSES.LIVE,
     enforcementBoundary: true,
-    enforcementNotes: "Reports / BSOS operating mutations.",
+    enforcementNotes: "Reports / BSOS / Growth analytics operating mutations.",
   },
   [PRODUCT_CAPABILITIES.CLIENT_PORTAL]: {
     code: PRODUCT_CAPABILITIES.CLIENT_PORTAL,

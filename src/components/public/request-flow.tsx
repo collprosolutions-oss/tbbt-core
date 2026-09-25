@@ -485,6 +485,9 @@ export function MultiServiceRequestFlow({
       );
       formData.set("otherQuantity", String(selected.otherQuantity || 1));
     }
+    if (typeof window !== "undefined") {
+      formData.set("landingPagePath", window.location.pathname);
+    }
     const result = await submitPublicIntakeForm(submitServiceRequest, slug, formData);
     if (!result.ok) {
       setError(result.error);

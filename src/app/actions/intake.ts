@@ -154,6 +154,8 @@ async function submitServiceRequestInner(
     smsOptIn: readString(formData, "smsOptIn") || formData.get("smsOptIn"),
     leadSource: readString(formData, "leadSource") || "WEBSITE",
     campaignId: readString(formData, "campaignId") || null,
+    landingPagePath: readString(formData, "landingPagePath") || null,
+    localPageSlug: readString(formData, "localPageSlug") || null,
     configuredAreas,
   });
 

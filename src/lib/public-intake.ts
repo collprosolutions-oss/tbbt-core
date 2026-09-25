@@ -95,6 +95,8 @@ export type PublicIntakeInput = {
   smsOptIn?: unknown;
   leadSource?: string | null;
   campaignId?: string | null;
+  landingPagePath?: string | null;
+  localPageSlug?: string | null;
   configuredAreas?: Array<{
     id: string;
     kind: string;
@@ -365,6 +367,10 @@ async function createPublicServiceRequestInner(
   });
   const leadSource = parseLeadSource(input.leadSource, PUBLIC_DEFAULT_LEAD_SOURCE);
   let campaignId = input.campaignId?.trim() || null;
+  const landingPagePath = input.landingPagePath?.trim() || null;
+  const localPageSlug =
+    input.localPageSlug?.trim() ||
+    (landingPagePath?.match(/\/hire\/[^/]+\/in\/([^/]+\/[^/?#]+)/)?.[1] ?? null);
   const qualification = qualifyServiceAddress(configuredAreas, {
     city: structuredInput.city,
     postalCode: structuredInput.postalCode,
@@ -755,6 +761,10 @@ async function createPublicServiceRequestInner(
           serviceCatalogItemId: firstCatalogId,
           leadSource,
           campaignId,
+          originalLeadSource: leadSource,
+          originalCampaignId: campaignId,
+          landingPagePath,
+          localPageSlug,
           serviceAreaQualification: qualification.qualification,
           matchedServiceAreaId: qualification.matchedAreaId,
           tradeCode: requestTradeCode,

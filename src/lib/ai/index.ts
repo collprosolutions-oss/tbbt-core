@@ -25,6 +25,12 @@ export {
 } from "@/lib/ai/marketing";
 export { describeReviewSentiment, draftReviewResponseFromRecord } from "@/lib/ai/reviews";
 export {
+  explainGrowthPerformance,
+  proposeCampaignAngle,
+  explainGrowthPerformanceWithAi,
+  proposeCampaignAngleWithAi,
+} from "@/lib/ai/growth";
+export {
   AI_NOT_CONNECTED_MESSAGE,
   AI_FAILURE_MESSAGE,
   AI_IN_PROGRESS_MESSAGE,
