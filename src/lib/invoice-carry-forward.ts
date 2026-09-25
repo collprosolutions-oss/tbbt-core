@@ -442,6 +442,20 @@ export type PersistDraftInvoiceResult =
   | { ok: true; invoiceId: string; reused: false; total: Prisma.Decimal; kind: string }
   | { ok: false; error: string };
 
+/**
+ * Test-only barrier. Production never sets this. Concurrent persist
+ * callers can meet here after a SUPPLEMENTAL row is created and before
+ * Change Orders are claimed, so the losing transaction must requery.
+ */
+export const persistDraftInvoiceTestHooks: {
+  afterCreateSupplemental?: (input: {
+    businessId: string;
+    jobId: string;
+    invoiceId: string;
+    changeOrderIds: string[];
+  }) => Promise<void> | void;
+} = {};
+
 async function writeInvoiceLines(
   tx: InvoiceWriteClient,
   input: {
@@ -695,25 +709,55 @@ export async function persistDraftInvoiceFromCompletedJob(
           total,
         },
       });
+      const changeOrderIds = unbilled.map((changeOrder) => changeOrder.id);
+      await persistDraftInvoiceTestHooks.afterCreateSupplemental?.({
+        businessId: input.businessId,
+        jobId: job.id,
+        invoiceId: created.id,
+        changeOrderIds,
+      });
       const claimedIds = await claimChangeOrdersOnInvoice(tx, {
         businessId: input.businessId,
         invoiceId: created.id,
-        changeOrderIds: unbilled.map((changeOrder) => changeOrder.id),
+        changeOrderIds,
       });
 
       if (claimedIds.length === 0) {
         await tx.invoice.delete({ where: { id: created.id } });
-        const winner = freshChangeOrders.find((changeOrder) => changeOrder.invoiceId);
-        const reusedId = winner?.invoiceId ?? original?.id;
-        if (!reusedId) {
+        const claimedNow = await tx.changeOrder.findMany({
+          where: {
+            id: { in: changeOrderIds },
+            businessId: input.businessId,
+            jobId: job.id,
+          },
+          select: { invoiceId: true },
+        });
+        const winningInvoiceIds = [
+          ...new Set(
+            claimedNow
+              .map((row) => row.invoiceId)
+              .filter((invoiceId): invoiceId is string => Boolean(invoiceId)),
+          ),
+        ];
+        if (winningInvoiceIds.length !== 1) {
           return { ok: false, error: "That invoice could not be created." };
         }
-        const reused = existing.find((invoice) => invoice.id === reusedId);
+        const winner = await tx.invoice.findFirst({
+          where: {
+            id: winningInvoiceIds[0],
+            businessId: input.businessId,
+            jobId: job.id,
+          },
+          select: { id: true, kind: true },
+        });
+        if (!winner) {
+          return { ok: false, error: "That invoice could not be created." };
+        }
         return {
           ok: true as const,
-          invoiceId: reusedId,
+          invoiceId: winner.id,
           reused: true as const,
-          kind: reused?.kind ?? INVOICE_KIND_SUPPLEMENTAL,
+          kind: winner.kind,
         };
       }
 

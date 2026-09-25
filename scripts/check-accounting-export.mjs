@@ -35,6 +35,8 @@ const {
 } = await import("@/lib/accounting-export");
 const { buildBusinessExportZip } = await import("@/lib/business-export");
 const { invoiceNumberFromId, jobReferenceFromId } = await import("@/lib/invoice-document");
+const { attachEstimatePaymentsToInvoice } = await import("@/lib/project-payments");
+const { INVOICE_KIND_ORIGINAL, INVOICE_KIND_SUPPLEMENTAL } = await import("@/lib/revenue-integrity");
 const { toCsv, toCsvCell } = await import("@/lib/zip-store");
 const { Prisma } = await import("@prisma/client");
 
@@ -315,6 +317,7 @@ const invoiceA = {
   id: "inv_a",
   customerId: "cust_multi",
   jobId: "job_multi",
+  kind: INVOICE_KIND_ORIGINAL,
   status: "SENT",
   total: "300.00",
   paidAt: null,
@@ -327,8 +330,9 @@ const invoiceB = {
   id: "inv_b",
   customerId: "cust_multi",
   jobId: "job_multi",
+  kind: INVOICE_KIND_SUPPLEMENTAL,
   status: "SENT",
-  total: "200.00",
+  total: "60.00",
   paidAt: null,
   paymentMethod: null,
   paymentReference: null,
@@ -341,7 +345,7 @@ const jobOnlyPayment = {
   invoiceId: null,
   jobId: "job_multi",
   purpose: "INVOICE_BALANCE",
-  amount: "100.00",
+  amount: "50.00",
   method: "CASH",
   receivedAt: new Date("2026-09-02T00:00:00.000Z"),
   note: null,
@@ -359,12 +363,24 @@ const directPaymentA = {
   note: null,
   createdAt: new Date("2026-09-02T01:00:00.000Z"),
 };
+const directPaymentB = {
+  id: "pay_direct_b",
+  customerId: "cust_multi",
+  invoiceId: "inv_b",
+  jobId: "job_multi",
+  purpose: "INVOICE_BALANCE",
+  amount: "15.00",
+  method: "CASH",
+  receivedAt: new Date("2026-09-02T02:00:00.000Z"),
+  note: null,
+  createdAt: new Date("2026-09-02T02:00:00.000Z"),
+};
 const multiSource = {
   businessId: "biz_multi",
   businessName: "Multi Invoice Co",
   slug: "multi-invoice",
   invoices: [invoiceA, invoiceB],
-  payments: [jobOnlyPayment, directPaymentA],
+  payments: [jobOnlyPayment, directPaymentA, directPaymentB],
   expenses: [],
   customers: [{ id: "cust_multi", name: "Multi Customer" }],
   jobs: [{ id: "job_multi" }],
@@ -376,34 +392,38 @@ const multiB = multiInvoices.records.find((row) => row["Invoice ID"] === "inv_b"
 const jobCounts = invoiceCountByJobId(multiSource.invoices);
 check("Two invoices on the same job are counted as a multi-invoice job", jobCounts.get("job_multi") === 2);
 check(
-  "Job-only payment is not allocated to either invoice on a multi-invoice job",
-  paymentsAllocatedToInvoice(invoiceA, multiSource.payments, 2).every((row) => row.id !== "pay_job_only") &&
-    paymentsAllocatedToInvoice(invoiceB, multiSource.payments, 2).every((row) => row.id !== "pay_job_only"),
+  "Legacy job-only payment attributes to ORIGINAL A only, never SUPPLEMENTAL B",
+  paymentsAllocatedToInvoice(invoiceA, multiSource.payments).some((row) => row.id === "pay_job_only") &&
+    paymentsAllocatedToInvoice(invoiceB, multiSource.payments).every((row) => row.id !== "pay_job_only") &&
+    multiA?.["Amount Paid"] === "90.00" &&
+    multiA["Amount Remaining"] === "210.00" &&
+    multiB?.["Amount Paid"] === "15.00" &&
+    multiB["Amount Remaining"] === "45.00",
 );
 check(
   "Direct Payment.invoiceId=A counts only on A",
-  paymentsAllocatedToInvoice(invoiceA, multiSource.payments, 2).some((row) => row.id === "pay_direct_a") &&
-    paymentsAllocatedToInvoice(invoiceB, multiSource.payments, 2).every((row) => row.id !== "pay_direct_a") &&
-    multiA?.["Amount Paid"] === "40.00" &&
-    multiA["Amount Remaining"] === "260.00" &&
-    multiA["Payment Basis"] === PAYMENT_BASIS.RECORDED_PAYMENTS &&
-    multiB?.["Amount Paid"] === "0.00" &&
-    multiB["Amount Remaining"] === "200.00" &&
-    multiB["Payment Basis"] === PAYMENT_BASIS.NO_RECORDED_PAYMENT,
+  paymentsAllocatedToInvoice(invoiceA, multiSource.payments).some((row) => row.id === "pay_direct_a") &&
+    paymentsAllocatedToInvoice(invoiceB, multiSource.payments).every((row) => row.id !== "pay_direct_a") &&
+    multiA?.["Payment Basis"] === PAYMENT_BASIS.RECORDED_PAYMENTS,
 );
 check(
-  "Job-only payment appears once in payments.csv and is not invented on both invoices",
+  "Direct Payment.invoiceId=B counts only on B",
+  paymentsAllocatedToInvoice(invoiceB, multiSource.payments).some((row) => row.id === "pay_direct_b") &&
+    paymentsAllocatedToInvoice(invoiceA, multiSource.payments).every((row) => row.id !== "pay_direct_b") &&
+    multiB?.["Payment Basis"] === PAYMENT_BASIS.RECORDED_PAYMENTS,
+);
+check(
+  "Job-only payment appears once in payments.csv with a blank Invoice ID",
   multiPayments.records.filter((row) => row["Payment ID"] === "pay_job_only").length === 1 &&
     multiPayments.records.find((row) => row["Payment ID"] === "pay_job_only")?.["Invoice ID"] === "" &&
-    multiPayments.records.find((row) => row["Payment ID"] === "pay_job_only")?.["Job ID"] === "job_multi" &&
-    multiA["Amount Paid"] !== "140.00" &&
-    multiB["Amount Paid"] !== "100.00",
+    multiPayments.records.find((row) => row["Payment ID"] === "pay_job_only")?.["Job ID"] === "job_multi",
 );
 
 const singleInvoice = {
   id: "inv_single",
   customerId: "cust_single",
   jobId: "job_single",
+  kind: INVOICE_KIND_ORIGINAL,
   status: "SENT",
   total: "500.00",
   paidAt: null,
@@ -437,14 +457,14 @@ const singleSource = {
 const singleRow = parseCsv(accountingInvoicesCsv(singleSource)).records[0];
 check(
   "Single-invoice job still allocates a legacy job-only Payment",
-  paymentsAllocatedToInvoice(singleInvoice, singleSource.payments, 1).some((row) => row.id === "pay_single_job") &&
+  paymentsAllocatedToInvoice(singleInvoice, singleSource.payments).some((row) => row.id === "pay_single_job") &&
     singleRow["Amount Paid"] === "75.00" &&
     singleRow["Amount Remaining"] === "425.00" &&
     singleRow["Payment Basis"] === PAYMENT_BASIS.RECORDED_PAYMENTS,
 );
 
 const paidPartial = accountingInvoicePaymentTotals(
-  { id: "inv_paid_partial", jobId: "job_pp", status: "PAID", total: "400.00" },
+  { id: "inv_paid_partial", jobId: "job_pp", kind: INVOICE_KIND_ORIGINAL, status: "PAID", total: "400.00" },
   [
     {
       id: "pay_partial",
@@ -459,7 +479,6 @@ const paidPartial = accountingInvoicePaymentTotals(
       createdAt: new Date(),
     },
   ],
-  1,
 );
 check(
   "PAID invoice with recorded Payment rows follows Payment truth, not the invoice total",
@@ -472,7 +491,11 @@ check(
   "Accounting export uses invoicePaymentBreakdown instead of a second paid-cash rule",
   accountingSrc.includes("invoicePaymentBreakdown") &&
     accountingSrc.includes("legacyFullyPaid") &&
-    accountingSrc.includes("paymentsAllocatedToInvoice"),
+    accountingSrc.includes("paymentsAllocatedToInvoice") &&
+    accountingSrc.includes("paymentsBelongingToInvoice") &&
+    accountingSrc.includes("ORIGINAL invoice only") &&
+    accountingSrc.includes("kind: true") &&
+    readFileSync(new URL("../src/lib/business-export.ts", import.meta.url), "utf8").includes("kind: true"),
 );
 
 try {
@@ -620,6 +643,7 @@ try {
       businessId: businessA.id,
       customerId: customerA.id,
       jobId: supplementJob.id,
+      kind: INVOICE_KIND_ORIGINAL,
       status: "SENT",
       total: new Prisma.Decimal("300.00"),
     },
@@ -629,8 +653,9 @@ try {
       businessId: businessA.id,
       customerId: customerA.id,
       jobId: supplementJob.id,
+      kind: INVOICE_KIND_SUPPLEMENTAL,
       status: "SENT",
-      total: new Prisma.Decimal("200.00"),
+      total: new Prisma.Decimal("60.00"),
     },
   });
   const unallocatedJobPayment = await prisma.payment.create({
@@ -640,22 +665,10 @@ try {
       jobId: supplementJob.id,
       invoiceId: null,
       purpose: "INVOICE_BALANCE",
-      amount: new Prisma.Decimal("100.00"),
+      amount: new Prisma.Decimal("50.00"),
       method: "CASH",
     },
   });
-  const attachedSupplementPayment = await prisma.payment.create({
-    data: {
-      businessId: businessA.id,
-      customerId: customerA.id,
-      jobId: supplementJob.id,
-      invoiceId: supplementInvoiceA.id,
-      purpose: "INVOICE_BALANCE",
-      amount: new Prisma.Decimal("40.00"),
-      method: "CHECK",
-    },
-  });
-
   const sourceA = await loadAccountingExportSource(prisma, businessA.id);
   const invoices = parseCsv(accountingInvoicesCsv(sourceA));
   const payments = parseCsv(accountingPaymentsCsv(sourceA));
@@ -710,14 +723,39 @@ try {
   const dbSupplementA = invoices.records.find((row) => row["Invoice ID"] === supplementInvoiceA.id);
   const dbSupplementB = invoices.records.find((row) => row["Invoice ID"] === supplementInvoiceB.id);
   check(
-    "Supplemental multi-invoice job does not duplicate unallocated cash",
-    dbSupplementA?.["Amount Paid"] === "40.00" &&
+    "Before attach, invoices.csv attributes the $50 job-only payment to ORIGINAL A only",
+    dbSupplementA?.["Amount Paid"] === "50.00" &&
+      dbSupplementA.Total === "300.00" &&
       dbSupplementA["Payment Basis"] === PAYMENT_BASIS.RECORDED_PAYMENTS &&
       dbSupplementB?.["Amount Paid"] === "0.00" &&
+      dbSupplementB.Total === "60.00" &&
       dbSupplementB["Payment Basis"] === PAYMENT_BASIS.NO_RECORDED_PAYMENT &&
       payments.records.filter((row) => row["Payment ID"] === unallocatedJobPayment.id).length === 1 &&
-      payments.records.find((row) => row["Payment ID"] === unallocatedJobPayment.id)?.["Invoice ID"] === "" &&
-      payments.records.some((row) => row["Payment ID"] === attachedSupplementPayment.id),
+      payments.records.find((row) => row["Payment ID"] === unallocatedJobPayment.id)?.["Invoice ID"] === "",
+  );
+
+  const attachedCount = await attachEstimatePaymentsToInvoice(prisma, {
+    businessId: businessA.id,
+    jobId: supplementJob.id,
+    invoiceId: supplementInvoiceA.id,
+  });
+  check("attachEstimatePaymentsToInvoice assigns the legacy payment to ORIGINAL A", attachedCount === 1);
+  const afterAttachPayment = await prisma.payment.findUniqueOrThrow({
+    where: { id: unallocatedJobPayment.id },
+  });
+  check("after attach, Payment.invoiceId is ORIGINAL A", afterAttachPayment.invoiceId === supplementInvoiceA.id);
+  const sourceAfterAttach = await loadAccountingExportSource(prisma, businessA.id);
+  const invoicesAfterAttach = parseCsv(accountingInvoicesCsv(sourceAfterAttach));
+  const paymentsAfterAttach = parseCsv(accountingPaymentsCsv(sourceAfterAttach));
+  const afterA = invoicesAfterAttach.records.find((row) => row["Invoice ID"] === supplementInvoiceA.id);
+  const afterB = invoicesAfterAttach.records.find((row) => row["Invoice ID"] === supplementInvoiceB.id);
+  check(
+    "After attach, invoice totals stay the same and payments.csv records A explicitly",
+    afterA?.["Amount Paid"] === "50.00" &&
+      afterB?.["Amount Paid"] === "0.00" &&
+      paymentsAfterAttach.records.filter((row) => row["Payment ID"] === unallocatedJobPayment.id).length === 1 &&
+      paymentsAfterAttach.records.find((row) => row["Payment ID"] === unallocatedJobPayment.id)?.["Invoice ID"] ===
+        supplementInvoiceA.id,
   );
   check(
     "Active expense is exported and voided expense truth is omitted",

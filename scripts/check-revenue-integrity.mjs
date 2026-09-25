@@ -17,6 +17,7 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const {
   persistDraftInvoiceFromCompletedJob,
+  persistDraftInvoiceTestHooks,
 } = await import("@/lib/invoice-carry-forward");
 const { completeJobAndSendInvoice } = await import("@/lib/complete-job-invoice");
 const {
@@ -1232,6 +1233,99 @@ try {
     uniqueSucceeded = true;
   }
   check("partial unique index rejects a second ORIGINAL for the same job", uniqueSucceeded);
+
+  console.log("\nTEST — Concurrent supplemental persist returns the winning invoice, not ORIGINAL");
+  const raceJob = await createInProgressApprovedJob({
+    businessId: businessA.id,
+    customerId: customerA.id,
+    propertyId: propertyA.id,
+    customerName: customerA.name,
+    estimateTotal: 220,
+    estimateLines: [{ description: "Race original work", quantity: 1, unitPrice: 220, total: 220 }],
+    status: "COMPLETED",
+  });
+  const raceOriginal = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: businessA.id,
+    jobId: raceJob.job.id,
+  });
+  check("race job created an ORIGINAL invoice", raceOriginal.ok && raceOriginal.kind === INVOICE_KIND_ORIGINAL);
+  await prisma.invoice.update({
+    where: { id: raceOriginal.invoiceId },
+    data: { status: "SENT" },
+  });
+  const raceCo = await addChangeOrder({
+    businessId: businessA.id,
+    jobId: raceJob.job.id,
+    title: "Race balance work",
+    status: "APPROVED",
+    total: 55,
+    description: "Race balance work",
+  });
+
+  let arrived = 0;
+  /** @type {Array<() => void>} */
+  const release = [];
+  persistDraftInvoiceTestHooks.afterCreateSupplemental = () =>
+    new Promise((resolve) => {
+      arrived += 1;
+      release.push(resolve);
+      if (arrived >= 2) {
+        for (const done of release) done();
+      }
+    });
+  const raceClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const raceClientB = new PrismaClient({ datasourceUrl: testUrl });
+  let raceResults;
+  try {
+    raceResults = await Promise.all([
+      persistDraftInvoiceFromCompletedJob(raceClientA, {
+        businessId: businessA.id,
+        jobId: raceJob.job.id,
+      }),
+      persistDraftInvoiceFromCompletedJob(raceClientB, {
+        businessId: businessA.id,
+        jobId: raceJob.job.id,
+      }),
+    ]);
+  } finally {
+    persistDraftInvoiceTestHooks.afterCreateSupplemental = undefined;
+    await raceClientA.$disconnect();
+    await raceClientB.$disconnect();
+  }
+
+  const successful = raceResults.filter((result) => result.ok);
+  const invoiceIds = [...new Set(successful.map((result) => result.invoiceId))];
+  const raceInvoices = await prisma.invoice.findMany({
+    where: { jobId: raceJob.job.id },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  const raceSupplementals = raceInvoices.filter((invoice) => invoice.kind === INVOICE_KIND_SUPPLEMENTAL);
+  const raceCoAfter = await prisma.changeOrder.findUniqueOrThrow({ where: { id: raceCo.id } });
+  const winnerId = raceCoAfter.invoiceId;
+  check("both concurrent callers succeeded", successful.length === 2);
+  check("both callers resolved to the same invoice id", invoiceIds.length === 1);
+  check("the shared invoice is the winning supplemental, not ORIGINAL", invoiceIds[0] === winnerId && winnerId !== raceOriginal.invoiceId);
+  check(
+    "neither losing call returned the ORIGINAL invoice",
+    successful.every((result) => result.invoiceId !== raceOriginal.invoiceId),
+  );
+  check("exactly one supplemental invoice remains", raceSupplementals.length === 1);
+  check("exactly one invoice owns the CO", raceCoAfter.invoiceId === raceSupplementals[0]?.id);
+  check(
+    "no orphan or zero-value supplemental remains",
+    raceSupplementals.every((invoice) => invoice.total.toString() === "55") &&
+      (await prisma.invoice.count({
+        where: { jobId: raceJob.job.id, kind: INVOICE_KIND_SUPPLEMENTAL, total: new Prisma.Decimal(0) },
+      })) === 0,
+  );
+  const originalAfterRace = await prisma.invoice.findUniqueOrThrow({ where: { id: raceOriginal.invoiceId } });
+  check("original invoice is unchanged", originalAfterRace.total.toString() === "220" && originalAfterRace.kind === INVOICE_KIND_ORIGINAL);
+  check("supplemental total is the late CO amount", raceSupplementals[0]?.total.toString() === "55");
+  const raceRetry = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: businessA.id,
+    jobId: raceJob.job.id,
+  });
+  check("subsequent retry reuses the winning supplemental", raceRetry.ok && raceRetry.reused === true && raceRetry.invoiceId === winnerId);
 
   console.log(
     failures === 0
