@@ -96,20 +96,21 @@ export function resolvePublicRequestTrade(
     return { ok: true, tradeCode: catalogCodes[0] };
   }
 
-  if (authorized.length === 1) {
-    return { ok: true, tradeCode: authorized[0] };
-  }
-
   if (authorized.length === 0) {
     return { ok: false, error: INACTIVE_TRADE_REQUEST_MESSAGE };
   }
 
   const hint = (input.requestedTradeCode ?? "").trim();
-  if (!hint) {
-    return { ok: false, error: CUSTOM_WORK_TRADE_REQUIRED_MESSAGE };
-  }
-  if (!isConfiguredTrade(hint) || !authorized.includes(hint)) {
+  if (hint) {
+    if (isConfiguredTrade(hint) && authorized.includes(hint)) {
+      return { ok: true, tradeCode: hint };
+    }
     return { ok: false, error: INACTIVE_TRADE_REQUEST_MESSAGE };
   }
-  return { ok: true, tradeCode: hint };
+
+  if (authorized.length === 1) {
+    return { ok: true, tradeCode: authorized[0] };
+  }
+
+  return { ok: false, error: CUSTOM_WORK_TRADE_REQUIRED_MESSAGE };
 }

@@ -255,7 +255,13 @@ check(
       authorizedActiveTradeCodes: ["HANDYMAN", "CLEANING"],
       requestedTradeCode: "CLEANING",
       includeOther: true,
-    }).ok === true,
+    }).ok === true &&
+    resolvePublicRequestTrade({
+      catalogTradeCodes: [],
+      authorizedActiveTradeCodes: ["HANDYMAN"],
+      requestedTradeCode: "CLEANING",
+      includeOther: true,
+    }).ok === false,
 );
 
 try {
