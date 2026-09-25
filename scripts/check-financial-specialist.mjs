@@ -19,6 +19,7 @@ const {
   getFinancialSpecialistInterpretationCount,
   interpretFinancialSpecialist,
   loadCanonicalRecommendationCatalog,
+  projectFinancialContext,
   planSpecialists,
   resetFinancialSpecialistCounters,
   resolveConflicts,
@@ -190,6 +191,9 @@ try {
 
   await entitleFounder(tenantA.business.id);
   await entitleFounder(tenantB.business.id);
+  await prisma.businessSaasSubscription.create({
+    data: { businessId: starter.business.id, status: "active", planCode: "STARTER" },
+  });
 
   const customerA = await prisma.customer.create({
     data: { businessId: tenantA.business.id, name: "Ada Cash" },
@@ -230,7 +234,7 @@ try {
       projectToken: randomUUID(),
     },
   });
-  await prisma.invoice.create({
+  const negativeInvoice = await prisma.invoice.create({
     data: {
       businessId: tenantA.business.id,
       customerId: customerA.id,
@@ -245,6 +249,7 @@ try {
       businessId: tenantA.business.id,
       customerId: customerA.id,
       jobId: negativeJob.id,
+      invoiceId: negativeInvoice.id,
       purpose: "INVOICE_BALANCE",
       amount: new Prisma.Decimal(100),
       method: "CASH",
@@ -321,40 +326,46 @@ try {
   const resultA = interpretFinancialSpecialist(catalogA, "How much collected cash and outstanding receivables do I have?");
   const resultB = interpretFinancialSpecialist(catalogB, "How much collected cash do I have?");
   const resultStarter = interpretFinancialSpecialist(catalogStarter, "How much profit do I have?");
+  const factsA = catalogA.financial.intelligence
+    ? projectFinancialContext(catalogA, "How much collected cash and outstanding receivables do I have?", catalogA.financial.intelligence).facts
+    : {};
+  const factsB = catalogB.financial.intelligence
+    ? projectFinancialContext(catalogB, "How much collected cash do I have?", catalogB.financial.intelligence).facts
+    : {};
 
   check("1. Tenant A snapshot is entitled", catalogA.financial.entitled === true && Boolean(catalogA.financial.intelligence));
   check("1. Tenant A cannot see B invoice total 8888", !JSON.stringify(resultA).includes("8888"));
-  check("1. Tenant B cannot see A collected 400", !JSON.stringify(resultB).includes("400.00") || resultB.facts["collected-customer-cash"] !== "400.00");
-  check("1. Tenant B collected cash stays on B", resultB.facts["collected-customer-cash"] === "0.00");
+  check("1. Tenant B cannot see A collected 400", factsB["collected-customer-cash"] !== "400.00" && factsB["collected-customer-cash"] !== "750.00");
+  check("1. Tenant B collected cash stays on B", factsB["collected-customer-cash"] === "0.00");
   check("3. No REPORTING_INSIGHTS skips Financial", resultStarter.status === "SKIPPED");
   check("3. Skipped Financial has a limitation", /Reporting Insights/i.test(resultStarter.limitation ?? ""));
   check("3. Skipped Financial has no fake zeroes", resultStarter.factKeys.length === 0 && resultStarter.findings.length === 0);
 
-  check("4. SENT 1000 + Payment 400 collects 400", resultA.facts["collected-customer-cash"] === "750.00" || resultA.facts["collected-customer-cash"] === "400.00" || Number(resultA.facts["collected-customer-cash"]) >= 400);
+  check("4. SENT 1000 + Payment 400 collects 400", factsA["collected-customer-cash"] === "750.00" || factsA["collected-customer-cash"] === "400.00" || Number(factsA["collected-customer-cash"]) >= 400);
   const intelA = catalogA.financial.intelligence;
   const partialInvoice = intelA.receivables.rows.find((row) => row.invoiceId === sentPartial.id);
   check("4. Partial payment stays partial — collected 400 / remaining 600", partialInvoice?.collectedAgainstInvoice === 400 && partialInvoice?.balanceDue === 600);
-  check("4. Combined collected includes payment-backed cash", Number(resultA.facts["collected-customer-cash"]) === 750);
+  check("4. Combined collected includes payment-backed cash", Number(factsA["collected-customer-cash"]) === 750);
   const legacyPaid = intelA.cashFlow.collectedCustomerPayments;
   check("5. PAID legacy invoice with no Payment rows uses fallback", legacyPaid === 750);
   const sentUnpaid = intelA.receivables.rows.filter((row) => row.invoiceTotal === 175);
   check("6. SENT invoice with no payment is not collected", sentUnpaid.length === 1 && sentUnpaid[0].collectedAgainstInvoice === 0 && sentUnpaid[0].balanceDue === 175);
 
-  check("7. Bank stays disconnected", resultA.facts["bank-connected"] === "false" && intelA.bankConnected === false);
-  check("7. Accounting stays disconnected", resultA.facts["accounting-connected"] === "false" && intelA.accountingConnected === false);
-  check("7. No invented bank/accounting balance", resultA.facts["projected-bank-balance"] === "unknown" && resultA.facts["projected-accounting-balance"] === "unknown" && intelA.cashFlow.projectedBalance === null);
-  check("8. Missing wage stays unknown/incomplete", resultA.facts["labor-cost-completeness"] === "incomplete/unknown");
-  check("9. Missing target margin is unconfigured, not 0%", resultA.facts["target-margin-configuration"] === "unconfigured" && intelA.laborBurden.targetGrossMarginRate == null);
-  check("10. Missing burden is unconfigured, not 0%", resultA.facts["burden-configuration"] === "unconfigured" && intelA.laborBurden.burdenRate == null);
+  check("7. Bank stays disconnected", factsA["bank-connected"] === "false" && intelA.bankConnected === false);
+  check("7. Accounting stays disconnected", factsA["accounting-connected"] === "false" && intelA.accountingConnected === false);
+  check("7. No invented bank/accounting balance", factsA["projected-bank-balance"] === "unknown" && factsA["projected-accounting-balance"] === "unknown" && intelA.cashFlow.projectedBalance === null);
+  check("8. Missing wage stays unknown/incomplete", factsA["labor-cost-completeness"] === "incomplete/unknown");
+  check("9. Missing target margin is unconfigured, not 0%", factsA["target-margin-configuration"] === "unconfigured" && intelA.laborBurden.targetGrossMarginRate == null);
+  check("10. Missing burden is unconfigured, not 0%", factsA["burden-configuration"] === "unconfigured" && intelA.laborBurden.burdenRate == null);
 
   const negative = intelA.jobProfitability.find((job) => job.jobId === negativeJob.id);
   check("11. Negative-margin job is projected", Boolean(negative) && negative.grossProfit === -150);
-  check("11. Specialist reports the negative margin", Number(resultA.facts["lowest-margin-job"]) === -150);
+  check("11. Specialist reports the negative margin", Number(factsA["lowest-margin-job"]) === -150);
 
   const unknownCost = intelA.jobProfitability.find((job) => job.jobId === unknownJob.id);
   check("24. Incomplete cost remains unknown", unknownCost?.grossProfit == null && unknownCost?.recordedDirectCost == null && unknownCost?.completeness.laborCostComplete === false);
 
-  const receivableFact = resultA.facts["receivables-top"] ?? "";
+  const receivableFact = factsA["receivables-top"] ?? "";
   check("12. Receivables are capped at 5", receivableFact.split("|").filter(Boolean).length <= FINANCIAL_CONTEXT_CAPS.receivables);
   check("12. Source receivables exceed the cap", intelA.receivables.rows.filter((row) => row.balanceDue > 0).length > FINANCIAL_CONTEXT_CAPS.receivables);
   check("13. Fact keys stay bounded", resultA.factKeys.length <= FINANCIAL_CONTEXT_CAPS.facts);
@@ -362,16 +373,19 @@ try {
     "13. Context does not pass raw ledgers or secrets",
     !JSON.stringify(resultA).includes("stripe") &&
       !JSON.stringify(resultA).includes("sk_live") &&
-      !/phone|email|address/i.test(JSON.stringify(resultA.facts)),
+      !/phone|email|address/i.test(JSON.stringify(factsA)),
   );
 
   const noJobBiz = await createOwnerWorkspace("No Jobs Financial");
   await entitleFounder(noJobBiz.business.id);
   const noJobCatalog = await loadCanonicalRecommendationCatalog(prisma, noJobBiz.business.id);
   const noJobResult = interpretFinancialSpecialist(noJobCatalog, "Should I change pricing?");
+  const noJobFacts = noJobCatalog.financial.intelligence
+    ? projectFinancialContext(noJobCatalog, "Should I change pricing?", noJobCatalog.financial.intelligence).facts
+    : {};
   check(
     "23. No completed jobs → no invented pricing signal",
-    noJobResult.facts["pricing-sample"] === "no-completed-jobs-with-complete-cost" &&
+    noJobFacts["pricing-sample"] === "no-completed-jobs-with-complete-cost" &&
       noJobResult.findings.every((row) => !row.key.startsWith("financial-pricing:")),
   );
 
@@ -392,6 +406,10 @@ try {
 
   const emptyFocus = await createOwnerWorkspace("Focus Only");
   await entitleFounder(emptyFocus.business.id);
+  await prisma.membership.update({
+    where: { id: emptyFocus.membership.id },
+    data: { hourlyWage: 25 },
+  });
   resetLoads();
   const unselected = await runChiefOfStaffCoach(prisma, emptyFocus.access, {
     question: "What should I focus on this week?",

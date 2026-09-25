@@ -36,6 +36,7 @@ export {
   FINANCIAL_OWNED_RECOMMENDATION_KEYS,
   interpretFinancialSpecialist,
   isFinancialOwnedRecommendationKey,
+  projectFinancialContext,
 } from "@/lib/chief-of-staff/specialists/financial";
 export { resolveConflicts } from "@/lib/chief-of-staff/conflicts";
 export { synthesizeCoachAnswer } from "@/lib/chief-of-staff/synthesize";
