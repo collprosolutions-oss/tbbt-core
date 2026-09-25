@@ -232,6 +232,7 @@ export async function buildBusinessExportZip(
         id: true,
         customerId: true,
         jobId: true,
+        kind: true,
         status: true,
         total: true,
         paidAt: true,

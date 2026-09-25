@@ -1496,6 +1496,14 @@ model Invoice {
   businessId       String
   customerId       String?
   jobId            String?
+  /// ORIGINAL | SUPPLEMENTAL. Exactly one ORIGINAL per job is enforced by
+  /// a partial unique index in the migration. The migration first ranks
+  /// legacy duplicate Invoice rows (oldest createdAt, then id) as ORIGINAL
+  /// and later rows as SUPPLEMENTAL — it never merges or deletes history.
+  /// A SUPPLEMENTAL / balance invoice bills approved Change Orders that
+  /// were not on the original invoice. Existing invoice totals are never
+  /// rewritten.
+  kind             String    @default("ORIGINAL")
   status           String    @default("DRAFT")
   total            Decimal   @default(0)
   /// Set exactly once, when status transitions SENT -> PAID. Never overwritten afterward.
@@ -1507,13 +1515,15 @@ model Invoice {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  customer  Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  job       Job?       @relation(fields: [jobId], references: [id], onDelete: SetNull)
-  lineItems LineItem[]
-  payments  Payment[]
+  business             Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer             Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  job                  Job?          @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  lineItems            LineItem[]
+  payments             Payment[]
+  billedChangeOrders   ChangeOrder[]
 
   @@index([businessId])
+  @@index([jobId, kind])
 }
 
 /// Durable payment record — source of truth for material deposits and
@@ -1646,14 +1656,20 @@ model ChangeOrder {
   /// Set exactly once, on the guarded DRAFT|SENT -> CANCELLED transition
   /// (owner/admin action). Never set on an APPROVED or DECLINED order.
   cancelledAt DateTime?
+  /// Set when this approved Change Order is copied onto an Invoice.
+  /// Null means not yet billed. A Change Order is billed at most once —
+  /// this column is the integrity guard that replaced one-invoice-per-job.
+  invoiceId   String?
 
   business               Business                @relation(fields: [businessId], references: [id], onDelete: Cascade)
   job                    Job                     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  invoice                Invoice?                @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   lineItems              LineItem[]
   additionalWorkRequests AdditionalWorkRequest[]
 
   @@index([businessId])
   @@index([jobId])
+  @@index([invoiceId])
 }
 
 /// A customer's (or, in the future, an employee's -- see `source` below)

@@ -39,6 +39,7 @@ import { prisma } from "@/lib/prisma";
 import { loadLaunchWorkspace } from "@/lib/business-launch-data";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
 import { getBusinessPaymentStatus } from "@/lib/payments";
+import { completedJobBillingAttention } from "@/lib/revenue-integrity";
 import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
 import { listActiveTradeCodes } from "@/lib/business-trades";
 import { workspaceTradeLabel } from "@/lib/trade-config";
@@ -93,6 +94,7 @@ export default async function DashboardPage() {
     recentRequests,
     paymentStatus,
     appointmentAttentionJobs,
+    completedJobsForBilling,
   ] = await Promise.all([
     prisma.serviceRequest.count({ where: { ...access.scope, status: "OPEN" } }),
     prisma.estimate.count({ where: { ...access.scope, status: "SENT" } }),
@@ -183,6 +185,24 @@ export default async function DashboardPage() {
       orderBy: { updatedAt: "desc" },
       take: DASHBOARD_APPOINTMENT_ATTENTION_TAKE,
     }),
+    prisma.job.findMany({
+      where: { ...access.scope, status: "COMPLETED" },
+      select: {
+        id: true,
+        customerId: true,
+        estimateId: true,
+        customer: { select: { name: true } },
+        invoices: {
+          select: { id: true, status: true, kind: true, createdAt: true, total: true },
+        },
+        changeOrders: {
+          select: { id: true, status: true, total: true, invoiceId: true, approvedAt: true, createdAt: true },
+        },
+        estimate: { select: { total: true } },
+        approvedEstimateVersion: { select: { total: true } },
+      },
+      orderBy: { updatedAt: "desc" },
+    }),
   ]);
 
   const outstandingTotal = outstandingAgg._sum.total ?? 0;
@@ -231,6 +251,16 @@ export default async function DashboardPage() {
     },
   ];
 
+  const unbilledCompletedJobs = completedJobsForBilling.filter((job) => {
+    const attention = completedJobBillingAttention({
+      jobStatus: "COMPLETED",
+      originalApprovedTotal: job.approvedEstimateVersion?.total ?? job.estimate?.total ?? null,
+      invoices: job.invoices,
+      changeOrders: job.changeOrders,
+    });
+    return attention.unbilled;
+  });
+
   const attentionGroups: AttentionGroupData[] = [
     {
       title: "Requests without an estimate",
@@ -272,6 +302,16 @@ export default async function DashboardPage() {
         meta: formatMoney(invoice.total),
         status: invoice.status,
         href: `/invoices/${invoice.id}`,
+        action: "Open",
+      })),
+    },
+    {
+      title: "Completed jobs with unbilled work",
+      count: unbilledCompletedJobs.length,
+      items: unbilledCompletedJobs.slice(0, ATTENTION_TAKE).map((job) => ({
+        key: job.id,
+        name: job.customer?.name ?? "Customer",
+        href: `/jobs/${job.id}`,
         action: "Open",
       })),
     },

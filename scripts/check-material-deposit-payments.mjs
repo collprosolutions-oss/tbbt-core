@@ -527,7 +527,7 @@ try {
   check("legacy PAID amount due is $0", legacyPaid.amountDue.toString() === "0");
 
   const groupedRows = paymentsBelongingToInvoice(
-    { id: "inv-1", jobId: "job-1" },
+    { id: "inv-1", jobId: "job-1", kind: "ORIGINAL" },
     [
       { id: "p-deposit", invoiceId: "inv-1", jobId: "job-1" },
       { id: "p-other-invoice", invoiceId: "inv-2", jobId: "job-1" },
@@ -538,6 +538,18 @@ try {
   check(
     "invoice payment grouping keeps this invoice's rows and unattached job payments",
     groupedRows.map((row) => row.id).join(",") === "p-deposit,p-unattached",
+  );
+  const supplementalRows = paymentsBelongingToInvoice(
+    { id: "inv-2", jobId: "job-1", kind: "SUPPLEMENTAL" },
+    [
+      { id: "p-deposit", invoiceId: "inv-1", jobId: "job-1" },
+      { id: "p-other-invoice", invoiceId: "inv-2", jobId: "job-1" },
+      { id: "p-unattached", invoiceId: null, jobId: "job-1" },
+    ],
+  );
+  check(
+    "supplemental invoice never claims an unallocated job-only payment",
+    supplementalRows.map((row) => row.id).join(",") === "p-other-invoice",
   );
 
   const businessA = await seedBusiness("Deposit A");

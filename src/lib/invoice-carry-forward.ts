@@ -10,16 +10,24 @@
  *   2. labor-minimum adjustment stored on that approved record
  *   3. Line items on currently APPROVED Change Orders only
  *
- * The Invoice.total is still resolveCurrentApprovedProjectTotal() computed
- * once at create (see src/app/actions/invoice.ts). Copied LineItem rows
- * are a commercial snapshot: later catalog / settings edits must not
- * rewrite them.
+ * The first invoice is ORIGINAL: resolveCurrentApprovedProjectTotal()
+ * computed once at create. A later approved Change Order is billed on a
+ * SUPPLEMENTAL invoice. Copied LineItem rows are a commercial snapshot:
+ * later catalog / settings edits must not rewrite them.
  */
 import { Prisma, type LineItemType, type PrismaClient } from "@prisma/client";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { attachEstimatePaymentsToInvoice } from "@/lib/project-payments";
+import {
+  INVOICE_KIND_ORIGINAL,
+  INVOICE_KIND_SUPPLEMENTAL,
+  billedChangeOrderIds,
+  isOriginalInvoiceKind,
+  originalInvoiceForJob,
+  unbilledApprovedChangeOrders,
+} from "@/lib/revenue-integrity";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -135,6 +143,8 @@ export const JOB_INVOICE_SCOPE_INCLUDE = {
       status: true,
       total: true,
       createdAt: true,
+      approvedAt: true,
+      invoiceId: true,
       lineItems: {
         orderBy: { createdAt: "asc" as const },
         select: INVOICE_LINE_SELECT,
@@ -159,6 +169,7 @@ export type InvoiceBackfillResult =
 export type BackfillChangeOrderCandidate = {
   id: string;
   createdAt: Date;
+  approvedAt?: Date | null;
   lineItems: InvoiceSnapshotLineInput[];
 };
 
@@ -203,10 +214,14 @@ export function invoiceCustomerPricingTotal(
  * Choose the APPROVED Change Orders whose copied lines, plus the original
  * approved estimate (and labor-minimum snapshot), equal the invoice total.
  *
- * Prefers Change Orders that already existed when the invoice was created.
- * If that set does not match — for example a Change Order approved in the
- * same second as invoice create — grows prefixes in createdAt order until
- * the snapshot sum equals the stored Invoice.total.
+ * Prefers Change Orders whose recorded approvedAt is at or before the
+ * invoice. createdAt is not approval time. If approval timing cannot be
+ * proven, the Change Order is omitted from as-of reconstruction.
+ *
+ * If that set does not match — for example two COs approved before the
+ * invoice but only one included in the frozen total — grows prefixes in
+ * approvedAt order among that as-of set until the snapshot sum equals
+ * the stored Invoice.total.
  *
  * Returns null when no safe reconstruction exists. Never invents lines and
  * never includes DRAFT / SENT / DECLINED / CANCELLED Change Orders
@@ -220,10 +235,16 @@ export function selectApprovedChangeOrdersForInvoiceBackfill(input: {
   invoiceTotal: Prisma.Decimal | number | string;
 }): BackfillChangeOrderCandidate[] | null {
   const invoiceTotal = toInvoiceDecimal(input.invoiceTotal);
-  const ordered = [...input.approvedChangeOrders].sort((a, b) => {
-    const byTime = a.createdAt.getTime() - b.createdAt.getTime();
-    return byTime !== 0 ? byTime : a.id.localeCompare(b.id);
-  });
+  const asOfInvoice = [...input.approvedChangeOrders]
+    .filter((changeOrder) => {
+      if (!changeOrder.approvedAt) return false;
+      return changeOrder.approvedAt.getTime() <= input.invoiceCreatedAt.getTime();
+    })
+    .sort((a, b) => {
+      const aTime = (a.approvedAt ?? a.createdAt).getTime();
+      const bTime = (b.approvedAt ?? b.createdAt).getTime();
+      return aTime !== bTime ? aTime - bTime : a.id.localeCompare(b.id);
+    });
 
   const matches = (changeOrders: BackfillChangeOrderCandidate[]) => {
     const lines = buildInvoiceLineSnapshots({
@@ -236,16 +257,12 @@ export function selectApprovedChangeOrdersForInvoiceBackfill(input: {
     return invoiceCustomerPricingTotal(lines).eq(invoiceTotal);
   };
 
-  const asOfInvoice = ordered.filter(
-    (changeOrder) =>
-      changeOrder.createdAt.getTime() <= input.invoiceCreatedAt.getTime(),
-  );
   if (matches(asOfInvoice)) {
     return asOfInvoice;
   }
 
-  for (let index = 0; index <= ordered.length; index += 1) {
-    const prefix = ordered.slice(0, index);
+  for (let index = 0; index <= asOfInvoice.length; index += 1) {
+    const prefix = asOfInvoice.slice(0, index);
     if (matches(prefix)) {
       return prefix;
     }
@@ -367,6 +384,7 @@ async function persistEmptyInvoiceWorkLines(
     .map((changeOrder) => ({
       id: changeOrder.id,
       createdAt: changeOrder.createdAt,
+      approvedAt: changeOrder.approvedAt,
       lineItems: changeOrder.lineItems,
     }));
 
@@ -420,14 +438,103 @@ async function persistEmptyInvoiceWorkLines(
 }
 
 export type PersistDraftInvoiceResult =
-  | { ok: true; invoiceId: string; reused: true }
-  | { ok: true; invoiceId: string; reused: false; total: Prisma.Decimal }
+  | { ok: true; invoiceId: string; reused: true; kind: string }
+  | { ok: true; invoiceId: string; reused: false; total: Prisma.Decimal; kind: string }
   | { ok: false; error: string };
 
 /**
- * Creates exactly one DRAFT invoice for a completed job, copying approved
- * commercial lines. Safe to call twice: the second call returns the
- * existing invoice (no second row, no extra line copies).
+ * Test-only barrier. Production never sets this. Concurrent persist
+ * callers can meet here after a SUPPLEMENTAL row is created and before
+ * Change Orders are claimed, so the losing transaction must requery.
+ */
+export const persistDraftInvoiceTestHooks: {
+  afterCreateSupplemental?: (input: {
+    businessId: string;
+    jobId: string;
+    invoiceId: string;
+    changeOrderIds: string[];
+  }) => Promise<void> | void;
+} = {};
+
+async function writeInvoiceLines(
+  tx: InvoiceWriteClient,
+  input: {
+    businessId: string;
+    invoiceId: string;
+    lines: InvoiceSnapshotLineInput[];
+  },
+) {
+  for (const line of input.lines) {
+    await tx.lineItem.create({
+      data: {
+        businessId: input.businessId,
+        invoiceId: input.invoiceId,
+        serviceCatalogItemId: line.serviceCatalogItemId ?? null,
+        description: line.description,
+        quantity: toInvoiceDecimal(line.quantity),
+        unitPrice: toInvoiceDecimal(line.unitPrice),
+        total: toInvoiceDecimal(line.total),
+        type: line.type,
+      },
+    });
+  }
+}
+
+async function claimChangeOrdersOnInvoice(
+  tx: InvoiceWriteClient,
+  input: {
+    businessId: string;
+    invoiceId: string;
+    changeOrderIds: string[];
+  },
+): Promise<string[]> {
+  if (input.changeOrderIds.length === 0) return [];
+  await tx.changeOrder.updateMany({
+    where: {
+      id: { in: input.changeOrderIds },
+      businessId: input.businessId,
+      status: "APPROVED",
+      invoiceId: null,
+    },
+    data: { invoiceId: input.invoiceId },
+  });
+  const claimed = await tx.changeOrder.findMany({
+    where: {
+      id: { in: input.changeOrderIds },
+      businessId: input.businessId,
+      invoiceId: input.invoiceId,
+    },
+    select: { id: true },
+  });
+  return claimed.map((row) => row.id);
+}
+
+async function attachOriginalInvoicePayments(
+  tx: InvoiceWriteClient,
+  input: {
+    businessId: string;
+    estimateId: string | null;
+    jobId: string;
+    invoiceId: string;
+  },
+) {
+  await backfillEmptyInvoiceWorkLines(tx, {
+    businessId: input.businessId,
+    invoiceId: input.invoiceId,
+  });
+  await attachEstimatePaymentsToInvoice(tx, {
+    businessId: input.businessId,
+    estimateId: input.estimateId,
+    jobId: input.jobId,
+    invoiceId: input.invoiceId,
+  });
+}
+
+/**
+ * Creates the ORIGINAL invoice when none exists, or a SUPPLEMENTAL invoice
+ * for approved Change Orders that are not yet billed. Safe to call twice:
+ * already-billed work is reused, never duplicated, and the original
+ * invoice total is never rewritten.
  */
 export async function persistDraftInvoiceFromCompletedJob(
   db: PrismaClient,
@@ -452,35 +559,24 @@ export async function persistDraftInvoiceFromCompletedJob(
   }
 
   return db.$transaction(async (tx) => {
-    const existing = await tx.invoice.findFirst({
+    const existing = await tx.invoice.findMany({
       where: { businessId: input.businessId, jobId: job.id },
-      select: { id: true },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { id: true, status: true, kind: true, createdAt: true, total: true },
     });
-    if (existing) {
-      await backfillEmptyInvoiceWorkLines(tx, {
-        businessId: input.businessId,
-        invoiceId: existing.id,
-      });
-      await attachEstimatePaymentsToInvoice(tx, {
-        businessId: input.businessId,
-        estimateId: job.estimateId,
-        jobId: job.id,
-        invoiceId: existing.id,
-      });
-      return { ok: true as const, invoiceId: existing.id, reused: true as const };
-    }
-
-    const total = resolveCurrentApprovedProjectTotal(
-      approvedScope.total,
-      job.changeOrders,
-    );
-
-    const created = await tx.invoice.create({
-      data: {
-        businessId: input.businessId,
-        customerId: job.customerId,
-        jobId: job.id,
-        total,
+    const changeOrders = await tx.changeOrder.findMany({
+      where: { businessId: input.businessId, jobId: job.id },
+      select: {
+        id: true,
+        status: true,
+        total: true,
+        createdAt: true,
+        approvedAt: true,
+        invoiceId: true,
+        lineItems: {
+          orderBy: { createdAt: "asc" },
+          select: INVOICE_LINE_SELECT,
+        },
       },
     });
 
@@ -489,43 +585,226 @@ export async function persistDraftInvoiceFromCompletedJob(
         ? approvedScope.laborMinimumAdjustment
         : (job.estimate?.laborMinimumAdjustment ?? ZERO);
 
-    const approvedChangeOrderLineItems = job.changeOrders
-      .filter((changeOrder) => changeOrder.status === "APPROVED")
-      .flatMap((changeOrder) => changeOrder.lineItems);
-
-    const lines = buildInvoiceLineSnapshots({
-      approvedLineItems: approvedScope.lineItems,
-      laborMinimumAdjustment,
-      approvedChangeOrderLineItems,
-    });
-
-    for (const line of lines) {
-      await tx.lineItem.create({
+    if (existing.length === 0) {
+      const total = resolveCurrentApprovedProjectTotal(approvedScope.total, changeOrders);
+      const created = await tx.invoice.create({
         data: {
           businessId: input.businessId,
-          invoiceId: created.id,
-          serviceCatalogItemId: line.serviceCatalogItemId ?? null,
-          description: line.description,
-          quantity: toInvoiceDecimal(line.quantity),
-          unitPrice: toInvoiceDecimal(line.unitPrice),
-          total: toInvoiceDecimal(line.total),
-          type: line.type,
+          customerId: job.customerId,
+          jobId: job.id,
+          kind: INVOICE_KIND_ORIGINAL,
+          total,
         },
+      });
+
+      const approvedChangeOrders = changeOrders.filter(
+        (changeOrder) => changeOrder.status === "APPROVED",
+      );
+      const claimedIds = await claimChangeOrdersOnInvoice(tx, {
+        businessId: input.businessId,
+        invoiceId: created.id,
+        changeOrderIds: approvedChangeOrders.map((changeOrder) => changeOrder.id),
+      });
+      const claimed = approvedChangeOrders.filter((changeOrder) =>
+        claimedIds.includes(changeOrder.id),
+      );
+      const claimedTotal = resolveCurrentApprovedProjectTotal(approvedScope.total, claimed);
+      if (!claimedTotal.eq(total)) {
+        await tx.invoice.update({
+          where: { id: created.id },
+          data: { total: claimedTotal },
+        });
+      }
+
+      const estimateLines = buildInvoiceLineSnapshots({
+        approvedLineItems: approvedScope.lineItems,
+        laborMinimumAdjustment,
+      });
+      await writeInvoiceLines(tx, {
+        businessId: input.businessId,
+        invoiceId: created.id,
+        lines: estimateLines,
+      });
+      for (const changeOrder of claimed) {
+        await writeInvoiceLines(tx, {
+          businessId: input.businessId,
+          invoiceId: created.id,
+          lines: changeOrder.lineItems,
+        });
+      }
+
+      await attachOriginalInvoicePayments(tx, {
+        businessId: input.businessId,
+        estimateId: job.estimateId,
+        jobId: job.id,
+        invoiceId: created.id,
+      });
+
+      return {
+        ok: true as const,
+        invoiceId: created.id,
+        reused: false as const,
+        total: claimedTotal,
+        kind: INVOICE_KIND_ORIGINAL,
+      };
+    }
+
+    const original = originalInvoiceForJob(existing);
+    if (original && isOriginalInvoiceKind(original.kind)) {
+      await attachOriginalInvoicePayments(tx, {
+        businessId: input.businessId,
+        estimateId: job.estimateId,
+        jobId: job.id,
+        invoiceId: original.id,
       });
     }
 
-    await attachEstimatePaymentsToInvoice(tx, {
-      businessId: input.businessId,
-      estimateId: job.estimateId,
-      jobId: job.id,
-      invoiceId: created.id,
-    });
+    const billed = billedChangeOrderIds({ invoices: existing, changeOrders });
+    const legacyUnmarked = changeOrders.filter(
+      (changeOrder) =>
+        changeOrder.status === "APPROVED" &&
+        !changeOrder.invoiceId &&
+        billed.has(changeOrder.id) &&
+        original,
+    );
+    if (legacyUnmarked.length > 0 && original) {
+      await claimChangeOrdersOnInvoice(tx, {
+        businessId: input.businessId,
+        invoiceId: original.id,
+        changeOrderIds: legacyUnmarked.map((changeOrder) => changeOrder.id),
+      });
+    }
 
+    const freshChangeOrders = await tx.changeOrder.findMany({
+      where: { businessId: input.businessId, jobId: job.id },
+      select: {
+        id: true,
+        status: true,
+        total: true,
+        createdAt: true,
+        approvedAt: true,
+        invoiceId: true,
+        lineItems: {
+          orderBy: { createdAt: "asc" },
+          select: INVOICE_LINE_SELECT,
+        },
+      },
+    });
+    const unbilled = unbilledApprovedChangeOrders({
+      invoices: existing,
+      changeOrders: freshChangeOrders,
+    }).filter((changeOrder) => toInvoiceDecimal(changeOrder.total).gt(0));
+
+    if (unbilled.length > 0) {
+      const total = unbilled.reduce(
+        (sum, changeOrder) => sum.add(toInvoiceDecimal(changeOrder.total)),
+        ZERO,
+      );
+      const created = await tx.invoice.create({
+        data: {
+          businessId: input.businessId,
+          customerId: job.customerId,
+          jobId: job.id,
+          kind: INVOICE_KIND_SUPPLEMENTAL,
+          total,
+        },
+      });
+      const changeOrderIds = unbilled.map((changeOrder) => changeOrder.id);
+      await persistDraftInvoiceTestHooks.afterCreateSupplemental?.({
+        businessId: input.businessId,
+        jobId: job.id,
+        invoiceId: created.id,
+        changeOrderIds,
+      });
+      const claimedIds = await claimChangeOrdersOnInvoice(tx, {
+        businessId: input.businessId,
+        invoiceId: created.id,
+        changeOrderIds,
+      });
+
+      if (claimedIds.length === 0) {
+        await tx.invoice.delete({ where: { id: created.id } });
+        const claimedNow = await tx.changeOrder.findMany({
+          where: {
+            id: { in: changeOrderIds },
+            businessId: input.businessId,
+            jobId: job.id,
+          },
+          select: { invoiceId: true },
+        });
+        const winningInvoiceIds = [
+          ...new Set(
+            claimedNow
+              .map((row) => row.invoiceId)
+              .filter((invoiceId): invoiceId is string => Boolean(invoiceId)),
+          ),
+        ];
+        if (winningInvoiceIds.length !== 1) {
+          return { ok: false, error: "That invoice could not be created." };
+        }
+        const winner = await tx.invoice.findFirst({
+          where: {
+            id: winningInvoiceIds[0],
+            businessId: input.businessId,
+            jobId: job.id,
+          },
+          select: { id: true, kind: true },
+        });
+        if (!winner) {
+          return { ok: false, error: "That invoice could not be created." };
+        }
+        return {
+          ok: true as const,
+          invoiceId: winner.id,
+          reused: true as const,
+          kind: winner.kind,
+        };
+      }
+
+      const claimed = unbilled.filter((changeOrder) => claimedIds.includes(changeOrder.id));
+      const claimedTotal = claimed.reduce(
+        (sum, changeOrder) => sum.add(toInvoiceDecimal(changeOrder.total)),
+        ZERO,
+      );
+      if (!claimedTotal.eq(total)) {
+        await tx.invoice.update({
+          where: { id: created.id },
+          data: { total: claimedTotal },
+        });
+      }
+      for (const changeOrder of claimed) {
+        await writeInvoiceLines(tx, {
+          businessId: input.businessId,
+          invoiceId: created.id,
+          lines: changeOrder.lineItems,
+        });
+      }
+
+      return {
+        ok: true as const,
+        invoiceId: created.id,
+        reused: false as const,
+        total: claimedTotal,
+        kind: INVOICE_KIND_SUPPLEMENTAL,
+      };
+    }
+
+    const draft = existing.find((invoice) => invoice.status === "DRAFT");
+    if (draft) {
+      return {
+        ok: true as const,
+        invoiceId: draft.id,
+        reused: true as const,
+        kind: draft.kind,
+      };
+    }
+
+    const reused = original ?? existing[0];
     return {
       ok: true as const,
-      invoiceId: created.id,
-      reused: false as const,
-      total,
+      invoiceId: reused.id,
+      reused: true as const,
+      kind: reused.kind,
     };
   });
 }

@@ -521,6 +521,7 @@ try {
   const keypadCo = {
     id: "co-keypad",
     createdAt: new Date("2026-09-01T12:00:00.000Z"),
+    approvedAt: new Date("2026-09-01T12:00:00.000Z"),
     lineItems: [
       {
         description: "Keypad / Electronic Deadbolt Replacement",
@@ -534,6 +535,7 @@ try {
   const laterCo = {
     id: "co-later",
     createdAt: new Date("2026-09-04T12:00:00.000Z"),
+    approvedAt: new Date("2026-09-04T12:00:00.000Z"),
     lineItems: [
       {
         description: "Should not appear",
@@ -559,6 +561,40 @@ try {
   check(
     "backfill selector omits a later approved CO that would break the invoice total",
     matchedCos?.every((changeOrder) => changeOrder.id !== "co-later") === true,
+  );
+  const createdBeforeApprovedAfter = {
+    id: "co-late-approval",
+    createdAt: new Date("2026-08-20T12:00:00.000Z"),
+    approvedAt: new Date("2026-09-10T12:00:00.000Z"),
+    lineItems: [
+      {
+        description: "Approved after invoice",
+        quantity: 1,
+        unitPrice: 50,
+        total: 50,
+        type: "LABOR",
+      },
+    ],
+  };
+  check(
+    "backfill selector does not treat a pre-invoice createdAt as billed when approvedAt is later",
+    selectApprovedChangeOrdersForInvoiceBackfill({
+      approvedLineItems: [closetLine, curtainLine],
+      laborMinimumAdjustment: 0,
+      approvedChangeOrders: [createdBeforeApprovedAfter],
+      invoiceCreatedAt,
+      invoiceTotal: 375,
+    }) === null,
+  );
+  check(
+    "backfill selector omits a CO with no approvedAt even if createdAt is earlier",
+    selectApprovedChangeOrdersForInvoiceBackfill({
+      approvedLineItems: [closetLine, curtainLine],
+      laborMinimumAdjustment: 0,
+      approvedChangeOrders: [{ ...keypadCo, approvedAt: null }],
+      invoiceCreatedAt,
+      invoiceTotal: 375,
+    }) === null,
   );
   const estimateOnly = selectApprovedChangeOrdersForInvoiceBackfill({
     approvedLineItems: [closetLine, curtainLine],
@@ -1283,15 +1319,22 @@ try {
     businessId: otherBusiness.id,
     jobId: founderWork.job.id,
   });
-  check("persist reuse does not create a second invoice", reuseEmpty.ok === true && reuseEmpty.reused === true);
   check(
-    "persist reuse does not duplicate invoice lines",
+    "persist bills the later approved CO on a supplemental invoice",
+    reuseEmpty.ok === true && reuseEmpty.reused === false && reuseEmpty.kind === "SUPPLEMENTAL",
+  );
+  check(
+    "original paid invoice lines are not duplicated",
     (await prisma.lineItem.count({ where: { invoiceId: emptyPaid.id } })) === 3,
   );
   check(
-    "persist reuse does not change the paid total",
+    "original paid total stays $375 after the supplemental is created",
     (await prisma.invoice.findUniqueOrThrow({ where: { id: emptyPaid.id } })).total.toString() ===
       "375",
+  );
+  check(
+    "supplemental total is only the later approved CO",
+    reuseEmpty.ok && reuseEmpty.total.toString() === "50",
   );
 
   const founderPdf = await renderInvoicePdf(founderDoc);

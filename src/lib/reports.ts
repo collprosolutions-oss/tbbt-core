@@ -19,6 +19,7 @@ import { expenseCategoryLabel } from "@/lib/expenses";
 import { addDays, addMonths, formatISODate, parseScheduleDate, startOfDay, startOfMonth, startOfWeek } from "@/lib/schedule";
 import { isPaidActivity, roundHours, roundMoney } from "@/lib/time-cards";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
+import { listCompletedUnbilledJobs } from "@/lib/revenue-integrity";
 
 export const REPORT_AREAS = [
   "overview",
@@ -283,6 +284,17 @@ export type ReportInvoice = {
   jobId: string | null;
   paymentMethod: string | null;
   paymentReference: string | null;
+  kind?: string | null;
+};
+
+export type ReportChangeOrder = {
+  id: string;
+  jobId: string;
+  status: string;
+  total: number;
+  invoiceId?: string | null;
+  approvedAt?: Date | null;
+  createdAt?: Date;
 };
 
 export type ReportCustomer = {
@@ -391,6 +403,7 @@ export type ReportSource = {
   memberships: ReportMembership[];
   expenses: ReportExpense[];
   payments?: ReportPayment[];
+  changeOrders?: ReportChangeOrder[];
 };
 
 export function paidInvoicesInRange(invoices: readonly ReportInvoice[], range: { start: Date | null; end: Date | null }) {
@@ -1118,17 +1131,18 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
       href: `/invoices/${row.invoice.id}`,
     });
   }
-  for (const job of source.jobs) {
-    if (job.status !== "COMPLETED") continue;
-    const hasInvoice = source.invoices.some((invoice) => invoice.jobId === job.id);
-    if (!hasInvoice) {
-      attention.push({
-        key: `job-unbilled:${job.id}`,
-        label: customerName(job.customerId, source),
-        detail: "Completed job has no invoice",
-        href: `/jobs/${job.id}`,
-      });
-    }
+  for (const row of listCompletedUnbilledJobs({
+    jobs: source.jobs,
+    invoices: source.invoices,
+    changeOrders: source.changeOrders ?? [],
+    estimates: source.estimates,
+  })) {
+    attention.push({
+      key: `job-unbilled:${row.job.id}`,
+      label: customerName(row.job.customerId, source),
+      detail: `${row.attention.detail} · ${row.attention.unbilledAmount.toFixed(2)}`,
+      href: `/jobs/${row.job.id}`,
+    });
   }
   for (const entry of laborEntries) {
     if (!isPaidActivity(entry.activityType)) continue;

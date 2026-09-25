@@ -87,6 +87,12 @@ check(
     dashboardSrc.includes('"Unscheduled jobs"') &&
     dashboardSrc.includes('"Unpaid invoices"'),
 );
+check(
+  "Dashboard surfaces completed jobs with unbilled approved work",
+  dashboardSrc.includes('"Completed jobs with unbilled work"') &&
+    dashboardSrc.includes("completedJobBillingAttention") &&
+    dashboardSrc.includes("completedJobsForBilling"),
+);
 
 const slot = {
   scheduledAt: new Date("2026-09-16T13:00:00.000Z"),

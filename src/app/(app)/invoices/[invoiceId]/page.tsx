@@ -31,7 +31,7 @@ import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
 import { prisma } from "@/lib/prisma";
 import {
   invoicePaymentBreakdown,
-  listProjectPayments,
+  listPaymentsForInvoice,
 } from "@/lib/project-payments";
 
 export const metadata: Metadata = {
@@ -77,10 +77,13 @@ export default async function InvoicePage({
   });
   invoice = (await prisma.invoice.findFirst(invoiceQuery)) ?? invoice;
 
-  const payments = await listProjectPayments(prisma, {
+  const payments = await listPaymentsForInvoice(prisma, {
     businessId: invoice.businessId,
-    invoiceId: invoice.id,
-    jobId: invoice.job?.id ?? null,
+    invoice: {
+      id: invoice.id,
+      jobId: invoice.job?.id ?? null,
+      kind: invoice.kind,
+    },
   });
   const breakdown = invoicePaymentBreakdown({
     status: invoice.status,

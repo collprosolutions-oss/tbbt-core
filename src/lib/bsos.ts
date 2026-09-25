@@ -90,6 +90,7 @@ export type BsosFacts = {
   growthRecoveryOpen?: { count: number };
   growthReactivationEligible?: { count: number };
   agedReceivables?: { count: number; amount: number };
+  unbilledCompletedJobs?: { count: number };
   lowMarginServices?: { count: number };
   estimateLaborOverruns?: { count: number };
   expenseGrowthPercent?: number | null;
@@ -117,6 +118,7 @@ export const EMPTY_BSOS_FACTS: BsosFacts = {
   recordedExpenses: { amount: 0 },
   growthRecoveryOpen: { count: 0 },
   growthReactivationEligible: { count: 0 },
+  unbilledCompletedJobs: { count: 0 },
   launchIncompleteSteps: { count: 0 },
   knowledgeNeedsApproval: { count: 0 },
   experienceCandidates: { count: 0 },
@@ -351,6 +353,25 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
         },
       ],
       href: "/growth?area=reactivation",
+    });
+  }
+
+  if ((facts.unbilledCompletedJobs?.count ?? 0) > 0) {
+    items.push({
+      key: "unbilled-completed-jobs",
+      title: "Bill completed jobs that still have unbilled work",
+      kind: "recommendation",
+      priority: 7,
+      why: "A completed job has approved work that is not covered by a sent or paid invoice. Field completion does not send invoices.",
+      facts: [
+        {
+          key: "unbilled-completed-jobs",
+          label: "Completed jobs with unbilled approved work",
+          value: String(facts.unbilledCompletedJobs!.count),
+          href: "/reports?area=overview",
+        },
+      ],
+      href: "/reports?area=overview",
     });
   }
 

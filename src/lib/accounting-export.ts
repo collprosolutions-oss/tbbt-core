@@ -7,9 +7,12 @@
  * Payment rows may use the full invoice total as the legacy fully-paid
  * fallback. A Payment row is never invented from invoice status.
  *
- * Job-only payments (invoiceId null) allocate to an invoice only when
- * that job has exactly one invoice. Multi-invoice jobs keep the payment
- * visible in payments.csv without double-counting it on every invoice.
+ * Payment attribution matches the shared runtime rule
+ * (paymentBelongsToInvoice): an explicit invoiceId belongs only to that
+ * invoice; a legacy job-only Payment (invoiceId null) attributes to the
+ * ORIGINAL invoice only; SUPPLEMENTAL never claims that fallback.
+ * payments.csv still prints the recorded Payment row — a null invoiceId
+ * stays blank and is never invented.
  *
  * Human text cells neutralize spreadsheet formula prefixes. Expense rows
  * follow ACTIVE_EXPENSE_WHERE (non-voided). Stripe session, payment-intent,
@@ -36,6 +39,7 @@ import {
   PAYMENT_PURPOSE_INVOICE_BALANCE,
   PAYMENT_PURPOSE_MATERIAL_DEPOSIT,
   invoicePaymentBreakdown,
+  paymentsBelongingToInvoice,
 } from "@/lib/project-payments";
 import { buildZipStore, toCsv } from "@/lib/zip-store";
 
@@ -144,6 +148,7 @@ export type AccountingInvoiceRecord = {
   id: string;
   customerId: string | null;
   jobId: string | null;
+  kind?: string | null;
   status: string;
   total: AccountingMoney;
   paidAt: Date | null;
@@ -289,51 +294,31 @@ export function invoiceCountByJobId(
 }
 
 /**
- * Accounting-only allocation. Does not change project-payment matching.
+ * Same shared rule as runtime invoice balances.
  *
- * A. Payment.invoiceId set → that invoice only.
- * B. Payment.invoiceId null + jobId → the job's invoice only when the
- *    job has exactly one invoice.
- * C. Multi-invoice job → leave the job-only payment unallocated.
+ * 1. Payment.invoiceId present → only that exact invoice.
+ * 2. Payment.invoiceId null + matching job → ORIGINAL invoice only.
+ * 3. SUPPLEMENTAL never claims a legacy unallocated payment.
  */
 export function paymentsAllocatedToInvoice<
   T extends { id: string; invoiceId: string | null; jobId: string | null },
 >(
-  invoice: { id: string; jobId?: string | null },
+  invoice: { id: string; jobId?: string | null; kind?: string | null },
   payments: readonly T[],
-  invoicesOnJob: number,
 ): T[] {
-  const seen = new Set<string>();
-  return payments.filter((row) => {
-    if (seen.has(row.id)) return false;
-    if (row.invoiceId === invoice.id) {
-      seen.add(row.id);
-      return true;
-    }
-    const jobOnlyFallback =
-      row.invoiceId == null &&
-      Boolean(invoice.jobId) &&
-      row.jobId === invoice.jobId &&
-      invoicesOnJob === 1;
-    if (jobOnlyFallback) {
-      seen.add(row.id);
-      return true;
-    }
-    return false;
-  });
+  return paymentsBelongingToInvoice(invoice, [...payments]);
 }
 
 export function accountingInvoicePaymentTotals(
-  invoice: Pick<AccountingInvoiceRecord, "id" | "jobId" | "status" | "total">,
+  invoice: Pick<AccountingInvoiceRecord, "id" | "jobId" | "kind" | "status" | "total">,
   payments: readonly AccountingPaymentRecord[],
-  invoicesOnJob: number,
 ): {
   amountPaid: Prisma.Decimal;
   amountRemaining: Prisma.Decimal;
   paymentBasis: PaymentBasis;
   legacyFullyPaid: boolean;
 } {
-  const allocated = paymentsAllocatedToInvoice(invoice, payments, invoicesOnJob);
+  const allocated = paymentsAllocatedToInvoice(invoice, payments);
   const breakdown = invoicePaymentBreakdown({
     status: invoice.status,
     total: invoice.total,
@@ -355,15 +340,10 @@ export function accountingInvoicePaymentTotals(
 
 export function buildAccountingInvoiceRows(source: AccountingExportSource): Array<Record<string, string>> {
   const customers = nameById(source.customers);
-  const invoicesOnJob = invoiceCountByJobId(source.invoices);
   return [...source.invoices]
     .sort((a, b) => compareByDateThenId(a.createdAt, a.id, b.createdAt, b.id))
     .map((invoice) => {
-      const totals = accountingInvoicePaymentTotals(
-        invoice,
-        source.payments,
-        invoice.jobId ? (invoicesOnJob.get(invoice.jobId) ?? 0) : 0,
-      );
+      const totals = accountingInvoicePaymentTotals(invoice, source.payments);
       return {
         "Invoice Number": invoiceNumberFromId(invoice.id),
         "Invoice ID": invoice.id,
@@ -497,6 +477,7 @@ export async function loadAccountingExportSource(
         id: true,
         customerId: true,
         jobId: true,
+        kind: true,
         status: true,
         total: true,
         paidAt: true,
