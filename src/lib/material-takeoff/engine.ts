@@ -301,6 +301,10 @@ function normalizeTakeoffItem(raw: unknown): TakeoffItem | null {
         : parsed.kind === "custom"
           ? "project"
           : undefined,
+    catalogMaterialId:
+      typeof parsed.catalogMaterialId === "string" && parsed.catalogMaterialId.trim()
+        ? parsed.catalogMaterialId.trim()
+        : null,
   };
 }
 

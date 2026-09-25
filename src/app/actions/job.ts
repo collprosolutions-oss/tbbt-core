@@ -66,6 +66,7 @@ import {
   conflictAcknowledgement,
   shouldAcceptConflictAcknowledgement,
 } from "@/lib/workforce-window";
+import { attachPurchaseListToCreatedJob } from "@/lib/materials/purchase";
 
 export type JobActionState = {
   error?: string;
@@ -188,6 +189,12 @@ export async function createJobFromEstimate(
       recurrenceCadence: recurrence.recurrenceCadence,
       recurrenceStatus: recurrence.recurrenceStatus,
     },
+  });
+
+  await attachPurchaseListToCreatedJob(prisma, access, {
+    jobId: job.id,
+    estimateId: estimate.id,
+    estimateVersionId: estimate.approvedVersionId,
   });
 
   revalidatePath(`/estimates/${estimate.id}`);

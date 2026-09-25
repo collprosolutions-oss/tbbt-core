@@ -790,6 +790,57 @@ check(
     planProductionMigrateDeploy({ localNames }).run === true,
 );
 
+const financialIntelligenceMigration = readFileSync(
+  new URL("../prisma/migrations/20260925220000_financial_profit_intelligence/migration.sql", import.meta.url),
+  "utf8",
+);
+const financialTruthMigration = readFileSync(
+  new URL("../prisma/migrations/20260925230000_financial_truth_corrections/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Financial intelligence migrations stay additive and before Materials",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(financialIntelligenceMigration) &&
+    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(financialTruthMigration) &&
+    financialIntelligenceMigration.includes('CREATE TABLE "BusinessLaborBurdenSetting"') &&
+    localNames.includes("20260925220000_financial_profit_intelligence") &&
+    localNames.includes("20260925230000_financial_truth_corrections") &&
+    localNames.includes("20260926011500_add_materials_suppliers_operations") &&
+    localNames.indexOf("20260925220000_financial_profit_intelligence") <
+      localNames.indexOf("20260926011500_add_materials_suppliers_operations") &&
+    localNames.indexOf("20260925230000_financial_truth_corrections") <
+      localNames.indexOf("20260926011500_add_materials_suppliers_operations"),
+);
+
+const materialsMigration = readFileSync(
+  new URL("../prisma/migrations/20260926011500_add_materials_suppliers_operations/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Materials/suppliers operations migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(materialsMigration) &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "Supplier"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialCatalogItem"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialPriceHistory"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialPurchaseList"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialPurchaseOrder"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialOperationAttempt"') &&
+    !/"password"/i.test(materialsMigration) &&
+    !/"apiSecret"/i.test(materialsMigration),
+);
+
+const materialsSchema = readFileSync(
+  new URL("../src/lib/materials/schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Materials schema is migrate-only and does not run request-time DDL",
+  materialsSchema.includes("prisma-migrate") &&
+    !materialsSchema.includes("$executeRawUnsafe") &&
+    !materialsSchema.includes("ensureMaterialsSuppliersTables") &&
+    !materialsSchema.includes("CREATE TABLE IF NOT EXISTS"),
+);
+
 console.log(
   failed === 0
     ? `\nAll production-migrate checks passed (${passed}).`

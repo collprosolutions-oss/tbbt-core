@@ -18,6 +18,11 @@ const RECOMMENDATION_ACTION_TITLES: Record<string, string> = {
   "outside-area-leads": "Review outside-area requests",
   "review-recurring-expenses": "Add or review recurring expense information",
   "schedule-unscheduled-jobs": "Schedule unscheduled jobs",
+  "receivable-needs-attention": "Follow up on aging unpaid invoices",
+  "service-margin-below-target": "Review services with negative recorded margin",
+  "estimate-labor-overrun": "Review estimate labor hours against actual time",
+  "expense-growth": "Review expense growth versus the prior period",
+  "high-value-customer-concentration": "Review customer concentration risk",
 };
 
 export function actionTitleForRecommendation(recommendation: BsosRecommendation) {
