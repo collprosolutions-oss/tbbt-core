@@ -126,36 +126,72 @@ async function ensureCallbackAction(
   db: Db,
   access: CommunicationAccess,
   input: {
+    claimedId: string;
     idempotencyKey: string;
     summary: string;
     customerName: string | null;
   },
 ) {
   const recommendationKey = callbackRecommendationKey(input.idempotencyKey);
+  const linked = await db.phoneInteraction.findFirst({
+    where: { id: input.claimedId, businessId: access.businessId },
+    select: { followUpActionItemId: true },
+  });
+  if (linked?.followUpActionItemId) return linked.followUpActionItemId;
+
   const existingAction = await db.businessActionItem.findFirst({
     where: { businessId: access.businessId, recommendationKey },
   });
-  if (existingAction) return existingAction.id;
-  try {
-    const action = await db.businessActionItem.create({
-      data: {
+  let actionId = existingAction?.id ?? null;
+  if (!actionId) {
+    try {
+      const action = await db.businessActionItem.create({
+        data: {
+          businessId: access.businessId,
+          recommendationKey,
+          title: input.customerName ? `Call back ${input.customerName}` : "Call back a missed caller",
+          notes: input.summary,
+          createdByMembershipId: access.workspace.membership?.id ?? null,
+        },
+      });
+      actionId = action.id;
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        const racedAction = await db.businessActionItem.findFirst({
+          where: { businessId: access.businessId, recommendationKey },
+        });
+        actionId = racedAction?.id ?? null;
+      } else {
+        throw error;
+      }
+    }
+  }
+  if (!actionId) return null;
+
+  await db.phoneInteraction.updateMany({
+    where: {
+      id: input.claimedId,
+      businessId: access.businessId,
+      followUpActionItemId: null,
+    },
+    data: { followUpActionItemId: actionId },
+  });
+  const winner = await db.phoneInteraction.findFirst({
+    where: { id: input.claimedId, businessId: access.businessId },
+    select: { followUpActionItemId: true },
+  });
+  const winnerId = winner?.followUpActionItemId ?? actionId;
+  if (winnerId !== actionId) {
+    await db.businessActionItem.deleteMany({
+      where: {
+        id: actionId,
         businessId: access.businessId,
         recommendationKey,
-        title: input.customerName ? `Call back ${input.customerName}` : "Call back a missed caller",
-        notes: input.summary,
-        createdByMembershipId: access.workspace.membership?.id ?? null,
+        phoneCallbacks: { none: {} },
       },
     });
-    return action.id;
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const racedAction = await db.businessActionItem.findFirst({
-        where: { businessId: access.businessId, recommendationKey },
-      });
-      return racedAction?.id ?? null;
-    }
-    throw error;
   }
+  return winnerId;
 }
 
 async function ensurePhoneCommunication(
@@ -261,6 +297,7 @@ async function completePhoneLog(
   let actionItemId = claimed.followUpActionItemId;
   if (callbackNeeded) {
     actionItemId = await ensureCallbackAction(db, access, {
+      claimedId: claimed.id,
       idempotencyKey: input.idempotencyKey,
       summary,
       customerName: customer?.name ?? null,
