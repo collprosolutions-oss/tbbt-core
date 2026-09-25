@@ -23,6 +23,12 @@ const RECOMMENDATION_ACTION_TITLES: Record<string, string> = {
   "estimate-labor-overrun": "Review estimate labor hours against actual time",
   "expense-growth": "Review expense growth versus the prior period",
   "high-value-customer-concentration": "Review customer concentration risk",
+  "workforce-overloaded-day": "Relieve an overloaded scheduled day",
+  "workforce-unassigned-job": "Assign a worker to scheduled jobs",
+  "workforce-poor-skill-match": "Review jobs assigned without required skills",
+  "workforce-double-booked": "Resolve a double-booked worker",
+  "workforce-capacity-gap": "Fill upcoming open workforce capacity",
+  "workforce-staffing-shortage": "Review staffing for upcoming work",
 };
 
 export function actionTitleForRecommendation(recommendation: BsosRecommendation) {

@@ -5,6 +5,7 @@
 
 export const AI_TASK_TYPES = [
   "COACH_ASK",
+  "COS_ASK",
   "WRITING",
   "MARKETING_DRAFT",
   "REVIEW_RESPONSE",

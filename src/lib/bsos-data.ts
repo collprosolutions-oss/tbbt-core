@@ -6,7 +6,6 @@ import type { PrismaClient } from "@prisma/client";
 import { addDays, startOfDay } from "@/lib/schedule";
 import {
   buildBsosHealthMetrics,
-  buildBsosRecommendations,
   coachSummary,
   type BsosFacts,
 } from "@/lib/bsos";
@@ -19,6 +18,7 @@ import { asNumber, buildReport, percentChange, resolveReportRange } from "@/lib/
 import { loadReportSource } from "@/lib/reports-data";
 import { isPaidActivity } from "@/lib/time-cards";
 import { partitionRecommendations } from "@/lib/bsos-actions";
+import { mergeCatalogRecommendations } from "@/lib/chief-of-staff/recommendations";
 import { loadWorkforceSnapshot } from "@/lib/workforce-data";
 import { aiConnectionLabel, isAiProviderConnected } from "@/lib/ai/config";
 import { listActiveBusinessTrades } from "@/lib/business-trades";
@@ -300,7 +300,7 @@ export async function loadBsosWorkspace(
     loadWorkforceSnapshot(prisma, businessId),
   ]);
 
-  const recommendations = [...buildBsosRecommendations(facts), ...workforce.recommendations];
+  const recommendations = mergeCatalogRecommendations(facts, workforce.recommendations);
   const { active, history } = partitionRecommendations(recommendations, recommendationStates);
   return {
     businessId,

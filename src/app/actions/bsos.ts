@@ -3,8 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { bsosErrorMessage, createBusinessActionItem, createBusinessGoal, updateBusinessActionStatus, updateBusinessGoalStatus } from "@/lib/bsos-ops";
 import { createActionFromRecommendation, recommendationEvidenceKey, upsertRecommendationState } from "@/lib/bsos-actions";
-import { buildBsosRecommendations } from "@/lib/bsos";
-import { loadBsosFacts } from "@/lib/bsos-data";
+import { findCatalogRecommendation } from "@/lib/chief-of-staff/recommendations";
 import { prisma } from "@/lib/prisma";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireOperatingProductAccess } from "@/lib/saas-billing/enforce";
@@ -94,8 +93,7 @@ export async function createRecommendationActionAction(
   try {
     const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
     const key = readString(formData, "recommendationKey");
-    const facts = await loadBsosFacts(prisma, access.businessId);
-    const recommendation = buildBsosRecommendations(facts).find((item) => item.key === key);
+    const recommendation = await findCatalogRecommendation(prisma, access.businessId, key);
     if (!recommendation) {
       return { error: "That recommendation is not active from recorded facts." };
     }
@@ -115,8 +113,7 @@ export async function dismissRecommendationAction(
     const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
     const key = readString(formData, "recommendationKey");
     if (!key) return { error: "Choose a recommendation." };
-    const facts = await loadBsosFacts(prisma, access.businessId);
-    const recommendation = buildBsosRecommendations(facts).find((item) => item.key === key);
+    const recommendation = await findCatalogRecommendation(prisma, access.businessId, key);
     await upsertRecommendationState(prisma, access, {
       recommendationKey: key,
       status: "DISMISSED",
@@ -137,8 +134,7 @@ export async function completeRecommendationAction(
     const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
     const key = readString(formData, "recommendationKey");
     if (!key) return { error: "Choose a recommendation." };
-    const facts = await loadBsosFacts(prisma, access.businessId);
-    const recommendation = buildBsosRecommendations(facts).find((item) => item.key === key);
+    const recommendation = await findCatalogRecommendation(prisma, access.businessId, key);
     await upsertRecommendationState(prisma, access, {
       recommendationKey: key,
       status: "COMPLETED",

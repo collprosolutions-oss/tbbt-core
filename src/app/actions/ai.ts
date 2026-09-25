@@ -5,16 +5,13 @@ import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
 import { appendConversationMessage, ensureAiConversation } from "@/lib/ai/conversations";
-import { answerCoachFromFacts, coachSystemPrompt } from "@/lib/ai/coach";
 import { runAiTask } from "@/lib/ai/service";
 import { runWritingAssist } from "@/lib/ai/writing";
 import { isAiAttemptId, isWritingAction } from "@/lib/ai/types";
 import { answerKnowledgeFromEntries, retrieveTenantKnowledge } from "@/lib/ai/knowledge";
 import { draftReviewResponseFromRecord } from "@/lib/ai/reviews";
 import { sanitizeAiText } from "@/lib/ai/sanitize";
-import { loadBsosFacts } from "@/lib/bsos-data";
-import { buildBsosHealthMetrics, buildBsosRecommendations } from "@/lib/bsos";
-import { AI_NOT_CONNECTED_MESSAGE } from "@/lib/ai/types";
+import { runChiefOfStaffCoach } from "@/lib/chief-of-staff";
 
 export type AiActionState = {
   error?: string;
@@ -47,96 +44,21 @@ export async function askBsosCoachAction(
     if (!question) return { error: "Ask a question about recorded TBBT facts." };
     if (!attemptId) return { error: "Retry that request from the form." };
 
-    const { listActiveTradeCodes } = await import("@/lib/business-trades");
-    const { workspaceTradeLabel } = await import("@/lib/trade-config");
-    const facts = await loadBsosFacts(prisma, access.businessId);
-    const activeTradeCodes = await listActiveTradeCodes(prisma, access.businessId);
-    const recommendations = buildBsosRecommendations(facts);
-    const metrics = buildBsosHealthMetrics(facts);
-    const [goals, actionItems] = await Promise.all([
-      prisma.businessGoal.findMany({ where: { businessId: access.businessId }, take: 20 }),
-      prisma.businessActionItem.findMany({ where: { businessId: access.businessId }, take: 20 }),
-    ]);
-    const grounded = answerCoachFromFacts(question, {
-      facts,
-      recommendations,
-      metrics,
-      goals,
-      actionItems,
-      activeTradeLabels: [workspaceTradeLabel(activeTradeCodes)],
-    });
-    const conversation = await ensureAiConversation(prisma, access, {
-      area: "COACH",
-      title: "BSOS Coach",
+    const result = await runChiefOfStaffCoach(prisma, access, {
+      question,
+      attemptId,
       conversationId: readString(formData, "conversationId") || undefined,
+      browserBusinessId: readString(formData, "businessId") || undefined,
     });
-    const result = await runAiTask(
-      prisma,
-      {
-        businessId: access.businessId,
-        membershipId: access.workspace.membership.id,
-        userId: access.workspace.user.id,
-      },
-      {
-        taskType: "COACH_ASK",
-        system: coachSystemPrompt(),
-        user: JSON.stringify({
-          question: sanitizeAiText(question, 1_000),
-          facts: grounded.citedFacts,
-          recommendations: recommendations.map((item) => ({
-            key: item.key,
-            title: item.title,
-            why: item.why,
-          })),
-        }),
-        inputSummary: question,
-        conversationId: conversation.id,
-        idempotencyKey: `coach:${access.businessId}:${conversation.id}:${attemptId}`,
-        fallback: grounded.output,
-        allowedFactKeys: grounded.citedFacts.map((fact) => fact.key),
-      },
-    );
-    if (result.status === "PENDING") {
+    if (result.error) return { error: result.error };
+    if (result.inProgress) {
       return { message: result.message, inProgress: true };
     }
-    const output = result.output ?? grounded.output;
-    if (result.interactionId) {
-      const existingAssistant = await prisma.aiConversationMessage.findFirst({
-        where: {
-          businessId: access.businessId,
-          conversationId: conversation.id,
-          interactionId: result.interactionId,
-          role: "ASSISTANT",
-        },
-      });
-      if (existingAssistant) {
-        revalidatePath("/business-health");
-        return {
-          message: result.connected ? result.message : AI_NOT_CONNECTED_MESSAGE,
-          text: existingAssistant.content,
-          stance: existingAssistant.stance ?? output.stance,
-        };
-      }
-    }
-    await appendConversationMessage(prisma, access, {
-      conversationId: conversation.id,
-      role: "USER",
-      content: question,
-      stance: "FACT",
-    });
-    await appendConversationMessage(prisma, access, {
-      conversationId: conversation.id,
-      role: "ASSISTANT",
-      content: output.text,
-      stance: output.stance,
-      citedFacts: grounded.citedFacts,
-      interactionId: result.interactionId,
-    });
     revalidatePath("/business-health");
     return {
-      message: result.connected ? result.message : AI_NOT_CONNECTED_MESSAGE,
-      text: output.text,
-      stance: output.stance,
+      message: result.message,
+      text: result.text,
+      stance: result.stance,
     };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "The coach could not answer that." };
