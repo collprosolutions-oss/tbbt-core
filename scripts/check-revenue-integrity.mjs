@@ -975,6 +975,7 @@ try {
       kind: INVOICE_KIND_ORIGINAL,
       status: "SENT",
       total: new Prisma.Decimal(300),
+      createdAt: new Date("2026-03-01T12:00:00.000Z"),
     },
   });
   await addChangeOrder({
@@ -984,6 +985,8 @@ try {
     status: "APPROVED",
     total: 60,
     description: "Balance after original",
+    createdAt: new Date("2026-03-02T12:00:00.000Z"),
+    approvedAt: new Date("2026-03-02T12:00:00.000Z"),
   });
   const invoiceBPersist = await persistDraftInvoiceFromCompletedJob(prisma, {
     businessId: businessA.id,
@@ -1251,7 +1254,7 @@ try {
   check("race job created an ORIGINAL invoice", raceOriginal.ok && raceOriginal.kind === INVOICE_KIND_ORIGINAL);
   await prisma.invoice.update({
     where: { id: raceOriginal.invoiceId },
-    data: { status: "SENT" },
+    data: { status: "SENT", createdAt: new Date("2026-04-01T12:00:00.000Z") },
   });
   const raceCo = await addChangeOrder({
     businessId: businessA.id,
@@ -1260,6 +1263,8 @@ try {
     status: "APPROVED",
     total: 55,
     description: "Race balance work",
+    createdAt: new Date("2026-04-02T12:00:00.000Z"),
+    approvedAt: new Date("2026-04-02T12:00:00.000Z"),
   });
 
   let arrived = 0;
