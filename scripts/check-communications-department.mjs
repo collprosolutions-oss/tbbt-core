@@ -88,13 +88,13 @@ function check(label, condition) {
   }
 }
 
-function makeAccess(businessId, role, membershipId) {
+function makeAccess(businessId, role, membershipId, userId) {
   return {
     businessId,
     workspace: {
       role,
       membership: { id: membershipId },
-      user: { id: "u" },
+      user: { id: userId },
       business: { id: businessId, name: "Comms Co" },
     },
     scope: { businessId },
@@ -138,8 +138,8 @@ async function seedBusiness(name) {
     business,
     membership,
     memberMembership,
-    access: makeAccess(business.id, "OWNER", membership.id),
-    memberAccess: makeAccess(business.id, "MEMBER", memberMembership.id),
+    access: makeAccess(business.id, "OWNER", membership.id, ownerUser.id),
+    memberAccess: makeAccess(business.id, "MEMBER", memberMembership.id, memberUser.id),
   };
 }
 

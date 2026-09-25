@@ -32,10 +32,9 @@ function dedupeKey(item: {
   purpose: string;
   relatedType: string | null;
   relatedId: string | null;
-  channel: string;
 }) {
   if (item.relatedType && item.relatedId) {
-    return `${item.channel}:${item.purpose}:${item.relatedType}:${item.relatedId}`;
+    return `${item.purpose}:${item.relatedType}:${item.relatedId}`;
   }
   return null;
 }
