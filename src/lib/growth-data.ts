@@ -34,11 +34,22 @@ function referredIds(source: GrowthSource) {
   );
 }
 
+let growthSourceLoadCount = 0;
+
+export function getGrowthSourceLoadCount() {
+  return growthSourceLoadCount;
+}
+
+export function resetGrowthSourceLoadCount() {
+  growthSourceLoadCount = 0;
+}
+
 export async function loadGrowthSource(
   prisma: PrismaClient,
   businessId: string,
   now = new Date(),
 ): Promise<GrowthSource> {
+  growthSourceLoadCount += 1;
   const scope = { businessId } as const;
   const [
     requests,

@@ -149,18 +149,26 @@ function factList(context: CoachContext): CitedFact[] {
       value: `${context.facts.recurringExpenses.count} / ${context.facts.recurringExpenses.amount.toFixed(2)}`,
       href: "/expenses",
     },
-    {
-      key: "growth-recovery",
-      label: "Open growth recovery opportunities",
-      value: String(context.facts.growthRecoveryOpen?.count ?? 0),
-      href: "/growth?area=recovery",
-    },
-    {
-      key: "growth-reactivation",
-      label: "Eligible reactivation customers",
-      value: String(context.facts.growthReactivationEligible?.count ?? 0),
-      href: "/growth?area=reactivation",
-    },
+    ...(context.facts.growthRecoveryOpen != null
+      ? [
+          {
+            key: "growth-recovery",
+            label: "Open growth recovery opportunities",
+            value: String(context.facts.growthRecoveryOpen.count),
+            href: "/growth?area=recovery",
+          } satisfies CitedFact,
+        ]
+      : []),
+    ...(context.facts.growthReactivationEligible != null
+      ? [
+          {
+            key: "growth-reactivation",
+            label: "Eligible reactivation customers",
+            value: String(context.facts.growthReactivationEligible.count),
+            href: "/growth?area=reactivation",
+          } satisfies CitedFact,
+        ]
+      : []),
     {
       key: "launch-incomplete",
       label: "Incomplete launch steps",
@@ -287,12 +295,28 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
     stance = "RECOMMENDATION";
     text = `${context.facts.completedJobsReadyForMarketing.count} completed job(s) have marketing-approved photos and no approved content yet. Drafts stay DRAFT until you approve them. Social accounts remain Not Connected unless a real provider is configured.`;
   } else if (/recover|reactivat|growth/.test(q)) {
-    keys = ["growth-recovery", "growth-reactivation"];
     stance = "FACT";
-    text =
-      `${context.facts.growthRecoveryOpen?.count ?? 0} open recovery opportunit${(context.facts.growthRecoveryOpen?.count ?? 0) === 1 ? "y is" : "ies are"} on file. ` +
-      `${context.facts.growthReactivationEligible?.count ?? 0} customer(s) are eligible for reactivation. ` +
-      "These counts come from existing Business Health facts. The Coach does not create Growth actions.";
+    if (context.facts.growthRecoveryOpen == null && context.facts.growthReactivationEligible == null) {
+      keys = [];
+      text =
+        "Recorded Growth recovery and reactivation counts are not available for this workspace. Missing Growth data is not treated as zero opportunities.";
+    } else {
+      keys = ["growth-recovery", "growth-reactivation"].filter((key) =>
+        key === "growth-recovery"
+          ? context.facts.growthRecoveryOpen != null
+          : context.facts.growthReactivationEligible != null,
+      );
+      const recoveryCount = context.facts.growthRecoveryOpen?.count;
+      const reactivationCount = context.facts.growthReactivationEligible?.count;
+      text =
+        (recoveryCount == null
+          ? ""
+          : `${recoveryCount} open recovery opportunit${recoveryCount === 1 ? "y is" : "ies are"} on file. `) +
+        (reactivationCount == null
+          ? ""
+          : `${reactivationCount} customer(s) are eligible for reactivation. `) +
+        "These counts come from existing Business Health facts. The Coach does not create Growth actions.";
+    }
   } else if (/launch|knowledge|experience/.test(q)) {
     keys = ["launch-incomplete", "knowledge-unreviewed", "experience-candidates"];
     stance = "FACT";

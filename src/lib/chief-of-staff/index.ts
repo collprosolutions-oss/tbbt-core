@@ -33,6 +33,10 @@ export {
   resetFinancialSpecialistCounters,
 } from "@/lib/chief-of-staff/financial-snapshot";
 export {
+  getGrowthSpecialistInterpretationCount,
+  resetGrowthSpecialistCounters,
+} from "@/lib/chief-of-staff/growth-snapshot";
+export {
   FINANCIAL_CONTEXT_CAPS,
   FINANCIAL_OWNED_RECOMMENDATION_KEYS,
   interpretFinancialSpecialist,
@@ -41,6 +45,19 @@ export {
   jobIdsFromFinancialFindings,
   projectFinancialContext,
 } from "@/lib/chief-of-staff/specialists/financial";
+export {
+  GROWTH_CONTEXT_CAPS,
+  GROWTH_OWNED_RECOMMENDATION_KEYS,
+  GROWTH_REQUIRED_PRODUCT_CAPABILITIES,
+  getLastGrowthProjection,
+  growthEntitlementLimitation,
+  growthProjectionHasForbiddenFields,
+  interpretGrowthSpecialist,
+  isGrowthOwnedRecommendationKey,
+  projectGrowthContext,
+  projectGrowthFromSource,
+  resetLastGrowthProjection,
+} from "@/lib/chief-of-staff/growth-specialist";
 export { resolveConflicts } from "@/lib/chief-of-staff/conflicts";
 export { synthesizeCoachAnswer } from "@/lib/chief-of-staff/synthesize";
 export {

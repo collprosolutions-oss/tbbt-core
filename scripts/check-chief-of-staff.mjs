@@ -143,6 +143,7 @@ const specialistFiles = [
   readFileSync(new URL("../src/lib/chief-of-staff/conflicts.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/synthesize.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/specialists/financial.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/lib/chief-of-staff/growth-specialist.ts", import.meta.url), "utf8"),
 ];
 
 try {
@@ -198,6 +199,7 @@ try {
     "Kitchen-sink focus can select Financial when an owned recommendation is active",
     kitchen.selectedIds.includes("FINANCIAL"),
   );
+  check("Kitchen-sink generic focus does not select GROWTH", !kitchen.selectedIds.includes("GROWTH"));
 
   const unknown = planSpecialists({
     question: "What is the weather on Mars and my favorite color?",
@@ -253,14 +255,75 @@ try {
   });
   check("Focus question with an active workforce recommendation selects WORKFORCE", focusWorkforce.selectedIds.includes("WORKFORCE"));
 
+  const growthPlan = planSpecialists({
+    question: "Which lost leads can I recover and which customers can I reactivate?",
+    activeRecommendationKeys: [],
+  });
+  check("Growth question selects GROWTH", growthPlan.selectedIds.includes("GROWTH") && growthPlan.fanout <= 4);
+  check("Growth selection keeps recursion depth 1", growthPlan.recursionDepth === 1);
+
+  const financialNoGrowth = planSpecialists({
+    question: "How is my profit and margin this month?",
+    activeRecommendationKeys: [],
+  });
+  check("Unrelated financial question does not select GROWTH", !financialNoGrowth.selectedIds.includes("GROWTH"));
+
+  const focusGrowth = planSpecialists({
+    question: "What should I focus on this week?",
+    activeRecommendationKeys: ["growth-lost-lead-recovery"],
+  });
+  check("Focus question with an active Growth recommendation selects GROWTH", focusGrowth.selectedIds.includes("GROWTH"));
+
+  const genericFocusGrowth = planSpecialists({
+    question: "What should I focus on this week?",
+    activeRecommendationKeys: [],
+  });
+  check("Generic focus does not select GROWTH without Growth evidence", !genericFocusGrowth.selectedIds.includes("GROWTH"));
+
+  const explicitReactivate = planSpecialists({
+    question: "Should I reactivate prior customers?",
+    activeRecommendationKeys: [],
+  });
+  check(
+    "Explicit Growth question survives focus phrasing without a recommendation",
+    explicitReactivate.selectedIds.includes("GROWTH"),
+  );
+  const explicitLostLeads = planSpecialists({
+    question: "What should I do about lost leads?",
+    activeRecommendationKeys: [],
+  });
+  check("Explicit lost-lead question selects GROWTH", explicitLostLeads.selectedIds.includes("GROWTH"));
+  const explicitAttribution = planSpecialists({
+    question: "Should I review my marketing attribution?",
+    activeRecommendationKeys: [],
+  });
+  check("Explicit marketing attribution question selects GROWTH", explicitAttribution.selectedIds.includes("GROWTH"));
+
   const enabled = enabledSpecialistIds();
-  check("Enabled specialists are ATTENTION, WORKFORCE, and FINANCIAL", enabled.join(",") === "ATTENTION,WORKFORCE,FINANCIAL");
+  check(
+    "Enabled specialists are ATTENTION, WORKFORCE, FINANCIAL, and GROWTH",
+    enabled.join(",") === "ATTENTION,WORKFORCE,FINANCIAL,GROWTH",
+  );
   check("Registry keeps future specialist identities", SPECIALIST_IDS.includes("FINANCIAL") && SPECIALIST_IDS.includes("BUSINESS_PROTECTION"));
   check(
     "Deep WORKFORCE upgrades the existing specialist instead of adding another",
     registrySrc.includes('id: "WORKFORCE"') &&
       !registrySrc.includes('id: "WORKFORCE_DEEP"') &&
       (registrySrc.match(/id: "WORKFORCE"/g) || []).length === 1,
+  );
+  const growthSpecialistSrc = readFileSync(
+    new URL("../src/lib/chief-of-staff/growth-specialist.ts", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Deep GROWTH upgrades the existing specialist instead of adding another",
+    registrySrc.includes('id: "GROWTH"') &&
+      registrySrc.includes("enabled: true") &&
+      !registrySrc.includes('id: "GROWTH_DEEP"') &&
+      (registrySrc.match(/id: "GROWTH"/g) || []).length === 1 &&
+      !growthSpecialistSrc.includes("loadGrowthSource(") &&
+      !growthSpecialistSrc.includes("createGrowthActionRequest") &&
+      !growthSpecialistSrc.includes("growth-ops"),
   );
   check(
     "Canonical Workforce recommendation keys stay the original six",
@@ -737,6 +800,66 @@ try {
       JSON.stringify({ text: "ok", stance: "FACT", citedFactKeys: ["paid-revenue", "secret-ledger"] }),
       synthesized.citedFacts.map((fact) => fact.key),
     )?.citedFactKeys.includes("secret-ledger") === false,
+  );
+  const growthSynthesis = synthesizeCoachAnswer({
+    question: "Which lost leads can I recover?",
+    catalog,
+    specialistResults: [
+      { specialistId: "ATTENTION", status: "OK", findings: [], factKeys: ["unpaid-invoices"], recommendationKeys: ["collect-unpaid-invoices"] },
+      {
+        specialistId: "FINANCIAL",
+        status: "OK",
+        findings: [
+          {
+            key: "review-low-margin-jobs",
+            title: "Review recorded low-margin work",
+            summary: "One recorded job has a negative margin.",
+            recommendationKeys: ["review-low-margin-jobs"],
+            factKeys: ["low-margin"],
+          },
+        ],
+        factKeys: ["low-margin"],
+        recommendationKeys: ["review-low-margin-jobs"],
+      },
+      {
+        specialistId: "GROWTH",
+        status: "OK",
+        findings: [
+          {
+            key: "growth-recovery-open",
+            title: "Review recorded recovery opportunities",
+            summary: "3 recorded recovery opportunities are open.",
+            recommendationKeys: [],
+            factKeys: ["growth-recovery"],
+          },
+        ],
+        factKeys: ["growth-recovery"],
+        recommendationKeys: [],
+      },
+    ],
+    conflicts,
+    coachContext: {
+      facts: catalog.facts,
+      recommendations: catalog.activeRecommendations,
+      metrics: [],
+      goals: [],
+      actionItems: [],
+    },
+  });
+  const growthRecorded = growthSynthesis.payload.recordedFindings ?? [];
+  check(
+    "Provider recordedFindings includes bounded Growth and Financial findings",
+    growthRecorded.some((row) => row.key === "growth-recovery-open" && row.title.includes("recovery")) &&
+      growthRecorded.some((row) => row.key === "review-low-margin-jobs"),
+  );
+  check(
+    "Provider payload does not name a Growth specialist",
+    !/Growth specialist/i.test(JSON.stringify(growthSynthesis.payload)) &&
+      !/Growth Agent/i.test(growthSynthesis.output.text),
+  );
+  check(
+    "Fallback still mentions the Growth finding",
+    growthSynthesis.output.text.includes("3 recorded recovery opportunities are open."),
   );
 
   console.log("\nRECOMMENDATIONS — Workforce dismiss stores real evidence");

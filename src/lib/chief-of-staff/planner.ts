@@ -4,6 +4,7 @@
  */
 import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { isSpecialistEnabled } from "@/lib/chief-of-staff/registry";
+import { isGrowthOwnedRecommendationKey } from "@/lib/chief-of-staff/growth-specialist";
 import { isFinancialOwnedRecommendationKey } from "@/lib/chief-of-staff/specialists/financial";
 import {
   MAX_RECURSION_DEPTH,
@@ -19,14 +20,33 @@ const WORKFORCE_QUESTION =
 const FINANCIAL_QUESTION =
   /\b(profit(?:ability)?|invoices?|receivables?|expenses?|margin|cash|revenue|payroll|payments?|unpaid|outstanding|collected|recurring (?:cost|expense)s?|labor (?:cost|burden)|(?:hourly )?wages?|pricing|target margin|estimate[- ]vs[- ]actual|customer concentration|losing money|making money)\b/i;
 const GROWTH_QUESTION =
-  /\b(recover(?:y|ed)?|reactivat(?:e|ion)|campaigns?|lost lead|growth|referrals?)\b/i;
+  /\b(leads?|lead funnel|lead source|pipeline|recover(?:y|ed)?(?: leads?)?|reactivat(?:e|ion)(?: customers?)?|campaigns?|marketing|attribution|(?:lead )?sources?|referrals?|reviews?|repeat customers?|customer retention|local (?:marketing|growth)|conversion|lost leads?|follow-up opportunities|growth)\b/i;
 const KNOWLEDGE_QUESTION =
   /\b(knowledge|launch|procedures?|experience candidates?|approval)\b/i;
 const MATERIALS_QUESTION = /\b(materials?|suppliers?|purchase orders?|inventory)\b/i;
 const COMMUNICATIONS_QUESTION = /\b(sms|text messages?|phone calls?|communications?)\b/i;
 const PROTECTION_QUESTION = /\b(vault|agreements?|esign|insurance|business protection)\b/i;
 const FOCUS_QUESTION = /\b(this week|focus|should i|what should i)\b/i;
+const GENERIC_FOCUS_QUESTION =
+  /\b(?:what )?should i focus\b|\bfocus on(?: this week)?\b|\bwhat should i (?:do|work on) this week\b/i;
 const WORKFORCE_REC_PREFIX = "workforce-";
+
+function departmentHitCount(question: string) {
+  return [
+    WORKFORCE_QUESTION,
+    FINANCIAL_QUESTION,
+    GROWTH_QUESTION,
+    KNOWLEDGE_QUESTION,
+    MATERIALS_QUESTION,
+    COMMUNICATIONS_QUESTION,
+    PROTECTION_QUESTION,
+  ].filter((pattern) => pattern.test(question)).length;
+}
+
+function isGenericFocusQuestion(question: string) {
+  if (GENERIC_FOCUS_QUESTION.test(question)) return true;
+  return FOCUS_QUESTION.test(question) && departmentHitCount(question) >= 3;
+}
 
 const DISABLED_KEYWORD_HINTS: Array<{ id: SpecialistId; pattern: RegExp }> = [
   { id: "FINANCIAL", pattern: FINANCIAL_QUESTION },
@@ -85,6 +105,21 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     skipped.push({ id: "FINANCIAL", reason: "DISABLED" });
   }
 
+  const growthKeys = input.activeRecommendationKeys.filter((key) =>
+    isGrowthOwnedRecommendationKey(key),
+  );
+  const growthHint =
+    input.entityHints?.recommendationKey != null &&
+    isGrowthOwnedRecommendationKey(input.entityHints.recommendationKey);
+  const wantsGrowth =
+    GROWTH_QUESTION.test(question) || growthKeys.length > 0 || Boolean(growthHint);
+
+  if (wantsGrowth && isSpecialistEnabled("GROWTH")) {
+    selected.push("GROWTH");
+  } else if (GROWTH_QUESTION.test(question) && !isSpecialistEnabled("GROWTH")) {
+    skipped.push({ id: "GROWTH", reason: "DISABLED" });
+  }
+
   const isFocus = FOCUS_QUESTION.test(question);
   for (const hint of DISABLED_KEYWORD_HINTS) {
     if (!hint.pattern.test(question)) continue;
@@ -102,6 +137,14 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     }
     if ((financialKeys.length > 0 || Boolean(financialHint)) && isSpecialistEnabled("FINANCIAL")) {
       allowed.add("FINANCIAL");
+    }
+    const explicitGrowth =
+      GROWTH_QUESTION.test(question) && !isGenericFocusQuestion(question);
+    if (
+      isSpecialistEnabled("GROWTH") &&
+      (growthKeys.length > 0 || Boolean(growthHint) || explicitGrowth)
+    ) {
+      allowed.add("GROWTH");
     }
     for (const id of [...selected]) {
       if (!allowed.has(id)) {

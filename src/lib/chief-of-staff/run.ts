@@ -32,6 +32,14 @@ import {
   resetFinancialSpecialistCounters,
   setInjectedFinancialLoadFailure,
 } from "@/lib/chief-of-staff/financial-snapshot";
+import {
+  resetGrowthSpecialistCounters,
+  setInjectedGrowthLoadFailure,
+} from "@/lib/chief-of-staff/growth-snapshot";
+import {
+  interpretGrowthSpecialist,
+  resetLastGrowthProjection,
+} from "@/lib/chief-of-staff/growth-specialist";
 import { planSpecialists } from "@/lib/chief-of-staff/planner";
 import {
   loadCanonicalRecommendationCatalog,
@@ -64,6 +72,8 @@ export type ChiefOfStaffTestHooks = {
   failFinancialLoad?: boolean;
   /** Test-only: catalog still loads BSOS facts; Workforce snapshot is marked failed. */
   failWorkforceSnapshot?: boolean;
+  /** Test-only: fail the Growth source load while ATTENTION can survive. */
+  failGrowthLoad?: boolean;
   /** Test-only: hide specific product capabilities after the real entitlement check. */
   denyProductCapabilities?: ProductCapabilityCode[];
 };
@@ -419,7 +429,10 @@ export async function runChiefOfStaffCoach(
   resetDeepLoaderInvocations();
   resetFinancialSpecialistCounters();
   setInjectedFinancialLoadFailure(Boolean(input.test?.failFinancialLoad));
+  resetGrowthSpecialistCounters();
+  setInjectedGrowthLoadFailure(Boolean(input.test?.failGrowthLoad));
   resetLastWorkforceProjection();
+  resetLastGrowthProjection();
 
   let catalog: CanonicalRecommendationCatalog;
   let synthesis: ReturnType<typeof synthesizeCoachAnswer>;
@@ -434,6 +447,7 @@ export async function runChiefOfStaffCoach(
       failWorkforceSnapshot: input.test?.failWorkforceSnapshot,
     });
     setInjectedFinancialLoadFailure(false);
+    setInjectedGrowthLoadFailure(false);
 
     plan = planSpecialists({
       question,
@@ -449,6 +463,17 @@ export async function runChiefOfStaffCoach(
         }
         if (specialistId === "FINANCIAL") {
           specialistResults.push(interpretFinancialSpecialist(catalog, question, input.entityHints));
+          continue;
+        }
+        if (specialistId === "GROWTH") {
+          specialistResults.push(
+            interpretGrowthSpecialist(
+              catalog,
+              question,
+              input.entityHints,
+              input.test?.denyProductCapabilities,
+            ),
+          );
           continue;
         }
         if (specialistId === "WORKFORCE") {
@@ -513,6 +538,7 @@ export async function runChiefOfStaffCoach(
     });
   } catch (error) {
     setInjectedFinancialLoadFailure(false);
+    setInjectedGrowthLoadFailure(false);
     return finalizePreProviderFailure({
       db,
       interactionId,
