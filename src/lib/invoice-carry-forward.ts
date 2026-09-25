@@ -443,11 +443,17 @@ export type PersistDraftInvoiceResult =
   | { ok: false; error: string };
 
 /**
- * Test-only barrier. Production never sets this. Concurrent persist
- * callers can meet here after a SUPPLEMENTAL row is created and before
- * Change Orders are claimed, so the losing transaction must requery.
+ * Test-only barriers. Production never sets these.
+ * - beforeCreateOriginal: concurrent first-invoice callers meet after
+ *   both saw no ORIGINAL and before the unique insert.
+ * - afterCreateSupplemental: concurrent balance callers meet after a
+ *   SUPPLEMENTAL row is created and before Change Orders are claimed.
  */
 export const persistDraftInvoiceTestHooks: {
+  beforeCreateOriginal?: (input: {
+    businessId: string;
+    jobId: string;
+  }) => Promise<void> | void;
   afterCreateSupplemental?: (input: {
     businessId: string;
     jobId: string;
@@ -455,6 +461,66 @@ export const persistDraftInvoiceTestHooks: {
     changeOrderIds: string[];
   }) => Promise<void> | void;
 } = {};
+
+const ORIGINAL_INVOICE_UNIQUE_INDEX = "Invoice_jobId_original_unique";
+
+function prismaUniqueViolation(
+  error: unknown,
+): Prisma.PrismaClientKnownRequestError | null {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    return error;
+  }
+  if (error && typeof error === "object" && "cause" in error) {
+    return prismaUniqueViolation((error as { cause: unknown }).cause);
+  }
+  return null;
+}
+
+/**
+ * True only when the unique ORIGINAL-per-job index rejected a create.
+ * Unrelated Prisma unique violations (Payment, etc.) stay false.
+ */
+export function isOriginalInvoiceUniqueViolation(error: unknown): boolean {
+  const unique = prismaUniqueViolation(error);
+  if (!unique) return false;
+  const model = String(unique.meta?.modelName ?? "");
+  const target = unique.meta?.target;
+  const parts = (Array.isArray(target) ? target : target != null ? [target] : []).map(
+    (value) => String(value),
+  );
+  const joined = [...parts, unique.message ?? ""].join(" ").toLowerCase();
+  if (joined.includes(ORIGINAL_INVOICE_UNIQUE_INDEX.toLowerCase())) {
+    return true;
+  }
+  if (joined.includes("jobid_original")) {
+    return true;
+  }
+  return model === "Invoice" && parts.some((part) => /^jobid$/i.test(part));
+}
+
+async function reuseOwnedOriginalInvoice(
+  db: PrismaClient,
+  input: { businessId: string; jobId: string },
+): Promise<Extract<PersistDraftInvoiceResult, { ok: true; reused: true }> | null> {
+  const winner = await db.invoice.findFirst({
+    where: {
+      businessId: input.businessId,
+      jobId: input.jobId,
+      kind: INVOICE_KIND_ORIGINAL,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: { id: true, kind: true },
+  });
+  if (!winner || !isOriginalInvoiceKind(winner.kind)) {
+    return null;
+  }
+  return {
+    ok: true,
+    invoiceId: winner.id,
+    reused: true,
+    kind: winner.kind,
+  };
+}
 
 async function writeInvoiceLines(
   tx: InvoiceWriteClient,
@@ -535,6 +601,11 @@ async function attachOriginalInvoicePayments(
  * for approved Change Orders that are not yet billed. Safe to call twice:
  * already-billed work is reused, never duplicated, and the original
  * invoice total is never rewritten.
+ *
+ * Concurrent first-ORIGINAL creates are serialized by
+ * Invoice_jobId_original_unique. The losing transaction is not surfaced as
+ * a unique-index error: it requeries the owned job ORIGINAL and returns
+ * that winner with reused=true. Unrelated Prisma errors still throw.
  */
 export async function persistDraftInvoiceFromCompletedJob(
   db: PrismaClient,
@@ -558,7 +629,8 @@ export async function persistDraftInvoiceFromCompletedJob(
     return { ok: false, error: "This job has no linked estimate." };
   }
 
-  return db.$transaction(async (tx) => {
+  try {
+    return await db.$transaction(async (tx) => {
     const existing = await tx.invoice.findMany({
       where: { businessId: input.businessId, jobId: job.id },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -586,6 +658,10 @@ export async function persistDraftInvoiceFromCompletedJob(
         : (job.estimate?.laborMinimumAdjustment ?? ZERO);
 
     if (existing.length === 0) {
+      await persistDraftInvoiceTestHooks.beforeCreateOriginal?.({
+        businessId: input.businessId,
+        jobId: job.id,
+      });
       const total = resolveCurrentApprovedProjectTotal(approvedScope.total, changeOrders);
       const created = await tx.invoice.create({
         data: {
@@ -806,5 +882,18 @@ export async function persistDraftInvoiceFromCompletedJob(
       reused: true as const,
       kind: reused.kind,
     };
-  });
+    });
+  } catch (error) {
+    if (!isOriginalInvoiceUniqueViolation(error)) {
+      throw error;
+    }
+    const reused = await reuseOwnedOriginalInvoice(db, {
+      businessId: input.businessId,
+      jobId: job.id,
+    });
+    if (!reused) {
+      throw error;
+    }
+    return reused;
+  }
 }

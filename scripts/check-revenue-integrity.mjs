@@ -16,10 +16,13 @@ import { readFileSync } from "node:fs";
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const {
+  isOriginalInvoiceUniqueViolation,
   persistDraftInvoiceFromCompletedJob,
   persistDraftInvoiceTestHooks,
 } = await import("@/lib/invoice-carry-forward");
-const { completeJobAndSendInvoice } = await import("@/lib/complete-job-invoice");
+const { completeJobAndSendInvoice, sendDraftInvoiceIfNeeded } = await import(
+  "@/lib/complete-job-invoice"
+);
 const {
   isCustomerVisibleInvoiceStatus,
   loadInvoiceDocumentForBusiness,
@@ -43,6 +46,7 @@ const {
 } = await import("@/lib/authorization");
 const {
   PAYMENT_PURPOSE_INVOICE_BALANCE,
+  PAYMENT_PURPOSE_MATERIAL_DEPOSIT,
   attachEstimatePaymentsToInvoice,
   invoicePaymentBreakdown,
   listPaymentsForInvoice,
@@ -1236,6 +1240,213 @@ try {
     uniqueSucceeded = true;
   }
   check("partial unique index rejects a second ORIGINAL for the same job", uniqueSucceeded);
+
+  console.log("\nTEST — Concurrent first ORIGINAL persist reuses the winner");
+  const originalIndexName = "Invoice_jobId_original_unique";
+  const paymentUniqueError = new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+    code: "P2002",
+    clientVersion: "6.19.3",
+    meta: { modelName: "Payment", target: ["stripeCheckoutSessionId"] },
+  });
+  const invoiceIdUniqueError = new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+    code: "P2002",
+    clientVersion: "6.19.3",
+    meta: { modelName: "Invoice", target: ["id"] },
+  });
+  const originalUniqueError = new Prisma.PrismaClientKnownRequestError(
+    `Unique constraint failed on the constraint: \`${originalIndexName}\``,
+    {
+      code: "P2002",
+      clientVersion: "6.19.3",
+      meta: { modelName: "Invoice", target: originalIndexName },
+    },
+  );
+  check(
+    "Payment unique violations are not treated as an ORIGINAL race",
+    isOriginalInvoiceUniqueViolation(paymentUniqueError) === false,
+  );
+  check(
+    "unrelated Invoice unique violations are not treated as an ORIGINAL race",
+    isOriginalInvoiceUniqueViolation(invoiceIdUniqueError) === false,
+  );
+  check(
+    "the ORIGINAL unique index is recognized as the first-invoice race",
+    isOriginalInvoiceUniqueViolation(originalUniqueError) === true,
+  );
+  check("non-Prisma errors are not swallowed as an ORIGINAL race", isOriginalInvoiceUniqueViolation(new Error("boom")) === false);
+
+  const originalRaceJob = await createInProgressApprovedJob({
+    businessId: businessA.id,
+    customerId: customerA.id,
+    propertyId: propertyA.id,
+    customerName: customerA.name,
+    estimateTotal: 210,
+    estimateLines: [
+      { description: "Door hardware", quantity: 1, unitPrice: 120, total: 120 },
+      { description: "Weatherstrip", quantity: 1, unitPrice: 90, total: 90 },
+    ],
+    status: "COMPLETED",
+  });
+  const originalRaceCo = await addChangeOrder({
+    businessId: businessA.id,
+    jobId: originalRaceJob.job.id,
+    title: "Threshold",
+    status: "APPROVED",
+    total: 45,
+    description: "Threshold",
+  });
+  const originalRaceDeposit = await recordSucceededPayment(prisma, {
+    businessId: businessA.id,
+    customerId: customerA.id,
+    estimateId: originalRaceJob.estimate.id,
+    jobId: originalRaceJob.job.id,
+    purpose: PAYMENT_PURPOSE_MATERIAL_DEPOSIT,
+    amount: new Prisma.Decimal(50),
+    method: "STRIPE",
+    note: "estimate-deposit",
+  });
+
+  let originalArrived = 0;
+  /** @type {Array<() => void>} */
+  const originalRelease = [];
+  persistDraftInvoiceTestHooks.beforeCreateOriginal = () =>
+    new Promise((resolve) => {
+      originalArrived += 1;
+      originalRelease.push(resolve);
+      if (originalArrived >= 2) {
+        for (const done of originalRelease) done();
+      }
+    });
+  const originalRaceClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const originalRaceClientB = new PrismaClient({ datasourceUrl: testUrl });
+  /** @type {Array<Awaited<ReturnType<typeof persistDraftInvoiceFromCompletedJob>>>} */
+  let originalRaceResults;
+  try {
+    originalRaceResults = await Promise.all([
+      persistDraftInvoiceFromCompletedJob(originalRaceClientA, {
+        businessId: businessA.id,
+        jobId: originalRaceJob.job.id,
+      }),
+      persistDraftInvoiceFromCompletedJob(originalRaceClientB, {
+        businessId: businessA.id,
+        jobId: originalRaceJob.job.id,
+      }),
+    ]);
+  } finally {
+    persistDraftInvoiceTestHooks.beforeCreateOriginal = undefined;
+    await originalRaceClientA.$disconnect();
+    await originalRaceClientB.$disconnect();
+  }
+
+  const originalSuccessful = originalRaceResults.filter((result) => result.ok);
+  const originalIds = [...new Set(originalSuccessful.map((result) => result.invoiceId))];
+  const originalCreated = originalSuccessful.filter((result) => result.reused === false);
+  const originalReused = originalSuccessful.filter((result) => result.reused === true);
+  const originalRaceInvoices = await prisma.invoice.findMany({
+    where: { jobId: originalRaceJob.job.id },
+    include: { lineItems: { orderBy: { createdAt: "asc" } } },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  const originalRaceOriginals = originalRaceInvoices.filter((invoice) => invoice.kind === INVOICE_KIND_ORIGINAL);
+  const originalRaceSupplementals = originalRaceInvoices.filter(
+    (invoice) => invoice.kind === INVOICE_KIND_SUPPLEMENTAL,
+  );
+  const originalWinner = originalRaceOriginals[0];
+  const originalRaceLines = originalWinner
+    ? await prisma.lineItem.findMany({
+        where: { invoiceId: originalWinner.id, businessId: businessA.id },
+      })
+    : [];
+  const originalRacePayments = await prisma.payment.findMany({
+    where: { jobId: originalRaceJob.job.id, businessId: businessA.id },
+  });
+  const originalRaceCoAfter = await prisma.changeOrder.findUniqueOrThrow({
+    where: { id: originalRaceCo.id },
+  });
+  check("both first-invoice callers overlapped at create", originalArrived === 2);
+  check("both concurrent first-invoice callers succeeded", originalSuccessful.length === 2);
+  check("both first-invoice callers returned the same invoice id", originalIds.length === 1);
+  check("exactly one caller created the ORIGINAL", originalCreated.length === 1);
+  check("the losing caller reused the winning ORIGINAL", originalReused.length === 1);
+  check("exactly one invoice row exists after the first-invoice race", originalRaceInvoices.length === 1);
+  check("exactly one ORIGINAL invoice remains", originalRaceOriginals.length === 1);
+  check("no supplemental invoice was created by the first-invoice race", originalRaceSupplementals.length === 0);
+  check("no orphan draft remains", originalRaceInvoices.every((invoice) => invoice.id === originalIds[0]));
+  check(
+    "winning ORIGINAL total is the approved estimate plus the approved CO",
+    originalWinner?.total.toString() === "255",
+  );
+  check(
+    "exact expected line count on the ORIGINAL",
+    originalRaceLines.length === 3 &&
+      originalRaceLines.some((line) => line.description === "Door hardware") &&
+      originalRaceLines.some((line) => line.description === "Weatherstrip") &&
+      originalRaceLines.some((line) => line.description === "Threshold"),
+  );
+  check("no duplicate line items were written", originalRaceLines.length === 3);
+  check(
+    "exactly one estimate-deposit Payment remains and is attached once",
+    originalRacePayments.length === 1 &&
+      originalRacePayments[0].id === originalRaceDeposit.id &&
+      originalRacePayments[0].purpose === PAYMENT_PURPOSE_MATERIAL_DEPOSIT &&
+      originalRacePayments[0].invoiceId === originalWinner?.id &&
+      originalRacePayments[0].amount.toString() === "50",
+  );
+  check(
+    "approved CO at first-invoice time stayed on the ORIGINAL",
+    originalRaceCoAfter.invoiceId === originalWinner?.id,
+  );
+  const originalRaceRetry = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: businessA.id,
+    jobId: originalRaceJob.job.id,
+  });
+  check(
+    "subsequent third retry reuses the same ORIGINAL",
+    originalRaceRetry.ok &&
+      originalRaceRetry.reused === true &&
+      originalRaceRetry.invoiceId === originalIds[0],
+  );
+  check(
+    "third retry still has one ORIGINAL and no supplemental",
+    (await prisma.invoice.count({ where: { jobId: originalRaceJob.job.id } })) === 1 &&
+      (await prisma.invoice.count({
+        where: { jobId: originalRaceJob.job.id, kind: INVOICE_KIND_SUPPLEMENTAL },
+      })) === 0,
+  );
+  const originalSent = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: businessA.id,
+    invoiceId: originalIds[0],
+    businessName: businessA.name,
+  });
+  const originalSentAgain = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: businessA.id,
+    invoiceId: originalIds[0],
+    businessName: businessA.name,
+  });
+  check("first send after the race moves the shared ORIGINAL to SENT", originalSent.ok && originalSent.newlySent === true);
+  check("retry send does not send the shared ORIGINAL again", originalSentAgain.ok && originalSentAgain.newlySent === false);
+  const foreignOriginalPersist = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: businessB.id,
+    jobId: originalRaceJob.job.id,
+  });
+  const missingOriginalPersist = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: businessA.id,
+    jobId: randomUUID(),
+  });
+  check(
+    "foreign tenant cannot persist an ORIGINAL for this job",
+    foreignOriginalPersist.ok === false &&
+      foreignOriginalPersist.error === "That job could not be found.",
+  );
+  check(
+    "unknown job IDs remain blocked",
+    missingOriginalPersist.ok === false &&
+      missingOriginalPersist.error === "That job could not be found.",
+  );
+  check(
+    "foreign/unknown IDs did not add an invoice",
+    (await prisma.invoice.count({ where: { jobId: originalRaceJob.job.id } })) === 1,
+  );
 
   console.log("\nTEST — Concurrent supplemental persist returns the winning invoice, not ORIGINAL");
   const raceJob = await createInProgressApprovedJob({
