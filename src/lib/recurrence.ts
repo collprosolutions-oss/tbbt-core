@@ -132,3 +132,91 @@ export function applyRecurrenceDecision(
     nextOccurrenceAt: decision === "CANCEL" ? null : plan.nextOccurrenceAt,
   };
 }
+
+function addCalendarMonths(start: Date, months: number): Date {
+  const next = new Date(start.getTime());
+  const day = next.getDate();
+  next.setMonth(next.getMonth() + months);
+  if (next.getDate() !== day) {
+    next.setDate(0);
+  }
+  return next;
+}
+
+/**
+ * Next known occurrence after a scheduled recurring job.
+ * CUSTOM cadence keeps an owner-set nextOccurrenceAt; it is not guessed.
+ */
+export function computeNextOccurrenceAt(
+  scheduledAt: Date,
+  cadence: RecurrenceCadence | "",
+  existingNext?: Date | null,
+): Date | null {
+  if (cadence === "WEEKLY") {
+    return new Date(scheduledAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+  }
+  if (cadence === "BIWEEKLY") {
+    return new Date(scheduledAt.getTime() + 14 * 24 * 60 * 60 * 1000);
+  }
+  if (cadence === "MONTHLY") {
+    return addCalendarMonths(scheduledAt, 1);
+  }
+  if (cadence === "CUSTOM") {
+    return existingNext && existingNext.getTime() > scheduledAt.getTime() ? existingNext : null;
+  }
+  return null;
+}
+
+export function recurrenceForecastActive(job: {
+  serviceIntent?: string | null;
+  recurrenceStatus?: string | null;
+  recurrenceCadence?: string | null;
+}): boolean {
+  return (
+    parseServiceIntent(job.serviceIntent) === "RECURRING" &&
+    parseRecurrenceStatus(job.recurrenceStatus) === "ACTIVE"
+  );
+}
+
+export type RecurrenceForecastOccurrence = {
+  at: Date;
+  kind: "estimated";
+  sourceJobId: string;
+  cadence: RecurrenceCadence | "";
+};
+
+/**
+ * Project known future recurring work into a forecast window.
+ * Does not create Job rows and is not Cleaning-specific.
+ */
+export function projectRecurrenceOccurrences(input: {
+  jobId: string;
+  scheduledAt: Date;
+  cadence: string;
+  nextOccurrenceAt?: Date | null;
+  from: Date;
+  until: Date;
+  maxOccurrences?: number;
+}): RecurrenceForecastOccurrence[] {
+  const cadence = parseRecurrenceCadence(input.cadence);
+  const maxOccurrences = input.maxOccurrences ?? 12;
+  const occurrences: RecurrenceForecastOccurrence[] = [];
+  let cursor =
+    input.nextOccurrenceAt && input.nextOccurrenceAt.getTime() > input.scheduledAt.getTime()
+      ? input.nextOccurrenceAt
+      : computeNextOccurrenceAt(input.scheduledAt, cadence, input.nextOccurrenceAt);
+  while (cursor && occurrences.length < maxOccurrences && cursor.getTime() < input.until.getTime()) {
+    if (cursor.getTime() >= input.from.getTime()) {
+      occurrences.push({
+        at: cursor,
+        kind: "estimated",
+        sourceJobId: input.jobId,
+        cadence,
+      });
+    }
+    const next = computeNextOccurrenceAt(cursor, cadence, null);
+    if (!next || next.getTime() <= cursor.getTime()) break;
+    cursor = next;
+  }
+  return occurrences;
+}

@@ -95,7 +95,8 @@
     "test:automation": "node --experimental-strip-types scripts/check-automation.mjs",
     "test:multi-trade-core": "node --experimental-strip-types scripts/check-multi-trade-core.mjs",
     "test:plan-entitlements": "node --experimental-strip-types scripts/check-plan-entitlements.mjs",
-    "test:website-engine": "node --experimental-strip-types scripts/check-website-engine.mjs"
+    "test:website-engine": "node --experimental-strip-types scripts/check-website-engine.mjs",
+    "test:workforce-capacity": "node --experimental-strip-types scripts/check-workforce-capacity.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",

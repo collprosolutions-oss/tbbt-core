@@ -23,7 +23,7 @@ Do not invent passing browser results. The isolated harness is
 4. CRM / requests / pipeline (`/customers`, `/requests`, `/pipeline`).
 5. Estimate → send / email → customer approve (`/estimates`, `/e/[token]`).
 6. Material deposit (Connect Stripe or fake local adapter).
-7. Job → schedule → employee field workflow (`/jobs`, `/field/jobs/[jobId]`).
+7. Job → schedule → employee field workflow (`/jobs`, `/field/jobs/[jobId]`). Capacity, skill match, and Fill-In Bench recommendations stay owner-approved (`npm run test:workforce-capacity`).
 8. Time cards → job photos → additional work / change order.
 9. Complete → invoice → payment (`/invoices`, `/p/[token]/invoice`).
 10. Expense → job profitability / reports (`/expenses`, `/reports`).

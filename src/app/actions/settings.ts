@@ -224,6 +224,16 @@ export async function updateSchedulingSettings(
       workingWeekdays: weekdays.days,
       schedulingBufferMinutes: buffer.minutes,
       unavailableDates,
+      firstAppointmentMode: readString(formData, "firstAppointmentMode"),
+      laterAppointmentMode: readString(formData, "laterAppointmentMode"),
+      defaultArrivalWindowMinutes: Number(readString(formData, "defaultArrivalWindowMinutes") || "120"),
+      dayBeforeChangeCutoffHours: Number(readString(formData, "dayBeforeChangeCutoffHours") || "24"),
+      defaultPickupMinutes: Number(readString(formData, "defaultPickupMinutes") || "0"),
+      travelPlaceholderMinutes: Number(readString(formData, "travelPlaceholderMinutes") || "0"),
+      helperRecommendationThresholdMinutes: Number(
+        readString(formData, "helperRecommendationThresholdMinutes") || "60",
+      ),
+      overloadThresholdPercent: Number(readString(formData, "overloadThresholdPercent") || "90"),
     });
     revalidateSettings();
     revalidatePath("/jobs");

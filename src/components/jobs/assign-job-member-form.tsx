@@ -14,6 +14,13 @@ export type EligibleMember = {
   email: string;
 };
 
+export type AssigneeHint = {
+  membershipId: string;
+  name: string;
+  reason: string;
+  available: boolean;
+};
+
 /**
  * OWNER/ADMIN-only control on the Work Order: assign, change, or remove the
  * one MEMBER assigned to this Job. `eligibleMembers` is already scoped to
@@ -26,10 +33,12 @@ export function AssignJobMemberForm({
   jobId,
   eligibleMembers,
   assignedMembershipId,
+  recommendations = [],
 }: {
   jobId: string;
   eligibleMembers: EligibleMember[];
   assignedMembershipId: string | null;
+  recommendations?: AssigneeHint[];
 }) {
   const [state, formAction, pending] = useActionState(
     assignJobMember,
@@ -55,6 +64,15 @@ export function AssignJobMemberForm({
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Saving…" : "Save assignment"}
       </Button>
+      {recommendations.length > 0 ? (
+        <p className="w-full text-xs text-muted-foreground">
+          Recommendation only — you make the assignment.{" "}
+          {recommendations
+            .slice(0, 3)
+            .map((row) => `${row.name}${row.available ? "" : " (busy)"}`)
+            .join("; ")}
+        </p>
+      ) : null}
       {state.error ? (
         <Alert variant="destructive" className="w-full">
           <AlertDescription>{state.error}</AlertDescription>

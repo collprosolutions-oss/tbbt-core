@@ -46,6 +46,13 @@ import {
 } from "@/lib/appointment-confirmation";
 import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { loadAvailabilitySnapshot } from "@/lib/availability-data";
+import { appointmentModeForJob, parseSkillList } from "@/lib/workforce";
+import {
+  loadJobAssignmentSuggestions,
+  loadSchedulingPolicy,
+} from "@/lib/workforce-data";
+import { StaffingOutreachForm } from "@/components/team/fill-in-bench-form";
+import { staffingShortage } from "@/lib/workforce-matching";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import {
   formatAddress,
@@ -251,6 +258,28 @@ export default async function JobPage({
   const availability = isCompleted
     ? null
     : await loadAvailabilitySnapshot(prisma, access.businessId);
+  const policy = await loadSchedulingPolicy(prisma, access.businessId);
+  const assignmentSuggestions = isCompleted
+    ? []
+    : await loadJobAssignmentSuggestions(prisma, access.businessId, {
+        id: job.id,
+        scheduledAt: job.scheduledAt,
+        scheduledDurationMinutes: job.scheduledDurationMinutes,
+        pickupDurationMinutes: job.pickupDurationMinutes,
+        requiredSkills: job.requiredSkills,
+      });
+  const shortage = staffingShortage({
+    requiredSkills: parseSkillList(job.requiredSkills),
+    durationMinutes: job.scheduledDurationMinutes,
+    pickupMinutes: job.pickupDurationMinutes ?? 0,
+    start: job.scheduledAt,
+    recommendations: assignmentSuggestions,
+  });
+  const appointmentNote = `${
+    appointmentModeForJob({ alreadyScheduled: Boolean(job.scheduledAt), policy }) === "EXACT"
+      ? "First appointment uses an exact start time"
+      : "Later work may use an arrival window"
+  } for this business. Pickup time is included in capacity.`;
 
   const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
     BEFORE: [],
@@ -595,6 +624,9 @@ export default async function JobPage({
               isScheduled={isScheduled}
               unpaidDepositWarning={unpaidDepositWarning}
               availability={availability}
+              pickupDurationMinutes={job.pickupDurationMinutes ?? 0}
+              requiredSkills={parseSkillList(job.requiredSkills)}
+              appointmentNote={appointmentNote}
             />
             </>
           )}
@@ -634,8 +666,24 @@ export default async function JobPage({
                 name: member.user.name,
                 email: member.user.email,
               }))}
+              recommendations={assignmentSuggestions.map((row) => ({
+                membershipId: row.membershipId,
+                name: row.name,
+                reason: row.reason,
+                available: row.available,
+              }))}
             />
           )}
+          {shortage.shortage ? (
+            <div className="space-y-2">
+              <p className="text-sm">{shortage.explanation}</p>
+              <StaffingOutreachForm
+                jobId={job.id}
+                missingSkills={shortage.missingSkills.join(",")}
+                explanation={shortage.explanation}
+              />
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

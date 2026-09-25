@@ -649,6 +649,26 @@ check(
     productGrantSourceRefMigration.includes("BusinessProductGrant_businessId_grantType_code_source_sourceRef_key"),
 );
 
+const workforceMigration = readFileSync(
+  new URL("../prisma/migrations/20260925220000_scheduling_workforce_intelligence/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Workforce capacity migration is additive and preserves membership and job rows",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(workforceMigration) &&
+    workforceMigration.includes('ADD COLUMN IF NOT EXISTS "schedulingActive"') &&
+    workforceMigration.includes('ADD COLUMN IF NOT EXISTS "pickupDurationMinutes"') &&
+    workforceMigration.includes('CREATE TABLE IF NOT EXISTS "FillInBenchWorker"') &&
+    workforceMigration.includes('CREATE TABLE IF NOT EXISTS "MembershipSkill"') &&
+    workforceMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run workforce DDL",
+  !workspaceLoader.includes("FillInBenchWorker") &&
+    !workspaceLoader.includes("ensureWorkforceSchema") &&
+    !workspaceLoader.includes("scheduling_workforce_intelligence"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

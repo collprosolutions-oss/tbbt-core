@@ -20,6 +20,7 @@ import {
 import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import { ensureBusinessAvailabilitySchema } from "@/lib/availability-data";
+import { ensureWorkforceSchema } from "@/lib/workforce-data";
 import {
   DEFAULT_SETTINGS_PREFERENCES,
   SCHEDULING_FUTURE_RULE_MESSAGE,
@@ -63,6 +64,7 @@ export async function ensureBusinessSettings(
   businessId: string,
 ) {
   await ensureBusinessAvailabilitySchema(db);
+  await ensureWorkforceSchema(db);
   const existing = await db.businessSettings.findUnique({
     where: { businessId },
   });
@@ -431,6 +433,14 @@ export async function updateSchedulingSettingsOp(
     workingWeekdays: number[];
     schedulingBufferMinutes: number;
     unavailableDates: string[];
+    firstAppointmentMode?: string;
+    laterAppointmentMode?: string;
+    defaultArrivalWindowMinutes?: number;
+    dayBeforeChangeCutoffHours?: number;
+    defaultPickupMinutes?: number;
+    travelPlaceholderMinutes?: number;
+    helperRecommendationThresholdMinutes?: number;
+    overloadThresholdPercent?: number;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
@@ -445,6 +455,31 @@ export async function updateSchedulingSettingsOp(
   if (input.schedulingBufferMinutes < 0 || input.schedulingBufferMinutes > 240) {
     throw new SettingsError("Enter a scheduling buffer between 0 and 240 minutes.");
   }
+  const policyMinutesOk = [
+    input.defaultArrivalWindowMinutes,
+    input.defaultPickupMinutes,
+    input.travelPlaceholderMinutes,
+    input.helperRecommendationThresholdMinutes,
+  ].every((value) => value == null || (Number.isInteger(value) && value >= 0 && value <= 24 * 60));
+  if (!policyMinutesOk) {
+    throw new SettingsError("Scheduling policy minutes must be whole numbers between 0 and 1440.");
+  }
+  if (
+    input.dayBeforeChangeCutoffHours != null &&
+    (!Number.isInteger(input.dayBeforeChangeCutoffHours) ||
+      input.dayBeforeChangeCutoffHours < 0 ||
+      input.dayBeforeChangeCutoffHours > 168)
+  ) {
+    throw new SettingsError("Day-before cutoff must be between 0 and 168 hours.");
+  }
+  if (
+    input.overloadThresholdPercent != null &&
+    (!Number.isInteger(input.overloadThresholdPercent) ||
+      input.overloadThresholdPercent < 1 ||
+      input.overloadThresholdPercent > 200)
+  ) {
+    throw new SettingsError("Overload threshold must be between 1 and 200 percent.");
+  }
 
   const current = await ensureBusinessSettings(db, access.businessId);
   const currentDates = await db.businessUnavailableDate.findMany({
@@ -458,6 +493,14 @@ export async function updateSchedulingSettingsOp(
     workingWeekdays: current.workingWeekdays,
     schedulingBufferMinutes: current.schedulingBufferMinutes,
     unavailableDates: currentDates.map((row) => row.date),
+    firstAppointmentMode: current.firstAppointmentMode,
+    laterAppointmentMode: current.laterAppointmentMode,
+    defaultArrivalWindowMinutes: current.defaultArrivalWindowMinutes,
+    dayBeforeChangeCutoffHours: current.dayBeforeChangeCutoffHours,
+    defaultPickupMinutes: current.defaultPickupMinutes,
+    travelPlaceholderMinutes: current.travelPlaceholderMinutes,
+    helperRecommendationThresholdMinutes: current.helperRecommendationThresholdMinutes,
+    overloadThresholdPercent: current.overloadThresholdPercent,
   };
   const nextDates = [...new Set(input.unavailableDates)].sort();
   const next = {
@@ -466,6 +509,17 @@ export async function updateSchedulingSettingsOp(
     workingWeekdays: input.workingWeekdays.join(","),
     schedulingBufferMinutes: input.schedulingBufferMinutes,
     unavailableDates: nextDates,
+    firstAppointmentMode: input.firstAppointmentMode ?? current.firstAppointmentMode,
+    laterAppointmentMode: input.laterAppointmentMode ?? current.laterAppointmentMode,
+    defaultArrivalWindowMinutes:
+      input.defaultArrivalWindowMinutes ?? current.defaultArrivalWindowMinutes,
+    dayBeforeChangeCutoffHours:
+      input.dayBeforeChangeCutoffHours ?? current.dayBeforeChangeCutoffHours,
+    defaultPickupMinutes: input.defaultPickupMinutes ?? current.defaultPickupMinutes,
+    travelPlaceholderMinutes: input.travelPlaceholderMinutes ?? current.travelPlaceholderMinutes,
+    helperRecommendationThresholdMinutes:
+      input.helperRecommendationThresholdMinutes ?? current.helperRecommendationThresholdMinutes,
+    overloadThresholdPercent: input.overloadThresholdPercent ?? current.overloadThresholdPercent,
   };
 
   const unchanged =
@@ -473,7 +527,15 @@ export async function updateSchedulingSettingsOp(
     previous.workEndMinutes === next.workEndMinutes &&
     previous.workingWeekdays === next.workingWeekdays &&
     previous.schedulingBufferMinutes === next.schedulingBufferMinutes &&
-    previous.unavailableDates.join(",") === next.unavailableDates.join(",");
+    previous.unavailableDates.join(",") === next.unavailableDates.join(",") &&
+    previous.firstAppointmentMode === next.firstAppointmentMode &&
+    previous.laterAppointmentMode === next.laterAppointmentMode &&
+    previous.defaultArrivalWindowMinutes === next.defaultArrivalWindowMinutes &&
+    previous.dayBeforeChangeCutoffHours === next.dayBeforeChangeCutoffHours &&
+    previous.defaultPickupMinutes === next.defaultPickupMinutes &&
+    previous.travelPlaceholderMinutes === next.travelPlaceholderMinutes &&
+    previous.helperRecommendationThresholdMinutes === next.helperRecommendationThresholdMinutes &&
+    previous.overloadThresholdPercent === next.overloadThresholdPercent;
   if (unchanged) {
     return { unchanged: true as const };
   }
@@ -486,6 +548,14 @@ export async function updateSchedulingSettingsOp(
         workEndMinutes: next.workEndMinutes,
         workingWeekdays: next.workingWeekdays,
         schedulingBufferMinutes: next.schedulingBufferMinutes,
+        firstAppointmentMode: next.firstAppointmentMode,
+        laterAppointmentMode: next.laterAppointmentMode,
+        defaultArrivalWindowMinutes: next.defaultArrivalWindowMinutes,
+        dayBeforeChangeCutoffHours: next.dayBeforeChangeCutoffHours,
+        defaultPickupMinutes: next.defaultPickupMinutes,
+        travelPlaceholderMinutes: next.travelPlaceholderMinutes,
+        helperRecommendationThresholdMinutes: next.helperRecommendationThresholdMinutes,
+        overloadThresholdPercent: next.overloadThresholdPercent,
       },
     });
     await tx.businessUnavailableDate.deleteMany({

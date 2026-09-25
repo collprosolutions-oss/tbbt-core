@@ -66,6 +66,8 @@ import {
   weekRange,
 } from "@/lib/schedule";
 import { loadAvailabilitySnapshot } from "@/lib/availability-data";
+import { CapacityIntelligencePanel } from "@/components/schedule/capacity-intelligence-panel";
+import { loadWorkforceSnapshot } from "@/lib/workforce-data";
 import { cn } from "@/lib/utils";
 
 // Deliberately not the exact "Schedule / Jobs" sidebar nav label: Next's
@@ -357,6 +359,7 @@ export default async function JobsPage({
   ]);
   const availability = await loadAvailabilitySnapshot(prisma, access.businessId);
   const scheduleBufferMinutes = availability.settings.schedulingBufferMinutes;
+  const workforce = await loadWorkforceSnapshot(prisma, access.businessId);
 
   const jobsThisWeekCount = thisWeekJobsForSum.length;
   const jobsThisWeekValue = thisWeekJobsForSum.reduce(
@@ -640,6 +643,12 @@ export default async function JobsPage({
   const calendarSection = (
     <>
       <FounderRegion id="calendar" className="space-y-3">
+      <CapacityIntelligencePanel
+        week={workforce.week}
+        today={workforce.week.days.find((day) => day.date === todayIso) ?? null}
+        conflicts={workforce.conflicts}
+        recommendations={workforce.recommendations}
+      />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <ScheduleViewTabs view={view} date={anchorDate} timeZone={timeZone} />
         {dateNavLabel ? (

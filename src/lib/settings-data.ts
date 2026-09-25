@@ -37,6 +37,8 @@ import {
   availabilitySettingsFromRow,
   ensureBusinessAvailabilitySchema,
 } from "@/lib/availability-data";
+import { schedulingPolicyFromRow } from "@/lib/workforce";
+import { ensureWorkforceSchema } from "@/lib/workforce-data";
 import { listActiveBusinessTrades } from "@/lib/business-trades";
 import { workspaceTradeLabel } from "@/lib/trade-config";
 import { publicPhone } from "@/lib/public-site";
@@ -90,6 +92,14 @@ export type SettingsSnapshot = {
     schedulingBufferMinutes: number;
     unavailableDates: string[];
     summary: string;
+    firstAppointmentMode: string;
+    laterAppointmentMode: string;
+    defaultArrivalWindowMinutes: number;
+    dayBeforeChangeCutoffHours: number;
+    defaultPickupMinutes: number;
+    travelPlaceholderMinutes: number;
+    helperRecommendationThresholdMinutes: number;
+    overloadThresholdPercent: number;
   };
   team: SettingsTeamMember[];
   catalogItemCount: number;
@@ -140,6 +150,7 @@ export async function loadSettingsSnapshot(
 ): Promise<SettingsSnapshot> {
   const scope = { businessId } as const;
   await ensureBusinessAvailabilitySchema(prisma);
+  await ensureWorkforceSchema(prisma);
   await ensureBusinessPublicContactSchema(prisma);
 
   const [
@@ -276,6 +287,7 @@ export async function loadSettingsSnapshot(
     preferencesRow,
     unavailableDates.map((row) => row.date),
   );
+  const policy = schedulingPolicyFromRow(preferencesRow);
 
   return {
     business: {
@@ -303,6 +315,7 @@ export async function loadSettingsSnapshot(
     websiteStory,
     scheduling: {
       ...scheduling,
+      ...policy,
       summary: formatAvailabilitySummary(scheduling),
     },
     team: members.map((member) => ({

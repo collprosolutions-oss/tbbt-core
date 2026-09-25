@@ -84,6 +84,8 @@ const lifecycle = [
   ["Estimate editor", "src/app/(app)/estimates/[estimateId]/page.tsx"],
   ["Customer estimate token", "src/app/e/[token]/page.tsx"],
   ["Jobs", "src/app/(app)/jobs/page.tsx"],
+  ["Workforce capacity", "src/lib/workforce-capacity.ts"],
+  ["Workforce agent", "src/lib/workforce-agent.ts"],
   ["Field workflow", "src/app/field/jobs/[jobId]/page.tsx"],
   ["Time cards", "src/app/(app)/time-cards/page.tsx"],
   ["Change orders", "src/app/(app)/jobs/[jobId]/change-orders/[changeOrderId]/page.tsx"],
@@ -112,6 +114,7 @@ try {
   check("README documents localhost:43217", /43217/.test(readme));
   check("README documents www.collproreno.com", /collproreno\.com/.test(readme));
   check("README documents test:isolation", /test:isolation/.test(readme));
+  check("README documents test:workforce-capacity", /test:workforce-capacity/.test(readme));
   check("README documents fake local adapters", /TBBT_PAYMENTS_ADAPTER=fake/.test(readme));
 
   const envExample = read(".env.example");

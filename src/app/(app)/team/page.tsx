@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { AddTeamMemberForm } from "@/components/team/add-team-member-form";
 import { SetTeamMemberActiveForm } from "@/components/team/set-team-member-active-form";
+import { FillInBenchForm, FillInBenchUseButton } from "@/components/team/fill-in-bench-form";
+import { WorkforceProfileForm } from "@/components/team/workforce-profile-form";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { RecordRow } from "@/components/record-row";
@@ -14,6 +16,8 @@ import {
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
 import { prisma } from "@/lib/prisma";
+import { formatProgression, skillLabel } from "@/lib/workforce";
+import { loadFillInBench, loadWorkforceMembers } from "@/lib/workforce-data";
 
 export const metadata: Metadata = {
   title: "Team",
@@ -42,6 +46,10 @@ export default async function TeamPage() {
     },
     orderBy: [{ role: "asc" }, { createdAt: "asc" }],
   });
+  const [workforceMembers, bench] = await Promise.all([
+    loadWorkforceMembers(prisma, access.businessId),
+    loadFillInBench(prisma, access.businessId),
+  ]);
 
   return (
     <PageContainer>
@@ -95,6 +103,58 @@ export default async function TeamPage() {
                 ) : null
               }
             />
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Workforce profiles</CardTitle>
+          <CardDescription>
+            Skills, progression, and scheduling status live on the existing
+            Membership. This is not a second employee identity and not a
+            performance-rating system.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {workforceMembers.map((member) => (
+            <div key={member.membershipId} className="space-y-2">
+              <p className="text-sm font-medium">
+                {member.name} — {formatProgression(member.progression)}
+                {member.skills.length > 0
+                  ? ` · ${member.skills.map((skill) => skillLabel(skill.skillKey)).join(", ")}`
+                  : ""}
+              </p>
+              <WorkforceProfileForm member={member} />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Internal Fill-In Bench</CardTitle>
+          <CardDescription>
+            Approved helpers and subcontractors for this business only. Profiles
+            are never public and are not a cross-business marketplace.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <FillInBenchForm />
+          {bench.map((worker) => (
+            <div key={worker.id} className="space-y-2 rounded-lg border p-3">
+              <p className="text-sm font-medium">
+                {worker.displayName}
+                {worker.approved ? " · Approved" : " · Not approved"}
+                {worker.lastUsedAt ? ` · last used ${worker.lastUsedAt.toLocaleDateString("en-US")}` : ""}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {worker.skills.map(skillLabel).join(", ") || "No skills recorded"} ·{" "}
+                {worker.contactPreference}
+              </p>
+              <FillInBenchForm worker={worker} />
+              <FillInBenchUseButton benchWorkerId={worker.id} />
+            </div>
           ))}
         </CardContent>
       </Card>

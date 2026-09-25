@@ -4,9 +4,12 @@ import { FieldTimeClock } from "@/components/field/field-time-clock";
 import { FIELD_JOB_SELECT, groupFieldJobs } from "@/lib/field-jobs";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatTime } from "@/lib/format";
-import { startOfDay } from "@/lib/schedule";
+import { formatISODate, startOfDay } from "@/lib/schedule";
 import { requireFieldWorkspace } from "@/lib/field-access";
 import { prisma } from "@/lib/prisma";
+import { calculateDailyCapacity } from "@/lib/workforce-capacity";
+import { capacityJobsFromRows, loadSchedulingPolicy, loadWorkforceMembers } from "@/lib/workforce-data";
+import { loadAvailabilitySettings } from "@/lib/availability-data";
 import { TIME_ACTIVITY_LABELS, isTimeActivityType } from "@/lib/time-cards";
 
 export const metadata: Metadata = {
@@ -35,6 +38,27 @@ export default async function FieldHomePage() {
   });
 
   const groups = groupFieldJobs(jobs, startOfDay(new Date(), timeZone), timeZone);
+  const [settings, policy, members] = await Promise.all([
+    loadAvailabilitySettings(prisma, field.businessId),
+    loadSchedulingPolicy(prisma, field.businessId),
+    loadWorkforceMembers(prisma, field.businessId),
+  ]);
+  const self = members.find((member) => member.membershipId === field.membershipId);
+  const myCapacity = calculateDailyCapacity({
+    day: startOfDay(new Date(), timeZone),
+    settings,
+    policy,
+    jobs: capacityJobsFromRows(
+      jobs.map((job) => ({
+        id: job.id,
+        scheduledAt: job.scheduledAt,
+        scheduledDurationMinutes: job.scheduledDurationMinutes,
+        assignedMembershipId: field.membershipId,
+        status: job.status,
+      })),
+    ),
+    member: self,
+  });
   const running = await prisma.timeEntry.findFirst({
     where: {
       businessId: field.businessId,
@@ -59,6 +83,11 @@ export default async function FieldHomePage() {
         <h1 className="text-2xl font-semibold tracking-tight">My Jobs</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Only jobs assigned to you, {field.workspace.user.name}.
+        </p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Your {formatISODate(startOfDay(new Date(), timeZone))} schedule: {myCapacity.knownScheduledMinutes} min
+          known, {myCapacity.remainingMinutes} min remaining
+          {myCapacity.overloaded ? " — this day looks full" : ""}. Other workers and the Fill-In Bench stay hidden.
         </p>
       </div>
 

@@ -17,6 +17,7 @@ import {
 } from "@/lib/availability";
 import { DURATION_PRESETS, parseDurationMinutes } from "@/lib/job-schedule";
 import { formatISODate } from "@/lib/schedule";
+import { WORKFORCE_SKILLS } from "@/lib/workforce";
 
 const initialState: JobActionState = {};
 
@@ -37,6 +38,9 @@ export function ScheduleJobForm({
   isScheduled,
   unpaidDepositWarning,
   availability,
+  pickupDurationMinutes = 0,
+  requiredSkills = [],
+  appointmentNote,
 }: {
   jobId: string;
   date: string;
@@ -46,6 +50,9 @@ export function ScheduleJobForm({
   isScheduled: boolean;
   unpaidDepositWarning?: string | null;
   availability?: AvailabilitySnapshot | null;
+  pickupDurationMinutes?: number;
+  requiredSkills?: string[];
+  appointmentNote?: string | null;
 }) {
   const [state, formAction, pending] = useActionState(
     scheduleJob,
@@ -207,6 +214,36 @@ export function ScheduleJobForm({
           </p>
         </div>
       ) : null}
+      <div className="space-y-2">
+        <Label htmlFor={`pickup-${jobId}`}>Material pickup minutes</Label>
+        <Input
+          id={`pickup-${jobId}`}
+          name="pickupDurationMinutes"
+          inputMode="numeric"
+          defaultValue={String(pickupDurationMinutes || 0)}
+        />
+        <p className="text-xs text-muted-foreground">
+          Consumes schedule time before the job. Separate from the travel/pickup buffer. Not a charge.
+        </p>
+      </div>
+      {appointmentNote ? <p className="text-xs text-muted-foreground">{appointmentNote}</p> : null}
+      <div className="space-y-2">
+        <p className="text-sm font-medium">Required skills</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {WORKFORCE_SKILLS.map((skill) => (
+            <label key={skill.key} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                name="requiredSkill"
+                value={skill.key}
+                defaultChecked={requiredSkills.includes(skill.key)}
+                className="size-4"
+              />
+              {skill.label}
+            </label>
+          ))}
+        </div>
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button type="submit" disabled={pending}>
           {pending

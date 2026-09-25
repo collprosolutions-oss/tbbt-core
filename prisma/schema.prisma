@@ -345,6 +345,11 @@ model Business {
   websiteGalleryItems      WebsiteGalleryItem[]
   websiteHostBindings      WebsiteHostBinding[]
   websiteLocalPageDrafts   WebsiteLocalPageDraft[]
+  membershipSkills         MembershipSkill[]
+  membershipWeeklyAvailability MembershipWeeklyAvailability[]
+  membershipAvailabilityExceptions MembershipAvailabilityException[]
+  fillInBenchWorkers       FillInBenchWorker[]
+  workforceOutreachTasks   WorkforceOutreachTask[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -401,6 +406,16 @@ model Membership {
   /// worker rather than inventing a number. Later wage edits must not
   /// rewrite already-approved TimeEntry / TimesheetWeek snapshots.
   hourlyWage Decimal?
+  /// Owner-recorded dispatch status. Inactive workers stay on the roster
+  /// but are not recommended for new assignments.
+  schedulingActive   Boolean @default(true)
+  /// LEARNING | CAPABLE | LEAD_QUALIFIED. Practical qualification only.
+  progression        String  @default("CAPABLE")
+  /// Optional owner cap on scheduled job minutes per working day.
+  maxDailyJobMinutes Int?
+  preferredJobTypes  String  @default("")
+  allowedJobTypes    String  @default("")
+  workforceNotes     String  @default("")
   createdAt  DateTime       @default(now())
 
   user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -452,6 +467,12 @@ model Membership {
   recommendationStates            BsosRecommendationState[] @relation("BsosRecommendationStateActor")
   websitePublishes                WebsitePublish[]          @relation("WebsitePublishAuthor")
   websiteGalleryItems             WebsiteGalleryItem[]      @relation("WebsiteGalleryCreator")
+  workforceSkills                 MembershipSkill[]
+  weeklyAvailability              MembershipWeeklyAvailability[]
+  availabilityExceptions          MembershipAvailabilityException[]
+  fillInBenchWorkers              FillInBenchWorker[]
+  workforceOutreachCreated        WorkforceOutreachTask[]   @relation("WorkforceOutreachCreator")
+  workforceOutreachApproved       WorkforceOutreachTask[]   @relation("WorkforceOutreachApprover")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -975,6 +996,14 @@ model Job {
   nextOccurrenceAt DateTime?
   /// ACTIVE | SKIPPED | CANCELLED. Empty when one-time.
   recurrenceStatus String @default("")
+  /// Owner-recorded material pickup minutes consumed before the job.
+  pickupDurationMinutes     Int?
+  /// Arrival window length when later work uses a window instead of an exact time.
+  arrivalWindowMinutes      Int?
+  /// Comma-separated practical skill keys required for this job.
+  requiredSkills            String    @default("")
+  /// Optional LEARNING | CAPABLE | LEAD_QUALIFIED floor for assignment.
+  requiredProgression       String    @default("")
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
 
@@ -1007,6 +1036,7 @@ model Job {
   customerFollowUps       CustomerFollowUp[]
   recurrenceSource        Job?  @relation("JobRecurrenceSource", fields: [recurrenceSourceJobId], references: [id], onDelete: SetNull)
   recurrenceOccurrences   Job[] @relation("JobRecurrenceSource")
+  workforceOutreachTasks  WorkforceOutreachTask[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -2152,6 +2182,18 @@ model BusinessSettings {
   workingWeekdays String @default("1,2,3,4,5")
   /// Travel / material-pickup buffer after a job, in minutes. Default 30.
   schedulingBufferMinutes Int @default(30)
+  /// EXACT | WINDOW. First appointment default. Configurable per business.
+  firstAppointmentMode String @default("EXACT")
+  /// EXACT | WINDOW. Later / follow-on work default.
+  laterAppointmentMode String @default("WINDOW")
+  defaultArrivalWindowMinutes Int @default(120)
+  /// Hours before start when a change is flagged as inside the day-before cutoff.
+  dayBeforeChangeCutoffHours Int @default(24)
+  defaultPickupMinutes Int @default(0)
+  /// Estimated travel placeholder only. Never GPS routing.
+  travelPlaceholderMinutes Int @default(0)
+  helperRecommendationThresholdMinutes Int @default(60)
+  overloadThresholdPercent Int @default(90)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2777,4 +2819,115 @@ model WebsiteLocalPageDraft {
 
   @@unique([businessId, serviceAreaId, catalogItemId])
   @@index([businessId])
+}
+
+/// Practical skill recorded on an existing Membership. Tenant-scoped.
+/// Not a public profile and not a second employee identity.
+model MembershipSkill {
+  id           String   @id @default(cuid())
+  businessId   String
+  membershipId String
+  skillKey     String
+  /// LEARNING | CAPABLE | LEAD_QUALIFIED
+  proficiency  String   @default("CAPABLE")
+  createdAt    DateTime @default(now())
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, skillKey])
+  @@index([businessId])
+}
+
+/// Optional weekly hours for one membership. Empty means inherit business hours.
+model MembershipWeeklyAvailability {
+  id           String @id @default(cuid())
+  businessId   String
+  membershipId String
+  weekday      Int
+  startMinutes Int
+  endMinutes   Int
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, weekday])
+  @@index([businessId])
+}
+
+/// One-day availability exception for a membership. YYYY-MM-DD.
+model MembershipAvailabilityException {
+  id           String   @id @default(cuid())
+  businessId   String
+  membershipId String
+  date         String
+  /// AVAILABLE | UNAVAILABLE
+  kind         String
+  startMinutes Int?
+  endMinutes   Int?
+  note         String   @default("")
+  createdAt    DateTime @default(now())
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, date])
+  @@index([businessId])
+}
+
+/// Internal approved helper / subcontractor bench. Never public.
+/// Not a cross-business marketplace and never shares CRM or revenue.
+model FillInBenchWorker {
+  id                String    @id @default(cuid())
+  businessId        String
+  displayName       String
+  /// PHONE | EMAIL | TEXT | OTHER
+  contactPreference String    @default("PHONE")
+  contactValue      String    @default("")
+  skills            String    @default("")
+  availabilityNotes String    @default("")
+  approved          Boolean   @default(true)
+  active            Boolean   @default(true)
+  lastUsedAt        DateTime?
+  notes             String    @default("")
+  membershipId      String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership? @relation(fields: [membershipId], references: [id], onDelete: SetNull)
+  outreachTasks WorkforceOutreachTask[]
+
+  @@index([businessId])
+  @@index([membershipId])
+}
+
+/// Owner-approved staffing outreach task. Creating this row is the
+/// authorization. No other agent sends contact from this record.
+model WorkforceOutreachTask {
+  id                       String   @id @default(cuid())
+  businessId               String
+  /// DRAFT | APPROVED | DISMISSED | DONE
+  status                   String   @default("DRAFT")
+  /// STAFFING_SHORTAGE | HELPER_NEEDED
+  kind                     String
+  jobId                    String?
+  benchWorkerId            String?
+  missingSkills            String   @default("")
+  missingMinutes           Int?
+  explanation              String
+  createdByMembershipId    String?
+  approvedByMembershipId   String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  business   Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job        Job?              @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  benchWorker FillInBenchWorker? @relation(fields: [benchWorkerId], references: [id], onDelete: SetNull)
+  createdBy  Membership?       @relation("WorkforceOutreachCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  approvedBy Membership?       @relation("WorkforceOutreachApprover", fields: [approvedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([benchWorkerId])
 }

@@ -37,7 +37,25 @@ import { loadAvailabilitySettings, loadOccupiedJobs } from "@/lib/availability-d
 import { formatDateTime } from "@/lib/format";
 import { accessArrangementWriteData } from "@/lib/property-access";
 import { prisma } from "@/lib/prisma";
-import { jobRecurrenceFromServiceRequest } from "@/lib/recurrence";
+import {
+  computeNextOccurrenceAt,
+  jobRecurrenceFromServiceRequest,
+  parseRecurrenceCadence,
+  recurrenceForecastActive,
+} from "@/lib/recurrence";
+import {
+  appointmentModeForJob,
+  parseBoundedInt,
+  parseSkillList,
+  serializeSkillList,
+} from "@/lib/workforce";
+import { laterJobsHurtByMove } from "@/lib/workforce-capacity";
+import { describeConflicts, detectScheduleConflicts } from "@/lib/workforce-conflicts";
+import {
+  loadCapacityJobs,
+  loadSchedulingPolicy,
+  loadWorkforceMembers,
+} from "@/lib/workforce-data";
 
 export type JobActionState = {
   error?: string;
@@ -182,6 +200,20 @@ export async function scheduleJob(
   const durationPreset = readString(formData, "durationPreset");
   const customHours = readString(formData, "customHours");
   const confirmOverlap = readString(formData, "confirmOverlap") === "1";
+  const pickupDurationMinutes = parseBoundedInt(
+    readString(formData, "pickupDurationMinutes"),
+    0,
+    0,
+    24 * 60,
+  );
+  const requiredSkills = serializeSkillList(
+    parseSkillList(
+      formData
+        .getAll("requiredSkill")
+        .filter((value): value is string => typeof value === "string")
+        .join(","),
+    ),
+  );
 
   if (!jobId) {
     return { error: "That job could not be scheduled." };
@@ -208,9 +240,12 @@ export async function scheduleJob(
   }
 
   if (!confirmOverlap) {
-    const [settings, others] = await Promise.all([
+    const [settings, others, policy, members, capacityJobs] = await Promise.all([
       loadAvailabilitySettings(prisma, access.businessId),
       loadOccupiedJobs(prisma, access.businessId, job.id),
+      loadSchedulingPolicy(prisma, access.businessId),
+      loadWorkforceMembers(prisma, access.businessId),
+      loadCapacityJobs(prisma, access.businessId),
     ]);
     const evaluation = evaluateProposedSchedule({
       start,
@@ -218,9 +253,38 @@ export async function scheduleJob(
       settings,
       existing: others,
     });
-    if (hasScheduleWarning(evaluation)) {
+    const conflicts = detectScheduleConflicts({
+      jobs: capacityJobs,
+      settings,
+      policy,
+      members,
+      proposed: {
+        jobId: job.id,
+        start,
+        durationMinutes: duration.minutes,
+        pickupMinutes: pickupDurationMinutes,
+        assignedMembershipId: job.assignedMembershipId,
+        alreadyScheduled: Boolean(job.scheduledAt),
+      },
+      now: new Date(),
+    });
+    const cascade = laterJobsHurtByMove({
+      start,
+      durationMinutes: duration.minutes,
+      pickupMinutes: pickupDurationMinutes,
+      settings,
+      existing: capacityJobs.filter((row) => row.id !== job.id),
+      membershipId: job.assignedMembershipId,
+    });
+    const warning =
+      (hasScheduleWarning(evaluation)
+        ? describeScheduleWarning(evaluation, start, formatDateTime, settings)
+        : null) ?? describeConflicts(conflicts);
+    if (warning) {
       return {
-        warning: describeScheduleWarning(evaluation, start, formatDateTime, settings) ?? undefined,
+        warning: cascade.length
+          ? `${warning} Later jobs were not moved.`
+          : warning,
       };
     }
   }
@@ -235,11 +299,28 @@ export async function scheduleJob(
     : job.appointmentProposalId;
   const rescheduled = Boolean(job.scheduledAt) && materialChange;
 
+  const policy = await loadSchedulingPolicy(prisma, access.businessId);
+  const mode = appointmentModeForJob({
+    alreadyScheduled: Boolean(job.scheduledAt),
+    policy,
+  });
+  const nextOccurrenceAt = recurrenceForecastActive(job)
+    ? computeNextOccurrenceAt(
+        start,
+        parseRecurrenceCadence(job.recurrenceCadence),
+        job.nextOccurrenceAt,
+      )
+    : job.nextOccurrenceAt;
+
   await prisma.job.update({
     where: { id: job.id },
     data: {
       scheduledAt: start,
       scheduledDurationMinutes: duration.minutes,
+      pickupDurationMinutes: pickupDurationMinutes || null,
+      requiredSkills,
+      arrivalWindowMinutes: mode === "WINDOW" ? policy.defaultArrivalWindowMinutes : null,
+      nextOccurrenceAt,
       ...(job.status === "UNSCHEDULED" ? { status: "SCHEDULED" } : {}),
       ...(materialChange
         ? {

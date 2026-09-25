@@ -15,6 +15,7 @@ import { asNumber, buildReport, resolveReportRange } from "@/lib/reports";
 import { loadReportSource } from "@/lib/reports-data";
 import { isPaidActivity } from "@/lib/time-cards";
 import { partitionRecommendations } from "@/lib/bsos-actions";
+import { loadWorkforceSnapshot } from "@/lib/workforce-data";
 import { aiConnectionLabel, isAiProviderConnected } from "@/lib/ai/config";
 import { listActiveBusinessTrades } from "@/lib/business-trades";
 import { publicTradeProjection } from "@/lib/trade-config";
@@ -196,7 +197,7 @@ export async function loadBsosWorkspace(
   businessId: string,
   membershipId?: string,
 ) {
-  const [facts, goals, actionItems, recommendationStates, conversation, activeTrades] = await Promise.all([
+  const [facts, goals, actionItems, recommendationStates, conversation, activeTrades, workforce] = await Promise.all([
     loadBsosFacts(prisma, businessId),
     prisma.businessGoal.findMany({
       where: { businessId },
@@ -217,9 +218,10 @@ export async function loadBsosWorkspace(
         })
       : Promise.resolve(null),
     listActiveBusinessTrades(prisma, businessId),
+    loadWorkforceSnapshot(prisma, businessId),
   ]);
 
-  const recommendations = buildBsosRecommendations(facts);
+  const recommendations = [...buildBsosRecommendations(facts), ...workforce.recommendations];
   const { active, history } = partitionRecommendations(recommendations, recommendationStates);
   return {
     businessId,
