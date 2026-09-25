@@ -82,6 +82,7 @@ const lifecycle = [
   ["CRM customers", "src/app/(app)/customers/page.tsx"],
   ["Requests", "src/app/(app)/requests/page.tsx"],
   ["Estimate editor", "src/app/(app)/estimates/[estimateId]/page.tsx"],
+  ["Materials & suppliers", "src/app/(app)/materials/page.tsx"],
   ["Customer estimate token", "src/app/e/[token]/page.tsx"],
   ["Jobs", "src/app/(app)/jobs/page.tsx"],
   ["Field workflow", "src/app/field/jobs/[jobId]/page.tsx"],

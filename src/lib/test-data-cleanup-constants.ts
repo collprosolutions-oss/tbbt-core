@@ -48,6 +48,7 @@ export const TEST_DATA_CLEANUP_PRESERVE = [
   "Website configuration, About copy, and PublicSiteImage rows",
   "Service catalog and service pricing",
   "Estimating defaults, supplier preferences, mappings, and supplier prices",
+  "Business suppliers, material catalog, and material price history",
   "Scheduling settings and unavailable dates",
   "Website / brand stored assets and R2 storage account",
   "Stripe Connect connected-account configuration",

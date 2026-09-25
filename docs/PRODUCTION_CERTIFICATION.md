@@ -22,12 +22,13 @@ Do not invent passing browser results. The isolated harness is
 3. Public website + request with photos (`/hire/[slug]`, `/r/[slug]`). After the first Website Publish, public pages read the immutable snapshot; businesses with no publish stay on the live-assembled path.
 4. CRM / requests / pipeline (`/customers`, `/requests`, `/pipeline`).
 5. Estimate → send / email → customer approve (`/estimates`, `/e/[token]`).
-6. Material deposit (Connect Stripe or fake local adapter).
-7. Job → schedule → employee field workflow (`/jobs`, `/field/jobs/[jobId]`).
-8. Time cards → job photos → additional work / change order.
-9. Complete → invoice → payment (`/invoices`, `/p/[token]/invoice`).
-10. Expense → job profitability / reports (`/expenses`, `/reports`).
-11. Review request → marketing opportunity → BSOS recommendation (`/reviews`, `/marketing`, `/business-health`).
+6. Materials & suppliers → purchase list / pickup (`/materials`, estimate or job purchase list). No live retailer integration.
+7. Material deposit (Connect Stripe or fake local adapter).
+8. Job → schedule → employee field workflow (`/jobs`, `/field/jobs/[jobId]`). Assigned members see pickup only, not vendor economics.
+9. Time cards → job photos → additional work / change order.
+10. Complete → invoice → payment (`/invoices`, `/p/[token]/invoice`).
+11. Expense → job profitability / reports (`/expenses`, `/reports`). Linked material purchases must not double-count.
+12. Review request → marketing opportunity → BSOS recommendation (`/reviews`, `/marketing`, `/business-health`).
 
 ## Cross-cutting proofs
 
@@ -45,5 +46,6 @@ Do not invent passing browser results. The isolated harness is
 
 - External Facebook / Instagram / Google publishing is **not connected**. Marketing never writes `PUBLISHED`.
 - Banking / accounting are **Not Connected**. TBBT will not invent a cash balance or tax conclusion.
+- Supplier commerce adapters are **DISCONNECTED**. No Home Depot / Lowe’s scrape or live order API. Production provider integrations need API/licensing review.
 - Marketing AI is not connected. Template drafts are available. An env string does not mean a provider is called.
 - This checklist does not replace a human production walkthrough on www.collproreno.com.

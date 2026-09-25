@@ -75,6 +75,8 @@ import {
 } from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
 import { formatISODate } from "@/lib/schedule";
+import { PurchaseListCard } from "@/components/materials/purchase-list-card";
+import { loadPurchaseWorkspace } from "@/lib/materials/board";
 
 export const metadata: Metadata = {
   title: "Work Order",
@@ -251,6 +253,11 @@ export default async function JobPage({
   const availability = isCompleted
     ? null
     : await loadAvailabilitySnapshot(prisma, access.businessId);
+  const purchaseWorkspace = await loadPurchaseWorkspace(prisma, access, {
+    jobId: job.id,
+    estimateId: job.estimateId,
+    createIfMissing: true,
+  });
 
   const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
     BEFORE: [],
@@ -408,6 +415,17 @@ export default async function JobPage({
           <CopyProjectLinkButton projectToken={job.projectToken} />
         </CardContent>
       </Card>
+
+      <PurchaseListCard
+        jobId={job.id}
+        estimateId={job.estimateId}
+        purchaseListId={purchaseWorkspace.purchaseListId}
+        items={purchaseWorkspace.items}
+        orders={purchaseWorkspace.orders}
+        variance={purchaseWorkspace.variance}
+        suppliers={purchaseWorkspace.suppliers}
+        canConvertTakeoff={Boolean(job.estimateId)}
+      />
 
       {isCompleted ? (
         <Card>

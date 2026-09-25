@@ -750,6 +750,33 @@ check(
     planProductionMigrateDeploy({ localNames }).run === true,
 );
 
+const materialsMigration = readFileSync(
+  new URL("../prisma/migrations/20260925193000_add_materials_suppliers_operations/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Materials/suppliers operations migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(materialsMigration) &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "Supplier"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialCatalogItem"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialPriceHistory"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialPurchaseList"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialPurchaseOrder"') &&
+    !/"password"/i.test(materialsMigration) &&
+    !/"apiSecret"/i.test(materialsMigration),
+);
+
+const materialsSchema = readFileSync(
+  new URL("../src/lib/materials/schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Preview runtime ensure covers materials/suppliers tables skipped by migrate",
+  materialsSchema.includes("Preview shares Production and skips migrate") &&
+    materialsSchema.includes("CREATE TABLE IF NOT EXISTS") &&
+    materialsSchema.includes("ensureMaterialsSuppliersTables"),
+);
+
 console.log(
   failed === 0
     ? `\nAll production-migrate checks passed (${passed}).`

@@ -345,6 +345,13 @@ model Business {
   websiteGalleryItems      WebsiteGalleryItem[]
   websiteHostBindings      WebsiteHostBinding[]
   websiteLocalPageDrafts   WebsiteLocalPageDraft[]
+  suppliers                  Supplier[]
+  materialCatalogItems       MaterialCatalogItem[]
+  materialPriceHistory       MaterialPriceHistory[]
+  materialPurchaseLists      MaterialPurchaseList[]
+  materialPurchaseListItems  MaterialPurchaseListItem[]
+  materialPurchaseOrders     MaterialPurchaseOrder[]
+  materialPurchaseOrderItems MaterialPurchaseOrderItem[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -815,6 +822,7 @@ model Estimate {
   /// ServiceRequest). Request-linked estimates reuse the request's
   /// PipelineOpportunity -- never a second opportunity row.
   pipelineOpportunity PipelineOpportunity? @relation("PipelineStandaloneEstimate")
+  materialPurchaseLists MaterialPurchaseList[]
 
   @@index([businessId])
   @@index([propertyId])
@@ -863,6 +871,7 @@ model EstimateVersion {
   /// Job.approvedEstimateVersionId).
   jobsApprovedFrom    Job[]                     @relation("JobApprovedEstimateVersion")
   lineItems           EstimateVersionLineItem[]
+  materialPurchaseLists MaterialPurchaseList[]
 
   @@unique([estimateId, versionNumber])
   @@index([businessId])
@@ -1007,6 +1016,8 @@ model Job {
   customerFollowUps       CustomerFollowUp[]
   recurrenceSource        Job?  @relation("JobRecurrenceSource", fields: [recurrenceSourceJobId], references: [id], onDelete: SetNull)
   recurrenceOccurrences   Job[] @relation("JobRecurrenceSource")
+  materialPurchaseLists   MaterialPurchaseList[]
+  materialPurchaseOrders  MaterialPurchaseOrder[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -1371,6 +1382,7 @@ model LineItem {
   job                Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
   invoice            Invoice?            @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   changeOrder        ChangeOrder?        @relation(fields: [changeOrderId], references: [id], onDelete: SetNull)
+  materialPurchaseListItems MaterialPurchaseListItem[]
 
   @@index([businessId])
   @@index([estimateId])
@@ -1783,6 +1795,7 @@ model Expense {
   customer   Customer?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
   parent     Expense?    @relation("ExpenseSplit", fields: [parentExpenseId], references: [id], onDelete: SetNull)
   splits     Expense[]   @relation("ExpenseSplit")
+  materialPurchaseItem MaterialPurchaseListItem?
 
   @@index([businessId])
   @@index([businessId, occurredOn])
@@ -2777,4 +2790,216 @@ model WebsiteLocalPageDraft {
 
   @@unique([businessId, serviceAreaId, catalogItemId])
   @@index([businessId])
+}
+
+/// First-class tenant-scoped supplier/vendor. Owner-managed records,
+/// not a retailer login, EDI account, or API-credential store.
+/// Never store supplier passwords or API secrets here.
+model Supplier {
+  id                  String   @id @default(cuid())
+  businessId          String
+  name                String
+  contactName         String?
+  contactEmail        String?
+  contactPhone        String?
+  website             String?
+  /// Account / vendor reference only. Never credentials.
+  accountReference    String?
+  preferred           Boolean  @default(false)
+  notes               String?
+  active              Boolean  @default(true)
+  /// Owner categories / trades. Not a national catalog taxonomy.
+  categories          String?
+  locationDescription String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  business          Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  catalogItems      MaterialCatalogItem[]
+  priceHistory      MaterialPriceHistory[]
+  purchaseListItems MaterialPurchaseListItem[]
+  purchaseOrders    MaterialPurchaseOrder[]
+
+  @@index([businessId])
+  @@index([businessId, active])
+}
+
+/// Reusable business material item. Owners name their own materials;
+/// this is not a standardized national SKU catalog.
+model MaterialCatalogItem {
+  id                  String    @id @default(cuid())
+  businessId          String
+  name                String
+  normalizedName      String
+  sku                 String?
+  unit                String
+  packSize            Decimal?
+  preferredSupplierId String?
+  lastKnownCost       Decimal?
+  lastKnownCostAt     DateTime?
+  notes               String?
+  category            String?
+  /// Optional calculator / takeoff identity for matching, not required.
+  takeoffIdentity     String?
+  active              Boolean   @default(true)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  business          Business                   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  preferredSupplier Supplier?                  @relation(fields: [preferredSupplierId], references: [id], onDelete: SetNull)
+  priceHistory      MaterialPriceHistory[]
+  purchaseListItems MaterialPurchaseListItem[]
+
+  @@index([businessId])
+  @@index([businessId, normalizedName])
+  @@index([preferredSupplierId])
+}
+
+/// Append-only observed / purchased prices. Application code must never
+/// update or delete an existing row when the current catalog price changes.
+model MaterialPriceHistory {
+  id                 String    @id @default(cuid())
+  businessId         String
+  materialId         String
+  supplierId         String?
+  unit               String
+  packSize           Decimal?
+  price              Decimal
+  observedAt         DateTime
+  /// OWNER_ENTRY | EXPENSE | PURCHASE | PROVIDER
+  source             String
+  purchaseListItemId String?
+  expenseId          String?
+  notes              String?
+  createdAt          DateTime  @default(now())
+
+  business         Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  material         MaterialCatalogItem    @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  supplier         Supplier?              @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  purchaseListItem MaterialPurchaseListItem? @relation(fields: [purchaseListItemId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([materialId, observedAt])
+  @@index([supplierId])
+  @@index([purchaseListItemId])
+}
+
+/// Job / estimate purchasing workflow. Operational tracking only —
+/// TBBT never places supplier orders from this record.
+model MaterialPurchaseList {
+  id                String   @id @default(cuid())
+  businessId        String
+  jobId             String?
+  estimateId        String?
+  estimateVersionId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  business        Business                   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job             Job?                       @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  estimate        Estimate?                  @relation(fields: [estimateId], references: [id], onDelete: SetNull)
+  estimateVersion EstimateVersion?           @relation(fields: [estimateVersionId], references: [id], onDelete: SetNull)
+  items           MaterialPurchaseListItem[]
+  purchaseOrders  MaterialPurchaseOrder[]
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([estimateId])
+  @@index([estimateVersionId])
+}
+
+model MaterialPurchaseListItem {
+  id                        String    @id @default(cuid())
+  businessId                String
+  purchaseListId            String
+  materialId                String?
+  supplierId                String?
+  lineItemId                String?
+  takeoffItemId             String?
+  name                      String
+  quantityNeeded            Decimal
+  unit                      String
+  plannedUnitCost           Decimal?
+  plannedCost               Decimal?
+  quantityPurchased         Decimal?
+  actualUnitCost            Decimal?
+  actualCost                Decimal?
+  /// Owner-entered markup snapshot from the estimate. Never invented.
+  markupPercent             Decimal?
+  /// Customer-facing unit price snapshot. Separate from purchase cost.
+  customerUnitPrice         Decimal?
+  estimatedQuantity         Decimal?
+  estimatedCost             Decimal?
+  pickupRequired            Boolean   @default(false)
+  pickupLocationDescription String?
+  pickupDurationMinutes     Int?
+  pickupReady               Boolean   @default(false)
+  /// NEEDED | PLANNED | ORDERED | PURCHASED | RECEIVED | CANCELLED
+  status                    String    @default("NEEDED")
+  expenseId                 String?   @unique
+  notes                     String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  business       Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseList   MaterialPurchaseList  @relation(fields: [purchaseListId], references: [id], onDelete: Cascade)
+  material       MaterialCatalogItem?  @relation(fields: [materialId], references: [id], onDelete: SetNull)
+  supplier       Supplier?             @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  lineItem       LineItem?             @relation(fields: [lineItemId], references: [id], onDelete: SetNull)
+  expense        Expense?              @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  priceHistory   MaterialPriceHistory[]
+  purchaseOrderItems MaterialPurchaseOrderItem[]
+
+  @@index([businessId])
+  @@index([purchaseListId])
+  @@index([materialId])
+  @@index([supplierId])
+  @@index([lineItemId])
+}
+
+/// Lightweight operational Purchase Order. Not supplier EDI.
+/// Status never means a supplier confirmed the order.
+model MaterialPurchaseOrder {
+  id             String    @id @default(cuid())
+  businessId     String
+  purchaseListId String
+  supplierId     String?
+  jobId          String?
+  /// DRAFT | READY | ORDERED_EXTERNALLY | PARTIALLY_RECEIVED | RECEIVED | CANCELLED
+  status         String    @default("DRAFT")
+  notes          String?
+  orderedAt      DateTime?
+  receivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  business     Business                    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseList MaterialPurchaseList        @relation(fields: [purchaseListId], references: [id], onDelete: Cascade)
+  supplier     Supplier?                   @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  job          Job?                        @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  items        MaterialPurchaseOrderItem[]
+
+  @@index([businessId])
+  @@index([purchaseListId])
+  @@index([supplierId])
+  @@index([jobId])
+}
+
+model MaterialPurchaseOrderItem {
+  id                 String   @id @default(cuid())
+  businessId         String
+  purchaseOrderId    String
+  purchaseListItemId String
+  quantity           Decimal
+  unitCost           Decimal?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  business         Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseOrder    MaterialPurchaseOrder    @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  purchaseListItem MaterialPurchaseListItem @relation(fields: [purchaseListItemId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([purchaseOrderId])
+  @@index([purchaseListItemId])
 }
