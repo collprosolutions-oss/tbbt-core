@@ -70,6 +70,20 @@ export function repeatFollowUpSmsBody(input: { businessName: string }) {
   return `${input.businessName} would be glad to help with your next project. Reply STOP to opt out of SMS.`;
 }
 
+export function estimateFollowUpSmsBody(input: { businessName: string; url?: string | null }) {
+  return input.url
+    ? `${input.businessName} is following up on your estimate. View: ${input.url}`
+    : `${input.businessName} is following up on your estimate.`;
+}
+
+export function jobUpdateSmsBody(input: { businessName: string }) {
+  return `${input.businessName} has an update on your job.`;
+}
+
+export function ownerFollowUpSmsBody(input: { businessName: string }) {
+  return `${input.businessName} is following up with you.`;
+}
+
 export function customerSmsIdempotencyKey(purpose: string, relatedId: string, extra?: string) {
   return extra ? `sms:${purpose}:${relatedId}:${extra}` : `sms:${purpose}:${relatedId}`;
 }

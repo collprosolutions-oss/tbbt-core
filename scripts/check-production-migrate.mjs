@@ -649,8 +649,92 @@ check(
     productGrantSourceRefMigration.includes("BusinessProductGrant_businessId_grantType_code_source_sourceRef_key"),
 );
 
+const workforceMigration = readFileSync(
+  new URL("../prisma/migrations/20260925220000_scheduling_workforce_intelligence/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Workforce capacity migration is additive and preserves membership and job rows",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(workforceMigration) &&
+    workforceMigration.includes('ADD COLUMN IF NOT EXISTS "schedulingActive"') &&
+    workforceMigration.includes('ADD COLUMN IF NOT EXISTS "pickupDurationMinutes"') &&
+    workforceMigration.includes('CREATE TABLE IF NOT EXISTS "FillInBenchWorker"') &&
+    workforceMigration.includes('CREATE TABLE IF NOT EXISTS "MembershipSkill"') &&
+    workforceMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run workforce DDL",
+  !workspaceLoader.includes("FillInBenchWorker") &&
+    !workspaceLoader.includes("ensureWorkforceSchema") &&
+    !workspaceLoader.includes("scheduling_workforce_intelligence"),
+);
+
+const workforceFkMigration = readFileSync(
+  new URL("../prisma/migrations/20260925230000_workforce_foreign_keys/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Workforce FK migration is additive and matches Prisma cascade/set-null",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(workforceFkMigration) &&
+    workforceFkMigration.includes('MembershipSkill_membershipId_fkey') &&
+    workforceFkMigration.includes('MembershipWeeklyAvailability_membershipId_fkey') &&
+    workforceFkMigration.includes('MembershipAvailabilityException_membershipId_fkey') &&
+    workforceFkMigration.includes('FillInBenchWorker_businessId_fkey') &&
+    workforceFkMigration.includes('FillInBenchWorker_membershipId_fkey') &&
+    workforceFkMigration.includes('WorkforceOutreachTask_jobId_fkey') &&
+    workforceFkMigration.includes('WorkforceOutreachTask_createdByMembershipId_fkey') &&
+    workforceFkMigration.includes('WorkforceOutreachTask_approvedByMembershipId_fkey') &&
+    workforceFkMigration.includes("ON DELETE CASCADE") &&
+    workforceFkMigration.includes("ON DELETE SET NULL") &&
+    workforceFkMigration.includes("idempotencyKey"),
+);
+
+const communicationsDepartmentMigration = readFileSync(
+  new URL("../prisma/migrations/20260926020000_communications_department/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Communications department migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(communicationsDepartmentMigration) &&
+    communicationsDepartmentMigration.includes('ADD COLUMN IF NOT EXISTS "threadId"') &&
+    communicationsDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "CommunicationThread"') &&
+    communicationsDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "PhoneInteraction"') &&
+    communicationsDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "ReceptionistEvent"'),
+);
+
+const communicationsSchema = readFileSync(
+  new URL("../src/lib/communications/schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Communications department schema is migrate-only and does not run request-time DDL",
+  communicationsSchema.includes("prisma-migrate") &&
+    !communicationsSchema.includes("$executeRawUnsafe") &&
+    !communicationsSchema.includes("ensureCommunicationsSchema") &&
+    !communicationsSchema.includes("COMMUNICATIONS_DEPARTMENT_ENSURE_SQL") &&
+    !communicationsSchema.includes("CREATE TABLE IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run communications-department DDL",
+  !workspaceLoader.includes("ensureCommunicationsSchema") &&
+    !workspaceLoader.includes("COMMUNICATIONS_DEPARTMENT_ENSURE_SQL"),
+);
+
+const phoneInteractionRelationsMigration = readFileSync(
+  new URL("../prisma/migrations/20260926030000_phone_interaction_relations/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "PhoneInteraction relation migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(phoneInteractionRelationsMigration) &&
+    phoneInteractionRelationsMigration.includes("PhoneInteraction_requestId_fkey") &&
+    phoneInteractionRelationsMigration.includes("PhoneInteraction_jobId_fkey") &&
+    phoneInteractionRelationsMigration.includes("PhoneInteraction_followUpActionItemId_fkey") &&
+    phoneInteractionRelationsMigration.includes("IF NOT EXISTS"),
+);
+
 const growthDepartmentMigration = readFileSync(
-  new URL("../prisma/migrations/20260925220000_growth_department/migration.sql", import.meta.url),
+  new URL("../prisma/migrations/20260926040000_growth_department/migration.sql", import.meta.url),
   "utf8",
 );
 check(
@@ -670,7 +754,7 @@ check(
 );
 
 const growthHardeningMigration = readFileSync(
-  new URL("../prisma/migrations/20260925230000_growth_department_hardening/migration.sql", import.meta.url),
+  new URL("../prisma/migrations/20260926050000_growth_department_hardening/migration.sql", import.meta.url),
   "utf8",
 );
 check(
@@ -780,6 +864,81 @@ check(
     appliedQueryError: true,
   }).run === true &&
     planProductionMigrateDeploy({ localNames }).run === true,
+);
+
+const financialIntelligenceMigration = readFileSync(
+  new URL("../prisma/migrations/20260925220000_financial_profit_intelligence/migration.sql", import.meta.url),
+  "utf8",
+);
+const financialTruthMigration = readFileSync(
+  new URL("../prisma/migrations/20260925230000_financial_truth_corrections/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Financial intelligence migrations stay additive and before Materials",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(financialIntelligenceMigration) &&
+    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(financialTruthMigration) &&
+    financialIntelligenceMigration.includes('CREATE TABLE "BusinessLaborBurdenSetting"') &&
+    localNames.includes("20260925220000_financial_profit_intelligence") &&
+    localNames.includes("20260925230000_financial_truth_corrections") &&
+    localNames.includes("20260926011500_add_materials_suppliers_operations") &&
+    localNames.indexOf("20260925220000_financial_profit_intelligence") <
+      localNames.indexOf("20260926011500_add_materials_suppliers_operations") &&
+    localNames.indexOf("20260925230000_financial_truth_corrections") <
+      localNames.indexOf("20260926011500_add_materials_suppliers_operations"),
+);
+check(
+  "Communications migrations stay after Financial, Workforce, and Materials",
+  localNames.includes("20260926020000_communications_department") &&
+    localNames.includes("20260926030000_phone_interaction_relations") &&
+    localNames.indexOf("20260925220000_financial_profit_intelligence") <
+      localNames.indexOf("20260926020000_communications_department") &&
+    localNames.indexOf("20260925220000_scheduling_workforce_intelligence") <
+      localNames.indexOf("20260926020000_communications_department") &&
+    localNames.indexOf("20260925230000_workforce_foreign_keys") <
+      localNames.indexOf("20260926020000_communications_department") &&
+    localNames.indexOf("20260926011500_add_materials_suppliers_operations") <
+      localNames.indexOf("20260926020000_communications_department") &&
+    localNames.indexOf("20260926020000_communications_department") <
+      localNames.indexOf("20260926030000_phone_interaction_relations"),
+);
+check(
+  "Growth department migrations stay after Communications",
+  localNames.includes("20260926040000_growth_department") &&
+    localNames.includes("20260926050000_growth_department_hardening") &&
+    localNames.indexOf("20260926030000_phone_interaction_relations") <
+      localNames.indexOf("20260926040000_growth_department") &&
+    localNames.indexOf("20260926040000_growth_department") <
+      localNames.indexOf("20260926050000_growth_department_hardening"),
+);
+
+const materialsMigration = readFileSync(
+  new URL("../prisma/migrations/20260926011500_add_materials_suppliers_operations/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Materials/suppliers operations migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(materialsMigration) &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "Supplier"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialCatalogItem"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialPriceHistory"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialPurchaseList"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialPurchaseOrder"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialOperationAttempt"') &&
+    !/"password"/i.test(materialsMigration) &&
+    !/"apiSecret"/i.test(materialsMigration),
+);
+
+const materialsSchema = readFileSync(
+  new URL("../src/lib/materials/schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Materials schema is migrate-only and does not run request-time DDL",
+  materialsSchema.includes("prisma-migrate") &&
+    !materialsSchema.includes("$executeRawUnsafe") &&
+    !materialsSchema.includes("ensureMaterialsSuppliersTables") &&
+    !materialsSchema.includes("CREATE TABLE IF NOT EXISTS"),
 );
 
 console.log(

@@ -82,8 +82,11 @@ const lifecycle = [
   ["CRM customers", "src/app/(app)/customers/page.tsx"],
   ["Requests", "src/app/(app)/requests/page.tsx"],
   ["Estimate editor", "src/app/(app)/estimates/[estimateId]/page.tsx"],
+  ["Materials & suppliers", "src/app/(app)/materials/page.tsx"],
   ["Customer estimate token", "src/app/e/[token]/page.tsx"],
   ["Jobs", "src/app/(app)/jobs/page.tsx"],
+  ["Workforce capacity", "src/lib/workforce-capacity.ts"],
+  ["Workforce agent", "src/lib/workforce-agent.ts"],
   ["Field workflow", "src/app/field/jobs/[jobId]/page.tsx"],
   ["Time cards", "src/app/(app)/time-cards/page.tsx"],
   ["Change orders", "src/app/(app)/jobs/[jobId]/change-orders/[changeOrderId]/page.tsx"],
@@ -92,6 +95,7 @@ const lifecycle = [
   ["Expenses", "src/app/(app)/expenses/page.tsx"],
   ["Reports / job profitability", "src/app/(app)/reports/page.tsx"],
   ["Reviews", "src/app/(app)/reviews/page.tsx"],
+  ["Communications", "src/app/(app)/communications/page.tsx"],
   ["Marketing", "src/app/(app)/marketing/page.tsx"],
   ["Growth", "src/app/(app)/growth/page.tsx"],
   ["Business Health / BSOS", "src/app/(app)/business-health/page.tsx"],
@@ -113,6 +117,7 @@ try {
   check("README documents localhost:43217", /43217/.test(readme));
   check("README documents www.collproreno.com", /collproreno\.com/.test(readme));
   check("README documents test:isolation", /test:isolation/.test(readme));
+  check("README documents test:workforce-capacity", /test:workforce-capacity/.test(readme));
   check("README documents fake local adapters", /TBBT_PAYMENTS_ADAPTER=fake/.test(readme));
 
   const envExample = read(".env.example");
@@ -168,7 +173,7 @@ try {
       websiteEngineMigration.includes("CREATE TABLE IF NOT EXISTS") &&
       websiteEngineMigration.includes("ADD COLUMN IF NOT EXISTS"),
   );
-  const growthDepartmentMigration = read("prisma/migrations/20260925220000_growth_department/migration.sql");
+  const growthDepartmentMigration = read("prisma/migrations/20260926040000_growth_department/migration.sql");
   check(
     "Growth department migration is additive",
     !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(growthDepartmentMigration) &&
@@ -177,7 +182,7 @@ try {
       growthDepartmentMigration.includes("LeadAttributionCorrection") &&
       growthDepartmentMigration.includes("GrowthActionRequest"),
   );
-  const growthHardeningMigration = read("prisma/migrations/20260925230000_growth_department_hardening/migration.sql");
+  const growthHardeningMigration = read("prisma/migrations/20260926050000_growth_department_hardening/migration.sql");
   check(
     "Growth department hardening migration is additive",
     !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(growthHardeningMigration) &&

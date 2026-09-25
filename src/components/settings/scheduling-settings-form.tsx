@@ -15,6 +15,7 @@ import {
   type AvailabilitySettings,
 } from "@/lib/availability";
 import { SCHEDULING_FUTURE_RULE_MESSAGE } from "@/lib/settings";
+import { DEFAULT_SCHEDULING_POLICY } from "@/lib/workforce";
 
 const initialState: SettingsActionState = {};
 
@@ -22,7 +23,16 @@ export function SchedulingSettingsForm({
   settings,
   canEdit,
 }: {
-  settings: AvailabilitySettings;
+  settings: AvailabilitySettings & {
+    firstAppointmentMode?: string;
+    laterAppointmentMode?: string;
+    defaultArrivalWindowMinutes?: number;
+    dayBeforeChangeCutoffHours?: number;
+    defaultPickupMinutes?: number;
+    travelPlaceholderMinutes?: number;
+    helperRecommendationThresholdMinutes?: number;
+    overloadThresholdPercent?: number;
+  };
   canEdit: boolean;
 }) {
   const [state, action, pending] = useActionState(updateSchedulingSettings, initialState);
@@ -106,6 +116,104 @@ export function SchedulingSettingsForm({
             Scheduling time only. This is not an extra charge — material pickup already in the estimate stays there.
             Default is 30 minutes.
           </p>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="firstAppointmentMode">First appointment</Label>
+            <select
+              id="firstAppointmentMode"
+              name="firstAppointmentMode"
+              defaultValue={settings.firstAppointmentMode ?? DEFAULT_SCHEDULING_POLICY.firstAppointmentMode}
+              className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+            >
+              <option value="EXACT">Exact time</option>
+              <option value="WINDOW">Arrival window</option>
+            </select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="laterAppointmentMode">Later work</Label>
+            <select
+              id="laterAppointmentMode"
+              name="laterAppointmentMode"
+              defaultValue={settings.laterAppointmentMode ?? DEFAULT_SCHEDULING_POLICY.laterAppointmentMode}
+              className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+            >
+              <option value="EXACT">Exact time</option>
+              <option value="WINDOW">Arrival window</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="defaultArrivalWindowMinutes">Arrival window (minutes)</Label>
+            <Input
+              id="defaultArrivalWindowMinutes"
+              name="defaultArrivalWindowMinutes"
+              inputMode="numeric"
+              defaultValue={String(
+                settings.defaultArrivalWindowMinutes ?? DEFAULT_SCHEDULING_POLICY.defaultArrivalWindowMinutes,
+              )}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="dayBeforeChangeCutoffHours">Day-before change cutoff (hours)</Label>
+            <Input
+              id="dayBeforeChangeCutoffHours"
+              name="dayBeforeChangeCutoffHours"
+              inputMode="numeric"
+              defaultValue={String(
+                settings.dayBeforeChangeCutoffHours ?? DEFAULT_SCHEDULING_POLICY.dayBeforeChangeCutoffHours,
+              )}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="defaultPickupMinutes">Default material pickup (minutes)</Label>
+            <Input
+              id="defaultPickupMinutes"
+              name="defaultPickupMinutes"
+              inputMode="numeric"
+              defaultValue={String(settings.defaultPickupMinutes ?? DEFAULT_SCHEDULING_POLICY.defaultPickupMinutes)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="travelPlaceholderMinutes">Travel placeholder (minutes)</Label>
+            <Input
+              id="travelPlaceholderMinutes"
+              name="travelPlaceholderMinutes"
+              inputMode="numeric"
+              defaultValue={String(
+                settings.travelPlaceholderMinutes ?? DEFAULT_SCHEDULING_POLICY.travelPlaceholderMinutes,
+              )}
+            />
+            <p className="text-xs text-muted-foreground">
+              Estimated only. Not GPS routing.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="helperRecommendationThresholdMinutes">Helper recommendation threshold (minutes)</Label>
+            <Input
+              id="helperRecommendationThresholdMinutes"
+              name="helperRecommendationThresholdMinutes"
+              inputMode="numeric"
+              defaultValue={String(
+                settings.helperRecommendationThresholdMinutes ??
+                  DEFAULT_SCHEDULING_POLICY.helperRecommendationThresholdMinutes,
+              )}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="overloadThresholdPercent">Overloaded-day threshold (%)</Label>
+            <Input
+              id="overloadThresholdPercent"
+              name="overloadThresholdPercent"
+              inputMode="numeric"
+              defaultValue={String(
+                settings.overloadThresholdPercent ?? DEFAULT_SCHEDULING_POLICY.overloadThresholdPercent,
+              )}
+            />
+          </div>
         </div>
 
         <div className="space-y-2">

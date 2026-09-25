@@ -627,6 +627,17 @@ try {
     requireBusinessCapability(adminA, CAPABILITIES.USE_AI_ASSIST);
   });
 
+  console.log("\nTEST 18 — Communications is OWNER/ADMIN-only");
+  check("OWNER has MANAGE_COMMUNICATIONS", roleHasCapability("OWNER", CAPABILITIES.MANAGE_COMMUNICATIONS));
+  check("ADMIN has MANAGE_COMMUNICATIONS", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_COMMUNICATIONS));
+  check("MEMBER does not have MANAGE_COMMUNICATIONS", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_COMMUNICATIONS));
+  await expectForbidden("MEMBER cannot pass the Communications capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_COMMUNICATIONS);
+  });
+  await expectAllowed("ADMIN can pass the Communications capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_COMMUNICATIONS);
+  });
+
   console.log(
     failures === 0
       ? "\nAll authorization checks passed."

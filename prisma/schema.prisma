@@ -322,6 +322,9 @@ model Business {
   materialSupplierMappings BusinessMaterialSupplierMapping[]
   supplierPriceRecords     SupplierPriceRecord[]
   customerCommunications   CustomerCommunication[]
+  communicationThreads     CommunicationThread[]
+  phoneInteractions        PhoneInteraction[]
+  receptionistEvents       ReceptionistEvent[]
   messagingWebhookEvents   CustomerMessagingWebhookEvent[]
   goals                    BusinessGoal[]
   actionItems              BusinessActionItem[]
@@ -340,6 +343,9 @@ model Business {
   automationRules          AutomationRule[]
   automationRuns           AutomationRun[]
   recommendationStates     BsosRecommendationState[]
+  laborBurdenSetting       BusinessLaborBurdenSetting?
+  recurringExpensePatterns RecurringExpensePattern[]
+  financeConnections       BusinessFinanceConnection[]
   publishedWebsite         WebsitePublish?          @relation("CurrentPublishedWebsite", fields: [publishedWebsiteId], references: [id], onDelete: SetNull)
   websitePublishes         WebsitePublish[]         @relation("BusinessWebsitePublishes")
   websiteGalleryItems      WebsiteGalleryItem[]
@@ -347,6 +353,19 @@ model Business {
   websiteLocalPageDrafts   WebsiteLocalPageDraft[]
   growthActionRequests     GrowthActionRequest[]
   leadAttributionCorrections LeadAttributionCorrection[]
+  membershipSkills         MembershipSkill[]
+  membershipWeeklyAvailability MembershipWeeklyAvailability[]
+  membershipAvailabilityExceptions MembershipAvailabilityException[]
+  fillInBenchWorkers       FillInBenchWorker[]
+  workforceOutreachTasks   WorkforceOutreachTask[]
+  suppliers                  Supplier[]
+  materialCatalogItems       MaterialCatalogItem[]
+  materialPriceHistory       MaterialPriceHistory[]
+  materialPurchaseLists      MaterialPurchaseList[]
+  materialPurchaseListItems  MaterialPurchaseListItem[]
+  materialPurchaseOrders     MaterialPurchaseOrder[]
+  materialPurchaseOrderItems MaterialPurchaseOrderItem[]
+  materialOperationAttempts  MaterialOperationAttempt[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -403,6 +422,16 @@ model Membership {
   /// worker rather than inventing a number. Later wage edits must not
   /// rewrite already-approved TimeEntry / TimesheetWeek snapshots.
   hourlyWage Decimal?
+  /// Owner-recorded dispatch status. Inactive workers stay on the roster
+  /// but are not recommended for new assignments.
+  schedulingActive   Boolean @default(true)
+  /// LEARNING | CAPABLE | LEAD_QUALIFIED. Practical qualification only.
+  progression        String  @default("CAPABLE")
+  /// Optional owner cap on scheduled job minutes per working day.
+  maxDailyJobMinutes Int?
+  preferredJobTypes  String  @default("")
+  allowedJobTypes    String  @default("")
+  workforceNotes     String  @default("")
   createdAt  DateTime       @default(now())
 
   user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -443,6 +472,8 @@ model Membership {
   reviewedKnowledgeEntries KnowledgeEntry[]   @relation("KnowledgeEntryReviewer")
   verifiedMeasurements     ServiceRequestMeasurement[] @relation("MeasurementVerifier")
   initiatedCustomerCommunications CustomerCommunication[] @relation("CustomerCommunicationInitiator")
+  initiatedPhoneInteractions      PhoneInteraction[]      @relation("PhoneInteractionInitiator")
+  initiatedReceptionistEvents     ReceptionistEvent[]     @relation("ReceptionistEventInitiator")
   createdBusinessGoals            BusinessGoal[]          @relation("BusinessGoalCreator")
   createdBusinessActionItems      BusinessActionItem[]    @relation("BusinessActionItemCreator")
   createdCampaigns                MarketingCampaign[]     @relation("MarketingCampaignCreator")
@@ -457,6 +488,14 @@ model Membership {
   createdGrowthActions            GrowthActionRequest[]     @relation("GrowthActionCreator")
   approvedGrowthActions           GrowthActionRequest[]     @relation("GrowthActionApprover")
   leadAttributionCorrections      LeadAttributionCorrection[] @relation("LeadAttributionActor")
+  workforceSkills                 MembershipSkill[]
+  weeklyAvailability              MembershipWeeklyAvailability[]
+  availabilityExceptions          MembershipAvailabilityException[]
+  fillInBenchWorkers              FillInBenchWorker[]
+  workforceOutreachCreated        WorkforceOutreachTask[]   @relation("WorkforceOutreachCreator")
+  workforceOutreachApproved       WorkforceOutreachTask[]   @relation("WorkforceOutreachApprover")
+  confirmedRecurringPatterns      RecurringExpensePattern[] @relation("RecurringPatternConfirmedBy")
+  dismissedRecurringPatterns      RecurringExpensePattern[] @relation("RecurringPatternDismissedBy")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -489,6 +528,9 @@ model Customer {
   reviewRequests  ReviewRequest[]
   reviews         Review[]
   communications  CustomerCommunication[]
+  communicationThreads CommunicationThread[]
+  phoneInteractions PhoneInteraction[]
+  receptionistEvents ReceptionistEvent[]
   referralRequests ReferralRequest[]
   customerFollowUps CustomerFollowUp[]
   referralsGiven   Referral[] @relation("ReferralSourceCustomer")
@@ -499,26 +541,60 @@ model Customer {
   @@index([firstCampaignId])
 }
 
-/// Durable audit trail for attempted external customer communications.
+/// Durable business/customer communication thread. One customer-level
+/// thread uses subjectType=CUSTOMER and subjectId=customerId. Never stores
+/// secrets. Browser businessId never authorizes these rows.
+model CommunicationThread {
+  id             String   @id @default(cuid())
+  businessId     String
+  customerId     String
+  /// CUSTOMER | ESTIMATE | JOB | INVOICE | REQUEST | PROPERTY
+  subjectType    String   @default("CUSTOMER")
+  subjectId      String
+  title          String?
+  lastActivityAt DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  business       Business                @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer       Customer                @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  communications CustomerCommunication[]
+  phoneInteractions PhoneInteraction[]
+
+  @@unique([businessId, customerId, subjectType, subjectId])
+  @@index([businessId, customerId, lastActivityAt])
+  @@index([businessId])
+}
+
+/// Durable audit trail for attempted customer communications.
 /// One row belongs to exactly one Business. Destination is stored as a
-/// fingerprint + last-4, not the raw phone. Status never claims provider
-/// delivery unless a connected adapter reported it.
+/// fingerprint + last-4, not the raw phone/email. Status never claims
+/// provider delivery unless a connected adapter reported it.
 model CustomerCommunication {
   id                       String    @id @default(cuid())
   businessId               String
   customerId               String
-  /// SMS for this foundation. EMAIL remains on the existing Resend path.
+  threadId                 String?
+  /// INBOUND | OUTBOUND
+  direction                String    @default("OUTBOUND")
+  /// SMS | EMAIL | PHONE | MANUAL | PORTAL | SYSTEM
   channel                  String    @default("SMS")
   /// ESTIMATE_READY | APPOINTMENT_CONFIRMATION | APPOINTMENT_REMINDER |
   /// SCHEDULE_CHANGE | INVOICE_READY | PAYMENT_REMINDER | REVIEW_REQUEST |
-  /// REVIEW_REMINDER | REFERRAL_REQUEST | JOB_FOLLOW_UP | REPEAT_FOLLOW_UP
+  /// REVIEW_REMINDER | REFERRAL_REQUEST | JOB_FOLLOW_UP | REPEAT_FOLLOW_UP |
+  /// ESTIMATE_FOLLOW_UP | JOB_UPDATE | GENERAL | OWNER_FOLLOW_UP |
+  /// MISSED_CALL | MANUAL_PHONE | INBOUND_CALL
   purpose                  String
-  /// ESTIMATE | JOB | INVOICE | REVIEW_REQUEST | REFERRAL_REQUEST
+  subject                  String?
+  /// ESTIMATE | JOB | INVOICE | REVIEW_REQUEST | REFERRAL_REQUEST |
+  /// CUSTOMER_FOLLOW_UP | SERVICE_REQUEST | PHONE_INTERACTION
   relatedType              String?
   relatedId                String?
   idempotencyKey           String
   destinationLast4         String?
   destinationFingerprint   String?
+  /// Safe consent/eligibility snapshot at write time. Never a secret.
+  consentContext           String?
   bodySnapshot             String    @default("")
   /// DRAFT | READY | QUEUED | ACCEPTED | SENT | DELIVERED | FAILED | BLOCKED | NOT_SENT
   status                   String
@@ -531,15 +607,97 @@ model CustomerCommunication {
   attemptedAt              DateTime?
   updatedAt                DateTime  @updatedAt
 
-  business     Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  customer     Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  initiatedBy  Membership? @relation("CustomerCommunicationInitiator", fields: [initiatedByMembershipId], references: [id], onDelete: SetNull)
+  business     Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer     Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  thread       CommunicationThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
+  initiatedBy  Membership?          @relation("CustomerCommunicationInitiator", fields: [initiatedByMembershipId], references: [id], onDelete: SetNull)
+  phoneInteractions PhoneInteraction[]
 
   @@unique([businessId, idempotencyKey])
   @@index([businessId])
   @@index([customerId])
+  @@index([threadId])
   @@index([provider, providerMessageId])
   @@index([businessId, relatedType, relatedId])
+  @@index([businessId, customerId, createdAt])
+}
+
+/// Manual / missed-call / inbound-call log. Useful before live voice.
+/// Never synthesizes a completed provider call.
+model PhoneInteraction {
+  id                       String    @id @default(cuid())
+  businessId               String
+  customerId               String?
+  threadId                 String?
+  communicationId          String?
+  /// Concrete ServiceRequest FK. Validated server-side for tenant + customer.
+  requestId                String?
+  /// Concrete Job FK. Validated server-side for tenant + customer.
+  jobId                    String?
+  /// Concrete BusinessActionItem FK for the optional callback task.
+  followUpActionItemId     String?
+  /// MISSED_CALL | MANUAL_PHONE | INBOUND_CALL_EVENT
+  kind                     String
+  /// LOGGED | CALLBACK_NEEDED | ESCALATED | CLOSED
+  status                   String    @default("LOGGED")
+  /// INBOUND | OUTBOUND
+  direction                String    @default("INBOUND")
+  callerLast4              String?
+  callerFingerprint        String?
+  summary                  String    @default("")
+  callbackNeeded           Boolean   @default(false)
+  idempotencyKey           String
+  initiatedByMembershipId  String?
+  occurredAt               DateTime  @default(now())
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  business     Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer     Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  thread       CommunicationThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
+  communication CustomerCommunication? @relation(fields: [communicationId], references: [id], onDelete: SetNull)
+  initiatedBy  Membership?          @relation("PhoneInteractionInitiator", fields: [initiatedByMembershipId], references: [id], onDelete: SetNull)
+  receptionistEvents ReceptionistEvent[]
+  request            ServiceRequest?       @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  job                Job?                  @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  followUpActionItem BusinessActionItem?   @relation(fields: [followUpActionItemId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([customerId])
+  @@index([threadId])
+  @@index([requestId])
+  @@index([jobId])
+  @@index([followUpActionItemId])
+}
+
+/// Provider-neutral receptionist domain events. Voice readiness is honest:
+/// no Twilio Voice connection, no purchased numbers, no fake completed calls.
+model ReceptionistEvent {
+  id                       String    @id @default(cuid())
+  businessId               String
+  customerId               String?
+  phoneInteractionId       String?
+  /// INBOUND_CALL | CALLER_LOOKUP | QUALIFICATION | CREATE_REQUEST_PROPOSAL |
+  /// SCHEDULING_PROPOSAL | MESSAGE_SUMMARY | ESCALATION
+  kind                     String
+  /// RECORDED | PROPOSED | ESCALATED | SKIPPED_NOT_CONNECTED
+  status                   String
+  provider                 String    @default("none")
+  providerConnected        Boolean   @default(false)
+  payload                  Json?
+  idempotencyKey           String
+  initiatedByMembershipId  String?
+  createdAt                DateTime  @default(now())
+
+  business         Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer         Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  phoneInteraction PhoneInteraction? @relation(fields: [phoneInteractionId], references: [id], onDelete: SetNull)
+  initiatedBy      Membership?       @relation("ReceptionistEventInitiator", fields: [initiatedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([customerId])
 }
 
 /// Idempotency for provider webhooks (delivery + inbound STOP/START/HELP).
@@ -707,6 +865,7 @@ model ServiceRequest {
   /// New Lead without a row here.
   pipelineOpportunity PipelineOpportunity?
   growthActionRequests GrowthActionRequest[]
+  phoneInteractions   PhoneInteraction[]
 
   @@index([businessId])
   @@index([businessId, tradeCode])
@@ -829,6 +988,7 @@ model Estimate {
   /// PipelineOpportunity -- never a second opportunity row.
   pipelineOpportunity PipelineOpportunity? @relation("PipelineStandaloneEstimate")
   growthActionRequests GrowthActionRequest[]
+  materialPurchaseLists MaterialPurchaseList[]
 
   @@index([businessId])
   @@index([propertyId])
@@ -877,6 +1037,7 @@ model EstimateVersion {
   /// Job.approvedEstimateVersionId).
   jobsApprovedFrom    Job[]                     @relation("JobApprovedEstimateVersion")
   lineItems           EstimateVersionLineItem[]
+  materialPurchaseLists MaterialPurchaseList[]
 
   @@unique([estimateId, versionNumber])
   @@index([businessId])
@@ -989,6 +1150,14 @@ model Job {
   nextOccurrenceAt DateTime?
   /// ACTIVE | SKIPPED | CANCELLED. Empty when one-time.
   recurrenceStatus String @default("")
+  /// Owner-recorded material pickup minutes consumed before the job.
+  pickupDurationMinutes     Int?
+  /// Arrival window length when later work uses a window instead of an exact time.
+  arrivalWindowMinutes      Int?
+  /// Comma-separated practical skill keys required for this job.
+  requiredSkills            String    @default("")
+  /// Optional LEARNING | CAPABLE | LEAD_QUALIFIED floor for assignment.
+  requiredProgression       String    @default("")
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
 
@@ -1019,9 +1188,13 @@ model Job {
   reviews                 Review[]
   referralRequests        ReferralRequest[]
   customerFollowUps       CustomerFollowUp[]
+  phoneInteractions       PhoneInteraction[]
   recurrenceSource        Job?  @relation("JobRecurrenceSource", fields: [recurrenceSourceJobId], references: [id], onDelete: SetNull)
   recurrenceOccurrences   Job[] @relation("JobRecurrenceSource")
   growthActionRequests    GrowthActionRequest[]
+  workforceOutreachTasks  WorkforceOutreachTask[]
+  materialPurchaseLists   MaterialPurchaseList[]
+  materialPurchaseOrders  MaterialPurchaseOrder[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -1386,6 +1559,7 @@ model LineItem {
   job                Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
   invoice            Invoice?            @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   changeOrder        ChangeOrder?        @relation(fields: [changeOrderId], references: [id], onDelete: SetNull)
+  materialPurchaseListItems MaterialPurchaseListItem[]
 
   @@index([businessId])
   @@index([estimateId])
@@ -1798,6 +1972,8 @@ model Expense {
   customer   Customer?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
   parent     Expense?    @relation("ExpenseSplit", fields: [parentExpenseId], references: [id], onDelete: SetNull)
   splits     Expense[]   @relation("ExpenseSplit")
+  materialPurchaseItem MaterialPurchaseListItem?
+  materialPriceHistory MaterialPriceHistory[]
 
   @@index([businessId])
   @@index([businessId, occurredOn])
@@ -2167,6 +2343,18 @@ model BusinessSettings {
   workingWeekdays String @default("1,2,3,4,5")
   /// Travel / material-pickup buffer after a job, in minutes. Default 30.
   schedulingBufferMinutes Int @default(30)
+  /// EXACT | WINDOW. First appointment default. Configurable per business.
+  firstAppointmentMode String @default("EXACT")
+  /// EXACT | WINDOW. Later / follow-on work default.
+  laterAppointmentMode String @default("WINDOW")
+  defaultArrivalWindowMinutes Int @default(120)
+  /// Hours before start when a change is flagged as inside the day-before cutoff.
+  dayBeforeChangeCutoffHours Int @default(24)
+  defaultPickupMinutes Int @default(0)
+  /// Estimated travel placeholder only. Never GPS routing.
+  travelPlaceholderMinutes Int @default(0)
+  helperRecommendationThresholdMinutes Int @default(60)
+  overloadThresholdPercent Int @default(90)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2323,6 +2511,7 @@ model BusinessActionItem {
   goal      BusinessGoal? @relation(fields: [goalId], references: [id], onDelete: SetNull)
   createdBy Membership? @relation("BusinessActionItemCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
   recommendationStates BsosRecommendationState[]
+  phoneCallbacks PhoneInteraction[]
 
   @@index([businessId])
   @@index([businessId, status])
@@ -2797,6 +2986,439 @@ model WebsiteLocalPageDraft {
   @@index([businessId])
 }
 
+/// Practical skill recorded on an existing Membership. Tenant-scoped.
+/// Not a public profile and not a second employee identity.
+model MembershipSkill {
+  id           String   @id @default(cuid())
+  businessId   String
+  membershipId String
+  skillKey     String
+  /// LEARNING | CAPABLE | LEAD_QUALIFIED
+  proficiency  String   @default("CAPABLE")
+  createdAt    DateTime @default(now())
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, skillKey])
+  @@index([businessId])
+}
+
+/// Optional weekly hours for one membership. Empty means inherit business hours.
+model MembershipWeeklyAvailability {
+  id           String @id @default(cuid())
+  businessId   String
+  membershipId String
+  weekday      Int
+  startMinutes Int
+  endMinutes   Int
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, weekday])
+  @@index([businessId])
+}
+
+/// One-day availability exception for a membership. YYYY-MM-DD.
+model MembershipAvailabilityException {
+  id           String   @id @default(cuid())
+  businessId   String
+  membershipId String
+  date         String
+  /// AVAILABLE | UNAVAILABLE
+  kind         String
+  startMinutes Int?
+  endMinutes   Int?
+  note         String   @default("")
+  createdAt    DateTime @default(now())
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, date])
+  @@index([businessId])
+}
+
+/// Internal approved helper / subcontractor bench. Never public.
+/// Not a cross-business marketplace and never shares CRM or revenue.
+model FillInBenchWorker {
+  id                String    @id @default(cuid())
+  businessId        String
+  displayName       String
+  /// PHONE | EMAIL | TEXT | OTHER
+  contactPreference String    @default("PHONE")
+  contactValue      String    @default("")
+  skills            String    @default("")
+  availabilityNotes String    @default("")
+  approved          Boolean   @default(true)
+  active            Boolean   @default(true)
+  lastUsedAt        DateTime?
+  notes             String    @default("")
+  membershipId      String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership? @relation(fields: [membershipId], references: [id], onDelete: SetNull)
+  outreachTasks WorkforceOutreachTask[]
+
+  @@index([businessId])
+  @@index([membershipId])
+}
+
+/// Owner-approved staffing outreach task. Creating this row is the
+/// authorization. No other agent sends contact from this record.
+model WorkforceOutreachTask {
+  id                       String   @id @default(cuid())
+  businessId               String
+  /// DRAFT | APPROVED | DISMISSED | DONE
+  status                   String   @default("DRAFT")
+  /// STAFFING_SHORTAGE | HELPER_NEEDED
+  kind                     String
+  jobId                    String?
+  benchWorkerId            String?
+  missingSkills            String   @default("")
+  missingMinutes           Int?
+  explanation              String
+  createdByMembershipId    String?
+  approvedByMembershipId   String?
+  /// Stable retry key for one logical outreach click. Unique per business.
+  idempotencyKey           String
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  business   Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job        Job?              @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  benchWorker FillInBenchWorker? @relation(fields: [benchWorkerId], references: [id], onDelete: SetNull)
+  createdBy  Membership?       @relation("WorkforceOutreachCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  approvedBy Membership?       @relation("WorkforceOutreachApprover", fields: [approvedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([jobId])
+  @@index([benchWorkerId])
+}
+
+/// First-class tenant-scoped supplier/vendor. Owner-managed records,
+/// not a retailer login, EDI account, or API-credential store.
+/// Never store supplier passwords or API secrets here.
+model Supplier {
+  id                  String   @id @default(cuid())
+  businessId          String
+  name                String
+  contactName         String?
+  contactEmail        String?
+  contactPhone        String?
+  website             String?
+  /// Account / vendor reference only. Never credentials.
+  accountReference    String?
+  preferred           Boolean  @default(false)
+  notes               String?
+  active              Boolean  @default(true)
+  /// Owner categories / trades. Not a national catalog taxonomy.
+  categories          String?
+  locationDescription String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  business          Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  catalogItems      MaterialCatalogItem[]
+  priceHistory      MaterialPriceHistory[]
+  purchaseListItems MaterialPurchaseListItem[]
+  purchaseOrders    MaterialPurchaseOrder[]
+
+  @@index([businessId])
+  @@index([businessId, active])
+}
+
+/// Reusable business material item. Owners name their own materials;
+/// this is not a standardized national SKU catalog.
+model MaterialCatalogItem {
+  id                  String    @id @default(cuid())
+  businessId          String
+  name                String
+  normalizedName      String
+  sku                 String?
+  unit                String
+  packSize            Decimal?
+  preferredSupplierId String?
+  lastKnownCost       Decimal?
+  lastKnownCostAt     DateTime?
+  notes               String?
+  category            String?
+  /// Optional calculator / takeoff identity for matching, not required.
+  takeoffIdentity     String?
+  active              Boolean   @default(true)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  business          Business                   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  preferredSupplier Supplier?                  @relation(fields: [preferredSupplierId], references: [id], onDelete: SetNull)
+  priceHistory      MaterialPriceHistory[]
+  purchaseListItems MaterialPurchaseListItem[]
+
+  @@index([businessId])
+  @@index([businessId, normalizedName])
+  @@index([preferredSupplierId])
+}
+
+/// Append-only observed / purchased prices. Application code must never
+/// update or delete an existing row when the current catalog price changes.
+model MaterialPriceHistory {
+  id                 String    @id @default(cuid())
+  businessId         String
+  materialId         String
+  supplierId         String?
+  unit               String
+  packSize           Decimal?
+  price              Decimal
+  observedAt         DateTime
+  /// OWNER_ENTRY | EXPENSE | PURCHASE | PROVIDER
+  source             String
+  purchaseListItemId String?
+  expenseId          String?
+  notes              String?
+  createdAt          DateTime  @default(now())
+
+  business         Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  material         MaterialCatalogItem    @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  supplier         Supplier?              @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  purchaseListItem MaterialPurchaseListItem? @relation(fields: [purchaseListItemId], references: [id], onDelete: SetNull)
+  expense          Expense?                 @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([materialId, observedAt])
+  @@index([supplierId])
+  @@index([purchaseListItemId])
+  @@index([expenseId])
+}
+
+/// Job / estimate purchasing workflow. Operational tracking only —
+/// TBBT never places supplier orders from this record.
+model MaterialPurchaseList {
+  id                String   @id @default(cuid())
+  businessId        String
+  jobId             String?
+  estimateId        String?
+  estimateVersionId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  business        Business                   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job             Job?                       @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  estimate        Estimate?                  @relation(fields: [estimateId], references: [id], onDelete: SetNull)
+  estimateVersion EstimateVersion?           @relation(fields: [estimateVersionId], references: [id], onDelete: SetNull)
+  items           MaterialPurchaseListItem[]
+  purchaseOrders  MaterialPurchaseOrder[]
+
+  @@unique([businessId, jobId])
+  @@unique([businessId, estimateId])
+  @@index([businessId])
+  @@index([jobId])
+  @@index([estimateId])
+  @@index([estimateVersionId])
+}
+
+model MaterialPurchaseListItem {
+  id                        String    @id @default(cuid())
+  businessId                String
+  purchaseListId            String
+  materialId                String?
+  supplierId                String?
+  lineItemId                String?
+  takeoffItemId             String?
+  /// Deterministic converted-row identity, e.g. takeoff:{lineItemId}:{takeoffItemId}
+  /// or material-line:{lineItemId}. Null for manual owner-added rows.
+  sourceKey                 String?
+  name                      String
+  quantityNeeded            Decimal
+  unit                      String
+  plannedUnitCost           Decimal?
+  plannedCost               Decimal?
+  quantityPurchased         Decimal?
+  actualUnitCost            Decimal?
+  actualCost                Decimal?
+  /// Owner-entered markup snapshot from the estimate. Never invented.
+  markupPercent             Decimal?
+  /// Customer-facing unit price snapshot. Separate from purchase cost.
+  customerUnitPrice         Decimal?
+  estimatedQuantity         Decimal?
+  estimatedCost             Decimal?
+  pickupRequired            Boolean   @default(false)
+  pickupLocationDescription String?
+  pickupDurationMinutes     Int?
+  pickupReady               Boolean   @default(false)
+  /// NEEDED | PLANNED | ORDERED | PURCHASED | RECEIVED | CANCELLED
+  status                    String    @default("NEEDED")
+  expenseId                 String?   @unique
+  notes                     String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  business       Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseList   MaterialPurchaseList  @relation(fields: [purchaseListId], references: [id], onDelete: Cascade)
+  material       MaterialCatalogItem?  @relation(fields: [materialId], references: [id], onDelete: SetNull)
+  supplier       Supplier?             @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  lineItem       LineItem?             @relation(fields: [lineItemId], references: [id], onDelete: SetNull)
+  expense        Expense?              @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  priceHistory   MaterialPriceHistory[]
+  purchaseOrderItems MaterialPurchaseOrderItem[]
+
+  @@unique([businessId, purchaseListId, sourceKey])
+  @@index([businessId])
+  @@index([purchaseListId])
+  @@index([materialId])
+  @@index([supplierId])
+  @@index([lineItemId])
+}
+
+/// Lightweight operational Purchase Order. Not supplier EDI.
+/// Status never means a supplier confirmed the order.
+model MaterialPurchaseOrder {
+  id             String    @id @default(cuid())
+  businessId     String
+  purchaseListId String
+  supplierId     String?
+  jobId          String?
+  /// DRAFT | READY | ORDERED_EXTERNALLY | PARTIALLY_RECEIVED | RECEIVED | CANCELLED
+  status         String    @default("DRAFT")
+  notes          String?
+  orderedAt      DateTime?
+  receivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  business     Business                    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseList MaterialPurchaseList        @relation(fields: [purchaseListId], references: [id], onDelete: Cascade)
+  supplier     Supplier?                   @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  job          Job?                        @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  items        MaterialPurchaseOrderItem[]
+
+  @@index([businessId])
+  @@index([purchaseListId])
+  @@index([supplierId])
+  @@index([jobId])
+}
+
+model MaterialPurchaseOrderItem {
+  id                 String   @id @default(cuid())
+  businessId         String
+  purchaseOrderId    String
+  purchaseListItemId String
+  quantity           Decimal
+  unitCost           Decimal?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  business         Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseOrder    MaterialPurchaseOrder    @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  purchaseListItem MaterialPurchaseListItem @relation(fields: [purchaseListItemId], references: [id], onDelete: Cascade)
+
+  @@unique([purchaseOrderId, purchaseListItemId])
+  @@index([businessId])
+  @@index([purchaseOrderId])
+  @@index([purchaseListItemId])
+}
+
+/// Browser/form retry identity for convert-takeoff, draft PO, and
+/// record-purchase. Never authorizes; businessId comes from the session.
+model MaterialOperationAttempt {
+  id                 String   @id @default(cuid())
+  businessId         String
+  attemptKey         String
+  /// CONVERT_TAKEOFF | CREATE_DRAFT_PO | RECORD_PURCHASE
+  kind               String
+  purchaseListId     String?
+  purchaseOrderId    String?
+  purchaseListItemId String?
+  expenseId          String?
+  createdCount       Int?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, attemptKey])
+  @@index([businessId])
+}
+
+/// Optional employer labor burden and owner pricing targets for THIS
+/// business. Null rates mean nothing is configured — profit calculations
+/// stay wage-only and never invent a default percentage. Changing a rate
+/// does not rewrite approved time-card or payroll snapshots.
+model BusinessLaborBurdenSetting {
+  id                    String   @id @default(cuid())
+  businessId            String   @unique
+  /// Employer burden as a decimal fraction of recorded wage (0.15 = 15%).
+  /// Null means no burden is configured.
+  burdenRate            Decimal?
+  /// Owner target gross margin as a decimal fraction (0.40 = 40%).
+  /// Null means no owner target is on file.
+  targetGrossMarginRate Decimal?
+  notes                 String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}
+
+/// Owner-reviewed recurring expense pattern derived from Expense history.
+/// Detection never creates a payable or liability. Persistence exists so
+/// the owner can confirm or dismiss a suggested pattern.
+model RecurringExpensePattern {
+  id                      String    @id @default(cuid())
+  businessId              String
+  patternKey              String
+  description             String
+  vendor                  String?
+  category                String
+  suggestedAmount         Decimal
+  occurrenceCount         Int
+  firstOccurredOn         DateTime
+  lastOccurredOn          DateTime
+  /// SUGGESTED | CONFIRMED | DISMISSED
+  ownerStatus             String    @default("SUGGESTED")
+  confirmedAt             DateTime?
+  confirmedByMembershipId String?
+  dismissedAt             DateTime?
+  dismissedByMembershipId String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  business    Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  confirmedBy Membership? @relation("RecurringPatternConfirmedBy", fields: [confirmedByMembershipId], references: [id], onDelete: SetNull)
+  dismissedBy Membership? @relation("RecurringPatternDismissedBy", fields: [dismissedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, patternKey])
+  @@index([businessId])
+  @@index([businessId, ownerStatus])
+}
+
+/// Provider-neutral accounting or banking connection for one business.
+/// This table records adapter identity and status only. No live provider
+/// is connected in the financial-intelligence release; rows stay
+/// DISCONNECTED until a later adapter is implemented.
+model BusinessFinanceConnection {
+  id           String    @id @default(cuid())
+  businessId   String
+  /// ACCOUNTING | BANKING
+  kind         String
+  /// Adapter id. "none" while disconnected.
+  providerKey  String    @default("none")
+  /// DISCONNECTED | CONNECTED
+  status       String    @default("DISCONNECTED")
+  connectedAt  DateTime?
+  lastSyncedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, kind])
+  @@index([businessId])
+}
+
 /// Owner correction of working attribution. originalLeadSource on the
 /// request and Customer.firstLeadSource stay immutable.
 model LeadAttributionCorrection {
@@ -2869,3 +3491,4 @@ model GrowthActionRequest {
   @@index([jobId])
   @@index([campaignId])
 }
+

@@ -3,8 +3,11 @@ import {
   appointmentConfirmationSmsBody,
   appointmentReminderSmsBody,
   customerSmsIdempotencyKey,
+  estimateFollowUpSmsBody,
   estimateReadySmsBody,
   invoiceReadySmsBody,
+  jobUpdateSmsBody,
+  ownerFollowUpSmsBody,
   jobFollowUpSmsBody,
   paymentReminderSmsBody,
   referralRequestSmsBody,
@@ -285,6 +288,75 @@ export async function attemptJobFollowUpSms(
     relatedId: input.followUpId,
     idempotencyKey: customerSmsIdempotencyKey("JOB_FOLLOW_UP", input.followUpId),
     body: jobFollowUpSmsBody({ businessName: input.businessName }),
+    initiatedByMembershipId: input.initiatedByMembershipId,
+  });
+}
+
+export async function attemptEstimateFollowUpSms(
+  db: Db,
+  input: {
+    businessId: string;
+    estimateId: string;
+    customerId: string;
+    businessName: string;
+    publicToken?: string | null;
+    initiatedByMembershipId?: string | null;
+  },
+) {
+  const slug = await businessSlug(db, input.businessId);
+  const url = input.publicToken && slug ? tenantEstimateUrl(slug, input.publicToken) : null;
+  return safeAttemptCustomerSms(db, {
+    businessId: input.businessId,
+    customerId: input.customerId,
+    purpose: "ESTIMATE_FOLLOW_UP",
+    relatedType: "ESTIMATE",
+    relatedId: input.estimateId,
+    idempotencyKey: customerSmsIdempotencyKey("ESTIMATE_FOLLOW_UP", input.estimateId),
+    body: estimateFollowUpSmsBody({ businessName: input.businessName, url }),
+    initiatedByMembershipId: input.initiatedByMembershipId,
+  });
+}
+
+export async function attemptJobUpdateSms(
+  db: Db,
+  input: {
+    businessId: string;
+    jobId: string;
+    customerId: string;
+    businessName: string;
+    initiatedByMembershipId?: string | null;
+  },
+) {
+  return safeAttemptCustomerSms(db, {
+    businessId: input.businessId,
+    customerId: input.customerId,
+    purpose: "JOB_UPDATE",
+    relatedType: "JOB",
+    relatedId: input.jobId,
+    idempotencyKey: customerSmsIdempotencyKey("JOB_UPDATE", input.jobId),
+    body: jobUpdateSmsBody({ businessName: input.businessName }),
+    initiatedByMembershipId: input.initiatedByMembershipId,
+  });
+}
+
+export async function attemptOwnerFollowUpSms(
+  db: Db,
+  input: {
+    businessId: string;
+    customerId: string;
+    relatedId: string;
+    businessName: string;
+    initiatedByMembershipId?: string | null;
+  },
+) {
+  return safeAttemptCustomerSms(db, {
+    businessId: input.businessId,
+    customerId: input.customerId,
+    purpose: "OWNER_FOLLOW_UP",
+    relatedType: "CUSTOMER_FOLLOW_UP",
+    relatedId: input.relatedId,
+    idempotencyKey: customerSmsIdempotencyKey("OWNER_FOLLOW_UP", input.relatedId),
+    body: ownerFollowUpSmsBody({ businessName: input.businessName }),
     initiatedByMembershipId: input.initiatedByMembershipId,
   });
 }

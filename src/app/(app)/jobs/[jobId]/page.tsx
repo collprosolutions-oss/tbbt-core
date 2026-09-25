@@ -34,7 +34,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Prisma } from "@prisma/client";
 import { requireManagementPageAccess } from "@/lib/access";
-import { formatZonedTimeInput, resolveBusinessTimeZone } from "@/lib/business-timezone";
+import { formatISODateInTimeZone, formatZonedTimeInput, resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   appointmentConfirmationLabel,
   confirmationSourceLabel,
@@ -46,6 +46,14 @@ import {
 } from "@/lib/appointment-confirmation";
 import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { loadAvailabilitySnapshot } from "@/lib/availability-data";
+import { appointmentModeForPosition, appointmentPositionOnDay, parseSkillList } from "@/lib/workforce";
+import {
+  loadCapacityJobs,
+  loadJobAssignmentSuggestions,
+  loadSchedulingPolicy,
+} from "@/lib/workforce-data";
+import { StaffingOutreachForm } from "@/components/team/fill-in-bench-form";
+import { staffingShortage } from "@/lib/workforce-matching";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import {
   formatAddress,
@@ -75,6 +83,8 @@ import {
 } from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
 import { formatISODate } from "@/lib/schedule";
+import { PurchaseListCard } from "@/components/materials/purchase-list-card";
+import { loadPurchaseWorkspace } from "@/lib/materials/board";
 
 export const metadata: Metadata = {
   title: "Work Order",
@@ -251,6 +261,50 @@ export default async function JobPage({
   const availability = isCompleted
     ? null
     : await loadAvailabilitySnapshot(prisma, access.businessId);
+  const policy = await loadSchedulingPolicy(prisma, access.businessId);
+  const assignmentSuggestions = isCompleted
+    ? []
+    : await loadJobAssignmentSuggestions(prisma, access.businessId, {
+        id: job.id,
+        scheduledAt: job.scheduledAt,
+        scheduledDurationMinutes: job.scheduledDurationMinutes,
+        pickupDurationMinutes: job.pickupDurationMinutes,
+        requiredSkills: job.requiredSkills,
+        requiredProgression: job.requiredProgression,
+      });
+  const shortage = staffingShortage({
+    requiredSkills: parseSkillList(job.requiredSkills),
+    durationMinutes: job.scheduledDurationMinutes,
+    pickupMinutes: job.pickupDurationMinutes ?? 0,
+    start: job.scheduledAt,
+    recommendations: assignmentSuggestions,
+  });
+  const capacityJobs = isCompleted
+    ? []
+    : await loadCapacityJobs(prisma, access.businessId);
+  const position = job.scheduledAt
+    ? appointmentPositionOnDay({
+        start: job.scheduledAt,
+        jobId: job.id,
+        assignedMembershipId: job.assignedMembershipId,
+        jobs: capacityJobs,
+        dateKey: (date) => formatISODateInTimeZone(date, timeZone),
+      })
+    : "first";
+  const mode = appointmentModeForPosition(position, policy);
+  const appointmentNote =
+    position === "first"
+      ? `This is the first appointment in this worker's day and uses ${
+          mode === "EXACT" ? "an exact start time" : "an arrival window"
+        }. Pickup occupies time before the appointment.`
+      : `This is a later appointment that day and uses ${
+          mode === "WINDOW" ? "an arrival window" : "an exact start time"
+        }. Pickup occupies time before the appointment.`;
+  const purchaseWorkspace = await loadPurchaseWorkspace(prisma, access, {
+    jobId: job.id,
+    estimateId: job.estimateId,
+    createIfMissing: true,
+  });
 
   const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
     BEFORE: [],
@@ -408,6 +462,17 @@ export default async function JobPage({
           <CopyProjectLinkButton projectToken={job.projectToken} />
         </CardContent>
       </Card>
+
+      <PurchaseListCard
+        jobId={job.id}
+        estimateId={job.estimateId}
+        purchaseListId={purchaseWorkspace.purchaseListId}
+        items={purchaseWorkspace.items}
+        orders={purchaseWorkspace.orders}
+        variance={purchaseWorkspace.variance}
+        suppliers={purchaseWorkspace.suppliers}
+        canConvertTakeoff={Boolean(job.estimateId)}
+      />
 
       {isCompleted ? (
         <Card>
@@ -595,6 +660,10 @@ export default async function JobPage({
               isScheduled={isScheduled}
               unpaidDepositWarning={unpaidDepositWarning}
               availability={availability}
+              pickupDurationMinutes={job.pickupDurationMinutes ?? 0}
+              requiredSkills={parseSkillList(job.requiredSkills)}
+              requiredProgression={job.requiredProgression ?? ""}
+              appointmentNote={appointmentNote}
             />
             </>
           )}
@@ -634,8 +703,24 @@ export default async function JobPage({
                 name: member.user.name,
                 email: member.user.email,
               }))}
+              recommendations={assignmentSuggestions.map((row) => ({
+                membershipId: row.membershipId,
+                name: row.name,
+                reason: row.reason,
+                available: row.available,
+              }))}
             />
           )}
+          {shortage.shortage ? (
+            <div className="space-y-2">
+              <p className="text-sm">{shortage.explanation}</p>
+              <StaffingOutreachForm
+                jobId={job.id}
+                missingSkills={shortage.missingSkills.join(",")}
+                explanation={shortage.explanation}
+              />
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

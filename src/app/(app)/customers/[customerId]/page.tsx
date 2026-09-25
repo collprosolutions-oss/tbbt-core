@@ -15,7 +15,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { CustomerCommunicationsCard } from "@/components/customers/communications-timeline-card";
 import { requireManagementPageAccess } from "@/lib/access";
+import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
+import { loadCustomerCommunicationTimeline } from "@/lib/communications/timeline";
 import { requestNotesText } from "@/lib/work-area-intake";
 import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
@@ -48,6 +51,10 @@ export default async function CustomerProfilePage({
     notFound();
   }
   access.assertOwned(customer);
+
+  const communications = roleHasCapability(access.workspace.role, CAPABILITIES.MANAGE_COMMUNICATIONS)
+    ? await loadCustomerCommunicationTimeline(prisma, access, { customerId: customer.id })
+    : [];
 
   return (
     <PageContainer>
@@ -217,6 +224,10 @@ export default async function CustomerProfilePage({
           )}
         </CardContent>
       </Card>
+
+      {roleHasCapability(access.workspace.role, CAPABILITIES.MANAGE_COMMUNICATIONS) ? (
+        <CustomerCommunicationsCard customerId={customer.id} items={communications} />
+      ) : null}
 
       <Card>
         <CardHeader>

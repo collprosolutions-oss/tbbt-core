@@ -10,6 +10,7 @@ type Db = PrismaClient | Prisma.TransactionClient;
  */
 export const INVOICE_DUE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 export const INVOICE_OVERDUE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+export const ESTIMATE_NO_ACTION_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
 export async function scanScheduledBusinessEvents(db: Db, businessId: string) {
   const now = Date.now();
@@ -59,6 +60,47 @@ export async function scanScheduledBusinessEvents(db: Db, businessId: string) {
         idempotencyKey: `INVOICE_OVERDUE:${invoice.id}`,
       });
     }
+  }
+
+  const estimates = await db.estimate.findMany({
+    where: { businessId, status: "SENT" },
+    select: { id: true, customerId: true },
+  });
+  for (const estimate of estimates) {
+    const sentEvent = await db.businessEvent.findFirst({
+      where: {
+        businessId,
+        type: "ESTIMATE_SENT",
+        subjectType: "ESTIMATE",
+        subjectId: estimate.id,
+      },
+      orderBy: { occurredAt: "asc" },
+      select: { occurredAt: true },
+    });
+    if (!sentEvent) continue;
+    if (now - sentEvent.occurredAt.getTime() < ESTIMATE_NO_ACTION_AFTER_MS) continue;
+    const approved = await db.businessEvent.findFirst({
+      where: {
+        businessId,
+        type: "ESTIMATE_APPROVED",
+        subjectType: "ESTIMATE",
+        subjectId: estimate.id,
+      },
+      select: { id: true },
+    });
+    if (approved) continue;
+    await emitAndProcessBusinessEvent(db, {
+      businessId,
+      type: "ESTIMATE_NO_ACTION",
+      subjectType: "ESTIMATE",
+      subjectId: estimate.id,
+      payload: {
+        customerId: estimate.customerId,
+        sentAt: sentEvent.occurredAt.toISOString(),
+        policy: "estimate-sent-event",
+      },
+      idempotencyKey: `ESTIMATE_NO_ACTION:${estimate.id}`,
+    });
   }
 
   const followUps = await db.customerFollowUp.findMany({
