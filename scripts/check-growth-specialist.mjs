@@ -166,7 +166,7 @@ try {
   check("Recursion depth remains 1", MAX_RECURSION_DEPTH === 1);
 
   const recoverPlan = planSpecialists({
-    question: "Which lost leads should I recover from the lead funnel?",
+    question: "Which lost leads can I recover from the lead funnel?",
     activeRecommendationKeys: [],
   });
   const reactivatePlan = planSpecialists({
@@ -460,8 +460,10 @@ try {
   check("11-14. Live projection stays bounded", Boolean(liveProjection) && liveProjection.recovery.length <= 8 && liveProjection.reactivation.length <= 8 && liveProjection.campaigns.length <= 5 && liveProjection.sources.length <= 5);
   check("15. Live projection excludes message bodies and consent secrets", !growthProjectionHasForbiddenFields(liveProjection));
 
+  const financialOnly = await createOwnerWorkspace("Financial Only Growth");
+  await entitleFounder(financialOnly.business.id);
   resetLoads();
-  const unselected = await runChiefOfStaffCoach(prisma, tenantA.access, {
+  const unselected = await runChiefOfStaffCoach(prisma, financialOnly.access, {
     question: "How is my profit and outstanding invoices this month?",
     attemptId: randomUUID(),
   });
@@ -495,7 +497,7 @@ try {
 
   resetLoads();
   const starterAsk = await runChiefOfStaffCoach(prisma, starter.access, {
-    question: "Which lost leads should I recover?",
+    question: "Which lost leads can I recover?",
     attemptId: randomUUID(),
   });
   check("3/4. Starter Growth skip does not invent opportunities", /Marketing Tools|Reporting/i.test(starterAsk.text ?? ""));
@@ -506,7 +508,7 @@ try {
 
   resetLoads();
   const denyMarketingAsk = await runChiefOfStaffCoach(prisma, tenantA.access, {
-    question: "Which lost leads should I recover?",
+    question: "Which lost leads can I recover?",
     attemptId: randomUUID(),
     test: { denyProductCapabilities: [PRODUCT_CAPABILITIES.MARKETING_TOOLS] },
   });
@@ -515,7 +517,7 @@ try {
 
   resetLoads();
   const denyReportingAsk = await runChiefOfStaffCoach(prisma, tenantA.access, {
-    question: "Which lost leads should I recover?",
+    question: "Which lost leads can I recover?",
     attemptId: randomUUID(),
     test: { denyProductCapabilities: [PRODUCT_CAPABILITIES.REPORTING_INSIGHTS] },
   });
@@ -529,7 +531,7 @@ try {
   check("ATTENTION / Financial can still complete when Growth is skipped", otherSurvives.orchestrationStatus === "COMPLETED");
 
   const partial = await runChiefOfStaffCoach(prisma, tenantA.access, {
-    question: "Which lost leads should I recover?",
+    question: "Which lost leads can I recover?",
     attemptId: randomUUID(),
     test: { failGrowthLoad: true },
   });
@@ -538,7 +540,7 @@ try {
   check("20. Failure does not invent an empty pipeline", !/zero recover|0 recovery opportunities|empty pipeline/i.test(partial.text ?? ""));
 
   const failSpecialist = await runChiefOfStaffCoach(prisma, tenantA.access, {
-    question: "Which lost leads should I recover?",
+    question: "Which lost leads can I recover?",
     attemptId: randomUUID(),
     test: { failSpecialistId: "GROWTH" },
   });
