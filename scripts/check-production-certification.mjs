@@ -103,6 +103,8 @@ const lifecycle = [
   ["Website publish engine", "src/lib/website-engine/publish.ts"],
   ["Website snapshot builder", "src/lib/website-engine/builder.ts"],
   ["Website service detail", "src/app/hire/[slug]/services/[serviceSlug]/page.tsx"],
+  ["Business Protection", "src/app/(app)/business-protection/page.tsx"],
+  ["Business Vault / Agreement Coach", "src/lib/business-protection-ops.ts"],
 ];
 
 try {

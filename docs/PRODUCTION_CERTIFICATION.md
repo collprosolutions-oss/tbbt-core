@@ -31,6 +31,7 @@ Do not invent passing browser results. The isolated harness is
 12. Review request → marketing opportunity → Growth loop → BSOS recommendation (`/reviews`, `/marketing`, `/growth`, `/business-health`). Launch progress, unreviewed knowledge, and candidate learnings feed Business Health facts — they do not replace the BSOS engine.
 13. Communications department → customer timeline, compose, missed-call log (`/communications`). Voice is not connected. Growth never sends customer messages; Communications owns delivery.
 14. Knowledge Hub (`/knowledge`) stores owner-approved operational knowledge, procedures/checklists, and Experience Intelligence candidates. Ask Knowledge distinguishes approved knowledge, historical evidence, inference, and unknown. No cross-tenant retrieval.
+15. Business Protection / Vault / Agreement Coach (`/business-protection`). Stores private records and drafts. Does not verify licenses or apply a live e-sign provider.
 
 ## Cross-cutting proofs
 

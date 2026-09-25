@@ -186,6 +186,13 @@ export const CAPABILITIES = {
    * Assigned-job comms stay on the narrow field helper.
    */
   MANAGE_COMMUNICATIONS: "MANAGE_COMMUNICATIONS",
+  /**
+   * Owner/admin Business Protection workspace: private Business Vault
+   * records, expiry attention, and Agreement Coach drafts. MEMBER must
+   * never receive this -- the vault holds company-wide private documents,
+   * not assigned-job field work.
+   */
+  MANAGE_BUSINESS_PROTECTION: "MANAGE_BUSINESS_PROTECTION",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -253,7 +260,7 @@ export function requireBusinessCapability(
 /**
  * Coarse, temporary READ gate for the entire authenticated management
  * console (Dashboard, Requests, Customers, Estimates, Materials, Jobs, Invoices,
- * Reports, Marketing, Growth, Reviews, Pipeline, Knowledge, Communications, Services, Time Cards, Payroll, Expenses, Settings).
+ * Reports, Marketing, Growth, Reviews, Pipeline, Knowledge, Communications, Business Protection, Services, Time Cards, Payroll, Expenses, Settings).
  *
  * Every one of those pages exists to browse or mutate business-wide
  * management data, and MEMBER has no capability over any of it today (see

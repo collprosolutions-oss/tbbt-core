@@ -44,7 +44,11 @@ async function countOperationalStoredAssets(db: CleanupClient, businessId: strin
     where: { businessId, storedAssetId: { not: null } },
     select: { storedAssetId: true },
   });
-  const keepIds = websiteLinked
+  const vaultLinked = await db.businessVaultRecord.findMany({
+    where: { businessId, storedAssetId: { not: null } },
+    select: { storedAssetId: true },
+  });
+  const keepIds = [...websiteLinked, ...vaultLinked]
     .map((row) => row.storedAssetId)
     .filter((id): id is string => Boolean(id));
   return db.storedAsset.count({
@@ -227,7 +231,11 @@ export async function executeOperationalTestDataCleanup(
         where: { businessId, storedAssetId: { not: null } },
         select: { storedAssetId: true },
       });
-      const keepIds = websiteLinked
+      const vaultLinked = await tx.businessVaultRecord.findMany({
+        where: { businessId, storedAssetId: { not: null } },
+        select: { storedAssetId: true },
+      });
+      const keepIds = [...websiteLinked, ...vaultLinked]
         .map((row) => row.storedAssetId)
         .filter((id): id is string => Boolean(id));
       await tx.storedAsset.deleteMany({

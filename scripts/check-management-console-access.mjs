@@ -337,6 +337,7 @@ try {
     { path: "/communications", label: "Communications", marker: "Customer and business communications" },
     { path: "/pipeline", label: "Deals / Pipeline", marker: "Sales workspace" },
     { path: "/knowledge", label: "Knowledge Hub", marker: "Internal operational knowledge" },
+    { path: "/business-protection", label: "Business Protection", marker: "TBBT does not guarantee legal" },
     { path: "/settings", label: "Settings", marker: "Business configuration for" },
     { path: "/settings?section=pricing", label: "Settings pricing", marker: "Labor Minimum Service Fee" },
   ];
@@ -379,6 +380,7 @@ try {
     "/communications": "TEST 17b",
     "/pipeline": "TEST 18",
     "/knowledge": "TEST 19",
+    "/business-protection": "TEST 20",
     "/settings": "TEST 10",
     "/settings?section=pricing": "TEST 10",
   };

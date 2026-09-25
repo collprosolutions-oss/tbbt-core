@@ -67,6 +67,11 @@ export async function buildBusinessExportZip(
     websitePublishes,
     websiteGallery,
     websiteLocalDrafts,
+    vaultRecords,
+    agreements,
+    agreementVersions,
+    protectionAudit,
+    protectionAcks,
   ] = await Promise.all([
     prisma.customer.findMany({
       where: { businessId },
@@ -348,6 +353,94 @@ export async function buildBusinessExportZip(
       },
       orderBy: { createdAt: "asc" },
     }),
+    prisma.businessVaultRecord.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        title: true,
+        category: true,
+        issuer: true,
+        counterparty: true,
+        effectiveOn: true,
+        expiresOn: true,
+        recordStatus: true,
+        persistedExpiryState: true,
+        notes: true,
+        storedAssetId: true,
+        createdAt: true,
+        updatedAt: true,
+        storedAsset: {
+          select: {
+            originalFilename: true,
+            mimeType: true,
+            visibility: true,
+            status: true,
+            fileSizeBytes: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.businessAgreement.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        agreementType: true,
+        title: true,
+        counterparty: true,
+        lifecycleStatus: true,
+        signingMode: true,
+        effectiveOn: true,
+        expiresOn: true,
+        signedVersionId: true,
+        vaultRecordId: true,
+        completedAt: true,
+        completedByMembershipId: true,
+        completionNotes: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.businessAgreementVersion.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        agreementId: true,
+        versionNumber: true,
+        representationStatus: true,
+        answersJson: true,
+        draftContent: true,
+        riskReviewJson: true,
+        lockedAt: true,
+        createdAt: true,
+      },
+      orderBy: [{ agreementId: "asc" }, { versionNumber: "asc" }],
+    }),
+    prisma.businessProtectionAuditLog.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        action: true,
+        vaultRecordId: true,
+        agreementId: true,
+        previousValue: true,
+        newValue: true,
+        changedAt: true,
+      },
+      orderBy: { changedAt: "asc" },
+    }),
+    prisma.businessProtectionAcknowledgment.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        kind: true,
+        statement: true,
+        acknowledgedAt: true,
+        membershipId: true,
+      },
+      orderBy: { acknowledgedAt: "asc" },
+    }),
   ]);
 
   const safeSettings = settings
@@ -473,6 +566,72 @@ export async function buildBusinessExportZip(
       data: toCsv(headersOf(websiteLocalDrafts), websiteLocalDrafts),
     },
     {
+      name: "business-vault.csv",
+      data: toCsv(
+        [
+          "id",
+          "title",
+          "category",
+          "issuer",
+          "counterparty",
+          "effectiveOn",
+          "expiresOn",
+          "recordStatus",
+          "persistedExpiryState",
+          "notes",
+          "storedAssetId",
+          "originalFilename",
+          "mimeType",
+          "visibility",
+          "fileStatus",
+          "fileSizeBytes",
+          "createdAt",
+          "updatedAt",
+        ],
+        vaultRecords.map((row) => ({
+          id: row.id,
+          title: row.title,
+          category: row.category,
+          issuer: row.issuer,
+          counterparty: row.counterparty,
+          effectiveOn: row.effectiveOn,
+          expiresOn: row.expiresOn,
+          recordStatus: row.recordStatus,
+          persistedExpiryState: row.persistedExpiryState,
+          notes: row.notes,
+          storedAssetId: row.storedAssetId,
+          originalFilename: row.storedAsset?.originalFilename ?? "",
+          mimeType: row.storedAsset?.mimeType ?? "",
+          visibility: row.storedAsset?.visibility ?? "",
+          fileStatus: row.storedAsset?.status ?? "",
+          fileSizeBytes: row.storedAsset?.fileSizeBytes ?? "",
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        })),
+      ),
+    },
+    { name: "business-agreements.csv", data: toCsv(headersOf(agreements), agreements) },
+    {
+      name: "business-agreement-versions.json",
+      data: JSON.stringify(
+        agreementVersions.map((row) => ({
+          ...row,
+          answers: safeJson(row.answersJson),
+          riskReview: safeJson(row.riskReviewJson),
+        })),
+        null,
+        2,
+      ),
+    },
+    {
+      name: "business-protection-audit.csv",
+      data: toCsv(headersOf(protectionAudit), protectionAudit),
+    },
+    {
+      name: "business-protection-acknowledgments.csv",
+      data: toCsv(headersOf(protectionAcks), protectionAcks),
+    },
+    {
       name: "commercial-entitlement.json",
       data: JSON.stringify(
         {
@@ -505,4 +664,13 @@ export async function buildBusinessExportZip(
 
 function headersOf(rows: Array<Record<string, unknown>>): string[] {
   return rows[0] ? Object.keys(rows[0]) : ["id"];
+}
+
+function safeJson(value: string | null) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }

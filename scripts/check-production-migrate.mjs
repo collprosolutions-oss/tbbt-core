@@ -797,6 +797,25 @@ check(
     knowledgeLaunchHardeningMigration.includes("IF NOT EXISTS"),
 );
 
+const businessProtectionMigration = readFileSync(
+  new URL("../prisma/migrations/20260925220000_business_protection_vault/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Business protection vault migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(businessProtectionMigration) &&
+    businessProtectionMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessVaultRecord"') &&
+    businessProtectionMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessAgreement"') &&
+    businessProtectionMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessAgreementVersion"') &&
+    businessProtectionMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessProtectionAuditLog"') &&
+    businessProtectionMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run business-protection DDL",
+  !workspaceLoader.includes("BusinessVaultRecord") &&
+    !workspaceLoader.includes("business_protection_vault"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,
