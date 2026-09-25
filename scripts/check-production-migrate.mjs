@@ -633,7 +633,20 @@ check(
 check(
   "Authenticated workspace load does not run product-plan DDL",
   !workspaceLoader.includes("BusinessProductAddon") &&
-    !workspaceLoader.includes("product_plans_entitlements"),
+    !workspaceLoader.includes("product_plans_entitlements") &&
+    !workspaceLoader.includes("product_grant_source_ref"),
+);
+
+const productGrantSourceRefMigration = readFileSync(
+  new URL("../prisma/migrations/20260925210000_product_grant_source_ref/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Product grant sourceRef migration is additive and preserves grant rows",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(productGrantSourceRefMigration) &&
+    productGrantSourceRefMigration.includes('ADD COLUMN IF NOT EXISTS "sourceRef"') &&
+    productGrantSourceRefMigration.includes("IF NOT EXISTS") &&
+    productGrantSourceRefMigration.includes("BusinessProductGrant_businessId_grantType_code_source_sourceRef_key"),
 );
 
 check(

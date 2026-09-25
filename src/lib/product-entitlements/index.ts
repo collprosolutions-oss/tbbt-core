@@ -15,6 +15,8 @@ export {
 export {
   ProductCapabilityRequiredError,
   ProductLimitExceededError,
+  ProductQuantityInvalidError,
+  assertPositiveIntegerQuantity,
   productEntitlementErrorMessage,
 } from "@/lib/product-entitlements/errors";
 export {

@@ -50,9 +50,12 @@ const { ForbiddenError, requireBusinessCapability, CAPABILITIES } = await import
 );
 const {
   assertPlanDefinitionsAcyclic,
+  formatApprovedDisplayPrice,
   getPlanCertificationProjection,
   getPlanDefinition,
+  getPlanLaunchReadiness,
   getPricingPageProjection,
+  isPubliclyPurchasablePlan,
   PLAN_CODES,
   PLAN_DEFINITIONS,
   PRODUCT_CAPABILITIES,
@@ -63,6 +66,7 @@ const {
 const {
   assignProductAddon,
   grantProductCapability,
+  grantProductLimit,
   hasProductCapability,
   loadProductEntitlement,
   PRODUCT_DOWNGRADE_RULES,
@@ -72,6 +76,7 @@ const {
   resolveWebhookPlanCode,
   ProductCapabilityRequiredError,
   ProductLimitExceededError,
+  ProductQuantityInvalidError,
 } = await import("@/lib/product-entitlements");
 const { activateBusinessTradeOp } = await import("@/lib/business-trades");
 const { createFakeSaasBillingProvider } = await import("@/lib/saas-billing/fake");
@@ -284,6 +289,71 @@ check(
       "BUSINESS",
 );
 check(
+  "Approved display prices format from amount, currency, and interval",
+  formatApprovedDisplayPrice({
+    amountCents: TBBT_FOUNDER_PLAN_AMOUNT_CENTS,
+    currency: "usd",
+    interval: "month",
+    label: TBBT_FOUNDER_PLAN_PRICE_LABEL,
+  }).priceAmount === "$49" &&
+    formatApprovedDisplayPrice({
+      amountCents: TBBT_FOUNDER_PLAN_AMOUNT_CENTS,
+      currency: "usd",
+      interval: "month",
+      label: TBBT_FOUNDER_PLAN_PRICE_LABEL,
+    }).priceSuffix === "/month" &&
+    formatApprovedDisplayPrice({
+      amountCents: 7900,
+      currency: "usd",
+      interval: "month",
+    }).priceAmount === "$79" &&
+    formatApprovedDisplayPrice({
+      amountCents: 7900,
+      currency: "usd",
+      interval: "month",
+    }).priceLabel === "$79/month" &&
+    getPricingPageProjection().plans.find((plan) => plan.code === "FOUNDER")?.priceAmount ===
+      "$49",
+);
+check(
+  "Starter is not launch-ready because scheduling and invoices still depend on jobs",
+  getPlanLaunchReadiness(PLAN_CODES.STARTER).launchReady === false &&
+    getPlanLaunchReadiness(PLAN_CODES.STARTER).findings.some(
+      (item) => item.code === "SCHEDULING_REQUIRES_JOBS",
+    ) &&
+    getPlanLaunchReadiness(PLAN_CODES.STARTER).findings.some(
+      (item) => item.code === "INVOICES_REQUIRE_COMPLETED_JOB",
+    ) &&
+    getPlanCertificationProjection().plans.find((plan) => plan.code === "STARTER")
+      ?.launchReady === false &&
+    getPlanLaunchReadiness(PLAN_CODES.FOUNDER).launchReady === true &&
+    getPlanLaunchReadiness(PLAN_CODES.FOUNDER).findings.length === 0,
+);
+{
+  const previousAdapter = process.env.TBBT_SAAS_BILLING_ADAPTER;
+  const previousVercel = process.env.VERCEL_ENV;
+  process.env.VERCEL_ENV = "production";
+  process.env.TBBT_SAAS_BILLING_ADAPTER = "fake";
+  check(
+    "Production-shaped environments do not map fake test price IDs to paid plans",
+    resolvePlanCodeFromPriceId("price_saas_test_BUSINESS") === null &&
+      resolvePlanCodeFromPriceId("price_saas_test_ENTERPRISE") === null &&
+      resolvePlanCodeFromPriceId("price_saas_test_STARTER") === null &&
+      resolveWebhookPlanCode({
+        stripePriceId: "price_saas_test_BUSINESS",
+        currentPlanCode: "FOUNDER",
+      }) === "FOUNDER",
+  );
+  process.env.TBBT_SAAS_BILLING_ADAPTER = previousAdapter;
+  if (previousVercel == null) delete process.env.VERCEL_ENV;
+  else process.env.VERCEL_ENV = previousVercel;
+}
+check(
+  "Fake adapter still maps test price IDs for programmatic plan exercise",
+  resolvePlanCodeFromPriceId("price_saas_test_STARTER") === "STARTER" &&
+    resolvePlanCodeFromPriceId("price_saas_test_BUSINESS") === "BUSINESS",
+);
+check(
   "Downgrade policy preserves records, export, billing, and offboarding",
   PRODUCT_DOWNGRADE_RULES.preserveRecords &&
     PRODUCT_DOWNGRADE_RULES.preserveExport &&
@@ -442,6 +512,115 @@ try {
       !bravoEntitlement.capabilities.includes(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS),
   );
 
+  const alphaBeforeMismatch = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: alpha.business.id },
+  });
+  const bravoBeforeMismatch = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: bravo.business.id },
+  });
+  const mismatchedCustomer = await applyParsedSaasBillingEvent(
+    prisma,
+    parseSaasBillingEvent(
+      saasSubscriptionEvent({
+        businessId: alpha.business.id,
+        customerId: starterCheckout.customerId,
+        subscriptionId: "sub_mismatch_customer",
+        priceId: "price_saas_test_BUSINESS",
+        id: "evt_mismatch_customer",
+        created: Math.floor(Date.now() / 1000) + 30,
+      }),
+    ),
+  );
+  const mismatchedSubscription = await applyParsedSaasBillingEvent(
+    prisma,
+    parseSaasBillingEvent(
+      saasSubscriptionEvent({
+        businessId: alpha.business.id,
+        customerId: "cus_mismatch_sub",
+        subscriptionId: "sub_bravo_starter",
+        priceId: "price_saas_test_ENTERPRISE",
+        id: "evt_mismatch_subscription",
+        created: Math.floor(Date.now() / 1000) + 31,
+      }),
+    ),
+  );
+  const unknownIdentifiers = await applyParsedSaasBillingEvent(
+    prisma,
+    parseSaasBillingEvent(
+      saasSubscriptionEvent({
+        businessId: randomUUID(),
+        customerId: "cus_unknown_foreign",
+        subscriptionId: "sub_unknown_foreign",
+        priceId: "price_saas_test_BUSINESS",
+        id: "evt_unknown_identifiers",
+        created: Math.floor(Date.now() / 1000) + 32,
+      }),
+    ),
+  );
+  const browserBusinessId = await applyParsedSaasBillingEvent(
+    prisma,
+    parseSaasBillingEvent(
+      saasSubscriptionEvent({
+        businessId: bravo.business.id,
+        customerId: checkout.customerId,
+        subscriptionId: "sub_alpha_founder",
+        priceId: "price_saas_test_BUSINESS",
+        id: "evt_browser_business",
+        created: Math.floor(Date.now() / 1000) + 33,
+      }),
+    ),
+  );
+  const matchingAlpha = await applyParsedSaasBillingEvent(
+    prisma,
+    parseSaasBillingEvent(
+      saasSubscriptionEvent({
+        businessId: alpha.business.id,
+        customerId: checkout.customerId,
+        subscriptionId: "sub_alpha_founder",
+        priceId: "price_saas_test",
+        id: "evt_matching_alpha",
+        created: Math.floor(Date.now() / 1000) + 34,
+      }),
+    ),
+  );
+  const alphaAfterMismatch = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: alpha.business.id },
+  });
+  const bravoAfterMismatch = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: bravo.business.id },
+  });
+  check(
+    "A metadata + B customer ID is rejected without mutating either tenant",
+    mismatchedCustomer.applied === false &&
+      mismatchedCustomer.reason === "tenant_mismatch" &&
+      alphaAfterMismatch?.planCode === alphaBeforeMismatch?.planCode &&
+      alphaAfterMismatch?.founderEligible === alphaBeforeMismatch?.founderEligible &&
+      bravoAfterMismatch?.planCode === bravoBeforeMismatch?.planCode,
+  );
+  check(
+    "A metadata + B subscription ID is rejected without mutating either tenant",
+    mismatchedSubscription.applied === false &&
+      mismatchedSubscription.reason === "tenant_mismatch",
+  );
+  check(
+    "Unknown identifiers do not mutate another tenant",
+    unknownIdentifiers.applied === false &&
+      unknownIdentifiers.reason === "unknown_business" &&
+      unknownIdentifiers.businessId == null &&
+      bravoAfterMismatch?.stripeCustomerId === bravoBeforeMismatch?.stripeCustomerId,
+  );
+  check(
+    "Browser-supplied businessId cannot attach another tenant's Stripe subscription",
+    browserBusinessId.applied === false &&
+      browserBusinessId.reason === "tenant_mismatch" &&
+      alphaAfterMismatch?.stripeSubscriptionId === "sub_alpha_founder" &&
+      bravoAfterMismatch?.stripeSubscriptionId === "sub_bravo_starter",
+  );
+  check(
+    "Matching A identifiers still apply to A",
+    matchingAlpha.applied === true && matchingAlpha.businessId === alpha.business.id,
+  );
+
   console.log("\nDB — Role × product entitlement and feature gates");
   await requireProductCapability(prisma, alpha.business.id, PRODUCT_CAPABILITIES.JOBS_TASKS);
   check("OWNER + entitled jobs feature is allowed", true);
@@ -562,6 +741,74 @@ try {
     await hasProductCapability(prisma, bravo.business.id, PRODUCT_CAPABILITIES.JOBS_TASKS),
   );
 
+  await expectThrow(
+    "Zero grant quantity is rejected",
+    () =>
+      grantProductLimit(prisma, {
+        businessId: bravo.business.id,
+        limit: PRODUCT_LIMITS.TRADES,
+        quantity: 0,
+      }),
+    (error) => error instanceof ProductQuantityInvalidError,
+  );
+  await expectThrow(
+    "Negative grant quantity is rejected",
+    () =>
+      grantProductLimit(prisma, {
+        businessId: bravo.business.id,
+        limit: PRODUCT_LIMITS.TRADES,
+        quantity: -2,
+      }),
+    (error) => error instanceof ProductQuantityInvalidError,
+  );
+  await expectThrow(
+    "Non-integer grant quantity is rejected",
+    () =>
+      grantProductLimit(prisma, {
+        businessId: bravo.business.id,
+        limit: PRODUCT_LIMITS.TRADES,
+        quantity: 1.5,
+      }),
+    (error) => error instanceof ProductQuantityInvalidError,
+  );
+  const firstIdempotent = await grantProductLimit(prisma, {
+    businessId: bravo.business.id,
+    limit: PRODUCT_LIMITS.USERS,
+    quantity: 3,
+    source: "SUPPORT",
+    sourceRef: "ticket-users-1",
+  });
+  const retryIdempotent = await grantProductLimit(prisma, {
+    businessId: bravo.business.id,
+    limit: PRODUCT_LIMITS.USERS,
+    quantity: 3,
+    source: "SUPPORT",
+    sourceRef: "ticket-users-1",
+  });
+  const independentGrant = await grantProductLimit(prisma, {
+    businessId: bravo.business.id,
+    limit: PRODUCT_LIMITS.USERS,
+    quantity: 1,
+    source: "SUPPORT",
+  });
+  const afterGrants = await loadProductEntitlement(prisma, bravo.business.id);
+  check(
+    "Retrying the same sourceRef grant does not double the limit; independent grants still add",
+    firstIdempotent.id === retryIdempotent.id &&
+      independentGrant.id !== firstIdempotent.id &&
+      afterGrants.limits.USERS.additive === 4,
+  );
+  await expectThrow(
+    "Invalid add-on quantity is rejected",
+    () =>
+      assignProductAddon(prisma, {
+        businessId: bravo.business.id,
+        addonCode: "ADDITIONAL_TRADE",
+        quantity: 0,
+      }),
+    (error) => error instanceof ProductQuantityInvalidError,
+  );
+
   const zip = await buildBusinessExportZip(prisma, bravo.business.id);
   const zipText = zip.bytes.toString("utf8");
   check(
@@ -581,8 +828,26 @@ try {
       snapshot.product.capabilities.includes(PRODUCT_CAPABILITIES.CRM) &&
       !snapshot.product.capabilities.includes(PRODUCT_CAPABILITIES.JOBS_TASKS) &&
       snapshot.availablePlans.find((plan) => plan.code === "FOUNDER")?.purchasable === true &&
-      snapshot.availablePlans.find((plan) => plan.code === "BUSINESS")?.purchasable === true &&
+      snapshot.availablePlans.find((plan) => plan.code === "STARTER")?.purchasable === false &&
+      snapshot.availablePlans.find((plan) => plan.code === "BUSINESS")?.purchasable === false &&
+      snapshot.availablePlans.find((plan) => plan.code === "ENTERPRISE")?.purchasable === false &&
+      snapshot.availablePlans.find((plan) => plan.code === "BUSINESS")?.providerTestable === true &&
+      snapshot.availablePlans.find((plan) => plan.code === "STARTER")?.providerTestable === true &&
+      snapshot.product.capabilitySummaries.find((item) => item.code === PRODUCT_CAPABILITIES.CRM)
+        ?.liveSoftware === true &&
+      snapshot.product.capabilitySummaries.find((item) => item.code === PRODUCT_CAPABILITIES.CRM)
+        ?.displayName === "CRM & Customer Management" &&
+      snapshot.product.capabilitySummaries.find(
+        (item) => item.code === PRODUCT_CAPABILITIES.MOBILE_ACCESS,
+      )?.liveSoftware === false &&
       snapshot.founderEligible === true,
+  );
+  check(
+    "Public catalog purchasability is commercial truth even while fake provider is testable",
+    isPubliclyPurchasablePlan(PLAN_CODES.FOUNDER) === true &&
+      isPubliclyPurchasablePlan(PLAN_CODES.STARTER) === false &&
+      isPubliclyPurchasablePlan(PLAN_CODES.BUSINESS) === false &&
+      isPubliclyPurchasablePlan(PLAN_CODES.ENTERPRISE) === false,
   );
   const publicPurchasableWithoutFake = getPricingPageProjection().plans.filter((plan) => plan.purchasable);
   check(

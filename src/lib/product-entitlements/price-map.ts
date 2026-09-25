@@ -64,12 +64,17 @@ export function resolveCheckoutPriceId(planCode: PlanCode): string | null {
 
 export function resolvePlanCodeFromPriceId(priceId: string | null | undefined): PlanCode | null {
   if (!priceId) return null;
-  if (priceId === FAKE_FOUNDER_PRICE_ID || priceId === "price_saas_test_FOUNDER") {
-    return PLAN_CODES.FOUNDER;
-  }
-  const fakeMatch = /^price_saas_test_([A-Z]+)$/.exec(priceId);
-  if (fakeMatch && isPlanCode(fakeMatch[1])) {
-    return fakeMatch[1];
+  // Test adapter identities only. Production-shaped environments must
+  // never treat price_saas_test* as a paid plan unless that exact ID is
+  // an explicitly configured approved price.
+  if (isFakeSaasBillingAdapterEnabled()) {
+    if (priceId === FAKE_FOUNDER_PRICE_ID || priceId === "price_saas_test_FOUNDER") {
+      return PLAN_CODES.FOUNDER;
+    }
+    const fakeMatch = /^price_saas_test_([A-Z]+)$/.exec(priceId);
+    if (fakeMatch && isPlanCode(fakeMatch[1])) {
+      return fakeMatch[1];
+    }
   }
   for (const code of PLAN_CODE_LIST) {
     const configured = getConfiguredPlanPriceId(code);

@@ -26,12 +26,28 @@ export class ProductLimitExceededError extends Error {
   }
 }
 
+export class ProductQuantityInvalidError extends Error {
+  constructor(message = "Quantity must be a positive integer.") {
+    super(message);
+    this.name = "ProductQuantityInvalidError";
+  }
+}
+
+export function assertPositiveIntegerQuantity(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new ProductQuantityInvalidError("Quantity must be a positive integer.");
+  }
+  return value;
+}
+
 export function productEntitlementErrorMessage(error: unknown): string | null {
   if (error instanceof ProductCapabilityRequiredError) return error.message;
   if (error instanceof ProductLimitExceededError) return error.message;
+  if (error instanceof ProductQuantityInvalidError) return error.message;
   if (error instanceof Error) {
     if (error.name === "ProductCapabilityRequiredError") return error.message;
     if (error.name === "ProductLimitExceededError") return error.message;
+    if (error.name === "ProductQuantityInvalidError") return error.message;
   }
   return null;
 }

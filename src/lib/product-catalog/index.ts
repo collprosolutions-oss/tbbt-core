@@ -50,7 +50,9 @@ export type { AddonDefinition } from "@/lib/product-catalog/addons";
 export { PRICING_COMPARE_ROWS } from "@/lib/product-catalog/compare";
 export type { CompareCellValue, PricingCompareRow } from "@/lib/product-catalog/compare";
 export {
+  formatApprovedDisplayPrice,
   getPricingPageProjection,
+  isPubliclyPurchasablePlan,
   PRICING_ADDON_PRICE_LABEL,
   PRICING_AVAILABLE_NOW_LABEL,
   PRICING_COMING_SOON_LABEL,
@@ -61,8 +63,14 @@ export type {
   PricingPageProjection,
   PricingPlanCardProjection,
 } from "@/lib/product-catalog/pricing-projection";
-export { getPlanCertificationProjection } from "@/lib/product-catalog/certification";
+export {
+  getPlanCertificationProjection,
+  getPlanLaunchReadiness,
+  PLAN_LAUNCH_WORKFLOW_DEPENDENCIES,
+} from "@/lib/product-catalog/certification";
 export type {
   PlanCertificationFeature,
   PlanCertificationProjection,
+  PlanLaunchReadiness,
+  PlanLaunchReadinessFinding,
 } from "@/lib/product-catalog/certification";

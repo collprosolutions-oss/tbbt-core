@@ -169,7 +169,6 @@ export async function resolveProductEntitlement(
       revokedAt: row.revokedAt?.toISOString() ?? null,
     });
     if (!active) continue;
-    const quantity = Math.max(1, row.quantity ?? 1);
     for (const capability of definition.grantsCapabilities) {
       capabilitySources.push({
         capability,
@@ -177,6 +176,8 @@ export async function resolveProductEntitlement(
         code: row.addonCode,
       });
     }
+    const quantity = Number.isInteger(row.quantity) && row.quantity > 0 ? row.quantity : 0;
+    if (quantity <= 0) continue;
     for (const [limitCode, delta] of Object.entries(definition.limitDeltas)) {
       if (delta == null) continue;
       const key = limitCode as ProductLimitCode;
@@ -193,6 +194,7 @@ export async function resolveProductEntitlement(
       });
     }
     if (grant.grantType === PRODUCT_GRANT_TYPES.LIMIT && grant.quantity != null) {
+      if (!Number.isInteger(grant.quantity) || grant.quantity <= 0) continue;
       const key = grant.code as ProductLimitCode;
       if (PRODUCT_LIMIT_LIST.includes(key)) {
         limitAdditive[key] = (limitAdditive[key] ?? 0) + grant.quantity;

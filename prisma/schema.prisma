@@ -1243,6 +1243,9 @@ model BusinessProductGrant {
   quantity   Int?
   status     String    @default("ACTIVE")
   source     String    @default("SUPPORT")
+  /// Idempotency key for a logical support/provider grant. Null means
+  /// an independent grant. Never a secret.
+  sourceRef  String?
   note       String?
   grantedAt  DateTime  @default(now())
   revokedAt  DateTime?
@@ -1252,6 +1255,7 @@ model BusinessProductGrant {
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
   @@index([businessId, status])
+  @@unique([businessId, grantType, code, source, sourceRef])
 }
 
 /// Idempotency log for TBBT SaaS billing webhooks. Distinct from the

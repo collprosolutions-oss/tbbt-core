@@ -127,8 +127,9 @@ export function TbbtHomePage() {
           <div className="tbbt-split-head">
             <h2>Built for trades businesses</h2>
             <p className="tbbt-muted">
-              Handyman is the live starting setup today. Cleaning and other
-              trades are planned on the same system — they are not launched yet.
+              Handyman is the live starting setup today. Additional trades
+              are planned after the core platform is completed — they are
+              not launched yet.
             </p>
           </div>
           <div className="tbbt-trade-strip">

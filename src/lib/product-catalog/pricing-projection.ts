@@ -67,9 +67,42 @@ function plannedLabel(code: PlanCode) {
   return PRICING_PLANNED_LABEL;
 }
 
+export function formatApprovedDisplayPrice(price: {
+  amountCents: number;
+  currency: string;
+  interval: string;
+  label?: string | null;
+}) {
+  const major = price.amountCents / 100;
+  const priceAmount = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: price.currency.toUpperCase(),
+    minimumFractionDigits: Number.isInteger(major) ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(major);
+  const priceSuffix = `/${price.interval}`;
+  return {
+    priceAmount,
+    priceSuffix,
+    priceLabel: price.label?.trim() || `${priceAmount}${priceSuffix}`,
+  };
+}
+
+export function isPubliclyPurchasablePlan(code: PlanCode) {
+  const plan = PLAN_DEFINITIONS[code];
+  return (
+    plan.publicStatus === PLAN_PUBLIC_STATUSES.LIVE &&
+    plan.checkoutEligible &&
+    plan.approvedDisplayPrice != null
+  );
+}
+
 function projectPlan(code: PlanCode): PricingPlanCardProjection {
   const plan = PLAN_DEFINITIONS[code];
   const live = plan.publicStatus === PLAN_PUBLIC_STATUSES.LIVE;
+  const formatted = plan.approvedDisplayPrice
+    ? formatApprovedDisplayPrice(plan.approvedDisplayPrice)
+    : null;
   return {
     code,
     displayName: plan.displayName,
@@ -78,13 +111,13 @@ function projectPlan(code: PlanCode): PricingPlanCardProjection {
     publicStatus: plan.publicStatus,
     statusBadge: live ? PRICING_AVAILABLE_NOW_LABEL : PRICING_COMING_SOON_LABEL,
     plannedLabel: plannedLabel(code),
-    priceLabel: plan.approvedDisplayPrice?.label ?? null,
-    priceAmount: plan.approvedDisplayPrice ? "$49" : null,
-    priceSuffix: plan.approvedDisplayPrice ? "/month" : null,
-    founderPriceLabel: code === PLAN_CODES.FOUNDER ? plan.approvedDisplayPrice?.label ?? null : null,
+    priceLabel: formatted?.priceLabel ?? null,
+    priceAmount: formatted?.priceAmount ?? null,
+    priceSuffix: formatted?.priceSuffix ?? null,
+    founderPriceLabel: code === PLAN_CODES.FOUNDER ? formatted?.priceLabel ?? null : null,
     cardFeatures: plan.cardFeatures.map((feature) => feature.label),
     cta: code === PLAN_CODES.ENTERPRISE ? "CONTACT" : live ? "SIGN_UP" : "SOON",
-    purchasable: live && plan.checkoutEligible && plan.approvedDisplayPrice != null,
+    purchasable: isPubliclyPurchasablePlan(code),
     checkoutEligible: plan.checkoutEligible,
     featured: code === PLAN_CODES.FOUNDER,
   };

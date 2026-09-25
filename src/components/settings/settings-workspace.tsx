@@ -638,19 +638,37 @@ function SectionBody(props: SettingsWorkspaceProps) {
           </div>
         </dl>
         <div className="space-y-2 text-sm">
-          <p className="text-muted-foreground">Included software capabilities</p>
+          <p className="text-muted-foreground">Live included capabilities</p>
           <ul className="flex flex-wrap gap-2">
-            {billing.product.capabilities.length > 0 ? (
-              billing.product.capabilities.map((capability) => (
-                <li key={capability}>
-                  <Badge variant="outline">{capability}</Badge>
-                </li>
-              ))
+            {billing.product.capabilitySummaries.filter((item) => item.liveSoftware).length > 0 ? (
+              billing.product.capabilitySummaries
+                .filter((item) => item.liveSoftware)
+                .map((item) => (
+                  <li key={item.code}>
+                    <Badge variant="outline">{item.displayName}</Badge>
+                  </li>
+                ))
             ) : (
               <li className="text-muted-foreground">None resolved.</li>
             )}
           </ul>
         </div>
+        {billing.product.capabilitySummaries.some((item) => !item.liveSoftware) ? (
+          <div className="space-y-2 text-sm">
+            <p className="text-muted-foreground">Coming soon / planned entitlements</p>
+            <ul className="flex flex-wrap gap-2">
+              {billing.product.capabilitySummaries
+                .filter((item) => !item.liveSoftware)
+                .map((item) => (
+                  <li key={item.code}>
+                    <Badge variant="outline">
+                      {item.displayName} · {item.implementationStatus === "PARTIAL" ? "Partial" : item.implementationStatus === "COMING_SOON" ? "Coming soon" : "Planned"}
+                    </Badge>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        ) : null}
         <div className="space-y-2 text-sm">
           <p className="text-muted-foreground">Active add-ons</p>
           {billing.product.addons.length > 0 ? (

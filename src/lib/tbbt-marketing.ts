@@ -122,8 +122,8 @@ export const TBBT_TRADES: readonly {
   },
   {
     name: "Cleaning",
-    status: "coming-next",
-    summary: "Next trade template. Same operating system, cleaning-specific setup.",
+    status: "planned",
+    summary: "Planned trade template. Architecture remains in Core; development is on hold until TBBT Core is fully operational.",
   },
   {
     name: "Electrical",
@@ -179,7 +179,7 @@ export const TBBT_TRADES: readonly {
 
 export const TBBT_TRADE_STATUS_LABEL: Record<TbbtTradeAvailability, string> = {
   available: "Available",
-  "coming-next": "Coming Next",
+  "coming-next": "Planned",
   planned: "Planned",
 };
 
@@ -208,7 +208,7 @@ export const TBBT_TRADES_PAGE_VALUE_POINTS = [
 
 export const TBBT_TRADES_PAGE_GRID_HEADING = "Supported Trades";
 export const TBBT_TRADES_PAGE_GRID_LEAD =
-  "Handyman is live today. Cleaning is next. Other trades are planned on the same platform.";
+  "Handyman is live today. Additional trades are planned on the roadmap after the core platform is completed.";
 
 export const TBBT_TRADES_PAGE_PLATFORM_KICKER = "One Platform. Endless Possibilities.";
 export const TBBT_TRADES_PAGE_PLATFORM_HEADLINE = [
@@ -216,7 +216,7 @@ export const TBBT_TRADES_PAGE_PLATFORM_HEADLINE = [
   "For Your Trade.",
 ] as const;
 export const TBBT_TRADES_PAGE_PLATFORM_SUPPORT =
-  "Every trade uses the same TBBT workspace. Handyman is live today — public website, catalog, customers, scheduling, estimates, jobs, invoices, and the rest of the operating tools. More trade setups follow on this same platform.";
+  "Every trade uses the same TBBT workspace. Handyman is live today — public website, catalog, customers, scheduling, estimates, jobs, invoices, and the rest of the operating tools. Additional trade setups are planned after the core platform is completed.";
 export const TBBT_TRADES_PAGE_SEE_FEATURES_LABEL = "See All Features";
 
 export const TBBT_TRADES_PAGE_CAPABILITIES = [
@@ -751,7 +751,7 @@ export const TBBT_VALUES = [
   },
   {
     title: "Continuous Improvement",
-    body: "Handyman is first. Cleaning is next. The operating system is built to add trades without starting over.",
+    body: "Handyman is first. Additional trades are planned after TBBT Core is fully operational. The operating system is built to add trades without starting over.",
   },
 ] as const;
 
@@ -1179,7 +1179,7 @@ export function tbbtPageDescription(page: string): string {
     case "features":
       return "TBBT features: public website, customers, scheduling, estimates, jobs, invoices, time cards, team, reports, reviews, and marketing content in one trades workspace.";
     case "trades":
-      return "One TBBT platform for every trade. Handyman is available now. Cleaning is next. Other trades are planned on the same operating system.";
+      return "One TBBT platform for every trade. Handyman is available now. Additional trades are planned on the roadmap after the core platform is completed.";
     case "pricing":
       return `TBBT Founder Plan ${TBBT_FOUNDER_PLAN_PRICE_LABEL}. ${TBBT_FOUNDER_TRIAL_DAYS}-day free trial. No credit card required to begin.`;
     case "about":

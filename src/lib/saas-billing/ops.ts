@@ -13,11 +13,14 @@ import { getAppUrl } from "@/lib/mail";
 import {
   canonicalizePlanCode,
   getPlanDefinition,
+  getProductCapabilityDefinition,
+  isPubliclyPurchasablePlan,
   PLAN_CODES,
   PLAN_PUBLIC_STATUSES,
   type PlanCode,
 } from "@/lib/product-catalog";
 import {
+  getConfiguredPlanPriceId,
   loadProductEntitlement,
   resolveCheckoutPriceId,
   resolveCompatiblePlanCode,
@@ -68,8 +71,16 @@ export type SaasBillingAvailablePlan = {
   publicStatus: string;
   checkoutEligible: boolean;
   purchasable: boolean;
+  providerTestable: boolean;
   priceConfigured: boolean;
   priceLabel: string | null;
+};
+
+export type SaasBillingCapabilitySummary = {
+  code: string;
+  displayName: string;
+  implementationStatus: string;
+  liveSoftware: boolean;
 };
 
 export type SaasBillingSnapshot = {
@@ -102,6 +113,7 @@ export type SaasBillingSnapshot = {
   entitlement: SaasEntitlement;
   product: {
     capabilities: string[];
+    capabilitySummaries: SaasBillingCapabilitySummary[];
     addons: Array<{ code: string; displayName: string; status: string }>;
     limits: Record<string, number | null>;
   };
@@ -253,16 +265,14 @@ export async function loadSaasBillingSnapshot(
   ] as const).map((code) => {
     const definition = getPlanDefinition(code);
     const priceId = resolveCheckoutPriceId(code);
-    const purchasable =
-      (fake || (definition.checkoutEligible && definition.publicStatus === PLAN_PUBLIC_STATUSES.LIVE)) &&
-      Boolean(priceId);
     return {
       code,
       name: definition.displayName,
       publicStatus: definition.publicStatus,
-      checkoutEligible: definition.checkoutEligible || fake,
-      purchasable,
-      priceConfigured: Boolean(priceId),
+      checkoutEligible: definition.checkoutEligible,
+      purchasable: isPubliclyPurchasablePlan(code),
+      providerTestable: fake && Boolean(priceId),
+      priceConfigured: Boolean(getConfiguredPlanPriceId(code)),
       priceLabel: definition.approvedDisplayPrice?.label ?? null,
     };
   });
@@ -300,6 +310,15 @@ export async function loadSaasBillingSnapshot(
     entitlement,
     product: {
       capabilities: product?.capabilities ?? [],
+      capabilitySummaries: (product?.capabilities ?? []).map((code) => {
+        const definition = getProductCapabilityDefinition(code);
+        return {
+          code,
+          displayName: definition.displayName,
+          implementationStatus: definition.implementationStatus,
+          liveSoftware: definition.implementationStatus === "LIVE",
+        };
+      }),
       addons: (product?.addons ?? []).map((addon) => ({
         code: addon.code,
         displayName: addon.displayName,
@@ -428,32 +447,69 @@ export async function startSaasBillingPortal(
   });
 }
 
-async function resolveBusinessId(
+async function resolveWebhookBusiness(
   db: BillingClient,
   parsed: ParsedSaasBillingEvent,
-) {
+): Promise<
+  | { ok: true; businessId: string }
+  | { ok: false; reason: "unknown_business" | "tenant_mismatch" }
+> {
+  const candidates = new Set<string>();
+
   if (parsed.businessId) {
     const owned = await db.business.findFirst({
       where: { id: parsed.businessId },
       select: { id: true },
     });
-    if (owned) return owned.id;
+    if (owned) candidates.add(owned.id);
   }
+
   if (parsed.snapshot.stripeSubscriptionId) {
     const bySub = await db.businessSaasSubscription.findFirst({
       where: { stripeSubscriptionId: parsed.snapshot.stripeSubscriptionId },
       select: { businessId: true },
     });
-    if (bySub) return bySub.businessId;
+    if (bySub) candidates.add(bySub.businessId);
   }
+
   if (parsed.snapshot.stripeCustomerId) {
     const byCustomer = await db.businessSaasSubscription.findFirst({
       where: { stripeCustomerId: parsed.snapshot.stripeCustomerId },
       select: { businessId: true },
     });
-    if (byCustomer) return byCustomer.businessId;
+    if (byCustomer) candidates.add(byCustomer.businessId);
   }
-  return null;
+
+  if (candidates.size > 1) {
+    return { ok: false, reason: "tenant_mismatch" };
+  }
+  if (candidates.size === 1) {
+    return { ok: true, businessId: [...candidates][0] };
+  }
+  return { ok: false, reason: "unknown_business" };
+}
+
+async function recordWebhookEventSafely(
+  db: PrismaClient,
+  parsed: ParsedSaasBillingEvent,
+  businessId: string | null,
+) {
+  try {
+    await db.saasBillingWebhookEvent.create({
+      data: {
+        stripeEventId: parsed.stripeEventId,
+        eventType: parsed.eventType,
+        businessId,
+        stripeEventCreatedAt: parsed.stripeEventCreatedAt,
+      },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return "already_processed" as const;
+    }
+    throw error;
+  }
+  return "recorded" as const;
 }
 
 export async function applyParsedSaasBillingEvent(
@@ -470,30 +526,18 @@ export async function applyParsedSaasBillingEvent(
     return { applied: false as const, reason: "already_processed" as const, businessId: null };
   }
 
-  const businessId = await resolveBusinessId(db, parsed);
-  if (!businessId) {
-    return { applied: false as const, reason: "unknown_business" as const, businessId: null };
+  const resolved = await resolveWebhookBusiness(db, parsed);
+  if (!resolved.ok) {
+    await recordWebhookEventSafely(db, parsed, null);
+    return { applied: false as const, reason: resolved.reason, businessId: null };
   }
+  const businessId = resolved.businessId;
 
   const current = await loadRow(db, businessId);
   if (isStaleSaasStripeEvent(current?.lastStripeEventCreatedAt, parsed.stripeEventCreatedAt)) {
-    try {
-      await db.saasBillingWebhookEvent.create({
-        data: {
-          stripeEventId: parsed.stripeEventId,
-          eventType: parsed.eventType,
-          businessId,
-          stripeEventCreatedAt: parsed.stripeEventCreatedAt,
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2002"
-      ) {
-        return { applied: false as const, reason: "already_processed" as const, businessId };
-      }
-      throw error;
+    const recorded = await recordWebhookEventSafely(db, parsed, businessId);
+    if (recorded === "already_processed") {
+      return { applied: false as const, reason: "already_processed" as const, businessId };
     }
     return { applied: false as const, reason: "stale_event" as const, businessId };
   }

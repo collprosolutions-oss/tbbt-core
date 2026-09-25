@@ -10,7 +10,9 @@ import { PRODUCT_CAPABILITY_DEFINITIONS } from "@/lib/product-catalog/capabiliti
 import {
   PLAN_CODE_LIST,
   PLAN_PUBLIC_STATUSES,
+  PRODUCT_CAPABILITIES,
   type PlanCode,
+  type ProductCapabilityCode,
 } from "@/lib/product-catalog/codes";
 import { PRICING_COMPARE_ROWS } from "@/lib/product-catalog/compare";
 import {
@@ -32,6 +34,68 @@ export type PlanCertificationFeature = {
   presentedAsLiveSoftware: Record<PlanCode, boolean>;
 };
 
+export type PlanLaunchReadinessFinding = {
+  planCode: PlanCode;
+  severity: "BLOCKER";
+  code: string;
+  advertisedCapability: ProductCapabilityCode;
+  dependsOnCapability: ProductCapabilityCode;
+  reason: string;
+};
+
+export type PlanLaunchReadiness = {
+  planCode: PlanCode;
+  launchReady: boolean;
+  findings: PlanLaunchReadinessFinding[];
+};
+
+/**
+ * Advertised capabilities that cannot currently operate together unless
+ * a required sibling capability is also included. This is a launch
+ * gate, not a green-check rewrite. Do not treat capability-code
+ * presence alone as LIVE-ready.
+ */
+export const PLAN_LAUNCH_WORKFLOW_DEPENDENCIES = [
+  {
+    advertisedCapability: PRODUCT_CAPABILITIES.SCHEDULING,
+    dependsOnCapability: PRODUCT_CAPABILITIES.JOBS_TASKS,
+    code: "SCHEDULING_REQUIRES_JOBS",
+    reason:
+      "Current TBBT scheduling is Job-based. A plan that advertises Scheduling & Calendar without JOBS_TASKS cannot operate that workflow until a separate non-job calendar exists or JOBS_TASKS is included.",
+  },
+  {
+    advertisedCapability: PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
+    dependsOnCapability: PRODUCT_CAPABILITIES.JOBS_TASKS,
+    code: "INVOICES_REQUIRE_COMPLETED_JOB",
+    reason:
+      "Current invoice creation is from a completed Job. A plan that advertises Estimates & Invoices without JOBS_TASKS cannot complete that workflow until a separate non-job invoice path exists or JOBS_TASKS is included.",
+  },
+] as const;
+
+export function getPlanLaunchReadiness(code: PlanCode): PlanLaunchReadiness {
+  const findings: PlanLaunchReadinessFinding[] = [];
+  for (const dependency of PLAN_LAUNCH_WORKFLOW_DEPENDENCIES) {
+    if (
+      planIncludesCapability(code, dependency.advertisedCapability) &&
+      !planIncludesCapability(code, dependency.dependsOnCapability)
+    ) {
+      findings.push({
+        planCode: code,
+        severity: "BLOCKER",
+        code: dependency.code,
+        advertisedCapability: dependency.advertisedCapability,
+        dependsOnCapability: dependency.dependsOnCapability,
+        reason: dependency.reason,
+      });
+    }
+  }
+  return {
+    planCode: code,
+    launchReady: findings.length === 0,
+    findings,
+  };
+}
+
 export type PlanCertificationProjection = {
   plans: Array<{
     code: PlanCode;
@@ -41,6 +105,8 @@ export type PlanCertificationProjection = {
     purchasableWithoutPriceConfig: boolean;
     approvedDisplayPrice: PlanDefinition["approvedDisplayPrice"];
     capabilities: string[];
+    launchReady: boolean;
+    launchBlockers: PlanLaunchReadinessFinding[];
   }>;
   features: PlanCertificationFeature[];
   addons: Array<{
@@ -57,6 +123,7 @@ export function getPlanCertificationProjection(): PlanCertificationProjection {
   return {
     plans: PLAN_CODE_LIST.map((code) => {
       const plan = PLAN_DEFINITIONS[code];
+      const launch = getPlanLaunchReadiness(code);
       return {
         code,
         displayName: plan.displayName,
@@ -67,6 +134,8 @@ export function getPlanCertificationProjection(): PlanCertificationProjection {
         capabilities: [...plan.cardFeatures]
           .map((feature) => feature.capability)
           .filter((value): value is NonNullable<typeof value> => Boolean(value)),
+        launchReady: launch.launchReady,
+        launchBlockers: launch.findings,
       };
     }),
     features: PRICING_COMPARE_ROWS.map((row) => {

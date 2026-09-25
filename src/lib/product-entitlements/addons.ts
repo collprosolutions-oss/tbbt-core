@@ -14,6 +14,7 @@ import {
   type AddonCode,
 } from "@/lib/product-catalog/codes";
 import { getAddonDefinition } from "@/lib/product-catalog/addons";
+import { assertPositiveIntegerQuantity } from "@/lib/product-entitlements/errors";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -31,7 +32,7 @@ export async function assignProductAddon(
     throw new Error("Unknown TBBT add-on code.");
   }
   const definition = getAddonDefinition(input.addonCode);
-  const quantity = Math.max(1, input.quantity ?? 1);
+  const quantity = assertPositiveIntegerQuantity(input.quantity ?? 1);
   const existing = await db.businessProductAddon.findUnique({
     where: {
       businessId_addonCode: {
