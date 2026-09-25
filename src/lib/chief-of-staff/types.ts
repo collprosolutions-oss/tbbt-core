@@ -50,6 +50,13 @@ export type SkippedSpecialist = {
     | "NO_DEEP_LOAD_PR1";
 };
 
+export type CosEntityHints = {
+  jobId?: string;
+  recommendationKey?: string;
+  customerDisplayName?: string;
+  scheduledDate?: string;
+};
+
 export type SpecialistContext = {
   specialistId: SpecialistId;
   question: string;
@@ -57,7 +64,7 @@ export type SpecialistContext = {
   recommendationKeys: string[];
   facts: Record<string, string>;
   findings: Array<{ key: string; title: string; why: string; entityIds?: string[] }>;
-  entityHints?: { jobId?: string; recommendationKey?: string };
+  entityHints?: CosEntityHints;
 };
 
 export type SpecialistFinding = {
@@ -113,5 +120,5 @@ export type OrchestrationSkipFailure = {
 export type CosPlannerInput = {
   question: string;
   activeRecommendationKeys: string[];
-  entityHints?: { jobId?: string; recommendationKey?: string };
+  entityHints?: CosEntityHints;
 };

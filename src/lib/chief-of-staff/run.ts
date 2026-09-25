@@ -39,12 +39,18 @@ import {
 } from "@/lib/chief-of-staff/recommendations";
 import { interpretFinancialSpecialist } from "@/lib/chief-of-staff/specialists/financial";
 import { synthesizeCoachAnswer } from "@/lib/chief-of-staff/synthesize";
+import {
+  resetLastWorkforceProjection,
+  runWorkforceSpecialist,
+} from "@/lib/chief-of-staff/workforce-specialist";
 import type {
+  CosEntityHints,
   OrchestrationSkipFailure,
   OrchestrationStatus,
   SpecialistId,
   SpecialistResult,
 } from "@/lib/chief-of-staff/types";
+import type { ProductCapabilityCode } from "@/lib/product-catalog/codes";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -56,6 +62,10 @@ export type ChiefOfStaffTestHooks = {
   failBeforeProvider?: boolean;
   /** Test-only: fail the Financial Intelligence load while ATTENTION can survive. */
   failFinancialLoad?: boolean;
+  /** Test-only: catalog still loads BSOS facts; Workforce snapshot is marked failed. */
+  failWorkforceSnapshot?: boolean;
+  /** Test-only: hide specific product capabilities after the real entitlement check. */
+  denyProductCapabilities?: ProductCapabilityCode[];
 };
 
 export type ChiefOfStaffRunResult = {
@@ -272,6 +282,7 @@ export async function runChiefOfStaffCoach(
     conversationId?: string;
     /** Ignored. Browser businessId is never authorization. */
     browserBusinessId?: string;
+    entityHints?: CosEntityHints;
     test?: ChiefOfStaffTestHooks;
   },
 ): Promise<ChiefOfStaffRunResult> {
@@ -408,6 +419,7 @@ export async function runChiefOfStaffCoach(
   resetDeepLoaderInvocations();
   resetFinancialSpecialistCounters();
   setInjectedFinancialLoadFailure(Boolean(input.test?.failFinancialLoad));
+  resetLastWorkforceProjection();
 
   let catalog: CanonicalRecommendationCatalog;
   let synthesis: ReturnType<typeof synthesizeCoachAnswer>;
@@ -418,12 +430,15 @@ export async function runChiefOfStaffCoach(
     if (input.test?.failCatalog) {
       throw new Error("injected catalog failure");
     }
-    catalog = await loadCanonicalRecommendationCatalog(db, access.businessId);
+    catalog = await loadCanonicalRecommendationCatalog(db, access.businessId, {
+      failWorkforceSnapshot: input.test?.failWorkforceSnapshot,
+    });
     setInjectedFinancialLoadFailure(false);
 
     plan = planSpecialists({
       question,
       activeRecommendationKeys: catalog.activeRecommendations.map((item) => item.key),
+      entityHints: input.entityHints,
     });
 
     specialistResults = [];
@@ -433,10 +448,23 @@ export async function runChiefOfStaffCoach(
           throw new Error("injected specialist failure");
         }
         if (specialistId === "FINANCIAL") {
-          specialistResults.push(interpretFinancialSpecialist(catalog, question));
+          specialistResults.push(interpretFinancialSpecialist(catalog, question, input.entityHints));
           continue;
         }
-        const context = loadSpecialistContext(specialistId, catalog, question);
+        if (specialistId === "WORKFORCE") {
+          specialistResults.push(
+            await runWorkforceSpecialist({
+              db,
+              access,
+              catalog,
+              question,
+              entityHints: input.entityHints,
+              denyProductCapabilities: input.test?.denyProductCapabilities,
+            }),
+          );
+          continue;
+        }
+        const context = loadSpecialistContext(specialistId, catalog, question, input.entityHints);
         specialistResults.push(projectSpecialist(context));
       } catch (error) {
         specialistResults.push({

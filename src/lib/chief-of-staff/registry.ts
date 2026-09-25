@@ -37,16 +37,20 @@ export const SPECIALIST_REGISTRY: readonly SpecialistRegistryEntry[] = [
   },
   {
     id: "WORKFORCE",
-    purpose: "Project Workforce recommendations and capacity facts already used by the BSOS workspace.",
+    purpose:
+      "Explain schedule, capacity, assignment, and conflict facts from the existing Workforce snapshot already loaded for the canonical catalog. Read/explain only.",
     enabled: true,
     requiredRoleCapability: CAPABILITIES.VIEW_REPORTS,
     requiredProductCapability: null,
-    readScope: "bsos-workforce-recommendations",
+    readScope: "workforce-schedule-capacity",
     approvalClass: COS_APPROVAL_CLASS,
     forbiddenBehavior: [
       "invoke-specialist",
       "assign-workers",
       "change-schedules",
+      "create-outreach",
+      "send-communications",
+      "write-availability",
       "mutate-domain",
       "authorize",
     ],

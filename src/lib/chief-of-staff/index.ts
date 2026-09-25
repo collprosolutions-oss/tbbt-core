@@ -9,6 +9,7 @@ export {
 export type {
   ApprovalClass,
   ConflictResolution,
+  CosEntityHints,
   CosPlannerInput,
   OrchestrationStatus,
   SpecialistId,
@@ -54,3 +55,13 @@ export {
   resetSynthesisCallCount,
   runChiefOfStaffCoach,
 } from "@/lib/chief-of-staff/run";
+export {
+  WORKFORCE_CONTEXT_CAPS,
+  getLastWorkforceProjection,
+  resetLastWorkforceProjection,
+  runWorkforceSpecialist,
+  projectWorkforceFromSnapshot,
+  availabilitySourceForMember,
+  describeInheritedAvailability,
+  workforceProjectionHasForbiddenFields,
+} from "@/lib/chief-of-staff/workforce-specialist";
