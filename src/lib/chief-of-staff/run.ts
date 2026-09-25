@@ -5,14 +5,19 @@
  * grounded fallback → exactly one runAiTask(COS_ASK).
  *
  * Orchestration status is not AI-provider status.
+ *
+ * One logical attempt has at most one active recovery worker. The
+ * AiInteraction claim lease is acquired before any catalog/fan-out work
+ * and is held through the single synthesis call.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { appendConversationMessage, ensureAiConversation } from "@/lib/ai/conversations";
 import { coachSystemPrompt } from "@/lib/ai/coach";
 import { sanitizeAiText, summarizeAiInput } from "@/lib/ai/sanitize";
-import { AI_PENDING_STALE_MS, runAiTask } from "@/lib/ai/service";
+import { claimAiInteraction, parseStructuredAiOutput, runAiTask } from "@/lib/ai/service";
 import {
+  AI_FAILURE_MESSAGE,
   AI_IN_PROGRESS_MESSAGE,
   AI_NOT_CONNECTED_MESSAGE,
   isAiAttemptId,
@@ -40,6 +45,10 @@ type Db = PrismaClient | Prisma.TransactionClient;
 
 export type ChiefOfStaffTestHooks = {
   failSpecialistId?: SpecialistId;
+  /** Test-only: fail after the audit pair exists, before fan-out. */
+  failCatalog?: boolean;
+  /** Test-only: fail after catalog/plan, before runAiTask owns synthesis. */
+  failBeforeProvider?: boolean;
 };
 
 export type ChiefOfStaffRunResult = {
@@ -55,7 +64,19 @@ export type ChiefOfStaffRunResult = {
   citedFactKeys?: string[];
 };
 
+const PRE_PROVIDER_FAILURE_TEXT =
+  "Recorded Business Health facts could not be loaded for this request. No substitute facts were invented.";
+
+function preProviderFallback(): StructuredAiOutput {
+  return {
+    text: PRE_PROVIDER_FAILURE_TEXT,
+    stance: "MIXED",
+    citedFactKeys: [],
+  };
+}
+
 let synthesisCallCount = 0;
+let orchestrationWorkerCount = 0;
 
 export function resetSynthesisCallCount() {
   synthesisCallCount = 0;
@@ -63,6 +84,14 @@ export function resetSynthesisCallCount() {
 
 export function getSynthesisCallCount() {
   return synthesisCallCount;
+}
+
+export function resetOrchestrationWorkerCount() {
+  orchestrationWorkerCount = 0;
+}
+
+export function getOrchestrationWorkerCount() {
+  return orchestrationWorkerCount;
 }
 
 function projectSpecialist(context: ReturnType<typeof loadSpecialistContext>): SpecialistResult {
@@ -89,70 +118,141 @@ async function loadCoachExtras(db: Db, businessId: string) {
   return { goals, actionItems };
 }
 
-function isStaleClaim(claimedAt: Date | null | undefined, now = new Date()) {
-  if (!claimedAt) return true;
-  return claimedAt.getTime() < now.getTime() - AI_PENDING_STALE_MS;
+function sanitizeFailureReason(reason: string) {
+  return sanitizeAiText(reason, 400).replace(
+    /\b(password|api[_-]?key|secret|token|authorization)\s*[:=]\s*\S+/gi,
+    "$1=[redacted]",
+  );
 }
 
-async function replayCompleted(input: {
+function inProgressResult(interactionId: string, orchestrationId: string): ChiefOfStaffRunResult {
+  return {
+    inProgress: true,
+    message: AI_IN_PROGRESS_MESSAGE,
+    interactionId,
+    orchestrationId,
+    orchestrationStatus: "PENDING",
+    aiStatus: "PENDING",
+  };
+}
+
+async function replayTerminal(input: {
   db: Db;
-  access: BusinessAccess;
   conversationId: string;
+  businessId: string;
   interactionId: string;
   orchestrationId: string;
   orchestrationStatus: OrchestrationStatus;
-  idempotencyKey: string;
-  fallback: StructuredAiOutput;
-  allowedFactKeys: string[];
-  citedFacts: unknown;
+  fallback?: StructuredAiOutput;
 }): Promise<ChiefOfStaffRunResult> {
-  synthesisCallCount += 1;
-  const aiResult = await runAiTask(
-    input.db as PrismaClient,
-    {
-      businessId: input.access.businessId,
-      membershipId: input.access.workspace.membership.id,
-      userId: input.access.workspace.user.id,
-    },
-    {
-      taskType: "COS_ASK",
-      system: coachSystemPrompt(),
-      user: "replay",
-      inputSummary: "replay",
-      conversationId: input.conversationId,
-      idempotencyKey: input.idempotencyKey,
-      fallback: input.fallback,
-      allowedFactKeys: input.allowedFactKeys,
-    },
-  );
-  if (aiResult.status === "PENDING") {
-    return {
-      inProgress: true,
-      message: AI_IN_PROGRESS_MESSAGE,
-      interactionId: input.interactionId,
-      orchestrationId: input.orchestrationId,
-      orchestrationStatus: "PENDING",
-      aiStatus: "PENDING",
-    };
-  }
-  const output = aiResult.output ?? input.fallback;
+  const interaction = await input.db.aiInteraction.findUnique({
+    where: { id: input.interactionId },
+  });
+  const fallback = input.fallback ?? preProviderFallback();
+  const stored = interaction?.outputSummary
+    ? parseStructuredAiOutput(interaction.outputSummary)
+    : null;
+  const output = stored ?? fallback;
   const existingAssistant = await input.db.aiConversationMessage.findFirst({
     where: {
-      businessId: input.access.businessId,
+      businessId: input.businessId,
       conversationId: input.conversationId,
       interactionId: input.interactionId,
       role: "ASSISTANT",
     },
   });
+  const aiStatus = (interaction?.status ?? "FAILED") as AiRunResult["status"];
   return {
-    message: aiResult.connected ? aiResult.message : AI_NOT_CONNECTED_MESSAGE,
+    error: aiStatus === "FAILED" && !existingAssistant ? output.text : undefined,
+    message:
+      aiStatus === "SKIPPED_NOT_CONNECTED"
+        ? AI_NOT_CONNECTED_MESSAGE
+        : aiStatus === "FAILED"
+          ? AI_FAILURE_MESSAGE
+          : aiStatus === "PENDING"
+            ? AI_IN_PROGRESS_MESSAGE
+            : undefined,
     text: existingAssistant?.content ?? output.text,
     stance: existingAssistant?.stance ?? output.stance,
     interactionId: input.interactionId,
     orchestrationId: input.orchestrationId,
     orchestrationStatus: input.orchestrationStatus,
-    aiStatus: aiResult.status,
+    aiStatus,
     citedFactKeys: output.citedFactKeys,
+  };
+}
+
+async function pendingOrReplay(input: {
+  db: Db;
+  access: BusinessAccess;
+  conversationId: string;
+  interactionId: string;
+  orchestrationId: string;
+}): Promise<ChiefOfStaffRunResult> {
+  const [interaction, orchestration] = await Promise.all([
+    input.db.aiInteraction.findUnique({ where: { id: input.interactionId } }),
+    input.db.aiOrchestrationRun.findUnique({ where: { id: input.orchestrationId } }),
+  ]);
+  if (orchestration && orchestration.status !== "PENDING") {
+    return replayTerminal({
+      db: input.db,
+      conversationId: input.conversationId,
+      businessId: input.access.businessId,
+      interactionId: input.interactionId,
+      orchestrationId: input.orchestrationId,
+      orchestrationStatus: orchestration.status as OrchestrationStatus,
+    });
+  }
+  if (interaction && interaction.status !== "PENDING") {
+    return replayTerminal({
+      db: input.db,
+      conversationId: input.conversationId,
+      businessId: input.access.businessId,
+      interactionId: input.interactionId,
+      orchestrationId: input.orchestrationId,
+      orchestrationStatus: (orchestration?.status as OrchestrationStatus) ?? "FAILED",
+    });
+  }
+  return inProgressResult(input.interactionId, input.orchestrationId);
+}
+
+async function finalizePreProviderFailure(input: {
+  db: Db;
+  interactionId: string;
+  orchestrationId: string;
+  reason: string;
+  failures?: OrchestrationSkipFailure["failures"];
+}): Promise<ChiefOfStaffRunResult> {
+  const fallback = preProviderFallback();
+  const failureReason = sanitizeFailureReason(input.reason);
+  await input.db.aiInteraction.update({
+    where: { id: input.interactionId },
+    data: {
+      status: "FAILED",
+      failureReason,
+      claimedAt: null,
+      outputSummary: JSON.stringify(fallback),
+    },
+  });
+  await input.db.aiOrchestrationRun.update({
+    where: { id: input.orchestrationId },
+    data: {
+      status: "FAILED",
+      skippedFailure: {
+        skipped: [],
+        failures: input.failures ?? [{ specialistId: "ATTENTION", message: failureReason }],
+      } satisfies OrchestrationSkipFailure,
+    },
+  });
+  return {
+    error: failureReason,
+    text: fallback.text,
+    stance: fallback.stance,
+    interactionId: input.interactionId,
+    orchestrationId: input.orchestrationId,
+    orchestrationStatus: "FAILED",
+    aiStatus: "FAILED",
+    citedFactKeys: [],
   };
 }
 
@@ -193,42 +293,36 @@ export async function runChiefOfStaffCoach(
     },
   });
   if (existing && existing.status !== "PENDING") {
-    const fallback: StructuredAiOutput = {
-      text: "Recorded TBBT facts were reused for this request.",
-      stance: "MIXED",
-      citedFactKeys: [],
-    };
-    return replayCompleted({
+    return replayTerminal({
       db,
-      access,
       conversationId: conversation.id,
+      businessId: access.businessId,
       interactionId: existing.interactionId,
       orchestrationId: existing.id,
       orchestrationStatus: existing.status as OrchestrationStatus,
-      idempotencyKey,
-      fallback,
-      allowedFactKeys: [],
-      citedFacts: [],
+      fallback: {
+        text: "Recorded TBBT facts were reused for this request.",
+        stance: "MIXED",
+        citedFactKeys: [],
+      },
     });
-  }
-
-  if (existing?.status === "PENDING") {
-    const interaction = await db.aiInteraction.findUnique({ where: { id: existing.interactionId } });
-    if (interaction && !isStaleClaim(interaction.claimedAt)) {
-      return {
-        inProgress: true,
-        message: AI_IN_PROGRESS_MESSAGE,
-        interactionId: existing.interactionId,
-        orchestrationId: existing.id,
-        orchestrationStatus: "PENDING",
-        aiStatus: "PENDING",
-      };
-    }
   }
 
   let interactionId = existing?.interactionId;
   let orchestrationId = existing?.id;
-  if (!existing) {
+
+  if (existing?.status === "PENDING") {
+    const won = await claimAiInteraction(db, { id: existing.interactionId });
+    if (!won) {
+      return pendingOrReplay({
+        db,
+        access,
+        conversationId: conversation.id,
+        interactionId: existing.interactionId,
+        orchestrationId: existing.id,
+      });
+    }
+  } else if (!existing) {
     try {
       const created = await (db as PrismaClient).$transaction(async (tx) => {
         const interaction = await tx.aiInteraction.create({
@@ -271,31 +365,31 @@ export async function runChiefOfStaffCoach(
           },
         },
       });
-      if (raced?.status === "PENDING") {
-        return {
-          inProgress: true,
-          message: AI_IN_PROGRESS_MESSAGE,
+      if (!raced) {
+        return { error: "That coach request could not be recorded." };
+      }
+      if (raced.status !== "PENDING") {
+        return replayTerminal({
+          db,
+          conversationId: conversation.id,
+          businessId: access.businessId,
           interactionId: raced.interactionId,
           orchestrationId: raced.id,
-          orchestrationStatus: "PENDING",
-          aiStatus: "PENDING",
-        };
+          orchestrationStatus: raced.status as OrchestrationStatus,
+        });
       }
-      if (raced) {
-        return replayCompleted({
+      const won = await claimAiInteraction(db, { id: raced.interactionId });
+      if (!won) {
+        return pendingOrReplay({
           db,
           access,
           conversationId: conversation.id,
           interactionId: raced.interactionId,
           orchestrationId: raced.id,
-          orchestrationStatus: raced.status as OrchestrationStatus,
-          idempotencyKey,
-          fallback: { text: "Recorded TBBT facts were reused for this request.", stance: "MIXED", citedFactKeys: [] },
-          allowedFactKeys: [],
-          citedFacts: [],
         });
       }
-      return { error: "That coach request could not be recorded." };
+      interactionId = raced.interactionId;
+      orchestrationId = raced.id;
     }
   }
 
@@ -303,87 +397,92 @@ export async function runChiefOfStaffCoach(
     return { error: "That coach request could not be recorded." };
   }
 
+  orchestrationWorkerCount += 1;
   resetDeepLoaderInvocations();
+
   let catalog: CanonicalRecommendationCatalog;
+  let synthesis: ReturnType<typeof synthesizeCoachAnswer>;
+  let plan: ReturnType<typeof planSpecialists>;
+  let specialistResults: SpecialistResult[];
+  let conflicts: ReturnType<typeof resolveConflicts>;
   try {
+    if (input.test?.failCatalog) {
+      throw new Error("injected catalog failure");
+    }
     catalog = await loadCanonicalRecommendationCatalog(db, access.businessId);
-  } catch (error) {
-    await db.aiOrchestrationRun.update({
-      where: { id: orchestrationId },
-      data: {
-        status: "FAILED",
-        skippedFailure: {
-          skipped: [],
-          failures: [{ specialistId: "ATTENTION", message: error instanceof Error ? error.message : "Catalog load failed" }],
-        } satisfies OrchestrationSkipFailure,
+
+    plan = planSpecialists({
+      question,
+      activeRecommendationKeys: catalog.activeRecommendations.map((item) => item.key),
+    });
+
+    specialistResults = [];
+    for (const specialistId of plan.selectedIds) {
+      try {
+        if (input.test?.failSpecialistId === specialistId) {
+          throw new Error("injected specialist failure");
+        }
+        const context = loadSpecialistContext(specialistId, catalog, question);
+        specialistResults.push(projectSpecialist(context));
+      } catch (error) {
+        specialistResults.push({
+          specialistId,
+          status: "FAILED",
+          findings: [],
+          factKeys: [],
+          recommendationKeys: [],
+          limitation:
+            "Part of the recorded attention view could not be loaded. No substitute facts were invented.",
+          failure: {
+            specialistId,
+            message: error instanceof Error ? error.message : "Specialist failed",
+          },
+        });
+      }
+    }
+
+    conflicts = resolveConflicts({
+      results: specialistResults,
+      recommendations: catalog.activeRecommendations,
+      facts: catalog.facts,
+    });
+
+    if (input.test?.failBeforeProvider) {
+      throw new Error("injected pre-provider failure");
+    }
+
+    const extras = await loadCoachExtras(db, access.businessId);
+    const { listActiveTradeCodes } = await import("@/lib/business-trades");
+    const { workspaceTradeLabel } = await import("@/lib/trade-config");
+    const activeTradeCodes = await listActiveTradeCodes(db as PrismaClient, access.businessId);
+    synthesis = synthesizeCoachAnswer({
+      question,
+      catalog,
+      specialistResults,
+      conflicts,
+      coachContext: {
+        facts: catalog.facts,
+        recommendations: catalog.activeRecommendations,
+        metrics: buildBsosHealthMetrics(catalog.facts),
+        goals: extras.goals,
+        actionItems: extras.actionItems,
+        activeTradeLabels: [workspaceTradeLabel(activeTradeCodes)],
       },
     });
-    return { error: error instanceof Error ? error.message : "Business Health facts could not be loaded." };
+  } catch (error) {
+    return finalizePreProviderFailure({
+      db,
+      interactionId,
+      orchestrationId,
+      reason:
+        error instanceof Error ? error.message : "Business Health facts could not be loaded.",
+    });
   }
-
-  const plan = planSpecialists({
-    question,
-    activeRecommendationKeys: catalog.activeRecommendations.map((item) => item.key),
-  });
-
-  const specialistResults: SpecialistResult[] = [];
-  for (const specialistId of plan.selectedIds) {
-    try {
-      if (input.test?.failSpecialistId === specialistId) {
-        throw new Error("injected specialist failure");
-      }
-      const context = loadSpecialistContext(specialistId, catalog, question);
-      specialistResults.push(projectSpecialist(context));
-    } catch (error) {
-      specialistResults.push({
-        specialistId,
-        status: "FAILED",
-        findings: [],
-        factKeys: [],
-        recommendationKeys: [],
-        limitation:
-          "Part of the recorded attention view could not be loaded. No substitute facts were invented.",
-        failure: {
-          specialistId,
-          message: error instanceof Error ? error.message : "Specialist failed",
-        },
-      });
-    }
-  }
-
-  const conflicts = resolveConflicts({
-    results: specialistResults,
-    recommendations: catalog.activeRecommendations,
-    facts: catalog.facts,
-  });
-  const extras = await loadCoachExtras(db, access.businessId);
-  const { listActiveTradeCodes } = await import("@/lib/business-trades");
-  const { workspaceTradeLabel } = await import("@/lib/trade-config");
-  const activeTradeCodes = await listActiveTradeCodes(db as PrismaClient, access.businessId);
-  const synthesis = synthesizeCoachAnswer({
-    question,
-    catalog,
-    specialistResults,
-    conflicts,
-    coachContext: {
-      facts: catalog.facts,
-      recommendations: catalog.activeRecommendations,
-      metrics: buildBsosHealthMetrics(catalog.facts),
-      goals: extras.goals,
-      actionItems: extras.actionItems,
-      activeTradeLabels: [workspaceTradeLabel(activeTradeCodes)],
-    },
-  });
 
   const failed = specialistResults.filter((row) => row.status === "FAILED");
   const ok = specialistResults.filter((row) => row.status === "OK");
   const orchestrationStatus: OrchestrationStatus =
     failed.length > 0 && ok.length > 0 ? "PARTIAL" : failed.length > 0 ? "FAILED" : "COMPLETED";
-
-  await db.aiInteraction.update({
-    where: { id: interactionId },
-    data: { claimedAt: null },
-  });
 
   synthesisCallCount += 1;
   const aiResult = await runAiTask(
@@ -402,6 +501,7 @@ export async function runChiefOfStaffCoach(
       idempotencyKey,
       fallback: synthesis.output,
       allowedFactKeys: synthesis.citedFacts.map((fact) => fact.key),
+      alreadyClaimed: true,
     },
   );
 

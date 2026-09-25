@@ -213,12 +213,50 @@ export async function runAiTask(
     inputSummary: string;
     conversationId?: string | null;
     idempotencyKey: string;
-        fallback: StructuredAiOutput;
-        allowRetry?: boolean;
-        allowedFactKeys?: string[] | null;
+    fallback: StructuredAiOutput;
+    allowRetry?: boolean;
+    allowedFactKeys?: string[] | null;
+    /**
+     * Caller already holds the PENDING claim lease (Chief of Staff
+     * recovery worker). Skip a second claim so fan-out and synthesis
+     * stay one worker.
+     */
+    alreadyClaimed?: boolean;
+  },
+): Promise<AiRunResult> {
+  let pending = await db.aiInteraction.findUnique({
+    where: {
+      businessId_idempotencyKey: {
+        businessId: actor.businessId,
+        idempotencyKey: input.idempotencyKey,
       },
-    ): Promise<AiRunResult> {
-      let pending = await db.aiInteraction.findUnique({
+    },
+  });
+  if (pending) {
+    if (pending.status !== "PENDING") {
+      return resultFromExistingInteraction(pending, input.fallback, input.allowedFactKeys);
+    }
+    if (!input.alreadyClaimed) {
+      const resolved = await resolvePendingInteraction(db, pending, input.fallback, input.allowedFactKeys);
+      if (resolved.kind === "result") return resolved.result;
+    }
+  } else {
+    try {
+      pending = await db.aiInteraction.create({
+        data: {
+          businessId: actor.businessId,
+          membershipId: actor.membershipId ?? null,
+          userId: actor.userId ?? null,
+          conversationId: input.conversationId ?? null,
+          taskType: input.taskType,
+          status: "PENDING",
+          inputSummary: summarizeAiInput(input.taskType, input.inputSummary),
+          idempotencyKey: input.idempotencyKey,
+          claimedAt: new Date(),
+        },
+      });
+    } catch {
+      const raced = await db.aiInteraction.findUnique({
         where: {
           businessId_idempotencyKey: {
             businessId: actor.businessId,
@@ -226,48 +264,18 @@ export async function runAiTask(
           },
         },
       });
-      if (pending) {
-        if (pending.status !== "PENDING") {
-          return resultFromExistingInteraction(pending, input.fallback, input.allowedFactKeys);
+      if (raced) {
+        if (raced.status !== "PENDING") {
+          return resultFromExistingInteraction(raced, input.fallback, input.allowedFactKeys);
         }
-        const resolved = await resolvePendingInteraction(db, pending, input.fallback, input.allowedFactKeys);
+        const resolved = await resolvePendingInteraction(db, raced, input.fallback, input.allowedFactKeys);
         if (resolved.kind === "result") return resolved.result;
+        pending = raced;
       } else {
-      try {
-        pending = await db.aiInteraction.create({
-          data: {
-            businessId: actor.businessId,
-            membershipId: actor.membershipId ?? null,
-            userId: actor.userId ?? null,
-            conversationId: input.conversationId ?? null,
-            taskType: input.taskType,
-            status: "PENDING",
-            inputSummary: summarizeAiInput(input.taskType, input.inputSummary),
-            idempotencyKey: input.idempotencyKey,
-            claimedAt: new Date(),
-          },
-        });
-      } catch {
-        const raced = await db.aiInteraction.findUnique({
-          where: {
-            businessId_idempotencyKey: {
-              businessId: actor.businessId,
-              idempotencyKey: input.idempotencyKey,
-            },
-          },
-        });
-        if (raced) {
-          if (raced.status !== "PENDING") {
-            return resultFromExistingInteraction(raced, input.fallback, input.allowedFactKeys);
-          }
-          const resolved = await resolvePendingInteraction(db, raced, input.fallback, input.allowedFactKeys);
-          if (resolved.kind === "result") return resolved.result;
-          pending = raced;
-        } else {
-          throw new Error("That AI request could not be recorded.");
-        }
+        throw new Error("That AI request could not be recorded.");
       }
-      }
+    }
+  }
 
   if (!pending) {
     throw new Error("That AI request could not be recorded.");

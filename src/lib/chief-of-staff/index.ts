@@ -35,7 +35,9 @@ export {
   mergeCatalogRecommendations,
 } from "@/lib/chief-of-staff/recommendations";
 export {
+  getOrchestrationWorkerCount,
   getSynthesisCallCount,
+  resetOrchestrationWorkerCount,
   resetSynthesisCallCount,
   runChiefOfStaffCoach,
 } from "@/lib/chief-of-staff/run";

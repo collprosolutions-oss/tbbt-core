@@ -14,6 +14,7 @@ import { createServer } from "node:http";
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const {
+  AI_PENDING_STALE_MS,
   COACH_FACT_KEYS,
   filterAuthorizedCitedFactKeys,
   parseStructuredAiOutput,
@@ -29,10 +30,12 @@ const {
   enabledSpecialistIds,
   findCatalogRecommendation,
   getDeepLoaderInvocations,
+  getOrchestrationWorkerCount,
   getSynthesisCallCount,
   loadCanonicalRecommendationCatalog,
   planSpecialists,
   resetDeepLoaderInvocations,
+  resetOrchestrationWorkerCount,
   resetSynthesisCallCount,
   resolveConflicts,
   runChiefOfStaffCoach,
@@ -338,6 +341,99 @@ try {
   });
   check("Concurrent same attempt creates at most one assistant message", raceAssistants <= 1);
 
+  console.log("\nSTALE TAKEOVER — one atomic recovery worker");
+  const staleAttempt = randomUUID();
+  const staleKey = `coach:${businessA.id}:${conversation.id}:${staleAttempt}`;
+  const staleInteraction = await prisma.aiInteraction.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memA.id,
+      userId: ownerA.id,
+      conversationId: conversation.id,
+      taskType: "COS_ASK",
+      status: "PENDING",
+      inputSummary: "stale-pending-takeover",
+      idempotencyKey: staleKey,
+      claimedAt: new Date(Date.now() - AI_PENDING_STALE_MS - 5_000),
+    },
+  });
+  const staleOrch = await prisma.aiOrchestrationRun.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memA.id,
+      interactionId: staleInteraction.id,
+      conversationId: conversation.id,
+      status: "PENDING",
+      questionSummary: "stale-pending-takeover",
+      specialistIds: [],
+      factKeys: [],
+      recommendationKeys: [],
+      idempotencyKey: staleKey,
+    },
+  });
+  resetSynthesisCallCount();
+  resetOrchestrationWorkerCount();
+  const staleQuestion = "What unpaid invoices should I follow up on?";
+  const [staleOne, staleTwo] = await Promise.all([
+    runChiefOfStaffCoach(prisma, accessA, {
+      question: staleQuestion,
+      attemptId: staleAttempt,
+      conversationId: conversation.id,
+    }),
+    runChiefOfStaffCoach(prisma, accessA, {
+      question: staleQuestion,
+      attemptId: staleAttempt,
+      conversationId: conversation.id,
+    }),
+  ]);
+  const staleIds = [staleOne.interactionId, staleTwo.interactionId].filter(Boolean);
+  const staleOrchIds = [staleOne.orchestrationId, staleTwo.orchestrationId].filter(Boolean);
+  check("Stale concurrent retries keep one AiInteraction", new Set(staleIds).size === 1 && staleIds[0] === staleInteraction.id);
+  check("Stale concurrent retries keep one AiOrchestrationRun", new Set(staleOrchIds).size === 1 && staleOrchIds[0] === staleOrch.id);
+  check("Only one stale worker performs orchestration", getOrchestrationWorkerCount() === 1);
+  check("At most one AI/provider synthesis execution", getSynthesisCallCount() === 1);
+  const staleInteractionRows = await prisma.aiInteraction.count({
+    where: { businessId: businessA.id, idempotencyKey: staleKey },
+  });
+  const staleOrchRows = await prisma.aiOrchestrationRun.count({
+    where: { businessId: businessA.id, idempotencyKey: staleKey },
+  });
+  check("Stale race stores one interaction and one orchestration row", staleInteractionRows === 1 && staleOrchRows === 1);
+  const staleAssistants = await prisma.aiConversationMessage.count({
+    where: {
+      businessId: businessA.id,
+      conversationId: conversation.id,
+      interactionId: staleInteraction.id,
+      role: "ASSISTANT",
+    },
+  });
+  const staleUsers = await prisma.aiConversationMessage.count({
+    where: {
+      businessId: businessA.id,
+      conversationId: conversation.id,
+      role: "USER",
+      content: staleQuestion,
+    },
+  });
+  check("Stale race creates at most one ASSISTANT message", staleAssistants === 1);
+  check("Stale race does not duplicate USER messages", staleUsers === 1);
+  const staleFinalInteraction = await prisma.aiInteraction.findUnique({ where: { id: staleInteraction.id } });
+  const staleFinalOrch = await prisma.aiOrchestrationRun.findUnique({ where: { id: staleOrch.id } });
+  check(
+    "Stale race final interaction is terminal and consistent",
+    staleFinalInteraction?.status !== "PENDING" && Boolean(staleFinalInteraction?.status),
+  );
+  check(
+    "Stale race final orchestration is terminal and consistent",
+    staleFinalOrch?.status !== "PENDING" && Boolean(staleFinalOrch?.status),
+  );
+  const stalePendingReturned = [staleOne, staleTwo].filter((row) => row.inProgress).length;
+  const staleCompletedReturned = [staleOne, staleTwo].filter((row) => !row.inProgress && Boolean(row.text)).length;
+  check(
+    "Stale losers return in-progress or the completed result",
+    stalePendingReturned + staleCompletedReturned === 2 && staleCompletedReturned >= 1,
+  );
+
   console.log("\nPROVIDER — disconnected vs orchestration status");
   const disconnectedAttempt = randomUUID();
   const disconnected = await runChiefOfStaffCoach(prisma, accessA, {
@@ -354,7 +450,10 @@ try {
   check("Provider disconnected still answers from recorded facts", Boolean(disconnected.text) && /invoice|unpaid/i.test(disconnected.text ?? ""));
   check("AiInteraction records SKIPPED_NOT_CONNECTED", disconnected.aiStatus === "SKIPPED_NOT_CONNECTED" && disconnectedInteraction?.status === "SKIPPED_NOT_CONNECTED");
   check("Orchestration can be COMPLETED while the provider is skipped", disconnected.orchestrationStatus === "COMPLETED" && disconnectedOrch?.status === "COMPLETED");
-  check("Disconnected answer does not invent a bank balance", !/bank balance/i.test(disconnected.text ?? "") || /not a bank/i.test(disconnected.text ?? "") || true);
+  check(
+    "Disconnected answer does not invent a bank balance",
+    !/bank balance/i.test(disconnected.text ?? "") || /not a bank balance/i.test(disconnected.text ?? ""),
+  );
 
   console.log("\nFAILURE — specialist PARTIAL and provider validation");
   resetDeepLoaderInvocations();
@@ -404,6 +503,91 @@ try {
   else process.env.TBBT_AI_API_KEY = previousKey;
   if (previousBase == null) delete process.env.TBBT_AI_BASE_URL;
   else process.env.TBBT_AI_BASE_URL = previousBase;
+
+  console.log("\nPRE-PROVIDER FAILURE — both audit rows finalize");
+  async function assertTerminalPreProviderFailure(label, hook) {
+    const attemptId = randomUUID();
+    resetSynthesisCallCount();
+    resetOrchestrationWorkerCount();
+    const failed = await runChiefOfStaffCoach(prisma, accessA, {
+      question: "What unpaid invoices should I follow up on?",
+      attemptId,
+      conversationId: conversation.id,
+      test: hook,
+    });
+    const failedInteraction = await prisma.aiInteraction.findUnique({ where: { id: failed.interactionId } });
+    const failedOrch = await prisma.aiOrchestrationRun.findUnique({ where: { id: failed.orchestrationId } });
+    check(`${label} marks orchestration FAILED`, failed.orchestrationStatus === "FAILED" && failedOrch?.status === "FAILED");
+    check(`${label} marks AI interaction FAILED, not PENDING`, failed.aiStatus === "FAILED" && failedInteraction?.status === "FAILED");
+    check(`${label} clears the worker claim`, failedInteraction?.claimedAt == null);
+    check(`${label} stores a safe deterministic fallback`, /could not be loaded|No substitute facts/i.test(failedInteraction?.outputSummary ?? "") && !/111|9999|bank/i.test(failedInteraction?.outputSummary ?? ""));
+    check(`${label} does not invent provider success`, failedInteraction?.provider == null && failedInteraction?.model == null);
+    const failedAssistants = await prisma.aiConversationMessage.count({
+      where: {
+        businessId: businessA.id,
+        conversationId: conversation.id,
+        interactionId: failed.interactionId,
+        role: "ASSISTANT",
+      },
+    });
+    check(`${label} does not fabricate an assistant message`, failedAssistants === 0);
+    check(`${label} first attempt does not call synthesis`, getSynthesisCallCount() === 0);
+
+    let providerHits = 0;
+    const replayServer = await new Promise((resolve) => {
+      const server = createServer((_req, res) => {
+        providerHits += 1;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({ text: "invented replay", stance: "FACT", citedFactKeys: [] }) } }],
+        }));
+      });
+      server.listen(0, "127.0.0.1", () => resolve(server));
+    });
+    const replayPort = replayServer.address().port;
+    const replayKey = process.env.TBBT_AI_API_KEY;
+    const replayBase = process.env.TBBT_AI_BASE_URL;
+    process.env.TBBT_AI_API_KEY = "sk-test-cos-replay";
+    process.env.TBBT_AI_BASE_URL = `http://127.0.0.1:${replayPort}`;
+    resetSynthesisCallCount();
+    resetOrchestrationWorkerCount();
+    const replayed = await runChiefOfStaffCoach(prisma, accessA, {
+      question: "What unpaid invoices should I follow up on?",
+      attemptId,
+      conversationId: conversation.id,
+    });
+    await new Promise((resolve) => replayServer.close(resolve));
+    if (replayKey == null) delete process.env.TBBT_AI_API_KEY;
+    else process.env.TBBT_AI_API_KEY = replayKey;
+    if (replayBase == null) delete process.env.TBBT_AI_BASE_URL;
+    else process.env.TBBT_AI_BASE_URL = replayBase;
+
+    const replayInteractionCount = await prisma.aiInteraction.count({
+      where: { businessId: businessA.id, idempotencyKey: `coach:${businessA.id}:${conversation.id}:${attemptId}` },
+    });
+    const replayOrchCount = await prisma.aiOrchestrationRun.count({
+      where: { businessId: businessA.id, idempotencyKey: `coach:${businessA.id}:${conversation.id}:${attemptId}` },
+    });
+    const replayAssistants = await prisma.aiConversationMessage.count({
+      where: {
+        businessId: businessA.id,
+        conversationId: conversation.id,
+        interactionId: failed.interactionId,
+        role: "ASSISTANT",
+      },
+    });
+    const replayInteraction = await prisma.aiInteraction.findUnique({ where: { id: failed.interactionId } });
+    const replayOrch = await prisma.aiOrchestrationRun.findUnique({ where: { id: failed.orchestrationId } });
+    check(`${label} same-attempt retry does not call the provider`, providerHits === 0);
+    check(`${label} same-attempt retry does not run another worker`, getOrchestrationWorkerCount() === 0 && getSynthesisCallCount() === 0);
+    check(`${label} same-attempt retry does not create another interaction/orchestration`, replayInteractionCount === 1 && replayOrchCount === 1);
+    check(`${label} same-attempt retry stays terminal FAILED`, replayed.inProgress !== true && replayInteraction?.status === "FAILED" && replayOrch?.status === "FAILED");
+    check(`${label} same-attempt retry does not fabricate an assistant message`, replayAssistants === 0 && !/invented replay/i.test(replayed.text ?? ""));
+    check(`${label} same-attempt retry replays the deterministic failure`, /could not be loaded|No substitute facts/i.test(replayed.text ?? ""));
+  }
+
+  await assertTerminalPreProviderFailure("Catalog failure", { failCatalog: true });
+  await assertTerminalPreProviderFailure("Deterministic-prep failure", { failBeforeProvider: true });
 
   console.log("\nSYNTHESIS — one voice and duplicate keys");
   const catalog = await loadCanonicalRecommendationCatalog(prisma, businessA.id);
