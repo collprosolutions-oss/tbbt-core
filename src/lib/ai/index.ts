@@ -9,7 +9,7 @@ export {
   AI_PENDING_STALE_MS,
 } from "@/lib/ai/service";
 export { applyTemplateWriting, runWritingAssist, resolveWritingOriginal } from "@/lib/ai/writing";
-export { answerCoachFromFacts, coachSystemPrompt } from "@/lib/ai/coach";
+export { answerCoachFromFacts, coachSystemPrompt, COACH_FACT_KEYS, listCoachCitedFacts } from "@/lib/ai/coach";
 export {
   retrieveTenantKnowledge,
   answerKnowledgeFromEntries,

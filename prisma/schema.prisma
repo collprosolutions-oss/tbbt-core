@@ -343,6 +343,7 @@ model Business {
   aiConversations          AiConversation[]
   aiConversationMessages   AiConversationMessage[]
   aiInteractions           AiInteraction[]
+  aiOrchestrationRuns      AiOrchestrationRun[]
   aiUsagePeriods           AiUsagePeriod[]
   knowledgeConcepts        KnowledgeConcept[]
   knowledgeAssertions      KnowledgeAssertion[]
@@ -501,6 +502,7 @@ model Membership {
   createdCustomerFollowUps        CustomerFollowUp[]      @relation("CustomerFollowUpCreator")
   aiConversations                 AiConversation[]        @relation("AiConversationMembership")
   aiInteractions                  AiInteraction[]         @relation("AiInteractionMembership")
+  aiOrchestrationRuns             AiOrchestrationRun[]    @relation("AiOrchestrationMembership")
   recommendationStates            BsosRecommendationState[] @relation("BsosRecommendationStateActor")
   websitePublishes                WebsitePublish[]          @relation("WebsitePublishAuthor")
   websiteGalleryItems             WebsiteGalleryItem[]      @relation("WebsiteGalleryCreator")
@@ -2730,6 +2732,7 @@ model AiConversation {
   membership   Membership              @relation("AiConversationMembership", fields: [membershipId], references: [id], onDelete: Cascade)
   messages     AiConversationMessage[]
   interactions AiInteraction[]
+  orchestrationRuns AiOrchestrationRun[] @relation("AiOrchestrationConversation")
 
   @@index([businessId])
   @@index([businessId, area])
@@ -2764,7 +2767,7 @@ model AiInteraction {
   membershipId     String?
   userId           String?
   conversationId   String?
-  /// COACH_ASK | WRITING | MARKETING_DRAFT | REVIEW_RESPONSE | KNOWLEDGE_ASK | WEEKLY_PLAN | CAMPAIGN_IDEAS
+  /// COACH_ASK | COS_ASK | WRITING | MARKETING_DRAFT | REVIEW_RESPONSE | KNOWLEDGE_ASK | WEEKLY_PLAN | CAMPAIGN_IDEAS
   taskType         String
   provider         String?
   model            String?
@@ -2787,11 +2790,43 @@ model AiInteraction {
   conversation AiConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   user         User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
   messages     AiConversationMessage[] @relation("AiMessageInteraction")
+  orchestrationRun AiOrchestrationRun? @relation("AiOrchestrationInteraction")
 
   @@unique([businessId, idempotencyKey])
   @@index([businessId])
   @@index([businessId, taskType])
   @@index([businessId, createdAt])
+}
+
+/// Chief-of-Staff audit metadata. No secrets and no chain-of-thought.
+/// Orchestration status is NOT AI-provider status.
+model AiOrchestrationRun {
+  id                 String   @id @default(cuid())
+  businessId         String
+  membershipId       String
+  interactionId      String   @unique
+  conversationId     String?
+  /// PENDING | COMPLETED | PARTIAL | FAILED
+  status             String
+  questionSummary    String
+  specialistIds      Json
+  factKeys           Json
+  recommendationKeys Json
+  conflictMetadata   Json?
+  skippedFailure     Json?
+  idempotencyKey     String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  business     Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership   Membership      @relation("AiOrchestrationMembership", fields: [membershipId], references: [id], onDelete: Cascade)
+  interaction  AiInteraction   @relation("AiOrchestrationInteraction", fields: [interactionId], references: [id], onDelete: Cascade)
+  conversation AiConversation? @relation("AiOrchestrationConversation", fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([membershipId])
+  @@index([conversationId])
 }
 
 /// Monthly usage totals. No invented dollar cost.

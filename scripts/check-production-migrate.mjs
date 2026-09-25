@@ -991,6 +991,19 @@ check(
     localNames.indexOf("20260926080000_business_protection_vault") <
       localNames.indexOf("20260926081000_business_protection_lifecycle_hardening"),
 );
+const orchestrationMigration = readFileSync(
+  new URL("../prisma/migrations/20260926090000_ai_orchestration_run/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Chief-of-Staff orchestration migration is additive and after Business Protection",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(orchestrationMigration) &&
+    orchestrationMigration.includes('CREATE TABLE IF NOT EXISTS "AiOrchestrationRun"') &&
+    orchestrationMigration.includes("IF NOT EXISTS") &&
+    localNames.includes("20260926090000_ai_orchestration_run") &&
+    localNames.indexOf("20260926081000_business_protection_lifecycle_hardening") <
+      localNames.indexOf("20260926090000_ai_orchestration_run"),
+);
 
 const materialsMigration = readFileSync(
   new URL("../prisma/migrations/20260926011500_add_materials_suppliers_operations/migration.sql", import.meta.url),

@@ -11,7 +11,57 @@ export type CoachContext = {
   activeTradeLabels?: string[];
 };
 
+export const COACH_FACT_KEYS = [
+  "active-trades",
+  "paid-revenue",
+  "recorded-expenses",
+  "unpaid-invoices",
+  "sent-estimates",
+  "low-margin",
+  "missing-wage",
+  "repeat-customers",
+  "review-opportunities",
+  "marketing-ready",
+  "recurring-expenses",
+  "growth-recovery",
+  "growth-reactivation",
+  "launch-incomplete",
+  "knowledge-unreviewed",
+  "experience-candidates",
+  "aged-receivables",
+  "available-capacity",
+  "unscheduled-jobs",
+  "workforce-attention",
+  "unpaid-count",
+  "open-days",
+  "ready-jobs",
+  "no-review",
+  "repeat",
+  "outside",
+  "recurring",
+  "unscheduled",
+  "recovery",
+  "reactivation",
+  "labor-overruns",
+  "low-margin-services",
+  "concentration",
+  "expense-growth",
+  "overloaded-days",
+  "unassigned",
+  "poor-match",
+  "double-booked",
+  "capacity-gap",
+  "shortage",
+] as const;
+
+export type CoachFactKey = (typeof COACH_FACT_KEYS)[number];
+
+export function listCoachCitedFacts(context: CoachContext): CitedFact[] {
+  return factList(context);
+}
+
 function factList(context: CoachContext): CitedFact[] {
+  const workforceAttention = context.recommendations.filter((item) => item.key.startsWith("workforce-")).length;
   return [
     ...(context.activeTradeLabels?.length
       ? [
@@ -83,6 +133,62 @@ function factList(context: CoachContext): CitedFact[] {
       value: `${context.facts.recurringExpenses.count} / ${context.facts.recurringExpenses.amount.toFixed(2)}`,
       href: "/expenses",
     },
+    {
+      key: "growth-recovery",
+      label: "Open growth recovery opportunities",
+      value: String(context.facts.growthRecoveryOpen?.count ?? 0),
+      href: "/growth?area=recovery",
+    },
+    {
+      key: "growth-reactivation",
+      label: "Eligible reactivation customers",
+      value: String(context.facts.growthReactivationEligible?.count ?? 0),
+      href: "/growth?area=reactivation",
+    },
+    {
+      key: "launch-incomplete",
+      label: "Incomplete launch steps",
+      value: String(context.facts.launchIncompleteSteps?.count ?? 0),
+      href: "/launch",
+    },
+    {
+      key: "knowledge-unreviewed",
+      label: "Knowledge entries needing approval",
+      value: String(context.facts.knowledgeNeedsApproval?.count ?? 0),
+      href: "/knowledge?review=needs-review",
+    },
+    {
+      key: "experience-candidates",
+      label: "Experience learning candidates",
+      value: String(context.facts.experienceCandidates?.count ?? 0),
+      href: "/knowledge",
+    },
+    {
+      key: "aged-receivables",
+      label: "Aged unpaid receivables",
+      value: context.facts.agedReceivables
+        ? `${context.facts.agedReceivables.count} / ${context.facts.agedReceivables.amount.toFixed(2)}`
+        : "0 / 0.00",
+      href: "/reports?area=receivables",
+    },
+    {
+      key: "available-capacity",
+      label: "Open working days (next 7)",
+      value: String(context.facts.availableCapacityDays?.count ?? 0),
+      href: "/jobs",
+    },
+    {
+      key: "unscheduled-jobs",
+      label: "Unscheduled jobs",
+      value: String(context.facts.unscheduledJobs?.count ?? 0),
+      href: "/jobs",
+    },
+    {
+      key: "workforce-attention",
+      label: "Workforce attention items",
+      value: String(workforceAttention),
+      href: "/jobs",
+    },
   ];
 }
 
@@ -98,6 +204,7 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
   const facts = factList(context);
   const top = context.recommendations[0];
   const profit = recordedProfit(context.facts);
+  const workforceAttention = context.recommendations.filter((item) => item.key.startsWith("workforce-")).length;
 
   let text: string;
   let keys: string[];
@@ -132,12 +239,16 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
       (context.facts.missingWageEntries.count > 0
         ? `${context.facts.missingWageEntries.count} approved time row(s) are missing a wage snapshot, so labor cost is incomplete.`
         : "Wage snapshots are present on approved time, so labor cost is not missing for that reason.");
-  } else if (/invoice|follow up|receivable/.test(q)) {
-    keys = ["unpaid-invoices"];
+  } else if (/invoice|follow up|receivable|aged/.test(q)) {
+    keys = ["unpaid-invoices", "aged-receivables"];
     stance = "FACT";
     text =
       context.facts.unpaidInvoices.count > 0
-        ? `${context.facts.unpaidInvoices.count} SENT invoice(s) remain unpaid totaling ${context.facts.unpaidInvoices.amount.toFixed(2)}. Follow up from Invoices. TBBT does not invent who already paid outside the system.`
+        ? `${context.facts.unpaidInvoices.count} SENT invoice(s) remain unpaid totaling ${context.facts.unpaidInvoices.amount.toFixed(2)}. ` +
+          (context.facts.agedReceivables?.count
+            ? `${context.facts.agedReceivables.count} of those are aged receivables totaling ${context.facts.agedReceivables.amount.toFixed(2)}. `
+            : "") +
+          "Follow up from Invoices. TBBT does not invent who already paid outside the system."
         : "There are no SENT unpaid invoices on file.";
   } else if (/repeat|referral|customer/.test(q)) {
     keys = ["repeat-customers", "review-opportunities"];
@@ -154,6 +265,28 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
     keys = ["marketing-ready"];
     stance = "RECOMMENDATION";
     text = `${context.facts.completedJobsReadyForMarketing.count} completed job(s) have marketing-approved photos and no approved content yet. Drafts stay DRAFT until you approve them. Social accounts remain Not Connected unless a real provider is configured.`;
+  } else if (/recover|reactivat|growth/.test(q)) {
+    keys = ["growth-recovery", "growth-reactivation"];
+    stance = "FACT";
+    text =
+      `${context.facts.growthRecoveryOpen?.count ?? 0} open recovery opportunit${(context.facts.growthRecoveryOpen?.count ?? 0) === 1 ? "y is" : "ies are"} on file. ` +
+      `${context.facts.growthReactivationEligible?.count ?? 0} customer(s) are eligible for reactivation. ` +
+      "These counts come from existing Business Health facts. The Coach does not create Growth actions.";
+  } else if (/launch|knowledge|experience/.test(q)) {
+    keys = ["launch-incomplete", "knowledge-unreviewed", "experience-candidates"];
+    stance = "FACT";
+    text =
+      `${context.facts.launchIncompleteSteps?.count ?? 0} launch step(s) are still incomplete. ` +
+      `${context.facts.knowledgeNeedsApproval?.count ?? 0} knowledge entr${(context.facts.knowledgeNeedsApproval?.count ?? 0) === 1 ? "y needs" : "ies need"} approval. ` +
+      `${context.facts.experienceCandidates?.count ?? 0} experience candidate(s) are on file.`;
+  } else if (/capacity|staff|schedule|workforce|assign/.test(q)) {
+    keys = ["available-capacity", "unscheduled-jobs", "workforce-attention"];
+    stance = "MIXED";
+    text =
+      `${context.facts.availableCapacityDays?.count ?? 0} upcoming working day(s) have no scheduled job. ` +
+      `${context.facts.unscheduledJobs?.count ?? 0} job(s) are unscheduled. ` +
+      `${workforceAttention} workforce attention item(s) are already on the Business Health list. ` +
+      "The Coach cannot assign workers or change the schedule.";
   } else if (/expense|recurring/.test(q)) {
     keys = ["recurring-expenses", "recorded-expenses"];
     stance = "FACT";
@@ -192,7 +325,8 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
 
 export function coachSystemPrompt() {
   return [
-    "You are the BSOS Coach for one TBBT tenant.",
+    "You are the Business Coach for one TBBT tenant.",
+    "Speak with one owner-facing voice. Never name internal specialists or agents.",
     "Use only the supplied recorded facts. Never invent bank balances, cash, ad spend, or missing financial data.",
     "Distinguish FACT from RECOMMENDATION.",
     "If a conclusion cannot be made, say which recorded data is missing.",

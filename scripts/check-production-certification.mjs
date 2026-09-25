@@ -99,6 +99,7 @@ const lifecycle = [
   ["Marketing", "src/app/(app)/marketing/page.tsx"],
   ["Growth", "src/app/(app)/growth/page.tsx"],
   ["Business Health / BSOS", "src/app/(app)/business-health/page.tsx"],
+  ["AI Chief of Staff", "src/lib/chief-of-staff/run.ts"],
   ["Local SEO service+city page", "src/app/hire/[slug]/in/[city]/[service]/page.tsx"],
   ["Website publish engine", "src/lib/website-engine/publish.ts"],
   ["Website snapshot builder", "src/lib/website-engine/builder.ts"],
