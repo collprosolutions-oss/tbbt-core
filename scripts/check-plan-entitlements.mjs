@@ -595,15 +595,23 @@ try {
     const pricingRes = await fetch(`${APP_URL}/pricing`, { redirect: "manual" });
     if (pricingRes.status >= 200 && pricingRes.status < 400) {
       const body = await pricingRes.text();
+      // Next.js RSC payloads use ids like "$29"; only treat price-like text as commercial.
+      const visible = body
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ");
       check(
         "Pricing page HTML shows Founder $49 and Coming Soon Business/Enterprise",
-        body.includes("$49") &&
-          body.includes("Coming Soon") &&
-          body.includes("Founder") &&
-          body.includes("Business") &&
-          body.includes("Enterprise") &&
-          !body.includes("$29") &&
-          !body.includes("$79"),
+        (visible.includes("$49") || body.includes("$49/month")) &&
+          visible.includes("Coming Soon") &&
+          visible.includes("Founder") &&
+          visible.includes("Business") &&
+          visible.includes("Enterprise") &&
+          visible.includes("Starter") &&
+          !visible.includes("$29") &&
+          !visible.includes("$79") &&
+          !body.includes("$29/month") &&
+          !body.includes("$79/month"),
       );
     } else {
       check("Pricing page HTTP skipped (app not reachable)", true);
