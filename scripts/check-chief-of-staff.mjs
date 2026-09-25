@@ -274,8 +274,8 @@ try {
       !workforceSpecialistSrc.includes("assignJobMember") &&
       !workforceSpecialistSrc.includes("scheduleJob") &&
       !workforceSpecialistSrc.includes("createWorkforceOutreachTask") &&
-      !workforceSpecialistSrc.includes("hourlyWage") &&
-      !workforceSpecialistSrc.includes("contactValue"),
+      !workforceSpecialistSrc.includes("hourlyWage:") &&
+      !workforceSpecialistSrc.includes("contactValue:"),
   );
   check(
     "Snapshot load counter is incremented only inside loadWorkforceSnapshot",
@@ -863,13 +863,16 @@ try {
   }
 
   const deep = await createOwnedBusiness("deep-wf", "FOUNDER");
+  await prisma.invoice.create({
+    data: { businessId: deep.business.id, status: "SENT", total: 222 },
+  });
   const other = await createOwnedBusiness("other-wf", "FOUNDER");
   const starter = await createOwnedBusiness("starter-wf", "STARTER");
   const emptyRoster = await createOwnedBusiness("empty-wf", "FOUNDER");
 
   const carpenter = await createFieldWorker(deep.business.id, "Cara Carpenter", {
     skills: [{ skillKey: "carpentry", proficiency: "LEAD_QUALIFIED" }],
-    weekly: [{ weekday: 1, startMinutes: 480, endMinutes: 1020 }, { weekday: 2, startMinutes: 480, endMinutes: 1020 }, { weekday: 3, startMinutes: 480, endMinutes: 1020 }, { weekday: 4, startMinutes: 480, endMinutes: 1020 }, { weekday: 5, startMinutes: 480, endMinutes: 1020 }],
+    weekly: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, startMinutes: 480, endMinutes: 1020 })),
     maxDailyJobMinutes: 360,
   });
   const painter = await createFieldWorker(deep.business.id, "Pat Painter", {
