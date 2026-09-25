@@ -449,7 +449,7 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
     });
   }
 
-  if (facts.launchIncompleteSteps.count > 0) {
+  if ((facts.launchIncompleteSteps?.count ?? 0) > 0) {
     items.push({
       key: "finish-business-launch",
       title: "Finish Business Launch setup",
@@ -468,7 +468,7 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
     });
   }
 
-  if (facts.experienceCandidates.count > 0) {
+  if ((facts.experienceCandidates?.count ?? 0) > 0) {
     items.push({
       key: "review-experience-learnings",
       title: "Review candidate learnings from real work",
@@ -487,7 +487,7 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
     });
   }
 
-  if (facts.knowledgeNeedsApproval.count > 0) {
+  if ((facts.knowledgeNeedsApproval?.count ?? 0) > 0) {
     items.push({
       key: "approve-business-knowledge",
       title: "Approve or reject knowledge that still needs an owner decision",

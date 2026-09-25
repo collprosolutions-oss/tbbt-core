@@ -58,7 +58,7 @@ const {
   reconcileCollectedRevenue,
 } = await import("@/lib/financial-intelligence");
 const { FinancialIntelligenceError, reviewRecurringExpensePattern, saveLaborBurdenSetting } = await import("@/lib/financial-intelligence-ops");
-const { buildBsosRecommendations } = await import("@/lib/bsos");
+const { buildBsosRecommendations, EMPTY_BSOS_FACTS } = await import("@/lib/bsos");
 const { hasProductCapability, requireProductCapability } = await import("@/lib/product-entitlements");
 const { PRODUCT_CAPABILITIES } = await import("@/lib/product-catalog");
 const { joinLineDescription } = await import("@/lib/estimate-line-scope");
@@ -369,20 +369,8 @@ try {
   check("Recurring detection uses recorded expense history", patterns.some((row) => row.occurrenceCount === 2 && row.ownerStatus === "SUGGESTED"));
 
   const recs = buildBsosRecommendations({
+    ...EMPTY_BSOS_FACTS,
     unpaidInvoices: { count: 1, amount: 80 },
-    sentEstimates: { count: 0 },
-    draftEstimates: { count: 0 },
-    unscheduledJobs: { count: 0 },
-    completedJobsWithoutReview: { count: 0 },
-    completedJobsReadyForMarketing: { count: 0 },
-    lowMarginJobs: { count: 0 },
-    missingWageEntries: { count: 0 },
-    availableCapacityDays: { count: 0 },
-    repeatCustomers: { count: 0 },
-    outsideAreaRequests: { count: 0 },
-    recurringExpenses: { count: 0, amount: 0 },
-    paidRevenue: { amount: 0 },
-    recordedExpenses: { amount: 0 },
     agedReceivables: { count: 1, amount: 80 },
     lowMarginServices: { count: 1 },
     estimateLaborOverruns: { count: 2 },
@@ -800,22 +788,7 @@ try {
   const afterCancel = await loadFinancialSource(prisma, businessA.id);
   check("Cancelled/downgrade data preservation keeps invoices and payments", afterCancel.invoices.length >= 2 && afterCancel.payments.length >= 1);
 
-  const starterFacts = {
-    unpaidInvoices: { count: 0, amount: 0 },
-    sentEstimates: { count: 0 },
-    draftEstimates: { count: 0 },
-    unscheduledJobs: { count: 0 },
-    completedJobsWithoutReview: { count: 0 },
-    completedJobsReadyForMarketing: { count: 0 },
-    lowMarginJobs: { count: 0 },
-    missingWageEntries: { count: 0 },
-    availableCapacityDays: { count: 0 },
-    repeatCustomers: { count: 0 },
-    outsideAreaRequests: { count: 0 },
-    recurringExpenses: { count: 0, amount: 0 },
-    paidRevenue: { amount: 0 },
-    recordedExpenses: { amount: 0 },
-  };
+  const starterFacts = { ...EMPTY_BSOS_FACTS };
   const starterBsos = buildBsosRecommendations(starterFacts);
   check("BSOS without insights facts does not invent reporting-only signals", starterBsos.every((row) => !["receivable-needs-attention", "service-margin-below-target", "estimate-labor-overrun", "high-value-customer-concentration"].includes(row.key)));
 
