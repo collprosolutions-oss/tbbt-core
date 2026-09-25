@@ -28,8 +28,8 @@ Do not invent passing browser results. The isolated harness is
 9. Time cards → job photos → additional work / change order.
 10. Complete → invoice → payment (`/invoices`, `/p/[token]/invoice`).
 11. Expense → job profitability / reports / financial intelligence (`/expenses`, `/reports`). Linked material purchases must not double-count. Known cash flow uses recorded payments and recorded expenses. PROCESSED payroll gross labor is an operational cost record, not verified bank cash out. Banking and accounting stay Not Connected.
-12. Review request → marketing opportunity → BSOS recommendation (`/reviews`, `/marketing`, `/business-health`).
-13. Communications department → customer timeline, compose, missed-call log (`/communications`). Voice is not connected.
+12. Review request → marketing opportunity → Growth loop → BSOS recommendation (`/reviews`, `/marketing`, `/growth`, `/business-health`).
+13. Communications department → customer timeline, compose, missed-call log (`/communications`). Voice is not connected. Growth never sends customer messages; Communications owns delivery.
 
 ## Cross-cutting proofs
 
@@ -45,7 +45,7 @@ Do not invent passing browser results. The isolated harness is
 
 ## Explicit blockers
 
-- External Facebook / Instagram / Google publishing is **not connected**. Marketing never writes `PUBLISHED`.
+- External Facebook / Instagram / Google publishing is **not connected**. Marketing never writes `PUBLISHED`. Growth does not claim social publishing or Google rankings.
 - Banking / accounting are **Not Connected**. TBBT will not invent a cash balance or tax conclusion.
 - Supplier commerce adapters are **DISCONNECTED**. No Home Depot / Lowe’s scrape or live order API. Production provider integrations need API/licensing review.
 - Marketing AI is not connected. Template drafts are available. An env string does not mean a provider is called.

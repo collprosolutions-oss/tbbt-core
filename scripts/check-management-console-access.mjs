@@ -332,6 +332,7 @@ try {
     { path: "/expenses", label: "Expenses", marker: "Track and manage business expenses" },
     { path: "/reports", label: "Reports", marker: CANARY_CUSTOMER },
     { path: "/marketing", label: "Marketing", marker: "Marketing Studio" },
+    { path: "/growth", label: "Growth", marker: "Where leads come from" },
     { path: "/reviews", label: "Reviews", marker: "Internal review workspace" },
     { path: "/communications", label: "Communications", marker: "Customer and business communications" },
     { path: "/pipeline", label: "Deals / Pipeline", marker: "Sales workspace" },

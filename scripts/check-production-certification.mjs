@@ -97,6 +97,7 @@ const lifecycle = [
   ["Reviews", "src/app/(app)/reviews/page.tsx"],
   ["Communications", "src/app/(app)/communications/page.tsx"],
   ["Marketing", "src/app/(app)/marketing/page.tsx"],
+  ["Growth", "src/app/(app)/growth/page.tsx"],
   ["Business Health / BSOS", "src/app/(app)/business-health/page.tsx"],
   ["Local SEO service+city page", "src/app/hire/[slug]/in/[city]/[service]/page.tsx"],
   ["Website publish engine", "src/lib/website-engine/publish.ts"],
@@ -172,6 +173,23 @@ try {
       websiteEngineMigration.includes("CREATE TABLE IF NOT EXISTS") &&
       websiteEngineMigration.includes("ADD COLUMN IF NOT EXISTS"),
   );
+  const growthDepartmentMigration = read("prisma/migrations/20260926040000_growth_department/migration.sql");
+  check(
+    "Growth department migration is additive",
+    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(growthDepartmentMigration) &&
+      growthDepartmentMigration.includes("CREATE TABLE IF NOT EXISTS") &&
+      growthDepartmentMigration.includes("ADD COLUMN IF NOT EXISTS") &&
+      growthDepartmentMigration.includes("LeadAttributionCorrection") &&
+      growthDepartmentMigration.includes("GrowthActionRequest"),
+  );
+  const growthHardeningMigration = read("prisma/migrations/20260926050000_growth_department_hardening/migration.sql");
+  check(
+    "Growth department hardening migration is additive",
+    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(growthHardeningMigration) &&
+      growthHardeningMigration.includes("ADD COLUMN IF NOT EXISTS") &&
+      growthHardeningMigration.includes("idempotencyKey") &&
+      growthHardeningMigration.includes("approvedByMembershipId"),
+  );
 
   check("OWNER and ADMIN can open the management console", canAccessManagementConsole("OWNER") && canAccessManagementConsole("ADMIN"));
   check("MEMBER cannot open the management console", canAccessManagementConsole("MEMBER") === false);
@@ -220,6 +238,14 @@ try {
       createdByMembershipId: memA.id,
     },
   });
+  await prisma.growthActionRequest.create({
+    data: {
+      businessId: businessA.id,
+      kind: "RECOVERY",
+      queue: "NEVER_ESTIMATED",
+      createdByMembershipId: memA.id,
+    },
+  });
   check(
     "B cannot list A's goals",
     (await prisma.businessGoal.count({ where: { businessId: businessB.id } })) === 0,
@@ -236,10 +262,14 @@ try {
     "B cannot list A's referral requests",
     (await prisma.referralRequest.count({ where: { businessId: businessB.id } })) === 0,
   );
+  check(
+    "B cannot list A's growth actions",
+    (await prisma.growthActionRequest.count({ where: { businessId: businessB.id } })) === 0,
+  );
 
   console.log("\nHONEST BLOCKERS — this harness does not invent a green full-system E2E");
   blocker("No browser walkthrough of signup → invoice → review was executed here.");
-  blocker("Facebook / Instagram / Google publishing adapters are not connected; Marketing never fakes PUBLISHED.");
+  blocker("Facebook / Instagram / Google publishing adapters are not connected; Marketing and Growth never fakes PUBLISHED.");
   blocker("Banking and accounting providers are Not Connected; cash-flow projected balance stays null.");
   blocker("External marketing AI is not connected; template drafts only.");
   blocker("Resend / Twilio / R2 / live Stripe Connect+SaaS require production secrets that this local harness does not set.");

@@ -98,7 +98,8 @@
     "test:website-engine": "node --experimental-strip-types scripts/check-website-engine.mjs",
     "test:workforce-capacity": "node --experimental-strip-types scripts/check-workforce-capacity.mjs",
     "test:materials-suppliers": "node --experimental-strip-types scripts/check-materials-suppliers.mjs",
-    "test:communications-department": "node --experimental-strip-types scripts/check-communications-department.mjs"
+    "test:communications-department": "node --experimental-strip-types scripts/check-communications-department.mjs",
+    "test:growth-department": "node --experimental-strip-types scripts/check-growth-department.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",

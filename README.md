@@ -2,7 +2,7 @@
 
 TBBT is a multi-tenant Handyman operating system. **Handyman is the live trade.** Other trades are not implemented.
 
-This is not a foundation-only placeholder. The application includes public websites, intake, CRM, estimates, materials and suppliers, jobs, field workflow, invoices, payments, expenses, payroll, reports, financial intelligence, reviews, marketing, and owner intelligence (Business Health / BSOS Coach). Banking and accounting adapters stay disconnected.
+This is not a foundation-only placeholder. The application includes public websites, intake, CRM, estimates, materials and suppliers, jobs, field workflow, invoices, payments, expenses, payroll, reports, financial intelligence, reviews, marketing, Growth (lead-to-revenue), Communications, and owner intelligence (Business Health / BSOS Coach). Banking and accounting adapters stay disconnected.
 
 ## Stack
 
@@ -84,6 +84,7 @@ npm run test:referrals
 npm run test:financial-intelligence
 npm run test:marketing
 npm run test:reviews
+npm run test:growth-department
 npm run test:reports
 npm run test:production-certification
 npm run test:plan-entitlements

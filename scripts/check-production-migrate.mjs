@@ -733,6 +733,38 @@ check(
     phoneInteractionRelationsMigration.includes("IF NOT EXISTS"),
 );
 
+const growthDepartmentMigration = readFileSync(
+  new URL("../prisma/migrations/20260926040000_growth_department/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Growth department migration is additive and idempotent",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(growthDepartmentMigration) &&
+    growthDepartmentMigration.includes('ADD COLUMN IF NOT EXISTS "originalLeadSource"') &&
+    growthDepartmentMigration.includes('ADD COLUMN IF NOT EXISTS "recordedCost"') &&
+    growthDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "LeadAttributionCorrection"') &&
+    growthDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "GrowthActionRequest"') &&
+    growthDepartmentMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run growth-department DDL",
+  !workspaceLoader.includes("GrowthActionRequest") &&
+    !workspaceLoader.includes("LeadAttributionCorrection") &&
+    !workspaceLoader.includes("growth_department"),
+);
+
+const growthHardeningMigration = readFileSync(
+  new URL("../prisma/migrations/20260926050000_growth_department_hardening/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Growth department hardening migration is additive and idempotent",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(growthHardeningMigration) &&
+    growthHardeningMigration.includes('ADD COLUMN IF NOT EXISTS "idempotencyKey"') &&
+    growthHardeningMigration.includes('ADD COLUMN IF NOT EXISTS "approvedByMembershipId"') &&
+    growthHardeningMigration.includes("IF NOT EXISTS"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,
@@ -869,6 +901,15 @@ check(
       localNames.indexOf("20260926020000_communications_department") &&
     localNames.indexOf("20260926020000_communications_department") <
       localNames.indexOf("20260926030000_phone_interaction_relations"),
+);
+check(
+  "Growth department migrations stay after Communications",
+  localNames.includes("20260926040000_growth_department") &&
+    localNames.includes("20260926050000_growth_department_hardening") &&
+    localNames.indexOf("20260926030000_phone_interaction_relations") <
+      localNames.indexOf("20260926040000_growth_department") &&
+    localNames.indexOf("20260926040000_growth_department") <
+      localNames.indexOf("20260926050000_growth_department_hardening"),
 );
 
 const materialsMigration = readFileSync(

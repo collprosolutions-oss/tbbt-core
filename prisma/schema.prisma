@@ -351,6 +351,8 @@ model Business {
   websiteGalleryItems      WebsiteGalleryItem[]
   websiteHostBindings      WebsiteHostBinding[]
   websiteLocalPageDrafts   WebsiteLocalPageDraft[]
+  growthActionRequests     GrowthActionRequest[]
+  leadAttributionCorrections LeadAttributionCorrection[]
   membershipSkills         MembershipSkill[]
   membershipWeeklyAvailability MembershipWeeklyAvailability[]
   membershipAvailabilityExceptions MembershipAvailabilityException[]
@@ -483,6 +485,9 @@ model Membership {
   recommendationStates            BsosRecommendationState[] @relation("BsosRecommendationStateActor")
   websitePublishes                WebsitePublish[]          @relation("WebsitePublishAuthor")
   websiteGalleryItems             WebsiteGalleryItem[]      @relation("WebsiteGalleryCreator")
+  createdGrowthActions            GrowthActionRequest[]     @relation("GrowthActionCreator")
+  approvedGrowthActions           GrowthActionRequest[]     @relation("GrowthActionApprover")
+  leadAttributionCorrections      LeadAttributionCorrection[] @relation("LeadAttributionActor")
   workforceSkills                 MembershipSkill[]
   weeklyAvailability              MembershipWeeklyAvailability[]
   availabilityExceptions          MembershipAvailabilityException[]
@@ -530,6 +535,7 @@ model Customer {
   customerFollowUps CustomerFollowUp[]
   referralsGiven   Referral[] @relation("ReferralSourceCustomer")
   referralsReceived Referral[] @relation("ReferralReferredCustomer")
+  growthActionRequests GrowthActionRequest[]
 
   @@index([businessId])
   @@index([firstCampaignId])
@@ -813,6 +819,12 @@ model ServiceRequest {
   /// GOOGLE | FACEBOOK | OTHER. Never inferred from an address.
   leadSource String?
   campaignId String?
+  /// First-recorded source at create. Owner correction never overwrites this.
+  originalLeadSource String?
+  originalCampaignId String?
+  /// Public hire/local path recorded at submit, if any. Not a ranking signal.
+  landingPagePath String?
+  localPageSlug String?
   /// IN_AREA | OUTSIDE_PREFERRED | UNKNOWN. Historical rows stay UNKNOWN.
   serviceAreaQualification String @default("UNKNOWN")
   matchedServiceAreaId String?
@@ -852,6 +864,7 @@ model ServiceRequest {
   /// LOST, a follow-up date, or pipeline notes. New requests appear as
   /// New Lead without a row here.
   pipelineOpportunity PipelineOpportunity?
+  growthActionRequests GrowthActionRequest[]
   phoneInteractions   PhoneInteraction[]
 
   @@index([businessId])
@@ -974,6 +987,7 @@ model Estimate {
   /// ServiceRequest). Request-linked estimates reuse the request's
   /// PipelineOpportunity -- never a second opportunity row.
   pipelineOpportunity PipelineOpportunity? @relation("PipelineStandaloneEstimate")
+  growthActionRequests GrowthActionRequest[]
   materialPurchaseLists MaterialPurchaseList[]
 
   @@index([businessId])
@@ -1177,6 +1191,7 @@ model Job {
   phoneInteractions       PhoneInteraction[]
   recurrenceSource        Job?  @relation("JobRecurrenceSource", fields: [recurrenceSourceJobId], references: [id], onDelete: SetNull)
   recurrenceOccurrences   Job[] @relation("JobRecurrenceSource")
+  growthActionRequests    GrowthActionRequest[]
   workforceOutreachTasks  WorkforceOutreachTask[]
   materialPurchaseLists   MaterialPurchaseList[]
   materialPurchaseOrders  MaterialPurchaseOrder[]
@@ -2513,6 +2528,8 @@ model MarketingCampaign {
   /// DRAFT | ACTIVE | PAUSED | COMPLETED
   status                String   @default("DRAFT")
   notes                 String   @default("")
+  /// Owner-recorded campaign cost. Null means cost/ROI is unavailable.
+  recordedCost          Decimal?
   createdByMembershipId String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -2525,6 +2542,7 @@ model MarketingCampaign {
   firstTouchCustomers Customer[]       @relation("CustomerFirstCampaign")
   contents          MarketingContent[] @relation("MarketingContentCampaign")
   referrals         Referral[]
+  growthActionRequests GrowthActionRequest[]
 
   @@index([businessId])
   @@index([businessId, status])
@@ -3400,3 +3418,77 @@ model BusinessFinanceConnection {
   @@unique([businessId, kind])
   @@index([businessId])
 }
+
+/// Owner correction of working attribution. originalLeadSource on the
+/// request and Customer.firstLeadSource stay immutable.
+model LeadAttributionCorrection {
+  id                      String   @id @default(cuid())
+  businessId              String
+  /// SERVICE_REQUEST | CUSTOMER | ESTIMATE | JOB
+  recordType              String
+  recordId                String
+  previousLeadSource      String?
+  previousCampaignId      String?
+  previousLandingPagePath String?
+  newLeadSource           String?
+  newCampaignId           String?
+  newLandingPagePath      String?
+  reason                  String   @default("")
+  actorMembershipId       String?
+  createdAt               DateTime @default(now())
+
+  business Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  actor    Membership? @relation("LeadAttributionActor", fields: [actorMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([businessId, recordType, recordId])
+  @@index([actorMembershipId])
+}
+
+/// Durable growth follow-up / recovery / reactivation request.
+/// Growth never sends customer messages; Communications owns delivery.
+model GrowthActionRequest {
+  id                    String    @id @default(cuid())
+  businessId            String
+  /// RECOVERY | REACTIVATION | REVIEW_ASK | REFERRAL_ASK
+  kind                  String
+  /// NEVER_ESTIMATED | ESTIMATE_NO_RESPONSE | ESTIMATE_LOST | MISSED_FOLLOW_UP | DORMANT | REACTIVATION
+  queue                 String
+  /// OPEN | APPROVED | CANCELLED | COMPLETED
+  status                String    @default("OPEN")
+  customerId            String?
+  serviceRequestId      String?
+  estimateId            String?
+  jobId                 String?
+  campaignId            String?
+  consentEligible       Boolean   @default(false)
+  evidenceJson          String    @default("{}")
+  notes                 String    @default("")
+  createdByMembershipId String?
+  approvedByMembershipId String?
+  approvedAt            DateTime?
+  /// Attempt-scoped key for one logical click. Future intentional actions use a new attemptId.
+  idempotencyKey        String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business      Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer      Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  serviceRequest ServiceRequest?  @relation(fields: [serviceRequestId], references: [id], onDelete: SetNull)
+  estimate      Estimate?         @relation(fields: [estimateId], references: [id], onDelete: SetNull)
+  job           Job?              @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  campaign      MarketingCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  createdBy     Membership?       @relation("GrowthActionCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  approvedBy    Membership?       @relation("GrowthActionApprover", fields: [approvedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([businessId, status])
+  @@index([businessId, queue])
+  @@index([customerId])
+  @@index([serviceRequestId])
+  @@index([estimateId])
+  @@index([jobId])
+  @@index([campaignId])
+}
+

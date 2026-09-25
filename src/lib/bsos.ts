@@ -87,6 +87,8 @@ export type BsosFacts = {
   paidRevenue: { amount: number };
   collectedRevenue?: { amount: number };
   recordedExpenses: { amount: number };
+  growthRecoveryOpen?: { count: number };
+  growthReactivationEligible?: { count: number };
   agedReceivables?: { count: number; amount: number };
   lowMarginServices?: { count: number };
   estimateLaborOverruns?: { count: number };
@@ -287,6 +289,44 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
     });
   }
 
+  if ((facts.growthRecoveryOpen?.count ?? 0) > 0) {
+    items.push({
+      key: "growth-lost-lead-recovery",
+      title: "Work the lost-lead recovery queue",
+      kind: "recommendation",
+      priority: 18,
+      why: "Recorded requests or estimates meet Growth recovery rules and have no auto-message.",
+      facts: [
+        {
+          key: "recovery",
+          label: "Recovery items",
+          value: String(facts.growthRecoveryOpen!.count),
+          href: "/growth?area=recovery",
+        },
+      ],
+      href: "/growth?area=recovery",
+    });
+  }
+
+  if ((facts.growthReactivationEligible?.count ?? 0) > 0) {
+    items.push({
+      key: "growth-reactivate-customers",
+      title: "Reactivate prior customers",
+      kind: "recommendation",
+      priority: 32,
+      why: "Completed customers meet elapsed-time, no-active-work, and consent rules.",
+      facts: [
+        {
+          key: "reactivation",
+          label: "Consent-eligible reactivation candidates",
+          value: String(facts.growthReactivationEligible!.count),
+          href: "/growth?area=reactivation",
+        },
+      ],
+      href: "/growth?area=reactivation",
+    });
+  }
+
   if ((facts.agedReceivables?.count ?? 0) > 0) {
     items.push({
       key: "receivable-needs-attention",
@@ -439,6 +479,14 @@ export function buildBsosHealthMetrics(facts: BsosFacts): BsosHealthMetric[] {
       kind: "fact",
       href: "/pipeline",
       note: "Recorded SENT estimates awaiting a decision.",
+    },
+    {
+      key: "growth-recovery",
+      label: "Growth recovery items",
+      value: String(facts.growthRecoveryOpen?.count ?? 0),
+      kind: "fact",
+      href: "/growth?area=recovery",
+      note: "Deterministic lost-lead recovery queue. No auto-message.",
     },
   ];
 }

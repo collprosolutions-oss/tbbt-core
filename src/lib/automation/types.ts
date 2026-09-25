@@ -17,6 +17,8 @@ export const BUSINESS_EVENT_TYPES = [
   "REVIEW_REQUEST_READY",
   "REFERRAL_REQUEST_READY",
   "CUSTOMER_FOLLOW_UP_DUE",
+  "GROWTH_RECOVERY_QUEUED",
+  "GROWTH_REACTIVATION_APPROVED",
   "ESTIMATE_NO_ACTION",
   "OWNER_FOLLOW_UP_CREATED",
 ] as const;
@@ -58,6 +60,8 @@ export const DEFAULT_AUTOMATION_RULES: Array<{
   { eventType: "REFERRAL_REQUEST_READY", purpose: "REFERRAL_REQUEST", kind: "COMMUNICATION", channel: "NONE", delayMinutes: 0, templateKey: "referral-request", enabled: false },
   { eventType: "CUSTOMER_FOLLOW_UP_DUE", purpose: "JOB_FOLLOW_UP", kind: "COMMUNICATION", channel: "NONE", delayMinutes: 0, templateKey: "job-follow-up", enabled: false },
   { eventType: "CUSTOMER_FOLLOW_UP_DUE", purpose: "REPEAT_FOLLOW_UP", kind: "COMMUNICATION", channel: "NONE", delayMinutes: 0, templateKey: "repeat-follow-up", enabled: false },
+  { eventType: "GROWTH_RECOVERY_QUEUED", purpose: "GROWTH_RECOVERY", kind: "ACTION_SUGGESTION", channel: "NONE", delayMinutes: 0, templateKey: "growth-recovery", enabled: true },
+  { eventType: "GROWTH_REACTIVATION_APPROVED", purpose: "GROWTH_REACTIVATION", kind: "ACTION_SUGGESTION", channel: "NONE", delayMinutes: 0, templateKey: "growth-reactivation", enabled: true },
   { eventType: "ESTIMATE_SENT", purpose: "ESTIMATE_FOLLOW_UP", kind: "COMMUNICATION", channel: "EMAIL", delayMinutes: 3 * 24 * 60, templateKey: "estimate-follow-up", enabled: false },
   { eventType: "ESTIMATE_NO_ACTION", purpose: "ESTIMATE_FOLLOW_UP", kind: "COMMUNICATION", channel: "EMAIL", delayMinutes: 0, templateKey: "estimate-no-action", enabled: false },
   { eventType: "OWNER_FOLLOW_UP_CREATED", purpose: "OWNER_FOLLOW_UP", kind: "ACTION_SUGGESTION", channel: "NONE", delayMinutes: 0, templateKey: "owner-follow-up", enabled: true },

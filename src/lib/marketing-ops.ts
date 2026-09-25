@@ -240,17 +240,27 @@ export async function setMarketingContentPlannedFor(
 export async function createMarketingCampaign(
   db: Db,
   access: BusinessAccess,
-  input: { name: string; sourceKey?: string; notes?: string },
+  input: { name: string; sourceKey?: string; notes?: string; recordedCost?: string | null },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
   const name = input.name.trim();
   if (!name) throw new MarketingError("A campaign needs a name.");
+  const rawCost = input.recordedCost?.trim() ?? "";
+  let recordedCost: Prisma.Decimal | null = null;
+  if (rawCost) {
+    const amount = Number(rawCost);
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new MarketingError("Enter a recorded campaign cost of zero or more, or leave it blank.");
+    }
+    recordedCost = new Prisma.Decimal(amount.toFixed(2));
+  }
   return db.marketingCampaign.create({
     data: {
       businessId: access.businessId,
       name,
       sourceKey: input.sourceKey?.trim() || "OTHER",
       notes: input.notes?.trim() ?? "",
+      recordedCost,
       createdByMembershipId: access.workspace.membership.id,
     },
   });
