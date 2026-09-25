@@ -229,6 +229,7 @@ export async function createWorkforceOutreachTask(
       missingMinutes: parseBoundedInt(readString(formData, "missingMinutes"), 0, 0, 24 * 60),
       explanation: readString(formData, "explanation") || "Staffing outreach task.",
       approve: readString(formData, "approve") === "1",
+      attemptId: readString(formData, "attemptId"),
     });
     revalidateWorkforce();
     return {

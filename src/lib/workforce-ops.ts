@@ -3,7 +3,7 @@
  * Never assign workers or rewrite schedules from recommendation helpers.
  * Schema ownership is the Prisma migration — these paths never run DDL.
  */
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, ForbiddenError, requireBusinessCapability } from "@/lib/authorization";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
@@ -16,6 +16,7 @@ import {
   requireIsoDate,
   requireWeekday,
   requireWorkforceProgression,
+  requireOutreachAttemptId,
   requireWorkforceSkillKey,
   serializeSkillList,
   WorkforceValidationError,
@@ -318,6 +319,7 @@ export async function createWorkforceOutreachTaskOp(
     missingMinutes?: number | null;
     explanation: string;
     approve: boolean;
+    attemptId: string;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
@@ -371,28 +373,41 @@ export async function createWorkforceOutreachTaskOp(
   }
 
   const ownerApproved = input.approve && access.workspace.role === "OWNER";
-  const idempotencyKey = input.jobId
-    ? `job:${input.jobId}:${input.kind}`
-    : `adhoc:${access.workspace.membership.id}:${input.kind}:${new Date().toISOString().slice(0, 10)}`;
+  let idempotencyKey: string;
+  try {
+    idempotencyKey = requireOutreachAttemptId(input.attemptId);
+  } catch (error) {
+    asWorkforceError(error);
+  }
 
   const existing = await db.workforceOutreachTask.findFirst({
     where: { businessId: access.businessId, idempotencyKey },
   });
   if (existing) return existing;
 
-  return db.workforceOutreachTask.create({
-    data: {
-      businessId: access.businessId,
-      status: ownerApproved ? "APPROVED" : "DRAFT",
-      kind: input.kind,
-      jobId: input.jobId ?? null,
-      benchWorkerId: input.benchWorkerId ?? null,
-      missingSkills: serializeSkillList(missingSkills),
-      missingMinutes,
-      explanation: explanation.slice(0, 500),
-      createdByMembershipId: access.workspace.membership.id,
-      approvedByMembershipId: ownerApproved ? access.workspace.membership.id : null,
-      idempotencyKey,
-    },
-  });
+  try {
+    return await db.workforceOutreachTask.create({
+      data: {
+        businessId: access.businessId,
+        status: ownerApproved ? "APPROVED" : "DRAFT",
+        kind: input.kind,
+        jobId: input.jobId ?? null,
+        benchWorkerId: input.benchWorkerId ?? null,
+        missingSkills: serializeSkillList(missingSkills),
+        missingMinutes,
+        explanation: explanation.slice(0, 500),
+        createdByMembershipId: access.workspace.membership.id,
+        approvedByMembershipId: ownerApproved ? access.workspace.membership.id : null,
+        idempotencyKey,
+      },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const winner = await db.workforceOutreachTask.findFirst({
+        where: { businessId: access.businessId, idempotencyKey },
+      });
+      if (winner) return winner;
+    }
+    throw error;
+  }
 }

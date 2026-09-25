@@ -284,6 +284,21 @@ export function requireIsoDate(value: string | null | undefined): string {
   return value;
 }
 
+const OUTREACH_ATTEMPT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isOutreachAttemptId(value: string | null | undefined): value is string {
+  return Boolean(value && OUTREACH_ATTEMPT_ID_PATTERN.test(value));
+}
+
+/** One logical outreach click. Retry/double-click reuse this key. */
+export function requireOutreachAttemptId(value: string | null | undefined): string {
+  if (!isOutreachAttemptId(value)) {
+    throw new WorkforceValidationError("Retry that outreach action from the form.");
+  }
+  return value;
+}
+
 export function schedulingPolicyFromRow(
   row:
     | {

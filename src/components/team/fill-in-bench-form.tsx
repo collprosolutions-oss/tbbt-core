@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import {
   createWorkforceOutreachTask,
   markFillInBenchUsed,
@@ -120,6 +120,10 @@ export function FillInBenchUseButton({ benchWorkerId }: { benchWorkerId: string 
   );
 }
 
+function newOutreachAttemptId() {
+  return crypto.randomUUID();
+}
+
 export function StaffingOutreachForm({
   jobId,
   missingSkills,
@@ -130,9 +134,18 @@ export function StaffingOutreachForm({
   explanation: string;
 }) {
   const [state, action, pending] = useActionState(createWorkforceOutreachTask, initialState);
+  const [attemptId, setAttemptId] = useState(newOutreachAttemptId);
+
+  useEffect(() => {
+    if (state.message) {
+      setAttemptId(newOutreachAttemptId());
+    }
+  }, [state.message]);
+
   return (
     <form action={action} className="space-y-2">
       {jobId ? <input type="hidden" name="jobId" value={jobId} /> : null}
+      <input type="hidden" name="attemptId" value={attemptId} />
       <input type="hidden" name="kind" value="STAFFING_SHORTAGE" />
       <input type="hidden" name="missingSkills" value={missingSkills} />
       <input type="hidden" name="explanation" value={explanation} />

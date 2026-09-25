@@ -189,6 +189,15 @@ check(
     !benchForm.includes("Create owner-approved outreach task") &&
     benchForm.includes("Owner approval is recorded only when an owner"),
 );
+check(
+  "Outreach form submits a browser attemptId and rotates it after success",
+  benchForm.includes('name="attemptId"') &&
+    benchForm.includes("newOutreachAttemptId") &&
+    benchForm.includes("state.message") &&
+    !workforceOps.includes("`job:${input.jobId}:${input.kind}`") &&
+    !workforceOps.includes("adhoc:${access.workspace.membership.id}") &&
+    workforceOps.includes('error.code === "P2002"'),
+);
 
 const monday = new Date(2026, 8, 7, 8, 0, 0);
 const settings = { ...DEFAULT_AVAILABILITY_SETTINGS };
@@ -1111,6 +1120,7 @@ try {
     active: true,
     notes: "",
   });
+  const failedAttemptId = randomUUID();
   try {
     await createWorkforceOutreachTaskOp(prisma, ownerA, {
       kind: "HELPER_NEEDED",
@@ -1118,6 +1128,7 @@ try {
       missingSkills: [],
       explanation: "Should fail",
       approve: true,
+      attemptId: failedAttemptId,
     });
     check("Approved outreach cannot attach an unapproved bench worker", false);
   } catch (error) {
@@ -1126,22 +1137,71 @@ try {
       error instanceof WorkforceError,
     );
   }
-
-  const outreach = await createWorkforceOutreachTaskOp(prisma, ownerA, {
-    kind: "STAFFING_SHORTAGE",
-    jobId: jobOne.id,
-    missingSkills: ["electrical"],
-    missingMinutes: 120,
-    explanation: "Need an electrician for Tuesday.",
-    approve: true,
+  try {
+    await createWorkforceOutreachTaskOp(prisma, ownerA, {
+      kind: "HELPER_NEEDED",
+      benchWorkerId: unapprovedBench.id,
+      missingSkills: [],
+      explanation: "Should fail",
+      approve: true,
+      attemptId: failedAttemptId,
+    });
+    check("Failed outreach retry reuses the same attemptId and still fails", false);
+  } catch (error) {
+    check(
+      "Failed outreach retry reuses the same attemptId and still fails",
+      error instanceof WorkforceError,
+    );
+  }
+  const failedRows = await prisma.workforceOutreachTask.count({
+    where: { businessId: businessA.id, idempotencyKey: failedAttemptId },
   });
-  const outreachRetry = await createWorkforceOutreachTaskOp(prisma, ownerA, {
-    kind: "STAFFING_SHORTAGE",
-    jobId: jobOne.id,
-    missingSkills: ["electrical"],
-    missingMinutes: 120,
-    explanation: "Need an electrician for Tuesday.",
+  check("Failed logical outreach action created no row", failedRows === 0);
+
+  const recovered = await createWorkforceOutreachTaskOp(prisma, ownerA, {
+    kind: "HELPER_NEEDED",
+    benchWorkerId: bench.id,
+    missingSkills: [],
+    explanation: "Retry after the bench was valid.",
     approve: true,
+    attemptId: failedAttemptId,
+  });
+  const recoveredRetry = await createWorkforceOutreachTaskOp(prisma, ownerA, {
+    kind: "HELPER_NEEDED",
+    benchWorkerId: bench.id,
+    missingSkills: [],
+    explanation: "Retry after the bench was valid.",
+    approve: true,
+    attemptId: failedAttemptId,
+  });
+  check(
+    "Failed/retry same logical action reuses the attemptId",
+    recovered.id === recoveredRetry.id && recovered.idempotencyKey === failedAttemptId,
+  );
+
+  const jobAttemptId = randomUUID();
+  const [outreach, outreachRace] = await Promise.all([
+    createWorkforceOutreachTaskOp(prisma, ownerA, {
+      kind: "STAFFING_SHORTAGE",
+      jobId: jobOne.id,
+      missingSkills: ["electrical"],
+      missingMinutes: 120,
+      explanation: "Need an electrician for Tuesday.",
+      approve: true,
+      attemptId: jobAttemptId,
+    }),
+    createWorkforceOutreachTaskOp(prisma, ownerA, {
+      kind: "STAFFING_SHORTAGE",
+      jobId: jobOne.id,
+      missingSkills: ["electrical"],
+      missingMinutes: 120,
+      explanation: "Need an electrician for Tuesday.",
+      approve: true,
+      attemptId: jobAttemptId,
+    }),
+  ]);
+  const sameAttemptRows = await prisma.workforceOutreachTask.findMany({
+    where: { businessId: businessA.id, idempotencyKey: jobAttemptId },
   });
   check(
     "Owner-approved outreach task does not contact anyone",
@@ -1149,7 +1209,44 @@ try {
       outreach.approvedByMembershipId === ownerMem.id &&
       outreach.businessId === businessA.id,
   );
-  check("Outreach double-click is idempotent", outreachRetry.id === outreach.id);
+  check(
+    "Promise.all same attemptId creates exactly one task and both calls return it",
+    outreach.id === outreachRace.id &&
+      sameAttemptRows.length === 1 &&
+      sameAttemptRows[0]?.id === outreach.id,
+  );
+
+  const laterJobAttempt = await createWorkforceOutreachTaskOp(prisma, ownerA, {
+    kind: "STAFFING_SHORTAGE",
+    jobId: jobOne.id,
+    missingSkills: ["electrical"],
+    explanation: "Later intentional outreach.",
+    approve: true,
+    attemptId: randomUUID(),
+  });
+  check(
+    "Same job + same kind + different attemptIds create two legitimate tasks",
+    laterJobAttempt.id !== outreach.id && laterJobAttempt.kind === outreach.kind && laterJobAttempt.jobId === jobOne.id,
+  );
+
+  const adhocA = await createWorkforceOutreachTaskOp(prisma, ownerA, {
+    kind: "HELPER_NEEDED",
+    missingSkills: [],
+    explanation: "Ad-hoc one",
+    approve: true,
+    attemptId: randomUUID(),
+  });
+  const adhocB = await createWorkforceOutreachTaskOp(prisma, ownerA, {
+    kind: "HELPER_NEEDED",
+    missingSkills: [],
+    explanation: "Ad-hoc two",
+    approve: true,
+    attemptId: randomUUID(),
+  });
+  check(
+    "Ad-hoc same-day outreach with different attemptIds creates two tasks",
+    adhocA.id !== adhocB.id && adhocA.kind === adhocB.kind && adhocA.jobId == null && adhocB.jobId == null,
+  );
 
   const adminOutreach = await createWorkforceOutreachTaskOp(prisma, adminA, {
     kind: "HELPER_NEEDED",
@@ -1157,6 +1254,7 @@ try {
     missingSkills: [],
     explanation: "Admin click",
     approve: true,
+    attemptId: randomUUID(),
   });
   check(
     "ADMIN approve=true records a draft, not owner-approved",
@@ -1178,6 +1276,7 @@ try {
       missingSkills: [],
       explanation: "Steal",
       approve: true,
+      attemptId: randomUUID(),
     });
     check("Business B cannot attach outreach to A's job", false);
   } catch (error) {
