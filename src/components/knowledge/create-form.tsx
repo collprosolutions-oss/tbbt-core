@@ -10,8 +10,10 @@ import {
   KNOWLEDGE_CATEGORIES,
   KNOWLEDGE_CATEGORY_LABELS,
   KNOWLEDGE_SOURCE_KIND_LABELS,
-  KNOWLEDGE_SOURCE_KINDS,
+  MANUAL_KNOWLEDGE_SOURCE_KINDS,
   KNOWLEDGE_SOURCE_TYPE_LABELS,
+  KNOWLEDGE_KINDS,
+  KNOWLEDGE_KIND_LABELS,
   KNOWLEDGE_SOURCE_TYPES,
   KNOWLEDGE_TRUST_LABELS,
   KNOWLEDGE_TRUST_STATES,
@@ -92,6 +94,21 @@ export function KnowledgeCreateForm({
         </select>
       </div>
       <div className="space-y-1.5">
+        <Label htmlFor="knowledge-kind">Knowledge kind</Label>
+        <select
+          id="knowledge-kind"
+          name="knowledgeKind"
+          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+        >
+          <option value="">Optional</option>
+          {KNOWLEDGE_KINDS.map((kind) => (
+            <option key={kind} value={kind}>
+              {KNOWLEDGE_KIND_LABELS[kind]}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="space-y-1.5">
         <Label htmlFor="knowledge-title">Title</Label>
         <Input id="knowledge-title" name="title" required placeholder="What should the business remember?" />
       </div>
@@ -151,7 +168,7 @@ export function KnowledgeCreateForm({
               className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
             >
               <option value="">Select a record type</option>
-              {KNOWLEDGE_SOURCE_KINDS.map((kind) => (
+              {MANUAL_KNOWLEDGE_SOURCE_KINDS.map((kind) => (
                 <option key={kind} value={kind}>
                   {KNOWLEDGE_SOURCE_KIND_LABELS[kind]}
                 </option>

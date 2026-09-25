@@ -765,6 +765,38 @@ check(
     growthHardeningMigration.includes("IF NOT EXISTS"),
 );
 
+const knowledgeLaunchMigration = readFileSync(
+  new URL("../prisma/migrations/20260926060000_knowledge_business_launch/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Knowledge business launch migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(knowledgeLaunchMigration) &&
+    knowledgeLaunchMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessLaunchProgress"') &&
+    knowledgeLaunchMigration.includes('CREATE TABLE IF NOT EXISTS "ExperienceLearningCandidate"') &&
+    knowledgeLaunchMigration.includes('ADD COLUMN IF NOT EXISTS "approvalState"') &&
+    knowledgeLaunchMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run knowledge-launch DDL",
+  !workspaceLoader.includes("BusinessLaunchProgress") &&
+    !workspaceLoader.includes("knowledge_business_launch") &&
+    !workspaceLoader.includes("ExperienceLearningCandidate"),
+);
+
+const knowledgeLaunchHardeningMigration = readFileSync(
+  new URL("../prisma/migrations/20260926070000_knowledge_launch_hardening/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Knowledge launch hardening migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(knowledgeLaunchHardeningMigration) &&
+    knowledgeLaunchHardeningMigration.includes(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "CompanySetupProposal_businessId_interactionId_key"',
+    ) &&
+    knowledgeLaunchHardeningMigration.includes("IF NOT EXISTS"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,
@@ -910,6 +942,15 @@ check(
       localNames.indexOf("20260926040000_growth_department") &&
     localNames.indexOf("20260926040000_growth_department") <
       localNames.indexOf("20260926050000_growth_department_hardening"),
+);
+check(
+  "Knowledge/Business Launch migrations stay after Growth",
+  localNames.includes("20260926060000_knowledge_business_launch") &&
+    localNames.includes("20260926070000_knowledge_launch_hardening") &&
+    localNames.indexOf("20260926050000_growth_department_hardening") <
+      localNames.indexOf("20260926060000_knowledge_business_launch") &&
+    localNames.indexOf("20260926060000_knowledge_business_launch") <
+      localNames.indexOf("20260926070000_knowledge_launch_hardening"),
 );
 
 const materialsMigration = readFileSync(

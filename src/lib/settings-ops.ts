@@ -595,6 +595,71 @@ export async function updateSchedulingSettingsOp(
   return { unchanged: false as const, note: SCHEDULING_FUTURE_RULE_MESSAGE };
 }
 
+export async function updateLaunchProfileOp(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: {
+    businessStage?: string | null;
+    pricingApproach?: string | null;
+    teamStructureNotes?: string | null;
+    paymentPreferenceNotes?: string | null;
+    schedulingPreferenceNotes?: string | null;
+  },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  const current = await ensureBusinessSettings(db, access.businessId);
+  const next = {
+    businessStage:
+      input.businessStage !== undefined ? input.businessStage?.trim() || null : current.businessStage,
+    pricingApproach:
+      input.pricingApproach !== undefined
+        ? input.pricingApproach?.trim() || null
+        : current.pricingApproach,
+    teamStructureNotes:
+      input.teamStructureNotes !== undefined
+        ? input.teamStructureNotes?.trim() || null
+        : current.teamStructureNotes,
+    paymentPreferenceNotes:
+      input.paymentPreferenceNotes !== undefined
+        ? input.paymentPreferenceNotes?.trim() || null
+        : current.paymentPreferenceNotes,
+    schedulingPreferenceNotes:
+      input.schedulingPreferenceNotes !== undefined
+        ? input.schedulingPreferenceNotes?.trim() || null
+        : current.schedulingPreferenceNotes,
+  };
+  const unchanged =
+    current.businessStage === next.businessStage &&
+    current.pricingApproach === next.pricingApproach &&
+    current.teamStructureNotes === next.teamStructureNotes &&
+    current.paymentPreferenceNotes === next.paymentPreferenceNotes &&
+    current.schedulingPreferenceNotes === next.schedulingPreferenceNotes;
+  if (unchanged) {
+    return { unchanged: true as const };
+  }
+  await db.$transaction(async (tx) => {
+    await tx.businessSettings.update({
+      where: { businessId: access.businessId },
+      data: next,
+    });
+    await writeSettingsAuditLog(tx, {
+      businessId: access.businessId,
+      changedByMembershipId: access.workspace.membership.id,
+      settingArea: "launch",
+      settingKey: "launchProfile",
+      previousValue: {
+        businessStage: current.businessStage,
+        pricingApproach: current.pricingApproach,
+        teamStructureNotes: current.teamStructureNotes,
+        paymentPreferenceNotes: current.paymentPreferenceNotes,
+        schedulingPreferenceNotes: current.schedulingPreferenceNotes,
+      },
+      newValue: next,
+    });
+  });
+  return { unchanged: false as const };
+}
+
 /**
  * Reject a mutation that supplies a foreign businessId. Callers must never
  * use a browser-submitted businessId as the write target; this helper is

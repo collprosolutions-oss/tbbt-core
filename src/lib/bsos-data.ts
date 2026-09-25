@@ -55,6 +55,10 @@ export async function loadBsosFacts(
     jobs,
     invoices,
     growthSource,
+    launchSteps,
+    knowledgeUnreviewed,
+    experienceCandidates,
+    launchGoals,
   ] = await Promise.all([
     prisma.invoice.findMany({
       where: { ...scope, status: "SENT" },
@@ -122,6 +126,18 @@ export async function loadBsosFacts(
       select: { customerId: true },
     }),
     loadGrowthSource(prisma, businessId, now),
+    prisma.businessLaunchStep.count({
+      where: { ...scope, status: { in: ["PENDING", "DEFERRED"] } },
+    }),
+    prisma.knowledgeEntry.count({
+      where: { ...scope, archived: false, approvalState: "UNREVIEWED" },
+    }),
+    prisma.experienceLearningCandidate.count({
+      where: { ...scope, status: { in: ["CANDIDATE", "REVIEWED"] } },
+    }),
+    prisma.businessGoal.count({
+      where: { ...scope, status: "ACTIVE", recommendationKey: { in: ["launch-goal", "launch-ai-goal"] } },
+    }),
   ]);
 
   const reviewJobIds = new Set(reviewRequests.map((row) => row.jobId).filter(Boolean));
@@ -203,6 +219,10 @@ export async function loadBsosFacts(
     growthReactivationEligible: {
       count: buildReactivationCandidates(growthSource).filter((row) => row.anyOutreachEligible).length,
     },
+    launchIncompleteSteps: { count: launchSteps },
+    knowledgeNeedsApproval: { count: knowledgeUnreviewed },
+    experienceCandidates: { count: experienceCandidates },
+    launchGoals: { count: launchGoals },
   };
 
   if (!hasInsights) return baseFacts;

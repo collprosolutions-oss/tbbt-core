@@ -18,7 +18,7 @@ Do not invent passing browser results. The isolated harness is
 ## Lifecycle (owner / customer / field)
 
 1. Signup → trial / SaaS entitlement (`/sign-up`, SaaS Stripe — not Connect).
-2. First-run setup → starter services → website setup (`/setup`, `/setup/services`, `/setup/website`).
+2. First-run setup → starter services → website setup (`/setup`, `/setup/services`, `/setup/website`). Owners can continue into resumable Business Launch (`/launch`) and AI-assisted Build my company (`/launch/build`) without being dumped into forty blank settings.
 3. Public website + request with photos (`/hire/[slug]`, `/r/[slug]`). After the first Website Publish, public pages read the immutable snapshot; businesses with no publish stay on the live-assembled path.
 4. CRM / requests / pipeline (`/customers`, `/requests`, `/pipeline`).
 5. Estimate → send / email → customer approve (`/estimates`, `/e/[token]`).
@@ -28,8 +28,9 @@ Do not invent passing browser results. The isolated harness is
 9. Time cards → job photos → additional work / change order.
 10. Complete → invoice → payment (`/invoices`, `/p/[token]/invoice`).
 11. Expense → job profitability / reports / financial intelligence (`/expenses`, `/reports`). Linked material purchases must not double-count. Known cash flow uses recorded payments and recorded expenses. PROCESSED payroll gross labor is an operational cost record, not verified bank cash out. Banking and accounting stay Not Connected.
-12. Review request → marketing opportunity → Growth loop → BSOS recommendation (`/reviews`, `/marketing`, `/growth`, `/business-health`).
+12. Review request → marketing opportunity → Growth loop → BSOS recommendation (`/reviews`, `/marketing`, `/growth`, `/business-health`). Launch progress, unreviewed knowledge, and candidate learnings feed Business Health facts — they do not replace the BSOS engine.
 13. Communications department → customer timeline, compose, missed-call log (`/communications`). Voice is not connected. Growth never sends customer messages; Communications owns delivery.
+14. Knowledge Hub (`/knowledge`) stores owner-approved operational knowledge, procedures/checklists, and Experience Intelligence candidates. Ask Knowledge distinguishes approved knowledge, historical evidence, inference, and unknown. No cross-tenant retrieval.
 
 ## Cross-cutting proofs
 

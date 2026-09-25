@@ -4,6 +4,8 @@ import { sanitizeAiText } from "@/lib/ai/sanitize";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
+export type KnowledgeGrounding = "approved" | "historical" | "inference" | "unknown";
+
 export type KnowledgeHit = {
   id: string;
   title: string;
@@ -12,6 +14,9 @@ export type KnowledgeHit = {
   sourceType: string;
   excerpt: string;
   scope: string;
+  approvalState: string;
+  knowledgeKind: string | null;
+  grounding: KnowledgeGrounding;
 };
 
 export async function retrieveTenantKnowledge(
@@ -41,6 +46,8 @@ export async function retrieveTenantKnowledge(
       trustState: true,
       sourceType: true,
       scope: true,
+      approvalState: true,
+      knowledgeKind: true,
     },
   });
 
@@ -48,7 +55,8 @@ export async function retrieveTenantKnowledge(
     .map((entry) => {
       const hay = `${entry.title} ${entry.body}`.toLowerCase();
       const score = tokens.reduce((sum, token) => sum + (hay.includes(token) ? 1 : 0), 0);
-      return { entry, score };
+      const approvedBoost = entry.approvalState === "APPROVED" ? 2 : 0;
+      return { entry, score: score + approvedBoost };
     })
     .filter((row) => row.score > 0 || tokens.length === 0)
     .sort((a, b) => b.score - a.score)
@@ -61,8 +69,22 @@ export async function retrieveTenantKnowledge(
     trustState: entry.trustState,
     sourceType: entry.sourceType,
     scope: entry.scope,
+    approvalState: entry.approvalState,
+    knowledgeKind: entry.knowledgeKind,
+    grounding: groundingForEntry(entry),
     excerpt: sanitizeAiText(entry.body, 240),
   }));
+}
+
+function groundingForEntry(entry: {
+  approvalState: string;
+  sourceType: string;
+  trustState: string;
+}): KnowledgeGrounding {
+  if (entry.approvalState === "APPROVED") return "approved";
+  if (entry.sourceType === "TBBT_RECORD") return "historical";
+  if (entry.trustState === "NEEDS_REVIEW" || entry.approvalState === "UNREVIEWED") return "inference";
+  return "unknown";
 }
 
 export function answerKnowledgeFromEntries(
@@ -71,19 +93,36 @@ export function answerKnowledgeFromEntries(
 ): StructuredAiOutput {
   if (hits.length === 0) {
     return {
-      text: `No authorized Knowledge entries for this business match that question. TBBT will not use another tenant's knowledge or invent an answer. Question recorded as owner text: ${sanitizeAiText(question, 160)}`,
+      text: `Unknown for this business. No authorized Knowledge entries match that question. TBBT will not use another tenant's knowledge or invent an answer. Question recorded as owner text: ${sanitizeAiText(question, 160)}`,
       stance: "FACT",
       citedFactKeys: [],
       notes: AI_NOT_CONNECTED_MESSAGE,
     };
   }
-  const lines = hits.map(
-    (hit) =>
-      `${hit.title} [${hit.trustState} / ${hit.sourceType}]: ${hit.excerpt}`,
-  );
+  const groups: Record<KnowledgeGrounding, KnowledgeHit[]> = {
+    approved: hits.filter((hit) => hit.grounding === "approved"),
+    historical: hits.filter((hit) => hit.grounding === "historical"),
+    inference: hits.filter((hit) => hit.grounding === "inference"),
+    unknown: hits.filter((hit) => hit.grounding === "unknown"),
+  };
+  const section = (label: string, rows: KnowledgeHit[]) =>
+    rows.length
+      ? `${label}\n${rows
+          .map((hit) => `- ${hit.title} [${hit.trustState} / ${hit.approvalState}]: ${hit.excerpt}`)
+          .join("\n")}`
+      : "";
+  const text = [
+    "From this business's Knowledge Hub only. Grounding is labeled; TBBT does not invent missing policy.",
+    section("Approved knowledge", groups.approved),
+    section("Historical evidence", groups.historical),
+    section("Inference (not approved policy)", groups.inference),
+    section("Unknown / unlabeled", groups.unknown),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   return {
-    text: `From this business's Knowledge Hub only:\n${lines.join("\n")}\n\nThese are retrieved entries, not verified just because they were returned. Trust state stays on each entry.`,
-    stance: "FACT",
+    text,
+    stance: groups.approved.length ? "FACT" : "MIXED",
     citedFactKeys: hits.map((hit) => hit.id),
     notes: AI_NOT_CONNECTED_MESSAGE,
   };

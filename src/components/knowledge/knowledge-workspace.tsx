@@ -4,6 +4,9 @@ import { KnowledgeCreateForm } from "@/components/knowledge/create-form";
 import { KnowledgeEditForm } from "@/components/knowledge/edit-form";
 import { KnowledgeReviewButton } from "@/components/knowledge/review-button";
 import { KnowledgeAskForm } from "@/components/knowledge/ask-form";
+import { KnowledgeApprovalButtons } from "@/components/knowledge/approval-buttons";
+import { ExperienceLearningPanel } from "@/components/knowledge/experience-panel";
+import { ProcedurePanel } from "@/components/knowledge/procedure-panel";
 import type { KnowledgeWorkspaceProps } from "@/components/knowledge/types";
 import { EmptyState } from "@/components/empty-state";
 import { FounderRegion } from "@/components/founder-design/region";
@@ -227,6 +230,8 @@ function OverviewBody({ source }: { source: KnowledgeSource }) {
             <KnowledgeCreateForm area="overview" source={source} />
           </CardContent>
         </Card>
+        <ProcedurePanel source={source} />
+        <ExperienceLearningPanel source={source} />
       </FounderRegion>
     </>
   );
@@ -479,6 +484,10 @@ function DetailCard({ source }: { source: KnowledgeSource }) {
         <div className="flex flex-wrap gap-2">
           <TrustBadge state={entry.trustState} />
           <Badge variant="outline">{entry.sourceTypeLabel}</Badge>
+          <Badge variant={entry.approvalState === "APPROVED" ? "success" : "outline"}>
+            {entry.approvalLabel}
+          </Badge>
+          {entry.knowledgeKindLabel ? <Badge variant="outline">{entry.knowledgeKindLabel}</Badge> : null}
           {entry.archived ? <Badge variant="outline">Archived</Badge> : null}
         </div>
         <p className="whitespace-pre-wrap">{entry.body}</p>
@@ -508,6 +517,19 @@ function DetailCard({ source }: { source: KnowledgeSource }) {
             ) : null}
           </div>
         ) : null}
+        {entry.concepts.length || entry.assertions.length ? (
+          <div className="space-y-1 text-xs text-muted-foreground">
+            {entry.concepts.length ? (
+              <p>Concepts: {entry.concepts.map((concept) => concept.label).join(", ")}</p>
+            ) : null}
+            {entry.assertions.map((assertion) => (
+              <p key={assertion.statement}>
+                {assertion.stance} ({assertion.confidence}): {assertion.statement}
+              </p>
+            ))}
+          </div>
+        ) : null}
+        <KnowledgeApprovalButtons entryId={entry.id} approvalState={entry.approvalState} />
         <KnowledgeReviewButton entryId={entry.id} />
         <KnowledgeArchiveButton entryId={entry.id} archived={entry.archived} />
         <KnowledgeEditForm entry={entry} />

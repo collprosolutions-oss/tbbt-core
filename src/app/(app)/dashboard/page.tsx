@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/card";
 import { DashboardAppointmentAttentionItems } from "@/components/dashboard/appointment-attention-items";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
+import { DashboardLaunchCard } from "@/components/launch/dashboard-card";
 import { FounderDesignRoot } from "@/components/founder-design/root";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { requireManagementPageAccess } from "@/lib/access";
@@ -35,6 +36,7 @@ import { formatDate, formatDateTime, formatMoney, formatTime } from "@/lib/forma
 import type { CuratedIconId } from "@/lib/founder-icons";
 import { NAV_ICONS } from "@/lib/nav-icons";
 import { prisma } from "@/lib/prisma";
+import { loadLaunchWorkspace } from "@/lib/business-launch-data";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
 import { getBusinessPaymentStatus } from "@/lib/payments";
 import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
@@ -312,6 +314,11 @@ export default async function DashboardPage() {
     },
   ].filter((group) => group.count > 0);
 
+  const launchWorkspace =
+    access.workspace.role === "OWNER"
+      ? await loadLaunchWorkspace(prisma, access.businessId)
+      : null;
+
   const attentionTotal =
     appointmentAttention.length +
     attentionGroups.reduce((sum, group) => sum + group.count, 0);
@@ -350,6 +357,12 @@ export default async function DashboardPage() {
           </div>
         }
       />
+
+      {launchWorkspace && launchWorkspace.progress.status !== "COMPLETED" ? (
+        <div className="mb-6">
+          <DashboardLaunchCard progress={launchWorkspace.progress} />
+        </div>
+      ) : null}
 
       {paymentsGoLive.showOwnerBanner ? (
         <div className="mb-6">

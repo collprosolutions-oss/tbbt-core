@@ -85,6 +85,10 @@ try {
     recurringExpenses: { count: 0, amount: 0 },
     paidRevenue: { amount: 0 },
     recordedExpenses: { amount: 0 },
+    launchIncompleteSteps: { count: 0 },
+    knowledgeNeedsApproval: { count: 0 },
+    experienceCandidates: { count: 0 },
+    launchGoals: { count: 0 },
   });
   check("No recommendations when no recorded facts", empty.length === 0);
   check("Coach distinguishes empty facts", /No prioritized recommendations/.test(coachSummary(empty)));
@@ -104,6 +108,10 @@ try {
     recurringExpenses: { count: 0, amount: 0 },
     paidRevenue: { amount: 400 },
     recordedExpenses: { amount: 40 },
+    launchIncompleteSteps: { count: 0 },
+    knowledgeNeedsApproval: { count: 0 },
+    experienceCandidates: { count: 0 },
+    launchGoals: { count: 0 },
   });
   check("Unpaid invoices become a recommendation", recs.some((row) => row.key === "collect-unpaid-invoices"));
   check("Recommendations include recorded facts", recs[0].facts.length > 0 && recs[0].kind === "recommendation");
@@ -123,6 +131,10 @@ try {
     recurringExpenses: { count: 1, amount: 25 },
     paidRevenue: { amount: 40 },
     recordedExpenses: { amount: 80 },
+    launchIncompleteSteps: { count: 0 },
+    knowledgeNeedsApproval: { count: 0 },
+    experienceCandidates: { count: 0 },
+    launchGoals: { count: 0 },
   });
   check("Negative-margin jobs become a recommendation", marginRecs.some((row) => row.key === "review-low-margin-jobs"));
   check("Recurring expenses become a recommendation", marginRecs.some((row) => row.key === "review-recurring-expenses"));

@@ -306,6 +306,13 @@ model Business {
   settingsAuditLogs        SettingsAuditLog[]
   publicSiteImages         PublicSiteImage[]
   knowledgeEntries         KnowledgeEntry[]
+  launchProgress           BusinessLaunchProgress?
+  launchSteps              BusinessLaunchStep[]
+  companySetupProposals    CompanySetupProposal[]
+  companySetupProposalItems CompanySetupProposalItem[]
+  operatingProcedures      OperatingProcedure[]
+  operatingProcedureSteps  OperatingProcedureStep[]
+  experienceLearningCandidates ExperienceLearningCandidate[]
   serviceRequestItems         ServiceRequestItem[]
   serviceRequestPhotos        ServiceRequestPhoto[]
   serviceRequestMeasurements  ServiceRequestMeasurement[]
@@ -470,6 +477,11 @@ model Membership {
   publicSiteImages         PublicSiteImage[]  @relation("PublicSiteImageActor")
   createdKnowledgeEntries  KnowledgeEntry[]   @relation("KnowledgeEntryCreator")
   reviewedKnowledgeEntries KnowledgeEntry[]   @relation("KnowledgeEntryReviewer")
+  approvedKnowledgeEntries KnowledgeEntry[]   @relation("KnowledgeEntryApprover")
+  createdLaunchProgress    BusinessLaunchProgress[] @relation("BusinessLaunchProgressCreator")
+  createdCompanySetupProposals CompanySetupProposal[] @relation("CompanySetupProposalCreator")
+  createdOperatingProcedures OperatingProcedure[] @relation("OperatingProcedureCreator")
+  reviewedExperienceCandidates ExperienceLearningCandidate[] @relation("ExperienceLearningReviewer")
   verifiedMeasurements     ServiceRequestMeasurement[] @relation("MeasurementVerifier")
   initiatedCustomerCommunications CustomerCommunication[] @relation("CustomerCommunicationInitiator")
   initiatedPhoneInteractions      PhoneInteraction[]      @relation("PhoneInteractionInitiator")
@@ -796,6 +808,7 @@ model ServiceCatalogItem {
   additionalWorkRequestItems   AdditionalWorkRequestItem[]
   websiteGalleryItems          WebsiteGalleryItem[]
   websiteLocalPageDrafts       WebsiteLocalPageDraft[]
+  operatingProcedures          OperatingProcedure[]
 
   @@unique([businessId, websiteSlug])
   @@index([businessId])
@@ -2356,6 +2369,15 @@ model BusinessSettings {
   helperRecommendationThresholdMinutes Int @default(60)
   overloadThresholdPercent Int @default(90)
 
+  /// Launch-only owner notes that have no other Core home.
+  /// STARTING | GROWING | ESTABLISHED | STABILIZING
+  businessStage String?
+  /// HOURLY | FLAT | MIXED | CUSTOM
+  pricingApproach String?
+  teamStructureNotes String?
+  paymentPreferenceNotes String?
+  schedulingPreferenceNotes String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -2436,7 +2458,8 @@ model PublicSiteImage {
 ///   CUSTOMERS_POLICIES | VENDORS_MATERIALS | MARKETING_BRAND |
 ///   SAFETY_COMPLIANCE | TRAINING_HOWTO
 /// sourceType: OWNER_CREATED | TBBT_RECORD | EXTERNAL_REFERENCE | SYSTEM_DERIVED
-/// sourceKind: SERVICE | ESTIMATE | JOB | EXPENSE | TIME | MARKETING | REVIEW
+/// sourceKind: SERVICE | ESTIMATE | JOB | EXPENSE | TIME | MARKETING | REVIEW |
+///   REQUEST | EXPERIENCE_CANDIDATE
 /// trustState: VERIFIED | SUPPORTED | ESTIMATE | NEEDS_REVIEW | CONFLICT | UNKNOWN
 model KnowledgeEntry {
   id         String @id @default(cuid())
@@ -2455,20 +2478,33 @@ model KnowledgeEntry {
   lastReviewedByMembershipId String?
   /// BUSINESS (this tenant only) | PLATFORM (shared later; never mixed into tenant retrieval)
   scope      String   @default("BUSINESS")
+  /// STANDARD_OPERATING_PROCEDURE | PRICING_LESSON | SERVICE_LESSON |
+  /// CUSTOMER_FAQ | FIELD_TECHNIQUE | ESTIMATING_ASSUMPTION |
+  /// SCHEDULING_LESSON | VENDOR_MATERIAL_LESSON | OWNER_POLICY | BUSINESS_RULE
+  knowledgeKind String?
+  /// UNREVIEWED | APPROVED | REJECTED. Owner approval is separate from trust.
+  approvalState String @default("UNREVIEWED")
+  approvedAt DateTime?
+  approvedByMembershipId String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
   createdBy  Membership @relation("KnowledgeEntryCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
   reviewedBy Membership? @relation("KnowledgeEntryReviewer", fields: [lastReviewedByMembershipId], references: [id], onDelete: SetNull)
+  approvedBy Membership? @relation("KnowledgeEntryApprover", fields: [approvedByMembershipId], references: [id], onDelete: SetNull)
   concepts   KnowledgeConcept[]
   assertions KnowledgeAssertion[]
+  procedures OperatingProcedure[]
+  experienceCandidates ExperienceLearningCandidate[]
 
   @@index([businessId])
   @@index([businessId, category])
   @@index([businessId, trustState])
   @@index([businessId, archived])
   @@index([businessId, scope])
+  @@index([businessId, approvalState])
+  @@index([businessId, knowledgeKind])
 }
 
 /// Owner-authored business goal. Recommendations never invent the target
@@ -2790,6 +2826,174 @@ model KnowledgeAssertion {
 
   @@index([businessId])
   @@index([entryId])
+}
+
+/// Resumable OWNER launch checklist. Progress is derived from defined
+/// steps — never a fake percentage. Authoritative business data stays on
+/// existing Core records; this table only tracks setup state.
+model BusinessLaunchProgress {
+  id                    String    @id @default(cuid())
+  businessId            String    @unique
+  /// IN_PROGRESS | COMPLETED
+  status                String    @default("IN_PROGRESS")
+  lastStepKey           String?
+  resumeLaterAt         DateTime?
+  completedAt           DateTime?
+  createdByMembershipId String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business  Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy Membership?          @relation("BusinessLaunchProgressCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  steps     BusinessLaunchStep[]
+}
+
+model BusinessLaunchStep {
+  id          String    @id @default(cuid())
+  businessId  String
+  progressId  String
+  stepKey     String
+  /// PENDING | COMPLETED | SKIPPED | DEFERRED
+  status      String    @default("PENDING")
+  completedAt DateTime?
+  skippedAt   DateTime?
+  deferredAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  business Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  progress BusinessLaunchProgress @relation(fields: [progressId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, stepKey])
+  @@index([businessId])
+  @@index([progressId])
+}
+
+/// AI-assisted company setup proposal. Never an authorized write.
+/// Owner must approve each consequential item before Core records change.
+model CompanySetupProposal {
+  id                    String   @id @default(cuid())
+  businessId            String
+  createdByMembershipId String
+  /// DRAFT | REVIEWED | PARTIALLY_APPLIED | APPLIED | DISCARDED
+  status                String   @default("DRAFT")
+  inputText             String
+  proposalSummary       String   @default("")
+  interactionId         String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business  Business                   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy Membership                 @relation("CompanySetupProposalCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  items     CompanySetupProposalItem[]
+
+  @@unique([businessId, interactionId])
+  @@index([businessId])
+  @@index([businessId, status])
+}
+
+model CompanySetupProposalItem {
+  id                 String    @id @default(cuid())
+  businessId         String
+  proposalId         String
+  /// SERVICE | DESCRIPTION | BRAND_VOICE | GOAL | PROCEDURE | SETUP_CHOICE |
+  /// TRADE_ACTIVATION | SUBSCRIPTION | WEBSITE_PUBLISH | LEGAL | PRICING
+  kind               String
+  title              String
+  body               String
+  payloadJson        String    @default("{}")
+  /// PENDING | APPROVED | REJECTED | APPLIED | BLOCKED
+  status             String    @default("PENDING")
+  appliedAt          DateTime?
+  appliedRecordKind  String?
+  appliedRecordId    String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  business Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  proposal CompanySetupProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([proposalId])
+}
+
+/// Reusable operating procedure / checklist. Not a workflow engine.
+model OperatingProcedure {
+  id                    String   @id @default(cuid())
+  businessId            String
+  title                 String
+  summary               String   @default("")
+  tradeCode             String?
+  serviceCatalogItemId  String?
+  jobType               String?
+  knowledgeEntryId      String?
+  /// UNREVIEWED | APPROVED | REJECTED
+  approvalState         String   @default("UNREVIEWED")
+  archived              Boolean  @default(false)
+  createdByMembershipId String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business    Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy   Membership          @relation("OperatingProcedureCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  catalogItem ServiceCatalogItem? @relation(fields: [serviceCatalogItemId], references: [id], onDelete: SetNull)
+  knowledge   KnowledgeEntry?     @relation(fields: [knowledgeEntryId], references: [id], onDelete: SetNull)
+  steps       OperatingProcedureStep[]
+
+  @@index([businessId])
+  @@index([businessId, archived])
+  @@index([serviceCatalogItemId])
+  @@index([knowledgeEntryId])
+}
+
+model OperatingProcedureStep {
+  id           String @id @default(cuid())
+  businessId   String
+  procedureId  String
+  sortOrder    Int
+  title        String
+  body         String  @default("")
+  required     Boolean @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  business  Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  procedure OperatingProcedure  @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([procedureId, sortOrder])
+}
+
+/// Candidate learning from recorded work. Never trusted policy until
+/// an owner reviews and approves it.
+model ExperienceLearningCandidate {
+  id                       String    @id @default(cuid())
+  businessId               String
+  /// DURATION_VARIANCE | INTAKE_QUESTION | RECURRING_CUSTOMER_QUESTION |
+  /// SCOPE_CHANGE | FIELD_NOTE | ESTIMATING_ASSUMPTION
+  kind                     String
+  title                    String
+  body                     String
+  evidenceJson             String    @default("{}")
+  evidenceKey              String
+  sourceKind               String?
+  sourceReferenceId        String?
+  /// CANDIDATE | REVIEWED | APPROVED | REJECTED
+  status                   String    @default("CANDIDATE")
+  confidence               String    @default("UNKNOWN")
+  reviewedAt               DateTime?
+  reviewedByMembershipId   String?
+  knowledgeEntryId         String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  business     Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  reviewedBy   Membership?     @relation("ExperienceLearningReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+  knowledge    KnowledgeEntry? @relation(fields: [knowledgeEntryId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, kind, evidenceKey])
+  @@index([businessId])
+  @@index([businessId, status])
 }
 
 /// Durable business event. Idempotent per (businessId, idempotencyKey).
