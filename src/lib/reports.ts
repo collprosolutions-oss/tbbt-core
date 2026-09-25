@@ -1114,7 +1114,7 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
     attention.push({
       key: `invoice:${row.invoice.id}`,
       label: customerName(row.invoice.customerId, source),
-      detail: `Outstanding remaining balance · ${row.balance.toFixed(2)}`,
+      detail: `Sent invoice outstanding remaining balance · ${row.balance.toFixed(2)}`,
       href: `/invoices/${row.invoice.id}`,
     });
   }
