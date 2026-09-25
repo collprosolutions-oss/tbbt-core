@@ -63,11 +63,15 @@ export function SaveLineForReuseForm({
   lineItemId,
   hasPrice,
   currentPriceLabel,
+  needsTradeChoice = false,
+  activeTrades = [],
 }: {
   estimateId: string;
   lineItemId: string;
   hasPrice: boolean;
   currentPriceLabel?: string | null;
+  needsTradeChoice?: boolean;
+  activeTrades?: Array<{ code: string; label: string }>;
 }) {
   const [state, action, pending] = useActionState(
     saveEstimateLineForReuse,
@@ -87,6 +91,27 @@ export function SaveLineForReuseForm({
       ) : null}
       <input type="hidden" name="estimateId" value={estimateId} />
       <input type="hidden" name="lineItemId" value={lineItemId} />
+      {needsTradeChoice && activeTrades.length > 1 ? (
+        <div className="space-y-1">
+          <Label htmlFor={`reuse-trade-${lineItemId}`}>Trade</Label>
+          <select
+            id={`reuse-trade-${lineItemId}`}
+            name="requestedTradeCode"
+            required
+            defaultValue=""
+            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+          >
+            <option value="" disabled>
+              Choose a trade
+            </option>
+            {activeTrades.map((trade) => (
+              <option key={trade.code} value={trade.code}>
+                {trade.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
       {hasPrice ? (
         <label className="flex items-start gap-2 text-sm">
           <input

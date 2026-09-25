@@ -57,7 +57,20 @@ const {
   INACTIVE_TRADE_REQUEST_MESSAGE,
   resolvePublicRequestTrade,
 } = await import("@/lib/public-request-trade");
-const { catalogRecurrenceEligibleFromForm } = await import("@/lib/catalog-item-fields");
+const {
+  catalogRecurrenceEligibleForTrade,
+  catalogRecurrenceEligibleFromForm,
+} = await import("@/lib/catalog-item-fields");
+const {
+  ESTIMATE_CATALOG_TRADE_REQUIRED_MESSAGE,
+  addCatalogItemToDraftEstimate,
+  resolveSaveEstimateLineTrade,
+  saveDraftEstimateLineAsCatalog,
+} = await import("@/lib/estimate-line-ops");
+const {
+  addRequestDraftLines,
+  sourceItemsFromServiceRequest,
+} = await import("@/lib/request-estimate-draft");
 const { loadPublicBusiness, loadPublicCatalog } = await import("@/lib/public-site-data");
 const { Prisma } = await import("@prisma/client");
 
@@ -96,9 +109,10 @@ function check(label, ok) {
   }
 }
 
-function makeAccess(businessId) {
+function makeAccess(businessId, role = "OWNER") {
   return {
     businessId,
+    workspace: { role, membership: { id: `mem-${businessId}` } },
     scope: businessScope(businessId),
     assertOwned(record) {
       return assertBusinessRecord(record, businessId);
@@ -118,6 +132,10 @@ const publicSiteData = read("src/lib/public-site-data.ts");
 const requestPage = read("src/app/r/[slug]/page.tsx");
 const requestFlow = read("src/components/public/request-flow.tsx");
 const catalogAction = read("src/app/actions/catalog.ts");
+const estimateLineOps = read("src/lib/estimate-line-ops.ts");
+const estimateAction = read("src/app/actions/estimate.ts");
+const estimateBuilderPage = read("src/app/(app)/estimates/[estimateId]/page.tsx");
+const saveLineForm = read("src/components/estimates/draft-line-scope-forms.tsx");
 const createCatalogForm = read("src/components/catalog/create-catalog-item-form.tsx");
 const catalogItemRow = read("src/components/catalog/catalog-item-row.tsx");
 const addServiceSheet = read("src/components/services/add-service-sheet.tsx");
@@ -222,9 +240,68 @@ check(
     createCatalogForm.includes("recurrenceEligible") &&
     createCatalogForm.includes("unitLabel") &&
     catalogItemRow.includes("recurrenceEligibleSubmitted") &&
-    catalogAction.includes("catalogRecurrenceEligibleFromForm") &&
+    catalogAction.includes("catalogRecurrenceEligibleForTrade") &&
     catalogRecurrenceEligibleFromForm(false, false, true) === true &&
     catalogRecurrenceEligibleFromForm(true, false, true) === false,
+);
+check(
+  "Estimate Builder add-catalog list and add action require ACTIVE BusinessTrade",
+  estimateBuilderPage.includes("addableCatalogItems") &&
+    estimateBuilderPage.includes("catalogItemIsPubliclyOffered") &&
+    estimateBuilderPage.includes("items={addableCatalogItems.map") &&
+    estimateBuilderPage.includes("where: { ...access.scope, active: true }") &&
+    estimateLineOps.includes("catalogItemIsPubliclyOffered") &&
+    estimateLineOps.includes("INACTIVE_CATALOG_TRADE_MESSAGE") &&
+    estimateAction.includes("addCatalogItemToDraftEstimate"),
+);
+check(
+  "Save estimate line to catalog is trade-aware and name-scoped by trade",
+  estimateLineOps.includes("resolveSaveEstimateLineTrade") &&
+    estimateLineOps.includes("requestedTradeCode") &&
+    estimateLineOps.includes("tradeCode,") &&
+    estimateLineOps.includes("ESTIMATE_CATALOG_TRADE_REQUIRED_MESSAGE") &&
+    estimateAction.includes("requestedTradeCode") &&
+    saveLineForm.includes('name="requestedTradeCode"') &&
+    estimateBuilderPage.includes("needsTradeChoice") &&
+    resolveSaveEstimateLineTrade({
+      linkedCatalogTradeCode: "CLEANING",
+      requestTradeCode: "HANDYMAN",
+      activeTradeCodes: ["HANDYMAN"],
+      requestedTradeCode: "HANDYMAN",
+    }).ok === true &&
+    resolveSaveEstimateLineTrade({
+      linkedCatalogTradeCode: "CLEANING",
+      requestTradeCode: "HANDYMAN",
+      activeTradeCodes: ["HANDYMAN"],
+      requestedTradeCode: "HANDYMAN",
+    }).tradeCode === "CLEANING" &&
+    resolveSaveEstimateLineTrade({
+      linkedCatalogTradeCode: null,
+      requestTradeCode: "CLEANING",
+      activeTradeCodes: ["HANDYMAN"],
+      requestedTradeCode: "HANDYMAN",
+    }).tradeCode === "CLEANING" &&
+    resolveSaveEstimateLineTrade({
+      linkedCatalogTradeCode: null,
+      requestTradeCode: null,
+      activeTradeCodes: ["HANDYMAN", "CLEANING"],
+      requestedTradeCode: null,
+    }).ok === false &&
+    resolveSaveEstimateLineTrade({
+      linkedCatalogTradeCode: null,
+      requestTradeCode: null,
+      activeTradeCodes: ["HANDYMAN"],
+      requestedTradeCode: null,
+    }).tradeCode === "HANDYMAN",
+);
+check(
+  "Recurrence eligibility is forced off when the trade does not support it",
+  catalogRecurrenceEligibleForTrade("HANDYMAN", true, true, false) === false &&
+    catalogRecurrenceEligibleForTrade("HANDYMAN", true, true, true) === false &&
+    catalogRecurrenceEligibleForTrade("HANDYMAN", false, false, true) === false &&
+    catalogRecurrenceEligibleForTrade("CLEANING", true, true, false) === true &&
+    catalogRecurrenceEligibleForTrade("CLEANING", false, false, true) === true &&
+    catalogRecurrenceEligibleForTrade("CLEANING", true, false, true) === false,
 );
 check(
   "Starter catalog UI uses per-trade plans instead of one Handyman heading",
@@ -643,6 +720,29 @@ try {
       catalogBefore.items.some((item) => item.id === handyService.id),
   );
 
+  const builderCustomer = await prisma.customer.create({
+    data: { businessId: handyA.id, name: "Builder Customer", email: "builder@example.com" },
+  });
+  const builderEstimate = await prisma.estimate.create({
+    data: {
+      businessId: handyA.id,
+      customerId: builderCustomer.id,
+      status: "DRAFT",
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const addedWhileActive = await addCatalogItemToDraftEstimate(prisma, accessA, {
+    estimateId: builderEstimate.id,
+    catalogItemId: cleanService.id,
+    quantity: new Prisma.Decimal(1),
+  });
+  check(
+    "Cleaning catalog can be manually added to a draft estimate while Cleaning is active",
+    addedWhileActive.serviceCatalogItemId === cleanService.id &&
+      addedWhileActive.description.includes("Standard Clean"),
+  );
+
   await deactivateBusinessTradeOp(prisma, accessA, "CLEANING");
   const publicAfterOff = await loadPublicBusiness(handyA.slug, prisma);
   const catalogAfterOff = await loadPublicCatalog(publicAfterOff, prisma);
@@ -732,6 +832,90 @@ try {
       otherInactiveChoice.error === INACTIVE_TRADE_REQUEST_MESSAGE,
   );
 
+  const activeAfterOff = await listActiveTradeCodes(prisma, handyA.id);
+  const ownerCatalogAfterOff = await prisma.serviceCatalogItem.findMany({
+    where: { businessId: handyA.id, active: true },
+  });
+  const addableAfterOff = ownerCatalogAfterOff.filter((item) =>
+    item.active && activeAfterOff.includes(item.tradeCode),
+  );
+  check(
+    "Deactivated Cleaning disappears from Estimate Builder new-add catalog",
+    !addableAfterOff.some((item) => item.id === cleanService.id) &&
+      addableAfterOff.some((item) => item.id === handyService.id) &&
+      ownerCatalogAfterOff.some((item) => item.id === cleanService.id),
+  );
+
+  let staleBuilderAddRejected = false;
+  let staleBuilderAddMessage = "";
+  try {
+    await addCatalogItemToDraftEstimate(prisma, accessA, {
+      estimateId: builderEstimate.id,
+      catalogItemId: cleanService.id,
+      quantity: new Prisma.Decimal(1),
+    });
+  } catch (error) {
+    staleBuilderAddRejected = true;
+    staleBuilderAddMessage = error instanceof Error ? error.message : "";
+  }
+  const existingCleaningLine = await prisma.lineItem.findFirst({
+    where: { id: addedWhileActive.id, businessId: handyA.id },
+  });
+  check(
+    "Direct add of a deactivated-trade catalog item is rejected; existing line stays intact",
+    staleBuilderAddRejected &&
+      staleBuilderAddMessage === INACTIVE_CATALOG_TRADE_MESSAGE &&
+      existingCleaningLine?.id === addedWhileActive.id &&
+      existingCleaningLine?.serviceCatalogItemId === cleanService.id &&
+      existingCleaningLine?.description === addedWhileActive.description &&
+      existingCleaningLine?.unitPrice.toString() === addedWhileActive.unitPrice.toString(),
+  );
+
+  const historicalRequest = request
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: request.id },
+        include: {
+          items: { include: { serviceCatalogItem: true } },
+          serviceCatalogItem: true,
+        },
+      })
+    : null;
+  const historicalEstimate = await prisma.estimate.create({
+    data: {
+      businessId: handyA.id,
+      customerId: (
+        await prisma.customer.create({
+          data: {
+            businessId: handyA.id,
+            name: "Historical Convert",
+            email: "hist-convert@example.com",
+          },
+        })
+      ).id,
+      serviceRequestId: historicalRequest?.id,
+      status: "DRAFT",
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const convertedCount = historicalRequest
+    ? await prisma.$transaction((tx) =>
+        addRequestDraftLines(tx, {
+          businessId: handyA.id,
+          estimateId: historicalEstimate.id,
+          items: sourceItemsFromServiceRequest(historicalRequest),
+        }),
+      )
+    : 0;
+  const convertedLines = await prisma.lineItem.findMany({
+    where: { estimateId: historicalEstimate.id, businessId: handyA.id },
+  });
+  check(
+    "Historical Cleaning request still converts into an estimate from frozen request lines",
+    convertedCount > 0 &&
+      convertedLines.some((line) => line.serviceCatalogItemId === cleanService.id),
+  );
+
   await activateBusinessTradeOp(prisma, accessA, "CLEANING");
   const publicAfterOn = await loadPublicBusiness(handyA.slug, prisma);
   const catalogAfterOn = await loadPublicCatalog(publicAfterOn, prisma);
@@ -740,6 +924,276 @@ try {
     catalogAfterOn.items.some((item) => item.id === cleanService.id) &&
       (await prisma.serviceCatalogItem.findUnique({ where: { id: cleanService.id } }))
         .active === true,
+  );
+
+  const addedAfterOn = await addCatalogItemToDraftEstimate(prisma, accessA, {
+    estimateId: builderEstimate.id,
+    catalogItemId: cleanService.id,
+    quantity: new Prisma.Decimal(1),
+  });
+  check(
+    "Reactivating Cleaning makes still-active catalog items addable to draft estimates again",
+    addedAfterOn.serviceCatalogItemId === cleanService.id &&
+      (await prisma.lineItem.count({
+        where: { estimateId: builderEstimate.id, serviceCatalogItemId: cleanService.id },
+      })) === 2,
+  );
+
+  console.log("\nLIVE — Save estimate line to catalog is trade-aware");
+  const sharedHandy = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: handyA.id,
+      tradeCode: "HANDYMAN",
+      name: "Shared Visit Name",
+      pricingMode: "CUSTOM_QUOTE",
+      price: new Prisma.Decimal(75),
+      category: "General Home Repairs",
+      active: true,
+    },
+  });
+  const sharedClean = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: handyA.id,
+      tradeCode: "CLEANING",
+      name: "Shared Visit Name",
+      pricingMode: "CUSTOM_QUOTE",
+      price: new Prisma.Decimal(90),
+      category: "Standard Cleaning",
+      active: true,
+      recurrenceEligible: true,
+    },
+  });
+  const reuseEstimate = await prisma.estimate.create({
+    data: {
+      businessId: handyA.id,
+      customerId: builderCustomer.id,
+      status: "DRAFT",
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const customUnlinked = await prisma.lineItem.create({
+    data: {
+      businessId: handyA.id,
+      estimateId: reuseEstimate.id,
+      description: "Custom multi-trade save",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(50),
+      total: new Prisma.Decimal(50),
+      type: "LABOR",
+    },
+  });
+  let missingTradeRejected = false;
+  try {
+    await saveDraftEstimateLineAsCatalog(prisma, accessA, {
+      estimateId: reuseEstimate.id,
+      lineItemId: customUnlinked.id,
+    });
+  } catch (error) {
+    missingTradeRejected =
+      error instanceof Error &&
+      error.message === ESTIMATE_CATALOG_TRADE_REQUIRED_MESSAGE;
+  }
+  check(
+    "Manual multi-trade estimate requires an explicit ACTIVE trade before save-to-catalog",
+    missingTradeRejected,
+  );
+
+  let inactiveSaveRejected = false;
+  try {
+    await saveDraftEstimateLineAsCatalog(prisma, accessA, {
+      estimateId: reuseEstimate.id,
+      lineItemId: customUnlinked.id,
+      requestedTradeCode: "PLUMBING",
+    });
+  } catch (error) {
+    inactiveSaveRejected =
+      error instanceof Error &&
+      error.message === "That trade is not active on this business.";
+  }
+  check(
+    "Explicit save-to-catalog trade must be an ACTIVE BusinessTrade",
+    inactiveSaveRejected,
+  );
+
+  const savedCleaningCustom = await saveDraftEstimateLineAsCatalog(prisma, accessA, {
+    estimateId: reuseEstimate.id,
+    lineItemId: customUnlinked.id,
+    requestedTradeCode: "CLEANING",
+  });
+  check(
+    "Explicit Cleaning choice creates a Cleaning catalog row, not Handyman",
+    savedCleaningCustom.tradeCode === "CLEANING" &&
+      savedCleaningCustom.name === "Custom multi-trade save",
+  );
+
+  const sharedHandyLine = await prisma.lineItem.create({
+    data: {
+      businessId: handyA.id,
+      estimateId: reuseEstimate.id,
+      description: "Shared Visit Name",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(80),
+      total: new Prisma.Decimal(80),
+      type: "LABOR",
+    },
+  });
+  const savedSharedHandy = await saveDraftEstimateLineAsCatalog(prisma, accessA, {
+    estimateId: reuseEstimate.id,
+    lineItemId: sharedHandyLine.id,
+    requestedTradeCode: "HANDYMAN",
+    savePrice: true,
+  });
+  const sharedHandyAfter = await prisma.serviceCatalogItem.findUnique({
+    where: { id: sharedHandy.id },
+  });
+  const sharedCleanAfter = await prisma.serviceCatalogItem.findUnique({
+    where: { id: sharedClean.id },
+  });
+  check(
+    "Same-name Handyman and Cleaning catalog services stay separate",
+    savedSharedHandy.id === sharedHandy.id &&
+      savedSharedHandy.tradeCode === "HANDYMAN" &&
+      sharedHandyAfter.price.toString() === "80" &&
+      sharedCleanAfter.id === sharedClean.id &&
+      sharedCleanAfter.tradeCode === "CLEANING" &&
+      sharedCleanAfter.price.toString() === "90",
+  );
+
+  const linkedHandyLine = await addCatalogItemToDraftEstimate(prisma, accessA, {
+    estimateId: reuseEstimate.id,
+    catalogItemId: sharedHandy.id,
+    quantity: new Prisma.Decimal(1),
+  });
+  const savedLinked = await saveDraftEstimateLineAsCatalog(prisma, accessA, {
+    estimateId: reuseEstimate.id,
+    lineItemId: linkedHandyLine.id,
+    requestedTradeCode: "CLEANING",
+  });
+  check(
+    "Linked catalog line keeps its catalog trade even if Cleaning is requested",
+    savedLinked.id === sharedHandy.id && savedLinked.tradeCode === "HANDYMAN",
+  );
+
+  const requestBackedEstimate = await prisma.estimate.create({
+    data: {
+      businessId: handyA.id,
+      customerId: builderCustomer.id,
+      serviceRequestId: request?.id,
+      status: "DRAFT",
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const requestBackedLine = await prisma.lineItem.create({
+    data: {
+      businessId: handyA.id,
+      estimateId: requestBackedEstimate.id,
+      description: "Frozen request custom save",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(60),
+      total: new Prisma.Decimal(60),
+      type: "LABOR",
+    },
+  });
+  const savedFromRequest = await saveDraftEstimateLineAsCatalog(prisma, accessA, {
+    estimateId: requestBackedEstimate.id,
+    lineItemId: requestBackedLine.id,
+  });
+  check(
+    "Estimate from a ServiceRequest uses the frozen request trade for save-to-catalog",
+    savedFromRequest.tradeCode === "CLEANING" &&
+      savedFromRequest.name === "Frozen request custom save",
+  );
+
+  const betaCustomer = await prisma.customer.create({
+    data: { businessId: handyB.id, name: "Beta Builder", email: "beta-builder@example.com" },
+  });
+  const betaEstimate = await prisma.estimate.create({
+    data: {
+      businessId: handyB.id,
+      customerId: betaCustomer.id,
+      status: "DRAFT",
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const betaLine = await prisma.lineItem.create({
+    data: {
+      businessId: handyB.id,
+      estimateId: betaEstimate.id,
+      description: "Single-trade inferred save",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(40),
+      total: new Prisma.Decimal(40),
+      type: "LABOR",
+    },
+  });
+  const savedInferred = await saveDraftEstimateLineAsCatalog(prisma, accessB, {
+    estimateId: betaEstimate.id,
+    lineItemId: betaLine.id,
+  });
+  check(
+    "Single ACTIVE trade is inferred for a manual estimate save-to-catalog",
+    savedInferred.tradeCode === "HANDYMAN" &&
+      savedInferred.businessId === handyB.id,
+  );
+
+  console.log("\nLIVE — Recurrence eligibility is enforced from trade config");
+  const craftedHandy = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: handyA.id,
+      tradeCode: "HANDYMAN",
+      name: "Crafted Recurring Handyman",
+      pricingMode: "FIXED",
+      price: new Prisma.Decimal(100),
+      category: "General Home Repairs",
+      active: true,
+      recurrenceEligible: catalogRecurrenceEligibleForTrade(
+        "HANDYMAN",
+        true,
+        true,
+        false,
+      ),
+    },
+  });
+  const cleaningRecurring = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: handyA.id,
+      tradeCode: "CLEANING",
+      name: "Owner Recurring Clean",
+      pricingMode: "FIXED",
+      price: new Prisma.Decimal(120),
+      category: "Standard Cleaning",
+      active: true,
+      recurrenceEligible: catalogRecurrenceEligibleForTrade(
+        "CLEANING",
+        true,
+        true,
+        false,
+      ),
+      unitLabel: "per visit",
+    },
+  });
+  const cleaningPreserved = catalogRecurrenceEligibleForTrade(
+    "CLEANING",
+    false,
+    false,
+    cleaningRecurring.recurrenceEligible,
+  );
+  const handyForcedOff = catalogRecurrenceEligibleForTrade(
+    "HANDYMAN",
+    false,
+    false,
+    true,
+  );
+  check(
+    "Crafted Handyman recurrence stays false; Cleaning owner value and ordinary omit stay trade-safe",
+    craftedHandy.recurrenceEligible === false &&
+      cleaningRecurring.recurrenceEligible === true &&
+      cleaningPreserved === true &&
+      handyForcedOff === false &&
+      cleaningRecurring.unitLabel === "per visit",
   );
 
   console.log("\nLIVE — Request recurrence is copied onto Job from Estimate");

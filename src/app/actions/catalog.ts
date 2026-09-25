@@ -23,7 +23,7 @@ import {
   listActiveTradeCodes,
 } from "@/lib/business-trades";
 import {
-  catalogRecurrenceEligibleFromForm,
+  catalogRecurrenceEligibleForTrade,
   catalogUnitLabelFromForm,
 } from "@/lib/catalog-item-fields";
 import { installStarterCatalogForTrade } from "@/lib/trade-catalog";
@@ -135,7 +135,12 @@ export async function createServiceCatalogItem(
         catalogDefinitionFromSnapshot(null, name),
       ),
       category,
-      recurrenceEligible: readString(formData, "recurrenceEligible") === "on",
+      recurrenceEligible: catalogRecurrenceEligibleForTrade(
+        tradeCode,
+        true,
+        readString(formData, "recurrenceEligible") === "on",
+        false,
+      ),
       unitLabel: readString(formData, "unitLabel"),
     },
   });
@@ -192,7 +197,8 @@ export async function updateServiceCatalogItem(
           catalogDefinitionFromSnapshot(null, name),
       ),
       category,
-      recurrenceEligible: catalogRecurrenceEligibleFromForm(
+      recurrenceEligible: catalogRecurrenceEligibleForTrade(
+        item.tradeCode,
         readString(formData, "recurrenceEligibleSubmitted") === "1",
         readString(formData, "recurrenceEligible") === "on",
         item.recurrenceEligible,

@@ -49,6 +49,12 @@ import {
   resolveCustomerPolicies,
 } from "@/lib/estimate-policies";
 import { DEFAULT_SERVICE_CATEGORY } from "@/lib/service-catalog-category";
+import { listActiveTradeCodes } from "@/lib/business-trades";
+import {
+  INACTIVE_CATALOG_TRADE_MESSAGE,
+  catalogItemIsPubliclyOffered,
+} from "@/lib/public-request-trade";
+import { isConfiguredTrade, type TradeCode } from "@/lib/trades";
 
 type Db = PrismaClient;
 
@@ -115,6 +121,10 @@ export async function addCatalogItemToDraftEstimate(
   );
   if (!catalogItem.active) {
     throw new EstimateLineError("That service is not active.");
+  }
+  const activeTradeCodes = await listActiveTradeCodes(db, access.businessId);
+  if (!catalogItemIsPubliclyOffered(catalogItem, activeTradeCodes)) {
+    throw new EstimateLineError(INACTIVE_CATALOG_TRADE_MESSAGE);
   }
 
   const calculatorDefinition =
@@ -371,6 +381,45 @@ export async function updateDraftMaterialCustomerLine(
   });
 }
 
+export const ESTIMATE_CATALOG_TRADE_REQUIRED_MESSAGE =
+  "Choose which trade this service belongs to.";
+
+/**
+ * Resolve the trade for "save estimate line to catalog".
+ *
+ * Linked catalog trade and frozen ServiceRequest.tradeCode are
+ * authoritative even if that trade is now inactive — never rewrite a
+ * Cleaning line into Handyman. Manual/custom estimates infer a single
+ * ACTIVE trade or require an explicit ACTIVE choice.
+ */
+export function resolveSaveEstimateLineTrade(input: {
+  linkedCatalogTradeCode?: string | null;
+  requestTradeCode?: string | null;
+  activeTradeCodes: string[];
+  requestedTradeCode?: string | null;
+}): { ok: true; tradeCode: TradeCode } | { ok: false; error: string } {
+  const linked = (input.linkedCatalogTradeCode ?? "").trim();
+  if (isConfiguredTrade(linked)) {
+    return { ok: true, tradeCode: linked };
+  }
+  const request = (input.requestTradeCode ?? "").trim();
+  if (isConfiguredTrade(request)) {
+    return { ok: true, tradeCode: request };
+  }
+  const explicit = (input.requestedTradeCode ?? "").trim();
+  const active = input.activeTradeCodes.filter(isConfiguredTrade);
+  if (explicit) {
+    if (isConfiguredTrade(explicit) && active.includes(explicit)) {
+      return { ok: true, tradeCode: explicit };
+    }
+    return { ok: false, error: "That trade is not active on this business." };
+  }
+  if (active.length === 1) {
+    return { ok: true, tradeCode: active[0] };
+  }
+  return { ok: false, error: ESTIMATE_CATALOG_TRADE_REQUIRED_MESSAGE };
+}
+
 /**
  * Explicit owner action: save this DRAFT line as a reusable
  * ServiceCatalogItem. Never runs automatically from add/price.
@@ -382,6 +431,7 @@ export async function saveDraftEstimateLineAsCatalog(
     estimateId: string;
     lineItemId: string;
     savePrice?: boolean;
+    requestedTradeCode?: string | null;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
@@ -391,7 +441,7 @@ export async function saveDraftEstimateLineAsCatalog(
   const estimate = access.assertOwned(
     await db.estimate.findFirst({
       where: { id: input.estimateId, ...access.scope },
-      select: { id: true, businessId: true, status: true },
+      select: { id: true, businessId: true, status: true, serviceRequestId: true },
     }),
   );
   if (estimate.status !== "DRAFT") {
@@ -437,21 +487,42 @@ export async function saveDraftEstimateLineAsCatalog(
   const linkedCatalog = line.serviceCatalogItemId
     ? await db.serviceCatalogItem.findFirst({
         where: { id: line.serviceCatalogItemId, ...access.scope },
-        select: { id: true, pricingMode: true, price: true },
+        select: { id: true, pricingMode: true, price: true, tradeCode: true },
       })
     : null;
   const pricingMode = linkedCatalog?.pricingMode ?? "CUSTOM_QUOTE";
   const savePrice = input.savePrice === true;
   const defaultPrice = savePrice && line.unitPrice.gt(0) ? line.unitPrice : null;
 
+  const requestTradeCode = estimate.serviceRequestId
+    ? (
+        await db.serviceRequest.findFirst({
+          where: { id: estimate.serviceRequestId, ...access.scope },
+          select: { tradeCode: true },
+        })
+      )?.tradeCode ?? null
+    : null;
+  const activeTradeCodes = await listActiveTradeCodes(db, access.businessId);
+  const resolvedTrade = resolveSaveEstimateLineTrade({
+    linkedCatalogTradeCode: linkedCatalog?.tradeCode,
+    requestTradeCode,
+    activeTradeCodes,
+    requestedTradeCode: input.requestedTradeCode,
+  });
+  if (!resolvedTrade.ok) {
+    throw new EstimateLineError(resolvedTrade.error);
+  }
+  const tradeCode = resolvedTrade.tradeCode;
+
   const existing =
     linkedCatalog ??
     (await db.serviceCatalogItem.findFirst({
       where: {
         ...access.scope,
+        tradeCode,
         name: { equals: name, mode: "insensitive" },
       },
-      select: { id: true, pricingMode: true, price: true },
+      select: { id: true, pricingMode: true, price: true, tradeCode: true },
     }));
 
   const catalog = existing
@@ -470,6 +541,7 @@ export async function saveDraftEstimateLineAsCatalog(
     : await db.serviceCatalogItem.create({
         data: {
           businessId: access.businessId,
+          tradeCode,
           name,
           description: joinCatalogDescription(includedWork, calculatorDefinition),
           pricingMode,
