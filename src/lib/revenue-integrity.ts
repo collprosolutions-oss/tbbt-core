@@ -26,6 +26,15 @@ export function invoiceKindLabel(kind?: string | null): string {
   return kind === INVOICE_KIND_SUPPLEMENTAL ? "Balance invoice" : "Invoice";
 }
 
+/**
+ * Record-journey label. Uses the same ORIGINAL / SUPPLEMENTAL kind truth
+ * as #114 (`invoiceKindLabel`) and names the original invoice explicitly
+ * so a job with both kinds is not shown as two generic "Invoice" chips.
+ */
+export function recordNavInvoiceLabel(kind?: string | null): string {
+  return kind === INVOICE_KIND_SUPPLEMENTAL ? "Balance invoice" : "Original invoice";
+}
+
 export type BillingInvoiceLike = {
   id: string;
   status: string;

@@ -62,6 +62,7 @@ import { tradeLabel } from "@/lib/trades";
 import { formatAddress, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
+import { loadRecordJourney } from "@/lib/record-nav";
 import { prisma } from "@/lib/prisma";
 import {
   CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
@@ -239,6 +240,11 @@ export default async function EstimateBuilderPage({
     notFound();
   }
   access.assertOwned(estimate);
+
+  const recordNavItems = await loadRecordJourney(prisma, access, {
+    kind: "estimate",
+    id: estimate.id,
+  });
 
   const laborSubtotal = estimate.lineItems
     .filter((item) => item.type === "LABOR")
@@ -828,7 +834,7 @@ export default async function EstimateBuilderPage({
             />
           ) : null}
           <RecordNav
-            customerId={estimate.customerId}
+            items={recordNavItems}
             backHref="/estimates"
             backLabel="Back to Estimates"
           />

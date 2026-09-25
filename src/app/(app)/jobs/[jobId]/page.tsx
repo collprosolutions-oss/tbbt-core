@@ -86,6 +86,7 @@ import {
   loadEstimatePaymentSummary,
   unpaidMaterialDepositWarning,
 } from "@/lib/project-payments";
+import { loadRecordJourney } from "@/lib/record-nav";
 import { prisma } from "@/lib/prisma";
 import { formatISODate } from "@/lib/schedule";
 import { PurchaseListCard } from "@/components/materials/purchase-list-card";
@@ -204,6 +205,11 @@ export default async function JobPage({
     notFound();
   }
   access.assertOwned(job);
+
+  const recordNavItems = await loadRecordJourney(prisma, access, {
+    kind: "job",
+    id: job.id,
+  });
 
   // Assignment candidates: MEMBER-role memberships of THIS Job's own
   // Business only -- see assignJobMember() in src/app/actions/job.ts for
@@ -366,7 +372,7 @@ export default async function JobPage({
             </Button>
           ) : null}
           <RecordNav
-            customerId={job.customerId}
+            items={recordNavItems}
             backHref="/jobs"
             backLabel="Back to Jobs"
           />

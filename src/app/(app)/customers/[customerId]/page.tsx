@@ -6,6 +6,7 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { AddPropertyForm } from "@/components/properties/add-property-form";
 import { PropertyItem } from "@/components/properties/property-item";
+import { RecordNav } from "@/components/record-nav";
 import { RecordRow } from "@/components/record-row";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { loadCustomerCommunicationTimeline } from "@/lib/communications/timeline";
 import { requestNotesText } from "@/lib/work-area-intake";
 import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
+import { loadRecordJourney } from "@/lib/record-nav";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -52,6 +54,11 @@ export default async function CustomerProfilePage({
   }
   access.assertOwned(customer);
 
+  const recordNavItems = await loadRecordJourney(prisma, access, {
+    kind: "customer",
+    id: customer.id,
+  });
+
   const communications = roleHasCapability(access.workspace.role, CAPABILITIES.MANAGE_COMMUNICATIONS)
     ? await loadCustomerCommunicationTimeline(prisma, access, { customerId: customer.id })
     : [];
@@ -62,9 +69,11 @@ export default async function CustomerProfilePage({
         title={customer.name}
         description="Customer profile"
       >
-        <Button asChild size="sm" variant="outline">
-          <Link href="/customers">Back to customers</Link>
-        </Button>
+        <RecordNav
+          items={recordNavItems}
+          backHref="/customers"
+          backLabel="Back to customers"
+        />
       </PageHeader>
 
       <Card>
@@ -83,7 +92,7 @@ export default async function CustomerProfilePage({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="service-addresses">
         <CardHeader>
           <CardTitle>Service addresses</CardTitle>
         </CardHeader>
@@ -101,7 +110,7 @@ export default async function CustomerProfilePage({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="customer-requests">
         <CardHeader>
           <CardTitle>Service requests</CardTitle>
         </CardHeader>
@@ -124,6 +133,11 @@ export default async function CustomerProfilePage({
                       <span>{formatDate(request.createdAt)}</span>
                     </>
                   }
+                  action={
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/requests/${request.id}`}>Open</Link>
+                    </Button>
+                  }
                 />
               ))}
             </div>
@@ -131,7 +145,7 @@ export default async function CustomerProfilePage({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="customer-estimates">
         <CardHeader>
           <CardTitle>Estimates</CardTitle>
         </CardHeader>
@@ -162,7 +176,7 @@ export default async function CustomerProfilePage({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="customer-jobs">
         <CardHeader>
           <CardTitle>Jobs</CardTitle>
         </CardHeader>
@@ -194,7 +208,7 @@ export default async function CustomerProfilePage({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="customer-invoices">
         <CardHeader>
           <CardTitle>Invoices</CardTitle>
         </CardHeader>

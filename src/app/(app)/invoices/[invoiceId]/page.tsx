@@ -28,6 +28,7 @@ import {
   reconcileStripeCheckoutPayment,
 } from "@/lib/payments";
 import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
+import { loadRecordJourney } from "@/lib/record-nav";
 import { prisma } from "@/lib/prisma";
 import {
   invoicePaymentBreakdown,
@@ -62,6 +63,11 @@ export default async function InvoicePage({
     notFound();
   }
   access.assertOwned(invoice);
+
+  const recordNavItems = await loadRecordJourney(prisma, access, {
+    kind: "invoice",
+    id: invoice.id,
+  });
 
   if (invoice.status === "SENT") {
     await reconcileStripeCheckoutPayment(
@@ -131,7 +137,7 @@ export default async function InvoicePage({
             </Button>
           ) : null}
           <RecordNav
-            customerId={invoice.customerId}
+            items={recordNavItems}
             backHref="/invoices"
             backLabel="Back to Invoices"
           />
