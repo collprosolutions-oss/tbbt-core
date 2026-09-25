@@ -9,6 +9,8 @@ export type CoachContext = {
   actionItems: Array<{ title: string; status: string; recommendationKey: string }>;
   /** Display labels only. Never an authorization source. */
   activeTradeLabels?: string[];
+  /** Bounded Materials facts from the selected specialist only. */
+  materialsFacts?: Record<string, string>;
 };
 
 export const COACH_FACT_KEYS = [
@@ -53,6 +55,16 @@ export const COACH_FACT_KEYS = [
   "double-booked",
   "capacity-gap",
   "shortage",
+  "materials-needed-count",
+  "materials-unmapped-count",
+  "materials-stale-price-count",
+  "materials-missing-price-count",
+  "materials-open-po-count",
+  "materials-incomplete-prep-count",
+  "materials-variance-unfavorable-count",
+  "materials-pickup-not-ready-count",
+  "materials-adapter-state",
+  "materials-price-changed-count",
 ] as const;
 
 export type CoachFactKey = (typeof COACH_FACT_KEYS)[number];
@@ -213,7 +225,30 @@ function factList(context: CoachContext): CitedFact[] {
       value: String(workforceAttention),
       href: "/jobs",
     },
+    ...materialsFactEntries(context.materialsFacts),
   ];
+}
+
+const MATERIALS_FACT_LABELS: Record<string, { label: string; href: string }> = {
+  "materials-needed-count": { label: "Materials still needed", href: "/materials" },
+  "materials-unmapped-count": { label: "Unmapped material suppliers", href: "/materials" },
+  "materials-stale-price-count": { label: "Stale recorded material prices", href: "/materials" },
+  "materials-missing-price-count": { label: "Materials missing a recorded price", href: "/materials" },
+  "materials-open-po-count": { label: "Open material purchase orders", href: "/materials" },
+  "materials-incomplete-prep-count": { label: "Incomplete material pickup prep", href: "/materials" },
+  "materials-variance-unfavorable-count": { label: "Unfavorable recorded material variance", href: "/materials" },
+  "materials-pickup-not-ready-count": { label: "Material pickups not ready", href: "/materials" },
+  "materials-adapter-state": { label: "Supplier commerce adapter", href: "/materials" },
+  "materials-price-changed-count": { label: "Recorded material price changes", href: "/materials" },
+};
+
+function materialsFactEntries(facts?: Record<string, string>): CitedFact[] {
+  if (!facts) return [];
+  return Object.entries(facts).flatMap(([key, value]) => {
+    const meta = MATERIALS_FACT_LABELS[key];
+    if (!meta) return [];
+    return [{ key, label: meta.label, value, href: meta.href } satisfies CitedFact];
+  });
 }
 
 function recordedProfit(facts: BsosFacts) {
@@ -324,6 +359,34 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
       `${context.facts.launchIncompleteSteps?.count ?? 0} launch step(s) are still incomplete. ` +
       `${context.facts.knowledgeNeedsApproval?.count ?? 0} knowledge entr${(context.facts.knowledgeNeedsApproval?.count ?? 0) === 1 ? "y needs" : "ies need"} approval. ` +
       `${context.facts.experienceCandidates?.count ?? 0} experience candidate(s) are on file.`;
+  } else if (/\b(inventory|stock(?: on hand)?|in stock)\b/.test(q)) {
+    stance = "FACT";
+    if (context.materialsFacts?.["materials-adapter-state"]) {
+      keys = ["materials-adapter-state"];
+      text =
+        "TBBT has no stock-on-hand inventory model. Missing stock is unknown, never zero. No quantity was invented. The supplier commerce adapter is disconnected, so a null quote is not live availability.";
+    } else {
+      keys = [];
+      text =
+        "TBBT has no stock-on-hand inventory model. Inventory quantity is unknown, never zero. Recorded Materials facts were not loaded for this question.";
+    }
+  } else if (/\b(materials?|suppliers?|purchase order|\bpo\b|lumber|pickup)\b/.test(q)) {
+    stance = "FACT";
+    if (context.materialsFacts && Object.keys(context.materialsFacts).length > 0) {
+      keys = Object.keys(context.materialsFacts).slice(0, 6);
+      const needed = context.materialsFacts["materials-needed-count"];
+      const adapter = context.materialsFacts["materials-adapter-state"];
+      text =
+        (needed != null
+          ? `${needed} recorded material requirement${needed === "1" ? " is" : "s are"} still needed. `
+          : "Recorded Materials requirements were reviewed. ") +
+        (adapter ? `Supplier commerce is ${adapter}. ` : "") +
+        "Missing price is not $0, unmapped suppliers are not invented, and stock-on-hand does not exist in TBBT.";
+    } else {
+      keys = [];
+      text =
+        "Recorded Materials facts were not loaded for this question. Missing Materials data is not treated as zero stock or zero cost.";
+    }
   } else if (/capacity|staff|schedule|workforce|assign/.test(q)) {
     keys = ["available-capacity", "unscheduled-jobs", "workforce-attention"];
     stance = "MIXED";

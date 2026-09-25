@@ -144,6 +144,7 @@ const specialistFiles = [
   readFileSync(new URL("../src/lib/chief-of-staff/synthesize.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/specialists/financial.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/growth-specialist.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/lib/chief-of-staff/materials-specialist.ts", import.meta.url), "utf8"),
 ];
 
 try {
@@ -194,7 +195,10 @@ try {
     kitchen.selectedIds.every((id) => id === "ATTENTION" || id === "WORKFORCE" || id === "FINANCIAL"),
   );
   check("Planner never exceeds 4 specialists", kitchen.selectedIds.length <= MAX_SPECIALIST_FANOUT && kitchen.fanout <= 4);
-  check("Disabled specialists are skipped, not loaded", kitchen.skipped.some((row) => row.id === "MATERIALS"));
+  check(
+    "Kitchen-sink generic focus does not select MATERIALS",
+    !kitchen.selectedIds.includes("MATERIALS") && kitchen.skipped.some((row) => row.id === "MATERIALS"),
+  );
   check(
     "Kitchen-sink focus can select Financial when an owned recommendation is active",
     kitchen.selectedIds.includes("FINANCIAL"),
@@ -299,10 +303,36 @@ try {
   });
   check("Explicit marketing attribution question selects GROWTH", explicitAttribution.selectedIds.includes("GROWTH"));
 
+  const materialsBuy = planSpecialists({
+    question: "What do I need to buy?",
+    activeRecommendationKeys: [],
+  });
+  check("Buy question selects MATERIALS", materialsBuy.selectedIds.includes("MATERIALS") && materialsBuy.fanout <= 4);
+  const inventoryPlan = planSpecialists({
+    question: "What's in inventory?",
+    activeRecommendationKeys: [],
+  });
+  check("Inventory question selects MATERIALS", inventoryPlan.selectedIds.includes("MATERIALS"));
+  const overloadedPlan = planSpecialists({
+    question: "Who is overloaded Friday?",
+    activeRecommendationKeys: [],
+  });
+  check("Overloaded Friday does not select MATERIALS", !overloadedPlan.selectedIds.includes("MATERIALS"));
+  const genericJobPlan = planSpecialists({
+    question: "How are my jobs this week?",
+    activeRecommendationKeys: [],
+  });
+  check("Generic job/this-week question does not select MATERIALS", !genericJobPlan.selectedIds.includes("MATERIALS"));
+  const materialsRecPlan = planSpecialists({
+    question: "What should I focus on this week?",
+    activeRecommendationKeys: ["materials-needed-for-upcoming-jobs"],
+  });
+  check("Focus with an active materials-* recommendation selects MATERIALS", materialsRecPlan.selectedIds.includes("MATERIALS"));
+
   const enabled = enabledSpecialistIds();
   check(
-    "Enabled specialists are ATTENTION, WORKFORCE, FINANCIAL, and GROWTH",
-    enabled.join(",") === "ATTENTION,WORKFORCE,FINANCIAL,GROWTH",
+    "Enabled specialists are ATTENTION, WORKFORCE, FINANCIAL, GROWTH, and MATERIALS",
+    enabled.join(",") === "ATTENTION,WORKFORCE,FINANCIAL,GROWTH,MATERIALS",
   );
   check("Registry keeps future specialist identities", SPECIALIST_IDS.includes("FINANCIAL") && SPECIALIST_IDS.includes("BUSINESS_PROTECTION"));
   check(
@@ -324,6 +354,19 @@ try {
       !growthSpecialistSrc.includes("loadGrowthSource(") &&
       !growthSpecialistSrc.includes("createGrowthActionRequest") &&
       !growthSpecialistSrc.includes("growth-ops"),
+  );
+  const materialsSpecialistSrc = readFileSync(
+    new URL("../src/lib/chief-of-staff/materials-specialist.ts", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Deep MATERIALS upgrades the existing specialist instead of adding another",
+    registrySrc.includes('id: "MATERIALS"') &&
+      !registrySrc.includes('id: "MATERIALS_DEEP"') &&
+      (registrySrc.match(/id: "MATERIALS"/g) || []).length === 1 &&
+      !materialsSpecialistSrc.includes("createPurchaseOrder") &&
+      !materialsSpecialistSrc.includes("ensurePurchaseList") &&
+      !materialsSpecialistSrc.includes("listAssignedJobPickupView"),
   );
   check(
     "Canonical Workforce recommendation keys stay the original six",

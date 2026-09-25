@@ -76,6 +76,12 @@ export type SpecialistFinding = {
   entityIds?: string[];
 };
 
+export type SpecialistSkipReason =
+  | "NOT_AUTHORIZED"
+  | "NOT_ENTITLED"
+  | "PRODUCT_CAPABILITY_MISSING"
+  | "UNAVAILABLE";
+
 export type SpecialistResult = {
   specialistId: SpecialistId;
   status: "OK" | "FAILED" | "SKIPPED";
@@ -83,6 +89,7 @@ export type SpecialistResult = {
   factKeys: string[];
   recommendationKeys: string[];
   limitation?: string;
+  skipReason?: SpecialistSkipReason;
   failure?: SpecialistFailure;
 };
 

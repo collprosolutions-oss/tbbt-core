@@ -5,6 +5,7 @@
 import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { isSpecialistEnabled } from "@/lib/chief-of-staff/registry";
 import { isGrowthOwnedRecommendationKey } from "@/lib/chief-of-staff/growth-specialist";
+import { isMaterialsOwnedRecommendationKey } from "@/lib/chief-of-staff/materials-specialist";
 import { isFinancialOwnedRecommendationKey } from "@/lib/chief-of-staff/specialists/financial";
 import {
   MAX_RECURSION_DEPTH,
@@ -23,7 +24,8 @@ const GROWTH_QUESTION =
   /\b(leads?|lead funnel|lead source|pipeline|recover(?:y|ed)?(?: leads?)?|reactivat(?:e|ion)(?: customers?)?|campaigns?|marketing|attribution|(?:lead )?sources?|referrals?|reviews?|repeat customers?|customer retention|local (?:marketing|growth)|conversion|lost leads?|follow-up opportunities|growth)\b/i;
 const KNOWLEDGE_QUESTION =
   /\b(knowledge|launch|procedures?|experience candidates?|approval)\b/i;
-const MATERIALS_QUESTION = /\b(materials?|suppliers?|purchase orders?|inventory)\b/i;
+const MATERIALS_QUESTION =
+  /\b(materials?|suppliers?|vendors?|inventory|stock|lumber|parts|pickup|job materials|material variance|purchase orders?|purchas(?:e|ed|ing)|buy|bought|buying|\bPOs?\b|pric(?:e|es|ing))\b/i;
 const COMMUNICATIONS_QUESTION = /\b(sms|text messages?|phone calls?|communications?)\b/i;
 const PROTECTION_QUESTION = /\b(vault|agreements?|esign|insurance|business protection)\b/i;
 const FOCUS_QUESTION = /\b(this week|focus|should i|what should i)\b/i;
@@ -120,6 +122,21 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     skipped.push({ id: "GROWTH", reason: "DISABLED" });
   }
 
+  const materialsKeys = input.activeRecommendationKeys.filter((key) =>
+    isMaterialsOwnedRecommendationKey(key),
+  );
+  const materialsHint =
+    input.entityHints?.recommendationKey != null &&
+    isMaterialsOwnedRecommendationKey(input.entityHints.recommendationKey);
+  const wantsMaterials =
+    MATERIALS_QUESTION.test(question) || materialsKeys.length > 0 || Boolean(materialsHint);
+
+  if (wantsMaterials && isSpecialistEnabled("MATERIALS")) {
+    selected.push("MATERIALS");
+  } else if (MATERIALS_QUESTION.test(question) && !isSpecialistEnabled("MATERIALS")) {
+    skipped.push({ id: "MATERIALS", reason: "DISABLED" });
+  }
+
   const isFocus = FOCUS_QUESTION.test(question);
   for (const hint of DISABLED_KEYWORD_HINTS) {
     if (!hint.pattern.test(question)) continue;
@@ -145,6 +162,14 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
       (growthKeys.length > 0 || Boolean(growthHint) || explicitGrowth)
     ) {
       allowed.add("GROWTH");
+    }
+    const explicitMaterials =
+      MATERIALS_QUESTION.test(question) && !isGenericFocusQuestion(question);
+    if (
+      isSpecialistEnabled("MATERIALS") &&
+      (materialsKeys.length > 0 || Boolean(materialsHint) || explicitMaterials)
+    ) {
+      allowed.add("MATERIALS");
     }
     for (const id of [...selected]) {
       if (!allowed.has(id)) {
