@@ -85,9 +85,9 @@ function factValue(facts: BsosFacts, key: string): string | null {
     case "recurring-expenses":
       return `${facts.recurringExpenses.count}/${facts.recurringExpenses.amount.toFixed(2)}`;
     case "growth-recovery":
-      return String(facts.growthRecoveryOpen?.count ?? 0);
+      return facts.growthRecoveryOpen == null ? null : String(facts.growthRecoveryOpen.count);
     case "growth-reactivation":
-      return String(facts.growthReactivationEligible?.count ?? 0);
+      return facts.growthReactivationEligible == null ? null : String(facts.growthReactivationEligible.count);
     case "launch-incomplete":
       return String(facts.launchIncompleteSteps.count);
     case "knowledge-unreviewed":
@@ -162,12 +162,13 @@ export function loadSpecialistContext(
       "available-capacity",
       "unscheduled-jobs",
     ];
+    const facts = projectFacts(catalog.facts, keys);
     return {
       specialistId,
       question,
-      factKeys: keys,
+      factKeys: keys.filter((key) => facts[key] != null),
       recommendationKeys: catalog.activeRecommendations.map((item) => item.key),
-      facts: projectFacts(catalog.facts, keys),
+      facts,
       findings: asFindings(catalog.activeRecommendations.filter((item) => !item.key.startsWith("workforce-"))),
       entityHints,
     };

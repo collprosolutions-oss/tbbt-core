@@ -126,7 +126,7 @@ export function synthesizeCoachAnswer(input: {
       ...failed.map((row) => row.limitation ?? row.failure?.message ?? "A recorded view was unavailable."),
       ...skipped.map((row) => row.limitation ?? "A recorded view was not available."),
     ],
-    recordedFindings: financialFindings.map((item) => ({
+    recordedFindings: [...financialFindings, ...growthFindings].map((item) => ({
       key: item.key,
       title: item.title,
       summary: item.summary,

@@ -116,8 +116,6 @@ export const EMPTY_BSOS_FACTS: BsosFacts = {
   recurringExpenses: { count: 0, amount: 0 },
   paidRevenue: { amount: 0 },
   recordedExpenses: { amount: 0 },
-  growthRecoveryOpen: { count: 0 },
-  growthReactivationEligible: { count: 0 },
   unbilledCompletedJobs: { count: 0 },
   launchIncompleteSteps: { count: 0 },
   knowledgeNeedsApproval: { count: 0 },
@@ -585,14 +583,18 @@ export function buildBsosHealthMetrics(facts: BsosFacts): BsosHealthMetric[] {
       href: "/pipeline",
       note: "Recorded SENT estimates awaiting a decision.",
     },
-    {
-      key: "growth-recovery",
-      label: "Growth recovery items",
-      value: String(facts.growthRecoveryOpen?.count ?? 0),
-      kind: "fact",
-      href: "/growth?area=recovery",
-      note: "Deterministic lost-lead recovery queue. No auto-message.",
-    },
+    ...(facts.growthRecoveryOpen != null
+      ? [
+          {
+            key: "growth-recovery",
+            label: "Growth recovery items",
+            value: String(facts.growthRecoveryOpen.count),
+            kind: "fact" as const,
+            href: "/growth?area=recovery",
+            note: "Deterministic lost-lead recovery queue. No auto-message.",
+          },
+        ]
+      : []),
   ];
 }
 

@@ -273,7 +273,7 @@ export async function loadBsosFactsBundle(
     recurringExpenses: { count: 0, amount: 0 },
     paidRevenue: { amount: asNumber(paidInvoices._sum.total) },
     recordedExpenses: { amount: asNumber(expenses._sum.amount) },
-    ...(growthLoaded.source
+    ...(growthEntitled && growthLoaded.source
       ? {
           growthRecoveryOpen: { count: buildRecoveryQueue(growthLoaded.source).length },
           growthReactivationEligible: {

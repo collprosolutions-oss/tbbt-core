@@ -23,15 +23,20 @@ const {
   growthProjectionHasForbiddenFields,
   interpretGrowthSpecialist,
   loadCanonicalRecommendationCatalog,
+  loadSpecialistContext,
   planSpecialists,
   resetGrowthSpecialistCounters,
   resetLastGrowthProjection,
   runChiefOfStaffCoach,
+  synthesizeCoachAnswer,
 } = await import("@/lib/chief-of-staff");
 const { getSpecialistEntry } = await import("@/lib/chief-of-staff/registry");
+const { setInjectedGrowthLoadFailure } = await import("@/lib/chief-of-staff/growth-snapshot");
 const { getGrowthSourceLoadCount, resetGrowthSourceLoadCount } = await import("@/lib/growth-data");
 const { REACTIVATION_AFTER_DAYS } = await import("@/lib/growth");
 const { PRODUCT_CAPABILITIES } = await import("@/lib/product-catalog");
+const { grantProductCapability } = await import("@/lib/product-entitlements");
+const { buildBsosHealthMetrics } = await import("@/lib/bsos");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -124,6 +129,76 @@ function resetLoads() {
   resetGrowthSourceLoadCount();
   resetGrowthSpecialistCounters();
   resetLastGrowthProjection();
+}
+
+async function seedWithheldGrowthSignals(businessId) {
+  const customer = await prisma.customer.create({
+    data: { businessId, name: "Withheld Recovery", smsConsentStatus: "UNKNOWN" },
+  });
+  await prisma.serviceRequest.create({
+    data: {
+      businessId,
+      customerId: customer.id,
+      summary: "Withheld never estimated",
+      leadSource: "WEBSITE",
+      originalLeadSource: "WEBSITE",
+      createdAt: daysAgo(21),
+      updatedAt: daysAgo(21),
+    },
+  });
+  const prior = await prisma.customer.create({
+    data: {
+      businessId,
+      name: "Withheld Prior",
+      email: `withheld-${randomUUID()}@example.com`,
+      smsConsentStatus: "GRANTED",
+      createdAt: daysAgo(200),
+    },
+  });
+  const job = await prisma.job.create({
+    data: {
+      businessId,
+      customerId: prior.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+      updatedAt: daysAgo(REACTIVATION_AFTER_DAYS + 10),
+    },
+  });
+  await prisma.businessEvent.create({
+    data: {
+      businessId,
+      type: "JOB_COMPLETED",
+      subjectType: "JOB",
+      subjectId: job.id,
+      occurredAt: daysAgo(REACTIVATION_AFTER_DAYS + 10),
+      idempotencyKey: `JOB_COMPLETED:${job.id}`,
+    },
+  });
+}
+
+function assertGrowthFactsWithheld(label, catalog) {
+  const attention = loadSpecialistContext("ATTENTION", catalog, "What should I focus on this week?");
+  const metrics = buildBsosHealthMetrics(catalog.facts);
+  check(`${label}: catalog.growth.entitled === false`, catalog.growth.entitled === false);
+  check(`${label}: catalog.growth.source === null`, catalog.growth.source == null);
+  check(`${label}: facts.growthRecoveryOpen === undefined`, catalog.facts.growthRecoveryOpen === undefined);
+  check(`${label}: facts.growthReactivationEligible === undefined`, catalog.facts.growthReactivationEligible === undefined);
+  check(
+    `${label}: no growth-lost-lead-recovery recommendation`,
+    catalog.recommendations.every((row) => row.key !== "growth-lost-lead-recovery") &&
+      catalog.activeRecommendations.every((row) => row.key !== "growth-lost-lead-recovery"),
+  );
+  check(
+    `${label}: no growth-reactivate-customers recommendation`,
+    catalog.recommendations.every((row) => row.key !== "growth-reactivate-customers") &&
+      catalog.activeRecommendations.every((row) => row.key !== "growth-reactivate-customers"),
+  );
+  check(`${label}: ATTENTION has no growth-recovery fact value`, attention.facts["growth-recovery"] == null);
+  check(`${label}: ATTENTION has no growth-reactivation fact value`, attention.facts["growth-reactivation"] == null);
+  check(
+    `${label}: Business Health does not display a fabricated Growth zero`,
+    !metrics.some((row) => row.key === "growth-recovery"),
+  );
 }
 
 try {
@@ -409,6 +484,11 @@ try {
     catalogStarter.growth.missingCapabilities.includes(PRODUCT_CAPABILITIES.MARKETING_TOOLS) &&
       catalogStarter.growth.missingCapabilities.includes(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS),
   );
+  check(
+    "3/4. Starter omits Growth count facts instead of fabricating zeros",
+    catalogStarter.facts.growthRecoveryOpen === undefined &&
+      catalogStarter.facts.growthReactivationEligible === undefined,
+  );
   check("5. Founder catalog attaches the entitled Growth source", catalogA.growth.entitled === true && catalogA.growth.source != null);
 
   const starterResult = interpretGrowthSpecialist(catalogStarter, "Which leads should I recover?");
@@ -474,6 +554,161 @@ try {
       projection.totals.recovery >= projection.recovery.length &&
       projection.totals.reactivationEligible >= projection.reactivation.filter((row) => row.outreachEligible).length,
   );
+  check(
+    "C. Entitled workspace keeps actual Growth counts",
+    catalogA.facts.growthRecoveryOpen != null &&
+      catalogA.facts.growthRecoveryOpen.count > 0 &&
+      catalogA.facts.growthReactivationEligible != null &&
+      catalogA.facts.growthReactivationEligible.count > 0,
+  );
+  check(
+    "C. Canonical Growth recommendations still work when entitled",
+    catalogA.activeRecommendations.some((row) => row.key === "growth-lost-lead-recovery") &&
+      catalogA.activeRecommendations.some((row) => row.key === "growth-reactivate-customers"),
+  );
+  check(
+    "C. Business Health may display the real recovery count",
+    buildBsosHealthMetrics(catalogA.facts).some(
+      (row) => row.key === "growth-recovery" && row.value === String(catalogA.facts.growthRecoveryOpen.count),
+    ),
+  );
+
+  const providerGrowthFinding =
+    okResult.findings.find((row) => row.key === "growth-recovery-open") ?? okResult.findings[0];
+  const providerFinancialFinding = {
+    key: "review-low-margin-jobs",
+    title: "Review recorded low-margin work",
+    summary: "One recorded job has a negative margin.",
+    recommendationKeys: ["review-low-margin-jobs"],
+    factKeys: ["low-margin"],
+  };
+  const providerSynthesis = synthesizeCoachAnswer({
+    question: "Which lost leads can I recover and how are campaigns converting?",
+    catalog: catalogA,
+    specialistResults: [
+      {
+        specialistId: "FINANCIAL",
+        status: "OK",
+        findings: [providerFinancialFinding],
+        factKeys: ["low-margin"],
+        recommendationKeys: ["review-low-margin-jobs"],
+      },
+      okResult,
+    ],
+    conflicts: {
+      items: [],
+      uniqueRecommendationKeys: [...okResult.recommendationKeys, "review-low-margin-jobs"],
+    },
+    coachContext: {
+      facts: catalogA.facts,
+      recommendations: catalogA.activeRecommendations,
+      metrics: [],
+      goals: [],
+      actionItems: [],
+    },
+  });
+  const recordedFindings = providerSynthesis.payload.recordedFindings ?? [];
+  const providerPayload = JSON.stringify(providerSynthesis.payload);
+  check(
+    "Provider recordedFindings includes the bounded Growth finding",
+    Array.isArray(recordedFindings) &&
+      recordedFindings.some(
+        (row) => row.key === providerGrowthFinding.key && row.title === providerGrowthFinding.title && row.summary === providerGrowthFinding.summary,
+      ),
+  );
+  check(
+    "Provider payload contains the Growth finding title and summary",
+    providerPayload.includes(providerGrowthFinding.title) && providerPayload.includes(providerGrowthFinding.summary),
+  );
+  check(
+    "Provider payload keeps Financial recorded findings",
+    recordedFindings.some((row) => row.key === "review-low-margin-jobs" && row.title === providerFinancialFinding.title),
+  );
+  check(
+    "Provider payload does not include a full GrowthSource",
+    !providerPayload.includes("reviewRequests") &&
+      !providerPayload.includes("localPageDrafts") &&
+      !providerPayload.includes("publishedLocalPages") &&
+      !providerPayload.includes("\"requests\""),
+  );
+  check(
+    "Provider payload has no forbidden Growth PII",
+    !growthProjectionHasForbiddenFields(providerSynthesis.payload) &&
+      !providerPayload.includes("ada-secret@example.com") &&
+      !providerPayload.includes("555-0100"),
+  );
+  check("Provider payload does not name a Growth specialist", !/Growth specialist/i.test(providerPayload) && !/Growth Agent/i.test(providerSynthesis.output.text));
+  check(
+    "Fallback still includes Growth finding summaries",
+    providerSynthesis.output.text.includes(providerGrowthFinding.summary),
+  );
+
+  console.log("\nENTITLEMENT — Growth facts stay absent unless both capabilities load");
+  const missingMarketing = await createOwnerWorkspace("Missing Marketing Growth");
+  await prisma.businessSaasSubscription.create({
+    data: { businessId: missingMarketing.business.id, status: "active", planCode: "STARTER" },
+  });
+  await grantProductCapability(prisma, {
+    businessId: missingMarketing.business.id,
+    capability: PRODUCT_CAPABILITIES.REPORTING_INSIGHTS,
+    source: "SUPPORT",
+    note: "Reporting only",
+  });
+  await seedWithheldGrowthSignals(missingMarketing.business.id);
+  const catalogMissingMarketing = await loadCanonicalRecommendationCatalog(prisma, missingMarketing.business.id);
+  assertGrowthFactsWithheld("A. Missing MARKETING_TOOLS", catalogMissingMarketing);
+  check(
+    "A. Missing MARKETING_TOOLS is named on the snapshot",
+    catalogMissingMarketing.growth.missingCapabilities.includes(PRODUCT_CAPABILITIES.MARKETING_TOOLS),
+  );
+  const missingMarketingPlan = planSpecialists({
+    question: "Which lost leads can I recover?",
+    activeRecommendationKeys: [],
+  });
+  const missingMarketingResult = interpretGrowthSpecialist(catalogMissingMarketing, "Which lost leads can I recover?");
+  check("A. Explicit Growth question still selects GROWTH", missingMarketingPlan.selectedIds.includes("GROWTH"));
+  check("A. Selected Growth SKIPS truthfully without a required capability", missingMarketingResult.status === "SKIPPED");
+
+  const missingReporting = await createOwnerWorkspace("Missing Reporting Growth");
+  await prisma.businessSaasSubscription.create({
+    data: { businessId: missingReporting.business.id, status: "active", planCode: "STARTER" },
+  });
+  await grantProductCapability(prisma, {
+    businessId: missingReporting.business.id,
+    capability: PRODUCT_CAPABILITIES.MARKETING_TOOLS,
+    source: "SUPPORT",
+    note: "Marketing only",
+  });
+  await seedWithheldGrowthSignals(missingReporting.business.id);
+  const catalogMissingReporting = await loadCanonicalRecommendationCatalog(prisma, missingReporting.business.id);
+  assertGrowthFactsWithheld("B. Missing REPORTING_INSIGHTS", catalogMissingReporting);
+  check(
+    "B. Missing REPORTING_INSIGHTS is named on the snapshot",
+    catalogMissingReporting.growth.missingCapabilities.includes(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS),
+  );
+  const missingReportingPlan = planSpecialists({
+    question: "Should I reactivate prior customers?",
+    activeRecommendationKeys: [],
+  });
+  const missingReportingResult = interpretGrowthSpecialist(catalogMissingReporting, "Should I reactivate prior customers?");
+  check("B. Explicit Growth question still selects GROWTH", missingReportingPlan.selectedIds.includes("GROWTH"));
+  check("B. Selected Growth SKIPS truthfully without Reporting Insights", missingReportingResult.status === "SKIPPED");
+
+  setInjectedGrowthLoadFailure(true);
+  const failedCatalog = await loadCanonicalRecommendationCatalog(prisma, tenantA.business.id);
+  setInjectedGrowthLoadFailure(false);
+  const failedAttention = loadSpecialistContext("ATTENTION", failedCatalog, "What should I focus on this week?");
+  check("D. Entitled workspace + load failure marks the snapshot failed", failedCatalog.growth.failed === true && failedCatalog.growth.source == null);
+  check("D. Failed load does not expose Growth count facts", failedCatalog.facts.growthRecoveryOpen === undefined && failedCatalog.facts.growthReactivationEligible === undefined);
+  check(
+    "D. Failed load does not invent Growth recovery/reactivation recommendations",
+    failedCatalog.recommendations.every((row) => row.key !== "growth-lost-lead-recovery" && row.key !== "growth-reactivate-customers"),
+  );
+  check(
+    "D. Failed load does not fabricate a zero Growth metric",
+    !buildBsosHealthMetrics(failedCatalog.facts).some((row) => row.key === "growth-recovery"),
+  );
+  check("D. ATTENTION survives without Growth fact values", failedAttention.specialistId === "ATTENTION" && failedAttention.facts["growth-recovery"] == null);
 
   console.log("\nCAPS — full totals stay truthful when detail is bounded");
   const overCap = await createOwnerWorkspace("Over Cap Growth");

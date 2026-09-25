@@ -801,6 +801,66 @@ try {
       synthesized.citedFacts.map((fact) => fact.key),
     )?.citedFactKeys.includes("secret-ledger") === false,
   );
+  const growthSynthesis = synthesizeCoachAnswer({
+    question: "Which lost leads can I recover?",
+    catalog,
+    specialistResults: [
+      { specialistId: "ATTENTION", status: "OK", findings: [], factKeys: ["unpaid-invoices"], recommendationKeys: ["collect-unpaid-invoices"] },
+      {
+        specialistId: "FINANCIAL",
+        status: "OK",
+        findings: [
+          {
+            key: "review-low-margin-jobs",
+            title: "Review recorded low-margin work",
+            summary: "One recorded job has a negative margin.",
+            recommendationKeys: ["review-low-margin-jobs"],
+            factKeys: ["low-margin"],
+          },
+        ],
+        factKeys: ["low-margin"],
+        recommendationKeys: ["review-low-margin-jobs"],
+      },
+      {
+        specialistId: "GROWTH",
+        status: "OK",
+        findings: [
+          {
+            key: "growth-recovery-open",
+            title: "Review recorded recovery opportunities",
+            summary: "3 recorded recovery opportunities are open.",
+            recommendationKeys: [],
+            factKeys: ["growth-recovery"],
+          },
+        ],
+        factKeys: ["growth-recovery"],
+        recommendationKeys: [],
+      },
+    ],
+    conflicts,
+    coachContext: {
+      facts: catalog.facts,
+      recommendations: catalog.activeRecommendations,
+      metrics: [],
+      goals: [],
+      actionItems: [],
+    },
+  });
+  const growthRecorded = growthSynthesis.payload.recordedFindings ?? [];
+  check(
+    "Provider recordedFindings includes bounded Growth and Financial findings",
+    growthRecorded.some((row) => row.key === "growth-recovery-open" && row.title.includes("recovery")) &&
+      growthRecorded.some((row) => row.key === "review-low-margin-jobs"),
+  );
+  check(
+    "Provider payload does not name a Growth specialist",
+    !/Growth specialist/i.test(JSON.stringify(growthSynthesis.payload)) &&
+      !/Growth Agent/i.test(growthSynthesis.output.text),
+  );
+  check(
+    "Fallback still mentions the Growth finding",
+    growthSynthesis.output.text.includes("3 recorded recovery opportunities are open."),
+  );
 
   console.log("\nRECOMMENDATIONS — Workforce dismiss stores real evidence");
   const workforceRec = await findCatalogRecommendation(prisma, businessA.id, "workforce-unassigned-job");
