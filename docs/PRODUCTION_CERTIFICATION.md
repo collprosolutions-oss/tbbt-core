@@ -18,7 +18,7 @@ Do not invent passing browser results. The isolated harness is
 ## Lifecycle (owner / customer / field)
 
 1. Signup → trial / SaaS entitlement (`/sign-up`, SaaS Stripe — not Connect).
-2. First-run setup → starter services → website setup (`/setup`, `/setup/services`, `/setup/website`). Owners can continue into resumable Business Launch (`/launch`) and AI-assisted Build my company (`/launch/build`) without being dumped into forty blank settings.
+2. First-run setup → starter services → website setup (`/setup`, `/setup/services`, `/setup/website`). Owners can continue into resumable Business Launch (`/launch`) and AI-assisted Build my company (`/launch/build`) without being dumped into forty blank settings. Settings → Go-live / Health (`/settings?section=go-live`) is a read-only production capability board. It does not connect providers or produce a single “100% ready” boolean.
 3. Public website + request with photos (`/hire/[slug]`, `/r/[slug]`). After the first Website Publish, public pages read the immutable snapshot; businesses with no publish stay on the live-assembled path.
 4. CRM / requests / pipeline (`/customers`, `/requests`, `/pipeline`).
 5. Estimate → send / email → customer approve (`/estimates`, `/e/[token]`).

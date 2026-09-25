@@ -677,6 +677,18 @@ try {
   await expectAllowed("OWNER can pass the data-export capability gate", () => {
     requireBusinessCapability(ownerA, CAPABILITIES.MANAGE_SETTINGS);
   });
+  const settingsPageSrc = readFileSync(new URL("../src/app/(app)/settings/page.tsx", import.meta.url), "utf8");
+  check(
+    "Go-live loader runs only after management-console access (MEMBER never reaches it)",
+    settingsPageSrc.includes("requireManagementPageAccess") &&
+      settingsPageSrc.includes("loadGoLiveCenter") &&
+      settingsPageSrc.indexOf("requireManagementPageAccess") <
+        settingsPageSrc.indexOf("loadGoLiveCenter"),
+  );
+  check(
+    "MEMBER cannot pass the Go-live / settings capability gate",
+    !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_SETTINGS),
+  );
 
   console.log("\nTEST 19 — Communications is OWNER/ADMIN-only");
   check("OWNER has MANAGE_COMMUNICATIONS", roleHasCapability("OWNER", CAPABILITIES.MANAGE_COMMUNICATIONS));

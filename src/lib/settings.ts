@@ -17,6 +17,7 @@ import { getMailConfig } from "@/lib/mail";
 
 export const SETTINGS_SECTIONS = [
   "overview",
+  "go-live",
   "profile",
   "website-photos",
   "website-story",
@@ -43,6 +44,7 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export const SETTINGS_SECTION_LABELS: Record<SettingsSection, string> = {
   overview: "Overview",
+  "go-live": "Go-live / Health",
   profile: "Business Profile",
   "website-photos": "Website Photos",
   "website-story": "Website Story",

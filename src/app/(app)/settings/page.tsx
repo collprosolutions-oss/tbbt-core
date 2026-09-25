@@ -24,6 +24,7 @@ import {
   settingsIntegrationCardsFromSnapshot,
   settingsReadinessFromSnapshot,
 } from "@/lib/settings-data";
+import { loadGoLiveCenter } from "@/lib/go-live-data";
 import { previewOperationalTestData } from "@/lib/test-data-cleanup";
 import { loadPublicCatalog } from "@/lib/public-site-data";
 import { loadWebsitePhotoEditorSlots } from "@/lib/public-site-images";
@@ -50,6 +51,7 @@ export default async function SettingsPage({
       : null;
 
   const snapshot = await loadSettingsSnapshot(prisma, access.businessId);
+  const goLive = await loadGoLiveCenter(prisma, access);
   const burdenRow = await prisma.businessLaborBurdenSetting.findUnique({
     where: { businessId: access.businessId },
     select: { burdenRate: true, targetGrossMarginRate: true, notes: true },
@@ -189,6 +191,7 @@ export default async function SettingsPage({
           role={role}
           snapshot={snapshot}
           readiness={readiness}
+          goLive={goLive}
           integrations={integrations}
           canEditConsequential={canEditConsequential}
           canEditPreferences={canEditPreferences}

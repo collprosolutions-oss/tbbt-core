@@ -22,6 +22,7 @@ import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-se
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import { SchedulingSettingsForm } from "@/components/settings/scheduling-settings-form";
 import { SupplierPricingSettingsForm } from "@/components/settings/supplier-pricing-form";
+import { GoLiveHealthCenter } from "@/components/settings/go-live-health-center";
 import { ClearTestDataForm } from "@/components/settings/clear-test-data-form";
 import { ChangePasswordForm } from "@/components/settings/change-password-form";
 import { AccountSecurityPanel } from "@/components/settings/account-security-panel";
@@ -152,6 +153,18 @@ function OverviewSection({
   return (
     <div className="space-y-4">
       <SectionCard
+        title="Go-live / Integration Health"
+        description="One owner screen for whether production capabilities are actually usable. This is status only — it does not connect providers."
+      >
+        <p className="text-sm text-muted-foreground">
+          Necessary items (SaaS access, customer cards, email, photo storage) are listed separately
+          from optional SMS, AI, bank, supplier, e-sign, voice, and social publishing.
+        </p>
+        <Button asChild size="sm">
+          <Link href="/settings?section=go-live">Open Go-live / Health</Link>
+        </Button>
+      </SectionCard>
+      <SectionCard
         title="Business setup"
         description={`${readiness.requiredReady} of ${readiness.requiredTotal} required areas are configured. This percentage is only those required checks — not an AI score.`}
       >
@@ -202,6 +215,10 @@ function SectionBody(props: SettingsWorkspaceProps) {
 
   if (section === "overview") {
     return <OverviewSection readiness={readiness} />;
+  }
+
+  if (section === "go-live") {
+    return <GoLiveHealthCenter center={props.goLive} />;
   }
 
   if (section === "website-photos") {
@@ -1094,6 +1111,20 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
       </FounderRegion>
 
       <FounderRegion id="rail" className="min-w-0 space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Go-live</CardTitle>
+            <CardDescription>Production capability status. Not a launch score.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Link
+              href="/settings?section=go-live"
+              className="text-sm text-primary underline-offset-4 hover:underline"
+            >
+              Open Integration Health
+            </Link>
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader>
             <CardTitle>Readiness</CardTitle>
