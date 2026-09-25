@@ -11,6 +11,7 @@ import {
   createKnowledgeEntry,
   knowledgeErrorMessage,
   markKnowledgeReviewed,
+  setKnowledgeApproval,
   setKnowledgeArchived,
   updateKnowledgeEntry,
 } from "@/lib/knowledge-ops";
@@ -45,6 +46,7 @@ export async function createKnowledgeEntryAction(
       sourceReferenceId: readString(formData, "sourceReferenceId") || undefined,
       sourceLabel: readString(formData, "sourceLabel") || undefined,
       trustState: readString(formData, "trustState") || undefined,
+      knowledgeKind: readString(formData, "knowledgeKind") || undefined,
     });
     revalidateKnowledge();
     return { message: "Knowledge entry saved. TBBT did not generate this automatically." };
@@ -71,6 +73,7 @@ export async function updateKnowledgeEntryAction(
         ? readString(formData, "sourceReferenceId")
         : undefined,
       sourceLabel: formData.has("sourceLabel") ? readString(formData, "sourceLabel") : undefined,
+      knowledgeKind: formData.has("knowledgeKind") ? readString(formData, "knowledgeKind") : undefined,
     });
     revalidateKnowledge();
     return { message: "Knowledge entry updated. Provenance was not silently overwritten." };
@@ -114,5 +117,22 @@ export async function setKnowledgeArchivedAction(
     };
   } catch (error) {
     return { error: knowledgeErrorMessage(error, "That knowledge entry could not be archived.") };
+  }
+}
+
+export async function setKnowledgeApprovalAction(
+  _prev: KnowledgeActionState,
+  formData: FormData,
+): Promise<KnowledgeActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    await setKnowledgeApproval(prisma, access, {
+      entryId: readString(formData, "entryId"),
+      approvalState: readString(formData, "approvalState"),
+    });
+    revalidateKnowledge();
+    return { message: "Owner approval updated. This does not silently change trust state." };
+  } catch (error) {
+    return { error: knowledgeErrorMessage(error, "That knowledge entry could not be approved.") };
   }
 }

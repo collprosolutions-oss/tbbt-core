@@ -14,11 +14,15 @@ import {
   KNOWLEDGE_CATEGORY_LABELS,
   KNOWLEDGE_SOURCE_KIND_LABELS,
   KNOWLEDGE_SOURCE_TYPE_LABELS,
+  KNOWLEDGE_APPROVAL_LABELS,
+  KNOWLEDGE_KIND_LABELS,
   KNOWLEDGE_TRUST_LABELS,
   LEARNING_LOOP_STEPS,
   NO_AI_MESSAGE,
   TAKEOFF_UNAVAILABLE_MESSAGE,
+  isKnowledgeApprovalState,
   isKnowledgeCategory,
+  isKnowledgeKind,
   isKnowledgeSourceKind,
   isKnowledgeSourceType,
   isKnowledgeTrustState,
@@ -76,6 +80,13 @@ export type KnowledgeEntryView = {
   createdByName: string | null;
   lastReviewedByName: string | null;
   referencedRecord: KnowledgeReferencedRecord | null;
+  knowledgeKind: string | null;
+  knowledgeKindLabel: string | null;
+  approvalState: string;
+  approvalLabel: string;
+  approvedAt: Date | null;
+  concepts: Array<{ label: string; kind: string }>;
+  assertions: Array<{ statement: string; stance: string; confidence: string }>;
 };
 
 function asSourceType(value: string): KnowledgeSourceType {
@@ -133,6 +144,8 @@ export async function loadKnowledgeSource(
     unapprovedTime,
     marketing,
     reviews,
+    procedures,
+    candidates,
   ] = await Promise.all([
     prisma.business.findFirst({
       where: { id: businessId },
@@ -143,6 +156,8 @@ export async function loadKnowledgeSource(
       include: {
         createdBy: { select: { user: { select: { name: true } } } },
         reviewedBy: { select: { user: { select: { name: true } } } },
+        concepts: { select: { label: true, kind: true }, take: 8 },
+        assertions: { select: { statement: true, stance: true, confidence: true }, take: 8 },
       },
       orderBy: { updatedAt: "desc" },
     }),
@@ -246,6 +261,17 @@ export async function loadKnowledgeSource(
       },
       orderBy: { createdAt: "desc" },
       take: 40,
+    }),
+    prisma.operatingProcedure.findMany({
+      where: { ...scope, archived: false },
+      include: { steps: { orderBy: { sortOrder: "asc" } } },
+      orderBy: { updatedAt: "desc" },
+      take: 20,
+    }),
+    prisma.experienceLearningCandidate.findMany({
+      where: { ...scope, status: { in: ["CANDIDATE", "REVIEWED"] } },
+      orderBy: { createdAt: "desc" },
+      take: 20,
     }),
   ]);
 
@@ -364,6 +390,8 @@ export async function loadKnowledgeSource(
     const sourceType = asSourceType(row.sourceType);
     const sourceKind = asSourceKind(row.sourceKind);
     const trustState = asTrustState(row.trustState);
+    const rawKind = row.knowledgeKind ?? undefined;
+    const knowledgeKind = isKnowledgeKind(rawKind) ? rawKind : null;
     return {
       id: row.id,
       title: row.title,
@@ -387,6 +415,15 @@ export async function loadKnowledgeSource(
       createdByName: row.createdBy.user.name,
       lastReviewedByName: row.reviewedBy?.user.name ?? null,
       referencedRecord: referencedRecord(sourceKind, row.sourceReferenceId),
+      knowledgeKind,
+      knowledgeKindLabel: knowledgeKind ? KNOWLEDGE_KIND_LABELS[knowledgeKind] : null,
+      approvalState: isKnowledgeApprovalState(row.approvalState) ? row.approvalState : "UNREVIEWED",
+      approvalLabel: KNOWLEDGE_APPROVAL_LABELS[
+        isKnowledgeApprovalState(row.approvalState) ? row.approvalState : "UNREVIEWED"
+      ],
+      approvedAt: row.approvedAt,
+      concepts: row.concepts ?? [],
+      assertions: row.assertions ?? [],
     };
   });
 
@@ -514,6 +551,30 @@ export async function loadKnowledgeSource(
       businessRecordsAvailable,
     },
     learningLoop: LEARNING_LOOP_STEPS,
+    procedures: procedures.map((row) => ({
+      id: row.id,
+      title: row.title,
+      summary: row.summary,
+      tradeCode: row.tradeCode,
+      jobType: row.jobType,
+      approvalState: row.approvalState,
+      stepCount: row.steps.length,
+      steps: row.steps.map((step) => ({
+        id: step.id,
+        title: step.title,
+        body: step.body,
+        required: step.required,
+      })),
+    })),
+    candidates: candidates.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      title: row.title,
+      body: row.body,
+      status: row.status,
+      confidence: row.confidence,
+      createdAt: row.createdAt,
+    })),
   };
 }
 

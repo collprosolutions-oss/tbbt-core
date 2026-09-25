@@ -17,6 +17,7 @@ export const AI_TASK_TYPES = [
   "COMM_REWRITE",
   "COMM_SUMMARIZE",
   "COMM_FOLLOW_UP",
+  "COMPANY_SETUP",
 ] as const;
 export type AiTaskType = (typeof AI_TASK_TYPES)[number];
 
@@ -36,6 +37,7 @@ export const AI_CONVERSATION_AREAS = [
   "REVIEW",
   "WRITING",
   "COMMUNICATION",
+  "LAUNCH",
 ] as const;
 export type AiConversationArea = (typeof AI_CONVERSATION_AREAS)[number];
 

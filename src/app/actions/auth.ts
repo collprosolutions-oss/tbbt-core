@@ -119,6 +119,7 @@ export async function signInAction(
         postAuthenticationPath({
           role: membership.role,
           business: membership.business,
+          launch: await loadLaunchResume(membership.businessId),
         }),
       );
     } catch (error) {
@@ -187,8 +188,17 @@ export async function signInAction(
     postAuthenticationPath({
       role: membership.role,
       business: membership.business,
+      launch: await loadLaunchResume(membership.businessId),
     }),
   );
+}
+
+async function loadLaunchResume(businessId: string) {
+  const progress = await prisma.businessLaunchProgress.findFirst({
+    where: { businessId },
+    select: { status: true, resumeLaterAt: true },
+  });
+  return progress;
 }
 
 export async function signOutAction() {

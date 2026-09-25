@@ -765,6 +765,25 @@ check(
     growthHardeningMigration.includes("IF NOT EXISTS"),
 );
 
+const knowledgeLaunchMigration = readFileSync(
+  new URL("../prisma/migrations/20260925220000_knowledge_business_launch/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Knowledge business launch migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(knowledgeLaunchMigration) &&
+    knowledgeLaunchMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessLaunchProgress"') &&
+    knowledgeLaunchMigration.includes('CREATE TABLE IF NOT EXISTS "ExperienceLearningCandidate"') &&
+    knowledgeLaunchMigration.includes('ADD COLUMN IF NOT EXISTS "approvalState"') &&
+    knowledgeLaunchMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run knowledge-launch DDL",
+  !workspaceLoader.includes("BusinessLaunchProgress") &&
+    !workspaceLoader.includes("knowledge_business_launch") &&
+    !workspaceLoader.includes("ExperienceLearningCandidate"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

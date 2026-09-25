@@ -12,7 +12,9 @@ import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
   SYSTEM_DERIVED_DISABLED_MESSAGE,
+  isKnowledgeApprovalState,
   isKnowledgeCategory,
+  isKnowledgeKind,
   isKnowledgeSourceKind,
   isKnowledgeSourceType,
   isKnowledgeTrustState,
@@ -211,6 +213,7 @@ export type CreateKnowledgeEntryInput = {
   sourceReferenceId?: string;
   sourceLabel?: string;
   trustState?: string;
+  knowledgeKind?: string;
 };
 
 export async function createKnowledgeEntry(
@@ -230,6 +233,10 @@ export async function createKnowledgeEntry(
   }
   if (!isKnowledgeCategory(input.category)) {
     throw new KnowledgeError("Choose a knowledge category.");
+  }
+  const knowledgeKind = input.knowledgeKind?.trim() || "";
+  if (knowledgeKind && !isKnowledgeKind(knowledgeKind)) {
+    throw new KnowledgeError("Choose a knowledge kind.");
   }
 
   const trustState = input.trustState?.trim() || "UNKNOWN";
@@ -261,6 +268,8 @@ export async function createKnowledgeEntry(
       sourceReferenceId,
       sourceLabel,
       trustState,
+      knowledgeKind: knowledgeKind || null,
+      approvalState: "UNREVIEWED",
       scope: "BUSINESS",
       createdByMembershipId: access.workspace.membership.id,
     },
@@ -309,6 +318,7 @@ export type UpdateKnowledgeEntryInput = {
   sourceKind?: string;
   sourceReferenceId?: string;
   sourceLabel?: string;
+  knowledgeKind?: string;
 };
 
 export async function updateKnowledgeEntry(
@@ -348,6 +358,13 @@ export async function updateKnowledgeEntry(
       throw new KnowledgeError("Choose a trust state.");
     }
     data.trustState = input.trustState;
+  }
+  if (input.knowledgeKind !== undefined) {
+    const knowledgeKind = input.knowledgeKind.trim();
+    if (knowledgeKind && !isKnowledgeKind(knowledgeKind)) {
+      throw new KnowledgeError("Choose a knowledge kind.");
+    }
+    data.knowledgeKind = knowledgeKind || null;
   }
 
   const provenanceTouched =
@@ -418,5 +435,28 @@ export async function setKnowledgeArchived(
   return db.knowledgeEntry.update({
     where: { id: existing.id },
     data: { archived: input.archived },
+  });
+}
+
+export async function setKnowledgeApproval(
+  db: Db,
+  access: BusinessAccess,
+  input: { entryId: string; approvalState: string },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_KNOWLEDGE);
+  if (!isKnowledgeApprovalState(input.approvalState)) {
+    throw new KnowledgeError("Choose approved or rejected.");
+  }
+  const existing = await requireOwnedEntry(db, access, input.entryId);
+  return db.knowledgeEntry.update({
+    where: { id: existing.id },
+    data: {
+      approvalState: input.approvalState,
+      approvedAt: input.approvalState === "APPROVED" ? new Date() : null,
+      approvedByMembershipId:
+        input.approvalState === "APPROVED" ? access.workspace.membership.id : null,
+      lastReviewedAt: new Date(),
+      lastReviewedByMembershipId: access.workspace.membership.id,
+    },
   });
 }

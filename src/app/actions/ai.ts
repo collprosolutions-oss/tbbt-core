@@ -170,7 +170,7 @@ export async function askKnowledgeAction(
       {
         taskType: "KNOWLEDGE_ASK",
         system:
-          "Answer only from the supplied tenant Knowledge entries. Never use another business. Return JSON {text, stance, citedFactKeys, notes}.",
+          "Answer only from the supplied tenant Knowledge entries. Distinguish approved knowledge, historical evidence, inference, and unknown. Never use another business. Return JSON {text, stance, citedFactKeys, notes}.",
         user: JSON.stringify({ question: sanitizeAiText(question, 800), entries: hits }),
         inputSummary: question,
         conversationId: conversation.id,

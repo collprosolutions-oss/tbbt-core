@@ -94,6 +94,33 @@ export type BsosFacts = {
   estimateLaborOverruns?: { count: number };
   expenseGrowthPercent?: number | null;
   customerConcentration?: { share: number | null; customerName: string | null };
+  launchIncompleteSteps: { count: number };
+  knowledgeNeedsApproval: { count: number };
+  experienceCandidates: { count: number };
+  launchGoals: { count: number };
+};
+
+export const EMPTY_BSOS_FACTS: BsosFacts = {
+  unpaidInvoices: { count: 0, amount: 0 },
+  sentEstimates: { count: 0 },
+  draftEstimates: { count: 0 },
+  unscheduledJobs: { count: 0 },
+  completedJobsWithoutReview: { count: 0 },
+  completedJobsReadyForMarketing: { count: 0 },
+  lowMarginJobs: { count: 0 },
+  missingWageEntries: { count: 0 },
+  availableCapacityDays: { count: 0 },
+  repeatCustomers: { count: 0 },
+  outsideAreaRequests: { count: 0 },
+  recurringExpenses: { count: 0, amount: 0 },
+  paidRevenue: { amount: 0 },
+  recordedExpenses: { amount: 0 },
+  growthRecoveryOpen: { count: 0 },
+  growthReactivationEligible: { count: 0 },
+  launchIncompleteSteps: { count: 0 },
+  knowledgeNeedsApproval: { count: 0 },
+  experienceCandidates: { count: 0 },
+  launchGoals: { count: 0 },
 };
 
 export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[] {
@@ -419,6 +446,63 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
         },
       ],
       href: "/reports?area=customers",
+    });
+  }
+
+  if (facts.launchIncompleteSteps.count > 0) {
+    items.push({
+      key: "finish-business-launch",
+      title: "Finish Business Launch setup",
+      kind: "recommendation",
+      priority: 18,
+      why: "Defined launch steps are still pending or deferred. This is recorded setup progress, not a score.",
+      facts: [
+        {
+          key: "launch-incomplete",
+          label: "Launch steps still open",
+          value: String(facts.launchIncompleteSteps.count),
+          href: "/launch",
+        },
+      ],
+      href: "/launch",
+    });
+  }
+
+  if (facts.experienceCandidates.count > 0) {
+    items.push({
+      key: "review-experience-learnings",
+      title: "Review candidate learnings from real work",
+      kind: "recommendation",
+      priority: 28,
+      why: "Experience Intelligence found recorded patterns. They are not trusted policy until you approve them.",
+      facts: [
+        {
+          key: "experience-candidates",
+          label: "Candidate learnings",
+          value: String(facts.experienceCandidates.count),
+          href: "/knowledge",
+        },
+      ],
+      href: "/knowledge",
+    });
+  }
+
+  if (facts.knowledgeNeedsApproval.count > 0) {
+    items.push({
+      key: "approve-business-knowledge",
+      title: "Approve or reject knowledge that still needs an owner decision",
+      kind: "recommendation",
+      priority: 32,
+      why: "Knowledge entries exist without owner approval. Ask Knowledge prefers approved entries.",
+      facts: [
+        {
+          key: "knowledge-unreviewed",
+          label: "Unreviewed knowledge",
+          value: String(facts.knowledgeNeedsApproval.count),
+          href: "/knowledge?review=needs-review",
+        },
+      ],
+      href: "/knowledge",
     });
   }
 

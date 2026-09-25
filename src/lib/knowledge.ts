@@ -178,10 +178,67 @@ export const LEARNING_LOOP_STEPS = [
   { id: "actual-time", label: "Actual Time", availability: "available" },
   { id: "actual-materials", label: "Actual Materials", availability: "unavailable" },
   { id: "compare", label: "Compare", availability: "future" },
-  { id: "learn", label: "Learn", availability: "future" },
+  { id: "learn", label: "Learn", availability: "available" },
   { id: "recommend", label: "Recommend", availability: "future" },
-  { id: "owner-approves", label: "Owner Approves", availability: "future" },
+  { id: "owner-approves", label: "Owner Approves", availability: "available" },
 ] as const;
+
+export const KNOWLEDGE_KINDS = [
+  "STANDARD_OPERATING_PROCEDURE",
+  "PRICING_LESSON",
+  "SERVICE_LESSON",
+  "CUSTOMER_FAQ",
+  "FIELD_TECHNIQUE",
+  "ESTIMATING_ASSUMPTION",
+  "SCHEDULING_LESSON",
+  "VENDOR_MATERIAL_LESSON",
+  "OWNER_POLICY",
+  "BUSINESS_RULE",
+] as const;
+export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
+
+export const KNOWLEDGE_KIND_LABELS: Record<KnowledgeKind, string> = {
+  STANDARD_OPERATING_PROCEDURE: "Standard operating procedure",
+  PRICING_LESSON: "Pricing lesson",
+  SERVICE_LESSON: "Service lesson",
+  CUSTOMER_FAQ: "Customer FAQ",
+  FIELD_TECHNIQUE: "Field technique",
+  ESTIMATING_ASSUMPTION: "Estimating assumption",
+  SCHEDULING_LESSON: "Scheduling lesson",
+  VENDOR_MATERIAL_LESSON: "Vendor / material lesson",
+  OWNER_POLICY: "Owner policy",
+  BUSINESS_RULE: "Business rule",
+};
+
+export const KNOWLEDGE_KIND_TO_CATEGORY: Record<KnowledgeKind, KnowledgeCategory> = {
+  STANDARD_OPERATING_PROCEDURE: "JOB_PROCEDURES",
+  PRICING_LESSON: "SERVICES_PRICING",
+  SERVICE_LESSON: "SERVICES_PRICING",
+  CUSTOMER_FAQ: "CUSTOMERS_POLICIES",
+  FIELD_TECHNIQUE: "TRAINING_HOWTO",
+  ESTIMATING_ASSUMPTION: "ESTIMATING_TAKEOFFS",
+  SCHEDULING_LESSON: "JOB_PROCEDURES",
+  VENDOR_MATERIAL_LESSON: "VENDORS_MATERIALS",
+  OWNER_POLICY: "CUSTOMERS_POLICIES",
+  BUSINESS_RULE: "CUSTOMERS_POLICIES",
+};
+
+export function isKnowledgeKind(value: string | undefined): value is KnowledgeKind {
+  return (KNOWLEDGE_KINDS as readonly string[]).includes(value ?? "");
+}
+
+export const KNOWLEDGE_APPROVAL_STATES = ["UNREVIEWED", "APPROVED", "REJECTED"] as const;
+export type KnowledgeApprovalState = (typeof KNOWLEDGE_APPROVAL_STATES)[number];
+
+export const KNOWLEDGE_APPROVAL_LABELS: Record<KnowledgeApprovalState, string> = {
+  UNREVIEWED: "Unreviewed",
+  APPROVED: "Owner approved",
+  REJECTED: "Rejected",
+};
+
+export function isKnowledgeApprovalState(value: string | undefined): value is KnowledgeApprovalState {
+  return (KNOWLEDGE_APPROVAL_STATES as readonly string[]).includes(value ?? "");
+}
 
 export type LearningLoopAvailability = "available" | "unavailable" | "future";
 
