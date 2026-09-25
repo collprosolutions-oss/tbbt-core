@@ -29,6 +29,8 @@ import { loadPublicCatalog } from "@/lib/public-site-data";
 import { loadWebsitePhotoEditorSlots } from "@/lib/public-site-images";
 import { loadSupplierPricingContextPayload } from "@/lib/material-pricing/db";
 import { loadWebsitePublishPanelData } from "@/lib/website-engine";
+import { getFinanceConnectionProvider } from "@/lib/finance-connections";
+import { asNumberOrNull } from "@/lib/reports";
 
 export const metadata: Metadata = {
   title: "Settings",
@@ -48,6 +50,11 @@ export default async function SettingsPage({
       : null;
 
   const snapshot = await loadSettingsSnapshot(prisma, access.businessId);
+  const burdenRow = await prisma.businessLaborBurdenSetting.findUnique({
+    where: { businessId: access.businessId },
+    select: { burdenRate: true, targetGrossMarginRate: true, notes: true },
+  });
+  const financeStatus = getFinanceConnectionProvider().status();
   const readiness = settingsReadinessFromSnapshot(snapshot);
   const integrations = settingsIntegrationCardsFromSnapshot(snapshot);
   const role = access.workspace.role;
@@ -194,6 +201,17 @@ export default async function SettingsPage({
           testDataCleanupPreview={testDataCleanupPreview}
           checkoutStatus={checkoutStatus}
           security={await loadSettingsSecurity(access)}
+          laborBurden={{
+            burdenRate: asNumberOrNull(burdenRow?.burdenRate),
+            targetGrossMarginRate: asNumberOrNull(burdenRow?.targetGrossMarginRate),
+            notes: burdenRow?.notes ?? null,
+          }}
+          financeStatus={{
+            accountingConnected: financeStatus.accounting.connected,
+            bankingConnected: financeStatus.banking.connected,
+            accountingMessage: financeStatus.accounting.message,
+            bankingMessage: financeStatus.banking.message,
+          }}
         />
       </FounderDesignRoot>
     </PageContainer>

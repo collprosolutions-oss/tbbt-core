@@ -85,7 +85,13 @@ export type BsosFacts = {
   outsideAreaRequests: { count: number };
   recurringExpenses: { count: number; amount: number };
   paidRevenue: { amount: number };
+  collectedRevenue?: { amount: number };
   recordedExpenses: { amount: number };
+  agedReceivables?: { count: number; amount: number };
+  lowMarginServices?: { count: number };
+  estimateLaborOverruns?: { count: number };
+  expenseGrowthPercent?: number | null;
+  customerConcentration?: { share: number | null; customerName: string | null };
 };
 
 export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[] {
@@ -135,7 +141,7 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
       title: "Review low-margin jobs and services",
       kind: "recommendation",
       priority: 25,
-      why: "Recorded paid revenue is below recorded labor plus job expenses on one or more jobs.",
+      why: "Billed revenue is below recorded wage plus job expenses on one or more jobs.",
       facts: [
         {
           key: "low-margin",
@@ -281,6 +287,101 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
     });
   }
 
+  if ((facts.agedReceivables?.count ?? 0) > 0) {
+    items.push({
+      key: "receivable-needs-attention",
+      title: "Unpaid invoices are aging",
+      kind: "recommendation",
+      priority: 8,
+      why: "SENT invoices have been outstanding more than 30 days. Age uses the issued date. Due dates are not invented.",
+      facts: [
+        {
+          key: "aged-receivables",
+          label: "Invoices older than 30 days",
+          value: `${facts.agedReceivables!.count} / ${facts.agedReceivables!.amount.toFixed(2)}`,
+          href: "/reports?area=receivables",
+        },
+      ],
+      href: "/reports?area=receivables",
+    });
+  }
+
+  if ((facts.lowMarginServices?.count ?? 0) > 0) {
+    items.push({
+      key: "service-margin-below-target",
+      title: "Review services with negative recorded margin",
+      kind: "recommendation",
+      priority: 24,
+      why: "Attributed completed work has billed revenue below recorded direct cost.",
+      facts: [
+        {
+          key: "low-margin-services",
+          label: "Services with negative recorded margin",
+          value: String(facts.lowMarginServices!.count),
+          href: "/reports?area=services",
+        },
+      ],
+      href: "/reports?area=services",
+    });
+  }
+
+  if ((facts.estimateLaborOverruns?.count ?? 0) > 0) {
+    items.push({
+      key: "estimate-labor-overrun",
+      title: "Approved labor exceeded a recorded hours baseline",
+      kind: "recommendation",
+      priority: 23,
+      why: "Approved time exceeded a trustworthy hours snapshot. Generic LABOR quantity is not treated as hours.",
+      facts: [
+        {
+          key: "labor-overruns",
+          label: "Jobs over a recorded hours baseline",
+          value: String(facts.estimateLaborOverruns!.count),
+          href: "/reports?area=estimate-accuracy",
+        },
+      ],
+      href: "/reports?area=estimate-accuracy",
+    });
+  }
+
+  if (facts.expenseGrowthPercent != null && facts.expenseGrowthPercent >= 25) {
+    items.push({
+      key: "expense-growth",
+      title: "Recorded expenses grew versus the prior period",
+      kind: "recommendation",
+      priority: 38,
+      why: "Active expense rows increased compared with the prior equivalent period.",
+      facts: [
+        {
+          key: "expense-growth",
+          label: "Expense change",
+          value: `${facts.expenseGrowthPercent.toFixed(1)}%`,
+          href: "/reports?area=expenses",
+        },
+      ],
+      href: "/reports?area=expenses",
+    });
+  }
+
+  if (facts.customerConcentration?.share != null && facts.customerConcentration.share >= 0.4) {
+    items.push({
+      key: "high-value-customer-concentration",
+      title: "Collected revenue is concentrated in one customer",
+      kind: "recommendation",
+      priority: 36,
+      why: "One customer accounts for a large share of recorded collected cash.",
+      facts: [
+        {
+          key: "concentration",
+          label: facts.customerConcentration.customerName ?? "Top customer",
+          value: `${Math.round(facts.customerConcentration.share * 100)}%`,
+          href: "/reports?area=customers",
+        },
+      ],
+      href: "/reports?area=customers",
+    });
+  }
+
   if (facts.unscheduledJobs.count > 0) {
     items.push({
       key: "schedule-unscheduled-jobs",
@@ -307,11 +408,13 @@ export function buildBsosHealthMetrics(facts: BsosFacts): BsosHealthMetric[] {
   return [
     {
       key: "paid-revenue",
-      label: "Recorded paid revenue",
-      value: facts.paidRevenue.amount.toFixed(2),
+      label: facts.collectedRevenue ? "Collected cash" : "PAID invoice status",
+      value: (facts.collectedRevenue ?? facts.paidRevenue).amount.toFixed(2),
       kind: "fact",
       href: "/reports",
-      note: "PAID invoices only. Not a bank balance.",
+      note: facts.collectedRevenue
+        ? "Recorded payments plus legacy PAID invoices with no Payment rows. Not a bank balance."
+        : "Invoice status PAID totals. Not collected cash unless a Payment exists.",
     },
     {
       key: "recorded-expenses",
@@ -327,7 +430,7 @@ export function buildBsosHealthMetrics(facts: BsosFacts): BsosHealthMetric[] {
       value: `${facts.unpaidInvoices.count} / ${facts.unpaidInvoices.amount.toFixed(2)}`,
       kind: "fact",
       href: "/invoices",
-      note: "SENT invoices still unpaid.",
+      note: "SENT invoices remaining balance after recorded payments.",
     },
     {
       key: "pipeline",

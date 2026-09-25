@@ -11,7 +11,11 @@ import {
   type BsosFacts,
 } from "@/lib/bsos";
 import { buildFinancialIntelligence } from "@/lib/financial-intelligence";
-import { asNumber, buildReport, resolveReportRange } from "@/lib/reports";
+import { loadFinancialSource } from "@/lib/financial-intelligence-data";
+import { invoiceBalanceDue } from "@/lib/financial-intelligence/collected-revenue";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { hasProductCapability } from "@/lib/product-entitlements";
+import { asNumber, buildReport, percentChange, resolveReportRange } from "@/lib/reports";
 import { loadReportSource } from "@/lib/reports-data";
 import { isPaidActivity } from "@/lib/time-cards";
 import { partitionRecommendations } from "@/lib/bsos-actions";
@@ -50,7 +54,7 @@ export async function loadBsosFacts(
   ] = await Promise.all([
     prisma.invoice.findMany({
       where: { ...scope, status: "SENT" },
-      select: { total: true },
+      select: { id: true, total: true },
     }),
     prisma.estimate.count({ where: { ...scope, status: "SENT" } }),
     prisma.estimate.count({ where: { ...scope, status: "DRAFT" } }),
@@ -159,35 +163,82 @@ export async function loadBsosFacts(
     return (completedByCustomer.get(customer.id) ?? 0) > 1 || (paidByCustomer.get(customer.id) ?? 0) > 1;
   }).length;
 
-  const range = resolveReportRange("all", undefined, undefined, now);
-  const report = buildReport(reportSource, range);
-  const intel = buildFinancialIntelligence(reportSource, report, now);
-  const lowMarginJobs = report.jobProfitability.filter(
-    (job) => job.recordedMargin != null && job.recordedMargin < 0,
-  ).length;
-  const recurring = {
-    count: intel.recurringExpenses.length,
-    amount: intel.recurringExpenses.reduce((sum, row) => sum + row.amount, 0),
-  };
+  const payments = await prisma.payment.findMany({
+    where: scope,
+    select: { id: true, amount: true, invoiceId: true, jobId: true, customerId: true, receivedAt: true },
+  });
+  const paymentRows = payments.map((payment) => ({
+    ...payment,
+    amount: asNumber(payment.amount),
+  }));
+  const unpaidRemaining = unpaid
+    .map((invoice) => invoiceBalanceDue({ id: invoice.id, total: asNumber(invoice.total) }, paymentRows))
+    .filter((amount) => amount > 0);
+  const hasInsights = await hasProductCapability(prisma, businessId, PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
 
-  return {
+  const baseFacts = {
     unpaidInvoices: {
-      count: unpaid.length,
-      amount: unpaid.reduce((sum, row) => sum + asNumber(row.total), 0),
+      count: unpaidRemaining.length,
+      amount: unpaidRemaining.reduce((sum, amount) => sum + amount, 0),
     },
     sentEstimates: { count: sentEstimates },
     draftEstimates: { count: draftEstimates },
     unscheduledJobs: { count: unscheduledJobs },
     completedJobsWithoutReview: { count: completedJobsWithoutReview },
     completedJobsReadyForMarketing: { count: completedJobsReadyForMarketing },
-    lowMarginJobs: { count: lowMarginJobs },
+    lowMarginJobs: { count: 0 },
     missingWageEntries: { count: missingWageEntries + memberships.filter((row) => row.hourlyWage == null).length },
     availableCapacityDays: { count: availableCapacityDays },
     repeatCustomers: { count: repeatCustomers },
     outsideAreaRequests: { count: outsideArea },
-    recurringExpenses: { count: recurring.count, amount: recurring.amount },
+    recurringExpenses: { count: 0, amount: 0 },
     paidRevenue: { amount: asNumber(paidInvoices._sum.total) },
     recordedExpenses: { amount: asNumber(expenses._sum.amount) },
+  };
+
+  if (!hasInsights) return baseFacts;
+
+  const range = resolveReportRange("all", undefined, undefined, now);
+  const report = buildReport({ ...reportSource, payments: paymentRows }, range);
+  const financialSource = await loadFinancialSource(prisma, businessId);
+  const intel = buildFinancialIntelligence(financialSource, report, now);
+  const lowMarginJobs = intel.jobProfitability.filter(
+    (job) => job.grossProfit != null && job.grossProfit < 0,
+  ).length;
+  const recurring = {
+    count: intel.recurringExpenses.length,
+    amount: intel.recurringExpenses.reduce((sum, row) => sum + row.amount, 0),
+  };
+  const aged = intel.receivables.rows.filter((row) => row.ageDays > 30);
+  const collected = intel.cashFlow.collectedCustomerPayments;
+  const topCustomer = intel.customerProfitability[0];
+
+  return {
+    ...baseFacts,
+    lowMarginJobs: { count: lowMarginJobs },
+    recurringExpenses: { count: recurring.count, amount: recurring.amount },
+    collectedRevenue: { amount: collected },
+    agedReceivables: {
+      count: aged.length,
+      amount: aged.reduce((sum, row) => sum + row.balanceDue, 0),
+    },
+    lowMarginServices: {
+      count: intel.serviceProfitability.filter((row) => row.attributed && row.grossProfit != null && row.grossProfit < 0).length,
+    },
+    estimateLaborOverruns: {
+      count: intel.jobProfitability.filter(
+        (job) =>
+          job.estimateActual.estimatedLaborHours != null &&
+          job.estimateActual.estimatedLaborHoursProvenance !== "none" &&
+          job.estimateActual.laborHoursVariance != null &&
+          job.estimateActual.laborHoursVariance > 0,
+      ).length,
+    },
+    expenseGrowthPercent: percentChange(report.recordedExpenses.current, report.recordedExpenses.prior ?? 0),
+    customerConcentration: {
+      share: topCustomer && collected > 0 ? topCustomer.collected / collected : null,
+      customerName: topCustomer?.name ?? null,
+    },
   };
 }
 

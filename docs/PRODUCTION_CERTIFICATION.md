@@ -27,7 +27,7 @@ Do not invent passing browser results. The isolated harness is
 8. Job → schedule → employee field workflow (`/jobs`, `/field/jobs/[jobId]`). Assigned members see pickup only, not vendor economics.
 9. Time cards → job photos → additional work / change order.
 10. Complete → invoice → payment (`/invoices`, `/p/[token]/invoice`).
-11. Expense → job profitability / reports (`/expenses`, `/reports`). Linked material purchases must not double-count.
+11. Expense → job profitability / reports / financial intelligence (`/expenses`, `/reports`). Linked material purchases must not double-count. Known cash flow uses recorded payments and recorded expenses. PROCESSED payroll gross labor is an operational cost record, not verified bank cash out. Banking and accounting stay Not Connected.
 12. Review request → marketing opportunity → BSOS recommendation (`/reviews`, `/marketing`, `/business-health`).
 
 ## Cross-cutting proofs

@@ -51,7 +51,7 @@ export async function loadReportSource(
     }),
     prisma.job.findMany({
       where: scope,
-      select: { id: true, status: true, createdAt: true, customerId: true, estimateId: true },
+      select: { id: true, status: true, createdAt: true, customerId: true, estimateId: true, scheduledDurationMinutes: true },
     }),
     prisma.estimate.findMany({
       where: scope,

@@ -750,6 +750,28 @@ check(
     planProductionMigrateDeploy({ localNames }).run === true,
 );
 
+const financialIntelligenceMigration = readFileSync(
+  new URL("../prisma/migrations/20260925220000_financial_profit_intelligence/migration.sql", import.meta.url),
+  "utf8",
+);
+const financialTruthMigration = readFileSync(
+  new URL("../prisma/migrations/20260925230000_financial_truth_corrections/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Financial intelligence migrations stay additive and before Materials",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(financialIntelligenceMigration) &&
+    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(financialTruthMigration) &&
+    financialIntelligenceMigration.includes('CREATE TABLE "BusinessLaborBurdenSetting"') &&
+    localNames.includes("20260925220000_financial_profit_intelligence") &&
+    localNames.includes("20260925230000_financial_truth_corrections") &&
+    localNames.includes("20260926011500_add_materials_suppliers_operations") &&
+    localNames.indexOf("20260925220000_financial_profit_intelligence") <
+      localNames.indexOf("20260926011500_add_materials_suppliers_operations") &&
+    localNames.indexOf("20260925230000_financial_truth_corrections") <
+      localNames.indexOf("20260926011500_add_materials_suppliers_operations"),
+);
+
 const materialsMigration = readFileSync(
   new URL("../prisma/migrations/20260926011500_add_materials_suppliers_operations/migration.sql", import.meta.url),
   "utf8",
