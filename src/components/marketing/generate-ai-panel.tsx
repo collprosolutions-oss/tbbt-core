@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useState } from "react";
 import { generateMarketingAiAction, type MarketingAiActionState } from "@/app/actions/marketing";
+import { shouldRotateAiAttemptId } from "@/lib/ai/types";
 import { Button } from "@/components/ui/button";
 
 const initial: MarketingAiActionState = {};
@@ -15,10 +16,10 @@ export function GenerateMarketingAiPanel() {
   const [attemptId, setAttemptId] = useState(newAttemptId);
 
   useEffect(() => {
-    if (state.message || state.error || state.text) {
+    if (shouldRotateAiAttemptId(state)) {
       setAttemptId(newAttemptId());
     }
-  }, [state.message, state.error, state.text]);
+  }, [state.text, state.error, state.inProgress]);
 
   return (
     <div className="space-y-2">

@@ -36,6 +36,7 @@ export type MarketingAiActionState = {
   text?: string;
   mode?: "AI" | "TEMPLATE";
   task?: string;
+  inProgress?: boolean;
 };
 
 function readString(formData: FormData, key: string) {
@@ -159,12 +160,12 @@ export async function generateMarketingAiAction(
     const facts = source.recordedActivity;
     if (task === "WEEKLY_PLAN") {
       const result = await weeklyMarketingPlanWithAi(prisma, actor, facts, key);
-      if (result.status === "PENDING") return { message: result.message, task };
+      if (result.status === "PENDING") return { message: result.message, task, inProgress: true };
       return { message: result.message, text: result.text, mode: result.mode, task };
     }
     if (task === "CAMPAIGN_IDEAS") {
       const result = await campaignIdeasWithAi(prisma, actor, facts, key);
-      if (result.status === "PENDING") return { message: result.message, task };
+      if (result.status === "PENDING") return { message: result.message, task, inProgress: true };
       return { message: result.message, text: result.text, mode: result.mode, task };
     }
     if (task === "MARKETING_DRAFT") {
@@ -180,7 +181,7 @@ export async function generateMarketingAiAction(
         },
         key,
       );
-      if (result.status === "PENDING") return { message: result.message, task };
+      if (result.status === "PENDING") return { message: result.message, task, inProgress: true };
       return { message: result.message, text: result.text, mode: result.mode, task };
     }
     return { error: "Choose a marketing AI task." };

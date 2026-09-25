@@ -560,6 +560,17 @@ check(
     automationClaimLeaseMigration.includes("IF NOT EXISTS"),
 );
 
+const aiClaimLeaseMigration = readFileSync(
+  new URL("../prisma/migrations/20260925000000_ai_interaction_claim_lease/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "AI interaction claim-lease migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(aiClaimLeaseMigration) &&
+    aiClaimLeaseMigration.includes('ADD COLUMN IF NOT EXISTS "claimedAt"') &&
+    aiClaimLeaseMigration.includes("IF NOT EXISTS"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

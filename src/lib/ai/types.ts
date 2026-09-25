@@ -69,6 +69,15 @@ export const AI_VALIDATION_MESSAGE =
 export const AI_IN_PROGRESS_MESSAGE =
   "That request is already in progress. TBBT did not invent a completed answer.";
 
+export function shouldRotateAiAttemptId(state: {
+  inProgress?: boolean;
+  text?: string;
+  error?: string;
+}) {
+  if (state.inProgress) return false;
+  return Boolean(state.text || state.error);
+}
+
 const AI_ATTEMPT_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 

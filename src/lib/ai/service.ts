@@ -152,6 +152,26 @@ async function recordUsage(
   });
 }
 
+export async function claimAiInteraction(
+  db: Db,
+  input: { id: string; now?: Date },
+) {
+  const now = input.now ?? new Date();
+  const staleBefore = new Date(now.getTime() - AI_PENDING_STALE_MS);
+  const claimed = await db.aiInteraction.updateMany({
+    where: {
+      id: input.id,
+      status: "PENDING",
+      OR: [{ claimedAt: { lte: staleBefore } }, { claimedAt: null }],
+    },
+    data: {
+      claimedAt: now,
+      retryCount: { increment: 1 },
+    },
+  });
+  return claimed.count === 1;
+}
+
 async function resolvePendingInteraction(
   db: Db,
   existing: {
@@ -161,25 +181,12 @@ async function resolvePendingInteraction(
     model: string | null;
     outputSummary: string | null;
     failureReason: string | null;
-    createdAt: Date;
-    retryCount: number;
   },
   fallback: StructuredAiOutput,
   allowedFactKeys?: string[] | null,
 ): Promise<{ kind: "result"; result: AiRunResult } | { kind: "takeover" }> {
-  const staleBefore = new Date(Date.now() - AI_PENDING_STALE_MS);
-  if (existing.createdAt <= staleBefore) {
-    const took = await db.aiInteraction.updateMany({
-      where: {
-        id: existing.id,
-        status: "PENDING",
-        retryCount: existing.retryCount,
-      },
-      data: { retryCount: { increment: 1 } },
-    });
-    if (took.count === 1) {
-      return { kind: "takeover" };
-    }
+  if (await claimAiInteraction(db, { id: existing.id })) {
+    return { kind: "takeover" };
   }
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -237,6 +244,7 @@ export async function runAiTask(
             status: "PENDING",
             inputSummary: summarizeAiInput(input.taskType, input.inputSummary),
             idempotencyKey: input.idempotencyKey,
+            claimedAt: new Date(),
           },
         });
       } catch {

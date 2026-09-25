@@ -2354,6 +2354,8 @@ model AiInteraction {
   completionTokens Int?
   retryCount       Int      @default(0)
   idempotencyKey   String
+  /// Set when a worker claims PENDING or reclaims a stale PENDING interaction.
+  claimedAt        DateTime?
   createdAt        DateTime @default(now())
 
   business     Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)

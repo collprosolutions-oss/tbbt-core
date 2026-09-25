@@ -5,6 +5,7 @@ export {
   parseStructuredAiOutput,
   filterAuthorizedCitedFactKeys,
   loadAiUsage,
+  claimAiInteraction,
   AI_PENDING_STALE_MS,
 } from "@/lib/ai/service";
 export { applyTemplateWriting, runWritingAssist, resolveWritingOriginal } from "@/lib/ai/writing";
@@ -31,5 +32,6 @@ export {
   WRITING_ACTION_LABELS,
   isWritingAction,
   isAiAttemptId,
+  shouldRotateAiAttemptId,
 } from "@/lib/ai/types";
 export type { WritingAction, AiRunResult, StructuredAiOutput, CitedFact } from "@/lib/ai/types";

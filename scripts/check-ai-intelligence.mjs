@@ -15,13 +15,16 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 const {
   AI_IN_PROGRESS_MESSAGE,
   AI_NOT_CONNECTED_MESSAGE,
+  AI_PENDING_STALE_MS,
   applyTemplateWriting,
+  claimAiInteraction,
   filterAuthorizedCitedFactKeys,
   isAiProviderConnected,
   parseStructuredAiOutput,
   resolveWritingOriginal,
   runAiTask,
   runWritingAssist,
+  shouldRotateAiAttemptId,
 } = await import("@/lib/ai/index");
 const { appendConversationMessage } = await import("@/lib/ai/conversations");
 const { weeklyMarketingPlanWithAi } = await import("@/lib/ai/marketing");
@@ -153,14 +156,29 @@ try {
       marketingActionSrc.includes("result.text") &&
       marketingAiSrc.includes('mode: result.connected && result.status === "COMPLETED"'),
   );
+  const coachFormSrc = readFileSync(new URL("../src/components/bsos/coach-form.tsx", import.meta.url), "utf8");
+  const knowledgeFormSrc = readFileSync(new URL("../src/components/knowledge/ask-form.tsx", import.meta.url), "utf8");
+  const reviewFormSrc = readFileSync(new URL("../src/components/reviews/response-form.tsx", import.meta.url), "utf8");
   check(
     "Interactive AI actions use a stable attempt ID instead of Date.now()",
     !writingActionSrc.includes("Date.now") &&
       writingActionSrc.includes("readAttemptId") &&
       writingBarSrc.includes('name="attemptId"') &&
-      readFileSync(new URL("../src/components/bsos/coach-form.tsx", import.meta.url), "utf8").includes('name="attemptId"') &&
-      readFileSync(new URL("../src/components/knowledge/ask-form.tsx", import.meta.url), "utf8").includes('name="attemptId"') &&
-      readFileSync(new URL("../src/components/reviews/response-form.tsx", import.meta.url), "utf8").includes('name="attemptId"'),
+      coachFormSrc.includes('name="attemptId"') &&
+      knowledgeFormSrc.includes('name="attemptId"') &&
+      reviewFormSrc.includes('name="attemptId"'),
+  );
+  check(
+    "PENDING/in-progress keeps the same attempt ID",
+    shouldRotateAiAttemptId({ inProgress: true, message: AI_IN_PROGRESS_MESSAGE }) === false &&
+      shouldRotateAiAttemptId({ message: AI_IN_PROGRESS_MESSAGE }) === false &&
+      shouldRotateAiAttemptId({ text: "Ready.", message: "Completed." }) === true &&
+      shouldRotateAiAttemptId({ error: "failed" }) === true &&
+      coachFormSrc.includes("shouldRotateAiAttemptId") &&
+      knowledgeFormSrc.includes("shouldRotateAiAttemptId") &&
+      generatePanelSrc.includes("shouldRotateAiAttemptId") &&
+      reviewFormSrc.includes("shouldRotateAiAttemptId") &&
+      writingBarSrc.includes("state.text || state.error || state.keptOriginal"),
   );
   check(
     "PENDING AI work is never returned as a completed fallback",
@@ -168,6 +186,12 @@ try {
       serviceSrc.includes('if (existing.status === "PENDING")') &&
       serviceSrc.includes("inProgressResult") &&
       !serviceSrc.includes('existing.status === "PENDING"\n          ? "Completed."'),
+  );
+  check(
+    "Stale AI takeover uses an atomic claimedAt lease",
+    serviceSrc.includes("claimAiInteraction") &&
+      serviceSrc.includes("claimedAt") &&
+      serviceSrc.includes('OR: [{ claimedAt: { lte: staleBefore } }, { claimedAt: null }]'),
   );
 
   const ownerA = await prisma.user.create({
@@ -391,6 +415,7 @@ try {
     };
   }
 
+  const liveClaimedAt = new Date();
   const pendingKey = `coach-pending-${randomUUID()}`;
   await prisma.aiInteraction.create({
     data: {
@@ -401,6 +426,7 @@ try {
       status: "PENDING",
       inputSummary: "pending",
       idempotencyKey: pendingKey,
+      claimedAt: liveClaimedAt,
     },
   });
   const pendingResult = await runAiTask(prisma, actorA, {
@@ -434,6 +460,7 @@ try {
       status: "PENDING",
       inputSummary: "hang",
       idempotencyKey: hangKey,
+      claimedAt: new Date(),
     },
   });
   const [hangOne, hangTwo] = await Promise.all([
@@ -447,12 +474,39 @@ try {
     "Concurrent PENDING requests stay in progress on one interaction",
     hangRows.length === 1 &&
       hangRows[0].status === "PENDING" &&
+      hangRows[0].retryCount === 0 &&
       hangOne.status === "PENDING" &&
       hangTwo.status === "PENDING" &&
       hangOne.output === null &&
       hangTwo.output === null &&
       hangOne.interactionId === hangRows[0].id &&
       hangTwo.interactionId === hangRows[0].id,
+  );
+
+  const liveLease = await prisma.aiInteraction.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memA.id,
+      userId: ownerA.id,
+      taskType: "COACH_ASK",
+      status: "PENDING",
+      inputSummary: "live-lease",
+      idempotencyKey: `coach-live-lease-${randomUUID()}`,
+      claimedAt: new Date(),
+    },
+  });
+  const liveNow = new Date();
+  const [liveClaimA, liveClaimB] = await Promise.all([
+    claimAiInteraction(prisma, { id: liveLease.id, now: liveNow }),
+    claimAiInteraction(prisma, { id: liveLease.id, now: liveNow }),
+  ]);
+  const liveLeaseRow = await prisma.aiInteraction.findUniqueOrThrow({ where: { id: liveLease.id } });
+  check(
+    "A live AI claim cannot be stolen",
+    liveClaimA === false &&
+      liveClaimB === false &&
+      liveLeaseRow.status === "PENDING" &&
+      liveLeaseRow.retryCount === 0,
   );
 
   const staleKey = `coach-stale-${randomUUID()}`;
@@ -466,25 +520,89 @@ try {
       inputSummary: "stale",
       idempotencyKey: staleKey,
       createdAt: new Date(Date.now() - 3 * 60 * 1000),
+      claimedAt: new Date(Date.now() - AI_PENDING_STALE_MS - 1_000),
     },
   });
-  const staleResult = await runAiTask(prisma, actorA, {
-    taskType: "COACH_ASK",
-    system: "unused",
-    user: "unused",
-    inputSummary: "stale",
-    idempotencyKey: staleKey,
-    fallback: coach.output,
-  });
-  const staleRow = await prisma.aiInteraction.findUniqueOrThrow({ where: { id: stalePending.id } });
+  const staleNow = new Date();
+  const [staleClaimA, staleClaimB] = await Promise.all([
+    claimAiInteraction(prisma, { id: stalePending.id, now: staleNow }),
+    claimAiInteraction(prisma, { id: stalePending.id, now: staleNow }),
+  ]);
+  const afterStaleClaim = await prisma.aiInteraction.findUniqueOrThrow({ where: { id: stalePending.id } });
   check(
-    "Stale PENDING AI work can be recovered without inventing a completed answer first",
-    staleResult.status === "SKIPPED_NOT_CONNECTED" &&
-      staleRow.status === "SKIPPED_NOT_CONNECTED" &&
-      staleResult.interactionId === stalePending.id,
+    "Concurrent stale AI recovery refresh the lease exactly once",
+    Boolean(staleClaimA) !== Boolean(staleClaimB) &&
+      afterStaleClaim.status === "PENDING" &&
+      afterStaleClaim.retryCount === 1 &&
+      afterStaleClaim.claimedAt instanceof Date &&
+      Math.abs(afterStaleClaim.claimedAt.getTime() - staleNow.getTime()) < 1000,
+  );
+
+  const staleRecoverKey = `coach-stale-recover-${randomUUID()}`;
+  const staleRecover = await prisma.aiInteraction.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memA.id,
+      userId: ownerA.id,
+      taskType: "COACH_ASK",
+      status: "PENDING",
+      inputSummary: "stale-recover",
+      idempotencyKey: staleRecoverKey,
+      claimedAt: new Date(Date.now() - AI_PENDING_STALE_MS - 1_000),
+    },
+  });
+  const usageBefore = await prisma.aiUsagePeriod.aggregate({
+    where: { businessId: businessA.id },
+    _sum: { requestCount: true },
+  });
+  const [recoverOne, recoverTwo] = await Promise.all([
+    runAiTask(prisma, actorA, { ...raceInput, idempotencyKey: staleRecoverKey }),
+    runAiTask(prisma, actorA, { ...raceInput, idempotencyKey: staleRecoverKey }),
+  ]);
+  const recoveredRows = await prisma.aiInteraction.findMany({
+    where: { businessId: businessA.id, idempotencyKey: staleRecoverKey },
+  });
+  const usageAfter = await prisma.aiUsagePeriod.aggregate({
+    where: { businessId: businessA.id },
+    _sum: { requestCount: true },
+  });
+  check(
+    "Concurrent stale-recovery callers result in one provider execution",
+    recoveredRows.length === 1 &&
+      recoveredRows[0].id === staleRecover.id &&
+      recoveredRows[0].status === "SKIPPED_NOT_CONNECTED" &&
+      recoverOne.interactionId === staleRecover.id &&
+      recoverTwo.interactionId === staleRecover.id &&
+      [recoverOne.status, recoverTwo.status].every((status) => status === "SKIPPED_NOT_CONNECTED") &&
+      (usageAfter._sum.requestCount ?? 0) === (usageBefore._sum.requestCount ?? 0) + 1,
   );
 
   const retryKey = `coach-retry-${randomUUID()}`;
+  const pendingRetry = await prisma.aiInteraction.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memA.id,
+      userId: ownerA.id,
+      taskType: "COACH_ASK",
+      status: "PENDING",
+      inputSummary: "retry",
+      idempotencyKey: retryKey,
+      claimedAt: new Date(),
+    },
+  });
+  const pendingRetryResult = await runAiTask(prisma, actorA, {
+    taskType: "COACH_ASK",
+    system: "unused",
+    user: "unused",
+    inputSummary: "retry",
+    conversationId: conversationA.id,
+    idempotencyKey: retryKey,
+    fallback: coach.output,
+  });
+  await prisma.aiInteraction.update({
+    where: { id: pendingRetry.id },
+    data: { claimedAt: new Date(Date.now() - AI_PENDING_STALE_MS - 1_000) },
+  });
   const firstRetry = await runAiTask(prisma, actorA, {
     taskType: "COACH_ASK",
     system: "unused",
@@ -530,10 +648,14 @@ try {
     where: { businessId: businessA.id, idempotencyKey: retryKey },
   });
   check(
-    "Duplicate retry causes one provider interaction and one assistant conversation message",
-    retryInteractions.length === 1 &&
-      firstRetry.interactionId === retryInteractions[0].id &&
-      secondRetry.interactionId === firstRetry.interactionId &&
+    "PENDING retry uses the same idempotency key for one interaction and one assistant message",
+    pendingRetryResult.status === "PENDING" &&
+      pendingRetryResult.interactionId === pendingRetry.id &&
+      retryInteractions.length === 1 &&
+      firstRetry.interactionId === pendingRetry.id &&
+      secondRetry.interactionId === pendingRetry.id &&
+      firstRetry.status === "SKIPPED_NOT_CONNECTED" &&
+      secondRetry.status === "SKIPPED_NOT_CONNECTED" &&
       assistantRows.length === 1 &&
       assistantRows[0].content === (firstRetry.output?.text ?? coach.output.text),
   );

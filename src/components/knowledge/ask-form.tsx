@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useState } from "react";
 import { askKnowledgeAction, type AiActionState } from "@/app/actions/ai";
+import { shouldRotateAiAttemptId } from "@/lib/ai/types";
 import { Button } from "@/components/ui/button";
 
 const initial: AiActionState = {};
@@ -15,10 +16,10 @@ export function KnowledgeAskForm() {
   const [attemptId, setAttemptId] = useState(newAttemptId);
 
   useEffect(() => {
-    if (state.text || state.error || state.message) {
+    if (shouldRotateAiAttemptId(state)) {
       setAttemptId(newAttemptId());
     }
-  }, [state.text, state.error, state.message]);
+  }, [state.text, state.error, state.inProgress]);
 
   return (
     <form action={action} className="space-y-2">

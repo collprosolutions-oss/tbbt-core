@@ -6,6 +6,7 @@ import { draftReviewResponseAssistAction, type AiActionState } from "@/app/actio
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { WritingAssistBar } from "@/components/ai/writing-assist-bar";
+import { shouldRotateAiAttemptId } from "@/lib/ai/types";
 
 const initial: ReviewsActionState = {};
 const assistInitial: AiActionState = {};
@@ -27,10 +28,10 @@ export function ResponseForm({
   }, [assist.text]);
 
   useEffect(() => {
-    if (assist.text || assist.error || assist.message) {
+    if (shouldRotateAiAttemptId(assist)) {
       setAttemptId(crypto.randomUUID());
     }
-  }, [assist.text, assist.error, assist.message]);
+  }, [assist.text, assist.error, assist.inProgress]);
 
   return (
     <form action={formAction} className="space-y-2">

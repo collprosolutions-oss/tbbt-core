@@ -22,6 +22,7 @@ export type AiActionState = {
   text?: string;
   stance?: string;
   keptOriginal?: boolean;
+  inProgress?: boolean;
 };
 
 function readString(formData: FormData, key: string) {
@@ -92,7 +93,7 @@ export async function askBsosCoachAction(
       },
     );
     if (result.status === "PENDING") {
-      return { message: result.message };
+      return { message: result.message, inProgress: true };
     }
     const output = result.output ?? grounded.output;
     if (result.interactionId) {
@@ -175,7 +176,7 @@ export async function askKnowledgeAction(
       },
     );
     if (result.status === "PENDING") {
-      return { message: result.message };
+      return { message: result.message, inProgress: true };
     }
     const output = result.output ?? fallback;
     if (result.interactionId) {
@@ -248,7 +249,7 @@ export async function applyWritingAction(
       },
     );
     if (result.status === "PENDING") {
-      return { message: result.message };
+      return { message: result.message, inProgress: true };
     }
     return {
       message: result.message,
@@ -301,7 +302,7 @@ export async function draftReviewResponseAssistAction(
       },
     );
     if (result.status === "PENDING") {
-      return { message: result.message };
+      return { message: result.message, inProgress: true };
     }
     return {
       message: result.message,
