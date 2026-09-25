@@ -42,6 +42,7 @@ import {
   type AgreementType,
 } from "@/lib/business-protection-agreements";
 import { selectedAgreementRisk, type ProtectionWorkspace } from "@/lib/business-protection-data";
+import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const initial: ProtectionActionState = {};
@@ -565,7 +566,8 @@ function AgreementDetail({
             )}
             {selected.completedAt ? (
               <p className="text-xs">
-                Marked complete {selected.completedAt} by membership {selected.completedByMembershipId}.
+                Marked complete {formatDateTime(new Date(selected.completedAt))}
+                {selected.completedByMembershipId ? " by the owner who recorded completion." : "."}
               </p>
             ) : null}
           </div>

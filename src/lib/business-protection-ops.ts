@@ -588,7 +588,7 @@ export async function saveAgreementDraftContent(
   const version = await openEditableVersion(db, access, agreement);
   const content = input.draftContent.trim();
   if (!content) throw new BusinessProtectionError("Draft content cannot be empty.");
-  if (/legally (sufficient|enforceable|binding)/i.test(content)) {
+  if (/\b(this (draft|agreement) is legally (sufficient|enforceable|binding))\b/i.test(content)) {
     throw new BusinessProtectionError(AGREEMENT_NOT_ENFORCEABLE_MESSAGE);
   }
   const answers = parseAgreementAnswers(version.answersJson);
