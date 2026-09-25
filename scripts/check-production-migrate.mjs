@@ -751,7 +751,7 @@ check(
 );
 
 const materialsMigration = readFileSync(
-  new URL("../prisma/migrations/20260925193000_add_materials_suppliers_operations/migration.sql", import.meta.url),
+  new URL("../prisma/migrations/20260926011500_add_materials_suppliers_operations/migration.sql", import.meta.url),
   "utf8",
 );
 check(
@@ -762,6 +762,7 @@ check(
     materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialPriceHistory"') &&
     materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialPurchaseList"') &&
     materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialPurchaseOrder"') &&
+    materialsMigration.includes('CREATE TABLE IF NOT EXISTS "MaterialOperationAttempt"') &&
     !/"password"/i.test(materialsMigration) &&
     !/"apiSecret"/i.test(materialsMigration),
 );
@@ -771,10 +772,11 @@ const materialsSchema = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers materials/suppliers tables skipped by migrate",
-  materialsSchema.includes("Preview shares Production and skips migrate") &&
-    materialsSchema.includes("CREATE TABLE IF NOT EXISTS") &&
-    materialsSchema.includes("ensureMaterialsSuppliersTables"),
+  "Materials schema is migrate-only and does not run request-time DDL",
+  materialsSchema.includes("prisma-migrate") &&
+    !materialsSchema.includes("$executeRawUnsafe") &&
+    !materialsSchema.includes("ensureMaterialsSuppliersTables") &&
+    !materialsSchema.includes("CREATE TABLE IF NOT EXISTS"),
 );
 
 console.log(

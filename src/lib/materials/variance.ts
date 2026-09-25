@@ -3,7 +3,6 @@ import type { BusinessAccess } from "@/lib/access";
 import { requirePurchaseListWriteAccess } from "@/lib/materials/access";
 import { asMoneyNumber } from "@/lib/materials/money";
 import { purchaseItemActualCostNumber } from "@/lib/materials/purchase";
-import { ensureMaterialsSuppliersTables } from "@/lib/materials/schema";
 import type { MaterialVarianceRow } from "@/lib/materials/types";
 
 export async function materialEstimateVsActual(
@@ -11,7 +10,6 @@ export async function materialEstimateVsActual(
   access: BusinessAccess,
   input: { jobId?: string | null; estimateId?: string | null },
 ): Promise<MaterialVarianceRow[]> {
-  await ensureMaterialsSuppliersTables(db);
   const list = await db.materialPurchaseList.findFirst({
     where: {
       businessId: access.businessId,

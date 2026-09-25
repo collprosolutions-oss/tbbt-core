@@ -7,7 +7,6 @@ import type { BusinessAccess } from "@/lib/access";
 import type { FieldWorkspace } from "@/lib/field-access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { assertFieldPickupJob } from "@/lib/materials/access";
-import { ensureMaterialsSuppliersTables } from "@/lib/materials/schema";
 import {
   isPurchaseItemStatus,
   type FieldJobPickupView,
@@ -20,7 +19,6 @@ export async function listJobMaterialPickupRequirements(
   jobId: string,
 ): Promise<JobMaterialPickupRequirement[]> {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
-  await ensureMaterialsSuppliersTables(db);
   access.assertOwned(
     await db.job.findFirst({
       where: { id: jobId, businessId: access.businessId },

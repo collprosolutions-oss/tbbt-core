@@ -59,6 +59,25 @@ export const PURCHASE_ORDER_STATUS_LABELS: Record<PurchaseOrderStatus, string> =
   CANCELLED: "Cancelled",
 };
 
+export const PURCHASE_ORDER_TRANSITIONS: Record<
+  PurchaseOrderStatus,
+  readonly PurchaseOrderStatus[]
+> = {
+  DRAFT: ["DRAFT", "READY", "ORDERED_EXTERNALLY", "CANCELLED"],
+  READY: ["READY", "DRAFT", "ORDERED_EXTERNALLY", "CANCELLED"],
+  ORDERED_EXTERNALLY: ["ORDERED_EXTERNALLY", "PARTIALLY_RECEIVED", "RECEIVED", "CANCELLED"],
+  PARTIALLY_RECEIVED: ["PARTIALLY_RECEIVED", "RECEIVED", "CANCELLED"],
+  RECEIVED: ["RECEIVED"],
+  CANCELLED: ["CANCELLED"],
+};
+
+export function canTransitionPurchaseOrder(
+  from: PurchaseOrderStatus,
+  to: PurchaseOrderStatus,
+) {
+  return PURCHASE_ORDER_TRANSITIONS[from].includes(to);
+}
+
 export function isMaterialPriceSource(value: unknown): value is MaterialPriceSource {
   return (
     typeof value === "string" &&

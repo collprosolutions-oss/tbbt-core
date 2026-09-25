@@ -5,17 +5,25 @@
  * Variance can still show operational actualCost, but a linked
  * non-voided Expense is the only counted financial cost.
  */
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { createExpense } from "@/lib/expense-ops";
 import { requireMaterialsExpenseAccess } from "@/lib/materials/access";
+import {
+  claimMaterialAttempt,
+  finishMaterialAttempt,
+  normalizeMaterialAttemptKey,
+} from "@/lib/materials/attempts";
 import { MaterialsError } from "@/lib/materials/errors";
 import { asMoneyNumber, decimalMoney, decimalQuantity, extendedCost } from "@/lib/materials/money";
 import { appendMaterialPriceHistory } from "@/lib/materials/price-history";
+import { applyPurchaseActuals } from "@/lib/materials/purchase";
 import type { MaterialActualCostLink } from "@/lib/materials/types";
 
+type Db = PrismaClient | Prisma.TransactionClient;
+
 export async function linkPurchaseItemToExpense(
-  db: PrismaClient,
+  db: Db,
   access: BusinessAccess,
   input: {
     itemId: string;
@@ -112,6 +120,92 @@ export async function linkPurchaseItemToExpense(
   }
 
   return updated;
+}
+
+export async function recordPurchaseOperation(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: {
+    attemptKey: string;
+    itemId: string;
+    quantityPurchased: string | number;
+    actualUnitCost: string | number;
+    supplierId?: string | null;
+    createExpense?: boolean;
+    occurredOn?: string;
+  },
+) {
+  const attemptKey = normalizeMaterialAttemptKey(input.attemptKey);
+  if (input.createExpense) {
+    await requireMaterialsExpenseAccess(db, access);
+  }
+
+  const replay = async (tx: Db, attempt: { purchaseListItemId: string | null; expenseId: string | null }) => {
+    if (!attempt.purchaseListItemId) {
+      throw new MaterialsError("That purchase is already being recorded. Retry.");
+    }
+    const item = access.assertOwned(
+      await tx.materialPurchaseListItem.findFirst({
+        where: { id: attempt.purchaseListItemId, businessId: access.businessId },
+        include: { expense: true },
+      }),
+    );
+    return item;
+  };
+
+  return db.$transaction(async (tx) => {
+    const claim = await claimMaterialAttempt(tx, access, {
+      attemptKey,
+      kind: "RECORD_PURCHASE",
+    });
+    if (!claim.claimed) {
+      return replay(tx, claim.existing);
+    }
+
+    const { existing, updated } = await applyPurchaseActuals(tx, access, {
+      itemId: input.itemId,
+      quantityPurchased: input.quantityPurchased,
+      actualUnitCost: input.actualUnitCost,
+      supplierId: input.supplierId,
+    });
+
+    let expenseId = existing.expenseId;
+    if (input.createExpense) {
+      const linked = await linkPurchaseItemToExpense(tx, access, {
+        itemId: existing.id,
+        createExpense: true,
+        occurredOn: input.occurredOn,
+        quantityPurchased: input.quantityPurchased,
+        actualUnitCost: input.actualUnitCost,
+      });
+      expenseId = linked.expenseId;
+      await finishMaterialAttempt(tx, access, {
+        attemptKey,
+        purchaseListId: existing.purchaseListId,
+        purchaseListItemId: existing.id,
+        expenseId,
+      });
+      return linked;
+    }
+
+    if (existing.materialId && updated.actualUnitCost) {
+      await appendMaterialPriceHistory(tx, access, {
+        materialId: existing.materialId,
+        supplierId: updated.supplierId,
+        unit: existing.unit,
+        price: updated.actualUnitCost,
+        source: "PURCHASE",
+        purchaseListItemId: existing.id,
+      });
+    }
+    await finishMaterialAttempt(tx, access, {
+      attemptKey,
+      purchaseListId: existing.purchaseListId,
+      purchaseListItemId: existing.id,
+      expenseId,
+    });
+    return updated;
+  });
 }
 
 export async function listMaterialActualCostLinks(

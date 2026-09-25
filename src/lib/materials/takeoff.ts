@@ -2,7 +2,7 @@
  * Connect takeoff / estimate material lines to the reusable catalog
  * and a purchase list. Never rewrite SENT/APPROVED snapshots.
  */
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { lineItemTitle, lineMaterialTakeoff } from "@/lib/estimate-line-scope";
 import { calculatorMaterialIdentity } from "@/lib/material-pricing/identities";
@@ -14,18 +14,24 @@ import {
   type TakeoffSnapshot,
 } from "@/lib/material-takeoff/types";
 import { requireMaterialsEstimateAccess } from "@/lib/materials/access";
+import {
+  claimMaterialAttempt,
+  finishMaterialAttempt,
+  normalizeMaterialAttemptKey,
+} from "@/lib/materials/attempts";
 import { findCatalogItemForTakeoff, upsertCatalogFromTakeoffItem } from "@/lib/materials/catalog";
 import { MaterialsError } from "@/lib/materials/errors";
 import { addPurchaseListItem, ensurePurchaseList } from "@/lib/materials/purchase";
 import { ownerEnteredMarkupPercent } from "@/lib/materials/markup";
+import { materialLineSourceKey, takeoffSourceKey } from "@/lib/materials/source-key";
 
-type Db = PrismaClient;
+type Db = PrismaClient | Prisma.TransactionClient;
 
 function takeoffIdentityForItem(item: TakeoffItem) {
   return calculatorMaterialIdentity(item);
 }
 
-export async function convertTakeoffToPurchaseList(
+async function convertTakeoffInner(
   db: Db,
   access: BusinessAccess,
   input: {
@@ -33,7 +39,7 @@ export async function convertTakeoffToPurchaseList(
     linkCatalog?: boolean;
   },
 ) {
-  await requireMaterialsEstimateAccess(db, access);
+  await requireMaterialsEstimateAccess(db as PrismaClient, access);
   const estimate = access.assertOwned(
     await db.estimate.findFirst({
       where: { id: input.estimateId, businessId: access.businessId },
@@ -51,10 +57,9 @@ export async function convertTakeoffToPurchaseList(
   const list = await ensurePurchaseList(db, access, { estimateId: estimate.id });
   const existing = await db.materialPurchaseListItem.findMany({
     where: { businessId: access.businessId, purchaseListId: list.id },
-    select: { takeoffItemId: true, lineItemId: true },
+    select: { sourceKey: true, takeoffItemId: true, lineItemId: true },
   });
-  const seenTakeoff = new Set(existing.map((row) => row.takeoffItemId).filter(Boolean));
-  const seenLines = new Set(existing.map((row) => row.lineItemId).filter(Boolean));
+  const seenKeys = new Set(existing.map((row) => row.sourceKey).filter(Boolean));
 
   let created = 0;
   for (const line of estimate.lineItems) {
@@ -65,16 +70,18 @@ export async function convertTakeoffToPurchaseList(
         if (!item.selected) continue;
         const quantity = workingQuantity(item);
         if (!(quantity > 0)) continue;
-        if (seenTakeoff.has(item.id)) continue;
+        const sourceKey = takeoffSourceKey(line.id, item.id);
+        if (seenKeys.has(sourceKey)) continue;
+        seenKeys.add(sourceKey);
         const identity = takeoffIdentityForItem(item);
         const catalog = input.linkCatalog
-          ? await upsertCatalogFromTakeoffItem(db, access, {
+          ? await upsertCatalogFromTakeoffItem(db as PrismaClient, access, {
               label: item.label,
               unit: item.unit,
               unitCost: item.unitCost,
               takeoffIdentity: identity,
             })
-          : await findCatalogItemForTakeoff(db, access.businessId, {
+          : await findCatalogItemForTakeoff(db as PrismaClient, access.businessId, {
               catalogMaterialId: item.catalogMaterialId,
               label: item.label,
               unit: item.unit,
@@ -86,6 +93,7 @@ export async function convertTakeoffToPurchaseList(
           supplierId: catalog?.preferredSupplierId ?? null,
           lineItemId: item.convertedLineItemId ?? line.id,
           takeoffItemId: item.id,
+          sourceKey,
           name: item.label,
           quantityNeeded: quantity,
           unit: item.unit,
@@ -101,16 +109,18 @@ export async function convertTakeoffToPurchaseList(
       continue;
     }
     if (line.type !== "MATERIAL") continue;
-    if (seenLines.has(line.id)) continue;
+    const sourceKey = materialLineSourceKey(line.id);
+    if (seenKeys.has(sourceKey)) continue;
+    seenKeys.add(sourceKey);
     const name = lineItemTitle(line.description);
     if (!name) continue;
     const catalog = input.linkCatalog
-      ? await upsertCatalogFromTakeoffItem(db, access, {
+      ? await upsertCatalogFromTakeoffItem(db as PrismaClient, access, {
           label: name,
           unit: "ea",
           unitCost: Number(line.unitPrice.toString()),
         })
-      : await findCatalogItemForTakeoff(db, access.businessId, {
+      : await findCatalogItemForTakeoff(db as PrismaClient, access.businessId, {
           label: name,
           unit: "ea",
         });
@@ -119,6 +129,7 @@ export async function convertTakeoffToPurchaseList(
       materialId: catalog?.id ?? null,
       supplierId: catalog?.preferredSupplierId ?? null,
       lineItemId: line.id,
+      sourceKey,
       name,
       quantityNeeded: line.quantity.toString(),
       unit: catalog?.unit ?? "ea",
@@ -130,14 +141,52 @@ export async function convertTakeoffToPurchaseList(
     created += 1;
   }
 
-  if (created === 0 && existing.length === 0) {
+  const present = await db.materialPurchaseListItem.count({
+    where: { businessId: access.businessId, purchaseListId: list.id },
+  });
+  if (present === 0) {
     throw new MaterialsError("No takeoff or material lines were ready to convert.");
   }
   return { purchaseListId: list.id, created, alreadyPresent: existing.length };
 }
 
+export async function convertTakeoffToPurchaseList(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: {
+    estimateId: string;
+    linkCatalog?: boolean;
+    attemptKey?: string | null;
+  },
+) {
+  if (!input.attemptKey) {
+    return convertTakeoffInner(db, access, input);
+  }
+  const attemptKey = normalizeMaterialAttemptKey(input.attemptKey);
+  return db.$transaction(async (tx) => {
+    const claim = await claimMaterialAttempt(tx, access, {
+      attemptKey,
+      kind: "CONVERT_TAKEOFF",
+    });
+    if (!claim.claimed && claim.existing.purchaseListId) {
+      return {
+        purchaseListId: claim.existing.purchaseListId,
+        created: claim.existing.createdCount ?? 0,
+        alreadyPresent: 0,
+      };
+    }
+    const result = await convertTakeoffInner(tx, access, input);
+    await finishMaterialAttempt(tx, access, {
+      attemptKey,
+      purchaseListId: result.purchaseListId,
+      createdCount: result.created,
+    });
+    return result;
+  });
+}
+
 export async function linkDraftTakeoffItemToCatalog(
-  db: Db,
+  db: PrismaClient,
   access: BusinessAccess,
   input: {
     estimateId: string;

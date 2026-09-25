@@ -8,9 +8,8 @@ import {
   createMaterialCatalogItem,
   createPurchaseOrder,
   createSupplier,
-  linkPurchaseItemToExpense,
   materialsErrorMessage,
-  recordPurchaseListItemPurchased,
+  recordPurchaseOperation,
   updateMaterialCatalogItem,
   updatePurchaseListItem,
   updatePurchaseOrderStatus,
@@ -171,6 +170,7 @@ export async function convertTakeoffToPurchaseListAction(
     const result = await convertTakeoffToPurchaseList(prisma, operating.access, {
       estimateId,
       linkCatalog: true,
+      attemptKey: readString(formData, "attemptId"),
     });
     revalidateMaterials([`/estimates/${estimateId}`]);
     return {
@@ -242,8 +242,6 @@ export async function updatePurchaseListItemAction(
       quantityNeeded: readString(formData, "quantityNeeded"),
       unit: readString(formData, "unit") || "ea",
       plannedUnitCost: readString(formData, "plannedUnitCost"),
-      quantityPurchased: readString(formData, "quantityPurchased"),
-      actualUnitCost: readString(formData, "actualUnitCost"),
       pickupRequired: readChecked(formData, "pickupRequired"),
       pickupLocationDescription: readString(formData, "pickupLocationDescription"),
       pickupDurationMinutes: readString(formData, "pickupDurationMinutes"),
@@ -273,26 +271,15 @@ export async function recordPurchaseAction(
       jobId ? PRODUCT_CAPABILITIES.JOBS_TASKS : PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
     );
     if (!operating.ok) return { error: operating.error };
-    await recordPurchaseListItemPurchased(prisma, operating.access, {
+    await recordPurchaseOperation(prisma, operating.access, {
+      attemptKey: readString(formData, "attemptId"),
       itemId: readString(formData, "itemId"),
       quantityPurchased: readString(formData, "quantityPurchased"),
       actualUnitCost: readString(formData, "actualUnitCost"),
       supplierId: readString(formData, "supplierId") || null,
+      createExpense: readChecked(formData, "createExpense"),
+      occurredOn: readString(formData, "occurredOn"),
     });
-    if (readChecked(formData, "createExpense")) {
-      const expenseAccess = await requireOperatingProductAccessForForm(
-        PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
-      );
-      if (!expenseAccess.ok) return { error: expenseAccess.error };
-      requireBusinessCapability(expenseAccess.access, CAPABILITIES.MANAGE_EXPENSES);
-      await linkPurchaseItemToExpense(prisma, expenseAccess.access, {
-        itemId: readString(formData, "itemId"),
-        createExpense: true,
-        occurredOn: readString(formData, "occurredOn"),
-        quantityPurchased: readString(formData, "quantityPurchased"),
-        actualUnitCost: readString(formData, "actualUnitCost"),
-      });
-    }
     revalidateMaterials([
       jobId ? `/jobs/${jobId}` : "",
       readString(formData, "estimateId") ? `/estimates/${readString(formData, "estimateId")}` : "",
@@ -318,6 +305,7 @@ export async function createPurchaseOrderAction(
       purchaseListId: readString(formData, "purchaseListId"),
       supplierId: readString(formData, "supplierId") || null,
       notes: readString(formData, "notes"),
+      attemptKey: readString(formData, "attemptId"),
     });
     revalidateMaterials([jobId ? `/jobs/${jobId}` : ""].filter(Boolean));
     return { message: "Draft purchase order created for tracking. No supplier was contacted." };

@@ -50,6 +50,37 @@ export async function appendMaterialPriceHistory(
       }),
     );
   }
+  if (input.purchaseListItemId) {
+    const item = access.assertOwned(
+      await db.materialPurchaseListItem.findFirst({
+        where: { id: input.purchaseListItemId, businessId: access.businessId },
+        select: {
+          id: true,
+          businessId: true,
+          materialId: true,
+          expenseId: true,
+        },
+      }),
+    );
+    if (item.materialId && item.materialId !== material.id) {
+      throw new MaterialsError(
+        "That purchase-list item is not consistent with the material being recorded.",
+      );
+    }
+    if (input.expenseId && item.expenseId && item.expenseId !== input.expenseId) {
+      throw new MaterialsError(
+        "That purchase-list item is not consistent with the expense being recorded.",
+      );
+    }
+  }
+  if (input.expenseId) {
+    access.assertOwned(
+      await db.expense.findFirst({
+        where: { id: input.expenseId, businessId: access.businessId },
+        select: { id: true, businessId: true },
+      }),
+    );
+  }
   const packSize = parseNonNegativeDecimal(input.packSize ?? null);
   return db.materialPriceHistory.create({
     data: {

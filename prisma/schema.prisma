@@ -352,6 +352,7 @@ model Business {
   materialPurchaseListItems  MaterialPurchaseListItem[]
   materialPurchaseOrders     MaterialPurchaseOrder[]
   materialPurchaseOrderItems MaterialPurchaseOrderItem[]
+  materialOperationAttempts  MaterialOperationAttempt[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -1796,6 +1797,7 @@ model Expense {
   parent     Expense?    @relation("ExpenseSplit", fields: [parentExpenseId], references: [id], onDelete: SetNull)
   splits     Expense[]   @relation("ExpenseSplit")
   materialPurchaseItem MaterialPurchaseListItem?
+  materialPriceHistory MaterialPriceHistory[]
 
   @@index([businessId])
   @@index([businessId, occurredOn])
@@ -2877,11 +2879,13 @@ model MaterialPriceHistory {
   material         MaterialCatalogItem    @relation(fields: [materialId], references: [id], onDelete: Cascade)
   supplier         Supplier?              @relation(fields: [supplierId], references: [id], onDelete: SetNull)
   purchaseListItem MaterialPurchaseListItem? @relation(fields: [purchaseListItemId], references: [id], onDelete: SetNull)
+  expense          Expense?                 @relation(fields: [expenseId], references: [id], onDelete: SetNull)
 
   @@index([businessId])
   @@index([materialId, observedAt])
   @@index([supplierId])
   @@index([purchaseListItemId])
+  @@index([expenseId])
 }
 
 /// Job / estimate purchasing workflow. Operational tracking only —
@@ -2902,6 +2906,8 @@ model MaterialPurchaseList {
   items           MaterialPurchaseListItem[]
   purchaseOrders  MaterialPurchaseOrder[]
 
+  @@unique([businessId, jobId])
+  @@unique([businessId, estimateId])
   @@index([businessId])
   @@index([jobId])
   @@index([estimateId])
@@ -2916,6 +2922,9 @@ model MaterialPurchaseListItem {
   supplierId                String?
   lineItemId                String?
   takeoffItemId             String?
+  /// Deterministic converted-row identity, e.g. takeoff:{lineItemId}:{takeoffItemId}
+  /// or material-line:{lineItemId}. Null for manual owner-added rows.
+  sourceKey                 String?
   name                      String
   quantityNeeded            Decimal
   unit                      String
@@ -2950,6 +2959,7 @@ model MaterialPurchaseListItem {
   priceHistory   MaterialPriceHistory[]
   purchaseOrderItems MaterialPurchaseOrderItem[]
 
+  @@unique([businessId, purchaseListId, sourceKey])
   @@index([businessId])
   @@index([purchaseListId])
   @@index([materialId])
@@ -2999,7 +3009,30 @@ model MaterialPurchaseOrderItem {
   purchaseOrder    MaterialPurchaseOrder    @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   purchaseListItem MaterialPurchaseListItem @relation(fields: [purchaseListItemId], references: [id], onDelete: Cascade)
 
+  @@unique([purchaseOrderId, purchaseListItemId])
   @@index([businessId])
   @@index([purchaseOrderId])
   @@index([purchaseListItemId])
+}
+
+/// Browser/form retry identity for convert-takeoff, draft PO, and
+/// record-purchase. Never authorizes; businessId comes from the session.
+model MaterialOperationAttempt {
+  id                 String   @id @default(cuid())
+  businessId         String
+  attemptKey         String
+  /// CONVERT_TAKEOFF | CREATE_DRAFT_PO | RECORD_PURCHASE
+  kind               String
+  purchaseListId     String?
+  purchaseOrderId    String?
+  purchaseListItemId String?
+  expenseId          String?
+  createdCount       Int?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, attemptKey])
+  @@index([businessId])
 }

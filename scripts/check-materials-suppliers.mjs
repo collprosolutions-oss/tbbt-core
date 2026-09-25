@@ -22,9 +22,14 @@ const { createEstimateVersionSnapshot } = await import("@/lib/estimate-version")
 const { joinLineDescription } = await import("@/lib/estimate-line-scope");
 const { computeTakeoff } = await import("@/lib/material-takeoff/engine");
 const {
+  addPurchaseListItem,
+  appendMaterialPriceHistory,
+  attachPurchaseListToCreatedJob,
   createMaterialCatalogItem,
+  createPurchaseOrder,
   createSupplier,
   convertTakeoffToPurchaseList,
+  ensurePurchaseList,
   getSupplierCommerceAdapter,
   linkPurchaseItemToExpense,
   listAssignedJobPickupView,
@@ -33,12 +38,19 @@ const {
   listMaterialCatalog,
   listMaterialPriceHistory,
   listSuppliers,
+  loadPurchaseListBoard,
   materialEstimateVsActual,
+  materialLineSourceKey,
+  MATERIALS_SUPPLIERS_SCHEMA_SOURCE,
   recordPurchaseListItemPurchased,
+  recordPurchaseOperation,
   separateMaterialMoneyLayers,
   SUPPLIER_COMMERCE_DISCONNECTED_LIMITATION,
   SUPPLIER_INTEGRATION_LICENSING_NOTICE,
+  takeoffSourceKey,
   updateMaterialCatalogItem,
+  updatePurchaseListItem,
+  updatePurchaseOrderStatus,
   updateSupplier,
 } = await import("@/lib/materials");
 const { createExpense } = await import("@/lib/expense-ops");
@@ -117,8 +129,17 @@ try {
   const types = readRepo("src/lib/materials/types.ts");
   const schema = readRepo("prisma/schema.prisma");
   const migration = readRepo(
-    "prisma/migrations/20260925193000_add_materials_suppliers_operations/migration.sql",
+    "prisma/migrations/20260926011500_add_materials_suppliers_operations/migration.sql",
   );
+  const materialsSchema = readRepo("src/lib/materials/schema.ts");
+  const accessSrc = readRepo("src/lib/materials/access.ts");
+  const pickupSrc = readRepo("src/lib/materials/pickup.ts");
+  const varianceSrc = readRepo("src/lib/materials/variance.ts");
+  const catalogSrc = readRepo("src/lib/materials/catalog.ts");
+  const purchaseSrc = readRepo("src/lib/materials/purchase.ts");
+  const takeoffSrc = readRepo("src/lib/materials/takeoff.ts");
+  const expenseSrc = readRepo("src/lib/materials/expense-link.ts");
+  const actionsSrc = readRepo("src/app/actions/materials.ts");
   const fieldCard = readRepo("src/components/field/assigned-job-pickup-card.tsx");
   check(
     "Supplier commerce adapter is DISCONNECTED and does not scrape",
@@ -156,6 +177,30 @@ try {
       !fieldCard.includes("formatMoney") &&
       !fieldCard.includes("actualCost") &&
       !fieldCard.includes("markup"),
+  );
+  const requestPathSources = [
+    materialsSchema,
+    accessSrc,
+    pickupSrc,
+    varianceSrc,
+    catalogSrc,
+    purchaseSrc,
+    takeoffSrc,
+    expenseSrc,
+    actionsSrc,
+  ];
+  check(
+    "Materials request paths execute no schema DDL",
+    MATERIALS_SUPPLIERS_SCHEMA_SOURCE === "prisma-migrate" &&
+      requestPathSources.every(
+        (src) =>
+          !src.includes("$executeRawUnsafe") &&
+          !src.includes("CREATE TABLE") &&
+          !src.includes("ALTER TABLE") &&
+          !src.includes("CREATE INDEX"),
+      ) &&
+      !actionsSrc.includes('formData.get("businessId")') &&
+      !actionsSrc.includes('readString(formData, "businessId")'),
   );
 
   const liveAdapter = getSupplierCommerceAdapter();
@@ -526,6 +571,442 @@ try {
         otherJob.id,
       ),
     (error) => error instanceof ForbiddenError || error.name === "ForbiddenError",
+  );
+
+  console.log("\nTEST — Ordinary edit preserves estimate snapshot and purchase actuals");
+  const estimatedBefore = {
+    qty: bagItem.estimatedQuantity.toString(),
+    cost: bagItem.estimatedCost.toString(),
+    purchasedQty: (await prisma.materialPurchaseListItem.findUnique({ where: { id: bagItem.id } }))
+      .quantityPurchased.toString(),
+    purchasedUnit: (await prisma.materialPurchaseListItem.findUnique({ where: { id: bagItem.id } }))
+      .actualUnitCost.toString(),
+    purchasedCost: (await prisma.materialPurchaseListItem.findUnique({ where: { id: bagItem.id } }))
+      .actualCost.toString(),
+  };
+  const varianceBeforeEdit = await materialEstimateVsActual(prisma, ownerA, { jobId: job.id });
+  const bagVarianceBeforeEdit = varianceBeforeEdit.find((row) => /concrete/i.test(row.name));
+  await updatePurchaseListItem(prisma, ownerA, {
+    itemId: bagItem.id,
+    supplierId: depot.id,
+    pickupLocationDescription: "Yard gate B",
+    notes: "Call ahead",
+    pickupRequired: true,
+  });
+  const bagAfterEdit = await prisma.materialPurchaseListItem.findUnique({ where: { id: bagItem.id } });
+  const varianceAfterEdit = await materialEstimateVsActual(prisma, ownerA, { jobId: job.id });
+  const bagVarianceAfterEdit = varianceAfterEdit.find((row) => /concrete/i.test(row.name));
+  check(
+    "Ordinary pickup/supplier/notes edit keeps estimate baseline and purchased actuals",
+    bagAfterEdit.pickupLocationDescription === "Yard gate B" &&
+      bagAfterEdit.notes === "Call ahead" &&
+      bagAfterEdit.estimatedQuantity.toString() === estimatedBefore.qty &&
+      bagAfterEdit.estimatedCost.toString() === estimatedBefore.cost &&
+      bagAfterEdit.quantityPurchased.toString() === estimatedBefore.purchasedQty &&
+      bagAfterEdit.actualUnitCost.toString() === estimatedBefore.purchasedUnit &&
+      bagAfterEdit.actualCost.toString() === estimatedBefore.purchasedCost &&
+      bagVarianceAfterEdit.estimatedQuantity === bagVarianceBeforeEdit.estimatedQuantity &&
+      bagVarianceAfterEdit.estimatedCost === bagVarianceBeforeEdit.estimatedCost &&
+      bagVarianceAfterEdit.purchasedQuantity === bagVarianceBeforeEdit.purchasedQuantity &&
+      bagVarianceAfterEdit.purchasedCost === bagVarianceBeforeEdit.purchasedCost &&
+      bagVarianceAfterEdit.costDelta === bagVarianceBeforeEdit.costDelta,
+  );
+
+  console.log("\nTEST — Purchase-list uniqueness and conversion idempotency");
+  async function seedEstimateWithTakeoff() {
+    const est = await prisma.estimate.create({
+      data: {
+        businessId: businessA.id,
+        customerId: customer.id,
+        status: "DRAFT",
+        publicToken: randomUUID(),
+      },
+    });
+    await prisma.lineItem.create({
+      data: {
+        businessId: businessA.id,
+        estimateId: est.id,
+        description: joinLineDescription("Concrete slab", null, null, null, {
+          materialTakeoff: withPrices,
+        }),
+        quantity: 1,
+        unitPrice: 400,
+        total: 400,
+        type: "LABOR",
+      },
+    });
+    return est;
+  }
+
+  const concurrentEstimate = await seedEstimateWithTakeoff();
+  const [listOne, listTwo] = await Promise.all([
+    ensurePurchaseList(prisma, ownerA, { estimateId: concurrentEstimate.id }),
+    ensurePurchaseList(prisma, ownerA, { estimateId: concurrentEstimate.id }),
+  ]);
+  const listsForEstimate = await prisma.materialPurchaseList.findMany({
+    where: { businessId: businessA.id, estimateId: concurrentEstimate.id },
+  });
+  check(
+    "Concurrent ensurePurchaseList for the same estimate yields one list",
+    listOne.id === listTwo.id && listsForEstimate.length === 1,
+  );
+
+  const convertEstimate = await seedEstimateWithTakeoff();
+  const [convertA, convertB] = await Promise.all([
+    convertTakeoffToPurchaseList(prisma, ownerA, {
+      estimateId: convertEstimate.id,
+      linkCatalog: true,
+      attemptKey: `convert-${convertEstimate.id}-1`,
+    }),
+    convertTakeoffToPurchaseList(prisma, ownerA, {
+      estimateId: convertEstimate.id,
+      linkCatalog: true,
+      attemptKey: `convert-${convertEstimate.id}-1`,
+    }),
+  ]);
+  const convertedItems = await prisma.materialPurchaseListItem.findMany({
+    where: { businessId: businessA.id, purchaseListId: convertA.purchaseListId },
+  });
+  const convertedKeys = convertedItems.map((row) => row.sourceKey).sort();
+  check(
+    "Concurrent takeoff conversion retries reuse one list and do not duplicate converted rows",
+    convertA.purchaseListId === convertB.purchaseListId &&
+      convertedItems.length === new Set(convertedKeys).size &&
+      convertedItems.every((row) => row.sourceKey) &&
+      convertedItems.some((row) => row.sourceKey.startsWith("takeoff:")),
+  );
+
+  const dualLineEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "DRAFT",
+      publicToken: randomUUID(),
+    },
+  });
+  const lineOne = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: dualLineEstimate.id,
+      description: joinLineDescription("Patio slab", null, null, null, {
+        materialTakeoff: withPrices,
+      }),
+      quantity: 1,
+      unitPrice: 200,
+      total: 200,
+      type: "LABOR",
+    },
+  });
+  const lineTwo = await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: dualLineEstimate.id,
+      description: joinLineDescription("Walkway slab", null, null, null, {
+        materialTakeoff: withPrices,
+      }),
+      quantity: 1,
+      unitPrice: 150,
+      total: 150,
+      type: "LABOR",
+    },
+  });
+  await convertTakeoffToPurchaseList(prisma, ownerA, {
+    estimateId: dualLineEstimate.id,
+    linkCatalog: true,
+  });
+  const dualItems = await prisma.materialPurchaseListItem.findMany({
+    where: { businessId: businessA.id, purchaseList: { estimateId: dualLineEstimate.id } },
+  });
+  const bagKeys = dualItems.filter((row) => /concrete/i.test(row.name)).map((row) => row.sourceKey);
+  check(
+    "Same takeoff item id on different estimate lines keeps both converted rows",
+    bagKeys.includes(takeoffSourceKey(lineOne.id, "concrete-bags")) &&
+      bagKeys.includes(takeoffSourceKey(lineTwo.id, "concrete-bags")) &&
+      bagKeys.length === 2,
+  );
+
+  const createdJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      estimateId: convertEstimate.id,
+      projectToken: randomUUID(),
+      status: "UNSCHEDULED",
+    },
+  });
+  const attached = await attachPurchaseListToCreatedJob(prisma, ownerA, {
+    jobId: createdJob.id,
+    estimateId: convertEstimate.id,
+  });
+  check(
+    "Attaching the estimate purchase list to its created job preserves the same list",
+    attached.id === convertA.purchaseListId && attached.jobId === createdJob.id,
+  );
+
+  console.log("\nTEST — Attach-to-job tenant and mismatch rejection");
+  const betaCustomer = await prisma.customer.create({
+    data: { businessId: businessB.id, name: "Other", email: `beta-${randomUUID()}@example.com` },
+  });
+  const betaEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessB.id,
+      customerId: betaCustomer.id,
+      status: "DRAFT",
+      publicToken: randomUUID(),
+    },
+  });
+  const betaJob = await prisma.job.create({
+    data: {
+      businessId: businessB.id,
+      customerId: betaCustomer.id,
+      estimateId: betaEstimate.id,
+      projectToken: randomUUID(),
+      status: "UNSCHEDULED",
+    },
+  });
+  const mismatchEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "DRAFT",
+      publicToken: randomUUID(),
+    },
+  });
+  await expectError(
+    "Cross-tenant job attach is rejected",
+    () =>
+      attachPurchaseListToCreatedJob(prisma, ownerA, {
+        jobId: betaJob.id,
+        estimateId: convertEstimate.id,
+      }),
+    (error) => error instanceof Error,
+  );
+  await expectError(
+    "Cross-tenant estimate attach is rejected",
+    () =>
+      attachPurchaseListToCreatedJob(prisma, ownerA, {
+        jobId: createdJob.id,
+        estimateId: betaEstimate.id,
+      }),
+    (error) => error instanceof Error,
+  );
+  await expectError(
+    "Same-tenant job/estimate mismatch attach is rejected",
+    () =>
+      attachPurchaseListToCreatedJob(prisma, ownerA, {
+        jobId: createdJob.id,
+        estimateId: mismatchEstimate.id,
+      }),
+    (error) => /does not belong to the supplied estimate/i.test(String(error.message)),
+  );
+
+  console.log("\nTEST — Purchase + expense atomic concurrent retry");
+  const expenseItem = dualItems.find((row) => /concrete/i.test(row.name));
+  const attemptKey = `purchase-${expenseItem.id}-1`;
+  const [purchaseOne, purchaseTwo] = await Promise.all([
+    recordPurchaseOperation(prisma, ownerA, {
+      attemptKey,
+      itemId: expenseItem.id,
+      quantityPurchased: expenseItem.quantityNeeded.toString(),
+      actualUnitCost: "8.50",
+      createExpense: true,
+      occurredOn: "2026-09-25",
+    }),
+    recordPurchaseOperation(prisma, ownerA, {
+      attemptKey,
+      itemId: expenseItem.id,
+      quantityPurchased: expenseItem.quantityNeeded.toString(),
+      actualUnitCost: "8.50",
+      createExpense: true,
+      occurredOn: "2026-09-25",
+    }),
+  ]);
+  const expenseRows = await prisma.expense.findMany({
+    where: { businessId: businessA.id, description: expenseItem.name },
+  });
+  const orphanExpenses = await prisma.expense.findMany({
+    where: {
+      businessId: businessA.id,
+      description: expenseItem.name,
+      materialPurchaseItem: { is: null },
+    },
+  });
+  const linkedItem = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: expenseItem.id },
+  });
+  check(
+    "Concurrent record-purchase retry creates exactly one Expense and no orphan",
+    purchaseOne.id === purchaseTwo.id &&
+      expenseRows.length === 1 &&
+      orphanExpenses.length === 0 &&
+      linkedItem.expenseId === expenseRows[0].id &&
+      Number(linkedItem.actualUnitCost.toString()) === 8.5,
+  );
+
+  console.log("\nTEST — Price-history provenance tenant validation");
+  const betaExpense = await createExpense(prisma, ownerB, {
+    occurredOn: "2026-09-25",
+    description: "Foreign",
+    amount: "9.00",
+    category: "MATERIALS",
+  });
+  await expectError(
+    "Cross-tenant purchaseListItemId is rejected on price history",
+    () =>
+      appendMaterialPriceHistory(prisma, ownerB, {
+        materialId: bags.id,
+        unit: "bag",
+        price: "9.00",
+        source: "PURCHASE",
+        purchaseListItemId: bagItem.id,
+      }),
+    (error) => error instanceof Error,
+  );
+  await expectError(
+    "Cross-tenant expenseId is rejected on price history",
+    () =>
+      appendMaterialPriceHistory(prisma, ownerA, {
+        materialId: bags.id,
+        unit: "bag",
+        price: "9.00",
+        source: "EXPENSE",
+        purchaseListItemId: bagItem.id,
+        expenseId: betaExpense.id,
+      }),
+    (error) => error instanceof Error,
+  );
+
+  console.log("\nTEST — Purchase-order supplier, ownership, status, and retry");
+  const otherSupplier = await createSupplier(prisma, ownerA, { name: "Other Yard" });
+  const poList = await ensurePurchaseList(prisma, ownerA, { estimateId: dualLineEstimate.id });
+  const poBag = dualItems.find((row) => /concrete/i.test(row.name) && row.lineItemId === lineOne.id);
+  const poPickup = dualItems.find((row) => row.pickupRequired && row.lineItemId === lineOne.id);
+  await updatePurchaseListItem(prisma, ownerA, { itemId: poBag.id, supplierId: depot.id });
+  await updatePurchaseListItem(prisma, ownerA, { itemId: poPickup.id, supplierId: otherSupplier.id });
+  await expectError(
+    "PO supplier mismatch is rejected when itemIds include another supplier",
+    () =>
+      createPurchaseOrder(prisma, ownerA, {
+        purchaseListId: poList.id,
+        supplierId: depot.id,
+        itemIds: [poBag.id, poPickup.id],
+      }),
+    (error) => /same supplier/i.test(String(error.message)),
+  );
+  const poAttempt = `po-${poList.id}-depot`;
+  const [poOne, poTwo] = await Promise.all([
+    createPurchaseOrder(prisma, ownerA, {
+      purchaseListId: poList.id,
+      supplierId: depot.id,
+      attemptKey: poAttempt,
+    }),
+    createPurchaseOrder(prisma, ownerA, {
+      purchaseListId: poList.id,
+      supplierId: depot.id,
+      attemptKey: poAttempt,
+    }),
+  ]);
+  check(
+    "Draft PO retry uses one PO and only that supplier's items",
+    poOne.id === poTwo.id &&
+      poOne.supplierId === depot.id &&
+      poOne.items.length >= 1 &&
+      poOne.items.every((row) => row.businessId === businessA.id) &&
+      !poOne.items.some((row) => row.purchaseListItemId === poPickup.id),
+  );
+  const otherListItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: list.id,
+    name: "Foreign list row",
+    quantityNeeded: "1",
+    unit: "ea",
+  });
+  await expectError(
+    "PO item from another purchase list is rejected",
+    () =>
+      createPurchaseOrder(prisma, ownerA, {
+        purchaseListId: poList.id,
+        itemIds: [otherListItem.id],
+      }),
+    (error) => /belong to this purchase list/i.test(String(error.message)),
+  );
+  const receivedPo = await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: poOne.id,
+    status: "ORDERED_EXTERNALLY",
+  });
+  const fullyReceived = await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: poOne.id,
+    status: "RECEIVED",
+  });
+  check(
+    "orderedAt / receivedAt are recorded and not erased",
+    receivedPo.orderedAt != null &&
+      fullyReceived.orderedAt != null &&
+      fullyReceived.receivedAt != null &&
+      fullyReceived.orderedAt.getTime() === receivedPo.orderedAt.getTime(),
+  );
+  await expectError(
+    "RECEIVED cannot silently return to DRAFT",
+    () => updatePurchaseOrderStatus(prisma, ownerA, { purchaseOrderId: poOne.id, status: "DRAFT" }),
+    (error) => /cannot move from RECEIVED to DRAFT/i.test(String(error.message)),
+  );
+  const cancelList = await ensurePurchaseList(prisma, ownerA, { estimateId: mismatchEstimate.id });
+  await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: cancelList.id,
+    name: "Cancel-me lumber",
+    quantityNeeded: "2",
+    unit: "ea",
+    supplierId: depot.id,
+  });
+  const cancelPo = await createPurchaseOrder(prisma, ownerA, {
+    purchaseListId: cancelList.id,
+    supplierId: depot.id,
+  });
+  await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: cancelPo.id,
+    status: "CANCELLED",
+  });
+  await expectError(
+    "CANCELLED cannot silently become RECEIVED",
+    () =>
+      updatePurchaseOrderStatus(prisma, ownerA, {
+        purchaseOrderId: cancelPo.id,
+        status: "RECEIVED",
+      }),
+    (error) => /cannot move from CANCELLED to RECEIVED/i.test(String(error.message)),
+  );
+
+  console.log("\nTEST — Runtime request paths execute no schema DDL");
+  const ddlStatements = [];
+  const originalUnsafe = prisma.$executeRawUnsafe.bind(prisma);
+  const originalRaw = prisma.$executeRaw.bind(prisma);
+  prisma.$executeRawUnsafe = async (...args) => {
+    ddlStatements.push(String(args[0]));
+    return originalUnsafe(...args);
+  };
+  prisma.$executeRaw = async (...args) => {
+    ddlStatements.push(String(args[0]));
+    return originalRaw(...args);
+  };
+  await listMaterialCatalog(prisma, ownerA);
+  await listSuppliers(prisma, ownerA);
+  await loadPurchaseListBoard(prisma, ownerA, { estimateId: estimate.id });
+  await materialEstimateVsActual(prisma, ownerA, { jobId: job.id });
+  await listJobMaterialPickupRequirements(prisma, ownerA, job.id);
+  await listMaterialActualCostLinks(prisma, ownerA, { jobId: job.id });
+  await listAssignedJobPickupView(
+    prisma,
+    {
+      workspace: memberA.workspace,
+      businessId: businessA.id,
+      membershipId: memberMem.id,
+    },
+    job.id,
+  );
+  prisma.$executeRawUnsafe = originalUnsafe;
+  prisma.$executeRaw = originalRaw;
+  check(
+    "Catalog / estimate / job / expense / pickup reads execute no schema DDL",
+    ddlStatements.every((sql) => !/CREATE\s+|ALTER\s+|DROP\s+|INDEX/i.test(sql)),
   );
 
   if (failures > 0) {

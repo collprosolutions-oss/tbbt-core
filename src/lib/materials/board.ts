@@ -98,6 +98,7 @@ export async function loadPurchaseWorkspace(
       supplierId: item.supplierId,
       supplierName: item.supplier?.name ?? null,
       materialId: item.materialId,
+      notes: item.notes,
     };
   });
   const orders: PurchaseOrderView[] = (board?.purchaseOrders ?? []).map((order) => ({

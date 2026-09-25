@@ -12,7 +12,11 @@ export {
   updateMaterialCatalogItem,
   upsertCatalogFromTakeoffItem,
 } from "@/lib/materials/catalog";
-export { linkPurchaseItemToExpense, listMaterialActualCostLinks, financialMaterialCost } from "@/lib/materials/expense-link";
+export {
+  claimMaterialAttempt,
+  normalizeMaterialAttemptKey,
+} from "@/lib/materials/attempts";
+export { linkPurchaseItemToExpense, listMaterialActualCostLinks, financialMaterialCost, recordPurchaseOperation } from "@/lib/materials/expense-link";
 export { MaterialsError, materialsErrorMessage } from "@/lib/materials/errors";
 export {
   MARKUP_IS_OWNER_ENTERED_ONLY,
@@ -33,7 +37,8 @@ export {
   updatePurchaseListItem,
   updatePurchaseOrderStatus,
 } from "@/lib/materials/purchase";
-export { ensureMaterialsSuppliersTables } from "@/lib/materials/schema";
+export { MATERIALS_SUPPLIERS_SCHEMA_SOURCE } from "@/lib/materials/schema";
+export { materialLineSourceKey, takeoffSourceKey } from "@/lib/materials/source-key";
 export { createSupplier, listSuppliers, updateSupplier } from "@/lib/materials/suppliers";
 export { convertTakeoffToPurchaseList, linkDraftTakeoffItemToCatalog } from "@/lib/materials/takeoff";
 export {
@@ -44,10 +49,12 @@ export {
   PURCHASE_ORDER_STATUS_LABELS,
   SUPPLIER_ADAPTER_STATES,
   SUPPLIER_INTEGRATION_LICENSING_NOTICE,
+  canTransitionPurchaseOrder,
   isMaterialPriceSource,
   isPurchaseItemStatus,
   isPurchaseOrderStatus,
   normalizeMaterialName,
+  PURCHASE_ORDER_TRANSITIONS,
 } from "@/lib/materials/types";
 export type {
   FieldJobPickupView,

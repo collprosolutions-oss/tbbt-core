@@ -1,6 +1,6 @@
 -- Materials, suppliers, price history, purchase lists, and lightweight POs.
--- Additive only. Preview skips migrate, so application code also
--- CREATE TABLE IF NOT EXISTS (see src/lib/materials/schema.ts).
+-- Additive only. Prisma migrate is the authoritative schema source.
+-- Application request paths must not run CREATE/ALTER/INDEX DDL.
 -- Never stores supplier passwords or API secrets.
 
 CREATE TABLE IF NOT EXISTS "Supplier" (
@@ -89,6 +89,9 @@ CREATE INDEX IF NOT EXISTS "MaterialPriceHistory_supplierId_idx"
 CREATE INDEX IF NOT EXISTS "MaterialPriceHistory_purchaseListItemId_idx"
   ON "MaterialPriceHistory"("purchaseListItemId");
 
+CREATE INDEX IF NOT EXISTS "MaterialPriceHistory_expenseId_idx"
+  ON "MaterialPriceHistory"("expenseId");
+
 CREATE TABLE IF NOT EXISTS "MaterialPurchaseList" (
     "id" TEXT NOT NULL,
     "businessId" TEXT NOT NULL,
@@ -113,6 +116,12 @@ CREATE INDEX IF NOT EXISTS "MaterialPurchaseList_estimateId_idx"
 CREATE INDEX IF NOT EXISTS "MaterialPurchaseList_estimateVersionId_idx"
   ON "MaterialPurchaseList"("estimateVersionId");
 
+CREATE UNIQUE INDEX IF NOT EXISTS "MaterialPurchaseList_businessId_jobId_key"
+  ON "MaterialPurchaseList"("businessId", "jobId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "MaterialPurchaseList_businessId_estimateId_key"
+  ON "MaterialPurchaseList"("businessId", "estimateId");
+
 CREATE TABLE IF NOT EXISTS "MaterialPurchaseListItem" (
     "id" TEXT NOT NULL,
     "businessId" TEXT NOT NULL,
@@ -121,6 +130,7 @@ CREATE TABLE IF NOT EXISTS "MaterialPurchaseListItem" (
     "supplierId" TEXT,
     "lineItemId" TEXT,
     "takeoffItemId" TEXT,
+    "sourceKey" TEXT,
     "name" TEXT NOT NULL,
     "quantityNeeded" DECIMAL(65,30) NOT NULL,
     "unit" TEXT NOT NULL,
@@ -163,6 +173,9 @@ CREATE INDEX IF NOT EXISTS "MaterialPurchaseListItem_supplierId_idx"
 
 CREATE INDEX IF NOT EXISTS "MaterialPurchaseListItem_lineItemId_idx"
   ON "MaterialPurchaseListItem"("lineItemId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "MaterialPurchaseListItem_businessId_purchaseListId_sourceKey_key"
+  ON "MaterialPurchaseListItem"("businessId", "purchaseListId", "sourceKey");
 
 CREATE TABLE IF NOT EXISTS "MaterialPurchaseOrder" (
     "id" TEXT NOT NULL,
@@ -213,6 +226,31 @@ CREATE INDEX IF NOT EXISTS "MaterialPurchaseOrderItem_purchaseOrderId_idx"
 
 CREATE INDEX IF NOT EXISTS "MaterialPurchaseOrderItem_purchaseListItemId_idx"
   ON "MaterialPurchaseOrderItem"("purchaseListItemId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "MaterialPurchaseOrderItem_purchaseOrderId_purchaseListItemId_key"
+  ON "MaterialPurchaseOrderItem"("purchaseOrderId", "purchaseListItemId");
+
+CREATE TABLE IF NOT EXISTS "MaterialOperationAttempt" (
+    "id" TEXT NOT NULL,
+    "businessId" TEXT NOT NULL,
+    "attemptKey" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "purchaseListId" TEXT,
+    "purchaseOrderId" TEXT,
+    "purchaseListItemId" TEXT,
+    "expenseId" TEXT,
+    "createdCount" INTEGER,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "MaterialOperationAttempt_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "MaterialOperationAttempt_businessId_attemptKey_key"
+  ON "MaterialOperationAttempt"("businessId", "attemptKey");
+
+CREATE INDEX IF NOT EXISTS "MaterialOperationAttempt_businessId_idx"
+  ON "MaterialOperationAttempt"("businessId");
 
 DO $$
 BEGIN
@@ -406,6 +444,22 @@ BEGIN
     ALTER TABLE "MaterialPurchaseOrderItem"
       ADD CONSTRAINT "MaterialPurchaseOrderItem_purchaseListItemId_fkey"
       FOREIGN KEY ("purchaseListItemId") REFERENCES "MaterialPurchaseListItem"("id")
+      ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'MaterialPriceHistory_expenseId_fkey'
+  ) THEN
+    ALTER TABLE "MaterialPriceHistory"
+      ADD CONSTRAINT "MaterialPriceHistory_expenseId_fkey"
+      FOREIGN KEY ("expenseId") REFERENCES "Expense"("id")
+      ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'MaterialOperationAttempt_businessId_fkey'
+  ) THEN
+    ALTER TABLE "MaterialOperationAttempt"
+      ADD CONSTRAINT "MaterialOperationAttempt_businessId_fkey"
+      FOREIGN KEY ("businessId") REFERENCES "Business"("id")
       ON DELETE CASCADE ON UPDATE CASCADE;
   END IF;
 END $$;

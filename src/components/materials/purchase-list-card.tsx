@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import {
   addPurchaseListItemAction,
   convertTakeoffToPurchaseListAction,
@@ -20,9 +20,15 @@ import {
   PURCHASE_ITEM_STATUS_LABELS,
   PURCHASE_ORDER_STATUSES,
   PURCHASE_ORDER_STATUS_LABELS,
+  PURCHASE_ORDER_TRANSITIONS,
+  isPurchaseOrderStatus,
 } from "@/lib/materials/types";
 
 const initial: MaterialsActionState = {};
+
+function newAttemptId() {
+  return crypto.randomUUID();
+}
 
 export type PurchaseListItemView = {
   id: string;
@@ -46,6 +52,7 @@ export type PurchaseListItemView = {
   supplierId: string | null;
   supplierName: string | null;
   materialId: string | null;
+  notes: string | null;
 };
 
 export type PurchaseOrderView = {
@@ -106,6 +113,14 @@ export function PurchaseListCard({
   );
   const [addState, addAction, adding] = useActionState(addPurchaseListItemAction, initial);
   const [poState, poAction, creatingPo] = useActionState(createPurchaseOrderAction, initial);
+  const [convertAttemptId, setConvertAttemptId] = useState(newAttemptId);
+  const [poAttemptId, setPoAttemptId] = useState(newAttemptId);
+  useEffect(() => {
+    if (convertState.message) setConvertAttemptId(newAttemptId());
+  }, [convertState.message]);
+  useEffect(() => {
+    if (poState.message) setPoAttemptId(newAttemptId());
+  }, [poState.message]);
 
   return (
     <Card>
@@ -121,6 +136,7 @@ export function PurchaseListCard({
           <form action={convertAction} className="space-y-2">
             <FormStatus state={convertState} />
             <input type="hidden" name="estimateId" value={estimateId} />
+            <input type="hidden" name="attemptId" value={convertAttemptId} />
             <Button type="submit" size="sm" disabled={converting}>
               {converting ? "Converting…" : "Convert takeoff / materials into purchase list"}
             </Button>
@@ -197,6 +213,7 @@ export function PurchaseListCard({
           <form action={poAction} className="flex flex-wrap items-end gap-2">
             <FormStatus state={poState} />
             <input type="hidden" name="purchaseListId" value={purchaseListId} />
+            <input type="hidden" name="attemptId" value={poAttemptId} />
             {jobId ? <input type="hidden" name="jobId" value={jobId} /> : null}
             <select name="supplierId" className="h-8 rounded-md border bg-transparent px-2 text-sm">
               <option value="">PO supplier</option>
@@ -235,6 +252,10 @@ function PurchaseItemForm({
 }) {
   const [state, action, pending] = useActionState(updatePurchaseListItemAction, initial);
   const [purchaseState, purchaseAction, recording] = useActionState(recordPurchaseAction, initial);
+  const [purchaseAttemptId, setPurchaseAttemptId] = useState(newAttemptId);
+  useEffect(() => {
+    if (purchaseState.message) setPurchaseAttemptId(newAttemptId());
+  }, [purchaseState.message]);
   return (
     <div className="space-y-2 rounded-lg border p-3">
       <form action={action} className="grid gap-2 sm:grid-cols-6">
@@ -291,6 +312,7 @@ function PurchaseItemForm({
         </label>
         <Input name="customerUnitPrice" defaultValue={item.customerUnitPrice ?? ""} placeholder="Customer $" />
         <Input name="markupPercent" defaultValue={item.markupPercent ?? ""} placeholder="Markup %" />
+        <Input name="notes" defaultValue={item.notes ?? ""} placeholder="Notes" className="sm:col-span-2" />
         <Button type="submit" size="sm" disabled={pending}>
           {pending ? "Saving…" : "Save"}
         </Button>
@@ -306,6 +328,7 @@ function PurchaseItemForm({
       <form action={purchaseAction} className="flex flex-wrap items-end gap-2">
         <FormStatus state={purchaseState} />
         <input type="hidden" name="itemId" value={item.id} />
+        <input type="hidden" name="attemptId" value={purchaseAttemptId} />
         {jobId ? <input type="hidden" name="jobId" value={jobId} /> : null}
         {estimateId ? <input type="hidden" name="estimateId" value={estimateId} /> : null}
         <Input name="quantityPurchased" defaultValue={item.quantityPurchased ?? item.quantityNeeded} className="w-24" />
@@ -345,7 +368,10 @@ function PurchaseOrderStatusForm({
         defaultValue={order.status}
         className="h-8 rounded-md border bg-transparent px-2 text-sm"
       >
-        {PURCHASE_ORDER_STATUSES.map((status) => (
+        {(isPurchaseOrderStatus(order.status)
+          ? PURCHASE_ORDER_TRANSITIONS[order.status]
+          : PURCHASE_ORDER_STATUSES
+        ).map((status) => (
           <option key={status} value={status}>
             {PURCHASE_ORDER_STATUS_LABELS[status]}
           </option>
