@@ -1283,15 +1283,22 @@ try {
     businessId: otherBusiness.id,
     jobId: founderWork.job.id,
   });
-  check("persist reuse does not create a second invoice", reuseEmpty.ok === true && reuseEmpty.reused === true);
   check(
-    "persist reuse does not duplicate invoice lines",
+    "persist bills the later approved CO on a supplemental invoice",
+    reuseEmpty.ok === true && reuseEmpty.reused === false && reuseEmpty.kind === "SUPPLEMENTAL",
+  );
+  check(
+    "original paid invoice lines are not duplicated",
     (await prisma.lineItem.count({ where: { invoiceId: emptyPaid.id } })) === 3,
   );
   check(
-    "persist reuse does not change the paid total",
+    "original paid total stays $375 after the supplemental is created",
     (await prisma.invoice.findUniqueOrThrow({ where: { id: emptyPaid.id } })).total.toString() ===
       "375",
+  );
+  check(
+    "supplemental total is only the later approved CO",
+    reuseEmpty.ok && reuseEmpty.total.toString() === "50",
   );
 
   const founderPdf = await renderInvoicePdf(founderDoc);
