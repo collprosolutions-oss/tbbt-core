@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import {
   acknowledgeAgreementLegalReviewAction,
   agreementAssistAction,
@@ -27,6 +27,7 @@ import {
   AGREEMENT_ATTORNEY_RECOMMENDATION_MESSAGE,
   AGREEMENT_NOT_ENFORCEABLE_MESSAGE,
   AGREEMENT_NOT_LEGAL_ADVICE_MESSAGE,
+  OWNER_REVIEW_REQUIRES_OWNER_MESSAGE,
   EXPIRY_STATE_LABELS,
   NO_FAKE_ESIGN_MESSAGE,
   PROTECTION_AREA_LABELS,
@@ -77,9 +78,11 @@ function FormMessage({ state }: { state: ProtectionActionState }) {
 export function BusinessProtectionWorkspace({
   source,
   canFinalize,
+  canRecordOwnerReview,
 }: {
   source: ProtectionWorkspace;
   canFinalize: boolean;
+  canRecordOwnerReview: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -106,7 +109,11 @@ export function BusinessProtectionWorkspace({
       {source.area === "dashboard" ? <DashboardPanel source={source} /> : null}
       {source.area === "vault" ? <VaultPanel source={source} /> : null}
       {source.area === "agreements" ? (
-        <AgreementPanel source={source} canFinalize={canFinalize} />
+        <AgreementPanel
+          source={source}
+          canFinalize={canFinalize}
+          canRecordOwnerReview={canRecordOwnerReview}
+        />
       ) : null}
     </div>
   );
@@ -311,9 +318,11 @@ function Field({
 function AgreementPanel({
   source,
   canFinalize,
+  canRecordOwnerReview,
 }: {
   source: ProtectionWorkspace;
   canFinalize: boolean;
+  canRecordOwnerReview: boolean;
 }) {
   const [createState, createAction, createPending] = useActionState(createAgreementAction, initial);
   const selected = source.selectedAgreement;
@@ -379,6 +388,7 @@ function AgreementPanel({
           questions={questions}
           risk={risk}
           canFinalize={canFinalize}
+          canRecordOwnerReview={canRecordOwnerReview}
           esignMessage={source.esign.message}
         />
       ) : (
@@ -398,6 +408,7 @@ function AgreementDetail({
   questions,
   risk,
   canFinalize,
+  canRecordOwnerReview,
   esignMessage,
 }: {
   selected: NonNullable<ProtectionWorkspace["selectedAgreement"]>;
@@ -405,6 +416,7 @@ function AgreementDetail({
   questions: (typeof AGREEMENT_QUESTION_SETS)[AgreementType];
   risk: ReturnType<typeof selectedAgreementRisk>;
   canFinalize: boolean;
+  canRecordOwnerReview: boolean;
   esignMessage: string;
 }) {
   const [answerState, answerAction, answerPending] = useActionState(saveAgreementAnswersAction, initial);
@@ -417,9 +429,24 @@ function AgreementDetail({
   const [completeState, completeAction, completePending] = useActionState(completeAgreementAction, initial);
   const [aiState, aiAction, aiPending] = useActionState(agreementAssistAction, initial);
   const [attemptId, setAttemptId] = useState(() => crypto.randomUUID());
+  const [completionAttemptKey, setCompletionAttemptKey] = useState(() => crypto.randomUUID());
+  const aiWasPending = useRef(false);
+  const completeWasPending = useRef(false);
   const highRisk = isHighRiskAgreement(selected.agreementType as AgreementType);
   const locked = Boolean(current.lockedAt) || current.representationStatus === "SIGNED_FINAL";
-  const answersJson = useMemo(() => JSON.stringify(current.answers), [current.answers]);
+  useEffect(() => {
+    if (aiWasPending.current && !aiPending && aiState.aiText && !aiState.error) {
+      setAttemptId(crypto.randomUUID());
+    }
+    aiWasPending.current = aiPending;
+  }, [aiPending, aiState.aiText, aiState.error]);
+
+  useEffect(() => {
+    if (completeWasPending.current && !completePending && completeState.agreementId && !completeState.error) {
+      setCompletionAttemptKey(crypto.randomUUID());
+    }
+    completeWasPending.current = completePending;
+  }, [completePending, completeState.agreementId, completeState.error]);
 
   return (
     <div className="space-y-4">
@@ -504,12 +531,16 @@ function AgreementDetail({
           ) : null}
 
           <div className="flex flex-wrap gap-2">
-            <form action={reviewAction}>
-              <input type="hidden" name="agreementId" value={selected.id} />
-              <Button type="submit" variant="outline" disabled={reviewPending || locked}>
-                Record owner review
-              </Button>
-            </form>
+            {canRecordOwnerReview ? (
+              <form action={reviewAction}>
+                <input type="hidden" name="agreementId" value={selected.id} />
+                <Button type="submit" variant="outline" disabled={reviewPending || locked}>
+                  Record owner review
+                </Button>
+              </form>
+            ) : (
+              <p className="text-sm text-muted-foreground">{OWNER_REVIEW_REQUIRES_OWNER_MESSAGE}</p>
+            )}
             {highRisk ? (
               <form action={legalAction}>
                 <input type="hidden" name="agreementId" value={selected.id} />
@@ -544,6 +575,7 @@ function AgreementDetail({
             {canFinalize ? (
               <form action={completeAction} className="space-y-2">
                 <input type="hidden" name="agreementId" value={selected.id} />
+                <input type="hidden" name="completionAttemptKey" value={completionAttemptKey} />
                 <Label htmlFor="mode">Completion method</Label>
                 <select
                   id="mode"
@@ -575,11 +607,8 @@ function AgreementDetail({
           <form
             action={aiAction}
             className="space-y-2 rounded-md border border-border/70 p-3"
-            onSubmit={() => setAttemptId(crypto.randomUUID())}
           >
             <input type="hidden" name="agreementId" value={selected.id} />
-            <input type="hidden" name="agreementType" value={selected.agreementType} />
-            <input type="hidden" name="answersJson" value={answersJson} />
             <input type="hidden" name="attemptId" value={attemptId} />
             <input type="hidden" name="text" value={current.draftContent} />
             <div className="text-sm font-medium">AI assistance (does not authorize or sign)</div>

@@ -36,6 +36,7 @@ export default async function BusinessProtectionPage({
       <BusinessProtectionWorkspace
         source={source}
         canFinalize={access.workspace.role === "OWNER"}
+        canRecordOwnerReview={access.workspace.role === "OWNER"}
       />
     </PageContainer>
   );

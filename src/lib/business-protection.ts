@@ -119,6 +119,24 @@ export const NO_STATE_CLAUSE_MESSAGE =
 export const NO_FAKE_ESIGN_MESSAGE =
   "No e-sign provider is connected. TBBT will not invent a digital signature.";
 
+export const OWNER_REVIEW_REQUIRES_OWNER_MESSAGE =
+  "Only the business owner can record owner review. Admins can prepare and edit drafts, but cannot set owner review.";
+
+export const AGREEMENT_NOT_READY_MESSAGE =
+  "This agreement is not ready. Complete guided answers, a current draft, a matching risk review, and owner review first.";
+
+export const AGREEMENT_NOT_READY_FOR_COMPLETION_MESSAGE =
+  "Complete an agreement only from READY or SENT after readiness checks pass. An empty or early-state draft cannot be signed.";
+
+export const EXTERNAL_SIGNATURE_NO_FILE_NOTE =
+  "No signed document file was uploaded. The owner attested that this agreement was signed externally. No digital signature was invented.";
+
+export const UPLOADED_SIGNED_DOCUMENT_NOTE =
+  "This vault record holds the uploaded signed document file. No digital signature was invented.";
+
+export const READY_WITHOUT_SENT_COMPLETION_NOTE =
+  "READY-but-not-SENT completion is allowed for an externally signed or uploaded signed document. The owner may finalize a ready draft that was signed outside TBBT without first recording SENT.";
+
 export const VAULT_PRIVATE_MESSAGE =
   "Vault files stay private. Adding a document here does not publish it to your website or any public page.";
 

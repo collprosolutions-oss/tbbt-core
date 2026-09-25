@@ -5,6 +5,7 @@ import {
   abortVaultDocumentUploadAction,
   authorizeVaultDocumentUploadAction,
   finalizeVaultDocumentUploadAction,
+  releaseUnreferencedVaultAssetAction,
 } from "@/app/actions/business-protection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,6 +55,9 @@ export function VaultUploadButton({
         setStatus(finalized.error || "That vault file could not be saved.");
         return;
       }
+      if (assetId && assetId !== finalized.assetId && assetId !== (defaultAssetId ?? "")) {
+        await releaseUnreferencedVaultAssetAction({ assetId });
+      }
       setAssetId(finalized.assetId);
       setStatus("Private file stored. It was not published.");
     } catch {
@@ -78,7 +82,22 @@ export function VaultUploadButton({
       {status ? <p className="text-xs text-muted-foreground">{status}</p> : null}
       {assetId ? (
         <p className="text-xs">
-          Stored privately. <Button type="button" variant="ghost" size="sm" onClick={() => setAssetId("")}>Remove attachment</Button>
+          Stored privately.{" "}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={async () => {
+              const previous = assetId;
+              setAssetId("");
+              if (previous && previous !== (defaultAssetId ?? "")) {
+                await releaseUnreferencedVaultAssetAction({ assetId: previous });
+                setStatus("Unreferenced upload removed.");
+              }
+            }}
+          >
+            Remove attachment
+          </Button>
         </p>
       ) : null}
     </div>

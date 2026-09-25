@@ -84,6 +84,51 @@ export const LOCKED_VERSION_STATUSES = new Set<AgreementVersionStatus>([
   "SIGNED_FINAL",
 ]);
 
+/**
+ * Central allowed lifecycle transitions. Server actions must consult this
+ * map. UI button visibility is not an authorization boundary.
+ *
+ * QUESTIONS cannot jump to READY, SENT, or COMPLETE.
+ * Blank DRAFT cannot jump to COMPLETE.
+ * READY-but-not-SENT may complete externally (documented).
+ */
+export const AGREEMENT_LIFECYCLE_TRANSITIONS: Record<
+  AgreementLifecycleStatus,
+  readonly AgreementLifecycleStatus[]
+> = {
+  QUESTIONS: ["QUESTIONS", "DRAFT", "RISK_REVIEW"],
+  DRAFT: ["QUESTIONS", "DRAFT", "RISK_REVIEW"],
+  RISK_REVIEW: ["QUESTIONS", "DRAFT", "RISK_REVIEW", "OWNER_REVIEW", "LEGAL_WARNING"],
+  OWNER_REVIEW: ["QUESTIONS", "DRAFT", "RISK_REVIEW", "OWNER_REVIEW", "LEGAL_WARNING", "READY"],
+  LEGAL_WARNING: ["QUESTIONS", "DRAFT", "RISK_REVIEW", "OWNER_REVIEW", "LEGAL_WARNING", "READY"],
+  READY: [
+    "QUESTIONS",
+    "DRAFT",
+    "RISK_REVIEW",
+    "OWNER_REVIEW",
+    "LEGAL_WARNING",
+    "READY",
+    "SENT",
+    "COMPLETE",
+    "EXTERNAL_COMPLETE",
+  ],
+  SENT: ["DRAFT", "RISK_REVIEW", "SENT", "COMPLETE", "EXTERNAL_COMPLETE"],
+  SIGNED: [],
+  COMPLETE: [],
+  EXTERNAL_COMPLETE: [],
+};
+
+export const COMPLETION_ALLOWED_FROM = ["READY", "SENT"] as const;
+export type CompletionSourceStatus = (typeof COMPLETION_ALLOWED_FROM)[number];
+
+export type AgreementReadinessTarget =
+  | "OWNER_REVIEW"
+  | "LEGAL_WARNING"
+  | "READY"
+  | "SENT"
+  | "COMPLETE"
+  | "EXTERNAL_COMPLETE";
+
 export type AgreementQuestion = {
   id: string;
   label: string;
@@ -250,6 +295,139 @@ export function buildAgreementDraft(input: {
     `${input.businessName}: ________________________  Date: __________`,
     `${counterparty}: ________________________  Date: __________`,
   ].join("\n");
+}
+
+export function canTransitionAgreementLifecycle(
+  from: AgreementLifecycleStatus,
+  to: AgreementLifecycleStatus,
+): boolean {
+  return AGREEMENT_LIFECYCLE_TRANSITIONS[from].includes(to);
+}
+
+export function agreementContentFingerprint(
+  answers: Record<string, string>,
+  draftContent: string,
+): string {
+  const keys = Object.keys(answers).sort();
+  const normalized = keys.map((key) => `${key}=${answers[key]?.trim() ?? ""}`).join("\n");
+  return `${normalized}\n---\n${draftContent.trim()}`;
+}
+
+export function parseStoredRiskReview(raw: string | null | undefined): {
+  findings: RiskFinding[];
+  attorneyRecommended: boolean;
+  contentFingerprint: string | null;
+} | null {
+  if (!raw?.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      findings?: RiskFinding[];
+      attorneyRecommended?: boolean;
+      contentFingerprint?: string;
+    };
+    if (!Array.isArray(parsed.findings)) return null;
+    return {
+      findings: parsed.findings,
+      attorneyRecommended: Boolean(parsed.attorneyRecommended),
+      contentFingerprint:
+        typeof parsed.contentFingerprint === "string" ? parsed.contentFingerprint : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function serializeRiskReview(input: {
+  type: AgreementType;
+  answers: Record<string, string>;
+  draftContent: string;
+}): string {
+  const review = reviewAgreementRisk(input);
+  return JSON.stringify({
+    ...review,
+    contentFingerprint: agreementContentFingerprint(input.answers, input.draftContent),
+  });
+}
+
+export function riskReviewMatchesCurrent(
+  raw: string | null | undefined,
+  answers: Record<string, string>,
+  draftContent: string,
+): boolean {
+  const stored = parseStoredRiskReview(raw);
+  if (!stored?.contentFingerprint) return false;
+  return stored.contentFingerprint === agreementContentFingerprint(answers, draftContent);
+}
+
+export function evaluateAgreementReadiness(input: {
+  accessBusinessId: string;
+  agreementBusinessId: string;
+  lifecycleStatus: AgreementLifecycleStatus;
+  agreementType: AgreementType;
+  ownerReviewedAt?: Date | string | null;
+  legalReviewAcknowledgedAt?: Date | string | null;
+  currentVersion?: {
+    draftContent?: string | null;
+    answersJson?: string | null;
+    riskReviewJson?: string | null;
+    representationStatus?: string | null;
+    lockedAt?: Date | string | null;
+  } | null;
+  target: AgreementReadinessTarget;
+}): { ok: true } | { ok: false; reason: string } {
+  if (input.agreementBusinessId !== input.accessBusinessId) {
+    return { ok: false, reason: "That agreement is not in this business workspace." };
+  }
+  if (isCompletedAgreement(input.lifecycleStatus)) {
+    return { ok: false, reason: "This agreement is already complete and historical." };
+  }
+  const version = input.currentVersion;
+  if (!version) {
+    return { ok: false, reason: "That agreement has no current version." };
+  }
+  const draftContent = version.draftContent?.trim() ?? "";
+  if (!draftContent) {
+    return { ok: false, reason: "Draft content cannot be empty." };
+  }
+  const answers = parseAgreementAnswers(version.answersJson);
+  const missing = requiredQuestionsMissing(input.agreementType, answers);
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      reason: `Answer required questions first: ${missing.map((row) => row.label).join(", ")}.`,
+    };
+  }
+  if (!riskReviewMatchesCurrent(version.riskReviewJson, answers, draftContent)) {
+    return {
+      ok: false,
+      reason: "Run risk review on the current draft before advancing this agreement.",
+    };
+  }
+  if (input.target === "OWNER_REVIEW" || input.target === "LEGAL_WARNING") {
+    return { ok: true };
+  }
+  if (!input.ownerReviewedAt) {
+    return { ok: false, reason: "The owner must record owner review before this agreement can be ready." };
+  }
+  if (isHighRiskAgreement(input.agreementType) && !input.legalReviewAcknowledgedAt) {
+    return {
+      ok: false,
+      reason: AGREEMENT_ATTORNEY_RECOMMENDATION_MESSAGE,
+    };
+  }
+  if (input.target === "SENT" && input.lifecycleStatus !== "READY" && input.lifecycleStatus !== "SENT") {
+    return { ok: false, reason: "Mark the agreement ready before recording that it was sent." };
+  }
+  if (
+    (input.target === "COMPLETE" || input.target === "EXTERNAL_COMPLETE") &&
+    !COMPLETION_ALLOWED_FROM.includes(input.lifecycleStatus as CompletionSourceStatus)
+  ) {
+    return {
+      ok: false,
+      reason: "Complete an agreement only from READY or SENT after readiness checks pass.",
+    };
+  }
+  return { ok: true };
 }
 
 export function reviewAgreementRisk(input: {

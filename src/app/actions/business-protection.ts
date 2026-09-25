@@ -21,6 +21,7 @@ import {
   markAgreementOwnerReviewed,
   markAgreementReady,
   markAgreementSent,
+  releaseUnreferencedVaultAsset,
   saveAgreementAnswers,
   saveAgreementDraftContent,
   updateVaultRecord,
@@ -77,8 +78,13 @@ export async function updateVaultRecordAction(
 ): Promise<ProtectionActionState> {
   try {
     const access = await requireOperatingBusinessAccess();
+    const recordId = readString(formData, "recordId");
+    const existing = await prisma.businessVaultRecord.findFirst({
+      where: { id: recordId, businessId: access.businessId },
+      select: { storedAssetId: true },
+    });
     const record = await updateVaultRecord(prisma, access, {
-      recordId: readString(formData, "recordId"),
+      recordId,
       title: readString(formData, "title") || undefined,
       category: readString(formData, "category") || undefined,
       issuer: formData.has("issuer") ? readString(formData, "issuer") : undefined,
@@ -89,6 +95,9 @@ export async function updateVaultRecordAction(
       recordStatus: readString(formData, "recordStatus") || undefined,
       storedAssetId: formData.has("storedAssetId") ? readString(formData, "storedAssetId") : undefined,
     });
+    if (existing?.storedAssetId && existing.storedAssetId !== record.storedAssetId) {
+      await releaseUnreferencedVaultAsset({ db: prisma }, access, existing.storedAssetId);
+    }
     revalidateProtection();
     return { message: "Vault record updated.", recordId: record.id };
   } catch (error) {
@@ -137,6 +146,24 @@ export async function abortVaultDocumentUploadAction(input: {
     return { message: "Upload cancelled." };
   } catch (error) {
     return { error: businessProtectionErrorMessage(error, "That upload could not be cancelled.") };
+  }
+}
+
+export async function releaseUnreferencedVaultAssetAction(input: {
+  assetId: string;
+}): Promise<ProtectionActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const result = await releaseUnreferencedVaultAsset({ db: prisma }, access, input.assetId);
+    if (result.released) revalidateProtection();
+    return {
+      message: result.released
+        ? "Unreferenced vault file removed."
+        : "That vault file is still attached to a business record.",
+      assetId: result.assetId,
+    };
+  } catch (error) {
+    return { error: businessProtectionErrorMessage(error, "That vault file could not be cleaned up.") };
   }
 }
 
@@ -230,7 +257,7 @@ export async function markAgreementOwnerReviewedAction(
       agreementId: readString(formData, "agreementId"),
     });
     revalidateProtection();
-    return { message: "Owner review recorded. This is not legal approval.", agreementId: readString(formData, "agreementId") };
+    return { message: "Owner review recorded by the owner. This is not legal approval.", agreementId: readString(formData, "agreementId") };
   } catch (error) {
     return { error: businessProtectionErrorMessage(error, "Owner review could not be recorded.") };
   }
@@ -296,6 +323,7 @@ export async function completeAgreementAction(
       mode: readString(formData, "mode"),
       notes: readString(formData, "notes") || undefined,
       storedAssetId: readString(formData, "storedAssetId") || undefined,
+      completionAttemptKey: readString(formData, "completionAttemptKey") || undefined,
     });
     revalidateProtection();
     return {
@@ -334,6 +362,7 @@ export async function agreementAssistAction(
     const result = await runAgreementAssist(prisma, access, {
       action,
       text: readString(formData, "text"),
+      agreementId: readString(formData, "agreementId") || undefined,
       agreementType: readString(formData, "agreementType") || undefined,
       answers,
       idempotencyKey: attemptId,

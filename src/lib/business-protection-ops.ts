@@ -6,22 +6,28 @@
  * never call these functions to authorize or sign.
  */
 
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import {
   CAPABILITIES,
   requireBusinessCapability,
   requireBusinessRole,
 } from "@/lib/authorization";
+import { isAiAttemptId } from "@/lib/ai/types";
 import {
   AGREEMENT_ATTORNEY_RECOMMENDATION_MESSAGE,
   AGREEMENT_NOT_ENFORCEABLE_MESSAGE,
+  AGREEMENT_NOT_READY_FOR_COMPLETION_MESSAGE,
   classifyExpiry,
+  EXTERNAL_SIGNATURE_NO_FILE_NOTE,
+  OWNER_REVIEW_REQUIRES_OWNER_MESSAGE,
+  parseOptionalCalendarDate,
+  READY_WITHOUT_SENT_COMPLETION_NOTE,
+  UPLOADED_SIGNED_DOCUMENT_NOTE,
   isVaultCategory,
   isVaultMimeAllowed,
   isVaultRecordStatus,
   needsRenewalAttention,
-  parseOptionalCalendarDate,
   VAULT_DOCUMENT_MAX_BYTES,
   VAULT_DOCUMENT_PURPOSE,
   type ExpiryState,
@@ -30,15 +36,17 @@ import {
 import {
   awaitingActionStatuses,
   buildAgreementDraft,
-  COMPLETED_AGREEMENT_STATUSES,
+  canTransitionAgreementLifecycle,
+  evaluateAgreementReadiness,
   isAgreementType,
   isCompletedAgreement,
   isHighRiskAgreement,
   isLockedVersion,
   parseAgreementAnswers,
   requiredQuestionsMissing,
-  reviewAgreementRisk,
+  serializeRiskReview,
   type AgreementLifecycleStatus,
+  type AgreementReadinessTarget,
   type AgreementType,
   type AgreementVersionStatus,
 } from "@/lib/business-protection-agreements";
@@ -53,6 +61,7 @@ import {
   abortManagedUpload,
   authorizeManagedUpload,
   finalizeManagedUpload,
+  resolveStorageProvider,
   type StorageServiceDeps,
 } from "@/lib/business-storage/service";
 
@@ -90,6 +99,104 @@ function requireProtection(access: BusinessAccess) {
 function requireOwnerForCompletion(access: BusinessAccess) {
   requireProtection(access);
   requireBusinessRole(access, "OWNER");
+}
+
+function requireOwnerForOwnerReview(access: BusinessAccess) {
+  requireProtection(access);
+  if (access.workspace.role !== "OWNER") {
+    throw new BusinessProtectionError(OWNER_REVIEW_REQUIRES_OWNER_MESSAGE);
+  }
+  requireBusinessRole(access, "OWNER");
+}
+
+function uniqueConflict(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
+function supportsTransaction(db: Db): db is PrismaClient {
+  return typeof (db as PrismaClient).$transaction === "function";
+}
+
+async function runAgreementTransaction<T>(
+  db: Db,
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  if (supportsTransaction(db)) {
+    return db.$transaction(fn);
+  }
+  return fn(db as Prisma.TransactionClient);
+}
+
+async function lockOwnedAgreement(tx: Prisma.TransactionClient, access: BusinessAccess, agreementId: string) {
+  await tx.$executeRaw`
+    SELECT 1 FROM "BusinessAgreement"
+    WHERE id = ${agreementId} AND "businessId" = ${access.businessId}
+    FOR UPDATE
+  `;
+}
+
+function assertLifecycleTransition(
+  from: AgreementLifecycleStatus,
+  to: AgreementLifecycleStatus,
+) {
+  if (!canTransitionAgreementLifecycle(from, to)) {
+    throw new BusinessProtectionError(
+      `Cannot move an agreement from ${from} to ${to}. Follow questions → draft → risk review → owner review → ready.`,
+    );
+  }
+}
+
+function assertAgreementReadiness(input: {
+  access: BusinessAccess;
+  agreement: {
+    businessId: string;
+    lifecycleStatus: string;
+    agreementType: string;
+    ownerReviewedAt: Date | null;
+    legalReviewAcknowledgedAt: Date | null;
+  };
+  version: {
+    draftContent: string;
+    answersJson: string;
+    riskReviewJson: string | null;
+    representationStatus: string;
+    lockedAt: Date | null;
+  } | null;
+  target: AgreementReadinessTarget;
+}) {
+  if (!isAgreementType(input.agreement.agreementType)) {
+    throw new BusinessProtectionError("Choose an agreement type.");
+  }
+  const result = evaluateAgreementReadiness({
+    accessBusinessId: input.access.businessId,
+    agreementBusinessId: input.agreement.businessId,
+    lifecycleStatus: input.agreement.lifecycleStatus as AgreementLifecycleStatus,
+    agreementType: input.agreement.agreementType,
+    ownerReviewedAt: input.agreement.ownerReviewedAt,
+    legalReviewAcknowledgedAt: input.agreement.legalReviewAcknowledgedAt,
+    currentVersion: input.version,
+    target: input.target,
+  });
+  if (!result.ok) {
+    throw new BusinessProtectionError(result.reason);
+  }
+}
+
+function reviewResetData() {
+  return {
+    ownerReviewedAt: null,
+    ownerReviewedByMembershipId: null,
+    legalReviewAcknowledgedAt: null,
+    legalReviewAcknowledgedByMembershipId: null,
+  };
+}
+
+function normalizeCompletionAttemptKey(value?: string | null) {
+  const key = value?.trim() ?? "";
+  if (!isAiAttemptId(key)) {
+    throw new BusinessProtectionError("Refresh and retry that completion from the form.");
+  }
+  return key;
 }
 
 function vaultCategoryForAgreement(type: string): VaultCategory {
@@ -336,6 +443,15 @@ async function assertPrivateVaultAsset(
   access: BusinessAccess,
   storedAssetId?: string | null,
 ) {
+  const asset = await loadPrivateVaultAsset(db, access, storedAssetId);
+  return asset?.id ?? null;
+}
+
+async function loadPrivateVaultAsset(
+  db: Db,
+  access: BusinessAccess,
+  storedAssetId?: string | null,
+) {
   const id = storedAssetId?.trim() || "";
   if (!id) return null;
   const asset = access.assertOwned(
@@ -349,10 +465,113 @@ async function assertPrivateVaultAsset(
   if (asset.status !== "READY") {
     throw new BusinessProtectionError("That file is not ready to attach.");
   }
+  if (asset.category !== "DOCUMENT") {
+    throw new BusinessProtectionError("Only a document file can be attached here.");
+  }
   if (asset.purpose !== VAULT_DOCUMENT_PURPOSE) {
     throw new BusinessProtectionError("Only a Business Vault file can be attached here.");
   }
-  return asset.id;
+  return asset;
+}
+
+async function assertDedicatedSignedUploadAsset(
+  db: Db,
+  access: BusinessAccess,
+  storedAssetId?: string | null,
+) {
+  const asset = await loadPrivateVaultAsset(db, access, storedAssetId);
+  if (!asset) {
+    throw new BusinessProtectionError("Upload the signed file before marking this complete.");
+  }
+  const vaultRef = await db.businessVaultRecord.findFirst({
+    where: { storedAssetId: asset.id, businessId: access.businessId },
+    select: { id: true },
+  });
+  if (vaultRef) {
+    throw new BusinessProtectionError(
+      "That vault file is already attached to another record. Upload a dedicated signed document for this agreement.",
+    );
+  }
+  const agreementRef = await db.businessAgreement.findFirst({
+    where: {
+      businessId: access.businessId,
+      vaultRecord: { storedAssetId: asset.id },
+    },
+    select: { id: true },
+  });
+  if (agreementRef) {
+    throw new BusinessProtectionError(
+      "That file is already used as a completed agreement document. Upload a dedicated signed document.",
+    );
+  }
+  return asset;
+}
+
+export async function releaseUnreferencedVaultAsset(
+  deps: StorageServiceDeps,
+  access: BusinessAccess,
+  assetId: string,
+) {
+  requireProtection(access);
+  const id = assetId.trim();
+  if (!id) return { released: false as const, reason: "missing", assetId: undefined };
+  const asset = await deps.db.storedAsset.findFirst({
+    where: { id, ...access.scope },
+    include: { storageAccount: true },
+  });
+  if (!asset || asset.businessId !== access.businessId) {
+    throw new BusinessProtectionError("That file is not in this business workspace.");
+  }
+  if (asset.purpose !== VAULT_DOCUMENT_PURPOSE) {
+    throw new BusinessProtectionError("Only an unreferenced Business Vault file can be cleaned up here.");
+  }
+  if (asset.status === "DELETED" || asset.deletedAt) {
+    return { released: false as const, reason: "already_deleted", assetId: asset.id };
+  }
+  const vaultRef = await deps.db.businessVaultRecord.findFirst({
+    where: { storedAssetId: asset.id, businessId: access.businessId },
+    select: { id: true },
+  });
+  const agreementRef = await deps.db.businessAgreement.findFirst({
+    where: {
+      businessId: access.businessId,
+      OR: [
+        { vaultRecord: { storedAssetId: asset.id } },
+        { vaultRecordId: { not: null }, vaultRecord: { storedAssetId: asset.id } },
+      ],
+    },
+    select: { id: true },
+  });
+  if (vaultRef || agreementRef) {
+    return { released: false as const, reason: "referenced", assetId: asset.id };
+  }
+  const now = deps.now?.() ?? new Date();
+  if (asset.status === "PENDING") {
+    await abortManagedUpload(deps, access.businessId, asset.id);
+    return { released: true as const, reason: "aborted", assetId: asset.id };
+  }
+  try {
+    const provider = await resolveStorageProvider(deps);
+    await provider.deleteObject({
+      bucket: asset.storageAccount.bucketName,
+      key: asset.storageKey,
+    }).catch(() => undefined);
+  } catch {
+    // Provider absence still allows the tenant-scoped DB cleanup below.
+  }
+  await deps.db.$transaction(async (tx) => {
+    await tx.storedAsset.update({
+      where: { id: asset.id },
+      data: { status: "DELETED", deletedAt: now, publicPath: null },
+    });
+    if (asset.status === "READY" && asset.fileSizeBytes > 0) {
+      await tx.businessStorageAccount.update({
+        where: { id: asset.storageAccountId },
+        data: { storageUsedBytes: { decrement: asset.fileSizeBytes } },
+      });
+    }
+  });
+  return { released: true as const, reason: "deleted", assetId: asset.id };
 }
 
 export async function authorizeVaultDocumentUpload(
@@ -479,34 +698,80 @@ async function openEditableVersion(
       "A completed agreement is historical. Start a new agreement instead of rewriting the signed copy.",
     );
   }
-  const current = currentVersion(agreement);
-  if (!isLockedVersion(current.representationStatus as AgreementVersionStatus, current.lockedAt)) {
-    return current;
+  const unlocked = currentVersion(agreement);
+  if (!isLockedVersion(unlocked.representationStatus as AgreementVersionStatus, unlocked.lockedAt)) {
+    return unlocked;
   }
-  const nextNumber = Math.max(...agreement.versions.map((row) => row.versionNumber)) + 1;
-  const next = await db.businessAgreementVersion.create({
-    data: {
-      businessId: access.businessId,
-      agreementId: agreement.id,
-      versionNumber: nextNumber,
-      representationStatus: "DRAFT",
-      answersJson: current.answersJson,
-      draftContent: current.draftContent,
-      riskReviewJson: current.riskReviewJson,
-      createdByMembershipId: membershipId(access),
-    },
-  });
-  if (current.representationStatus === "DRAFT") {
-    await db.businessAgreementVersion.update({
-      where: { id: current.id },
-      data: { representationStatus: "SUPERSEDED" },
-    });
+
+  const createReplacement = async (tx: Prisma.TransactionClient) => {
+    await lockOwnedAgreement(tx, access, agreement.id);
+    const fresh = await requireOwnedAgreement(tx, access, agreement.id);
+    if (isCompletedAgreement(fresh.lifecycleStatus as AgreementLifecycleStatus)) {
+      throw new BusinessProtectionError(
+        "A completed agreement is historical. Start a new agreement instead of rewriting the signed copy.",
+      );
+    }
+    const current = currentVersion(fresh);
+    if (!isLockedVersion(current.representationStatus as AgreementVersionStatus, current.lockedAt)) {
+      return current;
+    }
+    const nextNumber = Math.max(...fresh.versions.map((row) => row.versionNumber)) + 1;
+    try {
+      const next = await tx.businessAgreementVersion.create({
+        data: {
+          businessId: access.businessId,
+          agreementId: fresh.id,
+          versionNumber: nextNumber,
+          representationStatus: "DRAFT",
+          answersJson: current.answersJson,
+          draftContent: current.draftContent,
+          riskReviewJson: current.riskReviewJson,
+          createdByMembershipId: membershipId(access),
+        },
+      });
+      await tx.businessAgreement.update({
+        where: { id: fresh.id },
+        data: {
+          currentDraftVersionId: next.id,
+          lifecycleStatus: "DRAFT",
+          ...reviewResetData(),
+        },
+      });
+      await writeProtectionAudit(tx, {
+        businessId: access.businessId,
+        membershipId: membershipId(access),
+        action: "replacement_draft_opened",
+        agreementId: fresh.id,
+        previousValue: {
+          lifecycleStatus: fresh.lifecycleStatus,
+          lockedVersionId: current.id,
+          lockedVersionNumber: current.versionNumber,
+          lockedRepresentation: current.representationStatus,
+        },
+        newValue: {
+          versionId: next.id,
+          versionNumber: next.versionNumber,
+          fromLockedRepresentation: current.representationStatus,
+        },
+      });
+      return next;
+    } catch (error) {
+      if (!uniqueConflict(error)) throw error;
+      const raced = await requireOwnedAgreement(tx, access, agreement.id);
+      const winner = currentVersion(raced);
+      if (!isLockedVersion(winner.representationStatus as AgreementVersionStatus, winner.lockedAt)) {
+        return winner;
+      }
+      throw error;
+    }
+  };
+
+  try {
+    return await runAgreementTransaction(db, createReplacement);
+  } catch (error) {
+    if (!uniqueConflict(error)) throw error;
+    return runAgreementTransaction(db, createReplacement);
   }
-  await db.businessAgreement.update({
-    where: { id: agreement.id },
-    data: { currentDraftVersionId: next.id, lifecycleStatus: "DRAFT" },
-  });
-  return next;
 }
 
 export async function saveAgreementAnswers(
@@ -529,9 +794,16 @@ export async function saveAgreementAnswers(
     data: {
       title: input.title?.trim() || agreement.title,
       counterparty: input.counterparty?.trim() || answers.counterparty || agreement.counterparty,
-      effectiveOn: parseOptionalCalendarDate(answers.effectiveOn) ?? agreement.effectiveOn,
-      expiresOn: parseOptionalCalendarDate(answers.expiresOn) ?? agreement.expiresOn,
+      effectiveOn:
+        "effectiveOn" in input.answers
+          ? parseOptionalCalendarDate(input.answers.effectiveOn)
+          : agreement.effectiveOn,
+      expiresOn:
+        "expiresOn" in input.answers
+          ? parseOptionalCalendarDate(input.answers.expiresOn)
+          : agreement.expiresOn,
       lifecycleStatus: "QUESTIONS",
+      ...reviewResetData(),
     },
   });
   return updated;
@@ -559,21 +831,22 @@ export async function generateAgreementDraft(
     businessName: input.businessName,
     answers,
   });
-  const risk = reviewAgreementRisk({
-    type: agreement.agreementType,
-    answers,
-    draftContent,
-  });
+  const fromStatus = (await requireOwnedAgreement(db, access, agreement.id)).lifecycleStatus as AgreementLifecycleStatus;
+  assertLifecycleTransition(fromStatus, "RISK_REVIEW");
   await db.businessAgreementVersion.update({
     where: { id: version.id },
     data: {
       draftContent,
-      riskReviewJson: JSON.stringify(risk),
+      riskReviewJson: serializeRiskReview({
+        type: agreement.agreementType,
+        answers,
+        draftContent,
+      }),
     },
   });
   return db.businessAgreement.update({
     where: { id: agreement.id },
-    data: { lifecycleStatus: "RISK_REVIEW" },
+    data: { lifecycleStatus: "RISK_REVIEW", ...reviewResetData() },
     include: { versions: { orderBy: { versionNumber: "asc" } } },
   });
 }
@@ -592,16 +865,25 @@ export async function saveAgreementDraftContent(
     throw new BusinessProtectionError(AGREEMENT_NOT_ENFORCEABLE_MESSAGE);
   }
   const answers = parseAgreementAnswers(version.answersJson);
-  const risk = isAgreementType(agreement.agreementType)
-    ? reviewAgreementRisk({ type: agreement.agreementType, answers, draftContent: content })
-    : { findings: [], attorneyRecommended: true };
+  if (!isAgreementType(agreement.agreementType)) {
+    throw new BusinessProtectionError("Choose an agreement type.");
+  }
+  const fromStatus = (await requireOwnedAgreement(db, access, agreement.id)).lifecycleStatus as AgreementLifecycleStatus;
+  assertLifecycleTransition(fromStatus, "RISK_REVIEW");
   await db.businessAgreementVersion.update({
     where: { id: version.id },
-    data: { draftContent: content, riskReviewJson: JSON.stringify(risk) },
+    data: {
+      draftContent: content,
+      riskReviewJson: serializeRiskReview({
+        type: agreement.agreementType,
+        answers,
+        draftContent: content,
+      }),
+    },
   });
   return db.businessAgreement.update({
     where: { id: agreement.id },
-    data: { lifecycleStatus: "RISK_REVIEW" },
+    data: { lifecycleStatus: "RISK_REVIEW", ...reviewResetData() },
   });
 }
 
@@ -610,17 +892,28 @@ export async function markAgreementOwnerReviewed(
   access: BusinessAccess,
   input: { agreementId: string },
 ) {
-  requireProtection(access);
+  requireOwnerForOwnerReview(access);
   const agreement = await requireOwnedAgreement(db, access, input.agreementId);
   if (isCompletedAgreement(agreement.lifecycleStatus as AgreementLifecycleStatus)) {
     throw new BusinessProtectionError("A completed agreement cannot be re-reviewed into a new agreement.");
+  }
+  const version = currentVersion(agreement);
+  if (isLockedVersion(version.representationStatus as AgreementVersionStatus, version.lockedAt)) {
+    throw new BusinessProtectionError("Open a new draft before reviewing a locked historical version.");
   }
   const nextStatus: AgreementLifecycleStatus = isHighRiskAgreement(
     agreement.agreementType as AgreementType,
   )
     ? "LEGAL_WARNING"
-    : "READY";
-  return db.businessAgreement.update({
+    : "OWNER_REVIEW";
+  assertLifecycleTransition(agreement.lifecycleStatus as AgreementLifecycleStatus, nextStatus);
+  assertAgreementReadiness({
+    access,
+    agreement,
+    version,
+    target: nextStatus === "LEGAL_WARNING" ? "LEGAL_WARNING" : "OWNER_REVIEW",
+  });
+  const updated = await db.businessAgreement.update({
     where: { id: agreement.id },
     data: {
       lifecycleStatus: nextStatus,
@@ -628,6 +921,18 @@ export async function markAgreementOwnerReviewed(
       ownerReviewedByMembershipId: membershipId(access),
     },
   });
+  await writeProtectionAudit(db, {
+    businessId: access.businessId,
+    membershipId: membershipId(access),
+    action: "owner_review_recorded",
+    agreementId: agreement.id,
+    previousValue: { lifecycleStatus: agreement.lifecycleStatus },
+    newValue: {
+      lifecycleStatus: nextStatus,
+      ownerReviewedByMembershipId: membershipId(access),
+    },
+  });
+  return updated;
 }
 
 export async function acknowledgeAgreementLegalReview(
@@ -643,6 +948,20 @@ export async function acknowledgeAgreementLegalReview(
   if (isCompletedAgreement(agreement.lifecycleStatus as AgreementLifecycleStatus)) {
     throw new BusinessProtectionError("A completed agreement is already historical.");
   }
+  const version = currentVersion(agreement);
+  if (isLockedVersion(version.representationStatus as AgreementVersionStatus, version.lockedAt)) {
+    throw new BusinessProtectionError("A locked historical version cannot receive a new legal acknowledgment.");
+  }
+  if (!agreement.ownerReviewedAt) {
+    throw new BusinessProtectionError("The owner must record owner review before acknowledging attorney review.");
+  }
+  assertLifecycleTransition(agreement.lifecycleStatus as AgreementLifecycleStatus, "READY");
+  assertAgreementReadiness({
+    access,
+    agreement,
+    version,
+    target: "LEGAL_WARNING",
+  });
   await db.businessProtectionAcknowledgment.create({
     data: {
       businessId: access.businessId,
@@ -651,7 +970,7 @@ export async function acknowledgeAgreementLegalReview(
       statement: AGREEMENT_ATTORNEY_RECOMMENDATION_MESSAGE,
     },
   });
-  return db.businessAgreement.update({
+  const updated = await db.businessAgreement.update({
     where: { id: agreement.id },
     data: {
       lifecycleStatus: "READY",
@@ -659,6 +978,15 @@ export async function acknowledgeAgreementLegalReview(
       legalReviewAcknowledgedByMembershipId: membershipId(access),
     },
   });
+  await writeProtectionAudit(db, {
+    businessId: access.businessId,
+    membershipId: membershipId(access),
+    action: "attorney_recommendation_acknowledged",
+    agreementId: agreement.id,
+    previousValue: { lifecycleStatus: agreement.lifecycleStatus },
+    newValue: { lifecycleStatus: "READY" },
+  });
+  return updated;
 }
 
 export async function markAgreementReady(
@@ -671,16 +999,30 @@ export async function markAgreementReady(
   if (isCompletedAgreement(agreement.lifecycleStatus as AgreementLifecycleStatus)) {
     throw new BusinessProtectionError("A completed agreement is already historical.");
   }
-  if (
-    isHighRiskAgreement(agreement.agreementType as AgreementType) &&
-    !agreement.legalReviewAcknowledgedAt
-  ) {
-    throw new BusinessProtectionError(AGREEMENT_ATTORNEY_RECOMMENDATION_MESSAGE);
+  const version = currentVersion(agreement);
+  if (isLockedVersion(version.representationStatus as AgreementVersionStatus, version.lockedAt)) {
+    throw new BusinessProtectionError("A locked historical version cannot be marked ready.");
   }
-  return db.businessAgreement.update({
+  assertLifecycleTransition(agreement.lifecycleStatus as AgreementLifecycleStatus, "READY");
+  assertAgreementReadiness({
+    access,
+    agreement,
+    version,
+    target: "READY",
+  });
+  const updated = await db.businessAgreement.update({
     where: { id: agreement.id },
     data: { lifecycleStatus: "READY" },
   });
+  await writeProtectionAudit(db, {
+    businessId: access.businessId,
+    membershipId: membershipId(access),
+    action: "agreement_marked_ready",
+    agreementId: agreement.id,
+    previousValue: { lifecycleStatus: agreement.lifecycleStatus },
+    newValue: { lifecycleStatus: "READY" },
+  });
+  return updated;
 }
 
 export async function markAgreementSent(
@@ -689,37 +1031,68 @@ export async function markAgreementSent(
   input: { agreementId: string },
 ) {
   requireProtection(access);
-  const agreement = await requireOwnedAgreement(db, access, input.agreementId);
-  if (isCompletedAgreement(agreement.lifecycleStatus as AgreementLifecycleStatus)) {
-    throw new BusinessProtectionError("A completed agreement cannot be sent again as a new agreement.");
-  }
-  if (agreement.lifecycleStatus !== "READY" && agreement.lifecycleStatus !== "SENT") {
-    throw new BusinessProtectionError("Mark the agreement ready before recording that it was sent.");
-  }
-  const version = currentVersion(agreement);
-  if (isLockedVersion(version.representationStatus as AgreementVersionStatus, version.lockedAt)) {
-    return db.businessAgreement.update({
-      where: { id: agreement.id },
-      data: { lifecycleStatus: "SENT" },
+  const write = async (tx: Prisma.TransactionClient) => {
+    await lockOwnedAgreement(tx, access, input.agreementId);
+    const agreement = await requireOwnedAgreement(tx, access, input.agreementId);
+    if (isCompletedAgreement(agreement.lifecycleStatus as AgreementLifecycleStatus)) {
+      throw new BusinessProtectionError("A completed agreement cannot be sent again as a new agreement.");
+    }
+    const version = currentVersion(agreement);
+    assertLifecycleTransition(agreement.lifecycleStatus as AgreementLifecycleStatus, "SENT");
+    assertAgreementReadiness({
+      access,
+      agreement,
+      version,
+      target: "SENT",
     });
+    if (isLockedVersion(version.representationStatus as AgreementVersionStatus, version.lockedAt)) {
+      if (version.representationStatus === "SIGNED_FINAL") {
+        throw new BusinessProtectionError("A signed historical version cannot be re-sent.");
+      }
+      return tx.businessAgreement.update({
+        where: { id: agreement.id },
+        data: { lifecycleStatus: "SENT" },
+      });
+    }
+    const now = new Date();
+    await tx.businessAgreementVersion.update({
+      where: { id: version.id },
+      data: { representationStatus: "SENT", lockedAt: now },
+    });
+    const updated = await tx.businessAgreement.update({
+      where: { id: agreement.id },
+      data: { lifecycleStatus: "SENT", currentDraftVersionId: version.id },
+    });
+    await writeProtectionAudit(tx, {
+      businessId: access.businessId,
+      membershipId: membershipId(access),
+      action: "agreement_sent",
+      agreementId: agreement.id,
+      newValue: { versionId: version.id, versionNumber: version.versionNumber },
+    });
+    return updated;
+  };
+  return runAgreementTransaction(db, write);
+}
+
+async function loadCompletionWinner(
+  db: Db,
+  access: BusinessAccess,
+  agreementId: string,
+) {
+  const agreement = await requireOwnedAgreement(db, access, agreementId);
+  const signed = agreement.signedVersionId
+    ? agreement.versions.find((row) => row.id === agreement.signedVersionId)
+    : null;
+  const vault = agreement.vaultRecordId
+    ? await db.businessVaultRecord.findFirst({
+        where: { id: agreement.vaultRecordId, businessId: access.businessId },
+      })
+    : null;
+  if (!signed || !vault) {
+    throw new BusinessProtectionError("This agreement is already complete. Later edits belong on a new agreement.");
   }
-  const now = new Date();
-  await db.businessAgreementVersion.update({
-    where: { id: version.id },
-    data: { representationStatus: "SENT", lockedAt: now },
-  });
-  const updated = await db.businessAgreement.update({
-    where: { id: agreement.id },
-    data: { lifecycleStatus: "SENT", currentDraftVersionId: version.id },
-  });
-  await writeProtectionAudit(db, {
-    businessId: access.businessId,
-    membershipId: membershipId(access),
-    action: "agreement_sent",
-    agreementId: agreement.id,
-    newValue: { versionId: version.id, versionNumber: version.versionNumber },
-  });
-  return updated;
+  return { agreement, vault, signedVersion: signed };
 }
 
 export async function completeAgreementExternally(
@@ -730,16 +1103,13 @@ export async function completeAgreementExternally(
     mode: string;
     notes?: string;
     storedAssetId?: string;
+    completionAttemptKey?: string;
     now?: Date;
   },
 ) {
   requireOwnerForCompletion(access);
-  const agreement = await requireOwnedAgreement(db, access, input.agreementId);
-  if (isCompletedAgreement(agreement.lifecycleStatus as AgreementLifecycleStatus)) {
-    throw new BusinessProtectionError(
-      "This agreement is already complete. Later edits belong on a new agreement.",
-    );
-  }
+  const attemptKey = normalizeCompletionAttemptKey(input.completionAttemptKey);
+
   if (input.mode === "PROVIDER_READY" || input.mode === "digital" || input.mode === "esign") {
     assertDigitalSignatureAllowed(resolveEsignProviderStatus());
   }
@@ -754,18 +1124,64 @@ export async function completeAgreementExternally(
       "No e-sign provider is connected. Record an external signature or upload a signed file.",
     );
   }
-  if (mode === "MANUAL_UPLOAD" && !input.storedAssetId?.trim()) {
-    throw new BusinessProtectionError("Upload the signed file before marking this complete.");
-  }
-  const storedAssetId = await assertPrivateVaultAsset(db, access, input.storedAssetId);
-  const version = currentVersion(agreement);
-  const now = input.now ?? new Date();
-  const signed = isLockedVersion(version.representationStatus as AgreementVersionStatus, version.lockedAt)
-    ? await db.businessAgreementVersion.create({
+
+  const write = async (tx: Prisma.TransactionClient) => {
+    await lockOwnedAgreement(tx, access, input.agreementId);
+    const agreement = await requireOwnedAgreement(tx, access, input.agreementId);
+    const existingClaim = await tx.businessAgreementCompletionClaim.findUnique({
+      where: { agreementId: agreement.id },
+    });
+    if (isCompletedAgreement(agreement.lifecycleStatus as AgreementLifecycleStatus) || existingClaim) {
+      if (
+        (existingClaim?.attemptKey ?? agreement.completionAttemptKey) === attemptKey
+      ) {
+        return loadCompletionWinner(tx, access, agreement.id);
+      }
+      throw new BusinessProtectionError(
+        "This agreement is already complete. Later edits belong on a new agreement.",
+      );
+    }
+
+    const lifecycleStatus: AgreementLifecycleStatus =
+      mode === "MANUAL_UPLOAD" ? "COMPLETE" : "EXTERNAL_COMPLETE";
+    assertLifecycleTransition(agreement.lifecycleStatus as AgreementLifecycleStatus, lifecycleStatus);
+    const version = currentVersion(agreement);
+    if (version.representationStatus === "SIGNED_FINAL") {
+      throw new BusinessProtectionError("A locked historical version cannot be mutated.");
+    }
+    assertAgreementReadiness({
+      access,
+      agreement,
+      version,
+      target: lifecycleStatus,
+    });
+    if (!version.draftContent.trim()) {
+      throw new BusinessProtectionError(AGREEMENT_NOT_READY_FOR_COMPLETION_MESSAGE);
+    }
+
+    let storedAssetId: string | null = null;
+    if (mode === "MANUAL_UPLOAD") {
+      const asset = await assertDedicatedSignedUploadAsset(tx, access, input.storedAssetId);
+      storedAssetId = asset.id;
+    } else if (input.storedAssetId?.trim()) {
+      throw new BusinessProtectionError(
+        "External signature completion does not attach a file. Use manual upload to store a signed document.",
+      );
+    }
+
+    const now = input.now ?? new Date();
+    const sentLocked =
+      version.representationStatus === "SENT" ||
+      (agreement.lifecycleStatus === "SENT" &&
+        isLockedVersion(version.representationStatus as AgreementVersionStatus, version.lockedAt));
+    let signed;
+    if (sentLocked) {
+      const nextNumber = Math.max(...agreement.versions.map((row) => row.versionNumber)) + 1;
+      signed = await tx.businessAgreementVersion.create({
         data: {
           businessId: access.businessId,
           agreementId: agreement.id,
-          versionNumber: Math.max(...agreement.versions.map((row) => row.versionNumber)) + 1,
+          versionNumber: nextNumber,
           representationStatus: "SIGNED_FINAL",
           answersJson: version.answersJson,
           draftContent: version.draftContent,
@@ -773,70 +1189,125 @@ export async function completeAgreementExternally(
           createdByMembershipId: membershipId(access),
           lockedAt: now,
         },
-      })
-    : await db.businessAgreementVersion.update({
+      });
+    } else {
+      signed = await tx.businessAgreementVersion.update({
         where: { id: version.id },
         data: { representationStatus: "SIGNED_FINAL", lockedAt: now },
       });
+    }
 
-  const vault = await db.businessVaultRecord.create({
-    data: {
-      businessId: access.businessId,
-      title: `${agreement.title} (signed)`,
-      category: vaultCategoryForAgreement(agreement.agreementType),
-      counterparty: agreement.counterparty,
-      effectiveOn: agreement.effectiveOn,
-      expiresOn: agreement.expiresOn,
-      notes: input.notes?.trim() || "Final stored agreement copy.",
-      storedAssetId,
-      recordStatus: "ACTIVE",
-      persistedExpiryState: classifyExpiry({
+    const ownerNote = input.notes?.trim() || "";
+    const vaultNotes =
+      mode === "MANUAL_UPLOAD"
+        ? [UPLOADED_SIGNED_DOCUMENT_NOTE, ownerNote, `uploadedSignedAssetId=${storedAssetId}`]
+            .filter(Boolean)
+            .join(" ")
+        : [EXTERNAL_SIGNATURE_NO_FILE_NOTE, READY_WITHOUT_SENT_COMPLETION_NOTE, ownerNote]
+            .filter(Boolean)
+            .join(" ");
+    const vaultTitle =
+      mode === "MANUAL_UPLOAD"
+        ? `${agreement.title} (uploaded signed document)`
+        : `${agreement.title} (external signature recorded)`;
+
+    const vault = await tx.businessVaultRecord.create({
+      data: {
+        businessId: access.businessId,
+        title: vaultTitle,
         category: vaultCategoryForAgreement(agreement.agreementType),
+        counterparty: agreement.counterparty,
+        effectiveOn: agreement.effectiveOn,
         expiresOn: agreement.expiresOn,
-        now,
-      }),
-      createdByMembershipId: membershipId(access),
-      updatedByMembershipId: membershipId(access),
-    },
-  });
+        notes: vaultNotes,
+        storedAssetId,
+        recordStatus: "ACTIVE",
+        persistedExpiryState: classifyExpiry({
+          category: vaultCategoryForAgreement(agreement.agreementType),
+          expiresOn: agreement.expiresOn,
+          now,
+        }),
+        createdByMembershipId: membershipId(access),
+        updatedByMembershipId: membershipId(access),
+      },
+    });
 
-  const lifecycleStatus: AgreementLifecycleStatus =
-    mode === "MANUAL_UPLOAD" ? "COMPLETE" : "EXTERNAL_COMPLETE";
-  const updated = await db.businessAgreement.update({
-    where: { id: agreement.id },
-    data: {
-      lifecycleStatus,
-      signingMode: mode,
-      signedVersionId: signed.id,
-      currentDraftVersionId: signed.id,
+    const updated = await tx.businessAgreement.update({
+      where: { id: agreement.id },
+      data: {
+        lifecycleStatus,
+        signingMode: mode,
+        signedVersionId: signed.id,
+        currentDraftVersionId: signed.id,
+        vaultRecordId: vault.id,
+        completedAt: now,
+        completedByMembershipId: membershipId(access),
+        completionNotes: ownerNote || null,
+        completionAttemptKey: attemptKey,
+      },
+    });
+
+    await tx.businessAgreementCompletionClaim.create({
+      data: {
+        businessId: access.businessId,
+        agreementId: agreement.id,
+        attemptKey,
+        signedVersionId: signed.id,
+        vaultRecordId: vault.id,
+      },
+    });
+
+    await writeProtectionAudit(tx, {
+      businessId: access.businessId,
+      membershipId: membershipId(access),
+      action: "marked_signed",
+      agreementId: agreement.id,
       vaultRecordId: vault.id,
-      completedAt: now,
-      completedByMembershipId: membershipId(access),
-      completionNotes: input.notes?.trim() || null,
-    },
-  });
-  await writeProtectionAudit(db, {
-    businessId: access.businessId,
-    membershipId: membershipId(access),
-    action: "marked_signed",
-    agreementId: agreement.id,
-    vaultRecordId: vault.id,
-    newValue: {
-      mode,
-      versionId: signed.id,
-      completedByMembershipId: membershipId(access),
-      completedAt: now.toISOString(),
-    },
-  });
-  await writeProtectionAudit(db, {
-    businessId: access.businessId,
-    membershipId: membershipId(access),
-    action: "agreement_finalized",
-    agreementId: agreement.id,
-    vaultRecordId: vault.id,
-    newValue: { lifecycleStatus, storedAssetId },
-  });
-  return { agreement: updated, vault, signedVersion: signed };
+      newValue: {
+        mode,
+        versionId: signed.id,
+        completedByMembershipId: membershipId(access),
+        completedAt: now.toISOString(),
+        completionAttemptKey: attemptKey,
+        storedSignedDocument: Boolean(storedAssetId),
+      },
+    });
+    await writeProtectionAudit(tx, {
+      businessId: access.businessId,
+      membershipId: membershipId(access),
+      action: "agreement_finalized",
+      agreementId: agreement.id,
+      vaultRecordId: vault.id,
+      newValue: {
+        lifecycleStatus,
+        storedAssetId,
+        signedDocumentFileUploaded: Boolean(storedAssetId),
+      },
+    });
+    return { agreement: updated, vault, signedVersion: signed };
+  };
+
+  try {
+    return await runAgreementTransaction(db, write);
+  } catch (error) {
+    if (!uniqueConflict(error)) throw error;
+    const winner = await requireOwnedAgreement(db, access, input.agreementId);
+    if (
+      isCompletedAgreement(winner.lifecycleStatus as AgreementLifecycleStatus) &&
+      winner.completionAttemptKey === attemptKey
+    ) {
+      return loadCompletionWinner(db, access, input.agreementId);
+    }
+    const claim = await db.businessAgreementCompletionClaim.findFirst({
+      where: { businessId: access.businessId, attemptKey },
+    });
+    if (claim?.agreementId === input.agreementId) {
+      return loadCompletionWinner(db, access, input.agreementId);
+    }
+    throw new BusinessProtectionError(
+      "This agreement is already complete. Later edits belong on a new agreement.",
+    );
+  }
 }
 
 export async function mutateCompletedAgreementContent(

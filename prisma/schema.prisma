@@ -378,6 +378,7 @@ model Business {
   agreementVersions        BusinessAgreementVersion[]
   protectionAuditLogs      BusinessProtectionAuditLog[]
   protectionAcknowledgments BusinessProtectionAcknowledgment[]
+  agreementCompletionClaims BusinessAgreementCompletionClaim[]
   esignBoundary            BusinessEsignBoundary?
 }
 
@@ -3744,6 +3745,7 @@ model BusinessVaultRecord {
   updatedBy   Membership?  @relation("VaultRecordUpdater", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
   agreements  BusinessAgreement[]
   auditLogs   BusinessProtectionAuditLog[]
+  completionClaims BusinessAgreementCompletionClaim[]
 
   @@index([businessId, category, recordStatus])
   @@index([businessId, expiresOn])
@@ -3773,6 +3775,9 @@ model BusinessAgreement {
   completedByMembershipId               String?
   completedAt                           DateTime?
   completionNotes                       String?
+  /// Stable logical completion attempt key. Retries of the same attempt
+  /// reuse the winner; a completed agreement cannot be completed again.
+  completionAttemptKey                  String?
   legalReviewAcknowledgedAt             DateTime?
   legalReviewAcknowledgedByMembershipId String?
   ownerReviewedAt                       DateTime?
@@ -3786,6 +3791,7 @@ model BusinessAgreement {
   currentDraft      BusinessAgreementVersion?   @relation("AgreementCurrentDraft", fields: [currentDraftVersionId], references: [id], onDelete: SetNull)
   signedVersion     BusinessAgreementVersion?   @relation("AgreementSignedVersion", fields: [signedVersionId], references: [id], onDelete: SetNull)
   versions          BusinessAgreementVersion[]  @relation("AgreementVersions")
+  completionClaim   BusinessAgreementCompletionClaim?
   createdBy         Membership                  @relation("AgreementCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
   completedBy       Membership?                 @relation("AgreementCompleter", fields: [completedByMembershipId], references: [id], onDelete: SetNull)
   legalAcknowledgedBy Membership?               @relation("AgreementLegalAck", fields: [legalReviewAcknowledgedByMembershipId], references: [id], onDelete: SetNull)
@@ -3795,6 +3801,7 @@ model BusinessAgreement {
   @@index([businessId, lifecycleStatus])
   @@index([businessId, agreementType])
   @@index([vaultRecordId])
+  @@index([businessId, completionAttemptKey])
 }
 
 /// Versioned agreement representation. SENT / SIGNED_FINAL rows are locked.
@@ -3816,9 +3823,30 @@ model BusinessAgreementVersion {
   agreement   BusinessAgreement @relation("AgreementVersions", fields: [agreementId], references: [id], onDelete: Cascade)
   currentFor  BusinessAgreement? @relation("AgreementCurrentDraft")
   signedFor   BusinessAgreement? @relation("AgreementSignedVersion")
+  completionClaim BusinessAgreementCompletionClaim?
   createdBy   Membership        @relation("AgreementVersionCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
 
   @@unique([agreementId, versionNumber])
+  @@index([businessId, agreementId])
+}
+
+/// One completion claim per agreement. Same attempt key reuses the winner.
+/// Concurrent retries cannot create a second signed version or vault row.
+model BusinessAgreementCompletionClaim {
+  id              String   @id @default(cuid())
+  businessId      String
+  agreementId     String   @unique
+  attemptKey      String
+  signedVersionId String   @unique
+  vaultRecordId   String   @unique
+  createdAt       DateTime @default(now())
+
+  business      Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  agreement     BusinessAgreement        @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  signedVersion BusinessAgreementVersion @relation(fields: [signedVersionId], references: [id], onDelete: Restrict)
+  vaultRecord   BusinessVaultRecord      @relation(fields: [vaultRecordId], references: [id], onDelete: Restrict)
+
+  @@unique([businessId, attemptKey])
   @@index([businessId, agreementId])
 }
 

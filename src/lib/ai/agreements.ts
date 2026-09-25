@@ -15,6 +15,7 @@ import {
 import {
   AGREEMENT_QUESTION_SETS,
   isAgreementType,
+  parseAgreementAnswers,
   requiredQuestionsMissing,
   type AgreementType,
 } from "@/lib/business-protection-agreements";
@@ -85,18 +86,45 @@ export async function runAgreementAssist(
   access: BusinessAccess,
   input: {
     action: AgreementAiAction;
-    text: string;
+    text?: string;
+    agreementId?: string;
     agreementType?: AgreementType | string;
     answers?: Record<string, string>;
     idempotencyKey: string;
   },
 ) {
   requireAgreementAi(access);
-  const untrusted = sanitizeAiText(input.text, 3_000);
+  let agreementType = input.agreementType;
+  let answers = input.answers;
+  let authorizedText = "";
+  let authorizedAgreementId: string | null = null;
+
+  if (input.agreementId?.trim()) {
+    const agreement = access.assertOwned(
+      await db.businessAgreement.findFirst({
+        where: { id: input.agreementId.trim(), businessId: access.businessId },
+        include: { versions: { orderBy: { versionNumber: "asc" } } },
+      }),
+    );
+    authorizedAgreementId = agreement.id;
+    const current =
+      agreement.versions.find((row) => row.id === agreement.currentDraftVersionId) ??
+      agreement.versions[agreement.versions.length - 1];
+    agreementType = isAgreementType(agreement.agreementType) ? agreement.agreementType : agreementType;
+    answers = current ? parseAgreementAnswers(current.answersJson) : {};
+    authorizedText = current?.draftContent ?? "";
+  }
+
+  const proposed = sanitizeAiText(input.text ?? "", 3_000);
+  const authorized = sanitizeAiText(authorizedText, 3_000);
+  const untrusted =
+    input.action === "REWRITE" && proposed
+      ? proposed
+      : authorized || proposed;
   const fallback = agreementAssistFallback(input.action, {
     text: untrusted,
-    agreementType: input.agreementType,
-    answers: input.answers,
+    agreementType,
+    answers,
   });
   const system = [
     "You help a small-business owner organize agreement drafts.",
@@ -109,10 +137,16 @@ export async function runAgreementAssist(
   ].join(" ");
   const user = JSON.stringify({
     action: input.action,
-    agreementType: input.agreementType ?? null,
+    agreementId: authorizedAgreementId,
+    agreementType: agreementType ?? null,
     text: untrusted,
-    answers: input.answers ? sanitizeAiText(JSON.stringify(input.answers), 1_200) : null,
+    proposedText: proposed && proposed !== untrusted ? proposed : null,
+    answers: answers ? sanitizeAiText(JSON.stringify(answers), 1_200) : null,
     tenant: { role: "owner_or_admin" },
+    authoritative:
+      authorizedAgreementId
+        ? "Resolved from businessId + agreementId. Browser type/answers were not treated as the agreement."
+        : "No agreementId; assistance used only the supplied draft snippet.",
   });
   return runAiTask(db, {
     businessId: access.businessId,
