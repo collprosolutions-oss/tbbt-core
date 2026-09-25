@@ -120,6 +120,15 @@ check(
     estimateAction.includes("where: { id: serviceRequestId, ...access.scope }"),
 );
 check(
+  "Logged leads reuse createEstimate instead of a second estimate builder",
+  readRepo("src/app/actions/request.ts").includes("redirect(`/requests?selected=${result.requestId}`)") &&
+    readRepo("src/components/requests/requests-workspace.tsx").includes("CreateEstimateButton") &&
+    estimateAction.includes("customerId: request.customerId") &&
+    estimateAction.includes("propertyId: request.propertyId") &&
+    estimateAction.includes("leadSource: request.leadSource") &&
+    !readRepo("src/app/actions/request.ts").includes("estimate.create"),
+);
+check(
   "Customer estimate does not show owner request handoff",
   !customerPage.includes("RequestEstimateHandoff") &&
     !customerPage.includes("EDIT_BUILD_ESTIMATE_LABEL"),

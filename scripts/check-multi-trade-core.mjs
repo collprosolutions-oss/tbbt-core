@@ -121,6 +121,13 @@ function makeAccess(businessId, role = "OWNER") {
 }
 
 console.log("\nSTATIC — Multi-trade architecture");
+check(
+  "Owner Log lead uses the request tradeCode / DEFAULT_TRADE, not a Cleaning-only path",
+  read("src/lib/owner-log-lead.ts").includes("DEFAULT_TRADE") &&
+    read("src/lib/owner-log-lead.ts").includes("catalogItem.tradeCode") &&
+    !read("src/lib/owner-log-lead.ts").includes("cleaning-starter-catalog") &&
+    !read("src/app/actions/request.ts").includes("CLEANING"),
+);
 const schema = read("prisma/schema.prisma");
 const migration = read("prisma/migrations/20260925120000_multi_trade_core/migration.sql");
 const trades = read("src/lib/trades.ts");

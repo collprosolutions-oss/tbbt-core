@@ -54,7 +54,8 @@ export const CAPABILITIES = {
   /**
    * Create/edit estimates and their line items, and drive the estimate
    * status lifecycle (send / return to draft / re-email). Also covers
-   * converting an intake ServiceRequest into an estimate.
+   * converting an intake ServiceRequest into an estimate, and owner/admin
+   * Log lead (creating a ServiceRequest for phone / walk-in / referral).
    */
   MANAGE_ESTIMATES: "MANAGE_ESTIMATES",
   /** Create invoices and drive their status lifecycle (sent / paid). */

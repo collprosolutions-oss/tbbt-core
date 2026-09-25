@@ -36,6 +36,7 @@ const {
   PipelineError,
 } = await import("@/lib/pipeline-ops");
 const { loadPipelineSource } = await import("@/lib/pipeline-data");
+const { createOwnerLoggedLead } = await import("@/lib/owner-log-lead");
 const { FOUNDER_PAGE_KEYS, KPI_CARD_COUNTS } = await import("@/lib/founder-design");
 const { FOUNDER_REGIONS } = await import("@/lib/founder-regions");
 
@@ -368,6 +369,22 @@ try {
   const sent = source1.opportunities.find((row) => row.serviceRequestId === sentRequest.id);
   const won = source1.opportunities.find((row) => row.serviceRequestId === wonRequest.id);
   check("New request appears as New Lead", lead?.stage === "NEW_LEAD");
+  const loggedLead = await createOwnerLoggedLead(prisma, ownerA, {
+    mode: "existing",
+    customerId: customer.id,
+    summary: "Owner-logged phone leak",
+    channel: "PHONE",
+    submissionId: "pipe-lead-1",
+  });
+  const afterLogLead = await loadPipelineSource(prisma, businessA.id);
+  const ownerLogged = afterLogLead.opportunities.find(
+    (row) => row.serviceRequestId === (loggedLead.ok ? loggedLead.requestId : ""),
+  );
+  check("Owner-logged phone lead appears as New Lead on Pipeline",
+    loggedLead.ok === true && ownerLogged?.stage === "NEW_LEAD");
+  check("Owner-logged lead stays on tenant A",
+    !afterLogLead.opportunities.some((row) => row.customerName === "Beta Secret") &&
+      ownerLogged?.customerName === "Ada Homeowner");
   check("New lead has no fabricated deal value", lead?.estimateValue === null);
   check("Starting catalog price is not used as deal value", lead?.estimateValue !== "89.00");
   check("Draft estimate appears as Estimate in Progress", draft?.stage === "ESTIMATE_IN_PROGRESS");

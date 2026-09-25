@@ -83,7 +83,7 @@ function parseTab(raw: string | undefined): TabKey {
 export default async function RequestsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; q?: string; service?: string }>;
+  searchParams: Promise<{ status?: string; q?: string; service?: string; selected?: string }>;
 }) {
   const access = await requireManagementPageAccess();
 
@@ -381,15 +381,16 @@ export default async function RequestsPage({
        * Contextual header search (TBBT logo -> business switcher -> page
        * title -> primary action -> search -> ... -> theme -> account).
        * Real, server-filtered search -- a plain GET form, no client state,
-       * no fabricated results. There is no genuine owner-facing "create a
-       * request" flow anywhere in the app (requests are only ever created
-       * by a customer through the public intake form, see
-       * src/app/actions/intake.ts) -- rather than fabricate a "+ New
-       * Request" button with no real action behind it, the header's
-       * primary-action slot is intentionally left empty for this page.
+       * no fabricated results. Log lead is the owner-facing request create
+       * path (phone / walk-in / referral) so Requests history is not skipped.
        */}
       <PageHeaderControls
         title={PAGE_TITLE}
+        actions={
+          <Button asChild size="sm">
+            <Link href="/requests/log-lead">Log lead</Link>
+          </Button>
+        }
         search={
           <form action="/requests" method="GET" className="flex items-center gap-2">
             <input type="hidden" name="status" value={tab === "all" ? "" : tab} />
@@ -482,7 +483,7 @@ export default async function RequestsPage({
        * column under Request Details. --tbbt-panel-width sizes only
        * that supporting column, matching the details panel.
        */}
-      <RequestsWorkspace requests={requests} />
+      <RequestsWorkspace requests={requests} initialSelectedId={params.selected} />
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,280px)]">
         <FounderRegion id="calendar">
@@ -558,6 +559,9 @@ export default async function RequestsPage({
               </CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-2">
+              <Button asChild size="sm" variant="outline" className="justify-start">
+                <Link href="/requests/log-lead">Log lead</Link>
+              </Button>
               <Button asChild size="sm" variant="outline" className="justify-start">
                 <Link href="/estimates/new">Create estimate</Link>
               </Button>
