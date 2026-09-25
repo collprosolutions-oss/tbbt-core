@@ -96,4 +96,23 @@ Production migrate policy (no database):
 npm run test:production-migrate
 ```
 
+```bash
+npm run test:website-engine
+npm run test:public-website
+npm run test:live-public-website
+```
+
+## Website publishing
+
+Public customer sites use:
+
+**editable website state → validated immutable snapshot → atomic current pointer → public render**
+
+- `WebsitePublish` stores a versioned public snapshot (`schemaVersion = 1`).
+- `Business.publishedWebsiteId` is the current pointer. It can only reference a publish row for the same business.
+- Before the first publish, `/hire/[slug]` and `/r/[slug]` still assemble from live Business / catalog / image / service-area rows. CollPro stays on this path until it publishes.
+- After the first publish, owner drafts do not appear on the public site until the next Publish.
+- Rollback copies a historical snapshot into a new version. Old rows stay immutable.
+- `WebsiteHostBinding` is the future custom-domain boundary. `UNVERIFIED` hosts never route. This repo does not purchase domains or provision DNS.
+
 Certification checklist: `docs/PRODUCTION_CERTIFICATION.md`.
