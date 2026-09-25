@@ -20,6 +20,18 @@ const {
   dashboardAppointmentAttentionHref,
   dashboardAppointmentAttentionItems,
 } = await import("@/lib/dashboard-appointment-attention");
+const {
+  OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL,
+  OWNER_TODAY_CREATE_INVOICE_LABEL,
+  buildOwnerTodayAppointmentAttention,
+  buildOwnerTodayHandoffItems,
+  buildOwnerTodayJobs,
+  ownerTodayInvoiceActionLabel,
+  ownerTodayOwnedActionRefs,
+  ownerTodayScheduledWhere,
+} = await import("@/lib/owner-today");
+const { completedJobBillingAttention } = await import("@/lib/revenue-integrity");
+const { roleHasCapability, CAPABILITIES } = await import("@/lib/authorization");
 
 function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
@@ -92,6 +104,75 @@ check(
   dashboardSrc.includes('"Completed jobs with unbilled work"') &&
     dashboardSrc.includes("completedJobBillingAttention") &&
     dashboardSrc.includes("completedJobsForBilling"),
+);
+
+const todayPageSrc = readRepo("src/app/(app)/today/page.tsx");
+const todayHelperSrc = readRepo("src/lib/owner-today.ts");
+const todayCardSrc = readRepo("src/components/today/owner-today-job-card.tsx");
+const todayHandoffSrc = readRepo("src/components/today/owner-today-handoff-card.tsx");
+const fieldAccessSrc = readRepo("src/lib/field-access.ts");
+const invoiceActionSrc = readRepo("src/app/actions/invoice.ts");
+const startJobSrc = readRepo("src/components/jobs/start-job-button.tsx");
+
+console.log("\nSTATIC — Owner Today reuses existing truth and stays management-only");
+check(
+  "Today page is OWNER/ADMIN management-gated",
+  todayPageSrc.includes("requireManagementPageAccess()") &&
+    !todayPageSrc.includes("requireFieldWorkspace") &&
+    !todayPageSrc.includes("assignedJobWhere("),
+);
+check(
+  "Today queries stay business-scoped and bounded",
+  todayPageSrc.includes("...access.scope") &&
+    todayPageSrc.includes("ownerTodayScheduledWhere(todayRange)") &&
+    todayPageSrc.includes("OWNER_TODAY_JOBS_TAKE") &&
+    todayPageSrc.includes("OWNER_TODAY_HANDOFF_TAKE") &&
+    todayHelperSrc.includes("completedJobBillingAttention("),
+);
+check(
+  "Today handoff uses Revenue Integrity fact and existing invoice action",
+  todayHelperSrc.includes("completedJobBillingAttention") &&
+    todayHandoffSrc.includes("CreateInvoiceButton") &&
+    todayHandoffSrc.includes("item.invoiceActionLabel") &&
+    !todayHelperSrc.includes("sendDraftInvoiceIfNeeded") &&
+    !todayPageSrc.includes("sendDraftInvoiceIfNeeded") &&
+    !todayPageSrc.includes("createInvoiceFromJob") &&
+    !todayPageSrc.includes("completeJobAndSendInvoice") &&
+    !todayHelperSrc.includes("formatMoney"),
+);
+check(
+  "Today copy/open actions use owned job/customer refs",
+  todayCardSrc.includes("job.jobHref") &&
+    todayCardSrc.includes("job.customerHref") &&
+    todayCardSrc.includes("CopyProjectLinkButton") &&
+    todayCardSrc.includes("job.projectToken") &&
+    todayHelperSrc.includes("if (job.businessId !== businessId) return null"),
+);
+check(
+  "Today start/assign reuse existing guarded actions",
+  todayCardSrc.includes("StartJobButton") &&
+    todayCardSrc.includes("AssignJobMemberForm") &&
+    startJobSrc.includes("startWithoutConfirmation") &&
+    !todayCardSrc.includes("startAssignedJob"),
+);
+check(
+  "MEMBER capabilities and assigned-job field rule are unchanged",
+  Object.values(CAPABILITIES).every((capability) => !roleHasCapability("MEMBER", capability)) &&
+    /function assignedJobWhere[\s\S]*businessId: field.businessId[\s\S]*assignedMembershipId: field.membershipId/.test(
+      fieldAccessSrc,
+    ),
+);
+check(
+  "Existing invoice action still requires an explicit owner create — Today does not auto-send",
+  invoiceActionSrc.includes("export async function createInvoiceFromJob") &&
+    !todayPageSrc.includes("markInvoiceSent") &&
+    !todayHelperSrc.includes("markInvoiceSent"),
+);
+check(
+  "Dashboard Today reuses the owner-today helper without rebuilding KPIs",
+  dashboardSrc.includes("buildOwnerTodayJobs") &&
+    dashboardSrc.includes("OwnerTodayJobCard") &&
+    dashboardSrc.includes('label: "Open Requests"'),
 );
 
 const slot = {
@@ -252,6 +333,280 @@ check(
   ordered.length === 2 &&
     ordered[0].jobId === "job-new" &&
     ordered[1].jobId === "job-old",
+);
+
+const todayStart = new Date("2026-09-25T00:00:00.000Z");
+const todayRange = {
+  start: todayStart,
+  end: new Date("2026-09-26T00:00:00.000Z"),
+};
+const appointmentFields = {
+  scheduledDurationMinutes: 60,
+  arrivalWindowMinutes: null,
+  pickupDurationMinutes: null,
+  appointmentConfirmationStatus: "CONFIRMED",
+  appointmentProposalId: 1,
+  appointmentConfirmedForProposalId: 1,
+  appointmentConfirmationSource: "PORTAL",
+  appointmentChangeRequestNote: null,
+  appointmentNotificationStatus: "SENT",
+  appointmentNotificationError: null,
+  appointmentNotifiedForProposalId: 1,
+  propertyAccessMethod: "CUSTOMER_PRESENT",
+  propertyAccessInstructions: null,
+  propertyAccessContactName: null,
+  propertyAccessContactInfo: null,
+  propertyAccessPickupLocation: null,
+  propertyAccessNote: null,
+};
+
+function todayJob(extras = {}) {
+  return {
+    id: extras.id ?? "job-today",
+    businessId: extras.businessId ?? "biz-a",
+    customerId: extras.customerId ?? "cust-a",
+    status: extras.status ?? "SCHEDULED",
+    scheduledAt: extras.scheduledAt ?? new Date("2026-09-25T15:00:00.000Z"),
+    assignedMembershipId: extras.assignedMembershipId ?? "mem-1",
+    projectToken: extras.projectToken ?? "portal-today",
+    customer: { id: extras.customerId ?? "cust-a", name: extras.customerName ?? "Pat" },
+    property: extras.property ?? {
+      addressLine1: "10 Main St",
+      city: "Austin",
+      region: "TX",
+      postalCode: "78701",
+    },
+    assignedMembership: extras.assignedMembership ?? { user: { name: "Alex" } },
+    ...appointmentFields,
+    ...extras,
+  };
+}
+
+console.log("\nPURE — Owner Today jobs, appointment attention, and #114 handoff");
+const todayViews = buildOwnerTodayJobs(
+  [
+    todayJob({ id: "job-today" }),
+    todayJob({
+      id: "job-tomorrow",
+      scheduledAt: new Date("2026-09-26T15:00:00.000Z"),
+      customerName: "Tomorrow",
+    }),
+  ],
+  { businessId: "biz-a", range: todayRange },
+);
+check(
+  "today job appears",
+  todayViews.length === 1 && todayViews[0].jobId === "job-today" && todayViews[0].customerName === "Pat",
+);
+check(
+  "tomorrow job does not appear in today's section",
+  todayViews.every((job) => job.jobId !== "job-tomorrow"),
+);
+
+const unassignedViews = buildOwnerTodayJobs(
+  [todayJob({ id: "job-open", assignedMembershipId: null, assignedMembership: null })],
+  { businessId: "biz-a", range: todayRange },
+);
+check(
+  "unassigned today surfaces",
+  unassignedViews.length === 1 && unassignedViews[0].assignment.kind === "UNASSIGNED",
+);
+
+const awaitingAttention = buildOwnerTodayAppointmentAttention(
+  [
+    todayJob({
+      id: "job-awaiting",
+      appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+      appointmentConfirmedForProposalId: null,
+      appointmentNotificationStatus: "NOT_CONFIGURED",
+    }),
+  ],
+  { businessId: "biz-a", start: todayRange.start },
+);
+check(
+  "awaiting confirmation surfaces",
+  awaitingAttention.length === 1 &&
+    awaitingAttention[0].kind === "AWAITING_CUSTOMER" &&
+    awaitingAttention[0].title === "Unconfirmed appointment" &&
+    awaitingAttention[0].notificationMessage ===
+      "Email delivery is not configured, so the customer was not notified.",
+);
+
+const differentTimeAttention = buildOwnerTodayAppointmentAttention(
+  [
+    todayJob({
+      id: "job-change",
+      appointmentConfirmationStatus: "DIFFERENT_TIME_REQUESTED",
+      appointmentChangeRequestNote: "please move to 8am",
+    }),
+  ],
+  { businessId: "biz-a", start: todayRange.start },
+);
+check(
+  "different-time request surfaces",
+  differentTimeAttention.length === 1 &&
+    differentTimeAttention[0].kind === "DIFFERENT_TIME_REQUESTED" &&
+    differentTimeAttention[0].customerNote === "please move to 8am",
+);
+
+const upcomingAwaiting = buildOwnerTodayAppointmentAttention(
+  [
+    todayJob({
+      id: "job-upcoming-awaiting",
+      scheduledAt: new Date("2026-09-26T15:00:00.000Z"),
+      appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+      appointmentConfirmedForProposalId: null,
+    }),
+  ],
+  { businessId: "biz-a", start: todayRange.start },
+);
+check(
+  "upcoming unconfirmed appointment surfaces in attention, not Today's jobs",
+  upcomingAwaiting.some((item) => item.jobId === "job-upcoming-awaiting") &&
+    buildOwnerTodayJobs(
+      [
+        todayJob({
+          id: "job-upcoming-awaiting",
+          scheduledAt: new Date("2026-09-26T15:00:00.000Z"),
+        }),
+      ],
+      { businessId: "biz-a", range: todayRange },
+    ).length === 0,
+);
+
+const now = new Date("2026-09-20T12:00:00.000Z");
+const unbilledHandoff = buildOwnerTodayHandoffItems(
+  [
+    {
+      id: "job-unbilled",
+      businessId: "biz-a",
+      status: "COMPLETED",
+      estimate: { total: 200 },
+      invoices: [],
+      changeOrders: [],
+      customer: { name: "Closeout" },
+    },
+  ],
+  "biz-a",
+);
+check(
+  "completed/unbilled job surfaces via #114 truth",
+  unbilledHandoff.length === 1 &&
+    unbilledHandoff[0].invoiceActionLabel === OWNER_TODAY_CREATE_INVOICE_LABEL &&
+    completedJobBillingAttention({
+      jobStatus: "COMPLETED",
+      originalApprovedTotal: 200,
+      invoices: [],
+      changeOrders: [],
+    }).unbilled === true,
+);
+
+const billedHandoff = buildOwnerTodayHandoffItems(
+  [
+    {
+      id: "job-billed",
+      businessId: "biz-a",
+      status: "COMPLETED",
+      estimate: { total: 200 },
+      invoices: [
+        { id: "inv-1", status: "SENT", kind: "ORIGINAL", createdAt: now, total: 200 },
+      ],
+      changeOrders: [],
+      customer: { name: "Paid" },
+    },
+  ],
+  "biz-a",
+);
+check("fully billed completed job does not", billedHandoff.length === 0);
+
+const supplementalHandoff = buildOwnerTodayHandoffItems(
+  [
+    {
+      id: "job-co",
+      businessId: "biz-a",
+      status: "COMPLETED",
+      estimate: { total: 200 },
+      invoices: [
+        { id: "inv-1", status: "PAID", kind: "ORIGINAL", createdAt: now, total: 200 },
+      ],
+      changeOrders: [
+        {
+          id: "co-1",
+          status: "APPROVED",
+          total: 75,
+          invoiceId: null,
+          approvedAt: new Date("2026-09-21T12:00:00.000Z"),
+          createdAt: new Date("2026-09-21T12:00:00.000Z"),
+        },
+      ],
+      customer: { name: "Late CO" },
+    },
+  ],
+  "biz-a",
+);
+check(
+  "supplemental/unbilled CO case surfaces",
+  supplementalHandoff.length === 1 &&
+    supplementalHandoff[0].invoiceActionLabel === OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL &&
+    ownerTodayInvoiceActionLabel(
+      completedJobBillingAttention({
+        jobStatus: "COMPLETED",
+        originalApprovedTotal: 200,
+        invoices: [
+          { id: "inv-1", status: "PAID", kind: "ORIGINAL", createdAt: now, total: 200 },
+        ],
+        changeOrders: [
+          {
+            id: "co-1",
+            status: "APPROVED",
+            total: 75,
+            invoiceId: null,
+            approvedAt: new Date("2026-09-21T12:00:00.000Z"),
+            createdAt: new Date("2026-09-21T12:00:00.000Z"),
+          },
+        ],
+      }),
+    ) === OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL,
+);
+
+const owned = ownerTodayOwnedActionRefs(todayJob({ id: "job-owned", projectToken: "tok-a" }), "biz-a", "mem-1");
+const foreign = ownerTodayOwnedActionRefs(
+  todayJob({ id: "job-other", businessId: "biz-b", projectToken: "tok-b" }),
+  "biz-a",
+);
+check(
+  "copy/open actions use owned records",
+  owned?.jobHref === "/jobs/job-owned" &&
+    owned.customerHref === "/customers/cust-a" &&
+    owned.projectToken === "tok-a" &&
+    owned.directionsHref?.includes("10%20Main%20St") &&
+    owned.fieldHref === "/field/jobs/job-owned" &&
+    foreign === null,
+);
+check(
+  "tenant isolation keeps foreign today/handoff rows out",
+  buildOwnerTodayJobs([todayJob({ id: "job-b", businessId: "biz-b" })], {
+    businessId: "biz-a",
+    range: todayRange,
+  }).length === 0 &&
+    buildOwnerTodayHandoffItems(
+      [
+        {
+          id: "job-b-unbilled",
+          businessId: "biz-b",
+          status: "COMPLETED",
+          estimate: { total: 40 },
+          invoices: [],
+          changeOrders: [],
+        },
+      ],
+      "biz-a",
+    ).length === 0,
+);
+check(
+  "Today scheduled where is the same day-range filter Dashboard already used",
+  JSON.stringify(ownerTodayScheduledWhere(todayRange)) ===
+    JSON.stringify({ scheduledAt: { gte: todayRange.start, lt: todayRange.end } }),
 );
 
 const baseUrl = process.env.DATABASE_URL;
@@ -417,6 +772,227 @@ try {
     ownerAppointmentAttention(reconfirmed) === null &&
       !after.some((item) => item.jobId === reconfirmJob.id) &&
       after.some((item) => item.jobId === changeJob.id),
+  );
+
+  const todayAt = new Date("2026-09-25T15:00:00.000Z");
+  const tomorrowAt = new Date("2026-09-26T15:00:00.000Z");
+  const dbRange = {
+    start: new Date("2026-09-25T00:00:00.000Z"),
+    end: new Date("2026-09-26T00:00:00.000Z"),
+  };
+  const todayJobRow = await makeJob(businessA.id, {
+    customerName: "Today Pat",
+    scheduledAt: todayAt,
+    appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+    job: { pickupDurationMinutes: 30 },
+  });
+  const tomorrowJobRow = await makeJob(businessA.id, {
+    customerName: "Tomorrow Pat",
+    scheduledAt: tomorrowAt,
+    appointmentConfirmationStatus: "CONFIRMED",
+    job: {
+      appointmentProposalId: 1,
+      appointmentConfirmedForProposalId: 1,
+      propertyAccessMethod: "CUSTOMER_PRESENT",
+    },
+  });
+  const otherToday = await makeJob(businessB.id, {
+    customerName: "Other Today",
+    scheduledAt: todayAt,
+    appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+  });
+  const completedUnbilled = await makeJob(businessA.id, {
+    customerName: "Unbilled Closeout",
+    scheduledAt: todayAt,
+    job: { status: "COMPLETED" },
+  });
+  const unbilledEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: (
+        await prisma.job.findUnique({
+          where: { id: completedUnbilled.id },
+          select: { customerId: true },
+        })
+      ).customerId,
+      publicToken: randomUUID(),
+      status: "APPROVED",
+      total: 180,
+    },
+  });
+  await prisma.job.update({
+    where: { id: completedUnbilled.id },
+    data: { estimateId: unbilledEstimate.id },
+  });
+  const completedBilled = await makeJob(businessA.id, {
+    customerName: "Billed Closeout",
+    scheduledAt: todayAt,
+    job: { status: "COMPLETED" },
+  });
+  const billedEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: (await prisma.job.findUnique({
+        where: { id: completedBilled.id },
+        select: { customerId: true },
+      })).customerId,
+      publicToken: randomUUID(),
+      status: "APPROVED",
+      total: 90,
+    },
+  });
+  await prisma.job.update({
+    where: { id: completedBilled.id },
+    data: { estimateId: billedEstimate.id },
+  });
+  await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      jobId: completedBilled.id,
+      status: "SENT",
+      kind: "ORIGINAL",
+      total: 90,
+    },
+  });
+  const completedCo = await makeJob(businessA.id, {
+    customerName: "CO Closeout",
+    scheduledAt: todayAt,
+    job: { status: "COMPLETED" },
+  });
+  const coEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: (await prisma.job.findUnique({
+        where: { id: completedCo.id },
+        select: { customerId: true },
+      })).customerId,
+      publicToken: randomUUID(),
+      status: "APPROVED",
+      total: 100,
+    },
+  });
+  await prisma.job.update({
+    where: { id: completedCo.id },
+    data: { estimateId: coEstimate.id },
+  });
+  await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      jobId: completedCo.id,
+      status: "PAID",
+      kind: "ORIGINAL",
+      total: 100,
+      createdAt: new Date("2026-09-20T12:00:00.000Z"),
+    },
+  });
+  await prisma.changeOrder.create({
+    data: {
+      businessId: businessA.id,
+      jobId: completedCo.id,
+      status: "APPROVED",
+      title: "Extra work",
+      total: 40,
+      approvedAt: new Date("2026-09-22T12:00:00.000Z"),
+    },
+  });
+
+  const scopedToday = await prisma.job.findMany({
+    where: { businessId: businessA.id, ...ownerTodayScheduledWhere(dbRange) },
+    select: {
+      id: true,
+      businessId: true,
+      customerId: true,
+      status: true,
+      scheduledAt: true,
+      scheduledDurationMinutes: true,
+      arrivalWindowMinutes: true,
+      pickupDurationMinutes: true,
+      assignedMembershipId: true,
+      projectToken: true,
+      appointmentConfirmationStatus: true,
+      appointmentProposalId: true,
+      appointmentConfirmedForProposalId: true,
+      appointmentConfirmationSource: true,
+      appointmentChangeRequestNote: true,
+      appointmentNotificationStatus: true,
+      appointmentNotificationError: true,
+      appointmentNotifiedForProposalId: true,
+      propertyAccessMethod: true,
+      propertyAccessInstructions: true,
+      propertyAccessContactName: true,
+      propertyAccessContactInfo: true,
+      propertyAccessPickupLocation: true,
+      propertyAccessNote: true,
+      customer: { select: { id: true, name: true } },
+      property: {
+        select: {
+          addressLine1: true,
+          addressLine2: true,
+          city: true,
+          region: true,
+          postalCode: true,
+        },
+      },
+      assignedMembership: { select: { id: true, user: { select: { name: true } } } },
+    },
+  });
+  const dbToday = buildOwnerTodayJobs(scopedToday, {
+    businessId: businessA.id,
+    range: dbRange,
+  });
+  check(
+    "DB: today job appears and tomorrow job does not",
+    dbToday.some((job) => job.jobId === todayJobRow.id) &&
+      dbToday.every((job) => job.jobId !== tomorrowJobRow.id) &&
+      dbToday.every((job) => job.jobId !== otherToday.id),
+  );
+  check(
+    "DB: unassigned today and awaiting confirmation surface",
+    dbToday.some((job) => job.jobId === todayJobRow.id && job.assignment.kind === "UNASSIGNED") &&
+      buildOwnerTodayAppointmentAttention(scopedToday, {
+        businessId: businessA.id,
+        start: dbRange.start,
+      }).some((item) => item.jobId === todayJobRow.id && item.kind === "AWAITING_CUSTOMER"),
+  );
+
+  const completedRows = await prisma.job.findMany({
+    where: { businessId: businessA.id, status: "COMPLETED" },
+    select: {
+      id: true,
+      businessId: true,
+      customerId: true,
+      estimateId: true,
+      status: true,
+      customer: { select: { name: true } },
+      invoices: {
+        select: { id: true, status: true, kind: true, createdAt: true, total: true },
+      },
+      changeOrders: {
+        select: { id: true, status: true, total: true, invoiceId: true, approvedAt: true, createdAt: true },
+      },
+      estimate: { select: { total: true } },
+      approvedEstimateVersion: { select: { total: true } },
+    },
+  });
+  const dbHandoff = buildOwnerTodayHandoffItems(completedRows, businessA.id);
+  check(
+    "DB: completed/unbilled and unbilled CO surface; fully billed does not",
+    dbHandoff.some(
+      (item) =>
+        item.jobId === completedUnbilled.id &&
+        item.invoiceActionLabel === OWNER_TODAY_CREATE_INVOICE_LABEL,
+    ) &&
+      dbHandoff.some(
+        (item) =>
+          item.jobId === completedCo.id &&
+          item.invoiceActionLabel === OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL,
+      ) &&
+      dbHandoff.every((item) => item.jobId !== completedBilled.id),
+  );
+  check(
+    "DB: tenant isolation keeps business B off business A Today",
+    dbToday.every((job) => job.jobId !== otherToday.id) &&
+      buildOwnerTodayHandoffItems(completedRows, businessB.id).length === 0,
   );
 } finally {
   await prisma.$disconnect();

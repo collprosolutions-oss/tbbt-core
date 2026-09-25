@@ -18,6 +18,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { DashboardAppointmentAttentionItems } from "@/components/dashboard/appointment-attention-items";
+import { OwnerTodayJobCard } from "@/components/today/owner-today-job-card";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { DashboardLaunchCard } from "@/components/launch/dashboard-card";
 import { FounderDesignRoot } from "@/components/founder-design/root";
@@ -32,13 +33,18 @@ import {
 } from "@/lib/dashboard-appointment-attention";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
-import { formatDate, formatDateTime, formatMoney, formatTime } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
 import type { CuratedIconId } from "@/lib/founder-icons";
 import { NAV_ICONS } from "@/lib/nav-icons";
 import { prisma } from "@/lib/prisma";
 import { loadLaunchWorkspace } from "@/lib/business-launch-data";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
 import { getBusinessPaymentStatus } from "@/lib/payments";
+import {
+  OWNER_TODAY_JOB_SELECT,
+  buildOwnerTodayJobs,
+  ownerTodayScheduledWhere,
+} from "@/lib/owner-today";
 import { completedJobBillingAttention } from "@/lib/revenue-integrity";
 import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
 import { listActiveTradeCodes } from "@/lib/business-trades";
@@ -116,7 +122,7 @@ export default async function DashboardPage() {
     prisma.job.count({
       where: {
         ...access.scope,
-        scheduledAt: { gte: todayRange.start, lt: todayRange.end },
+        ...ownerTodayScheduledWhere(todayRange),
       },
     }),
     prisma.serviceRequest.findMany({
@@ -146,14 +152,9 @@ export default async function DashboardPage() {
     prisma.job.findMany({
       where: {
         ...access.scope,
-        scheduledAt: { gte: todayRange.start, lt: todayRange.end },
+        ...ownerTodayScheduledWhere(todayRange),
       },
-      select: {
-        id: true,
-        status: true,
-        scheduledAt: true,
-        customer: { select: { name: true } },
-      },
+      select: OWNER_TODAY_JOB_SELECT,
       orderBy: { scheduledAt: "asc" },
       take: TODAY_JOBS_TAKE,
     }),
@@ -211,6 +212,12 @@ export default async function DashboardPage() {
     appointmentAttentionJobs,
     access.businessId,
   );
+  const ownerTodayJobs = buildOwnerTodayJobs(todayJobs, {
+    businessId: access.businessId,
+    range: todayRange,
+    timeZone,
+    viewerMembershipId: access.workspace.membership.id,
+  });
 
   const kpis: KpiCardProps[] = [
     {
@@ -502,25 +509,11 @@ export default async function DashboardPage() {
               <CardDescription>Scheduled work for {formatDate(today, timeZone)}.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              {todayJobs.length === 0 ? (
+              {ownerTodayJobs.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Nothing scheduled today.</p>
               ) : (
-                todayJobs.map((job) => (
-                  <Link
-                    key={job.id}
-                    href={`/jobs/${job.id}`}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-card/40 p-2.5 text-sm transition-colors hover:bg-accent/40"
-                  >
-                    <span className="min-w-0 flex-1 truncate font-medium">
-                      {job.customer?.name ?? "Customer"}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
-                      {job.scheduledAt ? (
-                        <span className="tabular-nums">{formatTime(job.scheduledAt, timeZone)}</span>
-                      ) : null}
-                      <StatusBadge status={job.status} />
-                    </span>
-                  </Link>
+                ownerTodayJobs.map((job) => (
+                  <OwnerTodayJobCard key={job.jobId} job={job} />
                 ))
               )}
               {todayJobsCount > todayJobs.length ? (
@@ -528,6 +521,9 @@ export default async function DashboardPage() {
                   +{todayJobsCount - todayJobs.length} more today.
                 </p>
               ) : null}
+              <Button asChild size="sm" className="w-full">
+                <Link href="/today">Open Today</Link>
+              </Button>
               <Button asChild size="sm" variant="outline" className="w-full">
                 <Link href={`/jobs?view=day&date=${todayIso}`}>View full schedule</Link>
               </Button>

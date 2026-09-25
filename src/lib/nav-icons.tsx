@@ -3,6 +3,7 @@ import {
   BookOpen,
   Briefcase,
   CalendarClock,
+  CalendarDays,
   Clock,
   CircleDollarSign,
   FileText,
@@ -30,6 +31,7 @@ import {
  */
 export const NAV_ICONS: Record<string, ComponentType<{ className?: string }>> = {
   "/dashboard": LayoutDashboard,
+  "/today": CalendarDays,
   "/requests": Inbox,
   "/pipeline": Briefcase,
   "/customers": Users,

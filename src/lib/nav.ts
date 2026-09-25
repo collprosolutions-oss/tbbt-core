@@ -15,6 +15,7 @@ type NavItem = {
 
 export const APP_NAV: readonly NavItem[] = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/today", label: "Today" },
   { href: "/requests", label: "Requests" },
   { href: "/pipeline", label: "Deals / Pipeline", capability: CAPABILITIES.MANAGE_PIPELINE },
   { href: "/customers", label: "Customers" },

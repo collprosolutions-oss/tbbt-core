@@ -295,6 +295,13 @@ try {
       roleHasCapability("OWNER", CAPABILITIES.MANAGE_ESTIMATES) &&
       roleHasCapability("ADMIN", CAPABILITIES.MANAGE_ESTIMATES),
   );
+  const todayPageSrc = readFileSync(new URL("../src/app/(app)/today/page.tsx", import.meta.url), "utf8");
+  check(
+    "Today page does not broaden MEMBER access",
+    todayPageSrc.includes("requireManagementPageAccess()") &&
+      !todayPageSrc.includes("assignedJobWhere(") &&
+      allCapabilities.every((capability) => !roleHasCapability("MEMBER", capability)),
+  );
 
   const businessA = await prisma.business.create({
     data: { name: "Alpha Handyman", slug: "alpha-handyman-auth", tradeCode: "HANDYMAN" },
