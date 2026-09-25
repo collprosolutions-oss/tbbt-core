@@ -166,7 +166,7 @@ export const PRODUCT_CAPABILITY_DEFINITIONS: Record<
     implementationStatus: CAPABILITY_IMPLEMENTATION_STATUSES.PARTIAL,
     enforcementBoundary: false,
     enforcementNotes:
-      "Existing customer SMS is operational, not a purchasable add-on. Do not gate current SMS on this add-on.",
+      "Existing operational customer SMS stays ungated. Communications-department compose SMS is the paid add-on boundary. Ordinary email never depends on this add-on.",
   },
   [PRODUCT_CAPABILITIES.AI_BUSINESS_COACH]: {
     code: PRODUCT_CAPABILITIES.AI_BUSINESS_COACH,

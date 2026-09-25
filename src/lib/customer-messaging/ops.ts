@@ -21,6 +21,9 @@ import {
   type CustomerMessageStatus,
 } from "@/lib/customer-messaging/types";
 import { DEFAULT_SETTINGS_PREFERENCES } from "@/lib/settings";
+import { getOrCreateCustomerThread } from "@/lib/communications/thread";
+import { consentContextSnapshot } from "@/lib/communications/consent";
+import { isUsableEmail } from "@/lib/mail";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -63,6 +66,15 @@ async function loadRelatedRecord(
       where: { id: input.relatedId, businessId: input.businessId },
       select: RELATED_CUSTOMER_SELECT,
     });
+  }
+  if (input.relatedType === "SERVICE_REQUEST") {
+    return db.serviceRequest.findFirst({
+      where: { id: input.relatedId, businessId: input.businessId },
+      select: RELATED_CUSTOMER_SELECT,
+    });
+  }
+  if (input.relatedType === "PHONE_INTERACTION" || input.relatedType === "PROPERTY") {
+    return { id: input.relatedId, businessId: input.businessId, customerId: null };
   }
   return db.referralRequest.findFirst({
     where: { id: input.relatedId, businessId: input.businessId },
@@ -171,6 +183,8 @@ export async function attemptCustomerSms(
     select: {
       id: true,
       businessId: true,
+      name: true,
+      email: true,
       phone: true,
       smsConsentStatus: true,
     },
@@ -253,9 +267,16 @@ export async function attemptCustomerSms(
 
   const provider = getCustomerMessagingProvider();
   const now = new Date();
+  const thread = await getOrCreateCustomerThread(db, {
+    businessId: input.businessId,
+    customerId: customer.id,
+    title: customer.name,
+  });
   const baseData = {
     businessId: input.businessId,
     customerId: customer.id,
+    threadId: thread?.id ?? null,
+    direction: "OUTBOUND",
     channel: "SMS",
     purpose: input.purpose,
     relatedType: input.relatedType ?? null,
@@ -263,6 +284,12 @@ export async function attemptCustomerSms(
     idempotencyKey: input.idempotencyKey,
     destinationLast4: eligibility.last4,
     destinationFingerprint: eligibility.fingerprint,
+    consentContext: consentContextSnapshot({
+      smsConsentStatus: customer.smsConsentStatus,
+      emailAvailable: isUsableEmail(customer.email),
+      channel: "SMS",
+      extra: eligibility.ok ? null : eligibility.reason,
+    }),
     bodySnapshot: input.body,
     provider: provider.id,
     initiatedByMembershipId: input.initiatedByMembershipId ?? null,

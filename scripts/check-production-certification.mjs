@@ -95,6 +95,7 @@ const lifecycle = [
   ["Expenses", "src/app/(app)/expenses/page.tsx"],
   ["Reports / job profitability", "src/app/(app)/reports/page.tsx"],
   ["Reviews", "src/app/(app)/reviews/page.tsx"],
+  ["Communications", "src/app/(app)/communications/page.tsx"],
   ["Marketing", "src/app/(app)/marketing/page.tsx"],
   ["Business Health / BSOS", "src/app/(app)/business-health/page.tsx"],
   ["Local SEO service+city page", "src/app/hire/[slug]/in/[city]/[service]/page.tsx"],

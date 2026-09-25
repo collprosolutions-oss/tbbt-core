@@ -94,8 +94,8 @@ export async function attemptAutomationEmail(
   const slug = await businessSlug(db, input.businessId);
   const proposalId = typeof input.payload.proposalId === "number" ? input.payload.proposalId : 1;
   const key =
-    input.purpose === "ESTIMATE_READY"
-      ? estimateEmailIdempotencyKey(input.subjectId, "auto")
+    input.purpose === "ESTIMATE_READY" || input.purpose === "ESTIMATE_FOLLOW_UP"
+      ? estimateEmailIdempotencyKey(input.subjectId, input.purpose === "ESTIMATE_FOLLOW_UP" ? "follow-up" : "auto")
       : input.purpose === "INVOICE_READY"
         ? invoiceReadyIdempotencyKey(input.subjectId)
         : input.purpose === "APPOINTMENT_CONFIRMATION" || input.purpose === "SCHEDULE_CHANGE"
@@ -112,7 +112,7 @@ export async function attemptAutomationEmail(
                     ? `invoice-payment-reminder/${input.subjectId}/${input.runId}`
                     : `automation-email/${input.runId}`;
 
-  if (input.purpose === "ESTIMATE_READY") {
+  if (input.purpose === "ESTIMATE_READY" || input.purpose === "ESTIMATE_FOLLOW_UP") {
     const estimate = await db.estimate.findFirst({
       where: { id: input.subjectId, businessId: input.businessId },
       select: {

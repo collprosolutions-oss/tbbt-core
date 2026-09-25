@@ -11,6 +11,10 @@ export const AI_TASK_TYPES = [
   "KNOWLEDGE_ASK",
   "WEEKLY_PLAN",
   "CAMPAIGN_IDEAS",
+  "COMM_DRAFT",
+  "COMM_REWRITE",
+  "COMM_SUMMARIZE",
+  "COMM_FOLLOW_UP",
 ] as const;
 export type AiTaskType = (typeof AI_TASK_TYPES)[number];
 
@@ -29,6 +33,7 @@ export const AI_CONVERSATION_AREAS = [
   "MARKETING",
   "REVIEW",
   "WRITING",
+  "COMMUNICATION",
 ] as const;
 export type AiConversationArea = (typeof AI_CONVERSATION_AREAS)[number];
 

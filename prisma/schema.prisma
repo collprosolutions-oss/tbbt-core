@@ -322,6 +322,9 @@ model Business {
   materialSupplierMappings BusinessMaterialSupplierMapping[]
   supplierPriceRecords     SupplierPriceRecord[]
   customerCommunications   CustomerCommunication[]
+  communicationThreads     CommunicationThread[]
+  phoneInteractions        PhoneInteraction[]
+  receptionistEvents       ReceptionistEvent[]
   messagingWebhookEvents   CustomerMessagingWebhookEvent[]
   goals                    BusinessGoal[]
   actionItems              BusinessActionItem[]
@@ -467,6 +470,8 @@ model Membership {
   reviewedKnowledgeEntries KnowledgeEntry[]   @relation("KnowledgeEntryReviewer")
   verifiedMeasurements     ServiceRequestMeasurement[] @relation("MeasurementVerifier")
   initiatedCustomerCommunications CustomerCommunication[] @relation("CustomerCommunicationInitiator")
+  initiatedPhoneInteractions      PhoneInteraction[]      @relation("PhoneInteractionInitiator")
+  initiatedReceptionistEvents     ReceptionistEvent[]     @relation("ReceptionistEventInitiator")
   createdBusinessGoals            BusinessGoal[]          @relation("BusinessGoalCreator")
   createdBusinessActionItems      BusinessActionItem[]    @relation("BusinessActionItemCreator")
   createdCampaigns                MarketingCampaign[]     @relation("MarketingCampaignCreator")
@@ -518,6 +523,9 @@ model Customer {
   reviewRequests  ReviewRequest[]
   reviews         Review[]
   communications  CustomerCommunication[]
+  communicationThreads CommunicationThread[]
+  phoneInteractions PhoneInteraction[]
+  receptionistEvents ReceptionistEvent[]
   referralRequests ReferralRequest[]
   customerFollowUps CustomerFollowUp[]
   referralsGiven   Referral[] @relation("ReferralSourceCustomer")
@@ -527,26 +535,60 @@ model Customer {
   @@index([firstCampaignId])
 }
 
-/// Durable audit trail for attempted external customer communications.
+/// Durable business/customer communication thread. One customer-level
+/// thread uses subjectType=CUSTOMER and subjectId=customerId. Never stores
+/// secrets. Browser businessId never authorizes these rows.
+model CommunicationThread {
+  id             String   @id @default(cuid())
+  businessId     String
+  customerId     String
+  /// CUSTOMER | ESTIMATE | JOB | INVOICE | REQUEST | PROPERTY
+  subjectType    String   @default("CUSTOMER")
+  subjectId      String
+  title          String?
+  lastActivityAt DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  business       Business                @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer       Customer                @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  communications CustomerCommunication[]
+  phoneInteractions PhoneInteraction[]
+
+  @@unique([businessId, customerId, subjectType, subjectId])
+  @@index([businessId, customerId, lastActivityAt])
+  @@index([businessId])
+}
+
+/// Durable audit trail for attempted customer communications.
 /// One row belongs to exactly one Business. Destination is stored as a
-/// fingerprint + last-4, not the raw phone. Status never claims provider
-/// delivery unless a connected adapter reported it.
+/// fingerprint + last-4, not the raw phone/email. Status never claims
+/// provider delivery unless a connected adapter reported it.
 model CustomerCommunication {
   id                       String    @id @default(cuid())
   businessId               String
   customerId               String
-  /// SMS for this foundation. EMAIL remains on the existing Resend path.
+  threadId                 String?
+  /// INBOUND | OUTBOUND
+  direction                String    @default("OUTBOUND")
+  /// SMS | EMAIL | PHONE | MANUAL | PORTAL | SYSTEM
   channel                  String    @default("SMS")
   /// ESTIMATE_READY | APPOINTMENT_CONFIRMATION | APPOINTMENT_REMINDER |
   /// SCHEDULE_CHANGE | INVOICE_READY | PAYMENT_REMINDER | REVIEW_REQUEST |
-  /// REVIEW_REMINDER | REFERRAL_REQUEST | JOB_FOLLOW_UP | REPEAT_FOLLOW_UP
+  /// REVIEW_REMINDER | REFERRAL_REQUEST | JOB_FOLLOW_UP | REPEAT_FOLLOW_UP |
+  /// ESTIMATE_FOLLOW_UP | JOB_UPDATE | GENERAL | OWNER_FOLLOW_UP |
+  /// MISSED_CALL | MANUAL_PHONE | INBOUND_CALL
   purpose                  String
-  /// ESTIMATE | JOB | INVOICE | REVIEW_REQUEST | REFERRAL_REQUEST
+  subject                  String?
+  /// ESTIMATE | JOB | INVOICE | REVIEW_REQUEST | REFERRAL_REQUEST |
+  /// CUSTOMER_FOLLOW_UP | SERVICE_REQUEST | PHONE_INTERACTION
   relatedType              String?
   relatedId                String?
   idempotencyKey           String
   destinationLast4         String?
   destinationFingerprint   String?
+  /// Safe consent/eligibility snapshot at write time. Never a secret.
+  consentContext           String?
   bodySnapshot             String    @default("")
   /// DRAFT | READY | QUEUED | ACCEPTED | SENT | DELIVERED | FAILED | BLOCKED | NOT_SENT
   status                   String
@@ -559,15 +601,88 @@ model CustomerCommunication {
   attemptedAt              DateTime?
   updatedAt                DateTime  @updatedAt
 
-  business     Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  customer     Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  initiatedBy  Membership? @relation("CustomerCommunicationInitiator", fields: [initiatedByMembershipId], references: [id], onDelete: SetNull)
+  business     Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer     Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  thread       CommunicationThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
+  initiatedBy  Membership?          @relation("CustomerCommunicationInitiator", fields: [initiatedByMembershipId], references: [id], onDelete: SetNull)
+  phoneInteractions PhoneInteraction[]
 
   @@unique([businessId, idempotencyKey])
   @@index([businessId])
   @@index([customerId])
+  @@index([threadId])
   @@index([provider, providerMessageId])
   @@index([businessId, relatedType, relatedId])
+  @@index([businessId, customerId, createdAt])
+}
+
+/// Manual / missed-call / inbound-call log. Useful before live voice.
+/// Never synthesizes a completed provider call.
+model PhoneInteraction {
+  id                       String    @id @default(cuid())
+  businessId               String
+  customerId               String?
+  threadId                 String?
+  communicationId          String?
+  requestId                String?
+  jobId                    String?
+  followUpActionItemId     String?
+  /// MISSED_CALL | MANUAL_PHONE | INBOUND_CALL_EVENT
+  kind                     String
+  /// LOGGED | CALLBACK_NEEDED | ESCALATED | CLOSED
+  status                   String    @default("LOGGED")
+  /// INBOUND | OUTBOUND
+  direction                String    @default("INBOUND")
+  callerLast4              String?
+  callerFingerprint        String?
+  summary                  String    @default("")
+  callbackNeeded           Boolean   @default(false)
+  idempotencyKey           String
+  initiatedByMembershipId  String?
+  occurredAt               DateTime  @default(now())
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  business     Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer     Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  thread       CommunicationThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
+  communication CustomerCommunication? @relation(fields: [communicationId], references: [id], onDelete: SetNull)
+  initiatedBy  Membership?          @relation("PhoneInteractionInitiator", fields: [initiatedByMembershipId], references: [id], onDelete: SetNull)
+  receptionistEvents ReceptionistEvent[]
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([customerId])
+  @@index([threadId])
+}
+
+/// Provider-neutral receptionist domain events. Voice readiness is honest:
+/// no Twilio Voice connection, no purchased numbers, no fake completed calls.
+model ReceptionistEvent {
+  id                       String    @id @default(cuid())
+  businessId               String
+  customerId               String?
+  phoneInteractionId       String?
+  /// INBOUND_CALL | CALLER_LOOKUP | QUALIFICATION | CREATE_REQUEST_PROPOSAL |
+  /// SCHEDULING_PROPOSAL | MESSAGE_SUMMARY | ESCALATION
+  kind                     String
+  /// RECORDED | PROPOSED | ESCALATED | SKIPPED_NOT_CONNECTED
+  status                   String
+  provider                 String    @default("none")
+  providerConnected        Boolean   @default(false)
+  payload                  Json?
+  idempotencyKey           String
+  initiatedByMembershipId  String?
+  createdAt                DateTime  @default(now())
+
+  business         Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer         Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  phoneInteraction PhoneInteraction? @relation(fields: [phoneInteractionId], references: [id], onDelete: SetNull)
+  initiatedBy      Membership?       @relation("ReceptionistEventInitiator", fields: [initiatedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([customerId])
 }
 
 /// Idempotency for provider webhooks (delivery + inbound STOP/START/HELP).

@@ -689,6 +689,19 @@ check(
     workforceFkMigration.includes("idempotencyKey"),
 );
 
+const communicationsDepartmentMigration = readFileSync(
+  new URL("../prisma/migrations/20260925220000_communications_department/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Communications department migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(communicationsDepartmentMigration) &&
+    communicationsDepartmentMigration.includes('ADD COLUMN IF NOT EXISTS "threadId"') &&
+    communicationsDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "CommunicationThread"') &&
+    communicationsDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "PhoneInteraction"') &&
+    communicationsDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "ReceptionistEvent"'),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

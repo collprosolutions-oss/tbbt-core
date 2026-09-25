@@ -179,6 +179,13 @@ export const CAPABILITIES = {
    * AI never authorizes actions or changes tenant access.
    */
   USE_AI_ASSIST: "USE_AI_ASSIST",
+  /**
+   * Owner/admin Communications department: tenant-wide customer timeline,
+   * compose, missed-call logging, and receptionist proposals.
+   * MEMBER must never receive whole-customer communication history.
+   * Assigned-job comms stay on the narrow field helper.
+   */
+  MANAGE_COMMUNICATIONS: "MANAGE_COMMUNICATIONS",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -246,7 +253,7 @@ export function requireBusinessCapability(
 /**
  * Coarse, temporary READ gate for the entire authenticated management
  * console (Dashboard, Requests, Customers, Estimates, Materials, Jobs, Invoices,
- * Reports, Marketing, Reviews, Pipeline, Knowledge, Services, Time Cards, Payroll, Expenses, Settings).
+ * Reports, Marketing, Reviews, Pipeline, Knowledge, Communications, Services, Time Cards, Payroll, Expenses, Settings).
  *
  * Every one of those pages exists to browse or mutate business-wide
  * management data, and MEMBER has no capability over any of it today (see

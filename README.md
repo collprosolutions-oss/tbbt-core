@@ -88,6 +88,7 @@ npm run test:reports
 npm run test:production-certification
 npm run test:plan-entitlements
 npm run test:materials-suppliers
+npm run test:communications-department
 npx tsc --noEmit
 npm run build
 ```
