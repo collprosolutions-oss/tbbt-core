@@ -148,19 +148,19 @@ function factList(context: CoachContext): CitedFact[] {
     {
       key: "launch-incomplete",
       label: "Incomplete launch steps",
-      value: String(context.facts.launchIncompleteSteps.count),
+      value: String(context.facts.launchIncompleteSteps?.count ?? 0),
       href: "/launch",
     },
     {
       key: "knowledge-unreviewed",
       label: "Knowledge entries needing approval",
-      value: String(context.facts.knowledgeNeedsApproval.count),
+      value: String(context.facts.knowledgeNeedsApproval?.count ?? 0),
       href: "/knowledge?review=needs-review",
     },
     {
       key: "experience-candidates",
       label: "Experience learning candidates",
-      value: String(context.facts.experienceCandidates.count),
+      value: String(context.facts.experienceCandidates?.count ?? 0),
       href: "/knowledge",
     },
     {
@@ -174,13 +174,13 @@ function factList(context: CoachContext): CitedFact[] {
     {
       key: "available-capacity",
       label: "Open working days (next 7)",
-      value: String(context.facts.availableCapacityDays.count),
+      value: String(context.facts.availableCapacityDays?.count ?? 0),
       href: "/jobs",
     },
     {
       key: "unscheduled-jobs",
       label: "Unscheduled jobs",
-      value: String(context.facts.unscheduledJobs.count),
+      value: String(context.facts.unscheduledJobs?.count ?? 0),
       href: "/jobs",
     },
     {
@@ -276,15 +276,15 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
     keys = ["launch-incomplete", "knowledge-unreviewed", "experience-candidates"];
     stance = "FACT";
     text =
-      `${context.facts.launchIncompleteSteps.count} launch step(s) are still incomplete. ` +
-      `${context.facts.knowledgeNeedsApproval.count} knowledge entr${context.facts.knowledgeNeedsApproval.count === 1 ? "y needs" : "ies need"} approval. ` +
-      `${context.facts.experienceCandidates.count} experience candidate(s) are on file.`;
+      `${context.facts.launchIncompleteSteps?.count ?? 0} launch step(s) are still incomplete. ` +
+      `${context.facts.knowledgeNeedsApproval?.count ?? 0} knowledge entr${(context.facts.knowledgeNeedsApproval?.count ?? 0) === 1 ? "y needs" : "ies need"} approval. ` +
+      `${context.facts.experienceCandidates?.count ?? 0} experience candidate(s) are on file.`;
   } else if (/capacity|staff|schedule|workforce|assign/.test(q)) {
     keys = ["available-capacity", "unscheduled-jobs", "workforce-attention"];
     stance = "MIXED";
     text =
-      `${context.facts.availableCapacityDays.count} upcoming working day(s) have no scheduled job. ` +
-      `${context.facts.unscheduledJobs.count} job(s) are unscheduled. ` +
+      `${context.facts.availableCapacityDays?.count ?? 0} upcoming working day(s) have no scheduled job. ` +
+      `${context.facts.unscheduledJobs?.count ?? 0} job(s) are unscheduled. ` +
       `${workforceAttention} workforce attention item(s) are already on the Business Health list. ` +
       "The Coach cannot assign workers or change the schedule.";
   } else if (/expense|recurring/.test(q)) {
