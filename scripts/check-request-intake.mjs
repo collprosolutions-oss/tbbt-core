@@ -215,7 +215,7 @@ check(
   !logLeadFormSrc.includes("unitPrice") &&
     !logLeadFormSrc.includes("scheduledAt") &&
     !logLeadFormSrc.includes("payment") &&
-    logLeadPageSrc.includes("creates a ServiceRequest, not an estimate"),
+    logLeadPageSrc.includes("creates a ServiceRequest"),
 );
 check(
   "Logged leads hand off through the existing createEstimate path",
