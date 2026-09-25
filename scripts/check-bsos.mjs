@@ -139,6 +139,32 @@ try {
   check("Negative-margin jobs become a recommendation", marginRecs.some((row) => row.key === "review-low-margin-jobs"));
   check("Recurring expenses become a recommendation", marginRecs.some((row) => row.key === "review-recurring-expenses"));
 
+  const unbilledRecs = buildBsosRecommendations({
+    unpaidInvoices: { count: 0, amount: 0 },
+    sentEstimates: { count: 0 },
+    draftEstimates: { count: 0 },
+    unscheduledJobs: { count: 0 },
+    completedJobsWithoutReview: { count: 0 },
+    completedJobsReadyForMarketing: { count: 0 },
+    lowMarginJobs: { count: 0 },
+    missingWageEntries: { count: 0 },
+    availableCapacityDays: { count: 0 },
+    repeatCustomers: { count: 0 },
+    outsideAreaRequests: { count: 0 },
+    recurringExpenses: { count: 0, amount: 0 },
+    paidRevenue: { amount: 0 },
+    recordedExpenses: { amount: 0 },
+    unbilledCompletedJobs: { count: 2 },
+    launchIncompleteSteps: { count: 0 },
+    knowledgeNeedsApproval: { count: 0 },
+    experienceCandidates: { count: 0 },
+    launchGoals: { count: 0 },
+  });
+  check(
+    "Unbilled completed jobs become a Business Health recommendation",
+    unbilledRecs.some((row) => row.key === "unbilled-completed-jobs"),
+  );
+
   const businessA = await prisma.business.create({
     data: { name: "Alpha BSOS", slug: `alpha-bsos-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
   });

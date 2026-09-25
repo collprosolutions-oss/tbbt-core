@@ -28,7 +28,9 @@ import {
 import {
   invoicePaymentBreakdown,
   listProjectPayments,
+  paymentsBelongingToInvoice,
 } from "@/lib/project-payments";
+import { selectPortalInvoice } from "@/lib/revenue-integrity";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -335,11 +337,14 @@ export async function loadInvoiceDocumentForBusiness(
     include: INVOICE_DOCUMENT_INCLUDE,
   });
   if (!invoice) return null;
-  const payments = await listProjectPayments(db, {
-    businessId,
-    invoiceId: invoice.id,
-    jobId: invoice.job?.id ?? null,
-  });
+  const payments = paymentsBelongingToInvoice(
+    { id: invoice.id, jobId: invoice.job?.id ?? null },
+    await listProjectPayments(db, {
+      businessId,
+      invoiceId: invoice.id,
+      jobId: invoice.job?.id ?? null,
+    }),
+  );
   return toDocumentView(invoice, payments);
 }
 
@@ -359,14 +364,13 @@ export async function loadInvoiceDocumentForProjectToken(
     where: { projectToken: token },
     select: {
       invoices: {
-        take: 1,
-        orderBy: { createdAt: "asc" },
-        select: { id: true, businessId: true, status: true },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        select: { id: true, businessId: true, status: true, createdAt: true },
       },
     },
   });
 
-  const invoiceRef = job?.invoices[0];
+  const invoiceRef = selectPortalInvoice(job?.invoices ?? []);
   if (!invoiceRef || !isCustomerVisibleInvoiceStatus(invoiceRef.status)) {
     return null;
   }

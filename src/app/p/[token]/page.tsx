@@ -39,7 +39,9 @@ import {
   invoicePaymentBreakdown,
   loadEstimatePaymentSummary,
   listProjectPayments,
+  paymentsBelongingToInvoice,
 } from "@/lib/project-payments";
+import { selectPortalInvoice } from "@/lib/revenue-integrity";
 import { backfillEmptyInvoiceWorkLinesForProjectToken } from "@/lib/invoice-carry-forward";
 import { loadPortalAdditionalWorkCatalog } from "@/lib/portal-additional-work";
 import { prisma } from "@/lib/prisma";
@@ -145,9 +147,8 @@ export default async function CustomerProjectPortalPage({
             },
           },
           invoices: {
-            select: { id: true, status: true, total: true, paidAt: true },
-            take: 1,
-            orderBy: { createdAt: "asc" },
+            select: { id: true, status: true, total: true, paidAt: true, createdAt: true },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           },
           // Only ever the statuses a customer is allowed to see -- a DRAFT
           // change order has never been sent, and a CANCELLED one was
@@ -194,7 +195,8 @@ export default async function CustomerProjectPortalPage({
     await reconcileEstimateDepositCheckout(prisma, token, query.session_id);
   }
 
-  if (job.invoices[0]?.status === "SENT") {
+  const portalInvoice = selectPortalInvoice(job.invoices);
+  if (portalInvoice?.status === "SENT") {
     await reconcileProjectTokenCheckoutPayment(
       prisma,
       token,
@@ -202,13 +204,13 @@ export default async function CustomerProjectPortalPage({
     );
   }
 
-  if (job.invoices[0]) {
+  if (job.invoices.length > 0) {
     await backfillEmptyInvoiceWorkLinesForProjectToken(prisma, token);
   }
 
-  const invoice = job.invoices[0]
+  const invoice = portalInvoice
     ? await prisma.invoice.findFirst({
-        where: { id: job.invoices[0].id, job: { projectToken: token } },
+        where: { id: portalInvoice.id, job: { projectToken: token } },
         select: {
           id: true,
           status: true,
@@ -223,11 +225,14 @@ export default async function CustomerProjectPortalPage({
     : null;
   const payment = await getBusinessPaymentStatus(prisma, job.business.id);
   const invoicePayments = invoice
-    ? await listProjectPayments(prisma, {
-        businessId: job.business.id,
-        invoiceId: invoice.id,
-        jobId: job.id,
-      })
+    ? paymentsBelongingToInvoice(
+        { id: invoice.id, jobId: job.id },
+        await listProjectPayments(prisma, {
+          businessId: job.business.id,
+          invoiceId: invoice.id,
+          jobId: job.id,
+        }),
+      )
     : [];
   const invoiceBreakdown = invoice
     ? invoicePaymentBreakdown({

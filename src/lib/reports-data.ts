@@ -21,6 +21,7 @@ export async function loadReportSource(
     invoices,
     customers,
     jobs,
+    changeOrders,
     estimates,
     serviceRequests,
     catalogItems,
@@ -43,6 +44,7 @@ export async function loadReportSource(
         jobId: true,
         paymentMethod: true,
         paymentReference: true,
+        kind: true,
       },
     }),
     prisma.customer.findMany({
@@ -52,6 +54,10 @@ export async function loadReportSource(
     prisma.job.findMany({
       where: scope,
       select: { id: true, status: true, createdAt: true, customerId: true, estimateId: true, scheduledDurationMinutes: true },
+    }),
+    prisma.changeOrder.findMany({
+      where: scope,
+      select: { id: true, jobId: true, status: true, total: true, invoiceId: true, createdAt: true },
     }),
     prisma.estimate.findMany({
       where: scope,
@@ -130,6 +136,10 @@ export async function loadReportSource(
     })),
     customers,
     jobs,
+    changeOrders: changeOrders.map((changeOrder) => ({
+      ...changeOrder,
+      total: asNumber(changeOrder.total),
+    })),
     estimates: estimates.map((estimate) => ({
       ...estimate,
       total: asNumber(estimate.total),

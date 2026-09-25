@@ -16,6 +16,7 @@ import {
   recordSucceededPayment,
   requiredDepositFromLines,
 } from "@/lib/project-payments";
+import { selectPortalInvoice } from "@/lib/revenue-integrity";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
 import {
   connectedAccountReplacementBlockReason,
@@ -325,20 +326,20 @@ export async function createCustomerInvoiceCheckout(
           businessId: true,
           business: { select: { slug: true } },
           invoices: {
-            take: 1,
-            orderBy: { createdAt: "asc" },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
             select: {
               id: true,
               businessId: true,
               status: true,
               total: true,
+              createdAt: true,
             },
           },
         },
       })
     : null;
 
-  const invoice = job?.invoices[0] ?? null;
+  const invoice = selectPortalInvoice(job?.invoices ?? []);
   if (!job || !invoice || invoice.businessId !== job.businessId) {
     throw new PaymentError("This invoice is not available.");
   }
@@ -772,14 +773,13 @@ export async function reconcileProjectTokenCheckoutPayment(
         select: {
           businessId: true,
           invoices: {
-            take: 1,
-            orderBy: { createdAt: "asc" },
-            select: { id: true },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+            select: { id: true, status: true, createdAt: true },
           },
         },
       })
     : null;
-  const invoice = job?.invoices[0] ?? null;
+  const invoice = selectPortalInvoice(job?.invoices ?? []);
   if (!job || !invoice) {
     return { applied: false, reason: "invoice_not_found" };
   }

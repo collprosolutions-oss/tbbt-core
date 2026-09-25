@@ -19,6 +19,7 @@ const RECOMMENDATION_ACTION_TITLES: Record<string, string> = {
   "review-recurring-expenses": "Add or review recurring expense information",
   "schedule-unscheduled-jobs": "Schedule unscheduled jobs",
   "receivable-needs-attention": "Follow up on aging unpaid invoices",
+  "unbilled-completed-jobs": "Create or send invoices for completed unbilled work",
   "service-margin-below-target": "Review services with negative recorded margin",
   "estimate-labor-overrun": "Review estimate labor hours against actual time",
   "expense-growth": "Review expense growth versus the prior period",

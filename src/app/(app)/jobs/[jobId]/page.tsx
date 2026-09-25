@@ -56,6 +56,11 @@ import { StaffingOutreachForm } from "@/components/team/fill-in-bench-form";
 import { staffingShortage } from "@/lib/workforce-matching";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import {
+  completedJobBillingAttention,
+  invoiceKindLabel,
+  unbilledApprovedChangeOrders,
+} from "@/lib/revenue-integrity";
+import {
   formatAddress,
   formatDate,
   formatDateTime,
@@ -142,9 +147,8 @@ export default async function JobPage({
         },
       },
       invoices: {
-        select: { id: true, status: true, total: true },
-        take: 1,
-        orderBy: { createdAt: "asc" },
+        select: { id: true, status: true, total: true, kind: true, createdAt: true },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       },
       photos: {
         select: { id: true, stage: true, url: true, storedAssetId: true, caption: true, createdAt: true },
@@ -152,7 +156,7 @@ export default async function JobPage({
       },
       changeOrders: {
         orderBy: { createdAt: "desc" },
-        select: { id: true, title: true, status: true, total: true },
+        select: { id: true, title: true, status: true, total: true, invoiceId: true, createdAt: true },
       },
       additionalWorkRequests: {
         where: { status: "OPEN" },
@@ -218,8 +222,19 @@ export default async function JobPage({
   const notificationMessage = notificationOwnerMessage(job);
   const isCompleted = job.status === "COMPLETED";
   const isInProgress = job.status === "IN_PROGRESS";
-  const invoice = job.invoices[0] ?? null;
+  const invoices = job.invoices;
+  const invoice = invoices[0] ?? null;
   const approvedScope = resolveApprovedWorkOrderScope(job);
+  const billingAttention = completedJobBillingAttention({
+    jobStatus: job.status,
+    originalApprovedTotal: approvedScope.source === "none" ? null : approvedScope.total,
+    invoices,
+    changeOrders: job.changeOrders,
+  });
+  const unbilledChangeOrders = unbilledApprovedChangeOrders({
+    invoices,
+    changeOrders: job.changeOrders,
+  });
   const depositLines =
     job.approvedEstimateVersion?.lineItems ?? job.estimate?.lineItems ?? [];
   const depositTotal =
@@ -479,28 +494,39 @@ export default async function JobPage({
           <CardHeader>
             <CardTitle>Invoice</CardTitle>
             <CardDescription>
-              {invoice?.status === "DRAFT"
-                ? "The invoice was created from the approved work but was not sent. Send it so the customer can view and pay it in the project portal."
-                : invoice
-                  ? "Completing this job created and sent one invoice from the approved estimate and approved change orders. Opening it will not create another one."
-                  : "Completing this job did not create an invoice. Create and send one from the approved work. A job cannot have two invoices."}
+              {billingAttention.unbilled
+                ? billingAttention.detail
+                : invoices.length === 0
+                  ? "Completing this job did not create an invoice. Create and send one from the approved work."
+                  : invoices.some((row) => row.status === "DRAFT")
+                    ? "An invoice was created from the approved work but was not sent. Send it so the customer can view and pay it in the project portal."
+                    : "Approved work on this job is billed. Opening an invoice will not rewrite it."}
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-wrap items-center gap-2">
-            {invoice?.status === "DRAFT" ? (
-              <>
-                <MarkInvoiceSentButton invoiceId={invoice.id} />
-                <Button asChild size="sm" variant="outline">
-                  <Link href={`/invoices/${invoice.id}`}>Open Invoice</Link>
-                </Button>
-              </>
-            ) : invoice ? (
-              <Button asChild size="sm">
-                <Link href={`/invoices/${invoice.id}`}>Open Invoice</Link>
-              </Button>
-            ) : (
+          <CardContent className="space-y-3">
+            {invoices.length > 0 ? (
+              <ul className="space-y-2 text-sm">
+                {invoices.map((row) => (
+                  <li key={row.id} className="flex flex-wrap items-center gap-2">
+                    <StatusBadge status={row.status} />
+                    <span>
+                      {invoiceKindLabel(row.kind)} · {formatMoney(row.total)}
+                    </span>
+                    {row.status === "DRAFT" ? (
+                      <MarkInvoiceSentButton invoiceId={row.id} />
+                    ) : null}
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/invoices/${row.id}`}>Open</Link>
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {invoices.length === 0 ? (
               <CreateInvoiceButton jobId={job.id} />
-            )}
+            ) : unbilledChangeOrders.length > 0 ? (
+              <CreateInvoiceButton jobId={job.id} label="Create balance invoice" />
+            ) : null}
           </CardContent>
         </Card>
       ) : null}
@@ -763,10 +789,10 @@ export default async function JobPage({
               </p>
               {invoice && !invoice.total.equals(currentApprovedProjectTotal) ? (
                 <p className="text-muted-foreground">
-                  Note: this job already has an invoice (
-                  {formatMoney(invoice.total)}) created before the current
-                  approved project total above. Approved change orders since
-                  then are not automatically added to that existing invoice.
+                  Note: the original invoice (
+                  {formatMoney(invoice.total)}) is unchanged. Approved change
+                  orders after that invoice are billed on a separate balance
+                  invoice — they are never added to the original.
                 </p>
               ) : null}
             </>

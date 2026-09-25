@@ -1022,6 +1022,25 @@ check(
     !/"apiSecret"/i.test(materialsMigration),
 );
 
+const revenueIntegrityMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260926100000_revenue_integrity_supplemental_invoices/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Revenue-integrity supplemental invoice migration is additive and after orchestration",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(revenueIntegrityMigration) &&
+    revenueIntegrityMigration.includes('ADD COLUMN IF NOT EXISTS "kind"') &&
+    revenueIntegrityMigration.includes('ADD COLUMN IF NOT EXISTS "invoiceId"') &&
+    revenueIntegrityMigration.includes("Invoice_jobId_original_unique") &&
+    revenueIntegrityMigration.includes("WHERE \"jobId\" IS NOT NULL AND \"kind\" = 'ORIGINAL'") &&
+    localNames.includes("20260926100000_revenue_integrity_supplemental_invoices") &&
+    localNames.indexOf("20260926090000_ai_orchestration_run") <
+      localNames.indexOf("20260926100000_revenue_integrity_supplemental_invoices"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

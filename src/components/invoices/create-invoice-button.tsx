@@ -4,7 +4,13 @@ import { useTransition } from "react";
 import { createInvoiceFromJob } from "@/app/actions/invoice";
 import { Button } from "@/components/ui/button";
 
-export function CreateInvoiceButton({ jobId }: { jobId: string }) {
+export function CreateInvoiceButton({
+  jobId,
+  label = "Create invoice",
+}: {
+  jobId: string;
+  label?: string;
+}) {
   const [isPending, startTransition] = useTransition();
 
   return (
@@ -17,7 +23,7 @@ export function CreateInvoiceButton({ jobId }: { jobId: string }) {
       }}
     >
       <Button type="submit" size="sm" disabled={isPending}>
-        {isPending ? "Creating…" : "Create invoice"}
+        {isPending ? "Creating…" : label}
       </Button>
     </form>
   );

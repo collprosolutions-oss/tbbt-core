@@ -20,6 +20,7 @@ import { invoiceBalanceDue } from "@/lib/financial-intelligence/collected-revenu
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { hasProductCapability } from "@/lib/product-entitlements";
 import { asNumber, buildReport, percentChange, resolveReportRange } from "@/lib/reports";
+import { listCompletedUnbilledJobs } from "@/lib/revenue-integrity";
 import { loadReportSource } from "@/lib/reports-data";
 import { isPaidActivity } from "@/lib/time-cards";
 import { partitionRecommendations } from "@/lib/bsos-actions";
@@ -236,6 +237,14 @@ export async function loadBsosFactsBundle(
     growthRecoveryOpen: { count: buildRecoveryQueue(growthSource).length },
     growthReactivationEligible: {
       count: buildReactivationCandidates(growthSource).filter((row) => row.anyOutreachEligible).length,
+    },
+    unbilledCompletedJobs: {
+      count: listCompletedUnbilledJobs({
+        jobs: reportSource.jobs,
+        invoices: reportSource.invoices,
+        changeOrders: reportSource.changeOrders ?? [],
+        estimates: reportSource.estimates,
+      }).length,
     },
     launchIncompleteSteps: { count: launchSteps },
     knowledgeNeedsApproval: { count: knowledgeUnreviewed },

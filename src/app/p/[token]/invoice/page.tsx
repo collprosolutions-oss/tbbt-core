@@ -10,7 +10,7 @@ import {
   reconcileProjectTokenCheckoutPayment,
   shouldShowPayInvoice,
 } from "@/lib/payments";
-import { invoicePaymentBreakdown, listProjectPayments } from "@/lib/project-payments";
+import { invoicePaymentBreakdown, listProjectPayments, paymentsBelongingToInvoice } from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -54,11 +54,14 @@ export default async function CustomerInvoicePage({
     : null;
   const invoicePayments =
     payable && invoice
-      ? await listProjectPayments(prisma, {
-          businessId: payable.business.id,
-          invoiceId: invoice.id,
-          jobId: payable.id,
-        })
+      ? paymentsBelongingToInvoice(
+          { id: invoice.id, jobId: payable.id },
+          await listProjectPayments(prisma, {
+            businessId: payable.business.id,
+            invoiceId: invoice.id,
+            jobId: payable.id,
+          }),
+        )
       : [];
   const breakdown = invoice
     ? invoicePaymentBreakdown({

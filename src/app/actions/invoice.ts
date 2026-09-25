@@ -12,6 +12,7 @@ import {
   PAYMENT_PURPOSE_INVOICE_BALANCE,
   invoicePaymentBreakdown,
   listProjectPayments,
+  paymentsBelongingToInvoice,
   recordSucceededPayment,
 } from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
@@ -27,23 +28,15 @@ function readString(formData: FormData, key: string) {
 }
 
 /**
- * Invoice billable total = Original Approved Total (from the bound
- * EstimateVersion, or the legacy-estimate fallback -- see
- * resolveApprovedWorkOrderScope) PLUS every currently APPROVED Change
- * Order's total (see resolveCurrentApprovedProjectTotal in
- * src/lib/change-order.ts). DRAFT/SENT/DECLINED/CANCELLED change orders
- * never contribute.
+ * Invoice billable total is computed ONCE at create and never rewritten.
+ * The first invoice for a job is ORIGINAL (approved estimate + approved
+ * Change Orders at that moment). A Change Order approved AFTER that
+ * invoice exists is billed on a separate SUPPLEMENTAL / balance invoice —
+ * never retro-added to the original. persistDraftInvoiceFromCompletedJob
+ * is idempotent and tenant-scoped.
  *
- * This total is computed ONCE, at invoice creation, and never
- * recalculated afterward: a Change Order approved AFTER this Job's invoice
- * already exists is deliberately NOT retro-added to that invoice (see the
- * "This job has approved changes not yet billed" note surfaced on the
- * Work Order page instead) -- this function must never be called to
- * "refresh" an existing invoice's total.
- *
- * Approved estimate / change-order line items are copied onto the new
- * Invoice as LineItem snapshots (see persistDraftInvoiceFromCompletedJob).
- * Recovery / manual create now also sends the invoice (DRAFT → SENT)
+ * Approved estimate / change-order line items are copied as LineItem
+ * snapshots. Recovery / manual create also sends the invoice (DRAFT → SENT)
  * so the owner is not left with a second send step after Complete Job.
  */
 export async function createInvoiceFromJob(
@@ -64,28 +57,6 @@ export async function createInvoiceFromJob(
 
   if (job.status !== "COMPLETED") {
     return { error: "Only a completed job can become an invoice." };
-  }
-
-  const existing = await prisma.invoice.findFirst({
-    where: {
-      ...access.scope,
-      jobId: job.id,
-    },
-    select: { id: true, status: true },
-  });
-
-  if (existing) {
-    if (existing.status === "DRAFT") {
-      const sent = await sendDraftInvoiceIfNeeded(prisma, {
-        businessId: access.businessId,
-        invoiceId: existing.id,
-        businessName: access.workspace.business.name,
-      });
-      if (!sent.ok) {
-        return { error: sent.error };
-      }
-    }
-    redirect(`/invoices/${existing.id}`);
   }
 
   const result = await persistDraftInvoiceFromCompletedJob(prisma, {
@@ -185,11 +156,14 @@ export async function markInvoicePaid(
     return { error: "Choose a payment method." };
   }
 
-  const payments = await listProjectPayments(prisma, {
-    businessId: access.businessId,
-    invoiceId: invoice.id,
-    jobId: invoice.jobId,
-  });
+  const payments = paymentsBelongingToInvoice(
+    { id: invoice.id, jobId: invoice.jobId },
+    await listProjectPayments(prisma, {
+      businessId: access.businessId,
+      invoiceId: invoice.id,
+      jobId: invoice.jobId,
+    }),
+  );
   const breakdown = invoicePaymentBreakdown({
     status: invoice.status,
     total: invoice.total,
