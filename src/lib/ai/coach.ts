@@ -7,10 +7,22 @@ export type CoachContext = {
   metrics: Array<{ key: string; label: string; value: string; note: string; href: string }>;
   goals: Array<{ title: string; status: string }>;
   actionItems: Array<{ title: string; status: string; recommendationKey: string }>;
+  /** Display labels only. Never an authorization source. */
+  activeTradeLabels?: string[];
 };
 
 function factList(context: CoachContext): CitedFact[] {
   return [
+    ...(context.activeTradeLabels?.length
+      ? [
+          {
+            key: "active-trades",
+            label: "Active trades",
+            value: context.activeTradeLabels.join(", "),
+            href: "/settings",
+          } satisfies CitedFact,
+        ]
+      : []),
     {
       key: "paid-revenue",
       label: "Recorded paid revenue",

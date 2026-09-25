@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ExportCustomersButton } from "@/components/customers/export-customers-button";
 import { FounderRegion } from "@/components/founder-design/region";
 import { BusinessProfileForm } from "@/components/settings/business-profile-form";
+import { BusinessTradesForm } from "@/components/settings/business-trades-form";
 import { BusinessPublicContactForm } from "@/components/settings/business-public-contact-form";
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
 import { ServiceAreaSettings } from "@/components/settings/service-area-settings";
@@ -265,6 +266,17 @@ function SectionBody(props: SettingsWorkspaceProps) {
         >
           <ViewPublicWebsiteLink slug={snapshot.business.slug} className="mb-4" />
           <BusinessProfileForm name={snapshot.business.name} canEdit={canEditConsequential} />
+          <div className="space-y-2 border-t pt-4">
+            <h3 className="text-sm font-medium">Active trades</h3>
+            <BusinessTradesForm
+              trades={snapshot.business.activeTrades}
+              available={[
+                { code: "HANDYMAN", label: "Handyman" },
+                { code: "CLEANING", label: "Cleaning" },
+              ]}
+              canEdit={canEditConsequential}
+            />
+          </div>
           <dl className="grid gap-3 text-sm sm:grid-cols-2">
             <div>
               <dt className="text-muted-foreground">Trade / type</dt>

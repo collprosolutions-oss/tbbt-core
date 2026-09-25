@@ -55,6 +55,8 @@ import {
   type StructuredServiceAddress,
 } from "@/lib/service-address";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
+import type { IntakeAnswerMap, PublicIntakeSchemaProjection } from "@/lib/intake-schema";
+import { TradeIntakeFields } from "@/components/public/trade-intake-fields";
 import {
   catalogQuantitiesFromState,
   formatPricingSummaryLines,
@@ -96,6 +98,7 @@ export function MultiServiceRequestFlow({
   initialSelected,
   photosEnabled,
   serviceArea,
+  intakeSchema,
 }: {
   slug: string;
   businessName: string;
@@ -104,6 +107,7 @@ export function MultiServiceRequestFlow({
   initialSelected: SelectedWorkState;
   photosEnabled: boolean;
   serviceArea: BusinessServiceArea;
+  intakeSchema?: PublicIntakeSchemaProjection | null;
 }) {
   void groups;
   const [step, setStep] = useState<Step>("details");
@@ -124,6 +128,7 @@ export function MultiServiceRequestFlow({
   const [photos, setPhotos] = useState<SelectedRequestPhoto[]>([]);
   const [measurements, setMeasurements] = useState<Record<string, MeasurementDraft>>({});
   const [workArea, setWorkArea] = useState<Record<string, WorkAreaDraft>>({});
+  const [intakeAnswers, setIntakeAnswers] = useState<IntakeAnswerMap>({});
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
   const [pending, setPending] = useState(false);
@@ -325,6 +330,9 @@ export function MultiServiceRequestFlow({
           belongingsCleanup: draft.belongingsCleanup,
         }),
       );
+    }
+    if (intakeSchema) {
+      formData.set("intakeAnswers", JSON.stringify(intakeAnswers));
     }
     for (const photo of photos) {
       const authorized = await authorizePublicRequestPhotoUpload({
@@ -529,6 +537,13 @@ export function MultiServiceRequestFlow({
               setWorkArea((current) => ({ ...current, [catalogItemId]: next }))
             }
           />
+          {intakeSchema ? (
+            <TradeIntakeFields
+              schema={intakeSchema}
+              answers={intakeAnswers}
+              onChange={setIntakeAnswers}
+            />
+          ) : null}
           {photosEnabled ? (
             <RequestPhotoPicker
               photos={photos}

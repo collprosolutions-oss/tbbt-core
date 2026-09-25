@@ -38,6 +38,7 @@ export function ServicesWorkspace({
   businessName,
   publicRequestHref,
   starterPlan,
+  starterTrades,
   initialServiceId,
 }: {
   items: ServiceCatalogListItem[];
@@ -47,6 +48,7 @@ export function ServicesWorkspace({
   businessName: string;
   publicRequestHref: string;
   starterPlan: StarterCatalogSummary | null;
+  starterTrades?: Array<{ code: string; label: string }>;
   initialServiceId?: string;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(() =>
@@ -116,6 +118,7 @@ export function ServicesWorkspace({
         onOpenChange={setAddOpen}
         categories={categories}
         starterPlan={starterPlan}
+        starterTrades={starterTrades}
       />
     </>
   );

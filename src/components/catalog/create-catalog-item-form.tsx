@@ -68,6 +68,7 @@ export function CreateCatalogItemForm({
         >
           <option value="STARTING_AT">Starting at</option>
           <option value="FIXED">Fixed</option>
+          <option value="VARIABLE">Variable / unit</option>
           <option value="CUSTOM_QUOTE">Custom Quote</option>
         </select>
       </div>

@@ -16,11 +16,13 @@ export function AddServiceSheet({
   onOpenChange,
   categories,
   starterPlan,
+  starterTrades = [],
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   categories: string[];
   starterPlan: StarterCatalogSummary | null;
+  starterTrades?: Array<{ code: string; label: string }>;
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -28,9 +30,9 @@ export function AddServiceSheet({
         <SheetHeader>
           <SheetTitle>Add service</SheetTitle>
           <SheetDescription>
-            Uses this business&apos;s existing catalog. Choose Fixed, Starting
-            at, or Custom Quote. Saving a service later does not change amounts
-            already on estimates, jobs, or invoices.
+            Uses this business&apos;s existing catalog. Choose a pricing mode
+            allowed for the active trade. Saving a service later does not change
+            amounts already on estimates, jobs, or invoices.
           </SheetDescription>
         </SheetHeader>
         <div className="space-y-8 px-4 pb-6">
@@ -55,7 +57,15 @@ export function AddServiceSheet({
                   ? ` ${starterPlan.pendingCount} are not importable yet.`
                   : null}
               </p>
-              <InstallStarterCatalogForm />
+              {(starterTrades.length > 0 ? starterTrades : [{ code: "HANDYMAN", label: "Handyman starter catalog" }]).map(
+                (trade) => (
+                  <InstallStarterCatalogForm
+                    key={trade.code}
+                    tradeCode={trade.code}
+                    label={trade.label}
+                  />
+                ),
+              )}
             </div>
           ) : null}
         </div>

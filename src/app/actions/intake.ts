@@ -30,6 +30,17 @@ function readPhotoFiles(formData: FormData) {
     .filter((value): value is File => value instanceof File && value.size > 0);
 }
 
+function parseIntakeAnswersField(formData: FormData) {
+  const raw = readString(formData, "intakeAnswers");
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function parseMeasurementFields(formData: FormData) {
   return readFormStrings(formData, "measurement").flatMap((raw) => {
     try {
@@ -137,6 +148,7 @@ async function submitServiceRequestInner(
     photoAssetIds: readFormStrings(formData, "photoAssetId"),
     workAreaAnswers: parseWorkAreaFormAnswers(readFormStrings(formData, "workArea")),
     measurements: parseMeasurementFields(formData),
+    intakeAnswers: parseIntakeAnswersField(formData),
     submissionId: readString(formData, "submissionId") || null,
     smsOptIn: readString(formData, "smsOptIn") || formData.get("smsOptIn"),
     leadSource: readString(formData, "leadSource") || "WEBSITE",

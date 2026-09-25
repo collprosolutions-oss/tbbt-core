@@ -211,7 +211,12 @@ model Business {
   id                  String   @id @default(cuid())
   name                String
   slug                String   @unique
-  /// App-level trade code. Only HANDYMAN is active in Phase 1.
+  /// Compatibility projection of the primary active BusinessTrade only.
+  /// business_trades is the Core source of truth. Do not treat this column
+  /// as a second authority — writers sync it from the primary ACTIVE
+  /// BusinessTrade so existing readers keep working during the transition.
+  /// Planned removal: after every remaining tradeCode reader is migrated
+  /// to listActiveBusinessTrades() / resolvePrimaryTradeCode().
   tradeCode           String   @default("HANDYMAN")
   laborMinimumEnabled Boolean  @default(false)
   laborMinimumAmount  Decimal?
@@ -263,6 +268,7 @@ model Business {
   updatedAt           DateTime @updatedAt
 
   memberships              Membership[]
+  trades                   BusinessTrade[]
   customers                Customer[]
   properties               Property[]
   catalogItems             ServiceCatalogItem[]
@@ -328,6 +334,37 @@ model Business {
   automationRules          AutomationRule[]
   automationRuns           AutomationRun[]
   recommendationStates     BsosRecommendationState[]
+}
+
+/// First-class membership of a Business in a configured trade.
+/// This is the Core source of truth for multi-trade. One Business identity
+/// (slug, customers, jobs, invoices, public site) can hold multiple ACTIVE
+/// rows. Browser-supplied trade/business IDs never authorize these rows.
+model BusinessTrade {
+  id        String   @id @default(cuid())
+  businessId String
+  /// HANDYMAN | CLEANING. Must be a configured TRADE_CODES value.
+  tradeCode String
+  /// ACTIVE | INACTIVE
+  status    String   @default("ACTIVE")
+  /// Owner/admin JSON overrides for configurable defaults (starter prices,
+  /// customer-facing phrases). Never an authorization boundary. Validated
+  /// against the platform TradeConfiguration for this tradeCode.
+  configOverridesJson String @default("{}")
+  /// Platform intake schema version frozen when this membership was last
+  /// activated or when overrides were saved. Historical ServiceRequest
+  /// rows store their own snapshot and are never reinterpreted from here.
+  intakeSchemaVersion Int @default(1)
+  activatedAt   DateTime  @default(now())
+  deactivatedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, tradeCode])
+  @@index([businessId])
+  @@index([tradeCode])
 }
 
 model Membership {
@@ -536,7 +573,8 @@ model ServiceCatalogItem {
   /// it into LineItem.description — later catalog edits must not rewrite
   /// already-created estimate / version / invoice snapshots.
   description String?
-  /// FIXED | STARTING_AT | CUSTOM_QUOTE. Existing rows default to STARTING_AT.
+  /// FIXED | STARTING_AT | VARIABLE | CUSTOM_QUOTE. Existing rows default
+  /// to STARTING_AT. Allowed modes come from the owning trade config.
   pricingMode String   @default("STARTING_AT")
   price       Decimal?
   /// Persistent grouping label for this business's price list (e.g.
@@ -558,6 +596,15 @@ model ServiceCatalogItem {
   intakeMeasurementAxes String @default("")
   /// IN | FT. Customer-reported only; never contractor-verified units.
   intakeMeasurementUnit String @default("IN")
+  /// Trade this catalog row belongs to. Tenant-scoped: installing Cleaning
+  /// never inserts Cleaning services into a Handyman-only business.
+  tradeCode String @default("HANDYMAN")
+  /// Whether this service may be offered on a recurring cadence. Existing
+  /// Handyman rows stay false unless deliberately configured.
+  recurrenceEligible Boolean @default(false)
+  /// Unit label for VARIABLE / unit-based pricing (for example "room").
+  /// Empty when the pricing mode does not use a unit.
+  unitLabel String @default("")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -568,6 +615,7 @@ model ServiceCatalogItem {
   additionalWorkRequestItems   AdditionalWorkRequestItem[]
 
   @@index([businessId])
+  @@index([businessId, tradeCode])
 }
 
 model ServiceRequest {
@@ -590,6 +638,24 @@ model ServiceRequest {
   /// IN_AREA | OUTSIDE_PREFERRED | UNKNOWN. Historical rows stay UNKNOWN.
   serviceAreaQualification String @default("UNKNOWN")
   matchedServiceAreaId String?
+  /// Trade under which this request was submitted. Derived from the
+  /// authorized business + selected catalog items — never from a browser
+  /// trade/business ID.
+  tradeCode String @default("HANDYMAN")
+  /// Platform schema key (for example handyman.public) frozen at submit.
+  intakeSchemaKey String?
+  /// Platform schema version frozen at submit. Config changes after this
+  /// never reinterpret the stored answers.
+  intakeSchemaVersion Int?
+  /// Exact intake schema JSON used when the customer submitted.
+  intakeSchemaJson String?
+  /// Structured answers for the frozen schema. Legacy rows may be null
+  /// when answers only live in description / measurements.
+  intakeAnswersJson String?
+  /// ONE_TIME | RECURRING. Existing Handyman requests stay ONE_TIME.
+  serviceIntent String @default("ONE_TIME")
+  /// WEEKLY | BIWEEKLY | MONTHLY | CUSTOM. Empty when one-time.
+  recurrenceCadence String @default("")
 
   business           Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
   campaign           MarketingCampaign?  @relation("ServiceRequestCampaign", fields: [campaignId], references: [id], onDelete: SetNull)
@@ -610,6 +676,7 @@ model ServiceRequest {
   pipelineOpportunity PipelineOpportunity?
 
   @@index([businessId])
+  @@index([businessId, tradeCode])
   @@index([campaignId])
   @@index([matchedServiceAreaId])
 }
@@ -878,6 +945,16 @@ model Job {
   startWithoutConfirmationByMembershipId String?
   leadSource                String?
   campaignId                String?
+  /// ONE_TIME | RECURRING. Existing Handyman jobs stay ONE_TIME unless
+  /// deliberately configured. Recurrence-ready only — not a billing engine.
+  serviceIntent String @default("ONE_TIME")
+  /// WEEKLY | BIWEEKLY | MONTHLY | CUSTOM. Empty when one-time.
+  recurrenceCadence String @default("")
+  /// Parent / source job when this row is a later occurrence.
+  recurrenceSourceJobId String?
+  nextOccurrenceAt DateTime?
+  /// ACTIVE | SKIPPED | CANCELLED. Empty when one-time.
+  recurrenceStatus String @default("")
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
 
@@ -908,9 +985,12 @@ model Job {
   reviews                 Review[]
   referralRequests        ReferralRequest[]
   customerFollowUps       CustomerFollowUp[]
+  recurrenceSource        Job?  @relation("JobRecurrenceSource", fields: [recurrenceSourceJobId], references: [id], onDelete: SetNull)
+  recurrenceOccurrences   Job[] @relation("JobRecurrenceSource")
 
   @@index([businessId])
   @@index([assignedMembershipId])
+  @@index([recurrenceSourceJobId])
   @@index([appointmentConfirmedByMembershipId])
   @@index([startWithoutConfirmationByMembershipId])
   @@index([campaignId])

@@ -11,15 +11,14 @@ import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatMoney } from "@/lib/format";
-import {
-  HANDYMAN_CATALOG_CATEGORIES,
-  planStarterCatalogInstall,
-} from "@/lib/handyman-starter-catalog";
+import { planStarterCatalogInstall } from "@/lib/handyman-starter-catalog";
+import { planCleaningStarterCatalogInstall } from "@/lib/cleaning-starter-catalog";
 import { catalogScopeText } from "@/lib/estimate-line-scope";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
 import { groupServiceCatalogItemsByCategory } from "@/lib/service-catalog-category";
-import { isActiveTrade } from "@/lib/trades";
+import { listActiveTradeCodes } from "@/lib/business-trades";
+import { getTradeConfig, preferredCatalogCategoryOrder } from "@/lib/trade-config";
 
 export const metadata: Metadata = {
   title: "Services",
@@ -48,13 +47,27 @@ export default async function ServicesPage({
     where: access.scope,
     orderBy: [{ active: "desc" }, { name: "asc" }],
   });
-  const showStarterCatalog = isActiveTrade(access.workspace.business.tradeCode);
-  const starterPlan = showStarterCatalog
-    ? planStarterCatalogInstall(items.map((item) => item.name))
-    : null;
-  const preferredCategoryOrder = showStarterCatalog
-    ? HANDYMAN_CATALOG_CATEGORIES
-    : [];
+  const activeTradeCodes = await listActiveTradeCodes(prisma, access.businessId);
+  const preferredCategoryOrder = activeTradeCodes.flatMap((code) =>
+    preferredCatalogCategoryOrder(code),
+  );
+  const handymanNames = items
+    .filter((item) => (item.tradeCode ?? "HANDYMAN") === "HANDYMAN")
+    .map((item) => item.name);
+  const cleaningNames = items
+    .filter((item) => item.tradeCode === "CLEANING")
+    .map((item) => item.name);
+  const starterPlan = activeTradeCodes.includes("HANDYMAN")
+    ? planStarterCatalogInstall(handymanNames)
+    : activeTradeCodes.includes("CLEANING")
+      ? planCleaningStarterCatalogInstall(cleaningNames)
+      : null;
+  const starterTrades = activeTradeCodes
+    .filter((code) => getTradeConfig(code).catalogStarterSource !== "NONE")
+    .map((code) => ({
+      code,
+      label: `${getTradeConfig(code).label} starter catalog`,
+    }));
   const groupedItems = groupServiceCatalogItemsByCategory(
     items,
     preferredCategoryOrder,
@@ -177,6 +190,7 @@ export default async function ServicesPage({
                 }
               : null
           }
+          starterTrades={starterTrades}
           initialServiceId={params.service}
         />
       </FounderDesignRoot>

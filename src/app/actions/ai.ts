@@ -47,7 +47,10 @@ export async function askBsosCoachAction(
     if (!question) return { error: "Ask a question about recorded TBBT facts." };
     if (!attemptId) return { error: "Retry that request from the form." };
 
+    const { listActiveTradeCodes } = await import("@/lib/business-trades");
+    const { workspaceTradeLabel } = await import("@/lib/trade-config");
     const facts = await loadBsosFacts(prisma, access.businessId);
+    const activeTradeCodes = await listActiveTradeCodes(prisma, access.businessId);
     const recommendations = buildBsosRecommendations(facts);
     const metrics = buildBsosHealthMetrics(facts);
     const [goals, actionItems] = await Promise.all([
@@ -60,6 +63,7 @@ export async function askBsosCoachAction(
       metrics,
       goals,
       actionItems,
+      activeTradeLabels: [workspaceTradeLabel(activeTradeCodes)],
     });
     const conversation = await ensureAiConversation(prisma, access, {
       area: "COACH",

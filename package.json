@@ -92,7 +92,8 @@
     "test:test-data-cleanup": "node --experimental-strip-types scripts/check-test-data-cleanup.mjs",
     "test:handyman-1-0-completion": "node --experimental-strip-types scripts/check-handyman-1-0-completion.mjs",
     "test:ai-intelligence": "node --experimental-strip-types scripts/check-ai-intelligence.mjs",
-    "test:automation": "node --experimental-strip-types scripts/check-automation.mjs"
+    "test:automation": "node --experimental-strip-types scripts/check-automation.mjs",
+    "test:multi-trade-core": "node --experimental-strip-types scripts/check-multi-trade-core.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",

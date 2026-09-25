@@ -22,6 +22,11 @@ import { parseSelectedWorkSearch } from "@/lib/selected-work";
 import { isBusinessStorageConfigured } from "@/lib/business-storage";
 import { loadPublicNextAvailableLabel } from "@/lib/availability-data";
 import { prisma } from "@/lib/prisma";
+import {
+  composeIntakeSchema,
+  currentIntakeSchema,
+  publicIntakeSchemaProjection,
+} from "@/lib/intake-schema";
 
 export const dynamic = "force-dynamic";
 
@@ -42,7 +47,9 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   return publicTenantPageMetadata({
     business: site.business,
     title: `Request Service | ${name}`,
-    description: `Request one or more handyman tasks from ${name} in a single visit request.`,
+    description:
+      site.business.activeTrades?.[0]?.requestDescription ??
+      `Request service from ${name} in a single visit request.`,
     pathname: publicRequestPath(site.business.slug),
   });
 }
@@ -60,6 +67,13 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
   const phone = publicPhone(site.business);
   const textHref = smsHref(phone);
   const nextAvailableLabel = await loadPublicNextAvailableLabel(prisma, site.business.id);
+  const intakeSchema = publicIntakeSchemaProjection(
+    composeIntakeSchema(
+      (site.business.activeTrades?.map((trade) => trade.code) ?? [site.business.tradeCode]).map(
+        (code) => currentIntakeSchema(code),
+      ),
+    ),
+  );
 
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>
@@ -120,6 +134,7 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
                 initialSelected={initialSelected}
                 photosEnabled={isBusinessStorageConfigured()}
                 serviceArea={resolveBusinessServiceArea(site.business)}
+                intakeSchema={intakeSchema}
               />
             </div>
           </div>

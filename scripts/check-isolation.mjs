@@ -346,6 +346,13 @@ async function seedTenant(label, slug) {
   const business = await prisma.business.create({
     data: { name: `${label} Handyman`, slug, tradeCode: "HANDYMAN" },
   });
+  const trade = await prisma.businessTrade.create({
+    data: {
+      businessId: business.id,
+      tradeCode: "HANDYMAN",
+      status: "ACTIVE",
+    },
+  });
   const customer = await prisma.customer.create({
     data: {
       businessId: business.id,
@@ -468,6 +475,7 @@ async function seedTenant(label, slug) {
   });
   return {
     business,
+    trade,
     customer,
     property,
     request,
@@ -487,6 +495,7 @@ const CORE_MODELS = [
   ["job", "job"],
   ["invoice", "invoice"],
   ["payment", "payment"],
+  ["businessTrade", "trade"],
 ];
 
 async function proveCoreModelIsolation(model, recordA, recordB, accessA, accessB, label) {
