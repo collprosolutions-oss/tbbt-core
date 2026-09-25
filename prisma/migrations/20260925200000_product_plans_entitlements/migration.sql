@@ -1,6 +1,6 @@
 -- Additive product-plan identity and entitlement sources.
 -- Preview shares Production and skips migrate, so every statement is IF NOT EXISTS.
--- Existing BusinessSaasSubscription rows are preserved. No DROP/TRUNCATE.
+-- Existing BusinessSaasSubscription rows are preserved. No destructive statements.
 
 ALTER TABLE "BusinessSaasSubscription" ADD COLUMN IF NOT EXISTS "planCode" TEXT;
 
