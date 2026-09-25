@@ -10,7 +10,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { appendConversationMessage, ensureAiConversation } from "@/lib/ai/conversations";
 import { coachSystemPrompt } from "@/lib/ai/coach";
-import { summarizeAiInput } from "@/lib/ai/sanitize";
+import { sanitizeAiText, summarizeAiInput } from "@/lib/ai/sanitize";
 import { AI_PENDING_STALE_MS, runAiTask } from "@/lib/ai/service";
 import {
   AI_IN_PROGRESS_MESSAGE,
@@ -170,7 +170,10 @@ export async function runChiefOfStaffCoach(
 ): Promise<ChiefOfStaffRunResult> {
   requireBusinessCapability(access, CAPABILITIES.VIEW_REPORTS);
   void input.browserBusinessId;
-  const question = input.question.trim();
+  const question = sanitizeAiText(input.question, 1_000).replace(
+    /\b(password|api[_-]?key|secret|token|authorization)\s*[:=]\s*\S+/gi,
+    "$1=[redacted]",
+  );
   if (!question) return { error: "Ask a question about recorded TBBT facts." };
   if (!isAiAttemptId(input.attemptId)) return { error: "Retry that request from the form." };
 
@@ -423,7 +426,9 @@ export async function runChiefOfStaffCoach(
       conflictMetadata: conflicts,
       skippedFailure: {
         skipped: plan.skipped,
-        failures: failed.map((row) => row.failure).filter(Boolean),
+        failures: failed
+          .map((row) => row.failure)
+          .filter((row): row is NonNullable<typeof row> => Boolean(row)),
       } satisfies OrchestrationSkipFailure,
     },
   });

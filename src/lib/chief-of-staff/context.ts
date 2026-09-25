@@ -21,32 +21,32 @@ function recordDeepLoader(id: SpecialistId) {
   deepLoaderInvocations.push(id);
 }
 
-export function loadFinancialDeep() {
+export function loadFinancialDeep(): never {
   recordDeepLoader("FINANCIAL");
   throw new Error("Financial deep specialist is disabled in PR1.");
 }
 
-export function loadGrowthDeep() {
+export function loadGrowthDeep(): never {
   recordDeepLoader("GROWTH");
   throw new Error("Growth deep specialist is disabled in PR1.");
 }
 
-export function loadKnowledgeLaunchDeep() {
+export function loadKnowledgeLaunchDeep(): never {
   recordDeepLoader("KNOWLEDGE_LAUNCH");
   throw new Error("Knowledge/Launch deep specialist is disabled in PR1.");
 }
 
-export function loadMaterialsDeep() {
+export function loadMaterialsDeep(): never {
   recordDeepLoader("MATERIALS");
   throw new Error("Materials deep specialist is disabled in PR1.");
 }
 
-export function loadCommunicationsDeep() {
+export function loadCommunicationsDeep(): never {
   recordDeepLoader("COMMUNICATIONS");
   throw new Error("Communications deep specialist is disabled in PR1.");
 }
 
-export function loadBusinessProtectionDeep() {
+export function loadBusinessProtectionDeep(): never {
   recordDeepLoader("BUSINESS_PROTECTION");
   throw new Error("Business Protection deep specialist is disabled in PR1.");
 }

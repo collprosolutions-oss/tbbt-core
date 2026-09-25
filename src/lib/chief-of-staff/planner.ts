@@ -14,16 +14,16 @@ import {
 } from "@/lib/chief-of-staff/types";
 
 const WORKFORCE_QUESTION =
-  /\b(schedule|staff|worker|workforce|capacity|assign|overload|unassigned|crew|bench|double[- ]?book|skill match)\b/i;
+  /\b(schedule|staff(?:ing)?|workers?|workforce|capacity|assign(?:ment|ed)?|overload(?:ed)?|unassigned|crew|bench|double[- ]?book(?:ed|ing)?|skill match)\b/i;
 const FINANCIAL_QUESTION =
-  /\b(profit|invoice|receivable|expense|margin|cash|revenue|payroll|payment)\b/i;
+  /\b(profit|invoices?|receivables?|expenses?|margin|cash|revenue|payroll|payments?)\b/i;
 const GROWTH_QUESTION =
-  /\b(recover|reactivat|campaign|lost lead|growth|referral)\b/i;
+  /\b(recover(?:y|ed)?|reactivat(?:e|ion)|campaigns?|lost lead|growth|referrals?)\b/i;
 const KNOWLEDGE_QUESTION =
-  /\b(knowledge|launch|procedure|experience candidate|approval)\b/i;
-const MATERIALS_QUESTION = /\b(material|supplier|purchase order|inventory)\b/i;
-const COMMUNICATIONS_QUESTION = /\b(sms|text message|phone call|communications?)\b/i;
-const PROTECTION_QUESTION = /\b(vault|agreement|esign|insurance|business protection)\b/i;
+  /\b(knowledge|launch|procedures?|experience candidates?|approval)\b/i;
+const MATERIALS_QUESTION = /\b(materials?|suppliers?|purchase orders?|inventory)\b/i;
+const COMMUNICATIONS_QUESTION = /\b(sms|text messages?|phone calls?|communications?)\b/i;
+const PROTECTION_QUESTION = /\b(vault|agreements?|esign|insurance|business protection)\b/i;
 const FOCUS_QUESTION = /\b(this week|focus|should i|what should i)\b/i;
 const WORKFORCE_REC_PREFIX = "workforce-";
 
@@ -51,8 +51,7 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     key.startsWith(WORKFORCE_REC_PREFIX),
   );
   const workforceHint = input.entityHints?.recommendationKey?.startsWith(WORKFORCE_REC_PREFIX);
-  const wantsWorkforce =
-    WORKFORCE_QUESTION.test(question) || workforceKeys.length > 0 || Boolean(workforceHint);
+  const wantsWorkforce = WORKFORCE_QUESTION.test(question) || Boolean(workforceHint);
 
   if (wantsWorkforce && isSpecialistEnabled("WORKFORCE")) {
     selected.push("WORKFORCE");
@@ -72,7 +71,9 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
 
   if (isFocus) {
     const allowed = new Set<SpecialistId>(["ATTENTION"]);
-    if (workforceKeys.length > 0) allowed.add("WORKFORCE");
+    if (wantsWorkforce && (workforceKeys.length > 0 || Boolean(workforceHint))) {
+      allowed.add("WORKFORCE");
+    }
     for (const id of [...selected]) {
       if (!allowed.has(id)) {
         skipped.push({ id, reason: "UNKNOWN_QUESTION" });
