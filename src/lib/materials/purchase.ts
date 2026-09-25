@@ -1,9 +1,9 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import {
-  claimMaterialAttempt,
   finishMaterialAttempt,
   normalizeMaterialAttemptKey,
+  withMaterialAttempt,
 } from "@/lib/materials/attempts";
 import {
   requireMaterialsEstimateAccess,
@@ -668,23 +668,10 @@ export async function createPurchaseOrder(
     return run(db);
   }
   const attemptKey = normalizeMaterialAttemptKey(input.attemptKey);
-  const client = db as PrismaClient;
-  return client.$transaction(async (tx) => {
-    const claim = await claimMaterialAttempt(tx, access, {
-      attemptKey,
-      kind: "CREATE_DRAFT_PO",
-    });
-    if (!claim.claimed) {
-      if (!claim.existing.purchaseOrderId) {
-        throw new MaterialsError("That purchase order is already being created. Retry.");
-      }
-      const replayed = await tx.materialPurchaseOrder.findFirst({
-        where: { id: claim.existing.purchaseOrderId, businessId: access.businessId },
-        include: { items: true },
-      });
-      if (replayed) return replayed;
-      throw new MaterialsError("That purchase order is already being created. Retry.");
-    }
+  const outcome = await withMaterialAttempt(db as PrismaClient, access, {
+    attemptKey,
+    kind: "CREATE_DRAFT_PO",
+  }, async (tx) => {
     const created = await run(tx);
     await finishMaterialAttempt(tx, access, {
       attemptKey,
@@ -693,6 +680,18 @@ export async function createPurchaseOrder(
     });
     return created;
   });
+  if (outcome.status === "replay") {
+    if (!outcome.attempt.purchaseOrderId) {
+      throw new MaterialsError("That purchase order is already being created. Retry.");
+    }
+    const replayed = await db.materialPurchaseOrder.findFirst({
+      where: { id: outcome.attempt.purchaseOrderId, businessId: access.businessId },
+      include: { items: true },
+    });
+    if (replayed) return replayed;
+    throw new MaterialsError("That purchase order is already being created. Retry.");
+  }
+  return outcome.result;
 }
 
 export async function updatePurchaseOrderStatus(

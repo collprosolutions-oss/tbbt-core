@@ -801,13 +801,33 @@ try {
   );
 
   console.log("\nTEST — Purchase + expense atomic concurrent retry");
-  const expenseItem = dualItems.find((row) => /concrete/i.test(row.name));
+  const atomicEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "DRAFT",
+      publicToken: randomUUID(),
+    },
+  });
+  const atomicList = await ensurePurchaseList(prisma, ownerA, {
+    estimateId: atomicEstimate.id,
+  });
+  const expenseItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: atomicList.id,
+    materialId: bags.id,
+    name: `Atomic bag ${randomUUID().slice(0, 8)}`,
+    quantityNeeded: "4",
+    unit: "bag",
+    plannedUnitCost: "6.00",
+    estimatedQuantity: "4",
+    estimatedCost: "24.00",
+  });
   const attemptKey = `purchase-${expenseItem.id}-1`;
   const [purchaseOne, purchaseTwo] = await Promise.all([
     recordPurchaseOperation(prisma, ownerA, {
       attemptKey,
       itemId: expenseItem.id,
-      quantityPurchased: expenseItem.quantityNeeded.toString(),
+      quantityPurchased: "4",
       actualUnitCost: "8.50",
       createExpense: true,
       occurredOn: "2026-09-25",
@@ -815,7 +835,7 @@ try {
     recordPurchaseOperation(prisma, ownerA, {
       attemptKey,
       itemId: expenseItem.id,
-      quantityPurchased: expenseItem.quantityNeeded.toString(),
+      quantityPurchased: "4",
       actualUnitCost: "8.50",
       createExpense: true,
       occurredOn: "2026-09-25",

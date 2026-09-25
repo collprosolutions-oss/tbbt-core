@@ -10,9 +10,9 @@ import type { BusinessAccess } from "@/lib/access";
 import { createExpense } from "@/lib/expense-ops";
 import { requireMaterialsExpenseAccess } from "@/lib/materials/access";
 import {
-  claimMaterialAttempt,
   finishMaterialAttempt,
   normalizeMaterialAttemptKey,
+  withMaterialAttempt,
 } from "@/lib/materials/attempts";
 import { MaterialsError } from "@/lib/materials/errors";
 import { asMoneyNumber, decimalMoney, decimalQuantity, extendedCost } from "@/lib/materials/money";
@@ -140,28 +140,22 @@ export async function recordPurchaseOperation(
     await requireMaterialsExpenseAccess(db, access);
   }
 
-  const replay = async (tx: Db, attempt: { purchaseListItemId: string | null; expenseId: string | null }) => {
+  const replay = async (attempt: { purchaseListItemId: string | null }) => {
     if (!attempt.purchaseListItemId) {
       throw new MaterialsError("That purchase is already being recorded. Retry.");
     }
-    const item = access.assertOwned(
-      await tx.materialPurchaseListItem.findFirst({
+    return access.assertOwned(
+      await db.materialPurchaseListItem.findFirst({
         where: { id: attempt.purchaseListItemId, businessId: access.businessId },
         include: { expense: true },
       }),
     );
-    return item;
   };
 
-  return db.$transaction(async (tx) => {
-    const claim = await claimMaterialAttempt(tx, access, {
-      attemptKey,
-      kind: "RECORD_PURCHASE",
-    });
-    if (!claim.claimed) {
-      return replay(tx, claim.existing);
-    }
-
+  const outcome = await withMaterialAttempt(db, access, {
+    attemptKey,
+    kind: "RECORD_PURCHASE",
+  }, async (tx) => {
     const { existing, updated } = await applyPurchaseActuals(tx, access, {
       itemId: input.itemId,
       quantityPurchased: input.quantityPurchased,
@@ -206,6 +200,10 @@ export async function recordPurchaseOperation(
     });
     return updated;
   });
+  if (outcome.status === "replay") {
+    return replay(outcome.attempt);
+  }
+  return outcome.result;
 }
 
 export async function listMaterialActualCostLinks(

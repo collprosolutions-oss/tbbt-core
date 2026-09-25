@@ -15,9 +15,9 @@ import {
 } from "@/lib/material-takeoff/types";
 import { requireMaterialsEstimateAccess } from "@/lib/materials/access";
 import {
-  claimMaterialAttempt,
   finishMaterialAttempt,
   normalizeMaterialAttemptKey,
+  withMaterialAttempt,
 } from "@/lib/materials/attempts";
 import { findCatalogItemForTakeoff, upsertCatalogFromTakeoffItem } from "@/lib/materials/catalog";
 import { MaterialsError } from "@/lib/materials/errors";
@@ -163,18 +163,10 @@ export async function convertTakeoffToPurchaseList(
     return convertTakeoffInner(db, access, input);
   }
   const attemptKey = normalizeMaterialAttemptKey(input.attemptKey);
-  return db.$transaction(async (tx) => {
-    const claim = await claimMaterialAttempt(tx, access, {
-      attemptKey,
-      kind: "CONVERT_TAKEOFF",
-    });
-    if (!claim.claimed && claim.existing.purchaseListId) {
-      return {
-        purchaseListId: claim.existing.purchaseListId,
-        created: claim.existing.createdCount ?? 0,
-        alreadyPresent: 0,
-      };
-    }
+  const outcome = await withMaterialAttempt(db, access, {
+    attemptKey,
+    kind: "CONVERT_TAKEOFF",
+  }, async (tx) => {
     const result = await convertTakeoffInner(tx, access, input);
     await finishMaterialAttempt(tx, access, {
       attemptKey,
@@ -183,6 +175,17 @@ export async function convertTakeoffToPurchaseList(
     });
     return result;
   });
+  if (outcome.status === "replay") {
+    if (!outcome.attempt.purchaseListId) {
+      throw new MaterialsError("That takeoff conversion is already being recorded. Retry.");
+    }
+    return {
+      purchaseListId: outcome.attempt.purchaseListId,
+      created: outcome.attempt.createdCount ?? 0,
+      alreadyPresent: 0,
+    };
+  }
+  return outcome.result;
 }
 
 export async function linkDraftTakeoffItemToCatalog(

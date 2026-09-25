@@ -13,8 +13,8 @@ export {
   upsertCatalogFromTakeoffItem,
 } from "@/lib/materials/catalog";
 export {
-  claimMaterialAttempt,
   normalizeMaterialAttemptKey,
+  withMaterialAttempt,
 } from "@/lib/materials/attempts";
 export { linkPurchaseItemToExpense, listMaterialActualCostLinks, financialMaterialCost, recordPurchaseOperation } from "@/lib/materials/expense-link";
 export { MaterialsError, materialsErrorMessage } from "@/lib/materials/errors";

@@ -35,38 +35,6 @@ export async function findMaterialAttempt(
   });
 }
 
-export async function claimMaterialAttempt(
-  db: Db,
-  access: BusinessAccess,
-  input: { attemptKey: string; kind: MaterialAttemptKind },
-) {
-  const existing = await findMaterialAttempt(db, access, input.attemptKey);
-  if (existing) {
-    if (existing.kind !== input.kind) {
-      throw new MaterialsError("That retry token was already used for a different action.");
-    }
-    return { existing, claimed: false as const };
-  }
-  try {
-    const created = await db.materialOperationAttempt.create({
-      data: {
-        businessId: access.businessId,
-        attemptKey: input.attemptKey,
-        kind: input.kind,
-      },
-    });
-    return { existing: created, claimed: true as const };
-  } catch (error) {
-    if (!isPrismaUniqueViolation(error)) throw error;
-    const winner = await findMaterialAttempt(db, access, input.attemptKey);
-    if (!winner) throw error;
-    if (winner.kind !== input.kind) {
-      throw new MaterialsError("That retry token was already used for a different action.");
-    }
-    return { existing: winner, claimed: false as const };
-  }
-}
-
 export async function finishMaterialAttempt(
   db: Db,
   access: BusinessAccess,
@@ -94,4 +62,47 @@ export async function finishMaterialAttempt(
       createdCount: input.createdCount ?? undefined,
     },
   });
+}
+
+/**
+ * Run one logical browser attempt. Unique (businessId, attemptKey) is the
+ * lock. A unique violation is not queried inside the aborted transaction;
+ * the loser re-reads the winner after the transaction ends.
+ */
+export async function withMaterialAttempt<T>(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: { attemptKey: string; kind: MaterialAttemptKind },
+  work: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<{ status: "claimed"; result: T } | { status: "replay"; attempt: NonNullable<
+  Awaited<ReturnType<typeof findMaterialAttempt>>
+> }> {
+  const existing = await findMaterialAttempt(db, access, input.attemptKey);
+  if (existing) {
+    if (existing.kind !== input.kind) {
+      throw new MaterialsError("That retry token was already used for a different action.");
+    }
+    return { status: "replay", attempt: existing };
+  }
+  try {
+    const result = await db.$transaction(async (tx) => {
+      await tx.materialOperationAttempt.create({
+        data: {
+          businessId: access.businessId,
+          attemptKey: input.attemptKey,
+          kind: input.kind,
+        },
+      });
+      return work(tx);
+    });
+    return { status: "claimed", result };
+  } catch (error) {
+    if (!isPrismaUniqueViolation(error)) throw error;
+    const winner = await findMaterialAttempt(db, access, input.attemptKey);
+    if (!winner) throw error;
+    if (winner.kind !== input.kind) {
+      throw new MaterialsError("That retry token was already used for a different action.");
+    }
+    return { status: "replay", attempt: winner };
+  }
 }
