@@ -98,6 +98,7 @@
     "test:ai-intelligence": "node --experimental-strip-types scripts/check-ai-intelligence.mjs",
     "test:chief-of-staff": "node --experimental-strip-types scripts/check-chief-of-staff.mjs",
     "test:financial-specialist": "node --experimental-strip-types scripts/check-financial-specialist.mjs",
+    "test:growth-specialist": "node --experimental-strip-types scripts/check-growth-specialist.mjs",
     "test:automation": "node --experimental-strip-types scripts/check-automation.mjs",
     "test:multi-trade-core": "node --experimental-strip-types scripts/check-multi-trade-core.mjs",
     "test:plan-entitlements": "node --experimental-strip-types scripts/check-plan-entitlements.mjs",

@@ -9,6 +9,10 @@ import {
   EMPTY_FINANCIAL_SNAPSHOT,
   type FinancialTurnSnapshot,
 } from "@/lib/chief-of-staff/financial-snapshot";
+import {
+  EMPTY_GROWTH_SNAPSHOT,
+  type GrowthTurnSnapshot,
+} from "@/lib/chief-of-staff/growth-snapshot";
 import { loadWorkforceSnapshot, type WorkforceSnapshot } from "@/lib/workforce-data";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -21,6 +25,8 @@ export type CanonicalRecommendationCatalog = {
   states: Array<{ recommendationKey: string; status: string; evidenceKey?: string | null }>;
   workforceRecommendationKeys: string[];
   financial: FinancialTurnSnapshot;
+  /** Same GrowthSource already loaded for BSOS counts. Null when not entitled or on loader failure. */
+  growth: GrowthTurnSnapshot;
   /** Same snapshot already loaded for the catalog. Null only on loader failure. */
   workforceSnapshot: WorkforceSnapshot | null;
   workforceLoadError?: string;
@@ -77,6 +83,7 @@ export async function loadCanonicalRecommendationCatalog(
     states,
     workforceRecommendationKeys: workforce?.recommendations.map((item) => item.key) ?? [],
     financial: bundle.financial ?? EMPTY_FINANCIAL_SNAPSHOT,
+    growth: bundle.growth ?? EMPTY_GROWTH_SNAPSHOT,
     workforceSnapshot: workforce,
     workforceLoadError,
   };

@@ -4,6 +4,7 @@
  */
 import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { isSpecialistEnabled } from "@/lib/chief-of-staff/registry";
+import { isGrowthOwnedRecommendationKey } from "@/lib/chief-of-staff/growth-specialist";
 import { isFinancialOwnedRecommendationKey } from "@/lib/chief-of-staff/specialists/financial";
 import {
   MAX_RECURSION_DEPTH,
@@ -19,7 +20,7 @@ const WORKFORCE_QUESTION =
 const FINANCIAL_QUESTION =
   /\b(profit(?:ability)?|invoices?|receivables?|expenses?|margin|cash|revenue|payroll|payments?|unpaid|outstanding|collected|recurring (?:cost|expense)s?|labor (?:cost|burden)|(?:hourly )?wages?|pricing|target margin|estimate[- ]vs[- ]actual|customer concentration|losing money|making money)\b/i;
 const GROWTH_QUESTION =
-  /\b(recover(?:y|ed)?|reactivat(?:e|ion)|campaigns?|lost lead|growth|referrals?)\b/i;
+  /\b(leads?|lead funnel|lead source|pipeline|recover(?:y|ed)?(?: leads?)?|reactivat(?:e|ion)(?: customers?)?|campaigns?|marketing|attribution|(?:lead )?sources?|referrals?|reviews?|repeat customers?|customer retention|local (?:marketing|growth)|conversion|lost leads?|follow-up opportunities|growth)\b/i;
 const KNOWLEDGE_QUESTION =
   /\b(knowledge|launch|procedures?|experience candidates?|approval)\b/i;
 const MATERIALS_QUESTION = /\b(materials?|suppliers?|purchase orders?|inventory)\b/i;
@@ -85,6 +86,21 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     skipped.push({ id: "FINANCIAL", reason: "DISABLED" });
   }
 
+  const growthKeys = input.activeRecommendationKeys.filter((key) =>
+    isGrowthOwnedRecommendationKey(key),
+  );
+  const growthHint =
+    input.entityHints?.recommendationKey != null &&
+    isGrowthOwnedRecommendationKey(input.entityHints.recommendationKey);
+  const wantsGrowth =
+    GROWTH_QUESTION.test(question) || growthKeys.length > 0 || Boolean(growthHint);
+
+  if (wantsGrowth && isSpecialistEnabled("GROWTH")) {
+    selected.push("GROWTH");
+  } else if (GROWTH_QUESTION.test(question) && !isSpecialistEnabled("GROWTH")) {
+    skipped.push({ id: "GROWTH", reason: "DISABLED" });
+  }
+
   const isFocus = FOCUS_QUESTION.test(question);
   for (const hint of DISABLED_KEYWORD_HINTS) {
     if (!hint.pattern.test(question)) continue;
@@ -102,6 +118,9 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     }
     if ((financialKeys.length > 0 || Boolean(financialHint)) && isSpecialistEnabled("FINANCIAL")) {
       allowed.add("FINANCIAL");
+    }
+    if ((growthKeys.length > 0 || Boolean(growthHint)) && isSpecialistEnabled("GROWTH")) {
+      allowed.add("GROWTH");
     }
     for (const id of [...selected]) {
       if (!allowed.has(id)) {

@@ -1,11 +1,12 @@
 /**
  * Specialist context projection. ATTENTION still reads already-loaded
- * BSOS catalog facts. FINANCIAL reuses the turn snapshot. Deep WORKFORCE
- * explanation lives in workforce-specialist.ts and reuses the catalog snapshot.
- * Disabled specialists never deep-load.
+ * BSOS catalog facts. FINANCIAL and GROWTH reuse turn snapshots. Deep
+ * WORKFORCE explanation lives in workforce-specialist.ts and reuses the
+ * catalog snapshot. Disabled specialists never deep-load.
  */
 import type { BsosFacts, BsosRecommendation } from "@/lib/bsos";
 import { getSpecialistEntry, isSpecialistEnabled } from "@/lib/chief-of-staff/registry";
+import { projectGrowthContext } from "@/lib/chief-of-staff/growth-specialist";
 import { projectFinancialContext } from "@/lib/chief-of-staff/specialists/financial";
 import type { CosEntityHints, SpecialistContext, SpecialistId } from "@/lib/chief-of-staff/types";
 import type { CanonicalRecommendationCatalog } from "@/lib/chief-of-staff/recommendations";
@@ -31,7 +32,7 @@ export function loadFinancialDeep(): never {
 
 export function loadGrowthDeep(): never {
   recordDeepLoader("GROWTH");
-  throw new Error("Growth deep specialist is disabled in PR1.");
+  throw new Error("Growth specialist reuses the catalog snapshot and must not deep-load independently.");
 }
 
 export function loadKnowledgeLaunchDeep(): never {
@@ -55,7 +56,6 @@ export function loadBusinessProtectionDeep(): never {
 }
 
 const DISABLED_DEEP_LOADERS: Partial<Record<SpecialistId, () => never>> = {
-  GROWTH: loadGrowthDeep,
   KNOWLEDGE_LAUNCH: loadKnowledgeLaunchDeep,
   MATERIALS: loadMaterialsDeep,
   COMMUNICATIONS: loadCommunicationsDeep,
@@ -193,6 +193,14 @@ export function loadSpecialistContext(
       throw new Error("FINANCIAL context requires a loaded Reporting Insights snapshot.");
     }
     return projectFinancialContext(catalog, question, snapshot.intelligence, entityHints);
+  }
+
+  if (specialistId === "GROWTH") {
+    const snapshot = catalog.growth;
+    if (!snapshot?.entitled || snapshot.failed || !snapshot.source) {
+      throw new Error("GROWTH context requires a loaded Marketing Tools and Reporting Insights snapshot.");
+    }
+    return projectGrowthContext(catalog, question, snapshot.source, entityHints);
   }
 
   throw new Error(`${specialistId} has no context loader.`);

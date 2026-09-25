@@ -14,6 +14,10 @@ import {
   shouldInjectFinancialLoadFailure,
   type FinancialTurnSnapshot,
 } from "@/lib/chief-of-staff/financial-snapshot";
+import {
+  shouldInjectGrowthLoadFailure,
+  type GrowthTurnSnapshot,
+} from "@/lib/chief-of-staff/growth-snapshot";
 import { buildFinancialIntelligence } from "@/lib/financial-intelligence";
 import { loadFinancialSource } from "@/lib/financial-intelligence-data";
 import { invoiceBalanceDue } from "@/lib/financial-intelligence/collected-revenue";
@@ -35,6 +39,7 @@ import { buildReactivationCandidates, buildRecoveryQueue } from "@/lib/growth-en
 export type BsosFactsBundle = {
   facts: BsosFacts;
   financial: FinancialTurnSnapshot;
+  growth: GrowthTurnSnapshot;
 };
 
 export async function loadBsosFacts(
@@ -53,6 +58,20 @@ export async function loadBsosFactsBundle(
   const scope = { businessId } as const;
   const today = startOfDay(now);
   const weekEnd = addDays(today, 7);
+
+  const growthSourcePromise = (async () => {
+    try {
+      if (shouldInjectGrowthLoadFailure()) {
+        throw new Error("injected growth load failure");
+      }
+      return { source: await loadGrowthSource(prisma, businessId, now), error: null as string | null };
+    } catch (error) {
+      return {
+        source: null,
+        error: error instanceof Error ? error.message : "Growth source could not be loaded.",
+      };
+    }
+  })();
 
   const [
     unpaid,
@@ -73,7 +92,6 @@ export async function loadBsosFactsBundle(
     customers,
     jobs,
     invoices,
-    growthSource,
     launchSteps,
     knowledgeUnreviewed,
     experienceCandidates,
@@ -144,7 +162,6 @@ export async function loadBsosFactsBundle(
       where: { ...scope, status: "PAID" },
       select: { customerId: true },
     }),
-    loadGrowthSource(prisma, businessId, now),
     prisma.businessLaunchStep.count({
       where: { ...scope, status: { in: ["PENDING", "DEFERRED"] } },
     }),
@@ -214,7 +231,29 @@ export async function loadBsosFactsBundle(
   const unpaidRemaining = unpaid
     .map((invoice) => invoiceBalanceDue({ id: invoice.id, total: asNumber(invoice.total) }, paymentRows))
     .filter((amount) => amount > 0);
-  const hasInsights = await hasProductCapability(prisma, businessId, PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
+  const [hasInsights, hasMarketing, growthLoaded] = await Promise.all([
+    hasProductCapability(prisma, businessId, PRODUCT_CAPABILITIES.REPORTING_INSIGHTS),
+    hasProductCapability(prisma, businessId, PRODUCT_CAPABILITIES.MARKETING_TOOLS),
+    growthSourcePromise,
+  ]);
+  const missingGrowth: GrowthTurnSnapshot["missingCapabilities"] = [];
+  if (!hasMarketing) missingGrowth.push(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+  if (!hasInsights) missingGrowth.push(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
+  const growthEntitled = missingGrowth.length === 0;
+  const growth: GrowthTurnSnapshot = growthLoaded.error
+    ? {
+        entitled: growthEntitled,
+        missingCapabilities: missingGrowth,
+        source: null,
+        failed: true,
+        failureMessage: growthLoaded.error,
+      }
+    : {
+        entitled: growthEntitled,
+        missingCapabilities: missingGrowth,
+        source: growthEntitled ? growthLoaded.source : null,
+        failed: false,
+      };
 
   const baseFacts = {
     unpaidInvoices: {
@@ -234,10 +273,15 @@ export async function loadBsosFactsBundle(
     recurringExpenses: { count: 0, amount: 0 },
     paidRevenue: { amount: asNumber(paidInvoices._sum.total) },
     recordedExpenses: { amount: asNumber(expenses._sum.amount) },
-    growthRecoveryOpen: { count: buildRecoveryQueue(growthSource).length },
-    growthReactivationEligible: {
-      count: buildReactivationCandidates(growthSource).filter((row) => row.anyOutreachEligible).length,
-    },
+    ...(growthLoaded.source
+      ? {
+          growthRecoveryOpen: { count: buildRecoveryQueue(growthLoaded.source).length },
+          growthReactivationEligible: {
+            count: buildReactivationCandidates(growthLoaded.source).filter((row) => row.anyOutreachEligible)
+              .length,
+          },
+        }
+      : {}),
     unbilledCompletedJobs: {
       count: listCompletedUnbilledJobs({
         jobs: reportSource.jobs,
@@ -253,7 +297,7 @@ export async function loadBsosFactsBundle(
   };
 
   if (!hasInsights) {
-    return { facts: baseFacts, financial: EMPTY_FINANCIAL_SNAPSHOT };
+    return { facts: baseFacts, financial: EMPTY_FINANCIAL_SNAPSHOT, growth };
   }
 
   try {
@@ -304,6 +348,7 @@ export async function loadBsosFactsBundle(
         },
       },
       financial: { entitled: true, intelligence: intel, failed: false },
+      growth,
     };
   } catch (error) {
     return {
@@ -314,6 +359,7 @@ export async function loadBsosFactsBundle(
         failed: true,
         failureMessage: error instanceof Error ? error.message : "Financial Intelligence could not be loaded.",
       },
+      growth,
     };
   }
 }

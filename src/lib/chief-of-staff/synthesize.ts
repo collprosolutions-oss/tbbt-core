@@ -58,6 +58,14 @@ export function synthesizeCoachAnswer(input: {
     extraNotes.push(finding.summary);
   }
 
+  const growthFindings = usable
+    .filter((row) => row.specialistId === "GROWTH")
+    .flatMap((row) => row.findings)
+    .slice(0, 6);
+  for (const finding of growthFindings) {
+    extraNotes.push(finding.summary);
+  }
+
   if (failed.length > 0) {
     extraNotes.push(
       "Part of the recorded attention view could not be loaded. The answer uses only the surviving facts and does not invent substitutes.",

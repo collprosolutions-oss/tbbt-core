@@ -143,6 +143,7 @@ const specialistFiles = [
   readFileSync(new URL("../src/lib/chief-of-staff/conflicts.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/synthesize.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/specialists/financial.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/lib/chief-of-staff/growth-specialist.ts", import.meta.url), "utf8"),
 ];
 
 try {
@@ -253,14 +254,56 @@ try {
   });
   check("Focus question with an active workforce recommendation selects WORKFORCE", focusWorkforce.selectedIds.includes("WORKFORCE"));
 
+  const growthPlan = planSpecialists({
+    question: "Which lost leads can I recover and which customers can I reactivate?",
+    activeRecommendationKeys: [],
+  });
+  check("Growth question selects GROWTH", growthPlan.selectedIds.includes("GROWTH") && growthPlan.fanout <= 4);
+  check("Growth selection keeps recursion depth 1", growthPlan.recursionDepth === 1);
+
+  const financialNoGrowth = planSpecialists({
+    question: "How is my profit and margin this month?",
+    activeRecommendationKeys: [],
+  });
+  check("Unrelated financial question does not select GROWTH", !financialNoGrowth.selectedIds.includes("GROWTH"));
+
+  const focusGrowth = planSpecialists({
+    question: "What should I focus on this week?",
+    activeRecommendationKeys: ["growth-lost-lead-recovery"],
+  });
+  check("Focus question with an active Growth recommendation selects GROWTH", focusGrowth.selectedIds.includes("GROWTH"));
+
+  const genericFocusGrowth = planSpecialists({
+    question: "What should I focus on this week?",
+    activeRecommendationKeys: [],
+  });
+  check("Generic focus does not select GROWTH without Growth evidence", !genericFocusGrowth.selectedIds.includes("GROWTH"));
+
   const enabled = enabledSpecialistIds();
-  check("Enabled specialists are ATTENTION, WORKFORCE, and FINANCIAL", enabled.join(",") === "ATTENTION,WORKFORCE,FINANCIAL");
+  check(
+    "Enabled specialists are ATTENTION, WORKFORCE, FINANCIAL, and GROWTH",
+    enabled.join(",") === "ATTENTION,WORKFORCE,FINANCIAL,GROWTH",
+  );
   check("Registry keeps future specialist identities", SPECIALIST_IDS.includes("FINANCIAL") && SPECIALIST_IDS.includes("BUSINESS_PROTECTION"));
   check(
     "Deep WORKFORCE upgrades the existing specialist instead of adding another",
     registrySrc.includes('id: "WORKFORCE"') &&
       !registrySrc.includes('id: "WORKFORCE_DEEP"') &&
       (registrySrc.match(/id: "WORKFORCE"/g) || []).length === 1,
+  );
+  const growthSpecialistSrc = readFileSync(
+    new URL("../src/lib/chief-of-staff/growth-specialist.ts", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Deep GROWTH upgrades the existing specialist instead of adding another",
+    registrySrc.includes('id: "GROWTH"') &&
+      registrySrc.includes("enabled: true") &&
+      !registrySrc.includes('id: "GROWTH_DEEP"') &&
+      (registrySrc.match(/id: "GROWTH"/g) || []).length === 1 &&
+      !growthSpecialistSrc.includes("loadGrowthSource(") &&
+      !growthSpecialistSrc.includes("createGrowthActionRequest") &&
+      !growthSpecialistSrc.includes("growth-ops"),
   );
   check(
     "Canonical Workforce recommendation keys stay the original six",
