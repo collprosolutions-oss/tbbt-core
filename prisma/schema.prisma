@@ -624,8 +624,11 @@ model PhoneInteraction {
   customerId               String?
   threadId                 String?
   communicationId          String?
+  /// Concrete ServiceRequest FK. Validated server-side for tenant + customer.
   requestId                String?
+  /// Concrete Job FK. Validated server-side for tenant + customer.
   jobId                    String?
+  /// Concrete BusinessActionItem FK for the optional callback task.
   followUpActionItemId     String?
   /// MISSED_CALL | MANUAL_PHONE | INBOUND_CALL_EVENT
   kind                     String
@@ -649,11 +652,17 @@ model PhoneInteraction {
   communication CustomerCommunication? @relation(fields: [communicationId], references: [id], onDelete: SetNull)
   initiatedBy  Membership?          @relation("PhoneInteractionInitiator", fields: [initiatedByMembershipId], references: [id], onDelete: SetNull)
   receptionistEvents ReceptionistEvent[]
+  request            ServiceRequest?       @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  job                Job?                  @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  followUpActionItem BusinessActionItem?   @relation(fields: [followUpActionItemId], references: [id], onDelete: SetNull)
 
   @@unique([businessId, idempotencyKey])
   @@index([businessId])
   @@index([customerId])
   @@index([threadId])
+  @@index([requestId])
+  @@index([jobId])
+  @@index([followUpActionItemId])
 }
 
 /// Provider-neutral receptionist domain events. Voice readiness is honest:
@@ -843,6 +852,7 @@ model ServiceRequest {
   /// LOST, a follow-up date, or pipeline notes. New requests appear as
   /// New Lead without a row here.
   pipelineOpportunity PipelineOpportunity?
+  phoneInteractions   PhoneInteraction[]
 
   @@index([businessId])
   @@index([businessId, tradeCode])
@@ -1164,6 +1174,7 @@ model Job {
   reviews                 Review[]
   referralRequests        ReferralRequest[]
   customerFollowUps       CustomerFollowUp[]
+  phoneInteractions       PhoneInteraction[]
   recurrenceSource        Job?  @relation("JobRecurrenceSource", fields: [recurrenceSourceJobId], references: [id], onDelete: SetNull)
   recurrenceOccurrences   Job[] @relation("JobRecurrenceSource")
   workforceOutreachTasks  WorkforceOutreachTask[]
@@ -2485,6 +2496,7 @@ model BusinessActionItem {
   goal      BusinessGoal? @relation(fields: [goalId], references: [id], onDelete: SetNull)
   createdBy Membership? @relation("BusinessActionItemCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
   recommendationStates BsosRecommendationState[]
+  phoneCallbacks PhoneInteraction[]
 
   @@index([businessId])
   @@index([businessId, status])

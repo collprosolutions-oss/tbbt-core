@@ -702,6 +702,37 @@ check(
     communicationsDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "ReceptionistEvent"'),
 );
 
+const communicationsSchema = readFileSync(
+  new URL("../src/lib/communications/schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Communications department schema is migrate-only and does not run request-time DDL",
+  communicationsSchema.includes("prisma-migrate") &&
+    !communicationsSchema.includes("$executeRawUnsafe") &&
+    !communicationsSchema.includes("ensureCommunicationsSchema") &&
+    !communicationsSchema.includes("COMMUNICATIONS_DEPARTMENT_ENSURE_SQL") &&
+    !communicationsSchema.includes("CREATE TABLE IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run communications-department DDL",
+  !workspaceLoader.includes("ensureCommunicationsSchema") &&
+    !workspaceLoader.includes("COMMUNICATIONS_DEPARTMENT_ENSURE_SQL"),
+);
+
+const phoneInteractionRelationsMigration = readFileSync(
+  new URL("../prisma/migrations/20260925230000_phone_interaction_relations/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "PhoneInteraction relation migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(phoneInteractionRelationsMigration) &&
+    phoneInteractionRelationsMigration.includes("PhoneInteraction_requestId_fkey") &&
+    phoneInteractionRelationsMigration.includes("PhoneInteraction_jobId_fkey") &&
+    phoneInteractionRelationsMigration.includes("PhoneInteraction_followUpActionItemId_fkey") &&
+    phoneInteractionRelationsMigration.includes("IF NOT EXISTS"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

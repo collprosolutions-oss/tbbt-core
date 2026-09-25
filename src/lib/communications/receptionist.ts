@@ -4,7 +4,6 @@ import { destinationFingerprint, destinationLast4 } from "@/lib/customer-messagi
 import { isUsableNormalizedPhone, normalizePhone } from "@/lib/customer-identity";
 import { isCustomerMessagingConfigured } from "@/lib/customer-messaging/config";
 import { isEmailDeliveryConfigured } from "@/lib/settings";
-import { ensureCommunicationsSchema } from "@/lib/communications/schema";
 import {
   requireCommunicationsCapability,
   type CommunicationAccess,
@@ -54,7 +53,6 @@ export async function lookupCaller(
   access: CommunicationAccess,
   input: { phone?: string | null; browserBusinessId?: string | null },
 ) {
-  await ensureCommunicationsSchema(db);
   requireCommunicationsCapability(access);
   if (input.browserBusinessId && input.browserBusinessId !== access.businessId) {
     throw new ForbiddenError();
@@ -86,7 +84,6 @@ export async function recordInboundCallEvent(
     browserBusinessId?: string | null;
   },
 ) {
-  await ensureCommunicationsSchema(db);
   requireCommunicationsCapability(access);
   if (input.browserBusinessId && input.browserBusinessId !== access.businessId) {
     throw new ForbiddenError();
@@ -145,7 +142,6 @@ export async function proposeReceptionistAction(
     idempotencyKey: string;
   },
 ) {
-  await ensureCommunicationsSchema(db);
   requireCommunicationsCapability(access);
   if (input.customerId) {
     const owned = await db.customer.findFirst({

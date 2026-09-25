@@ -1,10 +1,18 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { logMissedCallAction, recordInboundCallEventAction } from "@/app/actions/communications";
+import {
+  logMissedCallAction,
+  recordInboundCallEventAction,
+  type CommunicationsActionState,
+} from "@/app/actions/communications";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  nextCommunicationAttemptId,
+  shouldRotateCommunicationSendAttemptId,
+} from "@/lib/communications/compose-flow";
 
 function newAttemptId() {
   return crypto.randomUUID();
@@ -16,7 +24,13 @@ export function MissedCallForm({
   customers: Array<{ id: string; name: string }>;
 }) {
   const [attemptId, setAttemptId] = useState(newAttemptId);
-  const [state, action] = useActionState(logMissedCallAction, {});
+  const [state, action] = useActionState(async (prev: CommunicationsActionState, formData: FormData) => {
+    const result = await logMissedCallAction(prev, formData);
+    setAttemptId((current) =>
+      nextCommunicationAttemptId(current, result, shouldRotateCommunicationSendAttemptId, newAttemptId),
+    );
+    return result;
+  }, {});
   const [inboundState, inboundAction] = useActionState(recordInboundCallEventAction, {});
 
   return (
@@ -25,7 +39,6 @@ export function MissedCallForm({
         action={async (formData) => {
           formData.set("attemptId", attemptId);
           await action(formData);
-          setAttemptId(newAttemptId());
         }}
         className="space-y-3"
       >

@@ -2,6 +2,8 @@ import type { CustomerMessagePurpose } from "@/lib/customer-messaging/types";
 import { PRODUCT_CAPABILITIES, type ProductCapabilityCode } from "@/lib/product-catalog/codes";
 import type { CommunicationComposeTemplate } from "@/lib/communications/types";
 
+/** Product-capability mapping for compose purposes. SMS add-on policy lives in sms-policy.ts. */
+
 export function productCapabilityForPurpose(
   purpose: CustomerMessagePurpose | string,
 ): ProductCapabilityCode {

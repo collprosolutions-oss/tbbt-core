@@ -71,6 +71,17 @@ const {
   runCommunicationAssist,
   setCommunicationEmailSender,
   VOICE_NOT_CONNECTED_REASON,
+  buildComposeFormFields,
+  composeIdempotencyKey,
+  nextCommunicationAttemptId,
+  resolveComposeSendIntent,
+  shouldRotateCommunicationAiAttemptId,
+  shouldRotateCommunicationSendAttemptId,
+  PHONE_LOG_CUSTOMER_CONFLICT_REASON,
+  RELATED_RECORD_NOT_OWNED_REASON,
+  RELATED_RECORD_WRONG_CUSTOMER_REASON,
+  SMS_COMMERCIAL_BOUNDARY,
+  productCapabilityForTemplate,
 } = await import("@/lib/communications");
 const {
   createFakeCustomerMessagingProvider,
@@ -170,10 +181,29 @@ try {
     new URL("../prisma/migrations/20260925220000_communications_department/migration.sql", import.meta.url),
     "utf8",
   );
+  const relationMigrationSrc = readFileSync(
+    new URL("../prisma/migrations/20260925230000_phone_interaction_relations/migration.sql", import.meta.url),
+    "utf8",
+  );
   const capabilitiesSrc = readFileSync(
     new URL("../src/lib/product-catalog/capabilities.ts", import.meta.url),
     "utf8",
   );
+  const schemaSrc = readFileSync(new URL("../src/lib/communications/schema.ts", import.meta.url), "utf8");
+  const composeFlowSrc = readFileSync(
+    new URL("../src/lib/communications/compose-flow.ts", import.meta.url),
+    "utf8",
+  );
+  const composeFormSrc = readFileSync(
+    new URL("../src/components/communications/compose-form.tsx", import.meta.url),
+    "utf8",
+  );
+  const dataSrc = readFileSync(new URL("../src/lib/communications/data.ts", import.meta.url), "utf8");
+  const smsPolicySrc = readFileSync(new URL("../src/lib/communications/sms-policy.ts", import.meta.url), "utf8");
+  const missedCallSrc = readFileSync(new URL("../src/lib/communications/missed-call.ts", import.meta.url), "utf8");
+  const timelineSrc = readFileSync(new URL("../src/lib/communications/timeline.ts", import.meta.url), "utf8");
+  const threadSrc = readFileSync(new URL("../src/lib/communications/thread.ts", import.meta.url), "utf8");
+  const relatedSrc = readFileSync(new URL("../src/lib/communications/related.ts", import.meta.url), "utf8");
 
   console.log("\nSTATIC — Department boundary and honesty");
   check(
@@ -203,15 +233,59 @@ try {
   check(
     "Ordinary email does not depend on the SMS add-on",
     consentSrc.includes("SMS_ADDON_NOT_ENTITLED_REASON") &&
-      engineSrc.includes("SMS_MESSAGING") &&
-      !engineSrc.includes("requireProductCapability(db, access.businessId, PRODUCT_CAPABILITIES.SMS_MESSAGING)") &&
-      capabilitiesSrc.includes("Ordinary email never depends on this add-on"),
+      smsPolicySrc.includes("ordinaryEmailRequiresSmsAddon: false") &&
+      SMS_COMMERCIAL_BOUNDARY.ordinaryEmailRequiresSmsAddon === false &&
+      SMS_COMMERCIAL_BOUNDARY.departmentSmsComposeRequiresSmsAddon === true &&
+      SMS_COMMERCIAL_BOUNDARY.publicPurchasable === false &&
+      capabilitiesSrc.includes("Ordinary email never requires this add-on"),
   );
   check(
     "Migration is additive",
     migrationSrc.includes("ADD COLUMN IF NOT EXISTS") &&
       migrationSrc.includes("CREATE TABLE IF NOT EXISTS") &&
-      !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migrationSrc),
+      !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migrationSrc) &&
+      !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(relationMigrationSrc),
+  );
+  const requestPathSources = [
+    schemaSrc,
+    engineSrc,
+    dataSrc,
+    timelineSrc,
+    missedCallSrc,
+    threadSrc,
+    receptionistSrc,
+    aiSrc,
+    actionSrc,
+    relatedSrc,
+  ];
+  check(
+    "Communications request paths do not run department DDL",
+    schemaSrc.includes("prisma-migrate") &&
+      requestPathSources.every(
+        (src) =>
+          !src.includes("$executeRawUnsafe") &&
+          !src.includes("CREATE TABLE IF NOT EXISTS") &&
+          !src.includes("ALTER TABLE") &&
+          !src.includes("ensureCommunicationsSchema"),
+      ),
+  );
+  check(
+    "Compose submit uses selected customer and template, not a hardcoded general send",
+    composeFormSrc.includes("buildComposeFormFields") &&
+      composeFormSrc.includes("setCustomerId") &&
+      composeFormSrc.includes("setTemplate") &&
+      !composeFormSrc.includes('name="template" value="general"') &&
+      !composeFormSrc.includes("hidden\" name=\"customerId\" value={selectedCustomerId") &&
+      !actionSrc.includes("purposeForComposeTemplate") &&
+      actionSrc.includes("resolveComposeSendIntent") &&
+      composeFlowSrc.includes("purposeForComposeTemplate"),
+  );
+  check(
+    "Attempt-id rotation uses the action result, not stale pre-dispatch state",
+    composeFormSrc.includes("nextCommunicationAttemptId") &&
+      composeFormSrc.includes("shouldRotateCommunicationSendAttemptId") &&
+      !composeFormSrc.includes("shouldRotateAiAttemptId(sendState)") &&
+      !composeFormSrc.includes("shouldRotateAiAttemptId(aiState)"),
   );
   check(
     "Automation catalog includes estimate no-action and owner follow-up",
@@ -494,6 +568,246 @@ try {
     idempotencyKey: missedKey,
   });
   check("Missed-call logging is idempotent", missedReuse.reused && missedReuse.phoneInteractionId === missed.phoneInteractionId);
+
+  const uniqueMissedSummary = `Unique missed ${randomUUID()}`;
+  const uniqueMissed = await recordMissedOrManualCall(prisma, tenantA.access, {
+    kind: "MISSED_CALL",
+    customerId: customerA.id,
+    summary: uniqueMissedSummary,
+    callbackNeeded: false,
+    idempotencyKey: `unique-missed-${randomUUID()}`,
+  });
+  const uniqueTimeline = await loadCustomerCommunicationTimeline(prisma, tenantA.access, {
+    customerId: customerA.id,
+  });
+  check(
+    "Missed-call timeline contains exactly one logical event",
+    uniqueMissed.ok &&
+      uniqueTimeline.filter(
+        (item) => item.body === uniqueMissedSummary || item.id === uniqueMissed.communicationId,
+      ).length === 1,
+  );
+
+  console.log("\nDB — Compose customer/template, attempt ids, related records, concurrency");
+  const customerBria = await prisma.customer.create({
+    data: {
+      businessId: tenantA.business.id,
+      name: "Bria",
+      email: "bria@example.com",
+      phone: "5550002222",
+      smsConsentStatus: "UNKNOWN",
+    },
+  });
+  const estimateBria = await prisma.estimate.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: customerBria.id,
+      status: "DRAFT",
+      publicToken: randomUUID(),
+    },
+  });
+  const requestA = await prisma.serviceRequest.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      summary: "A request",
+    },
+  });
+  const requestBria = await prisma.serviceRequest.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: customerBria.id,
+      summary: "Bria request",
+    },
+  });
+  const jobBria = await prisma.job.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: customerBria.id,
+      projectToken: randomUUID(),
+    },
+  });
+  const estimateB = await prisma.estimate.create({
+    data: {
+      businessId: tenantB.business.id,
+      customerId: customerB.id,
+      status: "SENT",
+      publicToken: randomUUID(),
+    },
+  });
+
+  const attemptKeep = randomUUID();
+  const failedRotate = nextCommunicationAttemptId(
+    attemptKeep,
+    { error: "The email provider failed." },
+    shouldRotateCommunicationSendAttemptId,
+    () => randomUUID(),
+  );
+  const successRotate = nextCommunicationAttemptId(
+    attemptKeep,
+    { message: "Message recorded." },
+    shouldRotateCommunicationSendAttemptId,
+    () => randomUUID(),
+  );
+  const pendingAi = nextCommunicationAttemptId(
+    attemptKeep,
+    { inProgress: true, message: "working" },
+    shouldRotateCommunicationAiAttemptId,
+    () => randomUUID(),
+  );
+  check(
+    "Failed send keeps the same attempt id; confirmed success rotates; in-progress AI does not",
+    failedRotate === attemptKeep && successRotate !== attemptKeep && pendingAi === attemptKeep,
+  );
+
+  const composeFields = buildComposeFormFields({
+    customerId: customerBria.id,
+    template: "estimate_follow_up",
+    channel: "EMAIL",
+    subject: "Estimate follow-up for Bria",
+    body: "Checking on Bria's estimate only.",
+    attemptId: randomUUID(),
+    relatedType: "ESTIMATE",
+    relatedId: estimateBria.id,
+  });
+  const composeIntent = resolveComposeSendIntent(composeFields);
+  const composed = composeIntent.ok
+    ? await composeCustomerCommunication(prisma, tenantA.access, {
+        customerId: composeIntent.intent.customerId,
+        channel: composeIntent.intent.channel,
+        purpose: composeIntent.intent.purpose,
+        subject: composeIntent.intent.subject,
+        body: composeIntent.intent.body,
+        relatedType: composeIntent.intent.relatedType,
+        relatedId: composeIntent.intent.relatedId,
+        idempotencyKey: composeIdempotencyKey(composeIntent.intent),
+      })
+    : { ok: false };
+  const briaRow = await prisma.customerCommunication.findFirst({
+    where: { businessId: tenantA.business.id, customerId: customerBria.id, purpose: "ESTIMATE_FOLLOW_UP" },
+  });
+  const aGotBriaCopy = await prisma.customerCommunication.findFirst({
+    where: {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      bodySnapshot: "Checking on Bria's estimate only.",
+    },
+  });
+  check(
+    "Selected Customer B + estimate_follow_up sends to B with ESTIMATE_FOLLOW_UP and ESTIMATES_INVOICES",
+    composeIntent.ok &&
+      composeIntent.intent.purpose === "ESTIMATE_FOLLOW_UP" &&
+      composeIntent.intent.requiredCapability === PRODUCT_CAPABILITIES.ESTIMATES_INVOICES &&
+      productCapabilityForTemplate("estimate_follow_up") === PRODUCT_CAPABILITIES.ESTIMATES_INVOICES &&
+      composed.ok &&
+      briaRow?.customerId === customerBria.id &&
+      briaRow?.purpose === "ESTIMATE_FOLLOW_UP" &&
+      !aGotBriaCopy,
+  );
+
+  const foreignRelated = await composeCustomerCommunication(prisma, tenantA.access, {
+    customerId: customerA.id,
+    channel: "EMAIL",
+    purpose: "ESTIMATE_FOLLOW_UP",
+    subject: "Foreign",
+    body: "Should not attach tenant B estimate.",
+    relatedType: "ESTIMATE",
+    relatedId: estimateB.id,
+    idempotencyKey: `foreign-related-${randomUUID()}`,
+  });
+  check(
+    "Foreign related record is rejected",
+    foreignRelated.ok === false && foreignRelated.failureReason === RELATED_RECORD_NOT_OWNED_REASON,
+  );
+
+  const wrongCustomerRelated = await composeCustomerCommunication(prisma, tenantA.access, {
+    customerId: customerA.id,
+    channel: "MANUAL",
+    purpose: "ESTIMATE_FOLLOW_UP",
+    subject: "Wrong customer",
+    body: "Should not attach Bria estimate to Ava.",
+    relatedType: "ESTIMATE",
+    relatedId: estimateBria.id,
+    idempotencyKey: `wrong-customer-related-${randomUUID()}`,
+  });
+  check(
+    "Same-tenant wrong-customer related record is rejected",
+    wrongCustomerRelated.ok === false &&
+      wrongCustomerRelated.failureReason === RELATED_RECORD_WRONG_CUSTOMER_REASON,
+  );
+
+  const explicitVsRequest = await recordMissedOrManualCall(prisma, tenantA.access, {
+    kind: "MISSED_CALL",
+    customerId: customerBria.id,
+    requestId: requestA.id,
+    summary: "Explicit customer conflicts with request.",
+    idempotencyKey: `conflict-request-${randomUUID()}`,
+  });
+  check(
+    "Explicit customer vs request customer is rejected",
+    explicitVsRequest.ok === false && explicitVsRequest.failureReason === PHONE_LOG_CUSTOMER_CONFLICT_REASON,
+  );
+
+  const requestVsJob = await recordMissedOrManualCall(prisma, tenantA.access, {
+    kind: "MISSED_CALL",
+    requestId: requestA.id,
+    jobId: jobBria.id,
+    summary: "Request and job resolve to different customers.",
+    idempotencyKey: `conflict-job-${randomUUID()}`,
+  });
+  check(
+    "Request and job customer conflict is rejected",
+    requestVsJob.ok === false && requestVsJob.failureReason === PHONE_LOG_CUSTOMER_CONFLICT_REASON,
+  );
+
+  const foreignRequest = await recordMissedOrManualCall(prisma, tenantA.access, {
+    kind: "MISSED_CALL",
+    customerId: customerA.id,
+    requestId: (
+      await prisma.serviceRequest.create({
+        data: { businessId: tenantB.business.id, customerId: customerB.id, summary: "B request" },
+      })
+    ).id,
+    summary: "Foreign request.",
+    idempotencyKey: `foreign-request-${randomUUID()}`,
+  });
+  check(
+    "Foreign requestId on a phone log is rejected",
+    foreignRequest.ok === false && foreignRequest.failureReason === RELATED_RECORD_NOT_OWNED_REASON,
+  );
+
+  const concurrentKey = `missed-concurrent-${randomUUID()}`;
+  const concurrentInput = {
+    kind: "MISSED_CALL",
+    customerId: customerA.id,
+    summary: "Concurrent missed-call claim.",
+    callbackNeeded: true,
+    requestId: requestA.id,
+    idempotencyKey: concurrentKey,
+  };
+  const [left, right] = await Promise.all([
+    recordMissedOrManualCall(prisma, tenantA.access, concurrentInput),
+    recordMissedOrManualCall(prisma, tenantA.access, concurrentInput),
+  ]);
+  const concurrentPhones = await prisma.phoneInteraction.findMany({
+    where: { businessId: tenantA.business.id, idempotencyKey: concurrentKey },
+  });
+  const concurrentComms = await prisma.customerCommunication.findMany({
+    where: { businessId: tenantA.business.id, idempotencyKey: `phone:MISSED_CALL:${concurrentKey}` },
+  });
+  const concurrentActions = await prisma.businessActionItem.findMany({
+    where: { businessId: tenantA.business.id, recommendationKey: `phone-callback:${concurrentKey}` },
+  });
+  check(
+    "Concurrent missed-call retries create one phone log, one communication, one callback task",
+    left.ok &&
+      right.ok &&
+      (left.reused || right.reused) &&
+      left.phoneInteractionId === right.phoneInteractionId &&
+      concurrentPhones.length === 1 &&
+      concurrentComms.length === 1 &&
+      concurrentActions.length === 1,
+  );
 
   console.log("\nDB — Tenant isolation and role checks");
   let memberDenied = false;

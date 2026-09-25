@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { randomUUID } from "node:crypto";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
@@ -10,14 +9,17 @@ import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import {
   composeCustomerCommunication,
   isCommunicationAiAction,
-  isCommunicationComposeTemplate,
-  purposeForComposeTemplate,
   recordInboundCallEvent,
   recordMissedOrManualCall,
-  renderCommunicationTemplate,
   runCommunicationAssist,
 } from "@/lib/communications";
-import { COMMUNICATION_RELATED_TYPES } from "@/lib/communications/types";
+import {
+  buildComposeFormFields,
+  composeIdempotencyKey,
+  resolveComposeSendIntent,
+} from "@/lib/communications/compose-flow";
+import { isCommunicationRelatedType } from "@/lib/communications/related";
+import { isCommunicationComposeTemplate } from "@/lib/communications/types";
 
 export type CommunicationsActionState = {
   error?: string;
@@ -44,74 +46,48 @@ export async function composeCommunicationAction(
   try {
     const access = await requireOperatingBusinessAccess();
     requireBusinessCapability(access, CAPABILITIES.MANAGE_COMMUNICATIONS);
-    const customerId = readString(formData, "customerId");
-    const channel = readString(formData, "channel");
     const template = readString(formData, "template");
-    const subject = readString(formData, "subject");
-    const body = readString(formData, "body");
-    const relatedTypeRaw = readString(formData, "relatedType");
-    const relatedType = (COMMUNICATION_RELATED_TYPES as readonly string[]).includes(relatedTypeRaw)
-      ? (relatedTypeRaw as (typeof COMMUNICATION_RELATED_TYPES)[number])
-      : null;
-    const relatedId = readString(formData, "relatedId");
-    const attemptId = readString(formData, "attemptId");
-    if (!customerId) return { error: "Choose a customer." };
     if (!isCommunicationComposeTemplate(template)) return { error: "Choose a message template." };
-    if (!isAiAttemptId(attemptId) && !attemptId) return { error: "Retry that send from the form." };
-    const purpose = purposeForComposeTemplate(template);
+    const resolved = resolveComposeSendIntent(
+      buildComposeFormFields({
+        customerId: readString(formData, "customerId"),
+        template,
+        channel: readString(formData, "channel"),
+        subject: readString(formData, "subject"),
+        body: readString(formData, "body"),
+        attemptId: readString(formData, "attemptId"),
+        relatedType: readString(formData, "relatedType"),
+        relatedId: readString(formData, "relatedId"),
+      }),
+    );
+    if (!resolved.ok) return { error: resolved.error };
+    const intent = resolved.intent;
     const result = await composeCustomerCommunication(prisma, access, {
-      customerId,
-      channel,
-      purpose,
-      subject,
-      body,
-      relatedType: relatedType || null,
-      relatedId: relatedId || null,
-      idempotencyKey: `comm:${channel}:${purpose}:${customerId}:${attemptId || randomUUID()}`,
+      customerId: intent.customerId,
+      channel: intent.channel,
+      purpose: intent.purpose,
+      subject: intent.subject,
+      body: intent.body,
+      relatedType: isCommunicationRelatedType(intent.relatedType) ? intent.relatedType : null,
+      relatedId: intent.relatedId,
+      idempotencyKey: composeIdempotencyKey(intent),
       browserBusinessId: readString(formData, "businessId") || null,
     });
-    revalidateCommunications(customerId);
+    revalidateCommunications(intent.customerId);
     if (!result.ok) {
       return { error: result.failureReason ?? "The message was not sent." };
     }
-    if (purpose === "OWNER_FOLLOW_UP") {
+    if (intent.purpose === "OWNER_FOLLOW_UP") {
       await emitAndProcessBusinessEvent(prisma, {
         businessId: access.businessId,
         type: "OWNER_FOLLOW_UP_CREATED",
         subjectType: "CUSTOMER",
-        subjectId: customerId,
-        payload: { customerId, communicationId: result.communicationId },
-        idempotencyKey: `OWNER_FOLLOW_UP_CREATED:${result.communicationId ?? attemptId}`,
+        subjectId: intent.customerId,
+        payload: { customerId: intent.customerId, communicationId: result.communicationId },
+        idempotencyKey: `OWNER_FOLLOW_UP_CREATED:${result.communicationId ?? intent.attemptId}`,
       });
     }
     return { message: result.reused ? "That send was already recorded." : "Message recorded." };
-  } catch {
-    return { error: "You do not have permission to do that." };
-  }
-}
-
-export async function applyCommunicationTemplateAction(
-  _prev: CommunicationsActionState,
-  formData: FormData,
-): Promise<CommunicationsActionState> {
-  try {
-    const access = await requireOperatingBusinessAccess();
-    requireBusinessCapability(access, CAPABILITIES.MANAGE_COMMUNICATIONS);
-    const template = readString(formData, "template");
-    const customerId = readString(formData, "customerId");
-    if (!isCommunicationComposeTemplate(template) || !customerId) {
-      return { error: "Choose a customer and template." };
-    }
-    const customer = await prisma.customer.findFirst({
-      where: { id: customerId, businessId: access.businessId },
-      select: { name: true },
-    });
-    if (!customer) return { error: "You do not have permission to do that." };
-    const rendered = renderCommunicationTemplate(template, {
-      businessName: access.workspace.business.name,
-      customerName: customer.name,
-    });
-    return { text: `${rendered.subject}\n\n${rendered.body}`, message: "Template filled. Review before sending." };
   } catch {
     return { error: "You do not have permission to do that." };
   }
@@ -124,6 +100,8 @@ export async function logMissedCallAction(
   try {
     const access = await requireOperatingBusinessAccess();
     requireBusinessCapability(access, CAPABILITIES.MANAGE_COMMUNICATIONS);
+    const attemptId = readString(formData, "attemptId");
+    if (!isAiAttemptId(attemptId)) return { error: "Retry that call log from the form." };
     const result = await recordMissedOrManualCall(prisma, access, {
       kind: readString(formData, "kind") === "MANUAL_PHONE" ? "MANUAL_PHONE" : "MISSED_CALL",
       customerId: readString(formData, "customerId") || null,
@@ -132,7 +110,7 @@ export async function logMissedCallAction(
       callbackNeeded: formData.get("callbackNeeded") === "on",
       requestId: readString(formData, "requestId") || null,
       jobId: readString(formData, "jobId") || null,
-      idempotencyKey: readString(formData, "attemptId") || randomUUID(),
+      idempotencyKey: attemptId,
       browserBusinessId: readString(formData, "businessId") || null,
     });
     revalidateCommunications(readString(formData, "customerId") || undefined);
@@ -169,11 +147,13 @@ export async function recordInboundCallEventAction(
   try {
     const access = await requireOperatingBusinessAccess();
     requireBusinessCapability(access, CAPABILITIES.MANAGE_COMMUNICATIONS);
+    const attemptId = readString(formData, "attemptId");
+    if (!isAiAttemptId(attemptId)) return { error: "Retry that inbound event from the form." };
     const result = await recordInboundCallEvent(prisma, access, {
       phone: readString(formData, "callerPhone") || null,
       customerId: readString(formData, "customerId") || null,
       summary: readString(formData, "summary") || null,
-      idempotencyKey: readString(formData, "attemptId") || randomUUID(),
+      idempotencyKey: attemptId,
       browserBusinessId: readString(formData, "businessId") || null,
     });
     revalidatePath("/communications");

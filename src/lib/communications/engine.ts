@@ -5,7 +5,8 @@ import {
   consentContextSnapshot,
 } from "@/lib/communications/consent";
 import { productCapabilityForPurpose } from "@/lib/communications/entitlements";
-import { ensureCommunicationsSchema } from "@/lib/communications/schema";
+import { assertRelatedRecordForCustomer } from "@/lib/communications/related";
+import { departmentSmsComposeRequiresAddon } from "@/lib/communications/sms-policy";
 import { getOrCreateCustomerThread, touchCommunicationThread } from "@/lib/communications/thread";
 import {
   isCommunicationChannel,
@@ -17,6 +18,7 @@ import {
   isAcceptedCustomerMessageStatus,
   isCustomerMessagePurpose,
   type CustomerMessagePurpose,
+  type CustomerMessageRelatedType,
   type CustomerMessageStatus,
 } from "@/lib/customer-messaging/types";
 import {
@@ -112,7 +114,6 @@ export async function composeCustomerCommunication(
     browserBusinessId?: string | null;
   },
 ): Promise<CommunicationSendResult> {
-  await ensureCommunicationsSchema(db);
   requireCommunicationsCapability(access);
 
   if (input.browserBusinessId && input.browserBusinessId !== access.businessId) {
@@ -151,11 +152,9 @@ export async function composeCustomerCommunication(
     );
   }
 
-  const smsEntitled = await hasProductCapability(
-    db,
-    access.businessId,
-    PRODUCT_CAPABILITIES.SMS_MESSAGING,
-  );
+  const smsEntitled = departmentSmsComposeRequiresAddon()
+    ? await hasProductCapability(db, access.businessId, PRODUCT_CAPABILITIES.SMS_MESSAGING)
+    : true;
 
   const customer = await db.customer.findFirst({
     where: { id: input.customerId, businessId: access.businessId },
@@ -170,6 +169,18 @@ export async function composeCustomerCommunication(
   if (!customer) {
     throw new ForbiddenError();
   }
+
+  const related = await assertRelatedRecordForCustomer(db, {
+    businessId: access.businessId,
+    customerId: customer.id,
+    relatedType: input.relatedType,
+    relatedId: input.relatedId,
+  });
+  if (!related.ok) {
+    return blocked(related.reason, input.channel as CommunicationChannel);
+  }
+  const relatedType = related.record?.relatedType ?? null;
+  const relatedId = related.record?.relatedId ?? null;
 
   const settings = await db.businessSettings.findFirst({
     where: { businessId: access.businessId },
@@ -210,8 +221,8 @@ export async function composeCustomerCommunication(
         subject: input.subject ?? null,
         body: input.body,
         idempotencyKey: input.idempotencyKey,
-        relatedType: input.relatedType ?? null,
-        relatedId: input.relatedId ?? null,
+        relatedType,
+        relatedId,
         status: "BLOCKED",
         provider: "none",
         failureReason: eligibility.ownerReason,
@@ -229,8 +240,8 @@ export async function composeCustomerCommunication(
       businessId: access.businessId,
       customerId: customer.id,
       purpose,
-      relatedType: input.relatedType ?? null,
-      relatedId: input.relatedId ?? null,
+      relatedType: relatedType as CustomerMessageRelatedType | null,
+      relatedId,
       idempotencyKey: input.idempotencyKey,
       body: input.body,
       initiatedByMembershipId: membershipIdOf(access),
@@ -275,8 +286,8 @@ export async function composeCustomerCommunication(
       subject: input.subject?.trim() || "Message from your contractor",
       body: input.body,
       idempotencyKey: input.idempotencyKey,
-      relatedType: input.relatedType ?? null,
-      relatedId: input.relatedId ?? null,
+      relatedType,
+      relatedId,
       eligibility,
     });
   }
@@ -290,8 +301,8 @@ export async function composeCustomerCommunication(
     subject: input.subject ?? null,
     body: input.body,
     idempotencyKey: input.idempotencyKey,
-    relatedType: input.relatedType ?? null,
-    relatedId: input.relatedId ?? null,
+    relatedType,
+    relatedId,
     status: input.channel === "PHONE" ? "NOT_SENT" : "SENT",
     provider: "manual",
     failureReason:

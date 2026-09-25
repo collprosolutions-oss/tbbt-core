@@ -3,7 +3,6 @@ import { ForbiddenError } from "@/lib/authorization";
 import { runAiTask, type AiServiceActor } from "@/lib/ai/service";
 import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { AI_NOT_CONNECTED_MESSAGE, type StructuredAiOutput } from "@/lib/ai/types";
-import { ensureCommunicationsSchema } from "@/lib/communications/schema";
 import {
   requireCommunicationsAiCapability,
   type CommunicationAccess,
@@ -80,7 +79,6 @@ export async function runCommunicationAssist(
     idempotencyKey: string;
   },
 ) {
-  await ensureCommunicationsSchema(db);
   requireCommunicationsAiCapability(access);
 
   const customer = await db.customer.findFirst({

@@ -13,9 +13,8 @@ export {
   parseCommunicationArea,
 } from "@/lib/communications/types";
 export {
-  COMMUNICATIONS_DEPARTMENT_ENSURE_SQL,
-  ensureCommunicationsSchema,
-  resetCommunicationsSchemaEnsure,
+  COMMUNICATIONS_DEPARTMENT_MIGRATIONS,
+  COMMUNICATIONS_DEPARTMENT_SCHEMA_SOURCE,
 } from "@/lib/communications/schema";
 export { getOrCreateCustomerThread } from "@/lib/communications/thread";
 export {
@@ -52,3 +51,24 @@ export {
 } from "@/lib/communications/entitlements";
 export { renderCommunicationTemplate } from "@/lib/communications/templates";
 export { loadCommunicationsWorkspace } from "@/lib/communications/data";
+export {
+  buildComposeFormFields,
+  composeIdempotencyKey,
+  nextCommunicationAttemptId,
+  resolveComposeSendIntent,
+  shouldRotateCommunicationAiAttemptId,
+  shouldRotateCommunicationSendAttemptId,
+} from "@/lib/communications/compose-flow";
+export {
+  PHONE_LOG_CUSTOMER_CONFLICT_REASON,
+  RELATED_RECORD_NOT_OWNED_REASON,
+  RELATED_RECORD_WRONG_CUSTOMER_REASON,
+  assertRelatedRecordForCustomer,
+  resolveRelatedCommunicationRecord,
+} from "@/lib/communications/related";
+export {
+  SMS_COMMERCIAL_BOUNDARY,
+  departmentSmsComposeRequiresAddon,
+  operationalSmsRequiresSmsAddon,
+  ordinaryEmailRequiresSmsAddon,
+} from "@/lib/communications/sms-policy";

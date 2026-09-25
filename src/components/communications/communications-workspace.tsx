@@ -18,9 +18,11 @@ type Source = Awaited<ReturnType<typeof loadCommunicationsWorkspace>>;
 export function CommunicationsWorkspace({
   area,
   source,
+  businessName,
 }: {
   area: CommunicationArea;
   source: Source;
+  businessName: string;
 }) {
   return (
     <div className="space-y-4">
@@ -56,12 +58,9 @@ export function CommunicationsWorkspace({
           </CardHeader>
           <CardContent>
             <ComposeCommunicationForm
-              customers={source.customers}
+              customers={source.composeCustomers}
               selectedCustomerId={source.selectedCustomerId}
-              emailReason={source.channelEligibility?.email.ownerReason ?? null}
-              smsReason={source.channelEligibility?.sms.ownerReason ?? null}
-              emailPermitted={Boolean(source.channelEligibility?.email.permitted && source.channelEligibility.email.available)}
-              smsPermitted={Boolean(source.channelEligibility?.sms.permitted && source.channelEligibility.sms.available)}
+              businessName={businessName}
             />
           </CardContent>
         </Card>

@@ -1,5 +1,4 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { ensureCommunicationsSchema } from "@/lib/communications/schema";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -11,7 +10,6 @@ export async function getOrCreateCustomerThread(
     title?: string | null;
   },
 ) {
-  await ensureCommunicationsSchema(db);
   const customer = await db.customer.findFirst({
     where: { id: input.customerId, businessId: input.businessId },
     select: { id: true, name: true },

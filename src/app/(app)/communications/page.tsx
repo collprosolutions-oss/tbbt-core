@@ -30,7 +30,11 @@ export default async function CommunicationsPage({
         title="Communications"
         description={`Customer and business communications for ${access.workspace.business.name}. Email, SMS, and manual phone live here. Voice is not connected.`}
       />
-      <CommunicationsWorkspace area={parseCommunicationArea(params.area)} source={source} />
+      <CommunicationsWorkspace
+        area={parseCommunicationArea(params.area)}
+        source={source}
+        businessName={access.workspace.business.name}
+      />
     </PageContainer>
   );
 }

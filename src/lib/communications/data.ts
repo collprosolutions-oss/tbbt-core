@@ -3,7 +3,6 @@ import { ensureDefaultAutomationRules } from "@/lib/automation/rules";
 import { evaluateComposeChannelEligibility } from "@/lib/communications/consent";
 import type { CommunicationAccess } from "@/lib/communications/engine";
 import { getReceptionistReadiness } from "@/lib/communications/receptionist";
-import { ensureCommunicationsSchema } from "@/lib/communications/schema";
 import { loadCustomerCommunicationTimeline } from "@/lib/communications/timeline";
 import { purposeForComposeTemplate } from "@/lib/communications/entitlements";
 import { hasProductCapability } from "@/lib/product-entitlements/enforce";
@@ -17,7 +16,6 @@ export async function loadCommunicationsWorkspace(
   access: CommunicationAccess,
   input?: { customerId?: string | null },
 ) {
-  await ensureCommunicationsSchema(db);
   await ensureDefaultAutomationRules(db, access.businessId);
 
   const [customers, inbox, phoneLogs, rules, smsEntitled] = await Promise.all([
@@ -72,6 +70,37 @@ export async function loadCommunicationsWorkspace(
     },
   });
 
+  const preferences = settings ?? DEFAULT_SETTINGS_PREFERENCES;
+  const composeCustomers = customers.map((row) => {
+    const email = evaluateComposeChannelEligibility({
+      businessId: access.businessId,
+      channel: "EMAIL",
+      email: row.email,
+      phone: row.phone,
+      smsConsentStatus: row.smsConsentStatus,
+      purpose: purposeForComposeTemplate("general"),
+      preferences,
+      smsEntitled,
+    });
+    const sms = evaluateComposeChannelEligibility({
+      businessId: access.businessId,
+      channel: "SMS",
+      email: row.email,
+      phone: row.phone,
+      smsConsentStatus: row.smsConsentStatus,
+      purpose: purposeForComposeTemplate("general"),
+      preferences,
+      smsEntitled,
+    });
+    return {
+      id: row.id,
+      name: row.name,
+      emailPermitted: Boolean(email.permitted && email.available),
+      smsPermitted: Boolean(sms.permitted && sms.available),
+      emailReason: email.ownerReason,
+      smsReason: sms.ownerReason,
+    };
+  });
   const channelEligibility = selected
     ? {
         email: evaluateComposeChannelEligibility({
@@ -81,7 +110,7 @@ export async function loadCommunicationsWorkspace(
           phone: selected.phone,
           smsConsentStatus: selected.smsConsentStatus,
           purpose: purposeForComposeTemplate("general"),
-          preferences: settings ?? DEFAULT_SETTINGS_PREFERENCES,
+          preferences,
           smsEntitled,
         }),
         sms: evaluateComposeChannelEligibility({
@@ -91,7 +120,7 @@ export async function loadCommunicationsWorkspace(
           phone: selected.phone,
           smsConsentStatus: selected.smsConsentStatus,
           purpose: purposeForComposeTemplate("general"),
-          preferences: settings ?? DEFAULT_SETTINGS_PREFERENCES,
+          preferences,
           smsEntitled,
         }),
         phone: evaluateComposeChannelEligibility({
@@ -101,7 +130,7 @@ export async function loadCommunicationsWorkspace(
           phone: selected.phone,
           smsConsentStatus: selected.smsConsentStatus,
           purpose: purposeForComposeTemplate("general"),
-          preferences: settings ?? DEFAULT_SETTINGS_PREFERENCES,
+          preferences,
           smsEntitled,
         }),
       }
@@ -109,6 +138,7 @@ export async function loadCommunicationsWorkspace(
 
   return {
     customers,
+    composeCustomers,
     selectedCustomerId: selected?.id ?? null,
     inbox,
     phoneLogs,

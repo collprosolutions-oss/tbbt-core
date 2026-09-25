@@ -1,7 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import { ForbiddenError } from "@/lib/authorization";
-import { ensureCommunicationsSchema } from "@/lib/communications/schema";
 import {
   requireCommunicationsCapability,
   type CommunicationAccess,
@@ -44,7 +43,6 @@ export async function loadCustomerCommunicationTimeline(
   access: CommunicationAccess,
   input: { customerId: string },
 ): Promise<CommunicationTimelineItem[]> {
-  await ensureCommunicationsSchema(db);
   requireCommunicationsCapability(access);
 
   const customer = await db.customer.findFirst({
@@ -203,10 +201,16 @@ export async function loadCustomerCommunicationTimeline(
       reusedSafe: true,
     });
   }
+  const recordedPhoneCommunicationIds = new Set(
+    records.filter((row) => row.channel === "PHONE").map((row) => row.id),
+  );
   for (const log of phoneLogs) {
+    if (log.communicationId && recordedPhoneCommunicationIds.has(log.communicationId)) {
+      continue;
+    }
     addProjected({
-      id: log.communicationId ?? `phone:${log.id}`,
-      source: log.communicationId ? "record" : "projected",
+      id: `phone:${log.id}`,
+      source: "projected",
       occurredAt: log.occurredAt.toISOString(),
       direction: log.direction === "OUTBOUND" ? "OUTBOUND" : "INBOUND",
       channel: "PHONE",
@@ -231,7 +235,6 @@ export async function listAssignedJobCommunications(
   db: Db,
   input: { businessId: string; membershipId: string; jobId: string },
 ) {
-  await ensureCommunicationsSchema(db);
   const job = await db.job.findFirst({
     where: {
       id: input.jobId,
@@ -265,7 +268,6 @@ export async function listBusinessCommunicationInbox(
   access: CommunicationAccess,
   take = 40,
 ) {
-  await ensureCommunicationsSchema(db);
   requireCommunicationsCapability(access);
   return db.customerCommunication.findMany({
     where: { businessId: access.businessId },

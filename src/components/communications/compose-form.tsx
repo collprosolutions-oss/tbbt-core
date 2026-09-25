@@ -1,8 +1,7 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useState } from "react";
 import {
-  applyCommunicationTemplateAction,
   communicationAssistAction,
   composeCommunicationAction,
   type CommunicationsActionState,
@@ -11,10 +10,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  buildComposeFormFields,
+  nextCommunicationAttemptId,
+  shouldRotateCommunicationAiAttemptId,
+  shouldRotateCommunicationSendAttemptId,
+} from "@/lib/communications/compose-flow";
+import { renderCommunicationTemplate } from "@/lib/communications/templates";
+import {
   COMMUNICATION_COMPOSE_TEMPLATES,
   type CommunicationComposeTemplate,
 } from "@/lib/communications/types";
-import { shouldRotateAiAttemptId } from "@/lib/ai/types";
 
 const TEMPLATE_LABELS: Record<CommunicationComposeTemplate, string> = {
   estimate_follow_up: "Estimate follow-up",
@@ -32,96 +37,124 @@ function newAttemptId() {
 export function ComposeCommunicationForm({
   customers,
   selectedCustomerId,
-  emailReason,
-  smsReason,
-  emailPermitted,
-  smsPermitted,
+  businessName,
 }: {
-  customers: Array<{ id: string; name: string }>;
+  customers: Array<{
+    id: string;
+    name: string;
+    emailPermitted: boolean;
+    smsPermitted: boolean;
+    emailReason: string | null;
+    smsReason: string | null;
+  }>;
   selectedCustomerId: string | null;
-  emailReason: string | null;
-  smsReason: string | null;
-  emailPermitted: boolean;
-  smsPermitted: boolean;
+  businessName: string;
 }) {
+  const [customerId, setCustomerId] = useState(selectedCustomerId ?? "");
+  const [template, setTemplate] = useState<CommunicationComposeTemplate>("general");
+  const [channel, setChannel] = useState("EMAIL");
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
   const [sendAttemptId, setSendAttemptId] = useState(newAttemptId);
   const [aiAttemptId, setAiAttemptId] = useState(newAttemptId);
-  const [sendState, sendAction] = useActionState(composeCommunicationAction, {});
-  const [templateState, templateAction] = useActionState(applyCommunicationTemplateAction, {});
-  const [aiState, aiAction] = useActionState(communicationAssistAction, {});
-  const [body, setBody] = useState("");
-  const [subject, setSubject] = useState("");
 
-  const suggestion = aiState.text ?? templateState.text ?? "";
-  const filled = useMemo(() => {
-    if (!suggestion) return { subject: "", body: "" };
-    const [first, ...rest] = suggestion.split("\n\n");
-    if (rest.length === 0) return { subject, body: suggestion };
-    return { subject: first, body: rest.join("\n\n") };
-  }, [suggestion, subject]);
+  const [sendState, sendAction] = useActionState(async (prev: CommunicationsActionState, formData: FormData) => {
+    const result = await composeCommunicationAction(prev, formData);
+    setSendAttemptId((current) =>
+      nextCommunicationAttemptId(current, result, shouldRotateCommunicationSendAttemptId, newAttemptId),
+    );
+    return result;
+  }, {});
+  const [aiState, aiAction] = useActionState(async (prev: CommunicationsActionState, formData: FormData) => {
+    const result = await communicationAssistAction(prev, formData);
+    setAiAttemptId((current) =>
+      nextCommunicationAttemptId(current, result, shouldRotateCommunicationAiAttemptId, newAttemptId),
+    );
+    return result;
+  }, {});
+
+  const selected = customers.find((row) => row.id === customerId) ?? null;
+
+  function applyTemplate() {
+    if (!selected) return;
+    const rendered = renderCommunicationTemplate(template, {
+      businessName,
+      customerName: selected.name,
+    });
+    setSubject(rendered.subject);
+    setBody(rendered.body);
+  }
 
   return (
     <div className="space-y-4">
-      <form action={templateAction} className="grid gap-3 md:grid-cols-2">
-        <div className="space-y-1">
-          <Label htmlFor="compose-customer">Customer</Label>
-          <select
-            id="compose-customer"
-            name="customerId"
-            defaultValue={selectedCustomerId ?? ""}
-            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
-            required
-          >
-            <option value="">Select a customer</option>
-            {customers.map((customer) => (
-              <option key={customer.id} value={customer.id}>
-                {customer.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="compose-template">Template</Label>
-          <select
-            id="compose-template"
-            name="template"
-            defaultValue="general"
-            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
-          >
-            {COMMUNICATION_COMPOSE_TEMPLATES.map((template) => (
-              <option key={template} value={template}>
-                {TEMPLATE_LABELS[template]}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="md:col-span-2">
-          <Button type="submit" size="sm" variant="outline">
-            Fill template
-          </Button>
-        </div>
-      </form>
-
       <form
         action={async (formData) => {
-          formData.set("body", body || filled.body);
-          formData.set("subject", subject || filled.subject);
-          formData.set("attemptId", sendAttemptId);
+          const fields = buildComposeFormFields({
+            customerId,
+            template,
+            channel,
+            subject,
+            body,
+            attemptId: sendAttemptId,
+            relatedType: String(formData.get("relatedType") ?? ""),
+            relatedId: String(formData.get("relatedId") ?? ""),
+          });
+          formData.set("customerId", fields.customerId);
+          formData.set("template", fields.template);
+          formData.set("channel", fields.channel);
+          formData.set("subject", fields.subject);
+          formData.set("body", fields.body);
+          formData.set("attemptId", fields.attemptId);
           await sendAction(formData);
-          if (shouldRotateAiAttemptId(sendState)) {
-            setSendAttemptId(newAttemptId());
-          }
         }}
         className="space-y-3"
       >
-        <input type="hidden" name="customerId" value={selectedCustomerId ?? ""} />
-        <input type="hidden" name="template" value="general" />
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-1">
+            <Label htmlFor="compose-customer">Customer</Label>
+            <select
+              id="compose-customer"
+              name="customerId"
+              value={customerId}
+              onChange={(event) => setCustomerId(event.target.value)}
+              className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+              required
+            >
+              <option value="">Select a customer</option>
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="compose-template">Template</Label>
+            <select
+              id="compose-template"
+              name="template"
+              value={template}
+              onChange={(event) => setTemplate(event.target.value as CommunicationComposeTemplate)}
+              className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+            >
+              {COMMUNICATION_COMPOSE_TEMPLATES.map((item) => (
+                <option key={item} value={item}>
+                  {TEMPLATE_LABELS[item]}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <Button type="button" size="sm" variant="outline" onClick={applyTemplate}>
+          Fill template
+        </Button>
         <div className="space-y-1">
           <Label htmlFor="compose-channel">Channel</Label>
           <select
             id="compose-channel"
             name="channel"
-            defaultValue="EMAIL"
+            value={channel}
+            onChange={(event) => setChannel(event.target.value)}
             className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
           >
             <option value="EMAIL">Email</option>
@@ -130,14 +163,16 @@ export function ComposeCommunicationForm({
           </select>
         </div>
         <p className="text-xs text-muted-foreground">
-          Email {emailPermitted ? "is available" : `unavailable: ${emailReason}`}. SMS{" "}
-          {smsPermitted ? "is available" : `unavailable: ${smsReason}`}.
+          Email {selected?.emailPermitted ? "is available" : `unavailable: ${selected?.emailReason ?? "choose a customer"}`}.
+          SMS {selected?.smsPermitted ? "is available" : `unavailable: ${selected?.smsReason ?? "choose a customer"}`}.
+          Server re-evaluates eligibility at send time.
         </p>
         <div className="space-y-1">
           <Label htmlFor="compose-subject">Subject</Label>
           <Input
             id="compose-subject"
-            value={subject || filled.subject}
+            name="subject"
+            value={subject}
             onChange={(event) => setSubject(event.target.value)}
           />
         </div>
@@ -145,12 +180,14 @@ export function ComposeCommunicationForm({
           <Label htmlFor="compose-body">Message</Label>
           <textarea
             id="compose-body"
-            value={body || filled.body}
+            name="body"
+            value={body}
             onChange={(event) => setBody(event.target.value)}
             rows={6}
             className="w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm"
           />
         </div>
+        <input type="hidden" name="attemptId" value={sendAttemptId} />
         <Button type="submit" size="sm">
           Send or record
         </Button>
@@ -160,16 +197,14 @@ export function ComposeCommunicationForm({
 
       <form
         action={async (formData) => {
+          formData.set("customerId", customerId);
           formData.set("attemptId", aiAttemptId);
-          formData.set("original", body || filled.body);
+          formData.set("original", body);
+          formData.set("context", body);
           await aiAction(formData);
-          if (shouldRotateAiAttemptId(aiState)) {
-            setAiAttemptId(newAttemptId());
-          }
         }}
         className="space-y-2 rounded-md border border-border/70 p-3"
       >
-        <input type="hidden" name="customerId" value={selectedCustomerId ?? ""} />
         <p className="text-sm font-medium">AI assist (suggestion only)</p>
         <select
           name="aiAction"
@@ -181,7 +216,8 @@ export function ComposeCommunicationForm({
           <option value="summarize">Summarize conversation</option>
           <option value="follow_up">Suggest follow-up</option>
         </select>
-        <input type="hidden" name="context" value={body || filled.body} />
+        <input type="hidden" name="customerId" value={customerId} />
+        <input type="hidden" name="attemptId" value={aiAttemptId} />
         <Button type="submit" size="sm" variant="outline">
           Generate suggestion
         </Button>
