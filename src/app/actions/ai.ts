@@ -49,6 +49,10 @@ export async function askBsosCoachAction(
       attemptId,
       conversationId: readString(formData, "conversationId") || undefined,
       browserBusinessId: readString(formData, "businessId") || undefined,
+      entityHints: {
+        jobId: readString(formData, "jobId") || undefined,
+        recommendationKey: readString(formData, "recommendationKey") || undefined,
+      },
     });
     if (result.error) return { error: result.error };
     if (result.inProgress) {

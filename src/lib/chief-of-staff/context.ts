@@ -1,11 +1,13 @@
 /**
- * Specialist context projection. Reads already-loaded catalog facts.
- * Disabled specialists never deep-load. FINANCIAL reuses the turn snapshot.
+ * Specialist context projection. ATTENTION still reads already-loaded
+ * BSOS catalog facts. FINANCIAL reuses the turn snapshot. Deep WORKFORCE
+ * explanation lives in workforce-specialist.ts and reuses the catalog snapshot.
+ * Disabled specialists never deep-load.
  */
 import type { BsosFacts, BsosRecommendation } from "@/lib/bsos";
 import { getSpecialistEntry, isSpecialistEnabled } from "@/lib/chief-of-staff/registry";
 import { projectFinancialContext } from "@/lib/chief-of-staff/specialists/financial";
-import type { SpecialistContext, SpecialistId } from "@/lib/chief-of-staff/types";
+import type { CosEntityHints, SpecialistContext, SpecialistId } from "@/lib/chief-of-staff/types";
 import type { CanonicalRecommendationCatalog } from "@/lib/chief-of-staff/recommendations";
 
 const deepLoaderInvocations: SpecialistId[] = [];
@@ -126,7 +128,7 @@ export function loadSpecialistContext(
   specialistId: SpecialistId,
   catalog: CanonicalRecommendationCatalog,
   question: string,
-  entityHints?: { jobId?: string; recommendationKey?: string },
+  entityHints?: CosEntityHints,
 ): SpecialistContext {
   const entry = getSpecialistEntry(specialistId);
   if (!entry.enabled || !isSpecialistEnabled(specialistId)) {

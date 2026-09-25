@@ -67,6 +67,14 @@ export function synthesizeCoachAnswer(input: {
     if (row.limitation) extraNotes.push(row.limitation);
   }
 
+  for (const row of usable) {
+    if (row.specialistId !== "WORKFORCE") continue;
+    for (const finding of row.findings.slice(0, 8)) {
+      extraNotes.push(finding.summary);
+    }
+    if (row.limitation) extraNotes.push(row.limitation);
+  }
+
   const text = oneVoice(
     [grounded.output.text, ...extraNotes].filter(Boolean).join(" "),
   );

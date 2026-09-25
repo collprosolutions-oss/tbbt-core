@@ -9,7 +9,7 @@ import {
   EMPTY_FINANCIAL_SNAPSHOT,
   type FinancialTurnSnapshot,
 } from "@/lib/chief-of-staff/financial-snapshot";
-import { loadWorkforceSnapshot } from "@/lib/workforce-data";
+import { loadWorkforceSnapshot, type WorkforceSnapshot } from "@/lib/workforce-data";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -21,6 +21,9 @@ export type CanonicalRecommendationCatalog = {
   states: Array<{ recommendationKey: string; status: string; evidenceKey?: string | null }>;
   workforceRecommendationKeys: string[];
   financial: FinancialTurnSnapshot;
+  /** Same snapshot already loaded for the catalog. Null only on loader failure. */
+  workforceSnapshot: WorkforceSnapshot | null;
+  workforceLoadError?: string;
 };
 
 export function mergeCatalogRecommendations(
@@ -35,14 +38,36 @@ export function mergeCatalogRecommendations(
 export async function loadCanonicalRecommendationCatalog(
   db: Db,
   businessId: string,
+  options?: { failWorkforceSnapshot?: boolean },
 ): Promise<CanonicalRecommendationCatalog> {
   const { loadBsosFactsBundle } = await import("@/lib/bsos-data");
-  const [bundle, workforce, states] = await Promise.all([
+  const [bundleResult, workforceResult, statesResult] = await Promise.allSettled([
     loadBsosFactsBundle(db as PrismaClient, businessId),
-    loadWorkforceSnapshot(db, businessId),
+    options?.failWorkforceSnapshot
+      ? Promise.reject(new Error("injected workforce snapshot failure"))
+      : loadWorkforceSnapshot(db, businessId),
     db.bsosRecommendationState.findMany({ where: { businessId } }),
   ]);
-  const recommendations = mergeCatalogRecommendations(bundle.facts, workforce.recommendations);
+  if (bundleResult.status === "rejected") {
+    throw bundleResult.reason instanceof Error
+      ? bundleResult.reason
+      : new Error("Business Health facts could not be loaded.");
+  }
+  if (statesResult.status === "rejected") {
+    throw statesResult.reason instanceof Error
+      ? statesResult.reason
+      : new Error("Recommendation states could not be loaded.");
+  }
+  const bundle = bundleResult.value;
+  const states = statesResult.value;
+  const workforce = workforceResult.status === "fulfilled" ? workforceResult.value : null;
+  const workforceLoadError =
+    workforceResult.status === "rejected"
+      ? workforceResult.reason instanceof Error
+        ? workforceResult.reason.message
+        : "Workforce snapshot could not be loaded."
+      : undefined;
+  const recommendations = mergeCatalogRecommendations(bundle.facts, workforce?.recommendations ?? []);
   const { active, history } = partitionRecommendations(recommendations, states);
   return {
     facts: bundle.facts,
@@ -50,8 +75,10 @@ export async function loadCanonicalRecommendationCatalog(
     activeRecommendations: active,
     historyRecommendations: history,
     states,
-    workforceRecommendationKeys: workforce.recommendations.map((item) => item.key),
+    workforceRecommendationKeys: workforce?.recommendations.map((item) => item.key) ?? [],
     financial: bundle.financial ?? EMPTY_FINANCIAL_SNAPSHOT,
+    workforceSnapshot: workforce,
+    workforceLoadError,
   };
 }
 

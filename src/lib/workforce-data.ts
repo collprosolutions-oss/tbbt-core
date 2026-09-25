@@ -240,7 +240,105 @@ export async function loadWorkforceTimeZone(db: WorkforceClient, businessId: str
   return resolveBusinessTimeZone(business);
 }
 
+let workforceSnapshotLoadCount = 0;
+let workforceScopedLookupCount = 0;
+
+export function resetWorkforceSnapshotLoadCount() {
+  workforceSnapshotLoadCount = 0;
+}
+
+export function getWorkforceSnapshotLoadCount() {
+  return workforceSnapshotLoadCount;
+}
+
+export function resetWorkforceScopedLookupCount() {
+  workforceScopedLookupCount = 0;
+}
+
+export function getWorkforceScopedLookupCount() {
+  return workforceScopedLookupCount;
+}
+
+export type OwnedWorkforceJob = {
+  id: string;
+  businessId: string;
+  scheduledAt: Date | null;
+  scheduledDurationMinutes: number | null;
+  pickupDurationMinutes: number | null;
+  assignedMembershipId: string | null;
+  status: string | null;
+  serviceIntent: string | null;
+  recurrenceCadence: string | null;
+  recurrenceStatus: string | null;
+  nextOccurrenceAt: Date | null;
+  recurrenceSourceJobId: string | null;
+  requiredSkills: string | null;
+  requiredProgression: string | null;
+  customerName: string | null;
+};
+
+const OWNED_JOB_SELECT = {
+  ...CAPACITY_JOB_SELECT,
+  businessId: true,
+} as const;
+
+/**
+ * Narrow tenant-owned job lookup. Not a second Workforce snapshot.
+ * Used only when an authorized target is missing from the already-loaded
+ * 21-day snapshot window.
+ */
+export async function loadOwnedWorkforceJob(
+  db: WorkforceClient,
+  businessId: string,
+  jobId: string,
+): Promise<OwnedWorkforceJob | null> {
+  workforceScopedLookupCount += 1;
+  const row = await db.job.findFirst({
+    where: { id: jobId, businessId },
+    select: OWNED_JOB_SELECT,
+  });
+  if (!row) return null;
+  return {
+    id: row.id,
+    businessId: row.businessId,
+    scheduledAt: row.scheduledAt,
+    scheduledDurationMinutes: row.scheduledDurationMinutes,
+    pickupDurationMinutes: row.pickupDurationMinutes ?? null,
+    assignedMembershipId: row.assignedMembershipId ?? null,
+    status: row.status ?? null,
+    serviceIntent: row.serviceIntent ?? null,
+    recurrenceCadence: row.recurrenceCadence ?? null,
+    recurrenceStatus: row.recurrenceStatus ?? null,
+    nextOccurrenceAt: row.nextOccurrenceAt ?? null,
+    recurrenceSourceJobId: row.recurrenceSourceJobId ?? null,
+    requiredSkills: row.requiredSkills ?? null,
+    requiredProgression: row.requiredProgression ?? null,
+    customerName: row.customer?.name ?? null,
+  };
+}
+
+export function ownedJobToConflictJob(job: OwnedWorkforceJob): ConflictJob | null {
+  if (!job.scheduledAt) return null;
+  return {
+    id: job.id,
+    scheduledAt: job.scheduledAt,
+    scheduledDurationMinutes: job.scheduledDurationMinutes,
+    pickupDurationMinutes: job.pickupDurationMinutes,
+    assignedMembershipId: job.assignedMembershipId,
+    status: job.status,
+    serviceIntent: job.serviceIntent,
+    recurrenceCadence: job.recurrenceCadence,
+    recurrenceStatus: job.recurrenceStatus,
+    nextOccurrenceAt: job.nextOccurrenceAt,
+    recurrenceSourceJobId: job.recurrenceSourceJobId,
+    customerName: job.customerName,
+    requiredSkills: parseSkillList(job.requiredSkills),
+    requiredProgression: job.requiredProgression ?? "",
+  };
+}
+
 export async function loadWorkforceSnapshot(db: WorkforceClient, businessId: string, now = new Date()) {
+  workforceSnapshotLoadCount += 1;
   const timeZone = await loadWorkforceTimeZone(db, businessId);
   const range = { start: startOfZonedDay(now, timeZone), end: addZonedCalendarDays(startOfZonedDay(now, timeZone), 21, timeZone) };
   const [settings, policy, members, bench, jobs] = await Promise.all([
@@ -270,6 +368,8 @@ export async function loadWorkforceSnapshot(db: WorkforceClient, businessId: str
   });
   return { settings, policy, members, bench, jobs, week, conflicts, recommendations, timeZone };
 }
+
+export type WorkforceSnapshot = Awaited<ReturnType<typeof loadWorkforceSnapshot>>;
 
 export async function loadJobAssignmentSuggestions(
   db: WorkforceClient,

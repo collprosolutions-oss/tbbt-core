@@ -15,7 +15,7 @@ import {
 } from "@/lib/chief-of-staff/types";
 
 const WORKFORCE_QUESTION =
-  /\b(schedule|staff(?:ing)?|workers?|workforce|capacity|assign(?:ment|ed)?|overload(?:ed)?|unassigned|crew|bench|double[- ]?book(?:ed|ing)?|skill match)\b/i;
+  /\b(schedule|calendar|crew|workers?|employee|helper|staff(?:ing)?|workforce|capacity|availability|available (?:workers?|staff|capacity|days?|slots?|helpers?)|assign(?:ment|ed|ees?)?|unassigned|double[- ]?book(?:ed|ing)?|overload(?:ed)?|skills?|qualified|qualification|progression|today|tomorrow|next week|this week(?:'s)? (?:schedule|calendar|crew|staff|capacity)|fill[- ]?in|bench|who can|who should i send|skill match)\b/i;
 const FINANCIAL_QUESTION =
   /\b(profit(?:ability)?|invoices?|receivables?|expenses?|margin|cash|revenue|payroll|payments?|unpaid|outstanding|collected|recurring (?:cost|expense)s?|labor (?:cost|burden)|(?:hourly )?wages?|pricing|target margin|estimate[- ]vs[- ]actual|customer concentration|losing money|making money)\b/i;
 const GROWTH_QUESTION =
@@ -52,7 +52,17 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     key.startsWith(WORKFORCE_REC_PREFIX),
   );
   const workforceHint = input.entityHints?.recommendationKey?.startsWith(WORKFORCE_REC_PREFIX);
-  const wantsWorkforce = WORKFORCE_QUESTION.test(question) || Boolean(workforceHint);
+  const otherDepartment =
+    FINANCIAL_QUESTION.test(question) ||
+    GROWTH_QUESTION.test(question) ||
+    KNOWLEDGE_QUESTION.test(question) ||
+    MATERIALS_QUESTION.test(question) ||
+    COMMUNICATIONS_QUESTION.test(question) ||
+    PROTECTION_QUESTION.test(question);
+  const wantsWorkforce =
+    WORKFORCE_QUESTION.test(question) ||
+    Boolean(workforceHint) ||
+    (workforceKeys.length > 0 && !otherDepartment);
 
   if (wantsWorkforce && isSpecialistEnabled("WORKFORCE")) {
     selected.push("WORKFORCE");
@@ -87,7 +97,7 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
 
   if (isFocus) {
     const allowed = new Set<SpecialistId>(["ATTENTION"]);
-    if (wantsWorkforce && (workforceKeys.length > 0 || Boolean(workforceHint))) {
+    if (wantsWorkforce) {
       allowed.add("WORKFORCE");
     }
     if ((financialKeys.length > 0 || Boolean(financialHint)) && isSpecialistEnabled("FINANCIAL")) {

@@ -15,9 +15,13 @@ function newAttemptId() {
 export function BsosCoachForm({
   conversationId,
   aiLabel,
+  jobId,
+  recommendationKey,
 }: {
   conversationId?: string;
   aiLabel: string;
+  jobId?: string;
+  recommendationKey?: string;
 }) {
   const [state, action, pending] = useActionState(askBsosCoachAction, initial);
   const [attemptId, setAttemptId] = useState(newAttemptId);
@@ -31,6 +35,8 @@ export function BsosCoachForm({
   return (
     <form action={action} className="space-y-2">
       {conversationId ? <input type="hidden" name="conversationId" value={conversationId} /> : null}
+      {jobId ? <input type="hidden" name="jobId" value={jobId} /> : null}
+      {recommendationKey ? <input type="hidden" name="recommendationKey" value={recommendationKey} /> : null}
       <input type="hidden" name="attemptId" value={attemptId} />
       <p className="text-xs text-muted-foreground">AI status: {aiLabel}. Answers cite recorded TBBT facts only.</p>
       <textarea
