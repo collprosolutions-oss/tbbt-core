@@ -89,6 +89,7 @@ export {
   FORMULA_KINDS,
   computeFormula,
   defaultFormulaRates,
+  defaultTierRateKey,
   emptyFormulaInputs,
   formulaQuantityKeys,
   formulaRateKeys,

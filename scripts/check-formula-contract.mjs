@@ -21,10 +21,13 @@ const {
   TRADE_FORMULA_CALCULATOR_ID,
   computeFormula,
   definitionFromFormulaBinding,
+  findCatalogCalculatorDefinition,
   formulaBindingForTemplateKey,
   formulaBindingForTitle,
+  formulaRateKeys,
   hoursFromProduction,
   normalizeFormulaContract,
+  persistableFormulaRates,
   startingCalculatorSnapshot,
 } = await import("@/lib/estimate-calculators");
 const { hoursFromCalculatorSnapshot } = await import(
@@ -32,6 +35,7 @@ const { hoursFromCalculatorSnapshot } = await import(
 );
 const {
   catalogCalculatorDefinition,
+  joinCatalogDescription,
   joinLineDescription,
   lineCalculatorSnapshot,
 } = await import("@/lib/estimate-line-scope");
@@ -91,11 +95,16 @@ const tierFormula = normalizeFormulaContract({
   unit: "sf",
   quantityKey: "quantity",
   tiers: [
-    { upTo: 100, rate: 12 },
-    { upTo: 300, rate: 10 },
-    { upTo: null, rate: 8 },
+    { upTo: 100, rateKey: "tierRate1" },
+    { upTo: 300, rateKey: "tierRate2" },
+    { upTo: null, rateKey: "tierRate3" },
   ],
 });
+const tierRates = {
+  tierRate1: 12,
+  tierRate2: 10,
+  tierRate3: 8,
+};
 const basePlusFormula = normalizeFormulaContract({
   kind: "base_plus_components",
   unit: "each",
@@ -107,6 +116,7 @@ const basePlusFormula = normalizeFormulaContract({
       quantityKey: "openingCount",
       rateKey: "openingRate",
       unit: "opening",
+      productionPerHourKey: "openingsPerHour",
     },
     {
       key: "trim",
@@ -114,6 +124,7 @@ const basePlusFormula = normalizeFormulaContract({
       quantityKey: "trimLf",
       rateKey: "trimRate",
       unit: "lf",
+      productionPerHourKey: "trimLfPerHour",
     },
   ],
 });
@@ -178,6 +189,10 @@ check(
   countResult.recommendedAmount === 225 && countResult.estimatedLaborHours === 1.5,
 );
 
+function breakdownTotal(result) {
+  return result.lines.reduce((sum, line) => sum + line.amount, 0);
+}
+
 const minimumLow = computeFormula(
   minimumFormula,
   { quantity: 1 },
@@ -188,16 +203,85 @@ const minimumHigh = computeFormula(
   { quantity: 4 },
   { unitRate: 40, minimumAmount: 100, unitsPerHour: 2 },
 );
+const minimumZero = computeFormula(
+  minimumFormula,
+  { quantity: 0 },
+  { unitRate: 40, minimumAmount: 100, unitsPerHour: 2 },
+);
 check("minimum_plus_unit floors at the minimum", minimumLow.recommendedAmount === 100);
 check("minimum_plus_unit uses quantity × rate above the minimum", minimumHigh.recommendedAmount === 160);
+check(
+  "below-minimum breakdown is production + adjustment and sums to recommended",
+  minimumLow.lines.find((line) => line.key === "production")?.amount === 40 &&
+    minimumLow.lines.find((line) => line.key === "minimum_adjustment")?.amount === 60 &&
+    breakdownTotal(minimumLow) === minimumLow.recommendedAmount &&
+    breakdownTotal(minimumLow) === 100,
+);
+check(
+  "above-minimum breakdown is production only and sums to recommended",
+  minimumHigh.lines.find((line) => line.key === "production")?.amount === 160 &&
+    minimumHigh.lines.every((line) => line.key !== "minimum_adjustment") &&
+    breakdownTotal(minimumHigh) === minimumHigh.recommendedAmount &&
+    breakdownTotal(minimumHigh) === 160,
+);
+check(
+  "zero quantity does not produce a billable recommendation",
+  minimumZero.recommendedAmount === 0 &&
+    breakdownTotal(minimumZero) === 0 &&
+    minimumZero.lines.every((line) => line.key !== "minimum_adjustment"),
+);
 
-const tierLow = computeFormula(tierFormula, { quantity: 80 }, {});
-const tierMid = computeFormula(tierFormula, { quantity: 200 }, {});
-const tierHigh = computeFormula(tierFormula, { quantity: 400 }, {});
-check("tier_table uses the first matching tier", tierLow.recommendedAmount === 960);
-check("tier_table steps to the next tier", tierMid.recommendedAmount === 2000);
-check("tier_table uses the open-ended tier", tierHigh.recommendedAmount === 3200);
+const persistedTierRates = persistableFormulaRates(tierFormula, tierRates);
+check(
+  "formulaRateKeys includes deterministic tier rate keys",
+  formulaRateKeys(tierFormula).join(",") ===
+    "unitsPerHour,tierRate1,tierRate2,tierRate3",
+);
+check(
+  "persistableFormulaRates persists tier rates, not job quantities",
+  persistedTierRates.tierRate1 === 12 &&
+    persistedTierRates.tierRate2 === 10 &&
+    persistedTierRates.tierRate3 === 8 &&
+    !Object.hasOwn(persistedTierRates, "quantity"),
+);
+check(
+  "tier_table structure stores rate keys, not dollar rates",
+  tierFormula.tiers.every((tier) => typeof tier.rateKey === "string" && !Object.hasOwn(tier, "rate")) &&
+    !JSON.stringify(tierFormula).includes('"rate":12') &&
+    !JSON.stringify(tierFormula).includes('"rate":10'),
+);
+const formSource = readRepo("src/components/estimates/formula-calculator-form.tsx");
+check(
+  "FormulaCalculatorForm exposes tier rates as editable owner rates",
+  formSource.includes("tier.rateKey") &&
+    formSource.includes("Open-ended tier rate") &&
+    !formSource.includes("formatMoney(tier.rate)") &&
+    !/tier\.rate[^\w]/.test(formSource),
+);
+
+const tierLow = computeFormula(tierFormula, { quantity: 80 }, tierRates);
+const tierMid = computeFormula(tierFormula, { quantity: 200 }, tierRates);
+const tierHigh = computeFormula(tierFormula, { quantity: 400 }, tierRates);
+check("tier_table uses the first matching tier from rates", tierLow.recommendedAmount === 960);
+check("tier_table steps to the next tier from rates", tierMid.recommendedAmount === 2000);
+check("tier_table uses the open-ended tier from rates", tierHigh.recommendedAmount === 3200);
 check("tier_table without production rate does not invent hours", tierLow.estimatedLaborHours == null);
+
+const legacyTier = normalizeFormulaContract({
+  kind: "tier_table",
+  unit: "sf",
+  tiers: [
+    { upTo: 100, rate: 12 },
+    { upTo: 300, rate: 10 },
+    { upTo: null, rate: 8 },
+  ],
+});
+check(
+  "legacy inline tier dollars migrate into persistable rates",
+  persistableFormulaRates(legacyTier, {}).tierRate1 === 12 &&
+    persistableFormulaRates(legacyTier, {}).tierRate3 === 8 &&
+    computeFormula(legacyTier, { quantity: 80 }, {}).recommendedAmount === 960,
+);
 
 const basePlus = computeFormula(
   basePlusFormula,
@@ -207,6 +291,53 @@ const basePlus = computeFormula(
 check(
   "base_plus_components is base + component totals",
   basePlus.recommendedAmount === 310 && basePlus.estimatedLaborHours == null,
+);
+const mixedHours = computeFormula(
+  basePlusFormula,
+  { openingCount: 10, trimLf: 20 },
+  {
+    baseAmount: 0,
+    openingRate: 40,
+    trimRate: 8,
+    openingsPerHour: 10,
+    trimLfPerHour: 20,
+  },
+);
+check(
+  "base_plus_components sums independent component hours, never mixed units",
+  mixedHours.recommendedAmount === 560 &&
+    mixedHours.estimatedLaborHours === 2,
+);
+const missingComponentRate = computeFormula(
+  basePlusFormula,
+  { openingCount: 10, trimLf: 20 },
+  {
+    baseAmount: 0,
+    openingRate: 40,
+    trimRate: 8,
+    openingsPerHour: 10,
+  },
+);
+check(
+  "missing component production rate makes hours null",
+  missingComponentRate.recommendedAmount === 560 &&
+    missingComponentRate.estimatedLaborHours == null,
+);
+const baseBlocksHours = computeFormula(
+  basePlusFormula,
+  { openingCount: 10, trimLf: 20 },
+  {
+    baseAmount: 150,
+    openingRate: 40,
+    trimRate: 8,
+    openingsPerHour: 10,
+    trimLfPerHour: 20,
+  },
+);
+check(
+  "non-zero unmodeled base charge does not claim complete labor hours",
+  baseBlocksHours.recommendedAmount === 710 &&
+    baseBlocksHours.estimatedLaborHours == null,
 );
 
 const starting = computeFormula(startingFormula, {}, { startingAmount: 125 });
@@ -386,6 +517,61 @@ check(
   startFromDefinition?.inputs.quantity === 0 &&
     startFromDefinition?.rates.unitRate === 80 &&
     startFromDefinition?.formula?.kind === "count",
+);
+
+const ownerEditedDefinition = {
+  ...encodedDefinition,
+  rates: { unitRate: 91, unitsPerHour: 3 },
+};
+const ownerCatalogDescription = joinCatalogDescription(
+  "Owner-reviewed knob replacement.",
+  ownerEditedDefinition,
+);
+const ownerFound = findCatalogCalculatorDefinition(
+  [
+    {
+      id: "svc-owner-knob",
+      name: doorKnob.name,
+      description: ownerCatalogDescription,
+    },
+  ],
+  { catalogItemId: "svc-owner-knob", title: doorKnob.name },
+);
+check(
+  "Saved catalog definition with owner-edited rates wins over factory/title default",
+  ownerFound?.rates.unitRate === 91 &&
+    ownerFound?.rates.unitsPerHour === 3 &&
+    formulaBindingForTitle(doorKnob.name)?.defaultRates.unitRate === 75,
+);
+check(
+  "findCatalogCalculatorDefinition does not manufacture registry defaults",
+  findCatalogCalculatorDefinition(
+    [
+      {
+        id: "svc-plain-knob",
+        name: doorKnob.name,
+        description: "Replace a standard door knob.",
+      },
+    ],
+    { catalogItemId: "svc-plain-knob", title: doorKnob.name },
+  ) == null,
+);
+const ownerLines = buildEstimateLineCreatesFromRequestItems("biz-a", [
+  {
+    quantity: 1,
+    serviceCatalogItem: {
+      id: "svc-owner-knob",
+      name: doorKnob.name,
+      pricingMode: "STARTING_AT",
+      price: 75,
+      description: ownerCatalogDescription,
+    },
+  },
+]);
+check(
+  "Request draft prefers encoded owner rates over title factory default",
+  lineCalculatorSnapshot(ownerLines[0].description)?.rates.unitRate === 91 &&
+    lineCalculatorSnapshot(ownerLines[0].description)?.rates.unitsPerHour === 3,
 );
 
 console.log("\nUNIT — Hours snapshot vs LABOR quantity");
@@ -634,6 +820,84 @@ try {
     nextSnapshot?.rates.unitRate === 80 &&
       nextSnapshot?.inputs.quantity === 0 &&
       nextSnapshot?.appliedAmount == null,
+  );
+
+  const tierCatalog = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: business.id,
+      tradeCode: "HANDYMAN",
+      name: "Tiered Patching",
+      description: "Tiered patching.",
+      pricingMode: "VARIABLE",
+      price: new Prisma.Decimal(12),
+      category: "Drywall",
+      active: true,
+    },
+  });
+  const tierEstimate = await prisma.estimate.create({
+    data: {
+      businessId: business.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const tierStart = startingCalculatorSnapshot({
+    title: "Tiered Patching",
+    definition: {
+      calculatorId: TRADE_FORMULA_CALCULATOR_ID,
+      formula: tierFormula,
+      rates: tierRates,
+    },
+  });
+  const tierLine = await prisma.lineItem.create({
+    data: {
+      businessId: business.id,
+      estimateId: tierEstimate.id,
+      serviceCatalogItemId: tierCatalog.id,
+      description: joinLineDescription("Tiered Patching", null, tierStart),
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(0),
+      total: new Prisma.Decimal(0),
+      type: "LABOR",
+    },
+  });
+  const appliedTier = await applyDraftEstimateCalculator(prisma, owner, {
+    estimateId: tierEstimate.id,
+    lineItemId: tierLine.id,
+    inputs: { quantity: 80 },
+    rates: { ...tierRates, unitsPerHour: 40, tierRate1: 14 },
+  });
+  const appliedTierSnapshot = lineCalculatorSnapshot(appliedTier.description);
+  check(
+    "Estimate snapshot freezes the tier rates actually used",
+    appliedTierSnapshot?.rates.tierRate1 === 14 &&
+      appliedTierSnapshot?.rates.tierRate2 === 10 &&
+      appliedTierSnapshot?.inputs.quantity === 80 &&
+      appliedTier.unitPrice.toString() === "1120" &&
+      appliedTier.quantity.toString() === "1",
+  );
+
+  await persistDraftEstimateCalculatorRates(prisma, owner, {
+    estimateId: tierEstimate.id,
+    lineItemId: tierLine.id,
+    rates: { ...tierRates, unitsPerHour: 40, tierRate1: 14 },
+    inputs: { quantity: 80 },
+  });
+  const persistedTierCatalog = await prisma.serviceCatalogItem.findFirst({
+    where: { id: tierCatalog.id },
+  });
+  const persistedTierDefinition = catalogCalculatorDefinition(
+    persistedTierCatalog.description,
+  );
+  check(
+    "Saved tier rates persist through the calculator-rate path without job quantities",
+    persistedTierDefinition?.formula?.kind === "tier_table" &&
+      persistedTierDefinition?.formula?.tiers?.[0]?.rateKey === "tierRate1" &&
+      !Object.hasOwn(persistedTierDefinition?.formula?.tiers?.[0] ?? {}, "rate") &&
+      persistedTierDefinition?.rates.tierRate1 === 14 &&
+      persistedTierDefinition?.rates.tierRate2 === 10 &&
+      !JSON.stringify(persistedTierDefinition ?? {}).includes('"quantity":80') &&
+      persistedTierCatalog.price.toString() === "12",
   );
 } finally {
   await prisma.$disconnect();

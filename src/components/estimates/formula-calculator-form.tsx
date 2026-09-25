@@ -17,7 +17,6 @@ import {
   type FormulaContract,
 } from "@/lib/estimate-calculators/formula-contract";
 import { PRODUCTION_UNIT_LABELS } from "@/lib/estimate-calculators/unit-registry";
-import { formatMoney } from "@/lib/format";
 
 const initialState: EstimateActionState = {};
 
@@ -126,16 +125,6 @@ export function FormulaCalculatorForm({
           />
         </div>
       ))}
-      {formula.kind === "tier_table" && formula.tiers?.length ? (
-        <ul className="text-xs text-muted-foreground">
-          {formula.tiers.map((tier, index) => (
-            <li key={`${tier.upTo ?? "open"}-${index}`}>
-              {tier.upTo == null ? "Above last tier" : `Up to ${tier.upTo}`} ·{" "}
-              {formatMoney(tier.rate)} / {PRODUCTION_UNIT_LABELS[formula.unit]}
-            </li>
-          ))}
-        </ul>
-      ) : null}
       <CalculatorBreakdown result={preview} />
       {preview.estimatedLaborHours != null ? (
         <p className="text-xs text-muted-foreground">
@@ -182,10 +171,11 @@ function quantityFields(formula: FormulaContract) {
 
 function rateFields(formula: FormulaContract) {
   const fields: Array<{ key: string; label: string }> = [];
+  const unit = PRODUCTION_UNIT_LABELS[formula.unit];
   if (formula.rateKey) {
     fields.push({
       key: formula.rateKey,
-      label: `Rate / ${PRODUCTION_UNIT_LABELS[formula.unit]}`,
+      label: `Rate / ${unit}`,
     });
   }
   if (formula.minimumKey) fields.push({ key: formula.minimumKey, label: "Minimum" });
@@ -194,7 +184,16 @@ function rateFields(formula: FormulaContract) {
   if (formula.productionPerHourKey) {
     fields.push({
       key: formula.productionPerHourKey,
-      label: `${PRODUCTION_UNIT_LABELS[formula.unit]} per hour (internal)`,
+      label: `${unit} per hour (internal)`,
+    });
+  }
+  for (const tier of formula.tiers ?? []) {
+    fields.push({
+      key: tier.rateKey,
+      label:
+        tier.upTo == null
+          ? `Open-ended tier rate / ${unit}`
+          : `Up to ${tier.upTo} rate / ${unit}`,
     });
   }
   for (const component of formula.components ?? []) {
@@ -202,6 +201,12 @@ function rateFields(formula: FormulaContract) {
       key: component.rateKey,
       label: `${component.name} rate`,
     });
+    if (component.productionPerHourKey) {
+      fields.push({
+        key: component.productionPerHourKey,
+        label: `${component.name} per hour (internal)`,
+      });
+    }
   }
   return fields;
 }

@@ -48,8 +48,14 @@ export type FormulaComponent = {
 
 export type FormulaTier = {
   upTo: number | null;
-  rate: number;
+  rateKey: string;
 };
+
+const legacyTierRatesByFormula = new WeakMap<FormulaContract, Record<string, number>>();
+
+export function defaultTierRateKey(index: number) {
+  return `tierRate${index + 1}`;
+}
 
 export type FormulaContract = {
   version: 1;
@@ -150,27 +156,55 @@ export function normalizeFormulaComponent(raw: unknown): FormulaComponent | null
   };
 }
 
-export function normalizeFormulaTiers(raw: unknown): FormulaTier[] {
+type ParsedFormulaTier = {
+  upTo: number | null;
+  rateKey?: string;
+  legacyRate?: number;
+};
+
+function parseFormulaTiers(raw: unknown): ParsedFormulaTier[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const row = item as Record<string, unknown>;
-      const rate = moneyOr(row.rate, null);
-      if (rate == null) return null;
+      const rateKey = optionalKey(row.rateKey);
+      const legacyRate = moneyOr(row.rate, null) ?? undefined;
+      if (!rateKey && legacyRate == null) return null;
       const upTo =
         row.upTo == null || row.upTo === ""
           ? null
           : moneyOr(row.upTo, null);
       if (row.upTo != null && row.upTo !== "" && upTo == null) return null;
-      return { upTo, rate };
+      return {
+        upTo,
+        ...(rateKey ? { rateKey } : {}),
+        ...(legacyRate != null ? { legacyRate } : {}),
+      };
     })
-    .filter((item): item is FormulaTier => item != null)
+    .filter((item): item is ParsedFormulaTier => item != null)
     .sort((left, right) => {
       if (left.upTo == null) return 1;
       if (right.upTo == null) return -1;
       return left.upTo - right.upTo;
     });
+}
+
+export function normalizeFormulaTiers(raw: unknown): FormulaTier[] {
+  return parseFormulaTiers(raw).map((tier, index) => ({
+    upTo: tier.upTo,
+    rateKey: optionalKey(tier.rateKey) ?? defaultTierRateKey(index),
+  }));
+}
+
+function extractLegacyTierRates(raw: unknown): Record<string, number> {
+  const extracted: Record<string, number> = {};
+  parseFormulaTiers(raw).forEach((tier, index) => {
+    if (tier.legacyRate == null) return;
+    const rateKey = optionalKey(tier.rateKey) ?? defaultTierRateKey(index);
+    extracted[rateKey] = tier.legacyRate;
+  });
+  return extracted;
 }
 
 export function normalizeFormulaContract(raw: unknown): FormulaContract | null {
@@ -190,7 +224,7 @@ export function normalizeFormulaContract(raw: unknown): FormulaContract | null {
   if (item.kind === "tier_table" && (!tiers || tiers.length === 0)) {
     return null;
   }
-  return {
+  const formula: FormulaContract = {
     version: FORMULA_CONTRACT_VERSION,
     kind: item.kind,
     unit: normalizeProductionUnit(item.unit, defaultUnitForKind(item.kind)),
@@ -224,6 +258,11 @@ export function normalizeFormulaContract(raw: unknown): FormulaContract | null {
     ...(components && components.length > 0 ? { components } : {}),
     ...(tiers && tiers.length > 0 ? { tiers } : {}),
   };
+  const legacyTierRates = extractLegacyTierRates(item.tiers);
+  if (Object.keys(legacyTierRates).length > 0) {
+    legacyTierRatesByFormula.set(formula, legacyTierRates);
+  }
+  return formula;
 }
 
 export function formulaQuantityKeys(formula: FormulaContract) {
@@ -248,6 +287,9 @@ export function formulaRateKeys(formula: FormulaContract) {
     keys.add(component.rateKey);
     if (component.productionPerHourKey) keys.add(component.productionPerHourKey);
   }
+  for (const tier of formula.tiers ?? []) {
+    keys.add(tier.rateKey);
+  }
   return [...keys];
 }
 
@@ -263,11 +305,9 @@ export function persistableFormulaRates(
   rates?: Record<string, unknown> | null,
 ) {
   const next: Record<string, number> = {};
+  const legacyTierRates = legacyTierRatesByFormula.get(formula) ?? {};
   for (const key of formulaRateKeys(formula)) {
-    next[key] = moneyOr(rates?.[key], 0) ?? 0;
-  }
-  if (formula.kind === "tier_table") {
-    // Tier rates live on the formula structure, not as job quantities.
+    next[key] = moneyOr(rates?.[key], moneyOr(legacyTierRates[key], 0)) ?? 0;
   }
   return next;
 }
@@ -337,8 +377,6 @@ export function computeFormula(
         amountState: "ready",
       });
     }
-    let productionQuantity = 0;
-    let productionPerHour: number | null = productionRate(rates, formula.productionPerHourKey);
     for (const component of formula.components ?? []) {
       const quantity = quantityValue(inputs[component.quantityKey], component.unit);
       const rate = moneyOr(rates[component.rateKey], 0) ?? 0;
@@ -350,16 +388,11 @@ export function computeFormula(
         amount: roundMoney(quantity * rate),
         amountState: amountStateForQuantity(quantity),
       });
-      const componentRate = productionRate(rates, component.productionPerHourKey);
-      if (componentRate != null && quantity > 0) {
-        productionQuantity += quantity;
-        if (productionPerHour == null) productionPerHour = componentRate;
-      }
     }
     return {
       recommendedAmount: roundMoney(lines.reduce((sum, line) => sum + line.amount, 0)),
       lines,
-      estimatedLaborHours: hoursFromProduction(productionQuantity, productionPerHour),
+      estimatedLaborHours: estimatedHoursForBasePlusComponents(formula, rates, inputs),
     };
   }
 
@@ -367,34 +400,46 @@ export function computeFormula(
   const rateKey = formula.rateKey ?? "unitRate";
   let billedRate = moneyOr(rates[rateKey], 0) ?? 0;
   let amount = roundMoney(quantity * billedRate);
-  let amountState = amountStateForQuantity(quantity);
+  const amountState = amountStateForQuantity(quantity);
 
   if (formula.kind === "tier_table") {
     const tier = tierForQuantity(formula.tiers ?? [], quantity);
-    billedRate = tier?.rate ?? 0;
+    billedRate = tier ? (moneyOr(rates[tier.rateKey], 0) ?? 0) : 0;
     amount = roundMoney(quantity * billedRate);
   }
 
   if (formula.kind === "minimum_plus_unit") {
     const minimumKey = formula.minimumKey ?? "minimumAmount";
     const minimum = moneyOr(rates[minimumKey], 0) ?? 0;
-    const unitAmount = roundMoney(quantity * billedRate);
-    if (quantity > 0) {
-      amount = roundMoney(Math.max(minimum, unitAmount));
-      amountState = "ready";
-      if (minimum > unitAmount) {
-        lines.push({
-          key: "minimum",
-          label: "Labor minimum",
-          quantity: 1,
-          rate: minimum,
-          amount: roundMoney(minimum),
-          amountState: "ready",
-        });
-      }
-    } else if (minimum > 0) {
-      amountState = "waiting";
+    const productionAmount = roundMoney(quantity * billedRate);
+    const minimumAdjustment =
+      quantity > 0 ? roundMoney(Math.max(0, minimum - productionAmount)) : 0;
+    lines.push({
+      key: "production",
+      label: lineLabelForKind(formula),
+      quantity,
+      rate: billedRate,
+      amount: productionAmount,
+      amountState,
+    });
+    if (minimumAdjustment > 0) {
+      lines.push({
+        key: "minimum_adjustment",
+        label: "Minimum adjustment",
+        quantity: 1,
+        rate: minimumAdjustment,
+        amount: minimumAdjustment,
+        amountState: "ready",
+      });
     }
+    return {
+      recommendedAmount: quantity > 0 ? roundMoney(productionAmount + minimumAdjustment) : 0,
+      lines,
+      estimatedLaborHours: hoursFromProduction(
+        quantity,
+        productionRate(rates, formula.productionPerHourKey),
+      ),
+    };
   }
 
   lines.push({
@@ -402,33 +447,45 @@ export function computeFormula(
     label: lineLabelForKind(formula),
     quantity,
     rate: billedRate,
-    amount: formula.kind === "minimum_plus_unit" && lines.length > 0 ? amount : amount,
+    amount,
     amountState,
   });
 
-  if (formula.kind === "minimum_plus_unit" && lines.length > 1) {
-    const unitLine = lines[lines.length - 1];
-    unitLine.amount = roundMoney(quantity * billedRate);
-  }
-
   return {
-    recommendedAmount:
-      formula.kind === "minimum_plus_unit"
-        ? quantity > 0
-          ? roundMoney(
-              Math.max(
-                moneyOr(rates[formula.minimumKey ?? "minimumAmount"], 0) ?? 0,
-                quantity * billedRate,
-              ),
-            )
-          : 0
-        : amount,
+    recommendedAmount: amount,
     lines,
     estimatedLaborHours: hoursFromProduction(
       quantity,
       productionRate(rates, formula.productionPerHourKey),
     ),
   };
+}
+
+function estimatedHoursForBasePlusComponents(
+  formula: FormulaContract,
+  rates: Record<string, number>,
+  inputs: Record<string, unknown>,
+): number | null {
+  const baseKey = formula.baseKey ?? "baseAmount";
+  const base = moneyOr(rates[baseKey], 0) ?? 0;
+  // A non-zero base may represent labor whose hours are not modeled.
+  if (base > 0) return null;
+
+  let total = 0;
+  let sawPositiveComponent = false;
+  for (const component of formula.components ?? []) {
+    const quantity = quantityValue(inputs[component.quantityKey], component.unit);
+    if (!(quantity > 0)) continue;
+    sawPositiveComponent = true;
+    const hours = hoursFromProduction(
+      quantity,
+      productionRate(rates, component.productionPerHourKey),
+    );
+    if (hours == null) return null;
+    total += hours;
+  }
+  if (!sawPositiveComponent) return null;
+  return Math.round(total * 100) / 100;
 }
 
 export function hoursFromProduction(
