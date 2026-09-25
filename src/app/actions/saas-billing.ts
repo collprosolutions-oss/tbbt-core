@@ -5,6 +5,7 @@ import { requireBusinessAccess } from "@/lib/access";
 import { ForbiddenError } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
 import {
+  requestSaasPlanChange,
   SaasBillingError,
   saasBillingErrorMessage,
   startSaasBillingPortal,
@@ -29,11 +30,13 @@ function rethrowRedirect(error: unknown) {
 
 export async function startSaasSubscriptionCheckoutAction(
   _prev: SaasBillingActionState,
-  _formData: FormData,
+  formData: FormData,
 ): Promise<SaasBillingActionState> {
   try {
     const access = await requireBusinessAccess();
-    const result = await startSaasSubscriptionCheckout(prisma, access);
+    const requested = formData.get("planCode");
+    const planCode = typeof requested === "string" && requested.trim() ? requested.trim() : undefined;
+    const result = await startSaasSubscriptionCheckout(prisma, access, { planCode });
     redirect(result.url);
   } catch (error) {
     rethrowRedirect(error);
@@ -69,6 +72,29 @@ export async function startSaasBillingPortalAction(
       error: saasBillingErrorMessage(
         error,
         "Stripe Billing Portal is not available on this Stripe account yet.",
+      ),
+    };
+  }
+}
+
+export async function requestSaasPlanChangeAction(
+  _prev: SaasBillingActionState,
+  formData: FormData,
+): Promise<SaasBillingActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    const requested = formData.get("planCode");
+    const planCode = typeof requested === "string" ? requested.trim() : "";
+    await requestSaasPlanChange(prisma, access, { planCode });
+    return { error: undefined };
+  } catch (error) {
+    if (error instanceof ForbiddenError) {
+      return { error: error.message };
+    }
+    return {
+      error: saasBillingErrorMessage(
+        error,
+        "That TBBT plan change could not be requested.",
       ),
     };
   }

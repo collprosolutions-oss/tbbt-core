@@ -6,7 +6,8 @@ import { createActionFromRecommendation, recommendationEvidenceKey, upsertRecomm
 import { buildBsosRecommendations } from "@/lib/bsos";
 import { loadBsosFacts } from "@/lib/bsos-data";
 import { prisma } from "@/lib/prisma";
-import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { requireOperatingProductAccess } from "@/lib/saas-billing/enforce";
 
 export type BsosActionState = { error?: string; message?: string };
 
@@ -20,7 +21,7 @@ export async function createGoalAction(
   formData: FormData,
 ): Promise<BsosActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
     await createBusinessGoal(prisma, access, {
       title: readString(formData, "title"),
       description: readString(formData, "description"),
@@ -38,7 +39,7 @@ export async function updateGoalStatusAction(
   formData: FormData,
 ): Promise<BsosActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
     await updateBusinessGoalStatus(prisma, access, {
       goalId: readString(formData, "goalId"),
       status: readString(formData, "status"),
@@ -55,7 +56,7 @@ export async function createActionItemAction(
   formData: FormData,
 ): Promise<BsosActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
     await createBusinessActionItem(prisma, access, {
       title: readString(formData, "title"),
       recommendationKey: readString(formData, "recommendationKey"),
@@ -74,7 +75,7 @@ export async function updateActionStatusAction(
   formData: FormData,
 ): Promise<BsosActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
     await updateBusinessActionStatus(prisma, access, {
       actionId: readString(formData, "actionId"),
       status: readString(formData, "status"),
@@ -91,7 +92,7 @@ export async function createRecommendationActionAction(
   formData: FormData,
 ): Promise<BsosActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
     const key = readString(formData, "recommendationKey");
     const facts = await loadBsosFacts(prisma, access.businessId);
     const recommendation = buildBsosRecommendations(facts).find((item) => item.key === key);
@@ -111,7 +112,7 @@ export async function dismissRecommendationAction(
   formData: FormData,
 ): Promise<BsosActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
     const key = readString(formData, "recommendationKey");
     if (!key) return { error: "Choose a recommendation." };
     const facts = await loadBsosFacts(prisma, access.businessId);
@@ -133,7 +134,7 @@ export async function completeRecommendationAction(
   formData: FormData,
 ): Promise<BsosActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
     const key = readString(formData, "recommendationKey");
     if (!key) return { error: "Choose a recommendation." };
     const facts = await loadBsosFacts(prisma, access.businessId);

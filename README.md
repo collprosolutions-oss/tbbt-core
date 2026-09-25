@@ -51,7 +51,7 @@ npm run dev
 Production secrets never belong in git. See `.env.example` for the real names:
 
 - Hosted Postgres: `DATABASE_URL`
-- SaaS Stripe (the trade business pays TBBT): `STRIPE_SAAS_PRICE_ID`, optional `STRIPE_SAAS_WEBHOOK_SECRET`
+- SaaS Stripe (the trade business pays TBBT): `STRIPE_SAAS_PRICE_ID` (Founder), optional `STRIPE_SAAS_WEBHOOK_SECRET`. Optional later plan prices: `STRIPE_SAAS_PRICE_ID_STARTER`, `STRIPE_SAAS_PRICE_ID_BUSINESS`, `STRIPE_SAAS_PRICE_ID_ENTERPRISE`, or `STRIPE_SAAS_PLAN_PRICE_MAP`. Starter / Business / Enterprise are not purchasable until the catalog marks them LIVE and an approved price exists.
 - Connect Stripe (customer job payments): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
 - Resend: `RESEND_API_KEY`, `EMAIL_FROM`
 - Twilio SMS: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, plus a messaging service or from-number
@@ -86,6 +86,7 @@ npm run test:marketing
 npm run test:reviews
 npm run test:reports
 npm run test:production-certification
+npm run test:plan-entitlements
 npx tsc --noEmit
 npm run build
 ```

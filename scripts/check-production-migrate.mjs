@@ -618,6 +618,24 @@ check(
     websiteSlugMigration.includes("IF NOT EXISTS"),
 );
 
+const productPlanMigration = readFileSync(
+  new URL("../prisma/migrations/20260925200000_product_plans_entitlements/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Product plan entitlement migration is additive and preserves SaaS rows",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(productPlanMigration) &&
+    productPlanMigration.includes('ADD COLUMN IF NOT EXISTS "planCode"') &&
+    productPlanMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessProductAddon"') &&
+    productPlanMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessProductGrant"') &&
+    productPlanMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run product-plan DDL",
+  !workspaceLoader.includes("BusinessProductAddon") &&
+    !workspaceLoader.includes("product_plans_entitlements"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

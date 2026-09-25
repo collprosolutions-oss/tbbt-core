@@ -264,6 +264,7 @@ check(
 );
 
 const pricingSrc = readRepo("src/components/tbbt-marketing/pricing.tsx");
+const catalogProjectionSrc = readRepo("src/lib/product-catalog/pricing-projection.ts");
 const homeMarketingSrc = readRepo("src/components/tbbt-marketing/home.tsx");
 const homeCssSrc = readRepo("src/components/tbbt-marketing/tbbt-home.css");
 const marketingLibSrc = readRepo("src/lib/tbbt-marketing.ts");
@@ -280,16 +281,13 @@ check(
     !pricingSrc.includes("$79") &&
     !pricingSrc.includes("$129") &&
     !marketingLibSrc.includes("$29") &&
-    pricingSrc.includes("TBBT_FOUNDER_PLAN_DISPLAY_NAME") &&
+    pricingSrc.includes("getPricingPageProjection") &&
     pricingSrc.includes("TBBT_SIGN_UP_HREF") &&
     pricingSrc.includes("Starter") &&
     pricingSrc.includes("Business") &&
     pricingSrc.includes("Enterprise") &&
-    pricingSrc.includes("Coming Soon") &&
-    pricingSrc.includes("TBBT_PRICING_PLANNED_LABEL") &&
-    pricingSrc.includes("TBBT_PRICING_AVAILABLE_NOW_LABEL") &&
     pricingSrc.includes("Pricing to be announced") === false &&
-    marketingLibSrc.includes("Pricing to be announced") &&
+    catalogProjectionSrc.includes("Pricing to be announced") &&
     !pricingSrc.includes("No invented tiers"),
 );
 check(

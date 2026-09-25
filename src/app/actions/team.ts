@@ -12,6 +12,12 @@
  */
 import { revalidatePath } from "next/cache";
 import { createSecureToken, hashPassword, hashToken } from "@/lib/auth";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import {
+  assertMemberInviteAllowed,
+  productEntitlementErrorMessage,
+  requireProductCapability,
+} from "@/lib/product-entitlements";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
@@ -55,6 +61,14 @@ export async function addTeamMember(
 ): Promise<TeamActionState> {
   const access = await requireOperatingBusinessAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_MEMBERS);
+  try {
+    await requireProductCapability(prisma, access.businessId, PRODUCT_CAPABILITIES.TEAM_MANAGEMENT);
+    await assertMemberInviteAllowed(prisma, access.businessId);
+  } catch (error) {
+    const message = productEntitlementErrorMessage(error);
+    if (message) return { error: message };
+    throw error;
+  }
 
   const name = readString(formData, "name");
   const email = readString(formData, "email").toLowerCase();

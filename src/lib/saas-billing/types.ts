@@ -23,6 +23,8 @@ export type SaasSubscriptionSnapshot = {
    * (Checkout / invoice recovery without an expanded subscription).
    */
   cancelAtPeriodEnd: boolean | null;
+  /** Server-resolved catalog plan. Webhooks map known prices only. */
+  planCode?: string | null;
 };
 
 export type CreateSaasCustomerInput = {
@@ -35,8 +37,21 @@ export type CreateSaasCheckoutInput = {
   businessId: string;
   customerId: string;
   priceId: string;
+  planCode: string;
   successUrl: string;
   cancelUrl: string;
+};
+
+export type ChangeSaasSubscriptionPriceInput = {
+  subscriptionId: string;
+  priceId: string;
+  planCode: string;
+};
+
+export type ChangeSaasSubscriptionPriceResult = {
+  subscriptionId: string;
+  priceId: string;
+  status: string;
 };
 
 export type SaasCheckoutSessionResult = {
@@ -86,6 +101,13 @@ export type SaasBillingProvider = {
   scheduleCancelAtPeriodEnd(
     input: ScheduleSaasCancelInput,
   ): Promise<ScheduleSaasCancelResult>;
+  /**
+   * Ask the provider to change the subscription price. Local TBBT rows
+   * stay unchanged until a webhook snapshot arrives.
+   */
+  changeSubscriptionPrice(
+    input: ChangeSaasSubscriptionPriceInput,
+  ): Promise<ChangeSaasSubscriptionPriceResult>;
 };
 
 export class SaasBillingError extends Error {

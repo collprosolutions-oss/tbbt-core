@@ -311,6 +311,8 @@ model Business {
   serviceRequestMeasurements  ServiceRequestMeasurement[]
   paymentAccount           BusinessPaymentAccount?
   saasSubscription         BusinessSaasSubscription?
+  productAddons            BusinessProductAddon[]
+  productGrants            BusinessProductGrant[]
   storageAccount           BusinessStorageAccount?
   storedAssets             StoredAsset[]
   estimatingDefaults       BusinessEstimatingDefault[]
@@ -1196,12 +1198,60 @@ model BusinessSaasSubscription {
   saasFounderTrialBackfilledAt DateTime?
   /// Latest Stripe event.created applied to this row. Stale events are ignored.
   lastStripeEventCreatedAt DateTime?
+  /// Authoritative catalog plan code (STARTER | FOUNDER | BUSINESS | ENTERPRISE).
+  /// Null on historical rows; compatibility resolves those to FOUNDER.
+  planCode             String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
   @@index([stripeCustomerId])
+  @@index([planCode])
+}
+
+/// Optional add-on entitlement source. Independently tracked from the
+/// base SaaS plan. No secrets. Cross-tenant assignment is impossible
+/// because writes always use the server workspace businessId.
+model BusinessProductAddon {
+  id          String    @id @default(cuid())
+  businessId  String
+  addonCode   String
+  status      String    @default("INACTIVE")
+  quantity    Int       @default(1)
+  source      String    @default("SUPPORT")
+  /// Provider subscription-item / reference id. Never a secret.
+  providerRef String?
+  grantedAt   DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, addonCode])
+  @@index([businessId, status])
+}
+
+/// Explicit support / grandfather grants. Additive, auditable, tenant-scoped.
+/// Never browser-controlled. Never a hidden plan-code special case.
+model BusinessProductGrant {
+  id         String    @id @default(cuid())
+  businessId String
+  grantType  String
+  code       String
+  quantity   Int?
+  status     String    @default("ACTIVE")
+  source     String    @default("SUPPORT")
+  note       String?
+  grantedAt  DateTime  @default(now())
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, status])
 }
 
 /// Idempotency log for TBBT SaaS billing webhooks. Distinct from the

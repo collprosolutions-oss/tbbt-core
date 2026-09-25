@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import {
+  requestSaasPlanChangeAction,
   startSaasBillingPortalAction,
   startSaasSubscriptionCheckoutAction,
   type SaasBillingActionState,
@@ -13,8 +14,12 @@ const initialState: SaasBillingActionState = {};
 
 export function SaasSubscribeButton({
   disabled,
+  planCode = "FOUNDER",
+  label,
 }: {
   disabled?: boolean;
+  planCode?: string;
+  label?: string;
 }) {
   const [state, formAction, pending] = useActionState(
     startSaasSubscriptionCheckoutAction,
@@ -23,13 +28,14 @@ export function SaasSubscribeButton({
 
   return (
     <form action={formAction} className="space-y-3">
+      <input type="hidden" name="planCode" value={planCode} />
       {state.error ? (
         <Alert variant="destructive">
           <AlertDescription>{state.error}</AlertDescription>
         </Alert>
       ) : null}
       <Button type="submit" size="sm" disabled={disabled || pending}>
-        {pending ? "Opening Stripe…" : "Start subscription"}
+        {pending ? "Opening Stripe…" : label ?? "Start subscription"}
       </Button>
     </form>
   );
@@ -54,6 +60,35 @@ export function SaasBillingPortalButton({
       ) : null}
       <Button type="submit" size="sm" variant="outline" disabled={disabled || pending}>
         {pending ? "Opening Stripe…" : "Manage billing"}
+      </Button>
+    </form>
+  );
+}
+
+export function SaasPlanChangeButton({
+  disabled,
+  planCode,
+  label,
+}: {
+  disabled?: boolean;
+  planCode: string;
+  label: string;
+}) {
+  const [state, formAction, pending] = useActionState(
+    requestSaasPlanChangeAction,
+    initialState,
+  );
+
+  return (
+    <form action={formAction} className="space-y-3">
+      <input type="hidden" name="planCode" value={planCode} />
+      {state.error ? (
+        <Alert variant="destructive">
+          <AlertDescription>{state.error}</AlertDescription>
+        </Alert>
+      ) : null}
+      <Button type="submit" size="sm" variant="outline" disabled={disabled || pending}>
+        {pending ? "Requesting…" : label}
       </Button>
     </form>
   );

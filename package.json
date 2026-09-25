@@ -94,6 +94,7 @@
     "test:ai-intelligence": "node --experimental-strip-types scripts/check-ai-intelligence.mjs",
     "test:automation": "node --experimental-strip-types scripts/check-automation.mjs",
     "test:multi-trade-core": "node --experimental-strip-types scripts/check-multi-trade-core.mjs",
+    "test:plan-entitlements": "node --experimental-strip-types scripts/check-plan-entitlements.mjs",
     "test:website-engine": "node --experimental-strip-types scripts/check-website-engine.mjs"
   },
   "dependencies": {

@@ -2,7 +2,8 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { requireOperatingBusinessAccessForForm } from "@/lib/saas-billing/enforce";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { requireOperatingProductAccessForForm } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { isUsableEmail } from "@/lib/mail";
 import { prisma } from "@/lib/prisma";
@@ -60,7 +61,7 @@ export async function createCustomer(
   _prev: CustomerActionState,
   formData: FormData,
 ): Promise<CustomerActionState> {
-  const operating = await requireOperatingBusinessAccessForForm();
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.CRM);
   if (!operating.ok) return { error: operating.error };
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CUSTOMERS);
@@ -112,7 +113,7 @@ export async function updateCustomer(
   _prev: CustomerActionState,
   formData: FormData,
 ): Promise<CustomerActionState> {
-  const operating = await requireOperatingBusinessAccessForForm();
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.CRM);
   if (!operating.ok) return { error: operating.error };
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CUSTOMERS);

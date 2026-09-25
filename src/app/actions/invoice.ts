@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireOperatingBusinessAccessForForm } from "@/lib/saas-billing/enforce";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { requireOperatingProductAccessForForm } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { sendDraftInvoiceIfNeeded } from "@/lib/complete-job-invoice";
 import { persistDraftInvoiceFromCompletedJob } from "@/lib/invoice-carry-forward";
@@ -48,7 +49,9 @@ function readString(formData: FormData, key: string) {
 export async function createInvoiceFromJob(
   jobId: string,
 ): Promise<InvoiceActionState> {
-  const operating = await requireOperatingBusinessAccessForForm();
+  const operating = await requireOperatingProductAccessForForm(
+    PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
+  );
   if (!operating.ok) return { error: operating.error };
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
@@ -113,7 +116,9 @@ export async function createInvoiceFromJob(
 export async function markInvoiceSent(
   invoiceId: string,
 ): Promise<InvoiceActionState> {
-  const operating = await requireOperatingBusinessAccessForForm();
+  const operating = await requireOperatingProductAccessForForm(
+    PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
+  );
   if (!operating.ok) return { error: operating.error };
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
@@ -145,7 +150,9 @@ export async function markInvoicePaid(
   _prev: InvoiceActionState,
   formData: FormData,
 ): Promise<InvoiceActionState> {
-  const operating = await requireOperatingBusinessAccessForForm();
+  const operating = await requireOperatingProductAccessForForm(
+    PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
+  );
   if (!operating.ok) return { error: operating.error };
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);

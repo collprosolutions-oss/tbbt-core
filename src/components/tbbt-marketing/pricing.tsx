@@ -29,20 +29,11 @@ import {
 } from "lucide-react";
 import { TbbtWatchVideoButton } from "@/components/tbbt-marketing/watch-video";
 import "@/components/tbbt-marketing/tbbt-pricing.css";
+import { getPricingPageProjection } from "@/lib/product-catalog";
 import {
-  TBBT_FOUNDER_PLAN_DISPLAY_NAME,
   TBBT_FOUNDER_PRICE_LABEL,
   TBBT_FOUNDER_PROTECTION,
   TBBT_HERO_OFFER,
-  TBBT_PRICING_ADDON_PRICE,
-  TBBT_PRICING_ADDON_STATUS,
-  TBBT_PRICING_ADDONS,
-  TBBT_PRICING_AVAILABLE_NOW_LABEL,
-  TBBT_PRICING_BUSINESS_CARD_FEATURES,
-  TBBT_PRICING_COMING_SOON_LABEL,
-  TBBT_PRICING_COMPARE_ROWS,
-  TBBT_PRICING_ENTERPRISE_CARD_FEATURES,
-  TBBT_PRICING_FOUNDER_CARD_FEATURES,
   TBBT_PRICING_PAGE_CTA_BUTTON,
   TBBT_PRICING_PAGE_CTA_HEADLINE,
   TBBT_PRICING_PAGE_CTA_SRC,
@@ -56,8 +47,6 @@ import {
   TBBT_PRICING_PAGE_SCRIPT,
   TBBT_PRICING_PAGE_SUPPORT,
   TBBT_PRICING_PAGE_VALUE_POINTS,
-  TBBT_PRICING_PLANNED_LABEL,
-  TBBT_PRICING_STARTER_CARD_FEATURES,
   TBBT_PRICING_TRUST,
   TBBT_SIGN_UP_HREF,
   TBBT_TAGLINE,
@@ -104,7 +93,12 @@ function CompareCell({ value }: { value: string }) {
 }
 
 export function TbbtPricingPage() {
-  const founderName = TBBT_FOUNDER_PLAN_DISPLAY_NAME.replace(" Plan", "");
+  const pricing = getPricingPageProjection();
+  const starter = pricing.plans.find((plan) => plan.code === "STARTER");
+  const founder = pricing.plans.find((plan) => plan.code === "FOUNDER");
+  const business = pricing.plans.find((plan) => plan.code === "BUSINESS");
+  const enterprise = pricing.plans.find((plan) => plan.code === "ENTERPRISE");
+  const founderName = founder?.headingName ?? "Founder";
 
   return (
     <div className="tbbt-pricing">
@@ -195,32 +189,32 @@ export function TbbtPricingPage() {
           </article>
 
           <article className="tbbt-prc-card">
-            <h3>Starter</h3>
-            <p className="tbbt-prc-sub">Perfect for getting started</p>
-            <span className="tbbt-prc-status">{TBBT_PRICING_COMING_SOON_LABEL}</span>
-            <p className="tbbt-prc-planned">{TBBT_PRICING_PLANNED_LABEL}</p>
+            <h3>{starter?.headingName ?? "Starter"}</h3>
+            <p className="tbbt-prc-sub">{starter?.tagline}</p>
+            <span className="tbbt-prc-status">{starter?.statusBadge}</span>
+            {starter?.plannedLabel ? <p className="tbbt-prc-planned">{starter.plannedLabel}</p> : null}
             <ul>
-              {TBBT_PRICING_STARTER_CARD_FEATURES.map((item) => (
+              {(starter?.cardFeatures ?? []).map((item) => (
                 <li key={item}>
                   <CircleCheck size={15} aria-hidden="true" />
                   {item}
                 </li>
               ))}
             </ul>
-            <span className="tbbt-btn tbbt-btn--ghost tbbt-prc-soon-btn">{TBBT_PRICING_COMING_SOON_LABEL}</span>
+            <span className="tbbt-btn tbbt-btn--ghost tbbt-prc-soon-btn">{starter?.statusBadge}</span>
           </article>
 
           <article className="tbbt-prc-card tbbt-prc-card--founder">
-            <span className="tbbt-prc-now">{TBBT_PRICING_AVAILABLE_NOW_LABEL}</span>
+            <span className="tbbt-prc-now">{founder?.statusBadge}</span>
             <h3>{founderName}</h3>
-            <p className="tbbt-prc-sub">Built for growing businesses</p>
+            <p className="tbbt-prc-sub">{founder?.tagline}</p>
             <p className="tbbt-prc-price">
-              <strong>$49</strong>
-              <span>/month</span>
+              <strong>{founder?.priceAmount ?? "$49"}</strong>
+              <span>{founder?.priceSuffix ?? "/month"}</span>
             </p>
-            <p className="tbbt-prc-founder-label">{TBBT_FOUNDER_PRICE_LABEL}</p>
+            <p className="tbbt-prc-founder-label">{founder?.founderPriceLabel ?? TBBT_FOUNDER_PRICE_LABEL}</p>
             <ul className="tbbt-prc-live-list">
-              {TBBT_PRICING_FOUNDER_CARD_FEATURES.map((item) => (
+              {(founder?.cardFeatures ?? []).map((item) => (
                 <li key={item}>
                   <CircleCheck size={15} aria-hidden="true" />
                   {item}
@@ -235,28 +229,28 @@ export function TbbtPricingPage() {
           </article>
 
           <article className="tbbt-prc-card">
-            <h3>Business</h3>
-            <p className="tbbt-prc-sub">For established companies</p>
-            <span className="tbbt-prc-status">{TBBT_PRICING_COMING_SOON_LABEL}</span>
-            <p className="tbbt-prc-planned">{TBBT_PRICING_PLANNED_LABEL}</p>
+            <h3>{business?.headingName ?? "Business"}</h3>
+            <p className="tbbt-prc-sub">{business?.tagline}</p>
+            <span className="tbbt-prc-status">{business?.statusBadge}</span>
+            {business?.plannedLabel ? <p className="tbbt-prc-planned">{business.plannedLabel}</p> : null}
             <ul>
-              {TBBT_PRICING_BUSINESS_CARD_FEATURES.map((item) => (
+              {(business?.cardFeatures ?? []).map((item) => (
                 <li key={item}>
                   <CircleCheck size={15} aria-hidden="true" />
                   {item}
                 </li>
               ))}
             </ul>
-            <span className="tbbt-btn tbbt-btn--ghost tbbt-prc-soon-btn">{TBBT_PRICING_COMING_SOON_LABEL}</span>
+            <span className="tbbt-btn tbbt-btn--ghost tbbt-prc-soon-btn">{business?.statusBadge}</span>
           </article>
 
           <article className="tbbt-prc-card">
-            <h3>Enterprise</h3>
-            <p className="tbbt-prc-sub">For larger operations</p>
-            <span className="tbbt-prc-status">{TBBT_PRICING_COMING_SOON_LABEL}</span>
-            <p className="tbbt-prc-planned">{TBBT_PRICING_PLANNED_LABEL}</p>
+            <h3>{enterprise?.headingName ?? "Enterprise"}</h3>
+            <p className="tbbt-prc-sub">{enterprise?.tagline}</p>
+            <span className="tbbt-prc-status">{enterprise?.statusBadge}</span>
+            {enterprise?.plannedLabel ? <p className="tbbt-prc-planned">{enterprise.plannedLabel}</p> : null}
             <ul>
-              {TBBT_PRICING_ENTERPRISE_CARD_FEATURES.map((item) => (
+              {(enterprise?.cardFeatures ?? []).map((item) => (
                 <li key={item}>
                   <CircleCheck size={15} aria-hidden="true" />
                   {item}
@@ -278,25 +272,25 @@ export function TbbtPricingPage() {
                 <tr>
                   <th>Features</th>
                   <th>
-                    Starter
-                    <span>Coming Soon</span>
+                    {starter?.headingName ?? "Starter"}
+                    <span>{starter?.statusBadge}</span>
                   </th>
                   <th>
-                    Founder
-                    <span>{TBBT_FOUNDER_PRICE_LABEL}</span>
+                    {founderName}
+                    <span>{founder?.founderPriceLabel ?? TBBT_FOUNDER_PRICE_LABEL}</span>
                   </th>
                   <th>
-                    Business
-                    <span>Coming Soon</span>
+                    {business?.headingName ?? "Business"}
+                    <span>{business?.statusBadge}</span>
                   </th>
                   <th>
-                    Enterprise
-                    <span>Coming Soon</span>
+                    {enterprise?.headingName ?? "Enterprise"}
+                    <span>{enterprise?.statusBadge}</span>
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {TBBT_PRICING_COMPARE_ROWS.map((row, index) => {
+                {pricing.compareRows.map((row, index) => {
                   const Icon = COMPARE_ICONS[index] ?? LayoutGrid;
                   return (
                     <tr key={row.label}>
@@ -322,7 +316,7 @@ export function TbbtPricingPage() {
             <h2>Optional Add-Ons</h2>
             <p>Add more power to your plan anytime.</p>
             <ul>
-              {TBBT_PRICING_ADDONS.map((item) => {
+              {pricing.addons.map((item) => {
                 const Icon = ADDON_ICONS[item.icon];
                 return (
                   <li key={item.title}>
@@ -333,8 +327,8 @@ export function TbbtPricingPage() {
                       <strong>{item.title}</strong>
                     </div>
                     <div className="tbbt-prc-addon-meta">
-                      <em>{TBBT_PRICING_ADDON_STATUS}</em>
-                      <span>{TBBT_PRICING_ADDON_PRICE}</span>
+                      <em>{item.status}</em>
+                      <span>{item.price}</span>
                     </div>
                     <span className="tbbt-prc-addon-plus" aria-hidden="true">
                       <CirclePlus size={18} />
