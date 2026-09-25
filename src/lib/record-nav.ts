@@ -139,7 +139,15 @@ function itemLabel(
   if (kind === "customer") return related.customer?.name?.trim() || "Customer";
   if (kind === "property") {
     const property = related.property;
-    if (property?.addressLine1) return formatAddress(property);
+    if (property?.addressLine1) {
+      return formatAddress({
+        addressLine1: property.addressLine1,
+        addressLine2: property.addressLine2,
+        city: property.city,
+        region: property.region,
+        postalCode: property.postalCode,
+      });
+    }
     return "Property";
   }
   if (kind === "request") return "Request";
