@@ -293,6 +293,7 @@ export type ReportChangeOrder = {
   status: string;
   total: number;
   invoiceId?: string | null;
+  approvedAt?: Date | null;
   createdAt?: Date;
 };
 

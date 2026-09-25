@@ -11,8 +11,7 @@ import { isPaymentMethodValue } from "@/lib/invoice-payment";
 import {
   PAYMENT_PURPOSE_INVOICE_BALANCE,
   invoicePaymentBreakdown,
-  listProjectPayments,
-  paymentsBelongingToInvoice,
+  listPaymentsForInvoice,
   recordSucceededPayment,
 } from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
@@ -156,14 +155,10 @@ export async function markInvoicePaid(
     return { error: "Choose a payment method." };
   }
 
-  const payments = paymentsBelongingToInvoice(
-    { id: invoice.id, jobId: invoice.jobId },
-    await listProjectPayments(prisma, {
-      businessId: access.businessId,
-      invoiceId: invoice.id,
-      jobId: invoice.jobId,
-    }),
-  );
+  const payments = await listPaymentsForInvoice(prisma, {
+    businessId: access.businessId,
+    invoice: { id: invoice.id, jobId: invoice.jobId, kind: invoice.kind },
+  });
   const breakdown = invoicePaymentBreakdown({
     status: invoice.status,
     total: invoice.total,

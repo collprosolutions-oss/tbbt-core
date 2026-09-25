@@ -39,8 +39,22 @@ export type BillingChangeOrderLike = {
   status: string;
   total: Prisma.Decimal | number | string;
   invoiceId?: string | null;
+  approvedAt?: Date | null;
   createdAt?: Date;
 };
+
+/**
+ * Recorded approval truth. createdAt is not approval time. If approvedAt
+ * is missing, the Change Order cannot be inferred as already billed.
+ */
+export function changeOrderApprovedAtOrBefore(
+  changeOrder: Pick<BillingChangeOrderLike, "status" | "approvedAt">,
+  at: Date,
+): boolean {
+  if (changeOrder.status !== "APPROVED") return false;
+  if (!changeOrder.approvedAt) return false;
+  return changeOrder.approvedAt.getTime() <= at.getTime();
+}
 
 function toAmount(value: Prisma.Decimal | number | string | null | undefined): Prisma.Decimal {
   if (value instanceof Prisma.Decimal) return value;
@@ -97,8 +111,7 @@ export function billedChangeOrderIds(input: {
     if (
       !changeOrder.invoiceId &&
       original &&
-      changeOrder.createdAt &&
-      changeOrder.createdAt.getTime() <= original.createdAt.getTime()
+      changeOrderApprovedAtOrBefore(changeOrder, original.createdAt)
     ) {
       billed.add(changeOrder.id);
     }
@@ -128,8 +141,7 @@ export function coveringBilledChangeOrderIds(input: {
       !changeOrder.invoiceId &&
       original &&
       isCoveringInvoiceStatus(original.status) &&
-      changeOrder.createdAt &&
-      changeOrder.createdAt.getTime() <= original.createdAt.getTime()
+      changeOrderApprovedAtOrBefore(changeOrder, original.createdAt)
     ) {
       billed.add(changeOrder.id);
     }

@@ -57,7 +57,7 @@ export async function loadReportSource(
     }),
     prisma.changeOrder.findMany({
       where: scope,
-      select: { id: true, jobId: true, status: true, total: true, invoiceId: true, createdAt: true },
+      select: { id: true, jobId: true, status: true, total: true, invoiceId: true, approvedAt: true, createdAt: true },
     }),
     prisma.estimate.findMany({
       where: scope,

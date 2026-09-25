@@ -143,6 +143,7 @@ export const JOB_INVOICE_SCOPE_INCLUDE = {
       status: true,
       total: true,
       createdAt: true,
+      approvedAt: true,
       invoiceId: true,
       lineItems: {
         orderBy: { createdAt: "asc" as const },
@@ -168,6 +169,7 @@ export type InvoiceBackfillResult =
 export type BackfillChangeOrderCandidate = {
   id: string;
   createdAt: Date;
+  approvedAt?: Date | null;
   lineItems: InvoiceSnapshotLineInput[];
 };
 
@@ -212,10 +214,14 @@ export function invoiceCustomerPricingTotal(
  * Choose the APPROVED Change Orders whose copied lines, plus the original
  * approved estimate (and labor-minimum snapshot), equal the invoice total.
  *
- * Prefers Change Orders that already existed when the invoice was created.
- * If that set does not match — for example a Change Order approved in the
- * same second as invoice create — grows prefixes in createdAt order until
- * the snapshot sum equals the stored Invoice.total.
+ * Prefers Change Orders whose recorded approvedAt is at or before the
+ * invoice. createdAt is not approval time. If approval timing cannot be
+ * proven, the Change Order is omitted from as-of reconstruction.
+ *
+ * If that set does not match — for example two COs approved before the
+ * invoice but only one included in the frozen total — grows prefixes in
+ * approvedAt order among that as-of set until the snapshot sum equals
+ * the stored Invoice.total.
  *
  * Returns null when no safe reconstruction exists. Never invents lines and
  * never includes DRAFT / SENT / DECLINED / CANCELLED Change Orders
@@ -229,10 +235,16 @@ export function selectApprovedChangeOrdersForInvoiceBackfill(input: {
   invoiceTotal: Prisma.Decimal | number | string;
 }): BackfillChangeOrderCandidate[] | null {
   const invoiceTotal = toInvoiceDecimal(input.invoiceTotal);
-  const ordered = [...input.approvedChangeOrders].sort((a, b) => {
-    const byTime = a.createdAt.getTime() - b.createdAt.getTime();
-    return byTime !== 0 ? byTime : a.id.localeCompare(b.id);
-  });
+  const asOfInvoice = [...input.approvedChangeOrders]
+    .filter((changeOrder) => {
+      if (!changeOrder.approvedAt) return false;
+      return changeOrder.approvedAt.getTime() <= input.invoiceCreatedAt.getTime();
+    })
+    .sort((a, b) => {
+      const aTime = (a.approvedAt ?? a.createdAt).getTime();
+      const bTime = (b.approvedAt ?? b.createdAt).getTime();
+      return aTime !== bTime ? aTime - bTime : a.id.localeCompare(b.id);
+    });
 
   const matches = (changeOrders: BackfillChangeOrderCandidate[]) => {
     const lines = buildInvoiceLineSnapshots({
@@ -245,16 +257,12 @@ export function selectApprovedChangeOrdersForInvoiceBackfill(input: {
     return invoiceCustomerPricingTotal(lines).eq(invoiceTotal);
   };
 
-  const asOfInvoice = ordered.filter(
-    (changeOrder) =>
-      changeOrder.createdAt.getTime() <= input.invoiceCreatedAt.getTime(),
-  );
   if (matches(asOfInvoice)) {
     return asOfInvoice;
   }
 
-  for (let index = 0; index <= ordered.length; index += 1) {
-    const prefix = ordered.slice(0, index);
+  for (let index = 0; index <= asOfInvoice.length; index += 1) {
+    const prefix = asOfInvoice.slice(0, index);
     if (matches(prefix)) {
       return prefix;
     }
@@ -376,6 +384,7 @@ async function persistEmptyInvoiceWorkLines(
     .map((changeOrder) => ({
       id: changeOrder.id,
       createdAt: changeOrder.createdAt,
+      approvedAt: changeOrder.approvedAt,
       lineItems: changeOrder.lineItems,
     }));
 
@@ -548,6 +557,7 @@ export async function persistDraftInvoiceFromCompletedJob(
         status: true,
         total: true,
         createdAt: true,
+        approvedAt: true,
         invoiceId: true,
         lineItems: {
           orderBy: { createdAt: "asc" },
@@ -658,6 +668,7 @@ export async function persistDraftInvoiceFromCompletedJob(
         status: true,
         total: true,
         createdAt: true,
+        approvedAt: true,
         invoiceId: true,
         lineItems: {
           orderBy: { createdAt: "asc" },

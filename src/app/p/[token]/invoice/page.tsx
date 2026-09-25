@@ -44,7 +44,7 @@ export default async function CustomerInvoicePage({
       invoices: {
         where: { id: document.invoiceId },
         take: 1,
-        select: { id: true, status: true, total: true },
+        select: { id: true, status: true, total: true, kind: true },
       },
     },
   });
@@ -55,7 +55,7 @@ export default async function CustomerInvoicePage({
   const invoicePayments =
     payable && invoice
       ? paymentsBelongingToInvoice(
-          { id: invoice.id, jobId: payable.id },
+          { id: invoice.id, jobId: payable.id, kind: invoice.kind },
           await listProjectPayments(prisma, {
             businessId: payable.business.id,
             invoiceId: invoice.id,

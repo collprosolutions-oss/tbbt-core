@@ -216,6 +216,7 @@ export default async function CustomerProjectPortalPage({
           status: true,
           total: true,
           paidAt: true,
+          kind: true,
           lineItems: {
             orderBy: { createdAt: "asc" },
             select: { description: true, quantity: true },
@@ -226,7 +227,7 @@ export default async function CustomerProjectPortalPage({
   const payment = await getBusinessPaymentStatus(prisma, job.business.id);
   const invoicePayments = invoice
     ? paymentsBelongingToInvoice(
-        { id: invoice.id, jobId: job.id },
+        { id: invoice.id, jobId: job.id, kind: invoice.kind },
         await listProjectPayments(prisma, {
           businessId: job.business.id,
           invoiceId: invoice.id,

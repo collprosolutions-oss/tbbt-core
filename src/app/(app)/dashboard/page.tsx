@@ -196,7 +196,7 @@ export default async function DashboardPage() {
           select: { id: true, status: true, kind: true, createdAt: true, total: true },
         },
         changeOrders: {
-          select: { id: true, status: true, total: true, invoiceId: true, createdAt: true },
+          select: { id: true, status: true, total: true, invoiceId: true, approvedAt: true, createdAt: true },
         },
         estimate: { select: { total: true } },
         approvedEstimateVersion: { select: { total: true } },

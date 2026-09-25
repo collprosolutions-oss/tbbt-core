@@ -27,8 +27,7 @@ import {
 } from "@/lib/business-contact";
 import {
   invoicePaymentBreakdown,
-  listProjectPayments,
-  paymentsBelongingToInvoice,
+  listPaymentsForInvoice,
 } from "@/lib/project-payments";
 import { selectPortalInvoice } from "@/lib/revenue-integrity";
 
@@ -337,14 +336,14 @@ export async function loadInvoiceDocumentForBusiness(
     include: INVOICE_DOCUMENT_INCLUDE,
   });
   if (!invoice) return null;
-  const payments = paymentsBelongingToInvoice(
-    { id: invoice.id, jobId: invoice.job?.id ?? null },
-    await listProjectPayments(db, {
-      businessId,
-      invoiceId: invoice.id,
+  const payments = await listPaymentsForInvoice(db, {
+    businessId,
+    invoice: {
+      id: invoice.id,
       jobId: invoice.job?.id ?? null,
-    }),
-  );
+      kind: invoice.kind,
+    },
+  });
   return toDocumentView(invoice, payments);
 }
 

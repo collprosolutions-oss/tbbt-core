@@ -1496,10 +1496,13 @@ model Invoice {
   businessId       String
   customerId       String?
   jobId            String?
-  /// ORIGINAL | SUPPLEMENTAL. Application code creates exactly one ORIGINAL
-  /// per job (enforced by a partial unique index in the migration). A
-  /// SUPPLEMENTAL / balance invoice bills approved Change Orders that were
-  /// not on the original invoice. Existing invoice totals are never rewritten.
+  /// ORIGINAL | SUPPLEMENTAL. Exactly one ORIGINAL per job is enforced by
+  /// a partial unique index in the migration. The migration first ranks
+  /// legacy duplicate Invoice rows (oldest createdAt, then id) as ORIGINAL
+  /// and later rows as SUPPLEMENTAL — it never merges or deletes history.
+  /// A SUPPLEMENTAL / balance invoice bills approved Change Orders that
+  /// were not on the original invoice. Existing invoice totals are never
+  /// rewritten.
   kind             String    @default("ORIGINAL")
   status           String    @default("DRAFT")
   total            Decimal   @default(0)

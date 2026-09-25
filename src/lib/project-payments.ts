@@ -11,6 +11,7 @@ import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { formatMoney } from "@/lib/format";
 import { isPaymentMethodValue, type PaymentMethodValue } from "@/lib/invoice-payment";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
+import { isOriginalInvoiceKind } from "@/lib/revenue-integrity";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -286,21 +287,64 @@ export type ProjectPaymentRow = {
   invoiceId: string | null;
 };
 
+export type InvoicePaymentTarget = {
+  id: string;
+  jobId?: string | null;
+  kind?: string | null;
+};
+
+/**
+ * Invoice-specific payment attribution. One Payment is never counted on
+ * more than one invoice.
+ *
+ * 1. Payment.invoiceId present → belongs ONLY to that invoice.
+ * 2. Payment.invoiceId null (legacy estimate/job-linked) → belongs ONLY
+ *    to the ORIGINAL invoice for that job. Supplemental invoices never
+ *    claim unallocated job-only rows.
+ * 3. Once a job has ORIGINAL + SUPPLEMENTAL invoices, an unallocated
+ *    job-only Payment is never counted independently on every invoice.
+ */
+export function paymentBelongsToInvoice(
+  payment: { invoiceId: string | null; jobId: string | null },
+  invoice: InvoicePaymentTarget,
+): boolean {
+  if (payment.invoiceId) {
+    return payment.invoiceId === invoice.id;
+  }
+  if (!isOriginalInvoiceKind(invoice.kind)) {
+    return false;
+  }
+  return Boolean(invoice.jobId) && payment.jobId === invoice.jobId;
+}
+
 export function paymentsBelongingToInvoice<
   T extends { id: string; invoiceId: string | null; jobId: string | null },
 >(
-  invoice: { id: string; jobId?: string | null },
+  invoice: InvoicePaymentTarget,
   payments: T[],
 ): T[] {
   const seen = new Set<string>();
   return payments.filter((row) => {
     if (seen.has(row.id)) return false;
-    const belongs =
-      row.invoiceId === invoice.id ||
-      (!row.invoiceId && Boolean(invoice.jobId) && row.jobId === invoice.jobId);
+    const belongs = paymentBelongsToInvoice(row, invoice);
     if (belongs) seen.add(row.id);
     return belongs;
   });
+}
+
+export async function listPaymentsForInvoice(
+  db: PaymentsDb,
+  input: {
+    businessId: string;
+    invoice: InvoicePaymentTarget;
+  },
+) {
+  const rows = await listProjectPayments(db, {
+    businessId: input.businessId,
+    invoiceId: input.invoice.id,
+    jobId: input.invoice.jobId,
+  });
+  return paymentsBelongingToInvoice(input.invoice, rows);
 }
 
 export async function listProjectPayments(
@@ -331,7 +375,7 @@ export async function listProjectPayments(
 export async function listPaymentsGroupedByInvoiceId(
   db: PaymentsDb,
   businessId: string,
-  invoices: Array<{ id: string; jobId?: string | null }>,
+  invoices: InvoicePaymentTarget[],
 ) {
   await ensurePaymentTable(db);
   const grouped = new Map<string, ProjectPaymentRow[]>();
@@ -526,6 +570,13 @@ export async function attachEstimatePaymentsToInvoice(
 ) {
   await ensurePaymentTable(db);
   await assertRelatedPaymentRecordsOwned(db, input);
+  const invoice = await db.invoice.findFirst({
+    where: { id: input.invoiceId, businessId: input.businessId },
+    select: { id: true, kind: true },
+  });
+  if (!invoice || !isOriginalInvoiceKind(invoice.kind)) {
+    return 0;
+  }
   const or: Prisma.PaymentWhereInput[] = [];
   if (input.estimateId) or.push({ estimateId: input.estimateId, invoiceId: null });
   if (input.jobId) or.push({ jobId: input.jobId, invoiceId: null });

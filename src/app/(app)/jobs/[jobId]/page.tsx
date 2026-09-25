@@ -156,7 +156,7 @@ export default async function JobPage({
       },
       changeOrders: {
         orderBy: { createdAt: "desc" },
-        select: { id: true, title: true, status: true, total: true, invoiceId: true, createdAt: true },
+        select: { id: true, title: true, status: true, total: true, invoiceId: true, approvedAt: true, createdAt: true },
       },
       additionalWorkRequests: {
         where: { status: "OPEN" },

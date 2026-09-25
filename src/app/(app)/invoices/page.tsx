@@ -199,6 +199,7 @@ export default async function InvoicesPage({
     invoicesRaw.map((invoice) => ({
       id: invoice.id,
       jobId: invoice.job?.id ?? null,
+      kind: invoice.kind,
     })),
   );
 

@@ -11,6 +11,7 @@
 import { createRequire, register } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -27,6 +28,7 @@ const { renderInvoicePdf } = await import("@/lib/invoice-pdf");
 const {
   INVOICE_KIND_ORIGINAL,
   INVOICE_KIND_SUPPLEMENTAL,
+  billedChangeOrderIds,
   completedJobBillingAttention,
   listCompletedUnbilledJobs,
   selectPortalInvoice,
@@ -40,7 +42,10 @@ const {
 } = await import("@/lib/authorization");
 const {
   PAYMENT_PURPOSE_INVOICE_BALANCE,
+  attachEstimatePaymentsToInvoice,
   invoicePaymentBreakdown,
+  listPaymentsForInvoice,
+  listPaymentsGroupedByInvoiceId,
   listProjectPayments,
   paymentsBelongingToInvoice,
   recordSucceededPayment,
@@ -98,6 +103,26 @@ function check(label, condition) {
     console.error(`FAIL - ${label}`);
     failures += 1;
   }
+}
+
+function migrationStatements(sql) {
+  const statements = [];
+  let current = [];
+  let dollarCount = 0;
+  for (const line of sql.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("--") && current.length === 0) continue;
+    current.push(line);
+    dollarCount += (line.match(/\$\$/g) ?? []).length;
+    if (dollarCount % 2 === 0 && trimmed.endsWith(";")) {
+      const text = current.join("\n").trim().replace(/;$/, "");
+      current = [];
+      if (text && !text.includes("DO $$")) {
+        statements.push(text);
+      }
+    }
+  }
+  return statements;
 }
 
 function makeAccess(businessId, role) {
@@ -192,8 +217,14 @@ async function addChangeOrder(input) {
       title: input.title,
       status: input.status,
       total: new Prisma.Decimal(input.total),
-      approvedAt: input.status === "APPROVED" ? new Date() : null,
-      sentAt: input.status === "SENT" || input.status === "APPROVED" ? new Date() : null,
+      createdAt: input.createdAt ?? undefined,
+      approvedAt:
+        input.approvedAt !== undefined
+          ? input.approvedAt
+          : input.status === "APPROVED"
+            ? new Date()
+            : null,
+      sentAt: input.status === "SENT" || input.status === "APPROVED" ? input.approvedAt ?? new Date() : null,
     },
   });
   await prisma.lineItem.create({
@@ -259,6 +290,7 @@ try {
         total: 75,
         invoiceId: null,
         createdAt: later,
+        approvedAt: later,
       },
     ],
   });
@@ -295,9 +327,112 @@ try {
           total: 75,
           invoiceId: "inv-2",
           createdAt: later,
+          approvedAt: later,
         },
       ],
     }).unbilled === false,
+  );
+  const createdJan1 = new Date("2026-01-01T12:00:00.000Z");
+  const invoicedJan5 = new Date("2026-01-05T12:00:00.000Z");
+  const approvedJan10 = new Date("2026-01-10T12:00:00.000Z");
+  const approvedJan3 = new Date("2026-01-03T12:00:00.000Z");
+  const lateApprovalAttention = completedJobBillingAttention({
+    jobStatus: "COMPLETED",
+    originalApprovedTotal: 200,
+    invoices: [
+      {
+        id: "inv-orig",
+        status: "SENT",
+        kind: INVOICE_KIND_ORIGINAL,
+        createdAt: invoicedJan5,
+        total: 200,
+      },
+    ],
+    changeOrders: [
+      {
+        id: "co-late-approval",
+        status: "APPROVED",
+        total: 80,
+        invoiceId: null,
+        createdAt: createdJan1,
+        approvedAt: approvedJan10,
+      },
+    ],
+  });
+  check(
+    "CO created before original but approved after is unbilled attention",
+    lateApprovalAttention.unbilled === true && lateApprovalAttention.reason === "unbilled-change-orders",
+  );
+  check(
+    "CO created before original but approved after is not inferred billed",
+    billedChangeOrderIds({
+      invoices: [
+        {
+          id: "inv-orig",
+          status: "SENT",
+          kind: INVOICE_KIND_ORIGINAL,
+          createdAt: invoicedJan5,
+          total: 200,
+        },
+      ],
+      changeOrders: [
+        {
+          id: "co-late-approval",
+          status: "APPROVED",
+          total: 80,
+          invoiceId: null,
+          createdAt: createdJan1,
+          approvedAt: approvedJan10,
+        },
+      ],
+    }).has("co-late-approval") === false,
+  );
+  check(
+    "CO with no approvedAt is not inferred billed even when createdAt is earlier",
+    billedChangeOrderIds({
+      invoices: [
+        {
+          id: "inv-orig",
+          status: "SENT",
+          kind: INVOICE_KIND_ORIGINAL,
+          createdAt: invoicedJan5,
+          total: 200,
+        },
+      ],
+      changeOrders: [
+        {
+          id: "co-unproven",
+          status: "APPROVED",
+          total: 80,
+          invoiceId: null,
+          createdAt: createdJan1,
+        },
+      ],
+    }).has("co-unproven") === false,
+  );
+  check(
+    "CO approved before original invoice may be inferred billed",
+    billedChangeOrderIds({
+      invoices: [
+        {
+          id: "inv-orig",
+          status: "SENT",
+          kind: INVOICE_KIND_ORIGINAL,
+          createdAt: invoicedJan5,
+          total: 200,
+        },
+      ],
+      changeOrders: [
+        {
+          id: "co-early-approval",
+          status: "APPROVED",
+          total: 80,
+          invoiceId: null,
+          createdAt: createdJan1,
+          approvedAt: approvedJan3,
+        },
+      ],
+    }).has("co-early-approval") === true,
   );
   check(
     "portal prefers the oldest SENT invoice",
@@ -510,8 +645,14 @@ try {
     jobId: work.job.id,
     invoiceId: original.id,
   });
-  const originalPayments = paymentsBelongingToInvoice({ id: original.id, jobId: work.job.id }, allPayments);
-  const balancePayments = paymentsBelongingToInvoice({ id: balance.id, jobId: work.job.id }, allPayments);
+  const originalPayments = paymentsBelongingToInvoice(
+    { id: original.id, jobId: work.job.id, kind: original.kind },
+    allPayments,
+  );
+  const balancePayments = paymentsBelongingToInvoice(
+    { id: balance.id, jobId: work.job.id, kind: balance.kind },
+    allPayments,
+  );
   check("original invoice receives only its $375 payment", originalPayments.length === 1 && originalPayments[0].amount.toString() === "375");
   check("supplemental invoice receives only its $80 payment", balancePayments.length === 1 && balancePayments[0].amount.toString() === "80");
   check(
@@ -622,6 +763,7 @@ try {
         status: changeOrder.status,
         total: Number(changeOrder.total.toString()),
         invoiceId: changeOrder.invoiceId,
+        approvedAt: changeOrder.approvedAt,
         createdAt: changeOrder.createdAt,
       })),
       serviceRequests: [],
@@ -668,6 +810,7 @@ try {
       status: changeOrder.status,
       total: changeOrder.total,
       invoiceId: changeOrder.invoiceId,
+      approvedAt: changeOrder.approvedAt,
       createdAt: changeOrder.createdAt,
     })),
     estimates: [
@@ -723,6 +866,372 @@ try {
     "tenant B report includes its own unbilled completed job",
     reportB.attention.some((item) => item.key === `job-unbilled:${businessBJob.job.id}`),
   );
+
+  console.log("\nTEST — Late-approved CO created before the original invoice stays billable");
+  const timingJob = await createInProgressApprovedJob({
+    businessId: businessA.id,
+    customerId: customerA.id,
+    propertyId: propertyA.id,
+    customerName: customerA.name,
+    estimateTotal: 200,
+    estimateLines: [{ description: "Timing original work", quantity: 1, unitPrice: 200, total: 200 }],
+    status: "COMPLETED",
+  });
+  const originalJan5 = new Date("2026-01-05T12:00:00.000Z");
+  const timingOriginal = await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      jobId: timingJob.job.id,
+      kind: INVOICE_KIND_ORIGINAL,
+      status: "SENT",
+      total: new Prisma.Decimal(200),
+      createdAt: originalJan5,
+    },
+  });
+  const lateApprovalCo = await addChangeOrder({
+    businessId: businessA.id,
+    jobId: timingJob.job.id,
+    title: "Created early, approved late",
+    status: "APPROVED",
+    total: 90,
+    description: "Created early, approved late",
+    createdAt: new Date("2026-01-01T12:00:00.000Z"),
+    approvedAt: new Date("2026-01-10T12:00:00.000Z"),
+  });
+  const earlyApprovalCo = await addChangeOrder({
+    businessId: businessA.id,
+    jobId: timingJob.job.id,
+    title: "Approved before original",
+    status: "APPROVED",
+    total: 40,
+    description: "Approved before original",
+    createdAt: new Date("2026-01-01T08:00:00.000Z"),
+    approvedAt: new Date("2026-01-03T12:00:00.000Z"),
+  });
+
+  const migrationSql = readFileSync(
+    new URL("../prisma/migrations/20260926100000_revenue_integrity_supplemental_invoices/migration.sql", import.meta.url),
+    "utf8",
+  );
+  const statements = migrationStatements(migrationSql);
+  for (const statement of statements) {
+    await prisma.$executeRawUnsafe(statement);
+  }
+
+  const lateAfterMigrate = await prisma.changeOrder.findUniqueOrThrow({ where: { id: lateApprovalCo.id } });
+  const earlyAfterMigrate = await prisma.changeOrder.findUniqueOrThrow({ where: { id: earlyApprovalCo.id } });
+  check("migration leaves late-approved CO unbilled", lateAfterMigrate.invoiceId === null);
+  check("migration attaches CO approved before the original invoice", earlyAfterMigrate.invoiceId === timingOriginal.id);
+  check(
+    "runtime still treats late-approved CO as unbilled attention",
+    completedJobBillingAttention({
+      jobStatus: "COMPLETED",
+      originalApprovedTotal: 200,
+      invoices: [timingOriginal],
+      changeOrders: [lateAfterMigrate, earlyAfterMigrate],
+    }).unbilled === true,
+  );
+
+  const latePersist = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: businessA.id,
+    jobId: timingJob.job.id,
+  });
+  check("late-approved CO produces a supplemental invoice", latePersist.ok && latePersist.reused === false);
+  check("late-approved supplemental total is only that CO", latePersist.ok && latePersist.total.toString() === "90");
+  const lateAfterBill = await prisma.changeOrder.findUniqueOrThrow({ where: { id: lateApprovalCo.id } });
+  check("late-approved CO is billed exactly once on the supplemental", lateAfterBill.invoiceId === latePersist.invoiceId);
+  const earlyStillOriginal = await prisma.changeOrder.findUniqueOrThrow({ where: { id: earlyApprovalCo.id } });
+  check("early-approved CO stays on the original and is not duplicated", earlyStillOriginal.invoiceId === timingOriginal.id);
+  const lateAgain = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: businessA.id,
+    jobId: timingJob.job.id,
+  });
+  check("same late-approved CO cannot be billed twice", lateAgain.ok && lateAgain.reused === true);
+  check(
+    "timing job still has one ORIGINAL and one SUPPLEMENTAL",
+    (await prisma.invoice.count({ where: { jobId: timingJob.job.id, kind: INVOICE_KIND_ORIGINAL } })) === 1 &&
+      (await prisma.invoice.count({ where: { jobId: timingJob.job.id, kind: INVOICE_KIND_SUPPLEMENTAL } })) === 1,
+  );
+  const unchangedOriginal = await prisma.invoice.findUniqueOrThrow({ where: { id: timingOriginal.id } });
+  check("original invoice total stayed $200 after late CO billing", unchangedOriginal.total.toString() === "200");
+
+  console.log("\nTEST — Multi-invoice payment attribution");
+  const payJob = await createInProgressApprovedJob({
+    businessId: businessA.id,
+    customerId: customerA.id,
+    propertyId: propertyA.id,
+    customerName: customerA.name,
+    estimateTotal: 300,
+    estimateLines: [{ description: "Payment job work", quantity: 1, unitPrice: 300, total: 300 }],
+    status: "COMPLETED",
+  });
+  const invoiceA = await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      jobId: payJob.job.id,
+      kind: INVOICE_KIND_ORIGINAL,
+      status: "SENT",
+      total: new Prisma.Decimal(300),
+    },
+  });
+  await addChangeOrder({
+    businessId: businessA.id,
+    jobId: payJob.job.id,
+    title: "Balance after original",
+    status: "APPROVED",
+    total: 60,
+    description: "Balance after original",
+  });
+  const invoiceBPersist = await persistDraftInvoiceFromCompletedJob(prisma, {
+    businessId: businessA.id,
+    jobId: payJob.job.id,
+  });
+  check("payment job created a supplemental invoice", invoiceBPersist.ok && invoiceBPersist.kind === INVOICE_KIND_SUPPLEMENTAL);
+  const invoiceB = await prisma.invoice.findUniqueOrThrow({ where: { id: invoiceBPersist.invoiceId } });
+  await prisma.invoice.update({ where: { id: invoiceB.id }, data: { status: "SENT" } });
+
+  const legacyPayment = await prisma.payment.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      estimateId: payJob.estimate.id,
+      jobId: payJob.job.id,
+      invoiceId: null,
+      purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+      amount: new Prisma.Decimal(50),
+      method: "CASH",
+      note: "legacy-unallocated",
+    },
+  });
+  const payRows = await listProjectPayments(prisma, {
+    businessId: businessA.id,
+    jobId: payJob.job.id,
+    invoiceId: invoiceA.id,
+  });
+  const beforeA = paymentsBelongingToInvoice({ id: invoiceA.id, jobId: payJob.job.id, kind: invoiceA.kind }, payRows);
+  const beforeB = paymentsBelongingToInvoice({ id: invoiceB.id, jobId: payJob.job.id, kind: invoiceB.kind }, payRows);
+  check("legacy job-only payment is counted on ORIGINAL A only", beforeA.some((row) => row.id === legacyPayment.id));
+  check("legacy job-only payment is never counted on SUPPLEMENTAL B", beforeB.every((row) => row.id !== legacyPayment.id));
+  check(
+    "B remains fully due while the legacy payment is unallocated",
+    invoicePaymentBreakdown({ status: "SENT", total: invoiceB.total, payments: beforeB }).amountDue.toString() === "60",
+  );
+
+  const attached = await attachEstimatePaymentsToInvoice(prisma, {
+    businessId: businessA.id,
+    estimateId: payJob.estimate.id,
+    jobId: payJob.job.id,
+    invoiceId: invoiceA.id,
+  });
+  check("legacy carry-forward assigns the payment to ORIGINAL A", attached === 1);
+  const afterAttach = await prisma.payment.findUniqueOrThrow({ where: { id: legacyPayment.id } });
+  check("legacy payment invoiceId is ORIGINAL A", afterAttach.invoiceId === invoiceA.id);
+  const refused = await attachEstimatePaymentsToInvoice(prisma, {
+    businessId: businessA.id,
+    estimateId: payJob.estimate.id,
+    jobId: payJob.job.id,
+    invoiceId: invoiceB.id,
+  });
+  check("carry-forward refuses to attach legacy payments to a supplemental invoice", refused === 0);
+
+  const payA = await recordSucceededPayment(prisma, {
+    businessId: businessA.id,
+    customerId: customerA.id,
+    jobId: payJob.job.id,
+    invoiceId: invoiceA.id,
+    purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+    amount: new Prisma.Decimal(250),
+    method: "CHECK",
+    note: "direct-A",
+  });
+  const payB = await recordSucceededPayment(prisma, {
+    businessId: businessA.id,
+    customerId: customerA.id,
+    jobId: payJob.job.id,
+    invoiceId: invoiceB.id,
+    purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+    amount: new Prisma.Decimal(15),
+    method: "ZELLE_BANK_TRANSFER",
+    note: "direct-B",
+  });
+  const grouped = await listPaymentsGroupedByInvoiceId(prisma, businessA.id, [
+    { id: invoiceA.id, jobId: payJob.job.id, kind: invoiceA.kind },
+    { id: invoiceB.id, jobId: payJob.job.id, kind: invoiceB.kind },
+  ]);
+  const groupedA = grouped.get(invoiceA.id) ?? [];
+  const groupedB = grouped.get(invoiceB.id) ?? [];
+  check(
+    "direct invoiceId=A payment stays isolated on A",
+    groupedA.some((row) => row.id === payA.id) && groupedB.every((row) => row.id !== payA.id),
+  );
+  check(
+    "direct invoiceId=B payment stays isolated on B",
+    groupedB.some((row) => row.id === payB.id) && groupedA.every((row) => row.id !== payB.id),
+  );
+  check("A document payments include the $50 legacy + $250 direct", groupedA.reduce((sum, row) => sum + Number(row.amount), 0) === 300);
+  check("B document payments include only B's $15", groupedB.reduce((sum, row) => sum + Number(row.amount), 0) === 15);
+
+  const remainingB = await listPaymentsForInvoice(prisma, {
+    businessId: businessA.id,
+    invoice: { id: invoiceB.id, jobId: payJob.job.id, kind: invoiceB.kind },
+  });
+  const dueB = invoicePaymentBreakdown({
+    status: "SENT",
+    total: invoiceB.total,
+    payments: remainingB,
+  });
+  check("marking B paid would record only B's remaining $45", dueB.amountDue.toString() === "45");
+  await recordSucceededPayment(prisma, {
+    businessId: businessA.id,
+    customerId: customerA.id,
+    jobId: payJob.job.id,
+    invoiceId: invoiceB.id,
+    purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+    amount: dueB.amountDue,
+    method: "CASH",
+    note: "mark-B-remaining",
+  });
+  const docA = await loadInvoiceDocumentForBusiness(invoiceA.id, businessA.id, prisma);
+  const docB = await loadInvoiceDocumentForBusiness(invoiceB.id, businessA.id, prisma);
+  check("invoice A document total stays $300.00", docA?.totalLabel === "$300.00");
+  check("invoice B document total stays $60.00", docB?.totalLabel === "$60.00");
+  check("invoice A document amount due is $0.00", docA?.amountDueLabel === "$0.00");
+  check("invoice B document amount due is $0.00 after its own remaining payment", docB?.amountDueLabel === "$0.00");
+  check("invoice A document does not list the supplemental work", docA?.lineItems.every((line) => line.description !== "Balance after original") === true);
+
+  console.log("\nTEST — Legacy duplicate-invoice migration normalization");
+  const dupJob = await createInProgressApprovedJob({
+    businessId: businessA.id,
+    customerId: customerA.id,
+    propertyId: propertyA.id,
+    customerName: customerA.name,
+    estimateTotal: 120,
+    estimateLines: [{ description: "Legacy duplicate job", quantity: 1, unitPrice: 120, total: 120 }],
+    status: "COMPLETED",
+  });
+  const singleJob = await createInProgressApprovedJob({
+    businessId: businessA.id,
+    customerId: customerA.id,
+    propertyId: propertyA.id,
+    customerName: customerA.name,
+    estimateTotal: 70,
+    estimateLines: [{ description: "One invoice job", quantity: 1, unitPrice: 70, total: 70 }],
+    status: "COMPLETED",
+  });
+  await prisma.$executeRawUnsafe(`DROP INDEX IF EXISTS "Invoice_jobId_original_unique"`);
+  const legacyA = await prisma.invoice.create({
+    data: {
+      id: "legacy_inv_a_older",
+      businessId: businessA.id,
+      customerId: customerA.id,
+      jobId: dupJob.job.id,
+      kind: INVOICE_KIND_ORIGINAL,
+      status: "PAID",
+      total: new Prisma.Decimal(120),
+      paidAt: new Date("2026-02-01T12:00:00.000Z"),
+      paymentMethod: "CASH",
+      paymentReference: "legacy-a",
+      createdAt: new Date("2026-02-01T10:00:00.000Z"),
+    },
+  });
+  const legacyB = await prisma.invoice.create({
+    data: {
+      id: "legacy_inv_b_newer",
+      businessId: businessA.id,
+      customerId: customerA.id,
+      jobId: dupJob.job.id,
+      kind: INVOICE_KIND_ORIGINAL,
+      status: "SENT",
+      total: new Prisma.Decimal(35),
+      createdAt: new Date("2026-02-02T10:00:00.000Z"),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      invoiceId: legacyA.id,
+      description: "Legacy original line",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(120),
+      total: new Prisma.Decimal(120),
+      type: "LABOR",
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      invoiceId: legacyB.id,
+      description: "Legacy later line",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(35),
+      total: new Prisma.Decimal(35),
+      type: "LABOR",
+    },
+  });
+  const legacyDupPayment = await prisma.payment.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      jobId: dupJob.job.id,
+      invoiceId: legacyA.id,
+      purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+      amount: new Prisma.Decimal(120),
+      method: "CASH",
+      note: "belongs-to-A",
+    },
+  });
+  const singleInvoice = await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      jobId: singleJob.job.id,
+      kind: INVOICE_KIND_ORIGINAL,
+      status: "SENT",
+      total: new Prisma.Decimal(70),
+    },
+  });
+
+  for (const statement of statements) {
+    await prisma.$executeRawUnsafe(statement);
+  }
+
+  const afterA = await prisma.invoice.findUniqueOrThrow({
+    where: { id: legacyA.id },
+    include: { lineItems: true },
+  });
+  const afterB = await prisma.invoice.findUniqueOrThrow({
+    where: { id: legacyB.id },
+    include: { lineItems: true },
+  });
+  const afterSingle = await prisma.invoice.findUniqueOrThrow({ where: { id: singleInvoice.id } });
+  check("oldest legacy invoice is ORIGINAL after migration", afterA.kind === INVOICE_KIND_ORIGINAL);
+  check("newer legacy invoice is SUPPLEMENTAL after migration", afterB.kind === INVOICE_KIND_SUPPLEMENTAL);
+  check("legacy ORIGINAL total/status/paidAt unchanged", afterA.total.toString() === "120" && afterA.status === "PAID" && afterA.paidAt instanceof Date);
+  check("legacy SUPPLEMENTAL total/status unchanged", afterB.total.toString() === "35" && afterB.status === "SENT");
+  check("legacy ORIGINAL line items unchanged", afterA.lineItems.length === 1 && afterA.lineItems[0].description === "Legacy original line");
+  check("legacy SUPPLEMENTAL line items unchanged", afterB.lineItems.length === 1 && afterB.lineItems[0].description === "Legacy later line");
+  check(
+    "legacy payment relationship unchanged",
+    (await prisma.payment.findUniqueOrThrow({ where: { id: legacyDupPayment.id } })).invoiceId === legacyA.id,
+  );
+  check("one-invoice job stays ORIGINAL", afterSingle.kind === INVOICE_KIND_ORIGINAL);
+  let uniqueSucceeded = false;
+  try {
+    await prisma.invoice.create({
+      data: {
+        businessId: businessA.id,
+        customerId: customerA.id,
+        jobId: dupJob.job.id,
+        kind: INVOICE_KIND_ORIGINAL,
+        total: new Prisma.Decimal(1),
+      },
+    });
+  } catch {
+    uniqueSucceeded = true;
+  }
+  check("partial unique index rejects a second ORIGINAL for the same job", uniqueSucceeded);
 
   console.log(
     failures === 0
