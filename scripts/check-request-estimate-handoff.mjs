@@ -20,13 +20,18 @@ const {
 const { buildEstimateLineCreatesFromRequestItems } = await import(
   "@/lib/request-estimate-draft"
 );
+const { DECORATIVE_WALL_PANELING_TITLE } = await import(
+  "@/lib/estimate-calculators"
+);
 const { HANDYMAN_STARTER_SERVICES } = await import(
   "@/lib/handyman-starter-catalog"
 );
 const { ownerVisibleRequestPhotos } = await import(
   "@/lib/intake-quote-handoff"
 );
-const { joinCatalogDescription } = await import("@/lib/estimate-line-scope");
+const { joinCatalogDescription, lineCalculatorSnapshot } = await import(
+  "@/lib/estimate-line-scope"
+);
 
 let passed = 0;
 let failed = 0;
@@ -46,6 +51,9 @@ function readRepo(path) {
 
 const doorKnob = HANDYMAN_STARTER_SERVICES.find(
   (row) => row.templateKey === "door-knob-deadbolt-set",
+);
+const paneling = HANDYMAN_STARTER_SERVICES.find(
+  (row) => row.templateKey === "decorative-wall-paneling-finish-carpentry",
 );
 const ownerPage = readRepo("src/app/(app)/estimates/[estimateId]/page.tsx");
 const handoffUi = readRepo("src/components/estimates/request-estimate-handoff.tsx");
@@ -186,6 +194,28 @@ const starterRows = associateRequestedWorkWithStarterLabor(
   })),
 );
 check("Door Knob starter service is in the catalog fixture", Boolean(doorKnob));
+const panelingLines = buildEstimateLineCreatesFromRequestItems("biz-a", [
+  {
+    quantity: 1,
+    serviceCatalogItem: {
+      id: "svc-paneling",
+      name: paneling.name,
+      pricingMode: "CUSTOM_QUOTE",
+      price: null,
+      description: paneling.description,
+    },
+  },
+]);
+const panelingSnapshot = lineCalculatorSnapshot(panelingLines[0]?.description);
+check(
+  "Request draft binds Decorative Wall Paneling from title/registry without an embedded catalog definition",
+  Boolean(paneling) &&
+    paneling.name === DECORATIVE_WALL_PANELING_TITLE &&
+    !paneling.description.includes("TBBT Calculator Definition") &&
+    panelingSnapshot?.calculatorId === "decorative-wall-paneling" &&
+    panelingSnapshot?.inputs.wallWidthFt === 0 &&
+    panelingSnapshot?.rates.panelRate === 90,
+);
 check(
   "Starter labor still populates at $125 with the catalog included scope",
   starterRows.length === 1 &&

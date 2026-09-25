@@ -10,12 +10,27 @@ import {
 import { DECORATIVE_WALL_PANELING_TEMPLATE } from "@/lib/estimate-calculators/decorative-wall-paneling-template";
 import {
   CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
+  TRADE_FORMULA_CALCULATOR_ID,
   isCalculatorId,
   type CalculatorDefinition,
   type CalculatorId,
   type CalculatorResult,
   type CalculatorSnapshot,
 } from "@/lib/estimate-calculators/types";
+import {
+  computeFormula,
+  emptyFormulaInputs,
+  formulaQuantityKeys,
+  normalizeFormulaContract,
+  persistableFormulaRates,
+  type FormulaContract,
+} from "@/lib/estimate-calculators/formula-contract";
+import {
+  calculatorTitleAliases,
+  definitionFromFormulaBinding,
+  formulaBindingForTitle,
+  resolveFormulaContract,
+} from "@/lib/estimate-calculators/formula-registry";
 import {
   computeVariableScope,
   defaultVariableScopeRates,
@@ -32,6 +47,7 @@ import { pickWorkAreaCalculatorInputs } from "@/lib/work-area-intake";
 
 const TITLE_ALIASES: Partial<Record<CalculatorId, string[]>> = {
   "decorative-wall-paneling": [DECORATIVE_WALL_PANELING_TITLE.toLowerCase()],
+  ...calculatorTitleAliases(),
 };
 
 export function resolveCalculatorId(input: {
@@ -74,12 +90,30 @@ export function templateForCalculator(
   return null;
 }
 
+export function persistableCalculatorFormula(
+  calculatorId: CalculatorId,
+  formula?: unknown,
+  title?: string | null,
+): FormulaContract | undefined {
+  const normalized = normalizeFormulaContract(formula);
+  if (normalized) return normalized;
+  if (calculatorId !== TRADE_FORMULA_CALCULATOR_ID) return undefined;
+  return resolveFormulaContract({ calculatorId, title }) ?? undefined;
+}
+
 export function defaultCalculatorRates(
   calculatorId: CalculatorId,
   components?: unknown[] | null,
+  formula?: FormulaContract | null,
+  title?: string | null,
 ) {
   if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
     return { ...DEFAULT_DECORATIVE_WALL_PANELING_RATES };
+  }
+  const resolvedFormula = persistableCalculatorFormula(calculatorId, formula, title);
+  if (resolvedFormula) {
+    const binding = formulaBindingForTitle(title);
+    return persistableFormulaRates(resolvedFormula, binding?.defaultRates);
   }
   const template = templateForCalculator(calculatorId, components);
   return template ? defaultVariableScopeRates(template) : {};
@@ -89,11 +123,17 @@ export function emptyCalculatorInputs(
   calculatorId: CalculatorId,
   rates?: Record<string, unknown>,
   components?: unknown[] | null,
+  formula?: FormulaContract | null,
+  title?: string | null,
 ) {
   if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
     return emptyDecorativeWallPanelingInputs(
       normalizeDecorativeWallPanelingRates(rates),
     );
+  }
+  const resolvedFormula = persistableCalculatorFormula(calculatorId, formula, title);
+  if (resolvedFormula) {
+    return emptyFormulaInputs(resolvedFormula);
   }
   const template = templateForCalculator(calculatorId, components);
   return template ? emptyVariableScopeInputs(template) : {};
@@ -104,9 +144,15 @@ export function computeCalculator(
   inputs?: Record<string, unknown> | null,
   rates?: Record<string, unknown> | null,
   components?: unknown[] | null,
+  formula?: FormulaContract | null,
+  title?: string | null,
 ): CalculatorResult {
   if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
     return computeDecorativeWallPaneling(inputs, rates);
+  }
+  const resolvedFormula = persistableCalculatorFormula(calculatorId, formula, title);
+  if (resolvedFormula) {
+    return computeFormula(resolvedFormula, inputs, rates);
   }
   const template = templateForCalculator(calculatorId, components);
   if (template) {
@@ -117,8 +163,10 @@ export function computeCalculator(
 
 export function normalizeCalculatorSnapshot(
   snapshot: CalculatorSnapshot,
+  title?: string | null,
 ): CalculatorSnapshot {
   const calculatorId = snapshot.calculatorId;
+  const formula = persistableCalculatorFormula(calculatorId, snapshot.formula, title);
   if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
     const rates = normalizeDecorativeWallPanelingRates(snapshot.rates);
     return {
@@ -126,11 +174,27 @@ export function normalizeCalculatorSnapshot(
       calculatorId,
       rates,
       inputs: normalizeDecorativeWallPanelingInputs(snapshot.inputs, rates),
+      estimatedLaborHours: snapshot.estimatedLaborHours ?? null,
+    };
+  }
+  if (formula) {
+    return {
+      ...snapshot,
+      calculatorId,
+      formula,
+      rates: persistableFormulaRates(formula, snapshot.rates),
+      inputs: {
+        ...emptyFormulaInputs(formula),
+        ...(snapshot.inputs && typeof snapshot.inputs === "object"
+          ? snapshot.inputs
+          : {}),
+      },
+      estimatedLaborHours: snapshot.estimatedLaborHours ?? null,
     };
   }
   const template = templateForCalculator(calculatorId, snapshot.components);
   if (!template) {
-    return { ...snapshot, calculatorId };
+    return { ...snapshot, calculatorId, ...(formula ? { formula } : {}) };
   }
   return {
     ...snapshot,
@@ -143,6 +207,7 @@ export function normalizeCalculatorSnapshot(
         : {}),
     },
     components: template.components,
+    estimatedLaborHours: snapshot.estimatedLaborHours ?? null,
   };
 }
 
@@ -173,6 +238,9 @@ export function calculatorTitle(calculatorId: CalculatorId) {
   if (calculatorId === CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID) {
     return "Custom Work";
   }
+  if (calculatorId === TRADE_FORMULA_CALCULATOR_ID) {
+    return "Trade formula";
+  }
   return calculatorId;
 }
 
@@ -181,7 +249,13 @@ export function persistableCalculatorRates(
   rates?: Record<string, unknown> | null,
   inputs?: Record<string, unknown> | null,
   components?: unknown[] | null,
+  formula?: FormulaContract | null,
+  title?: string | null,
 ): Record<string, unknown> {
+  const resolvedFormula = persistableCalculatorFormula(calculatorId, formula, title);
+  if (resolvedFormula) {
+    return persistableFormulaRates(resolvedFormula, rates);
+  }
   if (calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID) {
     const normalized = normalizeDecorativeWallPanelingRates(rates);
     const job = normalizeDecorativeWallPanelingInputs(inputs ?? undefined, normalized);
@@ -232,9 +306,14 @@ export function definitionOmitsJobQuantities(
     definition.calculatorId,
     definition.components,
   );
+  const formula = persistableCalculatorFormula(
+    definition.calculatorId,
+    definition.formula,
+  );
   const quantityKeys = new Set<string>([
     ...JOB_SPECIFIC_CALCULATOR_INPUT_KEYS,
     ...(template ? jobQuantityKeysFromTemplate(template) : []),
+    ...(formula ? formulaQuantityKeys(formula) : []),
   ]);
   const rates = definition.rates ?? {};
   if ([...quantityKeys].some((key) => Object.hasOwn(rates, key))) {
@@ -259,16 +338,20 @@ export function catalogDefinitionFromSnapshot(
   const calculatorId = resolveCalculatorId({ title, snapshot });
   if (!calculatorId) return null;
   const components = persistableCalculatorComponents(calculatorId, snapshot?.components);
+  const formula = persistableCalculatorFormula(calculatorId, snapshot?.formula, title);
   const template = templateForCalculator(calculatorId, components);
   return {
     calculatorId,
     rates: persistableCalculatorRates(
       calculatorId,
-      snapshot?.rates ?? defaultCalculatorRates(calculatorId, components),
+      snapshot?.rates ?? defaultCalculatorRates(calculatorId, components, formula, title),
       snapshot?.inputs,
       components,
+      formula,
+      title,
     ),
     ...(components ? { components } : {}),
+    ...(formula ? { formula } : {}),
     ...(template?.intake ? { intake: template.intake } : {}),
   };
 }
@@ -304,7 +387,10 @@ export function findCatalogCalculatorDefinition(
           )
         : null,
     });
-  if (!calculatorId) return null;
+  if (!calculatorId) {
+    const binding = formulaBindingForTitle(input.title);
+    return binding ? definitionFromFormulaBinding(binding) : null;
+  }
 
   if (input.catalogItemId) {
     const linked = items.find((item) => item.id === input.catalogItemId);
@@ -330,6 +416,11 @@ export function findCatalogCalculatorDefinition(
     const definition = catalogCalculatorDefinition(item.description);
     if (definition?.calculatorId === calculatorId) return definition;
   }
+
+  const binding = formulaBindingForTitle(input.title);
+  if (binding?.calculatorId === calculatorId) {
+    return definitionFromFormulaBinding(binding);
+  }
   return null;
 }
 
@@ -338,8 +429,15 @@ export function resolveCalculatorRatesForForm(input: {
   snapshot?: CalculatorSnapshot | null;
   businessRates?: Record<string, unknown> | null;
   components?: unknown[] | null;
+  formula?: FormulaContract | null;
+  title?: string | null;
 }) {
   const components = input.components ?? input.snapshot?.components;
+  const formula = persistableCalculatorFormula(
+    input.calculatorId,
+    input.formula ?? input.snapshot?.formula,
+    input.title,
+  );
   const applied =
     input.snapshot?.appliedAmount != null ||
     input.snapshot?.recommendedAmount != null;
@@ -349,15 +447,19 @@ export function resolveCalculatorRatesForForm(input: {
       input.snapshot?.rates,
       input.snapshot?.inputs,
       components,
+      formula,
+      input.title,
     );
   }
   return persistableCalculatorRates(
     input.calculatorId,
     input.businessRates ??
       input.snapshot?.rates ??
-      defaultCalculatorRates(input.calculatorId, components),
+      defaultCalculatorRates(input.calculatorId, components, formula, input.title),
     undefined,
     components,
+    formula,
+    input.title,
   );
 }
 
@@ -403,15 +505,22 @@ export function startingCalculatorSnapshot(input: {
     calculatorId,
     input.definition?.components ?? input.snapshot?.components,
   );
+  const formula = persistableCalculatorFormula(
+    calculatorId,
+    input.definition?.formula ?? input.snapshot?.formula,
+    input.title,
+  );
   const rates = persistableCalculatorRates(
     calculatorId,
     input.definition?.rates ??
       input.snapshot?.rates ??
-      defaultCalculatorRates(calculatorId, components),
+      defaultCalculatorRates(calculatorId, components, formula, input.title),
     undefined,
     components,
+    formula,
+    input.title,
   );
-  const empty = emptyCalculatorInputs(calculatorId, rates, components);
+  const empty = emptyCalculatorInputs(calculatorId, rates, components, formula, input.title);
   const allowedKeys = Object.keys(empty);
   return {
     calculatorId,
@@ -423,6 +532,7 @@ export function startingCalculatorSnapshot(input: {
       ...pickWorkAreaCalculatorInputs(input.prefillInputs ?? input.snapshot?.inputs),
     },
     ...(components ? { components } : {}),
+    ...(formula ? { formula } : {}),
   };
 }
 
@@ -436,6 +546,7 @@ export function formCalculatorInputs(input: {
     input.calculatorId,
     input.rates ?? undefined,
     input.components,
+    input.snapshot?.formula,
   );
   if (calculatorSnapshotIsApplied(input.snapshot)) {
     return input.snapshot?.inputs ?? empty;

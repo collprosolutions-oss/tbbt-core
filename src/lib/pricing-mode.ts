@@ -1,4 +1,5 @@
 import { formatMoney } from "@/lib/format";
+import { publicProductionUnitLabel } from "@/lib/estimate-calculators/unit-registry";
 
 export const PRICING_MODES = [
   "FIXED",
@@ -48,7 +49,7 @@ export function formatCatalogPriceLabel(
     return `Fixed ${money}`;
   }
   if (mode === "VARIABLE") {
-    const unit = unitLabel?.trim();
+    const unit = publicProductionUnitLabel(unitLabel);
     return unit ? `${money} / ${unit}` : `From ${money}`;
   }
   return `Starting at ${money}`;
@@ -57,13 +58,13 @@ export function formatCatalogPriceLabel(
 export function pricingModeLabel(mode: string) {
   if (mode === "FIXED") return "Fixed";
   if (mode === "CUSTOM_QUOTE") return "Custom Quote";
-  if (mode === "VARIABLE") return "Variable / unit";
+  if (mode === "VARIABLE") return "Unit / production";
   return "Starting at";
 }
 
 export function pricingModeDescription(mode: string) {
   if (mode === "FIXED") return "For predictable services.";
   if (mode === "CUSTOM_QUOTE") return "For highly variable work.";
-  if (mode === "VARIABLE") return "For unit-based or measured scope.";
+  if (mode === "VARIABLE") return "For unit or production pricing. Not an hourly rate.";
   return "For moderately variable services.";
 }

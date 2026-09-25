@@ -6,14 +6,17 @@
  * / Other items. Preview cannot add Prisma columns, so snapshots live
  * in existing description text.
  */
+import type { FormulaContract } from "@/lib/estimate-calculators/formula-contract";
 import type { VariableScopeComponent } from "@/lib/estimate-calculators/variable-scope";
 
 export const CALCULATOR_IDS = [
   "decorative-wall-paneling",
   "custom-variable-scope",
+  "trade-formula",
 ] as const;
 
 export const CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID = "custom-variable-scope" as const;
+export const TRADE_FORMULA_CALCULATOR_ID = "trade-formula" as const;
 
 export type CalculatorId = (typeof CALCULATOR_IDS)[number];
 
@@ -44,6 +47,7 @@ export type CalculatorCustomerPolicy = {
 export type CalculatorResult = {
   recommendedAmount: number;
   lines: CalculatorBreakdownLine[];
+  estimatedLaborHours?: number | null;
 };
 
 export type CalculatorSnapshot = {
@@ -55,6 +59,8 @@ export type CalculatorSnapshot = {
   appliedAmount?: number;
   overriddenAmount?: number | null;
   components?: VariableScopeComponent[];
+  formula?: FormulaContract;
+  estimatedLaborHours?: number | null;
 };
 
 export type CalculatorIntakeConfig = {
@@ -67,6 +73,7 @@ export type CalculatorDefinition = {
   customerPolicies?: CalculatorCustomerPolicy[];
   components?: VariableScopeComponent[];
   intake?: CalculatorIntakeConfig;
+  formula?: FormulaContract;
 };
 
 export function isCalculatorId(value: unknown): value is CalculatorId {

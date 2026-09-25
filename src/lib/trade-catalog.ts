@@ -13,6 +13,11 @@ import {
   cleaningStarterPricingMode,
 } from "@/lib/cleaning-starter-catalog";
 import {
+  definitionFromFormulaBinding,
+  formulaBindingForTemplateKey,
+} from "@/lib/estimate-calculators/formula-registry";
+import { joinCatalogDescription } from "@/lib/estimate-line-scope";
+import {
   planStarterCatalogInstall,
   starterIntakeFields,
   starterPricingMode,
@@ -58,7 +63,7 @@ async function installHandymanStarterRows(db: CatalogDb, businessId: string) {
         businessId,
         tradeCode: "HANDYMAN",
         name: service.name,
-        description: service.description,
+        description: starterCatalogDescription(service),
         pricingMode: starterPricingMode(service),
         price:
           service.startingPrice == null
@@ -109,6 +114,12 @@ async function installCleaningStarterRows(db: CatalogDb, businessId: string) {
     skipped: plan.skip.length,
     pending: plan.pending.length,
   };
+}
+
+function starterCatalogDescription(service: { templateKey: string; description: string }) {
+  const binding = formulaBindingForTemplateKey(service.templateKey);
+  if (!binding) return service.description;
+  return joinCatalogDescription(service.description, definitionFromFormulaBinding(binding));
 }
 
 export function catalogItemMatchesTrade(
