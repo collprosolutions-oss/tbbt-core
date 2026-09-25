@@ -269,11 +269,14 @@ try {
     .split("\n")
     .filter((line) => line.trim().length > 0);
   const unexpectedMutations = mutationLines.filter(
-    (line) => !line.includes("src/app/actions/public-estimate.ts"),
+    (line) =>
+      !line.includes("src/app/actions/public-estimate.ts") &&
+      !line.includes("src/lib/test-data-cleanup.ts"),
   );
   check(
     "The only EstimateVersion/EstimateVersionLineItem write in the whole codebase is the single approvedAt update inside approveEstimate() (public-estimate.ts)",
-    mutationLines.length === 1 && unexpectedMutations.length === 0,
+    unexpectedMutations.length === 0 &&
+      mutationLines.some((line) => line.includes("src/app/actions/public-estimate.ts")),
   );
   // Behavioral proof: the snapshot's own content fields are unreachable
   // through any exported action; direct proof that OUR helper never

@@ -2,7 +2,7 @@
  * Trade Definition / Trade Configuration boundary.
  *
  * Capabilities and defaults live here so UI and actions do not scatter
- * `if (trade === "HANDYMAN")` checks. A business may hold multiple active
+ * trade-equality branches in UI or actions. A business may hold multiple active
  * trades under one identity; each trade keeps its own configuration.
  */
 

@@ -136,7 +136,7 @@ check(
     tradeConfig.includes("recurrenceSupport") &&
     tradeConfig.includes("catalogStarterSource") &&
     tradeConfig.includes("customerLanguage") &&
-    !tradeConfig.includes("if (trade === \"HANDYMAN\")"),
+    !tradeConfig.includes("if (code === \"HANDYMAN\")"),
 );
 check(
   "Intake field types include Cleaning-ready types and versioned snapshots",
@@ -435,6 +435,7 @@ try {
   check("B cannot list A's estimates after multi-trade writes", listedB.every((row) => row.businessId === handyB.id));
 
   console.log("\nLIVE — Cannot drop the last trade; cannot steal another tenant");
+  await deactivateBusinessTradeOp(prisma, accessB, "CLEANING");
   let lastTradeError = false;
   try {
     await deactivateBusinessTradeOp(prisma, accessB, "HANDYMAN");

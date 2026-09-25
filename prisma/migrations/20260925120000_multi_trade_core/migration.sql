@@ -1,7 +1,7 @@
 -- Additive Multi-Trade Core + Cleaning-ready architecture.
 -- Preview shares Production and skips migrate, so every statement is IF NOT EXISTS.
 -- Re-running is safe: backfills use WHERE NOT EXISTS / COALESCE no-ops.
--- No DROP TABLE, DROP COLUMN, DELETE, or TRUNCATE.
+-- Statements are additive only.
 
 CREATE TABLE IF NOT EXISTS "BusinessTrade" (
     "id" TEXT NOT NULL,
