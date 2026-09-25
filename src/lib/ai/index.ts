@@ -24,6 +24,7 @@ export {
   campaignIdeasWithAi,
 } from "@/lib/ai/marketing";
 export { describeReviewSentiment, draftReviewResponseFromRecord } from "@/lib/ai/reviews";
+export { runAgreementAssist, agreementAssistFallback } from "@/lib/ai/agreements";
 export {
   explainGrowthPerformance,
   proposeCampaignAngle,

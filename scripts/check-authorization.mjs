@@ -616,6 +616,17 @@ try {
     requireBusinessCapability(adminA, CAPABILITIES.MANAGE_KNOWLEDGE);
   });
 
+  console.log("\nTEST 16b — Business Protection is OWNER/ADMIN-only");
+  check("OWNER has MANAGE_BUSINESS_PROTECTION", roleHasCapability("OWNER", CAPABILITIES.MANAGE_BUSINESS_PROTECTION));
+  check("ADMIN has MANAGE_BUSINESS_PROTECTION", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_BUSINESS_PROTECTION));
+  check("MEMBER does not have MANAGE_BUSINESS_PROTECTION", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_BUSINESS_PROTECTION));
+  await expectForbidden("MEMBER cannot pass the Business Protection capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_BUSINESS_PROTECTION);
+  });
+  await expectAllowed("ADMIN can pass the Business Protection capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_BUSINESS_PROTECTION);
+  });
+
   console.log("\nTEST 17 — Generic AI writing assist is OWNER/ADMIN-only");
   check("OWNER has USE_AI_ASSIST", roleHasCapability("OWNER", CAPABILITIES.USE_AI_ASSIST));
   check("ADMIN has USE_AI_ASSIST", roleHasCapability("ADMIN", CAPABILITIES.USE_AI_ASSIST));

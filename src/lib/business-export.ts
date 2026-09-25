@@ -5,6 +5,9 @@
  * are never included.
  */
 import type { PrismaClient } from "@prisma/client";
+import { VAULT_DOCUMENT_PURPOSE } from "@/lib/business-protection";
+import { resolveStorageProvider } from "@/lib/business-storage/service";
+import type { StorageProvider } from "@/lib/business-storage/types";
 import { buildZipStore, toCsv } from "@/lib/zip-store";
 
 const SECRET_KEY_PATTERN =
@@ -14,10 +17,79 @@ export function isExportableField(key: string): boolean {
   return !SECRET_KEY_PATTERN.test(key);
 }
 
+export type BusinessExportDocumentStatus = "exported" | "skipped" | "missing";
+
+export type BusinessExportDocumentManifestRow = {
+  vaultRecordId: string;
+  storedAssetId: string | null;
+  originalFilename: string | null;
+  exportedFilename: string | null;
+  status: BusinessExportDocumentStatus;
+  reason?: string;
+};
+
+export type BusinessExportResult = {
+  filename: string;
+  bytes: Buffer;
+  documentExport: "complete" | "partial" | "none";
+  documentExportError?: string;
+  exportedDocumentCount: number;
+  missingDocumentCount: number;
+};
+
+export type BusinessExportOptions = {
+  provider?: StorageProvider;
+};
+
+export function safeExportFilename(original: string | null | undefined, fallback: string): string {
+  const cleaned = (original ?? "")
+    .replace(/[/\\?%*:|"<>]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+  const base = cleaned || fallback;
+  return base.slice(0, 120);
+}
+
+export function uniqueExportPath(used: Set<string>, desired: string): string {
+  if (!used.has(desired)) {
+    used.add(desired);
+    return desired;
+  }
+  const lastDot = desired.lastIndexOf(".");
+  const stem = lastDot > 0 ? desired.slice(0, lastDot) : desired;
+  const ext = lastDot > 0 ? desired.slice(lastDot) : "";
+  let index = 2;
+  let candidate = `${stem}-${index}${ext}`;
+  while (used.has(candidate)) {
+    index += 1;
+    candidate = `${stem}-${index}${ext}`;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
+async function resolveExportStorageProvider(
+  options?: BusinessExportOptions,
+): Promise<{ provider: StorageProvider | null; error?: string }> {
+  if (options?.provider) return { provider: options.provider };
+  try {
+    return { provider: await resolveStorageProvider() };
+  } catch (error) {
+    return {
+      provider: null,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Private document storage is not available for this export.",
+    };
+  }
+}
+
 export async function buildBusinessExportZip(
   prisma: PrismaClient,
   businessId: string,
-): Promise<{ filename: string; bytes: Buffer }> {
+  options?: BusinessExportOptions,
+): Promise<BusinessExportResult> {
   const business = await prisma.business.findUnique({
     where: { id: businessId },
     select: {
@@ -67,6 +139,11 @@ export async function buildBusinessExportZip(
     websitePublishes,
     websiteGallery,
     websiteLocalDrafts,
+    vaultRecords,
+    agreements,
+    agreementVersions,
+    protectionAudit,
+    protectionAcks,
   ] = await Promise.all([
     prisma.customer.findMany({
       where: { businessId },
@@ -348,6 +425,103 @@ export async function buildBusinessExportZip(
       },
       orderBy: { createdAt: "asc" },
     }),
+    prisma.businessVaultRecord.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        title: true,
+        category: true,
+        issuer: true,
+        counterparty: true,
+        effectiveOn: true,
+        expiresOn: true,
+        recordStatus: true,
+        persistedExpiryState: true,
+        notes: true,
+        storedAssetId: true,
+        createdAt: true,
+        updatedAt: true,
+        storedAsset: {
+          select: {
+            id: true,
+            businessId: true,
+            originalFilename: true,
+            mimeType: true,
+            visibility: true,
+            status: true,
+            fileSizeBytes: true,
+            purpose: true,
+            category: true,
+            storageKey: true,
+            deletedAt: true,
+            storageAccount: {
+              select: { bucketName: true },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.businessAgreement.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        agreementType: true,
+        title: true,
+        counterparty: true,
+        lifecycleStatus: true,
+        signingMode: true,
+        effectiveOn: true,
+        expiresOn: true,
+        signedVersionId: true,
+        vaultRecordId: true,
+        completedAt: true,
+        completedByMembershipId: true,
+        completionNotes: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.businessAgreementVersion.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        agreementId: true,
+        versionNumber: true,
+        representationStatus: true,
+        answersJson: true,
+        draftContent: true,
+        riskReviewJson: true,
+        lockedAt: true,
+        createdAt: true,
+      },
+      orderBy: [{ agreementId: "asc" }, { versionNumber: "asc" }],
+    }),
+    prisma.businessProtectionAuditLog.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        action: true,
+        vaultRecordId: true,
+        agreementId: true,
+        previousValue: true,
+        newValue: true,
+        changedAt: true,
+      },
+      orderBy: { changedAt: "asc" },
+    }),
+    prisma.businessProtectionAcknowledgment.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        kind: true,
+        statement: true,
+        acknowledgedAt: true,
+        membershipId: true,
+      },
+      orderBy: { acknowledgedAt: "asc" },
+    }),
   ]);
 
   const safeSettings = settings
@@ -357,6 +531,100 @@ export async function buildBusinessExportZip(
     : {};
 
   const date = new Date().toISOString().slice(0, 10);
+  const usedDocumentNames = new Set<string>();
+  const documentManifest: BusinessExportDocumentManifestRow[] = [];
+  const documentFiles: Array<{ name: string; data: Buffer }> = [];
+  const storage = await resolveExportStorageProvider(options);
+  let documentExportError = storage.error;
+  let exportedDocumentCount = 0;
+  let missingDocumentCount = 0;
+
+  for (const record of vaultRecords) {
+    const asset = record.storedAsset;
+    if (!record.storedAssetId && !asset) continue;
+    if (
+      !asset ||
+      asset.businessId !== businessId ||
+      asset.deletedAt ||
+      asset.status !== "READY" ||
+      asset.visibility !== "PRIVATE" ||
+      asset.purpose !== VAULT_DOCUMENT_PURPOSE ||
+      asset.category !== "DOCUMENT"
+    ) {
+      if (record.storedAssetId) {
+        missingDocumentCount += 1;
+        documentManifest.push({
+          vaultRecordId: record.id,
+          storedAssetId: record.storedAssetId,
+          originalFilename: asset?.originalFilename ?? null,
+          exportedFilename: null,
+          status: "skipped",
+          reason: "Asset is not a READY private Business Vault document belonging to this tenant.",
+        });
+      }
+      continue;
+    }
+    if (!storage.provider) {
+      missingDocumentCount += 1;
+      documentManifest.push({
+        vaultRecordId: record.id,
+        storedAssetId: asset.id,
+        originalFilename: asset.originalFilename,
+        exportedFilename: null,
+        status: "missing",
+        reason: documentExportError || "Private document storage is not available for this export.",
+      });
+      continue;
+    }
+    try {
+      const object = await storage.provider.getObject({
+        bucket: asset.storageAccount.bucketName,
+        key: asset.storageKey,
+      });
+      if (!object?.body?.byteLength) {
+        throw new Error("The stored vault document could not be read from the storage provider.");
+      }
+      const exportedFilename = uniqueExportPath(
+        usedDocumentNames,
+        `vault-documents/${record.id}-${safeExportFilename(asset.originalFilename, "vault-document")}`,
+      );
+      documentFiles.push({
+        name: exportedFilename,
+        data: Buffer.from(object.body),
+      });
+      exportedDocumentCount += 1;
+      documentManifest.push({
+        vaultRecordId: record.id,
+        storedAssetId: asset.id,
+        originalFilename: asset.originalFilename,
+        exportedFilename,
+        status: "exported",
+      });
+    } catch (error) {
+      missingDocumentCount += 1;
+      const reason =
+        error instanceof Error
+          ? error.message
+          : "The stored vault document could not be read from the storage provider.";
+      documentExportError = documentExportError || reason;
+      documentManifest.push({
+        vaultRecordId: record.id,
+        storedAssetId: asset.id,
+        originalFilename: asset.originalFilename,
+        exportedFilename: null,
+        status: "missing",
+        reason,
+      });
+    }
+  }
+
+  const documentExport =
+    documentManifest.length === 0
+      ? "none"
+      : missingDocumentCount === 0
+        ? "complete"
+        : "partial";
+
   const [saasSubscription, productAddons, productGrants] = await Promise.all([
     prisma.businessSaasSubscription.findUnique({
       where: { businessId },
@@ -409,6 +677,10 @@ export async function buildBusinessExportZip(
           slug: business.slug,
           note:
             "Tenant-scoped export. Password hashes, session tokens, TOTP secrets, and setup/reset tokens are omitted.",
+          documentExport,
+          documentExportError: documentExportError ?? null,
+          exportedDocumentCount,
+          missingDocumentCount,
         },
         null,
         2,
@@ -473,6 +745,72 @@ export async function buildBusinessExportZip(
       data: toCsv(headersOf(websiteLocalDrafts), websiteLocalDrafts),
     },
     {
+      name: "business-vault.csv",
+      data: toCsv(
+        [
+          "id",
+          "title",
+          "category",
+          "issuer",
+          "counterparty",
+          "effectiveOn",
+          "expiresOn",
+          "recordStatus",
+          "persistedExpiryState",
+          "notes",
+          "storedAssetId",
+          "originalFilename",
+          "mimeType",
+          "visibility",
+          "fileStatus",
+          "fileSizeBytes",
+          "createdAt",
+          "updatedAt",
+        ],
+        vaultRecords.map((row) => ({
+          id: row.id,
+          title: row.title,
+          category: row.category,
+          issuer: row.issuer,
+          counterparty: row.counterparty,
+          effectiveOn: row.effectiveOn,
+          expiresOn: row.expiresOn,
+          recordStatus: row.recordStatus,
+          persistedExpiryState: row.persistedExpiryState,
+          notes: row.notes,
+          storedAssetId: row.storedAssetId,
+          originalFilename: row.storedAsset?.originalFilename ?? "",
+          mimeType: row.storedAsset?.mimeType ?? "",
+          visibility: row.storedAsset?.visibility ?? "",
+          fileStatus: row.storedAsset?.status ?? "",
+          fileSizeBytes: row.storedAsset?.fileSizeBytes ?? "",
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        })),
+      ),
+    },
+    { name: "business-agreements.csv", data: toCsv(headersOf(agreements), agreements) },
+    {
+      name: "business-agreement-versions.json",
+      data: JSON.stringify(
+        agreementVersions.map((row) => ({
+          ...row,
+          answers: safeJson(row.answersJson),
+          riskReview: safeJson(row.riskReviewJson),
+        })),
+        null,
+        2,
+      ),
+    },
+    {
+      name: "business-protection-audit.csv",
+      data: toCsv(headersOf(protectionAudit), protectionAudit),
+    },
+    {
+      name: "business-protection-acknowledgments.csv",
+      data: toCsv(headersOf(protectionAcks), protectionAcks),
+    },
+    {
       name: "commercial-entitlement.json",
       data: JSON.stringify(
         {
@@ -495,14 +833,48 @@ export async function buildBusinessExportZip(
         2,
       ),
     },
+    {
+      name: "business-vault-documents-manifest.json",
+      data: JSON.stringify(
+        {
+          documentExport,
+          documentExportError: documentExportError ?? null,
+          exportedDocumentCount,
+          missingDocumentCount,
+          note:
+            documentExport === "complete"
+              ? "READY private Business Vault documents belonging to this tenant are included as files."
+              : documentExport === "none"
+                ? "This tenant had no READY private Business Vault documents to export."
+                : "This export is a partial document export. Missing vault files are listed below and were not silently treated as complete.",
+          documents: documentManifest,
+        },
+        null,
+        2,
+      ),
+    },
+    ...documentFiles,
   ];
 
   return {
     filename: `tbbt-export-${business.slug}-${date}.zip`,
     bytes: buildZipStore(files),
+    documentExport,
+    documentExportError,
+    exportedDocumentCount,
+    missingDocumentCount,
   };
 }
 
 function headersOf(rows: Array<Record<string, unknown>>): string[] {
   return rows[0] ? Object.keys(rows[0]) : ["id"];
+}
+
+function safeJson(value: string | null) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }

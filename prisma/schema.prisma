@@ -373,6 +373,13 @@ model Business {
   materialPurchaseOrders     MaterialPurchaseOrder[]
   materialPurchaseOrderItems MaterialPurchaseOrderItem[]
   materialOperationAttempts  MaterialOperationAttempt[]
+  vaultRecords             BusinessVaultRecord[]
+  agreements               BusinessAgreement[]
+  agreementVersions        BusinessAgreementVersion[]
+  protectionAuditLogs      BusinessProtectionAuditLog[]
+  protectionAcknowledgments BusinessProtectionAcknowledgment[]
+  agreementCompletionClaims BusinessAgreementCompletionClaim[]
+  esignBoundary            BusinessEsignBoundary?
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -508,6 +515,15 @@ model Membership {
   workforceOutreachApproved       WorkforceOutreachTask[]   @relation("WorkforceOutreachApprover")
   confirmedRecurringPatterns      RecurringExpensePattern[] @relation("RecurringPatternConfirmedBy")
   dismissedRecurringPatterns      RecurringExpensePattern[] @relation("RecurringPatternDismissedBy")
+  createdVaultRecords             BusinessVaultRecord[]     @relation("VaultRecordCreator")
+  updatedVaultRecords             BusinessVaultRecord[]     @relation("VaultRecordUpdater")
+  createdAgreements               BusinessAgreement[]       @relation("AgreementCreator")
+  completedAgreements             BusinessAgreement[]       @relation("AgreementCompleter")
+  legalAcknowledgedAgreements     BusinessAgreement[]       @relation("AgreementLegalAck")
+  ownerReviewedAgreements         BusinessAgreement[]       @relation("AgreementOwnerReview")
+  createdAgreementVersions        BusinessAgreementVersion[] @relation("AgreementVersionCreator")
+  protectionAuditLogs             BusinessProtectionAuditLog[] @relation("ProtectionAuditActor")
+  protectionAcknowledgments       BusinessProtectionAcknowledgment[] @relation("ProtectionAcknowledgmentActor")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -1343,6 +1359,7 @@ model StoredAsset {
   serviceRequestPhotos ServiceRequestPhoto[]
   jobPhotos            JobPhoto[]
   websiteGalleryItems  WebsiteGalleryItem[]
+  vaultRecords         BusinessVaultRecord[]
 
   @@unique([businessId, storageKey])
   @@index([businessId, category, status])
@@ -3696,3 +3713,190 @@ model GrowthActionRequest {
   @@index([campaignId])
 }
 
+/// Tenant-scoped private Business Vault record. Existence never publishes
+/// the file. Linked StoredAssets stay PRIVATE.
+model BusinessVaultRecord {
+  id                      String   @id @default(cuid())
+  businessId              String
+  title                   String
+  /// COMPANY_LEGAL | EIN_TAX | INSURANCE | LICENSE | CERTIFICATION |
+  /// WARRANTY | CONTRACT | SUBCONTRACTOR_AGREEMENT | CUSTOMER_AGREEMENT |
+  /// NDA | REFERRAL_AGREEMENT | PARTNERSHIP_AGREEMENT | VENDOR_AGREEMENT | OTHER
+  category                String
+  issuer                  String?
+  counterparty            String?
+  /// YYYY-MM-DD calendar date. Deterministic expiry math uses this, not local TZ.
+  effectiveOn             String?
+  expiresOn               String?
+  /// ACTIVE | ARCHIVED — owner-set. Expiry attention is computed separately.
+  recordStatus            String   @default("ACTIVE")
+  /// Last persisted computed expiry band for audit history.
+  persistedExpiryState    String?
+  notes                   String?
+  storedAssetId           String?
+  createdByMembershipId   String
+  updatedByMembershipId   String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  business    Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  storedAsset StoredAsset? @relation(fields: [storedAssetId], references: [id], onDelete: SetNull)
+  createdBy   Membership   @relation("VaultRecordCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  updatedBy   Membership?  @relation("VaultRecordUpdater", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
+  agreements  BusinessAgreement[]
+  auditLogs   BusinessProtectionAuditLog[]
+  completionClaims BusinessAgreementCompletionClaim[]
+
+  @@index([businessId, category, recordStatus])
+  @@index([businessId, expiresOn])
+  @@index([storedAssetId])
+}
+
+/// Guided agreement lifecycle. Completed/signed versions are immutable.
+model BusinessAgreement {
+  id                                    String    @id @default(cuid())
+  businessId                            String
+  /// CUSTOMER_AGREEMENT | SUBCONTRACTOR_AGREEMENT |
+  /// INDEPENDENT_CONTRACTOR_AGREEMENT | NDA | REFERRAL_AGREEMENT |
+  /// PARTNERSHIP_AGREEMENT | VENDOR_AGREEMENT | CUSTOM_AGREEMENT
+  agreementType                         String
+  title                                 String
+  counterparty                          String?
+  /// QUESTIONS | DRAFT | RISK_REVIEW | OWNER_REVIEW | LEGAL_WARNING |
+  /// READY | SENT | SIGNED | COMPLETE | EXTERNAL_COMPLETE
+  lifecycleStatus                       String    @default("QUESTIONS")
+  currentDraftVersionId                 String?   @unique
+  signedVersionId                       String?   @unique
+  vaultRecordId                         String?
+  effectiveOn                           String?
+  expiresOn                             String?
+  /// NOT_CONNECTED | EXTERNAL_SIGNATURE | MANUAL_UPLOAD | PROVIDER_READY
+  signingMode                           String    @default("NOT_CONNECTED")
+  completedByMembershipId               String?
+  completedAt                           DateTime?
+  completionNotes                       String?
+  /// Stable logical completion attempt key. Retries of the same attempt
+  /// reuse the winner; a completed agreement cannot be completed again.
+  completionAttemptKey                  String?
+  legalReviewAcknowledgedAt             DateTime?
+  legalReviewAcknowledgedByMembershipId String?
+  ownerReviewedAt                       DateTime?
+  ownerReviewedByMembershipId           String?
+  createdByMembershipId                 String
+  createdAt                             DateTime  @default(now())
+  updatedAt                             DateTime  @updatedAt
+
+  business          Business                    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  vaultRecord       BusinessVaultRecord?        @relation(fields: [vaultRecordId], references: [id], onDelete: SetNull)
+  currentDraft      BusinessAgreementVersion?   @relation("AgreementCurrentDraft", fields: [currentDraftVersionId], references: [id], onDelete: SetNull)
+  signedVersion     BusinessAgreementVersion?   @relation("AgreementSignedVersion", fields: [signedVersionId], references: [id], onDelete: SetNull)
+  versions          BusinessAgreementVersion[]  @relation("AgreementVersions")
+  completionClaim   BusinessAgreementCompletionClaim?
+  createdBy         Membership                  @relation("AgreementCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  completedBy       Membership?                 @relation("AgreementCompleter", fields: [completedByMembershipId], references: [id], onDelete: SetNull)
+  legalAcknowledgedBy Membership?               @relation("AgreementLegalAck", fields: [legalReviewAcknowledgedByMembershipId], references: [id], onDelete: SetNull)
+  ownerReviewedBy   Membership?                 @relation("AgreementOwnerReview", fields: [ownerReviewedByMembershipId], references: [id], onDelete: SetNull)
+  auditLogs         BusinessProtectionAuditLog[]
+
+  @@index([businessId, lifecycleStatus])
+  @@index([businessId, agreementType])
+  @@index([vaultRecordId])
+  @@index([businessId, completionAttemptKey])
+}
+
+/// Versioned agreement representation. SENT / SIGNED_FINAL rows are locked.
+model BusinessAgreementVersion {
+  id                     String    @id @default(cuid())
+  businessId             String
+  agreementId            String
+  versionNumber          Int
+  /// DRAFT | SENT | SIGNED_FINAL | SUPERSEDED
+  representationStatus   String    @default("DRAFT")
+  answersJson            String    @default("{}")
+  draftContent           String    @default("")
+  riskReviewJson         String?
+  createdByMembershipId  String
+  createdAt              DateTime  @default(now())
+  lockedAt               DateTime?
+
+  business    Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  agreement   BusinessAgreement @relation("AgreementVersions", fields: [agreementId], references: [id], onDelete: Cascade)
+  currentFor  BusinessAgreement? @relation("AgreementCurrentDraft")
+  signedFor   BusinessAgreement? @relation("AgreementSignedVersion")
+  completionClaim BusinessAgreementCompletionClaim?
+  createdBy   Membership        @relation("AgreementVersionCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+
+  @@unique([agreementId, versionNumber])
+  @@index([businessId, agreementId])
+}
+
+/// One completion claim per agreement. Same attempt key reuses the winner.
+/// Concurrent retries cannot create a second signed version or vault row.
+model BusinessAgreementCompletionClaim {
+  id              String   @id @default(cuid())
+  businessId      String
+  agreementId     String   @unique
+  attemptKey      String
+  signedVersionId String   @unique
+  vaultRecordId   String   @unique
+  createdAt       DateTime @default(now())
+
+  business      Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  agreement     BusinessAgreement        @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  signedVersion BusinessAgreementVersion @relation(fields: [signedVersionId], references: [id], onDelete: Restrict)
+  vaultRecord   BusinessVaultRecord      @relation(fields: [vaultRecordId], references: [id], onDelete: Restrict)
+
+  @@unique([businessId, attemptKey])
+  @@index([businessId, agreementId])
+}
+
+/// Append-only protection/vault/agreement audit. Never updated or deleted.
+model BusinessProtectionAuditLog {
+  id                    String   @id @default(cuid())
+  businessId            String
+  vaultRecordId         String?
+  agreementId           String?
+  changedByMembershipId String
+  action                String
+  previousValue         String?
+  newValue              String?
+  changedAt             DateTime @default(now())
+
+  business    Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  vaultRecord BusinessVaultRecord? @relation(fields: [vaultRecordId], references: [id], onDelete: SetNull)
+  agreement   BusinessAgreement?   @relation(fields: [agreementId], references: [id], onDelete: SetNull)
+  changedBy   Membership           @relation("ProtectionAuditActor", fields: [changedByMembershipId], references: [id], onDelete: Restrict)
+
+  @@index([businessId, changedAt])
+  @@index([businessId, action])
+  @@index([vaultRecordId])
+  @@index([agreementId])
+}
+
+/// Owner-recorded acknowledgment (not a government filing).
+model BusinessProtectionAcknowledgment {
+  id             String   @id @default(cuid())
+  businessId     String
+  membershipId   String
+  kind           String
+  statement      String
+  acknowledgedAt DateTime @default(now())
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation("ProtectionAcknowledgmentActor", fields: [membershipId], references: [id], onDelete: Restrict)
+
+  @@index([businessId, kind])
+}
+
+/// Provider-neutral e-sign boundary. No live provider is wired in this PR.
+model BusinessEsignBoundary {
+  id             String   @id @default(cuid())
+  businessId     String   @unique
+  /// NOT_CONNECTED | PROVIDER_READY
+  providerStatus String   @default("NOT_CONNECTED")
+  providerName   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}

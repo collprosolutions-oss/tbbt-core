@@ -797,6 +797,36 @@ check(
     knowledgeLaunchHardeningMigration.includes("IF NOT EXISTS"),
 );
 
+const businessProtectionMigration = readFileSync(
+  new URL("../prisma/migrations/20260926080000_business_protection_vault/migration.sql", import.meta.url),
+  "utf8",
+);
+const businessProtectionHardeningMigration = readFileSync(
+  new URL("../prisma/migrations/20260926081000_business_protection_lifecycle_hardening/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Business protection vault migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(businessProtectionMigration) &&
+    businessProtectionMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessVaultRecord"') &&
+    businessProtectionMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessAgreement"') &&
+    businessProtectionMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessAgreementVersion"') &&
+    businessProtectionMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessProtectionAuditLog"') &&
+    businessProtectionMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Business protection lifecycle hardening migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(businessProtectionHardeningMigration) &&
+    businessProtectionHardeningMigration.includes("completionAttemptKey") &&
+    businessProtectionHardeningMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessAgreementCompletionClaim"') &&
+    businessProtectionHardeningMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run business-protection DDL",
+  !workspaceLoader.includes("BusinessVaultRecord") &&
+    !workspaceLoader.includes("business_protection_vault"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,
@@ -951,6 +981,15 @@ check(
       localNames.indexOf("20260926060000_knowledge_business_launch") &&
     localNames.indexOf("20260926060000_knowledge_business_launch") <
       localNames.indexOf("20260926070000_knowledge_launch_hardening"),
+);
+check(
+  "Business Protection/Vault migrations stay after Knowledge/Launch",
+  localNames.includes("20260926080000_business_protection_vault") &&
+    localNames.includes("20260926081000_business_protection_lifecycle_hardening") &&
+    localNames.indexOf("20260926070000_knowledge_launch_hardening") <
+      localNames.indexOf("20260926080000_business_protection_vault") &&
+    localNames.indexOf("20260926080000_business_protection_vault") <
+      localNames.indexOf("20260926081000_business_protection_lifecycle_hardening"),
 );
 
 const materialsMigration = readFileSync(

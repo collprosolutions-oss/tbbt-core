@@ -53,6 +53,7 @@ export const TEST_DATA_CLEANUP_PRESERVE = [
   "Website / brand stored assets and R2 storage account",
   "Stripe Connect connected-account configuration",
   "Knowledge entries",
+  "Business Vault records, agreements, and private vault files",
   "Settings audit history",
   "Team users, sessions, and founder design overrides",
 ] as const;
