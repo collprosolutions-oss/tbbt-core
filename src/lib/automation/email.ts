@@ -94,8 +94,10 @@ export async function attemptAutomationEmail(
   const slug = await businessSlug(db, input.businessId);
   const proposalId = typeof input.payload.proposalId === "number" ? input.payload.proposalId : 1;
   const key =
-    input.purpose === "ESTIMATE_READY" || input.purpose === "ESTIMATE_FOLLOW_UP"
-      ? estimateEmailIdempotencyKey(input.subjectId, input.purpose === "ESTIMATE_FOLLOW_UP" ? "follow-up" : "auto")
+    input.purpose === "ESTIMATE_READY"
+      ? estimateEmailIdempotencyKey(input.subjectId, "auto")
+      : input.purpose === "ESTIMATE_FOLLOW_UP"
+        ? estimateEmailIdempotencyKey(input.subjectId, "follow-up")
       : input.purpose === "INVOICE_READY"
         ? invoiceReadyIdempotencyKey(input.subjectId)
         : input.purpose === "APPOINTMENT_CONFIRMATION" || input.purpose === "SCHEDULE_CHANGE"
