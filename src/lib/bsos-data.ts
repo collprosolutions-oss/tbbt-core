@@ -9,6 +9,11 @@ import {
   coachSummary,
   type BsosFacts,
 } from "@/lib/bsos";
+import {
+  EMPTY_FINANCIAL_SNAPSHOT,
+  shouldInjectFinancialLoadFailure,
+  type FinancialTurnSnapshot,
+} from "@/lib/chief-of-staff/financial-snapshot";
 import { buildFinancialIntelligence } from "@/lib/financial-intelligence";
 import { loadFinancialSource } from "@/lib/financial-intelligence-data";
 import { invoiceBalanceDue } from "@/lib/financial-intelligence/collected-revenue";
@@ -26,11 +31,24 @@ import { publicTradeProjection } from "@/lib/trade-config";
 import { loadGrowthSource } from "@/lib/growth-data";
 import { buildReactivationCandidates, buildRecoveryQueue } from "@/lib/growth-engine";
 
+export type BsosFactsBundle = {
+  facts: BsosFacts;
+  financial: FinancialTurnSnapshot;
+};
+
 export async function loadBsosFacts(
   prisma: PrismaClient,
   businessId: string,
   now: Date = new Date(),
 ): Promise<BsosFacts> {
+  return (await loadBsosFactsBundle(prisma, businessId, now)).facts;
+}
+
+export async function loadBsosFactsBundle(
+  prisma: PrismaClient,
+  businessId: string,
+  now: Date = new Date(),
+): Promise<BsosFactsBundle> {
   const scope = { businessId } as const;
   const today = startOfDay(now);
   const weekEnd = addDays(today, 7);
@@ -225,50 +243,69 @@ export async function loadBsosFacts(
     launchGoals: { count: launchGoals },
   };
 
-  if (!hasInsights) return baseFacts;
+  if (!hasInsights) {
+    return { facts: baseFacts, financial: EMPTY_FINANCIAL_SNAPSHOT };
+  }
 
-  const range = resolveReportRange("all", undefined, undefined, now);
-  const report = buildReport({ ...reportSource, payments: paymentRows }, range);
-  const financialSource = await loadFinancialSource(prisma, businessId);
-  const intel = buildFinancialIntelligence(financialSource, report, now);
-  const lowMarginJobs = intel.jobProfitability.filter(
-    (job) => job.grossProfit != null && job.grossProfit < 0,
-  ).length;
-  const recurring = {
-    count: intel.recurringExpenses.length,
-    amount: intel.recurringExpenses.reduce((sum, row) => sum + row.amount, 0),
-  };
-  const aged = intel.receivables.rows.filter((row) => row.ageDays > 30);
-  const collected = intel.cashFlow.collectedCustomerPayments;
-  const topCustomer = intel.customerProfitability[0];
-
-  return {
-    ...baseFacts,
-    lowMarginJobs: { count: lowMarginJobs },
-    recurringExpenses: { count: recurring.count, amount: recurring.amount },
-    collectedRevenue: { amount: collected },
-    agedReceivables: {
-      count: aged.length,
-      amount: aged.reduce((sum, row) => sum + row.balanceDue, 0),
-    },
-    lowMarginServices: {
-      count: intel.serviceProfitability.filter((row) => row.attributed && row.grossProfit != null && row.grossProfit < 0).length,
-    },
-    estimateLaborOverruns: {
-      count: intel.jobProfitability.filter(
-        (job) =>
-          job.estimateActual.estimatedLaborHours != null &&
-          job.estimateActual.estimatedLaborHoursProvenance !== "none" &&
-          job.estimateActual.laborHoursVariance != null &&
-          job.estimateActual.laborHoursVariance > 0,
-      ).length,
-    },
-    expenseGrowthPercent: percentChange(report.recordedExpenses.current, report.recordedExpenses.prior ?? 0),
-    customerConcentration: {
-      share: topCustomer && collected > 0 ? topCustomer.collected / collected : null,
-      customerName: topCustomer?.name ?? null,
-    },
-  };
+  try {
+    if (shouldInjectFinancialLoadFailure()) {
+      throw new Error("injected financial load failure");
+    }
+    const range = resolveReportRange("all", undefined, undefined, now);
+    const report = buildReport({ ...reportSource, payments: paymentRows }, range);
+    const financialSource = await loadFinancialSource(prisma, businessId, { reportSource });
+    const intel = buildFinancialIntelligence(financialSource, report, now);
+    const lowMarginJobs = intel.jobProfitability.filter(
+      (job) => job.grossProfit != null && job.grossProfit < 0,
+    ).length;
+    const recurring = {
+      count: intel.recurringExpenses.length,
+      amount: intel.recurringExpenses.reduce((sum, row) => sum + row.amount, 0),
+    };
+    const aged = intel.receivables.rows.filter((row) => row.ageDays > 30);
+    const collected = intel.cashFlow.collectedCustomerPayments;
+    const topCustomer = intel.customerProfitability[0];
+    return {
+      facts: {
+        ...baseFacts,
+        lowMarginJobs: { count: lowMarginJobs },
+        recurringExpenses: { count: recurring.count, amount: recurring.amount },
+        collectedRevenue: { amount: collected },
+        agedReceivables: {
+          count: aged.length,
+          amount: aged.reduce((sum, row) => sum + row.balanceDue, 0),
+        },
+        lowMarginServices: {
+          count: intel.serviceProfitability.filter((row) => row.attributed && row.grossProfit != null && row.grossProfit < 0).length,
+        },
+        estimateLaborOverruns: {
+          count: intel.jobProfitability.filter(
+            (job) =>
+              job.estimateActual.estimatedLaborHours != null &&
+              job.estimateActual.estimatedLaborHoursProvenance !== "none" &&
+              job.estimateActual.laborHoursVariance != null &&
+              job.estimateActual.laborHoursVariance > 0,
+          ).length,
+        },
+        expenseGrowthPercent: percentChange(report.recordedExpenses.current, report.recordedExpenses.prior ?? 0),
+        customerConcentration: {
+          share: topCustomer && collected > 0 ? topCustomer.collected / collected : null,
+          customerName: topCustomer?.name ?? null,
+        },
+      },
+      financial: { entitled: true, intelligence: intel, failed: false },
+    };
+  } catch (error) {
+    return {
+      facts: baseFacts,
+      financial: {
+        entitled: true,
+        intelligence: null,
+        failed: true,
+        failureMessage: error instanceof Error ? error.message : "Financial Intelligence could not be loaded.",
+      },
+    };
+  }
 }
 
 export async function loadBsosWorkspace(

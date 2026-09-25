@@ -14,6 +14,7 @@ export type CoachContext = {
 export const COACH_FACT_KEYS = [
   "active-trades",
   "paid-revenue",
+  "collected-revenue",
   "recorded-expenses",
   "unpaid-invoices",
   "sent-estimates",
@@ -79,6 +80,16 @@ function factList(context: CoachContext): CitedFact[] {
       value: context.facts.paidRevenue.amount.toFixed(2),
       href: "/reports",
     },
+    ...(context.facts.collectedRevenue
+      ? [
+          {
+            key: "collected-revenue",
+            label: "Recorded collected customer cash",
+            value: context.facts.collectedRevenue.amount.toFixed(2),
+            href: "/reports",
+          } satisfies CitedFact,
+        ]
+      : []),
     {
       key: "recorded-expenses",
       label: "Recorded expenses",
@@ -239,8 +250,8 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
       (context.facts.missingWageEntries.count > 0
         ? `${context.facts.missingWageEntries.count} approved time row(s) are missing a wage snapshot, so labor cost is incomplete.`
         : "Wage snapshots are present on approved time, so labor cost is not missing for that reason.");
-  } else if (/invoice|follow up|receivable|aged/.test(q)) {
-    keys = ["unpaid-invoices", "aged-receivables"];
+  } else if (/invoice|follow up|receivable|aged|collected|unpaid|cash/.test(q)) {
+    keys = ["unpaid-invoices", "aged-receivables", "collected-revenue"];
     stance = "FACT";
     text =
       context.facts.unpaidInvoices.count > 0
@@ -248,8 +259,13 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
           (context.facts.agedReceivables?.count
             ? `${context.facts.agedReceivables.count} of those are aged receivables totaling ${context.facts.agedReceivables.amount.toFixed(2)}. `
             : "") +
+          (context.facts.collectedRevenue
+            ? `Recorded collected customer cash is ${context.facts.collectedRevenue.amount.toFixed(2)}. SENT invoice totals are not collected cash. `
+            : "") +
           "Follow up from Invoices. TBBT does not invent who already paid outside the system."
-        : "There are no SENT unpaid invoices on file.";
+        : context.facts.collectedRevenue
+          ? `Recorded collected customer cash is ${context.facts.collectedRevenue.amount.toFixed(2)}. There are no SENT unpaid invoices on file.`
+          : "There are no SENT unpaid invoices on file.";
   } else if (/repeat|referral|customer/.test(q)) {
     keys = ["repeat-customers", "review-opportunities"];
     stance = "MIXED";

@@ -35,6 +35,7 @@ export function synthesizeCoachAnswer(input: {
   const grounded = answerCoachFromFacts(input.question, input.coachContext);
   const usable = input.specialistResults.filter((row) => row.status === "OK");
   const failed = input.specialistResults.filter((row) => row.status === "FAILED");
+  const skipped = input.specialistResults.filter((row) => row.status === "SKIPPED");
   const extraNotes: string[] = [];
 
   const uniqueKeys = input.conflicts.uniqueRecommendationKeys;
@@ -49,10 +50,21 @@ export function synthesizeCoachAnswer(input: {
     extraNotes.push(conflict.summary);
   }
 
+  const financialFindings = usable
+    .filter((row) => row.specialistId === "FINANCIAL")
+    .flatMap((row) => row.findings)
+    .slice(0, 6);
+  for (const finding of financialFindings) {
+    extraNotes.push(finding.summary);
+  }
+
   if (failed.length > 0) {
     extraNotes.push(
       "Part of the recorded attention view could not be loaded. The answer uses only the surviving facts and does not invent substitutes.",
     );
+  }
+  for (const row of skipped) {
+    if (row.limitation) extraNotes.push(row.limitation);
   }
 
   const text = oneVoice(
@@ -94,7 +106,15 @@ export function synthesizeCoachAnswer(input: {
       recommendationKeys: item.recommendationKeys,
       summary: item.summary,
     })),
-    limitations: failed.map((row) => row.limitation ?? row.failure?.message ?? "A recorded view was unavailable."),
+    limitations: [
+      ...failed.map((row) => row.limitation ?? row.failure?.message ?? "A recorded view was unavailable."),
+      ...skipped.map((row) => row.limitation ?? "A recorded view was not available."),
+    ],
+    recordedFindings: financialFindings.map((item) => ({
+      key: item.key,
+      title: item.title,
+      summary: item.summary,
+    })),
   };
 
   return {

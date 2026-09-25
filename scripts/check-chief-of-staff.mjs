@@ -117,6 +117,7 @@ const specialistFiles = [
   contextSrc,
   readFileSync(new URL("../src/lib/chief-of-staff/conflicts.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/synthesize.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/lib/chief-of-staff/specialists/financial.ts", import.meta.url), "utf8"),
 ];
 
 try {
@@ -162,15 +163,37 @@ try {
     question: "What should I focus on this week for invoices, staff, materials, vault, growth, and knowledge?",
     activeRecommendationKeys: ["collect-unpaid-invoices", "workforce-unassigned-job"],
   });
-  check("Focus question does not select every department", kitchen.selectedIds.every((id) => id === "ATTENTION" || id === "WORKFORCE"));
+  check(
+    "Focus question does not select every department",
+    kitchen.selectedIds.every((id) => id === "ATTENTION" || id === "WORKFORCE" || id === "FINANCIAL"),
+  );
   check("Planner never exceeds 4 specialists", kitchen.selectedIds.length <= MAX_SPECIALIST_FANOUT && kitchen.fanout <= 4);
-  check("Disabled specialists are skipped, not loaded", kitchen.skipped.some((row) => row.id === "MATERIALS" || row.id === "FINANCIAL"));
+  check("Disabled specialists are skipped, not loaded", kitchen.skipped.some((row) => row.id === "MATERIALS"));
+  check(
+    "Kitchen-sink focus can select Financial when an owned recommendation is active",
+    kitchen.selectedIds.includes("FINANCIAL"),
+  );
 
   const unknown = planSpecialists({
     question: "What is the weather on Mars and my favorite color?",
     activeRecommendationKeys: ["collect-unpaid-invoices", "workforce-unassigned-job", "workforce-overloaded-day"],
   });
   check("Unknown question stays at the attention layer", unknown.selectedIds.join(",") === "ATTENTION");
+
+  const genericFocus = planSpecialists({
+    question: "What should I focus on this week?",
+    activeRecommendationKeys: [],
+  });
+  check(
+    "Generic focus does not select Financial without owned attention",
+    genericFocus.selectedIds.join(",") === "ATTENTION" && !genericFocus.selectedIds.includes("FINANCIAL"),
+  );
+
+  const profitPlan = planSpecialists({
+    question: "How is my profit and margin this month?",
+    activeRecommendationKeys: [],
+  });
+  check("Profit question selects Financial", profitPlan.selectedIds.includes("FINANCIAL"));
 
   const workforcePlan = planSpecialists({
     question: "Which worker should I assign to the unassigned scheduled jobs?",
@@ -179,7 +202,7 @@ try {
   check("Workforce question can select WORKFORCE", workforcePlan.selectedIds.includes("WORKFORCE") && workforcePlan.selectedIds.length <= 4);
 
   const enabled = enabledSpecialistIds();
-  check("PR1 enables only ATTENTION and WORKFORCE", enabled.join(",") === "ATTENTION,WORKFORCE");
+  check("Enabled specialists are ATTENTION, WORKFORCE, and FINANCIAL", enabled.join(",") === "ATTENTION,WORKFORCE,FINANCIAL");
   check("Registry keeps future specialist identities", SPECIALIST_IDS.includes("FINANCIAL") && SPECIALIST_IDS.includes("BUSINESS_PROTECTION"));
 
   const ownerA = await prisma.user.create({

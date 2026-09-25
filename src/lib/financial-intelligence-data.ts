@@ -7,13 +7,25 @@ import type { PrismaClient } from "@prisma/client";
 import { getFinanceConnectionProvider } from "@/lib/finance-connections";
 import { emptyLaborBurdenConfig } from "@/lib/financial-intelligence/labor-burden";
 import type { FinancialSource } from "@/lib/financial-intelligence/source";
-import { asNumber, asNumberOrNull } from "@/lib/reports";
+import { asNumber, asNumberOrNull, type ReportSource } from "@/lib/reports";
 import { loadReportSource } from "@/lib/reports-data";
+
+let financialSourceLoadCount = 0;
+
+export function getFinancialSourceLoadCount() {
+  return financialSourceLoadCount;
+}
+
+export function resetFinancialSourceLoadCount() {
+  financialSourceLoadCount = 0;
+}
 
 export async function loadFinancialSource(
   prisma: PrismaClient,
   businessId: string,
+  options?: { reportSource?: ReportSource },
 ): Promise<FinancialSource> {
+  financialSourceLoadCount += 1;
   const scope = { businessId } as const;
   const [
     report,
@@ -24,7 +36,9 @@ export async function loadFinancialSource(
     burden,
     patterns,
   ] = await Promise.all([
-    loadReportSource(prisma, businessId),
+    options?.reportSource
+      ? Promise.resolve(options.reportSource)
+      : loadReportSource(prisma, businessId),
     prisma.payment.findMany({
       where: scope,
       select: {

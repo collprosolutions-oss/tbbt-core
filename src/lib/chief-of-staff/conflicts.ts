@@ -74,5 +74,56 @@ export function resolveConflicts(input: {
     });
   }
 
+  const marginPricingKeys = [
+    "review-low-margin-jobs",
+    "service-margin-below-target",
+    "high-value-customer-concentration",
+  ];
+  const hasMarginOrPricing =
+    uniqueRecommendationKeys.some((key) => marginPricingKeys.includes(key)) ||
+    input.results.some((row) =>
+      row.findings.some((finding) => finding.key.startsWith("financial-pricing:")),
+    );
+  if (uniqueRecommendationKeys.includes("missing-wage-data") && hasMarginOrPricing) {
+    items.push({
+      kind: "MISSING_WAGE_VS_MARGIN_PRICING",
+      recommendationKeys: ["missing-wage-data", ...marginPricingKeys.filter((key) => uniqueRecommendationKeys.includes(key))],
+      summary:
+        "Wage data is incomplete. Margin and pricing stay unknown until recorded labor cost is complete. Missing burden or target margin is unconfigured, not 0%.",
+    });
+  }
+
+  const financial = input.results.find((row) => row.specialistId === "FINANCIAL" && row.status === "OK");
+  const financialJobIds = new Set(
+    (financial?.findings ?? []).flatMap((finding) => finding.entityIds ?? []),
+  );
+  if (
+    uniqueRecommendationKeys.includes("workforce-staffing-shortage") &&
+    (financialJobIds.size > 0 || uniqueRecommendationKeys.includes("review-low-margin-jobs"))
+  ) {
+    items.push({
+      kind: "STAFFING_SHORTAGE_VS_PROFITABLE_WORK",
+      recommendationKeys: ["workforce-staffing-shortage"],
+      summary:
+        "Staffing is short for upcoming work. Recorded profitable or scheduled job value stays in context; nobody is assigned.",
+    });
+  }
+
+  const otherJobIds = new Set(
+    input.results
+      .filter((row) => row.specialistId !== "FINANCIAL")
+      .flatMap((row) => row.findings.flatMap((finding) => finding.entityIds ?? [])),
+  );
+  const sharedJobs = [...financialJobIds].filter((id) => otherJobIds.has(id));
+  if (sharedJobs.length > 0) {
+    items.push({
+      kind: "SHARED_JOB_REFERENCE",
+      recommendationKeys: uniqueRecommendationKeys.filter((key) =>
+        key.includes("job") || key.startsWith("workforce-") || key.startsWith("review-low-margin"),
+      ),
+      summary: "More than one recorded view refers to the same job. The Coach keeps that job once and does not assign anyone.",
+    });
+  }
+
   return { items, uniqueRecommendationKeys };
 }

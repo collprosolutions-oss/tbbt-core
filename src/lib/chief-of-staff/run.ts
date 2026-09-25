@@ -28,11 +28,16 @@ import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { buildBsosHealthMetrics } from "@/lib/bsos";
 import { loadSpecialistContext, resetDeepLoaderInvocations } from "@/lib/chief-of-staff/context";
 import { resolveConflicts } from "@/lib/chief-of-staff/conflicts";
+import {
+  resetFinancialSpecialistCounters,
+  setInjectedFinancialLoadFailure,
+} from "@/lib/chief-of-staff/financial-snapshot";
 import { planSpecialists } from "@/lib/chief-of-staff/planner";
 import {
   loadCanonicalRecommendationCatalog,
   type CanonicalRecommendationCatalog,
 } from "@/lib/chief-of-staff/recommendations";
+import { interpretFinancialSpecialist } from "@/lib/chief-of-staff/specialists/financial";
 import { synthesizeCoachAnswer } from "@/lib/chief-of-staff/synthesize";
 import type {
   OrchestrationSkipFailure,
@@ -49,6 +54,8 @@ export type ChiefOfStaffTestHooks = {
   failCatalog?: boolean;
   /** Test-only: fail after catalog/plan, before runAiTask owns synthesis. */
   failBeforeProvider?: boolean;
+  /** Test-only: fail the Financial Intelligence load while ATTENTION can survive. */
+  failFinancialLoad?: boolean;
 };
 
 export type ChiefOfStaffRunResult = {
@@ -399,6 +406,8 @@ export async function runChiefOfStaffCoach(
 
   orchestrationWorkerCount += 1;
   resetDeepLoaderInvocations();
+  resetFinancialSpecialistCounters();
+  setInjectedFinancialLoadFailure(Boolean(input.test?.failFinancialLoad));
 
   let catalog: CanonicalRecommendationCatalog;
   let synthesis: ReturnType<typeof synthesizeCoachAnswer>;
@@ -410,6 +419,7 @@ export async function runChiefOfStaffCoach(
       throw new Error("injected catalog failure");
     }
     catalog = await loadCanonicalRecommendationCatalog(db, access.businessId);
+    setInjectedFinancialLoadFailure(false);
 
     plan = planSpecialists({
       question,
@@ -421,6 +431,10 @@ export async function runChiefOfStaffCoach(
       try {
         if (input.test?.failSpecialistId === specialistId) {
           throw new Error("injected specialist failure");
+        }
+        if (specialistId === "FINANCIAL") {
+          specialistResults.push(interpretFinancialSpecialist(catalog, question));
+          continue;
         }
         const context = loadSpecialistContext(specialistId, catalog, question);
         specialistResults.push(projectSpecialist(context));
@@ -470,6 +484,7 @@ export async function runChiefOfStaffCoach(
       },
     });
   } catch (error) {
+    setInjectedFinancialLoadFailure(false);
     return finalizePreProviderFailure({
       db,
       interactionId,

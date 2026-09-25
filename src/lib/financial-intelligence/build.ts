@@ -165,11 +165,22 @@ function financialAttention(input: {
   return items;
 }
 
+let financialIntelligenceBuildCount = 0;
+
+export function getFinancialIntelligenceBuildCount() {
+  return financialIntelligenceBuildCount;
+}
+
+export function resetFinancialIntelligenceBuildCount() {
+  financialIntelligenceBuildCount = 0;
+}
+
 export function buildFinancialIntelligence(
   source: FinancialSource,
   report: BuiltReport,
   now: Date = new Date(),
 ): FinancialIntelligence {
+  financialIntelligenceBuildCount += 1;
   const jobs = calculateAllJobProfitability(source, report.range);
   const receivables = buildReceivables(source, now);
   const serviceProfitability = buildServiceProfitability(jobs);

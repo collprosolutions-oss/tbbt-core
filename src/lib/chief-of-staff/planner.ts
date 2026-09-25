@@ -4,6 +4,7 @@
  */
 import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { isSpecialistEnabled } from "@/lib/chief-of-staff/registry";
+import { isFinancialOwnedRecommendationKey } from "@/lib/chief-of-staff/specialists/financial";
 import {
   MAX_RECURSION_DEPTH,
   MAX_SPECIALIST_FANOUT,
@@ -16,7 +17,7 @@ import {
 const WORKFORCE_QUESTION =
   /\b(schedule|staff(?:ing)?|workers?|workforce|capacity|assign(?:ment|ed)?|overload(?:ed)?|unassigned|crew|bench|double[- ]?book(?:ed|ing)?|skill match)\b/i;
 const FINANCIAL_QUESTION =
-  /\b(profit|invoices?|receivables?|expenses?|margin|cash|revenue|payroll|payments?)\b/i;
+  /\b(profit(?:ability)?|invoices?|receivables?|expenses?|margin|cash|revenue|payroll|payments?|unpaid|outstanding|collected|recurring (?:cost|expense)s?|labor (?:cost|burden)|(?:hourly )?wages?|pricing|target margin|estimate[- ]vs[- ]actual|customer concentration|losing money|making money)\b/i;
 const GROWTH_QUESTION =
   /\b(recover(?:y|ed)?|reactivat(?:e|ion)|campaigns?|lost lead|growth|referrals?)\b/i;
 const KNOWLEDGE_QUESTION =
@@ -59,6 +60,21 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     skipped.push({ id: "WORKFORCE", reason: "DISABLED" });
   }
 
+  const financialKeys = input.activeRecommendationKeys.filter((key) =>
+    isFinancialOwnedRecommendationKey(key),
+  );
+  const financialHint =
+    input.entityHints?.recommendationKey != null &&
+    isFinancialOwnedRecommendationKey(input.entityHints.recommendationKey);
+  const wantsFinancial =
+    FINANCIAL_QUESTION.test(question) || financialKeys.length > 0 || Boolean(financialHint);
+
+  if (wantsFinancial && isSpecialistEnabled("FINANCIAL")) {
+    selected.push("FINANCIAL");
+  } else if (FINANCIAL_QUESTION.test(question) && !isSpecialistEnabled("FINANCIAL")) {
+    skipped.push({ id: "FINANCIAL", reason: "DISABLED" });
+  }
+
   const isFocus = FOCUS_QUESTION.test(question);
   for (const hint of DISABLED_KEYWORD_HINTS) {
     if (!hint.pattern.test(question)) continue;
@@ -73,6 +89,9 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     const allowed = new Set<SpecialistId>(["ATTENTION"]);
     if (wantsWorkforce && (workforceKeys.length > 0 || Boolean(workforceHint))) {
       allowed.add("WORKFORCE");
+    }
+    if ((financialKeys.length > 0 || Boolean(financialHint)) && isSpecialistEnabled("FINANCIAL")) {
+      allowed.add("FINANCIAL");
     }
     for (const id of [...selected]) {
       if (!allowed.has(id)) {

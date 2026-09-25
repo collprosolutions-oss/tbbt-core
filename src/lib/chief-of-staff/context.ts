@@ -1,9 +1,10 @@
 /**
- * Specialist context projection. PR1 only reads already-loaded
- * BSOS / Workforce catalog facts. Disabled specialists never deep-load.
+ * Specialist context projection. Reads already-loaded catalog facts.
+ * Disabled specialists never deep-load. FINANCIAL reuses the turn snapshot.
  */
 import type { BsosFacts, BsosRecommendation } from "@/lib/bsos";
 import { getSpecialistEntry, isSpecialistEnabled } from "@/lib/chief-of-staff/registry";
+import { projectFinancialContext } from "@/lib/chief-of-staff/specialists/financial";
 import type { SpecialistContext, SpecialistId } from "@/lib/chief-of-staff/types";
 import type { CanonicalRecommendationCatalog } from "@/lib/chief-of-staff/recommendations";
 
@@ -52,7 +53,6 @@ export function loadBusinessProtectionDeep(): never {
 }
 
 const DISABLED_DEEP_LOADERS: Partial<Record<SpecialistId, () => never>> = {
-  FINANCIAL: loadFinancialDeep,
   GROWTH: loadGrowthDeep,
   KNOWLEDGE_LAUNCH: loadKnowledgeLaunchDeep,
   MATERIALS: loadMaterialsDeep,
@@ -185,5 +185,13 @@ export function loadSpecialistContext(
     };
   }
 
-  throw new Error(`${specialistId} has no PR1 context loader.`);
+  if (specialistId === "FINANCIAL") {
+    const snapshot = catalog.financial;
+    if (!snapshot?.entitled || snapshot.failed || !snapshot.intelligence) {
+      throw new Error("FINANCIAL context requires a loaded Reporting Insights snapshot.");
+    }
+    return projectFinancialContext(catalog, question, snapshot.intelligence, entityHints);
+  }
+
+  throw new Error(`${specialistId} has no context loader.`);
 }
