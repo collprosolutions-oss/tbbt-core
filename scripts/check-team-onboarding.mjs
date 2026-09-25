@@ -201,11 +201,30 @@ async function resolveActiveMemberships(userId) {
 let serverProcess;
 
 try {
+  const onboardingDone = new Date();
   const businessA = await prisma.business.create({
-    data: { name: "Alpha Handyman", slug: "alpha-handyman-team", tradeCode: "HANDYMAN" },
+    data: {
+      name: "Alpha Handyman",
+      slug: "alpha-handyman-team",
+      tradeCode: "HANDYMAN",
+      firstRunSetupCompletedAt: onboardingDone,
+      starterServicesSetupCompletedAt: onboardingDone,
+      starterServicesSetupChoice: "SKIPPED",
+      websiteSetupCompletedAt: onboardingDone,
+      websiteSetupChoice: "SKIPPED",
+    },
   });
   const businessB = await prisma.business.create({
-    data: { name: "Beta Handyman", slug: "beta-handyman-team", tradeCode: "HANDYMAN" },
+    data: {
+      name: "Beta Handyman",
+      slug: "beta-handyman-team",
+      tradeCode: "HANDYMAN",
+      firstRunSetupCompletedAt: onboardingDone,
+      starterServicesSetupCompletedAt: onboardingDone,
+      starterServicesSetupChoice: "SKIPPED",
+      websiteSetupCompletedAt: onboardingDone,
+      websiteSetupChoice: "SKIPPED",
+    },
   });
 
   const ownerAUser = await prisma.user.create({
@@ -408,9 +427,11 @@ try {
     /role:\s*"MEMBER",[\s\S]{0,40}active:\s*true/.test(jobActionsSrc),
   );
   const workspaceSrc = readFileSync(new URL("../src/lib/workspace.ts", import.meta.url), "utf8");
+  const contactSrc = readFileSync(new URL("../src/lib/business-contact.ts", import.meta.url), "utf8");
   check(
     "requireWorkspace() only resolves workspaces from active memberships",
-    /userId:\s*user\.id,\s*active:\s*true/.test(workspaceSrc),
+    workspaceSrc.includes("loadActiveWorkspaceMemberships") &&
+      /where:\s*\{\s*userId,\s*active:\s*true\s*\}/.test(contactSrc),
   );
   const authActionsSrc = readFileSync(new URL("../src/app/actions/auth.ts", import.meta.url), "utf8");
   check(

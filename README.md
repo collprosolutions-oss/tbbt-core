@@ -102,6 +102,7 @@ npm run test:production-migrate
 npm run test:website-engine
 npm run test:public-website
 npm run test:live-public-website
+npm run test:workforce-capacity
 ```
 
 ## Website publishing

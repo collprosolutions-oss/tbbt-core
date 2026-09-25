@@ -37,12 +37,41 @@ import { loadAvailabilitySettings, loadOccupiedJobs } from "@/lib/availability-d
 import { formatDateTime } from "@/lib/format";
 import { accessArrangementWriteData } from "@/lib/property-access";
 import { prisma } from "@/lib/prisma";
-import { jobRecurrenceFromServiceRequest } from "@/lib/recurrence";
+import {
+  computeNextOccurrenceAt,
+  jobRecurrenceFromServiceRequest,
+  parseRecurrenceCadence,
+  recurrenceForecastActive,
+} from "@/lib/recurrence";
+import { formatISODateInTimeZone } from "@/lib/business-timezone";
+import {
+  appointmentModeForPosition,
+  appointmentPositionOnDay,
+  parseBoundedInt,
+  parseSkillList,
+  requireOptionalWorkforceProgression,
+  requireWorkforceSkillKey,
+  serializeSkillList,
+  WorkforceValidationError,
+} from "@/lib/workforce";
+import { laterJobsHurtByMove } from "@/lib/workforce-capacity";
+import { describeConflicts, detectScheduleConflicts } from "@/lib/workforce-conflicts";
+import {
+  loadCapacityJobs,
+  loadSchedulingPolicy,
+  loadWorkforceMembers,
+  loadWorkforceTimeZone,
+} from "@/lib/workforce-data";
+import {
+  conflictAcknowledgement,
+  shouldAcceptConflictAcknowledgement,
+} from "@/lib/workforce-window";
 import { attachPurchaseListToCreatedJob } from "@/lib/materials/purchase";
 
 export type JobActionState = {
   error?: string;
   warning?: string;
+  conflictAck?: string;
   notificationWarning?: string;
   message?: string;
 };
@@ -188,7 +217,33 @@ export async function scheduleJob(
   const time = readString(formData, "time");
   const durationPreset = readString(formData, "durationPreset");
   const customHours = readString(formData, "customHours");
-  const confirmOverlap = readString(formData, "confirmOverlap") === "1";
+  const submittedAck = readString(formData, "confirmOverlapAck");
+  const pickupDurationMinutes = parseBoundedInt(
+    readString(formData, "pickupDurationMinutes"),
+    0,
+    0,
+    24 * 60,
+  );
+  let requiredSkills: string;
+  let requiredProgression: string;
+  try {
+    requiredSkills = serializeSkillList(
+      parseSkillList(
+        formData
+          .getAll("requiredSkill")
+          .filter((value): value is string => typeof value === "string")
+          .join(","),
+      ).map((skill) => requireWorkforceSkillKey(skill)),
+    );
+    requiredProgression = requireOptionalWorkforceProgression(
+      readString(formData, "requiredProgression"),
+    );
+  } catch (error) {
+    if (error instanceof WorkforceValidationError) {
+      return { error: error.message };
+    }
+    throw error;
+  }
 
   if (!jobId) {
     return { error: "That job could not be scheduled." };
@@ -214,22 +269,73 @@ export async function scheduleJob(
     return { error: duration.error };
   }
 
-  if (!confirmOverlap) {
-    const [settings, others] = await Promise.all([
-      loadAvailabilitySettings(prisma, access.businessId),
-      loadOccupiedJobs(prisma, access.businessId, job.id),
-    ]);
-    const evaluation = evaluateProposedSchedule({
+  const [settings, others, policy, members, capacityJobs, timeZone] = await Promise.all([
+    loadAvailabilitySettings(prisma, access.businessId),
+    loadOccupiedJobs(prisma, access.businessId, job.id),
+    loadSchedulingPolicy(prisma, access.businessId),
+    loadWorkforceMembers(prisma, access.businessId),
+    loadCapacityJobs(prisma, access.businessId),
+    loadWorkforceTimeZone(prisma, access.businessId),
+  ]);
+  const evaluation = evaluateProposedSchedule({
+    start,
+    durationMinutes: duration.minutes,
+    settings,
+    existing: others,
+  });
+  const conflicts = detectScheduleConflicts({
+    jobs: capacityJobs,
+    settings,
+    policy,
+    members,
+    timeZone,
+    proposed: {
+      jobId: job.id,
       start,
       durationMinutes: duration.minutes,
-      settings,
-      existing: others,
-    });
-    if (hasScheduleWarning(evaluation)) {
-      return {
-        warning: describeScheduleWarning(evaluation, start, formatDateTime, settings) ?? undefined,
-      };
-    }
+      pickupMinutes: pickupDurationMinutes,
+      assignedMembershipId: job.assignedMembershipId,
+      originalScheduledAt: job.scheduledAt,
+    },
+    now: new Date(),
+  });
+  const cascade = laterJobsHurtByMove({
+    start,
+    durationMinutes: duration.minutes,
+    pickupMinutes: pickupDurationMinutes,
+    settings,
+    policy,
+    existing: capacityJobs.filter((row) => row.id !== job.id),
+    membershipId: job.assignedMembershipId,
+  });
+  const warning =
+    (hasScheduleWarning(evaluation)
+      ? describeScheduleWarning(evaluation, start, formatDateTime, settings)
+      : null) ?? describeConflicts(conflicts);
+  const currentAck = conflictAcknowledgement({
+    jobId: job.id,
+    start,
+    durationMinutes: duration.minutes,
+    pickupMinutes: pickupDurationMinutes,
+    assignedMembershipId: job.assignedMembershipId,
+    conflicts: warning
+      ? conflicts.length > 0
+        ? conflicts
+        : [{ kind: "AVAILABILITY", jobId: job.id, severity: "WARNING" }]
+      : [],
+  });
+  if (
+    warning &&
+    shouldAcceptConflictAcknowledgement({
+      submittedAck,
+      currentAck,
+      conflicts: warning ? [warning] : [],
+    }) === "warn"
+  ) {
+    return {
+      warning: cascade.length ? `${warning} Later jobs were not moved.` : warning,
+      conflictAck: currentAck,
+    };
   }
 
   const materialChange = isMaterialAppointmentChange(
@@ -242,11 +348,33 @@ export async function scheduleJob(
     : job.appointmentProposalId;
   const rescheduled = Boolean(job.scheduledAt) && materialChange;
 
+  const position = appointmentPositionOnDay({
+    start,
+    jobId: job.id,
+    assignedMembershipId: job.assignedMembershipId,
+    jobs: capacityJobs,
+    dateKey: (date) => formatISODateInTimeZone(date, timeZone),
+  });
+  const mode = appointmentModeForPosition(position, policy);
+  const nextOccurrenceAt = recurrenceForecastActive(job)
+    ? computeNextOccurrenceAt(
+        start,
+        parseRecurrenceCadence(job.recurrenceCadence),
+        job.nextOccurrenceAt,
+        timeZone,
+      )
+    : job.nextOccurrenceAt;
+
   await prisma.job.update({
     where: { id: job.id },
     data: {
       scheduledAt: start,
       scheduledDurationMinutes: duration.minutes,
+      pickupDurationMinutes: pickupDurationMinutes || null,
+      requiredSkills,
+      requiredProgression,
+      arrivalWindowMinutes: mode === "WINDOW" ? policy.defaultArrivalWindowMinutes : null,
+      nextOccurrenceAt,
       ...(job.status === "UNSCHEDULED" ? { status: "SCHEDULED" } : {}),
       ...(materialChange
         ? {

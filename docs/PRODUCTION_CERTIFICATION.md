@@ -24,7 +24,7 @@ Do not invent passing browser results. The isolated harness is
 5. Estimate → send / email → customer approve (`/estimates`, `/e/[token]`).
 6. Materials & suppliers → purchase list / pickup (`/materials`, estimate or job purchase list). No live retailer integration.
 7. Material deposit (Connect Stripe or fake local adapter).
-8. Job → schedule → employee field workflow (`/jobs`, `/field/jobs/[jobId]`). Assigned members see pickup only, not vendor economics.
+8. Job → schedule → employee field workflow (`/jobs`, `/field/jobs/[jobId]`). Capacity, skill match, and Fill-In Bench recommendations stay owner-approved (`npm run test:workforce-capacity`). Assigned members see pickup only, not vendor economics.
 9. Time cards → job photos → additional work / change order.
 10. Complete → invoice → payment (`/invoices`, `/p/[token]/invoice`).
 11. Expense → job profitability / reports / financial intelligence (`/expenses`, `/reports`). Linked material purchases must not double-count. Known cash flow uses recorded payments and recorded expenses. PROCESSED payroll gross labor is an operational cost record, not verified bank cash out. Banking and accounting stay Not Connected.

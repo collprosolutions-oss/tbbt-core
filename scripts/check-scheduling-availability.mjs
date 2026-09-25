@@ -99,9 +99,10 @@ check(
     jobAction.includes('status === "UNSCHEDULED" ? { status: "SCHEDULED" }'),
 );
 check(
-  "Conflict/availability checks run before save unless confirmOverlap is set",
+  "Conflict/availability checks always recompute; override uses a current acknowledgement",
   jobAction.includes("evaluateProposedSchedule") &&
-    jobAction.includes("confirmOverlap") &&
+    jobAction.includes("confirmOverlapAck") &&
+    jobAction.includes("shouldAcceptConflictAcknowledgement") &&
     jobAction.includes("Schedule anyway") === false,
 );
 check("Owner form still has Schedule anyway after a warning", form.includes("Schedule anyway"));

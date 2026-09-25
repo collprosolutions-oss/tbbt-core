@@ -649,6 +649,46 @@ check(
     productGrantSourceRefMigration.includes("BusinessProductGrant_businessId_grantType_code_source_sourceRef_key"),
 );
 
+const workforceMigration = readFileSync(
+  new URL("../prisma/migrations/20260925220000_scheduling_workforce_intelligence/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Workforce capacity migration is additive and preserves membership and job rows",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(workforceMigration) &&
+    workforceMigration.includes('ADD COLUMN IF NOT EXISTS "schedulingActive"') &&
+    workforceMigration.includes('ADD COLUMN IF NOT EXISTS "pickupDurationMinutes"') &&
+    workforceMigration.includes('CREATE TABLE IF NOT EXISTS "FillInBenchWorker"') &&
+    workforceMigration.includes('CREATE TABLE IF NOT EXISTS "MembershipSkill"') &&
+    workforceMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run workforce DDL",
+  !workspaceLoader.includes("FillInBenchWorker") &&
+    !workspaceLoader.includes("ensureWorkforceSchema") &&
+    !workspaceLoader.includes("scheduling_workforce_intelligence"),
+);
+
+const workforceFkMigration = readFileSync(
+  new URL("../prisma/migrations/20260925230000_workforce_foreign_keys/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Workforce FK migration is additive and matches Prisma cascade/set-null",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(workforceFkMigration) &&
+    workforceFkMigration.includes('MembershipSkill_membershipId_fkey') &&
+    workforceFkMigration.includes('MembershipWeeklyAvailability_membershipId_fkey') &&
+    workforceFkMigration.includes('MembershipAvailabilityException_membershipId_fkey') &&
+    workforceFkMigration.includes('FillInBenchWorker_businessId_fkey') &&
+    workforceFkMigration.includes('FillInBenchWorker_membershipId_fkey') &&
+    workforceFkMigration.includes('WorkforceOutreachTask_jobId_fkey') &&
+    workforceFkMigration.includes('WorkforceOutreachTask_createdByMembershipId_fkey') &&
+    workforceFkMigration.includes('WorkforceOutreachTask_approvedByMembershipId_fkey') &&
+    workforceFkMigration.includes("ON DELETE CASCADE") &&
+    workforceFkMigration.includes("ON DELETE SET NULL") &&
+    workforceFkMigration.includes("idempotencyKey"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,
