@@ -51,20 +51,22 @@ export async function buildWebsiteSnapshot(
   db: Db,
   access: BusinessAccess,
 ): Promise<PublishedWebsiteSnapshot> {
-  const business = access.assertOwned(
-    await db.business.findFirst({
-      where: { id: access.businessId, ...access.scope },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        publicPhone: true,
-        publicEmail: true,
-        publicWebsite: true,
-        publicServiceAreaLabel: true,
-      },
-    }),
-  );
+  const found = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      publicPhone: true,
+      publicEmail: true,
+      publicWebsite: true,
+      publicServiceAreaLabel: true,
+    },
+  });
+  if (!found || found.id !== access.businessId) {
+    throw new WebsitePublishError("Business workspace is required.");
+  }
+  const business = found;
 
   const trades = await listActiveBusinessTrades(db, access.businessId);
   const activeTradeCodes = trades.map((row) => row.tradeCode);

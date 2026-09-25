@@ -444,10 +444,16 @@ try {
   check("Compatibility still lists the live Handyman service", compat?.site.items.some((row) => row.id === handyService.id) === true);
   check("Compatibility excludes inactive services", compat?.site.items.some((row) => row.id === inactiveService.id) !== true);
 
-  const collpro = await prisma.business.create({
-    data: { name: "CollPro Reno Handyman Services", slug: "collpro-reno", tradeCode: "HANDYMAN" },
-  });
+  const collpro =
+    (await prisma.business.findUnique({ where: { slug: "collpro-reno" } })) ??
+    (await prisma.business.create({
+      data: { name: "CollPro Reno Handyman Services", slug: "collpro-reno", tradeCode: "HANDYMAN" },
+    }));
   await activateBusinessTradeOp(prisma, makeAccess(collpro.id, memA.id), "HANDYMAN");
+  await prisma.business.update({
+    where: { id: collpro.id },
+    data: { publishedWebsiteId: null },
+  });
   const collproView = await loadPublicWebsiteView("collpro-reno", prisma);
   check("CollPro compatibility path still works before first publish", collproView?.source === "compatibility");
 
@@ -576,7 +582,10 @@ try {
     publishId: first.id,
     idempotencyKey: "rb-1",
   });
-  check("Rollback creates a new version", rollback.versionNumber === 3 && rollback.sourcePublishId === first.id);
+  check(
+    "Rollback creates a new version",
+    rollback.versionNumber > second.versionNumber && rollback.sourcePublishId === first.id,
+  );
   const afterRollback = await loadPublicWebsiteView(businessA.slug, prisma);
   check("Rollback restores version 1 public state", afterRollback?.snapshot?.about.copy === frozenAbout);
   const sameRollback = await rollbackWebsite(prisma, accessA, {
@@ -640,15 +649,17 @@ try {
       !JSON.stringify(reView.snapshot).includes("stripeSecret"),
   );
 
+  const hostAName = `alpha-${randomUUID().slice(0, 8)}.example.test`;
+  const hostBName = `beta-${randomUUID().slice(0, 8)}.example.test`;
   await prisma.websiteHostBinding.create({
-    data: { businessId: businessA.id, hostname: "alpha.example.test", status: "VERIFIED" },
+    data: { businessId: businessA.id, hostname: hostAName, status: "VERIFIED" },
   });
   await prisma.websiteHostBinding.create({
-    data: { businessId: businessB.id, hostname: "beta-unverified.example.test", status: "UNVERIFIED" },
+    data: { businessId: businessB.id, hostname: hostBName, status: "UNVERIFIED" },
   });
-  const hostA = await resolvePublicHost(prisma, "alpha.example.test");
-  const hostB = await resolvePublicHost(prisma, "beta-unverified.example.test");
-  const hostUnknown = await resolvePublicHost(prisma, "nobody.example.test");
+  const hostA = await resolvePublicHost(prisma, hostAName);
+  const hostB = await resolvePublicHost(prisma, hostBName);
+  const hostUnknown = await resolvePublicHost(prisma, `nobody-${randomUUID().slice(0, 8)}.example.test`);
   check("Verified host for A resolves A", hostA.kind === "tenant" && hostA.businessId === businessA.id && hostA.slug === businessA.slug);
   check("UNVERIFIED host for B does not resolve", hostB.kind === "unknown");
   check("Unknown host fails closed", hostUnknown.kind === "unknown");

@@ -31,12 +31,13 @@ export async function publishWebsite(
 
   const key = input.idempotencyKey?.trim() || null;
   if (key) {
-    const existing = access.assertOwned(
-      await db.websitePublish.findFirst({
-        where: { businessId: access.businessId, idempotencyKey: key },
-      }),
-    );
-    if (existing) return existing;
+    const existing = await db.websitePublish.findFirst({
+      where: { businessId: access.businessId, idempotencyKey: key },
+    });
+    if (existing) {
+      access.assertOwned(existing);
+      return existing;
+    }
   }
 
   const snapshot = await buildWebsiteSnapshot(db, access);
@@ -46,7 +47,7 @@ export async function publishWebsite(
   }
 
   const current = await db.business.findFirst({
-    where: { id: access.businessId, ...access.scope },
+    where: { id: access.businessId },
     select: { publishedWebsiteId: true },
   });
   const previousRow = current?.publishedWebsiteId
