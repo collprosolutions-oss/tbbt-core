@@ -297,7 +297,7 @@ check(
   "TBBT Billing shows the Price ID setup warning only from founderPriceWarning and keeps Start subscription on checkoutPossible",
   settingsWorkspace.includes("{billing.founderPriceWarning ? (") &&
     settingsWorkspace.includes("{billing.founderPriceWarning}") &&
-    settingsWorkspace.includes("{billing.checkoutPossible ? <SaasSubscribeButton /> : null}") &&
+    settingsWorkspace.includes("{billing.checkoutPossible ? <SaasSubscribeButton planCode=\"FOUNDER\" /> : null}") &&
     !settingsWorkspace.includes("TBBT_FOUNDER_PRICE_OPERATIONAL_REQUIREMENT"),
 );
 check(

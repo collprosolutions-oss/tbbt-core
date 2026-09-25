@@ -84,6 +84,7 @@ const {
   resetSaasBillingSchemaEnsure,
   SAAS_CHECKOUT_PURPOSE,
   setSaasBillingProvider,
+  startFounderTrialIfEligible,
   startSaasSubscriptionCheckout,
   SaasBillingError,
   TBBT_FOUNDER_PLAN_AMOUNT_CENTS,
@@ -324,6 +325,11 @@ try {
   const memberAccess = makeAccess(alpha.business.id, "MEMBER", memberMembership.id, memberUser.email);
   const bravoAccess = makeAccess(bravo.business.id, "OWNER", bravo.membership.id, bravo.ownerUser.email);
 
+  await startFounderTrialIfEligible(prisma, {
+    businessId: alpha.business.id,
+    slug: alpha.business.slug,
+    changedByMembershipId: alpha.membership.id,
+  });
   const trialEntitlement = await loadProductEntitlement(prisma, alpha.business.id);
   check(
     "Historical / empty SaaS rows resolve to FOUNDER capabilities",
