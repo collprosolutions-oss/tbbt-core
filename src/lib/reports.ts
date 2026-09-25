@@ -292,8 +292,8 @@ export type ReportChangeOrder = {
   jobId: string;
   status: string;
   total: number;
-  invoiceId: string | null;
-  createdAt: Date;
+  invoiceId?: string | null;
+  createdAt?: Date;
 };
 
 export type ReportCustomer = {

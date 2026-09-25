@@ -39,7 +39,7 @@ export type BillingChangeOrderLike = {
   status: string;
   total: Prisma.Decimal | number | string;
   invoiceId?: string | null;
-  createdAt: Date;
+  createdAt?: Date;
 };
 
 function toAmount(value: Prisma.Decimal | number | string | null | undefined): Prisma.Decimal {
@@ -97,6 +97,7 @@ export function billedChangeOrderIds(input: {
     if (
       !changeOrder.invoiceId &&
       original &&
+      changeOrder.createdAt &&
       changeOrder.createdAt.getTime() <= original.createdAt.getTime()
     ) {
       billed.add(changeOrder.id);
@@ -127,6 +128,7 @@ export function coveringBilledChangeOrderIds(input: {
       !changeOrder.invoiceId &&
       original &&
       isCoveringInvoiceStatus(original.status) &&
+      changeOrder.createdAt &&
       changeOrder.createdAt.getTime() <= original.createdAt.getTime()
     ) {
       billed.add(changeOrder.id);
