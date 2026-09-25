@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { findCurrentEstimateVersion } from "@/lib/estimate-version";
 import { prisma } from "@/lib/prisma";
+import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 
 export type ApproveEstimateResult = {
   status?: string;
@@ -132,6 +133,21 @@ export async function approveEstimate(
       return { status: "APPROVED" };
     }
     return { error: NOT_READY_ERROR };
+  }
+
+  const approved = await prisma.estimate.findUnique({
+    where: { publicToken: token },
+    select: { id: true, businessId: true, customerId: true },
+  });
+  if (approved) {
+    await emitAndProcessBusinessEvent(prisma, {
+      businessId: approved.businessId,
+      type: "ESTIMATE_APPROVED",
+      subjectType: "ESTIMATE",
+      subjectId: approved.id,
+      payload: { customerId: approved.customerId },
+      idempotencyKey: `ESTIMATE_APPROVED:${approved.id}`,
+    });
   }
 
   revalidatePath(`/e/${token}`);

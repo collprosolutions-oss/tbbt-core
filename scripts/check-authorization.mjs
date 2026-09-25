@@ -616,6 +616,17 @@ try {
     requireBusinessCapability(adminA, CAPABILITIES.MANAGE_KNOWLEDGE);
   });
 
+  console.log("\nTEST 17 — Generic AI writing assist is OWNER/ADMIN-only");
+  check("OWNER has USE_AI_ASSIST", roleHasCapability("OWNER", CAPABILITIES.USE_AI_ASSIST));
+  check("ADMIN has USE_AI_ASSIST", roleHasCapability("ADMIN", CAPABILITIES.USE_AI_ASSIST));
+  check("MEMBER does not have USE_AI_ASSIST", !roleHasCapability("MEMBER", CAPABILITIES.USE_AI_ASSIST));
+  await expectForbidden("MEMBER cannot pass the AI-assist capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.USE_AI_ASSIST);
+  });
+  await expectAllowed("ADMIN can pass the AI-assist capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.USE_AI_ASSIST);
+  });
+
   console.log(
     failures === 0
       ? "\nAll authorization checks passed."

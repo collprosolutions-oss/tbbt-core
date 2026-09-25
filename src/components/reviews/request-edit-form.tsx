@@ -1,10 +1,11 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { updateReviewRequestAction, type ReviewsActionState } from "@/app/actions/reviews";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { REVIEW_PLATFORM_LABELS, REVIEW_PLATFORMS } from "@/lib/reviews";
+import { WritingAssistBar } from "@/components/ai/writing-assist-bar";
 
 const initial: ReviewsActionState = {};
 
@@ -20,6 +21,7 @@ export function RequestEditForm({
   notes: string;
 }) {
   const [state, formAction, pending] = useActionState(updateReviewRequestAction, initial);
+  const [text, setText] = useState(requestText);
 
   return (
     <form action={formAction} className="space-y-3">
@@ -45,8 +47,14 @@ export function RequestEditForm({
           id={`edit-text-${requestId}`}
           name="requestText"
           rows={5}
-          defaultValue={requestText}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
           className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        />
+        <WritingAssistBar
+          original={text}
+          context="Ask for an honest review. Do not ask for 5 stars or gate who receives a request."
+          onSuggestion={setText}
         />
       </div>
       <div className="space-y-1.5">

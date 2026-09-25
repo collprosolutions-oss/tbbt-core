@@ -234,6 +234,7 @@ export async function attemptCustomerSms(
       scheduleNotificationEnabled: true,
       invoiceCommunicationEnabled: true,
       reviewRequestPreferenceEnabled: true,
+      marketingCommunicationEnabled: true,
     },
   });
   const eligibility = evaluateSmsEligibility({

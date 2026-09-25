@@ -505,6 +505,72 @@ check(
     authChallengeAttemptsMigration.includes('ADD COLUMN IF NOT EXISTS "failedAttemptCount"'),
 );
 
+const intelligenceMigration = readFileSync(
+  new URL("../prisma/migrations/20260924120000_bsos_intelligence_automation/migration.sql", import.meta.url),
+  "utf8",
+);
+const intelligenceSchema = readFileSync(
+  new URL("../src/lib/intelligence-schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Intelligence + automation migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(intelligenceMigration) &&
+    intelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "AiInteraction"') &&
+    intelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessEvent"') &&
+    intelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "AutomationRule"') &&
+    intelligenceMigration.includes('CREATE TABLE IF NOT EXISTS "BsosRecommendationState"') &&
+    intelligenceMigration.includes('ADD COLUMN IF NOT EXISTS "scope"'),
+);
+check(
+  "Intelligence schema is migrate-only and does not run request-time DDL",
+  intelligenceSchema.includes("prisma-migrate") &&
+    !intelligenceSchema.includes("$executeRawUnsafe") &&
+    !intelligenceSchema.includes("ensureIntelligenceSchema"),
+);
+check(
+  "Authenticated workspace load does not run intelligence DDL",
+  !workspaceLoader.includes("ensureIntelligenceSchema") &&
+    !workspaceLoader.includes("intelligence-schema"),
+);
+
+const intelligenceHardeningMigration = readFileSync(
+  new URL("../prisma/migrations/20260924220000_intelligence_hardening/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Intelligence hardening migration is additive and adds recommendation evidence plus FKs",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(intelligenceHardeningMigration) &&
+    intelligenceHardeningMigration.includes('ADD COLUMN IF NOT EXISTS "evidenceKey"') &&
+    intelligenceHardeningMigration.includes('ADD COLUMN IF NOT EXISTS "history"') &&
+    intelligenceHardeningMigration.includes("AiConversationMessage_interactionId_fkey") &&
+    intelligenceHardeningMigration.includes("AiInteraction_userId_fkey") &&
+    intelligenceHardeningMigration.includes("BsosRecommendationState_actionItemId_fkey") &&
+    intelligenceHardeningMigration.includes("IF NOT EXISTS"),
+);
+
+const automationClaimLeaseMigration = readFileSync(
+  new URL("../prisma/migrations/20260924230000_automation_run_claim_lease/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Automation claim-lease migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(automationClaimLeaseMigration) &&
+    automationClaimLeaseMigration.includes('ADD COLUMN IF NOT EXISTS "claimedAt"') &&
+    automationClaimLeaseMigration.includes("IF NOT EXISTS"),
+);
+
+const aiClaimLeaseMigration = readFileSync(
+  new URL("../prisma/migrations/20260925000000_ai_interaction_claim_lease/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "AI interaction claim-lease migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(aiClaimLeaseMigration) &&
+    aiClaimLeaseMigration.includes('ADD COLUMN IF NOT EXISTS "claimedAt"') &&
+    aiClaimLeaseMigration.includes("IF NOT EXISTS"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

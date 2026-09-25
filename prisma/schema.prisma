@@ -79,6 +79,7 @@ model User {
   /// Founder Design Mode cosmetic overrides this user has saved -- see
   /// FounderDesignOverride below. Empty for every non-founder User.
   founderDesignOverrides FounderDesignOverride[]
+  aiInteractions         AiInteraction[]
 }
 
 /// Founder/developer-only cosmetic design-token overrides for the
@@ -317,6 +318,16 @@ model Business {
   referralRequests         ReferralRequest[]
   referrals                Referral[]
   customerFollowUps        CustomerFollowUp[]
+  aiConversations          AiConversation[]
+  aiConversationMessages   AiConversationMessage[]
+  aiInteractions           AiInteraction[]
+  aiUsagePeriods           AiUsagePeriod[]
+  knowledgeConcepts        KnowledgeConcept[]
+  knowledgeAssertions      KnowledgeAssertion[]
+  businessEvents           BusinessEvent[]
+  automationRules          AutomationRule[]
+  automationRuns           AutomationRun[]
+  recommendationStates     BsosRecommendationState[]
 }
 
 model Membership {
@@ -388,6 +399,9 @@ model Membership {
   createdServiceAreas             ServiceArea[]           @relation("ServiceAreaCreator")
   createdReferralRequests         ReferralRequest[]       @relation("ReferralRequestCreator")
   createdCustomerFollowUps        CustomerFollowUp[]      @relation("CustomerFollowUpCreator")
+  aiConversations                 AiConversation[]        @relation("AiConversationMembership")
+  aiInteractions                  AiInteraction[]         @relation("AiInteractionMembership")
+  recommendationStates            BsosRecommendationState[] @relation("BsosRecommendationStateActor")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -2073,17 +2087,22 @@ model KnowledgeEntry {
   createdByMembershipId String
   lastReviewedAt DateTime?
   lastReviewedByMembershipId String?
+  /// BUSINESS (this tenant only) | PLATFORM (shared later; never mixed into tenant retrieval)
+  scope      String   @default("BUSINESS")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
   createdBy  Membership @relation("KnowledgeEntryCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
   reviewedBy Membership? @relation("KnowledgeEntryReviewer", fields: [lastReviewedByMembershipId], references: [id], onDelete: SetNull)
+  concepts   KnowledgeConcept[]
+  assertions KnowledgeAssertion[]
 
   @@index([businessId])
   @@index([businessId, category])
   @@index([businessId, trustState])
   @@index([businessId, archived])
+  @@index([businessId, scope])
 }
 
 /// Owner-authored business goal. Recommendations never invent the target
@@ -2125,6 +2144,7 @@ model BusinessActionItem {
   business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
   goal      BusinessGoal? @relation(fields: [goalId], references: [id], onDelete: SetNull)
   createdBy Membership? @relation("BusinessActionItemCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  recommendationStates BsosRecommendationState[]
 
   @@index([businessId])
   @@index([businessId, status])
@@ -2269,4 +2289,235 @@ model CustomerFollowUp {
   @@index([customerId])
   @@index([jobId])
   @@index([createdByMembershipId])
+}
+
+/// Tenant-scoped AI conversation. Never used as an authorization boundary.
+model AiConversation {
+  id           String   @id @default(cuid())
+  businessId   String
+  membershipId String
+  /// COACH | KNOWLEDGE | MARKETING | REVIEW | WRITING
+  area         String
+  title        String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  business     Business                @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership   Membership              @relation("AiConversationMembership", fields: [membershipId], references: [id], onDelete: Cascade)
+  messages     AiConversationMessage[]
+  interactions AiInteraction[]
+
+  @@index([businessId])
+  @@index([businessId, area])
+  @@index([membershipId])
+}
+
+model AiConversationMessage {
+  id             String   @id @default(cuid())
+  businessId     String
+  conversationId String
+  /// USER | ASSISTANT | SYSTEM
+  role           String
+  content        String
+  /// FACT | RECOMMENDATION | MIXED
+  stance         String   @default("MIXED")
+  citedFacts     Json?
+  interactionId  String?
+  createdAt      DateTime @default(now())
+
+  business     Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  conversation AiConversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  interaction  AiInteraction?  @relation("AiMessageInteraction", fields: [interactionId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([conversationId])
+}
+
+/// Auditable AI call. Stores sanitized summaries, never secrets or raw dumps.
+model AiInteraction {
+  id               String   @id @default(cuid())
+  businessId       String
+  membershipId     String?
+  userId           String?
+  conversationId   String?
+  /// COACH_ASK | WRITING | MARKETING_DRAFT | REVIEW_RESPONSE | KNOWLEDGE_ASK | WEEKLY_PLAN | CAMPAIGN_IDEAS
+  taskType         String
+  provider         String?
+  model            String?
+  /// PENDING | COMPLETED | FAILED | SKIPPED_NOT_CONNECTED | VALIDATION_FAILED
+  status           String
+  inputSummary     String
+  outputSummary    String?
+  failureReason    String?
+  latencyMs        Int?
+  promptTokens     Int?
+  completionTokens Int?
+  retryCount       Int      @default(0)
+  idempotencyKey   String
+  /// Set when a worker claims PENDING or reclaims a stale PENDING interaction.
+  claimedAt        DateTime?
+  createdAt        DateTime @default(now())
+
+  business     Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership   Membership?     @relation("AiInteractionMembership", fields: [membershipId], references: [id], onDelete: SetNull)
+  conversation AiConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  user         User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  messages     AiConversationMessage[] @relation("AiMessageInteraction")
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([businessId, taskType])
+  @@index([businessId, createdAt])
+}
+
+/// Monthly usage totals. No invented dollar cost.
+model AiUsagePeriod {
+  id               String   @id @default(cuid())
+  businessId       String
+  periodStart      DateTime
+  requestCount     Int      @default(0)
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  failedCount      Int      @default(0)
+  skippedCount     Int      @default(0)
+  updatedAt        DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, periodStart])
+}
+
+model KnowledgeConcept {
+  id         String   @id @default(cuid())
+  businessId String
+  entryId    String
+  label      String
+  /// CONCEPT | WORKFLOW | STRATEGY | WARNING | EXCEPTION
+  kind       String
+  createdAt  DateTime @default(now())
+
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  entry    KnowledgeEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([entryId])
+}
+
+model KnowledgeAssertion {
+  id         String   @id @default(cuid())
+  businessId String
+  entryId    String
+  statement  String
+  /// FACT | CLAIM | OPINION
+  stance     String
+  /// HIGH | MEDIUM | LOW | UNKNOWN
+  confidence String   @default("UNKNOWN")
+  createdAt  DateTime @default(now())
+
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  entry    KnowledgeEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([entryId])
+}
+
+/// Durable business event. Idempotent per (businessId, idempotencyKey).
+model BusinessEvent {
+  id             String   @id @default(cuid())
+  businessId     String
+  /// REQUEST_CREATED | ESTIMATE_SENT | ESTIMATE_APPROVED | APPOINTMENT_SCHEDULED |
+  /// APPOINTMENT_CHANGED | JOB_STARTED | JOB_COMPLETED | INVOICE_SENT | INVOICE_DUE |
+  /// INVOICE_OVERDUE | INVOICE_PAID | REVIEW_OPPORTUNITY_CREATED |
+  /// REFERRAL_OPPORTUNITY_CREATED | CUSTOMER_FOLLOW_UP_DUE
+  type           String
+  subjectType    String
+  subjectId      String
+  payload        Json?
+  occurredAt     DateTime @default(now())
+  idempotencyKey String
+  createdAt      DateTime @default(now())
+
+  business Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  runs     AutomationRun[]
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([businessId, type])
+  @@index([businessId, subjectType, subjectId])
+}
+
+model AutomationRule {
+  id           String   @id @default(cuid())
+  businessId   String
+  eventType    String
+  /// COMMUNICATION | ACTION_SUGGESTION
+  kind         String   @default("COMMUNICATION")
+  purpose      String
+  enabled      Boolean  @default(false)
+  /// EMAIL | SMS | BOTH | NONE
+  channel      String   @default("NONE")
+  delayMinutes Int      @default(0)
+  templateKey  String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  business Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  runs     AutomationRun[]
+
+  @@unique([businessId, eventType, purpose])
+  @@index([businessId])
+}
+
+model AutomationRun {
+  id             String    @id @default(cuid())
+  businessId     String
+  eventId        String
+  ruleId         String?
+  kind           String
+  /// PENDING | PROCESSING | SUCCEEDED | FAILED | SKIPPED | BLOCKED
+  status         String    @default("PENDING")
+  attemptCount   Int       @default(0)
+  lastError      String?
+  resultSummary  String?
+  idempotencyKey String
+  availableAt    DateTime  @default(now())
+  /// Set when a worker claims PENDING or reclaims a stale PROCESSING run.
+  claimedAt      DateTime?
+  processedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  business Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  event    BusinessEvent   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  rule     AutomationRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([businessId, status, availableAt])
+  @@index([eventId])
+}
+
+/// Persisted recommendation acknowledgment so dismissed/completed items
+/// do not keep repeating on Business Health.
+model BsosRecommendationState {
+  id                      String   @id @default(cuid())
+  businessId              String
+  recommendationKey       String
+  /// OPEN | DISMISSED | COMPLETED
+  status                  String   @default("OPEN")
+  /// Fingerprint of the supporting facts when this status was recorded.
+  evidenceKey             String   @default("")
+  /// Prior dismiss/complete acknowledgments for older fact fingerprints.
+  history                 Json?
+  actionItemId            String?
+  updatedByMembershipId   String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  business   Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  updatedBy  Membership?         @relation("BsosRecommendationStateActor", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
+  actionItem BusinessActionItem? @relation(fields: [actionItemId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, recommendationKey])
+  @@index([businessId])
 }

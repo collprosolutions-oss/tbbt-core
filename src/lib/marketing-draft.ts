@@ -1,10 +1,12 @@
 /**
  * AI-assisted marketing draft architecture.
  *
- * No external model provider is called. TBBT builds an honest TEMPLATE
- * draft from recorded job/service data. An env string never means a
- * provider is connected. Nothing here marks content PUBLISHED.
+ * Template drafts always work. A real model is used only when an API key
+ * is configured. An env provider name never means a provider is connected.
+ * Nothing here marks content PUBLISHED.
  */
+
+import { isAiProviderConnected } from "@/lib/ai/config";
 
 export const MARKETING_DRAFT_MODES = ["TEMPLATE"] as const;
 export type MarketingDraftMode = (typeof MARKETING_DRAFT_MODES)[number];
@@ -14,13 +16,13 @@ export const MARKETING_AI_DISCONNECTED_MESSAGE =
 
 export const MARKETING_AI_NOT_CONNECTED_MESSAGE = MARKETING_AI_DISCONNECTED_MESSAGE;
 
-export function marketingAiProviderConnected(): false {
-  return false;
+export function marketingAiProviderConnected() {
+  return isAiProviderConnected();
 }
 
-/** External AI is not connected. Template drafts still work. */
-export function marketingAiAssistAvailable(): false {
-  return false;
+/** Real AI assist requires an API key. An env provider name is not enough. */
+export function marketingAiAssistAvailable() {
+  return isAiProviderConnected();
 }
 
 export type MarketingDraftInput = {

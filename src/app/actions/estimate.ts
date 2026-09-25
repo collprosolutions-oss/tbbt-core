@@ -70,6 +70,7 @@ import {
   sendTransactionalEmail,
 } from "@/lib/mail";
 import { attemptEstimateReadySms } from "@/lib/customer-messaging";
+import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { tenantEstimateUrl } from "@/lib/tenant-app-url";
 import { prisma } from "@/lib/prisma";
 
@@ -1286,6 +1287,18 @@ export async function sendEstimate(
     publicToken: estimate.publicToken,
     customerId: estimate.customerId,
     initiatedByMembershipId: access.workspace.membership.id,
+  });
+  await emitAndProcessBusinessEvent(prisma, {
+    businessId: access.businessId,
+    type: "ESTIMATE_SENT",
+    subjectType: "ESTIMATE",
+    subjectId: estimate.id,
+    payload: {
+      customerId: estimate.customerId,
+      businessName: access.workspace.business.name,
+      publicToken: estimate.publicToken,
+    },
+    idempotencyKey: `ESTIMATE_SENT:${estimate.id}`,
   });
 
   revalidatePath("/estimates");

@@ -7,6 +7,14 @@
  */
 import { revalidatePath } from "next/cache";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
+import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { isAiAttemptId } from "@/lib/ai/types";
+import {
+  campaignIdeasWithAi,
+  draftMarketingVariationsWithAi,
+  weeklyMarketingPlanWithAi,
+} from "@/lib/ai/marketing";
+import { loadMarketingSource } from "@/lib/marketing-data";
 import {
   advanceMarketingContentStatus,
   createMarketingContent,
@@ -20,6 +28,15 @@ import { prisma } from "@/lib/prisma";
 export type MarketingActionState = {
   error?: string;
   message?: string;
+};
+
+export type MarketingAiActionState = {
+  error?: string;
+  message?: string;
+  text?: string;
+  mode?: "AI" | "TEMPLATE";
+  task?: string;
+  inProgress?: boolean;
 };
 
 function readString(formData: FormData, key: string) {
@@ -120,5 +137,55 @@ export async function setMarketingPlannedDateAction(
     return { message: "Internal planning date saved. This does not publish the post." };
   } catch (error) {
     return { error: marketingErrorMessage(error, "That planning date could not be saved.") };
+  }
+}
+
+export async function generateMarketingAiAction(
+  _prev: MarketingAiActionState,
+  formData: FormData,
+): Promise<MarketingAiActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+    const task = readString(formData, "marketingAiTask");
+    const attemptId = readString(formData, "attemptId");
+    if (!isAiAttemptId(attemptId)) return { error: "Retry that request from the form." };
+    const source = await loadMarketingSource(prisma, access.businessId);
+    const actor = {
+      businessId: access.businessId,
+      membershipId: access.workspace.membership.id,
+      userId: access.workspace.user.id,
+    };
+    const key = `marketing:${task}:${access.businessId}:${attemptId}`;
+    const facts = source.recordedActivity;
+    if (task === "WEEKLY_PLAN") {
+      const result = await weeklyMarketingPlanWithAi(prisma, actor, facts, key);
+      if (result.status === "PENDING") return { message: result.message, task, inProgress: true };
+      return { message: result.message, text: result.text, mode: result.mode, task };
+    }
+    if (task === "CAMPAIGN_IDEAS") {
+      const result = await campaignIdeasWithAi(prisma, actor, facts, key);
+      if (result.status === "PENDING") return { message: result.message, task, inProgress: true };
+      return { message: result.message, text: result.text, mode: result.mode, task };
+    }
+    if (task === "MARKETING_DRAFT") {
+      const result = await draftMarketingVariationsWithAi(
+        prisma,
+        actor,
+        {
+          contentType: "COMPLETED_JOB",
+          businessName: facts.businessName,
+          workPerformed: facts.workPerformed,
+          photoCount: facts.photoCount,
+          city: facts.city,
+        },
+        key,
+      );
+      if (result.status === "PENDING") return { message: result.message, task, inProgress: true };
+      return { message: result.message, text: result.text, mode: result.mode, task };
+    }
+    return { error: "Choose a marketing AI task." };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "That marketing draft could not be generated." };
   }
 }

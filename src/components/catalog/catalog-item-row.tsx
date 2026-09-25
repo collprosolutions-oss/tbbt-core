@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DEFAULT_SERVICE_CATEGORY } from "@/lib/service-catalog-category";
+import { WritingAssistBar } from "@/components/ai/writing-assist-bar";
 
 const initialState: CatalogActionState = {};
 
@@ -119,6 +120,7 @@ export function CatalogItemRow({
     initialState,
   );
   const [mode, setMode] = useState(pricingMode);
+  const [scope, setScope] = useState(description);
 
   return (
     <div className="space-y-3">
@@ -199,9 +201,15 @@ export function CatalogItemRow({
           <textarea
             id={`description-${id}`}
             name="description"
-            defaultValue={description}
+            value={scope}
+            onChange={(event) => setScope(event.target.value)}
             rows={4}
             className="min-h-20 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base outline-none md:text-sm"
+          />
+          <WritingAssistBar
+            original={scope}
+            context="Service catalog scope and included work. Do not invent prices, licenses, or guarantees."
+            onSuggestion={setScope}
           />
         </div>
         <Button type="submit" variant="outline" disabled={pending}>

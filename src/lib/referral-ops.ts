@@ -15,6 +15,7 @@ import {
   senderFrom,
 } from "@/lib/mail";
 import { channelDeliveryAccepted } from "@/lib/reviews";
+import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -67,21 +68,37 @@ export async function createReferralRequest(
     where: { id: access.businessId },
     select: { name: true },
   });
-  return db.referralRequest.create({
+  const requestText =
+    input.requestText?.trim() ||
+    suggestedReferralText({
+      customerName: customer.name,
+      businessName: business?.name ?? "us",
+    });
+  const request = await db.referralRequest.create({
     data: {
       businessId: access.businessId,
       customerId: customer.id,
       jobId: input.jobId || null,
-      requestText:
-        input.requestText?.trim() ||
-        suggestedReferralText({
-          customerName: customer.name,
-          businessName: business?.name ?? "us",
-        }),
+      requestText,
       notes: input.notes?.trim() || null,
       createdByMembershipId: access.workspace.membership.id,
     },
   });
+  await emitAndProcessBusinessEvent(db, {
+    businessId: access.businessId,
+    type: "REFERRAL_REQUEST_CREATED",
+    subjectType: "REFERRAL_REQUEST",
+    subjectId: request.id,
+    payload: {
+      customerId: customer.id,
+      jobId: request.jobId,
+      referralRequestId: request.id,
+      requestText,
+      businessName: business?.name ?? "Your contractor",
+    },
+    idempotencyKey: `REFERRAL_REQUEST_CREATED:${request.id}`,
+  });
+  return request;
 }
 
 export async function advanceReferralRequest(
@@ -102,10 +119,29 @@ export async function advanceReferralRequest(
         : "This referral request cannot be advanced.",
     );
   }
-  return db.referralRequest.update({
+  const updated = await db.referralRequest.update({
     where: { id: request.id },
     data: { status: "READY" },
   });
+  const business = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: { name: true },
+  });
+  await emitAndProcessBusinessEvent(db, {
+    businessId: access.businessId,
+    type: "REFERRAL_REQUEST_READY",
+    subjectType: "REFERRAL_REQUEST",
+    subjectId: updated.id,
+    payload: {
+      customerId: updated.customerId,
+      jobId: updated.jobId,
+      referralRequestId: updated.id,
+      requestText: updated.requestText,
+      businessName: business?.name ?? "Your contractor",
+    },
+    idempotencyKey: `REFERRAL_REQUEST_READY:${updated.id}`,
+  });
+  return updated;
 }
 
 async function attemptOwnedCustomerEmail(
@@ -313,7 +349,7 @@ export async function createCustomerFollowUp(
       }),
     );
   }
-  return db.customerFollowUp.create({
+  const row = await db.customerFollowUp.create({
     data: {
       businessId: access.businessId,
       customerId: input.customerId,
@@ -323,6 +359,24 @@ export async function createCustomerFollowUp(
       createdByMembershipId: access.workspace.membership.id,
     },
   });
+  const business = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: { name: true },
+  });
+  await emitAndProcessBusinessEvent(db, {
+    businessId: access.businessId,
+    type: "CUSTOMER_FOLLOW_UP_DUE",
+    subjectType: "CUSTOMER_FOLLOW_UP",
+    subjectId: row.id,
+    payload: {
+      customerId: row.customerId,
+      jobId: row.jobId,
+      followUpId: row.id,
+      businessName: business?.name ?? "Your contractor",
+    },
+    idempotencyKey: `CUSTOMER_FOLLOW_UP_DUE:${row.id}`,
+  });
+  return row;
 }
 
 export async function sendCustomerFollowUp(

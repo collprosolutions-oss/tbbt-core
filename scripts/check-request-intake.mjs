@@ -92,11 +92,22 @@ check(
   readRepo("src/lib/business-storage/request-photo-rules.ts").includes("image/heic") &&
     readRepo("src/lib/business-storage/request-photo-rules.ts").includes("image/heif"),
 );
+const jobPhotoSrc = readRepo("src/app/actions/job-photo.ts");
+const expenseSrc = readRepo("src/app/actions/expenses.ts");
+const storageSrc = readRepo("src/lib/storage.ts");
 check(
-  "Job-photo and expense Blob upload paths are not rewritten here",
-  readRepo("src/lib/storage.ts").includes("MAX_JOB_PHOTO_UPLOAD_BYTES = 4 * 1024 * 1024") &&
-    readRepo("src/app/actions/job-photo.ts").includes("MAX_JOB_PHOTO_UPLOAD_BYTES") &&
-    readRepo("src/app/actions/expenses.ts").includes("MAX_JOB_PHOTO_UPLOAD_BYTES"),
+  "OWNER/ADMIN job photos use private R2 / StoredAsset, not the 4MB Blob server-action path",
+  jobPhotoSrc.includes("authorizeManagementJobPhoto") &&
+    jobPhotoSrc.includes("finalizeManagementJobPhoto") &&
+    jobPhotoSrc.includes("The image body never enters this") &&
+    !jobPhotoSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES") &&
+    !jobPhotoSrc.includes("uploadJobPhoto") &&
+    !jobPhotoSrc.includes("BLOB_READ_WRITE_TOKEN"),
+);
+check(
+  "Expense receipt uploads still use the current storage helper and 4MB size cap",
+  storageSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES = 4 * 1024 * 1024") &&
+    expenseSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES"),
 );
 
 const nextConfigSrc = readRepo("next.config.ts");

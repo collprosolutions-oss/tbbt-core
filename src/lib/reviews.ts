@@ -11,6 +11,7 @@
  * import these helpers directly.
  */
 
+import { isAiProviderConnected } from "@/lib/ai/config";
 import { parseScheduleDate, startOfDay } from "@/lib/schedule";
 
 export const REVIEW_AREAS = [
@@ -127,9 +128,9 @@ export const NO_REVIEW_GATING_MESSAGE =
 export const MARKETING_LINK_MESSAGE =
   "A recorded review may become a future Marketing opportunity. Review text is not copied into public content automatically. Permission and usage rules still apply.";
 
-/** Extension point only — no AI provider is called in this step. */
-export function reviewAiAssistAvailable(): false {
-  return false;
+/** Real AI assist requires an API key. Sentiment still uses recorded text. */
+export function reviewAiAssistAvailable() {
+  return isAiProviderConnected();
 }
 
 export function parseReviewDate(raw: string | undefined): Date | null {

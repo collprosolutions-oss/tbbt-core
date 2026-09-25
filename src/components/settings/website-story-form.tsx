@@ -1,12 +1,13 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import {
   updateWebsiteStorySettings,
   type SettingsActionState,
 } from "@/app/actions/settings";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { WritingAssistBar } from "@/components/ai/writing-assist-bar";
 import {
   MAX_OWNER_STORY_LENGTH,
   MAX_PUBLIC_ABOUT_COPY_LENGTH,
@@ -30,6 +31,8 @@ export function WebsiteStoryForm({
     updateWebsiteStorySettings,
     initialState,
   );
+  const [ownerStory, setOwnerStory] = useState(rawOwnerStory);
+  const [aboutCopy, setAboutCopy] = useState(approvedPublicAboutCopy);
 
   return (
     <form action={action} className="space-y-5">
@@ -57,13 +60,21 @@ export function WebsiteStoryForm({
           name="rawOwnerStory"
           rows={7}
           maxLength={MAX_OWNER_STORY_LENGTH}
-          defaultValue={rawOwnerStory}
+          value={ownerStory}
+          onChange={(event) => setOwnerStory(event.target.value)}
           disabled={!canEdit || pending}
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
           placeholder="Type background, experience, and facts in your own words."
         />
+        {canEdit ? (
+          <WritingAssistBar
+            original={ownerStory}
+            context="Owner background story. Rephrase only facts written here. Never invent credentials."
+            onSuggestion={setOwnerStory}
+          />
+        ) : null}
         <p className="text-xs text-muted-foreground">
-          Not published. Future copy assistance may only rephrase facts written here.
+          Not published. Suggestions stay private until you copy them into approved About copy and save.
         </p>
       </div>
       <div className="space-y-2">
@@ -75,11 +86,19 @@ export function WebsiteStoryForm({
           name="approvedPublicAboutCopy"
           rows={8}
           maxLength={MAX_PUBLIC_ABOUT_COPY_LENGTH}
-          defaultValue={approvedPublicAboutCopy}
+          value={aboutCopy}
+          onChange={(event) => setAboutCopy(event.target.value)}
           disabled={!canEdit || pending}
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
           placeholder="The concise About story customers will read. Leave blank to use the default public copy."
         />
+        {canEdit ? (
+          <WritingAssistBar
+            original={aboutCopy}
+            context="Public About copy. Rephrase only owner-supplied facts. Never invent years, licenses, awards, or insurance."
+            onSuggestion={setAboutCopy}
+          />
+        ) : null}
         <p className="text-xs text-muted-foreground">
           Owner/admin approval is required before this text appears on the website.
         </p>

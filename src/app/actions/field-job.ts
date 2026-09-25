@@ -26,6 +26,7 @@ import {
 import { CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT, startJobRequiresCustomerConfirmation } from "@/lib/appointment-confirmation";
 import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
+import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import {
   isBusinessStorageConfigured,
   StorageError,
@@ -102,6 +103,14 @@ export async function startAssignedJob(
       where: { id: job.id },
       data: { status: result.nextStatus },
     });
+    await emitAndProcessBusinessEvent(prisma, {
+      businessId: job.businessId,
+      type: "JOB_STARTED",
+      subjectType: "JOB",
+      subjectId: job.id,
+      payload: { customerId: job.customerId },
+      idempotencyKey: `JOB_STARTED:${job.id}`,
+    });
   }
 
   revalidateFieldJob(job.id);
@@ -136,6 +145,14 @@ export async function completeAssignedJob(
     await prisma.job.update({
       where: { id: job.id },
       data: { status: result.nextStatus },
+    });
+    await emitAndProcessBusinessEvent(prisma, {
+      businessId: job.businessId,
+      type: "JOB_COMPLETED",
+      subjectType: "JOB",
+      subjectId: job.id,
+      payload: { customerId: job.customerId },
+      idempotencyKey: `JOB_COMPLETED:${job.id}`,
     });
   }
 
