@@ -2,10 +2,18 @@
  * Owner/admin accounting CSV export over recorded TBBT truth.
  *
  * This is not a general ledger, tax engine, or QuickBooks/Xero integration.
- * Invoice paid/remaining amounts come from Payment rows only — a PAID
- * invoice status never invents a payment or replaces recorded cash.
- * Expense rows follow ACTIVE_EXPENSE_WHERE (non-voided). Stripe session,
- * payment-intent, and provider tokens are never selected.
+ * Invoice paid/remaining uses invoicePaymentBreakdown: recorded Payment
+ * rows are modern cash truth, and a PAID invoice with zero allocated
+ * Payment rows may use the full invoice total as the legacy fully-paid
+ * fallback. A Payment row is never invented from invoice status.
+ *
+ * Job-only payments (invoiceId null) allocate to an invoice only when
+ * that job has exactly one invoice. Multi-invoice jobs keep the payment
+ * visible in payments.csv without double-counting it on every invoice.
+ *
+ * Human text cells neutralize spreadsheet formula prefixes. Expense rows
+ * follow ACTIVE_EXPENSE_WHERE (non-voided). Stripe session, payment-intent,
+ * and provider tokens are never selected.
  *
  * Callers must pass access.businessId from requireBusinessAccess().
  */
@@ -27,13 +35,40 @@ import { paymentMethodLabel } from "@/lib/invoice-payment";
 import {
   PAYMENT_PURPOSE_INVOICE_BALANCE,
   PAYMENT_PURPOSE_MATERIAL_DEPOSIT,
-  moneyMax,
-  paymentsBelongingToInvoice,
-  sumPaymentAmounts,
+  invoicePaymentBreakdown,
 } from "@/lib/project-payments";
 import { buildZipStore, toCsv } from "@/lib/zip-store";
 
-const ZERO = new Prisma.Decimal(0);
+const FORMULA_PREFIX = /^[=+\-@]/;
+
+export const PAYMENT_BASIS = {
+  RECORDED_PAYMENTS: "RECORDED_PAYMENTS",
+  LEGACY_PAID_STATUS: "LEGACY_PAID_STATUS",
+  NO_RECORDED_PAYMENT: "NO_RECORDED_PAYMENT",
+} as const;
+
+export type PaymentBasis = (typeof PAYMENT_BASIS)[keyof typeof PAYMENT_BASIS];
+
+export const ACCOUNTING_TEXT_COLUMNS = [
+  "Customer",
+  "Vendor",
+  "Description",
+  "Note",
+  "Payment Reference",
+  "Status Label",
+  "Payment Method",
+  "Payment Method Label",
+  "Method",
+  "Method Label",
+  "Purpose",
+  "Purpose Label",
+  "Category",
+  "Category Label",
+  "Tax Category",
+  "Tax Category Label",
+  "Reimbursement Status",
+  "Review Status",
+] as const;
 
 export const BUSINESS_EXPORT_CAPABILITY = CAPABILITIES.MANAGE_SETTINGS;
 
@@ -54,6 +89,7 @@ export const ACCOUNTING_INVOICE_HEADERS = [
   "Total",
   "Amount Paid",
   "Amount Remaining",
+  "Payment Basis",
   "Issued At",
   "Paid At",
   "Payment Method",
@@ -203,6 +239,35 @@ export function exportDate(value: Date | string | null | undefined): string {
   return iso ? iso.slice(0, 10) : "";
 }
 
+/**
+ * Neutralize spreadsheet formula-like text for accounting CSV cells.
+ * Money and date helpers must not call this — a leading "-" on a
+ * legitimate numeric amount stays numeric.
+ */
+export function exportAccountingText(value: string | null | undefined): string {
+  if (value == null || value === "") return "";
+  return FORMULA_PREFIX.test(value) ? `'${value}` : value;
+}
+
+export function accountingToCsv(
+  headers: readonly string[],
+  rows: Array<Record<string, string>>,
+): string {
+  const textColumns = new Set<string>(ACCOUNTING_TEXT_COLUMNS);
+  return toCsv(
+    headers,
+    rows.map((row) => {
+      const next: Record<string, string> = { ...row };
+      for (const header of headers) {
+        if (textColumns.has(header)) {
+          next[header] = exportAccountingText(next[header]);
+        }
+      }
+      return next;
+    }),
+  );
+}
+
 function nameById(rows: readonly AccountingNamedRecord[]): Map<string, string> {
   return new Map(rows.map((row) => [row.id, row.name]));
 }
@@ -212,34 +277,93 @@ function compareByDateThenId(aDate: Date, aId: string, bDate: Date, bId: string)
   return byDate !== 0 ? byDate : aId.localeCompare(bId);
 }
 
-export function recordedInvoicePaymentTotals(
-  invoice: Pick<AccountingInvoiceRecord, "id" | "jobId" | "total">,
+export function invoiceCountByJobId(
+  invoices: readonly Pick<AccountingInvoiceRecord, "jobId">[],
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const invoice of invoices) {
+    if (!invoice.jobId) continue;
+    counts.set(invoice.jobId, (counts.get(invoice.jobId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Accounting-only allocation. Does not change project-payment matching.
+ *
+ * A. Payment.invoiceId set → that invoice only.
+ * B. Payment.invoiceId null + jobId → the job's invoice only when the
+ *    job has exactly one invoice.
+ * C. Multi-invoice job → leave the job-only payment unallocated.
+ */
+export function paymentsAllocatedToInvoice<
+  T extends { id: string; invoiceId: string | null; jobId: string | null },
+>(
+  invoice: { id: string; jobId?: string | null },
+  payments: readonly T[],
+  invoicesOnJob: number,
+): T[] {
+  const seen = new Set<string>();
+  return payments.filter((row) => {
+    if (seen.has(row.id)) return false;
+    if (row.invoiceId === invoice.id) {
+      seen.add(row.id);
+      return true;
+    }
+    const jobOnlyFallback =
+      row.invoiceId == null &&
+      Boolean(invoice.jobId) &&
+      row.jobId === invoice.jobId &&
+      invoicesOnJob === 1;
+    if (jobOnlyFallback) {
+      seen.add(row.id);
+      return true;
+    }
+    return false;
+  });
+}
+
+export function accountingInvoicePaymentTotals(
+  invoice: Pick<AccountingInvoiceRecord, "id" | "jobId" | "status" | "total">,
   payments: readonly AccountingPaymentRecord[],
-): { amountPaid: Prisma.Decimal; amountRemaining: Prisma.Decimal } {
-  const belonging = paymentsBelongingToInvoice(
-    { id: invoice.id, jobId: invoice.jobId },
-    payments.map((row) => ({
-      id: row.id,
-      invoiceId: row.invoiceId,
-      jobId: row.jobId,
-      amount: row.amount,
-      purpose: row.purpose,
-    })),
-  );
-  const amountPaid = belonging.length === 0 ? ZERO : moneyMax(sumPaymentAmounts(belonging));
-  const total = invoice.total instanceof Prisma.Decimal ? invoice.total : new Prisma.Decimal(invoice.total);
+  invoicesOnJob: number,
+): {
+  amountPaid: Prisma.Decimal;
+  amountRemaining: Prisma.Decimal;
+  paymentBasis: PaymentBasis;
+  legacyFullyPaid: boolean;
+} {
+  const allocated = paymentsAllocatedToInvoice(invoice, payments, invoicesOnJob);
+  const breakdown = invoicePaymentBreakdown({
+    status: invoice.status,
+    total: invoice.total,
+    payments: allocated,
+  });
+  const paymentBasis: PaymentBasis =
+    allocated.length > 0
+      ? PAYMENT_BASIS.RECORDED_PAYMENTS
+      : breakdown.legacyFullyPaid
+        ? PAYMENT_BASIS.LEGACY_PAID_STATUS
+        : PAYMENT_BASIS.NO_RECORDED_PAYMENT;
   return {
-    amountPaid,
-    amountRemaining: moneyMax(total.sub(amountPaid)),
+    amountPaid: breakdown.amountPaid,
+    amountRemaining: breakdown.amountDue,
+    paymentBasis,
+    legacyFullyPaid: breakdown.legacyFullyPaid,
   };
 }
 
 export function buildAccountingInvoiceRows(source: AccountingExportSource): Array<Record<string, string>> {
   const customers = nameById(source.customers);
+  const invoicesOnJob = invoiceCountByJobId(source.invoices);
   return [...source.invoices]
     .sort((a, b) => compareByDateThenId(a.createdAt, a.id, b.createdAt, b.id))
     .map((invoice) => {
-      const totals = recordedInvoicePaymentTotals(invoice, source.payments);
+      const totals = accountingInvoicePaymentTotals(
+        invoice,
+        source.payments,
+        invoice.jobId ? (invoicesOnJob.get(invoice.jobId) ?? 0) : 0,
+      );
       return {
         "Invoice Number": invoiceNumberFromId(invoice.id),
         "Invoice ID": invoice.id,
@@ -252,6 +376,7 @@ export function buildAccountingInvoiceRows(source: AccountingExportSource): Arra
         Total: exportMoney(invoice.total),
         "Amount Paid": exportMoney(totals.amountPaid),
         "Amount Remaining": exportMoney(totals.amountRemaining),
+        "Payment Basis": totals.paymentBasis,
         "Issued At": exportDateTime(invoice.createdAt),
         "Paid At": exportDateTime(invoice.paidAt),
         "Payment Method": invoice.paymentMethod ?? "",
@@ -321,15 +446,15 @@ export function buildAccountingExpenseRows(source: AccountingExportSource): Arra
 }
 
 export function accountingInvoicesCsv(source: AccountingExportSource): string {
-  return toCsv(ACCOUNTING_INVOICE_HEADERS, buildAccountingInvoiceRows(source));
+  return accountingToCsv(ACCOUNTING_INVOICE_HEADERS, buildAccountingInvoiceRows(source));
 }
 
 export function accountingPaymentsCsv(source: AccountingExportSource): string {
-  return toCsv(ACCOUNTING_PAYMENT_HEADERS, buildAccountingPaymentRows(source));
+  return accountingToCsv(ACCOUNTING_PAYMENT_HEADERS, buildAccountingPaymentRows(source));
 }
 
 export function accountingExpensesCsv(source: AccountingExportSource): string {
-  return toCsv(ACCOUNTING_EXPENSE_HEADERS, buildAccountingExpenseRows(source));
+  return accountingToCsv(ACCOUNTING_EXPENSE_HEADERS, buildAccountingExpenseRows(source));
 }
 
 export function buildAccountingExportFiles(source: AccountingExportSource): AccountingExportFile[] {

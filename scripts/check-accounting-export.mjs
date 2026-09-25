@@ -19,13 +19,19 @@ const {
   ACCOUNTING_EXPENSE_HEADERS,
   ACCOUNTING_INVOICE_HEADERS,
   ACCOUNTING_PAYMENT_HEADERS,
+  PAYMENT_BASIS,
   accountingExpensesCsv,
   accountingInvoicesCsv,
   accountingPaymentsCsv,
+  accountingInvoicePaymentTotals,
   buildAccountingExportZip,
   canExportBusinessData,
   emptyAccountingExportSource,
+  exportAccountingText,
+  exportMoney,
+  invoiceCountByJobId,
   loadAccountingExportSource,
+  paymentsAllocatedToInvoice,
 } = await import("@/lib/accounting-export");
 const { buildBusinessExportZip } = await import("@/lib/business-export");
 const { invoiceNumberFromId, jobReferenceFromId } = await import("@/lib/invoice-document");
@@ -219,6 +225,255 @@ check(
   toCsvCell('Acme, "Best"\nCo') === '"Acme, ""Best""\nCo"' &&
     toCsv(["Name"], [{ Name: 'Acme, "Best"\nCo' }]).includes('"Acme, ""Best""\nCo"'),
 );
+check(
+  "Formula-like text is prefixed so spreadsheet cells stay literal",
+  exportAccountingText('=HYPERLINK("https://example.invalid","x")') ===
+    `'=HYPERLINK("https://example.invalid","x")` &&
+    exportAccountingText("+SUM(1,1)") === "'+SUM(1,1)" &&
+    exportAccountingText("@anything") === "'@anything" &&
+    exportAccountingText("-CMD") === "'-CMD" &&
+    exportAccountingText("Home Depot") === "Home Depot" &&
+    exportAccountingText("") === "",
+);
+check(
+  "Money columns keep a leading minus numeric",
+  exportMoney("-12.50") === "-12.50" && exportAccountingText("-12.50") === "'-12.50",
+);
+
+const formulaSource = {
+  businessId: "biz_formula",
+  businessName: "Formula Co",
+  slug: "formula-co",
+  invoices: [
+    {
+      id: "inv_formula",
+      customerId: "cust_formula",
+      jobId: "job_formula",
+      status: "SENT",
+      total: "100.00",
+      paidAt: null,
+      paymentMethod: "CHECK",
+      paymentReference: '=HYPERLINK("https://example.invalid","x")',
+      createdAt: new Date("2026-09-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-09-01T00:00:00.000Z"),
+    },
+  ],
+  payments: [
+    {
+      id: "pay_formula",
+      customerId: "cust_formula",
+      invoiceId: "inv_formula",
+      jobId: "job_formula",
+      purpose: "INVOICE_BALANCE",
+      amount: "25.00",
+      method: "CASH",
+      receivedAt: new Date("2026-09-01T12:00:00.000Z"),
+      note: "@anything",
+      createdAt: new Date("2026-09-01T12:00:00.000Z"),
+    },
+  ],
+  expenses: [
+    {
+      id: "exp_formula",
+      vendor: "+SUM(1,1)",
+      description: "-CMD",
+      amount: "-12.50",
+      category: "OTHER",
+      occurredOn: new Date("2026-09-01T00:00:00.000Z"),
+      jobId: "job_formula",
+      customerId: "cust_formula",
+      paymentMethod: "CASH",
+      taxCategory: null,
+      reimbursementStatus: "NONE",
+      reviewStatus: "RECORDED",
+      voidedAt: null,
+      createdAt: new Date("2026-09-01T00:00:00.000Z"),
+    },
+  ],
+  customers: [{ id: "cust_formula", name: '=HYPERLINK("https://example.invalid","x")' }],
+  jobs: [{ id: "job_formula" }],
+};
+const formulaInvoices = parseCsv(accountingInvoicesCsv(formulaSource));
+const formulaPayments = parseCsv(accountingPaymentsCsv(formulaSource));
+const formulaExpenses = parseCsv(accountingExpensesCsv(formulaSource));
+check(
+  "Accounting CSV formula prefixes survive quoting and leave money numeric",
+  formulaInvoices.records[0].Customer === `'=HYPERLINK("https://example.invalid","x")` &&
+    formulaInvoices.records[0]["Payment Reference"] ===
+      `'=HYPERLINK("https://example.invalid","x")` &&
+    formulaPayments.records[0].Note === "'@anything" &&
+    formulaExpenses.records[0].Vendor === "'+SUM(1,1)" &&
+    formulaExpenses.records[0].Description === "'-CMD" &&
+    formulaExpenses.records[0].Amount === "-12.50" &&
+    formulaInvoices.records[0].Total === "100.00" &&
+    !formulaInvoices.records[0].Customer.startsWith("=") &&
+    !formulaExpenses.records[0].Vendor.startsWith("+") &&
+    !formulaExpenses.records[0].Description.startsWith("-"),
+);
+
+const invoiceA = {
+  id: "inv_a",
+  customerId: "cust_multi",
+  jobId: "job_multi",
+  status: "SENT",
+  total: "300.00",
+  paidAt: null,
+  paymentMethod: null,
+  paymentReference: null,
+  createdAt: new Date("2026-09-01T00:00:00.000Z"),
+  updatedAt: new Date("2026-09-01T00:00:00.000Z"),
+};
+const invoiceB = {
+  id: "inv_b",
+  customerId: "cust_multi",
+  jobId: "job_multi",
+  status: "SENT",
+  total: "200.00",
+  paidAt: null,
+  paymentMethod: null,
+  paymentReference: null,
+  createdAt: new Date("2026-09-01T01:00:00.000Z"),
+  updatedAt: new Date("2026-09-01T01:00:00.000Z"),
+};
+const jobOnlyPayment = {
+  id: "pay_job_only",
+  customerId: "cust_multi",
+  invoiceId: null,
+  jobId: "job_multi",
+  purpose: "INVOICE_BALANCE",
+  amount: "100.00",
+  method: "CASH",
+  receivedAt: new Date("2026-09-02T00:00:00.000Z"),
+  note: null,
+  createdAt: new Date("2026-09-02T00:00:00.000Z"),
+};
+const directPaymentA = {
+  id: "pay_direct_a",
+  customerId: "cust_multi",
+  invoiceId: "inv_a",
+  jobId: "job_multi",
+  purpose: "INVOICE_BALANCE",
+  amount: "40.00",
+  method: "CHECK",
+  receivedAt: new Date("2026-09-02T01:00:00.000Z"),
+  note: null,
+  createdAt: new Date("2026-09-02T01:00:00.000Z"),
+};
+const multiSource = {
+  businessId: "biz_multi",
+  businessName: "Multi Invoice Co",
+  slug: "multi-invoice",
+  invoices: [invoiceA, invoiceB],
+  payments: [jobOnlyPayment, directPaymentA],
+  expenses: [],
+  customers: [{ id: "cust_multi", name: "Multi Customer" }],
+  jobs: [{ id: "job_multi" }],
+};
+const multiInvoices = parseCsv(accountingInvoicesCsv(multiSource));
+const multiPayments = parseCsv(accountingPaymentsCsv(multiSource));
+const multiA = multiInvoices.records.find((row) => row["Invoice ID"] === "inv_a");
+const multiB = multiInvoices.records.find((row) => row["Invoice ID"] === "inv_b");
+const jobCounts = invoiceCountByJobId(multiSource.invoices);
+check("Two invoices on the same job are counted as a multi-invoice job", jobCounts.get("job_multi") === 2);
+check(
+  "Job-only payment is not allocated to either invoice on a multi-invoice job",
+  paymentsAllocatedToInvoice(invoiceA, multiSource.payments, 2).every((row) => row.id !== "pay_job_only") &&
+    paymentsAllocatedToInvoice(invoiceB, multiSource.payments, 2).every((row) => row.id !== "pay_job_only"),
+);
+check(
+  "Direct Payment.invoiceId=A counts only on A",
+  paymentsAllocatedToInvoice(invoiceA, multiSource.payments, 2).some((row) => row.id === "pay_direct_a") &&
+    paymentsAllocatedToInvoice(invoiceB, multiSource.payments, 2).every((row) => row.id !== "pay_direct_a") &&
+    multiA?.["Amount Paid"] === "40.00" &&
+    multiA["Amount Remaining"] === "260.00" &&
+    multiA["Payment Basis"] === PAYMENT_BASIS.RECORDED_PAYMENTS &&
+    multiB?.["Amount Paid"] === "0.00" &&
+    multiB["Amount Remaining"] === "200.00" &&
+    multiB["Payment Basis"] === PAYMENT_BASIS.NO_RECORDED_PAYMENT,
+);
+check(
+  "Job-only payment appears once in payments.csv and is not invented on both invoices",
+  multiPayments.records.filter((row) => row["Payment ID"] === "pay_job_only").length === 1 &&
+    multiPayments.records.find((row) => row["Payment ID"] === "pay_job_only")?.["Invoice ID"] === "" &&
+    multiPayments.records.find((row) => row["Payment ID"] === "pay_job_only")?.["Job ID"] === "job_multi" &&
+    multiA["Amount Paid"] !== "140.00" &&
+    multiB["Amount Paid"] !== "100.00",
+);
+
+const singleInvoice = {
+  id: "inv_single",
+  customerId: "cust_single",
+  jobId: "job_single",
+  status: "SENT",
+  total: "500.00",
+  paidAt: null,
+  paymentMethod: null,
+  paymentReference: null,
+  createdAt: new Date("2026-09-01T00:00:00.000Z"),
+  updatedAt: new Date("2026-09-01T00:00:00.000Z"),
+};
+const singleJobPayment = {
+  id: "pay_single_job",
+  customerId: "cust_single",
+  invoiceId: null,
+  jobId: "job_single",
+  purpose: "MATERIAL_DEPOSIT",
+  amount: "75.00",
+  method: "CASH",
+  receivedAt: new Date("2026-09-02T00:00:00.000Z"),
+  note: null,
+  createdAt: new Date("2026-09-02T00:00:00.000Z"),
+};
+const singleSource = {
+  businessId: "biz_single",
+  businessName: "Single Invoice Co",
+  slug: "single-invoice",
+  invoices: [singleInvoice],
+  payments: [singleJobPayment],
+  expenses: [],
+  customers: [{ id: "cust_single", name: "Single Customer" }],
+  jobs: [{ id: "job_single" }],
+};
+const singleRow = parseCsv(accountingInvoicesCsv(singleSource)).records[0];
+check(
+  "Single-invoice job still allocates a legacy job-only Payment",
+  paymentsAllocatedToInvoice(singleInvoice, singleSource.payments, 1).some((row) => row.id === "pay_single_job") &&
+    singleRow["Amount Paid"] === "75.00" &&
+    singleRow["Amount Remaining"] === "425.00" &&
+    singleRow["Payment Basis"] === PAYMENT_BASIS.RECORDED_PAYMENTS,
+);
+
+const paidPartial = accountingInvoicePaymentTotals(
+  { id: "inv_paid_partial", jobId: "job_pp", status: "PAID", total: "400.00" },
+  [
+    {
+      id: "pay_partial",
+      customerId: null,
+      invoiceId: "inv_paid_partial",
+      jobId: "job_pp",
+      purpose: "INVOICE_BALANCE",
+      amount: "50.00",
+      method: "CASH",
+      receivedAt: new Date(),
+      note: null,
+      createdAt: new Date(),
+    },
+  ],
+  1,
+);
+check(
+  "PAID invoice with recorded Payment rows follows Payment truth, not the invoice total",
+  paidPartial.paymentBasis === PAYMENT_BASIS.RECORDED_PAYMENTS &&
+    paidPartial.legacyFullyPaid === false &&
+    paidPartial.amountPaid.toFixed(2) === "50.00" &&
+    paidPartial.amountRemaining.toFixed(2) === "350.00",
+);
+check(
+  "Accounting export uses invoicePaymentBreakdown instead of a second paid-cash rule",
+  accountingSrc.includes("invoicePaymentBreakdown") &&
+    accountingSrc.includes("legacyFullyPaid") &&
+    accountingSrc.includes("paymentsAllocatedToInvoice"),
+);
 
 try {
   console.log("\nDB — recorded payment truth, voided expenses, tenant isolation");
@@ -352,6 +607,55 @@ try {
     },
   });
 
+  const supplementJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  const supplementInvoiceA = await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      jobId: supplementJob.id,
+      status: "SENT",
+      total: new Prisma.Decimal("300.00"),
+    },
+  });
+  const supplementInvoiceB = await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      jobId: supplementJob.id,
+      status: "SENT",
+      total: new Prisma.Decimal("200.00"),
+    },
+  });
+  const unallocatedJobPayment = await prisma.payment.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      jobId: supplementJob.id,
+      invoiceId: null,
+      purpose: "INVOICE_BALANCE",
+      amount: new Prisma.Decimal("100.00"),
+      method: "CASH",
+    },
+  });
+  const attachedSupplementPayment = await prisma.payment.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      jobId: supplementJob.id,
+      invoiceId: supplementInvoiceA.id,
+      purpose: "INVOICE_BALANCE",
+      amount: new Prisma.Decimal("40.00"),
+      method: "CHECK",
+    },
+  });
+
   const sourceA = await loadAccountingExportSource(prisma, businessA.id);
   const invoices = parseCsv(accountingInvoicesCsv(sourceA));
   const payments = parseCsv(accountingPaymentsCsv(sourceA));
@@ -361,25 +665,25 @@ try {
   const partialRow = invoices.records.find((row) => row["Invoice ID"] === sentWithPartial.id);
   check("Tenant A invoices exclude tenant B", invoices.records.every((row) => row["Invoice ID"] !== invoiceB.id));
   check(
-    "PAID invoice without Payment rows does not invent paid cash",
+    "PAID invoice without Payment rows uses the legacy fully-paid fallback",
     paidRow?.Status === "PAID" &&
       paidRow.Total === "400.00" &&
-      paidRow["Amount Paid"] === "0.00" &&
-      paidRow["Amount Remaining"] === "400.00",
+      paidRow["Amount Paid"] === "400.00" &&
+      paidRow["Amount Remaining"] === "0.00" &&
+      paidRow["Payment Basis"] === PAYMENT_BASIS.LEGACY_PAID_STATUS,
   );
   check(
-    "Payment rows are not replaced by the PAID invoice total",
+    "Legacy PAID fallback never invents a Payment row",
     payments.records.every((row) => row["Invoice ID"] !== paidWithoutPayments.id) &&
-      payments.records.length === 1 &&
-      payments.records[0]["Payment ID"] === recordedPayment.id &&
-      payments.records[0].Amount === "50.00",
+      payments.records.some((row) => row["Payment ID"] === recordedPayment.id && row.Amount === "50.00"),
   );
   check(
     "Partial recorded payment is used for paid/remaining",
     partialRow?.Status === "SENT" &&
       partialRow.Total === "250.00" &&
       partialRow["Amount Paid"] === "50.00" &&
-      partialRow["Amount Remaining"] === "200.00",
+      partialRow["Amount Remaining"] === "200.00" &&
+      partialRow["Payment Basis"] === PAYMENT_BASIS.RECORDED_PAYMENTS,
   );
   check(
     "Invoice CSV includes human-readable identifiers and customer name",
@@ -387,20 +691,33 @@ try {
       paidRow["Job Reference"] === jobReferenceFromId(jobA.id) &&
       paidRow.Customer === 'Pat, "Alpha"\nCustomer',
   );
+  const recordedPaymentRow = payments.records.find((row) => row["Payment ID"] === recordedPayment.id);
   check(
     "Payment CSV includes invoice/job relationship, method, purpose, and received date",
-    payments.records[0]["Invoice Number"] === invoiceNumberFromId(sentWithPartial.id) &&
-      payments.records[0]["Job Reference"] === jobReferenceFromId(jobA.id) &&
-      payments.records[0].Method === "CHECK" &&
-      payments.records[0].Purpose === "INVOICE_BALANCE" &&
-      payments.records[0]["Purpose Label"] === "Invoice Balance" &&
-      payments.records[0]["Received At"] === "2026-09-03T12:00:00.000Z",
+    recordedPaymentRow?.["Invoice Number"] === invoiceNumberFromId(sentWithPartial.id) &&
+      recordedPaymentRow["Job Reference"] === jobReferenceFromId(jobA.id) &&
+      recordedPaymentRow.Method === "CHECK" &&
+      recordedPaymentRow.Purpose === "INVOICE_BALANCE" &&
+      recordedPaymentRow["Purpose Label"] === "Invoice Balance" &&
+      recordedPaymentRow["Received At"] === "2026-09-03T12:00:00.000Z",
   );
   check(
     "CSV escaping survives customer names, payment notes, and expense descriptions",
-    invoices.records[0].Customer === 'Pat, "Alpha"\nCustomer' &&
-      payments.records[0].Note === 'Check 12, "office"' &&
+    invoices.records.some((row) => row.Customer === 'Pat, "Alpha"\nCustomer') &&
+      recordedPaymentRow.Note === 'Check 12, "office"' &&
       expenses.records[0].Description === 'Lumber, 2x4, "premium"',
+  );
+  const dbSupplementA = invoices.records.find((row) => row["Invoice ID"] === supplementInvoiceA.id);
+  const dbSupplementB = invoices.records.find((row) => row["Invoice ID"] === supplementInvoiceB.id);
+  check(
+    "Supplemental multi-invoice job does not duplicate unallocated cash",
+    dbSupplementA?.["Amount Paid"] === "40.00" &&
+      dbSupplementA["Payment Basis"] === PAYMENT_BASIS.RECORDED_PAYMENTS &&
+      dbSupplementB?.["Amount Paid"] === "0.00" &&
+      dbSupplementB["Payment Basis"] === PAYMENT_BASIS.NO_RECORDED_PAYMENT &&
+      payments.records.filter((row) => row["Payment ID"] === unallocatedJobPayment.id).length === 1 &&
+      payments.records.find((row) => row["Payment ID"] === unallocatedJobPayment.id)?.["Invoice ID"] === "" &&
+      payments.records.some((row) => row["Payment ID"] === attachedSupplementPayment.id),
   );
   check(
     "Active expense is exported and voided expense truth is omitted",
@@ -443,6 +760,7 @@ try {
     zipA.filename.startsWith("tbbt-export-") &&
       zipAText.includes("Invoice Number") &&
       zipAText.includes("Amount Paid") &&
+      zipAText.includes("Payment Basis") &&
       zipAText.includes(sentWithPartial.id) &&
       zipAText.includes(recordedPayment.id) &&
       zipAText.includes(activeExpense.id) &&

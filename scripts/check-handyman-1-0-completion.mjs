@@ -257,6 +257,7 @@ try {
     "Export invoices/payments/expenses CSVs keep accountant headers",
     zipText.includes("Invoice Number") &&
       zipText.includes("Amount Paid") &&
+      zipText.includes("Payment Basis") &&
       zipText.includes("Payment ID") &&
       zipText.includes("Expense ID"),
   );

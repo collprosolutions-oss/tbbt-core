@@ -229,7 +229,7 @@ export const FULL_EXPORT_PLANNED_MESSAGE =
   "Download a tenant-scoped ZIP of customers, properties, requests, estimates, jobs, invoices, payments, expenses, time entries, reviews, campaigns, and settings. Password hashes, session tokens, TOTP secrets, and setup/reset tokens are omitted. Estimate/job/invoice PDF packs and original photo binaries remain a later add-on.";
 
 export const ACCOUNTING_EXPORT_MESSAGE =
-  "Invoices, payments, and expenses recorded in this workspace, as CSV. Payment rows are actual Payment records — a PAID invoice status does not invent cash. Voided expenses are omitted. This is not a general ledger and not a QuickBooks or Xero connection.";
+  "Invoices, payments, and expenses recorded in this workspace, as CSV. Payment rows are actual Payment records — a PAID invoice status never invents a Payment row. Invoice Amount Paid uses recorded payments, or the legacy PAID-status fallback when that invoice has no Payment rows. Voided expenses are omitted. This is not a general ledger and not a QuickBooks or Xero connection.";
 
 export type IntegrationConnectionStatus = "connected" | "not_connected" | "needs_attention";
 
