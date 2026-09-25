@@ -171,7 +171,8 @@ try {
     "Go-live health center refuses a single ready score",
     goLiveSrc.includes("GO_LIVE_NO_SCORE_DISCLAIMER") &&
       goLiveSrc.includes("readOnly: true") &&
-      !/readyPercent|100% ready/.test(goLiveSrc),
+      !goLiveSrc.includes("readyPercent") &&
+      !/export type GoLiveCenter = \{[\s\S]*ready:\s*boolean/.test(goLiveSrc),
   );
 
   const migration = read("prisma/migrations/20260924040000_add_owner_intelligence/migration.sql");

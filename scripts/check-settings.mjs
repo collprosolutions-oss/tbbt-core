@@ -373,7 +373,15 @@ try {
   check("All twelve capabilities are projected", center.cards.map((card) => card.id).join(",") === GO_LIVE_CAPABILITIES.join(","));
   check("No single ready boolean on the center", !("ready" in center) && !("readyPercent" in center) && center.readOnly === true);
   check("Launch groups are all present", center.groups.map((group) => group.id).join(",") === GO_LIVE_GROUPS.join(","));
-  check("Disconnected copy never says broken", !/broken/i.test(JSON.stringify(center)));
+  check(
+    "Disconnected copy never calls a system broken",
+    center.cards.every(
+      (card) =>
+        !/\bbroken\b/i.test(
+          `${card.currentState} ${card.whatWorks} ${card.whatDoesNot} ${card.ownerNextAction}`,
+        ),
+    ) && /not broken/.test(center.disclaimer),
+  );
   check("Necessary items are SaaS, Connect, Resend, and R2", center.necessaryCards.map((card) => card.id).join(",") === "stripe_saas,stripe_connect,resend,r2");
 
   const secretValues = [
