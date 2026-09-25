@@ -357,6 +357,47 @@ export async function buildBusinessExportZip(
     : {};
 
   const date = new Date().toISOString().slice(0, 10);
+  const [saasSubscription, productAddons, productGrants] = await Promise.all([
+    prisma.businessSaasSubscription.findUnique({
+      where: { businessId },
+      select: {
+        planCode: true,
+        status: true,
+        founderEligible: true,
+        founderConvertedAt: true,
+        founderEligibilityEndedAt: true,
+        trialStartedAt: true,
+        trialEndsAt: true,
+        legacyExempt: true,
+        cancelAtPeriodEnd: true,
+        currentPeriodEnd: true,
+      },
+    }),
+    prisma.businessProductAddon.findMany({
+      where: { businessId },
+      select: {
+        addonCode: true,
+        status: true,
+        quantity: true,
+        source: true,
+        grantedAt: true,
+        revokedAt: true,
+      },
+    }),
+    prisma.businessProductGrant.findMany({
+      where: { businessId },
+      select: {
+        grantType: true,
+        code: true,
+        quantity: true,
+        status: true,
+        source: true,
+        note: true,
+        grantedAt: true,
+        revokedAt: true,
+      },
+    }),
+  ]);
   const files = [
     {
       name: "manifest.json",
@@ -430,6 +471,29 @@ export async function buildBusinessExportZip(
     {
       name: "website-local-drafts.csv",
       data: toCsv(headersOf(websiteLocalDrafts), websiteLocalDrafts),
+    },
+    {
+      name: "commercial-entitlement.json",
+      data: JSON.stringify(
+        {
+          planCode: saasSubscription?.planCode ?? null,
+          subscriptionStatus: saasSubscription?.status ?? null,
+          founderEligible: saasSubscription?.founderEligible ?? null,
+          founderConvertedAt: saasSubscription?.founderConvertedAt ?? null,
+          founderEligibilityEndedAt: saasSubscription?.founderEligibilityEndedAt ?? null,
+          trialStartedAt: saasSubscription?.trialStartedAt ?? null,
+          trialEndsAt: saasSubscription?.trialEndsAt ?? null,
+          legacyExempt: saasSubscription?.legacyExempt ?? null,
+          cancelAtPeriodEnd: saasSubscription?.cancelAtPeriodEnd ?? null,
+          currentPeriodEnd: saasSubscription?.currentPeriodEnd ?? null,
+          addons: productAddons,
+          grants: productGrants,
+          omitted:
+            "Stripe secret keys, webhook secrets, provider credentials, and internal price configuration are not exported.",
+        },
+        null,
+        2,
+      ),
     },
   ];
 

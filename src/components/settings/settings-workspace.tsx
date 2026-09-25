@@ -14,6 +14,7 @@ import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-
 import { ConnectStripeButton } from "@/components/settings/connect-stripe-button";
 import {
   SaasBillingPortalButton,
+  SaasPlanChangeButton,
   SaasSubscribeButton,
 } from "@/components/settings/saas-billing-buttons";
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
@@ -572,6 +573,10 @@ function SectionBody(props: SettingsWorkspaceProps) {
             <dd className="font-medium">{billing.planName}</dd>
           </div>
           <div>
+            <dt className="text-muted-foreground">Plan code</dt>
+            <dd className="font-medium">{billing.catalogPlanCode}</dd>
+          </div>
+          <div>
             <dt className="text-muted-foreground">Price</dt>
             <dd className="font-medium">{priceLabel}</dd>
           </div>
@@ -623,15 +628,105 @@ function SectionBody(props: SettingsWorkspaceProps) {
             <dt className="text-muted-foreground">Cancellation scheduled</dt>
             <dd className="font-medium">{billing.cancelAtPeriodEnd ? "Yes" : "No"}</dd>
           </div>
+          <div>
+            <dt className="text-muted-foreground">Founder eligibility ended</dt>
+            <dd className="font-medium">
+              {billing.founderEligibilityEndedAt
+                ? new Date(billing.founderEligibilityEndedAt).toLocaleDateString("en-US")
+                : "No"}
+            </dd>
+          </div>
         </dl>
+        <div className="space-y-2 text-sm">
+          <p className="text-muted-foreground">Live included capabilities</p>
+          <ul className="flex flex-wrap gap-2">
+            {billing.product.capabilitySummaries.filter((item) => item.liveSoftware).length > 0 ? (
+              billing.product.capabilitySummaries
+                .filter((item) => item.liveSoftware)
+                .map((item) => (
+                  <li key={item.code}>
+                    <Badge variant="outline">{item.displayName}</Badge>
+                  </li>
+                ))
+            ) : (
+              <li className="text-muted-foreground">None resolved.</li>
+            )}
+          </ul>
+        </div>
+        {billing.product.capabilitySummaries.some((item) => !item.liveSoftware) ? (
+          <div className="space-y-2 text-sm">
+            <p className="text-muted-foreground">Coming soon / planned entitlements</p>
+            <ul className="flex flex-wrap gap-2">
+              {billing.product.capabilitySummaries
+                .filter((item) => !item.liveSoftware)
+                .map((item) => (
+                  <li key={item.code}>
+                    <Badge variant="outline">
+                      {item.displayName} · {item.implementationStatus === "PARTIAL" ? "Partial" : item.implementationStatus === "COMING_SOON" ? "Coming soon" : "Planned"}
+                    </Badge>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        ) : null}
+        <div className="space-y-2 text-sm">
+          <p className="text-muted-foreground">Active add-ons</p>
+          {billing.product.addons.length > 0 ? (
+            <ul className="flex flex-wrap gap-2">
+              {billing.product.addons.map((addon) => (
+                <li key={addon.code}>
+                  <Badge variant="outline">{addon.displayName}</Badge>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-muted-foreground">No active add-ons. Add-ons are not purchasable until an approved price exists.</p>
+          )}
+        </div>
+        <div className="space-y-2 text-sm">
+          <p className="text-muted-foreground">Plan availability</p>
+          <ul className="grid gap-2 sm:grid-cols-2">
+            {billing.availablePlans.map((plan) => (
+              <li key={plan.code} className="rounded-md border p-2">
+                <strong>{plan.name}</strong>
+                <span className="block text-muted-foreground">
+                  {plan.purchasable
+                    ? "Available to purchase"
+                    : plan.publicStatus === "LIVE"
+                      ? "Live offer"
+                      : plan.publicStatus === "PLANNED"
+                        ? "Planned — not purchasable"
+                        : "Coming soon — not purchasable"}
+                  {plan.priceLabel ? ` · ${plan.priceLabel}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
         {canEditConsequential ? (
           <div className="flex flex-wrap gap-3">
-            {billing.checkoutPossible ? <SaasSubscribeButton /> : null}
+            {billing.checkoutPossible ? <SaasSubscribeButton planCode="FOUNDER" /> : null}
             {billing.portalPossible ? <SaasBillingPortalButton /> : null}
+            {billing.planChangePossible
+              ? billing.availablePlans
+                  .filter((plan) => plan.purchasable && plan.code !== billing.catalogPlanCode)
+                  .map((plan) => (
+                    <SaasPlanChangeButton
+                      key={plan.code}
+                      planCode={plan.code}
+                      label={`Request ${plan.name}`}
+                    />
+                  ))
+              : null}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">{TBBT_SAAS_BILLING_OWNER_ONLY_MESSAGE}</p>
         )}
+        {canEditConsequential && billing.planChangePossible ? (
+          <p className="text-sm text-muted-foreground">
+            Plan changes are requested from the billing provider. This page does not mark a new plan active until the provider webhook confirms it.
+          </p>
+        ) : null}
       </SectionCard>
     );
   }

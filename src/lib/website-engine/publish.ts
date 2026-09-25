@@ -7,7 +7,8 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
-import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { requireOperatingProductCapability } from "@/lib/product-entitlements";
 import { buildWebsiteSnapshot, WebsitePublishError } from "@/lib/website-engine/builder";
 import { parseWebsiteSnapshot, serializeWebsiteSnapshot } from "@/lib/website-engine/snapshot";
 import { summarizeWebsiteSnapshotChange } from "@/lib/website-engine/summary";
@@ -27,7 +28,7 @@ export async function publishWebsite(
   input: { idempotencyKey?: string | null } = {},
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
-  await requireSaasOperatingEntitlement(db, access);
+  await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.WEBSITE_BUILDER);
 
   const key = input.idempotencyKey?.trim() || null;
   if (key) {
@@ -114,7 +115,7 @@ export async function rollbackWebsite(
   input: { publishId: string; idempotencyKey?: string | null },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
-  await requireSaasOperatingEntitlement(db, access);
+  await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.WEBSITE_BUILDER);
 
   const source = access.assertOwned(
     await db.websitePublish.findFirst({

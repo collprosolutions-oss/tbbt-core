@@ -387,7 +387,7 @@ check(
 check(
   "OWNER billing UI shows a configuration problem and hides Checkout that cannot start",
   settingsSrc.includes("billingNotReadyMessage") &&
-    settingsSrc.includes("{billing.checkoutPossible ? <SaasSubscribeButton /> : null}") &&
+    settingsSrc.includes("{billing.checkoutPossible ? <SaasSubscribeButton planCode=\"FOUNDER\" /> : null}") &&
     settingsSrc.includes("{billing.portalPossible ? <SaasBillingPortalButton /> : null}") &&
     saasBannerSrc.includes("readiness.portalReady"),
 );

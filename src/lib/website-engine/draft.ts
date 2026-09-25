@@ -1,7 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
-import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { requireOperatingProductCapability } from "@/lib/product-entitlements";
 import { WebsitePublishError } from "@/lib/website-engine/builder";
 
 type Db = PrismaClient;
@@ -12,7 +13,7 @@ export async function setReviewWebsiteSelected(
   input: { reviewId: string; selected: boolean },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
-  await requireSaasOperatingEntitlement(db, access);
+  await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.WEBSITE_BUILDER);
   const review = access.assertOwned(
     await db.review.findFirst({
       where: { id: input.reviewId, ...access.scope },
@@ -38,7 +39,7 @@ export async function addWebsiteGalleryItem(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
-  await requireSaasOperatingEntitlement(db, access);
+  await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.WEBSITE_BUILDER);
   const asset = access.assertOwned(
     await db.storedAsset.findFirst({
       where: { id: input.storedAssetId, ...access.scope },
@@ -78,7 +79,7 @@ export async function removeWebsiteGalleryItem(
   input: { id: string },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
-  await requireSaasOperatingEntitlement(db, access);
+  await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.WEBSITE_BUILDER);
   const item = access.assertOwned(
     await db.websiteGalleryItem.findFirst({
       where: { id: input.id, ...access.scope },
@@ -93,7 +94,7 @@ export async function saveWebsiteLocalPageDraft(
   input: { serviceAreaId: string; catalogItemId: string; draftCopy: string },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
-  await requireSaasOperatingEntitlement(db, access);
+  await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.WEBSITE_BUILDER);
   const area = access.assertOwned(
     await db.serviceArea.findFirst({
       where: { id: input.serviceAreaId, ...access.scope },
@@ -139,7 +140,7 @@ export async function saveWebsiteSeoDraft(
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
-  await requireSaasOperatingEntitlement(db, access);
+  await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.WEBSITE_BUILDER);
   return db.businessSettings.upsert({
     where: { businessId: access.businessId },
     update: {

@@ -1,4 +1,5 @@
 import type {
+  ChangeSaasSubscriptionPriceInput,
   CreateSaasCheckoutInput,
   CreateSaasCustomerInput,
   CreateSaasPortalInput,
@@ -28,6 +29,7 @@ export type FakeSaasCheckout = SaasCheckoutSessionResult & {
   businessId: string;
   customerId: string;
   priceId: string;
+  planCode: string;
   mode: "subscription";
 };
 
@@ -82,6 +84,7 @@ export function createFakeSaasBillingProvider(): FakeSaasBillingProvider {
         businessId: input.businessId,
         customerId: input.customerId,
         priceId: input.priceId,
+        planCode: input.planCode,
         mode: "subscription",
       };
       checkouts.push(result);
@@ -115,6 +118,14 @@ export function createFakeSaasBillingProvider(): FakeSaasBillingProvider {
       }
       row.cancelAtPeriodEnd = true;
       return { subscriptionId: row.id, cancelAtPeriodEnd: true };
+    },
+    async changeSubscriptionPrice(input: ChangeSaasSubscriptionPriceInput) {
+      const row = subscriptions.get(input.subscriptionId);
+      if (!row) {
+        throw new SaasBillingError("Stripe subscription was not found.");
+      }
+      row.priceId = input.priceId;
+      return { subscriptionId: row.id, priceId: row.priceId, status: row.status };
     },
   };
 

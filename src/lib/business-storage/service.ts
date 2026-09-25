@@ -152,15 +152,25 @@ export async function authorizeManagedUpload(
   const fresh = await deps.db.businessStorageAccount.findUniqueOrThrow({
     where: { id: account.id },
   });
+  const { resolveEffectiveStorageLimitBytes } = await import("@/lib/product-entitlements/limits");
+  const limitBytes = await resolveEffectiveStorageLimitBytes(
+    deps.db,
+    businessId,
+    fresh.storageLimitBytes,
+  );
   if (
     !hasEnoughStorage({
       usedBytes: fresh.storageUsedBytes,
       reservedBytes: fresh.storageReservedBytes,
       incomingBytes: input.fileSizeBytes,
-      limitBytes: fresh.storageLimitBytes,
+      limitBytes,
     })
   ) {
-    throw new StorageQuotaError();
+    throw new StorageQuotaError(
+      Number(fresh.storageUsedBytes) > limitBytes
+        ? "Stored files are kept. Additional uploads are blocked until storage is within the entitled limit or Extra Storage is added."
+        : "This upload would exceed the entitled storage limit. Existing files are kept.",
+    );
   }
 
   const key = buildBusinessStorageKey({
@@ -179,10 +189,12 @@ export async function authorizeManagedUpload(
         usedBytes: locked.storageUsedBytes,
         reservedBytes: locked.storageReservedBytes,
         incomingBytes: input.fileSizeBytes,
-        limitBytes: locked.storageLimitBytes,
+        limitBytes,
       })
     ) {
-      throw new StorageQuotaError();
+      throw new StorageQuotaError(
+        "This upload would exceed the entitled storage limit. Existing files are kept.",
+      );
     }
     const created = await tx.storedAsset.create({
       data: {

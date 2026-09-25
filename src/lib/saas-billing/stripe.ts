@@ -2,6 +2,7 @@ import Stripe from "stripe";
 import { getStripeSecretKey } from "@/lib/payments/config";
 import { SAAS_CHECKOUT_PURPOSE, TBBT_SAAS_PLAN_CODE } from "@/lib/saas-billing/config";
 import type {
+  ChangeSaasSubscriptionPriceInput,
   CreateSaasCheckoutInput,
   CreateSaasCustomerInput,
   CreateSaasPortalInput,
@@ -56,7 +57,7 @@ export function createStripeSaasBillingProvider(): SaasBillingProvider {
           metadata: {
             purpose: SAAS_CHECKOUT_PURPOSE,
             businessId: input.businessId,
-            planCode: TBBT_SAAS_PLAN_CODE,
+            planCode: input.planCode || TBBT_SAAS_PLAN_CODE,
           },
         },
       });
@@ -110,6 +111,35 @@ export function createStripeSaasBillingProvider(): SaasBillingProvider {
       } catch (error) {
         if (error instanceof SaasBillingError) throw error;
         throw new SaasBillingError("Stripe could not schedule cancellation.");
+      }
+    },
+
+    async changeSubscriptionPrice(input: ChangeSaasSubscriptionPriceInput) {
+      const stripe = requireStripe();
+      try {
+        const current = await stripe.subscriptions.retrieve(input.subscriptionId);
+        const itemId = current.items.data[0]?.id;
+        if (!itemId) {
+          throw new SaasBillingError("Stripe subscription has no price item to change.");
+        }
+        const updated = await stripe.subscriptions.update(input.subscriptionId, {
+          items: [{ id: itemId, price: input.priceId }],
+          metadata: {
+            ...current.metadata,
+            purpose: SAAS_CHECKOUT_PURPOSE,
+            planCode: input.planCode,
+          },
+        });
+        return {
+          subscriptionId: updated.id,
+          priceId: input.priceId,
+          status: updated.status,
+        };
+      } catch (error) {
+        if (error instanceof SaasBillingError) throw error;
+        throw new SaasBillingError(
+          "Stripe could not change the TBBT subscription price. Use Billing Portal or configure the approved plan price.",
+        );
       }
     },
   };

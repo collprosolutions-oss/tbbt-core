@@ -211,7 +211,8 @@ check(
 );
 check(
   "Customer/expense/catalog/settings operating writes call the centralized assertion",
-  customerActionSrc.includes("requireOperatingBusinessAccessForForm") &&
+  (customerActionSrc.includes("requireOperatingBusinessAccessForForm") ||
+    customerActionSrc.includes("requireOperatingProductAccessForForm")) &&
     expenseOpsSrc.includes("requireSaasOperatingEntitlement") &&
     catalogOpsSrc.includes("requireSaasOperatingEntitlement") &&
     settingsOpsSrc.includes("await requireSaasOperatingEntitlement(db, access)") &&

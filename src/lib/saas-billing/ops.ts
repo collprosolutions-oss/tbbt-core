@@ -11,6 +11,24 @@ import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import { getAppUrl } from "@/lib/mail";
 import {
+  canonicalizePlanCode,
+  getPlanDefinition,
+  getProductCapabilityDefinition,
+  isPubliclyPurchasablePlan,
+  PLAN_CODES,
+  PLAN_PUBLIC_STATUSES,
+  type PlanCode,
+} from "@/lib/product-catalog";
+import {
+  getConfiguredPlanPriceId,
+  loadProductEntitlement,
+  resolveCheckoutPriceId,
+  resolveCompatiblePlanCode,
+  resolvePlanCodeFromPriceId,
+  resolveWebhookPlanCode,
+  type ProductEntitlement,
+} from "@/lib/product-entitlements";
+import {
   getSaasPriceId,
   isFakeSaasBillingAdapterEnabled,
   SAAS_BILLING_SETTINGS_HREF,
@@ -36,6 +54,7 @@ import {
 import type { ParsedSaasBillingEvent, SaasSubscriptionSnapshot } from "@/lib/saas-billing/types";
 import {
   isBlockingSaasStatus,
+  isSaasSubscribedStatus,
   SAAS_SUBSCRIPTION_STATUS_NONE,
   SaasBillingError,
   saasStatusLabel,
@@ -46,9 +65,28 @@ import { writeSettingsAuditLog } from "@/lib/settings-ops";
 
 type BillingClient = PrismaClient | Prisma.TransactionClient;
 
+export type SaasBillingAvailablePlan = {
+  code: PlanCode;
+  name: string;
+  publicStatus: string;
+  checkoutEligible: boolean;
+  purchasable: boolean;
+  providerTestable: boolean;
+  priceConfigured: boolean;
+  priceLabel: string | null;
+};
+
+export type SaasBillingCapabilitySummary = {
+  code: string;
+  displayName: string;
+  implementationStatus: string;
+  liveSoftware: boolean;
+};
+
 export type SaasBillingSnapshot = {
   planCode: string;
   planName: string;
+  catalogPlanCode: PlanCode;
   status: string;
   statusLabel: string;
   stripeCustomerId: string | null;
@@ -60,6 +98,7 @@ export type SaasBillingSnapshot = {
   appUrlConfigured: boolean;
   checkoutPossible: boolean;
   portalPossible: boolean;
+  planChangePossible: boolean;
   billingReadinessReason: SaasBillingReadinessReason;
   billingNotReadyMessage: string | null;
   trialStartedAt: string | null;
@@ -67,10 +106,18 @@ export type SaasBillingSnapshot = {
   trialDaysRemaining: number | null;
   founderEligible: boolean;
   founderConvertedAt: string | null;
+  founderEligibilityEndedAt: string | null;
   founderPriceLabel: string;
   showFounderPrice: boolean;
   founderPriceWarning: string | null;
   entitlement: SaasEntitlement;
+  product: {
+    capabilities: string[];
+    capabilitySummaries: SaasBillingCapabilitySummary[];
+    addons: Array<{ code: string; displayName: string; status: string }>;
+    limits: Record<string, number | null>;
+  };
+  availablePlans: SaasBillingAvailablePlan[];
 };
 
 function billingSettingsUrl(query = "") {
@@ -92,6 +139,7 @@ async function upsertRow(
   data: Partial<SaasSubscriptionSnapshot> & {
     stripeCustomerId?: string | null;
     lastStripeEventCreatedAt?: Date | null;
+    planCode?: string | null;
   },
 ) {
   const current = await loadRow(db, businessId);
@@ -106,6 +154,7 @@ async function upsertRow(
         currentPeriodEnd: data.currentPeriodEnd ?? null,
         cancelAtPeriodEnd: data.cancelAtPeriodEnd ?? false,
         lastStripeEventCreatedAt: data.lastStripeEventCreatedAt ?? null,
+        planCode: data.planCode ?? null,
       },
     });
   }
@@ -129,8 +178,36 @@ async function upsertRow(
       ...(data.lastStripeEventCreatedAt !== undefined
         ? { lastStripeEventCreatedAt: data.lastStripeEventCreatedAt }
         : {}),
+      ...(data.planCode !== undefined ? { planCode: data.planCode } : {}),
     },
   });
+}
+
+function requestedPlanCode(raw?: string | null): PlanCode {
+  if (!raw) return PLAN_CODES.FOUNDER;
+  const canonical = canonicalizePlanCode(raw);
+  if (!canonical) {
+    throw new SaasBillingError("Unknown TBBT plan.");
+  }
+  return canonical;
+}
+
+function assertPlanCheckoutAllowed(planCode: PlanCode, priceId: string | null) {
+  const plan = getPlanDefinition(planCode);
+  const fake = isFakeSaasBillingAdapterEnabled();
+  if (!fake && !plan.checkoutEligible) {
+    throw new SaasBillingError(`${plan.displayName} is not available for checkout.`);
+  }
+  if (!fake && plan.publicStatus !== PLAN_PUBLIC_STATUSES.LIVE) {
+    throw new SaasBillingError(`${plan.displayName} is not available for checkout.`);
+  }
+  if (!priceId) {
+    throw new SaasBillingError("TBBT subscription price is not configured.");
+  }
+  const mapped = resolvePlanCodeFromPriceId(priceId);
+  if (mapped && mapped !== planCode) {
+    throw new SaasBillingError("The configured price does not belong to that TBBT plan.");
+  }
 }
 
 export async function loadSaasBillingSnapshot(
@@ -164,9 +241,46 @@ export async function loadSaasBillingSnapshot(
         }
       : null,
   });
+  const product: ProductEntitlement | null = business
+    ? await loadProductEntitlement(db, businessId)
+    : null;
+  const catalogPlanCode =
+    product?.planCode ??
+    resolveCompatiblePlanCode({
+      planCode: row?.planCode,
+      stripePriceId: row?.stripePriceId,
+      founderEligible: row?.founderEligible,
+      founderConvertedAt: row?.founderConvertedAt,
+      trialStartedAt: row?.trialStartedAt,
+      legacyExempt: row?.legacyExempt,
+      resolvePricePlanCode: resolvePlanCodeFromPriceId,
+    });
+  const plan = getPlanDefinition(catalogPlanCode);
+  const fake = isFakeSaasBillingAdapterEnabled();
+  const availablePlans = ([
+    PLAN_CODES.STARTER,
+    PLAN_CODES.FOUNDER,
+    PLAN_CODES.BUSINESS,
+    PLAN_CODES.ENTERPRISE,
+  ] as const).map((code) => {
+    const definition = getPlanDefinition(code);
+    const priceId = resolveCheckoutPriceId(code);
+    return {
+      code,
+      name: definition.displayName,
+      publicStatus: definition.publicStatus,
+      checkoutEligible: definition.checkoutEligible,
+      purchasable: isPubliclyPurchasablePlan(code),
+      providerTestable: fake && Boolean(priceId),
+      priceConfigured: Boolean(getConfiguredPlanPriceId(code)),
+      priceLabel: definition.approvedDisplayPrice?.label ?? null,
+    };
+  });
+  const founderPurchasable = availablePlans.find((item) => item.code === PLAN_CODES.FOUNDER)?.purchasable;
   return {
-    planCode: TBBT_SAAS_PLAN_CODE,
-    planName: TBBT_SAAS_PLAN_NAME,
+    planCode: catalogPlanCode === PLAN_CODES.FOUNDER ? TBBT_SAAS_PLAN_CODE : catalogPlanCode,
+    planName: plan.displayName || TBBT_SAAS_PLAN_NAME,
+    catalogPlanCode,
     status,
     statusLabel: saasStatusLabel(status),
     stripeCustomerId: row?.stripeCustomerId ?? null,
@@ -176,8 +290,12 @@ export async function loadSaasBillingSnapshot(
     cancelAtPeriodEnd: row?.cancelAtPeriodEnd ?? false,
     configured: readiness.configured,
     appUrlConfigured: readiness.appUrlConfigured,
-    checkoutPossible: readiness.checkoutReady && !isBlockingSaasStatus(status),
+    checkoutPossible: readiness.checkoutReady && !isBlockingSaasStatus(status) && Boolean(founderPurchasable),
     portalPossible: Boolean(row?.stripeCustomerId) && readiness.portalReady,
+    planChangePossible:
+      Boolean(row?.stripeSubscriptionId) &&
+      isSaasSubscribedStatus(status) &&
+      (fake || readiness.configured),
     billingReadinessReason: readiness.reason,
     billingNotReadyMessage: readiness.ownerMessage,
     trialStartedAt: entitlement.trialStartedAt,
@@ -185,34 +303,62 @@ export async function loadSaasBillingSnapshot(
     trialDaysRemaining: entitlement.trialDaysRemaining,
     founderEligible: entitlement.founderEligible,
     founderConvertedAt: entitlement.founderConvertedAt,
+    founderEligibilityEndedAt: entitlement.founderEligibilityEndedAt,
     founderPriceLabel: TBBT_FOUNDER_PLAN_PRICE_LABEL,
     showFounderPrice: founderPrice.showFounderPrice,
     founderPriceWarning: founderPrice.warning,
     entitlement,
+    product: {
+      capabilities: product?.capabilities ?? [],
+      capabilitySummaries: (product?.capabilities ?? []).map((code) => {
+        const definition = getProductCapabilityDefinition(code);
+        return {
+          code,
+          displayName: definition.displayName,
+          implementationStatus: definition.implementationStatus,
+          liveSoftware: definition.implementationStatus === "LIVE",
+        };
+      }),
+      addons: (product?.addons ?? []).map((addon) => ({
+        code: addon.code,
+        displayName: addon.displayName,
+        status: addon.status,
+      })),
+      limits: Object.fromEntries(
+        Object.entries(product?.limits ?? {}).map(([key, value]) => [key, value.effective]),
+      ),
+    },
+    availablePlans,
   };
 }
 
 export async function startSaasSubscriptionCheckout(
   db: PrismaClient,
   access: BusinessAccess,
+  input: { planCode?: string | null } = {},
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
   requireBusinessRole(access, "OWNER");
   await ensureSaasBillingSchema(db);
 
+  const planCode = requestedPlanCode(input.planCode);
   const founderPrice = await inspectConfiguredFounderPrice();
   const appUrl = getAppUrl();
   const readiness = resolveSaasBillingReadiness({ founderPrice, appUrl });
-  if (!readiness.checkoutReady) {
+  if (planCode === PLAN_CODES.FOUNDER && !readiness.checkoutReady) {
     throw new SaasBillingError(
       readiness.ownerMessage ??
         "TBBT subscription billing is not configured correctly on this environment.",
     );
   }
-  const priceId = getSaasPriceId() ?? (isFakeSaasBillingAdapterEnabled() ? "price_saas_test" : null);
-  if (!priceId) {
-    throw new SaasBillingError("TBBT subscription price is not configured.");
+  if (planCode !== PLAN_CODES.FOUNDER && !isFakeSaasBillingAdapterEnabled() && !readiness.configured) {
+    throw new SaasBillingError(
+      readiness.ownerMessage ??
+        "TBBT subscription billing is not configured correctly on this environment.",
+    );
   }
+  const priceId = resolveCheckoutPriceId(planCode);
+  assertPlanCheckoutAllowed(planCode, priceId);
 
   const business = await db.business.findFirst({
     where: { id: access.businessId },
@@ -255,7 +401,8 @@ export async function startSaasSubscriptionCheckout(
   const session = await provider.createSubscriptionCheckout({
     businessId: access.businessId,
     customerId,
-    priceId,
+    priceId: priceId!,
+    planCode: planCode === PLAN_CODES.FOUNDER ? TBBT_SAAS_PLAN_CODE : planCode,
     successUrl: billingSettingsUrl("&checkout=success"),
     cancelUrl: billingSettingsUrl("&checkout=canceled"),
   });
@@ -300,32 +447,69 @@ export async function startSaasBillingPortal(
   });
 }
 
-async function resolveBusinessId(
+async function resolveWebhookBusiness(
   db: BillingClient,
   parsed: ParsedSaasBillingEvent,
-) {
+): Promise<
+  | { ok: true; businessId: string }
+  | { ok: false; reason: "unknown_business" | "tenant_mismatch" }
+> {
+  const candidates = new Set<string>();
+
   if (parsed.businessId) {
     const owned = await db.business.findFirst({
       where: { id: parsed.businessId },
       select: { id: true },
     });
-    if (owned) return owned.id;
+    if (owned) candidates.add(owned.id);
   }
+
   if (parsed.snapshot.stripeSubscriptionId) {
     const bySub = await db.businessSaasSubscription.findFirst({
       where: { stripeSubscriptionId: parsed.snapshot.stripeSubscriptionId },
       select: { businessId: true },
     });
-    if (bySub) return bySub.businessId;
+    if (bySub) candidates.add(bySub.businessId);
   }
+
   if (parsed.snapshot.stripeCustomerId) {
     const byCustomer = await db.businessSaasSubscription.findFirst({
       where: { stripeCustomerId: parsed.snapshot.stripeCustomerId },
       select: { businessId: true },
     });
-    if (byCustomer) return byCustomer.businessId;
+    if (byCustomer) candidates.add(byCustomer.businessId);
   }
-  return null;
+
+  if (candidates.size > 1) {
+    return { ok: false, reason: "tenant_mismatch" };
+  }
+  if (candidates.size === 1) {
+    return { ok: true, businessId: [...candidates][0] };
+  }
+  return { ok: false, reason: "unknown_business" };
+}
+
+async function recordWebhookEventSafely(
+  db: PrismaClient,
+  parsed: ParsedSaasBillingEvent,
+  businessId: string | null,
+) {
+  try {
+    await db.saasBillingWebhookEvent.create({
+      data: {
+        stripeEventId: parsed.stripeEventId,
+        eventType: parsed.eventType,
+        businessId,
+        stripeEventCreatedAt: parsed.stripeEventCreatedAt,
+      },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return "already_processed" as const;
+    }
+    throw error;
+  }
+  return "recorded" as const;
 }
 
 export async function applyParsedSaasBillingEvent(
@@ -342,30 +526,18 @@ export async function applyParsedSaasBillingEvent(
     return { applied: false as const, reason: "already_processed" as const, businessId: null };
   }
 
-  const businessId = await resolveBusinessId(db, parsed);
-  if (!businessId) {
-    return { applied: false as const, reason: "unknown_business" as const, businessId: null };
+  const resolved = await resolveWebhookBusiness(db, parsed);
+  if (!resolved.ok) {
+    await recordWebhookEventSafely(db, parsed, null);
+    return { applied: false as const, reason: resolved.reason, businessId: null };
   }
+  const businessId = resolved.businessId;
 
   const current = await loadRow(db, businessId);
   if (isStaleSaasStripeEvent(current?.lastStripeEventCreatedAt, parsed.stripeEventCreatedAt)) {
-    try {
-      await db.saasBillingWebhookEvent.create({
-        data: {
-          stripeEventId: parsed.stripeEventId,
-          eventType: parsed.eventType,
-          businessId,
-          stripeEventCreatedAt: parsed.stripeEventCreatedAt,
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2002"
-      ) {
-        return { applied: false as const, reason: "already_processed" as const, businessId };
-      }
-      throw error;
+    const recorded = await recordWebhookEventSafely(db, parsed, businessId);
+    if (recorded === "already_processed") {
+      return { applied: false as const, reason: "already_processed" as const, businessId };
     }
     return { applied: false as const, reason: "stale_event" as const, businessId };
   }
@@ -381,16 +553,22 @@ export async function applyParsedSaasBillingEvent(
     : parsed.snapshot.cancelAtPeriodEnd != null
       ? parsed.snapshot.cancelAtPeriodEnd
       : current?.cancelAtPeriodEnd ?? false;
+  const nextPriceId = parsed.snapshot.stripePriceId ?? current?.stripePriceId ?? null;
+  const nextPlanCode = resolveWebhookPlanCode({
+    stripePriceId: nextPriceId,
+    currentPlanCode: current?.planCode ?? parsed.snapshot.planCode,
+  });
   await upsertRow(db, businessId, {
     stripeCustomerId: parsed.snapshot.stripeCustomerId ?? current?.stripeCustomerId ?? null,
     stripeSubscriptionId:
       parsed.snapshot.stripeSubscriptionId ?? current?.stripeSubscriptionId ?? null,
-    stripePriceId: parsed.snapshot.stripePriceId ?? current?.stripePriceId ?? null,
+    stripePriceId: nextPriceId,
     status: nextStatus,
     currentPeriodEnd: parsed.snapshot.currentPeriodEnd ?? current?.currentPeriodEnd ?? null,
     cancelAtPeriodEnd: nextCancelAtPeriodEnd,
     lastStripeEventCreatedAt:
       parsed.stripeEventCreatedAt ?? current?.lastStripeEventCreatedAt ?? null,
+    planCode: nextPlanCode,
   });
   await applyFounderSubscriptionTransition(
     db,
@@ -419,6 +597,62 @@ export async function applyParsedSaasBillingEvent(
   }
 
   return { applied: true as const, reason: "updated" as const, businessId };
+}
+
+export async function requestSaasPlanChange(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: { planCode?: string | null },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  requireBusinessRole(access, "OWNER");
+  await ensureSaasBillingSchema(db);
+
+  const planCode = requestedPlanCode(input.planCode);
+  const priceId = resolveCheckoutPriceId(planCode);
+  assertPlanCheckoutAllowed(planCode, priceId);
+  if (planCode === PLAN_CODES.FOUNDER) {
+    const founderPrice = await inspectConfiguredFounderPrice();
+    const readiness = resolveSaasBillingReadiness({ founderPrice, appUrl: getAppUrl() });
+    if (!isFakeSaasBillingAdapterEnabled() && !readiness.checkoutReady) {
+      throw new SaasBillingError(
+        readiness.ownerMessage ??
+          "TBBT subscription billing is not configured correctly on this environment.",
+      );
+    }
+  }
+
+  const current = await loadRow(db, access.businessId);
+  if (!current?.stripeSubscriptionId) {
+    throw new SaasBillingError("Subscribe to TBBT before changing plans.");
+  }
+  if (!isSaasSubscribedStatus(current.status) && !isBlockingSaasStatus(current.status)) {
+    throw new SaasBillingError("There is no active TBBT subscription to change.");
+  }
+
+  const provider = getSaasBillingProvider();
+  const changed = await provider.changeSubscriptionPrice({
+    subscriptionId: current.stripeSubscriptionId,
+    priceId: priceId!,
+    planCode: planCode === PLAN_CODES.FOUNDER ? TBBT_SAAS_PLAN_CODE : planCode,
+  });
+
+  await writeSettingsAuditLog(db, {
+    businessId: access.businessId,
+    changedByMembershipId: access.workspace.membership.id,
+    settingArea: "saas-billing",
+    settingKey: "planChangeRequested",
+    previousValue: current.planCode ?? resolveCompatiblePlanCode({ planCode: current.planCode }),
+    newValue: planCode,
+  });
+
+  return {
+    requested: true as const,
+    planCode,
+    priceId: changed.priceId,
+    subscriptionId: changed.subscriptionId,
+    localPlanUnchanged: true as const,
+  };
 }
 
 export async function applySaasBillingStripeEvent(

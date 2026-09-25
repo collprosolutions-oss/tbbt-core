@@ -23,6 +23,7 @@ import {
   resolveTradeConfiguration,
   type TradeConfiguration,
 } from "@/lib/trade-config";
+import { assertTradeActivationAllowed } from "@/lib/product-entitlements";
 import {
   DEFAULT_TRADE,
   TRADE_STATUS_ACTIVE,
@@ -178,6 +179,9 @@ export async function activateBusinessTradeOp(
   }
   const existing = await db.businessTrade.findFirst({
     where: { businessId: access.businessId, tradeCode },
+  });
+  await assertTradeActivationAllowed(db, access.businessId, {
+    alreadyActive: existing?.status === TRADE_STATUS_ACTIVE,
   });
   if (existing) {
     access.assertOwned(existing);

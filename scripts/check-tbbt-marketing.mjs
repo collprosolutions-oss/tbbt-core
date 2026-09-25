@@ -64,9 +64,11 @@ const {
   TBBT_SIGN_IN_HREF,
   TBBT_SIGN_UP_HREF,
   TBBT_TRADES,
+  TBBT_TRADE_STATUS_LABEL,
   TBBT_TRADES_PAGE_CAPABILITIES,
   TBBT_TRADES_PAGE_CARDS,
   TBBT_TRADES_PAGE_CTA_HEADLINE,
+  TBBT_TRADES_PAGE_GRID_LEAD,
   TBBT_TRADES_PAGE_CTA_SRC,
   TBBT_TRADES_PAGE_HERO_PRO_SRC,
   TBBT_TRADES_PAGE_PLATFORM_SRC,
@@ -235,13 +237,14 @@ check(
     !TBBT_TRADES.every((trade) => trade.name === "Handyman"),
 );
 check(
-  "Handyman is available; Cleaning is coming next; others are planned",
+  "Handyman is available; additional trades are planned after core, not committed as next",
   TBBT_TRADES.find((trade) => trade.name === "Handyman")?.status === "available" &&
-    TBBT_TRADES.find((trade) => trade.name === "Cleaning")?.status ===
-      "coming-next" &&
+    TBBT_TRADES.find((trade) => trade.name === "Cleaning")?.status === "planned" &&
     TBBT_TRADES.filter((trade) => trade.status === "available").length === 1 &&
     TRADE_CODES.includes("HANDYMAN") &&
-    TRADE_CODES.includes("CLEANING"),
+    TRADE_CODES.includes("CLEANING") &&
+    !TBBT_TRADES_PAGE_GRID_LEAD.includes("Cleaning is next") &&
+    !TBBT_TRADE_STATUS_LABEL["coming-next"].includes("Coming Next"),
 );
 check(
   "Launch pricing is the Founder Plan at $49/month with a 30-day trial",
@@ -264,6 +267,7 @@ check(
 );
 
 const pricingSrc = readRepo("src/components/tbbt-marketing/pricing.tsx");
+const catalogProjectionSrc = readRepo("src/lib/product-catalog/pricing-projection.ts");
 const homeMarketingSrc = readRepo("src/components/tbbt-marketing/home.tsx");
 const homeCssSrc = readRepo("src/components/tbbt-marketing/tbbt-home.css");
 const marketingLibSrc = readRepo("src/lib/tbbt-marketing.ts");
@@ -280,16 +284,13 @@ check(
     !pricingSrc.includes("$79") &&
     !pricingSrc.includes("$129") &&
     !marketingLibSrc.includes("$29") &&
-    pricingSrc.includes("TBBT_FOUNDER_PLAN_DISPLAY_NAME") &&
+    pricingSrc.includes("getPricingPageProjection") &&
     pricingSrc.includes("TBBT_SIGN_UP_HREF") &&
     pricingSrc.includes("Starter") &&
     pricingSrc.includes("Business") &&
     pricingSrc.includes("Enterprise") &&
-    pricingSrc.includes("Coming Soon") &&
-    pricingSrc.includes("TBBT_PRICING_PLANNED_LABEL") &&
-    pricingSrc.includes("TBBT_PRICING_AVAILABLE_NOW_LABEL") &&
     pricingSrc.includes("Pricing to be announced") === false &&
-    marketingLibSrc.includes("Pricing to be announced") &&
+    catalogProjectionSrc.includes("Pricing to be announced") &&
     !pricingSrc.includes("No invented tiers"),
 );
 check(
@@ -500,9 +501,9 @@ check(
     existsSync(new URL("../public/brand/tbbt-marketing/cta-sunset.png", import.meta.url)),
 );
 check(
-  "Trades page keeps Handyman available, Cleaning next, others planned, And More as roadmap",
+  "Trades page keeps Handyman available, additional trades planned, And More as roadmap",
   TBBT_TRADES.find((trade) => trade.name === "Handyman")?.status === "available" &&
-    TBBT_TRADES.find((trade) => trade.name === "Cleaning")?.status === "coming-next" &&
+    TBBT_TRADES.find((trade) => trade.name === "Cleaning")?.status === "planned" &&
     TBBT_TRADES.filter((trade) => trade.status === "available").length === 1 &&
     TBBT_TRADES_PAGE_CARDS["And More"]?.badge === TBBT_TRADES_PAGE_ROADMAP_LABEL &&
     !TBBT_TRADES_PAGE_CARDS["And More"]?.src &&
@@ -698,7 +699,9 @@ if (!reachable) {
         trades.body.includes("cta-sunset.png") &&
         !trades.body.includes("trades-page-promo.png") &&
         trades.body.includes("Available") &&
-        trades.body.includes("Coming Next") &&
+        trades.body.includes("Planned") &&
+        !trades.body.includes("Coming Next") &&
+        !trades.body.includes("Cleaning is next") &&
         trades.body.includes("Roadmap") &&
         trades.body.includes("/sign-up") &&
         !trades.body.includes("Join thousands"),

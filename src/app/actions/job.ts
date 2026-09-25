@@ -3,7 +3,8 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireOperatingBusinessAccessForForm } from "@/lib/saas-billing/enforce";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { requireOperatingProductAccessForForm } from "@/lib/saas-billing/enforce";
 import { readAccessArrangementFromFormData } from "@/lib/access-arrangement-form";
 import {
   CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
@@ -61,7 +62,7 @@ export async function createJobFromEstimate(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const operating = await requireOperatingBusinessAccessForForm();
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.JOBS_TASKS);
   if (!operating.ok) return { error: operating.error };
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
@@ -170,7 +171,7 @@ export async function scheduleJob(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const operating = await requireOperatingBusinessAccessForForm();
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.JOBS_TASKS);
   if (!operating.ok) return { error: operating.error };
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
@@ -312,7 +313,7 @@ export async function retryAppointmentNotification(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const operating = await requireOperatingBusinessAccessForForm();
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.JOBS_TASKS);
   if (!operating.ok) return { error: operating.error };
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
@@ -357,7 +358,7 @@ export async function recordOwnerAppointmentConfirmation(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const operating = await requireOperatingBusinessAccessForForm();
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.JOBS_TASKS);
   if (!operating.ok) return { error: operating.error };
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
@@ -432,7 +433,7 @@ export async function startJob(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const operating = await requireOperatingBusinessAccessForForm();
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.JOBS_TASKS);
   if (!operating.ok) return { error: operating.error };
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.OPERATE_JOBS);
@@ -524,7 +525,7 @@ export async function markJobComplete(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const operating = await requireOperatingBusinessAccessForForm();
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.JOBS_TASKS);
   if (!operating.ok) return { error: operating.error };
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.OPERATE_JOBS);
@@ -585,7 +586,7 @@ export async function assignJobMember(
   _prev: JobActionState,
   formData: FormData,
 ): Promise<JobActionState> {
-  const operating = await requireOperatingBusinessAccessForForm();
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.JOBS_TASKS);
   if (!operating.ok) return { error: operating.error };
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);

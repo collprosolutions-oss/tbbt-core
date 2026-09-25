@@ -6,10 +6,18 @@
  * application, or are explicitly labeled planned / coming.
  */
 import {
+  getPricingPageProjection,
+  PRICING_ADDON_PRICE_LABEL,
+  PRICING_AVAILABLE_NOW_LABEL,
+  PRICING_COMING_SOON_LABEL,
+  PRICING_COMPARE_ROWS,
+  PRICING_PLANNED_LABEL,
+} from "@/lib/product-catalog";
+import { TBBT_SAAS_PLAN_NAME } from "@/lib/saas-billing/config";
+import {
   TBBT_FOUNDER_PLAN_PRICE_LABEL,
   TBBT_FOUNDER_TRIAL_DAYS,
 } from "@/lib/saas-billing/founder-price";
-import { TBBT_SAAS_PLAN_NAME } from "@/lib/saas-billing/config";
 
 export const TBBT_PRODUCT_NAME = "TBBT";
 export const TBBT_PRODUCT_LONG_NAME = "Trades Business Builder Tool";
@@ -114,8 +122,8 @@ export const TBBT_TRADES: readonly {
   },
   {
     name: "Cleaning",
-    status: "coming-next",
-    summary: "Next trade template. Same operating system, cleaning-specific setup.",
+    status: "planned",
+    summary: "Planned trade template. Architecture remains in Core; development is on hold until TBBT Core is fully operational.",
   },
   {
     name: "Electrical",
@@ -171,7 +179,7 @@ export const TBBT_TRADES: readonly {
 
 export const TBBT_TRADE_STATUS_LABEL: Record<TbbtTradeAvailability, string> = {
   available: "Available",
-  "coming-next": "Coming Next",
+  "coming-next": "Planned",
   planned: "Planned",
 };
 
@@ -200,7 +208,7 @@ export const TBBT_TRADES_PAGE_VALUE_POINTS = [
 
 export const TBBT_TRADES_PAGE_GRID_HEADING = "Supported Trades";
 export const TBBT_TRADES_PAGE_GRID_LEAD =
-  "Handyman is live today. Cleaning is next. Other trades are planned on the same platform.";
+  "Handyman is live today. Additional trades are planned on the roadmap after the core platform is completed.";
 
 export const TBBT_TRADES_PAGE_PLATFORM_KICKER = "One Platform. Endless Possibilities.";
 export const TBBT_TRADES_PAGE_PLATFORM_HEADLINE = [
@@ -208,7 +216,7 @@ export const TBBT_TRADES_PAGE_PLATFORM_HEADLINE = [
   "For Your Trade.",
 ] as const;
 export const TBBT_TRADES_PAGE_PLATFORM_SUPPORT =
-  "Every trade uses the same TBBT workspace. Handyman is live today — public website, catalog, customers, scheduling, estimates, jobs, invoices, and the rest of the operating tools. More trade setups follow on this same platform.";
+  "Every trade uses the same TBBT workspace. Handyman is live today — public website, catalog, customers, scheduling, estimates, jobs, invoices, and the rest of the operating tools. Additional trade setups are planned after the core platform is completed.";
 export const TBBT_TRADES_PAGE_SEE_FEATURES_LABEL = "See All Features";
 
 export const TBBT_TRADES_PAGE_CAPABILITIES = [
@@ -674,83 +682,33 @@ export const TBBT_PRICING_PAGE_INTRO = {
   compareLead: "See what's included in each plan.",
 } as const;
 
-export const TBBT_PRICING_COMING_SOON_LABEL = "Coming Soon";
-export const TBBT_PRICING_PLANNED_LABEL = "Planned";
-export const TBBT_PRICING_AVAILABLE_NOW_LABEL = "Available Now";
+const pricingPageProjection = getPricingPageProjection();
+
+export const TBBT_PRICING_COMING_SOON_LABEL = PRICING_COMING_SOON_LABEL;
+export const TBBT_PRICING_PLANNED_LABEL = PRICING_PLANNED_LABEL;
+export const TBBT_PRICING_AVAILABLE_NOW_LABEL = PRICING_AVAILABLE_NOW_LABEL;
 
 /** Truthful current Founder capabilities shown on the live plan card. */
-export const TBBT_PRICING_FOUNDER_CARD_FEATURES = [
-  "Handyman starting setup",
-  "Public business website",
-  "Customer request intake",
-  "Customers / CRM",
-  "Scheduling",
-  "Estimates",
-  "Jobs",
-  "Invoices",
-  "Team management",
-  "Reports and business insights",
-] as const;
+export const TBBT_PRICING_FOUNDER_CARD_FEATURES = pricingPageProjection.founderCardFeatures;
 
-export const TBBT_PRICING_STARTER_CARD_FEATURES = [
-  "1 Trade / Industry",
-  "Website Builder",
-  "Basic CRM",
-  "Scheduling & Calendar",
-  "Estimates & Invoices",
-  "Time Tracking",
-  "Mobile Access",
-] as const;
+export const TBBT_PRICING_STARTER_CARD_FEATURES = pricingPageProjection.starterCardFeatures;
 
-export const TBBT_PRICING_BUSINESS_CARD_FEATURES = [
-  "More trades",
-  "Everything in Founder",
-  "Multi-Location Support",
-  "Advanced Reporting",
-  "Client Portal",
-  "Document Storage",
-  "Expanded Team Roles & Permissions",
-  "Priority Support",
-] as const;
+export const TBBT_PRICING_BUSINESS_CARD_FEATURES = pricingPageProjection.businessCardFeatures;
 
-export const TBBT_PRICING_ENTERPRISE_CARD_FEATURES = [
-  "Expanded trade support",
-  "Everything in Business",
-  "Custom Integrations",
-  "Advanced Automation",
-  "White Label Options",
-  "Dedicated Account Support",
-  "Priority Development Requests",
-  "Highest Priority Support",
-] as const;
+export const TBBT_PRICING_ENTERPRISE_CARD_FEATURES = pricingPageProjection.enterpriseCardFeatures;
 
-export const TBBT_PRICING_COMPARE_ROWS = [
-  { label: "Trade Availability", values: ["Coming Soon", "Available Now", "Coming Soon", "Planned"] },
-  { label: "Website Builder", values: ["check", "check", "check", "check"] },
-  { label: "CRM & Customer Management", values: ["check", "check", "check", "check"] },
-  { label: "Scheduling & Calendar", values: ["check", "check", "check", "check"] },
-  { label: "Estimates, Quotes & Invoices", values: ["check", "check", "check", "check"] },
-  { label: "Time Tracking", values: ["check", "check", "check", "check"] },
-  { label: "Jobs & Task Management", values: ["dash", "check", "check", "check"] },
-  { label: "Team Management", values: ["dash", "check", "check", "check"] },
-  { label: "Marketing Tools", values: ["dash", "check", "check", "check"] },
-  { label: "Reporting & Business Insights", values: ["dash", "check", "check", "check"] },
-  { label: "Client Portal", values: ["dash", "dash", "check", "check"] },
-  { label: "Multi-Location Support", values: ["dash", "dash", "check", "check"] },
-  { label: "Custom Integrations / White Label", values: ["dash", "dash", "dash", "check"] },
-] as const;
+export const TBBT_PRICING_COMPARE_ROWS = PRICING_COMPARE_ROWS.map((row) => ({
+  label: row.label,
+  values: row.values,
+}));
 
-export const TBBT_PRICING_ADDONS = [
-  { title: "Additional Trade", icon: "trade" },
-  { title: "SMS Messaging", icon: "sms" },
-  { title: "AI Business Coach", icon: "coach" },
-  { title: "Additional Users", icon: "users" },
-  { title: "Extra Storage", icon: "storage" },
-  { title: "Business Email", icon: "domain" },
-] as const;
+export const TBBT_PRICING_ADDONS = pricingPageProjection.addons.map((addon) => ({
+  title: addon.title,
+  icon: addon.icon,
+}));
 
-export const TBBT_PRICING_ADDON_STATUS = "Coming Soon";
-export const TBBT_PRICING_ADDON_PRICE = "Pricing to be announced";
+export const TBBT_PRICING_ADDON_STATUS = PRICING_COMING_SOON_LABEL;
+export const TBBT_PRICING_ADDON_PRICE = PRICING_ADDON_PRICE_LABEL;
 
 export const TBBT_PRICING_TRUST = [
   {
@@ -793,7 +751,7 @@ export const TBBT_VALUES = [
   },
   {
     title: "Continuous Improvement",
-    body: "Handyman is first. Cleaning is next. The operating system is built to add trades without starting over.",
+    body: "Handyman is first. Additional trades are planned after TBBT Core is fully operational. The operating system is built to add trades without starting over.",
   },
 ] as const;
 
@@ -1221,7 +1179,7 @@ export function tbbtPageDescription(page: string): string {
     case "features":
       return "TBBT features: public website, customers, scheduling, estimates, jobs, invoices, time cards, team, reports, reviews, and marketing content in one trades workspace.";
     case "trades":
-      return "One TBBT platform for every trade. Handyman is available now. Cleaning is next. Other trades are planned on the same operating system.";
+      return "One TBBT platform for every trade. Handyman is available now. Additional trades are planned on the roadmap after the core platform is completed.";
     case "pricing":
       return `TBBT Founder Plan ${TBBT_FOUNDER_PLAN_PRICE_LABEL}. ${TBBT_FOUNDER_TRIAL_DAYS}-day free trial. No credit card required to begin.`;
     case "about":

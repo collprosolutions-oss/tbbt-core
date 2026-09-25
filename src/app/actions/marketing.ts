@@ -6,7 +6,8 @@
  * businessId. OWNER/ADMIN only (MANAGE_MARKETING).
  */
 import { revalidatePath } from "next/cache";
-import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { requireOperatingProductAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { isAiAttemptId } from "@/lib/ai/types";
 import {
@@ -53,7 +54,7 @@ export async function grantPhotoMarketingPermissionAction(
   formData: FormData,
 ): Promise<MarketingActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
     await grantJobPhotoMarketingPermission(prisma, access, {
       photoId: readString(formData, "photoId"),
     });
@@ -69,7 +70,7 @@ export async function revokePhotoMarketingPermissionAction(
   formData: FormData,
 ): Promise<MarketingActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
     await revokeJobPhotoMarketingPermission(prisma, access, {
       photoId: readString(formData, "photoId"),
     });
@@ -85,7 +86,7 @@ export async function createMarketingContentAction(
   formData: FormData,
 ): Promise<MarketingActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
     await createMarketingContent(prisma, access, {
       contentType: readString(formData, "contentType"),
       title: readString(formData, "title"),
@@ -107,7 +108,7 @@ export async function advanceMarketingContentAction(
   formData: FormData,
 ): Promise<MarketingActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
     const updated = await advanceMarketingContentStatus(prisma, access, {
       contentId: readString(formData, "contentId"),
     });
@@ -128,7 +129,7 @@ export async function setMarketingPlannedDateAction(
   formData: FormData,
 ): Promise<MarketingActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
     await setMarketingContentPlannedFor(prisma, access, {
       contentId: readString(formData, "contentId"),
       plannedFor: readString(formData, "plannedFor"),
@@ -145,7 +146,7 @@ export async function generateMarketingAiAction(
   formData: FormData,
 ): Promise<MarketingAiActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
     requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
     const task = readString(formData, "marketingAiTask");
     const attemptId = readString(formData, "attemptId");

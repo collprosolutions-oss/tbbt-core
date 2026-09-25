@@ -13,6 +13,7 @@ export {
   applyParsedSaasBillingEvent,
   applySaasBillingStripeEvent,
   loadSaasBillingSnapshot,
+  requestSaasPlanChange,
   startSaasBillingPortal,
   startSaasSubscriptionCheckout,
 } from "@/lib/saas-billing/ops";

@@ -7,6 +7,11 @@
  * recovery, webhooks, or public customer flows.
  */
 import { requireBusinessAccess, type BusinessAccess } from "@/lib/access";
+import type { ProductCapabilityCode } from "@/lib/product-catalog/codes";
+import {
+  productEntitlementErrorMessage,
+  requireProductCapability,
+} from "@/lib/product-entitlements";
 import { prisma } from "@/lib/prisma";
 import {
   requireSaasOperatingEntitlement,
@@ -26,6 +31,29 @@ export async function requireOperatingBusinessAccessForForm(): Promise<
     return { ok: true, access: await requireOperatingBusinessAccess() };
   } catch (error) {
     const message = saasOperatingErrorMessage(error);
+    if (message) return { ok: false, error: message };
+    throw error;
+  }
+}
+
+export async function requireOperatingProductAccess(
+  capability: ProductCapabilityCode,
+): Promise<BusinessAccess> {
+  const access = await requireOperatingBusinessAccess();
+  await requireProductCapability(prisma, access.businessId, capability);
+  return access;
+}
+
+export async function requireOperatingProductAccessForForm(
+  capability: ProductCapabilityCode,
+): Promise<{ ok: true; access: BusinessAccess } | { ok: false; error: string }> {
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return operating;
+  try {
+    await requireProductCapability(prisma, operating.access.businessId, capability);
+    return operating;
+  } catch (error) {
+    const message = productEntitlementErrorMessage(error);
     if (message) return { ok: false, error: message };
     throw error;
   }
