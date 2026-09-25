@@ -18,6 +18,7 @@ import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatDate } from "@/lib/format";
 import {
   OWNER_TODAY_APPOINTMENT_TAKE,
+  OWNER_TODAY_FIELD_COMPLETION_COPY,
   OWNER_TODAY_HANDOFF_SELECT,
   OWNER_TODAY_HANDOFF_TAKE,
   OWNER_TODAY_JOB_SELECT,
@@ -129,8 +130,7 @@ export default async function OwnerTodayPage() {
           <CardTitle>Needs attention</CardTitle>
           <CardDescription>
             Unconfirmed appointments, unassigned today work, and completed jobs
-            that still need an invoice. Completing a job does not send money
-            documents.
+            that still need an invoice. {OWNER_TODAY_FIELD_COMPLETION_COPY}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

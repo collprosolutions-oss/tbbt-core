@@ -29,8 +29,11 @@ export const OWNER_TODAY_JOBS_TAKE = 25;
 export const OWNER_TODAY_HANDOFF_TAKE = 25;
 export const OWNER_TODAY_APPOINTMENT_TAKE = 25;
 
-export const OWNER_TODAY_CREATE_INVOICE_LABEL = "Create invoice";
-export const OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL = "Create balance invoice";
+export const OWNER_TODAY_CREATE_INVOICE_LABEL = "Create & send invoice";
+export const OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL =
+  "Create & send balance invoice";
+export const OWNER_TODAY_FIELD_COMPLETION_COPY =
+  "Field completion does not send an invoice. Creating and sending an invoice remains an owner/admin action.";
 
 export type DateRangeLike = { start: Date; end: Date };
 

@@ -23,6 +23,7 @@ const {
 const {
   OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL,
   OWNER_TODAY_CREATE_INVOICE_LABEL,
+  OWNER_TODAY_FIELD_COMPLETION_COPY,
   buildOwnerTodayAppointmentAttention,
   buildOwnerTodayHandoffItems,
   buildOwnerTodayJobs,
@@ -112,6 +113,8 @@ const todayCardSrc = readRepo("src/components/today/owner-today-job-card.tsx");
 const todayHandoffSrc = readRepo("src/components/today/owner-today-handoff-card.tsx");
 const fieldAccessSrc = readRepo("src/lib/field-access.ts");
 const invoiceActionSrc = readRepo("src/app/actions/invoice.ts");
+const createInvoiceButtonSrc = readRepo("src/components/invoices/create-invoice-button.tsx");
+const fieldJobActionSrc = readRepo("src/app/actions/field-job.ts");
 const startJobSrc = readRepo("src/components/jobs/start-job-button.tsx");
 
 console.log("\nSTATIC — Owner Today reuses existing truth and stays management-only");
@@ -134,11 +137,52 @@ check(
   todayHelperSrc.includes("completedJobBillingAttention") &&
     todayHandoffSrc.includes("CreateInvoiceButton") &&
     todayHandoffSrc.includes("item.invoiceActionLabel") &&
-    !todayHelperSrc.includes("sendDraftInvoiceIfNeeded") &&
-    !todayPageSrc.includes("sendDraftInvoiceIfNeeded") &&
-    !todayPageSrc.includes("createInvoiceFromJob") &&
-    !todayPageSrc.includes("completeJobAndSendInvoice") &&
+    createInvoiceButtonSrc.includes("createInvoiceFromJob(jobId)") &&
+    invoiceActionSrc.includes("persistDraftInvoiceFromCompletedJob") &&
+    invoiceActionSrc.includes("sendDraftInvoiceIfNeeded") &&
     !todayHelperSrc.includes("formatMoney"),
+);
+check(
+  "Today handoff labels explicitly communicate send behavior",
+  OWNER_TODAY_CREATE_INVOICE_LABEL === "Create & send invoice" &&
+    OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL ===
+      "Create & send balance invoice" &&
+    todayHelperSrc.includes('"Create & send invoice"') &&
+    todayHelperSrc.includes('"Create & send balance invoice"') &&
+    todayPageSrc.includes("OWNER_TODAY_FIELD_COMPLETION_COPY") &&
+    OWNER_TODAY_FIELD_COMPLETION_COPY.includes("Field completion does not send an invoice") &&
+    OWNER_TODAY_FIELD_COMPLETION_COPY.includes(
+      "Creating and sending an invoice remains an owner/admin action",
+    ) &&
+    !todayPageSrc.includes("Completing a job does not send money documents"),
+);
+check(
+  "Loading /today never calls createInvoiceFromJob, sendDraftInvoiceIfNeeded, or markInvoiceSent",
+  !todayPageSrc.includes("createInvoiceFromJob") &&
+    !todayPageSrc.includes("sendDraftInvoiceIfNeeded") &&
+    !todayPageSrc.includes("markInvoiceSent") &&
+    !todayHelperSrc.includes("createInvoiceFromJob") &&
+    !todayHelperSrc.includes("sendDraftInvoiceIfNeeded") &&
+    !todayHelperSrc.includes("markInvoiceSent") &&
+    !todayHandoffSrc.includes("createInvoiceFromJob") &&
+    !todayHandoffSrc.includes("sendDraftInvoiceIfNeeded") &&
+    !todayHandoffSrc.includes("markInvoiceSent") &&
+    todayHandoffSrc.includes("CreateInvoiceButton"),
+);
+check(
+  "Field-complete status alone does not send an invoice",
+  /export async function completeAssignedJob[\s\S]*Deliberately ONLY flips Job.status/.test(
+    fieldJobActionSrc,
+  ) &&
+    !/export async function completeAssignedJob[\s\S]*sendDraftInvoiceIfNeeded/.test(
+      fieldJobActionSrc,
+    ) &&
+    !/export async function completeAssignedJob[\s\S]*createInvoiceFromJob/.test(
+      fieldJobActionSrc,
+    ) &&
+    !todayPageSrc.includes("completeAssignedJob") &&
+    !todayPageSrc.includes("completeJobAndSendInvoice") &&
+    !todayHelperSrc.includes("completeJobAndSendInvoice"),
 );
 check(
   "Today copy/open actions use owned job/customer refs",
@@ -163,10 +207,13 @@ check(
     ),
 );
 check(
-  "Existing invoice action still requires an explicit owner create — Today does not auto-send",
-  invoiceActionSrc.includes("export async function createInvoiceFromJob") &&
-    !todayPageSrc.includes("markInvoiceSent") &&
-    !todayHelperSrc.includes("markInvoiceSent"),
+  "Explicit Today invoice click still uses the established createInvoiceFromJob send path",
+  createInvoiceButtonSrc.includes("await createInvoiceFromJob(jobId)") &&
+    invoiceActionSrc.includes("export async function createInvoiceFromJob") &&
+    /export async function createInvoiceFromJob[\s\S]*persistDraftInvoiceFromCompletedJob[\s\S]*sendDraftInvoiceIfNeeded/.test(
+      invoiceActionSrc,
+    ) &&
+    todayHandoffSrc.includes("<CreateInvoiceButton jobId={item.jobId} label={item.invoiceActionLabel} />"),
 );
 check(
   "Dashboard Today reuses the owner-today helper without rebuilding KPIs",
@@ -493,6 +540,7 @@ check(
   "completed/unbilled job surfaces via #114 truth",
   unbilledHandoff.length === 1 &&
     unbilledHandoff[0].invoiceActionLabel === OWNER_TODAY_CREATE_INVOICE_LABEL &&
+    unbilledHandoff[0].invoiceActionLabel === "Create & send invoice" &&
     completedJobBillingAttention({
       jobStatus: "COMPLETED",
       originalApprovedTotal: 200,
@@ -548,6 +596,7 @@ check(
   "supplemental/unbilled CO case surfaces",
   supplementalHandoff.length === 1 &&
     supplementalHandoff[0].invoiceActionLabel === OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL &&
+    supplementalHandoff[0].invoiceActionLabel === "Create & send balance invoice" &&
     ownerTodayInvoiceActionLabel(
       completedJobBillingAttention({
         jobStatus: "COMPLETED",
