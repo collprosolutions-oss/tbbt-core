@@ -56,7 +56,7 @@ export type SpecialistContext = {
   factKeys: string[];
   recommendationKeys: string[];
   facts: Record<string, string>;
-  findings: Array<{ key: string; title: string; why: string }>;
+  findings: Array<{ key: string; title: string; why: string; entityIds?: string[] }>;
   entityHints?: { jobId?: string; recommendationKey?: string };
 };
 
@@ -89,7 +89,10 @@ export type ConflictKind =
   | "OVERLOAD_VS_FILL_CAPACITY"
   | "STAFFING_SHORTAGE_VS_SCHEDULED_WORK"
   | "UNASSIGNED_PLUS_AVAILABLE"
-  | "SHARED_RECOMMENDATION";
+  | "SHARED_RECOMMENDATION"
+  | "MISSING_WAGE_VS_MARGIN_PRICING"
+  | "STAFFING_SHORTAGE_VS_PROFITABLE_WORK"
+  | "SHARED_JOB_REFERENCE";
 
 export type ConflictItem = {
   kind: ConflictKind;

@@ -3,6 +3,8 @@ export {
   buildFinancialIntelligence,
   buildJobMarginRangeSnapshot,
   estimateConversionFromSource,
+  getFinancialIntelligenceBuildCount,
+  resetFinancialIntelligenceBuildCount,
   type EstimateConversion,
   type FinancialAttentionItem,
   type FinancialIntelligence,

@@ -3,6 +3,7 @@
  * Uses only currently available BSOS / Workforce facts.
  */
 import type { BsosFacts, BsosRecommendation } from "@/lib/bsos";
+import { jobIdsFromFinancialFindings } from "@/lib/chief-of-staff/specialists/financial";
 import type {
   ConflictItem,
   ConflictResolution,
@@ -71,6 +72,43 @@ export function resolveConflicts(input: {
       kind: "SHARED_RECOMMENDATION",
       recommendationKeys: [key],
       summary: `More than one finding refers to ${key}; the Coach keeps that key once.`,
+    });
+  }
+
+  const marginPricingKeys = [
+    "review-low-margin-jobs",
+    "service-margin-below-target",
+    "high-value-customer-concentration",
+  ];
+  const hasMarginOrPricing =
+    uniqueRecommendationKeys.some((key) => marginPricingKeys.includes(key)) ||
+    input.results.some((row) =>
+      row.findings.some((finding) => finding.key.startsWith("financial-pricing:")),
+    );
+  if (uniqueRecommendationKeys.includes("missing-wage-data") && hasMarginOrPricing) {
+    items.push({
+      kind: "MISSING_WAGE_VS_MARGIN_PRICING",
+      recommendationKeys: ["missing-wage-data", ...marginPricingKeys.filter((key) => uniqueRecommendationKeys.includes(key))],
+      summary:
+        "Wage data is incomplete. Margin and pricing stay unknown until recorded labor cost is complete. Missing burden or target margin is unconfigured, not 0%.",
+    });
+  }
+
+  const financial = input.results.find((row) => row.specialistId === "FINANCIAL" && row.status === "OK");
+  const financialJobIds = new Set(jobIdsFromFinancialFindings(financial?.findings ?? []));
+  const otherJobIds = new Set(
+    input.results
+      .filter((row) => row.specialistId !== "FINANCIAL")
+      .flatMap((row) => row.findings.flatMap((finding) => finding.entityIds ?? [])),
+  );
+  const sharedJobs = [...financialJobIds].filter((id) => otherJobIds.has(id));
+  if (sharedJobs.length > 0) {
+    items.push({
+      kind: "SHARED_JOB_REFERENCE",
+      recommendationKeys: uniqueRecommendationKeys.filter((key) =>
+        key.includes("job") || key.startsWith("workforce-") || key.startsWith("review-low-margin"),
+      ),
+      summary: "More than one recorded view refers to the same job. The Coach keeps that job once and does not assign anyone.",
     });
   }
 

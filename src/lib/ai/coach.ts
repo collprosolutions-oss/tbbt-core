@@ -14,6 +14,7 @@ export type CoachContext = {
 export const COACH_FACT_KEYS = [
   "active-trades",
   "paid-revenue",
+  "collected-revenue",
   "recorded-expenses",
   "unpaid-invoices",
   "sent-estimates",
@@ -60,8 +61,13 @@ export function listCoachCitedFacts(context: CoachContext): CitedFact[] {
   return factList(context);
 }
 
+function ownerCollectedAmount(facts: BsosFacts) {
+  return facts.collectedRevenue?.amount ?? facts.paidRevenue.amount;
+}
+
 function factList(context: CoachContext): CitedFact[] {
   const workforceAttention = context.recommendations.filter((item) => item.key.startsWith("workforce-")).length;
+  const collectedAmount = ownerCollectedAmount(context.facts);
   return [
     ...(context.activeTradeLabels?.length
       ? [
@@ -75,10 +81,20 @@ function factList(context: CoachContext): CitedFact[] {
       : []),
     {
       key: "paid-revenue",
-      label: "Recorded paid revenue",
-      value: context.facts.paidRevenue.amount.toFixed(2),
+      label: context.facts.collectedRevenue ? "Recorded collected customer cash" : "Recorded paid revenue",
+      value: collectedAmount.toFixed(2),
       href: "/reports",
     },
+    ...(context.facts.collectedRevenue
+      ? [
+          {
+            key: "collected-revenue",
+            label: "Recorded collected customer cash",
+            value: collectedAmount.toFixed(2),
+            href: "/reports",
+          } satisfies CitedFact,
+        ]
+      : []),
     {
       key: "recorded-expenses",
       label: "Recorded expenses",
@@ -193,7 +209,7 @@ function factList(context: CoachContext): CitedFact[] {
 }
 
 function recordedProfit(facts: BsosFacts) {
-  return facts.paidRevenue.amount - facts.recordedExpenses.amount;
+  return ownerCollectedAmount(facts) - facts.recordedExpenses.amount;
 }
 
 export function answerCoachFromFacts(question: string, context: CoachContext): {
@@ -214,7 +230,7 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
     keys = ["paid-revenue", "recorded-expenses", "low-margin", "unpaid-invoices"];
     stance = "FACT";
     text =
-      `Recorded paid revenue is ${context.facts.paidRevenue.amount.toFixed(2)} and recorded expenses are ${context.facts.recordedExpenses.amount.toFixed(2)}. ` +
+      `Recorded ${context.facts.collectedRevenue ? "collected customer cash" : "paid revenue"} is ${ownerCollectedAmount(context.facts).toFixed(2)} and recorded expenses are ${context.facts.recordedExpenses.amount.toFixed(2)}. ` +
       `That leaves a recorded difference of ${profit.toFixed(2)}. This is not a bank balance. ` +
       (context.facts.lowMarginJobs.count > 0
         ? `${context.facts.lowMarginJobs.count} job(s) show recorded paid revenue below recorded labor plus job expenses. `
@@ -239,8 +255,8 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
       (context.facts.missingWageEntries.count > 0
         ? `${context.facts.missingWageEntries.count} approved time row(s) are missing a wage snapshot, so labor cost is incomplete.`
         : "Wage snapshots are present on approved time, so labor cost is not missing for that reason.");
-  } else if (/invoice|follow up|receivable|aged/.test(q)) {
-    keys = ["unpaid-invoices", "aged-receivables"];
+  } else if (/invoice|follow up|receivable|aged|collected|unpaid|cash/.test(q)) {
+    keys = ["unpaid-invoices", "aged-receivables", "collected-revenue"];
     stance = "FACT";
     text =
       context.facts.unpaidInvoices.count > 0
@@ -248,8 +264,13 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
           (context.facts.agedReceivables?.count
             ? `${context.facts.agedReceivables.count} of those are aged receivables totaling ${context.facts.agedReceivables.amount.toFixed(2)}. `
             : "") +
+          (context.facts.collectedRevenue
+            ? `Recorded collected customer cash is ${context.facts.collectedRevenue.amount.toFixed(2)}. SENT invoice totals are not collected cash. `
+            : "") +
           "Follow up from Invoices. TBBT does not invent who already paid outside the system."
-        : "There are no SENT unpaid invoices on file.";
+        : context.facts.collectedRevenue
+          ? `Recorded collected customer cash is ${context.facts.collectedRevenue.amount.toFixed(2)}. There are no SENT unpaid invoices on file.`
+          : "There are no SENT unpaid invoices on file.";
   } else if (/repeat|referral|customer/.test(q)) {
     keys = ["repeat-customers", "review-opportunities"];
     stance = "MIXED";
@@ -295,7 +316,7 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
     keys = ["paid-revenue", "unpaid-invoices"];
     stance = "MIXED";
     text =
-      `I can only use recorded TBBT facts. Paid revenue ${context.facts.paidRevenue.amount.toFixed(2)}; unpaid SENT invoices ${context.facts.unpaidInvoices.count}. ` +
+      `I can only use recorded TBBT facts. ${context.facts.collectedRevenue ? "Collected customer cash" : "Paid revenue"} ${ownerCollectedAmount(context.facts).toFixed(2)}; unpaid SENT invoices ${context.facts.unpaidInvoices.count}. ` +
       (top ? `Current recommendation: ${top.title}.` : "No recommendation is active.") +
       " Bank balances, ad spend, and unrecorded cash are unknown.";
   }
