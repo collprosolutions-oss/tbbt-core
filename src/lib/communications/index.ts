@@ -33,7 +33,11 @@ export {
   listBusinessCommunicationInbox,
   loadCustomerCommunicationTimeline,
 } from "@/lib/communications/timeline";
-export { recordMissedOrManualCall } from "@/lib/communications/missed-call";
+export {
+  PHONE_LOG_INJECTED_FAILURE_PREFIX,
+  recordMissedOrManualCall,
+  setPhoneLogFailureAfter,
+} from "@/lib/communications/missed-call";
 export {
   getReceptionistReadiness,
   lookupCaller,

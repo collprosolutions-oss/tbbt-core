@@ -25,6 +25,23 @@ export type PhoneLogResult = {
   failureReason: string | null;
 };
 
+export type PhoneLogFailureStage = "claimed" | "action" | "communication";
+
+export const PHONE_LOG_INJECTED_FAILURE_PREFIX = "Injected phone-log failure after ";
+
+let failAfter: PhoneLogFailureStage | null = null;
+
+export function setPhoneLogFailureAfter(stage: PhoneLogFailureStage | null) {
+  failAfter = stage;
+}
+
+function maybeFail(stage: PhoneLogFailureStage) {
+  if (failAfter === stage) {
+    failAfter = null;
+    throw new Error(`${PHONE_LOG_INJECTED_FAILURE_PREFIX}${stage}`);
+  }
+}
+
 function failed(failureReason: string): PhoneLogResult {
   return {
     ok: false,
@@ -36,19 +53,12 @@ function failed(failureReason: string): PhoneLogResult {
   };
 }
 
-function reusedFrom(row: {
-  id: string;
-  communicationId: string | null;
-  followUpActionItemId: string | null;
-}): PhoneLogResult {
-  return {
-    ok: true,
-    phoneInteractionId: row.id,
-    communicationId: row.communicationId,
-    actionItemId: row.followUpActionItemId,
-    reused: true,
-    failureReason: null,
-  };
+function callbackRecommendationKey(idempotencyKey: string) {
+  return `phone-callback:${idempotencyKey}`;
+}
+
+function communicationIdempotencyKey(kind: string, idempotencyKey: string) {
+  return `phone:${kind}:${idempotencyKey}`;
 }
 
 async function resolvePhoneLogCustomer(
@@ -112,6 +122,198 @@ async function resolvePhoneLogCustomer(
   return { ok: true, customerId: null };
 }
 
+async function ensureCallbackAction(
+  db: Db,
+  access: CommunicationAccess,
+  input: {
+    idempotencyKey: string;
+    summary: string;
+    customerName: string | null;
+  },
+) {
+  const recommendationKey = callbackRecommendationKey(input.idempotencyKey);
+  const existingAction = await db.businessActionItem.findFirst({
+    where: { businessId: access.businessId, recommendationKey },
+  });
+  if (existingAction) return existingAction.id;
+  try {
+    const action = await db.businessActionItem.create({
+      data: {
+        businessId: access.businessId,
+        recommendationKey,
+        title: input.customerName ? `Call back ${input.customerName}` : "Call back a missed caller",
+        notes: input.summary,
+        createdByMembershipId: access.workspace.membership?.id ?? null,
+      },
+    });
+    return action.id;
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const racedAction = await db.businessActionItem.findFirst({
+        where: { businessId: access.businessId, recommendationKey },
+      });
+      return racedAction?.id ?? null;
+    }
+    throw error;
+  }
+}
+
+async function ensurePhoneCommunication(
+  db: Db,
+  access: CommunicationAccess,
+  input: {
+    claimedId: string;
+    kind: string;
+    idempotencyKey: string;
+    summary: string;
+    callbackNeeded: boolean;
+    customer: { id: string; smsConsentStatus: string | null; email: string | null };
+    threadId: string | null;
+    last4: string | null;
+    fingerprint: string | null;
+  },
+) {
+  const communicationKey = communicationIdempotencyKey(input.kind, input.idempotencyKey);
+  const existingCommunication = await db.customerCommunication.findFirst({
+    where: { businessId: access.businessId, idempotencyKey: communicationKey },
+  });
+  if (existingCommunication) return existingCommunication.id;
+  try {
+    const communication = await db.customerCommunication.create({
+      data: {
+        businessId: access.businessId,
+        customerId: input.customer.id,
+        threadId: input.threadId,
+        direction: "INBOUND",
+        channel: "PHONE",
+        purpose: input.kind,
+        subject: input.callbackNeeded ? "Callback needed" : "Phone log",
+        relatedType: "PHONE_INTERACTION",
+        relatedId: input.claimedId,
+        idempotencyKey: communicationKey,
+        destinationLast4: input.last4,
+        destinationFingerprint: input.fingerprint,
+        consentContext: consentContextSnapshot({
+          smsConsentStatus: input.customer.smsConsentStatus,
+          emailAvailable: Boolean(input.customer.email),
+          channel: "PHONE",
+        }),
+        bodySnapshot: input.summary,
+        status: "SENT",
+        provider: "manual",
+        initiatedByMembershipId: access.workspace.membership?.id ?? null,
+        attemptedAt: new Date(),
+      },
+    });
+    return communication.id;
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const racedCommunication = await db.customerCommunication.findFirst({
+        where: { businessId: access.businessId, idempotencyKey: communicationKey },
+      });
+      return racedCommunication?.id ?? null;
+    }
+    throw error;
+  }
+}
+
+async function completePhoneLog(
+  db: Db,
+  access: CommunicationAccess,
+  input: {
+    kind: "MISSED_CALL" | "MANUAL_PHONE";
+    callerPhone?: string | null;
+    summary: string;
+    callbackNeeded?: boolean;
+    requestId?: string | null;
+    jobId?: string | null;
+    idempotencyKey: string;
+  },
+  claimed: {
+    id: string;
+    customerId: string | null;
+    threadId: string | null;
+    communicationId: string | null;
+    followUpActionItemId: string | null;
+    kind: string;
+    callbackNeeded: boolean;
+    summary: string;
+  },
+  customer: { id: string; name: string; smsConsentStatus: string | null; email: string | null } | null,
+  reused: boolean,
+): Promise<PhoneLogResult> {
+  maybeFail("claimed");
+
+  const digits = normalizePhone(input.callerPhone);
+  const usable = isUsableNormalizedPhone(digits);
+  const summary = claimed.summary || input.summary.trim();
+  const callbackNeeded = claimed.callbackNeeded || Boolean(input.callbackNeeded);
+  const kind = (claimed.kind as "MISSED_CALL" | "MANUAL_PHONE") || input.kind;
+
+  const thread = customer
+    ? await getOrCreateCustomerThread(db, {
+        businessId: access.businessId,
+        customerId: customer.id,
+        title: customer.name,
+      })
+    : null;
+
+  let actionItemId = claimed.followUpActionItemId;
+  if (callbackNeeded) {
+    actionItemId = await ensureCallbackAction(db, access, {
+      idempotencyKey: input.idempotencyKey,
+      summary,
+      customerName: customer?.name ?? null,
+    });
+    maybeFail("action");
+  }
+
+  let communicationId = claimed.communicationId;
+  if (customer) {
+    communicationId = await ensurePhoneCommunication(db, access, {
+      claimedId: claimed.id,
+      kind,
+      idempotencyKey: input.idempotencyKey,
+      summary,
+      callbackNeeded,
+      customer,
+      threadId: thread?.id ?? claimed.threadId,
+      last4: usable ? destinationLast4(digits) : null,
+      fingerprint: usable ? destinationFingerprint(access.businessId, digits) : null,
+    });
+    maybeFail("communication");
+  }
+
+  await db.phoneInteraction.updateMany({
+    where: { id: claimed.id, businessId: access.businessId },
+    data: {
+      customerId: customer?.id ?? claimed.customerId,
+      threadId: thread?.id ?? claimed.threadId,
+      communicationId,
+      followUpActionItemId: actionItemId,
+      requestId: input.requestId || null,
+      jobId: input.jobId || null,
+      callbackNeeded,
+      status: callbackNeeded ? "CALLBACK_NEEDED" : "LOGGED",
+    },
+  });
+  if (thread) {
+    await touchCommunicationThread(db, {
+      businessId: access.businessId,
+      threadId: thread.id,
+    });
+  }
+
+  return {
+    ok: true,
+    phoneInteractionId: claimed.id,
+    communicationId,
+    actionItemId,
+    reused,
+    failureReason: null,
+  };
+}
+
 export async function recordMissedOrManualCall(
   db: Db,
   access: CommunicationAccess,
@@ -135,14 +337,6 @@ export async function recordMissedOrManualCall(
     return failed("Summary and idempotency key are required.");
   }
 
-  const existing = await db.phoneInteraction.findFirst({
-    where: {
-      businessId: access.businessId,
-      idempotencyKey: input.idempotencyKey,
-    },
-  });
-  if (existing) return reusedFrom(existing);
-
   const resolved = await resolvePhoneLogCustomer(db, access, input);
   if (!resolved.ok) return failed(resolved.reason);
 
@@ -163,6 +357,16 @@ export async function recordMissedOrManualCall(
         title: customer.name,
       })
     : null;
+
+  const existing = await db.phoneInteraction.findFirst({
+    where: {
+      businessId: access.businessId,
+      idempotencyKey: input.idempotencyKey,
+    },
+  });
+  if (existing) {
+    return completePhoneLog(db, access, input, existing, customer, true);
+  }
 
   let claimed;
   try {
@@ -192,118 +396,10 @@ export async function recordMissedOrManualCall(
           idempotencyKey: input.idempotencyKey,
         },
       });
-      if (raced) return reusedFrom(raced);
+      if (raced) return completePhoneLog(db, access, input, raced, customer, true);
     }
     return failed("The phone log could not be saved.");
   }
 
-  const recommendationKey = `phone-callback:${input.idempotencyKey}`;
-  let actionItemId: string | null = null;
-  if (input.callbackNeeded) {
-    const existingAction = await db.businessActionItem.findFirst({
-      where: { businessId: access.businessId, recommendationKey },
-    });
-    if (existingAction) {
-      actionItemId = existingAction.id;
-    } else {
-      try {
-        const action = await db.businessActionItem.create({
-          data: {
-            businessId: access.businessId,
-            recommendationKey,
-            title: customer ? `Call back ${customer.name}` : "Call back a missed caller",
-            notes: input.summary.trim(),
-            createdByMembershipId: access.workspace.membership?.id ?? null,
-          },
-        });
-        actionItemId = action.id;
-      } catch (error) {
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-          const racedAction = await db.businessActionItem.findFirst({
-            where: { businessId: access.businessId, recommendationKey },
-          });
-          actionItemId = racedAction?.id ?? null;
-        } else {
-          throw error;
-        }
-      }
-    }
-  }
-
-  const communicationKey = `phone:${input.kind}:${input.idempotencyKey}`;
-  let communicationId: string | null = null;
-  if (customer) {
-    const existingCommunication = await db.customerCommunication.findFirst({
-      where: { businessId: access.businessId, idempotencyKey: communicationKey },
-    });
-    if (existingCommunication) {
-      communicationId = existingCommunication.id;
-    } else {
-      try {
-        const communication = await db.customerCommunication.create({
-          data: {
-            businessId: access.businessId,
-            customerId: customer.id,
-            threadId: thread?.id ?? null,
-            direction: "INBOUND",
-            channel: "PHONE",
-            purpose: input.kind,
-            subject: input.callbackNeeded ? "Callback needed" : "Phone log",
-            relatedType: "PHONE_INTERACTION",
-            relatedId: claimed.id,
-            idempotencyKey: communicationKey,
-            destinationLast4: usable ? destinationLast4(digits) : null,
-            destinationFingerprint: usable
-              ? destinationFingerprint(access.businessId, digits)
-              : null,
-            consentContext: consentContextSnapshot({
-              smsConsentStatus: customer.smsConsentStatus,
-              emailAvailable: Boolean(customer.email),
-              channel: "PHONE",
-            }),
-            bodySnapshot: input.summary.trim(),
-            status: "SENT",
-            provider: "manual",
-            initiatedByMembershipId: access.workspace.membership?.id ?? null,
-            attemptedAt: new Date(),
-          },
-        });
-        communicationId = communication.id;
-      } catch (error) {
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-          const racedCommunication = await db.customerCommunication.findFirst({
-            where: { businessId: access.businessId, idempotencyKey: communicationKey },
-          });
-          communicationId = racedCommunication?.id ?? null;
-        } else {
-          throw error;
-        }
-      }
-    }
-  }
-
-  await db.phoneInteraction.updateMany({
-    where: { id: claimed.id, businessId: access.businessId },
-    data: {
-      communicationId,
-      followUpActionItemId: actionItemId,
-      requestId: input.requestId || null,
-      jobId: input.jobId || null,
-    },
-  });
-  if (thread) {
-    await touchCommunicationThread(db, {
-      businessId: access.businessId,
-      threadId: thread.id,
-    });
-  }
-
-  return {
-    ok: true,
-    phoneInteractionId: claimed.id,
-    communicationId,
-    actionItemId,
-    reused: false,
-    failureReason: null,
-  };
+  return completePhoneLog(db, access, input, claimed, customer, false);
 }

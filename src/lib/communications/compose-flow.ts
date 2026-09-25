@@ -109,13 +109,18 @@ export function shouldRotateCommunicationSendAttemptId(result: {
   return Boolean(result.message);
 }
 
+/**
+ * One logical failed AI attempt keeps the same key for retry.
+ * Rotate only after a confirmed successful suggestion, for the next request.
+ */
 export function shouldRotateCommunicationAiAttemptId(result: {
   inProgress?: boolean;
   text?: string;
   error?: string;
 }) {
   if (result.inProgress) return false;
-  return Boolean(result.text || result.error);
+  if (result.error) return false;
+  return Boolean(result.text);
 }
 
 export function nextCommunicationAttemptId(

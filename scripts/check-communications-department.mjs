@@ -67,6 +67,8 @@ const {
   purposeForComposeTemplate,
   recordMissedOrManualCall,
   recordInboundCallEvent,
+  setPhoneLogFailureAfter,
+  PHONE_LOG_INJECTED_FAILURE_PREFIX,
   resetCommunicationEmailSender,
   runCommunicationAssist,
   setCommunicationEmailSender,
@@ -284,8 +286,12 @@ try {
     "Attempt-id rotation uses the action result, not stale pre-dispatch state",
     composeFormSrc.includes("nextCommunicationAttemptId") &&
       composeFormSrc.includes("shouldRotateCommunicationSendAttemptId") &&
+      composeFormSrc.includes("shouldRotateCommunicationAiAttemptId") &&
       !composeFormSrc.includes("shouldRotateAiAttemptId(sendState)") &&
-      !composeFormSrc.includes("shouldRotateAiAttemptId(aiState)"),
+      !composeFormSrc.includes("shouldRotateAiAttemptId(aiState)") &&
+      /export function shouldRotateCommunicationAiAttemptId[\s\S]*if \(result\.error\) return false/.test(
+        composeFlowSrc,
+      ),
   );
   check(
     "Automation catalog includes estimate no-action and owner follow-up",
@@ -655,9 +661,33 @@ try {
     shouldRotateCommunicationAiAttemptId,
     () => randomUUID(),
   );
+  const failedAi = nextCommunicationAttemptId(
+    attemptKeep,
+    { error: "The AI request failed." },
+    shouldRotateCommunicationAiAttemptId,
+    () => randomUUID(),
+  );
+  const retryAiSuccess = nextCommunicationAttemptId(
+    failedAi,
+    { text: "Suggested draft for the owner to review." },
+    shouldRotateCommunicationAiAttemptId,
+    () => randomUUID(),
+  );
+  const nextIntentionalAi = nextCommunicationAttemptId(
+    retryAiSuccess,
+    { text: "Next intentional request." },
+    shouldRotateCommunicationAiAttemptId,
+    () => randomUUID(),
+  );
   check(
     "Failed send keeps the same attempt id; confirmed success rotates; in-progress AI does not",
     failedRotate === attemptKeep && successRotate !== attemptKeep && pendingAi === attemptKeep,
+  );
+  check(
+    "AI failure keeps the same attempt id; retry success then rotates for the next request",
+    failedAi === attemptKeep &&
+      retryAiSuccess !== failedAi &&
+      nextIntentionalAi !== retryAiSuccess,
   );
 
   const composeFields = buildComposeFormFields({
@@ -807,6 +837,92 @@ try {
       concurrentPhones.length === 1 &&
       concurrentComms.length === 1 &&
       concurrentActions.length === 1,
+  );
+
+  async function assertLogicalPhoneLog(businessId, idempotencyKey, label) {
+    const phones = await prisma.phoneInteraction.findMany({
+      where: { businessId, idempotencyKey },
+    });
+    const comms = await prisma.customerCommunication.findMany({
+      where: { businessId, idempotencyKey: `phone:MISSED_CALL:${idempotencyKey}` },
+    });
+    const actions = await prisma.businessActionItem.findMany({
+      where: { businessId, recommendationKey: `phone-callback:${idempotencyKey}` },
+    });
+    check(
+      label,
+      phones.length === 1 &&
+        comms.length === 1 &&
+        actions.length === 1 &&
+        phones[0].communicationId === comms[0].id &&
+        phones[0].followUpActionItemId === actions[0].id,
+    );
+    return { phones, comms, actions };
+  }
+
+  async function injectAndRetry(stage, idempotencyKey) {
+    const payload = {
+      kind: "MISSED_CALL",
+      customerId: customerA.id,
+      summary: `Crash after ${stage}.`,
+      callbackNeeded: true,
+      requestId: requestA.id,
+      idempotencyKey,
+    };
+    setPhoneLogFailureAfter(stage);
+    let injected = false;
+    try {
+      await recordMissedOrManualCall(prisma, tenantA.access, payload);
+    } catch (error) {
+      injected = String(error?.message ?? "").startsWith(
+        `${PHONE_LOG_INJECTED_FAILURE_PREFIX}${stage}`,
+      );
+    }
+    setPhoneLogFailureAfter(null);
+    const repaired = await recordMissedOrManualCall(prisma, tenantA.access, payload);
+    return { injected, repaired };
+  }
+
+  const afterClaimKey = `missed-crash-claimed-${randomUUID()}`;
+  const afterClaim = await injectAndRetry("claimed", afterClaimKey);
+  const afterClaimPartial = await prisma.phoneInteraction.findFirst({
+    where: { businessId: tenantA.business.id, idempotencyKey: afterClaimKey },
+  });
+  check(
+    "Crash after PhoneInteraction claim leaves the claim and is retryable",
+    afterClaim.injected &&
+      afterClaimPartial &&
+      afterClaim.repaired.ok &&
+      afterClaim.repaired.reused,
+  );
+  await assertLogicalPhoneLog(
+    tenantA.business.id,
+    afterClaimKey,
+    "Retry after claim crash converges to one phone log, communication, and callback",
+  );
+
+  const afterActionKey = `missed-crash-action-${randomUUID()}`;
+  const afterAction = await injectAndRetry("action", afterActionKey);
+  check(
+    "Crash after callback action is retryable",
+    afterAction.injected && afterAction.repaired.ok && afterAction.repaired.reused,
+  );
+  await assertLogicalPhoneLog(
+    tenantA.business.id,
+    afterActionKey,
+    "Retry after callback-action crash reuses the action and completes the communication",
+  );
+
+  const afterCommKey = `missed-crash-communication-${randomUUID()}`;
+  const afterComm = await injectAndRetry("communication", afterCommKey);
+  check(
+    "Crash after communication is retryable",
+    afterComm.injected && afterComm.repaired.ok && afterComm.repaired.reused,
+  );
+  await assertLogicalPhoneLog(
+    tenantA.business.id,
+    afterCommKey,
+    "Retry after communication crash links the existing rows without duplicates",
   );
 
   console.log("\nDB — Tenant isolation and role checks");
