@@ -669,7 +669,7 @@ try {
     subscriptionId: "sub_alpha_founder",
     priceId: "price_saas_test_STARTER",
     id: "evt_alpha_down",
-    created: Math.floor(Date.now() / 1000) + 20,
+    created: Math.floor(Date.now() / 1000) + 40,
   });
   const afterDown = await prisma.businessSaasSubscription.findUnique({
     where: { businessId: alpha.business.id },
