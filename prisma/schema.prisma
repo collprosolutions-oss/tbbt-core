@@ -455,6 +455,7 @@ model Membership {
   websitePublishes                WebsitePublish[]          @relation("WebsitePublishAuthor")
   websiteGalleryItems             WebsiteGalleryItem[]      @relation("WebsiteGalleryCreator")
   createdGrowthActions            GrowthActionRequest[]     @relation("GrowthActionCreator")
+  approvedGrowthActions           GrowthActionRequest[]     @relation("GrowthActionApprover")
   leadAttributionCorrections      LeadAttributionCorrection[] @relation("LeadAttributionActor")
 
   @@unique([userId, businessId])
@@ -2842,7 +2843,10 @@ model GrowthActionRequest {
   evidenceJson          String    @default("{}")
   notes                 String    @default("")
   createdByMembershipId String?
+  approvedByMembershipId String?
   approvedAt            DateTime?
+  /// Stable logical key so retry/double-click cannot create a second row.
+  idempotencyKey        String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
@@ -2853,7 +2857,9 @@ model GrowthActionRequest {
   job           Job?              @relation(fields: [jobId], references: [id], onDelete: SetNull)
   campaign      MarketingCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   createdBy     Membership?       @relation("GrowthActionCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  approvedBy    Membership?       @relation("GrowthActionApprover", fields: [approvedByMembershipId], references: [id], onDelete: SetNull)
 
+  @@unique([businessId, idempotencyKey])
   @@index([businessId])
   @@index([businessId, status])
   @@index([businessId, queue])

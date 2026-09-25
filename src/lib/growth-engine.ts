@@ -11,6 +11,9 @@ import {
 } from "@/lib/pipeline";
 import { asNumber } from "@/lib/reports";
 import { parseLeadSource } from "@/lib/lead-attribution";
+import { isSmsConsentGranted } from "@/lib/customer-messaging/consent";
+import { isUsableEmail } from "@/lib/mail";
+import { collectedForJob, resolveCollectedCash } from "@/lib/collected-cash";
 import {
   ATTRIBUTION_KIND_LABELS,
   COST_ROI_UNAVAILABLE_MESSAGE,
@@ -75,6 +78,19 @@ export type GrowthInvoiceRow = {
   total: GrowthMoney;
   paidAt: Date | null;
   createdAt: Date;
+};
+
+export type GrowthPaymentRow = {
+  id: string;
+  invoiceId: string | null;
+  jobId: string | null;
+  customerId: string | null;
+  amount: GrowthMoney;
+};
+
+export type GrowthJobCompletionRow = {
+  jobId: string;
+  completedAt: Date;
 };
 
 export type GrowthPipelineRow = {
@@ -171,6 +187,8 @@ export type GrowthSource = {
   estimates: GrowthEstimateRow[];
   jobs: GrowthJobRow[];
   invoices: GrowthInvoiceRow[];
+  payments?: GrowthPaymentRow[];
+  jobCompletions?: GrowthJobCompletionRow[];
   pipeline: GrowthPipelineRow[];
   customers: GrowthCustomerRow[];
   campaigns: GrowthCampaignRow[];
@@ -246,6 +264,9 @@ export type RecoveryItem = {
   customerName: string;
   value: number | null;
   consentEligible: boolean;
+  emailEligible: boolean;
+  smsEligible: boolean;
+  anyOutreachEligible: boolean;
   smsConsentStatus: string;
   href: string;
   evidence: GrowthEvidence[];
@@ -255,13 +276,25 @@ export type ReactivationCandidate = {
   customerId: string;
   customerName: string;
   completedJobs: number;
-  lastCompletedAt: Date;
-  daysSinceCompleted: number;
+  lastCompletedAt: Date | null;
+  completionSource: "JOB_COMPLETED" | "unknown";
+  daysSinceCompleted: number | null;
   consentEligible: boolean;
+  emailEligible: boolean;
+  smsEligible: boolean;
+  anyOutreachEligible: boolean;
   smsConsentStatus: string;
   hasEmail: boolean;
   href: string;
 };
+
+export type ReactivationRejectionReason =
+  | "not_found"
+  | "no_completed_work"
+  | "no_completion_clock"
+  | "too_recent"
+  | "active_work"
+  | "not_outreach_eligible";
 
 export type ReviewConversion = {
   completedJobs: number;
@@ -320,13 +353,34 @@ export function campaignRoi(input: {
   };
 }
 
+export function outreachEligibility(customer: {
+  smsConsentStatus: string | null | undefined;
+  email?: string | null;
+}) {
+  const smsEligible = isSmsConsentGranted(customer.smsConsentStatus);
+  const emailEligible = isUsableEmail(customer.email);
+  return {
+    smsEligible,
+    emailEligible,
+    anyOutreachEligible: smsEligible || emailEligible,
+  };
+}
+
+/** Any recorded outreach channel. SMS revocation does not block email. */
 export function isConsentEligible(customer: {
   smsConsentStatus: string | null | undefined;
   email?: string | null;
 }): boolean {
-  if (customer.smsConsentStatus === "REVOKED") return false;
-  if (customer.smsConsentStatus === "GRANTED") return true;
-  return Boolean(customer.email?.trim());
+  return outreachEligibility(customer).anyOutreachEligible;
+}
+
+export function outreachEligibilityLabel(input: {
+  emailEligible: boolean;
+  smsEligible: boolean;
+}) {
+  return `${input.emailEligible ? "Email eligible" : "Email not eligible"} · ${
+    input.smsEligible ? "SMS eligible" : "SMS blocked"
+  }`;
 }
 
 export function classifyAttribution(input: {
@@ -383,16 +437,12 @@ export function preserveOriginalSource<T extends {
   };
 }
 
-function invoiceTotalsForJob(invoices: readonly GrowthInvoiceRow[], jobId: string) {
-  const rows = invoices.filter((invoice) => invoice.jobId === jobId);
-  return {
-    invoiced: rows
-      .filter((invoice) => invoice.status === "SENT" || invoice.status === "PAID")
-      .reduce((sum, invoice) => sum + moneyAmount(invoice.total), 0),
-    collected: rows
-      .filter((invoice) => invoice.status === "PAID")
-      .reduce((sum, invoice) => sum + moneyAmount(invoice.total), 0),
-  };
+function jobMoney(source: GrowthSource, jobId: string) {
+  return collectedForJob({
+    jobId,
+    invoices: source.invoices,
+    payments: source.payments ?? [],
+  });
 }
 
 function referredCustomerIds(referrals: readonly GrowthReferralRow[]) {
@@ -435,7 +485,10 @@ export function buildGrowthFunnel(source: GrowthSource): GrowthFunnel {
   }
 
   const issued = source.invoices.filter((row) => row.status === "SENT" || row.status === "PAID");
-  const collected = source.invoices.filter((row) => row.status === "PAID");
+  const cash = resolveCollectedCash({
+    invoices: source.invoices,
+    payments: source.payments ?? [],
+  });
   const referralOrReactivation =
     source.referrals.filter((row) => row.status !== "CANCELLED").length +
     source.followUps.filter((row) => row.kind === "REPEAT").length;
@@ -453,8 +506,8 @@ export function buildGrowthFunnel(source: GrowthSource): GrowthFunnel {
     },
     {
       key: "collected",
-      count: collected.length,
-      amount: collected.reduce((sum, row) => sum + moneyAmount(row.total), 0),
+      count: cash.collectionCount,
+      amount: cash.totalCollected,
     },
     { key: "review", count: source.reviews.length, amount: null },
     { key: "referral", count: referralOrReactivation, amount: null },
@@ -514,7 +567,7 @@ export function buildSourcePerformance(source: GrowthSource) {
   }
   for (const job of source.jobs) {
     const item = bucket(job.leadSource);
-    const money = invoiceTotalsForJob(source.invoices, job.id);
+    const money = jobMoney(source, job.id);
     item.invoicedRevenue += money.invoiced;
     item.collectedRevenue += money.collected;
   }
@@ -619,7 +672,7 @@ export function buildCampaignPerformance(source: GrowthSource): CampaignPerforma
       campaignId: job.campaignId,
       originalCampaignId: request?.originalCampaignId ?? job.campaignId,
     }));
-    const money = invoiceTotalsForJob(source.invoices, job.id);
+    const money = jobMoney(source, job.id);
     item.invoicedRevenue += money.invoiced;
     item.collectedRevenue += money.collected;
   }
@@ -691,7 +744,7 @@ export function buildReferralAttribution(source: GrowthSource): ReferralAttribut
     let invoiced = 0;
     let collected = 0;
     for (const job of jobs) {
-      const money = invoiceTotalsForJob(source.invoices, job.id);
+      const money = jobMoney(source, job.id);
       invoiced += money.invoiced;
       collected += money.collected;
     }
@@ -754,9 +807,9 @@ export function buildRecoveryQueue(source: GrowthSource): RecoveryItem[] {
     const estimate = pickPrimaryEstimate(estimates);
     const customer = request.customerId ? customers.get(request.customerId) : null;
     const { stage, followUp, hasJob } = opportunityStage(source, request, estimate);
-    const consentEligible = customer
-      ? isConsentEligible(customer)
-      : false;
+    const outreach = customer
+      ? outreachEligibility(customer)
+      : { smsEligible: false, emailEligible: false, anyOutreachEligible: false };
     const value = estimate ? Number(estimateDealValue({ ...estimate, total: estimate.total ?? 0 }) ?? 0) || null : null;
     const href = `/pipeline`;
     const base = {
@@ -765,7 +818,10 @@ export function buildRecoveryQueue(source: GrowthSource): RecoveryItem[] {
       customerId: request.customerId,
       customerName: customer?.name ?? "Customer",
       value,
-      consentEligible,
+      consentEligible: outreach.anyOutreachEligible,
+      emailEligible: outreach.emailEligible,
+      smsEligible: outreach.smsEligible,
+      anyOutreachEligible: outreach.anyOutreachEligible,
       smsConsentStatus: customer?.smsConsentStatus ?? "UNKNOWN",
       href,
     };
@@ -844,7 +900,9 @@ export function buildRecoveryQueue(source: GrowthSource): RecoveryItem[] {
   for (const estimate of source.estimates.filter((row) => !row.serviceRequestId)) {
     const { stage, followUp, hasJob } = opportunityStage(source, null, estimate);
     const customer = estimate.customerId ? customers.get(estimate.customerId) : null;
-    const consentEligible = customer ? isConsentEligible(customer) : false;
+    const outreach = customer
+      ? outreachEligibility(customer)
+      : { smsEligible: false, emailEligible: false, anyOutreachEligible: false };
     const value = Number(estimateDealValue({ ...estimate, total: estimate.total ?? 0 }) ?? 0) || null;
     const href = `/pipeline`;
     const base = {
@@ -853,7 +911,10 @@ export function buildRecoveryQueue(source: GrowthSource): RecoveryItem[] {
       customerId: estimate.customerId,
       customerName: customer?.name ?? "Customer",
       value,
-      consentEligible,
+      consentEligible: outreach.anyOutreachEligible,
+      emailEligible: outreach.emailEligible,
+      smsEligible: outreach.smsEligible,
+      anyOutreachEligible: outreach.anyOutreachEligible,
       smsConsentStatus: customer?.smsConsentStatus ?? "UNKNOWN",
       href,
     };
@@ -892,8 +953,7 @@ export function buildRecoveryQueue(source: GrowthSource): RecoveryItem[] {
   return items;
 }
 
-export function buildReactivationCandidates(source: GrowthSource): ReactivationCandidate[] {
-  const customers = new Map(source.customers.map((row) => [row.id, row]));
+function activeReactivationCustomerIds(source: GrowthSource) {
   const activeCustomerIds = new Set<string>();
   for (const job of source.jobs) {
     if (job.customerId && job.status !== "COMPLETED") activeCustomerIds.add(job.customerId);
@@ -905,40 +965,81 @@ export function buildReactivationCandidates(source: GrowthSource): ReactivationC
     const { stage, hasJob } = opportunityStage(source, request, estimate);
     if (!hasJob && stage !== "LOST" && stage !== "WON") activeCustomerIds.add(request.customerId);
   }
+  return activeCustomerIds;
+}
 
-  const completedByCustomer = new Map<string, { count: number; last: Date }>();
+function completionAtForJob(source: GrowthSource, jobId: string): Date | null {
+  const events = (source.jobCompletions ?? []).filter((row) => row.jobId === jobId);
+  if (events.length === 0) return null;
+  return events.reduce((earliest, row) =>
+    row.completedAt.getTime() < earliest.getTime() ? row.completedAt : earliest,
+  events[0]!.completedAt);
+}
+
+export function evaluateReactivationEligibility(
+  source: GrowthSource,
+  customerId: string,
+):
+  | { ok: true; candidate: ReactivationCandidate }
+  | { ok: false; reason: ReactivationRejectionReason; candidate: ReactivationCandidate | null } {
+  const customer = source.customers.find((row) => row.id === customerId);
+  if (!customer) {
+    return { ok: false, reason: "not_found", candidate: null };
+  }
+  const outreach = outreachEligibility(customer);
+  const completedJobs = source.jobs.filter((job) => job.status === "COMPLETED" && job.customerId === customerId);
+  const clocks = completedJobs
+    .map((job) => completionAtForJob(source, job.id))
+    .filter((value): value is Date => Boolean(value))
+    .sort((a, b) => b.getTime() - a.getTime());
+  const lastCompletedAt = clocks[0] ?? null;
+  const daysSinceCompleted = lastCompletedAt ? daysSince(lastCompletedAt, source.now) : null;
+  const candidate: ReactivationCandidate = {
+    customerId,
+    customerName: customer.name,
+    completedJobs: completedJobs.length,
+    lastCompletedAt,
+    completionSource: lastCompletedAt ? "JOB_COMPLETED" : "unknown",
+    daysSinceCompleted,
+    consentEligible: outreach.anyOutreachEligible,
+    emailEligible: outreach.emailEligible,
+    smsEligible: outreach.smsEligible,
+    anyOutreachEligible: outreach.anyOutreachEligible,
+    smsConsentStatus: customer.smsConsentStatus,
+    hasEmail: outreach.emailEligible,
+    href: `/customers/${customerId}`,
+  };
+
+  if (completedJobs.length === 0) {
+    return { ok: false, reason: "no_completed_work", candidate };
+  }
+  if (!lastCompletedAt || daysSinceCompleted == null) {
+    return { ok: false, reason: "no_completion_clock", candidate };
+  }
+  if (activeReactivationCustomerIds(source).has(customerId)) {
+    return { ok: false, reason: "active_work", candidate };
+  }
+  if (daysSinceCompleted < REACTIVATION_AFTER_DAYS) {
+    return { ok: false, reason: "too_recent", candidate };
+  }
+  if (!outreach.anyOutreachEligible) {
+    return { ok: false, reason: "not_outreach_eligible", candidate };
+  }
+  return { ok: true, candidate };
+}
+
+export function buildReactivationCandidates(source: GrowthSource): ReactivationCandidate[] {
+  const seen = new Set<string>();
+  const rows: ReactivationCandidate[] = [];
   for (const job of source.jobs) {
-    if (job.status !== "COMPLETED" || !job.customerId) continue;
-    const current = completedByCustomer.get(job.customerId);
-    const at = job.updatedAt;
-    if (!current) completedByCustomer.set(job.customerId, { count: 1, last: at });
-    else {
-      current.count += 1;
-      if (at.getTime() > current.last.getTime()) current.last = at;
+    if (job.status !== "COMPLETED" || !job.customerId || seen.has(job.customerId)) continue;
+    seen.add(job.customerId);
+    const result = evaluateReactivationEligibility(source, job.customerId);
+    if (result.candidate && (result.ok || result.reason === "not_outreach_eligible")) {
+      rows.push(result.candidate);
     }
   }
-
-  const rows: ReactivationCandidate[] = [];
-  for (const [customerId, stats] of completedByCustomer) {
-    if (activeCustomerIds.has(customerId)) continue;
-    const days = daysSince(stats.last, source.now);
-    if (days < REACTIVATION_AFTER_DAYS) continue;
-    const customer = customers.get(customerId);
-    if (!customer) continue;
-    const consentEligible = isConsentEligible(customer);
-    rows.push({
-      customerId,
-      customerName: customer.name,
-      completedJobs: stats.count,
-      lastCompletedAt: stats.last,
-      daysSinceCompleted: days,
-      consentEligible,
-      smsConsentStatus: customer.smsConsentStatus,
-      hasEmail: Boolean(customer.email?.trim()),
-      href: `/customers/${customerId}`,
-    });
-  }
-  return rows.sort((a, b) => b.daysSinceCompleted - a.daysSinceCompleted);
+  return rows.sort((a, b) => (b.daysSinceCompleted ?? -1) - (a.daysSinceCompleted ?? -1));
 }
 
 export function buildLocalGrowth(source: GrowthSource): LocalGrowthArea[] {
@@ -1039,14 +1140,14 @@ export function buildGrowthRecommendations(input: {
     });
   }
 
-  const eligible = input.reactivation.filter((row) => row.consentEligible);
+  const eligible = input.reactivation.filter((row) => row.anyOutreachEligible);
   if (eligible.length > 0) {
     items.push({
       key: "reactivate-prior-customers",
       title: "Reactivate prior customers",
       why: "Completed customers have no active job or request and meet the elapsed-time rule.",
       evidence: [
-        { key: "eligible", label: "Consent-eligible candidates", value: String(eligible.length), href: "/growth?area=reactivation" },
+        { key: "eligible", label: "Outreach-eligible candidates", value: String(eligible.length), href: "/growth?area=reactivation" },
         {
           key: "days",
           label: "Days since last completed job (oldest)",

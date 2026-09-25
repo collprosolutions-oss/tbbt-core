@@ -24,7 +24,7 @@ import {
   classifyAttribution,
   type GrowthSource,
 } from "@/lib/growth-engine";
-import { asNumber } from "@/lib/reports";
+import { invoicedAmount, resolveCollectedCash } from "@/lib/collected-cash";
 
 function referredIds(source: GrowthSource) {
   return new Set(
@@ -45,6 +45,8 @@ export async function loadGrowthSource(
     estimates,
     jobs,
     invoices,
+    payments,
+    jobCompletionEvents,
     pipeline,
     customers,
     campaigns,
@@ -112,6 +114,20 @@ export async function loadGrowthSource(
         paidAt: true,
         createdAt: true,
       },
+    }),
+    prisma.payment.findMany({
+      where: scope,
+      select: {
+        id: true,
+        invoiceId: true,
+        jobId: true,
+        customerId: true,
+        amount: true,
+      },
+    }),
+    prisma.businessEvent.findMany({
+      where: { ...scope, type: "JOB_COMPLETED", subjectType: "JOB" },
+      select: { subjectId: true, occurredAt: true },
     }),
     prisma.pipelineOpportunity.findMany({
       where: scope,
@@ -223,6 +239,11 @@ export async function loadGrowthSource(
     estimates,
     jobs,
     invoices,
+    payments,
+    jobCompletions: jobCompletionEvents.map((row) => ({
+      jobId: row.subjectId,
+      completedAt: row.occurredAt,
+    })),
     pipeline,
     customers,
     campaigns,
@@ -294,12 +315,11 @@ export async function loadGrowthWorkspace(
     };
   });
 
-  const collected = source.invoices
-    .filter((row) => row.status === "PAID")
-    .reduce((sum, row) => sum + asNumber(row.total), 0);
-  const invoiced = source.invoices
-    .filter((row) => row.status === "SENT" || row.status === "PAID")
-    .reduce((sum, row) => sum + asNumber(row.total), 0);
+  const collected = resolveCollectedCash({
+    invoices: source.invoices,
+    payments: source.payments ?? [],
+  }).totalCollected;
+  const invoiced = invoicedAmount(source.invoices);
 
   return {
     businessId,
@@ -328,7 +348,7 @@ export async function loadGrowthWorkspace(
       collected,
       invoiced,
       recoveryOpen: recovery.length,
-      reactivationEligible: reactivation.filter((row) => row.consentEligible).length,
+      reactivationEligible: reactivation.filter((row) => row.anyOutreachEligible).length,
     },
   };
 }

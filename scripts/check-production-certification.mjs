@@ -177,6 +177,14 @@ try {
       growthDepartmentMigration.includes("LeadAttributionCorrection") &&
       growthDepartmentMigration.includes("GrowthActionRequest"),
   );
+  const growthHardeningMigration = read("prisma/migrations/20260925230000_growth_department_hardening/migration.sql");
+  check(
+    "Growth department hardening migration is additive",
+    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(growthHardeningMigration) &&
+      growthHardeningMigration.includes("ADD COLUMN IF NOT EXISTS") &&
+      growthHardeningMigration.includes("idempotencyKey") &&
+      growthHardeningMigration.includes("approvedByMembershipId"),
+  );
 
   check("OWNER and ADMIN can open the management console", canAccessManagementConsole("OWNER") && canAccessManagementConsole("ADMIN"));
   check("MEMBER cannot open the management console", canAccessManagementConsole("MEMBER") === false);

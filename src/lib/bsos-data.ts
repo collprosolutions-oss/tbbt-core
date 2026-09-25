@@ -194,7 +194,7 @@ export async function loadBsosFacts(
     recordedExpenses: { amount: asNumber(expenses._sum.amount) },
     growthRecoveryOpen: { count: buildRecoveryQueue(growthSource).length },
     growthReactivationEligible: {
-      count: buildReactivationCandidates(growthSource).filter((row) => row.consentEligible).length,
+      count: buildReactivationCandidates(growthSource).filter((row) => row.anyOutreachEligible).length,
     },
   };
 }

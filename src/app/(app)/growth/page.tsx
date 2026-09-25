@@ -49,12 +49,12 @@ export default async function GrowthPage({
         <>
           <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <Kpi label="Leads" value={String(source.totals.leads)} note="Recorded requests" />
-            <Kpi label="Collected" value={formatMoney(source.totals.collected)} note="PAID invoices only" />
+            <Kpi label="Collected" value={formatMoney(source.totals.collected)} note="Recorded payments; legacy PAID only when no Payment rows" />
             <Kpi label="Recovery queue" value={String(source.totals.recoveryOpen)} note="Deterministic follow-ups" />
             <Kpi
               label="Reactivation"
               value={String(source.totals.reactivationEligible)}
-              note="Consent-eligible prior customers"
+              note="Outreach-eligible prior customers"
             />
           </div>
           <GrowthWorkspace area={area} source={source} />

@@ -669,6 +669,18 @@ check(
     !workspaceLoader.includes("growth_department"),
 );
 
+const growthHardeningMigration = readFileSync(
+  new URL("../prisma/migrations/20260925230000_growth_department_hardening/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Growth department hardening migration is additive and idempotent",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(growthHardeningMigration) &&
+    growthHardeningMigration.includes('ADD COLUMN IF NOT EXISTS "idempotencyKey"') &&
+    growthHardeningMigration.includes('ADD COLUMN IF NOT EXISTS "approvedByMembershipId"') &&
+    growthHardeningMigration.includes("IF NOT EXISTS"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

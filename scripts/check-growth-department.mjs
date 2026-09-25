@@ -12,6 +12,12 @@ import { readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
+const generateEarly = spawnSync("npx", ["prisma", "generate"], { stdio: "inherit" });
+if (generateEarly.status !== 0) {
+  console.error("Failed to generate Prisma client for growth department checks.");
+  process.exit(generateEarly.status ?? 1);
+}
+
 const {
   CAPABILITIES,
   ForbiddenError,
@@ -24,9 +30,11 @@ const {
   COST_ROI_UNAVAILABLE_MESSAGE,
   SOCIAL_DISCONNECTED_MESSAGE,
   RANKING_UNAVAILABLE_MESSAGE,
+  OWNER_APPROVAL_REQUIRED_MESSAGE,
   parseGrowthArea,
   REACTIVATION_AFTER_DAYS,
 } = await import("@/lib/growth");
+const { resolveCollectedCash, collectedForJob } = await import("@/lib/collected-cash");
 const {
   buildCampaignPerformance,
   buildGrowthFunnel,
@@ -36,6 +44,7 @@ const {
   buildReviewConversion,
   campaignRoi,
   classifyAttribution,
+  outreachEligibility,
   preserveOriginalSource,
   shouldPreserveCustomerFirstTouch,
 } = await import("@/lib/growth-engine");
@@ -61,12 +70,6 @@ const testDbName = "tbbt_growth_department_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
-
-const generate = spawnSync("npx", ["prisma", "generate"], { stdio: "inherit" });
-if (generate.status !== 0) {
-  console.error("Failed to generate Prisma client for growth department checks.");
-  process.exit(generate.status ?? 1);
-}
 
 const push = spawnSync(
   "npx",
@@ -124,6 +127,35 @@ try {
       campaignRoi({ recordedCost: 100, collectedRevenue: 400 }).costAvailable === true,
   );
   check(
+    "$1,000 SENT invoice + $400 Payment collects $400",
+    resolveCollectedCash({
+      invoices: [{ id: "inv-sent", status: "SENT", total: 1000 }],
+      payments: [{ id: "pay-partial", amount: 400, invoiceId: "inv-sent" }],
+    }).totalCollected === 400,
+  );
+  check(
+    "Legacy PAID invoice with no Payment may use the full total",
+    resolveCollectedCash({
+      invoices: [{ id: "inv-legacy", status: "PAID", total: 1000 }],
+      payments: [],
+    }).totalCollected === 1000,
+  );
+  check(
+    "One Payment is not double-counted across invoice and job",
+    collectedForJob({
+      jobId: "job-1",
+      invoices: [{ id: "inv-paid", status: "PAID", total: 1000, jobId: "job-1" }],
+      payments: [{ id: "pay-once", amount: 400, invoiceId: "inv-paid", jobId: "job-1" }],
+    }).collected === 400,
+  );
+  check(
+    "SENT invoice total is never collected without Payment rows",
+    resolveCollectedCash({
+      invoices: [{ id: "inv-sent-only", status: "SENT", total: 1000 }],
+      payments: [],
+    }).totalCollected === 0,
+  );
+  check(
     "Original source is preserved when a later campaign arrives",
     JSON.stringify(
       preserveOriginalSource(
@@ -168,6 +200,8 @@ try {
     serviceAreas: [],
     localPageDrafts: [],
     publishedLocalPages: [],
+    payments: [],
+    jobCompletions: [],
   });
   check("Empty records do not fabricate funnel stages", emptyFunnel.stages.length === 0);
   const socialSrc = readFileSync(new URL("../src/lib/growth.ts", import.meta.url), "utf8");
@@ -300,8 +334,27 @@ try {
     data: {
       businessId: businessA.id,
       name: "Revoked Customer",
-      email: "revoked@example.com",
       smsConsentStatus: "REVOKED",
+      firstLeadSource: "MANUAL",
+      createdAt: daysAgo(200),
+    },
+  });
+  const emailAfterSmsRevoke = await prisma.customer.create({
+    data: {
+      businessId: businessA.id,
+      name: "Email After SMS Revoke",
+      email: "still-emailable@example.com",
+      smsConsentStatus: "REVOKED",
+      firstLeadSource: "MANUAL",
+      createdAt: daysAgo(200),
+    },
+  });
+  const staleCustomer = await prisma.customer.create({
+    data: {
+      businessId: businessA.id,
+      name: "Stale Consent Customer",
+      email: "stale@example.com",
+      smsConsentStatus: "GRANTED",
       firstLeadSource: "MANUAL",
       createdAt: daysAgo(200),
     },
@@ -491,8 +544,44 @@ try {
       updatedAt: daysAgo(REACTIVATION_AFTER_DAYS + 10),
     },
   });
-  void oldJob;
-  void revokedJob;
+  const emailRevokeJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: emailAfterSmsRevoke.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+      updatedAt: daysAgo(REACTIVATION_AFTER_DAYS + 8),
+    },
+  });
+  const staleJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: staleCustomer.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+      updatedAt: daysAgo(REACTIVATION_AFTER_DAYS + 6),
+    },
+  });
+  async function recordJobCompleted(jobId, at) {
+    await prisma.businessEvent.create({
+      data: {
+        businessId: businessA.id,
+        type: "JOB_COMPLETED",
+        subjectType: "JOB",
+        subjectId: jobId,
+        occurredAt: at,
+        idempotencyKey: `JOB_COMPLETED:${jobId}`,
+      },
+    });
+  }
+  await recordJobCompleted(oldJob.id, daysAgo(REACTIVATION_AFTER_DAYS + 5));
+  await recordJobCompleted(revokedJob.id, daysAgo(REACTIVATION_AFTER_DAYS + 10));
+  await recordJobCompleted(emailRevokeJob.id, daysAgo(REACTIVATION_AFTER_DAYS + 8));
+  await recordJobCompleted(staleJob.id, daysAgo(REACTIVATION_AFTER_DAYS + 6));
+  await prisma.job.update({
+    where: { id: oldJob.id },
+    data: { leadSource: "MANUAL" },
+  });
 
   const missedRequest = await prisma.serviceRequest.create({
     data: {
@@ -561,7 +650,7 @@ try {
   check("Funnel includes recorded lead and estimate stages", workspace.funnel.stages.some((row) => row.key === "lead") && workspace.funnel.stages.some((row) => row.key === "estimate"));
   check("Funnel includes collected only when PAID invoices exist", workspace.funnel.stages.some((row) => row.key === "collected"));
   check("Tenant isolation: Beta workspace does not include Alpha leads", betaWorkspace.totals.leads === 1 && !betaWorkspace.attributions.some((row) => row.requestId === neverEstimated.id));
-  check("Collected is PAID only and invoiced includes SENT", workspace.totals.collected === 250 && workspace.totals.invoiced === 650);
+  check("Legacy PAID invoice with no Payment uses the invoice total", workspace.totals.collected === 250 && workspace.totals.invoiced === 650);
   check("Social stays disconnected", workspace.social.connected === false && workspace.social.message === SOCIAL_DISCONNECTED_MESSAGE);
   check("Marketing channel honesty is reused", workspace.social.channelsMessage === CHANNELS_DISCONNECTED_MESSAGE);
   check("Local growth refuses ranking data", workspace.localHonesty === RANKING_UNAVAILABLE_MESSAGE);
@@ -581,8 +670,30 @@ try {
 
   const eligible = workspace.reactivation.filter((row) => row.customerId === repeatCustomer.id);
   const revoked = workspace.reactivation.filter((row) => row.customerId === revokedCustomer.id);
-  check("Reactivation includes prior completed customer", eligible.length === 1 && eligible[0].consentEligible === true);
-  check("Revoked consent is not eligible", revoked.length === 1 && revoked[0].consentEligible === false);
+  const emailOnly = workspace.reactivation.filter((row) => row.customerId === emailAfterSmsRevoke.id);
+  check(
+    "Reactivation includes prior completed customer",
+    eligible.length === 1 &&
+      eligible[0].anyOutreachEligible === true &&
+      eligible[0].completionSource === "JOB_COMPLETED",
+  );
+  check(
+    "Unrelated completed-job edit does not restart the reactivation clock",
+    eligible[0].daysSinceCompleted >= REACTIVATION_AFTER_DAYS,
+  );
+  check(
+    "SMS revoked without email is not outreach-eligible",
+    revoked.length === 1 && revoked[0].smsEligible === false && revoked[0].emailEligible === false && revoked[0].anyOutreachEligible === false,
+  );
+  check(
+    "SMS revoked with a usable email remains email-eligible and SMS blocked",
+    emailOnly.length === 1 &&
+      emailOnly[0].emailEligible === true &&
+      emailOnly[0].smsEligible === false &&
+      emailOnly[0].anyOutreachEligible === true,
+  );
+  const outreachRevokedEmail = outreachEligibility({ smsConsentStatus: "REVOKED", email: "still-emailable@example.com" });
+  check("Channel helper keeps email open after SMS revoke", outreachRevokedEmail.emailEligible && !outreachRevokedEmail.smsEligible);
 
   const corrected = await correctLeadAttribution(prisma, ownerA, {
     requestId: neverEstimated.id,
@@ -635,8 +746,73 @@ try {
   } catch (error) {
     check("Revoked customer cannot be approved for reactivation", error instanceof GrowthError);
   }
+  try {
+    await approveReactivationCandidates(prisma, adminA, { customerIds: [emailAfterSmsRevoke.id] });
+    check("ADMIN cannot approve reactivation", false);
+  } catch (error) {
+    check(
+      "ADMIN cannot approve reactivation",
+      error instanceof GrowthError && error.message === OWNER_APPROVAL_REQUIRED_MESSAGE,
+    );
+  }
+  const prepared = await createGrowthActionRequest(prisma, adminA, {
+    kind: "REACTIVATION",
+    queue: "REACTIVATION",
+    customerId: emailAfterSmsRevoke.id,
+  });
+  check("ADMIN may prepare an open reactivation action", prepared.status === "OPEN");
+
+  await prisma.customer.update({
+    where: { id: staleCustomer.id },
+    data: { email: null, smsConsentStatus: "REVOKED" },
+  });
+  try {
+    await approveReactivationCandidates(prisma, ownerA, { customerIds: [staleCustomer.id] });
+    check("Stale consent is rechecked on approval", false);
+  } catch (error) {
+    check("Stale consent is rechecked on approval", error instanceof GrowthError);
+  }
+
+  const neverCompleted = await prisma.customer.create({
+    data: { businessId: businessA.id, name: "No Work Customer", smsConsentStatus: "GRANTED", email: "nowork@example.com" },
+  });
+  try {
+    await approveReactivationCandidates(prisma, ownerA, { customerIds: [neverCompleted.id] });
+    check("Approval revalidates completed-work facts", false);
+  } catch (error) {
+    check("Approval revalidates completed-work facts", error instanceof GrowthError);
+  }
+
+  try {
+    await createGrowthActionRequest(prisma, ownerA, {
+      kind: "RECOVERY",
+      queue: "NEVER_ESTIMATED",
+      customerId: referred.id,
+      serviceRequestId: neverEstimated.id,
+    });
+    check("Same-tenant wrong-customer related IDs are rejected", false);
+  } catch (error) {
+    check(
+      "Same-tenant wrong-customer related IDs are rejected",
+      error instanceof GrowthError && /same customer/.test(error.message),
+    );
+  }
+
   const approved = await approveReactivationCandidates(prisma, ownerA, { customerIds: [repeatCustomer.id] });
-  check("Owner can approve a consent-eligible reactivation", approved.length === 1 && approved[0].status === "APPROVED");
+  const approvedAgain = await approveReactivationCandidates(prisma, ownerA, { customerIds: [repeatCustomer.id] });
+  check("Owner can approve an outreach-eligible reactivation", approved.length === 1 && approved[0].status === "APPROVED");
+  check("Double-click/retry creates one logical reactivation action", approvedAgain[0].id === approved[0].id);
+  const reactivationCount = await prisma.growthActionRequest.count({
+    where: { businessId: businessA.id, kind: "REACTIVATION", customerId: repeatCustomer.id },
+  });
+  check("One reactivation row exists after retry", reactivationCount === 1);
+
+  const recoveryAgain = await createGrowthActionRequest(prisma, ownerA, {
+    kind: "RECOVERY",
+    queue: "NEVER_ESTIMATED",
+    serviceRequestId: neverEstimated.id,
+  });
+  check("Double-click/retry creates one logical recovery action", recoveryAgain.id === action.id);
 
   try {
     await createGrowthActionRequest(prisma, starterAccess, {
@@ -658,6 +834,47 @@ try {
 
   const betaActions = await prisma.growthActionRequest.count({ where: { businessId: businessB.id } });
   check("Growth actions stay tenant-scoped", betaActions === 0);
+
+  const cashJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  const cashInvoice = await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      jobId: cashJob.id,
+      status: "SENT",
+      total: 1000,
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      invoiceId: cashInvoice.id,
+      jobId: cashJob.id,
+      purpose: "INVOICE_BALANCE",
+      amount: 400,
+      method: "CASH",
+    },
+  });
+  const cashWorkspace = await loadGrowthWorkspace(prisma, businessA.id);
+  check(
+    "Workspace collected adds $400 Payment, not the $1,000 SENT total",
+    cashWorkspace.totals.collected === 650,
+  );
+  const cashCampaignJob = cashWorkspace.funnel.stages.find((row) => row.key === "collected");
+  check("Funnel collected amount uses Payment truth", cashCampaignJob?.amount === 650);
+  const referralAfter = cashWorkspace.referrals[0];
+  check(
+    "Referral collected stays on the referred customer's own cash",
+    referralAfter.collectedRevenue === 250,
+  );
 
   console.log("\nGrowth department check complete.");
 } catch (error) {

@@ -23,7 +23,7 @@ export function explainGrowthPerformance(input: GrowthExplainInput) {
     `Recorded leads: ${input.leads}.`,
     `Recorded estimates: ${input.estimates}.`,
     `Invoiced revenue (SENT + PAID): ${input.invoiced.toFixed(2)}.`,
-    `Collected revenue (PAID only): ${input.collected.toFixed(2)}.`,
+    `Collected revenue (Payment rows; legacy PAID only when no Payment rows): ${input.collected.toFixed(2)}.`,
   ];
   for (const campaign of input.campaigns.slice(0, 5)) {
     const roi = campaign.costAvailable

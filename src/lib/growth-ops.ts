@@ -4,18 +4,25 @@
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
-import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { parseLeadSource } from "@/lib/lead-attribution";
+import { loadGrowthSource } from "@/lib/growth-data";
 import {
   GROWTH_NO_AUTO_MESSAGE,
+  OWNER_APPROVAL_REQUIRED_MESSAGE,
+  growthActionIdempotencyKey,
   isGrowthActionKind,
   isGrowthActionQueue,
   isGrowthActionStatus,
   type GrowthActionKind,
   type GrowthActionQueue,
 } from "@/lib/growth";
-import { isConsentEligible, localPageSlugFromPath } from "@/lib/growth-engine";
+import {
+  evaluateReactivationEligibility,
+  localPageSlugFromPath,
+  outreachEligibility,
+} from "@/lib/growth-engine";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog/codes";
 import { requireProductCapability } from "@/lib/product-entitlements";
 
@@ -108,6 +115,93 @@ export async function correctLeadAttribution(
   });
 }
 
+async function loadRelatedGrowthRecords(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    customerId?: string | null;
+    serviceRequestId?: string | null;
+    estimateId?: string | null;
+    jobId?: string | null;
+    campaignId?: string | null;
+  },
+) {
+  const customerIds: string[] = [];
+  if (input.customerId?.trim()) {
+    const customer = access.assertOwned(
+      await db.customer.findFirst({
+        where: { id: input.customerId, ...access.scope },
+        select: { id: true, businessId: true },
+      }),
+    );
+    customerIds.push(customer.id);
+  }
+  if (input.serviceRequestId) {
+    const request = access.assertOwned(
+      await db.serviceRequest.findFirst({
+        where: { id: input.serviceRequestId, ...access.scope },
+        select: { id: true, businessId: true, customerId: true },
+      }),
+    );
+    if (request.customerId) customerIds.push(request.customerId);
+  }
+  if (input.estimateId) {
+    const estimate = access.assertOwned(
+      await db.estimate.findFirst({
+        where: { id: input.estimateId, ...access.scope },
+        select: { id: true, businessId: true, customerId: true },
+      }),
+    );
+    if (estimate.customerId) customerIds.push(estimate.customerId);
+  }
+  if (input.jobId) {
+    const job = access.assertOwned(
+      await db.job.findFirst({
+        where: { id: input.jobId, ...access.scope },
+        select: { id: true, businessId: true, customerId: true },
+      }),
+    );
+    if (job.customerId) customerIds.push(job.customerId);
+  }
+  if (input.campaignId) {
+    access.assertOwned(
+      await db.marketingCampaign.findFirst({
+        where: { id: input.campaignId, ...access.scope },
+        select: { id: true, businessId: true },
+      }),
+    );
+  }
+  const unique = [...new Set(customerIds)];
+  if (unique.length > 1) {
+    throw new GrowthError("Related request, estimate, and job must belong to the same customer.");
+  }
+  return { customerId: unique[0] ?? null };
+}
+
+function requireOwnerApproval(access: BusinessAccess) {
+  try {
+    requireBusinessRole(access, "OWNER");
+  } catch {
+    throw new GrowthError(OWNER_APPROVAL_REQUIRED_MESSAGE);
+  }
+}
+
+async function assertCurrentReactivationEligibility(
+  db: PrismaClient,
+  businessId: string,
+  customerId: string | null,
+) {
+  if (!customerId) {
+    throw new GrowthError("Reactivation requires a current same-tenant customer.");
+  }
+  const source = await loadGrowthSource(db, businessId);
+  const result = evaluateReactivationEligibility(source, customerId);
+  if (!result.ok) {
+    throw new GrowthError("This customer is no longer eligible for reactivation. Current facts were rechecked.");
+  }
+  return result.candidate;
+}
+
 export async function recordCampaignCost(
   db: Db,
   access: BusinessAccess,
@@ -161,51 +255,8 @@ export async function createGrowthActionRequest(
         : CAPABILITIES.MANAGE_MARKETING;
   await requireGrowthWrite(db, access, capability);
 
-  let customerId = input.customerId?.trim() || null;
-  if (customerId) {
-    access.assertOwned(
-      await db.customer.findFirst({
-        where: { id: customerId, ...access.scope },
-        select: { id: true, businessId: true },
-      }),
-    );
-  }
-  if (input.serviceRequestId) {
-    const request = access.assertOwned(
-      await db.serviceRequest.findFirst({
-        where: { id: input.serviceRequestId, ...access.scope },
-        select: { id: true, businessId: true, customerId: true },
-      }),
-    );
-    customerId = customerId ?? request.customerId;
-  }
-  if (input.estimateId) {
-    const estimate = access.assertOwned(
-      await db.estimate.findFirst({
-        where: { id: input.estimateId, ...access.scope },
-        select: { id: true, businessId: true, customerId: true },
-      }),
-    );
-    customerId = customerId ?? estimate.customerId;
-  }
-  if (input.jobId) {
-    const job = access.assertOwned(
-      await db.job.findFirst({
-        where: { id: input.jobId, ...access.scope },
-        select: { id: true, businessId: true, customerId: true },
-      }),
-    );
-    customerId = customerId ?? job.customerId;
-  }
-  if (input.campaignId) {
-    access.assertOwned(
-      await db.marketingCampaign.findFirst({
-        where: { id: input.campaignId, ...access.scope },
-        select: { id: true, businessId: true },
-      }),
-    );
-  }
-
+  const related = await loadRelatedGrowthRecords(db, access, input);
+  const customerId = related.customerId;
   const customer = customerId
     ? await db.customer.findFirst({
         where: { id: customerId, ...access.scope },
@@ -213,9 +264,30 @@ export async function createGrowthActionRequest(
       })
     : null;
   if (customer) access.assertOwned(customer);
-  const consentEligible = customer ? isConsentEligible(customer) : false;
-  if (input.approve && kind === "REACTIVATION" && !consentEligible) {
-    throw new GrowthError("This customer is not eligible for reactivation outreach. Consent is missing or revoked.");
+  const outreach = customer
+    ? outreachEligibility(customer)
+    : { smsEligible: false, emailEligible: false, anyOutreachEligible: false };
+  if (input.approve && kind === "REACTIVATION") {
+    requireOwnerApproval(access);
+    await assertCurrentReactivationEligibility(db as PrismaClient, access.businessId, customerId);
+  }
+
+  const idempotencyKey = growthActionIdempotencyKey({
+    kind,
+    queue: input.queue,
+    customerId,
+    serviceRequestId: input.serviceRequestId,
+    estimateId: input.estimateId,
+    jobId: input.jobId,
+  });
+  const existing = await db.growthActionRequest.findFirst({
+    where: { businessId: access.businessId, idempotencyKey },
+  });
+  if (existing) {
+    if (input.approve && existing.status !== "APPROVED") {
+      return setGrowthActionStatus(db, access, { actionId: existing.id, status: "APPROVED" });
+    }
+    return existing;
   }
 
   const created = await db.growthActionRequest.create({
@@ -229,12 +301,27 @@ export async function createGrowthActionRequest(
       estimateId: input.estimateId ?? null,
       jobId: input.jobId ?? null,
       campaignId: input.campaignId ?? null,
-      consentEligible,
-      evidenceJson: JSON.stringify(input.evidence ?? {}),
+      consentEligible: outreach.anyOutreachEligible,
+      evidenceJson: JSON.stringify({
+        ...(input.evidence ?? {}),
+        emailEligible: outreach.emailEligible,
+        smsEligible: outreach.smsEligible,
+        actorRole: access.workspace.role,
+      }),
       notes: input.notes?.trim() ?? "",
       createdByMembershipId: access.workspace.membership.id,
+      approvedByMembershipId: input.approve ? access.workspace.membership.id : null,
       approvedAt: input.approve ? new Date() : null,
+      idempotencyKey,
     },
+  }).catch(async (error) => {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const raced = await db.growthActionRequest.findFirst({
+        where: { businessId: access.businessId, idempotencyKey },
+      });
+      if (raced) return raced;
+    }
+    throw error;
   });
 
   await emitAndProcessBusinessEvent(db as PrismaClient, {
@@ -246,7 +333,9 @@ export async function createGrowthActionRequest(
     payload: {
       kind,
       queue: input.queue,
-      consentEligible,
+      consentEligible: outreach.anyOutreachEligible,
+      emailEligible: outreach.emailEligible,
+      smsEligible: outreach.smsEligible,
       autoMessage: false,
       note: GROWTH_NO_AUTO_MESSAGE,
     },
@@ -269,14 +358,28 @@ export async function setGrowthActionStatus(
       where: { id: input.actionId, ...access.scope },
     }),
   );
-  if (input.status === "APPROVED" && action.kind === "REACTIVATION" && !action.consentEligible) {
-    throw new GrowthError("This customer is not eligible for reactivation outreach. Consent is missing or revoked.");
+  if (input.status === "APPROVED" && action.kind === "REACTIVATION") {
+    requireOwnerApproval(access);
+    const current = await assertCurrentReactivationEligibility(
+      db as PrismaClient,
+      access.businessId,
+      action.customerId,
+    );
+    return db.growthActionRequest.update({
+      where: { id: action.id },
+      data: {
+        status: "APPROVED",
+        consentEligible: current.anyOutreachEligible,
+        approvedAt: new Date(),
+        approvedByMembershipId: access.workspace.membership.id,
+      },
+    });
   }
   return db.growthActionRequest.update({
     where: { id: action.id },
     data: {
       status: input.status,
-      approvedAt: input.status === "APPROVED" ? new Date() : action.approvedAt,
+      approvedAt: action.approvedAt,
     },
   });
 }
@@ -287,6 +390,7 @@ export async function approveReactivationCandidates(
   input: { customerIds: string[]; campaignId?: string | null; notes?: string },
 ) {
   await requireGrowthWrite(db, access, CAPABILITIES.MANAGE_MARKETING);
+  requireOwnerApproval(access);
   const ids = [...new Set(input.customerIds.filter(Boolean))];
   if (ids.length === 0) throw new GrowthError("Select at least one customer to approve.");
   const created = [];

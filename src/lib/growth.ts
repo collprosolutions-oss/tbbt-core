@@ -147,6 +147,11 @@ export const REACTIVATION_AFTER_DAYS = 90;
 export const COST_ROI_UNAVAILABLE_MESSAGE =
   "Campaign cost is not on file. Cost and ROI are unavailable. TBBT will not invent spend.";
 
+export { COLLECTED_CASH_MESSAGE } from "@/lib/collected-cash";
+
+export const OWNER_APPROVAL_REQUIRED_MESSAGE =
+  "Approving reactivation requires the OWNER role. ADMIN may prepare an open action, but cannot approve it.";
+
 export const SOCIAL_DISCONNECTED_MESSAGE =
   "No Facebook or Instagram account is connected. Growth keeps content planning and drafting only. Automatic publishing is not available.";
 
@@ -160,7 +165,27 @@ export const GROWTH_NO_AUTO_MESSAGE =
   "Growth does not message customers. Communications owns delivery. This creates a durable follow-up request only.";
 
 export const GROWTH_NO_SPAM_MESSAGE =
-  "Reactivation requires owner approval. TBBT will not blast customers.";
+  "Reactivation requires OWNER approval. TBBT will not blast customers.";
+
+export function growthActionIdempotencyKey(input: {
+  kind: string;
+  queue: string;
+  customerId?: string | null;
+  serviceRequestId?: string | null;
+  estimateId?: string | null;
+  jobId?: string | null;
+}) {
+  if (input.kind === "REACTIVATION") {
+    return `REACTIVATION:${input.customerId ?? "unknown"}`;
+  }
+  if (input.kind === "REVIEW_ASK") {
+    return `REVIEW_ASK:${input.jobId ?? input.customerId ?? "unknown"}`;
+  }
+  if (input.kind === "REFERRAL_ASK") {
+    return `REFERRAL_ASK:${input.customerId ?? input.jobId ?? "unknown"}`;
+  }
+  return `RECOVERY:${input.queue}:${input.serviceRequestId ?? ""}:${input.estimateId ?? ""}`;
+}
 
 export type GrowthEvidence = {
   key: string;

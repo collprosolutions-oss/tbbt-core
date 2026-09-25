@@ -19,12 +19,14 @@ import { formatMoney } from "@/lib/format";
 import {
   GROWTH_AREA_LABELS,
   GROWTH_AREAS,
+  COLLECTED_CASH_MESSAGE,
   GROWTH_NO_AUTO_MESSAGE,
   GROWTH_NO_SPAM_MESSAGE,
   ORIGINAL_SOURCE_PRESERVED_MESSAGE,
   RECOVERY_QUEUE_LABELS,
   type GrowthArea,
 } from "@/lib/growth";
+import { outreachEligibilityLabel } from "@/lib/growth-engine";
 import { cn } from "@/lib/utils";
 import type { GrowthWorkspaceProps } from "@/components/growth/types";
 
@@ -90,7 +92,7 @@ function FunnelBody({ source }: { source: GrowthWorkspaceProps["source"] }) {
           </ol>
         )}
         <p className="text-xs text-muted-foreground">
-          Collected is PAID invoices only. Invoiced is SENT + PAID. Path:{" "}
+          {COLLECTED_CASH_MESSAGE} Invoiced is SENT + PAID. Path:{" "}
           {source.funnel.path.join(" → ")}.
         </p>
       </CardContent>
@@ -167,7 +169,9 @@ function CampaignBody({ source }: { source: GrowthWorkspaceProps["source"] }) {
     <Card>
       <CardHeader>
         <CardTitle>Campaign performance</CardTitle>
-        <CardDescription>ROI is calculated only from a recorded campaign cost.</CardDescription>
+        <CardDescription>
+          ROI uses recorded collected cash and a recorded campaign cost. Average ticket is collected revenue per win.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {source.campaigns.length === 0 ? (
@@ -227,7 +231,7 @@ function RecoveryBody({ source }: { source: GrowthWorkspaceProps["source"] }) {
                 <Badge variant="outline">{RECOVERY_QUEUE_LABELS[item.queue]}</Badge>
               </div>
               <p className="text-muted-foreground">
-                {item.consentEligible ? "Consent eligible" : "Consent not eligible"}
+                {outreachEligibilityLabel(item)}
                 {item.value != null ? ` · value ${formatMoney(item.value)}` : ""}
               </p>
               <ActionForm action={createGrowthActionAction} className="mt-2">
@@ -262,17 +266,20 @@ function ReactivationBody({ source }: { source: GrowthWorkspaceProps["source"] }
           <ActionForm action={approveReactivationAction} className="space-y-3">
             {source.reactivation.map((row) => (
               <label key={row.customerId} className="flex items-start gap-2 rounded-md border border-border/70 p-3 text-sm">
-                <input type="checkbox" name="customerId" value={row.customerId} disabled={!row.consentEligible} />
+                <input type="checkbox" name="customerId" value={row.customerId} disabled={!row.anyOutreachEligible} />
                 <span>
                   <span className="font-medium">{row.customerName}</span>
                   <span className="block text-muted-foreground">
-                    {row.completedJobs} completed jobs · {row.daysSinceCompleted} days idle ·{" "}
-                    {row.consentEligible ? "eligible" : `not eligible (${row.smsConsentStatus})`}
+                    {row.completedJobs} completed jobs ·{" "}
+                    {row.completionSource === "JOB_COMPLETED" && row.daysSinceCompleted != null
+                      ? `${row.daysSinceCompleted} days since recorded completion`
+                      : "completion clock unavailable"}{" "}
+                    · {outreachEligibilityLabel(row)}
                   </span>
                 </span>
               </label>
             ))}
-            <Button type="submit">Approve selected campaign</Button>
+            <Button type="submit">Owner approve selected</Button>
           </ActionForm>
         )}
       </CardContent>
