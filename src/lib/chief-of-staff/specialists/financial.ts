@@ -72,6 +72,25 @@ export function isFinancialJobFindingKey(key: string) {
   return key.startsWith("financial-negative-job:") || FINANCIAL_JOB_RECOMMENDATION_KEYS.has(key);
 }
 
+function isTrustworthyLaborOverrun(job: FinancialIntelligence["jobProfitability"][number]) {
+  return (
+    job.estimateActual.estimatedLaborHours != null &&
+    job.estimateActual.estimatedLaborHoursProvenance !== "none" &&
+    job.estimateActual.laborHoursVariance != null &&
+    job.estimateActual.laborHoursVariance > 0
+  );
+}
+
+function entityIdsForOwnedJobRecommendation(
+  key: string,
+  negativeJobIds: string[],
+  laborOverrunJobIds: string[],
+) {
+  if (key === "review-low-margin-jobs") return negativeJobIds.length > 0 ? [...negativeJobIds] : undefined;
+  if (key === "estimate-labor-overrun") return laborOverrunJobIds.length > 0 ? [...laborOverrunJobIds] : undefined;
+  return undefined;
+}
+
 export function jobIdsFromFinancialFindings(
   findings: Array<{ key: string; entityIds?: string[] }>,
 ) {
@@ -207,13 +226,19 @@ export function projectFinancialContext(
   const ownedRecs = catalog.activeRecommendations.filter((item) =>
     isFinancialOwnedRecommendationKey(item.key),
   );
-  const jobEntityIds: string[] = [];
-  for (const job of negativeJobs) pushEntity(jobEntityIds, job.jobId);
+  const negativeJobIds: string[] = [];
+  for (const job of negativeJobs) pushEntity(negativeJobIds, job.jobId);
+  const laborOverrunJobs = intel.jobProfitability
+    .filter(isTrustworthyLaborOverrun)
+    .sort((a, b) => (b.estimateActual.laborHoursVariance ?? 0) - (a.estimateActual.laborHoursVariance ?? 0))
+    .slice(0, FINANCIAL_CONTEXT_CAPS.profitabilityJobs);
+  const laborOverrunJobIds: string[] = [];
+  for (const job of laborOverrunJobs) pushEntity(laborOverrunJobIds, job.jobId);
   const findings: ProjectedFinding[] = ownedRecs.map((item) => ({
     key: item.key,
     title: item.title,
     why: item.why,
-    entityIds: isFinancialJobFindingKey(item.key) && jobEntityIds.length > 0 ? jobEntityIds : undefined,
+    entityIds: entityIdsForOwnedJobRecommendation(item.key, negativeJobIds, laborOverrunJobIds),
   }));
 
   findings.push({

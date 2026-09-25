@@ -39,6 +39,7 @@ const {
   resetFinancialIntelligenceBuildCount,
 } = await import("@/lib/financial-intelligence");
 const { PRODUCT_CAPABILITIES } = await import("@/lib/product-catalog");
+const { joinLineDescription } = await import("@/lib/estimate-line-scope");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -640,6 +641,258 @@ try {
     "3. Live Financial job findings do not include receivable invoice ids",
     liveJobIds.every((id) => intelA.jobProfitability.some((job) => job.jobId === id)) &&
       liveInvoiceIds.length === 0,
+  );
+
+  console.log("\nENTITY IDS — recommendation keys keep their own jobs");
+  const splitWs = await createOwnerWorkspace("Split Job Facts");
+  await entitleFounder(splitWs.business.id);
+  const splitCustomer = await prisma.customer.create({
+    data: { businessId: splitWs.business.id, name: "Split Facts" },
+  });
+  const jobA = await prisma.job.create({
+    data: {
+      businessId: splitWs.business.id,
+      customerId: splitCustomer.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  const jobAInvoice = await prisma.invoice.create({
+    data: {
+      businessId: splitWs.business.id,
+      customerId: splitCustomer.id,
+      jobId: jobA.id,
+      status: "PAID",
+      total: 100,
+      paidAt: new Date(),
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      businessId: splitWs.business.id,
+      customerId: splitCustomer.id,
+      jobId: jobA.id,
+      invoiceId: jobAInvoice.id,
+      purpose: "INVOICE_BALANCE",
+      amount: new Prisma.Decimal(100),
+      method: "CASH",
+      receivedAt: new Date(),
+    },
+  });
+  await prisma.timeEntry.create({
+    data: {
+      businessId: splitWs.business.id,
+      membershipId: splitWs.membership.id,
+      jobId: jobA.id,
+      activityType: "JOB",
+      status: "APPROVED",
+      startedAt: new Date(),
+      endedAt: new Date(),
+      approvedHours: 10,
+      approvedLaborCost: 250,
+    },
+  });
+
+  const overrunHoursDescription = joinLineDescription("Calculator labor", null, {
+    calculatorId: "custom-variable-scope",
+    inputs: { estimatedLaborHours: 4 },
+    rates: {},
+  });
+  const jobBEstimate = await prisma.estimate.create({
+    data: {
+      businessId: splitWs.business.id,
+      customerId: splitCustomer.id,
+      status: "APPROVED",
+      total: 1000,
+      publicToken: randomUUID(),
+    },
+  });
+  const jobB = await prisma.job.create({
+    data: {
+      businessId: splitWs.business.id,
+      customerId: splitCustomer.id,
+      estimateId: jobBEstimate.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: splitWs.business.id,
+      estimateId: jobBEstimate.id,
+      jobId: jobB.id,
+      description: overrunHoursDescription,
+      quantity: 1,
+      unitPrice: 1000,
+      total: 1000,
+      type: "LABOR",
+    },
+  });
+  const jobBInvoice = await prisma.invoice.create({
+    data: {
+      businessId: splitWs.business.id,
+      customerId: splitCustomer.id,
+      jobId: jobB.id,
+      status: "PAID",
+      total: 1000,
+      paidAt: new Date(),
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      businessId: splitWs.business.id,
+      customerId: splitCustomer.id,
+      jobId: jobB.id,
+      invoiceId: jobBInvoice.id,
+      purpose: "INVOICE_BALANCE",
+      amount: new Prisma.Decimal(1000),
+      method: "CASH",
+      receivedAt: new Date(),
+    },
+  });
+  await prisma.timeEntry.create({
+    data: {
+      businessId: splitWs.business.id,
+      membershipId: splitWs.membership.id,
+      jobId: jobB.id,
+      activityType: "JOB",
+      status: "APPROVED",
+      startedAt: new Date(),
+      endedAt: new Date(),
+      approvedHours: 6,
+      approvedLaborCost: 180,
+    },
+  });
+
+  const splitCatalog = await loadCanonicalRecommendationCatalog(prisma, splitWs.business.id);
+  const splitIntel = splitCatalog.financial.intelligence;
+  const splitJobA = splitIntel?.jobProfitability.find((job) => job.jobId === jobA.id);
+  const splitJobB = splitIntel?.jobProfitability.find((job) => job.jobId === jobB.id);
+  check(
+    "Job A is negative-margin with no labor-hours overrun",
+    Boolean(splitJobA) &&
+      (splitJobA?.grossProfit ?? 0) < 0 &&
+      (splitJobA?.estimateActual.laborHoursVariance == null || splitJobA.estimateActual.laborHoursVariance <= 0),
+  );
+  check(
+    "Job B is non-negative with a trustworthy labor-hours overrun",
+    Boolean(splitJobB) &&
+      (splitJobB?.grossProfit ?? -1) >= 0 &&
+      splitJobB?.estimateActual.estimatedLaborHours != null &&
+      splitJobB.estimateActual.estimatedLaborHoursProvenance !== "none" &&
+      (splitJobB.estimateActual.laborHoursVariance ?? 0) > 0,
+  );
+
+  const splitResult = interpretFinancialSpecialist(splitCatalog, "Which jobs are losing money or over hours?");
+  const lowMarginFinding = splitResult.findings.find((row) => row.key === "review-low-margin-jobs");
+  const overrunFinding = splitResult.findings.find((row) => row.key === "estimate-labor-overrun");
+  check(
+    "review-low-margin-jobs references only Job A",
+    Boolean(lowMarginFinding) &&
+      lowMarginFinding?.entityIds?.length === 1 &&
+      lowMarginFinding.entityIds[0] === jobA.id &&
+      !lowMarginFinding.entityIds.includes(jobB.id),
+  );
+  check(
+    "estimate-labor-overrun references only Job B",
+    Boolean(overrunFinding) &&
+      overrunFinding?.entityIds?.length === 1 &&
+      overrunFinding.entityIds[0] === jobB.id &&
+      !overrunFinding.entityIds.includes(jobA.id),
+  );
+
+  const sameOverrunJob = resolveConflicts({
+    results: [
+      {
+        specialistId: "FINANCIAL",
+        status: "OK",
+        findings: [
+          {
+            key: "estimate-labor-overrun",
+            title: "Overrun",
+            summary: "hours",
+            recommendationKeys: ["estimate-labor-overrun"],
+            factKeys: [],
+            entityIds: overrunFinding?.entityIds,
+          },
+        ],
+        factKeys: [],
+        recommendationKeys: ["estimate-labor-overrun"],
+      },
+      {
+        specialistId: "WORKFORCE",
+        status: "OK",
+        findings: [
+          {
+            key: "workforce-unassigned-job",
+            title: "Unassigned",
+            summary: "u",
+            recommendationKeys: ["workforce-unassigned-job"],
+            factKeys: [],
+            entityIds: [jobB.id],
+          },
+        ],
+        factKeys: [],
+        recommendationKeys: ["workforce-unassigned-job"],
+      },
+    ],
+    recommendations: splitCatalog.activeRecommendations,
+    facts: splitCatalog.facts,
+  });
+  check(
+    "SHARED_JOB_REFERENCE fires only for the actual same job",
+    sameOverrunJob.items.some((item) => item.kind === "SHARED_JOB_REFERENCE"),
+  );
+
+  const recKeyMismatch = resolveConflicts({
+    results: [
+      {
+        specialistId: "FINANCIAL",
+        status: "OK",
+        findings: [
+          {
+            key: "review-low-margin-jobs",
+            title: "Low margin",
+            summary: "neg",
+            recommendationKeys: ["review-low-margin-jobs"],
+            factKeys: [],
+            entityIds: lowMarginFinding?.entityIds,
+          },
+          {
+            key: "estimate-labor-overrun",
+            title: "Overrun",
+            summary: "hours",
+            recommendationKeys: ["estimate-labor-overrun"],
+            factKeys: [],
+            entityIds: overrunFinding?.entityIds,
+          },
+        ],
+        factKeys: [],
+        recommendationKeys: ["review-low-margin-jobs", "estimate-labor-overrun"],
+      },
+      {
+        specialistId: "WORKFORCE",
+        status: "OK",
+        findings: [
+          {
+            key: "workforce-unassigned-job",
+            title: "Unassigned",
+            summary: "other",
+            recommendationKeys: ["workforce-unassigned-job"],
+            factKeys: [],
+            entityIds: ["unrelated-job"],
+          },
+        ],
+        factKeys: [],
+        recommendationKeys: ["workforce-unassigned-job"],
+      },
+    ],
+    recommendations: splitCatalog.activeRecommendations,
+    facts: splitCatalog.facts,
+  });
+  check(
+    "No false shared-job conflict from recommendation-key/entity mismatch",
+    recKeyMismatch.items.every((item) => item.kind !== "SHARED_JOB_REFERENCE"),
   );
 
   console.log("\nREVENUE TRUTH — one collected-cash number");
