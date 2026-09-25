@@ -27,7 +27,7 @@ import {
   type RecoveryQueue,
 } from "@/lib/growth";
 
-export type GrowthMoney = { toString(): string } | number | string | null | undefined;
+export type GrowthMoney = { toString(): string } | number | string | null;
 
 export type GrowthRequestRow = {
   id: string;
@@ -757,7 +757,7 @@ export function buildRecoveryQueue(source: GrowthSource): RecoveryItem[] {
     const consentEligible = customer
       ? isConsentEligible(customer)
       : false;
-    const value = estimate ? Number(estimateDealValue(estimate) ?? 0) || null : null;
+    const value = estimate ? Number(estimateDealValue({ ...estimate, total: estimate.total ?? 0 }) ?? 0) || null : null;
     const href = `/pipeline`;
     const base = {
       requestId: request.id,
@@ -845,7 +845,7 @@ export function buildRecoveryQueue(source: GrowthSource): RecoveryItem[] {
     const { stage, followUp, hasJob } = opportunityStage(source, null, estimate);
     const customer = estimate.customerId ? customers.get(estimate.customerId) : null;
     const consentEligible = customer ? isConsentEligible(customer) : false;
-    const value = Number(estimateDealValue(estimate) ?? 0) || null;
+    const value = Number(estimateDealValue({ ...estimate, total: estimate.total ?? 0 }) ?? 0) || null;
     const href = `/pipeline`;
     const base = {
       requestId: null,

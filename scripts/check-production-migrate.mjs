@@ -649,6 +649,26 @@ check(
     productGrantSourceRefMigration.includes("BusinessProductGrant_businessId_grantType_code_source_sourceRef_key"),
 );
 
+const growthDepartmentMigration = readFileSync(
+  new URL("../prisma/migrations/20260925220000_growth_department/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Growth department migration is additive and idempotent",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(growthDepartmentMigration) &&
+    growthDepartmentMigration.includes('ADD COLUMN IF NOT EXISTS "originalLeadSource"') &&
+    growthDepartmentMigration.includes('ADD COLUMN IF NOT EXISTS "recordedCost"') &&
+    growthDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "LeadAttributionCorrection"') &&
+    growthDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "GrowthActionRequest"') &&
+    growthDepartmentMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run growth-department DDL",
+  !workspaceLoader.includes("GrowthActionRequest") &&
+    !workspaceLoader.includes("LeadAttributionCorrection") &&
+    !workspaceLoader.includes("growth_department"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

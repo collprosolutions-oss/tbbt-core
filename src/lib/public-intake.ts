@@ -261,6 +261,10 @@ export type PublicIntakeTx = {
         serviceCatalogItemId: string | null;
         leadSource?: string | null;
         campaignId?: string | null;
+        originalLeadSource?: string | null;
+        originalCampaignId?: string | null;
+        landingPagePath?: string | null;
+        localPageSlug?: string | null;
         serviceAreaQualification?: string;
         matchedServiceAreaId?: string | null;
         tradeCode?: string;

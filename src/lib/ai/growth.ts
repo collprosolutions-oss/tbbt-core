@@ -4,8 +4,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { runAiTask, type AiServiceActor } from "@/lib/ai/service";
 import { AI_NOT_CONNECTED_MESSAGE } from "@/lib/ai/types";
-import type { CampaignPerformance, GrowthRecommendation } from "@/lib/growth-engine";
-import { COST_ROI_UNAVAILABLE_MESSAGE } from "@/lib/growth";
+import type { CampaignPerformance } from "@/lib/growth-engine";
+import { COST_ROI_UNAVAILABLE_MESSAGE, type GrowthRecommendation } from "@/lib/growth";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 

@@ -71,11 +71,12 @@ export async function correctLeadAttribution(
       where: { id: nextCampaignId, ...access.scope },
       select: { id: true, businessId: true },
     });
-    access.assertOwned(campaign);
-    nextCampaignId = campaign.id;
+    nextCampaignId = access.assertOwned(campaign).id;
   }
   const nextLanding =
-    input.landingPagePath === undefined ? request.landingPagePath : input.landingPagePath.trim() || null;
+    input.landingPagePath === undefined
+      ? request.landingPagePath
+      : input.landingPagePath?.trim() || null;
   const nextLocal = localPageSlugFromPath(nextLanding) ?? request.localPageSlug;
 
   await db.leadAttributionCorrection.create({
