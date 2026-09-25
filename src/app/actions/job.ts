@@ -36,6 +36,7 @@ import { loadAvailabilitySettings, loadOccupiedJobs } from "@/lib/availability-d
 import { formatDateTime } from "@/lib/format";
 import { accessArrangementWriteData } from "@/lib/property-access";
 import { prisma } from "@/lib/prisma";
+import { jobRecurrenceFromServiceRequest } from "@/lib/recurrence";
 
 export type JobActionState = {
   error?: string;
@@ -108,15 +109,33 @@ export async function createJobFromEstimate(
       access.assertOwned(property);
       propertyId = property.id;
     }
-  } else if (estimate.serviceRequestId) {
+  }
+
+  let sourceRequest: {
+    serviceIntent: string;
+    recurrenceCadence: string;
+    propertyId: string | null;
+  } | null = null;
+  if (estimate.serviceRequestId) {
     const serviceRequest = access.assertOwned(
       await prisma.serviceRequest.findFirst({
         where: { id: estimate.serviceRequestId, ...access.scope },
-        select: { id: true, businessId: true, propertyId: true },
+        select: {
+          id: true,
+          businessId: true,
+          propertyId: true,
+          serviceIntent: true,
+          recurrenceCadence: true,
+        },
       }),
     );
-    propertyId = serviceRequest.propertyId;
+    sourceRequest = serviceRequest;
+    if (!propertyId) {
+      propertyId = serviceRequest.propertyId;
+    }
   }
+
+  const recurrence = jobRecurrenceFromServiceRequest(sourceRequest);
 
   const job = await prisma.job.create({
     data: {
@@ -135,6 +154,9 @@ export async function createJobFromEstimate(
       status: "UNSCHEDULED",
       leadSource: estimate.leadSource,
       campaignId: estimate.campaignId,
+      serviceIntent: recurrence.serviceIntent,
+      recurrenceCadence: recurrence.recurrenceCadence,
+      recurrenceStatus: recurrence.recurrenceStatus,
     },
   });
 

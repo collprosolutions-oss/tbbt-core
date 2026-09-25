@@ -1,9 +1,6 @@
 import { getBusinessLogoSrc } from "@/lib/business-branding";
 import { catalogScopeText } from "@/lib/estimate-line-scope";
 import { catalogAsksWorkAreaIntake } from "@/lib/work-area-intake";
-import {
-  HANDYMAN_CATALOG_CATEGORIES,
-} from "@/lib/handyman-starter-catalog";
 import { formatPublicPhoneDisplay } from "@/lib/format";
 import { getAppUrl } from "@/lib/mail";
 import { getTenantAppOrigin, tenantPublicSiteUrl } from "@/lib/tenant-app-url";
@@ -13,7 +10,11 @@ import {
   type SelectedWorkQueryInput,
 } from "@/lib/selected-work";
 import { groupServiceCatalogItemsByCategory } from "@/lib/service-catalog-category";
-import { isActiveTrade } from "@/lib/trades";
+import {
+  preferredCatalogCategoryOrder,
+  type PublicTradeProjection,
+} from "@/lib/trade-config";
+import { tradeLabel } from "@/lib/trades";
 
 /**
  * CollPro Reno is the live customer-facing launch business on this
@@ -296,6 +297,9 @@ export type PublicCatalogItem = {
   intakeMeasurementUnit: string;
   /** Customer-facing flag only. Never includes rates or calculator internals. */
   asksWorkAreaIntake: boolean;
+  tradeCode: string;
+  recurrenceEligible?: boolean;
+  unitLabel?: string;
 };
 
 export type PublicCatalogGroup = {
@@ -312,6 +316,8 @@ export type PublicBusiness = {
   publicEmail?: string | null;
   publicWebsite?: string | null;
   publicServiceAreaLabel?: string | null;
+  /** Public trade labels only. Never internal config, overrides, or IDs. */
+  activeTrades?: PublicTradeProjection[];
 };
 
 export function isCollProRenoSlug(slug: string) {
@@ -418,6 +424,9 @@ export function toPublicCatalogItem(item: {
   intakeMeasurementMode?: string | null;
   intakeMeasurementAxes?: string | null;
   intakeMeasurementUnit?: string | null;
+  tradeCode?: string | null;
+  recurrenceEligible?: boolean | null;
+  unitLabel?: string | null;
 }): PublicCatalogItem {
   return {
     id: item.id,
@@ -425,27 +434,58 @@ export function toPublicCatalogItem(item: {
     description: catalogScopeText(item.description) ?? item.description,
     category: item.category,
     pricingMode: item.pricingMode,
-    priceLabel: formatCatalogPriceLabel(item.pricingMode, item.price),
+    priceLabel: formatCatalogPriceLabel(item.pricingMode, item.price, item.unitLabel),
     unitAmount: publicCatalogUnitAmount(item.pricingMode, item.price),
     intakeMeasurementMode: item.intakeMeasurementMode ?? "NONE",
     intakeMeasurementAxes: item.intakeMeasurementAxes ?? "",
     intakeMeasurementUnit: item.intakeMeasurementUnit ?? "IN",
     asksWorkAreaIntake: catalogAsksWorkAreaIntake(item.description, item.name),
+    tradeCode: item.tradeCode ?? "HANDYMAN",
+    recurrenceEligible: Boolean(item.recurrenceEligible),
+    unitLabel: item.unitLabel ?? "",
   };
 }
 
 export function groupPublicCatalog(
   items: PublicCatalogItem[],
-  tradeCode: string,
+  tradeCodeOrCodes: string | string[],
 ): PublicCatalogGroup[] {
-  const preferredOrder = isActiveTrade(tradeCode)
-    ? HANDYMAN_CATALOG_CATEGORIES
-    : [];
-  return groupServiceCatalogItemsByCategory(items, preferredOrder);
+  const codes = Array.isArray(tradeCodeOrCodes)
+    ? tradeCodeOrCodes
+    : [tradeCodeOrCodes];
+  const uniqueCodes = [...new Set(codes.filter(Boolean))];
+  if (uniqueCodes.length <= 1) {
+    const tradeCode = uniqueCodes[0] ?? "HANDYMAN";
+    return groupServiceCatalogItemsByCategory(
+      items,
+      preferredCatalogCategoryOrder(tradeCode),
+    );
+  }
+
+  const groups: PublicCatalogGroup[] = [];
+  const seen = new Set<string>();
+  for (const code of uniqueCodes) {
+    const tradeItems = items.filter((item) => (item.tradeCode ?? "HANDYMAN") === code);
+    for (const group of groupServiceCatalogItemsByCategory(
+      tradeItems,
+      preferredCatalogCategoryOrder(code),
+    )) {
+      groups.push({
+        category: `${tradeLabel(code)} · ${group.category}`,
+        items: group.items,
+      });
+      for (const item of group.items) seen.add(item.id);
+    }
+  }
+  const leftover = items.filter((item) => !seen.has(item.id));
+  if (leftover.length > 0) {
+    groups.push(...groupServiceCatalogItemsByCategory(leftover, []));
+  }
+  return groups;
 }
 
 export function preferredPublicCategoryOrder(tradeCode: string) {
-  return isActiveTrade(tradeCode) ? [...HANDYMAN_CATALOG_CATEGORIES] : [];
+  return preferredCatalogCategoryOrder(tradeCode);
 }
 
 export type PopularPublicCategory = {

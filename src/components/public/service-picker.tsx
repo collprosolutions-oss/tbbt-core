@@ -13,6 +13,10 @@ import {
   toggleSelectedCatalog,
   type SelectedWorkState,
 } from "@/lib/selected-work";
+import {
+  CROSS_TRADE_REQUEST_MESSAGE,
+  canAddCatalogItemToSelection,
+} from "@/lib/public-request-trade";
 import { cn } from "@/lib/utils";
 
 export type { SelectedWorkState };
@@ -41,6 +45,7 @@ export function ServicePicker({
   initialCategory?: string;
 }) {
   const [query, setQuery] = useState("");
+  const [crossTradeError, setCrossTradeError] = useState<string | null>(null);
   const startingCategory =
     initialCategory && groups.some((group) => group.category === initialCategory)
       ? initialCategory
@@ -66,6 +71,16 @@ export function ServicePicker({
   }, [activeCategory, groups, query]);
 
   function toggleCatalog(id: string) {
+    if (selected.catalogIds.includes(id)) {
+      setCrossTradeError(null);
+      onChange(toggleSelectedCatalog(selected, id));
+      return;
+    }
+    if (!canAddCatalogItemToSelection(items, selected.catalogIds, id)) {
+      setCrossTradeError(CROSS_TRADE_REQUEST_MESSAGE);
+      return;
+    }
+    setCrossTradeError(null);
     onChange(toggleSelectedCatalog(selected, id));
   }
 
@@ -78,6 +93,9 @@ export function ServicePicker({
 
   return (
     <div className="space-y-5">
+      {crossTradeError ? (
+        <p className="text-sm text-destructive">{crossTradeError}</p>
+      ) : null}
       <div className="space-y-2">
         <Label htmlFor={searchId}>Search services</Label>
         <div className="relative">

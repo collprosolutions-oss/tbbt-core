@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import {
   installHandymanStarterCatalog,
+  installTradeStarterCatalog,
   type CatalogActionState,
 } from "@/app/actions/catalog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -10,9 +11,18 @@ import { Button } from "@/components/ui/button";
 
 const initialState: CatalogActionState = {};
 
-export function InstallStarterCatalogForm() {
+export function InstallStarterCatalogForm({
+  tradeCode = "HANDYMAN",
+  label = "Handyman Starter Catalog",
+}: {
+  tradeCode?: string;
+  label?: string;
+}) {
   const [state, action, pending] = useActionState(
-    async () => installHandymanStarterCatalog(),
+    async () =>
+      tradeCode === "HANDYMAN"
+        ? installHandymanStarterCatalog()
+        : installTradeStarterCatalog(tradeCode),
     initialState,
   );
 
@@ -29,7 +39,7 @@ export function InstallStarterCatalogForm() {
         </Alert>
       ) : null}
       <Button type="submit" variant="outline" disabled={pending}>
-        {pending ? "Adding…" : "Add Handyman Starter Catalog"}
+        {pending ? "Adding…" : `Add ${label}`}
       </Button>
     </form>
   );

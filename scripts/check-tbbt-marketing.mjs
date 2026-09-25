@@ -240,8 +240,8 @@ check(
     TBBT_TRADES.find((trade) => trade.name === "Cleaning")?.status ===
       "coming-next" &&
     TBBT_TRADES.filter((trade) => trade.status === "available").length === 1 &&
-    TRADE_CODES.length === 1 &&
-    TRADE_CODES[0] === "HANDYMAN",
+    TRADE_CODES.includes("HANDYMAN") &&
+    TRADE_CODES.includes("CLEANING"),
 );
 check(
   "Launch pricing is the Founder Plan at $49/month with a 30-day trial",

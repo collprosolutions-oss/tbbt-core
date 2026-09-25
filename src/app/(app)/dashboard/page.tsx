@@ -38,7 +38,8 @@ import { prisma } from "@/lib/prisma";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
 import { getBusinessPaymentStatus } from "@/lib/payments";
 import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
-import { getTrade } from "@/lib/trades";
+import { listActiveTradeCodes } from "@/lib/business-trades";
+import { workspaceTradeLabel } from "@/lib/trade-config";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -52,7 +53,8 @@ export default async function DashboardPage() {
   const access = await requireManagementPageAccess();
   const business = access.workspace.business;
   const timeZone = resolveBusinessTimeZone(business);
-  const trade = getTrade(business.tradeCode);
+  const activeTradeCodes = await listActiveTradeCodes(prisma, business.id);
+  const tradeName = workspaceTradeLabel(activeTradeCodes);
   const today = startOfDay(new Date(), timeZone);
   const todayRange = dayRange(today, timeZone);
   const todayIso = formatISODate(today, timeZone);
@@ -338,7 +340,7 @@ export default async function DashboardPage() {
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-foreground">{business.name}</span>
             <span className="text-muted-foreground/40">·</span>
-            <span>{trade?.name ?? "Handyman"}</span>
+            <span>{tradeName}</span>
             <span className="text-muted-foreground/40">·</span>
             <span>
               {todayJobsCount === 0

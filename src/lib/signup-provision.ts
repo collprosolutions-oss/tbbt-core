@@ -6,6 +6,7 @@
  * is left with firstRunSetupCompletedAt null on purpose.
  */
 import type { PrismaClient } from "@prisma/client";
+import { ensurePrimaryBusinessTrade } from "@/lib/business-trades";
 import { allocateBusinessSlug } from "@/lib/slug";
 import { DEFAULT_TRADE } from "@/lib/trades";
 
@@ -42,6 +43,8 @@ export async function provisionOwnerWorkspace(
         role: "OWNER",
       },
     });
+
+    await ensurePrimaryBusinessTrade(tx, business.id, DEFAULT_TRADE);
 
     return { user, business, membership };
   });

@@ -15,8 +15,9 @@ import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import { isCollProRenoSlug } from "@/lib/public-site";
 import { SettingsError, writeSettingsAuditLog } from "@/lib/settings-ops";
-import { installHandymanStarterCatalogForBusiness } from "@/lib/starter-catalog-install";
-import { isActiveTrade } from "@/lib/trades";
+import { resolvePrimaryTradeCode } from "@/lib/business-trades";
+import { installStarterCatalogForTrade } from "@/lib/trade-catalog";
+import { tradeOffersStarterCatalog } from "@/lib/trade-config";
 
 type SetupClient = PrismaClient | Prisma.TransactionClient;
 
@@ -73,7 +74,7 @@ export type StarterServicesSetupBusiness = {
  * Do not turn this into a fake multi-trade selector.
  */
 export function tradeOffersOnboardingStarterCatalog(tradeCode: string | null | undefined) {
-  return isActiveTrade(tradeCode ?? "");
+  return tradeOffersStarterCatalog(tradeCode);
 }
 
 export function hasCompletedStarterServicesSetup(business: StarterServicesSetupBusiness) {
@@ -157,7 +158,8 @@ export async function installOnboardingStarterServicesOp(
     };
   }
 
-  const result = await installHandymanStarterCatalogForBusiness(db, access.businessId);
+  const tradeCode = (await resolvePrimaryTradeCode(db, access.businessId)) ?? "HANDYMAN";
+  const result = await installStarterCatalogForTrade(db, access.businessId, tradeCode);
 
   if (!current.starterServicesSetupCompletedAt) {
     await markStarterServicesSetupComplete(db, access, STARTER_SERVICES_SETUP_INSTALLED);

@@ -128,16 +128,16 @@ check(
     catalogAction.includes("export async function installHandymanStarterCatalog") &&
     addServiceSheet.includes("InstallStarterCatalogForm") &&
     servicesPage.includes("planStarterCatalogInstall") &&
-    installer.includes("planStarterCatalogInstall") &&
-    installer.includes("starterIntakeFields"),
+    installer.includes("installStarterCatalogForTrade") &&
+    readRepo("src/lib/trade-catalog.ts").includes("planStarterCatalogInstall"),
 );
 check(
-  "Task 2 does not add a trade picker, Cleaning catalog, or later onboarding products",
+  "Onboarding still has no trade picker; Cleaning now has a real starter catalog",
   !starterPage.includes("Cleaning") &&
     !starterForm.includes("trade picker") &&
     !readRepo("src/lib/starter-services-setup.ts").includes("Stripe") &&
     tradeOffersOnboardingStarterCatalog("HANDYMAN") === true &&
-    tradeOffersOnboardingStarterCatalog("CLEANING") === false,
+    tradeOffersOnboardingStarterCatalog("CLEANING") === true,
 );
 
 console.log("\nUNIT — Explicit starter-services completion, not service count");

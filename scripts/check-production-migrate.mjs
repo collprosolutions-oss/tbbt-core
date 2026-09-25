@@ -571,6 +571,24 @@ check(
     aiClaimLeaseMigration.includes("IF NOT EXISTS"),
 );
 
+const multiTradeMigration = readFileSync(
+  new URL("../prisma/migrations/20260925120000_multi_trade_core/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Multi-trade core migration is additive and backfills business_trades from tradeCode",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(multiTradeMigration) &&
+    multiTradeMigration.includes('CREATE TABLE IF NOT EXISTS "BusinessTrade"') &&
+    multiTradeMigration.includes("WHERE NOT EXISTS") &&
+    multiTradeMigration.includes("ADD COLUMN IF NOT EXISTS") &&
+    multiTradeMigration.includes("IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run multi-trade DDL",
+  !workspaceLoader.includes("BusinessTrade") &&
+    !workspaceLoader.includes("multi_trade_core"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

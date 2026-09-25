@@ -17,7 +17,18 @@ import { catalogCalculatorDefinition, joinCatalogDescription } from "@/lib/estim
 import { parsePricingMode } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
 import { normalizeServiceCategory } from "@/lib/service-catalog-category";
-import { isActiveTrade } from "@/lib/trades";
+import {
+  authorizeCatalogTradeCode,
+  InactiveCatalogTradeError,
+  listActiveTradeCodes,
+} from "@/lib/business-trades";
+import {
+  catalogRecurrenceEligibleForTrade,
+  catalogUnitLabelFromForm,
+} from "@/lib/catalog-item-fields";
+import { installStarterCatalogForTrade } from "@/lib/trade-catalog";
+import { pricingModeAllowedForTrade, tradeOffersStarterCatalog } from "@/lib/trade-config";
+import { isConfiguredTrade } from "@/lib/trades";
 
 export type CatalogActionState = {
   error?: string;
@@ -86,9 +97,27 @@ export async function createServiceCatalogItem(
     pricingMode ?? "",
     readString(formData, "price"),
   );
+  let tradeCode;
+  try {
+    tradeCode = await authorizeCatalogTradeCode(
+      prisma,
+      access.businessId,
+      readString(formData, "tradeCode") || null,
+    );
+  } catch (error) {
+    return {
+      error:
+        error instanceof InactiveCatalogTradeError
+          ? error.message
+          : "That trade is not active on this business.",
+    };
+  }
 
   if (!name || !pricingMode) {
     return { error: "Name and pricing mode are required." };
+  }
+  if (!pricingModeAllowedForTrade(tradeCode, pricingMode)) {
+    return { error: "That pricing mode is not allowed for this trade." };
   }
   if (!priced.ok) {
     return { error: priced.error };
@@ -97,6 +126,7 @@ export async function createServiceCatalogItem(
   await prisma.serviceCatalogItem.create({
     data: {
       businessId: access.businessId,
+      tradeCode,
       name,
       pricingMode,
       price: priced.price,
@@ -105,6 +135,13 @@ export async function createServiceCatalogItem(
         catalogDefinitionFromSnapshot(null, name),
       ),
       category,
+      recurrenceEligible: catalogRecurrenceEligibleForTrade(
+        tradeCode,
+        true,
+        readString(formData, "recurrenceEligible") === "on",
+        false,
+      ),
+      unitLabel: readString(formData, "unitLabel"),
     },
   });
 
@@ -140,6 +177,13 @@ export async function updateServiceCatalogItem(
       where: { id, ...access.scope },
     }),
   );
+  if (!pricingModeAllowedForTrade(item.tradeCode, pricingMode)) {
+    return { error: "That pricing mode is not allowed for this trade." };
+  }
+  const requestedTrade = readString(formData, "tradeCode");
+  if (requestedTrade && requestedTrade !== item.tradeCode) {
+    return { error: "A service's trade cannot be changed from this form." };
+  }
 
   await prisma.serviceCatalogItem.update({
     where: { id: item.id },
@@ -153,6 +197,17 @@ export async function updateServiceCatalogItem(
           catalogDefinitionFromSnapshot(null, name),
       ),
       category,
+      recurrenceEligible: catalogRecurrenceEligibleForTrade(
+        item.tradeCode,
+        readString(formData, "recurrenceEligibleSubmitted") === "1",
+        readString(formData, "recurrenceEligible") === "on",
+        item.recurrenceEligible,
+      ),
+      unitLabel: catalogUnitLabelFromForm(
+        pricingMode,
+        readString(formData, "unitLabel"),
+        item.unitLabel,
+      ),
     },
   });
 
@@ -203,7 +258,8 @@ export async function installHandymanStarterCatalog(): Promise<CatalogActionStat
   const access = operating.access;
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
 
-  if (!isActiveTrade(access.workspace.business.tradeCode)) {
+  const active = await listActiveTradeCodes(prisma, access.businessId);
+  if (!active.includes("HANDYMAN")) {
     return {
       error: "The Handyman starter catalog is only for Handyman workspaces.",
     };
@@ -212,6 +268,36 @@ export async function installHandymanStarterCatalog(): Promise<CatalogActionStat
   const plan = await installHandymanStarterCatalogForBusiness(
     prisma,
     access.businessId,
+  );
+
+  revalidatePath("/services");
+  return {
+    added: plan.added,
+    skipped: plan.skipped,
+    message: `Added ${plan.added}. Skipped ${plan.skipped} already on your list.`,
+  };
+}
+
+export async function installTradeStarterCatalog(
+  tradeCode: string,
+): Promise<CatalogActionState> {
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_CATALOG);
+
+  if (!isConfiguredTrade(tradeCode) || !tradeOffersStarterCatalog(tradeCode)) {
+    return { error: "That trade does not have a starter catalog." };
+  }
+  const active = await listActiveTradeCodes(prisma, access.businessId);
+  if (!active.includes(tradeCode)) {
+    return { error: "Activate that trade on this business before installing its catalog." };
+  }
+
+  const plan = await installStarterCatalogForTrade(
+    prisma,
+    access.businessId,
+    tradeCode,
   );
 
   revalidatePath("/services");

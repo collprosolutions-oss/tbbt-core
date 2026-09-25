@@ -14,7 +14,8 @@ import {
   ownerNeedsWebsiteSetup,
   WEBSITE_SETUP_PATH,
 } from "@/lib/website-setup";
-import { getTrade } from "@/lib/trades";
+import { listActiveTradeCodes } from "@/lib/business-trades";
+import { workspaceTradeLabel } from "@/lib/trade-config";
 import { requireWorkspace } from "@/lib/workspace";
 import { prisma } from "@/lib/prisma";
 import { loadSaasEntitlement, saasOperatingUiState } from "@/lib/saas-billing";
@@ -56,7 +57,8 @@ export default async function AppLayout({
     redirect("/access-restricted");
   }
 
-  const trade = getTrade(workspace.business.tradeCode);
+  const activeTradeCodes = await listActiveTradeCodes(prisma, workspace.business.id);
+  const tradeLabel = workspaceTradeLabel(activeTradeCodes);
   const businessLogoSrc = getBusinessLogoSrc(workspace.business.slug);
   const entitlement = await loadSaasEntitlement(prisma, workspace.business);
   const operating = saasOperatingUiState(entitlement, workspace.role);
@@ -66,7 +68,7 @@ export default async function AppLayout({
     <AppShell
       businessName={workspace.business.name}
       businessLogoSrc={businessLogoSrc}
-      tradeLabel={trade?.name ?? "Handyman"}
+      tradeLabel={tradeLabel}
       userName={workspace.user.name}
       userEmail={workspace.user.email}
       role={workspace.role}

@@ -7,9 +7,10 @@ import { ServiceCatalogPanel } from "@/components/services/service-catalog-panel
 import { ServicePresentationPanel } from "@/components/services/service-presentation-panel";
 import { ServicePricingPanel } from "@/components/services/service-pricing-panel";
 import type {
+  ActiveCatalogTradeOption,
   LaborMinimumSummary,
   ServiceCatalogListItem,
-  StarterCatalogSummary,
+  TradeStarterCatalogPlan,
 } from "@/components/services/types";
 import { FounderRegion } from "@/components/founder-design/region";
 import { PageHeaderControls } from "@/components/page-header-controls";
@@ -37,7 +38,8 @@ export function ServicesWorkspace({
   laborMinimum,
   businessName,
   publicRequestHref,
-  starterPlan,
+  starterPlans = [],
+  activeTrades = [],
   initialServiceId,
 }: {
   items: ServiceCatalogListItem[];
@@ -46,7 +48,8 @@ export function ServicesWorkspace({
   laborMinimum: LaborMinimumSummary;
   businessName: string;
   publicRequestHref: string;
-  starterPlan: StarterCatalogSummary | null;
+  starterPlans?: TradeStarterCatalogPlan[];
+  activeTrades?: ActiveCatalogTradeOption[];
   initialServiceId?: string;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(() =>
@@ -115,7 +118,8 @@ export function ServicesWorkspace({
         open={addOpen}
         onOpenChange={setAddOpen}
         categories={categories}
-        starterPlan={starterPlan}
+        starterPlans={starterPlans}
+        activeTrades={activeTrades}
       />
     </>
   );

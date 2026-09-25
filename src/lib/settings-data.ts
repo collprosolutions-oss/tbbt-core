@@ -37,7 +37,8 @@ import {
   availabilitySettingsFromRow,
   ensureBusinessAvailabilitySchema,
 } from "@/lib/availability-data";
-import { getTrade } from "@/lib/trades";
+import { listActiveBusinessTrades } from "@/lib/business-trades";
+import { workspaceTradeLabel } from "@/lib/trade-config";
 import { publicPhone } from "@/lib/public-site";
 
 export type SettingsTeamMember = {
@@ -66,6 +67,7 @@ export type SettingsSnapshot = {
     slug: string;
     tradeCode: string;
     tradeLabel: string;
+    activeTrades: Array<{ code: string; label: string; status: string }>;
     laborMinimumEnabled: boolean;
     laborMinimumAmount: string;
     logoSrc: string | null;
@@ -247,7 +249,8 @@ export async function loadSettingsSnapshot(
   const projection = projectedOperatingBalance({ knownInflows, knownOutflows });
   const emailDeliveryConfigured = isEmailDeliveryConfigured();
   const contact = resolveBusinessPublicContact(business);
-  const trade = getTrade(business.tradeCode);
+  const activeTrades = await listActiveBusinessTrades(prisma, businessId);
+  const tradeLabel = workspaceTradeLabel(activeTrades.map((row) => row.tradeCode));
   const payment = await getBusinessPaymentStatus(prisma, businessId);
 
   const preferences: SettingsPreferenceFlags = preferencesRow
@@ -280,7 +283,12 @@ export async function loadSettingsSnapshot(
       name: business.name,
       slug: business.slug,
       tradeCode: business.tradeCode,
-      tradeLabel: trade?.name ?? business.tradeCode,
+      tradeLabel,
+      activeTrades: activeTrades.map((row) => ({
+        code: row.tradeCode,
+        label: row.config.label,
+        status: row.status,
+      })),
       laborMinimumEnabled: business.laborMinimumEnabled,
       laborMinimumAmount: business.laborMinimumAmount?.toString() ?? "",
       logoSrc: getBusinessLogoSrc(business.slug),

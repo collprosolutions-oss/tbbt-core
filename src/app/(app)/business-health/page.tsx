@@ -45,7 +45,11 @@ export default async function BusinessHealthPage({
     <PageContainer>
       <PageHeader
         title="Business Health"
-        description="Recorded TBBT facts and owner recommendations. Bank balances and external analytics are never invented."
+        description={`Recorded TBBT facts and owner recommendations. Bank balances and external analytics are never invented.${
+          workspace.activeTrades?.length
+            ? ` Active trades: ${workspace.activeTrades.map((trade) => trade.label).join(", ")}.`
+            : ""
+        }`}
       />
       <nav className="mb-4 flex flex-wrap gap-1.5">
         {BSOS_AREAS.map((item) => (

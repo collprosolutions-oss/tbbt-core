@@ -956,6 +956,7 @@ export async function saveEstimateLineForReuse(
       estimateId,
       lineItemId: readString(formData, "lineItemId"),
       savePrice: readString(formData, "savePrice") === "1",
+      requestedTradeCode: readString(formData, "requestedTradeCode") || null,
     });
     revalidatePath(`/estimates/${estimateId}`);
     revalidatePath("/services");

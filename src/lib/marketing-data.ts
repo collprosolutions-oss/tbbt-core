@@ -5,7 +5,8 @@
 
 import type { PrismaClient } from "@prisma/client";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
-import { getTrade } from "@/lib/trades";
+import { listActiveTradeCodes } from "@/lib/business-trades";
+import { workspaceTradeLabel } from "@/lib/trade-config";
 import { rollupAttribution } from "@/lib/lead-attribution";
 import {
   CHANNELS_DISCONNECTED_MESSAGE,
@@ -202,14 +203,16 @@ export async function loadMarketingSource(
     })
     .map((item) => item.name);
 
-  const trade = business ? getTrade(business.tradeCode) : null;
+  const tradeLabel = business
+    ? workspaceTradeLabel(await listActiveTradeCodes(prisma, businessId))
+    : "Handyman";
 
   return {
     businessId,
     brand: {
       name: business?.name ?? "Business",
       slug: business?.slug ?? "",
-      tradeLabel: trade?.name ?? "Handyman",
+      tradeLabel,
       logoSrc: business ? getBusinessLogoSrc(business.slug) : null,
       serviceAreaOnFile: Boolean(business?.publicServiceAreaLabel?.trim()),
       descriptionOnFile: Boolean(settings?.approvedPublicAboutCopy?.trim() || settings?.marketingIdentityNotes?.trim()),

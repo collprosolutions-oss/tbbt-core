@@ -31,6 +31,7 @@ import type { BusinessEstimatingDefaultPayload } from "@/lib/estimating-defaults
 
 export const STARTING_AT_DRAFT_MARKER = "(starting at)";
 export const CUSTOM_QUOTE_DRAFT_MARKER = "(custom quote — enter price)";
+export const VARIABLE_DRAFT_MARKER = "(variable / unit)";
 
 export type RequestDraftSourceItem = {
   quantity?: number | null;
@@ -85,6 +86,9 @@ export function draftEstimateLinesFromRequestItems(
 export function formatDraftEstimateDescription(line: DraftEstimateLine) {
   if (line.pricingMode === "STARTING_AT") {
     return `${line.description} ${STARTING_AT_DRAFT_MARKER}`;
+  }
+  if (line.pricingMode === "VARIABLE") {
+    return `${line.description} ${VARIABLE_DRAFT_MARKER}`;
   }
   if (!line.priced) {
     return `${line.description} ${CUSTOM_QUOTE_DRAFT_MARKER}`;

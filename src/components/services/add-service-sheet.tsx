@@ -9,18 +9,23 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import type { StarterCatalogSummary } from "@/components/services/types";
+import type {
+  ActiveCatalogTradeOption,
+  TradeStarterCatalogPlan,
+} from "@/components/services/types";
 
 export function AddServiceSheet({
   open,
   onOpenChange,
   categories,
-  starterPlan,
+  starterPlans = [],
+  activeTrades = [],
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   categories: string[];
-  starterPlan: StarterCatalogSummary | null;
+  starterPlans?: TradeStarterCatalogPlan[];
+  activeTrades?: ActiveCatalogTradeOption[];
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -28,18 +33,24 @@ export function AddServiceSheet({
         <SheetHeader>
           <SheetTitle>Add service</SheetTitle>
           <SheetDescription>
-            Uses this business&apos;s existing catalog. Choose Fixed, Starting
-            at, or Custom Quote. Saving a service later does not change amounts
-            already on estimates, jobs, or invoices.
+            Uses this business&apos;s existing catalog. Choose a pricing mode
+            allowed for the active trade. Saving a service later does not change
+            amounts already on estimates, jobs, or invoices.
           </SheetDescription>
         </SheetHeader>
         <div className="space-y-8 px-4 pb-6">
-          <CreateCatalogItemForm categories={categories} />
-          {starterPlan ? (
-            <div className="space-y-3 border-t border-border/70 pt-6">
+          <CreateCatalogItemForm
+            categories={categories}
+            activeTrades={activeTrades}
+          />
+          {starterPlans.map((plan) => (
+            <div
+              key={plan.code}
+              className="space-y-3 border-t border-border/70 pt-6"
+            >
               <div>
                 <p className="text-sm font-semibold text-foreground">
-                  Handyman starter catalog
+                  {plan.label}
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
                   Template recommendations for this business only. Import copies
@@ -49,15 +60,18 @@ export function AddServiceSheet({
                 </p>
               </div>
               <p className="text-sm text-muted-foreground">
-                {starterPlan.addCount} will be added. {starterPlan.skipCount}{" "}
-                already on your list.
-                {starterPlan.pendingCount > 0
-                  ? ` ${starterPlan.pendingCount} are not importable yet.`
+                {plan.addCount} will be added. {plan.skipCount} already on your
+                list.
+                {plan.pendingCount > 0
+                  ? ` ${plan.pendingCount} are not importable yet.`
                   : null}
               </p>
-              <InstallStarterCatalogForm />
+              <InstallStarterCatalogForm
+                tradeCode={plan.code}
+                label={plan.label}
+              />
             </div>
-          ) : null}
+          ))}
         </div>
       </SheetContent>
     </Sheet>

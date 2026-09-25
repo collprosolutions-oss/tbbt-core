@@ -38,6 +38,19 @@ import {
   requestedWorkSummary,
   type SelectedPublicTask,
 } from "@/lib/service-request-work";
+import {
+  currentIntakeSchema,
+  freezeIntakeSchema,
+  validateIntakeAnswers,
+} from "@/lib/intake-schema";
+import {
+  parseRecurrenceCadence,
+  serviceIntentFromFrequency,
+} from "@/lib/recurrence";
+import {
+  resolvePublicRequestTrade,
+} from "@/lib/public-request-trade";
+import { DEFAULT_TRADE, isConfiguredTrade } from "@/lib/trades";
 
 export const PUBLIC_INTAKE_GENERIC_ERROR = "This request could not be submitted.";
 
@@ -92,14 +105,26 @@ export type PublicIntakeInput = {
     minimumAdjustment: number | null;
     notes: string;
   }>;
+  /** Structured trade-intake answers. Never used as an authorization boundary. */
+  intakeAnswers?: Record<string, unknown>;
+  /**
+   * Browser trade hint for Other/custom work on a multi-trade business.
+   * Never authorization. Server validates against ACTIVE BusinessTrade.
+   */
+  requestedTradeCode?: string | null;
 };
 
 export type PublicIntakeDb = {
   business: {
     findUnique: (args: {
       where: { slug: string };
-      select: { id: true };
-    }) => Promise<{ id: string } | null>;
+      select: { id: true; tradeCode?: true };
+    }) => Promise<{ id: string; tradeCode?: string } | null>;
+  };
+  businessTrade?: {
+    findMany: (args: {
+      where: { businessId: string; status: string };
+    }) => Promise<Array<{ tradeCode: string; status: string; configOverridesJson?: string }>>;
   };
   marketingCampaign: {
     findFirst: (args: {
@@ -117,6 +142,7 @@ export type PublicIntakeDb = {
         intakeMeasurementAxes: true;
         intakeMeasurementUnit: true;
         description: true;
+        tradeCode?: true;
       };
     }) => Promise<
       Array<{
@@ -126,6 +152,7 @@ export type PublicIntakeDb = {
         intakeMeasurementAxes: string;
         intakeMeasurementUnit: string;
         description: string | null;
+        tradeCode?: string;
       }>
     >;
   };
@@ -226,6 +253,13 @@ export type PublicIntakeTx = {
         campaignId?: string | null;
         serviceAreaQualification?: string;
         matchedServiceAreaId?: string | null;
+        tradeCode?: string;
+        intakeSchemaKey?: string | null;
+        intakeSchemaVersion?: number | null;
+        intakeSchemaJson?: string | null;
+        intakeAnswersJson?: string | null;
+        serviceIntent?: string;
+        recurrenceCadence?: string;
       };
     }) => Promise<{ id: string }>;
   };
@@ -355,7 +389,7 @@ async function createPublicServiceRequestInner(
 
   const business = await db.business.findUnique({
     where: { slug: safeSlug },
-    select: { id: true },
+    select: { id: true, tradeCode: true },
   });
   if (!business) {
     return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
@@ -382,6 +416,7 @@ async function createPublicServiceRequestInner(
       intakeMeasurementAxes: string;
       intakeMeasurementUnit: string;
       description: string | null;
+      tradeCode?: string;
     }
   >();
   if (catalogIds.length > 0) {
@@ -398,6 +433,7 @@ async function createPublicServiceRequestInner(
         intakeMeasurementAxes: true,
         intakeMeasurementUnit: true,
         description: true,
+        tradeCode: true,
       },
     });
     if (catalogItems.length !== catalogIds.length) {
@@ -482,6 +518,48 @@ async function createPublicServiceRequestInner(
     workAreaAnswers.length > 0 ? { answers: workAreaAnswers } : null,
     submissionId,
   );
+  const selectedTradeCodes = [
+    ...new Set(
+      [...catalogById.values()]
+        .map((item) => item.tradeCode)
+        .filter((code): code is string => Boolean(code && isConfiguredTrade(code))),
+    ),
+  ];
+  const membershipCodes =
+    db.businessTrade != null
+      ? (
+          await db.businessTrade.findMany({
+            where: { businessId: business.id, status: "ACTIVE" },
+          })
+        )
+          .map((row) => row.tradeCode)
+          .filter(isConfiguredTrade)
+      : [];
+  const authorizedCodes =
+    membershipCodes.length > 0
+      ? membershipCodes
+      : isConfiguredTrade(business.tradeCode ?? "")
+        ? [business.tradeCode as typeof DEFAULT_TRADE]
+        : [DEFAULT_TRADE];
+  const resolvedTrade = resolvePublicRequestTrade({
+    catalogTradeCodes: selectedTradeCodes,
+    authorizedActiveTradeCodes: authorizedCodes,
+    requestedTradeCode: input.requestedTradeCode,
+    includeOther: parsed.tasks.some((task) => task.kind === "other"),
+  });
+  if (!resolvedTrade.ok) {
+    return resolvedTrade;
+  }
+  const requestTradeCode = resolvedTrade.tradeCode;
+  const intakeSchema = currentIntakeSchema(requestTradeCode);
+  const checkedAnswers = validateIntakeAnswers(intakeSchema, input.intakeAnswers ?? {});
+  if (!checkedAnswers.ok) return checkedAnswers;
+  const frequency =
+    typeof checkedAnswers.answers.frequency === "string"
+      ? checkedAnswers.answers.frequency
+      : "";
+  const serviceIntent = serviceIntentFromFrequency(frequency);
+  const recurrenceCadence = parseRecurrenceCadence(frequency);
   const photoUrls = (input.photoUrls ?? []).filter(Boolean).slice(0, MAX_INTAKE_PHOTOS);
   const ownedPhotoIds =
     photoAssetIds.length > 0
@@ -623,6 +701,13 @@ async function createPublicServiceRequestInner(
           campaignId,
           serviceAreaQualification: qualification.qualification,
           matchedServiceAreaId: qualification.matchedAreaId,
+          tradeCode: requestTradeCode,
+          intakeSchemaKey: intakeSchema.key,
+          intakeSchemaVersion: intakeSchema.version,
+          intakeSchemaJson: freezeIntakeSchema(intakeSchema),
+          intakeAnswersJson: JSON.stringify(checkedAnswers.answers),
+          serviceIntent,
+          recurrenceCadence,
         },
       });
 

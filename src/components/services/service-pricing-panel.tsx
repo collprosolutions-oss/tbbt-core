@@ -9,6 +9,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { pricingModeDescription, pricingModeLabel } from "@/lib/pricing-mode";
+import { getTradeConfig } from "@/lib/trade-config";
+import { tradeLabel } from "@/lib/trades";
 import type {
   LaborMinimumSummary,
   ServiceCatalogListItem,
@@ -92,6 +94,9 @@ export function ServicePricingPanel({
               <div className="flex flex-wrap gap-2">
                 <Badge variant="secondary">{pricingModeLabel(service.pricingMode)}</Badge>
                 <Badge variant="outline">{service.category}</Badge>
+                <Badge variant="outline">
+                  {tradeLabel(service.tradeCode)}
+                </Badge>
                 <Badge variant={service.active ? "secondary" : "outline"}>
                   {service.active ? "Active" : "Inactive"}
                 </Badge>
@@ -188,6 +193,13 @@ export function ServicePricingPanel({
                   category={service.category}
                   categories={categories}
                   active={service.active}
+                  tradeCode={service.tradeCode}
+                  tradeLabel={tradeLabel(service.tradeCode)}
+                  recurrenceEligible={service.recurrenceEligible}
+                  unitLabel={service.unitLabel}
+                  recurrenceSupport={
+                    getTradeConfig(service.tradeCode).recurrenceSupport
+                  }
                 />
               </div>
             ) : null}

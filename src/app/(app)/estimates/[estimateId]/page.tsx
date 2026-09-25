@@ -55,6 +55,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
+import { listActiveTradeCodes } from "@/lib/business-trades";
+import { catalogItemIsPubliclyOffered } from "@/lib/public-request-trade";
+import { tradeLabel } from "@/lib/trades";
 import { formatAddress, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
@@ -151,6 +154,7 @@ export default async function EstimateBuilderPage({
       serviceRequest: {
         select: {
           id: true,
+          tradeCode: true,
           description: true,
           summary: true,
           serviceCatalogItem: { select: { name: true } },
@@ -367,6 +371,15 @@ export default async function EstimateBuilderPage({
     where: { ...access.scope, active: true },
     orderBy: { name: "asc" },
   });
+  const activeTradeCodes = await listActiveTradeCodes(prisma, access.businessId);
+  const addableCatalogItems = catalogItems.filter((item) =>
+    catalogItemIsPubliclyOffered(item, activeTradeCodes),
+  );
+  const catalogTradeOptions = activeTradeCodes.map((code) => ({
+    code,
+    label: tradeLabel(code),
+  }));
+  const requestTradeCode = estimate.serviceRequest?.tradeCode ?? null;
 
   const originalTakeoffWorkspace = (() => {
     if (!isDraft || !originalWorkLine) return null;
@@ -517,6 +530,8 @@ export default async function EstimateBuilderPage({
                 estimateId={estimate.id}
                 isDraft={isDraft}
                 catalogItems={catalogItems}
+                requestTradeCode={requestTradeCode}
+                catalogTradeOptions={catalogTradeOptions}
               />
             ))}
           </ul>
@@ -681,7 +696,7 @@ export default async function EstimateBuilderPage({
         <CardContent>
           <AddCatalogLineForm
             estimateId={estimate.id}
-            items={catalogItems.map((item) => ({
+            items={addableCatalogItems.map((item) => ({
               id: item.id,
               name: item.name,
               pricingMode: item.pricingMode,
@@ -1005,6 +1020,8 @@ function OwnerEstimateLaborLine({
   estimateId,
   isDraft,
   catalogItems,
+  requestTradeCode,
+  catalogTradeOptions,
 }: {
   item: {
     id: string;
@@ -1018,6 +1035,8 @@ function OwnerEstimateLaborLine({
   estimateId: string;
   isDraft: boolean;
   catalogItems: Awaited<ReturnType<typeof prisma.serviceCatalogItem.findMany>>;
+  requestTradeCode: string | null;
+  catalogTradeOptions: Array<{ code: string; label: string }>;
 }) {
   const priceRequired = isUnpricedCustomQuoteDraftLine(item);
   const requestName = customQuoteDisplayDescription(item.description);
@@ -1146,6 +1165,12 @@ function OwnerEstimateLaborLine({
               currentPriceLabel={
                 item.unitPrice.gt(0) ? formatMoney(item.unitPrice) : null
               }
+              needsTradeChoice={
+                !item.serviceCatalogItemId &&
+                !requestTradeCode &&
+                catalogTradeOptions.length > 1
+              }
+              activeTrades={catalogTradeOptions}
             />
           ) : null}
         </>

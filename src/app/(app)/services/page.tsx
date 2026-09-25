@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import { ServicesWorkspace } from "@/components/services/services-workspace";
-import type { ServiceCatalogListItem } from "@/components/services/types";
+import type {
+  ActiveCatalogTradeOption,
+  ServiceCatalogListItem,
+  TradeStarterCatalogPlan,
+} from "@/components/services/types";
 import { FounderDesignRoot } from "@/components/founder-design/root";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { FounderRegion } from "@/components/founder-design/region";
@@ -11,15 +15,14 @@ import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatMoney } from "@/lib/format";
-import {
-  HANDYMAN_CATALOG_CATEGORIES,
-  planStarterCatalogInstall,
-} from "@/lib/handyman-starter-catalog";
+import { planStarterCatalogInstall } from "@/lib/handyman-starter-catalog";
+import { planCleaningStarterCatalogInstall } from "@/lib/cleaning-starter-catalog";
 import { catalogScopeText } from "@/lib/estimate-line-scope";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
 import { groupServiceCatalogItemsByCategory } from "@/lib/service-catalog-category";
-import { isActiveTrade } from "@/lib/trades";
+import { listActiveTradeCodes } from "@/lib/business-trades";
+import { getTradeConfig, preferredCatalogCategoryOrder } from "@/lib/trade-config";
 
 export const metadata: Metadata = {
   title: "Services",
@@ -48,13 +51,46 @@ export default async function ServicesPage({
     where: access.scope,
     orderBy: [{ active: "desc" }, { name: "asc" }],
   });
-  const showStarterCatalog = isActiveTrade(access.workspace.business.tradeCode);
-  const starterPlan = showStarterCatalog
-    ? planStarterCatalogInstall(items.map((item) => item.name))
-    : null;
-  const preferredCategoryOrder = showStarterCatalog
-    ? HANDYMAN_CATALOG_CATEGORIES
-    : [];
+  const activeTradeCodes = await listActiveTradeCodes(prisma, access.businessId);
+  const preferredCategoryOrder = activeTradeCodes.flatMap((code) =>
+    preferredCatalogCategoryOrder(code),
+  );
+  const handymanNames = items
+    .filter((item) => (item.tradeCode ?? "HANDYMAN") === "HANDYMAN")
+    .map((item) => item.name);
+  const cleaningNames = items
+    .filter((item) => item.tradeCode === "CLEANING")
+    .map((item) => item.name);
+  const starterPlans: TradeStarterCatalogPlan[] = activeTradeCodes
+    .filter((code) => getTradeConfig(code).catalogStarterSource !== "NONE")
+    .map((code) => {
+      const names =
+        code === "CLEANING"
+          ? cleaningNames
+          : code === "HANDYMAN"
+            ? handymanNames
+            : items
+                .filter((item) => (item.tradeCode ?? "HANDYMAN") === code)
+                .map((item) => item.name);
+      const plan =
+        code === "CLEANING"
+          ? planCleaningStarterCatalogInstall(names)
+          : planStarterCatalogInstall(names);
+      return {
+        code,
+        label: `${getTradeConfig(code).label} starter catalog`,
+        addCount: plan.add.length,
+        skipCount: plan.skip.length,
+        pendingCount: plan.pending.length,
+      };
+    });
+  const activeCatalogTrades: ActiveCatalogTradeOption[] = activeTradeCodes.map(
+    (code) => ({
+      code,
+      label: getTradeConfig(code).label,
+      recurrenceSupport: getTradeConfig(code).recurrenceSupport,
+    }),
+  );
   const groupedItems = groupServiceCatalogItemsByCategory(
     items,
     preferredCategoryOrder,
@@ -75,6 +111,9 @@ export default async function ServicesPage({
     displayPrice: formatCatalogPriceLabel(item.pricingMode, item.price),
     category: item.category,
     active: item.active,
+    tradeCode: item.tradeCode ?? "HANDYMAN",
+    recurrenceEligible: item.recurrenceEligible,
+    unitLabel: item.unitLabel ?? "",
   }));
 
   const totalCount = items.length;
@@ -168,15 +207,8 @@ export default async function ServicesPage({
           laborMinimum={laborMinimum}
           businessName={business.name}
           publicRequestHref={`/r/${business.slug}`}
-          starterPlan={
-            starterPlan
-              ? {
-                  addCount: starterPlan.add.length,
-                  skipCount: starterPlan.skip.length,
-                  pendingCount: starterPlan.pending.length,
-                }
-              : null
-          }
+          starterPlans={starterPlans}
+          activeTrades={activeCatalogTrades}
           initialServiceId={params.service}
         />
       </FounderDesignRoot>

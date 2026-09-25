@@ -1,6 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ensureBusinessPublicContactSchema } from "@/lib/business-contact";
+import { listActiveBusinessTrades } from "@/lib/business-trades";
+import { catalogItemIsPubliclyOffered } from "@/lib/public-request-trade";
 import {
   COLLPRO_RENO_SLUGS,
   groupPublicCatalog,
@@ -9,6 +11,10 @@ import {
   type PublicCatalogGroup,
   type PublicCatalogItem,
 } from "@/lib/public-site";
+import {
+  publicTradeProjection,
+  publicTradeProjectionForCode,
+} from "@/lib/trade-config";
 
 type PublicSiteDb = PrismaClient | Prisma.TransactionClient;
 
@@ -22,7 +28,7 @@ export async function loadPublicBusiness(slug: string, db: PublicSiteDb = prisma
   const safeSlug = slug.trim().toLowerCase();
   if (!safeSlug) return null;
   await ensureBusinessPublicContactSchema(db);
-  return db.business.findUnique({
+  const business = await db.business.findUnique({
     where: { slug: safeSlug },
     select: {
       id: true,
@@ -35,6 +41,15 @@ export async function loadPublicBusiness(slug: string, db: PublicSiteDb = prisma
       publicServiceAreaLabel: true,
     },
   });
+  if (!business) return null;
+  const trades = await listActiveBusinessTrades(db, business.id);
+  return {
+    ...business,
+    activeTrades:
+      trades.length > 0
+        ? trades.map((row) => publicTradeProjection(row.config))
+        : [publicTradeProjectionForCode(business.tradeCode)],
+  };
 }
 
 export async function loadDefaultPublicBusiness(db: PublicSiteDb = prisma) {
@@ -58,13 +73,20 @@ export async function loadPublicCatalog(business: PublicBusiness, db: PublicSite
       intakeMeasurementMode: true,
       intakeMeasurementAxes: true,
       intakeMeasurementUnit: true,
+      tradeCode: true,
+      recurrenceEligible: true,
+      unitLabel: true,
     },
     orderBy: { name: "asc" },
   });
-  const items = rows.map(toPublicCatalogItem);
+  const tradeCodes =
+    business.activeTrades?.map((trade) => trade.code) ?? [business.tradeCode];
+  const items = rows
+    .filter((row) => catalogItemIsPubliclyOffered(row, tradeCodes))
+    .map(toPublicCatalogItem);
   return {
     items,
-    groups: groupPublicCatalog(items, business.tradeCode),
+    groups: groupPublicCatalog(items, tradeCodes),
   };
 }
 
