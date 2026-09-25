@@ -23,7 +23,6 @@ import { isBusinessStorageConfigured } from "@/lib/business-storage";
 import { loadPublicNextAvailableLabel } from "@/lib/availability-data";
 import { prisma } from "@/lib/prisma";
 import {
-  composeIntakeSchema,
   currentIntakeSchema,
   publicIntakeSchemaProjection,
 } from "@/lib/intake-schema";
@@ -67,12 +66,13 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
   const phone = publicPhone(site.business);
   const textHref = smsHref(phone);
   const nextAvailableLabel = await loadPublicNextAvailableLabel(prisma, site.business.id);
-  const intakeSchema = publicIntakeSchemaProjection(
-    composeIntakeSchema(
-      (site.business.activeTrades?.map((trade) => trade.code) ?? [site.business.tradeCode]).map(
-        (code) => currentIntakeSchema(code),
-      ),
-    ),
+  const activeTradeCodes =
+    site.business.activeTrades?.map((trade) => trade.code) ?? [site.business.tradeCode];
+  const intakeSchemasByTrade = Object.fromEntries(
+    activeTradeCodes.map((code) => [
+      code,
+      publicIntakeSchemaProjection(currentIntakeSchema(code)),
+    ]),
   );
 
   return (
@@ -134,7 +134,13 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
                 initialSelected={initialSelected}
                 photosEnabled={isBusinessStorageConfigured()}
                 serviceArea={resolveBusinessServiceArea(site.business)}
-                intakeSchema={intakeSchema}
+                intakeSchemasByTrade={intakeSchemasByTrade}
+                activeTrades={
+                  site.business.activeTrades?.map((trade) => ({
+                    code: trade.code,
+                    label: trade.label,
+                  })) ?? []
+                }
               />
             </div>
           </div>

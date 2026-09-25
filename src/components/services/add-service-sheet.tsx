@@ -9,20 +9,23 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import type { StarterCatalogSummary } from "@/components/services/types";
+import type {
+  ActiveCatalogTradeOption,
+  TradeStarterCatalogPlan,
+} from "@/components/services/types";
 
 export function AddServiceSheet({
   open,
   onOpenChange,
   categories,
-  starterPlan,
-  starterTrades = [],
+  starterPlans = [],
+  activeTrades = [],
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   categories: string[];
-  starterPlan: StarterCatalogSummary | null;
-  starterTrades?: Array<{ code: string; label: string }>;
+  starterPlans?: TradeStarterCatalogPlan[];
+  activeTrades?: ActiveCatalogTradeOption[];
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -36,12 +39,18 @@ export function AddServiceSheet({
           </SheetDescription>
         </SheetHeader>
         <div className="space-y-8 px-4 pb-6">
-          <CreateCatalogItemForm categories={categories} />
-          {starterPlan ? (
-            <div className="space-y-3 border-t border-border/70 pt-6">
+          <CreateCatalogItemForm
+            categories={categories}
+            activeTrades={activeTrades}
+          />
+          {starterPlans.map((plan) => (
+            <div
+              key={plan.code}
+              className="space-y-3 border-t border-border/70 pt-6"
+            >
               <div>
                 <p className="text-sm font-semibold text-foreground">
-                  Handyman starter catalog
+                  {plan.label}
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
                   Template recommendations for this business only. Import copies
@@ -51,23 +60,18 @@ export function AddServiceSheet({
                 </p>
               </div>
               <p className="text-sm text-muted-foreground">
-                {starterPlan.addCount} will be added. {starterPlan.skipCount}{" "}
-                already on your list.
-                {starterPlan.pendingCount > 0
-                  ? ` ${starterPlan.pendingCount} are not importable yet.`
+                {plan.addCount} will be added. {plan.skipCount} already on your
+                list.
+                {plan.pendingCount > 0
+                  ? ` ${plan.pendingCount} are not importable yet.`
                   : null}
               </p>
-              {(starterTrades.length > 0 ? starterTrades : [{ code: "HANDYMAN", label: "Handyman starter catalog" }]).map(
-                (trade) => (
-                  <InstallStarterCatalogForm
-                    key={trade.code}
-                    tradeCode={trade.code}
-                    label={trade.label}
-                  />
-                ),
-              )}
+              <InstallStarterCatalogForm
+                tradeCode={plan.code}
+                label={plan.label}
+              />
             </div>
-          ) : null}
+          ))}
         </div>
       </SheetContent>
     </Sheet>

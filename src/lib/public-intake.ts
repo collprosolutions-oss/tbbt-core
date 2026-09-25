@@ -39,7 +39,6 @@ import {
   type SelectedPublicTask,
 } from "@/lib/service-request-work";
 import {
-  composeIntakeSchema,
   currentIntakeSchema,
   freezeIntakeSchema,
   validateIntakeAnswers,
@@ -48,7 +47,10 @@ import {
   parseRecurrenceCadence,
   serviceIntentFromFrequency,
 } from "@/lib/recurrence";
-import { DEFAULT_TRADE, isConfiguredTrade, type TradeCode } from "@/lib/trades";
+import {
+  resolvePublicRequestTrade,
+} from "@/lib/public-request-trade";
+import { DEFAULT_TRADE, isConfiguredTrade } from "@/lib/trades";
 
 export const PUBLIC_INTAKE_GENERIC_ERROR = "This request could not be submitted.";
 
@@ -105,6 +107,11 @@ export type PublicIntakeInput = {
   }>;
   /** Structured trade-intake answers. Never used as an authorization boundary. */
   intakeAnswers?: Record<string, unknown>;
+  /**
+   * Browser trade hint for Other/custom work on a multi-trade business.
+   * Never authorization. Server validates against ACTIVE BusinessTrade.
+   */
+  requestedTradeCode?: string | null;
 };
 
 export type PublicIntakeDb = {
@@ -534,17 +541,17 @@ async function createPublicServiceRequestInner(
       : isConfiguredTrade(business.tradeCode ?? "")
         ? [business.tradeCode as typeof DEFAULT_TRADE]
         : [DEFAULT_TRADE];
-  const requestTradeCodes: TradeCode[] =
-    selectedTradeCodes.length > 0
-      ? selectedTradeCodes.filter((code): code is TradeCode =>
-          authorizedCodes.includes(code as TradeCode),
-        )
-      : authorizedCodes;
-  const intakeSchema = composeIntakeSchema(
-    (requestTradeCodes.length > 0 ? requestTradeCodes : authorizedCodes).map((code) =>
-      currentIntakeSchema(code),
-    ),
-  );
+  const resolvedTrade = resolvePublicRequestTrade({
+    catalogTradeCodes: selectedTradeCodes,
+    authorizedActiveTradeCodes: authorizedCodes,
+    requestedTradeCode: input.requestedTradeCode,
+    includeOther: parsed.tasks.some((task) => task.kind === "other"),
+  });
+  if (!resolvedTrade.ok) {
+    return resolvedTrade;
+  }
+  const requestTradeCode = resolvedTrade.tradeCode;
+  const intakeSchema = currentIntakeSchema(requestTradeCode);
   const checkedAnswers = validateIntakeAnswers(intakeSchema, input.intakeAnswers ?? {});
   if (!checkedAnswers.ok) return checkedAnswers;
   const frequency =
@@ -553,7 +560,6 @@ async function createPublicServiceRequestInner(
       : "";
   const serviceIntent = serviceIntentFromFrequency(frequency);
   const recurrenceCadence = parseRecurrenceCadence(frequency);
-  const requestTradeCode = requestTradeCodes[0] ?? authorizedCodes[0] ?? DEFAULT_TRADE;
   const photoUrls = (input.photoUrls ?? []).filter(Boolean).slice(0, MAX_INTAKE_PHOTOS);
   const ownedPhotoIds =
     photoAssetIds.length > 0

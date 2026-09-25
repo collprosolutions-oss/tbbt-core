@@ -15,7 +15,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { assertBusinessRecord } from "@/lib/access-scope";
 import {
-  composeIntakeSchema,
   currentIntakeSchema,
   type IntakeSchema,
 } from "@/lib/intake-schema";
@@ -257,14 +256,33 @@ export function businessHoldsTrade(
   );
 }
 
+export class InactiveCatalogTradeError extends Error {
+  constructor(message = "That trade is not active on this business.") {
+    super(message);
+    this.name = "InactiveCatalogTradeError";
+  }
+}
+
+/**
+ * Resolve a catalog write trade.
+ *
+ * An explicit requested trade must be a configured ACTIVE BusinessTrade.
+ * Invalid/inactive values fail closed instead of silently becoming the
+ * primary trade. Fallback-to-primary is only used when no trade was
+ * requested.
+ */
 export async function authorizeCatalogTradeCode(
   db: TradeDb,
   businessId: string,
   requested: string | null | undefined,
 ) {
+  const explicit = typeof requested === "string" ? requested.trim() : "";
   const active = await listActiveTradeCodes(db, businessId);
-  if (requested && active.includes(requested as TradeCode)) {
-    return requested as TradeCode;
+  if (explicit) {
+    if (isConfiguredTrade(explicit) && active.includes(explicit)) {
+      return explicit;
+    }
+    throw new InactiveCatalogTradeError();
   }
   return (await resolvePrimaryTradeCode(db, businessId)) as TradeCode;
 }
@@ -283,8 +301,10 @@ export async function composeBusinessIntakeSchema(
   const wanted = selectedTradeCodes.filter((code) =>
     active.includes(code as TradeCode),
   );
-  const codes = wanted.length > 0 ? wanted : active;
-  return composeIntakeSchema(codes.map((code) => currentIntakeSchema(code)));
+  const unique = [...new Set(wanted)];
+  // Do not merge conflicting Handyman + Cleaning field keys.
+  const code = (unique[0] ?? active[0] ?? DEFAULT_TRADE) as TradeCode;
+  return currentIntakeSchema(code);
 }
 
 export function tradeConfigForCode(tradeCode: string) {

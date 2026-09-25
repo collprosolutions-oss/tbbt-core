@@ -5,6 +5,7 @@ import { ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { groupServiceCatalogItemsByCategory } from "@/lib/service-catalog-category";
+import { tradeLabel } from "@/lib/trades";
 import { cn } from "@/lib/utils";
 import type { ServiceCatalogListItem } from "@/components/services/types";
 
@@ -36,7 +37,8 @@ export function ServiceCatalogPanel({
     return items.filter(
       (item) =>
         item.name.toLowerCase().includes(q) ||
-        item.category.toLowerCase().includes(q),
+        item.category.toLowerCase().includes(q) ||
+        tradeLabel(item.tradeCode).toLowerCase().includes(q),
     );
   }, [items, query]);
 
@@ -164,7 +166,12 @@ export function ServiceCatalogPanel({
                                 : "text-foreground hover:bg-accent/40",
                             )}
                           >
-                            <span className="min-w-0 truncate font-medium">{item.name}</span>
+                            <span className="min-w-0 truncate font-medium">
+                              {item.name}
+                              <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                                {tradeLabel(item.tradeCode)}
+                              </span>
+                            </span>
                             <span className="flex shrink-0 items-center gap-1.5">
                               {item.active ? (
                                 <Badge variant={selected ? "default" : "secondary"}>

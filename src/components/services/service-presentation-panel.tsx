@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { pricingModeLabel } from "@/lib/pricing-mode";
+import { tradeLabel } from "@/lib/trades";
 import type { ServiceCatalogListItem } from "@/components/services/types";
 
 export function ServicePresentationPanel({
@@ -39,6 +40,7 @@ export function ServicePresentationPanel({
                 <Badge variant={service.active ? "secondary" : "outline"}>
                   {service.active ? "Active" : "Inactive"}
                 </Badge>
+                <Badge variant="outline">{tradeLabel(service.tradeCode)}</Badge>
               </div>
               <p className="text-sm text-muted-foreground">
                 {service.category} · {pricingModeLabel(service.pricingMode)}

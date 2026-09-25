@@ -91,6 +91,36 @@ export function recurringServicePlan(cadence: RecurrenceCadence): RecurrencePlan
   };
 }
 
+/**
+ * Copy authoritative request recurrence onto a Job created from an Estimate.
+ * Manual/legacy estimates without a source request stay ONE_TIME. This does
+ * not create future jobs or recurring billing.
+ */
+export function jobRecurrenceFromServiceRequest(
+  request:
+    | {
+        serviceIntent?: string | null;
+        recurrenceCadence?: string | null;
+      }
+    | null
+    | undefined,
+): RecurrencePlan {
+  if (!request) return oneTimeRecurrencePlan();
+  const intent = parseServiceIntent(request.serviceIntent);
+  if (intent !== "RECURRING") return oneTimeRecurrencePlan();
+  const cadence = parseRecurrenceCadence(request.recurrenceCadence);
+  if (!cadence) {
+    return {
+      serviceIntent: "RECURRING",
+      recurrenceCadence: "",
+      recurrenceStatus: "ACTIVE",
+      recurrenceSourceJobId: null,
+      nextOccurrenceAt: null,
+    };
+  }
+  return recurringServicePlan(cadence);
+}
+
 /** Later skip/cancel semantics — recorded on the occurrence, not billed here. */
 export function applyRecurrenceDecision(
   plan: RecurrencePlan,

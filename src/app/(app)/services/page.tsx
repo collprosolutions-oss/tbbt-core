@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import { ServicesWorkspace } from "@/components/services/services-workspace";
-import type { ServiceCatalogListItem } from "@/components/services/types";
+import type {
+  ActiveCatalogTradeOption,
+  ServiceCatalogListItem,
+  TradeStarterCatalogPlan,
+} from "@/components/services/types";
 import { FounderDesignRoot } from "@/components/founder-design/root";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { FounderRegion } from "@/components/founder-design/region";
@@ -57,17 +61,36 @@ export default async function ServicesPage({
   const cleaningNames = items
     .filter((item) => item.tradeCode === "CLEANING")
     .map((item) => item.name);
-  const starterPlan = activeTradeCodes.includes("HANDYMAN")
-    ? planStarterCatalogInstall(handymanNames)
-    : activeTradeCodes.includes("CLEANING")
-      ? planCleaningStarterCatalogInstall(cleaningNames)
-      : null;
-  const starterTrades = activeTradeCodes
+  const starterPlans: TradeStarterCatalogPlan[] = activeTradeCodes
     .filter((code) => getTradeConfig(code).catalogStarterSource !== "NONE")
-    .map((code) => ({
+    .map((code) => {
+      const names =
+        code === "CLEANING"
+          ? cleaningNames
+          : code === "HANDYMAN"
+            ? handymanNames
+            : items
+                .filter((item) => (item.tradeCode ?? "HANDYMAN") === code)
+                .map((item) => item.name);
+      const plan =
+        code === "CLEANING"
+          ? planCleaningStarterCatalogInstall(names)
+          : planStarterCatalogInstall(names);
+      return {
+        code,
+        label: `${getTradeConfig(code).label} starter catalog`,
+        addCount: plan.add.length,
+        skipCount: plan.skip.length,
+        pendingCount: plan.pending.length,
+      };
+    });
+  const activeCatalogTrades: ActiveCatalogTradeOption[] = activeTradeCodes.map(
+    (code) => ({
       code,
-      label: `${getTradeConfig(code).label} starter catalog`,
-    }));
+      label: getTradeConfig(code).label,
+      recurrenceSupport: getTradeConfig(code).recurrenceSupport,
+    }),
+  );
   const groupedItems = groupServiceCatalogItemsByCategory(
     items,
     preferredCategoryOrder,
@@ -88,6 +111,9 @@ export default async function ServicesPage({
     displayPrice: formatCatalogPriceLabel(item.pricingMode, item.price),
     category: item.category,
     active: item.active,
+    tradeCode: item.tradeCode ?? "HANDYMAN",
+    recurrenceEligible: item.recurrenceEligible,
+    unitLabel: item.unitLabel ?? "",
   }));
 
   const totalCount = items.length;
@@ -181,16 +207,8 @@ export default async function ServicesPage({
           laborMinimum={laborMinimum}
           businessName={business.name}
           publicRequestHref={`/r/${business.slug}`}
-          starterPlan={
-            starterPlan
-              ? {
-                  addCount: starterPlan.add.length,
-                  skipCount: starterPlan.skip.length,
-                  pendingCount: starterPlan.pending.length,
-                }
-              : null
-          }
-          starterTrades={starterTrades}
+          starterPlans={starterPlans}
+          activeTrades={activeCatalogTrades}
           initialServiceId={params.service}
         />
       </FounderDesignRoot>

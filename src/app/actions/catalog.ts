@@ -19,8 +19,13 @@ import { prisma } from "@/lib/prisma";
 import { normalizeServiceCategory } from "@/lib/service-catalog-category";
 import {
   authorizeCatalogTradeCode,
+  InactiveCatalogTradeError,
   listActiveTradeCodes,
 } from "@/lib/business-trades";
+import {
+  catalogRecurrenceEligibleFromForm,
+  catalogUnitLabelFromForm,
+} from "@/lib/catalog-item-fields";
 import { installStarterCatalogForTrade } from "@/lib/trade-catalog";
 import { pricingModeAllowedForTrade, tradeOffersStarterCatalog } from "@/lib/trade-config";
 import { isConfiguredTrade } from "@/lib/trades";
@@ -92,11 +97,21 @@ export async function createServiceCatalogItem(
     pricingMode ?? "",
     readString(formData, "price"),
   );
-  const tradeCode = await authorizeCatalogTradeCode(
-    prisma,
-    access.businessId,
-    readString(formData, "tradeCode") || null,
-  );
+  let tradeCode;
+  try {
+    tradeCode = await authorizeCatalogTradeCode(
+      prisma,
+      access.businessId,
+      readString(formData, "tradeCode") || null,
+    );
+  } catch (error) {
+    return {
+      error:
+        error instanceof InactiveCatalogTradeError
+          ? error.message
+          : "That trade is not active on this business.",
+    };
+  }
 
   if (!name || !pricingMode) {
     return { error: "Name and pricing mode are required." };
@@ -160,6 +175,10 @@ export async function updateServiceCatalogItem(
   if (!pricingModeAllowedForTrade(item.tradeCode, pricingMode)) {
     return { error: "That pricing mode is not allowed for this trade." };
   }
+  const requestedTrade = readString(formData, "tradeCode");
+  if (requestedTrade && requestedTrade !== item.tradeCode) {
+    return { error: "A service's trade cannot be changed from this form." };
+  }
 
   await prisma.serviceCatalogItem.update({
     where: { id: item.id },
@@ -173,8 +192,16 @@ export async function updateServiceCatalogItem(
           catalogDefinitionFromSnapshot(null, name),
       ),
       category,
-      recurrenceEligible: readString(formData, "recurrenceEligible") === "on",
-      unitLabel: readString(formData, "unitLabel") || item.unitLabel,
+      recurrenceEligible: catalogRecurrenceEligibleFromForm(
+        readString(formData, "recurrenceEligibleSubmitted") === "1",
+        readString(formData, "recurrenceEligible") === "on",
+        item.recurrenceEligible,
+      ),
+      unitLabel: catalogUnitLabelFromForm(
+        pricingMode,
+        readString(formData, "unitLabel"),
+        item.unitLabel,
+      ),
     },
   });
 

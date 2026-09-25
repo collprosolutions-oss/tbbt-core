@@ -36,6 +36,11 @@ type CatalogItemRowProps = {
   category: string;
   categories: string[];
   active: boolean;
+  tradeCode?: string;
+  tradeLabel?: string;
+  recurrenceEligible?: boolean;
+  unitLabel?: string;
+  recurrenceSupport?: boolean;
 };
 
 export function CatalogItemSafetyActions({
@@ -114,6 +119,11 @@ export function CatalogItemRow({
   category,
   categories,
   active,
+  tradeCode,
+  tradeLabel,
+  recurrenceEligible = false,
+  unitLabel = "",
+  recurrenceSupport = false,
 }: CatalogItemRowProps) {
   const [state, action, pending] = useActionState(
     updateServiceCatalogItem,
@@ -127,7 +137,10 @@ export function CatalogItemRow({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="break-words font-medium">{name}</p>
-          <p className="text-sm text-muted-foreground">{displayPrice}</p>
+          <p className="text-sm text-muted-foreground">
+            {displayPrice}
+            {tradeLabel ? ` · ${tradeLabel}` : null}
+          </p>
         </div>
         <Badge variant={active ? "secondary" : "outline"}>
           {active ? "Active" : "Inactive"}
@@ -197,6 +210,34 @@ export function CatalogItemRow({
             />
           </div>
         )}
+        {mode === "VARIABLE" ? (
+          <div className="space-y-2">
+            <Label htmlFor={`unitLabel-${id}`}>Unit label</Label>
+            <Input
+              id={`unitLabel-${id}`}
+              name="unitLabel"
+              defaultValue={unitLabel}
+              placeholder="per hour, per room, per visit"
+            />
+          </div>
+        ) : null}
+        {recurrenceSupport ? (
+          <label className="flex items-center gap-2 text-sm">
+            <input type="hidden" name="recurrenceEligibleSubmitted" value="1" />
+            <input
+              type="checkbox"
+              name="recurrenceEligible"
+              value="on"
+              defaultChecked={recurrenceEligible}
+            />
+            Recurring service
+          </label>
+        ) : null}
+        {tradeCode ? (
+          <p className="text-sm text-muted-foreground">
+            Trade: {tradeLabel || tradeCode}
+          </p>
+        ) : null}
         <div className="space-y-2">
           <Label htmlFor={`description-${id}`}>Scope / Included Work</Label>
           <textarea

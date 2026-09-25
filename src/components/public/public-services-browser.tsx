@@ -23,6 +23,11 @@ import {
   toggleSelectedCatalog,
   type SelectedWorkState,
 } from "@/lib/selected-work";
+import {
+  CROSS_TRADE_REQUEST_MESSAGE,
+  canAddCatalogItemToSelection,
+  selectedCatalogTradeCodes,
+} from "@/lib/public-request-trade";
 import { cn } from "@/lib/utils";
 
 export function PublicServicesBrowser({
@@ -47,6 +52,11 @@ export function PublicServicesBrowser({
   const [active, setActive] = useState(starting);
   const [openId, setOpenId] = useState<string | null>(null);
   const [selected, setSelected] = useState<SelectedWorkState>(initialSelected);
+  const [crossTradeError, setCrossTradeError] = useState<string | null>(
+    selectedCatalogTradeCodes(items, initialSelected.catalogIds).length > 1
+      ? CROSS_TRADE_REQUEST_MESSAGE
+      : null,
+  );
 
   const group = groups.find((item) => item.category === active) ?? groups[0];
   const selectedRows = useMemo(
@@ -57,7 +67,24 @@ export function PublicServicesBrowser({
     [items, selected.catalogIds],
   );
   const selectedCount = selectedRows.length + (selected.includeOther ? 1 : 0);
+  const mixedTrade =
+    selectedCatalogTradeCodes(items, selected.catalogIds).length > 1;
   const href = `/r/${slug}${selectedWorkQuery(selected)}`;
+
+  function toggleCatalog(id: string) {
+    setSelected((current) => {
+      if (current.catalogIds.includes(id)) {
+        setCrossTradeError(null);
+        return toggleSelectedCatalog(current, id);
+      }
+      if (!canAddCatalogItemToSelection(items, current.catalogIds, id)) {
+        setCrossTradeError(CROSS_TRADE_REQUEST_MESSAGE);
+        return current;
+      }
+      setCrossTradeError(null);
+      return toggleSelectedCatalog(current, id);
+    });
+  }
   const summary = summarizeSelectedWorkPricing(
     selectedCatalogPricingRows(selected, items),
   );
@@ -168,9 +195,7 @@ export function PublicServicesBrowser({
                       />
                       <button
                         type="button"
-                        onClick={() =>
-                          setSelected((current) => toggleSelectedCatalog(current, item.id))
-                        }
+                        onClick={() => toggleCatalog(item.id)}
                         aria-label={`Remove ${item.name}`}
                       >
                         ×
@@ -236,7 +261,12 @@ export function PublicServicesBrowser({
               </p>
             </div>
           ) : null}
-          {selectedCount > 0 ? (
+          {crossTradeError || mixedTrade ? (
+            <p className="mt-3 text-sm text-destructive">
+              {crossTradeError || CROSS_TRADE_REQUEST_MESSAGE}
+            </p>
+          ) : null}
+          {selectedCount > 0 && !mixedTrade ? (
             <Link href={href} className="public-btn public-btn-primary">
               Continue with Selected Work
             </Link>
@@ -282,7 +312,7 @@ export function PublicServicesBrowser({
                   <button
                     type="button"
                     aria-pressed={checked}
-                    onClick={() => setSelected((current) => toggleSelectedCatalog(current, item.id))}
+                    onClick={() => toggleCatalog(item.id)}
                     className={cn(
                       "public-select-control",
                       checked

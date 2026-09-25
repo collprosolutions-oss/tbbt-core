@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ensureBusinessPublicContactSchema } from "@/lib/business-contact";
 import { listActiveBusinessTrades } from "@/lib/business-trades";
+import { catalogItemIsPubliclyOffered } from "@/lib/public-request-trade";
 import {
   COLLPRO_RENO_SLUGS,
   groupPublicCatalog,
@@ -78,9 +79,11 @@ export async function loadPublicCatalog(business: PublicBusiness, db: PublicSite
     },
     orderBy: { name: "asc" },
   });
-  const items = rows.map(toPublicCatalogItem);
   const tradeCodes =
     business.activeTrades?.map((trade) => trade.code) ?? [business.tradeCode];
+  const items = rows
+    .filter((row) => catalogItemIsPubliclyOffered(row, tradeCodes))
+    .map(toPublicCatalogItem);
   return {
     items,
     groups: groupPublicCatalog(items, tradeCodes),

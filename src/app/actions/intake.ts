@@ -149,6 +149,7 @@ async function submitServiceRequestInner(
     workAreaAnswers: parseWorkAreaFormAnswers(readFormStrings(formData, "workArea")),
     measurements: parseMeasurementFields(formData),
     intakeAnswers: parseIntakeAnswersField(formData),
+    requestedTradeCode: readString(formData, "requestedTradeCode") || null,
     submissionId: readString(formData, "submissionId") || null,
     smsOptIn: readString(formData, "smsOptIn") || formData.get("smsOptIn"),
     leadSource: readString(formData, "leadSource") || "WEBSITE",

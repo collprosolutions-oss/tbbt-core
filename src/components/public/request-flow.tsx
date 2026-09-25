@@ -58,6 +58,11 @@ import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
 import type { IntakeAnswerMap, PublicIntakeSchemaProjection } from "@/lib/intake-schema";
 import { TradeIntakeFields } from "@/components/public/trade-intake-fields";
 import {
+  CROSS_TRADE_REQUEST_MESSAGE,
+  CUSTOM_WORK_TRADE_REQUIRED_MESSAGE,
+  selectedCatalogTradeCodes,
+} from "@/lib/public-request-trade";
+import {
   catalogQuantitiesFromState,
   formatPricingSummaryLines,
   selectedCatalogPricingRows,
@@ -98,7 +103,8 @@ export function MultiServiceRequestFlow({
   initialSelected,
   photosEnabled,
   serviceArea,
-  intakeSchema,
+  intakeSchemasByTrade = {},
+  activeTrades = [],
 }: {
   slug: string;
   businessName: string;
@@ -107,7 +113,8 @@ export function MultiServiceRequestFlow({
   initialSelected: SelectedWorkState;
   photosEnabled: boolean;
   serviceArea: BusinessServiceArea;
-  intakeSchema?: PublicIntakeSchemaProjection | null;
+  intakeSchemasByTrade?: Record<string, PublicIntakeSchemaProjection>;
+  activeTrades?: Array<{ code: string; label: string }>;
 }) {
   void groups;
   const [step, setStep] = useState<Step>("details");
@@ -129,6 +136,7 @@ export function MultiServiceRequestFlow({
   const [measurements, setMeasurements] = useState<Record<string, MeasurementDraft>>({});
   const [workArea, setWorkArea] = useState<Record<string, WorkAreaDraft>>({});
   const [intakeAnswers, setIntakeAnswers] = useState<IntakeAnswerMap>({});
+  const [customTradeCode, setCustomTradeCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
   const [pending, setPending] = useState(false);
@@ -195,6 +203,22 @@ export function MultiServiceRequestFlow({
   const catalogEmpty = items.length === 0;
   const hasWork =
     selected.catalogIds.length > 0 || selected.includeOther || catalogEmpty;
+  const selectedTradeCodes = useMemo(
+    () => selectedCatalogTradeCodes(items, selected.catalogIds),
+    [items, selected.catalogIds],
+  );
+  const mixedTrade = selectedTradeCodes.length > 1;
+  const catalogTrade = selectedTradeCodes.length === 1 ? selectedTradeCodes[0] : "";
+  const needsCustomTradeChoice =
+    selected.catalogIds.length === 0 &&
+    (selected.includeOther || catalogEmpty) &&
+    activeTrades.length > 1;
+  const resolvedTrade =
+    catalogTrade ||
+    (needsCustomTradeChoice ? customTradeCode : activeTrades[0]?.code ?? "");
+  const intakeSchema = resolvedTrade
+    ? intakeSchemasByTrade[resolvedTrade] ?? null
+    : null;
   const servicesHref = publicServicesPath(slug, selected);
   const chooseServicesHref = publicServicesPath(slug);
 
@@ -259,6 +283,30 @@ export function MultiServiceRequestFlow({
         return;
       }
     }
+    if (mixedTrade) {
+      setError(CROSS_TRADE_REQUEST_MESSAGE);
+      return;
+    }
+    if (needsCustomTradeChoice && !customTradeCode) {
+      setError(CUSTOM_WORK_TRADE_REQUIRED_MESSAGE);
+      return;
+    }
+    if (intakeSchema) {
+      for (const field of intakeSchema.fields) {
+        if (!field.required) continue;
+        if (field.visibleWhen) {
+          const actual = intakeAnswers[field.visibleWhen.field];
+          if (String(actual ?? "").toLowerCase() !== field.visibleWhen.value.toLowerCase()) {
+            continue;
+          }
+        }
+        const raw = intakeAnswers[field.key];
+        if (raw == null || raw === "" || (Array.isArray(raw) && raw.length === 0)) {
+          setError(`Please answer: ${field.label}.`);
+          return;
+        }
+      }
+    }
     setServiceAddress(checked.address);
     setError(null);
     setStep("info");
@@ -285,6 +333,14 @@ export function MultiServiceRequestFlow({
 
   async function onSubmit() {
     if (pending) return;
+    if (mixedTrade) {
+      setError(CROSS_TRADE_REQUEST_MESSAGE);
+      return;
+    }
+    if (needsCustomTradeChoice && !customTradeCode) {
+      setError(CUSTOM_WORK_TRADE_REQUIRED_MESSAGE);
+      return;
+    }
     setPending(true);
     setError(null);
     try {
@@ -333,6 +389,9 @@ export function MultiServiceRequestFlow({
     }
     if (intakeSchema) {
       formData.set("intakeAnswers", JSON.stringify(intakeAnswers));
+    }
+    if (resolvedTrade) {
+      formData.set("requestedTradeCode", resolvedTrade);
     }
     for (const photo of photos) {
       const authorized = await authorizePublicRequestPhotoUpload({
@@ -428,6 +487,21 @@ export function MultiServiceRequestFlow({
         <Link href={`/hire/${slug}`} className="public-btn public-btn-primary mt-8">
           Back to the website
         </Link>
+      </section>
+    );
+  }
+
+  if (mixedTrade) {
+    return (
+      <section>
+        <h2 className="text-2xl font-extrabold uppercase">What work do you need?</h2>
+        <p className="mt-3 text-muted-foreground">{CROSS_TRADE_REQUEST_MESSAGE}</p>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link href={chooseServicesHref} className="public-btn public-btn-primary">
+            Choose services for one trade
+            <ArrowRight className="size-4" aria-hidden="true" />
+          </Link>
+        </div>
       </section>
     );
   }
@@ -537,6 +611,28 @@ export function MultiServiceRequestFlow({
               setWorkArea((current) => ({ ...current, [catalogItemId]: next }))
             }
           />
+          {needsCustomTradeChoice ? (
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">Which type of work is this?</legend>
+              <select
+                name="requestedTradeCode"
+                value={customTradeCode}
+                onChange={(event) => {
+                  setCustomTradeCode(event.target.value);
+                  setIntakeAnswers({});
+                }}
+                required
+                className="h-12 w-full rounded-lg border border-input bg-white px-3 text-base"
+              >
+                <option value="">Choose a trade</option>
+                {activeTrades.map((trade) => (
+                  <option key={trade.code} value={trade.code}>
+                    {trade.label}
+                  </option>
+                ))}
+              </select>
+            </fieldset>
+          ) : null}
           {intakeSchema ? (
             <TradeIntakeFields
               schema={intakeSchema}

@@ -23,7 +23,9 @@ const read = (rel) => readFileSync(join(root, rel), "utf8");
 
 const {
   activateBusinessTradeOp,
+  authorizeCatalogTradeCode,
   deactivateBusinessTradeOp,
+  InactiveCatalogTradeError,
   listActiveTradeCodes,
   primaryTradeCodeFrom,
   resolvePrimaryTradeCode,
@@ -43,7 +45,20 @@ const {
   publicTradeProjection,
 } = await import("@/lib/trade-config");
 const { parsePricingMode, PRICING_MODES } = await import("@/lib/pricing-mode");
-const { oneTimeRecurrencePlan, parseServiceIntent } = await import("@/lib/recurrence");
+const {
+  jobRecurrenceFromServiceRequest,
+  oneTimeRecurrencePlan,
+  parseServiceIntent,
+} = await import("@/lib/recurrence");
+const {
+  CROSS_TRADE_REQUEST_MESSAGE,
+  CUSTOM_WORK_TRADE_REQUIRED_MESSAGE,
+  INACTIVE_CATALOG_TRADE_MESSAGE,
+  INACTIVE_TRADE_REQUEST_MESSAGE,
+  resolvePublicRequestTrade,
+} = await import("@/lib/public-request-trade");
+const { catalogRecurrenceEligibleFromForm } = await import("@/lib/catalog-item-fields");
+const { loadPublicBusiness, loadPublicCatalog } = await import("@/lib/public-site-data");
 const { Prisma } = await import("@prisma/client");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -99,6 +114,16 @@ const tradeConfig = read("src/lib/trade-config.ts");
 const businessTrades = read("src/lib/business-trades.ts");
 const intakeSchema = read("src/lib/intake-schema.ts");
 const publicIntake = read("src/lib/public-intake.ts");
+const publicSiteData = read("src/lib/public-site-data.ts");
+const requestPage = read("src/app/r/[slug]/page.tsx");
+const requestFlow = read("src/components/public/request-flow.tsx");
+const catalogAction = read("src/app/actions/catalog.ts");
+const createCatalogForm = read("src/components/catalog/create-catalog-item-form.tsx");
+const catalogItemRow = read("src/components/catalog/catalog-item-row.tsx");
+const addServiceSheet = read("src/components/services/add-service-sheet.tsx");
+const servicesPage = read("src/app/(app)/services/page.tsx");
+const catalogTypes = read("src/components/services/types.ts");
+const jobAction = read("src/app/actions/job.ts");
 const workspace = read("src/lib/workspace.ts");
 check(
   "business_trades is the schema authority and tradeCode is compatibility only",
@@ -169,6 +194,68 @@ check(
   "Existing Handyman jobs default to one-time recurrence plan",
   oneTimeRecurrencePlan().serviceIntent === "ONE_TIME" &&
     parseServiceIntent(undefined) === "ONE_TIME",
+);
+check(
+  "Public catalog filters by ACTIVE BusinessTrade, not only catalog.active",
+  publicSiteData.includes("catalogItemIsPubliclyOffered") &&
+    publicIntake.includes("resolvePublicRequestTrade"),
+);
+check(
+  "Public request page does not compose every active-trade schema",
+  !requestPage.includes("composeIntakeSchema") &&
+    requestPage.includes("intakeSchemasByTrade") &&
+    requestFlow.includes("selectedCatalogTradeCodes") &&
+    requestFlow.includes("CROSS_TRADE_REQUEST_MESSAGE"),
+);
+check(
+  "Explicit invalid catalog trade fails closed instead of falling back to primary",
+  businessTrades.includes("InactiveCatalogTradeError") &&
+    businessTrades.includes("if (explicit)") &&
+    catalogAction.includes("InactiveCatalogTradeError"),
+);
+check(
+  "Catalog list items and Add Service carry trade, recurrence, and unit label",
+  catalogTypes.includes("tradeCode: string") &&
+    catalogTypes.includes("recurrenceEligible: boolean") &&
+    catalogTypes.includes("unitLabel: string") &&
+    createCatalogForm.includes('name="tradeCode"') &&
+    createCatalogForm.includes("recurrenceEligible") &&
+    createCatalogForm.includes("unitLabel") &&
+    catalogItemRow.includes("recurrenceEligibleSubmitted") &&
+    catalogAction.includes("catalogRecurrenceEligibleFromForm") &&
+    catalogRecurrenceEligibleFromForm(false, false, true) === true &&
+    catalogRecurrenceEligibleFromForm(true, false, true) === false,
+);
+check(
+  "Starter catalog UI uses per-trade plans instead of one Handyman heading",
+  addServiceSheet.includes("starterPlans") &&
+    addServiceSheet.includes("plan.label") &&
+    !addServiceSheet.includes("Handyman starter catalog") &&
+    servicesPage.includes("starterPlans") &&
+    servicesPage.includes("planCleaningStarterCatalogInstall") &&
+    servicesPage.includes("planStarterCatalogInstall"),
+);
+check(
+  "createJobFromEstimate copies request recurrence instead of schema defaults",
+  jobAction.includes("jobRecurrenceFromServiceRequest") &&
+    jobAction.includes("serviceIntent: recurrence.serviceIntent") &&
+    jobAction.includes("recurrenceCadence: recurrence.recurrenceCadence") &&
+    jobAction.includes("recurrenceStatus: recurrence.recurrenceStatus"),
+);
+check(
+  "Other-only multi-trade work requires an ACTIVE trade choice",
+  resolvePublicRequestTrade({
+    catalogTradeCodes: [],
+    authorizedActiveTradeCodes: ["HANDYMAN", "CLEANING"],
+    requestedTradeCode: null,
+    includeOther: true,
+  }).ok === false &&
+    resolvePublicRequestTrade({
+      catalogTradeCodes: [],
+      authorizedActiveTradeCodes: ["HANDYMAN", "CLEANING"],
+      requestedTradeCode: "CLEANING",
+      includeOther: true,
+    }).ok === true,
 );
 
 try {
@@ -371,6 +458,369 @@ try {
 
   const missingCleaning = validateIntakeAnswers(currentIntakeSchema("CLEANING"), {});
   check("Cleaning required fields fail closed", missingCleaning.ok === false);
+
+  console.log("\nLIVE — Selected-trade intake, Other-work trade, and mixed-trade block");
+  const handyOnlyAnswers = validateIntakeAnswers(currentIntakeSchema("HANDYMAN"), {
+    frequency: "ONE_TIME",
+  });
+  check(
+    "Handyman-only schema does not require Cleaning bedrooms/bathrooms/home size",
+    handyOnlyAnswers.ok === true &&
+      !currentIntakeSchema("HANDYMAN").fields.some((field) =>
+        ["bedrooms", "bathrooms", "homeSize"].includes(field.key),
+      ),
+  );
+  const cleaningFreq = currentIntakeSchema("CLEANING").fields.find(
+    (field) => field.key === "frequency",
+  );
+  check(
+    "Cleaning-only frequency exposes ONE_TIME / WEEKLY / BIWEEKLY / MONTHLY",
+    cleaningFreq?.options?.map((option) => option.value).join(",") ===
+      "ONE_TIME,WEEKLY,BIWEEKLY,MONTHLY",
+  );
+  const hintedCleaningOnHandyman = await createPublicServiceRequest(prisma, {
+    slug: handyA.slug,
+    name: "Hint Customer",
+    email: "hint@example.com",
+    phone: "5550000000",
+    address: "3a Main St",
+    streetAddress: "3a Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Door only",
+    catalogItemIds: [handyService.id],
+    includeOther: false,
+    otherDescription: "",
+    requestedTradeCode: "CLEANING",
+  });
+  const hintedRow = hintedCleaningOnHandyman.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: hintedCleaningOnHandyman.requestId },
+      })
+    : null;
+  check(
+    "Browser trade hint never authorizes over tenant-owned catalog trade",
+    hintedCleaningOnHandyman.ok === true &&
+      hintedRow?.tradeCode === "HANDYMAN" &&
+      hintedRow?.intakeSchemaKey === "handyman.public",
+  );
+
+  const mixedRequest = await createPublicServiceRequest(prisma, {
+    slug: handyA.slug,
+    name: "Mix Customer",
+    email: "mix@example.com",
+    phone: "5550001111",
+    address: "3 Main St",
+    streetAddress: "3 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Both trades",
+    catalogItemIds: [handyService.id, cleanService.id],
+    includeOther: false,
+    otherDescription: "",
+  });
+  check(
+    "Mixed Handyman + Cleaning selection is rejected with a separate-request message",
+    mixedRequest.ok === false && mixedRequest.error === CROSS_TRADE_REQUEST_MESSAGE,
+  );
+
+  const otherNeedsChoice = await createPublicServiceRequest(prisma, {
+    slug: handyA.slug,
+    name: "Other Customer",
+    email: "other-mt@example.com",
+    phone: "5550002222",
+    address: "4 Main St",
+    streetAddress: "4 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Custom work",
+    catalogItemIds: [],
+    includeOther: true,
+    otherDescription: "Fix a door and maybe clean later",
+  });
+  check(
+    "Other-only on a multi-trade business requires an explicit trade choice",
+    otherNeedsChoice.ok === false &&
+      otherNeedsChoice.error === CUSTOM_WORK_TRADE_REQUIRED_MESSAGE,
+  );
+
+  const otherInvalid = await createPublicServiceRequest(prisma, {
+    slug: handyA.slug,
+    name: "Other Invalid",
+    email: "other-bad@example.com",
+    phone: "5550003333",
+    address: "5 Main St",
+    streetAddress: "5 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Custom work",
+    catalogItemIds: [],
+    includeOther: true,
+    otherDescription: "Unknown trade",
+    requestedTradeCode: "PLUMBING",
+  });
+  check(
+    "Invalid Other-work trade choice fails closed",
+    otherInvalid.ok === false && otherInvalid.error === INACTIVE_TRADE_REQUEST_MESSAGE,
+  );
+
+  const otherCleaning = await createPublicServiceRequest(prisma, {
+    slug: handyA.slug,
+    name: "Other Cleaning",
+    email: "other-clean@example.com",
+    phone: "5550004444",
+    address: "6 Main St",
+    streetAddress: "6 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Custom clean",
+    catalogItemIds: [],
+    includeOther: true,
+    otherDescription: "Custom cleaning visit",
+    requestedTradeCode: "CLEANING",
+    intakeAnswers: {
+      bedrooms: 2,
+      bathrooms: 1,
+      homeSize: "1000_1500",
+      frequency: "MONTHLY",
+    },
+  });
+  const otherCleaningRow = otherCleaning.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: otherCleaning.requestId } })
+    : null;
+  check(
+    "Other-only Cleaning choice freezes the Cleaning schema on the request",
+    otherCleaning.ok === true &&
+      otherCleaningRow?.tradeCode === "CLEANING" &&
+      otherCleaningRow?.intakeSchemaKey === "cleaning.public" &&
+      otherCleaningRow?.serviceIntent === "RECURRING" &&
+      otherCleaningRow?.recurrenceCadence === "MONTHLY",
+  );
+
+  await deactivateBusinessTradeOp(prisma, accessB, "CLEANING");
+  const singleTradeOther = await createPublicServiceRequest(prisma, {
+    slug: handyB.slug,
+    name: "Beta Other",
+    email: "beta-other@example.com",
+    phone: "5550005555",
+    address: "7 Main St",
+    streetAddress: "7 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Custom handy",
+    catalogItemIds: [],
+    includeOther: true,
+    otherDescription: "Custom handyman work",
+  });
+  const singleTradeOtherRow = singleTradeOther.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: singleTradeOther.requestId } })
+    : null;
+  check(
+    "Other-only on a one-trade business infers that trade server-side",
+    singleTradeOther.ok === true &&
+      singleTradeOtherRow?.tradeCode === "HANDYMAN" &&
+      singleTradeOtherRow?.intakeSchemaKey === "handyman.public",
+  );
+
+  console.log("\nLIVE — Deactivated trades stop participating operationally");
+  const publicBefore = await loadPublicBusiness(handyA.slug, prisma);
+  const catalogBefore = await loadPublicCatalog(publicBefore, prisma);
+  check(
+    "Handyman + Cleaning active exposes Cleaning on the public catalog",
+    catalogBefore.items.some((item) => item.id === cleanService.id) &&
+      catalogBefore.items.some((item) => item.id === handyService.id),
+  );
+
+  await deactivateBusinessTradeOp(prisma, accessA, "CLEANING");
+  const publicAfterOff = await loadPublicBusiness(handyA.slug, prisma);
+  const catalogAfterOff = await loadPublicCatalog(publicAfterOff, prisma);
+  const storedCleaning = await prisma.serviceCatalogItem.findUnique({
+    where: { id: cleanService.id },
+  });
+  check(
+    "Deactivating Cleaning hides Cleaning services without rewriting catalog rows",
+    !catalogAfterOff.items.some((item) => item.tradeCode === "CLEANING") &&
+      catalogAfterOff.items.some((item) => item.id === handyService.id) &&
+      storedCleaning?.active === true &&
+      storedCleaning?.tradeCode === "CLEANING" &&
+      storedCleaning?.name === "Standard Clean",
+  );
+
+  const staleCleaning = await createPublicServiceRequest(prisma, {
+    slug: handyA.slug,
+    name: "Stale Clean",
+    email: "stale@example.com",
+    phone: "5550006666",
+    address: "8 Main St",
+    streetAddress: "8 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Deep link",
+    catalogItemIds: [cleanService.id],
+    includeOther: false,
+    otherDescription: "",
+    intakeAnswers: {
+      bedrooms: 2,
+      bathrooms: 1,
+      homeSize: "1000_1500",
+      frequency: "WEEKLY",
+    },
+  });
+  check(
+    "Stale Cleaning catalog ID from a deactivated trade is rejected server-side",
+    staleCleaning.ok === false && staleCleaning.error === INACTIVE_CATALOG_TRADE_MESSAGE,
+  );
+
+  let inactiveWriteRejected = false;
+  try {
+    await authorizeCatalogTradeCode(prisma, handyA.id, "CLEANING");
+  } catch (error) {
+    inactiveWriteRejected = error instanceof InactiveCatalogTradeError;
+  }
+  const implicitPrimary = await authorizeCatalogTradeCode(prisma, handyA.id, null);
+  let unknownWriteRejected = false;
+  try {
+    await authorizeCatalogTradeCode(prisma, handyA.id, "PLUMBING");
+  } catch (error) {
+    unknownWriteRejected = error instanceof InactiveCatalogTradeError;
+  }
+  check(
+    "Explicit inactive or unknown catalog trade is rejected; omitted trade falls back to primary",
+    inactiveWriteRejected &&
+      unknownWriteRejected &&
+      implicitPrimary === "HANDYMAN",
+  );
+
+  const otherInactiveChoice = await createPublicServiceRequest(prisma, {
+    slug: handyA.slug,
+    name: "Other Inactive",
+    email: "other-off@example.com",
+    phone: "5550007777",
+    address: "9 Main St",
+    streetAddress: "9 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Custom clean while off",
+    catalogItemIds: [],
+    includeOther: true,
+    otherDescription: "Still cleaning?",
+    requestedTradeCode: "CLEANING",
+    intakeAnswers: {
+      bedrooms: 2,
+      bathrooms: 1,
+      homeSize: "1000_1500",
+      frequency: "WEEKLY",
+    },
+  });
+  check(
+    "Other-work choice of an inactive trade fails closed",
+    otherInactiveChoice.ok === false &&
+      otherInactiveChoice.error === INACTIVE_TRADE_REQUEST_MESSAGE,
+  );
+
+  await activateBusinessTradeOp(prisma, accessA, "CLEANING");
+  const publicAfterOn = await loadPublicBusiness(handyA.slug, prisma);
+  const catalogAfterOn = await loadPublicCatalog(publicAfterOn, prisma);
+  check(
+    "Reactivating Cleaning makes still-active Cleaning services public again",
+    catalogAfterOn.items.some((item) => item.id === cleanService.id) &&
+      (await prisma.serviceCatalogItem.findUnique({ where: { id: cleanService.id } }))
+        .active === true,
+  );
+
+  console.log("\nLIVE — Request recurrence is copied onto Job from Estimate");
+  const weeklyCleaning = await createPublicServiceRequest(prisma, {
+    slug: handyA.slug,
+    name: "Weekly Customer",
+    email: "weekly@example.com",
+    phone: "5550008888",
+    address: "10 Main St",
+    streetAddress: "10 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Weekly clean to job",
+    catalogItemIds: [cleanService.id],
+    includeOther: false,
+    otherDescription: "",
+    intakeAnswers: {
+      bedrooms: 3,
+      bathrooms: 2,
+      homeSize: "1500_2000",
+      frequency: "WEEKLY",
+    },
+  });
+  const weeklyRequest = weeklyCleaning.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: weeklyCleaning.requestId } })
+    : null;
+  const weeklyRecurrence = jobRecurrenceFromServiceRequest(weeklyRequest);
+  const weeklyEstimate = await prisma.estimate.create({
+    data: {
+      businessId: handyA.id,
+      customerId: (
+        await prisma.customer.create({
+          data: { businessId: handyA.id, name: "Weekly Job Customer", email: "weekly-job@example.com" },
+        })
+      ).id,
+      serviceRequestId: weeklyRequest?.id,
+      status: "APPROVED",
+      total: new Prisma.Decimal(180),
+      publicToken: randomUUID(),
+    },
+  });
+  const weeklyJob = await prisma.job.create({
+    data: {
+      businessId: handyA.id,
+      customerId: weeklyEstimate.customerId,
+      estimateId: weeklyEstimate.id,
+      projectToken: randomUUID(),
+      status: "UNSCHEDULED",
+      serviceIntent: weeklyRecurrence.serviceIntent,
+      recurrenceCadence: weeklyRecurrence.recurrenceCadence,
+      recurrenceStatus: weeklyRecurrence.recurrenceStatus,
+    },
+  });
+  check(
+    "Cleaning weekly request → estimate → Job stays RECURRING / WEEKLY / ACTIVE",
+    weeklyRequest?.serviceIntent === "RECURRING" &&
+      weeklyRequest?.recurrenceCadence === "WEEKLY" &&
+      weeklyJob.serviceIntent === "RECURRING" &&
+      weeklyJob.recurrenceCadence === "WEEKLY" &&
+      weeklyJob.recurrenceStatus === "ACTIVE",
+  );
+
+  const handyRecurrence = jobRecurrenceFromServiceRequest(handyRequest);
+  const handyJobFromRequest = await prisma.job.create({
+    data: {
+      businessId: handyA.id,
+      customerId: (
+        await prisma.customer.create({
+          data: { businessId: handyA.id, name: "Handy Job Customer", email: "handy-job@example.com" },
+        })
+      ).id,
+      projectToken: randomUUID(),
+      status: "UNSCHEDULED",
+      serviceIntent: handyRecurrence.serviceIntent,
+      recurrenceCadence: handyRecurrence.recurrenceCadence,
+      recurrenceStatus: handyRecurrence.recurrenceStatus,
+    },
+  });
+  const manualRecurrence = jobRecurrenceFromServiceRequest(null);
+  check(
+    "Handyman request Job stays ONE_TIME; legacy estimate without a request stays ONE_TIME",
+    handyJobFromRequest.serviceIntent === "ONE_TIME" &&
+      handyJobFromRequest.recurrenceCadence === "" &&
+      handyJobFromRequest.recurrenceStatus === "" &&
+      manualRecurrence.serviceIntent === "ONE_TIME",
+  );
 
   console.log("\nLIVE — Handyman estimate / job / invoice still attach on the same identity");
   const customer = await prisma.customer.create({
