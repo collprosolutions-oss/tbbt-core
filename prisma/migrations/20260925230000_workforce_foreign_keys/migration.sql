@@ -1,6 +1,6 @@
 -- Additive foreign keys, indexes, and outreach idempotency.
 -- Production migrate is the source of truth. Request paths never run this DDL.
--- Existing Workforce rows are preserved. No DROP / DELETE / TRUNCATE.
+-- Existing Workforce rows are preserved. This file is additive only.
 
 ALTER TABLE "WorkforceOutreachTask" ADD COLUMN IF NOT EXISTS "idempotencyKey" TEXT;
 

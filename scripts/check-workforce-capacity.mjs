@@ -634,10 +634,10 @@ check(
   inactiveCapacity.memberLaneCount === 1 && inactiveCapacity.availableMinutes === 540,
 );
 
-const longJobStart = new Date(2026, 8, 7, 8, 0, 0);
-const longJob = {
+const multiDayStart = new Date(2026, 8, 7, 8, 0, 0);
+const multiDayJob = {
   id: "long-1",
-  scheduledAt: longJobStart,
+  scheduledAt: multiDayStart,
   scheduledDurationMinutes: 1440,
   pickupDurationMinutes: 0,
   assignedMembershipId: "mem-1",
@@ -647,7 +647,7 @@ const longWeek = calculateWeeklyCapacity({
   start: monday,
   settings,
   policy,
-  jobs: [longJob],
+  jobs: [multiDayJob],
   member,
 });
 const longKnown = longWeek.days.reduce((sum, day) => sum + day.knownScheduledMinutes, 0);
@@ -672,6 +672,7 @@ const fourPm = detectScheduleConflicts({
   settings,
   policy,
   members: [member],
+  timeZone: "UTC",
 });
 check(
   "4 PM + 2h on an 8–5 worker is flagged outside availability",
@@ -687,6 +688,7 @@ const lateMatch = recommendAssignees({
   jobs: [],
   settings,
   policy,
+  timeZone: "UTC",
 });
 check(
   "Matching treats pickup and buffer as occupied time, so a late slot is not available",
