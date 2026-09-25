@@ -13,6 +13,13 @@ export const CUSTOMER_MESSAGE_PURPOSES = [
   "REFERRAL_REQUEST",
   "JOB_FOLLOW_UP",
   "REPEAT_FOLLOW_UP",
+  "ESTIMATE_FOLLOW_UP",
+  "JOB_UPDATE",
+  "GENERAL",
+  "OWNER_FOLLOW_UP",
+  "MISSED_CALL",
+  "MANUAL_PHONE",
+  "INBOUND_CALL",
 ] as const;
 export type CustomerMessagePurpose = (typeof CUSTOMER_MESSAGE_PURPOSES)[number];
 
@@ -23,6 +30,9 @@ export const CUSTOMER_MESSAGE_RELATED_TYPES = [
   "REVIEW_REQUEST",
   "REFERRAL_REQUEST",
   "CUSTOMER_FOLLOW_UP",
+  "SERVICE_REQUEST",
+  "PHONE_INTERACTION",
+  "PROPERTY",
 ] as const;
 export type CustomerMessageRelatedType = (typeof CUSTOMER_MESSAGE_RELATED_TYPES)[number];
 

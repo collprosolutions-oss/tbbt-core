@@ -166,7 +166,8 @@ export type TransactionalEmailKind =
   | "password-reset"
   | "review"
   | "referral"
-  | "follow-up";
+  | "follow-up"
+  | "customer";
 
 /**
  * Password-reset mail is sent once per issued token. The key is the
@@ -213,6 +214,9 @@ export function transactionalEmailFailureMessage(kind: TransactionalEmailKind) {
   }
   if (kind === "follow-up") {
     return "The follow-up email could not be sent.";
+  }
+  if (kind === "customer") {
+    return "The customer email could not be sent.";
   }
   return "The team invitation email could not be sent.";
 }

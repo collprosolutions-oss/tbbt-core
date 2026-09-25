@@ -689,6 +689,50 @@ check(
     workforceFkMigration.includes("idempotencyKey"),
 );
 
+const communicationsDepartmentMigration = readFileSync(
+  new URL("../prisma/migrations/20260926020000_communications_department/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Communications department migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(communicationsDepartmentMigration) &&
+    communicationsDepartmentMigration.includes('ADD COLUMN IF NOT EXISTS "threadId"') &&
+    communicationsDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "CommunicationThread"') &&
+    communicationsDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "PhoneInteraction"') &&
+    communicationsDepartmentMigration.includes('CREATE TABLE IF NOT EXISTS "ReceptionistEvent"'),
+);
+
+const communicationsSchema = readFileSync(
+  new URL("../src/lib/communications/schema.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Communications department schema is migrate-only and does not run request-time DDL",
+  communicationsSchema.includes("prisma-migrate") &&
+    !communicationsSchema.includes("$executeRawUnsafe") &&
+    !communicationsSchema.includes("ensureCommunicationsSchema") &&
+    !communicationsSchema.includes("COMMUNICATIONS_DEPARTMENT_ENSURE_SQL") &&
+    !communicationsSchema.includes("CREATE TABLE IF NOT EXISTS"),
+);
+check(
+  "Authenticated workspace load does not run communications-department DDL",
+  !workspaceLoader.includes("ensureCommunicationsSchema") &&
+    !workspaceLoader.includes("COMMUNICATIONS_DEPARTMENT_ENSURE_SQL"),
+);
+
+const phoneInteractionRelationsMigration = readFileSync(
+  new URL("../prisma/migrations/20260926030000_phone_interaction_relations/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "PhoneInteraction relation migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(phoneInteractionRelationsMigration) &&
+    phoneInteractionRelationsMigration.includes("PhoneInteraction_requestId_fkey") &&
+    phoneInteractionRelationsMigration.includes("PhoneInteraction_jobId_fkey") &&
+    phoneInteractionRelationsMigration.includes("PhoneInteraction_followUpActionItemId_fkey") &&
+    phoneInteractionRelationsMigration.includes("IF NOT EXISTS"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,
@@ -810,6 +854,21 @@ check(
       localNames.indexOf("20260926011500_add_materials_suppliers_operations") &&
     localNames.indexOf("20260925230000_financial_truth_corrections") <
       localNames.indexOf("20260926011500_add_materials_suppliers_operations"),
+);
+check(
+  "Communications migrations stay after Financial, Workforce, and Materials",
+  localNames.includes("20260926020000_communications_department") &&
+    localNames.includes("20260926030000_phone_interaction_relations") &&
+    localNames.indexOf("20260925220000_financial_profit_intelligence") <
+      localNames.indexOf("20260926020000_communications_department") &&
+    localNames.indexOf("20260925220000_scheduling_workforce_intelligence") <
+      localNames.indexOf("20260926020000_communications_department") &&
+    localNames.indexOf("20260925230000_workforce_foreign_keys") <
+      localNames.indexOf("20260926020000_communications_department") &&
+    localNames.indexOf("20260926011500_add_materials_suppliers_operations") <
+      localNames.indexOf("20260926020000_communications_department") &&
+    localNames.indexOf("20260926020000_communications_department") <
+      localNames.indexOf("20260926030000_phone_interaction_relations"),
 );
 
 const materialsMigration = readFileSync(

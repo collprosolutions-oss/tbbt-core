@@ -8,8 +8,10 @@ import { parseServerScheduledAt } from "@/lib/automation/timing";
 import {
   attemptAppointmentReminderSms,
   attemptAppointmentSms,
+  attemptEstimateFollowUpSms,
   attemptEstimateReadySms,
   attemptInvoiceReadySms,
+  attemptJobUpdateSms,
   attemptJobFollowUpSms,
   attemptPaymentReminderSms,
   attemptReferralRequestSms,
@@ -70,20 +72,48 @@ async function resolveSmsTarget(
 ) {
   const payload = eventPayload(event.payload);
 
-  if (rule.purpose === "ESTIMATE_READY") {
+  if (rule.purpose === "ESTIMATE_READY" || rule.purpose === "ESTIMATE_FOLLOW_UP") {
     const estimate = await db.estimate.findFirst({
       where: { id: event.subjectId, businessId },
-      select: { id: true, publicToken: true },
+      select: { id: true, publicToken: true, status: true },
     });
     if (!estimate) return { error: "Estimate is not in this business." };
+    if (rule.purpose === "ESTIMATE_FOLLOW_UP" && estimate.status !== "SENT") {
+      return { skip: "Estimate is no longer waiting for customer action. Follow-up was not sent." };
+    }
     return {
       send: () =>
-        attemptEstimateReadySms(db, {
+        rule.purpose === "ESTIMATE_FOLLOW_UP"
+          ? attemptEstimateFollowUpSms(db, {
+              businessId,
+              estimateId: estimate.id,
+              businessName,
+              publicToken: estimate.publicToken,
+              customerId,
+            })
+          : attemptEstimateReadySms(db, {
+              businessId,
+              estimateId: estimate.id,
+              businessName,
+              publicToken: estimate.publicToken,
+              customerId,
+            }),
+    };
+  }
+
+  if (rule.purpose === "JOB_UPDATE") {
+    const job = await db.job.findFirst({
+      where: { id: event.subjectId, businessId },
+      select: { id: true },
+    });
+    if (!job) return { error: "Job is not in this business." };
+    return {
+      send: () =>
+        attemptJobUpdateSms(db, {
           businessId,
-          estimateId: estimate.id,
-          businessName,
-          publicToken: estimate.publicToken,
+          jobId: job.id,
           customerId,
+          businessName,
         }),
     };
   }

@@ -29,6 +29,7 @@ Do not invent passing browser results. The isolated harness is
 10. Complete → invoice → payment (`/invoices`, `/p/[token]/invoice`).
 11. Expense → job profitability / reports / financial intelligence (`/expenses`, `/reports`). Linked material purchases must not double-count. Known cash flow uses recorded payments and recorded expenses. PROCESSED payroll gross labor is an operational cost record, not verified bank cash out. Banking and accounting stay Not Connected.
 12. Review request → marketing opportunity → BSOS recommendation (`/reviews`, `/marketing`, `/business-health`).
+13. Communications department → customer timeline, compose, missed-call log (`/communications`). Voice is not connected.
 
 ## Cross-cutting proofs
 

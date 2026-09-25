@@ -166,7 +166,7 @@ export const PRODUCT_CAPABILITY_DEFINITIONS: Record<
     implementationStatus: CAPABILITY_IMPLEMENTATION_STATUSES.PARTIAL,
     enforcementBoundary: false,
     enforcementNotes:
-      "Existing customer SMS is operational, not a purchasable add-on. Do not gate current SMS on this add-on.",
+      "See src/lib/communications/sms-policy.ts. Ordinary email never requires this add-on. Manual Communications Department SMS compose requires it. Existing operational SMS stays compatibility-ungated until #111. Not publicly purchasable or live.",
   },
   [PRODUCT_CAPABILITIES.AI_BUSINESS_COACH]: {
     code: PRODUCT_CAPABILITIES.AI_BUSINESS_COACH,

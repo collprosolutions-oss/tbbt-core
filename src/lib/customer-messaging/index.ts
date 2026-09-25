@@ -97,8 +97,11 @@ export {
 export {
   attemptAppointmentReminderSms,
   attemptAppointmentSms,
+  attemptEstimateFollowUpSms,
   attemptEstimateReadySms,
   attemptInvoiceReadySms,
+  attemptJobUpdateSms,
+  attemptOwnerFollowUpSms,
   attemptPaymentReminderSms,
   attemptReferralRequestSms,
   attemptReviewReminderSms,
