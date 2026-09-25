@@ -569,19 +569,19 @@ check(
     ) === OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL,
 );
 
-const owned = ownerTodayOwnedActionRefs(todayJob({ id: "job-owned", projectToken: "tok-a" }), "biz-a", "mem-1");
-const foreign = ownerTodayOwnedActionRefs(
+const ownedTodayActions = ownerTodayOwnedActionRefs(todayJob({ id: "job-owned", projectToken: "tok-a" }), "biz-a", "mem-1");
+const foreignTodayActions = ownerTodayOwnedActionRefs(
   todayJob({ id: "job-other", businessId: "biz-b", projectToken: "tok-b" }),
   "biz-a",
 );
 check(
   "copy/open actions use owned records",
-  owned?.jobHref === "/jobs/job-owned" &&
-    owned.customerHref === "/customers/cust-a" &&
-    owned.projectToken === "tok-a" &&
-    owned.directionsHref?.includes("10%20Main%20St") &&
-    owned.fieldHref === "/field/jobs/job-owned" &&
-    foreign === null,
+  ownedTodayActions?.jobHref === "/jobs/job-owned" &&
+    ownedTodayActions.customerHref === "/customers/cust-a" &&
+    ownedTodayActions.projectToken === "tok-a" &&
+    ownedTodayActions.directionsHref?.includes("10%20Main%20St") &&
+    ownedTodayActions.fieldHref === "/field/jobs/job-owned" &&
+    foreignTodayActions === null,
 );
 check(
   "tenant isolation keeps foreign today/handoff rows out",
