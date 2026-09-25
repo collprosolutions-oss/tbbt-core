@@ -42,6 +42,7 @@ const {
   listWebsitePublishes,
   websiteHasUnpublishedChanges,
   loadPublicWebsiteView,
+  missingWebsiteEngineSchema,
   publicServiceFromView,
   publicLocalPageFromView,
   resolvePublicHost,
@@ -235,6 +236,12 @@ check(
       return error instanceof WebsiteSnapshotError;
     }
   })(),
+);
+check(
+  "Missing publishedWebsiteId schema falls back instead of crashing public pages",
+  missingWebsiteEngineSchema({ code: "P2022", message: "The column `Business.publishedWebsiteId` does not exist in the current database." }) &&
+    missingWebsiteEngineSchema({ code: "P2021", message: "The table `WebsitePublish` does not exist in the current database." }) &&
+    !missingWebsiteEngineSchema(new Error("unrelated")),
 );
 check(
   "Disconnected writing assist stays usable without inventing reviews or prices",

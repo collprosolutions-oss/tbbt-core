@@ -17,6 +17,8 @@ import { resolvePublishedAboutCopy } from "@/lib/website-story";
 import { allocateUniqueServiceSlugs } from "@/lib/website-engine/slugs";
 import {
   WEBSITE_SNAPSHOT_SCHEMA_VERSION,
+  type PublishedGalleryItem,
+  type PublishedImage,
   type PublishedWebsiteSnapshot,
 } from "@/lib/website-engine/snapshot";
 
@@ -86,7 +88,7 @@ export async function buildWebsiteSnapshot(
     include: { storedAsset: true },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
-  const gallery = [];
+  const gallery: PublishedGalleryItem[] = [];
   for (const row of galleryRows) {
     access.assertOwned(row);
     const asset = row.storedAsset;
@@ -119,7 +121,7 @@ export async function buildWebsiteSnapshot(
     where: { businessId: access.businessId },
     include: { storedAsset: true },
   });
-  const images = [];
+  const images: PublishedImage[] = [];
   for (const row of siteImages) {
     access.assertOwned(row);
     if (!row.imageUrl) continue;

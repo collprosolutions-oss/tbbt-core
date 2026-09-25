@@ -33,14 +33,20 @@ export async function resolvePublicHost(
   if (isCollProPublicHost(hostname)) {
     return { kind: "collpro", slug: COLLPRO_RENO_SLUGS[0] };
   }
-  const binding = await db.websiteHostBinding.findFirst({
-    where: { hostname, status: "VERIFIED" },
-    select: { businessId: true, business: { select: { slug: true } } },
-  });
-  if (!binding) return { kind: "unknown" };
-  return {
-    kind: "tenant",
-    slug: binding.business.slug,
-    businessId: binding.businessId,
-  };
+  try {
+    const binding = await db.websiteHostBinding.findFirst({
+      where: { hostname, status: "VERIFIED" },
+      select: { businessId: true, business: { select: { slug: true } } },
+    });
+    if (!binding) return { kind: "unknown" };
+    return {
+      kind: "tenant",
+      slug: binding.business.slug,
+      businessId: binding.businessId,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/WebsiteHostBinding|does not exist/i.test(message)) return { kind: "unknown" };
+    throw error;
+  }
 }

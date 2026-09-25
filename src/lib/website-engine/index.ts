@@ -18,6 +18,7 @@ export {
   publicServiceFromView,
   publicLocalPageFromView,
   snapshotToImageRows,
+  missingWebsiteEngineSchema,
 } from "@/lib/website-engine/public";
 export { resolvePublicHost } from "@/lib/website-engine/hosts";
 export { publishedSitemapPaths, snapshotPageMetadata, viewHomeMetadata } from "@/lib/website-engine/seo";

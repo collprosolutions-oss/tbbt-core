@@ -69,39 +69,21 @@ function snapshotToSite(snapshot: PublishedWebsiteSnapshot): PublicSitePayload {
   };
 }
 
-export async function loadPublicWebsiteView(
-  slug: string,
-  db: Db = prisma,
-): Promise<PublicWebsiteView | null> {
-  const safeSlug = slug.trim().toLowerCase();
-  if (!safeSlug) return null;
-  const business = await db.business.findUnique({
-    where: { slug: safeSlug },
-    select: { id: true, slug: true, publishedWebsiteId: true },
-  });
-  if (!business) return null;
+export function missingWebsiteEngineSchema(error: unknown) {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: string }).code)
+      : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    code === "P2021" ||
+    code === "P2022" ||
+    /publishedWebsiteId|WebsitePublish|does not exist/i.test(message)
+  );
+}
 
-  if (business.publishedWebsiteId) {
-    const publish = await db.websitePublish.findFirst({
-      where: { id: business.publishedWebsiteId, businessId: business.id },
-    });
-    if (publish) {
-      const snapshot = parseWebsiteSnapshot(publish.snapshotJson);
-      if (snapshot.business.id !== business.id || snapshot.business.slug !== business.slug) {
-        return null;
-      }
-      return {
-        source: "snapshot",
-        versionNumber: publish.versionNumber,
-        publishedAt: publish.publishedAt,
-        snapshot,
-        site: snapshotToSite(snapshot),
-        about: snapshot.about.copy,
-      };
-    }
-  }
-
-  const site = await loadPublicSite(safeSlug, db);
+async function loadCompatibilityView(slug: string, db: Db): Promise<PublicWebsiteView | null> {
+  const site = await loadPublicSite(slug, db);
   if (!site) return null;
   return {
     source: "compatibility",
@@ -111,6 +93,45 @@ export async function loadPublicWebsiteView(
     site,
     about: resolvePublishedAboutCopy(await loadPublicAboutCopy(site.business.id, db), site.business.slug),
   };
+}
+
+export async function loadPublicWebsiteView(
+  slug: string,
+  db: Db = prisma,
+): Promise<PublicWebsiteView | null> {
+  const safeSlug = slug.trim().toLowerCase();
+  if (!safeSlug) return null;
+  try {
+    const business = await db.business.findUnique({
+      where: { slug: safeSlug },
+      select: { id: true, slug: true, publishedWebsiteId: true },
+    });
+    if (!business) return null;
+
+    if (business.publishedWebsiteId) {
+      const publish = await db.websitePublish.findFirst({
+        where: { id: business.publishedWebsiteId, businessId: business.id },
+      });
+      if (publish) {
+        const snapshot = parseWebsiteSnapshot(publish.snapshotJson);
+        if (snapshot.business.id !== business.id || snapshot.business.slug !== business.slug) {
+          return null;
+        }
+        return {
+          source: "snapshot",
+          versionNumber: publish.versionNumber,
+          publishedAt: publish.publishedAt,
+          snapshot,
+          site: snapshotToSite(snapshot),
+          about: snapshot.about.copy,
+        };
+      }
+    }
+  } catch (error) {
+    if (!missingWebsiteEngineSchema(error)) throw error;
+  }
+
+  return loadCompatibilityView(safeSlug, db);
 }
 
 export function publicServiceFromView(view: PublicWebsiteView, serviceSlug: string) {

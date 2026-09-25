@@ -60,7 +60,10 @@ export default async function HomePage() {
   }
 
   const view = await loadPublicWebsiteView(business.slug);
-  const catalog = view?.site ?? (await loadPublicCatalog(business));
+  const catalog = view?.site ?? {
+    business,
+    ...(await loadPublicCatalog(business)),
+  };
   const homeImages = view?.snapshot
     ? buildPublicHomeImagePresentation(catalog.groups, snapshotToImageRows(view.snapshot))
     : await loadPublicHomeImages(prisma, business.id, catalog.groups);
