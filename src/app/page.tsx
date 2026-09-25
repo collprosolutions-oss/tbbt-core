@@ -19,6 +19,7 @@ import { prisma } from "@/lib/prisma";
 import { loadDefaultPublicBusiness, loadPublicCatalog } from "@/lib/public-site-data";
 import { readRequestHost } from "@/lib/request-host";
 import { tbbtMarketingMetadata } from "@/lib/tbbt-marketing-seo";
+import { shouldServeTbbtMarketingHome } from "@/lib/tbbt-marketing-host";
 import { loadPublicWebsiteView, snapshotToImageRows } from "@/lib/website-engine/public";
 import { resolvePublicRoot } from "@/lib/website-engine/hosts";
 import { viewHomeMetadata } from "@/lib/website-engine/seo";
@@ -34,7 +35,7 @@ export const dynamic = "force-dynamic";
 export async function generateMetadata(): Promise<Metadata> {
   const host = await readRequestHost();
   const resolved = await resolvePublicRoot(prisma, host);
-  if (resolved.kind === "marketing") {
+  if (resolved.kind === "marketing" || shouldServeTbbtMarketingHome(host)) {
     return tbbtMarketingMetadata({ page: "home", pathname: "/", host });
   }
   if (resolved.kind === "unknown") {
@@ -42,10 +43,10 @@ export async function generateMetadata(): Promise<Metadata> {
   }
   const view = await loadPublicWebsiteView(resolved.slug);
   if (view?.snapshot) {
-    return (
+    const snapshotMeta =
       viewHomeMetadata(view, "/", resolved.origin) ??
-      viewHomeMetadata(view, publicHomePath(view.site.business.slug), resolved.origin)
-    );
+      viewHomeMetadata(view, publicHomePath(view.site.business.slug), resolved.origin);
+    if (snapshotMeta) return snapshotMeta;
   }
   if (view && isCollProRenoSlug(view.site.business.slug) && !view.snapshot) {
     return {
@@ -74,7 +75,7 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function HomePage() {
   const host = await readRequestHost();
   const resolved = await resolvePublicRoot(prisma, host);
-  if (resolved.kind === "marketing") {
+  if (resolved.kind === "marketing" || shouldServeTbbtMarketingHome(host)) {
     return (
       <TbbtMarketingShell host={host}>
         <TbbtHomePage />

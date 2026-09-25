@@ -19,10 +19,12 @@ import type { PublicSiteImageRow } from "@/lib/public-site-images";
 import {
   currentIntakeSchema,
   intakeSchemaFromPublicProjection,
+  INTAKE_FIELD_TYPES,
   publicIntakeSchemaProjection,
+  type IntakeFieldType,
   type PublicIntakeSchemaProjection,
 } from "@/lib/intake-schema";
-import { isConfiguredTrade } from "@/lib/trades";
+import { DEFAULT_TRADE, isConfiguredTrade } from "@/lib/trades";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -35,14 +37,23 @@ export type PublicWebsiteView = {
   about: string;
 };
 
+function asIntakeFieldType(value: string): IntakeFieldType {
+  return (INTAKE_FIELD_TYPES as readonly string[]).includes(value)
+    ? (value as IntakeFieldType)
+    : "TEXT";
+}
+
 function snapshotTradeProjection(trade: PublishedTrade): PublicIntakeSchemaProjection {
   if (trade.intake?.key && trade.intake.fields.length > 0) {
     return {
       key: trade.intake.key,
       version: trade.intake.version,
-      tradeCode: trade.code,
+      tradeCode: isConfiguredTrade(trade.code) ? trade.code : DEFAULT_TRADE,
       title: trade.intake.title,
-      fields: trade.intake.fields,
+      fields: trade.intake.fields.map((field) => ({
+        ...field,
+        type: asIntakeFieldType(field.type),
+      })),
     };
   }
   return publicIntakeSchemaProjection(currentIntakeSchema(trade.code));
