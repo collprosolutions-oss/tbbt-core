@@ -304,7 +304,10 @@ try {
   });
   check("Under-target margin recommendation includes sample size", priced.some((row) => row.key === "under-target-margin" && row.sampleSize === 3 && row.evidence.length > 0));
   check("Labor overrun recommendation is evidence-backed", priced.some((row) => row.key === "labor-exceeds-estimate" && /hours/.test(row.currentResult)));
-  check("Pricing recommendations never claim an automatic price change", priced.every((row) => /will not change|unchanged|before changing/i.test(row.proposedAction)));
+  check(
+    "Pricing recommendations never claim an automatic price change",
+    priced.every((row) => row.kind === "owner-review" && !/automatically change|auto-change|will update .*price/i.test(row.proposedAction)),
+  );
   check("Expense growth becomes an owner-review signal", priced.some((row) => row.key === "recurring-cost-growth"));
 
   const patterns = detectRecurringExpensePatterns([
@@ -366,13 +369,13 @@ try {
   const customer = await prisma.customer.create({
     data: { businessId: businessA.id, name: "Ada" },
   });
-  await prisma.invoice.create({
+  const paidInvoice = await prisma.invoice.create({
     data: {
       businessId: businessA.id,
       customerId: customer.id,
       status: "PAID",
       total: 200,
-      paidAt: new Date(),
+      paidAt: new Date("2026-08-20"),
     },
   });
   await prisma.invoice.create({
@@ -395,6 +398,7 @@ try {
     data: {
       businessId: businessA.id,
       customerId: customer.id,
+      invoiceId: paidInvoice.id,
       purpose: "INVOICE_BALANCE",
       amount: new Prisma.Decimal(200),
       method: "CASH",
