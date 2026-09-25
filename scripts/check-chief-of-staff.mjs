@@ -1129,9 +1129,112 @@ try {
   });
   const starterProjection = getLastWorkforceProjection();
   check("Missing TEAM_MANAGEMENT hides deep skill/bench slices", starterProjection?.teamSummary == null);
-  check("Missing JOBS_TASKS hides targeted assignment suggestions", starterProjection?.canTargetAssignments === false && starterProjection?.targeted == null);
+  check("Missing JOBS_TASKS hides targeted assignment suggestions", starterProjection?.canTargetJob === false && starterProjection?.canRecommendAssignees === false && starterProjection?.targeted == null);
   check("STARTER still gets week-level schedule/capacity when SCHEDULING exists", Boolean(starterProjection?.attention));
   check("Starter limitation is truthful", /Team management is not on this plan|Jobs are not on this plan/i.test(starterAsk.text ?? ""));
+
+  const assignedBeforeJobsOnly = await prisma.job.count({
+    where: { businessId: deep.business.id, assignedMembershipId: { not: null } },
+  });
+  const outreachBeforeJobsOnly = await prisma.workforceOutreachTask.count({ where: { businessId: deep.business.id } });
+  resetLastWorkforceProjection();
+  const jobsWithoutTeam = await runChiefOfStaffCoach(prisma, deep.access, {
+    question: "Who should I send to this unassigned carpentry job?",
+    attemptId: randomUUID(),
+    entityHints: { jobId: unassignedJob.id },
+    test: { denyProductCapabilities: [PRODUCT_CAPABILITIES.TEAM_MANAGEMENT] },
+  });
+  const jobsWithoutTeamProjection = getLastWorkforceProjection();
+  const jobsWithoutTeamTargeted = JSON.stringify(jobsWithoutTeamProjection?.targeted ?? {});
+  const jobsWithoutTeamRaw = JSON.stringify(jobsWithoutTeamProjection);
+  check(
+    "JOBS_TASKS without TEAM_MANAGEMENT can still identify an owned targeted job",
+    jobsWithoutTeamProjection?.canTargetJob === true &&
+      jobsWithoutTeamProjection.canUseTeamProfiles === false &&
+      jobsWithoutTeamProjection.canRecommendAssignees === false &&
+      jobsWithoutTeamProjection.targeted?.job.id === unassignedJob.id,
+  );
+  check("JOBS_TASKS without TEAM_MANAGEMENT returns no assignee suggestions", jobsWithoutTeamProjection?.targeted?.suggestions.length === 0);
+  check(
+    "JOBS_TASKS without TEAM_MANAGEMENT exposes no worker name or membershipId",
+    !jobsWithoutTeamTargeted.includes(carpenter.id) &&
+      !jobsWithoutTeamTargeted.includes(painter.id) &&
+      !jobsWithoutTeamTargeted.includes("Cara Carpenter") &&
+      !jobsWithoutTeamTargeted.includes("Pat Painter") &&
+      !jobsWithoutTeamTargeted.includes("Hank Helper") &&
+      !/"membershipId"/.test(jobsWithoutTeamTargeted),
+  );
+  check(
+    "JOBS_TASKS without TEAM_MANAGEMENT hides worker skill match",
+    jobsWithoutTeamProjection?.targeted?.recordedSkillMatch == null &&
+      !/"skillMatch"\s*:/.test(jobsWithoutTeamTargeted),
+  );
+  check(
+    "JOBS_TASKS without TEAM_MANAGEMENT hides worker availability",
+    jobsWithoutTeamProjection?.targeted?.availabilitySource == null &&
+      jobsWithoutTeamProjection.targeted.suggestions.every((row) => !row.availabilitySource),
+  );
+  check(
+    "JOBS_TASKS without TEAM_MANAGEMENT hides worker progression",
+    jobsWithoutTeamProjection?.targeted?.meetsProgression == null,
+  );
+  check(
+    "JOBS_TASKS without TEAM_MANAGEMENT hides bench and team-profile slices",
+    jobsWithoutTeamProjection?.teamSummary == null &&
+      jobsWithoutTeamProjection.attention.staffingShortageCount === 0 &&
+      jobsWithoutTeamProjection.attention.poorSkillMatchCount === 0,
+  );
+  check(
+    "JOBS_TASKS without TEAM_MANAGEMENT keeps safe job-level facts",
+    jobsWithoutTeamProjection?.targeted?.job.assigned === false &&
+      jobsWithoutTeamProjection.targeted.job.requiredSkills.includes("carpentry") &&
+      jobsWithoutTeamProjection.targeted.job.requiredProgression === "LEAD_QUALIFIED" &&
+      jobsWithoutTeamProjection.targeted.job.pickupKind === "configured",
+  );
+  check(
+    "JOBS_TASKS without TEAM_MANAGEMENT states Team Management is unavailable",
+    /Team management is not on this plan/i.test(jobsWithoutTeam.text ?? "") &&
+      /worker skill, availability, and bench slices stay hidden/i.test(jobsWithoutTeam.text ?? ""),
+  );
+  const assignedAfterJobsOnly = await prisma.job.count({
+    where: { businessId: deep.business.id, assignedMembershipId: { not: null } },
+  });
+  const outreachAfterJobsOnly = await prisma.workforceOutreachTask.count({ where: { businessId: deep.business.id } });
+  check(
+    "JOBS_TASKS without TEAM_MANAGEMENT creates no assignment or outreach writes",
+    assignedBeforeJobsOnly === assignedAfterJobsOnly &&
+      outreachBeforeJobsOnly === outreachAfterJobsOnly &&
+      (await prisma.job.findUnique({ where: { id: unassignedJob.id } }))?.assignedMembershipId == null,
+  );
+
+  resetLastWorkforceProjection();
+  const teamWithoutJobs = await runChiefOfStaffCoach(prisma, deep.access, {
+    question: "Who should I send to this unassigned carpentry job?",
+    attemptId: randomUUID(),
+    entityHints: { jobId: unassignedJob.id },
+    test: { denyProductCapabilities: [PRODUCT_CAPABILITIES.JOBS_TASKS] },
+  });
+  const teamWithoutJobsProjection = getLastWorkforceProjection();
+  check(
+    "TEAM_MANAGEMENT without JOBS_TASKS still exposes the team summary",
+    teamWithoutJobsProjection?.canUseTeamProfiles === true &&
+      teamWithoutJobsProjection.teamSummary != null &&
+      teamWithoutJobsProjection.teamSummary.benchExists === true,
+  );
+  check(
+    "TEAM_MANAGEMENT without JOBS_TASKS does not name or suggest assignees",
+    teamWithoutJobsProjection?.canTargetJob === false &&
+      teamWithoutJobsProjection.canRecommendAssignees === false &&
+      teamWithoutJobsProjection.targeted == null &&
+      /named assignment targeting is not available/i.test(teamWithoutJobs.text ?? ""),
+  );
+
+  check(
+    "TEAM_MANAGEMENT + JOBS_TASKS still returns at most 5 assignee suggestions",
+    (deepProjection?.canRecommendAssignees === true &&
+      (deepProjection?.targeted?.suggestions.length ?? 0) > 0 &&
+      (deepProjection?.targeted?.suggestions.length ?? 99) <= WORKFORCE_CONTEXT_CAPS.MAX_ASSIGNEE_SUGGESTIONS),
+  );
 
   resetLastWorkforceProjection();
   const emptyAsk = await runChiefOfStaffCoach(prisma, emptyRoster.access, {

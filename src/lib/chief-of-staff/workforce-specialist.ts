@@ -105,12 +105,12 @@ export type WorkforceAssigneeSuggestion = {
 export type WorkforceTargetedJob = {
   job: WorkforceJobProjection;
   suggestions: WorkforceAssigneeSuggestion[];
-  recordedSkillMatch: "none" | "partial" | "full" | "unneeded" | "unassigned";
-  availabilitySource: WorkforceAvailabilitySource | "unassigned" | "unknown-member";
+  recordedSkillMatch: "none" | "partial" | "full" | "unneeded" | "unassigned" | null;
+  availabilitySource: WorkforceAvailabilitySource | "unassigned" | "unknown-member" | null;
   meetsProgression: boolean | null;
   conflict: boolean;
-  shortage: boolean;
-  shortageExplanation: string;
+  shortage: boolean | null;
+  shortageExplanation: string | null;
   nextJobThreat: boolean;
   durationUnknown: boolean;
 };
@@ -138,6 +138,10 @@ export type WorkforceProjection = {
   conflicts: WorkforceConflictProjection[];
   snapshotReused: true;
   scopedLookup: boolean;
+  canUseTeamProfiles: boolean;
+  canTargetJob: boolean;
+  canRecommendAssignees: boolean;
+  /** Named assignee recommendations — both JOBS_TASKS and TEAM_MANAGEMENT. */
   canTargetAssignments: boolean;
 };
 
@@ -441,14 +445,42 @@ async function resolveTargetedJob(input: {
 function buildTargetedJob(
   target: ConflictJob | OwnedWorkforceJob,
   snapshot: WorkforceSnapshot,
-  canSuggest: boolean,
+  options: { canRecommendAssignees: boolean; canUseTeamProfiles: boolean },
 ): WorkforceTargetedJob {
   const job = projectJob(target, snapshot);
   const conflictJob = conflictJobFromTarget(target);
-  const assigned = snapshot.members.find((row) => row.membershipId === target.assignedMembershipId);
   const required = job.requiredSkills;
   const requiredProgression = isWorkforceProgression(job.requiredProgression) ? job.requiredProgression : "";
   const day = target.scheduledAt ?? new Date();
+  const jobConflicts = snapshot.conflicts.filter((row) => row.jobId === job.id || row.otherJobId === job.id);
+  const later = conflictJob
+    ? laterJobsHurtByMove({
+        start: conflictJob.scheduledAt,
+        durationMinutes: conflictJob.scheduledDurationMinutes,
+        pickupMinutes: pickupMinutesForJob(conflictJob.pickupDurationMinutes, snapshot.policy).minutes,
+        settings: snapshot.settings,
+        policy: snapshot.policy,
+        existing: snapshot.jobs,
+        membershipId: conflictJob.assignedMembershipId,
+      }).filter((row) => row.id !== job.id)
+    : [];
+
+  if (!options.canUseTeamProfiles) {
+    return {
+      job,
+      suggestions: [],
+      recordedSkillMatch: null,
+      availabilitySource: null,
+      meetsProgression: null,
+      conflict: jobConflicts.some((row) => row.kind === "DOUBLE_BOOKING" || row.severity === "ERROR"),
+      shortage: null,
+      shortageExplanation: null,
+      nextJobThreat: later.length > 0,
+      durationUnknown: !job.durationKnown,
+    };
+  }
+
+  const assigned = snapshot.members.find((row) => row.membershipId === target.assignedMembershipId);
   const recordedSkillMatch = assigned
     ? skillMatchQuality(assigned, required)
     : target.assignedMembershipId
@@ -460,8 +492,7 @@ function buildTargetedJob(
       ? "unknown-member"
       : "unassigned";
   const meetsProgression = assigned ? progressionMeets(assigned.progression, requiredProgression) : null;
-  const jobConflicts = snapshot.conflicts.filter((row) => row.jobId === job.id || row.otherJobId === job.id);
-  const suggestions = canSuggest && conflictJob
+  const suggestions = options.canRecommendAssignees && conflictJob
     ? recommendAssignees({
         start: conflictJob.scheduledAt,
         durationMinutes: conflictJob.scheduledDurationMinutes,
@@ -490,7 +521,7 @@ function buildTargetedJob(
           } satisfies WorkforceAssigneeSuggestion;
         })
     : [];
-  const shortageInput = canSuggest && conflictJob
+  const shortageInput = options.canRecommendAssignees && conflictJob
     ? recommendAssignees({
         start: conflictJob.scheduledAt,
         durationMinutes: conflictJob.scheduledDurationMinutes,
@@ -515,17 +546,6 @@ function buildTargetedJob(
         timeZone: snapshot.timeZone,
       })
     : { shortage: false, explanation: "This job has no recorded start time, so assignment fit stays unknown." };
-  const later = conflictJob
-    ? laterJobsHurtByMove({
-        start: conflictJob.scheduledAt,
-        durationMinutes: conflictJob.scheduledDurationMinutes,
-        pickupMinutes: pickupMinutesForJob(conflictJob.pickupDurationMinutes, snapshot.policy).minutes,
-        settings: snapshot.settings,
-        policy: snapshot.policy,
-        existing: snapshot.jobs,
-        membershipId: conflictJob.assignedMembershipId,
-      }).filter((row) => row.id !== job.id)
-    : [];
   return {
     job,
     suggestions,
@@ -559,7 +579,7 @@ function teamSummaryFromSnapshot(snapshot: WorkforceSnapshot): WorkforceTeamSumm
   };
 }
 
-function attentionFromSnapshot(snapshot: WorkforceSnapshot): WorkforceTeamAttention {
+function attentionFromSnapshot(snapshot: WorkforceSnapshot, canUseTeamProfiles: boolean): WorkforceTeamAttention {
   const days = snapshot.week.days;
   const overloadedDates = days.filter((day) => day.overloaded).map((day) => day.date);
   const open = openCapacityDates(days).filter((date) => !overloadedDates.includes(date));
@@ -570,8 +590,8 @@ function attentionFromSnapshot(snapshot: WorkforceSnapshot): WorkforceTeamAttent
       (job) => job.status !== "COMPLETED" && !job.assignedMembershipId && job.scheduledAt,
     ).length,
     doubleBookingCount: snapshot.conflicts.filter((row) => row.kind === "DOUBLE_BOOKING").length,
-    staffingShortageCount: countStaffingShortages(snapshot),
-    poorSkillMatchCount: countPoorSkillMatches(snapshot),
+    staffingShortageCount: canUseTeamProfiles ? countStaffingShortages(snapshot) : 0,
+    poorSkillMatchCount: canUseTeamProfiles ? countPoorSkillMatches(snapshot) : 0,
     helperRecommendedDates: days.filter((day) => day.helperRecommended).map((day) => day.date),
   };
 }
@@ -730,7 +750,7 @@ function findingsFromProjection(
     });
   }
 
-  if (projection.canTargetAssignments && projection.targeted && !projection.targeted.job.assigned) {
+  if (projection.canTargetJob && projection.targeted && !projection.targeted.job.assigned) {
     findings.push({
       key: "workforce-review-assignment",
       title: "Owner-safe next step: review assignment",
@@ -778,12 +798,16 @@ export function projectWorkforceFromSnapshot(input: {
   snapshot: WorkforceSnapshot;
   catalogKeys: string[];
   target: WorkforceTargetResolution;
-  includeTeamSummary: boolean;
-  canTargetAssignments: boolean;
+  canUseTeamProfiles: boolean;
+  canTargetJob: boolean;
+  canRecommendAssignees: boolean;
 }): WorkforceProjection {
   const targeted =
     input.target.status === "resolved"
-      ? buildTargetedJob(input.target.job, input.snapshot, input.canTargetAssignments)
+      ? buildTargetedJob(input.target.job, input.snapshot, {
+          canRecommendAssignees: input.canRecommendAssignees,
+          canUseTeamProfiles: input.canUseTeamProfiles,
+        })
       : null;
   const jobs = selectJobs(input.snapshot, targeted?.job.id ?? null);
   if (targeted && !jobs.some((job) => job.id === targeted.job.id)) {
@@ -791,15 +815,18 @@ export function projectWorkforceFromSnapshot(input: {
     if (jobs.length > WORKFORCE_CONTEXT_CAPS.MAX_JOBS) jobs.length = WORKFORCE_CONTEXT_CAPS.MAX_JOBS;
   }
   const projection: WorkforceProjection = {
-    attention: attentionFromSnapshot(input.snapshot),
-    teamSummary: input.includeTeamSummary ? teamSummaryFromSnapshot(input.snapshot) : null,
+    attention: attentionFromSnapshot(input.snapshot, input.canUseTeamProfiles),
+    teamSummary: input.canUseTeamProfiles ? teamSummaryFromSnapshot(input.snapshot) : null,
     jobs,
     targeted,
     targeting: input.target.status,
     conflicts: projectConflicts(input.snapshot),
     snapshotReused: true,
     scopedLookup: input.target.status === "resolved" ? input.target.scopedLookup : false,
-    canTargetAssignments: input.canTargetAssignments,
+    canUseTeamProfiles: input.canUseTeamProfiles,
+    canTargetJob: input.canTargetJob,
+    canRecommendAssignees: input.canRecommendAssignees,
+    canTargetAssignments: input.canRecommendAssignees,
   };
   assertSafeProjection(projection);
   return projection;
@@ -846,18 +873,19 @@ export async function runWorkforceSpecialist(input: WorkforceSpecialistInput): P
     };
   }
 
-  const includeTeamSummary = hasCapability(
+  const canUseTeamProfiles = hasCapability(
     allowed,
     PRODUCT_CAPABILITIES.TEAM_MANAGEMENT,
     input.denyProductCapabilities,
   );
-  const canTargetAssignments = hasCapability(
+  const canTargetJob = hasCapability(
     allowed,
     PRODUCT_CAPABILITIES.JOBS_TASKS,
     input.denyProductCapabilities,
   );
+  const canRecommendAssignees = canTargetJob && canUseTeamProfiles;
 
-  const target = canTargetAssignments
+  const target = canTargetJob
     ? await resolveTargetedJob({
         db: input.db,
         access: input.access,
@@ -871,17 +899,18 @@ export async function runWorkforceSpecialist(input: WorkforceSpecialistInput): P
     snapshot,
     catalogKeys,
     target,
-    includeTeamSummary,
-    canTargetAssignments,
+    canUseTeamProfiles,
+    canTargetJob,
+    canRecommendAssignees,
   });
   lastWorkforceProjection = projection;
 
   const findings = findingsFromProjection(projection, catalogKeys);
   const limitations: string[] = [];
-  if (!includeTeamSummary) {
+  if (!canUseTeamProfiles) {
     limitations.push("Team management is not on this plan, so worker skill, availability, and bench slices stay hidden.");
   }
-  if (!canTargetAssignments) {
+  if (!canTargetJob) {
     limitations.push("Jobs are not on this plan, so named assignment targeting is not available.");
   }
   if (target.status === "unauthorized") {
