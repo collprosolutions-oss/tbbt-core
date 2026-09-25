@@ -24,6 +24,7 @@ const {
   isUnpricedCustomQuoteDraftLine,
 } = await import("@/lib/request-estimate-draft");
 const { EstimateLineError, priceDraftEstimateLine } = await import("@/lib/estimate-line-ops");
+const { lineCalculatorSnapshot, lineItemTitle } = await import("@/lib/estimate-line-scope");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -380,7 +381,9 @@ try {
   check("Original line is now $1,800", pricedWall.unitPrice.toString() === "1800" && pricedWall.total.toString() === "1800");
   check(
     "Original customer-request wording is preserved",
-    pricedWall.description === "Decorative Wall Paneling & Finish Carpentry",
+    lineItemTitle(pricedWall.description) === "Decorative Wall Paneling & Finish Carpentry" &&
+      lineCalculatorSnapshot(pricedWall.description)?.calculatorId ===
+        "decorative-wall-paneling",
   );
   check("Price-required state is gone", !isUnpricedCustomQuoteDraftLine(pricedWall));
   check("Send Estimate is enabled after pricing the original line", draftEstimateSendError(wallAfter) === null);

@@ -27,7 +27,6 @@ import {
 } from "@/lib/estimate-calculators/formula-contract";
 import {
   calculatorTitleAliases,
-  definitionFromFormulaBinding,
   formulaBindingForTitle,
   resolveFormulaContract,
 } from "@/lib/estimate-calculators/formula-registry";
@@ -387,10 +386,7 @@ export function findCatalogCalculatorDefinition(
           )
         : null,
     });
-  if (!calculatorId) {
-    const binding = formulaBindingForTitle(input.title);
-    return binding ? definitionFromFormulaBinding(binding) : null;
-  }
+  if (!calculatorId) return null;
 
   if (input.catalogItemId) {
     const linked = items.find((item) => item.id === input.catalogItemId);
@@ -415,11 +411,6 @@ export function findCatalogCalculatorDefinition(
   for (const item of items) {
     const definition = catalogCalculatorDefinition(item.description);
     if (definition?.calculatorId === calculatorId) return definition;
-  }
-
-  const binding = formulaBindingForTitle(input.title);
-  if (binding?.calculatorId === calculatorId) {
-    return definitionFromFormulaBinding(binding);
   }
   return null;
 }
