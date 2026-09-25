@@ -3,6 +3,7 @@
  * Uses only currently available BSOS / Workforce facts.
  */
 import type { BsosFacts, BsosRecommendation } from "@/lib/bsos";
+import { jobIdsFromFinancialFindings } from "@/lib/chief-of-staff/specialists/financial";
 import type {
   ConflictItem,
   ConflictResolution,
@@ -94,21 +95,7 @@ export function resolveConflicts(input: {
   }
 
   const financial = input.results.find((row) => row.specialistId === "FINANCIAL" && row.status === "OK");
-  const financialJobIds = new Set(
-    (financial?.findings ?? []).flatMap((finding) => finding.entityIds ?? []),
-  );
-  if (
-    uniqueRecommendationKeys.includes("workforce-staffing-shortage") &&
-    (financialJobIds.size > 0 || uniqueRecommendationKeys.includes("review-low-margin-jobs"))
-  ) {
-    items.push({
-      kind: "STAFFING_SHORTAGE_VS_PROFITABLE_WORK",
-      recommendationKeys: ["workforce-staffing-shortage"],
-      summary:
-        "Staffing is short for upcoming work. Recorded profitable or scheduled job value stays in context; nobody is assigned.",
-    });
-  }
-
+  const financialJobIds = new Set(jobIdsFromFinancialFindings(financial?.findings ?? []));
   const otherJobIds = new Set(
     input.results
       .filter((row) => row.specialistId !== "FINANCIAL")

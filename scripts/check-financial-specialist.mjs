@@ -18,13 +18,18 @@ const {
   FINANCIAL_OWNED_RECOMMENDATION_KEYS,
   getFinancialSpecialistInterpretationCount,
   interpretFinancialSpecialist,
+  isFinancialJobFindingKey,
+  jobIdsFromFinancialFindings,
   loadCanonicalRecommendationCatalog,
   projectFinancialContext,
   planSpecialists,
   resetFinancialSpecialistCounters,
   resolveConflicts,
   runChiefOfStaffCoach,
+  synthesizeCoachAnswer,
 } = await import("@/lib/chief-of-staff");
+const { buildBsosHealthMetrics } = await import("@/lib/bsos");
+const { answerCoachFromFacts } = await import("@/lib/ai/coach");
 const {
   getFinancialSourceLoadCount,
   resetFinancialSourceLoadCount,
@@ -512,13 +517,285 @@ try {
     conflicts.items.some((item) => item.kind === "MISSING_WAGE_VS_MARGIN_PRICING"),
   );
   check(
-    "Conflicts preserve profitable work without assigning anyone",
-    conflicts.items.some((item) => item.kind === "STAFFING_SHORTAGE_VS_PROFITABLE_WORK") &&
-      conflicts.items.some((item) => /does not assign|nobody is assigned/i.test(item.summary)),
+    "5. Existing shared recommendation dedupe still passes",
+    conflicts.items.some((item) => item.kind === "SHARED_RECOMMENDATION" || item.kind === "DUPLICATE_RECOMMENDATION") &&
+      conflicts.uniqueRecommendationKeys.filter((key) => key === "missing-wage-data").length === 1,
   );
   check(
-    "Conflicts dedupe shared job references",
+    "4. Shared job reference fires only for the same job",
     conflicts.items.some((item) => item.kind === "SHARED_JOB_REFERENCE"),
+  );
+  check(
+    "2. Negative-margin job + staffing shortage is not a profitable-work conflict",
+    conflicts.items.every((item) => item.kind !== "STAFFING_SHORTAGE_VS_PROFITABLE_WORK"),
+  );
+
+  const invoiceId = "inv-receivable-only";
+  const receivableOnly = resolveConflicts({
+    results: [
+      {
+        specialistId: "FINANCIAL",
+        status: "OK",
+        findings: [
+          {
+            key: "financial-outstanding-receivables",
+            title: "Receivables",
+            summary: "SENT remainder",
+            recommendationKeys: ["collect-unpaid-invoices"],
+            factKeys: [],
+            entityIds: [invoiceId],
+          },
+        ],
+        factKeys: [],
+        recommendationKeys: ["collect-unpaid-invoices"],
+      },
+      {
+        specialistId: "WORKFORCE",
+        status: "OK",
+        findings: [
+          {
+            key: "workforce-staffing-shortage",
+            title: "Shortage",
+            summary: "short",
+            recommendationKeys: ["workforce-staffing-shortage"],
+            factKeys: [],
+            entityIds: [invoiceId],
+          },
+        ],
+        factKeys: [],
+        recommendationKeys: ["workforce-staffing-shortage"],
+      },
+    ],
+    recommendations: [
+      { key: "workforce-staffing-shortage", title: "Shortage", kind: "recommendation", priority: 1, why: "x", facts: [], href: "/jobs" },
+      { key: "collect-unpaid-invoices", title: "Collect", kind: "recommendation", priority: 2, why: "y", facts: [], href: "/invoices" },
+    ],
+    facts: catalogA.facts,
+  });
+  check(
+    "1. Receivable invoice + staffing shortage does not emit profitable-work conflict",
+    receivableOnly.items.every((item) => item.kind !== "STAFFING_SHORTAGE_VS_PROFITABLE_WORK"),
+  );
+  check(
+    "3. Invoice ids are never interpreted as job ids",
+    jobIdsFromFinancialFindings([
+      {
+        key: "financial-outstanding-receivables",
+        entityIds: [invoiceId],
+      },
+    ]).length === 0 &&
+      !isFinancialJobFindingKey("financial-outstanding-receivables") &&
+      receivableOnly.items.every((item) => item.kind !== "SHARED_JOB_REFERENCE"),
+  );
+
+  const differentJob = resolveConflicts({
+    results: [
+      {
+        specialistId: "FINANCIAL",
+        status: "OK",
+        findings: [
+          {
+            key: `financial-negative-job:${negativeJob.id}`,
+            title: "Low margin",
+            summary: "neg",
+            recommendationKeys: [],
+            factKeys: [],
+            entityIds: [negativeJob.id],
+          },
+        ],
+        factKeys: [],
+        recommendationKeys: [],
+      },
+      {
+        specialistId: "WORKFORCE",
+        status: "OK",
+        findings: [
+          {
+            key: "workforce-unassigned-job",
+            title: "Unassigned",
+            summary: "u",
+            recommendationKeys: ["workforce-unassigned-job"],
+            factKeys: [],
+            entityIds: ["some-other-job"],
+          },
+        ],
+        factKeys: [],
+        recommendationKeys: ["workforce-unassigned-job"],
+      },
+    ],
+    recommendations: catalogA.activeRecommendations,
+    facts: catalogA.facts,
+  });
+  check(
+    "4. Shared job reference does not fire for different jobs",
+    differentJob.items.every((item) => item.kind !== "SHARED_JOB_REFERENCE"),
+  );
+
+  const liveResult = interpretFinancialSpecialist(catalogA, "How much collected cash do I have?");
+  const liveJobIds = jobIdsFromFinancialFindings(liveResult.findings);
+  const liveInvoiceIds = liveResult.findings
+    .filter((row) => row.key === "financial-outstanding-receivables" || row.key === "collect-unpaid-invoices")
+    .flatMap((row) => row.entityIds ?? []);
+  check(
+    "3. Live Financial job findings do not include receivable invoice ids",
+    liveJobIds.every((id) => intelA.jobProfitability.some((job) => job.jobId === id)) &&
+      liveInvoiceIds.length === 0,
+  );
+
+  console.log("\nREVENUE TRUTH — one collected-cash number");
+  const paidPartial = await createOwnerWorkspace("Paid Partial");
+  await entitleFounder(paidPartial.business.id);
+  const paidPartialCustomer = await prisma.customer.create({
+    data: { businessId: paidPartial.business.id, name: "Partial Pay" },
+  });
+  const paidPartialInvoice = await prisma.invoice.create({
+    data: {
+      businessId: paidPartial.business.id,
+      customerId: paidPartialCustomer.id,
+      status: "PAID",
+      total: 1000,
+      paidAt: new Date(),
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      businessId: paidPartial.business.id,
+      customerId: paidPartialCustomer.id,
+      invoiceId: paidPartialInvoice.id,
+      purpose: "INVOICE_BALANCE",
+      amount: new Prisma.Decimal(400),
+      method: "CASH",
+      receivedAt: new Date(),
+    },
+  });
+  const paidPartialCatalog = await loadCanonicalRecommendationCatalog(prisma, paidPartial.business.id);
+  check(
+    "PAID 1000 + Payment 400 uses collected 400 for both paidRevenue and collectedRevenue",
+    paidPartialCatalog.facts.paidRevenue.amount === 400 &&
+      paidPartialCatalog.facts.collectedRevenue?.amount === 400 &&
+      paidPartialCatalog.financial.intelligence?.cashFlow.collectedCustomerPayments === 400,
+  );
+  const paidPartialHealth = buildBsosHealthMetrics(paidPartialCatalog.facts);
+  check(
+    "Business Health collected-cash metric is 400, not 1000",
+    paidPartialHealth.some((row) => row.key === "paid-revenue" && row.value === "400.00") &&
+      paidPartialHealth.every((row) => row.value !== "1000.00"),
+  );
+  const paidPartialCoach = answerCoachFromFacts("How much collected cash and paid revenue do I have?", {
+    facts: paidPartialCatalog.facts,
+    recommendations: paidPartialCatalog.activeRecommendations,
+    metrics: paidPartialHealth,
+    goals: [],
+    actionItems: [],
+  });
+  const paidPartialSynthesis = synthesizeCoachAnswer({
+    question: "How much collected cash and paid revenue do I have?",
+    catalog: paidPartialCatalog,
+    specialistResults: [interpretFinancialSpecialist(paidPartialCatalog, "How much collected cash and paid revenue do I have?")],
+    conflicts: resolveConflicts({
+      results: [interpretFinancialSpecialist(paidPartialCatalog, "How much collected cash and paid revenue do I have?")],
+      recommendations: paidPartialCatalog.activeRecommendations,
+      facts: paidPartialCatalog.facts,
+    }),
+    coachContext: {
+      facts: paidPartialCatalog.facts,
+      recommendations: paidPartialCatalog.activeRecommendations,
+      metrics: paidPartialHealth,
+      goals: [],
+      actionItems: [],
+    },
+  });
+  const paidPartialAsk = await runChiefOfStaffCoach(prisma, paidPartial.access, {
+    question: "How much collected cash and paid revenue do I have?",
+    attemptId: randomUUID(),
+  });
+  const paidPartialOwnerFacing = [
+    paidPartialCoach.output.text,
+    paidPartialSynthesis.output.text,
+    paidPartialAsk.text ?? "",
+  ].join("\n");
+  const paidPartialRevenueFacts = [...paidPartialCoach.citedFacts, ...paidPartialSynthesis.citedFacts].filter(
+    (fact) => fact.key === "paid-revenue" || fact.key === "collected-revenue",
+  );
+  check(
+    "Coach/synthesis does not expose 1000 as collected/paid revenue while Financial says 400",
+    paidPartialCatalog.financial.intelligence?.cashFlow.collectedCustomerPayments === 400 &&
+      /400/.test(paidPartialAsk.text ?? "") &&
+      !/collected customer cash is 1000|paid revenue is 1000/i.test(paidPartialOwnerFacing) &&
+      paidPartialRevenueFacts.length > 0 &&
+      paidPartialRevenueFacts.every((fact) => fact.value === "400.00") &&
+      paidPartialCoach.citedFacts.every((fact) => fact.value !== "1000.00") &&
+      paidPartialSynthesis.citedFacts.every((fact) => fact.value !== "1000.00"),
+  );
+  check(
+    "No competing cash fact contradicts collected 400",
+    paidPartialCatalog.facts.paidRevenue.amount === 400 &&
+      paidPartialCatalog.facts.collectedRevenue?.amount === 400 &&
+      paidPartialRevenueFacts.every((fact) => fact.value === "400.00"),
+  );
+
+  const legacyPaidWs = await createOwnerWorkspace("Legacy Paid");
+  await entitleFounder(legacyPaidWs.business.id);
+  await prisma.invoice.create({
+    data: {
+      businessId: legacyPaidWs.business.id,
+      status: "PAID",
+      total: 1000,
+      paidAt: new Date(),
+    },
+  });
+  const legacyCatalog = await loadCanonicalRecommendationCatalog(prisma, legacyPaidWs.business.id);
+  check(
+    "PAID 1000 with no Payment rows uses legacy fallback 1000",
+    legacyCatalog.facts.paidRevenue.amount === 1000 &&
+      legacyCatalog.facts.collectedRevenue?.amount === 1000 &&
+      legacyCatalog.financial.intelligence?.cashFlow.collectedCustomerPayments === 1000,
+  );
+
+  const sentPartialWs = await createOwnerWorkspace("Sent Partial");
+  await entitleFounder(sentPartialWs.business.id);
+  const sentCustomer = await prisma.customer.create({
+    data: { businessId: sentPartialWs.business.id, name: "Sent Partial" },
+  });
+  const sentInvoice = await prisma.invoice.create({
+    data: {
+      businessId: sentPartialWs.business.id,
+      customerId: sentCustomer.id,
+      status: "SENT",
+      total: 1000,
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      businessId: sentPartialWs.business.id,
+      customerId: sentCustomer.id,
+      invoiceId: sentInvoice.id,
+      purpose: "INVOICE_BALANCE",
+      amount: new Prisma.Decimal(400),
+      method: "CASH",
+      receivedAt: new Date(),
+    },
+  });
+  const sentCatalog = await loadCanonicalRecommendationCatalog(prisma, sentPartialWs.business.id);
+  const sentRow = sentCatalog.financial.intelligence?.receivables.rows.find((row) => row.invoiceId === sentInvoice.id);
+  check(
+    "SENT 1000 + Payment 400 collects 400 and remains 600",
+    sentCatalog.facts.paidRevenue.amount === 400 &&
+      sentCatalog.facts.collectedRevenue?.amount === 400 &&
+      sentCatalog.facts.unpaidInvoices.amount === 600 &&
+      sentRow?.collectedAgainstInvoice === 400 &&
+      sentRow?.balanceDue === 600,
+  );
+  const sentAsk = await runChiefOfStaffCoach(prisma, sentPartialWs.access, {
+    question: "How much collected cash and outstanding receivables do I have?",
+    attemptId: randomUUID(),
+  });
+  check(
+    "SENT partial Coach does not treat 1000 as collected cash",
+    /400/.test(sentAsk.text ?? "") &&
+      /600/.test(sentAsk.text ?? "") &&
+      !/collected customer cash is 1000/i.test(sentAsk.text ?? "") &&
+      sentCatalog.facts.paidRevenue.amount !== 1000,
   );
 
   check("PRODUCT_CAPABILITIES still names REPORTING_INSIGHTS", PRODUCT_CAPABILITIES.REPORTING_INSIGHTS === "REPORTING_INSIGHTS");

@@ -56,7 +56,7 @@ export type SpecialistContext = {
   factKeys: string[];
   recommendationKeys: string[];
   facts: Record<string, string>;
-  findings: Array<{ key: string; title: string; why: string }>;
+  findings: Array<{ key: string; title: string; why: string; entityIds?: string[] }>;
   entityHints?: { jobId?: string; recommendationKey?: string };
 };
 

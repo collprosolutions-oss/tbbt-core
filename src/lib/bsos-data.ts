@@ -268,6 +268,7 @@ export async function loadBsosFactsBundle(
     return {
       facts: {
         ...baseFacts,
+        paidRevenue: { amount: collected },
         lowMarginJobs: { count: lowMarginJobs },
         recurringExpenses: { count: recurring.count, amount: recurring.amount },
         collectedRevenue: { amount: collected },

@@ -63,6 +63,33 @@ function pushEntity(ids: string[], value: string | null | undefined) {
   ids.push(value);
 }
 
+const FINANCIAL_JOB_RECOMMENDATION_KEYS = new Set([
+  "review-low-margin-jobs",
+  "estimate-labor-overrun",
+]);
+
+export function isFinancialJobFindingKey(key: string) {
+  return key.startsWith("financial-negative-job:") || FINANCIAL_JOB_RECOMMENDATION_KEYS.has(key);
+}
+
+export function jobIdsFromFinancialFindings(
+  findings: Array<{ key: string; entityIds?: string[] }>,
+) {
+  const ids: string[] = [];
+  for (const finding of findings) {
+    if (!isFinancialJobFindingKey(finding.key)) continue;
+    for (const id of finding.entityIds ?? []) pushEntity(ids, id);
+  }
+  return ids;
+}
+
+type ProjectedFinding = {
+  key: string;
+  title: string;
+  why: string;
+  entityIds?: string[];
+};
+
 export function projectFinancialContext(
   catalog: CanonicalRecommendationCatalog,
   question: string,
@@ -71,8 +98,6 @@ export function projectFinancialContext(
 ): SpecialistContext {
   const facts: Record<string, string> = {};
   const factKeys: string[] = [];
-  const entityIds: string[] = [];
-  if (entityHints?.jobId) pushEntity(entityIds, entityHints.jobId);
 
   addFact(facts, factKeys, "collected-customer-cash", money(intel.cashFlow.collectedCustomerPayments));
   addFact(
@@ -139,7 +164,6 @@ export function projectFinancialContext(
   addFact(facts, factKeys, "low-margin-job-count", String(negativeJobs.length));
   if (negativeJobs[0]) {
     addFact(facts, factKeys, "lowest-margin-job", `${money(negativeJobs[0].grossProfit ?? 0)}`);
-    pushEntity(entityIds, negativeJobs[0].jobId);
   }
 
   const receivableRows = intel.receivables.rows
@@ -152,7 +176,6 @@ export function projectFinancialContext(
     "receivables-top",
     receivableRows.map((row) => `${money(row.balanceDue)}:${row.ageDays}d:${row.agingBucket}`).join("|") || "none",
   );
-  for (const row of receivableRows) pushEntity(entityIds, row.invoiceId);
 
   const services = intel.serviceProfitability
     .filter((row) => row.attributed)
@@ -184,10 +207,13 @@ export function projectFinancialContext(
   const ownedRecs = catalog.activeRecommendations.filter((item) =>
     isFinancialOwnedRecommendationKey(item.key),
   );
-  const findings = ownedRecs.map((item) => ({
+  const jobEntityIds: string[] = [];
+  for (const job of negativeJobs) pushEntity(jobEntityIds, job.jobId);
+  const findings: ProjectedFinding[] = ownedRecs.map((item) => ({
     key: item.key,
     title: item.title,
     why: item.why,
+    entityIds: isFinancialJobFindingKey(item.key) && jobEntityIds.length > 0 ? jobEntityIds : undefined,
   }));
 
   findings.push({
@@ -241,8 +267,8 @@ export function projectFinancialContext(
       key: `financial-negative-job:${job.jobId}`,
       title: "Low-margin job",
       why: `Recorded gross profit on a completed job is ${money(job.grossProfit ?? 0)}. This uses billed revenue minus recorded direct cost.`,
+      entityIds: [job.jobId],
     });
-    pushEntity(entityIds, job.jobId);
   }
   if (completedWithCost.length > 0) {
     for (const rec of intel.pricingRecommendations.slice(0, FINANCIAL_CONTEXT_CAPS.pricingFindings)) {
@@ -269,7 +295,7 @@ export function projectFinancialContext(
     facts,
     findings,
     entityHints: {
-      jobId: entityHints?.jobId ?? entityIds[0],
+      jobId: entityHints?.jobId,
       recommendationKey: entityHints?.recommendationKey,
     },
   };
@@ -308,18 +334,6 @@ export function interpretFinancialSpecialist(
   }
 
   const context = projectFinancialContext(catalog, question, snapshot.intelligence, entityHints);
-  const entityIds: string[] = [];
-  if (context.entityHints?.jobId) pushEntity(entityIds, context.entityHints.jobId);
-  for (const job of snapshot.intelligence.jobProfitability
-    .filter((job) => job.grossProfit != null && job.grossProfit < 0)
-    .slice(0, FINANCIAL_CONTEXT_CAPS.profitabilityJobs)) {
-    pushEntity(entityIds, job.jobId);
-  }
-  for (const row of snapshot.intelligence.receivables.rows
-    .filter((row) => row.balanceDue > 0)
-    .slice(0, FINANCIAL_CONTEXT_CAPS.receivables)) {
-    pushEntity(entityIds, row.invoiceId);
-  }
 
   return {
     specialistId: "FINANCIAL",
@@ -330,7 +344,7 @@ export function interpretFinancialSpecialist(
       summary: item.why,
       recommendationKeys: isFinancialOwnedRecommendationKey(item.key) ? [item.key] : [],
       factKeys: context.factKeys,
-      entityIds: entityIds.length > 0 ? entityIds : undefined,
+      entityIds: item.entityIds,
     })),
     factKeys: context.factKeys,
     recommendationKeys: context.recommendationKeys,
