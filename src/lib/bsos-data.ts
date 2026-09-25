@@ -11,7 +11,8 @@ import {
   type BsosFacts,
 } from "@/lib/bsos";
 import { buildFinancialIntelligence } from "@/lib/financial-intelligence";
-import { asNumber, buildReport, resolveReportRange } from "@/lib/reports";
+import { loadFinancialSource } from "@/lib/financial-intelligence-data";
+import { asNumber, buildReport, percentChange, resolveReportRange } from "@/lib/reports";
 import { loadReportSource } from "@/lib/reports-data";
 import { isPaidActivity } from "@/lib/time-cards";
 import { partitionRecommendations } from "@/lib/bsos-actions";
@@ -161,14 +162,18 @@ export async function loadBsosFacts(
 
   const range = resolveReportRange("all", undefined, undefined, now);
   const report = buildReport(reportSource, range);
-  const intel = buildFinancialIntelligence(reportSource, report, now);
-  const lowMarginJobs = report.jobProfitability.filter(
-    (job) => job.recordedMargin != null && job.recordedMargin < 0,
+  const financialSource = await loadFinancialSource(prisma, businessId);
+  const intel = buildFinancialIntelligence(financialSource, report, now);
+  const lowMarginJobs = intel.jobProfitability.filter(
+    (job) => job.grossProfit != null && job.grossProfit < 0,
   ).length;
   const recurring = {
     count: intel.recurringExpenses.length,
     amount: intel.recurringExpenses.reduce((sum, row) => sum + row.amount, 0),
   };
+  const aged = intel.receivables.rows.filter((row) => row.ageDays > 30);
+  const collected = intel.customerProfitability.reduce((sum, row) => sum + row.collected, 0);
+  const topCustomer = intel.customerProfitability[0];
 
   return {
     unpaidInvoices: {
@@ -188,6 +193,23 @@ export async function loadBsosFacts(
     recurringExpenses: { count: recurring.count, amount: recurring.amount },
     paidRevenue: { amount: asNumber(paidInvoices._sum.total) },
     recordedExpenses: { amount: asNumber(expenses._sum.amount) },
+    agedReceivables: {
+      count: aged.length,
+      amount: aged.reduce((sum, row) => sum + row.balanceDue, 0),
+    },
+    lowMarginServices: {
+      count: intel.serviceProfitability.filter((row) => row.attributed && row.grossProfit != null && row.grossProfit < 0).length,
+    },
+    estimateLaborOverruns: {
+      count: intel.jobProfitability.filter(
+        (job) => job.estimateActual.laborHoursVariance != null && job.estimateActual.laborHoursVariance > 0,
+      ).length,
+    },
+    expenseGrowthPercent: percentChange(report.recordedExpenses.current, report.recordedExpenses.prior ?? 0),
+    customerConcentration: {
+      share: topCustomer && collected > 0 ? topCustomer.collected / collected : null,
+      customerName: topCustomer?.name ?? null,
+    },
   };
 }
 

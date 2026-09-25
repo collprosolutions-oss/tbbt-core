@@ -90,6 +90,17 @@ export type SettingsWorkspaceProps = {
     canTransferOwnership: boolean;
     canRequestOffboarding: boolean;
   };
+  laborBurden?: {
+    burdenRate: number | null;
+    targetGrossMarginRate: number | null;
+    notes: string | null;
+  };
+  financeStatus?: {
+    accountingConnected: boolean;
+    bankingConnected: boolean;
+    accountingMessage: string;
+    bankingMessage: string;
+  };
 };
 
 export type {

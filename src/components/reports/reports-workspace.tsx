@@ -16,6 +16,7 @@ import {
 } from "@/lib/reports";
 import { formatDurationClock } from "@/lib/time-cards";
 import { cn } from "@/lib/utils";
+import { RecurringPatternReview } from "@/components/reports/recurring-pattern-review";
 import type { ReportsWorkspaceProps } from "@/components/reports/types";
 
 function changeLabel(changePercent: number | null): string | null {
@@ -74,34 +75,53 @@ export function ReportsWorkspace({ area, rangePreset, from, to, report, intellig
         {intelligence && area === "overview" ? (
           <Card>
             <CardHeader>
-              <CardTitle>Financial intelligence</CardTitle>
+              <CardTitle>Profitability overview</CardTitle>
               <CardDescription>
-                {intelligence.messages.bank} {intelligence.messages.accounting}
+                Recorded facts first. {intelligence.messages.bank} {intelligence.messages.accounting}
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <p>Average ticket (issued invoices): {intelligence.averageTicket == null ? "—" : formatMoney(intelligence.averageTicket)}</p>
-              <p>
-                Estimate conversion: {intelligence.estimateConversion.approved}/{intelligence.estimateConversion.sent}
-                {intelligence.estimateConversion.conversionRate != null
-                  ? ` (${intelligence.estimateConversion.conversionRate}%)`
-                  : ""}
-              </p>
-              <p>
-                Known future inflows: {formatMoney(intelligence.cashFlow.knownInflows)} · known outflows:{" "}
-                {formatMoney(intelligence.cashFlow.knownOutflows)}. Projected bank balance: Not Connected.
-              </p>
-              <p>{intelligence.cashFlow.message}</p>
-              <p>Recurring expense flags on file: {intelligence.recurringExpenses.length}</p>
-              <p>
-                Job margin snapshot ({intelligence.jobMarginKind}):{" "}
-                {intelligence.jobMarginSnapshot[0]
-                  ? `${intelligence.jobMarginSnapshot[0].jobCount} jobs in ${intelligence.jobMarginSnapshot[0].label}`
-                  : "no recorded jobs in this range"}
-              </p>
-              <Button asChild size="sm" variant="outline">
-                <Link href="/business-health">Open BSOS recommendations</Link>
-              </Button>
+            <CardContent className="space-y-3 text-sm">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <MiniStat
+                  label="Collected cash"
+                  value={<Money value={intelligence.cashFlow.collectedCustomerPayments} />}
+                  hint={intelligence.cashFlow.coverage}
+                />
+                <MiniStat
+                  label="Outstanding receivables"
+                  value={<Money value={intelligence.outstandingReceivables.amount} />}
+                  hint={`${intelligence.outstandingReceivables.count} sent, unpaid · not cash`}
+                />
+                <MiniStat
+                  label="Known cash out"
+                  value={<Money value={intelligence.cashFlow.knownOutflows} />}
+                  hint="Recorded expenses + processed payroll"
+                />
+                <MiniStat
+                  label="Jobs in view"
+                  value={String(intelligence.jobProfitability.length)}
+                  hint={
+                    intelligence.jobMarginSnapshot[0]
+                      ? `${intelligence.jobMarginSnapshot[0].label} · selected-range snapshot`
+                      : "No jobs with recorded financial activity"
+                  }
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">{intelligence.cashFlow.message}</p>
+              <div className="flex flex-wrap gap-2">
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/reports?area=receivables">Receivables</Link>
+                </Button>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/reports?area=job-profitability">Job margin</Link>
+                </Button>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/reports?area=cash-flow">Known cash flow</Link>
+                </Button>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/business-health">Open BSOS</Link>
+                </Button>
+              </div>
             </CardContent>
           </Card>
         ) : null}
@@ -111,7 +131,7 @@ export function ReportsWorkspace({ area, rangePreset, from, to, report, intellig
         </FounderRegion>
 
         <FounderRegion id="table">
-          <ReportBody area={area} report={report} />
+          <ReportBody area={area} report={report} intelligence={intelligence} />
         </FounderRegion>
       </div>
 
@@ -120,16 +140,16 @@ export function ReportsWorkspace({ area, rangePreset, from, to, report, intellig
           <CardHeader>
             <CardTitle>Needs attention</CardTitle>
             <CardDescription>
-              {report.attention.length === 0
+              {report.attention.length + (intelligence?.attention.length ?? 0) === 0
                 ? "Nothing waiting right now."
-                : `${report.attention.length} record${report.attention.length === 1 ? "" : "s"} needing a look.`}
+                : `${report.attention.length + (intelligence?.attention.length ?? 0)} record${report.attention.length + (intelligence?.attention.length ?? 0) === 1 ? "" : "s"} needing a look.`}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            {report.attention.length === 0 ? (
+            {report.attention.length + (intelligence?.attention.length ?? 0) === 0 ? (
               <p className="text-sm text-muted-foreground">No outstanding invoices, unbilled completed jobs, or missing wage snapshots in this view.</p>
             ) : (
-              report.attention.slice(0, 12).map((item) => (
+              [...(intelligence?.attention ?? []), ...report.attention].slice(0, 12).map((item) => (
                 <Link
                   key={item.key}
                   href={item.href}
@@ -250,7 +270,15 @@ function ReportCharts({ area, report }: { area: ReportArea; report: BuiltReport 
   );
 }
 
-function ReportBody({ area, report }: { area: ReportArea; report: BuiltReport }) {
+function ReportBody({
+  area,
+  report,
+  intelligence,
+}: {
+  area: ReportArea;
+  report: BuiltReport;
+  intelligence?: ReportsWorkspaceProps["intelligence"];
+}) {
   if (area === "expenses") {
     return (
       <div className="space-y-4">
@@ -322,6 +350,30 @@ function ReportBody({ area, report }: { area: ReportArea; report: BuiltReport })
   }
 
   if (area === "job-profitability") {
+    if (intelligence) {
+      return (
+        <ReportTable
+          title="Job profitability"
+          description="Billed and collected are separate. Gross profit is billed revenue minus known direct cost (wage + optional burden + job expenses). Unpaid invoices are never collected cash."
+          headers={["Customer", "Status", "Billed", "Collected", "Direct cost", "Gross profit", "Margin %"]}
+          empty="No jobs with invoices, approved labor, or recorded job expenses in this range."
+          rows={intelligence.jobProfitability.map((row) => ({
+            key: row.jobId,
+            href: row.href,
+            cells: [
+              row.customerName,
+              <StatusBadge key="s" status={row.status} />,
+              <Money key="b" value={row.billedRevenue} />,
+              <Money key="c" value={row.collectedRevenue} />,
+              row.knownTotalDirectCost == null ? "Incomplete" : <Money key="d" value={row.knownTotalDirectCost} />,
+              <Money key="g" value={row.grossProfit} />,
+              row.grossMarginPct == null ? "—" : `${row.grossMarginPct}%`,
+            ],
+            mobile: `${row.customerName} · billed ${formatMoney(row.billedRevenue)} · collected ${formatMoney(row.collectedRevenue)}`,
+          }))}
+        />
+      );
+    }
     return (
       <ReportTable
         title="Job profitability"
@@ -389,6 +441,30 @@ function ReportBody({ area, report }: { area: ReportArea; report: BuiltReport })
   }
 
   if (area === "customers") {
+    if (intelligence) {
+      return (
+        <ReportTable
+          title="Customer profitability"
+          description="Invoiced is sent + paid. Collected is recorded payments. Outstanding is unpaid sent invoices."
+          headers={["Customer", "Jobs", "Invoiced", "Collected", "Direct cost", "Gross profit", "Outstanding"]}
+          empty="No customer financial activity in this range."
+          rows={intelligence.customerProfitability.map((row) => ({
+            key: row.customerId,
+            href: row.href,
+            cells: [
+              row.name,
+              String(row.jobCount),
+              <Money key="i" value={row.invoiced} />,
+              <Money key="c" value={row.collected} />,
+              row.knownDirectCost == null ? "Incomplete" : <Money key="d" value={row.knownDirectCost} />,
+              <Money key="g" value={row.grossProfit} />,
+              <Money key="o" value={row.outstandingReceivables} />,
+            ],
+            mobile: `${row.name} · collected ${formatMoney(row.collected)}`,
+          }))}
+        />
+      );
+    }
     return (
       <ReportTable
         title="Customers"
@@ -412,6 +488,30 @@ function ReportBody({ area, report }: { area: ReportArea; report: BuiltReport })
   }
 
   if (area === "services") {
+    if (intelligence) {
+      return (
+        <ReportTable
+          title="Service profitability"
+          description="Jobs are attributed only when they map to exactly one catalog service. Unattributed work is not split across services."
+          headers={["Service", "Jobs", "Billed", "Direct cost", "Gross profit", "Margin %", "Avg ticket"]}
+          empty="No attributable service activity in this range."
+          rows={intelligence.serviceProfitability.map((row) => ({
+            key: row.catalogItemId ?? "unattributed",
+            href: "/services",
+            cells: [
+              row.attributed ? row.name : `${row.name} (not attributed)`,
+              String(row.jobs),
+              row.revenue == null ? "—" : <Money key="r" value={row.revenue} />,
+              row.directCost == null ? "Incomplete" : <Money key="d" value={row.directCost} />,
+              <Money key="g" value={row.grossProfit} />,
+              row.grossMargin == null ? "—" : `${row.grossMargin}%`,
+              <Money key="a" value={row.averageTicket} />,
+            ],
+            mobile: `${row.name} · ${row.jobs} jobs`,
+          }))}
+        />
+      );
+    }
     return (
       <ReportTable
         title="Services"
@@ -431,6 +531,144 @@ function ReportBody({ area, report }: { area: ReportArea; report: BuiltReport })
           mobile: `${row.name} · ${row.requested} requested`,
         }))}
       />
+    );
+  }
+
+  if (area === "receivables" && intelligence) {
+    return (
+      <div className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {(["0-30", "31-60", "61-90", "90+"] as const).map((bucket) => (
+            <MiniStat
+              key={bucket}
+              label={`${bucket} days`}
+              value={<Money value={intelligence.receivables.buckets[bucket].amount} />}
+              hint={`${intelligence.receivables.buckets[bucket].count} invoices · age from issued date`}
+            />
+          ))}
+        </div>
+        <ReportTable
+          title="Unpaid sent invoices"
+          description="Balance due is invoice total minus recorded payments. Due dates are not invented."
+          headers={["Customer", "Age", "Bucket", "Invoice", "Collected", "Balance due"]}
+          empty="No unpaid sent invoices."
+          rows={intelligence.receivables.rows.map((row) => ({
+            key: row.invoiceId,
+            href: row.href,
+            cells: [
+              row.customerName,
+              `${row.ageDays} days`,
+              row.agingBucket,
+              <Money key="t" value={row.invoiceTotal} />,
+              <Money key="c" value={row.collectedAgainstInvoice} />,
+              <Money key="b" value={row.balanceDue} />,
+            ],
+            mobile: `${row.customerName} · ${formatMoney(row.balanceDue)} · ${row.ageDays}d`,
+          }))}
+        />
+      </div>
+    );
+  }
+
+  if (area === "cash-flow" && intelligence) {
+    return (
+      <div className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Known cash flow</CardTitle>
+            <CardDescription>{intelligence.cashFlow.message}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <PnlRow label="Collected customer payments" value={<Money value={intelligence.cashFlow.collectedCustomerPayments} />} />
+            <PnlRow label="Recorded expenses" value={<Money value={intelligence.cashFlow.recordedExpenseOutflows} />} />
+            <PnlRow label="Processed payroll" value={<Money value={intelligence.cashFlow.processedPayrollOutflows} />} hint="AUTHORIZED payroll is not treated as cash out" />
+            <PnlRow label="Known net" value={<Money value={intelligence.cashFlow.netKnown} />} hint="Not a bank balance" />
+            <p className="text-xs text-muted-foreground">{intelligence.cashFlow.coverage}</p>
+            <p className="text-xs text-muted-foreground">
+              Banking: {intelligence.bankConnected ? "Connected" : "Not Connected"}. Accounting:{" "}
+              {intelligence.accountingConnected ? "Connected" : "Not Connected"}.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (area === "estimate-accuracy" && intelligence) {
+    return (
+      <ReportTable
+        title="Estimate vs actual"
+        description="Estimated LABOR quantity/cost and MATERIAL lines versus approved time and recorded materials. Missing estimates stay blank."
+        headers={["Customer", "Est. hours", "Actual hours", "Est. materials", "Actual materials", "Cost variance"]}
+        empty="No jobs with estimate or actual cost records in this range."
+        rows={intelligence.jobProfitability.map((row) => ({
+          key: row.jobId,
+          href: row.href,
+          cells: [
+            row.customerName,
+            row.estimateActual.estimatedLaborHours == null ? "—" : formatDurationClock(row.estimateActual.estimatedLaborHours),
+            formatDurationClock(row.estimateActual.actualLaborHours),
+            <Money key="em" value={row.estimateActual.estimatedMaterials} />,
+            <Money key="am" value={row.estimateActual.actualMaterials} />,
+            <Money key="v" value={row.estimateActual.totalCostVariance} />,
+          ],
+          mobile: `${row.customerName} · variance ${row.estimateActual.totalCostVariance ?? "—"}`,
+        }))}
+      />
+    );
+  }
+
+  if (area === "pricing" && intelligence) {
+    return (
+      <div className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Pricing signals</CardTitle>
+            <CardDescription>
+              Deterministic owner-review signals from completed historical data. Catalog prices are never changed automatically.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {intelligence.pricingRecommendations.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Not enough completed jobs with complete cost data for a pricing signal.
+              </p>
+            ) : (
+              intelligence.pricingRecommendations.map((row) => (
+                <div key={row.key} className="rounded-lg border border-border/70 p-3 text-sm">
+                  <p className="font-medium">{row.title}</p>
+                  <p className="text-xs text-muted-foreground">Sample {row.sampleSize} · {row.currentResult}</p>
+                  <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                    {row.evidence.map((fact) => (
+                      <li key={fact}>{fact}</li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-xs">{row.proposedAction}</p>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+        <ReportTable
+          title="Likely recurring costs"
+          description="Detected from expense history. Confirming a pattern does not create a liability."
+          headers={["Description", "Vendor", "Suggested", "Count", "Status", "Review"]}
+          empty="No repeating expense patterns on file."
+          rows={intelligence.recurringSuggestions.map((row) => ({
+            key: row.patternKey,
+            href: row.href,
+            cells: [
+              row.description,
+              row.vendor ?? "—",
+              <Money key="a" value={row.suggestedAmount} />,
+              String(row.occurrenceCount),
+              row.ownerStatus,
+              <RecurringPatternReview key="r" row={row} />,
+            ],
+            mobile: `${row.description} · ${row.ownerStatus}`,
+          }))}
+        />
+      </div>
     );
   }
 

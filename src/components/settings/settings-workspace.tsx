@@ -17,6 +17,7 @@ import {
   SaasPlanChangeButton,
   SaasSubscribeButton,
 } from "@/components/settings/saas-billing-buttons";
+import { LaborBurdenForm } from "@/components/settings/labor-burden-form";
 import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-settings-form";
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import { SchedulingSettingsForm } from "@/components/settings/scheduling-settings-form";
@@ -193,6 +194,8 @@ function SectionBody(props: SettingsWorkspaceProps) {
     canClearTestData,
     testDataCleanupPreview,
     checkoutStatus,
+    laborBurden,
+    financeStatus,
   } = props;
 
   if (section === "overview") {
@@ -745,6 +748,15 @@ function SectionBody(props: SettingsWorkspaceProps) {
         <Button asChild variant="outline">
           <Link href="/payroll">Open Payroll</Link>
         </Button>
+        <div className="border-t border-border/60 pt-4">
+          <p className="mb-2 text-sm font-medium">Optional labor burden</p>
+          <LaborBurdenForm
+            burdenRate={laborBurden?.burdenRate ?? null}
+            targetGrossMarginRate={laborBurden?.targetGrossMarginRate ?? null}
+            notes={laborBurden?.notes ?? null}
+            canEdit={canEditPreferences && canOperate}
+          />
+        </div>
       </SectionCard>
     );
   }
@@ -758,7 +770,11 @@ function SectionBody(props: SettingsWorkspaceProps) {
         <dl className="grid gap-3 text-sm">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <dt>Bank connection</dt>
-            <dd><Badge variant="outline">Not Connected</Badge></dd>
+            <dd><Badge variant="outline">{financeStatus?.bankingConnected ? "Connected" : "Not Connected"}</Badge></dd>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <dt>Accounting connection</dt>
+            <dd><Badge variant="outline">{financeStatus?.accountingConnected ? "Connected" : "Not Connected"}</Badge></dd>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <dt>Last Verified Bank Balance</dt>
@@ -778,7 +794,8 @@ function SectionBody(props: SettingsWorkspaceProps) {
           </div>
         </dl>
         <p className="text-sm text-muted-foreground">{PROJECTED_BALANCE_UNAVAILABLE_MESSAGE}</p>
-        <p className="text-sm text-muted-foreground">{snapshot.bank.unavailableReason}</p>
+        <p className="text-sm text-muted-foreground">{financeStatus?.bankingMessage ?? snapshot.bank.unavailableReason}</p>
+        <p className="text-sm text-muted-foreground">{financeStatus?.accountingMessage ?? "Accounting is Not Connected."}</p>
       </SectionCard>
     );
   }

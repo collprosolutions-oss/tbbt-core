@@ -340,6 +340,9 @@ model Business {
   automationRules          AutomationRule[]
   automationRuns           AutomationRun[]
   recommendationStates     BsosRecommendationState[]
+  laborBurdenSetting       BusinessLaborBurdenSetting?
+  recurringExpensePatterns RecurringExpensePattern[]
+  financeConnections       BusinessFinanceConnection[]
   publishedWebsite         WebsitePublish?          @relation("CurrentPublishedWebsite", fields: [publishedWebsiteId], references: [id], onDelete: SetNull)
   websitePublishes         WebsitePublish[]         @relation("BusinessWebsitePublishes")
   websiteGalleryItems      WebsiteGalleryItem[]
@@ -2776,5 +2779,79 @@ model WebsiteLocalPageDraft {
   catalogItem ServiceCatalogItem @relation(fields: [catalogItemId], references: [id], onDelete: Cascade)
 
   @@unique([businessId, serviceAreaId, catalogItemId])
+  @@index([businessId])
+}
+
+/// Optional employer labor burden and owner pricing targets for THIS
+/// business. Null rates mean nothing is configured — profit calculations
+/// stay wage-only and never invent a default percentage. Changing a rate
+/// does not rewrite approved time-card or payroll snapshots.
+model BusinessLaborBurdenSetting {
+  id                    String   @id @default(cuid())
+  businessId            String   @unique
+  /// Employer burden as a decimal fraction of recorded wage (0.15 = 15%).
+  /// Null means no burden is configured.
+  burdenRate            Decimal?
+  /// Owner target gross margin as a decimal fraction (0.40 = 40%).
+  /// Null means no owner target is on file.
+  targetGrossMarginRate Decimal?
+  notes                 String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}
+
+/// Owner-reviewed recurring expense pattern derived from Expense history.
+/// Detection never creates a payable or liability. Persistence exists so
+/// the owner can confirm or dismiss a suggested pattern.
+model RecurringExpensePattern {
+  id                      String    @id @default(cuid())
+  businessId              String
+  patternKey              String
+  description             String
+  vendor                  String?
+  category                String
+  suggestedAmount         Decimal
+  occurrenceCount         Int
+  firstOccurredOn         DateTime
+  lastOccurredOn          DateTime
+  /// SUGGESTED | CONFIRMED | DISMISSED
+  ownerStatus             String    @default("SUGGESTED")
+  confirmedAt             DateTime?
+  confirmedByMembershipId String?
+  dismissedAt             DateTime?
+  dismissedByMembershipId String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, patternKey])
+  @@index([businessId])
+  @@index([businessId, ownerStatus])
+}
+
+/// Provider-neutral accounting or banking connection for one business.
+/// This table records adapter identity and status only. No live provider
+/// is connected in the financial-intelligence release; rows stay
+/// DISCONNECTED until a later adapter is implemented.
+model BusinessFinanceConnection {
+  id           String    @id @default(cuid())
+  businessId   String
+  /// ACCOUNTING | BANKING
+  kind         String
+  /// Adapter id. "none" while disconnected.
+  providerKey  String    @default("none")
+  /// DISCONNECTED | CONNECTED
+  status       String    @default("DISCONNECTED")
+  connectedAt  DateTime?
+  lastSyncedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, kind])
   @@index([businessId])
 }

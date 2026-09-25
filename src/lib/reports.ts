@@ -29,6 +29,10 @@ export const REPORT_AREAS = [
   "payroll-labor",
   "customers",
   "services",
+  "receivables",
+  "cash-flow",
+  "estimate-accuracy",
+  "pricing",
   "taxes",
   "vendor-spending",
 ] as const;
@@ -43,6 +47,10 @@ export const REPORT_AREA_LABELS: Record<ReportArea, string> = {
   "payroll-labor": "Payroll & Labor",
   customers: "Customers",
   services: "Services",
+  receivables: "Receivables",
+  "cash-flow": "Known cash flow",
+  "estimate-accuracy": "Estimate vs actual",
+  pricing: "Pricing signals",
   taxes: "Taxes / Records",
   "vendor-spending": "Vendor Spending",
 };

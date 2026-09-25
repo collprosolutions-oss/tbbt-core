@@ -9,14 +9,20 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
 import { requireManagementPageAccess } from "@/lib/access";
+import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import type { CuratedIconId } from "@/lib/founder-icons";
 import { formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
-import { loadReportSource } from "@/lib/reports-data";
-import { buildFinancialIntelligence, managementReportCsvRows } from "@/lib/financial-intelligence";
+import { loadFinancialSource } from "@/lib/financial-intelligence-data";
+import {
+  buildFinancialIntelligence,
+  jobProfitabilityCsvRows,
+  managementReportCsvRows,
+  receivablesCsvRows,
+} from "@/lib/financial-intelligence";
 import {
   buildReport,
   parseDatePreset,
@@ -38,6 +44,7 @@ export default async function ReportsPage({
   searchParams: Promise<{ area?: string; range?: string; from?: string; to?: string }>;
 }) {
   const access = await requireManagementPageAccess();
+  requireBusinessCapability(access, CAPABILITIES.VIEW_REPORTS);
 
   const founder = await checkFounderAccess();
   const founderOverride = founder
@@ -55,7 +62,7 @@ export default async function ReportsPage({
   const from = rangePreset === "custom" && parseReportDate(params.from, timeZone) ? params.from! : "";
   const to = rangePreset === "custom" && parseReportDate(params.to, timeZone) ? params.to! : "";
 
-  const source = await loadReportSource(prisma, access.businessId);
+  const source = await loadFinancialSource(prisma, access.businessId);
   const report = buildReport(source, range);
   const intelligence = buildFinancialIntelligence(source, report);
 
@@ -111,7 +118,11 @@ export default async function ReportsPage({
           <div className="flex flex-wrap gap-2">
             <ExportReportButton
               filename={`tbbt-${area}-${formatISODate(new Date(), timeZone)}.csv`}
-              {...reportCsvRows(area, report)}
+              {...(area === "job-profitability"
+                ? jobProfitabilityCsvRows(intelligence)
+                : area === "receivables"
+                  ? receivablesCsvRows(intelligence)
+                  : reportCsvRows(area, report))}
             />
             <ExportReportButton
               filename={`tbbt-management-${formatISODate(new Date(), timeZone)}.csv`}
