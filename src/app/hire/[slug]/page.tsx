@@ -11,7 +11,7 @@ import {
 } from "@/lib/public-site";
 import { buildPublicHomeImagePresentation, loadPublicHomeImages } from "@/lib/public-site-images";
 import { prisma } from "@/lib/prisma";
-import { requirePublicWebsiteView } from "@/lib/require-public-site";
+import { requirePublicSite, requirePublicWebsiteView } from "@/lib/require-public-site";
 import {
   publicSiteMetaDescription,
   publicTenantPageMetadata,
@@ -28,21 +28,22 @@ type PageProps = {
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
   const view = await requirePublicWebsiteView(slug);
-  const snapshotMeta = viewHomeMetadata(view, publicHomePath(view.site.business.slug));
+  const site: Awaited<ReturnType<typeof requirePublicSite>> = view.site;
+  const snapshotMeta = viewHomeMetadata(view, publicHomePath(site.business.slug));
   if (snapshotMeta) return snapshotMeta;
-  const name = publicDisplayName(view.site.business);
+  const name = publicDisplayName(site.business);
   return publicTenantPageMetadata({
-    business: view.site.business,
+    business: site.business,
     title: `${name} | Services`,
-    description: publicSiteMetaDescription(view.site.business, view.about),
-    pathname: publicHomePath(view.site.business.slug),
+    description: publicSiteMetaDescription(site.business, view.about),
+    pathname: publicHomePath(site.business.slug),
   });
 }
 
 export default async function PublicHirePage({ params }: PageProps) {
   const { slug } = await params;
   const view = await requirePublicWebsiteView(slug);
-  const site = view.site;
+  const site: Awaited<ReturnType<typeof requirePublicSite>> = view.site;
 
   const homeImages = view.snapshot
     ? buildPublicHomeImagePresentation(site.groups, snapshotToImageRows(view.snapshot))

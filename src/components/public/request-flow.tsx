@@ -95,6 +95,38 @@ const STEPS: { id: Step; title: string; caption: string }[] = [
   { id: "review", title: "Review & Submit", caption: "Review and send request" },
 ];
 
+function SmsOptInField({
+  smsOptIn,
+  onChange,
+}: {
+  smsOptIn: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label className="flex items-start gap-3 text-sm leading-6">
+      <input
+        type="checkbox"
+        name="smsOptIn"
+        value="true"
+        checked={smsOptIn}
+        onChange={(event) => onChange(event.target.checked)}
+        className="mt-1 size-4 shrink-0"
+      />
+      <span>
+        {SMS_OPT_IN_LABEL}{" "}
+        <a href={SMS_CONSENT_TERMS_URL} className="underline" target="_blank" rel="noreferrer">
+          Terms
+        </a>{" "}
+        and{" "}
+        <a href={SMS_CONSENT_PRIVACY_URL} className="underline" target="_blank" rel="noreferrer">
+          Privacy
+        </a>
+        .
+      </span>
+    </label>
+  );
+}
+
 export function MultiServiceRequestFlow({
   slug,
   businessName,
@@ -502,6 +534,9 @@ export function MultiServiceRequestFlow({
             <ArrowRight className="size-4" aria-hidden="true" />
           </Link>
         </div>
+        <div className="mt-6">
+          <SmsOptInField smsOptIn={smsOptIn} onChange={setSmsOptIn} />
+        </div>
       </section>
     );
   }
@@ -522,6 +557,9 @@ export function MultiServiceRequestFlow({
           >
             Describe other work
           </Link>
+        </div>
+        <div className="mt-6">
+          <SmsOptInField smsOptIn={smsOptIn} onChange={setSmsOptIn} />
         </div>
       </section>
     );
@@ -652,6 +690,7 @@ export function MultiServiceRequestFlow({
               submit your request with a description.
             </p>
           )}
+          <SmsOptInField smsOptIn={smsOptIn} onChange={setSmsOptIn} />
           <button type="submit" className="public-btn public-btn-primary w-full">
             Next: Your Information
             <ArrowRight className="size-4" aria-hidden="true" />
@@ -735,27 +774,7 @@ export function MultiServiceRequestFlow({
               </label>
             </div>
           </fieldset>
-          <label className="flex items-start gap-3 text-sm leading-6">
-            <input
-              type="checkbox"
-              name="smsOptIn"
-              value="true"
-              checked={smsOptIn}
-              onChange={(event) => setSmsOptIn(event.target.checked)}
-              className="mt-1 size-4 shrink-0"
-            />
-            <span>
-              {SMS_OPT_IN_LABEL}{" "}
-              <a href={SMS_CONSENT_TERMS_URL} className="underline" target="_blank" rel="noreferrer">
-                Terms
-              </a>{" "}
-              and{" "}
-              <a href={SMS_CONSENT_PRIVACY_URL} className="underline" target="_blank" rel="noreferrer">
-                Privacy
-              </a>
-              .
-            </span>
-          </label>
+          <SmsOptInField smsOptIn={smsOptIn} onChange={setSmsOptIn} />
           <div className="flex flex-col gap-3 sm:flex-row">
             <button type="button" className="public-btn public-btn-outline flex-1" onClick={() => setStep("details")}>
               Back
@@ -809,27 +828,7 @@ export function MultiServiceRequestFlow({
                 : "Photo upload is not available"}
             </p>
           </ReviewBlock>
-          <label className="flex items-start gap-3 text-sm leading-6">
-            <input
-              type="checkbox"
-              name="smsOptIn"
-              value="true"
-              checked={smsOptIn}
-              onChange={(event) => setSmsOptIn(event.target.checked)}
-              className="mt-1 size-4 shrink-0"
-            />
-            <span>
-              {SMS_OPT_IN_LABEL}{" "}
-              <a href={SMS_CONSENT_TERMS_URL} className="underline" target="_blank" rel="noreferrer">
-                Terms
-              </a>{" "}
-              and{" "}
-              <a href={SMS_CONSENT_PRIVACY_URL} className="underline" target="_blank" rel="noreferrer">
-                Privacy
-              </a>
-              .
-            </span>
-          </label>
+          <SmsOptInField smsOptIn={smsOptIn} onChange={setSmsOptIn} />
           <div className="flex flex-col gap-3 sm:flex-row">
             <button
               type="button"
