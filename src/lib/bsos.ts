@@ -85,6 +85,7 @@ export type BsosFacts = {
   outsideAreaRequests: { count: number };
   recurringExpenses: { count: number; amount: number };
   paidRevenue: { amount: number };
+  collectedRevenue?: { amount: number };
   recordedExpenses: { amount: number };
   agedReceivables?: { count: number; amount: number };
   lowMarginServices?: { count: number };
@@ -140,7 +141,7 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
       title: "Review low-margin jobs and services",
       kind: "recommendation",
       priority: 25,
-      why: "Recorded paid revenue is below recorded labor plus job expenses on one or more jobs.",
+      why: "Billed revenue is below recorded wage plus job expenses on one or more jobs.",
       facts: [
         {
           key: "low-margin",
@@ -311,7 +312,7 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
       title: "Review services with negative recorded margin",
       kind: "recommendation",
       priority: 24,
-      why: "Attributed completed work has billed revenue below known direct cost.",
+      why: "Attributed completed work has billed revenue below recorded direct cost.",
       facts: [
         {
           key: "low-margin-services",
@@ -327,14 +328,14 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
   if ((facts.estimateLaborOverruns?.count ?? 0) > 0) {
     items.push({
       key: "estimate-labor-overrun",
-      title: "Estimates are using fewer labor hours than actual work",
+      title: "Approved labor exceeded a recorded hours baseline",
       kind: "recommendation",
       priority: 23,
-      why: "Approved time on recorded jobs exceeded estimated LABOR quantity.",
+      why: "Approved time exceeded a trustworthy hours snapshot. Generic LABOR quantity is not treated as hours.",
       facts: [
         {
           key: "labor-overruns",
-          label: "Jobs over estimated hours",
+          label: "Jobs over a recorded hours baseline",
           value: String(facts.estimateLaborOverruns!.count),
           href: "/reports?area=estimate-accuracy",
         },
@@ -407,11 +408,13 @@ export function buildBsosHealthMetrics(facts: BsosFacts): BsosHealthMetric[] {
   return [
     {
       key: "paid-revenue",
-      label: "Recorded paid revenue",
-      value: facts.paidRevenue.amount.toFixed(2),
+      label: facts.collectedRevenue ? "Collected cash" : "PAID invoice status",
+      value: (facts.collectedRevenue ?? facts.paidRevenue).amount.toFixed(2),
       kind: "fact",
       href: "/reports",
-      note: "PAID invoices only. Not a bank balance.",
+      note: facts.collectedRevenue
+        ? "Recorded payments plus legacy PAID invoices with no Payment rows. Not a bank balance."
+        : "Invoice status PAID totals. Not collected cash unless a Payment exists.",
     },
     {
       key: "recorded-expenses",
@@ -427,7 +430,7 @@ export function buildBsosHealthMetrics(facts: BsosFacts): BsosHealthMetric[] {
       value: `${facts.unpaidInvoices.count} / ${facts.unpaidInvoices.amount.toFixed(2)}`,
       kind: "fact",
       href: "/invoices",
-      note: "SENT invoices still unpaid.",
+      note: "SENT invoices remaining balance after recorded payments.",
     },
     {
       key: "pipeline",

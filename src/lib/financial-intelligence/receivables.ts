@@ -1,6 +1,6 @@
 import { inRange } from "@/lib/reports";
 import { roundMoney } from "@/lib/time-cards";
-import { paymentsAppliedToInvoice } from "@/lib/financial-intelligence/job-profitability";
+import { invoiceBalanceDue, paymentsAppliedToInvoice } from "@/lib/financial-intelligence/collected-revenue";
 import type { FinancialSource } from "@/lib/financial-intelligence/source";
 
 export const RECEIVABLE_AGING_BUCKETS = ["0-30", "31-60", "61-90", "90+"] as const;
@@ -59,7 +59,7 @@ export function buildReceivables(source: FinancialSource, now: Date = new Date()
     .filter((invoice) => invoice.status === "SENT")
     .map((invoice) => {
       const collectedAgainstInvoice = paymentsAppliedToInvoice(source.payments, invoice.id);
-      const balanceDue = roundMoney(Math.max(0, invoice.total - collectedAgainstInvoice));
+      const balanceDue = invoiceBalanceDue(invoice, source.payments);
       const ageDays = ageInWholeDays(invoice.createdAt, now);
       const agingBucket = agingBucketForDays(ageDays);
       const customer = source.customers.find((row) => row.id === invoice.customerId);

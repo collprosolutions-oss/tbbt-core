@@ -10,6 +10,8 @@ import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
 import { requireManagementPageAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { requireProductCapability } from "@/lib/product-entitlements";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
@@ -45,6 +47,7 @@ export default async function ReportsPage({
 }) {
   const access = await requireManagementPageAccess();
   requireBusinessCapability(access, CAPABILITIES.VIEW_REPORTS);
+  await requireProductCapability(prisma, access.businessId, PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
 
   const founder = await checkFounderAccess();
   const founderOverride = founder
@@ -77,18 +80,15 @@ export default async function ReportsPage({
     defaultIconId: CuratedIconId;
   }> = [
     {
-      label: "Paid revenue",
-      value: formatMoney(report.paidRevenue.current),
-      sublabel:
-        report.paidRevenue.changePercent == null
-          ? "PAID invoices · paid date"
-          : `${report.paidRevenue.changePercent > 0 ? "+" : ""}${report.paidRevenue.changePercent.toFixed(1)}% vs prior period`,
+      label: "Collected cash",
+      value: formatMoney(intelligence.cashFlow.collectedCustomerPayments),
+      sublabel: "Payment rows + legacy PAID invoices with no Payment rows",
       defaultIconId: "dollar-sign",
     },
     {
       label: "Outstanding",
-      value: formatMoney(report.outstanding.current),
-      sublabel: `${report.outstanding.count} sent, unpaid`,
+      value: formatMoney(intelligence.outstandingReceivables.amount),
+      sublabel: `${intelligence.outstandingReceivables.count} sent · remaining after payments`,
       defaultIconId: "receipt",
     },
     {
@@ -133,7 +133,7 @@ export default async function ReportsPage({
       />
       <PageHeader
         title="Reports"
-        description={`Business reports for ${access.workspace.business.name}. Figures come from invoices, jobs, approved labor, and recorded expenses in TBBT. Profit & Loss is TBBT-recorded P&L, not full accounting or tax books.`}
+        description={`Business reports for ${access.workspace.business.name}. Collected cash is Payment rows plus legacy PAID invoices that have no Payment rows. PAID invoice status totals can differ from collected cash when a payment is partial or missing. Profit & Loss uses PAID invoice status minus recorded expenses — that is not collected cash and not full accounting or tax books.`}
       />
 
       <FounderDesignRoot

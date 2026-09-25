@@ -2,7 +2,8 @@ import { recordedVendor } from "@/lib/reports";
 import { roundMoney } from "@/lib/time-cards";
 import type { RecurringPatternRecord } from "@/lib/financial-intelligence/source";
 
-export const RECURRING_PATTERN_MIN_OCCURRENCES = 2;
+export const RECURRING_PATTERN_MIN_OCCURRENCES = 3;
+export const RECURRING_AMOUNT_TOLERANCE = 0.2;
 
 export type RecurringExpenseSuggestion = {
   patternKey: string;
@@ -15,13 +16,39 @@ export type RecurringExpenseSuggestion = {
   lastOccurredOn: Date;
   ownerStatus: "SUGGESTED" | "CONFIRMED" | "DISMISSED";
   persistedId: string | null;
+  why: string[];
+  cadence: "explicit-flag" | "monthly" | "similar-amount" | null;
   href: string;
 };
 
-function normalizeKey(vendor: string | null, category: string, description: string) {
-  const vendorKey = (vendor ?? "").trim().toLowerCase();
-  const descKey = description.trim().toLowerCase().replace(/\s+/g, " ");
-  return `${category}::${vendorKey || descKey || "unknown"}`;
+function normalizeText(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export function recurringPatternKey(input: {
+  category: string;
+  vendor: string | null;
+  description: string;
+}) {
+  return `${input.category}::${normalizeText(input.vendor) || "novendor"}::${normalizeText(input.description) || "nodesc"}`;
+}
+
+function similarAmounts(amounts: number[]) {
+  if (amounts.length === 0) return false;
+  const avg = amounts.reduce((sum, amount) => sum + amount, 0) / amounts.length;
+  if (avg <= 0) return false;
+  return amounts.every((amount) => Math.abs(amount - avg) / avg <= RECURRING_AMOUNT_TOLERANCE);
+}
+
+function monthlyCadence(dates: Date[]) {
+  if (dates.length < 3) return false;
+  const sorted = [...dates].sort((a, b) => a.getTime() - b.getTime());
+  const gaps: number[] = [];
+  for (let index = 1; index < sorted.length; index += 1) {
+    gaps.push((sorted[index]!.getTime() - sorted[index - 1]!.getTime()) / 86_400_000);
+  }
+  const median = [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)] ?? 0;
+  return median >= 20 && median <= 45;
 }
 
 export function detectRecurringExpensePatterns(
@@ -50,7 +77,11 @@ export function detectRecurringExpensePatterns(
 
   for (const expense of expenses) {
     const vendor = recordedVendor(expense.vendor);
-    const key = normalizeKey(vendor, expense.category, expense.description);
+    const key = recurringPatternKey({
+      category: expense.category,
+      vendor,
+      description: expense.description,
+    });
     const existing = groups.get(key);
     if (existing) {
       existing.amounts.push(expense.amount);
@@ -72,20 +103,45 @@ export function detectRecurringExpensePatterns(
   const suggestions: RecurringExpenseSuggestion[] = [];
 
   for (const [patternKey, group] of groups) {
-    if (!group.flagged && group.amounts.length < RECURRING_PATTERN_MIN_OCCURRENCES) continue;
+    const similar = similarAmounts(group.amounts);
+    const monthly = monthlyCadence(group.dates);
+    const enoughRepeats = group.amounts.length >= RECURRING_PATTERN_MIN_OCCURRENCES && similar && (monthly || group.amounts.length >= 4);
+    if (!group.flagged && !enoughRepeats) continue;
+
+    const why: string[] = [];
+    let cadence: RecurringExpenseSuggestion["cadence"] = null;
+    if (group.flagged) {
+      why.push("An expense row is explicitly marked recurring.");
+      cadence = "explicit-flag";
+    }
+    if (enoughRepeats) {
+      why.push(`${group.amounts.length} matching vendor + description + category rows.`);
+      if (similar) {
+        why.push("Amounts are within 20% of the group average.");
+        if (!cadence) cadence = "similar-amount";
+      }
+      if (monthly) {
+        why.push("Occurrence gaps look roughly monthly (20–45 days).");
+        cadence = "monthly";
+      }
+    }
+    why.push("This is not a subscription or liability. Confirming only records the pattern.");
+
     const saved = persistedByKey.get(patternKey);
     const dates = [...group.dates].sort((a, b) => a.getTime() - b.getTime());
     suggestions.push({
       patternKey,
-      description: saved?.description ?? group.description,
-      vendor: saved?.vendor ?? group.vendor,
-      category: saved?.category ?? group.category,
-      suggestedAmount: saved?.suggestedAmount ?? roundMoney(group.amounts.reduce((sum, amount) => sum + amount, 0) / group.amounts.length),
-      occurrenceCount: Math.max(saved?.occurrenceCount ?? 0, group.amounts.length),
-      firstOccurredOn: saved?.firstOccurredOn ?? dates[0]!,
-      lastOccurredOn: saved?.lastOccurredOn ?? dates[dates.length - 1]!,
+      description: group.description,
+      vendor: group.vendor,
+      category: group.category,
+      suggestedAmount: roundMoney(group.amounts.reduce((sum, amount) => sum + amount, 0) / group.amounts.length),
+      occurrenceCount: group.amounts.length,
+      firstOccurredOn: dates[0]!,
+      lastOccurredOn: dates[dates.length - 1]!,
       ownerStatus: (saved?.ownerStatus as RecurringExpenseSuggestion["ownerStatus"]) ?? "SUGGESTED",
       persistedId: saved?.id ?? null,
+      why,
+      cadence,
       href: "/expenses",
     });
   }
@@ -103,6 +159,8 @@ export function detectRecurringExpensePatterns(
       lastOccurredOn: saved.lastOccurredOn,
       ownerStatus: saved.ownerStatus as RecurringExpenseSuggestion["ownerStatus"],
       persistedId: saved.id,
+      why: ["Previously reviewed pattern. Facts are refreshed from recorded expenses when still detectable."],
+      cadence: null,
       href: "/expenses",
     });
   }

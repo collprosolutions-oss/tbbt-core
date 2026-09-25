@@ -26,7 +26,7 @@ Do not invent passing browser results. The isolated harness is
 7. Job → schedule → employee field workflow (`/jobs`, `/field/jobs/[jobId]`).
 8. Time cards → job photos → additional work / change order.
 9. Complete → invoice → payment (`/invoices`, `/p/[token]/invoice`).
-10. Expense → job profitability / reports / financial intelligence (`/expenses`, `/reports`). Known cash flow uses recorded payments, expenses, and processed payroll only. Banking and accounting stay Not Connected.
+10. Expense → job profitability / reports / financial intelligence (`/expenses`, `/reports`). Known cash flow uses recorded payments and recorded expenses. PROCESSED payroll gross labor is an operational cost record, not verified bank cash out. Banking and accounting stay Not Connected.
 11. Review request → marketing opportunity → BSOS recommendation (`/reviews`, `/marketing`, `/business-health`).
 
 ## Cross-cutting proofs

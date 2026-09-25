@@ -77,7 +77,7 @@ export function ReportsWorkspace({ area, rangePreset, from, to, report, intellig
             <CardHeader>
               <CardTitle>Profitability overview</CardTitle>
               <CardDescription>
-                Recorded facts first. {intelligence.messages.bank} {intelligence.messages.accounting}
+                Recorded facts first — wage snapshots and expenses, not burden assumptions. {intelligence.messages.bank} {intelligence.messages.accounting}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
@@ -90,19 +90,19 @@ export function ReportsWorkspace({ area, rangePreset, from, to, report, intellig
                 <MiniStat
                   label="Outstanding receivables"
                   value={<Money value={intelligence.outstandingReceivables.amount} />}
-                  hint={`${intelligence.outstandingReceivables.count} sent, unpaid · not cash`}
+                  hint={`${intelligence.outstandingReceivables.count} sent · remaining after payments`}
                 />
                 <MiniStat
                   label="Known cash out"
                   value={<Money value={intelligence.cashFlow.knownOutflows} />}
-                  hint="Recorded expenses + processed payroll"
+                  hint="Recorded expenses only. Payroll gross is not verified bank cash out."
                 />
                 <MiniStat
                   label="Jobs in view"
                   value={String(intelligence.jobProfitability.length)}
                   hint={
                     intelligence.jobMarginSnapshot[0]
-                      ? `${intelligence.jobMarginSnapshot[0].label} · selected-range snapshot`
+                      ? intelligence.jobMarginLabel
                       : "No jobs with recorded financial activity"
                   }
                 />
@@ -208,12 +208,12 @@ function ReportCharts({ area, report }: { area: ReportArea; report: BuiltReport 
       <Card>
         <CardHeader>
           <CardTitle>{report.profitLoss.label}</CardTitle>
-          <CardDescription>Paid invoice revenue and recorded expenses in this range.</CardDescription>
+          <CardDescription>PAID invoice-status totals and recorded expenses in this range. This is not collected cash.</CardDescription>
         </CardHeader>
         <CardContent>
           <ReportChart
             points={[
-              { key: "revenue", label: "Paid revenue", amount: report.profitLoss.revenue },
+              { key: "revenue", label: "PAID invoice-status revenue", amount: report.profitLoss.revenue },
               { key: "expenses", label: "Recorded expenses", amount: report.profitLoss.expenses },
             ]}
             emptyLabel="No paid revenue or recorded expenses in this range."
@@ -227,8 +227,8 @@ function ReportCharts({ area, report }: { area: ReportArea; report: BuiltReport 
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Paid revenue</CardTitle>
-          <CardDescription>Paid invoices in this range, using each invoice&apos;s paid date.</CardDescription>
+          <CardTitle>PAID invoice-status revenue</CardTitle>
+          <CardDescription>Invoice status PAID totals in this range, using each invoice&apos;s paid date. This is not collected cash unless a Payment row exists.</CardDescription>
         </CardHeader>
         <CardContent>
           <ReportChart points={report.revenueByDay} emptyLabel="No paid invoices in this range." />
@@ -354,7 +354,7 @@ function ReportBody({
       return (
         <ReportTable
           title="Job profitability"
-          description="Billed and collected are separate. Gross profit is billed revenue minus known direct cost (wage + optional burden + job expenses). Unpaid invoices are never collected cash."
+          description={`${intelligence.jobMarginLabel} Billed and collected are separate. Gross profit is billed revenue minus recorded direct cost (wage + job expenses). Owner-configured burden is a planning scenario, not recorded cost. Unpaid invoices are never collected cash.`}
           headers={["Customer", "Status", "Billed", "Collected", "Direct cost", "Gross profit", "Margin %"]}
           empty="No jobs with invoices, approved labor, or recorded job expenses in this range."
           rows={intelligence.jobProfitability.map((row) => ({
@@ -469,7 +469,7 @@ function ReportBody({
       <ReportTable
         title="Customers"
         description="New = created in this range. Repeat = more than one completed job or paid invoice on record."
-        headers={["Customer", "New", "Repeat", "Paid revenue", "Completed jobs"]}
+        headers={["Customer", "New", "Repeat", "PAID invoice-status revenue", "Completed jobs"]}
         empty="No customer activity in this range."
         rows={report.customers.map((row) => ({
           key: row.id,
@@ -579,10 +579,15 @@ function ReportBody({
             <CardDescription>{intelligence.cashFlow.message}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <PnlRow label="Collected customer payments" value={<Money value={intelligence.cashFlow.collectedCustomerPayments} />} />
-            <PnlRow label="Recorded expenses" value={<Money value={intelligence.cashFlow.recordedExpenseOutflows} />} />
-            <PnlRow label="Processed payroll" value={<Money value={intelligence.cashFlow.processedPayrollOutflows} />} hint="AUTHORIZED payroll is not treated as cash out" />
-            <PnlRow label="Known net" value={<Money value={intelligence.cashFlow.netKnown} />} hint="Not a bank balance" />
+            <PnlRow label="Collected customer payments" value={<Money value={intelligence.cashFlow.collectedCustomerPayments} />} hint="Payment rows + legacy PAID invoices with no Payment rows" />
+            <PnlRow label="Recorded expenses" value={<Money value={intelligence.cashFlow.recordedExpenseOutflows} />} hint="Known cash out" />
+            <PnlRow
+              label="Processed payroll gross labor"
+              value={<Money value={intelligence.cashFlow.processedPayrollGrossLabor} />}
+              hint="Recorded operational/payroll cost. Not included as verified bank cash movement."
+            />
+            <PnlRow label="Known net" value={<Money value={intelligence.cashFlow.netKnown} />} hint="Collected in minus recorded expenses. Payroll gross is not subtracted." />
+            <p className="text-xs text-muted-foreground">{intelligence.cashFlow.payrollNote}</p>
             <p className="text-xs text-muted-foreground">{intelligence.cashFlow.coverage}</p>
             <p className="text-xs text-muted-foreground">
               Banking: {intelligence.bankConnected ? "Connected" : "Not Connected"}. Accounting:{" "}
@@ -598,21 +603,24 @@ function ReportBody({
     return (
       <ReportTable
         title="Estimate vs actual"
-        description="Estimated LABOR quantity/cost and MATERIAL lines versus approved time and recorded materials. Missing estimates stay blank."
-        headers={["Customer", "Est. hours", "Actual hours", "Est. materials", "Actual materials", "Cost variance"]}
+        description="Customer labor/material charges are price components, not estimated cost. Hours and supplier cost appear only when a trustworthy snapshot exists. Generic LABOR quantity is not hours."
+        headers={["Customer", "Customer labor charge", "Hours baseline", "Actual hours", "Customer material charge", "Recorded materials", "Cost variance"]}
         empty="No jobs with estimate or actual cost records in this range."
         rows={intelligence.jobProfitability.map((row) => ({
           key: row.jobId,
           href: row.href,
           cells: [
             row.customerName,
-            row.estimateActual.estimatedLaborHours == null ? "—" : formatDurationClock(row.estimateActual.estimatedLaborHours),
+            row.estimateActual.customerLaborCharge == null ? "—" : <Money key="cl" value={row.estimateActual.customerLaborCharge} />,
+            row.estimateActual.estimatedLaborHours == null
+              ? "—"
+              : formatDurationClock(row.estimateActual.estimatedLaborHours),
             formatDurationClock(row.estimateActual.actualLaborHours),
-            <Money key="em" value={row.estimateActual.estimatedMaterials} />,
+            row.estimateActual.customerMaterialCharge == null ? "—" : <Money key="cm" value={row.estimateActual.customerMaterialCharge} />,
             <Money key="am" value={row.estimateActual.actualMaterials} />,
-            <Money key="v" value={row.estimateActual.totalCostVariance} />,
+            row.estimateActual.totalCostVariance == null ? "—" : <Money key="v" value={row.estimateActual.totalCostVariance} />,
           ],
-          mobile: `${row.customerName} · variance ${row.estimateActual.totalCostVariance ?? "—"}`,
+          mobile: `${row.customerName} · customer labor ${row.estimateActual.customerLaborCharge ?? "—"}`,
         }))}
       />
     );
@@ -651,8 +659,8 @@ function ReportBody({
         </Card>
         <ReportTable
           title="Likely recurring costs"
-          description="Detected from expense history. Confirming a pattern does not create a liability."
-          headers={["Description", "Vendor", "Suggested", "Count", "Status", "Review"]}
+          description="Detected from expense history. Confirming a pattern does not create a liability or subscription."
+          headers={["Description", "Vendor", "Suggested", "Count", "Why", "Status", "Review"]}
           empty="No repeating expense patterns on file."
           rows={intelligence.recurringSuggestions.map((row) => ({
             key: row.patternKey,
@@ -662,7 +670,8 @@ function ReportBody({
               row.vendor ?? "—",
               <Money key="a" value={row.suggestedAmount} />,
               String(row.occurrenceCount),
-              row.ownerStatus,
+              row.why.join(" "),
+              row.ownerStatus === "CONFIRMED" ? "Owner confirmed" : row.ownerStatus === "DISMISSED" ? "Owner dismissed" : row.ownerStatus,
               <RecurringPatternReview key="r" row={row} />,
             ],
             mobile: `${row.description} · ${row.ownerStatus}`,
@@ -702,14 +711,14 @@ function ReportBody({
       {area === "overview" ? (
         <div className="grid gap-3 sm:grid-cols-2">
           <MiniStat
-            label="Paid revenue"
-            value={<Money value={report.paidRevenue.current} />}
-            hint={changeLabel(report.paidRevenue.changePercent)}
+            label={intelligence ? "Collected cash" : "PAID invoice-status revenue"}
+            value={<Money value={intelligence ? intelligence.cashFlow.collectedCustomerPayments : report.paidRevenue.current} />}
+            hint={intelligence ? "Payment rows + legacy PAID invoices with no Payment rows" : changeLabel(report.paidRevenue.changePercent)}
           />
           <MiniStat
             label="Outstanding"
             value={<Money value={report.outstanding.current} />}
-            hint={`${report.outstanding.count} sent, unpaid · current snapshot`}
+            hint={`${report.outstanding.count} sent · remaining after payments`}
           />
           <MiniStat
             label="Approved labor"
@@ -731,7 +740,7 @@ function ReportBody({
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-3">
-          <MiniStat label="Paid revenue" value={<Money value={report.paidRevenue.current} />} hint="PAID invoices · paid date" />
+          <MiniStat label="PAID invoice-status revenue" value={<Money value={report.paidRevenue.current} />} hint="Invoice status PAID · paid date. Not collected cash unless a Payment exists." />
           <MiniStat
             label="Issued invoices"
             value={String(report.issuedInvoiceCount.current)}
@@ -744,7 +753,7 @@ function ReportBody({
           <MiniStat
             label="Outstanding"
             value={<Money value={report.outstanding.current} />}
-            hint="Currently SENT"
+            hint="Currently SENT remaining balance after payments"
           />
         </div>
       )}
@@ -806,7 +815,7 @@ function ProfitLossCard({ report }: { report: BuiltReport }) {
         <CardDescription>{report.profitLoss.message}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        <PnlRow label="Paid revenue" value={<Money value={report.profitLoss.revenue} />} />
+        <PnlRow label="PAID invoice-status revenue" value={<Money value={report.profitLoss.revenue} />} hint="Not collected cash" />
         <PnlRow label="Recorded expenses" value={<Money value={report.profitLoss.expenses} />} />
         <PnlRow label={report.profitLoss.label} value={<Money value={report.profitLoss.recordedNet} />} />
         <PnlRow

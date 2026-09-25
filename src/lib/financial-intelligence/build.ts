@@ -2,7 +2,7 @@ import { percentChange, type BuiltReport } from "@/lib/reports";
 import { BANKING_NOT_CONNECTED_MESSAGE } from "@/lib/finance-connections";
 import { buildKnownCashFlowFromSource, CASH_FLOW_RECORDED_ONLY_MESSAGE, type KnownCashFlow } from "@/lib/financial-intelligence/cash-flow";
 import { buildCustomerLifetime, buildCustomerProfitability, type CustomerLifetimeRow, type CustomerProfitRow } from "@/lib/financial-intelligence/customer-profitability";
-import { calculateAllJobProfitability, type JobProfitability } from "@/lib/financial-intelligence/job-profitability";
+import { calculateAllJobProfitability, WHOLE_JOB_RANGE_LABEL, type JobProfitability } from "@/lib/financial-intelligence/job-profitability";
 import { emptyLaborBurdenConfig, type LaborBurdenConfig } from "@/lib/financial-intelligence/labor-burden";
 import { buildPricingRecommendations, type PricingRecommendation } from "@/lib/financial-intelligence/pricing-intelligence";
 import { buildReceivables, type ReceivablesAging } from "@/lib/financial-intelligence/receivables";
@@ -41,7 +41,8 @@ export type FinancialIntelligence = {
   customerProfitability: CustomerProfitRow[];
   jobProfitability: JobProfitability[];
   jobMarginSnapshot: JobMarginPoint[];
-  jobMarginKind: "selected-range-snapshot";
+  jobMarginKind: "whole-job-for-activity-in-range";
+  jobMarginLabel: string;
   laborCostTrend: JobMarginPoint[];
   vendorSpend: Array<{ name: string; amount: number; count: number }>;
   recurringExpenses: Array<{
@@ -139,7 +140,7 @@ function financialAttention(input: {
       key: "negative-job-margin",
       kind: "fact",
       label: `${negative.length} job${negative.length === 1 ? "" : "s"} with negative recorded gross profit`,
-      detail: "Billed revenue minus known direct cost on complete jobs.",
+      detail: "Billed revenue minus recorded direct cost (wage + job expenses) on complete jobs.",
       href: "/reports?area=job-profitability",
     });
   }
@@ -191,8 +192,9 @@ export function buildFinancialIntelligence(
     serviceProfitability,
     customerProfitability,
     jobProfitability: jobs,
-    jobMarginSnapshot: buildJobMarginRangeSnapshot(jobs, report.range.label),
-    jobMarginKind: "selected-range-snapshot",
+    jobMarginSnapshot: buildJobMarginRangeSnapshot(jobs, WHOLE_JOB_RANGE_LABEL),
+    jobMarginKind: "whole-job-for-activity-in-range",
+    jobMarginLabel: WHOLE_JOB_RANGE_LABEL,
     laborCostTrend: [
       {
         key: "current",
@@ -222,7 +224,7 @@ export function buildFinancialIntelligence(
       count: receivables.count,
     },
     receivables,
-    customerLifetime: buildCustomerLifetime(source.customers, source.invoices, source.jobs),
+    customerLifetime: buildCustomerLifetime(source.customers, source.invoices, source.jobs, source.payments),
     cashFlow,
     pricingRecommendations,
     laborBurden,

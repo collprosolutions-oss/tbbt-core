@@ -26,10 +26,14 @@ const {
 } = await import("@/lib/finance-connections");
 const {
   BANK_NOT_CONNECTED_MESSAGE,
+  BURDEN_ASSUMPTION_MESSAGE,
   CASH_FLOW_COVERAGE_MESSAGE,
   CASH_FLOW_RECORDED_ONLY_MESSAGE,
+  CUSTOMER_LABOR_CHARGE_LABEL,
   NO_BURDEN_CONFIGURED_MESSAGE,
+  PAYROLL_GROSS_NOT_CASH_MESSAGE,
   PRICING_MIN_SAMPLE,
+  WHOLE_JOB_RANGE_LABEL,
   applyLaborBurden,
   agingBucketForDays,
   buildCustomerLifetime,
@@ -40,15 +44,24 @@ const {
   buildReceivables,
   buildServiceProfitability,
   calculateJobProfitability,
+  collectedRevenueForCustomer,
+  collectedRevenueForInvoices,
   collectedRevenueForJob,
   detectRecurringExpensePatterns,
   emptyLaborBurdenConfig,
   estimateConversionFromSource,
   financialSignalsForBsos,
+  invoiceBalanceDue,
+  jobProfitabilityCsvRows,
   parseOptionalRate,
+  parsePercentInput,
+  reconcileCollectedRevenue,
 } = await import("@/lib/financial-intelligence");
-const { saveLaborBurdenSetting } = await import("@/lib/financial-intelligence-ops");
+const { FinancialIntelligenceError, reviewRecurringExpensePattern, saveLaborBurdenSetting } = await import("@/lib/financial-intelligence-ops");
 const { buildBsosRecommendations } = await import("@/lib/bsos");
+const { hasProductCapability, requireProductCapability } = await import("@/lib/product-entitlements");
+const { PRODUCT_CAPABILITIES } = await import("@/lib/product-catalog");
+const { joinLineDescription } = await import("@/lib/estimate-line-scope");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -128,14 +141,20 @@ try {
   const adapterBalance = await getFinanceConnectionProvider().fetchExternalBalance();
   check("Adapter does not invent an external balance", adapterBalance.balance === null && adapterBalance.ok === false);
 
-  check("Blank burden parses as unconfigured", parseOptionalRate("") === null && parseOptionalRate("  ") === null);
-  check("15 parses as 0.15", parseOptionalRate("15") === 0.15);
-  check("0.2 stays a fraction", parseOptionalRate("0.2") === 0.2);
+  check("Blank burden parses as unconfigured", parsePercentInput("") === null && parsePercentInput("  ") === null && parseOptionalRate("") === null);
+  check("Percent field 1 is 1% = 0.01", parsePercentInput("1") === 0.01);
+  check("Percent field 0.5 is 0.5% = 0.005", parsePercentInput("0.5") === 0.005);
+  check("Percent field 12.5 is 12.5% = 0.125", parsePercentInput("12.5") === 0.125);
+  check("Percent field 40 is 40% = 0.40", parsePercentInput("40") === 0.4);
+  check("Percent field does not treat 0.2 as 20%", parsePercentInput("0.2") === 0.002);
+  check("Target margin over 100% is rejected", parsePercentInput("101", { maxPercent: 100 }) === null);
+  check("Burden 200% is allowed as an intentional documented range", parsePercentInput("200", { maxPercent: 200 }) === 2);
   const wageOnly = applyLaborBurden(200, emptyLaborBurdenConfig());
   check("No invented burden when unconfigured", wageOnly.burdenRate === null && wageOnly.burdenAmount === null && wageOnly.laborCostWithBurden === 200);
   check("Wage-only explanation is explicit", /wage only/i.test(wageOnly.explanation) && /No employer labor burden/.test(NO_BURDEN_CONFIGURED_MESSAGE));
   const withBurden = applyLaborBurden(200, { burdenRate: 0.1, targetGrossMarginRate: null, notes: null });
   check("Configured 10% burden adds 20", withBurden.burdenAmount === 20 && withBurden.laborCostWithBurden === 220 && withBurden.burdenSource === "business-default");
+  check("Burden is labeled an owner assumption, not recorded cash", withBurden.kind === "owner-assumption" && /owner-configured 10% labor burden assumption/i.test(withBurden.explanation) && /planning assumption/.test(BURDEN_ASSUMPTION_MESSAGE));
   check("Incomplete wage stays incomplete even with a burden rate", applyLaborBurden(null, { burdenRate: 0.2, targetGrossMarginRate: null, notes: null }).laborCostWithBurden === null);
 
   const conversion = estimateConversionFromSource(
@@ -185,13 +204,17 @@ try {
   check("Collected revenue ignores the unpaid SENT invoice", profit?.collectedRevenue === 400);
   check("Unpaid invoice value is not collected cash", collectedRevenueForJob({ jobId, invoices: jobSource.invoices, payments: jobSource.payments }) === 400);
   check("Labor hours come from approved time", profit?.laborHours === 10);
-  check("Direct labor cost is wage-only", profit?.directLaborCost === 200);
+  check("Direct labor cost is recorded wage only", profit?.directLaborCost === 200 && profit?.recordedWageLaborCost === 200);
   check("Burden is applied only because it was configured", profit?.laborBurden.burdenAmount === 20 && profit?.laborBurden.laborCostWithBurden === 220);
   check("Materials and other direct expenses are split", profit?.materialsDirectExpense === 50 && profit?.otherAllocatedDirectExpense === 30);
-  check("Known total direct cost is labor with burden + expenses", profit?.knownTotalDirectCost === 300);
-  check("Gross profit is billed minus known direct cost", profit?.grossProfit === 900);
-  check("Gross margin percent is 75", profit?.grossMarginPct === 75);
-  check("Estimate labor hours variance is +2", profit?.estimateActual.laborHoursVariance === 2);
+  check("Recorded direct cost excludes owner burden assumption", profit?.recordedDirectCost === 280 && profit?.knownTotalDirectCost === 280);
+  check("Burden-adjusted scenario is separate from recorded cost", profit?.burdenAdjustedDirectCost === 300);
+  check("Gross profit is billed minus recorded direct cost", profit?.grossProfit === 920);
+  check("Gross margin percent is 76.67 on billed revenue", profit?.grossMarginPct === 76.67);
+  check("Generic LABOR quantity is not estimated hours", profit?.estimateActual.estimatedLaborHours === null && profit?.estimateActual.laborHoursVariance === null);
+  check("LABOR line total is customer labor charge, not estimated cost", profit?.estimateActual.customerLaborCharge === 160 && profit?.estimateActual.estimatedLaborCost === null && profit?.estimateActual.laborCostVariance === null);
+  check("MATERIAL line total is customer material charge, not supplier cost", profit?.estimateActual.customerMaterialCharge === 40 && profit?.estimateActual.estimatedMaterialCost === null);
+  check("Customer charge labels stay truthful", /customer labor charge/i.test(CUSTOMER_LABOR_CHARGE_LABEL));
   check("Service attribution uses the request catalog item", profit?.completeness.serviceAttributed === true && profit?.catalogItemId === "svc-1");
   check("Unpaid invoice completeness flag is set", profit?.completeness.unpaidInvoicePresent === true);
 
@@ -207,15 +230,16 @@ try {
   check("Projected bank balance stays null", cash.projectedBalance === null && cash.bankConnected === false);
   check("Known inflows are collected payments only", cash.knownInflows === 400 && cash.collectedCustomerPayments === 400);
   check("SENT invoices are not an input to known cash in", !("outstandingInvoices" in cash));
-  check("Known outflows are recorded expenses + processed payroll", cash.knownOutflows === 130);
-  check("Authorized-but-not-processed payroll is omitted from the processed input", cash.processedPayrollOutflows === 50);
+  check("Known outflows are recorded expenses only", cash.knownOutflows === 80);
+  check("Processed payroll gross is shown separately and not treated as bank cash out", cash.processedPayrollGrossLabor === 50 && cash.processedPayrollOutflows === 0);
+  check("Known net does not subtract payroll gross", cash.netKnown === 320 && /not included as verified bank cash movement/i.test(PAYROLL_GROSS_NOT_CASH_MESSAGE));
 
   const sentIsNotCash = buildKnownCashFlow({
     collectedPayments: [],
     recordedExpenses: [],
     processedPayroll: [{ authorizedGrossLaborAmount: 10 }],
   });
-  check("A sent invoice is not required to compute cash flow", sentIsNotCash.knownInflows === 0 && sentIsNotCash.knownOutflows === 10);
+  check("A sent invoice is not required to compute cash flow", sentIsNotCash.knownInflows === 0 && sentIsNotCash.knownOutflows === 0 && sentIsNotCash.processedPayrollGrossLabor === 10);
 
   check("45 days ages into 31-60", agingBucketForDays(45) === "31-60");
   check("90 days stays in 61-90", agingBucketForDays(90) === "61-90");
@@ -276,8 +300,14 @@ try {
       status: "COMPLETED",
       grossMarginPct: 10,
       completeness: { ...profit.completeness, laborCostComplete: true },
-      estimateActual: { ...profit.estimateActual, estimatedLaborHours: 4, laborHoursVariance: 6 },
-      knownTotalDirectCost: 300,
+      estimateActual: {
+        ...profit.estimateActual,
+        estimatedLaborHours: 4,
+        estimatedLaborHoursProvenance: "calculator-hours",
+        laborHoursVariance: 6,
+      },
+      recordedDirectCost: 280,
+      knownTotalDirectCost: 280,
     })),
     services: [{
       catalogItemId: "svc-1",
@@ -303,7 +333,29 @@ try {
     priorExpenses: 100,
   });
   check("Under-target margin recommendation includes sample size", priced.some((row) => row.key === "under-target-margin" && row.sampleSize === 3 && row.evidence.length > 0));
-  check("Labor overrun recommendation is evidence-backed", priced.some((row) => row.key === "labor-exceeds-estimate" && /hours/.test(row.currentResult)));
+  check("Labor overrun recommendation requires a trustworthy hours snapshot", priced.some((row) => row.key === "labor-exceeds-estimate" && /hours baseline/.test(row.currentResult)));
+  const fakeHours = buildPricingRecommendations({
+    jobs: Array.from({ length: PRICING_MIN_SAMPLE }, (_, index) => ({
+      ...profit,
+      jobId: `job-qty-${index}`,
+      status: "COMPLETED",
+      recordedDirectCost: 280,
+      completeness: { ...profit.completeness, laborCostComplete: true },
+      estimateActual: {
+        ...profit.estimateActual,
+        estimatedLaborHours: null,
+        estimatedLaborHoursProvenance: "none",
+        laborHoursVariance: null,
+        customerLaborCharge: 500,
+      },
+    })),
+    services: [],
+    laborBurden: { burdenRate: null, targetGrossMarginRate: null, notes: null },
+    expenseGrowthPercent: null,
+    currentExpenses: 0,
+    priorExpenses: 0,
+  });
+  check("Generic LABOR quantity does not create a labor-overrun signal", fakeHours.every((row) => row.key !== "labor-exceeds-estimate" && row.key !== "scheduled-duration-overrun"));
   check(
     "Pricing recommendations never claim an automatic price change",
     priced.every((row) => row.kind === "owner-review" && !/automatically change|auto-change|will update .*price/i.test(row.proposedAction)),
@@ -453,7 +505,7 @@ try {
   check("Authorized payroll is not treated as cash out", intel.cashFlow.processedPayrollOutflows === 0);
   check("Customer lifetime includes Ada's paid revenue", intel.customerLifetime.some((row) => row.name === "Ada" && row.paidRevenue === 200));
   check("Recurring expenses appear from recorded rows", intel.recurringExpenses.some((row) => row.description === "Insurance"));
-  check("Job margin is a selected-range snapshot", intel.jobMarginKind === "selected-range-snapshot");
+  check("Job profitability is labeled whole-job for activity in range", intel.jobMarginKind === "whole-job-for-activity-in-range" && intel.jobMarginLabel === WHOLE_JOB_RANGE_LABEL);
 
   const signals = financialSignalsForBsos(intel);
   check("BSOS hooks are recorded facts", signals.every((row) => row.kind === "fact"));
@@ -495,6 +547,284 @@ try {
   const betaOnly = await loadFinancialSource(prisma, businessB.id);
   check("Business B cannot see A's burden setting", betaOnly.laborBurden.burdenRate === null);
   check("Business B cannot see A's payment", betaOnly.payments.length === 0);
+
+  console.log("\nSTATIC — Estimate-vs-actual fixed-price labor is not hours or cost");
+  const hoursDescription = joinLineDescription("Calculator labor", null, {
+    calculatorId: "custom-variable-scope",
+    inputs: { estimatedLaborHours: 4 },
+    rates: {},
+  });
+  const fixedPrice = calculateJobProfitability("job-fixed", financeSource({
+    customers: [{ id: "c1", name: "Ada", createdAt: new Date("2026-01-01") }],
+    jobs: [{ id: "job-fixed", status: "COMPLETED", createdAt: new Date("2026-01-01"), customerId: "c1", estimateId: "est-fixed", scheduledDurationMinutes: 120 }],
+    estimates: [{ id: "est-fixed", status: "APPROVED", total: 500, createdAt: new Date("2026-01-01"), customerId: "c1", serviceRequestId: null }],
+    estimateLines: [
+      { estimateId: "est-fixed", type: "LABOR", quantity: 1, total: 500, fromApprovedVersion: true },
+      { estimateId: "est-fixed", type: "MATERIAL", quantity: 1, total: 250, fromApprovedVersion: true },
+    ],
+    invoices: [{ id: "inv-fixed", businessId: "biz-a", status: "PAID", total: 500, paidAt: new Date("2026-01-02"), createdAt: new Date("2026-01-02"), customerId: "c1", jobId: "job-fixed", paymentMethod: null, paymentReference: null }],
+    payments: [{ id: "pay-fixed", businessId: "biz-a", customerId: "c1", jobId: "job-fixed", invoiceId: "inv-fixed", purpose: "INVOICE_BALANCE", amount: 500, method: "CASH", receivedAt: new Date("2026-01-02") }],
+    approvedTimeEntries: [
+      { id: "t-fixed", membershipId: "m1", jobId: "job-fixed", activityType: "JOB", startedAt: new Date("2026-01-02"), approvedHours: 6, approvedLaborCost: 180 },
+    ],
+  }));
+  check("Fixed-price LABOR quantity 1 is not estimated labor hours", fixedPrice?.estimateActual.estimatedLaborHours === null);
+  check("Fixed-price LABOR $500 is customer charge, not estimated labor cost", fixedPrice?.estimateActual.customerLaborCharge === 500 && fixedPrice?.estimateActual.estimatedLaborCost === null);
+  check("MATERIAL $250 is customer material charge, not supplier cost", fixedPrice?.estimateActual.customerMaterialCharge === 250 && fixedPrice?.estimateActual.estimatedMaterialCost === null);
+  check("Actual 6 hours / $180 wage does not create fake cost variance", fixedPrice?.estimateActual.laborHoursVariance === null && fixedPrice?.estimateActual.laborCostVariance === null && fixedPrice?.estimateActual.totalCostVariance === null);
+  check("Scheduled duration is labeled planned/scheduled, not estimate hours", fixedPrice?.estimateActual.scheduledDurationMinutes === 120 && /planned\/scheduled duration/i.test(fixedPrice?.estimateActual.scheduledDurationLabel ?? ""));
+  const snapshotHours = calculateJobProfitability("job-snap", financeSource({
+    customers: [{ id: "c1", name: "Ada", createdAt: new Date("2026-01-01") }],
+    jobs: [{ id: "job-snap", status: "COMPLETED", createdAt: new Date("2026-01-01"), customerId: "c1", estimateId: "est-snap" }],
+    estimates: [{ id: "est-snap", status: "APPROVED", total: 400, createdAt: new Date("2026-01-01"), customerId: "c1", serviceRequestId: null }],
+    estimateLines: [
+      { estimateId: "est-snap", type: "LABOR", quantity: 1, total: 400, description: hoursDescription, fromApprovedVersion: true },
+    ],
+    approvedTimeEntries: [
+      { id: "t-snap", membershipId: "m1", jobId: "job-snap", activityType: "JOB", startedAt: new Date("2026-01-02"), approvedHours: 6, approvedLaborCost: 180 },
+    ],
+  }));
+  check("Calculator hours snapshot is the only hours baseline", snapshotHours?.estimateActual.estimatedLaborHours === 4 && snapshotHours?.estimateActual.estimatedLaborHoursProvenance === "calculator-hours");
+
+  console.log("\nSTATIC — Canonical collected revenue and remaining balances");
+  const mixedJob = {
+    jobId: "job-mix",
+    invoices: [
+      { id: "inv-a", status: "PAID", total: 100, jobId: "job-mix", customerId: "c1" },
+      { id: "inv-b", status: "PAID", total: 75, jobId: "job-mix", customerId: "c1" },
+    ],
+    payments: [
+      { id: "pay-a", amount: 100, invoiceId: "inv-a", jobId: "job-mix", customerId: "c1", receivedAt: new Date() },
+    ],
+  };
+  check(
+    "Mixed payment + legacy PAID on the same job collects both",
+    collectedRevenueForJob(mixedJob) === 175,
+  );
+  const noJobCustomer = collectedRevenueForCustomer({
+    customerId: "c-partial",
+    invoices: [{ id: "inv-partial", status: "PAID", total: 100, customerId: "c-partial", jobId: null }],
+    payments: [{ id: "pay-partial", amount: 40, invoiceId: "inv-partial", jobId: null, customerId: "c-partial", receivedAt: new Date() }],
+  });
+  check("Customer PAID invoice with a $40 Payment and no job collects $40, not $100", noJobCustomer === 40);
+  const once = collectedRevenueForJob({
+    jobId: "job-once",
+    invoices: [{ id: "inv-once", status: "PAID", total: 50, jobId: "job-once", customerId: "c1" }],
+    payments: [
+      { id: "pay-once", amount: 50, invoiceId: "inv-once", jobId: "job-once", customerId: "c1", receivedAt: new Date() },
+      { id: "pay-once", amount: 50, invoiceId: "inv-once", jobId: "job-once", customerId: "c1", receivedAt: new Date() },
+    ],
+  });
+  check("One Payment linked through job and invoice paths is counted once", once === 50);
+  const sentPartial = invoiceBalanceDue(
+    { id: "inv-sent-1000", total: 1000 },
+    [{ id: "pay-400", amount: 400, invoiceId: "inv-sent-1000", jobId: "job-1", customerId: "c1", receivedAt: new Date() }],
+  );
+  check("SENT $1000 with $400 collected has $600 remaining, not $1000", sentPartial === 600);
+  const reconSource = financeSource({
+    jobs: [{ id: "job-mix", status: "COMPLETED", createdAt: new Date(), customerId: "c1", estimateId: null }],
+    customers: [{ id: "c1", name: "Ada", createdAt: new Date() }, { id: "c-partial", name: "Ned", createdAt: new Date() }],
+    invoices: [
+      { id: "inv-a", businessId: "biz-a", status: "PAID", total: 100, paidAt: new Date(), createdAt: new Date(), customerId: "c1", jobId: "job-mix", paymentMethod: null, paymentReference: null },
+      { id: "inv-b", businessId: "biz-a", status: "PAID", total: 75, paidAt: new Date(), createdAt: new Date(), customerId: "c1", jobId: "job-mix", paymentMethod: null, paymentReference: null },
+      { id: "inv-partial", businessId: "biz-a", status: "PAID", total: 100, paidAt: new Date(), createdAt: new Date(), customerId: "c-partial", jobId: null, paymentMethod: null, paymentReference: null },
+    ],
+    payments: [
+      { id: "pay-a", businessId: "biz-a", customerId: "c1", jobId: "job-mix", invoiceId: "inv-a", purpose: "INVOICE_BALANCE", amount: 100, method: "CASH", receivedAt: new Date() },
+      { id: "pay-partial", businessId: "biz-a", customerId: "c-partial", jobId: null, invoiceId: "inv-partial", purpose: "INVOICE_BALANCE", amount: 40, method: "CASH", receivedAt: new Date() },
+    ],
+  });
+  const recon = reconcileCollectedRevenue(reconSource);
+  check("Global collected cash reconciles to job-attributed plus unattributed", recon.reconciles && recon.totalCollected === 215 && recon.attributedToJobs === 175 && recon.unattributedCollected === 40);
+  check("Invoice-set collected matches the same 215", collectedRevenueForInvoices(reconSource.invoices, reconSource.payments) === 215);
+  const sentJob = calculateJobProfitability("job-sent", financeSource({
+    jobs: [{ id: "job-sent", status: "COMPLETED", createdAt: new Date(), customerId: "c1", estimateId: null }],
+    invoices: [{ id: "inv-sent-1000", businessId: "biz-a", status: "SENT", total: 1000, paidAt: null, createdAt: new Date(), customerId: "c1", jobId: "job-sent", paymentMethod: null, paymentReference: null }],
+    payments: [{ id: "pay-400", businessId: "biz-a", customerId: "c1", jobId: "job-sent", invoiceId: "inv-sent-1000", purpose: "INVOICE_BALANCE", amount: 400, method: "CASH", receivedAt: new Date() }],
+  }));
+  check("Job outstanding uses remaining balance after partial collection", sentJob?.outstandingReceivable === 600 && sentJob?.collectedRevenue === 400);
+
+  console.log("\nSTATIC — Recurring evidence, chronology, CSV labels");
+  const homeDepot = detectRecurringExpensePatterns([
+    { id: "hd1", description: "2x4 lumber", amount: 48, category: "MATERIALS", vendor: "Home Depot", recurring: false, occurredOn: new Date("2026-07-01") },
+    { id: "hd2", description: "Exterior paint", amount: 62, category: "MATERIALS", vendor: "Home Depot", recurring: false, occurredOn: new Date("2026-07-20") },
+  ]);
+  check("Two unrelated Home Depot material purchases are not a recurring suggestion", homeDepot.length === 0);
+  const insurance = detectRecurringExpensePatterns([
+    { id: "ins1", description: "Liability insurance", amount: 25, category: "INSURANCE", vendor: "Insurer", recurring: false, occurredOn: new Date("2026-06-01") },
+    { id: "ins2", description: "Liability insurance", amount: 25, category: "INSURANCE", vendor: "Insurer", recurring: false, occurredOn: new Date("2026-07-01") },
+    { id: "ins3", description: "Liability insurance", amount: 25, category: "INSURANCE", vendor: "Insurer", recurring: false, occurredOn: new Date("2026-08-01") },
+  ]);
+  check("Three matching monthly insurance charges become a suggestion", insurance.some((row) => row.occurrenceCount === 3 && row.cadence === "monthly" && row.why.some((line) => /monthly/i.test(line))));
+  const explicit = detectRecurringExpensePatterns([
+    { id: "soft1", description: "Design software", amount: 30, category: "SOFTWARE", vendor: "Adobe", recurring: true, occurredOn: new Date("2026-08-01") },
+  ]);
+  check("Explicit owner recurring flag becomes a suggestion", explicit.some((row) => row.cadence === "explicit-flag" && row.why.some((line) => /explicitly marked recurring/i.test(line))));
+  const irregular = detectRecurringExpensePatterns([
+    { id: "c1", description: "Deck contractor", amount: 900, category: "SUBCONTRACTOR", vendor: "Bob", recurring: false, occurredOn: new Date("2026-01-01") },
+    { id: "c2", description: "Fence contractor", amount: 1400, category: "SUBCONTRACTOR", vendor: "Bob", recurring: false, occurredOn: new Date("2026-03-15") },
+    { id: "c3", description: "Shed contractor", amount: 2100, category: "SUBCONTRACTOR", vendor: "Bob", recurring: false, occurredOn: new Date("2026-08-02") },
+  ]);
+  check("Irregular one-off contractor spend is not a recurring suggestion", irregular.length === 0);
+
+  const laterLow = Array.from({ length: 3 }, (_, index) => ({
+    ...profit,
+    jobId: `aaa-recent-${index}`,
+    status: "COMPLETED",
+    grossMarginPct: 10,
+    burdenAdjustedMarginPct: 10,
+    recordedDirectCost: 280,
+    financialActivityAt: new Date("2026-09-01"),
+    completeness: { ...profit.completeness, laborCostComplete: true },
+  }));
+  const earlierHigh = Array.from({ length: 3 }, (_, index) => ({
+    ...profit,
+    jobId: `zzz-older-${index}`,
+    status: "COMPLETED",
+    grossMarginPct: 40,
+    burdenAdjustedMarginPct: 40,
+    recordedDirectCost: 280,
+    financialActivityAt: new Date("2026-01-01"),
+    completeness: { ...profit.completeness, laborCostComplete: true },
+  }));
+  const datedErosion = buildPricingRecommendations({
+    jobs: [...laterLow, ...earlierHigh],
+    services: [],
+    laborBurden: { burdenRate: null, targetGrossMarginRate: null, notes: null },
+    expenseGrowthPercent: null,
+    currentExpenses: 0,
+    priorExpenses: 0,
+  });
+  check("Margin erosion follows financial-activity dates, not lexical job IDs", datedErosion.some((row) => row.key === "margin-erosion" && /financial-activity date/i.test(row.evidence.join(" "))));
+  const sameDay = buildPricingRecommendations({
+    jobs: [...laterLow, ...earlierHigh].map((job) => ({ ...job, financialActivityAt: new Date("2026-06-01") })),
+    services: [],
+    laborBurden: { burdenRate: null, targetGrossMarginRate: null, notes: null },
+    expenseGrowthPercent: null,
+    currentExpenses: 0,
+    priorExpenses: 0,
+  });
+  check("No recent-margin-erosion claim without distinct chronology", sameDay.every((row) => row.key !== "margin-erosion"));
+
+  const csv = jobProfitabilityCsvRows(intel);
+  check("Job CSV states whole-job range semantics", csv.headers.includes("Range semantics") && csv.rows.every((row) => row.at(-1) === WHOLE_JOB_RANGE_LABEL));
+  check("Job CSV separates recorded wage from burden assumption", csv.headers.includes("Recorded wage labor cost") && csv.headers.includes("Owner-configured burden %"));
+
+  console.log("\nDB — Owner review, tamper-proof facts, entitlements");
+  const adminUser = await prisma.user.create({
+    data: { name: "Ann Admin", email: `ann-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const adminMem = await prisma.membership.create({
+    data: { userId: adminUser.id, businessId: businessA.id, role: "ADMIN" },
+  });
+  const adminAccess = makeAccess(businessA.id, "ADMIN", adminMem.id);
+  const ownerB = await prisma.user.create({
+    data: { name: "Bea Owner", email: `bea-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const ownerBMem = await prisma.membership.create({
+    data: { userId: ownerB.id, businessId: businessB.id, role: "OWNER" },
+  });
+  const ownerBAccess = makeAccess(businessB.id, "OWNER", ownerBMem.id);
+  await prisma.businessSaasSubscription.create({
+    data: { businessId: businessB.id, status: "active", planCode: "FOUNDER", legacyExempt: true },
+  });
+
+  await prisma.expense.createMany({
+    data: [
+      { businessId: businessA.id, occurredOn: new Date("2026-06-01"), description: "Liability insurance", amount: 25, category: "INSURANCE", vendor: "Insurer", recurring: false },
+      { businessId: businessA.id, occurredOn: new Date("2026-07-01"), description: "Liability insurance", amount: 25, category: "INSURANCE", vendor: "Insurer", recurring: false },
+      { businessId: businessA.id, occurredOn: new Date("2026-08-01"), description: "Liability insurance", amount: 25, category: "INSURANCE", vendor: "Insurer", recurring: false },
+    ],
+  });
+  const insuranceKey = "INSURANCE::insurer::liability insurance";
+  let memberReviewBlocked = false;
+  try {
+    await reviewRecurringExpensePattern(prisma, memberAccess, { patternKey: insuranceKey, ownerStatus: "CONFIRMED" });
+  } catch (error) {
+    memberReviewBlocked = error instanceof ForbiddenError || error?.name === "ForbiddenError";
+  }
+  check("MEMBER cannot confirm a recurring pattern", memberReviewBlocked);
+  let adminReviewBlocked = false;
+  try {
+    await reviewRecurringExpensePattern(prisma, adminAccess, { patternKey: insuranceKey, ownerStatus: "CONFIRMED" });
+  } catch (error) {
+    adminReviewBlocked = error instanceof ForbiddenError || error?.name === "ForbiddenError";
+  }
+  check("ADMIN cannot owner-confirm a recurring pattern", adminReviewBlocked);
+  let staleBlocked = false;
+  try {
+    await reviewRecurringExpensePattern(prisma, ownerAccess, { patternKey: "INSURANCE::tampered::$25000", ownerStatus: "CONFIRMED" });
+  } catch (error) {
+    staleBlocked = error instanceof FinancialIntelligenceError && /unknown or stale/i.test(error.message);
+  }
+  check("Hidden-field / stale patternKey tampering is rejected", staleBlocked);
+  let crossTenantBlocked = false;
+  try {
+    await reviewRecurringExpensePattern(prisma, ownerBAccess, { patternKey: insuranceKey, ownerStatus: "CONFIRMED" });
+  } catch (error) {
+    crossTenantBlocked = error instanceof FinancialIntelligenceError || error instanceof ForbiddenError;
+  }
+  check("Cross-tenant recurring review is denied", crossTenantBlocked);
+  const confirmed = await reviewRecurringExpensePattern(prisma, ownerAccess, { patternKey: insuranceKey, ownerStatus: "CONFIRMED" });
+  check("Owner confirm persists server-recomputed $25, not a browser amount", Number(confirmed.suggestedAmount) === 25 && confirmed.confirmedByMembershipId === ownerMem.id && confirmed.ownerStatus === "CONFIRMED");
+
+  const adminBurden = await saveLaborBurdenSetting(prisma, adminAccess, { burdenRate: "20", targetGrossMarginRate: "99" });
+  check("ADMIN may change burden but cannot rewrite owner target margin", Number(adminBurden.burdenRate) === 0.2 && Number(adminBurden.targetGrossMarginRate) === 0.4);
+  const audits = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessA.id, settingArea: "financial-intelligence" },
+    orderBy: { changedAt: "asc" },
+  });
+  check("Burden/target changes write old and new values with actor", audits.some((row) => row.settingKey === "laborBurden.burdenRate" && row.changedByMembershipId === adminMem.id && String(row.newValue).includes("0.2")));
+
+  const starterBiz = await prisma.business.create({
+    data: { name: "Starter Shop", slug: `starter-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
+  });
+  await prisma.businessSaasSubscription.create({
+    data: { businessId: starterBiz.id, status: "active", planCode: "STARTER" },
+  });
+  check("STARTER cannot access REPORTING_INSIGHTS", (await hasProductCapability(prisma, starterBiz.id, PRODUCT_CAPABILITIES.REPORTING_INSIGHTS)) === false);
+  let starterDenied = false;
+  try {
+    await requireProductCapability(prisma, starterBiz.id, PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
+  } catch (error) {
+    starterDenied = /does not include/i.test(error.message);
+  }
+  check("STARTER requireProductCapability refuses Reporting Insights", starterDenied);
+  check("Founder keeps REPORTING_INSIGHTS", (await hasProductCapability(prisma, businessA.id, PRODUCT_CAPABILITIES.REPORTING_INSIGHTS)) === true);
+
+  await prisma.businessSaasSubscription.update({
+    where: { businessId: businessA.id },
+    data: { status: "canceled" },
+  });
+  check("Cancelled Founder still has REPORTING_INSIGHTS for retained history", (await hasProductCapability(prisma, businessA.id, PRODUCT_CAPABILITIES.REPORTING_INSIGHTS)) === true);
+  const afterCancel = await loadFinancialSource(prisma, businessA.id);
+  check("Cancelled/downgrade data preservation keeps invoices and payments", afterCancel.invoices.length >= 2 && afterCancel.payments.length >= 1);
+
+  const starterFacts = {
+    unpaidInvoices: { count: 0, amount: 0 },
+    sentEstimates: { count: 0 },
+    draftEstimates: { count: 0 },
+    unscheduledJobs: { count: 0 },
+    completedJobsWithoutReview: { count: 0 },
+    completedJobsReadyForMarketing: { count: 0 },
+    lowMarginJobs: { count: 0 },
+    missingWageEntries: { count: 0 },
+    availableCapacityDays: { count: 0 },
+    repeatCustomers: { count: 0 },
+    outsideAreaRequests: { count: 0 },
+    recurringExpenses: { count: 0, amount: 0 },
+    paidRevenue: { amount: 0 },
+    recordedExpenses: { amount: 0 },
+  };
+  const starterBsos = buildBsosRecommendations(starterFacts);
+  check("BSOS without insights facts does not invent reporting-only signals", starterBsos.every((row) => !["receivable-needs-attention", "service-margin-below-target", "estimate-labor-overrun", "high-value-customer-concentration"].includes(row.key)));
+
+  const bsosPartial = financialSignalsForBsos({
+    ...intel,
+    outstandingReceivables: { amount: 600, count: 1 },
+    jobProfitability: [sentJob].filter(Boolean),
+  });
+  check("BSOS outstanding signal uses remaining balances already computed", bsosPartial.some((row) => row.key === "outstanding-receivables"));
 
   console.log(failures === 0 ? "\nAll financial-intelligence checks passed." : `\n${failures} financial-intelligence check(s) failed.`);
 } finally {

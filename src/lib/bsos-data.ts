@@ -12,6 +12,9 @@ import {
 } from "@/lib/bsos";
 import { buildFinancialIntelligence } from "@/lib/financial-intelligence";
 import { loadFinancialSource } from "@/lib/financial-intelligence-data";
+import { invoiceBalanceDue } from "@/lib/financial-intelligence/collected-revenue";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { hasProductCapability } from "@/lib/product-entitlements";
 import { asNumber, buildReport, percentChange, resolveReportRange } from "@/lib/reports";
 import { loadReportSource } from "@/lib/reports-data";
 import { isPaidActivity } from "@/lib/time-cards";
@@ -51,7 +54,7 @@ export async function loadBsosFacts(
   ] = await Promise.all([
     prisma.invoice.findMany({
       where: { ...scope, status: "SENT" },
-      select: { total: true },
+      select: { id: true, total: true },
     }),
     prisma.estimate.count({ where: { ...scope, status: "SENT" } }),
     prisma.estimate.count({ where: { ...scope, status: "DRAFT" } }),
@@ -160,8 +163,43 @@ export async function loadBsosFacts(
     return (completedByCustomer.get(customer.id) ?? 0) > 1 || (paidByCustomer.get(customer.id) ?? 0) > 1;
   }).length;
 
+  const payments = await prisma.payment.findMany({
+    where: scope,
+    select: { id: true, amount: true, invoiceId: true, jobId: true, customerId: true, receivedAt: true },
+  });
+  const paymentRows = payments.map((payment) => ({
+    ...payment,
+    amount: asNumber(payment.amount),
+  }));
+  const unpaidRemaining = unpaid
+    .map((invoice) => invoiceBalanceDue({ id: invoice.id, total: asNumber(invoice.total) }, paymentRows))
+    .filter((amount) => amount > 0);
+  const hasInsights = await hasProductCapability(prisma, businessId, PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
+
+  const baseFacts = {
+    unpaidInvoices: {
+      count: unpaidRemaining.length,
+      amount: unpaidRemaining.reduce((sum, amount) => sum + amount, 0),
+    },
+    sentEstimates: { count: sentEstimates },
+    draftEstimates: { count: draftEstimates },
+    unscheduledJobs: { count: unscheduledJobs },
+    completedJobsWithoutReview: { count: completedJobsWithoutReview },
+    completedJobsReadyForMarketing: { count: completedJobsReadyForMarketing },
+    lowMarginJobs: { count: 0 },
+    missingWageEntries: { count: missingWageEntries + memberships.filter((row) => row.hourlyWage == null).length },
+    availableCapacityDays: { count: availableCapacityDays },
+    repeatCustomers: { count: repeatCustomers },
+    outsideAreaRequests: { count: outsideArea },
+    recurringExpenses: { count: 0, amount: 0 },
+    paidRevenue: { amount: asNumber(paidInvoices._sum.total) },
+    recordedExpenses: { amount: asNumber(expenses._sum.amount) },
+  };
+
+  if (!hasInsights) return baseFacts;
+
   const range = resolveReportRange("all", undefined, undefined, now);
-  const report = buildReport(reportSource, range);
+  const report = buildReport({ ...reportSource, payments: paymentRows }, range);
   const financialSource = await loadFinancialSource(prisma, businessId);
   const intel = buildFinancialIntelligence(financialSource, report, now);
   const lowMarginJobs = intel.jobProfitability.filter(
@@ -172,27 +210,14 @@ export async function loadBsosFacts(
     amount: intel.recurringExpenses.reduce((sum, row) => sum + row.amount, 0),
   };
   const aged = intel.receivables.rows.filter((row) => row.ageDays > 30);
-  const collected = intel.customerProfitability.reduce((sum, row) => sum + row.collected, 0);
+  const collected = intel.cashFlow.collectedCustomerPayments;
   const topCustomer = intel.customerProfitability[0];
 
   return {
-    unpaidInvoices: {
-      count: unpaid.length,
-      amount: unpaid.reduce((sum, row) => sum + asNumber(row.total), 0),
-    },
-    sentEstimates: { count: sentEstimates },
-    draftEstimates: { count: draftEstimates },
-    unscheduledJobs: { count: unscheduledJobs },
-    completedJobsWithoutReview: { count: completedJobsWithoutReview },
-    completedJobsReadyForMarketing: { count: completedJobsReadyForMarketing },
+    ...baseFacts,
     lowMarginJobs: { count: lowMarginJobs },
-    missingWageEntries: { count: missingWageEntries + memberships.filter((row) => row.hourlyWage == null).length },
-    availableCapacityDays: { count: availableCapacityDays },
-    repeatCustomers: { count: repeatCustomers },
-    outsideAreaRequests: { count: outsideArea },
     recurringExpenses: { count: recurring.count, amount: recurring.amount },
-    paidRevenue: { amount: asNumber(paidInvoices._sum.total) },
-    recordedExpenses: { amount: asNumber(expenses._sum.amount) },
+    collectedRevenue: { amount: collected },
     agedReceivables: {
       count: aged.length,
       amount: aged.reduce((sum, row) => sum + row.balanceDue, 0),
@@ -202,7 +227,11 @@ export async function loadBsosFacts(
     },
     estimateLaborOverruns: {
       count: intel.jobProfitability.filter(
-        (job) => job.estimateActual.laborHoursVariance != null && job.estimateActual.laborHoursVariance > 0,
+        (job) =>
+          job.estimateActual.estimatedLaborHours != null &&
+          job.estimateActual.estimatedLaborHoursProvenance !== "none" &&
+          job.estimateActual.laborHoursVariance != null &&
+          job.estimateActual.laborHoursVariance > 0,
       ).length,
     },
     expenseGrowthPercent: percentChange(report.recordedExpenses.current, report.recordedExpenses.prior ?? 0),

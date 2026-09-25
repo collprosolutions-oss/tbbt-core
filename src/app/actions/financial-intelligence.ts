@@ -49,13 +49,6 @@ export async function reviewRecurringPatternAction(
     }
     await reviewRecurringExpensePattern(prisma, access, {
       patternKey: readString(formData, "patternKey"),
-      description: readString(formData, "description"),
-      vendor: readString(formData, "vendor") || null,
-      category: readString(formData, "category") || "OTHER",
-      suggestedAmount: Number(readString(formData, "suggestedAmount") || "0"),
-      occurrenceCount: Number(readString(formData, "occurrenceCount") || "0"),
-      firstOccurredOn: new Date(readString(formData, "firstOccurredOn") || Date.now()),
-      lastOccurredOn: new Date(readString(formData, "lastOccurredOn") || Date.now()),
       ownerStatus: status,
     });
     revalidatePath("/reports");

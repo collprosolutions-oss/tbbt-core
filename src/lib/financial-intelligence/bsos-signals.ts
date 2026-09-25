@@ -41,7 +41,7 @@ export function financialSignalsForBsos(intel: FinancialIntelligence): BsosFinan
       key: "low-margin-services",
       kind: "fact",
       label: `${lowMargin.length} service${lowMargin.length === 1 ? "" : "s"} with negative recorded margin`,
-      detail: "Billed revenue minus known direct cost on attributed jobs.",
+      detail: "Billed revenue minus recorded direct cost on attributed jobs.",
       href: "/reports?area=services",
       priority: 20,
     });
@@ -67,14 +67,18 @@ export function financialSignalsForBsos(intel: FinancialIntelligence): BsosFinan
     });
   }
   const overruns = intel.jobProfitability.filter(
-    (job) => job.estimateActual.laborHoursVariance != null && job.estimateActual.laborHoursVariance > 0,
+    (job) =>
+      job.estimateActual.estimatedLaborHours != null &&
+      job.estimateActual.estimatedLaborHoursProvenance !== "none" &&
+      job.estimateActual.laborHoursVariance != null &&
+      job.estimateActual.laborHoursVariance > 0,
   );
   if (overruns.length >= 2) {
     signals.push({
       key: "estimate-labor-overrun",
       kind: "fact",
-      label: `${overruns.length} jobs used more labor hours than estimated`,
-      detail: "Variance compares approved time to estimated LABOR quantity.",
+      label: `${overruns.length} jobs used more approved labor than a recorded hours baseline`,
+      detail: "Variance uses a trustworthy hours snapshot, not generic LABOR line quantity.",
       href: "/reports?area=estimate-accuracy",
       priority: 22,
     });

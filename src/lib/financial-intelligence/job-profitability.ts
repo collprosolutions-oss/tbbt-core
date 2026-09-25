@@ -1,12 +1,27 @@
 import { catalogIdForJob, inRange, sumTotals, type ReportDateRange, type ReportSource } from "@/lib/reports";
 import { isPaidActivity, roundHours, roundMoney } from "@/lib/time-cards";
 import {
+  collectedRevenueForJob,
+  invoiceBalanceDue,
+} from "@/lib/financial-intelligence/collected-revenue";
+import {
+  costAssumptionsFromLines,
+  customerChargesFromLines,
+  scheduledDurationHours,
+  SCHEDULED_DURATION_LABEL,
+} from "@/lib/financial-intelligence/estimate-actual";
+import {
   applyLaborBurden,
   emptyLaborBurdenConfig,
   type LaborBurdenApplication,
   type LaborBurdenConfig,
 } from "@/lib/financial-intelligence/labor-burden";
 import type { FinancialSource } from "@/lib/financial-intelligence/source";
+
+export { collectedRevenueForJob, paymentsAppliedToInvoice } from "@/lib/financial-intelligence/collected-revenue";
+
+export const WHOLE_JOB_RANGE_LABEL =
+  "Whole-job profitability for jobs with financial activity in this selected range.";
 
 export type DataCompletenessFlags = {
   hasApprovedEstimate: boolean;
@@ -20,11 +35,16 @@ export type DataCompletenessFlags = {
 };
 
 export type EstimateActualVariance = {
+  customerLaborCharge: number | null;
+  customerMaterialCharge: number | null;
   estimatedLaborHours: number | null;
+  estimatedLaborHoursProvenance: "none" | "calculator-hours" | "takeoff-unit-cost" | "scheduled-duration";
   estimatedLaborCost: number | null;
+  estimatedLaborCostProvenance: "none" | "calculator-hours" | "takeoff-unit-cost" | "scheduled-duration";
   actualLaborHours: number;
   actualLaborCost: number | null;
   estimatedMaterials: number | null;
+  estimatedMaterialCost: number | null;
   actualMaterials: number;
   estimateTotal: number | null;
   approvedChangeOrders: number;
@@ -35,6 +55,10 @@ export type EstimateActualVariance = {
   materialsVariance: number | null;
   totalCostVariance: number | null;
   revenueVariance: number | null;
+  scheduledDurationMinutes: number | null;
+  scheduledDurationHours: number | null;
+  scheduledDurationLabel: typeof SCHEDULED_DURATION_LABEL;
+  scheduledVsActualHoursVariance: number | null;
 };
 
 export type JobProfitability = {
@@ -49,16 +73,22 @@ export type JobProfitability = {
   collectedRevenue: number;
   outstandingReceivable: number;
   laborHours: number;
+  recordedWageLaborCost: number | null;
   directLaborCost: number | null;
   laborBurden: LaborBurdenApplication;
   materialsDirectExpense: number;
   otherAllocatedDirectExpense: number;
+  recordedDirectCost: number | null;
   knownTotalDirectCost: number | null;
+  burdenAdjustedDirectCost: number | null;
   grossProfit: number | null;
   collectedGrossProfit: number | null;
   grossMarginPct: number | null;
+  burdenAdjustedGrossProfit: number | null;
+  burdenAdjustedMarginPct: number | null;
   estimateActual: EstimateActualVariance;
   completeness: DataCompletenessFlags;
+  financialActivityAt: Date;
   href: string;
 };
 
@@ -72,45 +102,6 @@ function catalogName(id: string | null, source: ReportSource): string | null {
   return source.catalogItems.find((item) => item.id === id)?.name ?? "Service";
 }
 
-export function paymentsAppliedToInvoice(
-  payments: FinancialSource["payments"],
-  invoiceId: string,
-): number {
-  return roundMoney(
-    payments.filter((payment) => payment.invoiceId === invoiceId).reduce((sum, payment) => sum + payment.amount, 0),
-  );
-}
-
-/**
- * Collected cash for a job. Uses recorded Payment rows when present.
- * Legacy PAID invoices with no payment rows count as collected.
- * SENT / unpaid invoice value is never treated as collected cash.
- */
-export function collectedRevenueForJob(input: {
-  jobId: string;
-  invoices: ReportSource["invoices"];
-  payments: FinancialSource["payments"];
-}): number {
-  const jobPayments = input.payments.filter((payment) => payment.jobId === input.jobId);
-  const invoicePayments = input.payments.filter((payment) => {
-    if (!payment.invoiceId) return false;
-    return input.invoices.some((invoice) => invoice.id === payment.invoiceId && invoice.jobId === input.jobId);
-  });
-  const paymentIds = new Set([...jobPayments, ...invoicePayments].map((row) => row.id));
-  const fromPayments = [...jobPayments, ...invoicePayments]
-    .filter((row, index, all) => all.findIndex((item) => item.id === row.id) === index)
-    .reduce((sum, payment) => sum + payment.amount, 0);
-
-  const paidInvoices = input.invoices.filter((invoice) => invoice.jobId === input.jobId && invoice.status === "PAID");
-  let legacyPaid = 0;
-  for (const invoice of paidInvoices) {
-    const applied = input.payments.some((payment) => payment.invoiceId === invoice.id || paymentIds.has(payment.id));
-    if (!applied) legacyPaid += invoice.total;
-  }
-
-  return roundMoney(fromPayments + legacyPaid);
-}
-
 function estimateLinesForJob(job: { estimateId: string | null }, source: FinancialSource) {
   if (!job.estimateId) return [];
   const approved = source.estimateLines.filter(
@@ -120,6 +111,28 @@ function estimateLinesForJob(job: { estimateId: string | null }, source: Financi
   const estimate = source.estimates.find((row) => row.id === job.estimateId && row.status === "APPROVED");
   if (!estimate) return [];
   return source.estimateLines.filter((line) => line.estimateId === job.estimateId);
+}
+
+function financialActivityAtForJob(
+  jobId: string,
+  source: FinancialSource,
+  fallback: Date,
+): Date {
+  const dates: Date[] = [fallback];
+  for (const invoice of source.invoices.filter((row) => row.jobId === jobId)) {
+    dates.push(invoice.createdAt);
+    if (invoice.paidAt) dates.push(invoice.paidAt);
+  }
+  for (const entry of source.approvedTimeEntries.filter((row) => row.jobId === jobId)) {
+    dates.push(entry.startedAt);
+  }
+  for (const expense of source.expenses.filter((row) => row.jobId === jobId)) {
+    dates.push(expense.occurredOn);
+  }
+  for (const payment of source.payments.filter((row) => row.jobId === jobId)) {
+    dates.push(payment.receivedAt);
+  }
+  return dates.reduce((latest, date) => (date.getTime() > latest.getTime() ? date : latest));
 }
 
 export function calculateJobProfitability(
@@ -145,11 +158,19 @@ export function calculateJobProfitability(
   );
   const approvedChangeOrderTotal = roundMoney(approvedChangeOrders.reduce((sum, order) => sum + order.total, 0));
   const contractedRevenue =
-    approvedEstimate != null ? roundMoney(approvedEstimate.total + approvedChangeOrderTotal) : approvedChangeOrders.length > 0 ? approvedChangeOrderTotal : null;
+    approvedEstimate != null
+      ? roundMoney(approvedEstimate.total + approvedChangeOrderTotal)
+      : approvedChangeOrders.length > 0
+        ? approvedChangeOrderTotal
+        : null;
 
   const billedInvoices = jobInvoices.filter((invoice) => invoice.status === "SENT" || invoice.status === "PAID");
   const billedRevenue = sumTotals(billedInvoices);
-  const outstandingReceivable = sumTotals(jobInvoices.filter((invoice) => invoice.status === "SENT"));
+  const outstandingReceivable = roundMoney(
+    jobInvoices
+      .filter((invoice) => invoice.status === "SENT")
+      .reduce((sum, invoice) => sum + invoiceBalanceDue(invoice, source.payments), 0),
+  );
   const collectedRevenue = collectedRevenueForJob({
     jobId,
     invoices: source.invoices,
@@ -170,7 +191,8 @@ export function calculateJobProfitability(
     }
   }
   laborHours = roundHours(laborHours);
-  const directLaborCost = sawCost ? roundMoney(wageOnly) : laborCostIncomplete ? null : 0;
+  const recordedWageLaborCost = sawCost ? roundMoney(wageOnly) : laborCostIncomplete ? null : 0;
+  const directLaborCost = recordedWageLaborCost;
   const laborBurden = applyLaborBurden(directLaborCost, burden);
 
   const materialsDirectExpense = roundMoney(
@@ -179,37 +201,48 @@ export function calculateJobProfitability(
   const otherAllocatedDirectExpense = roundMoney(
     jobExpenses.filter((expense) => expense.category !== "MATERIALS").reduce((sum, expense) => sum + expense.amount, 0),
   );
-  const knownTotalDirectCost =
-    laborBurden.laborCostWithBurden == null || laborCostIncomplete
+  const recordedDirectCost =
+    recordedWageLaborCost == null || laborCostIncomplete
       ? null
-      : roundMoney(laborBurden.laborCostWithBurden + materialsDirectExpense + otherAllocatedDirectExpense);
+      : roundMoney(recordedWageLaborCost + materialsDirectExpense + otherAllocatedDirectExpense);
+  const knownTotalDirectCost = recordedDirectCost;
+  const burdenAdjustedDirectCost =
+    recordedDirectCost == null || laborBurden.burdenAmount == null
+      ? recordedDirectCost
+      : roundMoney(recordedDirectCost + laborBurden.burdenAmount);
 
-  const grossProfit = knownTotalDirectCost == null ? null : roundMoney(billedRevenue - knownTotalDirectCost);
-  const collectedGrossProfit = knownTotalDirectCost == null ? null : roundMoney(collectedRevenue - knownTotalDirectCost);
+  const grossProfit = recordedDirectCost == null ? null : roundMoney(billedRevenue - recordedDirectCost);
+  const collectedGrossProfit = recordedDirectCost == null ? null : roundMoney(collectedRevenue - recordedDirectCost);
   const grossMarginPct =
     grossProfit == null || billedRevenue <= 0 ? null : roundMoney((grossProfit / billedRevenue) * 100);
+  const burdenAdjustedGrossProfit =
+    burdenAdjustedDirectCost == null ? null : roundMoney(billedRevenue - burdenAdjustedDirectCost);
+  const burdenAdjustedMarginPct =
+    burdenAdjustedGrossProfit == null || billedRevenue <= 0
+      ? null
+      : roundMoney((burdenAdjustedGrossProfit / billedRevenue) * 100);
 
   const lines = estimateLinesForJob(job ?? { estimateId: null }, source);
-  const laborLines = lines.filter((line) => line.type === "LABOR");
-  const materialLines = lines.filter((line) => line.type === "MATERIAL");
-  const estimatedLaborHours = laborLines.length > 0 ? roundHours(laborLines.reduce((sum, line) => sum + line.quantity, 0)) : null;
-  const estimatedLaborCost = laborLines.length > 0 ? roundMoney(laborLines.reduce((sum, line) => sum + line.total, 0)) : null;
-  const estimatedMaterials = materialLines.length > 0 ? roundMoney(materialLines.reduce((sum, line) => sum + line.total, 0)) : null;
-  const actualLaborCost = laborBurden.laborCostWithBurden;
+  const charges = customerChargesFromLines(lines);
+  const assumptions = costAssumptionsFromLines(lines, job?.scheduledDurationMinutes ?? null);
+  const plannedHours = scheduledDurationHours(assumptions.scheduledDurationMinutes);
   const laborHoursVariance =
-    estimatedLaborHours == null ? null : roundHours(laborHours - estimatedLaborHours);
+    assumptions.estimatedLaborHours == null ? null : roundHours(laborHours - assumptions.estimatedLaborHours);
   const laborCostVariance =
-    estimatedLaborCost == null || actualLaborCost == null ? null : roundMoney(actualLaborCost - estimatedLaborCost);
-  const materialsVariance =
-    estimatedMaterials == null ? null : roundMoney(materialsDirectExpense - estimatedMaterials);
-  const estimatedDirect =
-    estimatedLaborCost == null && estimatedMaterials == null
+    assumptions.estimatedLaborCost == null || recordedWageLaborCost == null
       ? null
-      : roundMoney((estimatedLaborCost ?? 0) + (estimatedMaterials ?? 0));
+      : roundMoney(recordedWageLaborCost - assumptions.estimatedLaborCost);
+  const materialsVariance =
+    assumptions.estimatedMaterialCost == null
+      ? null
+      : roundMoney(materialsDirectExpense - assumptions.estimatedMaterialCost);
+  const estimatedDirect =
+    assumptions.estimatedLaborCost == null && assumptions.estimatedMaterialCost == null
+      ? null
+      : roundMoney((assumptions.estimatedLaborCost ?? 0) + (assumptions.estimatedMaterialCost ?? 0));
   const totalCostVariance =
-    estimatedDirect == null || knownTotalDirectCost == null ? null : roundMoney(knownTotalDirectCost - estimatedDirect);
-  const revenueVariance =
-    contractedRevenue == null ? null : roundMoney(billedRevenue - contractedRevenue);
+    estimatedDirect == null || recordedDirectCost == null ? null : roundMoney(recordedDirectCost - estimatedDirect);
+  const revenueVariance = contractedRevenue == null ? null : roundMoney(billedRevenue - contractedRevenue);
 
   return {
     jobId,
@@ -223,41 +256,57 @@ export function calculateJobProfitability(
     collectedRevenue,
     outstandingReceivable,
     laborHours,
+    recordedWageLaborCost,
     directLaborCost,
     laborBurden,
     materialsDirectExpense,
     otherAllocatedDirectExpense,
+    recordedDirectCost,
     knownTotalDirectCost,
+    burdenAdjustedDirectCost,
     grossProfit,
     collectedGrossProfit,
     grossMarginPct,
+    burdenAdjustedGrossProfit,
+    burdenAdjustedMarginPct,
     estimateActual: {
-      estimatedLaborHours,
-      estimatedLaborCost,
+      customerLaborCharge: charges.customerLaborCharge,
+      customerMaterialCharge: charges.customerMaterialCharge,
+      estimatedLaborHours: assumptions.estimatedLaborHours,
+      estimatedLaborHoursProvenance: assumptions.estimatedLaborHoursProvenance,
+      estimatedLaborCost: assumptions.estimatedLaborCost,
+      estimatedLaborCostProvenance: assumptions.estimatedLaborCostProvenance,
       actualLaborHours: laborHours,
-      actualLaborCost,
-      estimatedMaterials,
+      actualLaborCost: recordedWageLaborCost,
+      estimatedMaterials: charges.customerMaterialCharge,
+      estimatedMaterialCost: assumptions.estimatedMaterialCost,
       actualMaterials: materialsDirectExpense,
       estimateTotal: approvedEstimate?.total ?? null,
       approvedChangeOrders: approvedChangeOrderTotal,
       invoiceTotal: billedRevenue,
-      actualKnownCost: knownTotalDirectCost,
+      actualKnownCost: recordedDirectCost,
       laborHoursVariance,
       laborCostVariance,
       materialsVariance,
       totalCostVariance,
       revenueVariance,
+      scheduledDurationMinutes: assumptions.scheduledDurationMinutes,
+      scheduledDurationHours: plannedHours,
+      scheduledDurationLabel: SCHEDULED_DURATION_LABEL,
+      scheduledVsActualHoursVariance:
+        plannedHours == null ? null : roundHours(laborHours - plannedHours),
     },
     completeness: {
       hasApprovedEstimate: Boolean(approvedEstimate),
       hasInvoice: billedInvoices.length > 0,
       hasCollectedPayment: collectedRevenue > 0,
-      laborCostComplete: !laborCostIncomplete && directLaborCost != null,
+      laborCostComplete: !laborCostIncomplete && recordedWageLaborCost != null,
       hasTimeEntries: jobEntries.length > 0,
       hasJobExpenses: jobExpenses.length > 0,
       unpaidInvoicePresent: outstandingReceivable > 0,
       serviceAttributed: catalogItemId != null,
     },
+    financialActivityAt: financialActivityAtForJob(jobId, source, job?.createdAt ?? jobInvoices[0]?.createdAt ?? new Date(0)),
     href: `/jobs/${jobId}`,
   };
 }

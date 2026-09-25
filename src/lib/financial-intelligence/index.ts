@@ -15,15 +15,33 @@ export {
   CASH_FLOW_COVERAGE_MESSAGE,
   CASH_FLOW_RECORDED_ONLY_MESSAGE,
   collectedPaymentsInRange,
+  PAYROLL_GROSS_NOT_CASH_MESSAGE,
   type KnownCashFlow,
   type KnownCashFlowInput,
 } from "@/lib/financial-intelligence/cash-flow";
+export {
+  collectedAmountForInvoice,
+  collectedRevenueForCustomer,
+  collectedRevenueForInvoices,
+  collectedRevenueForJob,
+  invoiceBalanceDue,
+  outstandingReceivableAmount,
+  paymentsAppliedToInvoice,
+  reconcileCollectedRevenue,
+  type CollectedRevenueReconciliation,
+} from "@/lib/financial-intelligence/collected-revenue";
 export {
   buildCustomerLifetime,
   buildCustomerProfitability,
   type CustomerLifetimeRow,
   type CustomerProfitRow,
 } from "@/lib/financial-intelligence/customer-profitability";
+export {
+  CUSTOMER_LABOR_CHARGE_LABEL,
+  CUSTOMER_MATERIAL_CHARGE_LABEL,
+  SCHEDULED_DURATION_LABEL,
+  SCHEDULED_DURATION_LIMITATION,
+} from "@/lib/financial-intelligence/estimate-actual";
 export {
   jobProfitabilityCsvRows,
   managementReportCsvRows,
@@ -32,18 +50,19 @@ export {
 export {
   calculateAllJobProfitability,
   calculateJobProfitability,
-  collectedRevenueForJob,
-  paymentsAppliedToInvoice,
+  WHOLE_JOB_RANGE_LABEL,
   type DataCompletenessFlags,
   type EstimateActualVariance,
   type JobProfitability,
 } from "@/lib/financial-intelligence/job-profitability";
 export {
   applyLaborBurden,
+  BURDEN_ASSUMPTION_MESSAGE,
   emptyLaborBurdenConfig,
   formatRatePercent,
   NO_BURDEN_CONFIGURED_MESSAGE,
   parseOptionalRate,
+  parsePercentInput,
   type LaborBurdenApplication,
   type LaborBurdenConfig,
 } from "@/lib/financial-intelligence/labor-burden";

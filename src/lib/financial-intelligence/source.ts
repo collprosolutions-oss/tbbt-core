@@ -27,6 +27,7 @@ export type FinancialEstimateLine = {
   type: string;
   quantity: number;
   total: number;
+  description?: string | null;
   fromApprovedVersion: boolean;
 };
 
@@ -43,7 +44,12 @@ export type RecurringPatternRecord = {
   ownerStatus: string;
 };
 
-export type FinancialSource = ReportSource & {
+export type FinancialJob = ReportSource["jobs"][number] & {
+  scheduledDurationMinutes?: number | null;
+};
+
+export type FinancialSource = Omit<ReportSource, "jobs"> & {
+  jobs: FinancialJob[];
   payments: FinancialPayment[];
   changeOrders: FinancialChangeOrder[];
   estimateLines: FinancialEstimateLine[];

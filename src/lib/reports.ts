@@ -58,7 +58,7 @@ export const REPORT_AREA_LABELS: Record<ReportArea, string> = {
 export const TBBT_RECORDED_PL_LABEL = "TBBT-recorded P&L";
 
 export const PROFIT_LOSS_MESSAGE =
-  "TBBT-recorded P&L is paid invoice revenue minus recorded expenses. This is not full accounting or tax books.";
+  "TBBT-recorded P&L is PAID invoice-status totals minus recorded expenses. That is not collected cash and not full accounting or tax books.";
 
 export const TAX_DISCLAIMER =
   "TBBT is not calculating or filing taxes in this module. The records below are what TBBT actually holds so you can export them for your own bookkeeping.";
@@ -297,6 +297,16 @@ export type ReportJob = {
   createdAt: Date;
   customerId: string | null;
   estimateId: string | null;
+  scheduledDurationMinutes?: number | null;
+};
+
+export type ReportPayment = {
+  id: string;
+  invoiceId: string | null;
+  jobId: string | null;
+  customerId: string | null;
+  amount: number;
+  receivedAt: Date;
 };
 
 export type ReportEstimate = {
@@ -380,6 +390,7 @@ export type ReportSource = {
   payrollRuns: ReportPayrollRun[];
   memberships: ReportMembership[];
   expenses: ReportExpense[];
+  payments?: ReportPayment[];
 };
 
 export function paidInvoicesInRange(invoices: readonly ReportInvoice[], range: { start: Date | null; end: Date | null }) {
@@ -400,6 +411,32 @@ export function issuedInvoicesInRange(
 
 export function outstandingInvoices(invoices: readonly ReportInvoice[]) {
   return invoices.filter((invoice) => invoice.status === "SENT");
+}
+
+function paymentsOnInvoice(payments: readonly ReportPayment[] | undefined, invoiceId: string) {
+  if (!payments?.length) return 0;
+  return roundMoney(
+    payments.filter((payment) => payment.invoiceId === invoiceId).reduce((sum, payment) => sum + payment.amount, 0),
+  );
+}
+
+/** Remaining SENT balance after recorded payments when payments are present. */
+export function outstandingRemaining(
+  invoices: readonly ReportInvoice[],
+  payments?: readonly ReportPayment[],
+) {
+  const sent = outstandingInvoices(invoices);
+  if (!payments?.length) {
+    return { amount: sumTotals(sent), count: sent.length, rows: sent.map((invoice) => ({ invoice, balance: invoice.total })) };
+  }
+  const rows = sent
+    .map((invoice) => ({ invoice, balance: roundMoney(Math.max(0, invoice.total - paymentsOnInvoice(payments, invoice.id))) }))
+    .filter((row) => row.balance > 0);
+  return {
+    amount: roundMoney(rows.reduce((sum, row) => sum + row.balance, 0)),
+    count: rows.length,
+    rows,
+  };
 }
 
 export function expensesInRange(
@@ -722,7 +759,7 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
   const priorPaid = priorRange ? paidInvoicesInRange(source.invoices, priorRange) : [];
   const issued = issuedInvoicesInRange(source.invoices, range);
   const priorIssued = priorRange ? issuedInvoicesInRange(source.invoices, priorRange) : [];
-  const outstanding = outstandingInvoices(source.invoices);
+  const outstandingRemainingSnapshot = outstandingRemaining(source.invoices, source.payments);
 
   const laborEntries = source.approvedTimeEntries.filter((entry) => inRange(entry.startedAt, range));
   const priorLaborEntries = priorRange
@@ -911,7 +948,7 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
       const job = jobById.get(jobId);
       const jobInvoices = source.invoices.filter((invoice) => invoice.jobId === jobId);
       const paidRevenueForJob = sumTotals(jobInvoices.filter((invoice) => invoice.status === "PAID"));
-      const outstandingForJob = sumTotals(jobInvoices.filter((invoice) => invoice.status === "SENT"));
+      const outstandingForJob = outstandingRemaining(jobInvoices, source.payments).amount;
       const jobLabor = rollupApprovedLabor(laborEntries.filter((entry) => entry.jobId === jobId));
       const recordedJobExpense = roundMoney(
         periodExpenses.filter((expense) => expense.jobId === jobId).reduce((sum, expense) => sum + expense.amount, 0),
@@ -1073,12 +1110,12 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
   ].sort((a, b) => b.dateLabel.localeCompare(a.dateLabel));
 
   const attention: AttentionItem[] = [];
-  for (const invoice of outstanding) {
+  for (const row of outstandingRemainingSnapshot.rows) {
     attention.push({
-      key: `invoice:${invoice.id}`,
-      label: customerName(invoice.customerId, source),
-      detail: `Sent invoice outstanding · ${invoice.total.toFixed(2)}`,
-      href: `/invoices/${invoice.id}`,
+      key: `invoice:${row.invoice.id}`,
+      label: customerName(row.invoice.customerId, source),
+      detail: `Outstanding remaining balance · ${row.balance.toFixed(2)}`,
+      href: `/invoices/${row.invoice.id}`,
     });
   }
   for (const job of source.jobs) {
@@ -1108,7 +1145,7 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
   return {
     range,
     paidRevenue: changeStat(paidRevenue, comparable ? sumTotals(priorPaid) : null, comparable),
-    outstanding: { current: sumTotals(outstanding), count: outstanding.length },
+    outstanding: { current: outstandingRemainingSnapshot.amount, count: outstandingRemainingSnapshot.count },
     issuedInvoiceCount: changeStat(issued.length, comparable ? priorIssued.length : null, comparable),
     averageIssuedInvoice: averageInvoiceValue(issued),
     completedJobsOpened: changeStat(
@@ -1184,7 +1221,7 @@ export function reportCsvRows(area: ReportArea, report: BuiltReport): { headers:
     return {
       headers: ["Line", "Amount", "Notes"],
       rows: [
-        ["Paid revenue", String(report.profitLoss.revenue), "Paid invoices"],
+        ["PAID invoice-status revenue", String(report.profitLoss.revenue), "Invoice status PAID totals. Not collected cash unless a Payment exists."],
         ["Recorded expenses", String(report.profitLoss.expenses), "Expense.occurredOn in range"],
         [TBBT_RECORDED_PL_LABEL, String(report.profitLoss.recordedNet), PROFIT_LOSS_MESSAGE],
         [
@@ -1210,7 +1247,7 @@ export function reportCsvRows(area: ReportArea, report: BuiltReport): { headers:
   }
   if (area === "job-profitability") {
     return {
-      headers: ["Job", "Customer", "Status", "Paid revenue", "Approved hours", "Labor cost", "Recorded job expenses", JOB_MARGIN_LABEL],
+      headers: ["Job", "Customer", "Status", "PAID invoice-status revenue", "Approved hours", "Labor cost", "Recorded job expenses", JOB_MARGIN_LABEL],
       rows: report.jobProfitability.map((row) => [
         row.jobId,
         row.customerName,
@@ -1235,7 +1272,7 @@ export function reportCsvRows(area: ReportArea, report: BuiltReport): { headers:
   }
   if (area === "customers") {
     return {
-      headers: ["Customer", "New", "Repeat", "Paid revenue", "Completed jobs"],
+      headers: ["Customer", "New", "Repeat", "PAID invoice-status revenue", "Completed jobs"],
       rows: report.customers.map((row) => [
         row.name,
         row.isNew ? "yes" : "no",

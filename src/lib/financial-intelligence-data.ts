@@ -47,12 +47,12 @@ export async function loadFinancialSource(
       where: { ...scope, approvedAt: { not: null } },
       select: {
         estimateId: true,
-        lineItems: { select: { type: true, quantity: true, total: true } },
+        lineItems: { select: { type: true, quantity: true, total: true, description: true } },
       },
     }),
     prisma.lineItem.findMany({
       where: { ...scope, estimateId: { not: null } },
-      select: { estimateId: true, type: true, quantity: true, total: true },
+      select: { estimateId: true, type: true, quantity: true, total: true, description: true },
     }),
     prisma.businessLaborBurdenSetting.findUnique({
       where: { businessId },
@@ -72,6 +72,7 @@ export async function loadFinancialSource(
         type: line.type,
         quantity: asNumber(line.quantity),
         total: asNumber(line.total),
+        description: line.description,
         fromApprovedVersion: true,
       })),
     );
@@ -82,6 +83,7 @@ export async function loadFinancialSource(
     type: line.type,
     quantity: asNumber(line.quantity),
     total: asNumber(line.total),
+    description: line.description,
     fromApprovedVersion: false,
   }));
 

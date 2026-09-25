@@ -184,6 +184,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
     snapshot,
     readiness,
     integrations,
+    role,
     canEditConsequential,
     canEditPreferences,
     canOperate,
@@ -754,7 +755,8 @@ function SectionBody(props: SettingsWorkspaceProps) {
             burdenRate={laborBurden?.burdenRate ?? null}
             targetGrossMarginRate={laborBurden?.targetGrossMarginRate ?? null}
             notes={laborBurden?.notes ?? null}
-            canEdit={canEditPreferences && canOperate}
+            canEditBurden={canEditPreferences && canOperate}
+            canEditTarget={canEditConsequential && canOperate && role === "OWNER"}
           />
         </div>
       </SectionCard>

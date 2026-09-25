@@ -455,6 +455,8 @@ model Membership {
   recommendationStates            BsosRecommendationState[] @relation("BsosRecommendationStateActor")
   websitePublishes                WebsitePublish[]          @relation("WebsitePublishAuthor")
   websiteGalleryItems             WebsiteGalleryItem[]      @relation("WebsiteGalleryCreator")
+  confirmedRecurringPatterns      RecurringExpensePattern[] @relation("RecurringPatternConfirmedBy")
+  dismissedRecurringPatterns      RecurringExpensePattern[] @relation("RecurringPatternDismissedBy")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -2825,7 +2827,9 @@ model RecurringExpensePattern {
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business    Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  confirmedBy Membership? @relation("RecurringPatternConfirmedBy", fields: [confirmedByMembershipId], references: [id], onDelete: SetNull)
+  dismissedBy Membership? @relation("RecurringPatternDismissedBy", fields: [dismissedByMembershipId], references: [id], onDelete: SetNull)
 
   @@unique([businessId, patternKey])
   @@index([businessId])
