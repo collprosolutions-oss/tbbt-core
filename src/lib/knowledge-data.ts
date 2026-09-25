@@ -269,9 +269,9 @@ export async function loadKnowledgeSource(
       take: 20,
     }),
     prisma.experienceLearningCandidate.findMany({
-      where: { ...scope, status: { in: ["CANDIDATE", "REVIEWED"] } },
+      where: scope,
       orderBy: { createdAt: "desc" },
-      take: 20,
+      take: 40,
     }),
   ]);
 
@@ -282,6 +282,7 @@ export async function loadKnowledgeSource(
   const timeById = new Map(approvedTime.map((row) => [row.id, row]));
   const marketingById = new Map(marketing.map((row) => [row.id, row]));
   const reviewById = new Map(reviews.map((row) => [row.id, row]));
+  const candidateById = new Map(candidates.map((row) => [row.id, row]));
 
   function referencedRecord(
     kind: KnowledgeSourceKind | null,
@@ -380,6 +381,25 @@ export async function loadKnowledgeSource(
         label: row.customer?.name ?? "Recorded review",
         href,
         detail: [row.platform, row.rating ? `${row.rating}★` : "No rating"].join(" · "),
+      };
+    }
+    if (kind === "REQUEST") {
+      return {
+        kind,
+        label: "Service request",
+        href,
+        detail: "Recorded request evidence.",
+      };
+    }
+    if (kind === "EXPERIENCE_CANDIDATE") {
+      const row = candidateById.get(id);
+      return {
+        kind,
+        label: row?.title ?? "Experience candidate",
+        href,
+        detail: row
+          ? `Experience Intelligence · ${row.kind} · ${row.status}`
+          : "Experience Intelligence evidence.",
       };
     }
     return null;
@@ -566,7 +586,9 @@ export async function loadKnowledgeSource(
         required: step.required,
       })),
     })),
-    candidates: candidates.map((row) => ({
+    candidates: candidates
+      .filter((row) => row.status === "CANDIDATE" || row.status === "REVIEWED")
+      .map((row) => ({
       id: row.id,
       kind: row.kind,
       title: row.title,

@@ -6,6 +6,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { OWNER_KNOWLEDGE_APPROVAL_MESSAGE } from "@/lib/knowledge";
 import {
   EXPERIENCE_CANDIDATE_NOT_POLICY_MESSAGE,
   isExperienceLearningKind,
@@ -196,6 +197,11 @@ export async function reviewExperienceCandidate(
   if (!isExperienceLearningStatus(input.status) || input.status === "CANDIDATE") {
     throw new ExperienceIntelligenceError("Choose reviewed, approved, or rejected.");
   }
+  if (input.status === "APPROVED" || input.status === "REJECTED") {
+    if (access.workspace.role !== "OWNER") {
+      throw new ExperienceIntelligenceError(OWNER_KNOWLEDGE_APPROVAL_MESSAGE);
+    }
+  }
   const existing = access.assertOwned(
     await db.experienceLearningCandidate.findFirst({
       where: { id: input.candidateId, ...access.scope },
@@ -223,14 +229,13 @@ export async function reviewExperienceCandidate(
       FIELD_NOTE: "FIELD_TECHNIQUE",
       ESTIMATING_ASSUMPTION: "ESTIMATING_ASSUMPTION",
     } as const;
-    const sourceType = existing.sourceKind === "JOB" && existing.sourceReferenceId ? "TBBT_RECORD" : "OWNER_CREATED";
     const entry = await createKnowledgeEntry(db, access, {
       title: existing.title,
       body: existing.body,
       category: kindToCategory[existing.kind],
-      sourceType,
-      sourceKind: sourceType === "TBBT_RECORD" ? "JOB" : undefined,
-      sourceReferenceId: sourceType === "TBBT_RECORD" ? existing.sourceReferenceId ?? undefined : undefined,
+      sourceType: "TBBT_RECORD",
+      sourceKind: "EXPERIENCE_CANDIDATE",
+      sourceReferenceId: existing.id,
       trustState: "SUPPORTED",
       knowledgeKind: kindToKnowledge[existing.kind],
     });

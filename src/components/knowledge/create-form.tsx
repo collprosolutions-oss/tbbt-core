@@ -10,7 +10,7 @@ import {
   KNOWLEDGE_CATEGORIES,
   KNOWLEDGE_CATEGORY_LABELS,
   KNOWLEDGE_SOURCE_KIND_LABELS,
-  KNOWLEDGE_SOURCE_KINDS,
+  MANUAL_KNOWLEDGE_SOURCE_KINDS,
   KNOWLEDGE_SOURCE_TYPE_LABELS,
   KNOWLEDGE_KINDS,
   KNOWLEDGE_KIND_LABELS,
@@ -168,7 +168,7 @@ export function KnowledgeCreateForm({
               className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
             >
               <option value="">Select a record type</option>
-              {KNOWLEDGE_SOURCE_KINDS.map((kind) => (
+              {MANUAL_KNOWLEDGE_SOURCE_KINDS.map((kind) => (
                 <option key={kind} value={kind}>
                   {KNOWLEDGE_SOURCE_KIND_LABELS[kind]}
                 </option>

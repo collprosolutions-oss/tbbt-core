@@ -110,8 +110,20 @@ export const KNOWLEDGE_SOURCE_KINDS = [
   "TIME",
   "MARKETING",
   "REVIEW",
+  "REQUEST",
+  "EXPERIENCE_CANDIDATE",
 ] as const;
 export type KnowledgeSourceKind = (typeof KNOWLEDGE_SOURCE_KINDS)[number];
+
+export const MANUAL_KNOWLEDGE_SOURCE_KINDS = [
+  "SERVICE",
+  "ESTIMATE",
+  "JOB",
+  "EXPENSE",
+  "TIME",
+  "MARKETING",
+  "REVIEW",
+] as const;
 
 export const KNOWLEDGE_SOURCE_KIND_LABELS: Record<KnowledgeSourceKind, string> = {
   SERVICE: "Service",
@@ -121,6 +133,8 @@ export const KNOWLEDGE_SOURCE_KIND_LABELS: Record<KnowledgeSourceKind, string> =
   TIME: "Approved time",
   MARKETING: "Marketing content",
   REVIEW: "Review",
+  REQUEST: "Service request",
+  EXPERIENCE_CANDIDATE: "Experience candidate",
 };
 
 export function isKnowledgeSourceKind(value: string | undefined): value is KnowledgeSourceKind {
@@ -240,6 +254,9 @@ export function isKnowledgeApprovalState(value: string | undefined): value is Kn
   return (KNOWLEDGE_APPROVAL_STATES as readonly string[]).includes(value ?? "");
 }
 
+export const OWNER_KNOWLEDGE_APPROVAL_MESSAGE =
+  "Owner approval is required. ADMIN can create, edit, and prep knowledge, but cannot mark owner-approved policy.";
+
 export type LearningLoopAvailability = "available" | "unavailable" | "future";
 
 export const LEARNING_LOOP_AVAILABILITY_LABELS: Record<LearningLoopAvailability, string> = {
@@ -259,6 +276,8 @@ export function sourceRecordHref(
   if (kind === "TIME") return "/time-cards";
   if (kind === "MARKETING") return "/marketing";
   if (kind === "REVIEW") return "/reviews";
+  if (kind === "REQUEST") return "/requests";
+  if (kind === "EXPERIENCE_CANDIDATE") return "/knowledge";
   return null;
 }
 

@@ -2458,7 +2458,8 @@ model PublicSiteImage {
 ///   CUSTOMERS_POLICIES | VENDORS_MATERIALS | MARKETING_BRAND |
 ///   SAFETY_COMPLIANCE | TRAINING_HOWTO
 /// sourceType: OWNER_CREATED | TBBT_RECORD | EXTERNAL_REFERENCE | SYSTEM_DERIVED
-/// sourceKind: SERVICE | ESTIMATE | JOB | EXPENSE | TIME | MARKETING | REVIEW
+/// sourceKind: SERVICE | ESTIMATE | JOB | EXPENSE | TIME | MARKETING | REVIEW |
+///   REQUEST | EXPERIENCE_CANDIDATE
 /// trustState: VERIFIED | SUPPORTED | ESTIMATE | NEEDS_REVIEW | CONFLICT | UNKNOWN
 model KnowledgeEntry {
   id         String @id @default(cuid())
@@ -2886,6 +2887,7 @@ model CompanySetupProposal {
   createdBy Membership                 @relation("CompanySetupProposalCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
   items     CompanySetupProposalItem[]
 
+  @@unique([businessId, interactionId])
   @@index([businessId])
   @@index([businessId, status])
 }

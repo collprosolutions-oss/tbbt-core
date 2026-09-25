@@ -41,7 +41,7 @@ import {
 } from "@/lib/settings-ops";
 import { isConfiguredTrade } from "@/lib/trades";
 
-type Db = PrismaClient;
+type Db = PrismaClient | Prisma.TransactionClient;
 
 export class LaunchError extends Error {
   constructor(message: string) {
@@ -188,8 +188,17 @@ export type LaunchStepInput = {
   confirmTrades?: string[];
 };
 
+async function lockLaunchStep(tx: Prisma.TransactionClient, businessId: string, stepKey: string) {
+  await tx.$queryRaw`
+    SELECT id
+    FROM "BusinessLaunchStep"
+    WHERE "businessId" = ${businessId} AND "stepKey" = ${stepKey}
+    FOR UPDATE
+  `;
+}
+
 export async function completeLaunchStep(
-  db: Db,
+  db: PrismaClient,
   access: BusinessAccess,
   input: LaunchStepInput,
 ) {
@@ -197,6 +206,56 @@ export async function completeLaunchStep(
   requireBusinessRole(access, "OWNER");
   if (!isLaunchStepKey(input.stepKey)) {
     throw new LaunchError("Choose a launch step.");
+  }
+  const stepKey = input.stepKey;
+
+  if (stepKey === "services" || stepKey === "goals" || stepKey === "service_area") {
+    await ensureLaunchProgress(db, access);
+    return db.$transaction(async (tx) => {
+      await lockLaunchStep(tx, access.businessId, stepKey);
+      if (stepKey === "service_area") {
+        const label = input.serviceAreaLabel?.trim() ?? "";
+        if (!label) throw new LaunchError("Enter the area you actually serve.");
+        await updateBusinessPublicContactOp(db, access, {
+          phone: input.phone ?? "",
+          email: input.email ?? "",
+          website: input.website ?? "",
+          serviceArea: label,
+        });
+        if (input.serviceAreaCity?.trim()) {
+          const city = input.serviceAreaCity.trim();
+          const existingArea = await tx.serviceArea.findFirst({
+            where: { businessId: access.businessId, kind: "CITY", city },
+          });
+          await upsertServiceArea(tx, access, {
+            areaId: existingArea?.id,
+            kind: "CITY",
+            label,
+            city,
+            region: input.serviceAreaRegion,
+          });
+        }
+      } else if (stepKey === "services") {
+        const names = (input.serviceNames ?? []).map((name) => name.trim()).filter(Boolean);
+        for (const name of names) {
+          await createOwnedQuoteService(tx, access, { name });
+        }
+      } else {
+        const title = input.goalTitle?.trim() ?? "";
+        if (!title) throw new LaunchError("Enter a business goal.");
+        const existingGoal = await tx.businessGoal.findFirst({
+          where: { businessId: access.businessId, title, recommendationKey: "launch-goal" },
+        });
+        if (!existingGoal) {
+          await createBusinessGoal(tx, access, {
+            title,
+            description: input.goalDescription,
+            recommendationKey: "launch-goal",
+          });
+        }
+      }
+      return setStepStatus(tx, access, stepKey, "COMPLETED");
+    });
   }
 
   switch (input.stepKey) {
@@ -219,32 +278,6 @@ export async function completeLaunchStep(
         if (!isConfiguredTrade(code) || !active.includes(code)) {
           throw new LaunchError(LAUNCH_TRADE_CONFIRM_ONLY_MESSAGE);
         }
-      }
-      break;
-    }
-    case "service_area": {
-      const label = input.serviceAreaLabel?.trim() ?? "";
-      if (!label) throw new LaunchError("Enter the area you actually serve.");
-      await updateBusinessPublicContactOp(db, access, {
-        phone: input.phone ?? "",
-        email: input.email ?? "",
-        website: input.website ?? "",
-        serviceArea: label,
-      });
-      if (input.serviceAreaCity?.trim()) {
-        await upsertServiceArea(db, access, {
-          kind: "CITY",
-          label,
-          city: input.serviceAreaCity,
-          region: input.serviceAreaRegion,
-        });
-      }
-      break;
-    }
-    case "services": {
-      const names = (input.serviceNames ?? []).map((name) => name.trim()).filter(Boolean);
-      for (const name of names) {
-        await createOwnedQuoteService(db, access, { name });
       }
       break;
     }
@@ -331,16 +364,6 @@ export async function completeLaunchStep(
         });
       }
       void LAUNCH_NO_PUBLISH_MESSAGE;
-      break;
-    }
-    case "goals": {
-      const title = input.goalTitle?.trim() ?? "";
-      if (!title) throw new LaunchError("Enter a business goal.");
-      await createBusinessGoal(db, access, {
-        title,
-        description: input.goalDescription,
-        recommendationKey: "launch-goal",
-      });
       break;
     }
     case "stage": {

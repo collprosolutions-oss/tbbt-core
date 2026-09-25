@@ -6,7 +6,7 @@
  * Deleting a catalog item SetNulls LineItem / request FKs. Historical
  * estimate line snapshots keep their recorded title, scope, and prices.
  */
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
@@ -19,7 +19,7 @@ import { normalizeServiceCategory } from "@/lib/service-catalog-category";
 import { pricingModeAllowedForTrade } from "@/lib/trade-config";
 import { allocateUnusedWebsiteSlug } from "@/lib/website-engine/slugs";
 
-type Db = PrismaClient;
+type Db = PrismaClient | Prisma.TransactionClient;
 
 export class CatalogOpsError extends Error {
   constructor(message: string) {
@@ -57,6 +57,10 @@ export async function createOwnedQuoteService(
   if (!pricingModeAllowedForTrade(tradeCode, "CUSTOM_QUOTE")) {
     throw new CatalogOpsError("Custom quote services are not allowed for that trade.");
   }
+  const existing = await db.serviceCatalogItem.findFirst({
+    where: { businessId: access.businessId, name, tradeCode },
+  });
+  if (existing) return existing;
   const websiteSlug = await allocateUnusedWebsiteSlug(db, access.businessId, name);
   return db.serviceCatalogItem.create({
     data: {

@@ -11,6 +11,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
+  OWNER_KNOWLEDGE_APPROVAL_MESSAGE,
   SYSTEM_DERIVED_DISABLED_MESSAGE,
   isKnowledgeApprovalState,
   isKnowledgeCategory,
@@ -118,13 +119,52 @@ async function resolveTbbtSource(
     );
     return { sourceKind: kind, sourceReferenceId: row.id, sourceLabel: row.title };
   }
-  const row = access.assertOwned(
-    await db.review.findFirst({
-      where: { id: sourceReferenceId, ...access.scope },
-      select: { id: true, businessId: true, platform: true },
-    }),
-  );
-  return { sourceKind: kind, sourceReferenceId: row.id, sourceLabel: `Review (${row.platform})` };
+  if (kind === "REQUEST") {
+    const row = access.assertOwned(
+      await db.serviceRequest.findFirst({
+        where: { id: sourceReferenceId, ...access.scope },
+        select: { id: true, businessId: true, summary: true },
+      }),
+    );
+    return {
+      sourceKind: kind,
+      sourceReferenceId: row.id,
+      sourceLabel: row.summary?.trim() || "Service request",
+    };
+  }
+  if (kind === "EXPERIENCE_CANDIDATE") {
+    const row = access.assertOwned(
+      await db.experienceLearningCandidate.findFirst({
+        where: { id: sourceReferenceId, ...access.scope },
+        select: {
+          id: true,
+          businessId: true,
+          kind: true,
+          title: true,
+          sourceKind: true,
+          sourceReferenceId: true,
+        },
+      }),
+    );
+    const evidence = [row.sourceKind, row.sourceReferenceId].filter(Boolean).join(" ");
+    return {
+      sourceKind: kind,
+      sourceReferenceId: row.id,
+      sourceLabel: evidence
+        ? `Experience Intelligence · ${row.kind} · ${evidence}`
+        : `Experience Intelligence · ${row.kind}`,
+    };
+  }
+  if (kind === "REVIEW") {
+    const row = access.assertOwned(
+      await db.review.findFirst({
+        where: { id: sourceReferenceId, ...access.scope },
+        select: { id: true, businessId: true, platform: true },
+      }),
+    );
+    return { sourceKind: kind, sourceReferenceId: row.id, sourceLabel: `Review (${row.platform})` };
+  }
+  throw new KnowledgeError("A TBBT record source needs a record type and a record from this business.");
 }
 
 function assertWritableTrust(
@@ -403,6 +443,41 @@ export async function updateKnowledgeEntry(
   }
   assertWritableTrust(nextCategory, nextSourceType, nextTrust);
 
+  const nextTitle = input.title !== undefined ? String(data.title ?? existing.title) : existing.title;
+  const nextBody = input.body !== undefined ? String(data.body ?? existing.body) : existing.body;
+  const nextKind =
+    input.knowledgeKind !== undefined
+      ? ((data.knowledgeKind as string | null | undefined) ?? null)
+      : existing.knowledgeKind;
+  const nextSourceKind =
+    provenanceTouched
+      ? ((data.sourceKind as string | null | undefined) ?? null)
+      : existing.sourceKind;
+  const nextSourceReferenceId =
+    provenanceTouched
+      ? ((data.sourceReferenceId as string | null | undefined) ?? null)
+      : existing.sourceReferenceId;
+  const nextSourceLabel =
+    provenanceTouched
+      ? ((data.sourceLabel as string | null | undefined) ?? null)
+      : existing.sourceLabel;
+  const materialChanged =
+    nextTitle !== existing.title ||
+    nextBody !== existing.body ||
+    nextCategory !== existing.category ||
+    nextTrust !== existing.trustState ||
+    (nextKind || null) !== (existing.knowledgeKind || null) ||
+    nextSourceType !== existing.sourceType ||
+    (nextSourceKind || null) !== (existing.sourceKind || null) ||
+    (nextSourceReferenceId || null) !== (existing.sourceReferenceId || null) ||
+    (nextSourceLabel || null) !== (existing.sourceLabel || null);
+
+  if (existing.approvalState === "APPROVED" && materialChanged) {
+    data.approvalState = "UNREVIEWED";
+    data.approvedAt = null;
+    data.approvedBy = { disconnect: true };
+  }
+
   return db.knowledgeEntry.update({
     where: { id: existing.id },
     data,
@@ -446,6 +521,11 @@ export async function setKnowledgeApproval(
   requireBusinessCapability(access, CAPABILITIES.MANAGE_KNOWLEDGE);
   if (!isKnowledgeApprovalState(input.approvalState)) {
     throw new KnowledgeError("Choose approved or rejected.");
+  }
+  if (input.approvalState === "APPROVED" || input.approvalState === "REJECTED") {
+    if (access.workspace.role !== "OWNER") {
+      throw new KnowledgeError(OWNER_KNOWLEDGE_APPROVAL_MESSAGE);
+    }
   }
   const existing = await requireOwnedEntry(db, access, input.entryId);
   return db.knowledgeEntry.update({

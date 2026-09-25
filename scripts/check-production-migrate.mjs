@@ -784,6 +784,19 @@ check(
     !workspaceLoader.includes("ExperienceLearningCandidate"),
 );
 
+const knowledgeLaunchHardeningMigration = readFileSync(
+  new URL("../prisma/migrations/20260925230000_knowledge_launch_hardening/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Knowledge launch hardening migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(knowledgeLaunchHardeningMigration) &&
+    knowledgeLaunchHardeningMigration.includes(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "CompanySetupProposal_businessId_interactionId_key"',
+    ) &&
+    knowledgeLaunchHardeningMigration.includes("IF NOT EXISTS"),
+);
+
 check(
   "Local builds skip migrate",
   shouldRunProductionMigrate({ vercelEnv: undefined }).run === false,

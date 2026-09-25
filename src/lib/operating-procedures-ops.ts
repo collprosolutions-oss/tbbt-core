@@ -5,6 +5,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { OWNER_KNOWLEDGE_APPROVAL_MESSAGE } from "@/lib/knowledge";
 import { createKnowledgeEntry } from "@/lib/knowledge-ops";
 import { isConfiguredTrade } from "@/lib/trades";
 import type { ProcedureStepInput } from "@/lib/operating-procedures";
@@ -103,6 +104,11 @@ export async function setOperatingProcedureApproval(
   requireBusinessCapability(access, CAPABILITIES.MANAGE_KNOWLEDGE);
   if (!isProcedureApprovalState(input.approvalState)) {
     throw new ProcedureError("Choose an approval state.");
+  }
+  if (input.approvalState === "APPROVED" || input.approvalState === "REJECTED") {
+    if (access.workspace.role !== "OWNER") {
+      throw new ProcedureError(OWNER_KNOWLEDGE_APPROVAL_MESSAGE);
+    }
   }
   const existing = await requireOwnedProcedure(db, access, input.procedureId);
   let knowledgeEntryId = existing.knowledgeEntryId;

@@ -33,7 +33,8 @@ const {
 const { completeLaunchStep, deferLaunchStep, ensureLaunchProgress, skipLaunchStep } =
   await import("@/lib/business-launch-ops");
 const { loadLaunchWorkspace } = await import("@/lib/business-launch-data");
-const { createKnowledgeEntry, setKnowledgeApproval } = await import("@/lib/knowledge-ops");
+const { createKnowledgeEntry, setKnowledgeApproval, setKnowledgeArchived, updateKnowledgeEntry } =
+  await import("@/lib/knowledge-ops");
 const { retrieveTenantKnowledge, answerKnowledgeFromEntries } = await import("@/lib/ai/knowledge");
 const { proposeCompanySetupFromDescription } = await import("@/lib/ai/company-setup");
 const {
@@ -52,6 +53,7 @@ const { loadBsosFacts } = await import("@/lib/bsos-data");
 const { postAuthenticationPath } = await import("@/lib/first-run-setup");
 const { ensurePrimaryBusinessTrade } = await import("@/lib/business-trades");
 const { COMPANY_SETUP_FORBIDDEN_MESSAGE } = await import("@/lib/company-setup");
+const { OWNER_KNOWLEDGE_APPROVAL_MESSAGE } = await import("@/lib/knowledge");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -197,11 +199,17 @@ try {
   const betaUser = await prisma.user.create({
     data: { name: "Bea", email: `beta-launch-${randomUUID()}@example.com`, passwordHash: "x" },
   });
+  const adminUser = await prisma.user.create({
+    data: { name: "Amina", email: `admin-launch-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
   const ownerMem = await prisma.membership.create({
     data: { userId: ownerUser.id, businessId: businessA.id, role: "OWNER" },
   });
   const memberMem = await prisma.membership.create({
     data: { userId: memberUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const adminMem = await prisma.membership.create({
+    data: { userId: adminUser.id, businessId: businessA.id, role: "ADMIN" },
   });
   const betaMem = await prisma.membership.create({
     data: { userId: betaUser.id, businessId: businessB.id, role: "OWNER" },
@@ -217,6 +225,7 @@ try {
 
   const ownerA = makeAccess(businessA.id, "OWNER", ownerMem.id);
   const memberA = makeAccess(businessA.id, "MEMBER", memberMem.id);
+  const adminA = makeAccess(businessA.id, "ADMIN", adminMem.id);
   const ownerB = makeAccess(businessB.id, "OWNER", betaMem.id);
 
   console.log("\nDB — resumability and existing-model writes");
@@ -436,6 +445,7 @@ try {
   check("Approved candidate created knowledge", Boolean(approvedCandidate?.knowledgeEntryId));
   const promoted = await prisma.knowledgeEntry.findUnique({ where: { id: approvedCandidate.knowledgeEntryId } });
   check("Promoted knowledge is owner-approved, not system-derived", promoted?.sourceType !== "SYSTEM_DERIVED" && promoted?.approvalState === "APPROVED");
+  check("Duration candidate provenance is Experience evidence", promoted?.sourceType === "TBBT_RECORD" && promoted?.sourceKind === "EXPERIENCE_CANDIDATE" && promoted?.sourceReferenceId === candidate.id);
 
   await expectError(
     "Business B cannot approve A's candidate",
@@ -458,6 +468,236 @@ try {
     "MEMBER cannot approve knowledge",
     () => setKnowledgeApproval(prisma, memberA, { entryId: knowledge.id, approvalState: "APPROVED" }),
     (error) => error instanceof ForbiddenError || error.name === "ForbiddenError",
+  );
+
+  console.log("\nDB — approval invalidation and OWNER authority");
+  const policy = await createKnowledgeEntry(prisma, adminA, {
+    title: "Approved door swing policy",
+    body: "Confirm hinge side before ordering a prehung door.",
+    category: "JOB_PROCEDURES",
+    sourceType: "OWNER_CREATED",
+    knowledgeKind: "OWNER_POLICY",
+  });
+  await expectError(
+    "ADMIN cannot owner-approve knowledge",
+    () => setKnowledgeApproval(prisma, adminA, { entryId: policy.id, approvalState: "APPROVED" }),
+    (error) => String(error.message) === OWNER_KNOWLEDGE_APPROVAL_MESSAGE,
+  );
+  await expectError(
+    "ADMIN cannot reject knowledge as owner authority",
+    () => setKnowledgeApproval(prisma, adminA, { entryId: policy.id, approvalState: "REJECTED" }),
+    (error) => String(error.message) === OWNER_KNOWLEDGE_APPROVAL_MESSAGE,
+  );
+  await setKnowledgeApproval(prisma, ownerA, { entryId: policy.id, approvalState: "APPROVED" });
+  const approvedPolicy = await prisma.knowledgeEntry.findUnique({ where: { id: policy.id } });
+  check("OWNER can approve knowledge", approvedPolicy?.approvalState === "APPROVED" && Boolean(approvedPolicy.approvedAt));
+  const archivedStillApproved = await setKnowledgeArchived(prisma, adminA, {
+    entryId: policy.id,
+    archived: true,
+  });
+  check("Archiving alone keeps owner approval", archivedStillApproved.approvalState === "APPROVED");
+  await setKnowledgeArchived(prisma, adminA, { entryId: policy.id, archived: false });
+  const editedByAdmin = await updateKnowledgeEntry(prisma, adminA, {
+    entryId: policy.id,
+    body: "Confirm hinge side and rough opening before ordering a prehung door.",
+  });
+  check("ADMIN can edit knowledge", editedByAdmin.body.includes("rough opening"));
+  check("Material edit clears owner approval", editedByAdmin.approvalState === "UNREVIEWED");
+  check("Material edit clears approvedAt", editedByAdmin.approvedAt == null);
+  check("Material edit clears approvedBy", editedByAdmin.approvedByMembershipId == null);
+  const editedHits = await retrieveTenantKnowledge(prisma, businessA.id, "prehung door");
+  check(
+    "Ask Knowledge no longer labels the edited version approved",
+    editedHits.some((hit) => hit.id === policy.id && hit.grounding !== "approved"),
+  );
+  await expectError(
+    "MEMBER cannot edit knowledge",
+    () => updateKnowledgeEntry(prisma, memberA, { entryId: policy.id, body: "Member should not edit this." }),
+    (error) => error instanceof ForbiddenError || error.name === "ForbiddenError",
+  );
+  await setKnowledgeApproval(prisma, ownerA, { entryId: policy.id, approvalState: "APPROVED" });
+  const reapproved = await prisma.knowledgeEntry.findUnique({ where: { id: policy.id } });
+  check("OWNER reapproval restores approved state", reapproved?.approvalState === "APPROVED");
+  await expectError(
+    "ADMIN cannot owner-approve an operating procedure",
+    () => setOperatingProcedureApproval(prisma, adminA, { procedureId: procedure.id, approvalState: "APPROVED" }),
+    (error) => String(error.message) === OWNER_KNOWLEDGE_APPROVAL_MESSAGE,
+  );
+
+  console.log("\nDB — concurrent apply, proposal retry, and launch writes");
+  const retryId = `company-setup-retry-${randomUUID()}`;
+  const retryDraft = proposeCompanySetupFromDescription({
+    description: "We repair fences and want a written first-visit checklist.",
+    activeTradeCodes: ["HANDYMAN"],
+  });
+  const [retryOne, retryTwo] = await Promise.all([
+    createCompanySetupProposal(prisma, ownerA, {
+      inputText: "We repair fences and want a written first-visit checklist.",
+      summary: retryDraft.summary,
+      items: retryDraft.items,
+      interactionId: retryId,
+    }),
+    createCompanySetupProposal(prisma, ownerA, {
+      inputText: "We repair fences and want a written first-visit checklist.",
+      summary: retryDraft.summary,
+      items: retryDraft.items,
+      interactionId: retryId,
+    }),
+  ]);
+  check("Same AI attempt returns one proposal", retryOne.id === retryTwo.id);
+  const retryCount = await prisma.companySetupProposal.count({
+    where: { businessId: businessA.id, interactionId: retryId },
+  });
+  check("Retry-safe proposal persisted once", retryCount === 1);
+
+  async function approveAndApplyTwice(kind, title, payload = {}) {
+    const created = await createCompanySetupProposal(prisma, ownerA, {
+      inputText: `Concurrent apply proof for ${kind} ${title} needs enough text.`,
+      summary: `${kind} apply`,
+      items: [{ kind, title, body: `${title} body for concurrent apply.`, payload }],
+    });
+    const item = created.items.find((row) => row.kind === kind);
+    await reviewCompanySetupItem(prisma, ownerA, { itemId: item.id, decision: "APPROVED" });
+    await Promise.all([
+      applyCompanySetupItem(prisma, ownerA, item.id),
+      applyCompanySetupItem(prisma, ownerA, item.id),
+    ]);
+    return prisma.companySetupProposalItem.findUnique({ where: { id: item.id } });
+  }
+
+  const appliedService = await approveAndApplyTwice("SERVICE", "Fence repair");
+  const fenceServices = await prisma.serviceCatalogItem.findMany({
+    where: { businessId: businessA.id, name: "Fence repair" },
+  });
+  check("Concurrent SERVICE apply creates one catalog item", fenceServices.length === 1);
+  check("Concurrent SERVICE apply is APPLIED once", appliedService?.status === "APPLIED" && appliedService.appliedRecordId === fenceServices[0].id);
+
+  const appliedGoal = await approveAndApplyTwice("GOAL", "Book more fence work");
+  const fenceGoals = await prisma.businessGoal.findMany({
+    where: { businessId: businessA.id, title: "Book more fence work", recommendationKey: "launch-ai-goal" },
+  });
+  check("Concurrent GOAL apply creates one goal", fenceGoals.length === 1);
+  check("Concurrent GOAL apply is APPLIED once", appliedGoal?.status === "APPLIED" && appliedGoal.appliedRecordId === fenceGoals[0].id);
+
+  const appliedProcedure = await approveAndApplyTwice("PROCEDURE", "Fence visit checklist", {
+    steps: [{ title: "Confirm the fence line" }],
+  });
+  const fenceProcedures = await prisma.operatingProcedure.findMany({
+    where: { businessId: businessA.id, title: "Fence visit checklist" },
+  });
+  check("Concurrent PROCEDURE apply creates one procedure", fenceProcedures.length === 1);
+  check(
+    "Concurrent PROCEDURE apply is APPLIED once",
+    appliedProcedure?.status === "APPLIED" && appliedProcedure.appliedRecordId === fenceProcedures[0].id,
+  );
+
+  const appliedChoice = await approveAndApplyTwice("SETUP_CHOICE", "Always photograph the posts");
+  const choiceKnowledge = await prisma.knowledgeEntry.findMany({
+    where: { businessId: businessA.id, title: "Always photograph the posts", knowledgeKind: "BUSINESS_RULE" },
+  });
+  check("Concurrent SETUP_CHOICE apply creates one knowledge record", choiceKnowledge.length === 1);
+  check(
+    "Concurrent SETUP_CHOICE apply is APPLIED once",
+    appliedChoice?.status === "APPLIED" && appliedChoice.appliedRecordId === choiceKnowledge[0].id,
+  );
+
+  await Promise.all([
+    completeLaunchStep(prisma, ownerA, { stepKey: "services", serviceNames: ["Gate latch repair"] }),
+    completeLaunchStep(prisma, ownerA, { stepKey: "services", serviceNames: ["Gate latch repair"] }),
+  ]);
+  const gateServices = await prisma.serviceCatalogItem.findMany({
+    where: { businessId: businessA.id, name: "Gate latch repair" },
+  });
+  check("Concurrent launch services create one catalog item", gateServices.length === 1);
+
+  await Promise.all([
+    completeLaunchStep(prisma, ownerA, {
+      stepKey: "goals",
+      goalTitle: "Finish the remaining launch steps",
+      goalDescription: "Owner-entered goal",
+    }),
+    completeLaunchStep(prisma, ownerA, {
+      stepKey: "goals",
+      goalTitle: "Finish the remaining launch steps",
+      goalDescription: "Owner-entered goal",
+    }),
+  ]);
+  const launchGoals = await prisma.businessGoal.findMany({
+    where: { businessId: businessA.id, title: "Finish the remaining launch steps", recommendationKey: "launch-goal" },
+  });
+  check("Concurrent launch goals create one goal", launchGoals.length === 1);
+
+  const areasBefore = await prisma.serviceArea.count({
+    where: { businessId: businessA.id, city: "Sparks" },
+  });
+  await Promise.all([
+    completeLaunchStep(prisma, ownerA, {
+      stepKey: "service_area",
+      phone: "555-0100",
+      email: "hello@alpha.test",
+      serviceAreaLabel: "Sparks, NV",
+      serviceAreaCity: "Sparks",
+      serviceAreaRegion: "NV",
+    }),
+    completeLaunchStep(prisma, ownerA, {
+      stepKey: "service_area",
+      phone: "555-0100",
+      email: "hello@alpha.test",
+      serviceAreaLabel: "Sparks, NV",
+      serviceAreaCity: "Sparks",
+      serviceAreaRegion: "NV",
+    }),
+  ]);
+  const sparksAreas = await prisma.serviceArea.count({
+    where: { businessId: businessA.id, city: "Sparks" },
+  });
+  check("Concurrent launch service area creates one city row", areasBefore === 0 && sparksAreas === 1);
+
+  console.log("\nDB — experience provenance and OWNER-only promotion");
+  await prisma.serviceRequest.createMany({
+    data: [
+      {
+        businessId: businessA.id,
+        summary: "How much does a door latch replacement cost",
+        description: "Customer asked about latch replacement cost before booking.",
+      },
+      {
+        businessId: businessA.id,
+        summary: "How much does a door latch replacement take",
+        description: "Another customer asked about latch replacement timing.",
+      },
+    ],
+  });
+  await scanExperienceCandidates(prisma, ownerA);
+  const questionCandidates = await prisma.experienceLearningCandidate.findMany({
+    where: { businessId: businessA.id, kind: "RECURRING_CUSTOMER_QUESTION" },
+  });
+  check("Recurring-question candidate was created", questionCandidates.length >= 1);
+  const question = questionCandidates[0];
+  await expectError(
+    "ADMIN cannot promote a candidate into trusted knowledge",
+    () => reviewExperienceCandidate(prisma, adminA, { candidateId: question.id, status: "APPROVED" }),
+    (error) => String(error.message) === OWNER_KNOWLEDGE_APPROVAL_MESSAGE,
+  );
+  const stillCandidate = await prisma.experienceLearningCandidate.findUnique({ where: { id: question.id } });
+  check("ADMIN review did not promote the candidate", stillCandidate?.status === "CANDIDATE" && !stillCandidate.knowledgeEntryId);
+  await reviewExperienceCandidate(prisma, ownerA, { candidateId: question.id, status: "APPROVED" });
+  const promotedQuestion = await prisma.experienceLearningCandidate.findUnique({ where: { id: question.id } });
+  const questionKnowledge = await prisma.knowledgeEntry.findUnique({
+    where: { id: promotedQuestion.knowledgeEntryId },
+  });
+  check("Promoted recurring-question knowledge is APPROVED", questionKnowledge?.approvalState === "APPROVED");
+  check("Promoted knowledge stays TBBT evidence", questionKnowledge?.sourceType === "TBBT_RECORD");
+  check(
+    "Promoted knowledge points at the Experience candidate",
+    questionKnowledge?.sourceKind === "EXPERIENCE_CANDIDATE" &&
+      questionKnowledge.sourceReferenceId === question.id,
+  );
+  check("Promoted knowledge does not claim OWNER_CREATED", questionKnowledge?.sourceType !== "OWNER_CREATED");
+  await expectError(
+    "Business B cannot promote A's recurring-question candidate",
+    () => reviewExperienceCandidate(prisma, ownerB, { candidateId: question.id, status: "REJECTED" }),
+    (error) => error instanceof Error,
   );
 
   console.log(
