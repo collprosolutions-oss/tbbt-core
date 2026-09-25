@@ -5,7 +5,12 @@
  * approve, or create a Job/Invoice.
  */
 import { Prisma } from "@prisma/client";
-import { startingCalculatorSnapshot } from "@/lib/estimate-calculators";
+import {
+  catalogDefinitionFromSnapshot,
+  definitionFromFormulaBinding,
+  formulaBindingForTitle,
+  startingCalculatorSnapshot,
+} from "@/lib/estimate-calculators";
 import {
   calculatorPrefillFromStoredMeasurement,
   customerReportedMeasurementForCatalog,
@@ -165,8 +170,13 @@ export function buildEstimateLineCreatesFromRequestItems(
   return draftEstimateLinesFromRequestItems(items).map((line, index) => {
     const unitPrice = line.priced && line.unitPrice != null ? line.unitPrice : 0;
     const catalog = items[index]?.serviceCatalogItem;
+    const title = catalog?.name ?? line.description;
+    const encodedDefinition = catalogCalculatorDefinition(catalog?.description);
+    const binding = formulaBindingForTitle(title);
     const calculatorDefinition =
-      catalogCalculatorDefinition(catalog?.description) ??
+      encodedDefinition ??
+      (binding ? definitionFromFormulaBinding(binding) : null) ??
+      catalogDefinitionFromSnapshot(null, title) ??
       (businessDefaults?.labor.calculatorId && businessDefaults.labor.rates
         ? {
             calculatorId: businessDefaults.labor.calculatorId,
@@ -190,14 +200,14 @@ export function buildEstimateLineCreatesFromRequestItems(
         : null,
       measurementInputs: measurementPrefill,
     });
-    const snapshot =
-      calculatorDefinition || workAreaAnswer || Object.keys(measurementPrefill).length > 0
-        ? startingCalculatorSnapshot({
-            title: catalog?.name ?? line.description,
-            definition: calculatorDefinition,
-            prefillInputs,
-          })
-        : null;
+    const snapshot = startingCalculatorSnapshot({
+      title,
+      definition: calculatorDefinition,
+      prefillInputs:
+        workAreaAnswer || Object.keys(measurementPrefill).length > 0
+          ? prefillInputs
+          : null,
+    });
     return {
       businessId,
       serviceCatalogItemId: line.serviceCatalogItemId,

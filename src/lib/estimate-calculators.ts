@@ -46,6 +46,7 @@ export {
   formCalculatorInputs,
   normalizeCalculatorSnapshot,
   persistableCalculatorComponents,
+  persistableCalculatorFormula,
   persistableCalculatorRates,
   pickPositiveNumericCalculatorInputs,
   resolveCalculatorId,
@@ -70,6 +71,7 @@ export type {
 } from "@/lib/estimate-calculators/variable-scope";
 export {
   CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
+  TRADE_FORMULA_CALCULATOR_ID,
   isCalculatorId,
   roundMoney,
 } from "@/lib/estimate-calculators/types";
@@ -82,6 +84,43 @@ export type {
   CalculatorResult,
   CalculatorSnapshot,
 } from "@/lib/estimate-calculators/types";
+export {
+  FORMULA_CONTRACT_VERSION,
+  FORMULA_KINDS,
+  computeFormula,
+  defaultFormulaRates,
+  defaultTierRateKey,
+  emptyFormulaInputs,
+  formulaQuantityKeys,
+  formulaRateKeys,
+  hoursFromProduction,
+  isFormulaKind,
+  normalizeFormulaContract,
+  persistableFormulaRates,
+} from "@/lib/estimate-calculators/formula-contract";
+export type {
+  FormulaComponent,
+  FormulaContract,
+  FormulaKind,
+  FormulaTier,
+} from "@/lib/estimate-calculators/formula-contract";
+export {
+  PRODUCTION_UNITS,
+  PRODUCTION_UNIT_LABELS,
+  isHourlyUnitLabel,
+  isProductionUnit,
+  normalizeProductionUnit,
+  publicProductionUnitLabel,
+} from "@/lib/estimate-calculators/unit-registry";
+export type { ProductionUnit } from "@/lib/estimate-calculators/unit-registry";
+export {
+  HANDYMAN_FORMULA_PROOF_BINDINGS,
+  HANDYMAN_FORMULA_PROOF_TEMPLATE_KEYS,
+  definitionFromFormulaBinding,
+  formulaBindingForTemplateKey,
+  formulaBindingForTitle,
+  resolveFormulaContract,
+} from "@/lib/estimate-calculators/formula-registry";
 export {
   CONCRETE_SLAB_WORKSPACE_ID,
   ESTIMATING_WORKSPACES,

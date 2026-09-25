@@ -18,6 +18,7 @@ import {
   findCatalogCalculatorDefinition,
   normalizeCalculatorSnapshot,
   persistableCalculatorComponents,
+  persistableCalculatorFormula,
   persistableCalculatorRates,
   resolveCalculatorId,
   startingCalculatorSnapshot,
@@ -605,15 +606,24 @@ export async function applyDraftEstimateCalculator(
     throw new EstimateLineError("This line does not have a pricing calculator.");
   }
 
-  const snapshot = normalizeCalculatorSnapshot({
+  const formula = persistableCalculatorFormula(
     calculatorId,
-    inputs: input.inputs,
-    rates: input.rates ?? parts.calculatorSnapshot?.rates ?? {},
-    components: persistableCalculatorComponents(
+    parts.calculatorSnapshot?.formula,
+    customQuoteDisplayDescription(parts.title),
+  );
+  const snapshot = normalizeCalculatorSnapshot(
+    {
       calculatorId,
-      parts.calculatorSnapshot?.components,
-    ),
-  });
+      inputs: input.inputs,
+      rates: input.rates ?? parts.calculatorSnapshot?.rates ?? {},
+      components: persistableCalculatorComponents(
+        calculatorId,
+        parts.calculatorSnapshot?.components,
+      ),
+      ...(formula ? { formula } : {}),
+    },
+    customQuoteDisplayDescription(parts.title),
+  );
   if (
     calculatorId === DECORATIVE_WALL_PANELING_CALCULATOR_ID &&
     (!(Number(snapshot.inputs.wallWidthFt) > 0) ||
@@ -628,11 +638,14 @@ export async function applyDraftEstimateCalculator(
     snapshot.inputs,
     snapshot.rates,
     snapshot.components,
+    snapshot.formula,
+    customQuoteDisplayDescription(parts.title),
   );
   snapshot.result = result;
   snapshot.recommendedAmount = result.recommendedAmount;
   snapshot.appliedAmount = result.recommendedAmount;
   snapshot.overriddenAmount = null;
+  snapshot.estimatedLaborHours = result.estimatedLaborHours ?? null;
   if (result.recommendedAmount <= 0) {
     throw new EstimateLineError("The calculator did not produce a recommended labor price.");
   }
@@ -653,6 +666,8 @@ export async function applyDraftEstimateCalculator(
     snapshot.rates,
     snapshot.inputs,
     snapshot.components,
+    snapshot.formula,
+    customQuoteDisplayDescription(parts.title),
   );
   const baselineRates = parts.calculatorSnapshot
     ? persistableCalculatorRates(
@@ -660,8 +675,17 @@ export async function applyDraftEstimateCalculator(
         parts.calculatorSnapshot.rates,
         parts.calculatorSnapshot.inputs,
         parts.calculatorSnapshot.components,
+        parts.calculatorSnapshot.formula,
+        customQuoteDisplayDescription(parts.title),
       )
-    : persistableCalculatorRates(calculatorId, undefined, undefined, snapshot.components);
+    : persistableCalculatorRates(
+        calculatorId,
+        undefined,
+        undefined,
+        snapshot.components,
+        snapshot.formula,
+        customQuoteDisplayDescription(parts.title),
+      );
   const ratesEdited = !calculatorRatesEqual(nextRates, baselineRates);
 
   await db.$transaction(async (tx) => {
@@ -682,6 +706,7 @@ export async function applyDraftEstimateCalculator(
         includedWork: parts.includedWork,
         rates: nextRates,
         components: snapshot.components,
+        formula: snapshot.formula,
         lineItemId: line.id,
       });
     }
@@ -743,11 +768,18 @@ export async function persistDraftEstimateCalculatorRates(
     calculatorId,
     parts.calculatorSnapshot?.components,
   );
+  const formula = persistableCalculatorFormula(
+    calculatorId,
+    parts.calculatorSnapshot?.formula,
+    customQuoteDisplayDescription(parts.title),
+  );
   const rates = persistableCalculatorRates(
     calculatorId,
     input.rates,
     input.inputs,
     components,
+    formula,
+    customQuoteDisplayDescription(parts.title),
   );
   await writeBusinessCalculatorRates(db, access, {
     calculatorId,
@@ -756,6 +788,7 @@ export async function persistDraftEstimateCalculatorRates(
     includedWork: parts.includedWork,
     rates,
     components,
+    formula,
     customerPolicies: input.customerPolicies,
     lineItemId: line.id,
   });
@@ -781,6 +814,7 @@ async function writeBusinessCalculatorRates(
     includedWork?: string | null;
     rates: Record<string, unknown>;
     components?: CalculatorSnapshot["components"];
+    formula?: CalculatorSnapshot["formula"];
     customerPolicies?: Array<{ id: string; title: string; body: string }> | null;
     lineItemId: string;
   },
@@ -836,15 +870,28 @@ async function writeBusinessCalculatorRates(
   );
   const intake =
     existingDefinition?.intake ?? templateForCalculator(calculatorId, components)?.intake;
+  const formula = persistableCalculatorFormula(
+    calculatorId,
+    input.formula ?? existingDefinition?.formula,
+    input.title,
+  );
   const definition = {
     calculatorId,
-    rates: persistableCalculatorRates(calculatorId, input.rates, null, components),
+    rates: persistableCalculatorRates(
+      calculatorId,
+      input.rates,
+      null,
+      components,
+      formula,
+      input.title,
+    ),
     customerPolicies: catalogCustomerPolicies(
       resolveCustomerPolicies(
         input.customerPolicies ?? existingDefinition?.customerPolicies,
       ),
     ),
     ...(components ? { components } : {}),
+    ...(formula ? { formula } : {}),
     ...(intake ? { intake } : {}),
   };
   const catalog = existing

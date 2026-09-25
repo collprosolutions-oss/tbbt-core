@@ -37,6 +37,10 @@ const {
 const { installHandymanStarterCatalogForBusiness } = await import(
   "@/lib/starter-catalog-install"
 );
+const { catalogScopeText } = await import("@/lib/estimate-line-scope");
+const { formulaBindingForTemplateKey } = await import(
+  "@/lib/estimate-calculators/formula-registry"
+);
 const {
   ensureStarterServicesSetupSchema,
   hasCompletedStarterServicesSetup,
@@ -430,7 +434,10 @@ try {
           item.pricingMode === starterPricingMode(template) &&
           priceMatches &&
           item.intakeMeasurementMode === intake.intakeMeasurementMode &&
-          item.description === template.description
+          catalogScopeText(item.description) === template.description &&
+          (formulaBindingForTemplateKey(template.templateKey)
+            ? item.description.includes("TBBT Calculator Definition")
+            : item.description === template.description)
         );
       }),
   );

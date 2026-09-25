@@ -54,10 +54,16 @@ function numericFromUnknown(value: unknown): number | null {
 }
 
 export function hoursFromCalculatorSnapshot(snapshot: {
+  estimatedLaborHours?: number | null;
+  result?: { estimatedLaborHours?: number | null } | null;
   inputs?: Record<string, unknown>;
   rates?: Record<string, unknown>;
 } | null): number | null {
   if (!snapshot) return null;
+  const declared =
+    numericFromUnknown(snapshot.estimatedLaborHours) ??
+    numericFromUnknown(snapshot.result?.estimatedLaborHours);
+  if (declared != null) return declared;
   for (const key of HOURS_KEYS) {
     const fromInputs = numericFromUnknown(snapshot.inputs?.[key]);
     if (fromInputs != null) return fromInputs;

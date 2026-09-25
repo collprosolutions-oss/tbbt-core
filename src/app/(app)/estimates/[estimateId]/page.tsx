@@ -23,6 +23,7 @@ import { EstimateTermsEditor } from "@/components/estimates/estimate-terms-edito
 import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
 import { OverrideLinePriceForm } from "@/components/estimates/override-line-price-form";
 import { PriceRequiredLineForm } from "@/components/estimates/price-required-line-form";
+import { FormulaCalculatorForm } from "@/components/estimates/formula-calculator-form";
 import { VariableScopeCalculatorForm } from "@/components/estimates/variable-scope-calculator-form";
 import { VariableScopeDefinitionForm } from "@/components/estimates/variable-scope-definition-form";
 import {
@@ -65,9 +66,11 @@ import { prisma } from "@/lib/prisma";
 import {
   CUSTOM_VARIABLE_SCOPE_CALCULATOR_ID,
   DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+  TRADE_FORMULA_CALCULATOR_ID,
   descriptionLooksLikeCustomQuote,
   findCatalogCalculatorDefinition,
   formCalculatorInputs,
+  persistableCalculatorFormula,
   resolveCalculatorId,
   resolveCalculatorRatesForForm,
   resolveEstimatingWorkspace,
@@ -1069,12 +1072,21 @@ function OwnerEstimateLaborLine({
     : null;
   const calculatorComponents =
     businessDefinition?.components ?? calculatorSnapshot?.components;
+  const calculatorFormula = calculatorId
+    ? persistableCalculatorFormula(
+        calculatorId,
+        businessDefinition?.formula ?? calculatorSnapshot?.formula,
+        requestName,
+      )
+    : undefined;
   const formRates = calculatorId
     ? resolveCalculatorRatesForForm({
         calculatorId,
         snapshot: calculatorSnapshot,
         businessRates: businessDefinition?.rates,
         components: calculatorComponents,
+        formula: calculatorFormula,
+        title: requestName,
       })
     : null;
   const formInputs = calculatorId
@@ -1144,6 +1156,15 @@ function OwnerEstimateLaborLine({
           estimateId={estimateId}
           lineItemId={item.id}
           template={customTemplate}
+          inputs={formInputs}
+          rates={formRates}
+        />
+      ) : null}
+      {isDraft && calculatorId === TRADE_FORMULA_CALCULATOR_ID && calculatorFormula ? (
+        <FormulaCalculatorForm
+          estimateId={estimateId}
+          lineItemId={item.id}
+          formula={calculatorFormula}
           inputs={formInputs}
           rates={formRates}
         />

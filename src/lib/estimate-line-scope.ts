@@ -18,6 +18,7 @@ import {
   type CalculatorDefinition,
   type CalculatorSnapshot,
 } from "@/lib/estimate-calculators/types";
+import { normalizeFormulaContract } from "@/lib/estimate-calculators/formula-contract";
 import { normalizeVariableScopeComponents } from "@/lib/estimate-calculators/variable-scope";
 import { normalizeCustomerPolicies } from "@/lib/estimate-policies";
 import { normalizeTakeoffSnapshot } from "@/lib/material-takeoff/engine";
@@ -432,7 +433,9 @@ function parseCalculatorSnapshot(raw: string): CalculatorSnapshot | null {
       parsed.overriddenAmount == null || typeof parsed.overriddenAmount === "number"
         ? (parsed.overriddenAmount as number | null | undefined)
         : undefined,
+    estimatedLaborHours: optionalHours(parsed.estimatedLaborHours),
     ...calculatorComponentsField(parsed.calculatorId, parsed.components),
+    ...calculatorFormulaField(parsed.formula),
   };
 }
 
@@ -450,6 +453,7 @@ function parseCalculatorDefinition(raw: string): CalculatorDefinition | null {
     customerPolicies: normalizeCustomerPolicies(parsed.customerPolicies),
     ...calculatorComponentsField(parsed.calculatorId, parsed.components),
     ...calculatorIntakeField(parsed.intake),
+    ...calculatorFormulaField(parsed.formula),
   };
 }
 
@@ -462,7 +466,9 @@ function serializeCalculatorSnapshot(snapshot: CalculatorSnapshot) {
     recommendedAmount: snapshot.recommendedAmount,
     appliedAmount: snapshot.appliedAmount,
     overriddenAmount: snapshot.overriddenAmount ?? null,
+    estimatedLaborHours: snapshot.estimatedLaborHours ?? null,
     ...calculatorComponentsField(snapshot.calculatorId, snapshot.components),
+    ...calculatorFormulaField(snapshot.formula),
   });
 }
 
@@ -474,6 +480,7 @@ function serializeCalculatorDefinition(definition: CalculatorDefinition) {
     ...(customerPolicies.length > 0 ? { customerPolicies } : {}),
     ...calculatorComponentsField(definition.calculatorId, definition.components),
     ...calculatorIntakeField(definition.intake),
+    ...calculatorFormulaField(definition.formula),
   });
 }
 
@@ -483,6 +490,18 @@ function calculatorIntakeField(raw: unknown) {
   if (workArea === true) return { intake: { workArea: true } };
   if (workArea === false) return { intake: { workArea: false } };
   return {};
+}
+
+function calculatorFormulaField(raw: unknown) {
+  const formula = normalizeFormulaContract(raw);
+  return formula ? { formula } : {};
+}
+
+function optionalHours(value: unknown): number | null | undefined {
+  if (value == null || value === "") return null;
+  const amount = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return Math.round(amount * 100) / 100;
 }
 
 function calculatorComponentsField(

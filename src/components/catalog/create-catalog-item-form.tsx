@@ -95,7 +95,7 @@ export function CreateCatalogItemForm({
         >
           <option value="STARTING_AT">Starting at</option>
           <option value="FIXED">Fixed</option>
-          <option value="VARIABLE">Variable / unit</option>
+          <option value="VARIABLE">Unit / production</option>
           <option value="CUSTOM_QUOTE">Custom Quote</option>
         </select>
       </div>
@@ -116,8 +116,17 @@ export function CreateCatalogItemForm({
           <Input
             id="unitLabel"
             name="unitLabel"
-            placeholder="per hour, per room, per visit"
+            placeholder="each, sf, lf, room, bag, opening"
+            list="catalog-production-units"
           />
+          <datalist id="catalog-production-units">
+            <option value="each" />
+            <option value="sf" />
+            <option value="lf" />
+            <option value="room" />
+            <option value="bag" />
+            <option value="opening" />
+          </datalist>
         </div>
       ) : null}
       {selectedTrade?.recurrenceSupport ? (
