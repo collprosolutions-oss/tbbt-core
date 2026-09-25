@@ -408,9 +408,11 @@ try {
     /role:\s*"MEMBER",[\s\S]{0,40}active:\s*true/.test(jobActionsSrc),
   );
   const workspaceSrc = readFileSync(new URL("../src/lib/workspace.ts", import.meta.url), "utf8");
+  const contactSrc = readFileSync(new URL("../src/lib/business-contact.ts", import.meta.url), "utf8");
   check(
     "requireWorkspace() only resolves workspaces from active memberships",
-    /userId:\s*user\.id,\s*active:\s*true/.test(workspaceSrc),
+    workspaceSrc.includes("loadActiveWorkspaceMemberships") &&
+      /where:\s*\{\s*userId,\s*active:\s*true\s*\}/.test(contactSrc),
   );
   const authActionsSrc = readFileSync(new URL("../src/app/actions/auth.ts", import.meta.url), "utf8");
   check(
