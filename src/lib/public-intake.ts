@@ -43,6 +43,8 @@ import {
   freezeIntakeSchema,
   validateIntakeAnswers,
 } from "@/lib/intake-schema";
+import { parseWebsiteSnapshot, type PublishedWebsiteSnapshot } from "@/lib/website-engine/snapshot";
+import { snapshotIntakeSchemaForTrade } from "@/lib/website-engine/public";
 import {
   parseRecurrenceCadence,
   serviceIntentFromFrequency,
@@ -109,7 +111,8 @@ export type PublicIntakeInput = {
   intakeAnswers?: Record<string, unknown>;
   /**
    * Browser trade hint for Other/custom work on a multi-trade business.
-   * Never authorization. Server validates against ACTIVE BusinessTrade.
+   * Never authorization. Snapshot mode validates against the published
+   * trades; compatibility mode validates against ACTIVE BusinessTrade.
    */
   requestedTradeCode?: string | null;
 };
@@ -118,8 +121,13 @@ export type PublicIntakeDb = {
   business: {
     findUnique: (args: {
       where: { slug: string };
-      select: { id: true; tradeCode?: true };
-    }) => Promise<{ id: string; tradeCode?: string } | null>;
+      select: { id: true; tradeCode?: true; publishedWebsiteId?: true };
+    }) => Promise<{ id: string; tradeCode?: string; publishedWebsiteId?: string | null } | null>;
+  };
+  websitePublish?: {
+    findFirst: (args: {
+      where: { id: string; businessId: string };
+    }) => Promise<{ snapshotJson: string } | null>;
   };
   businessTrade?: {
     findMany: (args: {
@@ -134,7 +142,7 @@ export type PublicIntakeDb = {
   };
   serviceCatalogItem: {
     findMany: (args: {
-      where: { id: { in: string[] }; businessId: string; active: boolean };
+      where: { id: { in: string[] }; businessId: string; active?: boolean };
       select: {
         id: true;
         name: true;
@@ -389,10 +397,27 @@ async function createPublicServiceRequestInner(
 
   const business = await db.business.findUnique({
     where: { slug: safeSlug },
-    select: { id: true, tradeCode: true },
+    select: { id: true, tradeCode: true, publishedWebsiteId: true },
   });
   if (!business) {
     return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
+  }
+
+  let publishedSnapshot: PublishedWebsiteSnapshot | null = null;
+  if (business.publishedWebsiteId && db.websitePublish) {
+    try {
+      const publish = await db.websitePublish.findFirst({
+        where: { id: business.publishedWebsiteId, businessId: business.id },
+      });
+      if (publish) {
+        const parsed = parseWebsiteSnapshot(publish.snapshotJson);
+        if (parsed.business.id === business.id && parsed.business.slug === safeSlug) {
+          publishedSnapshot = parsed;
+        }
+      }
+    } catch {
+      publishedSnapshot = null;
+    }
   }
 
   if (campaignId) {
@@ -420,11 +445,17 @@ async function createPublicServiceRequestInner(
     }
   >();
   if (catalogIds.length > 0) {
+    if (publishedSnapshot) {
+      const publishedIds = new Set(publishedSnapshot.services.map((row) => row.id));
+      if (catalogIds.some((id) => !publishedIds.has(id))) {
+        return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
+      }
+    }
     const catalogItems = await db.serviceCatalogItem.findMany({
       where: {
         id: { in: catalogIds },
         businessId: business.id,
-        active: true,
+        ...(publishedSnapshot ? {} : { active: true }),
       },
       select: {
         id: true,
@@ -439,7 +470,24 @@ async function createPublicServiceRequestInner(
     if (catalogItems.length !== catalogIds.length) {
       return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
     }
-    catalogById = new Map(catalogItems.map((item) => [item.id, item]));
+    catalogById = new Map(
+      catalogItems.map((item) => {
+        const published = publishedSnapshot?.services.find((row) => row.id === item.id);
+        return [
+          item.id,
+          published
+            ? {
+                ...item,
+                name: published.name,
+                intakeMeasurementMode: published.intakeMeasurementMode,
+                intakeMeasurementAxes: published.intakeMeasurementAxes,
+                intakeMeasurementUnit: published.intakeMeasurementUnit,
+                tradeCode: published.tradeCode,
+              }
+            : item,
+        ];
+      }),
+    );
   }
 
   const measurementInputs = input.measurements ?? [];
@@ -482,7 +530,12 @@ async function createPublicServiceRequestInner(
   for (const task of parsed.tasks) {
     if (task.kind !== "catalog") continue;
     const catalog = catalogById.get(task.serviceCatalogItemId);
-    if (!catalog || !catalogAsksWorkAreaIntake(catalog.description, catalog.name)) continue;
+    if (!catalog) continue;
+    const published = publishedSnapshot?.services.find((row) => row.id === catalog.id);
+    const asksWorkArea = published
+      ? published.asksWorkAreaIntake
+      : catalogAsksWorkAreaIntake(catalog.description, catalog.name);
+    if (!asksWorkArea) continue;
     const submitted = (input.workAreaAnswers ?? []).find(
       (row) => row.catalogItemId === task.serviceCatalogItemId,
     ) ?? { catalogItemId: task.serviceCatalogItemId };
@@ -525,8 +578,9 @@ async function createPublicServiceRequestInner(
         .filter((code): code is string => Boolean(code && isConfiguredTrade(code))),
     ),
   ];
-  const membershipCodes =
-    db.businessTrade != null
+  const membershipCodes = publishedSnapshot
+    ? publishedSnapshot.trades.map((row) => row.code).filter(isConfiguredTrade)
+    : db.businessTrade != null
       ? (
           await db.businessTrade.findMany({
             where: { businessId: business.id, status: "ACTIVE" },
@@ -551,7 +605,9 @@ async function createPublicServiceRequestInner(
     return resolvedTrade;
   }
   const requestTradeCode = resolvedTrade.tradeCode;
-  const intakeSchema = currentIntakeSchema(requestTradeCode);
+  const intakeSchema = publishedSnapshot
+    ? snapshotIntakeSchemaForTrade(publishedSnapshot, requestTradeCode)
+    : currentIntakeSchema(requestTradeCode);
   const checkedAnswers = validateIntakeAnswers(intakeSchema, input.intakeAnswers ?? {});
   if (!checkedAnswers.ok) return checkedAnswers;
   const frequency =

@@ -28,11 +28,19 @@ export function PublicHome({
   business,
   groups,
   images,
+  headline,
+  supporting,
+  servicesHeading,
+  heroImageAlt,
 }: {
   business: PublicBusiness;
   items: PublicCatalogItem[];
   groups: PublicCatalogGroup[];
   images?: PublicHomeImagePresentation;
+  headline?: string | null;
+  supporting?: string | null;
+  servicesHeading?: string | null;
+  heroImageAlt?: string | null;
 }) {
   const servicesHref = publicServicesPath(business.slug);
   const projectsHref = publicProjectsPath(business.slug);
@@ -53,7 +61,7 @@ export function PublicHome({
         <div className="public-cinematic-media">
           <PublicFittedImage
             src={hero.src}
-            alt="Handyman working with tools in a workshop"
+            alt={heroImageAlt || "Handyman working with tools in a workshop"}
             objectPosition={hero.objectPosition}
             objectZoom={hero.objectZoom}
             sizes="100vw"
@@ -65,18 +73,22 @@ export function PublicHome({
           <div className="public-brand-spacer" aria-hidden="true" />
           <div className="public-cinematic-copy">
             <p className="public-kicker">Reliable. Professional. Done Right.</p>
-            <h1>
-              Your Home.
-              <br />
-              Our
-              <br />
-              Handyman
-              <br />
-              <em>Expertise.</em>
-            </h1>
+            {headline ? (
+              <h1>{headline}</h1>
+            ) : (
+              <h1>
+                Your Home.
+                <br />
+                Our
+                <br />
+                Handyman
+                <br />
+                <em>Expertise.</em>
+              </h1>
+            )}
             <p>
-              From small repairs to home improvements, we get the job done
-              right the first time.
+              {supporting ||
+                "From small repairs to home improvements, we get the job done right the first time."}
             </p>
           </div>
         </div>
@@ -102,7 +114,11 @@ export function PublicHome({
       <section className="public-section">
         <div className="public-container">
           <h2 className="public-section-title">
-            Handyman <span>Services</span> You Can Count On
+            {servicesHeading || (
+              <>
+                Handyman <span>Services</span> You Can Count On
+              </>
+            )}
           </h2>
           {categories.length === 0 ? (
             <div className="mt-10 rounded-xl border border-dashed p-6 text-center">

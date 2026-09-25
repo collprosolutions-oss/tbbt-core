@@ -16,9 +16,12 @@ import {
   publicReviewsPath,
 } from "@/lib/public-site";
 import { prisma } from "@/lib/prisma";
-import { requirePublicSite } from "@/lib/require-public-site";
+import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
-import { loadPublicReviewsImages } from "@/lib/public-site-images";
+import { buildPublicReviewsImagePresentation, loadPublicReviewsImages } from "@/lib/public-site-images";
+import { snapshotToImageRows } from "@/lib/website-engine/public";
+import { publicOriginForSlug } from "@/lib/website-engine/hosts";
+import { readRequestHost } from "@/lib/request-host";
 
 export const dynamic = "force-dynamic";
 
@@ -26,13 +29,16 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
+  const view = await requirePublicWebsiteView(slug);
+  const site = view.site;
   const name = publicDisplayName(site.business);
+  const origin = await publicOriginForSlug(prisma, site.business.slug, await readRequestHost());
   return publicTenantPageMetadata({
     business: site.business,
     title: `Reviews | ${name}`,
     description: `Customer feedback for ${name} will appear here when it is approved for public display.`,
     pathname: publicReviewsPath(site.business.slug),
+    origin,
   });
 }
 
@@ -40,9 +46,13 @@ const TRUST_ICONS = [Shield, Clock, Handshake, Users] as const;
 
 export default async function PublicReviewsPage({ params }: PageProps) {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
+  const view = await requirePublicWebsiteView(slug);
+  const site = view.site;
   const phone = publicPhone(site.business);
-  const images = await loadPublicReviewsImages(prisma, site.business.id, site.business.slug);
+  const images = view.snapshot
+    ? buildPublicReviewsImagePresentation(snapshotToImageRows(view.snapshot), site.business.slug)
+    : await loadPublicReviewsImages(prisma, site.business.id, site.business.slug);
+  const publishedReviews = view.snapshot?.reviews ?? [];
 
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>
@@ -85,16 +95,30 @@ export default async function PublicReviewsPage({ params }: PageProps) {
         <section className="bg-[var(--public-paper)] py-10">
           <div className="public-container">
             <h2 className="text-2xl font-extrabold uppercase">Customer Reviews</h2>
-            <p className="mt-2 max-w-2xl text-muted-foreground">{REVIEWS_PLACEHOLDER_COPY}</p>
+            <p className="mt-2 max-w-2xl text-muted-foreground">
+              {publishedReviews.length > 0
+                ? "Customer reviews selected by the owner for public display."
+                : REVIEWS_PLACEHOLDER_COPY}
+            </p>
             <ul className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {Array.from({ length: 4 }).map((_, index) => (
-                <li key={index} className="public-review-card">
-                  <p className="text-xs font-extrabold tracking-[0.12em] uppercase">Review</p>
-                  <p className="mt-4 text-sm leading-6 text-muted-foreground">
-                    {REVIEWS_PLACEHOLDER_COPY}
-                  </p>
-                </li>
-              ))}
+              {publishedReviews.length > 0
+                ? publishedReviews.map((review) => (
+                    <li key={review.id} className="public-review-card">
+                      <p className="text-xs font-extrabold tracking-[0.12em] uppercase">
+                        {review.platform}
+                        {review.rating != null ? ` · ${review.rating}/5` : ""}
+                      </p>
+                      <p className="mt-4 text-sm leading-6">{review.reviewText}</p>
+                    </li>
+                  ))
+                : Array.from({ length: 4 }).map((_, index) => (
+                    <li key={index} className="public-review-card">
+                      <p className="text-xs font-extrabold tracking-[0.12em] uppercase">Review</p>
+                      <p className="mt-4 text-sm leading-6 text-muted-foreground">
+                        {REVIEWS_PLACEHOLDER_COPY}
+                      </p>
+                    </li>
+                  ))}
             </ul>
           </div>
         </section>

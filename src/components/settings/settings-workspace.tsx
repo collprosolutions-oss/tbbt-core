@@ -8,6 +8,7 @@ import { BusinessPublicContactForm } from "@/components/settings/business-public
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
 import { ServiceAreaSettings } from "@/components/settings/service-area-settings";
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
+import { WebsitePublishPanel } from "@/components/settings/website-publish-panel";
 import { ViewPublicWebsiteLink } from "@/components/settings/view-public-website-link";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { ConnectStripeButton } from "@/components/settings/connect-stripe-button";
@@ -186,6 +187,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
     canOperate,
     operatingBlockedMessage,
     websitePhotos,
+    websitePublish,
     supplierPricing,
     canClearTestData,
     testDataCleanupPreview,
@@ -228,6 +230,38 @@ function SectionBody(props: SettingsWorkspaceProps) {
         description="Owner-configured cities and postal codes for intake qualification."
       >
         <ServiceAreaSettings businessId={snapshot.business.id} />
+      </SectionCard>
+    );
+  }
+
+  if (section === "website-publish") {
+    return (
+      <SectionCard
+        title="Website Publish"
+        description="Draft website copy and selections stay private until you publish. Publishing freezes a snapshot. The public site does not update from later edits until you publish again."
+      >
+        {websitePublish ? (
+          <WebsitePublishPanel
+            slug={snapshot.business.slug}
+            canEdit={canEditPreferences && canOperate}
+            hasUnpublishedChanges={websitePublish.hasUnpublishedChanges}
+            currentVersion={websitePublish.currentVersion}
+            versions={websitePublish.versions}
+            reviews={websitePublish.reviews}
+            galleryAssets={websitePublish.galleryAssets}
+            galleryItems={websitePublish.galleryItems}
+            localPairs={websitePublish.localPairs}
+            seo={websitePublish.seo}
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">Website publish data is not available.</p>
+        )}
+        {!canOperate ? (
+          <p className="mt-2 text-sm text-muted-foreground">{operatingBlockedMessage}</p>
+        ) : null}
+        {!canEditPreferences ? (
+          <p className="text-sm text-muted-foreground">Members cannot publish the website.</p>
+        ) : null}
       </SectionCard>
     );
   }

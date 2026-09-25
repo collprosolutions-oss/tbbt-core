@@ -9,7 +9,8 @@ import {
   coerceRequestQuantity,
   parseRequestQuantity,
 } from "@/lib/service-request-work";
-import { PUBLIC_PRICING_DISCLAIMER } from "@/lib/public-site";
+import { PUBLIC_PRICING_DISCLAIMER, publicServiceDetailPath } from "@/lib/public-site";
+import { websiteServiceSlug } from "@/lib/website-engine/slugs";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
 import type { ResolvedPublicSiteImage } from "@/lib/public-site-images";
 import {
@@ -308,6 +309,12 @@ export function PublicServicesBrowser({
                   <strong>{item.name}</strong>
                   <span>{item.priceLabel}</span>
                 </button>
+                <Link
+                  href={publicServiceDetailPath(slug, websiteServiceSlug(item.name))}
+                  className="text-sm underline"
+                >
+                  Details
+                </Link>
                 <div className="public-service-controls">
                   <button
                     type="button"

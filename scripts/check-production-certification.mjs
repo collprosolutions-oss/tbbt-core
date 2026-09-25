@@ -95,6 +95,9 @@ const lifecycle = [
   ["Marketing", "src/app/(app)/marketing/page.tsx"],
   ["Business Health / BSOS", "src/app/(app)/business-health/page.tsx"],
   ["Local SEO service+city page", "src/app/hire/[slug]/in/[city]/[service]/page.tsx"],
+  ["Website publish engine", "src/lib/website-engine/publish.ts"],
+  ["Website snapshot builder", "src/lib/website-engine/builder.ts"],
+  ["Website service detail", "src/app/hire/[slug]/services/[serviceSlug]/page.tsx"],
 ];
 
 try {
@@ -156,6 +159,13 @@ try {
     !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migration) &&
       migration.includes("ADD COLUMN IF NOT EXISTS") &&
       migration.includes("CREATE TABLE IF NOT EXISTS"),
+  );
+  const websiteEngineMigration = read("prisma/migrations/20260925180000_website_engine/migration.sql");
+  check(
+    "Website engine migration is additive",
+    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(websiteEngineMigration) &&
+      websiteEngineMigration.includes("CREATE TABLE IF NOT EXISTS") &&
+      websiteEngineMigration.includes("ADD COLUMN IF NOT EXISTS"),
   );
 
   check("OWNER and ADMIN can open the management console", canAccessManagementConsole("OWNER") && canAccessManagementConsole("ADMIN"));

@@ -14,8 +14,11 @@ import {
   publicRequestPath,
 } from "@/lib/public-site";
 import { prisma } from "@/lib/prisma";
-import { requirePublicSite } from "@/lib/require-public-site";
+import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
+import { publicLocalPageFromView } from "@/lib/website-engine/public";
+import { publicOriginForSlug } from "@/lib/website-engine/hosts";
+import { readRequestHost } from "@/lib/request-host";
 
 export const dynamic = "force-dynamic";
 
@@ -24,16 +27,30 @@ type PageProps = {
 };
 
 async function loadPublicLocalPage(slug: string, city: string, service: string) {
-  const site = await requirePublicSite(slug);
-  const areas = await listServiceAreas(prisma, site.business.id);
+  const view = await requirePublicWebsiteView(slug);
+  if (view.snapshot) {
+    const local = publicLocalPageFromView(view, city, service);
+    if (!local) return null;
+    return {
+      site: view.site,
+      snapshotLocal: local,
+      catalog: view.site.items.find((item) => item.id === local.serviceId) ?? {
+        id: local.serviceId,
+        name: local.serviceName,
+        description: local.copy,
+      },
+      matchedCity: { label: local.cityLabel, city: local.cityLabel },
+    };
+  }
+  const areas = await listServiceAreas(prisma, view.site.business.id);
   const resolved = resolvePublicLocalPage({
     citySlug: city,
     serviceSlug: service,
     areas,
-    services: site.items,
+    services: view.site.items,
   });
   if (!resolved) return null;
-  return { site, areas, catalog: resolved.service, matchedCity: resolved.city };
+  return { site: view.site, snapshotLocal: null, catalog: resolved.service, matchedCity: resolved.city };
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -46,20 +63,21 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     };
   }
   const name = publicDisplayName(loaded.site.business);
-  const settings = await prisma.businessSettings.findUnique({
-    where: { businessId: loaded.site.business.id },
-    select: { seoTitleServices: true, seoDescriptionServices: true },
-  });
-  const title =
-    settings?.seoTitleServices?.trim() || `${loaded.catalog.name} in ${loaded.matchedCity.label} | ${name}`;
+  const title = `${loaded.catalog.name} in ${loaded.matchedCity.label} | ${name}`;
   const description =
-    settings?.seoDescriptionServices?.trim() ||
+    loaded.snapshotLocal?.copy ||
     `Request ${loaded.catalog.name} in ${loaded.matchedCity.label} from ${name}.`;
+  const origin = await publicOriginForSlug(
+    prisma,
+    loaded.site.business.slug,
+    await readRequestHost(),
+  );
   return publicTenantPageMetadata({
     business: loaded.site.business,
     title,
     description,
     pathname: publicServiceCityPath(loaded.site.business.slug, service, city),
+    origin,
   });
 }
 
@@ -69,15 +87,21 @@ export default async function PublicServiceCityPage({ params }: PageProps) {
   if (!loaded) notFound();
 
   const phone = publicPhone(loaded.site.business);
-  const approvedContent = await prisma.marketingContent.findMany({
-    where: {
-      businessId: loaded.site.business.id,
-      status: "APPROVED",
-      catalogItemId: loaded.catalog.id,
-    },
-    select: { title: true, body: true },
-    take: 3,
-  });
+  const approvedContent = loaded.snapshotLocal
+    ? []
+    : await prisma.marketingContent.findMany({
+        where: {
+          businessId: loaded.site.business.id,
+          status: "APPROVED",
+          catalogItemId: loaded.catalog.id,
+        },
+        select: { title: true, body: true },
+        take: 3,
+      });
+  const localCopy =
+    loaded.snapshotLocal?.copy ||
+    loaded.catalog.description?.trim() ||
+    `${loaded.catalog.name} for homeowners in ${loaded.matchedCity.label}.`;
 
   return (
     <PublicSiteShell business={loaded.site.business} groups={loaded.site.groups}>
@@ -93,10 +117,7 @@ export default async function PublicServiceCityPage({ params }: PageProps) {
         />
         <section className="bg-[var(--public-paper)]">
           <div className="public-container space-y-4 py-8">
-            <p className="text-sm">
-              {loaded.catalog.description?.trim() ||
-                `${loaded.catalog.name} for homeowners in ${loaded.matchedCity.label}.`}
-            </p>
+            <p className="text-sm whitespace-pre-wrap">{localCopy}</p>
             {approvedContent.length > 0 ? (
               <div className="space-y-2">
                 <h2 className="text-lg font-semibold">Approved project notes</h2>

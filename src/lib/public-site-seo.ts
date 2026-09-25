@@ -10,7 +10,19 @@ import { tenantAbsoluteUrl } from "@/lib/tenant-app-url";
 
 const META_DESCRIPTION_MAX = 160;
 
-export function publicCanonicalUrl(slug: string, pathname: string) {
+export function publicCanonicalUrl(
+  slug: string,
+  pathname: string,
+  origin?: string | null,
+) {
+  if (origin) {
+    const normalizedOrigin = origin.replace(/\/$/, "");
+    if (!pathname || pathname === "/" || pathname === publicHomePath(slug)) {
+      return `${normalizedOrigin}/`;
+    }
+    const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
+    return `${normalizedOrigin}${path}`;
+  }
   if (!pathname || pathname === "/" || pathname === publicHomePath(slug)) {
     return publicSiteUrl(slug);
   }
@@ -41,11 +53,17 @@ export function publicTenantPageMetadata(input: {
   title: string;
   description: string;
   pathname: string;
+  origin?: string | null;
 }): Metadata {
-  const canonical = publicCanonicalUrl(input.business.slug, input.pathname);
+  const canonical = publicCanonicalUrl(input.business.slug, input.pathname, input.origin);
   return {
     title: { absolute: input.title },
     description: input.description,
     alternates: { canonical },
+    openGraph: {
+      title: input.title,
+      description: input.description,
+      url: canonical,
+    },
   };
 }

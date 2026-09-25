@@ -23,6 +23,40 @@ export type SettingsWorkspaceProps = {
   canEditPreferences: boolean;
   canOperate: boolean;
   operatingBlockedMessage: string;
+  websitePublish?: {
+    hasUnpublishedChanges: boolean;
+    currentVersion: number | null;
+    versions: Array<{
+      id: string;
+      versionNumber: number;
+      publishedAt: string;
+      summary: string;
+      sourcePublishId: string | null;
+      isCurrent: boolean;
+      publishedByName: string | null;
+    }>;
+    reviews: Array<{ id: string; reviewText: string; websiteSelected: boolean }>;
+    galleryAssets: Array<{ id: string; publicPath: string | null }>;
+    galleryItems: Array<{ id: string; title: string; caption: string; imageUrl: string | null }>;
+    localPairs: Array<{
+      serviceAreaId: string;
+      catalogItemId: string;
+      label: string;
+      draftCopy: string;
+    }>;
+    seo: {
+      websiteHeroHeadline: string;
+      websiteHeroSupporting: string;
+      seoTitleHome: string;
+      seoDescriptionHome: string;
+      seoTitleServices: string;
+      seoDescriptionServices: string;
+      seoTitleAbout: string;
+      seoDescriptionAbout: string;
+      seoTitleRequest: string;
+      seoDescriptionRequest: string;
+    };
+  };
   websitePhotos?: {
     storageConfigured: boolean;
     storageUsage?: { usedBytes: number; limitBytes: number } | null;

@@ -335,10 +335,12 @@ check("Website Story keeps raw owner notes separate from approved public copy",
 
 console.log("\nSTATIC — Catalog and intake architecture");
 check("Public catalog uses persisted categories",
-  (hireSrc.includes("requirePublicSite") || hireSrc.includes("loadPublicSite")) &&
+  (hireSrc.includes("requirePublicWebsiteView") ||
+    hireSrc.includes("requirePublicSite") ||
+    hireSrc.includes("loadPublicSite")) &&
     readRepo("src/lib/public-site.ts").includes("groupServiceCatalogItemsByCategory"));
 check("Unknown hire slugs return a real 404 instead of a 200 placeholder",
-  hireSrc.includes("requirePublicSite") &&
+  (hireSrc.includes("requirePublicWebsiteView") || hireSrc.includes("requirePublicSite")) &&
     readRepo("src/lib/require-public-site.ts").includes("notFound()") &&
     readRepo("src/app/hire/[slug]/not-found.tsx").includes("This business could not be found.") &&
     !hireSrc.includes("PublicUnavailable"));

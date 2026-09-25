@@ -12,9 +12,14 @@ import {
   publicServicesPath,
 } from "@/lib/public-site";
 import { prisma } from "@/lib/prisma";
-import { requirePublicSite } from "@/lib/require-public-site";
+import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
-import { loadPublicServicesImages } from "@/lib/public-site-images";
+import { buildPublicServicesImagePresentation, loadPublicServicesImages } from "@/lib/public-site-images";
+import { snapshotToImageRows } from "@/lib/website-engine/public";
+import { snapshotPageMetadata } from "@/lib/website-engine/seo";
+import { publishedServicesHeroDescription } from "@/lib/website-engine/copy";
+import { publicOriginForSlug } from "@/lib/website-engine/hosts";
+import { readRequestHost } from "@/lib/request-host";
 import { parseSelectedWorkSearch } from "@/lib/selected-work";
 
 export const dynamic = "force-dynamic";
@@ -32,24 +37,37 @@ type PageProps = {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
-  const name = publicDisplayName(site.business);
+  const view = await requirePublicWebsiteView(slug);
+  const origin = await publicOriginForSlug(prisma, view.site.business.slug, await readRequestHost());
+  if (view.snapshot) {
+    return snapshotPageMetadata({
+      snapshot: view.snapshot,
+      page: view.snapshot.seo.services,
+      pathname: publicServicesPath(view.site.business.slug),
+      origin,
+    });
+  }
+  const name = publicDisplayName(view.site.business);
   return publicTenantPageMetadata({
-    business: site.business,
+    business: view.site.business,
     title: `Services | ${name}`,
     description: `Browse handyman services from ${name}. Select one or more tasks, then continue to request service.`,
-    pathname: publicServicesPath(site.business.slug),
+    pathname: publicServicesPath(view.site.business.slug),
+    origin,
   });
 }
 
 export default async function PublicServicesPage({ params, searchParams }: PageProps) {
   const { slug } = await params;
   const query = await searchParams;
-  const site = await requirePublicSite(slug);
+  const view = await requirePublicWebsiteView(slug);
+  const site = view.site;
   const phone = publicPhone(site.business);
   const requestHref = publicRequestPath(site.business.slug);
   const textHref = smsHref(phone);
-  const images = await loadPublicServicesImages(prisma, site.business.id, site.groups);
+  const images = view.snapshot
+    ? buildPublicServicesImagePresentation(site.groups, snapshotToImageRows(view.snapshot))
+    : await loadPublicServicesImages(prisma, site.business.id, site.groups);
   const initialSelected = parseSelectedWorkSearch(query, new Set(site.items.map((item) => item.id)));
 
   return (
@@ -59,7 +77,15 @@ export default async function PublicServicesPage({ params, searchParams }: PageP
           homeHref={publicHomePath(site.business.slug)}
           current="Services"
           title="Services"
-          description="Professional handyman services to keep your home running smoothly and looking its best."
+          description={
+            view.snapshot
+              ? view.snapshot.seo.services.description ||
+                publishedServicesHeroDescription({
+                  name: publicDisplayName(site.business),
+                  trades: view.snapshot.trades,
+                })
+              : "Professional handyman services to keep your home running smoothly and looking its best."
+          }
           imageSrc={images.hero.src}
           objectPosition={images.hero.objectPosition}
           objectZoom={images.hero.objectZoom}

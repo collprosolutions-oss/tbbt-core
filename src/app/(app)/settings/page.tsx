@@ -28,6 +28,7 @@ import { previewOperationalTestData } from "@/lib/test-data-cleanup";
 import { loadPublicCatalog } from "@/lib/public-site-data";
 import { loadWebsitePhotoEditorSlots } from "@/lib/public-site-images";
 import { loadSupplierPricingContextPayload } from "@/lib/material-pricing/db";
+import { loadWebsitePublishPanelData } from "@/lib/website-engine";
 
 export const metadata: Metadata = {
   title: "Settings",
@@ -74,6 +75,11 @@ export default async function SettingsPage({
       slots: await loadWebsitePhotoEditorSlots(prisma, access.businessId, catalog.groups),
     };
   }
+
+  const websitePublish =
+    section === "website-publish" && canEditPreferences
+      ? await loadWebsitePublishPanelData(prisma, access)
+      : undefined;
 
   const supplierPricing =
     section === "vendors"
@@ -182,6 +188,7 @@ export default async function SettingsPage({
           canOperate={operating.canOperate}
           operatingBlockedMessage={operating.blockedMessage}
           websitePhotos={websitePhotos}
+          websitePublish={websitePublish}
           supplierPricing={supplierPricing}
           canClearTestData={canClearTestData}
           testDataCleanupPreview={testDataCleanupPreview}

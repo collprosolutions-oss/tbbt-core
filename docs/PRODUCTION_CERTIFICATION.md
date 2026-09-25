@@ -19,7 +19,7 @@ Do not invent passing browser results. The isolated harness is
 
 1. Signup → trial / SaaS entitlement (`/sign-up`, SaaS Stripe — not Connect).
 2. First-run setup → starter services → website setup (`/setup`, `/setup/services`, `/setup/website`).
-3. Public website + request with photos (`/hire/[slug]`, `/r/[slug]`).
+3. Public website + request with photos (`/hire/[slug]`, `/r/[slug]`). After the first Website Publish, public pages read the immutable snapshot; businesses with no publish stay on the live-assembled path.
 4. CRM / requests / pipeline (`/customers`, `/requests`, `/pipeline`).
 5. Estimate → send / email → customer approve (`/estimates`, `/e/[token]`).
 6. Material deposit (Connect Stripe or fake local adapter).
@@ -38,6 +38,7 @@ Do not invent passing browser results. The isolated harness is
 - Provider failure must not delete core records (review / referral rows stay SENT).
 - Password recovery: `/forgot-password`, `/reset-password/[token]`.
 - R2 website uploads: `R2_*` in `.env.example`. Field job photos use private R2. Legacy historical job-photo rows may still store a Vercel Blob URL for read-only rendering.
+- Website publishing: Settings → Website Publish. `npm run test:website-engine` covers snapshot isolation, rollback, multi-trade publication, and SEO/sitemap. Custom-domain verification is not automatic.
 - Resend: unset `RESEND_API_KEY` / `EMAIL_FROM` is NOT_CONFIGURED, not a fake send.
 
 ## Explicit blockers

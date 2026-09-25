@@ -16,7 +16,7 @@ import {
   publicRequestPath,
 } from "@/lib/public-site";
 import { resolveBusinessServiceArea } from "@/lib/business-service-area";
-import { requirePublicSite } from "@/lib/require-public-site";
+import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { parseSelectedWorkSearch } from "@/lib/selected-work";
 import { isBusinessStorageConfigured } from "@/lib/business-storage";
@@ -26,6 +26,11 @@ import {
   currentIntakeSchema,
   publicIntakeSchemaProjection,
 } from "@/lib/intake-schema";
+import { snapshotIntakeSchemasByTrade } from "@/lib/website-engine/public";
+import { snapshotPageMetadata } from "@/lib/website-engine/seo";
+import { publicOriginForSlug } from "@/lib/website-engine/hosts";
+import { publishedRequestAccent } from "@/lib/website-engine/copy";
+import { readRequestHost } from "@/lib/request-host";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +46,17 @@ type PageProps = {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
+  const view = await requirePublicWebsiteView(slug);
+  const site = view.site;
+  const origin = await publicOriginForSlug(prisma, site.business.slug, await readRequestHost());
+  if (view.snapshot) {
+    return snapshotPageMetadata({
+      snapshot: view.snapshot,
+      page: view.snapshot.seo.request,
+      pathname: publicRequestPath(site.business.slug),
+      origin,
+    });
+  }
   const name = publicDisplayName(site.business);
   return publicTenantPageMetadata({
     business: site.business,
@@ -50,13 +65,15 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       site.business.activeTrades?.[0]?.requestDescription ??
       `Request service from ${name} in a single visit request.`,
     pathname: publicRequestPath(site.business.slug),
+    origin,
   });
 }
 
 export default async function PublicIntakePage({ params, searchParams }: PageProps) {
   const { slug } = await params;
   const query = await searchParams;
-  const site = await requirePublicSite(slug);
+  const view = await requirePublicWebsiteView(slug);
+  const site = view.site;
 
   const initialSelected = parseSelectedWorkSearch(
     query,
@@ -66,14 +83,13 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
   const phone = publicPhone(site.business);
   const textHref = smsHref(phone);
   const nextAvailableLabel = await loadPublicNextAvailableLabel(prisma, site.business.id);
-  const activeTradeCodes =
-    site.business.activeTrades?.map((trade) => trade.code) ?? [site.business.tradeCode];
-  const intakeSchemasByTrade = Object.fromEntries(
-    activeTradeCodes.map((code) => [
-      code,
-      publicIntakeSchemaProjection(currentIntakeSchema(code)),
-    ]),
-  );
+  const intakeSchemasByTrade = view.snapshot
+    ? snapshotIntakeSchemasByTrade(view.snapshot)
+    : Object.fromEntries(
+        (site.business.activeTrades?.map((trade) => trade.code) ?? [site.business.tradeCode]).map(
+          (code) => [code, publicIntakeSchemaProjection(currentIntakeSchema(code))],
+        ),
+      );
 
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>
@@ -83,7 +99,11 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
           homeHref={publicHomePath(site.business.slug)}
           current="Request a Quote"
           title="Request a Quote"
-          accent="Let's get your project started."
+          accent={
+            view.snapshot
+              ? publishedRequestAccent(view.snapshot.trades)
+              : "Let's get your project started."
+          }
           description="Fill out the form below. We will review your request before preparing a written estimate."
           imageSrc={publicQuoteHeroImage(site.business.slug)}
           objectPosition={publicQuoteHeroPosition(site.business.slug)}
@@ -98,7 +118,11 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
               <MessageSquare className="size-7 text-[var(--public-blue)]" aria-hidden="true" />
               <div>
                 <h2>Fast Response</h2>
-                <p>Text us about your project and we will follow up.</p>
+                <p>
+                  {view.snapshot
+                    ? "Text us about the requested work and we will follow up."
+                    : "Text us about your project and we will follow up."}
+                </p>
               </div>
             </div>
             <div className="public-quote-point">
