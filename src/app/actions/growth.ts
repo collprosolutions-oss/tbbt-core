@@ -81,6 +81,7 @@ export async function createGrowthActionAction(
     await createGrowthActionRequest(prisma, access, {
       kind: readString(formData, "kind"),
       queue: readString(formData, "queue"),
+      attemptId: readString(formData, "attemptId"),
       customerId: readString(formData, "customerId") || null,
       serviceRequestId: readString(formData, "serviceRequestId") || null,
       estimateId: readString(formData, "estimateId") || null,
@@ -123,6 +124,7 @@ export async function approveReactivationAction(
     requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
     await approveReactivationCandidates(prisma, access, {
       customerIds: readAll(formData, "customerId"),
+      attemptId: readString(formData, "attemptId"),
       campaignId: readString(formData, "campaignId") || null,
       notes: readString(formData, "notes"),
     });

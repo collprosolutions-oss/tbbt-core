@@ -33,6 +33,7 @@ const {
   OWNER_APPROVAL_REQUIRED_MESSAGE,
   parseGrowthArea,
   REACTIVATION_AFTER_DAYS,
+  growthActionIdempotencyKey,
 } = await import("@/lib/growth");
 const { resolveCollectedCash, collectedForJob } = await import("@/lib/collected-cash");
 const {
@@ -54,6 +55,7 @@ const {
   correctLeadAttribution,
   createGrowthActionRequest,
   GrowthError,
+  setGrowthActionStatus,
 } = await import("@/lib/growth-ops");
 const { PRODUCT_CAPABILITIES } = await import("@/lib/product-catalog/codes");
 const { ProductCapabilityRequiredError } = await import("@/lib/product-entitlements/errors");
@@ -206,9 +208,19 @@ try {
   check("Empty records do not fabricate funnel stages", emptyFunnel.stages.length === 0);
   const socialSrc = readFileSync(new URL("../src/lib/growth.ts", import.meta.url), "utf8");
   const workspaceSrc = readFileSync(new URL("../src/components/growth/growth-workspace.tsx", import.meta.url), "utf8");
+  const attemptFormSrc = readFileSync(new URL("../src/components/growth/growth-attempt-form.tsx", import.meta.url), "utf8");
   check("Growth copy states social is disconnected", socialSrc.includes(SOCIAL_DISCONNECTED_MESSAGE));
   check("Growth UI does not claim PUBLISHED social posts", !workspaceSrc.includes("PUBLISHED"));
   check("Growth copy refuses fake rankings", socialSrc.includes(RANKING_UNAVAILABLE_MESSAGE));
+  check("Growth forms submit a browser-generated attemptId", attemptFormSrc.includes('name="attemptId"'));
+  check("Growth recovery and reactivation use the attempt form", workspaceSrc.includes("GrowthAttemptForm"));
+  check(
+    "Idempotency keys are attempt-scoped, not permanent customer/job keys",
+    socialSrc.includes("GROWTH_ACTION:") &&
+      !socialSrc.includes("REACTIVATION:${input.customerId") &&
+      !socialSrc.includes("REVIEW_ASK:${input.jobId") &&
+      !socialSrc.includes("RECOVERY:${input.queue}"),
+  );
   check("OWNER/ADMIN can access the management console", canAccessManagementConsole("OWNER") && canAccessManagementConsole("ADMIN"));
   check("MEMBER cannot access the management console", canAccessManagementConsole("MEMBER") === false);
   check("Growth nav is visible to OWNER", visibleAppNav("OWNER").some((item) => item.href === "/growth"));
@@ -729,25 +741,67 @@ try {
     check("Cross-tenant attribution correction is rejected", true);
   }
 
-  const action = await createGrowthActionRequest(prisma, ownerA, {
-    kind: "RECOVERY",
-    queue: "NEVER_ESTIMATED",
-    serviceRequestId: neverEstimated.id,
-  });
+  async function approvalEventCount(actionId) {
+    return prisma.businessEvent.count({
+      where: { businessId: businessA.id, type: "GROWTH_REACTIVATION_APPROVED", subjectId: actionId },
+    });
+  }
+
+  const recoveryAttempt = randomUUID();
+  const [action, racedRecovery] = await Promise.all([
+    createGrowthActionRequest(prisma, ownerA, {
+      kind: "RECOVERY",
+      queue: "NEVER_ESTIMATED",
+      serviceRequestId: neverEstimated.id,
+      attemptId: recoveryAttempt,
+    }),
+    createGrowthActionRequest(prisma, ownerA, {
+      kind: "RECOVERY",
+      queue: "NEVER_ESTIMATED",
+      serviceRequestId: neverEstimated.id,
+      attemptId: recoveryAttempt,
+    }),
+  ]);
   check("Recovery action is durable and does not send", action.status === "OPEN" && action.kind === "RECOVERY");
+  check("same attemptId Promise.all creates one recovery action", action.id === racedRecovery.id);
+  check(
+    "same attemptId Promise.all resolves the same recovery row",
+    action.idempotencyKey === growthActionIdempotencyKey({ attemptId: recoveryAttempt, customerId: action.customerId }),
+  );
+  const recoveryRaceCount = await prisma.growthActionRequest.count({
+    where: { businessId: businessA.id, idempotencyKey: action.idempotencyKey },
+  });
+  check("same attemptId Promise.all stores one GrowthActionRequest", recoveryRaceCount === 1);
   const event = await prisma.businessEvent.findFirst({
     where: { businessId: businessA.id, type: "GROWTH_RECOVERY_QUEUED", subjectId: action.id },
   });
   check("Recovery emits an action-suggestion event", Boolean(event) && event.payload?.autoMessage === false);
 
+  const laterRecovery = await createGrowthActionRequest(prisma, ownerA, {
+    kind: "RECOVERY",
+    queue: "NEVER_ESTIMATED",
+    serviceRequestId: neverEstimated.id,
+    attemptId: randomUUID(),
+  });
+  check(
+    "different attemptIds for the same recovery opportunity create separate intentional actions",
+    laterRecovery.id !== action.id && laterRecovery.status === "OPEN",
+  );
+
   try {
-    await approveReactivationCandidates(prisma, ownerA, { customerIds: [revokedCustomer.id] });
+    await approveReactivationCandidates(prisma, ownerA, {
+      customerIds: [revokedCustomer.id],
+      attemptId: randomUUID(),
+    });
     check("Revoked customer cannot be approved for reactivation", false);
   } catch (error) {
     check("Revoked customer cannot be approved for reactivation", error instanceof GrowthError);
   }
   try {
-    await approveReactivationCandidates(prisma, adminA, { customerIds: [emailAfterSmsRevoke.id] });
+    await approveReactivationCandidates(prisma, adminA, {
+      customerIds: [emailAfterSmsRevoke.id],
+      attemptId: randomUUID(),
+    });
     check("ADMIN cannot approve reactivation", false);
   } catch (error) {
     check(
@@ -759,15 +813,36 @@ try {
     kind: "REACTIVATION",
     queue: "REACTIVATION",
     customerId: emailAfterSmsRevoke.id,
+    attemptId: randomUUID(),
   });
   check("ADMIN may prepare an open reactivation action", prepared.status === "OPEN");
+  check(
+    "ADMIN OPEN reactivation emits zero approval events",
+    (await approvalEventCount(prepared.id)) === 0,
+  );
+  try {
+    await setGrowthActionStatus(prisma, adminA, { actionId: prepared.id, status: "APPROVED" });
+    check("ADMIN cannot cause an approval event via status change", false);
+  } catch (error) {
+    check(
+      "ADMIN cannot cause an approval event via status change",
+      error instanceof GrowthError && error.message === OWNER_APPROVAL_REQUIRED_MESSAGE,
+    );
+  }
+  check(
+    "ADMIN status change still emits zero approval events",
+    (await approvalEventCount(prepared.id)) === 0,
+  );
 
   await prisma.customer.update({
     where: { id: staleCustomer.id },
     data: { email: null, smsConsentStatus: "REVOKED" },
   });
   try {
-    await approveReactivationCandidates(prisma, ownerA, { customerIds: [staleCustomer.id] });
+    await approveReactivationCandidates(prisma, ownerA, {
+      customerIds: [staleCustomer.id],
+      attemptId: randomUUID(),
+    });
     check("Stale consent is rechecked on approval", false);
   } catch (error) {
     check("Stale consent is rechecked on approval", error instanceof GrowthError);
@@ -777,7 +852,10 @@ try {
     data: { businessId: businessA.id, name: "No Work Customer", smsConsentStatus: "GRANTED", email: "nowork@example.com" },
   });
   try {
-    await approveReactivationCandidates(prisma, ownerA, { customerIds: [neverCompleted.id] });
+    await approveReactivationCandidates(prisma, ownerA, {
+      customerIds: [neverCompleted.id],
+      attemptId: randomUUID(),
+    });
     check("Approval revalidates completed-work facts", false);
   } catch (error) {
     check("Approval revalidates completed-work facts", error instanceof GrowthError);
@@ -789,6 +867,7 @@ try {
       queue: "NEVER_ESTIMATED",
       customerId: referred.id,
       serviceRequestId: neverEstimated.id,
+      attemptId: randomUUID(),
     });
     check("Same-tenant wrong-customer related IDs are rejected", false);
   } catch (error) {
@@ -798,26 +877,86 @@ try {
     );
   }
 
-  const approved = await approveReactivationCandidates(prisma, ownerA, { customerIds: [repeatCustomer.id] });
-  const approvedAgain = await approveReactivationCandidates(prisma, ownerA, { customerIds: [repeatCustomer.id] });
-  check("Owner can approve an outreach-eligible reactivation", approved.length === 1 && approved[0].status === "APPROVED");
-  check("Double-click/retry creates one logical reactivation action", approvedAgain[0].id === approved[0].id);
-  const reactivationCount = await prisma.growthActionRequest.count({
-    where: { businessId: businessA.id, kind: "REACTIVATION", customerId: repeatCustomer.id },
+  const ownerApprovedOpen = await setGrowthActionStatus(prisma, ownerA, {
+    actionId: prepared.id,
+    status: "APPROVED",
   });
-  check("One reactivation row exists after retry", reactivationCount === 1);
+  check("OWNER can approve an ADMIN-prepared OPEN reactivation", ownerApprovedOpen.status === "APPROVED");
+  check(
+    "OWNER approval of OPEN emits exactly one approval event",
+    (await approvalEventCount(prepared.id)) === 1,
+  );
+  const openApprovalEvent = await prisma.businessEvent.findFirst({
+    where: { businessId: businessA.id, type: "GROWTH_REACTIVATION_APPROVED", subjectId: prepared.id },
+  });
+  check(
+    "OPEN→APPROVED event reflects revalidated outreach and does not send",
+    openApprovalEvent?.payload?.autoMessage === false &&
+      openApprovalEvent.payload?.emailEligible === true &&
+      openApprovalEvent.payload?.smsEligible === false,
+  );
+  await setGrowthActionStatus(prisma, ownerA, { actionId: prepared.id, status: "APPROVED" });
+  check(
+    "repeat approval of the same OPEN action emits no duplicate event",
+    (await approvalEventCount(prepared.id)) === 1,
+  );
 
-  const recoveryAgain = await createGrowthActionRequest(prisma, ownerA, {
-    kind: "RECOVERY",
-    queue: "NEVER_ESTIMATED",
-    serviceRequestId: neverEstimated.id,
+  const reactAttempt = randomUUID();
+  const [approvedRaceA, approvedRaceB] = await Promise.all([
+    createGrowthActionRequest(prisma, ownerA, {
+      kind: "REACTIVATION",
+      queue: "REACTIVATION",
+      customerId: repeatCustomer.id,
+      attemptId: reactAttempt,
+      approve: true,
+    }),
+    createGrowthActionRequest(prisma, ownerA, {
+      kind: "REACTIVATION",
+      queue: "REACTIVATION",
+      customerId: repeatCustomer.id,
+      attemptId: reactAttempt,
+      approve: true,
+    }),
+  ]);
+  check(
+    "same attemptId Promise.all creates one reactivation action",
+    approvedRaceA.id === approvedRaceB.id && approvedRaceA.status === "APPROVED",
+  );
+  const approved = await approveReactivationCandidates(prisma, ownerA, {
+    customerIds: [repeatCustomer.id],
+    attemptId: reactAttempt,
   });
-  check("Double-click/retry creates one logical recovery action", recoveryAgain.id === action.id);
+  check("Owner can approve an outreach-eligible reactivation", approved.length === 1 && approved[0].id === approvedRaceA.id);
+  check(
+    "direct OWNER-approved creation emits exactly one approval event",
+    (await approvalEventCount(approvedRaceA.id)) === 1,
+  );
+  await approveReactivationCandidates(prisma, ownerA, {
+    customerIds: [repeatCustomer.id],
+    attemptId: reactAttempt,
+  });
+  check(
+    "retry same logical approval emits no duplicate event",
+    (await approvalEventCount(approvedRaceA.id)) === 1,
+  );
+  const laterReact = await approveReactivationCandidates(prisma, ownerA, {
+    customerIds: [repeatCustomer.id],
+    attemptId: randomUUID(),
+  });
+  check(
+    "different attemptIds for the same customer/reactivation create two legitimate actions",
+    laterReact[0].id !== approvedRaceA.id && laterReact[0].status === "APPROVED",
+  );
+  check(
+    "later legitimate reactivation also emits exactly one approval event",
+    (await approvalEventCount(laterReact[0].id)) === 1,
+  );
 
   try {
     await createGrowthActionRequest(prisma, starterAccess, {
       kind: "RECOVERY",
       queue: "NEVER_ESTIMATED",
+      attemptId: randomUUID(),
     });
     check("Starter plan cannot write Growth actions", false);
   } catch (error) {

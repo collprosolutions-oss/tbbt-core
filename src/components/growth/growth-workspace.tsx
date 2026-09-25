@@ -9,6 +9,7 @@ import {
   setGrowthActionStatusAction,
 } from "@/app/actions/growth";
 import { ActionForm } from "@/components/action-form";
+import { GrowthAttemptForm } from "@/components/growth/growth-attempt-form";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -234,7 +235,7 @@ function RecoveryBody({ source }: { source: GrowthWorkspaceProps["source"] }) {
                 {outreachEligibilityLabel(item)}
                 {item.value != null ? ` · value ${formatMoney(item.value)}` : ""}
               </p>
-              <ActionForm action={createGrowthActionAction} className="mt-2">
+              <GrowthAttemptForm action={createGrowthActionAction} className="mt-2">
                 <input type="hidden" name="kind" value="RECOVERY" />
                 <input type="hidden" name="queue" value={item.queue} />
                 {item.customerId ? <input type="hidden" name="customerId" value={item.customerId} /> : null}
@@ -243,7 +244,7 @@ function RecoveryBody({ source }: { source: GrowthWorkspaceProps["source"] }) {
                 <Button type="submit" size="sm" variant="outline">
                   Queue follow-up request
                 </Button>
-              </ActionForm>
+              </GrowthAttemptForm>
             </div>
           ))
         )}
@@ -263,7 +264,7 @@ function ReactivationBody({ source }: { source: GrowthWorkspaceProps["source"] }
         {source.reactivation.length === 0 ? (
           <EmptyState title="No reactivation candidates" description="Previous customers appear after completed work, elapsed time, no active job/request, and consent checks." />
         ) : (
-          <ActionForm action={approveReactivationAction} className="space-y-3">
+          <GrowthAttemptForm action={approveReactivationAction} className="space-y-3">
             {source.reactivation.map((row) => (
               <label key={row.customerId} className="flex items-start gap-2 rounded-md border border-border/70 p-3 text-sm">
                 <input type="checkbox" name="customerId" value={row.customerId} disabled={!row.anyOutreachEligible} />
@@ -280,7 +281,7 @@ function ReactivationBody({ source }: { source: GrowthWorkspaceProps["source"] }
               </label>
             ))}
             <Button type="submit">Owner approve selected</Button>
-          </ActionForm>
+          </GrowthAttemptForm>
         )}
       </CardContent>
     </Card>

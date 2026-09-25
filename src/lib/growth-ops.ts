@@ -9,14 +9,17 @@ import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { parseLeadSource } from "@/lib/lead-attribution";
 import { loadGrowthSource } from "@/lib/growth-data";
 import {
+  GROWTH_ATTEMPT_ID_REQUIRED_MESSAGE,
   GROWTH_NO_AUTO_MESSAGE,
   OWNER_APPROVAL_REQUIRED_MESSAGE,
   growthActionIdempotencyKey,
+  growthReactivationApprovedEventKey,
+  growthRecoveryQueuedEventKey,
   isGrowthActionKind,
   isGrowthActionQueue,
   isGrowthActionStatus,
+  isGrowthAttemptId,
   type GrowthActionKind,
-  type GrowthActionQueue,
 } from "@/lib/growth";
 import {
   evaluateReactivationEligibility,
@@ -202,6 +205,55 @@ async function assertCurrentReactivationEligibility(
   return result.candidate;
 }
 
+function requireAttemptId(value: string | null | undefined) {
+  if (!isGrowthAttemptId(value)) {
+    throw new GrowthError(GROWTH_ATTEMPT_ID_REQUIRED_MESSAGE);
+  }
+  return value.trim();
+}
+
+type OutreachSnapshot = {
+  emailEligible: boolean;
+  smsEligible: boolean;
+  anyOutreachEligible: boolean;
+};
+
+async function emitGrowthActionEvent(
+  db: PrismaClient,
+  input: {
+    businessId: string;
+    actionId: string;
+    kind: string;
+    queue: string;
+    status: string;
+    outreach: OutreachSnapshot;
+  },
+) {
+  const approvedReactivation = input.kind === "REACTIVATION" && input.status === "APPROVED";
+  if (input.kind === "REACTIVATION" && !approvedReactivation) {
+    return;
+  }
+  await emitAndProcessBusinessEvent(db, {
+    businessId: input.businessId,
+    type: approvedReactivation ? "GROWTH_REACTIVATION_APPROVED" : "GROWTH_RECOVERY_QUEUED",
+    subjectType: "GROWTH_ACTION_REQUEST",
+    subjectId: input.actionId,
+    idempotencyKey: approvedReactivation
+      ? growthReactivationApprovedEventKey(input.actionId)
+      : growthRecoveryQueuedEventKey(input.actionId),
+    payload: {
+      kind: input.kind,
+      queue: input.queue,
+      status: input.status,
+      consentEligible: input.outreach.anyOutreachEligible,
+      emailEligible: input.outreach.emailEligible,
+      smsEligible: input.outreach.smsEligible,
+      autoMessage: false,
+      note: GROWTH_NO_AUTO_MESSAGE,
+    },
+  });
+}
+
 export async function recordCampaignCost(
   db: Db,
   access: BusinessAccess,
@@ -234,6 +286,7 @@ export async function createGrowthActionRequest(
   input: {
     kind: string;
     queue: string;
+    attemptId: string;
     customerId?: string | null;
     serviceRequestId?: string | null;
     estimateId?: string | null;
@@ -247,6 +300,7 @@ export async function createGrowthActionRequest(
   const kind = input.kind as GrowthActionKind;
   if (!isGrowthActionKind(kind)) throw new GrowthError("Choose a growth action kind.");
   if (!isGrowthActionQueue(input.queue)) throw new GrowthError("Choose a growth queue.");
+  const attemptId = requireAttemptId(input.attemptId);
   const capability =
     kind === "REVIEW_ASK" || kind === "REFERRAL_ASK"
       ? CAPABILITIES.MANAGE_REVIEWS
@@ -264,22 +318,24 @@ export async function createGrowthActionRequest(
       })
     : null;
   if (customer) access.assertOwned(customer);
-  const outreach = customer
+  let outreach: OutreachSnapshot = customer
     ? outreachEligibility(customer)
     : { smsEligible: false, emailEligible: false, anyOutreachEligible: false };
   if (input.approve && kind === "REACTIVATION") {
     requireOwnerApproval(access);
-    await assertCurrentReactivationEligibility(db as PrismaClient, access.businessId, customerId);
+    const current = await assertCurrentReactivationEligibility(
+      db as PrismaClient,
+      access.businessId,
+      customerId,
+    );
+    outreach = {
+      emailEligible: current.emailEligible,
+      smsEligible: current.smsEligible,
+      anyOutreachEligible: current.anyOutreachEligible,
+    };
   }
 
-  const idempotencyKey = growthActionIdempotencyKey({
-    kind,
-    queue: input.queue,
-    customerId,
-    serviceRequestId: input.serviceRequestId,
-    estimateId: input.estimateId,
-    jobId: input.jobId,
-  });
+  const idempotencyKey = growthActionIdempotencyKey({ attemptId, customerId });
   const existing = await db.growthActionRequest.findFirst({
     where: { businessId: access.businessId, idempotencyKey },
   });
@@ -307,6 +363,7 @@ export async function createGrowthActionRequest(
         emailEligible: outreach.emailEligible,
         smsEligible: outreach.smsEligible,
         actorRole: access.workspace.role,
+        attemptId,
       }),
       notes: input.notes?.trim() ?? "",
       createdByMembershipId: access.workspace.membership.id,
@@ -324,21 +381,13 @@ export async function createGrowthActionRequest(
     throw error;
   });
 
-  await emitAndProcessBusinessEvent(db as PrismaClient, {
+  await emitGrowthActionEvent(db as PrismaClient, {
     businessId: access.businessId,
-    type: kind === "REACTIVATION" ? "GROWTH_REACTIVATION_APPROVED" : "GROWTH_RECOVERY_QUEUED",
-    subjectType: "GROWTH_ACTION_REQUEST",
-    subjectId: created.id,
-    idempotencyKey: `${kind}:${created.id}`,
-    payload: {
-      kind,
-      queue: input.queue,
-      consentEligible: outreach.anyOutreachEligible,
-      emailEligible: outreach.emailEligible,
-      smsEligible: outreach.smsEligible,
-      autoMessage: false,
-      note: GROWTH_NO_AUTO_MESSAGE,
-    },
+    actionId: created.id,
+    kind: created.kind,
+    queue: created.queue,
+    status: created.status,
+    outreach,
   });
 
   return created;
@@ -360,12 +409,15 @@ export async function setGrowthActionStatus(
   );
   if (input.status === "APPROVED" && action.kind === "REACTIVATION") {
     requireOwnerApproval(access);
+    if (action.status === "APPROVED") {
+      return action;
+    }
     const current = await assertCurrentReactivationEligibility(
       db as PrismaClient,
       access.businessId,
       action.customerId,
     );
-    return db.growthActionRequest.update({
+    const updated = await db.growthActionRequest.update({
       where: { id: action.id },
       data: {
         status: "APPROVED",
@@ -374,6 +426,19 @@ export async function setGrowthActionStatus(
         approvedByMembershipId: access.workspace.membership.id,
       },
     });
+    await emitGrowthActionEvent(db as PrismaClient, {
+      businessId: access.businessId,
+      actionId: updated.id,
+      kind: updated.kind,
+      queue: updated.queue,
+      status: updated.status,
+      outreach: {
+        emailEligible: current.emailEligible,
+        smsEligible: current.smsEligible,
+        anyOutreachEligible: current.anyOutreachEligible,
+      },
+    });
+    return updated;
   }
   return db.growthActionRequest.update({
     where: { id: action.id },
@@ -387,10 +452,11 @@ export async function setGrowthActionStatus(
 export async function approveReactivationCandidates(
   db: Db,
   access: BusinessAccess,
-  input: { customerIds: string[]; campaignId?: string | null; notes?: string },
+  input: { customerIds: string[]; attemptId: string; campaignId?: string | null; notes?: string },
 ) {
   await requireGrowthWrite(db, access, CAPABILITIES.MANAGE_MARKETING);
   requireOwnerApproval(access);
+  const attemptId = requireAttemptId(input.attemptId);
   const ids = [...new Set(input.customerIds.filter(Boolean))];
   if (ids.length === 0) throw new GrowthError("Select at least one customer to approve.");
   const created = [];
@@ -399,6 +465,7 @@ export async function approveReactivationCandidates(
       await createGrowthActionRequest(db, access, {
         kind: "REACTIVATION",
         queue: "REACTIVATION",
+        attemptId,
         customerId,
         campaignId: input.campaignId,
         notes: input.notes,

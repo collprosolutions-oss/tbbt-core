@@ -2845,7 +2845,7 @@ model GrowthActionRequest {
   createdByMembershipId String?
   approvedByMembershipId String?
   approvedAt            DateTime?
-  /// Stable logical key so retry/double-click cannot create a second row.
+  /// Attempt-scoped key for one logical click. Future intentional actions use a new attemptId.
   idempotencyKey        String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt

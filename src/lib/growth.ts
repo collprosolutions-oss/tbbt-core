@@ -167,24 +167,36 @@ export const GROWTH_NO_AUTO_MESSAGE =
 export const GROWTH_NO_SPAM_MESSAGE =
   "Reactivation requires OWNER approval. TBBT will not blast customers.";
 
+export const GROWTH_ATTEMPT_ID_REQUIRED_MESSAGE = "Retry that request from the form.";
+
+const GROWTH_ATTEMPT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Browser-generated id for one logical create/approve click. */
+export function isGrowthAttemptId(value: string | null | undefined): value is string {
+  return Boolean(value && GROWTH_ATTEMPT_ID_PATTERN.test(value.trim()));
+}
+
+/**
+ * Attempt-scoped key for one logical GrowthActionRequest click.
+ * Customer is only a disambiguator for a multi-select submit, never a
+ * permanent "this customer forever" key.
+ */
 export function growthActionIdempotencyKey(input: {
-  kind: string;
-  queue: string;
+  attemptId: string;
   customerId?: string | null;
-  serviceRequestId?: string | null;
-  estimateId?: string | null;
-  jobId?: string | null;
 }) {
-  if (input.kind === "REACTIVATION") {
-    return `REACTIVATION:${input.customerId ?? "unknown"}`;
-  }
-  if (input.kind === "REVIEW_ASK") {
-    return `REVIEW_ASK:${input.jobId ?? input.customerId ?? "unknown"}`;
-  }
-  if (input.kind === "REFERRAL_ASK") {
-    return `REFERRAL_ASK:${input.customerId ?? input.jobId ?? "unknown"}`;
-  }
-  return `RECOVERY:${input.queue}:${input.serviceRequestId ?? ""}:${input.estimateId ?? ""}`;
+  const attemptId = input.attemptId.trim();
+  const customerId = input.customerId?.trim();
+  return customerId ? `GROWTH_ACTION:${attemptId}:${customerId}` : `GROWTH_ACTION:${attemptId}`;
+}
+
+export function growthReactivationApprovedEventKey(actionId: string) {
+  return `GROWTH_REACTIVATION_APPROVED:${actionId}`;
+}
+
+export function growthRecoveryQueuedEventKey(actionId: string) {
+  return `GROWTH_RECOVERY_QUEUED:${actionId}`;
 }
 
 export type GrowthEvidence = {
