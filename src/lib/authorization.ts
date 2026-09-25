@@ -245,7 +245,7 @@ export function requireBusinessCapability(
 
 /**
  * Coarse, temporary READ gate for the entire authenticated management
- * console (Dashboard, Requests, Customers, Estimates, Jobs, Invoices,
+ * console (Dashboard, Requests, Customers, Estimates, Materials, Jobs, Invoices,
  * Reports, Marketing, Reviews, Pipeline, Knowledge, Services, Time Cards, Payroll, Expenses, Settings).
  *
  * Every one of those pages exists to browse or mutate business-wide

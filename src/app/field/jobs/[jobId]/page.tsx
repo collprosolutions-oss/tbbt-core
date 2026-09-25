@@ -28,6 +28,8 @@ import { TIME_ACTIVITY_LABELS, isTimeActivityType } from "@/lib/time-cards";
 import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { prisma } from "@/lib/prisma";
+import { AssignedJobPickupCard } from "@/components/field/assigned-job-pickup-card";
+import { listAssignedJobPickupView } from "@/lib/materials/pickup";
 
 export const metadata: Metadata = {
   title: "Job",
@@ -156,6 +158,7 @@ export default async function FieldJobPage({
   });
   const approvedScope = resolveApprovedWorkOrderScope(job);
   const hasApprovedScope = approvedScope.source !== "none";
+  const pickupItems = await listAssignedJobPickupView(prisma, field, job.id);
 
   const directions = directionsUrl(job.property);
   const tel = telHref(job.customer?.phone ?? null);
@@ -225,6 +228,8 @@ export default async function FieldJobPage({
           </div>
         </CardContent>
       </Card>
+
+      <AssignedJobPickupCard items={pickupItems} />
 
       <FieldTimeClock
         membershipId={field.membershipId}

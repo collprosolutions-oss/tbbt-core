@@ -55,6 +55,12 @@ export type TakeoffItem = {
   explanation: string;
   convertedLineItemId: string | null;
   /**
+   * Optional reusable MaterialCatalogItem id. Absent on historical
+   * snapshots. A later catalog price change must not rewrite this
+   * snapshot's unitCost / customerUnitPrice.
+   */
+  catalogMaterialId?: string | null;
+  /**
    * Owner-added materials only. Standard generated items always save
    * reusable prices with the calculator. "project" is the default so a
    * one-off add does not silently become a business default.

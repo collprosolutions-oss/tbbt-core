@@ -120,6 +120,8 @@ import {
 import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { loadBusinessEstimatingDefaults } from "@/lib/estimating-defaults-db";
 import { loadSupplierPricingContextPayload } from "@/lib/material-pricing/db";
+import { PurchaseListCard } from "@/components/materials/purchase-list-card";
+import { loadPurchaseWorkspace } from "@/lib/materials/board";
 import {
   pickIntakeMeasurementForLine,
   suggestTakeoffInputs,
@@ -380,6 +382,9 @@ export default async function EstimateBuilderPage({
     label: tradeLabel(code),
   }));
   const requestTradeCode = estimate.serviceRequest?.tradeCode ?? null;
+  const purchaseWorkspace = await loadPurchaseWorkspace(prisma, access, {
+    estimateId: estimate.id,
+  });
 
   const originalTakeoffWorkspace = (() => {
     if (!isDraft || !originalWorkLine) return null;
@@ -981,6 +986,16 @@ export default async function EstimateBuilderPage({
           ) : null}
         </CardContent>
       </Card>
+
+      <PurchaseListCard
+        estimateId={estimate.id}
+        purchaseListId={purchaseWorkspace.purchaseListId}
+        items={purchaseWorkspace.items}
+        orders={purchaseWorkspace.orders}
+        variance={purchaseWorkspace.variance}
+        suppliers={purchaseWorkspace.suppliers}
+        canConvertTakeoff
+      />
 
       {estimate.lineItems.length > 0 && composedTerms.length > 0 ? (
         <Card>
