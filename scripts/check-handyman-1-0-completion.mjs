@@ -253,6 +253,14 @@ try {
   check("Export includes this tenant customer", zipText.includes("Pat Customer"));
   check("Export excludes the other tenant customer", !zipText.includes("Other Customer"));
   check("Export zip is non-empty", exported.bytes.length > 100);
+  check(
+    "Export invoices/payments/expenses CSVs keep accountant headers",
+    zipText.includes("Invoice Number") &&
+      zipText.includes("Amount Paid") &&
+      zipText.includes("Payment Basis") &&
+      zipText.includes("Payment ID") &&
+      zipText.includes("Expense ID"),
+  );
 
   let enrollmentNeedsPassword = false;
   try {

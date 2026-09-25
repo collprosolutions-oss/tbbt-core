@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireBusinessAccess } from "@/lib/access";
-import { canExportBusinessData } from "@/lib/accounting-export";
-import { buildBusinessExportZip } from "@/lib/business-export";
+import { buildAccountingExportZip, canExportBusinessData } from "@/lib/accounting-export";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +11,7 @@ export async function GET() {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const exported = await buildBusinessExportZip(prisma, access.businessId);
+  const exported = await buildAccountingExportZip(prisma, access.businessId);
   return new NextResponse(new Uint8Array(exported.bytes), {
     status: 200,
     headers: {
