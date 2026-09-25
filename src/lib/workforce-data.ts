@@ -8,6 +8,7 @@ import { loadAvailabilitySettings } from "@/lib/availability-data";
 import { resolveBusinessTimeZone, startOfZonedDay, addZonedCalendarDays } from "@/lib/business-timezone";
 import {
   isAssignableFieldMember,
+  isWorkforceProgression,
   parseSkillList,
   parseWorkforceProgression,
   schedulingPolicyFromRow,
@@ -294,7 +295,7 @@ export async function loadJobAssignmentSuggestions(
     durationMinutes: job.scheduledDurationMinutes,
     pickupMinutes: job.pickupDurationMinutes ?? 0,
     requiredSkills: parseSkillList(job.requiredSkills),
-    requiredProgression: job.requiredProgression ?? "",
+    requiredProgression: isWorkforceProgression(job.requiredProgression) ? job.requiredProgression : "",
     members: members.filter((member) => isAssignableFieldMember(member)),
     jobs,
     settings,

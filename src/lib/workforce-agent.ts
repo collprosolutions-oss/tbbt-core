@@ -8,6 +8,7 @@ import type { AvailabilitySettings } from "@/lib/availability";
 import { addZonedCalendarDays, DEFAULT_BUSINESS_TIMEZONE, formatISODateInTimeZone, startOfZonedDay } from "@/lib/business-timezone";
 import type { BsosRecommendation } from "@/lib/bsos";
 import {
+  isWorkforceProgression,
   type FillInBenchRecord,
   type SchedulingPolicy,
   type WorkforceMember,
@@ -190,7 +191,7 @@ export function buildWorkforceRecommendations(
       durationMinutes: job.scheduledDurationMinutes,
       pickupMinutes: job.pickupDurationMinutes ?? 0,
       requiredSkills: job.requiredSkills ?? [],
-      requiredProgression: (job.requiredProgression as "" | undefined) ?? "",
+      requiredProgression: isWorkforceProgression(job.requiredProgression) ? job.requiredProgression : "",
       members: context.members,
       timeZone: zone,
       jobs: context.jobs,
