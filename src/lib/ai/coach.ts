@@ -364,11 +364,11 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
     if (context.materialsFacts?.["materials-adapter-state"]) {
       keys = ["materials-adapter-state"];
       text =
-        "TBBT has no stock-on-hand inventory model. Missing stock is unknown, never zero. No quantity was invented. The supplier commerce adapter is disconnected, so a null quote is not live availability.";
+        "TBBT does not record inventory quantities. Missing stock is unknown, never zero. No quantity was invented. The supplier commerce adapter is disconnected, so a null quote is not live availability.";
     } else {
       keys = [];
       text =
-        "TBBT has no stock-on-hand inventory model. Inventory quantity is unknown, never zero. Recorded Materials facts were not loaded for this question.";
+        "TBBT does not record inventory quantities. Inventory quantity is unknown, never zero. Recorded Materials facts were not loaded for this question.";
     }
   } else if (/\b(materials?|suppliers?|purchase order|\bpo\b|lumber|pickup)\b/.test(q)) {
     stance = "FACT";

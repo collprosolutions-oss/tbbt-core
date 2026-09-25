@@ -105,7 +105,7 @@ export function isMaterialsOwnedRecommendationKey(key: string): boolean {
 
 export function materialsEntitlementLimitation(reason: SpecialistSkipReason, missing?: readonly string[]) {
   if (reason === "NOT_AUTHORIZED") {
-    return "Materials catalog and supplier records were not loaded because this role cannot manage estimates. Missing Materials data is not treated as zero cost, zero stock, or an empty purchase list.";
+    return "Materials catalog and supplier records were not loaded because this role cannot manage estimates. Missing Materials data is not treated as empty recorded requirements.";
   }
   if (reason === "NOT_ENTITLED") {
     return "Materials records were not loaded because this workspace does not have an active operating subscription. Missing Materials data is not treated as zero.";
@@ -114,7 +114,7 @@ export function materialsEntitlementLimitation(reason: SpecialistSkipReason, mis
     const names = (missing ?? MATERIALS_REQUIRED_PRODUCT_CAPABILITIES).map(
       (code) => getProductCapabilityDefinition(code as ProductCapabilityCode).displayName,
     );
-    return `Materials intelligence was not loaded because this workspace does not have ${names.join(" and ")}. Missing Materials data is not treated as zero stock or zero cost.`;
+    return `Materials intelligence was not loaded because this workspace does not have ${names.join(" and ")}. Missing Materials data is not treated as empty recorded requirements.`;
   }
   return "Recorded Materials data is unavailable. Missing Materials data is not treated as zero.";
 }
@@ -849,26 +849,16 @@ export async function loadMaterialsProjection(input: {
     : [];
 
   let cheaperRecorded = 0;
-  for (const [identity, recorded] of pricesByIdentity) {
+  for (const [, recorded] of pricesByIdentity) {
     const comparable = recorded.filter(
       (row) =>
         row.recordedPrice != null && COMPARABLE_FRESHNESS.has(row.freshness),
     );
     if (comparable.length < 2) continue;
-    const sorted = [...comparable].sort((a, b) => (a.recordedPrice ?? 0) - (b.recordedPrice ?? 0));
-    const cheapest = sorted[0];
-    const preferredIdentity = mappings.find((row) => row.materialIdentity === identity);
-    const preferredPrice = comparable.find((row) => row.providerId === preferredIdentity?.providerId);
-    if (
-      cheapest &&
-      preferredPrice &&
-      cheapest.recordedPrice != null &&
-      preferredPrice.recordedPrice != null &&
-      cheapest.recordedPrice < preferredPrice.recordedPrice &&
-      cheapest.providerId !== preferredPrice.providerId
-    ) {
-      cheaperRecorded += 1;
-    }
+    const pricesOnly = comparable.map((row) => row.recordedPrice as number);
+    const min = Math.min(...pricesOnly);
+    const max = Math.max(...pricesOnly);
+    if (min < max) cheaperRecorded += 1;
   }
 
   let priceChanged = 0;
@@ -1010,6 +1000,13 @@ function findingsFromProjection(
 ): Array<{ key: string; title: string; why: string; entityIds?: string[] }> {
   const findings: Array<{ key: string; title: string; why: string; entityIds?: string[] }> = [];
   const t = projection.totals;
+  if (inventoryQuestion(question)) {
+    findings.push({
+      key: "materials-inventory-unknown",
+      title: "Inventory quantity is unknown",
+      why: "TBBT does not record inventory quantities. Missing stock is unknown, never zero. No quantity was invented.",
+    });
+  }
 
   if (t.needed > 0 && (projection.canReadJobs || projection.canReadEstimates)) {
     findings.push({
@@ -1091,13 +1088,6 @@ function findingsFromProjection(
     title: "Supplier commerce is disconnected",
     why: `${projection.adapterLimitation} A null quote or availability response is not a live stock result and not a rejection.`,
   });
-  if (inventoryQuestion(question)) {
-    findings.push({
-      key: "materials-inventory-unknown",
-      title: "Inventory quantity is unknown",
-      why: "TBBT has no stock-on-hand inventory model. Missing stock is unknown, never zero. No quantity was invented.",
-    });
-  }
   for (const key of catalogKeys) {
     if (findings.some((row) => row.key === key)) continue;
     if (isMaterialsOwnedRecommendationKey(key)) {
@@ -1241,7 +1231,7 @@ export function emptyMaterialsProjectionForTests(): MaterialsProjection {
     inventoryState: "unknown",
     canReadJobs: false,
     canReadExpenses: false,
-    canEstimates: false,
+    canReadEstimates: false,
     targetedJobUnauthorized: false,
     signals: [],
     snapshotReused: false,
