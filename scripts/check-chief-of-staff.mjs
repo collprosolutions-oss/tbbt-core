@@ -199,6 +199,7 @@ try {
     "Kitchen-sink focus can select Financial when an owned recommendation is active",
     kitchen.selectedIds.includes("FINANCIAL"),
   );
+  check("Kitchen-sink generic focus does not select GROWTH", !kitchen.selectedIds.includes("GROWTH"));
 
   const unknown = planSpecialists({
     question: "What is the weather on Mars and my favorite color?",
@@ -278,6 +279,25 @@ try {
     activeRecommendationKeys: [],
   });
   check("Generic focus does not select GROWTH without Growth evidence", !genericFocusGrowth.selectedIds.includes("GROWTH"));
+
+  const explicitReactivate = planSpecialists({
+    question: "Should I reactivate prior customers?",
+    activeRecommendationKeys: [],
+  });
+  check(
+    "Explicit Growth question survives focus phrasing without a recommendation",
+    explicitReactivate.selectedIds.includes("GROWTH"),
+  );
+  const explicitLostLeads = planSpecialists({
+    question: "What should I do about lost leads?",
+    activeRecommendationKeys: [],
+  });
+  check("Explicit lost-lead question selects GROWTH", explicitLostLeads.selectedIds.includes("GROWTH"));
+  const explicitAttribution = planSpecialists({
+    question: "Should I review my marketing attribution?",
+    activeRecommendationKeys: [],
+  });
+  check("Explicit marketing attribution question selects GROWTH", explicitAttribution.selectedIds.includes("GROWTH"));
 
   const enabled = enabledSpecialistIds();
   check(

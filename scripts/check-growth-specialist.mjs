@@ -203,6 +203,31 @@ try {
   check("8. Planner selects Growth for reviews / referrals / local marketing", reviewPlan.selectedIds.includes("GROWTH"));
   check("10. Generic focus does not select Growth without evidence", !genericFocus.selectedIds.includes("GROWTH"));
   check("9. Active canonical Growth recommendation selects Growth", recPlan.selectedIds.includes("GROWTH"));
+  const explicitReactivate = planSpecialists({
+    question: "Should I reactivate prior customers?",
+    activeRecommendationKeys: [],
+  });
+  const explicitLostLeads = planSpecialists({
+    question: "What should I do about lost leads?",
+    activeRecommendationKeys: [],
+  });
+  const explicitAttribution = planSpecialists({
+    question: "Should I review my marketing attribution?",
+    activeRecommendationKeys: [],
+  });
+  const kitchenFocus = planSpecialists({
+    question: "What should I focus on this week for invoices, staff, materials, vault, growth, and knowledge?",
+    activeRecommendationKeys: ["collect-unpaid-invoices", "workforce-unassigned-job"],
+  });
+  check("C. Explicit reactivation question selects Growth without a recommendation", explicitReactivate.selectedIds.includes("GROWTH"));
+  check("D. Explicit lost-lead question selects Growth", explicitLostLeads.selectedIds.includes("GROWTH"));
+  check("E. Explicit marketing attribution question selects Growth", explicitAttribution.selectedIds.includes("GROWTH"));
+  check(
+    "F. Kitchen-sink generic focus does not load every department",
+    kitchenFocus.selectedIds.every((id) => id === "ATTENTION" || id === "WORKFORCE" || id === "FINANCIAL") &&
+      !kitchenFocus.selectedIds.includes("GROWTH") &&
+      kitchenFocus.fanout <= 4,
+  );
   check("7. Unrelated Financial question does not select Growth", !financialPlan.selectedIds.includes("GROWTH"));
   check("Financial selection remains unchanged", financialPlan.selectedIds.includes("FINANCIAL"));
   check("Workforce selection remains unchanged", workforcePlan.selectedIds.includes("WORKFORCE") && !workforcePlan.selectedIds.includes("GROWTH"));
@@ -442,6 +467,190 @@ try {
       .every((row) => row.recommendationKeys.length === 0),
   );
   check("Consent UNKNOWN is not treated as granted", !JSON.stringify(okResult.findings).includes("granted consent"));
+  check(
+    "Owner facts use full totals when detail is capped",
+    Boolean(projection?.totals) &&
+      okResult.factKeys.includes("growth-recovery") &&
+      projection.totals.recovery >= projection.recovery.length &&
+      projection.totals.reactivationEligible >= projection.reactivation.filter((row) => row.outreachEligible).length,
+  );
+
+  console.log("\nCAPS — full totals stay truthful when detail is bounded");
+  const overCap = await createOwnerWorkspace("Over Cap Growth");
+  await entitleFounder(overCap.business.id);
+  const overCampaigns = [];
+  for (let i = 0; i < 7; i += 1) {
+    overCampaigns.push(
+      await prisma.marketingCampaign.create({
+        data: {
+          businessId: overCap.business.id,
+          name: `Over campaign ${i + 1}`,
+          sourceKey: "OTHER",
+          status: "ACTIVE",
+        },
+      }),
+    );
+  }
+  const attributedSources = ["WEBSITE", "GOOGLE", "REFERRAL", "MANUAL", "CAMPAIGN", "FACEBOOK"];
+  for (const [index, source] of attributedSources.entries()) {
+    const customer = await prisma.customer.create({
+      data: {
+        businessId: overCap.business.id,
+        name: `Attributed ${source}`,
+        smsConsentStatus: "UNKNOWN",
+      },
+    });
+    for (let n = 0; n < 3; n += 1) {
+      await prisma.serviceRequest.create({
+        data: {
+          businessId: overCap.business.id,
+          customerId: customer.id,
+          summary: `${source} lead ${n + 1}`,
+          leadSource: source,
+          originalLeadSource: source,
+          campaignId: overCampaigns[index % overCampaigns.length].id,
+          originalCampaignId: overCampaigns[index % overCampaigns.length].id,
+          createdAt: daysAgo(20),
+          updatedAt: daysAgo(20),
+        },
+      });
+    }
+  }
+  const unknownCustomer = await prisma.customer.create({
+    data: {
+      businessId: overCap.business.id,
+      name: "Unattributed Lead",
+      smsConsentStatus: "UNKNOWN",
+    },
+  });
+  await prisma.serviceRequest.create({
+    data: {
+      businessId: overCap.business.id,
+      customerId: unknownCustomer.id,
+      summary: "Unknown source only",
+      leadSource: null,
+      originalLeadSource: null,
+      createdAt: daysAgo(18),
+      updatedAt: daysAgo(18),
+    },
+  });
+  for (let i = 0; i < 12; i += 1) {
+    const customer = await prisma.customer.create({
+      data: {
+        businessId: overCap.business.id,
+        name: `Recovery ${i + 1}`,
+        smsConsentStatus: "UNKNOWN",
+      },
+    });
+    const campaign = overCampaigns[i % overCampaigns.length];
+    await prisma.serviceRequest.create({
+      data: {
+        businessId: overCap.business.id,
+        customerId: customer.id,
+        summary: `Over recovery ${i + 1}`,
+        leadSource: "WEBSITE",
+        originalLeadSource: "WEBSITE",
+        campaignId: campaign.id,
+        originalCampaignId: campaign.id,
+        createdAt: daysAgo(21),
+        updatedAt: daysAgo(21),
+      },
+    });
+  }
+  for (let i = 0; i < 10; i += 1) {
+    const eligible = i >= 8;
+    const prior = await prisma.customer.create({
+      data: {
+        businessId: overCap.business.id,
+        name: eligible ? `Eligible Prior ${i + 1}` : `Ineligible Prior ${i + 1}`,
+        email: eligible ? `eligible-${i}@example.com` : null,
+        smsConsentStatus: eligible ? "GRANTED" : "REVOKED",
+        createdAt: daysAgo(200),
+      },
+    });
+    const completedAt = daysAgo(eligible ? REACTIVATION_AFTER_DAYS + 5 : REACTIVATION_AFTER_DAYS + 40 + i);
+    const job = await prisma.job.create({
+      data: {
+        businessId: overCap.business.id,
+        customerId: prior.id,
+        status: "COMPLETED",
+        projectToken: randomUUID(),
+        updatedAt: completedAt,
+      },
+    });
+    await prisma.businessEvent.create({
+      data: {
+        businessId: overCap.business.id,
+        type: "JOB_COMPLETED",
+        subjectType: "JOB",
+        subjectId: job.id,
+        occurredAt: completedAt,
+        idempotencyKey: `JOB_COMPLETED:${job.id}`,
+      },
+    });
+  }
+
+  resetLastGrowthProjection();
+  const overCatalog = await loadCanonicalRecommendationCatalog(prisma, overCap.business.id);
+  const overResult = interpretGrowthSpecialist(overCatalog, "Explain recovery, reactivation, campaigns, and attribution.");
+  const overProjection = getLastGrowthProjection();
+  const recoveryFinding = overResult.findings.find((row) => row.key === "growth-recovery-open");
+  const reactivationFinding = overResult.findings.find((row) => row.key === "growth-reactivation-eligible");
+  const campaignFinding = overResult.findings.find((row) => row.key === "growth-campaigns-review");
+  const attributionFinding = overResult.findings.find((row) => row.key === "growth-attribution-unknown");
+  check("Over-cap recovery detail is <= 8", Boolean(overProjection) && overProjection.recovery.length <= 8);
+  check(
+    "Over-cap recovery fact/finding uses the full total",
+    Boolean(overProjection) &&
+      overProjection.totals.recovery >= 12 &&
+      overProjection.totals.recovery > overProjection.recovery.length &&
+      overResult.factKeys.includes("growth-recovery") &&
+      new RegExp(`\\b${overProjection.totals.recovery}\\b`).test(recoveryFinding?.summary ?? ""),
+  );
+  check("Over-cap reactivation detail is <= 8", Boolean(overProjection) && overProjection.reactivation.length <= 8);
+  check(
+    "Over-cap eligible reactivation total survives outside the first 8 detail rows",
+    Boolean(overProjection) &&
+      overProjection.totals.reactivationCandidates >= 10 &&
+      overProjection.totals.reactivationEligible === 2 &&
+      overProjection.reactivation.filter((row) => row.outreachEligible).length === 0 &&
+      overResult.factKeys.includes("growth-reactivation") &&
+      new RegExp(`\\b${overProjection.totals.reactivationEligible}\\b`).test(reactivationFinding?.summary ?? ""),
+  );
+  check("Over-cap campaign detail is <= 5", Boolean(overProjection) && overProjection.campaigns.length <= 5);
+  check(
+    "Over-cap campaign totals stay full recorded truth",
+    Boolean(overProjection) &&
+      overProjection.totals.campaigns >= 7 &&
+      overProjection.totals.campaigns > overProjection.campaigns.length &&
+      overProjection.totals.campaignsNeedingReview >= 7 &&
+      overResult.factKeys.includes("growth-campaigns") &&
+      new RegExp(`\\b${overProjection.totals.campaignsNeedingReview}\\b`).test(campaignFinding?.summary ?? ""),
+  );
+  check("Over-cap source detail is <= 5", Boolean(overProjection) && overProjection.sources.length <= 5);
+  check(
+    "UNKNOWN source outside top 5 still appears in unattributed totals",
+    Boolean(overProjection) &&
+      overProjection.totals.sources >= 7 &&
+      !overProjection.sources.some((row) => row.source === "UNKNOWN") &&
+      overProjection.totals.unattributedSources >= 1 &&
+      overProjection.totals.unattributedLeads >= 1 &&
+      overResult.factKeys.includes("growth-unattributed-sources") &&
+      /unknown|unattributed/i.test(attributionFinding?.summary ?? ""),
+  );
+  check(
+    "Entity IDs stay bounded from capped rows",
+    (recoveryFinding?.entityIds?.length ?? 0) <= GROWTH_CONTEXT_CAPS.entityIds &&
+      (reactivationFinding?.entityIds?.length ?? 0) <= GROWTH_CONTEXT_CAPS.entityIds,
+  );
+  check(
+    "No full GrowthSource enters specialist context",
+    !JSON.stringify(overProjection).includes("reviewRequests") &&
+      !JSON.stringify(overProjection).includes("localPageDrafts") &&
+      !JSON.stringify(overProjection).includes("publishedLocalPages") &&
+      !JSON.stringify(overResult).includes("\"requests\"") &&
+      !growthProjectionHasForbiddenFields(overProjection),
+  );
 
   console.log("\nRUNTIME — orchestration, one-load, failure, writes");
   resetLoads();

@@ -52,6 +52,7 @@ export const GROWTH_CONTEXT_CAPS = {
   campaigns: 5,
   sources: 5,
   localAreas: 4,
+  entityIds: 4,
   findings: 16,
   facts: 24,
 } as const;
@@ -135,7 +136,23 @@ export type GrowthSourceProjection = {
   attributed: boolean;
 };
 
+export type GrowthProjectionTotals = {
+  recovery: number;
+  reactivationCandidates: number;
+  reactivationEligible: number;
+  campaigns: number;
+  campaignsNeedingReview: number;
+  sources: number;
+  unattributedSources: number;
+  unattributedLeads: number;
+  reviewEligible: number;
+  referrals: number;
+  localOpportunities: number;
+  funnelStages: number;
+};
+
 export type GrowthProjection = {
+  totals: GrowthProjectionTotals;
   funnel: Array<{ key: string; label: string; count: number; amount: number | null }>;
   recovery: GrowthRecoveryProjection[];
   reactivation: GrowthReactivationProjection[];
@@ -250,34 +267,50 @@ export function growthProjectionHasForbiddenFields(value: unknown) {
   );
 }
 
+function campaignNeedsReview(row: GrowthCampaignProjection) {
+  return Boolean(row.campaignId) && (row.leads > 0 || !row.roiKnown);
+}
+
 export function projectGrowthFromSource(source: GrowthSource): GrowthProjection {
-  const recovery = buildRecoveryQueue(source).slice(0, GROWTH_CONTEXT_CAPS.recovery).map(projectRecovery);
-  const reactivation = buildReactivationCandidates(source)
-    .slice(0, GROWTH_CONTEXT_CAPS.reactivation)
-    .map(projectReactivation);
-  const campaigns = buildCampaignPerformance(source)
+  const recoveryAll = buildRecoveryQueue(source);
+  const reactivationAll = buildReactivationCandidates(source);
+  const campaignsAll = buildCampaignPerformance(source)
     .sort((a, b) => b.leads - a.leads || b.collectedRevenue - a.collectedRevenue)
-    .slice(0, GROWTH_CONTEXT_CAPS.campaigns)
     .map(projectCampaign);
-  const sources = buildSourcePerformance(source)
+  const sourcesAll = buildSourcePerformance(source)
     .sort((a, b) => b.leads - a.leads || b.collectedRevenue - a.collectedRevenue)
-    .slice(0, GROWTH_CONTEXT_CAPS.sources)
     .map(projectSource);
   const reviews = buildReviewConversion(source);
   const referrals = buildReferralAttribution(source);
-  const local = projectLocal(buildLocalGrowth(source));
+  const localAreas = buildLocalGrowth(source);
+  const local = projectLocal(localAreas);
   const funnel = buildGrowthFunnel(source).stages.map((row) => ({
     key: row.key,
     label: row.label,
     count: row.count,
     amount: row.amount,
   }));
+  const unattributed = sourcesAll.filter((row) => !row.attributed);
   const projection: GrowthProjection = {
+    totals: {
+      recovery: recoveryAll.length,
+      reactivationCandidates: reactivationAll.length,
+      reactivationEligible: reactivationAll.filter((row) => row.anyOutreachEligible).length,
+      campaigns: campaignsAll.length,
+      campaignsNeedingReview: campaignsAll.filter(campaignNeedsReview).length,
+      sources: sourcesAll.length,
+      unattributedSources: unattributed.length,
+      unattributedLeads: unattributed.reduce((sum, row) => sum + row.leads, 0),
+      reviewEligible: Math.max(0, reviews.completedJobs - reviews.requestsPrepared),
+      referrals: referrals.length,
+      localOpportunities: local.opportunityCount,
+      funnelStages: funnel.length,
+    },
     funnel,
-    recovery,
-    reactivation,
-    campaigns,
-    sources,
+    recovery: recoveryAll.slice(0, GROWTH_CONTEXT_CAPS.recovery).map(projectRecovery),
+    reactivation: reactivationAll.slice(0, GROWTH_CONTEXT_CAPS.reactivation).map(projectReactivation),
+    campaigns: campaignsAll.slice(0, GROWTH_CONTEXT_CAPS.campaigns),
+    sources: sourcesAll.slice(0, GROWTH_CONTEXT_CAPS.sources),
     reviews: {
       completedJobs: reviews.completedJobs,
       requestsPrepared: reviews.requestsPrepared,
@@ -318,25 +351,15 @@ export function projectGrowthContext(
   const facts: Record<string, string> = {};
   const factKeys: string[] = [];
 
-  addFact(facts, factKeys, "growth-recovery", String(projection.recovery.length));
-  addFact(
-    facts,
-    factKeys,
-    "growth-reactivation",
-    String(projection.reactivation.filter((row) => row.outreachEligible).length),
-  );
-  addFact(facts, factKeys, "growth-funnel-stages", String(projection.funnel.length));
-  addFact(facts, factKeys, "growth-campaigns", String(projection.campaigns.length));
-  const unknownSources = projection.sources.filter((row) => !row.attributed);
-  addFact(facts, factKeys, "growth-unattributed-sources", String(unknownSources.length));
-  addFact(
-    facts,
-    factKeys,
-    "growth-review-eligible",
-    String(Math.max(0, projection.reviews.completedJobs - projection.reviews.requestsPrepared)),
-  );
-  addFact(facts, factKeys, "growth-referrals", String(projection.referrals.count));
-  addFact(facts, factKeys, "growth-local-opportunities", String(projection.local.opportunityCount));
+  addFact(facts, factKeys, "growth-recovery", String(projection.totals.recovery));
+  addFact(facts, factKeys, "growth-reactivation", String(projection.totals.reactivationEligible));
+  addFact(facts, factKeys, "growth-funnel-stages", String(projection.totals.funnelStages));
+  addFact(facts, factKeys, "growth-campaigns", String(projection.totals.campaigns));
+  addFact(facts, factKeys, "growth-unattributed-sources", String(projection.totals.unattributedSources));
+  addFact(facts, factKeys, "growth-unattributed-leads", String(projection.totals.unattributedLeads));
+  addFact(facts, factKeys, "growth-review-eligible", String(projection.totals.reviewEligible));
+  addFact(facts, factKeys, "growth-referrals", String(projection.totals.referrals));
+  addFact(facts, factKeys, "growth-local-opportunities", String(projection.totals.localOpportunities));
   addFact(facts, factKeys, "review-opportunities", String(catalog.facts.completedJobsWithoutReview.count));
   addFact(facts, factKeys, "repeat-customers", String(catalog.facts.repeatCustomers.count));
   addFact(facts, factKeys, "marketing-ready", String(catalog.facts.completedJobsReadyForMarketing.count));
@@ -350,45 +373,40 @@ export function projectGrowthContext(
     }),
   );
 
-  if (projection.recovery.length > 0) {
+  if (projection.totals.recovery > 0) {
     findings.push({
       key: "growth-recovery-open",
       title: "Review recorded recovery opportunities",
-      why: `${projection.recovery.length} recorded recovery opportunit${projection.recovery.length === 1 ? "y is" : "ies are"} open. These are follow-up opportunities, not closed sales. Open the Growth workspace to review them.`,
+      why: `${projection.totals.recovery} recorded recovery opportunit${projection.totals.recovery === 1 ? "y is" : "ies are"} open. These are follow-up opportunities, not closed sales. Open the Growth workspace to review them.`,
       entityIds: projection.recovery
         .map((row) => row.requestId ?? row.estimateId ?? row.customerId)
         .filter((id): id is string => Boolean(id))
-        .slice(0, 4),
+        .slice(0, GROWTH_CONTEXT_CAPS.entityIds),
     });
   }
-  if (projection.reactivation.length > 0) {
-    const eligible = projection.reactivation.filter((row) => row.outreachEligible).length;
+  if (projection.totals.reactivationCandidates > 0) {
     findings.push({
       key: "growth-reactivation-eligible",
       title: "Consider reactivation candidates",
-      why: `${projection.reactivation.length} prior customer${projection.reactivation.length === 1 ? "" : "s"} meet reactivation rules (${eligible} outreach-eligible). Eligibility is not proof that outreach already happened. Review candidates in the Growth workspace.`,
-      entityIds: projection.reactivation.map((row) => row.customerId).slice(0, 4),
+      why: `${projection.totals.reactivationCandidates} prior customer${projection.totals.reactivationCandidates === 1 ? "" : "s"} meet reactivation rules (${projection.totals.reactivationEligible} outreach-eligible). Eligibility is not proof that outreach already happened. Review candidates in the Growth workspace.`,
+      entityIds: projection.reactivation.map((row) => row.customerId).slice(0, GROWTH_CONTEXT_CAPS.entityIds),
     });
   }
-  const campaignsNeedingReview = projection.campaigns.filter(
-    (row) => row.campaignId && (row.leads > 0 || !row.roiKnown),
-  );
-  if (campaignsNeedingReview.length > 0) {
+  if (projection.totals.campaignsNeedingReview > 0) {
     findings.push({
       key: "growth-campaigns-review",
       title: "Review recorded campaign performance",
-      why: `${campaignsNeedingReview.length} recorded campaign${campaignsNeedingReview.length === 1 ? "" : "s"} can be reviewed from attribution already on file. Performance is not invented when cost or conversion is incomplete. Open the Growth workspace.`,
+      why: `${projection.totals.campaignsNeedingReview} recorded campaign${projection.totals.campaignsNeedingReview === 1 ? "" : "s"} can be reviewed from attribution already on file. Performance is not invented when cost or conversion is incomplete. Open the Growth workspace.`,
     });
   }
-  if (unknownSources.length > 0) {
-    const unknownLeads = unknownSources.reduce((sum, row) => sum + row.leads, 0);
+  if (projection.totals.unattributedSources > 0 || projection.totals.unattributedLeads > 0) {
     findings.push({
       key: "growth-attribution-unknown",
       title: "Some attribution is unknown",
-      why: `${unknownLeads || unknownSources.length} lead or source row${unknownLeads === 1 ? "" : "s"} remain unattributed. Unknown attribution stays unknown; no source or marketing ROI was invented.`,
+      why: `${projection.totals.unattributedLeads || projection.totals.unattributedSources} lead or source row${projection.totals.unattributedLeads === 1 ? "" : "s"} remain unattributed. Unknown attribution stays unknown; no source or marketing ROI was invented.`,
     });
   }
-  const reviewEligible = Math.max(0, projection.reviews.completedJobs - projection.reviews.requestsPrepared);
+  const reviewEligible = projection.totals.reviewEligible;
   if (reviewEligible > 0 || catalog.facts.completedJobsWithoutReview.count > 0) {
     findings.push({
       key: "growth-review-eligible",
@@ -413,11 +431,11 @@ export function projectGrowthContext(
       why: "Recorded local-area or outside-area demand exists. Rankings were not invented. Review local growth in the existing workspace.",
     });
   }
-  if (projection.funnel.length > 0) {
+  if (projection.totals.funnelStages > 0) {
     findings.push({
       key: "growth-funnel-recorded",
       title: "Recorded lead and revenue funnel",
-      why: `The recorded funnel has ${projection.funnel.length} present stage${projection.funnel.length === 1 ? "" : "s"}. Missing stages are absent, not zero.`,
+      why: `The recorded funnel has ${projection.totals.funnelStages} present stage${projection.totals.funnelStages === 1 ? "" : "s"}. Missing stages are absent, not zero.`,
     });
   }
 

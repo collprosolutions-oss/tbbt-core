@@ -27,7 +27,26 @@ const MATERIALS_QUESTION = /\b(materials?|suppliers?|purchase orders?|inventory)
 const COMMUNICATIONS_QUESTION = /\b(sms|text messages?|phone calls?|communications?)\b/i;
 const PROTECTION_QUESTION = /\b(vault|agreements?|esign|insurance|business protection)\b/i;
 const FOCUS_QUESTION = /\b(this week|focus|should i|what should i)\b/i;
+const GENERIC_FOCUS_QUESTION =
+  /\b(?:what )?should i focus\b|\bfocus on(?: this week)?\b|\bwhat should i (?:do|work on) this week\b/i;
 const WORKFORCE_REC_PREFIX = "workforce-";
+
+function departmentHitCount(question: string) {
+  return [
+    WORKFORCE_QUESTION,
+    FINANCIAL_QUESTION,
+    GROWTH_QUESTION,
+    KNOWLEDGE_QUESTION,
+    MATERIALS_QUESTION,
+    COMMUNICATIONS_QUESTION,
+    PROTECTION_QUESTION,
+  ].filter((pattern) => pattern.test(question)).length;
+}
+
+function isGenericFocusQuestion(question: string) {
+  if (GENERIC_FOCUS_QUESTION.test(question)) return true;
+  return FOCUS_QUESTION.test(question) && departmentHitCount(question) >= 3;
+}
 
 const DISABLED_KEYWORD_HINTS: Array<{ id: SpecialistId; pattern: RegExp }> = [
   { id: "FINANCIAL", pattern: FINANCIAL_QUESTION },
@@ -119,7 +138,12 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     if ((financialKeys.length > 0 || Boolean(financialHint)) && isSpecialistEnabled("FINANCIAL")) {
       allowed.add("FINANCIAL");
     }
-    if ((growthKeys.length > 0 || Boolean(growthHint)) && isSpecialistEnabled("GROWTH")) {
+    const explicitGrowth =
+      GROWTH_QUESTION.test(question) && !isGenericFocusQuestion(question);
+    if (
+      isSpecialistEnabled("GROWTH") &&
+      (growthKeys.length > 0 || Boolean(growthHint) || explicitGrowth)
+    ) {
       allowed.add("GROWTH");
     }
     for (const id of [...selected]) {
