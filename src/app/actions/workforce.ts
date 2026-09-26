@@ -35,6 +35,7 @@ function readString(formData: FormData, key: string) {
 
 function revalidateWorkforce() {
   revalidatePath("/team");
+  revalidatePath("/team/bench");
   revalidatePath("/jobs");
   revalidatePath("/business-health");
 }
@@ -172,6 +173,8 @@ export async function saveFillInBenchWorker(
         .getAll("benchSkill")
         .filter((value): value is string => typeof value === "string"),
       availabilityNotes: readString(formData, "availabilityNotes"),
+      workerType: readString(formData, "workerType") || "BACKUP",
+      locationNotes: readString(formData, "locationNotes"),
       approved: readString(formData, "approved") === "1",
       active: readString(formData, "active") === "1",
       notes: readString(formData, "notes"),

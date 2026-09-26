@@ -1061,6 +1061,22 @@ check(
     revenueIntegrityMigration.includes('p."invoiceId" IS NULL'),
 );
 
+const fillInBenchMigration = readFileSync(
+  new URL("../prisma/migrations/20260927010000_fill_in_bench_owner_fields/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Fill-In Bench owner-fields migration is additive and after Workforce FKs",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(fillInBenchMigration) &&
+    fillInBenchMigration.includes('ADD COLUMN IF NOT EXISTS "workerType"') &&
+    fillInBenchMigration.includes('ADD COLUMN IF NOT EXISTS "locationNotes"') &&
+    fillInBenchMigration.includes("IF NOT EXISTS") &&
+    !fillInBenchMigration.includes("CREATE TABLE") &&
+    localNames.includes("20260927010000_fill_in_bench_owner_fields") &&
+    localNames.indexOf("20260925230000_workforce_foreign_keys") <
+      localNames.indexOf("20260927010000_fill_in_bench_owner_fields"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

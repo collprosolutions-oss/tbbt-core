@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
+import { setFillInBenchActive } from "@/app/actions/fill-in-bench";
 import {
   createWorkforceOutreachTask,
   markFillInBenchUsed,
@@ -11,11 +12,23 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { BENCH_CONTACT_PREFERENCES, WORKFORCE_SKILLS, type FillInBenchRecord } from "@/lib/workforce";
+import {
+  BENCH_CONTACT_PREFERENCES,
+  BENCH_WORKER_TYPES,
+  WORKFORCE_SKILLS,
+  formatBenchWorkerType,
+  type FillInBenchRecord,
+} from "@/lib/workforce";
 
 const initialState: WorkforceActionState = {};
 
-export function FillInBenchForm({ worker }: { worker?: FillInBenchRecord }) {
+export function FillInBenchForm({
+  worker,
+  teamMembers = [],
+}: {
+  worker?: FillInBenchRecord;
+  teamMembers?: Array<{ membershipId: string; name: string }>;
+}) {
   const [state, action, pending] = useActionState(saveFillInBenchWorker, initialState);
   const selected = new Set(worker?.skills ?? []);
 
@@ -74,6 +87,50 @@ export function FillInBenchForm({ worker }: { worker?: FillInBenchRecord }) {
             defaultValue={worker?.availabilityNotes ?? ""}
           />
         </div>
+        <div className="space-y-1">
+          <Label htmlFor={`bench-type-${worker?.id ?? "new"}`}>Worker type</Label>
+          <select
+            id={`bench-type-${worker?.id ?? "new"}`}
+            name="workerType"
+            defaultValue={worker?.workerType ?? "BACKUP"}
+            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+          >
+            {BENCH_WORKER_TYPES.map((value) => (
+              <option key={value} value={value}>
+                {formatBenchWorkerType(value)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`bench-location-${worker?.id ?? "new"}`}>Service-area / location notes</Label>
+          <Input
+            id={`bench-location-${worker?.id ?? "new"}`}
+            name="locationNotes"
+            defaultValue={worker?.locationNotes ?? ""}
+            placeholder="Owner notes only. Not a map."
+          />
+        </div>
+        <div className="space-y-1 sm:col-span-2">
+          <Label htmlFor={`bench-member-${worker?.id ?? "new"}`}>Regular team member</Label>
+          <select
+            id={`bench-member-${worker?.id ?? "new"}`}
+            name="membershipId"
+            defaultValue={worker?.membershipId ?? ""}
+            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+          >
+            <option value="">Not a regular team member</option>
+            {teamMembers.map((member) => (
+              <option key={member.membershipId} value={member.membershipId}>
+                {member.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            Linking records that they are already on the regular roster. It does not create a
+            login or a Membership.
+          </p>
+        </div>
       </div>
       <div className="grid gap-2 sm:grid-cols-3">
         {WORKFORCE_SKILLS.map((skill) => (
@@ -103,6 +160,27 @@ export function FillInBenchForm({ worker }: { worker?: FillInBenchRecord }) {
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Saving…" : worker ? "Update bench worker" : "Add to Fill-In Bench"}
       </Button>
+    </form>
+  );
+}
+
+export function FillInBenchActiveButton({
+  benchWorkerId,
+  active,
+}: {
+  benchWorkerId: string;
+  active: boolean;
+}) {
+  const [state, action, pending] = useActionState(setFillInBenchActive, initialState);
+  return (
+    <form action={action} className="inline">
+      <input type="hidden" name="id" value={benchWorkerId} />
+      <input type="hidden" name="active" value={active ? "0" : "1"} />
+      <Button type="submit" size="sm" variant="outline" disabled={pending}>
+        {pending ? "Saving…" : active ? "Deactivate" : "Reactivate"}
+      </Button>
+      {state.message ? <p className="text-xs text-muted-foreground">{state.message}</p> : null}
+      {state.error ? <p className="text-xs text-destructive">{state.error}</p> : null}
     </form>
   );
 }

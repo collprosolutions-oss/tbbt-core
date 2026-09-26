@@ -129,7 +129,24 @@ export async function loadFillInBench(
 ): Promise<FillInBenchRecord[]> {
   const rows = await db.fillInBenchWorker.findMany({
     where: { businessId },
-    orderBy: [{ lastUsedAt: "desc" }, { displayName: "asc" }],
+    select: {
+      id: true,
+      displayName: true,
+      contactPreference: true,
+      contactValue: true,
+      skills: true,
+      availabilityNotes: true,
+      workerType: true,
+      locationNotes: true,
+      approved: true,
+      active: true,
+      lastUsedAt: true,
+      notes: true,
+      membershipId: true,
+      updatedAt: true,
+      membership: { select: { id: true, user: { select: { name: true } } } },
+    },
+    orderBy: [{ active: "desc" }, { lastUsedAt: "desc" }, { displayName: "asc" }],
   });
   return rows.map((row) => ({
     id: row.id,
@@ -138,11 +155,18 @@ export async function loadFillInBench(
     contactValue: row.contactValue,
     skills: parseSkillList(row.skills),
     availabilityNotes: row.availabilityNotes,
+    workerType: row.workerType === "HELPER" || row.workerType === "SUBCONTRACTOR" || row.workerType === "FUTURE_HIRE"
+      ? row.workerType
+      : "BACKUP",
+    locationNotes: row.locationNotes,
     approved: row.approved,
     active: row.active,
     lastUsedAt: row.lastUsedAt,
     notes: row.notes,
     membershipId: row.membershipId,
+    linkedMemberName: row.membership?.user.name ?? null,
+    isRegularTeamMember: Boolean(row.membershipId && row.membership),
+    updatedAt: row.updatedAt,
   }));
 }
 

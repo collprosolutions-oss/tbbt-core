@@ -11,6 +11,7 @@ import { requireProductCapability } from "@/lib/product-entitlements";
 import {
   parseSkillList,
   requireBenchContactPreference,
+  requireBenchWorkerType,
   requireDayMinutesRange,
   requireExceptionKind,
   requireIsoDate,
@@ -230,6 +231,8 @@ export async function upsertFillInBenchWorkerOp(
     contactValue: string;
     skills: string[];
     availabilityNotes: string;
+    workerType?: string;
+    locationNotes?: string;
     approved: boolean;
     active: boolean;
     notes: string;
@@ -242,9 +245,22 @@ export async function upsertFillInBenchWorkerOp(
   if (!input.displayName.trim()) {
     throw new WorkforceError("Enter a name for this bench worker.");
   }
+  const existing = input.id
+    ? await db.fillInBenchWorker.findFirst({
+        where: { id: input.id, businessId: access.businessId },
+      })
+    : null;
+  if (input.id && !existing) throw new ForbiddenError();
+  if (existing) access.assertOwned(existing);
+
   let contactPreference;
+  let workerType;
   try {
     contactPreference = requireBenchContactPreference(input.contactPreference);
+    workerType =
+      input.workerType == null
+        ? requireBenchWorkerType(existing?.workerType ?? "BACKUP")
+        : requireBenchWorkerType(input.workerType);
     input.skills.forEach((skill) => requireWorkforceSkillKey(skill));
   } catch (error) {
     asWorkforceError(error);
@@ -264,18 +280,18 @@ export async function upsertFillInBenchWorkerOp(
     contactValue: input.contactValue.trim().slice(0, 120),
     skills: serializeSkillList(input.skills),
     availabilityNotes: input.availabilityNotes.slice(0, 240),
+    workerType,
+    locationNotes:
+      input.locationNotes == null
+        ? (existing?.locationNotes ?? "")
+        : input.locationNotes.slice(0, 240),
     approved: input.approved,
     active: input.active,
     notes: input.notes.slice(0, 500),
     membershipId: input.membershipId ?? null,
   };
 
-  if (input.id) {
-    const existing = await db.fillInBenchWorker.findFirst({
-      where: { id: input.id, businessId: access.businessId },
-    });
-    if (!existing) throw new ForbiddenError();
-    access.assertOwned(existing);
+  if (existing) {
     return db.fillInBenchWorker.update({
       where: { id: existing.id },
       data,
@@ -287,6 +303,24 @@ export async function upsertFillInBenchWorkerOp(
       businessId: access.businessId,
       ...data,
     },
+  });
+}
+
+export async function setFillInBenchActiveOp(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: { id: string; active: boolean },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MEMBERS);
+  await requireProductCapability(db, access.businessId, PRODUCT_CAPABILITIES.TEAM_MANAGEMENT);
+  const existing = await db.fillInBenchWorker.findFirst({
+    where: { id: input.id, businessId: access.businessId },
+  });
+  if (!existing) throw new ForbiddenError();
+  access.assertOwned(existing);
+  return db.fillInBenchWorker.update({
+    where: { id: existing.id },
+    data: { active: input.active },
   });
 }
 
