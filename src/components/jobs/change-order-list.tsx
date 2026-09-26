@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { requireManagementPageAccess } from "@/lib/access";
 import { StatusBadge } from "@/components/status-badge";
 import { formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
@@ -13,6 +14,7 @@ export type ChangeOrderListItem = {
 
 type LinkedSourceRequest = {
   id: string;
+  businessId: string;
   changeOrderId: string | null;
   description: string;
   source: "CUSTOMER" | "EMPLOYEE";
@@ -22,6 +24,52 @@ type LinkedSourceRequest = {
     serviceCatalogItem: { name: string } | null;
   }>;
 };
+
+type ChangeOrderSourceAccess = {
+  businessId: string;
+  assertOwned: <T extends { businessId: string }>(
+    record: T | null | undefined,
+  ) => T;
+};
+
+/**
+ * Follows AdditionalWorkRequest.changeOrderId for owner source context.
+ * businessId always comes from authenticated management access — never a
+ * browser-supplied businessId.
+ */
+export async function loadLinkedChangeOrderSourceRequests(
+  access: ChangeOrderSourceAccess,
+  input: { jobId: string; changeOrderIds: string[] },
+) {
+  if (input.changeOrderIds.length === 0) {
+    return [];
+  }
+
+  const linkedRequests = await prisma.additionalWorkRequest.findMany({
+    where: {
+      businessId: access.businessId,
+      jobId: input.jobId,
+      changeOrderId: { in: input.changeOrderIds },
+    },
+    select: {
+      id: true,
+      businessId: true,
+      changeOrderId: true,
+      description: true,
+      source: true,
+      items: {
+        orderBy: { sortOrder: "asc" },
+        select: {
+          quantity: true,
+          customDescription: true,
+          serviceCatalogItem: { select: { name: true } },
+        },
+      },
+    },
+  });
+
+  return linkedRequests.map((request) => access.assertOwned(request));
+}
 
 function sourceRequestLabel(source: LinkedSourceRequest["source"]) {
   return source === "EMPLOYEE" ? "Field employee report" : "Customer request";
@@ -43,31 +91,17 @@ export async function ChangeOrderList({
   jobId: string;
   changeOrders: ChangeOrderListItem[];
 }) {
+  const access = await requireManagementPageAccess();
+
   if (changeOrders.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">No change orders yet.</p>
     );
   }
 
-  const linkedRequests = await prisma.additionalWorkRequest.findMany({
-    where: {
-      jobId,
-      changeOrderId: { in: changeOrders.map((changeOrder) => changeOrder.id) },
-    },
-    select: {
-      id: true,
-      changeOrderId: true,
-      description: true,
-      source: true,
-      items: {
-        orderBy: { sortOrder: "asc" },
-        select: {
-          quantity: true,
-          customDescription: true,
-          serviceCatalogItem: { select: { name: true } },
-        },
-      },
-    },
+  const linkedRequests = await loadLinkedChangeOrderSourceRequests(access, {
+    jobId,
+    changeOrderIds: changeOrders.map((changeOrder) => changeOrder.id),
   });
   const sourceByChangeOrderId = new Map<string, LinkedSourceRequest>();
   for (const request of linkedRequests) {

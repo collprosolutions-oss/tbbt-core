@@ -89,6 +89,28 @@ function makeAccess(businessId, role) {
   };
 }
 
+/** Mirrors loadLinkedChangeOrderSourceRequests in change-order-list.tsx. */
+async function loadLinkedChangeOrderSourceRequests(access, input) {
+  if (input.changeOrderIds.length === 0) {
+    return [];
+  }
+  const linkedRequests = await prisma.additionalWorkRequest.findMany({
+    where: {
+      businessId: access.businessId,
+      jobId: input.jobId,
+      changeOrderId: { in: input.changeOrderIds },
+    },
+    select: {
+      id: true,
+      businessId: true,
+      changeOrderId: true,
+      description: true,
+      source: true,
+    },
+  });
+  return linkedRequests.map((request) => access.assertOwned(request));
+}
+
 /** Mirrors src/app/actions/change-order.ts createChangeOrder(). */
 async function mirrorCreateChangeOrder(access, form) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_CHANGE_ORDERS);
@@ -480,6 +502,28 @@ check(
     changeOrderListSrc.includes("request.description") &&
     !changeOrderListSrc.includes("sourceRequestCopy"),
 );
+check(
+  "Change Order list source query uses authenticated management businessId",
+  changeOrderListSrc.includes("requireManagementPageAccess") &&
+    changeOrderListSrc.includes("businessId: access.businessId") &&
+    changeOrderListSrc.includes("const access = await requireManagementPageAccess()"),
+);
+check(
+  "Change Order list does not trust a browser-supplied businessId",
+  !changeOrderListSrc.includes("readString") &&
+    !changeOrderListSrc.includes('formData.get("businessId")') &&
+    !changeOrderListSrc.includes("businessId: jobId") &&
+    !/\bbusinessId\s*:\s*string/.test(
+      changeOrderListSrc.slice(
+        changeOrderListSrc.indexOf("export async function ChangeOrderList"),
+        changeOrderListSrc.indexOf("const access = await requireManagementPageAccess()"),
+      ),
+    ),
+);
+check(
+  "Change Order list fail-closes through assertOwned after the scoped query",
+  changeOrderListSrc.includes("access.assertOwned(request)"),
+);
 
 console.log("\nSTATIC — DRAFT-only create, dismiss, and duplicate guards");
 const createFn = changeOrderActionSrc.slice(
@@ -725,14 +769,9 @@ try {
     employeeLines.length === 0 && employeeCo.changeOrder.total.toString() === "0",
   );
 
-  const linkedForList = await prisma.additionalWorkRequest.findMany({
-    where: {
-      jobId: jobA.id,
-      changeOrderId: {
-        in: [customerCo.changeOrder.id, employeeCo.changeOrder.id],
-      },
-    },
-    select: { changeOrderId: true, source: true, description: true },
+  const linkedForList = await loadLinkedChangeOrderSourceRequests(ownerA, {
+    jobId: jobA.id,
+    changeOrderIds: [customerCo.changeOrder.id, employeeCo.changeOrder.id],
   });
   check(
     "Change Order list can follow the relation for customer source context",
@@ -749,6 +788,11 @@ try {
         row.source === "EMPLOYEE" &&
         row.description === employeeRequest.description,
     ),
+  );
+  check(
+    "same-tenant source context is visible through the scoped ChangeOrderList query",
+    linkedForList.length === 2 &&
+      linkedForList.every((row) => row.businessId === businessA.id),
   );
 
   console.log("\nBEHAVIOR — Duplicate conversion is prevented");
@@ -867,6 +911,38 @@ try {
     foreignJobRejected = true;
   }
   check("foreign jobId is rejected by tenant scope", foreignJobRejected);
+
+  const secretBetaDescription = "SECRET-BETA-SOURCE-CONTEXT-MUST-NOT-LEAK";
+  await prisma.additionalWorkRequest.update({
+    where: { id: foreignRequest.id },
+    data: {
+      description: secretBetaDescription,
+      jobId: jobA.id,
+      changeOrderId: customerCo.changeOrder.id,
+    },
+  });
+  const manipulatedIds = await loadLinkedChangeOrderSourceRequests(ownerA, {
+    jobId: jobA.id,
+    changeOrderIds: [
+      customerCo.changeOrder.id,
+      employeeCo.changeOrder.id,
+      foreignRequest.id,
+    ],
+  });
+  check(
+    "foreign-tenant AdditionalWorkRequest cannot appear in ChangeOrderList even if IDs are manipulated",
+    manipulatedIds.every((row) => row.businessId === businessA.id) &&
+      !manipulatedIds.some((row) => row.description === secretBetaDescription) &&
+      !manipulatedIds.some((row) => row.id === foreignRequest.id),
+  );
+  const mismatchedJobQuery = await loadLinkedChangeOrderSourceRequests(ownerA, {
+    jobId: jobB.id,
+    changeOrderIds: [customerCo.changeOrder.id],
+  });
+  check(
+    "same-tenant access plus a foreign jobId still returns no source context",
+    mismatchedJobQuery.length === 0,
+  );
 
   console.log("\nBEHAVIOR — Existing Change Order lifecycle still works");
   const lifecycle = await mirrorCreateChangeOrder(ownerA, {
