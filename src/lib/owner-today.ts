@@ -15,7 +15,7 @@ import {
   type AppointmentConfirmationStatus,
   type AppointmentJobFields,
 } from "@/lib/appointment-confirmation";
-import { directionsUrl } from "@/lib/directions";
+import { directionsUrl, telHref } from "@/lib/directions";
 import { formatAddress, formatTime } from "@/lib/format";
 import { expectedEnd } from "@/lib/job-schedule";
 import {
@@ -62,7 +62,7 @@ export const OWNER_TODAY_JOB_SELECT = {
   propertyAccessContactInfo: true,
   propertyAccessPickupLocation: true,
   propertyAccessNote: true,
-  customer: { select: { id: true, name: true } },
+  customer: { select: { id: true, name: true, phone: true } },
   property: {
     select: {
       addressLine1: true,
@@ -227,7 +227,7 @@ export type OwnerTodayJobRecord = AppointmentJobFields & {
   projectToken: string;
   appointmentNotificationStatus?: string | null;
   appointmentNotificationError?: string | null;
-  customer?: { id?: string | null; name: string | null } | null;
+  customer?: { id?: string | null; name: string | null; phone?: string | null } | null;
   property?: {
     addressLine1: string;
     addressLine2?: string | null;
@@ -254,6 +254,7 @@ export type OwnerTodayJobView = {
   fieldHref: string | null;
   projectToken: string;
   directionsHref: string | null;
+  callHref: string | null;
   canStart: boolean;
   appointmentConfirmed: boolean;
 };
@@ -265,7 +266,7 @@ export type OwnerTodayJobView = {
 export function ownerTodayOwnedActionRefs(
   job: Pick<
     OwnerTodayJobRecord,
-    "id" | "businessId" | "customerId" | "projectToken" | "property" | "assignedMembershipId"
+    "id" | "businessId" | "customerId" | "projectToken" | "property" | "assignedMembershipId" | "customer"
   >,
   businessId: string,
   viewerMembershipId?: string | null,
@@ -276,6 +277,7 @@ export function ownerTodayOwnedActionRefs(
     customerHref: job.customerId ? `/customers/${job.customerId}` : null,
     projectToken: job.projectToken,
     directionsHref: directionsUrl(job.property ?? null),
+    callHref: telHref(job.customer?.phone ?? null),
     fieldHref:
       viewerMembershipId && job.assignedMembershipId === viewerMembershipId
         ? `/field/jobs/${job.id}`
@@ -317,6 +319,7 @@ export function buildOwnerTodayJobView(
     fieldHref: actions.fieldHref,
     projectToken: actions.projectToken,
     directionsHref: actions.directionsHref,
+    callHref: actions.callHref,
     canStart: job.status !== "COMPLETED" && job.status !== "IN_PROGRESS",
     appointmentConfirmed: appointment.confirmed,
   };
