@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
+import { requireOperatingBusinessAccess, requireOperatingProductAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
 import { appendConversationMessage, ensureAiConversation } from "@/lib/ai/conversations";
@@ -11,7 +11,16 @@ import { isAiAttemptId, isWritingAction } from "@/lib/ai/types";
 import { answerKnowledgeFromEntries, retrieveTenantKnowledge } from "@/lib/ai/knowledge";
 import { draftReviewResponseFromRecord } from "@/lib/ai/reviews";
 import { sanitizeAiText } from "@/lib/ai/sanitize";
-import { runChiefOfStaffCoach } from "@/lib/chief-of-staff";
+import {
+  confirmControlledAction,
+  controlledActionErrorMessage,
+  parseControlledActionProposal,
+  proposeControlledAction,
+  runChiefOfStaffCoach,
+  serializeControlledActionProposal,
+  trustedControlledActionRecord,
+} from "@/lib/chief-of-staff";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 
 export type AiActionState = {
   error?: string;
@@ -20,6 +29,10 @@ export type AiActionState = {
   stance?: string;
   keptOriginal?: boolean;
   inProgress?: boolean;
+  proposalJson?: string;
+  summary?: string;
+  proposedTitle?: string;
+  proposedWhy?: string;
 };
 
 function readString(formData: FormData, key: string) {
@@ -74,6 +87,69 @@ export async function askBsosCoachAction(
     };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "The coach could not answer that." };
+  }
+}
+
+export async function proposeCoachActionAction(
+  _prev: AiActionState,
+  formData: FormData,
+): Promise<AiActionState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
+    requireBusinessCapability(access, CAPABILITIES.VIEW_REPORTS);
+    const proposal = await proposeControlledAction(prisma, access, {
+      actionKey: readString(formData, "actionKey"),
+      targetEntityId: readString(formData, "targetEntityId"),
+      browserBusinessId: readString(formData, "businessId") || undefined,
+    });
+    return {
+      message: "Proposed. Nothing was recorded yet.",
+      proposalJson: serializeControlledActionProposal(proposal),
+      summary: proposal.summary,
+      proposedTitle: proposal.freshnessInputs.title ?? proposal.displayLabel,
+      proposedWhy: proposal.freshnessInputs.why ?? proposal.summary,
+    };
+  } catch (error) {
+    return {
+      error: controlledActionErrorMessage(error, "That action could not be proposed."),
+    };
+  }
+}
+
+export async function confirmCoachActionAction(
+  _prev: AiActionState,
+  formData: FormData,
+): Promise<AiActionState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
+    const proposal = parseControlledActionProposal(readString(formData, "proposalJson"));
+    if (!proposal) return { error: "Prepare that action again from live records." };
+    const executionAttemptId = readAttemptId(formData);
+    if (!executionAttemptId) return { error: "Retry that confirmation from the form." };
+    const result = await confirmControlledAction(prisma, access, {
+      proposal,
+      executionAttemptId,
+      confirm: readString(formData, "confirm"),
+      browserBusinessId: readString(formData, "businessId") || undefined,
+    });
+    const conversationId = readString(formData, "conversationId");
+    if (conversationId && result.executionResult.status === "SUCCEEDED") {
+      await appendConversationMessage(prisma, access, {
+        conversationId,
+        role: "SYSTEM",
+        content: trustedControlledActionRecord(result),
+        stance: "FACT",
+      });
+    }
+    revalidatePath("/business-health");
+    return {
+      message: result.executionResult.message,
+      text: result.summary,
+    };
+  } catch (error) {
+    return {
+      error: controlledActionErrorMessage(error, "That action could not be confirmed."),
+    };
   }
 }
 

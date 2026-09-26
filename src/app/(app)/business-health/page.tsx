@@ -11,6 +11,8 @@ import {
 } from "@/app/actions/bsos";
 import { ActionForm } from "@/components/action-form";
 import { BsosCoachForm } from "@/components/bsos/coach-form";
+import { ControlledActionConfirmForm } from "@/components/bsos/confirm-action-form";
+import { canConfirmControlledActions } from "@/lib/chief-of-staff";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -156,6 +158,16 @@ export default async function BusinessHealthPage({
                       <Button type="submit" size="sm" variant="outline">Mark complete</Button>
                     </ActionForm>
                   </div>
+                  {area === "coach" && canConfirmControlledActions(access) ? (
+                    <div className="mt-2">
+                      <ControlledActionConfirmForm
+                        actionKey="CREATE_RECOMMENDATION_ACTION_ITEM"
+                        targetEntityId={item.key}
+                        conversationId={workspace.conversation?.id}
+                        label={item.title}
+                      />
+                    </div>
+                  ) : null}
                 </div>
               ))
             )}
