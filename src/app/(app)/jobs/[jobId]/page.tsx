@@ -596,11 +596,12 @@ export default async function JobPage({
                   customerNote={job.appointmentChangeRequestNote}
                   scheduledAt={job.scheduledAt}
                   notificationSent={job.appointmentNotificationStatus === "SENT"}
+                  timeZone={timeZone}
                 />
               ) : null}
               <div className="space-y-1">
-              <p>Date: {formatDate(job.scheduledAt)}</p>
-              <p>Start time: {formatTime(job.scheduledAt)}</p>
+              <p>Date: {formatDate(job.scheduledAt, timeZone)}</p>
+              <p>Start time: {formatTime(job.scheduledAt, timeZone)}</p>
               {job.scheduledDurationMinutes ? (
                 <>
                   <p>
@@ -614,6 +615,7 @@ export default async function JobPage({
                         job.scheduledAt,
                         job.scheduledDurationMinutes,
                       ),
+                      timeZone,
                     )}
                   </p>
                 </>

@@ -259,7 +259,8 @@ export async function scheduleJob(
     return { error: "A completed job cannot be rescheduled." };
   }
 
-  const start = parseScheduleStart(date, time);
+  const timeZone = await loadWorkforceTimeZone(prisma, access.businessId);
+  const start = parseScheduleStart(date, time, timeZone);
   if (!start) {
     return { error: "Choose a valid date and start time." };
   }
@@ -269,19 +270,19 @@ export async function scheduleJob(
     return { error: duration.error };
   }
 
-  const [settings, others, policy, members, capacityJobs, timeZone] = await Promise.all([
+  const [settings, others, policy, members, capacityJobs] = await Promise.all([
     loadAvailabilitySettings(prisma, access.businessId),
     loadOccupiedJobs(prisma, access.businessId, job.id),
     loadSchedulingPolicy(prisma, access.businessId),
     loadWorkforceMembers(prisma, access.businessId),
     loadCapacityJobs(prisma, access.businessId),
-    loadWorkforceTimeZone(prisma, access.businessId),
   ]);
   const evaluation = evaluateProposedSchedule({
     start,
     durationMinutes: duration.minutes,
     settings,
     existing: others,
+    timeZone,
   });
   const conflicts = detectScheduleConflicts({
     jobs: capacityJobs,
@@ -310,7 +311,13 @@ export async function scheduleJob(
   });
   const warning =
     (hasScheduleWarning(evaluation)
-      ? describeScheduleWarning(evaluation, start, formatDateTime, settings)
+      ? describeScheduleWarning(
+          evaluation,
+          start,
+          (value) => formatDateTime(value, timeZone),
+          settings,
+          timeZone,
+        )
       : null) ?? describeConflicts(conflicts);
   const currentAck = conflictAcknowledgement({
     jobId: job.id,

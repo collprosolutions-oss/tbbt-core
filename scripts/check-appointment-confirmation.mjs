@@ -485,6 +485,7 @@ const email = buildAppointmentProposedEmail({
   serviceDescription: "Ceiling Fan Replacement",
   projectUrl: "https://www.collproreno.com/p/stanley-token",
   rescheduled: false,
+  timeZone: "America/New_York",
 });
 check("Email names the business and customer", email.text.includes("CollPro Reno") && email.text.includes("Stanley"));
 check("Email includes service address and service description", email.text.includes("12 Test St") && email.text.includes("Ceiling Fan Replacement"));
