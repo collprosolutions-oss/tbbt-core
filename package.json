@@ -49,6 +49,7 @@
     "test:knowledge": "node --experimental-strip-types scripts/check-knowledge.mjs",
     "test:knowledge-launch": "node --experimental-strip-types scripts/check-knowledge-launch.mjs",
     "test:settings": "node --experimental-strip-types scripts/check-settings.mjs",
+    "test:integration-center": "node --experimental-strip-types scripts/check-integration-center.mjs",
     "test:business-contact": "node --experimental-strip-types scripts/check-business-contact.mjs",
     "test:expenses": "node --experimental-strip-types scripts/check-expenses.mjs",
     "test:accounting-export": "node --experimental-strip-types scripts/check-accounting-export.mjs",

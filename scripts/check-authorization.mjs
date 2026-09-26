@@ -692,6 +692,17 @@ try {
       settingsPageSrc.indexOf("requireManagementPageAccess") <
         settingsPageSrc.indexOf("loadGoLiveCenter"),
   );
+  const integrationsPageSrc = readFileSync(
+    new URL("../src/app/(app)/integrations/page.tsx", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Integration Center loader runs only after management-console access (MEMBER never reaches it)",
+    integrationsPageSrc.includes("requireManagementPageAccess") &&
+      integrationsPageSrc.includes("loadIntegrationCenter") &&
+      integrationsPageSrc.indexOf("requireManagementPageAccess") <
+        integrationsPageSrc.indexOf("loadIntegrationCenter"),
+  );
   check(
     "MEMBER cannot pass the Go-live / settings capability gate",
     !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_SETTINGS),
