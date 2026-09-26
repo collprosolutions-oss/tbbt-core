@@ -209,9 +209,12 @@ check(
   "Public request finalize loads the candidate before generic finalizeManagedUpload",
   candidateLoadIdx >= 0 &&
     genericFinalizeIdx > candidateLoadIdx &&
-    finalizeFnSrc.includes('category === "CUSTOMER_PHOTO"') &&
-    finalizeFnSrc.includes('visibility === "PRIVATE"') &&
-    finalizeFnSrc.includes("status === \"READY\""),
+    finalizeFnSrc.includes("isPrivateUnpublishedCustomerPhoto") &&
+    finalizeFnSrc.includes("status === \"READY\"") &&
+    requestPhotosSrc.includes('category === "CUSTOMER_PHOTO"') &&
+    requestPhotosSrc.includes('visibility === "PRIVATE"') &&
+    requestPhotosSrc.indexOf("function isPrivateUnpublishedCustomerPhoto") <
+      requestPhotosSrc.indexOf("export async function finalizePublicRequestPhoto"),
 );
 check(
   "Public request photo finalize is slug-authorized and ignores browser businessId",
