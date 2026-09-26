@@ -34,6 +34,12 @@ export const DISMISS_ADDITIONAL_WORK_CONFIRM =
 const createInitialState: ChangeOrderActionState = {};
 const dismissInitialState: AdditionalWorkRequestActionState = {};
 
+function recordedSourceCopy(source: OpenAdditionalWorkRequest["source"]) {
+  return source === "EMPLOYEE"
+    ? "Reported by field employee"
+    : "Requested by customer";
+}
+
 /**
  * Internal-only review queue for "+ Request Additional Work" submissions
  * from the Customer Project Portal (see
@@ -75,6 +81,10 @@ function RequestRow({
 }) {
   const serviceLabels = requestedWorkLabels(request);
   const defaultTitle = (serviceLabels[0] ?? request.description).slice(0, 80);
+  const showRecordedDescription = Boolean(
+    request.description &&
+      (serviceLabels.length === 0 || request.description !== serviceLabels[0]),
+  );
   const [creating, setCreating] = useState(false);
   const [confirmingDismiss, setConfirmingDismiss] = useState(false);
   const [createState, createAction, createPending] = useActionState(
@@ -88,23 +98,27 @@ function RequestRow({
 
   return (
     <li className="space-y-2 rounded-lg border p-3 text-sm">
+      <p className="text-xs font-medium text-muted-foreground">
+        {recordedSourceCopy(request.source)}
+      </p>
       {serviceLabels.length > 0 ? (
-        <ul className="list-disc space-y-1 pl-5">
-          {serviceLabels.map((label) => (
-            <li key={label}>{label}</li>
-          ))}
-        </ul>
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground">Requested services</p>
+          <ul className="list-disc space-y-1 pl-5">
+            {serviceLabels.map((label) => (
+              <li key={label}>{label}</li>
+            ))}
+          </ul>
+        </div>
       ) : null}
-      {request.description &&
-      (serviceLabels.length === 0 ||
-        request.description !== serviceLabels[0]) ? (
-        <p className="whitespace-pre-wrap">{request.description}</p>
+      {showRecordedDescription ? (
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground">Recorded description</p>
+          <p className="whitespace-pre-wrap">{request.description}</p>
+        </div>
       ) : null}
       <p className="text-xs text-muted-foreground">
-        {request.source === "EMPLOYEE"
-          ? "Reported by field employee"
-          : "Requested by customer"}{" "}
-        · {formatDateTime(request.createdAt)}
+        Recorded {formatDateTime(request.createdAt)}
       </p>
       {createState.error ? (
         <Alert variant="destructive">
@@ -124,6 +138,10 @@ function RequestRow({
             name="additionalWorkRequestId"
             value={request.id}
           />
+          <p className="text-xs text-muted-foreground">
+            Creates a DRAFT Change Order from this recorded request. It is not
+            approved and does not change invoices or the original estimate.
+          </p>
           <div className="space-y-1">
             <Label htmlFor={`co-title-${request.id}`}>
               Change order title

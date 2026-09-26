@@ -82,6 +82,8 @@ export async function createChangeOrder(
   let sourceRequest: {
     id: string;
     businessId: string;
+    jobId: string;
+    changeOrderId: string | null;
     status: string;
     items: Array<{
       quantity: number;
@@ -106,6 +108,8 @@ export async function createChangeOrder(
         select: {
           id: true,
           businessId: true,
+          jobId: true,
+          changeOrderId: true,
           status: true,
           items: {
             orderBy: { sortOrder: "asc" },
@@ -126,7 +130,13 @@ export async function createChangeOrder(
         },
       }),
     );
-    if (sourceRequest.status !== "OPEN") {
+    if (
+      sourceRequest.jobId !== job.id ||
+      sourceRequest.businessId !== job.businessId
+    ) {
+      return { error: "That request could not be found." };
+    }
+    if (sourceRequest.status !== "OPEN" || sourceRequest.changeOrderId) {
       return { error: "That request has already been handled." };
     }
   }
@@ -137,13 +147,20 @@ export async function createChangeOrder(
         businessId: access.businessId,
         jobId: job.id,
         title,
+        status: "DRAFT",
       },
     });
 
     const sourceRequestId = sourceRequest?.id ?? null;
     if (sourceRequestId) {
       const linked = await tx.additionalWorkRequest.updateMany({
-        where: { id: sourceRequestId, businessId: access.businessId, status: "OPEN" },
+        where: {
+          id: sourceRequestId,
+          businessId: access.businessId,
+          jobId: job.id,
+          status: "OPEN",
+          changeOrderId: null,
+        },
         data: {
           status: "CONVERTED",
           changeOrderId: created.id,
