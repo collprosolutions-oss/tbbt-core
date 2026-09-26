@@ -20,6 +20,7 @@ import {
   CUSTOMER_VISIBLE_CHANGE_ORDER_STATUSES,
   resolveCurrentApprovedProjectTotal,
 } from "@/lib/change-order";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatAppointmentWhen, formatDateTime, formatMailingAddress, formatMoney } from "@/lib/format";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
@@ -112,7 +113,7 @@ export default async function CustomerProjectPortalPage({
           propertyAccessPickupLocation: true,
           propertyAccessNote: true,
           appointmentChangeRequestNote: true,
-          business: { select: { id: true, name: true, slug: true, tradeCode: true } },
+          business: { select: { id: true, name: true, slug: true, tradeCode: true, timezone: true } },
           customer: { select: { name: true } },
           property: {
             select: {
@@ -300,6 +301,7 @@ export default async function CustomerProjectPortalPage({
     : null;
   const appointmentStatus = effectiveAppointmentConfirmationStatus(job);
   const appointmentConfirmed = isCurrentAppointmentConfirmed(job);
+  const timeZone = resolveBusinessTimeZone(job.business);
 
   return (
     <main className="min-h-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -319,7 +321,7 @@ export default async function CustomerProjectPortalPage({
               <CardDescription>
                 {customerFacingJobStatusLabel(job.status)}
                 {job.scheduledAt
-                  ? ` · Scheduled ${formatDateTime(job.scheduledAt)}`
+                  ? ` · Scheduled ${formatDateTime(job.scheduledAt, timeZone)}`
                   : ""}
               </CardDescription>
             </CardHeader>
@@ -333,7 +335,7 @@ export default async function CustomerProjectPortalPage({
               <CardHeader>
                 <CardTitle>Appointment</CardTitle>
                 <CardDescription>
-                  {formatDateTime(job.scheduledAt)}
+                  {formatDateTime(job.scheduledAt, timeZone)}
                   {job.scheduledDurationMinutes
                     ? ` · ${job.scheduledDurationMinutes} minutes`
                     : ""}
@@ -343,7 +345,7 @@ export default async function CustomerProjectPortalPage({
                 {appointmentStatus === "DIFFERENT_TIME_REQUESTED" ? (
                   <div className="space-y-2">
                     <p className="font-medium">Change requested</p>
-                    <p>Current appointment: {formatAppointmentWhen(job.scheduledAt)}</p>
+                    <p>Current appointment: {formatAppointmentWhen(job.scheduledAt, timeZone)}</p>
                     {job.appointmentChangeRequestNote ? (
                       <p>Your request: “{job.appointmentChangeRequestNote}”</p>
                     ) : null}

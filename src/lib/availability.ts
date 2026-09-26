@@ -8,8 +8,15 @@
  *
  * Pure functions only. Database loading lives in availability-data.ts.
  */
+import {
+  addZonedCalendarDays,
+  formatISODateInTimeZone,
+  startOfZonedDay,
+  zonedCivilToUtc,
+  zonedDateParts,
+  zonedWeekday,
+} from "@/lib/business-timezone";
 import { schedulesOverlapWithBuffer } from "@/lib/job-schedule";
-import { addDays, formatISODate, startOfDay } from "@/lib/schedule";
 
 export const DEFAULT_WORKING_WEEKDAYS = [1, 2, 3, 4, 5];
 export const DEFAULT_WORK_START_MINUTES = 8 * 60;
@@ -55,6 +62,7 @@ export type OccupiedJob = {
 
 export type AvailabilitySnapshot = {
   settings: AvailabilitySettings;
+  timeZone: string;
   jobs: Array<{
     id: string;
     scheduledAt: string;
@@ -153,27 +161,36 @@ export function parseUnavailableDate(raw: string): string | null {
     return null;
   }
   const [year, month, day] = raw.split("-").map(Number);
-  const candidate = new Date(year, month - 1, day);
+  const candidate = new Date(Date.UTC(year, month - 1, day));
   if (
-    candidate.getFullYear() !== year ||
-    candidate.getMonth() !== month - 1 ||
-    candidate.getDate() !== day
+    candidate.getUTCFullYear() !== year ||
+    candidate.getUTCMonth() !== month - 1 ||
+    candidate.getUTCDate() !== day
   ) {
     return null;
   }
   return raw;
 }
 
-export function minutesOfDay(date: Date): number {
-  return date.getHours() * 60 + date.getMinutes();
+export function minutesOfDay(date: Date, timeZone: string): number {
+  const parts = zonedDateParts(date, timeZone);
+  return parts.hour * 60 + parts.minute;
 }
 
-export function isWorkingWeekday(date: Date, settings: AvailabilitySettings): boolean {
-  return settings.workingWeekdays.includes(date.getDay());
+export function isWorkingWeekday(
+  date: Date,
+  settings: AvailabilitySettings,
+  timeZone: string,
+): boolean {
+  return settings.workingWeekdays.includes(zonedWeekday(date, timeZone));
 }
 
-export function isUnavailableDate(date: Date, settings: AvailabilitySettings): boolean {
-  return settings.unavailableDates.includes(formatISODate(date));
+export function isUnavailableDate(
+  date: Date,
+  settings: AvailabilitySettings,
+  timeZone: string,
+): boolean {
+  return settings.unavailableDates.includes(formatISODateInTimeZone(date, timeZone));
 }
 
 export function workDayLengthMinutes(settings: AvailabilitySettings): number {
@@ -191,15 +208,19 @@ export function durationFitsWorkingDay(
   return minutes <= workDayLengthMinutes(settings);
 }
 
-export function datesCoveredBySchedule(start: Date, durationMinutes: number | null): Date[] {
+export function datesCoveredBySchedule(
+  start: Date,
+  durationMinutes: number | null,
+  timeZone: string,
+): Date[] {
   const windowMinutes = Math.max(durationMinutes ?? 0, 1);
   const end = new Date(start.getTime() + windowMinutes * 60 * 1000);
   const days: Date[] = [];
-  let cursor = startOfDay(start);
-  const last = startOfDay(new Date(end.getTime() - 1));
+  let cursor = startOfZonedDay(start, timeZone);
+  const last = startOfZonedDay(new Date(end.getTime() - 1), timeZone);
   while (cursor.getTime() <= last.getTime()) {
     days.push(cursor);
-    cursor = addDays(cursor, 1);
+    cursor = addZonedCalendarDays(cursor, 1, timeZone);
   }
   return days;
 }
@@ -209,8 +230,9 @@ export function evaluateProposedSchedule(input: {
   durationMinutes: number | null;
   settings: AvailabilitySettings;
   existing: OccupiedJob[];
+  timeZone: string;
 }): ScheduleEvaluation {
-  const { start, durationMinutes, settings, existing } = input;
+  const { start, durationMinutes, settings, existing, timeZone } = input;
   const overlapJob = existing.find((job) =>
     schedulesOverlapWithBuffer(
       start,
@@ -220,8 +242,8 @@ export function evaluateProposedSchedule(input: {
       settings.schedulingBufferMinutes,
     ),
   );
-  const covered = datesCoveredBySchedule(start, durationMinutes);
-  const startMinutes = minutesOfDay(start);
+  const covered = datesCoveredBySchedule(start, durationMinutes, timeZone);
+  const startMinutes = minutesOfDay(start, timeZone);
   const duration = Math.max(durationMinutes ?? 0, 0);
   const endsAt = startMinutes + Math.max(duration, 1);
   const fitsDay = durationFitsWorkingDay(durationMinutes, settings);
@@ -233,13 +255,13 @@ export function evaluateProposedSchedule(input: {
           scheduledAt: overlapJob.scheduledAt,
         }
       : null,
-    nonWorkingDay: !isWorkingWeekday(start, settings),
-    unavailableDate: isUnavailableDate(start, settings),
+    nonWorkingDay: !isWorkingWeekday(start, settings, timeZone),
+    unavailableDate: isUnavailableDate(start, settings, timeZone),
     coversUnavailableDate: covered.some((day) => {
-      if (formatISODate(day) === formatISODate(start)) {
+      if (formatISODateInTimeZone(day, timeZone) === formatISODateInTimeZone(start, timeZone)) {
         return false;
       }
-      return isUnavailableDate(day, settings) || !isWorkingWeekday(day, settings);
+      return isUnavailableDate(day, settings, timeZone) || !isWorkingWeekday(day, settings, timeZone);
     }),
     outsideWorkingHours:
       startMinutes < settings.workStartMinutes || startMinutes >= settings.workEndMinutes,
@@ -265,6 +287,7 @@ export function describeScheduleWarning(
   start: Date,
   formatOverlapTime: (value: Date) => string,
   settings: AvailabilitySettings,
+  timeZone: string,
 ): string | null {
   if (!hasScheduleWarning(evaluation)) {
     return null;
@@ -277,10 +300,10 @@ export function describeScheduleWarning(
     );
   }
   if (evaluation.unavailableDate) {
-    parts.push(`${formatNextAvailableDate(start)} is marked unavailable.`);
+    parts.push(`${formatNextAvailableDate(start, timeZone)} is marked unavailable.`);
   }
   if (evaluation.nonWorkingDay) {
-    const weekday = WEEKDAY_OPTIONS.find((option) => option.value === start.getDay());
+    const weekday = WEEKDAY_OPTIONS.find((option) => option.value === zonedWeekday(start, timeZone));
     parts.push(`${weekday?.label ?? "That day"} is not a working day.`);
   }
   if (evaluation.coversUnavailableDate) {
@@ -335,18 +358,20 @@ export function formatAvailabilitySummary(settings: AvailabilitySettings): strin
   return `${days}, ${hours}, ${buffer}, ${blocked}.`;
 }
 
-export function formatNextAvailableDate(value: Date): string {
+export function formatNextAvailableDate(value: Date, timeZone: string): string {
   return value.toLocaleDateString("en-US", {
     weekday: "long",
     month: "long",
     day: "numeric",
+    timeZone,
   });
 }
 
-export function formatNextAvailableDateTime(value: Date): string {
-  return `${formatNextAvailableDate(value)} at ${value.toLocaleTimeString("en-US", {
+export function formatNextAvailableDateTime(value: Date, timeZone: string): string {
+  return `${formatNextAvailableDate(value, timeZone)} at ${value.toLocaleTimeString("en-US", {
     hour: "numeric",
     minute: "2-digit",
+    timeZone,
   })}`;
 }
 
@@ -363,17 +388,28 @@ export function occupiedJobsFromSnapshot(
     }));
 }
 
-function atMinutesOnDay(day: Date, minutes: number): Date {
-  return new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(minutes / 60), minutes % 60, 0, 0);
+function atMinutesOnDay(day: Date, minutes: number, timeZone: string): Date {
+  const parts = zonedDateParts(day, timeZone);
+  return zonedCivilToUtc(
+    parts.year,
+    parts.month,
+    parts.day,
+    Math.floor(minutes / 60),
+    minutes % 60,
+    0,
+    timeZone,
+  );
 }
 
-function ceilToStepMinutes(date: Date, stepMinutes: number): Date {
-  const total = date.getHours() * 60 + date.getMinutes() + (date.getSeconds() > 0 || date.getMilliseconds() > 0 ? 1 : 0);
+function ceilToStepMinutes(date: Date, stepMinutes: number, timeZone: string): Date {
+  const parts = zonedDateParts(date, timeZone);
+  const total =
+    parts.hour * 60 + parts.minute + (parts.second > 0 || date.getMilliseconds() > 0 ? 1 : 0);
   const rounded = Math.ceil(total / stepMinutes) * stepMinutes;
   if (rounded >= 24 * 60) {
-    return atMinutesOnDay(addDays(startOfDay(date), 1), 0);
+    return atMinutesOnDay(addZonedCalendarDays(startOfZonedDay(date, timeZone), 1, timeZone), 0, timeZone);
   }
-  return atMinutesOnDay(date, rounded);
+  return atMinutesOnDay(date, rounded, timeZone);
 }
 
 function slotOverlapsExisting(
@@ -399,8 +435,9 @@ export function findNextAvailableStart(input: {
   settings: AvailabilitySettings;
   existing: OccupiedJob[];
   searchDays?: number;
+  timeZone: string;
 }): Date | null {
-  const { from, settings, existing } = input;
+  const { from, settings, existing, timeZone } = input;
   const durationMinutes = input.durationMinutes;
   const searchDays = input.searchDays ?? AVAILABILITY_SEARCH_DAYS;
   const duration = Math.max(durationMinutes ?? 60, 1);
@@ -410,23 +447,23 @@ export function findNextAvailableStart(input: {
     return null;
   }
 
-  const startDay = startOfDay(from);
+  const startDay = startOfZonedDay(from, timeZone);
   for (let offset = 0; offset < searchDays; offset += 1) {
-    const day = addDays(startDay, offset);
-    if (!isWorkingWeekday(day, settings) || isUnavailableDate(day, settings)) {
+    const day = addZonedCalendarDays(startDay, offset, timeZone);
+    if (!isWorkingWeekday(day, settings, timeZone) || isUnavailableDate(day, settings, timeZone)) {
       continue;
     }
 
     if (!fitsDay) {
-      const candidate = atMinutesOnDay(day, settings.workStartMinutes);
+      const candidate = atMinutesOnDay(day, settings.workStartMinutes, timeZone);
       if (candidate < from) {
         continue;
       }
       if (slotOverlapsExisting(candidate, duration, settings, existing)) {
         continue;
       }
-      const covered = datesCoveredBySchedule(candidate, duration);
-      if (covered.some((coveredDay) => isUnavailableDate(coveredDay, settings))) {
+      const covered = datesCoveredBySchedule(candidate, duration, timeZone);
+      if (covered.some((coveredDay) => isUnavailableDate(coveredDay, settings, timeZone))) {
         continue;
       }
       return candidate;
@@ -438,12 +475,12 @@ export function findNextAvailableStart(input: {
     }
 
     let slotMinutes = settings.workStartMinutes;
-    if (formatISODate(day) === formatISODate(from)) {
-      const rounded = ceilToStepMinutes(from, AVAILABILITY_SLOT_STEP_MINUTES);
-      if (formatISODate(rounded) !== formatISODate(day)) {
+    if (formatISODateInTimeZone(day, timeZone) === formatISODateInTimeZone(from, timeZone)) {
+      const rounded = ceilToStepMinutes(from, AVAILABILITY_SLOT_STEP_MINUTES, timeZone);
+      if (formatISODateInTimeZone(rounded, timeZone) !== formatISODateInTimeZone(day, timeZone)) {
         continue;
       }
-      slotMinutes = Math.max(settings.workStartMinutes, minutesOfDay(rounded));
+      slotMinutes = Math.max(settings.workStartMinutes, minutesOfDay(rounded, timeZone));
       const rem = slotMinutes % AVAILABILITY_SLOT_STEP_MINUTES;
       if (rem !== 0) {
         slotMinutes += AVAILABILITY_SLOT_STEP_MINUTES - rem;
@@ -455,7 +492,7 @@ export function findNextAvailableStart(input: {
       minutes <= lastStartMinutes;
       minutes += AVAILABILITY_SLOT_STEP_MINUTES
     ) {
-      const candidate = atMinutesOnDay(day, minutes);
+      const candidate = atMinutesOnDay(day, minutes, timeZone);
       if (candidate < from) {
         continue;
       }

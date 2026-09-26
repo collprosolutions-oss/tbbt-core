@@ -11,17 +11,19 @@ export function OwnerAppointmentAttentionBanner({
   customerNote,
   scheduledAt,
   notificationSent,
+  timeZone,
 }: {
   kind: OwnerAppointmentAttentionKind;
   customerNote: string | null;
   scheduledAt: Date;
   notificationSent: boolean;
+  timeZone: string;
 }) {
   const heading =
     kind === "DIFFERENT_TIME"
       ? OWNER_DIFFERENT_TIME_ATTENTION_HEADING
       : OWNER_RECONFIRMATION_ATTENTION_HEADING;
-  const when = formatAppointmentWhen(scheduledAt);
+  const when = formatAppointmentWhen(scheduledAt, timeZone);
 
   return (
     <div

@@ -9,7 +9,7 @@ import {
   workDayLengthMinutes,
   type AvailabilitySettings,
 } from "@/lib/availability";
-import { DEFAULT_BUSINESS_TIMEZONE, formatISODateInTimeZone } from "@/lib/business-timezone";
+import { DEFAULT_BUSINESS_TIMEZONE, formatISODateInTimeZone, zonedWeekday } from "@/lib/business-timezone";
 import {
   dayBeforeCutoffPassed,
   type SchedulingPolicy,
@@ -164,12 +164,13 @@ export function detectScheduleConflicts(input: {
         explanation: `${labelFor(job)} is longer than the configured working day.`,
       });
     }
-    const covered = datesCoveredBySchedule(window.occupiedStart, duration);
+    const covered = datesCoveredBySchedule(window.occupiedStart, duration, zone);
     if (
       covered.some(
         (day) =>
           formatISODateInTimeZone(day, zone) !== formatISODateInTimeZone(job.scheduledAt, zone) &&
-          (isUnavailableDate(day, input.settings) || !input.settings.workingWeekdays.includes(day.getDay())),
+          (isUnavailableDate(day, input.settings, zone) ||
+            !input.settings.workingWeekdays.includes(zonedWeekday(day, zone))),
       )
     ) {
       conflicts.push({
