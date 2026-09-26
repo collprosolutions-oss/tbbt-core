@@ -21,6 +21,7 @@ import {
   type AvailabilitySnapshot,
   type OccupiedJob,
 } from "@/lib/availability";
+import { ensureBusinessTimezoneSchema, resolveBusinessTimeZone } from "@/lib/business-timezone";
 
 type AvailabilityClient = PrismaClient | Prisma.TransactionClient;
 
@@ -152,12 +153,16 @@ export async function loadAvailabilitySnapshot(
   db: AvailabilityClient,
   businessId: string,
 ): Promise<AvailabilitySnapshot> {
-  const [settings, jobs] = await Promise.all([
+  await ensureBusinessTimezoneSchema(db);
+  const [settings, jobs, business] = await Promise.all([
     loadAvailabilitySettings(db, businessId),
     loadOccupiedJobs(db, businessId),
+    db.business.findUnique({ where: { id: businessId }, select: { timezone: true } }),
   ]);
+  const timeZone = resolveBusinessTimeZone(business);
   return {
     settings,
+    timeZone,
     jobs: jobs.map((job) => ({
       id: job.id ?? "",
       scheduledAt: job.scheduledAt.toISOString(),
@@ -171,15 +176,19 @@ export async function loadPublicNextAvailableLabel(
   businessId: string,
   from = new Date(),
 ): Promise<string | null> {
-  const [settings, existing] = await Promise.all([
+  await ensureBusinessTimezoneSchema(db);
+  const [settings, existing, business] = await Promise.all([
     loadAvailabilitySettings(db, businessId),
     loadOccupiedJobs(db, businessId),
+    db.business.findUnique({ where: { id: businessId }, select: { timezone: true } }),
   ]);
+  const timeZone = resolveBusinessTimeZone(business);
   const next = findNextAvailableStart({
     from,
     durationMinutes: PUBLIC_NEXT_AVAILABLE_DURATION_MINUTES,
     settings,
     existing,
+    timeZone,
   });
-  return next ? formatNextAvailableDate(next) : null;
+  return next ? formatNextAvailableDate(next, timeZone) : null;
 }

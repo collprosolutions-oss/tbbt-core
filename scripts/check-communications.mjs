@@ -320,6 +320,7 @@ const appointmentEmail = buildAppointmentProposedEmail({
   serviceDescription: "Ceiling Fan Replacement",
   projectUrl: "https://www.collproreno.com/p/project-token",
   rescheduled: false,
+  timeZone: "America/New_York",
 });
 check(
   "appointment email links to the customer project portal",

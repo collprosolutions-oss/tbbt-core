@@ -22,6 +22,7 @@ import {
   effectiveAppointmentConfirmationStatus,
   isCurrentAppointmentConfirmed,
 } from "@/lib/appointment-confirmation";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatAddress, formatDateTime, formatTime } from "@/lib/format";
 import { ownerAccessSummaryLines } from "@/lib/property-access";
 import { TIME_ACTIVITY_LABELS, isTimeActivityType } from "@/lib/time-cards";
@@ -137,6 +138,7 @@ export default async function FieldJobPage({
     return null;
   }
 
+  const timeZone = resolveBusinessTimeZone(field.workspace.business);
   const isCompleted = job.status === "COMPLETED";
   const isInProgress = job.status === "IN_PROGRESS";
   const running = await prisma.timeEntry.findFirst({
@@ -188,7 +190,7 @@ export default async function FieldJobPage({
         <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <StatusBadge status={job.status} />
           <span>
-            {job.scheduledAt ? formatDateTime(job.scheduledAt) : "Not yet scheduled"}
+            {job.scheduledAt ? formatDateTime(job.scheduledAt, timeZone) : "Not yet scheduled"}
           </span>
           {job.scheduledAt ? (
             <span>

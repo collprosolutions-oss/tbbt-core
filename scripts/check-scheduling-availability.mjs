@@ -38,9 +38,10 @@ const {
   parseWorkingWeekdays,
   parseWorkingWeekdaysInput,
 } = await import("@/lib/availability");
-const { durationWithBuffer, parseDurationMinutes, schedulesOverlapWithBuffer } =
+const { durationWithBuffer, parseDurationMinutes, parseScheduleStart, schedulesOverlapWithBuffer } =
   await import("@/lib/job-schedule");
-const { formatDateTime } = await import("@/lib/format");
+const { formatDateTime, formatTime } = await import("@/lib/format");
+const { zonedCivilToUtc, zonedDateParts } = await import("@/lib/business-timezone");
 const { unpaidMaterialDepositWarning } = await import("@/lib/project-payments");
 const { updateSchedulingSettingsOp } = await import("@/lib/settings-ops");
 const { ForbiddenError } = await import("@/lib/authorization");
@@ -108,6 +109,18 @@ check(
 check("Owner form still has Schedule anyway after a warning", form.includes("Schedule anyway"));
 check("Owner form shows next available", form.includes("Next available") && form.includes("Use this time"));
 check(
+  "Owner next-available uses the snapshot business timezone",
+  form.includes("timeZone: availability.timeZone") &&
+    form.includes("formatISODateInTimeZone(nextAvailable, availability.timeZone)") &&
+    form.includes("formatZonedTimeInput(nextAvailable, availability.timeZone)"),
+);
+check(
+  "scheduleJob evaluates availability with the loaded business timezone",
+  jobAction.includes("loadWorkforceTimeZone") &&
+    jobAction.includes("parseScheduleStart(date, time, timeZone)") &&
+    jobAction.includes("timeZone,"),
+);
+check(
   "Settings persist working days, hours, blocked dates, and the 30-minute buffer",
   settingsForm.includes("Working days") &&
     settingsForm.includes("Days unavailable") &&
@@ -126,7 +139,7 @@ check(
 );
 check(
   "Customer project portal still renders the scheduled appointment",
-  portal.includes("Scheduled") && portal.includes("formatDateTime(job.scheduledAt)"),
+  portal.includes("Scheduled") && portal.includes("formatDateTime(job.scheduledAt, timeZone)"),
 );
 check("Default buffer is 30 minutes", DEFAULT_SCHEDULING_BUFFER_MINUTES === 30);
 check(
@@ -162,17 +175,25 @@ check(
 
 console.log("\nUNIT — Working hours, blocked dates, duration, buffer, next available");
 
-const monday = new Date(2026, 8, 7, 8, 0, 0); // Monday Sep 7, 2026 8:00
-const saturday = new Date(2026, 8, 12, 9, 0, 0);
+const NY = "America/New_York";
+function civil(year, month, day, hour = 0, minute = 0) {
+  return zonedCivilToUtc(year, month, day, hour, minute, 0, NY);
+}
+function partsOf(value) {
+  return zonedDateParts(value, NY);
+}
+
+const monday = civil(2026, 9, 7, 8, 0); // Monday Sep 7, 2026 8:00 NY
+const saturday = civil(2026, 9, 12, 9, 0);
 const settings = {
   ...DEFAULT_AVAILABILITY_SETTINGS,
   unavailableDates: ["2026-09-09"], // Wednesday
 };
 
-check("Monday is a working day by default", isWorkingWeekday(monday, settings));
-check("Saturday is not a working day by default", !isWorkingWeekday(saturday, settings));
-check("Wednesday Sep 9 is blocked", isUnavailableDate(new Date(2026, 8, 9), settings));
-check("Thursday Sep 10 is not blocked", !isUnavailableDate(new Date(2026, 8, 10), settings));
+check("Monday is a working day by default", isWorkingWeekday(monday, settings, NY));
+check("Saturday is not a working day by default", !isWorkingWeekday(saturday, settings, NY));
+check("Wednesday Sep 9 is blocked", isUnavailableDate(civil(2026, 9, 9), settings, NY));
+check("Thursday Sep 10 is not blocked", !isUnavailableDate(civil(2026, 9, 10), settings, NY));
 check("parseWorkingWeekdays falls back to Mon–Fri", parseWorkingWeekdays("").join(",") === "1,2,3,4,5");
 check("parseWorkingWeekdaysInput rejects an empty set", parseWorkingWeekdaysInput([]).ok === false);
 check("parseTimeToMinutes(08:00) is 480", parseTimeToMinutes("08:00") === 480);
@@ -194,7 +215,7 @@ check("2-day job does not fit a single work day", durationFitsWorkingDay(960, se
 const existing = [
   {
     id: "job-a",
-    scheduledAt: new Date(2026, 8, 7, 8, 0, 0),
+    scheduledAt: civil(2026, 9, 7, 8, 0),
     scheduledDurationMinutes: 60,
     customerName: "Alpha",
   },
@@ -203,7 +224,7 @@ const existing = [
 check(
   "Back-to-back 8:00 and 9:00 1-hour jobs conflict once the 30-minute buffer is applied",
   schedulesOverlapWithBuffer(
-    new Date(2026, 8, 7, 9, 0, 0),
+    civil(2026, 9, 7, 9, 0),
     60,
     existing[0].scheduledAt,
     existing[0].scheduledDurationMinutes,
@@ -213,7 +234,7 @@ check(
 check(
   "A 9:30 start after an 8:00–9:00 job plus 30-minute buffer does not conflict",
   !schedulesOverlapWithBuffer(
-    new Date(2026, 8, 7, 9, 30, 0),
+    civil(2026, 9, 7, 9, 30),
     60,
     existing[0].scheduledAt,
     existing[0].scheduledDurationMinutes,
@@ -223,7 +244,7 @@ check(
 check(
   "Buffer 0 keeps the existing adjacent-window behavior (9:00 after 8:00–9:00 is free)",
   !schedulesOverlapWithBuffer(
-    new Date(2026, 8, 7, 9, 0, 0),
+    civil(2026, 9, 7, 9, 0),
     60,
     existing[0].scheduledAt,
     existing[0].scheduledDurationMinutes,
@@ -232,27 +253,37 @@ check(
 );
 
 const overlapEval = evaluateProposedSchedule({
-  start: new Date(2026, 8, 7, 9, 0, 0),
+  start: civil(2026, 9, 7, 9, 0),
   durationMinutes: 60,
   settings,
   existing,
+  timeZone: NY,
 });
 check("Overlap evaluation flags the buffer conflict", Boolean(overlapEval.overlap));
 check(
   "Owner warning names the other job and mentions the buffer",
-  describeScheduleWarning(overlapEval, new Date(2026, 8, 7, 9, 0, 0), formatDateTime, settings)?.includes(
-    "Alpha",
-  ) === true &&
-    describeScheduleWarning(overlapEval, new Date(2026, 8, 7, 9, 0, 0), formatDateTime, settings)?.includes(
-      "30-minute",
-    ) === true,
+  describeScheduleWarning(
+    overlapEval,
+    civil(2026, 9, 7, 9, 0),
+    (value) => formatDateTime(value, NY),
+    settings,
+    NY,
+  )?.includes("Alpha") === true &&
+    describeScheduleWarning(
+      overlapEval,
+      civil(2026, 9, 7, 9, 0),
+      (value) => formatDateTime(value, NY),
+      settings,
+      NY,
+    )?.includes("30-minute") === true,
 );
 
 const blockedEval = evaluateProposedSchedule({
-  start: new Date(2026, 8, 9, 8, 0, 0),
+  start: civil(2026, 9, 9, 8, 0),
   durationMinutes: 60,
   settings,
   existing: [],
+  timeZone: NY,
 });
 check("Blocked date is a warning, not a silent booking", blockedEval.unavailableDate && hasScheduleWarning(blockedEval));
 
@@ -261,40 +292,81 @@ const weekendEval = evaluateProposedSchedule({
   durationMinutes: 60,
   settings,
   existing: [],
+  timeZone: NY,
 });
 check("Weekend start is a non-working-day warning", weekendEval.nonWorkingDay);
 
 const afterHoursEval = evaluateProposedSchedule({
-  start: new Date(2026, 8, 7, 18, 0, 0),
+  start: civil(2026, 9, 7, 18, 0),
   durationMinutes: 60,
   settings,
   existing: [],
+  timeZone: NY,
 });
 check("6:00 PM start is outside working hours", afterHoursEval.outsideWorkingHours);
 
 const lateStartEval = evaluateProposedSchedule({
-  start: new Date(2026, 8, 7, 16, 30, 0),
+  start: civil(2026, 9, 7, 16, 30),
   durationMinutes: 60,
   settings,
   existing: [],
+  timeZone: NY,
 });
 check("4:30 PM 1-hour job extends past 5:00 PM closing", lateStartEval.extendsPastWorkingHours);
 
-const fromBeforeOpen = new Date(2026, 8, 7, 7, 0, 0);
+const nineAmNy = parseScheduleStart("2026-09-26", "09:00", NY);
+const nineAmEval = evaluateProposedSchedule({
+  start: nineAmNy,
+  durationMinutes: 60,
+  settings: DEFAULT_AVAILABILITY_SETTINGS,
+  existing: [],
+  timeZone: NY,
+});
+check(
+  "09:00 America/New_York is inside 08:00–17:00 working hours even when the UTC instant is 13:00Z",
+  nineAmNy?.toISOString() === "2026-09-26T13:00:00.000Z" &&
+    !nineAmEval.outsideWorkingHours &&
+    !nineAmEval.nonWorkingDay,
+);
+
+const nearUtcMidnight = new Date("2026-09-09T02:00:00.000Z"); // 22:00 Sep 8 EDT
+const blockedNearMidnight = evaluateProposedSchedule({
+  start: nearUtcMidnight,
+  durationMinutes: 60,
+  settings,
+  existing: [],
+  timeZone: NY,
+});
+const blockedCivilMorning = evaluateProposedSchedule({
+  start: new Date("2026-09-09T12:00:00.000Z"), // 08:00 Sep 9 EDT
+  durationMinutes: 60,
+  settings,
+  existing: [],
+  timeZone: NY,
+});
+check(
+  "Unavailable business calendar date uses Business.timezone, including instants near UTC midnight",
+  !blockedNearMidnight.unavailableDate && blockedCivilMorning.unavailableDate,
+);
+
+const fromBeforeOpen = civil(2026, 9, 7, 7, 0);
 const nextOpen = findNextAvailableStart({
   from: fromBeforeOpen,
   durationMinutes: 120,
   settings,
   existing: [],
+  timeZone: NY,
 });
+const nextOpenParts = nextOpen ? partsOf(nextOpen) : null;
 check(
-  "Next available 2-hour slot is Monday 8:00 AM",
-  Boolean(nextOpen) &&
-    nextOpen.getFullYear() === 2026 &&
-    nextOpen.getMonth() === 8 &&
-    nextOpen.getDate() === 7 &&
-    nextOpen.getHours() === 8 &&
-    nextOpen.getMinutes() === 0,
+  "Next available 2-hour slot is Monday 8:00 AM business time",
+  Boolean(nextOpenParts) &&
+    nextOpenParts.year === 2026 &&
+    nextOpenParts.month === 9 &&
+    nextOpenParts.day === 7 &&
+    nextOpenParts.hour === 8 &&
+    nextOpenParts.minute === 0 &&
+    formatTime(nextOpen, NY) === "8:00 AM",
 );
 
 const nextAfterJob = findNextAvailableStart({
@@ -302,43 +374,49 @@ const nextAfterJob = findNextAvailableStart({
   durationMinutes: 60,
   settings,
   existing,
+  timeZone: NY,
 });
+const nextAfterParts = nextAfterJob ? partsOf(nextAfterJob) : null;
 check(
   "Existing 8:00 job plus 30-minute buffer pushes next available to 9:30",
-  Boolean(nextAfterJob) && nextAfterJob.getHours() === 9 && nextAfterJob.getMinutes() === 30,
+  Boolean(nextAfterParts) && nextAfterParts.hour === 9 && nextAfterParts.minute === 30,
 );
 
-const thursdayLabel = formatNextAvailableDate(new Date(2026, 8, 10, 8, 0, 0));
+const thursdayLabel = formatNextAvailableDate(civil(2026, 9, 10, 8, 0), NY);
 check(
   "Public next-available label matches Thursday, September 10",
   thursdayLabel === "Thursday, September 10",
 );
 
-const afterTuesdayClose = new Date(2026, 8, 8, 17, 1, 0);
+const afterTuesdayClose = civil(2026, 9, 8, 17, 1);
 const nextPastBlockedWednesday = findNextAvailableStart({
   from: afterTuesdayClose,
   durationMinutes: 60,
   settings,
   existing: [],
+  timeZone: NY,
 });
+const nextBlockedParts = nextPastBlockedWednesday ? partsOf(nextPastBlockedWednesday) : null;
 check(
   "Blocked Wednesday is skipped; next available is Thursday, September 10 at 8:00",
-  Boolean(nextPastBlockedWednesday) &&
-    nextPastBlockedWednesday.getDate() === 10 &&
-    nextPastBlockedWednesday.getMonth() === 8 &&
-    nextPastBlockedWednesday.getHours() === 8 &&
-    formatNextAvailableDate(nextPastBlockedWednesday) === "Thursday, September 10",
+  Boolean(nextBlockedParts) &&
+    nextBlockedParts.day === 10 &&
+    nextBlockedParts.month === 9 &&
+    nextBlockedParts.hour === 8 &&
+    formatNextAvailableDate(nextPastBlockedWednesday, NY) === "Thursday, September 10",
 );
 
 const nextHalfDay = findNextAvailableStart({
-  from: new Date(2026, 8, 7, 14, 0, 0),
+  from: civil(2026, 9, 7, 14, 0),
   durationMinutes: 240,
   settings,
   existing: [],
+  timeZone: NY,
 });
+const nextHalfParts = nextHalfDay ? partsOf(nextHalfDay) : null;
 check(
   "A half-day job at 2:00 PM does not fit remaining hours, so next available is the following working morning",
-  Boolean(nextHalfDay) && nextHalfDay.getDate() === 8 && nextHalfDay.getHours() === 8,
+  Boolean(nextHalfParts) && nextHalfParts.day === 8 && nextHalfParts.hour === 8,
 );
 
 const nextTwoDay = findNextAvailableStart({
@@ -346,10 +424,19 @@ const nextTwoDay = findNextAvailableStart({
   durationMinutes: 960,
   settings,
   existing: [],
+  timeZone: NY,
 });
+const nextTwoParts = nextTwoDay ? partsOf(nextTwoDay) : null;
 check(
   "A multi-day duration that cannot fit one work day still starts at the next working morning",
-  Boolean(nextTwoDay) && nextTwoDay.getDate() === 7 && nextTwoDay.getHours() === 8,
+  Boolean(nextTwoParts) && nextTwoParts.day === 7 && nextTwoParts.hour === 8,
+);
+
+check(
+  "Scheduling truth does not use host getHours/getDay for business civil time",
+  !readRepo("src/lib/availability.ts").includes("date.getHours()") &&
+    !readRepo("src/lib/availability.ts").includes("date.getDay()") &&
+    !readRepo("src/lib/job-schedule.ts").includes('new Date(`${date}T${time}:00`)'),
 );
 
 check(

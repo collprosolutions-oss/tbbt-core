@@ -7,7 +7,7 @@ import type { FieldJob } from "@/lib/field-jobs";
  * Large-tap-target Field Home list row. Links straight to the Field Job
  * page for that assigned job -- no separate "view details" step.
  */
-export function FieldJobCard({ job }: { job: FieldJob }) {
+export function FieldJobCard({ job, timeZone }: { job: FieldJob; timeZone: string }) {
   return (
     <Link
       href={`/field/jobs/${job.id}`}
@@ -25,7 +25,7 @@ export function FieldJobCard({ job }: { job: FieldJob }) {
           ) : null}
           <p className="text-sm text-muted-foreground">
             {job.scheduledAt
-              ? formatDateTime(job.scheduledAt)
+              ? formatDateTime(job.scheduledAt, timeZone)
               : "Not yet scheduled"}
           </p>
         </div>

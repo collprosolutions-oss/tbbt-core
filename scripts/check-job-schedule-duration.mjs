@@ -20,8 +20,16 @@ const {
   expectedEnd,
   formatDurationMinutes,
   parseDurationMinutes,
+  parseScheduleStart,
   scheduleWindow,
 } = await import("@/lib/job-schedule");
+const {
+  formatISODateInTimeZone,
+  formatZonedTimeInput,
+  zonedDateParts,
+} = await import("@/lib/business-timezone");
+const { formatAppointmentWhen, formatDateTime, formatTime } = await import("@/lib/format");
+const { formatNextAvailableDateTime } = await import("@/lib/availability");
 
 let passed = 0;
 let failed = 0;
@@ -106,6 +114,88 @@ const fiveDayEnd = expectedEnd(start, 2400);
 check(
   "5-day expected end is 2400 minutes after start",
   fiveDayEnd.getTime() === start.getTime() + 2400 * 60 * 1000,
+);
+
+console.log("\nUNIT — Business timezone civil parse / display");
+
+const NY = "America/New_York";
+const CHI = "America/Chicago";
+const summer = parseScheduleStart("2026-09-26", "09:00", NY);
+const winter = parseScheduleStart("2026-01-15", "09:00", NY);
+const chicago = parseScheduleStart("2026-09-26", "09:00", CHI);
+const dstGap = parseScheduleStart("2026-03-08", "02:30", NY);
+const invalidCal = parseScheduleStart("2026-02-30", "09:00", NY);
+
+check(
+  "Summer EDT 09:00 America/New_York persists 2026-09-26T13:00:00.000Z",
+  summer?.toISOString() === "2026-09-26T13:00:00.000Z",
+);
+check(
+  "Summer EDT round-trips to 09:00 New York",
+  Boolean(summer) &&
+    formatZonedTimeInput(summer, NY) === "09:00" &&
+    formatISODateInTimeZone(summer, NY) === "2026-09-26" &&
+    formatTime(summer, NY) === "9:00 AM",
+);
+check(
+  "Winter EST 09:00 America/New_York persists 2026-01-15T14:00:00.000Z",
+  winter?.toISOString() === "2026-01-15T14:00:00.000Z",
+);
+check(
+  "Winter EST displays 09:00 New York",
+  Boolean(winter) &&
+    formatZonedTimeInput(winter, NY) === "09:00" &&
+    formatTime(winter, NY) === "9:00 AM",
+);
+check(
+  "Same civil input in America/Chicago persists that zone's UTC instant",
+  chicago?.toISOString() === "2026-09-26T14:00:00.000Z" &&
+    formatZonedTimeInput(chicago, CHI) === "09:00",
+);
+check("DST spring-forward gap 2026-03-08 02:30 America/New_York is rejected", dstGap === null);
+check("Impossible calendar date 2026-02-30 is rejected", invalidCal === null);
+check(
+  "Schedule form reload shows the same 09:00 after persist",
+  Boolean(summer) &&
+    formatISODateInTimeZone(summer, NY) === "2026-09-26" &&
+    formatZonedTimeInput(summer, NY) === "09:00",
+);
+
+const workOrder = readRepo("src/app/(app)/jobs/[jobId]/page.tsx");
+const jobAction = readRepo("src/app/actions/job.ts");
+const parseSrc = readRepo("src/lib/job-schedule.ts");
+check(
+  "Work Order schedule form defaults use business-zone civil helpers",
+  workOrder.includes("formatISODate(job.scheduledAt, timeZone)") &&
+    workOrder.includes("formatZonedTimeInput(job.scheduledAt, timeZone)"),
+);
+check(
+  "scheduleJob loads Business.timezone before constructing start",
+  /loadWorkforceTimeZone[\s\S]*parseScheduleStart\(date, time, timeZone\)/.test(jobAction) &&
+    !jobAction.includes('new Date(`${date}T${time}:00`)'),
+);
+check(
+  "parseScheduleStart uses zonedCivilToUtc and round-trip zonedDateParts",
+  parseSrc.includes("zonedCivilToUtc") &&
+    parseSrc.includes("zonedDateParts") &&
+    parseSrc.includes("timeZone") &&
+    !parseSrc.includes('new Date(`${date}T${time}:00`)'),
+);
+
+const instant = new Date("2026-09-26T13:00:00.000Z");
+const when = formatAppointmentWhen(instant, NY);
+const dateTime = formatDateTime(instant, NY);
+const nextLabel = formatNextAvailableDateTime(instant, NY);
+check(
+  "Today / calendar / Work Order / email / portal / field helpers agree on 9:00 AM New York",
+  formatTime(instant, NY) === "9:00 AM" &&
+    when.includes("9:00 AM") &&
+    dateTime.includes("9:00 AM") &&
+    nextLabel.includes("9:00 AM") &&
+    !when.includes("5:00 AM") &&
+    !when.includes("1:00 PM") &&
+    zonedDateParts(instant, NY).hour === 9 &&
+    zonedDateParts(instant, NY).minute === 0,
 );
 
 console.log(
