@@ -687,6 +687,7 @@ export async function markJobComplete(
     businessId: access.businessId,
     jobId: job.id,
     businessName: access.workspace.business.name,
+    actorMembershipId: access.workspace.membership.id,
   });
 
   if (!result.ok) {

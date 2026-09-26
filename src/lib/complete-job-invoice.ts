@@ -11,11 +11,11 @@
  */
 import type { PrismaClient } from "@prisma/client";
 import { persistDraftInvoiceFromCompletedJob } from "@/lib/invoice-carry-forward";
+import { completeJobWithRunningTimeSafety } from "@/lib/time-card-ops";
 import {
   buildInvoiceReadyEmail,
   formatInvoiceServiceAddress,
 } from "@/lib/invoice-mail";
-import { evaluateCompleteJob } from "@/lib/job-lifecycle";
 import { attemptInvoiceReadySms } from "@/lib/customer-messaging";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import {
@@ -250,45 +250,26 @@ async function notifyCustomerInvoiceReady(
 
 export async function completeJobAndSendInvoice(
   db: PrismaClient,
-  input: { businessId: string; jobId: string; businessName: string },
+  input: {
+    businessId: string;
+    jobId: string;
+    businessName: string;
+    actorMembershipId?: string | null;
+  },
 ): Promise<CompleteJobInvoiceResult> {
-  const job = await db.job.findFirst({
-    where: { id: input.jobId, businessId: input.businessId },
-    select: { id: true, status: true, customerId: true },
+  const safety = await completeJobWithRunningTimeSafety(db, {
+    businessId: input.businessId,
+    jobId: input.jobId,
+    actorMembershipId: input.actorMembershipId,
   });
 
-  if (!job) {
-    return { ok: false, error: "That job could not be completed.", jobCompleted: false };
-  }
-
-  const lifecycle = evaluateCompleteJob(job.status);
-  if (!lifecycle.ok) {
-    return { ok: false, error: lifecycle.error, jobCompleted: false };
-  }
-
-  if (lifecycle.nextStatus) {
-    const updated = await db.job.updateMany({
-      where: {
-        id: job.id,
-        businessId: input.businessId,
-        status: job.status,
-      },
-      data: { status: lifecycle.nextStatus },
-    });
-    if (updated.count !== 1 && job.status !== "COMPLETED") {
-      const current = await db.job.findFirst({
-        where: { id: job.id, businessId: input.businessId },
-        select: { status: true },
-      });
-      if (current?.status !== "COMPLETED") {
-        return { ok: false, error: "That job could not be completed.", jobCompleted: false };
-      }
-    }
+  if (!safety.ok) {
+    return { ok: false, error: safety.error, jobCompleted: false };
   }
 
   const persist = await persistDraftInvoiceFromCompletedJob(db, {
     businessId: input.businessId,
-    jobId: job.id,
+    jobId: input.jobId,
   });
 
   if (!persist.ok) {
@@ -318,25 +299,25 @@ export async function completeJobAndSendInvoice(
     businessId: input.businessId,
     type: "JOB_COMPLETED",
     subjectType: "JOB",
-    subjectId: job.id,
-    payload: { customerId: job.customerId, businessName: input.businessName },
-    idempotencyKey: `JOB_COMPLETED:${job.id}`,
+    subjectId: input.jobId,
+    payload: { customerId: safety.customerId, businessName: input.businessName },
+    idempotencyKey: `JOB_COMPLETED:${input.jobId}`,
   });
   await emitAndProcessBusinessEvent(db, {
     businessId: input.businessId,
     type: "REVIEW_OPPORTUNITY_CREATED",
     subjectType: "JOB",
-    subjectId: job.id,
-    payload: { customerId: job.customerId, businessName: input.businessName },
-    idempotencyKey: `REVIEW_OPPORTUNITY_CREATED:${job.id}`,
+    subjectId: input.jobId,
+    payload: { customerId: safety.customerId, businessName: input.businessName },
+    idempotencyKey: `REVIEW_OPPORTUNITY_CREATED:${input.jobId}`,
   });
   await emitAndProcessBusinessEvent(db, {
     businessId: input.businessId,
     type: "REFERRAL_OPPORTUNITY_CREATED",
     subjectType: "JOB",
-    subjectId: job.id,
-    payload: { customerId: job.customerId, businessName: input.businessName },
-    idempotencyKey: `REFERRAL_OPPORTUNITY_CREATED:${job.id}`,
+    subjectId: input.jobId,
+    payload: { customerId: safety.customerId, businessName: input.businessName },
+    idempotencyKey: `REFERRAL_OPPORTUNITY_CREATED:${input.jobId}`,
   });
   if (sent.newlySent) {
     await emitAndProcessBusinessEvent(db, {
@@ -344,7 +325,7 @@ export async function completeJobAndSendInvoice(
       type: "INVOICE_SENT",
       subjectType: "INVOICE",
       subjectId: persist.invoiceId,
-      payload: { customerId: job.customerId, businessName: input.businessName },
+      payload: { customerId: safety.customerId, businessName: input.businessName },
       idempotencyKey: `INVOICE_SENT:${persist.invoiceId}`,
     });
   }

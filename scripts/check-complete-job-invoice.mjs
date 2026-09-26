@@ -19,6 +19,11 @@ const {
   sendDraftInvoiceIfNeeded,
 } = await import("@/lib/complete-job-invoice");
 const {
+  clockInTime,
+  JOB_COMPLETION_TIME_CLOSED_REASON,
+} = await import("@/lib/time-card-ops");
+const { weekRange } = await import("@/lib/time-cards");
+const {
   isCustomerVisibleInvoiceStatus,
   loadInvoiceDocumentForProjectToken,
 } = await import("@/lib/invoice-document");
@@ -206,6 +211,46 @@ try {
       postalCode: "89501",
     },
   });
+  const ownerUser = await prisma.user.create({
+    data: { name: "Olivia Owner", email: "owner-complete@example.com", passwordHash: "x" },
+  });
+  const memberUser = await prisma.user.create({
+    data: { name: "Mia Member", email: "member-complete@example.com", passwordHash: "x" },
+  });
+  const otherUser = await prisma.user.create({
+    data: { name: "Omar Other", email: "other-complete@example.com", passwordHash: "x" },
+  });
+  const betaOwnerUser = await prisma.user.create({
+    data: { name: "Bea Owner", email: "beta-owner-complete@example.com", passwordHash: "x" },
+  });
+  const ownerMem = await prisma.membership.create({
+    data: { userId: ownerUser.id, businessId: businessA.id, role: "OWNER" },
+  });
+  const memberMem = await prisma.membership.create({
+    data: { userId: memberUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const otherMem = await prisma.membership.create({
+    data: { userId: otherUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const betaOwnerMem = await prisma.membership.create({
+    data: { userId: betaOwnerUser.id, businessId: businessB.id, role: "OWNER" },
+  });
+  function makeAccess(businessId, role, membershipId) {
+    return {
+      businessId,
+      workspace: { role, membership: { id: membershipId } },
+      scope: { businessId },
+      assertOwned(record) {
+        if (!record || record.businessId !== businessId) {
+          throw new Error("Record is not in the authorized business workspace.");
+        }
+        return record;
+      },
+    };
+  }
+  const ownerA = makeAccess(businessA.id, "OWNER", ownerMem.id);
+  const memberA = makeAccess(businessA.id, "MEMBER", memberMem.id);
+
   const customerB = await prisma.customer.create({
     data: { businessId: businessB.id, name: "Beta Customer" },
   });
@@ -304,6 +349,7 @@ try {
     businessId: businessA.id,
     jobId: work.job.id,
     businessName: businessA.name,
+    actorMembershipId: ownerMem.id,
   });
   check("complete succeeds", completed.ok === true);
   check("job is marked completed", (await prisma.job.findUniqueOrThrow({ where: { id: work.job.id } })).status === "COMPLETED");
@@ -360,6 +406,7 @@ try {
     businessId: businessA.id,
     jobId: work.job.id,
     businessName: businessA.name,
+    actorMembershipId: ownerMem.id,
   });
   check("retry succeeds", retry.ok === true);
   check("retry reuses the same invoice", retry.ok && retry.invoiceId === invoice.id && retry.invoiceReused === true);
@@ -421,6 +468,7 @@ try {
     businessId: businessA.id,
     jobId: work.job.id,
     businessName: businessA.name,
+    actorMembershipId: ownerMem.id,
   });
   const paid = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
   check("paid retry succeeds without a new invoice", paidRetry.ok === true && paidRetry.invoiceId === invoice.id);
@@ -436,6 +484,7 @@ try {
     businessId: businessB.id,
     jobId: work.job.id,
     businessName: businessB.name,
+    actorMembershipId: betaOwnerMem.id,
   });
   check("other business cannot complete/send this job", foreign.ok === false);
   check(
@@ -467,6 +516,7 @@ try {
     businessId: businessA.id,
     jobId: unstarted.job.id,
     businessName: businessA.name,
+    actorMembershipId: ownerMem.id,
   });
   check("unstarted job is rejected", blocked.ok === false);
   check(
@@ -476,6 +526,217 @@ try {
   check(
     "no invoice was created for the unstarted job",
     (await prisma.invoice.count({ where: { jobId: unstarted.job.id } })) === 0,
+  );
+
+  console.log("\nTEST — Owner completion closes exact-job RUNNING JOB time");
+  const timed = await createInProgressApprovedJob({
+    businessId: businessA.id,
+    customerId: customerA.id,
+    propertyId: propertyA.id,
+    customerName: customerA.name,
+    estimateTotal: 80,
+    estimateLines: [{ description: "Timed labor", quantity: 1, unitPrice: 80, total: 80 }],
+  });
+  await prisma.job.update({
+    where: { id: timed.job.id },
+    data: { assignedMembershipId: memberMem.id },
+  });
+  const sibling = await createInProgressApprovedJob({
+    businessId: businessA.id,
+    customerId: customerA.id,
+    propertyId: propertyA.id,
+    customerName: customerA.name,
+    estimateTotal: 40,
+    estimateLines: [{ description: "Sibling job", quantity: 1, unitPrice: 40, total: 40 }],
+  });
+  await prisma.job.update({
+    where: { id: sibling.job.id },
+    data: { assignedMembershipId: otherMem.id },
+  });
+  const jobAStartedAt = new Date(Date.now() - 50 * 60 * 1000);
+  const runningJobA = await clockInTime(prisma, memberA, {
+    membershipId: memberMem.id,
+    activityType: "JOB",
+    jobId: timed.job.id,
+    startedAt: jobAStartedAt,
+    note: "On site finishing timed labor",
+  });
+  const runningJobB = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: otherMem.id,
+      jobId: sibling.job.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: new Date(Date.now() - 30 * 60 * 1000),
+      endedAt: null,
+      source: "CLOCK",
+    },
+  });
+  const runningTravel = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: ownerMem.id,
+      activityType: "TRAVEL",
+      status: "RUNNING",
+      startedAt: new Date(Date.now() - 20 * 60 * 1000),
+      endedAt: null,
+      source: "CLOCK",
+    },
+  });
+  const completedTimed = await completeJobAndSendInvoice(prisma, {
+    businessId: businessA.id,
+    jobId: timed.job.id,
+    businessName: businessA.name,
+    actorMembershipId: ownerMem.id,
+  });
+  const closedTimed = await prisma.timeEntry.findUnique({ where: { id: runningJobA.id } });
+  const timedAdjustments = await prisma.timeEntryAdjustment.findMany({
+    where: { timeEntryId: runningJobA.id, reason: JOB_COMPLETION_TIME_CLOSED_REASON },
+  });
+  check("owner complete with running JOB time succeeds", completedTimed.ok === true);
+  check(
+    "timed job is COMPLETED",
+    (await prisma.job.findUniqueOrThrow({ where: { id: timed.job.id } })).status === "COMPLETED",
+  );
+  check(
+    "invoice behavior is preserved",
+    completedTimed.ok &&
+      completedTimed.invoiceCreated === true &&
+      completedTimed.invoiceStatus === "SENT" &&
+      completedTimed.newlySent === true,
+  );
+  check(
+    "RUNNING JOB entry is READY with endedAt and preserved startedAt/note",
+    closedTimed.status === "READY" &&
+      closedTimed.endedAt != null &&
+      closedTimed.startedAt.getTime() === jobAStartedAt.getTime() &&
+      closedTimed.note === "On site finishing timed labor",
+  );
+  check("completion wrote one truthful close adjustment", timedAdjustments.length === 1);
+  check(
+    "sibling Job B running JOB entry is untouched",
+    (await prisma.timeEntry.findUnique({ where: { id: runningJobB.id } })).status === "RUNNING",
+  );
+  check(
+    "unrelated TRAVEL stays running",
+    (await prisma.timeEntry.findUnique({ where: { id: runningTravel.id } })).status === "RUNNING",
+  );
+
+  const retryTimed = await completeJobAndSendInvoice(prisma, {
+    businessId: businessA.id,
+    jobId: timed.job.id,
+    businessName: businessA.name,
+    actorMembershipId: ownerMem.id,
+  });
+  check("repeated owner completion reuses the invoice", retryTimed.ok && retryTimed.invoiceReused === true);
+  check(
+    "repeated owner completion does not double-adjust",
+    (await prisma.timeEntryAdjustment.count({
+      where: { timeEntryId: runningJobA.id, reason: JOB_COMPLETION_TIME_CLOSED_REASON },
+    })) === 1,
+  );
+  check(
+    "still exactly one invoice for the timed job",
+    (await prisma.invoice.count({ where: { jobId: timed.job.id } })) === 1,
+  );
+
+  console.log("\nTEST — Approved week blocks owner completion before invoice");
+  const approvedBlock = await createInProgressApprovedJob({
+    businessId: businessA.id,
+    customerId: customerA.id,
+    propertyId: propertyA.id,
+    customerName: customerA.name,
+    estimateTotal: 55,
+    estimateLines: [{ description: "Approved-week block", quantity: 1, unitPrice: 55, total: 55 }],
+  });
+  await prisma.job.update({
+    where: { id: approvedBlock.job.id },
+    data: { assignedMembershipId: memberMem.id },
+  });
+  const approvedRunning = await clockInTime(prisma, memberA, {
+    membershipId: memberMem.id,
+    activityType: "JOB",
+    jobId: approvedBlock.job.id,
+  });
+  await prisma.timesheetWeek.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memberMem.id,
+      weekStartedAt: weekRange(approvedRunning.startedAt).start,
+      status: "APPROVED",
+      approvedAt: new Date(),
+      approvedByMembershipId: ownerMem.id,
+    },
+  });
+  const invoicesBeforeBlock = await prisma.invoice.count({ where: { jobId: approvedBlock.job.id } });
+  const blockedApproved = await completeJobAndSendInvoice(prisma, {
+    businessId: businessA.id,
+    jobId: approvedBlock.job.id,
+    businessName: businessA.name,
+    actorMembershipId: ownerMem.id,
+  });
+  check("approved week fails completion", blockedApproved.ok === false && blockedApproved.jobCompleted === false);
+  check(
+    "approved-week block leaves Job IN_PROGRESS",
+    (await prisma.job.findUniqueOrThrow({ where: { id: approvedBlock.job.id } })).status === "IN_PROGRESS",
+  );
+  check(
+    "approved-week block creates no invoice",
+    (await prisma.invoice.count({ where: { jobId: approvedBlock.job.id } })) === invoicesBeforeBlock,
+  );
+  check(
+    "approved-week block does not mutate the running entry",
+    (await prisma.timeEntry.findUnique({ where: { id: approvedRunning.id } })).status === "RUNNING" &&
+      (await prisma.timeEntry.findUnique({ where: { id: approvedRunning.id } })).endedAt == null,
+  );
+
+  console.log("\nTEST — Owner completion vs JOB clock-in race");
+  const race = await createInProgressApprovedJob({
+    businessId: businessA.id,
+    customerId: customerA.id,
+    propertyId: propertyA.id,
+    customerName: customerA.name,
+    estimateTotal: 25,
+    estimateLines: [{ description: "Race job", quantity: 1, unitPrice: 25, total: 25 }],
+  });
+  const raceUser = await prisma.user.create({
+    data: { name: "Riley Race", email: "race-complete@example.com", passwordHash: "x" },
+  });
+  const raceMem = await prisma.membership.create({
+    data: { userId: raceUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  await prisma.job.update({
+    where: { id: race.job.id },
+    data: { assignedMembershipId: raceMem.id },
+  });
+  const raceAccess = makeAccess(businessA.id, "MEMBER", raceMem.id);
+  await Promise.allSettled([
+    clockInTime(prisma, raceAccess, {
+      membershipId: raceMem.id,
+      activityType: "JOB",
+      jobId: race.job.id,
+    }),
+    completeJobAndSendInvoice(prisma, {
+      businessId: businessA.id,
+      jobId: race.job.id,
+      businessName: businessA.name,
+      actorMembershipId: ownerMem.id,
+    }),
+  ]);
+  const raceJob = await prisma.job.findUniqueOrThrow({ where: { id: race.job.id } });
+  const raceRunning = await prisma.timeEntry.count({
+    where: {
+      businessId: businessA.id,
+      jobId: race.job.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      endedAt: null,
+    },
+  });
+  check(
+    "owner completion vs clock-in never leaves COMPLETED + RUNNING JOB time",
+    !(raceJob.status === "COMPLETED" && raceRunning > 0),
   );
 
   console.log(

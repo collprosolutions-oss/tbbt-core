@@ -46,7 +46,12 @@ const {
   ForbiddenError,
   requireBusinessCapability,
 } = await import("../src/lib/authorization.ts");
-const { clockInTime, clockOutTime } = await import("../src/lib/time-card-ops.ts");
+const {
+  clockInTime,
+  clockOutTime,
+  completeJobWithRunningTimeSafety,
+  JOB_COMPLETION_TIME_CLOSED_REASON,
+} = await import("../src/lib/time-card-ops.ts");
 const { visibleAppNav } = await import("../src/lib/nav.ts");
 
 let failures = 0;
@@ -159,6 +164,13 @@ check(
 check(
   "Every field action derives its Job through findAssignedJob() (assignment-scoped), not requireBusinessCapability() (business-wide)",
   fieldJobActionsSrc.includes("findAssignedJob(") && !fieldJobActionsSrc.includes("requireBusinessCapability("),
+);
+check(
+  "Field completion uses the canonical time-safety helper and still does not send the owner invoice",
+  fieldJobActionsSrc.includes("completeJobWithRunningTimeSafety") &&
+    fieldJobActionsSrc.includes("requireAssignedJobOperating") &&
+    !fieldJobActionsSrc.includes("completeJobAndSendInvoice") &&
+    !fieldJobActionsSrc.includes("persistDraftInvoiceFromCompletedJob"),
 );
 check(
   "Field job photos authorize through R2, not a File body on the server action",
@@ -386,18 +398,19 @@ async function simulateStartAssignedJob(jobId, businessId, membershipId) {
   return { ok: true, job: await prisma.job.findUnique({ where: { id: job.id } }) };
 }
 
-/** Mirrors completeAssignedJob() in src/app/actions/field-job.ts, using the REAL evaluateCompleteJob(). */
+/** Mirrors completeAssignedJob() in src/app/actions/field-job.ts, using the REAL completion/time safety. */
 async function simulateCompleteAssignedJob(jobId, businessId, membershipId) {
   const job = await findAssignedJobLike(jobId, businessId, membershipId);
   if (!job) {
     return { ok: false, reason: "not-assigned" };
   }
-  const result = evaluateCompleteJob(job.status);
+  const result = await completeJobWithRunningTimeSafety(prisma, {
+    businessId,
+    jobId: job.id,
+    actorMembershipId: membershipId,
+  });
   if (!result.ok) {
     return { ok: false, reason: result.error };
-  }
-  if (result.nextStatus) {
-    await prisma.job.update({ where: { id: job.id }, data: { status: result.nextStatus } });
   }
   return { ok: true, job: await prisma.job.findUnique({ where: { id: job.id } }) };
 }
@@ -740,6 +753,53 @@ try {
 
   const completeByWrongMember = await simulateCompleteAssignedJob(otherJob.id, businessA.id, member2Membership.id);
   check("A different member cannot Complete member1's job either", completeByWrongMember.ok === false);
+
+  console.log("\nTEST — Field completion closes RUNNING JOB time and does not invoice");
+  const fieldTimeJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: member1Membership.id,
+    },
+  });
+  const fieldClock = await clockInTime(prisma, memberAccess, {
+    membershipId: member1Membership.id,
+    activityType: "JOB",
+    jobId: fieldTimeJob.id,
+    note: "Field finishing punch list",
+  });
+  const fieldInvoicesBefore = await prisma.invoice.count({ where: { jobId: fieldTimeJob.id } });
+  const fieldComplete = await simulateCompleteAssignedJob(fieldTimeJob.id, businessA.id, member1Membership.id);
+  const fieldClosed = await prisma.timeEntry.findUnique({ where: { id: fieldClock.id } });
+  check("Assigned field member can complete with running JOB time", fieldComplete.ok === true && fieldComplete.job.status === "COMPLETED");
+  check(
+    "Field completion closed the RUNNING JOB entry",
+    fieldClosed.status === "READY" &&
+      fieldClosed.endedAt != null &&
+      fieldClosed.startedAt.getTime() === fieldClock.startedAt.getTime() &&
+      fieldClosed.note === "Field finishing punch list",
+  );
+  check(
+    "Field completion wrote a job-completed adjustment",
+    (await prisma.timeEntryAdjustment.count({
+      where: { timeEntryId: fieldClock.id, reason: JOB_COMPLETION_TIME_CLOSED_REASON },
+    })) === 1,
+  );
+  check(
+    "Field completion does not create an invoice",
+    (await prisma.invoice.count({ where: { jobId: fieldTimeJob.id } })) === fieldInvoicesBefore,
+  );
+  const fieldRepeat = await simulateCompleteAssignedJob(fieldTimeJob.id, businessA.id, member1Membership.id);
+  check("Repeated field completion stays COMPLETED", fieldRepeat.ok === true && fieldRepeat.job.status === "COMPLETED");
+  check(
+    "Repeated field completion does not double-adjust",
+    (await prisma.timeEntryAdjustment.count({
+      where: { timeEntryId: fieldClock.id, reason: JOB_COMPLETION_TIME_CLOSED_REASON },
+    })) === 1,
+  );
 
   console.log("\nTEST 22/23 — Job Photos: assignment-scoped, mirroring the existing private JobPhoto model");
   const { jobPhotoSrc } = await import("@/lib/business-storage/field-job-photos");
