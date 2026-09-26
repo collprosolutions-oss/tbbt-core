@@ -40,6 +40,7 @@ import {
 import { CustomerMaterialsTotalForm } from "@/components/estimates/customer-materials-total-form";
 import { EditMaterialLineForm } from "@/components/estimates/edit-material-line-form";
 import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-button";
+import { LegacyUnversionedSentNotice } from "@/components/estimates/legacy-unversioned-sent-notice";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
 import { CreateJobButton } from "@/components/jobs/create-job-button";
@@ -92,6 +93,7 @@ import {
 import { ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL } from "@/lib/estimate-document";
 import {
   customQuoteDisplayDescription,
+  draftEstimateSendState,
   isUnpricedCustomQuoteDraftLine,
   isUnpricedDraftLine,
 } from "@/lib/request-estimate-draft";
@@ -301,6 +303,11 @@ export default async function EstimateBuilderPage({
   const customerEmail = estimate.customer?.email ?? "";
   const hasCustomerEmail = isUsableEmail(customerEmail);
   const needsCustomQuotePrices = estimate.lineItems.some(isUnpricedCustomQuoteDraftLine);
+  const sendState = draftEstimateSendState({
+    status: estimate.status,
+    lineItems: estimate.lineItems,
+  });
+  const needsReissue = isSent && estimate.versions.length === 0;
   const fromCustomerRequest = Boolean(estimate.serviceRequestId);
   const hasOriginalWorkLine = estimate.lineItems.some(isOriginalEstimateWorkLine);
   const originalWorkLine = estimate.lineItems.find(isOriginalEstimateWorkLine) ?? null;
@@ -770,15 +777,22 @@ export default async function EstimateBuilderPage({
         }
       >
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <p>
-            Customer view:{" "}
-            <Link
-              href={`/e/${estimate.publicToken}`}
-              className="underline underline-offset-4"
-            >
-              /e/{estimate.publicToken}
-            </Link>
-          </p>
+          {isSent || isApproved ? (
+            <p>
+              Customer view:{" "}
+              <Link
+                href={`/e/${estimate.publicToken}`}
+                className="underline underline-offset-4"
+              >
+                /e/{estimate.publicToken}
+              </Link>
+            </p>
+          ) : (
+            <p>
+              This draft is not on the customer link. Preview it here, then
+              Send Estimate.
+            </p>
+          )}
           <Button asChild size="sm" variant="outline">
             <Link href={`/estimates/${estimate.id}/print`}>Preview Estimate</Link>
           </Button>
@@ -789,6 +803,14 @@ export default async function EstimateBuilderPage({
             <CopyEstimateLinkButton publicToken={estimate.publicToken} />
           ) : null}
         </div>
+        {needsReissue ? (
+          <div className="mt-3">
+            <LegacyUnversionedSentNotice
+              estimateId={estimate.id}
+              showReturnAction={false}
+            />
+          </div>
+        ) : null}
         {isSent ? (
           <p className="mt-2 text-sm text-foreground">
             This is the estimate currently presented to the customer. Editing
@@ -820,7 +842,7 @@ export default async function EstimateBuilderPage({
           {isDraft ? (
             <SendEstimateButton
               estimateId={estimate.id}
-              disabled={estimate.lineItems.length === 0 || needsCustomQuotePrices}
+              blockedReason={sendState.error}
             />
           ) : null}
           {isSent ? <EditEstimateButton estimateId={estimate.id} /> : null}

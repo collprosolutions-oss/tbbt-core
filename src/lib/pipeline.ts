@@ -272,6 +272,17 @@ export function parseOpportunityKey(raw: string | undefined): {
   return null;
 }
 
+/**
+ * Deep-link to the selected request in the Requests workspace.
+ * Uses the recorded serviceRequestId only. Never fabricates a selected route.
+ */
+export function pipelineOpenRequestHref(
+  serviceRequestId: string | null | undefined,
+): string | null {
+  const id = serviceRequestId?.trim();
+  return id ? `/requests?selected=${encodeURIComponent(id)}` : null;
+}
+
 export function daysSince(date: Date, now: Date = new Date()): number {
   const start = startOfDay(date).getTime();
   const today = startOfDay(now).getTime();

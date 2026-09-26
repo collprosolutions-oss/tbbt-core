@@ -17,6 +17,14 @@ import type { Prisma } from "@prisma/client";
 type TransactionClient = Prisma.TransactionClient;
 
 /**
+ * Owner-only copy for a historical SENT estimate that predates versioning.
+ * Approval stays refused until Return to Draft → Send creates Version 1.
+ * Do not fabricate a version at customer approval time.
+ */
+export const LEGACY_SENT_WITHOUT_VERSION_OWNER_MESSAGE =
+  "This older sent estimate has no version snapshot. Return it to Draft and Send again before the customer can approve it. Sending creates Version 1.";
+
+/**
  * Creates the immutable SENT snapshot for an estimate. Callers MUST invoke
  * this only after the DRAFT -> SENT status transition has already
  * succeeded (guarded by a status-checked updateMany), and MUST do so inside

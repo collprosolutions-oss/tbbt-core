@@ -566,6 +566,14 @@ export async function loadEstimateDocumentForBusiness(
     : null;
 }
 
+/**
+ * Customer token routes may show SENT and APPROVED documents only.
+ * Possessing publicToken must not expose DRAFT content, print, or PDF.
+ */
+export function isPublicEstimateDocumentVisible(status: string) {
+  return status === "SENT" || status === "APPROVED";
+}
+
 export async function loadEstimateDocumentByToken(
   token: string,
   db: PrismaClient = prisma,
@@ -580,7 +588,9 @@ export async function loadEstimateDocumentByToken(
     include: ESTIMATE_DOCUMENT_INCLUDE,
   });
 
-  return estimate
-    ? withPaymentSummary(estimate, toDocumentView(estimate), db)
-    : null;
+  if (!estimate || !isPublicEstimateDocumentVisible(estimate.status)) {
+    return null;
+  }
+
+  return withPaymentSummary(estimate, toDocumentView(estimate), db);
 }
