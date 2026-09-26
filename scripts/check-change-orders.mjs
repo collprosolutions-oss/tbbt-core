@@ -32,7 +32,7 @@
 import { createRequire, register } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   CAPABILITIES,
   ForbiddenError,
@@ -1219,6 +1219,22 @@ try {
   check(
     "portal catalog loader groups by existing ServiceCatalogItem.category",
     (portalCatalogGroupGrep.stdout || "").trim().length > 0,
+  );
+  const ownerReviewListSrc = readFileSync(
+    new URL("../src/components/jobs/additional-work-request-list.tsx", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Owner additional-work Dismiss requires confirmation and leaves Create Change Order intact",
+    ownerReviewListSrc.includes("Create Change Order") &&
+      ownerReviewListSrc.includes("createChangeOrder") &&
+      ownerReviewListSrc.includes("DISMISS_ADDITIONAL_WORK_CONFIRM") &&
+      ownerReviewListSrc.includes("This recorded status cannot be undone") &&
+      ownerReviewListSrc.includes("Yes, dismiss") &&
+      ownerReviewListSrc.includes("Keep request") &&
+      ownerReviewListSrc.includes("setConfirmingDismiss(true)") &&
+      !ownerReviewListSrc.includes("undo") &&
+      !ownerReviewListSrc.includes("Undo"),
   );
 
   // --- HTTP-level checks against the built, running app ---------------
