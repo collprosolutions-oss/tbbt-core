@@ -415,5 +415,77 @@ export function resolveConflicts(input: {
     });
   }
 
+  const protectionKeys = (...keys: string[]) => keys.filter((key) => recordedKeys.has(key));
+
+  if (hasAny("protection-checklist-organization")) {
+    items.push({
+      kind: "CHECKLIST_PRESENT_VS_COMPLIANCE",
+      recommendationKeys: protectionKeys("protection-checklist-organization"),
+      summary:
+        "A Business Protection checklist item being met means the corresponding recorded category exists in TBBT. It is not licensed, insured, compliant, or legally protected.",
+    });
+  }
+
+  if (
+    hasAny(
+      "protection-expired-recorded-date",
+      "protection-expiring-soon",
+      "protection-missing-date",
+      "protection-current-recorded-date",
+    )
+  ) {
+    items.push({
+      kind: "RECORDED_EXPIRY_VS_LEGAL_STATUS",
+      recommendationKeys: protectionKeys(
+        "protection-expired-recorded-date",
+        "protection-expiring-soon",
+        "protection-missing-date",
+        "protection-current-recorded-date",
+      ),
+      summary:
+        "Expiry states are recorded-date classifiers. CURRENT is not legal validity, EXPIRING_SOON is not a regulatory determination, EXPIRED is not regulatory noncompliance, and MISSING_DATE is not expired or noncompliant.",
+    });
+  }
+
+  if (
+    hasAny(
+      "protection-owner-review-recorded",
+      "protection-owner-review-not-recorded",
+      "protection-legal-warning-acknowledged",
+    )
+  ) {
+    items.push({
+      kind: "OWNER_REVIEW_VS_LEGAL_REVIEW",
+      recommendationKeys: protectionKeys(
+        "protection-owner-review-recorded",
+        "protection-owner-review-not-recorded",
+        "protection-legal-warning-acknowledged",
+      ),
+      summary:
+        "Owner review is a recorded owner workflow fact, not attorney review. A legal-warning acknowledgment is not attorney approval or legal advice.",
+    });
+  }
+
+  if (hasAny("protection-agreement-complete-not-enforceable", "protection-agreement-lifecycle")) {
+    items.push({
+      kind: "AGREEMENT_COMPLETE_VS_ENFORCEABLE",
+      recommendationKeys: protectionKeys(
+        "protection-agreement-complete-not-enforceable",
+        "protection-agreement-lifecycle",
+      ),
+      summary:
+        "SIGNED, COMPLETE, and EXTERNAL_COMPLETE are recorded workflow facts. They are not legal validity or enforceability.",
+    });
+  }
+
+  if (hasAny("protection-esign-not-connected")) {
+    items.push({
+      kind: "ESIGN_NOT_CONNECTED_VS_DIGITAL_SIGNATURE",
+      recommendationKeys: protectionKeys("protection-esign-not-connected"),
+      summary:
+        "E-sign is NOT_CONNECTED. A signed version, completion status, uploaded file, or external signature does not connect a provider and does not invent a digital signature.",
+    });
+  }
+
   return { items, uniqueRecommendationKeys };
 }

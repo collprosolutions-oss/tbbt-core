@@ -15,6 +15,8 @@ export type CoachContext = {
   communicationsFacts?: Record<string, string>;
   /** Bounded Knowledge/Launch facts from the selected specialist only. */
   knowledgeLaunchFacts?: Record<string, string>;
+  /** Bounded Business Protection facts from the selected specialist only. */
+  businessProtectionFacts?: Record<string, string>;
 };
 
 export const COACH_FACT_KEYS = [
@@ -104,6 +106,25 @@ export const COACH_FACT_KEYS = [
   "launch-unfinished-steps",
   "setup-proposal-count",
   "setup-proposal-excerpt",
+  "protection-expired-count",
+  "protection-expiring-soon-count",
+  "protection-missing-date-count",
+  "protection-current-count",
+  "protection-no-date-optional-count",
+  "protection-vault-active-count",
+  "protection-agreement-count",
+  "protection-owner-review-count",
+  "protection-draft-count",
+  "protection-questions-count",
+  "protection-ready-count",
+  "protection-complete-count",
+  "protection-checklist-met-count",
+  "protection-esign-status",
+  "protection-expiring-example",
+  "protection-expired-example",
+  "protection-missing-date-example",
+  "protection-owner-review-example",
+  "protection-draft-example",
 ] as const;
 
 export type CoachFactKey = (typeof COACH_FACT_KEYS)[number];
@@ -267,6 +288,7 @@ function factList(context: CoachContext): CitedFact[] {
     ...materialsFactEntries(context.materialsFacts),
     ...communicationsFactEntries(context.communicationsFacts),
     ...knowledgeLaunchFactEntries(context.knowledgeLaunchFacts),
+    ...businessProtectionFactEntries(context.businessProtectionFacts),
   ];
 }
 
@@ -354,6 +376,37 @@ function knowledgeLaunchFactEntries(facts?: Record<string, string>): CitedFact[]
   });
 }
 
+const BUSINESS_PROTECTION_FACT_LABELS: Record<string, { label: string; href: string }> = {
+  "protection-expired-count": { label: "Vault records with a recorded date that has passed", href: "/business-protection" },
+  "protection-expiring-soon-count": { label: "Vault records with a recorded date in the 30-day window", href: "/business-protection" },
+  "protection-missing-date-count": { label: "Vault records missing an expected date", href: "/business-protection" },
+  "protection-current-count": { label: "Vault records with a recorded date outside the warning window", href: "/business-protection" },
+  "protection-no-date-optional-count": { label: "Vault records in categories that do not require a date", href: "/business-protection" },
+  "protection-vault-active-count": { label: "Active Business Vault records", href: "/business-protection?area=vault" },
+  "protection-agreement-count": { label: "Recorded agreements", href: "/business-protection?area=agreements" },
+  "protection-owner-review-count": { label: "Agreements in OWNER_REVIEW", href: "/business-protection?area=agreements" },
+  "protection-draft-count": { label: "Agreements in DRAFT", href: "/business-protection?area=agreements" },
+  "protection-questions-count": { label: "Agreements in QUESTIONS", href: "/business-protection?area=agreements" },
+  "protection-ready-count": { label: "Agreements recorded as READY", href: "/business-protection?area=agreements" },
+  "protection-complete-count": { label: "Agreements with recorded completion", href: "/business-protection?area=agreements" },
+  "protection-checklist-met-count": { label: "Organization checklist categories on file", href: "/business-protection" },
+  "protection-esign-status": { label: "E-sign provider status", href: "/business-protection" },
+  "protection-expiring-example": { label: "Recorded expiring vault example", href: "/business-protection?area=vault" },
+  "protection-expired-example": { label: "Recorded expired vault example", href: "/business-protection?area=vault" },
+  "protection-missing-date-example": { label: "Recorded missing-date vault example", href: "/business-protection?area=vault" },
+  "protection-owner-review-example": { label: "Agreement recorded in OWNER_REVIEW", href: "/business-protection?area=agreements" },
+  "protection-draft-example": { label: "Agreement recorded as DRAFT", href: "/business-protection?area=agreements" },
+};
+
+function businessProtectionFactEntries(facts?: Record<string, string>): CitedFact[] {
+  if (!facts) return [];
+  return Object.entries(facts).flatMap(([key, value]) => {
+    const meta = BUSINESS_PROTECTION_FACT_LABELS[key];
+    if (!meta) return [];
+    return [{ key, label: meta.label, value, href: meta.href } satisfies CitedFact];
+  });
+}
+
 function recordedProfit(facts: BsosFacts) {
   return ownerCollectedAmount(facts) - facts.recordedExpenses.amount;
 }
@@ -424,7 +477,59 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
       `${context.facts.repeatCustomers.count} customer(s) have more than one completed job or paid invoice on file. ` +
       `${context.facts.completedJobsWithoutReview.count} completed job(s) have no review request yet. ` +
       "Recommendation: reconnect using the existing review/referral/follow-up workspace. TBBT will not send messages unless a connected channel accepts them or you mark them sent.";
-  } else if (/review|reputation/.test(q) && !/knowledge|launch|setup|learned|candidate|sop/.test(q)) {
+  } else if (
+    /\b(?:business protection|business vault|\bvault\b|protection (?:records?|checklist)|insurance(?: records?)?|licen[cs]es?|certifications?|renewal dates?|expir(?:ing|ed|y|ation)|e-?sign|digital sign|agreements?|owner review|legal[- ](?:warning|review)|legally approved)\b/.test(
+      q,
+    )
+  ) {
+    stance = "FACT";
+    if (context.businessProtectionFacts && Object.keys(context.businessProtectionFacts).length > 0) {
+      const facts = context.businessProtectionFacts;
+      keys = [
+        "protection-expiring-example",
+        "protection-expired-example",
+        "protection-owner-review-example",
+        "protection-esign-status",
+        "protection-expiring-soon-count",
+        "protection-checklist-met-count",
+      ].filter((key) => facts[key] != null);
+      if (keys.length === 0) keys = Object.keys(facts).slice(0, 6);
+      const expiringExample = facts["protection-expiring-example"];
+      const expiredExample = facts["protection-expired-example"];
+      const ownerReviewExample = facts["protection-owner-review-example"];
+      const draftExample = facts["protection-draft-example"];
+      const esign = facts["protection-esign-status"];
+      const expiringSoon = facts["protection-expiring-soon-count"];
+      const checklistMet = facts["protection-checklist-met-count"];
+      text =
+        (expiringExample
+          ? `An insurance or dated Business Vault record is on file: ${expiringExample}. TBBT classifies that record as EXPIRING_SOON based on its recorded date. `
+          : "") +
+        (expiredExample
+          ? `A Business Vault record has an owner-recorded expiration date that has passed: ${expiredExample}. EXPIRED is a recorded-date fact, not regulatory noncompliance. `
+          : "") +
+        (expiringSoon != null && !expiringExample
+          ? `${expiringSoon} active ${expiringSoon === "1" ? "record is" : "records are"} EXPIRING_SOON based on the recorded date. `
+          : "") +
+        (ownerReviewExample
+          ? `This agreement is recorded as OWNER_REVIEW: ${ownerReviewExample}. Owner review is recorded. OWNER_REVIEW is not attorney review or legal approval. `
+          : "") +
+        (draftExample && !ownerReviewExample
+          ? `An agreement is recorded as DRAFT: ${draftExample}. DRAFT is not READY and is not legally sufficient. `
+          : "") +
+        (esign === "NOT_CONNECTED"
+          ? "No e-sign provider is connected. Digital signing is not available. TBBT will not invent a digital signature. "
+          : "") +
+        (checklistMet != null
+          ? `${checklistMet} organization checklist ${checklistMet === "1" ? "category has" : "categories have"} a recorded match. That is recorded presence, not compliance. `
+          : "") +
+        "This is recorded organizational/workflow information, not a determination of legal, licensing, insurance, or regulatory compliance. The Coach does not sign, upload, renew, or mark agreements approved.";
+    } else {
+      keys = [];
+      text =
+        "Recorded Business Protection facts were not loaded for this question. Missing Protection data is not treated as an empty vault or as legal compliance.";
+    }
+  } else if (/review|reputation/.test(q) && !/knowledge|launch|setup|learned|candidate|sop|agreement|vault|protection/.test(q)) {
     keys = ["review-opportunities"];
     stance = "FACT";
     text = `${context.facts.completedJobsWithoutReview.count} completed job(s) have no recorded review request. Review requests are not gated on expected rating.`;

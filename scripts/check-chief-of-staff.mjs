@@ -148,6 +148,7 @@ const specialistFiles = [
   readFileSync(new URL("../src/lib/chief-of-staff/materials-specialist.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/communications-specialist.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/knowledge-launch-specialist.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/lib/chief-of-staff/business-protection-specialist.ts", import.meta.url), "utf8"),
 ];
 
 try {
@@ -165,14 +166,14 @@ try {
     specialistFiles.every((src) => !src.includes("runAiTask") && !src.includes("planSpecialists(") && !src.includes("runChiefOfStaffCoach")),
   );
   check(
-    "Disabled specialists have deep loaders that are not imported by the planner",
-    registrySrc.includes("enabled: false") &&
-      !plannerSrc.includes("loadFinancialDeep") &&
+    "Bounded specialists do not import workspace deep loaders into the planner or context",
+    !plannerSrc.includes("loadFinancialDeep") &&
       !plannerSrc.includes("financial-intelligence-data") &&
       !contextSrc.includes("@/lib/financial-intelligence") &&
       !contextSrc.includes("@/lib/growth-data") &&
       !contextSrc.includes("@/lib/materials") &&
-      !contextSrc.includes("@/lib/business-protection"),
+      !contextSrc.includes("@/lib/business-protection-data") &&
+      !contextSrc.includes("loadProtectionWorkspace"),
   );
   check("Coach action uses COS_ASK runner and still requires VIEW_REPORTS", actionSrc.includes("runChiefOfStaffCoach") && actionSrc.includes("VIEW_REPORTS") && !actionSrc.includes("AI_BUSINESS_COACH"));
   check("Recommendation mutations use the canonical catalog", bsosActionSrc.includes("findCatalogRecommendation") && !bsosActionSrc.includes("buildBsosRecommendations(facts)"));
@@ -209,6 +210,10 @@ try {
   check(
     "Kitchen-sink generic focus does not select KNOWLEDGE_LAUNCH",
     !kitchen.selectedIds.includes("KNOWLEDGE_LAUNCH"),
+  );
+  check(
+    "Kitchen-sink generic focus does not select BUSINESS_PROTECTION",
+    !kitchen.selectedIds.includes("BUSINESS_PROTECTION"),
   );
   check(
     "Kitchen-sink focus can select Financial when an owned recommendation is active",
@@ -384,12 +389,21 @@ try {
   check("Generic business question does not select KNOWLEDGE_LAUNCH", !genericBusiness.selectedIds.includes("KNOWLEDGE_LAUNCH"));
   check("Profit question does not select KNOWLEDGE_LAUNCH", !profitPlan.selectedIds.includes("KNOWLEDGE_LAUNCH"));
 
+  const protectionVault = planSpecialists({
+    question: "What is in my Business Vault?",
+    activeRecommendationKeys: [],
+  });
+  check("Vault question selects BUSINESS_PROTECTION", protectionVault.selectedIds.includes("BUSINESS_PROTECTION") && protectionVault.fanout <= 4);
+  check("Generic business question does not select BUSINESS_PROTECTION", !genericBusiness.selectedIds.includes("BUSINESS_PROTECTION"));
+  check("Profit question does not select BUSINESS_PROTECTION", !profitPlan.selectedIds.includes("BUSINESS_PROTECTION"));
+
   const enabled = enabledSpecialistIds();
   check(
-    "Enabled specialists are ATTENTION, WORKFORCE, FINANCIAL, GROWTH, KNOWLEDGE_LAUNCH, MATERIALS, and COMMUNICATIONS",
-    enabled.join(",") === "ATTENTION,WORKFORCE,FINANCIAL,GROWTH,KNOWLEDGE_LAUNCH,MATERIALS,COMMUNICATIONS",
+    "Enabled specialists are ATTENTION, WORKFORCE, FINANCIAL, GROWTH, KNOWLEDGE_LAUNCH, MATERIALS, COMMUNICATIONS, and BUSINESS_PROTECTION",
+    enabled.join(",") ===
+      "ATTENTION,WORKFORCE,FINANCIAL,GROWTH,KNOWLEDGE_LAUNCH,MATERIALS,COMMUNICATIONS,BUSINESS_PROTECTION",
   );
-  check("Registry keeps future specialist identities", SPECIALIST_IDS.includes("FINANCIAL") && SPECIALIST_IDS.includes("BUSINESS_PROTECTION"));
+  check("Registry keeps the existing BUSINESS_PROTECTION identity", SPECIALIST_IDS.includes("BUSINESS_PROTECTION"));
   check(
     "Deep WORKFORCE upgrades the existing specialist instead of adding another",
     registrySrc.includes('id: "WORKFORCE"') &&
@@ -464,6 +478,26 @@ try {
     getSpecialistEntry("KNOWLEDGE_LAUNCH").requiredRoleCapability === CAPABILITIES.VIEW_REPORTS &&
       getSpecialistEntry("KNOWLEDGE_LAUNCH").requiredProductCapability === null &&
       getSpecialistEntry("KNOWLEDGE_LAUNCH").enabled === true,
+  );
+  const businessProtectionSpecialistSrc = readFileSync(
+    new URL("../src/lib/chief-of-staff/business-protection-specialist.ts", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Deep BUSINESS_PROTECTION upgrades the existing specialist instead of adding another",
+    registrySrc.includes('id: "BUSINESS_PROTECTION"') &&
+      !registrySrc.includes('id: "BUSINESS_PROTECTION_DEEP"') &&
+      (registrySrc.match(/id: "BUSINESS_PROTECTION"/g) || []).length === 1 &&
+      !businessProtectionSpecialistSrc.includes("createVaultRecord") &&
+      !businessProtectionSpecialistSrc.includes("createAgreement") &&
+      !businessProtectionSpecialistSrc.includes("runAgreementAssist") &&
+      !businessProtectionSpecialistSrc.includes("loadProtectionWorkspace"),
+  );
+  check(
+    "BUSINESS_PROTECTION registry uses MANAGE_BUSINESS_PROTECTION with no product floor",
+    getSpecialistEntry("BUSINESS_PROTECTION").requiredRoleCapability === CAPABILITIES.MANAGE_BUSINESS_PROTECTION &&
+      getSpecialistEntry("BUSINESS_PROTECTION").requiredProductCapability === null &&
+      getSpecialistEntry("BUSINESS_PROTECTION").enabled === true,
   );
   check(
     "Canonical Workforce recommendation keys stay the original six",

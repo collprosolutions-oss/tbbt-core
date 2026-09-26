@@ -22,7 +22,7 @@ export type CosSynthesis = {
 function oneVoice(text: string) {
   return text
     .replace(/\b(Finance|Workforce|Growth|Knowledge|Materials|Communications|Vault|Protection) Agent says\b/gi, "Recorded facts show")
-    .replace(/\b(the )?(Finance|Workforce|Growth|Knowledge|Materials|Communications|Vault) specialist\b/gi, "recorded facts");
+    .replace(/\b(the )?(Finance|Workforce|Growth|Knowledge|Materials|Communications|Vault|Protection) specialist\b/gi, "recorded facts");
 }
 
 export function synthesizeCoachAnswer(input: {
@@ -94,6 +94,18 @@ export function synthesizeCoachAnswer(input: {
     if (row.limitation) extraNotes.push(row.limitation);
   }
 
+  const businessProtectionFindings = usable
+    .filter((row) => row.specialistId === "BUSINESS_PROTECTION")
+    .flatMap((row) => row.findings)
+    .slice(0, 6);
+  for (const finding of businessProtectionFindings) {
+    extraNotes.push(finding.summary);
+  }
+  for (const row of usable) {
+    if (row.specialistId !== "BUSINESS_PROTECTION") continue;
+    if (row.limitation) extraNotes.push(row.limitation);
+  }
+
   if (failed.length > 0) {
     extraNotes.push(
       "Part of the recorded attention view could not be loaded. The answer uses only the surviving facts and does not invent substitutes.",
@@ -154,7 +166,7 @@ export function synthesizeCoachAnswer(input: {
       ...failed.map((row) => row.limitation ?? row.failure?.message ?? "A recorded view was unavailable."),
       ...skipped.map((row) => row.limitation ?? "A recorded view was not available."),
     ],
-    recordedFindings: [...financialFindings, ...growthFindings, ...materialsFindings, ...communicationsFindings, ...knowledgeLaunchFindings].map((item) => ({
+    recordedFindings: [...financialFindings, ...growthFindings, ...materialsFindings, ...communicationsFindings, ...knowledgeLaunchFindings, ...businessProtectionFindings].map((item) => ({
       key: item.key,
       title: item.title,
       summary: item.summary,
