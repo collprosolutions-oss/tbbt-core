@@ -28,7 +28,16 @@ const { resolveBusinessTimeZone } = await import("@/lib/business-timezone");
 const { isCurrentAppointmentConfirmed } = await import(
   "@/lib/appointment-confirmation"
 );
-const { assignedJobWhere } = await import("@/lib/field-access");
+
+/** Mirrors assignedJobWhere() in src/lib/field-access.ts. Not imported from
+ *  that module because it pulls next/navigation into this Node script. */
+function assignedJobWhere(jobId, field) {
+  return {
+    id: jobId,
+    businessId: field.businessId,
+    assignedMembershipId: field.membershipId,
+  };
+}
 
 const WAITING_FOR_OFFICE = "Waiting for the office to schedule this job.";
 const CUSTOMER_NOT_CONFIRMED = "Customer has not confirmed this appointment.";
@@ -68,11 +77,11 @@ function exactAppointmentCopy(scheduledAt, timeZone) {
 }
 
 function hasStartJobSubmit(body) {
-  return /<button\b[^>]*>[\s\S]*?Start Job[\s\S]*?<\/button>/i.test(body);
+  return /<button\b[^>]*>\s*Start Job\s*<\/button>/i.test(body);
 }
 
 function hasCompleteJobSubmit(body) {
-  return /<button\b[^>]*>[\s\S]*?Complete Job[\s\S]*?<\/button>/i.test(body);
+  return /<button\b[^>]*>\s*Complete Job\s*<\/button>/i.test(body);
 }
 
 const fieldPageSrc = readRepo("src/app/field/jobs/[jobId]/page.tsx");
