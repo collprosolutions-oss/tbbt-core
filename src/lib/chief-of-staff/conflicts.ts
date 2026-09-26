@@ -382,5 +382,38 @@ export function resolveConflicts(input: {
     });
   }
 
+  if (hasAny("setup-proposal-not-applied")) {
+    items.push({
+      kind: "PROPOSAL_VS_APPLIED_SETUP",
+      recommendationKeys: knowledgeKeys("setup-proposal-not-applied"),
+      summary: "A setup proposal is not applied setup. AI setup proposals never imply a setting, service, or procedure was written unless the item is APPLIED.",
+    });
+    items.push({
+      kind: "PENDING_VS_APPROVED_SETUP_ITEM",
+      recommendationKeys: knowledgeKeys("setup-proposal-not-applied"),
+      summary: "PENDING setup-proposal items are not APPROVED.",
+    });
+    items.push({
+      kind: "APPROVED_VS_APPLIED_SETUP_ITEM",
+      recommendationKeys: knowledgeKeys("setup-proposal-not-applied"),
+      summary: "APPROVED setup-proposal items are not APPLIED.",
+    });
+    items.push({
+      kind: "REJECTED_VS_APPLIED_SETUP_ITEM",
+      recommendationKeys: knowledgeKeys("setup-proposal-not-applied"),
+      summary: "REJECTED setup-proposal items are not APPLIED.",
+    });
+    items.push({
+      kind: "BLOCKED_VS_APPLIED_SETUP_ITEM",
+      recommendationKeys: knowledgeKeys("setup-proposal-not-applied"),
+      summary: "BLOCKED setup-proposal items are not APPLIED.",
+    });
+    items.push({
+      kind: "SETUP_PROPOSAL_VS_COMPLETED_LAUNCH",
+      recommendationKeys: knowledgeKeys("setup-proposal-not-applied"),
+      summary: "DRAFT, REVIEWED, and PARTIALLY_APPLIED setup proposals are not completed Launch.",
+    });
+  }
+
   return { items, uniqueRecommendationKeys };
 }

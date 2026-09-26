@@ -17,9 +17,13 @@ const {
   KNOWLEDGE_LAUNCH_CONTEXT_CAPS,
   KNOWLEDGE_LAUNCH_OWNED_RECOMMENDATION_KEYS,
   KNOWLEDGE_LAUNCH_TARGET_CONSISTENCY_LIMITATION,
+  KNOWLEDGE_NOT_AUTHORIZED_LIMITATION,
   KNOWLEDGE_STATE_CONTRACT,
+  LAUNCH_NOT_AUTHORIZED_LIMITATION,
   MAX_RECURSION_DEPTH,
   MAX_SPECIALIST_FANOUT,
+  SETUP_NOT_AUTHORIZED_LIMITATION,
+  SETUP_STATE_CONTRACT,
   candidateIsNotApprovedKnowledge,
   conflictRemainsConflict,
   estimateIsLabeledEstimate,
@@ -32,11 +36,18 @@ const {
   launchCompleteDoesNotImplyWebsite,
   launchStatusesRemainDistinct,
   planSpecialists,
+  proposalIsNotAppliedSetup,
   resetKnowledgeLaunchSpecialistCounters,
   resetLastKnowledgeLaunchProjection,
   resolveConflicts,
+  resolveKnowledgeLaunchReadScope,
   runChiefOfStaffCoach,
   runKnowledgeLaunchSpecialist,
+  setupItemApprovedIsNotApplied,
+  setupItemBlockedIsNotApplied,
+  setupItemPendingIsNotApproved,
+  setupItemRejectedIsNotApplied,
+  setupProposalIsNotCompletedLaunch,
   supportedIsNotVerified,
   systemDerivedIsReserved,
   unknownStaysUnknown,
@@ -154,13 +165,15 @@ function projectionIsClosed(projection) {
     projection.candidates.length === 0 &&
     projection.procedures.length === 0 &&
     projection.launch.steps.length === 0 &&
+    projection.launch.loaded === false &&
+    (projection.setup?.proposals?.length ?? 0) === 0 &&
     projection.totals.entries === 0 &&
     projection.canReadDeep === false
   );
 }
 
 async function countKnowledgeLaunchRows(businessId) {
-  const [entries, candidates, procedures, progress, steps, proposals] = await Promise.all([
+  const [entries, candidates, procedures, progress, steps, proposals, proposalItems] = await Promise.all([
     prisma.knowledgeEntry.findMany({
       where: { businessId },
       select: {
@@ -188,7 +201,14 @@ async function countKnowledgeLaunchRows(businessId) {
       where: { businessId },
       select: { stepKey: true, status: true },
     }),
-    prisma.companySetupProposal.count({ where: { businessId } }),
+    prisma.companySetupProposal.findMany({
+      where: { businessId },
+      select: { id: true, status: true },
+    }),
+    prisma.companySetupProposalItem.findMany({
+      where: { businessId },
+      select: { id: true, status: true, title: true },
+    }),
   ]);
   return {
     entries: entries.length,
@@ -211,7 +231,15 @@ async function countKnowledgeLaunchRows(businessId) {
       .map((row) => `${row.stepKey}:${row.status}`)
       .sort()
       .join("|"),
-    proposals,
+    proposals: proposals.length,
+    proposalStates: proposals
+      .map((row) => `${row.id}:${row.status}`)
+      .sort()
+      .join("|"),
+    proposalItems: proposalItems
+      .map((row) => `${row.id}:${row.status}:${row.title}`)
+      .sort()
+      .join("|"),
   };
 }
 
@@ -264,7 +292,7 @@ async function seedLaunch(workspace, statuses) {
   return { progress, steps };
 }
 
-async function seedKnowledgeWorld(workspace, { secret = false, extraEntries = 0, launchStatuses } = {}) {
+async function seedKnowledgeWorld(workspace, { secret = false, extraEntries = 0, needsReviewOutside = 0, launchStatuses } = {}) {
   const prefix = secret ? "BetaSecretKnowledge" : "Alpha";
   const unreviewed = await createEntry(workspace, {
     title: `${prefix} unreviewed unknown`,
@@ -346,6 +374,17 @@ async function seedKnowledgeWorld(workspace, { secret = false, extraEntries = 0,
       },
     },
   });
+  const buriedNeedsReview = [];
+  for (let i = 0; i < needsReviewOutside; i += 1) {
+    buriedNeedsReview.push(
+      await createEntry(workspace, {
+        title: `${prefix} needs review buried ${i + 1}`,
+        body: `${prefix} needs review body ${i + 1}`,
+        approvalState: "UNREVIEWED",
+        trustState: "NEEDS_REVIEW",
+      }),
+    );
+  }
   const extras = [];
   for (let i = 0; i < extraEntries; i += 1) {
     extras.push(
@@ -373,8 +412,69 @@ async function seedKnowledgeWorld(workspace, { secret = false, extraEntries = 0,
     candidate,
     procedure,
     extras,
+    buriedNeedsReview,
     launch,
+    proposal: await seedSetupProposal(workspace, prefix),
   };
+}
+
+async function seedSetupProposal(workspace, prefix) {
+  return prisma.companySetupProposal.create({
+    data: {
+      businessId: workspace.business.id,
+      createdByMembershipId: workspace.membership.id,
+      status: "DRAFT",
+      inputText: `${prefix} SECRET_INPUT must never reach Coach`,
+      proposalSummary: `${prefix} SECRET_SUMMARY must never reach Coach`,
+      items: {
+        create: [
+          {
+            businessId: workspace.business.id,
+            kind: "SERVICE",
+            title: `${prefix} proposed deck staining`,
+            body: `${prefix} SECRET_BODY must never reach Coach`,
+            payloadJson: JSON.stringify({ secret: `${prefix}-payload` }),
+            status: "PENDING",
+          },
+          {
+            businessId: workspace.business.id,
+            kind: "PROCEDURE",
+            title: `${prefix} approved procedure item`,
+            body: `${prefix} approved body`,
+            payloadJson: "{}",
+            status: "APPROVED",
+          },
+          {
+            businessId: workspace.business.id,
+            kind: "GOAL",
+            title: `${prefix} rejected goal`,
+            body: `${prefix} rejected body`,
+            payloadJson: "{}",
+            status: "REJECTED",
+          },
+          {
+            businessId: workspace.business.id,
+            kind: "TRADE_ACTIVATION",
+            title: `${prefix} blocked trade`,
+            body: `${prefix} blocked body`,
+            payloadJson: "{}",
+            status: "BLOCKED",
+          },
+          {
+            businessId: workspace.business.id,
+            kind: "DESCRIPTION",
+            title: `${prefix} applied description`,
+            body: `${prefix} applied body`,
+            payloadJson: "{}",
+            status: "APPLIED",
+            appliedAt: new Date(),
+            appliedRecordKind: "Business",
+          },
+        ],
+      },
+    },
+    include: { items: true },
+  });
 }
 
 try {
@@ -406,6 +506,9 @@ try {
       !specialistSrc.includes("skipLaunchStep") &&
       !specialistSrc.includes("deferLaunchStep") &&
       !specialistSrc.includes("ensureLaunchProgress") &&
+      !specialistSrc.includes("createCompanySetupProposal") &&
+      !specialistSrc.includes("reviewCompanySetupItem") &&
+      !specialistSrc.includes("applyCompanySetupItem") &&
       !specialistSrc.includes("publishWebsite") &&
       !specialistSrc.includes("AiActionProposal") &&
       !snapshotSrc.includes("AiActionProposal") &&
@@ -448,9 +551,46 @@ try {
   check("Launch completion does not imply website publishing", launchCompleteDoesNotImplyWebsite("COMPLETED", false));
   check("Launch completion does not imply provider connection", launchCompleteDoesNotImplyProvider("COMPLETED", false));
   check(
+    "Setup proposal statuses remain distinct",
+    SETUP_STATE_CONTRACT.proposalStatuses.join(",") === "DRAFT,REVIEWED,PARTIALLY_APPLIED,APPLIED,DISCARDED" &&
+      SETUP_STATE_CONTRACT.itemStatuses.join(",") === "PENDING,APPROVED,REJECTED,APPLIED,BLOCKED",
+  );
+  check("Proposal is not applied setup", proposalIsNotAppliedSetup("DRAFT") && proposalIsNotAppliedSetup("REVIEWED") && proposalIsNotAppliedSetup("PARTIALLY_APPLIED"));
+  check("PENDING setup item is not APPROVED", setupItemPendingIsNotApproved("PENDING") && !setupItemPendingIsNotApproved("APPROVED"));
+  check("APPROVED setup item is not APPLIED", setupItemApprovedIsNotApplied("APPROVED") && !setupItemApprovedIsNotApplied("APPLIED"));
+  check("REJECTED setup item is not APPLIED", setupItemRejectedIsNotApplied("REJECTED"));
+  check("BLOCKED setup item is not APPLIED", setupItemBlockedIsNotApplied("BLOCKED"));
+  check("DRAFT/REVIEWED/PARTIALLY_APPLIED proposal is not completed Launch", setupProposalIsNotCompletedLaunch("DRAFT") && setupProposalIsNotCompletedLaunch("REVIEWED") && setupProposalIsNotCompletedLaunch("PARTIALLY_APPLIED"));
+  check("ADMIN is not treated as OWNER for Launch/setup", resolveKnowledgeLaunchReadScope(makeAccess("biz", "ADMIN", "m", "u")).launch === false && resolveKnowledgeLaunchReadScope(makeAccess("biz", "ADMIN", "m", "u")).setup === false);
+  check("OWNER can read Knowledge + Launch + setup when entitled", resolveKnowledgeLaunchReadScope(makeAccess("biz", "OWNER", "m", "u")).knowledge && resolveKnowledgeLaunchReadScope(makeAccess("biz", "OWNER", "m", "u")).launch && resolveKnowledgeLaunchReadScope(makeAccess("biz", "OWNER", "m", "u")).setup);
+  check("MEMBER cannot read either domain", !resolveKnowledgeLaunchReadScope(makeAccess("biz", "MEMBER", "m", "u")).knowledge && !resolveKnowledgeLaunchReadScope(makeAccess("biz", "MEMBER", "m", "u")).launch);
+  check(
     "Owned recommendation keys stay the existing catalog only",
     KNOWLEDGE_LAUNCH_OWNED_RECOMMENDATION_KEYS.join(",") ===
       "finish-business-launch,review-experience-learnings,approve-business-knowledge",
+  );
+  check(
+    "Projection caps stay deterministic",
+    KNOWLEDGE_LAUNCH_CONTEXT_CAPS.entries === 8 &&
+      KNOWLEDGE_LAUNCH_CONTEXT_CAPS.candidates === 8 &&
+      KNOWLEDGE_LAUNCH_CONTEXT_CAPS.procedures === 8 &&
+      KNOWLEDGE_LAUNCH_CONTEXT_CAPS.launchSteps === 14 &&
+      KNOWLEDGE_LAUNCH_CONTEXT_CAPS.proposals === 3 &&
+      KNOWLEDGE_LAUNCH_CONTEXT_CAPS.proposalItems === 5 &&
+      KNOWLEDGE_LAUNCH_CONTEXT_CAPS.proposalTitle === 80 &&
+      KNOWLEDGE_LAUNCH_CONTEXT_CAPS.explainedEntries === 3 &&
+      KNOWLEDGE_LAUNCH_CONTEXT_CAPS.explainedCandidates === 1 &&
+      KNOWLEDGE_LAUNCH_CONTEXT_CAPS.explainedUnfinishedSteps === 6 &&
+      KNOWLEDGE_LAUNCH_CONTEXT_CAPS.findings === 16 &&
+      KNOWLEDGE_LAUNCH_CONTEXT_CAPS.facts === 24 &&
+      KNOWLEDGE_LAUNCH_CONTEXT_CAPS.excerpt === 240,
+  );
+  check(
+    "Launch and setup keep OWNER-only source gates",
+    specialistSrc.includes("MANAGE_SETTINGS") &&
+      specialistSrc.includes("USE_AI_ASSIST") &&
+      specialistSrc.includes("isKnowledgeLaunchOwnerRole") &&
+      specialistSrc.includes("MANAGE_KNOWLEDGE"),
   );
 
   const learned = planSpecialists({ question: "What have we learned about this kind of work?", activeRecommendationKeys: [] });
@@ -495,7 +635,7 @@ try {
   });
   const memberAccess = makeAccess(tenantA.business.id, "MEMBER", memberMembership.id, memberUser.id);
 
-  const seededA = await seedKnowledgeWorld(tenantA, { extraEntries: 6 });
+  const seededA = await seedKnowledgeWorld(tenantA, { extraEntries: 10, needsReviewOutside: 3 });
   const seededB = await seedKnowledgeWorld(tenantB, { secret: true });
   const completedStatuses = LAUNCH_STEP_KEYS.map((key, index) => (index === LAUNCH_STEP_KEYS.length - 1 ? "SKIPPED" : "COMPLETED"));
   const seededComplete = await seedKnowledgeWorld(tenantComplete, { launchStatuses: completedStatuses });
@@ -530,6 +670,15 @@ try {
   check("Tenant ownership is explicit on entries", ownerProjection.entries.every((row) => row.businessId === tenantA.business.id));
   check("Tenant ownership is explicit on candidates", ownerProjection.candidates.every((row) => row.businessId === tenantA.business.id));
   check("Owner sees targeted local titles", ownerProjection.entries.some((row) => row.title.includes("Alpha")));
+  check("Owner can read Knowledge + Launch when entitled", ownerProjection.canReadKnowledge && ownerProjection.canReadLaunch && ownerProjection.canReadSetup && ownerProjection.launch.loaded && ownerProjection.setup.loaded);
+  check("Owner setup proposal stays DRAFT, not applied", ownerProjection.setup.proposals.some((row) => row.id === seededA.proposal.id && row.status === "DRAFT" && proposalIsNotAppliedSetup(row.status)));
+  check("Owner setup item statuses stay distinct", ["PENDING", "APPROVED", "REJECTED", "APPLIED", "BLOCKED"].every((status) => ownerProjection.setup.proposals.some((row) => row.items.some((item) => item.status === status))));
+  check("PENDING setup item is not treated as APPROVED", ownerProjection.setup.proposals[0].items.some((item) => item.status === "PENDING" && setupItemPendingIsNotApproved(item.status)));
+  check("APPROVED setup item is not treated as APPLIED", ownerProjection.setup.proposals[0].items.some((item) => item.status === "APPROVED" && setupItemApprovedIsNotApplied(item.status) && item.applied === false));
+  check("REJECTED setup item is not treated as APPLIED", ownerProjection.setup.proposals[0].items.some((item) => item.status === "REJECTED" && setupItemRejectedIsNotApplied(item.status)));
+  check("BLOCKED setup item is not treated as APPLIED", ownerProjection.setup.proposals[0].items.some((item) => item.status === "BLOCKED" && setupItemBlockedIsNotApplied(item.status) && item.blocked === true));
+  check("Setup proposal title is bounded metadata", ownerProjection.setup.proposals[0].items.some((item) => item.title.includes("proposed deck staining") && item.title.length <= KNOWLEDGE_LAUNCH_CONTEXT_CAPS.proposalTitle + 1));
+  check("Setup proposal does not leak inputText/summary/body/payload", !JSON.stringify(ownerProjection).includes("SECRET_INPUT") && !JSON.stringify(ownerProjection).includes("SECRET_SUMMARY") && !JSON.stringify(ownerProjection).includes("SECRET_BODY") && !JSON.stringify(ownerProjection).includes("payloadJson"));
   check("No forbidden/private fields leak", !knowledgeLaunchProjectionHasForbiddenFields(ownerProjection));
   check("Full knowledge bodies are not projected", !JSON.stringify(ownerProjection).includes('"body"'));
   check("Candidate evidence is not projected", !JSON.stringify(ownerProjection).includes("BetaSecret") && !JSON.stringify(ownerProjection).includes("evidence"));
@@ -543,7 +692,20 @@ try {
     catalog: emptyCatalog(),
     question: "What does our business know about this?",
   });
-  check("Admin authorized deep read succeeds", adminResult.status === "OK" && getLastKnowledgeLaunchProjection()?.entries.some((row) => row.businessId === tenantA.business.id));
+  const adminProjection = getLastKnowledgeLaunchProjection();
+  check("Admin authorized Knowledge read succeeds", adminResult.status === "OK" && adminProjection?.entries.some((row) => row.businessId === tenantA.business.id));
+  check("Admin can read authorized Knowledge", adminProjection.canReadKnowledge === true && adminProjection.entries.some((row) => row.title.includes("Alpha")));
+  check("Admin cannot receive OWNER-only Launch progress", adminProjection.canReadLaunch === false && adminProjection.launch.loaded === false && adminProjection.launch.status == null);
+  check("Admin cannot receive OWNER-only Launch steps", adminProjection.launch.steps.length === 0);
+  check("Admin cannot receive provider Launch state", adminProjection.providers == null);
+  check("Admin cannot receive setup-proposal metadata", adminProjection.canReadSetup === false && adminProjection.setup.loaded === false && adminProjection.setup.proposals.length === 0);
+  check("Unauthorized Launch counts are not zero or complete", adminProjection.totals.launchPending == null && adminProjection.totals.launchCompleted == null && adminProjection.totals.launchDeferred == null);
+  check("Unauthorized setup counts are not zero or applied", adminProjection.totals.setupProposals == null && adminProjection.totals.setupApplied == null);
+  check("Admin Launch limitation is fail-safe", (adminResult.limitation ?? "").includes(LAUNCH_NOT_AUTHORIZED_LIMITATION));
+  check("Admin setup limitation is fail-safe", (adminResult.limitation ?? "").includes(SETUP_NOT_AUTHORIZED_LIMITATION));
+  check("Admin does not receive a Knowledge-not-authorized limitation", !(adminResult.limitation ?? "").includes(KNOWLEDGE_NOT_AUTHORIZED_LIMITATION));
+  check("Admin facts omit Launch counts", !adminResult.factKeys.includes("launch-pending-count") && !adminResult.factKeys.includes("launch-progress-status"));
+  check("Admin facts omit setup metadata", !adminResult.factKeys.includes("setup-proposal-count") && !adminResult.factKeys.includes("setup-proposal-excerpt"));
 
   resetLoads();
   const memberResult = await runKnowledgeLaunchSpecialist({
@@ -718,6 +880,13 @@ try {
     "Excerpts stay bounded",
     cappedProjection.entries.every((row) => row.excerpt.length <= KNOWLEDGE_LAUNCH_CONTEXT_CAPS.excerpt + 1),
   );
+  const visibleNeedsReview = cappedProjection.entries.filter((row) => row.trustState === "NEEDS_REVIEW").length;
+  const expectedNeedsReview = 3 + 1;
+  check("Needs-review rows can fall outside the visible sample", visibleNeedsReview < expectedNeedsReview && seededA.buriedNeedsReview.every((row) => !cappedProjection.entries.some((entry) => entry.id === row.id)));
+  check("Needs-review total is the scoped DB count, not the sample", cappedProjection.totals.needsReview === expectedNeedsReview);
+  check("Needs-review fact uses the scoped DB count", capped.factKeys.includes("knowledge-needs-review-count") && String(cappedProjection.totals.needsReview) === String(expectedNeedsReview));
+  check("Proposal cap holds", cappedProjection.setup.proposals.length <= KNOWLEDGE_LAUNCH_CONTEXT_CAPS.proposals);
+  check("Proposal item cap holds", cappedProjection.setup.proposals.every((row) => row.items.length <= KNOWLEDGE_LAUNCH_CONTEXT_CAPS.proposalItems));
 
   resetLoads();
   const first = await runKnowledgeLaunchSpecialist({
@@ -816,6 +985,16 @@ try {
       results: [findingResult("COMMUNICATIONS", ["communications-failed-delivery"])],
     }).items.every((item) => !["UNREVIEWED_VS_APPROVED", "CANDIDATE_VS_APPROVED_KNOWLEDGE", "LAUNCH_COMPLETE_VS_WEBSITE"].includes(item.kind)),
   );
+  const setupConflicts = resolveConflicts({
+    ...emptyConflictInput,
+    results: [findingResult("KNOWLEDGE_LAUNCH", ["setup-proposal-not-applied"])],
+  }).items.map((item) => item.kind);
+  check("PROPOSAL_VS_APPLIED_SETUP stays distinct", setupConflicts.includes("PROPOSAL_VS_APPLIED_SETUP"));
+  check("PENDING_VS_APPROVED_SETUP_ITEM stays distinct", setupConflicts.includes("PENDING_VS_APPROVED_SETUP_ITEM"));
+  check("APPROVED_VS_APPLIED_SETUP_ITEM stays distinct", setupConflicts.includes("APPROVED_VS_APPLIED_SETUP_ITEM"));
+  check("REJECTED_VS_APPLIED_SETUP_ITEM stays distinct", setupConflicts.includes("REJECTED_VS_APPLIED_SETUP_ITEM"));
+  check("BLOCKED_VS_APPLIED_SETUP_ITEM stays distinct", setupConflicts.includes("BLOCKED_VS_APPLIED_SETUP_ITEM"));
+  check("SETUP_PROPOSAL_VS_COMPLETED_LAUNCH stays distinct", setupConflicts.includes("SETUP_PROPOSAL_VS_COMPLETED_LAUNCH"));
 
   console.log("\nRUNTIME — orchestration, no write, no recursive specialist");
   resetLoads();
@@ -824,9 +1003,33 @@ try {
     attemptId: randomUUID(),
     browserBusinessId: tenantB.business.id,
   });
-  check("Coach omits Beta secret", Boolean(coach.text) && !coach.text.includes("BetaSecret"));
+  check("Coach omits Beta secret", Boolean(coach.text) && !coach.text.includes("BetaSecret") && !coach.text.includes("BetaSecretKnowledge"));
+  check("Seeded APPROVED Knowledge title/excerpt reaches the owner answer", /Alpha approved verified/i.test(coach.text ?? "") && /Alpha approved verified body/i.test(coach.text ?? ""));
+  check("Seeded UNREVIEWED content is labeled UNREVIEWED, not owner policy", /UNREVIEWED/i.test(coach.text ?? "") && /Alpha unreviewed unknown/i.test(coach.text ?? "") && /not owner policy/i.test(coach.text ?? ""));
+  check("A candidate can be described but remains a candidate", /Alpha candidate/i.test(coach.text ?? "") && /candidate/i.test(coach.text ?? "") && !/Alpha candidate body is not approved knowledge[\s\S]*approved knowledge policy/i.test(coach.text ?? ""));
+  check("Foreign tenant content never appears", !/BetaSecret/i.test(coach.text ?? "") && !/Beta proposed/i.test(coach.text ?? ""));
   check("Coach mentions recorded knowledge", /UNREVIEWED|APPROVED|candidate|launch|ESTIMATE|CONFLICT/i.test(coach.text ?? ""));
   check("Coach does not invent motives", !/because they forgot|the owner is lazy|we should fire/i.test(coach.text ?? ""));
+
+  resetLoads();
+  const setupCoach = await runChiefOfStaffCoach(prisma, tenantA.access, {
+    question: "What setup do I still need to finish?",
+    attemptId: randomUUID(),
+    browserBusinessId: tenantB.business.id,
+  });
+  check("Unfinished Launch steps are named, not only counted", /Active trade\(s\) \(PENDING\)/i.test(setupCoach.text ?? "") && /Services offered \(DEFERRED\)/i.test(setupCoach.text ?? ""));
+  check("Setup proposal item is described as proposal state, not applied state", /proposed deck staining/i.test(setupCoach.text ?? "") && /PENDING/i.test(setupCoach.text ?? "") && /not applied/i.test(setupCoach.text ?? ""));
+  check("Setup Coach omits proposal secrets and foreign tenant content", !/SECRET_INPUT|SECRET_SUMMARY|SECRET_BODY|BetaSecret/i.test(setupCoach.text ?? ""));
+
+  resetLoads();
+  const adminCoach = await runChiefOfStaffCoach(prisma, adminAccess, {
+    question: "What setup do I still need to finish?",
+    attemptId: randomUUID(),
+  });
+  check("Admin Coach can explain authorized Knowledge", /Alpha approved verified|UNREVIEWED|Alpha unreviewed/i.test(adminCoach.text ?? ""));
+  check("Admin Coach does not name OWNER-only Launch steps", !/Active trade\(s\) \(PENDING\)/i.test(adminCoach.text ?? "") && !/Services offered \(DEFERRED\)/i.test(adminCoach.text ?? ""));
+  check("Admin Coach does not expose setup-proposal metadata", !/proposed deck staining/i.test(adminCoach.text ?? "") && !/SECRET_INPUT/i.test(adminCoach.text ?? ""));
+  check("Admin missing Launch data is not represented as zero or complete", !/0 launch/i.test(adminCoach.text ?? "") && !/launch progress is COMPLETED/i.test(adminCoach.text ?? "") && /not loaded under the current role boundary/i.test(adminCoach.text ?? ""));
   check("Exactly one Knowledge/Launch projection load when selected", getKnowledgeLaunchProjectionLoadCount() === 1);
   check("Knowledge/Launch interprets once", getKnowledgeLaunchSpecialistInterpretationCount() === 1);
   check("Orchestration can complete", coach.orchestrationStatus === "COMPLETED");
@@ -875,7 +1078,7 @@ try {
   check("No experience candidates are created or promoted", before.candidates === after.candidates && before.candidateStates === after.candidateStates);
   check("No operating procedures are written", before.procedures === after.procedures && before.procedureStates === after.procedureStates);
   check("No launch progress is mutated", before.launchStatus === after.launchStatus && before.launchSteps === after.launchSteps);
-  check("No company-setup proposal is created", before.proposals === after.proposals);
+  check("No company-setup proposal is created or applied", before.proposals === after.proposals && before.proposalStates === after.proposalStates && before.proposalItems === after.proposalItems);
 
   check("Financial specialist file was not rewritten by this work", readFileSync(new URL("../src/lib/chief-of-staff/specialists/financial.ts", import.meta.url), "utf8").includes("interpretFinancialSpecialist"));
   check("Workforce specialist file was not rewritten by this work", readFileSync(new URL("../src/lib/chief-of-staff/workforce-specialist.ts", import.meta.url), "utf8").includes("runWorkforceSpecialist"));

@@ -25,7 +25,7 @@ const FINANCIAL_QUESTION =
 const GROWTH_QUESTION =
   /\b(leads?|lead funnel|lead source|pipeline|recover(?:y|ed)?(?: leads?)?|reactivat(?:e|ion)(?: customers?)?|campaigns?|marketing|attribution|(?:lead )?sources?|referrals?|reviews?|repeat customers?|customer retention|local (?:marketing|growth)|conversion|lost leads?|follow-up opportunities|growth)\b/i;
 const KNOWLEDGE_QUESTION =
-  /\b(?:knowledge(?: hub)?|operating procedures?|SOPs?|experience (?:learning )?candidates?|experience learnings?|what (?:have we|did we) learned|have we learned|what does (?:our |the )?business know|knowledge (?:approved|still needs review|needs review|unreviewed)|business launch|\blaunch\b|next launch step|defer(?:red)? during setup|what setup do i|setup (?:still )?(?:need|to finish)|launch setup complete|what did i defer)\b/i;
+  /\b(?:knowledge(?: hub)?|operating procedures?|SOPs?|experience (?:learning )?candidates?|experience learnings?|what (?:have we|did we) learned|have we learned|what does (?:our |the )?business know|knowledge (?:approved|still needs review|needs review|unreviewed)|business launch|\blaunch\b|next launch step|defer(?:red)? during setup|what setup do i|setup (?:still )?(?:need|to finish)|launch setup complete|what did i defer|setup proposals?|build my company)\b/i;
 const MATERIALS_QUESTION =
   /\b(materials?|suppliers?|vendors?|inventory|stock|lumber|parts|pickup|job materials|material variance|purchase orders?|purchas(?:e|ed|ing)|buy|bought|buying|\bPOs?\b|pric(?:e|es|ing))\b/i;
 const COMMUNICATIONS_QUESTION =

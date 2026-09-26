@@ -98,6 +98,12 @@ export const COACH_FACT_KEYS = [
   "launch-email-configured",
   "launch-sms-configured",
   "launch-storage-configured",
+  "knowledge-approved-excerpt",
+  "knowledge-unreviewed-excerpt",
+  "knowledge-candidate-excerpt",
+  "launch-unfinished-steps",
+  "setup-proposal-count",
+  "setup-proposal-excerpt",
 ] as const;
 
 export type CoachFactKey = (typeof COACH_FACT_KEYS)[number];
@@ -331,6 +337,12 @@ const KNOWLEDGE_LAUNCH_FACT_LABELS: Record<string, { label: string; href: string
   "launch-email-configured": { label: "Email delivery configured", href: "/settings" },
   "launch-sms-configured": { label: "SMS delivery configured", href: "/settings" },
   "launch-storage-configured": { label: "File storage configured", href: "/settings" },
+  "knowledge-approved-excerpt": { label: "Approved recorded knowledge", href: "/knowledge" },
+  "knowledge-unreviewed-excerpt": { label: "Unreviewed recorded knowledge", href: "/knowledge" },
+  "knowledge-candidate-excerpt": { label: "Experience learning candidate", href: "/knowledge" },
+  "launch-unfinished-steps": { label: "Unfinished launch steps", href: "/launch" },
+  "setup-proposal-count": { label: "Build-my-company setup proposals", href: "/launch/build" },
+  "setup-proposal-excerpt": { label: "Setup proposal state", href: "/launch/build" },
 };
 
 function knowledgeLaunchFactEntries(facts?: Record<string, string>): CitedFact[] {
@@ -412,7 +424,7 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
       `${context.facts.repeatCustomers.count} customer(s) have more than one completed job or paid invoice on file. ` +
       `${context.facts.completedJobsWithoutReview.count} completed job(s) have no review request yet. ` +
       "Recommendation: reconnect using the existing review/referral/follow-up workspace. TBBT will not send messages unless a connected channel accepts them or you mark them sent.";
-  } else if (/review|reputation/.test(q)) {
+  } else if (/review|reputation/.test(q) && !/knowledge|launch|setup|learned|candidate|sop/.test(q)) {
     keys = ["review-opportunities"];
     stance = "FACT";
     text = `${context.facts.completedJobsWithoutReview.count} completed job(s) have no recorded review request. Review requests are not gated on expected rating.`;
@@ -443,24 +455,43 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
           : `${reactivationCount} customer(s) are eligible for reactivation. `) +
         "These counts come from existing Business Health facts. The Coach does not create Growth actions.";
     }
-  } else if (/launch|knowledge|experience/.test(q)) {
+  } else if (/launch|knowledge|experience|learned|setup|sop|procedure|defer/.test(q)) {
     stance = "FACT";
     if (context.knowledgeLaunchFacts && Object.keys(context.knowledgeLaunchFacts).length > 0) {
-      keys = Object.keys(context.knowledgeLaunchFacts).slice(0, 6);
-      const unreviewed = context.knowledgeLaunchFacts["knowledge-unreviewed-count"];
-      const candidates = context.knowledgeLaunchFacts["knowledge-candidate-count"];
-      const pending = context.knowledgeLaunchFacts["launch-pending-count"];
-      const deferred = context.knowledgeLaunchFacts["launch-deferred-count"];
-      const launchStatus = context.knowledgeLaunchFacts["launch-progress-status"];
-      const website = context.knowledgeLaunchFacts["launch-website-published"];
+      const facts = context.knowledgeLaunchFacts;
+      keys = [
+        "knowledge-approved-excerpt",
+        "knowledge-unreviewed-excerpt",
+        "knowledge-candidate-excerpt",
+        "launch-unfinished-steps",
+        "setup-proposal-excerpt",
+        "knowledge-needs-review-count",
+      ].filter((key) => facts[key] != null);
+      if (keys.length === 0) keys = Object.keys(facts).slice(0, 6);
+      const approvedExcerpt = facts["knowledge-approved-excerpt"];
+      const unreviewedExcerpt = facts["knowledge-unreviewed-excerpt"];
+      const candidateExcerpt = facts["knowledge-candidate-excerpt"];
+      const unfinished = facts["launch-unfinished-steps"];
+      const setupExcerpt = facts["setup-proposal-excerpt"];
+      const unreviewed = facts["knowledge-unreviewed-count"];
+      const candidates = facts["knowledge-candidate-count"];
+      const pending = facts["launch-pending-count"];
+      const deferred = facts["launch-deferred-count"];
+      const launchStatus = facts["launch-progress-status"];
+      const website = facts["launch-website-published"];
       text =
-        (unreviewed != null ? `${unreviewed} Knowledge ${unreviewed === "1" ? "entry is" : "entries are"} UNREVIEWED, which is not APPROVED. ` : "") +
-        (candidates != null ? `${candidates} experience ${candidates === "1" ? "candidate remains" : "candidates remain"} a candidate, not approved knowledge. ` : "") +
-        (pending != null ? `${pending} launch ${pending === "1" ? "step is" : "steps are"} PENDING. ` : "") +
-        (deferred != null && deferred !== "0" ? `${deferred} launch ${deferred === "1" ? "step is" : "steps are"} DEFERRED. ` : "") +
+        (approvedExcerpt ? `Approved recorded knowledge: ${approvedExcerpt} ` : "") +
+        (unreviewedExcerpt ? `UNREVIEWED knowledge, not owner policy: ${unreviewedExcerpt} ` : "") +
+        (unreviewed != null && !unreviewedExcerpt ? `${unreviewed} Knowledge ${unreviewed === "1" ? "entry is" : "entries are"} UNREVIEWED, which is not APPROVED. ` : "") +
+        (candidateExcerpt ? `Experience candidate material, still a candidate: ${candidateExcerpt} ` : "") +
+        (candidates != null && !candidateExcerpt ? `${candidates} experience ${candidates === "1" ? "candidate remains" : "candidates remain"} a candidate, not approved knowledge. ` : "") +
+        (unfinished ? `Unfinished Launch steps: ${unfinished}. ` : "") +
+        (pending != null && !unfinished ? `${pending} launch ${pending === "1" ? "step is" : "steps are"} PENDING. ` : "") +
+        (deferred != null && deferred !== "0" && !unfinished ? `${deferred} launch ${deferred === "1" ? "step is" : "steps are"} DEFERRED. ` : "") +
+        (setupExcerpt ? `Setup proposal state, not applied Launch: ${setupExcerpt} ` : "") +
         (launchStatus ? `Recorded launch progress is ${launchStatus}. ` : "") +
         (website === "no" ? "Launch completion does not publish the website. " : "") +
-        "The Coach does not approve knowledge, promote candidates, or mutate launch steps.";
+        "The Coach does not approve knowledge, promote candidates, apply setup proposals, or mutate launch steps.";
     } else {
       keys = ["launch-incomplete", "knowledge-unreviewed", "experience-candidates"];
       text =

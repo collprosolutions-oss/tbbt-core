@@ -35,6 +35,11 @@ import type {
   SpecialistResult,
   SpecialistSkipReason,
 } from "@/lib/chief-of-staff/types";
+import {
+  COMPANY_SETUP_ITEM_STATUSES,
+  COMPANY_SETUP_PROPOSAL_ONLY_MESSAGE,
+  COMPANY_SETUP_PROPOSAL_STATUSES,
+} from "@/lib/company-setup";
 import { isCustomerMessagingConfigured } from "@/lib/customer-messaging/config";
 import {
   KNOWLEDGE_APPROVAL_STATES,
@@ -70,6 +75,12 @@ export const KNOWLEDGE_LAUNCH_CONTEXT_CAPS = {
   candidates: 8,
   procedures: 8,
   launchSteps: LAUNCH_STEP_KEYS.length,
+  proposals: 3,
+  proposalItems: 5,
+  proposalTitle: 80,
+  explainedEntries: 3,
+  explainedCandidates: 1,
+  explainedUnfinishedSteps: 6,
   findings: 16,
   facts: 24,
   entityIds: 4,
@@ -90,6 +101,8 @@ const FORBIDDEN_PROJECTION_KEYS = [
   "apiKey",
   "inputText",
   "proposalSummary",
+  "payloadJson",
+  "appliedRecordId",
   "stripeAccountId",
   "accountSid",
   "authToken",
@@ -105,13 +118,22 @@ export function knowledgeLaunchEntitlementLimitation(
   reason: SpecialistSkipReason,
 ) {
   if (reason === "NOT_AUTHORIZED") {
-    return "Knowledge Hub and Business Launch records were not loaded because this role cannot manage knowledge. Assigned field work is not business-wide Knowledge Hub or Launch data. Missing Knowledge/Launch data is not treated as empty knowledge or a finished launch.";
+    return "Knowledge Hub and Business Launch records were not loaded because this role cannot read those management records. Assigned field work is not business-wide Knowledge Hub or Launch data. Missing Knowledge/Launch data is not treated as empty knowledge or a finished launch.";
   }
   if (reason === "NOT_ENTITLED") {
     return "Knowledge Hub and Business Launch records were not loaded because this workspace does not have an active operating subscription. Missing Knowledge/Launch data is not treated as empty knowledge or a finished launch.";
   }
   return "Recorded Knowledge Hub and Business Launch data is unavailable. Missing Knowledge/Launch data is not treated as empty knowledge or a finished launch.";
 }
+
+export const KNOWLEDGE_NOT_AUTHORIZED_LIMITATION =
+  "Knowledge Hub records were not loaded under the current role boundary. Missing Knowledge data is not empty knowledge.";
+
+export const LAUNCH_NOT_AUTHORIZED_LIMITATION =
+  "Business Launch progress, launch steps, and provider launch state were not loaded under the current role boundary. Missing Launch data is not a finished launch and is not zero remaining steps.";
+
+export const SETUP_NOT_AUTHORIZED_LIMITATION =
+  "Build-my-company setup proposals were not loaded under the current role boundary. Missing proposal data is not applied setup.";
 
 export const KNOWLEDGE_LAUNCH_FAILURE_LIMITATION =
   "Recorded Knowledge Hub and Business Launch data could not be loaded. No substitute knowledge, invented lesson, or invented launch completion was substituted.";
@@ -166,6 +188,39 @@ export function launchCompleteDoesNotImplyProvider(
   providerConnected: boolean,
 ) {
   return launchStatus === "COMPLETED" && !providerConnected;
+}
+
+export function proposalIsNotAppliedSetup(status: string) {
+  return status !== "APPLIED";
+}
+
+export function setupItemPendingIsNotApproved(status: string) {
+  return status === "PENDING";
+}
+
+export function setupItemApprovedIsNotApplied(status: string) {
+  return status === "APPROVED";
+}
+
+export function setupItemRejectedIsNotApplied(status: string) {
+  return status === "REJECTED";
+}
+
+export function setupItemBlockedIsNotApplied(status: string) {
+  return status === "BLOCKED";
+}
+
+export function setupProposalIsNotCompletedLaunch(status: string) {
+  return (
+    status === "DRAFT" ||
+    status === "REVIEWED" ||
+    status === "PARTIALLY_APPLIED" ||
+    status === "DISCARDED"
+  );
+}
+
+export function isKnowledgeLaunchOwnerRole(role: string) {
+  return role === "OWNER";
 }
 
 export type KnowledgeEntryProjection = {
@@ -225,25 +280,59 @@ export type KnowledgeLaunchProviderState = {
 };
 
 export type KnowledgeLaunchProjectionTotals = {
-  entries: number;
-  approved: number;
-  unreviewed: number;
-  rejected: number;
-  needsReview: number;
-  conflicts: number;
-  estimates: number;
-  unknown: number;
-  supported: number;
-  verified: number;
-  externalReferences: number;
-  systemDerived: number;
-  candidates: number;
-  candidateOpen: number;
-  procedures: number;
-  launchPending: number;
-  launchCompleted: number;
-  launchSkipped: number;
-  launchDeferred: number;
+  entries: number | null;
+  approved: number | null;
+  unreviewed: number | null;
+  rejected: number | null;
+  needsReview: number | null;
+  conflicts: number | null;
+  estimates: number | null;
+  unknown: number | null;
+  supported: number | null;
+  verified: number | null;
+  externalReferences: number | null;
+  systemDerived: number | null;
+  candidates: number | null;
+  candidateOpen: number | null;
+  procedures: number | null;
+  launchPending: number | null;
+  launchCompleted: number | null;
+  launchSkipped: number | null;
+  launchDeferred: number | null;
+  setupProposals: number | null;
+  setupItems: number | null;
+  setupPending: number | null;
+  setupApproved: number | null;
+  setupRejected: number | null;
+  setupApplied: number | null;
+  setupBlocked: number | null;
+};
+
+export type SetupProposalItemProjection = {
+  id: string;
+  kind: string;
+  title: string;
+  status: string;
+  applied: boolean;
+  blocked: boolean;
+};
+
+export type SetupProposalProjection = {
+  id: string;
+  status: string;
+  itemCount: number;
+  pendingCount: number;
+  approvedCount: number;
+  rejectedCount: number;
+  appliedCount: number;
+  blockedCount: number;
+  items: SetupProposalItemProjection[];
+};
+
+export type KnowledgeLaunchReadScope = {
+  knowledge: boolean;
+  launch: boolean;
+  setup: boolean;
 };
 
 export type KnowledgeLaunchProjection = {
@@ -252,13 +341,21 @@ export type KnowledgeLaunchProjection = {
   candidates: KnowledgeCandidateProjection[];
   procedures: KnowledgeProcedureProjection[];
   launch: {
-    status: LaunchProgressStatus;
-    definedStepCount: number;
-    progressPercent: number;
+    loaded: boolean;
+    status: LaunchProgressStatus | null;
+    definedStepCount: number | null;
+    progressPercent: number | null;
     recommendedNext: LaunchStepKey | null;
     steps: LaunchStepProjection[];
   };
-  providers: KnowledgeLaunchProviderState;
+  setup: {
+    loaded: boolean;
+    proposals: SetupProposalProjection[];
+  };
+  providers: KnowledgeLaunchProviderState | null;
+  canReadKnowledge: boolean;
+  canReadLaunch: boolean;
+  canReadSetup: boolean;
   canReadDeep: boolean;
   targetedEntryUnauthorized: boolean;
   targetedCandidateUnauthorized: boolean;
@@ -302,6 +399,25 @@ function excerptText(value: string | null | undefined) {
   return sanitizeAiText(value ?? "", KNOWLEDGE_LAUNCH_CONTEXT_CAPS.excerpt);
 }
 
+function proposalTitle(value: string | null | undefined) {
+  return sanitizeAiText(value ?? "", KNOWLEDGE_LAUNCH_CONTEXT_CAPS.proposalTitle);
+}
+
+function isOwner(access: BusinessAccess) {
+  return isKnowledgeLaunchOwnerRole(access.workspace.role);
+}
+
+export function resolveKnowledgeLaunchReadScope(
+  access: BusinessAccess,
+  denyRoleCapabilities?: Capability[],
+): KnowledgeLaunchReadScope {
+  return {
+    knowledge: hasRole(access, CAPABILITIES.MANAGE_KNOWLEDGE, denyRoleCapabilities),
+    launch: isOwner(access) && hasRole(access, CAPABILITIES.MANAGE_SETTINGS, denyRoleCapabilities),
+    setup: isOwner(access) && hasRole(access, CAPABILITIES.USE_AI_ASSIST, denyRoleCapabilities),
+  };
+}
+
 function assertSafeProjection(projection: KnowledgeLaunchProjection) {
   const raw = JSON.stringify(projection);
   for (const key of FORBIDDEN_PROJECTION_KEYS) {
@@ -339,11 +455,86 @@ function emptyTotals(): KnowledgeLaunchProjectionTotals {
     launchCompleted: 0,
     launchSkipped: 0,
     launchDeferred: 0,
+    setupProposals: 0,
+    setupItems: 0,
+    setupPending: 0,
+    setupApproved: 0,
+    setupRejected: 0,
+    setupApplied: 0,
+    setupBlocked: 0,
+  };
+}
+
+function unavailableKnowledgeTotals(
+  totals: KnowledgeLaunchProjectionTotals,
+): KnowledgeLaunchProjectionTotals {
+  return {
+    ...totals,
+    entries: null,
+    approved: null,
+    unreviewed: null,
+    rejected: null,
+    needsReview: null,
+    conflicts: null,
+    estimates: null,
+    unknown: null,
+    supported: null,
+    verified: null,
+    externalReferences: null,
+    systemDerived: null,
+    candidates: null,
+    candidateOpen: null,
+    procedures: null,
+  };
+}
+
+function unavailableLaunchTotals(
+  totals: KnowledgeLaunchProjectionTotals,
+): KnowledgeLaunchProjectionTotals {
+  return {
+    ...totals,
+    launchPending: null,
+    launchCompleted: null,
+    launchSkipped: null,
+    launchDeferred: null,
+  };
+}
+
+function unavailableSetupTotals(
+  totals: KnowledgeLaunchProjectionTotals,
+): KnowledgeLaunchProjectionTotals {
+  return {
+    ...totals,
+    setupProposals: null,
+    setupItems: null,
+    setupPending: null,
+    setupApproved: null,
+    setupRejected: null,
+    setupApplied: null,
+    setupBlocked: null,
+  };
+}
+
+function unloadedLaunch(): KnowledgeLaunchProjection["launch"] {
+  return {
+    loaded: false,
+    status: null,
+    definedStepCount: null,
+    progressPercent: null,
+    recommendedNext: null,
+    steps: [],
+  };
+}
+
+function unloadedSetup(): KnowledgeLaunchProjection["setup"] {
+  return {
+    loaded: false,
+    proposals: [],
   };
 }
 
 type GateDecision =
-  | { status: "ok" }
+  | { status: "ok"; scope: KnowledgeLaunchReadScope }
   | { status: "skip"; skipReason: SpecialistSkipReason; limitation: string };
 
 async function resolveKnowledgeLaunchGates(
@@ -351,8 +542,8 @@ async function resolveKnowledgeLaunchGates(
   access: BusinessAccess,
   denyRoleCapabilities?: Capability[],
 ): Promise<GateDecision> {
-  const canManageKnowledge = hasRole(access, CAPABILITIES.MANAGE_KNOWLEDGE, denyRoleCapabilities);
-  if (!canManageKnowledge) {
+  const scope = resolveKnowledgeLaunchReadScope(access, denyRoleCapabilities);
+  if (!scope.knowledge && !scope.launch && !scope.setup) {
     return {
       status: "skip",
       skipReason: "NOT_AUTHORIZED",
@@ -381,7 +572,7 @@ async function resolveKnowledgeLaunchGates(
     };
   }
 
-  return { status: "ok" };
+  return { status: "ok", scope };
 }
 
 type ResolvedTargets = {
@@ -563,10 +754,44 @@ async function loadProviders(db: Db, businessId: string): Promise<KnowledgeLaunc
   };
 }
 
+function projectSetupProposal(row: {
+  id: string;
+  status: string;
+  items: Array<{
+    id: string;
+    kind: string;
+    title: string;
+    status: string;
+    appliedAt: Date | null;
+  }>;
+  _count: { items: number };
+}): SetupProposalProjection {
+  const items = row.items.slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.proposalItems).map((item) => ({
+    id: item.id,
+    kind: item.kind,
+    title: proposalTitle(item.title),
+    status: item.status,
+    applied: item.status === "APPLIED" || Boolean(item.appliedAt),
+    blocked: item.status === "BLOCKED",
+  }));
+  return {
+    id: row.id,
+    status: row.status,
+    itemCount: row._count.items,
+    pendingCount: items.filter((item) => item.status === "PENDING").length,
+    approvedCount: items.filter((item) => item.status === "APPROVED").length,
+    rejectedCount: items.filter((item) => item.status === "REJECTED").length,
+    appliedCount: items.filter((item) => item.status === "APPLIED").length,
+    blockedCount: items.filter((item) => item.status === "BLOCKED").length,
+    items,
+  };
+}
+
 export async function loadKnowledgeLaunchProjection(input: {
   db: Db;
   access: BusinessAccess;
   entityHints?: CosEntityHints;
+  denyRoleCapabilities?: Capability[];
 }): Promise<KnowledgeLaunchProjection> {
   recordKnowledgeLaunchProjectionLoad();
   if (shouldInjectKnowledgeLaunchLoadFailure()) {
@@ -574,6 +799,7 @@ export async function loadKnowledgeLaunchProjection(input: {
   }
 
   const businessId = input.access.businessId;
+  const scope = resolveKnowledgeLaunchReadScope(input.access, input.denyRoleCapabilities);
   const targets = await resolveTargets(input.db, businessId, input.entityHints);
   const failClosed =
     targets.targetedEntryUnauthorized ||
@@ -581,7 +807,10 @@ export async function loadKnowledgeLaunchProjection(input: {
     targets.targetedProcedureUnauthorized ||
     targets.targetedEntityMismatch;
   const scoped = targets.scoped && !failClosed;
-  const loadRows = !failClosed && (scoped || !targets.scoped);
+  const authorizedRows = !failClosed && (scoped || !targets.scoped);
+  const loadKnowledge = authorizedRows && scope.knowledge;
+  const loadLaunch = authorizedRows && scope.launch;
+  const loadSetup = authorizedRows && scope.setup;
 
   const entryWhere: Prisma.KnowledgeEntryWhereInput = {
     businessId,
@@ -645,6 +874,7 @@ export async function loadKnowledgeLaunchProjection(input: {
     approvedCount,
     unreviewedCount,
     rejectedCount,
+    needsReviewCount,
     conflictCount,
     estimateCount,
     unknownCount,
@@ -653,8 +883,16 @@ export async function loadKnowledgeLaunchProjection(input: {
     externalCount,
     systemDerivedCount,
     candidateOpenCount,
+    proposalRows,
+    proposalCount,
+    setupItemCount,
+    setupPendingCount,
+    setupApprovedCount,
+    setupRejectedCount,
+    setupAppliedCount,
+    setupBlockedCount,
   ] = await Promise.all([
-    loadRows
+    loadKnowledge
       ? input.db.knowledgeEntry.findMany({
           where: entryWhere,
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -662,7 +900,7 @@ export async function loadKnowledgeLaunchProjection(input: {
           select: entrySelect,
         })
       : Promise.resolve([]),
-    loadRows
+    loadKnowledge
       ? input.db.knowledgeEntry.findMany({
           where: { ...entryWhere, approvalState: "UNREVIEWED" },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -670,7 +908,7 @@ export async function loadKnowledgeLaunchProjection(input: {
           select: entrySelect,
         })
       : Promise.resolve([]),
-    loadRows
+    loadKnowledge
       ? input.db.knowledgeEntry.findMany({
           where: { ...entryWhere, approvalState: "APPROVED" },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -678,7 +916,7 @@ export async function loadKnowledgeLaunchProjection(input: {
           select: entrySelect,
         })
       : Promise.resolve([]),
-    loadRows
+    loadKnowledge
       ? input.db.knowledgeEntry.findMany({
           where: { ...entryWhere, trustState: "CONFLICT" },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -686,7 +924,7 @@ export async function loadKnowledgeLaunchProjection(input: {
           select: entrySelect,
         })
       : Promise.resolve([]),
-    loadRows
+    loadKnowledge
       ? input.db.knowledgeEntry.findMany({
           where: { ...entryWhere, trustState: "ESTIMATE" },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -694,7 +932,7 @@ export async function loadKnowledgeLaunchProjection(input: {
           select: entrySelect,
         })
       : Promise.resolve([]),
-    loadRows
+    loadKnowledge
       ? input.db.knowledgeEntry.findMany({
           where: { ...entryWhere, trustState: "UNKNOWN" },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -702,7 +940,7 @@ export async function loadKnowledgeLaunchProjection(input: {
           select: entrySelect,
         })
       : Promise.resolve([]),
-    loadRows
+    loadKnowledge
       ? input.db.knowledgeEntry.findMany({
           where: { ...entryWhere, trustState: "SUPPORTED" },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -710,7 +948,7 @@ export async function loadKnowledgeLaunchProjection(input: {
           select: entrySelect,
         })
       : Promise.resolve([]),
-    loadRows
+    loadKnowledge
       ? input.db.knowledgeEntry.findMany({
           where: { ...entryWhere, sourceType: "EXTERNAL_REFERENCE" },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -718,7 +956,7 @@ export async function loadKnowledgeLaunchProjection(input: {
           select: entrySelect,
         })
       : Promise.resolve([]),
-    loadRows
+    loadKnowledge
       ? input.db.knowledgeEntry.findMany({
           where: { ...entryWhere, sourceType: "SYSTEM_DERIVED" },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -726,7 +964,7 @@ export async function loadKnowledgeLaunchProjection(input: {
           select: entrySelect,
         })
       : Promise.resolve([]),
-    loadRows
+    loadKnowledge
       ? input.db.experienceLearningCandidate.findMany({
           where: candidateWhere,
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -743,7 +981,7 @@ export async function loadKnowledgeLaunchProjection(input: {
           },
         })
       : Promise.resolve([]),
-    loadRows
+    loadKnowledge
       ? input.db.operatingProcedure.findMany({
           where: procedureWhere,
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -764,7 +1002,7 @@ export async function loadKnowledgeLaunchProjection(input: {
           },
         })
       : Promise.resolve([]),
-    loadRows
+    loadLaunch
       ? input.db.businessLaunchProgress.findUnique({
           where: { businessId },
           select: {
@@ -775,7 +1013,7 @@ export async function loadKnowledgeLaunchProjection(input: {
           },
         })
       : Promise.resolve(null),
-    loadRows
+    loadLaunch
       ? input.db.businessLaunchStep.findMany({
           where: { businessId },
           select: {
@@ -787,56 +1025,94 @@ export async function loadKnowledgeLaunchProjection(input: {
           },
         })
       : Promise.resolve([]),
-    loadRows ? loadProviders(input.db, businessId) : Promise.resolve({
-      stripeStatus: "unknown",
-      stripePaymentReady: false,
-      emailConfigured: false,
-      smsConfigured: false,
-      storageConfigured: false,
-      websitePublished: false,
-    } satisfies KnowledgeLaunchProviderState),
-    loadRows ? input.db.knowledgeEntry.count({ where: entryWhere }) : Promise.resolve(0),
-    loadRows ? input.db.experienceLearningCandidate.count({ where: candidateWhere }) : Promise.resolve(0),
-    loadRows ? input.db.operatingProcedure.count({ where: procedureWhere }) : Promise.resolve(0),
-    loadRows
+    loadLaunch ? loadProviders(input.db, businessId) : Promise.resolve(null),
+    loadKnowledge ? input.db.knowledgeEntry.count({ where: entryWhere }) : Promise.resolve(null),
+    loadKnowledge ? input.db.experienceLearningCandidate.count({ where: candidateWhere }) : Promise.resolve(null),
+    loadKnowledge ? input.db.operatingProcedure.count({ where: procedureWhere }) : Promise.resolve(null),
+    loadKnowledge
       ? input.db.knowledgeEntry.count({ where: { ...entryWhere, approvalState: "APPROVED" } })
-      : Promise.resolve(0),
-    loadRows
+      : Promise.resolve(null),
+    loadKnowledge
       ? input.db.knowledgeEntry.count({ where: { ...entryWhere, approvalState: "UNREVIEWED" } })
-      : Promise.resolve(0),
-    loadRows
+      : Promise.resolve(null),
+    loadKnowledge
       ? input.db.knowledgeEntry.count({ where: { ...entryWhere, approvalState: "REJECTED" } })
-      : Promise.resolve(0),
-    loadRows
+      : Promise.resolve(null),
+    loadKnowledge
+      ? input.db.knowledgeEntry.count({
+          where: { ...entryWhere, trustState: { in: ["NEEDS_REVIEW", "CONFLICT"] } },
+        })
+      : Promise.resolve(null),
+    loadKnowledge
       ? input.db.knowledgeEntry.count({ where: { ...entryWhere, trustState: "CONFLICT" } })
-      : Promise.resolve(0),
-    loadRows
+      : Promise.resolve(null),
+    loadKnowledge
       ? input.db.knowledgeEntry.count({ where: { ...entryWhere, trustState: "ESTIMATE" } })
-      : Promise.resolve(0),
-    loadRows
+      : Promise.resolve(null),
+    loadKnowledge
       ? input.db.knowledgeEntry.count({ where: { ...entryWhere, trustState: "UNKNOWN" } })
-      : Promise.resolve(0),
-    loadRows
+      : Promise.resolve(null),
+    loadKnowledge
       ? input.db.knowledgeEntry.count({ where: { ...entryWhere, trustState: "SUPPORTED" } })
-      : Promise.resolve(0),
-    loadRows
+      : Promise.resolve(null),
+    loadKnowledge
       ? input.db.knowledgeEntry.count({ where: { ...entryWhere, trustState: "VERIFIED" } })
-      : Promise.resolve(0),
-    loadRows
+      : Promise.resolve(null),
+    loadKnowledge
       ? input.db.knowledgeEntry.count({
           where: { ...entryWhere, sourceType: "EXTERNAL_REFERENCE" },
         })
-      : Promise.resolve(0),
-    loadRows
+      : Promise.resolve(null),
+    loadKnowledge
       ? input.db.knowledgeEntry.count({
           where: { ...entryWhere, sourceType: "SYSTEM_DERIVED" },
         })
-      : Promise.resolve(0),
-    loadRows
+      : Promise.resolve(null),
+    loadKnowledge
       ? input.db.experienceLearningCandidate.count({
           where: { ...candidateWhere, status: { in: ["CANDIDATE", "REVIEWED"] } },
         })
-      : Promise.resolve(0),
+      : Promise.resolve(null),
+    loadSetup
+      ? input.db.companySetupProposal.findMany({
+          where: { businessId },
+          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+          take: KNOWLEDGE_LAUNCH_CONTEXT_CAPS.proposals,
+          select: {
+            id: true,
+            status: true,
+            items: {
+              orderBy: { createdAt: "asc" },
+              take: KNOWLEDGE_LAUNCH_CONTEXT_CAPS.proposalItems,
+              select: {
+                id: true,
+                kind: true,
+                title: true,
+                status: true,
+                appliedAt: true,
+              },
+            },
+            _count: { select: { items: true } },
+          },
+        })
+      : Promise.resolve([]),
+    loadSetup ? input.db.companySetupProposal.count({ where: { businessId } }) : Promise.resolve(null),
+    loadSetup ? input.db.companySetupProposalItem.count({ where: { businessId } }) : Promise.resolve(null),
+    loadSetup
+      ? input.db.companySetupProposalItem.count({ where: { businessId, status: "PENDING" } })
+      : Promise.resolve(null),
+    loadSetup
+      ? input.db.companySetupProposalItem.count({ where: { businessId, status: "APPROVED" } })
+      : Promise.resolve(null),
+    loadSetup
+      ? input.db.companySetupProposalItem.count({ where: { businessId, status: "REJECTED" } })
+      : Promise.resolve(null),
+    loadSetup
+      ? input.db.companySetupProposalItem.count({ where: { businessId, status: "APPLIED" } })
+      : Promise.resolve(null),
+    loadSetup
+      ? input.db.companySetupProposalItem.count({ where: { businessId, status: "BLOCKED" } })
+      : Promise.resolve(null),
   ]);
 
   const entryById = new Map<string, (typeof recentEntries)[number]>();
@@ -880,55 +1156,84 @@ export async function loadKnowledgeLaunchProjection(input: {
     targeted: Boolean(targets.procedureId && row.id === targets.procedureId),
   }));
 
-  const launchSummary = buildLaunchProgressSummary({
-    status: progress?.status,
-    lastStepKey: progress?.lastStepKey,
-    resumeLaterAt: progress?.resumeLaterAt,
-    completedAt: progress?.completedAt,
-    steps: stepRows,
-  });
-  const launchSteps = launchSummary.steps
+  const launchSummary = loadLaunch
+    ? buildLaunchProgressSummary({
+        status: progress?.status,
+        lastStepKey: progress?.lastStepKey,
+        resumeLaterAt: progress?.resumeLaterAt,
+        completedAt: progress?.completedAt,
+        steps: stepRows,
+      })
+    : null;
+  const launchSteps = (launchSummary?.steps ?? [])
     .slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.launchSteps)
     .map((step) => ({
       stepKey: step.stepKey,
       label: LAUNCH_STEP_LABELS[step.stepKey],
       status: step.status,
     }));
+  const setupProposals = loadSetup
+    ? proposalRows.slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.proposals).map(projectSetupProposal)
+    : [];
+
+  let totals: KnowledgeLaunchProjectionTotals = {
+    entries: entryCount,
+    approved: approvedCount,
+    unreviewed: unreviewedCount,
+    rejected: rejectedCount,
+    needsReview: needsReviewCount,
+    conflicts: conflictCount,
+    estimates: estimateCount,
+    unknown: unknownCount,
+    supported: supportedCount,
+    verified: verifiedCount,
+    externalReferences: externalCount,
+    systemDerived: systemDerivedCount,
+    candidates: candidateCount,
+    candidateOpen: candidateOpenCount,
+    procedures: procedureCount,
+    launchPending: launchSummary?.pendingCount ?? null,
+    launchCompleted: launchSummary?.completedCount ?? null,
+    launchSkipped: launchSummary?.skippedCount ?? null,
+    launchDeferred: launchSummary?.deferredCount ?? null,
+    setupProposals: proposalCount,
+    setupItems: setupItemCount,
+    setupPending: setupPendingCount,
+    setupApproved: setupApprovedCount,
+    setupRejected: setupRejectedCount,
+    setupApplied: setupAppliedCount,
+    setupBlocked: setupBlockedCount,
+  };
+  if (!loadKnowledge) totals = unavailableKnowledgeTotals(totals);
+  if (!loadLaunch) totals = unavailableLaunchTotals(totals);
+  if (!loadSetup) totals = unavailableSetupTotals(totals);
 
   const projection: KnowledgeLaunchProjection = {
-    totals: {
-      entries: entryCount,
-      approved: approvedCount,
-      unreviewed: unreviewedCount,
-      rejected: rejectedCount,
-      needsReview: entries.filter((row) => needsKnowledgeReview(row.trustState)).length,
-      conflicts: conflictCount,
-      estimates: estimateCount,
-      unknown: unknownCount,
-      supported: supportedCount,
-      verified: verifiedCount,
-      externalReferences: externalCount,
-      systemDerived: systemDerivedCount,
-      candidates: candidateCount,
-      candidateOpen: candidateOpenCount,
-      procedures: procedureCount,
-      launchPending: launchSummary.pendingCount,
-      launchCompleted: launchSummary.completedCount,
-      launchSkipped: launchSummary.skippedCount,
-      launchDeferred: launchSummary.deferredCount,
-    },
-    entries,
-    candidates: candidateRows,
-    procedures: procedureRows,
-    launch: {
-      status: launchSummary.status,
-      definedStepCount: launchSummary.definedStepCount,
-      progressPercent: launchSummary.progressPercent,
-      recommendedNext: launchSummary.recommendedNext,
-      steps: launchSteps,
-    },
-    providers,
-    canReadDeep: true,
+    totals,
+    entries: loadKnowledge ? entries : [],
+    candidates: loadKnowledge ? candidateRows : [],
+    procedures: loadKnowledge ? procedureRows : [],
+    launch: loadLaunch
+      ? {
+          loaded: true,
+          status: launchSummary?.status ?? "IN_PROGRESS",
+          definedStepCount: launchSummary?.definedStepCount ?? LAUNCH_STEP_KEYS.length,
+          progressPercent: launchSummary?.progressPercent ?? 0,
+          recommendedNext: launchSummary?.recommendedNext ?? null,
+          steps: launchSteps,
+        }
+      : { ...unloadedLaunch() },
+    setup: loadSetup
+      ? {
+          loaded: true,
+          proposals: setupProposals,
+        }
+      : { ...unloadedSetup() },
+    providers: loadLaunch ? providers : null,
+    canReadKnowledge: scope.knowledge,
+    canReadLaunch: scope.launch,
+    canReadSetup: scope.setup,
+    canReadDeep: loadKnowledge || loadLaunch || loadSetup,
     targetedEntryUnauthorized: targets.targetedEntryUnauthorized,
     targetedCandidateUnauthorized: targets.targetedCandidateUnauthorized,
     targetedProcedureUnauthorized: targets.targetedProcedureUnauthorized,
@@ -941,18 +1246,38 @@ export async function loadKnowledgeLaunchProjection(input: {
     projection.entries = [];
     projection.candidates = [];
     projection.procedures = [];
-    projection.launch = {
-      status: "IN_PROGRESS",
-      definedStepCount: LAUNCH_STEP_KEYS.length,
-      progressPercent: 0,
-      recommendedNext: null,
-      steps: [],
-    };
+    projection.launch = { ...unloadedLaunch() };
+    projection.setup = { ...unloadedSetup() };
+    projection.providers = null;
     projection.canReadDeep = false;
   }
 
   assertSafeProjection(projection);
   return projection;
+}
+
+function describeEntry(row: KnowledgeEntryProjection) {
+  return `"${row.title}" [${row.approvalState} / ${row.trustState} / ${row.sourceType}]: ${row.excerpt}`;
+}
+
+function describeCandidate(row: KnowledgeCandidateProjection) {
+  return `"${row.title}" [${row.status}, candidate not approved knowledge]: ${row.excerpt}`;
+}
+
+function describeUnfinishedSteps(steps: LaunchStepProjection[]) {
+  return steps
+    .filter((step) => step.status === "PENDING" || step.status === "DEFERRED")
+    .slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.explainedUnfinishedSteps)
+    .map((step) => `${step.label} (${step.status})`)
+    .join("; ");
+}
+
+function describeSetupProposal(proposal: SetupProposalProjection) {
+  const items = proposal.items
+    .slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.proposalItems)
+    .map((item) => `${item.kind} "${item.title}" is ${item.status}${item.applied ? " and already applied" : item.blocked ? " and blocked" : ", not applied"}`)
+    .join("; ");
+  return `Proposal ${proposal.id} is ${proposal.status}. ${COMPANY_SETUP_PROPOSAL_ONLY_MESSAGE}${items ? ` Items: ${items}.` : ""}`;
 }
 
 function findingsFromProjection(
@@ -961,12 +1286,23 @@ function findingsFromProjection(
 ): Array<{ key: string; title: string; why: string; entityIds?: string[] }> {
   const findings: Array<{ key: string; title: string; why: string; entityIds?: string[] }> = [];
   const t = projection.totals;
+  const approvedRows = projection.entries
+    .filter((row) => row.approvalState === "APPROVED")
+    .slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.explainedEntries);
+  const unreviewedRows = projection.entries
+    .filter((row) => row.approvalState === "UNREVIEWED")
+    .slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.explainedEntries);
+  const candidateRows = projection.candidates.slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.explainedCandidates);
+  const unfinished = describeUnfinishedSteps(projection.launch.steps);
 
-  if (t.approved > 0) {
+  if (projection.canReadKnowledge && (t.approved ?? 0) > 0) {
     findings.push({
       key: "knowledge-approved-entries",
       title: "Approved knowledge is on file",
-      why: `${t.approved} Knowledge ${t.approved === 1 ? "entry is" : "entries are"} APPROVED. Approval is owner policy, separate from trust state.`,
+      why:
+        `${t.approved} Knowledge ${t.approved === 1 ? "entry is" : "entries are"} APPROVED recorded knowledge, not an invented lesson. ` +
+        (approvedRows.length > 0 ? `Recorded examples: ${approvedRows.map(describeEntry).join(" ")} ` : "") +
+        "Approval is owner policy, separate from trust state.",
       entityIds: projection.entries
         .filter((row) => row.approvalState === "APPROVED")
         .map((row) => row.id)
@@ -974,11 +1310,13 @@ function findingsFromProjection(
     });
   }
 
-  if (t.unreviewed > 0) {
+  if (projection.canReadKnowledge && (t.unreviewed ?? 0) > 0) {
     findings.push({
       key: "knowledge-unreviewed-entries",
       title: "Knowledge still needs owner approval",
-      why: `${t.unreviewed} Knowledge ${t.unreviewed === 1 ? "entry is" : "entries are"} UNREVIEWED. UNREVIEWED is not APPROVED and is not owner policy.`,
+      why:
+        `${t.unreviewed} Knowledge ${t.unreviewed === 1 ? "entry is" : "entries are"} UNREVIEWED. UNREVIEWED is not APPROVED and is not owner policy. ` +
+        (unreviewedRows.length > 0 ? `Recorded UNREVIEWED examples: ${unreviewedRows.map(describeEntry).join(" ")}` : ""),
       entityIds: projection.entries
         .filter((row) => row.approvalState === "UNREVIEWED")
         .map((row) => row.id)
@@ -986,11 +1324,11 @@ function findingsFromProjection(
     });
   }
 
-  if (t.needsReview > 0 || t.conflicts > 0) {
+  if (projection.canReadKnowledge && ((t.needsReview ?? 0) > 0 || (t.conflicts ?? 0) > 0)) {
     findings.push({
       key: "knowledge-needs-review",
       title: "Knowledge trust still needs review",
-      why: `${t.conflicts} recorded ${t.conflicts === 1 ? "entry has" : "entries have"} trust CONFLICT and ${t.needsReview} projected ${t.needsReview === 1 ? "entry needs" : "entries need"} review. CONFLICT remains unresolved. The Coach does not approve or edit knowledge.`,
+      why: `${t.needsReview} recorded Knowledge ${t.needsReview === 1 ? "entry needs" : "entries need"} review because trust is NEEDS_REVIEW or CONFLICT. ${t.conflicts} of those ${t.conflicts === 1 ? "entry remains" : "entries remain"} CONFLICT. This is the scoped recorded total, not only the projected sample. CONFLICT remains unresolved. The Coach does not approve or edit knowledge.`,
       entityIds: projection.entries
         .filter((row) => needsKnowledgeReview(row.trustState))
         .map((row) => row.id)
@@ -998,7 +1336,7 @@ function findingsFromProjection(
     });
   }
 
-  if (t.conflicts > 0) {
+  if (projection.canReadKnowledge && (t.conflicts ?? 0) > 0) {
     findings.push({
       key: "knowledge-conflict",
       title: "Recorded knowledge is in conflict",
@@ -1010,7 +1348,7 @@ function findingsFromProjection(
     });
   }
 
-  if (t.estimates > 0) {
+  if (projection.canReadKnowledge && (t.estimates ?? 0) > 0) {
     findings.push({
       key: "knowledge-estimate",
       title: "Some knowledge is labeled an estimate",
@@ -1022,7 +1360,7 @@ function findingsFromProjection(
     });
   }
 
-  if (t.unknown > 0) {
+  if (projection.canReadKnowledge && (t.unknown ?? 0) > 0) {
     findings.push({
       key: "knowledge-unknown",
       title: "Some knowledge stays unknown",
@@ -1034,7 +1372,7 @@ function findingsFromProjection(
     });
   }
 
-  if (t.supported > 0) {
+  if (projection.canReadKnowledge && (t.supported ?? 0) > 0) {
     findings.push({
       key: "knowledge-supported-not-verified",
       title: "Supported knowledge is not verified",
@@ -1042,7 +1380,7 @@ function findingsFromProjection(
     });
   }
 
-  if (t.externalReferences > 0) {
+  if (projection.canReadKnowledge && (t.externalReferences ?? 0) > 0) {
     findings.push({
       key: "knowledge-external-not-verified",
       title: "External references are not internally verified",
@@ -1050,7 +1388,7 @@ function findingsFromProjection(
     });
   }
 
-  if (t.systemDerived > 0) {
+  if (projection.canReadKnowledge && (t.systemDerived ?? 0) > 0) {
     findings.push({
       key: "knowledge-system-derived-reserved",
       title: "System-derived knowledge is reserved",
@@ -1058,11 +1396,13 @@ function findingsFromProjection(
     });
   }
 
-  if (t.candidateOpen > 0 || t.candidates > 0) {
+  if (projection.canReadKnowledge && ((t.candidateOpen ?? 0) > 0 || (t.candidates ?? 0) > 0)) {
     findings.push({
       key: "knowledge-candidate-not-policy",
       title: "Experience candidates are not approved knowledge",
-      why: `${t.candidateOpen} experience ${t.candidateOpen === 1 ? "candidate remains" : "candidates remain"} a candidate or reviewed candidate. A candidate is not approved knowledge and is not promoted automatically.`,
+      why:
+        `${t.candidateOpen} experience ${t.candidateOpen === 1 ? "candidate remains" : "candidates remain"} a candidate or reviewed candidate. A candidate is not approved knowledge and is not promoted automatically. ` +
+        (candidateRows.length > 0 ? `Recorded candidate material: ${candidateRows.map(describeCandidate).join(" ")}` : ""),
       entityIds: projection.candidates
         .filter((row) => row.status === "CANDIDATE" || row.status === "REVIEWED")
         .map((row) => row.id)
@@ -1070,29 +1410,53 @@ function findingsFromProjection(
     });
   }
 
-  if (t.launchPending > 0) {
+  if (projection.launch.loaded && (t.launchPending ?? 0) > 0) {
+    const pendingLabels = projection.launch.steps
+      .filter((step) => step.status === "PENDING")
+      .slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.explainedUnfinishedSteps)
+      .map((step) => `${step.label} (PENDING)`)
+      .join("; ");
     findings.push({
       key: "launch-pending-steps",
       title: "Launch steps are still pending",
-      why: `${t.launchPending} Business Launch ${t.launchPending === 1 ? "step is" : "steps are"} PENDING. PENDING is not COMPLETED, SKIPPED, or DEFERRED. Recommended next recorded step: ${projection.launch.recommendedNext ?? "none"}.`,
+      why:
+        `${t.launchPending} Business Launch ${t.launchPending === 1 ? "step is" : "steps are"} PENDING. PENDING is not COMPLETED, SKIPPED, or DEFERRED. ` +
+        (pendingLabels ? `Recorded PENDING steps: ${pendingLabels}. ` : "") +
+        `Recommended next recorded step: ${projection.launch.recommendedNext ?? "none"}.`,
     });
   }
 
-  if (t.launchDeferred > 0) {
+  if (projection.launch.loaded && (t.launchDeferred ?? 0) > 0) {
+    const deferredLabels = projection.launch.steps
+      .filter((step) => step.status === "DEFERRED")
+      .slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.explainedUnfinishedSteps)
+      .map((step) => `${step.label} (DEFERRED)`)
+      .join("; ");
     findings.push({
       key: "launch-deferred-steps",
       title: "Launch steps were deferred",
-      why: `${t.launchDeferred} Business Launch ${t.launchDeferred === 1 ? "step is" : "steps are"} DEFERRED. DEFERRED is not COMPLETED and still blocks launch completion.`,
+      why:
+        `${t.launchDeferred} Business Launch ${t.launchDeferred === 1 ? "step is" : "steps are"} DEFERRED. DEFERRED is not COMPLETED and still blocks launch completion. ` +
+        (deferredLabels ? `Recorded DEFERRED steps: ${deferredLabels}.` : ""),
     });
   }
 
-  if (projection.launch.status === "COMPLETED") {
+  if (projection.launch.loaded && unfinished) {
+    findings.push({
+      key: "launch-unfinished-steps",
+      title: "Unfinished launch setup is still recorded",
+      why: `Unfinished Launch steps still need to be finished: ${unfinished}. SKIPPED stays SKIPPED. Launch completion does not publish the website or connect providers.`,
+    });
+  }
+
+  if (projection.launch.loaded && projection.launch.status === "COMPLETED") {
+    const providers = projection.providers;
     const providerGaps = [
-      projection.providers.websitePublished ? null : "the website is not published",
-      projection.providers.stripeStatus === "connected" ? null : "Stripe is not connected",
-      projection.providers.emailConfigured ? null : "email delivery is not configured",
-      projection.providers.smsConfigured ? null : "SMS is not connected",
-      projection.providers.storageConfigured ? null : "file storage is not configured",
+      providers?.websitePublished ? null : "the website is not published",
+      providers?.stripeStatus === "connected" ? null : "Stripe is not connected",
+      providers?.emailConfigured ? null : "email delivery is not configured",
+      providers?.smsConfigured ? null : "SMS is not connected",
+      providers?.storageConfigured ? null : "file storage is not configured",
     ].filter(Boolean);
     findings.push({
       key: "launch-complete-not-operating-proof",
@@ -1104,39 +1468,58 @@ function findingsFromProjection(
           ? `Provider/config state is separate: ${providerGaps.join("; ")}.`
           : "Provider/config state is read from the actual provider and published-site records, not from Launch step completion."),
     });
-    if (!projection.providers.websitePublished) {
+    if (!providers?.websitePublished) {
       findings.push({
         key: "launch-complete-vs-website",
         title: "Launch completion does not publish the website",
         why: `${LAUNCH_NO_PUBLISH_MESSAGE} Recorded launch status is COMPLETED and publishedWebsiteId is not set.`,
       });
     }
-    if (projection.providers.stripeStatus !== "connected" || !projection.providers.emailConfigured || !projection.providers.smsConfigured) {
+    if (providers?.stripeStatus !== "connected" || !providers.emailConfigured || !providers.smsConfigured) {
       findings.push({
         key: "launch-complete-vs-provider",
         title: "Launch completion does not connect providers",
-        why: `Launch completion does not imply Stripe, Resend, SMS, or R2 are connected. Recorded Stripe status is ${projection.providers.stripeStatus}. Email configured=${projection.providers.emailConfigured}. SMS configured=${projection.providers.smsConfigured}. Storage configured=${projection.providers.storageConfigured}.`,
+        why: `Launch completion does not imply Stripe, Resend, SMS, or R2 are connected. Recorded Stripe status is ${providers?.stripeStatus ?? "unknown"}. Email configured=${providers?.emailConfigured ?? false}. SMS configured=${providers?.smsConfigured ?? false}. Storage configured=${providers?.storageConfigured ?? false}.`,
       });
     }
   }
 
+  if (projection.setup.loaded && (t.setupProposals ?? 0) > 0) {
+    const proposal = projection.setup.proposals[0];
+    findings.push({
+      key: "setup-proposal-not-applied",
+      title: "Setup proposals are not applied setup",
+      why:
+        `${t.setupProposals} Build-my-company ${t.setupProposals === 1 ? "proposal is" : "proposals are"} on file. A proposal is not applied setup. PENDING is not APPROVED. APPROVED is not APPLIED. REJECTED is not APPLIED. BLOCKED is not APPLIED. DRAFT, REVIEWED, and PARTIALLY_APPLIED proposals are not completed Launch. ` +
+        (proposal ? describeSetupProposal(proposal) : COMPANY_SETUP_PROPOSAL_ONLY_MESSAGE),
+      entityIds: projection.setup.proposals.map((row) => row.id).slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.entityIds),
+    });
+  }
+
   for (const key of catalogKeys) {
     if (findings.some((item) => item.key === key)) continue;
-    if (key === "finish-business-launch" && t.launchPending + t.launchDeferred > 0) {
+    if (
+      key === "finish-business-launch" &&
+      projection.launch.loaded &&
+      (t.launchPending ?? 0) + (t.launchDeferred ?? 0) > 0
+    ) {
       findings.push({
         key,
         title: "Finish the recorded business launch",
-        why: `${t.launchPending + t.launchDeferred} recorded launch ${t.launchPending + t.launchDeferred === 1 ? "step is" : "steps are"} still PENDING or DEFERRED.`,
+        why:
+          `${(t.launchPending ?? 0) + (t.launchDeferred ?? 0)} recorded launch ${
+            (t.launchPending ?? 0) + (t.launchDeferred ?? 0) === 1 ? "step is" : "steps are"
+          } still PENDING or DEFERRED.` + (unfinished ? ` ${unfinished}.` : ""),
       });
     }
-    if (key === "review-experience-learnings" && t.candidateOpen > 0) {
+    if (key === "review-experience-learnings" && projection.canReadKnowledge && (t.candidateOpen ?? 0) > 0) {
       findings.push({
         key,
         title: "Review experience learnings",
         why: `${t.candidateOpen} experience ${t.candidateOpen === 1 ? "candidate is" : "candidates are"} still a candidate, not approved knowledge.`,
       });
     }
-    if (key === "approve-business-knowledge" && t.unreviewed > 0) {
+    if (key === "approve-business-knowledge" && projection.canReadKnowledge && (t.unreviewed ?? 0) > 0) {
       findings.push({
         key,
         title: "Approve business knowledge",
@@ -1152,24 +1535,55 @@ export function projectKnowledgeLaunchFacts(projection: KnowledgeLaunchProjectio
   const facts: Record<string, string> = {};
   const factKeys: string[] = [];
   const t = projection.totals;
-  addFact(facts, factKeys, "knowledge-approved-count", String(t.approved));
-  addFact(facts, factKeys, "knowledge-unreviewed-count", String(t.unreviewed));
-  addFact(facts, factKeys, "knowledge-rejected-count", String(t.rejected));
-  addFact(facts, factKeys, "knowledge-needs-review-count", String(t.needsReview));
-  addFact(facts, factKeys, "knowledge-conflict-count", String(t.conflicts));
-  addFact(facts, factKeys, "knowledge-estimate-count", String(t.estimates));
-  addFact(facts, factKeys, "knowledge-unknown-count", String(t.unknown));
-  addFact(facts, factKeys, "knowledge-candidate-count", String(t.candidateOpen));
-  addFact(facts, factKeys, "launch-pending-count", String(t.launchPending));
-  addFact(facts, factKeys, "launch-completed-step-count", String(t.launchCompleted));
-  addFact(facts, factKeys, "launch-skipped-count", String(t.launchSkipped));
-  addFact(facts, factKeys, "launch-deferred-count", String(t.launchDeferred));
-  addFact(facts, factKeys, "launch-progress-status", projection.launch.status);
-  addFact(facts, factKeys, "launch-website-published", projection.providers.websitePublished ? "yes" : "no");
-  addFact(facts, factKeys, "launch-payments-connected", projection.providers.stripeStatus);
-  addFact(facts, factKeys, "launch-email-configured", projection.providers.emailConfigured ? "yes" : "no");
-  addFact(facts, factKeys, "launch-sms-configured", projection.providers.smsConfigured ? "yes" : "no");
-  addFact(facts, factKeys, "launch-storage-configured", projection.providers.storageConfigured ? "yes" : "no");
+  const approved = projection.entries.find((row) => row.approvalState === "APPROVED");
+  const unreviewed = projection.entries.find((row) => row.approvalState === "UNREVIEWED");
+  const candidate = projection.candidates[0];
+  const unfinished = describeUnfinishedSteps(projection.launch.steps);
+  const proposal = projection.setup.proposals[0];
+
+  if (projection.canReadKnowledge && approved) {
+    addFact(facts, factKeys, "knowledge-approved-excerpt", describeEntry(approved));
+  }
+  if (projection.canReadKnowledge && unreviewed) {
+    addFact(facts, factKeys, "knowledge-unreviewed-excerpt", describeEntry(unreviewed));
+  }
+  if (projection.canReadKnowledge && candidate) {
+    addFact(facts, factKeys, "knowledge-candidate-excerpt", describeCandidate(candidate));
+  }
+  if (projection.launch.loaded && unfinished) {
+    addFact(facts, factKeys, "launch-unfinished-steps", unfinished);
+  }
+  if (projection.setup.loaded && proposal) {
+    addFact(facts, factKeys, "setup-proposal-excerpt", describeSetupProposal(proposal));
+  }
+
+  if (projection.canReadKnowledge) {
+    if (t.approved != null) addFact(facts, factKeys, "knowledge-approved-count", String(t.approved));
+    if (t.unreviewed != null) addFact(facts, factKeys, "knowledge-unreviewed-count", String(t.unreviewed));
+    if (t.rejected != null) addFact(facts, factKeys, "knowledge-rejected-count", String(t.rejected));
+    if (t.needsReview != null) addFact(facts, factKeys, "knowledge-needs-review-count", String(t.needsReview));
+    if (t.conflicts != null) addFact(facts, factKeys, "knowledge-conflict-count", String(t.conflicts));
+    if (t.estimates != null) addFact(facts, factKeys, "knowledge-estimate-count", String(t.estimates));
+    if (t.unknown != null) addFact(facts, factKeys, "knowledge-unknown-count", String(t.unknown));
+    if (t.candidateOpen != null) addFact(facts, factKeys, "knowledge-candidate-count", String(t.candidateOpen));
+  }
+  if (projection.launch.loaded) {
+    if (t.launchPending != null) addFact(facts, factKeys, "launch-pending-count", String(t.launchPending));
+    if (t.launchCompleted != null) addFact(facts, factKeys, "launch-completed-step-count", String(t.launchCompleted));
+    if (t.launchSkipped != null) addFact(facts, factKeys, "launch-skipped-count", String(t.launchSkipped));
+    if (t.launchDeferred != null) addFact(facts, factKeys, "launch-deferred-count", String(t.launchDeferred));
+    if (projection.launch.status) addFact(facts, factKeys, "launch-progress-status", projection.launch.status);
+    if (projection.providers) {
+      addFact(facts, factKeys, "launch-website-published", projection.providers.websitePublished ? "yes" : "no");
+      addFact(facts, factKeys, "launch-payments-connected", projection.providers.stripeStatus);
+      addFact(facts, factKeys, "launch-email-configured", projection.providers.emailConfigured ? "yes" : "no");
+      addFact(facts, factKeys, "launch-sms-configured", projection.providers.smsConfigured ? "yes" : "no");
+      addFact(facts, factKeys, "launch-storage-configured", projection.providers.storageConfigured ? "yes" : "no");
+    }
+  }
+  if (projection.setup.loaded && t.setupProposals != null) {
+    addFact(facts, factKeys, "setup-proposal-count", String(t.setupProposals));
+  }
   return { facts, factKeys };
 }
 
@@ -1205,6 +1619,7 @@ export async function runKnowledgeLaunchSpecialist(
       db: input.db,
       access: input.access,
       entityHints: input.entityHints,
+      denyRoleCapabilities: input.denyRoleCapabilities,
     });
     lastKnowledgeLaunchProjection = projection;
 
@@ -1220,6 +1635,9 @@ export async function runKnowledgeLaunchSpecialist(
     }));
 
     const limitations: string[] = [];
+    if (!projection.canReadKnowledge) limitations.push(KNOWLEDGE_NOT_AUTHORIZED_LIMITATION);
+    if (!projection.canReadLaunch) limitations.push(LAUNCH_NOT_AUTHORIZED_LIMITATION);
+    if (!projection.canReadSetup) limitations.push(SETUP_NOT_AUTHORIZED_LIMITATION);
     if (projection.targetedEntityMismatch) {
       limitations.push(TARGET_CONSISTENCY_LIMITATION);
     } else {
@@ -1265,21 +1683,12 @@ export function emptyKnowledgeLaunchProjectionForTests(): KnowledgeLaunchProject
     entries: [],
     candidates: [],
     procedures: [],
-    launch: {
-      status: "IN_PROGRESS",
-      definedStepCount: LAUNCH_STEP_KEYS.length,
-      progressPercent: 0,
-      recommendedNext: null,
-      steps: [],
-    },
-    providers: {
-      stripeStatus: "not_connected",
-      stripePaymentReady: false,
-      emailConfigured: false,
-      smsConfigured: false,
-      storageConfigured: false,
-      websitePublished: false,
-    },
+    launch: { ...unloadedLaunch() },
+    setup: { ...unloadedSetup() },
+    providers: null,
+    canReadKnowledge: false,
+    canReadLaunch: false,
+    canReadSetup: false,
     canReadDeep: false,
     targetedEntryUnauthorized: false,
     targetedCandidateUnauthorized: false,
@@ -1293,4 +1702,9 @@ export const KNOWLEDGE_STATE_CONTRACT = {
   approvalStates: KNOWLEDGE_APPROVAL_STATES,
   trustStates: KNOWLEDGE_TRUST_STATES,
   sourceTypes: KNOWLEDGE_SOURCE_TYPES,
+} as const;
+
+export const SETUP_STATE_CONTRACT = {
+  proposalStatuses: COMPANY_SETUP_PROPOSAL_STATUSES,
+  itemStatuses: COMPANY_SETUP_ITEM_STATUSES,
 } as const;

@@ -89,6 +89,10 @@ export function synthesizeCoachAnswer(input: {
   for (const finding of knowledgeLaunchFindings) {
     extraNotes.push(finding.summary);
   }
+  for (const row of usable) {
+    if (row.specialistId !== "KNOWLEDGE_LAUNCH") continue;
+    if (row.limitation) extraNotes.push(row.limitation);
+  }
 
   if (failed.length > 0) {
     extraNotes.push(
