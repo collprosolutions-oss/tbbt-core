@@ -10,6 +10,10 @@
 import { Prisma, type LineItemType, type PrismaClient } from "@prisma/client";
 import { getBusinessDocumentLogoSrc } from "@/lib/business-branding";
 import { splitLineDescription } from "@/lib/estimate-line-scope";
+import {
+  CUSTOM_QUOTE_DRAFT_MARKER,
+  customQuoteDisplayDescription,
+} from "@/lib/request-estimate-draft";
 import { parseWorkAreaIntake } from "@/lib/work-area-intake";
 import {
   collectEstimateTermContext,
@@ -54,6 +58,7 @@ export const ESTIMATE_LABOR_SECTION_TITLE = "LABOR";
 export const ESTIMATE_MATERIALS_SECTION_TITLE = "MATERIALS";
 export const ESTIMATE_OTHER_SECTION_TITLE = "OTHER";
 export const ESTIMATE_TOTAL_CUSTOMER_LABEL = "Estimate Total";
+export const ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL = "Custom Quote";
 
 export function estimateNumberFromId(estimateId: string): string {
   return `EST-${estimateId.slice(-8).toUpperCase()}`;
@@ -214,6 +219,24 @@ function toDocumentPolicy(policy: {
   };
 }
 
+function isUnpricedLaborLine(line: {
+  type: LineItemType;
+  unitPrice: Prisma.Decimal;
+  description: string;
+}) {
+  return (
+    line.type === "LABOR" &&
+    (line.unitPrice.lte(0) || line.description.includes(CUSTOM_QUOTE_DRAFT_MARKER))
+  );
+}
+
+function documentAmountLabel(amount: Prisma.Decimal, quoteWhenZero: boolean) {
+  if (quoteWhenZero && amount.lte(0)) {
+    return ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL;
+  }
+  return formatMoney(amount);
+}
+
 function toDocumentLines(
   lineItems: Array<{
     description: string;
@@ -226,13 +249,27 @@ function toDocumentLines(
   return lineItems.map((line) => {
     const parts = splitLineDescription(line.description);
     const hideLinePricing = line.type === "MATERIAL";
+    const unpricedLabor =
+      line.type === "LABOR" &&
+      (line.unitPrice.lte(0) || parts.title.includes(CUSTOM_QUOTE_DRAFT_MARKER));
+    const title = unpricedLabor
+      ? customQuoteDisplayDescription(parts.title)
+      : parts.title;
     return {
       type: line.type,
-      description: parts.title,
+      description: title,
       includedWork: hideLinePricing ? null : parts.includedWork,
       quantityLabel: formatQuantity(line.quantity),
-      unitPriceLabel: hideLinePricing ? "" : formatMoney(line.unitPrice),
-      amountLabel: hideLinePricing ? "" : formatMoney(line.total),
+      unitPriceLabel: hideLinePricing
+        ? ""
+        : unpricedLabor
+          ? ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL
+          : formatMoney(line.unitPrice),
+      amountLabel: hideLinePricing
+        ? ""
+        : unpricedLabor
+          ? ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL
+          : formatMoney(line.total),
       showLinePricing: !hideLinePricing,
     };
   });
@@ -329,6 +366,11 @@ function toDocumentView(estimate: {
     .filter((line) => line.type === "OTHER")
     .reduce((sum, line) => sum.add(line.total), ZERO);
   const lineItems = toDocumentLines(rawLines);
+  const hasUnpricedLabor = rawLines.some(isUnpricedLaborLine);
+  const hasPricedLabor = rawLines.some(
+    (line) => line.type === "LABOR" && !isUnpricedLaborLine(line),
+  );
+  const quoteWhenZero = hasUnpricedLabor && !hasPricedLabor;
   const deposit = resolveMaterialDeposit({ lines: rawLines, total });
   const showDeposit = deposit.amount.gt(0);
   const subtotal = laborTotal.add(materialTotal).add(otherTotal);
@@ -379,15 +421,15 @@ function toDocumentView(estimate: {
       ? toDocumentPolicy(resolvedTerms.projectConditions)
       : null,
     terms: resolvedTerms.terms.map(toDocumentPolicy),
-    laborTotalLabel: formatMoney(laborTotal),
+    laborTotalLabel: documentAmountLabel(laborTotal, quoteWhenZero),
     materialTotalLabel: formatMoney(materialTotal),
     otherTotalLabel: otherTotal.gt(0) ? formatMoney(otherTotal) : null,
-    subtotalLabel: formatMoney(subtotal),
+    subtotalLabel: documentAmountLabel(subtotal, quoteWhenZero),
     laborMinimumLabel: showLaborMinimum ? LABOR_MINIMUM_CUSTOMER_LABEL : null,
     laborMinimumAmountLabel: showLaborMinimum
       ? formatMoney(laborMinimumAdjustment)
       : null,
-    totalLabel: formatMoney(total),
+    totalLabel: documentAmountLabel(total, quoteWhenZero),
     materialDepositLabel: showDeposit ? formatMoney(deposit.amount) : null,
     remainingBalanceLabel: showDeposit ? formatMoney(deposit.remaining) : null,
     materialDepositNote: showDeposit ? MATERIAL_DEPOSIT_CUSTOMER_NOTE : null,
@@ -396,7 +438,7 @@ function toDocumentView(estimate: {
     depositRemainingDueLabel: showDeposit ? formatMoney(deposit.amount) : null,
     remainingProjectBalanceLabel: showDeposit
       ? formatMoney(deposit.remaining)
-      : formatMoney(total),
+      : documentAmountLabel(total, quoteWhenZero),
   };
 }
 

@@ -159,24 +159,7 @@ export function resolveSupplierQuoteForIdentity(input: {
           unitLabel: catalog.unitLabel,
         },
       suggested,
-      quote: {
-        providerId: provider.id,
-        productId: catalog.productId,
-        sku: catalog.sku,
-        url: catalog.url,
-        productName: catalog.name,
-        unitLabel: catalog.unitLabel,
-        currentPrice: 0,
-        currency: "USD",
-        locationZip: null,
-        locationStoreId: null,
-        locationLabel: null,
-        fetchedAt: null,
-        sourceStatus: "unavailable",
-        sourceMode: "catalog-reference",
-        limitation: provider.limitation,
-        rawMetadata: null,
-      },
+      quote: null,
     };
   }
 

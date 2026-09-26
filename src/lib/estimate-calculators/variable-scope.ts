@@ -213,24 +213,30 @@ function computeComponentLine(
     component.inputType === "allowance"
       ? (moneyOr(inputs[quantityKey], rate) ?? rate)
       : rate;
+  const ready =
+    component.inputType === "allowance" || component.inputType === "rate"
+      ? billedRate > 0
+      : quantity > 0 && billedRate > 0;
   return {
     key: component.key,
     label: component.name,
     quantity,
     rate: billedRate,
-    amount: roundMoney(quantity * billedRate),
-    amountState: amountStateFor(component, quantity),
+    amount: ready ? roundMoney(quantity * billedRate) : 0,
+    amountState: amountStateFor(component, quantity, billedRate),
   };
 }
 
 function amountStateFor(
   component: VariableScopeComponent,
   quantity: number,
+  rate: number,
 ): CalculatorAmountState {
   if (component.inputType === "allowance" || component.inputType === "rate") {
-    return "ready";
+    return rate > 0 ? "ready" : "waiting";
   }
-  if (quantity > 0) return "ready";
+  if (quantity > 0 && rate > 0) return "ready";
+  if (quantity > 0) return "waiting";
   return component.inputType === "measurement" ? "waiting" : "not_entered";
 }
 

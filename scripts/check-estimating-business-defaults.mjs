@@ -957,8 +957,18 @@ try {
 
   await prisma.serviceCatalogItem.update({
     where: { id: catalog.id },
-    data: { active: false },
+    data: { price: new Prisma.Decimal(999), active: false },
   });
+  const versionAfterCatalogPrice = await prisma.estimateVersion.findFirst({
+    where: { id: sentVersion.id },
+    include: { lineItems: true },
+  });
+  check(
+    "Later catalog starting-price change does not rewrite the SENT snapshot",
+    money(versionAfterCatalogPrice.lineItems.find((item) => item.type === "LABOR")?.total) === 800 &&
+      money(versionAfterCatalogPrice.lineItems.find((item) => item.type === "LABOR")?.unitPrice) ===
+        money(sentLabor.unitPrice),
+  );
   await prisma.serviceCatalogItem.delete({ where: { id: catalog.id } });
   check(
     "Catalog deletion does not remove business estimating defaults",

@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  calculatorHasIncompleteBillableWork,
   computeFormula,
   persistableFormulaRates,
   type FormulaContract,
@@ -133,7 +134,14 @@ export function FormulaCalculatorForm({
       ) : null}
       {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}
       {state.message ? <p className="text-sm text-muted-foreground">{state.message}</p> : null}
-      <Button type="submit" disabled={pending || preview.recommendedAmount <= 0}>
+      <Button
+        type="submit"
+        disabled={
+          pending ||
+          preview.recommendedAmount <= 0 ||
+          calculatorHasIncompleteBillableWork(preview)
+        }
+      >
         {pending ? "Applying…" : "Apply recommended labor price"}
       </Button>
     </form>

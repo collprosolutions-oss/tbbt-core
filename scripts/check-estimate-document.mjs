@@ -20,6 +20,7 @@ const {
   ESTIMATE_LABOR_SECTION_TITLE,
   ESTIMATE_MATERIALS_SECTION_TITLE,
   ESTIMATE_TOTAL_CUSTOMER_LABEL,
+  ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL,
   estimateDocumentPlainText,
   estimateNumberFromId,
   estimatePdfFilename,
@@ -30,6 +31,7 @@ const {
 const { renderEstimatePdf } = await import("@/lib/estimate-pdf");
 const { createEstimateVersionSnapshot } = await import("@/lib/estimate-version");
 const { joinLineDescription, splitLineDescription } = await import("@/lib/estimate-line-scope");
+const { CUSTOM_QUOTE_DRAFT_MARKER } = await import("@/lib/request-estimate-draft");
 const {
   MATERIAL_DEPOSIT_CUSTOMER_LABEL,
   REMAINING_BALANCE_CUSTOMER_LABEL,
@@ -244,6 +246,12 @@ check(
     estimatePdfSrc.includes('doc.text("QTY"') &&
     estimatePdfSrc.includes("quantityOnly"),
 );
+check(
+  "Unpriced custom-quote labor is labeled Custom Quote, never fabricated $0.00",
+  documentLib.includes("ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL") &&
+    documentLib.includes("CUSTOM_QUOTE_DRAFT_MARKER") &&
+    ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL === "Custom Quote",
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -389,6 +397,52 @@ try {
       type: "LABOR",
     },
   });
+
+  const quoteEstimate = await prisma.estimate.create({
+    data: {
+      businessId: business.id,
+      customerId: customer.id,
+      propertyId: property.id,
+      status: "DRAFT",
+      total: new Prisma.Decimal(0),
+      laborMinimumAdjustment: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: business.id,
+      estimateId: quoteEstimate.id,
+      description: `Custom Carpentry ${CUSTOM_QUOTE_DRAFT_MARKER}`,
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(0),
+      total: new Prisma.Decimal(0),
+      type: "LABOR",
+    },
+  });
+  const quoteDoc = await loadEstimateDocumentForBusiness(
+    quoteEstimate.id,
+    business.id,
+    prisma,
+  );
+  check(
+    "Unpriced custom-quote draft never displays fabricated $0.00 pricing",
+    quoteDoc?.laborLines[0]?.description === "Custom Carpentry" &&
+      quoteDoc.laborLines[0].unitPriceLabel === ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL &&
+      quoteDoc.laborLines[0].amountLabel === ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL &&
+      !quoteDoc.laborLines[0].unitPriceLabel.includes("$0") &&
+      !quoteDoc.laborLines[0].amountLabel.includes("$0") &&
+      quoteDoc.totalLabel === ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL &&
+      quoteDoc.laborTotalLabel === ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL &&
+      quoteDoc.subtotalLabel === ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL &&
+      !quoteDoc.totalLabel.includes("$0") &&
+      !quoteDoc.laborTotalLabel.includes("$0") &&
+      !quoteDoc.subtotalLabel.includes("$0"),
+  );
+  check(
+    "Starting-at wording stays starting-at, not a guaranteed fixed price",
+    joinLineDescription("Door Adjustment (starting at)").includes("(starting at)"),
+  );
 
   console.log("\nTEST 1 — Draft document uses live customer-facing fields");
   const draftDoc = await loadEstimateDocumentForBusiness(

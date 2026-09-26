@@ -32,7 +32,7 @@ export function publicCatalogUnitAmount(
 ): number | null {
   if (mode === "CUSTOM_QUOTE" || price == null) return null;
   const amount = typeof price === "number" ? price : Number(price.toString());
-  if (!Number.isFinite(amount) || amount < 0) return null;
+  if (!Number.isFinite(amount) || amount <= 0) return null;
   return amount;
 }
 
@@ -41,10 +41,11 @@ export function formatCatalogPriceLabel(
   price: { toString(): string } | number | null | undefined,
   unitLabel?: string | null,
 ) {
-  if (mode === "CUSTOM_QUOTE" || price == null) {
+  const amount = publicCatalogUnitAmount(mode, price);
+  if (amount == null) {
     return "Custom Quote";
   }
-  const money = formatMoney(price);
+  const money = formatMoney(amount);
   if (mode === "FIXED") {
     return `Fixed ${money}`;
   }

@@ -1,5 +1,9 @@
 import { formatMoney } from "@/lib/format";
-import type { CalculatorResult, CalculatorSnapshot } from "@/lib/estimate-calculators";
+import {
+  calculatorHasIncompleteBillableWork,
+  type CalculatorResult,
+  type CalculatorSnapshot,
+} from "@/lib/estimate-calculators";
 
 export function CalculatorBreakdown({
   snapshot,
@@ -40,7 +44,7 @@ export function CalculatorBreakdown({
             </span>
             <span className="shrink-0 text-right tabular-nums">
               {line.amountState === "waiting"
-                ? "Waiting for quantity"
+                ? "Waiting for required inputs"
                 : line.amountState === "not_entered"
                   ? "—"
                   : formatMoney(line.amount)}
@@ -49,7 +53,10 @@ export function CalculatorBreakdown({
         ))}
       </ul>
       <p className="mt-2 font-medium">
-        Recommended labor price: {formatMoney(breakdown.recommendedAmount)}
+        {breakdown.recommendedAmount > 0 &&
+        !calculatorHasIncompleteBillableWork(breakdown)
+          ? `Recommended labor price: ${formatMoney(breakdown.recommendedAmount)}`
+          : "No recommended labor price yet"}
       </p>
       {snapshot?.overriddenAmount != null ? (
         <p className="text-sm text-muted-foreground">

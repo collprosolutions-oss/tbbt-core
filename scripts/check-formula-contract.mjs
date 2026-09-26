@@ -19,6 +19,7 @@ const {
   HANDYMAN_FORMULA_PROOF_TEMPLATE_KEYS,
   PRODUCTION_UNITS,
   TRADE_FORMULA_CALCULATOR_ID,
+  calculatorHasIncompleteBillableWork,
   computeFormula,
   definitionFromFormulaBinding,
   findCatalogCalculatorDefinition,
@@ -42,7 +43,7 @@ const {
 const { buildEstimateLineCreatesFromRequestItems } = await import(
   "@/lib/request-estimate-draft"
 );
-const { formatCatalogPriceLabel } = await import("@/lib/pricing-mode");
+const { formatCatalogPriceLabel, publicCatalogUnitAmount } = await import("@/lib/pricing-mode");
 const { createEstimateVersionSnapshot } = await import("@/lib/estimate-version");
 const {
   applyDraftEstimateCalculator,
@@ -251,12 +252,41 @@ check(
     !JSON.stringify(tierFormula).includes('"rate":10'),
 );
 const formSource = readRepo("src/components/estimates/formula-calculator-form.tsx");
+const breakdownSource = readRepo("src/components/estimates/calculator-breakdown.tsx");
+const applySource = readRepo("src/lib/estimate-line-ops.ts");
 check(
   "FormulaCalculatorForm exposes tier rates as editable owner rates",
   formSource.includes("tier.rateKey") &&
     formSource.includes("Open-ended tier rate") &&
     !formSource.includes("formatMoney(tier.rate)") &&
     !/tier\.rate[^\w]/.test(formSource),
+);
+check(
+  "Apply still rejects a non-positive recommendation",
+  applySource.includes("result.recommendedAmount <= 0") &&
+    applySource.includes("calculatorHasIncompleteBillableWork(result)"),
+);
+const applyFn = applySource.slice(
+  applySource.indexOf("export async function applyDraftEstimateCalculator"),
+  applySource.indexOf("export async function persistDraftEstimateCalculatorRates"),
+);
+check(
+  "Apply rejects incomplete billable work before any line mutation",
+  applyFn.includes("if (result.recommendedAmount <= 0 || calculatorHasIncompleteBillableWork(result))") &&
+    applyFn.indexOf("calculatorHasIncompleteBillableWork(result)") <
+      applyFn.indexOf("snapshot.result = result") &&
+    applyFn.indexOf("calculatorHasIncompleteBillableWork(result)") <
+      applyFn.indexOf("await db.$transaction") &&
+    applyFn.indexOf("throw new EstimateLineError") < applyFn.indexOf("unitPrice") &&
+    applyFn.indexOf("throw new EstimateLineError") < applyFn.indexOf("tx.lineItem.update"),
+);
+check(
+  "Owner calculator does not present a partial recommendation as the complete labor price",
+  breakdownSource.includes("calculatorHasIncompleteBillableWork(breakdown)") &&
+    breakdownSource.includes("No recommended labor price yet") &&
+    breakdownSource.includes("Recommended labor price:") &&
+    formSource.includes("preview.recommendedAmount <= 0") &&
+    formSource.includes("calculatorHasIncompleteBillableWork(preview)"),
 );
 
 const tierLow = computeFormula(tierFormula, { quantity: 80 }, tierRates);
@@ -348,9 +378,98 @@ check(
 const custom = computeFormula(customFormula, { quantity: 5 }, { unitRate: 20, unitsPerHour: 2 });
 check(
   "custom_quote does not invent a price or hours",
-  custom.recommendedAmount === 0 && custom.estimatedLaborHours == null,
+  custom.recommendedAmount === 0 &&
+    custom.estimatedLaborHours == null &&
+    custom.lines[0]?.amountState === "waiting",
+);
+const missingRate = computeFormula(unitFormula, { quantity: 6 }, {});
+check(
+  "missing required rate never becomes a ready $0 price",
+  missingRate.recommendedAmount === 0 &&
+    missingRate.lines[0]?.amount === 0 &&
+    missingRate.lines[0]?.amountState === "waiting",
+);
+const missingQuantity = computeFormula(unitFormula, {}, { unitRate: 18 });
+check(
+  "missing required quantity never becomes a ready $0 price",
+  missingQuantity.recommendedAmount === 0 &&
+    missingQuantity.lines[0]?.amountState === "waiting",
+);
+const zeroRateWithQuantity = computeFormula(areaFormula, { areaSqFt: 50 }, { unitRate: 0 });
+check(
+  "explicit zero rate with quantity stays waiting",
+  zeroRateWithQuantity.recommendedAmount === 0 &&
+    zeroRateWithQuantity.lines[0]?.amountState === "waiting",
+);
+const missingComponentBillableRate = computeFormula(
+  basePlusFormula,
+  { openingCount: 2, trimLf: 0 },
+  { baseAmount: 150, openingRate: 0, trimRate: 8 },
+);
+check(
+  "missing component rate stays waiting and does not invent $0 ready work",
+  missingComponentBillableRate.lines.find((line) => line.key === "openings")
+    ?.amountState === "waiting" &&
+    missingComponentBillableRate.lines.find((line) => line.key === "openings")
+      ?.amount === 0 &&
+    missingComponentBillableRate.recommendedAmount === 150,
+);
+check(
+  "partial base_plus_components recommendation is incomplete billable work",
+  missingComponentBillableRate.recommendedAmount > 0 &&
+    calculatorHasIncompleteBillableWork(missingComponentBillableRate),
+);
+const onePricedOneWaiting = computeFormula(
+  basePlusFormula,
+  { openingCount: 2, trimLf: 10 },
+  { baseAmount: 0, openingRate: 40, trimRate: 0 },
+);
+check(
+  "priced component plus missing rate stays a positive incomplete recommendation",
+  onePricedOneWaiting.recommendedAmount === 80 &&
+    onePricedOneWaiting.lines.find((line) => line.key === "openings")?.amountState ===
+      "ready" &&
+    onePricedOneWaiting.lines.find((line) => line.key === "trim")?.amountState ===
+      "waiting" &&
+    calculatorHasIncompleteBillableWork(onePricedOneWaiting),
+);
+const minimumWithoutUnitRate = computeFormula(
+  minimumFormula,
+  { quantity: 2 },
+  { minimumAmount: 100, unitRate: 0 },
+);
+check(
+  "minimum_plus_unit with a missing unit rate is an incomplete positive recommendation",
+  minimumWithoutUnitRate.recommendedAmount === 100 &&
+    minimumWithoutUnitRate.lines.find((line) => line.key === "production")
+      ?.amountState === "waiting" &&
+    calculatorHasIncompleteBillableWork(minimumWithoutUnitRate),
+);
+const unusedZeroQuantity = computeFormula(
+  basePlusFormula,
+  { openingCount: 2, trimLf: 0 },
+  { baseAmount: 150, openingRate: 40, trimRate: 0 },
+);
+check(
+  "zero-quantity unused component does not make a complete formula incomplete",
+  unusedZeroQuantity.recommendedAmount === 230 &&
+    unusedZeroQuantity.lines.find((line) => line.key === "trim")?.quantity === 0 &&
+    !calculatorHasIncompleteBillableWork(unusedZeroQuantity),
+);
+const missingMinimumInputs = computeFormula(minimumFormula, { quantity: 2 }, {});
+check(
+  "minimum_plus_unit without rates does not invent a billable minimum",
+  missingMinimumInputs.recommendedAmount === 0 &&
+    missingMinimumInputs.lines.every((line) => line.amountState !== "ready"),
 );
 check("hoursFromProduction requires quantity and a positive rate", hoursFromProduction(10, 0) == null);
+check(
+  "A $0 catalog price is not a public sellable amount",
+  publicCatalogUnitAmount("FIXED", 0) == null &&
+    publicCatalogUnitAmount("STARTING_AT", 0) == null &&
+    publicCatalogUnitAmount("VARIABLE", 0) == null &&
+    formatCatalogPriceLabel("FIXED", 0) === "Custom Quote",
+);
 
 console.log("\nUNIT — Public catalog never prints / hour");
 check(
@@ -783,6 +902,44 @@ try {
   }
   check("SENT estimate cannot recalculate a formula snapshot", sentRecalcBlocked);
 
+  let missingInputApplyBlocked = false;
+  const waitingEstimate = await prisma.estimate.create({
+    data: {
+      businessId: business.id,
+      total: new Prisma.Decimal(75),
+      publicToken: randomUUID(),
+    },
+  });
+  const waitingLine = await prisma.lineItem.create({
+    data: {
+      businessId: business.id,
+      estimateId: waitingEstimate.id,
+      serviceCatalogItemId: catalog.id,
+      description: knobLines[0].description,
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(75),
+      total: new Prisma.Decimal(75),
+      type: "LABOR",
+    },
+  });
+  try {
+    await applyDraftEstimateCalculator(prisma, owner, {
+      estimateId: waitingEstimate.id,
+      lineItemId: waitingLine.id,
+      inputs: { quantity: 3 },
+      rates: {},
+    });
+  } catch (error) {
+    missingInputApplyBlocked = error instanceof EstimateLineError;
+  }
+  const waitingAfter = await prisma.lineItem.findFirst({ where: { id: waitingLine.id } });
+  check(
+    "Apply rejects a formula with quantity but no required rate and leaves the stored line unchanged",
+    missingInputApplyBlocked &&
+      waitingAfter.unitPrice.toString() === "75" &&
+      waitingAfter.total.toString() === "75",
+  );
+
   const nextEstimate = await prisma.estimate.create({
     data: {
       businessId: business.id,
@@ -898,6 +1055,189 @@ try {
       persistedTierDefinition?.rates.tierRate2 === 10 &&
       !JSON.stringify(persistedTierDefinition ?? {}).includes('"quantity":80') &&
       persistedTierCatalog.price.toString() === "12",
+  );
+
+  console.log("\nTEST — Apply rejects incomplete multi-component recommendations");
+
+  async function createFormulaLine(name, formula, rates, unitPrice = 40) {
+    const item = await prisma.serviceCatalogItem.create({
+      data: {
+        businessId: business.id,
+        tradeCode: "HANDYMAN",
+        name,
+        description: name,
+        pricingMode: "VARIABLE",
+        price: new Prisma.Decimal(unitPrice),
+        category: "Proofs",
+        active: true,
+      },
+    });
+    const draft = await prisma.estimate.create({
+      data: {
+        businessId: business.id,
+        total: new Prisma.Decimal(unitPrice),
+        publicToken: randomUUID(),
+      },
+    });
+    const start = startingCalculatorSnapshot({
+      title: name,
+      definition: {
+        calculatorId: TRADE_FORMULA_CALCULATOR_ID,
+        formula,
+        rates,
+      },
+    });
+    const line = await prisma.lineItem.create({
+      data: {
+        businessId: business.id,
+        estimateId: draft.id,
+        serviceCatalogItemId: item.id,
+        description: joinLineDescription(name, null, start),
+        quantity: new Prisma.Decimal(1),
+        unitPrice: new Prisma.Decimal(unitPrice),
+        total: new Prisma.Decimal(unitPrice),
+        type: "LABOR",
+      },
+    });
+    return { estimate: draft, line, description: line.description };
+  }
+
+  async function applyRejected(estimateId, lineItemId, inputs, rates) {
+    try {
+      await applyDraftEstimateCalculator(prisma, owner, {
+        estimateId,
+        lineItemId,
+        inputs,
+        rates,
+      });
+      return false;
+    } catch (error) {
+      return error instanceof EstimateLineError;
+    }
+  }
+
+  const partialBase = await createFormulaLine(
+    "Partial Base Plus Openings",
+    basePlusFormula,
+    { baseAmount: 150, openingRate: 0, trimRate: 8 },
+    40,
+  );
+  const partialBaseBefore = await prisma.lineItem.findFirst({
+    where: { id: partialBase.line.id },
+  });
+  const partialBaseBlocked = await applyRejected(
+    partialBase.estimate.id,
+    partialBase.line.id,
+    { openingCount: 2, trimLf: 0 },
+    { baseAmount: 150, openingRate: 0, trimRate: 8 },
+  );
+  const partialBaseAfter = await prisma.lineItem.findFirst({
+    where: { id: partialBase.line.id },
+  });
+  check(
+    "Apply rejects base + positive-quantity component with a missing rate even when the partial total is $150",
+    missingComponentBillableRate.recommendedAmount === 150 &&
+      calculatorHasIncompleteBillableWork(missingComponentBillableRate) &&
+      partialBaseBlocked &&
+      partialBaseAfter.unitPrice.toString() === partialBaseBefore.unitPrice.toString() &&
+      partialBaseAfter.total.toString() === partialBaseBefore.total.toString() &&
+      partialBaseAfter.description === partialBaseBefore.description,
+  );
+
+  const partialMixed = await createFormulaLine(
+    "Partial Mixed Components",
+    basePlusFormula,
+    { baseAmount: 0, openingRate: 40, trimRate: 0 },
+    40,
+  );
+  const partialMixedBefore = await prisma.lineItem.findFirst({
+    where: { id: partialMixed.line.id },
+  });
+  const partialMixedBlocked = await applyRejected(
+    partialMixed.estimate.id,
+    partialMixed.line.id,
+    { openingCount: 2, trimLf: 10 },
+    { baseAmount: 0, openingRate: 40, trimRate: 0 },
+  );
+  const partialMixedAfter = await prisma.lineItem.findFirst({
+    where: { id: partialMixed.line.id },
+  });
+  check(
+    "Apply rejects a priced component plus a waiting positive-quantity component",
+    onePricedOneWaiting.recommendedAmount === 80 &&
+      calculatorHasIncompleteBillableWork(onePricedOneWaiting) &&
+      partialMixedBlocked &&
+      partialMixedAfter.unitPrice.toString() === "40" &&
+      partialMixedAfter.total.toString() === "40" &&
+      partialMixedAfter.description === partialMixedBefore.description,
+  );
+
+  const partialMinimum = await createFormulaLine(
+    "Partial Minimum Plus Unit",
+    minimumFormula,
+    { minimumAmount: 100, unitRate: 0 },
+    40,
+  );
+  const partialMinimumBefore = await prisma.lineItem.findFirst({
+    where: { id: partialMinimum.line.id },
+  });
+  const partialMinimumBlocked = await applyRejected(
+    partialMinimum.estimate.id,
+    partialMinimum.line.id,
+    { quantity: 2 },
+    { minimumAmount: 100, unitRate: 0 },
+  );
+  const partialMinimumAfter = await prisma.lineItem.findFirst({
+    where: { id: partialMinimum.line.id },
+  });
+  check(
+    "Apply rejects minimum_plus_unit when quantity is priced by the minimum but the unit rate is missing",
+    minimumWithoutUnitRate.recommendedAmount === 100 &&
+      calculatorHasIncompleteBillableWork(minimumWithoutUnitRate) &&
+      partialMinimumBlocked &&
+      partialMinimumAfter.unitPrice.toString() === partialMinimumBefore.unitPrice.toString() &&
+      partialMinimumAfter.total.toString() === partialMinimumBefore.total.toString() &&
+      partialMinimumAfter.description === partialMinimumBefore.description,
+  );
+
+  const unusedComponent = await createFormulaLine(
+    "Complete With Unused Component",
+    basePlusFormula,
+    { baseAmount: 150, openingRate: 40, trimRate: 0 },
+    40,
+  );
+  const unusedApplied = await applyDraftEstimateCalculator(prisma, owner, {
+    estimateId: unusedComponent.estimate.id,
+    lineItemId: unusedComponent.line.id,
+    inputs: { openingCount: 2, trimLf: 0 },
+    rates: { baseAmount: 150, openingRate: 40, trimRate: 0 },
+  });
+  check(
+    "Zero-quantity unused component does not block a complete valid formula",
+    unusedZeroQuantity.recommendedAmount === 230 &&
+      !calculatorHasIncompleteBillableWork(unusedZeroQuantity) &&
+      unusedApplied.unitPrice.toString() === "230" &&
+      unusedApplied.total.toString() === "230",
+  );
+
+  const completeMixed = await createFormulaLine(
+    "Complete Multi Component",
+    basePlusFormula,
+    { baseAmount: 150, openingRate: 40, trimRate: 8 },
+    40,
+  );
+  const completeApplied = await applyDraftEstimateCalculator(prisma, owner, {
+    estimateId: completeMixed.estimate.id,
+    lineItemId: completeMixed.line.id,
+    inputs: { openingCount: 2, trimLf: 10 },
+    rates: { baseAmount: 150, openingRate: 40, trimRate: 8 },
+  });
+  check(
+    "Fully priced multi-component formula still applies normally",
+    basePlus.recommendedAmount === 310 &&
+      !calculatorHasIncompleteBillableWork(basePlus) &&
+      completeApplied.unitPrice.toString() === "310" &&
+      completeApplied.total.toString() === "310",
   );
 } finally {
   await prisma.$disconnect();
