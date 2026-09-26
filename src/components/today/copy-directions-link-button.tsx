@@ -16,7 +16,8 @@ export function CopyDirectionsLinkButton({
     <Button
       type="button"
       size="sm"
-      variant="outline"
+      variant="ghost"
+      className="h-11 px-3"
       onClick={async () => {
         await navigator.clipboard.writeText(href);
         setCopied(true);
