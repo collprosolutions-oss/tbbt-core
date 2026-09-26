@@ -192,6 +192,30 @@ export {
   mergeCatalogRecommendations,
 } from "@/lib/chief-of-staff/recommendations";
 export {
+  CONTROLLED_ACTION_CATALOG,
+  CONTROLLED_ACTION_KEYS,
+  EXCLUDED_ACTION_KEYS,
+  confirmControlledAction,
+  controlledActionErrorMessage,
+  executableControlledActionKeys,
+  getControlledActionEntry,
+  isControlledActionKey,
+  isExcludedActionKey,
+  parseControlledActionProposal,
+  proposeControlledAction,
+  resetControlledActionAttempts,
+  serializeControlledActionProposal,
+} from "@/lib/chief-of-staff/controlled-actions";
+export type {
+  ConfirmControlledActionInput,
+  ControlledActionCatalogEntry,
+  ControlledActionConfirmation,
+  ControlledActionExecutionResult,
+  ControlledActionKey,
+  ControlledActionProposal,
+  ExcludedActionKey,
+} from "@/lib/chief-of-staff/controlled-actions";
+export {
   getOrchestrationWorkerCount,
   getSynthesisCallCount,
   resetOrchestrationWorkerCount,

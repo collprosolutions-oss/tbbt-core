@@ -11,6 +11,7 @@ import {
 } from "@/app/actions/bsos";
 import { ActionForm } from "@/components/action-form";
 import { BsosCoachForm } from "@/components/bsos/coach-form";
+import { ControlledActionConfirmForm } from "@/components/bsos/confirm-action-form";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -156,6 +157,28 @@ export default async function BusinessHealthPage({
                       <Button type="submit" size="sm" variant="outline">Mark complete</Button>
                     </ActionForm>
                   </div>
+                  {area === "coach" ? (
+                    <div className="mt-2 space-y-2">
+                      <ControlledActionConfirmForm
+                        actionKey="CREATE_RECOMMENDATION_ACTION"
+                        targetEntityId={item.key}
+                        conversationId={workspace.conversation?.id}
+                        label="create plan action"
+                      />
+                      <ControlledActionConfirmForm
+                        actionKey="DISMISS_RECOMMENDATION"
+                        targetEntityId={item.key}
+                        conversationId={workspace.conversation?.id}
+                        label="dismiss recommendation"
+                      />
+                      <ControlledActionConfirmForm
+                        actionKey="COMPLETE_RECOMMENDATION"
+                        targetEntityId={item.key}
+                        conversationId={workspace.conversation?.id}
+                        label="complete recommendation"
+                      />
+                    </div>
+                  ) : null}
                 </div>
               ))
             )}
@@ -295,6 +318,17 @@ export default async function BusinessHealthPage({
                       </select>
                       <Button type="submit" size="sm" variant="outline">Update</Button>
                     </ActionForm>
+                    {area === "coach" && item.status !== "DONE" ? (
+                      <div className="mt-2">
+                        <ControlledActionConfirmForm
+                          actionKey="UPDATE_ACTION_ITEM_STATUS"
+                          targetEntityId={item.id}
+                          conversationId={workspace.conversation?.id}
+                          nextStatus="DONE"
+                          label="mark action done"
+                        />
+                      </div>
+                    ) : null}
                   </li>
                 ))}
               </ul>
