@@ -157,8 +157,9 @@ function OverviewSection({
         description="One owner screen for whether production capabilities are actually usable. This is status only — it does not connect providers."
       >
         <p className="text-sm text-muted-foreground">
-          Required items are SaaS access, transactional email, and photo storage. Stripe Connect is
-          conditional for online card checkout. SMS, AI, domain, bank, suppliers, e-sign, voice, and
+          Required is active TBBT software access. Conditional: transactional email if TBBT should
+          send email, R2 storage if intake, job, or website photo uploads are needed, and Stripe
+          Connect for online card checkout. SMS, AI, domain, bank, suppliers, e-sign, voice, and
           social publishing stay optional.
         </p>
         <Button asChild size="sm">

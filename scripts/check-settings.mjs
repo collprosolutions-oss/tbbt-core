@@ -337,7 +337,28 @@ try {
   const r2Down = buildGoLiveCenter(sampleGoLiveInput({ r2Configured: false }));
   check("Configured R2 is LIVE", goLiveCardById(r2Live, "r2")?.status === "LIVE" && classifyR2(true) === "LIVE");
   check("Unconfigured R2 is NOT_CONFIGURED", goLiveCardById(r2Down, "r2")?.status === "NOT_CONFIGURED" && classifyR2(false) === "NOT_CONFIGURED");
-  check("R2 NOT_CONFIGURED copy names photo upload", /Intake and job photo upload are unavailable/.test(goLiveCardById(r2Down, "r2")?.whatDoesNot ?? ""));
+  check(
+    "R2 NOT_CONFIGURED copy names photo-upload blocks",
+    /Intake photo upload/.test(goLiveCardById(r2Down, "r2")?.whatDoesNot ?? "") &&
+      /job photo upload/.test(goLiveCardById(r2Down, "r2")?.whatDoesNot ?? "") &&
+      /website-managed photo upload/.test(goLiveCardById(r2Down, "r2")?.whatDoesNot ?? ""),
+  );
+  check(
+    "disconnected R2 does not claim requests or jobs cannot exist",
+    /Requests without photos still work/.test(goLiveCardById(r2Down, "r2")?.whatWorks ?? "") &&
+      /Jobs, estimates, and invoices remain as recorded data/.test(goLiveCardById(r2Down, "r2")?.whatWorks ?? "") &&
+      /does not mean requests or jobs cannot exist/.test(goLiveCardById(r2Down, "r2")?.whatWorks ?? "") &&
+      !/requests cannot exist|jobs cannot exist|cannot operate/i.test(goLiveCardById(r2Down, "r2")?.whatDoesNot ?? ""),
+  );
+  check(
+    "disconnected Resend does not claim TBBT cannot operate",
+    /Recorded operating workflows/.test(goLiveCardById(resendDown, "resend")?.whatWorks ?? "") &&
+      /public\/share links/.test(goLiveCardById(resendDown, "resend")?.whatWorks ?? "") &&
+      /non-email operation/.test(goLiveCardById(resendDown, "resend")?.whatWorks ?? "") &&
+      /does not mean TBBT cannot operate/.test(goLiveCardById(resendDown, "resend")?.whatWorks ?? "") &&
+      /TBBT email delivery is unavailable/.test(goLiveCardById(resendDown, "resend")?.whatDoesNot ?? "") &&
+      !/TBBT cannot operate/.test(goLiveCardById(resendDown, "resend")?.whatDoesNot ?? ""),
+  );
 
   const connectReady = buildGoLiveCenter(sampleGoLiveInput());
   const connectNotReady = buildGoLiveCenter(sampleGoLiveInput({
@@ -414,16 +435,24 @@ try {
   check("No single ready boolean on the center", !("ready" in center) && !("readyPercent" in center) && !("launchReady" in center) && center.readOnly === true);
   check("Launch groups are all present", center.groups.map((group) => group.id).join(",") === GO_LIVE_GROUPS.join(","));
   check("Requirement contract is REQUIRED / CONDITIONAL / OPTIONAL", GO_LIVE_REQUIREMENTS.join(",") === "REQUIRED,CONDITIONAL,OPTIONAL");
-  check("Resend is REQUIRED", goLiveCardById(center, "resend")?.requirement === "REQUIRED" && GO_LIVE_CARD_REQUIREMENTS.resend === "REQUIRED");
+  check("SaaS software access is REQUIRED", goLiveCardById(center, "stripe_saas")?.requirement === "REQUIRED" && GO_LIVE_CARD_REQUIREMENTS.stripe_saas === "REQUIRED");
+  check("Resend is CONDITIONAL", goLiveCardById(center, "resend")?.requirement === "CONDITIONAL" && GO_LIVE_CARD_REQUIREMENTS.resend === "CONDITIONAL");
+  check("R2 is CONDITIONAL", goLiveCardById(center, "r2")?.requirement === "CONDITIONAL" && GO_LIVE_CARD_REQUIREMENTS.r2 === "CONDITIONAL");
   check("Twilio SMS is OPTIONAL", goLiveCardById(center, "twilio_sms")?.requirement === "OPTIONAL" && GO_LIVE_CARD_REQUIREMENTS.twilio_sms === "OPTIONAL");
   check("Voice receptionist is OPTIONAL", goLiveCardById(center, "voice_receptionist")?.requirement === "OPTIONAL" && GO_LIVE_CARD_REQUIREMENTS.voice_receptionist === "OPTIONAL");
+  check(
+    "optional integrations stay OPTIONAL",
+    ["twilio_sms", "ai_provider", "custom_domain", "finance_bank", "supplier_commerce", "esign", "voice_receptionist", "social_publishing"].every(
+      (id) => goLiveCardById(center, id)?.requirement === "OPTIONAL" && GO_LIVE_CARD_REQUIREMENTS[id] === "OPTIONAL",
+    ),
+  );
   const communicationsGroup = center.groups.find((group) => group.id === "COMMUNICATIONS");
   check(
     "Communications group is MIXED",
     communicationsGroup?.requirement === "MIXED" &&
       communicationsGroup.requirementLabel === "Mixed" &&
       goLiveGroupRequirement(communicationsGroup.cards) === "MIXED" &&
-      /Email is required; SMS and voice are optional/.test(communicationsGroup.summary),
+      /Transactional email is conditional if TBBT should send email; SMS and voice are optional/.test(communicationsGroup.summary),
   );
   check(
     "Communications is not rendered as wholly optional",
@@ -441,11 +470,18 @@ try {
       ),
   );
   check(
-    "top required count excludes conditional Connect",
-    center.requiredCards.map((card) => card.id).join(",") === "stripe_saas,resend,r2" &&
-      center.conditionalCards.map((card) => card.id).join(",") === "stripe_connect" &&
-      center.requiredCards.length === 3 &&
-      !center.requiredCards.some((card) => card.id === "stripe_connect"),
+    "top required count is SaaS only; email and storage stay conditional",
+    center.requiredCards.map((card) => card.id).join(",") === "stripe_saas" &&
+      center.conditionalCards.map((card) => card.id).join(",") === "stripe_connect,resend,r2" &&
+      center.requiredCards.length === 1 &&
+      !center.requiredCards.some((card) => card.id === "stripe_connect" || card.id === "resend" || card.id === "r2"),
+  );
+  check(
+    "disconnected Resend and R2 do not increase required remaining",
+    goLiveCardById(center, "resend")?.status === "UNAVAILABLE" &&
+      goLiveCardById(center, "r2")?.status === "NOT_CONFIGURED" &&
+      center.requiredLiveCount === 1 &&
+      center.requiredRemainingCount === 0,
   );
   check(
     "no 100% launch ready output exists",
@@ -455,15 +491,23 @@ try {
   );
   check(
     "top summaries distinguish required, conditional, and optional",
-    /SaaS access/.test(GO_LIVE_REQUIRED_SUMMARY) &&
-      /transactional email/.test(GO_LIVE_REQUIRED_SUMMARY) &&
-      /photo storage/.test(GO_LIVE_REQUIRED_SUMMARY) &&
+    /active TBBT software access/.test(GO_LIVE_REQUIRED_SUMMARY) &&
+      !/transactional email/.test(GO_LIVE_REQUIRED_SUMMARY) &&
+      !/photo storage/.test(GO_LIVE_REQUIRED_SUMMARY) &&
+      /transactional email if TBBT should send email/.test(GO_LIVE_CONDITIONAL_SUMMARY) &&
+      /R2 storage if intake, job, or website photo uploads are needed/.test(GO_LIVE_CONDITIONAL_SUMMARY) &&
       /Stripe Connect for online card checkout/.test(GO_LIVE_CONDITIONAL_SUMMARY) &&
       /SMS/.test(GO_LIVE_OPTIONAL_SUMMARY),
   );
+  check(
+    "overview copy no longer lists email or storage as required",
+    !/Required items are SaaS access, transactional email, and photo storage/.test(workspaceSource) &&
+      /Required is active TBBT software access/.test(workspaceSource) &&
+      /R2 storage if intake, job, or website photo uploads are needed/.test(workspaceSource),
+  );
   check("Payments group is Conditional", center.groups.find((group) => group.id === "PAYMENTS")?.requirement === "CONDITIONAL");
   check("Core operating group is Required", center.groups.find((group) => group.id === "CORE_OPERATING")?.requirement === "REQUIRED");
-  check("Storage group is Required", center.groups.find((group) => group.id === "STORAGE")?.requirement === "REQUIRED");
+  check("Storage group is Conditional", center.groups.find((group) => group.id === "STORAGE")?.requirement === "CONDITIONAL");
   check("AI group is Optional", center.groups.find((group) => group.id === "AI")?.requirement === "OPTIONAL");
   check("Optional / planned group is Optional", center.groups.find((group) => group.id === "OPTIONAL_PLANNED")?.requirement === "OPTIONAL");
   check(

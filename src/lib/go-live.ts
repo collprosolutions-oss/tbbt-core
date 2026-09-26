@@ -62,8 +62,8 @@ export type GoLiveGroupRequirement = GoLiveRequirement | "MIXED";
 export const GO_LIVE_CARD_REQUIREMENTS: Record<GoLiveCapabilityId, GoLiveRequirement> = {
   stripe_saas: "REQUIRED",
   stripe_connect: "CONDITIONAL",
-  resend: "REQUIRED",
-  r2: "REQUIRED",
+  resend: "CONDITIONAL",
+  r2: "CONDITIONAL",
   twilio_sms: "OPTIONAL",
   ai_provider: "OPTIONAL",
   custom_domain: "OPTIONAL",
@@ -101,9 +101,10 @@ export const GO_LIVE_GROUP_SUMMARIES: Record<GoLiveGroup, string> = {
     "Required. Software access for the business to keep using TBBT in production. This is not customer job payments.",
   PAYMENTS:
     "Conditional. Required for online card payments; manual Mark Paid remains available.",
-  COMMUNICATIONS: "Mixed. Email is required; SMS and voice are optional.",
+  COMMUNICATIONS:
+    "Mixed. Transactional email is conditional if TBBT should send email; SMS and voice are optional.",
   STORAGE:
-    "Required. Needed for intake, job, and website photo upload. Missing storage does not delete recorded jobs.",
+    "Conditional. Needed only for intake, job, and website photo upload. Missing storage does not delete recorded jobs or block requests without photos.",
   AI: "Optional. Deterministic Coach facts stay available without a provider.",
   OPTIONAL_PLANNED:
     "Optional. Disconnected or planned capabilities. Absence is not a production outage.",
@@ -123,10 +124,10 @@ export const GO_LIVE_NO_SCORE_DISCLAIMER =
   "This is a status board, not a launch score. Required, conditional, and optional items are listed separately. Disconnected systems are not broken.";
 
 export const GO_LIVE_REQUIRED_SUMMARY =
-  "Required for core production: SaaS access, transactional email, and photo storage.";
+  "Required: active TBBT software access.";
 
 export const GO_LIVE_CONDITIONAL_SUMMARY =
-  "Conditional: Stripe Connect for online card checkout.";
+  "Conditional: transactional email if TBBT should send email; R2 storage if intake, job, or website photo uploads are needed; Stripe Connect for online card checkout.";
 
 export const GO_LIVE_OPTIONAL_SUMMARY =
   "Optional/planned: SMS, AI, domain, bank, suppliers, e-sign, voice, social.";
@@ -464,9 +465,10 @@ function resendCard(emailConfigured: boolean): GoLiveCard {
     group: "COMMUNICATIONS",
     status: "UNAVAILABLE",
     requirement: GO_LIVE_CARD_REQUIREMENTS.resend,
-    currentState: "Email delivery is unavailable.",
-    whatWorks: "In-app records, public links, and copy-to-share URLs still work.",
-    whatDoesNot: "TBBT cannot send customer email until Resend and a from-address are configured.",
+    currentState: "Email delivery is unavailable. Required only if TBBT should send email.",
+    whatWorks:
+      "Recorded operating workflows, public/share links, and non-email operation still work. Disconnected email does not mean TBBT cannot operate.",
+    whatDoesNot: "TBBT email delivery is unavailable.",
     ownerNextAction: "Ask the platform operator to configure Resend. Do not paste API keys into TBBT.",
     settingsHref: "/settings?section=communications",
   };
@@ -494,9 +496,12 @@ function r2Card(r2Configured: boolean): GoLiveCard {
     group: "STORAGE",
     status: "NOT_CONFIGURED",
     requirement: GO_LIVE_CARD_REQUIREMENTS.r2,
-    currentState: "R2 storage is not configured.",
-    whatWorks: "Jobs, requests, and records without new photo upload still exist.",
-    whatDoesNot: "Intake and job photo upload are unavailable.",
+    currentState:
+      "R2 storage is not configured. Required only if intake, job, or website photo uploads are needed.",
+    whatWorks:
+      "Requests without photos still work. Jobs, estimates, and invoices remain as recorded data. The public compatibility site keeps its current fallback imagery. Disconnected storage does not mean requests or jobs cannot exist.",
+    whatDoesNot:
+      "Intake photo upload, job photo upload, and website-managed photo upload are unavailable.",
     ownerNextAction: "Ask the platform operator to configure R2. Do not paste access keys into TBBT.",
     settingsHref: "/settings?section=website-photos",
   };
