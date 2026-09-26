@@ -317,7 +317,7 @@ export function parseControlledActionProposal(raw: string): ControlledActionProp
   }
 }
 
-async function liveRecommendation(db: Db, businessId: string, recommendationKey: string) {
+async function canonicalRecommendation(db: Db, businessId: string, recommendationKey: string) {
   const catalog = await loadCanonicalRecommendationCatalog(db, businessId);
   const recommendation = catalog.recommendations.find((item) => item.key === recommendationKey);
   if (!recommendation) {
@@ -328,11 +328,19 @@ async function liveRecommendation(db: Db, businessId: string, recommendationKey:
     select: { recommendationKey: true, status: true, evidenceKey: true },
   });
   const { active } = partitionRecommendations(catalog.recommendations, states);
-  if (!active.some((item) => item.key === recommendation.key)) {
+  return {
+    recommendation,
+    evidenceKey: recommendationEvidenceKey(recommendation),
+    active: active.some((item) => item.key === recommendation.key),
+  };
+}
+
+async function liveRecommendation(db: Db, businessId: string, recommendationKey: string) {
+  const live = await canonicalRecommendation(db, businessId, recommendationKey);
+  if (!live.active) {
     throw new ControlledActionError("That recommendation is not active from recorded facts.");
   }
-  const evidenceKey = recommendationEvidenceKey(recommendation);
-  return { recommendation, evidenceKey };
+  return live;
 }
 
 function serverProposalFromLive(
@@ -404,26 +412,93 @@ export type ConfirmControlledActionInput = {
   test?: ControlledActionAuthTest;
 };
 
+async function recommendationStateFor(
+  db: Db,
+  businessId: string,
+  recommendationKey: string,
+) {
+  return db.bsosRecommendationState.findUnique({
+    where: {
+      businessId_recommendationKey: {
+        businessId,
+        recommendationKey,
+      },
+    },
+  });
+}
+
+async function ownedActionItemOrFail(
+  db: Db,
+  access: BusinessAccess,
+  actionItemId: string,
+) {
+  const item = await db.businessActionItem.findFirst({
+    where: { id: actionItemId, ...access.scope },
+  });
+  if (!item) {
+    throw new ControlledActionError("That recorded action item is no longer available. TBBT did not change anything.");
+  }
+  return access.assertOwned(item);
+}
+
 async function existingActionForEvidence(
   db: Db,
   access: BusinessAccess,
   recommendationKey: string,
   evidenceKey: string,
 ) {
-  const state = await db.bsosRecommendationState.findUnique({
-    where: {
-      businessId_recommendationKey: {
-        businessId: access.businessId,
-        recommendationKey,
-      },
-    },
-  });
+  const state = await recommendationStateFor(db, access.businessId, recommendationKey);
   if (!state?.actionItemId || state.evidenceKey !== evidenceKey) return null;
-  return access.assertOwned(
-    await db.businessActionItem.findFirst({
-      where: { id: state.actionItemId, ...access.scope },
-    }),
+  return ownedActionItemOrFail(db, access, state.actionItemId);
+}
+
+function changedStateError() {
+  return new ControlledActionError(
+    "That proposal is stale. Live records changed. TBBT did not change anything.",
   );
+}
+
+async function alreadyAppliedResult(
+  db: Db,
+  access: BusinessAccess,
+  entry: ControlledActionCatalogEntry,
+  live: { recommendation: BsosRecommendation; evidenceKey: string },
+): Promise<ControlledActionExecutionResult | null> {
+  const state = await recommendationStateFor(db, access.businessId, live.recommendation.key);
+  if (!state || state.evidenceKey !== live.evidenceKey) return null;
+
+  if (entry.key === "CREATE_RECOMMENDATION_ACTION_ITEM") {
+    if (!state.actionItemId) return null;
+    const item = await ownedActionItemOrFail(db, access, state.actionItemId);
+    return {
+      status: "REPLAYED",
+      recordId: item.id,
+      recordType: "BusinessActionItem",
+      message: "Action already on the owner plan. TBBT did not execute the work.",
+    };
+  }
+  if (entry.key === "DISMISS_RECOMMENDATION") {
+    if (state.status === "DISMISSED") {
+      return {
+        status: "REPLAYED",
+        recordId: state.id,
+        recordType: "BsosRecommendationState",
+        message: "Recommendation dismissed. It will stay in history until facts change.",
+      };
+    }
+    if (state.status === "COMPLETED") throw changedStateError();
+    return null;
+  }
+  if (state.status === "COMPLETED") {
+    return {
+      status: "REPLAYED",
+      recordId: state.id,
+      recordType: "BsosRecommendationState",
+      message: "Recommendation marked complete for this business.",
+    };
+  }
+  if (state.status === "DISMISSED") throw changedStateError();
+  return null;
 }
 
 async function createRecommendationActionItemOnce(
@@ -522,12 +597,10 @@ export async function confirmControlledAction(
   }
   await authorizeCatalogAccess(db, access, entry, input.test, { ownerOnly: true });
 
-  const live = await liveRecommendation(db, access.businessId, input.proposal.targetEntityId);
+  const live = await canonicalRecommendation(db, access.businessId, input.proposal.targetEntityId);
   const serverProposal = serverProposalFromLive(access, entry, live);
   if (serverProposal.fingerprint !== input.proposal.fingerprint) {
-    throw new ControlledActionError(
-      "That proposal is stale. Live records changed. TBBT did not change anything.",
-    );
+    throw changedStateError();
   }
 
   const key = attemptKey(access.businessId, entry.key, input.executionAttemptId);
@@ -549,6 +622,21 @@ export async function confirmControlledAction(
       executionAttemptId: input.executionAttemptId,
       executionResult: { ...first.executionResult, status: "REPLAYED" },
     };
+  }
+
+  const already = await alreadyAppliedResult(db, access, entry, live);
+  if (already) {
+    const confirmation: ControlledActionConfirmation = {
+      ...serverProposal,
+      confirmed: true,
+      executionAttemptId: input.executionAttemptId,
+      executionResult: already,
+    };
+    executionAttempts.set(key, confirmation);
+    return confirmation;
+  }
+  if (!live.active) {
+    throw new ControlledActionError("That recommendation is not active from recorded facts.");
   }
 
   let resolveWork: (value: ControlledActionConfirmation) => void = () => undefined;
