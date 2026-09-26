@@ -12,9 +12,11 @@ const initialState: FieldJobActionState = {};
 
 export function StartAssignedJobButton({
   jobId,
+  scheduled = true,
   appointmentConfirmed = true,
 }: {
   jobId: string;
+  scheduled?: boolean;
   appointmentConfirmed?: boolean;
 }) {
   const [state, formAction, pending] = useActionState(
@@ -25,6 +27,14 @@ export function StartAssignedJobButton({
 
   if (!operating.canOperate) {
     return <p className="text-sm text-muted-foreground">{operating.blockedMessage}</p>;
+  }
+
+  if (!scheduled) {
+    return (
+      <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+        Waiting for the office to schedule this job.
+      </p>
+    );
   }
 
   if (!appointmentConfirmed) {

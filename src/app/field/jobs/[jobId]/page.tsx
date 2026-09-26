@@ -81,6 +81,7 @@ export default async function FieldJobPage({
       status: true,
       scheduledAt: true,
       scheduledDurationMinutes: true,
+      arrivalWindowMinutes: true,
       appointmentConfirmationStatus: true,
       appointmentProposalId: true,
       appointmentConfirmedForProposalId: true,
@@ -190,7 +191,16 @@ export default async function FieldJobPage({
         <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <StatusBadge status={job.status} />
           <span>
-            {job.scheduledAt ? formatDateTime(job.scheduledAt, timeZone) : "Not yet scheduled"}
+            {job.scheduledAt
+              ? job.arrivalWindowMinutes && job.arrivalWindowMinutes > 0
+                ? `Arrival window: ${formatDateTime(job.scheduledAt, timeZone)} – ${formatTime(
+                    new Date(
+                      job.scheduledAt.getTime() + job.arrivalWindowMinutes * 60 * 1000,
+                    ),
+                    timeZone,
+                  )}`
+                : `Appointment time: ${formatDateTime(job.scheduledAt, timeZone)}`
+              : "Not yet scheduled"}
           </span>
           {job.scheduledAt ? (
             <span>
@@ -261,6 +271,7 @@ export default async function FieldJobPage({
         {!isCompleted && !isInProgress ? (
           <StartAssignedJobButton
             jobId={job.id}
+            scheduled={job.scheduledAt != null}
             appointmentConfirmed={isCurrentAppointmentConfirmed(job)}
           />
         ) : null}
