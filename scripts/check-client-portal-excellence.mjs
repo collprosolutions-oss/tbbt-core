@@ -744,13 +744,16 @@ try {
         "internal private facts stay absent",
         !ownedBody.includes("Business Vault") &&
           !ownedBody.includes("Chief-of-Staff") &&
-          !ownedBody.includes("margin") &&
-          !ownedBody.includes("Your message was read"),
+          !ownedBody.includes("Your message was read") &&
+          !ownedBody.includes("laborCost") &&
+          !ownedBody.includes("supplierCost"),
       );
       check(
         "canonical next-step / change-order path remains",
-        ownedBody.includes("Review Change Order") &&
-          ownedBody.includes("Approve") === true,
+        ownedBody.includes("Confirm appointment") &&
+          ownedBody.includes("Change Orders") &&
+          ownedBody.includes("Approve") &&
+          ownedBody.includes("Pending Approval"),
       );
 
       const siblingRes = await fetch(`${APP_URL}/p/${jobSibling.job.projectToken}`, {
