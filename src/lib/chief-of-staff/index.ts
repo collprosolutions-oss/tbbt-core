@@ -219,6 +219,29 @@ export type {
   ExcludedActionKey,
 } from "@/lib/chief-of-staff/controlled-actions";
 export {
+  ACTION_CENTER_ORIGIN_NOT_RECORDED,
+  ACTION_CENTER_PATH,
+  ACTION_CENTER_RECORD_KINDS,
+  ACTION_CENTER_TARGET_RECORD_TYPES,
+  actionCenterHref,
+  canViewControlledActionCenter,
+  loadControlledActionCenter,
+  loadControlledActionCenterItem,
+  recordedOwnerPlanStateClaimsControlledAction,
+  resolveOwnedActionTargetLink,
+} from "@/lib/chief-of-staff/action-center";
+export type {
+  ActionCenterAvailableAction,
+  ActionCenterLiveTarget,
+  ActionCenterRecordKind,
+  ActionCenterRecordedOrigin,
+  ActionCenterRecordedState,
+  ActionCenterTargetRecordType,
+  ControlledActionCenter,
+  ControlledActionCenterDetail,
+  OwnedActionTargetLink,
+} from "@/lib/chief-of-staff/action-center";
+export {
   getOrchestrationWorkerCount,
   getSynthesisCallCount,
   resetOrchestrationWorkerCount,

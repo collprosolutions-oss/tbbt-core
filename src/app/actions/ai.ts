@@ -142,6 +142,7 @@ export async function confirmCoachActionAction(
       });
     }
     revalidatePath("/business-health");
+    revalidatePath("/actions");
     return {
       message: result.executionResult.message,
       text: result.summary,
