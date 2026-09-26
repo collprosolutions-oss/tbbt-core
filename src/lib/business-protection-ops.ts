@@ -270,34 +270,42 @@ export async function persistExpiryState(
   access: BusinessAccess,
   record: {
     id: string;
-    category: string;
-    expiresOn: string | null;
-    persistedExpiryState: string | null;
+    category?: string;
+    expiresOn?: string | null;
+    persistedExpiryState?: string | null;
     renewalLeadDays?: number | null;
   },
   now = new Date(),
 ) {
   requireProtection(access);
-  if (!isVaultCategory(record.category)) return record.persistedExpiryState;
+  const existing = await requireOwnedVaultRecord(db, access, record.id);
+  void record.category;
+  void record.expiresOn;
+  void record.persistedExpiryState;
+  void record.renewalLeadDays;
+  if (!isVaultCategory(existing.category)) return existing.persistedExpiryState;
   const clock = await vaultClassificationClock(db, access.businessId, now);
   const next = classifyExpiry({
-    category: record.category,
-    expiresOn: record.expiresOn,
-    renewalLeadDays: record.renewalLeadDays,
+    category: existing.category,
+    expiresOn: existing.expiresOn,
+    renewalLeadDays: existing.renewalLeadDays,
     now: clock.now,
     timeZone: clock.timeZone,
   });
-  if (record.persistedExpiryState === next) return next;
-  await db.businessVaultRecord.update({
-    where: { id: record.id },
+  if (existing.persistedExpiryState === next) return next;
+  const written = await db.businessVaultRecord.updateMany({
+    where: { id: existing.id, ...access.scope },
     data: { persistedExpiryState: next },
   });
+  if (written.count !== 1) {
+    throw new Error("Record is not in the authorized business workspace.");
+  }
   await writeProtectionAudit(db, {
     businessId: access.businessId,
     membershipId: membershipId(access),
     action: "expiry_state_change",
-    vaultRecordId: record.id,
-    previousValue: record.persistedExpiryState,
+    vaultRecordId: existing.id,
+    previousValue: existing.persistedExpiryState,
     newValue: next,
   });
   return next;

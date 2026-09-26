@@ -30,6 +30,7 @@ const {
   authorizeVaultDocumentUpload,
   createVaultRecord,
   finalizeVaultDocumentUpload,
+  persistExpiryState,
   updateVaultRecord,
 } = await import("@/lib/business-protection-ops");
 const { loadProtectionWorkspace } = await import("@/lib/business-protection-data");
@@ -155,7 +156,13 @@ try {
       !/deriveVaultRenewalState\(input: \{[^}]*category/.test(helperSrc),
   );
   check("Workspace groups expired records instead of hiding them", workspaceUiSrc.includes("renewalGroups") && workspaceUiSrc.includes("EXPIRED"));
-  check("Specialist stays read/explain", !specialistSrc.includes("createVaultRecord") && !specialistSrc.includes("updateVaultRecord"));
+  check("Specialist candidate SQL is bounded and business-scoped", specialistSrc.includes("LIMIT ${input.take}") && specialistSrc.includes('"businessId" = ${input.businessId}'));
+  check("Specialist discovers custom lead days in SQL candidates", specialistSrc.includes('COALESCE("renewalLeadDays"'));
+  check("Specialist classification still uses the canonical helper", specialistSrc.includes("classifyExpiry("));
+  check("Specialist does not persist a redundant renewal status", !specialistSrc.includes("persistedExpiryState:"));
+  check("persistExpiryState re-resolves the owned vault row", opsSrc.includes("const existing = await requireOwnedVaultRecord(db, access, record.id)"));
+  check("persistExpiryState writes with explicit business scope", opsSrc.includes("where: { id: existing.id, ...access.scope }"));
+  check("Specialist stays read/explain", !specialistSrc.includes("createVaultRecord") && !specialistSrc.includes("updateVaultRecord") && !specialistSrc.includes("$executeRaw"));
   check("Specialist does not persist AI dates", !specialistSrc.includes("expiresOn:") || specialistSrc.includes("expiresOn: row.expiresOn"));
   check("No CollPro-specific copy in the vault workspace", !/CollPro|handyman-only/i.test(workspaceUiSrc));
 
@@ -523,6 +530,198 @@ try {
   const foreignProjection = getLastBusinessProtectionProjection();
   check("Foreign specialist target fails closed", foreignSpecialist.status === "OK" && (foreignProjection?.vaultRecords.length ?? 1) === 0);
   check("Foreign specialist does not name the other tenant certificate", !JSON.stringify(foreignSpecialist).includes("General Liability certificate"));
+
+  console.log("\nREGRESSION — Specialist honors recorded renewalLeadDays");
+  const leadUser = await prisma.user.create({
+    data: { name: "Lea Lead", email: `lead-vr-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const leadBusiness = await prisma.business.create({
+    data: {
+      name: "Lead Window Trades",
+      slug: `lead-vr-${randomUUID()}`,
+      tradeCode: "PLUMBING",
+      timezone: NY,
+    },
+  });
+  const leadMem = await prisma.membership.create({
+    data: { userId: leadUser.id, businessId: leadBusiness.id, role: "OWNER" },
+  });
+  const leadAccess = makeAccess(leadBusiness.id, "OWNER", leadMem.id, {
+    userId: leadUser.id,
+    businessName: leadBusiness.name,
+  });
+  const far90 = await createVaultRecord(prisma, leadAccess, {
+    title: "Ninety-day warranty",
+    category: "WARRANTY",
+    expiresOn: "2026-11-25",
+    renewalLeadDays: 90,
+    now: middayNySept26,
+  });
+  const far30 = await createVaultRecord(prisma, leadAccess, {
+    title: "Thirty-day warranty",
+    category: "WARRANTY",
+    expiresOn: "2026-11-25",
+    renewalLeadDays: 30,
+    now: middayNySept26,
+  });
+  const leadExpired = await createVaultRecord(prisma, leadAccess, {
+    title: "Expired plumbing license",
+    category: "LICENSE",
+    expiresOn: "2026-07-01",
+    now: middayNySept26,
+  });
+  const leadBlank = await createVaultRecord(prisma, leadAccess, {
+    title: "Registration without a date",
+    category: "LICENSE",
+    now: middayNySept26,
+  });
+  check("Helper: 60 days away + lead 90 is approaching", deriveVaultRenewalState({
+    expiresOn: "2026-11-25",
+    renewalLeadDays: 90,
+    now: middayNySept26,
+    timeZone: NY,
+  }) === "RENEWAL_APPROACHING");
+  check("Helper: same expiration + lead 30 is current", deriveVaultRenewalState({
+    expiresOn: "2026-11-25",
+    renewalLeadDays: 30,
+    now: middayNySept26,
+    timeZone: NY,
+  }) === "CURRENT");
+
+  resetLastBusinessProtectionProjection();
+  const leadSpecialist = await runBusinessProtectionSpecialist({
+    db: prisma,
+    access: leadAccess,
+    catalog: emptyCatalog(),
+    question: "What business protection documents are approaching renewal?",
+    now: middayNySept26,
+  });
+  const leadProjection = getLastBusinessProtectionProjection();
+  const far90Row = leadProjection?.vaultRecords.find((row) => row.id === far90.id);
+  const far30Row = leadProjection?.vaultRecords.find((row) => row.id === far30.id);
+  const expiredRow = leadProjection?.vaultRecords.find((row) => row.id === leadExpired.id);
+  const blankRow = leadProjection?.vaultRecords.find((row) => row.id === leadBlank.id);
+  check("90-day lead record is surfaced as EXPIRING_SOON", leadSpecialist.status === "OK" && far90Row?.expiryState === "EXPIRING_SOON" && far90Row.expiresOn === "2026-11-25");
+  check("30-day lead record with the same expiration is CURRENT", far30Row?.expiryState === "CURRENT");
+  check("Custom 90-day lead contributes to expiringSoon totals", leadProjection?.totals.expiringSoon === 1);
+  check("Matching 30-day lead contributes to current totals", leadProjection?.totals.current === 1);
+  check("Expired remains expired", expiredRow?.expiryState === "EXPIRED" && leadProjection?.totals.expired === 1);
+  check("No expiration remains no expiration recorded", blankRow?.expiryState === "MISSING_DATE" && leadProjection?.totals.missingDate === 1);
+
+  resetLastBusinessProtectionProjection();
+  const beforeLeadWindow = await runBusinessProtectionSpecialist({
+    db: prisma,
+    access: leadAccess,
+    catalog: emptyCatalog(),
+    question: "What is approaching renewal?",
+    now: new Date("2026-08-26T16:00:00.000Z"),
+  });
+  const beforeProjection = getLastBusinessProtectionProjection();
+  const far90Before = beforeProjection?.vaultRecords.find((row) => row.id === far90.id);
+  const far90Unchanged = await prisma.businessVaultRecord.findUnique({ where: { id: far90.id } });
+  check("Before the 90-day lead boundary the same row is CURRENT", beforeLeadWindow.status === "OK" && far90Before?.expiryState === "CURRENT");
+  check("Crossing the custom lead boundary did not rewrite the vault row", far90Unchanged?.expiresOn === "2026-11-25" && far90Unchanged.renewalLeadDays === 90);
+  check("Totals follow the moved now, not a persisted derived status", beforeProjection?.totals.current === 2 && beforeProjection?.totals.expiringSoon === 0);
+
+  resetLastBusinessProtectionProjection();
+  const afterExpiry = await runBusinessProtectionSpecialist({
+    db: prisma,
+    access: leadAccess,
+    catalog: emptyCatalog(),
+    question: "What is expired?",
+    now: new Date("2026-11-26T16:00:00.000Z"),
+  });
+  const afterProjection = getLastBusinessProtectionProjection();
+  check(
+    "After the recorded date the 90-day lead record is expired without a row rewrite",
+    afterExpiry.status === "OK" &&
+      afterProjection?.vaultRecords.find((row) => row.id === far90.id)?.expiryState === "EXPIRED",
+  );
+
+  resetLastBusinessProtectionProjection();
+  const utcMidnightCustom = await runBusinessProtectionSpecialist({
+    db: prisma,
+    access: leadAccess,
+    catalog: emptyCatalog(),
+    question: "What is approaching?",
+    now: utcMidnightSept26,
+  });
+  const utcProjection = getLastBusinessProtectionProjection();
+  check(
+    "Business.timezone still decides the specialist calendar day",
+    utcMidnightCustom.status === "OK" &&
+      utcProjection?.vaultRecords.find((row) => row.id === far90.id)?.expiryState === "EXPIRING_SOON",
+  );
+
+  for (let i = 0; i < 12; i += 1) {
+    await createVaultRecord(prisma, leadAccess, {
+      title: `Overflow current warranty ${i + 1}`,
+      category: "WARRANTY",
+      expiresOn: "2027-06-01",
+      now: middayNySept26,
+    });
+  }
+  resetLastBusinessProtectionProjection();
+  const capped = await runBusinessProtectionSpecialist({
+    db: prisma,
+    access: leadAccess,
+    catalog: emptyCatalog(),
+    question: "What is in my Business Vault?",
+    now: middayNySept26,
+  });
+  const cappedProjection = getLastBusinessProtectionProjection();
+  check("Bounded projection still caps vault rows", capped.status === "OK" && (cappedProjection?.vaultRecords.length ?? 99) <= 10);
+  check("Bounded overflow does not dump every overflow title", !(cappedProjection?.vaultRecords.filter((row) => /Overflow current warranty/.test(row.title)).length >= 12));
+
+  console.log("\nREGRESSION — persistExpiryState uses canonical owned DB truth");
+  const persistTarget = await createVaultRecord(prisma, ownerA, {
+    title: "Owned persist target",
+    category: "INSURANCE",
+    expiresOn: "2026-12-01",
+    renewalLeadDays: 30,
+    now: middayNySept26,
+  });
+  const foreignPersist = await createVaultRecord(prisma, ownerB, {
+    title: "Foreign persist target",
+    category: "INSURANCE",
+    expiresOn: "2026-12-01",
+    now: middayNySept26,
+  });
+  check("Same-tenant persist starts from CURRENT", persistTarget.persistedExpiryState === "CURRENT");
+
+  await expectError("Business A cannot persist expiry state for Business B", () => {
+    return persistExpiryState(prisma, ownerA, {
+      id: foreignPersist.id,
+      category: "INSURANCE",
+      expiresOn: "2020-01-01",
+      persistedExpiryState: "CURRENT",
+      renewalLeadDays: 365,
+    }, middayNySept26);
+  }, (error) => error instanceof Error);
+
+  const foreignAfter = await prisma.businessVaultRecord.findUnique({ where: { id: foreignPersist.id } });
+  check("Foreign record remains unchanged after the rejected persist", foreignAfter?.persistedExpiryState === foreignPersist.persistedExpiryState && foreignAfter?.expiresOn === "2026-12-01");
+
+  const fabricated = await persistExpiryState(prisma, ownerA, {
+    id: persistTarget.id,
+    category: "LICENSE",
+    expiresOn: "2020-01-01",
+    persistedExpiryState: "EXPIRED",
+    renewalLeadDays: 365,
+  }, middayNySept26);
+  const afterFabrication = await prisma.businessVaultRecord.findUnique({ where: { id: persistTarget.id } });
+  check("Fabricated caller expiresOn cannot alter classification", fabricated === "CURRENT" && afterFabrication?.expiresOn === "2026-12-01");
+  check("Fabricated caller renewalLeadDays cannot alter classification", afterFabrication?.renewalLeadDays === 30 && afterFabrication.persistedExpiryState === "CURRENT");
+
+  const moved = await persistExpiryState(prisma, adminA, persistTarget, new Date("2027-01-01T16:00:00.000Z"));
+  const afterMove = await prisma.businessVaultRecord.findUnique({ where: { id: persistTarget.id } });
+  check("Same-tenant canonical persist updates from recorded dates and now", moved === "EXPIRED" && afterMove?.persistedExpiryState === "EXPIRED" && afterMove.expiresOn === "2026-12-01");
+
+  await expectError("MEMBER cannot persist expiry state", () => {
+    return persistExpiryState(prisma, memberA, persistTarget, middayNySept26);
+  }, (error) => error instanceof ForbiddenError);
+  const afterMemberPersist = await prisma.businessVaultRecord.findUnique({ where: { id: persistTarget.id } });
+  check("MEMBER persist left the owned record unchanged", afterMemberPersist?.persistedExpiryState === "EXPIRED");
 
   if (failures > 0) {
     console.error(`\n${failures} check(s) failed.`);
