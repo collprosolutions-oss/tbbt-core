@@ -112,6 +112,8 @@ const lifecycle = [
   ["Go-live health center", "src/lib/go-live.ts"],
   ["Go-live health loader", "src/lib/go-live-data.ts"],
   ["Go-live owner screen", "src/components/settings/go-live-health-center.tsx"],
+  ["Integration Center registry", "src/lib/integrations/registry.ts"],
+  ["Integration Center owner screen", "src/app/(app)/integrations/page.tsx"],
 ];
 
 try {

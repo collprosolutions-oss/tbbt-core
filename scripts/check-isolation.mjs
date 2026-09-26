@@ -67,6 +67,7 @@ const {
 const { Prisma } = await import("@prisma/client");
 const { loadGoLiveCenter } = await import("@/lib/go-live-data");
 const { goLiveCardById } = await import("@/lib/go-live");
+const { loadIntegrationCenter } = await import("@/lib/integrations");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -1441,6 +1442,22 @@ try {
     goLiveCardById(goLiveB, "custom_domain")?.status === "PARTIAL" &&
       JSON.stringify(goLiveB).includes("beta-iso.example.test") &&
       !JSON.stringify(goLiveB).includes("alpha-iso.example.test"),
+  );
+  const integrationA = await loadIntegrationCenter(prisma, accessA);
+  const integrationB = await loadIntegrationCenter(prisma, accessB);
+  check(
+    "Integration Center for A includes only A's verified host",
+    integrationA.businessId === tenantA.business.id &&
+      JSON.stringify(integrationA).includes("alpha-iso.example.test") &&
+      !JSON.stringify(integrationA).includes("beta-iso.example.test") &&
+      !JSON.stringify(integrationA).includes(tenantB.business.id),
+  );
+  check(
+    "Integration Center for B includes only B's unverified host",
+    integrationB.businessId === tenantB.business.id &&
+      JSON.stringify(integrationB).includes("beta-iso.example.test") &&
+      !JSON.stringify(integrationB).includes("alpha-iso.example.test") &&
+      !JSON.stringify(integrationB).includes(tenantA.business.id),
   );
 
   console.log(`\nIsolation cases: ${passed} passed, ${failures} failed.`);
