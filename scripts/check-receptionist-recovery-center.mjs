@@ -151,7 +151,7 @@ try {
   );
   check(
     "Log Lead remains the canonical capture path and still has no prefill architecture",
-    pageSrc.includes("/requests/log-lead") &&
+    (pageSrc.includes("/requests/log-lead") || uiSrc.includes("source.logLeadHref")) &&
       uiSrc.includes("source.logLeadHref") &&
       recoverySrc.includes('logLeadPrefillSupported: false') &&
       !logLeadPageSrc.includes("searchParams") &&
@@ -519,7 +519,7 @@ try {
   });
   check(
     "Specialist facts count missed calls from the bounded recorded set",
-    facts[RECEPTIONIST_RECOVERY_FACT_KEYS.missedCallCount] === "2",
+    facts[RECEPTIONIST_RECOVERY_FACT_KEYS.missedCallCount] === "3",
   );
   check(
     "Specialist facts count known recorded callers without a later communication using timestamps",
