@@ -11,15 +11,16 @@ const initialState: EstimateActionState = {};
 
 export function SendEstimateButton({
   estimateId,
-  disabled,
+  blockedReason,
 }: {
   estimateId: string;
-  disabled?: boolean;
+  blockedReason?: string | null;
 }) {
   const [state, formAction, pending] = useActionState(
     sendEstimate,
     initialState,
   );
+  const disabled = Boolean(blockedReason);
 
   return (
     <form action={formAction}>
@@ -27,9 +28,9 @@ export function SendEstimateButton({
       <Button type="submit" size="sm" disabled={pending || disabled}>
         {pending ? "Sending…" : "Send Estimate"}
       </Button>
-      {disabled ? (
-        <p className="mt-2 text-sm text-muted-foreground">
-          Review the draft and finish any required pricing before sending.
+      {blockedReason ? (
+        <p className="mt-2 text-sm font-medium text-amber-800 dark:text-amber-300">
+          {blockedReason}
         </p>
       ) : null}
       {state.error ? (
