@@ -13,6 +13,8 @@ export type CoachContext = {
   materialsFacts?: Record<string, string>;
   /** Bounded Communications facts from the selected specialist only. */
   communicationsFacts?: Record<string, string>;
+  /** Bounded Knowledge/Launch facts from the selected specialist only. */
+  knowledgeLaunchFacts?: Record<string, string>;
 };
 
 export const COACH_FACT_KEYS = [
@@ -78,6 +80,24 @@ export const COACH_FACT_KEYS = [
   "communications-appointment-different-time-count",
   "communications-email-message-count",
   "communications-sms-message-count",
+  "knowledge-approved-count",
+  "knowledge-unreviewed-count",
+  "knowledge-rejected-count",
+  "knowledge-needs-review-count",
+  "knowledge-conflict-count",
+  "knowledge-estimate-count",
+  "knowledge-unknown-count",
+  "knowledge-candidate-count",
+  "launch-pending-count",
+  "launch-completed-step-count",
+  "launch-skipped-count",
+  "launch-deferred-count",
+  "launch-progress-status",
+  "launch-website-published",
+  "launch-payments-connected",
+  "launch-email-configured",
+  "launch-sms-configured",
+  "launch-storage-configured",
 ] as const;
 
 export type CoachFactKey = (typeof COACH_FACT_KEYS)[number];
@@ -240,6 +260,7 @@ function factList(context: CoachContext): CitedFact[] {
     },
     ...materialsFactEntries(context.materialsFacts),
     ...communicationsFactEntries(context.communicationsFacts),
+    ...knowledgeLaunchFactEntries(context.knowledgeLaunchFacts),
   ];
 }
 
@@ -286,6 +307,36 @@ function communicationsFactEntries(facts?: Record<string, string>): CitedFact[] 
   if (!facts) return [];
   return Object.entries(facts).flatMap(([key, value]) => {
     const meta = COMMUNICATIONS_FACT_LABELS[key];
+    if (!meta) return [];
+    return [{ key, label: meta.label, value, href: meta.href } satisfies CitedFact];
+  });
+}
+
+const KNOWLEDGE_LAUNCH_FACT_LABELS: Record<string, { label: string; href: string }> = {
+  "knowledge-approved-count": { label: "Approved knowledge entries", href: "/knowledge" },
+  "knowledge-unreviewed-count": { label: "Unreviewed knowledge entries", href: "/knowledge" },
+  "knowledge-rejected-count": { label: "Rejected knowledge entries", href: "/knowledge" },
+  "knowledge-needs-review-count": { label: "Knowledge needing trust review", href: "/knowledge?review=needs-review" },
+  "knowledge-conflict-count": { label: "Knowledge in conflict", href: "/knowledge?review=needs-review" },
+  "knowledge-estimate-count": { label: "Knowledge labeled estimate", href: "/knowledge" },
+  "knowledge-unknown-count": { label: "Knowledge still unknown", href: "/knowledge" },
+  "knowledge-candidate-count": { label: "Experience learning candidates", href: "/knowledge" },
+  "launch-pending-count": { label: "Pending launch steps", href: "/launch" },
+  "launch-completed-step-count": { label: "Completed launch steps", href: "/launch" },
+  "launch-skipped-count": { label: "Skipped launch steps", href: "/launch" },
+  "launch-deferred-count": { label: "Deferred launch steps", href: "/launch" },
+  "launch-progress-status": { label: "Recorded launch progress", href: "/launch" },
+  "launch-website-published": { label: "Website published", href: "/website" },
+  "launch-payments-connected": { label: "Stripe payment connection", href: "/settings" },
+  "launch-email-configured": { label: "Email delivery configured", href: "/settings" },
+  "launch-sms-configured": { label: "SMS delivery configured", href: "/settings" },
+  "launch-storage-configured": { label: "File storage configured", href: "/settings" },
+};
+
+function knowledgeLaunchFactEntries(facts?: Record<string, string>): CitedFact[] {
+  if (!facts) return [];
+  return Object.entries(facts).flatMap(([key, value]) => {
+    const meta = KNOWLEDGE_LAUNCH_FACT_LABELS[key];
     if (!meta) return [];
     return [{ key, label: meta.label, value, href: meta.href } satisfies CitedFact];
   });
@@ -393,12 +444,31 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
         "These counts come from existing Business Health facts. The Coach does not create Growth actions.";
     }
   } else if (/launch|knowledge|experience/.test(q)) {
-    keys = ["launch-incomplete", "knowledge-unreviewed", "experience-candidates"];
     stance = "FACT";
-    text =
-      `${context.facts.launchIncompleteSteps?.count ?? 0} launch step(s) are still incomplete. ` +
-      `${context.facts.knowledgeNeedsApproval?.count ?? 0} knowledge entr${(context.facts.knowledgeNeedsApproval?.count ?? 0) === 1 ? "y needs" : "ies need"} approval. ` +
-      `${context.facts.experienceCandidates?.count ?? 0} experience candidate(s) are on file.`;
+    if (context.knowledgeLaunchFacts && Object.keys(context.knowledgeLaunchFacts).length > 0) {
+      keys = Object.keys(context.knowledgeLaunchFacts).slice(0, 6);
+      const unreviewed = context.knowledgeLaunchFacts["knowledge-unreviewed-count"];
+      const candidates = context.knowledgeLaunchFacts["knowledge-candidate-count"];
+      const pending = context.knowledgeLaunchFacts["launch-pending-count"];
+      const deferred = context.knowledgeLaunchFacts["launch-deferred-count"];
+      const launchStatus = context.knowledgeLaunchFacts["launch-progress-status"];
+      const website = context.knowledgeLaunchFacts["launch-website-published"];
+      text =
+        (unreviewed != null ? `${unreviewed} Knowledge ${unreviewed === "1" ? "entry is" : "entries are"} UNREVIEWED, which is not APPROVED. ` : "") +
+        (candidates != null ? `${candidates} experience ${candidates === "1" ? "candidate remains" : "candidates remain"} a candidate, not approved knowledge. ` : "") +
+        (pending != null ? `${pending} launch ${pending === "1" ? "step is" : "steps are"} PENDING. ` : "") +
+        (deferred != null && deferred !== "0" ? `${deferred} launch ${deferred === "1" ? "step is" : "steps are"} DEFERRED. ` : "") +
+        (launchStatus ? `Recorded launch progress is ${launchStatus}. ` : "") +
+        (website === "no" ? "Launch completion does not publish the website. " : "") +
+        "The Coach does not approve knowledge, promote candidates, or mutate launch steps.";
+    } else {
+      keys = ["launch-incomplete", "knowledge-unreviewed", "experience-candidates"];
+      text =
+        `${context.facts.launchIncompleteSteps?.count ?? 0} launch step(s) are still incomplete. ` +
+        `${context.facts.knowledgeNeedsApproval?.count ?? 0} knowledge entr${(context.facts.knowledgeNeedsApproval?.count ?? 0) === 1 ? "y needs" : "ies need"} approval. ` +
+        `${context.facts.experienceCandidates?.count ?? 0} experience candidate(s) are on file. ` +
+        "Recorded Knowledge/Launch facts were not loaded for this question beyond Business Health counts.";
+    }
   } else if (/\b(inventory|stock(?: on hand)?|in stock)\b/.test(q)) {
     stance = "FACT";
     if (context.materialsFacts?.["materials-adapter-state"]) {

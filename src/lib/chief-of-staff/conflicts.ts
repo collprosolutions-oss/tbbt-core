@@ -270,5 +270,117 @@ export function resolveConflicts(input: {
     });
   }
 
+  const knowledgeKeys = (...keys: string[]) => keys.filter((key) => recordedKeys.has(key));
+
+  if (hasAny("knowledge-unreviewed-entries", "approve-business-knowledge")) {
+    items.push({
+      kind: "UNREVIEWED_VS_APPROVED",
+      recommendationKeys: knowledgeKeys("knowledge-unreviewed-entries", "approve-business-knowledge"),
+      summary:
+        "UNREVIEWED knowledge is not APPROVED. Missing owner approval is not treated as owner policy.",
+    });
+  }
+
+  if (hasAny("knowledge-candidate-not-policy", "review-experience-learnings")) {
+    items.push({
+      kind: "CANDIDATE_VS_APPROVED_KNOWLEDGE",
+      recommendationKeys: knowledgeKeys(
+        "knowledge-candidate-not-policy",
+        "review-experience-learnings",
+      ),
+      summary:
+        "An experience learning candidate remains a candidate. It is not approved knowledge and is not promoted automatically.",
+    });
+  }
+
+  if (hasAny("knowledge-conflict")) {
+    items.push({
+      kind: "CONFLICT_STILL_UNRESOLVED",
+      recommendationKeys: knowledgeKeys("knowledge-conflict", "knowledge-needs-review"),
+      summary: "CONFLICT remains conflict. The Coach does not resolve or rewrite the recorded trust state.",
+    });
+  }
+
+  if (hasAny("knowledge-estimate")) {
+    items.push({
+      kind: "ESTIMATE_VS_KNOWN_FACT",
+      recommendationKeys: knowledgeKeys("knowledge-estimate"),
+      summary: "ESTIMATE is labeled as an estimate, not a known fact.",
+    });
+  }
+
+  if (hasAny("knowledge-unknown")) {
+    items.push({
+      kind: "UNKNOWN_IS_NOT_FALSE",
+      recommendationKeys: knowledgeKeys("knowledge-unknown"),
+      summary: "UNKNOWN stays unknown. It is not treated as false or as a recorded fact.",
+    });
+  }
+
+  if (hasAny("knowledge-supported-not-verified")) {
+    items.push({
+      kind: "SUPPORTED_VS_VERIFIED",
+      recommendationKeys: knowledgeKeys("knowledge-supported-not-verified"),
+      summary: "SUPPORTED is not VERIFIED.",
+    });
+  }
+
+  if (hasAny("knowledge-external-not-verified")) {
+    items.push({
+      kind: "EXTERNAL_REFERENCE_VS_VERIFIED",
+      recommendationKeys: knowledgeKeys("knowledge-external-not-verified"),
+      summary: "An external reference is not internally verified.",
+    });
+  }
+
+  if (hasAny("knowledge-system-derived-reserved")) {
+    items.push({
+      kind: "SYSTEM_DERIVED_RESERVED",
+      recommendationKeys: knowledgeKeys("knowledge-system-derived-reserved"),
+      summary:
+        "SYSTEM_DERIVED is reserved and is not treated as operating knowledge in this step.",
+    });
+  }
+
+  if (hasAny("launch-pending-steps", "finish-business-launch")) {
+    items.push({
+      kind: "PENDING_VS_COMPLETED_LAUNCH",
+      recommendationKeys: knowledgeKeys("launch-pending-steps", "finish-business-launch"),
+      summary: "PENDING launch steps are not COMPLETED, SKIPPED, or DEFERRED.",
+    });
+  }
+
+  if (hasAny("launch-deferred-steps")) {
+    items.push({
+      kind: "DEFERRED_VS_COMPLETED_LAUNCH",
+      recommendationKeys: knowledgeKeys("launch-deferred-steps"),
+      summary: "DEFERRED launch steps are not COMPLETED and still block recorded launch completion.",
+    });
+  }
+
+  if (hasAny("launch-complete-vs-website", "launch-complete-not-operating-proof")) {
+    items.push({
+      kind: "LAUNCH_COMPLETE_VS_WEBSITE",
+      recommendationKeys: knowledgeKeys(
+        "launch-complete-vs-website",
+        "launch-complete-not-operating-proof",
+      ),
+      summary:
+        "Recorded launch completion does not publish the website. Website publishing remains a separate owner action.",
+    });
+  }
+
+  if (hasAny("launch-complete-vs-provider", "launch-complete-not-operating-proof")) {
+    items.push({
+      kind: "LAUNCH_COMPLETE_VS_PROVIDER",
+      recommendationKeys: knowledgeKeys(
+        "launch-complete-vs-provider",
+        "launch-complete-not-operating-proof",
+      ),
+      summary:
+        "Recorded launch completion does not imply Stripe, Resend, SMS, or R2 are connected. Provider truth comes from actual provider/config state.",
+    });
+  }
+
   return { items, uniqueRecommendationKeys };
 }

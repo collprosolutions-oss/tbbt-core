@@ -65,6 +65,11 @@ export {
   resetCommunicationsSpecialistCounters,
 } from "@/lib/chief-of-staff/communications-snapshot";
 export {
+  getKnowledgeLaunchProjectionLoadCount,
+  getKnowledgeLaunchSpecialistInterpretationCount,
+  resetKnowledgeLaunchSpecialistCounters,
+} from "@/lib/chief-of-staff/knowledge-launch-snapshot";
+export {
   getMaterialsProjectionLoadCount,
   getMaterialsSpecialistInterpretationCount,
   resetMaterialsSpecialistCounters,
@@ -84,6 +89,31 @@ export {
   runCommunicationsSpecialist,
   unknownConsentIsNotGranted,
 } from "@/lib/chief-of-staff/communications-specialist";
+export {
+  KNOWLEDGE_LAUNCH_CONTEXT_CAPS,
+  KNOWLEDGE_LAUNCH_OWNED_RECOMMENDATION_KEYS,
+  KNOWLEDGE_STATE_CONTRACT,
+  TARGET_CONSISTENCY_LIMITATION as KNOWLEDGE_LAUNCH_TARGET_CONSISTENCY_LIMITATION,
+  candidateIsNotApprovedKnowledge,
+  conflictRemainsConflict,
+  estimateIsLabeledEstimate,
+  externalReferenceIsNotInternallyVerified,
+  getLastKnowledgeLaunchProjection,
+  isKnowledgeLaunchOwnedRecommendationKey,
+  knowledgeLaunchEntitlementLimitation,
+  knowledgeLaunchProjectionHasForbiddenFields,
+  launchCompleteDoesNotImplyProvider,
+  launchCompleteDoesNotImplyWebsite,
+  launchStatusesRemainDistinct,
+  loadKnowledgeLaunchProjection,
+  projectKnowledgeLaunchFacts,
+  resetLastKnowledgeLaunchProjection,
+  runKnowledgeLaunchSpecialist,
+  supportedIsNotVerified,
+  systemDerivedIsReserved,
+  unknownStaysUnknown,
+  unreviewedIsNotApproved,
+} from "@/lib/chief-of-staff/knowledge-launch-specialist";
 export {
   MATERIALS_CONTEXT_CAPS,
   MATERIALS_OWNED_RECOMMENDATION_KEYS,
