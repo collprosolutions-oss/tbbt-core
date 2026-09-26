@@ -27,11 +27,23 @@ const {
   SERVICE_AREA_COPY,
   TRUST_POINTS,
   HOME_FEATURED_PROJECT_IDS,
+  collproRenoLegacyHireRedirectPath,
   groupPublicCatalog,
   isCollProRenoSlug,
+  publicAboutPath,
+  publicContactPath,
+  publicHomePath,
+  publicIndexableSitemapPaths,
   publicPhone,
+  publicProjectsPath,
+  publicRequestPath,
+  publicReviewsPath,
+  publicServiceAreaPath,
+  publicServicesPath,
   toPublicCatalogItem,
 } = await import("@/lib/public-site");
+const { publishedSitemapPaths } = await import("@/lib/website-engine/seo");
+const { tbbtApexWwwRedirectLocation } = await import("@/lib/tbbt-marketing-host");
 const {
   PUBLIC_PROJECTS,
   publicProjectCaption,
@@ -529,6 +541,92 @@ check("Multi-item request labels stay as a list, not a blob of IDs",
   }).join("|") === "Door Adjustment|TV Mounting|Caulking");
 check("CollPro slug mapping is recognized",
   isCollProRenoSlug("collpro-reno") && isCollProRenoSlug("collpro-reno-handyman-services"));
+const collproSitemapPaths = publicIndexableSitemapPaths("collpro-reno");
+check(
+  "Public sitemap lists existing hire pages including Projects, Reviews, Service Area, and Contact",
+  collproSitemapPaths.includes(publicHomePath("collpro-reno")) &&
+    collproSitemapPaths.includes(publicServicesPath("collpro-reno")) &&
+    collproSitemapPaths.includes(publicAboutPath("collpro-reno")) &&
+    collproSitemapPaths.includes(publicReviewsPath("collpro-reno")) &&
+    collproSitemapPaths.includes(publicProjectsPath("collpro-reno")) &&
+    collproSitemapPaths.includes(publicServiceAreaPath("collpro-reno")) &&
+    collproSitemapPaths.includes(publicContactPath("collpro-reno")) &&
+    collproSitemapPaths.includes(publicRequestPath("collpro-reno")) &&
+    collproSitemapPaths.includes("/hire/collpro-reno/projects") &&
+    collproSitemapPaths.includes("/hire/collpro-reno/reviews") &&
+    collproSitemapPaths.includes("/hire/collpro-reno/service-area") &&
+    collproSitemapPaths.includes("/hire/collpro-reno/contact"),
+);
+check(
+  "Public sitemap omits owner, private, and app routes",
+  !collproSitemapPaths.some((path) =>
+    ["/dashboard", "/settings", "/requests", "/jobs", "/business-health", "/field", "/setup"].includes(path) ||
+      path.startsWith("/dashboard") ||
+      path.startsWith("/settings") ||
+      path.startsWith("/requests"),
+  ) &&
+    !collproSitemapPaths.includes("/hire/collpro-reno-handyman-services"),
+);
+check(
+  "Compatibility sitemap and published sitemap share the same public hire pages",
+  publicIndexableSitemapPaths("alpha-handyman").every((path) =>
+    publishedSitemapPaths({
+      business: { slug: "alpha-handyman" },
+      services: [],
+      localPages: [],
+    }).includes(path),
+  ),
+);
+check(
+  "Compatibility sitemap is wired into src/app/sitemap.ts",
+  readRepo("src/app/sitemap.ts").includes("publicIndexableSitemapPaths") &&
+    readRepo("src/app/sitemap.ts").includes("publishedSitemapPaths"),
+);
+check(
+  "Historical CollPro hire slug 308s to the canonical hire page only",
+  collproRenoLegacyHireRedirectPath("/hire/collpro-reno-handyman-services") ===
+    "/hire/collpro-reno" &&
+    collproRenoLegacyHireRedirectPath("/hire/collpro-reno-handyman-services/") ===
+      "/hire/collpro-reno" &&
+    collproRenoLegacyHireRedirectPath("/hire/collpro-reno-handyman-services?ref=1") ===
+      "/hire/collpro-reno",
+);
+check(
+  "Canonical hire, homepage, and nested hire pages do not redirect",
+  collproRenoLegacyHireRedirectPath("/hire/collpro-reno") === null &&
+    collproRenoLegacyHireRedirectPath("/hire/collpro-reno/") === null &&
+    collproRenoLegacyHireRedirectPath("/") === null &&
+    collproRenoLegacyHireRedirectPath("/hire/collpro-reno/about") === null &&
+    collproRenoLegacyHireRedirectPath("/hire/collpro-reno-handyman-services/about") === null,
+);
+check(
+  "Legacy hire redirect cannot loop back onto itself",
+  collproRenoLegacyHireRedirectPath("/hire/collpro-reno-handyman-services") ===
+    "/hire/collpro-reno" &&
+    collproRenoLegacyHireRedirectPath(
+      collproRenoLegacyHireRedirectPath("/hire/collpro-reno-handyman-services"),
+    ) === null,
+);
+check(
+  "Auth proxy 308s the historical hire slug after the TBBT apex 308",
+  proxySrc.includes("collproRenoLegacyHireRedirectPath") &&
+    proxySrc.includes("NextResponse.redirect(apexLocation, 308)") &&
+    proxySrc.includes("tbbtApexWwwRedirectLocation") &&
+    proxySrc.indexOf("tbbtApexWwwRedirectLocation") <
+      proxySrc.indexOf("collproRenoLegacyHireRedirectPath(pathname)") &&
+    proxySrc.includes("NextResponse.redirect(") &&
+    /collproRenoLegacyHireRedirectPath[\s\S]{0,400}308/.test(proxySrc),
+);
+check(
+  "www/canonical and homepage redirect behavior stay unchanged",
+  tbbtApexWwwRedirectLocation("tbbtool.com", "/") === "https://www.tbbtool.com/" &&
+    tbbtApexWwwRedirectLocation("www.tbbtool.com", "/") === null &&
+    tbbtApexWwwRedirectLocation("collproreno.com", "/") === null &&
+    tbbtApexWwwRedirectLocation("www.collproreno.com", "/hire/collpro-reno") === null &&
+    collproRenoLegacyHireRedirectPath("/") === null &&
+    isPublicWebsitePath("/") &&
+    !/if \(pathname === ["']\/["']\)/.test(proxySrc),
+);
 check("CollPro phone and name are the verified launch values",
   COLLPRO_RENO_PHONE === "239-357-8199" &&
     COLLPRO_RENO_DISPLAY_NAME === "CollPro Reno Handyman Services");
@@ -960,9 +1058,68 @@ try {
     const hire = await fetchMaybe("/hire/collpro-reno");
     check("Existing /hire/collpro-reno homepage still loads",
       Boolean(hire && hire.status === 200 && hire.body.includes(COLLPRO_RENO_DISPLAY_NAME)));
+    const hireAgain = await fetchMaybe("/hire/collpro-reno");
+    check("Canonical /hire/collpro-reno is not a redirect",
+      Boolean(hireAgain && hireAgain.status === 200 && !hireAgain.location));
+    const legacyHire = await fetchMaybe("/hire/collpro-reno-handyman-services");
+    const legacyLocation = new URL(legacyHire?.location ?? "http://invalid.example/", APP_URL);
+    check("Historical /hire/collpro-reno-handyman-services permanently redirects to /hire/collpro-reno",
+      Boolean(
+        legacyHire &&
+          legacyHire.status === 308 &&
+          legacyLocation.pathname === "/hire/collpro-reno",
+      ));
+    const afterLegacy = await fetchMaybe(legacyLocation.pathname);
+    check("Following the historical hire redirect lands on the canonical page without looping",
+      Boolean(
+        afterLegacy &&
+          afterLegacy.status === 200 &&
+          !afterLegacy.location &&
+          afterLegacy.body.includes(COLLPRO_RENO_DISPLAY_NAME),
+      ));
+    const homeAgain = await fetchMaybe("/");
+    check("Homepage / is unchanged and is not redirected to the hire slug",
+      Boolean(homeAgain && homeAgain.status === 200 && !homeAgain.location));
     const missingHire = await fetchMaybe("/hire/no-such-tbbt-business");
     check("Unknown public hire slug returns HTTP 404",
       Boolean(missingHire && missingHire.status === 404));
+    async function fetchSitemap(host) {
+      try {
+        const res = await fetch(`${APP_URL}/sitemap.xml`, {
+          redirect: "manual",
+          headers: host ? { host } : undefined,
+        });
+        return { status: res.status, body: await res.text().catch(() => "") };
+      } catch {
+        return null;
+      }
+    }
+    const publicSitemap = await fetchSitemap("www.collproreno.com");
+    check(
+      "CollPro sitemap includes the confirmed public hire and intake routes",
+      Boolean(
+        publicSitemap &&
+          publicSitemap.status === 200 &&
+          publicSitemap.body.includes("/hire/collpro-reno/services") &&
+          publicSitemap.body.includes("/hire/collpro-reno/about") &&
+          publicSitemap.body.includes("/hire/collpro-reno/projects") &&
+          publicSitemap.body.includes("/hire/collpro-reno/reviews") &&
+          publicSitemap.body.includes("/hire/collpro-reno/service-area") &&
+          publicSitemap.body.includes("/hire/collpro-reno/contact") &&
+          publicSitemap.body.includes("/r/collpro-reno"),
+      ),
+    );
+    check(
+      "CollPro sitemap omits owner/private/app routes and the historical hire slug",
+      Boolean(
+        publicSitemap &&
+          !publicSitemap.body.includes("/dashboard") &&
+          !publicSitemap.body.includes("/settings") &&
+          !publicSitemap.body.includes("/business-health") &&
+          !publicSitemap.body.includes("/requests") &&
+          !publicSitemap.body.includes("/hire/collpro-reno-handyman-services"),
+      ),
+    );
 
     const services = await fetchMaybe("/hire/collpro-reno/services");
     check("Services page loads",

@@ -561,6 +561,39 @@ export function publicContactPath(slug: string) {
   return `/hire/${slug}/contact`;
 }
 
+/**
+ * Public, indexable hire/intake routes that always exist as App Router
+ * pages. Snapshot-only service-detail and city+service pages are added
+ * separately after publish. Never includes owner/app routes.
+ */
+export function publicIndexableSitemapPaths(slug: string) {
+  return [
+    publicHomePath(slug),
+    publicServicesPath(slug),
+    publicAboutPath(slug),
+    publicReviewsPath(slug),
+    publicProjectsPath(slug),
+    publicServiceAreaPath(slug),
+    publicContactPath(slug),
+    publicRequestPath(slug),
+  ];
+}
+
+/**
+ * Historical CollPro hire slug → current canonical hire path.
+ * Exact path only (optional trailing slash). Does not rewrite `/` or
+ * the canonical `/hire/collpro-reno` route.
+ */
+export function collproRenoLegacyHireRedirectPath(pathname: string): string | null {
+  const pathOnly = pathname.split("?")[0] ?? "";
+  const trimmed =
+    pathOnly.length > 1 && pathOnly.endsWith("/") ? pathOnly.slice(0, -1) : pathOnly;
+  if (trimmed.toLowerCase() === `/hire/${COLLPRO_RENO_SLUGS[1]}`) {
+    return publicHomePath(COLLPRO_RENO_SLUGS[0]);
+  }
+  return null;
+}
+
 export function localBusinessJsonLd(input: {
   name: string;
   slug: string;

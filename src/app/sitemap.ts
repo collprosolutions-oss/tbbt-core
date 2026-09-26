@@ -10,7 +10,7 @@ import { authorizedPublicOrigin, resolvePublicHost } from "@/lib/website-engine/
 import { loadPublicWebsiteView } from "@/lib/website-engine/public";
 import { publishedSitemapPaths } from "@/lib/website-engine/seo";
 import { publicCanonicalUrl } from "@/lib/public-site-seo";
-import { COLLPRO_RENO_SLUGS, publicHomePath, publicServicesPath, publicAboutPath, publicRequestPath } from "@/lib/public-site";
+import { COLLPRO_RENO_SLUGS, publicHomePath, publicIndexableSitemapPaths } from "@/lib/public-site";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const host = await readRequestHost();
@@ -37,12 +37,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const origin = authorizedPublicOrigin(resolved, host);
   const paths = view.snapshot
     ? publishedSitemapPaths(view.snapshot)
-    : [
-        publicHomePath(view.site.business.slug),
-        publicServicesPath(view.site.business.slug),
-        publicAboutPath(view.site.business.slug),
-        publicRequestPath(view.site.business.slug),
-      ];
+    : publicIndexableSitemapPaths(view.site.business.slug);
   if (resolved.kind === "tenant" && !paths.includes("/")) {
     paths.unshift("/");
   }
