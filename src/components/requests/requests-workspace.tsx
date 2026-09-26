@@ -2,7 +2,7 @@
 
 import { useState, type ComponentType, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
-import { FileText, Mail, MapPin, Phone, Receipt, Wrench } from "lucide-react";
+import { FileText, MapPin, Phone, Receipt, Wrench } from "lucide-react";
 import { CreateEstimateButton } from "@/components/estimates/create-estimate-button";
 import { OwnerPrivatePhoto } from "@/components/estimates/owner-private-photo";
 import { RecordNav } from "@/components/record-nav";
@@ -21,8 +21,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { telHref } from "@/lib/directions";
 import { FounderRegion } from "@/components/founder-design/region";
+import {
+  RequestContactActions,
+  RequestIdentityReviewBadge,
+  RequestIdentityReviewNotice,
+} from "@/components/requests/request-follow-up";
 import { cn } from "@/lib/utils";
 
 function initials(name: string) {
@@ -210,9 +214,7 @@ function RequestsTable({
                   <td className="align-top" style={{ padding: "var(--tr-py) var(--cell-px)" }}>
                     <div className="flex flex-col items-start gap-1">
                       <StatusBadge status={request.status} />
-                      {request.identityReview ? (
-                        <StatusBadge status="IDENTITY_REVIEW" />
-                      ) : null}
+                      <RequestIdentityReviewBadge review={request.identityReview} />
                     </div>
                   </td>
                   <td
@@ -318,8 +320,6 @@ function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
     );
   }
 
-  const tel = telHref(request.customer?.phone ?? null);
-  const mailto = request.customer?.email ? `mailto:${request.customer.email}` : null;
   const customerName = request.customer?.name ?? "Customer";
 
   return (
@@ -340,16 +340,11 @@ function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
       <CardContent className="flex-1 space-y-6 pt-5">
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <StatusBadge status={request.status} />
-          {request.identityReview ? <StatusBadge status="IDENTITY_REVIEW" /> : null}
+          <RequestIdentityReviewBadge review={request.identityReview} />
           <span className="text-muted-foreground">{request.createdAtLabel}</span>
         </div>
         <RecordNav items={request.recordNavItems} />
-        {request.identityReview ? (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
-            <p className="font-medium">Needs identity review</p>
-            <p className="mt-1">{request.identityReview.message}</p>
-          </div>
-        ) : null}
+        <RequestIdentityReviewNotice review={request.identityReview} />
         {request.serviceAreaNote ? (
           <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
             <p className="font-medium">Service area</p>
@@ -414,22 +409,10 @@ function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
         ) : null}
       </CardContent>
       <CardFooter className="flex flex-wrap gap-2 border-t border-border/60 pt-5">
-        {tel ? (
-          <Button asChild variant="outline">
-            <a href={tel}>
-              <Phone className="size-4" />
-              Call
-            </a>
-          </Button>
-        ) : null}
-        {mailto ? (
-          <Button asChild variant="outline">
-            <a href={mailto}>
-              <Mail className="size-4" />
-              Email
-            </a>
-          </Button>
-        ) : null}
+        <RequestContactActions
+          phone={request.customer?.phone}
+          email={request.customer?.email}
+        />
         {request.customer ? (
           <Button asChild variant="outline">
             <Link href={`/customers/${request.customer.id}`}>Open customer</Link>

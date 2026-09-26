@@ -439,6 +439,48 @@ try {
     "invoice nav includes customer when Invoice.customerId exists",
     idsOf(fromInvoice, "customer")[0] === tenantA.customer.id,
   );
+  check(
+    "invoice nav includes Property when the linked job has a property",
+    idsOf(fromInvoice, "property")[0] === tenantA.property.id,
+  );
+  check(
+    "invoice nav includes Request when Job.estimate.serviceRequestId exists",
+    idsOf(fromInvoice, "request").join(",") === tenantA.request.id,
+  );
+
+  const jobWithoutProperty = await prisma.job.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      estimateId: standaloneEstimate.id,
+      status: "UNSCHEDULED",
+      projectToken: randomUUID(),
+    },
+  });
+  const invoiceWithoutPropertyRequest = await prisma.invoice.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      jobId: jobWithoutProperty.id,
+      kind: INVOICE_KIND_ORIGINAL,
+      status: "DRAFT",
+      total: new Prisma.Decimal(40),
+    },
+  });
+  const fromInvoiceMissingHops = await loadRecordJourney(prisma, accessA, {
+    kind: "invoice",
+    id: invoiceWithoutPropertyRequest.id,
+  });
+  check(
+    "invoice nav does not invent Property when the job has none",
+    idsOf(fromInvoiceMissingHops, "property").length === 0,
+  );
+  check(
+    "invoice nav does not invent Request when the estimate has no serviceRequestId",
+    idsOf(fromInvoiceMissingHops, "request").length === 0 &&
+      idsOf(fromInvoiceMissingHops, "estimate").join(",") === standaloneEstimate.id &&
+      idsOf(fromInvoiceMissingHops, "job").join(",") === jobWithoutProperty.id,
+  );
 
   const fromCustomer = await loadRecordJourney(prisma, accessA, {
     kind: "customer",
@@ -627,10 +669,12 @@ try {
     id: invoicePointingAtB.id,
   });
   check(
-    "Invoice A omits foreign job / customer",
+    "Invoice A omits foreign job / customer / property / request",
     !idsOf(fromCorruptInvoice, "job").includes(tenantB.job.id) &&
       !idsOf(fromCorruptInvoice, "customer").includes(tenantB.customer.id) &&
       !idsOf(fromCorruptInvoice, "estimate").includes(tenantB.estimate.id) &&
+      !idsOf(fromCorruptInvoice, "property").includes(tenantB.property.id) &&
+      !idsOf(fromCorruptInvoice, "request").includes(tenantB.request.id) &&
       fromCorruptInvoice.some((item) => item.kind === "invoice" && item.id === invoicePointingAtB.id),
   );
 
