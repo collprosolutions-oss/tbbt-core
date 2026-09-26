@@ -6,7 +6,6 @@ import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { requireManagementPageAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
-import { ensureLaunchProgress } from "@/lib/business-launch-ops";
 import { loadLaunchWorkspace } from "@/lib/business-launch-data";
 import { parseLaunchStepKey } from "@/lib/business-launch";
 import { prisma } from "@/lib/prisma";
@@ -23,7 +22,6 @@ export default async function BusinessLaunchPage({
   const access = await requireManagementPageAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
   requireBusinessRole(access, "OWNER");
-  await ensureLaunchProgress(prisma, access);
   const workspace = await loadLaunchWorkspace(prisma, access.businessId);
   const params = await searchParams;
   const step = parseLaunchStepKey(params.step ?? workspace.progress.recommendedNext ?? undefined);
