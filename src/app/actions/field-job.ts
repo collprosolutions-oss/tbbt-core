@@ -25,7 +25,8 @@ import {
 } from "@/lib/saas-billing/entitlement";
 import { CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT, startJobRequiresCustomerConfirmation } from "@/lib/appointment-confirmation";
 import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
-import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
+import { evaluateStartJob } from "@/lib/job-lifecycle";
+import { completeJobWithRunningTimeSafety } from "@/lib/time-card-ops";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import {
   isBusinessStorageConfigured,
@@ -132,20 +133,20 @@ export async function completeAssignedJob(
   }
   const { job } = assigned;
 
-  const result = evaluateCompleteJob(job.status);
+  // Deliberately ONLY flips Job.status (after closing RUNNING JOB time).
+  // Does not create/send an Invoice, approve any Change Order, or touch
+  // payment -- owner financial control stays on Work Order Complete Job
+  // (markJobComplete → completeJobAndSendInvoice).
+  const result = await completeJobWithRunningTimeSafety(prisma, {
+    businessId: job.businessId,
+    jobId: job.id,
+    actorMembershipId: assigned.membershipId,
+  });
   if (!result.ok) {
     return { error: result.error };
   }
 
-  if (result.nextStatus) {
-    // Deliberately ONLY flips Job.status. Does not create/send an Invoice,
-    // approve any Change Order, or touch payment -- owner financial control
-    // stays on Work Order Complete Job (markJobComplete →
-    // completeJobAndSendInvoice).
-    await prisma.job.update({
-      where: { id: job.id },
-      data: { status: result.nextStatus },
-    });
+  if (!result.alreadyCompleted) {
     await emitAndProcessBusinessEvent(prisma, {
       businessId: job.businessId,
       type: "JOB_COMPLETED",

@@ -11,6 +11,7 @@ import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, ForbiddenError, requireBusinessCapability } from "@/lib/authorization";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireOperatingProductCapability } from "@/lib/product-entitlements";
+import { evaluateCompleteJob } from "@/lib/job-lifecycle";
 import {
   approvalSnapshot,
   canApproveWeek,
@@ -38,6 +39,24 @@ export class TimeCardError extends Error {
   }
 }
 
+/** Audit reason written when completion closes a RUNNING JOB TimeEntry. */
+export const JOB_COMPLETION_TIME_CLOSED_REASON = "Closed because the job was completed.";
+
+const COMPLETED_JOB_CLOCK_IN_ERROR = "This job is completed. Job time cannot be started.";
+const APPROVED_WEEK_COMPLETION_ERROR =
+  "This job cannot be completed while approved job time is still running. Reopen the timesheet week first.";
+const MISSING_COMPLETION_ACTOR_ERROR = "That job could not be completed.";
+const COMPLETION_CLOCK_ORDER_ERROR =
+  "Job time cannot be closed because the completion time is not after the clock-in start.";
+
+type TenantJobRow = {
+  id: string;
+  businessId: string;
+  assignedMembershipId: string | null;
+  status: string;
+  customerId: string | null;
+};
+
 function decimal(value: number | null | undefined): Prisma.Decimal | null {
   if (value == null || !Number.isFinite(value)) return null;
   return new Prisma.Decimal(value);
@@ -61,12 +80,37 @@ async function loadMembershipInBusiness(
 async function loadJobInBusiness(db: Db, businessId: string, jobId: string) {
   const job = await db.job.findFirst({
     where: { id: jobId, businessId },
-    select: { id: true, assignedMembershipId: true, businessId: true },
+    select: {
+      id: true,
+      assignedMembershipId: true,
+      businessId: true,
+      status: true,
+      customerId: true,
+    },
   });
   if (!job) {
     throw new TimeCardError("That job is not in this business.");
   }
   return job;
+}
+
+/**
+ * Tenant/job-scoped row lock. Different jobs and tenants stay independent;
+ * this never serializes the whole TimeEntry or Job table.
+ */
+async function lockTenantOwnedJob(
+  db: Db,
+  businessId: string,
+  jobId: string,
+): Promise<TenantJobRow | null> {
+  const rows = await db.$queryRaw<TenantJobRow[]>`
+    SELECT id, "businessId", "assignedMembershipId", status, "customerId"
+    FROM "Job"
+    WHERE id = ${jobId}
+      AND "businessId" = ${businessId}
+    FOR UPDATE
+  `;
+  return rows[0] ?? null;
 }
 
 async function assertJobClockAccess(input: {
@@ -221,6 +265,16 @@ export async function clockInTime(
       jobId: input.jobId ?? null,
       activityType,
     });
+
+    if (activityType === "JOB" && input.jobId) {
+      const locked = await lockTenantOwnedJob(tx, access.businessId, input.jobId);
+      if (!locked) {
+        throw new TimeCardError("That job is not in this business.");
+      }
+      if (locked.status === "COMPLETED") {
+        throw new TimeCardError(COMPLETED_JOB_CLOCK_IN_ERROR);
+      }
+    }
 
     const running = await tx.timeEntry.findMany({
       where: {
@@ -826,6 +880,204 @@ export async function reopenTimesheetWeek(
     await refreshPayrollAfterTimesheetChange(tx, access.businessId, week.id);
     return reopened;
   });
+}
+
+export type CloseRunningJobTimeForCompletionInput = {
+  businessId: string;
+  jobId: string;
+  /** Trusted server-derived membership that is writing the audit row. */
+  actorMembershipId?: string | null;
+  endedAt?: Date;
+};
+
+export type ClosedJobTimeEntry = {
+  id: string;
+  membershipId: string;
+  startedAt: Date;
+  endedAt: Date;
+};
+
+async function closeLockedJobRunningTime(
+  db: Db,
+  job: Pick<TenantJobRow, "id" | "businessId">,
+  input: CloseRunningJobTimeForCompletionInput,
+): Promise<ClosedJobTimeEntry[]> {
+  const endedAt = input.endedAt ?? new Date();
+  const running = await db.timeEntry.findMany({
+    where: {
+      businessId: job.businessId,
+      jobId: job.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      endedAt: null,
+    },
+    orderBy: { startedAt: "asc" },
+  });
+  if (running.length === 0) {
+    return [];
+  }
+  if (!input.actorMembershipId) {
+    throw new TimeCardError(MISSING_COMPLETION_ACTOR_ERROR);
+  }
+  await loadMembershipInBusiness(db, job.businessId, input.actorMembershipId);
+
+  const closed: ClosedJobTimeEntry[] = [];
+  for (const entry of running) {
+    if (!canEditTimeEntry(entry.status)) {
+      throw new TimeCardError(APPROVED_WEEK_COMPLETION_ERROR);
+    }
+    try {
+      await assertWeekEditable(db, job.businessId, entry.membershipId, entry.startedAt);
+      await assertWeekEditable(db, job.businessId, entry.membershipId, endedAt);
+    } catch (error) {
+      if (isTimeCardError(error)) {
+        throw new TimeCardError(APPROVED_WEEK_COMPLETION_ERROR);
+      }
+      throw error;
+    }
+    if (endedAt <= entry.startedAt) {
+      throw new TimeCardError(COMPLETION_CLOCK_ORDER_ERROR);
+    }
+
+    const previous = toAuditSnapshot(entry);
+    const updated = await db.timeEntry.updateMany({
+      where: {
+        id: entry.id,
+        businessId: job.businessId,
+        jobId: job.id,
+        activityType: "JOB",
+        status: "RUNNING",
+        endedAt: null,
+      },
+      data: {
+        endedAt,
+        status: "READY",
+      },
+    });
+    if (updated.count !== 1) {
+      continue;
+    }
+
+    const next = await db.timeEntry.findFirst({
+      where: { id: entry.id, businessId: job.businessId },
+    });
+    if (!next || !next.endedAt) {
+      continue;
+    }
+
+    await writeAdjustment(db, {
+      businessId: job.businessId,
+      timeEntryId: next.id,
+      actorMembershipId: input.actorMembershipId,
+      action: "UPDATE",
+      reason: JOB_COMPLETION_TIME_CLOSED_REASON,
+      previous,
+      next: toAuditSnapshot(next),
+    });
+    closed.push({
+      id: next.id,
+      membershipId: next.membershipId,
+      startedAt: next.startedAt,
+      endedAt: next.endedAt,
+    });
+  }
+  return closed;
+}
+
+/**
+ * Close RUNNING JOB labor for one tenant-owned Job as part of completion.
+ *
+ * Only entries matching all of: businessId, jobId, activityType JOB,
+ * status RUNNING, endedAt null. TRAVEL / MATERIAL_PICKUP / BREAK / OTHER
+ * and other jobs / tenants are left untouched.
+ */
+export async function closeRunningJobTimeForCompletion(
+  db: Db,
+  input: CloseRunningJobTimeForCompletionInput,
+): Promise<{ job: TenantJobRow; closed: ClosedJobTimeEntry[] }> {
+  const run = async (tx: Db) => {
+    const job = await lockTenantOwnedJob(tx, input.businessId, input.jobId);
+    if (!job) {
+      throw new TimeCardError("That job is not in this business.");
+    }
+    const closed = await closeLockedJobRunningTime(tx, job, input);
+    return { job, closed };
+  };
+
+  if (typeof (db as PrismaClient).$transaction === "function") {
+    return (db as PrismaClient).$transaction((tx) => run(tx));
+  }
+  return run(db);
+}
+
+export type CompleteJobWithRunningTimeSafetyResult =
+  | {
+      ok: true;
+      alreadyCompleted: boolean;
+      jobCompleted: true;
+      customerId: string | null;
+      closed: ClosedJobTimeEntry[];
+    }
+  | { ok: false; error: string };
+
+/**
+ * Canonical completion write: lock the tenant-owned Job, refuse when the
+ * lifecycle does not allow COMPLETED, close matching RUNNING JOB time,
+ * then persist COMPLETED in the same transaction. Owner invoice/send and
+ * Field event emission stay in their existing callers.
+ */
+export async function completeJobWithRunningTimeSafety(
+  db: PrismaClient,
+  input: CloseRunningJobTimeForCompletionInput,
+): Promise<CompleteJobWithRunningTimeSafetyResult> {
+  try {
+    return await db.$transaction(async (tx) => {
+      const job = await lockTenantOwnedJob(tx, input.businessId, input.jobId);
+      if (!job) {
+        return { ok: false, error: "That job could not be completed." };
+      }
+
+      const lifecycle = evaluateCompleteJob(job.status);
+      if (!lifecycle.ok) {
+        return { ok: false, error: lifecycle.error };
+      }
+
+      const closed = await closeLockedJobRunningTime(tx, job, input);
+
+      if (lifecycle.nextStatus) {
+        const updated = await tx.job.updateMany({
+          where: {
+            id: job.id,
+            businessId: input.businessId,
+            status: job.status,
+          },
+          data: { status: lifecycle.nextStatus },
+        });
+        if (updated.count !== 1 && job.status !== "COMPLETED") {
+          const current = await tx.job.findFirst({
+            where: { id: job.id, businessId: input.businessId },
+            select: { status: true },
+          });
+          if (current?.status !== "COMPLETED") {
+            throw new TimeCardError("That job could not be completed.");
+          }
+        }
+      }
+
+      return {
+        ok: true,
+        alreadyCompleted: lifecycle.nextStatus == null,
+        jobCompleted: true as const,
+        customerId: job.customerId,
+        closed,
+      };
+    });
+  } catch (error) {
+    if (isTimeCardError(error) || error instanceof ForbiddenError) {
+      return { ok: false, error: timeCardErrorMessage(error, MISSING_COMPLETION_ACTOR_ERROR) };
+    }
+    throw error;
+  }
 }
 
 export function isTimeCardError(error: unknown): error is TimeCardError {

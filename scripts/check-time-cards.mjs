@@ -47,8 +47,11 @@ const {
   approveTimesheetWeek,
   clockInTime,
   clockOutTime,
+  closeRunningJobTimeForCompletion,
+  completeJobWithRunningTimeSafety,
   correctTimeEntry,
   createManualTimeEntry,
+  JOB_COMPLETION_TIME_CLOSED_REASON,
   reopenTimesheetWeek,
   requestTimeCorrection,
   TimeCardError,
@@ -240,6 +243,26 @@ try {
   check("OWNER/ADMIN have MANAGE_TIME_CARDS", roleHasCapability("OWNER", CAPABILITIES.MANAGE_TIME_CARDS) && roleHasCapability("ADMIN", CAPABILITIES.MANAGE_TIME_CARDS));
   check("MEMBER does not have MANAGE_TIME_CARDS", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_TIME_CARDS));
   check("All five activity types exist", TIME_ACTIVITY_TYPES.length === 5);
+  const timeCardOpsSrc = readFileSync(new URL("../src/lib/time-card-ops.ts", import.meta.url), "utf8");
+  const completeInvoiceSrc = readFileSync(new URL("../src/lib/complete-job-invoice.ts", import.meta.url), "utf8");
+  const markJobSrc = readFileSync(new URL("../src/app/actions/job.ts", import.meta.url), "utf8");
+  check(
+    "Canonical closeRunningJobTimeForCompletion locks the tenant-owned Job row",
+    timeCardOpsSrc.includes("export async function closeRunningJobTimeForCompletion") &&
+      timeCardOpsSrc.includes("FOR UPDATE") &&
+      timeCardOpsSrc.includes('activityType: "JOB"') &&
+      timeCardOpsSrc.includes("JOB_COMPLETION_TIME_CLOSED_REASON"),
+  );
+  check(
+    "clockInTime refuses JOB time on a persisted COMPLETED Job",
+    timeCardOpsSrc.includes("COMPLETED_JOB_CLOCK_IN_ERROR") &&
+      timeCardOpsSrc.includes('locked.status === "COMPLETED"'),
+  );
+  check(
+    "Owner completion uses the shared time-safety helper and passes the actor membership",
+    completeInvoiceSrc.includes("completeJobWithRunningTimeSafety") &&
+      /actorMembershipId:\s*access\.workspace\.membership\.id/.test(markJobSrc),
+  );
 
   const businessA = await prisma.business.create({
     data: { name: "Alpha Time", slug: "alpha-time-cards", tradeCode: "HANDYMAN" },
@@ -1016,6 +1039,346 @@ try {
     Number(persistAfterIsolation.approvedHourlyWage) === 25 &&
       Number(persistAfterIsolation.approvedLaborCost) === 25,
   );
+
+  console.log("\nTEST — Job completion cannot leave RUNNING JOB time");
+  const closerUser = await prisma.user.create({
+    data: { name: "Cara Closer", email: "closer-time@example.com", passwordHash: "x" },
+  });
+  const otherUser = await prisma.user.create({
+    data: { name: "Omar Other", email: "other-time@example.com", passwordHash: "x" },
+  });
+  const raceUser = await prisma.user.create({
+    data: { name: "Riley Race", email: "race-time@example.com", passwordHash: "x" },
+  });
+  const closerMem = await prisma.membership.create({
+    data: { userId: closerUser.id, businessId: businessA.id, role: "MEMBER", hourlyWage: new Prisma.Decimal(19) },
+  });
+  const otherMem = await prisma.membership.create({
+    data: { userId: otherUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const raceMem = await prisma.membership.create({
+    data: { userId: raceUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const closerA = makeAccess(businessA.id, "MEMBER", closerMem.id);
+  const raceA = makeAccess(businessA.id, "MEMBER", raceMem.id);
+  const completionJobA = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "IN_PROGRESS",
+      projectToken: randomUUID(),
+      assignedMembershipId: closerMem.id,
+    },
+  });
+  const completionJobB = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "IN_PROGRESS",
+      projectToken: randomUUID(),
+      assignedMembershipId: otherMem.id,
+    },
+  });
+  const betaCompletionJob = await prisma.job.create({
+    data: {
+      businessId: businessB.id,
+      status: "IN_PROGRESS",
+      projectToken: randomUUID(),
+      assignedMembershipId: betaMemberMem.id,
+    },
+  });
+
+  const jobAStartedAt = hoursAgo(2);
+  const jobAClock = await clockInTime(prisma, closerA, {
+    membershipId: closerMem.id,
+    activityType: "JOB",
+    jobId: completionJobA.id,
+    startedAt: jobAStartedAt,
+    note: "Finishing Job A labor",
+  });
+  const jobBClock = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: otherMem.id,
+      jobId: completionJobB.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: hoursAgo(3),
+      endedAt: null,
+      source: "CLOCK",
+      note: "Job B still on site",
+    },
+  });
+  const breakClock = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: adminMem.id,
+      activityType: "BREAK",
+      status: "RUNNING",
+      startedAt: hoursAgo(1),
+      endedAt: null,
+      source: "CLOCK",
+    },
+  });
+  const travelClock = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: ownerMem.id,
+      activityType: "TRAVEL",
+      status: "RUNNING",
+      startedAt: hoursAgo(1),
+      endedAt: null,
+      source: "CLOCK",
+      jobId: completionJobA.id,
+    },
+  });
+  const pickupClock = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: helperMem.id,
+      activityType: "MATERIAL_PICKUP",
+      status: "RUNNING",
+      startedAt: hoursAgo(1),
+      endedAt: null,
+      source: "CLOCK",
+    },
+  });
+  const otherClock = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: danielMem.id,
+      activityType: "OTHER",
+      status: "RUNNING",
+      startedAt: hoursAgo(1),
+      endedAt: null,
+      source: "CLOCK",
+    },
+  });
+  const betaClock = await prisma.timeEntry.create({
+    data: {
+      businessId: businessB.id,
+      membershipId: betaMemberMem.id,
+      jobId: betaCompletionJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: hoursAgo(1),
+      endedAt: null,
+      source: "CLOCK",
+    },
+  });
+
+  const completedA = await completeJobWithRunningTimeSafety(prisma, {
+    businessId: businessA.id,
+    jobId: completionJobA.id,
+    actorMembershipId: ownerMem.id,
+  });
+  const closedA = await prisma.timeEntry.findUnique({ where: { id: jobAClock.id } });
+  const jobAAdjustments = await prisma.timeEntryAdjustment.findMany({
+    where: { timeEntryId: jobAClock.id, action: "UPDATE", reason: JOB_COMPLETION_TIME_CLOSED_REASON },
+  });
+  check("Completing Job A succeeds", completedA.ok === true && completedA.jobCompleted === true);
+  check("Job A is COMPLETED", (await prisma.job.findUnique({ where: { id: completionJobA.id } })).status === "COMPLETED");
+  check(
+    "Job A RUNNING JOB entry is READY with preserved startedAt and note",
+    closedA.status === "READY" &&
+      closedA.endedAt != null &&
+      closedA.startedAt.getTime() === jobAStartedAt.getTime() &&
+      closedA.note === "Finishing Job A labor",
+  );
+  check("Completion wrote exactly one close adjustment", jobAAdjustments.length === 1);
+  check(
+    "Job B running JOB entry is untouched",
+    (await prisma.timeEntry.findUnique({ where: { id: jobBClock.id } })).status === "RUNNING" &&
+      (await prisma.timeEntry.findUnique({ where: { id: jobBClock.id } })).endedAt == null,
+  );
+  check(
+    "Unrelated BREAK / TRAVEL / MATERIAL_PICKUP / OTHER stay running",
+    (await prisma.timeEntry.findUnique({ where: { id: breakClock.id } })).status === "RUNNING" &&
+      (await prisma.timeEntry.findUnique({ where: { id: travelClock.id } })).status === "RUNNING" &&
+      (await prisma.timeEntry.findUnique({ where: { id: pickupClock.id } })).status === "RUNNING" &&
+      (await prisma.timeEntry.findUnique({ where: { id: otherClock.id } })).status === "RUNNING",
+  );
+  check(
+    "Tenant B running JOB time is untouched by Tenant A completion",
+    (await prisma.timeEntry.findUnique({ where: { id: betaClock.id } })).status === "RUNNING" &&
+      (await prisma.job.findUnique({ where: { id: betaCompletionJob.id } })).status === "IN_PROGRESS",
+  );
+
+  await expectError(
+    "Tenant B cannot close Tenant A running JOB time",
+    () =>
+      closeRunningJobTimeForCompletion(prisma, {
+        businessId: businessB.id,
+        jobId: completionJobA.id,
+        actorMembershipId: betaOwnerMem.id,
+      }),
+    (error) => error instanceof TimeCardError,
+  );
+  check(
+    "Cross-tenant close left Job A entry READY (not reopened or rewritten)",
+    (await prisma.timeEntry.findUnique({ where: { id: jobAClock.id } })).status === "READY" &&
+      (await prisma.timeEntryAdjustment.count({
+        where: { timeEntryId: jobAClock.id, reason: JOB_COMPLETION_TIME_CLOSED_REASON },
+      })) === 1,
+  );
+
+  const repeatA = await completeJobWithRunningTimeSafety(prisma, {
+    businessId: businessA.id,
+    jobId: completionJobA.id,
+    actorMembershipId: ownerMem.id,
+  });
+  check("Repeated completion is idempotent", repeatA.ok === true && repeatA.alreadyCompleted === true);
+  check(
+    "Repeated completion does not double-adjust",
+    (await prisma.timeEntryAdjustment.count({
+      where: { timeEntryId: jobAClock.id, reason: JOB_COMPLETION_TIME_CLOSED_REASON },
+    })) === 1,
+  );
+  const closedAAfterRepeat = await prisma.timeEntry.findUnique({ where: { id: jobAClock.id } });
+  check(
+    "Repeated completion does not alter the already-closed entry",
+    closedAAfterRepeat.endedAt.getTime() === closedA.endedAt.getTime() &&
+      closedAAfterRepeat.status === "READY",
+  );
+
+  await expectError(
+    "Completed Job rejects a new JOB clock-in",
+    () =>
+      clockInTime(prisma, closerA, {
+        membershipId: closerMem.id,
+        activityType: "JOB",
+        jobId: completionJobA.id,
+      }),
+    (error) => error instanceof TimeCardError && /completed/i.test(error.message),
+  );
+  check(
+    "Rejected JOB clock-in created no new RUNNING JOB entry",
+    (await prisma.timeEntry.count({
+      where: {
+        businessId: businessA.id,
+        jobId: completionJobA.id,
+        activityType: "JOB",
+        status: "RUNNING",
+        endedAt: null,
+      },
+    })) === 0,
+  );
+
+  const approvedBlockJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "IN_PROGRESS",
+      projectToken: randomUUID(),
+      assignedMembershipId: closerMem.id,
+    },
+  });
+  const approvedRunning = await clockInTime(prisma, closerA, {
+    membershipId: closerMem.id,
+    activityType: "JOB",
+    jobId: approvedBlockJob.id,
+  });
+  await prisma.timesheetWeek.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: closerMem.id,
+      weekStartedAt: weekRange(approvedRunning.startedAt).start,
+      status: "APPROVED",
+      approvedAt: new Date(),
+      approvedByMembershipId: ownerMem.id,
+    },
+  });
+  const blockedComplete = await completeJobWithRunningTimeSafety(prisma, {
+    businessId: businessA.id,
+    jobId: approvedBlockJob.id,
+    actorMembershipId: ownerMem.id,
+  });
+  check("Approved week blocks completion", blockedComplete.ok === false);
+  check(
+    "Approved-week block leaves Job IN_PROGRESS",
+    (await prisma.job.findUnique({ where: { id: approvedBlockJob.id } })).status === "IN_PROGRESS",
+  );
+  const stillRunningApproved = await prisma.timeEntry.findUnique({ where: { id: approvedRunning.id } });
+  check(
+    "Approved-week block does not silently close or mutate the running entry",
+    stillRunningApproved.status === "RUNNING" && stillRunningApproved.endedAt == null,
+  );
+  check(
+    "Approved-week block wrote no completion adjustment",
+    (await prisma.timeEntryAdjustment.count({
+      where: { timeEntryId: approvedRunning.id, reason: JOB_COMPLETION_TIME_CLOSED_REASON },
+    })) === 0,
+  );
+
+  const raceJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "IN_PROGRESS",
+      projectToken: randomUUID(),
+      assignedMembershipId: raceMem.id,
+    },
+  });
+  const [raceClock, raceComplete] = await Promise.allSettled([
+    clockInTime(prisma, raceA, {
+      membershipId: raceMem.id,
+      activityType: "JOB",
+      jobId: raceJob.id,
+    }),
+    completeJobWithRunningTimeSafety(prisma, {
+      businessId: businessA.id,
+      jobId: raceJob.id,
+      actorMembershipId: ownerMem.id,
+    }),
+  ]);
+  const raceJobRow = await prisma.job.findUnique({ where: { id: raceJob.id } });
+  const raceRunning = await prisma.timeEntry.findMany({
+    where: {
+      businessId: businessA.id,
+      jobId: raceJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      endedAt: null,
+    },
+  });
+  check(
+    "Completion vs JOB clock-in never leaves COMPLETED + RUNNING JOB time",
+    !(raceJobRow.status === "COMPLETED" && raceRunning.length > 0),
+  );
+  check(
+    "Race settled without an uncaught rejection",
+    (raceClock.status === "fulfilled" || raceClock.status === "rejected") &&
+      (raceComplete.status === "fulfilled" || raceComplete.status === "rejected"),
+  );
+
+  await clockOutTime(prisma, memberA, { membershipId: memberMem.id }).catch(() => null);
+  const normalIn = await clockInTime(prisma, memberA, {
+    membershipId: memberMem.id,
+    activityType: "TRAVEL",
+  });
+  const normalOut = await clockOutTime(prisma, memberA, { membershipId: memberMem.id });
+  check(
+    "Existing clockIn / clockOut path is unchanged",
+    normalIn.status === "RUNNING" &&
+      normalIn.activityType === "TRAVEL" &&
+      normalOut.status === "READY" &&
+      normalOut.endedAt != null,
+  );
+
+  const stillSelfAssigned = await prisma.job.findUnique({ where: { id: ownerJob.id } });
+  const ownerSelfAgain = await clockInTime(prisma, ownerA, {
+    membershipId: ownerMem.id,
+    activityType: "JOB",
+    jobId: ownerJob.id,
+  });
+  check(
+    "#144 owner self-assignment Field clock still works",
+    stillSelfAssigned.assignedMembershipId === ownerMem.id &&
+      stillSelfAssigned.status !== "COMPLETED" &&
+      ownerSelfAgain.status === "RUNNING" &&
+      ownerSelfAgain.jobId === ownerJob.id,
+  );
+  await clockOutTime(prisma, ownerA, { membershipId: ownerMem.id });
 
   console.log(
     failures === 0
