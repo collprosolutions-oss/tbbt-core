@@ -521,7 +521,10 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
         : context.facts.collectedRevenue
           ? `Recorded collected customer cash is ${context.facts.collectedRevenue.amount.toFixed(2)}. There are no SENT unpaid invoices on file.`
           : "There are no SENT unpaid invoices on file.";
-  } else if (/repeat|referral|customer/.test(q)) {
+  } else if (
+    /repeat|referral|customer/.test(q) &&
+    !/\b(?:did we contact|have we contact|can i (?:text|email|call|contact)|sms|consent|communications?|text(?:ed|ing|s)?|messag(?:e|es|ing))\b/.test(q)
+  ) {
     keys = ["repeat-customers", "review-opportunities"];
     stance = "MIXED";
     text =
