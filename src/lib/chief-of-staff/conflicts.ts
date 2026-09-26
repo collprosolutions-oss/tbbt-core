@@ -203,7 +203,7 @@ export function resolveConflicts(input: {
       kind: "NO_INVENTORY_RECORDED",
       recommendationKeys: materialKeys("materials-inventory-unknown"),
       summary:
-        "No inventory or stock-on-hand model exists. Inventory quantity stays unknown, never zero, and is not live commerce.",
+        "No inventory quantities are recorded. Inventory quantity stays unknown, never zero, and is not live commerce.",
     });
   }
 
