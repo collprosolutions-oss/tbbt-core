@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const { smsHref, telHref } = await import("@/lib/directions");
+const { formatDateTime } = await import("@/lib/format");
 
 function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
@@ -126,8 +127,16 @@ check(
 check(
   "Job rows keep the recorded scheduled or created date",
   jobsCard.includes("job.scheduledAt") &&
-    jobsCard.includes("formatDateTime(job.scheduledAt)") &&
+    jobsCard.includes("formatDateTime(job.scheduledAt, timeZone)") &&
     jobsCard.includes("formatDate(job.createdAt)"),
+);
+check(
+  "Scheduled job time uses resolved Business.timezone, not host-local",
+  page.includes('import { resolveBusinessTimeZone } from "@/lib/business-timezone"') &&
+    page.includes("const timeZone = resolveBusinessTimeZone(access.workspace.business)") &&
+    jobsCard.includes("formatDateTime(job.scheduledAt, timeZone)") &&
+    !jobsCard.includes("new Date(`${") &&
+    !page.includes("prisma.business.find"),
 );
 check(
   "Job Open still uses the existing job route and a phone tap target",
@@ -137,6 +146,23 @@ check(
 check(
   "Jobs query is still the customer FK list",
   page.includes('jobs: { orderBy: { createdAt: "desc" } }'),
+);
+
+console.log("\nUNIT — Scheduled job time follows Business.timezone");
+const scheduledInstant = new Date("2026-09-26T13:00:00.000Z");
+const newYorkLabel = formatDateTime(scheduledInstant, "America/New_York");
+const losAngelesLabel = formatDateTime(scheduledInstant, "America/Los_Angeles");
+const hostLocalLabel = formatDateTime(scheduledInstant);
+check(
+  "2026-09-26T13:00:00.000Z in America/New_York renders 9:00 AM, not 1:00 PM",
+  newYorkLabel.includes("9:00 AM") && !newYorkLabel.includes("1:00 PM"),
+);
+check(
+  "A different IANA zone is used instead of host-local time",
+  losAngelesLabel.includes("6:00 AM") &&
+    !losAngelesLabel.includes("9:00 AM") &&
+    losAngelesLabel !== hostLocalLabel &&
+    losAngelesLabel !== newYorkLabel,
 );
 
 console.log("\nSTATIC — Tenant scope and customers list isolation");

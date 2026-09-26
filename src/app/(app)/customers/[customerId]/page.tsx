@@ -19,6 +19,7 @@ import {
 import { CustomerCommunicationsCard } from "@/components/customers/communications-timeline-card";
 import { requireManagementPageAccess } from "@/lib/access";
 import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { loadCustomerCommunicationTimeline } from "@/lib/communications/timeline";
 import { customerInvoiceHistoryContext } from "@/lib/customer-invoice-history";
 import { requestNotesText } from "@/lib/work-area-intake";
@@ -37,6 +38,7 @@ export default async function CustomerProfilePage({
 }) {
   const { customerId } = await params;
   const access = await requireManagementPageAccess();
+  const timeZone = resolveBusinessTimeZone(access.workspace.business);
   const customer = await prisma.customer.findFirst({
     where: { id: customerId, ...access.scope },
     include: {
@@ -201,7 +203,7 @@ export default async function CustomerProfilePage({
                     meta={
                       <span>
                         {job.scheduledAt
-                          ? formatDateTime(job.scheduledAt)
+                          ? formatDateTime(job.scheduledAt, timeZone)
                           : formatDate(job.createdAt)}
                       </span>
                     }
