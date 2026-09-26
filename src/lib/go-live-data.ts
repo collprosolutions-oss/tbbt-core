@@ -4,6 +4,9 @@
  * Reads existing configuration only. Callers must pass the authenticated
  * workspace businessId — never a browser-supplied id. OWNER/ADMIN use
  * MANAGE_SETTINGS; MEMBER is denied.
+ *
+ * Settings pages must call loadGoLiveCenter only when section === "go-live".
+ * Overview and other Settings sections must not run these provider reads.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";

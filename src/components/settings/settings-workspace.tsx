@@ -157,8 +157,9 @@ function OverviewSection({
         description="One owner screen for whether production capabilities are actually usable. This is status only — it does not connect providers."
       >
         <p className="text-sm text-muted-foreground">
-          Necessary items (SaaS access, customer cards, email, photo storage) are listed separately
-          from optional SMS, AI, bank, supplier, e-sign, voice, and social publishing.
+          Required items are SaaS access, transactional email, and photo storage. Stripe Connect is
+          conditional for online card checkout. SMS, AI, domain, bank, suppliers, e-sign, voice, and
+          social publishing stay optional.
         </p>
         <Button asChild size="sm">
           <Link href="/settings?section=go-live">Open Go-live / Health</Link>
@@ -166,11 +167,11 @@ function OverviewSection({
       </SectionCard>
       <SectionCard
         title="Business setup"
-        description={`${readiness.requiredReady} of ${readiness.requiredTotal} required areas are configured. This percentage is only those required checks — not an AI score.`}
+        description={`${readiness.requiredReady} of ${readiness.requiredTotal} baseline settings checks configured.`}
       >
-        <p className="text-3xl font-semibold tabular-nums">{readiness.readyPercent}%</p>
         <p className="text-sm text-muted-foreground">
-          Required areas: business identity, active team membership, and the existing security model.
+          This is Settings completeness, not production Go-live status. Required checks are business
+          identity, active team membership, and the existing security model.
         </p>
       </SectionCard>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -218,7 +219,13 @@ function SectionBody(props: SettingsWorkspaceProps) {
   }
 
   if (section === "go-live") {
-    return <GoLiveHealthCenter center={props.goLive} />;
+    return props.goLive ? (
+      <GoLiveHealthCenter center={props.goLive} />
+    ) : (
+      <p className="text-sm text-muted-foreground">
+        Go-live Health loads only on this section.
+      </p>
+    );
   }
 
   if (section === "website-photos") {
@@ -1087,7 +1094,9 @@ function SectionBody(props: SettingsWorkspaceProps) {
 
 export function SettingsWorkspace(props: SettingsWorkspaceProps) {
   const { section, readiness } = props;
-  const attention = readiness.items.filter((item) => item.status === "needs_setup" || item.status === "not_connected");
+  const attention = readiness.items.filter(
+    (item) => item.required && item.status === "needs_setup",
+  );
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(12rem,16rem)_minmax(0,1fr)_var(--tbbt-panel-width,300px)]">

@@ -5,8 +5,8 @@
  * from existing configuration only. This module does not connect
  * providers, mutate connection state, or expose secrets.
  *
- * There is no single "100% ready" boolean. Groups stay separate so
- * necessary operating items are never mixed with optional/planned ones.
+ * There is no single "100% ready" boolean or launch percentage.
+ * Cards use REQUIRED / CONDITIONAL / OPTIONAL. Mixed groups stay mixed.
  */
 import type { SaasEntitlementState } from "@/lib/saas-billing/entitlement";
 import type { PaymentConnectionStatus } from "@/lib/payments/types";
@@ -55,6 +55,38 @@ export const GO_LIVE_CAPABILITIES = [
 ] as const;
 export type GoLiveCapabilityId = (typeof GO_LIVE_CAPABILITIES)[number];
 
+export const GO_LIVE_REQUIREMENTS = ["REQUIRED", "CONDITIONAL", "OPTIONAL"] as const;
+export type GoLiveRequirement = (typeof GO_LIVE_REQUIREMENTS)[number];
+export type GoLiveGroupRequirement = GoLiveRequirement | "MIXED";
+
+export const GO_LIVE_CARD_REQUIREMENTS: Record<GoLiveCapabilityId, GoLiveRequirement> = {
+  stripe_saas: "REQUIRED",
+  stripe_connect: "CONDITIONAL",
+  resend: "REQUIRED",
+  r2: "REQUIRED",
+  twilio_sms: "OPTIONAL",
+  ai_provider: "OPTIONAL",
+  custom_domain: "OPTIONAL",
+  finance_bank: "OPTIONAL",
+  supplier_commerce: "OPTIONAL",
+  esign: "OPTIONAL",
+  voice_receptionist: "OPTIONAL",
+  social_publishing: "OPTIONAL",
+};
+
+export const GO_LIVE_REQUIREMENT_LABELS: Record<GoLiveRequirement, string> = {
+  REQUIRED: "Required",
+  CONDITIONAL: "Conditional",
+  OPTIONAL: "Optional",
+};
+
+export const GO_LIVE_GROUP_REQUIREMENT_LABELS: Record<GoLiveGroupRequirement, string> = {
+  REQUIRED: "Required",
+  CONDITIONAL: "Conditional",
+  OPTIONAL: "Optional",
+  MIXED: "Mixed",
+};
+
 export const GO_LIVE_GROUP_LABELS: Record<GoLiveGroup, string> = {
   CORE_OPERATING: "Core operating",
   PAYMENTS: "Payments",
@@ -66,16 +98,15 @@ export const GO_LIVE_GROUP_LABELS: Record<GoLiveGroup, string> = {
 
 export const GO_LIVE_GROUP_SUMMARIES: Record<GoLiveGroup, string> = {
   CORE_OPERATING:
-    "Necessary for the business to keep using TBBT in production. This is software access, not customer job payments.",
+    "Required. Software access for the business to keep using TBBT in production. This is not customer job payments.",
   PAYMENTS:
-    "Customer deposits and invoice cards. Manual Mark Paid still works when card checkout is not live.",
-  COMMUNICATIONS:
-    "Outbound email is required for customer notices. SMS and voice are optional and degradable.",
+    "Conditional. Required for online card payments; manual Mark Paid remains available.",
+  COMMUNICATIONS: "Mixed. Email is required; SMS and voice are optional.",
   STORAGE:
-    "Required for intake, job, and website photo upload. Missing storage does not delete recorded jobs.",
+    "Required. Needed for intake, job, and website photo upload. Missing storage does not delete recorded jobs.",
   AI: "Optional. Deterministic Coach facts stay available without a provider.",
   OPTIONAL_PLANNED:
-    "Disconnected or planned capabilities. Absence is not a production outage.",
+    "Optional. Disconnected or planned capabilities. Absence is not a production outage.",
 };
 
 export const GO_LIVE_STATUS_LABELS: Record<GoLiveStatus, string> = {
@@ -89,7 +120,16 @@ export const GO_LIVE_STATUS_LABELS: Record<GoLiveStatus, string> = {
 };
 
 export const GO_LIVE_NO_SCORE_DISCLAIMER =
-  "This is a status board, not a launch score. Necessary and optional items are listed separately. Disconnected systems are not broken.";
+  "This is a status board, not a launch score. Required, conditional, and optional items are listed separately. Disconnected systems are not broken.";
+
+export const GO_LIVE_REQUIRED_SUMMARY =
+  "Required for core production: SaaS access, transactional email, and photo storage.";
+
+export const GO_LIVE_CONDITIONAL_SUMMARY =
+  "Conditional: Stripe Connect for online card checkout.";
+
+export const GO_LIVE_OPTIONAL_SUMMARY =
+  "Optional/planned: SMS, AI, domain, bank, suppliers, e-sign, voice, social.";
 
 export const GO_LIVE_READ_ONLY_MESSAGE =
   "This page reports current configuration only. It does not connect providers, start onboarding, or change billing.";
@@ -99,7 +139,7 @@ export type GoLiveCard = {
   label: string;
   group: GoLiveGroup;
   status: GoLiveStatus;
-  necessary: boolean;
+  requirement: GoLiveRequirement;
   currentState: string;
   whatWorks: string;
   whatDoesNot: string;
@@ -111,7 +151,8 @@ export type GoLiveLaunchGroup = {
   id: GoLiveGroup;
   label: string;
   summary: string;
-  necessary: boolean;
+  requirement: GoLiveGroupRequirement;
+  requirementLabel: string;
   cards: GoLiveCard[];
   liveCount: number;
   readyCount: number;
@@ -122,11 +163,12 @@ export type GoLiveLaunchGroup = {
 export type GoLiveCenter = {
   cards: GoLiveCard[];
   groups: GoLiveLaunchGroup[];
-  necessaryCards: GoLiveCard[];
+  requiredCards: GoLiveCard[];
+  conditionalCards: GoLiveCard[];
   optionalCards: GoLiveCard[];
-  necessaryLiveCount: number;
-  necessaryReadyCount: number;
-  necessaryRemainingCount: number;
+  requiredLiveCount: number;
+  requiredReadyCount: number;
+  requiredRemainingCount: number;
   disclaimer: string;
   readOnly: true;
 };
@@ -174,6 +216,16 @@ export function isGoLiveStatus(value: string): value is GoLiveStatus {
 
 export function isGoLiveGroup(value: string): value is GoLiveGroup {
   return (GO_LIVE_GROUPS as readonly string[]).includes(value);
+}
+
+export function isGoLiveRequirement(value: string): value is GoLiveRequirement {
+  return (GO_LIVE_REQUIREMENTS as readonly string[]).includes(value);
+}
+
+export function goLiveGroupRequirement(cards: readonly GoLiveCard[]): GoLiveGroupRequirement {
+  const unique = [...new Set(cards.map((card) => card.requirement))];
+  if (unique.length === 1) return unique[0];
+  return "MIXED";
 }
 
 export function classifyStripeSaas(input: GoLiveInput["saas"]): GoLiveStatus {
@@ -278,7 +330,7 @@ function stripeSaasCard(input: GoLiveInput["saas"]): GoLiveCard {
       label: "Stripe SaaS subscription",
       group: "CORE_OPERATING",
       status,
-      necessary: true,
+      requirement: GO_LIVE_CARD_REQUIREMENTS.stripe_saas,
       currentState: `${input.statusLabel}. The business can use TBBT software access.`,
       whatWorks: "Owner/admin operating pages stay available under the current entitlement.",
       whatDoesNot: "This is not Stripe Connect. Customers do not pay job invoices here.",
@@ -292,7 +344,7 @@ function stripeSaasCard(input: GoLiveInput["saas"]): GoLiveCard {
       label: "Stripe SaaS subscription",
       group: "CORE_OPERATING",
       status,
-      necessary: true,
+      requirement: GO_LIVE_CARD_REQUIREMENTS.stripe_saas,
       currentState: "Checkout is ready. The business still needs an active subscription or trial.",
       whatWorks: "TBBT Billing can start Founder Checkout when the owner chooses.",
       whatDoesNot: "Operating access stays blocked until a subscription or trial is active.",
@@ -306,7 +358,7 @@ function stripeSaasCard(input: GoLiveInput["saas"]): GoLiveCard {
       label: "Stripe SaaS subscription",
       group: "CORE_OPERATING",
       status,
-      necessary: true,
+      requirement: GO_LIVE_CARD_REQUIREMENTS.stripe_saas,
       currentState: "SaaS Stripe billing is not configured on this environment.",
       whatWorks: "Existing business records stay on file.",
       whatDoesNot: "Owner checkout for TBBT software cannot start until platform billing is configured.",
@@ -319,7 +371,7 @@ function stripeSaasCard(input: GoLiveInput["saas"]): GoLiveCard {
     label: "Stripe SaaS subscription",
     group: "CORE_OPERATING",
     status: "PARTIAL",
-    necessary: true,
+    requirement: GO_LIVE_CARD_REQUIREMENTS.stripe_saas,
     currentState:
       input.entitlementState === "payment_problem"
         ? "The TBBT subscription has a payment problem. Operating access continues while Billing is updated."
@@ -337,7 +389,7 @@ function stripeConnectCard(input: GoLiveInput["connect"]): GoLiveCard {
     id: "stripe_connect" as const,
     label: "Stripe Connect customer payments",
     group: "PAYMENTS" as const,
-    necessary: true,
+    requirement: GO_LIVE_CARD_REQUIREMENTS.stripe_connect,
     settingsHref: "/settings?section=estimates-payments",
   };
   if (status === "LIVE") {
@@ -346,7 +398,7 @@ function stripeConnectCard(input: GoLiveInput["connect"]): GoLiveCard {
       status,
       currentState: "Customers can pay deposits and invoices online.",
       whatWorks: "Card checkout for sent invoices and material deposits is live. Manual Mark Paid still works.",
-      whatDoesNot: "This is not TBBT software billing.",
+      whatDoesNot: "This is not TBBT software billing. Connect is required only if accepting customer card payments online.",
       ownerNextAction: "No Connect action is needed from this page.",
     };
   }
@@ -355,8 +407,8 @@ function stripeConnectCard(input: GoLiveInput["connect"]): GoLiveCard {
       ...base,
       status,
       currentState: "Stripe Connect is ready to collect cards once checkout links can resolve.",
-      whatWorks: "The connected account can charge. Cash, check, and Zelle Mark Paid still work.",
-      whatDoesNot: "Pay buttons stay hidden until the app URL is set.",
+      whatWorks: "The connected account can charge. Cash, check, and Zelle Mark Paid still work. TBBT still operates without online cards.",
+      whatDoesNot: "Pay buttons stay hidden until the app URL is set. Connect is required only if accepting customer card payments online.",
       ownerNextAction: "Ask the platform operator to set the public app URL. Do not start a new connection from this page.",
     };
   }
@@ -364,8 +416,8 @@ function stripeConnectCard(input: GoLiveInput["connect"]): GoLiveCard {
     return {
       ...base,
       status,
-      currentState: "Stripe Connect setup is incomplete.",
-      whatWorks: "Cash, check, and Zelle can still be recorded with Mark Paid.",
+      currentState: "Stripe Connect setup is incomplete. Required only if accepting customer card payments online.",
+      whatWorks: "Cash, check, and Zelle can still be recorded with Mark Paid. TBBT still operates without online cards.",
       whatDoesNot: "Customers cannot finish card checkout yet.",
       ownerNextAction: "Finish Stripe onboarding from Estimates & Payments when you are ready. This page does not start onboarding.",
     };
@@ -374,18 +426,18 @@ function stripeConnectCard(input: GoLiveInput["connect"]): GoLiveCard {
     return {
       ...base,
       status,
-      currentState: "Stripe Connect is not configured on this TBBT environment.",
-      whatWorks: "Cash, check, and Zelle Mark Paid still record payments.",
-      whatDoesNot: "Customer card deposits and invoice cards are unavailable.",
+      currentState: "Stripe Connect is not configured on this TBBT environment. Required only if accepting customer card payments online.",
+      whatWorks: "Cash, check, and Zelle Mark Paid still record payments. TBBT still operates without online cards.",
+      whatDoesNot: "Customer card deposits and invoice cards are unavailable. Disconnected Connect does not mean TBBT cannot operate.",
       ownerNextAction: "Ask the platform operator to set the Connect secret. Do not paste keys into TBBT.",
     };
   }
   return {
     ...base,
     status: "DISCONNECTED",
-    currentState: "Stripe Connect is not connected for this business.",
-    whatWorks: "Cash, check, and Zelle Mark Paid still record payments.",
-    whatDoesNot: "Customer card deposits and invoice cards are unavailable until Connect is finished.",
+    currentState: "Stripe Connect is not connected for this business. Required only if accepting customer card payments online.",
+    whatWorks: "Cash, check, and Zelle Mark Paid still record payments. TBBT still operates without online cards.",
+    whatDoesNot: "Customer card deposits and invoice cards are unavailable until Connect is finished. Disconnected Connect does not mean TBBT cannot operate.",
     ownerNextAction: "Connect Stripe from Estimates & Payments when you want card checkout. This page does not start that flow.",
   };
 }
@@ -398,7 +450,7 @@ function resendCard(emailConfigured: boolean): GoLiveCard {
       label: "Resend email",
       group: "COMMUNICATIONS",
       status,
-      necessary: true,
+      requirement: GO_LIVE_CARD_REQUIREMENTS.resend,
       currentState: "Platform email delivery is configured.",
       whatWorks: "Transactional customer email can send when a usable address exists.",
       whatDoesNot: "API keys are not shown. SMS is a separate capability.",
@@ -411,7 +463,7 @@ function resendCard(emailConfigured: boolean): GoLiveCard {
     label: "Resend email",
     group: "COMMUNICATIONS",
     status: "UNAVAILABLE",
-    necessary: true,
+    requirement: GO_LIVE_CARD_REQUIREMENTS.resend,
     currentState: "Email delivery is unavailable.",
     whatWorks: "In-app records, public links, and copy-to-share URLs still work.",
     whatDoesNot: "TBBT cannot send customer email until Resend and a from-address are configured.",
@@ -428,7 +480,7 @@ function r2Card(r2Configured: boolean): GoLiveCard {
       label: "R2 / storage",
       group: "STORAGE",
       status,
-      necessary: true,
+      requirement: GO_LIVE_CARD_REQUIREMENTS.r2,
       currentState: "Platform object storage is configured.",
       whatWorks: "Intake, job, and website photo uploads can use platform storage.",
       whatDoesNot: "Storage credentials are not shown.",
@@ -441,7 +493,7 @@ function r2Card(r2Configured: boolean): GoLiveCard {
     label: "R2 / storage",
     group: "STORAGE",
     status: "NOT_CONFIGURED",
-    necessary: true,
+    requirement: GO_LIVE_CARD_REQUIREMENTS.r2,
     currentState: "R2 storage is not configured.",
     whatWorks: "Jobs, requests, and records without new photo upload still exist.",
     whatDoesNot: "Intake and job photo upload are unavailable.",
@@ -458,7 +510,7 @@ function twilioCard(input: GoLiveInput["twilio"]): GoLiveCard {
       label: "Twilio SMS",
       group: "COMMUNICATIONS",
       status,
-      necessary: false,
+      requirement: "OPTIONAL",
       currentState: "A dedicated sending number is assigned and platform SMS credentials exist.",
       whatWorks: "Operational SMS can be attempted for consented customers when a workflow calls it.",
       whatDoesNot:
@@ -473,7 +525,7 @@ function twilioCard(input: GoLiveInput["twilio"]): GoLiveCard {
       label: "Twilio SMS",
       group: "COMMUNICATIONS",
       status,
-      necessary: false,
+      requirement: "OPTIONAL",
       currentState: input.platformConfigured
         ? "Twilio credentials exist. A dedicated business number or live SMS add-on is not fully in place."
         : "SMS is only partly available.",
@@ -489,7 +541,7 @@ function twilioCard(input: GoLiveInput["twilio"]): GoLiveCard {
     label: "Twilio SMS",
     group: "COMMUNICATIONS",
     status: "UNAVAILABLE",
-    necessary: false,
+    requirement: "OPTIONAL",
     currentState: "SMS delivery is unavailable.",
     whatWorks: "Email (when configured) and in-app records still work. The product degrades without SMS.",
     whatDoesNot: "TBBT will not invent SMS delivery. Twilio is optional.",
@@ -506,7 +558,7 @@ function aiCard(aiConnected: boolean): GoLiveCard {
       label: "AI provider",
       group: "AI",
       status,
-      necessary: false,
+      requirement: "OPTIONAL",
       currentState: "An AI provider is connected.",
       whatWorks: "Provider synthesis can run for entitled Coach/Chief-of-Staff asks. Recorded facts stay the source of truth.",
       whatDoesNot: "API keys and account IDs are not shown. A provider name alone is not proof of a live model.",
@@ -519,7 +571,7 @@ function aiCard(aiConnected: boolean): GoLiveCard {
     label: "AI provider",
     group: "AI",
     status: "DISCONNECTED",
-    necessary: false,
+    requirement: "OPTIONAL",
     currentState: "No AI provider is connected.",
     whatWorks: "Recorded Coach facts remain available; provider-generated synthesis is unavailable.",
     whatDoesNot: "TBBT will not invent model output. Deterministic Coach still works.",
@@ -536,7 +588,7 @@ function domainCard(input: GoLiveDomainInput): GoLiveCard {
       label: "Custom / public domain",
       group: "OPTIONAL_PLANNED",
       status,
-      necessary: false,
+      requirement: "OPTIONAL",
       currentState: `Verified custom host: ${input.verifiedHostname}.`,
       whatWorks: "The verified hostname can resolve to this business's public site.",
       whatDoesNot: "TBBT does not purchase domains or change DNS from this page.",
@@ -551,7 +603,7 @@ function domainCard(input: GoLiveDomainInput): GoLiveCard {
       label: "Custom / public domain",
       group: "OPTIONAL_PLANNED",
       status,
-      necessary: false,
+      requirement: "OPTIONAL",
       currentState: input.failedHostname
         ? `Custom host ${hostname} failed verification.`
         : `Custom host ${hostname} is on file but unverified.`,
@@ -566,7 +618,7 @@ function domainCard(input: GoLiveDomainInput): GoLiveCard {
     label: "Custom / public domain",
     group: "OPTIONAL_PLANNED",
     status: "NOT_CONFIGURED",
-    necessary: false,
+    requirement: "OPTIONAL",
     currentState: "No custom-domain binding is on file.",
     whatWorks: "Customers can still use the public /hire site for this business slug.",
     whatDoesNot: "A branded custom hostname is not configured. TBBT does not buy domains.",
@@ -581,7 +633,7 @@ function financeCard(): GoLiveCard {
     label: "Finance / bank",
     group: "OPTIONAL_PLANNED",
     status: classifyFinanceBank(),
-    necessary: false,
+    requirement: "OPTIONAL",
     currentState: "Bank and accounting connections are disconnected placeholders.",
     whatWorks: "Recorded invoices, payments, and expenses still exist inside TBBT.",
     whatDoesNot: "Live bank sync is not connected. TBBT will not invent a cash balance.",
@@ -596,7 +648,7 @@ function supplierCard(): GoLiveCard {
     label: "Supplier commerce",
     group: "OPTIONAL_PLANNED",
     status: classifySupplierCommerce(),
-    necessary: false,
+    requirement: "OPTIONAL",
     currentState: "Supplier commerce is disconnected.",
     whatWorks: "Recorded supplier prices may exist.",
     whatDoesNot: "Live stock/ordering is not connected. TBBT does not log into retailer accounts.",
@@ -611,7 +663,7 @@ function esignCard(): GoLiveCard {
     label: "E-sign",
     group: "OPTIONAL_PLANNED",
     status: classifyEsign(),
-    necessary: false,
+    requirement: "OPTIONAL",
     currentState: "E-sign is a disconnected placeholder.",
     whatWorks: "You can still record an external signature or upload a signed file in Business Protection.",
     whatDoesNot: "No live e-sign provider is connected. TBBT will not invent a digital signature.",
@@ -626,7 +678,7 @@ function voiceCard(): GoLiveCard {
     label: "Voice receptionist",
     group: "COMMUNICATIONS",
     status: classifyVoiceReceptionist(),
-    necessary: false,
+    requirement: "OPTIONAL",
     currentState: "Voice is not connected.",
     whatWorks: "Caller lookup, missed-call notes, and owner proposals can stay manual.",
     whatDoesNot: VOICE_NOT_CONNECTED_REASON,
@@ -641,7 +693,7 @@ function socialCard(): GoLiveCard {
     label: "Social publishing",
     group: "OPTIONAL_PLANNED",
     status: classifySocialPublishing(),
-    necessary: false,
+    requirement: "OPTIONAL",
     currentState: "Social publishing is disconnected.",
     whatWorks: "Internal marketing drafts and recorded permissions still exist.",
     whatDoesNot: "TBBT does not publish autonomously to Facebook, Instagram, or Google.",
@@ -650,17 +702,15 @@ function socialCard(): GoLiveCard {
   };
 }
 
-function groupNecessary(id: GoLiveGroup) {
-  return id === "CORE_OPERATING" || id === "PAYMENTS" || id === "STORAGE";
-}
-
 function buildGroup(id: GoLiveGroup, cards: GoLiveCard[]): GoLiveLaunchGroup {
   const grouped = cards.filter((card) => card.group === id);
+  const requirement = goLiveGroupRequirement(grouped);
   return {
     id,
     label: GO_LIVE_GROUP_LABELS[id],
     summary: GO_LIVE_GROUP_SUMMARIES[id],
-    necessary: groupNecessary(id),
+    requirement,
+    requirementLabel: GO_LIVE_GROUP_REQUIREMENT_LABELS[requirement],
     cards: grouped,
     liveCount: grouped.filter((card) => card.status === "LIVE").length,
     readyCount: grouped.filter((card) => card.status === "READY").length,
@@ -685,16 +735,18 @@ export function buildGoLiveCenter(input: GoLiveInput): GoLiveCenter {
     socialCard(),
   ];
   const groups = GO_LIVE_GROUPS.map((id) => buildGroup(id, cards));
-  const necessaryCards = cards.filter((card) => card.necessary);
-  const optionalCards = cards.filter((card) => !card.necessary);
+  const requiredCards = cards.filter((card) => card.requirement === "REQUIRED");
+  const conditionalCards = cards.filter((card) => card.requirement === "CONDITIONAL");
+  const optionalCards = cards.filter((card) => card.requirement === "OPTIONAL");
   const center: GoLiveCenter = {
     cards,
     groups,
-    necessaryCards,
+    requiredCards,
+    conditionalCards,
     optionalCards,
-    necessaryLiveCount: necessaryCards.filter((card) => card.status === "LIVE").length,
-    necessaryReadyCount: necessaryCards.filter((card) => card.status === "READY").length,
-    necessaryRemainingCount: necessaryCards.filter(
+    requiredLiveCount: requiredCards.filter((card) => card.status === "LIVE").length,
+    requiredReadyCount: requiredCards.filter((card) => card.status === "READY").length,
+    requiredRemainingCount: requiredCards.filter(
       (card) => card.status !== "LIVE" && card.status !== "READY",
     ).length,
     disclaimer: GO_LIVE_NO_SCORE_DISCLAIMER,

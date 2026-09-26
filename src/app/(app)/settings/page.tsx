@@ -51,7 +51,10 @@ export default async function SettingsPage({
       : null;
 
   const snapshot = await loadSettingsSnapshot(prisma, access.businessId);
-  const goLive = await loadGoLiveCenter(prisma, access);
+  const goLive =
+    section === "go-live"
+      ? await loadGoLiveCenter(prisma, access)
+      : undefined;
   const burdenRow = await prisma.businessLaborBurdenSetting.findUnique({
     where: { businessId: access.businessId },
     select: { burdenRate: true, targetGrossMarginRate: true, notes: true },
@@ -120,7 +123,7 @@ export default async function SettingsPage({
     {
       label: "Required ready",
       value: `${readiness.requiredReady}/${readiness.requiredTotal}`,
-      sublabel: `${readiness.readyPercent}% of required checks`,
+      sublabel: "Baseline settings checks, not Go-live status",
       defaultIconId: "check-circle",
     },
     {
@@ -179,9 +182,9 @@ export default async function SettingsPage({
           <div className="rounded-xl border bg-card px-4 py-3 text-sm">
             <p className="font-medium">Business Health / Settings Overview</p>
             <p className="text-muted-foreground">
-              {readiness.requiredReady} of {readiness.requiredTotal} required areas configured
-              ({readiness.readyPercent}%). Optional connections stay Not Connected until a real
-              provider exists. This is not an AI score.
+              {readiness.requiredReady} of {readiness.requiredTotal} baseline settings checks
+              configured. This is Settings completeness, not production Go-live status.
+              Optional connections stay Not Connected until a real provider exists.
             </p>
           </div>
         </FounderRegion>

@@ -37,8 +37,13 @@ const {
 } = await import("@/lib/settings");
 const {
   GO_LIVE_CAPABILITIES,
+  GO_LIVE_CARD_REQUIREMENTS,
+  GO_LIVE_CONDITIONAL_SUMMARY,
   GO_LIVE_GROUPS,
   GO_LIVE_NO_SCORE_DISCLAIMER,
+  GO_LIVE_OPTIONAL_SUMMARY,
+  GO_LIVE_REQUIREMENTS,
+  GO_LIVE_REQUIRED_SUMMARY,
   assertGoLiveProjectionSafe,
   buildGoLiveCenter,
   classifyAiProvider,
@@ -54,6 +59,7 @@ const {
   classifyTwilioSms,
   classifyVoiceReceptionist,
   goLiveCardById,
+  goLiveGroupRequirement,
   twilioImpliesAllFeaturesLive,
 } = await import("@/lib/go-live");
 const { loadGoLiveCenter, requireGoLiveAccess } = await import("@/lib/go-live-data");
@@ -135,6 +141,7 @@ const settingsSource = [
   readFileSync(new URL("../src/lib/settings-ops.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/settings-data.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/app/actions/settings.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/app/(app)/settings/page.tsx", import.meta.url), "utf8"),
   readFileSync(new URL("../src/components/settings/settings-workspace.tsx", import.meta.url), "utf8"),
   readFileSync(new URL("../src/components/settings/business-public-contact-form.tsx", import.meta.url), "utf8"),
   readFileSync(new URL("../src/components/settings/change-password-form.tsx", import.meta.url), "utf8"),
@@ -149,6 +156,39 @@ try {
   check("pricing section parses", parseSettingsSection("pricing") === "pricing");
   check("TBBT Billing is a Settings section", parseSettingsSection("tbbt-billing") === "tbbt-billing");
   check("Go-live is a Settings section", parseSettingsSection("go-live") === "go-live");
+  const settingsPageSource = readFileSync(
+    new URL("../src/app/(app)/settings/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const workspaceSource = readFileSync(
+    new URL("../src/components/settings/settings-workspace.tsx", import.meta.url),
+    "utf8",
+  );
+  const goLiveUiSource = readFileSync(
+    new URL("../src/components/settings/go-live-health-center.tsx", import.meta.url),
+    "utf8",
+  );
+  check(
+    "loadGoLiveCenter is section-gated to go-live",
+    /const goLive =\s*section === ["']go-live["']\s*\?\s*await loadGoLiveCenter\(/.test(settingsPageSource) &&
+      !/const goLive = await loadGoLiveCenter\(/.test(settingsPageSource),
+  );
+  check(
+    "unrelated Settings pages do not run Go-live provider reads",
+    settingsPageSource.includes('section === "go-live"') &&
+      settingsPageSource.includes("loadGoLiveCenter") &&
+      !settingsPageSource.includes("inspectConfiguredFounderPrice") &&
+      !settingsPageSource.includes("loadSaasBillingSnapshot") &&
+      !settingsPageSource.includes("getBusinessPaymentStatus") &&
+      !settingsPageSource.includes("loadGoLiveDomainState") &&
+      !settingsPageSource.includes("loadGoLiveInput"),
+  );
+  check(
+    "GoLiveHealthCenter renders only when the go-live projection exists",
+    workspaceSource.includes("section === \"go-live\"") &&
+      workspaceSource.includes("props.goLive") &&
+      workspaceSource.includes("<GoLiveHealthCenter center={props.goLive} />"),
+  );
   check("FOUNDER_PAGE_KEYS includes settings", FOUNDER_PAGE_KEYS.includes("settings"));
   check("Settings has 4 KPI cards", KPI_CARD_COUNTS.settings === 4);
   check(
@@ -371,8 +411,61 @@ try {
 
   const center = buildGoLiveCenter(sampleGoLiveInput({ r2Configured: false, emailConfigured: false, aiConnected: false }));
   check("All twelve capabilities are projected", center.cards.map((card) => card.id).join(",") === GO_LIVE_CAPABILITIES.join(","));
-  check("No single ready boolean on the center", !("ready" in center) && !("readyPercent" in center) && center.readOnly === true);
+  check("No single ready boolean on the center", !("ready" in center) && !("readyPercent" in center) && !("launchReady" in center) && center.readOnly === true);
   check("Launch groups are all present", center.groups.map((group) => group.id).join(",") === GO_LIVE_GROUPS.join(","));
+  check("Requirement contract is REQUIRED / CONDITIONAL / OPTIONAL", GO_LIVE_REQUIREMENTS.join(",") === "REQUIRED,CONDITIONAL,OPTIONAL");
+  check("Resend is REQUIRED", goLiveCardById(center, "resend")?.requirement === "REQUIRED" && GO_LIVE_CARD_REQUIREMENTS.resend === "REQUIRED");
+  check("Twilio SMS is OPTIONAL", goLiveCardById(center, "twilio_sms")?.requirement === "OPTIONAL" && GO_LIVE_CARD_REQUIREMENTS.twilio_sms === "OPTIONAL");
+  check("Voice receptionist is OPTIONAL", goLiveCardById(center, "voice_receptionist")?.requirement === "OPTIONAL" && GO_LIVE_CARD_REQUIREMENTS.voice_receptionist === "OPTIONAL");
+  const communicationsGroup = center.groups.find((group) => group.id === "COMMUNICATIONS");
+  check(
+    "Communications group is MIXED",
+    communicationsGroup?.requirement === "MIXED" &&
+      communicationsGroup.requirementLabel === "Mixed" &&
+      goLiveGroupRequirement(communicationsGroup.cards) === "MIXED" &&
+      /Email is required; SMS and voice are optional/.test(communicationsGroup.summary),
+  );
+  check(
+    "Communications is not rendered as wholly optional",
+    communicationsGroup?.requirement !== "OPTIONAL" &&
+      !/wholly optional|Optional \/ planned/.test(communicationsGroup?.requirementLabel ?? "") &&
+      !goLiveUiSource.includes("group.necessary ? \"Necessary\" : \"Optional / planned\""),
+  );
+  check("Stripe Connect is CONDITIONAL", goLiveCardById(center, "stripe_connect")?.requirement === "CONDITIONAL");
+  check(
+    "disconnected Connect does not imply TBBT cannot operate",
+    /TBBT still operates without online cards/.test(goLiveCardById(connectNotReady, "stripe_connect")?.whatWorks ?? "") &&
+      /does not mean TBBT cannot operate/.test(goLiveCardById(connectNotReady, "stripe_connect")?.whatDoesNot ?? "") &&
+      /required only if accepting customer card payments online/i.test(
+        goLiveCardById(connectNotReady, "stripe_connect")?.currentState ?? "",
+      ),
+  );
+  check(
+    "top required count excludes conditional Connect",
+    center.requiredCards.map((card) => card.id).join(",") === "stripe_saas,resend,r2" &&
+      center.conditionalCards.map((card) => card.id).join(",") === "stripe_connect" &&
+      center.requiredCards.length === 3 &&
+      !center.requiredCards.some((card) => card.id === "stripe_connect"),
+  );
+  check(
+    "no 100% launch ready output exists",
+    !/100%\s*launch\s*ready/i.test(`${GO_LIVE_NO_SCORE_DISCLAIMER} ${GO_LIVE_REQUIRED_SUMMARY} ${GO_LIVE_CONDITIONAL_SUMMARY} ${GO_LIVE_OPTIONAL_SUMMARY} ${goLiveUiSource}`) &&
+      !center.disclaimer.toLowerCase().includes("100%") &&
+      !("readyPercent" in center),
+  );
+  check(
+    "top summaries distinguish required, conditional, and optional",
+    /SaaS access/.test(GO_LIVE_REQUIRED_SUMMARY) &&
+      /transactional email/.test(GO_LIVE_REQUIRED_SUMMARY) &&
+      /photo storage/.test(GO_LIVE_REQUIRED_SUMMARY) &&
+      /Stripe Connect for online card checkout/.test(GO_LIVE_CONDITIONAL_SUMMARY) &&
+      /SMS/.test(GO_LIVE_OPTIONAL_SUMMARY),
+  );
+  check("Payments group is Conditional", center.groups.find((group) => group.id === "PAYMENTS")?.requirement === "CONDITIONAL");
+  check("Core operating group is Required", center.groups.find((group) => group.id === "CORE_OPERATING")?.requirement === "REQUIRED");
+  check("Storage group is Required", center.groups.find((group) => group.id === "STORAGE")?.requirement === "REQUIRED");
+  check("AI group is Optional", center.groups.find((group) => group.id === "AI")?.requirement === "OPTIONAL");
+  check("Optional / planned group is Optional", center.groups.find((group) => group.id === "OPTIONAL_PLANNED")?.requirement === "OPTIONAL");
   check(
     "Disconnected copy never calls a system broken",
     center.cards.every(
@@ -382,7 +475,17 @@ try {
         ),
     ) && /not broken/.test(center.disclaimer),
   );
-  check("Necessary items are SaaS, Connect, Resend, and R2", center.necessaryCards.map((card) => card.id).join(",") === "stripe_saas,stripe_connect,resend,r2");
+  check(
+    "Business setup wording is settings completeness, not a Go-live score",
+    workspaceSource.includes("baseline settings checks configured") &&
+      workspaceSource.includes("This is Settings completeness, not production Go-live status.") &&
+      !workspaceSource.includes("{readiness.readyPercent}%") &&
+      !workspaceSource.includes("text-3xl font-semibold tabular-nums"),
+  );
+  check(
+    "Business setup rail lists required setup checks only",
+    workspaceSource.includes("item.required && item.status === \"needs_setup\""),
+  );
 
   const secretValues = [
     "re_secret_TESTKEY_12345",

@@ -19,7 +19,7 @@ export type SettingsWorkspaceProps = {
   role: "OWNER" | "ADMIN" | "MEMBER";
   snapshot: SettingsSnapshot;
   readiness: SettingsReadiness;
-  goLive: GoLiveCenter;
+  goLive?: GoLiveCenter | null;
   integrations: IntegrationCard[];
   canEditConsequential: boolean;
   canEditPreferences: boolean;

@@ -8,10 +8,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  GO_LIVE_CONDITIONAL_SUMMARY,
   GO_LIVE_NO_SCORE_DISCLAIMER,
+  GO_LIVE_OPTIONAL_SUMMARY,
   GO_LIVE_READ_ONLY_MESSAGE,
+  GO_LIVE_REQUIRED_SUMMARY,
+  GO_LIVE_REQUIREMENT_LABELS,
   GO_LIVE_STATUS_LABELS,
   type GoLiveCenter,
+  type GoLiveGroupRequirement,
   type GoLiveStatus,
 } from "@/lib/go-live";
 
@@ -25,6 +30,12 @@ function StatusBadge({ status }: { status: GoLiveStatus }) {
   return <Badge variant={statusVariant(status)}>{GO_LIVE_STATUS_LABELS[status]}</Badge>;
 }
 
+function groupBadgeVariant(requirement: GoLiveGroupRequirement) {
+  if (requirement === "REQUIRED") return "secondary" as const;
+  if (requirement === "CONDITIONAL" || requirement === "MIXED") return "warning" as const;
+  return "outline" as const;
+}
+
 export function GoLiveHealthCenter({ center }: { center: GoLiveCenter }) {
   return (
     <div className="space-y-4">
@@ -35,19 +46,26 @@ export function GoLiveHealthCenter({ center }: { center: GoLiveCenter }) {
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">{center.disclaimer}</p>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-lg border p-3">
               <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                Necessary for production
+                Required for core production
               </p>
               <p className="mt-1 text-sm">
-                {center.necessaryLiveCount} live · {center.necessaryReadyCount} ready ·{" "}
-                {center.necessaryRemainingCount} still open of {center.necessaryCards.length}
+                {center.requiredLiveCount} live · {center.requiredReadyCount} ready ·{" "}
+                {center.requiredRemainingCount} still open of {center.requiredCards.length}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                SaaS access, customer cards, email, and photo storage. This is not a single ready
-                boolean.
+              <p className="mt-1 text-xs text-muted-foreground">{GO_LIVE_REQUIRED_SUMMARY}</p>
+            </div>
+            <div className="rounded-lg border p-3">
+              <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Conditional
               </p>
+              <p className="mt-1 text-sm">
+                {center.conditionalCards.length} capabilities. Not counted as required for core
+                production.
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{GO_LIVE_CONDITIONAL_SUMMARY}</p>
             </div>
             <div className="rounded-lg border p-3">
               <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
@@ -56,10 +74,7 @@ export function GoLiveHealthCenter({ center }: { center: GoLiveCenter }) {
               <p className="mt-1 text-sm">
                 {center.optionalCards.length} capabilities. Disconnected is not broken.
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                SMS, AI, custom domain, bank, supplier commerce, e-sign, voice, and social
-                publishing can stay unused.
-              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{GO_LIVE_OPTIONAL_SUMMARY}</p>
             </div>
           </div>
           <p className="text-xs text-muted-foreground">{GO_LIVE_NO_SCORE_DISCLAIMER}</p>
@@ -71,9 +86,7 @@ export function GoLiveHealthCenter({ center }: { center: GoLiveCenter }) {
           <div>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-base font-semibold">{group.label}</h3>
-              <Badge variant={group.necessary ? "secondary" : "outline"}>
-                {group.necessary ? "Necessary" : "Optional / planned"}
-              </Badge>
+              <Badge variant={groupBadgeVariant(group.requirement)}>{group.requirementLabel}</Badge>
             </div>
             <p className="text-sm text-muted-foreground">{group.summary}</p>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -88,7 +101,7 @@ export function GoLiveHealthCenter({ center }: { center: GoLiveCenter }) {
                   <div>
                     <p className="font-medium">{card.label}</p>
                     <p className="text-xs text-muted-foreground">
-                      {card.necessary ? "Necessary" : "Optional"}
+                      {GO_LIVE_REQUIREMENT_LABELS[card.requirement]}
                     </p>
                   </div>
                   <StatusBadge status={card.status} />
