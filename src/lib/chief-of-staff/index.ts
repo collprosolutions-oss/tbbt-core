@@ -194,6 +194,7 @@ export {
 export {
   CONTROLLED_ACTION_CATALOG,
   CONTROLLED_ACTION_KEYS,
+  CONTROLLED_ACTION_PROPOSAL_VERSION,
   EXCLUDED_ACTION_KEYS,
   confirmControlledAction,
   controlledActionErrorMessage,

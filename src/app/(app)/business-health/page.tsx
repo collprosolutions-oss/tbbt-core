@@ -160,7 +160,7 @@ export default async function BusinessHealthPage({
                   {area === "coach" ? (
                     <div className="mt-2 space-y-2">
                       <ControlledActionConfirmForm
-                        actionKey="CREATE_RECOMMENDATION_ACTION"
+                        actionKey="CREATE_RECOMMENDATION_ACTION_ITEM"
                         targetEntityId={item.key}
                         conversationId={workspace.conversation?.id}
                         label="create plan action"

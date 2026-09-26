@@ -16,8 +16,11 @@ const { ForbiddenError, CAPABILITIES, roleHasCapability } = await import("@/lib/
 const { ProductCapabilityRequiredError } = await import("@/lib/product-entitlements");
 const { PRODUCT_CAPABILITIES } = await import("@/lib/product-catalog");
 const {
+  APPROVAL_CLASSES,
   CONTROLLED_ACTION_CATALOG,
   CONTROLLED_ACTION_KEYS,
+  CONTROLLED_ACTION_PROPOSAL_VERSION,
+  COS_APPROVAL_CLASS,
   EXCLUDED_ACTION_KEYS,
   confirmControlledAction,
   executableControlledActionKeys,
@@ -200,10 +203,24 @@ try {
       actionSrc.includes("requireOperatingProductAccess") &&
       actionSrc.includes("REPORTING_INSIGHTS") &&
       confirmUiSrc.includes('name="confirm" value="confirm"') &&
-      confirmUiSrc.includes("Owner confirm") &&
+      confirmUiSrc.includes("Confirm and add to action plan") &&
       !confirmUiSrc.includes("useEffect(() => { proposeAction"),
   );
   check("MEMBER remains blocked from VIEW_REPORTS", !roleHasCapability("MEMBER", CAPABILITIES.VIEW_REPORTS));
+  check(
+    "Approval classes remain the existing five",
+    APPROVAL_CLASSES.join(",") === "READ_EXPLAIN,DRAFT_PREPARE,OWNER_CONFIRMED_RECORD,DOMAIN_AUTHORIZED,EXTERNAL_ACTION",
+  );
+  check("Chief-of-Staff approval class remains READ_EXPLAIN", COS_APPROVAL_CLASS === "READ_EXPLAIN");
+  check("Proposal version is bounded and schema-free", CONTROLLED_ACTION_PROPOSAL_VERSION === 1 && !schemaSrc.includes("model AiAction"));
+  check("No Prisma migration was added for this layer", !controlledSrc.includes("prisma.schema") && !schemaSrc.includes("ControlledAction"));
+  check(
+    "Scheduling, knowledge, and launch apply stay excluded",
+    ["SCHEDULE_JOB", "ASSIGN_WORKER", "APPROVE_KNOWLEDGE", "APPLY_LAUNCH_SETUP", "SEND_INVOICE"].every(
+      (key) => EXCLUDED_ACTION_KEYS.includes(key) && !executableControlledActionKeys().includes(key),
+    ),
+  );
+  check("Catalog rows declare no external effect", CONTROLLED_ACTION_CATALOG.every((row) => row.externalEffect === false && row.freshnessRequired === true));
 
   console.log("\nRUNTIME — propose does nothing; confirm is owner-only and stale-safe");
   resetControlledActionAttempts();
@@ -255,7 +272,7 @@ try {
 
   const beforePropose = await domainCounts(businessA.id);
   const proposal = await proposeControlledAction(prisma, ownerA, {
-    actionKey: "CREATE_RECOMMENDATION_ACTION",
+    actionKey: "CREATE_RECOMMENDATION_ACTION_ITEM",
     targetEntityId: "collect-unpaid-invoices",
     browserBusinessId: businessB.id,
   });
@@ -306,7 +323,7 @@ try {
   let memberProposeFailed = false;
   try {
     await proposeControlledAction(prisma, memberA, {
-      actionKey: "CREATE_RECOMMENDATION_ACTION",
+      actionKey: "CREATE_RECOMMENDATION_ACTION_ITEM",
       targetEntityId: "collect-unpaid-invoices",
     });
   } catch (error) {
@@ -369,7 +386,7 @@ try {
   check("Stale confirm does not dismiss or create rows", afterStale.recommendationStates === beforeStale.recommendationStates && afterStale.actionItems === beforeStale.actionItems);
 
   const currentProposal = await proposeControlledAction(prisma, ownerA, {
-    actionKey: "CREATE_RECOMMENDATION_ACTION",
+    actionKey: "CREATE_RECOMMENDATION_ACTION_ITEM",
     targetEntityId: "collect-unpaid-invoices",
   });
   const beforeSuccess = await domainCounts(businessA.id);
@@ -382,6 +399,31 @@ try {
   const afterSuccess = await domainCounts(businessA.id);
   check("Current proposal succeeds through the canonical operation", first.executionResult.status === "SUCCEEDED" && afterSuccess.actionItems === beforeSuccess.actionItems + 1);
   check("Canonical create message is preserved", first.executionResult.message.includes("did not execute the work"));
+  check("Created action item stays on tenant A", (await prisma.businessActionItem.findUnique({ where: { id: first.executionResult.recordId } }))?.businessId === businessA.id);
+  check(
+    "Created action item identifies the canonical recommendation",
+    (await prisma.businessActionItem.findUnique({ where: { id: first.executionResult.recordId } }))?.recommendationKey ===
+      "collect-unpaid-invoices",
+  );
+  const sameEvidenceRetry = await confirmControlledAction(prisma, ownerA, {
+    proposal: currentProposal,
+    executionAttemptId: randomUUID(),
+    confirm: "confirm",
+  });
+  const afterSameEvidence = await domainCounts(businessA.id);
+  check(
+    "Same recommendation and evidence does not create a second action item",
+    sameEvidenceRetry.executionResult.status === "REPLAYED" &&
+      sameEvidenceRetry.executionResult.recordId === first.executionResult.recordId &&
+      afterSameEvidence.actionItems === afterSuccess.actionItems,
+  );
+  check(
+    "Proposal stays bounded",
+    currentProposal.externalEffect === false &&
+      currentProposal.proposalVersion === 1 &&
+      !JSON.stringify(currentProposal.parameters).includes("prisma") &&
+      currentProposal.parameters.recommendationKey === "collect-unpaid-invoices",
+  );
 
   const replay = await confirmControlledAction(prisma, ownerA, {
     proposal: currentProposal,
@@ -391,6 +433,38 @@ try {
   const afterReplay = await domainCounts(businessA.id);
   check("Duplicate execution attempt is idempotent", replay.executionResult.status === "REPLAYED" && afterReplay.actionItems === afterSuccess.actionItems);
   check("Replay returns the same record", replay.executionResult.recordId === first.executionResult.recordId);
+
+  let productFailed = false;
+  try {
+    await confirmControlledAction(prisma, ownerA, {
+      proposal: await proposeControlledAction(prisma, ownerA, {
+        actionKey: "DISMISS_RECOMMENDATION",
+        targetEntityId: "collect-unpaid-invoices",
+      }),
+      executionAttemptId: randomUUID(),
+      confirm: "confirm",
+      test: { denyProductCapabilities: [PRODUCT_CAPABILITIES.REPORTING_INSIGHTS] },
+    });
+  } catch (error) {
+    productFailed = error instanceof ProductCapabilityRequiredError || error?.name === "ProductCapabilityRequiredError";
+  }
+  check("Canonical product entitlement still applies", productFailed);
+
+  let roleDenied = false;
+  try {
+    await confirmControlledAction(prisma, ownerA, {
+      proposal: await proposeControlledAction(prisma, ownerA, {
+        actionKey: "CREATE_RECOMMENDATION_ACTION_ITEM",
+        targetEntityId: "collect-unpaid-invoices",
+      }),
+      executionAttemptId: randomUUID(),
+      confirm: "confirm",
+      test: { denyRoleCapabilities: [CAPABILITIES.VIEW_REPORTS] },
+    });
+  } catch (error) {
+    roleDenied = error instanceof ForbiddenError || error?.name === "ForbiddenError";
+  }
+  check("Canonical role authorization still applies", roleDenied);
 
   const concurrentAttempt = randomUUID();
   const concurrentProposal = await proposeControlledAction(prisma, ownerA, {
@@ -419,6 +493,26 @@ try {
       [one.executionResult.status, two.executionResult.status].includes("SUCCEEDED") &&
       [one.executionResult.status, two.executionResult.status].includes("REPLAYED"),
   );
+  let completedCannotCreate = false;
+  try {
+    await proposeControlledAction(prisma, ownerA, {
+      actionKey: "CREATE_RECOMMENDATION_ACTION_ITEM",
+      targetEntityId: "collect-unpaid-invoices",
+    });
+  } catch (error) {
+    completedCannotCreate = error instanceof Error && error.message.includes("not active");
+  }
+  check("Completed recommendation cannot execute as though still active", completedCannotCreate);
+  let arbitraryKeyFailed = false;
+  try {
+    await proposeControlledAction(prisma, ownerA, {
+      actionKey: "inventedPrismaWriter",
+      targetEntityId: "collect-unpaid-invoices",
+    });
+  } catch (error) {
+    arbitraryKeyFailed = error instanceof Error && error.message.includes("not executable");
+  }
+  check("Arbitrary action key fails closed", arbitraryKeyFailed);
 
   let missingConfirm = false;
   try {
@@ -431,38 +525,6 @@ try {
     missingConfirm = error instanceof Error && error.message.includes("explicitly");
   }
   check("A non-confirm token is not owner confirmation", missingConfirm);
-
-  let productFailed = false;
-  try {
-    await confirmControlledAction(prisma, ownerA, {
-      proposal: await proposeControlledAction(prisma, ownerA, {
-        actionKey: "DISMISS_RECOMMENDATION",
-        targetEntityId: "collect-unpaid-invoices",
-      }),
-      executionAttemptId: randomUUID(),
-      confirm: "confirm",
-      test: { denyProductCapabilities: [PRODUCT_CAPABILITIES.REPORTING_INSIGHTS] },
-    });
-  } catch (error) {
-    productFailed = error instanceof ProductCapabilityRequiredError || error?.name === "ProductCapabilityRequiredError";
-  }
-  check("Canonical product entitlement still applies", productFailed);
-
-  let roleDenied = false;
-  try {
-    await confirmControlledAction(prisma, ownerA, {
-      proposal: await proposeControlledAction(prisma, ownerA, {
-        actionKey: "CREATE_RECOMMENDATION_ACTION",
-        targetEntityId: "collect-unpaid-invoices",
-      }),
-      executionAttemptId: randomUUID(),
-      confirm: "confirm",
-      test: { denyRoleCapabilities: [CAPABILITIES.VIEW_REPORTS] },
-    });
-  } catch (error) {
-    roleDenied = error instanceof ForbiddenError || error?.name === "ForbiddenError";
-  }
-  check("Canonical role authorization still applies", roleDenied);
 
   const existingItem = await createActionFromRecommendation(
     prisma,

@@ -69,7 +69,7 @@ export function ControlledActionConfirmForm({
           <input type="hidden" name="attemptId" value={executionAttemptId} />
           <input type="hidden" name="confirm" value="confirm" />
           <Button type="submit" size="sm" disabled={confirming}>
-            {confirming ? "Confirming…" : "Owner confirm"}
+            {confirming ? "Confirming…" : "Confirm and add to action plan"}
           </Button>
         </form>
       ) : null}

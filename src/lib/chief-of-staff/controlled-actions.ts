@@ -8,7 +8,7 @@
  * Not a second mutation engine. Not a schema-first proposal table.
  * Specialists, synthesis, and Coach ask never call these functions.
  */
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { isAiAttemptId } from "@/lib/ai/types";
 import {
@@ -20,12 +20,13 @@ import {
 } from "@/lib/authorization";
 import {
   createActionFromRecommendation,
+  partitionRecommendations,
   recommendationEvidenceKey,
   upsertRecommendationState,
 } from "@/lib/bsos-actions";
 import { updateBusinessActionStatus } from "@/lib/bsos-ops";
-import { isActionStatus } from "@/lib/bsos";
-import { findCatalogRecommendation } from "@/lib/chief-of-staff/recommendations";
+import { isActionStatus, type BsosRecommendation } from "@/lib/bsos";
+import { loadCanonicalRecommendationCatalog } from "@/lib/chief-of-staff/recommendations";
 import type { ApprovalClass } from "@/lib/chief-of-staff/types";
 import { PRODUCT_CAPABILITIES, type ProductCapabilityCode } from "@/lib/product-catalog";
 import { ProductCapabilityRequiredError, requireProductCapability } from "@/lib/product-entitlements";
@@ -33,7 +34,7 @@ import { ProductCapabilityRequiredError, requireProductCapability } from "@/lib/
 type Db = PrismaClient | Prisma.TransactionClient;
 
 export const CONTROLLED_ACTION_KEYS = [
-  "CREATE_RECOMMENDATION_ACTION",
+  "CREATE_RECOMMENDATION_ACTION_ITEM",
   "DISMISS_RECOMMENDATION",
   "COMPLETE_RECOMMENDATION",
   "UPDATE_ACTION_ITEM_STATUS",
@@ -64,6 +65,17 @@ export const EXCLUDED_ACTION_KEYS = [
   "CHANGE_PERMISSIONS",
   "CHANGE_ROLE",
   "TRANSFER_OWNERSHIP",
+  "CONFIRM_APPOINTMENT",
+  "SCHEDULE_JOB",
+  "RESCHEDULE_JOB",
+  "ASSIGN_WORKER",
+  "CHANGE_PRICING",
+  "SEND_ESTIMATE",
+  "APPROVE_ESTIMATE",
+  "SEND_INVOICE",
+  "CHANGE_PAYMENT_ACCOUNT",
+  "APPROVE_KNOWLEDGE",
+  "APPLY_LAUNCH_SETUP",
 ] as const;
 export type ExcludedActionKey = (typeof EXCLUDED_ACTION_KEYS)[number];
 
@@ -71,6 +83,7 @@ export type ControlledActionTargetType = "RECOMMENDATION" | "ACTION_ITEM";
 
 export type ControlledActionCatalogEntry = {
   key: ControlledActionKey;
+  displayLabel: string;
   approvalClass: ApprovalClass;
   requiredRoleCapability: Capability;
   requiredProductCapability: ProductCapabilityCode | null;
@@ -79,58 +92,76 @@ export type ControlledActionCatalogEntry = {
     | "createActionFromRecommendation"
     | "upsertRecommendationState"
     | "updateBusinessActionStatus";
+  externalEffect: false;
+  freshnessRequired: true;
   purpose: string;
   whyAllowed: string;
 };
 
 export const CONTROLLED_ACTION_CATALOG: readonly ControlledActionCatalogEntry[] = [
   {
-    key: "CREATE_RECOMMENDATION_ACTION",
+    key: "CREATE_RECOMMENDATION_ACTION_ITEM",
+    displayLabel: "Create owner action-plan item",
     approvalClass: "OWNER_CONFIRMED_RECORD",
     requiredRoleCapability: CAPABILITIES.VIEW_REPORTS,
     requiredProductCapability: PRODUCT_CAPABILITIES.REPORTING_INSIGHTS,
     targetEntityType: "RECOMMENDATION",
     canonicalOperation: "createActionFromRecommendation",
+    externalEffect: false,
+    freshnessRequired: true,
     purpose: "Create an owner plan row from a live catalog recommendation.",
     whyAllowed:
       "Creates a BusinessActionItem only. TBBT does not execute the work, send messages, or move money. Reversible via action-item status.",
   },
   {
     key: "DISMISS_RECOMMENDATION",
+    displayLabel: "Dismiss recommendation",
     approvalClass: "OWNER_CONFIRMED_RECORD",
     requiredRoleCapability: CAPABILITIES.VIEW_REPORTS,
     requiredProductCapability: PRODUCT_CAPABILITIES.REPORTING_INSIGHTS,
     targetEntityType: "RECOMMENDATION",
     canonicalOperation: "upsertRecommendationState",
+    externalEffect: false,
+    freshnessRequired: true,
     purpose: "Dismiss a live catalog recommendation for the current evidence.",
     whyAllowed:
       "Owner plan state only. Uses the existing evidence fingerprint. No customer contact, spend, or publish.",
   },
   {
     key: "COMPLETE_RECOMMENDATION",
+    displayLabel: "Mark recommendation complete",
     approvalClass: "OWNER_CONFIRMED_RECORD",
     requiredRoleCapability: CAPABILITIES.VIEW_REPORTS,
     requiredProductCapability: PRODUCT_CAPABILITIES.REPORTING_INSIGHTS,
     targetEntityType: "RECOMMENDATION",
     canonicalOperation: "upsertRecommendationState",
+    externalEffect: false,
+    freshnessRequired: true,
     purpose: "Mark a live catalog recommendation complete for the current evidence.",
     whyAllowed:
       "Owner plan state only. Does not collect money, send messages, or change domain records.",
   },
   {
     key: "UPDATE_ACTION_ITEM_STATUS",
+    displayLabel: "Update action-item status",
     approvalClass: "OWNER_CONFIRMED_RECORD",
     requiredRoleCapability: CAPABILITIES.VIEW_REPORTS,
     requiredProductCapability: PRODUCT_CAPABILITIES.REPORTING_INSIGHTS,
     targetEntityType: "ACTION_ITEM",
     canonicalOperation: "updateBusinessActionStatus",
+    externalEffect: false,
+    freshnessRequired: true,
     purpose: "Update an existing owner action-item status.",
     whyAllowed: "Owner plan CRUD on an existing BusinessActionItem. No domain execution.",
   },
 ] as const;
 
+export const CONTROLLED_ACTION_PROPOSAL_VERSION = 1;
+
 export type ControlledActionProposal = {
+  proposalVersion: typeof CONTROLLED_ACTION_PROPOSAL_VERSION;
   actionKey: ControlledActionKey;
+  displayLabel: string;
   approvalClass: ApprovalClass;
   requiredRoleCapability: Capability;
   requiredProductCapability: ProductCapabilityCode | null;
@@ -142,6 +173,8 @@ export type ControlledActionProposal = {
   fingerprint: string;
   freshnessInputs: Record<string, string>;
   canonicalOperation: ControlledActionCatalogEntry["canonicalOperation"];
+  externalEffect: false;
+  freshnessRequired: true;
   confirmed: false;
   executionResult: null;
 };
@@ -229,14 +262,18 @@ export function parseControlledActionProposal(raw: string): ControlledActionProp
     const entry = getControlledActionEntry(String(value.actionKey));
     if (!entry) return null;
     if (value.confirmed !== false || value.executionResult !== null) return null;
+    if (value.proposalVersion !== CONTROLLED_ACTION_PROPOSAL_VERSION) return null;
     if (typeof value.businessId !== "string" || !value.businessId) return null;
     if (typeof value.targetEntityId !== "string" || !value.targetEntityId) return null;
     if (typeof value.fingerprint !== "string" || !value.fingerprint) return null;
     if (typeof value.summary !== "string" || !value.summary) return null;
     if (value.targetEntityType !== entry.targetEntityType) return null;
     if (value.canonicalOperation !== entry.canonicalOperation) return null;
+    if (value.externalEffect !== false) return null;
     return {
+      proposalVersion: CONTROLLED_ACTION_PROPOSAL_VERSION,
       actionKey: entry.key,
+      displayLabel: entry.displayLabel,
       approvalClass: entry.approvalClass,
       requiredRoleCapability: entry.requiredRoleCapability,
       requiredProductCapability: entry.requiredProductCapability,
@@ -264,6 +301,8 @@ export function parseControlledActionProposal(raw: string): ControlledActionProp
             )
           : {},
       canonicalOperation: entry.canonicalOperation,
+      externalEffect: false,
+      freshnessRequired: true,
       confirmed: false,
       executionResult: null,
     };
@@ -273,8 +312,17 @@ export function parseControlledActionProposal(raw: string): ControlledActionProp
 }
 
 async function liveRecommendation(db: Db, businessId: string, recommendationKey: string) {
-  const recommendation = await findCatalogRecommendation(db, businessId, recommendationKey);
+  const catalog = await loadCanonicalRecommendationCatalog(db, businessId);
+  const recommendation = catalog.recommendations.find((item) => item.key === recommendationKey);
   if (!recommendation) {
+    throw new ControlledActionError("That recommendation is not active from recorded facts.");
+  }
+  const states = await db.bsosRecommendationState.findMany({
+    where: { businessId },
+    select: { recommendationKey: true, status: true, evidenceKey: true },
+  });
+  const { active } = partitionRecommendations(catalog.recommendations, states);
+  if (!active.some((item) => item.key === recommendation.key)) {
     throw new ControlledActionError("That recommendation is not active from recorded facts.");
   }
   const evidenceKey = recommendationEvidenceKey(recommendation);
@@ -285,6 +333,8 @@ async function liveRecommendation(db: Db, businessId: string, recommendationKey:
     freshnessInputs: {
       recommendationKey: recommendation.key,
       evidenceKey,
+      title: recommendation.title,
+      why: recommendation.why,
     },
   };
 }
@@ -328,24 +378,28 @@ export async function proposeControlledAction(
   if (entry.targetEntityType === "RECOMMENDATION") {
     const live = await liveRecommendation(db, access.businessId, targetEntityId);
     const verb =
-      entry.key === "CREATE_RECOMMENDATION_ACTION"
-        ? "Create an owner plan action"
+      entry.key === "CREATE_RECOMMENDATION_ACTION_ITEM"
+        ? "Create an internal action-plan item"
         : entry.key === "DISMISS_RECOMMENDATION"
           ? "Dismiss this recommendation"
           : "Mark this recommendation complete";
     return {
+      proposalVersion: CONTROLLED_ACTION_PROPOSAL_VERSION,
       actionKey: entry.key,
+      displayLabel: entry.displayLabel,
       approvalClass: entry.approvalClass,
       requiredRoleCapability: entry.requiredRoleCapability,
       requiredProductCapability: entry.requiredProductCapability,
       targetEntityType: entry.targetEntityType,
       targetEntityId: live.recommendation.key,
       businessId: access.businessId,
-      summary: `${verb} for “${live.recommendation.title}”. ${entry.whyAllowed}`,
+      summary: `${verb} for “${live.recommendation.title}”. Why: ${live.recommendation.why} This will not contact the customer, charge money, change the schedule, or perform the work.`,
       parameters: { recommendationKey: live.recommendation.key },
       fingerprint: live.fingerprint,
       freshnessInputs: live.freshnessInputs,
       canonicalOperation: entry.canonicalOperation,
+      externalEffect: false,
+      freshnessRequired: true,
       confirmed: false,
       executionResult: null,
     };
@@ -355,18 +409,22 @@ export async function proposeControlledAction(
   if (!isActionStatus(nextStatus)) throw new ControlledActionError("Choose a valid action status.");
   const live = await liveActionItem(db, access, targetEntityId);
   return {
+    proposalVersion: CONTROLLED_ACTION_PROPOSAL_VERSION,
     actionKey: entry.key,
+    displayLabel: entry.displayLabel,
     approvalClass: entry.approvalClass,
     requiredRoleCapability: entry.requiredRoleCapability,
     requiredProductCapability: entry.requiredProductCapability,
     targetEntityType: entry.targetEntityType,
     targetEntityId: live.item.id,
     businessId: access.businessId,
-    summary: `Update action “${live.item.title}” from ${live.item.status} to ${nextStatus}. ${entry.whyAllowed}`,
+    summary: `Update action “${live.item.title}” from ${live.item.status} to ${nextStatus}. This will not contact the customer, charge money, change the schedule, or perform the work.`,
     parameters: { actionItemId: live.item.id, nextStatus },
     fingerprint: live.fingerprint,
     freshnessInputs: live.freshnessInputs,
     canonicalOperation: entry.canonicalOperation,
+    externalEffect: false,
+    freshnessRequired: true,
     confirmed: false,
     executionResult: null,
   };
@@ -403,6 +461,88 @@ async function authorizeConfirm(
   }
 }
 
+async function existingActionForEvidence(
+  db: Db,
+  access: BusinessAccess,
+  recommendationKey: string,
+  evidenceKey: string,
+) {
+  const state = await db.bsosRecommendationState.findUnique({
+    where: {
+      businessId_recommendationKey: {
+        businessId: access.businessId,
+        recommendationKey,
+      },
+    },
+  });
+  if (!state?.actionItemId || state.evidenceKey !== evidenceKey) return null;
+  return access.assertOwned(
+    await db.businessActionItem.findFirst({
+      where: { id: state.actionItemId, ...access.scope },
+    }),
+  );
+}
+
+async function createRecommendationActionItemOnce(
+  db: Db,
+  access: BusinessAccess,
+  live: { recommendation: BsosRecommendation; evidenceKey: string },
+): Promise<ControlledActionExecutionResult> {
+  const already = await existingActionForEvidence(db, access, live.recommendation.key, live.evidenceKey);
+  if (already) {
+    return {
+      status: "REPLAYED",
+      recordId: already.id,
+      recordType: "BusinessActionItem",
+      message: "Action already on the owner plan. TBBT did not execute the work.",
+    };
+  }
+
+  const run = async (tx: Db) => {
+    let state = await tx.bsosRecommendationState.findUnique({
+      where: {
+        businessId_recommendationKey: {
+          businessId: access.businessId,
+          recommendationKey: live.recommendation.key,
+        },
+      },
+    });
+    if (!state) {
+      state = await tx.bsosRecommendationState.create({
+        data: {
+          businessId: access.businessId,
+          recommendationKey: live.recommendation.key,
+          status: "OPEN",
+          evidenceKey: "",
+          updatedByMembershipId: access.workspace.membership.id,
+        },
+      });
+    }
+    await tx.$queryRaw(Prisma.sql`SELECT id FROM "BsosRecommendationState" WHERE id = ${state.id} FOR UPDATE`);
+    const locked = await existingActionForEvidence(tx, access, live.recommendation.key, live.evidenceKey);
+    if (locked) {
+      return {
+        status: "REPLAYED" as const,
+        recordId: locked.id,
+        recordType: "BusinessActionItem" as const,
+        message: "Action already on the owner plan. TBBT did not execute the work.",
+      };
+    }
+    const created = await createActionFromRecommendation(tx, access, live.recommendation);
+    return {
+      status: "SUCCEEDED" as const,
+      recordId: created.id,
+      recordType: "BusinessActionItem" as const,
+      message: "Action added to the owner plan. TBBT did not execute the work.",
+    };
+  };
+
+  if ("$transaction" in db && typeof db.$transaction === "function") {
+    return db.$transaction((tx) => run(tx));
+  }
+  return run(db);
+}
+
 async function invokeCanonicalOperation(
   db: Db,
   access: BusinessAccess,
@@ -416,13 +556,7 @@ async function invokeCanonicalOperation(
         "That proposal is stale. Live records changed. TBBT did not change anything.",
       );
     }
-    const created = await createActionFromRecommendation(db, access, live.recommendation);
-    return {
-      status: "SUCCEEDED",
-      recordId: created.id,
-      recordType: "BusinessActionItem",
-      message: "Action added to the owner plan. TBBT did not execute the work.",
-    };
+    return createRecommendationActionItemOnce(db, access, live);
   }
 
   if (entry.canonicalOperation === "upsertRecommendationState") {

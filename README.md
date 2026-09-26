@@ -83,6 +83,7 @@ npm run test:bsos
 npm run test:chief-of-staff
 npm run test:business-coach
 npm run test:controlled-actions
+npm run test:controlled-ai-actions
 npm run test:financial-specialist
 npm run test:growth-specialist
 npm run test:materials-specialist
