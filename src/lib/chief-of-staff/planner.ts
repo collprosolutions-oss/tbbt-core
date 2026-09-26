@@ -132,9 +132,12 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     input.entityHints?.recommendationKey != null &&
     isKnowledgeLaunchOwnedRecommendationKey(input.entityHints.recommendationKey);
   const wantsKnowledge =
-    KNOWLEDGE_QUESTION.test(question) || knowledgeKeys.length > 0 || Boolean(knowledgeHint);
+    KNOWLEDGE_QUESTION.test(question) || Boolean(knowledgeHint);
 
-  if (wantsKnowledge && isSpecialistEnabled("KNOWLEDGE_LAUNCH")) {
+  if (
+    isSpecialistEnabled("KNOWLEDGE_LAUNCH") &&
+    (wantsKnowledge || (FOCUS_QUESTION.test(question) && knowledgeKeys.length > 0))
+  ) {
     selected.push("KNOWLEDGE_LAUNCH");
   } else if (KNOWLEDGE_QUESTION.test(question) && !isSpecialistEnabled("KNOWLEDGE_LAUNCH")) {
     skipped.push({ id: "KNOWLEDGE_LAUNCH", reason: "DISABLED" });

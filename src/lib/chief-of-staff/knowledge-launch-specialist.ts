@@ -627,9 +627,13 @@ export async function loadKnowledgeLaunchProjection(input: {
   const [
     recentEntries,
     unreviewedEntries,
+    approvedEntries,
     conflictEntries,
     estimateEntries,
     unknownEntries,
+    supportedEntries,
+    externalEntries,
+    systemDerivedEntries,
     candidates,
     procedures,
     progress,
@@ -662,7 +666,15 @@ export async function loadKnowledgeLaunchProjection(input: {
       ? input.db.knowledgeEntry.findMany({
           where: { ...entryWhere, approvalState: "UNREVIEWED" },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-          take: 3,
+          take: 2,
+          select: entrySelect,
+        })
+      : Promise.resolve([]),
+    loadRows
+      ? input.db.knowledgeEntry.findMany({
+          where: { ...entryWhere, approvalState: "APPROVED" },
+          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+          take: 1,
           select: entrySelect,
         })
       : Promise.resolve([]),
@@ -670,7 +682,7 @@ export async function loadKnowledgeLaunchProjection(input: {
       ? input.db.knowledgeEntry.findMany({
           where: { ...entryWhere, trustState: "CONFLICT" },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-          take: 3,
+          take: 1,
           select: entrySelect,
         })
       : Promise.resolve([]),
@@ -678,7 +690,7 @@ export async function loadKnowledgeLaunchProjection(input: {
       ? input.db.knowledgeEntry.findMany({
           where: { ...entryWhere, trustState: "ESTIMATE" },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-          take: 2,
+          take: 1,
           select: entrySelect,
         })
       : Promise.resolve([]),
@@ -686,7 +698,31 @@ export async function loadKnowledgeLaunchProjection(input: {
       ? input.db.knowledgeEntry.findMany({
           where: { ...entryWhere, trustState: "UNKNOWN" },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-          take: 2,
+          take: 1,
+          select: entrySelect,
+        })
+      : Promise.resolve([]),
+    loadRows
+      ? input.db.knowledgeEntry.findMany({
+          where: { ...entryWhere, trustState: "SUPPORTED" },
+          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+          take: 1,
+          select: entrySelect,
+        })
+      : Promise.resolve([]),
+    loadRows
+      ? input.db.knowledgeEntry.findMany({
+          where: { ...entryWhere, sourceType: "EXTERNAL_REFERENCE" },
+          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+          take: 1,
+          select: entrySelect,
+        })
+      : Promise.resolve([]),
+    loadRows
+      ? input.db.knowledgeEntry.findMany({
+          where: { ...entryWhere, sourceType: "SYSTEM_DERIVED" },
+          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+          take: 1,
           select: entrySelect,
         })
       : Promise.resolve([]),
@@ -805,22 +841,25 @@ export async function loadKnowledgeLaunchProjection(input: {
 
   const entryById = new Map<string, (typeof recentEntries)[number]>();
   for (const row of [
-    ...recentEntries,
-    ...unreviewedEntries,
     ...conflictEntries,
     ...estimateEntries,
     ...unknownEntries,
+    ...approvedEntries,
+    ...supportedEntries,
+    ...externalEntries,
+    ...systemDerivedEntries,
+    ...unreviewedEntries,
+    ...recentEntries,
   ]) {
+    if (entryById.size >= KNOWLEDGE_LAUNCH_CONTEXT_CAPS.entries) break;
     if (!entryById.has(row.id)) entryById.set(row.id, row);
   }
-  const entries = [...entryById.values()]
-    .slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.entries)
-    .map((row) =>
-      projectEntry({
-        ...row,
-        targeted: Boolean(targets.entryId && row.id === targets.entryId),
-      }),
-    );
+  const entries = [...entryById.values()].map((row) =>
+    projectEntry({
+      ...row,
+      targeted: Boolean(targets.entryId && row.id === targets.entryId),
+    }),
+  );
 
   const candidateRows = candidates.slice(0, KNOWLEDGE_LAUNCH_CONTEXT_CAPS.candidates).map((row) =>
     projectCandidate({
