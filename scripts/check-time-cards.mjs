@@ -256,7 +256,7 @@ try {
   check(
     "clockInTime refuses JOB time on a persisted COMPLETED Job",
     timeCardOpsSrc.includes("COMPLETED_JOB_CLOCK_IN_ERROR") &&
-      timeCardOpsSrc.includes('job.status === "COMPLETED"'),
+      timeCardOpsSrc.includes('locked.status === "COMPLETED"'),
   );
   check(
     "Owner completion uses the shared time-safety helper and passes the actor membership",
@@ -1277,7 +1277,6 @@ try {
     membershipId: closerMem.id,
     activityType: "JOB",
     jobId: approvedBlockJob.id,
-    startedAt: hoursAgo(1),
   });
   await prisma.timesheetWeek.create({
     data: {
