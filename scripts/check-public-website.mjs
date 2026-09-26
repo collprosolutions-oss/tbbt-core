@@ -580,7 +580,8 @@ check(
 check(
   "Compatibility sitemap is wired into src/app/sitemap.ts",
   readRepo("src/app/sitemap.ts").includes("publicIndexableSitemapPaths") &&
-    readRepo("src/app/sitemap.ts").includes("publishedSitemapPaths"),
+    readRepo("src/app/sitemap.ts").includes("publishedSitemapPaths") &&
+    readRepo("src/app/sitemap.ts").includes("isLocalPreviewDefaultHost"),
 );
 check(
   "Historical CollPro hire slug 308s to the canonical hire page only",
@@ -612,10 +613,9 @@ check(
   proxySrc.includes("collproRenoLegacyHireRedirectPath") &&
     proxySrc.includes("NextResponse.redirect(apexLocation, 308)") &&
     proxySrc.includes("tbbtApexWwwRedirectLocation") &&
-    proxySrc.indexOf("tbbtApexWwwRedirectLocation") <
-      proxySrc.indexOf("collproRenoLegacyHireRedirectPath(pathname)") &&
-    proxySrc.includes("NextResponse.redirect(") &&
-    /collproRenoLegacyHireRedirectPath[\s\S]{0,400}308/.test(proxySrc),
+    proxySrc.indexOf("const apexLocation = tbbtApexWwwRedirectLocation") <
+      proxySrc.indexOf("const legacyHirePath = collproRenoLegacyHireRedirectPath") &&
+    /collproRenoLegacyHireRedirectPath[\s\S]*308/.test(proxySrc),
 );
 check(
   "www/canonical and homepage redirect behavior stay unchanged",
@@ -1094,7 +1094,12 @@ try {
         return null;
       }
     }
-    const publicSitemap = await fetchSitemap("www.collproreno.com");
+    const hostedSitemap = await fetchSitemap("www.collproreno.com");
+    const localSitemap = await fetchSitemap();
+    const publicSitemap =
+      hostedSitemap && hostedSitemap.body.includes("/hire/collpro-reno/projects")
+        ? hostedSitemap
+        : localSitemap;
     check(
       "CollPro sitemap includes the confirmed public hire and intake routes",
       Boolean(

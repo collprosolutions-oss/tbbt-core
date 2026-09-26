@@ -212,6 +212,7 @@ check(
     serviceDetail.includes("application/ld+json") &&
     sitemap.includes("publishedSitemapPaths") &&
     sitemap.includes("publicIndexableSitemapPaths") &&
+    sitemap.includes("isLocalPreviewDefaultHost") &&
     exportSrc.includes("website-publishes.json") &&
     exportSrc.includes("website-gallery.csv"),
 );

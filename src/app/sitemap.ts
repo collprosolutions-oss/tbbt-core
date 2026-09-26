@@ -6,7 +6,7 @@ import {
   TBBT_MARKETING_PUBLIC_PATHS,
 } from "@/lib/tbbt-marketing-host";
 import { prisma } from "@/lib/prisma";
-import { authorizedPublicOrigin, resolvePublicHost } from "@/lib/website-engine/hosts";
+import { authorizedPublicOrigin, isLocalPreviewDefaultHost, resolvePublicHost } from "@/lib/website-engine/hosts";
 import { loadPublicWebsiteView } from "@/lib/website-engine/public";
 import { publishedSitemapPaths } from "@/lib/website-engine/seo";
 import { publicCanonicalUrl } from "@/lib/public-site-seo";
@@ -29,7 +29,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       ? COLLPRO_RENO_SLUGS[0]
       : resolved.kind === "tenant"
         ? resolved.slug
-        : null;
+        : isLocalPreviewDefaultHost(host)
+          ? COLLPRO_RENO_SLUGS[0]
+          : null;
   if (!slug) return [];
 
   const view = await loadPublicWebsiteView(slug);
