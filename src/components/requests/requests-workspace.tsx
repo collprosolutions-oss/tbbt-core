@@ -5,7 +5,9 @@ import Link from "next/link";
 import { FileText, Mail, MapPin, Phone, Receipt, Wrench } from "lucide-react";
 import { CreateEstimateButton } from "@/components/estimates/create-estimate-button";
 import { OwnerPrivatePhoto } from "@/components/estimates/owner-private-photo";
+import { RecordNav } from "@/components/record-nav";
 import type { OwnerIntakePhoto } from "@/lib/intake-quote-handoff";
+import type { RecordNavItem } from "@/lib/record-nav";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -46,6 +48,7 @@ export type RequestListItem = {
   identityReview: { reason: string; message: string } | null;
   /** Pre-formatted (Decimal -> string) server-side -- never passed as a Decimal instance across the client boundary. */
   estimate: { id: string; status: string; totalLabel: string } | null;
+  recordNavItems: RecordNavItem[];
   serviceAreaNote: string | null;
 };
 
@@ -340,6 +343,7 @@ function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
           {request.identityReview ? <StatusBadge status="IDENTITY_REVIEW" /> : null}
           <span className="text-muted-foreground">{request.createdAtLabel}</span>
         </div>
+        <RecordNav items={request.recordNavItems} />
         {request.identityReview ? (
           <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
             <p className="font-medium">Needs identity review</p>

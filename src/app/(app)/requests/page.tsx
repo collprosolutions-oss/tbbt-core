@@ -23,6 +23,7 @@ import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { ownerVisibleRequestPhotos } from "@/lib/intake-quote-handoff";
 import { formatCustomerMeasurement } from "@/lib/catalog-intake";
 import { formatAddress, formatDate, formatMoney, formatTime } from "@/lib/format";
+import { buildRecordNavItems } from "@/lib/record-nav";
 import { prisma } from "@/lib/prisma";
 import {
   SCHEDULE_JOB_SELECT,
@@ -155,9 +156,18 @@ export default async function RequestsPage({
     prisma.serviceRequest.findMany({
       where,
       include: {
-        customer: { select: { id: true, name: true, email: true, phone: true } },
+        customer: { select: { id: true, businessId: true, name: true, email: true, phone: true } },
         property: {
-          select: { addressLine1: true, addressLine2: true, city: true, region: true, postalCode: true },
+          select: {
+            id: true,
+            businessId: true,
+            customerId: true,
+            addressLine1: true,
+            addressLine2: true,
+            city: true,
+            region: true,
+            postalCode: true,
+          },
         },
         serviceCatalogItem: { select: { name: true } },
         items: {
@@ -200,9 +210,9 @@ export default async function RequestsPage({
           },
         },
         estimates: {
+          where: { businessId: access.businessId },
           select: { id: true, status: true, total: true },
           orderBy: { createdAt: "asc" },
-          take: 1,
         },
       },
       orderBy: { createdAt: "desc" },
@@ -309,6 +319,22 @@ export default async function RequestsPage({
             totalLabel: formatMoney(request.estimates[0].total),
           }
         : null,
+      recordNavItems: buildRecordNavItems({
+        origin: { kind: "request", id: request.id },
+        related: {
+          customer:
+            request.customer?.businessId === access.businessId
+              ? request.customer
+              : null,
+          property:
+            request.property?.businessId === access.businessId
+              ? request.property
+              : null,
+          requests: [{ id: request.id }],
+          estimates: request.estimates,
+        },
+        role: access.workspace.role,
+      }),
       serviceAreaNote:
         request.serviceAreaQualification === "OUTSIDE_PREFERRED"
           ? "This lead is outside the preferred service area recorded on the request."
