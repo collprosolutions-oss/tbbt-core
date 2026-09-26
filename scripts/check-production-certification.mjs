@@ -81,11 +81,8 @@ const lifecycle = [
   ["Cleaning starter catalog", "src/lib/cleaning-starter-catalog.ts"],
   ["CRM customers", "src/app/(app)/customers/page.tsx"],
   ["Requests", "src/app/(app)/requests/page.tsx"],
-<<<<<<< HEAD
   ["Owner log lead", "src/app/(app)/requests/log-lead/page.tsx"],
-=======
   ["Request record", "src/app/(app)/requests/[requestId]/page.tsx"],
->>>>>>> e403b28 (Add record-journey navigation across customer, request, estimate, job, and invoice.)
   ["Estimate editor", "src/app/(app)/estimates/[estimateId]/page.tsx"],
   ["Materials & suppliers", "src/app/(app)/materials/page.tsx"],
   ["Customer estimate token", "src/app/e/[token]/page.tsx"],
