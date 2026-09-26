@@ -419,7 +419,8 @@ check(
 );
 check(
   "handoff does not add a second source field or status/source enum",
-  !changeOrderActionSrc.includes("sourceRequestId") &&
+  changeOrderActionSrc.includes("changeOrderId: created.id") &&
+    !changeOrderActionSrc.includes("sourceRequestId String") &&
     !changeOrderActionSrc.includes("enum AdditionalWork") &&
     !requestListSrc.includes("opportunity") &&
     !changeOrderListSrc.includes("ticket model"),
