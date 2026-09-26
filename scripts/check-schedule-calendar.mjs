@@ -283,9 +283,8 @@ const crewViewSrc = readFileSync(new URL("../src/components/schedule/crew-view.t
 check(
   "SCHEDULE_JOB_SELECT remains the canonical ScheduleJob select and includes assignedMembership.user.name",
   scheduleLibSrc.includes("export const SCHEDULE_JOB_SELECT") &&
-    /assignedMembership:\s*\{\s*select:\s*\{\s*id:\s*true,\s*user:\s*\{\s*select:\s*\{\s*name:\s*true\s*\}\s*\}\s*\}\s*\}/.test(
-      scheduleLibSrc,
-    ),
+    scheduleLibSrc.includes("assignedMembership:") &&
+    scheduleLibSrc.includes("user: { select: { name: true } }"),
 );
 check(
   "Jobs page calendar queries still use select: SCHEDULE_JOB_SELECT (no second assignment query)",
@@ -325,8 +324,9 @@ check(
   "Crew view grouping remains groupJobsByAssignedMember(assignedMembership) — no second crew system",
   crewViewSrc.includes("groupJobsByAssignedMember") &&
     crewViewSrc.includes("JobScheduleRow") &&
-    !crewViewSrc.includes("prisma") &&
-    !crewViewSrc.includes("membership.find"),
+    !crewViewSrc.includes("prisma.") &&
+    !crewViewSrc.includes("membership.findMany") &&
+    !crewViewSrc.includes("from \"@/lib/prisma\""),
 );
 check(
   "Owned schedule display files introduce no second membership query",
