@@ -20,6 +20,7 @@ const {
   DEFAULT_MANAGED_STORAGE_LIMIT_BYTES,
   MemoryStorageProvider,
   StorageAccessError,
+  StorageError,
   StorageQuotaError,
   assertKeyBelongsToBusiness,
   buildBusinessStorageKey,
@@ -31,10 +32,13 @@ const {
 } = await import("@/lib/business-storage/index");
 const {
   abortBusinessUpload,
+  abortManagedUpload,
   authorizeBusinessUpload,
+  authorizeManagedUpload,
   deleteStoredAsset,
   ensureBusinessStorageAccount,
   finalizeBusinessUpload,
+  finalizeManagedUpload,
   putBusinessObject,
   readPublicStoredAsset,
 } = await import("@/lib/business-storage/service");
@@ -113,6 +117,43 @@ function makeAccess(businessId, role, membershipId) {
 
 function readRepo(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+}
+
+function trackDeletes(inner, options = {}) {
+  const deletes = [];
+  const failOnKeys = new Set(options.failOnKeys ?? []);
+  const failAll = Boolean(options.failAll);
+  return {
+    deletes,
+    provider: {
+      get id() {
+        return inner.id;
+      },
+      putObject: (input) => inner.putObject(input),
+      getObjectMetadata: (input) => inner.getObjectMetadata(input),
+      getObject: (input) => inner.getObject(input),
+      objectExists: (input) => inner.objectExists(input),
+      createUploadUrl: (input) => inner.createUploadUrl(input),
+      createDownloadUrl: (input) => inner.createDownloadUrl(input),
+      async deleteObject(input) {
+        deletes.push({ bucket: input.bucket, key: input.key });
+        if (failAll || failOnKeys.has(input.key)) {
+          throw new Error("simulated provider deleteObject failure");
+        }
+        return inner.deleteObject(input);
+      },
+    },
+  };
+}
+
+async function accountSnapshot(businessId) {
+  const account = await prisma.businessStorageAccount.findUniqueOrThrow({
+    where: { businessId },
+  });
+  return {
+    used: Number(account.storageUsedBytes),
+    reserved: Number(account.storageReservedBytes),
+  };
 }
 
 const editorSrc = readRepo("src/components/settings/website-photos-editor.tsx");
@@ -432,6 +473,582 @@ try {
   });
   check("Ready assets for A never include another business",
     listing.every((row) => row.businessId === businessA.id));
+
+  console.log("\nDB — Pending orphan object cleanup");
+  const serviceSrc = readRepo("src/lib/business-storage/service.ts");
+  check("Abort and expiry claim PENDING atomically before decrement or delete",
+    serviceSrc.includes('where: { id: existing.id, businessId, status: "PENDING" }') &&
+      serviceSrc.includes('where: { id: row.id, businessId, status: "PENDING" }') &&
+      serviceSrc.includes("updated.count !== 1") &&
+      serviceSrc.includes("if (updated.count === 1) won.push(row)") &&
+      serviceSrc.includes("bestEffortCleanupOwnedObject") &&
+      serviceSrc.includes("Provider resolution and delete are both best-effort after DB commit.") &&
+      serviceSrc.includes("One provider delete failure must not block the rest of the expired set."));
+  check("Finalize claims PENDING atomically before READY accounting",
+    serviceSrc.includes('id: asset.id,\n        businessId,\n        status: "PENDING"') &&
+      serviceSrc.includes("claimed.count === 1") &&
+      serviceSrc.includes('if (current?.status === "READY") return current') &&
+      serviceSrc.includes('throw new StorageError("That upload is no longer pending.")'));
+
+  const abortTracker = trackDeletes(provider);
+  const abortDeps = { ...deps, provider: abortTracker.provider };
+  const abortBefore = await accountSnapshot(businessA.id);
+  const pendingAbort = await authorizeManagedUpload(abortDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "orphan-abort",
+    originalFilename: "abort-orphan.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+    visibility: "PRIVATE",
+  });
+  await abortTracker.provider.putObject({
+    bucket: pendingAbort.account.bucketName,
+    key: pendingAbort.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  check("Abort fixture uploaded bytes before abort",
+    await abortTracker.provider.objectExists({
+      bucket: pendingAbort.account.bucketName,
+      key: pendingAbort.asset.storageKey,
+    }));
+  const aborted = await abortManagedUpload(abortDeps, businessA.id, pendingAbort.asset.id);
+  const abortAfter = await accountSnapshot(businessA.id);
+  const abortedRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: pendingAbort.asset.id },
+  });
+  check("Abort marks PENDING FAILED and deletes the uploaded object once",
+    aborted.status === "FAILED" &&
+      abortedRow.status === "FAILED" &&
+      abortedRow.deletedAt != null &&
+      abortAfter.reserved === abortBefore.reserved &&
+      abortAfter.used === abortBefore.used &&
+      abortTracker.deletes.length === 1 &&
+      abortTracker.deletes[0].bucket === pendingAbort.account.bucketName &&
+      abortTracker.deletes[0].key === pendingAbort.asset.storageKey &&
+      !(await abortTracker.provider.objectExists({
+        bucket: pendingAbort.account.bucketName,
+        key: pendingAbort.asset.storageKey,
+      })));
+
+  const abortRepeat = await abortManagedUpload(abortDeps, businessA.id, pendingAbort.asset.id);
+  const abortAfterRepeat = await accountSnapshot(businessA.id);
+  check("Repeated abort is idempotent and does not decrement reservation again",
+    abortRepeat.status === "FAILED" &&
+      abortAfterRepeat.reserved === abortAfter.reserved &&
+      abortAfterRepeat.used === abortAfter.used &&
+      abortTracker.deletes.length === 1);
+
+  const failTracker = trackDeletes(provider, { failAll: true });
+  const failDeps = { ...deps, provider: failTracker.provider };
+  const failBefore = await accountSnapshot(businessA.id);
+  const pendingFail = await authorizeManagedUpload(failDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "orphan-delete-fail",
+    originalFilename: "delete-fail.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+    visibility: "PRIVATE",
+  });
+  await failTracker.provider.putObject({
+    bucket: pendingFail.account.bucketName,
+    key: pendingFail.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  const failedAbort = await abortManagedUpload(failDeps, businessA.id, pendingFail.asset.id);
+  const failAfter = await accountSnapshot(businessA.id);
+  const failedRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: pendingFail.asset.id },
+  });
+  check("deleteObject failure still marks FAILED and releases reservation once",
+    failedAbort.status === "FAILED" &&
+      failedRow.status === "FAILED" &&
+      failedRow.deletedAt != null &&
+      failAfter.reserved === failBefore.reserved &&
+      failAfter.used === failBefore.used &&
+      failTracker.deletes.length === 1 &&
+      await failTracker.provider.objectExists({
+        bucket: pendingFail.account.bucketName,
+        key: pendingFail.asset.storageKey,
+      }));
+  await abortManagedUpload(failDeps, businessA.id, pendingFail.asset.id);
+  const failAfterRepeat = await accountSnapshot(businessA.id);
+  check("deleteObject failure does not restore PENDING or re-reserve on repeat abort",
+    (await prisma.storedAsset.findUniqueOrThrow({ where: { id: pendingFail.asset.id } })).status === "FAILED" &&
+      failAfterRepeat.reserved === failAfter.reserved &&
+      failAfterRepeat.used === failAfter.used &&
+      failTracker.deletes.length === 1);
+
+  const readyBefore = await accountSnapshot(businessA.id);
+  const readyDeletesBefore = abortTracker.deletes.length;
+  const readyAbort = await abortManagedUpload(abortDeps, businessA.id, privateAsset.id);
+  const readyAfter = await accountSnapshot(businessA.id);
+  const readyStillThere = await abortTracker.provider.objectExists({
+    bucket: privateAuth.account.bucketName,
+    key: privateAsset.storageKey,
+  });
+  check("READY abort is a no-op for deletion and accounting",
+    readyAbort.status === "READY" &&
+      readyAfter.reserved === readyBefore.reserved &&
+      readyAfter.used === readyBefore.used &&
+      abortTracker.deletes.length === readyDeletesBefore &&
+      readyStillThere);
+
+  await expectThrow("Foreign business cannot abort another business asset", () =>
+    abortManagedUpload(abortDeps, businessB.id, pendingAbort.asset.id),
+  (error) => error instanceof StorageAccessError);
+  const foreignStillFailed = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: pendingAbort.asset.id },
+  });
+  const foreignAccountA = await accountSnapshot(businessA.id);
+  check("Foreign abort fails closed without mutating the owner account",
+    foreignStillFailed.status === "FAILED" &&
+      foreignAccountA.reserved === abortAfterRepeat.reserved &&
+      foreignAccountA.used === abortAfterRepeat.used);
+
+  const expiryTracker = trackDeletes(provider);
+  const expiryDeps = { ...deps, provider: expiryTracker.provider };
+  const expiryBefore = await accountSnapshot(businessA.id);
+  const expiredOne = await authorizeManagedUpload(expiryDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "expired-one",
+    originalFilename: "expired-one.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: 40,
+    visibility: "PRIVATE",
+  });
+  const expiredTwo = await authorizeManagedUpload(expiryDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "expired-two",
+    originalFilename: "expired-two.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: 50,
+    visibility: "PRIVATE",
+  });
+  await expiryTracker.provider.putObject({
+    bucket: expiredOne.account.bucketName,
+    key: expiredOne.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  await expiryTracker.provider.putObject({
+    bucket: expiredTwo.account.bucketName,
+    key: expiredTwo.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  expiryTracker.provider.deleteObject = async (input) => {
+    expiryTracker.deletes.push({ bucket: input.bucket, key: input.key });
+    if (input.key === expiredOne.asset.storageKey) {
+      throw new Error("simulated provider deleteObject failure");
+    }
+    return provider.deleteObject(input);
+  };
+  const past = new Date(Date.now() - 60_000);
+  await prisma.storedAsset.updateMany({
+    where: { id: { in: [expiredOne.asset.id, expiredTwo.asset.id] } },
+    data: { expiresAt: past },
+  });
+  const afterExpiryAuthorize = await authorizeManagedUpload(expiryDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "after-expiry",
+    originalFilename: "after-expiry.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: 12,
+    visibility: "PRIVATE",
+  });
+  const expiredOneRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: expiredOne.asset.id },
+  });
+  const expiredTwoRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: expiredTwo.asset.id },
+  });
+  const expiryAfter = await accountSnapshot(businessA.id);
+  const expiryDeleteKeys = expiryTracker.deletes.map((row) => row.key).sort();
+  check("Expiry cleanup marks FAILED, releases reservation once, and deletes independently",
+    expiredOneRow.status === "FAILED" &&
+      expiredTwoRow.status === "FAILED" &&
+      expiredOneRow.deletedAt != null &&
+      expiredTwoRow.deletedAt != null &&
+      expiryAfter.used === expiryBefore.used &&
+      expiryAfter.reserved === expiryBefore.reserved + afterExpiryAuthorize.asset.fileSizeBytes &&
+      expiryDeleteKeys.includes(expiredOne.asset.storageKey) &&
+      expiryDeleteKeys.includes(expiredTwo.asset.storageKey) &&
+      await expiryTracker.provider.objectExists({
+        bucket: expiredOne.account.bucketName,
+        key: expiredOne.asset.storageKey,
+      }) &&
+      !(await expiryTracker.provider.objectExists({
+        bucket: expiredTwo.account.bucketName,
+        key: expiredTwo.asset.storageKey,
+      })));
+  check("authorize after expiry uses the released reservation for quota",
+    afterExpiryAuthorize.asset.status === "PENDING" &&
+      afterExpiryAuthorize.asset.fileSizeBytes === 12);
+  await abortManagedUpload(expiryDeps, businessA.id, afterExpiryAuthorize.asset.id);
+
+  const oversizedTracker = trackDeletes(provider);
+  const oversizedDeps = { ...deps, provider: oversizedTracker.provider };
+  const oversizedBefore = await accountSnapshot(businessA.id);
+  const oversizedAuth = await authorizeManagedUpload(oversizedDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "oversized-finalize",
+    originalFilename: "oversized.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: 4,
+    visibility: "PRIVATE",
+  });
+  await oversizedTracker.provider.putObject({
+    bucket: oversizedAuth.account.bucketName,
+    key: oversizedAuth.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  await expectThrow("Oversized finalize still aborts, deletes, and throws StorageQuotaError", () =>
+    finalizeManagedUpload(oversizedDeps, businessA.id, oversizedAuth.asset.id),
+  (error) => error instanceof StorageQuotaError && error.message.includes("larger than what was authorized"));
+  const oversizedRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: oversizedAuth.asset.id },
+  });
+  const oversizedAfter = await accountSnapshot(businessA.id);
+  check("Oversized finalize does not double-decrement reservation or used bytes",
+    oversizedRow.status === "FAILED" &&
+      oversizedAfter.reserved === oversizedBefore.reserved &&
+      oversizedAfter.used === oversizedBefore.used &&
+      oversizedTracker.deletes.filter((row) => row.key === oversizedAuth.asset.storageKey).length === 1 &&
+      !(await oversizedTracker.provider.objectExists({
+        bucket: oversizedAuth.account.bucketName,
+        key: oversizedAuth.asset.storageKey,
+      })));
+
+  const concurrentAbortTracker = trackDeletes(provider);
+  const concurrentAbortDeps = { ...deps, provider: concurrentAbortTracker.provider };
+  const concurrentAbortBefore = await accountSnapshot(businessA.id);
+  const concurrentPending = await authorizeManagedUpload(concurrentAbortDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "concurrent-abort",
+    originalFilename: "concurrent-abort.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+    visibility: "PRIVATE",
+  });
+  await concurrentAbortTracker.provider.putObject({
+    bucket: concurrentPending.account.bucketName,
+    key: concurrentPending.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  const [concurrentAbortOne, concurrentAbortTwo] = await Promise.all([
+    abortManagedUpload(concurrentAbortDeps, businessA.id, concurrentPending.asset.id),
+    abortManagedUpload(concurrentAbortDeps, businessA.id, concurrentPending.asset.id),
+  ]);
+  const concurrentAbortAfter = await accountSnapshot(businessA.id);
+  const concurrentAbortRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: concurrentPending.asset.id },
+  });
+  const concurrentAbortDeletes = concurrentAbortTracker.deletes.filter(
+    (row) => row.key === concurrentPending.asset.storageKey,
+  );
+  check("Simultaneous aborts claim PENDING once and decrement reserved once",
+    concurrentAbortOne.status === "FAILED" &&
+      concurrentAbortTwo.status === "FAILED" &&
+      concurrentAbortRow.status === "FAILED" &&
+      concurrentAbortAfter.reserved === concurrentAbortBefore.reserved &&
+      concurrentAbortAfter.used === concurrentAbortBefore.used &&
+      concurrentAbortAfter.reserved >= 0 &&
+      concurrentAbortDeletes.length === 1 &&
+      !(await concurrentAbortTracker.provider.objectExists({
+        bucket: concurrentPending.account.bucketName,
+        key: concurrentPending.asset.storageKey,
+      })));
+
+  const concurrentExpiryTracker = trackDeletes(provider);
+  const concurrentExpiryDeps = { ...deps, provider: concurrentExpiryTracker.provider };
+  const concurrentExpiryBefore = await accountSnapshot(businessA.id);
+  const sharedExpired = await authorizeManagedUpload(concurrentExpiryDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "shared-expired",
+    originalFilename: "shared-expired.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: 40,
+    visibility: "PRIVATE",
+  });
+  await concurrentExpiryTracker.provider.putObject({
+    bucket: sharedExpired.account.bucketName,
+    key: sharedExpired.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  await prisma.storedAsset.update({
+    where: { id: sharedExpired.asset.id },
+    data: { expiresAt: new Date(Date.now() - 60_000) },
+  });
+  const [expiryAuthOne, expiryAuthTwo] = await Promise.all([
+    authorizeManagedUpload(concurrentExpiryDeps, businessA.id, {
+      category: "DOCUMENT",
+      purpose: "after-shared-expiry-a",
+      originalFilename: "after-shared-expiry-a.jpg",
+      mimeType: "image/jpeg",
+      fileSizeBytes: 15,
+      visibility: "PRIVATE",
+    }),
+    authorizeManagedUpload(concurrentExpiryDeps, businessA.id, {
+      category: "DOCUMENT",
+      purpose: "after-shared-expiry-b",
+      originalFilename: "after-shared-expiry-b.jpg",
+      mimeType: "image/jpeg",
+      fileSizeBytes: 16,
+      visibility: "PRIVATE",
+    }),
+  ]);
+  const sharedExpiredRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: sharedExpired.asset.id },
+  });
+  const concurrentExpiryAfter = await accountSnapshot(businessA.id);
+  const sharedExpiredDeletes = concurrentExpiryTracker.deletes.filter(
+    (row) => row.key === sharedExpired.asset.storageKey,
+  );
+  check("Simultaneous expiry cleanup releases the expired reservation once",
+    sharedExpiredRow.status === "FAILED" &&
+      sharedExpiredRow.deletedAt != null &&
+      expiryAuthOne.asset.status === "PENDING" &&
+      expiryAuthTwo.asset.status === "PENDING" &&
+      expiryAuthOne.asset.fileSizeBytes === 15 &&
+      expiryAuthTwo.asset.fileSizeBytes === 16 &&
+      concurrentExpiryAfter.used === concurrentExpiryBefore.used &&
+      concurrentExpiryAfter.reserved === concurrentExpiryBefore.reserved + 15 + 16 &&
+      concurrentExpiryAfter.reserved >= 0 &&
+      sharedExpiredDeletes.length === 1 &&
+      !(await concurrentExpiryTracker.provider.objectExists({
+        bucket: sharedExpired.account.bucketName,
+        key: sharedExpired.asset.storageKey,
+      })));
+  await Promise.all([
+    abortManagedUpload(concurrentExpiryDeps, businessA.id, expiryAuthOne.asset.id),
+    abortManagedUpload(concurrentExpiryDeps, businessA.id, expiryAuthTwo.asset.id),
+  ]);
+
+  const resolveBefore = await accountSnapshot(businessA.id);
+  const resolvePending = await authorizeManagedUpload(deps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "provider-resolve-fail",
+    originalFilename: "provider-resolve-fail.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+    visibility: "PRIVATE",
+  });
+  const r2EnvKeys = ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"];
+  const savedR2Env = Object.fromEntries(r2EnvKeys.map((key) => [key, process.env[key]]));
+  for (const key of r2EnvKeys) delete process.env[key];
+  let resolveAbortError = null;
+  let resolveAbortResult = null;
+  try {
+    resolveAbortResult = await abortManagedUpload(
+      { db: prisma, bucketName: deps.bucketName, defaultLimitBytes: deps.defaultLimitBytes },
+      businessA.id,
+      resolvePending.asset.id,
+    );
+  } catch (error) {
+    resolveAbortError = error;
+  } finally {
+    for (const key of r2EnvKeys) {
+      if (savedR2Env[key] === undefined) delete process.env[key];
+      else process.env[key] = savedR2Env[key];
+    }
+  }
+  const resolveAfter = await accountSnapshot(businessA.id);
+  const resolveRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: resolvePending.asset.id },
+  });
+  check("Provider resolution failure after abort keeps FAILED and released reservation",
+    resolveAbortError == null &&
+      resolveAbortResult?.status === "FAILED" &&
+      resolveRow.status === "FAILED" &&
+      resolveRow.deletedAt != null &&
+      resolveAfter.reserved === resolveBefore.reserved &&
+      resolveAfter.used === resolveBefore.used &&
+      resolveAfter.reserved >= 0);
+
+  const readyFinalizeBefore = await accountSnapshot(businessA.id);
+  const readyFinalize = await finalizeManagedUpload(deps, businessA.id, privateAsset.id);
+  const readyFinalizeAfter = await accountSnapshot(businessA.id);
+  check("READY finalize is idempotent and does not change accounting",
+    readyFinalize.status === "READY" &&
+      readyFinalize.id === privateAsset.id &&
+      readyFinalizeAfter.reserved === readyFinalizeBefore.reserved &&
+      readyFinalizeAfter.used === readyFinalizeBefore.used);
+
+  const vsAbortTracker = trackDeletes(provider);
+  const vsAbortDeps = { ...deps, provider: vsAbortTracker.provider };
+  const vsAbortBefore = await accountSnapshot(businessA.id);
+  const vsAbortPending = await authorizeManagedUpload(vsAbortDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "finalize-vs-abort",
+    originalFilename: "finalize-vs-abort.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+    visibility: "PRIVATE",
+  });
+  await vsAbortTracker.provider.putObject({
+    bucket: vsAbortPending.account.bucketName,
+    key: vsAbortPending.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  const [vsAbortFinalize, vsAbortAbort] = await Promise.allSettled([
+    finalizeManagedUpload(vsAbortDeps, businessA.id, vsAbortPending.asset.id),
+    abortManagedUpload(vsAbortDeps, businessA.id, vsAbortPending.asset.id),
+  ]);
+  const vsAbortRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: vsAbortPending.asset.id },
+  });
+  const vsAbortAfter = await accountSnapshot(businessA.id);
+  const vsAbortDeletes = vsAbortTracker.deletes.filter(
+    (row) => row.key === vsAbortPending.asset.storageKey,
+  );
+  const vsAbortExists = await vsAbortTracker.provider.objectExists({
+    bucket: vsAbortPending.account.bucketName,
+    key: vsAbortPending.asset.storageKey,
+  });
+  const finalizeWonAbortRace =
+    vsAbortRow.status === "READY" &&
+    vsAbortFinalize.status === "fulfilled" &&
+    vsAbortFinalize.value.status === "READY" &&
+    vsAbortAbort.status === "fulfilled" &&
+    vsAbortAbort.value.status === "READY" &&
+    vsAbortAfter.reserved === vsAbortBefore.reserved &&
+    vsAbortAfter.used === vsAbortBefore.used + jpeg.byteLength &&
+    vsAbortDeletes.length === 0 &&
+    vsAbortExists;
+  const abortWonFinalizeRace =
+    vsAbortRow.status === "FAILED" &&
+    vsAbortFinalize.status === "rejected" &&
+    vsAbortFinalize.reason instanceof StorageError &&
+    vsAbortAbort.status === "fulfilled" &&
+    vsAbortAbort.value.status === "FAILED" &&
+    vsAbortAfter.reserved === vsAbortBefore.reserved &&
+    vsAbortAfter.used === vsAbortBefore.used &&
+    vsAbortDeletes.length === 1 &&
+    !vsAbortExists;
+  check("Finalize vs abort has one PENDING terminal owner and one accounting path",
+    (finalizeWonAbortRace || abortWonFinalizeRace) &&
+      vsAbortAfter.reserved >= 0 &&
+      vsAbortRow.status !== "PENDING" &&
+      !(vsAbortRow.status === "READY" && !vsAbortExists));
+
+  const vsFinalizeTracker = trackDeletes(provider);
+  const vsFinalizeDeps = { ...deps, provider: vsFinalizeTracker.provider };
+  const vsFinalizeBefore = await accountSnapshot(businessA.id);
+  const vsFinalizePending = await authorizeManagedUpload(vsFinalizeDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "finalize-vs-finalize",
+    originalFilename: "finalize-vs-finalize.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+    visibility: "PRIVATE",
+  });
+  await vsFinalizeTracker.provider.putObject({
+    bucket: vsFinalizePending.account.bucketName,
+    key: vsFinalizePending.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  const [finalizeOne, finalizeTwo] = await Promise.all([
+    finalizeManagedUpload(vsFinalizeDeps, businessA.id, vsFinalizePending.asset.id),
+    finalizeManagedUpload(vsFinalizeDeps, businessA.id, vsFinalizePending.asset.id),
+  ]);
+  const vsFinalizeRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: vsFinalizePending.asset.id },
+  });
+  const vsFinalizeAfter = await accountSnapshot(businessA.id);
+  const vsFinalizeDeletes = vsFinalizeTracker.deletes.filter(
+    (row) => row.key === vsFinalizePending.asset.storageKey,
+  );
+  check("Simultaneous finalize claims PENDING once and accounts once",
+    finalizeOne.status === "READY" &&
+      finalizeTwo.status === "READY" &&
+      vsFinalizeRow.status === "READY" &&
+      vsFinalizeAfter.reserved === vsFinalizeBefore.reserved &&
+      vsFinalizeAfter.used === vsFinalizeBefore.used + jpeg.byteLength &&
+      vsFinalizeAfter.reserved >= 0 &&
+      vsFinalizeDeletes.length === 0 &&
+      await vsFinalizeTracker.provider.objectExists({
+        bucket: vsFinalizePending.account.bucketName,
+        key: vsFinalizePending.asset.storageKey,
+      }));
+
+  const vsExpiryTracker = trackDeletes(provider);
+  const vsExpiryDeps = { ...deps, provider: vsExpiryTracker.provider };
+  const vsExpiryBefore = await accountSnapshot(businessA.id);
+  const vsExpiryPending = await authorizeManagedUpload(vsExpiryDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "finalize-vs-expiry",
+    originalFilename: "finalize-vs-expiry.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: 40,
+    visibility: "PRIVATE",
+  });
+  await vsExpiryTracker.provider.putObject({
+    bucket: vsExpiryPending.account.bucketName,
+    key: vsExpiryPending.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  await prisma.storedAsset.update({
+    where: { id: vsExpiryPending.asset.id },
+    data: { expiresAt: new Date(Date.now() - 60_000) },
+  });
+  const [vsExpiryFinalize, vsExpiryAuthorize] = await Promise.allSettled([
+    finalizeManagedUpload(vsExpiryDeps, businessA.id, vsExpiryPending.asset.id),
+    authorizeManagedUpload(vsExpiryDeps, businessA.id, {
+      category: "DOCUMENT",
+      purpose: "after-finalize-expiry",
+      originalFilename: "after-finalize-expiry.jpg",
+      mimeType: "image/jpeg",
+      fileSizeBytes: 12,
+      visibility: "PRIVATE",
+    }),
+  ]);
+  const vsExpiryRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: vsExpiryPending.asset.id },
+  });
+  const vsExpiryAfter = await accountSnapshot(businessA.id);
+  const vsExpiryDeletes = vsExpiryTracker.deletes.filter(
+    (row) => row.key === vsExpiryPending.asset.storageKey,
+  );
+  const vsExpiryExists = await vsExpiryTracker.provider.objectExists({
+    bucket: vsExpiryPending.account.bucketName,
+    key: vsExpiryPending.asset.storageKey,
+  });
+  const authorizeAfterExpiry =
+    vsExpiryAuthorize.status === "fulfilled" ? vsExpiryAuthorize.value : null;
+  const finalizeWonExpiryRace =
+    vsExpiryRow.status === "READY" &&
+    vsExpiryFinalize.status === "fulfilled" &&
+    vsExpiryFinalize.value.status === "READY" &&
+    authorizeAfterExpiry?.asset.status === "PENDING" &&
+    vsExpiryAfter.used === vsExpiryBefore.used + jpeg.byteLength &&
+    vsExpiryAfter.reserved === vsExpiryBefore.reserved + 12 &&
+    vsExpiryDeletes.length === 0 &&
+    vsExpiryExists;
+  const expiryWonFinalizeRace =
+    vsExpiryRow.status === "FAILED" &&
+    vsExpiryFinalize.status === "rejected" &&
+    vsExpiryFinalize.reason instanceof StorageError &&
+    authorizeAfterExpiry?.asset.status === "PENDING" &&
+    vsExpiryAfter.used === vsExpiryBefore.used &&
+    vsExpiryAfter.reserved === vsExpiryBefore.reserved + 12 &&
+    vsExpiryDeletes.length === 1 &&
+    !vsExpiryExists;
+  check("Finalize vs expiry has one PENDING terminal owner and one accounting path",
+    (finalizeWonExpiryRace || expiryWonFinalizeRace) &&
+      vsExpiryAfter.reserved >= 0 &&
+      vsExpiryRow.status !== "PENDING" &&
+      !(vsExpiryRow.status === "READY" && !vsExpiryExists));
+  if (authorizeAfterExpiry?.asset.id) {
+    await abortManagedUpload(vsExpiryDeps, businessA.id, authorizeAfterExpiry.asset.id);
+  }
 } finally {
   await prisma.$disconnect();
   spawnSync("psql", [baseUrl, "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE);`], {

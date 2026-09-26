@@ -96,26 +96,79 @@ export async function ensureBusinessStorageAccount(
   });
 }
 
-async function releaseExpiredReservations(db: Db, businessId: string, now: Date) {
+async function bestEffortDeleteOwnedObject(
+  provider: StorageProvider,
+  businessId: string,
+  input: { bucket: string; storageKey: string },
+) {
+  assertKeyBelongsToBusiness(input.storageKey, businessId);
+  await provider.deleteObject({
+    bucket: input.bucket,
+    key: input.storageKey,
+  });
+}
+
+async function bestEffortCleanupOwnedObject(
+  deps: StorageServiceDeps,
+  businessId: string,
+  input: { bucket: string; storageKey: string },
+) {
+  try {
+    const provider = await resolveStorageProvider(deps);
+    await bestEffortDeleteOwnedObject(provider, businessId, input);
+  } catch {
+    // Provider resolution and delete are both best-effort after DB commit.
+  }
+}
+
+async function releaseExpiredReservations(
+  db: PrismaClient,
+  businessId: string,
+  now: Date,
+  provider: StorageProvider,
+) {
   const expired = await db.storedAsset.findMany({
     where: {
       businessId,
       status: "PENDING",
       expiresAt: { lte: now },
     },
-    select: { id: true, fileSizeBytes: true, storageAccountId: true },
+    select: {
+      id: true,
+      fileSizeBytes: true,
+      storageAccountId: true,
+      storageKey: true,
+      storageAccount: { select: { bucketName: true } },
+    },
   });
   if (expired.length === 0) return;
-  const reserved = expired.reduce((sum, row) => sum + row.fileSizeBytes, 0);
-  await db.storedAsset.updateMany({
-    where: { id: { in: expired.map((row) => row.id) } },
-    data: { status: "FAILED", deletedAt: now },
+  const claimed = await db.$transaction(async (tx) => {
+    const won: typeof expired = [];
+    for (const row of expired) {
+      const updated = await tx.storedAsset.updateMany({
+        where: { id: row.id, businessId, status: "PENDING" },
+        data: { status: "FAILED", deletedAt: now },
+      });
+      if (updated.count === 1) won.push(row);
+    }
+    const reserved = won.reduce((sum, row) => sum + row.fileSizeBytes, 0);
+    if (reserved > 0) {
+      await tx.businessStorageAccount.update({
+        where: { id: won[0]!.storageAccountId },
+        data: { storageReservedBytes: { decrement: reserved } },
+      });
+    }
+    return won;
   });
-  if (reserved > 0) {
-    await db.businessStorageAccount.update({
-      where: { id: expired[0]!.storageAccountId },
-      data: { storageReservedBytes: { decrement: reserved } },
-    });
+  for (const row of claimed) {
+    try {
+      await bestEffortDeleteOwnedObject(provider, businessId, {
+        bucket: row.storageAccount.bucketName,
+        storageKey: row.storageKey,
+      });
+    } catch {
+      // One provider delete failure must not block the rest of the expired set.
+    }
   }
 }
 
@@ -147,7 +200,7 @@ export async function authorizeManagedUpload(
     throw new StorageError("File storage is suspended for this business.");
   }
 
-  await releaseExpiredReservations(deps.db, businessId, now);
+  await releaseExpiredReservations(deps.db, businessId, now, provider);
 
   const fresh = await deps.db.businessStorageAccount.findUniqueOrThrow({
     where: { id: account.id },
@@ -256,23 +309,36 @@ export async function abortManagedUpload(
   businessId: string,
   assetId: string,
 ) {
-  const asset = await deps.db.storedAsset.findFirst({
+  const existing = await deps.db.storedAsset.findFirst({
     where: { id: assetId, businessId },
+    include: { storageAccount: true },
   });
-  if (!asset) throw new StorageAccessError();
-  if (asset.status !== "PENDING") return asset;
+  if (!existing) throw new StorageAccessError();
   const now = deps.now?.() ?? new Date();
-  await deps.db.$transaction(async (tx) => {
-    await tx.storedAsset.update({
-      where: { id: asset.id },
+  const claimed = await deps.db.$transaction(async (tx) => {
+    const updated = await tx.storedAsset.updateMany({
+      where: { id: existing.id, businessId, status: "PENDING" },
       data: { status: "FAILED", deletedAt: now },
     });
+    if (updated.count !== 1) return false;
     await tx.businessStorageAccount.update({
-      where: { id: asset.storageAccountId },
-      data: { storageReservedBytes: { decrement: asset.fileSizeBytes } },
+      where: { id: existing.storageAccountId },
+      data: { storageReservedBytes: { decrement: existing.fileSizeBytes } },
     });
+    return true;
   });
-  return { ...asset, status: "FAILED" as const };
+  if (claimed) {
+    await bestEffortCleanupOwnedObject(deps, businessId, {
+      bucket: existing.storageAccount.bucketName,
+      storageKey: existing.storageKey,
+    });
+  }
+  const current = await deps.db.storedAsset.findFirst({
+    where: { id: assetId, businessId },
+    include: { storageAccount: true },
+  });
+  if (!current) throw new StorageAccessError();
+  return current;
 }
 
 export async function abortBusinessUpload(
@@ -309,10 +375,6 @@ export async function finalizeManagedUpload(
   }
   if (meta.sizeBytes > asset.fileSizeBytes) {
     await abortManagedUpload(deps, businessId, asset.id);
-    await provider.deleteObject({
-      bucket: asset.storageAccount.bucketName,
-      key: asset.storageKey,
-    }).catch(() => undefined);
     throw new StorageQuotaError("The uploaded file is larger than what was authorized.");
   }
 
@@ -323,8 +385,12 @@ export async function finalizeManagedUpload(
   const actual = meta.sizeBytes;
 
   return deps.db.$transaction(async (tx) => {
-    const updated = await tx.storedAsset.update({
-      where: { id: asset.id },
+    const claimed = await tx.storedAsset.updateMany({
+      where: {
+        id: asset.id,
+        businessId,
+        status: "PENDING",
+      },
       data: {
         status: "READY",
         fileSizeBytes: actual,
@@ -334,14 +400,23 @@ export async function finalizeManagedUpload(
         updatedAt: now,
       },
     });
-    await tx.businessStorageAccount.update({
-      where: { id: asset.storageAccountId },
-      data: {
-        storageReservedBytes: { decrement: reserved },
-        storageUsedBytes: { increment: actual },
-      },
+    if (claimed.count === 1) {
+      await tx.businessStorageAccount.update({
+        where: { id: asset.storageAccountId },
+        data: {
+          storageReservedBytes: { decrement: reserved },
+          storageUsedBytes: { increment: actual },
+        },
+      });
+      return tx.storedAsset.findFirstOrThrow({
+        where: { id: asset.id, businessId },
+      });
+    }
+    const current = await tx.storedAsset.findFirst({
+      where: { id: asset.id, businessId },
     });
-    return updated;
+    if (current?.status === "READY") return current;
+    throw new StorageError("That upload is no longer pending.");
   });
 }
 
