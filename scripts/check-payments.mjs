@@ -600,7 +600,8 @@ try {
   check(
     "owner invoice page tells the owner when card pay is not live",
     ownerInvoiceSrc.includes("OwnerPaymentsGoLiveBanner") &&
-      ownerInvoiceSrc.includes("Record Payment"),
+      ownerInvoiceSrc.includes("MarkInvoicePaidForm") &&
+      ownerInvoiceSrc.includes("ownerInvoiceOnlineCheckoutCopy"),
   );
   check(
     "customer invoice page does not show owner go-live or Mark Paid",

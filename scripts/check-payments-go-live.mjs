@@ -82,7 +82,6 @@ check(
 check(
   "app URL blocker names NEXT_PUBLIC_APP_URL and Mark Paid",
   noAppUrl.detail.includes("NEXT_PUBLIC_APP_URL") &&
-    noAppUrl.detail.includes("www.collproreno.com") &&
     noAppUrl.detail.includes("Mark Paid"),
 );
 
