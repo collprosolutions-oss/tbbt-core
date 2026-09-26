@@ -72,6 +72,7 @@ export {
 export {
   COMMUNICATIONS_CONTEXT_CAPS,
   COMMUNICATIONS_OWNED_RECOMMENDATION_KEYS,
+  TARGET_CONSISTENCY_LIMITATION,
   communicationsEntitlementLimitation,
   communicationsProjectionHasForbiddenFields,
   getLastCommunicationsProjection,

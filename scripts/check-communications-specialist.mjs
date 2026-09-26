@@ -17,6 +17,7 @@ const {
   COMMUNICATIONS_CONTEXT_CAPS,
   MAX_RECURSION_DEPTH,
   MAX_SPECIALIST_FANOUT,
+  TARGET_CONSISTENCY_LIMITATION,
   communicationsProjectionHasForbiddenFields,
   getCommunicationsProjectionLoadCount,
   getCommunicationsSpecialistInterpretationCount,
@@ -120,6 +121,26 @@ async function createOwnerWorkspace(name) {
 function resetLoads() {
   resetCommunicationsSpecialistCounters();
   resetLastCommunicationsProjection();
+}
+
+function projectionIsClosed(projection) {
+  return (
+    Boolean(projection) &&
+    projection.customers.length === 0 &&
+    projection.messages.length === 0 &&
+    projection.appointments.length === 0 &&
+    projection.phoneInteractions.length === 0 &&
+    projection.totals.messages === 0 &&
+    projection.totals.customers === 0
+  );
+}
+
+function limitationIsTargetConsistency(result, secrets) {
+  const text = result.limitation ?? "";
+  return (
+    text.includes(TARGET_CONSISTENCY_LIMITATION) &&
+    secrets.every((secret) => !text.includes(secret))
+  );
 }
 
 function emptyCatalog(keys = []) {
@@ -491,6 +512,262 @@ try {
     getLastCommunicationsProjection().targetedMessageUnauthorized === true &&
       !getLastCommunicationsProjection().messages.some((row) => row.id === seededB.failedSms.id),
   );
+
+  resetLoads();
+  await runCommunicationsSpecialist({
+    db: prisma,
+    access: tenantA.access,
+    catalog: emptyCatalog(),
+    question: "What happened with the message?",
+    entityHints: { requestId: seededA.request.id },
+  });
+  const ownedRequestProjection = getLastCommunicationsProjection();
+  check(
+    "Authorized single request still succeeds",
+    ownedRequestProjection.targetedRequestUnauthorized === false &&
+      ownedRequestProjection.targetedEntityMismatch === false &&
+      ownedRequestProjection.customers.some((row) => row.id === seededA.granted.id && row.targeted === true) &&
+      ownedRequestProjection.messages.every((row) => row.customerId === seededA.granted.id),
+  );
+
+  resetLoads();
+  await runCommunicationsSpecialist({
+    db: prisma,
+    access: tenantA.access,
+    catalog: emptyCatalog(),
+    question: "What did we send about this appointment?",
+    entityHints: { jobId: seededA.job.id },
+  });
+  const ownedJobProjection = getLastCommunicationsProjection();
+  check(
+    "Authorized single job still succeeds",
+    ownedJobProjection.targetedJobUnauthorized === false &&
+      ownedJobProjection.targetedEntityMismatch === false &&
+      ownedJobProjection.customers.some((row) => row.id === seededA.granted.id && row.targeted === true) &&
+      ownedJobProjection.messages.every((row) => row.customerId === seededA.granted.id),
+  );
+
+  resetLoads();
+  await runCommunicationsSpecialist({
+    db: prisma,
+    access: tenantA.access,
+    catalog: emptyCatalog(),
+    question: "What happened with the message?",
+    entityHints: { messageId: seededA.failedSms.id },
+  });
+  const ownedMessageProjection = getLastCommunicationsProjection();
+  check(
+    "Authorized single message still succeeds",
+    ownedMessageProjection.targetedMessageUnauthorized === false &&
+      ownedMessageProjection.targetedEntityMismatch === false &&
+      ownedMessageProjection.messages.some((row) => row.id === seededA.failedSms.id) &&
+      ownedMessageProjection.messages.every((row) => row.customerId === seededA.granted.id) &&
+      ownedMessageProjection.customers.every((row) => row.id === seededA.granted.id),
+  );
+
+  const requestB = await prisma.serviceRequest.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: seededA.revoked.id,
+      summary: "Alpha revoked request",
+    },
+  });
+  const jobB = await prisma.job.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: seededA.revoked.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date(),
+      projectToken: randomUUID(),
+      appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+    },
+  });
+
+  console.log("\nTARGET CONSISTENCY — mixed hints fail closed");
+  const mixedSecrets = [
+    seededA.granted.id,
+    seededA.revoked.id,
+    seededA.pending.id,
+    seededA.failedSms.id,
+    seededB.granted.id,
+    seededB.request.id,
+    "Alpha Granted",
+    "Alpha Revoked",
+    "BetaSecretCustomer",
+    "secret-beta@example.com",
+  ];
+
+  async function runMixedHints(entityHints) {
+    resetLoads();
+    const result = await runCommunicationsSpecialist({
+      db: prisma,
+      access: tenantA.access,
+      catalog: emptyCatalog(),
+      question: "Did we contact this customer and what happened with the message?",
+      entityHints,
+    });
+    return { result, projection: getLastCommunicationsProjection() };
+  }
+
+  const mixedCustomerMessage = await runMixedHints({
+    customerId: seededA.granted.id,
+    messageId: seededA.pending.id,
+  });
+  check(
+    "Same-tenant customer A + customer B message fails closed",
+    mixedCustomerMessage.result.status === "OK" &&
+      mixedCustomerMessage.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedCustomerMessage.projection) &&
+      !mixedCustomerMessage.projection.messages.some((row) => row.id === seededA.pending.id) &&
+      !mixedCustomerMessage.projection.customers.some((row) => row.id === seededA.granted.id || row.id === seededA.revoked.id),
+  );
+  check(
+    "Same-tenant customer/message mismatch does not expose ids",
+    limitationIsTargetConsistency(mixedCustomerMessage.result, mixedSecrets),
+  );
+
+  const mixedMessageCustomer = await runMixedHints({
+    messageId: seededA.pending.id,
+    customerId: seededA.granted.id,
+  });
+  check(
+    "Inverse same-tenant message B + customer A fails closed",
+    mixedMessageCustomer.result.status === "OK" &&
+      mixedMessageCustomer.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedMessageCustomer.projection) &&
+      !mixedMessageCustomer.projection.messages.some((row) => row.id === seededA.pending.id),
+  );
+
+  const mixedRevokedPlusGrantedMessage = await runMixedHints({
+    customerId: seededA.revoked.id,
+    messageId: seededA.failedSms.id,
+  });
+  check(
+    "Inverse same-tenant customer B + customer A message fails closed",
+    mixedRevokedPlusGrantedMessage.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedRevokedPlusGrantedMessage.projection) &&
+      !mixedRevokedPlusGrantedMessage.projection.messages.some((row) => row.id === seededA.failedSms.id),
+  );
+
+  const mixedRequestJob = await runMixedHints({
+    requestId: seededA.request.id,
+    jobId: jobB.id,
+  });
+  check(
+    "Same-tenant request A + job B fails closed",
+    mixedRequestJob.result.status === "OK" &&
+      mixedRequestJob.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedRequestJob.projection) &&
+      !mixedRequestJob.projection.customers.some((row) => row.id === seededA.granted.id || row.id === seededA.revoked.id) &&
+      !mixedRequestJob.projection.appointments.some((row) => row.jobId === seededA.job.id || row.jobId === jobB.id),
+  );
+  check(
+    "Same-tenant request/job mismatch does not blend history",
+    limitationIsTargetConsistency(mixedRequestJob.result, mixedSecrets),
+  );
+
+  const mixedJobRequest = await runMixedHints({
+    jobId: seededA.job.id,
+    requestId: requestB.id,
+  });
+  check(
+    "Inverse same-tenant job A + request B fails closed",
+    mixedJobRequest.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedJobRequest.projection) &&
+      !mixedJobRequest.projection.customers.some((row) => row.id === seededA.granted.id || row.id === seededA.revoked.id),
+  );
+
+  const mixedForeignOwned = await runMixedHints({
+    customerId: seededB.granted.id,
+    requestId: seededA.request.id,
+  });
+  check(
+    "Foreign customer + owned request fails the entire targeted projection closed",
+    mixedForeignOwned.result.status === "OK" &&
+      mixedForeignOwned.projection.targetedCustomerUnauthorized === true &&
+      mixedForeignOwned.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedForeignOwned.projection) &&
+      !mixedForeignOwned.projection.customers.some((row) => row.id === seededA.granted.id || row.id === seededB.granted.id) &&
+      !mixedForeignOwned.projection.messages.some((row) => row.customerId === seededA.granted.id),
+  );
+  check(
+    "Foreign + owned mix does not load the owned request customer as a substitute",
+    limitationIsTargetConsistency(mixedForeignOwned.result, mixedSecrets) &&
+      !JSON.stringify(mixedForeignOwned.projection).includes(seededB.granted.id) &&
+      !JSON.stringify(mixedForeignOwned.result).includes("secret-beta@example.com"),
+  );
+
+  const mixedOwnedForeign = await runMixedHints({
+    customerId: seededA.granted.id,
+    requestId: seededB.request.id,
+  });
+  check(
+    "Inverse owned customer + foreign request fails closed",
+    mixedOwnedForeign.projection.targetedRequestUnauthorized === true &&
+      mixedOwnedForeign.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedOwnedForeign.projection) &&
+      !mixedOwnedForeign.projection.customers.some((row) => row.id === seededA.granted.id) &&
+      !mixedOwnedForeign.projection.messages.some((row) => row.id === seededA.failedSms.id),
+  );
+
+  const mixedForeignRequestOwnedJob = await runMixedHints({
+    requestId: seededB.request.id,
+    jobId: seededA.job.id,
+  });
+  check(
+    "Inverse foreign request + owned job fails closed",
+    mixedForeignRequestOwnedJob.projection.targetedRequestUnauthorized === true &&
+      mixedForeignRequestOwnedJob.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedForeignRequestOwnedJob.projection),
+  );
+
+  resetLoads();
+  const consistentMulti = await runCommunicationsSpecialist({
+    db: prisma,
+    access: tenantA.access,
+    catalog: emptyCatalog(),
+    question: "Did we contact this customer and what happened with the message?",
+    entityHints: {
+      customerId: seededA.granted.id,
+      requestId: seededA.request.id,
+      jobId: seededA.job.id,
+      messageId: seededA.failedSms.id,
+    },
+  });
+  const consistentProjection = getLastCommunicationsProjection();
+  check("Consistent multi-hint run succeeds", consistentMulti.status === "OK");
+  check(
+    "Consistent multi-hint stays bounded",
+    consistentProjection.customers.length <= COMMUNICATIONS_CONTEXT_CAPS.customers &&
+      consistentProjection.messages.length <= COMMUNICATIONS_CONTEXT_CAPS.messages &&
+      consistentProjection.appointments.length <= COMMUNICATIONS_CONTEXT_CAPS.appointments,
+  );
+  check(
+    "Consistent multi-hint targets only customer A",
+    consistentProjection.targetedEntityMismatch === false &&
+      consistentProjection.targetedCustomerUnauthorized === false &&
+      consistentProjection.targetedRequestUnauthorized === false &&
+      consistentProjection.targetedJobUnauthorized === false &&
+      consistentProjection.targetedMessageUnauthorized === false &&
+      consistentProjection.customers.some((row) => row.id === seededA.granted.id && row.targeted === true) &&
+      consistentProjection.customers.every((row) => row.id === seededA.granted.id) &&
+      consistentProjection.messages.some((row) => row.id === seededA.failedSms.id) &&
+      consistentProjection.messages.every((row) => row.customerId === seededA.granted.id) &&
+      consistentProjection.appointments.every((row) => row.customerId === seededA.granted.id) &&
+      !consistentProjection.customers.some((row) => row.id === seededA.revoked.id) &&
+      !consistentProjection.messages.some((row) => row.id === seededA.pending.id),
+  );
+  check(
+    "Consistent multi-hint does not use the mismatch limitation",
+    !(consistentMulti.limitation ?? "").includes(TARGET_CONSISTENCY_LIMITATION),
+  );
+
+  check(
+    "Targeted message lookup requires customer scope in source",
+    specialistSrc.includes("id: pinnedMessageId, businessId, customerId: scopedCustomerId") ||
+      specialistSrc.includes("{ id: pinnedMessageId, businessId, customerId: scopedCustomerId }"),
+  );
+  check("Target consistency limitation is owner-facing and generic", TARGET_CONSISTENCY_LIMITATION.includes("one consistent owned customer context"));
 
   console.log("\nCONSENT — GRANTED / REVOKED / UNKNOWN stay distinct");
   resetLoads();

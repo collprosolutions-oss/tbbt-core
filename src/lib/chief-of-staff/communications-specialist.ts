@@ -129,6 +129,9 @@ export function communicationsEntitlementLimitation(
 export const COMMUNICATIONS_FAILURE_LIMITATION =
   "Recorded Communications data could not be loaded. No empty inbox, invented consent, or invented send was substituted.";
 
+export const TARGET_CONSISTENCY_LIMITATION =
+  "The supplied record targets did not resolve to one consistent owned customer context.";
+
 export type SafeChannelEligibility = {
   channel: "EMAIL" | "SMS" | "PHONE";
   permitted: boolean;
@@ -238,6 +241,7 @@ export type CommunicationsProjection = {
   targetedRequestUnauthorized: boolean;
   targetedJobUnauthorized: boolean;
   targetedMessageUnauthorized: boolean;
+  targetedEntityMismatch: boolean;
   signals: CommunicationsDependencySignal[];
   snapshotReused: false;
 };
@@ -411,7 +415,13 @@ type ResolvedTargets = {
   targetedRequestUnauthorized: boolean;
   targetedJobUnauthorized: boolean;
   targetedMessageUnauthorized: boolean;
+  targetedEntityMismatch: boolean;
 };
+
+function suppliedHintCount(hints?: CosEntityHints) {
+  if (!hints) return 0;
+  return [hints.customerId, hints.requestId, hints.jobId, hints.messageId].filter(Boolean).length;
+}
 
 async function resolveTargets(
   db: Db,
@@ -426,7 +436,12 @@ async function resolveTargets(
     targetedRequestUnauthorized: false,
     targetedJobUnauthorized: false,
     targetedMessageUnauthorized: false,
+    targetedEntityMismatch: false,
   };
+
+  const derivedCustomerIds: Array<string | null> = [];
+  let authorizedMessageId: string | null = null;
+  let authorizedMessageCustomerId: string | null = null;
 
   if (hints?.customerId) {
     result.scoped = true;
@@ -435,7 +450,7 @@ async function resolveTargets(
       select: { id: true, businessId: true },
     });
     if (!customer) result.targetedCustomerUnauthorized = true;
-    else result.customerId = customer.id;
+    else derivedCustomerIds.push(customer.id);
   }
 
   if (hints?.requestId) {
@@ -445,7 +460,7 @@ async function resolveTargets(
       select: { id: true, customerId: true, businessId: true },
     });
     if (!request) result.targetedRequestUnauthorized = true;
-    else if (request.customerId && !result.customerId) result.customerId = request.customerId;
+    else derivedCustomerIds.push(request.customerId);
   }
 
   if (hints?.jobId) {
@@ -455,7 +470,7 @@ async function resolveTargets(
       select: { id: true, customerId: true, businessId: true },
     });
     if (!job) result.targetedJobUnauthorized = true;
-    else if (job.customerId && !result.customerId) result.customerId = job.customerId;
+    else derivedCustomerIds.push(job.customerId);
   }
 
   if (hints?.messageId) {
@@ -466,11 +481,39 @@ async function resolveTargets(
     });
     if (!message) result.targetedMessageUnauthorized = true;
     else {
-      result.messageId = message.id;
-      if (!result.customerId) result.customerId = message.customerId;
+      authorizedMessageId = message.id;
+      authorizedMessageCustomerId = message.customerId;
+      derivedCustomerIds.push(message.customerId);
     }
   }
 
+  const anyUnauthorized =
+    result.targetedCustomerUnauthorized ||
+    result.targetedRequestUnauthorized ||
+    result.targetedJobUnauthorized ||
+    result.targetedMessageUnauthorized;
+  const resolvedCustomerIds = [...new Set(derivedCustomerIds.filter((id): id is string => Boolean(id)))];
+  const hasUnresolvedAuthorizedHint = derivedCustomerIds.some((id) => !id);
+  const mismatch =
+    resolvedCustomerIds.length > 1 ||
+    (hasUnresolvedAuthorizedHint && (resolvedCustomerIds.length > 0 || derivedCustomerIds.length > 1));
+
+  if (anyUnauthorized || mismatch) {
+    result.customerId = null;
+    result.messageId = null;
+    result.targetedEntityMismatch = mismatch || (anyUnauthorized && suppliedHintCount(hints) > 1);
+    return result;
+  }
+
+  result.customerId = resolvedCustomerIds[0] ?? null;
+  if (
+    authorizedMessageId &&
+    authorizedMessageCustomerId &&
+    result.customerId &&
+    authorizedMessageCustomerId === result.customerId
+  ) {
+    result.messageId = authorizedMessageId;
+  }
   return result;
 }
 
@@ -546,16 +589,18 @@ export async function loadCommunicationsProjection(input: {
     targets.targetedCustomerUnauthorized ||
     targets.targetedRequestUnauthorized ||
     targets.targetedJobUnauthorized ||
-    targets.targetedMessageUnauthorized;
+    targets.targetedMessageUnauthorized ||
+    targets.targetedEntityMismatch;
 
-  const scopedCustomerId = failClosed && !targets.customerId ? null : targets.customerId;
+  const scopedCustomerId = failClosed ? null : targets.customerId;
+  const pinnedMessageId = failClosed ? null : targets.messageId;
   const messageWhere: Prisma.CustomerCommunicationWhereInput = { businessId };
   if (scopedCustomerId) messageWhere.customerId = scopedCustomerId;
-  if (failClosed && !scopedCustomerId) {
+  if (failClosed || (targets.scoped && !scopedCustomerId)) {
     messageWhere.id = "__no-such-owned-communication__";
   }
 
-  const loadMessages = Boolean(scopedCustomerId || !failClosed);
+  const loadMessages = !failClosed && (Boolean(scopedCustomerId) || !targets.scoped);
   const messageSelect = {
     id: true,
     businessId: true,
@@ -638,9 +683,9 @@ export async function loadCommunicationsProjection(input: {
         ])
       : [0, 0, 0, 0, 0, 0, 0, 0];
 
-  if (targets.messageId && !messageRows.some((row) => row.id === targets.messageId)) {
+  if (pinnedMessageId && scopedCustomerId && !messageRows.some((row) => row.id === pinnedMessageId)) {
     const extra = await input.db.customerCommunication.findFirst({
-      where: { id: targets.messageId, businessId },
+      where: { id: pinnedMessageId, businessId, customerId: scopedCustomerId },
       select: messageSelect,
     });
     if (extra) messageRows.unshift(extra);
@@ -654,7 +699,7 @@ export async function loadCommunicationsProjection(input: {
     selectedMessageRows.push(row);
     seenMessageIds.add(row.id);
   };
-  if (targets.messageId) pinMessage(messageRows.find((row) => row.id === targets.messageId));
+  if (pinnedMessageId) pinMessage(messageRows.find((row) => row.id === pinnedMessageId));
   for (const row of failedRows) pinMessage(row);
   for (const row of pendingRows) pinMessage(row);
   pinMessage(emailRows[0]);
@@ -684,7 +729,7 @@ export async function loadCommunicationsProjection(input: {
   if (scopedCustomerId) customerIds.add(scopedCustomerId);
   for (const row of projectedMessages) customerIds.add(row.customerId);
 
-  if (!failClosed || scopedCustomerId) {
+  if (!failClosed && (scopedCustomerId || !targets.scoped)) {
     const revoked = await input.db.customer.findMany({
       where: {
         businessId,
@@ -732,7 +777,7 @@ export async function loadCommunicationsProjection(input: {
     businessId,
     scheduledAt: { not: null },
     ...(scopedCustomerId ? { customerId: scopedCustomerId } : {}),
-    ...(failClosed && !scopedCustomerId ? { id: "__no-such-owned-job__" } : {}),
+    ...(failClosed || (targets.scoped && !scopedCustomerId) ? { id: "__no-such-owned-job__" } : {}),
   };
   const appointmentRows = await input.db.job.findMany({
     where: appointmentWhere,
@@ -777,7 +822,7 @@ export async function loadCommunicationsProjection(input: {
   const phoneWhere: Prisma.PhoneInteractionWhereInput = {
     businessId,
     ...(scopedCustomerId ? { customerId: scopedCustomerId } : {}),
-    ...(failClosed && !scopedCustomerId ? { id: "__no-such-owned-phone__" } : {}),
+    ...(failClosed || (targets.scoped && !scopedCustomerId) ? { id: "__no-such-owned-phone__" } : {}),
   };
   const phoneRows = await input.db.phoneInteraction.findMany({
     where: phoneWhere,
@@ -859,6 +904,7 @@ export async function loadCommunicationsProjection(input: {
     targetedRequestUnauthorized: targets.targetedRequestUnauthorized,
     targetedJobUnauthorized: targets.targetedJobUnauthorized,
     targetedMessageUnauthorized: targets.targetedMessageUnauthorized,
+    targetedEntityMismatch: targets.targetedEntityMismatch,
     signals,
     snapshotReused: false,
   };
@@ -1057,17 +1103,21 @@ export async function runCommunicationsSpecialist(
     if (!projection.channels.emailConfigured) {
       limitations.push("Email delivery is not configured. Recorded email history stays recorded history.");
     }
-    if (projection.targetedCustomerUnauthorized) {
-      limitations.push("That customer is not in this business workspace, so it was not targeted.");
-    }
-    if (projection.targetedRequestUnauthorized) {
-      limitations.push("That request is not in this business workspace, so it was not targeted.");
-    }
-    if (projection.targetedJobUnauthorized) {
-      limitations.push("That job is not in this business workspace, so it was not targeted.");
-    }
-    if (projection.targetedMessageUnauthorized) {
-      limitations.push("That message is not in this business workspace, so it was not targeted.");
+    if (projection.targetedEntityMismatch) {
+      limitations.push(TARGET_CONSISTENCY_LIMITATION);
+    } else {
+      if (projection.targetedCustomerUnauthorized) {
+        limitations.push("That customer is not in this business workspace, so it was not targeted.");
+      }
+      if (projection.targetedRequestUnauthorized) {
+        limitations.push("That request is not in this business workspace, so it was not targeted.");
+      }
+      if (projection.targetedJobUnauthorized) {
+        limitations.push("That job is not in this business workspace, so it was not targeted.");
+      }
+      if (projection.targetedMessageUnauthorized) {
+        limitations.push("That message is not in this business workspace, so it was not targeted.");
+      }
     }
 
     return {
@@ -1116,6 +1166,7 @@ export function emptyCommunicationsProjectionForTests(): CommunicationsProjectio
     targetedRequestUnauthorized: false,
     targetedJobUnauthorized: false,
     targetedMessageUnauthorized: false,
+    targetedEntityMismatch: false,
     signals: [],
     snapshotReused: false,
   };
