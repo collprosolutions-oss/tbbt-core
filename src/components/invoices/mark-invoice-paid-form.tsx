@@ -6,21 +6,30 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { formatMoney } from "@/lib/format";
 import { PAYMENT_METHODS } from "@/lib/invoice-payment";
 
 const initialState: InvoiceActionState = {};
 
-export function MarkInvoicePaidForm({ invoiceId }: { invoiceId: string }) {
+export function MarkInvoicePaidForm({
+  invoiceId,
+  remainingDue,
+}: {
+  invoiceId: string;
+  remainingDue: string;
+}) {
   const [open, setOpen] = useState(false);
   const [state, formAction, pending] = useActionState(
     markInvoicePaid,
     initialState,
   );
+  const remainingAmount = Number(remainingDue);
+  const showAmount = Number.isFinite(remainingAmount) && remainingAmount > 0;
 
   if (!open) {
     return (
       <Button type="button" size="sm" onClick={() => setOpen(true)}>
-        Mark Paid
+        Record Payment
       </Button>
     );
   }
@@ -55,6 +64,24 @@ export function MarkInvoicePaidForm({ invoiceId }: { invoiceId: string }) {
           ))}
         </select>
       </div>
+      {showAmount ? (
+        <div className="space-y-2">
+          <Label htmlFor="amount">Amount</Label>
+          <Input
+            id="amount"
+            name="amount"
+            inputMode="decimal"
+            required
+            defaultValue={remainingDue}
+            className="w-36"
+          />
+          <p className="text-xs text-muted-foreground">
+            Remaining due {formatMoney(remainingDue)}. Leave the full amount to
+            mark the invoice paid, or enter a smaller amount for a partial
+            payment.
+          </p>
+        </div>
+      ) : null}
       <div className="space-y-2">
         <Label htmlFor="paymentReference">Reference / note (optional)</Label>
         <Input

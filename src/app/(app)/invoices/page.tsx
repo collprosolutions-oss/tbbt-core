@@ -27,6 +27,7 @@ import { prisma } from "@/lib/prisma";
 import {
   invoicePaymentBreakdown,
   listPaymentsGroupedByInvoiceId,
+  sumInvoiceRemainingDue,
 } from "@/lib/project-payments";
 import { jobScopeSummary } from "@/lib/schedule";
 import { cn } from "@/lib/utils";
@@ -140,6 +141,7 @@ export default async function InvoicesPage({
     matchedCount,
     invoicesRaw,
     customerOptions,
+    sentInvoicesForKpi,
   ] = await Promise.all([
     prisma.invoice.aggregate({ where: access.scope, _count: { _all: true }, _sum: { total: true } }),
     prisma.invoice.aggregate({
@@ -191,16 +193,27 @@ export default async function InvoicesPage({
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
+    prisma.invoice.findMany({
+      where: { ...access.scope, status: "SENT" },
+      select: { id: true, status: true, total: true, jobId: true, kind: true },
+    }),
   ]);
 
   const paymentsByInvoiceId = await listPaymentsGroupedByInvoiceId(
     prisma,
     access.businessId,
-    invoicesRaw.map((invoice) => ({
-      id: invoice.id,
-      jobId: invoice.job?.id ?? null,
-      kind: invoice.kind,
-    })),
+    [
+      ...invoicesRaw.map((invoice) => ({
+        id: invoice.id,
+        jobId: invoice.job?.id ?? null,
+        kind: invoice.kind,
+      })),
+      ...sentInvoicesForKpi,
+    ],
+  );
+  const sentRemainingDue = sumInvoiceRemainingDue(
+    sentInvoicesForKpi,
+    paymentsByInvoiceId,
   );
 
   const invoices: InvoiceListItem[] = invoicesRaw.map((invoice) => {
@@ -218,6 +231,7 @@ export default async function InvoicesPage({
         ? formatMoney(breakdown.depositPaid)
         : null,
       balanceLabel: formatMoney(breakdown.amountDue),
+      remainingDue: breakdown.amountDue.toFixed(2),
       balanceSettled: breakdown.amountDue.lte(0),
       createdAtLabel: formatDateTime(invoice.createdAt),
       customer: invoice.customer,
@@ -257,7 +271,7 @@ export default async function InvoicesPage({
     {
       label: "Sent",
       value: sentAgg._count._all,
-      sublabel: formatMoney(sentAgg._sum.total ?? 0),
+      sublabel: formatMoney(sentRemainingDue),
       icon: Send,
       defaultIconId: "send" as const,
       accent: "orange",

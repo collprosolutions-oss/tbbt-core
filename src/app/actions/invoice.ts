@@ -9,13 +9,10 @@ import { sendDraftInvoiceIfNeeded } from "@/lib/complete-job-invoice";
 import { persistDraftInvoiceFromCompletedJob } from "@/lib/invoice-carry-forward";
 import { isPaymentMethodValue } from "@/lib/invoice-payment";
 import {
-  PAYMENT_PURPOSE_INVOICE_BALANCE,
-  invoicePaymentBreakdown,
-  listPaymentsForInvoice,
-  recordSucceededPayment,
+  ProjectPaymentError,
+  recordOwnerInvoiceBalancePayment,
 } from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
-import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 
 export type InvoiceActionState = {
   error?: string;
@@ -129,83 +126,39 @@ export async function markInvoicePaid(
   const invoiceId = readString(formData, "invoiceId");
   const paymentMethod = readString(formData, "paymentMethod");
   const paymentReference = readString(formData, "paymentReference");
+  const amount = readString(formData, "amount");
 
   if (!invoiceId) {
     return { error: "That invoice could not be marked paid." };
-  }
-
-  const invoice = access.assertOwned(
-    await prisma.invoice.findFirst({
-      where: { id: invoiceId, ...access.scope },
-      include: { job: { select: { estimateId: true } } },
-    }),
-  );
-
-  // Already paid: no second payment action, and never overwrite the
-  // recorded paidAt/method/reference.
-  if (invoice.status === "PAID") {
-    return {};
-  }
-
-  if (invoice.status !== "SENT") {
-    return { error: "Send the invoice before marking it paid." };
   }
 
   if (!isPaymentMethodValue(paymentMethod)) {
     return { error: "Choose a payment method." };
   }
 
-  const payments = await listPaymentsForInvoice(prisma, {
-    businessId: access.businessId,
-    invoice: { id: invoice.id, jobId: invoice.jobId, kind: invoice.kind },
-  });
-  const breakdown = invoicePaymentBreakdown({
-    status: invoice.status,
-    total: invoice.total,
-    payments,
-  });
-  if (breakdown.amountDue.gt(0)) {
-    await recordSucceededPayment(prisma, {
-      businessId: invoice.businessId,
-      customerId: invoice.customerId,
-      estimateId: invoice.job?.estimateId ?? null,
-      jobId: invoice.jobId,
-      invoiceId: invoice.id,
-      purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
-      amount: breakdown.amountDue,
+  access.assertOwned(
+    await prisma.invoice.findFirst({
+      where: { id: invoiceId, ...access.scope },
+      select: { id: true, businessId: true },
+    }),
+  );
+
+  try {
+    await recordOwnerInvoiceBalancePayment(prisma, access, {
+      invoiceId,
+      amount,
       method: paymentMethod,
       note: paymentReference || null,
     });
+    revalidatePath("/invoices");
+    revalidatePath(`/invoices/${invoiceId}`);
+    revalidatePath("/customers");
+    revalidatePath("/dashboard");
+    return {};
+  } catch (error) {
+    if (error instanceof ProjectPaymentError) {
+      return { error: error.message };
+    }
+    throw error;
   }
-
-  const updated = await prisma.invoice.updateMany({
-    where: {
-      id: invoice.id,
-      businessId: access.businessId,
-      status: "SENT",
-    },
-    data: {
-      status: "PAID",
-      paidAt: new Date(),
-      paymentMethod,
-      paymentReference: paymentReference || null,
-    },
-  });
-
-  if (updated.count !== 1) {
-    return { error: "Send the invoice before marking it paid." };
-  }
-
-  await emitAndProcessBusinessEvent(prisma, {
-    businessId: access.businessId,
-    type: "INVOICE_PAID",
-    subjectType: "INVOICE",
-    subjectId: invoice.id,
-    payload: { customerId: invoice.customerId },
-    idempotencyKey: `INVOICE_PAID:${invoice.id}`,
-  });
-
-  revalidatePath("/invoices");
-  revalidatePath(`/invoices/${invoice.id}`);
-  return {};
 }

@@ -106,3 +106,9 @@ export function explainPaymentsGoLiveFromStatus(
 ): PaymentsGoLiveExplanation {
   return explainPaymentsGoLive(payment);
 }
+
+export function ownerInvoiceOnlineCheckoutCopy(onlineCheckoutPossible: boolean) {
+  return onlineCheckoutPossible
+    ? "Customers can view this invoice from the link and pay the remaining balance by card online."
+    : "Online card payment is not available. Record cash, check, or Zelle with Record Payment.";
+}

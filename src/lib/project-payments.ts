@@ -7,6 +7,7 @@
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
+import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { formatMoney } from "@/lib/format";
 import { isPaymentMethodValue, type PaymentMethodValue } from "@/lib/invoice-payment";
@@ -261,6 +262,51 @@ export function invoicePaymentBreakdown(input: {
     credit: moneyMax(recorded.sub(total)),
     legacyFullyPaid: false,
   };
+}
+
+/**
+ * Remaining due across invoices from canonical Payment attribution.
+ * One Payment is never counted on more than one invoice. Callers must
+ * pass payments already grouped by listPaymentsGroupedByInvoiceId /
+ * paymentsBelongingToInvoice — do not subtract every Payment row.
+ */
+export function sumInvoiceRemainingDue(
+  invoices: Array<{
+    id: string;
+    status: string;
+    total: Prisma.Decimal | number | string;
+  }>,
+  paymentsByInvoiceId: Map<
+    string,
+    Array<{ purpose: string; amount: Prisma.Decimal | number | string }>
+  >,
+) {
+  return invoices.reduce((sum, invoice) => {
+    return sum.add(
+      invoicePaymentBreakdown({
+        status: invoice.status,
+        total: invoice.total,
+        payments: paymentsByInvoiceId.get(invoice.id) ?? [],
+      }).amountDue,
+    );
+  }, ZERO);
+}
+
+export function sumSentInvoiceRemainingDue(
+  invoices: Array<{
+    id: string;
+    status: string;
+    total: Prisma.Decimal | number | string;
+  }>,
+  paymentsByInvoiceId: Map<
+    string,
+    Array<{ purpose: string; amount: Prisma.Decimal | number | string }>
+  >,
+) {
+  return sumInvoiceRemainingDue(
+    invoices.filter((invoice) => invoice.status === "SENT"),
+    paymentsByInvoiceId,
+  );
 }
 
 const PROJECT_PAYMENT_SELECT = {
@@ -677,4 +723,192 @@ export async function recordOwnerManualDeposit(
     receivedAt,
     note: input.note ?? null,
   });
+}
+
+export type OwnerInvoiceBalancePaymentResult = {
+  alreadyPaid: boolean;
+  created: boolean;
+  paymentId: string | null;
+  transitionedToPaid: boolean;
+  invoicePaid: boolean;
+  amountDue: Prisma.Decimal;
+  recordedAmount: Prisma.Decimal;
+  customerId: string | null;
+};
+
+function parseOwnerInvoicePaymentAmount(raw: string | null | undefined) {
+  const trimmed = raw?.trim() ?? "";
+  if (!trimmed) return null;
+  try {
+    const amount = new Prisma.Decimal(trimmed);
+    if (!amount.isFinite()) {
+      throw new ProjectPaymentError("Enter a valid payment amount.");
+    }
+    return amount;
+  } catch (error) {
+    if (error instanceof ProjectPaymentError) throw error;
+    throw new ProjectPaymentError("Enter a valid payment amount.");
+  }
+}
+
+/**
+ * Owner-recorded invoice-balance collection. Locks the Invoice row so
+ * concurrent Mark Paid / Record Payment submissions share one remaining-
+ * balance collection. Amount is always revalidated against current
+ * attributed Payments — never against a client-submitted balance.
+ */
+export async function recordOwnerInvoiceBalancePayment(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: {
+    invoiceId: string;
+    amount?: string | null;
+    method: string;
+    note?: string | null;
+  },
+): Promise<OwnerInvoiceBalancePaymentResult> {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
+  if (!input.invoiceId) {
+    throw new ProjectPaymentError("That invoice could not be found.");
+  }
+  if (!isPaymentMethodValue(input.method)) {
+    throw new ProjectPaymentError("Choose a payment method.");
+  }
+
+  const result = await db.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM "Invoice"
+      WHERE id = ${input.invoiceId} AND "businessId" = ${access.businessId}
+      FOR UPDATE
+    `;
+    if (locked.length === 0) {
+      throw new ProjectPaymentError("That invoice could not be found.");
+    }
+
+    const invoice = access.assertOwned(
+      await tx.invoice.findFirst({
+        where: { id: input.invoiceId, ...access.scope },
+        include: { job: { select: { estimateId: true } } },
+      }),
+    );
+
+    if (invoice.status === "PAID") {
+      return {
+        alreadyPaid: true,
+        created: false,
+        paymentId: null,
+        transitionedToPaid: false,
+        invoicePaid: true,
+        amountDue: ZERO,
+        recordedAmount: ZERO,
+        customerId: invoice.customerId,
+      };
+    }
+
+    if (invoice.status !== "SENT") {
+      throw new ProjectPaymentError("Send the invoice before marking it paid.");
+    }
+
+    const payments = await listPaymentsForInvoice(tx, {
+      businessId: access.businessId,
+      invoice: { id: invoice.id, jobId: invoice.jobId, kind: invoice.kind },
+    });
+    const breakdown = invoicePaymentBreakdown({
+      status: invoice.status,
+      total: invoice.total,
+      payments,
+    });
+    const remaining = breakdown.amountDue;
+
+    if (remaining.lte(0)) {
+      const closed = await tx.invoice.updateMany({
+        where: {
+          id: invoice.id,
+          businessId: access.businessId,
+          status: "SENT",
+        },
+        data: {
+          status: "PAID",
+          paidAt: new Date(),
+          paymentMethod: input.method,
+          paymentReference: input.note?.trim() || null,
+        },
+      });
+      return {
+        alreadyPaid: false,
+        created: false,
+        paymentId: null,
+        transitionedToPaid: closed.count === 1,
+        invoicePaid: true,
+        amountDue: ZERO,
+        recordedAmount: ZERO,
+        customerId: invoice.customerId,
+      };
+    }
+
+    const requested = parseOwnerInvoicePaymentAmount(input.amount);
+    const amount = requested ?? remaining;
+    if (amount.lte(0)) {
+      throw new ProjectPaymentError("Enter a payment amount greater than zero.");
+    }
+    if (amount.gt(remaining)) {
+      throw new ProjectPaymentError("That amount is more than the remaining balance.");
+    }
+
+    const recorded = await recordSucceededPayment(tx, {
+      businessId: invoice.businessId,
+      customerId: invoice.customerId,
+      estimateId: invoice.job?.estimateId ?? null,
+      jobId: invoice.jobId,
+      invoiceId: invoice.id,
+      purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+      amount,
+      method: input.method,
+      note: input.note ?? null,
+    });
+
+    const nextDue = moneyMax(remaining.sub(amount));
+    let transitionedToPaid = false;
+    if (nextDue.lte(0)) {
+      const closed = await tx.invoice.updateMany({
+        where: {
+          id: invoice.id,
+          businessId: access.businessId,
+          status: "SENT",
+        },
+        data: {
+          status: "PAID",
+          paidAt: new Date(),
+          paymentMethod: input.method,
+          paymentReference: input.note?.trim() || null,
+        },
+      });
+      transitionedToPaid = closed.count === 1;
+    }
+
+    return {
+      alreadyPaid: false,
+      created: recorded.created,
+      paymentId: recorded.id,
+      transitionedToPaid,
+      invoicePaid: nextDue.lte(0),
+      amountDue: nextDue,
+      recordedAmount: amount,
+      customerId: invoice.customerId,
+    };
+  });
+
+  if (result.transitionedToPaid) {
+    await emitAndProcessBusinessEvent(db, {
+      businessId: access.businessId,
+      type: "INVOICE_PAID",
+      subjectType: "INVOICE",
+      subjectId: input.invoiceId,
+      payload: { customerId: result.customerId },
+      idempotencyKey: `INVOICE_PAID:${input.invoiceId}`,
+    });
+  }
+
+  return result;
 }

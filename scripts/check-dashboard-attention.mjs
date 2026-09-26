@@ -91,7 +91,7 @@ check(
     dashboardSrc.includes('href: "/jobs?view=list"') &&
     dashboardSrc.includes('label: "Outstanding Invoices"') &&
     dashboardSrc.includes('href: "/invoices"') &&
-    dashboardSrc.includes("Outstanding uses the invoice's own stored total"),
+    dashboardSrc.includes("Outstanding is remaining due on SENT invoices"),
 );
 check(
   "Existing draft/unscheduled/unpaid attention groups remain",
