@@ -221,6 +221,20 @@ check(
     dashboardSrc.includes("OwnerTodayJobCard") &&
     dashboardSrc.includes('label: "Open Requests"'),
 );
+check(
+  "Dashboard keeps #118 Log lead and #120 Open Today together",
+  dashboardSrc.includes('href="/requests/log-lead"') &&
+    dashboardSrc.includes(">Log lead<") &&
+    dashboardSrc.includes('href="/estimates/new"') &&
+    dashboardSrc.includes(">Create Estimate<") &&
+    dashboardSrc.includes('href="/today"') &&
+    dashboardSrc.includes(">Open Today<") &&
+    dashboardSrc.includes(">View full schedule<") &&
+    dashboardSrc.includes(">Review Requests<") &&
+    dashboardSrc.includes(">Open Schedule<") &&
+    dashboardSrc.includes("buildOwnerTodayJobs") &&
+    dashboardSrc.includes("OwnerTodayJobCard"),
+);
 
 const slot = {
   scheduledAt: new Date("2026-09-16T13:00:00.000Z"),
