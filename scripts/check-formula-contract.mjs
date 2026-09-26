@@ -42,7 +42,7 @@ const {
 const { buildEstimateLineCreatesFromRequestItems } = await import(
   "@/lib/request-estimate-draft"
 );
-const { formatCatalogPriceLabel } = await import("@/lib/pricing-mode");
+const { formatCatalogPriceLabel, publicCatalogUnitAmount } = await import("@/lib/pricing-mode");
 const { createEstimateVersionSnapshot } = await import("@/lib/estimate-version");
 const {
   applyDraftEstimateCalculator,
@@ -348,9 +348,55 @@ check(
 const custom = computeFormula(customFormula, { quantity: 5 }, { unitRate: 20, unitsPerHour: 2 });
 check(
   "custom_quote does not invent a price or hours",
-  custom.recommendedAmount === 0 && custom.estimatedLaborHours == null,
+  custom.recommendedAmount === 0 &&
+    custom.estimatedLaborHours == null &&
+    custom.lines[0]?.amountState === "waiting",
+);
+const missingRate = computeFormula(unitFormula, { quantity: 6 }, {});
+check(
+  "missing required rate never becomes a ready $0 price",
+  missingRate.recommendedAmount === 0 &&
+    missingRate.lines[0]?.amount === 0 &&
+    missingRate.lines[0]?.amountState === "waiting",
+);
+const missingQuantity = computeFormula(unitFormula, {}, { unitRate: 18 });
+check(
+  "missing required quantity never becomes a ready $0 price",
+  missingQuantity.recommendedAmount === 0 &&
+    missingQuantity.lines[0]?.amountState === "waiting",
+);
+const zeroRateWithQuantity = computeFormula(areaFormula, { areaSqFt: 50 }, { unitRate: 0 });
+check(
+  "explicit zero rate with quantity stays waiting",
+  zeroRateWithQuantity.recommendedAmount === 0 &&
+    zeroRateWithQuantity.lines[0]?.amountState === "waiting",
+);
+const missingComponentRate = computeFormula(
+  basePlusFormula,
+  { openingCount: 2, trimLf: 0 },
+  { baseAmount: 150, openingRate: 0, trimRate: 8 },
+);
+check(
+  "missing component rate stays waiting and does not invent $0 ready work",
+  missingComponentRate.lines.find((line) => line.key === "openings")?.amountState ===
+    "waiting" &&
+    missingComponentRate.lines.find((line) => line.key === "openings")?.amount === 0 &&
+    missingComponentRate.recommendedAmount === 150,
+);
+const missingMinimumInputs = computeFormula(minimumFormula, { quantity: 2 }, {});
+check(
+  "minimum_plus_unit without rates does not invent a billable minimum",
+  missingMinimumInputs.recommendedAmount === 0 &&
+    missingMinimumInputs.lines.every((line) => line.amountState !== "ready"),
 );
 check("hoursFromProduction requires quantity and a positive rate", hoursFromProduction(10, 0) == null);
+check(
+  "A $0 catalog price is not a public sellable amount",
+  publicCatalogUnitAmount("FIXED", 0) == null &&
+    publicCatalogUnitAmount("STARTING_AT", 0) == null &&
+    publicCatalogUnitAmount("VARIABLE", 0) == null &&
+    formatCatalogPriceLabel("FIXED", 0) === "Custom Quote",
+);
 
 console.log("\nUNIT — Public catalog never prints / hour");
 check(
@@ -782,6 +828,44 @@ try {
     sentRecalcBlocked = error instanceof EstimateLineError;
   }
   check("SENT estimate cannot recalculate a formula snapshot", sentRecalcBlocked);
+
+  let missingInputApplyBlocked = false;
+  const waitingEstimate = await prisma.estimate.create({
+    data: {
+      businessId: business.id,
+      total: new Prisma.Decimal(75),
+      publicToken: randomUUID(),
+    },
+  });
+  const waitingLine = await prisma.lineItem.create({
+    data: {
+      businessId: business.id,
+      estimateId: waitingEstimate.id,
+      serviceCatalogItemId: catalog.id,
+      description: knobLines[0].description,
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(75),
+      total: new Prisma.Decimal(75),
+      type: "LABOR",
+    },
+  });
+  try {
+    await applyDraftEstimateCalculator(prisma, owner, {
+      estimateId: waitingEstimate.id,
+      lineItemId: waitingLine.id,
+      inputs: { quantity: 3 },
+      rates: {},
+    });
+  } catch (error) {
+    missingInputApplyBlocked = error instanceof EstimateLineError;
+  }
+  const waitingAfter = await prisma.lineItem.findFirst({ where: { id: waitingLine.id } });
+  check(
+    "Apply rejects a formula with quantity but no required rate and leaves the stored line unchanged",
+    missingInputApplyBlocked &&
+      waitingAfter.unitPrice.toString() === "75" &&
+      waitingAfter.total.toString() === "75",
+  );
 
   const nextEstimate = await prisma.estimate.create({
     data: {

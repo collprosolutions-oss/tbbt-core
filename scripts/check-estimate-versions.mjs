@@ -360,6 +360,78 @@ try {
   const staleEstimateFinal = await prisma.estimate.findUnique({ where: { id: staleEstimate.id } });
   check("estimate remains SENT, not APPROVED, after a stale approval attempt", staleEstimateFinal.status === "SENT");
 
+  console.log("\nTEST 8 — Later catalog / minimum-fee changes do not rewrite a SENT snapshot");
+  const catalog = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Catalog Snapshot Service",
+      pricingMode: "STARTING_AT",
+      price: new Prisma.Decimal(80),
+      active: true,
+    },
+  });
+  await prisma.business.update({
+    where: { id: businessA.id },
+    data: { laborMinimumEnabled: true, laborMinimumAmount: new Prisma.Decimal(40) },
+  });
+  const histEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      total: new Prisma.Decimal(80),
+      laborMinimumWaived: false,
+      laborMinimumAdjustment: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: histEstimate.id,
+      serviceCatalogItemId: catalog.id,
+      description: "Catalog Snapshot Service (starting at)",
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(80),
+      total: new Prisma.Decimal(80),
+      type: "LABOR",
+    },
+  });
+  const histSend = await simulateSend(histEstimate.id, businessA.id);
+  const histVersion = await prisma.estimateVersion.findUnique({
+    where: { id: histSend.version.id },
+    include: { lineItems: true },
+  });
+  await prisma.serviceCatalogItem.update({
+    where: { id: catalog.id },
+    data: { price: new Prisma.Decimal(999) },
+  });
+  await prisma.business.update({
+    where: { id: businessA.id },
+    data: { laborMinimumAmount: new Prisma.Decimal(500) },
+  });
+  const histVersionAfter = await prisma.estimateVersion.findUnique({
+    where: { id: histSend.version.id },
+    include: { lineItems: true },
+  });
+  const histLive = await prisma.estimate.findUnique({ where: { id: histEstimate.id } });
+  check("historical send succeeded", histSend.ok === true);
+  check(
+    "SENT version line stays at the stored $80 after a later catalog-price change",
+    histVersionAfter.lineItems[0]?.unitPrice.toString() === "80" &&
+      histVersionAfter.lineItems[0]?.total.toString() === "80" &&
+      histVersionAfter.total.toString() === histVersion.total.toString(),
+  );
+  check(
+    "SENT estimate total and minimum adjustment stay frozen after a later minimum-fee change",
+    histLive.status === "SENT" &&
+      histLive.total.toString() === "80" &&
+      histLive.laborMinimumAdjustment.toString() ===
+        histVersionAfter.laborMinimumAdjustment.toString() &&
+      histVersionAfter.laborMinimumAdjustment.toString() ===
+        histVersion.laborMinimumAdjustment.toString(),
+  );
+
   console.log(
     failures === 0
       ? "\nAll estimate-version checks passed."

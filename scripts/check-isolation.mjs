@@ -686,6 +686,81 @@ try {
       tenantA.job.projectToken !== tenantA.business.id,
   );
 
+  console.log("\nPRICING — Foreign catalog / formula defaults / materials / waiver");
+  const catalogA = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: tenantA.business.id,
+      name: "Alpha Catalog Service",
+      pricingMode: "FIXED",
+      price: new Prisma.Decimal(125),
+      active: true,
+    },
+  });
+  const catalogB = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: tenantB.business.id,
+      name: "Beta Catalog Service",
+      pricingMode: "FIXED",
+      price: new Prisma.Decimal(999),
+      active: true,
+    },
+  });
+  const scopedForeignCatalog = await prisma.serviceCatalogItem.findFirst({
+    where: { id: catalogA.id, ...accessB.scope },
+  });
+  check("B cannot load A's catalog item by scoped id", scopedForeignCatalog === null);
+  const bCatalogList = await prisma.serviceCatalogItem.findMany({
+    where: accessB.scope,
+  });
+  check(
+    "B scoped catalog list cannot include A's service",
+    bCatalogList.every((row) => row.id !== catalogA.id) &&
+      bCatalogList.some((row) => row.id === catalogB.id),
+  );
+
+  await prisma.businessEstimatingDefault.create({
+    data: {
+      businessId: tenantA.business.id,
+      workspaceId: "concrete-slab",
+      payload: JSON.stringify({
+        version: 1,
+        workspaceId: "concrete-slab",
+        labor: { laborRate: 36 },
+      }),
+    },
+  });
+  const foreignDefault = await prisma.businessEstimatingDefault.findFirst({
+    where: { businessId: tenantB.business.id, workspaceId: "concrete-slab" },
+  });
+  check("B does not inherit A's formula / estimating defaults", foreignDefault === null);
+
+  await prisma.businessMaterialSupplierMapping.create({
+    data: {
+      businessId: tenantA.business.id,
+      providerId: "home-depot",
+      materialIdentity: "concrete-bags",
+      providerProductId: "202080829",
+      productName: "Quikrete 60 lb",
+      unitLabel: "bag",
+    },
+  });
+  const foreignMapping = await prisma.businessMaterialSupplierMapping.findFirst({
+    where: { businessId: tenantB.business.id, materialIdentity: "concrete-bags" },
+  });
+  check("B cannot see A's material supplier mapping", foreignMapping === null);
+
+  const foreignWaiver = await prisma.estimate.findFirst({
+    where: { id: tenantA.estimate.id, ...accessB.scope },
+  });
+  const waiverMutateB = await prisma.estimate.updateMany({
+    where: { id: tenantA.estimate.id, ...accessB.scope },
+    data: { laborMinimumWaived: true },
+  });
+  const waiverA = await prisma.estimate.findUnique({ where: { id: tenantA.estimate.id } });
+  check("B cannot load A's estimate to waive the minimum", foreignWaiver === null);
+  check("B scoped updateMany cannot waive A's labor minimum", waiverMutateB.count === 0);
+  check("A's labor-minimum waiver flag remains unwaived", waiverA.laborMinimumWaived === false);
+
   console.log("\nCORE MODELS — Scoped list/read/foreign-id/assertOwned");
   for (const [model, key] of CORE_MODELS) {
     await proveCoreModelIsolation(

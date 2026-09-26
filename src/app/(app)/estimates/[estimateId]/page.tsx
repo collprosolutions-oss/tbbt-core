@@ -89,9 +89,11 @@ import {
   lineMaterialTakeoff,
   lineMaterialTakeoffSource,
 } from "@/lib/estimate-line-scope";
+import { ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL } from "@/lib/estimate-document";
 import {
   customQuoteDisplayDescription,
   isUnpricedCustomQuoteDraftLine,
+  isUnpricedDraftLine,
 } from "@/lib/request-estimate-draft";
 import { RequestEstimateHandoff } from "@/components/estimates/request-estimate-handoff";
 import {
@@ -250,6 +252,13 @@ export default async function EstimateBuilderPage({
     .filter((item) => item.type === "LABOR")
     .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0));
   const laborLines = estimate.lineItems.filter((item) => item.type === "LABOR");
+  const quoteWhenZero =
+    laborLines.some(isUnpricedDraftLine) &&
+    !laborLines.some((item) => !isUnpricedDraftLine(item) && item.unitPrice.gt(0));
+  const ownerAmountLabel = (amount: Prisma.Decimal) =>
+    quoteWhenZero && amount.lte(0)
+      ? ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL
+      : formatMoney(amount);
   const materialLines = estimate.lineItems.filter((item) => item.type === "MATERIAL");
   const otherLines = estimate.lineItems.filter((item) => item.type === "OTHER");
   const customerMaterials = resolveCustomerMaterialsTotal(estimate.lineItems);
@@ -756,7 +765,7 @@ export default async function EstimateBuilderPage({
           <div className="flex flex-wrap items-center gap-2">
             <span>Estimate</span>
             <StatusBadge status={estimate.status} />
-            <span>{formatMoney(estimate.total)}</span>
+            <span>{ownerAmountLabel(estimate.total)}</span>
           </div>
         }
       >
@@ -883,7 +892,7 @@ export default async function EstimateBuilderPage({
           <dl className="space-y-1 text-sm">
             <div className="flex justify-between gap-3">
               <dt>Labor</dt>
-              <dd className="tabular-nums">{formatMoney(laborSubtotal)}</dd>
+              <dd className="tabular-nums">{ownerAmountLabel(laborSubtotal)}</dd>
             </div>
             <div className="flex justify-between gap-3">
               <dt>Materials</dt>
@@ -899,7 +908,7 @@ export default async function EstimateBuilderPage({
             ) : null}
             <div className="flex justify-between gap-3 font-medium">
               <dt>Estimate Total</dt>
-              <dd className="tabular-nums">{formatMoney(estimate.total)}</dd>
+              <dd className="tabular-nums">{ownerAmountLabel(estimate.total)}</dd>
             </div>
             <div className="mt-3 flex justify-between gap-3">
               <dt>Material Deposit Due</dt>
@@ -1120,11 +1129,11 @@ function OwnerEstimateLaborLine({
     >
       <div className="flex items-start justify-between gap-3">
         <span className="min-w-0 flex-1 break-words">
-          Labor: {lineItemTitle(item.description)} × {item.quantity.toString()}
+          Labor: {requestName} × {item.quantity.toString()}
           {priceRequired ? " — price required" : ` @ ${formatMoney(item.unitPrice)}`}
         </span>
         <span className="flex shrink-0 items-center gap-2">
-          <span>{formatMoney(item.total)}</span>
+          <span>{priceRequired ? "Price required" : formatMoney(item.total)}</span>
           {isDraft ? (
             <RemoveLineItemButton estimateId={estimateId} lineItemId={item.id} />
           ) : null}

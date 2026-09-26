@@ -34,9 +34,8 @@ const { applyCurrentSupplierPriceToDraftItem } = await import(
 );
 const { classifySupplierPriceFreshness, describeSupplierPriceCheck } =
   await import("@/lib/material-pricing/freshness");
-const { buildOwnerSupplierPricingBoard } = await import(
-  "@/lib/material-pricing/engine"
-);
+const { buildOwnerSupplierPricingBoard, resolveSupplierQuoteForIdentity } =
+  await import("@/lib/material-pricing/engine");
 const { getSupplierProvider, HOME_DEPOT_LIVE_UNAVAILABLE, LOWES_NOT_IMPLEMENTED } =
   await import("@/lib/material-pricing/registry");
 const { HOME_DEPOT_CATALOG, HOME_DEPOT_CONCRETE_SLAB_MAPPINGS } = await import(
@@ -268,6 +267,58 @@ try {
       pickupRow?.mappingStatus === "not-a-product" &&
       pickupRow?.canUseCurrentPrice === false,
   );
+  const missingStored = resolveSupplierQuoteForIdentity({
+    materialIdentity: "concrete-bags",
+    mappings: [],
+    prices: [
+      {
+        providerId: "home-depot",
+        providerProductId: "202080829",
+        productName: "Quikrete 60 lb",
+        sku: null,
+        currentPrice: 0,
+        fetchedAt: null,
+        sourceMode: "catalog-reference",
+        sourceStatus: "unavailable",
+      },
+    ],
+    catalogFallback: false,
+  });
+  check(
+    "A stored $0 / missing supplier price stays missing, not a usable $0",
+    missingStored.quote == null || missingStored.quote.currentPrice <= 0,
+  );
+  const missingBoard = buildOwnerSupplierPricingBoard({
+    snapshot: {
+      ...nineBagSnapshot,
+      items: nineBagSnapshot.items.map((item) =>
+        item.id === "concrete-bags" ? { ...item, unitCost: null } : item,
+      ),
+    },
+    mappings: [],
+    prices: [
+      {
+        providerId: "home-depot",
+        providerProductId: "202080829",
+        productName: "Quikrete 60 lb",
+        sku: null,
+        currentPrice: 0,
+        fetchedAt: null,
+        sourceMode: "catalog-reference",
+        sourceStatus: "unavailable",
+      },
+    ],
+  });
+  const missingBagRow = missingBoard.rows.find((row) => row.itemId === "concrete-bags");
+  check(
+    "Missing recorded price cannot be used as a live $0 cost and never implies inventory",
+    missingBagRow?.savedUnitCost == null &&
+      (missingBagRow?.supplierUnitCost == null || missingBagRow.supplierUnitCost > 0) &&
+      (missingBagRow?.canUseCurrentPrice === false ||
+        (missingBagRow?.supplierUnitCost != null && missingBagRow.supplierUnitCost > 0)) &&
+      !JSON.stringify(missingBagRow ?? {}).toLowerCase().includes("inventory") &&
+      !JSON.stringify(missingBagRow ?? {}).toLowerCase().includes("in stock"),
+  );
 
   const savedDraft = {
     ...nineBagSnapshot,
@@ -288,6 +339,11 @@ try {
       appliedBags?.customerUnitPrice === markedUpCustomerUnitPrice(6.47, 20) &&
       markedUpCustomerUnitPrice(6.47, 20) === 7.76 &&
       savedDraft.items.find((item) => item.id === "concrete-bags")?.unitCost === 6.29,
+  );
+  const zeroApply = applyCurrentSupplierPriceToDraftItem(savedDraft, "concrete-bags", 0);
+  check(
+    "Applying a $0 supplier cost is a no-op — missing stays missing, not zero",
+    zeroApply.items.find((item) => item.id === "concrete-bags")?.unitCost === 6.29,
   );
   const noMarkupApply = applyCurrentSupplierPriceToDraftItem(
     { ...savedDraft, markupPercent: 0, items: savedDraft.items.map((item) => ({ ...item, customerUnitPrice: 9.99 })) },

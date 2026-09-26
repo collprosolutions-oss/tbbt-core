@@ -101,15 +101,27 @@ export function formatDraftEstimateDescription(line: DraftEstimateLine) {
   return line.description;
 }
 
+function draftLineUnitPriceIsUnpaid(item: {
+  unitPrice: { lte: (value: number) => boolean } | number | string;
+}) {
+  return typeof item.unitPrice === "object" && item.unitPrice && "lte" in item.unitPrice
+    ? item.unitPrice.lte(0)
+    : Number(item.unitPrice) <= 0;
+}
+
 export function isUnpricedCustomQuoteDraftLine(item: {
   unitPrice: { lte: (value: number) => boolean } | number | string;
   description: string;
 }) {
-  const unpaid =
-    typeof item.unitPrice === "object" && item.unitPrice && "lte" in item.unitPrice
-      ? item.unitPrice.lte(0)
-      : Number(item.unitPrice) <= 0;
-  return unpaid && item.description.includes(CUSTOM_QUOTE_DRAFT_MARKER);
+  return draftLineUnitPriceIsUnpaid(item) && item.description.includes(CUSTOM_QUOTE_DRAFT_MARKER);
+}
+
+/** Any stored $0/negative line is unpriced — never a sendable quote. */
+export function isUnpricedDraftLine(item: {
+  unitPrice: { lte: (value: number) => boolean } | number | string;
+  description: string;
+}) {
+  return draftLineUnitPriceIsUnpaid(item) || item.description.includes(CUSTOM_QUOTE_DRAFT_MARKER);
 }
 
 /** Owner/customer-facing title without the internal "enter price" marker. */
@@ -156,6 +168,9 @@ export function draftEstimateSendError(estimate: {
   }
   if (estimate.lineItems.some(isUnpricedCustomQuoteDraftLine)) {
     return "Enter a price for each custom-quote line before sending.";
+  }
+  if (estimate.lineItems.some(isUnpricedDraftLine)) {
+    return "Enter a price for each line before sending.";
   }
   return null;
 }

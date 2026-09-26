@@ -22,8 +22,13 @@ const {
   addRequestDraftLines,
   draftEstimateSendError,
   isUnpricedCustomQuoteDraftLine,
+  isUnpricedDraftLine,
 } = await import("@/lib/request-estimate-draft");
-const { EstimateLineError, priceDraftEstimateLine } = await import("@/lib/estimate-line-ops");
+const { EstimateLineError, addCatalogItemToDraftEstimate, priceDraftEstimateLine } =
+  await import("@/lib/estimate-line-ops");
+const { formatCatalogPriceLabel, publicCatalogUnitAmount } = await import(
+  "@/lib/pricing-mode"
+);
 const { lineCalculatorSnapshot, lineItemTitle } = await import("@/lib/estimate-line-scope");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -111,6 +116,25 @@ try {
   check(
     "Owner is told to price the original line instead of adding a duplicate",
     pageSource.includes("duplicate custom item") && pageSource.includes("second custom item"),
+  );
+  check(
+    "Owner draft never prints a fabricated $0 total on a price-required line",
+    pageSource.includes('{priceRequired ? "Price required" : formatMoney(item.total)}') &&
+      pageSource.includes("ownerAmountLabel") &&
+      pageSource.includes(" — price required"),
+  );
+  check(
+    "A $0 catalog price is not treated as a public sellable amount",
+    publicCatalogUnitAmount("FIXED", 0) == null &&
+      formatCatalogPriceLabel("STARTING_AT", 0) === "Custom Quote",
+  );
+  check(
+    "Send is blocked for a $0 FIXED line even without the custom-quote marker",
+    draftEstimateSendError({
+      status: "DRAFT",
+      lineItems: [{ description: "TV Mounting", unitPrice: 0 }],
+    }) === "Enter a price for each line before sending." &&
+      isUnpricedDraftLine({ description: "TV Mounting", unitPrice: 0 }),
   );
 
   const ownerUser = await prisma.user.create({
@@ -415,6 +439,82 @@ try {
         unitPrice: "1",
       }),
     (error) => error instanceof Error,
+  );
+
+  const foreignCatalog = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessB.id,
+      name: "Foreign Catalog Service",
+      pricingMode: "FIXED",
+      price: new Prisma.Decimal("99"),
+      active: true,
+    },
+  });
+  const isolatedEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  await expectError(
+    "Foreign business catalog item cannot be added to this estimate",
+    () =>
+      addCatalogItemToDraftEstimate(prisma, ownerA, {
+        estimateId: isolatedEstimate.id,
+        catalogItemId: foreignCatalog.id,
+        quantity: new Prisma.Decimal(1),
+      }),
+    (error) => error instanceof Error,
+  );
+  await expectError(
+    "Business B cannot add its catalog onto Business A's estimate",
+    () =>
+      addCatalogItemToDraftEstimate(prisma, ownerB, {
+        estimateId: isolatedEstimate.id,
+        catalogItemId: foreignCatalog.id,
+        quantity: new Prisma.Decimal(1),
+      }),
+    (error) => error instanceof Error,
+  );
+  check(
+    "Foreign catalog add left A's estimate empty",
+    (await prisma.lineItem.count({ where: { estimateId: isolatedEstimate.id } })) === 0,
+  );
+
+  const waiverEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(50),
+      laborMinimumWaived: false,
+      laborMinimumAdjustment: new Prisma.Decimal(150),
+      publicToken: randomUUID(),
+    },
+  });
+  const foreignWaiverLookup = await prisma.estimate.findFirst({
+    where: { id: waiverEstimate.id, ...ownerB.scope },
+  });
+  check("Waiver lookup is scoped — Business B cannot see A's estimate", foreignWaiverLookup == null);
+  await prisma.$transaction(async (tx) => {
+    const owned = await tx.estimate.findFirst({
+      where: { id: waiverEstimate.id, ...ownerA.scope, status: "DRAFT" },
+    });
+    if (!owned) throw new Error("expected owned draft");
+    await tx.estimate.update({
+      where: { id: owned.id },
+      data: { laborMinimumWaived: true },
+    });
+    await persistDraftEstimateTotal(tx, owned.id, ownerA.businessId);
+  });
+  const waived = await prisma.estimate.findUnique({ where: { id: waiverEstimate.id } });
+  const stillB = await prisma.estimate.findFirst({
+    where: { id: waiverEstimate.id, ...ownerB.scope },
+  });
+  check(
+    "Waiver belongs to the correct business/estimate and stays invisible to Business B",
+    waived?.laborMinimumWaived === true &&
+      waived.businessId === businessA.id &&
+      stillB == null,
   );
 
   console.log(

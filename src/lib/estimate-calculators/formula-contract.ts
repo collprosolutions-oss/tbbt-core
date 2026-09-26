@@ -355,10 +355,10 @@ export function computeFormula(
       quantity: 1,
       rate: starting,
       amount: starting,
-      amountState: starting > 0 ? "ready" : "waiting",
+      amountState: amountStateForProduction(1, starting),
     });
     return {
-      recommendedAmount: roundMoney(starting),
+      recommendedAmount: starting > 0 ? roundMoney(starting) : 0,
       lines,
       estimatedLaborHours: null,
     };
@@ -380,13 +380,14 @@ export function computeFormula(
     for (const component of formula.components ?? []) {
       const quantity = quantityValue(inputs[component.quantityKey], component.unit);
       const rate = moneyOr(rates[component.rateKey], 0) ?? 0;
+      const ready = quantity > 0 && rate > 0;
       lines.push({
         key: component.key,
         label: component.name,
         quantity,
         rate,
-        amount: roundMoney(quantity * rate),
-        amountState: amountStateForQuantity(quantity),
+        amount: ready ? roundMoney(quantity * rate) : 0,
+        amountState: amountStateForProduction(quantity, rate),
       });
     }
     return {
@@ -399,21 +400,24 @@ export function computeFormula(
   const quantity = productionQuantity(formula, inputs);
   const rateKey = formula.rateKey ?? "unitRate";
   let billedRate = moneyOr(rates[rateKey], 0) ?? 0;
-  let amount = roundMoney(quantity * billedRate);
-  const amountState = amountStateForQuantity(quantity);
 
   if (formula.kind === "tier_table") {
     const tier = tierForQuantity(formula.tiers ?? [], quantity);
     billedRate = tier ? (moneyOr(rates[tier.rateKey], 0) ?? 0) : 0;
-    amount = roundMoney(quantity * billedRate);
   }
+
+  const productionReady = quantity > 0 && billedRate > 0;
+  const amount = productionReady ? roundMoney(quantity * billedRate) : 0;
+  const amountState = amountStateForProduction(quantity, billedRate);
 
   if (formula.kind === "minimum_plus_unit") {
     const minimumKey = formula.minimumKey ?? "minimumAmount";
     const minimum = moneyOr(rates[minimumKey], 0) ?? 0;
-    const productionAmount = roundMoney(quantity * billedRate);
+    const productionAmount = productionReady ? roundMoney(quantity * billedRate) : 0;
     const minimumAdjustment =
-      quantity > 0 ? roundMoney(Math.max(0, minimum - productionAmount)) : 0;
+      quantity > 0 && minimum > 0
+        ? roundMoney(Math.max(0, minimum - productionAmount))
+        : 0;
     lines.push({
       key: "production",
       label: lineLabelForKind(formula),
@@ -432,8 +436,12 @@ export function computeFormula(
         amountState: "ready",
       });
     }
+    const recommended =
+      quantity > 0 && (billedRate > 0 || minimum > 0)
+        ? roundMoney(productionAmount + minimumAdjustment)
+        : 0;
     return {
-      recommendedAmount: quantity > 0 ? roundMoney(productionAmount + minimumAdjustment) : 0,
+      recommendedAmount: recommended,
       lines,
       estimatedLaborHours: hoursFromProduction(
         quantity,
@@ -536,8 +544,11 @@ function productionRate(rates: Record<string, number>, key?: string) {
   return value != null && value > 0 ? value : null;
 }
 
-function amountStateForQuantity(quantity: number): CalculatorAmountState {
-  return quantity > 0 ? "ready" : "waiting";
+function amountStateForProduction(
+  quantity: number,
+  rate: number,
+): CalculatorAmountState {
+  return quantity > 0 && rate > 0 ? "ready" : "waiting";
 }
 
 function lineLabelForKind(formula: FormulaContract) {
