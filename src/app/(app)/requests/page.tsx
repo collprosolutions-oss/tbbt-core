@@ -156,10 +156,11 @@ export default async function RequestsPage({
     prisma.serviceRequest.findMany({
       where,
       include: {
-        customer: { select: { id: true, name: true, email: true, phone: true } },
+        customer: { select: { id: true, businessId: true, name: true, email: true, phone: true } },
         property: {
           select: {
             id: true,
+            businessId: true,
             customerId: true,
             addressLine1: true,
             addressLine2: true,
@@ -209,6 +210,7 @@ export default async function RequestsPage({
           },
         },
         estimates: {
+          where: { businessId: access.businessId },
           select: { id: true, status: true, total: true },
           orderBy: { createdAt: "asc" },
         },
@@ -320,8 +322,14 @@ export default async function RequestsPage({
       recordNavItems: buildRecordNavItems({
         origin: { kind: "request", id: request.id },
         related: {
-          customer: request.customer,
-          property: request.property,
+          customer:
+            request.customer?.businessId === access.businessId
+              ? request.customer
+              : null,
+          property:
+            request.property?.businessId === access.businessId
+              ? request.property
+              : null,
           requests: [{ id: request.id }],
           estimates: request.estimates,
         },

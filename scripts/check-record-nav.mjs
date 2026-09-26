@@ -202,8 +202,22 @@ check(
   "Resolver refuses name/amount/customer-only guessing",
   recordNavLib.includes("Never infers a link from a similar name") &&
     recordNavLib.includes("access.scope") &&
-    recordNavLib.includes("serviceRequestId") &&
-    recordNavLib.includes("estimateId"),
+    recordNavLib.includes("serviceRequest") &&
+    recordNavLib.includes("ownedByBusiness"),
+);
+check(
+  "Nested to-many hops add explicit businessId where clauses",
+  recordNavLib.includes("const tenantWhere = { businessId: access.businessId }") &&
+    recordNavLib.includes("serviceRequests: {\n            where: tenantWhere,") &&
+    recordNavLib.includes("estimates: {\n            where: tenantWhere,") &&
+    recordNavLib.includes("jobs: {\n            where: tenantWhere,") &&
+    recordNavLib.includes("invoices: {\n            where: tenantWhere,"),
+);
+check(
+  "To-one hops are used only when related.businessId matches the workspace",
+  recordNavLib.includes("ownedByBusiness") &&
+    recordNavLib.includes("row.businessId === businessId") &&
+    recordNavLib.includes("A foreign-key match alone is never the tenant boundary"),
 );
 check(
   "No schema.prisma relationship redesign in this helper",
@@ -482,6 +496,184 @@ try {
     "MEMBER does not receive forbidden financial links",
     memberJourney.length === 0 &&
       !hrefsOf(memberJourney).some((href) => href.startsWith("/invoices/") || href.startsWith("/estimates/")),
+  );
+
+  console.log("\nDB — Corrupted cross-tenant FKs are omitted");
+  const foreignRequestOnA = await prisma.serviceRequest.create({
+    data: {
+      businessId: tenantB.business.id,
+      customerId: tenantA.customer.id,
+      status: "OPEN",
+      summary: "Corrupt B request on A customer",
+    },
+  });
+  const foreignEstimateOnA = await prisma.estimate.create({
+    data: {
+      businessId: tenantB.business.id,
+      customerId: tenantA.customer.id,
+      status: "DRAFT",
+      total: new Prisma.Decimal(250),
+      publicToken: randomUUID(),
+    },
+  });
+  const foreignJobOnA = await prisma.job.create({
+    data: {
+      businessId: tenantB.business.id,
+      customerId: tenantA.customer.id,
+      status: "UNSCHEDULED",
+      projectToken: randomUUID(),
+    },
+  });
+  const foreignInvoiceOnA = await prisma.invoice.create({
+    data: {
+      businessId: tenantB.business.id,
+      customerId: tenantA.customer.id,
+      status: "DRAFT",
+      total: new Prisma.Decimal(40),
+    },
+  });
+
+  const customerAfterCorrupt = await loadRecordJourney(prisma, accessA, {
+    kind: "customer",
+    id: tenantA.customer.id,
+  });
+  check(
+    "Customer A omits a Business-B ServiceRequest that points at Customer A",
+    !idsOf(customerAfterCorrupt, "request").includes(foreignRequestOnA.id),
+  );
+  check(
+    "Customer A omits Business-B Estimate / Job / Invoice rows that point at Customer A",
+    !idsOf(customerAfterCorrupt, "estimate").includes(foreignEstimateOnA.id) &&
+      !idsOf(customerAfterCorrupt, "job").includes(foreignJobOnA.id) &&
+      !idsOf(customerAfterCorrupt, "invoice").includes(foreignInvoiceOnA.id),
+  );
+
+  const requestPointingAtB = await prisma.serviceRequest.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: tenantB.customer.id,
+      propertyId: tenantB.property.id,
+      status: "OPEN",
+      summary: "A request with B customer/property",
+    },
+  });
+  const fromCorruptRequest = await loadRecordJourney(prisma, accessA, {
+    kind: "request",
+    id: requestPointingAtB.id,
+  });
+  check(
+    "Request A omits a foreign customerId / propertyId",
+    !idsOf(fromCorruptRequest, "customer").includes(tenantB.customer.id) &&
+      !idsOf(fromCorruptRequest, "property").includes(tenantB.property.id) &&
+      fromCorruptRequest.some((item) => item.kind === "request" && item.id === requestPointingAtB.id),
+  );
+
+  const estimatePointingAtB = await prisma.estimate.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: tenantB.customer.id,
+      propertyId: tenantB.property.id,
+      serviceRequestId: tenantB.request.id,
+      status: "DRAFT",
+      total: new Prisma.Decimal(250),
+      publicToken: randomUUID(),
+    },
+  });
+  const fromCorruptEstimate = await loadRecordJourney(prisma, accessA, {
+    kind: "estimate",
+    id: estimatePointingAtB.id,
+  });
+  check(
+    "Estimate A omits foreign serviceRequest / customer / property",
+    !idsOf(fromCorruptEstimate, "request").includes(tenantB.request.id) &&
+      !idsOf(fromCorruptEstimate, "customer").includes(tenantB.customer.id) &&
+      !idsOf(fromCorruptEstimate, "property").includes(tenantB.property.id) &&
+      fromCorruptEstimate.some((item) => item.kind === "estimate" && item.id === estimatePointingAtB.id),
+  );
+
+  const jobPointingAtB = await prisma.job.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: tenantB.customer.id,
+      propertyId: tenantB.property.id,
+      estimateId: tenantB.estimate.id,
+      status: "UNSCHEDULED",
+      projectToken: randomUUID(),
+    },
+  });
+  const fromCorruptJob = await loadRecordJourney(prisma, accessA, {
+    kind: "job",
+    id: jobPointingAtB.id,
+  });
+  check(
+    "Job A omits foreign estimate / customer / property",
+    !idsOf(fromCorruptJob, "estimate").includes(tenantB.estimate.id) &&
+      !idsOf(fromCorruptJob, "customer").includes(tenantB.customer.id) &&
+      !idsOf(fromCorruptJob, "property").includes(tenantB.property.id) &&
+      fromCorruptJob.some((item) => item.kind === "job" && item.id === jobPointingAtB.id),
+  );
+
+  const invoicePointingAtB = await prisma.invoice.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: tenantB.customer.id,
+      jobId: tenantB.job.id,
+      status: "DRAFT",
+      total: new Prisma.Decimal(15),
+    },
+  });
+  const fromCorruptInvoice = await loadRecordJourney(prisma, accessA, {
+    kind: "invoice",
+    id: invoicePointingAtB.id,
+  });
+  check(
+    "Invoice A omits foreign job / customer",
+    !idsOf(fromCorruptInvoice, "job").includes(tenantB.job.id) &&
+      !idsOf(fromCorruptInvoice, "customer").includes(tenantB.customer.id) &&
+      !idsOf(fromCorruptInvoice, "estimate").includes(tenantB.estimate.id) &&
+      fromCorruptInvoice.some((item) => item.kind === "invoice" && item.id === invoicePointingAtB.id),
+  );
+
+  const sameTenantAfterCorrupt = await loadRecordJourney(prisma, accessA, {
+    kind: "job",
+    id: tenantA.job.id,
+  });
+  check(
+    "Normal same-tenant chain still shows Customer → Request → Estimate → Job → Invoice",
+    idsOf(sameTenantAfterCorrupt, "customer")[0] === tenantA.customer.id &&
+      idsOf(sameTenantAfterCorrupt, "request")[0] === tenantA.request.id &&
+      idsOf(sameTenantAfterCorrupt, "estimate")[0] === tenantA.estimate.id &&
+      idsOf(sameTenantAfterCorrupt, "job")[0] === tenantA.job.id &&
+      idsOf(sameTenantAfterCorrupt, "invoice").includes(tenantA.invoice.id),
+  );
+  check(
+    "Existing tenant-B-origin top-level lookup remains empty for tenant A",
+    (await loadRecordJourney(prisma, accessA, { kind: "job", id: tenantB.job.id })).length === 0,
+  );
+
+  const leakedAfterCorrupt = [
+    ...customerAfterCorrupt,
+    ...fromCorruptRequest,
+    ...fromCorruptEstimate,
+    ...fromCorruptJob,
+    ...fromCorruptInvoice,
+    ...sameTenantAfterCorrupt,
+  ];
+  check(
+    "No corrupted hop exposes a tenant-B href or id",
+    !leakedAfterCorrupt.some(
+      (item) =>
+        item.id === tenantB.customer.id ||
+        item.id === tenantB.property.id ||
+        item.id === tenantB.request.id ||
+        item.id === tenantB.estimate.id ||
+        item.id === tenantB.job.id ||
+        item.id === tenantB.invoice.id ||
+        item.id === foreignRequestOnA.id ||
+        item.id === foreignEstimateOnA.id ||
+        item.id === foreignJobOnA.id ||
+        item.id === foreignInvoiceOnA.id,
+    ),
   );
 
   console.log("\nSTATIC — Existing record routes still exist");

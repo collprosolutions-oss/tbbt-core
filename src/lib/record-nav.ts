@@ -5,10 +5,14 @@
  * Never infers a link from a similar name, similar amount, or a shared
  * customer. If a relationship is missing, it is omitted.
  *
- * Tenant scope is applied by the loader (`access.scope`). Authorization
- * is applied when items are built: MEMBER never receives management
- * financial hrefs, and estimate/invoice links require the matching
- * capability.
+ * Tenant scope is applied at every hop. The origin uses `access.scope`.
+ * Nested to-many relations add `where: { businessId }`. Nested to-one
+ * relations are used only when `related.businessId === access.businessId`.
+ * A foreign-key match alone is never the tenant boundary.
+ *
+ * Authorization is applied when items are built: MEMBER never receives
+ * management financial hrefs, and estimate/invoice links require the
+ * matching capability.
  */
 import type { MembershipRole } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
@@ -205,6 +209,43 @@ function emptyRelated(): RecordNavRelated {
   return {};
 }
 
+function ownedByBusiness<T extends { businessId: string }>(
+  row: T | null | undefined,
+  businessId: string,
+): T | null {
+  return row && row.businessId === businessId ? row : null;
+}
+
+function projectProperty(
+  property:
+    | {
+        id: string;
+        businessId: string;
+        customerId?: string | null;
+        addressLine1?: string | null;
+        addressLine2?: string | null;
+        city?: string | null;
+        region?: string | null;
+        postalCode?: string | null;
+      }
+    | null
+    | undefined,
+  businessId: string,
+  ownedCustomerId?: string | null,
+) {
+  const owned = ownedByBusiness(property, businessId);
+  if (!owned) return null;
+  return {
+    id: owned.id,
+    customerId: ownedCustomerId ?? null,
+    addressLine1: owned.addressLine1,
+    addressLine2: owned.addressLine2,
+    city: owned.city,
+    region: owned.region,
+    postalCode: owned.postalCode,
+  };
+}
+
 export async function loadRecordJourney(
   db: PrismaClient,
   access: RecordNavAccess,
@@ -224,8 +265,10 @@ async function loadRecordNavRelated(
   access: RecordNavAccess,
   origin: RecordNavOrigin,
 ): Promise<RecordNavRelated | null> {
+  const tenantWhere = { businessId: access.businessId };
   const propertySelect = {
     id: true,
+    businessId: true,
     customerId: true,
     addressLine1: true,
     addressLine2: true,
@@ -233,6 +276,7 @@ async function loadRecordNavRelated(
     region: true,
     postalCode: true,
   } as const;
+  const customerSelect = { id: true, businessId: true, name: true } as const;
   const invoiceSelect = {
     id: true,
     kind: true,
@@ -246,10 +290,23 @@ async function loadRecordNavRelated(
         select: {
           id: true,
           name: true,
-          serviceRequests: { select: { id: true }, orderBy: { createdAt: "asc" } },
-          estimates: { select: { id: true }, orderBy: { createdAt: "asc" } },
-          jobs: { select: { id: true }, orderBy: { createdAt: "asc" } },
+          serviceRequests: {
+            where: tenantWhere,
+            select: { id: true },
+            orderBy: { createdAt: "asc" },
+          },
+          estimates: {
+            where: tenantWhere,
+            select: { id: true },
+            orderBy: { createdAt: "asc" },
+          },
+          jobs: {
+            where: tenantWhere,
+            select: { id: true },
+            orderBy: { createdAt: "asc" },
+          },
           invoices: {
+            where: tenantWhere,
             select: invoiceSelect,
             orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           },
@@ -269,15 +326,20 @@ async function loadRecordNavRelated(
         where: { id: origin.id, ...access.scope },
         select: {
           id: true,
-          customer: { select: { id: true, name: true } },
+          customer: { select: customerSelect },
           property: { select: propertySelect },
-          estimates: { select: { id: true }, orderBy: { createdAt: "asc" } },
+          estimates: {
+            where: tenantWhere,
+            select: { id: true },
+            orderBy: { createdAt: "asc" },
+          },
         },
       });
       if (!request) return null;
+      const customer = ownedByBusiness(request.customer, access.businessId);
       return {
-        customer: request.customer,
-        property: request.property,
+        customer: customer ? { id: customer.id, name: customer.name } : null,
+        property: projectProperty(request.property, access.businessId, customer?.id),
         requests: [{ id: request.id }],
         estimates: request.estimates,
       };
@@ -287,13 +349,15 @@ async function loadRecordNavRelated(
         where: { id: origin.id, ...access.scope },
         select: {
           id: true,
-          customer: { select: { id: true, name: true } },
+          customer: { select: customerSelect },
           property: { select: propertySelect },
-          serviceRequest: { select: { id: true } },
+          serviceRequest: { select: { id: true, businessId: true } },
           jobs: {
+            where: tenantWhere,
             select: {
               id: true,
               invoices: {
+                where: tenantWhere,
                 select: invoiceSelect,
                 orderBy: [{ createdAt: "asc" }, { id: "asc" }],
               },
@@ -303,10 +367,12 @@ async function loadRecordNavRelated(
         },
       });
       if (!estimate) return null;
+      const customer = ownedByBusiness(estimate.customer, access.businessId);
+      const request = ownedByBusiness(estimate.serviceRequest, access.businessId);
       return {
-        customer: estimate.customer,
-        property: estimate.property,
-        requests: estimate.serviceRequest ? [estimate.serviceRequest] : [],
+        customer: customer ? { id: customer.id, name: customer.name } : null,
+        property: projectProperty(estimate.property, access.businessId, customer?.id),
+        requests: request ? [{ id: request.id }] : [],
         estimates: [{ id: estimate.id }],
         jobs: estimate.jobs,
         invoices: estimate.jobs.flatMap((job) => job.invoices),
@@ -317,23 +383,31 @@ async function loadRecordNavRelated(
         where: { id: origin.id, ...access.scope },
         select: {
           id: true,
-          customer: { select: { id: true, name: true } },
+          customer: { select: customerSelect },
           property: { select: propertySelect },
-          estimate: { select: { id: true, serviceRequestId: true } },
+          estimate: {
+            select: {
+              id: true,
+              businessId: true,
+              serviceRequest: { select: { id: true, businessId: true } },
+            },
+          },
           invoices: {
+            where: tenantWhere,
             select: invoiceSelect,
             orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           },
         },
       });
       if (!job) return null;
+      const customer = ownedByBusiness(job.customer, access.businessId);
+      const estimate = ownedByBusiness(job.estimate, access.businessId);
+      const request = ownedByBusiness(estimate?.serviceRequest, access.businessId);
       return {
-        customer: job.customer,
-        property: job.property,
-        requests: job.estimate?.serviceRequestId
-          ? [{ id: job.estimate.serviceRequestId }]
-          : [],
-        estimates: job.estimate ? [{ id: job.estimate.id }] : [],
+        customer: customer ? { id: customer.id, name: customer.name } : null,
+        property: projectProperty(job.property, access.businessId, customer?.id),
+        requests: request ? [{ id: request.id }] : [],
+        estimates: estimate ? [{ id: estimate.id }] : [],
         jobs: [{ id: job.id }],
         invoices: job.invoices,
       };
@@ -345,15 +419,24 @@ async function loadRecordNavRelated(
           id: true,
           kind: true,
           createdAt: true,
-          customer: { select: { id: true, name: true } },
-          job: { select: { id: true, estimateId: true } },
+          customer: { select: customerSelect },
+          job: {
+            select: {
+              id: true,
+              businessId: true,
+              estimate: { select: { id: true, businessId: true } },
+            },
+          },
         },
       });
       if (!invoice) return null;
+      const customer = ownedByBusiness(invoice.customer, access.businessId);
+      const job = ownedByBusiness(invoice.job, access.businessId);
+      const estimate = ownedByBusiness(job?.estimate, access.businessId);
       return {
-        customer: invoice.customer,
-        estimates: invoice.job?.estimateId ? [{ id: invoice.job.estimateId }] : [],
-        jobs: invoice.job ? [{ id: invoice.job.id }] : [],
+        customer: customer ? { id: customer.id, name: customer.name } : null,
+        estimates: estimate ? [{ id: estimate.id }] : [],
+        jobs: job ? [{ id: job.id }] : [],
         invoices: [invoice],
       };
     }
