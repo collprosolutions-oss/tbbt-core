@@ -20,6 +20,7 @@ const {
   DEFAULT_MANAGED_STORAGE_LIMIT_BYTES,
   MemoryStorageProvider,
   StorageAccessError,
+  StorageError,
   StorageQuotaError,
   assertKeyBelongsToBusiness,
   buildBusinessStorageKey,
@@ -483,6 +484,11 @@ try {
       serviceSrc.includes("bestEffortCleanupOwnedObject") &&
       serviceSrc.includes("Provider resolution and delete are both best-effort after DB commit.") &&
       serviceSrc.includes("One provider delete failure must not block the rest of the expired set."));
+  check("Finalize claims PENDING atomically before READY accounting",
+    serviceSrc.includes('id: asset.id,\n        businessId,\n        status: "PENDING"') &&
+      serviceSrc.includes("claimed.count === 1") &&
+      serviceSrc.includes('if (current?.status === "READY") return current') &&
+      serviceSrc.includes('throw new StorageError("That upload is no longer pending.")'));
 
   const abortTracker = trackDeletes(provider);
   const abortDeps = { ...deps, provider: abortTracker.provider };
@@ -863,6 +869,186 @@ try {
       resolveAfter.reserved === resolveBefore.reserved &&
       resolveAfter.used === resolveBefore.used &&
       resolveAfter.reserved >= 0);
+
+  const readyFinalizeBefore = await accountSnapshot(businessA.id);
+  const readyFinalize = await finalizeManagedUpload(deps, businessA.id, privateAsset.id);
+  const readyFinalizeAfter = await accountSnapshot(businessA.id);
+  check("READY finalize is idempotent and does not change accounting",
+    readyFinalize.status === "READY" &&
+      readyFinalize.id === privateAsset.id &&
+      readyFinalizeAfter.reserved === readyFinalizeBefore.reserved &&
+      readyFinalizeAfter.used === readyFinalizeBefore.used);
+
+  const vsAbortTracker = trackDeletes(provider);
+  const vsAbortDeps = { ...deps, provider: vsAbortTracker.provider };
+  const vsAbortBefore = await accountSnapshot(businessA.id);
+  const vsAbortPending = await authorizeManagedUpload(vsAbortDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "finalize-vs-abort",
+    originalFilename: "finalize-vs-abort.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+    visibility: "PRIVATE",
+  });
+  await vsAbortTracker.provider.putObject({
+    bucket: vsAbortPending.account.bucketName,
+    key: vsAbortPending.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  const [vsAbortFinalize, vsAbortAbort] = await Promise.allSettled([
+    finalizeManagedUpload(vsAbortDeps, businessA.id, vsAbortPending.asset.id),
+    abortManagedUpload(vsAbortDeps, businessA.id, vsAbortPending.asset.id),
+  ]);
+  const vsAbortRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: vsAbortPending.asset.id },
+  });
+  const vsAbortAfter = await accountSnapshot(businessA.id);
+  const vsAbortDeletes = vsAbortTracker.deletes.filter(
+    (row) => row.key === vsAbortPending.asset.storageKey,
+  );
+  const vsAbortExists = await vsAbortTracker.provider.objectExists({
+    bucket: vsAbortPending.account.bucketName,
+    key: vsAbortPending.asset.storageKey,
+  });
+  const finalizeWonAbortRace =
+    vsAbortRow.status === "READY" &&
+    vsAbortFinalize.status === "fulfilled" &&
+    vsAbortFinalize.value.status === "READY" &&
+    vsAbortAbort.status === "fulfilled" &&
+    vsAbortAbort.value.status === "READY" &&
+    vsAbortAfter.reserved === vsAbortBefore.reserved &&
+    vsAbortAfter.used === vsAbortBefore.used + jpeg.byteLength &&
+    vsAbortDeletes.length === 0 &&
+    vsAbortExists;
+  const abortWonFinalizeRace =
+    vsAbortRow.status === "FAILED" &&
+    vsAbortFinalize.status === "rejected" &&
+    vsAbortFinalize.reason instanceof StorageError &&
+    vsAbortAbort.status === "fulfilled" &&
+    vsAbortAbort.value.status === "FAILED" &&
+    vsAbortAfter.reserved === vsAbortBefore.reserved &&
+    vsAbortAfter.used === vsAbortBefore.used &&
+    vsAbortDeletes.length === 1 &&
+    !vsAbortExists;
+  check("Finalize vs abort has one PENDING terminal owner and one accounting path",
+    (finalizeWonAbortRace || abortWonFinalizeRace) &&
+      vsAbortAfter.reserved >= 0 &&
+      vsAbortRow.status !== "PENDING" &&
+      !(vsAbortRow.status === "READY" && !vsAbortExists));
+
+  const vsFinalizeTracker = trackDeletes(provider);
+  const vsFinalizeDeps = { ...deps, provider: vsFinalizeTracker.provider };
+  const vsFinalizeBefore = await accountSnapshot(businessA.id);
+  const vsFinalizePending = await authorizeManagedUpload(vsFinalizeDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "finalize-vs-finalize",
+    originalFilename: "finalize-vs-finalize.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+    visibility: "PRIVATE",
+  });
+  await vsFinalizeTracker.provider.putObject({
+    bucket: vsFinalizePending.account.bucketName,
+    key: vsFinalizePending.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  const [finalizeOne, finalizeTwo] = await Promise.all([
+    finalizeManagedUpload(vsFinalizeDeps, businessA.id, vsFinalizePending.asset.id),
+    finalizeManagedUpload(vsFinalizeDeps, businessA.id, vsFinalizePending.asset.id),
+  ]);
+  const vsFinalizeRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: vsFinalizePending.asset.id },
+  });
+  const vsFinalizeAfter = await accountSnapshot(businessA.id);
+  const vsFinalizeDeletes = vsFinalizeTracker.deletes.filter(
+    (row) => row.key === vsFinalizePending.asset.storageKey,
+  );
+  check("Simultaneous finalize claims PENDING once and accounts once",
+    finalizeOne.status === "READY" &&
+      finalizeTwo.status === "READY" &&
+      vsFinalizeRow.status === "READY" &&
+      vsFinalizeAfter.reserved === vsFinalizeBefore.reserved &&
+      vsFinalizeAfter.used === vsFinalizeBefore.used + jpeg.byteLength &&
+      vsFinalizeAfter.reserved >= 0 &&
+      vsFinalizeDeletes.length === 0 &&
+      await vsFinalizeTracker.provider.objectExists({
+        bucket: vsFinalizePending.account.bucketName,
+        key: vsFinalizePending.asset.storageKey,
+      }));
+
+  const vsExpiryTracker = trackDeletes(provider);
+  const vsExpiryDeps = { ...deps, provider: vsExpiryTracker.provider };
+  const vsExpiryBefore = await accountSnapshot(businessA.id);
+  const vsExpiryPending = await authorizeManagedUpload(vsExpiryDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "finalize-vs-expiry",
+    originalFilename: "finalize-vs-expiry.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: 40,
+    visibility: "PRIVATE",
+  });
+  await vsExpiryTracker.provider.putObject({
+    bucket: vsExpiryPending.account.bucketName,
+    key: vsExpiryPending.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  await prisma.storedAsset.update({
+    where: { id: vsExpiryPending.asset.id },
+    data: { expiresAt: new Date(Date.now() - 60_000) },
+  });
+  const [vsExpiryFinalize, vsExpiryAuthorize] = await Promise.allSettled([
+    finalizeManagedUpload(vsExpiryDeps, businessA.id, vsExpiryPending.asset.id),
+    authorizeManagedUpload(vsExpiryDeps, businessA.id, {
+      category: "DOCUMENT",
+      purpose: "after-finalize-expiry",
+      originalFilename: "after-finalize-expiry.jpg",
+      mimeType: "image/jpeg",
+      fileSizeBytes: 12,
+      visibility: "PRIVATE",
+    }),
+  ]);
+  const vsExpiryRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: vsExpiryPending.asset.id },
+  });
+  const vsExpiryAfter = await accountSnapshot(businessA.id);
+  const vsExpiryDeletes = vsExpiryTracker.deletes.filter(
+    (row) => row.key === vsExpiryPending.asset.storageKey,
+  );
+  const vsExpiryExists = await vsExpiryTracker.provider.objectExists({
+    bucket: vsExpiryPending.account.bucketName,
+    key: vsExpiryPending.asset.storageKey,
+  });
+  const authorizeAfterExpiry =
+    vsExpiryAuthorize.status === "fulfilled" ? vsExpiryAuthorize.value : null;
+  const finalizeWonExpiryRace =
+    vsExpiryRow.status === "READY" &&
+    vsExpiryFinalize.status === "fulfilled" &&
+    vsExpiryFinalize.value.status === "READY" &&
+    authorizeAfterExpiry?.asset.status === "PENDING" &&
+    vsExpiryAfter.used === vsExpiryBefore.used + jpeg.byteLength &&
+    vsExpiryAfter.reserved === vsExpiryBefore.reserved + 12 &&
+    vsExpiryDeletes.length === 0 &&
+    vsExpiryExists;
+  const expiryWonFinalizeRace =
+    vsExpiryRow.status === "FAILED" &&
+    vsExpiryFinalize.status === "rejected" &&
+    vsExpiryFinalize.reason instanceof StorageError &&
+    authorizeAfterExpiry?.asset.status === "PENDING" &&
+    vsExpiryAfter.used === vsExpiryBefore.used &&
+    vsExpiryAfter.reserved === vsExpiryBefore.reserved + 12 &&
+    vsExpiryDeletes.length === 1 &&
+    !vsExpiryExists;
+  check("Finalize vs expiry has one PENDING terminal owner and one accounting path",
+    (finalizeWonExpiryRace || expiryWonFinalizeRace) &&
+      vsExpiryAfter.reserved >= 0 &&
+      vsExpiryRow.status !== "PENDING" &&
+      !(vsExpiryRow.status === "READY" && !vsExpiryExists));
+  if (authorizeAfterExpiry?.asset.id) {
+    await abortManagedUpload(vsExpiryDeps, businessA.id, authorizeAfterExpiry.asset.id);
+  }
 } finally {
   await prisma.$disconnect();
   spawnSync("psql", [baseUrl, "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE);`], {

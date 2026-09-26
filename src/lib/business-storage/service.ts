@@ -385,8 +385,12 @@ export async function finalizeManagedUpload(
   const actual = meta.sizeBytes;
 
   return deps.db.$transaction(async (tx) => {
-    const updated = await tx.storedAsset.update({
-      where: { id: asset.id },
+    const claimed = await tx.storedAsset.updateMany({
+      where: {
+        id: asset.id,
+        businessId,
+        status: "PENDING",
+      },
       data: {
         status: "READY",
         fileSizeBytes: actual,
@@ -396,14 +400,23 @@ export async function finalizeManagedUpload(
         updatedAt: now,
       },
     });
-    await tx.businessStorageAccount.update({
-      where: { id: asset.storageAccountId },
-      data: {
-        storageReservedBytes: { decrement: reserved },
-        storageUsedBytes: { increment: actual },
-      },
+    if (claimed.count === 1) {
+      await tx.businessStorageAccount.update({
+        where: { id: asset.storageAccountId },
+        data: {
+          storageReservedBytes: { decrement: reserved },
+          storageUsedBytes: { increment: actual },
+        },
+      });
+      return tx.storedAsset.findFirstOrThrow({
+        where: { id: asset.id, businessId },
+      });
+    }
+    const current = await tx.storedAsset.findFirst({
+      where: { id: asset.id, businessId },
     });
-    return updated;
+    if (current?.status === "READY") return current;
+    throw new StorageError("That upload is no longer pending.");
   });
 }
 
