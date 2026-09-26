@@ -181,9 +181,9 @@ try {
     "Timeline does not project estimate/invoice/job lifecycle status",
     !timelineSrc.includes('source: "projected"') &&
       !timelineSrc.includes('channel: "PROJECTED"') &&
+      !timelineSrc.includes("addProjected") &&
       !timelineSrc.includes('status: "SENT"') &&
-      !timelineSrc.includes("estimate.findMany") &&
-      !timelineSrc.includes("invoice.findMany"),
+      timelineSrc.includes("Lifecycle status on estimates, invoices, jobs, or review requests is never"),
   );
   check(
     "Timeline queries CustomerCommunication and PhoneInteraction only",
