@@ -25,7 +25,7 @@ import { createRequire } from "node:module";
 import { register } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 // src/lib/schedule.ts imports src/lib/job-schedule.ts via this repo's
 // "@/lib/job-schedule" TypeScript path alias (deliberately, so the
@@ -242,6 +242,101 @@ check(
   ![...grouped.values()].some((jobs) => jobs.some((j) => j.id === "w")),
 );
 
+console.log("\n#137 — business timezone behavior unchanged");
+const NY = "America/New_York";
+const eightPmSep19Ny = new Date("2026-09-20T00:00:00.000Z");
+const nyMidnightSep20 = new Date("2026-09-20T04:00:00.000Z");
+const byNyDay = groupJobsByDay(
+  [
+    { id: "ny-evening", scheduledAt: eightPmSep19Ny },
+    { id: "ny-morning", scheduledAt: nyMidnightSep20 },
+  ],
+  NY,
+);
+check(
+  "A job at 8 PM NY groups onto Sep 19, not the UTC date",
+  (byNyDay.get("2026-09-19") ?? []).some((job) => job.id === "ny-evening") &&
+    !(byNyDay.get("2026-09-20") ?? []).some((job) => job.id === "ny-evening"),
+);
+check(
+  "A job at NY midnight Sep 20 groups onto Sep 20",
+  (byNyDay.get("2026-09-20") ?? []).some((job) => job.id === "ny-morning"),
+);
+check(
+  "parseScheduleDate('2026-09-19', NY) is NY midnight, not UTC midnight",
+  formatISODate(parseScheduleDate("2026-09-19", NY), NY) === "2026-09-19" &&
+    parseScheduleDate("2026-09-19", NY).toISOString() === "2026-09-19T04:00:00.000Z",
+);
+check(
+  "UTC midnight does NOT prematurely advance the New York business date",
+  formatISODate(eightPmSep19Ny, NY) === "2026-09-19",
+);
+
+console.log("\nSTATIC — Calendar assignment display uses SCHEDULE_JOB_SELECT only");
+const scheduleLibSrc = readFileSync(new URL("../src/lib/schedule.ts", import.meta.url), "utf8");
+const jobsPageSrc = readFileSync(new URL("../src/app/(app)/jobs/page.tsx", import.meta.url), "utf8");
+const rowSrc = readFileSync(new URL("../src/components/schedule/job-schedule-row.tsx", import.meta.url), "utf8");
+const pillSrc = readFileSync(new URL("../src/components/schedule/job-pill.tsx", import.meta.url), "utf8");
+const panelSrc = readFileSync(new URL("../src/components/schedule/unscheduled-jobs-panel.tsx", import.meta.url), "utf8");
+const crewViewSrc = readFileSync(new URL("../src/components/schedule/crew-view.tsx", import.meta.url), "utf8");
+
+check(
+  "SCHEDULE_JOB_SELECT remains the canonical ScheduleJob select and includes assignedMembership.user.name",
+  scheduleLibSrc.includes("export const SCHEDULE_JOB_SELECT") &&
+    scheduleLibSrc.includes("assignedMembership:") &&
+    scheduleLibSrc.includes("user: { select: { name: true } }"),
+);
+check(
+  "Jobs page calendar queries still use select: SCHEDULE_JOB_SELECT (no second assignment query)",
+  jobsPageSrc.includes("select: SCHEDULE_JOB_SELECT") &&
+    (jobsPageSrc.match(/select: SCHEDULE_JOB_SELECT/g) ?? []).length >= 4,
+);
+check(
+  "JobScheduleRow displays recorded assignedMembership only (Assigned: name or Unassigned)",
+  rowSrc.includes("job.assignedMembership") &&
+    rowSrc.includes("Assigned: ") &&
+    rowSrc.includes('"Unassigned"') &&
+    !rowSrc.includes("prisma") &&
+    !rowSrc.includes("assignedMembershipId") &&
+    !rowSrc.includes("membership.find"),
+);
+check(
+  "Month JobPill title/accessibility and visible indicator use recorded assignedMembership only",
+  pillSrc.includes("job.assignedMembership") &&
+    pillSrc.includes("aria-label={title}") &&
+    pillSrc.includes("title={title}") &&
+    pillSrc.includes("Assigned: ") &&
+    pillSrc.includes('"Unassigned"') &&
+    !pillSrc.includes("prisma") &&
+    !pillSrc.includes("assignedMembershipId") &&
+    !pillSrc.includes("membership.find"),
+);
+check(
+  "Unscheduled overflow href preserves List view + UNSCHEDULED status",
+  panelSrc.includes('href="/jobs?view=list&status=unscheduled"') &&
+    panelSrc.includes("See all in List view") &&
+    panelSrc.includes("view=list") &&
+    panelSrc.includes("status=unscheduled") &&
+    !panelSrc.includes('href="/jobs?view=list"\n') &&
+    !panelSrc.includes("href=\"/jobs?view=list\">"),
+);
+check(
+  "Crew view grouping remains groupJobsByAssignedMember(assignedMembership) — no second crew system",
+  crewViewSrc.includes("groupJobsByAssignedMember") &&
+    crewViewSrc.includes("JobScheduleRow") &&
+    !crewViewSrc.includes("prisma.") &&
+    !crewViewSrc.includes("membership.findMany") &&
+    !crewViewSrc.includes("from \"@/lib/prisma\""),
+);
+check(
+  "Owned schedule display files introduce no second membership query",
+  !rowSrc.includes("findMany") &&
+    !pillSrc.includes("findMany") &&
+    !panelSrc.includes("findMany") &&
+    !rowSrc.includes("from \"@/lib/workforce") &&
+    !pillSrc.includes("from \"@/lib/workforce"),
+);
+
 // --- 2. Prisma-level + HTTP checks (requires the built app) -------------
 
 const baseUrl = process.env.DATABASE_URL;
@@ -331,6 +426,20 @@ async function fetchRaw(session, path) {
   });
   const body = await res.text().catch(() => "");
   return { status: res.status, location: res.headers.get("location"), body };
+}
+
+function jobRowHtml(body, jobId) {
+  const href = `href="/jobs/${jobId}"`;
+  const hrefAt = body.indexOf(href);
+  if (hrefAt === -1) {
+    return "";
+  }
+  const start = body.lastIndexOf("<a", hrefAt);
+  const end = body.indexOf("</a>", hrefAt);
+  if (start === -1 || end === -1) {
+    return "";
+  }
+  return body.slice(start, end);
 }
 
 let serverProcess;
@@ -694,6 +803,77 @@ try {
     !crewViewAfter.body.includes(`/jobs/${nextMonthJob.id}`),
   );
 
+  console.log("\nASSIGNMENT DISPLAY — recorded assignedMembership is visible in Month / Week / Day");
+  const weekJobDayIso = formatISODate(
+    new Date(weekRangeResult.start.getTime() + 2 * 24 * 60 * 60 * 1000),
+  );
+  const assignedWeekView = await fetchRaw(ownerSession, `/jobs?view=week&date=${formatISODate(weekAnchor)}`);
+  const assignedDayView = await fetchRaw(ownerSession, `/jobs?view=day&date=${weekJobDayIso}`);
+  const assignedMonthView = await fetchRaw(ownerSession, `/jobs?view=month&date=${anchorIso}`);
+  const assignedWeekRow = jobRowHtml(assignedWeekView.body, weekJob.id);
+  const assignedDayRow = jobRowHtml(assignedDayView.body, weekJob.id);
+  const assignedMonthPill = jobRowHtml(assignedMonthView.body, weekJob.id);
+  const unassignedDayRow = jobRowHtml(
+    (await fetchRaw(ownerSession, `/jobs?view=day&date=${rescheduledIso}`)).body,
+    unscheduledJob.id,
+  );
+  check(
+    "Assigned ScheduleJob row displays the recorded member name (Week view)",
+    assignedWeekRow.includes(`Assigned: ${memberUser.name}`),
+  );
+  check(
+    "Assigned ScheduleJob row displays the recorded member name (Day view)",
+    assignedDayRow.includes(`Assigned: ${memberUser.name}`),
+  );
+  check(
+    "Unassigned row displays Unassigned (not a fabricated worker)",
+    unassignedDayRow.includes("Unassigned") && !unassignedDayRow.includes("Assigned:"),
+  );
+  check(
+    "Month pill accessibility/title carries assignment truth",
+    assignedMonthPill.includes(`title="`) &&
+      assignedMonthPill.includes(`Assigned: ${memberUser.name}`) &&
+      assignedMonthPill.includes("aria-label="),
+  );
+  check(
+    "Month visible assignment indicator is present (recorded member name, not color-only)",
+    assignedMonthPill.replace(/<a\b[^>]*>/, "").includes(memberUser.name),
+  );
+
+  const adminMembership = await prisma.membership.findFirstOrThrow({
+    where: { userId: adminUser.id, businessId: businessA.id },
+  });
+  await prisma.job.update({
+    where: { id: laterJob.id },
+    data: { assignedMembershipId: adminMembership.id },
+  });
+  const distinctDayView = await fetchRaw(ownerSession, `/jobs?view=day&date=${chronoDayIso}`);
+  const laterAssignedRow = jobRowHtml(distinctDayView.body, laterJob.id);
+  const earlierUnassignedRow = jobRowHtml(distinctDayView.body, earlierJob.id);
+  const distinctCrewView = await fetchRaw(ownerSession, `/jobs?view=crew&date=${anchorIso}`);
+  check(
+    "Different recorded assigned members remain distinct in Day rows",
+    laterAssignedRow.includes(`Assigned: ${adminUser.name}`) &&
+      !laterAssignedRow.includes(`Assigned: ${memberUser.name}`) &&
+      jobRowHtml(assignedWeekView.body, weekJob.id).includes(`Assigned: ${memberUser.name}`) &&
+      !jobRowHtml(assignedWeekView.body, weekJob.id).includes(`Assigned: ${adminUser.name}`),
+  );
+  check(
+    "Same-day unassigned job still displays Unassigned next to a distinctly assigned job",
+    earlierUnassignedRow.includes("Unassigned") &&
+      !earlierUnassignedRow.includes(`Assigned: ${adminUser.name}`) &&
+      !earlierUnassignedRow.includes(`Assigned: ${memberUser.name}`),
+  );
+  check(
+    "Crew grouping remains based on canonical assignedMembership after a second assignment",
+    distinctCrewView.body.includes(memberUser.name) &&
+      distinctCrewView.body.includes(adminUser.name) &&
+      distinctCrewView.body.indexOf(adminUser.name) < distinctCrewView.body.indexOf(`/jobs/${laterJob.id}`) &&
+      distinctCrewView.body.indexOf(memberUser.name) < distinctCrewView.body.indexOf(`/jobs/${weekJob.id}`) &&
+      distinctCrewView.body.indexOf(`/jobs/${weekJob.id}`) < distinctCrewView.body.indexOf("Unassigned") &&
+      distinctCrewView.body.indexOf(`/jobs/${laterJob.id}`) < distinctCrewView.body.indexOf("Unassigned"),
+  );
+
   console.log("\nTEST 17 (HTTP) — Conflict UI only appears where the underlying data really overlaps");
   const overlapBase = new Date(2026, 7, 18, 9, 0, 0);
   const overlapJob1 = await prisma.job.create({
@@ -730,14 +910,6 @@ try {
     },
   });
   const overlapDayView = await fetchRaw(ownerSession, `/jobs?view=day&date=2026-08-18`);
-  function jobRowHtml(body, jobId) {
-    const start = body.indexOf(`href="/jobs/${jobId}"`);
-    if (start === -1) {
-      return "";
-    }
-    const end = body.indexOf("</a>", start);
-    return end === -1 ? "" : body.slice(start, end);
-  }
   check(
     "Job 1 (9:00-10:30) really overlaps Job 2 (9:30-10:30) -> its own row is flagged",
     jobRowHtml(overlapDayView.body, overlapJob1.id).includes("Possible scheduling conflict"),

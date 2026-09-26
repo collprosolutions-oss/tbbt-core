@@ -90,7 +90,7 @@ export function UnscheduledJobsPanel({
               <p className="text-xs text-muted-foreground">
                 Showing {jobs.length} of {totalCount} unscheduled jobs.{" "}
                 <Link
-                  href="/jobs?view=list"
+                  href="/jobs?view=list&status=unscheduled"
                   className="underline underline-offset-4"
                 >
                   See all in List view
