@@ -59,7 +59,8 @@ check(
   !helper.includes("geocode") &&
     !helper.includes("latitude") &&
     !helper.includes("longitude") &&
-    helper.includes("Do not require a paid Maps API"),
+    helper.includes("paid Maps API") &&
+    helper.includes("/maps/search"),
 );
 
 console.log("\nSTATIC — Property item Directions + Edit");
