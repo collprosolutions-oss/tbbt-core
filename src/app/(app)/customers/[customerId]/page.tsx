@@ -20,7 +20,10 @@ import { CustomerCommunicationsCard } from "@/components/customers/communication
 import { requireManagementPageAccess } from "@/lib/access";
 import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
-import { loadCustomerCommunicationTimeline } from "@/lib/communications/timeline";
+import {
+  emptyCustomerCommunicationHistory,
+  loadCustomerCommunicationHistory,
+} from "@/lib/communications/timeline";
 import { customerInvoiceHistoryContext } from "@/lib/customer-invoice-history";
 import { requestNotesText } from "@/lib/work-area-intake";
 import { formatAddress, formatDate, formatDateTime, formatMoney } from "@/lib/format";
@@ -63,8 +66,8 @@ export default async function CustomerProfilePage({
   });
 
   const communications = roleHasCapability(access.workspace.role, CAPABILITIES.MANAGE_COMMUNICATIONS)
-    ? await loadCustomerCommunicationTimeline(prisma, access, { customerId: customer.id })
-    : [];
+    ? await loadCustomerCommunicationHistory(prisma, access, { customerId: customer.id })
+    : emptyCustomerCommunicationHistory(access.businessId, customer.id, timeZone);
 
   return (
     <PageContainer>
@@ -263,7 +266,12 @@ export default async function CustomerProfilePage({
       </Card>
 
       {roleHasCapability(access.workspace.role, CAPABILITIES.MANAGE_COMMUNICATIONS) ? (
-        <CustomerCommunicationsCard customerId={customer.id} items={communications} />
+        <CustomerCommunicationsCard
+          customerId={customer.id}
+          items={communications.items}
+          summary={communications.summary}
+          timeZone={communications.timeZone}
+        />
       ) : null}
 
       <Card>

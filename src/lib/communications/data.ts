@@ -3,7 +3,8 @@ import { ensureDefaultAutomationRules } from "@/lib/automation/rules";
 import { evaluateComposeChannelEligibility } from "@/lib/communications/consent";
 import type { CommunicationAccess } from "@/lib/communications/engine";
 import { getReceptionistReadiness } from "@/lib/communications/receptionist";
-import { loadCustomerCommunicationTimeline } from "@/lib/communications/timeline";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
+import { loadCustomerCommunicationHistory } from "@/lib/communications/timeline";
 import { purposeForComposeTemplate } from "@/lib/communications/entitlements";
 import { hasProductCapability } from "@/lib/product-entitlements/enforce";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog/codes";
@@ -18,7 +19,7 @@ export async function loadCommunicationsWorkspace(
 ) {
   await ensureDefaultAutomationRules(db, access.businessId);
 
-  const [customers, inbox, phoneLogs, rules, smsEntitled] = await Promise.all([
+  const [customers, inbox, phoneLogs, rules, smsEntitled, business] = await Promise.all([
     db.customer.findMany({
       where: { businessId: access.businessId },
       orderBy: { name: "asc" },
@@ -51,13 +52,19 @@ export async function loadCommunicationsWorkspace(
       orderBy: { eventType: "asc" },
     }),
     hasProductCapability(db, access.businessId, PRODUCT_CAPABILITIES.SMS_MESSAGING),
+    db.business.findFirst({
+      where: { id: access.businessId },
+      select: { timezone: true },
+    }),
   ]);
 
+  const timeZone = resolveBusinessTimeZone(business);
   const selected =
     customers.find((row) => row.id === input?.customerId) ?? customers[0] ?? null;
-  const timeline = selected
-    ? await loadCustomerCommunicationTimeline(db, access, { customerId: selected.id })
-    : [];
+  const history = selected
+    ? await loadCustomerCommunicationHistory(db, access, { customerId: selected.id })
+    : null;
+  const timeline = history?.items ?? [];
 
   const settings = await db.businessSettings.findFirst({
     where: { businessId: access.businessId },
@@ -144,6 +151,8 @@ export async function loadCommunicationsWorkspace(
     phoneLogs,
     rules,
     timeline,
+    timelineSummary: history?.summary ?? null,
+    timeZone,
     channelEligibility,
     receptionist: getReceptionistReadiness(),
     smsEntitled,

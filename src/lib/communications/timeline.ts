@@ -1,6 +1,6 @@
-import type { PrismaClient } from "@prisma/client";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { ForbiddenError } from "@/lib/authorization";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   requireCommunicationsCapability,
   type CommunicationAccess,
@@ -9,92 +9,165 @@ import type { CommunicationChannel } from "@/lib/communications/types";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
+export const CUSTOMER_COMMUNICATION_TIMELINE_LIMIT = 80;
+
+export type CommunicationTimelineSource = "record" | "phone";
+export type CommunicationTimelineDirection = "INBOUND" | "OUTBOUND";
+
 export type CommunicationTimelineItem = {
   id: string;
-  source: "record" | "projected";
+  source: CommunicationTimelineSource;
   occurredAt: string;
-  direction: "INBOUND" | "OUTBOUND";
-  channel: CommunicationChannel | "PROJECTED";
+  direction: CommunicationTimelineDirection | null;
+  channel: CommunicationChannel;
   purpose: string;
   subject: string | null;
   body: string;
   status: string;
   relatedType: string | null;
   relatedId: string | null;
+  contextLabel: string;
+  relatedHref: string | null;
   failureReason: string | null;
   consentContext: string | null;
   provider: string | null;
   reusedSafe: boolean;
 };
 
-function dedupeKey(item: {
-  purpose: string;
-  relatedType: string | null;
-  relatedId: string | null;
-}) {
-  if (item.relatedType && item.relatedId) {
-    return `${item.purpose}:${item.relatedType}:${item.relatedId}`;
-  }
+export type CommunicationTimelineSummary = {
+  lastOccurredAt: string | null;
+  lastChannel: string | null;
+  lastDirection: CommunicationTimelineDirection | null;
+  lastStatus: string | null;
+  lastPurpose: string | null;
+  itemCount: number;
+  truncated: boolean;
+};
+
+export type CustomerCommunicationHistory = {
+  customerId: string;
+  businessId: string;
+  timeZone: string;
+  items: CommunicationTimelineItem[];
+  summary: CommunicationTimelineSummary;
+};
+
+const CONTEXT_RECORD_HREFS: Record<string, (id: string) => string> = {
+  ESTIMATE: (id) => `/estimates/${id}`,
+  JOB: (id) => `/jobs/${id}`,
+  INVOICE: (id) => `/invoices/${id}`,
+  SERVICE_REQUEST: (id) => `/requests/${id}`,
+};
+
+export function recordedCommunicationDirection(
+  value: string | null | undefined,
+): CommunicationTimelineDirection | null {
+  if (value === "INBOUND" || value === "OUTBOUND") return value;
   return null;
 }
 
-export async function loadCustomerCommunicationTimeline(
-  db: Db,
-  access: CommunicationAccess,
-  input: { customerId: string },
-): Promise<CommunicationTimelineItem[]> {
-  requireCommunicationsCapability(access);
+export function communicationContextLabel(
+  relatedType: string | null | undefined,
+  purpose: string,
+): string {
+  const related = relatedType?.trim() ?? "";
+  if (related === "ESTIMATE" || purpose.startsWith("ESTIMATE")) return "Estimate";
+  if (related === "INVOICE" || purpose.startsWith("INVOICE") || purpose.startsWith("PAYMENT")) {
+    return "Invoice";
+  }
+  if (
+    purpose.startsWith("APPOINTMENT") ||
+    purpose === "SCHEDULE_CHANGE"
+  ) {
+    return "Appointment";
+  }
+  if (related === "SERVICE_REQUEST") return "Request";
+  if (related === "JOB" || purpose.startsWith("JOB")) return "Job";
+  if (related === "REVIEW_REQUEST" || purpose.startsWith("REVIEW")) return "Review request";
+  if (related === "REFERRAL_REQUEST" || purpose.startsWith("REFERRAL")) return "Referral";
+  if (related === "PHONE_INTERACTION" || purpose.includes("CALL") || purpose.includes("PHONE")) {
+    return "Phone";
+  }
+  return "Customer";
+}
 
-  const customer = await db.customer.findFirst({
-    where: { id: input.customerId, businessId: access.businessId },
-    select: { id: true },
+export function summarizeCustomerCommunicationTimeline(
+  items: CommunicationTimelineItem[],
+  truncated = false,
+): CommunicationTimelineSummary {
+  const newest = items[0] ?? null;
+  return {
+    lastOccurredAt: newest?.occurredAt ?? null,
+    lastChannel: newest?.channel ?? null,
+    lastDirection: newest?.direction ?? null,
+    lastStatus: newest?.status ?? null,
+    lastPurpose: newest?.purpose ?? null,
+    itemCount: items.length,
+    truncated,
+  };
+}
+
+export function filterCommunicationTimelineItems(
+  items: CommunicationTimelineItem[],
+  filter: { channel?: string | null; direction?: string | null },
+): CommunicationTimelineItem[] {
+  const channel = filter.channel?.trim() || null;
+  const direction = filter.direction?.trim() || null;
+  return items.filter((item) => {
+    if (channel && channel !== "all" && item.channel !== channel) return false;
+    if (direction && direction !== "all") {
+      if (direction === "UNRECORDED") return item.direction == null;
+      if (item.direction !== direction) return false;
+    }
+    return true;
   });
-  if (!customer) throw new ForbiddenError();
+}
 
-  const [records, estimates, invoices, jobs, reviewRequests, phoneLogs] = await Promise.all([
-    db.customerCommunication.findMany({
-      where: { businessId: access.businessId, customerId: customer.id },
-      orderBy: { createdAt: "asc" },
-    }),
-    db.estimate.findMany({
-      where: { businessId: access.businessId, customerId: customer.id, status: "SENT" },
-      select: { id: true, updatedAt: true, createdAt: true },
-    }),
-    db.invoice.findMany({
-      where: { businessId: access.businessId, customerId: customer.id, status: "SENT" },
-      select: { id: true, updatedAt: true, createdAt: true },
-    }),
-    db.job.findMany({
-      where: {
-        businessId: access.businessId,
-        customerId: customer.id,
-        scheduledAt: { not: null },
-      },
-      select: {
-        id: true,
-        scheduledAt: true,
-        appointmentNotificationStatus: true,
-      },
-    }),
-    db.reviewRequest.findMany({
-      where: {
-        businessId: access.businessId,
-        customerId: customer.id,
-        status: { in: ["SENT", "COMPLETED"] },
-      },
-      select: { id: true, updatedAt: true, requestText: true },
-    }),
-    db.phoneInteraction.findMany({
-      where: { businessId: access.businessId, customerId: customer.id },
-      orderBy: { occurredAt: "asc" },
-    }),
-  ]);
+export function compareCommunicationTimelineItems(
+  left: CommunicationTimelineItem,
+  right: CommunicationTimelineItem,
+) {
+  if (left.occurredAt !== right.occurredAt) {
+    return right.occurredAt.localeCompare(left.occurredAt);
+  }
+  return right.id.localeCompare(left.id);
+}
 
-  const items: CommunicationTimelineItem[] = records.map((row) => ({
+function emptyHistory(
+  businessId: string,
+  customerId: string,
+  timeZone: string,
+): CustomerCommunicationHistory {
+  return {
+    customerId,
+    businessId,
+    timeZone,
+    items: [],
+    summary: summarizeCustomerCommunicationTimeline([], false),
+  };
+}
+
+function mapCommunicationRecord(row: {
+  id: string;
+  direction: string;
+  channel: string;
+  purpose: string;
+  subject: string | null;
+  bodySnapshot: string;
+  status: string;
+  relatedType: string | null;
+  relatedId: string | null;
+  failureReason: string | null;
+  consentContext: string | null;
+  provider: string;
+  createdAt: Date;
+  attemptedAt: Date | null;
+}): CommunicationTimelineItem {
+  return {
     id: row.id,
     source: "record",
     occurredAt: (row.attemptedAt ?? row.createdAt).toISOString(),
-    direction: row.direction === "INBOUND" ? "INBOUND" : "OUTBOUND",
+    direction: recordedCommunicationDirection(row.direction),
     channel: row.channel as CommunicationChannel,
     purpose: row.purpose,
     subject: row.subject,
@@ -102,133 +175,249 @@ export async function loadCustomerCommunicationTimeline(
     status: row.status,
     relatedType: row.relatedType,
     relatedId: row.relatedId,
+    contextLabel: communicationContextLabel(row.relatedType, row.purpose),
+    relatedHref: null,
     failureReason: row.failureReason,
     consentContext: row.consentContext,
     provider: row.provider,
     reusedSafe: true,
-  }));
+  };
+}
 
-  const seen = new Set(
-    items
-      .map((item) => dedupeKey(item))
-      .filter((key): key is string => Boolean(key)),
-  );
+function mapPhoneInteraction(row: {
+  id: string;
+  kind: string;
+  status: string;
+  direction: string;
+  summary: string;
+  callbackNeeded: boolean;
+  occurredAt: Date;
+  requestId: string | null;
+  jobId: string | null;
+}): CommunicationTimelineItem {
+  const relatedType = row.jobId ? "JOB" : row.requestId ? "SERVICE_REQUEST" : "PHONE_INTERACTION";
+  const relatedId = row.jobId ?? row.requestId ?? row.id;
+  return {
+    id: `phone:${row.id}`,
+    source: "phone",
+    occurredAt: row.occurredAt.toISOString(),
+    direction: recordedCommunicationDirection(row.direction),
+    channel: "PHONE",
+    purpose: row.kind,
+    subject: row.callbackNeeded ? "Callback needed" : "Phone log",
+    body: row.summary,
+    status: row.status,
+    relatedType,
+    relatedId,
+    contextLabel: communicationContextLabel(relatedType, row.kind),
+    relatedHref: null,
+    failureReason: null,
+    consentContext: null,
+    provider: "manual",
+    reusedSafe: true,
+  };
+}
 
-  function addProjected(item: CommunicationTimelineItem) {
-    const key = dedupeKey(item);
-    if (key && seen.has(key)) return;
-    if (key) seen.add(key);
-    items.push(item);
+async function attachVerifiedContextLinks(
+  db: Db,
+  input: { businessId: string; customerId: string; items: CommunicationTimelineItem[] },
+): Promise<CommunicationTimelineItem[]> {
+  const idsByType = new Map<string, string[]>();
+  for (const item of input.items) {
+    if (!item.relatedType || !item.relatedId) continue;
+    if (!CONTEXT_RECORD_HREFS[item.relatedType]) continue;
+    const list = idsByType.get(item.relatedType) ?? [];
+    list.push(item.relatedId);
+    idsByType.set(item.relatedType, list);
   }
 
-  for (const estimate of estimates) {
-    addProjected({
-      id: `projected:estimate:${estimate.id}`,
-      source: "projected",
-      occurredAt: estimate.updatedAt.toISOString(),
-      direction: "OUTBOUND",
-      channel: "PROJECTED",
-      purpose: "ESTIMATE_READY",
-      subject: "Estimate sent",
-      body: "Estimate was marked sent. No duplicate send was created for the timeline.",
-      status: "PROJECTED",
-      relatedType: "ESTIMATE",
-      relatedId: estimate.id,
-      failureReason: null,
-      consentContext: null,
-      provider: null,
-      reusedSafe: true,
-    });
-  }
-  for (const invoice of invoices) {
-    addProjected({
-      id: `projected:invoice:${invoice.id}`,
-      source: "projected",
-      occurredAt: invoice.updatedAt.toISOString(),
-      direction: "OUTBOUND",
-      channel: "PROJECTED",
-      purpose: "INVOICE_READY",
-      subject: "Invoice sent",
-      body: "Invoice was marked sent. No duplicate send was created for the timeline.",
-      status: "PROJECTED",
-      relatedType: "INVOICE",
-      relatedId: invoice.id,
-      failureReason: null,
-      consentContext: null,
-      provider: null,
-      reusedSafe: true,
-    });
-  }
-  for (const job of jobs) {
-    if (!job.scheduledAt) continue;
-    addProjected({
-      id: `projected:job:${job.id}`,
-      source: "projected",
-      occurredAt: job.scheduledAt.toISOString(),
-      direction: "OUTBOUND",
-      channel: "PROJECTED",
-      purpose: "APPOINTMENT_CONFIRMATION",
-      subject: "Appointment scheduled",
-      body:
-        job.appointmentNotificationStatus === "SENT"
-          ? "Appointment was scheduled and a notification was recorded."
-          : "Appointment was scheduled. Timeline projection does not send another message.",
-      status: job.appointmentNotificationStatus ?? "PROJECTED",
-      relatedType: "JOB",
-      relatedId: job.id,
-      failureReason: null,
-      consentContext: null,
-      provider: null,
-      reusedSafe: true,
-    });
-  }
-  for (const request of reviewRequests) {
-    addProjected({
-      id: `projected:review:${request.id}`,
-      source: "projected",
-      occurredAt: request.updatedAt.toISOString(),
-      direction: "OUTBOUND",
-      channel: "PROJECTED",
-      purpose: "REVIEW_REQUEST",
-      subject: "Review request",
-      body: request.requestText || "Review request recorded.",
-      status: "PROJECTED",
-      relatedType: "REVIEW_REQUEST",
-      relatedId: request.id,
-      failureReason: null,
-      consentContext: null,
-      provider: null,
-      reusedSafe: true,
-    });
-  }
-  const recordedPhoneCommunicationIds = new Set(
-    records.filter((row) => row.channel === "PHONE").map((row) => row.id),
-  );
-  for (const log of phoneLogs) {
-    if (log.communicationId && recordedPhoneCommunicationIds.has(log.communicationId)) {
-      continue;
+  const verified = new Set<string>();
+  const lookups: Array<Promise<void>> = [];
+  const selectOwned = async (
+    relatedType: string,
+    rows: Promise<Array<{ id: string }>>,
+  ) => {
+    for (const row of await rows) {
+      verified.add(`${relatedType}:${row.id}`);
     }
-    addProjected({
-      id: `phone:${log.id}`,
-      source: "projected",
-      occurredAt: log.occurredAt.toISOString(),
-      direction: log.direction === "OUTBOUND" ? "OUTBOUND" : "INBOUND",
-      channel: "PHONE",
-      purpose: log.kind,
-      subject: log.callbackNeeded ? "Callback needed" : "Phone log",
-      body: log.summary,
-      status: log.status,
-      relatedType: "PHONE_INTERACTION",
-      relatedId: log.id,
-      failureReason: null,
-      consentContext: null,
-      provider: "manual",
-      reusedSafe: true,
-    });
+  };
+
+  const estimateIds = [...new Set(idsByType.get("ESTIMATE") ?? [])];
+  if (estimateIds.length) {
+    lookups.push(
+      selectOwned(
+        "ESTIMATE",
+        db.estimate.findMany({
+          where: {
+            businessId: input.businessId,
+            customerId: input.customerId,
+            id: { in: estimateIds },
+          },
+          select: { id: true },
+        }),
+      ),
+    );
+  }
+  const jobIds = [...new Set(idsByType.get("JOB") ?? [])];
+  if (jobIds.length) {
+    lookups.push(
+      selectOwned(
+        "JOB",
+        db.job.findMany({
+          where: {
+            businessId: input.businessId,
+            customerId: input.customerId,
+            id: { in: jobIds },
+          },
+          select: { id: true },
+        }),
+      ),
+    );
+  }
+  const invoiceIds = [...new Set(idsByType.get("INVOICE") ?? [])];
+  if (invoiceIds.length) {
+    lookups.push(
+      selectOwned(
+        "INVOICE",
+        db.invoice.findMany({
+          where: {
+            businessId: input.businessId,
+            customerId: input.customerId,
+            id: { in: invoiceIds },
+          },
+          select: { id: true },
+        }),
+      ),
+    );
+  }
+  const requestIds = [...new Set(idsByType.get("SERVICE_REQUEST") ?? [])];
+  if (requestIds.length) {
+    lookups.push(
+      selectOwned(
+        "SERVICE_REQUEST",
+        db.serviceRequest.findMany({
+          where: {
+            businessId: input.businessId,
+            customerId: input.customerId,
+            id: { in: requestIds },
+          },
+          select: { id: true },
+        }),
+      ),
+    );
+  }
+  if (lookups.length) await Promise.all(lookups);
+
+  return input.items.map((item) => {
+    const hrefBuilder = item.relatedType ? CONTEXT_RECORD_HREFS[item.relatedType] : null;
+    const key = item.relatedType && item.relatedId ? `${item.relatedType}:${item.relatedId}` : null;
+    return {
+      ...item,
+      relatedHref: hrefBuilder && key && verified.has(key) ? hrefBuilder(item.relatedId!) : null,
+    };
+  });
+}
+
+/**
+ * Recorded customer communication history only.
+ * Lifecycle status on estimates, invoices, jobs, or review requests is never
+ * treated as proof that a message was sent or delivered.
+ */
+export async function loadCustomerCommunicationHistory(
+  db: Db,
+  access: CommunicationAccess,
+  input: { customerId: string },
+): Promise<CustomerCommunicationHistory> {
+  requireCommunicationsCapability(access);
+
+  const [customer, business] = await Promise.all([
+    db.customer.findFirst({
+      where: { id: input.customerId, businessId: access.businessId },
+      select: { id: true, businessId: true },
+    }),
+    db.business.findFirst({
+      where: { id: access.businessId },
+      select: { timezone: true },
+    }),
+  ]);
+  if (!customer) throw new ForbiddenError();
+
+  const timeZone = resolveBusinessTimeZone(business);
+  const [records, phoneLogs] = await Promise.all([
+    db.customerCommunication.findMany({
+      where: { businessId: access.businessId, customerId: customer.id },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: CUSTOMER_COMMUNICATION_TIMELINE_LIMIT,
+      select: {
+        id: true,
+        direction: true,
+        channel: true,
+        purpose: true,
+        subject: true,
+        bodySnapshot: true,
+        status: true,
+        relatedType: true,
+        relatedId: true,
+        failureReason: true,
+        consentContext: true,
+        provider: true,
+        createdAt: true,
+        attemptedAt: true,
+      },
+    }),
+    db.phoneInteraction.findMany({
+      where: { businessId: access.businessId, customerId: customer.id },
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+      take: CUSTOMER_COMMUNICATION_TIMELINE_LIMIT,
+      select: {
+        id: true,
+        communicationId: true,
+        kind: true,
+        status: true,
+        direction: true,
+        summary: true,
+        callbackNeeded: true,
+        occurredAt: true,
+        requestId: true,
+        jobId: true,
+      },
+    }),
+  ]);
+
+  const items: CommunicationTimelineItem[] = records.map(mapCommunicationRecord);
+  const recordedIds = new Set(records.map((row) => row.id));
+  for (const log of phoneLogs) {
+    if (log.communicationId && recordedIds.has(log.communicationId)) continue;
+    items.push(mapPhoneInteraction(log));
   }
 
-  items.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
-  return items;
+  items.sort(compareCommunicationTimelineItems);
+  const truncated =
+    records.length === CUSTOMER_COMMUNICATION_TIMELINE_LIMIT ||
+    phoneLogs.length === CUSTOMER_COMMUNICATION_TIMELINE_LIMIT ||
+    items.length > CUSTOMER_COMMUNICATION_TIMELINE_LIMIT;
+  const bounded = items.slice(0, CUSTOMER_COMMUNICATION_TIMELINE_LIMIT);
+  const withLinks = await attachVerifiedContextLinks(db, {
+    businessId: access.businessId,
+    customerId: customer.id,
+    items: bounded,
+  });
+
+  return {
+    customerId: customer.id,
+    businessId: access.businessId,
+    timeZone,
+    items: withLinks,
+    summary: summarizeCustomerCommunicationTimeline(withLinks, truncated),
+  };
+}
+
+export async function loadCustomerCommunicationTimeline(
+  db: Db,
+  access: CommunicationAccess,
+  input: { customerId: string },
+): Promise<CommunicationTimelineItem[]> {
+  return (await loadCustomerCommunicationHistory(db, access, input)).items;
 }
 
 export async function listAssignedJobCommunications(
@@ -277,4 +466,12 @@ export async function listBusinessCommunicationInbox(
       customer: { select: { id: true, name: true } },
     },
   });
+}
+
+export function emptyCustomerCommunicationHistory(
+  businessId: string,
+  customerId: string,
+  timeZone: string,
+): CustomerCommunicationHistory {
+  return emptyHistory(businessId, customerId, timeZone);
 }

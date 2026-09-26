@@ -30,6 +30,7 @@ import {
   evaluateEmailEligibility,
 } from "@/lib/communications/consent";
 import { departmentSmsComposeRequiresAddon } from "@/lib/communications/sms-policy";
+import { loadCustomerCommunicationHistory } from "@/lib/communications/timeline";
 import {
   EMAIL_NOT_CONFIGURED_REASON,
   SMS_ADDON_NOT_ENTITLED_REASON,
@@ -229,6 +230,18 @@ export type CommunicationsDependencySignal = {
   reason: string;
 };
 
+export type CommunicationsHistoryFacts = {
+  scoped: boolean;
+  reusedCanonicalLoader: boolean;
+  lastOccurredAt: string | null;
+  lastChannel: string | null;
+  lastDirection: string | null;
+  lastStatus: string | null;
+  lastPurpose: string | null;
+  itemCount: number;
+  lastFailed: boolean;
+};
+
 export type CommunicationsProjection = {
   totals: CommunicationsProjectionTotals;
   customers: CommunicationsCustomerProjection[];
@@ -244,6 +257,7 @@ export type CommunicationsProjection = {
   targetedEntityMismatch: boolean;
   signals: CommunicationsDependencySignal[];
   snapshotReused: false;
+  history: CommunicationsHistoryFacts;
 };
 
 export type CommunicationsSpecialistInput = {
@@ -308,6 +322,20 @@ export function communicationsProjectionHasForbiddenFields(value: unknown) {
   return FORBIDDEN_PROJECTION_KEYS.some(
     (key) => raw.includes(`"${key}"`) || new RegExp(`"${key}":`, "i").test(raw),
   );
+}
+
+function emptyHistoryFacts(): CommunicationsHistoryFacts {
+  return {
+    scoped: false,
+    reusedCanonicalLoader: false,
+    lastOccurredAt: null,
+    lastChannel: null,
+    lastDirection: null,
+    lastStatus: null,
+    lastPurpose: null,
+    itemCount: 0,
+    lastFailed: false,
+  };
 }
 
 function emptyTotals(): CommunicationsProjectionTotals {
@@ -594,6 +622,11 @@ export async function loadCommunicationsProjection(input: {
 
   const scopedCustomerId = failClosed ? null : targets.customerId;
   const pinnedMessageId = failClosed ? null : targets.messageId;
+  const history = scopedCustomerId
+    ? await loadCustomerCommunicationHistory(input.db, input.access, {
+        customerId: scopedCustomerId,
+      })
+    : null;
   const messageWhere: Prisma.CustomerCommunicationWhereInput = { businessId };
   if (scopedCustomerId) messageWhere.customerId = scopedCustomerId;
   if (failClosed || (targets.scoped && !scopedCustomerId)) {
@@ -908,6 +941,19 @@ export async function loadCommunicationsProjection(input: {
     targetedEntityMismatch: targets.targetedEntityMismatch,
     signals,
     snapshotReused: false,
+    history: history
+      ? {
+          scoped: true,
+          reusedCanonicalLoader: true,
+          lastOccurredAt: history.summary.lastOccurredAt,
+          lastChannel: history.summary.lastChannel,
+          lastDirection: history.summary.lastDirection,
+          lastStatus: history.summary.lastStatus,
+          lastPurpose: history.summary.lastPurpose,
+          itemCount: history.summary.itemCount,
+          lastFailed: history.summary.lastStatus === "FAILED",
+        }
+      : emptyHistoryFacts(),
   };
 
   assertSafeProjection(projection);
@@ -1042,6 +1088,36 @@ export function projectCommunicationsFacts(projection: CommunicationsProjection)
   );
   addFact(facts, factKeys, "communications-email-message-count", String(t.emailMessages));
   addFact(facts, factKeys, "communications-sms-message-count", String(t.smsMessages));
+  if (projection.history.scoped) {
+    addFact(
+      facts,
+      factKeys,
+      "communications-last-occurred-at",
+      projection.history.lastOccurredAt ?? "none",
+    );
+    addFact(facts, factKeys, "communications-last-channel", projection.history.lastChannel ?? "none");
+    addFact(
+      facts,
+      factKeys,
+      "communications-last-direction",
+      projection.history.lastDirection ?? "none",
+    );
+    addFact(facts, factKeys, "communications-last-status", projection.history.lastStatus ?? "none");
+    addFact(facts, factKeys, "communications-last-purpose", projection.history.lastPurpose ?? "none");
+    addFact(facts, factKeys, "communications-history-count", String(projection.history.itemCount));
+    addFact(
+      facts,
+      factKeys,
+      "communications-last-failed",
+      projection.history.lastFailed ? "yes" : "no",
+    );
+    addFact(
+      facts,
+      factKeys,
+      "communications-history-loader",
+      projection.history.reusedCanonicalLoader ? "canonical" : "none",
+    );
+  }
   return { facts, factKeys };
 }
 
@@ -1170,5 +1246,6 @@ export function emptyCommunicationsProjectionForTests(): CommunicationsProjectio
     targetedEntityMismatch: false,
     signals: [],
     snapshotReused: false,
+    history: emptyHistoryFacts(),
   };
 }
