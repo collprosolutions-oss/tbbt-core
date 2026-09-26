@@ -15,6 +15,7 @@ export type {
   SpecialistId,
   SpecialistResult,
   SpecialistSelection,
+  SpecialistSkipReason,
 } from "@/lib/chief-of-staff/types";
 export {
   SPECIALIST_REGISTRY,
@@ -58,6 +59,30 @@ export {
   projectGrowthFromSource,
   resetLastGrowthProjection,
 } from "@/lib/chief-of-staff/growth-specialist";
+export {
+  getMaterialsProjectionLoadCount,
+  getMaterialsSpecialistInterpretationCount,
+  resetMaterialsSpecialistCounters,
+} from "@/lib/chief-of-staff/materials-snapshot";
+export {
+  MATERIALS_CONTEXT_CAPS,
+  MATERIALS_OWNED_RECOMMENDATION_KEYS,
+  MATERIALS_REQUIRED_PRODUCT_CAPABILITIES,
+  countCheaperRecordedSuppliers,
+  countDistinctStaleMaterials,
+  countPriceChangesFromHistory,
+  latestComparableByProvider,
+  latestRecordedSupplierPrice,
+  selectProjectedSupplierPrices,
+  getLastMaterialsProjection,
+  isMaterialsOwnedRecommendationKey,
+  loadMaterialsProjection,
+  materialsEntitlementLimitation,
+  materialsProjectionHasForbiddenFields,
+  projectMaterialsFacts,
+  resetLastMaterialsProjection,
+  runMaterialsSpecialist,
+} from "@/lib/chief-of-staff/materials-specialist";
 export { resolveConflicts } from "@/lib/chief-of-staff/conflicts";
 export { synthesizeCoachAnswer } from "@/lib/chief-of-staff/synthesize";
 export {

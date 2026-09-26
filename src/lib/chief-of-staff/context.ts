@@ -42,7 +42,7 @@ export function loadKnowledgeLaunchDeep(): never {
 
 export function loadMaterialsDeep(): never {
   recordDeepLoader("MATERIALS");
-  throw new Error("Materials deep specialist is disabled in PR1.");
+  throw new Error("Materials specialist loads a bounded projection when selected and must not use the workspace deep-loader.");
 }
 
 export function loadCommunicationsDeep(): never {
@@ -57,7 +57,6 @@ export function loadBusinessProtectionDeep(): never {
 
 const DISABLED_DEEP_LOADERS: Partial<Record<SpecialistId, () => never>> = {
   KNOWLEDGE_LAUNCH: loadKnowledgeLaunchDeep,
-  MATERIALS: loadMaterialsDeep,
   COMMUNICATIONS: loadCommunicationsDeep,
   BUSINESS_PROTECTION: loadBusinessProtectionDeep,
 };

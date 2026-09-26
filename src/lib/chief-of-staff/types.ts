@@ -76,6 +76,12 @@ export type SpecialistFinding = {
   entityIds?: string[];
 };
 
+export type SpecialistSkipReason =
+  | "NOT_AUTHORIZED"
+  | "NOT_ENTITLED"
+  | "PRODUCT_CAPABILITY_MISSING"
+  | "UNAVAILABLE";
+
 export type SpecialistResult = {
   specialistId: SpecialistId;
   status: "OK" | "FAILED" | "SKIPPED";
@@ -83,6 +89,7 @@ export type SpecialistResult = {
   factKeys: string[];
   recommendationKeys: string[];
   limitation?: string;
+  skipReason?: SpecialistSkipReason;
   failure?: SpecialistFailure;
 };
 
@@ -99,7 +106,16 @@ export type ConflictKind =
   | "SHARED_RECOMMENDATION"
   | "MISSING_WAGE_VS_MARGIN_PRICING"
   | "STAFFING_SHORTAGE_VS_PROFITABLE_WORK"
-  | "SHARED_JOB_REFERENCE";
+  | "SHARED_JOB_REFERENCE"
+  | "STALE_PRICE_VS_CURRENT"
+  | "PREFERRED_SUPPLIER_VS_RECORDED_PRICE"
+  | "PURCHASE_LIST_VS_PO"
+  | "PO_VS_SUPPLIER_CONFIRMATION"
+  | "MATERIAL_VARIANCE_VS_JOB_MARGIN"
+  | "MATERIAL_UNREADY_VS_SCHEDULE"
+  | "MATERIAL_UNREADY_VS_GROWTH"
+  | "MATERIAL_DELAY_VS_CUSTOMER_UPDATE"
+  | "NO_INVENTORY_RECORDED";
 
 export type ConflictItem = {
   kind: ConflictKind;

@@ -81,6 +81,8 @@ npm run test:authorization
 npm run test:bsos
 npm run test:chief-of-staff
 npm run test:financial-specialist
+npm run test:growth-specialist
+npm run test:materials-specialist
 npm run test:knowledge
 npm run test:knowledge-launch
 npm run test:service-areas
