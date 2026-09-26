@@ -479,8 +479,11 @@ async function seedMaterialsWorld(workspace, { secret = false, extraJobs = 0, ex
       source: "OWNER_ENTRY",
     },
   });
+  const estimateOnlyEstimate = await prisma.estimate.create({
+    data: { businessId, customerId: customer.id, status: "DRAFT", publicToken: randomUUID() },
+  });
   const estimateOnlyList = await prisma.materialPurchaseList.create({
-    data: { businessId, estimateId: estimate.id },
+    data: { businessId, estimateId: estimateOnlyEstimate.id },
   });
   await prisma.materialPurchaseListItem.create({
     data: {
@@ -571,7 +574,7 @@ async function seedMaterialsWorld(workspace, { secret = false, extraJobs = 0, ex
   });
   await prisma.materialPurchaseList.update({
     where: { id: estimateOnlyList.id },
-    data: { estimateId: estimate.id },
+    data: { estimateId: estimateOnlyEstimate.id },
   });
 
   return {
@@ -588,6 +591,7 @@ async function seedMaterialsWorld(workspace, { secret = false, extraJobs = 0, ex
     needed,
     draftPo,
     estimate,
+    estimateOnlyEstimate,
   };
 }
 
@@ -872,7 +876,7 @@ try {
   );
   check(
     "Estimate-only lists still load without Jobs access",
-    noJobProjection.purchaseLists.some((row) => row.id === seededA.estimateOnlyList.id && row.estimateId === seededA.estimate.id && row.jobId == null) &&
+    noJobProjection.purchaseLists.some((row) => row.id === seededA.estimateOnlyList.id && row.estimateId === seededA.estimateOnlyEstimate.id && row.jobId == null) &&
       noJobProjection.requirements.some((row) => /estimate-only/i.test(row.name)),
   );
 
