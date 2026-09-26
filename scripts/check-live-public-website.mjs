@@ -525,7 +525,7 @@ async function fetchMaybe(path) {
   try {
     const res = await fetch(`${APP_URL}${path}`, { redirect: "manual" });
     const body = await res.text().catch(() => "");
-    return { status: res.status, body };
+    return { status: res.status, body, location: res.headers.get("location") };
   } catch {
     return null;
   }
@@ -540,6 +540,16 @@ if (!reachable) {
   check(
     "Existing CollPro /hire/collpro-reno still loads without authentication",
     Boolean(hire && hire.status === 200 && hire.body.includes(COLLPRO_RENO_DISPLAY_NAME)),
+  );
+  const legacyHire = await fetchMaybe("/hire/collpro-reno-handyman-services");
+  check(
+    "Historical CollPro hire slug permanently redirects to the canonical hire page",
+    Boolean(
+      legacyHire &&
+        legacyHire.status === 308 &&
+        new URL(legacyHire.location ?? "http://invalid.example/", APP_URL).pathname ===
+          "/hire/collpro-reno",
+    ),
   );
   const missing = await fetchMaybe("/hire/no-such-tbbt-business");
   check("Unknown slug safely 404s", Boolean(missing && missing.status === 404));
