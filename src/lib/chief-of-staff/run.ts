@@ -358,7 +358,7 @@ export async function runChiefOfStaffCoach(
 
   const conversation = await ensureAiConversation(db as PrismaClient, access, {
     area: "COACH",
-    title: "BSOS Coach",
+    title: "Business Coach",
     conversationId: input.conversationId,
   });
   const idempotencyKey = `coach:${access.businessId}:${conversation.id}:${input.attemptId}`;
@@ -650,6 +650,7 @@ export async function runChiefOfStaffCoach(
       catalog,
       specialistResults,
       conflicts,
+      plannerSkipped: plan.skipped,
       coachContext: {
         facts: catalog.facts,
         recommendations: catalog.activeRecommendations,

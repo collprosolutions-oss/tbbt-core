@@ -16,11 +16,21 @@ export function BsosCoachForm({
   conversationId,
   aiLabel,
   jobId,
+  customerId,
+  messageId,
+  knowledgeEntryId,
+  vaultRecordId,
+  agreementId,
   recommendationKey,
 }: {
   conversationId?: string;
   aiLabel: string;
   jobId?: string;
+  customerId?: string;
+  messageId?: string;
+  knowledgeEntryId?: string;
+  vaultRecordId?: string;
+  agreementId?: string;
   recommendationKey?: string;
 }) {
   const [state, action, pending] = useActionState(askBsosCoachAction, initial);
@@ -36,6 +46,11 @@ export function BsosCoachForm({
     <form action={action} className="space-y-2">
       {conversationId ? <input type="hidden" name="conversationId" value={conversationId} /> : null}
       {jobId ? <input type="hidden" name="jobId" value={jobId} /> : null}
+      {customerId ? <input type="hidden" name="customerId" value={customerId} /> : null}
+      {messageId ? <input type="hidden" name="messageId" value={messageId} /> : null}
+      {knowledgeEntryId ? <input type="hidden" name="knowledgeEntryId" value={knowledgeEntryId} /> : null}
+      {vaultRecordId ? <input type="hidden" name="vaultRecordId" value={vaultRecordId} /> : null}
+      {agreementId ? <input type="hidden" name="agreementId" value={agreementId} /> : null}
       {recommendationKey ? <input type="hidden" name="recommendationKey" value={recommendationKey} /> : null}
       <input type="hidden" name="attemptId" value={attemptId} />
       <p className="text-xs text-muted-foreground">AI status: {aiLabel}. Answers cite recorded TBBT facts only.</p>
@@ -43,7 +58,7 @@ export function BsosCoachForm({
         name="question"
         required
         className="w-full rounded-md border px-3 py-2 text-sm"
-        placeholder="Why was this month less profitable?"
+        placeholder="What needs my attention today?"
       />
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Thinking…" : "Ask coach"}

@@ -69,9 +69,9 @@ export default async function BusinessHealthPage({
       {area === "coach" && (
         <Card className="mb-4">
           <CardHeader>
-            <CardTitle>BSOS Coach</CardTitle>
+            <CardTitle>Business Coach</CardTitle>
             <CardDescription>
-              {workspace.coach} Recorded facts stay authoritative. AI can explain them but cannot change permissions or invent balances.
+              {workspace.coach} One advisor over recorded TBBT facts. Specialists stay internal. The Coach can explain and recommend, but cannot change records, send messages, or invent balances.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">

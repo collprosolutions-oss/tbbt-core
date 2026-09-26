@@ -23,7 +23,14 @@ export {
   getSpecialistEntry,
   isSpecialistEnabled,
 } from "@/lib/chief-of-staff/registry";
-export { planSpecialists, sanitizePlannerQuestion } from "@/lib/chief-of-staff/planner";
+export {
+  isAttentionTodayQuestion,
+  isJobBlockerQuestion,
+  isNextWorkQuestion,
+  isOwnerFocusQuestion,
+  planSpecialists,
+  sanitizePlannerQuestion,
+} from "@/lib/chief-of-staff/planner";
 export {
   getDeepLoaderInvocations,
   loadSpecialistContext,

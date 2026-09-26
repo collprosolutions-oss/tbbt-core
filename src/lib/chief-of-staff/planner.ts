@@ -19,13 +19,13 @@ import {
 } from "@/lib/chief-of-staff/types";
 
 const WORKFORCE_QUESTION =
-  /\b(schedule|calendar|crew|workers?|employee|helper|staff(?:ing)?|workforce|capacity|availability|available (?:workers?|staff|capacity|days?|slots?|helpers?)|assign(?:ment|ed|ees?)?|unassigned|double[- ]?book(?:ed|ing)?|overload(?:ed)?|skills?|qualified|qualification|progression|today|tomorrow|next week|this week(?:'s)? (?:schedule|calendar|crew|staff|capacity)|fill[- ]?in|bench|who can|who should i send|skill match)\b/i;
+  /\b(schedule|calendar|crew|workers?|employee|helper|staff(?:ing)?|workforce|capacity|availability|available (?:workers?|staff|capacity|days?|slots?|helpers?)|assign(?:ment|ed|ees?)?|unassigned|double[- ]?book(?:ed|ing)?|overload(?:ed)?|skills?|qualified|qualification|progression|today's (?:schedule|calendar|crew|staff|jobs?|capacity)|tomorrow's (?:schedule|calendar|crew|staff|jobs?)|(?:scheduled|working|assigned) (?:today|tomorrow)|(?:what )?jobs? (?:do i have |are (?:on )?)?(?:today|tomorrow)|jobs? (?:today|tomorrow)|next week|this week(?:'s)? (?:schedule|calendar|crew|staff|capacity)|fill[- ]?in|bench|who can|who should i send|skill match)\b/i;
 const FINANCIAL_QUESTION =
   /\b(profit(?:ability)?|invoices?|receivables?|expenses?|margin|cash|revenue|payroll|payments?|unpaid|outstanding|collected|recurring (?:cost|expense)s?|labor (?:cost|burden)|(?:hourly )?wages?|pricing|target margin|estimate[- ]vs[- ]actual|customer concentration|losing money|making money)\b/i;
 const GROWTH_QUESTION =
   /\b(leads?|lead funnel|lead source|pipeline|recover(?:y|ed)?(?: leads?)?|reactivat(?:e|ion)(?: customers?)?|campaigns?|marketing|attribution|(?:lead )?sources?|referrals?|reviews?|repeat customers?|customer retention|local (?:marketing|growth)|conversion|lost leads?|follow-up opportunities|growth)\b/i;
 const KNOWLEDGE_QUESTION =
-  /\b(?:knowledge(?: hub)?|operating procedures?|SOPs?|experience (?:learning )?candidates?|experience learnings?|what (?:have we|did we) learned|have we learned|what does (?:our |the )?business know|knowledge (?:approved|still needs review|needs review|unreviewed)|business launch|\blaunch\b|next launch step|defer(?:red)? during setup|what setup do i|setup (?:still )?(?:need|to finish)|launch setup complete|what did i defer|setup proposals?|build my company)\b/i;
+  /\b(?:knowledge(?: hub)?|operating procedures?|SOPs?|experience (?:learning )?candidates?|experience learnings?|what (?:have we|did we) learned|have we learned|what does (?:our |the )?business know|knowledge (?:approved|still needs review|needs review|unreviewed)|business launch|\blaunch\b|next launch step|defer(?:red)? during setup|what setup do i|setup (?:still )?(?:need|to finish)|(?:business )?setup (?:is )?unfinished|unfinished (?:business )?setup|launch setup complete|what did i defer|setup proposals?|build my company)\b/i;
 const MATERIALS_QUESTION =
   /\b(materials?|suppliers?|vendors?|inventory|stock|lumber|parts|pickup|job materials|material variance|purchase orders?|purchas(?:e|ed|ing)|buy|bought|buying|\bPOs?\b|pric(?:e|es|ing))\b/i;
 const COMMUNICATIONS_QUESTION =
@@ -35,6 +35,12 @@ const PROTECTION_QUESTION =
 const FOCUS_QUESTION = /\b(this week|focus|should i|what should i)\b/i;
 const GENERIC_FOCUS_QUESTION =
   /\b(?:what )?should i focus\b|\bfocus on(?: this week)?\b|\bwhat should i (?:do|work on) this week\b/i;
+const ATTENTION_TODAY_QUESTION =
+  /\b(?:what (?:needs|requires) (?:my )?attention(?: today)?|needs my attention today)\b/i;
+const NEXT_WORK_QUESTION =
+  /\bwhat should i work on next\b|\bwhat do i (?:do|work on) next\b|\bwhat(?:'s| is) next for me\b/i;
+const JOB_BLOCKER_QUESTION =
+  /\b(?:what(?:'s| is) )?(?:stopping|blocking|holding up) (?:this |the )?(?:job|work)\b|\b(?:this |the )?(?:job|work) (?:from )?moving forward\b/i;
 const WORKFORCE_REC_PREFIX = "workforce-";
 
 function departmentHitCount(question: string) {
@@ -51,7 +57,25 @@ function departmentHitCount(question: string) {
 
 function isGenericFocusQuestion(question: string) {
   if (GENERIC_FOCUS_QUESTION.test(question)) return true;
-  return FOCUS_QUESTION.test(question) && departmentHitCount(question) >= 3;
+  const focusLike = FOCUS_QUESTION.test(question) || ATTENTION_TODAY_QUESTION.test(question);
+  return focusLike && departmentHitCount(question) >= 3;
+}
+
+export function isAttentionTodayQuestion(question: string) {
+  return ATTENTION_TODAY_QUESTION.test(sanitizePlannerQuestion(question));
+}
+
+export function isNextWorkQuestion(question: string) {
+  return NEXT_WORK_QUESTION.test(sanitizePlannerQuestion(question));
+}
+
+export function isJobBlockerQuestion(question: string) {
+  return JOB_BLOCKER_QUESTION.test(sanitizePlannerQuestion(question));
+}
+
+export function isOwnerFocusQuestion(question: string) {
+  const cleaned = sanitizePlannerQuestion(question);
+  return isAttentionTodayQuestion(cleaned) || isNextWorkQuestion(cleaned) || FOCUS_QUESTION.test(cleaned);
 }
 
 const DISABLED_KEYWORD_HINTS: Array<{ id: SpecialistId; pattern: RegExp }> = [
@@ -185,7 +209,18 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     skipped.push({ id: "BUSINESS_PROTECTION", reason: "DISABLED" });
   }
 
-  const isFocus = FOCUS_QUESTION.test(question);
+  const jobBlocker = JOB_BLOCKER_QUESTION.test(question);
+  const hasJobTarget = Boolean(input.entityHints?.jobId);
+  if (jobBlocker && hasJobTarget && departmentHitCount(question) === 0) {
+    if (isSpecialistEnabled("WORKFORCE") && !selected.includes("WORKFORCE")) {
+      selected.push("WORKFORCE");
+    }
+    if (isSpecialistEnabled("MATERIALS") && !selected.includes("MATERIALS")) {
+      selected.push("MATERIALS");
+    }
+  }
+
+  const isFocus = FOCUS_QUESTION.test(question) || ATTENTION_TODAY_QUESTION.test(question);
   for (const hint of DISABLED_KEYWORD_HINTS) {
     if (!hint.pattern.test(question)) continue;
     if (isSpecialistEnabled(hint.id)) continue;
@@ -240,6 +275,12 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     if (isSpecialistEnabled("BUSINESS_PROTECTION") && (protectionHint || explicitProtection)) {
       allowed.add("BUSINESS_PROTECTION");
     }
+    if (jobBlocker && hasJobTarget && !isGenericFocusQuestion(question)) {
+      if (isSpecialistEnabled("WORKFORCE")) allowed.add("WORKFORCE");
+      if (isSpecialistEnabled("MATERIALS") && (wantsMaterials || departmentHitCount(question) === 0)) {
+        allowed.add("MATERIALS");
+      }
+    }
     for (const id of [...selected]) {
       if (!allowed.has(id)) {
         skipped.push({ id, reason: "UNKNOWN_QUESTION" });
@@ -259,6 +300,8 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     PROTECTION_QUESTION.test(question) ||
     protectionHint ||
     FOCUS_QUESTION.test(question) ||
+    ATTENTION_TODAY_QUESTION.test(question) ||
+    jobBlocker ||
     /\b(unpaid|review|market|customer|invoice|estimate|job)\b/i.test(question);
 
   if (!recognized && selected.length > 1) {

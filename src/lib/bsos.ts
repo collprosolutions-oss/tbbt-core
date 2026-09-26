@@ -17,7 +17,7 @@ export type BsosArea = (typeof BSOS_AREAS)[number];
 
 export const BSOS_AREA_LABELS: Record<BsosArea, string> = {
   health: "Business Health",
-  coach: "BSOS Coach",
+  coach: "Business Coach",
   recommendations: "Recommendations",
   goals: "Goals & action plan",
   feed: "Attention & opportunities",
