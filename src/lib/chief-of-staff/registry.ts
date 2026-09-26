@@ -119,7 +119,7 @@ export const SPECIALIST_REGISTRY: readonly SpecialistRegistryEntry[] = [
     purpose:
       "Explain recorded catalog, supplier mapping, purchase-list, PO, price freshness, pickup readiness, and material variance. Read/explain only. Not a second Materials engine and not live commerce.",
     enabled: true,
-    requiredRoleCapability: CAPABILITIES.VIEW_REPORTS,
+    requiredRoleCapability: CAPABILITIES.MANAGE_ESTIMATES,
     requiredProductCapability: "ESTIMATES_INVOICES",
     readScope: "materials-suppliers",
     approvalClass: COS_APPROVAL_CLASS,

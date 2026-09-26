@@ -186,6 +186,7 @@ export type MaterialsPriceRef = {
   fetchedAt: string | null;
   freshness: SupplierPriceFreshness;
   sourceMode: string | null;
+  locationKey: string | null;
 };
 
 export type MaterialsPurchaseListRef = {
@@ -316,6 +317,73 @@ function hasRole(
 
 function hasDeniedProduct(code: ProductCapabilityCode, deny?: ProductCapabilityCode[]) {
   return Boolean(deny?.includes(code));
+}
+
+function staleMaterialKey(row: {
+  materialId?: string | null;
+  takeoffIdentity?: string | null;
+  materialKey?: string;
+}) {
+  return row.takeoffIdentity || row.materialKey || row.materialId || null;
+}
+
+export function countDistinctStaleMaterials(
+  requirements: Array<{
+    materialId: string | null;
+    takeoffIdentity: string | null;
+    priceState: string;
+  }>,
+  freshnessRows: Array<{ materialKey: string; freshness: SupplierPriceFreshness }>,
+) {
+  const keys = new Set<string>();
+  for (const row of requirements) {
+    if (row.priceState !== "price-stale") continue;
+    const key = staleMaterialKey(row);
+    if (key) keys.add(key);
+  }
+  for (const row of freshnessRows) {
+    if (row.freshness !== "stale") continue;
+    const key = staleMaterialKey(row);
+    if (key) keys.add(key);
+  }
+  return keys.size;
+}
+
+export function countPriceChangesFromHistory(
+  historyByMaterial: Map<string, Array<{ price: { toString(): string } | number | null }>>,
+) {
+  let changed = 0;
+  for (const rows of historyByMaterial.values()) {
+    const prices = rows
+      .map((row) => money(row.price))
+      .filter((value): value is number => value != null);
+    if (prices.length < 2) continue;
+    if (prices.some((value) => value !== prices[0])) changed += 1;
+  }
+  return changed;
+}
+
+export function countCheaperRecordedSuppliers(
+  pricesByIdentity: Map<string, MaterialsPriceRef[]>,
+) {
+  let cheaper = 0;
+  for (const recorded of pricesByIdentity.values()) {
+    const latestByProvider = new Map<string, MaterialsPriceRef>();
+    for (const row of recorded) {
+      if (row.recordedPrice == null || !COMPARABLE_FRESHNESS.has(row.freshness)) continue;
+      const existing = latestByProvider.get(row.providerId);
+      if (
+        !existing ||
+        (row.fetchedAt != null && (existing.fetchedAt == null || row.fetchedAt > existing.fetchedAt))
+      ) {
+        latestByProvider.set(row.providerId, row);
+      }
+    }
+    if (latestByProvider.size < 2) continue;
+    const pricesOnly = [...latestByProvider.values()].map((row) => row.recordedPrice as number);
+    if (Math.min(...pricesOnly) < Math.max(...pricesOnly)) cheaper += 1;
+  }
+  return cheaper;
 }
 
 function assertSafeProjection(projection: MaterialsProjection) {
@@ -523,20 +591,30 @@ export async function loadMaterialsProjection(input: {
   const jobPickupById = new Map(jobRows.map((job) => [job.id, job.pickupDurationMinutes]));
 
   const listWhere: Prisma.MaterialPurchaseListWhereInput = { businessId };
-  const listOr: Prisma.MaterialPurchaseListWhereInput[] = [];
-  if (input.canJobs && jobIds.length > 0) listOr.push({ jobId: { in: jobIds } });
-  if (input.canEstimates) listOr.push({ estimateId: { not: null } });
-  if (listOr.length > 0) listWhere.OR = listOr;
+  let canQueryLists = false;
+  if (input.canJobs && input.canEstimates) {
+    const listOr: Prisma.MaterialPurchaseListWhereInput[] = [];
+    if (jobIds.length > 0) listOr.push({ jobId: { in: jobIds } });
+    listOr.push({ estimateId: { not: null }, jobId: null });
+    listWhere.OR = listOr;
+    canQueryLists = listOr.length > 0;
+  } else if (input.canJobs && jobIds.length > 0) {
+    listWhere.jobId = { in: jobIds };
+    canQueryLists = true;
+  } else if (input.canEstimates) {
+    listWhere.estimateId = { not: null };
+    listWhere.jobId = null;
+    canQueryLists = true;
+  }
 
-  const purchaseLists =
-    listOr.length > 0
-      ? await input.db.materialPurchaseList.findMany({
-          where: listWhere,
-          orderBy: { updatedAt: "desc" },
-          take: MATERIALS_CONTEXT_CAPS.purchaseLists,
-          select: { id: true, jobId: true, estimateId: true },
-        })
-      : [];
+  const purchaseLists = canQueryLists
+    ? await input.db.materialPurchaseList.findMany({
+        where: listWhere,
+        orderBy: { updatedAt: "desc" },
+        take: MATERIALS_CONTEXT_CAPS.purchaseLists,
+        select: { id: true, jobId: true, estimateId: true },
+      })
+    : [];
 
   const listIds = purchaseLists.map((row) => row.id);
   const listById = new Map(purchaseLists.map((row) => [row.id, row]));
@@ -692,6 +770,7 @@ export async function loadMaterialsProjection(input: {
             fetchedAt: true,
             sourceStatus: true,
             sourceMode: true,
+            locationKey: true,
           },
         })
       : [];
@@ -730,6 +809,7 @@ export async function loadMaterialsProjection(input: {
         fetchedAt: record.fetchedAt?.toISOString() ?? null,
         freshness,
         sourceMode: record.sourceMode,
+        locationKey: record.locationKey,
       };
       materialPrices.push(ref);
       prices.push(ref);
@@ -776,13 +856,13 @@ export async function loadMaterialsProjection(input: {
     }
     const supplierState: MaterialsRequirementProjection["supplierState"] =
       item.supplierId || mapped ? "recorded" : "supplier-unmapped";
-    const pickupMinutes =
-      item.pickupDurationMinutes ??
-      (list?.jobId ? jobPickupById.get(list.jobId) ?? null : null);
+    const jobMinutes =
+      input.canJobs && list?.jobId ? jobPickupById.get(list.jobId) ?? null : null;
+    const pickupMinutes = item.pickupDurationMinutes ?? jobMinutes;
     return {
       id: item.id,
       purchaseListId: item.purchaseListId,
-      jobId: list?.jobId ?? null,
+      jobId: input.canJobs ? list?.jobId ?? null : null,
       estimateId: list?.estimateId ?? null,
       name: item.name,
       status: item.status,
@@ -855,38 +935,11 @@ export async function loadMaterialsProjection(input: {
         })
     : [];
 
-  let cheaperRecorded = 0;
-  for (const [, recorded] of pricesByIdentity) {
-    const comparable = recorded.filter(
-      (row) =>
-        row.recordedPrice != null && COMPARABLE_FRESHNESS.has(row.freshness),
-    );
-    if (comparable.length < 2) continue;
-    const pricesOnly = comparable.map((row) => row.recordedPrice as number);
-    const min = Math.min(...pricesOnly);
-    const max = Math.max(...pricesOnly);
-    if (min < max) cheaperRecorded += 1;
-  }
-
-  let priceChanged = 0;
-  for (const [materialId, rows] of historyByMaterial) {
-    const latest = rows[0];
-    const previous = rows[1];
-    const catalog = catalogById.get(materialId);
-    const lastKnown = money(catalog?.lastKnownCost ?? null);
-    const latestPrice = money(latest?.price ?? null);
-    if (latestPrice != null && lastKnown != null && latestPrice !== lastKnown) {
-      priceChanged += 1;
-      continue;
-    }
-    if (latestPrice != null && previous && money(previous.price) != null && latestPrice !== money(previous.price)) {
-      priceChanged += 1;
-    }
-  }
+  const cheaperRecorded = countCheaperRecordedSuppliers(pricesByIdentity);
+  const priceChanged = countPriceChangesFromHistory(historyByMaterial);
 
   const unmapped = requirements.filter((row) => row.supplierState === "supplier-unmapped").length;
-  const stalePrices = requirements.filter((row) => row.priceState === "price-stale").length
-    + freshness.filter((row) => row.freshness === "stale").length;
+  const stalePrices = countDistinctStaleMaterials(requirements, freshness);
   const missingPrices = requirements.filter((row) => row.priceState === "price-missing").length;
   const needed = requirements.filter((row) => row.status === "NEEDED").length;
   const incompletePrep = requirements.filter(
@@ -965,19 +1018,23 @@ export async function loadMaterialsProjection(input: {
     mappings,
     prices: priced,
     freshness,
-    purchaseLists: purchaseLists.map((row) => ({
-      id: row.id,
-      jobId: row.jobId,
-      estimateId: row.estimateId,
-    })),
-    purchaseOrders: purchaseOrders.map((row) => ({
-      id: row.id,
-      purchaseListId: row.purchaseListId,
-      jobId: row.jobId,
-      supplierId: row.supplierId,
-      status: row.status,
-      supplierConfirmed: false,
-    })),
+    purchaseLists: purchaseLists
+      .filter((row) => input.canJobs || row.jobId == null)
+      .map((row) => ({
+        id: row.id,
+        jobId: input.canJobs ? row.jobId : null,
+        estimateId: row.estimateId,
+      })),
+    purchaseOrders: purchaseOrders
+      .filter((row) => input.canJobs || row.jobId == null)
+      .map((row) => ({
+        id: row.id,
+        purchaseListId: row.purchaseListId,
+        jobId: input.canJobs ? row.jobId : null,
+        supplierId: row.supplierId,
+        status: row.status,
+        supplierConfirmed: false,
+      })),
     variance: capInMemory(variance, MATERIALS_CONTEXT_CAPS.variance),
     pickups: capInMemory(pickups, MATERIALS_CONTEXT_CAPS.pickups),
     preferences: capInMemory(
@@ -1022,12 +1079,14 @@ function findingsFromProjection(
       why: `${t.needed} recorded material requirement${t.needed === 1 ? " is" : "s are"} NEEDED on upcoming or open purchase lists. This is not live stock and not a supplier confirmation.`,
       entityIds: projection.requirements
         .filter((row) => row.status === "NEEDED")
-        .map((row) => row.jobId ?? row.estimateId ?? row.id)
+        .map((row) =>
+          projection.canReadJobs ? row.jobId ?? row.estimateId ?? row.id : row.estimateId ?? row.id,
+        )
         .filter((id): id is string => Boolean(id))
         .slice(0, MATERIALS_CONTEXT_CAPS.entityIds),
     });
   }
-  if (t.incompletePrep > 0) {
+  if (t.incompletePrep > 0 && projection.canReadJobs) {
     findings.push({
       key: "materials-incomplete-prep",
       title: "Material pickup prep is incomplete",

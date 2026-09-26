@@ -28,6 +28,7 @@ const {
   ORCHESTRATION_STATUSES,
   SPECIALIST_IDS,
   enabledSpecialistIds,
+  getSpecialistEntry,
   findCatalogRecommendation,
   getDeepLoaderInvocations,
   getOrchestrationWorkerCount,
@@ -367,6 +368,11 @@ try {
       !materialsSpecialistSrc.includes("createPurchaseOrder") &&
       !materialsSpecialistSrc.includes("ensurePurchaseList") &&
       !materialsSpecialistSrc.includes("listAssignedJobPickupView"),
+  );
+  check(
+    "MATERIALS registry role floor is MANAGE_ESTIMATES",
+    getSpecialistEntry("MATERIALS").requiredRoleCapability === CAPABILITIES.MANAGE_ESTIMATES &&
+      getSpecialistEntry("MATERIALS").requiredProductCapability === "ESTIMATES_INVOICES",
   );
   check(
     "Canonical Workforce recommendation keys stay the original six",
@@ -811,6 +817,39 @@ try {
     facts: catalog.facts,
   });
   check("Duplicate recommendation key is unique in conflict resolution", conflicts.uniqueRecommendationKeys.filter((key) => key === "collect-unpaid-invoices").length === 1);
+  const materialsConflicts = resolveConflicts({
+    results: [
+      {
+        specialistId: "MATERIALS",
+        status: "OK",
+        findings: [
+          {
+            key: "materials-stale-price",
+            title: "Stale",
+            summary: "stale",
+            recommendationKeys: ["materials-stale-price"],
+            factKeys: [],
+          },
+          {
+            key: "materials-inventory-unknown",
+            title: "Unknown inventory",
+            summary: "unknown",
+            recommendationKeys: ["materials-inventory-unknown"],
+            factKeys: [],
+          },
+        ],
+        factKeys: [],
+        recommendationKeys: ["materials-stale-price", "materials-inventory-unknown"],
+      },
+    ],
+    recommendations: [],
+    facts: catalog.facts,
+  });
+  check(
+    "Materials stale/inventory conflicts resolve without calling another specialist",
+    materialsConflicts.items.some((item) => item.kind === "STALE_PRICE_VS_CURRENT") &&
+      materialsConflicts.items.some((item) => item.kind === "NO_INVENTORY_RECORDED"),
+  );
   const synthesized = synthesizeCoachAnswer({
     question: "What should I focus on this week?",
     catalog,

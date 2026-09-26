@@ -17,6 +17,9 @@ const {
   MATERIALS_CONTEXT_CAPS,
   MAX_RECURSION_DEPTH,
   MAX_SPECIALIST_FANOUT,
+  countCheaperRecordedSuppliers,
+  countDistinctStaleMaterials,
+  countPriceChangesFromHistory,
   getLastMaterialsProjection,
   getMaterialsProjectionLoadCount,
   getMaterialsSpecialistInterpretationCount,
@@ -24,6 +27,7 @@ const {
   planSpecialists,
   resetLastMaterialsProjection,
   resetMaterialsSpecialistCounters,
+  resolveConflicts,
   runChiefOfStaffCoach,
   runMaterialsSpecialist,
 } = await import("@/lib/chief-of-staff");
@@ -265,16 +269,6 @@ async function seedMaterialsWorld(workspace, { secret = false, extraJobs = 0, ex
       unitLabel: "board",
     },
   });
-  await prisma.businessMaterialSupplierMapping.create({
-    data: {
-      businessId,
-      providerId: "lowes",
-      materialIdentity: "form-lumber",
-      providerProductId: "lw-lumber-1",
-      productName: "2x4",
-      unitLabel: "board",
-    },
-  });
   await prisma.supplierPriceRecord.create({
     data: {
       businessId,
@@ -286,19 +280,21 @@ async function seedMaterialsWorld(workspace, { secret = false, extraJobs = 0, ex
       fetchedAt: hoursAgo(2),
       sourceStatus: "current",
       sourceMode: "catalog-reference",
+      locationKey: "store-a",
     },
   });
   await prisma.supplierPriceRecord.create({
     data: {
       businessId,
-      providerId: "lowes",
-      providerProductId: "lw-lumber-1",
+      providerId: "home-depot",
+      providerProductId: "hd-lumber-1",
       productName: "2x4",
       unitLabel: "board",
-      currentPrice: "7.10",
-      fetchedAt: hoursAgo(3),
+      currentPrice: "7.90",
+      fetchedAt: hoursAgo(1),
       sourceStatus: "current",
       sourceMode: "catalog-reference",
+      locationKey: "store-b",
     },
   });
   const staleMaterial = await prisma.materialCatalogItem.create({
@@ -428,6 +424,106 @@ async function seedMaterialsWorld(workspace, { secret = false, extraJobs = 0, ex
       status: "DRAFT",
     },
   });
+  const oneHistory = await prisma.materialCatalogItem.create({
+    data: {
+      businessId,
+      name: `${prefix} one-history paint`,
+      normalizedName: `${prefix.toLowerCase()} one-history paint`,
+      unit: "gal",
+      lastKnownCost: "22.00",
+      lastKnownCostAt: hoursAgo(4),
+      takeoffIdentity: "one-history-paint",
+    },
+  });
+  await prisma.materialPriceHistory.create({
+    data: {
+      businessId,
+      materialId: oneHistory.id,
+      supplierId: supplier.id,
+      unit: "gal",
+      price: "24.50",
+      observedAt: hoursAgo(5),
+      source: "OWNER_ENTRY",
+    },
+  });
+  const sameHistory = await prisma.materialCatalogItem.create({
+    data: {
+      businessId,
+      name: `${prefix} same-history nails`,
+      normalizedName: `${prefix.toLowerCase()} same-history nails`,
+      unit: "lb",
+      lastKnownCost: "4.00",
+      lastKnownCostAt: hoursAgo(4),
+      takeoffIdentity: "same-history-nails",
+    },
+  });
+  await prisma.materialPriceHistory.create({
+    data: {
+      businessId,
+      materialId: sameHistory.id,
+      supplierId: supplier.id,
+      unit: "lb",
+      price: "4.25",
+      observedAt: daysAgo(10),
+      source: "OWNER_ENTRY",
+    },
+  });
+  await prisma.materialPriceHistory.create({
+    data: {
+      businessId,
+      materialId: sameHistory.id,
+      supplierId: supplier.id,
+      unit: "lb",
+      price: "4.25",
+      observedAt: hoursAgo(6),
+      source: "OWNER_ENTRY",
+    },
+  });
+  const estimateOnlyList = await prisma.materialPurchaseList.create({
+    data: { businessId, estimateId: estimate.id },
+  });
+  await prisma.materialPurchaseListItem.create({
+    data: {
+      businessId,
+      purchaseListId: estimateOnlyList.id,
+      name: `${prefix} estimate-only fasteners`,
+      quantityNeeded: "2",
+      unit: "box",
+      status: "NEEDED",
+      sourceKey: `est-only-${randomUUID()}`,
+    },
+  });
+  await prisma.materialPurchaseListItem.create({
+    data: {
+      businessId,
+      purchaseListId: estimateOnlyList.id,
+      materialId: oneHistory.id,
+      name: oneHistory.name,
+      quantityNeeded: "1",
+      unit: "gal",
+      status: "PLANNED",
+      sourceKey: `one-hist-${randomUUID()}`,
+    },
+  });
+  await prisma.materialPurchaseListItem.create({
+    data: {
+      businessId,
+      purchaseListId: estimateOnlyList.id,
+      materialId: sameHistory.id,
+      name: sameHistory.name,
+      quantityNeeded: "1",
+      unit: "lb",
+      status: "PLANNED",
+      sourceKey: `same-hist-${randomUUID()}`,
+    },
+  });
+  await prisma.materialPurchaseOrder.create({
+    data: {
+      businessId,
+      purchaseListId: estimateOnlyList.id,
+      status: "DRAFT",
+    },
+  });
 
   for (let i = 0; i < extraJobs; i += 1) {
     const extraJob = await prisma.job.create({
@@ -469,7 +565,30 @@ async function seedMaterialsWorld(workspace, { secret = false, extraJobs = 0, ex
     });
   }
 
-  return { supplier, cheaper, lumber, unmapped, staleMaterial, job, list, needed, draftPo, estimate };
+  await prisma.materialPurchaseList.update({
+    where: { id: list.id },
+    data: { estimateId: estimate.id },
+  });
+  await prisma.materialPurchaseList.update({
+    where: { id: estimateOnlyList.id },
+    data: { estimateId: estimate.id },
+  });
+
+  return {
+    supplier,
+    cheaper,
+    lumber,
+    unmapped,
+    staleMaterial,
+    oneHistory,
+    sameHistory,
+    job,
+    list,
+    estimateOnlyList,
+    needed,
+    draftPo,
+    estimate,
+  };
 }
 
 try {
@@ -481,7 +600,7 @@ try {
   console.log("\nSTATIC — Materials specialist is read/explain only");
   const entry = getSpecialistEntry("MATERIALS");
   check("MATERIALS remains the existing specialist identity", entry.id === "MATERIALS" && entry.enabled === true);
-  check("Role floor stays VIEW_REPORTS", entry.requiredRoleCapability === CAPABILITIES.VIEW_REPORTS);
+  check("Role floor is MANAGE_ESTIMATES", entry.requiredRoleCapability === CAPABILITIES.MANAGE_ESTIMATES);
   check("Registry product field stays ESTIMATES_INVOICES", entry.requiredProductCapability === "ESTIMATES_INVOICES");
   check("Approval class is READ_EXPLAIN", entry.approvalClass === "READ_EXPLAIN");
   check("Materials specialist performs no LLM call", !specialistSrc.includes("runAiTask") && !specialistSrc.includes("resolveAiProvider"));
@@ -544,6 +663,53 @@ try {
   check("Generic job question does not select MATERIALS", !genericJob.selectedIds.includes("MATERIALS"));
   check("Fan-out stays <= 4", buyPlan.fanout <= 4 && recPlan.fanout <= 4);
   check("Recursion depth stays 1", buyPlan.recursionDepth === 1);
+  check(
+    "Stale requirement and freshness for one material count once",
+    countDistinctStaleMaterials(
+      [{ materialId: "m1", takeoffIdentity: "concrete-bags", priceState: "price-stale" }],
+      [{ materialKey: "concrete-bags", freshness: "stale" }],
+    ) === 1,
+  );
+  check(
+    "One history row is not a price change even when lastKnownCost differs",
+    countPriceChangesFromHistory(new Map([["one", [{ price: 24.5 }]]])) === 0,
+  );
+  check(
+    "Two 90-day history rows at the same price are not a change",
+    countPriceChangesFromHistory(new Map([["same", [{ price: 4.25 }, { price: 4.25 }]]])) === 0,
+  );
+  check(
+    "Two 90-day history rows at different prices are a change",
+    countPriceChangesFromHistory(new Map([["diff", [{ price: 8 }, { price: 6.5 }]]])) === 1,
+  );
+  check(
+    "Same provider two locations is not a cheaper recorded supplier",
+    countCheaperRecordedSuppliers(
+      new Map([
+        [
+          "form-lumber",
+          [
+            { materialKey: "form-lumber", providerId: "home-depot", providerProductId: "hd-lumber-1", recordedPrice: 8.4, fetchedAt: "2026-09-25T20:00:00.000Z", freshness: "current", sourceMode: "catalog-reference", locationKey: "store-a" },
+            { materialKey: "form-lumber", providerId: "home-depot", providerProductId: "hd-lumber-1", recordedPrice: 7.9, fetchedAt: "2026-09-25T21:00:00.000Z", freshness: "current", sourceMode: "catalog-reference", locationKey: "store-b" },
+          ],
+        ],
+      ]),
+    ) === 0,
+  );
+  check(
+    "Distinct current providers can be a cheaper recorded supplier",
+    countCheaperRecordedSuppliers(
+      new Map([
+        [
+          "form-lumber",
+          [
+            { materialKey: "form-lumber", providerId: "home-depot", providerProductId: "hd-lumber-1", recordedPrice: 8.4, fetchedAt: "2026-09-25T20:00:00.000Z", freshness: "current", sourceMode: "catalog-reference", locationKey: "store-a" },
+            { materialKey: "form-lumber", providerId: "lowes", providerProductId: "lw-lumber-1", recordedPrice: 7.1, fetchedAt: "2026-09-25T19:00:00.000Z", freshness: "current", sourceMode: "catalog-reference", locationKey: "_" },
+          ],
+        ],
+      ]),
+    ) === 1,
+  );
 
   const tenantA = await createOwnerWorkspace("Alpha Materials");
   const tenantB = await createOwnerWorkspace("Beta Materials");
@@ -588,9 +754,20 @@ try {
   check("Needed count is recorded, not invented zero", Number(resultA.factKeys.includes("materials-needed-count") && projectionA.totals.needed) > 0);
   check("Unmapped supplier is counted, not invented", projectionA.totals.unmapped >= 1 && projectionA.requirements.some((row) => row.supplierState === "supplier-unmapped" && row.supplierName == null));
   check("8-day price is stale never current", projectionA.freshness.some((row) => row.freshness === "stale") && !projectionA.prices.some((row) => row.materialKey === "concrete-bags" && row.freshness === "current"));
+  check("One stale recorded price counts once", projectionA.totals.stalePrices === 1);
   check("Missing price is not $0", projectionA.requirements.some((row) => row.priceState === "price-missing" && row.plannedUnitCost == null && row.lastKnownCost == null));
-  check("Cheaper supplier uses recorded current/recent evidence", projectionA.totals.cheaperRecordedSupplier >= 1 && resultA.findings.some((row) => row.key === "materials-cheaper-recorded-supplier" && /recorded/i.test(row.summary) && !/\bavailable stock\b|\bconfirmed available\b|\blive quote\b/i.test(row.summary)));
-  check("Price changed uses recorded history", projectionA.totals.priceChanged >= 1);
+  check(
+    "Same-provider store prices are not another supplier",
+    projectionA.totals.cheaperRecordedSupplier === 0 &&
+      !resultA.findings.some((row) => row.key === "materials-cheaper-recorded-supplier") &&
+      projectionA.prices.filter((row) => row.materialKey === "form-lumber" && row.providerId === "home-depot").length >= 2,
+  );
+  check(
+    "Price-change uses two 90-day history rows, not lastKnownCost",
+    projectionA.totals.priceChanged === 1 &&
+      projectionA.requirements.some((row) => row.materialId === seededA.oneHistory.id) &&
+      projectionA.requirements.some((row) => row.materialId === seededA.sameHistory.id),
+  );
   check("Pickup duration is recorded only", projectionA.pickups.every((row) => row.pickupDurationMinutes == null || row.durationSource === "item" || row.durationSource === "job"));
   check("Expense-linked variance is unfavorable", projectionA.totals.unfavorableVariance >= 1 && projectionA.variance.some((row) => row.financialCost === 48 && row.unfavorable));
   check("Financial cost omitted unless expense-linked", projectionA.variance.some((row) => row.financialCost == null && row.operationalActualCost == null));
@@ -608,6 +785,44 @@ try {
   );
   check("One projection load", getMaterialsProjectionLoadCount() === 1);
   check("One interpretation", getMaterialsSpecialistInterpretationCount() === 1);
+
+  await prisma.businessMaterialSupplierMapping.create({
+    data: {
+      businessId: tenantA.business.id,
+      providerId: "lowes",
+      materialIdentity: "form-lumber",
+      providerProductId: "lw-lumber-1",
+      productName: "2x4",
+      unitLabel: "board",
+    },
+  });
+  await prisma.supplierPriceRecord.create({
+    data: {
+      businessId: tenantA.business.id,
+      providerId: "lowes",
+      providerProductId: "lw-lumber-1",
+      productName: "2x4",
+      unitLabel: "board",
+      currentPrice: "7.10",
+      fetchedAt: hoursAgo(3),
+      sourceStatus: "current",
+      sourceMode: "catalog-reference",
+      locationKey: "store-1",
+    },
+  });
+  resetLoads();
+  const cheaperResult = await runMaterialsSpecialist({
+    db: prisma,
+    access: tenantA.access,
+    catalog: emptyCatalog(),
+    question: "Which recorded supplier price is cheaper?",
+  });
+  const cheaperProjection = getLastMaterialsProjection();
+  check(
+    "Distinct supplier cheaper finding uses recorded current/recent evidence",
+    cheaperProjection.totals.cheaperRecordedSupplier >= 1 &&
+      cheaperResult.findings.some((row) => row.key === "materials-cheaper-recorded-supplier" && /recorded/i.test(row.summary) && !/\bavailable stock\b|\bconfirmed available\b|\blive quote\b/i.test(row.summary)),
+  );
 
   resetLoads();
   const resultB = await runMaterialsSpecialist({
@@ -645,6 +860,21 @@ try {
   check("Missing MANAGE_JOBS still runs catalog slice", denyJobs.status === "OK");
   check("Missing MANAGE_JOBS omits job/pickup slice", noJobProjection.jobs.length === 0 && noJobProjection.pickups.length === 0 && !denyJobs.factKeys.includes("materials-pickup-not-ready-count"));
   check("Missing job slice is not fake zero upcoming work", /not the same as zero/i.test(denyJobs.limitation ?? ""));
+  check(
+    "Denied Jobs does not leak jobId through estimate-linked lists",
+    noJobProjection.jobs.length === 0 &&
+      noJobProjection.pickups.length === 0 &&
+      noJobProjection.requirements.every((row) => row.jobId == null) &&
+      noJobProjection.purchaseLists.every((row) => row.jobId == null) &&
+      noJobProjection.purchaseOrders.every((row) => row.jobId == null) &&
+      denyJobs.findings.every((row) => !(row.entityIds ?? []).includes(seededA.job.id)) &&
+      !JSON.stringify(denyJobs.findings).includes(seededA.job.id),
+  );
+  check(
+    "Estimate-only lists still load without Jobs access",
+    noJobProjection.purchaseLists.some((row) => row.id === seededA.estimateOnlyList.id && row.estimateId === seededA.estimate.id && row.jobId == null) &&
+      noJobProjection.requirements.some((row) => /estimate-only/i.test(row.name)),
+  );
 
   resetLoads();
   const denyJobsProduct = await runMaterialsSpecialist({
@@ -655,6 +885,12 @@ try {
     denyProductCapabilities: [PRODUCT_CAPABILITIES.JOBS_TASKS],
   });
   check("Missing JOBS_TASKS omits job/pickup slice", getLastMaterialsProjection().jobs.length === 0 && getLastMaterialsProjection().pickups.length === 0);
+  check(
+    "Missing JOBS_TASKS does not leak jobId",
+    getLastMaterialsProjection().requirements.every((row) => row.jobId == null) &&
+      getLastMaterialsProjection().purchaseLists.every((row) => row.jobId == null) &&
+      getLastMaterialsProjection().purchaseOrders.every((row) => row.jobId == null),
+  );
 
   resetLoads();
   const denyExpenses = await runMaterialsSpecialist({
@@ -701,6 +937,106 @@ try {
     question: "What's in inventory?",
   });
   check("Inventory question returns unknown, no fake quantity", inventoryAsk.findings.some((row) => row.key === "materials-inventory-unknown" && /unknown/i.test(row.summary) && !/\b0 bags\b|\b0 board\b|stock-on-hand/i.test(row.summary)));
+
+  console.log("\nCONFLICTS — additive Materials kinds from recorded findings only");
+  function findingResult(id, keys, extras = {}) {
+    return {
+      specialistId: id,
+      status: "OK",
+      findings: keys.map((key) => ({
+        key,
+        title: key,
+        summary: key,
+        recommendationKeys: [key],
+        factKeys: [],
+      })),
+      factKeys: [],
+      recommendationKeys: keys,
+      ...extras,
+    };
+  }
+  const emptyConflictInput = { recommendations: [], facts: {} };
+  const staleConflicts = resolveConflicts({
+    ...emptyConflictInput,
+    results: [findingResult("MATERIALS", ["materials-stale-price", "materials-missing-price"])],
+  });
+  check(
+    "STALE_PRICE_VS_CURRENT keeps stale/missing from becoming current",
+    staleConflicts.items.some((item) => item.kind === "STALE_PRICE_VS_CURRENT" && /cannot be treated as current/i.test(item.summary)),
+  );
+  const preferredConflicts = resolveConflicts({
+    ...emptyConflictInput,
+    results: [findingResult("MATERIALS", ["materials-cheaper-recorded-supplier"])],
+  });
+  check(
+    "PREFERRED_SUPPLIER_VS_RECORDED_PRICE is not available/confirmed/live",
+    preferredConflicts.items.some((item) => item.kind === "PREFERRED_SUPPLIER_VS_RECORDED_PRICE") &&
+      preferredConflicts.items.every((item) => !/\bavailable stock\b|\bconfirmed available\b|\blive stock\b/i.test(item.summary) || item.kind === "PREFERRED_SUPPLIER_VS_RECORDED_PRICE"),
+  );
+  check(
+    "Preferred vs cheaper copy keeps cheaper from meaning available",
+    preferredConflicts.items.some((item) => item.kind === "PREFERRED_SUPPLIER_VS_RECORDED_PRICE" && /not available, confirmed, or live stock/i.test(item.summary)),
+  );
+  const listPoConflicts = resolveConflicts({
+    ...emptyConflictInput,
+    results: [findingResult("MATERIALS", ["materials-open-purchase-list", "materials-draft-po"])],
+  });
+  check(
+    "PURCHASE_LIST_VS_PO keeps list and PO distinct",
+    listPoConflicts.items.some((item) => item.kind === "PURCHASE_LIST_VS_PO" && /not a purchase order/i.test(item.summary)),
+  );
+  check(
+    "PO_VS_SUPPLIER_CONFIRMATION does not treat ORDERED_EXTERNALLY as confirmation",
+    listPoConflicts.items.some((item) => item.kind === "PO_VS_SUPPLIER_CONFIRMATION" && /not supplier confirmation/i.test(item.summary)),
+  );
+  const varianceConflicts = resolveConflicts({
+    ...emptyConflictInput,
+    results: [
+      findingResult("MATERIALS", ["materials-variance-hurting-margin"]),
+      findingResult("FINANCIAL", ["review-low-margin-jobs"]),
+    ],
+  });
+  check(
+    "MATERIAL_VARIANCE_VS_JOB_MARGIN leaves margin math with Financial",
+    varianceConflicts.items.some((item) => item.kind === "MATERIAL_VARIANCE_VS_JOB_MARGIN" && /Financial owns job margin/i.test(item.summary)),
+  );
+  const unreadyConflicts = resolveConflicts({
+    ...emptyConflictInput,
+    results: [
+      findingResult("MATERIALS", ["materials-incomplete-prep", "materials-needed-for-upcoming-jobs"]),
+      findingResult("WORKFORCE", ["workforce-staffing-shortage"]),
+      findingResult("GROWTH", ["growth-lost-lead-recovery"]),
+    ],
+  });
+  check(
+    "MATERIAL_UNREADY_VS_SCHEDULE does not create staff",
+    unreadyConflicts.items.some((item) => item.kind === "MATERIAL_UNREADY_VS_SCHEDULE" && /do not create staff/i.test(item.summary)),
+  );
+  check(
+    "MATERIAL_UNREADY_VS_GROWTH stays a fulfillment constraint",
+    unreadyConflicts.items.some((item) => item.kind === "MATERIAL_UNREADY_VS_GROWTH" && /fulfillment constraint/i.test(item.summary)),
+  );
+  check(
+    "MATERIAL_DELAY_VS_CUSTOMER_UPDATE stays Communications-owned",
+    unreadyConflicts.items.some((item) => item.kind === "MATERIAL_DELAY_VS_CUSTOMER_UPDATE" && /Communications owns contact/i.test(item.summary)),
+  );
+  const inventoryConflicts = resolveConflicts({
+    ...emptyConflictInput,
+    results: [inventoryAsk],
+  });
+  check(
+    "NO_INVENTORY_RECORDED comes from the inventory-unknown finding",
+    inventoryConflicts.items.some((item) => item.kind === "NO_INVENTORY_RECORDED" && /unknown/i.test(item.summary)),
+  );
+  const financialOnlyConflicts = resolveConflicts({
+    ...emptyConflictInput,
+    results: [findingResult("FINANCIAL", ["review-low-margin-jobs"])],
+  });
+  check(
+    "Materials conflicts do not fire without Materials findings",
+    financialOnlyConflicts.items.every((item) => !String(item.kind).startsWith("MATERIAL") && item.kind !== "STALE_PRICE_VS_CURRENT" && item.kind !== "PREFERRED_SUPPLIER_VS_RECORDED_PRICE" && item.kind !== "PURCHASE_LIST_VS_PO" && item.kind !== "PO_VS_SUPPLIER_CONFIRMATION" && item.kind !== "NO_INVENTORY_RECORDED"),
+  );
+  check("Conflict resolver does not call another specialist", !readFileSync(new URL("../src/lib/chief-of-staff/conflicts.ts", import.meta.url), "utf8").includes("runMaterialsSpecialist") && !readFileSync(new URL("../src/lib/chief-of-staff/conflicts.ts", import.meta.url), "utf8").includes("interpretFinancialSpecialist"));
 
   console.log("\nRUNTIME — orchestration, failure, mutation proof");
   resetLoads();

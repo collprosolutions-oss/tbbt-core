@@ -112,5 +112,100 @@ export function resolveConflicts(input: {
     });
   }
 
+  const recordedKeys = new Set<string>(uniqueRecommendationKeys);
+  for (const row of input.results) {
+    for (const finding of row.findings) recordedKeys.add(finding.key);
+  }
+  const specialistOk = (id: SpecialistResult["specialistId"]) =>
+    input.results.some((row) => row.specialistId === id && row.status === "OK");
+  const hasAny = (...keys: string[]) => keys.some((key) => recordedKeys.has(key));
+  const materialKeys = (...keys: string[]) => keys.filter((key) => recordedKeys.has(key));
+
+  if (hasAny("materials-stale-price", "materials-missing-price")) {
+    items.push({
+      kind: "STALE_PRICE_VS_CURRENT",
+      recommendationKeys: materialKeys("materials-stale-price", "materials-missing-price"),
+      summary:
+        "A stale or missing recorded price cannot be treated as current. Missing price is unknown, not a live quote.",
+    });
+  }
+
+  if (hasAny("materials-cheaper-recorded-supplier")) {
+    items.push({
+      kind: "PREFERRED_SUPPLIER_VS_RECORDED_PRICE",
+      recommendationKeys: ["materials-cheaper-recorded-supplier"],
+      summary:
+        "Preferred supplier is not the cheapest recorded supplier, and cheaper is not available, confirmed, or live stock.",
+    });
+  }
+
+  if (hasAny("materials-open-purchase-list", "materials-draft-po")) {
+    items.push({
+      kind: "PURCHASE_LIST_VS_PO",
+      recommendationKeys: materialKeys("materials-open-purchase-list", "materials-draft-po"),
+      summary: "A purchase list is not a purchase order. The Coach does not convert or send either one.",
+    });
+  }
+
+  if (hasAny("materials-draft-po")) {
+    items.push({
+      kind: "PO_VS_SUPPLIER_CONFIRMATION",
+      recommendationKeys: materialKeys("materials-draft-po", "materials-adapter-disconnected"),
+      summary:
+        "ORDERED_EXTERNALLY and a disconnected adapter are owner tracking only. They are not supplier confirmation.",
+    });
+  }
+
+  if (hasAny("materials-variance-hurting-margin") && specialistOk("FINANCIAL")) {
+    items.push({
+      kind: "MATERIAL_VARIANCE_VS_JOB_MARGIN",
+      recommendationKeys: materialKeys("materials-variance-hurting-margin"),
+      summary:
+        "Expense-linked material variance is a recorded cost input. Financial owns job margin math; operational purchase cost is not a financial actual unless Expense-linked.",
+    });
+  }
+
+  if (
+    hasAny("materials-incomplete-prep", "materials-pickup-not-ready") &&
+    specialistOk("WORKFORCE")
+  ) {
+    items.push({
+      kind: "MATERIAL_UNREADY_VS_SCHEDULE",
+      recommendationKeys: materialKeys("materials-incomplete-prep", "materials-pickup-not-ready"),
+      summary:
+        "Unready recorded materials do not create staff or capacity. Workforce owns scheduling; Materials only reports recorded pickup readiness.",
+    });
+  }
+
+  if (
+    hasAny("materials-needed-for-upcoming-jobs", "materials-incomplete-prep") &&
+    specialistOk("GROWTH")
+  ) {
+    items.push({
+      kind: "MATERIAL_UNREADY_VS_GROWTH",
+      recommendationKeys: materialKeys("materials-needed-for-upcoming-jobs", "materials-incomplete-prep"),
+      summary:
+        "Unready or still-needed materials remain a fulfillment constraint. Growth owns demand and does not invent capacity from Materials.",
+    });
+  }
+
+  if (hasAny("materials-needed-for-upcoming-jobs", "materials-incomplete-prep")) {
+    items.push({
+      kind: "MATERIAL_DELAY_VS_CUSTOMER_UPDATE",
+      recommendationKeys: materialKeys("materials-needed-for-upcoming-jobs", "materials-incomplete-prep"),
+      summary:
+        "A customer update may be needed for delayed materials. Communications owns contact; Materials does not send a message.",
+    });
+  }
+
+  if (hasAny("materials-inventory-unknown")) {
+    items.push({
+      kind: "NO_INVENTORY_RECORDED",
+      recommendationKeys: materialKeys("materials-inventory-unknown"),
+      summary:
+        "No inventory or stock-on-hand model exists. Inventory quantity stays unknown, never zero, and is not live commerce.",
+    });
+  }
+
   return { items, uniqueRecommendationKeys };
 }
