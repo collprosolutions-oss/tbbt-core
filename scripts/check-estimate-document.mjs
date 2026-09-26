@@ -431,9 +431,13 @@ try {
       quoteDoc.laborLines[0].unitPriceLabel === ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL &&
       quoteDoc.laborLines[0].amountLabel === ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL &&
       !quoteDoc.laborLines[0].unitPriceLabel.includes("$0") &&
+      !quoteDoc.laborLines[0].amountLabel.includes("$0") &&
       quoteDoc.totalLabel === ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL &&
       quoteDoc.laborTotalLabel === ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL &&
-      !estimateDocumentPlainText(quoteDoc).includes("$0.00"),
+      quoteDoc.subtotalLabel === ESTIMATE_CUSTOM_QUOTE_CUSTOMER_LABEL &&
+      !quoteDoc.totalLabel.includes("$0") &&
+      !quoteDoc.laborTotalLabel.includes("$0") &&
+      !quoteDoc.subtotalLabel.includes("$0"),
   );
   check(
     "Starting-at wording stays starting-at, not a guaranteed fixed price",
