@@ -314,7 +314,7 @@ const lateStartEval = evaluateProposedSchedule({
 });
 check("4:30 PM 1-hour job extends past 5:00 PM closing", lateStartEval.extendsPastWorkingHours);
 
-const nineAmNy = parseScheduleStart("2026-09-26", "09:00", NY);
+const nineAmNy = parseScheduleStart("2026-09-25", "09:00", NY);
 const nineAmEval = evaluateProposedSchedule({
   start: nineAmNy,
   durationMinutes: 60,
@@ -324,7 +324,7 @@ const nineAmEval = evaluateProposedSchedule({
 });
 check(
   "09:00 America/New_York is inside 08:00–17:00 working hours even when the UTC instant is 13:00Z",
-  nineAmNy?.toISOString() === "2026-09-26T13:00:00.000Z" &&
+  nineAmNy?.toISOString() === "2026-09-25T13:00:00.000Z" &&
     !nineAmEval.outsideWorkingHours &&
     !nineAmEval.nonWorkingDay,
 );
