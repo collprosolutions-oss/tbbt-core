@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/cookies";
 import { navigationRedirectUrl } from "@/lib/navigation-origin";
 import { isCustomerMessagingWebhookPath } from "@/lib/customer-messaging/config";
+import { collproRenoLegacyHireRedirectPath } from "@/lib/public-site";
 import { isPublicWebsitePath } from "@/lib/public-website-paths";
 import { isStripeWebhookPath } from "@/lib/stripe-webhook-path";
 import { tbbtApexWwwRedirectLocation } from "@/lib/tbbt-marketing-host";
@@ -42,6 +43,20 @@ export function proxy(request: NextRequest) {
   );
   if (apexLocation) {
     return NextResponse.redirect(apexLocation, 308);
+  }
+
+  const legacyHirePath = collproRenoLegacyHireRedirectPath(pathname);
+  if (legacyHirePath) {
+    return NextResponse.redirect(
+      navigationRedirectUrl(`${legacyHirePath}${request.nextUrl.search}`, {
+        requestUrl: request.url,
+        hostHeader: request.headers.get("host"),
+        forwardedHostHeader: request.headers.get("x-forwarded-host"),
+        vercelDeploymentUrl: request.headers.get("x-vercel-deployment-url"),
+        vercelEnv: process.env.VERCEL_ENV,
+      }),
+      308,
+    );
   }
 
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);

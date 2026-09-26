@@ -218,7 +218,9 @@ check(
 check(
   "Auth proxy 308s tbbtool.com apex to www before serving any homepage",
   proxySrc.includes("tbbtApexWwwRedirectLocation") &&
-    proxySrc.includes("NextResponse.redirect(apexLocation, 308)"),
+    proxySrc.includes("NextResponse.redirect(apexLocation, 308)") &&
+    proxySrc.indexOf("const apexLocation = tbbtApexWwwRedirectLocation") <
+      proxySrc.indexOf("collproRenoLegacyHireRedirectPath(pathname)"),
 );
 
 console.log("\nSTATIC — Honest product claims");

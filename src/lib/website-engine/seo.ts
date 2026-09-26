@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { publicIndexableSitemapPaths } from "@/lib/public-site";
 import { publicCanonicalUrl } from "@/lib/public-site-seo";
 import type { PublishedSeoPage, PublishedWebsiteSnapshot } from "@/lib/website-engine/snapshot";
 import type { PublicWebsiteView } from "@/lib/website-engine/public";
@@ -50,16 +51,7 @@ export function viewHomeMetadata(
 
 export function publishedSitemapPaths(snapshot: PublishedWebsiteSnapshot) {
   const slug = snapshot.business.slug;
-  const paths = [
-    `/hire/${slug}`,
-    `/hire/${slug}/services`,
-    `/hire/${slug}/about`,
-    `/hire/${slug}/reviews`,
-    `/hire/${slug}/projects`,
-    `/hire/${slug}/service-area`,
-    `/hire/${slug}/contact`,
-    `/r/${slug}`,
-  ];
+  const paths = [...publicIndexableSitemapPaths(slug)];
   for (const service of snapshot.services) {
     paths.push(`/hire/${slug}/services/${service.slug}`);
   }

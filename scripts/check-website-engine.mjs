@@ -211,6 +211,8 @@ check(
   serviceDetail.includes("publicServiceFromView") &&
     serviceDetail.includes("application/ld+json") &&
     sitemap.includes("publishedSitemapPaths") &&
+    sitemap.includes("publicIndexableSitemapPaths") &&
+    sitemap.includes("isLocalPreviewDefaultHost") &&
     exportSrc.includes("website-publishes.json") &&
     exportSrc.includes("website-gallery.csv"),
 );
@@ -866,8 +868,15 @@ try {
 
   const paths = publishedSitemapPaths(reView.snapshot);
   check("Sitemap includes homepage and service pages", paths.includes(`/hire/${businessA.slug}`) && paths.includes(`/hire/${businessA.slug}/services/tv-mounting`));
+  check(
+    "Sitemap includes Projects, Reviews, Service Area, and Contact",
+    paths.includes(`/hire/${businessA.slug}/projects`) &&
+      paths.includes(`/hire/${businessA.slug}/reviews`) &&
+      paths.includes(`/hire/${businessA.slug}/service-area`) &&
+      paths.includes(`/hire/${businessA.slug}/contact`),
+  );
   check("Sitemap includes local pages", paths.some((path) => path.includes("/in/reno/tv-mounting")));
-  check("Sitemap excludes owner routes and B slug", !paths.some((path) => path.startsWith("/settings") || path.includes(businessB.slug)));
+  check("Sitemap excludes owner routes and B slug", !paths.some((path) => path.startsWith("/settings") || path.startsWith("/dashboard") || path.includes(businessB.slug)));
   check(
     "Canonical belongs to the correct tenant slug",
     reView.snapshot.business.slug === businessA.slug &&
