@@ -29,10 +29,11 @@ export function buildAppointmentProposedEmail(input: {
   serviceDescription: string | null;
   projectUrl: string;
   rescheduled: boolean;
+  timeZone: string;
 }) {
   const firstName = customerFirstName(input.customerName);
   const greeting = firstName ? `Hi ${firstName},` : "Hi,";
-  const when = formatDateTime(input.scheduledAt);
+  const when = formatDateTime(input.scheduledAt, input.timeZone);
   const duration = input.scheduledDurationMinutes
     ? formatDurationMinutes(input.scheduledDurationMinutes)
     : null;
