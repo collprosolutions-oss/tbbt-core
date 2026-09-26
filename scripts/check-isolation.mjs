@@ -13,8 +13,8 @@
  *     next/headers via requireWorkspace)
  *   - persistDraftInvoiceFromCompletedJob from src/lib/invoice-carry-forward.ts
  *   - listProjectPayments / recordSucceededPayment / recordOwnerManualDeposit
- *     / attachEstimatePaymentsToInvoice / ProjectPaymentError
- *     from src/lib/project-payments.ts
+ *     / recordOwnerInvoiceBalancePayment / attachEstimatePaymentsToInvoice
+ *     / ProjectPaymentError from src/lib/project-payments.ts
  *   - requireBusinessCapability / CAPABILITIES from src/lib/authorization.ts
  *
  * Server actions that call requireBusinessAccess() cannot be invoked from
@@ -60,6 +60,7 @@ const {
   ProjectPaymentError,
   attachEstimatePaymentsToInvoice,
   listProjectPayments,
+  recordOwnerInvoiceBalancePayment,
   recordOwnerManualDeposit,
   recordSucceededPayment,
 } = await import("@/lib/project-payments");
@@ -300,55 +301,13 @@ async function mirrorCreateInvoiceFromJob(access, jobId) {
 }
 
 /**
- * Mirrors src/app/actions/invoice.ts markInvoicePaid() ownership + scoped
- * payment + updateMany. Uses the real listProjectPayments /
- * recordSucceededPayment helpers.
+ * Mirrors src/app/actions/invoice.ts markInvoicePaid() by calling the
+ * real recordOwnerInvoiceBalancePayment helper used by that action.
  */
 async function mirrorMarkInvoicePaid(access, invoiceId) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
-  const invoice = access.assertOwned(
-    await prisma.invoice.findFirst({
-      where: { id: invoiceId, ...access.scope },
-      include: { job: { select: { estimateId: true } } },
-    }),
-  );
-  if (invoice.status === "PAID") return { alreadyPaid: true };
-  if (invoice.status !== "SENT") {
-    throw new Error("Send the invoice before marking it paid.");
-  }
-  const payments = await listProjectPayments(prisma, {
-    businessId: access.businessId,
-    invoiceId: invoice.id,
-    jobId: invoice.jobId,
-  });
-  const recorded = payments.reduce(
-    (sum, row) => sum.add(row.amount),
-    new Prisma.Decimal(0),
-  );
-  const amountDue = invoice.total.sub(recorded);
-  if (amountDue.gt(0)) {
-    await recordSucceededPayment(prisma, {
-      businessId: invoice.businessId,
-      customerId: invoice.customerId,
-      estimateId: invoice.job?.estimateId ?? null,
-      jobId: invoice.jobId,
-      invoiceId: invoice.id,
-      purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
-      amount: amountDue,
-      method: "CASH",
-    });
-  }
-  return prisma.invoice.updateMany({
-    where: {
-      id: invoice.id,
-      businessId: access.businessId,
-      status: "SENT",
-    },
-    data: {
-      status: "PAID",
-      paidAt: new Date(),
-      paymentMethod: "CASH",
-    },
+  return recordOwnerInvoiceBalancePayment(prisma, access, {
+    invoiceId,
+    method: "CASH",
   });
 }
 

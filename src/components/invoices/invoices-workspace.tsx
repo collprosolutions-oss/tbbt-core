@@ -31,6 +31,7 @@ export type InvoiceListItem = {
   paymentsLabel: string;
   depositPaidLabel: string | null;
   balanceLabel: string;
+  remainingDue: string;
   balanceSettled: boolean;
   createdAtLabel: string;
   customer: { id: string; name: string; phone: string | null; email: string | null } | null;
@@ -427,7 +428,12 @@ function InvoiceDetailsPanel({ invoice }: { invoice: InvoiceListItem | null }) {
           </Button>
         ) : null}
         {isDraft ? <MarkInvoiceSentButton invoiceId={invoice.id} /> : null}
-        {isSent ? <MarkInvoicePaidForm invoiceId={invoice.id} /> : null}
+        {isSent ? (
+          <MarkInvoicePaidForm
+            invoiceId={invoice.id}
+            remainingDue={invoice.remainingDue}
+          />
+        ) : null}
         {invoice.customer ? (
           <Button asChild variant="outline">
             <Link href={`/customers/${invoice.customer.id}`}>Open Customer</Link>

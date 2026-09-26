@@ -47,6 +47,10 @@ import {
 } from "@/lib/owner-today";
 import { completedJobBillingAttention } from "@/lib/revenue-integrity";
 import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
+import {
+  listPaymentsGroupedByInvoiceId,
+  sumInvoiceRemainingDue,
+} from "@/lib/project-payments";
 import { listActiveTradeCodes } from "@/lib/business-trades";
 import { workspaceTradeLabel } from "@/lib/trade-config";
 
@@ -83,7 +87,7 @@ export default async function DashboardPage() {
     sentEstimates,
     scheduledJobs,
     inProgressJobs,
-    outstandingAgg,
+    sentOutstandingInvoices,
     sentInvoicesCount,
     unscheduledJobsCount,
     draftEstimatesCount,
@@ -106,11 +110,12 @@ export default async function DashboardPage() {
     prisma.estimate.count({ where: { ...access.scope, status: "SENT" } }),
     prisma.job.count({ where: { ...access.scope, status: "SCHEDULED" } }),
     prisma.job.count({ where: { ...access.scope, status: "IN_PROGRESS" } }),
-    // Outstanding uses the invoice's own stored total, never a recomputed
-    // estimate/catalog price, and only SENT invoices (never DRAFT or PAID).
-    prisma.invoice.aggregate({
+    // Outstanding is remaining due on SENT invoices: stored invoice total
+    // minus canonical attributed Payments. Never DRAFT or PAID face value,
+    // and never a recomputed estimate/catalog price.
+    prisma.invoice.findMany({
       where: { ...access.scope, status: "SENT" },
-      _sum: { total: true },
+      select: { id: true, status: true, total: true, jobId: true, kind: true },
     }),
     prisma.invoice.count({ where: { ...access.scope, status: "SENT" } }),
     prisma.job.count({ where: { ...access.scope, status: "UNSCHEDULED" } }),
@@ -206,7 +211,15 @@ export default async function DashboardPage() {
     }),
   ]);
 
-  const outstandingTotal = outstandingAgg._sum.total ?? 0;
+  const outstandingPayments = await listPaymentsGroupedByInvoiceId(
+    prisma,
+    access.businessId,
+    sentOutstandingInvoices,
+  );
+  const outstandingTotal = sumInvoiceRemainingDue(
+    sentOutstandingInvoices,
+    outstandingPayments,
+  );
   const paymentsGoLive = explainPaymentsGoLiveFromStatus(paymentStatus);
   const appointmentAttention = dashboardAppointmentAttentionItems(
     appointmentAttentionJobs,
@@ -275,7 +288,7 @@ export default async function DashboardPage() {
       items: requestsWithoutEstimate.map((request) => ({
         key: request.id,
         name: request.customer?.name ?? "Customer",
-        href: "/requests",
+        href: `/requests?selected=${request.id}`,
         action: "Open requests",
       })),
     },
@@ -355,7 +368,7 @@ export default async function DashboardPage() {
         key: request.id,
         name: request.customer?.name ?? "Customer",
         meta: formatDateTime(request.createdAt),
-        href: "/requests",
+        href: `/requests?selected=${request.id}`,
         action: "Open requests",
       })),
     },

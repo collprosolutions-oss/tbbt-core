@@ -32,6 +32,10 @@ import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatDate, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
+import {
+  listPaymentsGroupedByInvoiceId,
+  sumInvoiceRemainingDue,
+} from "@/lib/project-payments";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -134,7 +138,17 @@ export default async function CustomersPage({
           orderBy: { createdAt: "asc" },
           take: 1,
         },
-        invoices: { select: { id: true, status: true, total: true, paidAt: true, updatedAt: true } },
+        invoices: {
+          select: {
+            id: true,
+            status: true,
+            total: true,
+            paidAt: true,
+            updatedAt: true,
+            jobId: true,
+            kind: true,
+          },
+        },
         serviceRequests: { select: { id: true, status: true, updatedAt: true }, orderBy: { updatedAt: "desc" }, take: 1 },
         estimates: { select: { id: true, status: true, updatedAt: true }, orderBy: { updatedAt: "desc" }, take: 1 },
         jobs: { select: { id: true, status: true, updatedAt: true }, orderBy: { updatedAt: "desc" }, take: 1 },
@@ -203,13 +217,28 @@ export default async function CustomersPage({
 
   const areaOptions = areaRows.map((row) => row.city).filter((city): city is string => Boolean(city));
 
+  const paymentsByInvoiceId = await listPaymentsGroupedByInvoiceId(
+    prisma,
+    access.businessId,
+    customersRaw.flatMap((customer) =>
+      customer.invoices.map((invoice) => ({
+        id: invoice.id,
+        jobId: invoice.jobId,
+        kind: invoice.kind,
+      })),
+    ),
+  );
+
   const customers = customersRaw.map((customer) => {
     const totalSpent = customer.invoices
       .filter((invoice) => invoice.paidAt)
       .reduce((sum, invoice) => sum + Number(invoice.total), 0);
-    const balance = customer.invoices
-      .filter((invoice) => invoice.status === "SENT")
-      .reduce((sum, invoice) => sum + Number(invoice.total), 0);
+    const balance = Number(
+      sumInvoiceRemainingDue(
+        customer.invoices.filter((invoice) => invoice.status === "SENT"),
+        paymentsByInvoiceId,
+      ),
+    );
 
     const latestInvoice = customer.invoices.reduce<(typeof customer.invoices)[number] | null>(
       (latest, invoice) => (!latest || invoice.updatedAt > latest.updatedAt ? invoice : latest),
