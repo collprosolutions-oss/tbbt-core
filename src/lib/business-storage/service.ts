@@ -122,7 +122,7 @@ async function bestEffortCleanupOwnedObject(
 }
 
 async function releaseExpiredReservations(
-  db: Db,
+  db: PrismaClient,
   businessId: string,
   now: Date,
   provider: StorageProvider,
