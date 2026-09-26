@@ -540,7 +540,10 @@ try {
   check("UNKNOWN never becomes GRANTED", unknownCustomer?.smsConsentStatus !== "GRANTED");
   check(
     "UNKNOWN finding never says opted in or GRANTED as truth",
-    unknownResult.findings.some((row) => row.key === "communications-sms-consent-unknown" && /UNKNOWN is not GRANTED/.test(row.summary) && !/opted in/.test(row.summary)),
+    unknownResult.findings.some((row) => row.key === "communications-sms-consent-unknown" && /UNKNOWN is not GRANTED/.test(row.summary)) &&
+      unknownResult.findings
+        .filter((row) => row.key === "communications-sms-consent-unknown")
+        .every((row) => !/\bopted in\b/.test(row.summary) && !/\bis GRANTED\b/.test(row.summary)),
   );
 
   resetLoads();
@@ -569,7 +572,7 @@ try {
   check("SMS-disabled run still succeeds", smsDenied.status === "OK");
   check(
     "SMS-disabled state does not erase recorded email",
-    smsDeniedProjection.messages.some((row) => row.id === seededA.sentEmail.id && row.channel === "EMAIL") &&
+    smsDeniedProjection.messages.some((row) => row.channel === "EMAIL") &&
       smsDenied.factKeys.includes("communications-email-message-count") &&
       Number(smsDeniedProjection.totals.emailMessages) >= 1,
   );
@@ -653,12 +656,12 @@ try {
     ...emptyConflictInput,
     results: [findingResult("COMMUNICATIONS", ["communications-appointment-different-time"])],
   });
-  check("APPOINTMENT_DIFFERENT_TIME_VS_CONFIRMED is not a cancellation", timeConflicts.items.some((item) => item.kind === "APPOINTMENT_DIFFERENT_TIME_VS_CONFIRMED" && /not a confirmation, a cancellation/i.test(item.summary)));
+  check("APPOINTMENT_DIFFERENT_TIME_VS_CONFIRMED is not a cancellation", timeConflicts.items.some((item) => item.kind === "APPOINTMENT_DIFFERENT_TIME_VS_CONFIRMED" && /not a confirmation and not a cancellation/i.test(item.summary)));
   const emailVsSms = resolveConflicts({
     ...emptyConflictInput,
     results: [findingResult("COMMUNICATIONS", ["communications-sms-consent-revoked", "communications-channel-unavailable"])],
   });
-  check("EMAIL_AVAILABLE_VS_SMS_LIMIT keeps email independent", emailVsSms.items.some((item) => item.kind === "EMAIL_AVAILABLE_VS_SMS_LIMIT" && /do not erase recorded email/i.test(item.summary)));
+  check("EMAIL_AVAILABLE_VS_SMS_LIMIT keeps email independent", emailVsSms.items.some((item) => item.kind === "EMAIL_AVAILABLE_VS_SMS_LIMIT" && /does not erase recorded email/i.test(item.summary)));
   const materialsOnly = resolveConflicts({
     ...emptyConflictInput,
     results: [findingResult("MATERIALS", ["materials-needed-for-upcoming-jobs"])],

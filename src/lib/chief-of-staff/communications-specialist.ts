@@ -3,7 +3,7 @@
  *
  * Loads one bounded read-only projection when selected. Does not send
  * email or SMS, create threads, mutate consent, write communication
- * records, or create AiActionProposal. Does not call other specialists.
+ * records, or propose owner actions. Does not call other specialists.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
@@ -325,10 +325,6 @@ function emptyTotals(): CommunicationsProjectionTotals {
   };
 }
 
-function capInMemory<T>(rows: T[], cap: number) {
-  return rows.slice(0, cap);
-}
-
 function previewSubject(subject: string | null | undefined) {
   const trimmed = subject?.trim() ?? "";
   if (!trimmed) return null;
@@ -526,6 +522,7 @@ function projectCustomer(input: {
     emailAvailable: hasEmail,
     emailConfigured: input.emailConfigured,
     emailEligible: email.permitted && email.available,
+    targeted: input.targeted,
   };
 }
 
@@ -577,14 +574,42 @@ export async function loadCommunicationsProjection(input: {
     attemptedAt: true,
     bodySnapshot: true,
   } as const;
-  const messageRows = loadMessages
-    ? await input.db.customerCommunication.findMany({
-        where: messageWhere,
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: COMMUNICATIONS_CONTEXT_CAPS.messages + (targets.messageId ? 1 : 0),
-        select: messageSelect,
-      })
-    : [];
+  const messageOrder = [{ createdAt: "desc" as const }, { id: "desc" as const }];
+  const [recentRows, failedRows, pendingRows, emailRows, smsRows] = loadMessages
+    ? await Promise.all([
+        input.db.customerCommunication.findMany({
+          where: messageWhere,
+          orderBy: messageOrder,
+          take: COMMUNICATIONS_CONTEXT_CAPS.messages,
+          select: messageSelect,
+        }),
+        input.db.customerCommunication.findMany({
+          where: { ...messageWhere, status: { in: [...FAILED_STATUSES] } },
+          orderBy: messageOrder,
+          take: 4,
+          select: messageSelect,
+        }),
+        input.db.customerCommunication.findMany({
+          where: { ...messageWhere, status: { in: [...PENDING_STATUSES] } },
+          orderBy: messageOrder,
+          take: 4,
+          select: messageSelect,
+        }),
+        input.db.customerCommunication.findMany({
+          where: { ...messageWhere, channel: "EMAIL" },
+          orderBy: messageOrder,
+          take: 4,
+          select: messageSelect,
+        }),
+        input.db.customerCommunication.findMany({
+          where: { ...messageWhere, channel: "SMS" },
+          orderBy: messageOrder,
+          take: 4,
+          select: messageSelect,
+        }),
+      ])
+    : [[], [], [], [], []];
+  const messageRows = [...recentRows];
   const [messageCount, failedCount, pendingCount, blockedCount, inboundCount, outboundCount, smsCount, emailCount] =
     loadMessages
       ? await Promise.all([
@@ -616,30 +641,27 @@ export async function loadCommunicationsProjection(input: {
   if (targets.messageId && !messageRows.some((row) => row.id === targets.messageId)) {
     const extra = await input.db.customerCommunication.findFirst({
       where: { id: targets.messageId, businessId },
-      select: {
-        id: true,
-        businessId: true,
-        customerId: true,
-        direction: true,
-        channel: true,
-        purpose: true,
-        subject: true,
-        relatedType: true,
-        relatedId: true,
-        consentContext: true,
-        status: true,
-        provider: true,
-        failureReason: true,
-        createdAt: true,
-        attemptedAt: true,
-        bodySnapshot: true,
-      },
+      select: messageSelect,
     });
     if (extra) messageRows.unshift(extra);
   }
+  const selectedMessageRows: typeof messageRows = [];
+  const seenMessageIds = new Set<string>();
+  const pinMessage = (row: (typeof messageRows)[number] | undefined) => {
+    if (!row || seenMessageIds.has(row.id) || selectedMessageRows.length >= COMMUNICATIONS_CONTEXT_CAPS.messages) {
+      return;
+    }
+    selectedMessageRows.push(row);
+    seenMessageIds.add(row.id);
+  };
+  if (targets.messageId) pinMessage(messageRows.find((row) => row.id === targets.messageId));
+  for (const row of failedRows) pinMessage(row);
+  for (const row of pendingRows) pinMessage(row);
+  pinMessage(emailRows[0]);
+  pinMessage(smsRows[0]);
+  for (const row of messageRows) pinMessage(row);
 
-  const projectedMessages = capInMemory(
-    messageRows.map((row) => ({
+  const projectedMessages = selectedMessageRows.map((row) => ({
       id: row.id,
       businessId: row.businessId,
       customerId: row.customerId,
@@ -656,9 +678,7 @@ export async function loadCommunicationsProjection(input: {
       hasSubject: Boolean(row.subject?.trim()),
       subjectPreview: previewSubject(row.subject),
       hasBody: Boolean(row.bodySnapshot?.trim()),
-    })),
-    COMMUNICATIONS_CONTEXT_CAPS.messages,
-  );
+    }));
 
   const customerIds = new Set<string>();
   if (scopedCustomerId) customerIds.add(scopedCustomerId);
@@ -858,7 +878,7 @@ function findingsFromProjection(
     findings.push({
       key: "communications-failed-delivery",
       title: "Recent communication delivery failed",
-      why: `${t.failedDeliveries} recorded communication${t.failedDeliveries === 1 ? " has" : "s have"} status FAILED. That is a recorded delivery result, not proof the customer saw, read, or ignored the message.`,
+      why: `${t.failedDeliveries} recorded communication${t.failedDeliveries === 1 ? " has" : "s have"} status FAILED. That is a recorded delivery result, not a read receipt.`,
       entityIds: projection.messages
         .filter((row) => row.status === "FAILED")
         .map((row) => row.id)
@@ -882,7 +902,7 @@ function findingsFromProjection(
     findings.push({
       key: "communications-sms-consent-unknown",
       title: "SMS consent is unknown",
-      why: `${t.unknownConsent} projected customer${t.unknownConsent === 1 ? " has" : "s have"} SMS consent UNKNOWN. UNKNOWN is not GRANTED and is not opted in. Having a phone number does not grant consent.`,
+      why: `${t.unknownConsent} projected customer${t.unknownConsent === 1 ? " has" : "s have"} SMS consent UNKNOWN. UNKNOWN is not GRANTED. Having a phone number does not grant consent.`,
       entityIds: projection.customers
         .filter((row) => row.smsConsentStatus === "UNKNOWN")
         .map((row) => row.id)
@@ -910,7 +930,7 @@ function findingsFromProjection(
     findings.push({
       key: "communications-appointment-different-time",
       title: "Customer requested a different appointment time",
-      why: `${t.differentTimeAppointments} recorded appointment${t.differentTimeAppointments === 1 ? " has" : "s have"} DIFFERENT_TIME_REQUESTED. That is a recorded request, not proof the customer will cancel or is upset.`,
+      why: `${t.differentTimeAppointments} recorded appointment${t.differentTimeAppointments === 1 ? " has" : "s have"} DIFFERENT_TIME_REQUESTED. That is a recorded request, not a confirmation and not a cancellation.`,
       entityIds: projection.appointments
         .filter((row) => row.differentTimeRequested)
         .map((row) => row.jobId)
@@ -934,7 +954,7 @@ function findingsFromProjection(
     findings.push({
       key: "communications-awaiting-appointment",
       title: "Appointment confirmation is awaiting the customer",
-      why: `${t.awaitingAppointments} recorded appointment${t.awaitingAppointments === 1 ? " is" : "s are"} AWAITING_CUSTOMER. That does not prove the customer saw or read a message.`,
+      why: `${t.awaitingAppointments} recorded appointment${t.awaitingAppointments === 1 ? " is" : "s are"} AWAITING_CUSTOMER. That is recorded confirmation state, not a customer reply.`,
       entityIds: projection.appointments
         .filter((row) => row.awaitingCustomer)
         .map((row) => row.jobId)

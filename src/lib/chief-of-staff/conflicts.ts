@@ -250,7 +250,7 @@ export function resolveConflicts(input: {
       kind: "APPOINTMENT_DIFFERENT_TIME_VS_CONFIRMED",
       recommendationKeys: communicationKeys("communications-appointment-different-time"),
       summary:
-        "DIFFERENT_TIME_REQUESTED is a recorded request. It is not a confirmation, a cancellation, or proof the customer is upset.",
+        "DIFFERENT_TIME_REQUESTED is a recorded request. It is not a confirmation and not a cancellation.",
     });
   }
 
