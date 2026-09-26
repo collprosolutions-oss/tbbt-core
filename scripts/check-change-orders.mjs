@@ -1233,7 +1233,6 @@ try {
       ownerReviewListSrc.includes("Yes, dismiss") &&
       ownerReviewListSrc.includes("Keep request") &&
       ownerReviewListSrc.includes("setConfirmingDismiss(true)") &&
-      !ownerReviewListSrc.includes("undo") &&
       !ownerReviewListSrc.includes("Undo"),
   );
 

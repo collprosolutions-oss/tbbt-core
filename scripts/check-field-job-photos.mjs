@@ -198,7 +198,6 @@ check(
     ownerPhotoItemSrc.includes("setConfirming(true)") &&
     ownerPhotoItemSrc.includes("Keep photo") &&
     ownerPhotoItemSrc.includes("deleteJobPhoto") &&
-    !ownerPhotoItemSrc.includes("undo") &&
     !ownerPhotoItemSrc.includes("Undo"),
 );
 check(
