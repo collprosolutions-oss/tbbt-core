@@ -436,12 +436,23 @@ try {
       !materialsHold.selectedIds.includes("BUSINESS_PROTECTION") &&
       !materialsHold.selectedIds.includes("KNOWLEDGE_LAUNCH"),
   );
-  const jobBlocker = planSpecialists({
+  const jobBlockerNoTarget = planSpecialists({
     question: "What is stopping this job from moving forward?",
     activeRecommendationKeys: [],
   });
   check(
-    "Job-blocker selects ATTENTION plus WORKFORCE and MATERIALS only",
+    "Job-blocker without a job target stays at ATTENTION",
+    jobBlockerNoTarget.selectedIds.join(",") === "ATTENTION" &&
+      !jobBlockerNoTarget.selectedIds.includes("WORKFORCE") &&
+      !jobBlockerNoTarget.selectedIds.includes("MATERIALS"),
+  );
+  const jobBlocker = planSpecialists({
+    question: "What is stopping this job from moving forward?",
+    activeRecommendationKeys: [],
+    entityHints: { jobId: "owned-job-1" },
+  });
+  check(
+    "Job-blocker with a job target selects ATTENTION plus WORKFORCE and MATERIALS only",
     jobBlocker.selectedIds.includes("ATTENTION") &&
       jobBlocker.selectedIds.includes("WORKFORCE") &&
       jobBlocker.selectedIds.includes("MATERIALS") &&

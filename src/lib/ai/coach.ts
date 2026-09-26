@@ -463,10 +463,10 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
     keys = [];
     stance = "MIXED";
     text =
-      "What is stopping this job is taken from recorded scheduling and material findings for the selected work. " +
+      "Job-specific recorded scheduling and material findings are used to identify blockers only for a selected job. " +
+      "If no job is selected, or no job-specific blocker is recorded, the available records do not establish one. " +
+      "Open or select the job to inspect the schedule and materials records. " +
       "Business-wide unpaid invoices or unscheduled-job counts are not treated as blockers for this job. " +
-      "If no job-specific blocker is recorded, the available records do not establish one. " +
-      "Open the job, schedule, or materials records to inspect the selected work. " +
       "The Coach does not assign, purchase, send messages, or mark anything paid.";
   } else if (/profit|less profitable|margin/.test(q)) {
     keys = ["paid-revenue", "recorded-expenses", "low-margin", "unpaid-invoices"];

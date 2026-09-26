@@ -210,7 +210,8 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
   }
 
   const jobBlocker = JOB_BLOCKER_QUESTION.test(question);
-  if (jobBlocker && departmentHitCount(question) === 0) {
+  const hasJobTarget = Boolean(input.entityHints?.jobId);
+  if (jobBlocker && hasJobTarget && departmentHitCount(question) === 0) {
     if (isSpecialistEnabled("WORKFORCE") && !selected.includes("WORKFORCE")) {
       selected.push("WORKFORCE");
     }
@@ -274,7 +275,7 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     if (isSpecialistEnabled("BUSINESS_PROTECTION") && (protectionHint || explicitProtection)) {
       allowed.add("BUSINESS_PROTECTION");
     }
-    if (jobBlocker && !isGenericFocusQuestion(question)) {
+    if (jobBlocker && hasJobTarget && !isGenericFocusQuestion(question)) {
       if (isSpecialistEnabled("WORKFORCE")) allowed.add("WORKFORCE");
       if (isSpecialistEnabled("MATERIALS") && (wantsMaterials || departmentHitCount(question) === 0)) {
         allowed.add("MATERIALS");

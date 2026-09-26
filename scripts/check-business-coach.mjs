@@ -223,22 +223,35 @@ check(
     !protectionExpiring.selectedIds.includes("GROWTH"),
 );
 
-const jobBlocker = planSpecialists({
+const jobBlockerNoTarget = planSpecialists({
   question: OWNER_QUESTIONS.jobBlocker,
   activeRecommendationKeys: [],
+  entityHints: undefined,
 });
 check(
-  "Job-blocker stays at ATTENTION + WORKFORCE + MATERIALS",
-  jobBlocker.selectedIds.includes("ATTENTION") &&
-    jobBlocker.selectedIds.includes("WORKFORCE") &&
-    jobBlocker.selectedIds.includes("MATERIALS") &&
-    jobBlocker.selectedIds.length === 3 &&
-    jobBlocker.fanout <= 4 &&
-    !jobBlocker.selectedIds.includes("FINANCIAL") &&
-    !jobBlocker.selectedIds.includes("GROWTH") &&
-    !jobBlocker.selectedIds.includes("COMMUNICATIONS") &&
-    !jobBlocker.selectedIds.includes("KNOWLEDGE_LAUNCH") &&
-    !jobBlocker.selectedIds.includes("BUSINESS_PROTECTION"),
+  "Job-blocker without a job target stays ATTENTION-bounded",
+  jobBlockerNoTarget.selectedIds.join(",") === "ATTENTION" &&
+    !jobBlockerNoTarget.selectedIds.includes("WORKFORCE") &&
+    !jobBlockerNoTarget.selectedIds.includes("MATERIALS") &&
+    jobBlockerNoTarget.fanout === 1,
+);
+const jobBlockerWithTarget = planSpecialists({
+  question: OWNER_QUESTIONS.jobBlocker,
+  activeRecommendationKeys: [],
+  entityHints: { jobId: "owned-job-1" },
+});
+check(
+  "Job-blocker with an owned job target stays at ATTENTION + WORKFORCE + MATERIALS",
+  jobBlockerWithTarget.selectedIds.includes("ATTENTION") &&
+    jobBlockerWithTarget.selectedIds.includes("WORKFORCE") &&
+    jobBlockerWithTarget.selectedIds.includes("MATERIALS") &&
+    jobBlockerWithTarget.selectedIds.length === 3 &&
+    jobBlockerWithTarget.fanout <= 4 &&
+    !jobBlockerWithTarget.selectedIds.includes("FINANCIAL") &&
+    !jobBlockerWithTarget.selectedIds.includes("GROWTH") &&
+    !jobBlockerWithTarget.selectedIds.includes("COMMUNICATIONS") &&
+    !jobBlockerWithTarget.selectedIds.includes("KNOWLEDGE_LAUNCH") &&
+    !jobBlockerWithTarget.selectedIds.includes("BUSINESS_PROTECTION"),
 );
 
 const kitchen = planSpecialists({
@@ -632,6 +645,7 @@ check(
   "Job-blocker uses selected-scope scheduling/material findings and admits when none are recorded",
   /recorded scheduling and material findings/i.test(jobBlockerText) &&
     /do not establish one/i.test(jobBlockerText) &&
+    /open or select the job/i.test(jobBlockerText) &&
     /does not assign, purchase/i.test(jobBlockerText),
 );
 
@@ -643,16 +657,30 @@ const jobBlockerExamples = [
   "What's holding up the job?",
 ];
 for (const question of jobBlockerExamples) {
-  const plan = planSpecialists({ question, activeRecommendationKeys: [] });
+  const noTarget = planSpecialists({ question, activeRecommendationKeys: [] });
+  const withTarget = planSpecialists({
+    question,
+    activeRecommendationKeys: [],
+    entityHints: { jobId: "owned-job-1" },
+  });
   check(
     `"${question}" remains a job-blocker question`,
-    isJobBlockerQuestion(question) &&
-      plan.selectedIds.includes("ATTENTION") &&
-      plan.selectedIds.includes("WORKFORCE") &&
-      plan.selectedIds.includes("MATERIALS") &&
-      plan.fanout <= 4 &&
-      !plan.selectedIds.includes("FINANCIAL") &&
-      !plan.selectedIds.includes("GROWTH"),
+    isJobBlockerQuestion(question),
+  );
+  check(
+    `"${question}" without a job target stays ATTENTION-bounded`,
+    noTarget.selectedIds.join(",") === "ATTENTION" &&
+      !noTarget.selectedIds.includes("WORKFORCE") &&
+      !noTarget.selectedIds.includes("MATERIALS"),
+  );
+  check(
+    `"${question}" with a job target selects WORKFORCE + MATERIALS`,
+    withTarget.selectedIds.includes("ATTENTION") &&
+      withTarget.selectedIds.includes("WORKFORCE") &&
+      withTarget.selectedIds.includes("MATERIALS") &&
+      withTarget.fanout <= 4 &&
+      !withTarget.selectedIds.includes("FINANCIAL") &&
+      !withTarget.selectedIds.includes("GROWTH"),
   );
 }
 
@@ -730,6 +758,97 @@ check(
     plannerSrc.includes("jobs? (?:today|tomorrow)") &&
     !plannerSrc.includes("|\\btoday\\b|") &&
     !plannerSrc.includes("|today|"),
+);
+
+console.log("\nCORRECTION 4 — job-blocker deep-load requires an owned job target");
+const noJobTargetPlan = planSpecialists({
+  question: "What is stopping this job from moving forward?",
+  activeRecommendationKeys: [],
+  entityHints: undefined,
+});
+check(
+  "A. No job target does not select WORKFORCE or MATERIALS from blocker wording",
+  !noJobTargetPlan.selectedIds.includes("WORKFORCE") &&
+    !noJobTargetPlan.selectedIds.includes("MATERIALS") &&
+    noJobTargetPlan.selectedIds.join(",") === "ATTENTION" &&
+    noJobTargetPlan.fanout === 1,
+);
+
+const ownedJobTargetPlan = planSpecialists({
+  question: "What is stopping this job from moving forward?",
+  activeRecommendationKeys: [],
+  entityHints: { jobId: "owned-job-1" },
+});
+check(
+  "B. Owned job target selects ATTENTION + WORKFORCE + MATERIALS, fanout <= 4",
+  ownedJobTargetPlan.selectedIds.includes("ATTENTION") &&
+    ownedJobTargetPlan.selectedIds.includes("WORKFORCE") &&
+    ownedJobTargetPlan.selectedIds.includes("MATERIALS") &&
+    ownedJobTargetPlan.selectedIds.length === 3 &&
+    ownedJobTargetPlan.fanout <= 4,
+);
+
+const noTargetSynthesis = synthesizeCoachAnswer({
+  question: "What is stopping this job from moving forward?",
+  catalog,
+  specialistResults: noJobTargetPlan.selectedIds.map((specialistId) => ({
+    specialistId,
+    status: "OK",
+    findings:
+      specialistId === "ATTENTION"
+        ? [
+            {
+              key: "attention-open-invoices",
+              title: "Recorded unpaid invoices",
+              summary: "SENT invoices remain unpaid on file.",
+              recommendationKeys: [],
+              factKeys: ["unpaid-invoices"],
+            },
+          ]
+        : [],
+    factKeys: specialistId === "ATTENTION" ? ["unpaid-invoices"] : [],
+    recommendationKeys: [],
+  })),
+  conflicts: { items: [], uniqueRecommendationKeys: [] },
+  coachContext: coachContext(),
+});
+const noTargetRecorded = noTargetSynthesis.payload.recordedFindings ?? [];
+const noTargetPayload = JSON.stringify(noTargetSynthesis.payload);
+check(
+  "C. No-target job-blocker payload has no business-wide Workforce/Materials recordedFindings",
+  !noJobTargetPlan.selectedIds.includes("WORKFORCE") &&
+    !noJobTargetPlan.selectedIds.includes("MATERIALS") &&
+    !noTargetRecorded.some((row) => /^(workforce|materials)-/i.test(row.key)) &&
+    !/unscheduled jobs|materials still needed|Workforce specialist|Materials specialist/i.test(noTargetPayload) &&
+    /do not establish one/i.test(noTargetSynthesis.output.text) &&
+    /open or select the job/i.test(noTargetSynthesis.output.text) &&
+    !/\d+\s+unpaid SENT invoice/i.test(noTargetSynthesis.output.text),
+);
+
+const materialsHoldControl = planSpecialists({
+  question: "What materials are holding up jobs?",
+  activeRecommendationKeys: [],
+});
+const jobsTodayControl = planSpecialists({
+  question: "What jobs do I have today?",
+  activeRecommendationKeys: [],
+});
+const attentionTodayControl = planSpecialists({
+  question: "What needs my attention today?",
+  activeRecommendationKeys: [],
+});
+const capacityWeekControl = planSpecialists({
+  question: "Do I have enough capacity this week?",
+  activeRecommendationKeys: [],
+});
+check(
+  "D. Existing domain routing stays unchanged",
+  jobsTodayControl.selectedIds.includes("WORKFORCE") &&
+    materialsHoldControl.selectedIds.includes("MATERIALS") &&
+    !materialsHoldControl.selectedIds.includes("WORKFORCE") &&
+    attentionTodayControl.selectedIds.join(",") === "ATTENTION" &&
+    capacityWeekControl.selectedIds.includes("WORKFORCE") &&
+    !capacityWeekControl.selectedIds.includes("MATERIALS"),
 );
 
 if (failures > 0) {
