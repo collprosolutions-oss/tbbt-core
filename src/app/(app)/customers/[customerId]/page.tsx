@@ -22,7 +22,7 @@ import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { loadCustomerCommunicationTimeline } from "@/lib/communications/timeline";
 import { customerInvoiceHistoryContext } from "@/lib/customer-invoice-history";
 import { requestNotesText } from "@/lib/work-area-intake";
-import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
+import { formatAddress, formatDate, formatDateTime, formatMoney } from "@/lib/format";
 import { loadRecordJourney } from "@/lib/record-nav";
 import { prisma } from "@/lib/prisma";
 
@@ -186,24 +186,33 @@ export default async function CustomerProfilePage({
             <p className="text-sm text-muted-foreground">No jobs yet.</p>
           ) : (
             <div className="space-y-2">
-              {customer.jobs.map((job) => (
-                <RecordRow
-                  key={job.id}
-                  title={<StatusBadge status={job.status} />}
-                  meta={
-                    <span>
-                      {job.scheduledAt
-                        ? formatDateTime(job.scheduledAt)
-                        : formatDate(job.createdAt)}
-                    </span>
-                  }
-                  action={
-                    <Button asChild size="sm" variant="outline">
-                      <Link href={`/jobs/${job.id}`}>Open</Link>
-                    </Button>
-                  }
-                />
-              ))}
+              {customer.jobs.map((job) => {
+                const recordedProperty = customer.properties.find(
+                  (property) => property.id === job.propertyId,
+                );
+                const recordedAddress = recordedProperty
+                  ? formatAddress(recordedProperty)
+                  : null;
+                return (
+                  <RecordRow
+                    key={job.id}
+                    title={<StatusBadge status={job.status} />}
+                    subtitle={recordedAddress || undefined}
+                    meta={
+                      <span>
+                        {job.scheduledAt
+                          ? formatDateTime(job.scheduledAt)
+                          : formatDate(job.createdAt)}
+                      </span>
+                    }
+                    action={
+                      <Button asChild variant="outline" className="min-h-11 min-w-11 px-4">
+                        <Link href={`/jobs/${job.id}`}>Open</Link>
+                      </Button>
+                    }
+                  />
+                );
+              })}
             </div>
           )}
         </CardContent>

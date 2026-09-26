@@ -21,6 +21,8 @@
     "test:service-categories": "node --experimental-strip-types scripts/check-service-categories.mjs",
     "test:services-page": "node --experimental-strip-types scripts/check-services-page.mjs",
     "test:customers-page": "node --experimental-strip-types scripts/check-customers-page.mjs",
+    "test:customer": "node --experimental-strip-types scripts/check-customer.mjs",
+    "test:property": "node --experimental-strip-types scripts/check-property.mjs",
     "test:customer-layout": "node --experimental-strip-types scripts/check-customer-layout.mjs",
     "test:record-nav": "node --experimental-strip-types scripts/check-record-nav.mjs",
     "test:requests-page": "node --experimental-strip-types scripts/check-requests-page.mjs",
