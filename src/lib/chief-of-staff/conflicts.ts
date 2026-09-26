@@ -466,15 +466,12 @@ export function resolveConflicts(input: {
     });
   }
 
-  if (hasAny("protection-agreement-complete-not-enforceable", "protection-agreement-lifecycle")) {
+  if (hasAny("protection-agreement-complete-not-enforceable")) {
     items.push({
       kind: "AGREEMENT_COMPLETE_VS_ENFORCEABLE",
-      recommendationKeys: protectionKeys(
-        "protection-agreement-complete-not-enforceable",
-        "protection-agreement-lifecycle",
-      ),
+      recommendationKeys: protectionKeys("protection-agreement-complete-not-enforceable"),
       summary:
-        "SIGNED, COMPLETE, and EXTERNAL_COMPLETE are recorded workflow facts. They are not legal validity or enforceability.",
+        "SIGNED, COMPLETE, and EXTERNAL_COMPLETE are recorded workflow facts. Recorded completion does not prove legal validity or enforceability.",
     });
   }
 

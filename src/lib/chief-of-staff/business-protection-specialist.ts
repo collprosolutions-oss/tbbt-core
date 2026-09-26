@@ -235,8 +235,8 @@ export type BusinessProtectionProjectionTotals = {
   complete: number;
   externalComplete: number;
   awaitingAction: number;
-  checklistMet: number;
-  checklistMissing: number;
+  checklistMet: number | null;
+  checklistMissing: number | null;
 };
 
 export type BusinessProtectionProjection = {
@@ -244,6 +244,9 @@ export type BusinessProtectionProjection = {
   vaultRecords: VaultRecordProjection[];
   agreements: AgreementProjection[];
   checklist: ProtectionChecklistProjection[];
+  checklistAvailable: boolean;
+  vaultScopeLoaded: boolean;
+  agreementScopeLoaded: boolean;
   esign: {
     providerStatus: EsignProviderStatus;
     message: string;
@@ -334,8 +337,8 @@ function emptyTotals(): BusinessProtectionProjectionTotals {
     complete: 0,
     externalComplete: 0,
     awaitingAction: 0,
-    checklistMet: 0,
-    checklistMissing: 0,
+    checklistMet: null,
+    checklistMissing: null,
   };
 }
 
@@ -585,6 +588,9 @@ export async function loadBusinessProtectionProjection(input: {
     targets.targetedEntityMismatch;
   const scoped = targets.scoped && !failClosed;
   const loadRows = !failClosed && (scoped || !targets.scoped);
+  const loadVaultScope = Boolean(loadRows && (!scoped || targets.vaultRecordId));
+  const loadAgreementScope = Boolean(loadRows && (!scoped || targets.agreementId));
+  const loadChecklist = loadVaultScope;
 
   const vaultWhere: Prisma.BusinessVaultRecordWhereInput = { businessId };
   const agreementWhere: Prisma.BusinessAgreementWhereInput = { businessId };
@@ -637,7 +643,7 @@ export async function loadBusinessProtectionProjection(input: {
     externalCompleteCount,
     checklistCounts,
   ] = await Promise.all([
-    loadRows
+    loadVaultScope
       ? input.db.businessVaultRecord.findMany({
           where: {
             ...activeWhere,
@@ -648,7 +654,7 @@ export async function loadBusinessProtectionProjection(input: {
           select: vaultSelect,
         })
       : emptyVaultRows(),
-    loadRows
+    loadVaultScope
       ? input.db.businessVaultRecord.findMany({
           where: {
             ...activeWhere,
@@ -660,7 +666,7 @@ export async function loadBusinessProtectionProjection(input: {
           select: vaultSelect,
         })
       : emptyVaultRows(),
-    loadRows
+    loadVaultScope
       ? input.db.businessVaultRecord.findMany({
           where: {
             ...activeWhere,
@@ -671,7 +677,7 @@ export async function loadBusinessProtectionProjection(input: {
           select: vaultSelect,
         })
       : emptyVaultRows(),
-    loadRows
+    loadVaultScope
       ? input.db.businessVaultRecord.findMany({
           where: {
             ...activeWhere,
@@ -683,7 +689,7 @@ export async function loadBusinessProtectionProjection(input: {
           select: vaultSelect,
         })
       : emptyVaultRows(),
-    loadRows
+    loadVaultScope
       ? input.db.businessVaultRecord.findMany({
           where: vaultWhere,
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -691,7 +697,7 @@ export async function loadBusinessProtectionProjection(input: {
           select: vaultSelect,
         })
       : emptyVaultRows(),
-    loadRows
+    loadAgreementScope
       ? input.db.businessAgreement.findMany({
           where: {
             ...agreementWhere,
@@ -702,7 +708,7 @@ export async function loadBusinessProtectionProjection(input: {
           select: agreementSelect,
         })
       : emptyAgreementRows(),
-    loadRows
+    loadAgreementScope
       ? input.db.businessAgreement.findMany({
           where: agreementWhere,
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -710,28 +716,28 @@ export async function loadBusinessProtectionProjection(input: {
           select: agreementSelect,
         })
       : emptyAgreementRows(),
-    loadRows
+    loadVaultScope
       ? input.db.businessVaultRecord.count({ where: { ...vaultWhere, recordStatus: "ACTIVE" } })
       : Promise.resolve(0),
-    loadRows
+    loadVaultScope
       ? input.db.businessVaultRecord.count({ where: { ...vaultWhere, recordStatus: "ARCHIVED" } })
       : Promise.resolve(0),
-    loadRows
+    loadVaultScope
       ? input.db.businessVaultRecord.count({
           where: { ...activeWhere, expiresOn: { not: null, lt: today } },
         })
       : Promise.resolve(0),
-    loadRows
+    loadVaultScope
       ? input.db.businessVaultRecord.count({
           where: { ...activeWhere, expiresOn: { gte: today, lte: soonEnd } },
         })
       : Promise.resolve(0),
-    loadRows
+    loadVaultScope
       ? input.db.businessVaultRecord.count({
           where: { ...activeWhere, expiresOn: { gt: soonEnd } },
         })
       : Promise.resolve(0),
-    loadRows
+    loadVaultScope
       ? input.db.businessVaultRecord.count({
           where: {
             ...activeWhere,
@@ -740,7 +746,7 @@ export async function loadBusinessProtectionProjection(input: {
           },
         })
       : Promise.resolve(0),
-    loadRows
+    loadVaultScope
       ? input.db.businessVaultRecord.count({
           where: {
             ...activeWhere,
@@ -749,46 +755,46 @@ export async function loadBusinessProtectionProjection(input: {
           },
         })
       : Promise.resolve(0),
-    loadRows ? input.db.businessAgreement.count({ where: agreementWhere }) : Promise.resolve(0),
-    loadRows
+    loadAgreementScope ? input.db.businessAgreement.count({ where: agreementWhere }) : Promise.resolve(0),
+    loadAgreementScope
       ? input.db.businessAgreement.count({ where: { ...agreementWhere, lifecycleStatus: "QUESTIONS" } })
       : Promise.resolve(0),
-    loadRows
+    loadAgreementScope
       ? input.db.businessAgreement.count({ where: { ...agreementWhere, lifecycleStatus: "DRAFT" } })
       : Promise.resolve(0),
-    loadRows
+    loadAgreementScope
       ? input.db.businessAgreement.count({
           where: { ...agreementWhere, lifecycleStatus: "RISK_REVIEW" },
         })
       : Promise.resolve(0),
-    loadRows
+    loadAgreementScope
       ? input.db.businessAgreement.count({
           where: { ...agreementWhere, lifecycleStatus: "OWNER_REVIEW" },
         })
       : Promise.resolve(0),
-    loadRows
+    loadAgreementScope
       ? input.db.businessAgreement.count({
           where: { ...agreementWhere, lifecycleStatus: "LEGAL_WARNING" },
         })
       : Promise.resolve(0),
-    loadRows
+    loadAgreementScope
       ? input.db.businessAgreement.count({ where: { ...agreementWhere, lifecycleStatus: "READY" } })
       : Promise.resolve(0),
-    loadRows
+    loadAgreementScope
       ? input.db.businessAgreement.count({ where: { ...agreementWhere, lifecycleStatus: "SENT" } })
       : Promise.resolve(0),
-    loadRows
+    loadAgreementScope
       ? input.db.businessAgreement.count({ where: { ...agreementWhere, lifecycleStatus: "SIGNED" } })
       : Promise.resolve(0),
-    loadRows
+    loadAgreementScope
       ? input.db.businessAgreement.count({ where: { ...agreementWhere, lifecycleStatus: "COMPLETE" } })
       : Promise.resolve(0),
-    loadRows
+    loadAgreementScope
       ? input.db.businessAgreement.count({
           where: { ...agreementWhere, lifecycleStatus: "EXTERNAL_COMPLETE" },
         })
       : Promise.resolve(0),
-    loadRows
+    loadChecklist
       ? Promise.all(
           PROTECTION_CHECKLIST.map((item) =>
             input.db.businessVaultRecord.count({
@@ -805,7 +811,7 @@ export async function loadBusinessProtectionProjection(input: {
             }),
           ),
         )
-      : Promise.resolve(PROTECTION_CHECKLIST.map(() => 0)),
+      : Promise.resolve(null),
   ]);
 
   if (targets.vaultRecordId && loadRows && !recentVault.some((row) => row.id === targets.vaultRecordId)) {
@@ -850,15 +856,17 @@ export async function loadBusinessProtectionProjection(input: {
     projectAgreement(row, Boolean(targets.agreementId && row.id === targets.agreementId)),
   );
 
-  const checklist = PROTECTION_CHECKLIST.map((item, index) => {
-    const count = checklistCounts[index] ?? 0;
-    return {
-      id: item.id,
-      label: item.label,
-      met: count > 0,
-      count,
-    };
-  });
+  const checklist = loadChecklist
+    ? PROTECTION_CHECKLIST.map((item, index) => {
+        const count = checklistCounts?.[index] ?? 0;
+        return {
+          id: item.id,
+          label: item.label,
+          met: count > 0,
+          count,
+        };
+      })
+    : [];
 
   const projection: BusinessProtectionProjection = {
     totals: {
@@ -888,12 +896,15 @@ export async function loadBusinessProtectionProjection(input: {
         legalWarningCount +
         readyCount +
         sentCount,
-      checklistMet: checklist.filter((item) => item.met).length,
-      checklistMissing: checklist.filter((item) => !item.met).length,
+      checklistMet: loadChecklist ? checklist.filter((item) => item.met).length : null,
+      checklistMissing: loadChecklist ? checklist.filter((item) => !item.met).length : null,
     },
     vaultRecords,
     agreements,
     checklist,
+    checklistAvailable: loadChecklist,
+    vaultScopeLoaded: loadVaultScope,
+    agreementScopeLoaded: loadAgreementScope,
     esign: {
       providerStatus: resolveEsignProviderStatus(),
       message: ESIGN_PROVIDER_NOT_CONNECTED_MESSAGE,
@@ -915,12 +926,10 @@ export async function loadBusinessProtectionProjection(input: {
     projection.totals = emptyTotals();
     projection.vaultRecords = [];
     projection.agreements = [];
-    projection.checklist = PROTECTION_CHECKLIST.map((item) => ({
-      id: item.id,
-      label: item.label,
-      met: false,
-      count: 0,
-    }));
+    projection.checklist = [];
+    projection.checklistAvailable = false;
+    projection.vaultScopeLoaded = false;
+    projection.agreementScopeLoaded = false;
     projection.canReadDeep = false;
   }
 
@@ -1030,7 +1039,7 @@ function findingsFromProjection(
     });
   }
 
-  if (projection.checklist.length > 0) {
+  if (projection.checklistAvailable && projection.checklist.length > 0) {
     const present = projection.checklist.filter((item) => item.met);
     const absent = projection.checklist.filter((item) => !item.met);
     findings.push({
@@ -1073,7 +1082,7 @@ function findingsFromProjection(
         `QUESTIONS is not DRAFT. DRAFT is not READY. RISK_REVIEW is not attorney review. ` +
         `OWNER_REVIEW is a recorded owner review workflow state, not attorney approval. ` +
         `LEGAL_WARNING is a TBBT workflow/legal-warning state, not proof a lawyer reviewed it. ` +
-        `READY is internally ready under TBBT's recorded workflow, not legally sufficient or enforceable. ` +
+        `READY is internally ready under TBBT's recorded workflow. TBBT does not represent that READY means legally sufficient, valid, or enforceable. ` +
         `SENT means a sent version was recorded, not received, accepted, or signed. ` +
         `SIGNED, COMPLETE, and EXTERNAL_COMPLETE are recorded completion/signing workflow facts, not legal validity, enforceability, attorney approval, or government approval. ` +
         (examples ? `Recorded examples: ${examples}. ` : "") +
@@ -1155,25 +1164,30 @@ export function projectBusinessProtectionFacts(projection: BusinessProtectionPro
   const ownerReview = projection.agreements.find((row) => row.lifecycleStatus === "OWNER_REVIEW");
   const draft = projection.agreements.find((row) => row.lifecycleStatus === "DRAFT");
 
-  if (expiring) addFact(facts, factKeys, "protection-expiring-example", describeVault(expiring));
-  if (expired) addFact(facts, factKeys, "protection-expired-example", describeVault(expired));
-  if (missing) addFact(facts, factKeys, "protection-missing-date-example", describeVault(missing));
-  if (ownerReview) addFact(facts, factKeys, "protection-owner-review-example", describeAgreement(ownerReview));
-  if (draft) addFact(facts, factKeys, "protection-draft-example", describeAgreement(draft));
-
-  addFact(facts, factKeys, "protection-expired-count", String(t.expired));
-  addFact(facts, factKeys, "protection-expiring-soon-count", String(t.expiringSoon));
-  addFact(facts, factKeys, "protection-missing-date-count", String(t.missingDate));
-  addFact(facts, factKeys, "protection-current-count", String(t.current));
-  addFact(facts, factKeys, "protection-no-date-optional-count", String(t.noDateOptional));
-  addFact(facts, factKeys, "protection-vault-active-count", String(t.vaultActive));
-  addFact(facts, factKeys, "protection-agreement-count", String(t.agreements));
-  addFact(facts, factKeys, "protection-owner-review-count", String(t.ownerReview));
-  addFact(facts, factKeys, "protection-draft-count", String(t.draft));
-  addFact(facts, factKeys, "protection-questions-count", String(t.questions));
-  addFact(facts, factKeys, "protection-ready-count", String(t.ready));
-  addFact(facts, factKeys, "protection-complete-count", String(t.complete + t.signed + t.externalComplete));
-  addFact(facts, factKeys, "protection-checklist-met-count", String(t.checklistMet));
+  if (projection.vaultScopeLoaded) {
+    if (expiring) addFact(facts, factKeys, "protection-expiring-example", describeVault(expiring));
+    if (expired) addFact(facts, factKeys, "protection-expired-example", describeVault(expired));
+    if (missing) addFact(facts, factKeys, "protection-missing-date-example", describeVault(missing));
+    addFact(facts, factKeys, "protection-expired-count", String(t.expired));
+    addFact(facts, factKeys, "protection-expiring-soon-count", String(t.expiringSoon));
+    addFact(facts, factKeys, "protection-missing-date-count", String(t.missingDate));
+    addFact(facts, factKeys, "protection-current-count", String(t.current));
+    addFact(facts, factKeys, "protection-no-date-optional-count", String(t.noDateOptional));
+    addFact(facts, factKeys, "protection-vault-active-count", String(t.vaultActive));
+  }
+  if (projection.agreementScopeLoaded) {
+    if (ownerReview) addFact(facts, factKeys, "protection-owner-review-example", describeAgreement(ownerReview));
+    if (draft) addFact(facts, factKeys, "protection-draft-example", describeAgreement(draft));
+    addFact(facts, factKeys, "protection-agreement-count", String(t.agreements));
+    addFact(facts, factKeys, "protection-owner-review-count", String(t.ownerReview));
+    addFact(facts, factKeys, "protection-draft-count", String(t.draft));
+    addFact(facts, factKeys, "protection-questions-count", String(t.questions));
+    addFact(facts, factKeys, "protection-ready-count", String(t.ready));
+    addFact(facts, factKeys, "protection-complete-count", String(t.complete + t.signed + t.externalComplete));
+  }
+  if (projection.checklistAvailable && t.checklistMet != null) {
+    addFact(facts, factKeys, "protection-checklist-met-count", String(t.checklistMet));
+  }
   addFact(facts, factKeys, "protection-esign-status", projection.esign.providerStatus);
   return { facts, factKeys };
 }
@@ -1257,12 +1271,10 @@ export function emptyBusinessProtectionProjectionForTests(): BusinessProtectionP
     totals: emptyTotals(),
     vaultRecords: [],
     agreements: [],
-    checklist: PROTECTION_CHECKLIST.map((item) => ({
-      id: item.id,
-      label: item.label,
-      met: false,
-      count: 0,
-    })),
+    checklist: [],
+    checklistAvailable: false,
+    vaultScopeLoaded: false,
+    agreementScopeLoaded: false,
     esign: {
       providerStatus: "NOT_CONNECTED",
       message: ESIGN_PROVIDER_NOT_CONNECTED_MESSAGE,

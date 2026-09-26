@@ -1,5 +1,6 @@
 import type { BsosFacts, BsosRecommendation, RecordedFact } from "@/lib/bsos";
 import { AI_NOT_CONNECTED_MESSAGE, type CitedFact, type StructuredAiOutput } from "@/lib/ai/types";
+import { AGREEMENT_NOT_ENFORCEABLE_MESSAGE } from "@/lib/business-protection";
 
 export type CoachContext = {
   facts: BsosFacts;
@@ -515,7 +516,7 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
           ? `This agreement is recorded as OWNER_REVIEW: ${ownerReviewExample}. Owner review is recorded. OWNER_REVIEW is not attorney review or legal approval. `
           : "") +
         (draftExample && !ownerReviewExample
-          ? `An agreement is recorded as DRAFT: ${draftExample}. DRAFT is not READY and is not legally sufficient. `
+          ? `An agreement is recorded as DRAFT: ${draftExample}. DRAFT is not READY. ${AGREEMENT_NOT_ENFORCEABLE_MESSAGE} `
           : "") +
         (esign === "NOT_CONNECTED"
           ? "No e-sign provider is connected. Digital signing is not available. TBBT will not invent a digital signature. "

@@ -46,7 +46,7 @@ const {
   runChiefOfStaffCoach,
 } = await import("@/lib/chief-of-staff");
 const { getSpecialistEntry, isSpecialistEnabled } = await import("@/lib/chief-of-staff/registry");
-const { classifyExpiry, daysUntilCalendarDate, EXPIRING_SOON_DAYS } = await import(
+const { classifyExpiry, daysUntilCalendarDate, EXPIRING_SOON_DAYS, AGREEMENT_NOT_ENFORCEABLE_MESSAGE } = await import(
   "@/lib/business-protection"
 );
 const { resolveEsignProviderStatus } = await import("@/lib/business-protection-esign");
@@ -403,6 +403,8 @@ try {
   const runSrc = readFileSync(new URL("../src/lib/chief-of-staff/run.ts", import.meta.url), "utf8");
   const schemaSrc = readFileSync(new URL("../prisma/schema.prisma", import.meta.url), "utf8");
   const registrySrc = readFileSync(new URL("../src/lib/chief-of-staff/registry.ts", import.meta.url), "utf8");
+  const coachSrc = readFileSync(new URL("../src/lib/ai/coach.ts", import.meta.url), "utf8");
+  const conflictSrc = readFileSync(new URL("../src/lib/chief-of-staff/conflicts.ts", import.meta.url), "utf8");
 
   console.log("\nSTATIC — Business Protection specialist is read/explain only");
   const entry = getSpecialistEntry("BUSINESS_PROTECTION");
@@ -449,6 +451,17 @@ try {
       !specialistSrc.includes("planSpecialists(") &&
       !specialistSrc.includes("runChiefOfStaffCoach") &&
       !specialistSrc.includes("@/lib/ai/agreements"),
+  );
+  check(
+    "Coach DRAFT copy does not independently conclude legal insufficiency",
+    !coachSrc.includes("is not legally sufficient") &&
+      coachSrc.includes("DRAFT is not READY.") &&
+      coachSrc.includes("AGREEMENT_NOT_ENFORCEABLE_MESSAGE"),
+  );
+  check(
+    "Specialist READY copy uses non-representation language",
+    !specialistSrc.includes("not legally sufficient or enforceable") &&
+      specialistSrc.includes("TBBT does not represent that READY means legally sufficient, valid, or enforceable"),
   );
   check("No Prisma schema change is required", schemaSrc.includes("model BusinessVaultRecord") && schemaSrc.includes("model BusinessAgreement"));
   check("Max fan-out remains 4", MAX_SPECIALIST_FANOUT === 4);
@@ -817,11 +830,19 @@ try {
     }).items.some((item) => item.kind === "OWNER_REVIEW_VS_LEGAL_REVIEW"),
   );
   check(
-    "AGREEMENT_COMPLETE_VS_ENFORCEABLE stays distinct",
+    "AGREEMENT_COMPLETE_VS_ENFORCEABLE fires from recorded completion truth",
     resolveConflicts({
       ...emptyConflictInput,
       results: [findingResult("BUSINESS_PROTECTION", ["protection-agreement-complete-not-enforceable"])],
     }).items.some((item) => item.kind === "AGREEMENT_COMPLETE_VS_ENFORCEABLE"),
+  );
+  check(
+    "Generic lifecycle finding alone does not fire AGREEMENT_COMPLETE_VS_ENFORCEABLE",
+    !resolveConflicts({
+      ...emptyConflictInput,
+      results: [findingResult("BUSINESS_PROTECTION", ["protection-agreement-lifecycle"])],
+    }).items.some((item) => item.kind === "AGREEMENT_COMPLETE_VS_ENFORCEABLE") &&
+      !conflictSrc.includes('hasAny("protection-agreement-complete-not-enforceable", "protection-agreement-lifecycle")'),
   );
   check(
     "ESIGN_NOT_CONNECTED_VS_DIGITAL_SIGNATURE stays distinct",
@@ -852,6 +873,81 @@ try {
   check("Coach reports e-sign NOT_CONNECTED", /NOT_CONNECTED|No e-sign provider is connected/i.test(coach.text ?? ""));
   check("Private notes/draft/secrets never appear in Coach output", !/SECRET_VAULT_NOTES|SECRET_DRAFT|SECRET_ANSWERS|SECRET_RISK|SECRET_FILE_PATH|BetaSecret/i.test(coach.text ?? ""));
   check("Coach does not invent compliance", !/you are compliant|you are licensed|your insurance is valid|you are legally protected/i.test(coach.text ?? ""));
+
+  resetLoads();
+  const agreementOnly = await runBusinessProtectionSpecialist({
+    db: prisma,
+    access: tenantA.access,
+    catalog: emptyCatalog(),
+    question: "What is the status of this agreement?",
+    entityHints: { agreementId: seededA.draft.id },
+    now: NOW,
+  });
+  const agreementOnlyProjection = getLastBusinessProtectionProjection();
+  const agreementOnlyConflicts = resolveConflicts({
+    recommendations: [],
+    facts: {},
+    results: [agreementOnly],
+  });
+  check("Agreement-only target keeps the owned agreement", agreementOnly.status === "OK" && agreementOnlyProjection.agreements.some((row) => row.id === seededA.draft.id && row.lifecycleStatus === "DRAFT"));
+  check("Agreement-only target does not load unrelated Vault records", agreementOnlyProjection.vaultRecords.length === 0 && !agreementOnlyProjection.vaultScopeLoaded);
+  check("Agreement-only target does not load business-wide checklist counts", agreementOnlyProjection.checklistAvailable === false && agreementOnlyProjection.checklist.length === 0 && agreementOnlyProjection.totals.checklistMet == null);
+  check("Agreement-only target does not emit checklist findings", !agreementOnly.findings.some((row) => row.key === "protection-checklist-organization") && !agreementOnly.factKeys.includes("protection-checklist-met-count"));
+  check(
+    "Agreement-only target does not emit a fake zero checklist",
+    !JSON.stringify(agreementOnly.findings).includes("0 organization checklist") &&
+      agreementOnlyProjection.totals.checklistMet !== 0,
+  );
+  check("Agreement-only target still reports e-sign provider state", agreementOnlyProjection.esign.providerStatus === "NOT_CONNECTED");
+  check(
+    "QUESTIONS/DRAFT/OWNER_REVIEW projection does not fire completion-vs-enforceability",
+    !agreementOnlyConflicts.items.some((item) => item.kind === "AGREEMENT_COMPLETE_VS_ENFORCEABLE"),
+  );
+  resetLoads();
+  const completeOnly = await runBusinessProtectionSpecialist({
+    db: prisma,
+    access: tenantA.access,
+    catalog: emptyCatalog(),
+    question: "Has this agreement been marked complete?",
+    entityHints: { agreementId: seededA.complete.id },
+    now: NOW,
+  });
+  check(
+    "Recorded completion finding fires AGREEMENT_COMPLETE_VS_ENFORCEABLE",
+    completeOnly.findings.some((row) => row.key === "protection-agreement-complete-not-enforceable") &&
+      resolveConflicts({
+        recommendations: [],
+        facts: {},
+        results: [completeOnly],
+      }).items.some((item) => item.kind === "AGREEMENT_COMPLETE_VS_ENFORCEABLE"),
+  );
+
+  resetLoads();
+  const draftCoach = await runChiefOfStaffCoach(prisma, tenantA.access, {
+    question: "What is the status of this agreement? Is e-sign connected?",
+    attemptId: randomUUID(),
+    entityHints: { agreementId: seededA.draft.id },
+    browserBusinessId: tenantB.business.id,
+  });
+  check("Targeted DRAFT Coach names the owned agreement", /Alpha draft vendor/i.test(draftCoach.text ?? "") && /DRAFT/i.test(draftCoach.text ?? ""));
+  check(
+    "DRAFT Coach output does not say the agreement is not legally sufficient",
+    !/is not legally sufficient/i.test(draftCoach.text ?? "") &&
+      !/is legally insufficient|is legally invalid|is unenforceable|is not enforceable\b/i.test(draftCoach.text ?? ""),
+  );
+  check(
+    "DRAFT Coach preserves the canonical non-representation disclaimer",
+    (draftCoach.text ?? "").includes(AGREEMENT_NOT_ENFORCEABLE_MESSAGE) ||
+      /does not represent that (the draft|READY) is legally sufficient|not a representation that the agreement is legally sufficient/i.test(draftCoach.text ?? ""),
+  );
+  check("Agreement-only Coach does not name unrelated Vault titles", !/Alpha GL insurance|Alpha expired license|Alpha current warranty|Alpha license missing date|Alpha articles of organization|overflow vault/i.test(draftCoach.text ?? ""));
+  check(
+    "Agreement-only Coach does not invent a fake zero checklist",
+    !/0 organization checklist|0 checklist categories|no recorded match/i.test(draftCoach.text ?? "") &&
+      !/organization checklist .*recorded match/i.test(draftCoach.text ?? ""),
+  );
+  check("Agreement-only Coach may still report e-sign", /NOT_CONNECTED|No e-sign provider is connected/i.test(draftCoach.text ?? ""));
+  check("Agreement-only Coach does not include tenant B data", !/BetaSecret|Beta Protection/i.test(draftCoach.text ?? ""));
 
   resetLoads();
   const genericCoach = await runChiefOfStaffCoach(prisma, tenantA.access, {
