@@ -207,5 +207,68 @@ export function resolveConflicts(input: {
     });
   }
 
+  const communicationKeys = (...keys: string[]) => keys.filter((key) => recordedKeys.has(key));
+
+  if (hasAny("communications-sms-consent-revoked")) {
+    items.push({
+      kind: "SMS_REVOKED_VS_TEXTABLE",
+      recommendationKeys: communicationKeys("communications-sms-consent-revoked"),
+      summary:
+        "SMS consent is REVOKED. A stored phone number is not consent, and the Coach cannot text this customer or restore consent.",
+    });
+  }
+
+  if (hasAny("communications-sms-consent-unknown")) {
+    items.push({
+      kind: "UNKNOWN_CONSENT_IS_NOT_GRANTED",
+      recommendationKeys: communicationKeys("communications-sms-consent-unknown"),
+      summary:
+        "SMS consent is UNKNOWN. UNKNOWN is not GRANTED and is not opted in. A phone number, a prior call, or a successful delivery does not invent consent.",
+    });
+  }
+
+  if (hasAny("communications-failed-delivery")) {
+    items.push({
+      kind: "FAILED_DELIVERY_VS_DELIVERED",
+      recommendationKeys: communicationKeys("communications-failed-delivery"),
+      summary:
+        "A FAILED recorded delivery is not delivered, seen, or ignored. The Coach does not retry or invent a read receipt.",
+    });
+  }
+
+  if (hasAny("communications-channel-unavailable")) {
+    items.push({
+      kind: "CHANNEL_UNAVAILABLE_VS_SEND",
+      recommendationKeys: communicationKeys("communications-channel-unavailable"),
+      summary:
+        "A disconnected or unentitled channel cannot be treated as sent. SMS limitations do not erase recorded email.",
+    });
+  }
+
+  if (hasAny("communications-appointment-different-time")) {
+    items.push({
+      kind: "APPOINTMENT_DIFFERENT_TIME_VS_CONFIRMED",
+      recommendationKeys: communicationKeys("communications-appointment-different-time"),
+      summary:
+        "DIFFERENT_TIME_REQUESTED is a recorded request. It is not a confirmation, a cancellation, or proof the customer is upset.",
+    });
+  }
+
+  if (
+    hasAny("communications-sms-consent-revoked", "communications-sms-consent-unknown") &&
+    hasAny("communications-channel-unavailable")
+  ) {
+    items.push({
+      kind: "EMAIL_AVAILABLE_VS_SMS_LIMIT",
+      recommendationKeys: communicationKeys(
+        "communications-sms-consent-revoked",
+        "communications-sms-consent-unknown",
+        "communications-channel-unavailable",
+      ),
+      summary:
+        "SMS consent or SMS capability is limited. That SMS slice does not erase recorded email availability or email history.",
+    });
+  }
+
   return { items, uniqueRecommendationKeys };
 }

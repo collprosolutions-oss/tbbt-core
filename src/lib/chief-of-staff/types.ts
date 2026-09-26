@@ -52,6 +52,9 @@ export type SkippedSpecialist = {
 
 export type CosEntityHints = {
   jobId?: string;
+  customerId?: string;
+  requestId?: string;
+  messageId?: string;
   recommendationKey?: string;
   customerDisplayName?: string;
   scheduledDate?: string;
@@ -115,7 +118,13 @@ export type ConflictKind =
   | "MATERIAL_UNREADY_VS_SCHEDULE"
   | "MATERIAL_UNREADY_VS_GROWTH"
   | "MATERIAL_DELAY_VS_CUSTOMER_UPDATE"
-  | "NO_INVENTORY_RECORDED";
+  | "NO_INVENTORY_RECORDED"
+  | "SMS_REVOKED_VS_TEXTABLE"
+  | "UNKNOWN_CONSENT_IS_NOT_GRANTED"
+  | "FAILED_DELIVERY_VS_DELIVERED"
+  | "CHANNEL_UNAVAILABLE_VS_SEND"
+  | "APPOINTMENT_DIFFERENT_TIME_VS_CONFIRMED"
+  | "EMAIL_AVAILABLE_VS_SMS_LIMIT";
 
 export type ConflictItem = {
   kind: ConflictKind;

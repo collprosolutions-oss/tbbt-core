@@ -60,10 +60,29 @@ export {
   resetLastGrowthProjection,
 } from "@/lib/chief-of-staff/growth-specialist";
 export {
+  getCommunicationsProjectionLoadCount,
+  getCommunicationsSpecialistInterpretationCount,
+  resetCommunicationsSpecialistCounters,
+} from "@/lib/chief-of-staff/communications-snapshot";
+export {
   getMaterialsProjectionLoadCount,
   getMaterialsSpecialistInterpretationCount,
   resetMaterialsSpecialistCounters,
 } from "@/lib/chief-of-staff/materials-snapshot";
+export {
+  COMMUNICATIONS_CONTEXT_CAPS,
+  COMMUNICATIONS_OWNED_RECOMMENDATION_KEYS,
+  communicationsEntitlementLimitation,
+  communicationsProjectionHasForbiddenFields,
+  getLastCommunicationsProjection,
+  isCommunicationsOwnedRecommendationKey,
+  loadCommunicationsProjection,
+  phoneDoesNotGrantConsent,
+  projectCommunicationsFacts,
+  resetLastCommunicationsProjection,
+  runCommunicationsSpecialist,
+  unknownConsentIsNotGranted,
+} from "@/lib/chief-of-staff/communications-specialist";
 export {
   MATERIALS_CONTEXT_CAPS,
   MATERIALS_OWNED_RECOMMENDATION_KEYS,

@@ -41,6 +41,16 @@ import {
   resetLastGrowthProjection,
 } from "@/lib/chief-of-staff/growth-specialist";
 import {
+  resetCommunicationsSpecialistCounters,
+  setInjectedCommunicationsLoadFailure,
+} from "@/lib/chief-of-staff/communications-snapshot";
+import {
+  getLastCommunicationsProjection,
+  projectCommunicationsFacts,
+  resetLastCommunicationsProjection,
+  runCommunicationsSpecialist,
+} from "@/lib/chief-of-staff/communications-specialist";
+import {
   resetMaterialsSpecialistCounters,
   setInjectedMaterialsLoadFailure,
 } from "@/lib/chief-of-staff/materials-snapshot";
@@ -87,6 +97,8 @@ export type ChiefOfStaffTestHooks = {
   failGrowthLoad?: boolean;
   /** Test-only: fail the Materials bounded projection while ATTENTION can survive. */
   failMaterialsLoad?: boolean;
+  /** Test-only: fail the Communications bounded projection while ATTENTION can survive. */
+  failCommunicationsLoad?: boolean;
   /** Test-only: hide specific product capabilities after the real entitlement check. */
   denyProductCapabilities?: ProductCapabilityCode[];
   /** Test-only: hide specific role capabilities after the real role check. */
@@ -448,9 +460,12 @@ export async function runChiefOfStaffCoach(
   setInjectedGrowthLoadFailure(Boolean(input.test?.failGrowthLoad));
   resetMaterialsSpecialistCounters();
   setInjectedMaterialsLoadFailure(Boolean(input.test?.failMaterialsLoad));
+  resetCommunicationsSpecialistCounters();
+  setInjectedCommunicationsLoadFailure(Boolean(input.test?.failCommunicationsLoad));
   resetLastWorkforceProjection();
   resetLastGrowthProjection();
   resetLastMaterialsProjection();
+  resetLastCommunicationsProjection();
 
   let catalog: CanonicalRecommendationCatalog;
   let synthesis: ReturnType<typeof synthesizeCoachAnswer>;
@@ -521,6 +536,20 @@ export async function runChiefOfStaffCoach(
           );
           continue;
         }
+        if (specialistId === "COMMUNICATIONS") {
+          specialistResults.push(
+            await runCommunicationsSpecialist({
+              db,
+              access,
+              catalog,
+              question,
+              entityHints: input.entityHints,
+              denyProductCapabilities: input.test?.denyProductCapabilities,
+              denyRoleCapabilities: input.test?.denyRoleCapabilities,
+            }),
+          );
+          continue;
+        }
         const context = loadSpecialistContext(specialistId, catalog, question, input.entityHints);
         specialistResults.push(projectSpecialist(context));
       } catch (error) {
@@ -555,6 +584,7 @@ export async function runChiefOfStaffCoach(
     const { workspaceTradeLabel } = await import("@/lib/trade-config");
     const activeTradeCodes = await listActiveTradeCodes(db as PrismaClient, access.businessId);
     const materialsProjection = getLastMaterialsProjection();
+    const communicationsProjection = getLastCommunicationsProjection();
     synthesis = synthesizeCoachAnswer({
       question,
       catalog,
@@ -570,12 +600,16 @@ export async function runChiefOfStaffCoach(
         materialsFacts: materialsProjection
           ? projectMaterialsFacts(materialsProjection).facts
           : undefined,
+        communicationsFacts: communicationsProjection
+          ? projectCommunicationsFacts(communicationsProjection).facts
+          : undefined,
       },
     });
   } catch (error) {
     setInjectedFinancialLoadFailure(false);
     setInjectedGrowthLoadFailure(false);
     setInjectedMaterialsLoadFailure(false);
+    setInjectedCommunicationsLoadFailure(false);
     return finalizePreProviderFailure({
       db,
       interactionId,

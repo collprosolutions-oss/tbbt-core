@@ -146,6 +146,7 @@ const specialistFiles = [
   readFileSync(new URL("../src/lib/chief-of-staff/specialists/financial.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/growth-specialist.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/materials-specialist.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/lib/chief-of-staff/communications-specialist.ts", import.meta.url), "utf8"),
 ];
 
 try {
@@ -199,6 +200,10 @@ try {
   check(
     "Kitchen-sink generic focus does not select MATERIALS",
     !kitchen.selectedIds.includes("MATERIALS") && kitchen.skipped.some((row) => row.id === "MATERIALS"),
+  );
+  check(
+    "Kitchen-sink generic focus does not select COMMUNICATIONS",
+    !kitchen.selectedIds.includes("COMMUNICATIONS"),
   );
   check(
     "Kitchen-sink focus can select Financial when an owned recommendation is active",
@@ -330,10 +335,31 @@ try {
   });
   check("Focus with an active materials-* recommendation selects MATERIALS", materialsRecPlan.selectedIds.includes("MATERIALS"));
 
+  const commsContact = planSpecialists({
+    question: "Did we contact this customer?",
+    activeRecommendationKeys: [],
+  });
+  check("Contact question selects COMMUNICATIONS", commsContact.selectedIds.includes("COMMUNICATIONS") && commsContact.fanout <= 4);
+  const commsText = planSpecialists({
+    question: "Can I text this customer?",
+    activeRecommendationKeys: [],
+  });
+  check("Text-consent question selects COMMUNICATIONS", commsText.selectedIds.includes("COMMUNICATIONS"));
+  const genericBusiness = planSpecialists({
+    question: "How is my business doing?",
+    activeRecommendationKeys: [],
+  });
+  check("Generic business question does not select COMMUNICATIONS", !genericBusiness.selectedIds.includes("COMMUNICATIONS"));
+  const commsRecPlan = planSpecialists({
+    question: "What should I focus on this week?",
+    activeRecommendationKeys: ["communications-failed-delivery"],
+  });
+  check("Focus with an active communications-* recommendation selects COMMUNICATIONS", commsRecPlan.selectedIds.includes("COMMUNICATIONS"));
+
   const enabled = enabledSpecialistIds();
   check(
-    "Enabled specialists are ATTENTION, WORKFORCE, FINANCIAL, GROWTH, and MATERIALS",
-    enabled.join(",") === "ATTENTION,WORKFORCE,FINANCIAL,GROWTH,MATERIALS",
+    "Enabled specialists are ATTENTION, WORKFORCE, FINANCIAL, GROWTH, MATERIALS, and COMMUNICATIONS",
+    enabled.join(",") === "ATTENTION,WORKFORCE,FINANCIAL,GROWTH,MATERIALS,COMMUNICATIONS",
   );
   check("Registry keeps future specialist identities", SPECIALIST_IDS.includes("FINANCIAL") && SPECIALIST_IDS.includes("BUSINESS_PROTECTION"));
   check(
@@ -373,6 +399,24 @@ try {
     "MATERIALS registry role floor is MANAGE_ESTIMATES",
     getSpecialistEntry("MATERIALS").requiredRoleCapability === CAPABILITIES.MANAGE_ESTIMATES &&
       getSpecialistEntry("MATERIALS").requiredProductCapability === "ESTIMATES_INVOICES",
+  );
+  const communicationsSpecialistSrc = readFileSync(
+    new URL("../src/lib/chief-of-staff/communications-specialist.ts", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Deep COMMUNICATIONS upgrades the existing specialist instead of adding another",
+    registrySrc.includes('id: "COMMUNICATIONS"') &&
+      !registrySrc.includes('id: "COMMUNICATIONS_DEEP"') &&
+      (registrySrc.match(/id: "COMMUNICATIONS"/g) || []).length === 1 &&
+      !communicationsSpecialistSrc.includes("composeCustomerCommunication") &&
+      !communicationsSpecialistSrc.includes("attemptCustomerSms") &&
+      !communicationsSpecialistSrc.includes("applyInboundConsentEvent"),
+  );
+  check(
+    "COMMUNICATIONS registry role floor is MANAGE_COMMUNICATIONS",
+    getSpecialistEntry("COMMUNICATIONS").requiredRoleCapability === CAPABILITIES.MANAGE_COMMUNICATIONS &&
+      getSpecialistEntry("COMMUNICATIONS").requiredProductCapability === null,
   );
   check(
     "Canonical Workforce recommendation keys stay the original six",
