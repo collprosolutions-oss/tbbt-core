@@ -108,6 +108,19 @@ async function bestEffortDeleteOwnedObject(
   });
 }
 
+async function bestEffortCleanupOwnedObject(
+  deps: StorageServiceDeps,
+  businessId: string,
+  input: { bucket: string; storageKey: string },
+) {
+  try {
+    const provider = await resolveStorageProvider(deps);
+    await bestEffortDeleteOwnedObject(provider, businessId, input);
+  } catch {
+    // Provider resolution and delete are both best-effort after DB commit.
+  }
+}
+
 async function releaseExpiredReservations(
   db: Db,
   businessId: string,
@@ -129,18 +142,25 @@ async function releaseExpiredReservations(
     },
   });
   if (expired.length === 0) return;
-  const reserved = expired.reduce((sum, row) => sum + row.fileSizeBytes, 0);
-  await db.storedAsset.updateMany({
-    where: { id: { in: expired.map((row) => row.id) } },
-    data: { status: "FAILED", deletedAt: now },
+  const claimed = await db.$transaction(async (tx) => {
+    const won: typeof expired = [];
+    for (const row of expired) {
+      const updated = await tx.storedAsset.updateMany({
+        where: { id: row.id, businessId, status: "PENDING" },
+        data: { status: "FAILED", deletedAt: now },
+      });
+      if (updated.count === 1) won.push(row);
+    }
+    const reserved = won.reduce((sum, row) => sum + row.fileSizeBytes, 0);
+    if (reserved > 0) {
+      await tx.businessStorageAccount.update({
+        where: { id: won[0]!.storageAccountId },
+        data: { storageReservedBytes: { decrement: reserved } },
+      });
+    }
+    return won;
   });
-  if (reserved > 0) {
-    await db.businessStorageAccount.update({
-      where: { id: expired[0]!.storageAccountId },
-      data: { storageReservedBytes: { decrement: reserved } },
-    });
-  }
-  for (const row of expired) {
+  for (const row of claimed) {
     try {
       await bestEffortDeleteOwnedObject(provider, businessId, {
         bucket: row.storageAccount.bucketName,
@@ -289,30 +309,36 @@ export async function abortManagedUpload(
   businessId: string,
   assetId: string,
 ) {
-  const asset = await deps.db.storedAsset.findFirst({
+  const existing = await deps.db.storedAsset.findFirst({
     where: { id: assetId, businessId },
     include: { storageAccount: true },
   });
-  if (!asset) throw new StorageAccessError();
-  if (asset.status !== "PENDING") return asset;
-  assertKeyBelongsToBusiness(asset.storageKey, businessId);
+  if (!existing) throw new StorageAccessError();
   const now = deps.now?.() ?? new Date();
-  await deps.db.$transaction(async (tx) => {
-    await tx.storedAsset.update({
-      where: { id: asset.id },
+  const claimed = await deps.db.$transaction(async (tx) => {
+    const updated = await tx.storedAsset.updateMany({
+      where: { id: existing.id, businessId, status: "PENDING" },
       data: { status: "FAILED", deletedAt: now },
     });
+    if (updated.count !== 1) return false;
     await tx.businessStorageAccount.update({
-      where: { id: asset.storageAccountId },
-      data: { storageReservedBytes: { decrement: asset.fileSizeBytes } },
+      where: { id: existing.storageAccountId },
+      data: { storageReservedBytes: { decrement: existing.fileSizeBytes } },
     });
+    return true;
   });
-  const provider = await resolveStorageProvider(deps);
-  await bestEffortDeleteOwnedObject(provider, businessId, {
-    bucket: asset.storageAccount.bucketName,
-    storageKey: asset.storageKey,
-  }).catch(() => undefined);
-  return { ...asset, status: "FAILED" as const };
+  if (claimed) {
+    await bestEffortCleanupOwnedObject(deps, businessId, {
+      bucket: existing.storageAccount.bucketName,
+      storageKey: existing.storageKey,
+    });
+  }
+  const current = await deps.db.storedAsset.findFirst({
+    where: { id: assetId, businessId },
+    include: { storageAccount: true },
+  });
+  if (!current) throw new StorageAccessError();
+  return current;
 }
 
 export async function abortBusinessUpload(
@@ -349,10 +375,6 @@ export async function finalizeManagedUpload(
   }
   if (meta.sizeBytes > asset.fileSizeBytes) {
     await abortManagedUpload(deps, businessId, asset.id);
-    await provider.deleteObject({
-      bucket: asset.storageAccount.bucketName,
-      key: asset.storageKey,
-    }).catch(() => undefined);
     throw new StorageQuotaError("The uploaded file is larger than what was authorized.");
   }
 

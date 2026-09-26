@@ -475,9 +475,13 @@ try {
 
   console.log("\nDB — Pending orphan object cleanup");
   const serviceSrc = readRepo("src/lib/business-storage/service.ts");
-  check("Abort and expiry own object-delete after reservation release",
-    /await deps\.db\.\$transaction\(async \(tx\) => \{[\s\S]*storageReservedBytes: \{ decrement: asset\.fileSizeBytes \}[\s\S]*bestEffortDeleteOwnedObject/.test(serviceSrc) &&
-      /storageReservedBytes: \{ decrement: reserved \}[\s\S]*bestEffortDeleteOwnedObject/.test(serviceSrc) &&
+  check("Abort and expiry claim PENDING atomically before decrement or delete",
+    serviceSrc.includes('where: { id: existing.id, businessId, status: "PENDING" }') &&
+      serviceSrc.includes('where: { id: row.id, businessId, status: "PENDING" }') &&
+      serviceSrc.includes("updated.count !== 1") &&
+      serviceSrc.includes("if (updated.count === 1) won.push(row)") &&
+      serviceSrc.includes("bestEffortCleanupOwnedObject") &&
+      serviceSrc.includes("Provider resolution and delete are both best-effort after DB commit.") &&
       serviceSrc.includes("One provider delete failure must not block the rest of the expired set."));
 
   const abortTracker = trackDeletes(provider);
@@ -706,11 +710,159 @@ try {
     oversizedRow.status === "FAILED" &&
       oversizedAfter.reserved === oversizedBefore.reserved &&
       oversizedAfter.used === oversizedBefore.used &&
-      oversizedTracker.deletes.some((row) => row.key === oversizedAuth.asset.storageKey) &&
+      oversizedTracker.deletes.filter((row) => row.key === oversizedAuth.asset.storageKey).length === 1 &&
       !(await oversizedTracker.provider.objectExists({
         bucket: oversizedAuth.account.bucketName,
         key: oversizedAuth.asset.storageKey,
       })));
+
+  const concurrentAbortTracker = trackDeletes(provider);
+  const concurrentAbortDeps = { ...deps, provider: concurrentAbortTracker.provider };
+  const concurrentAbortBefore = await accountSnapshot(businessA.id);
+  const concurrentPending = await authorizeManagedUpload(concurrentAbortDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "concurrent-abort",
+    originalFilename: "concurrent-abort.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+    visibility: "PRIVATE",
+  });
+  await concurrentAbortTracker.provider.putObject({
+    bucket: concurrentPending.account.bucketName,
+    key: concurrentPending.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  const [concurrentAbortOne, concurrentAbortTwo] = await Promise.all([
+    abortManagedUpload(concurrentAbortDeps, businessA.id, concurrentPending.asset.id),
+    abortManagedUpload(concurrentAbortDeps, businessA.id, concurrentPending.asset.id),
+  ]);
+  const concurrentAbortAfter = await accountSnapshot(businessA.id);
+  const concurrentAbortRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: concurrentPending.asset.id },
+  });
+  const concurrentAbortDeletes = concurrentAbortTracker.deletes.filter(
+    (row) => row.key === concurrentPending.asset.storageKey,
+  );
+  check("Simultaneous aborts claim PENDING once and decrement reserved once",
+    concurrentAbortOne.status === "FAILED" &&
+      concurrentAbortTwo.status === "FAILED" &&
+      concurrentAbortRow.status === "FAILED" &&
+      concurrentAbortAfter.reserved === concurrentAbortBefore.reserved &&
+      concurrentAbortAfter.used === concurrentAbortBefore.used &&
+      concurrentAbortAfter.reserved >= 0 &&
+      concurrentAbortDeletes.length === 1 &&
+      !(await concurrentAbortTracker.provider.objectExists({
+        bucket: concurrentPending.account.bucketName,
+        key: concurrentPending.asset.storageKey,
+      })));
+
+  const concurrentExpiryTracker = trackDeletes(provider);
+  const concurrentExpiryDeps = { ...deps, provider: concurrentExpiryTracker.provider };
+  const concurrentExpiryBefore = await accountSnapshot(businessA.id);
+  const sharedExpired = await authorizeManagedUpload(concurrentExpiryDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "shared-expired",
+    originalFilename: "shared-expired.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: 40,
+    visibility: "PRIVATE",
+  });
+  await concurrentExpiryTracker.provider.putObject({
+    bucket: sharedExpired.account.bucketName,
+    key: sharedExpired.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  await prisma.storedAsset.update({
+    where: { id: sharedExpired.asset.id },
+    data: { expiresAt: new Date(Date.now() - 60_000) },
+  });
+  const [expiryAuthOne, expiryAuthTwo] = await Promise.all([
+    authorizeManagedUpload(concurrentExpiryDeps, businessA.id, {
+      category: "DOCUMENT",
+      purpose: "after-shared-expiry-a",
+      originalFilename: "after-shared-expiry-a.jpg",
+      mimeType: "image/jpeg",
+      fileSizeBytes: 15,
+      visibility: "PRIVATE",
+    }),
+    authorizeManagedUpload(concurrentExpiryDeps, businessA.id, {
+      category: "DOCUMENT",
+      purpose: "after-shared-expiry-b",
+      originalFilename: "after-shared-expiry-b.jpg",
+      mimeType: "image/jpeg",
+      fileSizeBytes: 16,
+      visibility: "PRIVATE",
+    }),
+  ]);
+  const sharedExpiredRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: sharedExpired.asset.id },
+  });
+  const concurrentExpiryAfter = await accountSnapshot(businessA.id);
+  const sharedExpiredDeletes = concurrentExpiryTracker.deletes.filter(
+    (row) => row.key === sharedExpired.asset.storageKey,
+  );
+  check("Simultaneous expiry cleanup releases the expired reservation once",
+    sharedExpiredRow.status === "FAILED" &&
+      sharedExpiredRow.deletedAt != null &&
+      expiryAuthOne.asset.status === "PENDING" &&
+      expiryAuthTwo.asset.status === "PENDING" &&
+      expiryAuthOne.asset.fileSizeBytes === 15 &&
+      expiryAuthTwo.asset.fileSizeBytes === 16 &&
+      concurrentExpiryAfter.used === concurrentExpiryBefore.used &&
+      concurrentExpiryAfter.reserved === concurrentExpiryBefore.reserved + 15 + 16 &&
+      concurrentExpiryAfter.reserved >= 0 &&
+      sharedExpiredDeletes.length === 1 &&
+      !(await concurrentExpiryTracker.provider.objectExists({
+        bucket: sharedExpired.account.bucketName,
+        key: sharedExpired.asset.storageKey,
+      })));
+  await Promise.all([
+    abortManagedUpload(concurrentExpiryDeps, businessA.id, expiryAuthOne.asset.id),
+    abortManagedUpload(concurrentExpiryDeps, businessA.id, expiryAuthTwo.asset.id),
+  ]);
+
+  const resolveBefore = await accountSnapshot(businessA.id);
+  const resolvePending = await authorizeManagedUpload(deps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "provider-resolve-fail",
+    originalFilename: "provider-resolve-fail.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+    visibility: "PRIVATE",
+  });
+  const r2EnvKeys = ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"];
+  const savedR2Env = Object.fromEntries(r2EnvKeys.map((key) => [key, process.env[key]]));
+  for (const key of r2EnvKeys) delete process.env[key];
+  let resolveAbortError = null;
+  let resolveAbortResult = null;
+  try {
+    resolveAbortResult = await abortManagedUpload(
+      { db: prisma, bucketName: deps.bucketName, defaultLimitBytes: deps.defaultLimitBytes },
+      businessA.id,
+      resolvePending.asset.id,
+    );
+  } catch (error) {
+    resolveAbortError = error;
+  } finally {
+    for (const key of r2EnvKeys) {
+      if (savedR2Env[key] === undefined) delete process.env[key];
+      else process.env[key] = savedR2Env[key];
+    }
+  }
+  const resolveAfter = await accountSnapshot(businessA.id);
+  const resolveRow = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: resolvePending.asset.id },
+  });
+  check("Provider resolution failure after abort keeps FAILED and released reservation",
+    resolveAbortError == null &&
+      resolveAbortResult?.status === "FAILED" &&
+      resolveRow.status === "FAILED" &&
+      resolveRow.deletedAt != null &&
+      resolveAfter.reserved === resolveBefore.reserved &&
+      resolveAfter.used === resolveBefore.used &&
+      resolveAfter.reserved >= 0);
 } finally {
   await prisma.$disconnect();
   spawnSync("psql", [baseUrl, "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE);`], {
