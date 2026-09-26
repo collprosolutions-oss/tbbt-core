@@ -9,6 +9,7 @@ import {
   settingsErrorMessage,
   updateBusinessProfileOp,
   updateBusinessPublicContactOp,
+  updateBusinessTimeZoneOp,
   updateLaborMinimumSettingsOp,
   updateSettingsPreferencesOp,
   updateWebsiteStoryOp,
@@ -96,6 +97,34 @@ export async function updateBusinessProfileSettings(
       : { message: "Business name updated." };
   } catch (error) {
     return { error: settingsErrorMessage(error, "That business profile could not be saved.") };
+  }
+}
+
+function revalidateBusinessTimeZoneSurfaces() {
+  revalidatePath("/settings");
+  revalidatePath("/jobs");
+  revalidatePath("/today");
+  revalidatePath("/dashboard");
+  revalidatePath("/field");
+}
+
+export async function updateBusinessTimeZoneSettings(
+  _prev: SettingsActionState,
+  formData: FormData,
+): Promise<SettingsActionState> {
+  try {
+    const access = await requireBusinessAccess();
+    assertSettingsBusinessScope(access, readString(formData, "businessId") || null);
+    const result = await updateBusinessTimeZoneOp(prisma, access, {
+      timezone: readString(formData, "timezone"),
+      confirmed: readConfirmed(formData),
+    });
+    revalidateBusinessTimeZoneSurfaces();
+    return result.unchanged
+      ? { message: "No business-timezone changes to save." }
+      : { message: "Business timezone updated. Stored timestamps were not rewritten." };
+  } catch (error) {
+    return { error: settingsErrorMessage(error, "That business timezone could not be saved.") };
   }
 }
 

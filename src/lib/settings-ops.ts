@@ -42,6 +42,7 @@ import {
   MAX_PUBLIC_ABOUT_COPY_LENGTH,
   normalizeAboutCopy,
 } from "@/lib/website-story";
+import { isValidIanaTimeZone } from "@/lib/business-timezone";
 
 type SettingsClient = PrismaClient | Prisma.TransactionClient;
 
@@ -218,6 +219,50 @@ export async function updateBusinessProfileOp(
       settingKey: "name",
       previousValue: business.name,
       newValue: name,
+    });
+  });
+
+  return { unchanged: false as const };
+}
+
+export async function updateBusinessTimeZoneOp(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: { timezone: string; confirmed: boolean },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  requireBusinessRole(access, "OWNER");
+
+  const timezone = input.timezone.trim();
+  if (!isValidIanaTimeZone(timezone)) {
+    throw new SettingsError("Enter a valid IANA timezone.");
+  }
+
+  const business = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: { id: true, timezone: true },
+  });
+  if (!business) {
+    throw new SettingsError("Business was not found.");
+  }
+  if (business.timezone === timezone) {
+    return { unchanged: true as const };
+  }
+
+  requireConfirm(input.confirmed, "Confirm this business-timezone change before saving.");
+
+  await db.$transaction(async (tx) => {
+    await tx.business.update({
+      where: { id: access.businessId },
+      data: { timezone },
+    });
+    await writeSettingsAuditLog(tx, {
+      businessId: access.businessId,
+      changedByMembershipId: access.workspace.membership.id,
+      settingArea: "profile",
+      settingKey: "timezone",
+      previousValue: business.timezone,
+      newValue: timezone,
     });
   });
 

@@ -10,6 +10,7 @@ import {
   ensureBusinessPublicContactSchema,
   resolveBusinessPublicContact,
 } from "@/lib/business-contact";
+import { describeBusinessTimeZone } from "@/lib/business-timezone";
 import { ACTIVE_EXPENSE_WHERE, projectedOperatingBalance } from "@/lib/expenses";
 import { PAYMENT_METHODS } from "@/lib/invoice-payment";
 import { getBusinessPaymentStatus } from "@/lib/payments";
@@ -78,6 +79,11 @@ export type SettingsSnapshot = {
     publicServiceAreaLabel: string;
     displayedPhone: string | null;
     fallbackPhone: string | null;
+  };
+  timezone: {
+    storedTimezone: string | null;
+    resolvedTimezone: string;
+    isExplicit: boolean;
   };
   preferences: SettingsPreferenceFlags;
   websiteStory: {
@@ -177,6 +183,7 @@ export async function loadSettingsSnapshot(
         publicEmail: true,
         publicWebsite: true,
         publicServiceAreaLabel: true,
+        timezone: true,
       },
     }),
     prisma.businessSettings.findUnique({
@@ -309,6 +316,7 @@ export async function loadSettingsSnapshot(
       displayedPhone: contact.phone,
       fallbackPhone: publicPhone(business.slug),
     },
+    timezone: describeBusinessTimeZone(business),
     preferences,
     websiteStory,
     scheduling: {

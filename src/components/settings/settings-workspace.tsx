@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ExportCustomersButton } from "@/components/customers/export-customers-button";
 import { FounderRegion } from "@/components/founder-design/region";
 import { BusinessProfileForm } from "@/components/settings/business-profile-form";
+import { BusinessTimeZoneForm } from "@/components/settings/business-timezone-form";
 import { BusinessTradesForm } from "@/components/settings/business-trades-form";
 import { BusinessPublicContactForm } from "@/components/settings/business-public-contact-form";
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
@@ -331,6 +332,15 @@ function SectionBody(props: SettingsWorkspaceProps) {
         >
           <ViewPublicWebsiteLink slug={snapshot.business.slug} className="mb-4" />
           <BusinessProfileForm name={snapshot.business.name} canEdit={canEditConsequential} />
+          <div className="space-y-2 border-t pt-4">
+            <h3 className="text-sm font-medium">Business timezone</h3>
+            <BusinessTimeZoneForm
+              storedTimezone={snapshot.timezone.storedTimezone}
+              resolvedTimezone={snapshot.timezone.resolvedTimezone}
+              isExplicit={snapshot.timezone.isExplicit}
+              canEdit={canEditConsequential}
+            />
+          </div>
           <div className="space-y-2 border-t pt-4">
             <h3 className="text-sm font-medium">Active trades</h3>
             <BusinessTradesForm
