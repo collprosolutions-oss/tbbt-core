@@ -286,6 +286,22 @@ try {
     new URL("../src/components/jobs/approved-scope-card.tsx", import.meta.url),
     "utf8",
   );
+  const projectPaymentsSrc = readFileSync(
+    new URL("../src/lib/project-payments.ts", import.meta.url),
+    "utf8",
+  );
+  const listPaymentsForInvoiceSrc = projectPaymentsSrc.slice(
+    projectPaymentsSrc.indexOf("export async function listPaymentsForInvoice"),
+    projectPaymentsSrc.indexOf("export async function listProjectPayments"),
+  );
+  const listProjectPaymentsSrc = projectPaymentsSrc.slice(
+    projectPaymentsSrc.indexOf("export async function listProjectPayments"),
+    projectPaymentsSrc.indexOf("export async function listPaymentsGroupedByInvoiceId"),
+  );
+  const paymentBelongsToInvoiceSrc = projectPaymentsSrc.slice(
+    projectPaymentsSrc.indexOf("export function paymentBelongsToInvoice"),
+    projectPaymentsSrc.indexOf("export function paymentsBelongingToInvoice"),
+  );
 
   console.log("\nSTATIC — Deposit workflow contracts");
   check(
@@ -310,11 +326,40 @@ try {
     depositRouteSrc.includes("createCustomerDepositCheckout(prisma, token)"),
   );
   check(
-    "owner invoice ops page derives payments and amount due from Payment rows",
-    ownerInvoiceSrc.includes("listProjectPayments") &&
-      ownerInvoiceSrc.includes("invoicePaymentBreakdown") &&
+    "owner invoice ops page loads Payment rows through listPaymentsForInvoice",
+    ownerInvoiceSrc.includes("listPaymentsForInvoice") &&
+      ownerInvoiceSrc.includes("const payments = await listPaymentsForInvoice(prisma, {") &&
+      ownerInvoiceSrc.includes("businessId: invoice.businessId") &&
+      ownerInvoiceSrc.includes("id: invoice.id") &&
+      ownerInvoiceSrc.includes("jobId: invoice.job?.id ?? null") &&
+      ownerInvoiceSrc.includes("kind: invoice.kind"),
+  );
+  check(
+    "owner invoice ops page derives amount paid and amount due from Payment rows",
+    ownerInvoiceSrc.includes("invoicePaymentBreakdown") &&
+      ownerInvoiceSrc.includes("const breakdown = invoicePaymentBreakdown({") &&
+      ownerInvoiceSrc.includes("payments,") &&
+      ownerInvoiceSrc.includes("formatMoney(breakdown.amountPaid)") &&
+      ownerInvoiceSrc.includes("formatMoney(breakdown.amountDue)") &&
       !ownerInvoiceSrc.includes("isPaid ? formatMoney(invoice.total)") &&
       !ownerInvoiceSrc.includes("isPaid ? formatMoney(0) : formatMoney(invoice.total)"),
+  );
+  check(
+    "listPaymentsForInvoice routes through tenant-scoped listProjectPayments",
+    listPaymentsForInvoiceSrc.includes("export async function listPaymentsForInvoice") &&
+      listPaymentsForInvoiceSrc.includes("const rows = await listProjectPayments(db, {") &&
+      listPaymentsForInvoiceSrc.includes("businessId: input.businessId") &&
+      listPaymentsForInvoiceSrc.includes("invoiceId: input.invoice.id") &&
+      listPaymentsForInvoiceSrc.includes("jobId: input.invoice.jobId") &&
+      listPaymentsForInvoiceSrc.includes("return paymentsBelongingToInvoice(input.invoice, rows)") &&
+      listProjectPaymentsSrc.includes("businessId: input.businessId"),
+  );
+  check(
+    "invoice payment attribution still treats ORIGINAL and SUPPLEMENTAL invoices differently",
+    paymentBelongsToInvoiceSrc.includes("if (payment.invoiceId)") &&
+      paymentBelongsToInvoiceSrc.includes("return payment.invoiceId === invoice.id") &&
+      paymentBelongsToInvoiceSrc.includes("if (!isOriginalInvoiceKind(invoice.kind))") &&
+      paymentBelongsToInvoiceSrc.includes("return Boolean(invoice.jobId) && payment.jobId === invoice.jobId"),
   );
   check(
     "owner invoices list remaining due uses Payment rows, not PAID vs full total",
