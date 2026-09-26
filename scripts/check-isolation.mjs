@@ -570,6 +570,14 @@ try {
     new URL("../src/lib/project-payments.ts", import.meta.url),
     "utf8",
   );
+  const ownerTodaySrc = readFileSync(
+    new URL("../src/lib/owner-today.ts", import.meta.url),
+    "utf8",
+  );
+  const todayPageSrc = readFileSync(
+    new URL("../src/app/(app)/today/page.tsx", import.meta.url),
+    "utf8",
+  );
   check(
     "access.ts re-exports the pure access-scope helpers used by this harness",
     accessSrc.includes('from "@/lib/access-scope"') &&
@@ -587,6 +595,14 @@ try {
     /function assignedJobWhere[\s\S]*businessId: field\.businessId[\s\S]*assignedMembershipId: field\.membershipId/.test(
       fieldAccessSrc,
     ),
+  );
+  check(
+    "Owner Today stays tenant-scoped and does not loosen assignedJobWhere",
+    todayPageSrc.includes("...access.scope") &&
+      todayPageSrc.includes("requireManagementPageAccess()") &&
+      ownerTodaySrc.includes("if (job.businessId !== businessId) return null") &&
+      ownerTodaySrc.includes("if (job.businessId !== options.businessId) continue") &&
+      !todayPageSrc.includes("assignedJobWhere("),
   );
   check(
     "private R2 reads still 404 non-management viewers who are not assigned to the JOB_PHOTO",
