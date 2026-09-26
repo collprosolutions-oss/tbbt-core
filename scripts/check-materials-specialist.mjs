@@ -21,6 +21,7 @@ const {
   countDistinctStaleMaterials,
   countPriceChangesFromHistory,
   latestComparableByProvider,
+  latestRecordedSupplierPrice,
   selectProjectedSupplierPrices,
   getLastMaterialsProjection,
   getMaterialsProjectionLoadCount,
@@ -620,6 +621,82 @@ async function seedMaterialsWorld(workspace, { secret = false, extraJobs = 0, ex
       sourceKey: `newest-${randomUUID()}`,
     },
   });
+
+  async function seedFreshnessIdentity(identity, providers, itemName) {
+    const catalogItem = await prisma.materialCatalogItem.create({
+      data: {
+        businessId,
+        name: `${prefix} ${itemName}`,
+        normalizedName: `${prefix.toLowerCase()} ${itemName}`,
+        unit: "ea",
+        takeoffIdentity: identity,
+      },
+    });
+    for (const provider of providers) {
+      await prisma.businessMaterialSupplierMapping.create({
+        data: {
+          businessId,
+          providerId: provider.providerId,
+          materialIdentity: identity,
+          providerProductId: provider.providerProductId,
+          productName: itemName,
+          unitLabel: "ea",
+        },
+      });
+      await prisma.supplierPriceRecord.create({
+        data: {
+          businessId,
+          providerId: provider.providerId,
+          providerProductId: provider.providerProductId,
+          productName: itemName,
+          unitLabel: "ea",
+          currentPrice: provider.price,
+          fetchedAt: provider.fetchedAt,
+          sourceStatus: provider.sourceStatus,
+          sourceMode: "catalog-reference",
+          locationKey: provider.locationKey,
+        },
+      });
+    }
+    await prisma.materialPurchaseListItem.create({
+      data: {
+        businessId,
+        purchaseListId: estimateOnlyList.id,
+        materialId: catalogItem.id,
+        name: catalogItem.name,
+        quantityNeeded: "1",
+        unit: "ea",
+        status: "PLANNED",
+        sourceKey: `${identity}-${randomUUID()}`,
+      },
+    });
+    return catalogItem;
+  }
+
+  const freshnessOrderA = await seedFreshnessIdentity(
+    "freshness-order-a",
+    [
+      { providerId: "home-depot", providerProductId: "hd-order-a", price: "8.40", fetchedAt: daysAgo(8), sourceStatus: "stale", locationKey: "hd-first" },
+      { providerId: "lowes", providerProductId: "lw-order-a", price: "7.90", fetchedAt: daysAgo(1), sourceStatus: "current", locationKey: "lw-second" },
+    ],
+    "freshness-order-a",
+  );
+  const freshnessOrderB = await seedFreshnessIdentity(
+    "freshness-order-b",
+    [
+      { providerId: "lowes", providerProductId: "lw-order-b", price: "7.90", fetchedAt: daysAgo(1), sourceStatus: "current", locationKey: "lw-first" },
+      { providerId: "home-depot", providerProductId: "hd-order-b", price: "8.40", fetchedAt: daysAgo(8), sourceStatus: "stale", locationKey: "hd-second" },
+    ],
+    "freshness-order-b",
+  );
+  const allStaleMix = await seedFreshnessIdentity(
+    "all-stale-mix",
+    [
+      { providerId: "home-depot", providerProductId: "hd-stale-mix", price: "9.10", fetchedAt: daysAgo(9), sourceStatus: "stale", locationKey: "hd-stale" },
+      { providerId: "lowes", providerProductId: "lw-stale-mix", price: "8.80", fetchedAt: daysAgo(8), sourceStatus: "stale", locationKey: "lw-stale" },
+    ],
+    "all-stale-mix",
+  );
   await prisma.materialPurchaseOrder.create({
     data: {
       businessId,
@@ -686,6 +763,9 @@ async function seedMaterialsWorld(workspace, { secret = false, extraJobs = 0, ex
     oneHistory,
     sameHistory,
     newestCompare,
+    freshnessOrderA,
+    freshnessOrderB,
+    allStaleMix,
     job,
     list,
     estimateOnlyList,
@@ -845,6 +925,17 @@ try {
     specialistSrc.includes("later recorded history price that differs from an earlier recorded history price") &&
       !specialistSrc.includes("differs from last known cost"),
   );
+  check(
+    "Latest recorded supplier price ignores mapping insertion order",
+    latestRecordedSupplierPrice([
+      { materialKey: "freshness-order-a", providerId: "home-depot", providerProductId: "hd-order-a", recordedPrice: 8.4, fetchedAt: daysAgo(8).toISOString(), freshness: "stale", sourceMode: "catalog-reference", locationKey: "hd-first" },
+      { materialKey: "freshness-order-a", providerId: "lowes", providerProductId: "lw-order-a", recordedPrice: 7.9, fetchedAt: daysAgo(1).toISOString(), freshness: "recently_checked", sourceMode: "catalog-reference", locationKey: "lw-second" },
+    ])?.providerId === "lowes" &&
+      latestRecordedSupplierPrice([
+        { materialKey: "freshness-order-b", providerId: "lowes", providerProductId: "lw-order-b", recordedPrice: 7.9, fetchedAt: daysAgo(1).toISOString(), freshness: "recently_checked", sourceMode: "catalog-reference", locationKey: "lw-first" },
+        { materialKey: "freshness-order-b", providerId: "home-depot", providerProductId: "hd-order-b", recordedPrice: 8.4, fetchedAt: daysAgo(8).toISOString(), freshness: "stale", sourceMode: "catalog-reference", locationKey: "hd-second" },
+      ])?.providerId === "lowes",
+  );
 
   const tenantA = await createOwnerWorkspace("Alpha Materials");
   const tenantB = await createOwnerWorkspace("Beta Materials");
@@ -889,7 +980,35 @@ try {
   check("Needed count is recorded, not invented zero", Number(resultA.factKeys.includes("materials-needed-count") && projectionA.totals.needed) > 0);
   check("Unmapped supplier is counted, not invented", projectionA.totals.unmapped >= 1 && projectionA.requirements.some((row) => row.supplierState === "supplier-unmapped" && row.supplierName == null));
   check("8-day price is stale never current", projectionA.freshness.some((row) => row.freshness === "stale") && !projectionA.prices.some((row) => row.materialKey === "concrete-bags" && row.freshness === "current"));
-  check("One stale recorded price counts once", projectionA.totals.stalePrices === 1);
+  check("One stale recorded price counts once", projectionA.freshness.filter((row) => row.materialKey === "concrete-bags" && row.freshness === "stale").length === 1);
+  check(
+    "Stale-first then current mapping is not price-stale",
+    projectionA.requirements.some((row) => row.takeoffIdentity === "freshness-order-a" && row.priceState !== "price-stale") &&
+      projectionA.freshness.some((row) => row.materialKey === "freshness-order-a" && row.freshness !== "stale") &&
+      !projectionA.requirements.some((row) => row.takeoffIdentity === "freshness-order-a" && row.priceState === "price-stale"),
+  );
+  check(
+    "Reversed mapping order still uses the newest current/recent price",
+    projectionA.requirements.some((row) => row.takeoffIdentity === "freshness-order-b" && row.priceState !== "price-stale") &&
+      projectionA.freshness.some((row) => row.materialKey === "freshness-order-b" && row.freshness !== "stale") &&
+      !projectionA.requirements.some((row) => row.takeoffIdentity === "freshness-order-b" && row.priceState === "price-stale"),
+  );
+  check(
+    "Freshness-order identities are omitted from stale count",
+    countDistinctStaleMaterials(
+      projectionA.requirements.filter((row) => row.takeoffIdentity === "freshness-order-a" || row.takeoffIdentity === "freshness-order-b"),
+      projectionA.freshness.filter((row) => row.materialKey === "freshness-order-a" || row.materialKey === "freshness-order-b"),
+    ) === 0 &&
+      !resultA.findings.some((row) => row.key === "materials-stale-price" && /freshness-order/i.test(row.summary)),
+  );
+  check(
+    "All-stale identity is price-stale once, not twice",
+    projectionA.requirements.filter((row) => row.takeoffIdentity === "all-stale-mix").every((row) => row.priceState === "price-stale") &&
+      countDistinctStaleMaterials(
+        projectionA.requirements.filter((row) => row.takeoffIdentity === "all-stale-mix"),
+        projectionA.freshness.filter((row) => row.materialKey === "all-stale-mix"),
+      ) === 1,
+  );
   check("Missing price is not $0", projectionA.requirements.some((row) => row.priceState === "price-missing" && row.plannedUnitCost == null && row.lastKnownCost == null));
   check(
     "Same-provider store prices are not another supplier",

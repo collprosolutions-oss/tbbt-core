@@ -72,6 +72,7 @@ export {
   countDistinctStaleMaterials,
   countPriceChangesFromHistory,
   latestComparableByProvider,
+  latestRecordedSupplierPrice,
   selectProjectedSupplierPrices,
   getLastMaterialsProjection,
   isMaterialsOwnedRecommendationKey,

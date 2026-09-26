@@ -373,6 +373,17 @@ function priceRowKey(row: MaterialsPriceRef) {
   return `${row.providerId}\0${row.providerProductId ?? ""}\0${row.locationKey ?? ""}\0${row.fetchedAt ?? ""}`;
 }
 
+export function latestRecordedSupplierPrice(rows: MaterialsPriceRef[]) {
+  if (rows.length === 0) return undefined;
+  return [...rows].sort((a, b) => {
+    const byFetched = fetchedAtMs(b) - fetchedAtMs(a);
+    if (byFetched !== 0) return byFetched;
+    const byProvider = (a.providerId ?? "").localeCompare(b.providerId ?? "");
+    if (byProvider !== 0) return byProvider;
+    return (a.locationKey ?? "").localeCompare(b.locationKey ?? "");
+  })[0];
+}
+
 export function latestComparableByProvider(rows: MaterialsPriceRef[]) {
   const latestByProvider = new Map<string, MaterialsPriceRef>();
   for (const row of rows) {
@@ -858,7 +869,7 @@ export async function loadMaterialsProjection(input: {
     cheaperCandidates.set(identity, candidates);
     const selected = selectProjectedSupplierPrices(candidates);
     prices.push(...selected);
-    const newest = [...candidates].sort((a, b) => fetchedAtMs(b) - fetchedAtMs(a))[0];
+    const newest = latestRecordedSupplierPrice(candidates);
     if (newest) {
       freshnessRows.push({
         materialKey: identity,
@@ -884,7 +895,7 @@ export async function loadMaterialsProjection(input: {
     const recordedPrices = identity ? pricesByIdentity.get(identity) ?? [] : [];
     const lastKnown = money(catalog?.lastKnownCost ?? null);
     const planned = money(item.plannedUnitCost);
-    const latestFresh = recordedPrices[0];
+    const latestFresh = latestRecordedSupplierPrice(recordedPrices);
     const latestHistory = item.materialId ? historyByMaterial.get(item.materialId)?.[0] : undefined;
     let priceState: MaterialsRequirementProjection["priceState"] = "recorded";
     if (latestFresh?.freshness === "stale" || (latestFresh == null && lastKnown == null && planned == null && !latestHistory)) {
