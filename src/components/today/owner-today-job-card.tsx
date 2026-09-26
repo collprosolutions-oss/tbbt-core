@@ -61,6 +61,29 @@ export function OwnerTodayJobCard({
         </p>
       ) : null}
 
+      {job.callHref || job.directionsHref ? (
+        <div
+          className={
+            job.callHref && job.directionsHref
+              ? "mt-3 grid grid-cols-2 gap-2"
+              : "mt-3 grid grid-cols-1 gap-2"
+          }
+        >
+          {job.callHref ? (
+            <Button asChild variant="outline" className="h-12 text-base">
+              <a href={job.callHref}>Call</a>
+            </Button>
+          ) : null}
+          {job.directionsHref ? (
+            <Button asChild variant="outline" className="h-12 text-base">
+              <a href={job.directionsHref} target="_blank" rel="noreferrer noopener">
+                Directions
+              </a>
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="mt-3 flex flex-wrap gap-2">
         <Button asChild size="sm">
           <Link href={job.jobHref}>Open job</Link>
@@ -76,9 +99,7 @@ export function OwnerTodayJobCard({
           </Button>
         ) : null}
         <CopyProjectLinkButton projectToken={job.projectToken} label="Copy portal link" />
-        {job.directionsHref ? (
-          <CopyDirectionsLinkButton href={job.directionsHref} />
-        ) : null}
+        {job.directionsHref ? <CopyDirectionsLinkButton href={job.directionsHref} /> : null}
         {showStart && job.canStart && !job.appointmentConfirmed ? (
           <Button asChild size="sm" variant="outline">
             <Link href={job.jobHref}>Start on work order</Link>
