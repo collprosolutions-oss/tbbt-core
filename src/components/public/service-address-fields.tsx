@@ -29,7 +29,11 @@ export function ServiceAddressFields({
   const showOtherCity =
     hasCityOptions && (forceOtherCity || Boolean(value.city && !listedCity));
   const citySelectValue = showOtherCity ? OTHER_CITY_VALUE : value.city;
-  const showOutOfArea = shouldWarnOutsideServiceArea(value.city, approvedCities);
+  // Selecting Other clears the city field. Keep that explicit path distinct from
+  // the initial untouched blank so the warning does not fire on first paint.
+  const cityForAreaWarning =
+    forceOtherCity && !value.city.trim() ? OTHER_CITY_VALUE : value.city;
+  const showOutOfArea = shouldWarnOutsideServiceArea(cityForAreaWarning, approvedCities);
   const requireZip = isUsServiceCountry(serviceArea.country);
   const useUsStateSelect = isUsServiceCountry(serviceArea.country);
 

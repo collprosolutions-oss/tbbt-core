@@ -226,7 +226,12 @@ export function shouldWarnOutsideServiceArea(
   approvedCities: readonly string[],
 ) {
   const trimmed = city.trim();
-  if (!trimmed || trimmed === OTHER_CITY_VALUE) {
+  // An untouched/blank city is "no choice yet", not "outside the service area".
+  if (!trimmed) {
+    return false;
+  }
+  // Explicit "Other / not listed" is an unlisted-city path even before typing.
+  if (trimmed === OTHER_CITY_VALUE) {
     return approvedCities.length > 0;
   }
   return !cityIsInServiceArea(trimmed, approvedCities);
