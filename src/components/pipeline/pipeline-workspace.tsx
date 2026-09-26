@@ -19,6 +19,7 @@ import {
   PIPELINE_STAGE_LABELS,
   PIPELINE_STAGES,
   isPipelineLossReason,
+  pipelineOpenRequestHref,
   type PipelineStage,
 } from "@/lib/pipeline";
 import type { PipelineOpportunityView } from "@/lib/pipeline-data";
@@ -278,6 +279,7 @@ function OpportunityDetail({
   source: PipelineWorkspaceProps["source"];
   row: PipelineOpportunityView;
 }) {
+  const openRequestHref = pipelineOpenRequestHref(row.serviceRequestId);
   return (
     <Card>
       <CardHeader>
@@ -329,9 +331,9 @@ function OpportunityDetail({
         </div>
 
         <div className="flex flex-wrap gap-2">
-          {row.serviceRequestId ? (
+          {openRequestHref ? (
             <Button asChild size="sm" variant="outline">
-              <Link href="/requests">Open request</Link>
+              <Link href={openRequestHref}>Open request</Link>
             </Button>
           ) : null}
           {row.customerId ? (

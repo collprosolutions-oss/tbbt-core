@@ -20,6 +20,7 @@ import { CustomerCommunicationsCard } from "@/components/customers/communication
 import { requireManagementPageAccess } from "@/lib/access";
 import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { loadCustomerCommunicationTimeline } from "@/lib/communications/timeline";
+import { customerInvoiceHistoryContext } from "@/lib/customer-invoice-history";
 import { requestNotesText } from "@/lib/work-area-intake";
 import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
 import { loadRecordJourney } from "@/lib/record-nav";
@@ -217,23 +218,34 @@ export default async function CustomerProfilePage({
             <p className="text-sm text-muted-foreground">No invoices yet.</p>
           ) : (
             <div className="space-y-2">
-              {customer.invoices.map((invoice) => (
-                <RecordRow
-                  key={invoice.id}
-                  title={
-                    <>
-                      <StatusBadge status={invoice.status} />
-                      <span className="text-foreground">{formatMoney(invoice.total)}</span>
-                    </>
-                  }
-                  meta={<span>{formatDate(invoice.createdAt)}</span>}
-                  action={
-                    <Button asChild size="sm" variant="outline">
-                      <Link href={`/invoices/${invoice.id}`}>Open</Link>
-                    </Button>
-                  }
-                />
-              ))}
+              {customer.invoices.map((invoice) => {
+                const history = customerInvoiceHistoryContext(invoice);
+                return (
+                  <RecordRow
+                    key={invoice.id}
+                    title={
+                      <>
+                        <StatusBadge status={history.status} />
+                        <span className="text-foreground">{formatMoney(invoice.total)}</span>
+                      </>
+                    }
+                    meta={
+                      <>
+                        <span>{formatDate(invoice.createdAt)}</span>
+                        {history.paidAt ? <span>Paid {formatDate(history.paidAt)}</span> : null}
+                        {history.paymentMethodLabel ? (
+                          <span>{history.paymentMethodLabel}</span>
+                        ) : null}
+                      </>
+                    }
+                    action={
+                      <Button asChild size="sm" variant="outline">
+                        <Link href={`/invoices/${invoice.id}`}>Open</Link>
+                      </Button>
+                    }
+                  />
+                );
+              })}
             </div>
           )}
         </CardContent>

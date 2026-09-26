@@ -424,7 +424,14 @@ async function loadRecordNavRelated(
             select: {
               id: true,
               businessId: true,
-              estimate: { select: { id: true, businessId: true } },
+              property: { select: propertySelect },
+              estimate: {
+                select: {
+                  id: true,
+                  businessId: true,
+                  serviceRequest: { select: { id: true, businessId: true } },
+                },
+              },
             },
           },
         },
@@ -433,8 +440,11 @@ async function loadRecordNavRelated(
       const customer = ownedByBusiness(invoice.customer, access.businessId);
       const job = ownedByBusiness(invoice.job, access.businessId);
       const estimate = ownedByBusiness(job?.estimate, access.businessId);
+      const request = ownedByBusiness(estimate?.serviceRequest, access.businessId);
       return {
         customer: customer ? { id: customer.id, name: customer.name } : null,
+        property: projectProperty(job?.property, access.businessId, customer?.id),
+        requests: request ? [{ id: request.id }] : [],
         estimates: estimate ? [{ id: estimate.id }] : [],
         jobs: job ? [{ id: job.id }] : [],
         invoices: [invoice],
