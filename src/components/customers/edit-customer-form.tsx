@@ -10,8 +10,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useSaasOperating } from "@/components/saas/saas-operating-context";
+import { smsHref, telHref } from "@/lib/directions";
 
 const initialState: CustomerActionState = {};
+const PHONE_ACTION_CLASS = "min-h-11 min-w-11 px-4";
+
+function emailHref(email: string | null | undefined): string | null {
+  const value = email?.trim();
+  return value ? `mailto:${value}` : null;
+}
 
 export function EditCustomerForm({
   customer,
@@ -34,16 +41,43 @@ export function EditCustomerForm({
   }, [pending, state]);
 
   if (!editing) {
+    const callHref = telHref(customer.phone);
+    const textHref = smsHref(customer.phone);
+    const mailHref = emailHref(customer.email);
+
     return (
-      <div className="space-y-2 text-sm">
+      <div className="space-y-3 text-sm">
         <p>Name: {customer.name}</p>
-        <p>Phone: {customer.phone || "None"}</p>
-        <p>Email: {customer.email || "None"}</p>
+        <div className="space-y-2">
+          <p>Phone: {customer.phone || "None"}</p>
+          {callHref || textHref ? (
+            <div className="flex flex-wrap gap-2">
+              {callHref ? (
+                <Button asChild variant="outline" className={PHONE_ACTION_CLASS}>
+                  <a href={callHref}>Call</a>
+                </Button>
+              ) : null}
+              {textHref ? (
+                <Button asChild variant="outline" className={PHONE_ACTION_CLASS}>
+                  <a href={textHref}>Text</a>
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+        <div className="space-y-2">
+          <p>Email: {customer.email || "None"}</p>
+          {mailHref ? (
+            <Button asChild variant="outline" className={PHONE_ACTION_CLASS}>
+              <a href={mailHref}>Email</a>
+            </Button>
+          ) : null}
+        </div>
         {operating.canOperate ? (
         <Button
           type="button"
-          size="sm"
           variant="outline"
+          className={PHONE_ACTION_CLASS}
           onClick={() => setEditing(true)}
         >
           Edit

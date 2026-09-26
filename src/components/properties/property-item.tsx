@@ -9,9 +9,11 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { directionsUrl } from "@/lib/directions";
 import { formatAddress } from "@/lib/format";
 
 const initialState: PropertyActionState = {};
+const PHONE_ACTION_CLASS = "min-h-11 min-w-11 px-4";
 
 export type PropertyDetails = {
   id: string;
@@ -39,20 +41,31 @@ export function PropertyItem({ property }: { property: PropertyDetails }) {
   }, [pending, state]);
 
   if (!editing) {
+    const directionsHref = directionsUrl(property);
+
     return (
       <li className="flex flex-wrap items-center justify-between gap-2">
         <span>
           {property.label ? `${property.label}: ` : null}
           {formatAddress(property)}
         </span>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => setEditing(true)}
-        >
-          Edit
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {directionsHref ? (
+            <Button asChild variant="outline" className={PHONE_ACTION_CLASS}>
+              <a href={directionsHref} target="_blank" rel="noreferrer noopener">
+                Directions
+              </a>
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            className={PHONE_ACTION_CLASS}
+            onClick={() => setEditing(true)}
+          >
+            Edit
+          </Button>
+        </div>
       </li>
     );
   }
