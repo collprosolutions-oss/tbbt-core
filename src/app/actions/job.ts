@@ -32,9 +32,13 @@ import {
   describeScheduleWarning,
   evaluateProposedSchedule,
   hasScheduleWarning,
+  scheduleConflictFacts,
+  type OccupiedJob,
+  type RecordedConflictJob,
+  type ScheduleConflictFact,
 } from "@/lib/availability";
 import { loadAvailabilitySettings, loadOccupiedJobs } from "@/lib/availability-data";
-import { formatDateTime } from "@/lib/format";
+import { formatAddress, formatDateTime } from "@/lib/format";
 import { accessArrangementWriteData } from "@/lib/property-access";
 import { prisma } from "@/lib/prisma";
 import {
@@ -72,9 +76,72 @@ export type JobActionState = {
   error?: string;
   warning?: string;
   conflictAck?: string;
+  conflicts?: ScheduleConflictFact[];
   notificationWarning?: string;
   message?: string;
 };
+
+async function ownedScheduleConflictFacts(
+  overlaps: OccupiedJob[],
+  businessId: string,
+  timeZone: string,
+): Promise<ScheduleConflictFact[]> {
+  const overlapIds = [
+    ...new Set(
+      overlaps
+        .map((job) => job.id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  if (overlapIds.length === 0) {
+    return [];
+  }
+
+  const rows = await prisma.job.findMany({
+    where: {
+      id: { in: overlapIds },
+      businessId,
+    },
+    select: {
+      id: true,
+      scheduledAt: true,
+      scheduledDurationMinutes: true,
+      assignedMembershipId: true,
+      customer: { select: { name: true } },
+      assignedMembership: { select: { user: { select: { name: true } } } },
+      property: {
+        select: {
+          addressLine1: true,
+          addressLine2: true,
+          city: true,
+          region: true,
+          postalCode: true,
+        },
+      },
+    },
+  });
+
+  const ownedById = new Map<string, RecordedConflictJob>();
+  for (const row of rows) {
+    if (!row.scheduledAt) {
+      continue;
+    }
+    ownedById.set(row.id, {
+      id: row.id,
+      scheduledAt: row.scheduledAt,
+      scheduledDurationMinutes: row.scheduledDurationMinutes,
+      customerName: row.customer?.name ?? null,
+      assignedMembershipId: row.assignedMembershipId,
+      assignedWorkerName: row.assignedMembership?.user?.name ?? null,
+      addressSummary: row.property?.addressLine1
+        ? formatAddress(row.property)
+        : null,
+      assignmentKnown: true,
+    });
+  }
+
+  return scheduleConflictFacts(overlaps, timeZone, ownedById);
+}
 
 function readString(formData: FormData, key: string) {
   const value = formData.get(key);
@@ -339,9 +406,15 @@ export async function scheduleJob(
       conflicts: warning ? [warning] : [],
     }) === "warn"
   ) {
+    const conflicts = await ownedScheduleConflictFacts(
+      evaluation.overlaps,
+      access.businessId,
+      timeZone,
+    );
     return {
       warning: cascade.length ? `${warning} Later jobs were not moved.` : warning,
       conflictAck: currentAck,
+      ...(conflicts.length > 0 ? { conflicts } : {}),
     };
   }
 

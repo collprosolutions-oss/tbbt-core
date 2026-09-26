@@ -58,6 +58,31 @@ export type OccupiedJob = {
   scheduledAt: Date;
   scheduledDurationMinutes: number | null;
   customerName?: string | null;
+  assignedMembershipId?: string | null;
+  assignedWorkerName?: string | null;
+  addressSummary?: string | null;
+  assignmentKnown?: boolean;
+};
+
+export type RecordedConflictJob = {
+  id: string;
+  scheduledAt: Date;
+  scheduledDurationMinutes: number | null;
+  customerName?: string | null;
+  assignedMembershipId?: string | null;
+  assignedWorkerName?: string | null;
+  addressSummary?: string | null;
+  assignmentKnown?: boolean;
+};
+
+export type ScheduleConflictFact = {
+  jobId: string;
+  href: string;
+  customerName: string;
+  scheduledStartLabel: string;
+  expectedEndLabel: string | null;
+  assignedWorkerName: string | null;
+  addressSummary: string | null;
 };
 
 export type AvailabilitySnapshot = {
@@ -72,6 +97,7 @@ export type AvailabilitySnapshot = {
 
 export type ScheduleEvaluation = {
   overlap: { customerName: string | null; scheduledAt: Date } | null;
+  overlaps: OccupiedJob[];
   nonWorkingDay: boolean;
   unavailableDate: boolean;
   coversUnavailableDate: boolean;
@@ -225,6 +251,87 @@ export function datesCoveredBySchedule(
   return days;
 }
 
+export function overlappingOccupiedJobs(input: {
+  start: Date;
+  durationMinutes: number | null;
+  existing: OccupiedJob[];
+  bufferMinutes: number;
+}): OccupiedJob[] {
+  return input.existing.filter((job) =>
+    schedulesOverlapWithBuffer(
+      input.start,
+      input.durationMinutes,
+      job.scheduledAt,
+      job.scheduledDurationMinutes,
+      input.bufferMinutes,
+    ),
+  );
+}
+
+export function conflictingJobHref(jobId: string): string {
+  return `/jobs/${jobId}`;
+}
+
+function recordedExpectedEnd(
+  start: Date,
+  durationMinutes: number | null,
+): Date | null {
+  if (durationMinutes == null || durationMinutes <= 0) {
+    return null;
+  }
+  return new Date(start.getTime() + durationMinutes * 60 * 1000);
+}
+
+function recordedAssignmentLabel(job: RecordedConflictJob): string | null {
+  if (!job.assignmentKnown) {
+    return job.assignedWorkerName?.trim() || null;
+  }
+  if (!job.assignedMembershipId) {
+    return "Unassigned";
+  }
+  return job.assignedWorkerName?.trim() || null;
+}
+
+/**
+ * Serialize overlapping recorded Jobs for the owner schedule warning.
+ * Only IDs present in `ownedById` are emitted — a foreign Job cannot
+ * appear in warning detail, href, or action state.
+ */
+export function scheduleConflictFacts(
+  overlaps: OccupiedJob[],
+  timeZone: string,
+  ownedById: ReadonlyMap<string, RecordedConflictJob>,
+): ScheduleConflictFact[] {
+  const facts: ScheduleConflictFact[] = [];
+  const seen = new Set<string>();
+  for (const overlap of overlaps) {
+    if (!overlap.id || seen.has(overlap.id)) {
+      continue;
+    }
+    const owned = ownedById.get(overlap.id);
+    if (!owned) {
+      continue;
+    }
+    seen.add(owned.id);
+    const expectedEnd = recordedExpectedEnd(
+      owned.scheduledAt,
+      owned.scheduledDurationMinutes,
+    );
+    facts.push({
+      jobId: owned.id,
+      href: conflictingJobHref(owned.id),
+      customerName: owned.customerName?.trim() || "Customer",
+      scheduledStartLabel: formatNextAvailableDateTime(owned.scheduledAt, timeZone),
+      expectedEndLabel: expectedEnd
+        ? formatNextAvailableDateTime(expectedEnd, timeZone)
+        : null,
+      assignedWorkerName: recordedAssignmentLabel(owned),
+      addressSummary: owned.addressSummary?.trim() || null,
+    });
+  }
+  return facts;
+}
+
 export function evaluateProposedSchedule(input: {
   start: Date;
   durationMinutes: number | null;
@@ -233,15 +340,13 @@ export function evaluateProposedSchedule(input: {
   timeZone: string;
 }): ScheduleEvaluation {
   const { start, durationMinutes, settings, existing, timeZone } = input;
-  const overlapJob = existing.find((job) =>
-    schedulesOverlapWithBuffer(
-      start,
-      durationMinutes,
-      job.scheduledAt,
-      job.scheduledDurationMinutes,
-      settings.schedulingBufferMinutes,
-    ),
-  );
+  const overlaps = overlappingOccupiedJobs({
+    start,
+    durationMinutes,
+    existing,
+    bufferMinutes: settings.schedulingBufferMinutes,
+  });
+  const overlapJob = overlaps[0] ?? null;
   const covered = datesCoveredBySchedule(start, durationMinutes, timeZone);
   const startMinutes = minutesOfDay(start, timeZone);
   const duration = Math.max(durationMinutes ?? 0, 0);
@@ -255,6 +360,7 @@ export function evaluateProposedSchedule(input: {
           scheduledAt: overlapJob.scheduledAt,
         }
       : null,
+    overlaps,
     nonWorkingDay: !isWorkingWeekday(start, settings, timeZone),
     unavailableDate: isUnavailableDate(start, settings, timeZone),
     coversUnavailableDate: covered.some((day) => {

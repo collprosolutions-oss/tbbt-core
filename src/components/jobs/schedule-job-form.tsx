@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useEffect, useMemo, useState } from "react";
 import {
   scheduleJob,
@@ -108,7 +109,35 @@ export function ScheduleJobForm({
       {state.warning ? (
         <Alert>
           <AlertTitle>Schedule conflict</AlertTitle>
-          <AlertDescription>{state.warning}</AlertDescription>
+          <AlertDescription>
+            <p>{state.warning}</p>
+            {state.conflicts && state.conflicts.length > 0 ? (
+              <ul className="mt-3 space-y-3">
+                {state.conflicts.map((conflict) => (
+                  <li key={conflict.jobId} className="space-y-1">
+                    <p className="font-medium text-foreground">
+                      {conflict.customerName}
+                    </p>
+                    <p>Scheduled {conflict.scheduledStartLabel}</p>
+                    {conflict.expectedEndLabel ? (
+                      <p>Expected end {conflict.expectedEndLabel}</p>
+                    ) : null}
+                    {conflict.assignedWorkerName ? (
+                      <p>{conflict.assignedWorkerName}</p>
+                    ) : null}
+                    {conflict.addressSummary ? (
+                      <p>{conflict.addressSummary}</p>
+                    ) : null}
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/jobs/${conflict.jobId}`}>
+                        Open conflicting job
+                      </Link>
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </AlertDescription>
         </Alert>
       ) : null}
       {state.notificationWarning ? (
