@@ -58,6 +58,8 @@ export type CosEntityHints = {
   knowledgeEntryId?: string;
   experienceCandidateId?: string;
   procedureId?: string;
+  vaultRecordId?: string;
+  agreementId?: string;
   recommendationKey?: string;
   customerDisplayName?: string;
   scheduledDate?: string;
@@ -145,7 +147,12 @@ export type ConflictKind =
   | "APPROVED_VS_APPLIED_SETUP_ITEM"
   | "REJECTED_VS_APPLIED_SETUP_ITEM"
   | "BLOCKED_VS_APPLIED_SETUP_ITEM"
-  | "SETUP_PROPOSAL_VS_COMPLETED_LAUNCH";
+  | "SETUP_PROPOSAL_VS_COMPLETED_LAUNCH"
+  | "CHECKLIST_PRESENT_VS_COMPLIANCE"
+  | "RECORDED_EXPIRY_VS_LEGAL_STATUS"
+  | "OWNER_REVIEW_VS_LEGAL_REVIEW"
+  | "AGREEMENT_COMPLETE_VS_ENFORCEABLE"
+  | "ESIGN_NOT_CONNECTED_VS_DIGITAL_SIGNATURE";
 
 export type ConflictItem = {
   kind: ConflictKind;
