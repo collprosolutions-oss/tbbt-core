@@ -175,6 +175,26 @@ export function draftEstimateSendError(estimate: {
   return null;
 }
 
+/**
+ * Owner Send UI projection of draftEstimateSendError().
+ * List and builder must use this instead of inventing a second ruleset.
+ */
+export type DraftEstimateSendState = {
+  canSend: boolean;
+  error: string | null;
+};
+
+export function draftEstimateSendState(estimate: {
+  status: string;
+  lineItems: Array<{
+    description: string;
+    unitPrice: { lte: (value: number) => boolean } | number | string;
+  }>;
+}): DraftEstimateSendState {
+  const error = draftEstimateSendError(estimate);
+  return { canSend: error === null, error };
+}
+
 export function buildEstimateLineCreatesFromRequestItems(
   businessId: string,
   items: RequestDraftSourceItem[],

@@ -27,6 +27,7 @@ import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatAddress, formatDate, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { lineItemTitle } from "@/lib/estimate-line-scope";
+import { draftEstimateSendState } from "@/lib/request-estimate-draft";
 import { prisma } from "@/lib/prisma";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
 import {
@@ -173,6 +174,7 @@ export default async function EstimatesPage({
         },
         jobs: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
         lineItems: { orderBy: { createdAt: "asc" } },
+        _count: { select: { versions: true } },
       },
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * pageSize,
@@ -247,6 +249,11 @@ export default async function EstimatesPage({
       unpaidDepositWarning: unpaidMaterialDepositWarning(
         materialDeposit.amount.sub(paidTowardDeposit),
       ),
+      sendBlockedReason: draftEstimateSendState({
+        status: estimate.status,
+        lineItems: estimate.lineItems,
+      }).error,
+      needsReissue: estimate.status === "SENT" && estimate._count.versions === 0,
     };
   });
 

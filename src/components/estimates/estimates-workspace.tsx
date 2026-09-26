@@ -9,6 +9,7 @@ import { EditEstimateButton } from "@/components/estimates/edit-estimate-button"
 import { EmailEstimateButton } from "@/components/estimates/email-estimate-button";
 import { IncludedWorkDisplay } from "@/components/estimates/included-work-display";
 import { lineItemTitle } from "@/lib/estimate-line-scope";
+import { LegacyUnversionedSentNotice } from "@/components/estimates/legacy-unversioned-sent-notice";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { EmptyState } from "@/components/empty-state";
 import { CreateJobButton } from "@/components/jobs/create-job-button";
@@ -56,6 +57,8 @@ export type EstimateListItem = {
   hasCustomerEmail: boolean;
   publicToken: string;
   unpaidDepositWarning?: string | null;
+  sendBlockedReason: string | null;
+  needsReissue: boolean;
 };
 
 function initials(name: string) {
@@ -440,7 +443,10 @@ function EstimateDetailsPanel({ estimate }: { estimate: EstimateListItem | null 
             <Button asChild variant="outline">
               <Link href={`/estimates/${estimate.id}`}>Edit Estimate</Link>
             </Button>
-            <SendEstimateButton estimateId={estimate.id} disabled={estimate.lineItems.length === 0} />
+            <SendEstimateButton
+              estimateId={estimate.id}
+              blockedReason={estimate.sendBlockedReason}
+            />
             {estimate.lineItems.length > 0 ? (
               <ClearDraftEstimateButton estimateId={estimate.id} />
             ) : null}
@@ -448,6 +454,12 @@ function EstimateDetailsPanel({ estimate }: { estimate: EstimateListItem | null 
         ) : null}
         {isSent ? (
           <>
+            {estimate.needsReissue ? (
+              <LegacyUnversionedSentNotice
+                estimateId={estimate.id}
+                showReturnAction={false}
+              />
+            ) : null}
             <EditEstimateButton estimateId={estimate.id} />
             <CopyEstimateLinkButton publicToken={estimate.publicToken} />
             {estimate.hasCustomerEmail ? <EmailEstimateButton estimateId={estimate.id} /> : null}
