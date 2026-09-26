@@ -58,9 +58,9 @@ export function LaunchWorkspace({
         <CardHeader>
           <CardTitle>Setup progress</CardTitle>
           <CardDescription>
-            {workspace.progress.completedCount} of {workspace.progress.definedStepCount} defined
-            steps complete ({workspace.progress.progressPercent}%). Skipped and deferred are not
-            counted as complete.
+            {workspace.progress.hasRecordedProgress
+              ? `${workspace.progress.completedCount} of ${workspace.progress.definedStepCount} defined steps complete (${workspace.progress.progressPercent}%). Skipped and deferred are not counted as complete.`
+              : "Optional checklist. Normal TBBT operation does not require completing all 14 Launch steps. Progress is recorded only after you save, skip, or defer a step."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">

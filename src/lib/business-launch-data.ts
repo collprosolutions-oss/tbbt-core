@@ -100,7 +100,10 @@ export async function loadLaunchWorkspace(
   const payment = await getBusinessPaymentStatus(prisma, businessId);
 
   return {
-    progress: buildLaunchProgressSummary(progress ?? {}),
+    progress: buildLaunchProgressSummary({
+      ...(progress ?? {}),
+      hasRecordedProgress: Boolean(progress),
+    }),
     business: {
       name: business?.name ?? "",
       publicPhone: business?.publicPhone ?? "",

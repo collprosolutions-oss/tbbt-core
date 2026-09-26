@@ -188,6 +188,35 @@ export type LaunchStepInput = {
   confirmTrades?: string[];
 };
 
+async function readUnavailableDates(db: Db, businessId: string) {
+  const rows = await db.businessUnavailableDate.findMany({
+    where: { businessId },
+    select: { date: true },
+    orderBy: { date: "asc" },
+  });
+  return rows.map((row) => row.date);
+}
+
+async function writeLaunchSchedulingSettings(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: {
+    workStartMinutes?: number;
+    workEndMinutes?: number;
+    workingWeekdays?: number[];
+    schedulingBufferMinutes?: number;
+  },
+) {
+  const unavailableDates = await readUnavailableDates(db, access.businessId);
+  await updateSchedulingSettingsOp(db, access, {
+    workStartMinutes: input.workStartMinutes ?? 480,
+    workEndMinutes: input.workEndMinutes ?? 1020,
+    workingWeekdays: input.workingWeekdays?.length ? input.workingWeekdays : [1, 2, 3, 4, 5],
+    schedulingBufferMinutes: input.schedulingBufferMinutes ?? 30,
+    unavailableDates,
+  });
+}
+
 async function lockLaunchStep(tx: Prisma.TransactionClient, businessId: string, stepKey: string) {
   await tx.$queryRaw`
     SELECT id
@@ -309,23 +338,21 @@ export async function completeLaunchStep(
       break;
     }
     case "hours": {
-      await updateSchedulingSettingsOp(db, access, {
+      await writeLaunchSchedulingSettings(db, access, {
         workStartMinutes: input.workStartMinutes ?? 480,
         workEndMinutes: input.workEndMinutes ?? 1020,
         workingWeekdays: input.workingWeekdays?.length ? input.workingWeekdays : [1, 2, 3, 4, 5],
         schedulingBufferMinutes: input.schedulingBufferMinutes ?? 30,
-        unavailableDates: [],
       });
       break;
     }
     case "scheduling": {
       if (input.schedulingBufferMinutes != null) {
-        await updateSchedulingSettingsOp(db, access, {
+        await writeLaunchSchedulingSettings(db, access, {
           workStartMinutes: input.workStartMinutes ?? 480,
           workEndMinutes: input.workEndMinutes ?? 1020,
           workingWeekdays: input.workingWeekdays?.length ? input.workingWeekdays : [1, 2, 3, 4, 5],
           schedulingBufferMinutes: input.schedulingBufferMinutes,
-          unavailableDates: [],
         });
       }
       await updateLaunchProfileOp(db, access, {

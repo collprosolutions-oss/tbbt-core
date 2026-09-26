@@ -410,7 +410,8 @@ export default async function DashboardPage() {
         }
       />
 
-      {launchWorkspace && launchWorkspace.progress.status !== "COMPLETED" ? (
+      {launchWorkspace &&
+      !(launchWorkspace.progress.hasRecordedProgress && launchWorkspace.progress.status === "COMPLETED") ? (
         <div className="mb-6">
           <DashboardLaunchCard progress={launchWorkspace.progress} />
         </div>

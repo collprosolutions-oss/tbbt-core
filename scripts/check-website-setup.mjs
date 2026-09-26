@@ -57,6 +57,7 @@ const {
   ownerNeedsWebsiteSetup,
   resetWebsiteSetupSchemaEnsure,
   skipWebsiteSetupOp,
+  websiteSetupCompletionCopy,
   WEBSITE_SETUP_ENSURE_SQL,
   WEBSITE_SETUP_PATH,
   WEBSITE_SETUP_SAVED,
@@ -140,9 +141,10 @@ check(
 check(
   "Save and skip both land on the public-site handoff with View Public Website",
   websitePage.includes("WEBSITE_SETUP_SKIPPED") &&
+    websitePage.includes("websiteSetupCompletionCopy") &&
+    websitePage.includes("workspace.business.websiteSetupChoice") &&
     websitePage.includes("View Public Website") &&
     websitePage.includes("Continue to Dashboard") &&
-    websitePage.includes("Public website ready") &&
     (readRepo("src/app/actions/website-setup.ts").match(/redirect\(WEBSITE_SETUP_PATH\)/g) || [])
       .length === 2 &&
     !readRepo("src/app/actions/website-setup.ts").includes("postAuthenticationPath"),
@@ -225,6 +227,35 @@ check(
     business: { slug: "new-handyman", websiteSetupCompletedAt: null },
   }) === true &&
     hasCompletedWebsiteSetup({ slug: "new-handyman", websiteSetupCompletedAt: null }) === false,
+);
+const savedCopy = websiteSetupCompletionCopy({
+  choice: WEBSITE_SETUP_SAVED,
+  publicPath: "/hire/cedar-handyman",
+});
+const skippedCopy = websiteSetupCompletionCopy({
+  choice: WEBSITE_SETUP_SKIPPED,
+  publicPath: "/hire/maple-handyman",
+});
+check(
+  "SAVED website completion copy stays truthful",
+  savedCopy.title === "Public website ready" &&
+    savedCopy.alert.includes("Your public website is live") &&
+    !savedCopy.description.includes("custom domain") &&
+    !savedCopy.alert.includes("photo"),
+);
+check(
+  "SKIPPED website completion copy does not claim the site is ready",
+  skippedCopy.title === "Website setup skipped" &&
+    skippedCopy.description.includes("The default TBBT /hire/maple-handyman route exists") &&
+    skippedCopy.description.includes("skipped About and service-area setup") &&
+    skippedCopy.description.includes("finish website details later in Settings") &&
+    skippedCopy.alert.includes("skipped About and service-area setup") &&
+    skippedCopy.alert.includes("Settings") &&
+    !skippedCopy.title.includes("ready") &&
+    !skippedCopy.alert.includes("is live") &&
+    !skippedCopy.description.includes("custom domain") &&
+    !skippedCopy.description.includes("published") &&
+    !skippedCopy.alert.includes("photo"),
 );
 check(
   "Saved or skipped timestamp completes the step",
