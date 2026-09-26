@@ -210,11 +210,9 @@ export function trustedControlledActionRecord(result: ControlledActionConfirmati
   return `Owner confirmed: ${result.summary} ${result.executionResult.message}`;
 }
 
-const executionAttempts = new Map<string, ControlledActionConfirmation>();
 const inflightAttempts = new Map<string, Promise<ControlledActionConfirmation>>();
 
 export function resetControlledActionAttempts() {
-  executionAttempts.clear();
   inflightAttempts.clear();
 }
 
@@ -241,8 +239,11 @@ function assertExecutableKey(actionKey: string): ControlledActionCatalogEntry {
   return entry;
 }
 
-function attemptKey(businessId: string, actionKey: string, executionAttemptId: string) {
-  return `${businessId}:${actionKey}:${executionAttemptId}`;
+function attemptKey(
+  proposal: Pick<ControlledActionProposal, "businessId" | "actionKey" | "targetEntityId" | "fingerprint">,
+  executionAttemptId: string,
+) {
+  return `${proposal.businessId}:${proposal.actionKey}:${proposal.targetEntityId}:${proposal.fingerprint}:${executionAttemptId}`;
 }
 
 export type ControlledActionAuthTest = {
@@ -441,6 +442,12 @@ async function ownedActionItemOrFail(
   return access.assertOwned(item);
 }
 
+function missingActionItemError() {
+  return new ControlledActionError(
+    "That recorded action item is no longer available. TBBT did not change anything.",
+  );
+}
+
 async function existingActionForEvidence(
   db: Db,
   access: BusinessAccess,
@@ -448,7 +455,8 @@ async function existingActionForEvidence(
   evidenceKey: string,
 ) {
   const state = await recommendationStateFor(db, access.businessId, recommendationKey);
-  if (!state?.actionItemId || state.evidenceKey !== evidenceKey) return null;
+  if (!state || state.evidenceKey !== evidenceKey) return null;
+  if (!state.actionItemId) throw missingActionItemError();
   return ownedActionItemOrFail(db, access, state.actionItemId);
 }
 
@@ -468,7 +476,7 @@ async function alreadyAppliedResult(
   if (!state || state.evidenceKey !== live.evidenceKey) return null;
 
   if (entry.key === "CREATE_RECOMMENDATION_ACTION_ITEM") {
-    if (!state.actionItemId) return null;
+    if (!state.actionItemId) throw missingActionItemError();
     const item = await ownedActionItemOrFail(db, access, state.actionItemId);
     return {
       status: "REPLAYED",
@@ -603,16 +611,20 @@ export async function confirmControlledAction(
     throw changedStateError();
   }
 
-  const key = attemptKey(access.businessId, entry.key, input.executionAttemptId);
-  const replayed = executionAttempts.get(key);
-  if (replayed) {
+  const already = await alreadyAppliedResult(db, access, entry, live);
+  if (already) {
     return {
       ...serverProposal,
       confirmed: true,
       executionAttemptId: input.executionAttemptId,
-      executionResult: { ...replayed.executionResult, status: "REPLAYED" },
+      executionResult: already,
     };
   }
+  if (!live.active) {
+    throw new ControlledActionError("That recommendation is not active from recorded facts.");
+  }
+
+  const key = attemptKey(serverProposal, input.executionAttemptId);
   const pending = inflightAttempts.get(key);
   if (pending) {
     const first = await pending;
@@ -634,21 +646,6 @@ export async function confirmControlledAction(
   inflightAttempts.set(key, work);
 
   try {
-    const already = await alreadyAppliedResult(db, access, entry, live);
-    if (already) {
-      const confirmation: ControlledActionConfirmation = {
-        ...serverProposal,
-        confirmed: true,
-        executionAttemptId: input.executionAttemptId,
-        executionResult: already,
-      };
-      executionAttempts.set(key, confirmation);
-      resolveWork(confirmation);
-      return confirmation;
-    }
-    if (!live.active) {
-      throw new ControlledActionError("That recommendation is not active from recorded facts.");
-    }
     const result = await invokeCanonicalOperation(db, access, entry, live);
     const confirmation: ControlledActionConfirmation = {
       ...serverProposal,
@@ -656,7 +653,6 @@ export async function confirmControlledAction(
       executionAttemptId: input.executionAttemptId,
       executionResult: result,
     };
-    executionAttempts.set(key, confirmation);
     resolveWork(confirmation);
     return confirmation;
   } catch (error) {

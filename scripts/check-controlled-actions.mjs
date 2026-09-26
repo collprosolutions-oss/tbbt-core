@@ -223,9 +223,28 @@ try {
   check(
     "Confirm authorizes before process-map, in-flight, or database replay",
     controlledSrc.indexOf("await authorizeCatalogAccess(db, access, entry, input.test, { ownerOnly: true })") <
-      controlledSrc.indexOf("executionAttempts.get(key)") &&
-      controlledSrc.indexOf("await authorizeCatalogAccess(db, access, entry, input.test, { ownerOnly: true })") <
-        controlledSrc.indexOf("const already = await alreadyAppliedResult"),
+      controlledSrc.indexOf("const already = await alreadyAppliedResult") &&
+      controlledSrc.indexOf("const already = await alreadyAppliedResult") <
+        controlledSrc.indexOf("inflightAttempts.get(key)") &&
+      !controlledSrc.includes("executionAttempts.get("),
+  );
+  check(
+    "Completed process maps are not an authoritative replay source",
+    !controlledSrc.includes("executionAttempts.get(") &&
+      controlledSrc.includes("inflightAttempts") &&
+      controlledSrc.includes("alreadyAppliedResult("),
+  );
+  check(
+    "In-flight attempt identity is bound to the server-derived proposal",
+    controlledSrc.includes("function attemptKey(") &&
+      controlledSrc.includes("attemptKey(serverProposal, input.executionAttemptId)") &&
+      controlledSrc.includes("proposal.targetEntityId") &&
+      controlledSrc.includes("proposal.fingerprint"),
+  );
+  check(
+    "Same-evidence CREATE with a missing actionItemId fails closed",
+    controlledSrc.includes("function missingActionItemError(") &&
+      controlledSrc.includes("if (!state.actionItemId) throw missingActionItemError()"),
   );
   check(
     "Confirm resolves canonical recommendation without requiring ACTIVE before already-applied replay",
@@ -713,6 +732,81 @@ try {
     data: { actionItemId: createdItems[0].id, status: "OPEN" },
   });
 
+  await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      status: "SENT",
+      total: 80,
+      publicToken: randomUUID(),
+    },
+  });
+  const recommendationB = await findCatalogRecommendation(prisma, businessA.id, "follow-up-sent-estimates");
+  check("Live catalog has follow-up-sent-estimates for tenant A", Boolean(recommendationB));
+  const proposalB = await proposeControlledAction(prisma, ownerA, {
+    actionKey: "CREATE_RECOMMENDATION_ACTION_ITEM",
+    targetEntityId: "follow-up-sent-estimates",
+  });
+  const confirmB = await confirmControlledAction(prisma, ownerA, {
+    proposal: proposalB,
+    executionAttemptId: attemptId,
+    confirm: "confirm",
+  });
+  const createdItemsB = await prisma.businessActionItem.findMany({
+    where: { businessId: businessA.id, recommendationKey: "follow-up-sent-estimates" },
+  });
+  check(
+    "Same executionAttemptId cannot return CREATE A when confirming CREATE B",
+    confirmB.executionResult.recordId !== createdItems[0].id &&
+      createdItemsB.length === 1 &&
+      confirmB.executionResult.recordId === createdItemsB[0].id &&
+      confirmB.executionResult.status === "SUCCEEDED",
+  );
+
+  const beforeMissingOwned = await domainCounts(businessA.id);
+  await prisma.businessActionItem.delete({ where: { id: createdItemsB[0].id } });
+  const afterDeleteB = await prisma.bsosRecommendationState.findFirst({
+    where: { businessId: businessA.id, recommendationKey: "follow-up-sent-estimates" },
+  });
+  check("Deleting the owned action item leaves same-evidence actionItemId null", afterDeleteB?.actionItemId === null);
+  let missingOwnedWithoutReset = false;
+  try {
+    await confirmControlledAction(prisma, ownerA, {
+      proposal: proposalB,
+      executionAttemptId: attemptId,
+      confirm: "confirm",
+    });
+  } catch (error) {
+    missingOwnedWithoutReset =
+      error instanceof Error && /no longer available|did not change anything/i.test(error.message);
+  }
+  check(
+    "Same-evidence CREATE with null actionItemId fails closed even when process maps remain",
+    missingOwnedWithoutReset &&
+      (await prisma.businessActionItem.count({
+        where: { businessId: businessA.id, recommendationKey: "follow-up-sent-estimates" },
+      })) === 0,
+  );
+  resetControlledActionAttempts();
+  let missingOwnedAfterReset = false;
+  try {
+    await confirmControlledAction(prisma, ownerA, {
+      proposal: proposalB,
+      executionAttemptId: randomUUID(),
+      confirm: "confirm",
+    });
+  } catch (error) {
+    missingOwnedAfterReset =
+      error instanceof Error && /no longer available|did not change anything/i.test(error.message);
+  }
+  check(
+    "Same-evidence CREATE with null actionItemId fails closed after maps are cleared",
+    missingOwnedAfterReset &&
+      (await prisma.businessActionItem.count({
+        where: { businessId: businessA.id, recommendationKey: "follow-up-sent-estimates" },
+      })) === 0 &&
+      (await domainCounts(businessA.id)).actionItems === beforeMissingOwned.actionItems - 1,
+  );
+
   let productFailed = false;
   try {
     await confirmControlledAction(prisma, ownerA, {
@@ -830,6 +924,35 @@ try {
       completeDifferentAttempt.executionResult.recordId === completedState.id &&
       sameCounts(completeAfterSuccess, await domainCounts(businessA.id)),
   );
+
+  await prisma.bsosRecommendationState.update({
+    where: { id: completedState.id },
+    data: { status: "DISMISSED" },
+  });
+  let completeSameAttemptAfterOppositeRejected = false;
+  let completeSameAttemptAfterOppositeReplayed = false;
+  try {
+    const staleComplete = await confirmControlledAction(prisma, ownerA, {
+      proposal: concurrentProposal,
+      executionAttemptId: concurrentAttempt,
+      confirm: "confirm",
+    });
+    completeSameAttemptAfterOppositeReplayed = staleComplete.executionResult.status === "REPLAYED";
+  } catch (error) {
+    completeSameAttemptAfterOppositeRejected = error instanceof Error && /stale|changed/i.test(error.message);
+  }
+  check(
+    "COMPLETE same-attempt retry rejects after same-evidence state becomes DISMISSED",
+    completeSameAttemptAfterOppositeRejected &&
+      !completeSameAttemptAfterOppositeReplayed &&
+      (await prisma.bsosRecommendationState.findFirst({
+        where: { businessId: businessA.id, recommendationKey: "collect-unpaid-invoices" },
+      }))?.status === "DISMISSED",
+  );
+  await prisma.bsosRecommendationState.update({
+    where: { id: completedState.id },
+    data: { status: "COMPLETED" },
+  });
 
   let dismissWhenCompletedRejected = false;
   let dismissWhenCompletedReplayed = false;
@@ -960,6 +1083,35 @@ try {
       sameCounts(afterDismissSuccess, await domainCounts(businessA.id)),
   );
 
+  await prisma.bsosRecommendationState.update({
+    where: { id: dismissedState.id },
+    data: { status: "COMPLETED" },
+  });
+  let dismissSameAttemptAfterOppositeRejected = false;
+  let dismissSameAttemptAfterOppositeReplayed = false;
+  try {
+    const staleDismiss = await confirmControlledAction(prisma, ownerA, {
+      proposal: dismissProposal,
+      executionAttemptId: dismissAttempt,
+      confirm: "confirm",
+    });
+    dismissSameAttemptAfterOppositeReplayed = staleDismiss.executionResult.status === "REPLAYED";
+  } catch (error) {
+    dismissSameAttemptAfterOppositeRejected = error instanceof Error && /stale|changed/i.test(error.message);
+  }
+  check(
+    "DISMISS same-attempt retry rejects after same-evidence state becomes COMPLETED",
+    dismissSameAttemptAfterOppositeRejected &&
+      !dismissSameAttemptAfterOppositeReplayed &&
+      (await prisma.bsosRecommendationState.findFirst({
+        where: { businessId: businessA.id, recommendationKey: "collect-unpaid-invoices" },
+      }))?.status === "COMPLETED",
+  );
+  await prisma.bsosRecommendationState.update({
+    where: { id: dismissedState.id },
+    data: { status: "DISMISSED" },
+  });
+
   check("ADMIN cannot receive DISMISS database replay", await replayDenied(adminA, dismissProposal));
   check("MEMBER cannot receive DISMISS database replay", await replayDenied(memberA, dismissProposal));
   check(
@@ -1032,6 +1184,100 @@ try {
     "Changed-evidence confirm does not add recommendation state or action items",
     afterChangedEvidence.recommendationStates === beforeChangedEvidence.recommendationStates &&
       afterChangedEvidence.actionItems === beforeChangedEvidence.actionItems,
+  );
+
+  const newEvidenceProposal = await proposeControlledAction(prisma, ownerA, {
+    actionKey: "CREATE_RECOMMENDATION_ACTION_ITEM",
+    targetEntityId: "collect-unpaid-invoices",
+  });
+  const beforeNewEvidence = await domainCounts(businessA.id);
+  const newEvidenceCreate = await confirmControlledAction(prisma, ownerA, {
+    proposal: newEvidenceProposal,
+    executionAttemptId: randomUUID(),
+    confirm: "confirm",
+  });
+  const newEvidenceItems = await prisma.businessActionItem.findMany({
+    where: { businessId: businessA.id, recommendationKey: "collect-unpaid-invoices" },
+    orderBy: { createdAt: "desc" },
+  });
+  check(
+    "Changed evidence permits a new-evidence CREATE and is not treated as corruption",
+    newEvidenceCreate.executionResult.status === "SUCCEEDED" &&
+      newEvidenceCreate.executionResult.recordId !== createdItems[0].id &&
+      newEvidenceItems[0]?.id === newEvidenceCreate.executionResult.recordId &&
+      (await domainCounts(businessA.id)).actionItems === beforeNewEvidence.actionItems + 1,
+  );
+
+  const dismissNewEvidence = await proposeControlledAction(prisma, ownerA, {
+    actionKey: "DISMISS_RECOMMENDATION",
+    targetEntityId: "collect-unpaid-invoices",
+  });
+  const dismissEstimateRec = await proposeControlledAction(prisma, ownerA, {
+    actionKey: "DISMISS_RECOMMENDATION",
+    targetEntityId: "follow-up-sent-estimates",
+  });
+  const sharedDismissAttempt = randomUUID();
+  const dismissNewA = await confirmControlledAction(prisma, ownerA, {
+    proposal: dismissNewEvidence,
+    executionAttemptId: sharedDismissAttempt,
+    confirm: "confirm",
+  });
+  const dismissNewB = await confirmControlledAction(prisma, ownerA, {
+    proposal: dismissEstimateRec,
+    executionAttemptId: sharedDismissAttempt,
+    confirm: "confirm",
+  });
+  const dismissedA = await prisma.bsosRecommendationState.findFirst({
+    where: { businessId: businessA.id, recommendationKey: "collect-unpaid-invoices" },
+  });
+  const dismissedB = await prisma.bsosRecommendationState.findFirst({
+    where: { businessId: businessA.id, recommendationKey: "follow-up-sent-estimates" },
+  });
+  check(
+    "Shared DISMISS attempt ID cannot cross-target another recommendation",
+    dismissNewA.executionResult.recordId !== dismissNewB.executionResult.recordId &&
+      dismissedA?.status === "DISMISSED" &&
+      dismissedB?.status === "DISMISSED" &&
+      dismissNewB.executionResult.status === "SUCCEEDED",
+  );
+
+  await prisma.bsosRecommendationState.update({
+    where: { id: dismissedA.id },
+    data: { status: "OPEN" },
+  });
+  await prisma.bsosRecommendationState.update({
+    where: { id: dismissedB.id },
+    data: { status: "OPEN" },
+  });
+  const completeNewEvidence = await proposeControlledAction(prisma, ownerA, {
+    actionKey: "COMPLETE_RECOMMENDATION",
+    targetEntityId: "collect-unpaid-invoices",
+  });
+  const completeEstimateRec = await proposeControlledAction(prisma, ownerA, {
+    actionKey: "COMPLETE_RECOMMENDATION",
+    targetEntityId: "follow-up-sent-estimates",
+  });
+  const sharedCompleteAttempt = randomUUID();
+  const completeNewA = await confirmControlledAction(prisma, ownerA, {
+    proposal: completeNewEvidence,
+    executionAttemptId: sharedCompleteAttempt,
+    confirm: "confirm",
+  });
+  const completeNewB = await confirmControlledAction(prisma, ownerA, {
+    proposal: completeEstimateRec,
+    executionAttemptId: sharedCompleteAttempt,
+    confirm: "confirm",
+  });
+  check(
+    "Shared COMPLETE attempt ID cannot cross-target another recommendation",
+    completeNewA.executionResult.recordId !== completeNewB.executionResult.recordId &&
+      (await prisma.bsosRecommendationState.findFirst({
+        where: { businessId: businessA.id, recommendationKey: "collect-unpaid-invoices" },
+      }))?.status === "COMPLETED" &&
+      (await prisma.bsosRecommendationState.findFirst({
+        where: { businessId: businessA.id, recommendationKey: "follow-up-sent-estimates" },
+      }))?.status === "COMPLETED" &&
+      completeNewB.executionResult.status === "SUCCEEDED",
   );
 
   let arbitraryKeyFailed = false;
