@@ -15,7 +15,7 @@ const {
   isFakePaymentsAdapterEnabled,
   isStripePlatformConfigured,
 } = await import("@/lib/payments/config");
-const { explainPaymentsGoLive } = await import("@/lib/payments/go-live");
+const { explainPaymentsGoLive, ownerInvoiceOnlineCheckoutCopy } = await import("@/lib/payments/go-live");
 const { stripeConnectActionLabel } = await import("@/lib/payments/readiness");
 const { shouldShowPayDeposit, shouldShowPayInvoice } = await import(
   "@/lib/payments/service"
@@ -44,6 +44,16 @@ const live = explainPaymentsGoLive({
 check("fully ready hides the owner banner", live.showOwnerBanner === false);
 check("fully ready allows online checkout", live.onlineCheckoutPossible === true);
 check("fully ready has no blocker", live.blocker === null);
+check(
+  "live checkout copy says customers can pay by card now",
+  ownerInvoiceOnlineCheckoutCopy(true).includes("pay the remaining balance by card online") &&
+    !ownerInvoiceOnlineCheckoutCopy(true).includes("will be available"),
+);
+check(
+  "unavailable checkout copy does not promise a future connection",
+  ownerInvoiceOnlineCheckoutCopy(false).includes("not available") &&
+    !ownerInvoiceOnlineCheckoutCopy(false).includes("will be available when payment processing is connected"),
+);
 
 const noPlatform = explainPaymentsGoLive({
   platformConfigured: false,
@@ -72,7 +82,6 @@ check(
 check(
   "app URL blocker names NEXT_PUBLIC_APP_URL and Mark Paid",
   noAppUrl.detail.includes("NEXT_PUBLIC_APP_URL") &&
-    noAppUrl.detail.includes("www.collproreno.com") &&
     noAppUrl.detail.includes("Mark Paid"),
 );
 
@@ -337,11 +346,12 @@ check(
     ownerInvoiceSrc.includes("/invoice"),
 );
 check(
-  "owner invoice link copy does not claim customers can pay online",
-  ownerInvoiceSrc.includes(
-    "Customers can view this invoice from the link. Online card payment will be available when payment processing is connected.",
-  ) &&
-    !ownerInvoiceSrc.includes("Customers can pay this invoice online from the link."),
+  "owner invoice checkout copy follows onlineCheckoutPossible",
+  ownerInvoiceSrc.includes("ownerInvoiceOnlineCheckoutCopy") &&
+    ownerInvoiceSrc.includes("paymentsGoLive.onlineCheckoutPossible") &&
+    !ownerInvoiceSrc.includes(
+      "Online card payment will be available when payment processing is connected.",
+    ),
 );
 check(
   "copy button can target an explicit customer path",

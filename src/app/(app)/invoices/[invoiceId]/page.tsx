@@ -27,7 +27,10 @@ import {
   getBusinessPaymentStatus,
   reconcileStripeCheckoutPayment,
 } from "@/lib/payments";
-import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
+import {
+  explainPaymentsGoLiveFromStatus,
+  ownerInvoiceOnlineCheckoutCopy,
+} from "@/lib/payments/go-live";
 import { loadRecordJourney } from "@/lib/record-nav";
 import { prisma } from "@/lib/prisma";
 import {
@@ -123,7 +126,12 @@ export default async function InvoicePage({
             <a href={`/invoices/${invoice.id}/pdf`}>Download PDF</a>
           </Button>
           {isDraft ? <MarkInvoiceSentButton invoiceId={invoice.id} /> : null}
-          {isSent ? <MarkInvoicePaidForm invoiceId={invoice.id} /> : null}
+          {isSent ? (
+            <MarkInvoicePaidForm
+              invoiceId={invoice.id}
+              remainingDue={breakdown.amountDue.toFixed(2)}
+            />
+          ) : null}
           {invoice.job?.projectToken && (isSent || isPaid) ? (
             <CopyProjectLinkButton
               projectToken={invoice.job.projectToken}
@@ -167,8 +175,8 @@ export default async function InvoicePage({
           <CardHeader>
             <CardTitle>Collect payment</CardTitle>
             <CardDescription>
-              Share the customer invoice link. Use Mark Paid for cash, check, or
-              Zelle. Card checkout appears for the customer only when online
+              Share the customer invoice link. Record cash, check, or Zelle
+              here. Card checkout appears for the customer only when online
               payments are live.
             </CardDescription>
           </CardHeader>
@@ -187,9 +195,9 @@ export default async function InvoicePage({
               </p>
             )}
             <p className="text-sm text-muted-foreground">
-              {paymentsGoLive.onlineCheckoutPossible
-                ? "Customers can view this invoice from the link. Online card payment will be available when payment processing is connected."
-                : "Online card pay is not live. Record the payment with Mark Paid when the customer pays."}
+              {ownerInvoiceOnlineCheckoutCopy(
+                paymentsGoLive.onlineCheckoutPossible,
+              )}
             </p>
           </CardContent>
         </Card>

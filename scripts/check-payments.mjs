@@ -590,16 +590,18 @@ try {
       ownerInvoiceSrc.includes("/invoice"),
   );
   check(
-    "owner invoice link copy does not claim customers can pay online",
-    ownerInvoiceSrc.includes(
-      "Customers can view this invoice from the link. Online card payment will be available when payment processing is connected.",
-    ) &&
-      !ownerInvoiceSrc.includes("Customers can pay this invoice online from the link."),
+    "owner invoice checkout copy follows onlineCheckoutPossible",
+    ownerInvoiceSrc.includes("ownerInvoiceOnlineCheckoutCopy") &&
+      ownerInvoiceSrc.includes("paymentsGoLive.onlineCheckoutPossible") &&
+      !ownerInvoiceSrc.includes(
+        "Online card payment will be available when payment processing is connected.",
+      ),
   );
   check(
     "owner invoice page tells the owner when card pay is not live",
     ownerInvoiceSrc.includes("OwnerPaymentsGoLiveBanner") &&
-      ownerInvoiceSrc.includes("Mark Paid"),
+      ownerInvoiceSrc.includes("MarkInvoicePaidForm") &&
+      ownerInvoiceSrc.includes("ownerInvoiceOnlineCheckoutCopy"),
   );
   check(
     "customer invoice page does not show owner go-live or Mark Paid",
