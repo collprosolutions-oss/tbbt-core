@@ -196,6 +196,7 @@ export {
   CONTROLLED_ACTION_KEYS,
   CONTROLLED_ACTION_PROPOSAL_VERSION,
   EXCLUDED_ACTION_KEYS,
+  canConfirmControlledActions,
   confirmControlledAction,
   controlledActionErrorMessage,
   executableControlledActionKeys,
@@ -206,6 +207,7 @@ export {
   proposeControlledAction,
   resetControlledActionAttempts,
   serializeControlledActionProposal,
+  trustedControlledActionRecord,
 } from "@/lib/chief-of-staff/controlled-actions";
 export type {
   ConfirmControlledActionInput,

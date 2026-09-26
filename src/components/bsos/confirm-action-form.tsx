@@ -20,13 +20,11 @@ export function ControlledActionConfirmForm({
   actionKey,
   targetEntityId,
   conversationId,
-  nextStatus,
   label,
 }: {
   actionKey: string;
   targetEntityId: string;
   conversationId?: string;
-  nextStatus?: string;
   label: string;
 }) {
   const [proposeState, proposeAction, proposing] = useActionState(proposeCoachActionAction, initial);
@@ -51,7 +49,6 @@ export function ControlledActionConfirmForm({
       <form action={proposeAction} className="flex flex-wrap items-center gap-2">
         <input type="hidden" name="actionKey" value={actionKey} />
         <input type="hidden" name="targetEntityId" value={targetEntityId} />
-        {nextStatus ? <input type="hidden" name="nextStatus" value={nextStatus} /> : null}
         <Button type="submit" size="sm" variant="outline" disabled={proposing}>
           {proposing ? "Preparing…" : "Prepare action"}
         </Button>

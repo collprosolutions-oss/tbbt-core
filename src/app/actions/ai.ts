@@ -18,6 +18,7 @@ import {
   proposeControlledAction,
   runChiefOfStaffCoach,
   serializeControlledActionProposal,
+  trustedControlledActionRecord,
 } from "@/lib/chief-of-staff";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 
@@ -94,14 +95,11 @@ export async function proposeCoachActionAction(
   formData: FormData,
 ): Promise<AiActionState> {
   try {
-    const access = await requireOperatingBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
     requireBusinessCapability(access, CAPABILITIES.VIEW_REPORTS);
     const proposal = await proposeControlledAction(prisma, access, {
       actionKey: readString(formData, "actionKey"),
       targetEntityId: readString(formData, "targetEntityId"),
-      parameters: {
-        nextStatus: readString(formData, "nextStatus"),
-      },
       browserBusinessId: readString(formData, "businessId") || undefined,
     });
     return {
@@ -139,7 +137,7 @@ export async function confirmCoachActionAction(
       await appendConversationMessage(prisma, access, {
         conversationId,
         role: "SYSTEM",
-        content: `Owner confirmed: ${result.summary} ${result.executionResult.message}`,
+        content: trustedControlledActionRecord(result),
         stance: "FACT",
       });
     }

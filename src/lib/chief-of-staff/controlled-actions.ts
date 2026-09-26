@@ -2,12 +2,13 @@
  * Controlled AI Actions V1.
  *
  * TypeScript catalog → non-executable proposal → explicit OWNER
- * confirmation → re-read live records → fingerprint check → new
- * execution-attempt ID → existing canonical domain operation.
+ * confirmation → re-read live records → fingerprint check →
+ * existing canonical domain operation.
  *
  * Not a second mutation engine. Not a schema-first proposal table.
  * Specialists, synthesis, and Coach ask never call these functions.
  */
+import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { isAiAttemptId } from "@/lib/ai/types";
@@ -24,8 +25,7 @@ import {
   recommendationEvidenceKey,
   upsertRecommendationState,
 } from "@/lib/bsos-actions";
-import { updateBusinessActionStatus } from "@/lib/bsos-ops";
-import { isActionStatus, type BsosRecommendation } from "@/lib/bsos";
+import type { BsosRecommendation } from "@/lib/bsos";
 import { loadCanonicalRecommendationCatalog } from "@/lib/chief-of-staff/recommendations";
 import type { ApprovalClass } from "@/lib/chief-of-staff/types";
 import { PRODUCT_CAPABILITIES, type ProductCapabilityCode } from "@/lib/product-catalog";
@@ -37,7 +37,6 @@ export const CONTROLLED_ACTION_KEYS = [
   "CREATE_RECOMMENDATION_ACTION_ITEM",
   "DISMISS_RECOMMENDATION",
   "COMPLETE_RECOMMENDATION",
-  "UPDATE_ACTION_ITEM_STATUS",
 ] as const;
 export type ControlledActionKey = (typeof CONTROLLED_ACTION_KEYS)[number];
 
@@ -46,6 +45,7 @@ export type ControlledActionKey = (typeof CONTROLLED_ACTION_KEYS)[number];
  * Do not add these to CONTROLLED_ACTION_KEYS to make tests pass.
  */
 export const EXCLUDED_ACTION_KEYS = [
+  "UPDATE_ACTION_ITEM_STATUS",
   "SEND_CUSTOMER_EMAIL",
   "SEND_CUSTOMER_SMS",
   "MAKE_PHONE_CALL",
@@ -79,7 +79,7 @@ export const EXCLUDED_ACTION_KEYS = [
 ] as const;
 export type ExcludedActionKey = (typeof EXCLUDED_ACTION_KEYS)[number];
 
-export type ControlledActionTargetType = "RECOMMENDATION" | "ACTION_ITEM";
+export type ControlledActionTargetType = "RECOMMENDATION";
 
 export type ControlledActionCatalogEntry = {
   key: ControlledActionKey;
@@ -88,10 +88,7 @@ export type ControlledActionCatalogEntry = {
   requiredRoleCapability: Capability;
   requiredProductCapability: ProductCapabilityCode | null;
   targetEntityType: ControlledActionTargetType;
-  canonicalOperation:
-    | "createActionFromRecommendation"
-    | "upsertRecommendationState"
-    | "updateBusinessActionStatus";
+  canonicalOperation: "createActionFromRecommendation" | "upsertRecommendationState";
   externalEffect: false;
   freshnessRequired: true;
   purpose: string;
@@ -141,22 +138,12 @@ export const CONTROLLED_ACTION_CATALOG: readonly ControlledActionCatalogEntry[] 
     whyAllowed:
       "Owner plan state only. Does not collect money, send messages, or change domain records.",
   },
-  {
-    key: "UPDATE_ACTION_ITEM_STATUS",
-    displayLabel: "Update action-item status",
-    approvalClass: "OWNER_CONFIRMED_RECORD",
-    requiredRoleCapability: CAPABILITIES.VIEW_REPORTS,
-    requiredProductCapability: PRODUCT_CAPABILITIES.REPORTING_INSIGHTS,
-    targetEntityType: "ACTION_ITEM",
-    canonicalOperation: "updateBusinessActionStatus",
-    externalEffect: false,
-    freshnessRequired: true,
-    purpose: "Update an existing owner action-item status.",
-    whyAllowed: "Owner plan CRUD on an existing BusinessActionItem. No domain execution.",
-  },
 ] as const;
 
 export const CONTROLLED_ACTION_PROPOSAL_VERSION = 1;
+const MAX_PROPOSAL_JSON_CHARS = 8192;
+const MAX_TARGET_ID_CHARS = 200;
+const MAX_FINGERPRINT_CHARS = 2000;
 
 export type ControlledActionProposal = {
   proposalVersion: typeof CONTROLLED_ACTION_PROPOSAL_VERSION;
@@ -215,6 +202,14 @@ export function executableControlledActionKeys() {
   return CONTROLLED_ACTION_CATALOG.map((row) => row.key);
 }
 
+export function canConfirmControlledActions(access: { workspace?: { role?: string } }) {
+  return access.workspace?.role === "OWNER";
+}
+
+export function trustedControlledActionRecord(result: ControlledActionConfirmation) {
+  return `Owner confirmed: ${result.summary} ${result.executionResult.message}`;
+}
+
 const executionAttempts = new Map<string, ControlledActionConfirmation>();
 const inflightAttempts = new Map<string, Promise<ControlledActionConfirmation>>();
 
@@ -250,26 +245,53 @@ function attemptKey(businessId: string, actionKey: string, executionAttemptId: s
   return `${businessId}:${actionKey}:${executionAttemptId}`;
 }
 
+export type ControlledActionAuthTest = {
+  denyProductCapabilities?: ProductCapabilityCode[];
+  denyRoleCapabilities?: Capability[];
+};
+
+async function authorizeCatalogAccess(
+  db: Db,
+  access: BusinessAccess,
+  entry: ControlledActionCatalogEntry,
+  test?: ControlledActionAuthTest,
+  options?: { ownerOnly?: boolean },
+) {
+  if (options?.ownerOnly) requireBusinessRole(access, "OWNER");
+  requireBusinessCapability(access, CAPABILITIES.VIEW_REPORTS);
+  if (test?.denyRoleCapabilities?.includes(entry.requiredRoleCapability)) {
+    throw new ForbiddenError();
+  }
+  requireBusinessCapability(access, entry.requiredRoleCapability);
+  if (entry.requiredProductCapability) {
+    if (test?.denyProductCapabilities?.includes(entry.requiredProductCapability)) {
+      throw new ProductCapabilityRequiredError(entry.requiredProductCapability);
+    }
+    await requireProductCapability(db, access.businessId, entry.requiredProductCapability);
+  }
+}
+
 export function serializeControlledActionProposal(proposal: ControlledActionProposal) {
   return JSON.stringify(proposal);
 }
 
+function boundedString(value: unknown, max: number) {
+  return typeof value === "string" && value.length > 0 && value.length <= max ? value : null;
+}
+
 export function parseControlledActionProposal(raw: string): ControlledActionProposal | null {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_PROPOSAL_JSON_CHARS) return null;
   try {
     const value = JSON.parse(raw) as Partial<ControlledActionProposal>;
-    if (!value || typeof value !== "object") return null;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     if (!isControlledActionKey(String(value.actionKey))) return null;
     const entry = getControlledActionEntry(String(value.actionKey));
     if (!entry) return null;
-    if (value.confirmed !== false || value.executionResult !== null) return null;
+    const targetEntityId = boundedString(value.targetEntityId, MAX_TARGET_ID_CHARS);
+    const fingerprint = boundedString(value.fingerprint, MAX_FINGERPRINT_CHARS);
+    const businessId = boundedString(value.businessId, MAX_TARGET_ID_CHARS);
+    if (!targetEntityId || !fingerprint || !businessId) return null;
     if (value.proposalVersion !== CONTROLLED_ACTION_PROPOSAL_VERSION) return null;
-    if (typeof value.businessId !== "string" || !value.businessId) return null;
-    if (typeof value.targetEntityId !== "string" || !value.targetEntityId) return null;
-    if (typeof value.fingerprint !== "string" || !value.fingerprint) return null;
-    if (typeof value.summary !== "string" || !value.summary) return null;
-    if (value.targetEntityType !== entry.targetEntityType) return null;
-    if (value.canonicalOperation !== entry.canonicalOperation) return null;
-    if (value.externalEffect !== false) return null;
     return {
       proposalVersion: CONTROLLED_ACTION_PROPOSAL_VERSION,
       actionKey: entry.key,
@@ -278,28 +300,12 @@ export function parseControlledActionProposal(raw: string): ControlledActionProp
       requiredRoleCapability: entry.requiredRoleCapability,
       requiredProductCapability: entry.requiredProductCapability,
       targetEntityType: entry.targetEntityType,
-      targetEntityId: value.targetEntityId,
-      businessId: value.businessId,
-      summary: value.summary,
-      parameters:
-        value.parameters && typeof value.parameters === "object" && !Array.isArray(value.parameters)
-          ? Object.fromEntries(
-              Object.entries(value.parameters).filter(
-                (pair): pair is [string, string] => typeof pair[1] === "string",
-              ),
-            )
-          : {},
-      fingerprint: value.fingerprint,
-      freshnessInputs:
-        value.freshnessInputs &&
-        typeof value.freshnessInputs === "object" &&
-        !Array.isArray(value.freshnessInputs)
-          ? Object.fromEntries(
-              Object.entries(value.freshnessInputs).filter(
-                (pair): pair is [string, string] => typeof pair[1] === "string",
-              ),
-            )
-          : {},
+      targetEntityId,
+      businessId,
+      summary: "",
+      parameters: {},
+      fingerprint,
+      freshnessInputs: {},
       canonicalOperation: entry.canonicalOperation,
       externalEffect: false,
       freshnessRequired: true,
@@ -326,34 +332,44 @@ async function liveRecommendation(db: Db, businessId: string, recommendationKey:
     throw new ControlledActionError("That recommendation is not active from recorded facts.");
   }
   const evidenceKey = recommendationEvidenceKey(recommendation);
-  return {
-    recommendation,
-    evidenceKey,
-    fingerprint: `recommendation:${recommendation.key}:${evidenceKey}`,
-    freshnessInputs: {
-      recommendationKey: recommendation.key,
-      evidenceKey,
-      title: recommendation.title,
-      why: recommendation.why,
-    },
-  };
+  return { recommendation, evidenceKey };
 }
 
-async function liveActionItem(db: Db, access: BusinessAccess, actionItemId: string) {
-  const item = access.assertOwned(
-    await db.businessActionItem.findFirst({
-      where: { id: actionItemId, ...access.scope },
-    }),
-  );
+function serverProposalFromLive(
+  access: BusinessAccess,
+  entry: ControlledActionCatalogEntry,
+  live: { recommendation: BsosRecommendation; evidenceKey: string },
+): ControlledActionProposal {
+  const verb =
+    entry.key === "CREATE_RECOMMENDATION_ACTION_ITEM"
+      ? "Create an internal action-plan item"
+      : entry.key === "DISMISS_RECOMMENDATION"
+        ? "Dismiss this recommendation"
+        : "Mark this recommendation complete";
   return {
-    item,
-    fingerprint: `action-item:${item.id}:${item.status}:${item.recommendationKey}:${item.updatedAt.toISOString()}`,
+    proposalVersion: CONTROLLED_ACTION_PROPOSAL_VERSION,
+    actionKey: entry.key,
+    displayLabel: entry.displayLabel,
+    approvalClass: entry.approvalClass,
+    requiredRoleCapability: entry.requiredRoleCapability,
+    requiredProductCapability: entry.requiredProductCapability,
+    targetEntityType: entry.targetEntityType,
+    targetEntityId: live.recommendation.key,
+    businessId: access.businessId,
+    summary: `${verb} for “${live.recommendation.title}”. Why: ${live.recommendation.why} This will not contact the customer, charge money, change the schedule, or perform the work.`,
+    parameters: { recommendationKey: live.recommendation.key },
+    fingerprint: `recommendation:${entry.key}:${live.recommendation.key}:${live.evidenceKey}`,
     freshnessInputs: {
-      actionItemId: item.id,
-      status: item.status,
-      recommendationKey: item.recommendationKey,
-      updatedAt: item.updatedAt.toISOString(),
+      recommendationKey: live.recommendation.key,
+      evidenceKey: live.evidenceKey,
+      title: live.recommendation.title,
+      why: live.recommendation.why,
     },
+    canonicalOperation: entry.canonicalOperation,
+    externalEffect: false,
+    freshnessRequired: true,
+    confirmed: false,
+    executionResult: null,
   };
 }
 
@@ -363,71 +379,20 @@ export async function proposeControlledAction(
   input: {
     actionKey: string;
     targetEntityId: string;
-    parameters?: Record<string, string>;
     /** Ignored. Browser businessId is never write authority. */
     browserBusinessId?: string;
+    test?: ControlledActionAuthTest;
   },
 ): Promise<ControlledActionProposal> {
   voidBrowserBusinessId(input.browserBusinessId);
-  requireBusinessCapability(access, CAPABILITIES.VIEW_REPORTS);
   const entry = assertExecutableKey(input.actionKey);
-  requireBusinessCapability(access, entry.requiredRoleCapability);
+  await authorizeCatalogAccess(db, access, entry, input.test);
   const targetEntityId = input.targetEntityId.trim();
-  if (!targetEntityId) throw new ControlledActionError("Choose a live record.");
-
-  if (entry.targetEntityType === "RECOMMENDATION") {
-    const live = await liveRecommendation(db, access.businessId, targetEntityId);
-    const verb =
-      entry.key === "CREATE_RECOMMENDATION_ACTION_ITEM"
-        ? "Create an internal action-plan item"
-        : entry.key === "DISMISS_RECOMMENDATION"
-          ? "Dismiss this recommendation"
-          : "Mark this recommendation complete";
-    return {
-      proposalVersion: CONTROLLED_ACTION_PROPOSAL_VERSION,
-      actionKey: entry.key,
-      displayLabel: entry.displayLabel,
-      approvalClass: entry.approvalClass,
-      requiredRoleCapability: entry.requiredRoleCapability,
-      requiredProductCapability: entry.requiredProductCapability,
-      targetEntityType: entry.targetEntityType,
-      targetEntityId: live.recommendation.key,
-      businessId: access.businessId,
-      summary: `${verb} for “${live.recommendation.title}”. Why: ${live.recommendation.why} This will not contact the customer, charge money, change the schedule, or perform the work.`,
-      parameters: { recommendationKey: live.recommendation.key },
-      fingerprint: live.fingerprint,
-      freshnessInputs: live.freshnessInputs,
-      canonicalOperation: entry.canonicalOperation,
-      externalEffect: false,
-      freshnessRequired: true,
-      confirmed: false,
-      executionResult: null,
-    };
+  if (!targetEntityId || targetEntityId.length > MAX_TARGET_ID_CHARS) {
+    throw new ControlledActionError("Choose a live record.");
   }
-
-  const nextStatus = input.parameters?.nextStatus?.trim() ?? "";
-  if (!isActionStatus(nextStatus)) throw new ControlledActionError("Choose a valid action status.");
-  const live = await liveActionItem(db, access, targetEntityId);
-  return {
-    proposalVersion: CONTROLLED_ACTION_PROPOSAL_VERSION,
-    actionKey: entry.key,
-    displayLabel: entry.displayLabel,
-    approvalClass: entry.approvalClass,
-    requiredRoleCapability: entry.requiredRoleCapability,
-    requiredProductCapability: entry.requiredProductCapability,
-    targetEntityType: entry.targetEntityType,
-    targetEntityId: live.item.id,
-    businessId: access.businessId,
-    summary: `Update action “${live.item.title}” from ${live.item.status} to ${nextStatus}. This will not contact the customer, charge money, change the schedule, or perform the work.`,
-    parameters: { actionItemId: live.item.id, nextStatus },
-    fingerprint: live.fingerprint,
-    freshnessInputs: live.freshnessInputs,
-    canonicalOperation: entry.canonicalOperation,
-    externalEffect: false,
-    freshnessRequired: true,
-    confirmed: false,
-    executionResult: null,
-  };
+  const live = await liveRecommendation(db, access.businessId, targetEntityId);
+  return serverProposalFromLive(access, entry, live);
 }
 
 export type ConfirmControlledActionInput = {
@@ -436,30 +401,8 @@ export type ConfirmControlledActionInput = {
   confirm: string;
   /** Ignored. Browser businessId is never write authority. */
   browserBusinessId?: string;
-  test?: {
-    denyProductCapabilities?: ProductCapabilityCode[];
-    denyRoleCapabilities?: Capability[];
-  };
+  test?: ControlledActionAuthTest;
 };
-
-async function authorizeConfirm(
-  db: Db,
-  access: BusinessAccess,
-  entry: ControlledActionCatalogEntry,
-  test?: ConfirmControlledActionInput["test"],
-) {
-  requireBusinessRole(access, "OWNER");
-  if (test?.denyRoleCapabilities?.includes(entry.requiredRoleCapability)) {
-    throw new ForbiddenError();
-  }
-  requireBusinessCapability(access, entry.requiredRoleCapability);
-  if (entry.requiredProductCapability) {
-    if (test?.denyProductCapabilities?.includes(entry.requiredProductCapability)) {
-      throw new ProductCapabilityRequiredError(entry.requiredProductCapability);
-    }
-    await requireProductCapability(db, access.businessId, entry.requiredProductCapability);
-  }
-}
 
 async function existingActionForEvidence(
   db: Db,
@@ -488,42 +431,34 @@ async function createRecommendationActionItemOnce(
   access: BusinessAccess,
   live: { recommendation: BsosRecommendation; evidenceKey: string },
 ): Promise<ControlledActionExecutionResult> {
-  const already = await existingActionForEvidence(db, access, live.recommendation.key, live.evidenceKey);
-  if (already) {
-    return {
-      status: "REPLAYED",
-      recordId: already.id,
-      recordType: "BusinessActionItem",
-      message: "Action already on the owner plan. TBBT did not execute the work.",
-    };
-  }
-
   const run = async (tx: Db) => {
-    let state = await tx.bsosRecommendationState.findUnique({
-      where: {
-        businessId_recommendationKey: {
-          businessId: access.businessId,
-          recommendationKey: live.recommendation.key,
-        },
-      },
-    });
-    if (!state) {
-      state = await tx.bsosRecommendationState.create({
-        data: {
-          businessId: access.businessId,
-          recommendationKey: live.recommendation.key,
-          status: "OPEN",
-          evidenceKey: "",
-          updatedByMembershipId: access.workspace.membership.id,
-        },
-      });
-    }
-    await tx.$queryRaw(Prisma.sql`SELECT id FROM "BsosRecommendationState" WHERE id = ${state.id} FOR UPDATE`);
-    const locked = await existingActionForEvidence(tx, access, live.recommendation.key, live.evidenceKey);
-    if (locked) {
+    await tx.$executeRaw(
+      Prisma.sql`
+        INSERT INTO "BsosRecommendationState" (
+          "id", "businessId", "recommendationKey", "status", "evidenceKey",
+          "updatedByMembershipId", "createdAt", "updatedAt"
+        )
+        VALUES (
+          ${`c${randomUUID().replace(/-/g, "")}`},
+          ${access.businessId},
+          ${live.recommendation.key},
+          'OPEN',
+          '',
+          ${access.workspace.membership.id},
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT ("businessId", "recommendationKey") DO NOTHING
+      `,
+    );
+    await tx.$queryRaw(
+      Prisma.sql`SELECT id FROM "BsosRecommendationState" WHERE "businessId" = ${access.businessId} AND "recommendationKey" = ${live.recommendation.key} FOR UPDATE`,
+    );
+    const already = await existingActionForEvidence(tx, access, live.recommendation.key, live.evidenceKey);
+    if (already) {
       return {
         status: "REPLAYED" as const,
-        recordId: locked.id,
+        recordId: already.id,
         recordType: "BusinessActionItem" as const,
         message: "Action already on the owner plan. TBBT did not execute the work.",
       };
@@ -547,80 +482,25 @@ async function invokeCanonicalOperation(
   db: Db,
   access: BusinessAccess,
   entry: ControlledActionCatalogEntry,
-  proposal: ControlledActionProposal,
+  live: { recommendation: BsosRecommendation; evidenceKey: string },
 ): Promise<ControlledActionExecutionResult> {
   if (entry.canonicalOperation === "createActionFromRecommendation") {
-    const live = await liveRecommendation(db, access.businessId, proposal.targetEntityId);
-    if (live.fingerprint !== proposal.fingerprint) {
-      throw new ControlledActionError(
-        "That proposal is stale. Live records changed. TBBT did not change anything.",
-      );
-    }
     return createRecommendationActionItemOnce(db, access, live);
   }
-
-  if (entry.canonicalOperation === "upsertRecommendationState") {
-    const live = await liveRecommendation(db, access.businessId, proposal.targetEntityId);
-    if (live.fingerprint !== proposal.fingerprint) {
-      throw new ControlledActionError(
-        "That proposal is stale. Live records changed. TBBT did not change anything.",
-      );
-    }
-    const status = entry.key === "DISMISS_RECOMMENDATION" ? "DISMISSED" : "COMPLETED";
-    const state = await upsertRecommendationState(db, access, {
-      recommendationKey: live.recommendation.key,
-      status,
-      evidenceKey: live.evidenceKey,
-    });
-    return {
-      status: "SUCCEEDED",
-      recordId: state.id,
-      recordType: "BsosRecommendationState",
-      message:
-        status === "DISMISSED"
-          ? "Recommendation dismissed. It will stay in history until facts change."
-          : "Recommendation marked complete for this business.",
-    };
-  }
-
-  const nextStatus = proposal.parameters.nextStatus ?? "";
-  if (!isActionStatus(nextStatus)) throw new ControlledActionError("Choose a valid action status.");
-  const live = await liveActionItem(db, access, proposal.targetEntityId);
-  if (live.fingerprint !== proposal.fingerprint) {
-    throw new ControlledActionError(
-      "That proposal is stale. Live records changed. TBBT did not change anything.",
-    );
-  }
-  const updated = await updateBusinessActionStatus(db, access, {
-    actionId: live.item.id,
-    status: nextStatus,
+  const status = entry.key === "DISMISS_RECOMMENDATION" ? "DISMISSED" : "COMPLETED";
+  const state = await upsertRecommendationState(db, access, {
+    recommendationKey: live.recommendation.key,
+    status,
+    evidenceKey: live.evidenceKey,
   });
   return {
     status: "SUCCEEDED",
-    recordId: updated.id,
-    recordType: "BusinessActionItem",
-    message: "Action item updated.",
-  };
-}
-
-async function executeConfirmedAction(
-  db: Db,
-  access: BusinessAccess,
-  input: ConfirmControlledActionInput,
-  entry: ControlledActionCatalogEntry,
-): Promise<ControlledActionConfirmation> {
-  if (input.proposal.businessId !== access.businessId) {
-    throw new ControlledActionError("That proposal is not for this workspace.");
-  }
-  if (input.proposal.actionKey !== entry.key) {
-    throw new ControlledActionError("That action is not executable.");
-  }
-  const result = await invokeCanonicalOperation(db, access, entry, input.proposal);
-  return {
-    ...input.proposal,
-    confirmed: true,
-    executionAttemptId: input.executionAttemptId,
-    executionResult: result,
+    recordId: state.id,
+    recordType: "BsosRecommendationState",
+    message:
+      status === "DISMISSED"
+        ? "Recommendation dismissed. It will stay in history until facts change."
+        : "Recommendation marked complete for this business.",
   };
 }
 
@@ -637,11 +517,26 @@ export async function confirmControlledAction(
     throw new ControlledActionError("Retry that confirmation from the form.");
   }
   const entry = assertExecutableKey(input.proposal.actionKey);
+  if (input.proposal.businessId !== access.businessId) {
+    throw new ControlledActionError("That proposal is not for this workspace.");
+  }
+  await authorizeCatalogAccess(db, access, entry, input.test, { ownerOnly: true });
+
+  const live = await liveRecommendation(db, access.businessId, input.proposal.targetEntityId);
+  const serverProposal = serverProposalFromLive(access, entry, live);
+  if (serverProposal.fingerprint !== input.proposal.fingerprint) {
+    throw new ControlledActionError(
+      "That proposal is stale. Live records changed. TBBT did not change anything.",
+    );
+  }
+
   const key = attemptKey(access.businessId, entry.key, input.executionAttemptId);
   const replayed = executionAttempts.get(key);
   if (replayed) {
     return {
-      ...replayed,
+      ...serverProposal,
+      confirmed: true,
+      executionAttemptId: input.executionAttemptId,
       executionResult: { ...replayed.executionResult, status: "REPLAYED" },
     };
   }
@@ -649,7 +544,9 @@ export async function confirmControlledAction(
   if (pending) {
     const first = await pending;
     return {
-      ...first,
+      ...serverProposal,
+      confirmed: true,
+      executionAttemptId: input.executionAttemptId,
       executionResult: { ...first.executionResult, status: "REPLAYED" },
     };
   }
@@ -664,8 +561,13 @@ export async function confirmControlledAction(
   inflightAttempts.set(key, work);
 
   try {
-    await authorizeConfirm(db, access, entry, input.test);
-    const confirmation = await executeConfirmedAction(db, access, input, entry);
+    const result = await invokeCanonicalOperation(db, access, entry, live);
+    const confirmation: ControlledActionConfirmation = {
+      ...serverProposal,
+      confirmed: true,
+      executionAttemptId: input.executionAttemptId,
+      executionResult: result,
+    };
     executionAttempts.set(key, confirmation);
     resolveWork(confirmation);
     return confirmation;
