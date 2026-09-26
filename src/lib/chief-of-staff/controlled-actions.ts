@@ -503,8 +503,6 @@ export async function confirmControlledAction(
     throw new ControlledActionError("Retry that confirmation from the form.");
   }
   const entry = assertExecutableKey(input.proposal.actionKey);
-  await authorizeConfirm(db, access, entry, input.test);
-
   const key = attemptKey(access.businessId, entry.key, input.executionAttemptId);
   const replayed = executionAttempts.get(key);
   if (replayed) {
@@ -522,16 +520,25 @@ export async function confirmControlledAction(
     };
   }
 
-  const work = executeConfirmedAction(db, access, input, entry)
-    .then((confirmation) => {
-      executionAttempts.set(key, confirmation);
-      inflightAttempts.delete(key);
-      return confirmation;
-    })
-    .catch((error) => {
-      inflightAttempts.delete(key);
-      throw error;
-    });
+  let resolveWork: (value: ControlledActionConfirmation) => void = () => undefined;
+  let rejectWork: (error: unknown) => void = () => undefined;
+  const work = new Promise<ControlledActionConfirmation>((resolve, reject) => {
+    resolveWork = resolve;
+    rejectWork = reject;
+  });
+  work.catch(() => undefined);
   inflightAttempts.set(key, work);
-  return work;
+
+  try {
+    await authorizeConfirm(db, access, entry, input.test);
+    const confirmation = await executeConfirmedAction(db, access, input, entry);
+    executionAttempts.set(key, confirmation);
+    resolveWork(confirmation);
+    return confirmation;
+  } catch (error) {
+    rejectWork(error);
+    throw error;
+  } finally {
+    inflightAttempts.delete(key);
+  }
 }

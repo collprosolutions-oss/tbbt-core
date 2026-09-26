@@ -351,7 +351,9 @@ try {
     targetEntityId: "collect-unpaid-invoices",
   });
   const beforeStale = await domainCounts(businessA.id);
-  await prisma.invoice.update({ where: { id: invoice.id }, data: { total: 400 } });
+  await prisma.invoice.create({
+    data: { businessId: businessA.id, status: "SENT", total: 50 },
+  });
   let staleFailed = false;
   try {
     await confirmControlledAction(prisma, ownerA, {
@@ -395,7 +397,6 @@ try {
     actionKey: "COMPLETE_RECOMMENDATION",
     targetEntityId: "collect-unpaid-invoices",
   });
-  const beforeConcurrent = await domainCounts(businessA.id);
   const [one, two] = await Promise.all([
     confirmControlledAction(prisma, ownerA, {
       proposal: concurrentProposal,
@@ -408,10 +409,13 @@ try {
       confirm: "confirm",
     }),
   ]);
-  const afterConcurrent = await domainCounts(businessA.id);
+  const completedState = await prisma.bsosRecommendationState.findFirst({
+    where: { businessId: businessA.id, recommendationKey: "collect-unpaid-invoices" },
+  });
   check(
     "Concurrent confirms share one execution attempt",
-    afterConcurrent.recommendationStates === beforeConcurrent.recommendationStates + 1 &&
+    completedState?.status === "COMPLETED" &&
+      one.executionResult.recordId === two.executionResult.recordId &&
       [one.executionResult.status, two.executionResult.status].includes("SUCCEEDED") &&
       [one.executionResult.status, two.executionResult.status].includes("REPLAYED"),
   );
