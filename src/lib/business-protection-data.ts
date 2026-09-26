@@ -13,11 +13,16 @@ import {
   PROTECTION_CHECKLIST,
   VAULT_CATEGORY_LABELS,
   VAULT_PRIVATE_MESSAGE,
+  VAULT_RENEWAL_GROUP_ORDER,
+  VAULT_RENEWAL_STATE_LABELS,
+  vaultRenewalStateFromExpiry,
   isVaultCategory,
   type ExpiryState,
   type ProtectionArea,
   type VaultCategory,
+  type VaultRenewalState,
 } from "@/lib/business-protection";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   AGREEMENT_LIFECYCLE_LABELS,
   AGREEMENT_TYPE_LABELS,
@@ -44,8 +49,10 @@ export type VaultRecordView = {
   counterparty: string | null;
   effectiveOn: string | null;
   expiresOn: string | null;
+  renewalLeadDays: number | null;
   recordStatus: string;
   expiryState: ExpiryState;
+  renewalState: VaultRenewalState;
   renewalAttention: boolean;
   notes: string | null;
   storedAssetId: string | null;
@@ -92,6 +99,10 @@ export type ProtectionDashboard = {
   expiringSoon: number;
   expired: number;
   missingDates: number;
+  noExpirationRecorded: number;
+  renewalApproaching: number;
+  current: number;
+  timeZone: string;
   completeness: Array<{ id: string; label: string; met: boolean; count: number }>;
   disclaimer: string;
   authorityDisclaimer: string;
@@ -101,6 +112,11 @@ export type ProtectionWorkspace = {
   area: ProtectionArea;
   query: { area: ProtectionArea; selected?: string; q: string };
   records: VaultRecordView[];
+  renewalGroups: Array<{
+    state: VaultRenewalState;
+    label: string;
+    records: VaultRecordView[];
+  }>;
   agreements: AgreementView[];
   selectedRecord: VaultRecordView | null;
   selectedAgreement: AgreementView | null;
@@ -128,6 +144,7 @@ function toView(
     counterparty: string | null;
     effectiveOn: string | null;
     expiresOn: string | null;
+    renewalLeadDays: number | null;
     recordStatus: string;
     notes: string | null;
     storedAssetId: string | null;
@@ -136,9 +153,17 @@ function toView(
     storedAsset: { originalFilename: string; visibility: string } | null;
   },
   now: Date,
+  timeZone: string,
 ): VaultRecordView {
   const category = isVaultCategory(row.category) ? row.category : "OTHER";
-  const expiryState = classifyExpiry({ category, expiresOn: row.expiresOn, now });
+  const expiryState = classifyExpiry({
+    category,
+    expiresOn: row.expiresOn,
+    renewalLeadDays: row.renewalLeadDays,
+    now,
+    timeZone,
+  });
+  const renewalState = vaultRenewalStateFromExpiry(expiryState);
   return {
     id: row.id,
     title: row.title,
@@ -148,8 +173,10 @@ function toView(
     counterparty: row.counterparty,
     effectiveOn: row.effectiveOn,
     expiresOn: row.expiresOn,
+    renewalLeadDays: row.renewalLeadDays,
     recordStatus: row.recordStatus,
     expiryState,
+    renewalState,
     renewalAttention: needsRenewalAttention(expiryState),
     notes: row.notes,
     storedAssetId: row.storedAssetId,
@@ -171,7 +198,11 @@ export async function loadProtectionWorkspace(
 ): Promise<ProtectionWorkspace> {
   const area = (query.area === "vault" || query.area === "agreements" ? query.area : "dashboard") as ProtectionArea;
   const q = query.q?.trim() ?? "";
-  const [records, agreements, audit] = await Promise.all([
+  const [business, records, agreements, audit] = await Promise.all([
+    db.business.findUnique({
+      where: { id: businessId },
+      select: { timezone: true },
+    }),
     db.businessVaultRecord.findMany({
       where: { businessId },
       include: { storedAsset: { select: { originalFilename: true, visibility: true } } },
@@ -196,8 +227,9 @@ export async function loadProtectionWorkspace(
     }),
   ]);
 
+  const timeZone = resolveBusinessTimeZone(business);
   const recordViews = records
-    .map((row) => toView(row, now))
+    .map((row) => toView(row, now, timeZone))
     .filter((row) => {
       if (!q) return true;
       const hay = [row.title, row.issuer, row.counterparty, row.categoryLabel, row.notes]
@@ -243,6 +275,12 @@ export async function loadProtectionWorkspace(
     };
   });
 
+  const renewalGroups = VAULT_RENEWAL_GROUP_ORDER.map((state) => ({
+    state,
+    label: VAULT_RENEWAL_STATE_LABELS[state],
+    records: recordViews.filter((row) => row.renewalState === state),
+  }));
+
   const active = recordViews.filter((row) => row.recordStatus === "ACTIVE");
   const completeness = PROTECTION_CHECKLIST.map((item) => {
     const count = active.filter((row) => (item.categories as readonly string[]).includes(row.category)).length;
@@ -255,9 +293,13 @@ export async function loadProtectionWorkspace(
     licensesCertsOnFile: active.filter((row) => row.category === "LICENSE" || row.category === "CERTIFICATION")
       .length,
     agreementsAwaitingAction: agreementViews.filter((row) => awaiting.has(row.lifecycleStatus)).length,
-    expiringSoon: active.filter((row) => row.expiryState === "EXPIRING_SOON").length,
-    expired: active.filter((row) => row.expiryState === "EXPIRED").length,
+    expiringSoon: active.filter((row) => row.renewalState === "RENEWAL_APPROACHING").length,
+    expired: active.filter((row) => row.renewalState === "EXPIRED").length,
     missingDates: active.filter((row) => row.expiryState === "MISSING_DATE").length,
+    noExpirationRecorded: active.filter((row) => row.renewalState === "NO_EXPIRATION_RECORDED").length,
+    renewalApproaching: active.filter((row) => row.renewalState === "RENEWAL_APPROACHING").length,
+    current: active.filter((row) => row.renewalState === "CURRENT").length,
+    timeZone,
     completeness,
     disclaimer: LEGAL_NO_COMPLIANCE_GUARANTEE_MESSAGE,
     authorityDisclaimer: LEGAL_NOT_AUTHORITY_MESSAGE,
@@ -270,6 +312,7 @@ export async function loadProtectionWorkspace(
     area,
     query: { area, selected: query.selected, q },
     records: recordViews,
+    renewalGroups,
     agreements: agreementViews,
     selectedRecord,
     selectedAgreement,

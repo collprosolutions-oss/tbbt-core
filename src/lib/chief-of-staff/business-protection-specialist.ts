@@ -9,7 +9,7 @@
  * Does not write records, invoke Agreement Coach AI, or call other
  * specialists.
  */
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { CAPABILITIES, roleHasCapability, type Capability } from "@/lib/authorization";
@@ -21,14 +21,14 @@ import {
   LEGAL_NOT_AUTHORITY_MESSAGE,
   NO_FAKE_ESIGN_MESSAGE,
   NO_STATE_CLAUSE_MESSAGE,
+  businessCalendarDate,
   classifyExpiry,
   DATED_VAULT_CATEGORIES,
   EXPIRING_SOON_DAYS,
   EXPIRY_STATES,
   needsRenewalAttention,
   PROTECTION_CHECKLIST,
-  utcCalendarDate,
-  utcMidnightFromCalendarDate,
+  resolveRenewalLeadDays,
   VAULT_RECORD_STATUSES,
   isVaultCategory,
   isVaultRecordStatus,
@@ -49,6 +49,7 @@ import {
   resolveEsignProviderStatus,
   type EsignProviderStatus,
 } from "@/lib/business-protection-esign";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import type { CanonicalRecommendationCatalog } from "@/lib/chief-of-staff/recommendations";
 import {
   recordBusinessProtectionProjectionLoad,
@@ -135,8 +136,16 @@ export function currentIsRecordedDateNotLegalValidity(state: string) {
   return state === "CURRENT";
 }
 
-export function expiringSoonUsesCanonicalWindow(state: string, daysUntil: number) {
-  return state === "EXPIRING_SOON" && daysUntil >= 0 && daysUntil <= EXPIRING_SOON_DAYS;
+export function expiringSoonUsesCanonicalWindow(
+  state: string,
+  daysUntil: number,
+  renewalLeadDays?: number | null,
+) {
+  return (
+    state === "EXPIRING_SOON" &&
+    daysUntil >= 0 &&
+    daysUntil <= resolveRenewalLeadDays(renewalLeadDays)
+  );
 }
 
 export function expiredIsRecordedDatePassed(state: string) {
@@ -342,10 +351,91 @@ function emptyTotals(): BusinessProtectionProjectionTotals {
   };
 }
 
-function addUtcDays(calendarDate: string, days: number): string {
-  const date = utcMidnightFromCalendarDate(calendarDate);
-  date.setUTCDate(date.getUTCDate() + days);
-  return utcCalendarDate(date);
+function vaultRecordIdFilter(recordId?: string) {
+  return recordId ? Prisma.sql`AND "id" = ${recordId}` : Prisma.sql``;
+}
+
+function recordedLeadEndSql(today: string) {
+  return Prisma.sql`to_char((to_date(${today}, 'YYYY-MM-DD') + (COALESCE("renewalLeadDays", ${EXPIRING_SOON_DAYS}) * INTERVAL '1 day'))::date, 'YYYY-MM-DD')`;
+}
+
+function recordedLeadDateFilter(today: string, band: "attention" | "approaching" | "current") {
+  const leadEnd = recordedLeadEndSql(today);
+  if (band === "attention") {
+    return Prisma.sql`AND "expiresOn" IS NOT NULL AND "expiresOn" <= ${leadEnd}`;
+  }
+  if (band === "approaching") {
+    return Prisma.sql`AND "expiresOn" IS NOT NULL AND "expiresOn" >= ${today} AND "expiresOn" <= ${leadEnd}`;
+  }
+  return Prisma.sql`AND "expiresOn" IS NOT NULL AND "expiresOn" > ${leadEnd}`;
+}
+
+/**
+ * Bounded, read-only, business-scoped candidate IDs. This is not
+ * classification — classifyExpiry() remains the authority after load.
+ */
+async function findVaultIdsByRecordedLeadBand(
+  db: Db,
+  input: {
+    businessId: string;
+    today: string;
+    recordId?: string;
+    band: "attention" | "current";
+    take: number;
+  },
+): Promise<string[]> {
+  const rows = await db.$queryRaw<Array<{ id: string }>>(
+    Prisma.sql`
+      SELECT "id"
+      FROM "BusinessVaultRecord"
+      WHERE "businessId" = ${input.businessId}
+        AND "recordStatus" = 'ACTIVE'
+        ${recordedLeadDateFilter(input.today, input.band)}
+        ${vaultRecordIdFilter(input.recordId)}
+      ORDER BY "expiresOn" ASC, "id" ASC
+      LIMIT ${input.take}
+    `,
+  );
+  return rows.map((row) => row.id);
+}
+
+async function countVaultsByRecordedLeadBand(
+  db: Db,
+  input: {
+    businessId: string;
+    today: string;
+    recordId?: string;
+    band: "approaching" | "current";
+  },
+): Promise<number> {
+  const rows = await db.$queryRaw<Array<{ count: number }>>(
+    Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM "BusinessVaultRecord"
+      WHERE "businessId" = ${input.businessId}
+        AND "recordStatus" = 'ACTIVE'
+        ${recordedLeadDateFilter(input.today, input.band)}
+        ${vaultRecordIdFilter(input.recordId)}
+    `,
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+async function loadVaultsByIds(
+  db: Db,
+  businessId: string,
+  ids: string[],
+): Promise<VaultSelectRow[]> {
+  if (ids.length === 0) return [];
+  const rows = await db.businessVaultRecord.findMany({
+    where: { businessId, id: { in: ids } },
+    select: vaultSelect,
+  });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return ids.flatMap((id) => {
+    const row = byId.get(id);
+    return row ? [row] : [];
+  });
 }
 
 const DATED_CATEGORY_LIST = [...DATED_VAULT_CATEGORIES];
@@ -458,6 +548,7 @@ const vaultSelect = {
   recordStatus: true,
   effectiveOn: true,
   expiresOn: true,
+  renewalLeadDays: true,
 } as const;
 
 const agreementSelect = {
@@ -496,13 +587,21 @@ function projectVault(
     recordStatus: string;
     effectiveOn: string | null;
     expiresOn: string | null;
+    renewalLeadDays?: number | null;
   },
   now: Date,
   targeted: boolean,
+  timeZone: string,
 ): VaultRecordProjection {
   const category = isVaultCategory(row.category) ? row.category : "OTHER";
   const recordStatus = isVaultRecordStatus(row.recordStatus) ? row.recordStatus : "ACTIVE";
-  const expiryState = classifyExpiry({ category, expiresOn: row.expiresOn, now });
+  const expiryState = classifyExpiry({
+    category,
+    expiresOn: row.expiresOn,
+    renewalLeadDays: row.renewalLeadDays,
+    now,
+    timeZone,
+  });
   return {
     id: row.id,
     businessId: row.businessId,
@@ -577,9 +676,13 @@ export async function loadBusinessProtectionProjection(input: {
   }
 
   const now = input.now ?? new Date();
-  const today = utcCalendarDate(now);
-  const soonEnd = addUtcDays(today, EXPIRING_SOON_DAYS);
   const businessId = input.access.businessId;
+  const business = await input.db.business.findUnique({
+    where: { id: businessId },
+    select: { timezone: true },
+  });
+  const timeZone = resolveBusinessTimeZone(business);
+  const today = businessCalendarDate(now, timeZone);
   const targets = await resolveTargets(input.db, businessId, input.entityHints);
 
   const failClosed =
@@ -616,6 +719,7 @@ export async function loadBusinessProtectionProjection(input: {
     ...vaultWhere,
     recordStatus: "ACTIVE",
   };
+  const scopedVaultId = typeof vaultWhere.id === "string" ? vaultWhere.id : undefined;
 
   const [
     attentionVault,
@@ -646,15 +750,13 @@ export async function loadBusinessProtectionProjection(input: {
     checklistCounts,
   ] = await Promise.all([
     loadVaultScope
-      ? input.db.businessVaultRecord.findMany({
-          where: {
-            ...activeWhere,
-            expiresOn: { not: null, lte: soonEnd },
-          },
-          orderBy: [{ expiresOn: "asc" }, { id: "asc" }],
+      ? findVaultIdsByRecordedLeadBand(input.db, {
+          businessId,
+          today,
+          recordId: scopedVaultId,
+          band: "attention",
           take: BUSINESS_PROTECTION_CONTEXT_CAPS.vaultRecords,
-          select: vaultSelect,
-        })
+        }).then((ids) => loadVaultsByIds(input.db, businessId, ids))
       : emptyVaultRows(),
     loadVaultScope
       ? input.db.businessVaultRecord.findMany({
@@ -669,15 +771,13 @@ export async function loadBusinessProtectionProjection(input: {
         })
       : emptyVaultRows(),
     loadVaultScope
-      ? input.db.businessVaultRecord.findMany({
-          where: {
-            ...activeWhere,
-            expiresOn: { gt: soonEnd },
-          },
-          orderBy: [{ expiresOn: "asc" }, { id: "asc" }],
+      ? findVaultIdsByRecordedLeadBand(input.db, {
+          businessId,
+          today,
+          recordId: scopedVaultId,
+          band: "current",
           take: 2,
-          select: vaultSelect,
-        })
+        }).then((ids) => loadVaultsByIds(input.db, businessId, ids))
       : emptyVaultRows(),
     loadVaultScope
       ? input.db.businessVaultRecord.findMany({
@@ -730,13 +830,19 @@ export async function loadBusinessProtectionProjection(input: {
         })
       : Promise.resolve(0),
     loadVaultScope
-      ? input.db.businessVaultRecord.count({
-          where: { ...activeWhere, expiresOn: { gte: today, lte: soonEnd } },
+      ? countVaultsByRecordedLeadBand(input.db, {
+          businessId,
+          today,
+          recordId: scopedVaultId,
+          band: "approaching",
         })
       : Promise.resolve(0),
     loadVaultScope
-      ? input.db.businessVaultRecord.count({
-          where: { ...activeWhere, expiresOn: { gt: soonEnd } },
+      ? countVaultsByRecordedLeadBand(input.db, {
+          businessId,
+          today,
+          recordId: scopedVaultId,
+          band: "current",
         })
       : Promise.resolve(0),
     loadVaultScope
@@ -852,7 +958,7 @@ export async function loadBusinessProtectionProjection(input: {
   );
 
   const vaultRecords = vaultRows.map((row) =>
-    projectVault(row, now, Boolean(targets.vaultRecordId && row.id === targets.vaultRecordId)),
+    projectVault(row, now, Boolean(targets.vaultRecordId && row.id === targets.vaultRecordId), timeZone),
   );
   const agreements = agreementRows.map((row) =>
     projectAgreement(row, Boolean(targets.agreementId && row.id === targets.agreementId)),
@@ -940,7 +1046,10 @@ export async function loadBusinessProtectionProjection(input: {
 }
 
 function describeVault(row: VaultRecordProjection) {
-  return `"${row.title}" [${row.category} / ${row.recordStatus} / ${row.expiryState}${row.expiresOn ? ` / recorded date ${row.expiresOn}` : ""}]`;
+  const recordedDate = row.expiresOn
+    ? `${row.title} has an expiration date of ${row.expiresOn}`
+    : `${row.title} has no expiration recorded`;
+  return `"${row.title}" [${row.category} / ${row.recordStatus} / ${row.expiryState}${row.expiresOn ? ` / recorded date ${row.expiresOn}` : ""}] — ${recordedDate}`;
 }
 
 function describeAgreement(row: AgreementProjection) {
@@ -984,10 +1093,11 @@ function findingsFromProjection(
       .join("; ");
     findings.push({
       key: "protection-expiring-soon",
-      title: "A recorded expiration date is within 30 days",
+      title: "A recorded expiration date is within the recorded renewal lead window",
       why:
-        `${t.expiringSoon} active Business Vault ${t.expiringSoon === 1 ? "record has" : "records have"} an owner-recorded expiration date within the canonical ${EXPIRING_SOON_DAYS}-day warning window. ` +
-        `TBBT classifies ${t.expiringSoon === 1 ? "this record" : "these records"} as EXPIRING_SOON based on the recorded date. ` +
+        `${t.expiringSoon} active Business Vault ${t.expiringSoon === 1 ? "record has" : "records have"} an owner-recorded expiration date within that record's recorded renewal lead window. ` +
+        `The default lead is ${EXPIRING_SOON_DAYS} days when no per-document lead is stored. ` +
+        `TBBT classifies ${t.expiringSoon === 1 ? "this record" : "these records"} as EXPIRING_SOON based on the recorded date and recorded lead time. ` +
         `EXPIRING_SOON is not a regulatory determination. ` +
         (examples ? `Recorded examples: ${examples}. ` : "") +
         RECORDED_TRUTH_CAVEAT,

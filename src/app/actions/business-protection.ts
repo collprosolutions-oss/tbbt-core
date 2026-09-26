@@ -62,6 +62,7 @@ export async function createVaultRecordAction(
       counterparty: readString(formData, "counterparty") || undefined,
       effectiveOn: readString(formData, "effectiveOn") || undefined,
       expiresOn: readString(formData, "expiresOn") || undefined,
+      renewalLeadDays: formData.has("renewalLeadDays") ? readString(formData, "renewalLeadDays") : undefined,
       notes: readString(formData, "notes") || undefined,
       storedAssetId: readString(formData, "storedAssetId") || undefined,
     });
@@ -91,6 +92,7 @@ export async function updateVaultRecordAction(
       counterparty: formData.has("counterparty") ? readString(formData, "counterparty") : undefined,
       effectiveOn: formData.has("effectiveOn") ? readString(formData, "effectiveOn") : undefined,
       expiresOn: formData.has("expiresOn") ? readString(formData, "expiresOn") : undefined,
+      renewalLeadDays: formData.has("renewalLeadDays") ? readString(formData, "renewalLeadDays") : undefined,
       notes: formData.has("notes") ? readString(formData, "notes") : undefined,
       recordStatus: readString(formData, "recordStatus") || undefined,
       storedAssetId: formData.has("storedAssetId") ? readString(formData, "storedAssetId") : undefined,

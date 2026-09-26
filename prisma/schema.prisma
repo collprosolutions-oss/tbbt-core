@@ -3776,9 +3776,14 @@ model BusinessVaultRecord {
   category                String
   issuer                  String?
   counterparty            String?
-  /// YYYY-MM-DD calendar date. Deterministic expiry math uses this, not local TZ.
+  /// YYYY-MM-DD calendar date. Issue/effective date is owner-recorded only.
   effectiveOn             String?
+  /// YYYY-MM-DD calendar date. Never inferred from category. Boundary math
+  /// uses Business.timezone, not the browser or process local timezone.
   expiresOn               String?
+  /// Owner-recorded attention window in calendar days. Null uses the
+  /// canonical 30-day default. Not a legal filing deadline.
+  renewalLeadDays         Int?
   /// ACTIVE | ARCHIVED — owner-set. Expiry attention is computed separately.
   recordStatus            String   @default("ACTIVE")
   /// Last persisted computed expiry band for audit history.

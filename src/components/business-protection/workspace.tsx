@@ -28,8 +28,10 @@ import {
   AGREEMENT_NOT_ENFORCEABLE_MESSAGE,
   AGREEMENT_NOT_LEGAL_ADVICE_MESSAGE,
   OWNER_REVIEW_REQUIRES_OWNER_MESSAGE,
+  EXPIRING_SOON_DAYS,
   EXPIRY_STATE_LABELS,
   NO_FAKE_ESIGN_MESSAGE,
+  VAULT_RENEWAL_STATE_LABELS,
   PROTECTION_AREA_LABELS,
   PROTECTION_AREAS,
   VAULT_CATEGORIES,
@@ -128,9 +130,18 @@ function DashboardPanel({ source }: { source: ProtectionWorkspace }) {
           <FactCard label="Insurance records" value={String(d.insuranceOnFile)} hint="On file — not verified with a carrier" />
           <FactCard label="Licenses / certifications" value={String(d.licensesCertsOnFile)} hint="Stored records only" />
           <FactCard label="Agreements awaiting action" value={String(d.agreementsAwaitingAction)} hint="Draft, review, ready, or sent" />
-          <FactCard label="Expiring soon" value={String(d.expiringSoon)} hint="Within 30 UTC days" />
-          <FactCard label="Expired" value={String(d.expired)} hint="Past the recorded date" />
-          <FactCard label="Missing important dates" value={String(d.missingDates)} hint="Dated categories without an expiration" />
+          <FactCard
+            label="Renewal approaching"
+            value={String(d.renewalApproaching)}
+            hint={`Recorded dates inside the lead window (${d.timeZone})`}
+          />
+          <FactCard label="Expired" value={String(d.expired)} hint="Recorded expiration date has passed in the business timezone" />
+          <FactCard
+            label="No expiration recorded"
+            value={String(d.noExpirationRecorded)}
+            hint="Owner has not recorded an expiration date"
+          />
+          <FactCard label="Current" value={String(d.current)} hint="Recorded date is outside the lead window" />
         </div>
         <Card>
           <CardHeader>
@@ -201,26 +212,38 @@ function VaultPanel({ source }: { source: ProtectionWorkspace }) {
               <Link href={hrefWith(source, { q: undefined, selected: source.query.selected })}>Reset</Link>
             </Button>
           </form>
-          <div className="space-y-2">
+          <div className="space-y-4">
             {source.records.length === 0 ? <p className="text-sm text-muted-foreground">No vault records yet.</p> : null}
-            {source.records.map((row) => (
-              <Link
-                key={row.id}
-                href={hrefWith(source, { selected: row.id })}
-                className={cn(
-                  "block rounded-md border px-3 py-2 text-sm",
-                  selected?.id === row.id ? "border-primary bg-primary/5" : "border-border/70",
-                )}
-              >
+            {source.renewalGroups.map((group) => (
+              <section key={group.state} className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium">{row.title}</span>
-                  <ExpiryBadge state={row.expiryState} />
+                  <h3 className="text-sm font-medium">{group.label}</h3>
+                  <span className="text-xs text-muted-foreground">{group.records.length}</span>
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {row.categoryLabel}
-                  {row.expiresOn ? ` · expires ${row.expiresOn}` : ""}
-                </div>
-              </Link>
+                {group.records.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">None.</p>
+                ) : null}
+                {group.records.map((row) => (
+                  <Link
+                    key={row.id}
+                    href={hrefWith(source, { selected: row.id })}
+                    className={cn(
+                      "block rounded-md border px-3 py-2 text-sm",
+                      selected?.id === row.id ? "border-primary bg-primary/5" : "border-border/70",
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium">{row.title}</span>
+                      <ExpiryBadge state={row.expiryState} />
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {row.categoryLabel}
+                      {row.expiresOn ? ` · recorded expiration ${row.expiresOn}` : " · no expiration recorded"}
+                      {row.renewalLeadDays != null ? ` · lead ${row.renewalLeadDays} days` : ""}
+                    </div>
+                  </Link>
+                ))}
+              </section>
             ))}
           </div>
         </CardContent>
@@ -252,7 +275,19 @@ function VaultPanel({ source }: { source: ProtectionWorkspace }) {
               <Field id="issuer" label="Issuer" defaultValue={selected?.issuer ?? ""} />
               <Field id="counterparty" label="Counterparty" defaultValue={selected?.counterparty ?? ""} />
               <Field id="effectiveOn" label="Effective date" type="date" defaultValue={selected?.effectiveOn ?? ""} />
-              <Field id="expiresOn" label="Expiration / renewal date" type="date" defaultValue={selected?.expiresOn ?? ""} />
+              <Field id="expiresOn" label="Expiration date" type="date" defaultValue={selected?.expiresOn ?? ""} />
+              <Field
+                id="renewalLeadDays"
+                label={`Renewal lead time (days, blank uses ${EXPIRING_SOON_DAYS})`}
+                type="number"
+                defaultValue={selected?.renewalLeadDays != null ? String(selected.renewalLeadDays) : ""}
+              />
+              {selected ? (
+                <p className="text-xs text-muted-foreground">
+                  Recorded state: {VAULT_RENEWAL_STATE_LABELS[selected.renewalState]}
+                  {selected.expiresOn ? ` · expiration ${selected.expiresOn}` : ""}. Dates are classified in the business timezone, not the browser clock. This is not a legal compliance finding.
+                </p>
+              ) : null}
               <div className="space-y-1.5">
                 <Label htmlFor="notes">Notes</Label>
                 <textarea

@@ -5,6 +5,7 @@
  * warns about recorded expiration dates. It is not a licensing authority
  * and does not guarantee legal compliance or enforceability.
  */
+import { formatISODateInTimeZone } from "@/lib/business-timezone";
 
 export const VAULT_CATEGORIES = [
   "COMPANY_LEGAL",
@@ -55,11 +56,37 @@ export type ExpiryState = (typeof EXPIRY_STATES)[number];
 
 export const EXPIRY_STATE_LABELS: Record<ExpiryState, string> = {
   CURRENT: "Current",
-  EXPIRING_SOON: "Expiring soon",
+  EXPIRING_SOON: "Renewal approaching",
   EXPIRED: "Expired",
-  MISSING_DATE: "Missing important date",
-  NO_DATE_OPTIONAL: "No date on file",
+  MISSING_DATE: "No expiration recorded",
+  NO_DATE_OPTIONAL: "No expiration recorded",
 };
+
+/**
+ * Operational renewal states derived from recorded Vault dates.
+ * These are not persisted. Category never invents a date.
+ */
+export const VAULT_RENEWAL_STATES = [
+  "NO_EXPIRATION_RECORDED",
+  "CURRENT",
+  "RENEWAL_APPROACHING",
+  "EXPIRED",
+] as const;
+export type VaultRenewalState = (typeof VAULT_RENEWAL_STATES)[number];
+
+export const VAULT_RENEWAL_STATE_LABELS: Record<VaultRenewalState, string> = {
+  NO_EXPIRATION_RECORDED: "No expiration recorded",
+  CURRENT: "Current",
+  RENEWAL_APPROACHING: "Renewal approaching",
+  EXPIRED: "Expired",
+};
+
+export const VAULT_RENEWAL_GROUP_ORDER = [
+  "EXPIRED",
+  "RENEWAL_APPROACHING",
+  "CURRENT",
+  "NO_EXPIRATION_RECORDED",
+] as const;
 
 /** Categories where an expiration/renewal date is expected. */
 export const DATED_VAULT_CATEGORIES = new Set<VaultCategory>([
@@ -223,6 +250,10 @@ export function utcCalendarDate(now: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+export function businessCalendarDate(now: Date, timeZone: string): string {
+  return formatISODateInTimeZone(now, timeZone);
+}
+
 export function utcMidnightFromCalendarDate(value: string): Date {
   const match = CALENDAR_DATE.exec(value.trim());
   if (!match) {
@@ -231,10 +262,67 @@ export function utcMidnightFromCalendarDate(value: string): Date {
   return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
 }
 
-export function daysUntilCalendarDate(expiresOn: string, now: Date): number {
+export function daysUntilCalendarDate(expiresOn: string, now: Date, timeZone?: string): number {
   const exp = utcMidnightFromCalendarDate(expiresOn);
-  const today = utcMidnightFromCalendarDate(utcCalendarDate(now));
+  const today = utcMidnightFromCalendarDate(
+    timeZone ? businessCalendarDate(now, timeZone) : utcCalendarDate(now),
+  );
   return Math.round((exp.getTime() - today.getTime()) / 86_400_000);
+}
+
+export function parseOptionalRenewalLeadDays(value?: string | number | null): number | null {
+  if (value == null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 365) {
+    throw new Error("Enter a renewal lead time of 0 to 365 days.");
+  }
+  return parsed;
+}
+
+export function resolveRenewalLeadDays(value?: number | null): number {
+  return value == null ? EXPIRING_SOON_DAYS : value;
+}
+
+export function isVaultRenewalState(value: string): value is VaultRenewalState {
+  return (VAULT_RENEWAL_STATES as readonly string[]).includes(value);
+}
+
+/**
+ * Pure operational renewal state. Uses recorded expiration + lead time
+ * and the business timezone calendar day. Never infers a date from
+ * category or AI. `now` is an instant; "today" is that instant in
+ * `timeZone`.
+ */
+export function deriveVaultRenewalState(input: {
+  expiresOn?: string | null;
+  renewalLeadDays?: number | null;
+  now: Date;
+  timeZone: string;
+}): VaultRenewalState {
+  const expiresOn = input.expiresOn?.trim() || "";
+  if (!expiresOn) return "NO_EXPIRATION_RECORDED";
+  const days = daysUntilCalendarDate(expiresOn, input.now, input.timeZone);
+  if (days < 0) return "EXPIRED";
+  if (days <= resolveRenewalLeadDays(input.renewalLeadDays)) return "RENEWAL_APPROACHING";
+  return "CURRENT";
+}
+
+export function vaultRenewalStateFromExpiry(state: ExpiryState): VaultRenewalState {
+  if (state === "EXPIRED") return "EXPIRED";
+  if (state === "EXPIRING_SOON") return "RENEWAL_APPROACHING";
+  if (state === "CURRENT") return "CURRENT";
+  return "NO_EXPIRATION_RECORDED";
+}
+
+export function expiryStateFromVaultRenewal(
+  renewal: VaultRenewalState,
+  category: VaultCategory,
+): ExpiryState {
+  if (renewal === "EXPIRED") return "EXPIRED";
+  if (renewal === "RENEWAL_APPROACHING") return "EXPIRING_SOON";
+  if (renewal === "CURRENT") return "CURRENT";
+  return categoryNeedsExpiration(category) ? "MISSING_DATE" : "NO_DATE_OPTIONAL";
 }
 
 export function categoryNeedsExpiration(category: VaultCategory): boolean {
@@ -245,14 +333,27 @@ export function classifyExpiry(input: {
   category: VaultCategory;
   expiresOn?: string | null;
   now: Date;
+  timeZone?: string;
+  renewalLeadDays?: number | null;
 }): ExpiryState {
+  if (input.timeZone) {
+    return expiryStateFromVaultRenewal(
+      deriveVaultRenewalState({
+        expiresOn: input.expiresOn,
+        renewalLeadDays: input.renewalLeadDays,
+        now: input.now,
+        timeZone: input.timeZone,
+      }),
+      input.category,
+    );
+  }
   const expiresOn = input.expiresOn?.trim() || "";
   if (!expiresOn) {
     return categoryNeedsExpiration(input.category) ? "MISSING_DATE" : "NO_DATE_OPTIONAL";
   }
   const days = daysUntilCalendarDate(expiresOn, input.now);
   if (days < 0) return "EXPIRED";
-  if (days <= EXPIRING_SOON_DAYS) return "EXPIRING_SOON";
+  if (days <= resolveRenewalLeadDays(input.renewalLeadDays)) return "EXPIRING_SOON";
   return "CURRENT";
 }
 
