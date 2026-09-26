@@ -855,6 +855,8 @@ export async function loadKnowledgeLaunchProjection(input: {
 
   const [
     recentEntries,
+    verifiedApprovedEntries,
+    oldestUnreviewedEntries,
     unreviewedEntries,
     approvedEntries,
     conflictEntries,
@@ -897,6 +899,22 @@ export async function loadKnowledgeLaunchProjection(input: {
           where: entryWhere,
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
           take: KNOWLEDGE_LAUNCH_CONTEXT_CAPS.entries,
+          select: entrySelect,
+        })
+      : Promise.resolve([]),
+    loadKnowledge
+      ? input.db.knowledgeEntry.findMany({
+          where: { ...entryWhere, approvalState: "APPROVED", trustState: "VERIFIED" },
+          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+          take: 1,
+          select: entrySelect,
+        })
+      : Promise.resolve([]),
+    loadKnowledge
+      ? input.db.knowledgeEntry.findMany({
+          where: { ...entryWhere, approvalState: "UNREVIEWED" },
+          orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+          take: 1,
           select: entrySelect,
         })
       : Promise.resolve([]),
@@ -1117,6 +1135,8 @@ export async function loadKnowledgeLaunchProjection(input: {
 
   const entryById = new Map<string, (typeof recentEntries)[number]>();
   for (const row of [
+    ...verifiedApprovedEntries,
+    ...oldestUnreviewedEntries,
     ...conflictEntries,
     ...estimateEntries,
     ...unknownEntries,
@@ -1535,8 +1555,12 @@ export function projectKnowledgeLaunchFacts(projection: KnowledgeLaunchProjectio
   const facts: Record<string, string> = {};
   const factKeys: string[] = [];
   const t = projection.totals;
-  const approved = projection.entries.find((row) => row.approvalState === "APPROVED");
-  const unreviewed = projection.entries.find((row) => row.approvalState === "UNREVIEWED");
+  const approved =
+    projection.entries.find((row) => row.approvalState === "APPROVED" && row.trustState === "VERIFIED") ??
+    projection.entries.find((row) => row.approvalState === "APPROVED");
+  const unreviewed =
+    projection.entries.find((row) => row.approvalState === "UNREVIEWED" && row.trustState === "UNKNOWN" && row.sourceType === "OWNER_CREATED") ??
+    projection.entries.find((row) => row.approvalState === "UNREVIEWED");
   const candidate = projection.candidates[0];
   const unfinished = describeUnfinishedSteps(projection.launch.steps);
   const proposal = projection.setup.proposals[0];
