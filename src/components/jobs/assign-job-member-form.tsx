@@ -23,11 +23,11 @@ export type AssigneeHint = {
 
 /**
  * OWNER/ADMIN-only control on the Work Order: assign, change, or remove the
- * one MEMBER assigned to this Job. `eligibleMembers` is already scoped to
- * this Job's own Business and to role MEMBER (see the Prisma query in
- * src/app/(app)/jobs/[jobId]/page.tsx) -- assignJobMember() re-validates
- * that server-side regardless, so this list is a UX convenience only, never
- * the enforcement boundary.
+ * one worker assigned to this Job. Another worker must be an active MEMBER
+ * of this Job's own Business. OWNER/ADMIN may also assign themselves.
+ * `eligibleMembers` is a UX convenience only -- assignJobMember()
+ * re-validates the target server-side regardless (see
+ * src/app/actions/job.ts). Workforce recommendations stay MEMBER-only.
  */
 export function AssignJobMemberForm({
   jobId,
