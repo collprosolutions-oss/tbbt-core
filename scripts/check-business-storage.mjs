@@ -193,6 +193,21 @@ check("Invalid website photo types are rejected before authorize",
     inspectWebsitePhotoUpload({ type: "image/jpeg", name: "hero.jpg", size: 800 }).ok === true);
 check("Zoom below 1 is still accepted after the storage cutover",
   clampObjectZoom(0.7) === 0.7);
+const requestPhotoSrc = readRepo("src/lib/business-storage/request-photos.ts");
+const publicFinalizeSrc = requestPhotoSrc.slice(
+  requestPhotoSrc.indexOf("export async function finalizePublicRequestPhoto"),
+);
+check("Public request finalize proves PRIVATE CUSTOMER_PHOTO before finalizeManagedUpload",
+  publicFinalizeSrc.indexOf("storedAsset.findFirst") >= 0 &&
+    publicFinalizeSrc.indexOf("finalizeManagedUpload") >
+      publicFinalizeSrc.indexOf("storedAsset.findFirst") &&
+    publicFinalizeSrc.includes("isPrivateUnpublishedCustomerPhoto") &&
+    publicFinalizeSrc.includes("status === \"READY\"") &&
+    requestPhotoSrc.includes('category === "CUSTOMER_PHOTO"') &&
+    requestPhotoSrc.includes('visibility === "PRIVATE"'));
+check("Public request fallback photos count recorded attachments before adding more",
+  requestPhotoSrc.includes("serviceRequestPhoto.count") &&
+    requestPhotoSrc.includes("remainingIntakePhotoSlots"));
 
 try {
   const ownerUser = await prisma.user.create({
