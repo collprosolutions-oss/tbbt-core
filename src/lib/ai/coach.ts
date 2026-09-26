@@ -335,6 +335,14 @@ const COMMUNICATIONS_FACT_LABELS: Record<string, { label: string; href: string }
   },
   "communications-email-message-count": { label: "Recorded email communications", href: "/communications" },
   "communications-sms-message-count": { label: "Recorded SMS communications", href: "/communications" },
+  "communications-missed-call-count": {
+    label: "Recorded missed calls",
+    href: "/communications/receptionist",
+  },
+  "communications-recorded-caller-without-later-communication-count": {
+    label: "Recorded callers without a later communication",
+    href: "/communications/receptionist",
+  },
 };
 
 function communicationsFactEntries(facts?: Record<string, string>): CitedFact[] {
