@@ -158,24 +158,12 @@ export default async function BusinessHealthPage({
                     </ActionForm>
                   </div>
                   {area === "coach" ? (
-                    <div className="mt-2 space-y-2">
+                    <div className="mt-2">
                       <ControlledActionConfirmForm
                         actionKey="CREATE_RECOMMENDATION_ACTION_ITEM"
                         targetEntityId={item.key}
                         conversationId={workspace.conversation?.id}
-                        label="create plan action"
-                      />
-                      <ControlledActionConfirmForm
-                        actionKey="DISMISS_RECOMMENDATION"
-                        targetEntityId={item.key}
-                        conversationId={workspace.conversation?.id}
-                        label="dismiss recommendation"
-                      />
-                      <ControlledActionConfirmForm
-                        actionKey="COMPLETE_RECOMMENDATION"
-                        targetEntityId={item.key}
-                        conversationId={workspace.conversation?.id}
-                        label="complete recommendation"
+                        label={item.title}
                       />
                     </div>
                   ) : null}
@@ -318,17 +306,6 @@ export default async function BusinessHealthPage({
                       </select>
                       <Button type="submit" size="sm" variant="outline">Update</Button>
                     </ActionForm>
-                    {area === "coach" && item.status !== "DONE" ? (
-                      <div className="mt-2">
-                        <ControlledActionConfirmForm
-                          actionKey="UPDATE_ACTION_ITEM_STATUS"
-                          targetEntityId={item.id}
-                          conversationId={workspace.conversation?.id}
-                          nextStatus="DONE"
-                          label="mark action done"
-                        />
-                      </div>
-                    ) : null}
                   </li>
                 ))}
               </ul>

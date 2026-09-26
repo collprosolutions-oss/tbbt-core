@@ -41,18 +41,19 @@ export function ControlledActionConfirmForm({
 
   const proposalJson = proposeState.proposalJson;
   const prepared = Boolean(proposalJson) && !proposeState.error;
+  const recorded = Boolean(confirmState.message) && !confirmState.error;
 
   return (
     <div className="space-y-2 rounded-md border border-dashed p-2">
       <p className="text-xs text-muted-foreground">
-        Coach recommendations do nothing until the owner prepares and then confirms. Opening this page is not confirmation.
+        Preparing a proposal does not record anything. Only the owner Confirm step can add an internal action-plan item.
       </p>
       <form action={proposeAction} className="flex flex-wrap items-center gap-2">
         <input type="hidden" name="actionKey" value={actionKey} />
         <input type="hidden" name="targetEntityId" value={targetEntityId} />
         {nextStatus ? <input type="hidden" name="nextStatus" value={nextStatus} /> : null}
         <Button type="submit" size="sm" variant="outline" disabled={proposing}>
-          {proposing ? "Preparing…" : `Prepare: ${label}`}
+          {proposing ? "Preparing…" : "Prepare action"}
         </Button>
       </form>
       {proposeState.error ? (
@@ -60,8 +61,23 @@ export function ControlledActionConfirmForm({
           <AlertDescription>{proposeState.error}</AlertDescription>
         </Alert>
       ) : null}
-      {proposeState.message ? <p className="text-xs text-muted-foreground">{proposeState.message}</p> : null}
-      {proposeState.summary ? <p className="text-sm">{proposeState.summary}</p> : null}
+      {prepared ? (
+        <div className="space-y-1 rounded-md border bg-muted/30 p-2 text-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Proposed</p>
+          <p>
+            <span className="font-medium">What will happen:</span> Create an internal action-plan item for{" "}
+            {proposeState.proposedTitle ?? label}.
+          </p>
+          {proposeState.proposedWhy ? (
+            <p>
+              <span className="font-medium">Why:</span> {proposeState.proposedWhy}
+            </p>
+          ) : null}
+          <p className="text-muted-foreground">
+            This will NOT contact the customer, charge money, change the schedule, or perform the work.
+          </p>
+        </div>
+      ) : null}
       {prepared ? (
         <form action={confirmAction} className="flex flex-wrap items-center gap-2">
           {conversationId ? <input type="hidden" name="conversationId" value={conversationId} /> : null}
@@ -78,7 +94,9 @@ export function ControlledActionConfirmForm({
           <AlertDescription>{confirmState.error}</AlertDescription>
         </Alert>
       ) : null}
-      {confirmState.message ? <p className="text-xs text-muted-foreground">{confirmState.message}</p> : null}
+      {recorded ? (
+        <p className="text-xs font-medium text-muted-foreground">Confirmed / recorded: {confirmState.message}</p>
+      ) : null}
     </div>
   );
 }

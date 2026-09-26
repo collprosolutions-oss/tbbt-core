@@ -203,7 +203,12 @@ try {
       actionSrc.includes("requireOperatingProductAccess") &&
       actionSrc.includes("REPORTING_INSIGHTS") &&
       confirmUiSrc.includes('name="confirm" value="confirm"') &&
+      confirmUiSrc.includes("Prepare action") &&
       confirmUiSrc.includes("Confirm and add to action plan") &&
+      confirmUiSrc.includes("This will NOT") &&
+      !confirmUiSrc.includes("Do it") &&
+      !confirmUiSrc.includes("Run AI") &&
+      !confirmUiSrc.includes("Fix automatically") &&
       !confirmUiSrc.includes("useEffect(() => { proposeAction"),
   );
   check("MEMBER remains blocked from VIEW_REPORTS", !roleHasCapability("MEMBER", CAPABILITIES.VIEW_REPORTS));
@@ -221,6 +226,37 @@ try {
     ),
   );
   check("Catalog rows declare no external effect", CONTROLLED_ACTION_CATALOG.every((row) => row.externalEffect === false && row.freshnessRequired === true));
+  check(
+    "No second LLM or autonomous loop was added",
+    !controlledSrc.includes("runAiTask") &&
+      !controlledSrc.includes("runChiefOfStaffCoach") &&
+      !controlledSrc.includes("setInterval") &&
+      !controlledSrc.includes("setTimeout") &&
+      !runSrc.includes("confirmControlledAction") &&
+      !actionSrc.includes("createInvoice") &&
+      !actionSrc.includes("markInvoicePaid"),
+  );
+  check(
+    "Charge, comms, schedule, PO, knowledge, publish, Vault, and roles stay excluded",
+    [
+      "CHARGE_CARD",
+      "REFUND",
+      "MARK_PAID",
+      "SEND_CUSTOMER_EMAIL",
+      "SEND_CUSTOMER_SMS",
+      "MAKE_PHONE_CALL",
+      "SCHEDULE_JOB",
+      "ASSIGN_WORKER",
+      "SUPPLIER_PURCHASE",
+      "COMMIT_PURCHASE_ORDER",
+      "APPROVE_KNOWLEDGE",
+      "PUBLISH_WEBSITE",
+      "SIGN_AGREEMENT",
+      "MUTATE_VAULT_LEGAL_STATE",
+      "CHANGE_ROLE",
+      "TRANSFER_OWNERSHIP",
+    ].every((key) => isExcludedActionKey(key)),
+  );
 
   console.log("\nRUNTIME — propose does nothing; confirm is owner-only and stale-safe");
   resetControlledActionAttempts();
@@ -384,6 +420,26 @@ try {
   check("Stale proposal fails before mutation", staleFailed);
   const afterStale = await domainCounts(businessA.id);
   check("Stale confirm does not dismiss or create rows", afterStale.recommendationStates === beforeStale.recommendationStates && afterStale.actionItems === beforeStale.actionItems);
+
+  const missingProposal = await proposeControlledAction(prisma, ownerA, {
+    actionKey: "CREATE_RECOMMENDATION_ACTION_ITEM",
+    targetEntityId: "collect-unpaid-invoices",
+  });
+  await prisma.invoice.deleteMany({ where: { businessId: businessA.id } });
+  let disappearedFailed = false;
+  try {
+    await confirmControlledAction(prisma, ownerA, {
+      proposal: missingProposal,
+      executionAttemptId: randomUUID(),
+      confirm: "confirm",
+    });
+  } catch (error) {
+    disappearedFailed = error instanceof Error && /not active|stale/i.test(error.message);
+  }
+  check("Disappeared recommendation rejects confirmation", disappearedFailed);
+  await prisma.invoice.create({
+    data: { businessId: businessA.id, status: "SENT", total: 125 },
+  });
 
   const currentProposal = await proposeControlledAction(prisma, ownerA, {
     actionKey: "CREATE_RECOMMENDATION_ACTION_ITEM",

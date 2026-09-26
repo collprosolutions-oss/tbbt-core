@@ -30,6 +30,8 @@ export type AiActionState = {
   inProgress?: boolean;
   proposalJson?: string;
   summary?: string;
+  proposedTitle?: string;
+  proposedWhy?: string;
 };
 
 function readString(formData: FormData, key: string) {
@@ -103,9 +105,11 @@ export async function proposeCoachActionAction(
       browserBusinessId: readString(formData, "businessId") || undefined,
     });
     return {
-      message: "Proposal prepared. Nothing was changed. Confirm is a second owner click.",
+      message: "Proposed. Nothing was recorded yet.",
       proposalJson: serializeControlledActionProposal(proposal),
       summary: proposal.summary,
+      proposedTitle: proposal.freshnessInputs.title ?? proposal.displayLabel,
+      proposedWhy: proposal.freshnessInputs.why ?? proposal.summary,
     };
   } catch (error) {
     return {
