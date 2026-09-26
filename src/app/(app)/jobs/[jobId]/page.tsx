@@ -87,6 +87,7 @@ import {
   unpaidMaterialDepositWarning,
 } from "@/lib/project-payments";
 import { loadRecordJourney } from "@/lib/record-nav";
+import { directionsUrl, smsHref, telHref } from "@/lib/directions";
 import { prisma } from "@/lib/prisma";
 import { formatISODate } from "@/lib/schedule";
 import { PurchaseListCard } from "@/components/materials/purchase-list-card";
@@ -116,7 +117,7 @@ export default async function JobPage({
   const job = await prisma.job.findFirst({
     where: { id: jobId, ...access.scope },
     include: {
-      customer: { select: { name: true } },
+      customer: { select: { name: true, phone: true, email: true } },
       property: {
         select: {
           addressLine1: true,
@@ -362,6 +363,11 @@ export default async function JobPage({
     });
   }
 
+  const callHref = telHref(job.customer?.phone);
+  const textHref = smsHref(job.customer?.phone);
+  const mailHref = workOrderEmailHref(job.customer?.email);
+  const mapsHref = directionsUrl(job.property);
+
   return (
     <PageContainer>
       <PageHeader
@@ -404,6 +410,34 @@ export default async function JobPage({
           />
         </div>
       </PageHeader>
+
+      <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center">
+        {callHref ? (
+          <Button asChild variant="outline" className="h-12 w-full text-base sm:h-9 sm:w-auto sm:text-sm">
+            <a href={callHref}>Call customer</a>
+          </Button>
+        ) : null}
+        {textHref ? (
+          <Button asChild variant="outline" className="h-12 w-full text-base sm:h-9 sm:w-auto sm:text-sm">
+            <a href={textHref}>Text customer</a>
+          </Button>
+        ) : null}
+        {mailHref ? (
+          <Button asChild variant="outline" className="h-12 w-full text-base sm:h-9 sm:w-auto sm:text-sm">
+            <a href={mailHref}>Email customer</a>
+          </Button>
+        ) : null}
+        {mapsHref ? (
+          <Button asChild variant="outline" className="h-12 w-full text-base sm:h-9 sm:w-auto sm:text-sm">
+            <a href={mapsHref} target="_blank" rel="noreferrer noopener">
+              Directions
+            </a>
+          </Button>
+        ) : null}
+        <Button asChild variant="outline" className="h-12 w-full text-base sm:h-9 sm:w-auto sm:text-sm">
+          <Link href="/today">Back to Today</Link>
+        </Button>
+      </div>
 
       <Card>
         <CardHeader>
@@ -906,6 +940,12 @@ export default async function JobPage({
       </Card>
     </PageContainer>
   );
+}
+
+/** Same truthful trimmed mailto as the customer mobile contact view. */
+function workOrderEmailHref(email: string | null | undefined): string | null {
+  const value = email?.trim();
+  return value ? `mailto:${value}` : null;
 }
 
 function PhotoStageGroup({
