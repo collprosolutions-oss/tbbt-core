@@ -371,17 +371,18 @@ check(
   zeroRateWithQuantity.recommendedAmount === 0 &&
     zeroRateWithQuantity.lines[0]?.amountState === "waiting",
 );
-const missingComponentRate = computeFormula(
+const missingComponentBillableRate = computeFormula(
   basePlusFormula,
   { openingCount: 2, trimLf: 0 },
   { baseAmount: 150, openingRate: 0, trimRate: 8 },
 );
 check(
   "missing component rate stays waiting and does not invent $0 ready work",
-  missingComponentRate.lines.find((line) => line.key === "openings")?.amountState ===
-    "waiting" &&
-    missingComponentRate.lines.find((line) => line.key === "openings")?.amount === 0 &&
-    missingComponentRate.recommendedAmount === 150,
+  missingComponentBillableRate.lines.find((line) => line.key === "openings")
+    ?.amountState === "waiting" &&
+    missingComponentBillableRate.lines.find((line) => line.key === "openings")
+      ?.amount === 0 &&
+    missingComponentBillableRate.recommendedAmount === 150,
 );
 const missingMinimumInputs = computeFormula(minimumFormula, { quantity: 2 }, {});
 check(
