@@ -231,8 +231,9 @@ try {
     "Confirm resolves canonical recommendation without requiring ACTIVE before already-applied replay",
     controlledSrc.includes("async function canonicalRecommendation(") &&
       controlledSrc.includes("async function alreadyAppliedResult(") &&
+      controlledSrc.includes("const live = await canonicalRecommendation(db, access.businessId, input.proposal.targetEntityId)") &&
       controlledSrc.indexOf("const already = await alreadyAppliedResult") <
-        controlledSrc.indexOf("if (!live.active)"),
+        controlledSrc.indexOf("if (!live.active)", controlledSrc.indexOf("const already = await alreadyAppliedResult")),
   );
   check(
     "CREATE concurrency stays INSERT ON CONFLICT then SELECT FOR UPDATE",

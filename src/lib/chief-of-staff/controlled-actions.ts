@@ -624,21 +624,6 @@ export async function confirmControlledAction(
     };
   }
 
-  const already = await alreadyAppliedResult(db, access, entry, live);
-  if (already) {
-    const confirmation: ControlledActionConfirmation = {
-      ...serverProposal,
-      confirmed: true,
-      executionAttemptId: input.executionAttemptId,
-      executionResult: already,
-    };
-    executionAttempts.set(key, confirmation);
-    return confirmation;
-  }
-  if (!live.active) {
-    throw new ControlledActionError("That recommendation is not active from recorded facts.");
-  }
-
   let resolveWork: (value: ControlledActionConfirmation) => void = () => undefined;
   let rejectWork: (error: unknown) => void = () => undefined;
   const work = new Promise<ControlledActionConfirmation>((resolve, reject) => {
@@ -649,6 +634,21 @@ export async function confirmControlledAction(
   inflightAttempts.set(key, work);
 
   try {
+    const already = await alreadyAppliedResult(db, access, entry, live);
+    if (already) {
+      const confirmation: ControlledActionConfirmation = {
+        ...serverProposal,
+        confirmed: true,
+        executionAttemptId: input.executionAttemptId,
+        executionResult: already,
+      };
+      executionAttempts.set(key, confirmation);
+      resolveWork(confirmation);
+      return confirmation;
+    }
+    if (!live.active) {
+      throw new ControlledActionError("That recommendation is not active from recorded facts.");
+    }
     const result = await invokeCanonicalOperation(db, access, entry, live);
     const confirmation: ControlledActionConfirmation = {
       ...serverProposal,
