@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, type ComponentType, type CSSProperties, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import { FileText, MapPin, Phone, Receipt, Wrench } from "lucide-react";
 import { CreateEstimateButton } from "@/components/estimates/create-estimate-button";
@@ -27,7 +34,18 @@ import {
   RequestIdentityReviewBadge,
   RequestIdentityReviewNotice,
 } from "@/components/requests/request-follow-up";
+import {
+  REQUESTS_MOBILE_SHEET_QUERY,
+  requestMobileSheetShouldOpen,
+  resolveInitialRequestSelection,
+} from "@/lib/request-list-selection";
 import { cn } from "@/lib/utils";
+
+function isRequestsMobileViewport() {
+  return (
+    typeof window !== "undefined" && window.matchMedia(REQUESTS_MOBILE_SHEET_QUERY).matches
+  );
+}
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -72,16 +90,36 @@ export function RequestsWorkspace({
   requests: RequestListItem[];
   initialSelectedId?: string;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(() => {
-    if (initialSelectedId && requests.some((request) => request.id === initialSelectedId)) {
-      return initialSelectedId;
-    }
-    return requests[0]?.id ?? null;
-  });
+  const initialSelection = resolveInitialRequestSelection(requests, initialSelectedId);
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelection.selectedId);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const appliedSelectedParam = useRef<string | undefined | null>(undefined);
+  const hasAppliedSelectedParam = useRef(false);
   const selected = requests.find((request) => request.id === selectedId) ?? null;
 
-  function selectRequest(id: string) {
+  useEffect(() => {
+    if (hasAppliedSelectedParam.current && appliedSelectedParam.current === initialSelectedId) {
+      return;
+    }
+    hasAppliedSelectedParam.current = true;
+    appliedSelectedParam.current = initialSelectedId;
+
+    const { matchedSelectedId } = resolveInitialRequestSelection(requests, initialSelectedId);
+    if (matchedSelectedId) {
+      setSelectedId(matchedSelectedId);
+      setMobileOpen(
+        requestMobileSheetShouldOpen(matchedSelectedId, !isRequestsMobileViewport()),
+      );
+      return;
+    }
+    setMobileOpen(false);
+  }, [initialSelectedId, requests]);
+
+  function selectDesktopRow(id: string) {
+    setSelectedId(id);
+  }
+
+  function selectMobileCard(id: string) {
     setSelectedId(id);
     setMobileOpen(true);
   }
@@ -106,10 +144,10 @@ export function RequestsWorkspace({
           (avoids horizontal scroll and tiny cramped cells on a phone). */}
       <FounderRegion id="table">
       <div className="hidden sm:block">
-        <RequestsTable requests={requests} selectedId={selectedId} onSelect={selectRequest} />
+        <RequestsTable requests={requests} selectedId={selectedId} onSelect={selectDesktopRow} />
       </div>
       <div className="space-y-2 sm:hidden">
-        <RequestsMobileList requests={requests} selectedId={selectedId} onSelect={selectRequest} />
+        <RequestsMobileList requests={requests} selectedId={selectedId} onSelect={selectMobileCard} />
       </div>
       </FounderRegion>
 
@@ -117,6 +155,9 @@ export function RequestsWorkspace({
         <RequestDetailsPanel request={selected} />
       </FounderRegion>
 
+      {/* SheetOverlay portals independently of SheetContent className.
+          `lg:hidden` hides only the panel -- open={true} still traps
+          desktop focus and blocks the page. Keep open false at lg. */}
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="bottom" className="max-h-[85vh] overflow-y-auto lg:hidden">
           <SheetHeader className="sr-only">
@@ -277,6 +318,9 @@ function RequestsMobileList({
             <p className="mt-2 truncate text-sm font-medium text-foreground">
               {request.serviceName ?? "Not specified"}
             </p>
+            {request.propertyLabel ? (
+              <p className="truncate text-xs text-muted-foreground">{request.propertyLabel}</p>
+            ) : null}
             {request.identityReview ? (
               <p className="mt-1 text-xs font-medium text-amber-800">Needs identity review</p>
             ) : null}
