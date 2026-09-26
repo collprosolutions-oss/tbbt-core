@@ -460,21 +460,13 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
     isJobBlockerQuestion(question) &&
     !/\b(materials?|suppliers?|profit|capacity|staff|contact|learned|vault|protection|launch|setup)\b/.test(q)
   ) {
-    keys = ["unscheduled-jobs", "unpaid-invoices", "available-capacity"];
+    keys = [];
     stance = "MIXED";
-    const materialsNeeded = context.materialsFacts?.["materials-needed-count"];
-    const commsPending = context.communicationsFacts?.["communications-pending-count"];
     text =
-      `Recorded facts that can stop a job: ${context.facts.unscheduledJobs?.count ?? 0} unscheduled job(s); ` +
-      `${context.facts.unpaidInvoices.count} unpaid SENT invoice(s). ` +
-      (materialsNeeded != null
-        ? `${materialsNeeded} recorded material requirement${materialsNeeded === "1" ? " is" : "s are"} still needed. `
-        : "Materials were not loaded for this question, so no material quantity was invented. ") +
-      (commsPending != null
-        ? `${commsPending} recorded communication(s) are still pending. `
-        : "") +
-      "Why it matters: unscheduled work, unpaid invoices, or missing materials can keep a job from moving. " +
-      "What you could do next is open the job, schedule, invoices, or materials records. " +
+      "What is stopping this job is taken from recorded scheduling and material findings for the selected work. " +
+      "Business-wide unpaid invoices or unscheduled-job counts are not treated as blockers for this job. " +
+      "If no job-specific blocker is recorded, the available records do not establish one. " +
+      "Open the job, schedule, or materials records to inspect the selected work. " +
       "The Coach does not assign, purchase, send messages, or mark anything paid.";
   } else if (/profit|less profitable|margin/.test(q)) {
     keys = ["paid-revenue", "recorded-expenses", "low-margin", "unpaid-invoices"];

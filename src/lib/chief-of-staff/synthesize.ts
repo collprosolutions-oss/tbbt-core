@@ -28,26 +28,23 @@ function oneVoice(text: string) {
     .replace(/\b(the )?(Finance|Workforce|Growth|Knowledge|Materials|Communications|Vault|Protection|Attention|Business Protection) specialist\b/gi, "recorded facts");
 }
 
-function findingsFor(usable: SpecialistResult[], specialistId: SpecialistResult["specialistId"]) {
-  return usable
-    .filter((row) => row.specialistId === specialistId)
-    .flatMap((row) => row.findings)
-    .slice(0, 6);
-}
-
-function ownerFacingFindings(usable: SpecialistResult[]) {
+function boundedRecordedFindings(usable: SpecialistResult[]) {
   const seen = new Set<string>();
-  const summaries: string[] = [];
+  const items: Array<{ key: string; title: string; summary: string }> = [];
   for (const row of usable) {
     for (const finding of row.findings) {
+      const key = finding.key.trim();
+      const title = finding.title.trim();
       const summary = finding.summary.trim();
-      if (!summary || seen.has(summary)) continue;
+      if (!key || !title || !summary) continue;
+      if (seen.has(key) || seen.has(summary)) continue;
+      seen.add(key);
       seen.add(summary);
-      summaries.push(summary);
-      if (summaries.length >= OWNER_FINDING_CAP) return summaries;
+      items.push({ key, title, summary });
+      if (items.length >= OWNER_FINDING_CAP) return items;
     }
   }
-  return summaries;
+  return items;
 }
 
 export function synthesizeCoachAnswer(input: {
@@ -78,14 +75,8 @@ export function synthesizeCoachAnswer(input: {
     extraNotes.push(`Conflicts from recorded truth: ${conflictNotes.join(" ")}`);
   }
 
-  const financialFindings = findingsFor(usable, "FINANCIAL");
-  const growthFindings = findingsFor(usable, "GROWTH");
-  const materialsFindings = findingsFor(usable, "MATERIALS");
-  const communicationsFindings = findingsFor(usable, "COMMUNICATIONS");
-  const knowledgeLaunchFindings = findingsFor(usable, "KNOWLEDGE_LAUNCH");
-  const businessProtectionFindings = findingsFor(usable, "BUSINESS_PROTECTION");
-
-  extraNotes.push(...ownerFacingFindings(usable));
+  const recordedFindings = boundedRecordedFindings(usable);
+  extraNotes.push(...recordedFindings.map((item) => item.summary));
 
   for (const row of usable) {
     if (
@@ -159,11 +150,7 @@ export function synthesizeCoachAnswer(input: {
       ...failed.map((row) => row.limitation ?? row.failure?.message ?? "A recorded view was unavailable."),
       ...skipped.map((row) => row.limitation ?? "A recorded view was not available."),
     ],
-    recordedFindings: [...financialFindings, ...growthFindings, ...materialsFindings, ...communicationsFindings, ...knowledgeLaunchFindings, ...businessProtectionFindings].map((item) => ({
-      key: item.key,
-      title: item.title,
-      summary: item.summary,
-    })),
+    recordedFindings,
   };
 
   return {

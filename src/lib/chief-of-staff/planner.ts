@@ -19,7 +19,7 @@ import {
 } from "@/lib/chief-of-staff/types";
 
 const WORKFORCE_QUESTION =
-  /\b(schedule|calendar|crew|workers?|employee|helper|staff(?:ing)?|workforce|capacity|availability|available (?:workers?|staff|capacity|days?|slots?|helpers?)|assign(?:ment|ed|ees?)?|unassigned|double[- ]?book(?:ed|ing)?|overload(?:ed)?|skills?|qualified|qualification|progression|today's (?:schedule|calendar|crew|staff|jobs?|capacity)|tomorrow's (?:schedule|calendar|crew|staff|jobs?)|(?:scheduled|working|assigned) (?:today|tomorrow)|next week|this week(?:'s)? (?:schedule|calendar|crew|staff|capacity)|fill[- ]?in|bench|who can|who should i send|skill match)\b/i;
+  /\b(schedule|calendar|crew|workers?|employee|helper|staff(?:ing)?|workforce|capacity|availability|available (?:workers?|staff|capacity|days?|slots?|helpers?)|assign(?:ment|ed|ees?)?|unassigned|double[- ]?book(?:ed|ing)?|overload(?:ed)?|skills?|qualified|qualification|progression|today's (?:schedule|calendar|crew|staff|jobs?|capacity)|tomorrow's (?:schedule|calendar|crew|staff|jobs?)|(?:scheduled|working|assigned) (?:today|tomorrow)|(?:what )?jobs? (?:do i have |are (?:on )?)?(?:today|tomorrow)|jobs? (?:today|tomorrow)|next week|this week(?:'s)? (?:schedule|calendar|crew|staff|capacity)|fill[- ]?in|bench|who can|who should i send|skill match)\b/i;
 const FINANCIAL_QUESTION =
   /\b(profit(?:ability)?|invoices?|receivables?|expenses?|margin|cash|revenue|payroll|payments?|unpaid|outstanding|collected|recurring (?:cost|expense)s?|labor (?:cost|burden)|(?:hourly )?wages?|pricing|target margin|estimate[- ]vs[- ]actual|customer concentration|losing money|making money)\b/i;
 const GROWTH_QUESTION =
@@ -40,7 +40,7 @@ const ATTENTION_TODAY_QUESTION =
 const NEXT_WORK_QUESTION =
   /\bwhat should i work on next\b|\bwhat do i (?:do|work on) next\b|\bwhat(?:'s| is) next for me\b/i;
 const JOB_BLOCKER_QUESTION =
-  /\b(?:what(?:'s| is) stopping|stopping this (?:job|work)|holding up (?:this |the )?jobs?|moving forward|what is blocking)\b/i;
+  /\b(?:what(?:'s| is) )?(?:stopping|blocking|holding up) (?:this |the )?(?:job|work)\b|\b(?:this |the )?(?:job|work) (?:from )?moving forward\b/i;
 const WORKFORCE_REC_PREFIX = "workforce-";
 
 function departmentHitCount(question: string) {

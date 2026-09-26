@@ -116,6 +116,17 @@ check(
 );
 check("MEMBER remains blocked from VIEW_REPORTS", !roleHasCapability("MEMBER", CAPABILITIES.VIEW_REPORTS));
 check("Runner stays tenant-scoped", runSrc.includes("access.businessId") && runSrc.includes("requireBusinessCapability"));
+check(
+  "Synthesis recordedFindings comes from all usable specialists, not a hard-coded department list",
+  synthesizeSrc.includes("boundedRecordedFindings") &&
+    synthesizeSrc.includes("OWNER_FINDING_CAP = 8") &&
+    !synthesizeSrc.includes("findingsFor("),
+);
+check(
+  "Job-blocker grounded text does not promote business-wide counts",
+  coachSrc.includes("Business-wide unpaid invoices or unscheduled-job counts are not treated as blockers") &&
+    !coachSrc.includes("Recorded facts that can stop a job"),
+);
 
 console.log("\nPLANNER — real owner questions");
 check("Attention-today classifier matches", isAttentionTodayQuestion(OWNER_QUESTIONS.attentionToday));
@@ -432,6 +443,293 @@ check(
   "Provider payload can still keep bounded recorded findings without naming specialists",
   Array.isArray(manyFindings.payload.recordedFindings) &&
     !/Growth specialist|Finance Agent/i.test(JSON.stringify(manyFindings.payload)),
+);
+
+console.log("\nCORRECTION 1 — connected-AI payload keeps Workforce truth");
+const workforceFinding = {
+  key: "workforce-selected-job-unscheduled",
+  title: "Selected work has no recorded schedule",
+  summary: "The selected job has no recorded schedule date.",
+  recommendationKeys: [],
+  factKeys: ["unscheduled-jobs"],
+};
+const attentionFinding = {
+  key: "attention-selected-work",
+  title: "Recorded attention on selected work",
+  summary: "Recorded attention includes the selected work.",
+  recommendationKeys: [],
+  factKeys: [],
+};
+const skippedFinancialFinding = {
+  key: "review-low-margin-jobs",
+  title: "Review recorded low-margin work",
+  summary: "One recorded job has a negative margin.",
+  recommendationKeys: ["review-low-margin-jobs"],
+  factKeys: ["low-margin"],
+};
+const workforcePayloadSynthesis = synthesizeCoachAnswer({
+  question: OWNER_QUESTIONS.jobBlocker,
+  catalog,
+  specialistResults: [
+    {
+      specialistId: "ATTENTION",
+      status: "OK",
+      findings: [attentionFinding],
+      factKeys: [],
+      recommendationKeys: [],
+    },
+    {
+      specialistId: "WORKFORCE",
+      status: "OK",
+      findings: [workforceFinding],
+      factKeys: ["unscheduled-jobs"],
+      recommendationKeys: [],
+    },
+    {
+      specialistId: "FINANCIAL",
+      status: "SKIPPED",
+      findings: [skippedFinancialFinding],
+      factKeys: ["low-margin"],
+      recommendationKeys: ["review-low-margin-jobs"],
+      skipReason: "UNAVAILABLE",
+      limitation: "Financial records were not selected for this question.",
+    },
+  ],
+  conflicts: { items: [], uniqueRecommendationKeys: [] },
+  coachContext: coachContext(),
+});
+const workforceRecorded = workforcePayloadSynthesis.payload.recordedFindings ?? [];
+const workforceProviderPayload = JSON.stringify(workforcePayloadSynthesis.payload);
+check(
+  "A WORKFORCE finding is placed in payload.recordedFindings",
+  workforceRecorded.some(
+    (row) =>
+      row.key === workforceFinding.key &&
+      row.title === workforceFinding.title &&
+      row.summary === workforceFinding.summary,
+  ),
+);
+check(
+  "ATTENTION may contribute a useful finding to recordedFindings",
+  workforceRecorded.some((row) => row.key === attentionFinding.key && row.summary === attentionFinding.summary),
+);
+check(
+  "Unselected or skipped specialists contribute nothing to recordedFindings",
+  !workforceRecorded.some((row) => row.key === skippedFinancialFinding.key) &&
+    !workforceProviderPayload.includes(skippedFinancialFinding.summary),
+);
+check(
+  "Provider-facing recordedFindings keep key/title/summary only",
+  workforceRecorded.every((row) => Object.keys(row).sort().join(",") === "key,summary,title"),
+);
+check(
+  "Provider-facing payload does not name internal specialists",
+  !/Workforce specialist|Finance Agent|Growth Agent|Materials specialist|Attention Agent|Finance Agent/i.test(
+    workforceProviderPayload,
+  ) && !/"specialistId"/.test(workforceProviderPayload),
+);
+const overflowFindings = Array.from({ length: 10 }, (_, index) => ({
+  key: `overflow-finding-${index + 1}`,
+  title: `Overflow finding ${index + 1}`,
+  summary: `Overflow recorded finding ${index + 1}.`,
+  recommendationKeys: [],
+  factKeys: [],
+}));
+const overflowSynthesis = synthesizeCoachAnswer({
+  question: OWNER_QUESTIONS.profitWeak,
+  catalog,
+  specialistResults: [
+    {
+      specialistId: "ATTENTION",
+      status: "OK",
+      findings: overflowFindings.slice(0, 4),
+      factKeys: [],
+      recommendationKeys: [],
+    },
+    {
+      specialistId: "WORKFORCE",
+      status: "OK",
+      findings: overflowFindings.slice(4, 8),
+      factKeys: [],
+      recommendationKeys: [],
+    },
+    {
+      specialistId: "FINANCIAL",
+      status: "OK",
+      findings: overflowFindings.slice(8),
+      factKeys: [],
+      recommendationKeys: [],
+    },
+  ],
+  conflicts: { items: [], uniqueRecommendationKeys: [] },
+  coachContext: coachContext(),
+});
+const overflowRecorded = overflowSynthesis.payload.recordedFindings ?? [];
+check("recordedFindings is globally capped at 8", overflowRecorded.length === 8 && overflowRecorded.length <= 8);
+check(
+  "recordedFindings cap is not 8 departmental reports",
+  overflowRecorded.length === 8 &&
+    !overflowRecorded.some((row) => /specialist|Agent|departmental report/i.test(`${row.title} ${row.summary}`)),
+);
+const duplicateSynthesis = synthesizeCoachAnswer({
+  question: OWNER_QUESTIONS.jobBlocker,
+  catalog,
+  specialistResults: [
+    {
+      specialistId: "WORKFORCE",
+      status: "OK",
+      findings: [workforceFinding, { ...workforceFinding, title: "Duplicate key should collapse" }],
+      factKeys: [],
+      recommendationKeys: [],
+    },
+    {
+      specialistId: "MATERIALS",
+      status: "OK",
+      findings: [
+        {
+          key: "materials-other-key",
+          title: "Same summary should collapse",
+          summary: workforceFinding.summary,
+          recommendationKeys: [],
+          factKeys: [],
+        },
+      ],
+      factKeys: [],
+      recommendationKeys: [],
+    },
+  ],
+  conflicts: { items: [], uniqueRecommendationKeys: [] },
+  coachContext: coachContext(),
+});
+const deduped = duplicateSynthesis.payload.recordedFindings ?? [];
+check(
+  "recordedFindings dedupes by key and summary",
+  deduped.filter((row) => row.key === workforceFinding.key).length === 1 &&
+    deduped.filter((row) => row.summary === workforceFinding.summary).length === 1,
+);
+
+console.log("\nCORRECTION 2 — job blockers stay on selected-scope records");
+const jobBlockerAnswer = answerCoachFromFacts(
+  OWNER_QUESTIONS.jobBlocker,
+  coachContext({
+    recommendations: recs,
+  }),
+);
+const jobBlockerText = jobBlockerAnswer.output.text;
+check(
+  "Job-blocker does not describe global unpaid SENT invoices as this-job blockers",
+  !/\d+\s+unpaid SENT invoice/i.test(jobBlockerText) &&
+    !/2 unpaid/i.test(jobBlockerText) &&
+    !/Recorded facts that can stop a job/i.test(jobBlockerText),
+);
+check(
+  "Job-blocker does not describe unrelated unscheduled-job counts as this-job blockers",
+  !/\b1 job\(s\) are unscheduled\b/i.test(jobBlockerText) &&
+    !/\d+ unscheduled jobs?\b/i.test(jobBlockerText) &&
+    !/can stop a job:.*unscheduled/i.test(jobBlockerText),
+);
+check(
+  "Job-blocker uses selected-scope scheduling/material findings and admits when none are recorded",
+  /recorded scheduling and material findings/i.test(jobBlockerText) &&
+    /do not establish one/i.test(jobBlockerText) &&
+    /does not assign, purchase/i.test(jobBlockerText),
+);
+
+console.log("\nCORRECTION 3 — job-blocker routing stays job-scoped; jobs-today stays Workforce");
+const jobBlockerExamples = [
+  "What is stopping this job from moving forward?",
+  "What's blocking this job?",
+  "What is holding up this work?",
+  "What's holding up the job?",
+];
+for (const question of jobBlockerExamples) {
+  const plan = planSpecialists({ question, activeRecommendationKeys: [] });
+  check(
+    `"${question}" remains a job-blocker question`,
+    isJobBlockerQuestion(question) &&
+      plan.selectedIds.includes("ATTENTION") &&
+      plan.selectedIds.includes("WORKFORCE") &&
+      plan.selectedIds.includes("MATERIALS") &&
+      plan.fanout <= 4 &&
+      !plan.selectedIds.includes("FINANCIAL") &&
+      !plan.selectedIds.includes("GROWTH"),
+  );
+}
+
+const businessMoving = planSpecialists({
+  question: "What's stopping my business from moving forward?",
+  activeRecommendationKeys: [],
+});
+check(
+  "Generic business moving-forward is not a job-blocker and does not auto-select WORKFORCE + MATERIALS",
+  !isJobBlockerQuestion("What's stopping my business from moving forward?") &&
+    !(businessMoving.selectedIds.includes("WORKFORCE") && businessMoving.selectedIds.includes("MATERIALS")),
+);
+
+const overallGrowth = planSpecialists({
+  question: "What is blocking our overall growth?",
+  activeRecommendationKeys: [],
+});
+check(
+  "Overall growth blocking does not auto-select WORKFORCE + MATERIALS",
+  !isJobBlockerQuestion("What is blocking our overall growth?") &&
+    overallGrowth.selectedIds.includes("GROWTH") &&
+    !overallGrowth.selectedIds.includes("WORKFORCE") &&
+    !overallGrowth.selectedIds.includes("MATERIALS"),
+);
+
+const companyForward = planSpecialists({
+  question: "How do I keep the company moving forward?",
+  activeRecommendationKeys: [],
+});
+check(
+  "Company moving-forward does not auto-select WORKFORCE + MATERIALS",
+  !isJobBlockerQuestion("How do I keep the company moving forward?") &&
+    !companyForward.selectedIds.includes("WORKFORCE") &&
+    !companyForward.selectedIds.includes("MATERIALS"),
+);
+
+const jobsToday = planSpecialists({
+  question: "What jobs do I have today?",
+  activeRecommendationKeys: [],
+});
+check(
+  "What jobs do I have today? selects WORKFORCE",
+  jobsToday.selectedIds.includes("WORKFORCE") &&
+    jobsToday.selectedIds.includes("ATTENTION") &&
+    !jobsToday.selectedIds.includes("MATERIALS") &&
+    jobsToday.fanout <= 4,
+);
+
+const jobsTomorrow = planSpecialists({
+  question: "What jobs do I have tomorrow?",
+  activeRecommendationKeys: [],
+});
+check(
+  "What jobs do I have tomorrow? selects WORKFORCE",
+  jobsTomorrow.selectedIds.includes("WORKFORCE") &&
+    jobsTomorrow.selectedIds.includes("ATTENTION") &&
+    !jobsTomorrow.selectedIds.includes("MATERIALS"),
+);
+
+const attentionStaysBounded = planSpecialists({
+  question: OWNER_QUESTIONS.attentionToday,
+  activeRecommendationKeys: [],
+});
+check(
+  "What needs my attention today? remains ATTENTION-bounded",
+  attentionStaysBounded.selectedIds.join(",") === "ATTENTION" &&
+    !attentionStaysBounded.selectedIds.includes("WORKFORCE") &&
+    !attentionStaysBounded.selectedIds.includes("MATERIALS") &&
+    !attentionStaysBounded.selectedIds.includes("FINANCIAL") &&
+    attentionStaysBounded.fanout === 1,
+);
+check(
+  "Jobs-today routing is explicit and does not restore bare today",
+  plannerSrc.includes("(?:what )?jobs? (?:do i have |are (?:on )?)?(?:today|tomorrow)") &&
+    plannerSrc.includes("jobs? (?:today|tomorrow)") &&
+    !plannerSrc.includes("|\\btoday\\b|") &&
+    !plannerSrc.includes("|today|"),
 );
 
 if (failures > 0) {
