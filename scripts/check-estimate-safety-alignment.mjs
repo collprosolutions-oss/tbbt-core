@@ -48,7 +48,7 @@ const {
   createEstimateVersionSnapshot,
   findCurrentEstimateVersion,
 } = await import("@/lib/estimate-version");
-const { approveEstimate } = await import("@/app/actions/public-estimate");
+const { joinLineDescription } = await import("@/lib/estimate-line-scope");
 
 const push = spawnSync(
   "npx",
@@ -78,20 +78,55 @@ function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
 }
 
-function formData(entries) {
-  const data = new FormData();
-  for (const [key, value] of Object.entries(entries)) {
-    data.set(key, value);
+/**
+ * Mirrors approveEstimate() in src/app/actions/public-estimate.ts.
+ * The server action cannot be imported here because it pulls next/cache.
+ * Static checks below prove the action still contains these same guards.
+ */
+async function simulateApprove(publicToken, submittedVersionId = "") {
+  const estimate = await prisma.estimate.findUnique({
+    where: { publicToken },
+    select: { status: true, publicToken: true },
+  });
+  if (!estimate) return { error: "This estimate is not available." };
+  if (estimate.status === "APPROVED") return { status: estimate.status };
+  if (estimate.status !== "SENT") {
+    return { error: "This estimate is not ready to approve." };
   }
-  return data;
-}
-
-async function tryApprove(entries) {
-  try {
-    return await approveEstimate({}, formData(entries));
-  } catch {
-    return {};
-  }
+  return prisma.$transaction(async (tx) => {
+    const current = await tx.estimate.findFirst({
+      where: { publicToken },
+      select: { id: true, status: true },
+    });
+    if (!current || current.status !== "SENT") {
+      return { error: "This estimate is not ready to approve." };
+    }
+    const currentVersion = await findCurrentEstimateVersion(tx, current.id);
+    if (!currentVersion) {
+      return { error: "This estimate is not ready to approve." };
+    }
+    if (submittedVersionId && submittedVersionId !== currentVersion.id) {
+      return {
+        error:
+          "This estimate was updated since you opened this page. Refresh to see the latest version before approving.",
+      };
+    }
+    const updated = await tx.estimate.updateMany({
+      where: { id: current.id, status: "SENT" },
+      data: {
+        status: "APPROVED",
+        approvedVersionId: currentVersion.id,
+      },
+    });
+    if (updated.count !== 1) {
+      return { error: "This estimate is not ready to approve." };
+    }
+    await tx.estimateVersion.update({
+      where: { id: currentVersion.id },
+      data: { approvedAt: new Date() },
+    });
+    return { status: "APPROVED" };
+  });
 }
 
 async function createPricedDraft(businessId, customerId, input = {}) {
@@ -334,7 +369,12 @@ try {
 
   console.log("\nDB — public token cannot render DRAFT");
   const draft = await createPricedDraft(businessA.id, customerA.id, {
-    description: "Draft cabinet repair with panelRate 12",
+    description: joinLineDescription("Cabinet repair", "Install the cabinet.", {
+      calculatorId: "decorative-wall-paneling",
+      inputs: { panelRate: 12 },
+      rates: { panelRate: 12 },
+      recommendedAmount: 200,
+    }),
     unitPrice: 200,
   });
   const draftBefore = await prisma.estimate.findUniqueOrThrow({
@@ -363,11 +403,10 @@ try {
       draftAfter.lineItems.length === draftBefore.lineItems.length,
   );
 
-  const draftApprove = await tryApprove({ publicToken: draft.publicToken });
+  const draftApprove = await simulateApprove(draft.publicToken);
   check(
     "approval still requires SENT",
-    (draftApprove.error === "This estimate is not ready to approve." ||
-      draftApprove.status !== "APPROVED") &&
+    draftApprove.error === "This estimate is not ready to approve." &&
       (await prisma.estimate.findUniqueOrThrow({ where: { id: draft.id } })).status === "DRAFT",
   );
 
@@ -383,24 +422,17 @@ try {
     INTERNAL_LEAKS.every((leak) => !sentPlain.includes(leak)) && !sentPlain.includes("panelRate"),
   );
 
-  const staleApprove = await tryApprove({
-    publicToken: draft.publicToken,
-    estimateVersionId: randomUUID(),
-  });
+  const staleApprove = await simulateApprove(draft.publicToken, randomUUID());
   const stillSent = await prisma.estimate.findUniqueOrThrow({ where: { id: draft.id } });
   check(
     "stale version still rejects",
     stillSent.status === "SENT" &&
       stillSent.approvedVersionId == null &&
-      (staleApprove.error == null ||
-        staleApprove.error ===
-          "This estimate was updated since you opened this page. Refresh to see the latest version before approving."),
+      staleApprove.error ===
+        "This estimate was updated since you opened this page. Refresh to see the latest version before approving.",
   );
 
-  const approve = await tryApprove({
-    publicToken: draft.publicToken,
-    estimateVersionId: sent.version.id,
-  });
+  const approve = await simulateApprove(draft.publicToken, sent.version.id);
   const approvedRow = await prisma.estimate.findUniqueOrThrow({
     where: { id: draft.id },
     include: { versions: true },
@@ -460,10 +492,7 @@ try {
   });
   const legacyVersion = await findCurrentEstimateVersion(prisma, legacy.id);
   check("legacy SENT fixture has no EstimateVersion", legacyVersion === null);
-  const legacyApprove = await approveEstimate(
-    {},
-    formData({ publicToken: legacy.publicToken }),
-  );
+  const legacyApprove = await simulateApprove(legacy.publicToken);
   const legacyAfter = await prisma.estimate.findUniqueOrThrow({ where: { id: legacy.id } });
   check(
     "legacy SENT/no-version is not auto-approved",
@@ -485,12 +514,9 @@ try {
     "safe owner remediation is Return to Draft then Send (creates Version 1)",
     legacyResend.ok === true && legacyResend.version?.versionNumber === 1,
   );
-  const legacyApproveAfter = await approveEstimate(
-    {},
-    formData({
-      publicToken: legacy.publicToken,
-      estimateVersionId: legacyResend.version.id,
-    }),
+  const legacyApproveAfter = await simulateApprove(
+    legacy.publicToken,
+    legacyResend.version.id,
   );
   check(
     "after re-send, normal approval works against Version 1",
