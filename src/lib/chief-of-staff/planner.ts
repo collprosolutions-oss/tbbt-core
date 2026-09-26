@@ -6,6 +6,7 @@ import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { isSpecialistEnabled } from "@/lib/chief-of-staff/registry";
 import { isGrowthOwnedRecommendationKey } from "@/lib/chief-of-staff/growth-specialist";
 import { isCommunicationsOwnedRecommendationKey } from "@/lib/chief-of-staff/communications-specialist";
+import { isKnowledgeLaunchOwnedRecommendationKey } from "@/lib/chief-of-staff/knowledge-launch-specialist";
 import { isMaterialsOwnedRecommendationKey } from "@/lib/chief-of-staff/materials-specialist";
 import { isFinancialOwnedRecommendationKey } from "@/lib/chief-of-staff/specialists/financial";
 import {
@@ -24,7 +25,7 @@ const FINANCIAL_QUESTION =
 const GROWTH_QUESTION =
   /\b(leads?|lead funnel|lead source|pipeline|recover(?:y|ed)?(?: leads?)?|reactivat(?:e|ion)(?: customers?)?|campaigns?|marketing|attribution|(?:lead )?sources?|referrals?|reviews?|repeat customers?|customer retention|local (?:marketing|growth)|conversion|lost leads?|follow-up opportunities|growth)\b/i;
 const KNOWLEDGE_QUESTION =
-  /\b(knowledge|launch|procedures?|experience candidates?|approval)\b/i;
+  /\b(?:knowledge(?: hub)?|operating procedures?|SOPs?|experience (?:learning )?candidates?|experience learnings?|what (?:have we|did we) learned|have we learned|what does (?:our |the )?business know|knowledge (?:approved|still needs review|needs review|unreviewed)|business launch|\blaunch\b|next launch step|defer(?:red)? during setup|what setup do i|setup (?:still )?(?:need|to finish)|launch setup complete|what did i defer|setup proposals?|build my company)\b/i;
 const MATERIALS_QUESTION =
   /\b(materials?|suppliers?|vendors?|inventory|stock|lumber|parts|pickup|job materials|material variance|purchase orders?|purchas(?:e|ed|ing)|buy|bought|buying|\bPOs?\b|pric(?:e|es|ing))\b/i;
 const COMMUNICATIONS_QUESTION =
@@ -124,6 +125,24 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     skipped.push({ id: "GROWTH", reason: "DISABLED" });
   }
 
+  const knowledgeKeys = input.activeRecommendationKeys.filter((key) =>
+    isKnowledgeLaunchOwnedRecommendationKey(key),
+  );
+  const knowledgeHint =
+    input.entityHints?.recommendationKey != null &&
+    isKnowledgeLaunchOwnedRecommendationKey(input.entityHints.recommendationKey);
+  const wantsKnowledge =
+    KNOWLEDGE_QUESTION.test(question) || Boolean(knowledgeHint);
+
+  if (
+    isSpecialistEnabled("KNOWLEDGE_LAUNCH") &&
+    (wantsKnowledge || (FOCUS_QUESTION.test(question) && knowledgeKeys.length > 0))
+  ) {
+    selected.push("KNOWLEDGE_LAUNCH");
+  } else if (KNOWLEDGE_QUESTION.test(question) && !isSpecialistEnabled("KNOWLEDGE_LAUNCH")) {
+    skipped.push({ id: "KNOWLEDGE_LAUNCH", reason: "DISABLED" });
+  }
+
   const materialsKeys = input.activeRecommendationKeys.filter((key) =>
     isMaterialsOwnedRecommendationKey(key),
   );
@@ -197,6 +216,14 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
       (communicationsKeys.length > 0 || Boolean(communicationsHint) || explicitCommunications)
     ) {
       allowed.add("COMMUNICATIONS");
+    }
+    const explicitKnowledge =
+      KNOWLEDGE_QUESTION.test(question) && !isGenericFocusQuestion(question);
+    if (
+      isSpecialistEnabled("KNOWLEDGE_LAUNCH") &&
+      (knowledgeKeys.length > 0 || Boolean(knowledgeHint) || explicitKnowledge)
+    ) {
+      allowed.add("KNOWLEDGE_LAUNCH");
     }
     for (const id of [...selected]) {
       if (!allowed.has(id)) {

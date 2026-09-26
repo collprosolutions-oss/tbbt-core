@@ -147,6 +147,7 @@ const specialistFiles = [
   readFileSync(new URL("../src/lib/chief-of-staff/growth-specialist.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/materials-specialist.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/chief-of-staff/communications-specialist.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/lib/chief-of-staff/knowledge-launch-specialist.ts", import.meta.url), "utf8"),
 ];
 
 try {
@@ -204,6 +205,10 @@ try {
   check(
     "Kitchen-sink generic focus does not select COMMUNICATIONS",
     !kitchen.selectedIds.includes("COMMUNICATIONS"),
+  );
+  check(
+    "Kitchen-sink generic focus does not select KNOWLEDGE_LAUNCH",
+    !kitchen.selectedIds.includes("KNOWLEDGE_LAUNCH"),
   );
   check(
     "Kitchen-sink focus can select Financial when an owned recommendation is active",
@@ -356,10 +361,33 @@ try {
   });
   check("Focus with an active communications-* recommendation selects COMMUNICATIONS", commsRecPlan.selectedIds.includes("COMMUNICATIONS"));
 
+  const knowledgeLearned = planSpecialists({
+    question: "What have we learned about this kind of work?",
+    activeRecommendationKeys: [],
+  });
+  check("Learned-work question selects KNOWLEDGE_LAUNCH", knowledgeLearned.selectedIds.includes("KNOWLEDGE_LAUNCH") && knowledgeLearned.fanout <= 4);
+  const knowledgeApproved = planSpecialists({
+    question: "Is this knowledge approved?",
+    activeRecommendationKeys: [],
+  });
+  check("Knowledge-approved question selects KNOWLEDGE_LAUNCH", knowledgeApproved.selectedIds.includes("KNOWLEDGE_LAUNCH"));
+  const launchNext = planSpecialists({
+    question: "What is the next launch step?",
+    activeRecommendationKeys: [],
+  });
+  check("Next launch step question selects KNOWLEDGE_LAUNCH", launchNext.selectedIds.includes("KNOWLEDGE_LAUNCH"));
+  const knowledgeRecPlan = planSpecialists({
+    question: "What should I focus on this week?",
+    activeRecommendationKeys: ["finish-business-launch"],
+  });
+  check("Focus with an existing launch recommendation selects KNOWLEDGE_LAUNCH", knowledgeRecPlan.selectedIds.includes("KNOWLEDGE_LAUNCH"));
+  check("Generic business question does not select KNOWLEDGE_LAUNCH", !genericBusiness.selectedIds.includes("KNOWLEDGE_LAUNCH"));
+  check("Profit question does not select KNOWLEDGE_LAUNCH", !profitPlan.selectedIds.includes("KNOWLEDGE_LAUNCH"));
+
   const enabled = enabledSpecialistIds();
   check(
-    "Enabled specialists are ATTENTION, WORKFORCE, FINANCIAL, GROWTH, MATERIALS, and COMMUNICATIONS",
-    enabled.join(",") === "ATTENTION,WORKFORCE,FINANCIAL,GROWTH,MATERIALS,COMMUNICATIONS",
+    "Enabled specialists are ATTENTION, WORKFORCE, FINANCIAL, GROWTH, KNOWLEDGE_LAUNCH, MATERIALS, and COMMUNICATIONS",
+    enabled.join(",") === "ATTENTION,WORKFORCE,FINANCIAL,GROWTH,KNOWLEDGE_LAUNCH,MATERIALS,COMMUNICATIONS",
   );
   check("Registry keeps future specialist identities", SPECIALIST_IDS.includes("FINANCIAL") && SPECIALIST_IDS.includes("BUSINESS_PROTECTION"));
   check(
@@ -417,6 +445,25 @@ try {
     "COMMUNICATIONS registry role floor is MANAGE_COMMUNICATIONS",
     getSpecialistEntry("COMMUNICATIONS").requiredRoleCapability === CAPABILITIES.MANAGE_COMMUNICATIONS &&
       getSpecialistEntry("COMMUNICATIONS").requiredProductCapability === null,
+  );
+  const knowledgeLaunchSpecialistSrc = readFileSync(
+    new URL("../src/lib/chief-of-staff/knowledge-launch-specialist.ts", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Deep KNOWLEDGE_LAUNCH upgrades the existing specialist instead of adding another",
+    registrySrc.includes('id: "KNOWLEDGE_LAUNCH"') &&
+      !registrySrc.includes('id: "KNOWLEDGE_LAUNCH_DEEP"') &&
+      (registrySrc.match(/id: "KNOWLEDGE_LAUNCH"/g) || []).length === 1 &&
+      !knowledgeLaunchSpecialistSrc.includes("createKnowledgeEntry") &&
+      !knowledgeLaunchSpecialistSrc.includes("setKnowledgeApproval") &&
+      !knowledgeLaunchSpecialistSrc.includes("completeLaunchStep"),
+  );
+  check(
+    "KNOWLEDGE_LAUNCH registry entry stays VIEW_REPORTS with no product floor",
+    getSpecialistEntry("KNOWLEDGE_LAUNCH").requiredRoleCapability === CAPABILITIES.VIEW_REPORTS &&
+      getSpecialistEntry("KNOWLEDGE_LAUNCH").requiredProductCapability === null &&
+      getSpecialistEntry("KNOWLEDGE_LAUNCH").enabled === true,
   );
   check(
     "Canonical Workforce recommendation keys stay the original six",

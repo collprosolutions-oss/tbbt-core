@@ -3,7 +3,8 @@
  * BSOS catalog facts. FINANCIAL and GROWTH reuse turn snapshots. Deep
  * WORKFORCE explanation lives in workforce-specialist.ts and reuses the
  * catalog snapshot. MATERIALS and COMMUNICATIONS load bounded
- * projections only when selected. Disabled specialists never deep-load.
+ * projections only when selected. KNOWLEDGE_LAUNCH loads a bounded
+ * projection only when selected. Disabled specialists never deep-load.
  */
 import type { BsosFacts, BsosRecommendation } from "@/lib/bsos";
 import { getSpecialistEntry, isSpecialistEnabled } from "@/lib/chief-of-staff/registry";
@@ -38,7 +39,7 @@ export function loadGrowthDeep(): never {
 
 export function loadKnowledgeLaunchDeep(): never {
   recordDeepLoader("KNOWLEDGE_LAUNCH");
-  throw new Error("Knowledge/Launch deep specialist is disabled in PR1.");
+  throw new Error("Knowledge/Launch specialist loads a bounded projection when selected and must not use the workspace deep-loader.");
 }
 
 export function loadMaterialsDeep(): never {
@@ -57,7 +58,6 @@ export function loadBusinessProtectionDeep(): never {
 }
 
 const DISABLED_DEEP_LOADERS: Partial<Record<SpecialistId, () => never>> = {
-  KNOWLEDGE_LAUNCH: loadKnowledgeLaunchDeep,
   BUSINESS_PROTECTION: loadBusinessProtectionDeep,
 };
 

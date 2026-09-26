@@ -55,6 +55,9 @@ export type CosEntityHints = {
   customerId?: string;
   requestId?: string;
   messageId?: string;
+  knowledgeEntryId?: string;
+  experienceCandidateId?: string;
+  procedureId?: string;
   recommendationKey?: string;
   customerDisplayName?: string;
   scheduledDate?: string;
@@ -124,7 +127,25 @@ export type ConflictKind =
   | "FAILED_DELIVERY_VS_DELIVERED"
   | "CHANNEL_UNAVAILABLE_VS_SEND"
   | "APPOINTMENT_DIFFERENT_TIME_VS_CONFIRMED"
-  | "EMAIL_AVAILABLE_VS_SMS_LIMIT";
+  | "EMAIL_AVAILABLE_VS_SMS_LIMIT"
+  | "UNREVIEWED_VS_APPROVED"
+  | "CANDIDATE_VS_APPROVED_KNOWLEDGE"
+  | "CONFLICT_STILL_UNRESOLVED"
+  | "ESTIMATE_VS_KNOWN_FACT"
+  | "UNKNOWN_IS_NOT_FALSE"
+  | "SUPPORTED_VS_VERIFIED"
+  | "EXTERNAL_REFERENCE_VS_VERIFIED"
+  | "SYSTEM_DERIVED_RESERVED"
+  | "PENDING_VS_COMPLETED_LAUNCH"
+  | "DEFERRED_VS_COMPLETED_LAUNCH"
+  | "LAUNCH_COMPLETE_VS_WEBSITE"
+  | "LAUNCH_COMPLETE_VS_PROVIDER"
+  | "PROPOSAL_VS_APPLIED_SETUP"
+  | "PENDING_VS_APPROVED_SETUP_ITEM"
+  | "APPROVED_VS_APPLIED_SETUP_ITEM"
+  | "REJECTED_VS_APPLIED_SETUP_ITEM"
+  | "BLOCKED_VS_APPLIED_SETUP_ITEM"
+  | "SETUP_PROPOSAL_VS_COMPLETED_LAUNCH";
 
 export type ConflictItem = {
   kind: ConflictKind;
