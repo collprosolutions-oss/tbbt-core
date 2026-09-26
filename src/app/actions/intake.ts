@@ -2,14 +2,11 @@
 
 import { createPublicServiceRequest } from "@/lib/public-intake";
 import { isBusinessStorageConfigured } from "@/lib/business-storage";
-import { putPublicRequestPhotoFromBytes } from "@/lib/business-storage/request-photos";
-import { privateAssetPath } from "@/lib/business-storage/keys";
+import { attachRemainingPublicRequestFallbackPhotos } from "@/lib/business-storage/request-photos";
 import { prisma } from "@/lib/prisma";
 import { readFormStrings } from "@/lib/public-request-submit";
 import { notifyBusinessNewPublicRequest } from "@/lib/request-notify";
 import { parseWorkAreaFormAnswers } from "@/lib/work-area-intake";
-import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
-import { resolveSupportedImageMimeType } from "@/lib/storage";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 
 export type IntakeResult = {
@@ -181,60 +178,15 @@ async function submitServiceRequestInner(
     }
   }
 
-  const files = readPhotoFiles(formData).slice(0, MAX_INTAKE_PHOTOS);
+  const files = readPhotoFiles(formData);
   if (files.length === 0 || !isBusinessStorageConfigured()) {
     return { ok: true };
   }
 
-  const business = await prisma.business.findUnique({
-    where: { slug: safeSlug },
-    select: { id: true },
+  await attachRemainingPublicRequestFallbackPhotos({ db: prisma }, safeSlug, {
+    requestId: created.requestId,
+    files,
   });
-  if (!business) {
-    return { ok: true };
-  }
-
-  const request = await prisma.serviceRequest.findFirst({
-    where: { id: created.requestId, businessId: business.id },
-    select: { id: true },
-  });
-  if (!request) {
-    return { ok: true };
-  }
-
-  const attached: Array<{ url: string; storedAssetId: string }> = [];
-  for (const file of files) {
-    const mimeType = resolveSupportedImageMimeType(file);
-    if (!mimeType) continue;
-    try {
-      const asset = await putPublicRequestPhotoFromBytes(
-        { db: prisma },
-        safeSlug,
-        {
-          originalFilename: file.name,
-          mimeType,
-          body: new Uint8Array(await file.arrayBuffer()),
-        },
-      );
-      attached.push({
-        url: privateAssetPath(asset.id),
-        storedAssetId: asset.id,
-      });
-    } catch {
-      // Request already exists. A failed photo must not roll it back.
-    }
-  }
-
-  if (attached.length > 0) {
-    await prisma.serviceRequestPhoto.createMany({
-      data: attached.map((photo) => ({
-        businessId: business.id,
-        serviceRequestId: request.id,
-        url: photo.url,
-        storedAssetId: photo.storedAssetId,
-      })),
-    });
-  }
 
   return { ok: true };
 }

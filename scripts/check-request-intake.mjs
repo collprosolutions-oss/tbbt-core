@@ -21,9 +21,20 @@ const { decideCustomerMatch } = await import("@/lib/customer-identity");
 const { MemoryStorageProvider, servePublicStoredAsset } = await import(
   "@/lib/business-storage/index"
 );
-const { putPublicRequestPhotoFromBytes } = await import(
-  "@/lib/business-storage/request-photos"
+const {
+  abortPublicRequestPhoto,
+  attachRemainingPublicRequestFallbackPhotos,
+  authorizePublicRequestPhoto,
+  finalizePublicRequestPhoto,
+  putPublicRequestPhotoFromBytes,
+  remainingIntakePhotoSlots,
+} = await import("@/lib/business-storage/request-photos");
+const { authorizeManagedUpload, finalizeManagedUpload } = await import(
+  "@/lib/business-storage/service"
 );
+const { StorageError, StorageQuotaError } = await import("@/lib/business-storage/types");
+const { MAX_INTAKE_PHOTOS } = await import("@/lib/service-request-work");
+const { VAULT_DOCUMENT_PURPOSE } = await import("@/lib/business-protection");
 const { servePrivateStoredAsset } = await import(
   "@/lib/business-storage/private-serve"
 );
@@ -172,7 +183,62 @@ check(
     requestFlowSrc.includes('formData.append("photos", photo.file)') &&
     requestFlowSrc.includes("abortPublicRequestPhotoUpload") &&
     intakeActionSrc.includes('.getAll("photos")') &&
-    intakeActionSrc.includes("putPublicRequestPhotoFromBytes"),
+    intakeActionSrc.includes("attachRemainingPublicRequestFallbackPhotos"),
+);
+const requestPhotosSrc = readRepo("src/lib/business-storage/request-photos.ts");
+const finalizeFnSrc = requestPhotosSrc.slice(
+  requestPhotosSrc.indexOf("export async function finalizePublicRequestPhoto"),
+);
+const candidateLoadIdx = finalizeFnSrc.indexOf("storedAsset.findFirst");
+const genericFinalizeIdx = finalizeFnSrc.indexOf("finalizeManagedUpload");
+const attachFnSrc = requestPhotosSrc.slice(
+  requestPhotosSrc.indexOf("export async function attachRemainingPublicRequestFallbackPhotos"),
+);
+check(
+  "Fallback photos count recorded ServiceRequestPhoto rows before attaching more",
+  requestPhotosSrc.includes("serviceRequestPhoto.count") &&
+    requestPhotosSrc.includes("remainingIntakePhotoSlots") &&
+    requestPhotosSrc.includes("MAX_INTAKE_PHOTOS") &&
+    intakeActionSrc.includes("attachRemainingPublicRequestFallbackPhotos") &&
+    !intakeActionSrc.includes(".slice(0, MAX_INTAKE_PHOTOS)"),
+);
+check(
+  "Fallback attach serializes on the owned ServiceRequest row, not a table lock",
+  attachFnSrc.includes("$transaction") &&
+    attachFnSrc.includes("FROM \"ServiceRequest\"") &&
+    attachFnSrc.includes("FOR UPDATE") &&
+    attachFnSrc.indexOf("FOR UPDATE") < attachFnSrc.indexOf("serviceRequestPhoto.count") &&
+    attachFnSrc.indexOf("serviceRequestPhoto.count") <
+      attachFnSrc.indexOf("putPublicRequestPhotoFromBytes(deps, slug") &&
+    !attachFnSrc.includes("LOCK TABLE") &&
+    !/pg_advisory|advisory_lock/i.test(attachFnSrc),
+);
+check(
+  "Combined remaining slots are MAX_INTAKE_PHOTOS minus recorded attachments",
+  remainingIntakePhotoSlots(0) === MAX_INTAKE_PHOTOS &&
+    remainingIntakePhotoSlots(5) === 3 &&
+    remainingIntakePhotoSlots(8) === 0 &&
+    remainingIntakePhotoSlots(16) === 0 &&
+    MAX_INTAKE_PHOTOS === 8,
+);
+check(
+  "Public request finalize loads the candidate before generic finalizeManagedUpload",
+  candidateLoadIdx >= 0 &&
+    genericFinalizeIdx > candidateLoadIdx &&
+    finalizeFnSrc.includes("isPrivateUnpublishedCustomerPhoto") &&
+    finalizeFnSrc.includes("status === \"READY\"") &&
+    requestPhotosSrc.includes('category === "CUSTOMER_PHOTO"') &&
+    requestPhotosSrc.includes('visibility === "PRIVATE"') &&
+    requestPhotosSrc.indexOf("function isPrivateUnpublishedCustomerPhoto") <
+      requestPhotosSrc.indexOf("export async function finalizePublicRequestPhoto"),
+);
+check(
+  "Public request photo finalize is slug-authorized and ignores browser businessId",
+  readRepo("src/app/actions/public-request-photos.ts").includes(
+    "finalizePublicRequestPhoto({ db: prisma }, input.slug, input.assetId)",
+  ) &&
+    !readRepo("src/app/actions/public-request-photos.ts").includes("businessId") &&
+    requestPhotosSrc.includes("resolvePublicStorageBusiness(deps.db, slug)"),
 );
 check(
   "Public submit notifies the tenant company email after the request persists",
@@ -484,6 +550,792 @@ try {
     otherDescription: "",
   });
   check("Another tenant can still submit without CollPro measurement config", otherRequest.ok === true);
+
+  console.log("\nDB — Combined managed + fallback photo cap");
+  async function makeReadyPhotos(count, slug = "collpro-reno") {
+    const photos = [];
+    for (let i = 0; i < count; i += 1) {
+      photos.push(
+        await putPublicRequestPhotoFromBytes(storageDeps, slug, {
+          originalFilename: `${slug}-${count}-${i}.png`,
+          mimeType: "image/png",
+          body: pngBytes,
+        }),
+      );
+    }
+    return photos;
+  }
+  function makePngFiles(count, prefix) {
+    return Array.from({ length: count }, (_, i) => new File([pngBytes], `${prefix}-${i}.png`, { type: "image/png" }));
+  }
+  async function countRequestPhotos(requestId) {
+    return prisma.serviceRequestPhoto.count({
+      where: { serviceRequestId: requestId, businessId: business.id },
+    });
+  }
+  async function submitWithFallback({ name, email, photoAssetIds, files, submissionId, notes }) {
+    const created = await createPublicServiceRequest(prisma, {
+      slug: "collpro-reno",
+      name,
+      email,
+      phone: "555-0410",
+      address: "",
+      streetAddress: "12 Oak St",
+      city: "Fort Myers",
+      region: "FL",
+      postalCode: "33901",
+      notes: notes ?? "Photo cap",
+      catalogItemIds: [fan.id],
+      includeOther: false,
+      otherDescription: "",
+      photoAssetIds,
+      submissionId,
+    });
+    if (!created.ok) return { created, count: -1, requestId: null };
+    await attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: created.requestId,
+      files,
+    });
+    return {
+      created,
+      requestId: created.requestId,
+      count: await countRequestPhotos(created.requestId),
+    };
+  }
+
+  const eightManaged = await makeReadyPhotos(8);
+  const eightPlusEight = await submitWithFallback({
+    name: "Eight Plus Eight",
+    email: "eight-plus-eight@example.com",
+    photoAssetIds: eightManaged.map((row) => row.id),
+    files: makePngFiles(8, "extra-eight"),
+  });
+  check(
+    "8 valid managed photoAssetIds + 8 fallback files attach exactly 8 ServiceRequestPhoto rows",
+    eightPlusEight.created.ok === true && eightPlusEight.count === 8,
+  );
+  check(
+    "Managed attachments are kept when leftover fallback files are ignored",
+    eightPlusEight.requestId
+      ? (
+          await prisma.serviceRequestPhoto.findMany({
+            where: { serviceRequestId: eightPlusEight.requestId },
+            select: { storedAssetId: true },
+          })
+        ).every((row) => eightManaged.some((asset) => asset.id === row.storedAssetId))
+      : false,
+  );
+
+  const fiveManaged = await makeReadyPhotos(5);
+  const fivePlusEight = await submitWithFallback({
+    name: "Five Plus Eight",
+    email: "five-plus-eight@example.com",
+    photoAssetIds: fiveManaged.map((row) => row.id),
+    files: makePngFiles(8, "extra-five"),
+  });
+  const fivePlusEightIds = fivePlusEight.requestId
+    ? (
+        await prisma.serviceRequestPhoto.findMany({
+          where: { serviceRequestId: fivePlusEight.requestId },
+          select: { storedAssetId: true },
+        })
+      ).map((row) => row.storedAssetId)
+    : [];
+  check(
+    "5 managed + 8 fallback files attach exactly 8 total photos",
+    fivePlusEight.created.ok === true && fivePlusEight.count === 8,
+  );
+  check(
+    "5 managed stay attached and only 3 fallback files consume remaining slots",
+    fiveManaged.every((asset) => fivePlusEightIds.includes(asset.id)) &&
+      fivePlusEightIds.filter((id) => !fiveManaged.some((asset) => asset.id === id)).length === 3,
+  );
+
+  const zeroPlusEight = await submitWithFallback({
+    name: "Zero Plus Eight",
+    email: "zero-plus-eight@example.com",
+    photoAssetIds: [],
+    files: makePngFiles(8, "fallback-only"),
+  });
+  check(
+    "0 managed + 8 fallback files attach exactly 8 total photos",
+    zeroPlusEight.created.ok === true && zeroPlusEight.count === 8,
+  );
+
+  const retrySubmissionId = "photocap01";
+  const retryFirst = await submitWithFallback({
+    name: "Retry Cap",
+    email: "retry-cap@example.com",
+    photoAssetIds: (await makeReadyPhotos(8)).map((row) => row.id),
+    files: [],
+    submissionId: retrySubmissionId,
+  });
+  const retrySecond = await submitWithFallback({
+    name: "Retry Cap",
+    email: "retry-cap@example.com",
+    photoAssetIds: [],
+    files: makePngFiles(8, "retry-extra"),
+    submissionId: retrySubmissionId,
+  });
+  check(
+    "Duplicate submissionId retry reuses the request and never exceeds 8 photos",
+    retryFirst.created.ok === true &&
+      retrySecond.created.ok === true &&
+      retrySecond.requestId === retryFirst.requestId &&
+      retryFirst.count === 8 &&
+      retrySecond.count === 8,
+  );
+
+  const ownedForInvalid = await makeReadyPhotos(2);
+  const invalidPlusFallback = await submitWithFallback({
+    name: "Invalid Assets",
+    email: "invalid-assets@example.com",
+    photoAssetIds: [ownedForInvalid[0].id, ownedForInvalid[1].id, foreign.id, "not-a-real-asset-id"],
+    files: makePngFiles(8, "after-invalid"),
+  });
+  const invalidIds = invalidPlusFallback.requestId
+    ? (
+        await prisma.serviceRequestPhoto.findMany({
+          where: { serviceRequestId: invalidPlusFallback.requestId },
+          select: { storedAssetId: true },
+        })
+      ).map((row) => row.storedAssetId)
+    : [];
+  check(
+    "Foreign/invalid photoAssetIds do not consume a slot unless they actually attached",
+    invalidPlusFallback.created.ok === true &&
+      invalidPlusFallback.count === 8 &&
+      invalidIds.includes(ownedForInvalid[0].id) &&
+      invalidIds.includes(ownedForInvalid[1].id) &&
+      !invalidIds.includes(foreign.id) &&
+      !invalidIds.includes("not-a-real-asset-id") &&
+      invalidIds.filter((id) => ![ownedForInvalid[0].id, ownedForInvalid[1].id].includes(id)).length === 6,
+  );
+
+  console.log("\nDB — Concurrent fallback handlers stay at MAX_INTAKE_PHOTOS");
+  function createLatch() {
+    let resolve;
+    const promise = new Promise((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+  async function waitForPeer(promise, ms, label) {
+    let timer;
+    try {
+      await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(label)), ms);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function countAssetsByPrefix(prefix) {
+    return prisma.storedAsset.count({
+      where: {
+        businessId: business.id,
+        originalFilename: { startsWith: prefix },
+      },
+    });
+  }
+
+  const concurrentFive = await submitWithFallback({
+    name: "Concurrent Five",
+    email: "concurrent-five@example.com",
+    photoAssetIds: (await makeReadyPhotos(5)).map((row) => row.id),
+    files: [],
+  });
+  const fivePrefixA = `conc-five-a-${concurrentFive.requestId}-`;
+  const fivePrefixB = `conc-five-b-${concurrentFive.requestId}-`;
+  const [fiveA, fiveB] = await Promise.all([
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: concurrentFive.requestId,
+      files: makePngFiles(8, fivePrefixA),
+    }),
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: concurrentFive.requestId,
+      files: makePngFiles(8, fivePrefixB),
+    }),
+  ]);
+  const fiveConcurrentCount = await countRequestPhotos(concurrentFive.requestId);
+  const fiveUploadedA = await countAssetsByPrefix(fivePrefixA);
+  const fiveUploadedB = await countAssetsByPrefix(fivePrefixB);
+  check(
+    "Concurrent 5-recorded + 8/8 fallback handlers finish with exactly 8 rows",
+    concurrentFive.created.ok === true &&
+      concurrentFive.count === 5 &&
+      fiveConcurrentCount === 8 &&
+      fiveConcurrentCount <= MAX_INTAKE_PHOTOS,
+  );
+  check(
+    "Concurrent 5-recorded handlers attach only 3 new fallback photos total",
+    fiveA.attached + fiveB.attached === 3 &&
+      fiveA.uploaded + fiveB.uploaded === 3 &&
+      ((fiveA.uploaded === 3 && fiveB.uploaded === 0) ||
+        (fiveB.uploaded === 3 && fiveA.uploaded === 0)),
+  );
+  check(
+    "Loser of the 5-recorded race uploads zero files after recounting 8",
+    fiveUploadedA + fiveUploadedB === 3 &&
+      ((fiveUploadedA === 3 && fiveUploadedB === 0) ||
+        (fiveUploadedB === 3 && fiveUploadedA === 0)),
+  );
+
+  const concurrentZero = await submitWithFallback({
+    name: "Concurrent Zero",
+    email: "concurrent-zero@example.com",
+    photoAssetIds: [],
+    files: [],
+  });
+  const zeroPrefixA = `conc-zero-a-${concurrentZero.requestId}-`;
+  const zeroPrefixB = `conc-zero-b-${concurrentZero.requestId}-`;
+  const [zeroA, zeroB] = await Promise.all([
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: concurrentZero.requestId,
+      files: makePngFiles(8, zeroPrefixA),
+    }),
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: concurrentZero.requestId,
+      files: makePngFiles(8, zeroPrefixB),
+    }),
+  ]);
+  const zeroConcurrentCount = await countRequestPhotos(concurrentZero.requestId);
+  const zeroUploadedA = await countAssetsByPrefix(zeroPrefixA);
+  const zeroUploadedB = await countAssetsByPrefix(zeroPrefixB);
+  check(
+    "Concurrent 0-recorded + 8/8 fallback handlers finish with exactly 8 rows, not 16",
+    concurrentZero.created.ok === true &&
+      concurrentZero.count === 0 &&
+      zeroConcurrentCount === 8 &&
+      zeroA.attached + zeroB.attached === 8 &&
+      zeroA.uploaded + zeroB.uploaded === 8 &&
+      ((zeroA.uploaded === 8 && zeroB.uploaded === 0) ||
+        (zeroB.uploaded === 8 && zeroA.uploaded === 0)) &&
+      zeroUploadedA + zeroUploadedB === 8 &&
+      ((zeroUploadedA === 8 && zeroUploadedB === 0) ||
+        (zeroUploadedB === 8 && zeroUploadedA === 0)),
+  );
+
+  const concurrentFull = await submitWithFallback({
+    name: "Concurrent Full",
+    email: "concurrent-full@example.com",
+    photoAssetIds: (await makeReadyPhotos(8)).map((row) => row.id),
+    files: [],
+  });
+  const fullPrefixA = `conc-full-a-${concurrentFull.requestId}-`;
+  const fullPrefixB = `conc-full-b-${concurrentFull.requestId}-`;
+  const [fullA, fullB] = await Promise.all([
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: concurrentFull.requestId,
+      files: makePngFiles(8, fullPrefixA),
+    }),
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: concurrentFull.requestId,
+      files: makePngFiles(8, fullPrefixB),
+    }),
+  ]);
+  check(
+    "Concurrent fallback on an already-full request uploads zero files and stays at 8",
+    concurrentFull.created.ok === true &&
+      concurrentFull.count === 8 &&
+      (await countRequestPhotos(concurrentFull.requestId)) === 8 &&
+      fullA.attached === 0 &&
+      fullB.attached === 0 &&
+      fullA.uploaded === 0 &&
+      fullB.uploaded === 0 &&
+      (await countAssetsByPrefix(fullPrefixA)) === 0 &&
+      (await countAssetsByPrefix(fullPrefixB)) === 0,
+  );
+
+  const independentA = await submitWithFallback({
+    name: "Independent A",
+    email: "independent-a@example.com",
+    photoAssetIds: [],
+    files: [],
+  });
+  const independentB = await submitWithFallback({
+    name: "Independent B",
+    email: "independent-b@example.com",
+    photoAssetIds: [],
+    files: [],
+  });
+  const aReady = createLatch();
+  const bReady = createLatch();
+  let aHeld = false;
+  let bHeld = false;
+  let differentRequestsOverlapped = false;
+  function noteOverlap() {
+    if (aHeld && bHeld) differentRequestsOverlapped = true;
+  }
+  const [indepA, indepB] = await Promise.all([
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: independentA.requestId,
+      files: makePngFiles(8, `indep-a-${independentA.requestId}-`),
+      onOwnedRequestLocked: async () => {
+        aHeld = true;
+        noteOverlap();
+        aReady.resolve();
+        try {
+          await waitForPeer(bReady.promise, 5000, "peer request B lock");
+          noteOverlap();
+        } finally {
+          aHeld = false;
+        }
+      },
+    }),
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: independentB.requestId,
+      files: makePngFiles(8, `indep-b-${independentB.requestId}-`),
+      onOwnedRequestLocked: async () => {
+        bHeld = true;
+        noteOverlap();
+        bReady.resolve();
+        try {
+          await waitForPeer(aReady.promise, 5000, "peer request A lock");
+          noteOverlap();
+        } finally {
+          bHeld = false;
+        }
+      },
+    }),
+  ]);
+  check(
+    "Different requests in the same business are not serialized by a global/table lock",
+    independentA.created.ok === true &&
+      independentB.created.ok === true &&
+      independentA.requestId !== independentB.requestId &&
+      differentRequestsOverlapped === true &&
+      indepA.attached === 8 &&
+      indepB.attached === 8 &&
+      (await countRequestPhotos(independentA.requestId)) === 8 &&
+      (await countRequestPhotos(independentB.requestId)) === 8,
+  );
+
+  console.log("\nDB — Public request photo finalize type gate");
+  async function authorizeAndStore(input) {
+    const authorized = await authorizeManagedUpload(storageDeps, input.businessId ?? business.id, {
+      category: input.category,
+      purpose: input.purpose,
+      originalFilename: input.name ?? `${input.category}.png`,
+      mimeType: "image/png",
+      fileSizeBytes: pngBytes.length,
+      visibility: input.visibility,
+    });
+    await provider.putObject({
+      bucket: authorized.account.bucketName,
+      key: authorized.asset.storageKey,
+      body: pngBytes,
+      contentType: "image/png",
+    });
+    return authorized.asset;
+  }
+  async function expectFinalizeReject(label, slug, assetId) {
+    try {
+      await finalizePublicRequestPhoto(storageDeps, slug, assetId);
+      check(label, false);
+    } catch (error) {
+      check(label, error instanceof StorageError);
+    }
+  }
+  async function reloadAsset(id) {
+    return prisma.storedAsset.findUnique({ where: { id } });
+  }
+
+  const pendingCustomer = await authorizeAndStore({
+    category: "CUSTOMER_PHOTO",
+    visibility: "PRIVATE",
+    purpose: "public-request-photo",
+    name: "pending-ok.png",
+  });
+  const finalizedPending = await finalizePublicRequestPhoto(
+    storageDeps,
+    "collpro-reno",
+    pendingCustomer.id,
+  );
+  check(
+    "PENDING PRIVATE CUSTOMER_PHOTO may finalize after the type gate",
+    finalizedPending.status === "READY" &&
+      finalizedPending.category === "CUSTOMER_PHOTO" &&
+      finalizedPending.visibility === "PRIVATE" &&
+      finalizedPending.publicPath == null,
+  );
+  const readyAgain = await finalizePublicRequestPhoto(storageDeps, "collpro-reno", finalizedPending.id);
+  check(
+    "READY PRIVATE CUSTOMER_PHOTO finalize is idempotent and does not republish",
+    readyAgain.id === finalizedPending.id &&
+      readyAgain.status === "READY" &&
+      readyAgain.category === "CUSTOMER_PHOTO" &&
+      readyAgain.visibility === "PRIVATE" &&
+      readyAgain.publicPath == null,
+  );
+
+  const websitePending = await authorizeAndStore({
+    category: "WEBSITE_IMAGE",
+    visibility: "PUBLIC",
+    purpose: "website:home:hero",
+    name: "website.png",
+  });
+  await expectFinalizeReject(
+    "Website photos are rejected before generic finalize",
+    "collpro-reno",
+    websitePending.id,
+  );
+  check(
+    "Rejected website photo stays PENDING and is not moved to READY",
+    (await reloadAsset(websitePending.id))?.status === "PENDING",
+  );
+
+  const jobPending = await authorizeAndStore({
+    category: "JOB_PHOTO",
+    visibility: "PRIVATE",
+    purpose: "field-job-photo",
+    name: "job.png",
+  });
+  await expectFinalizeReject(
+    "Job photos are rejected before generic finalize",
+    "collpro-reno",
+    jobPending.id,
+  );
+  check(
+    "Rejected job photo stays PENDING",
+    (await reloadAsset(jobPending.id))?.status === "PENDING",
+  );
+
+  const vaultPending = await authorizeAndStore({
+    category: "DOCUMENT",
+    visibility: "PRIVATE",
+    purpose: VAULT_DOCUMENT_PURPOSE,
+    name: "agreement.pdf",
+  });
+  await expectFinalizeReject(
+    "Vault/agreement documents are rejected before generic finalize",
+    "collpro-reno",
+    vaultPending.id,
+  );
+  check(
+    "Rejected vault document stays PENDING",
+    (await reloadAsset(vaultPending.id))?.status === "PENDING",
+  );
+
+  const publicCustomer = await authorizeAndStore({
+    category: "CUSTOMER_PHOTO",
+    visibility: "PUBLIC",
+    purpose: "public-request-photo",
+    name: "public-customer.png",
+  });
+  await expectFinalizeReject(
+    "PUBLIC customer photos are rejected before generic finalize",
+    "collpro-reno",
+    publicCustomer.id,
+  );
+  const publicAfter = await reloadAsset(publicCustomer.id);
+  check(
+    "Rejected PUBLIC customer photo stays PENDING without a publicPath",
+    publicAfter?.status === "PENDING" && publicAfter.publicPath == null,
+  );
+
+  const failedCustomer = await authorizeAndStore({
+    category: "CUSTOMER_PHOTO",
+    visibility: "PRIVATE",
+    purpose: "public-request-photo",
+    name: "failed.png",
+  });
+  await prisma.storedAsset.update({
+    where: { id: failedCustomer.id },
+    data: { status: "FAILED" },
+  });
+  await expectFinalizeReject(
+    "FAILED customer photos are rejected before generic finalize",
+    "collpro-reno",
+    failedCustomer.id,
+  );
+  check(
+    "Rejected FAILED photo stays FAILED",
+    (await reloadAsset(failedCustomer.id))?.status === "FAILED",
+  );
+
+  const deletedCustomer = await authorizeAndStore({
+    category: "CUSTOMER_PHOTO",
+    visibility: "PRIVATE",
+    purpose: "public-request-photo",
+    name: "deleted.png",
+  });
+  await prisma.storedAsset.update({
+    where: { id: deletedCustomer.id },
+    data: { status: "DELETED", deletedAt: new Date() },
+  });
+  await expectFinalizeReject(
+    "DELETED customer photos are rejected before generic finalize",
+    "collpro-reno",
+    deletedCustomer.id,
+  );
+  check(
+    "Rejected DELETED photo stays DELETED",
+    (await reloadAsset(deletedCustomer.id))?.status === "DELETED",
+  );
+
+  const expiredCustomer = await authorizeAndStore({
+    category: "CUSTOMER_PHOTO",
+    visibility: "PRIVATE",
+    purpose: "public-request-photo",
+    name: "expired.png",
+  });
+  await prisma.storedAsset.update({
+    where: { id: expiredCustomer.id },
+    data: { expiresAt: new Date(Date.now() - 60_000) },
+  });
+  await expectFinalizeReject(
+    "EXPIRED pending customer photos are rejected before generic finalize",
+    "collpro-reno",
+    expiredCustomer.id,
+  );
+  check(
+    "Rejected expired pending photo is not finalized to READY",
+    (await reloadAsset(expiredCustomer.id))?.status === "PENDING",
+  );
+
+  const readyWebsite = await authorizeAndStore({
+    category: "WEBSITE_IMAGE",
+    visibility: "PUBLIC",
+    purpose: "website:home:gallery",
+    name: "ready-website.png",
+  });
+  await finalizeManagedUpload(storageDeps, business.id, readyWebsite.id);
+  await expectFinalizeReject(
+    "Already-READY website photos cannot be finalized through the public request route",
+    "collpro-reno",
+    readyWebsite.id,
+  );
+  check(
+    "READY website photo remains a WEBSITE_IMAGE",
+    (await reloadAsset(readyWebsite.id))?.category === "WEBSITE_IMAGE",
+  );
+
+  const otherPending = await authorizeAndStore({
+    businessId: other.id,
+    category: "CUSTOMER_PHOTO",
+    visibility: "PRIVATE",
+    purpose: "public-request-photo",
+    name: "other-pending.png",
+  });
+  await expectFinalizeReject(
+    "Tenant A slug cannot finalize tenant B pending photo",
+    "collpro-reno",
+    otherPending.id,
+  );
+  check(
+    "Foreign pending photo stays PENDING on its own tenant",
+    (await reloadAsset(otherPending.id))?.status === "PENDING" &&
+      (await reloadAsset(otherPending.id))?.businessId === other.id,
+  );
+  await expectFinalizeReject(
+    "Tenant B slug cannot finalize tenant A READY request photo",
+    "other-handyman",
+    finalizedPending.id,
+  );
+  check(
+    "Cross-tenant finalize leaves the owned READY request photo unchanged",
+    (await reloadAsset(finalizedPending.id))?.status === "READY" &&
+      (await reloadAsset(finalizedPending.id))?.businessId === business.id,
+  );
+
+  console.log("\nDB — Public request photos honor merged storage terminal-state truth");
+  async function accountSnapshot(businessId) {
+    const account = await prisma.businessStorageAccount.findUnique({
+      where: { businessId },
+    });
+    return {
+      reserved: Number(account?.storageReservedBytes ?? 0),
+      used: Number(account?.storageUsedBytes ?? 0),
+    };
+  }
+  async function createRequestWithPhotoIds(name, email, photoAssetIds) {
+    const created = await createPublicServiceRequest(prisma, {
+      slug: "collpro-reno",
+      name,
+      email,
+      phone: "555-0418",
+      address: "",
+      streetAddress: "12 Oak St",
+      city: "Fort Myers",
+      region: "FL",
+      postalCode: "33901",
+      notes: "Storage terminal-state",
+      catalogItemIds: [fan.id],
+      includeOther: false,
+      otherDescription: "",
+      photoAssetIds,
+    });
+    const photos = created.ok
+      ? await prisma.serviceRequestPhoto.findMany({
+          where: { serviceRequestId: created.requestId, businessId: business.id },
+        })
+      : [];
+    return { created, photos };
+  }
+
+  const managedReady = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "terminal-ready.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const managedReadyRequest = await createRequestWithPhotoIds(
+    "Terminal Ready",
+    "terminal-ready@example.com",
+    [managedReady.id],
+  );
+  check(
+    "Normal public-request managed photo finalizes READY CUSTOMER_PHOTO PRIVATE and attaches once",
+    managedReady.status === "READY" &&
+      managedReady.category === "CUSTOMER_PHOTO" &&
+      managedReady.visibility === "PRIVATE" &&
+      managedReady.publicPath == null &&
+      managedReadyRequest.created.ok === true &&
+      managedReadyRequest.photos.length === 1 &&
+      managedReadyRequest.photos[0].storedAssetId === managedReady.id,
+  );
+
+  const afterFirstReady = await accountSnapshot(business.id);
+  const readyRetry = await finalizePublicRequestPhoto(storageDeps, "collpro-reno", managedReady.id);
+  const afterReadyRetry = await accountSnapshot(business.id);
+  const readyRetryRequest = await createRequestWithPhotoIds(
+    "Terminal Ready Retry",
+    "terminal-ready-retry@example.com",
+    [managedReady.id, managedReady.id],
+  );
+  check(
+    "READY public-request finalize is idempotent and does not re-account storage",
+    readyRetry.id === managedReady.id &&
+      readyRetry.status === "READY" &&
+      readyRetry.publicPath == null &&
+      afterReadyRetry.reserved === afterFirstReady.reserved &&
+      afterReadyRetry.used === afterFirstReady.used,
+  );
+  check(
+    "READY retry does not duplicate the ServiceRequestPhoto attachment",
+    readyRetryRequest.created.ok === true &&
+      readyRetryRequest.photos.length === 1 &&
+      readyRetryRequest.photos[0].storedAssetId === managedReady.id,
+  );
+
+  const failedAuth = await authorizePublicRequestPhoto(storageDeps, "collpro-reno", {
+    originalFilename: "terminal-failed.png",
+    mimeType: "image/png",
+    fileSizeBytes: pngBytes.length,
+  });
+  await provider.putObject({
+    bucket: failedAuth.account.bucketName,
+    key: failedAuth.asset.storageKey,
+    body: pngBytes,
+    contentType: "image/png",
+  });
+  const abortedFailed = await abortPublicRequestPhoto(storageDeps, "collpro-reno", failedAuth.asset.id);
+  let failedFinalizeError = null;
+  try {
+    await finalizePublicRequestPhoto(storageDeps, "collpro-reno", failedAuth.asset.id);
+  } catch (error) {
+    failedFinalizeError = error;
+  }
+  const failedAfter = await reloadAsset(failedAuth.asset.id);
+  const failedRequest = await createRequestWithPhotoIds(
+    "Terminal Failed",
+    "terminal-failed@example.com",
+    [failedAuth.asset.id],
+  );
+  check(
+    "FAILED storage truth is rejected before public-request finalize and does not attach",
+    abortedFailed.status === "FAILED" &&
+      failedFinalizeError instanceof StorageError &&
+      failedAfter?.status === "FAILED" &&
+      failedRequest.created.ok === true &&
+      failedRequest.photos.length === 0,
+  );
+  check(
+    "FAILED public-request photo is not resurrected to READY",
+    failedAfter?.status === "FAILED" && failedAfter.publicPath == null,
+  );
+
+  const expiredAuth = await authorizePublicRequestPhoto(storageDeps, "collpro-reno", {
+    originalFilename: "terminal-expired.png",
+    mimeType: "image/png",
+    fileSizeBytes: pngBytes.length,
+  });
+  await provider.putObject({
+    bucket: expiredAuth.account.bucketName,
+    key: expiredAuth.asset.storageKey,
+    body: pngBytes,
+    contentType: "image/png",
+  });
+  await prisma.storedAsset.update({
+    where: { id: expiredAuth.asset.id },
+    data: { expiresAt: new Date(Date.now() - 60_000) },
+  });
+  let expiredFinalizeError = null;
+  try {
+    await finalizePublicRequestPhoto(storageDeps, "collpro-reno", expiredAuth.asset.id);
+  } catch (error) {
+    expiredFinalizeError = error;
+  }
+  const expiredAfter = await reloadAsset(expiredAuth.asset.id);
+  const expiredRequest = await createRequestWithPhotoIds(
+    "Terminal Expired",
+    "terminal-expired@example.com",
+    [expiredAuth.asset.id],
+  );
+  check(
+    "Expired PENDING public-request photo is rejected, not attached, and not resurrected",
+    expiredFinalizeError instanceof StorageError &&
+      expiredAfter?.status !== "READY" &&
+      expiredRequest.created.ok === true &&
+      expiredRequest.photos.length === 0,
+  );
+
+  const oversizedAuth = await authorizePublicRequestPhoto(storageDeps, "collpro-reno", {
+    originalFilename: "terminal-oversized.png",
+    mimeType: "image/png",
+    fileSizeBytes: 10,
+  });
+  await provider.putObject({
+    bucket: oversizedAuth.account.bucketName,
+    key: oversizedAuth.asset.storageKey,
+    body: pngBytes,
+    contentType: "image/png",
+  });
+  let oversizedError = null;
+  try {
+    await finalizePublicRequestPhoto(storageDeps, "collpro-reno", oversizedAuth.asset.id);
+  } catch (error) {
+    oversizedError = error;
+  }
+  const oversizedAfter = await reloadAsset(oversizedAuth.asset.id);
+  const oversizedRequest = await createRequestWithPhotoIds(
+    "Terminal Oversized",
+    "terminal-oversized@example.com",
+    [oversizedAuth.asset.id],
+  );
+  let oversizedRetryError = null;
+  try {
+    await finalizePublicRequestPhoto(storageDeps, "collpro-reno", oversizedAuth.asset.id);
+  } catch (error) {
+    oversizedRetryError = error;
+  }
+  const oversizedRetry = await reloadAsset(oversizedAuth.asset.id);
+  check(
+    "Oversized public-request finalize keeps canonical StorageQuotaError and does not attach",
+    oversizedError instanceof StorageQuotaError &&
+      oversizedAfter?.status === "FAILED" &&
+      oversizedRequest.created.ok === true &&
+      oversizedRequest.photos.length === 0,
+  );
+  check(
+    "Oversized public-request retry does not resurrect FAILED to READY",
+    oversizedRetryError instanceof StorageError &&
+      oversizedRetry?.status === "FAILED" &&
+      oversizedRetry.publicPath == null,
+  );
 
   console.log("\nDB — Owner Log lead creates a real ServiceRequest");
   function makeAccess(businessId) {
