@@ -129,18 +129,7 @@ async function assertJobClockAccess(input: {
   }
   if (!input.jobId) return;
 
-  // JOB clock-in locks the tenant-owned Job row so a concurrent completion
-  // cannot leave COMPLETED + a new RUNNING JOB TimeEntry.
-  const job =
-    input.activityType === "JOB"
-      ? await lockTenantOwnedJob(input.db, input.businessId, input.jobId)
-      : await loadJobInBusiness(input.db, input.businessId, input.jobId);
-  if (!job) {
-    throw new TimeCardError("That job is not in this business.");
-  }
-  if (input.activityType === "JOB" && job.status === "COMPLETED") {
-    throw new TimeCardError(COMPLETED_JOB_CLOCK_IN_ERROR);
-  }
+  const job = await loadJobInBusiness(input.db, input.businessId, input.jobId);
   if (input.actorRole === "MEMBER") {
     if (input.workerMembershipId !== input.actorMembershipId) {
       throw new ForbiddenError();
@@ -276,6 +265,16 @@ export async function clockInTime(
       jobId: input.jobId ?? null,
       activityType,
     });
+
+    if (activityType === "JOB" && input.jobId) {
+      const locked = await lockTenantOwnedJob(tx, access.businessId, input.jobId);
+      if (!locked) {
+        throw new TimeCardError("That job is not in this business.");
+      }
+      if (locked.status === "COMPLETED") {
+        throw new TimeCardError(COMPLETED_JOB_CLOCK_IN_ERROR);
+      }
+    }
 
     const running = await tx.timeEntry.findMany({
       where: {
