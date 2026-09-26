@@ -27,6 +27,10 @@ export const WORKFORCE_SKILLS = [
   { key: "outdoor", label: "Outdoor / yard" },
   { key: "appliance", label: "Appliance" },
   { key: "helper", label: "Helper / labor" },
+  { key: "cleaning", label: "Cleaning" },
+  { key: "hvac", label: "HVAC" },
+  { key: "roofing", label: "Roofing" },
+  { key: "landscaping", label: "Landscaping" },
 ] as const;
 
 export type WorkforceSkillKey = (typeof WORKFORCE_SKILLS)[number]["key"];
@@ -38,6 +42,9 @@ export type AppointmentMode = (typeof APPOINTMENT_MODES)[number];
 
 export const BENCH_CONTACT_PREFERENCES = ["PHONE", "EMAIL", "TEXT", "OTHER"] as const;
 export type BenchContactPreference = (typeof BENCH_CONTACT_PREFERENCES)[number];
+
+export const BENCH_WORKER_TYPES = ["BACKUP", "HELPER", "SUBCONTRACTOR", "FUTURE_HIRE"] as const;
+export type BenchWorkerType = (typeof BENCH_WORKER_TYPES)[number];
 
 export const OUTREACH_TASK_KINDS = ["STAFFING_SHORTAGE", "HELPER_NEEDED"] as const;
 export type OutreachTaskKind = (typeof OUTREACH_TASK_KINDS)[number];
@@ -117,11 +124,16 @@ export type FillInBenchRecord = {
   contactValue: string;
   skills: string[];
   availabilityNotes: string;
+  workerType: BenchWorkerType;
+  locationNotes: string;
   approved: boolean;
   active: boolean;
   lastUsedAt: Date | null;
   notes: string;
   membershipId: string | null;
+  linkedMemberName: string | null;
+  isRegularTeamMember: boolean;
+  updatedAt: Date;
 };
 
 export function isWorkforceProgression(
@@ -248,6 +260,24 @@ export function requireBenchContactPreference(value: string | null | undefined):
     throw new WorkforceValidationError("Choose a valid bench contact preference.");
   }
   return value as BenchContactPreference;
+}
+
+export function isBenchWorkerType(value: string | null | undefined): value is BenchWorkerType {
+  return (BENCH_WORKER_TYPES as readonly string[]).includes(value ?? "");
+}
+
+export function requireBenchWorkerType(value: string | null | undefined): BenchWorkerType {
+  if (!isBenchWorkerType(value)) {
+    throw new WorkforceValidationError("Choose a recorded worker type.");
+  }
+  return value;
+}
+
+export function formatBenchWorkerType(value: BenchWorkerType): string {
+  if (value === "HELPER") return "Helper";
+  if (value === "SUBCONTRACTOR") return "Subcontractor";
+  if (value === "FUTURE_HIRE") return "Future hire";
+  return "Backup";
 }
 
 export function requireWeekday(value: number): number {

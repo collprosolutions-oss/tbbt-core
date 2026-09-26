@@ -38,6 +38,7 @@ import {
   type OwnedWorkforceJob,
   type WorkforceSnapshot,
 } from "@/lib/workforce-data";
+import { describeRecordedBenchSkillFacts, recordedBenchSkillFacts } from "@/lib/fill-in-bench";
 import type { CanonicalRecommendationCatalog } from "@/lib/chief-of-staff/recommendations";
 import type {
   CosEntityHints,
@@ -66,6 +67,11 @@ export type WorkforceTeamAttention = {
   helperRecommendedDates: string[];
 };
 
+export type WorkforceBenchSkillFact = {
+  skillKey: string;
+  recordedActiveCount: number;
+};
+
 export type WorkforceTeamSummary = {
   assignableCount: number;
   unschedulableCount: number;
@@ -76,6 +82,8 @@ export type WorkforceTeamSummary = {
   maxDailyCapConfiguredCount: number;
   benchExists: boolean;
   benchCount: number;
+  /** Counts of recorded skills on active bench rows. No names or contact. */
+  benchSkillFacts: WorkforceBenchSkillFact[];
 };
 
 export type WorkforceJobProjection = {
@@ -111,6 +119,8 @@ export type WorkforceTargetedJob = {
   conflict: boolean;
   shortage: boolean | null;
   shortageExplanation: string | null;
+  /** Recorded active-bench skill facts only. Never names a person. */
+  benchSkillExplanation: string | null;
   nextJobThreat: boolean;
   durationUnknown: boolean;
 };
@@ -475,6 +485,7 @@ function buildTargetedJob(
       conflict: jobConflicts.some((row) => row.kind === "DOUBLE_BOOKING" || row.severity === "ERROR"),
       shortage: null,
       shortageExplanation: null,
+      benchSkillExplanation: null,
       nextJobThreat: later.length > 0,
       durationUnknown: !job.durationKnown,
     };
@@ -546,6 +557,9 @@ function buildTargetedJob(
         timeZone: snapshot.timeZone,
       })
     : { shortage: false, explanation: "This job has no recorded start time, so assignment fit stays unknown." };
+  const benchSkillExplanation = shortage.shortage
+    ? describeRecordedBenchSkillFacts(snapshot.bench, required)
+    : null;
   return {
     job,
     suggestions,
@@ -554,7 +568,10 @@ function buildTargetedJob(
     meetsProgression,
     conflict: jobConflicts.some((row) => row.kind === "DOUBLE_BOOKING" || row.severity === "ERROR"),
     shortage: shortage.shortage,
-    shortageExplanation: shortage.explanation,
+    shortageExplanation: benchSkillExplanation
+      ? `${shortage.explanation} ${benchSkillExplanation}`
+      : shortage.explanation,
+    benchSkillExplanation,
     nextJobThreat: later.length > 0,
     durationUnknown: !job.durationKnown,
   };
@@ -576,6 +593,10 @@ function teamSummaryFromSnapshot(snapshot: WorkforceSnapshot): WorkforceTeamSumm
     maxDailyCapConfiguredCount: assignable.filter((member) => member.maxDailyJobMinutes != null).length,
     benchExists: bench.length > 0,
     benchCount: bench.length,
+    benchSkillFacts: recordedBenchSkillFacts(snapshot.bench).map((row) => ({
+      skillKey: row.skillKey,
+      recordedActiveCount: row.recordedActiveCount,
+    })),
   };
 }
 
@@ -626,11 +647,14 @@ function findingsFromProjection(
   }
 
   if (projection.attention.staffingShortageCount > 0) {
+    const benchFacts = projection.targeted?.benchSkillExplanation ?? "";
     findings.push({
       key: "workforce-staffing-shortage",
       title: "Staffing is short for upcoming work",
       summary:
-        `${projection.attention.staffingShortageCount} upcoming job${projection.attention.staffingShortageCount === 1 ? "" : "s"} need skill or time the current team cannot cover. No worker was assigned.`,
+        `${projection.attention.staffingShortageCount} upcoming job${projection.attention.staffingShortageCount === 1 ? "" : "s"} need skill or time the current team cannot cover. No worker was assigned.${
+          benchFacts ? ` ${benchFacts}` : ""
+        }`,
       recommendationKeys: rec("workforce-staffing-shortage"),
       factKeys,
     });

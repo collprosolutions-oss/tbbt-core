@@ -3314,6 +3314,8 @@ model MembershipAvailabilityException {
 
 /// Internal approved helper / subcontractor bench. Never public.
 /// Not a cross-business marketplace and never shares CRM or revenue.
+/// A bench row is not a User or Membership. Optional membershipId only
+/// records that this person is already on the regular team roster.
 model FillInBenchWorker {
   id                String    @id @default(cuid())
   businessId        String
@@ -3323,6 +3325,10 @@ model FillInBenchWorker {
   contactValue      String    @default("")
   skills            String    @default("")
   availabilityNotes String    @default("")
+  /// BACKUP | HELPER | SUBCONTRACTOR | FUTURE_HIRE
+  workerType        String    @default("BACKUP")
+  /// Owner-recorded service-area / location notes. Not a geo engine.
+  locationNotes     String    @default("")
   approved          Boolean   @default(true)
   active            Boolean   @default(true)
   lastUsedAt        DateTime?

@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { AddTeamMemberForm } from "@/components/team/add-team-member-form";
 import { SetTeamMemberActiveForm } from "@/components/team/set-team-member-active-form";
-import { FillInBenchForm, FillInBenchUseButton } from "@/components/team/fill-in-bench-form";
+import { FillInBenchWorkspace } from "@/components/team/fill-in-bench-workspace";
 import { WeeklyAvailabilityForm } from "@/components/team/weekly-availability-form";
 import { WorkforceProfileForm } from "@/components/team/workforce-profile-form";
 import { PageContainer } from "@/components/page-container";
@@ -16,11 +17,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
+import { loadOwnedFillInBench } from "@/lib/fill-in-bench";
 import { prisma } from "@/lib/prisma";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { hasProductCapability } from "@/lib/product-entitlements";
 import { formatProgression, skillLabel } from "@/lib/workforce";
-import { loadFillInBench, loadWorkforceMembers } from "@/lib/workforce-data";
+import { loadWorkforceMembers } from "@/lib/workforce-data";
 
 export const metadata: Metadata = {
   title: "Team",
@@ -57,7 +59,7 @@ export default async function TeamPage() {
   const [workforceMembers, bench] = canManageWorkforce
     ? await Promise.all([
         loadWorkforceMembers(prisma, access.businessId),
-        loadFillInBench(prisma, access.businessId),
+        loadOwnedFillInBench(prisma, access),
       ])
     : [[], []];
 
@@ -151,26 +153,20 @@ export default async function TeamPage() {
           <CardTitle>Internal Fill-In Bench</CardTitle>
           <CardDescription>
             Approved helpers and subcontractors for this business only. Profiles
-            are never public and are not a cross-business marketplace.
+            are never public and are not a cross-business marketplace.{" "}
+            <Link href="/team/bench" className="underline underline-offset-4">
+              Open the Fill-In Bench workspace
+            </Link>
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <FillInBenchForm />
-          {bench.map((worker) => (
-            <div key={worker.id} className="space-y-2 rounded-lg border p-3">
-              <p className="text-sm font-medium">
-                {worker.displayName}
-                {worker.approved ? " · Approved" : " · Not approved"}
-                {worker.lastUsedAt ? ` · last used ${worker.lastUsedAt.toLocaleDateString("en-US")}` : ""}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {worker.skills.map(skillLabel).join(", ") || "No skills recorded"} ·{" "}
-                {worker.contactPreference}
-              </p>
-              <FillInBenchForm worker={worker} />
-              <FillInBenchUseButton benchWorkerId={worker.id} />
-            </div>
-          ))}
+        <CardContent>
+          <FillInBenchWorkspace
+            bench={bench}
+            teamMembers={workforceMembers.map((member) => ({
+              membershipId: member.membershipId,
+              name: member.name,
+            }))}
+          />
         </CardContent>
       </Card>
       ) : null}
