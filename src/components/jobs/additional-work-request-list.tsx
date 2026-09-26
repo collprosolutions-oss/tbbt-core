@@ -28,6 +28,9 @@ export type OpenAdditionalWorkRequest = {
   }>;
 };
 
+export const DISMISS_ADDITIONAL_WORK_CONFIRM =
+  "Dismiss this request? This recorded status cannot be undone. Approved scope, price, and invoices stay unchanged.";
+
 const createInitialState: ChangeOrderActionState = {};
 const dismissInitialState: AdditionalWorkRequestActionState = {};
 
@@ -73,6 +76,7 @@ function RequestRow({
   const serviceLabels = requestedWorkLabels(request);
   const defaultTitle = (serviceLabels[0] ?? request.description).slice(0, 80);
   const [creating, setCreating] = useState(false);
+  const [confirmingDismiss, setConfirmingDismiss] = useState(false);
   const [createState, createAction, createPending] = useActionState(
     createChangeOrder,
     createInitialState,
@@ -147,21 +151,63 @@ function RequestRow({
           </div>
         </form>
       ) : (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" size="sm" onClick={() => setCreating(true)}>
-            Create Change Order
-          </Button>
-          <form action={dismissAction}>
-            <input type="hidden" name="requestId" value={request.id} />
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
-              type="submit"
+              type="button"
               size="sm"
-              variant="outline"
+              className="h-10"
               disabled={dismissPending}
+              onClick={() => {
+                setConfirmingDismiss(false);
+                setCreating(true);
+              }}
             >
-              {dismissPending ? "Dismissing…" : "Dismiss"}
+              Create Change Order
             </Button>
-          </form>
+            {confirmingDismiss ? null : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-10"
+                disabled={dismissPending}
+                onClick={() => setConfirmingDismiss(true)}
+              >
+                Dismiss
+              </Button>
+            )}
+          </div>
+          {confirmingDismiss ? (
+            <form
+              action={dismissAction}
+              className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3"
+            >
+              <input type="hidden" name="requestId" value={request.id} />
+              <p className="text-sm font-medium">{DISMISS_ADDITIONAL_WORK_CONFIRM}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="destructive"
+                  className="h-10"
+                  disabled={dismissPending}
+                >
+                  {dismissPending ? "Dismissing…" : "Yes, dismiss"}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-10"
+                  disabled={dismissPending}
+                  onClick={() => setConfirmingDismiss(false)}
+                >
+                  Keep request
+                </Button>
+              </div>
+            </form>
+          ) : null}
         </div>
       )}
     </li>
