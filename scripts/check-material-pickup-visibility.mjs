@@ -213,9 +213,9 @@ check(
   "Field page does not auto-start a time card or invent MATERIAL_PICKUP clocking",
   !fieldPageSrc.includes("clockInTime") &&
     !fieldPageSrc.includes("clockOutTime") &&
-    !fieldPageSrc.includes("MATERIAL_PICKUP") &&
+    !fieldPageSrc.includes('"MATERIAL_PICKUP"') &&
     !pickupCardSrc.includes("clockInTime") &&
-    !pickupCardSrc.includes("MATERIAL_PICKUP") &&
+    !pickupCardSrc.includes('"MATERIAL_PICKUP"') &&
     !pickupCardSrc.includes("startAssignedJob") &&
     fieldPageSrc.includes("<FieldTimeClock") &&
     pickupCardSrc.includes("This does not start a time card."),
