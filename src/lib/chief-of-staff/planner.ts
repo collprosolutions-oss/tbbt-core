@@ -257,6 +257,7 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     MATERIALS_QUESTION.test(question) ||
     COMMUNICATIONS_QUESTION.test(question) ||
     PROTECTION_QUESTION.test(question) ||
+    protectionHint ||
     FOCUS_QUESTION.test(question) ||
     /\b(unpaid|review|market|customer|invoice|estimate|job)\b/i.test(question);
 

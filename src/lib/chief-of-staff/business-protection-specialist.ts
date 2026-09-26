@@ -1004,7 +1004,7 @@ function findingsFromProjection(
       why:
         `${t.current} active ${t.current === 1 ? "record is" : "records are"} CURRENT. ` +
         `CURRENT means the owner-recorded expiration date is currently outside the warning window. ` +
-        `It does not mean legally valid, licensed, insured, compliant, or verified by a regulator. ` +
+        `It is a recorded-date classifier only, not a determination of legal, licensing, insurance, or regulatory status. ` +
         RECORDED_TRUTH_CAVEAT,
     });
   }
@@ -1081,7 +1081,7 @@ function findingsFromProjection(
         (ownerReviewed.length > 0
           ? `Owner review is recorded for ${ownerReviewed.length} projected agreement${ownerReviewed.length === 1 ? "" : "s"}. `
           : `${t.ownerReview} agreement${t.ownerReview === 1 ? " is" : "s are"} in OWNER_REVIEW. `) +
-        `That is recorded owner review, not attorney review, legal approval, or legal sufficiency.`,
+        `That is recorded owner review, not attorney approval, attorney review, legal approval, or legal sufficiency.`,
       entityIds: ownerReviewed.map((row) => row.id).slice(0, BUSINESS_PROTECTION_CONTEXT_CAPS.entityIds),
     });
   }
