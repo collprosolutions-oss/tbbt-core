@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, type ComponentType, type CSSProperties, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import { FileText, MapPin, Phone, Receipt, Wrench } from "lucide-react";
 import { CreateEstimateButton } from "@/components/estimates/create-estimate-button";
@@ -27,7 +34,18 @@ import {
   RequestIdentityReviewBadge,
   RequestIdentityReviewNotice,
 } from "@/components/requests/request-follow-up";
+import {
+  REQUESTS_MOBILE_SHEET_QUERY,
+  requestMobileSheetShouldOpen,
+  resolveInitialRequestSelection,
+} from "@/lib/request-list-selection";
 import { cn } from "@/lib/utils";
+
+function isRequestsMobileViewport() {
+  return (
+    typeof window !== "undefined" && window.matchMedia(REQUESTS_MOBILE_SHEET_QUERY).matches
+  );
+}
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -57,26 +75,6 @@ export type RequestListItem = {
 };
 
 /**
- * Resolve `?selected=` against the already tenant-scoped loaded request
- * set. A matching ID becomes the selection and opens the mobile detail
- * sheet. Missing or foreign IDs never open the sheet and never invent a request
- * -- they fall back to the first loaded row (existing highlight).
- */
-export function resolveInitialRequestSelection(
-  requests: ReadonlyArray<{ id: string }>,
-  initialSelectedId?: string | null,
-): { selectedId: string | null; openMobileSheet: boolean } {
-  const matchedId =
-    initialSelectedId && requests.some((request) => request.id === initialSelectedId)
-      ? initialSelectedId
-      : null;
-  return {
-    selectedId: matchedId ?? requests[0]?.id ?? null,
-    openMobileSheet: Boolean(matchedId),
-  };
-}
-
-/**
  * The Requests master/detail workspace: a dense operating table (left) and
  * a Request Details panel (right on desktop, a bottom sheet on mobile --
  * see the MOBILE section of the spec). All data is pre-fetched, already
@@ -94,10 +92,34 @@ export function RequestsWorkspace({
 }) {
   const initialSelection = resolveInitialRequestSelection(requests, initialSelectedId);
   const [selectedId, setSelectedId] = useState<string | null>(initialSelection.selectedId);
-  const [mobileOpen, setMobileOpen] = useState(initialSelection.openMobileSheet);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const appliedSelectedParam = useRef<string | undefined | null>(undefined);
+  const hasAppliedSelectedParam = useRef(false);
   const selected = requests.find((request) => request.id === selectedId) ?? null;
 
-  function selectRequest(id: string) {
+  useEffect(() => {
+    if (hasAppliedSelectedParam.current && appliedSelectedParam.current === initialSelectedId) {
+      return;
+    }
+    hasAppliedSelectedParam.current = true;
+    appliedSelectedParam.current = initialSelectedId;
+
+    const { matchedSelectedId } = resolveInitialRequestSelection(requests, initialSelectedId);
+    if (matchedSelectedId) {
+      setSelectedId(matchedSelectedId);
+      setMobileOpen(
+        requestMobileSheetShouldOpen(matchedSelectedId, !isRequestsMobileViewport()),
+      );
+      return;
+    }
+    setMobileOpen(false);
+  }, [initialSelectedId, requests]);
+
+  function selectDesktopRow(id: string) {
+    setSelectedId(id);
+  }
+
+  function selectMobileCard(id: string) {
     setSelectedId(id);
     setMobileOpen(true);
   }
@@ -122,10 +144,10 @@ export function RequestsWorkspace({
           (avoids horizontal scroll and tiny cramped cells on a phone). */}
       <FounderRegion id="table">
       <div className="hidden sm:block">
-        <RequestsTable requests={requests} selectedId={selectedId} onSelect={selectRequest} />
+        <RequestsTable requests={requests} selectedId={selectedId} onSelect={selectDesktopRow} />
       </div>
       <div className="space-y-2 sm:hidden">
-        <RequestsMobileList requests={requests} selectedId={selectedId} onSelect={selectRequest} />
+        <RequestsMobileList requests={requests} selectedId={selectedId} onSelect={selectMobileCard} />
       </div>
       </FounderRegion>
 
@@ -133,6 +155,9 @@ export function RequestsWorkspace({
         <RequestDetailsPanel request={selected} />
       </FounderRegion>
 
+      {/* SheetOverlay portals independently of SheetContent className.
+          `lg:hidden` hides only the panel -- open={true} still traps
+          desktop focus and blocks the page. Keep open false at lg. */}
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="bottom" className="max-h-[85vh] overflow-y-auto lg:hidden">
           <SheetHeader className="sr-only">

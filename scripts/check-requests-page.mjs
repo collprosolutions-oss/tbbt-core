@@ -124,15 +124,22 @@ check(
     mobileListSrc.includes("{request.propertyLabel}"),
 );
 check(
-  "Matching ?selected= ID opens the mobile detail sheet from the loaded set",
+  "Matching ?selected= ID is resolved from the loaded set and opens the sheet only below lg",
   workspaceSrc.includes("resolveInitialRequestSelection") &&
-    workspaceSrc.includes("useState(initialSelection.openMobileSheet)") &&
-    workspaceSrc.includes("requests.some((request) => request.id === initialSelectedId)"),
+    workspaceSrc.includes("requestMobileSheetShouldOpen") &&
+    workspaceSrc.includes("REQUESTS_MOBILE_SHEET_QUERY") &&
+    workspaceSrc.includes("useState(false)"),
+);
+check(
+  "Desktop table click does not share the mobile-open callback",
+  workspaceSrc.includes("selectDesktopRow") &&
+    workspaceSrc.includes("selectMobileCard") &&
+    !workspaceSrc.includes("function selectRequest"),
 );
 check(
   "Foreign or missing selected IDs leave the mobile sheet closed",
-  workspaceSrc.includes("openMobileSheet: Boolean(matchedId)") &&
-    workspaceSrc.includes("never invent a request"),
+  workspaceSrc.includes("setMobileOpen(false)") &&
+    workspaceSrc.includes("matchedSelectedId"),
 );
 check(
   "Call / Email / Open customer actions from #133 remain",
