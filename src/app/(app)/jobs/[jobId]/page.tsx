@@ -211,14 +211,35 @@ export default async function JobPage({
     id: job.id,
   });
 
-  // Assignment candidates: MEMBER-role memberships of THIS Job's own
-  // Business only -- see assignJobMember() in src/app/actions/job.ts for
-  // the server-side re-validation this list is purely a UX convenience for.
-  const eligibleMembers = await prisma.membership.findMany({
+  // Assignment candidates: active MEMBER memberships of THIS Job's own
+  // Business, plus the current OWNER/ADMIN membership so a solo owner can
+  // self-assign. Other OWNER/ADMIN rows stay out. See assignJobMember()
+  // in src/app/actions/job.ts -- this list is a UX convenience only.
+  const eligibleMemberRows = await prisma.membership.findMany({
     where: { businessId: access.businessId, role: "MEMBER", active: true },
     select: { id: true, user: { select: { name: true, email: true } } },
     orderBy: { createdAt: "asc" },
   });
+  const actorMembership = access.workspace.membership;
+  const actorRole = access.workspace.role;
+  const canSelfAssign =
+    (actorRole === "OWNER" || actorRole === "ADMIN") &&
+    actorMembership.active &&
+    actorMembership.businessId === access.businessId;
+  const eligibleMembers =
+    canSelfAssign && !eligibleMemberRows.some((member) => member.id === actorMembership.id)
+      ? [
+          {
+            id: actorMembership.id,
+            user: {
+              name: access.workspace.user.name,
+              email: access.workspace.user.email,
+            },
+          },
+          ...eligibleMemberRows,
+        ]
+      : eligibleMemberRows;
+  const viewerIsAssignee = job.assignedMembershipId === actorMembership.id;
 
   const isScheduled = Boolean(job.scheduledAt);
   const appointmentStatus = effectiveAppointmentConfirmationStatus(job);
@@ -358,6 +379,11 @@ export default async function JobPage({
         }
       >
         <div className="flex flex-wrap items-center gap-2">
+          {viewerIsAssignee ? (
+            <Button asChild className="h-12 w-full text-base sm:h-9 sm:w-auto sm:text-sm">
+              <Link href={`/field/jobs/${job.id}`}>Open Field View</Link>
+            </Button>
+          ) : null}
           {!isCompleted && !isInProgress ? (
             <StartJobButton
               jobId={job.id}
@@ -708,12 +734,12 @@ export default async function JobPage({
         <CardHeader>
           <CardTitle>Assigned Employee</CardTitle>
           <CardDescription>
-            The one field member assigned to perform this job. Only members
-            of {access.workspace.business.name} are eligible. An assigned
-            member can open this job from their own Field Home, start it,
-            complete it, add photos, report a problem, or flag customer
-            requests for more work -- nothing else in the management
-            console.
+            The one worker assigned to perform this job. Active MEMBERs of{" "}
+            {access.workspace.business.name} are eligible, and OWNER/ADMIN
+            may assign themselves. An assigned worker can open this job from
+            Field / My Jobs, start it, complete it, add photos, report a
+            problem, or flag customer requests for more work -- nothing else
+            in the management console.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
@@ -726,7 +752,7 @@ export default async function JobPage({
           {eligibleMembers.length === 0 ? (
             <p className="text-muted-foreground">
               No team members yet. Invite a MEMBER to this business to assign
-              jobs.
+              jobs, or assign this job to yourself.
             </p>
           ) : (
             <AssignJobMemberForm
@@ -734,7 +760,10 @@ export default async function JobPage({
               assignedMembershipId={job.assignedMembership?.id ?? null}
               eligibleMembers={eligibleMembers.map((member) => ({
                 id: member.id,
-                name: member.user.name,
+                name:
+                  member.id === actorMembership.id
+                    ? `${member.user.name} (you)`
+                    : member.user.name,
                 email: member.user.email,
               }))}
               recommendations={assignmentSuggestions.map((row) => ({

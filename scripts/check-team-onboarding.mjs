@@ -389,9 +389,14 @@ try {
   console.log("\nTEST 17 — assignJobMember-style re-validation rejects a cross-business/removed membershipId (mirrors src/app/actions/job.ts)");
   async function mirrorAssignJobMember(access, jobId, membershipId) {
     const membership = await prisma.membership.findFirst({
-      where: { id: membershipId, businessId: access.businessId, role: "MEMBER", active: true },
+      where: { id: membershipId, businessId: access.businessId, active: true },
     });
-    if (!membership) {
+    const isActiveMember = membership?.role === "MEMBER";
+    const isSelfAssignment =
+      membership != null &&
+      membership.id === access.workspace.membership.id &&
+      (access.workspace.role === "OWNER" || access.workspace.role === "ADMIN");
+    if (!membership || (!isActiveMember && !isSelfAssignment)) {
       return { ok: false };
     }
     await prisma.job.update({ where: { id: jobId }, data: { assignedMembershipId: membership.id } });
@@ -424,7 +429,7 @@ try {
   const jobActionsSrc = readFileSync(new URL("../src/app/actions/job.ts", import.meta.url), "utf8");
   check(
     "assignJobMember() re-validation also excludes inactive memberships",
-    /role:\s*"MEMBER",[\s\S]{0,40}active:\s*true/.test(jobActionsSrc),
+    /businessId:\s*access\.businessId,[\s\S]{0,80}active:\s*true/.test(jobActionsSrc),
   );
   const workspaceSrc = readFileSync(new URL("../src/lib/workspace.ts", import.meta.url), "utf8");
   const contactSrc = readFileSync(new URL("../src/lib/business-contact.ts", import.meta.url), "utf8");

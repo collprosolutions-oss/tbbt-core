@@ -289,7 +289,7 @@ export default async function JobsPage({
     completedCount,
     thisWeekJobsForSum,
     completedThisWeekJobsForSum,
-    eligibleMembers,
+    eligibleMemberRows,
     matchedCount,
     jobsRaw,
   ] = await Promise.all([
@@ -326,6 +326,8 @@ export default async function JobsPage({
         changeOrders: { select: { status: true, total: true } },
       },
     }),
+    // Active MEMBERs only here. OWNER/ADMIN self is merged after this
+    // Promise.all -- other OWNER/ADMIN memberships stay out.
     prisma.membership.findMany({
       where: { businessId: access.businessId, role: "MEMBER", active: true },
       select: { id: true, user: { select: { name: true, email: true } } },
@@ -359,6 +361,25 @@ export default async function JobsPage({
       take: pageSize,
     }),
   ]);
+  const actorMembership = access.workspace.membership;
+  const actorRole = access.workspace.role;
+  const canSelfAssign =
+    (actorRole === "OWNER" || actorRole === "ADMIN") &&
+    actorMembership.active &&
+    actorMembership.businessId === access.businessId;
+  const eligibleMembers =
+    canSelfAssign && !eligibleMemberRows.some((member) => member.id === actorMembership.id)
+      ? [
+          {
+            id: actorMembership.id,
+            user: {
+              name: access.workspace.user.name,
+              email: access.workspace.user.email,
+            },
+          },
+          ...eligibleMemberRows,
+        ]
+      : eligibleMemberRows;
   const availability = await loadAvailabilitySnapshot(prisma, access.businessId);
   const scheduleBufferMinutes = availability.settings.schedulingBufferMinutes;
   const canScheduling = await hasProductCapability(
@@ -836,7 +857,10 @@ export default async function JobsPage({
         jobs={jobs}
         eligibleMembers={eligibleMembers.map((member) => ({
           id: member.id,
-          name: member.user.name,
+          name:
+            member.id === actorMembership.id
+              ? `${member.user.name} (you)`
+              : member.user.name,
           email: member.user.email,
         }))}
         pagination={pagination}

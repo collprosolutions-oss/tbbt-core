@@ -379,6 +379,64 @@ try {
   });
   check("Business B cannot load Business A's time entry by id", leaked === null);
 
+  console.log("\nTEST — Self-assigned OWNER/ADMIN can use the existing Field clock");
+  const ownerJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "SCHEDULED",
+      projectToken: randomUUID(),
+      assignedMembershipId: ownerMem.id,
+    },
+  });
+  const ownerSelfClock = await clockInTime(prisma, ownerA, {
+    membershipId: ownerMem.id,
+    activityType: "JOB",
+    jobId: ownerJob.id,
+  });
+  check(
+    "OWNER can clock JOB on a self-assigned job",
+    ownerSelfClock.status === "RUNNING" &&
+      ownerSelfClock.jobId === ownerJob.id &&
+      ownerSelfClock.membershipId === ownerMem.id,
+  );
+  const ownerRunning = await prisma.timeEntry.findMany({
+    where: { businessId: businessA.id, membershipId: ownerMem.id, status: "RUNNING" },
+  });
+  check("OWNER has exactly one RUNNING TimeEntry on their own membership", ownerRunning.length === 1);
+  const ownerOut = await clockOutTime(prisma, ownerA, { membershipId: ownerMem.id });
+  check("OWNER can clock out of that self-assigned job", ownerOut.status === "READY" && ownerOut.endedAt != null);
+  const ownerRunningAfter = await prisma.timeEntry.count({
+    where: { businessId: businessA.id, membershipId: ownerMem.id, status: "RUNNING" },
+  });
+  check("OWNER has no parallel clock after clock-out", ownerRunningAfter === 0);
+  const ownerClockLeak = await prisma.timeEntry.findFirst({
+    where: { id: ownerSelfClock.id, businessId: businessB.id },
+  });
+  check("OWNER self-clock does not leak to the foreign tenant", ownerClockLeak === null);
+
+  const adminJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "SCHEDULED",
+      projectToken: randomUUID(),
+      assignedMembershipId: adminMem.id,
+    },
+  });
+  const adminSelfClock = await clockInTime(prisma, adminA, {
+    membershipId: adminMem.id,
+    activityType: "JOB",
+    jobId: adminJob.id,
+  });
+  check(
+    "ADMIN can clock JOB on a self-assigned job",
+    adminSelfClock.status === "RUNNING" &&
+      adminSelfClock.membershipId === adminMem.id &&
+      adminSelfClock.jobId === adminJob.id,
+  );
+  await clockOutTime(prisma, adminA, { membershipId: adminMem.id });
+
   console.log("\nTEST — Manual 9 AM–5 PM duration (not 32 hours)");
   const danielUser = await prisma.user.create({
     data: { name: "Daniel Worker", email: "daniel-time@example.com", passwordHash: "x" },

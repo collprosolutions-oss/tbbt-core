@@ -708,21 +708,28 @@ export async function markJobComplete(
 }
 
 /**
- * OWNER/ADMIN-only: assign, change, or remove the ONE MEMBER assigned to
+ * OWNER/ADMIN-only: assign, change, or remove the one worker assigned to
  * this Job (Phase 3 / Step 4 Employee Field Workflow). An empty
  * `membershipId` removes the assignment (Unassigned).
  *
+ * A selected target is valid only when:
+ *   A. membershipId is empty → unassign
+ *   B. the membership belongs to access.businessId, is active, and
+ *      role === MEMBER
+ *   C. SELF ASSIGNMENT: the membership is the caller's own active
+ *      membership in this business AND the actor role is OWNER or ADMIN
+ *
+ * OWNER/ADMIN self-assignment does NOT allow assigning some other
+ * OWNER or ADMIN. Browser-supplied businessId/role are never trusted;
+ * tenant and actor identity come from the authenticated workspace.
+ *
  * SECURITY: the target Membership is re-fetched scoped by
- * `access.businessId` AND `role: "MEMBER"` in the same query used to
- * validate it -- never trusted from client input alone. A membershipId
- * belonging to a different business, or to an OWNER/ADMIN membership,
- * simply does not come back, so cross-tenant assignment and
- * self-escalation-by-assignment are both structurally impossible here, not
- * just discouraged by the UI. MEMBER never reaches this action at all: it
+ * `access.businessId` AND `active: true` in the same query used to
+ * validate it. Role is then checked against that persisted row plus the
+ * authenticated workspace. MEMBER never reaches this action at all: it
  * is gated the same way every other job-management mutation is, by
  * CAPABILITIES.MANAGE_JOBS, which MEMBER has zero capabilities for (see
- * src/lib/authorization.ts) -- so "MEMBER cannot assign themselves or
- * anyone else" holds regardless of what a MEMBER might submit.
+ * src/lib/authorization.ts).
  */
 export async function assignJobMember(
   _prev: JobActionState,
@@ -752,6 +759,7 @@ export async function assignJobMember(
     });
     revalidatePath(`/jobs/${job.id}`);
     revalidatePath("/jobs");
+    revalidatePath("/field");
     return {};
   }
 
@@ -759,12 +767,19 @@ export async function assignJobMember(
     where: {
       id: membershipId,
       businessId: access.businessId,
-      role: "MEMBER",
       active: true,
     },
   });
 
-  if (!membership) {
+  const actorRole = access.workspace.role;
+  const actorMembershipId = access.workspace.membership.id;
+  const isActiveMember = membership?.role === "MEMBER";
+  const isSelfAssignment =
+    membership != null &&
+    membership.id === actorMembershipId &&
+    (actorRole === "OWNER" || actorRole === "ADMIN");
+
+  if (!membership || (!isActiveMember && !isSelfAssignment)) {
     return { error: "Choose a team member from this business." };
   }
 
@@ -775,5 +790,7 @@ export async function assignJobMember(
 
   revalidatePath(`/jobs/${job.id}`);
   revalidatePath("/jobs");
+  revalidatePath("/field");
+  revalidatePath(`/field/jobs/${job.id}`);
   return {};
 }

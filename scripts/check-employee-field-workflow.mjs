@@ -41,6 +41,13 @@ const {
 const { groupFieldJobs } = await import("../src/lib/field-jobs.ts");
 const { directionsUrl, telHref } = await import("../src/lib/directions.ts");
 const { groupJobsByAssignedMember } = await import("../src/lib/schedule.ts");
+const {
+  CAPABILITIES,
+  ForbiddenError,
+  requireBusinessCapability,
+} = await import("../src/lib/authorization.ts");
+const { clockInTime, clockOutTime } = await import("../src/lib/time-card-ops.ts");
+const { visibleAppNav } = await import("../src/lib/nav.ts");
 
 let failures = 0;
 function check(label, condition) {
@@ -208,15 +215,80 @@ check(
   /export async function assignJobMember[\s\S]{0,400}requireBusinessCapability\(access, CAPABILITIES\.MANAGE_JOBS\)/.test(jobActionsSrc),
 );
 check(
-  "assignJobMember() re-validates the target membership scoped by businessId AND role MEMBER (cross-tenant/role-escalation via assignment is impossible)",
-  /id:\s*membershipId,[\s\S]{0,60}businessId:\s*access\.businessId,[\s\S]{0,60}role:\s*"MEMBER"/.test(jobActionsSrc),
+  "assignJobMember() re-validates the target membership scoped by businessId AND active (never a client-supplied businessId or role)",
+  /id:\s*membershipId,[\s\S]{0,80}businessId:\s*access\.businessId,[\s\S]{0,80}active:\s*true/.test(jobActionsSrc) &&
+    !jobActionsSrc.includes('formData.get("businessId")') &&
+    !jobActionsSrc.includes('formData.get("role")'),
+);
+check(
+  "assignJobMember() still treats an active MEMBER of this business as a valid target",
+  jobActionsSrc.includes('membership?.role === "MEMBER"'),
+);
+check(
+  "assignJobMember() allows OWNER/ADMIN self-assignment only — not another OWNER/ADMIN",
+  jobActionsSrc.includes("isSelfAssignment") &&
+    jobActionsSrc.includes("membership.id === actorMembershipId") &&
+    jobActionsSrc.includes('actorRole === "OWNER"') &&
+    jobActionsSrc.includes('actorRole === "ADMIN"'),
 );
 check(
   // Added by the Launch Blocker Fix team-onboarding work (see
   // scripts/check-team-onboarding.mjs): a deactivated ("removed") MEMBER
   // must be just as un-assignable as a wrong-business/wrong-role one.
-  "assignJobMember() also excludes an inactive (removed) MEMBER's membership",
-  /role:\s*"MEMBER",[\s\S]{0,40}active:\s*true/.test(jobActionsSrc),
+  "assignJobMember() also excludes an inactive (removed) membership",
+  /businessId:\s*access\.businessId,[\s\S]{0,80}active:\s*true/.test(jobActionsSrc),
+);
+check(
+  "assignedJobWhere stays assignment-scoped with no OWNER/ADMIN role bypass",
+  fieldAccessSrc.includes("assignedMembershipId: field.membershipId") &&
+    !fieldAccessSrc.includes('role === "OWNER"') &&
+    !fieldAccessSrc.includes('role === "ADMIN"'),
+);
+const jobPageSrc = readFileSync(
+  new URL("../src/app/(app)/jobs/[jobId]/page.tsx", import.meta.url),
+  "utf8",
+);
+const jobsListSrc = readFileSync(
+  new URL("../src/app/(app)/jobs/page.tsx", import.meta.url),
+  "utf8",
+);
+const assignFormSrc = readFileSync(
+  new URL("../src/components/jobs/assign-job-member-form.tsx", import.meta.url),
+  "utf8",
+);
+const navSrc = readFileSync(new URL("../src/lib/nav.ts", import.meta.url), "utf8");
+check(
+  "Work Order and Jobs list still query active MEMBER candidates",
+  /role:\s*"MEMBER",\s*active:\s*true/.test(jobPageSrc) &&
+    /role:\s*"MEMBER",\s*active:\s*true/.test(jobsListSrc),
+);
+check(
+  "Work Order and Jobs list add the current OWNER/ADMIN membership only",
+  jobPageSrc.includes("canSelfAssign") &&
+    jobsListSrc.includes("canSelfAssign") &&
+    jobPageSrc.includes('actorRole === "OWNER"') &&
+    jobPageSrc.includes('actorRole === "ADMIN"') &&
+    !jobPageSrc.includes('role: { in: ["OWNER", "ADMIN"] }'),
+);
+check(
+  "Assignment form copy allows OWNER/ADMIN self-assignment, not other-owner assignment",
+  assignFormSrc.includes("OWNER/ADMIN may also assign themselves") &&
+    assignFormSrc.includes("Another worker must be an active MEMBER"),
+);
+check(
+  "Field / My Jobs is a normal nav destination to /field",
+  navSrc.includes('href: "/field"') &&
+    navSrc.includes('label: "Field / My Jobs"') &&
+    visibleAppNav("OWNER").some((item) => item.href === "/field" && item.label === "Field / My Jobs") &&
+    visibleAppNav("ADMIN").some((item) => item.href === "/field") &&
+    visibleAppNav("MEMBER").some((item) => item.href === "/field"),
+);
+check(
+  "Work Order shows Open Field View only when the viewer is the assignee",
+  jobPageSrc.includes("viewerIsAssignee") &&
+    jobPageSrc.includes("Open Field View") &&
+    jobPageSrc.includes("`/field/jobs/${job.id}`") &&
+    jobPageSrc.includes("job.assignedMembershipId === actorMembership.id"),
 );
 
 // --- 2. Prisma-level checks (mirror real server-action logic) -----------
@@ -244,9 +316,28 @@ function hashToken(token) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function makeAccess(businessId, role, membershipId) {
+  return {
+    businessId,
+    workspace: { role, membership: { id: membershipId } },
+    scope: { businessId },
+    assertOwned(record) {
+      if (!record || record.businessId !== businessId) {
+        throw new Error("Record is not in the authorized business workspace.");
+      }
+      return record;
+    },
+  };
+}
+
 /** Mirrors assignJobMember() in src/app/actions/job.ts exactly. */
-async function simulateAssignJobMember(jobId, businessId, membershipId) {
-  const job = await prisma.job.findFirst({ where: { id: jobId, businessId } });
+async function simulateAssignJobMember(access, jobId, membershipId) {
+  try {
+    requireBusinessCapability(access, CAPABILITIES.MANAGE_JOBS);
+  } catch (error) {
+    return { ok: false, reason: error instanceof ForbiddenError ? "forbidden" : "forbidden" };
+  }
+  const job = await prisma.job.findFirst({ where: { id: jobId, businessId: access.businessId } });
   if (!job) {
     return { ok: false, reason: "job-not-found" };
   }
@@ -255,9 +346,16 @@ async function simulateAssignJobMember(jobId, businessId, membershipId) {
     return { ok: true };
   }
   const membership = await prisma.membership.findFirst({
-    where: { id: membershipId, businessId, role: "MEMBER" },
+    where: { id: membershipId, businessId: access.businessId, active: true },
   });
-  if (!membership) {
+  const actorRole = access.workspace.role;
+  const actorMembershipId = access.workspace.membership.id;
+  const isActiveMember = membership?.role === "MEMBER";
+  const isSelfAssignment =
+    membership != null &&
+    membership.id === actorMembershipId &&
+    (actorRole === "OWNER" || actorRole === "ADMIN");
+  if (!membership || (!isActiveMember && !isSelfAssignment)) {
     return { ok: false, reason: "invalid-membership" };
   }
   await prisma.job.update({ where: { id: job.id }, data: { assignedMembershipId: membership.id } });
@@ -348,13 +446,16 @@ try {
 
   const ownerUser = await prisma.user.create({ data: { name: "Olivia Owner", email: "owner@field-test.example", passwordHash: "x" } });
   const adminUser = await prisma.user.create({ data: { name: "Amir Admin", email: "admin@field-test.example", passwordHash: "x" } });
+  const coOwnerUser = await prisma.user.create({ data: { name: "Owen CoOwner", email: "coowner@field-test.example", passwordHash: "x" } });
   const member1User = await prisma.user.create({ data: { name: "Mia Member", email: "member1@field-test.example", passwordHash: "x" } });
   const member2User = await prisma.user.create({ data: { name: "Max Member", email: "member2@field-test.example", passwordHash: "x" } });
+  const inactiveUser = await prisma.user.create({ data: { name: "Ivy Inactive", email: "inactive@field-test.example", passwordHash: "x" } });
   const betaOwnerUser = await prisma.user.create({ data: { name: "Beto Owner", email: "owner@beta-field-test.example", passwordHash: "x" } });
   const betaMemberUser = await prisma.user.create({ data: { name: "Bree Member", email: "member@beta-field-test.example", passwordHash: "x" } });
 
-  await prisma.membership.create({ data: { userId: ownerUser.id, businessId: businessA.id, role: "OWNER" } });
-  await prisma.membership.create({ data: { userId: adminUser.id, businessId: businessA.id, role: "ADMIN" } });
+  const ownerMembership = await prisma.membership.create({ data: { userId: ownerUser.id, businessId: businessA.id, role: "OWNER" } });
+  const adminMembership = await prisma.membership.create({ data: { userId: adminUser.id, businessId: businessA.id, role: "ADMIN" } });
+  const coOwnerMembership = await prisma.membership.create({ data: { userId: coOwnerUser.id, businessId: businessA.id, role: "OWNER" } });
   const member1Membership = await prisma.membership.create({
     data: {
       userId: member1User.id,
@@ -364,8 +465,16 @@ try {
     },
   });
   const member2Membership = await prisma.membership.create({ data: { userId: member2User.id, businessId: businessA.id, role: "MEMBER" } });
-  await prisma.membership.create({ data: { userId: betaOwnerUser.id, businessId: businessB.id, role: "OWNER" } });
+  const inactiveMembership = await prisma.membership.create({
+    data: { userId: inactiveUser.id, businessId: businessA.id, role: "MEMBER", active: false },
+  });
+  const betaOwnerMembership = await prisma.membership.create({ data: { userId: betaOwnerUser.id, businessId: businessB.id, role: "OWNER" } });
   const betaMemberMembership = await prisma.membership.create({ data: { userId: betaMemberUser.id, businessId: businessB.id, role: "MEMBER" } });
+
+  const ownerAccess = makeAccess(businessA.id, "OWNER", ownerMembership.id);
+  const adminAccess = makeAccess(businessA.id, "ADMIN", adminMembership.id);
+  const memberAccess = makeAccess(businessA.id, "MEMBER", member1Membership.id);
+  const betaOwnerAccess = makeAccess(businessB.id, "OWNER", betaOwnerMembership.id);
 
   const farFuture = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   async function makeSession(user, businessId) {
@@ -374,8 +483,10 @@ try {
     return { token, businessId };
   }
   const ownerSession = await makeSession(ownerUser, businessA.id);
+  const adminSession = await makeSession(adminUser, businessA.id);
   const member1Session = await makeSession(member1User, businessA.id);
   const member2Session = await makeSession(member2User, businessA.id);
+  const betaOwnerSession = await makeSession(betaOwnerUser, businessB.id);
   const betaMemberSession = await makeSession(betaMemberUser, businessB.id);
 
   const customerA = await prisma.customer.create({
@@ -442,29 +553,121 @@ try {
   });
 
   console.log("\nTEST 1/2 — OWNER and ADMIN can assign an eligible MEMBER to a Job");
-  const ownerAssign = await simulateAssignJobMember(assignedJob.id, businessA.id, member1Membership.id);
+  const ownerAssign = await simulateAssignJobMember(ownerAccess, assignedJob.id, member1Membership.id);
   check("TEST 1 - OWNER's assignment succeeds", ownerAssign.ok === true);
   let refreshed = await prisma.job.findUnique({ where: { id: assignedJob.id } });
   check("TEST 1 - Job.assignedMembershipId is now member1", refreshed.assignedMembershipId === member1Membership.id);
 
-  const adminReassign = await simulateAssignJobMember(assignedJob.id, businessA.id, member2Membership.id);
+  const adminReassign = await simulateAssignJobMember(adminAccess, assignedJob.id, member2Membership.id);
   check("TEST 2 - ADMIN's re-assignment (change assignment) succeeds", adminReassign.ok === true);
   refreshed = await prisma.job.findUnique({ where: { id: assignedJob.id } });
   check("TEST 2 - Job.assignedMembershipId changed to member2", refreshed.assignedMembershipId === member2Membership.id);
 
-  const unassign = await simulateAssignJobMember(assignedJob.id, businessA.id, "");
+  const unassign = await simulateAssignJobMember(ownerAccess, assignedJob.id, "");
   check("Removing an assignment (empty membershipId) succeeds", unassign.ok === true);
   refreshed = await prisma.job.findUnique({ where: { id: assignedJob.id } });
   check("Job.assignedMembershipId is null after removal", refreshed.assignedMembershipId === null);
 
   // Re-assign to member1 for the rest of the suite.
-  await simulateAssignJobMember(assignedJob.id, businessA.id, member1Membership.id);
+  await simulateAssignJobMember(ownerAccess, assignedJob.id, member1Membership.id);
 
   console.log("\nTEST 4 — Cross-business member cannot be assigned");
-  const crossBusinessAssign = await simulateAssignJobMember(assignedJob.id, businessA.id, betaMemberMembership.id);
+  const crossBusinessAssign = await simulateAssignJobMember(ownerAccess, assignedJob.id, betaMemberMembership.id);
   check("TEST 4 - Assigning a Business B membership to a Business A job is rejected", crossBusinessAssign.ok === false && crossBusinessAssign.reason === "invalid-membership");
   refreshed = await prisma.job.findUnique({ where: { id: assignedJob.id } });
   check("TEST 4 - Job assignment is unchanged after the rejected cross-business attempt", refreshed.assignedMembershipId === member1Membership.id);
+
+  console.log("\nTEST — OWNER/ADMIN self-assignment, other-manager rejection, inactive, MEMBER gate");
+  const ownerSelfJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "SCHEDULED",
+      scheduledAt: new Date(),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      appointmentConfirmationStatus: "CONFIRMED",
+      appointmentConfirmedForProposalId: 1,
+      appointmentConfirmationSource: "PORTAL",
+      propertyAccessMethod: "CUSTOMER_PRESENT",
+    },
+  });
+  const ownerSelf = await simulateAssignJobMember(ownerAccess, ownerSelfJob.id, ownerMembership.id);
+  check("OWNER can assign their own OWNER membership", ownerSelf.ok === true);
+  const ownerSelfRow = await prisma.job.findUnique({ where: { id: ownerSelfJob.id } });
+  check("OWNER self-assignment writes Job.assignedMembershipId = owner membership id", ownerSelfRow.assignedMembershipId === ownerMembership.id);
+
+  const adminSelfJob = await prisma.job.create({
+    data: { businessId: businessA.id, customerId: customerA.id, propertyId: propertyA.id, projectToken: randomUUID(), status: "UNSCHEDULED" },
+  });
+  const adminSelf = await simulateAssignJobMember(adminAccess, adminSelfJob.id, adminMembership.id);
+  check("ADMIN can assign their own ADMIN membership", adminSelf.ok === true);
+  const adminSelfRow = await prisma.job.findUnique({ where: { id: adminSelfJob.id } });
+  check("ADMIN self-assignment writes Job.assignedMembershipId = admin membership id", adminSelfRow.assignedMembershipId === adminMembership.id);
+
+  const ownerToOtherOwner = await simulateAssignJobMember(ownerAccess, assignedJob.id, coOwnerMembership.id);
+  check("OWNER cannot assign another OWNER", ownerToOtherOwner.ok === false && ownerToOtherOwner.reason === "invalid-membership");
+  const ownerToAdmin = await simulateAssignJobMember(ownerAccess, assignedJob.id, adminMembership.id);
+  check("OWNER cannot assign another ADMIN", ownerToAdmin.ok === false && ownerToAdmin.reason === "invalid-membership");
+  const adminToOwner = await simulateAssignJobMember(adminAccess, assignedJob.id, ownerMembership.id);
+  check("ADMIN cannot assign OWNER", adminToOwner.ok === false && adminToOwner.reason === "invalid-membership");
+  const adminToCoOwner = await simulateAssignJobMember(adminAccess, assignedJob.id, coOwnerMembership.id);
+  check("ADMIN cannot assign another OWNER/ADMIN", adminToCoOwner.ok === false && adminToCoOwner.reason === "invalid-membership");
+  const assignInactive = await simulateAssignJobMember(ownerAccess, assignedJob.id, inactiveMembership.id);
+  check("Inactive membership is rejected", assignInactive.ok === false && assignInactive.reason === "invalid-membership");
+  const memberAssign = await simulateAssignJobMember(memberAccess, assignedJob.id, member1Membership.id);
+  check("MEMBER cannot use the management assignment action", memberAssign.ok === false && memberAssign.reason === "forbidden");
+  const afterRejected = await prisma.job.findUnique({ where: { id: assignedJob.id } });
+  check("Rejected manager/inactive/MEMBER attempts leave member1 assigned", afterRejected.assignedMembershipId === member1Membership.id);
+
+  console.log("\nTEST — Assignment candidate UI (self + active MEMBERs, not other OWNER/ADMIN)");
+  function assignmentCandidatesFor(actor) {
+    const members = [
+      member1Membership,
+      member2Membership,
+      inactiveMembership,
+    ].filter((row) => row.businessId === actor.businessId && row.role === "MEMBER" && row.active);
+    const canSelf =
+      (actor.role === "OWNER" || actor.role === "ADMIN") &&
+      actor.active &&
+      actor.businessId === actor.businessId;
+    return canSelf && !members.some((row) => row.id === actor.id)
+      ? [actor, ...members]
+      : members;
+  }
+  const ownerCandidates = assignmentCandidatesFor(ownerMembership);
+  const adminCandidates = assignmentCandidatesFor(adminMembership);
+  check("OWNER candidates include self", ownerCandidates.some((row) => row.id === ownerMembership.id));
+  check("OWNER candidates include active MEMBER workers", ownerCandidates.some((row) => row.id === member1Membership.id) && ownerCandidates.some((row) => row.id === member2Membership.id));
+  check("OWNER candidates exclude other OWNER/ADMIN and inactive MEMBER", !ownerCandidates.some((row) => row.id === coOwnerMembership.id) && !ownerCandidates.some((row) => row.id === adminMembership.id) && !ownerCandidates.some((row) => row.id === inactiveMembership.id));
+  check("ADMIN candidates include self", adminCandidates.some((row) => row.id === adminMembership.id));
+  check("ADMIN candidates include active MEMBER workers", adminCandidates.some((row) => row.id === member1Membership.id));
+  check("ADMIN candidates exclude other OWNER/ADMIN", !adminCandidates.some((row) => row.id === ownerMembership.id) && !adminCandidates.some((row) => row.id === coOwnerMembership.id));
+  check("OWNER and ADMIN candidate lists are de-duplicated by membership id", new Set(ownerCandidates.map((row) => row.id)).size === ownerCandidates.length && new Set(adminCandidates.map((row) => row.id)).size === adminCandidates.length);
+
+  console.log("\nTEST — Self-assigned OWNER live clock uses the canonical TimeEntry path");
+  const ownerClockIn = await clockInTime(prisma, ownerAccess, {
+    membershipId: ownerMembership.id,
+    activityType: "JOB",
+    jobId: ownerSelfJob.id,
+  });
+  check("OWNER can clock into their self-assigned Job", ownerClockIn.status === "RUNNING" && ownerClockIn.jobId === ownerSelfJob.id && ownerClockIn.membershipId === ownerMembership.id);
+  const ownerRunning = await prisma.timeEntry.findMany({
+    where: { businessId: businessA.id, membershipId: ownerMembership.id, status: "RUNNING" },
+  });
+  check("Exactly one RUNNING TimeEntry for the owner's own membership", ownerRunning.length === 1 && ownerRunning[0].id === ownerClockIn.id);
+  const leakedOwnerClock = await prisma.timeEntry.findFirst({
+    where: { id: ownerClockIn.id, businessId: businessB.id },
+  });
+  check("Owner clock does not leak into the foreign tenant", leakedOwnerClock === null);
+  const ownerClockOut = await clockOutTime(prisma, ownerAccess, { membershipId: ownerMembership.id });
+  check("OWNER can clock out of their self-assigned Job", ownerClockOut.status === "READY" && ownerClockOut.endedAt != null);
+  const ownerRunningAfter = await prisma.timeEntry.count({
+    where: { businessId: businessA.id, membershipId: ownerMembership.id, status: "RUNNING" },
+  });
+  check("No parallel owner clock remains after clock-out", ownerRunningAfter === 0);
 
   console.log("\nTEST 5 — Existing (legacy) Job can remain Unassigned safely");
   const legacyJob = await prisma.job.create({
@@ -760,6 +963,38 @@ try {
 
   const fieldHomeUnauth = await fetchRaw(null, "/field");
   check("Unauthenticated request to /field is redirected to sign-in, not rendered", fieldHomeUnauth.status === 307 && fieldHomeUnauth.location === "/sign-in");
+
+  console.log("\nTEST — Self-assigned OWNER Field access, Open Field View, and Field nav");
+  const ownerFieldHome = await fetchRaw(ownerSession, "/field");
+  check("Self-assigned OWNER /field returns 200", ownerFieldHome.status === 200);
+  check("Self-assigned OWNER /field includes their assigned Job", ownerFieldHome.body.includes(customerA.name) && ownerFieldHome.body.includes(`/field/jobs/${ownerSelfJob.id}`));
+  const ownerFieldJob = await fetchRaw(ownerSession, `/field/jobs/${ownerSelfJob.id}`);
+  check("Self-assigned OWNER can open /field/jobs/{jobId}", ownerFieldJob.status === 200 && ownerFieldJob.body.includes(customerA.name));
+  const adminOtherFieldJob = await fetchRaw(adminSession, `/field/jobs/${ownerSelfJob.id}`);
+  check("Another ADMIN who is not assigned cannot open that Field Job", adminOtherFieldJob.status === 404 && !adminOtherFieldJob.body.includes(customerA.name));
+  const foreignOwnerFieldJob = await fetchRaw(betaOwnerSession, `/field/jobs/${ownerSelfJob.id}`);
+  check("Foreign tenant cannot open the owner's Field Job", foreignOwnerFieldJob.status === 404 && !foreignOwnerFieldJob.body.includes(customerA.name));
+  const ownerWorkOrderSelf = await fetchRaw(ownerSession, `/jobs/${ownerSelfJob.id}`);
+  check("Self-assigned viewer gets Open Field View on the Work Order", ownerWorkOrderSelf.status === 200 && ownerWorkOrderSelf.body.includes("Open Field View") && ownerWorkOrderSelf.body.includes(`/field/jobs/${ownerSelfJob.id}`));
+  const ownerWorkOrderOther = await fetchRaw(ownerSession, `/jobs/${adminSelfJob.id}`);
+  check("Non-assignee Work Order does not show Open Field View", ownerWorkOrderOther.status === 200 && !ownerWorkOrderOther.body.includes("Open Field View"));
+  const ownerJobsNav = await fetchRaw(ownerSession, "/jobs");
+  check("Field / My Jobs appears in OWNER management nav and links to /field", ownerJobsNav.status === 200 && ownerJobsNav.body.includes("Field / My Jobs") && ownerJobsNav.body.includes('href="/field"'));
+  const adminJobsNav = await fetchRaw(adminSession, "/jobs");
+  check("Field / My Jobs appears in ADMIN management nav and links to /field", adminJobsNav.status === 200 && adminJobsNav.body.includes("Field / My Jobs") && adminJobsNav.body.includes('href="/field"'));
+  check("OWNER assignment dropdown includes self labeled (you) and active MEMBERs, not other OWNER/ADMIN", ownerWorkOrderSelf.body.includes(`${ownerUser.name} (you)`) && ownerWorkOrderSelf.body.includes(member1User.name) && !ownerWorkOrderSelf.body.includes(coOwnerUser.name) && !ownerWorkOrderSelf.body.includes(adminUser.name));
+
+  console.log("\nTEST — Self-assigned OWNER live clock on /field");
+  await clockInTime(prisma, ownerAccess, {
+    membershipId: ownerMembership.id,
+    activityType: "JOB",
+    jobId: ownerSelfJob.id,
+  });
+  const ownerFieldClockedIn = await fetchRaw(ownerSession, "/field");
+  check("OWNER /field shows the running clock after clock-in", ownerFieldClockedIn.status === 200 && ownerFieldClockedIn.body.includes("Clocked in") && ownerFieldClockedIn.body.includes("Clock Out"));
+  await clockOutTime(prisma, ownerAccess, { membershipId: ownerMembership.id });
+  const ownerFieldClockedOut = await fetchRaw(ownerSession, "/field");
+  check("OWNER /field shows clock-in again after clock-out", ownerFieldClockedOut.status === 200 && ownerFieldClockedOut.body.includes("You are not clocked in.") && ownerFieldClockedOut.body.includes("Clock In · Job"));
 
   console.log("\nTEST 9 — MEMBER still cannot access the OWNER/ADMIN management console (unchanged boundary)");
   const memberDashboard = await fetchRaw(member1Session, "/dashboard");
