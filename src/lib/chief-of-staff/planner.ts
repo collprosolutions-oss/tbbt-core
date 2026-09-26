@@ -6,6 +6,7 @@ import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { isSpecialistEnabled } from "@/lib/chief-of-staff/registry";
 import { isGrowthOwnedRecommendationKey } from "@/lib/chief-of-staff/growth-specialist";
 import { isCommunicationsOwnedRecommendationKey } from "@/lib/chief-of-staff/communications-specialist";
+import { isBusinessProtectionOwnedRecommendationKey } from "@/lib/chief-of-staff/business-protection-specialist";
 import { isKnowledgeLaunchOwnedRecommendationKey } from "@/lib/chief-of-staff/knowledge-launch-specialist";
 import { isMaterialsOwnedRecommendationKey } from "@/lib/chief-of-staff/materials-specialist";
 import { isFinancialOwnedRecommendationKey } from "@/lib/chief-of-staff/specialists/financial";
@@ -30,7 +31,8 @@ const MATERIALS_QUESTION =
   /\b(materials?|suppliers?|vendors?|inventory|stock|lumber|parts|pickup|job materials|material variance|purchase orders?|purchas(?:e|ed|ing)|buy|bought|buying|\bPOs?\b|pric(?:e|es|ing))\b/i;
 const COMMUNICATIONS_QUESTION =
   /\b(?:sms|opt[- ]?(?:in|out)|consent|(?:phone|voice) calls?|communications?|text(?:ed|ing|s)?|email(?:ed|ing)?|messag(?:e|es|ed|ing)|(?:did|have) we (?:contact|text|email|call|send)|can i (?:text|email|call|contact)|what happened with the (?:message|text|email|sms)|why did (?:this |the )?(?:message|text|email|sms) fail|what (?:communication|message) is waiting|what did we send|appointment (?:message|text|sms|email|communication)|contact(?:ed|ing) this customer|unanswered)\b/i;
-const PROTECTION_QUESTION = /\b(vault|agreements?|esign|insurance|business protection)\b/i;
+const PROTECTION_QUESTION =
+  /\b(?:business protection|business vault|\bvault\b|agreements?|agreement coach|e-?sign|insurance|licen[cs]es?|certifications?|expir(?:y|es|ed|ation|ing)|protection checklist|owner review|legal[- ]review|signed (?:file|document|agreement)|protection records?)\b/i;
 const FOCUS_QUESTION = /\b(this week|focus|should i|what should i)\b/i;
 const GENERIC_FOCUS_QUESTION =
   /\b(?:what )?should i focus\b|\bfocus on(?: this week)?\b|\bwhat should i (?:do|work on) this week\b/i;
@@ -175,6 +177,24 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     skipped.push({ id: "COMMUNICATIONS", reason: "DISABLED" });
   }
 
+  const protectionKeys = input.activeRecommendationKeys.filter((key) =>
+    isBusinessProtectionOwnedRecommendationKey(key),
+  );
+  const protectionHint =
+    input.entityHints?.recommendationKey != null &&
+    isBusinessProtectionOwnedRecommendationKey(input.entityHints.recommendationKey);
+  const wantsProtection =
+    PROTECTION_QUESTION.test(question) || Boolean(protectionHint);
+
+  if (
+    isSpecialistEnabled("BUSINESS_PROTECTION") &&
+    (wantsProtection || (FOCUS_QUESTION.test(question) && protectionKeys.length > 0))
+  ) {
+    selected.push("BUSINESS_PROTECTION");
+  } else if (PROTECTION_QUESTION.test(question) && !isSpecialistEnabled("BUSINESS_PROTECTION")) {
+    skipped.push({ id: "BUSINESS_PROTECTION", reason: "DISABLED" });
+  }
+
   const isFocus = FOCUS_QUESTION.test(question);
   for (const hint of DISABLED_KEYWORD_HINTS) {
     if (!hint.pattern.test(question)) continue;
@@ -224,6 +244,14 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
       (knowledgeKeys.length > 0 || Boolean(knowledgeHint) || explicitKnowledge)
     ) {
       allowed.add("KNOWLEDGE_LAUNCH");
+    }
+    const explicitProtection =
+      PROTECTION_QUESTION.test(question) && !isGenericFocusQuestion(question);
+    if (
+      isSpecialistEnabled("BUSINESS_PROTECTION") &&
+      (protectionKeys.length > 0 || Boolean(protectionHint) || explicitProtection)
+    ) {
+      allowed.add("BUSINESS_PROTECTION");
     }
     for (const id of [...selected]) {
       if (!allowed.has(id)) {

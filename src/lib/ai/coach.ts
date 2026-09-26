@@ -15,6 +15,8 @@ export type CoachContext = {
   communicationsFacts?: Record<string, string>;
   /** Bounded Knowledge/Launch facts from the selected specialist only. */
   knowledgeLaunchFacts?: Record<string, string>;
+  /** Bounded Business Protection facts from the selected specialist only. */
+  businessProtectionFacts?: Record<string, string>;
 };
 
 export const COACH_FACT_KEYS = [
@@ -104,6 +106,24 @@ export const COACH_FACT_KEYS = [
   "launch-unfinished-steps",
   "setup-proposal-count",
   "setup-proposal-excerpt",
+  "protection-expired-count",
+  "protection-expiring-soon-count",
+  "protection-missing-date-count",
+  "protection-current-count",
+  "protection-no-date-optional-count",
+  "protection-active-record-count",
+  "protection-archived-record-count",
+  "protection-draft-count",
+  "protection-ready-count",
+  "protection-sent-count",
+  "protection-complete-count",
+  "protection-owner-review-count",
+  "protection-legal-ack-count",
+  "protection-signed-file-count",
+  "protection-checklist-met-count",
+  "protection-checklist-open-count",
+  "protection-esign-connected",
+  "protection-esign-status",
 ] as const;
 
 export type CoachFactKey = (typeof COACH_FACT_KEYS)[number];
@@ -267,6 +287,7 @@ function factList(context: CoachContext): CitedFact[] {
     ...materialsFactEntries(context.materialsFacts),
     ...communicationsFactEntries(context.communicationsFacts),
     ...knowledgeLaunchFactEntries(context.knowledgeLaunchFacts),
+    ...businessProtectionFactEntries(context.businessProtectionFacts),
   ];
 }
 
@@ -349,6 +370,36 @@ function knowledgeLaunchFactEntries(facts?: Record<string, string>): CitedFact[]
   if (!facts) return [];
   return Object.entries(facts).flatMap(([key, value]) => {
     const meta = KNOWLEDGE_LAUNCH_FACT_LABELS[key];
+    if (!meta) return [];
+    return [{ key, label: meta.label, value, href: meta.href } satisfies CitedFact];
+  });
+}
+
+const BUSINESS_PROTECTION_FACT_LABELS: Record<string, { label: string; href: string }> = {
+  "protection-expired-count": { label: "Vault records with EXPIRED date state", href: "/business-protection" },
+  "protection-expiring-soon-count": { label: "Vault records EXPIRING_SOON", href: "/business-protection" },
+  "protection-missing-date-count": { label: "Vault records MISSING_DATE", href: "/business-protection" },
+  "protection-current-count": { label: "Vault records with CURRENT date state", href: "/business-protection" },
+  "protection-no-date-optional-count": { label: "Vault records NO_DATE_OPTIONAL", href: "/business-protection" },
+  "protection-active-record-count": { label: "ACTIVE vault records", href: "/business-protection?area=vault" },
+  "protection-archived-record-count": { label: "ARCHIVED vault records", href: "/business-protection?area=vault" },
+  "protection-draft-count": { label: "Agreements in DRAFT", href: "/business-protection?area=agreements" },
+  "protection-ready-count": { label: "Agreements in READY", href: "/business-protection?area=agreements" },
+  "protection-sent-count": { label: "Agreements in SENT", href: "/business-protection?area=agreements" },
+  "protection-complete-count": { label: "Agreements with recorded completion", href: "/business-protection?area=agreements" },
+  "protection-owner-review-count": { label: "Agreements with recorded owner review", href: "/business-protection?area=agreements" },
+  "protection-legal-ack-count": { label: "Agreements with recorded legal-review acknowledgment", href: "/business-protection?area=agreements" },
+  "protection-signed-file-count": { label: "Agreements with a recorded signed file", href: "/business-protection?area=agreements" },
+  "protection-checklist-met-count": { label: "Protection checklist items on file", href: "/business-protection" },
+  "protection-checklist-open-count": { label: "Protection checklist items missing from records", href: "/business-protection" },
+  "protection-esign-connected": { label: "E-sign provider connected", href: "/business-protection" },
+  "protection-esign-status": { label: "Recorded e-sign provider status", href: "/business-protection" },
+};
+
+function businessProtectionFactEntries(facts?: Record<string, string>): CitedFact[] {
+  if (!facts) return [];
+  return Object.entries(facts).flatMap(([key, value]) => {
+    const meta = BUSINESS_PROTECTION_FACT_LABELS[key];
     if (!meta) return [];
     return [{ key, label: meta.label, value, href: meta.href } satisfies CitedFact];
   });
@@ -499,6 +550,46 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
         `${context.facts.knowledgeNeedsApproval?.count ?? 0} knowledge entr${(context.facts.knowledgeNeedsApproval?.count ?? 0) === 1 ? "y needs" : "ies need"} approval. ` +
         `${context.facts.experienceCandidates?.count ?? 0} experience candidate(s) are on file. ` +
         "Recorded Knowledge/Launch facts were not loaded for this question beyond Business Health counts.";
+    }
+  } else if (/\b(vault|agreement|e-?sign|insurance|licen[cs]e|expir|business protection|legal[- ]review|owner review|signed file)\b/.test(q)) {
+    stance = "FACT";
+    if (context.businessProtectionFacts && Object.keys(context.businessProtectionFacts).length > 0) {
+      const facts = context.businessProtectionFacts;
+      keys = [
+        "protection-expired-count",
+        "protection-expiring-soon-count",
+        "protection-missing-date-count",
+        "protection-current-count",
+        "protection-draft-count",
+        "protection-esign-status",
+      ].filter((key) => facts[key] != null);
+      if (keys.length === 0) keys = Object.keys(facts).slice(0, 6);
+      const expired = facts["protection-expired-count"];
+      const soon = facts["protection-expiring-soon-count"];
+      const missing = facts["protection-missing-date-count"];
+      const current = facts["protection-current-count"];
+      const draft = facts["protection-draft-count"];
+      const ready = facts["protection-ready-count"];
+      const sent = facts["protection-sent-count"];
+      const complete = facts["protection-complete-count"];
+      const esign = facts["protection-esign-status"];
+      const checklistMet = facts["protection-checklist-met-count"];
+      text =
+        (expired != null ? `${expired} ACTIVE vault ${expired === "1" ? "record is" : "records are"} EXPIRED. ` : "") +
+        (soon != null ? `${soon} ACTIVE vault ${soon === "1" ? "record is" : "records are"} EXPIRING_SOON. ` : "") +
+        (missing != null ? `${missing} ACTIVE vault ${missing === "1" ? "record is" : "records are"} MISSING_DATE, which is not CURRENT and not a compliance finding. ` : "") +
+        (current != null ? `${current} ACTIVE vault ${current === "1" ? "record is" : "records are"} CURRENT, which is recorded date state only. ` : "") +
+        (draft != null ? `${draft} agreement${draft === "1" ? " is" : "s are"} DRAFT. DRAFT is not READY, SENT, or COMPLETE. ` : "") +
+        (ready != null ? `${ready} agreement${ready === "1" ? " is" : "s are"} READY, which is not SENT. ` : "") +
+        (sent != null ? `${sent} agreement${sent === "1" ? " is" : "s are"} SENT, which is not COMPLETE. ` : "") +
+        (complete != null ? `${complete} agreement${complete === "1" ? " has" : "s have"} a recorded completion state. That is organizational record truth, not legal sufficiency. ` : "") +
+        (checklistMet != null ? `${checklistMet} checklist ${checklistMet === "1" ? "item is" : "items are"} met from ACTIVE records on file. Checklist state is not legal compliance. ` : "") +
+        (esign ? `Recorded e-sign provider status is ${esign}. ` : "") +
+        "The Coach does not write vault records, sign agreements, or invent legal conclusions.";
+    } else {
+      keys = [];
+      text =
+        "Recorded Business Protection vault and agreement metadata were not loaded for this question. Missing Protection data is not treated as an empty vault or as legal compliance.";
     }
   } else if (/\b(inventory|stock(?: on hand)?|in stock)\b/.test(q)) {
     stance = "FACT";

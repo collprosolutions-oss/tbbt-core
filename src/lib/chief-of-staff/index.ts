@@ -65,6 +65,11 @@ export {
   resetCommunicationsSpecialistCounters,
 } from "@/lib/chief-of-staff/communications-snapshot";
 export {
+  getBusinessProtectionProjectionLoadCount,
+  getBusinessProtectionSpecialistInterpretationCount,
+  resetBusinessProtectionSpecialistCounters,
+} from "@/lib/chief-of-staff/business-protection-snapshot";
+export {
   getKnowledgeLaunchProjectionLoadCount,
   getKnowledgeLaunchSpecialistInterpretationCount,
   resetKnowledgeLaunchSpecialistCounters,
@@ -126,6 +131,35 @@ export {
   unknownStaysUnknown,
   unreviewedIsNotApproved,
 } from "@/lib/chief-of-staff/knowledge-launch-specialist";
+export {
+  BUSINESS_PROTECTION_CONTEXT_CAPS,
+  BUSINESS_PROTECTION_OWNED_RECOMMENDATION_KEYS,
+  PROTECTION_STATE_CONTRACT,
+  TARGET_CONSISTENCY_LIMITATION as BUSINESS_PROTECTION_TARGET_CONSISTENCY_LIMITATION,
+  archivedIsNotActive,
+  businessProtectionEntitlementLimitation,
+  businessProtectionProjectionHasForbiddenFields,
+  businessProtectionTextHasLegalSufficiency,
+  checklistMetIsNotCompliance,
+  completeDoesNotMeanEnforceable,
+  currentIsNotInsured,
+  draftIsNotComplete,
+  draftIsNotReady,
+  esignDisconnectedIsNotSigned,
+  getLastBusinessProtectionProjection,
+  isBusinessProtectionOwnedRecommendationKey,
+  legalAckIsNotAttorneyApproval,
+  loadBusinessProtectionProjection,
+  missingDateIsNotCompliant,
+  missingDateIsNotCurrent,
+  noDateOptionalIsNotCurrent,
+  ownerReviewIsRecordedOnly,
+  projectBusinessProtectionFacts,
+  readyIsNotSent,
+  resetLastBusinessProtectionProjection,
+  runBusinessProtectionSpecialist,
+  sentIsNotComplete,
+} from "@/lib/chief-of-staff/business-protection-specialist";
 export {
   MATERIALS_CONTEXT_CAPS,
   MATERIALS_OWNED_RECOMMENDATION_KEYS,

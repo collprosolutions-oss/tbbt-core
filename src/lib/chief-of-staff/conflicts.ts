@@ -415,5 +415,66 @@ export function resolveConflicts(input: {
     });
   }
 
+  const protectionKeys = (...keys: string[]) => keys.filter((key) => recordedKeys.has(key));
+
+  if (hasAny("protection-missing-date")) {
+    items.push({
+      kind: "MISSING_DATE_VS_CURRENT",
+      recommendationKeys: protectionKeys("protection-missing-date", "protection-current-date"),
+      summary:
+        "MISSING_DATE is not CURRENT. A missing recorded date is not a finding of legal compliance.",
+    });
+  }
+
+  if (hasAny("protection-checklist-gap")) {
+    items.push({
+      kind: "CHECKLIST_MET_VS_COMPLIANCE",
+      recommendationKeys: protectionKeys("protection-checklist-gap"),
+      summary:
+        "Checklist state is organizational record truth. A met checklist item is not legal, licensing, or insurance compliance.",
+    });
+  }
+
+  if (hasAny("protection-agreement-draft")) {
+    items.push({
+      kind: "DRAFT_VS_COMPLETE",
+      recommendationKeys: protectionKeys("protection-agreement-draft", "protection-agreement-complete"),
+      summary: "DRAFT is not COMPLETE. A recorded draft is not legal sufficiency, validity, or enforceability.",
+    });
+  }
+
+  if (hasAny("protection-agreement-ready")) {
+    items.push({
+      kind: "READY_VS_SENT",
+      recommendationKeys: protectionKeys("protection-agreement-ready", "protection-agreement-sent"),
+      summary: "READY is not SENT. Recorded readiness is not a send and not a legal conclusion.",
+    });
+  }
+
+  if (hasAny("protection-agreement-sent")) {
+    items.push({
+      kind: "SENT_VS_COMPLETE",
+      recommendationKeys: protectionKeys("protection-agreement-sent", "protection-agreement-complete"),
+      summary: "SENT is not COMPLETE. Recorded send state is not completion and not enforceability.",
+    });
+  }
+
+  if (hasAny("protection-esign-disconnected")) {
+    items.push({
+      kind: "ESIGN_DISCONNECTED_VS_SIGNED",
+      recommendationKeys: protectionKeys("protection-esign-disconnected", "protection-agreement-complete"),
+      summary:
+        "No e-sign provider is connected. Recorded completion does not invent a digital signature.",
+    });
+  }
+
+  if (hasAny("protection-archived-record")) {
+    items.push({
+      kind: "ARCHIVED_VS_ACTIVE",
+      recommendationKeys: protectionKeys("protection-archived-record"),
+      summary: "ARCHIVED is owner-set record status. It is not an expiry state and not a compliance finding.",
+    });
+  }
+
   return { items, uniqueRecommendationKeys };
 }
