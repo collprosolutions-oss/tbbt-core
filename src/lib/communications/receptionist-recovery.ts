@@ -341,7 +341,7 @@ export async function loadReceptionistRecoveryCenter(
     if (customerId && owned.customerId !== customerId) return null;
     return {
       id: owned.id,
-      label: owned.summary,
+      label: owned.summary ?? "Recorded request",
       href: `/requests/${owned.id}`,
     };
   }
