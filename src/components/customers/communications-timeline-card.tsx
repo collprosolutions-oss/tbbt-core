@@ -1,15 +1,22 @@
 import Link from "next/link";
-import { CommunicationTimelineList } from "@/components/communications/timeline-list";
+import { CustomerCommunicationTimeline } from "@/components/communications/customer-communication-timeline";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { CommunicationTimelineItem } from "@/lib/communications/timeline";
+import type {
+  CommunicationTimelineItem,
+  CommunicationTimelineSummary,
+} from "@/lib/communications/timeline";
 
 export function CustomerCommunicationsCard({
   customerId,
   items,
+  summary,
+  timeZone,
 }: {
   customerId: string;
   items: CommunicationTimelineItem[];
+  summary: CommunicationTimelineSummary;
+  timeZone: string;
 }) {
   return (
     <Card>
@@ -20,7 +27,7 @@ export function CustomerCommunicationsCard({
         </Button>
       </CardHeader>
       <CardContent>
-        <CommunicationTimelineList items={items} />
+        <CustomerCommunicationTimeline items={items} summary={summary} timeZone={timeZone} />
       </CardContent>
     </Card>
   );

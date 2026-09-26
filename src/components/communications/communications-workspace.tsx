@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ComposeCommunicationForm } from "@/components/communications/compose-form";
 import { MissedCallForm } from "@/components/communications/missed-call-form";
+import { CustomerCommunicationTimeline } from "@/components/communications/customer-communication-timeline";
 import { CommunicationTimelineList } from "@/components/communications/timeline-list";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
@@ -92,7 +93,9 @@ export function CommunicationsWorkspace({
                       <span className="text-muted-foreground">{log.customer?.name ?? "Unknown caller"}</span>
                     </div>
                     <p className="mt-1">{log.summary}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{formatDateTime(log.occurredAt)}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {formatDateTime(log.occurredAt, source.timeZone)}
+                    </p>
                   </div>
                 ))
               )}
@@ -139,12 +142,20 @@ function InboxPanel({ source }: { source: Source }) {
           <CardTitle>Customer timeline</CardTitle>
           <CardDescription>
             {source.selectedCustomerId
-              ? "Chronological records plus safe projections. Projections do not send."
+              ? "Recorded communications only. Lifecycle status is not treated as a send."
               : "Add a customer to see a timeline."}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <CommunicationTimelineList items={source.timeline} />
+          {source.timelineSummary ? (
+            <CustomerCommunicationTimeline
+              items={source.timeline}
+              summary={source.timelineSummary}
+              timeZone={source.timeZone}
+            />
+          ) : (
+            <CommunicationTimelineList items={source.timeline} timeZone={source.timeZone} />
+          )}
         </CardContent>
       </Card>
     </div>

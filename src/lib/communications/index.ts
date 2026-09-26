@@ -29,9 +29,17 @@ export {
   setCommunicationEmailSender,
 } from "@/lib/communications/engine";
 export {
+  CUSTOMER_COMMUNICATION_TIMELINE_LIMIT,
+  communicationContextLabel,
+  compareCommunicationTimelineItems,
+  emptyCustomerCommunicationHistory,
+  filterCommunicationTimelineItems,
   listAssignedJobCommunications,
   listBusinessCommunicationInbox,
+  loadCustomerCommunicationHistory,
   loadCustomerCommunicationTimeline,
+  recordedCommunicationDirection,
+  summarizeCustomerCommunicationTimeline,
 } from "@/lib/communications/timeline";
 export {
   PHONE_LOG_INJECTED_FAILURE_PREFIX,
