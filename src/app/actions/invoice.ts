@@ -127,12 +127,13 @@ export async function markInvoicePaid(
   const paymentMethod = readString(formData, "paymentMethod");
   const paymentReference = readString(formData, "paymentReference");
   const amount = readString(formData, "amount");
+  const closeCovered = readString(formData, "closeCovered") === "1";
 
   if (!invoiceId) {
     return { error: "That invoice could not be marked paid." };
   }
 
-  if (!isPaymentMethodValue(paymentMethod)) {
+  if (!closeCovered && !isPaymentMethodValue(paymentMethod)) {
     return { error: "Choose a payment method." };
   }
 
@@ -146,9 +147,10 @@ export async function markInvoicePaid(
   try {
     await recordOwnerInvoiceBalancePayment(prisma, access, {
       invoiceId,
-      amount,
-      method: paymentMethod,
-      note: paymentReference || null,
+      amount: closeCovered ? null : amount,
+      method: closeCovered ? null : paymentMethod,
+      note: closeCovered ? null : paymentReference || null,
+      closeCovered,
     });
     revalidatePath("/invoices");
     revalidatePath(`/invoices/${invoiceId}`);

@@ -751,6 +751,30 @@ function parseOwnerInvoicePaymentAmount(raw: string | null | undefined) {
   }
 }
 
+function closingTruthFromRecordedPayments(
+  payments: Array<{ method: string; note: string | null; receivedAt: Date }>,
+) {
+  const latest = payments[payments.length - 1];
+  if (!latest) {
+    return {
+      paymentMethod: null as string | null,
+      paymentReference: null as string | null,
+      paidAt: new Date(),
+    };
+  }
+  const method = latest.method.trim();
+  const note = latest.note?.trim() || null;
+  const receivedAt =
+    latest.receivedAt instanceof Date && !Number.isNaN(latest.receivedAt.getTime())
+      ? latest.receivedAt
+      : new Date();
+  return {
+    paymentMethod: method || null,
+    paymentReference: note,
+    paidAt: receivedAt,
+  };
+}
+
 /**
  * Owner-recorded invoice-balance collection. Locks the Invoice row so
  * concurrent Mark Paid / Record Payment submissions share one remaining-
@@ -763,16 +787,14 @@ export async function recordOwnerInvoiceBalancePayment(
   input: {
     invoiceId: string;
     amount?: string | null;
-    method: string;
+    method?: string | null;
     note?: string | null;
+    closeCovered?: boolean;
   },
 ): Promise<OwnerInvoiceBalancePaymentResult> {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
   if (!input.invoiceId) {
     throw new ProjectPaymentError("That invoice could not be found.");
-  }
-  if (!isPaymentMethodValue(input.method)) {
-    throw new ProjectPaymentError("Choose a payment method.");
   }
 
   const result = await db.$transaction(async (tx) => {
@@ -822,6 +844,7 @@ export async function recordOwnerInvoiceBalancePayment(
     const remaining = breakdown.amountDue;
 
     if (remaining.lte(0)) {
+      const closing = closingTruthFromRecordedPayments(payments);
       const closed = await tx.invoice.updateMany({
         where: {
           id: invoice.id,
@@ -830,9 +853,9 @@ export async function recordOwnerInvoiceBalancePayment(
         },
         data: {
           status: "PAID",
-          paidAt: new Date(),
-          paymentMethod: input.method,
-          paymentReference: input.note?.trim() || null,
+          paidAt: closing.paidAt,
+          paymentMethod: closing.paymentMethod,
+          paymentReference: closing.paymentReference,
         },
       });
       return {
@@ -845,6 +868,16 @@ export async function recordOwnerInvoiceBalancePayment(
         recordedAmount: ZERO,
         customerId: invoice.customerId,
       };
+    }
+
+    if (input.closeCovered) {
+      throw new ProjectPaymentError(
+        "This invoice still has a remaining balance. Refresh and record the payment.",
+      );
+    }
+    const method = input.method ?? "";
+    if (!isPaymentMethodValue(method)) {
+      throw new ProjectPaymentError("Choose a payment method.");
     }
 
     const requested = parseOwnerInvoicePaymentAmount(input.amount);
@@ -864,7 +897,7 @@ export async function recordOwnerInvoiceBalancePayment(
       invoiceId: invoice.id,
       purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
       amount,
-      method: input.method,
+      method,
       note: input.note ?? null,
     });
 
@@ -880,7 +913,7 @@ export async function recordOwnerInvoiceBalancePayment(
         data: {
           status: "PAID",
           paidAt: new Date(),
-          paymentMethod: input.method,
+          paymentMethod: method,
           paymentReference: input.note?.trim() || null,
         },
       });

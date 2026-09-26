@@ -229,6 +229,14 @@ check(
     formSrc.includes("paymentMethod"),
 );
 check(
+  "already-covered SENT invoices close as paid without collecting a method",
+  formSrc.includes('name="closeCovered"') &&
+    formSrc.includes("alreadyCovered") &&
+    formSrc.includes("Mark Paid") &&
+    projectPaymentsSrc.includes("closingTruthFromRecordedPayments") &&
+    invoiceActionSrc.includes("closeCovered"),
+);
+check(
   "dashboard request links use selected request IDs",
   dashboardSrc.includes("Requests without an estimate") &&
     dashboardSrc.includes("Recent requests") &&
@@ -457,6 +465,172 @@ try {
     leftover.recordedAmount.toString() === "350" &&
       afterDepositClose.invoice.status === "PAID" &&
       afterDepositClose.breakdown.amountDue.toString() === "0",
+  );
+
+  console.log("\nTEST — Fully covered SENT invoice closes from recorded payment truth");
+  const coveredZelle = await seedSentInvoice({
+    businessId: tenantA.business.id,
+    customerId: tenantA.customer.id,
+    propertyId: tenantA.property.id,
+    total: "500.00",
+  });
+  const zelleReceivedAt = new Date("2026-09-01T15:00:00.000Z");
+  await recordSucceededPayment(prisma, {
+    businessId: tenantA.business.id,
+    customerId: tenantA.customer.id,
+    jobId: coveredZelle.job.id,
+    invoiceId: coveredZelle.invoice.id,
+    purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+    amount: new Prisma.Decimal("500.00"),
+    method: "ZELLE_BANK_TRANSFER",
+    note: "zelle 500",
+    receivedAt: zelleReceivedAt,
+  });
+  const beforeCoveredClose = await invoiceTruth(tenantA.business.id, coveredZelle.invoice.id);
+  const coveredClose = await recordOwnerInvoiceBalancePayment(prisma, accessA, {
+    invoiceId: coveredZelle.invoice.id,
+    method: "CASH",
+    note: "should not be written",
+    closeCovered: true,
+  });
+  const afterCoveredClose = await invoiceTruth(tenantA.business.id, coveredZelle.invoice.id);
+  const coveredEvents = await prisma.businessEvent.findMany({
+    where: {
+      businessId: tenantA.business.id,
+      type: "INVOICE_PAID",
+      subjectId: coveredZelle.invoice.id,
+    },
+  });
+  check(
+    "fully covered SENT invoice creates no new Payment",
+    coveredClose.created === false &&
+      afterCoveredClose.payments.length === beforeCoveredClose.payments.length &&
+      afterCoveredClose.payments.length === 1,
+  );
+  check("fully covered SENT invoice becomes PAID", afterCoveredClose.invoice.status === "PAID" && coveredClose.transitionedToPaid === true);
+  check(
+    "paymentMethod does not become submitted CASH",
+    afterCoveredClose.invoice.paymentMethod === "ZELLE_BANK_TRANSFER" &&
+      afterCoveredClose.invoice.paymentMethod !== "CASH",
+  );
+  check(
+    "recorded method and reference remain truthful",
+    afterCoveredClose.invoice.paymentReference === "zelle 500" &&
+      afterCoveredClose.payments[0].method === "ZELLE_BANK_TRANSFER",
+  );
+  check(
+    "paidAt reflects the recorded payment",
+    afterCoveredClose.invoice.paidAt?.toISOString() === zelleReceivedAt.toISOString(),
+  );
+  check("INVOICE_PAID event emitted once for covered close", coveredEvents.length === 1);
+
+  const mixedCovered = await seedSentInvoice({
+    businessId: tenantA.business.id,
+    customerId: tenantA.customer.id,
+    propertyId: tenantA.property.id,
+    total: "500.00",
+  });
+  await recordSucceededPayment(prisma, {
+    businessId: tenantA.business.id,
+    customerId: tenantA.customer.id,
+    jobId: mixedCovered.job.id,
+    invoiceId: mixedCovered.invoice.id,
+    purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+    amount: new Prisma.Decimal("200.00"),
+    method: "CASH",
+    note: "first cash",
+    receivedAt: new Date("2026-09-02T12:00:00.000Z"),
+  });
+  await recordSucceededPayment(prisma, {
+    businessId: tenantA.business.id,
+    customerId: tenantA.customer.id,
+    jobId: mixedCovered.job.id,
+    invoiceId: mixedCovered.invoice.id,
+    purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+    amount: new Prisma.Decimal("300.00"),
+    method: "ZELLE_BANK_TRANSFER",
+    note: "closing zelle",
+    receivedAt: new Date("2026-09-03T12:00:00.000Z"),
+  });
+  const mixedClose = await recordOwnerInvoiceBalancePayment(prisma, accessA, {
+    invoiceId: mixedCovered.invoice.id,
+    method: "CHECK",
+    note: "invented check",
+    closeCovered: true,
+  });
+  const afterMixed = await invoiceTruth(tenantA.business.id, mixedCovered.invoice.id);
+  check(
+    "mixed prior payments that already cover create no extra Payment",
+    mixedClose.created === false &&
+      afterMixed.payments.length === 2 &&
+      afterMixed.invoice.status === "PAID",
+  );
+  check(
+    "mixed cover does not invent method or reference",
+    afterMixed.invoice.paymentMethod === "ZELLE_BANK_TRANSFER" &&
+      afterMixed.invoice.paymentReference === "closing zelle" &&
+      afterMixed.invoice.paymentMethod !== "CHECK",
+  );
+
+  const depositCovered = await seedSentInvoice({
+    businessId: tenantA.business.id,
+    customerId: tenantA.customer.id,
+    propertyId: tenantA.property.id,
+    total: "500.00",
+  });
+  await recordSucceededPayment(prisma, {
+    businessId: tenantA.business.id,
+    customerId: tenantA.customer.id,
+    jobId: depositCovered.job.id,
+    invoiceId: depositCovered.invoice.id,
+    purpose: PAYMENT_PURPOSE_MATERIAL_DEPOSIT,
+    amount: new Prisma.Decimal("500.00"),
+    method: "ZELLE_BANK_TRANSFER",
+    note: "full material deposit",
+  });
+  const depositCoveredClose = await recordOwnerInvoiceBalancePayment(prisma, accessA, {
+    invoiceId: depositCovered.invoice.id,
+    closeCovered: true,
+  });
+  const afterDepositCovered = await invoiceTruth(tenantA.business.id, depositCovered.invoice.id);
+  check(
+    "fully covered by material deposit fabricates no INVOICE_BALANCE Payment",
+    depositCoveredClose.created === false &&
+      afterDepositCovered.payments.every((row) => row.purpose === PAYMENT_PURPOSE_MATERIAL_DEPOSIT) &&
+      afterDepositCovered.payments.filter((row) => row.purpose === PAYMENT_PURPOSE_INVOICE_BALANCE).length === 0,
+  );
+  check(
+    "material-deposit cover transitions PAID from recorded deposit truth",
+    afterDepositCovered.invoice.status === "PAID" &&
+      afterDepositCovered.invoice.paymentMethod === "ZELLE_BANK_TRANSFER" &&
+      afterDepositCovered.invoice.paymentReference === "full material deposit",
+  );
+
+  console.log("\nTEST — Stale close-out rejects when server due is still positive");
+  const staleCloseInvoice = await seedSentInvoice({
+    businessId: tenantA.business.id,
+    customerId: tenantA.customer.id,
+    propertyId: tenantA.property.id,
+    total: "500.00",
+  });
+  await expectRejects(
+    "stale close-as-paid rejects when remaining due is > 0",
+    () =>
+      recordOwnerInvoiceBalancePayment(prisma, accessA, {
+        invoiceId: staleCloseInvoice.invoice.id,
+        closeCovered: true,
+        method: "CASH",
+      }),
+    (error) =>
+      error instanceof ProjectPaymentError &&
+      error.message.includes("remaining balance"),
+  );
+  const afterStaleClose = await invoiceTruth(tenantA.business.id, staleCloseInvoice.invoice.id);
+  check(
+    "stale close-out creates no Payment and leaves SENT",
+    afterStaleClose.invoice.status === "SENT" &&
+      afterStaleClose.payments.length === 0 &&
+      afterStaleClose.breakdown.amountDue.toString() === "500",
   );
 
   console.log("\nTEST — Receivable totals use remaining due");
