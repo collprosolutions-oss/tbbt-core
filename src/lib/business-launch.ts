@@ -117,6 +117,7 @@ export type LaunchStepRecord = {
 
 export type LaunchProgressSummary = {
   status: LaunchProgressStatus;
+  hasRecordedProgress: boolean;
   definedStepCount: number;
   completedCount: number;
   skippedCount: number;
@@ -135,6 +136,7 @@ export function buildLaunchProgressSummary(input: {
   lastStepKey?: string | null;
   resumeLaterAt?: Date | null;
   completedAt?: Date | null;
+  hasRecordedProgress?: boolean;
   steps?: Array<{
     stepKey: string;
     status: string;
@@ -169,6 +171,7 @@ export function buildLaunchProgressSummary(input: {
     input.lastStepKey && isLaunchStepKey(input.lastStepKey) ? input.lastStepKey : null;
   return {
     status: input.status === "COMPLETED" || allResolved ? "COMPLETED" : "IN_PROGRESS",
+    hasRecordedProgress: Boolean(input.hasRecordedProgress),
     definedStepCount,
     completedCount,
     skippedCount,

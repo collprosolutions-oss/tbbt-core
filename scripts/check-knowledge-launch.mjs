@@ -30,7 +30,7 @@ const {
   ownerNeedsBusinessLaunch,
   parseLaunchStepKey,
 } = await import("@/lib/business-launch");
-const { completeLaunchStep, deferLaunchStep, ensureLaunchProgress, skipLaunchStep } =
+const { completeLaunchStep, deferLaunchStep, ensureLaunchProgress, resumeLaunchLater, skipLaunchStep } =
   await import("@/lib/business-launch-ops");
 const { loadLaunchWorkspace } = await import("@/lib/business-launch-data");
 const { createKnowledgeEntry, setKnowledgeApproval, setKnowledgeArchived, updateKnowledgeEntry } =
@@ -122,6 +122,7 @@ try {
   check("Launch has 14 defined steps", LAUNCH_STEP_KEYS.length === 14);
   check("Progress uses defined steps, not a fake total", buildLaunchProgressSummary({}).definedStepCount === 14);
   check("Empty progress is 0%", buildLaunchProgressSummary({}).progressPercent === 0);
+  check("Synthesized empty progress is not recorded", buildLaunchProgressSummary({}).hasRecordedProgress === false);
   check("Recommended next starts at identity", buildLaunchProgressSummary({}).recommendedNext === "identity");
   check("parseLaunchStepKey falls back", parseLaunchStepKey("nope") === "identity");
   check(
@@ -173,6 +174,28 @@ try {
   check("Forbidden trade proposal is represented", companyAi.includes("TRADE_ACTIVATION"));
   check("Launch documents no silent pricing", launchOps.includes("LAUNCH_NO_SILENT_PRICING_MESSAGE"));
   check("Website publish stays a separate action", LAUNCH_NO_PUBLISH_MESSAGE.includes("never publishes"));
+
+  const launchPage = readRepo("src/app/(app)/launch/page.tsx");
+  const dashboardPage = readRepo("src/app/(app)/dashboard/page.tsx");
+  const dashboardCard = readRepo("src/components/launch/dashboard-card.tsx");
+  check(
+    "GET /launch does not create launch progress",
+    !launchPage.includes("ensureLaunchProgress") && launchPage.includes("loadLaunchWorkspace"),
+  );
+  check(
+    "Dashboard hides unfinished 0-of-14 copy until Launch is recorded",
+    dashboardPage.includes("hasRecordedProgress") &&
+      dashboardCard.includes("hasRecordedProgress") &&
+      dashboardCard.includes("Optional: build out more business settings") &&
+      dashboardCard.includes("does not require") &&
+      dashboardCard.includes("Continue launch"),
+  );
+  check(
+    "Hours and Scheduling launch steps do not wipe unavailable dates",
+    !launchOps.includes("unavailableDates: []") &&
+      launchOps.includes("readUnavailableDates") &&
+      launchOps.includes("updateSchedulingSettingsOp"),
+  );
 
   const emptyRecs = buildBsosRecommendations(EMPTY_BSOS_FACTS);
   check("Empty BSOS facts still have no recommendations", emptyRecs.length === 0);
@@ -228,12 +251,210 @@ try {
   const adminA = makeAccess(businessA.id, "ADMIN", adminMem.id);
   const ownerB = makeAccess(businessB.id, "OWNER", betaMem.id);
 
+  const setupCompleteBusiness = {
+    slug: "new-handyman",
+    firstRunSetupCompletedAt: new Date(),
+    starterServicesSetupCompletedAt: new Date(),
+    websiteSetupCompletedAt: new Date(),
+  };
+
+  console.log("\nDB — viewing Launch does not create a resume obligation");
+  const viewed = await loadLaunchWorkspace(prisma, businessA.id);
+  const viewedRow = await prisma.businessLaunchProgress.findFirst({ where: { businessId: businessA.id } });
+  check("GET /launch load creates no BusinessLaunchProgress row", viewedRow == null);
+  check("Unstarted Launch workspace synthesizes 14 pending steps in memory", viewed.progress.definedStepCount === 14 && viewed.progress.pendingCount === 14);
+  check("Unstarted Launch has no recorded progress", viewed.progress.hasRecordedProgress === false);
+  check(
+    "Unstarted Launch does not force post-auth /launch",
+    postAuthenticationPath({
+      role: "OWNER",
+      business: setupCompleteBusiness,
+      launch: viewedRow,
+    }) === "/dashboard" &&
+      ownerNeedsBusinessLaunch({ role: "OWNER", launch: viewedRow }) === false,
+  );
+
+  console.log("\nDB — first Launch mutation creates resumable progress");
+  const freshBusiness = await prisma.business.create({
+    data: { name: "Fresh Launch", slug: `fresh-launch-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
+  });
+  const freshUser = await prisma.user.create({
+    data: { name: "Faye", email: `fresh-launch-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const freshMem = await prisma.membership.create({
+    data: { userId: freshUser.id, businessId: freshBusiness.id, role: "OWNER" },
+  });
+  await prisma.businessSaasSubscription.create({
+    data: { businessId: freshBusiness.id, status: "none", legacyExempt: true, planCode: "FOUNDER" },
+  });
+  const freshOwner = makeAccess(freshBusiness.id, "OWNER", freshMem.id);
+  await skipLaunchStep(prisma, freshOwner, "identity");
+  const afterFirstWrite = await loadLaunchWorkspace(prisma, freshBusiness.id);
+  const freshRow = await prisma.businessLaunchProgress.findFirst({
+    where: { businessId: freshBusiness.id },
+    select: { status: true, resumeLaterAt: true },
+  });
+  check("First skip creates a BusinessLaunchProgress row", Boolean(freshRow));
+  check("First Launch mutation is recorded progress", afterFirstWrite.progress.hasRecordedProgress === true);
+  check("First Launch mutation is resumable IN_PROGRESS", freshRow?.status === "IN_PROGRESS" && afterFirstWrite.progress.skippedCount === 1);
+  check(
+    "Recorded unfinished Launch routes post-auth to /launch",
+    postAuthenticationPath({
+      role: "OWNER",
+      business: { ...setupCompleteBusiness, slug: freshBusiness.slug },
+      launch: freshRow,
+    }) === BUSINESS_LAUNCH_PATH,
+  );
+  await resumeLaunchLater(prisma, freshOwner);
+  const resumed = await prisma.businessLaunchProgress.findFirst({
+    where: { businessId: freshBusiness.id },
+    select: { status: true, resumeLaterAt: true },
+  });
+  check(
+    "Resume later still releases the next login from /launch",
+    resumed?.status === "IN_PROGRESS" &&
+      Boolean(resumed?.resumeLaterAt) &&
+      ownerNeedsBusinessLaunch({ role: "OWNER", launch: resumed }) === false &&
+      postAuthenticationPath({
+        role: "OWNER",
+        business: { ...setupCompleteBusiness, slug: freshBusiness.slug },
+        launch: resumed,
+      }) === "/dashboard",
+  );
+  for (const stepKey of LAUNCH_STEP_KEYS) {
+    if (stepKey === "identity") continue;
+    await skipLaunchStep(prisma, freshOwner, stepKey);
+  }
+  const completedFresh = await loadLaunchWorkspace(prisma, freshBusiness.id);
+  const completedRow = await prisma.businessLaunchProgress.findFirst({
+    where: { businessId: freshBusiness.id },
+    select: { status: true, resumeLaterAt: true, completedAt: true },
+  });
+  check("Completed Launch is recorded COMPLETED", completedFresh.progress.status === "COMPLETED" && completedRow?.status === "COMPLETED");
+  check(
+    "Completed Launch does not force post-auth /launch",
+    ownerNeedsBusinessLaunch({ role: "OWNER", launch: completedRow }) === false &&
+      postAuthenticationPath({
+        role: "OWNER",
+        business: { ...setupCompleteBusiness, slug: freshBusiness.slug },
+        launch: completedRow,
+      }) === "/dashboard",
+  );
+
+  console.log("\nDB — Hours and Scheduling preserve unavailable dates");
+  const hoursBusiness = await prisma.business.create({
+    data: { name: "Hours Launch", slug: `hours-launch-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
+  });
+  const hoursUser = await prisma.user.create({
+    data: { name: "Hana", email: `hours-launch-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const hoursMem = await prisma.membership.create({
+    data: { userId: hoursUser.id, businessId: hoursBusiness.id, role: "OWNER" },
+  });
+  const hoursAdminUser = await prisma.user.create({
+    data: { name: "Hal", email: `hours-admin-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const hoursAdminMem = await prisma.membership.create({
+    data: { userId: hoursAdminUser.id, businessId: hoursBusiness.id, role: "ADMIN" },
+  });
+  await prisma.businessSaasSubscription.create({
+    data: { businessId: hoursBusiness.id, status: "none", legacyExempt: true, planCode: "FOUNDER" },
+  });
+  const hoursOwner = makeAccess(hoursBusiness.id, "OWNER", hoursMem.id);
+  const hoursAdmin = makeAccess(hoursBusiness.id, "ADMIN", hoursAdminMem.id);
+  await prisma.businessUnavailableDate.createMany({
+    data: [
+      { businessId: hoursBusiness.id, date: "2026-10-01" },
+      { businessId: hoursBusiness.id, date: "2026-10-15" },
+      { businessId: businessB.id, date: "2026-11-01" },
+    ],
+  });
+  await expectError(
+    "ADMIN cannot complete a launch step",
+    () =>
+      completeLaunchStep(prisma, hoursAdmin, {
+        stepKey: "hours",
+        workStartMinutes: 540,
+        workEndMinutes: 1080,
+        workingWeekdays: [1, 2, 3, 4, 5],
+        schedulingBufferMinutes: 15,
+      }),
+    (error) => error instanceof ForbiddenError || error.name === "ForbiddenError",
+  );
+  await expectError(
+    "ADMIN cannot skip a launch step",
+    () => skipLaunchStep(prisma, hoursAdmin, "hours"),
+    (error) => error instanceof ForbiddenError || error.name === "ForbiddenError",
+  );
+  await expectError(
+    "MEMBER cannot skip a launch step",
+    () => skipLaunchStep(prisma, memberA, "hours"),
+    (error) => error instanceof ForbiddenError || error.name === "ForbiddenError",
+  );
+  await expectError(
+    "ADMIN cannot resume launch later",
+    () => resumeLaunchLater(prisma, hoursAdmin),
+    (error) => error instanceof ForbiddenError || error.name === "ForbiddenError",
+  );
+  await expectError(
+    "MEMBER cannot resume launch later",
+    () => resumeLaunchLater(prisma, memberA),
+    (error) => error instanceof ForbiddenError || error.name === "ForbiddenError",
+  );
+  await completeLaunchStep(prisma, hoursOwner, {
+    stepKey: "hours",
+    workStartMinutes: 540,
+    workEndMinutes: 1080,
+    workingWeekdays: [1, 2, 3, 4, 5],
+    schedulingBufferMinutes: 15,
+  });
+  const afterHours = await prisma.businessUnavailableDate.findMany({
+    where: { businessId: hoursBusiness.id },
+    select: { date: true },
+    orderBy: { date: "asc" },
+  });
+  const afterHoursSettings = await prisma.businessSettings.findUnique({ where: { businessId: hoursBusiness.id } });
+  check(
+    "Hours preserves existing unavailable dates",
+    afterHours.map((row) => row.date).join(",") === "2026-10-01,2026-10-15",
+  );
+  check("Hours still writes working hours", afterHoursSettings?.workStartMinutes === 540 && afterHoursSettings?.schedulingBufferMinutes === 15);
+  await completeLaunchStep(prisma, hoursOwner, {
+    stepKey: "scheduling",
+    workStartMinutes: 540,
+    workEndMinutes: 1080,
+    workingWeekdays: [1, 2, 3, 4, 5],
+    schedulingBufferMinutes: 45,
+    schedulingNotes: "Keep the October blocks",
+  });
+  const afterScheduling = await prisma.businessUnavailableDate.findMany({
+    where: { businessId: hoursBusiness.id },
+    select: { date: true },
+    orderBy: { date: "asc" },
+  });
+  const afterSchedulingSettings = await prisma.businessSettings.findUnique({
+    where: { businessId: hoursBusiness.id },
+  });
+  check(
+    "Scheduling preserves existing unavailable dates",
+    afterScheduling.map((row) => row.date).join(",") === "2026-10-01,2026-10-15",
+  );
+  check("Scheduling still writes buffer and notes", afterSchedulingSettings?.schedulingBufferMinutes === 45 && afterSchedulingSettings?.schedulingPreferenceNotes === "Keep the October blocks");
+  const betaDates = await prisma.businessUnavailableDate.findMany({
+    where: { businessId: businessB.id },
+    select: { date: true },
+  });
+  check("Hours/Scheduling writes stay tenant-scoped", betaDates.map((row) => row.date).join(",") === "2026-11-01");
+  const betaProgress = await prisma.businessLaunchProgress.findFirst({ where: { businessId: businessB.id } });
+  check("Hours/Scheduling does not create another tenant's launch progress", betaProgress == null);
+
   console.log("\nDB — resumability and existing-model writes");
   const started = await ensureLaunchProgress(prisma, ownerA);
   check("Launch creates every defined step", started.steps.length === LAUNCH_STEP_KEYS.length);
   const first = await loadLaunchWorkspace(prisma, businessA.id);
   check("Fresh launch progress is 0%", first.progress.progressPercent === 0);
   check("Recommended next is identity", first.progress.recommendedNext === "identity");
+  check("Ensured launch progress is recorded", first.progress.hasRecordedProgress === true);
 
   await expectError(
     "MEMBER cannot complete a launch step",
@@ -453,7 +674,7 @@ try {
     (error) => error instanceof Error,
   );
   const bSource = await loadLaunchWorkspace(prisma, businessB.id);
-  check("Business B launch is empty", bSource.progress.completedCount === 0);
+  check("Business B launch is empty", bSource.progress.completedCount === 0 && bSource.progress.hasRecordedProgress === false);
   const bHits = await retrieveTenantKnowledge(prisma, businessB.id, "door hinge");
   check("Ask Knowledge does not retrieve cross-tenant entries", bHits.length === 0);
   const bFacts = await loadBsosFacts(prisma, businessB.id);

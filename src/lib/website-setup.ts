@@ -31,6 +31,32 @@ export const WEBSITE_SETUP_PATH = "/setup/website";
 export const WEBSITE_SETUP_SAVED = "SAVED";
 export const WEBSITE_SETUP_SKIPPED = "SKIPPED";
 
+export type WebsiteSetupCompletionCopy = {
+  title: string;
+  description: string;
+  alert: string;
+};
+
+export function websiteSetupCompletionCopy(input: {
+  choice: string | null | undefined;
+  publicPath: string;
+}): WebsiteSetupCompletionCopy {
+  if (input.choice === WEBSITE_SETUP_SKIPPED) {
+    return {
+      title: "Website setup skipped",
+      description: `The default TBBT ${input.publicPath} route exists. You skipped About and service-area setup. You can finish website details later in Settings.`,
+      alert:
+        "You skipped About and service-area setup. The default TBBT public route still exists, and you can finish website details later in Settings.",
+    };
+  }
+  return {
+    title: "Public website ready",
+    description:
+      "Homeowners can visit this business at its TBBT public site. You can change these details later in Settings.",
+    alert: "Your public website is live. Open it, then continue to the Dashboard.",
+  };
+}
+
 export const WEBSITE_SETUP_ENSURE_SQL = `
 DO $$
 BEGIN

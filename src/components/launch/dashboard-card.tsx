@@ -4,6 +4,25 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { LAUNCH_STEP_LABELS, type LaunchProgressSummary } from "@/lib/business-launch";
 
 export function DashboardLaunchCard({ progress }: { progress: LaunchProgressSummary }) {
+  if (!progress.hasRecordedProgress) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Help me build and understand my business</CardTitle>
+          <CardDescription>
+            Optional: build out more business settings. Normal TBBT operation does not require
+            completing all 14 Launch steps.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-3">
+          <Button asChild size="sm" variant="outline">
+            <Link href="/launch">Explore launch</Link>
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
   const nextLabel = progress.recommendedNext ? LAUNCH_STEP_LABELS[progress.recommendedNext] : "Review launch";
   return (
     <Card>

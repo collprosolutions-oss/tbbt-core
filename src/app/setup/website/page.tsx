@@ -26,6 +26,7 @@ import {
   ownerNeedsWebsiteSetup,
   WEBSITE_SETUP_SAVED,
   WEBSITE_SETUP_SKIPPED,
+  websiteSetupCompletionCopy,
 } from "@/lib/website-setup";
 import { requireWorkspace } from "@/lib/workspace";
 
@@ -58,20 +59,19 @@ export default async function WebsiteSetupPage() {
   }
 
   if (completed) {
+    const completionCopy = websiteSetupCompletionCopy({
+      choice: workspace.business.websiteSetupChoice,
+      publicPath: previewHref,
+    });
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Public website ready</CardTitle>
-          <CardDescription>
-            Homeowners can visit this business at its TBBT public site. You can
-            change these details later in Settings.
-          </CardDescription>
+          <CardTitle>{completionCopy.title}</CardTitle>
+          <CardDescription>{completionCopy.description}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <Alert>
-            <AlertDescription>
-              Your public website is live. Open it, then continue to the Dashboard.
-            </AlertDescription>
+            <AlertDescription>{completionCopy.alert}</AlertDescription>
           </Alert>
           <p className="break-all text-sm text-muted-foreground">{previewHref}</p>
           <Link
