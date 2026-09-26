@@ -178,80 +178,84 @@ export async function attachRemainingPublicRequestFallbackPhotos(
   input: {
     requestId: string;
     files: PublicRequestFallbackPhotoFile[];
+    onOwnedRequestLocked?: () => Promise<void> | void;
   },
 ) {
   if (input.files.length === 0) {
-    return { attached: 0, remainingSlots: 0 };
+    return { attached: 0, remainingSlots: 0, uploaded: 0 };
   }
 
   const business = await resolvePublicStorageBusiness(deps.db, slug);
   if (!business) {
-    return { attached: 0, remainingSlots: 0 };
+    return { attached: 0, remainingSlots: 0, uploaded: 0 };
   }
 
-  const request = await deps.db.serviceRequest.findFirst({
-    where: { id: input.requestId, businessId: business.id },
-    select: { id: true },
-  });
-  if (!request) {
-    return { attached: 0, remainingSlots: 0 };
-  }
+  return deps.db.$transaction(
+    async (tx) => {
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id
+        FROM "ServiceRequest"
+        WHERE id = ${input.requestId}
+          AND "businessId" = ${business.id}
+        FOR UPDATE
+      `;
+      const request = locked[0];
+      if (!request) {
+        return { attached: 0, remainingSlots: 0, uploaded: 0 };
+      }
 
-  const attachedCount = await deps.db.serviceRequestPhoto.count({
-    where: {
-      serviceRequestId: request.id,
-      businessId: business.id,
-    },
-  });
-  const remainingSlots = remainingIntakePhotoSlots(attachedCount);
-  if (remainingSlots <= 0) {
-    return { attached: 0, remainingSlots: 0 };
-  }
+      await input.onOwnedRequestLocked?.();
 
-  const files = input.files.slice(0, remainingSlots);
-  const uploaded: Array<{ url: string; storedAssetId: string }> = [];
-  for (const file of files) {
-    const mimeType = resolveSupportedImageMimeType(file);
-    if (!mimeType) continue;
-    try {
-      const asset = await putPublicRequestPhotoFromBytes(deps, slug, {
-        originalFilename: file.name,
-        mimeType,
-        body: new Uint8Array(await file.arrayBuffer()),
+      const attachedCount = await tx.serviceRequestPhoto.count({
+        where: {
+          serviceRequestId: request.id,
+          businessId: business.id,
+        },
       });
-      uploaded.push({
-        url: privateAssetPath(asset.id),
-        storedAssetId: asset.id,
+      const remainingSlots = remainingIntakePhotoSlots(attachedCount);
+      if (remainingSlots <= 0) {
+        return { attached: 0, remainingSlots: 0, uploaded: 0 };
+      }
+
+      const files = input.files.slice(0, remainingSlots);
+      const uploaded: Array<{ url: string; storedAssetId: string }> = [];
+      for (const file of files) {
+        const mimeType = resolveSupportedImageMimeType(file);
+        if (!mimeType) continue;
+        try {
+          const asset = await putPublicRequestPhotoFromBytes(deps, slug, {
+            originalFilename: file.name,
+            mimeType,
+            body: new Uint8Array(await file.arrayBuffer()),
+          });
+          uploaded.push({
+            url: privateAssetPath(asset.id),
+            storedAssetId: asset.id,
+          });
+        } catch {
+          // Request already exists. A failed photo must not roll it back.
+        }
+      }
+
+      if (uploaded.length === 0) {
+        return { attached: 0, remainingSlots, uploaded: 0 };
+      }
+
+      await tx.serviceRequestPhoto.createMany({
+        data: uploaded.map((photo) => ({
+          businessId: business.id,
+          serviceRequestId: request.id,
+          url: photo.url,
+          storedAssetId: photo.storedAssetId,
+        })),
       });
-    } catch {
-      // Request already exists. A failed photo must not roll it back.
-    }
-  }
 
-  if (uploaded.length === 0) {
-    return { attached: 0, remainingSlots };
-  }
-
-  const latestCount = await deps.db.serviceRequestPhoto.count({
-    where: {
-      serviceRequestId: request.id,
-      businessId: business.id,
+      return {
+        attached: uploaded.length,
+        remainingSlots,
+        uploaded: uploaded.length,
+      };
     },
-  });
-  const stillRemaining = remainingIntakePhotoSlots(latestCount);
-  const toInsert = uploaded.slice(0, stillRemaining);
-  if (toInsert.length === 0) {
-    return { attached: 0, remainingSlots: stillRemaining };
-  }
-
-  await deps.db.serviceRequestPhoto.createMany({
-    data: toInsert.map((photo) => ({
-      businessId: business.id,
-      serviceRequestId: request.id,
-      url: photo.url,
-      storedAssetId: photo.storedAssetId,
-    })),
-  });
-
-  return { attached: toInsert.length, remainingSlots: stillRemaining };
+    { maxWait: 10_000, timeout: 30_000 },
+  );
 }

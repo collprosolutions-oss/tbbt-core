@@ -189,6 +189,9 @@ const finalizeFnSrc = requestPhotosSrc.slice(
 );
 const candidateLoadIdx = finalizeFnSrc.indexOf("storedAsset.findFirst");
 const genericFinalizeIdx = finalizeFnSrc.indexOf("finalizeManagedUpload");
+const attachFnSrc = requestPhotosSrc.slice(
+  requestPhotosSrc.indexOf("export async function attachRemainingPublicRequestFallbackPhotos"),
+);
 check(
   "Fallback photos count recorded ServiceRequestPhoto rows before attaching more",
   requestPhotosSrc.includes("serviceRequestPhoto.count") &&
@@ -196,6 +199,17 @@ check(
     requestPhotosSrc.includes("MAX_INTAKE_PHOTOS") &&
     intakeActionSrc.includes("attachRemainingPublicRequestFallbackPhotos") &&
     !intakeActionSrc.includes(".slice(0, MAX_INTAKE_PHOTOS)"),
+);
+check(
+  "Fallback attach serializes on the owned ServiceRequest row, not a table lock",
+  attachFnSrc.includes("$transaction") &&
+    attachFnSrc.includes("FROM \"ServiceRequest\"") &&
+    attachFnSrc.includes("FOR UPDATE") &&
+    attachFnSrc.indexOf("FOR UPDATE") < attachFnSrc.indexOf("serviceRequestPhoto.count") &&
+    attachFnSrc.indexOf("serviceRequestPhoto.count") <
+      attachFnSrc.indexOf("putPublicRequestPhotoFromBytes(deps, slug") &&
+    !attachFnSrc.includes("LOCK TABLE") &&
+    !/pg_advisory|advisory_lock/i.test(attachFnSrc),
 );
 check(
   "Combined remaining slots are MAX_INTAKE_PHOTOS minus recorded attachments",
@@ -694,6 +708,208 @@ try {
       !invalidIds.includes(foreign.id) &&
       !invalidIds.includes("not-a-real-asset-id") &&
       invalidIds.filter((id) => ![ownedForInvalid[0].id, ownedForInvalid[1].id].includes(id)).length === 6,
+  );
+
+  console.log("\nDB — Concurrent fallback handlers stay at MAX_INTAKE_PHOTOS");
+  function createLatch() {
+    let resolve;
+    const promise = new Promise((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+  async function waitForPeer(promise, ms, label) {
+    let timer;
+    try {
+      await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(label)), ms);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function countAssetsByPrefix(prefix) {
+    return prisma.storedAsset.count({
+      where: {
+        businessId: business.id,
+        originalFilename: { startsWith: prefix },
+      },
+    });
+  }
+
+  const concurrentFive = await submitWithFallback({
+    name: "Concurrent Five",
+    email: "concurrent-five@example.com",
+    photoAssetIds: (await makeReadyPhotos(5)).map((row) => row.id),
+    files: [],
+  });
+  const fivePrefixA = `conc-five-a-${concurrentFive.requestId}-`;
+  const fivePrefixB = `conc-five-b-${concurrentFive.requestId}-`;
+  const [fiveA, fiveB] = await Promise.all([
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: concurrentFive.requestId,
+      files: makePngFiles(8, fivePrefixA),
+    }),
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: concurrentFive.requestId,
+      files: makePngFiles(8, fivePrefixB),
+    }),
+  ]);
+  const fiveConcurrentCount = await countRequestPhotos(concurrentFive.requestId);
+  const fiveUploadedA = await countAssetsByPrefix(fivePrefixA);
+  const fiveUploadedB = await countAssetsByPrefix(fivePrefixB);
+  check(
+    "Concurrent 5-recorded + 8/8 fallback handlers finish with exactly 8 rows",
+    concurrentFive.created.ok === true &&
+      concurrentFive.count === 5 &&
+      fiveConcurrentCount === 8 &&
+      fiveConcurrentCount <= MAX_INTAKE_PHOTOS,
+  );
+  check(
+    "Concurrent 5-recorded handlers attach only 3 new fallback photos total",
+    fiveA.attached + fiveB.attached === 3 &&
+      fiveA.uploaded + fiveB.uploaded === 3 &&
+      ((fiveA.uploaded === 3 && fiveB.uploaded === 0) ||
+        (fiveB.uploaded === 3 && fiveA.uploaded === 0)),
+  );
+  check(
+    "Loser of the 5-recorded race uploads zero files after recounting 8",
+    fiveUploadedA + fiveUploadedB === 3 &&
+      ((fiveUploadedA === 3 && fiveUploadedB === 0) ||
+        (fiveUploadedB === 3 && fiveUploadedA === 0)),
+  );
+
+  const concurrentZero = await submitWithFallback({
+    name: "Concurrent Zero",
+    email: "concurrent-zero@example.com",
+    photoAssetIds: [],
+    files: [],
+  });
+  const zeroPrefixA = `conc-zero-a-${concurrentZero.requestId}-`;
+  const zeroPrefixB = `conc-zero-b-${concurrentZero.requestId}-`;
+  const [zeroA, zeroB] = await Promise.all([
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: concurrentZero.requestId,
+      files: makePngFiles(8, zeroPrefixA),
+    }),
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: concurrentZero.requestId,
+      files: makePngFiles(8, zeroPrefixB),
+    }),
+  ]);
+  const zeroConcurrentCount = await countRequestPhotos(concurrentZero.requestId);
+  const zeroUploadedA = await countAssetsByPrefix(zeroPrefixA);
+  const zeroUploadedB = await countAssetsByPrefix(zeroPrefixB);
+  check(
+    "Concurrent 0-recorded + 8/8 fallback handlers finish with exactly 8 rows, not 16",
+    concurrentZero.created.ok === true &&
+      concurrentZero.count === 0 &&
+      zeroConcurrentCount === 8 &&
+      zeroA.attached + zeroB.attached === 8 &&
+      zeroA.uploaded + zeroB.uploaded === 8 &&
+      ((zeroA.uploaded === 8 && zeroB.uploaded === 0) ||
+        (zeroB.uploaded === 8 && zeroA.uploaded === 0)) &&
+      zeroUploadedA + zeroUploadedB === 8 &&
+      ((zeroUploadedA === 8 && zeroUploadedB === 0) ||
+        (zeroUploadedB === 8 && zeroUploadedA === 0)),
+  );
+
+  const concurrentFull = await submitWithFallback({
+    name: "Concurrent Full",
+    email: "concurrent-full@example.com",
+    photoAssetIds: (await makeReadyPhotos(8)).map((row) => row.id),
+    files: [],
+  });
+  const fullPrefixA = `conc-full-a-${concurrentFull.requestId}-`;
+  const fullPrefixB = `conc-full-b-${concurrentFull.requestId}-`;
+  const [fullA, fullB] = await Promise.all([
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: concurrentFull.requestId,
+      files: makePngFiles(8, fullPrefixA),
+    }),
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: concurrentFull.requestId,
+      files: makePngFiles(8, fullPrefixB),
+    }),
+  ]);
+  check(
+    "Concurrent fallback on an already-full request uploads zero files and stays at 8",
+    concurrentFull.created.ok === true &&
+      concurrentFull.count === 8 &&
+      (await countRequestPhotos(concurrentFull.requestId)) === 8 &&
+      fullA.attached === 0 &&
+      fullB.attached === 0 &&
+      fullA.uploaded === 0 &&
+      fullB.uploaded === 0 &&
+      (await countAssetsByPrefix(fullPrefixA)) === 0 &&
+      (await countAssetsByPrefix(fullPrefixB)) === 0,
+  );
+
+  const independentA = await submitWithFallback({
+    name: "Independent A",
+    email: "independent-a@example.com",
+    photoAssetIds: [],
+    files: [],
+  });
+  const independentB = await submitWithFallback({
+    name: "Independent B",
+    email: "independent-b@example.com",
+    photoAssetIds: [],
+    files: [],
+  });
+  const aReady = createLatch();
+  const bReady = createLatch();
+  let aHeld = false;
+  let bHeld = false;
+  let differentRequestsOverlapped = false;
+  function noteOverlap() {
+    if (aHeld && bHeld) differentRequestsOverlapped = true;
+  }
+  const [indepA, indepB] = await Promise.all([
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: independentA.requestId,
+      files: makePngFiles(8, `indep-a-${independentA.requestId}-`),
+      onOwnedRequestLocked: async () => {
+        aHeld = true;
+        noteOverlap();
+        aReady.resolve();
+        try {
+          await waitForPeer(bReady.promise, 5000, "peer request B lock");
+          noteOverlap();
+        } finally {
+          aHeld = false;
+        }
+      },
+    }),
+    attachRemainingPublicRequestFallbackPhotos(storageDeps, "collpro-reno", {
+      requestId: independentB.requestId,
+      files: makePngFiles(8, `indep-b-${independentB.requestId}-`),
+      onOwnedRequestLocked: async () => {
+        bHeld = true;
+        noteOverlap();
+        bReady.resolve();
+        try {
+          await waitForPeer(aReady.promise, 5000, "peer request A lock");
+          noteOverlap();
+        } finally {
+          bHeld = false;
+        }
+      },
+    }),
+  ]);
+  check(
+    "Different requests in the same business are not serialized by a global/table lock",
+    independentA.created.ok === true &&
+      independentB.created.ok === true &&
+      independentA.requestId !== independentB.requestId &&
+      differentRequestsOverlapped === true &&
+      indepA.attached === 8 &&
+      indepB.attached === 8 &&
+      (await countRequestPhotos(independentA.requestId)) === 8 &&
+      (await countRequestPhotos(independentB.requestId)) === 8,
   );
 
   console.log("\nDB — Public request photo finalize type gate");
