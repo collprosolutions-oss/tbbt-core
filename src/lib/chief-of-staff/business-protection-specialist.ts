@@ -473,6 +473,17 @@ const agreementSelect = {
   legalReviewAcknowledgedAt: true,
 } as const;
 
+type VaultSelectRow = Prisma.BusinessVaultRecordGetPayload<{ select: typeof vaultSelect }>;
+type AgreementSelectRow = Prisma.BusinessAgreementGetPayload<{ select: typeof agreementSelect }>;
+
+function emptyVaultRows(): Promise<VaultSelectRow[]> {
+  return Promise.resolve([]);
+}
+
+function emptyAgreementRows(): Promise<AgreementSelectRow[]> {
+  return Promise.resolve([]);
+}
+
 function projectVault(
   row: {
     id: string;
@@ -636,7 +647,7 @@ export async function loadBusinessProtectionProjection(input: {
           take: BUSINESS_PROTECTION_CONTEXT_CAPS.vaultRecords,
           select: vaultSelect,
         })
-      : Promise.resolve([]),
+      : emptyVaultRows(),
     loadRows
       ? input.db.businessVaultRecord.findMany({
           where: {
@@ -648,7 +659,7 @@ export async function loadBusinessProtectionProjection(input: {
           take: 4,
           select: vaultSelect,
         })
-      : Promise.resolve([]),
+      : emptyVaultRows(),
     loadRows
       ? input.db.businessVaultRecord.findMany({
           where: {
@@ -659,7 +670,7 @@ export async function loadBusinessProtectionProjection(input: {
           take: 2,
           select: vaultSelect,
         })
-      : Promise.resolve([]),
+      : emptyVaultRows(),
     loadRows
       ? input.db.businessVaultRecord.findMany({
           where: {
@@ -671,7 +682,7 @@ export async function loadBusinessProtectionProjection(input: {
           take: 2,
           select: vaultSelect,
         })
-      : Promise.resolve([]),
+      : emptyVaultRows(),
     loadRows
       ? input.db.businessVaultRecord.findMany({
           where: vaultWhere,
@@ -679,7 +690,7 @@ export async function loadBusinessProtectionProjection(input: {
           take: BUSINESS_PROTECTION_CONTEXT_CAPS.vaultRecords,
           select: vaultSelect,
         })
-      : Promise.resolve([]),
+      : emptyVaultRows(),
     loadRows
       ? input.db.businessAgreement.findMany({
           where: {
@@ -690,7 +701,7 @@ export async function loadBusinessProtectionProjection(input: {
           take: BUSINESS_PROTECTION_CONTEXT_CAPS.agreements,
           select: agreementSelect,
         })
-      : Promise.resolve([]),
+      : emptyAgreementRows(),
     loadRows
       ? input.db.businessAgreement.findMany({
           where: agreementWhere,
@@ -698,7 +709,7 @@ export async function loadBusinessProtectionProjection(input: {
           take: BUSINESS_PROTECTION_CONTEXT_CAPS.agreements,
           select: agreementSelect,
         })
-      : Promise.resolve([]),
+      : emptyAgreementRows(),
     loadRows
       ? input.db.businessVaultRecord.count({ where: { ...vaultWhere, recordStatus: "ACTIVE" } })
       : Promise.resolve(0),
