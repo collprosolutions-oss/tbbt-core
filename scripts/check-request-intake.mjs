@@ -12,6 +12,12 @@ import { randomUUID } from "node:crypto";
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const { createPublicServiceRequest } = await import("@/lib/public-intake");
+const {
+  createOwnerLoggedLead,
+  recordedLeadSourceForChannel,
+} = await import("@/lib/owner-log-lead");
+const { loadPipelineSource } = await import("@/lib/pipeline-data");
+const { decideCustomerMatch } = await import("@/lib/customer-identity");
 const { MemoryStorageProvider, servePublicStoredAsset } = await import(
   "@/lib/business-storage/index"
 );
@@ -176,6 +182,58 @@ check(
     intakeActionSrc.includes("businessId: notifyBusiness.id") &&
     intakeActionSrc.includes("requestId: created.requestId") &&
     !/customer\.email/.test(intakeActionSrc),
+);
+
+const requestActionSrc = readRepo("src/app/actions/request.ts");
+const ownerLogLeadSrc = readRepo("src/lib/owner-log-lead.ts");
+const logLeadFormSrc = readRepo("src/components/requests/log-lead-form.tsx");
+const logLeadPageSrc = readRepo("src/app/(app)/requests/log-lead/page.tsx");
+check(
+  "Owner Log lead is a real ServiceRequest action, not a second Lead table",
+  requestActionSrc.includes("export async function logLead") &&
+    requestActionSrc.includes("createOwnerLoggedLead") &&
+    requestActionSrc.includes("CAPABILITIES.MANAGE_ESTIMATES") &&
+    ownerLogLeadSrc.includes("serviceRequest.create") &&
+    !ownerLogLeadSrc.includes("prisma.lead") &&
+    !requestActionSrc.includes("model Lead"),
+);
+check(
+  "Log lead never authorizes from client businessId",
+  !requestActionSrc.includes('readString(formData, "businessId")') &&
+    ownerLogLeadSrc.includes("Browser-supplied businessId is never authorization") &&
+    ownerLogLeadSrc.includes("void input.businessId"),
+);
+check(
+  "Log lead reuses normalized customer matching and structured addresses",
+  ownerLogLeadSrc.includes("decideCustomerMatch") &&
+    ownerLogLeadSrc.includes("validateStructuredAddress") &&
+    logLeadFormSrc.includes('name="streetAddress"') &&
+    logLeadFormSrc.includes('name="postalCode"'),
+);
+check(
+  "Log lead form stays a one-minute capture (no price, schedule, or payment)",
+  !logLeadFormSrc.includes("unitPrice") &&
+    !logLeadFormSrc.includes("scheduledAt") &&
+    !logLeadFormSrc.includes("payment") &&
+    logLeadPageSrc.includes("creates a ServiceRequest"),
+);
+check(
+  "Logged leads hand off through the existing createEstimate path",
+  readRepo("src/app/(app)/requests/page.tsx").includes('href="/requests/log-lead"') &&
+    readRepo("src/components/requests/requests-workspace.tsx").includes("CreateEstimateButton") &&
+    readRepo("src/app/actions/estimate.ts").includes("serviceRequestId: request.id") &&
+    readRepo("src/app/actions/estimate.ts").includes("customerId: request.customerId") &&
+    readRepo("src/app/actions/estimate.ts").includes("propertyId: request.propertyId"),
+);
+check(
+  "Log lead resolves trade from ACTIVE BusinessTrade and does not invent a Handyman fallback",
+  ownerLogLeadSrc.includes("resolvePublicRequestTrade") &&
+    ownerLogLeadSrc.includes("listActiveBusinessTrades") &&
+    ownerLogLeadSrc.includes("authorizedOwnerLogLeadTradeCodes") &&
+    !ownerLogLeadSrc.includes("DEFAULT_TRADE") &&
+    logLeadPageSrc.includes("catalogItemIsPubliclyOffered") &&
+    logLeadFormSrc.includes('name="tradeCode"') &&
+    logLeadFormSrc.includes("activeTrades.length > 1"),
 );
 
 const noneConfig = resolveCatalogIntakeConfig({ intakeMeasurementMode: "NONE" });
@@ -426,6 +484,286 @@ try {
     otherDescription: "",
   });
   check("Another tenant can still submit without CollPro measurement config", otherRequest.ok === true);
+
+  console.log("\nDB — Owner Log lead creates a real ServiceRequest");
+  function makeAccess(businessId) {
+    return {
+      businessId,
+      scope: { businessId },
+      assertOwned(record) {
+        if (!record || record.businessId !== businessId) {
+          throw new Error("Record is not in the authorized business workspace.");
+        }
+        return record;
+      },
+    };
+  }
+  const ownerAccess = makeAccess(business.id);
+  const otherAccess = makeAccess(other.id);
+
+  const phoneLead = await createOwnerLoggedLead(prisma, ownerAccess, {
+    businessId: other.id,
+    mode: "new",
+    name: "Phone Lead",
+    email: "phone.lead@example.com",
+    phone: "(239) 555-0110",
+    summary: "Kitchen faucet leak",
+    notes: "Called during lunch",
+    channel: "PHONE",
+    submissionId: "phonelead01",
+  });
+  const phoneRequest = phoneLead.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: phoneLead.requestId },
+        include: { customer: true, property: true, items: true },
+      })
+    : null;
+  check("Owner can log a new phone lead", phoneLead.ok === true);
+  check("Logged lead is an OPEN ServiceRequest in this tenant",
+    phoneRequest?.status === "OPEN" && phoneRequest.businessId === business.id);
+  check("Phone/walk-in stores MANUAL, not a new schema value",
+    phoneRequest?.leadSource === "MANUAL" &&
+      recordedLeadSourceForChannel("PHONE") === "MANUAL" &&
+      recordedLeadSourceForChannel("WALK_IN") === "MANUAL" &&
+      recordedLeadSourceForChannel("REFERRAL") === "REFERRAL");
+  check("Phone origin is preserved in request notes",
+    (phoneRequest?.description ?? "").includes("Logged lead origin: Phone"));
+  check("Client businessId was ignored; request stayed on the access tenant",
+    phoneRequest?.businessId === business.id && phoneRequest?.businessId !== other.id);
+  check("Existing Handyman Log lead stores HANDYMAN without a selected service",
+    phoneRequest?.tradeCode === "HANDYMAN");
+
+  const pipeline = await loadPipelineSource(prisma, business.id);
+  check("Logged lead appears on the Pipeline New Lead path",
+    pipeline.opportunities.some(
+      (row) => row.serviceRequestId === phoneRequest?.id && row.stage === "NEW_LEAD",
+    ));
+  const listed = await prisma.serviceRequest.findMany({
+    where: { businessId: business.id, status: "OPEN" },
+    select: { id: true },
+  });
+  check("Logged lead appears on the Requests OPEN path",
+    listed.some((row) => row.id === phoneRequest?.id));
+
+  const customersBeforeMatch = await prisma.customer.count({ where: { businessId: business.id } });
+  const emailMatch = await createOwnerLoggedLead(prisma, ownerAccess, {
+    mode: "new",
+    name: "Different Name",
+    email: "PHONE.LEAD@example.com",
+    phone: "",
+    summary: "Repeat caller",
+    channel: "PHONE",
+    submissionId: "emailmatch1",
+  });
+  const emailMatchRequest = emailMatch.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: emailMatch.requestId },
+        include: { customer: true },
+      })
+    : null;
+  const customersAfterEmail = await prisma.customer.count({ where: { businessId: business.id } });
+  check("Normalized email reuses the existing customer",
+    emailMatch.ok === true &&
+      emailMatchRequest?.customerId === phoneRequest?.customerId &&
+      customersAfterEmail === customersBeforeMatch);
+  check("Clear email match does not create a duplicate customer",
+    customersAfterEmail === customersBeforeMatch);
+
+  const phoneMatch = await createOwnerLoggedLead(prisma, ownerAccess, {
+    mode: "new",
+    name: "Still Different",
+    email: "",
+    phone: "+1 239-555-0110",
+    summary: "Follow-up text",
+    channel: "TEXT",
+    submissionId: "phonematch1",
+  });
+  const phoneMatchRequest = phoneMatch.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: phoneMatch.requestId },
+      })
+    : null;
+  const customersAfterPhone = await prisma.customer.count({ where: { businessId: business.id } });
+  check("Normalized phone reuses the existing customer",
+    phoneMatch.ok === true &&
+      phoneMatchRequest?.customerId === phoneRequest?.customerId &&
+      customersAfterPhone === customersBeforeMatch);
+
+  const existingProperty = await prisma.property.create({
+    data: {
+      businessId: business.id,
+      customerId: phoneRequest.customerId,
+      addressLine1: "12 Oak St",
+      city: "Fort Myers",
+      region: "FL",
+      postalCode: "33901",
+    },
+  });
+  const existingPropertyLead = await createOwnerLoggedLead(prisma, ownerAccess, {
+    mode: "existing",
+    customerId: phoneRequest.customerId,
+    propertyChoice: existingProperty.id,
+    summary: "Back to the same house",
+    channel: "WALK_IN",
+    serviceCatalogItemId: fan.id,
+    submissionId: "existprop1",
+  });
+  const existingPropertyRequest = existingPropertyLead.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: existingPropertyLead.requestId },
+        include: { items: true },
+      })
+    : null;
+  check("Existing property can be selected on a logged lead",
+    existingPropertyLead.ok === true &&
+      existingPropertyRequest?.propertyId === existingProperty.id &&
+      existingPropertyRequest.customerId === phoneRequest.customerId);
+  check("Optional catalog service attaches to the logged request",
+    existingPropertyRequest?.serviceCatalogItemId === fan.id &&
+      existingPropertyRequest.items.some((item) => item.serviceCatalogItemId === fan.id));
+
+  const newPropertyLead = await createOwnerLoggedLead(prisma, ownerAccess, {
+    mode: "existing",
+    customerId: phoneRequest.customerId,
+    propertyChoice: "new",
+    streetAddress: "88 Harbor Ave",
+    city: "Cape Coral",
+    region: "FL",
+    postalCode: "33904",
+    summary: "Second property",
+    channel: "MANUAL",
+    submissionId: "newprop001",
+  });
+  const newPropertyRequest = newPropertyLead.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: newPropertyLead.requestId },
+        include: { property: true },
+      })
+    : null;
+  check("New structured property can be created on a logged lead",
+    newPropertyLead.ok === true &&
+      newPropertyRequest?.property?.addressLine1 === "88 Harbor Ave" &&
+      newPropertyRequest.property?.city === "Cape Coral" &&
+      newPropertyRequest.property?.region === "FL" &&
+      newPropertyRequest.property?.postalCode === "33904" &&
+      newPropertyRequest.property?.businessId === business.id &&
+      newPropertyRequest.customerId === phoneRequest.customerId);
+
+  const otherCustomerCount = await prisma.customer.count({ where: { businessId: other.id } });
+  const otherRequestCount = await prisma.serviceRequest.count({ where: { businessId: other.id } });
+  const otherPropertyCount = await prisma.property.count({ where: { businessId: other.id } });
+  const foreignCustomer = await createOwnerLoggedLead(prisma, otherAccess, {
+    mode: "existing",
+    customerId: phoneRequest.customerId,
+    summary: "Hijack customer",
+    channel: "PHONE",
+    submissionId: "foreigncus",
+  });
+  const otherExistingCustomer = await prisma.customer.findFirst({
+    where: { businessId: other.id },
+    select: { id: true },
+  });
+  const foreignProperty = otherExistingCustomer
+    ? await createOwnerLoggedLead(prisma, otherAccess, {
+        mode: "existing",
+        customerId: otherExistingCustomer.id,
+        propertyChoice: existingProperty.id,
+        summary: "Hijack property",
+        channel: "PHONE",
+        submissionId: "foreignprp",
+      })
+    : { ok: true };
+  check("Tenant B cannot attach tenant A customer",
+    foreignCustomer.ok === false);
+  check("Tenant B cannot attach tenant A property",
+    foreignProperty.ok === false);
+  check("Rejected foreign IDs create no partial customer/request/property rows",
+    (await prisma.customer.count({ where: { businessId: other.id } })) === otherCustomerCount &&
+      (await prisma.serviceRequest.count({ where: { businessId: other.id } })) === otherRequestCount &&
+      (await prisma.property.count({ where: { businessId: other.id } })) === otherPropertyCount);
+
+  const retry = await createOwnerLoggedLead(prisma, ownerAccess, {
+    mode: "new",
+    name: "Phone Lead",
+    email: "phone.lead@example.com",
+    summary: "Kitchen faucet leak",
+    channel: "PHONE",
+    submissionId: "phonelead01",
+  });
+  check("Resubmit with the same submissionId reuses the request",
+    retry.ok === true && retry.requestId === phoneLead.requestId && retry.reused === true);
+
+  const customersBeforeHandoff = await prisma.customer.count({ where: { businessId: business.id } });
+  const estimate = await prisma.estimate.create({
+    data: {
+      businessId: business.id,
+      serviceRequestId: phoneRequest.id,
+      customerId: phoneRequest.customerId,
+      propertyId: phoneRequest.propertyId,
+      leadSource: phoneRequest.leadSource,
+      campaignId: phoneRequest.campaignId,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  await prisma.serviceRequest.update({
+    where: { id: phoneRequest.id },
+    data: { status: "CONVERTED" },
+  });
+  const converted = await prisma.serviceRequest.findUnique({
+    where: { id: phoneRequest.id },
+  });
+  const customersAfterHandoff = await prisma.customer.count({ where: { businessId: business.id } });
+  check("Request→estimate handoff keeps the same customer and property",
+    estimate.serviceRequestId === phoneRequest.id &&
+      estimate.customerId === phoneRequest.customerId &&
+      estimate.propertyId === phoneRequest.propertyId &&
+      estimate.leadSource === phoneRequest.leadSource &&
+      converted.status === "CONVERTED");
+  check("Handoff does not create a second customer",
+    customersAfterHandoff === customersBeforeHandoff);
+
+  const conflictA = await prisma.customer.create({
+    data: {
+      businessId: business.id,
+      name: "Email Owner",
+      email: "conflict@example.com",
+    },
+  });
+  const conflictB = await prisma.customer.create({
+    data: {
+      businessId: business.id,
+      name: "Phone Owner",
+      phone: "2395550199",
+    },
+  });
+  const ambiguous = await createOwnerLoggedLead(prisma, ownerAccess, {
+    mode: "new",
+    name: "Ambiguous Person",
+    email: "conflict@example.com",
+    phone: "239-555-0199",
+    summary: "Conflicting identifiers",
+    channel: "PHONE",
+    submissionId: "ambiguous1",
+  });
+  const ambiguousRequest = ambiguous.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: ambiguous.requestId },
+      })
+    : null;
+  check("Ambiguous email/phone does not silently merge existing customers",
+    ambiguous.ok === true &&
+      ambiguousRequest?.customerId !== conflictA.id &&
+      ambiguousRequest?.customerId !== conflictB.id &&
+      (ambiguousRequest?.description ?? "").includes("TBBT Identity Review"));
+  check("decideCustomerMatch still classifies that pair as ambiguous",
+    decideCustomerMatch(
+      [
+        { id: conflictA.id, name: "Email Owner", email: "conflict@example.com", phone: null },
+        { id: conflictB.id, name: "Phone Owner", email: null, phone: "2395550199" },
+      ],
+      { email: "conflict@example.com", phone: "239-555-0199" },
+    ).kind === "ambiguous");
 } finally {
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });

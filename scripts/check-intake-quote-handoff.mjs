@@ -84,6 +84,13 @@ const pngBytes = Buffer.from(
 );
 
 console.log("\nSTATIC — Owner estimate vs customer surfaces");
+check(
+  "Owner Log lead does not invent a second quote/estimate builder",
+  readRepo("src/app/actions/request.ts").includes("createOwnerLoggedLead") &&
+    !readRepo("src/components/requests/log-lead-form.tsx").includes("unitPrice") &&
+    !readRepo("src/components/requests/log-lead-form.tsx").includes("CreateManualEstimateForm") &&
+    readRepo("src/components/requests/requests-workspace.tsx").includes("CreateEstimateButton"),
+);
 const ownerPage = readRepo("src/app/(app)/estimates/[estimateId]/page.tsx");
 const customerPage = readRepo("src/app/e/[token]/page.tsx");
 const printPage = readRepo("src/app/(invoice-document)/e/[token]/print/page.tsx");

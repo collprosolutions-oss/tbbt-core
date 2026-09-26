@@ -61,6 +61,7 @@ const {
   catalogRecurrenceEligibleForTrade,
   catalogRecurrenceEligibleFromForm,
 } = await import("@/lib/catalog-item-fields");
+const { createOwnerLoggedLead } = await import("@/lib/owner-log-lead");
 const {
   ESTIMATE_CATALOG_TRADE_REQUIRED_MESSAGE,
   addCatalogItemToDraftEstimate,
@@ -121,6 +122,26 @@ function makeAccess(businessId, role = "OWNER") {
 }
 
 console.log("\nSTATIC — Multi-trade architecture");
+const ownerLogLeadSrc = read("src/lib/owner-log-lead.ts");
+const logLeadFormSrc = read("src/components/requests/log-lead-form.tsx");
+const logLeadPageSrc = read("src/app/(app)/requests/log-lead/page.tsx");
+check(
+  "Owner Log lead reuses public trade resolution and does not invent a Handyman fallback",
+  ownerLogLeadSrc.includes("resolvePublicRequestTrade") &&
+    ownerLogLeadSrc.includes("authorizedOwnerLogLeadTradeCodes") &&
+    ownerLogLeadSrc.includes("listActiveBusinessTrades") &&
+    !ownerLogLeadSrc.includes("DEFAULT_TRADE") &&
+    !ownerLogLeadSrc.includes("activateBusinessTradeOp") &&
+    !ownerLogLeadSrc.includes("deactivateBusinessTradeOp") &&
+    !ownerLogLeadSrc.includes("cleaning-starter-catalog") &&
+    !read("src/app/actions/request.ts").includes("CLEANING") &&
+    logLeadPageSrc.includes("authorizedOwnerLogLeadTradeCodes") &&
+    logLeadPageSrc.includes("catalogItemIsPubliclyOffered") &&
+    logLeadFormSrc.includes('name="tradeCode"') &&
+    logLeadFormSrc.includes("activeTrades.length > 1") &&
+    logLeadFormSrc.includes("Choose a trade") &&
+    logLeadFormSrc.includes("handleServiceChange"),
+);
 const schema = read("prisma/schema.prisma");
 const migration = read("prisma/migrations/20260925120000_multi_trade_core/migration.sql");
 const trades = read("src/lib/trades.ts");
@@ -1343,6 +1364,256 @@ try {
 
   const listedB = await prisma.estimate.findMany({ where: accessB.scope });
   check("B cannot list A's estimates after multi-trade writes", listedB.every((row) => row.businessId === handyB.id));
+
+  console.log("\nLIVE — Owner Log lead respects ACTIVE BusinessTrade truth");
+  const handyOnly = await prisma.business.create({
+    data: {
+      name: "Log Lead Handy Only",
+      slug: `ll-handy-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const cleanOnly = await prisma.business.create({
+    data: {
+      name: "Log Lead Clean Only",
+      slug: `ll-clean-${randomUUID().slice(0, 8)}`,
+      tradeCode: "CLEANING",
+    },
+  });
+  const multiLead = await prisma.business.create({
+    data: {
+      name: "Log Lead Multi",
+      slug: `ll-multi-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const foreignLead = await prisma.business.create({
+    data: {
+      name: "Log Lead Foreign",
+      slug: `ll-foreign-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const handyOnlyAccess = makeAccess(handyOnly.id);
+  const cleanOnlyAccess = makeAccess(cleanOnly.id);
+  const multiLeadAccess = makeAccess(multiLead.id);
+  const foreignLeadAccess = makeAccess(foreignLead.id);
+  await activateBusinessTradeOp(prisma, handyOnlyAccess, "HANDYMAN");
+  await activateBusinessTradeOp(prisma, cleanOnlyAccess, "CLEANING");
+  await activateBusinessTradeOp(prisma, multiLeadAccess, "HANDYMAN");
+  await activateBusinessTradeOp(prisma, multiLeadAccess, "CLEANING");
+  await activateBusinessTradeOp(prisma, foreignLeadAccess, "HANDYMAN");
+
+  const handyOnlyTradesBefore = await prisma.businessTrade.count({
+    where: { businessId: handyOnly.id },
+  });
+  const cleanOnlyTradesBefore = await prisma.businessTrade.count({
+    where: { businessId: cleanOnly.id },
+  });
+  const multiTradesBefore = await prisma.businessTrade.count({
+    where: { businessId: multiLead.id },
+  });
+
+  const handyOnlyLead = await createOwnerLoggedLead(prisma, handyOnlyAccess, {
+    mode: "new",
+    name: "Handy Caller",
+    summary: "Door latch",
+    channel: "PHONE",
+    submissionId: "ll-handy-a",
+  });
+  const handyOnlyRequest = handyOnlyLead.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: handyOnlyLead.requestId } })
+    : null;
+  check(
+    "A. Handyman-only Log lead with no service stores HANDYMAN",
+    handyOnlyLead.ok === true && handyOnlyRequest?.tradeCode === "HANDYMAN",
+  );
+
+  const cleanOnlyLead = await createOwnerLoggedLead(prisma, cleanOnlyAccess, {
+    mode: "new",
+    name: "Clean Caller",
+    summary: "Weekly house clean",
+    channel: "PHONE",
+    submissionId: "ll-clean-b",
+  });
+  const cleanOnlyRequest = cleanOnlyLead.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: cleanOnlyLead.requestId } })
+    : null;
+  check(
+    "B. Cleaning-only Log lead with no service stores CLEANING, never HANDYMAN",
+    cleanOnlyLead.ok === true &&
+      cleanOnlyRequest?.tradeCode === "CLEANING" &&
+      cleanOnlyRequest?.tradeCode !== "HANDYMAN",
+  );
+
+  const multiExplicit = await createOwnerLoggedLead(prisma, multiLeadAccess, {
+    mode: "new",
+    name: "Multi Explicit",
+    summary: "Move-out clean",
+    channel: "PHONE",
+    tradeCode: "CLEANING",
+    submissionId: "ll-multi-c",
+  });
+  const multiExplicitRequest = multiExplicit.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: multiExplicit.requestId } })
+    : null;
+  check(
+    "C. Multi-trade Log lead with explicit CLEANING and no service stores CLEANING",
+    multiExplicit.ok === true && multiExplicitRequest?.tradeCode === "CLEANING",
+  );
+
+  const multiRequestsBeforeD = await prisma.serviceRequest.count({
+    where: { businessId: multiLead.id },
+  });
+  const multiCustomersBeforeD = await prisma.customer.count({
+    where: { businessId: multiLead.id },
+  });
+  const multiNoChoice = await createOwnerLoggedLead(prisma, multiLeadAccess, {
+    mode: "new",
+    name: "Multi No Choice",
+    summary: "Need help",
+    channel: "PHONE",
+    submissionId: "ll-multi-d",
+  });
+  check(
+    "D. Multi-trade Log lead with no service and no trade choice fails closed",
+    multiNoChoice.ok === false &&
+      multiNoChoice.error === CUSTOM_WORK_TRADE_REQUIRED_MESSAGE &&
+      (await prisma.serviceRequest.count({ where: { businessId: multiLead.id } })) ===
+        multiRequestsBeforeD &&
+      (await prisma.customer.count({ where: { businessId: multiLead.id } })) ===
+        multiCustomersBeforeD,
+  );
+
+  const activeCleanItem = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: multiLead.id,
+      name: "Standard Clean",
+      category: "Cleaning",
+      pricingMode: "FIXED",
+      price: new Prisma.Decimal(150),
+      active: true,
+      tradeCode: "CLEANING",
+    },
+  });
+  const catalogCleanLead = await createOwnerLoggedLead(prisma, multiLeadAccess, {
+    mode: "new",
+    name: "Catalog Clean",
+    summary: "Standard clean",
+    channel: "PHONE",
+    serviceCatalogItemId: activeCleanItem.id,
+    submissionId: "ll-multi-e",
+  });
+  const catalogCleanRequest = catalogCleanLead.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: catalogCleanLead.requestId } })
+    : null;
+  check(
+    "E. Active Cleaning catalog service stores CLEANING on the logged request",
+    catalogCleanLead.ok === true &&
+      catalogCleanRequest?.tradeCode === "CLEANING" &&
+      catalogCleanRequest?.serviceCatalogItemId === activeCleanItem.id,
+  );
+
+  await deactivateBusinessTradeOp(prisma, multiLeadAccess, "CLEANING");
+  const staleCleanItem = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: multiLead.id,
+      name: "Deep Clean leftover",
+      category: "Cleaning",
+      pricingMode: "FIXED",
+      price: new Prisma.Decimal(200),
+      active: true,
+      tradeCode: "CLEANING",
+    },
+  });
+  const inactiveCounts = {
+    requests: await prisma.serviceRequest.count({ where: { businessId: multiLead.id } }),
+    customers: await prisma.customer.count({ where: { businessId: multiLead.id } }),
+    properties: await prisma.property.count({ where: { businessId: multiLead.id } }),
+  };
+  const inactiveCatalogLead = await createOwnerLoggedLead(prisma, multiLeadAccess, {
+    mode: "new",
+    name: "Stale Clean",
+    email: "stale-clean@example.com",
+    summary: "Deep clean",
+    channel: "PHONE",
+    serviceCatalogItemId: staleCleanItem.id,
+    propertyChoice: "new",
+    streetAddress: "9 Inactive Ave",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    submissionId: "ll-multi-f",
+  });
+  check(
+    "F. Catalog item on an inactive trade is rejected with no partial write",
+    inactiveCatalogLead.ok === false &&
+      inactiveCatalogLead.error === INACTIVE_CATALOG_TRADE_MESSAGE &&
+      (await prisma.serviceRequest.count({ where: { businessId: multiLead.id } })) ===
+        inactiveCounts.requests &&
+      (await prisma.customer.count({ where: { businessId: multiLead.id } })) ===
+        inactiveCounts.customers &&
+      (await prisma.property.count({ where: { businessId: multiLead.id } })) ===
+        inactiveCounts.properties,
+  );
+
+  const foreignItem = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: foreignLead.id,
+      name: "Foreign Fan",
+      category: "Fans",
+      pricingMode: "FIXED",
+      price: new Prisma.Decimal(90),
+      active: true,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const foreignCounts = {
+    requests: await prisma.serviceRequest.count({ where: { businessId: multiLead.id } }),
+    customers: await prisma.customer.count({ where: { businessId: multiLead.id } }),
+  };
+  const foreignCatalogLead = await createOwnerLoggedLead(prisma, multiLeadAccess, {
+    mode: "new",
+    name: "Foreign Catalog",
+    summary: "Steal service",
+    channel: "PHONE",
+    serviceCatalogItemId: foreignItem.id,
+    tradeCode: "HANDYMAN",
+    submissionId: "ll-multi-g",
+  });
+  check(
+    "G. Foreign business catalog item is still rejected",
+    foreignCatalogLead.ok === false &&
+      foreignCatalogLead.error === "That service is not available." &&
+      (await prisma.serviceRequest.count({ where: { businessId: multiLead.id } })) ===
+        foreignCounts.requests &&
+      (await prisma.customer.count({ where: { businessId: multiLead.id } })) ===
+        foreignCounts.customers,
+  );
+
+  const handyOnlyAgain = await createOwnerLoggedLead(prisma, handyOnlyAccess, {
+    mode: "new",
+    name: "Handy Again",
+    summary: "Shelf install",
+    channel: "WALK_IN",
+    submissionId: "ll-handy-h",
+  });
+  const handyOnlyAgainRequest = handyOnlyAgain.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: handyOnlyAgain.requestId } })
+    : null;
+  check(
+    "H. Existing Handyman-only Log lead path stays HANDYMAN and simple",
+    handyOnlyAgain.ok === true && handyOnlyAgainRequest?.tradeCode === "HANDYMAN",
+  );
+  check(
+    "Log lead does not activate or deactivate BusinessTrade rows",
+    (await prisma.businessTrade.count({ where: { businessId: handyOnly.id } })) ===
+      handyOnlyTradesBefore &&
+      (await prisma.businessTrade.count({ where: { businessId: cleanOnly.id } })) ===
+        cleanOnlyTradesBefore &&
+      (await prisma.businessTrade.count({ where: { businessId: multiLead.id } })) ===
+        multiTradesBefore,
+  );
 
   console.log("\nLIVE — Cannot drop the last trade; cannot steal another tenant");
   await deactivateBusinessTradeOp(prisma, accessB, "CLEANING");

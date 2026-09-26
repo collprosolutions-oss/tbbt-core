@@ -105,6 +105,9 @@ check("Quick Actions still link to estimates/new, estimates, and jobs",
   pageSrc.includes('href="/estimates/new"') &&
     pageSrc.includes('href="/estimates"') &&
     pageSrc.includes('href="/jobs"'));
+check("Quick Actions and header include owner Log lead",
+  pageSrc.includes('href="/requests/log-lead"') &&
+    pageSrc.includes("Log lead"));
 check("Open estimate action is unchanged", workspaceSrc.includes("Open estimate"));
 check("Row selection still only updates local client state",
   workspaceSrc.includes("setSelectedId") &&

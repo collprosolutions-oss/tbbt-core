@@ -22,6 +22,7 @@
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   CAPABILITIES,
   ForbiddenError,
@@ -278,6 +279,22 @@ try {
     "MEMBER has NO general owner/admin management capability (foundation only)",
     allCapabilities.every((capability) => !roleHasCapability("MEMBER", capability)),
   );
+  const requestActionSrc = readFileSync(
+    new URL("../src/app/actions/request.ts", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Owner Log lead uses the existing MANAGE_ESTIMATES request-management gate",
+    requestActionSrc.includes("export async function logLead") &&
+      requestActionSrc.includes("requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES)") &&
+      !requestActionSrc.includes('readString(formData, "businessId")'),
+  );
+  check(
+    "MEMBER still has no MANAGE_ESTIMATES (Log lead stays owner/admin)",
+    !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_ESTIMATES) &&
+      roleHasCapability("OWNER", CAPABILITIES.MANAGE_ESTIMATES) &&
+      roleHasCapability("ADMIN", CAPABILITIES.MANAGE_ESTIMATES),
+  );
 
   const businessA = await prisma.business.create({
     data: { name: "Alpha Handyman", slug: "alpha-handyman-auth", tradeCode: "HANDYMAN" },
@@ -404,6 +421,15 @@ try {
   );
   const estimateStillSent = await prisma.estimate.findUnique({ where: { id: memberSentEstimate.id } });
   check("Estimate remains SENT after MEMBER's rejected return-to-draft", estimateStillSent.status === "SENT");
+  await expectForbidden("MEMBER cannot pass the Log lead / request-management gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_ESTIMATES);
+  });
+  await expectAllowed("ADMIN can pass the Log lead / request-management gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_ESTIMATES);
+  });
+  await expectAllowed("OWNER can pass the Log lead / request-management gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.MANAGE_ESTIMATES);
+  });
   console.log(
     "  note - Approving an estimate (approveEstimate) is a PUBLIC customer action gated by\n" +
     "         publicToken + status, not a business Membership role; it is intentionally out of\n" +

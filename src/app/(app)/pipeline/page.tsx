@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { PipelineWorkspace } from "@/components/pipeline/pipeline-workspace";
 import { FounderDesignRoot } from "@/components/founder-design/root";
 import { FounderRegion } from "@/components/founder-design/region";
@@ -6,6 +7,8 @@ import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
+import { PageHeaderControls } from "@/components/page-header-controls";
+import { Button } from "@/components/ui/button";
 import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
@@ -85,6 +88,13 @@ export default async function PipelinePage({
 
   return (
     <PageContainer width="2xl">
+      <PageHeaderControls
+        actions={
+          <Button asChild size="sm">
+            <Link href="/requests/log-lead">Log lead</Link>
+          </Button>
+        }
+      />
       <PageHeader
         title="Deals / Pipeline"
         description={`Sales workspace for ${access.workspace.business.name}. Stages follow real requests, estimates, and jobs — not a second CRM.`}

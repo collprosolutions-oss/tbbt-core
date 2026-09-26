@@ -58,8 +58,19 @@ export type RequestListItem = {
  * client state, never triggers a new fetch or exposes any other
  * business's data.
  */
-export function RequestsWorkspace({ requests }: { requests: RequestListItem[] }) {
-  const [selectedId, setSelectedId] = useState<string | null>(requests[0]?.id ?? null);
+export function RequestsWorkspace({
+  requests,
+  initialSelectedId,
+}: {
+  requests: RequestListItem[];
+  initialSelectedId?: string;
+}) {
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    if (initialSelectedId && requests.some((request) => request.id === initialSelectedId)) {
+      return initialSelectedId;
+    }
+    return requests[0]?.id ?? null;
+  });
   const [mobileOpen, setMobileOpen] = useState(false);
   const selected = requests.find((request) => request.id === selectedId) ?? null;
 
@@ -73,7 +84,7 @@ export function RequestsWorkspace({ requests }: { requests: RequestListItem[] })
       <FounderRegion id="table">
         <EmptyState
           title="No requests yet"
-          description="Public website submissions for this workspace appear here. If you applied a status or search filter, clear it to see every request."
+          description="Public website submissions and owner-logged leads for this workspace appear here. If you applied a status or search filter, clear it to see every request."
         />
       </FounderRegion>
     );

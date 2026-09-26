@@ -376,9 +376,14 @@ export default async function DashboardPage() {
        */}
       <PageHeaderControls
         actions={
-          <Button asChild size="sm">
-            <Link href="/estimates/new">Create Estimate</Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button asChild size="sm" variant="outline">
+              <Link href="/requests/log-lead">Log lead</Link>
+            </Button>
+            <Button asChild size="sm">
+              <Link href="/estimates/new">Create Estimate</Link>
+            </Button>
+          </div>
         }
       />
       <PageHeader
@@ -540,6 +545,9 @@ export default async function DashboardPage() {
             </CardHeader>
             <CardContent className="flex flex-col gap-2">
               <Button asChild size="sm" className="justify-start">
+                <Link href="/requests/log-lead">Log lead</Link>
+              </Button>
+              <Button asChild size="sm" variant="outline" className="justify-start">
                 <Link href="/estimates/new">Create Estimate</Link>
               </Button>
               <Button asChild size="sm" variant="outline" className="justify-start">

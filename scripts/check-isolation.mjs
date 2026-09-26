@@ -46,6 +46,7 @@ const { CAPABILITIES, requireBusinessCapability } = await import(
 const { persistDraftInvoiceFromCompletedJob } = await import(
   "@/lib/invoice-carry-forward"
 );
+const { createOwnerLoggedLead } = await import("@/lib/owner-log-lead");
 const {
   accountingExpensesCsv,
   accountingInvoicesCsv,
@@ -816,6 +817,48 @@ try {
       true,
     );
   }
+
+  const bCustomersBeforeLead = await prisma.customer.count({
+    where: { businessId: accessB.businessId },
+  });
+  const bRequestsBeforeLead = await prisma.serviceRequest.count({
+    where: { businessId: accessB.businessId },
+  });
+  const bPropertiesBeforeLead = await prisma.property.count({
+    where: { businessId: accessB.businessId },
+  });
+  const hijackCustomer = await createOwnerLoggedLead(prisma, accessB, {
+    mode: "existing",
+    customerId: tenantA.customer.id,
+    summary: "Hijack customer",
+    channel: "PHONE",
+    submissionId: "iso-cust-a",
+  });
+  const hijackProperty = await createOwnerLoggedLead(prisma, accessB, {
+    mode: "existing",
+    customerId: tenantB.customer.id,
+    propertyChoice: tenantA.property.id,
+    summary: "Hijack property",
+    channel: "WALK_IN",
+    submissionId: "iso-prop-a",
+  });
+  check(
+    "B cannot attach Customer A to an owner-logged lead",
+    hijackCustomer.ok === false,
+  );
+  check(
+    "B cannot attach Property A to an owner-logged lead",
+    hijackProperty.ok === false,
+  );
+  check(
+    "Rejected log-lead foreign IDs create no partial rows on B",
+    (await prisma.customer.count({ where: { businessId: accessB.businessId } })) ===
+      bCustomersBeforeLead &&
+      (await prisma.serviceRequest.count({ where: { businessId: accessB.businessId } })) ===
+        bRequestsBeforeLead &&
+      (await prisma.property.count({ where: { businessId: accessB.businessId } })) ===
+        bPropertiesBeforeLead,
+  );
 
   await expectRejects(
     "B cannot create a Job from Estimate A (createJobFromEstimate)",
