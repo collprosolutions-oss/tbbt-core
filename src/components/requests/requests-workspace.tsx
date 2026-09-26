@@ -57,6 +57,26 @@ export type RequestListItem = {
 };
 
 /**
+ * Resolve `?selected=` against the already tenant-scoped loaded request
+ * set. A matching ID becomes the selection and opens the mobile detail
+ * sheet. Missing or foreign IDs never open the sheet and never invent a request
+ * -- they fall back to the first loaded row (existing highlight).
+ */
+export function resolveInitialRequestSelection(
+  requests: ReadonlyArray<{ id: string }>,
+  initialSelectedId?: string | null,
+): { selectedId: string | null; openMobileSheet: boolean } {
+  const matchedId =
+    initialSelectedId && requests.some((request) => request.id === initialSelectedId)
+      ? initialSelectedId
+      : null;
+  return {
+    selectedId: matchedId ?? requests[0]?.id ?? null,
+    openMobileSheet: Boolean(matchedId),
+  };
+}
+
+/**
  * The Requests master/detail workspace: a dense operating table (left) and
  * a Request Details panel (right on desktop, a bottom sheet on mobile --
  * see the MOBILE section of the spec). All data is pre-fetched, already
@@ -72,13 +92,9 @@ export function RequestsWorkspace({
   requests: RequestListItem[];
   initialSelectedId?: string;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(() => {
-    if (initialSelectedId && requests.some((request) => request.id === initialSelectedId)) {
-      return initialSelectedId;
-    }
-    return requests[0]?.id ?? null;
-  });
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const initialSelection = resolveInitialRequestSelection(requests, initialSelectedId);
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelection.selectedId);
+  const [mobileOpen, setMobileOpen] = useState(initialSelection.openMobileSheet);
   const selected = requests.find((request) => request.id === selectedId) ?? null;
 
   function selectRequest(id: string) {
@@ -277,6 +293,9 @@ function RequestsMobileList({
             <p className="mt-2 truncate text-sm font-medium text-foreground">
               {request.serviceName ?? "Not specified"}
             </p>
+            {request.propertyLabel ? (
+              <p className="truncate text-xs text-muted-foreground">{request.propertyLabel}</p>
+            ) : null}
             {request.identityReview ? (
               <p className="mt-1 text-xs font-medium text-amber-800">Needs identity review</p>
             ) : null}

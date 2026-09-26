@@ -113,6 +113,33 @@ check("Row selection still only updates local client state",
   workspaceSrc.includes("setSelectedId") &&
     workspaceSrc.includes("selecting a row only changes local"));
 
+console.log("\nSTATIC — Mobile selected-id continuity");
+const mobileListSrc = workspaceSrc.slice(
+  workspaceSrc.indexOf("function RequestsMobileList"),
+  workspaceSrc.indexOf("function DetailField"),
+);
+check(
+  "Mobile request cards show the recorded property/address label when available",
+  mobileListSrc.includes("{request.propertyLabel ? (") &&
+    mobileListSrc.includes("{request.propertyLabel}"),
+);
+check(
+  "Matching ?selected= ID opens the mobile detail sheet from the loaded set",
+  workspaceSrc.includes("resolveInitialRequestSelection") &&
+    workspaceSrc.includes("useState(initialSelection.openMobileSheet)") &&
+    workspaceSrc.includes("requests.some((request) => request.id === initialSelectedId)"),
+);
+check(
+  "Foreign or missing selected IDs leave the mobile sheet closed",
+  workspaceSrc.includes("openMobileSheet: Boolean(matchedId)") &&
+    workspaceSrc.includes("never invent a request"),
+);
+check(
+  "Call / Email / Open customer actions from #133 remain",
+  workspaceSrc.includes("<RequestContactActions") &&
+    workspaceSrc.includes("Open customer"),
+);
+
 console.log("\nSTATIC — Founder Design Mode regions are preserved");
 check("Requests still has 4 KPI cards", KPI_CARD_COUNTS.requests === 4);
 check("Requests still has a tunable details panel", PAGE_HAS_PANEL.requests === true);
