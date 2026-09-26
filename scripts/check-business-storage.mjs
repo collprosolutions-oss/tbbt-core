@@ -201,9 +201,10 @@ check("Public request finalize proves PRIVATE CUSTOMER_PHOTO before finalizeMana
   publicFinalizeSrc.indexOf("storedAsset.findFirst") >= 0 &&
     publicFinalizeSrc.indexOf("finalizeManagedUpload") >
       publicFinalizeSrc.indexOf("storedAsset.findFirst") &&
-    publicFinalizeSrc.includes('category === "CUSTOMER_PHOTO"') &&
-    publicFinalizeSrc.includes('visibility === "PRIVATE"') &&
-    publicFinalizeSrc.includes("status === \"READY\""));
+    publicFinalizeSrc.includes("isPrivateUnpublishedCustomerPhoto") &&
+    publicFinalizeSrc.includes("status === \"READY\"") &&
+    requestPhotoSrc.includes('category === "CUSTOMER_PHOTO"') &&
+    requestPhotoSrc.includes('visibility === "PRIVATE"'));
 check("Public request fallback photos count recorded attachments before adding more",
   requestPhotoSrc.includes("serviceRequestPhoto.count") &&
     requestPhotoSrc.includes("remainingIntakePhotoSlots"));
