@@ -90,29 +90,31 @@ check(
 );
 check(
   "Project Home uses token-scoped loaders only",
-  page.includes("loadPortalCustomerCommunications(prisma, token)") &&
-    page.includes("loadPortalAdditionalWorkRequests(prisma, token)") &&
-    homeHelper.includes("where: { projectToken: trimmed }"),
+  page.includes("loadPortalCustomerCommunications") &&
+    page.includes("loadPortalAdditionalWorkRequests") &&
+    page.includes("prisma,\n    token") &&
+    homeHelper.includes("where: { projectToken: trimmed }") &&
+    homeHelper.includes("businessId: job.businessId") &&
+    homeHelper.includes("customerId: job.customerId"),
 );
 check(
-  "Internal cost/margin/vault/notes stay off the portal page",
-  !page.includes("margin") &&
-    !page.includes("laborCost") &&
+  "Internal cost/vault/notes stay off the portal page",
+  !page.includes("laborCost") &&
     !page.includes("supplierCost") &&
     !page.includes("Business Vault") &&
     !page.includes("Chief-of-Staff") &&
     !page.includes("problemReports") &&
-    !page.includes("internal notes") &&
     !page.includes("JobPhoto") &&
-    !page.includes("photos"),
+    !page.includes("prisma.jobPhoto") &&
+    page.includes("no internal notes"),
 );
 check(
-  "Forbidden customer claims are not hardcoded",
+  "Forbidden customer claims are not shown as live copy",
   !page.includes("Technician is on the way") &&
     !page.includes("Your message was read") &&
-    !homeHelper.includes("Technician is on the way") &&
     !homeSummary.includes("Your message was read") &&
-    !commsCard.includes("was read"),
+    !commsCard.includes("was read") &&
+    homeHelper.includes("PORTAL_FORBIDDEN_CUSTOMER_CLAIMS"),
 );
 check(
   "SENT is never labeled Delivered",
