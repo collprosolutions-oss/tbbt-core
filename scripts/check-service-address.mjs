@@ -15,6 +15,7 @@ const { createPublicServiceRequest } = await import("@/lib/public-intake");
 const { resolveBusinessServiceArea } = await import("@/lib/business-service-area");
 const { formatAddress } = await import("@/lib/format");
 const {
+  OTHER_CITY_VALUE,
   OUT_OF_AREA_WARNING,
   applyAddressSuggestion,
   cityIsInServiceArea,
@@ -23,6 +24,7 @@ const {
   formatStructuredMailingAddress,
   getAddressLookupProvider,
   isValidUsPostalCode,
+  normalizeCityName,
   normalizeRegion,
   shouldWarnOutsideServiceArea,
   structuredAddressKey,
@@ -129,23 +131,70 @@ check(
 check("CollPro default state is FL from tenant config, not global code", collproArea.region === "FL" && collproArea.country === "US");
 check("Another business does not inherit CollPro cities or Florida", otherArea.cities.length === 0 && otherArea.region === null);
 check("Fort Myers is in CollPro's approved area", cityIsInServiceArea("fort myers", collproArea.cities));
+check("Cape Coral is in CollPro's approved area", cityIsInServiceArea("Cape Coral", collproArea.cities));
+check("North Fort Myers is in CollPro's approved area", cityIsInServiceArea("North Fort Myers", collproArea.cities));
 check("Naples is outside CollPro's approved area", !cityIsInServiceArea("Naples", collproArea.cities));
 check("Out-of-area warning text is the approved customer copy", OUT_OF_AREA_WARNING.includes("outside our standard service area"));
 check(
-  "Out-of-area warning fires for a city not on the tenant list",
-  shouldWarnOutsideServiceArea("Naples", collproArea.cities) === true,
+  "Initial blank city does not warn when approved cities are configured",
+  shouldWarnOutsideServiceArea("", collproArea.cities) === false &&
+    shouldWarnOutsideServiceArea("   ", collproArea.cities) === false,
 );
 check(
-  "Approved city does not warn",
+  "Fort Myers does not warn when approved",
+  shouldWarnOutsideServiceArea("Fort Myers", collproArea.cities) === false,
+);
+check(
+  "Cape Coral does not warn when approved",
   shouldWarnOutsideServiceArea("Cape Coral", collproArea.cities) === false,
 );
 check(
-  "Business with no configured cities never warns",
-  shouldWarnOutsideServiceArea("Anywhere", otherArea.cities) === false,
+  "North Fort Myers does not warn when approved",
+  shouldWarnOutsideServiceArea("North Fort Myers", collproArea.cities) === false,
+);
+check(
+  "Normalized equivalent of an approved city does not warn",
+  normalizeCityName("  FORT   MYERS ") === normalizeCityName("Fort Myers") &&
+    shouldWarnOutsideServiceArea("  FORT   MYERS ", collproArea.cities) === false &&
+    shouldWarnOutsideServiceArea("cape coral", collproArea.cities) === false &&
+    shouldWarnOutsideServiceArea("north  fort myers", collproArea.cities) === false,
+);
+check(
+  "Explicit Other / not listed warns while the unlisted-city path is chosen",
+  shouldWarnOutsideServiceArea(OTHER_CITY_VALUE, collproArea.cities) === true,
+);
+check(
+  "Typed unlisted city warns",
+  shouldWarnOutsideServiceArea("Naples", collproArea.cities) === true &&
+    shouldWarnOutsideServiceArea("Bonita Springs", collproArea.cities) === true,
+);
+check(
+  "Business with no configured cities never warns, including blank and Other",
+  shouldWarnOutsideServiceArea("Anywhere", otherArea.cities) === false &&
+    shouldWarnOutsideServiceArea("", otherArea.cities) === false &&
+    shouldWarnOutsideServiceArea(OTHER_CITY_VALUE, otherArea.cities) === false,
+);
+check(
+  "Public address UI does not infer outside from an untouched blank city",
+  fieldsSrc.includes("forceOtherCity && !value.city.trim() ? OTHER_CITY_VALUE") &&
+    fieldsSrc.includes("shouldWarnOutsideServiceArea(cityForAreaWarning, approvedCities)"),
+);
+check(
+  "Selecting Other still switches into the custom-city input",
+  fieldsSrc.includes('setForceOtherCity(true)') &&
+    fieldsSrc.includes("Other / not listed"),
 );
 
 const missingStreet = validateStructuredAddress(
   { streetAddress: "", city: "Fort Myers", region: "FL", postalCode: "33901" },
+  { country: "US" },
+);
+const missingCity = validateStructuredAddress(
+  { streetAddress: "1 Main", city: "", region: "FL", postalCode: "33901" },
+  { country: "US" },
+);
+const otherCitySentinel = validateStructuredAddress(
+  { streetAddress: "1 Main", city: OTHER_CITY_VALUE, region: "FL", postalCode: "33901" },
   { country: "US" },
 );
 const missingZip = validateStructuredAddress(
@@ -157,6 +206,13 @@ const nonUsOk = validateStructuredAddress(
   { country: "CA" },
 );
 check("Street is required", missingStreet.ok === false);
+check(
+  "Request submission validation still requires city",
+  missingCity.ok === false &&
+    missingCity.error === "City / town is required." &&
+    otherCitySentinel.ok === false &&
+    otherCitySentinel.error === "City / town is required.",
+);
 check("ZIP is required for US businesses", missingZip.ok === false);
 check("ZIP is not required for a non-US business", nonUsOk.ok === true);
 check("Florida is normalized to FL only when the business is US", normalizeRegion("Florida", "US") === "FL");
@@ -354,6 +410,28 @@ try {
     otherDescription: "",
   });
   check("US ZIP is required on structured CollPro intake", missing.ok === false);
+
+  const missingCitySubmit = await createPublicServiceRequest(prisma, {
+    slug: "collpro-reno",
+    name: "Cara Incomplete",
+    email: "cara-city@example.com",
+    phone: "555-0203",
+    address: "",
+    streetAddress: "1 Oak",
+    unit: "",
+    city: "",
+    region: "FL",
+    postalCode: "33901",
+    notes: "",
+    catalogItemIds: [catalog.id],
+    includeOther: false,
+    otherDescription: "",
+  });
+  check(
+    "Structured CollPro intake still requires city on submit",
+    missingCitySubmit.ok === false &&
+      missingCitySubmit.error === "City / town is required.",
+  );
 
   const customer = await prisma.customer.create({
     data: {
