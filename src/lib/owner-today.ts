@@ -16,7 +16,7 @@ import {
   type AppointmentJobFields,
 } from "@/lib/appointment-confirmation";
 import { directionsUrl, telHref } from "@/lib/directions";
-import { formatAddress, formatTime } from "@/lib/format";
+import { formatAddress, formatDateTime, formatTime } from "@/lib/format";
 import { expectedEnd } from "@/lib/job-schedule";
 import {
   completedJobBillingAttention,
@@ -28,6 +28,7 @@ import {
 export const OWNER_TODAY_JOBS_TAKE = 25;
 export const OWNER_TODAY_HANDOFF_TAKE = 25;
 export const OWNER_TODAY_APPOINTMENT_TAKE = 25;
+export const OWNER_TODAY_FIELD_PROBLEM_TAKE = 25;
 
 export const OWNER_TODAY_CREATE_INVOICE_LABEL = "Create & send invoice";
 export const OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL =
@@ -74,6 +75,22 @@ export const OWNER_TODAY_JOB_SELECT = {
   },
   assignedMembership: {
     select: { id: true, user: { select: { name: true } } },
+  },
+} as const;
+
+export const OWNER_TODAY_FIELD_PROBLEM_SELECT = {
+  id: true,
+  businessId: true,
+  description: true,
+  createdAt: true,
+  status: true,
+  membership: { select: { user: { select: { name: true } } } },
+  job: {
+    select: {
+      id: true,
+      businessId: true,
+      customer: { select: { name: true } },
+    },
   },
 } as const;
 
@@ -449,6 +466,66 @@ export function buildOwnerTodayHandoffItems(
       reason: attention.reason,
       detail: attention.detail,
     });
+  }
+  return items;
+}
+
+export type OwnerTodayFieldProblemRecord = {
+  id: string;
+  businessId: string;
+  description: string;
+  createdAt: Date;
+  status: string;
+  membership?: { user?: { name: string | null } | null } | null;
+  job?: {
+    id: string;
+    businessId: string;
+    customer?: { name: string | null } | null;
+  } | null;
+};
+
+export type OwnerTodayFieldProblemItem = {
+  reportId: string;
+  jobId: string;
+  customerName: string;
+  reporterName: string;
+  description: string;
+  reportedAtLabel: string;
+  href: string;
+};
+
+/**
+ * Canonical Today projection for OPEN JobProblemReport rows.
+ * Fail closed when the report or related Job is not in the requested
+ * business. Does not invent a second ticketing model or a resolve action.
+ */
+export function buildOwnerTodayFieldProblemItem(
+  report: OwnerTodayFieldProblemRecord,
+  options: { businessId: string; timeZone?: string },
+): OwnerTodayFieldProblemItem | null {
+  if (report.businessId !== options.businessId) return null;
+  if (report.status !== "OPEN") return null;
+  const job = report.job;
+  if (!job || job.businessId !== options.businessId) return null;
+  return {
+    reportId: report.id,
+    jobId: job.id,
+    customerName: job.customer?.name?.trim() || "Customer",
+    reporterName: report.membership?.user?.name?.trim() || "Team member",
+    description: report.description,
+    reportedAtLabel: formatDateTime(report.createdAt, options.timeZone),
+    href: `/jobs/${job.id}`,
+  };
+}
+
+export function buildOwnerTodayFieldProblemAttention(
+  reports: readonly OwnerTodayFieldProblemRecord[],
+  options: { businessId: string; timeZone?: string },
+): OwnerTodayFieldProblemItem[] {
+  const items: OwnerTodayFieldProblemItem[] = [];
+  for (const report of reports) {
+    const item = buildOwnerTodayFieldProblemItem(report, options);
+    if (item) items.push(item);
   }
   return items;
 }

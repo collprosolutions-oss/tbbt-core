@@ -3,6 +3,7 @@ import Link from "next/link";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { OwnerTodayAppointmentAttention } from "@/components/today/owner-today-appointment-attention";
+import { OwnerTodayFieldProblemAttention } from "@/components/today/owner-today-field-problem-attention";
 import { OwnerTodayHandoffCard } from "@/components/today/owner-today-handoff-card";
 import { OwnerTodayJobCard } from "@/components/today/owner-today-job-card";
 import { Button } from "@/components/ui/button";
@@ -19,11 +20,14 @@ import { formatDate } from "@/lib/format";
 import {
   OWNER_TODAY_APPOINTMENT_TAKE,
   OWNER_TODAY_FIELD_COMPLETION_COPY,
+  OWNER_TODAY_FIELD_PROBLEM_SELECT,
+  OWNER_TODAY_FIELD_PROBLEM_TAKE,
   OWNER_TODAY_HANDOFF_SELECT,
   OWNER_TODAY_HANDOFF_TAKE,
   OWNER_TODAY_JOB_SELECT,
   OWNER_TODAY_JOBS_TAKE,
   buildOwnerTodayAppointmentAttention,
+  buildOwnerTodayFieldProblemAttention,
   buildOwnerTodayHandoffItems,
   buildOwnerTodayJobs,
   ownerTodayAppointmentCandidateWhere,
@@ -45,38 +49,52 @@ export default async function OwnerTodayPage() {
   const todayIso = formatISODate(today, timeZone);
   const viewerMembershipId = access.workspace.membership.id;
 
-  const [todayJobs, appointmentJobs, completedJobsForBilling, eligibleMemberRows] =
-    await Promise.all([
-      prisma.job.findMany({
-        where: {
-          ...access.scope,
-          ...ownerTodayScheduledWhere(todayRange),
-        },
-        select: OWNER_TODAY_JOB_SELECT,
-        orderBy: { scheduledAt: "asc" },
-        take: OWNER_TODAY_JOBS_TAKE,
-      }),
-      prisma.job.findMany({
-        where: {
-          ...access.scope,
-          ...ownerTodayAppointmentCandidateWhere(todayRange.start),
-        },
-        select: OWNER_TODAY_JOB_SELECT,
-        orderBy: { scheduledAt: "asc" },
-        take: OWNER_TODAY_APPOINTMENT_TAKE,
-      }),
-      prisma.job.findMany({
-        where: { ...access.scope, status: "COMPLETED" },
-        select: OWNER_TODAY_HANDOFF_SELECT,
-        orderBy: { updatedAt: "desc" },
-        take: OWNER_TODAY_HANDOFF_TAKE,
-      }),
-      prisma.membership.findMany({
-        where: { businessId: access.businessId, role: "MEMBER", active: true },
-        select: { id: true, user: { select: { name: true, email: true } } },
-        orderBy: { createdAt: "asc" },
-      }),
-    ]);
+  const [
+    todayJobs,
+    appointmentJobs,
+    completedJobsForBilling,
+    openFieldProblemReports,
+    eligibleMemberRows,
+  ] = await Promise.all([
+    prisma.job.findMany({
+      where: {
+        ...access.scope,
+        ...ownerTodayScheduledWhere(todayRange),
+      },
+      select: OWNER_TODAY_JOB_SELECT,
+      orderBy: { scheduledAt: "asc" },
+      take: OWNER_TODAY_JOBS_TAKE,
+    }),
+    prisma.job.findMany({
+      where: {
+        ...access.scope,
+        ...ownerTodayAppointmentCandidateWhere(todayRange.start),
+      },
+      select: OWNER_TODAY_JOB_SELECT,
+      orderBy: { scheduledAt: "asc" },
+      take: OWNER_TODAY_APPOINTMENT_TAKE,
+    }),
+    prisma.job.findMany({
+      where: { ...access.scope, status: "COMPLETED" },
+      select: OWNER_TODAY_HANDOFF_SELECT,
+      orderBy: { updatedAt: "desc" },
+      take: OWNER_TODAY_HANDOFF_TAKE,
+    }),
+    prisma.jobProblemReport.findMany({
+      where: {
+        businessId: access.businessId,
+        status: "OPEN",
+      },
+      select: OWNER_TODAY_FIELD_PROBLEM_SELECT,
+      orderBy: { createdAt: "desc" },
+      take: OWNER_TODAY_FIELD_PROBLEM_TAKE,
+    }),
+    prisma.membership.findMany({
+      where: { businessId: access.businessId, role: "MEMBER", active: true },
+      select: { id: true, user: { select: { name: true, email: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
+  ]);
 
   const jobs = buildOwnerTodayJobs(todayJobs, {
     businessId: access.businessId,
@@ -92,6 +110,10 @@ export default async function OwnerTodayPage() {
   const handoffItems = buildOwnerTodayHandoffItems(
     completedJobsForBilling,
     access.businessId,
+  );
+  const fieldProblemAttention = buildOwnerTodayFieldProblemAttention(
+    openFieldProblemReports,
+    { businessId: access.businessId, timeZone },
   );
   const unassignedToday = jobs.filter((job) => job.assignment.kind === "UNASSIGNED");
   const eligibleMembers = eligibleMemberRows.map((member) => ({
@@ -129,13 +151,15 @@ export default async function OwnerTodayPage() {
         <CardHeader>
           <CardTitle>Needs attention</CardTitle>
           <CardDescription>
-            Unconfirmed appointments, unassigned today work, and completed jobs
-            that still need an invoice. {OWNER_TODAY_FIELD_COMPLETION_COPY}
+            Unconfirmed appointments, unassigned today work, open field reports,
+            and completed jobs that still need an invoice.{" "}
+            {OWNER_TODAY_FIELD_COMPLETION_COPY}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {appointmentAttention.length === 0 &&
           unassignedToday.length === 0 &&
+          fieldProblemAttention.length === 0 &&
           handoffItems.length === 0 ? (
             <p className="text-sm text-muted-foreground">Nothing waiting right now.</p>
           ) : null}
@@ -163,6 +187,8 @@ export default async function OwnerTodayPage() {
               ))}
             </div>
           ) : null}
+
+          <OwnerTodayFieldProblemAttention items={fieldProblemAttention} />
 
           {handoffItems.length > 0 ? (
             <div className="space-y-2">
