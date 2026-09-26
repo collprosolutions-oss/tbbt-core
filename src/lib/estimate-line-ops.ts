@@ -11,6 +11,7 @@ import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireOperatingProductCapability } from "@/lib/product-entitlements";
 import {
   DECORATIVE_WALL_PANELING_CALCULATOR_ID,
+  calculatorHasIncompleteBillableWork,
   calculatorRatesEqual,
   calculatorTitle,
   catalogDefinitionFromSnapshot,
@@ -641,14 +642,14 @@ export async function applyDraftEstimateCalculator(
     snapshot.formula,
     customQuoteDisplayDescription(parts.title),
   );
+  if (result.recommendedAmount <= 0 || calculatorHasIncompleteBillableWork(result)) {
+    throw new EstimateLineError("The calculator did not produce a recommended labor price.");
+  }
   snapshot.result = result;
   snapshot.recommendedAmount = result.recommendedAmount;
   snapshot.appliedAmount = result.recommendedAmount;
   snapshot.overriddenAmount = null;
   snapshot.estimatedLaborHours = result.estimatedLaborHours ?? null;
-  if (result.recommendedAmount <= 0) {
-    throw new EstimateLineError("The calculator did not produce a recommended labor price.");
-  }
   const unitPrice = new Prisma.Decimal(result.recommendedAmount.toFixed(2));
   const total = line.quantity.mul(unitPrice);
   const customerPolicies = mergeCustomerPolicies(

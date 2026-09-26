@@ -1,5 +1,9 @@
 import { formatMoney } from "@/lib/format";
-import type { CalculatorResult, CalculatorSnapshot } from "@/lib/estimate-calculators";
+import {
+  calculatorHasIncompleteBillableWork,
+  type CalculatorResult,
+  type CalculatorSnapshot,
+} from "@/lib/estimate-calculators";
 
 export function CalculatorBreakdown({
   snapshot,
@@ -49,8 +53,8 @@ export function CalculatorBreakdown({
         ))}
       </ul>
       <p className="mt-2 font-medium">
-        {breakdown.lines.some((line) => line.amountState === "ready") &&
-        breakdown.recommendedAmount > 0
+        {breakdown.recommendedAmount > 0 &&
+        !calculatorHasIncompleteBillableWork(breakdown)
           ? `Recommended labor price: ${formatMoney(breakdown.recommendedAmount)}`
           : "No recommended labor price yet"}
       </p>

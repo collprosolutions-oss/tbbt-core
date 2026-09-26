@@ -551,6 +551,14 @@ function amountStateForProduction(
   return quantity > 0 && rate > 0 ? "ready" : "waiting";
 }
 
+export function calculatorHasIncompleteBillableWork(
+  result: Pick<CalculatorResult, "lines">,
+) {
+  return result.lines.some(
+    (line) => line.quantity > 0 && line.amountState === "waiting",
+  );
+}
+
 function lineLabelForKind(formula: FormulaContract) {
   if (formula.kind === "area") return `Area (${formula.unit})`;
   if (formula.kind === "linear") return `Length (${formula.unit})`;

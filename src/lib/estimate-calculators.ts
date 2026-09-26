@@ -87,6 +87,7 @@ export type {
 export {
   FORMULA_CONTRACT_VERSION,
   FORMULA_KINDS,
+  calculatorHasIncompleteBillableWork,
   computeFormula,
   defaultFormulaRates,
   defaultTierRateKey,
