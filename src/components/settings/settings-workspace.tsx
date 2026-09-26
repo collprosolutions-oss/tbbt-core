@@ -1125,11 +1125,12 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
             </Link>
           </CardContent>
         </Card>
+        {section === "go-live" ? null : (
         <Card>
           <CardHeader>
-            <CardTitle>Readiness</CardTitle>
+            <CardTitle>Business setup checks</CardTitle>
             <CardDescription>
-              {readiness.requiredReady}/{readiness.requiredTotal} required · {readiness.readyPercent}%
+              {readiness.requiredReady}/{readiness.requiredTotal} required identity/team/security checks. This is not a go-live score.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -1149,6 +1150,7 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
             )}
           </CardContent>
         </Card>
+        )}
       </FounderRegion>
     </div>
   );
