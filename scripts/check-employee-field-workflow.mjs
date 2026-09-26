@@ -976,7 +976,7 @@ try {
   check("Foreign tenant cannot open the owner's Field Job", foreignOwnerFieldJob.status === 404 && !foreignOwnerFieldJob.body.includes(customerA.name));
   const ownerWorkOrderSelf = await fetchRaw(ownerSession, `/jobs/${ownerSelfJob.id}`);
   check("Self-assigned viewer gets Open Field View on the Work Order", ownerWorkOrderSelf.status === 200 && ownerWorkOrderSelf.body.includes("Open Field View") && ownerWorkOrderSelf.body.includes(`/field/jobs/${ownerSelfJob.id}`));
-  const ownerWorkOrderOther = await fetchRaw(ownerSession, `/jobs/${assignedJob.id}`);
+  const ownerWorkOrderOther = await fetchRaw(ownerSession, `/jobs/${adminSelfJob.id}`);
   check("Non-assignee Work Order does not show Open Field View", ownerWorkOrderOther.status === 200 && !ownerWorkOrderOther.body.includes("Open Field View"));
   const ownerJobsNav = await fetchRaw(ownerSession, "/jobs");
   check("Field / My Jobs appears in OWNER management nav and links to /field", ownerJobsNav.status === 200 && ownerJobsNav.body.includes("Field / My Jobs") && ownerJobsNav.body.includes('href="/field"'));
