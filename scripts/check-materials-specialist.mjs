@@ -912,7 +912,10 @@ try {
     "Price-change uses two 90-day history rows, not lastKnownCost",
     projectionA.totals.priceChanged === 1 &&
       projectionA.requirements.some((row) => row.materialId === seededA.oneHistory.id) &&
-      projectionA.requirements.some((row) => row.materialId === seededA.sameHistory.id),
+      projectionA.requirements.some((row) => row.materialId === seededA.sameHistory.id) &&
+      resultA.findings
+        .filter((row) => row.key === "materials-price-changed")
+        .every((row) => /earlier recorded history price/.test(row.summary) && !/last known cost/i.test(row.summary)),
   );
   check("Pickup duration is recorded only", projectionA.pickups.every((row) => row.pickupDurationMinutes == null || row.durationSource === "item" || row.durationSource === "job"));
   check("Expense-linked variance is unfavorable", projectionA.totals.unfavorableVariance >= 1 && projectionA.variance.some((row) => row.financialCost === 48 && row.unfavorable));
