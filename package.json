@@ -102,6 +102,7 @@
     "test:financial-specialist": "node --experimental-strip-types scripts/check-financial-specialist.mjs",
     "test:growth-specialist": "node --experimental-strip-types scripts/check-growth-specialist.mjs",
     "test:materials-specialist": "node --experimental-strip-types scripts/check-materials-specialist.mjs",
+    "test:communications-specialist": "node --experimental-strip-types scripts/check-communications-specialist.mjs",
     "test:automation": "node --experimental-strip-types scripts/check-automation.mjs",
     "test:multi-trade-core": "node --experimental-strip-types scripts/check-multi-trade-core.mjs",
     "test:plan-entitlements": "node --experimental-strip-types scripts/check-plan-entitlements.mjs",

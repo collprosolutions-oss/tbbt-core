@@ -11,6 +11,8 @@ export type CoachContext = {
   activeTradeLabels?: string[];
   /** Bounded Materials facts from the selected specialist only. */
   materialsFacts?: Record<string, string>;
+  /** Bounded Communications facts from the selected specialist only. */
+  communicationsFacts?: Record<string, string>;
 };
 
 export const COACH_FACT_KEYS = [
@@ -65,6 +67,17 @@ export const COACH_FACT_KEYS = [
   "materials-pickup-not-ready-count",
   "materials-adapter-state",
   "materials-price-changed-count",
+  "communications-failed-delivery-count",
+  "communications-pending-count",
+  "communications-revoked-consent-count",
+  "communications-unknown-consent-count",
+  "communications-granted-consent-count",
+  "communications-sms-configured",
+  "communications-email-configured",
+  "communications-sms-entitled",
+  "communications-appointment-different-time-count",
+  "communications-email-message-count",
+  "communications-sms-message-count",
 ] as const;
 
 export type CoachFactKey = (typeof COACH_FACT_KEYS)[number];
@@ -226,6 +239,7 @@ function factList(context: CoachContext): CitedFact[] {
       href: "/jobs",
     },
     ...materialsFactEntries(context.materialsFacts),
+    ...communicationsFactEntries(context.communicationsFacts),
   ];
 }
 
@@ -246,6 +260,32 @@ function materialsFactEntries(facts?: Record<string, string>): CitedFact[] {
   if (!facts) return [];
   return Object.entries(facts).flatMap(([key, value]) => {
     const meta = MATERIALS_FACT_LABELS[key];
+    if (!meta) return [];
+    return [{ key, label: meta.label, value, href: meta.href } satisfies CitedFact];
+  });
+}
+
+const COMMUNICATIONS_FACT_LABELS: Record<string, { label: string; href: string }> = {
+  "communications-failed-delivery-count": { label: "Failed recorded deliveries", href: "/communications" },
+  "communications-pending-count": { label: "Pending recorded communications", href: "/communications" },
+  "communications-revoked-consent-count": { label: "SMS consent revoked", href: "/communications" },
+  "communications-unknown-consent-count": { label: "SMS consent unknown", href: "/communications" },
+  "communications-granted-consent-count": { label: "SMS consent granted", href: "/communications" },
+  "communications-sms-configured": { label: "SMS delivery configured", href: "/communications" },
+  "communications-email-configured": { label: "Email delivery configured", href: "/communications" },
+  "communications-sms-entitled": { label: "SMS messaging entitled", href: "/communications" },
+  "communications-appointment-different-time-count": {
+    label: "Appointment different-time requests",
+    href: "/communications",
+  },
+  "communications-email-message-count": { label: "Recorded email communications", href: "/communications" },
+  "communications-sms-message-count": { label: "Recorded SMS communications", href: "/communications" },
+};
+
+function communicationsFactEntries(facts?: Record<string, string>): CitedFact[] {
+  if (!facts) return [];
+  return Object.entries(facts).flatMap(([key, value]) => {
+    const meta = COMMUNICATIONS_FACT_LABELS[key];
     if (!meta) return [];
     return [{ key, label: meta.label, value, href: meta.href } satisfies CitedFact];
   });
@@ -399,6 +439,29 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
     keys = ["recurring-expenses", "recorded-expenses"];
     stance = "FACT";
     text = `Recorded expenses total ${context.facts.recordedExpenses.amount.toFixed(2)}. ${context.facts.recurringExpenses.count} row(s) are flagged recurring. These are owner-recorded rows, not bank drafts.`;
+  } else if (
+    /\b(?:sms|consent|communications?|text(?:ed|ing|s)?|messag(?:e|es|ing)|can i text|did we contact|what did we send|opt[- ]?(?:in|out))\b/.test(
+      q,
+    )
+  ) {
+    stance = "FACT";
+    if (context.communicationsFacts && Object.keys(context.communicationsFacts).length > 0) {
+      keys = Object.keys(context.communicationsFacts).slice(0, 6);
+      const failed = context.communicationsFacts["communications-failed-delivery-count"];
+      const revoked = context.communicationsFacts["communications-revoked-consent-count"];
+      const unknown = context.communicationsFacts["communications-unknown-consent-count"];
+      const emailCount = context.communicationsFacts["communications-email-message-count"];
+      text =
+        (failed != null ? `${failed} recorded communication(s) have status FAILED. ` : "") +
+        (revoked != null ? `${revoked} projected customer(s) have SMS consent REVOKED. ` : "") +
+        (unknown != null ? `${unknown} projected customer(s) have SMS consent UNKNOWN, which is not GRANTED. ` : "") +
+        (emailCount != null ? `${emailCount} recorded email communication(s) remain on file. ` : "") +
+        "A stored phone number is not consent. SMS limitations do not erase recorded email. The Coach does not send messages or change consent.";
+    } else {
+      keys = [];
+      text =
+        "Recorded Communications facts were not loaded for this question. Missing Communications data is not treated as zero messages or granted consent.";
+    }
   } else {
     keys = ["paid-revenue", "unpaid-invoices"];
     stance = "MIXED";

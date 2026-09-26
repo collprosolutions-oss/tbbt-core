@@ -51,6 +51,9 @@ export async function askBsosCoachAction(
       browserBusinessId: readString(formData, "businessId") || undefined,
       entityHints: {
         jobId: readString(formData, "jobId") || undefined,
+        customerId: readString(formData, "customerId") || undefined,
+        requestId: readString(formData, "requestId") || undefined,
+        messageId: readString(formData, "messageId") || undefined,
         recommendationKey: readString(formData, "recommendationKey") || undefined,
       },
     });

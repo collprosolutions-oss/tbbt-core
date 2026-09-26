@@ -5,6 +5,7 @@
 import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { isSpecialistEnabled } from "@/lib/chief-of-staff/registry";
 import { isGrowthOwnedRecommendationKey } from "@/lib/chief-of-staff/growth-specialist";
+import { isCommunicationsOwnedRecommendationKey } from "@/lib/chief-of-staff/communications-specialist";
 import { isMaterialsOwnedRecommendationKey } from "@/lib/chief-of-staff/materials-specialist";
 import { isFinancialOwnedRecommendationKey } from "@/lib/chief-of-staff/specialists/financial";
 import {
@@ -26,7 +27,8 @@ const KNOWLEDGE_QUESTION =
   /\b(knowledge|launch|procedures?|experience candidates?|approval)\b/i;
 const MATERIALS_QUESTION =
   /\b(materials?|suppliers?|vendors?|inventory|stock|lumber|parts|pickup|job materials|material variance|purchase orders?|purchas(?:e|ed|ing)|buy|bought|buying|\bPOs?\b|pric(?:e|es|ing))\b/i;
-const COMMUNICATIONS_QUESTION = /\b(sms|text messages?|phone calls?|communications?)\b/i;
+const COMMUNICATIONS_QUESTION =
+  /\b(?:sms|opt[- ]?(?:in|out)|consent|(?:phone|voice) calls?|communications?|text(?:ed|ing|s)?|email(?:ed|ing)?|messag(?:e|es|ed|ing)|(?:did|have) we (?:contact|text|email|call|send)|can i (?:text|email|call|contact)|what happened with the (?:message|text|email|sms)|why did (?:this |the )?(?:message|text|email|sms) fail|what (?:communication|message) is waiting|what did we send|appointment (?:message|text|sms|email|communication)|contact(?:ed|ing) this customer|unanswered)\b/i;
 const PROTECTION_QUESTION = /\b(vault|agreements?|esign|insurance|business protection)\b/i;
 const FOCUS_QUESTION = /\b(this week|focus|should i|what should i)\b/i;
 const GENERIC_FOCUS_QUESTION =
@@ -137,6 +139,23 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
     skipped.push({ id: "MATERIALS", reason: "DISABLED" });
   }
 
+  const communicationsKeys = input.activeRecommendationKeys.filter((key) =>
+    isCommunicationsOwnedRecommendationKey(key),
+  );
+  const communicationsHint =
+    input.entityHints?.recommendationKey != null &&
+    isCommunicationsOwnedRecommendationKey(input.entityHints.recommendationKey);
+  const wantsCommunications =
+    COMMUNICATIONS_QUESTION.test(question) ||
+    communicationsKeys.length > 0 ||
+    Boolean(communicationsHint);
+
+  if (wantsCommunications && isSpecialistEnabled("COMMUNICATIONS")) {
+    selected.push("COMMUNICATIONS");
+  } else if (COMMUNICATIONS_QUESTION.test(question) && !isSpecialistEnabled("COMMUNICATIONS")) {
+    skipped.push({ id: "COMMUNICATIONS", reason: "DISABLED" });
+  }
+
   const isFocus = FOCUS_QUESTION.test(question);
   for (const hint of DISABLED_KEYWORD_HINTS) {
     if (!hint.pattern.test(question)) continue;
@@ -170,6 +189,14 @@ export function planSpecialists(input: CosPlannerInput): SpecialistSelection {
       (materialsKeys.length > 0 || Boolean(materialsHint) || explicitMaterials)
     ) {
       allowed.add("MATERIALS");
+    }
+    const explicitCommunications =
+      COMMUNICATIONS_QUESTION.test(question) && !isGenericFocusQuestion(question);
+    if (
+      isSpecialistEnabled("COMMUNICATIONS") &&
+      (communicationsKeys.length > 0 || Boolean(communicationsHint) || explicitCommunications)
+    ) {
+      allowed.add("COMMUNICATIONS");
     }
     for (const id of [...selected]) {
       if (!allowed.has(id)) {

@@ -74,6 +74,14 @@ export function synthesizeCoachAnswer(input: {
     extraNotes.push(finding.summary);
   }
 
+  const communicationsFindings = usable
+    .filter((row) => row.specialistId === "COMMUNICATIONS")
+    .flatMap((row) => row.findings)
+    .slice(0, 6);
+  for (const finding of communicationsFindings) {
+    extraNotes.push(finding.summary);
+  }
+
   if (failed.length > 0) {
     extraNotes.push(
       "Part of the recorded attention view could not be loaded. The answer uses only the surviving facts and does not invent substitutes.",
@@ -134,7 +142,7 @@ export function synthesizeCoachAnswer(input: {
       ...failed.map((row) => row.limitation ?? row.failure?.message ?? "A recorded view was unavailable."),
       ...skipped.map((row) => row.limitation ?? "A recorded view was not available."),
     ],
-    recordedFindings: [...financialFindings, ...growthFindings, ...materialsFindings].map((item) => ({
+    recordedFindings: [...financialFindings, ...growthFindings, ...materialsFindings, ...communicationsFindings].map((item) => ({
       key: item.key,
       title: item.title,
       summary: item.summary,
