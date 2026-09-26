@@ -20,6 +20,8 @@ const {
   countCheaperRecordedSuppliers,
   countDistinctStaleMaterials,
   countPriceChangesFromHistory,
+  latestComparableByProvider,
+  selectProjectedSupplierPrices,
   getLastMaterialsProjection,
   getMaterialsProjectionLoadCount,
   getMaterialsSpecialistInterpretationCount,
@@ -297,6 +299,92 @@ async function seedMaterialsWorld(workspace, { secret = false, extraJobs = 0, ex
       locationKey: "store-b",
     },
   });
+  await prisma.supplierPriceRecord.create({
+    data: {
+      businessId,
+      providerId: "home-depot",
+      providerProductId: "hd-lumber-1",
+      productName: "2x4",
+      unitLabel: "board",
+      currentPrice: "8.10",
+      fetchedAt: hoursAgo(4),
+      sourceStatus: "current",
+      sourceMode: "catalog-reference",
+      locationKey: "store-c",
+    },
+  });
+  const newestCompare = await prisma.materialCatalogItem.create({
+    data: {
+      businessId,
+      name: `${prefix} newest-compare stain`,
+      normalizedName: `${prefix.toLowerCase()} newest-compare stain`,
+      unit: "gal",
+      lastKnownCost: "8.40",
+      takeoffIdentity: "newest-compare",
+    },
+  });
+  await prisma.businessMaterialSupplierMapping.create({
+    data: {
+      businessId,
+      providerId: "home-depot",
+      materialIdentity: "newest-compare",
+      providerProductId: "hd-stain-1",
+      productName: "stain",
+      unitLabel: "gal",
+    },
+  });
+  await prisma.businessMaterialSupplierMapping.create({
+    data: {
+      businessId,
+      providerId: "lowes",
+      materialIdentity: "newest-compare",
+      providerProductId: "lw-stain-1",
+      productName: "stain",
+      unitLabel: "gal",
+    },
+  });
+  await prisma.supplierPriceRecord.create({
+    data: {
+      businessId,
+      providerId: "home-depot",
+      providerProductId: "hd-stain-1",
+      productName: "stain",
+      unitLabel: "gal",
+      currentPrice: "6.00",
+      fetchedAt: hoursAgo(12),
+      sourceStatus: "current",
+      sourceMode: "catalog-reference",
+      locationKey: "store-old",
+    },
+  });
+  await prisma.supplierPriceRecord.create({
+    data: {
+      businessId,
+      providerId: "home-depot",
+      providerProductId: "hd-stain-1",
+      productName: "stain",
+      unitLabel: "gal",
+      currentPrice: "8.40",
+      fetchedAt: hoursAgo(1),
+      sourceStatus: "current",
+      sourceMode: "catalog-reference",
+      locationKey: "store-new",
+    },
+  });
+  await prisma.supplierPriceRecord.create({
+    data: {
+      businessId,
+      providerId: "lowes",
+      providerProductId: "lw-stain-1",
+      productName: "stain",
+      unitLabel: "gal",
+      currentPrice: "8.40",
+      fetchedAt: hoursAgo(2),
+      sourceStatus: "current",
+      sourceMode: "catalog-reference",
+      locationKey: "store-1",
+    },
+  });
   const staleMaterial = await prisma.materialCatalogItem.create({
     data: {
       businessId,
@@ -520,6 +608,18 @@ async function seedMaterialsWorld(workspace, { secret = false, extraJobs = 0, ex
       sourceKey: `same-hist-${randomUUID()}`,
     },
   });
+  await prisma.materialPurchaseListItem.create({
+    data: {
+      businessId,
+      purchaseListId: estimateOnlyList.id,
+      materialId: newestCompare.id,
+      name: newestCompare.name,
+      quantityNeeded: "1",
+      unit: "gal",
+      status: "PLANNED",
+      sourceKey: `newest-${randomUUID()}`,
+    },
+  });
   await prisma.materialPurchaseOrder.create({
     data: {
       businessId,
@@ -585,6 +685,7 @@ async function seedMaterialsWorld(workspace, { secret = false, extraJobs = 0, ex
     staleMaterial,
     oneHistory,
     sameHistory,
+    newestCompare,
     job,
     list,
     estimateOnlyList,
@@ -714,6 +815,36 @@ try {
       ]),
     ) === 1,
   );
+  check(
+    "SupplierPriceRecord query orders by fetchedAt then id",
+    specialistSrc.includes('orderBy: [{ fetchedAt: "desc" }, { id: "desc" }]'),
+  );
+  const hdAbcLowes = [
+    { materialKey: "form-lumber", providerId: "home-depot", providerProductId: "hd-lumber-1", recordedPrice: 8.4, fetchedAt: "2026-09-25T20:00:00.000Z", freshness: "current", sourceMode: "catalog-reference", locationKey: "store-a" },
+    { materialKey: "form-lumber", providerId: "home-depot", providerProductId: "hd-lumber-1", recordedPrice: 7.9, fetchedAt: "2026-09-25T21:00:00.000Z", freshness: "current", sourceMode: "catalog-reference", locationKey: "store-b" },
+    { materialKey: "form-lumber", providerId: "home-depot", providerProductId: "hd-lumber-1", recordedPrice: 8.1, fetchedAt: "2026-09-25T18:00:00.000Z", freshness: "current", sourceMode: "catalog-reference", locationKey: "store-c" },
+    { materialKey: "form-lumber", providerId: "lowes", providerProductId: "lw-lumber-1", recordedPrice: 7.1, fetchedAt: "2026-09-25T19:00:00.000Z", freshness: "current", sourceMode: "catalog-reference", locationKey: "store-1" },
+  ];
+  const projectedAbc = selectProjectedSupplierPrices(hdAbcLowes);
+  check(
+    "3 Home Depot locations plus Lowe's stay within the 3-row projection cap",
+    projectedAbc.length === 3 &&
+      projectedAbc.some((row) => row.providerId === "home-depot") &&
+      projectedAbc.some((row) => row.providerId === "lowes"),
+  );
+  check(
+    "Newest per-provider record is used for cheaper comparison",
+    latestComparableByProvider([
+      { materialKey: "newest-compare", providerId: "home-depot", providerProductId: "hd-stain-1", recordedPrice: 6, fetchedAt: "2026-09-25T10:00:00.000Z", freshness: "current", sourceMode: "catalog-reference", locationKey: "store-old" },
+      { materialKey: "newest-compare", providerId: "home-depot", providerProductId: "hd-stain-1", recordedPrice: 8.4, fetchedAt: "2026-09-25T21:00:00.000Z", freshness: "current", sourceMode: "catalog-reference", locationKey: "store-new" },
+      { materialKey: "newest-compare", providerId: "lowes", providerProductId: "lw-stain-1", recordedPrice: 8.4, fetchedAt: "2026-09-25T20:00:00.000Z", freshness: "current", sourceMode: "catalog-reference", locationKey: "store-1" },
+    ]).find((row) => row.providerId === "home-depot")?.recordedPrice === 8.4,
+  );
+  check(
+    "Price-change copy no longer cites lastKnownCost",
+    specialistSrc.includes("later recorded history price that differs from an earlier recorded history price") &&
+      !specialistSrc.includes("differs from last known cost"),
+  );
 
   const tenantA = await createOwnerWorkspace("Alpha Materials");
   const tenantB = await createOwnerWorkspace("Beta Materials");
@@ -765,6 +896,17 @@ try {
     projectionA.totals.cheaperRecordedSupplier === 0 &&
       !resultA.findings.some((row) => row.key === "materials-cheaper-recorded-supplier") &&
       projectionA.prices.filter((row) => row.materialKey === "form-lumber" && row.providerId === "home-depot").length >= 2,
+  );
+  check(
+    "Three Home Depot stores alone do not create a cheaper-supplier finding",
+    projectionA.prices.filter((row) => row.materialKey === "form-lumber").every((row) => row.providerId === "home-depot") &&
+      projectionA.totals.cheaperRecordedSupplier === 0,
+  );
+  check(
+    "Newest Home Depot stain record is used against Lowe's, not the older $6",
+    projectionA.requirements.some((row) => row.takeoffIdentity === "newest-compare") &&
+      projectionA.totals.cheaperRecordedSupplier === 0 &&
+      !resultA.findings.some((row) => row.key === "materials-cheaper-recorded-supplier"),
   );
   check(
     "Price-change uses two 90-day history rows, not lastKnownCost",
@@ -822,9 +964,16 @@ try {
     question: "Which recorded supplier price is cheaper?",
   });
   const cheaperProjection = getLastMaterialsProjection();
+  const lumberPrices = cheaperProjection.prices.filter((row) => row.materialKey === "form-lumber");
+  check(
+    "3 Home Depot + Lowe's projected prices stay <= 3 and keep both providers",
+    lumberPrices.length <= 3 &&
+      lumberPrices.some((row) => row.providerId === "home-depot") &&
+      lumberPrices.some((row) => row.providerId === "lowes"),
+  );
   check(
     "Distinct supplier cheaper finding uses recorded current/recent evidence",
-    cheaperProjection.totals.cheaperRecordedSupplier >= 1 &&
+    cheaperProjection.totals.cheaperRecordedSupplier === 1 &&
       cheaperResult.findings.some((row) => row.key === "materials-cheaper-recorded-supplier" && /recorded/i.test(row.summary) && !/\bavailable stock\b|\bconfirmed available\b|\blive quote\b/i.test(row.summary)),
   );
 

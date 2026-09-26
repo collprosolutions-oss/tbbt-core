@@ -363,24 +363,58 @@ export function countPriceChangesFromHistory(
   return changed;
 }
 
+function fetchedAtMs(row: { fetchedAt?: string | null }) {
+  if (!row.fetchedAt) return Number.NEGATIVE_INFINITY;
+  const ms = Date.parse(row.fetchedAt);
+  return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY;
+}
+
+function priceRowKey(row: MaterialsPriceRef) {
+  return `${row.providerId}\0${row.providerProductId ?? ""}\0${row.locationKey ?? ""}\0${row.fetchedAt ?? ""}`;
+}
+
+export function latestComparableByProvider(rows: MaterialsPriceRef[]) {
+  const latestByProvider = new Map<string, MaterialsPriceRef>();
+  for (const row of rows) {
+    if (row.recordedPrice == null || !COMPARABLE_FRESHNESS.has(row.freshness)) continue;
+    const existing = latestByProvider.get(row.providerId);
+    if (!existing || fetchedAtMs(row) > fetchedAtMs(existing)) {
+      latestByProvider.set(row.providerId, row);
+    }
+  }
+  return [...latestByProvider.values()].sort((a, b) => fetchedAtMs(b) - fetchedAtMs(a));
+}
+
+export function selectProjectedSupplierPrices(
+  rows: MaterialsPriceRef[],
+  cap = MATERIALS_CONTEXT_CAPS.pricesPerMaterial,
+) {
+  const selected: MaterialsPriceRef[] = [];
+  const seen = new Set<string>();
+  for (const row of latestComparableByProvider(rows)) {
+    if (selected.length >= cap) break;
+    selected.push(row);
+    seen.add(priceRowKey(row));
+  }
+  const rest = [...rows].sort((a, b) => fetchedAtMs(b) - fetchedAtMs(a));
+  for (const row of rest) {
+    if (selected.length >= cap) break;
+    const key = priceRowKey(row);
+    if (seen.has(key)) continue;
+    selected.push(row);
+    seen.add(key);
+  }
+  return selected;
+}
+
 export function countCheaperRecordedSuppliers(
   pricesByIdentity: Map<string, MaterialsPriceRef[]>,
 ) {
   let cheaper = 0;
   for (const recorded of pricesByIdentity.values()) {
-    const latestByProvider = new Map<string, MaterialsPriceRef>();
-    for (const row of recorded) {
-      if (row.recordedPrice == null || !COMPARABLE_FRESHNESS.has(row.freshness)) continue;
-      const existing = latestByProvider.get(row.providerId);
-      if (
-        !existing ||
-        (row.fetchedAt != null && (existing.fetchedAt == null || row.fetchedAt > existing.fetchedAt))
-      ) {
-        latestByProvider.set(row.providerId, row);
-      }
-    }
-    if (latestByProvider.size < 2) continue;
-    const pricesOnly = [...latestByProvider.values()].map((row) => row.recordedPrice as number);
+    const latestByProvider = latestComparableByProvider(recorded);
+    if (latestByProvider.length < 2) continue;
+    const pricesOnly = latestByProvider.map((row) => row.recordedPrice as number);
     if (Math.min(...pricesOnly) < Math.max(...pricesOnly)) cheaper += 1;
   }
   return cheaper;
@@ -761,8 +795,10 @@ export async function loadMaterialsProjection(input: {
               providerProductId: row.providerProductId,
             })),
           },
+          orderBy: [{ fetchedAt: "desc" }, { id: "desc" }],
           take: 40,
           select: {
+            id: true,
             providerId: true,
             providerProductId: true,
             productName: true,
@@ -790,16 +826,13 @@ export async function loadMaterialsProjection(input: {
     historyByMaterial.set(row.materialId, list);
   }
 
-  const prices: MaterialsPriceRef[] = [];
-  const freshnessRows: Array<{ materialKey: string; freshness: SupplierPriceFreshness }> = [];
-  const pricesByIdentity = new Map<string, MaterialsPriceRef[]>();
+  const candidatesByIdentity = new Map<string, MaterialsPriceRef[]>();
   for (const mapping of mappings) {
     const records = priceRows.filter(
       (row) =>
         row.providerId === mapping.providerId && row.providerProductId === mapping.providerProductId,
     );
-    const materialPrices: MaterialsPriceRef[] = [];
-    for (const record of records.slice(0, MATERIALS_CONTEXT_CAPS.pricesPerMaterial)) {
+    for (const record of records) {
       const freshness = classifySupplierPriceFreshness(record.fetchedAt, now);
       const ref: MaterialsPriceRef = {
         materialKey: mapping.materialIdentity,
@@ -811,25 +844,30 @@ export async function loadMaterialsProjection(input: {
         sourceMode: record.sourceMode,
         locationKey: record.locationKey,
       };
-      materialPrices.push(ref);
-      prices.push(ref);
-    }
-    if (materialPrices.length > 0) {
-      const existing = pricesByIdentity.get(mapping.materialIdentity) ?? [];
-      const merged = capInMemory(
-        [...existing, ...materialPrices],
-        MATERIALS_CONTEXT_CAPS.pricesPerMaterial,
-      );
-      pricesByIdentity.set(mapping.materialIdentity, merged);
-      if (existing.length === 0) {
-        freshnessRows.push({
-          materialKey: mapping.materialIdentity,
-          freshness: materialPrices[0]?.freshness ?? "unavailable",
-        });
-      }
+      const existing = candidatesByIdentity.get(mapping.materialIdentity) ?? [];
+      existing.push(ref);
+      candidatesByIdentity.set(mapping.materialIdentity, existing);
     }
   }
 
+  const cheaperCandidates = new Map<string, MaterialsPriceRef[]>();
+  const prices: MaterialsPriceRef[] = [];
+  const freshnessRows: Array<{ materialKey: string; freshness: SupplierPriceFreshness }> = [];
+  for (const [identity, candidates] of candidatesByIdentity) {
+    if (cheaperCandidates.size >= MATERIALS_CONTEXT_CAPS.pricedMaterials) break;
+    cheaperCandidates.set(identity, candidates);
+    const selected = selectProjectedSupplierPrices(candidates);
+    prices.push(...selected);
+    const newest = [...candidates].sort((a, b) => fetchedAtMs(b) - fetchedAtMs(a))[0];
+    if (newest) {
+      freshnessRows.push({
+        materialKey: identity,
+        freshness: newest.freshness,
+      });
+    }
+  }
+
+  const pricesByIdentity = cheaperCandidates;
   const priced = groupTake(
     prices,
     (row) => row.materialKey,
@@ -1132,7 +1170,7 @@ function findingsFromProjection(
     findings.push({
       key: "materials-price-changed",
       title: "Recorded material prices changed",
-      why: `${t.priceChanged} material${t.priceChanged === 1 ? " has" : "s have"} a later recorded price that differs from last known cost or an earlier history row. This is recorded history, not a live market quote.`,
+      why: `${t.priceChanged} material${t.priceChanged === 1 ? " has" : "s have"} a later recorded history price that differs from an earlier recorded history price. This is recorded history, not a live market quote.`,
     });
   }
   if (t.cheaperRecordedSupplier > 0) {
