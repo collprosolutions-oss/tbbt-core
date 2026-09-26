@@ -108,6 +108,9 @@ const lifecycle = [
   ["Website service detail", "src/app/hire/[slug]/services/[serviceSlug]/page.tsx"],
   ["Business Protection", "src/app/(app)/business-protection/page.tsx"],
   ["Business Vault / Agreement Coach", "src/lib/business-protection-ops.ts"],
+  ["Go-live health center", "src/lib/go-live.ts"],
+  ["Go-live health loader", "src/lib/go-live-data.ts"],
+  ["Go-live owner screen", "src/components/settings/go-live-health-center.tsx"],
 ];
 
 try {
@@ -162,6 +165,14 @@ try {
   check(
     "Production certification does not say new job photos use Vercel Blob",
     /private R2/.test(certDoc) && !/Job photos may still use Vercel Blob/.test(certDoc),
+  );
+  const goLiveSrc = read("src/lib/go-live.ts");
+  check(
+    "Go-live health center refuses a single ready score",
+    goLiveSrc.includes("GO_LIVE_NO_SCORE_DISCLAIMER") &&
+      goLiveSrc.includes("readOnly: true") &&
+      !goLiveSrc.includes("readyPercent") &&
+      !/export type GoLiveCenter = \{[\s\S]*ready:\s*boolean/.test(goLiveSrc),
   );
 
   const migration = read("prisma/migrations/20260924040000_add_owner_intelligence/migration.sql");

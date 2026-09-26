@@ -33,7 +33,39 @@ const {
   parseSettingsSection,
   serializeAuditValue,
   settingsAiAssistAvailable,
+  isEmailDeliveryConfigured,
 } = await import("@/lib/settings");
+const {
+  GO_LIVE_CAPABILITIES,
+  GO_LIVE_CARD_REQUIREMENTS,
+  GO_LIVE_CONDITIONAL_SUMMARY,
+  GO_LIVE_GROUPS,
+  GO_LIVE_NO_SCORE_DISCLAIMER,
+  GO_LIVE_OPTIONAL_SUMMARY,
+  GO_LIVE_REQUIREMENTS,
+  GO_LIVE_REQUIRED_SUMMARY,
+  assertGoLiveProjectionSafe,
+  buildGoLiveCenter,
+  classifyAiProvider,
+  classifyCustomDomain,
+  classifyEsign,
+  classifyFinanceBank,
+  classifyR2,
+  classifyResend,
+  classifySocialPublishing,
+  classifyStripeConnect,
+  classifyStripeSaas,
+  classifySupplierCommerce,
+  classifyTwilioSms,
+  classifyVoiceReceptionist,
+  goLiveCardById,
+  goLiveGroupRequirement,
+  twilioImpliesAllFeaturesLive,
+} = await import("@/lib/go-live");
+const { loadGoLiveCenter, requireGoLiveAccess } = await import("@/lib/go-live-data");
+const { isBusinessStorageConfigured } = await import("@/lib/business-storage");
+const { isTwilioCustomerMessagingConfigured } = await import("@/lib/customer-messaging/config");
+const { isAiProviderConnected } = await import("@/lib/ai/config");
 const {
   assertSettingsBusinessScope,
   SettingsError,
@@ -109,9 +141,13 @@ const settingsSource = [
   readFileSync(new URL("../src/lib/settings-ops.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/lib/settings-data.ts", import.meta.url), "utf8"),
   readFileSync(new URL("../src/app/actions/settings.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/app/(app)/settings/page.tsx", import.meta.url), "utf8"),
   readFileSync(new URL("../src/components/settings/settings-workspace.tsx", import.meta.url), "utf8"),
   readFileSync(new URL("../src/components/settings/business-public-contact-form.tsx", import.meta.url), "utf8"),
   readFileSync(new URL("../src/components/settings/change-password-form.tsx", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/lib/go-live.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/lib/go-live-data.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/components/settings/go-live-health-center.tsx", import.meta.url), "utf8"),
 ].join("\n");
 
 try {
@@ -119,6 +155,40 @@ try {
   check("Invalid section falls back to overview", parseSettingsSection("not-real") === "overview");
   check("pricing section parses", parseSettingsSection("pricing") === "pricing");
   check("TBBT Billing is a Settings section", parseSettingsSection("tbbt-billing") === "tbbt-billing");
+  check("Go-live is a Settings section", parseSettingsSection("go-live") === "go-live");
+  const settingsPageSource = readFileSync(
+    new URL("../src/app/(app)/settings/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const workspaceSource = readFileSync(
+    new URL("../src/components/settings/settings-workspace.tsx", import.meta.url),
+    "utf8",
+  );
+  const goLiveUiSource = readFileSync(
+    new URL("../src/components/settings/go-live-health-center.tsx", import.meta.url),
+    "utf8",
+  );
+  check(
+    "loadGoLiveCenter is section-gated to go-live",
+    /const goLive =\s*section === ["']go-live["']\s*\?\s*await loadGoLiveCenter\(/.test(settingsPageSource) &&
+      !/const goLive = await loadGoLiveCenter\(/.test(settingsPageSource),
+  );
+  check(
+    "unrelated Settings pages do not run Go-live provider reads",
+    settingsPageSource.includes('section === "go-live"') &&
+      settingsPageSource.includes("loadGoLiveCenter") &&
+      !settingsPageSource.includes("inspectConfiguredFounderPrice") &&
+      !settingsPageSource.includes("loadSaasBillingSnapshot") &&
+      !settingsPageSource.includes("getBusinessPaymentStatus") &&
+      !settingsPageSource.includes("loadGoLiveDomainState") &&
+      !settingsPageSource.includes("loadGoLiveInput"),
+  );
+  check(
+    "GoLiveHealthCenter renders only when the go-live projection exists",
+    workspaceSource.includes("section === \"go-live\"") &&
+      workspaceSource.includes("props.goLive") &&
+      workspaceSource.includes("<GoLiveHealthCenter center={props.goLive} />"),
+  );
   check("FOUNDER_PAGE_KEYS includes settings", FOUNDER_PAGE_KEYS.includes("settings"));
   check("Settings has 4 KPI cards", KPI_CARD_COUNTS.settings === 4);
   check(
@@ -139,7 +209,11 @@ try {
   check("No AI assist in Settings", settingsAiAssistAvailable() === false);
   check("Website Story is a Settings section", parseSettingsSection("website-story") === "website-story");
   check("Settings source does not call an AI provider", !/openai|anthropic|generateText|streamText/i.test(settingsSource));
-  check("Settings source does not send customer messages", !/sendTransactionalEmail|resend\.emails|twilio/i.test(settingsSource));
+  check("Settings source does not send customer messages", !/sendTransactionalEmail|resend\.emails|twilio\.messages|new Twilio/i.test(settingsSource));
+  check(
+    "Go-live does not start provider connection flows",
+    !/startStripeConnectOnboarding|startSaasSubscriptionCheckout|createConnectedAccount|createSubscriptionCheckout/.test(settingsSource),
+  );
   check("Settings source does not publish marketing/reviews", !/publish|postReview|requestReviewAutomatically/i.test(settingsSource) || settingsSource.includes("does not publish"));
   check("Secret keys serialize as redacted", serializeAuditValue("apiKey", "sk-live-secret") === SETTINGS_SECRET_REDACTED);
   check("Labor minimum values are stored for audit", serializeAuditValue("laborMinimum", { enabled: true, amount: "140" }) === JSON.stringify({ enabled: true, amount: "140" }));
@@ -198,6 +272,296 @@ try {
   check(
     "Nonexistent integrations are Not Connected, never Connected",
     cards.every((card) => card.status === "not_connected"),
+  );
+
+  function sampleGoLiveInput({ saas, connect, twilio, domain, ...rest } = {}) {
+    return {
+      saas: {
+        configured: true,
+        checkoutPossible: true,
+        entitlementState: "subscribed_active",
+        canOperate: true,
+        statusLabel: "Subscribed",
+        ...saas,
+      },
+      connect: {
+        platformConfigured: true,
+        appUrlConfigured: true,
+        paymentReady: true,
+        status: "connected",
+        onlineCheckoutPossible: true,
+        ...connect,
+      },
+      emailConfigured: true,
+      r2Configured: true,
+      twilio: { platformConfigured: false, dedicatedNumberAssigned: false, ...twilio },
+      aiConnected: false,
+      domain: {
+        verifiedHostname: null,
+        unverifiedHostname: null,
+        failedHostname: null,
+        ...domain,
+      },
+      ...rest,
+    };
+  }
+
+  function withEnv(overrides, fn) {
+    const previous = {};
+    for (const [key, value] of Object.entries(overrides)) {
+      previous[key] = process.env[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    try {
+      return fn();
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }
+
+  console.log("\nSTATIC — Go-live / Integration Health status mapping");
+  check("Go-live groups stay separate", GO_LIVE_GROUPS.join(",") === "CORE_OPERATING,PAYMENTS,COMMUNICATIONS,STORAGE,AI,OPTIONAL_PLANNED");
+  check("Twilio env never implies every SMS feature is live", twilioImpliesAllFeaturesLive() === false);
+  check("Disclaimer refuses a single ready score", /not a launch score|not a single ready/i.test(GO_LIVE_NO_SCORE_DISCLAIMER));
+
+  const resendLive = buildGoLiveCenter(sampleGoLiveInput({ emailConfigured: true }));
+  const resendDown = buildGoLiveCenter(sampleGoLiveInput({ emailConfigured: false }));
+  check("Configured Resend is LIVE", goLiveCardById(resendLive, "resend")?.status === "LIVE" && classifyResend(true) === "LIVE");
+  check("Unconfigured Resend is UNAVAILABLE", goLiveCardById(resendDown, "resend")?.status === "UNAVAILABLE" && classifyResend(false) === "UNAVAILABLE");
+
+  const r2Live = buildGoLiveCenter(sampleGoLiveInput({ r2Configured: true }));
+  const r2Down = buildGoLiveCenter(sampleGoLiveInput({ r2Configured: false }));
+  check("Configured R2 is LIVE", goLiveCardById(r2Live, "r2")?.status === "LIVE" && classifyR2(true) === "LIVE");
+  check("Unconfigured R2 is NOT_CONFIGURED", goLiveCardById(r2Down, "r2")?.status === "NOT_CONFIGURED" && classifyR2(false) === "NOT_CONFIGURED");
+  check("R2 NOT_CONFIGURED copy names photo upload", /Intake and job photo upload are unavailable/.test(goLiveCardById(r2Down, "r2")?.whatDoesNot ?? ""));
+
+  const connectReady = buildGoLiveCenter(sampleGoLiveInput());
+  const connectNotReady = buildGoLiveCenter(sampleGoLiveInput({
+    connect: {
+      platformConfigured: true,
+      appUrlConfigured: true,
+      paymentReady: false,
+      status: "not_connected",
+      onlineCheckoutPossible: false,
+    },
+  }));
+  check("Stripe Connect ready is LIVE", goLiveCardById(connectReady, "stripe_connect")?.status === "LIVE" && classifyStripeConnect(connectReady.cards.find((c) => c.id === "stripe_connect") && {
+    platformConfigured: true,
+    appUrlConfigured: true,
+    paymentReady: true,
+    status: "connected",
+    onlineCheckoutPossible: true,
+  }) === "LIVE");
+  check("Stripe Connect not ready is DISCONNECTED", goLiveCardById(connectNotReady, "stripe_connect")?.status === "DISCONNECTED");
+
+  const aiOn = buildGoLiveCenter(sampleGoLiveInput({ aiConnected: true }));
+  const aiOff = buildGoLiveCenter(sampleGoLiveInput({ aiConnected: false }));
+  check("AI connected is READY", goLiveCardById(aiOn, "ai_provider")?.status === "READY" && classifyAiProvider(true) === "READY");
+  check("AI disconnected is DISCONNECTED", goLiveCardById(aiOff, "ai_provider")?.status === "DISCONNECTED" && classifyAiProvider(false) === "DISCONNECTED");
+  check(
+    "AI DISCONNECTED keeps Coach facts",
+    /Recorded Coach facts remain available/.test(goLiveCardById(aiOff, "ai_provider")?.whatWorks ?? ""),
+  );
+
+  const twilioUp = buildGoLiveCenter(sampleGoLiveInput({
+    twilio: { platformConfigured: true, dedicatedNumberAssigned: true },
+  }));
+  const twilioPartial = buildGoLiveCenter(sampleGoLiveInput({
+    twilio: { platformConfigured: true, dedicatedNumberAssigned: false },
+  }));
+  const twilioDown = buildGoLiveCenter(sampleGoLiveInput({
+    twilio: { platformConfigured: false, dedicatedNumberAssigned: false },
+  }));
+  check("Twilio available with number is READY", goLiveCardById(twilioUp, "twilio_sms")?.status === "READY");
+  check("Twilio available without number is PARTIAL", goLiveCardById(twilioPartial, "twilio_sms")?.status === "PARTIAL" && classifyTwilioSms({ platformConfigured: true, dedicatedNumberAssigned: false }) === "PARTIAL");
+  check("Twilio unavailable is UNAVAILABLE", goLiveCardById(twilioDown, "twilio_sms")?.status === "UNAVAILABLE" && classifyTwilioSms({ platformConfigured: false, dedicatedNumberAssigned: false }) === "UNAVAILABLE");
+  check(
+    "Twilio READY copy does not claim every SMS feature",
+    /never mean every SMS feature is live/.test(goLiveCardById(twilioUp, "twilio_sms")?.whatDoesNot ?? ""),
+  );
+
+  const supplier = buildGoLiveCenter(sampleGoLiveInput());
+  check("Supplier commerce is DISCONNECTED", goLiveCardById(supplier, "supplier_commerce")?.status === "DISCONNECTED" && classifySupplierCommerce() === "DISCONNECTED");
+  check(
+    "Supplier DISCONNECTED keeps recorded prices",
+    /Recorded supplier prices may exist/.test(goLiveCardById(supplier, "supplier_commerce")?.whatWorks ?? ""),
+  );
+  check("Finance/bank is DISCONNECTED", goLiveCardById(supplier, "finance_bank")?.status === "DISCONNECTED" && classifyFinanceBank() === "DISCONNECTED");
+  check("Finance copy does not imply bank sync", /Live bank sync is not connected/.test(goLiveCardById(supplier, "finance_bank")?.whatDoesNot ?? ""));
+  check("E-sign is DISCONNECTED", goLiveCardById(supplier, "esign")?.status === "DISCONNECTED" && classifyEsign() === "DISCONNECTED");
+  check("Voice is DISCONNECTED", goLiveCardById(supplier, "voice_receptionist")?.status === "DISCONNECTED" && classifyVoiceReceptionist() === "DISCONNECTED");
+  check("Social publishing is DISCONNECTED", goLiveCardById(supplier, "social_publishing")?.status === "DISCONNECTED" && classifySocialPublishing() === "DISCONNECTED");
+
+  const domainLive = buildGoLiveCenter(sampleGoLiveInput({
+    domain: { verifiedHostname: "jobs.example.test", unverifiedHostname: null, failedHostname: null },
+  }));
+  const domainUnverified = buildGoLiveCenter(sampleGoLiveInput({
+    domain: { verifiedHostname: null, unverifiedHostname: "pending.example.test", failedHostname: null },
+  }));
+  check("Verified custom domain is LIVE", goLiveCardById(domainLive, "custom_domain")?.status === "LIVE" && classifyCustomDomain({ verifiedHostname: "jobs.example.test", unverifiedHostname: null, failedHostname: null }) === "LIVE");
+  check("Unverified custom domain is PARTIAL", goLiveCardById(domainUnverified, "custom_domain")?.status === "PARTIAL" && classifyCustomDomain({ verifiedHostname: null, unverifiedHostname: "pending.example.test", failedHostname: null }) === "PARTIAL");
+  check("No custom domain is NOT_CONFIGURED", classifyCustomDomain({ verifiedHostname: null, unverifiedHostname: null, failedHostname: null }) === "NOT_CONFIGURED");
+
+  check("SaaS subscribed is LIVE", classifyStripeSaas({ configured: true, checkoutPossible: true, entitlementState: "subscribed_active", canOperate: true, statusLabel: "Subscribed" }) === "LIVE");
+  check("SaaS unconfigured is NOT_CONFIGURED", classifyStripeSaas({ configured: false, checkoutPossible: false, entitlementState: "subscription_required", canOperate: false, statusLabel: "Subscription required" }) === "NOT_CONFIGURED");
+
+  const center = buildGoLiveCenter(sampleGoLiveInput({ r2Configured: false, emailConfigured: false, aiConnected: false }));
+  check("All twelve capabilities are projected", center.cards.map((card) => card.id).join(",") === GO_LIVE_CAPABILITIES.join(","));
+  check("No single ready boolean on the center", !("ready" in center) && !("readyPercent" in center) && !("launchReady" in center) && center.readOnly === true);
+  check("Launch groups are all present", center.groups.map((group) => group.id).join(",") === GO_LIVE_GROUPS.join(","));
+  check("Requirement contract is REQUIRED / CONDITIONAL / OPTIONAL", GO_LIVE_REQUIREMENTS.join(",") === "REQUIRED,CONDITIONAL,OPTIONAL");
+  check("Resend is REQUIRED", goLiveCardById(center, "resend")?.requirement === "REQUIRED" && GO_LIVE_CARD_REQUIREMENTS.resend === "REQUIRED");
+  check("Twilio SMS is OPTIONAL", goLiveCardById(center, "twilio_sms")?.requirement === "OPTIONAL" && GO_LIVE_CARD_REQUIREMENTS.twilio_sms === "OPTIONAL");
+  check("Voice receptionist is OPTIONAL", goLiveCardById(center, "voice_receptionist")?.requirement === "OPTIONAL" && GO_LIVE_CARD_REQUIREMENTS.voice_receptionist === "OPTIONAL");
+  const communicationsGroup = center.groups.find((group) => group.id === "COMMUNICATIONS");
+  check(
+    "Communications group is MIXED",
+    communicationsGroup?.requirement === "MIXED" &&
+      communicationsGroup.requirementLabel === "Mixed" &&
+      goLiveGroupRequirement(communicationsGroup.cards) === "MIXED" &&
+      /Email is required; SMS and voice are optional/.test(communicationsGroup.summary),
+  );
+  check(
+    "Communications is not rendered as wholly optional",
+    communicationsGroup?.requirement !== "OPTIONAL" &&
+      !/wholly optional|Optional \/ planned/.test(communicationsGroup?.requirementLabel ?? "") &&
+      !goLiveUiSource.includes("group.necessary ? \"Necessary\" : \"Optional / planned\""),
+  );
+  check("Stripe Connect is CONDITIONAL", goLiveCardById(center, "stripe_connect")?.requirement === "CONDITIONAL");
+  check(
+    "disconnected Connect does not imply TBBT cannot operate",
+    /TBBT still operates without online cards/.test(goLiveCardById(connectNotReady, "stripe_connect")?.whatWorks ?? "") &&
+      /does not mean TBBT cannot operate/.test(goLiveCardById(connectNotReady, "stripe_connect")?.whatDoesNot ?? "") &&
+      /required only if accepting customer card payments online/i.test(
+        goLiveCardById(connectNotReady, "stripe_connect")?.currentState ?? "",
+      ),
+  );
+  check(
+    "top required count excludes conditional Connect",
+    center.requiredCards.map((card) => card.id).join(",") === "stripe_saas,resend,r2" &&
+      center.conditionalCards.map((card) => card.id).join(",") === "stripe_connect" &&
+      center.requiredCards.length === 3 &&
+      !center.requiredCards.some((card) => card.id === "stripe_connect"),
+  );
+  check(
+    "no 100% launch ready output exists",
+    !/100%\s*launch\s*ready/i.test(`${GO_LIVE_NO_SCORE_DISCLAIMER} ${GO_LIVE_REQUIRED_SUMMARY} ${GO_LIVE_CONDITIONAL_SUMMARY} ${GO_LIVE_OPTIONAL_SUMMARY} ${goLiveUiSource}`) &&
+      !center.disclaimer.toLowerCase().includes("100%") &&
+      !("readyPercent" in center),
+  );
+  check(
+    "top summaries distinguish required, conditional, and optional",
+    /SaaS access/.test(GO_LIVE_REQUIRED_SUMMARY) &&
+      /transactional email/.test(GO_LIVE_REQUIRED_SUMMARY) &&
+      /photo storage/.test(GO_LIVE_REQUIRED_SUMMARY) &&
+      /Stripe Connect for online card checkout/.test(GO_LIVE_CONDITIONAL_SUMMARY) &&
+      /SMS/.test(GO_LIVE_OPTIONAL_SUMMARY),
+  );
+  check("Payments group is Conditional", center.groups.find((group) => group.id === "PAYMENTS")?.requirement === "CONDITIONAL");
+  check("Core operating group is Required", center.groups.find((group) => group.id === "CORE_OPERATING")?.requirement === "REQUIRED");
+  check("Storage group is Required", center.groups.find((group) => group.id === "STORAGE")?.requirement === "REQUIRED");
+  check("AI group is Optional", center.groups.find((group) => group.id === "AI")?.requirement === "OPTIONAL");
+  check("Optional / planned group is Optional", center.groups.find((group) => group.id === "OPTIONAL_PLANNED")?.requirement === "OPTIONAL");
+  check(
+    "Disconnected copy never calls a system broken",
+    center.cards.every(
+      (card) =>
+        !/\bbroken\b/i.test(
+          `${card.currentState} ${card.whatWorks} ${card.whatDoesNot} ${card.ownerNextAction}`,
+        ),
+    ) && /not broken/.test(center.disclaimer),
+  );
+  check(
+    "Business setup wording is settings completeness, not a Go-live score",
+    workspaceSource.includes("baseline settings checks configured") &&
+      workspaceSource.includes("This is Settings completeness, not production Go-live status.") &&
+      !workspaceSource.includes("{readiness.readyPercent}%") &&
+      !workspaceSource.includes("text-3xl font-semibold tabular-nums"),
+  );
+  check(
+    "Business setup rail lists required setup checks only",
+    workspaceSource.includes("item.required && item.status === \"needs_setup\""),
+  );
+
+  const secretValues = [
+    "re_secret_TESTKEY_12345",
+    "sk_test_healthcenter_secret_value",
+    "whsec_healthcenter_webhook",
+    "R2SECRETACCESSKEYVALUE",
+    "twilio-auth-token-secret",
+    "openai-test-secret-key",
+  ];
+  withEnv(
+    {
+      RESEND_API_KEY: secretValues[0],
+      EMAIL_FROM: "owner@example.test",
+      NEXT_PUBLIC_APP_URL: "http://localhost:43217",
+      STRIPE_SECRET_KEY: secretValues[1],
+      STRIPE_WEBHOOK_SECRET: secretValues[2],
+      R2_ACCOUNT_ID: "r2accountidtest",
+      R2_ACCESS_KEY_ID: "r2accesskeyidtest",
+      R2_SECRET_ACCESS_KEY: secretValues[3],
+      R2_BUCKET_NAME: "tbbt-photos-test",
+      TWILIO_ACCOUNT_SID: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      TWILIO_AUTH_TOKEN: secretValues[4],
+      TWILIO_MESSAGING_SERVICE_SID: "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      OPENAI_API_KEY: secretValues[5],
+    },
+    () => {
+      check("Resend helper sees configured env", isEmailDeliveryConfigured() === true);
+      check("R2 helper sees configured env", isBusinessStorageConfigured() === true);
+      check("Twilio helper sees configured env", isTwilioCustomerMessagingConfigured() === true);
+      check("AI helper sees configured env", isAiProviderConnected() === true);
+      const envCenter = buildGoLiveCenter(sampleGoLiveInput({
+        emailConfigured: isEmailDeliveryConfigured(),
+        r2Configured: isBusinessStorageConfigured(),
+        twilio: {
+          platformConfigured: isTwilioCustomerMessagingConfigured(),
+          dedicatedNumberAssigned: false,
+        },
+        aiConnected: isAiProviderConnected(),
+      }));
+      let safe = true;
+      try {
+        assertGoLiveProjectionSafe(envCenter, secretValues);
+      } catch {
+        safe = false;
+      }
+      check("Configured-env projection contains no secret values", safe);
+      const rendered = JSON.stringify(envCenter);
+      check(
+        "Rendered go-live JSON omits secret material",
+        secretValues.every((value) => !rendered.includes(value)) &&
+          !rendered.includes("sk_test_") &&
+          !rendered.includes("whsec_") &&
+          !/"apiKey"|"authToken"|"stripeAccountId"/.test(rendered),
+      );
+    },
+  );
+  withEnv(
+    {
+      RESEND_API_KEY: undefined,
+      EMAIL_FROM: undefined,
+      R2_ACCOUNT_ID: undefined,
+      R2_ACCESS_KEY_ID: undefined,
+      R2_SECRET_ACCESS_KEY: undefined,
+      R2_BUCKET_NAME: undefined,
+      TWILIO_ACCOUNT_SID: undefined,
+      TWILIO_AUTH_TOKEN: undefined,
+      TWILIO_MESSAGING_SERVICE_SID: undefined,
+      OPENAI_API_KEY: undefined,
+      TBBT_AI_API_KEY: undefined,
+    },
+    () => {
+      check("Resend helper sees unconfigured env", isEmailDeliveryConfigured() === false);
+      check("R2 helper sees unconfigured env", isBusinessStorageConfigured() === false);
+      check("Twilio helper sees unconfigured env", isTwilioCustomerMessagingConfigured() === false);
+      check("AI helper sees unconfigured env", isAiProviderConnected() === false);
+    },
   );
 
   const businessA = await prisma.business.create({
@@ -592,6 +956,39 @@ try {
   await expectError("MEMBER Settings capability is denied", () => {
     requireBusinessCapability(memberA, CAPABILITIES.MANAGE_SETTINGS);
   }, (error) => error instanceof ForbiddenError);
+  requireGoLiveAccess(ownerA);
+  requireGoLiveAccess(adminA);
+  check("OWNER and ADMIN can open Go-live", true);
+  await expectError("MEMBER is blocked from Go-live", () => {
+    requireGoLiveAccess(memberA);
+  }, (error) => error instanceof ForbiddenError);
+
+  await prisma.websiteHostBinding.create({
+    data: { businessId: businessA.id, hostname: "alpha-live.example.test", status: "VERIFIED" },
+  });
+  await prisma.websiteHostBinding.create({
+    data: { businessId: businessB.id, hostname: "beta-pending.example.test", status: "UNVERIFIED" },
+  });
+  const goLiveA = await loadGoLiveCenter(prisma, ownerA);
+  const goLiveB = await loadGoLiveCenter(prisma, ownerB);
+  const domainA = goLiveCardById(goLiveA, "custom_domain");
+  const domainB = goLiveCardById(goLiveB, "custom_domain");
+  check("Tenant A go-live shows A's verified domain", domainA?.status === "LIVE" && /alpha-live\.example\.test/.test(domainA.currentState));
+  check("Tenant B go-live shows B's unverified domain", domainB?.status === "PARTIAL" && /beta-pending\.example\.test/.test(domainB.currentState));
+  check(
+    "Go-live domain projection is tenant-isolated",
+    !JSON.stringify(goLiveA).includes("beta-pending.example.test") &&
+      !JSON.stringify(goLiveB).includes("alpha-live.example.test"),
+  );
+  await expectError("MEMBER cannot load Go-live for the same tenant", () => loadGoLiveCenter(prisma, memberA), (error) => error instanceof ForbiddenError);
+  let leaked = false;
+  try {
+    assertGoLiveProjectionSafe(goLiveA, ["sk_live", "sk_test", "whsec_", "re_"]);
+    assertGoLiveProjectionSafe(goLiveB, ["sk_live", "sk_test", "whsec_", "re_"]);
+  } catch {
+    leaked = true;
+  }
+  check("Loaded tenant projections stay secret-safe", leaked === false);
 
   const deleted = await prisma.settingsAuditLog.deleteMany({ where: { businessId: businessA.id } }).catch(() => null);
   check("Audit rows exist until an explicit test cleanup (no Settings delete-history UI)", deleted === null || typeof deleted.count === "number");

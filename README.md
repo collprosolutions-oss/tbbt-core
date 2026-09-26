@@ -66,6 +66,7 @@ Do **not** set `TBBT_PAYMENTS_ADAPTER=fake` or `TBBT_SAAS_BILLING_ADAPTER=fake` 
 - Server code must query with `businessScope(workspace.business.id)` from `src/lib/access.ts`.
 - Session cookie proves the user; workspace cookie selects a membership the user already has.
 - OWNER / ADMIN use the management console. MEMBER is field-scoped.
+- Settings → Go-live / Health is a read-only production capability board. It does not connect providers or produce a single ready score.
 
 ```bash
 npm run test:isolation

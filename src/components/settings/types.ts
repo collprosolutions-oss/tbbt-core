@@ -3,6 +3,7 @@ import type {
   SettingsSnapshot,
   SettingsTeamMember,
 } from "@/lib/settings-data";
+import type { GoLiveCenter } from "@/lib/go-live";
 import type {
   IntegrationCard,
   SettingsPreferenceFlags,
@@ -18,6 +19,7 @@ export type SettingsWorkspaceProps = {
   role: "OWNER" | "ADMIN" | "MEMBER";
   snapshot: SettingsSnapshot;
   readiness: SettingsReadiness;
+  goLive?: GoLiveCenter | null;
   integrations: IntegrationCard[];
   canEditConsequential: boolean;
   canEditPreferences: boolean;

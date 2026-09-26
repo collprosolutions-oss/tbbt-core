@@ -22,6 +22,7 @@ import { LaborMinimumSettingsForm } from "@/components/settings/labor-minimum-se
 import { PreferenceSettingsForm } from "@/components/settings/preference-settings-form";
 import { SchedulingSettingsForm } from "@/components/settings/scheduling-settings-form";
 import { SupplierPricingSettingsForm } from "@/components/settings/supplier-pricing-form";
+import { GoLiveHealthCenter } from "@/components/settings/go-live-health-center";
 import { ClearTestDataForm } from "@/components/settings/clear-test-data-form";
 import { ChangePasswordForm } from "@/components/settings/change-password-form";
 import { AccountSecurityPanel } from "@/components/settings/account-security-panel";
@@ -152,12 +153,25 @@ function OverviewSection({
   return (
     <div className="space-y-4">
       <SectionCard
-        title="Business setup"
-        description={`${readiness.requiredReady} of ${readiness.requiredTotal} required areas are configured. This percentage is only those required checks — not an AI score.`}
+        title="Go-live / Integration Health"
+        description="One owner screen for whether production capabilities are actually usable. This is status only — it does not connect providers."
       >
-        <p className="text-3xl font-semibold tabular-nums">{readiness.readyPercent}%</p>
         <p className="text-sm text-muted-foreground">
-          Required areas: business identity, active team membership, and the existing security model.
+          Required items are SaaS access, transactional email, and photo storage. Stripe Connect is
+          conditional for online card checkout. SMS, AI, domain, bank, suppliers, e-sign, voice, and
+          social publishing stay optional.
+        </p>
+        <Button asChild size="sm">
+          <Link href="/settings?section=go-live">Open Go-live / Health</Link>
+        </Button>
+      </SectionCard>
+      <SectionCard
+        title="Business setup"
+        description={`${readiness.requiredReady} of ${readiness.requiredTotal} baseline settings checks configured.`}
+      >
+        <p className="text-sm text-muted-foreground">
+          This is Settings completeness, not production Go-live status. Required checks are business
+          identity, active team membership, and the existing security model.
         </p>
       </SectionCard>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -202,6 +216,16 @@ function SectionBody(props: SettingsWorkspaceProps) {
 
   if (section === "overview") {
     return <OverviewSection readiness={readiness} />;
+  }
+
+  if (section === "go-live") {
+    return props.goLive ? (
+      <GoLiveHealthCenter center={props.goLive} />
+    ) : (
+      <p className="text-sm text-muted-foreground">
+        Go-live Health loads only on this section.
+      </p>
+    );
   }
 
   if (section === "website-photos") {
@@ -1070,7 +1094,9 @@ function SectionBody(props: SettingsWorkspaceProps) {
 
 export function SettingsWorkspace(props: SettingsWorkspaceProps) {
   const { section, readiness } = props;
-  const attention = readiness.items.filter((item) => item.status === "needs_setup" || item.status === "not_connected");
+  const attention = readiness.items.filter(
+    (item) => item.required && item.status === "needs_setup",
+  );
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(12rem,16rem)_minmax(0,1fr)_var(--tbbt-panel-width,300px)]">
@@ -1096,9 +1122,24 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
       <FounderRegion id="rail" className="min-w-0 space-y-4">
         <Card>
           <CardHeader>
-            <CardTitle>Readiness</CardTitle>
+            <CardTitle>Go-live</CardTitle>
+            <CardDescription>Production capability status. Not a launch score.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Link
+              href="/settings?section=go-live"
+              className="text-sm text-primary underline-offset-4 hover:underline"
+            >
+              Open Integration Health
+            </Link>
+          </CardContent>
+        </Card>
+        {section === "go-live" ? null : (
+        <Card>
+          <CardHeader>
+            <CardTitle>Business setup checks</CardTitle>
             <CardDescription>
-              {readiness.requiredReady}/{readiness.requiredTotal} required · {readiness.readyPercent}%
+              {readiness.requiredReady}/{readiness.requiredTotal} required identity/team/security checks. This is not a go-live score.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -1118,6 +1159,7 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
             )}
           </CardContent>
         </Card>
+        )}
       </FounderRegion>
     </div>
   );

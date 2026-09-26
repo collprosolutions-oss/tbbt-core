@@ -64,6 +64,8 @@ const {
   recordSucceededPayment,
 } = await import("@/lib/project-payments");
 const { Prisma } = await import("@prisma/client");
+const { loadGoLiveCenter } = await import("@/lib/go-live-data");
+const { goLiveCardById } = await import("@/lib/go-live");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -1360,6 +1362,35 @@ try {
     zipB.bytes.toString("utf8").includes(tenantB.payment.id) &&
       !zipB.bytes.toString("utf8").includes(tenantA.payment.id) &&
       !zipB.bytes.toString("utf8").includes("Alpha only paint"),
+  );
+
+  await prisma.websiteHostBinding.create({
+    data: {
+      businessId: tenantA.business.id,
+      hostname: "alpha-iso.example.test",
+      status: "VERIFIED",
+    },
+  });
+  await prisma.websiteHostBinding.create({
+    data: {
+      businessId: tenantB.business.id,
+      hostname: "beta-iso.example.test",
+      status: "UNVERIFIED",
+    },
+  });
+  const goLiveA = await loadGoLiveCenter(prisma, accessA);
+  const goLiveB = await loadGoLiveCenter(prisma, accessB);
+  check(
+    "Go-live for A includes only A's verified host",
+    goLiveCardById(goLiveA, "custom_domain")?.status === "LIVE" &&
+      JSON.stringify(goLiveA).includes("alpha-iso.example.test") &&
+      !JSON.stringify(goLiveA).includes("beta-iso.example.test"),
+  );
+  check(
+    "Go-live for B includes only B's unverified host",
+    goLiveCardById(goLiveB, "custom_domain")?.status === "PARTIAL" &&
+      JSON.stringify(goLiveB).includes("beta-iso.example.test") &&
+      !JSON.stringify(goLiveB).includes("alpha-iso.example.test"),
   );
 
   console.log(`\nIsolation cases: ${passed} passed, ${failures} failed.`);
