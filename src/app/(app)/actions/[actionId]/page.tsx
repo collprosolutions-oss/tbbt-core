@@ -30,8 +30,8 @@ export default async function ControlledActionCenterDetailPage({
   return (
     <PageContainer>
       <PageHeader
-        title={detail.live?.targetLabel ?? detail.recordedResults[0]?.targetLabel ?? "Action"}
-        description="Same-tenant Controlled AI Action target. Foreign IDs fail closed."
+        title={detail.live?.targetLabel ?? detail.recordedOwnerPlanState[0]?.targetLabel ?? "Action"}
+        description="Same-tenant Action Center target. Existing owner-plan state does not prove Controlled AI origin. Foreign IDs fail closed."
       >
         <Button asChild size="sm" variant="outline">
           <Link href={ACTION_CENTER_PATH}>Back to Action Center</Link>
@@ -40,7 +40,7 @@ export default async function ControlledActionCenterDetailPage({
       <ActionCenterBoard
         center={{
           needsOwnerConfirmation: detail.live ? [detail.live] : [],
-          recordedResults: detail.recordedResults,
+          recordedOwnerPlanState: detail.recordedOwnerPlanState,
         }}
         canConfirm={canConfirmControlledActions(access)}
         showCatalog={false}

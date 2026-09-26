@@ -3,7 +3,7 @@ import { ActionCenterConfirmForm } from "@/components/actions/action-center-conf
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type {
   ActionCenterLiveTarget,
-  ActionCenterRecordedResult,
+  ActionCenterRecordedState,
   ControlledActionCenter,
 } from "@/lib/chief-of-staff/action-center";
 
@@ -58,7 +58,9 @@ function LiveTargetCard({
             <div>
               <p className="text-sm font-medium">{action.displayLabel}</p>
               <p className="text-xs text-muted-foreground">{action.purpose}</p>
-              <p className="text-xs text-muted-foreground">Approval: {action.approvalClass}</p>
+              <p className="text-xs text-muted-foreground">
+                Current Controlled Action: {action.actionKey} · Approval: {action.approvalClass}
+              </p>
             </div>
             {canConfirm ? (
               <ActionCenterConfirmForm
@@ -78,11 +80,13 @@ function LiveTargetCard({
   );
 }
 
-function RecordedResultCard({ row }: { row: ActionCenterRecordedResult }) {
+function RecordedOwnerPlanCard({ row }: { row: ActionCenterRecordedState }) {
   return (
     <div className="rounded-md border p-3">
-      <p className="font-medium">{row.displayLabel}</p>
-      <p className="text-sm text-muted-foreground">{row.purpose}</p>
+      <p className="font-medium">{row.targetLabel}</p>
+      <p className="text-sm text-muted-foreground">
+        {row.recordKind === "ACTION_ITEM" ? "Owner-plan item" : "Recommendation state"}
+      </p>
       <p className="mt-1 text-sm">
         Target: recommendation · <TargetLink href={row.targetHref} label={row.targetLabel} />
       </p>
@@ -92,6 +96,9 @@ function RecordedResultCard({ row }: { row: ActionCenterRecordedResult }) {
       {row.actionItemStatus ? (
         <p className="text-xs text-muted-foreground">Action-plan item: {row.actionItemStatus}</p>
       ) : null}
+      <p className="mt-1 text-xs text-muted-foreground">
+        Origin is not recorded in Controlled Actions V1.
+      </p>
       {row.relatedAreaHref ? (
         <p className="mt-1 text-sm">
           <Link className="text-primary underline-offset-4 hover:underline" href={row.relatedAreaHref}>
@@ -103,13 +110,13 @@ function RecordedResultCard({ row }: { row: ActionCenterRecordedResult }) {
         <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
           {row.history.map((entry) => (
             <li key={`${entry.at}-${entry.status}`}>
-              {entry.atLabel} — {entry.status}
+              Recommendation status/evidence history: {entry.atLabel} — {entry.status}
             </li>
           ))}
         </ul>
       ) : (
         <p className="mt-2 text-xs text-muted-foreground">
-          No additional persisted attempt history. V1 stores the current recorded result.
+          No additional recommendation status/evidence history is stored on this row.
         </p>
       )}
     </div>
@@ -121,7 +128,7 @@ export function ActionCenterBoard({
   canConfirm,
   showCatalog = true,
 }: {
-  center: Pick<ControlledActionCenter, "needsOwnerConfirmation" | "recordedResults"> &
+  center: Pick<ControlledActionCenter, "needsOwnerConfirmation" | "recordedOwnerPlanState"> &
     Partial<Pick<ControlledActionCenter, "catalog">>;
   canConfirm: boolean;
   showCatalog?: boolean;
@@ -174,20 +181,22 @@ export function ActionCenterBoard({
       </Card>
       ) : null}
 
-      {showCatalog || center.recordedResults.length > 0 ? (
+      {showCatalog || center.recordedOwnerPlanState.length > 0 ? (
       <Card>
         <CardHeader>
-          <CardTitle>Recorded results</CardTitle>
+          <CardTitle>Recorded owner-plan state</CardTitle>
           <CardDescription>
-            Existing recommendation states and owner action-plan items. Failed confirmations
-            are not persisted as attempts.
+            Existing recommendation states and owner action-plan items. Origin is not recorded
+            in Controlled Actions V1. Failed confirmations are not persisted as attempts.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          {center.recordedResults.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No recorded Controlled AI Action results yet.</p>
+          {center.recordedOwnerPlanState.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No recorded owner-plan state yet.</p>
           ) : (
-            center.recordedResults.map((row) => <RecordedResultCard key={`${row.actionKey}-${row.id}`} row={row} />)
+            center.recordedOwnerPlanState.map((row) => (
+              <RecordedOwnerPlanCard key={`${row.recordKind}-${row.id}`} row={row} />
+            ))
           )}
         </CardContent>
       </Card>

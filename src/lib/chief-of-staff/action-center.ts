@@ -1,10 +1,11 @@
 /**
  * Owner Action Center — read projection over Controlled AI Actions V1.
  *
- * V1 does not persist a proposal/attempt table. This module reads the
- * live recommendation catalog plus existing BsosRecommendationState and
- * BusinessActionItem rows. Propose and confirm stay on the canonical
- * Controlled AI Actions functions. This is not a second action engine.
+ * V1 does not persist a proposal/attempt/origin table. Live propose/confirm
+ * uses the current allowlist. Persisted BusinessActionItem and
+ * BsosRecommendationState rows are useful owner-plan truth, but they do
+ * not record whether a Controlled AI Action produced them. This module
+ * never infers a historical ControlledActionKey from generic BSOS state.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
@@ -22,6 +23,10 @@ import { formatDateTime } from "@/lib/format";
 type Db = PrismaClient | Prisma.TransactionClient;
 
 export const ACTION_CENTER_PATH = "/actions";
+export const ACTION_CENTER_ORIGIN_NOT_RECORDED = "NOT_RECORDED" as const;
+export type ActionCenterRecordedOrigin = typeof ACTION_CENTER_ORIGIN_NOT_RECORDED;
+export const ACTION_CENTER_RECORD_KINDS = ["ACTION_ITEM", "RECOMMENDATION_STATE"] as const;
+export type ActionCenterRecordKind = (typeof ACTION_CENTER_RECORD_KINDS)[number];
 
 export const ACTION_CENTER_TARGET_RECORD_TYPES = [
   "CUSTOMER",
@@ -236,12 +241,10 @@ export type ActionCenterLiveTarget = {
   availableActions: ActionCenterAvailableAction[];
 };
 
-export type ActionCenterRecordedResult = {
+export type ActionCenterRecordedState = {
   id: string;
-  actionKey: ControlledActionKey;
-  displayLabel: string;
-  purpose: string;
-  approvalClass: ApprovalClass;
+  recordKind: ActionCenterRecordKind;
+  origin: ActionCenterRecordedOrigin;
   targetEntityType: "RECOMMENDATION";
   targetEntityId: string;
   targetLabel: string;
@@ -260,20 +263,19 @@ export type ControlledActionCenter = {
   timeZone: string;
   catalog: ActionCenterAvailableAction[];
   needsOwnerConfirmation: ActionCenterLiveTarget[];
-  recordedResults: ActionCenterRecordedResult[];
+  recordedOwnerPlanState: ActionCenterRecordedState[];
 };
 
 export type ControlledActionCenterDetail = {
   id: string;
   live: ActionCenterLiveTarget | null;
-  recordedResults: ActionCenterRecordedResult[];
+  recordedOwnerPlanState: ActionCenterRecordedState[];
 };
 
-function inferActionKey(status: string, hasActionItem: boolean): ControlledActionKey | null {
-  if (status === "DISMISSED") return "DISMISS_RECOMMENDATION";
-  if (status === "COMPLETED") return "COMPLETE_RECOMMENDATION";
-  if (hasActionItem) return "CREATE_RECOMMENDATION_ACTION_ITEM";
-  return null;
+export function recordedOwnerPlanStateClaimsControlledAction(
+  row: ActionCenterRecordedState & { actionKey?: unknown },
+) {
+  return row.origin !== ACTION_CENTER_ORIGIN_NOT_RECORDED || row.actionKey != null;
 }
 
 export async function loadControlledActionCenter(
@@ -342,23 +344,20 @@ export async function loadControlledActionCenter(
     });
   }
 
-  const recordedResults: ActionCenterRecordedResult[] = [];
+  const recordedOwnerPlanState: ActionCenterRecordedState[] = [];
 
   for (const item of actionItems) {
     const recommendation = recommendationByKey.get(item.recommendationKey);
-    const summary = catalogSummary("CREATE_RECOMMENDATION_ACTION_ITEM");
     const targetHref = await resolveOwnedRecommendationTarget(
       db,
       access,
       item.recommendationKey,
       knownTargets,
     );
-    recordedResults.push({
+    recordedOwnerPlanState.push({
       id: item.id,
-      actionKey: summary.actionKey,
-      displayLabel: summary.displayLabel,
-      purpose: summary.purpose,
-      approvalClass: summary.approvalClass,
+      recordKind: "ACTION_ITEM",
+      origin: ACTION_CENTER_ORIGIN_NOT_RECORDED,
       targetEntityType: "RECOMMENDATION",
       targetEntityId: item.recommendationKey,
       targetLabel: recommendation?.title ?? item.title,
@@ -375,22 +374,17 @@ export async function loadControlledActionCenter(
   }
 
   for (const state of states) {
-    const inferred = inferActionKey(state.status, Boolean(state.actionItemId));
-    if (!inferred || inferred === "CREATE_RECOMMENDATION_ACTION_ITEM") continue;
     const recommendation = recommendationByKey.get(state.recommendationKey);
-    const summary = catalogSummary(inferred);
     const targetHref = await resolveOwnedRecommendationTarget(
       db,
       access,
       state.recommendationKey,
       knownTargets,
     );
-    recordedResults.push({
+    recordedOwnerPlanState.push({
       id: state.id,
-      actionKey: summary.actionKey,
-      displayLabel: summary.displayLabel,
-      purpose: summary.purpose,
-      approvalClass: summary.approvalClass,
+      recordKind: "RECOMMENDATION_STATE",
+      origin: ACTION_CENTER_ORIGIN_NOT_RECORDED,
       targetEntityType: "RECOMMENDATION",
       targetEntityId: state.recommendationKey,
       targetLabel: recommendation?.title ?? state.recommendationKey,
@@ -415,7 +409,7 @@ export async function loadControlledActionCenter(
       approvalClass: row.approvalClass,
     })),
     needsOwnerConfirmation,
-    recordedResults,
+    recordedOwnerPlanState,
   };
 }
 
@@ -440,14 +434,14 @@ export async function loadControlledActionCenterItem(
   const recommendationKey = actionItem?.recommendationKey ?? state?.recommendationKey ?? id;
   const center = await loadControlledActionCenter(db, access);
   const live = center.needsOwnerConfirmation.find((row) => row.targetEntityId === recommendationKey) ?? null;
-  const recordedResults = center.recordedResults.filter(
+  const recordedOwnerPlanState = center.recordedOwnerPlanState.filter(
     (row) =>
       row.id === id ||
       row.actionItemId === id ||
       row.targetEntityId === recommendationKey,
   );
 
-  if (!live && recordedResults.length === 0) {
+  if (!live && recordedOwnerPlanState.length === 0) {
     const catalog = await loadCanonicalRecommendationCatalog(db, access.businessId);
     const recommendation = catalog.recommendations.find((item) => item.key === id);
     if (!recommendation) return null;
@@ -468,13 +462,13 @@ export async function loadControlledActionCenterItem(
         recordedStatus: null,
         availableActions: [],
       },
-      recordedResults: [],
+      recordedOwnerPlanState: [],
     };
   }
 
   return {
     id: recommendationKey,
     live,
-    recordedResults,
+    recordedOwnerPlanState,
   };
 }

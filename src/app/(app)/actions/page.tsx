@@ -21,7 +21,7 @@ export default async function ControlledActionCenterPage() {
     <PageContainer>
       <PageHeader
         title="Action Center"
-        description="Owner control over existing Controlled AI Actions. This is not autonomous AI, not a second Chief-of-Staff, and not a new allowlist. TBBT shows live catalog items and recorded recommendation or action-plan results only."
+        description="Owner control over existing Controlled AI Actions. This is not autonomous AI, not a second Chief-of-Staff, and not a new allowlist. Live actions use the current V1 allowlist. Existing owner-plan state is shown without inventing Controlled AI origin — origin is not recorded in Controlled Actions V1."
       />
       <ActionCenterBoard
         center={center}

@@ -16,6 +16,7 @@ const { ForbiddenError, CAPABILITIES, roleHasCapability } = await import("@/lib/
 const { formatDateTime } = await import("@/lib/format");
 const { APP_NAV } = await import("@/lib/nav");
 const {
+  ACTION_CENTER_ORIGIN_NOT_RECORDED,
   CONTROLLED_ACTION_CATALOG,
   CONTROLLED_ACTION_KEYS,
   EXCLUDED_ACTION_KEYS,
@@ -24,13 +25,20 @@ const {
   canViewControlledActionCenter,
   confirmControlledAction,
   executableControlledActionKeys,
+  findCatalogRecommendation,
   isExcludedActionKey,
   loadControlledActionCenter,
   loadControlledActionCenterItem,
   proposeControlledAction,
+  recordedOwnerPlanStateClaimsControlledAction,
   resetControlledActionAttempts,
   resolveOwnedActionTargetLink,
 } = await import("@/lib/chief-of-staff");
+const {
+  createActionFromRecommendation,
+  recommendationEvidenceKey,
+  upsertRecommendationState,
+} = await import("@/lib/bsos-actions");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -197,6 +205,31 @@ try {
       pageSrc.includes("loadControlledActionCenter"),
   );
   check(
+    "Persisted generic BSOS state is not inferred as a ControlledActionKey",
+    !actionCenterSrc.includes("function inferActionKey") &&
+      !actionCenterSrc.includes("inferActionKey(") &&
+      actionCenterSrc.includes("ACTION_CENTER_ORIGIN_NOT_RECORDED") &&
+      actionCenterSrc.includes('recordKind: "ACTION_ITEM"') &&
+      actionCenterSrc.includes('recordKind: "RECOMMENDATION_STATE"') &&
+      !actionCenterSrc.includes('actionKey: summary.actionKey'),
+  );
+  check(
+    "UI labels persisted rows as owner-plan state, not Controlled AI history",
+    boardSrc.includes("Recorded owner-plan state") &&
+      boardSrc.includes("Origin is not recorded in Controlled Actions V1.") &&
+      pageSrc.includes("origin is not recorded in Controlled Actions V1") &&
+      !boardSrc.includes(">Recorded results<") &&
+      !boardSrc.includes("No recorded Controlled AI Action results yet") &&
+      boardSrc.includes("Recommendation status/evidence history") &&
+      !boardSrc.includes("AI attempt history") &&
+      !boardSrc.includes("controlled-action audit"),
+  );
+  check(
+    "Current-session confirm may show the canonical execution message",
+    formSrc.includes("Recorded result: {confirmState.message}") &&
+      formSrc.includes("confirmCoachActionAction"),
+  );
+  check(
     "Every catalog row still requires owner confirmation",
     CONTROLLED_ACTION_CATALOG.every((row) => row.approvalClass === "OWNER_CONFIRMED_RECORD"),
   );
@@ -301,10 +334,17 @@ try {
     ),
   );
 
+  check(
+    "Live prepare path still exposes the current Controlled Action type",
+    before.needsOwnerConfirmation.some((row) =>
+      row.availableActions.some((action) => action.actionKey === "CREATE_RECOMMENDATION_ACTION_ITEM"),
+    ),
+  );
+
   const centerBBefore = await loadControlledActionCenter(prisma, ownerB);
   check(
     "Foreign tenant action items do not appear before any confirm",
-    centerBBefore.recordedResults.length === 0,
+    centerBBefore.recordedOwnerPlanState.length === 0,
   );
 
   let memberLoadFailed = false;
@@ -327,7 +367,11 @@ try {
     targetEntityId: "collect-unpaid-invoices",
     browserBusinessId: businessB.id,
   });
-  check("Propose does not create a recorded Action Center result", (await loadControlledActionCenter(prisma, ownerA)).recordedResults.length === 0);
+  check(
+    "Live proposeControlledAction keeps the current Controlled Action type",
+    proposal.actionKey === "CREATE_RECOMMENDATION_ACTION_ITEM" && proposal.confirmed === false,
+  );
+  check("Propose does not create a recorded Action Center result", (await loadControlledActionCenter(prisma, ownerA)).recordedOwnerPlanState.length === 0);
 
   let skippedConfirm = false;
   try {
@@ -342,7 +386,7 @@ try {
   check("Action requiring approval cannot execute before explicit confirm", skippedConfirm);
   check(
     "Rejected confirm does not become a successful recorded result",
-    (await loadControlledActionCenter(prisma, ownerA)).recordedResults.length === 0,
+    (await loadControlledActionCenter(prisma, ownerA)).recordedOwnerPlanState.length === 0,
   );
 
   let memberConfirmFailed = false;
@@ -387,10 +431,14 @@ try {
     where: { businessId: businessA.id, recommendationKey: "collect-unpaid-invoices" },
   });
   check(
-    "Owner execution uses the canonical V1 executor",
+    "Owner confirmation still works only through canonical V1",
     first.executionResult.recordType === "BusinessActionItem" &&
       createdItems.length === 1 &&
       first.executionResult.message.includes("did not execute the work"),
+  );
+  check(
+    "Immediate canonical confirm result is the returned execution message",
+    first.executionResult.message === "Action added to the owner plan. TBBT did not execute the work.",
   );
   check(
     "Duplicate/concurrent execution preserves V1 idempotency",
@@ -401,10 +449,19 @@ try {
   );
 
   const after = await loadControlledActionCenter(prisma, ownerA);
-  const recordedCreate = after.recordedResults.find(
-    (row) => row.actionKey === "CREATE_RECOMMENDATION_ACTION_ITEM" && row.targetEntityId === "collect-unpaid-invoices",
+  const recordedCreate = after.recordedOwnerPlanState.find(
+    (row) => row.recordKind === "ACTION_ITEM" && row.targetEntityId === "collect-unpaid-invoices",
   );
-  check("Successful action reflects the persisted successful result", Boolean(recordedCreate) && recordedCreate.actionItemId === createdItems[0].id);
+  check(
+    "Existing owner-plan state remains visible after a canonical confirm",
+    Boolean(recordedCreate) && recordedCreate.actionItemId === createdItems[0].id,
+  );
+  check(
+    "Reloaded persisted state does not claim Controlled AI provenance",
+    after.recordedOwnerPlanState.every((row) => !recordedOwnerPlanStateClaimsControlledAction(row)) &&
+      recordedCreate?.origin === ACTION_CENTER_ORIGIN_NOT_RECORDED &&
+      recordedCreate?.actionKey == null,
+  );
   check(
     "Recorded timestamp uses Business.timezone",
     recordedCreate?.recordedAtLabel === formatDateTime(createdItems[0].updatedAt, "America/Chicago"),
@@ -426,8 +483,8 @@ try {
   const centerB = await loadControlledActionCenter(prisma, ownerB);
   check(
     "Foreign tenant recorded action does not appear",
-    !centerB.recordedResults.some((row) => row.actionItemId === createdItems[0].id) &&
-      !centerB.recordedResults.some((row) => row.id === createdItems[0].id),
+    !centerB.recordedOwnerPlanState.some((row) => row.actionItemId === createdItems[0].id) &&
+      !centerB.recordedOwnerPlanState.some((row) => row.id === createdItems[0].id),
   );
 
   const foreignDetail = await loadControlledActionCenterItem(prisma, ownerB, createdItems[0].id);
@@ -436,7 +493,8 @@ try {
   const ownedDetail = await loadControlledActionCenterItem(prisma, ownerA, createdItems[0].id);
   check(
     "Same-tenant action item detail resolves",
-    ownedDetail?.recordedResults.some((row) => row.actionItemId === createdItems[0].id) === true,
+    ownedDetail?.recordedOwnerPlanState.some((row) => row.actionItemId === createdItems[0].id) === true &&
+      ownedDetail.recordedOwnerPlanState.every((row) => !recordedOwnerPlanStateClaimsControlledAction(row)),
   );
 
   const unknownDetail = await loadControlledActionCenterItem(prisma, ownerA, `missing-${randomUUID()}`);
@@ -522,7 +580,9 @@ try {
   check("Failure remains failure — stale confirm is not recorded as success", staleFailed);
   check(
     "Stale failure does not add a dismissed recorded result",
-    !afterStale.recordedResults.some((row) => row.actionKey === "DISMISS_RECOMMENDATION"),
+    !afterStale.recordedOwnerPlanState.some(
+      (row) => row.recordKind === "RECOMMENDATION_STATE" && row.recordedStatus === "DISMISSED",
+    ) && afterStale.recordedOwnerPlanState.every((row) => !recordedOwnerPlanStateClaimsControlledAction(row)),
   );
 
   const currentDismiss = await proposeControlledAction(prisma, ownerA, {
@@ -536,17 +596,105 @@ try {
   });
   const afterDismiss = await loadControlledActionCenter(prisma, ownerA);
   check(
-    "Persisted dismiss result is shown as DISMISSED",
+    "Immediate dismiss confirm returns the canonical execution result",
     dismissed.executionResult.status === "SUCCEEDED" &&
-      afterDismiss.recordedResults.some(
-        (row) => row.actionKey === "DISMISS_RECOMMENDATION" && row.recordedStatus === "DISMISSED",
-      ),
+      dismissed.executionResult.message.includes("Recommendation dismissed"),
+  );
+  check(
+    "Reloaded dismiss state is owner-plan truth, not a proven DISMISS_RECOMMENDATION",
+    afterDismiss.recordedOwnerPlanState.some(
+      (row) => row.recordKind === "RECOMMENDATION_STATE" && row.recordedStatus === "DISMISSED",
+    ) && afterDismiss.recordedOwnerPlanState.every((row) => !recordedOwnerPlanStateClaimsControlledAction(row)),
   );
   check(
     "No new allowed action types were introduced by execution",
     CONTROLLED_ACTION_KEYS.length === 3 &&
       afterDismiss.catalog.every((row) => CONTROLLED_ACTION_KEYS.includes(row.actionKey)),
   );
+
+  console.log("\nRUNTIME — ordinary BSOS writes are not labeled as Controlled AI provenance");
+  await prisma.estimate.update({
+    where: { id: estimateA.id },
+    data: { status: "SENT" },
+  });
+  const followUp = await findCatalogRecommendation(prisma, businessA.id, "follow-up-sent-estimates");
+  check("Ordinary create path has a live catalog recommendation", Boolean(followUp));
+  const ordinaryItem = await createActionFromRecommendation(prisma, ownerA, followUp);
+  const afterOrdinaryCreate = await loadControlledActionCenter(prisma, ownerA);
+  const ordinaryCreateRow = afterOrdinaryCreate.recordedOwnerPlanState.find(
+    (row) => row.recordKind === "ACTION_ITEM" && row.actionItemId === ordinaryItem.id,
+  );
+  check("Ordinary action-item remains visible as owner-plan state", Boolean(ordinaryCreateRow));
+  check(
+    "Ordinary createRecommendationAction path is not labeled as Controlled AI",
+    Boolean(ordinaryCreateRow) &&
+      ordinaryCreateRow.origin === ACTION_CENTER_ORIGIN_NOT_RECORDED &&
+      !recordedOwnerPlanStateClaimsControlledAction(ordinaryCreateRow) &&
+      ordinaryCreateRow.actionKey == null,
+  );
+
+  const dismissRec = await findCatalogRecommendation(prisma, businessA.id, "follow-up-sent-estimates");
+  await upsertRecommendationState(prisma, ownerA, {
+    recommendationKey: "follow-up-sent-estimates",
+    status: "DISMISSED",
+    evidenceKey: dismissRec ? recommendationEvidenceKey(dismissRec) : undefined,
+  });
+  const afterOrdinaryDismiss = await loadControlledActionCenter(prisma, ownerA);
+  const ordinaryDismissRow = afterOrdinaryDismiss.recordedOwnerPlanState.find(
+    (row) =>
+      row.recordKind === "RECOMMENDATION_STATE" &&
+      row.targetEntityId === "follow-up-sent-estimates" &&
+      row.recordedStatus === "DISMISSED",
+  );
+  check("Ordinary dismissed recommendation remains visible", Boolean(ordinaryDismissRow));
+  check(
+    "Ordinary dismissRecommendationAction path is not labeled as Controlled AI",
+    Boolean(ordinaryDismissRow) &&
+      ordinaryDismissRow.origin === ACTION_CENTER_ORIGIN_NOT_RECORDED &&
+      !recordedOwnerPlanStateClaimsControlledAction(ordinaryDismissRow) &&
+      ordinaryDismissRow.actionKey == null,
+  );
+
+  await upsertRecommendationState(prisma, ownerA, {
+    recommendationKey: "review-recurring-expenses",
+    status: "COMPLETED",
+  });
+  const afterOrdinaryComplete = await loadControlledActionCenter(prisma, ownerA);
+  const ordinaryCompleteRow = afterOrdinaryComplete.recordedOwnerPlanState.find(
+    (row) =>
+      row.recordKind === "RECOMMENDATION_STATE" &&
+      row.targetEntityId === "review-recurring-expenses" &&
+      row.recordedStatus === "COMPLETED",
+  );
+  check("Ordinary completed recommendation remains visible", Boolean(ordinaryCompleteRow));
+  check(
+    "Ordinary completeRecommendationAction path is not labeled as Controlled AI",
+    Boolean(ordinaryCompleteRow) &&
+      ordinaryCompleteRow.origin === ACTION_CENTER_ORIGIN_NOT_RECORDED &&
+      !recordedOwnerPlanStateClaimsControlledAction(ordinaryCompleteRow) &&
+      ordinaryCompleteRow.actionKey == null,
+  );
+  check(
+    "UI copy still states historical origin is not recorded by V1",
+    boardSrc.includes("Origin is not recorded in Controlled Actions V1.") &&
+      afterOrdinaryComplete.recordedOwnerPlanState.every((row) => !recordedOwnerPlanStateClaimsControlledAction(row)),
+  );
+
+  const ordinaryDetail = await loadControlledActionCenterItem(prisma, ownerA, ordinaryItem.id);
+  const foreignState = await prisma.bsosRecommendationState.create({
+    data: {
+      businessId: businessB.id,
+      recommendationKey: "collect-unpaid-invoices",
+      status: "DISMISSED",
+    },
+  });
+  const foreignStateDetail = await loadControlledActionCenterItem(prisma, ownerA, foreignState.id);
+  check(
+    "Detail route keeps owner-plan state without Controlled AI provenance",
+    ordinaryDetail?.recordedOwnerPlanState.some((row) => row.actionItemId === ordinaryItem.id) === true &&
+      ordinaryDetail.recordedOwnerPlanState.every((row) => !recordedOwnerPlanStateClaimsControlledAction(row)),
+  );
+  check("Foreign recommendation-state ID still fails closed", foreignStateDetail === null);
 
   let excludedFailed = false;
   try {
