@@ -170,10 +170,88 @@ export function ownerTodayTimeWindowLabel(
   return start;
 }
 
+export const MATERIAL_PICKUP_SCHEDULED_HEADING =
+  "Materials pickup scheduled before this job";
+export const MATERIAL_PICKUP_SCHEDULED_NOTE =
+  "Scheduled pickup time, not guaranteed travel or store arrival.";
+
+/**
+ * Recorded Job.pickupDurationMinutes only. Zero and null are "not recorded"
+ * — this helper never invents a pickup duration.
+ */
+export function recordedPickupDurationMinutes(
+  pickupDurationMinutes: number | null | undefined,
+) {
+  if (pickupDurationMinutes == null || pickupDurationMinutes <= 0) return null;
+  return pickupDurationMinutes;
+}
+
 export function ownerTodayMaterialPickupRecorded(
   pickupDurationMinutes: number | null | undefined,
 ) {
-  return pickupDurationMinutes != null && pickupDurationMinutes > 0;
+  return recordedPickupDurationMinutes(pickupDurationMinutes) != null;
+}
+
+/**
+ * Scheduled pickup-block start = appointment minus recorded pickup minutes.
+ * This is scheduled time consumed before the Job, not travel or store arrival.
+ */
+export function materialPickupBlockStart(
+  scheduledAt: Date,
+  pickupDurationMinutes: number,
+) {
+  return new Date(scheduledAt.getTime() - pickupDurationMinutes * 60 * 1000);
+}
+
+export type MaterialPickupVisibility = {
+  recorded: boolean;
+  durationMinutes: number | null;
+  durationLabel: string | null;
+  minutesLabel: string | null;
+  blockLabel: string | null;
+  scheduledNote: string | null;
+};
+
+/**
+ * Operational presentation of persisted Job.pickupDurationMinutes.
+ * Unscheduled jobs can show the recorded duration but never a clock block.
+ */
+export function buildMaterialPickupVisibility(
+  job: {
+    scheduledAt?: Date | null;
+    pickupDurationMinutes?: number | null;
+  },
+  timeZone?: string,
+): MaterialPickupVisibility {
+  const durationMinutes = recordedPickupDurationMinutes(job.pickupDurationMinutes);
+  if (durationMinutes == null) {
+    return {
+      recorded: false,
+      durationMinutes: null,
+      durationLabel: null,
+      minutesLabel: null,
+      blockLabel: null,
+      scheduledNote: null,
+    };
+  }
+
+  let blockLabel: string | null = null;
+  if (job.scheduledAt) {
+    const pickupStart = materialPickupBlockStart(job.scheduledAt, durationMinutes);
+    blockLabel = `Pickup block: ${formatTime(pickupStart, timeZone)} – ${formatTime(
+      job.scheduledAt,
+      timeZone,
+    )}`;
+  }
+
+  return {
+    recorded: true,
+    durationMinutes,
+    durationLabel: `Materials pickup: ${durationMinutes} min before appointment`,
+    minutesLabel: `${durationMinutes} minutes`,
+    blockLabel,
+    scheduledNote: MATERIAL_PICKUP_SCHEDULED_NOTE,
+  };
 }
 
 export function ownerTodayAssignmentState(job: {
@@ -266,6 +344,7 @@ export type OwnerTodayJobView = {
   assignment: ReturnType<typeof ownerTodayAssignmentState>;
   appointment: OwnerTodayAppointmentState;
   materialPickupRecorded: boolean;
+  materialPickup: MaterialPickupVisibility;
   jobHref: string;
   customerHref: string | null;
   fieldHref: string | null;
@@ -320,6 +399,7 @@ export function buildOwnerTodayJobView(
   if (!actions) return null;
 
   const appointment = ownerTodayAppointmentState(job);
+  const materialPickup = buildMaterialPickupVisibility(job, options.timeZone);
   return {
     jobId: job.id,
     businessId: job.businessId,
@@ -330,7 +410,8 @@ export function buildOwnerTodayJobView(
     timeWindowLabel: ownerTodayTimeWindowLabel(job, options.timeZone),
     assignment: ownerTodayAssignmentState(job),
     appointment,
-    materialPickupRecorded: ownerTodayMaterialPickupRecorded(job.pickupDurationMinutes),
+    materialPickupRecorded: materialPickup.recorded,
+    materialPickup,
     jobHref: actions.jobHref,
     customerHref: actions.customerHref,
     fieldHref: actions.fieldHref,
