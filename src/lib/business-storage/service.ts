@@ -96,14 +96,37 @@ export async function ensureBusinessStorageAccount(
   });
 }
 
-async function releaseExpiredReservations(db: Db, businessId: string, now: Date) {
+async function bestEffortDeleteOwnedObject(
+  provider: StorageProvider,
+  businessId: string,
+  input: { bucket: string; storageKey: string },
+) {
+  assertKeyBelongsToBusiness(input.storageKey, businessId);
+  await provider.deleteObject({
+    bucket: input.bucket,
+    key: input.storageKey,
+  });
+}
+
+async function releaseExpiredReservations(
+  db: Db,
+  businessId: string,
+  now: Date,
+  provider: StorageProvider,
+) {
   const expired = await db.storedAsset.findMany({
     where: {
       businessId,
       status: "PENDING",
       expiresAt: { lte: now },
     },
-    select: { id: true, fileSizeBytes: true, storageAccountId: true },
+    select: {
+      id: true,
+      fileSizeBytes: true,
+      storageAccountId: true,
+      storageKey: true,
+      storageAccount: { select: { bucketName: true } },
+    },
   });
   if (expired.length === 0) return;
   const reserved = expired.reduce((sum, row) => sum + row.fileSizeBytes, 0);
@@ -116,6 +139,16 @@ async function releaseExpiredReservations(db: Db, businessId: string, now: Date)
       where: { id: expired[0]!.storageAccountId },
       data: { storageReservedBytes: { decrement: reserved } },
     });
+  }
+  for (const row of expired) {
+    try {
+      await bestEffortDeleteOwnedObject(provider, businessId, {
+        bucket: row.storageAccount.bucketName,
+        storageKey: row.storageKey,
+      });
+    } catch {
+      // One provider delete failure must not block the rest of the expired set.
+    }
   }
 }
 
@@ -147,7 +180,7 @@ export async function authorizeManagedUpload(
     throw new StorageError("File storage is suspended for this business.");
   }
 
-  await releaseExpiredReservations(deps.db, businessId, now);
+  await releaseExpiredReservations(deps.db, businessId, now, provider);
 
   const fresh = await deps.db.businessStorageAccount.findUniqueOrThrow({
     where: { id: account.id },
@@ -258,9 +291,11 @@ export async function abortManagedUpload(
 ) {
   const asset = await deps.db.storedAsset.findFirst({
     where: { id: assetId, businessId },
+    include: { storageAccount: true },
   });
   if (!asset) throw new StorageAccessError();
   if (asset.status !== "PENDING") return asset;
+  assertKeyBelongsToBusiness(asset.storageKey, businessId);
   const now = deps.now?.() ?? new Date();
   await deps.db.$transaction(async (tx) => {
     await tx.storedAsset.update({
@@ -272,6 +307,11 @@ export async function abortManagedUpload(
       data: { storageReservedBytes: { decrement: asset.fileSizeBytes } },
     });
   });
+  const provider = await resolveStorageProvider(deps);
+  await bestEffortDeleteOwnedObject(provider, businessId, {
+    bucket: asset.storageAccount.bucketName,
+    storageKey: asset.storageKey,
+  }).catch(() => undefined);
   return { ...asset, status: "FAILED" as const };
 }
 
