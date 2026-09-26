@@ -266,12 +266,19 @@ check(
   applySource.includes("result.recommendedAmount <= 0") &&
     applySource.includes("calculatorHasIncompleteBillableWork(result)"),
 );
+const applyFn = applySource.slice(
+  applySource.indexOf("export async function applyDraftEstimateCalculator"),
+  applySource.indexOf("export async function persistDraftEstimateCalculatorRates"),
+);
 check(
   "Apply rejects incomplete billable work before any line mutation",
-  applySource.indexOf("calculatorHasIncompleteBillableWork(result)") <
-    applySource.indexOf("snapshot.result = result") &&
-    applySource.indexOf("calculatorHasIncompleteBillableWork(result)") <
-      applySource.indexOf("await db.$transaction"),
+  applyFn.includes("if (result.recommendedAmount <= 0 || calculatorHasIncompleteBillableWork(result))") &&
+    applyFn.indexOf("calculatorHasIncompleteBillableWork(result)") <
+      applyFn.indexOf("snapshot.result = result") &&
+    applyFn.indexOf("calculatorHasIncompleteBillableWork(result)") <
+      applyFn.indexOf("await db.$transaction") &&
+    applyFn.indexOf("throw new EstimateLineError") < applyFn.indexOf("unitPrice") &&
+    applyFn.indexOf("throw new EstimateLineError") < applyFn.indexOf("tx.lineItem.update"),
 );
 check(
   "Owner calculator does not present a partial recommendation as the complete labor price",
