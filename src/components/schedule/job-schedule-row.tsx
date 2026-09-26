@@ -19,6 +19,8 @@ export function JobScheduleRow({
   timeZone?: string;
 }) {
   const scope = jobScopeSummary(job);
+  const assignedName = job.assignedMembership?.user.name.trim() ?? "";
+  const assignmentLabel = assignedName ? `Assigned: ${assignedName}` : "Unassigned";
   return (
     <Link
       href={`/jobs/${job.id}`}
@@ -37,6 +39,7 @@ export function JobScheduleRow({
           {scope ? (
             <p className="truncate text-xs text-muted-foreground">{scope}</p>
           ) : null}
+          <p className="truncate text-xs text-muted-foreground">{assignmentLabel}</p>
         </div>
         <div className="flex flex-col items-end gap-1 text-right">
           {job.scheduledAt ? (

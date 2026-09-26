@@ -25,10 +25,15 @@ export function JobPill({
   hasConflict?: boolean;
   timeZone?: string;
 }) {
+  const customerName = job.customer?.name ?? "Customer";
+  const assignedName = job.assignedMembership?.user.name.trim() ?? "";
+  const assignmentLabel = assignedName ? `Assigned: ${assignedName}` : "Unassigned";
+  const title = `${customerName} · ${job.status} · ${assignmentLabel}${hasConflict ? " · Possible scheduling conflict" : ""}`;
   return (
     <Link
       href={`/jobs/${job.id}`}
-      title={`${job.customer?.name ?? "Customer"} · ${job.status}${hasConflict ? " · Possible scheduling conflict" : ""}`}
+      title={title}
+      aria-label={title}
       className={cn(
         "flex items-center gap-1 overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium sm:text-[11px]",
         STATUS_PILL_CLASSES[job.status] ?? "bg-muted text-foreground",
@@ -42,7 +47,10 @@ export function JobPill({
           {formatTime(job.scheduledAt, timeZone)}
         </span>
       ) : null}
-      <span className="truncate">{job.customer?.name ?? "Customer"}</span>
+      <span className="min-w-0 truncate">{customerName}</span>
+      <span className="min-w-0 max-w-[46%] truncate font-normal opacity-80">
+        {assignedName || "Unassigned"}
+      </span>
     </Link>
   );
 }
