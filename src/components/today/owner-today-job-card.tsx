@@ -44,10 +44,24 @@ export function OwnerTodayJobCard({
           <dt className="text-muted-foreground">Appointment</dt>
           <dd className="font-medium">{job.appointment.label}</dd>
         </div>
-        {job.materialPickupRecorded ? (
-          <div className="flex flex-wrap items-baseline gap-x-2">
-            <dt className="text-muted-foreground">Materials</dt>
-            <dd className="font-medium">Pickup recorded</dd>
+        {job.materialPickup.recorded ? (
+          <div className="space-y-0.5">
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <dt className="text-muted-foreground">Materials pickup</dt>
+              <dd className="font-medium">
+                {job.materialPickup.durationMinutes} min before appointment
+              </dd>
+            </div>
+            {job.materialPickup.blockLabel ? (
+              <p className="text-sm tabular-nums text-muted-foreground">
+                {job.materialPickup.blockLabel}
+              </p>
+            ) : null}
+            {job.materialPickup.scheduledNote ? (
+              <p className="text-sm text-muted-foreground">
+                {job.materialPickup.scheduledNote}
+              </p>
+            ) : null}
           </div>
         ) : null}
       </dl>

@@ -31,6 +31,7 @@ import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { prisma } from "@/lib/prisma";
 import { AssignedJobPickupCard } from "@/components/field/assigned-job-pickup-card";
 import { listAssignedJobPickupView } from "@/lib/materials/pickup";
+import { buildMaterialPickupVisibility } from "@/lib/owner-today";
 
 export const metadata: Metadata = {
   title: "Job",
@@ -82,6 +83,7 @@ export default async function FieldJobPage({
       scheduledAt: true,
       scheduledDurationMinutes: true,
       arrivalWindowMinutes: true,
+      pickupDurationMinutes: true,
       appointmentConfirmationStatus: true,
       appointmentProposalId: true,
       appointmentConfirmedForProposalId: true,
@@ -162,6 +164,13 @@ export default async function FieldJobPage({
   const approvedScope = resolveApprovedWorkOrderScope(job);
   const hasApprovedScope = approvedScope.source !== "none";
   const pickupItems = await listAssignedJobPickupView(prisma, field, job.id);
+  const materialPickup = buildMaterialPickupVisibility(
+    {
+      scheduledAt: job.scheduledAt,
+      pickupDurationMinutes: job.pickupDurationMinutes,
+    },
+    timeZone,
+  );
 
   const directions = directionsUrl(job.property);
   const tel = telHref(job.customer?.phone ?? null);
@@ -207,6 +216,14 @@ export default async function FieldJobPage({
               {appointmentConfirmationLabel(effectiveAppointmentConfirmationStatus(job))}
             </span>
           ) : null}
+          {materialPickup.recorded ? (
+            <span className="block w-full text-sm leading-relaxed text-foreground">
+              <span className="block font-medium">{materialPickup.durationLabel}</span>
+              {materialPickup.blockLabel ? (
+                <span className="block tabular-nums">{materialPickup.blockLabel}</span>
+              ) : null}
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -241,7 +258,7 @@ export default async function FieldJobPage({
         </CardContent>
       </Card>
 
-      <AssignedJobPickupCard items={pickupItems} />
+      <AssignedJobPickupCard items={pickupItems} scheduledPickup={materialPickup} />
 
       <FieldTimeClock
         membershipId={field.membershipId}
