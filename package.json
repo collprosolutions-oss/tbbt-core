@@ -99,6 +99,7 @@
     "test:handyman-1-0-completion": "node --experimental-strip-types scripts/check-handyman-1-0-completion.mjs",
     "test:ai-intelligence": "node --experimental-strip-types scripts/check-ai-intelligence.mjs",
     "test:chief-of-staff": "node --experimental-strip-types scripts/check-chief-of-staff.mjs",
+    "test:business-coach": "node --experimental-strip-types scripts/check-business-coach.mjs",
     "test:financial-specialist": "node --experimental-strip-types scripts/check-financial-specialist.mjs",
     "test:growth-specialist": "node --experimental-strip-types scripts/check-growth-specialist.mjs",
     "test:materials-specialist": "node --experimental-strip-types scripts/check-materials-specialist.mjs",

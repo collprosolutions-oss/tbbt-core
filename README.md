@@ -81,6 +81,7 @@ npm run test:isolation
 npm run test:authorization
 npm run test:bsos
 npm run test:chief-of-staff
+npm run test:business-coach
 npm run test:financial-specialist
 npm run test:growth-specialist
 npm run test:materials-specialist

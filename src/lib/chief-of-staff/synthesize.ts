@@ -9,6 +9,7 @@ import type { CitedFact, StructuredAiOutput } from "@/lib/ai/types";
 import type { CanonicalRecommendationCatalog } from "@/lib/chief-of-staff/recommendations";
 import type {
   ConflictResolution,
+  SkippedSpecialist,
   SpecialistResult,
 } from "@/lib/chief-of-staff/types";
 
@@ -19,10 +20,34 @@ export type CosSynthesis = {
   payload: Record<string, unknown>;
 };
 
+const OWNER_FINDING_CAP = 8;
+
 function oneVoice(text: string) {
   return text
-    .replace(/\b(Finance|Workforce|Growth|Knowledge|Materials|Communications|Vault|Protection) Agent says\b/gi, "Recorded facts show")
-    .replace(/\b(the )?(Finance|Workforce|Growth|Knowledge|Materials|Communications|Vault|Protection) specialist\b/gi, "recorded facts");
+    .replace(/\b(Finance|Workforce|Growth|Knowledge|Materials|Communications|Vault|Protection|Attention) Agent says\b/gi, "Recorded facts show")
+    .replace(/\b(the )?(Finance|Workforce|Growth|Knowledge|Materials|Communications|Vault|Protection|Attention|Business Protection) specialist\b/gi, "recorded facts");
+}
+
+function findingsFor(usable: SpecialistResult[], specialistId: SpecialistResult["specialistId"]) {
+  return usable
+    .filter((row) => row.specialistId === specialistId)
+    .flatMap((row) => row.findings)
+    .slice(0, 6);
+}
+
+function ownerFacingFindings(usable: SpecialistResult[]) {
+  const seen = new Set<string>();
+  const summaries: string[] = [];
+  for (const row of usable) {
+    for (const finding of row.findings) {
+      const summary = finding.summary.trim();
+      if (!summary || seen.has(summary)) continue;
+      seen.add(summary);
+      summaries.push(summary);
+      if (summaries.length >= OWNER_FINDING_CAP) return summaries;
+    }
+  }
+  return summaries;
 }
 
 export function synthesizeCoachAnswer(input: {
@@ -31,6 +56,7 @@ export function synthesizeCoachAnswer(input: {
   catalog: CanonicalRecommendationCatalog;
   specialistResults: SpecialistResult[];
   conflicts: ConflictResolution;
+  plannerSkipped?: SkippedSpecialist[];
 }): CosSynthesis {
   const grounded = answerCoachFromFacts(input.question, input.coachContext);
   const usable = input.specialistResults.filter((row) => row.status === "OK");
@@ -40,69 +66,35 @@ export function synthesizeCoachAnswer(input: {
 
   const uniqueKeys = input.conflicts.uniqueRecommendationKeys;
   const recs = input.catalog.activeRecommendations.filter((item) => uniqueKeys.includes(item.key));
-  if (recs.length > 0 && /this week|focus|should i/i.test(input.question)) {
+  if (recs.length > 0 && /this week|focus|should i|attention today|work on next/i.test(input.question)) {
     const titles = recs.slice(0, 3).map((item) => item.title);
     extraNotes.push(`Recorded attention, in one list: ${titles.join("; ")}.`);
   }
 
-  for (const conflict of input.conflicts.items) {
-    if (conflict.kind === "DUPLICATE_RECOMMENDATION") continue;
-    extraNotes.push(conflict.summary);
+  const conflictNotes = input.conflicts.items
+    .filter((conflict) => conflict.kind !== "DUPLICATE_RECOMMENDATION")
+    .map((conflict) => conflict.summary);
+  if (conflictNotes.length > 0) {
+    extraNotes.push(`Conflicts from recorded truth: ${conflictNotes.join(" ")}`);
   }
 
-  const financialFindings = usable
-    .filter((row) => row.specialistId === "FINANCIAL")
-    .flatMap((row) => row.findings)
-    .slice(0, 6);
-  for (const finding of financialFindings) {
-    extraNotes.push(finding.summary);
-  }
+  const financialFindings = findingsFor(usable, "FINANCIAL");
+  const growthFindings = findingsFor(usable, "GROWTH");
+  const materialsFindings = findingsFor(usable, "MATERIALS");
+  const communicationsFindings = findingsFor(usable, "COMMUNICATIONS");
+  const knowledgeLaunchFindings = findingsFor(usable, "KNOWLEDGE_LAUNCH");
+  const businessProtectionFindings = findingsFor(usable, "BUSINESS_PROTECTION");
 
-  const growthFindings = usable
-    .filter((row) => row.specialistId === "GROWTH")
-    .flatMap((row) => row.findings)
-    .slice(0, 6);
-  for (const finding of growthFindings) {
-    extraNotes.push(finding.summary);
-  }
+  extraNotes.push(...ownerFacingFindings(usable));
 
-  const materialsFindings = usable
-    .filter((row) => row.specialistId === "MATERIALS")
-    .flatMap((row) => row.findings)
-    .slice(0, 6);
-  for (const finding of materialsFindings) {
-    extraNotes.push(finding.summary);
-  }
-
-  const communicationsFindings = usable
-    .filter((row) => row.specialistId === "COMMUNICATIONS")
-    .flatMap((row) => row.findings)
-    .slice(0, 6);
-  for (const finding of communicationsFindings) {
-    extraNotes.push(finding.summary);
-  }
-
-  const knowledgeLaunchFindings = usable
-    .filter((row) => row.specialistId === "KNOWLEDGE_LAUNCH")
-    .flatMap((row) => row.findings)
-    .slice(0, 6);
-  for (const finding of knowledgeLaunchFindings) {
-    extraNotes.push(finding.summary);
-  }
   for (const row of usable) {
-    if (row.specialistId !== "KNOWLEDGE_LAUNCH") continue;
-    if (row.limitation) extraNotes.push(row.limitation);
-  }
-
-  const businessProtectionFindings = usable
-    .filter((row) => row.specialistId === "BUSINESS_PROTECTION")
-    .flatMap((row) => row.findings)
-    .slice(0, 6);
-  for (const finding of businessProtectionFindings) {
-    extraNotes.push(finding.summary);
-  }
-  for (const row of usable) {
-    if (row.specialistId !== "BUSINESS_PROTECTION") continue;
+    if (
+      row.specialistId !== "KNOWLEDGE_LAUNCH" &&
+      row.specialistId !== "BUSINESS_PROTECTION" &&
+      row.specialistId !== "WORKFORCE"
+    ) {
+      continue;
+    }
     if (row.limitation) extraNotes.push(row.limitation);
   }
 
@@ -114,13 +106,14 @@ export function synthesizeCoachAnswer(input: {
   for (const row of skipped) {
     if (row.limitation) extraNotes.push(row.limitation);
   }
-
-  for (const row of usable) {
-    if (row.specialistId !== "WORKFORCE") continue;
-    for (const finding of row.findings.slice(0, 8)) {
-      extraNotes.push(finding.summary);
-    }
-    if (row.limitation) extraNotes.push(row.limitation);
+  if (
+    input.plannerSkipped?.some(
+      (row) => row.reason === "DISABLED" || row.reason === "NO_DEEP_LOAD_PR1",
+    )
+  ) {
+    extraNotes.push(
+      "A requested recorded view is not enabled for this workspace. Missing data was not replaced with empty or zero values.",
+    );
   }
 
   const text = oneVoice(

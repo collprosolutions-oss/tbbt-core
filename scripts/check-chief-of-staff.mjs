@@ -397,6 +397,82 @@ try {
   check("Generic business question does not select BUSINESS_PROTECTION", !genericBusiness.selectedIds.includes("BUSINESS_PROTECTION"));
   check("Profit question does not select BUSINESS_PROTECTION", !profitPlan.selectedIds.includes("BUSINESS_PROTECTION"));
 
+  const attentionToday = planSpecialists({
+    question: "What needs my attention today?",
+    activeRecommendationKeys: [],
+  });
+  check(
+    "Attention-today stays at ATTENTION and does not auto-load WORKFORCE",
+    attentionToday.selectedIds.join(",") === "ATTENTION" && !attentionToday.selectedIds.includes("WORKFORCE"),
+  );
+  const workOnNext = planSpecialists({
+    question: "What should I work on next?",
+    activeRecommendationKeys: [],
+  });
+  check(
+    "Work-on-next stays at ATTENTION without a kitchen-sink fan-out",
+    workOnNext.selectedIds.join(",") === "ATTENTION" && workOnNext.fanout === 1,
+  );
+  const capacityWeek = planSpecialists({
+    question: "Do I have enough capacity this week?",
+    activeRecommendationKeys: [],
+  });
+  check(
+    "Capacity-this-week selects WORKFORCE and stays at or under fan-out 4",
+    capacityWeek.selectedIds.includes("WORKFORCE") &&
+      capacityWeek.selectedIds.includes("ATTENTION") &&
+      capacityWeek.fanout <= 4 &&
+      !capacityWeek.selectedIds.includes("MATERIALS") &&
+      !capacityWeek.selectedIds.includes("BUSINESS_PROTECTION"),
+  );
+  const materialsHold = planSpecialists({
+    question: "What materials are holding up jobs?",
+    activeRecommendationKeys: [],
+  });
+  check(
+    "Materials-holding-up selects MATERIALS and not irrelevant departments",
+    materialsHold.selectedIds.includes("MATERIALS") &&
+      !materialsHold.selectedIds.includes("GROWTH") &&
+      !materialsHold.selectedIds.includes("BUSINESS_PROTECTION") &&
+      !materialsHold.selectedIds.includes("KNOWLEDGE_LAUNCH"),
+  );
+  const jobBlocker = planSpecialists({
+    question: "What is stopping this job from moving forward?",
+    activeRecommendationKeys: [],
+  });
+  check(
+    "Job-blocker selects ATTENTION plus WORKFORCE and MATERIALS only",
+    jobBlocker.selectedIds.includes("ATTENTION") &&
+      jobBlocker.selectedIds.includes("WORKFORCE") &&
+      jobBlocker.selectedIds.includes("MATERIALS") &&
+      jobBlocker.selectedIds.length === 3 &&
+      !jobBlocker.selectedIds.includes("GROWTH") &&
+      !jobBlocker.selectedIds.includes("COMMUNICATIONS") &&
+      !jobBlocker.selectedIds.includes("BUSINESS_PROTECTION") &&
+      !jobBlocker.selectedIds.includes("KNOWLEDGE_LAUNCH") &&
+      !jobBlocker.selectedIds.includes("FINANCIAL"),
+  );
+  const protectionExpiring = planSpecialists({
+    question: "Is anything in my business protection records expiring?",
+    activeRecommendationKeys: [],
+  });
+  check(
+    "Protection-expiring selects BUSINESS_PROTECTION and not a kitchen sink",
+    protectionExpiring.selectedIds.includes("BUSINESS_PROTECTION") &&
+      !protectionExpiring.selectedIds.includes("MATERIALS") &&
+      !protectionExpiring.selectedIds.includes("GROWTH"),
+  );
+  const setupUnfinished = planSpecialists({
+    question: "What business setup is unfinished?",
+    activeRecommendationKeys: [],
+  });
+  check(
+    "Unfinished-setup selects KNOWLEDGE_LAUNCH and not WORKFORCE",
+    setupUnfinished.selectedIds.includes("KNOWLEDGE_LAUNCH") &&
+      !setupUnfinished.selectedIds.includes("WORKFORCE") &&
+      !setupUnfinished.selectedIds.includes("MATERIALS"),
+  );
+
   const enabled = enabledSpecialistIds();
   check(
     "Enabled specialists are ATTENTION, WORKFORCE, FINANCIAL, GROWTH, KNOWLEDGE_LAUNCH, MATERIALS, COMMUNICATIONS, and BUSINESS_PROTECTION",

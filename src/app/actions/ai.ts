@@ -54,6 +54,11 @@ export async function askBsosCoachAction(
         customerId: readString(formData, "customerId") || undefined,
         requestId: readString(formData, "requestId") || undefined,
         messageId: readString(formData, "messageId") || undefined,
+        knowledgeEntryId: readString(formData, "knowledgeEntryId") || undefined,
+        experienceCandidateId: readString(formData, "experienceCandidateId") || undefined,
+        procedureId: readString(formData, "procedureId") || undefined,
+        vaultRecordId: readString(formData, "vaultRecordId") || undefined,
+        agreementId: readString(formData, "agreementId") || undefined,
         recommendationKey: readString(formData, "recommendationKey") || undefined,
       },
     });
