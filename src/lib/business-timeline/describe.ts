@@ -104,7 +104,7 @@ export function describeChangeOrderEvent(kind: string, title: string): string {
 
 /**
  * Communications stay at recorded provider/status truth.
- * DELIVERED is a recorded status, not proof the customer read the message.
+ * DELIVERED is a recorded status, not proof of a read receipt.
  */
 export function describeRecordedCommunication(channel: string, status: string): string {
   return `${humanizeToken(channel)} status recorded as ${status}.`;
