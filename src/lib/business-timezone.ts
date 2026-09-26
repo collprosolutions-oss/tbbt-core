@@ -58,6 +58,54 @@ export function resolveBusinessTimeZone(business: {
   return DEFAULT_BUSINESS_TIMEZONE;
 }
 
+export const COMMON_BUSINESS_TIMEZONES = [
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Phoenix",
+  "America/Los_Angeles",
+  "America/Anchorage",
+  "Pacific/Honolulu",
+] as const;
+
+export const BUSINESS_TIMEZONE_CHANGE_MESSAGE =
+  "Changing the business timezone changes how schedule, Today, time cards, payroll/report calendar days, and displayed timestamps are interpreted. It does NOT rewrite the UTC timestamps already stored.";
+
+export const BUSINESS_TIMEZONE_FALLBACK_LABEL =
+  `Timezone is not explicitly set. TBBT is currently using the ${DEFAULT_BUSINESS_TIMEZONE} default.`;
+
+export type BusinessTimeZonePreference = {
+  storedTimezone: string | null;
+  resolvedTimezone: string;
+  isExplicit: boolean;
+};
+
+/**
+ * Settings-facing timezone truth. Resolution stays in
+ * resolveBusinessTimeZone(); this only reports whether a valid IANA
+ * value is stored or the America/New_York fallback is in use.
+ */
+export function describeBusinessTimeZone(business: {
+  timezone?: string | null;
+} | null | undefined): BusinessTimeZonePreference {
+  const storedTimezone = business?.timezone ?? null;
+  return {
+    storedTimezone,
+    resolvedTimezone: resolveBusinessTimeZone(business),
+    isExplicit: isValidIanaTimeZone(storedTimezone),
+  };
+}
+
+export function businessTimeZoneDisplayLabel(business: {
+  timezone?: string | null;
+} | null | undefined): string {
+  const preference = describeBusinessTimeZone(business);
+  if (preference.isExplicit && preference.storedTimezone) {
+    return `Business timezone: ${preference.storedTimezone.trim()}`;
+  }
+  return BUSINESS_TIMEZONE_FALLBACK_LABEL;
+}
+
 export type ZonedDateParts = {
   year: number;
   month: number;
