@@ -21,7 +21,7 @@ import {
   type AvailabilitySnapshot,
   type OccupiedJob,
 } from "@/lib/availability";
-import { ensureBusinessTimezoneSchema, resolveBusinessTimeZone } from "@/lib/business-timezone";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 
 type AvailabilityClient = PrismaClient | Prisma.TransactionClient;
 
@@ -153,7 +153,6 @@ export async function loadAvailabilitySnapshot(
   db: AvailabilityClient,
   businessId: string,
 ): Promise<AvailabilitySnapshot> {
-  await ensureBusinessTimezoneSchema(db);
   const [settings, jobs, business] = await Promise.all([
     loadAvailabilitySettings(db, businessId),
     loadOccupiedJobs(db, businessId),
@@ -176,7 +175,6 @@ export async function loadPublicNextAvailableLabel(
   businessId: string,
   from = new Date(),
 ): Promise<string | null> {
-  await ensureBusinessTimezoneSchema(db);
   const [settings, existing, business] = await Promise.all([
     loadAvailabilitySettings(db, businessId),
     loadOccupiedJobs(db, businessId),

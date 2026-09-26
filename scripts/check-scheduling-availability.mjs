@@ -148,6 +148,29 @@ check(
     DEFAULT_WORK_END_MINUTES === 1020 &&
     DEFAULT_WORKING_WEEKDAYS.join(",") === "1,2,3,4,5",
 );
+function sourceOfExportedFunction(src, name) {
+  const match = src.match(
+    new RegExp(
+      `export async function ${name}\\([\\s\\S]*?\\n\\}\\n`,
+    ),
+  );
+  return match?.[0] ?? "";
+}
+const snapshotFn = sourceOfExportedFunction(availabilityData, "loadAvailabilitySnapshot");
+const nextAvailableFn = sourceOfExportedFunction(availabilityData, "loadPublicNextAvailableLabel");
+const timezoneLoadFns = `${snapshotFn}\n${nextAvailableFn}`;
+check(
+  "Availability timezone loading is read-only (no Business.timezone DDL)",
+  !availabilityData.includes("ensureBusinessTimezoneSchema") &&
+    snapshotFn.includes("resolveBusinessTimeZone") &&
+    snapshotFn.includes("select: { timezone: true }") &&
+    nextAvailableFn.includes("resolveBusinessTimeZone") &&
+    nextAvailableFn.includes("select: { timezone: true }") &&
+    !timezoneLoadFns.includes("ensureBusinessTimezoneSchema") &&
+    !timezoneLoadFns.includes("$executeRaw") &&
+    !timezoneLoadFns.includes("$executeRawUnsafe") &&
+    !timezoneLoadFns.includes("ALTER TABLE"),
+);
 check(
   "Preview-safe runtime ensure adds availability columns/table before Settings reads",
   availabilityData.includes("ADD COLUMN IF NOT EXISTS \"workStartMinutes\"") &&

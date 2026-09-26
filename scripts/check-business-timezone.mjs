@@ -330,6 +330,25 @@ check(
   "Jobs list view formats scheduledAt in Business.timezone",
   listView.includes("formatTime(job.scheduledAt, timeZone)"),
 );
+const availabilityData = readFileSync(
+  new URL("../src/lib/availability-data.ts", import.meta.url),
+  "utf8",
+);
+function sourceOfExportedFunction(src, name) {
+  const match = src.match(new RegExp(`export async function ${name}\\([\\s\\S]*?\\n\\}\\n`));
+  return match?.[0] ?? "";
+}
+const snapshotFn = sourceOfExportedFunction(availabilityData, "loadAvailabilitySnapshot");
+const nextAvailableFn = sourceOfExportedFunction(availabilityData, "loadPublicNextAvailableLabel");
+check(
+  "Availability timezone reads do not ALTER Business or run timezone DDL",
+  !availabilityData.includes("ensureBusinessTimezoneSchema") &&
+    snapshotFn.includes("resolveBusinessTimeZone") &&
+    nextAvailableFn.includes("resolveBusinessTimeZone") &&
+    !`${snapshotFn}\n${nextAvailableFn}`.includes("$executeRaw") &&
+    !`${snapshotFn}\n${nextAvailableFn}`.includes("$executeRawUnsafe") &&
+    !`${snapshotFn}\n${nextAvailableFn}`.includes("ALTER TABLE"),
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
