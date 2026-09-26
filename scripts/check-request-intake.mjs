@@ -22,7 +22,9 @@ const { MemoryStorageProvider, servePublicStoredAsset } = await import(
   "@/lib/business-storage/index"
 );
 const {
+  abortPublicRequestPhoto,
   attachRemainingPublicRequestFallbackPhotos,
+  authorizePublicRequestPhoto,
   finalizePublicRequestPhoto,
   putPublicRequestPhotoFromBytes,
   remainingIntakePhotoSlots,
@@ -30,7 +32,7 @@ const {
 const { authorizeManagedUpload, finalizeManagedUpload } = await import(
   "@/lib/business-storage/service"
 );
-const { StorageError } = await import("@/lib/business-storage/types");
+const { StorageError, StorageQuotaError } = await import("@/lib/business-storage/types");
 const { MAX_INTAKE_PHOTOS } = await import("@/lib/service-request-work");
 const { VAULT_DOCUMENT_PURPOSE } = await import("@/lib/business-protection");
 const { servePrivateStoredAsset } = await import(
@@ -1138,6 +1140,201 @@ try {
     "Cross-tenant finalize leaves the owned READY request photo unchanged",
     (await reloadAsset(finalizedPending.id))?.status === "READY" &&
       (await reloadAsset(finalizedPending.id))?.businessId === business.id,
+  );
+
+  console.log("\nDB — Public request photos honor merged storage terminal-state truth");
+  async function accountSnapshot(businessId) {
+    const account = await prisma.businessStorageAccount.findUnique({
+      where: { businessId },
+    });
+    return {
+      reserved: Number(account?.storageReservedBytes ?? 0),
+      used: Number(account?.storageUsedBytes ?? 0),
+    };
+  }
+  async function createRequestWithPhotoIds(name, email, photoAssetIds) {
+    const created = await createPublicServiceRequest(prisma, {
+      slug: "collpro-reno",
+      name,
+      email,
+      phone: "555-0418",
+      address: "",
+      streetAddress: "12 Oak St",
+      city: "Fort Myers",
+      region: "FL",
+      postalCode: "33901",
+      notes: "Storage terminal-state",
+      catalogItemIds: [fan.id],
+      includeOther: false,
+      otherDescription: "",
+      photoAssetIds,
+    });
+    const photos = created.ok
+      ? await prisma.serviceRequestPhoto.findMany({
+          where: { serviceRequestId: created.requestId, businessId: business.id },
+        })
+      : [];
+    return { created, photos };
+  }
+
+  const managedReady = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "terminal-ready.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const managedReadyRequest = await createRequestWithPhotoIds(
+    "Terminal Ready",
+    "terminal-ready@example.com",
+    [managedReady.id],
+  );
+  check(
+    "Normal public-request managed photo finalizes READY CUSTOMER_PHOTO PRIVATE and attaches once",
+    managedReady.status === "READY" &&
+      managedReady.category === "CUSTOMER_PHOTO" &&
+      managedReady.visibility === "PRIVATE" &&
+      managedReady.publicPath == null &&
+      managedReadyRequest.created.ok === true &&
+      managedReadyRequest.photos.length === 1 &&
+      managedReadyRequest.photos[0].storedAssetId === managedReady.id,
+  );
+
+  const afterFirstReady = await accountSnapshot(business.id);
+  const readyRetry = await finalizePublicRequestPhoto(storageDeps, "collpro-reno", managedReady.id);
+  const afterReadyRetry = await accountSnapshot(business.id);
+  const readyRetryRequest = await createRequestWithPhotoIds(
+    "Terminal Ready Retry",
+    "terminal-ready-retry@example.com",
+    [managedReady.id, managedReady.id],
+  );
+  check(
+    "READY public-request finalize is idempotent and does not re-account storage",
+    readyRetry.id === managedReady.id &&
+      readyRetry.status === "READY" &&
+      readyRetry.publicPath == null &&
+      afterReadyRetry.reserved === afterFirstReady.reserved &&
+      afterReadyRetry.used === afterFirstReady.used,
+  );
+  check(
+    "READY retry does not duplicate the ServiceRequestPhoto attachment",
+    readyRetryRequest.created.ok === true &&
+      readyRetryRequest.photos.length === 1 &&
+      readyRetryRequest.photos[0].storedAssetId === managedReady.id,
+  );
+
+  const failedAuth = await authorizePublicRequestPhoto(storageDeps, "collpro-reno", {
+    originalFilename: "terminal-failed.png",
+    mimeType: "image/png",
+    fileSizeBytes: pngBytes.length,
+  });
+  await provider.putObject({
+    bucket: failedAuth.account.bucketName,
+    key: failedAuth.asset.storageKey,
+    body: pngBytes,
+    contentType: "image/png",
+  });
+  const abortedFailed = await abortPublicRequestPhoto(storageDeps, "collpro-reno", failedAuth.asset.id);
+  let failedFinalizeError = null;
+  try {
+    await finalizePublicRequestPhoto(storageDeps, "collpro-reno", failedAuth.asset.id);
+  } catch (error) {
+    failedFinalizeError = error;
+  }
+  const failedAfter = await reloadAsset(failedAuth.asset.id);
+  const failedRequest = await createRequestWithPhotoIds(
+    "Terminal Failed",
+    "terminal-failed@example.com",
+    [failedAuth.asset.id],
+  );
+  check(
+    "FAILED storage truth is rejected before public-request finalize and does not attach",
+    abortedFailed.status === "FAILED" &&
+      failedFinalizeError instanceof StorageError &&
+      failedAfter?.status === "FAILED" &&
+      failedRequest.created.ok === true &&
+      failedRequest.photos.length === 0,
+  );
+  check(
+    "FAILED public-request photo is not resurrected to READY",
+    failedAfter?.status === "FAILED" && failedAfter.publicPath == null,
+  );
+
+  const expiredAuth = await authorizePublicRequestPhoto(storageDeps, "collpro-reno", {
+    originalFilename: "terminal-expired.png",
+    mimeType: "image/png",
+    fileSizeBytes: pngBytes.length,
+  });
+  await provider.putObject({
+    bucket: expiredAuth.account.bucketName,
+    key: expiredAuth.asset.storageKey,
+    body: pngBytes,
+    contentType: "image/png",
+  });
+  await prisma.storedAsset.update({
+    where: { id: expiredAuth.asset.id },
+    data: { expiresAt: new Date(Date.now() - 60_000) },
+  });
+  let expiredFinalizeError = null;
+  try {
+    await finalizePublicRequestPhoto(storageDeps, "collpro-reno", expiredAuth.asset.id);
+  } catch (error) {
+    expiredFinalizeError = error;
+  }
+  const expiredAfter = await reloadAsset(expiredAuth.asset.id);
+  const expiredRequest = await createRequestWithPhotoIds(
+    "Terminal Expired",
+    "terminal-expired@example.com",
+    [expiredAuth.asset.id],
+  );
+  check(
+    "Expired PENDING public-request photo is rejected, not attached, and not resurrected",
+    expiredFinalizeError instanceof StorageError &&
+      expiredAfter?.status !== "READY" &&
+      expiredRequest.created.ok === true &&
+      expiredRequest.photos.length === 0,
+  );
+
+  const oversizedAuth = await authorizePublicRequestPhoto(storageDeps, "collpro-reno", {
+    originalFilename: "terminal-oversized.png",
+    mimeType: "image/png",
+    fileSizeBytes: 10,
+  });
+  await provider.putObject({
+    bucket: oversizedAuth.account.bucketName,
+    key: oversizedAuth.asset.storageKey,
+    body: pngBytes,
+    contentType: "image/png",
+  });
+  let oversizedError = null;
+  try {
+    await finalizePublicRequestPhoto(storageDeps, "collpro-reno", oversizedAuth.asset.id);
+  } catch (error) {
+    oversizedError = error;
+  }
+  const oversizedAfter = await reloadAsset(oversizedAuth.asset.id);
+  const oversizedRequest = await createRequestWithPhotoIds(
+    "Terminal Oversized",
+    "terminal-oversized@example.com",
+    [oversizedAuth.asset.id],
+  );
+  let oversizedRetryError = null;
+  try {
+    await finalizePublicRequestPhoto(storageDeps, "collpro-reno", oversizedAuth.asset.id);
+  } catch (error) {
+    oversizedRetryError = error;
+  }
+  const oversizedRetry = await reloadAsset(oversizedAuth.asset.id);
+  check(
+    "Oversized public-request finalize keeps canonical StorageQuotaError and does not attach",
+    oversizedError instanceof StorageQuotaError &&
+      oversizedAfter?.status === "FAILED" &&
+      oversizedRequest.created.ok === true &&
+      oversizedRequest.photos.length === 0,
+  );
+  check(
+    "Oversized public-request retry does not resurrect FAILED to READY",
+    oversizedRetryError instanceof StorageError &&
+      oversizedRetry?.status === "FAILED" &&
+      oversizedRetry.publicPath == null,
   );
 
   console.log("\nDB — Owner Log lead creates a real ServiceRequest");
