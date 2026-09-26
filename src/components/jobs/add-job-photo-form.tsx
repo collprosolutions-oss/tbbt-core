@@ -20,6 +20,10 @@ import { Label } from "@/components/ui/label";
  * business storage (R2); the server action only authorizes the upload and
  * then persists the JobPhoto metadata. Unlike the field form, this path
  * is business-owned and does not require a job assignment.
+ *
+ * Capture matches the Field mobile standard: `capture="environment"` opens
+ * the phone's rear camera on most mobile browsers, while accept="image/*"
+ * still allows choosing an existing gallery photo.
  */
 export function AddJobPhotoForm({ jobId }: { jobId: string }) {
   const [open, setOpen] = useState(false);
@@ -30,8 +34,8 @@ export function AddJobPhotoForm({ jobId }: { jobId: string }) {
     return (
       <Button
         type="button"
-        size="sm"
         variant="outline"
+        className="h-12 w-full text-base"
         onClick={() => {
           setError(null);
           setOpen(true);
@@ -132,7 +136,7 @@ export function AddJobPhotoForm({ jobId }: { jobId: string }) {
           name="stage"
           defaultValue="BEFORE"
           disabled={pending}
-          className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+          className="h-11 w-full rounded-lg border border-input bg-transparent px-2.5 text-base"
         >
           <option value="BEFORE">Before</option>
           <option value="DURING">During</option>
@@ -146,11 +150,13 @@ export function AddJobPhotoForm({ jobId }: { jobId: string }) {
           name="file"
           type="file"
           accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/*"
+          capture="environment"
           required
           disabled={pending}
+          className="h-12 w-full text-base file:me-3 file:h-8 file:px-3"
         />
         <p className="text-xs text-muted-foreground">
-          Choose Photo or Take Photo from your device. Up to {requestPhotoMaxBytesLabel()}. JPEG, PNG, WebP, or HEIC.
+          Take a photo or choose one from your device. Up to {requestPhotoMaxBytesLabel()}. JPEG, PNG, WebP, or HEIC.
         </p>
       </div>
       <div className="space-y-2">
@@ -159,18 +165,19 @@ export function AddJobPhotoForm({ jobId }: { jobId: string }) {
           id="photo-caption"
           name="caption"
           disabled={pending}
+          className="h-11 text-base"
           placeholder="e.g. Leaky faucet before repair"
         />
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" size="sm" disabled={pending}>
+      <div className="flex gap-2">
+        <Button type="submit" disabled={pending} className="h-12 flex-1 text-base">
           {pending ? "Uploading…" : "Add photo"}
         </Button>
         <Button
           type="button"
-          size="sm"
           variant="outline"
           disabled={pending}
+          className="h-12 text-base"
           onClick={() => setOpen(false)}
         >
           Cancel

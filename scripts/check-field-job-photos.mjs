@@ -95,6 +95,7 @@ const privateRouteSrc = readRepo("src/app/api/storage/private/[assetId]/route.ts
 const storageSrc = readRepo("src/lib/storage.ts");
 const ownerPhotoSrc = readRepo("src/app/actions/job-photo.ts");
 const ownerFormSrc = readRepo("src/components/jobs/add-job-photo-form.tsx");
+const ownerPhotoItemSrc = readRepo("src/components/jobs/job-photo-item.tsx");
 
 console.log("\nSTATIC — Field photos leave the 4 MB server-action body path");
 check(
@@ -180,6 +181,24 @@ check(
     ownerFormSrc.includes("finalizeManagementJobPhotoUpload") &&
     !ownerFormSrc.includes("addJobPhoto") &&
     !ownerFormSrc.includes("useActionState"),
+);
+check(
+  "Owner form uses Field camera-first capture and still allows gallery selection",
+  ownerFormSrc.includes('capture="environment"') &&
+    ownerFormSrc.includes(
+      'accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/*"',
+    ) &&
+    ownerFormSrc.includes("Take a photo or choose one from your device") &&
+    ownerFormSrc.includes("h-12 w-full"),
+);
+check(
+  "Owner photo remove requires a second confirmation and does not invent undo",
+  ownerPhotoItemSrc.includes("REMOVE_JOB_PHOTO_CONFIRM") &&
+    ownerPhotoItemSrc.includes("Remove this photo? This cannot be undone.") &&
+    ownerPhotoItemSrc.includes("setConfirming(true)") &&
+    ownerPhotoItemSrc.includes("Keep photo") &&
+    ownerPhotoItemSrc.includes("deleteJobPhoto") &&
+    !ownerPhotoItemSrc.includes("Undo"),
 );
 check(
   "Missing R2 configuration returns a clear operational error",
