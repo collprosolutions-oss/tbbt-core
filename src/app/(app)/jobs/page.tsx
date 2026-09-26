@@ -564,7 +564,7 @@ export default async function JobsPage({
         estimate: { select: { total: true } },
       },
     });
-    content = <JobsListView jobs={listJobs} />;
+    content = <JobsListView jobs={listJobs} timeZone={timeZone} />;
   }
 
   const showUnscheduledPanel = view !== "list";

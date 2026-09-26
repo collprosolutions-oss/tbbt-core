@@ -286,6 +286,51 @@ check(
     !src.includes("getTimezoneOffset"),
 );
 
+console.log("\nUNIT — Appointment display surfaces share Business.timezone");
+const { parseScheduleStart } = await import("@/lib/job-schedule");
+const { formatAppointmentWhen, formatDateTime, formatTime } = await import("@/lib/format");
+const { formatZonedTimeInput } = await import("@/lib/business-timezone");
+const summerInstant = parseScheduleStart("2026-09-26", "09:00", NY);
+const workOrder = readFileSync(new URL("../src/app/(app)/jobs/[jobId]/page.tsx", import.meta.url), "utf8");
+const portal = readFileSync(new URL("../src/app/p/[token]/page.tsx", import.meta.url), "utf8");
+const fieldHome = readFileSync(new URL("../src/app/field/page.tsx", import.meta.url), "utf8");
+const fieldJob = readFileSync(new URL("../src/app/field/jobs/[jobId]/page.tsx", import.meta.url), "utf8");
+const mail = readFileSync(new URL("../src/lib/appointment-mail.ts", import.meta.url), "utf8");
+const listView = readFileSync(new URL("../src/components/schedule/jobs-list-view.tsx", import.meta.url), "utf8");
+check(
+  "Persisted summer instant is 13:00Z and every formatter shows 9:00 AM New York",
+  summerInstant?.toISOString() === "2026-09-26T13:00:00.000Z" &&
+    formatTime(summerInstant, NY) === "9:00 AM" &&
+    formatDateTime(summerInstant, NY).includes("9:00 AM") &&
+    formatAppointmentWhen(summerInstant, NY).includes("9:00 AM") &&
+    formatZonedTimeInput(summerInstant, NY) === "09:00",
+);
+check(
+  "Work Order appointment card and schedule reload bind timeZone",
+  workOrder.includes("formatDate(job.scheduledAt, timeZone)") &&
+    workOrder.includes("formatTime(job.scheduledAt, timeZone)") &&
+    workOrder.includes("formatZonedTimeInput(job.scheduledAt, timeZone)"),
+);
+check(
+  "Portal appointment display binds Business.timezone",
+  portal.includes("resolveBusinessTimeZone(job.business)") &&
+    portal.includes("formatDateTime(job.scheduledAt, timeZone)"),
+);
+check(
+  "Field home and Field job bind Business.timezone",
+  fieldHome.includes("FieldJobCard") &&
+    fieldHome.includes("timeZone={timeZone}") &&
+    fieldJob.includes("formatDateTime(job.scheduledAt, timeZone)"),
+);
+check(
+  "Customer appointment email formats with the passed business timeZone",
+  mail.includes("formatDateTime(input.scheduledAt, input.timeZone)"),
+);
+check(
+  "Jobs list view formats scheduledAt in Business.timezone",
+  listView.includes("formatTime(job.scheduledAt, timeZone)"),
+);
+
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
   console.error("DATABASE_URL must be set to run the isolation database check.");

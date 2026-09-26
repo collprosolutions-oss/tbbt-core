@@ -40,7 +40,7 @@ export type JobsListItem = {
  * SCHEDULE PAGE spec: "Preserve existing Jobs access where practical").
  * Unchanged in behavior from the original standalone Jobs page.
  */
-export function JobsListView({ jobs }: { jobs: JobsListItem[] }) {
+export function JobsListView({ jobs, timeZone }: { jobs: JobsListItem[]; timeZone: string }) {
   const unscheduled = jobs
     .filter(
       (job) =>
@@ -79,9 +79,9 @@ export function JobsListView({ jobs }: { jobs: JobsListItem[] }) {
 
   return (
     <>
-      <JobGroup title="Unscheduled" empty="No unscheduled jobs." jobs={unscheduled} />
-      <JobGroup title="Upcoming" empty="No upcoming jobs." jobs={upcoming} />
-      <JobGroup title="Completed" empty="No completed jobs." jobs={completed} />
+      <JobGroup title="Unscheduled" empty="No unscheduled jobs." jobs={unscheduled} timeZone={timeZone} />
+      <JobGroup title="Upcoming" empty="No upcoming jobs." jobs={upcoming} timeZone={timeZone} />
+      <JobGroup title="Completed" empty="No completed jobs." jobs={completed} timeZone={timeZone} />
     </>
   );
 }
@@ -90,10 +90,12 @@ function JobGroup({
   title,
   empty,
   jobs,
+  timeZone,
 }: {
   title: string;
   empty: string;
   jobs: JobsListItem[];
+  timeZone: string;
 }) {
   return (
     <section className="space-y-3">
@@ -109,7 +111,7 @@ function JobGroup({
               <CardTitle>{job.customer?.name ?? "Customer"}</CardTitle>
               <CardDescription>
                 {job.scheduledAt
-                  ? `${formatDate(job.scheduledAt)} · ${formatTime(job.scheduledAt)}${
+                  ? `${formatDate(job.scheduledAt, timeZone)} · ${formatTime(job.scheduledAt, timeZone)}${
                       job.scheduledDurationMinutes
                         ? ` · ${formatDurationMinutes(job.scheduledDurationMinutes)}`
                         : ""

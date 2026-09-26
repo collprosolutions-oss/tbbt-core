@@ -14,6 +14,7 @@ import {
   sendTransactionalEmail,
   senderFrom,
 } from "@/lib/mail";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { tenantEstimateUrl, tenantInvoiceUrl, tenantProjectUrl } from "@/lib/tenant-app-url";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -195,6 +196,7 @@ export async function attemptAutomationEmail(
         appointmentProposalId: true,
         projectToken: true,
         customer: { select: { name: true } },
+        business: { select: { timezone: true } },
       },
     });
     if (!job?.scheduledAt) return { status: "SKIPPED", failureReason: "Job has no recorded appointment time." };
@@ -223,6 +225,7 @@ export async function attemptAutomationEmail(
       serviceDescription: null,
       projectUrl: url,
       rescheduled: input.purpose === "SCHEDULE_CHANGE",
+      timeZone: resolveBusinessTimeZone(job.business),
     });
     return sendOwnedCustomerEmail(db, {
       businessId: input.businessId,

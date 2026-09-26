@@ -12,6 +12,7 @@ import {
   senderFrom,
   sendTransactionalEmail,
 } from "@/lib/mail";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { tenantProjectUrl } from "@/lib/tenant-app-url";
 
 type NotifyClient = PrismaClient | Prisma.TransactionClient;
@@ -43,7 +44,7 @@ export async function notifyCustomerAppointmentProposed(
     select: {
       id: true,
       projectToken: true,
-      business: { select: { slug: true } },
+      business: { select: { slug: true, timezone: true } },
       scheduledAt: true,
       scheduledDurationMinutes: true,
       customer: { select: { id: true, name: true, email: true } },
@@ -163,6 +164,7 @@ export async function notifyCustomerAppointmentProposed(
       tenantProjectUrl(job.business.slug, job.projectToken) ??
       `${appUrl}/p/${job.projectToken}`,
     rescheduled: input.rescheduled,
+    timeZone: resolveBusinessTimeZone(job.business),
   });
 
   const sent = await sendTransactionalEmail({

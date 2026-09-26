@@ -15,19 +15,11 @@ import {
   occupiedJobsFromSnapshot,
   type AvailabilitySnapshot,
 } from "@/lib/availability";
+import { formatISODateInTimeZone, formatZonedTimeInput } from "@/lib/business-timezone";
 import { DURATION_PRESETS, parseDurationMinutes } from "@/lib/job-schedule";
-import { formatISODate } from "@/lib/schedule";
 import { WORKFORCE_PROGRESSIONS, WORKFORCE_SKILLS, formatProgression } from "@/lib/workforce";
 
 const initialState: JobActionState = {};
-
-function pad2(value: number) {
-  return String(value).padStart(2, "0");
-}
-
-function toTimeInput(value: Date) {
-  return `${pad2(value.getHours())}:${pad2(value.getMinutes())}`;
-}
 
 export function ScheduleJobForm({
   jobId,
@@ -80,6 +72,7 @@ export function ScheduleJobForm({
       durationMinutes: durationMinutes ?? 60,
       settings: availability.settings,
       existing: occupiedJobsFromSnapshot(availability, jobId),
+      timeZone: availability.timeZone,
     });
   }, [availability, durationMinutes, jobId, now]);
 
@@ -129,7 +122,7 @@ export function ScheduleJobForm({
           <p className="font-medium">Next available</p>
           {nextAvailable ? (
             <p>
-              {formatNextAvailableDateTime(nextAvailable)}
+              {formatNextAvailableDateTime(nextAvailable, availability.timeZone)}
             </p>
           ) : now ? (
             <p className="text-muted-foreground">
@@ -144,8 +137,8 @@ export function ScheduleJobForm({
               variant="outline"
               size="sm"
               onClick={() => {
-                setDateValue(formatISODate(nextAvailable));
-                setTimeValue(toTimeInput(nextAvailable));
+                setDateValue(formatISODateInTimeZone(nextAvailable, availability.timeZone));
+                setTimeValue(formatZonedTimeInput(nextAvailable, availability.timeZone));
               }}
             >
               Use this time

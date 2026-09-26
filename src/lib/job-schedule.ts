@@ -1,3 +1,9 @@
+import {
+  isValidIanaTimeZone,
+  zonedCivilToUtc,
+  zonedDateParts,
+} from "@/lib/business-timezone";
+
 /** One scheduled work day matches the existing Full day preset. */
 export const WORK_DAY_MINUTES = 480;
 export const CUSTOM_DURATION_MAX_HOURS = 240;
@@ -66,12 +72,52 @@ export function parseDurationMinutes(
   return { ok: true, minutes: match.minutes };
 }
 
-export function parseScheduleStart(date: string, time: string) {
+/**
+ * Owner-entered civil date + clock time in `timeZone`.
+ * Host / process timezone is never used. DST spring-forward gaps
+ * (for example America/New_York 2026-03-08 02:30) reject instead of
+ * silently normalizing to the next valid local time.
+ */
+export function parseScheduleStart(date: string, time: string, timeZone: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) {
     return null;
   }
-  const start = new Date(`${date}T${time}:00`);
+  if (!isValidIanaTimeZone(timeZone)) {
+    return null;
+  }
+  const [year, month, day] = date.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    hour > 23 ||
+    minute > 59
+  ) {
+    return null;
+  }
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  if (
+    calendar.getUTCFullYear() !== year ||
+    calendar.getUTCMonth() !== month - 1 ||
+    calendar.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  const start = zonedCivilToUtc(year, month, day, hour, minute, 0, timeZone);
   if (Number.isNaN(start.getTime())) {
+    return null;
+  }
+  const parts = zonedDateParts(start, timeZone);
+  if (
+    parts.year !== year ||
+    parts.month !== month ||
+    parts.day !== day ||
+    parts.hour !== hour ||
+    parts.minute !== minute
+  ) {
     return null;
   }
   return start;

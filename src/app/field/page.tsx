@@ -112,12 +112,13 @@ export default async function FieldHomePage() {
         }))}
       />
 
-      <JobGroup title="Today" jobs={groups.today} emptyLabel="Nothing assigned for today." />
-      <JobGroup title="Upcoming" jobs={groups.upcoming} emptyLabel="No upcoming jobs assigned." />
+      <JobGroup title="Today" jobs={groups.today} emptyLabel="Nothing assigned for today." timeZone={timeZone} />
+      <JobGroup title="Upcoming" jobs={groups.upcoming} emptyLabel="No upcoming jobs assigned." timeZone={timeZone} />
       <JobGroup
         title="Completed / Recent"
         jobs={groups.completed}
         emptyLabel="No completed jobs yet."
+        timeZone={timeZone}
       />
     </div>
   );
@@ -127,10 +128,12 @@ function JobGroup({
   title,
   jobs,
   emptyLabel,
+  timeZone,
 }: {
   title: string;
   jobs: ReturnType<typeof groupFieldJobs>["today"];
   emptyLabel: string;
+  timeZone: string;
 }) {
   return (
     <section className="space-y-2">
@@ -144,7 +147,7 @@ function JobGroup({
       ) : (
         <div className="space-y-2">
           {jobs.map((job) => (
-            <FieldJobCard key={job.id} job={job} />
+            <FieldJobCard key={job.id} job={job} timeZone={timeZone} />
           ))}
         </div>
       )}

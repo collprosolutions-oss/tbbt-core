@@ -37,8 +37,8 @@ export function formatTime(value: Date, timeZone?: string) {
   });
 }
 
-export function formatAppointmentWhen(value: Date) {
-  return `${formatDate(value)} at ${formatTime(value)}`;
+export function formatAppointmentWhen(value: Date, timeZone?: string) {
+  return `${formatDate(value, timeZone)} at ${formatTime(value, timeZone)}`;
 }
 
 export function formatAddress(property: {
