@@ -21,6 +21,7 @@ import {
   LEGAL_NOT_AUTHORITY_MESSAGE,
   NO_FAKE_ESIGN_MESSAGE,
   NO_STATE_CLAUSE_MESSAGE,
+  businessCalendarDate,
   classifyExpiry,
   DATED_VAULT_CATEGORIES,
   EXPIRING_SOON_DAYS,
@@ -49,6 +50,7 @@ import {
   resolveEsignProviderStatus,
   type EsignProviderStatus,
 } from "@/lib/business-protection-esign";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import type { CanonicalRecommendationCatalog } from "@/lib/chief-of-staff/recommendations";
 import {
   recordBusinessProtectionProjectionLoad,
@@ -458,6 +460,7 @@ const vaultSelect = {
   recordStatus: true,
   effectiveOn: true,
   expiresOn: true,
+  renewalLeadDays: true,
 } as const;
 
 const agreementSelect = {
@@ -496,13 +499,21 @@ function projectVault(
     recordStatus: string;
     effectiveOn: string | null;
     expiresOn: string | null;
+    renewalLeadDays?: number | null;
   },
   now: Date,
   targeted: boolean,
+  timeZone: string,
 ): VaultRecordProjection {
   const category = isVaultCategory(row.category) ? row.category : "OTHER";
   const recordStatus = isVaultRecordStatus(row.recordStatus) ? row.recordStatus : "ACTIVE";
-  const expiryState = classifyExpiry({ category, expiresOn: row.expiresOn, now });
+  const expiryState = classifyExpiry({
+    category,
+    expiresOn: row.expiresOn,
+    renewalLeadDays: row.renewalLeadDays,
+    now,
+    timeZone,
+  });
   return {
     id: row.id,
     businessId: row.businessId,
@@ -577,9 +588,14 @@ export async function loadBusinessProtectionProjection(input: {
   }
 
   const now = input.now ?? new Date();
-  const today = utcCalendarDate(now);
-  const soonEnd = addUtcDays(today, EXPIRING_SOON_DAYS);
   const businessId = input.access.businessId;
+  const business = await input.db.business.findUnique({
+    where: { id: businessId },
+    select: { timezone: true },
+  });
+  const timeZone = resolveBusinessTimeZone(business);
+  const today = businessCalendarDate(now, timeZone);
+  const soonEnd = addUtcDays(today, EXPIRING_SOON_DAYS);
   const targets = await resolveTargets(input.db, businessId, input.entityHints);
 
   const failClosed =
@@ -852,7 +868,7 @@ export async function loadBusinessProtectionProjection(input: {
   );
 
   const vaultRecords = vaultRows.map((row) =>
-    projectVault(row, now, Boolean(targets.vaultRecordId && row.id === targets.vaultRecordId)),
+    projectVault(row, now, Boolean(targets.vaultRecordId && row.id === targets.vaultRecordId), timeZone),
   );
   const agreements = agreementRows.map((row) =>
     projectAgreement(row, Boolean(targets.agreementId && row.id === targets.agreementId)),
@@ -940,7 +956,10 @@ export async function loadBusinessProtectionProjection(input: {
 }
 
 function describeVault(row: VaultRecordProjection) {
-  return `"${row.title}" [${row.category} / ${row.recordStatus} / ${row.expiryState}${row.expiresOn ? ` / recorded date ${row.expiresOn}` : ""}]`;
+  const recordedDate = row.expiresOn
+    ? `${row.title} has an expiration date of ${row.expiresOn}`
+    : `${row.title} has no expiration recorded`;
+  return `"${row.title}" [${row.category} / ${row.recordStatus} / ${row.expiryState}${row.expiresOn ? ` / recorded date ${row.expiresOn}` : ""}] — ${recordedDate}`;
 }
 
 function describeAgreement(row: AgreementProjection) {

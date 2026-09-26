@@ -22,6 +22,7 @@ import {
   EXTERNAL_SIGNATURE_NO_FILE_NOTE,
   OWNER_REVIEW_REQUIRES_OWNER_MESSAGE,
   parseOptionalCalendarDate,
+  parseOptionalRenewalLeadDays,
   READY_WITHOUT_SENT_COMPLETION_NOTE,
   UPLOADED_SIGNED_DOCUMENT_NOTE,
   isVaultCategory,
@@ -33,6 +34,7 @@ import {
   type ExpiryState,
   type VaultCategory,
 } from "@/lib/business-protection";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   awaitingActionStatuses,
   buildAgreementDraft,
@@ -85,6 +87,9 @@ export function businessProtectionErrorMessage(error: unknown, fallback: string)
   if (error instanceof Error && error.message === "Use a valid YYYY-MM-DD date.") {
     return error.message;
   }
+  if (error instanceof Error && error.message === "Enter a renewal lead time of 0 to 365 days.") {
+    return error.message;
+  }
   return fallback;
 }
 
@@ -107,6 +112,14 @@ function requireOwnerForOwnerReview(access: BusinessAccess) {
     throw new BusinessProtectionError(OWNER_REVIEW_REQUIRES_OWNER_MESSAGE);
   }
   requireBusinessRole(access, "OWNER");
+}
+
+async function vaultClassificationClock(db: Db, businessId: string, now = new Date()) {
+  const business = await db.business.findUnique({
+    where: { id: businessId },
+    select: { timezone: true },
+  });
+  return { now, timeZone: resolveBusinessTimeZone(business) };
 }
 
 function uniqueConflict(error: unknown) {
@@ -255,15 +268,24 @@ async function requireOwnedAgreement(db: Db, access: BusinessAccess, agreementId
 export async function persistExpiryState(
   db: Db,
   access: BusinessAccess,
-  record: { id: string; category: string; expiresOn: string | null; persistedExpiryState: string | null },
+  record: {
+    id: string;
+    category: string;
+    expiresOn: string | null;
+    persistedExpiryState: string | null;
+    renewalLeadDays?: number | null;
+  },
   now = new Date(),
 ) {
   requireProtection(access);
   if (!isVaultCategory(record.category)) return record.persistedExpiryState;
+  const clock = await vaultClassificationClock(db, access.businessId, now);
   const next = classifyExpiry({
     category: record.category,
     expiresOn: record.expiresOn,
-    now,
+    renewalLeadDays: record.renewalLeadDays,
+    now: clock.now,
+    timeZone: clock.timeZone,
   });
   if (record.persistedExpiryState === next) return next;
   await db.businessVaultRecord.update({
@@ -291,6 +313,7 @@ export async function createVaultRecord(
     counterparty?: string;
     effectiveOn?: string;
     expiresOn?: string;
+    renewalLeadDays?: string | number | null;
     notes?: string;
     storedAssetId?: string;
     now?: Date;
@@ -305,10 +328,19 @@ export async function createVaultRecord(
   const storedAssetId = await assertPrivateVaultAsset(db, access, input.storedAssetId);
   const expiresOn = parseOptionalCalendarDate(input.expiresOn);
   const effectiveOn = parseOptionalCalendarDate(input.effectiveOn);
+  let renewalLeadDays: number | null;
+  try {
+    renewalLeadDays = parseOptionalRenewalLeadDays(input.renewalLeadDays);
+  } catch (error) {
+    throw new BusinessProtectionError(error instanceof Error ? error.message : "Enter a renewal lead time of 0 to 365 days.");
+  }
+  const clock = await vaultClassificationClock(db, access.businessId, input.now ?? new Date());
   const expiry = classifyExpiry({
     category: input.category,
     expiresOn,
-    now: input.now ?? new Date(),
+    renewalLeadDays,
+    now: clock.now,
+    timeZone: clock.timeZone,
   });
   const record = await db.businessVaultRecord.create({
     data: {
@@ -319,6 +351,7 @@ export async function createVaultRecord(
       counterparty: input.counterparty?.trim() || null,
       effectiveOn,
       expiresOn,
+      renewalLeadDays,
       notes: input.notes?.trim() || null,
       storedAssetId,
       recordStatus: "ACTIVE",
@@ -348,6 +381,7 @@ export async function updateVaultRecord(
     counterparty?: string | null;
     effectiveOn?: string | null;
     expiresOn?: string | null;
+    renewalLeadDays?: string | number | null;
     notes?: string | null;
     recordStatus?: string;
     storedAssetId?: string | null;
@@ -376,12 +410,25 @@ export async function updateVaultRecord(
     input.effectiveOn === undefined
       ? existing.effectiveOn
       : parseOptionalCalendarDate(input.effectiveOn);
+  let renewalLeadDays = existing.renewalLeadDays;
+  if (input.renewalLeadDays !== undefined) {
+    try {
+      renewalLeadDays = parseOptionalRenewalLeadDays(input.renewalLeadDays);
+    } catch (error) {
+      throw new BusinessProtectionError(
+        error instanceof Error ? error.message : "Enter a renewal lead time of 0 to 365 days.",
+      );
+    }
+  }
   const title = input.title?.trim() || existing.title;
   if (!title) throw new BusinessProtectionError("Enter a title.");
+  const clock = await vaultClassificationClock(db, access.businessId, input.now ?? new Date());
   const expiry = classifyExpiry({
     category,
     expiresOn,
-    now: input.now ?? new Date(),
+    renewalLeadDays,
+    now: clock.now,
+    timeZone: clock.timeZone,
   });
   const updated = await db.businessVaultRecord.update({
     where: { id: existing.id },
@@ -395,6 +442,7 @@ export async function updateVaultRecord(
           : input.counterparty?.trim() || null,
       effectiveOn,
       expiresOn,
+      renewalLeadDays,
       notes: input.notes === undefined ? existing.notes : input.notes?.trim() || null,
       recordStatus,
       storedAssetId,
@@ -1211,6 +1259,7 @@ export async function completeAgreementExternally(
         ? `${agreement.title} (uploaded signed document)`
         : `${agreement.title} (external signature recorded)`;
 
+    const clock = await vaultClassificationClock(tx, access.businessId, now);
     const vault = await tx.businessVaultRecord.create({
       data: {
         businessId: access.businessId,
@@ -1225,7 +1274,8 @@ export async function completeAgreementExternally(
         persistedExpiryState: classifyExpiry({
           category: vaultCategoryForAgreement(agreement.agreementType),
           expiresOn: agreement.expiresOn,
-          now,
+          now: clock.now,
+          timeZone: clock.timeZone,
         }),
         createdByMembershipId: membershipId(access),
         updatedByMembershipId: membershipId(access),
