@@ -169,7 +169,7 @@ check(
   "Field completion uses the canonical time-safety helper and still does not send the owner invoice",
   fieldJobActionsSrc.includes("completeJobWithRunningTimeSafety") &&
     fieldJobActionsSrc.includes("requireAssignedJobOperating") &&
-    !fieldJobActionsSrc.includes("completeJobAndSendInvoice") &&
+    !fieldJobActionsSrc.includes('from "@/lib/complete-job-invoice"') &&
     !fieldJobActionsSrc.includes("persistDraftInvoiceFromCompletedJob"),
 );
 check(
