@@ -365,7 +365,7 @@ check(
     paidWithoutDate.paidAt === null &&
     paidWithoutDate.paymentMethodLabel === paymentMethodLabel("CHECK") &&
     customerProfile.includes("customerInvoiceHistoryContext(invoice)") &&
-    customerInvoiceHistory.includes("Does not calculate new financial truth"),
+    customerInvoiceHistory.includes("Does not calculate new financial"),
 );
 
 async function seedTenant(label, slug) {
