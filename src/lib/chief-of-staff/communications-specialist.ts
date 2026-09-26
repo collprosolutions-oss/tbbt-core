@@ -793,6 +793,7 @@ export async function loadCommunicationsProjection(input: {
       appointmentProposalId: true,
       appointmentConfirmedForProposalId: true,
       appointmentConfirmationSource: true,
+      appointmentChangeRequestNote: true,
       appointmentNotificationStatus: true,
       propertyAccessMethod: true,
       propertyAccessInstructions: true,

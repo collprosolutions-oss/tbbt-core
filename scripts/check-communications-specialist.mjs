@@ -341,6 +341,22 @@ try {
       !specialistSrc.includes("runChiefOfStaffCoach"),
   );
   check("No Prisma schema change is required", schemaSrc.includes("model CustomerCommunication") && schemaSrc.includes("smsConsentStatus"));
+  check(
+    "Job select loads appointmentChangeRequestNote for canonical helpers",
+    specialistSrc.includes("appointmentChangeRequestNote: true") &&
+      specialistSrc.includes("hasPendingAppointmentChangeRequest") &&
+      specialistSrc.includes("effectiveAppointmentConfirmationStatus"),
+  );
+  check(
+    "appointmentChangeRequestNote remains forbidden from the Communications projection",
+    specialistSrc.includes('"appointmentChangeRequestNote"') &&
+      communicationsProjectionHasForbiddenFields({ appointmentChangeRequestNote: "must-not-project" }),
+  );
+  check(
+    "Projected appointment mapping does not pass the note through",
+    /return \{\s*jobId: row\.id,[\s\S]*scheduledAt: row\.scheduledAt/.test(specialistSrc) &&
+      !/return \{\s*jobId: row\.id,[\s\S]*appointmentChangeRequestNote/.test(specialistSrc),
+  );
   check("Max fan-out remains 4", MAX_SPECIALIST_FANOUT === 4);
   check("Recursion depth remains 1", MAX_RECURSION_DEPTH === 1);
   check("Phone number does not imply GRANTED", phoneDoesNotGrantConsent(true, "UNKNOWN") === "UNKNOWN");
@@ -721,6 +737,91 @@ try {
       projectionIsClosed(mixedForeignRequestOwnedJob.projection),
   );
 
+  const mixedCustomerJob = await runMixedHints({
+    customerId: seededA.granted.id,
+    jobId: jobB.id,
+  });
+  check(
+    "Same-tenant customer A + customer B job fails closed",
+    mixedCustomerJob.result.status === "OK" &&
+      mixedCustomerJob.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedCustomerJob.projection) &&
+      !mixedCustomerJob.projection.customers.some((row) => row.id === seededA.granted.id || row.id === seededA.revoked.id) &&
+      !mixedCustomerJob.projection.appointments.some((row) => row.jobId === seededA.job.id || row.jobId === jobB.id) &&
+      !mixedCustomerJob.projection.messages.some((row) => row.id === seededA.failedSms.id),
+  );
+  check(
+    "Same-tenant customer/job mismatch does not fall back to customer A history",
+    limitationIsTargetConsistency(mixedCustomerJob.result, mixedSecrets),
+  );
+
+  const mixedCustomerRequest = await runMixedHints({
+    customerId: seededA.granted.id,
+    requestId: requestB.id,
+  });
+  check(
+    "Same-tenant customer A + customer B request fails closed",
+    mixedCustomerRequest.result.status === "OK" &&
+      mixedCustomerRequest.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedCustomerRequest.projection) &&
+      !mixedCustomerRequest.projection.customers.some((row) => row.id === seededA.granted.id || row.id === seededA.revoked.id) &&
+      !mixedCustomerRequest.projection.messages.some((row) => row.id === seededA.failedSms.id),
+  );
+  check(
+    "Same-tenant customer/request mismatch does not fall back to customer A history",
+    limitationIsTargetConsistency(mixedCustomerRequest.result, mixedSecrets),
+  );
+
+  const mixedCustomerForeignMessage = await runMixedHints({
+    customerId: seededA.granted.id,
+    messageId: seededB.failedSms.id,
+  });
+  check(
+    "Local customer A + foreign message fails the entire targeted projection closed",
+    mixedCustomerForeignMessage.result.status === "OK" &&
+      mixedCustomerForeignMessage.projection.targetedMessageUnauthorized === true &&
+      mixedCustomerForeignMessage.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedCustomerForeignMessage.projection) &&
+      !mixedCustomerForeignMessage.projection.customers.some((row) => row.id === seededA.granted.id || row.id === seededB.granted.id) &&
+      !mixedCustomerForeignMessage.projection.messages.some((row) => row.id === seededA.failedSms.id || row.id === seededB.failedSms.id) &&
+      !JSON.stringify(mixedCustomerForeignMessage.projection).includes(seededB.failedSms.id) &&
+      !JSON.stringify(mixedCustomerForeignMessage.projection).includes(seededB.granted.id),
+  );
+  check(
+    "Local customer + foreign message does not fall back to customer A history",
+    limitationIsTargetConsistency(mixedCustomerForeignMessage.result, mixedSecrets),
+  );
+
+  const mixedCustomerForeignJob = await runMixedHints({
+    customerId: seededA.granted.id,
+    jobId: seededB.job.id,
+  });
+  check(
+    "Local customer A + foreign job fails closed",
+    mixedCustomerForeignJob.projection.targetedJobUnauthorized === true &&
+      mixedCustomerForeignJob.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedCustomerForeignJob.projection) &&
+      !mixedCustomerForeignJob.projection.appointments.some((row) => row.jobId === seededA.job.id || row.jobId === seededB.job.id) &&
+      !JSON.stringify(mixedCustomerForeignJob.projection).includes(seededB.job.id),
+  );
+  check(
+    "Local customer + foreign job does not fall back to customer A history",
+    limitationIsTargetConsistency(mixedCustomerForeignJob.result, mixedSecrets),
+  );
+
+  const mixedCustomerForeignRequest = await runMixedHints({
+    customerId: seededA.granted.id,
+    requestId: seededB.request.id,
+  });
+  check(
+    "Local customer A + foreign request fails closed",
+    mixedCustomerForeignRequest.projection.targetedRequestUnauthorized === true &&
+      mixedCustomerForeignRequest.projection.targetedEntityMismatch === true &&
+      projectionIsClosed(mixedCustomerForeignRequest.projection) &&
+      !mixedCustomerForeignRequest.projection.customers.some((row) => row.id === seededA.granted.id) &&
+      !JSON.stringify(mixedCustomerForeignRequest.projection).includes(seededB.request.id),
+  );
+
   resetLoads();
   const consistentMulti = await runCommunicationsSpecialist({
     db: prisma,
@@ -768,6 +869,101 @@ try {
       specialistSrc.includes("{ id: pinnedMessageId, businessId, customerId: scopedCustomerId }"),
   );
   check("Target consistency limitation is owner-facing and generic", TARGET_CONSISTENCY_LIMITATION.includes("one consistent owned customer context"));
+  check(
+    "Consistent same-tenant hints never project a foreign record",
+    !JSON.stringify(consistentProjection).includes(seededB.granted.id) &&
+      !JSON.stringify(consistentProjection).includes(seededB.request.id) &&
+      !JSON.stringify(consistentProjection).includes(seededB.job.id) &&
+      !JSON.stringify(consistentProjection).includes(seededB.failedSms.id) &&
+      !JSON.stringify(consistentProjection).includes("BetaSecretCustomer") &&
+      !JSON.stringify(consistentProjection).includes("secret-beta@example.com"),
+  );
+  check(
+    "Contradictory targeting never opens an unscoped whole-customer view",
+    [
+      mixedCustomerMessage,
+      mixedCustomerJob,
+      mixedCustomerRequest,
+      mixedCustomerForeignMessage,
+      mixedCustomerForeignJob,
+      mixedCustomerForeignRequest,
+      mixedForeignOwned,
+    ].every((row) => projectionIsClosed(row.projection) && row.projection.totals.messages === 0 && row.projection.totals.customers === 0),
+  );
+
+  console.log("\nAPPOINTMENT — canonical note fallback is classified; note stays forbidden");
+  const NOTE_FALLBACK_SECRET = `NOTEFALLBACK_SECRET_PleaseMoveToTuesdayMorning_${randomUUID()}`;
+  const noteCustomer = await prisma.customer.create({
+    data: {
+      businessId: tenantA.business.id,
+      name: "Note Fallback Customer",
+      email: "note-fallback@example.com",
+      phone: "5551212000",
+      smsConsentStatus: "UNKNOWN",
+    },
+  });
+  const noteJob = await prisma.job.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: noteCustomer.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date(),
+      projectToken: randomUUID(),
+      appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+      appointmentProposalId: 1,
+      appointmentConfirmedForProposalId: null,
+      appointmentChangeRequestNote: NOTE_FALLBACK_SECRET,
+    },
+  });
+
+  resetLoads();
+  const noteResult = await runCommunicationsSpecialist({
+    db: prisma,
+    access: tenantA.access,
+    catalog: emptyCatalog(),
+    question: "What did we send about this appointment?",
+    entityHints: { jobId: noteJob.id },
+  });
+  const noteProjection = getLastCommunicationsProjection();
+  const noteAppointment = noteProjection.appointments.find((row) => row.jobId === noteJob.id);
+  check(
+    "Note-only pending change is classified as a different-time request",
+    noteResult.status === "OK" &&
+      noteJob.appointmentConfirmationStatus !== "DIFFERENT_TIME_REQUESTED" &&
+      noteAppointment?.differentTimeRequested === true &&
+      noteAppointment?.confirmationStatus === "DIFFERENT_TIME_REQUESTED" &&
+      noteAppointment?.awaitingCustomer === false &&
+      noteProjection.totals.differentTimeAppointments >= 1 &&
+      noteResult.findings.some((row) => row.key === "communications-appointment-different-time"),
+  );
+  check(
+    "Note-only job is not treated as awaiting confirmation",
+    noteAppointment?.confirmationStatus !== "AWAITING_CUSTOMER" &&
+      !noteResult.findings.some((row) => row.key === "communications-awaiting-appointment"),
+  );
+  const noteLeakSurfaces = [JSON.stringify(noteProjection), JSON.stringify(noteResult)].join("\n");
+  check(
+    "appointmentChangeRequestNote is never projected or summarized",
+    Boolean(noteAppointment) &&
+      !Object.keys(noteAppointment).includes("appointmentChangeRequestNote") &&
+      !noteLeakSurfaces.includes("appointmentChangeRequestNote") &&
+      !noteLeakSurfaces.includes(NOTE_FALLBACK_SECRET) &&
+      !communicationsProjectionHasForbiddenFields(noteProjection),
+  );
+
+  resetLoads();
+  const noteCoach = await runChiefOfStaffCoach(prisma, tenantA.access, {
+    question: "What did we send about this appointment?",
+    attemptId: randomUUID(),
+    entityHints: { jobId: noteJob.id },
+  });
+  check(
+    "Coach output never includes the appointment change-request note",
+    Boolean(noteCoach.text) &&
+      !(noteCoach.text ?? "").includes(NOTE_FALLBACK_SECRET) &&
+      !JSON.stringify(noteCoach).includes(NOTE_FALLBACK_SECRET) &&
+      !JSON.stringify(noteCoach).includes("appointmentChangeRequestNote"),
+  );
 
   console.log("\nCONSENT — GRANTED / REVOKED / UNKNOWN stay distinct");
   resetLoads();
