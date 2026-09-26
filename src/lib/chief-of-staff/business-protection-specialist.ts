@@ -590,7 +590,9 @@ export async function loadBusinessProtectionProjection(input: {
   const loadRows = !failClosed && (scoped || !targets.scoped);
   const loadVaultScope = Boolean(loadRows && (!scoped || targets.vaultRecordId));
   const loadAgreementScope = Boolean(loadRows && (!scoped || targets.agreementId));
-  const loadChecklist = loadVaultScope;
+  // Organization checklist is business-wide. A target-scoped Vault subset
+  // must not be reinterpreted as missing checklist categories.
+  const loadChecklist = Boolean(loadRows && !scoped);
 
   const vaultWhere: Prisma.BusinessVaultRecordWhereInput = { businessId };
   const agreementWhere: Prisma.BusinessAgreementWhereInput = { businessId };

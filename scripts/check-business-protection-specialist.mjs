@@ -722,6 +722,15 @@ try {
   check("Canonically related same-tenant targets combine", relatedTargets.status === "OK" && relatedProjection.canReadDeep);
   check("Related target keeps the vault", relatedProjection.vaultRecords.some((row) => row.id === seededA.insurance.id));
   check("Related target keeps the agreement", relatedProjection.agreements.some((row) => row.id === seededA.related.id));
+  check(
+    "Related vault+agreement target does not load organization-wide checklist",
+    relatedProjection.checklistAvailable === false &&
+      relatedProjection.checklist.length === 0 &&
+      relatedProjection.totals.checklistMet == null &&
+      relatedProjection.totals.checklistMissing == null &&
+      !relatedTargets.findings.some((row) => row.key === "protection-checklist-organization") &&
+      !relatedTargets.factKeys.includes("protection-checklist-met-count"),
+  );
 
   console.log("\nBOUNDS — projection caps, private-field exclusion, recorded-truth states");
   resetLoads();
@@ -948,6 +957,98 @@ try {
   );
   check("Agreement-only Coach may still report e-sign", /NOT_CONNECTED|No e-sign provider is connected/i.test(draftCoach.text ?? ""));
   check("Agreement-only Coach does not include tenant B data", !/BetaSecret|Beta Protection/i.test(draftCoach.text ?? ""));
+
+  resetLoads();
+  const vaultOnly = await runBusinessProtectionSpecialist({
+    db: prisma,
+    access: tenantA.access,
+    catalog: emptyCatalog(),
+    question: "What is the status of this insurance record?",
+    entityHints: { vaultRecordId: seededA.insurance.id },
+    now: NOW,
+  });
+  const vaultOnlyProjection = getLastBusinessProtectionProjection();
+  check(
+    "Vault-only target keeps the owned Vault record",
+    vaultOnly.status === "OK" &&
+      vaultOnlyProjection.vaultRecords.some((row) => row.id === seededA.insurance.id) &&
+      vaultOnlyProjection.vaultRecords.length === 1,
+  );
+  check(
+    "Vault-only target does not load unrelated Vault records",
+    !vaultOnlyProjection.vaultRecords.some((row) => row.id !== seededA.insurance.id) &&
+      !vaultOnlyProjection.vaultRecords.some((row) =>
+        /expired license|current warranty|license missing date|articles of organization|overflow vault/i.test(row.title),
+      ),
+  );
+  check(
+    "Vault-only target does not load organization-wide checklist",
+    vaultOnlyProjection.checklistAvailable === false &&
+      Array.isArray(vaultOnlyProjection.checklist) &&
+      vaultOnlyProjection.checklist.length === 0 &&
+      vaultOnlyProjection.totals.checklistMet == null &&
+      vaultOnlyProjection.totals.checklistMissing == null,
+  );
+  check(
+    "Vault-only target emits no checklist fact or finding",
+    !vaultOnly.findings.some((row) => row.key === "protection-checklist-organization") &&
+      !vaultOnly.factKeys.includes("protection-checklist-met-count") &&
+      !/no recorded match|0 organization checklist|0 checklist categories/i.test(JSON.stringify(vaultOnly.findings)),
+  );
+  check("Vault-only target still reports e-sign provider state", vaultOnlyProjection.esign.providerStatus === "NOT_CONNECTED");
+
+  resetLoads();
+  const vaultOnlyCoach = await runChiefOfStaffCoach(prisma, tenantA.access, {
+    question: "What is the status of this insurance record? Is e-sign connected?",
+    attemptId: randomUUID(),
+    entityHints: { vaultRecordId: seededA.insurance.id },
+    browserBusinessId: tenantB.business.id,
+  });
+  check("Vault-only Coach names the targeted Vault record", /Alpha GL insurance/i.test(vaultOnlyCoach.text ?? ""));
+  check(
+    "Vault-only Coach does not name unrelated Vault titles",
+    !/Alpha expired license|Alpha current warranty|Alpha license missing date|Alpha articles of organization|overflow vault/i.test(
+      vaultOnlyCoach.text ?? "",
+    ),
+  );
+  check(
+    "Vault-only Coach does not claim other checklist categories are missing",
+    !/no recorded match|Checklist categories with no recorded match|0 organization checklist|0 checklist categories/i.test(
+      vaultOnlyCoach.text ?? "",
+    ) && !/organization checklist .*recorded match/i.test(vaultOnlyCoach.text ?? ""),
+  );
+  check("Vault-only Coach may still report e-sign", /NOT_CONNECTED|No e-sign provider is connected/i.test(vaultOnlyCoach.text ?? ""));
+  check("Vault-only Coach does not include tenant B data", !/BetaSecret|Beta Protection/i.test(vaultOnlyCoach.text ?? ""));
+
+  resetLoads();
+  const unscopedChecklist = await runBusinessProtectionSpecialist({
+    db: prisma,
+    access: tenantA.access,
+    catalog: emptyCatalog(),
+    question: "What does my protection checklist show?",
+    now: NOW,
+  });
+  const unscopedChecklistProjection = getLastBusinessProtectionProjection();
+  check(
+    "Unscoped checklist question loads the true business-wide checklist",
+    unscopedChecklist.status === "OK" &&
+      unscopedChecklistProjection.checklistAvailable === true &&
+      unscopedChecklistProjection.checklist.length > 0 &&
+      unscopedChecklistProjection.totals.checklistMet != null &&
+      unscopedChecklistProjection.totals.checklistMet > 0 &&
+      unscopedChecklist.findings.some((row) => row.key === "protection-checklist-organization") &&
+      unscopedChecklist.factKeys.includes("protection-checklist-met-count"),
+  );
+  resetLoads();
+  const unscopedChecklistCoach = await runChiefOfStaffCoach(prisma, tenantA.access, {
+    question: "What does my protection checklist show?",
+    attemptId: randomUUID(),
+  });
+  check(
+    "Unscoped Coach checklist question reports recorded organization checklist presence",
+    /organization checklist/i.test(unscopedChecklistCoach.text ?? "") &&
+      /recorded presence|recorded match|organization checklist/i.test(unscopedChecklistCoach.text ?? ""),
+  );
 
   resetLoads();
   const genericCoach = await runChiefOfStaffCoach(prisma, tenantA.access, {
