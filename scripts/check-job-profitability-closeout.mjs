@@ -392,6 +392,93 @@ try {
   );
   check("5. Reverse line order still uses Version 1", reversePinned?.sold.estimatedLaborLineTotal === 600 && reversePinned?.sold.estimatedMaterialLineTotal === 300);
 
+  const liveDraftAfterPin = buildJobProfitabilityCloseout(
+    closeoutInput({
+      estimates: [
+        { id: "est-1", businessId: "biz-a", status: "DRAFT", total: 5000, createdAt: now, customerId: "c1", serviceRequestId: null },
+      ],
+      estimateLines: [
+        ...versionOneLines,
+        { estimateId: "est-1", type: "LABOR", quantity: 1, total: 9999, fromApprovedVersion: false },
+      ],
+    }),
+  );
+  check(
+    "Pinned version is used after the live estimate returns to DRAFT",
+    liveDraftAfterPin?.sold.approvedEstimateTotal === 1000 &&
+      liveDraftAfterPin?.sold.estimatedLaborLineTotal === 600 &&
+      liveDraftAfterPin?.sold.estimatedMaterialLineTotal === 300 &&
+      liveDraftAfterPin?.sold.estimatedOtherLineTotal === 100 &&
+      liveDraftAfterPin?.sold.usedDraftOrSentAsApproved === false &&
+      liveDraftAfterPin?.coverage.estimate === "Complete",
+  );
+  const liveSentAfterPin = buildJobProfitabilityCloseout(
+    closeoutInput({
+      estimates: [
+        { id: "est-1", businessId: "biz-a", status: "SENT", total: 4000, createdAt: now, customerId: "c1", serviceRequestId: null },
+      ],
+      estimateLines: [
+        ...versionOneLines,
+        { estimateId: "est-1", type: "LABOR", quantity: 1, total: 8888, fromApprovedVersion: false },
+      ],
+    }),
+  );
+  check(
+    "Pinned version is used after the live estimate becomes SENT",
+    liveSentAfterPin?.sold.approvedEstimateTotal === 1000 &&
+      liveSentAfterPin?.sold.estimatedLaborLineTotal === 600 &&
+      liveSentAfterPin?.sold.usedDraftOrSentAsApproved === false &&
+      liveSentAfterPin?.coverage.estimate === "Complete",
+  );
+  const pinnedThroughSent = isolateApprovedEstimate(
+    [{ id: "est-1", businessId: "biz-a", status: "SENT", total: 4000, createdAt: now, customerId: "c1", serviceRequestId: null }],
+    "biz-a",
+    "est-1",
+    "ver-1",
+  );
+  const pinnedSentLines = isolateApprovedEstimateLines(
+    [...versionOneLines, { estimateId: "est-1", type: "LABOR", quantity: 1, total: 8888, fromApprovedVersion: false }],
+    pinnedThroughSent,
+    "ver-1",
+  );
+  check(
+    "Pin keeps Version 1 lines when the live estimate is SENT",
+    pinnedThroughSent?.status === "SENT" &&
+      pinnedSentLines.length === 3 &&
+      pinnedSentLines.every((line) => line.estimateVersionId === "ver-1") &&
+      pinnedSentLines.reduce((sum, line) => sum + line.total, 0) === 1000,
+  );
+
+  const cappedPinnedLines = Array.from({ length: CLOSEOUT_READ_BOUND }, (_, index) => ({
+    estimateId: "est-1",
+    type: index % 2 === 0 ? "LABOR" : "MATERIAL",
+    quantity: 1,
+    total: 1,
+    fromApprovedVersion: true,
+    estimateVersionId: "ver-1",
+  }));
+  const cappedPinned = buildJobProfitabilityCloseout(
+    closeoutInput({
+      estimateLines: cappedPinnedLines,
+      readsTruncated: true,
+    }),
+  );
+  check(
+    "Pinned-version 200-row cap marks the read truncated",
+    cappedPinned?.readsTruncated === true &&
+      dataSrc.includes("approvedVersionLines.length >= CLOSEOUT_READ_BOUND"),
+  );
+  check(
+    "Pinned-version 200-row cap makes coverage Partial",
+    cappedPinned?.coverage.estimate === "Partial" &&
+      cappedPinned?.coverage.laborCost === "Partial" &&
+      cappedPinned?.coverageComplete === false,
+  );
+  check(
+    "Pinned-version 200-row cap does not claim full profit",
+    cappedPinned?.profitability.available === false && cappedPinned?.profitability.grossProfit === null,
+  );
+
   console.log("\nSTATIC — Same-job billing and foreign isolation");
   const billed = buildJobProfitabilityCloseout(
     closeoutInput({
@@ -594,7 +681,12 @@ try {
   const foreignJob = buildJobProfitabilityCloseout(closeoutInput({ job: { ...closeoutInput().job, businessId: "biz-b" } }));
   check("Foreign job id / tenant mismatch fails closed", foreignJob === null);
   check("Missing job fails closed", buildJobProfitabilityCloseout(closeoutInput({ job: null })) === null);
-  check("Closeout read bound is deterministic", CLOSEOUT_READ_BOUND === 200 && dataSrc.includes("CLOSEOUT_READ_BOUND"));
+  check(
+    "Closeout read bound is deterministic",
+    CLOSEOUT_READ_BOUND === 200 &&
+      dataSrc.includes("CLOSEOUT_READ_BOUND") &&
+      dataSrc.includes("approvedVersionLines.length >= CLOSEOUT_READ_BOUND"),
+  );
 
   console.log("\nDB — Tenant-scoped loader");
   const ownerUser = await prisma.user.create({
@@ -940,6 +1032,92 @@ try {
   check("11. DB missing labor cost is not recorded", missingCost?.actualWork.laborCost.amount === null && missingCost?.actualWork.laborCost.message === LABOR_COST_NOT_RECORDED_MESSAGE);
   check("12. DB missing material cost is not $0", missingCost?.actualWork.materialCost.amount === null);
   check("13. DB incomplete coverage has no full-profit number", missingCost?.profitability.available === false && missingCost?.profitability.grossProfit === null);
+
+  await prisma.estimate.update({
+    where: { id: estimateA.id },
+    data: { status: "DRAFT", total: new Prisma.Decimal(9999) },
+  });
+  const afterDraft = await loadJobProfitabilityCloseout(prisma, ownerA, jobA.id);
+  check(
+    "DB pin survives live estimate returning to DRAFT",
+    afterDraft?.sold.approvedEstimateTotal === 1000 &&
+      afterDraft?.sold.estimatedLaborLineTotal === 600 &&
+      afterDraft?.sold.estimatedMaterialLineTotal === 300 &&
+      afterDraft?.sold.estimatedOtherLineTotal === 100 &&
+      afterDraft?.sold.usedDraftOrSentAsApproved === false &&
+      afterDraft?.coverage.estimate === "Complete",
+  );
+  await prisma.estimate.update({
+    where: { id: estimateA.id },
+    data: { status: "SENT", total: new Prisma.Decimal(8888) },
+  });
+  const afterSent = await loadJobProfitabilityCloseout(prisma, ownerA, jobA.id);
+  check(
+    "DB pin survives live estimate becoming SENT",
+    afterSent?.sold.approvedEstimateTotal === 1000 &&
+      afterSent?.sold.estimatedLaborLineTotal === 600 &&
+      afterSent?.sold.usedDraftOrSentAsApproved === false &&
+      afterSent?.coverage.estimate === "Complete",
+  );
+
+  const cappedEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "APPROVED",
+      total: new Prisma.Decimal(CLOSEOUT_READ_BOUND),
+      publicToken: randomUUID(),
+    },
+  });
+  const cappedVersion = await prisma.estimateVersion.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: cappedEstimate.id,
+      versionNumber: 1,
+      total: new Prisma.Decimal(CLOSEOUT_READ_BOUND),
+      laborMinimumWaived: false,
+      laborMinimumAdjustment: 0,
+      approvedAt: now,
+    },
+  });
+  await prisma.estimateVersionLineItem.createMany({
+    data: Array.from({ length: CLOSEOUT_READ_BOUND }, (_, index) => ({
+      businessId: businessA.id,
+      estimateVersionId: cappedVersion.id,
+      description: `Capped line ${index + 1}`,
+      quantity: new Prisma.Decimal(1),
+      unitPrice: new Prisma.Decimal(1),
+      total: new Prisma.Decimal(1),
+      type: index % 2 === 0 ? "LABOR" : "MATERIAL",
+    })),
+  });
+  await prisma.estimate.update({
+    where: { id: cappedEstimate.id },
+    data: { approvedVersionId: cappedVersion.id },
+  });
+  const cappedJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      estimateId: cappedEstimate.id,
+      approvedEstimateVersionId: cappedVersion.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  const cappedLoad = await loadJobProfitabilityCloseout(prisma, ownerA, cappedJob.id);
+  check(
+    "DB pinned-version 200-row cap marks the read truncated",
+    cappedLoad?.readsTruncated === true,
+  );
+  check(
+    "DB pinned-version 200-row cap makes estimate coverage Partial",
+    cappedLoad?.coverage.estimate === "Partial" && cappedLoad?.coverageComplete === false,
+  );
+  check(
+    "DB pinned-version 200-row cap does not claim full profit",
+    cappedLoad?.profitability.available === false && cappedLoad?.profitability.grossProfit === null,
+  );
 } catch (error) {
   console.error(error);
   failures += 1;

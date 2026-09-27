@@ -260,7 +260,8 @@ export async function loadJobProfitabilityCloseout(
     timeEntries.length >= CLOSEOUT_READ_BOUND ||
     expenses.length >= CLOSEOUT_READ_BOUND ||
     materialItems.length >= CLOSEOUT_READ_BOUND ||
-    liveLines.length >= CLOSEOUT_READ_BOUND;
+    liveLines.length >= CLOSEOUT_READ_BOUND ||
+    approvedVersionLines.length >= CLOSEOUT_READ_BOUND;
 
   return buildJobProfitabilityCloseout({
     businessId,
