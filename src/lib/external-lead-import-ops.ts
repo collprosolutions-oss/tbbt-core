@@ -17,19 +17,17 @@ import {
   EXTERNAL_LEAD_IMPORT_ROUTE,
   ExternalLeadImportError,
   FILE_TOO_LARGE_MESSAGE,
-  fetchOwnerSuppliedCsv,
   hashCsvBytes,
   IMPORT_CONFIRM_REQUIRED_MESSAGE,
   IMPORT_NOT_AVAILABLE_MESSAGE,
   importRowSubmissionId,
+  MAX_EXTERNAL_LEAD_IMPORT_BYTES,
   OWNER_ONLY_IMPORT_MESSAGE,
   parseExternalLeadCsv,
   sanitizeSourceFilename,
-  type ExternalLeadImportSourceKind,
   type ParsedImportRow,
   type SameBusinessIdentity,
   type SameBusinessRequest,
-  type SourceLookup,
 } from "@/lib/external-lead-import";
 import { createOwnerLoggedLead } from "@/lib/owner-log-lead";
 import { hasStructuredAddressInput } from "@/lib/service-address";
@@ -175,7 +173,6 @@ async function persistPreview(
   db: Db,
   access: ExternalLeadImportAccess,
   input: {
-    sourceKind: ExternalLeadImportSourceKind;
     sourceLabel: string;
     bytes: Uint8Array | Buffer;
   },
@@ -183,7 +180,7 @@ async function persistPreview(
   requireOwner(access);
   const businessId = access.businessId;
   const bytes = Buffer.from(input.bytes);
-  if (bytes.byteLength > 256 * 1024) {
+  if (bytes.byteLength > MAX_EXTERNAL_LEAD_IMPORT_BYTES) {
     throw new ExternalLeadImportError(FILE_TOO_LARGE_MESSAGE);
   }
   const contentSha256 = hashCsvBytes(bytes);
@@ -210,7 +207,7 @@ async function persistPreview(
     const created = await db.externalLeadImport.create({
       data: {
         businessId,
-        sourceKind: input.sourceKind,
+        sourceKind: "CSV_UPLOAD",
         sourceLabel: input.sourceLabel,
         contentSha256,
         capturedAt,
@@ -291,30 +288,8 @@ export async function previewCsvUpload(
   input: { filename: string; bytes: Uint8Array | Buffer },
 ): Promise<ExternalLeadImportPreview> {
   return persistPreview(db, access, {
-    sourceKind: "CSV_UPLOAD",
     sourceLabel: sanitizeSourceFilename(input.filename),
     bytes: input.bytes,
-  });
-}
-
-export async function previewOwnerSourceUrl(
-  db: Db,
-  access: ExternalLeadImportAccess,
-  input: {
-    sourceUrl: string;
-    fetchImpl?: typeof fetch;
-    lookup?: SourceLookup;
-  },
-): Promise<ExternalLeadImportPreview> {
-  requireOwner(access);
-  const fetched = await fetchOwnerSuppliedCsv(input.sourceUrl, {
-    fetchImpl: input.fetchImpl,
-    lookup: input.lookup,
-  });
-  return persistPreview(db, access, {
-    sourceKind: "SOURCE_URL",
-    sourceLabel: fetched.sourceLabel,
-    bytes: fetched.bytes,
   });
 }
 

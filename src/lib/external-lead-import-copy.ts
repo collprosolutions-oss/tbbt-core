@@ -9,10 +9,8 @@ export const MAX_EXTERNAL_LEAD_IMPORT_BYTES = 256 * 1024;
 export const MAX_EXTERNAL_LEAD_IMPORT_ROWS = 200;
 export const MAX_EXTERNAL_LEAD_IMPORT_FIELD = 200;
 export const MAX_EXTERNAL_LEAD_IMPORT_SUMMARY = 200;
-export const MAX_EXTERNAL_LEAD_IMPORT_URL = 2048;
-export const EXTERNAL_LEAD_IMPORT_FETCH_TIMEOUT_MS = 8_000;
 
-export const EXTERNAL_LEAD_IMPORT_SOURCE_KINDS = ["CSV_UPLOAD", "SOURCE_URL"] as const;
+export const EXTERNAL_LEAD_IMPORT_SOURCE_KINDS = ["CSV_UPLOAD"] as const;
 export type ExternalLeadImportSourceKind =
   (typeof EXTERNAL_LEAD_IMPORT_SOURCE_KINDS)[number];
 
@@ -36,7 +34,12 @@ export const IMPORT_CONFIRM_REQUIRED_MESSAGE =
   "Leads are created only after the owner confirms this preview.";
 
 export const IMPORT_NO_SCRAPE_MESSAGE =
-  "TBBT does not scrape directories, crawl websites, or buy lead lists. Supply a CSV you already have, or a direct CSV URL you control.";
+  "TBBT does not scrape directories, crawl websites, fetch source URLs, or buy lead lists. Upload a CSV you already have.";
+
+export const IMPORT_CSV_REQUIRED_MESSAGE =
+  "Upload a CSV file. TBBT does not fetch owner-supplied source URLs.";
+
+export const NOT_CSV_MESSAGE = "That file is not a CSV.";
 
 export const IMPORT_NO_SCORE_MESSAGE =
   "TBBT does not invent a lead score. Possible duplicates are same-business email or phone matches only.";
@@ -50,15 +53,8 @@ export const MISSING_NAME_HEADER_MESSAGE =
   "CSV must include a name column (name, customer, or customer_name).";
 export const EMPTY_CSV_MESSAGE = "CSV has no data rows.";
 export const INVALID_CSV_MESSAGE = "That CSV could not be read.";
-export const BLOCKED_SOURCE_URL_MESSAGE =
-  "That source URL is not allowed. Use a public http(s) URL that points at a CSV you control.";
-export const SOURCE_URL_NOT_CSV_MESSAGE =
-  "The source URL must return a CSV. HTML pages and directory listings are rejected.";
-export const SOURCE_URL_FETCH_MESSAGE =
-  "That source URL could not be read as a CSV.";
 
-export function sourceKindLabel(kind: string): string {
-  if (kind === "SOURCE_URL") return "Owner-supplied source URL";
+export function sourceKindLabel(_kind: string): string {
   return "Manual CSV";
 }
 

@@ -39,24 +39,12 @@ export function ImportLeadsForm() {
           name="csv"
           type="file"
           accept=".csv,text/csv,text/plain"
+          required
         />
         <p className="text-xs text-muted-foreground">
           Max {MAX_EXTERNAL_LEAD_IMPORT_BYTES / 1024} KB and {MAX_EXTERNAL_LEAD_IMPORT_ROWS}{" "}
           data rows. Required column: name. Optional: email, phone, summary, notes, street,
           unit, city, region, postal, source.
-        </p>
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="sourceUrl">Owner-supplied source URL</Label>
-        <Input
-          id="sourceUrl"
-          name="sourceUrl"
-          type="url"
-          placeholder="https://example.com/owner-leads.csv"
-        />
-        <p className="text-xs text-muted-foreground">
-          Direct CSV URL you control. Private, local, and HTML destinations are rejected.
         </p>
       </div>
 

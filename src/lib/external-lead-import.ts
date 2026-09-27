@@ -2,12 +2,10 @@
  * OWNER-reviewed external lead import — parse, sanitize, bound, and
  * same-business duplicate flags. Preview never creates leads.
  *
- * Owner-supplied CSV bytes or a direct CSV URL the owner controls.
- * This module does not scrape directories, buy lists, send outreach,
- * or invent lead scores.
+ * Manual CSV upload only. This module does not fetch owner-supplied
+ * URLs, scrape directories, buy lists, send outreach, or invent lead scores.
  */
 import { createHash } from "node:crypto";
-import { lookup as dnsLookup } from "node:dns/promises";
 import {
   isUsableNormalizedEmail,
   isUsableNormalizedPhone,
@@ -15,22 +13,17 @@ import {
   normalizePhone,
 } from "@/lib/customer-identity";
 import {
-  BLOCKED_SOURCE_URL_MESSAGE,
   EMPTY_CSV_MESSAGE,
-  EXTERNAL_LEAD_IMPORT_FETCH_TIMEOUT_MS,
   FILE_TOO_LARGE_MESSAGE,
   INVALID_CSV_MESSAGE,
   MAX_EXTERNAL_LEAD_IMPORT_BYTES,
   MAX_EXTERNAL_LEAD_IMPORT_FIELD,
   MAX_EXTERNAL_LEAD_IMPORT_ROWS,
   MAX_EXTERNAL_LEAD_IMPORT_SUMMARY,
-  MAX_EXTERNAL_LEAD_IMPORT_URL,
   MISSING_NAME_HEADER_MESSAGE,
-  SOURCE_URL_FETCH_MESSAGE,
-  SOURCE_URL_NOT_CSV_MESSAGE,
+  NOT_CSV_MESSAGE,
   TOO_MANY_ROWS_MESSAGE,
   type ExternalLeadImportRowStatus,
-  type ExternalLeadImportSourceKind,
 } from "@/lib/external-lead-import-copy";
 import {
   OWNER_DEFAULT_LEAD_SOURCE,
@@ -45,15 +38,14 @@ import {
 } from "@/lib/service-address";
 
 export {
-  BLOCKED_SOURCE_URL_MESSAGE,
   EMPTY_CSV_MESSAGE,
-  EXTERNAL_LEAD_IMPORT_FETCH_TIMEOUT_MS,
   EXTERNAL_LEAD_IMPORT_ROUTE,
   EXTERNAL_LEAD_IMPORT_ROW_STATUSES,
   EXTERNAL_LEAD_IMPORT_SOURCE_KINDS,
   EXTERNAL_LEAD_IMPORT_STATUSES,
   FILE_TOO_LARGE_MESSAGE,
   IMPORT_CONFIRM_REQUIRED_MESSAGE,
+  IMPORT_CSV_REQUIRED_MESSAGE,
   IMPORT_NO_OUTREACH_MESSAGE,
   IMPORT_NO_SCORE_MESSAGE,
   IMPORT_NO_SCRAPE_MESSAGE,
@@ -63,11 +55,9 @@ export {
   MAX_EXTERNAL_LEAD_IMPORT_FIELD,
   MAX_EXTERNAL_LEAD_IMPORT_ROWS,
   MAX_EXTERNAL_LEAD_IMPORT_SUMMARY,
-  MAX_EXTERNAL_LEAD_IMPORT_URL,
   MISSING_NAME_HEADER_MESSAGE,
+  NOT_CSV_MESSAGE,
   OWNER_ONLY_IMPORT_MESSAGE,
-  SOURCE_URL_FETCH_MESSAGE,
-  SOURCE_URL_NOT_CSV_MESSAGE,
   TOO_MANY_ROWS_MESSAGE,
   previewStatusLabel,
   sourceKindLabel,
@@ -130,24 +120,6 @@ const HEADER_ALIASES: Record<string, CanonicalImportColumn> = {
   source: "source",
   lead_source: "source",
 };
-
-const BLOCKED_SOURCE_HOSTS = new Set([
-  "localhost",
-  "localhost.localdomain",
-  "127.0.0.1",
-  "0.0.0.0",
-  "::1",
-  "metadata.google.internal",
-  "metadata.google.com",
-  "169.254.169.254",
-]);
-
-const ALLOWED_CSV_CONTENT_TYPES = [
-  "text/csv",
-  "text/plain",
-  "application/csv",
-  "application/vnd.ms-excel",
-];
 
 export class ExternalLeadImportError extends Error {
   constructor(message: string) {
@@ -257,7 +229,7 @@ export function decodeCsvBytes(bytes: Uint8Array | Buffer): string {
   }
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   if (/^\s*</.test(text)) {
-    throw new ExternalLeadImportError(SOURCE_URL_NOT_CSV_MESSAGE);
+    throw new ExternalLeadImportError(NOT_CSV_MESSAGE);
   }
   return text;
 }
@@ -471,115 +443,4 @@ export function countPreviewStatuses(rows: ParsedImportRow[]) {
     possibleDuplicateCount: rows.filter((row) => row.previewStatus === "POSSIBLE_DUPLICATE")
       .length,
   };
-}
-
-export function isPrivateIpv4(host: string): boolean {
-  const match = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (!match) return false;
-  const [a, b] = [Number(match[1]), Number(match[2])];
-  if (a === 10 || a === 127 || a === 0) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  return false;
-}
-
-export function isBlockedSourceHost(hostname: string): boolean {
-  const host = hostname.trim().toLowerCase().replace(/\.$/, "");
-  if (!host) return true;
-  if (BLOCKED_SOURCE_HOSTS.has(host)) return true;
-  if (host.endsWith(".localhost") || host.endsWith(".local")) return true;
-  if (host === "::1" || host.startsWith("[") || host.includes(":")) {
-    return host === "::1" || host === "[::1]";
-  }
-  return isPrivateIpv4(host);
-}
-
-export function validateOwnerSourceUrl(
-  raw: string,
-): { ok: true; href: string } | { ok: false; error: string } {
-  const trimmed = sanitizeImportText(raw, MAX_EXTERNAL_LEAD_IMPORT_URL);
-  if (!trimmed || trimmed.length > MAX_EXTERNAL_LEAD_IMPORT_URL) {
-    return { ok: false, error: BLOCKED_SOURCE_URL_MESSAGE };
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    return { ok: false, error: BLOCKED_SOURCE_URL_MESSAGE };
-  }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    return { ok: false, error: BLOCKED_SOURCE_URL_MESSAGE };
-  }
-  if (parsed.username || parsed.password) {
-    return { ok: false, error: BLOCKED_SOURCE_URL_MESSAGE };
-  }
-  if (isBlockedSourceHost(parsed.hostname)) {
-    return { ok: false, error: BLOCKED_SOURCE_URL_MESSAGE };
-  }
-  return { ok: true, href: parsed.href };
-}
-
-export type SourceLookup = (hostname: string) => Promise<string[]>;
-
-export async function defaultSourceLookup(hostname: string): Promise<string[]> {
-  const result = await dnsLookup(hostname, { all: true, verbatim: true });
-  return result.map((entry) => entry.address);
-}
-
-function looksLikeCsvContentType(value: string | null): boolean {
-  if (!value) return true;
-  const type = value.split(";")[0]?.trim().toLowerCase() ?? "";
-  if (ALLOWED_CSV_CONTENT_TYPES.includes(type)) return true;
-  return type.endsWith("+csv");
-}
-
-export async function fetchOwnerSuppliedCsv(
-  rawUrl: string,
-  options: {
-    fetchImpl?: typeof fetch;
-    lookup?: SourceLookup;
-  } = {},
-): Promise<{ bytes: Buffer; sourceLabel: string }> {
-  const validated = validateOwnerSourceUrl(rawUrl);
-  if (!validated.ok) {
-    throw new ExternalLeadImportError(validated.error);
-  }
-  const parsed = new URL(validated.href);
-  const lookup = options.lookup ?? defaultSourceLookup;
-  const addresses = await lookup(parsed.hostname);
-  if (addresses.length === 0 || addresses.some((address) => isBlockedSourceHost(address))) {
-    throw new ExternalLeadImportError(BLOCKED_SOURCE_URL_MESSAGE);
-  }
-
-  const fetchImpl = options.fetchImpl ?? fetch;
-  let response: Response;
-  try {
-    response = await fetchImpl(validated.href, {
-      method: "GET",
-      redirect: "error",
-      headers: { Accept: "text/csv, text/plain;q=0.9" },
-      signal: AbortSignal.timeout(EXTERNAL_LEAD_IMPORT_FETCH_TIMEOUT_MS),
-    });
-  } catch (error) {
-    if (error instanceof ExternalLeadImportError) throw error;
-    throw new ExternalLeadImportError(SOURCE_URL_FETCH_MESSAGE);
-  }
-
-  if (!response.ok) {
-    throw new ExternalLeadImportError(SOURCE_URL_FETCH_MESSAGE);
-  }
-  if (!looksLikeCsvContentType(response.headers.get("content-type"))) {
-    throw new ExternalLeadImportError(SOURCE_URL_NOT_CSV_MESSAGE);
-  }
-  const length = Number(response.headers.get("content-length") ?? "0");
-  if (length > MAX_EXTERNAL_LEAD_IMPORT_BYTES) {
-    throw new ExternalLeadImportError(FILE_TOO_LARGE_MESSAGE);
-  }
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.byteLength > MAX_EXTERNAL_LEAD_IMPORT_BYTES) {
-    throw new ExternalLeadImportError(FILE_TOO_LARGE_MESSAGE);
-  }
-  decodeCsvBytes(buffer);
-  return { bytes: buffer, sourceLabel: validated.href };
 }

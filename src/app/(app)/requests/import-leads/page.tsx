@@ -36,7 +36,7 @@ export default async function ImportLeadsPage() {
     <PageContainer width="narrow">
       <PageHeader
         title="Import leads"
-        description="Preview an owner-supplied CSV or CSV URL, then confirm before any leads are created."
+        description="Preview an owner-uploaded CSV, then confirm before any leads are created."
       >
         <Button asChild size="sm" variant="outline">
           <Link href="/requests">Back to requests</Link>
@@ -71,7 +71,7 @@ export default async function ImportLeadsPage() {
       ) : (
         <Card>
           <CardHeader>
-            <CardTitle>Owner-supplied source</CardTitle>
+            <CardTitle>Owner-uploaded CSV</CardTitle>
             <CardDescription>
               {IMPORT_NO_SCRAPE_MESSAGE} {IMPORT_NO_SCORE_MESSAGE} {IMPORT_NO_OUTREACH_MESSAGE}
             </CardDescription>

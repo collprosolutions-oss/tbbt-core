@@ -4143,7 +4143,7 @@ model PartnerVendorOpportunity {
 model ExternalLeadImport {
   id                    String   @id @default(cuid())
   businessId            String
-  /// CSV_UPLOAD | SOURCE_URL
+  /// CSV_UPLOAD. Server-side source-URL fetch is not implemented.
   sourceKind            String
   /// Sanitized filename or owner-supplied URL. Display only.
   sourceLabel           String

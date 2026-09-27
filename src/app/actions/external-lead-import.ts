@@ -9,13 +9,13 @@ import {
   EXTERNAL_LEAD_IMPORT_ROUTE,
   ExternalLeadImportError,
   FILE_TOO_LARGE_MESSAGE,
+  IMPORT_CSV_REQUIRED_MESSAGE,
   MAX_EXTERNAL_LEAD_IMPORT_BYTES,
   OWNER_ONLY_IMPORT_MESSAGE,
 } from "@/lib/external-lead-import";
 import {
   confirmExternalLeadImport,
   previewCsvUpload,
-  previewOwnerSourceUrl,
 } from "@/lib/external-lead-import-ops";
 import { prisma } from "@/lib/prisma";
 
@@ -53,17 +53,17 @@ export async function previewExternalLeadImport(
   const operating = await requireOwnerImportAccess();
   if (!operating.ok) return { error: operating.error };
 
-  const sourceUrl = readString(formData, "sourceUrl");
   const file = formData.get("csv");
   const hasFile = file instanceof File && file.size > 0;
+  if (!hasFile) {
+    return { error: IMPORT_CSV_REQUIRED_MESSAGE };
+  }
 
   try {
-    const preview = hasFile
-      ? await previewCsvUpload(prisma, operating.access, {
-          filename: file.name,
-          bytes: Buffer.from(await file.arrayBuffer()),
-        })
-      : await previewOwnerSourceUrl(prisma, operating.access, { sourceUrl });
+    const preview = await previewCsvUpload(prisma, operating.access, {
+      filename: file.name,
+      bytes: Buffer.from(await file.arrayBuffer()),
+    });
     revalidatePath(EXTERNAL_LEAD_IMPORT_ROUTE);
     redirect(`${EXTERNAL_LEAD_IMPORT_ROUTE}/${preview.id}`);
   } catch (error) {

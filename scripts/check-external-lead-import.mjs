@@ -25,13 +25,11 @@ const { APP_NAV } = await import("@/lib/nav");
 const { businessScope, assertBusinessRecord } = await import("@/lib/access-scope");
 const {
   applySameBusinessDuplicates,
-  BLOCKED_SOURCE_URL_MESSAGE,
   decodeCsvBytes,
   evaluateImportRow,
   EXTERNAL_LEAD_IMPORT_ROUTE,
   FILE_TOO_LARGE_MESSAGE,
-  fetchOwnerSuppliedCsv,
-  hashCsvBytes,
+  IMPORT_CSV_REQUIRED_MESSAGE,
   IMPORT_NO_OUTREACH_MESSAGE,
   IMPORT_NO_SCORE_MESSAGE,
   IMPORT_NO_SCRAPE_MESSAGE,
@@ -41,21 +39,21 @@ const {
   MAX_EXTERNAL_LEAD_IMPORT_BYTES,
   MAX_EXTERNAL_LEAD_IMPORT_ROWS,
   MISSING_NAME_HEADER_MESSAGE,
+  NOT_CSV_MESSAGE,
   OWNER_ONLY_IMPORT_MESSAGE,
   parseCsv,
   parseExternalLeadCsv,
   sanitizeImportText,
   sanitizeSourceFilename,
-  SOURCE_URL_NOT_CSV_MESSAGE,
   TOO_MANY_ROWS_MESSAGE,
-  validateOwnerSourceUrl,
 } = await import("@/lib/external-lead-import");
+const importModule = await import("@/lib/external-lead-import");
+const opsModule = await import("@/lib/external-lead-import-ops");
 const {
   confirmExternalLeadImport,
   loadOwnedImport,
   previewCsvUpload,
-  previewOwnerSourceUrl,
-} = await import("@/lib/external-lead-import-ops");
+} = opsModule;
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 function readSrc(relative) {
@@ -169,6 +167,18 @@ try {
       !readSrc("src/lib/external-lead-import-copy.ts").includes("node:"),
   );
   check(
+    "Server-side owner CSV URL fetch is disabled",
+    !featureSource.includes("fetchOwnerSuppliedCsv") &&
+      !featureSource.includes("previewOwnerSourceUrl") &&
+      !featureSource.includes("validateOwnerSourceUrl") &&
+      !featureSource.includes("node:dns") &&
+      !featureSource.includes("sourceUrl") &&
+      !uiSource.includes("Owner-supplied source URL") &&
+      IMPORT_CSV_REQUIRED_MESSAGE.includes("does not fetch") &&
+      !("fetchOwnerSuppliedCsv" in importModule) &&
+      !("previewOwnerSourceUrl" in opsModule),
+  );
+  check(
     "Ops require OWNER and scope every load by businessId",
     readSrc("src/lib/external-lead-import-ops.ts").includes('requireBusinessRole(access, "OWNER")') &&
       readSrc("src/lib/external-lead-import-ops.ts").includes("businessId: access.businessId"),
@@ -189,7 +199,7 @@ try {
       importRowFingerprint({ name: "Ada", email: "ada@example.com", phone: "2393578199", summary: "Faucet" }),
   );
 
-  console.log("\nSTATIC — parse, sanitize, URL bounds");
+  console.log("\nSTATIC — parse, sanitize, upload bounds");
   const quoted = parseCsv('name,summary\n"Lee, Jr.","Fix, now"');
   check(
     "CSV parser keeps quoted commas",
@@ -226,61 +236,12 @@ try {
   } catch (error) {
     check("Byte bound rejects oversized buffers", error.message === FILE_TOO_LARGE_MESSAGE);
   }
-  check(
-    "Localhost source URL is blocked",
-    validateOwnerSourceUrl("http://127.0.0.1/leads.csv").ok === false &&
-      validateOwnerSourceUrl("http://localhost/leads.csv").error === BLOCKED_SOURCE_URL_MESSAGE,
-  );
-  check(
-    "Metadata and private hosts are blocked",
-    validateOwnerSourceUrl("http://169.254.169.254/latest/meta-data").ok === false &&
-      validateOwnerSourceUrl("http://192.168.1.10/leads.csv").ok === false &&
-      validateOwnerSourceUrl("http://10.0.0.8/leads.csv").ok === false,
-  );
-  check(
-    "Credentialed and non-http URLs are blocked",
-    validateOwnerSourceUrl("https://user:pass@example.com/leads.csv").ok === false &&
-      validateOwnerSourceUrl("javascript:alert(1)").ok === false,
-  );
-  check(
-    "Public https CSV URL is accepted",
-    validateOwnerSourceUrl("https://owner.example.com/leads.csv").ok === true,
-  );
-
-  let fetched = false;
   try {
-    await fetchOwnerSuppliedCsv("http://127.0.0.1/leads.csv", {
-      fetchImpl: async () => {
-        fetched = true;
-        return new Response("name,summary\nAda,Faucet");
-      },
-      lookup: async () => ["127.0.0.1"],
-    });
-    check("Blocked URL does not fetch", false);
+    decodeCsvBytes(Buffer.from("<html>directory</html>"));
+    check("HTML upload is rejected as not CSV", false);
   } catch (error) {
-    check("Blocked URL does not fetch", error.message === BLOCKED_SOURCE_URL_MESSAGE && fetched === false);
+    check("HTML upload is rejected as not CSV", error.message === NOT_CSV_MESSAGE);
   }
-
-  const htmlFetch = await fetchOwnerSuppliedCsv("https://owner.example.com/leads.csv", {
-    fetchImpl: async () =>
-      new Response("<html>directory</html>", { headers: { "content-type": "text/html" } }),
-    lookup: async () => ["203.0.113.10"],
-  }).then(
-    () => ({ ok: true }),
-    (error) => ({ ok: false, error: error.message }),
-  );
-  check("HTML source URL is rejected", htmlFetch.ok === false && htmlFetch.error === SOURCE_URL_NOT_CSV_MESSAGE);
-
-  const csvBytes = Buffer.from(csv(['Ada,ada@example.com,2393578199,Faucet,"Call back",1 Main,Naples,FL,34102,GOOGLE']));
-  const ownerCsv = await fetchOwnerSuppliedCsv("https://owner.example.com/owner-leads.csv", {
-    fetchImpl: async () =>
-      new Response(csvBytes, { headers: { "content-type": "text/csv" } }),
-    lookup: async () => ["203.0.113.10"],
-  });
-  check(
-    "Owner CSV URL returns the supplied bytes",
-    hashCsvBytes(ownerCsv.bytes) === hashCsvBytes(csvBytes),
-  );
 
   const sameBusinessDupes = applySameBusinessDuplicates(
     parseExternalLeadCsv(csv(["Ada,ada@example.com,2393578199,Faucet,,,,,,MANUAL"])),
@@ -437,18 +398,7 @@ try {
     previewB.rows.find((row) => row.email === "ada@example.com")?.previewStatus === "POSSIBLE_DUPLICATE",
   );
 
-  const urlPreview = await previewOwnerSourceUrl(prisma, ownerA, {
-    sourceUrl: "https://owner.example.com/second.csv",
-    fetchImpl: async () =>
-      new Response("name,summary\nCarl,Deck repair\n", { headers: { "content-type": "text/csv" } }),
-    lookup: async () => ["203.0.113.10"],
-  });
-  check(
-    "Owner URL preview stores the supplied URL as the source",
-    urlPreview.sourceKind === "SOURCE_URL" &&
-      urlPreview.sourceLabel === "https://owner.example.com/second.csv" &&
-      urlPreview.validCount === 1,
-  );
+  check("Preview source kind is CSV upload only", previewA.sourceKind === "CSV_UPLOAD");
 
   console.log("\nCONFIRM — explicit OWNER create, idempotent retry, tenant isolation");
   const requestsBeforeA = await prisma.serviceRequest.count({ where: { businessId: businessA.id } });
