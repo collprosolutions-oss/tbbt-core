@@ -1,5 +1,9 @@
 import { nativeJson } from "@/lib/native-http";
 import {
+  parseNativeSessionJson,
+  readCappedRequestText,
+} from "@/lib/native-session-limits";
+import {
   NATIVE_WORKSPACE_HEADER,
   readBearerToken,
   readRequestedWorkspaceId,
@@ -17,13 +21,15 @@ function readString(value: unknown) {
 }
 
 export async function POST(request: Request) {
-  let body: unknown = null;
-  try {
-    body = await request.json();
-  } catch {
-    return nativeJson({ error: "Email and password are required." }, 400);
+  const capped = await readCappedRequestText(request);
+  if (!capped.ok) {
+    return nativeJson({ error: capped.error }, capped.status);
   }
-  const payload = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const parsed = parseNativeSessionJson(capped.text);
+  if (!parsed.ok) {
+    return nativeJson({ error: parsed.error }, parsed.status);
+  }
+  const payload = parsed.payload;
   const result = await signInNativeField(prisma, {
     email: readString(payload.email),
     password: readString(payload.password),

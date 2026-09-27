@@ -20,6 +20,12 @@ import {
 } from "@/lib/account-security";
 import { createSecureToken, hashToken, verifyPassword } from "@/lib/auth-crypto";
 import { loadActiveWorkspaceMemberships } from "@/lib/business-contact";
+import {
+  NATIVE_PASSWORD_LOCKED_MESSAGE,
+  clearNativePasswordThrottle,
+  nativePasswordThrottleIsLocked,
+  recordNativePasswordFailure,
+} from "@/lib/native-session-limits";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -235,6 +241,10 @@ export async function signInNativeField(
     return { ok: false, error: "Email and password are required." };
   }
 
+  if (await nativePasswordThrottleIsLocked(db, email)) {
+    return { ok: false, error: NATIVE_PASSWORD_LOCKED_MESSAGE };
+  }
+
   const user = await db.user.findUnique({
     where: { email },
     include: {
@@ -246,8 +256,14 @@ export async function signInNativeField(
   });
 
   if (!user || !(await verifyPassword(password, user.passwordHash))) {
-    return { ok: false, error: "Email or password is incorrect." };
+    const recorded = await recordNativePasswordFailure(db, email);
+    return {
+      ok: false,
+      error: recorded.locked ? NATIVE_PASSWORD_LOCKED_MESSAGE : "Email or password is incorrect.",
+    };
   }
+
+  await clearNativePasswordThrottle(db, email);
 
   if (user.memberships.length === 0) {
     return { ok: false, error: "This account is not assigned to a business workspace." };

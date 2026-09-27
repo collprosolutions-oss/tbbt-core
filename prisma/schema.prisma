@@ -162,6 +162,24 @@ model AuthChallenge {
   @@index([userId])
 }
 
+/// Durable native password-attempt window. Keyed by hashed email + purpose,
+/// never a raw email or password. Survives process restarts. This is not a
+/// permanent account lockout — the row expires and the counter resets.
+model NativeSignInThrottle {
+  id                 String   @id @default(cuid())
+  /// sha256(purpose + normalized identifier). Never the raw email.
+  subjectHash        String
+  purpose            String
+  failedAttemptCount Int      @default(0)
+  windowStartedAt    DateTime
+  expiresAt          DateTime
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([subjectHash, purpose])
+  @@index([expiresAt])
+}
+
 /// A single-use, expiring, unguessable link letting a newly-onboarded team
 /// member set their OWN password -- the smallest secure onboarding
 /// mechanism that avoids ever exposing or storing a plaintext password

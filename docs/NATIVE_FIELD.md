@@ -18,6 +18,8 @@ The native contract:
 
 The edge proxy lets `/api/native/` through without a cookie so Bearer auth can run. Missing or invalid tokens still receive 401 from the route.
 
+`POST /api/native/v1/session` rejects bodies over 4 KB and stores password failures on `NativeSignInThrottle` (hashed email, five tries per 10-minute window). TOTP failures use the same durable `AuthChallenge.failedAttemptCount` as web sign-in. Neither counter is process memory.
+
 ## Field scope
 
 `GET /api/native/v1/today` and `GET /api/native/v1/jobs/:jobId` use the same assignment clause as Field Home: `businessId` + `assignedMembershipId` in one query.

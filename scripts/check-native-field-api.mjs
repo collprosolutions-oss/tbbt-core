@@ -19,6 +19,20 @@ import { randomUUID } from "node:crypto";
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const { hashPassword, hashToken } = await import("@/lib/auth-crypto");
+const { currentTotpCode } = await import("@/lib/totp");
+const {
+  TOTP_CHALLENGE_LOCKED_MESSAGE,
+  TOTP_CHALLENGE_MAX_ATTEMPTS,
+} = await import("@/lib/account-security");
+const {
+  NATIVE_PASSWORD_LOCKED_MESSAGE,
+  NATIVE_PASSWORD_MAX_ATTEMPTS,
+  NATIVE_SESSION_MAX_BODY_BYTES,
+  NATIVE_SESSION_TOO_LARGE,
+  nativePasswordSubjectHash,
+  parseNativeSessionJson,
+  readCappedRequestText,
+} = await import("@/lib/native-session-limits");
 const { isNativeFieldApiPath, NATIVE_FIELD_API_PREFIX } = await import(
   "@/lib/native-field-api-path"
 );
@@ -101,6 +115,30 @@ check(
 );
 check("NATIVE_FIELD_API_PREFIX is /api/native/v1", NATIVE_FIELD_API_PREFIX === "/api/native/v1");
 
+const oversized = await readCappedRequestText(
+  new Request("http://native.test/api/native/v1/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "x".repeat(NATIVE_SESSION_MAX_BODY_BYTES + 1),
+  }),
+);
+check(
+  "Oversized native session body is rejected before JSON parse",
+  oversized.ok === false && oversized.status === 413 && oversized.error === NATIVE_SESSION_TOO_LARGE,
+);
+const cappedOk = await readCappedRequestText(
+  new Request("http://native.test/api/native/v1/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "a@b.co", password: "x" }),
+  }),
+);
+check("In-cap native session JSON is accepted", cappedOk.ok === true);
+check(
+  "Overlong email field is rejected after parse",
+  parseNativeSessionJson(JSON.stringify({ email: "a".repeat(400), password: "secret" })).ok === false,
+);
+
 const assignedShape = nativeAssignedJobWhere("job-1", {
   businessId: "biz-1",
   membershipId: "mem-1",
@@ -129,6 +167,7 @@ check(
 const sessionRouteSrc = readRepo("src/app/api/native/v1/session/route.ts");
 const todayRouteSrc = readRepo("src/app/api/native/v1/today/route.ts");
 const jobRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/route.ts");
+const limitsSrc = readRepo("src/lib/native-session-limits.ts");
 check(
   "Native routes authenticate with Bearer helpers, not cookies()",
   sessionRouteSrc.includes("readBearerToken") &&
@@ -137,6 +176,15 @@ check(
     !sessionRouteSrc.includes("cookies(") &&
     !todayRouteSrc.includes("cookies(") &&
     !jobRouteSrc.includes("cookies("),
+);
+check(
+  "Native session POST caps JSON and uses a durable throttle, not process memory",
+    sessionRouteSrc.includes("readCappedRequestText") &&
+    sessionRouteSrc.includes("parseNativeSessionJson") &&
+    limitsSrc.includes("nativeSignInThrottle") &&
+    !limitsSrc.includes("new Map") &&
+    !limitsSrc.includes("globalThis") &&
+    limitsSrc.includes("NATIVE_SESSION_MAX_BODY_BYTES"),
 );
 
 const nativeFieldSrc = readRepo("src/lib/native-field.ts");
@@ -218,14 +266,18 @@ try {
   const inactiveUser = await prisma.user.create({
     data: { name: "Ivy Inactive", email: "inactive@native-field.example", passwordHash },
   });
+  const totpSecret = "JBSWY3DPEHPK3PXP";
   const totpUser = await prisma.user.create({
     data: {
       name: "Tess Totp",
       email: "totp@native-field.example",
       passwordHash,
-      totpSecret: "JBSWY3DPEHPK3PXP",
+      totpSecret,
       totpEnabledAt: new Date(),
     },
+  });
+  const sprayUser = await prisma.user.create({
+    data: { name: "Sam Spray", email: "spray@native-field.example", passwordHash },
   });
   const betaMemberUser = await prisma.user.create({
     data: { name: "Bree Beta", email: "bree@beta-native-field.example", passwordHash },
@@ -250,6 +302,9 @@ try {
   });
   await prisma.membership.create({
     data: { userId: totpUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  await prisma.membership.create({
+    data: { userId: sprayUser.id, businessId: businessA.id, role: "MEMBER" },
   });
   const betaMembership = await prisma.membership.create({
     data: { userId: betaMemberUser.id, businessId: businessB.id, role: "MEMBER" },
@@ -435,6 +490,68 @@ try {
       totpSignIn.totpRequired === true &&
       Boolean(totpSignIn.challengeToken) &&
       !("token" in totpSignIn),
+  );
+
+  const totpOk = await signInNativeField(prisma, {
+    challengeToken: totpSignIn.challengeToken,
+    totpCode: currentTotpCode(totpSecret),
+  });
+  check("Valid TOTP challenge issues a Bearer session", totpOk.ok === true);
+  if (totpOk.ok) {
+    const totpAccess = await resolveNativeFieldAccess(prisma, { token: totpOk.token });
+    check("Valid TOTP session resolves field access", totpAccess.ok === true);
+    await revokeNativeSession(prisma, totpOk.token);
+    const afterTotpRevoke = await resolveNativeFieldAccess(prisma, { token: totpOk.token });
+    check("TOTP session can be revoked", afterTotpRevoke.ok === false && afterTotpRevoke.status === 401);
+  }
+
+  const totpRetry = await signInNativeField(prisma, {
+    email: totpUser.email,
+    password,
+  });
+  check("TOTP user can start a new challenge after revoke", totpRetry.ok === false && Boolean(totpRetry.challengeToken));
+  let totpLocked = "";
+  for (let attempt = 0; attempt < TOTP_CHALLENGE_MAX_ATTEMPTS; attempt += 1) {
+    const failed = await signInNativeField(prisma, {
+      challengeToken: totpRetry.challengeToken,
+      totpCode: "000000",
+    });
+    totpLocked = failed.ok ? "" : failed.error;
+  }
+  const leftoverTotp = await prisma.authChallenge.findMany({
+    where: { userId: totpUser.id, purpose: "TOTP_SIGN_IN" },
+  });
+  check(
+    "Five wrong TOTP codes lock the durable challenge",
+    totpLocked === TOTP_CHALLENGE_LOCKED_MESSAGE && leftoverTotp.length === 0,
+  );
+
+  let sprayLocked = "";
+  for (let attempt = 0; attempt < NATIVE_PASSWORD_MAX_ATTEMPTS; attempt += 1) {
+    const failed = await signInNativeField(prisma, {
+      email: sprayUser.email,
+      password: "wrong-password",
+    });
+    sprayLocked = failed.ok ? "" : failed.error;
+  }
+  const sprayThrottle = await prisma.nativeSignInThrottle.findUnique({
+    where: {
+      subjectHash_purpose: {
+        subjectHash: nativePasswordSubjectHash(sprayUser.email),
+        purpose: "NATIVE_PASSWORD",
+      },
+    },
+  });
+  const sprayCorrectAfterLock = await signInNativeField(prisma, {
+    email: sprayUser.email,
+    password,
+  });
+  check(
+    "Five wrong passwords persist on NativeSignInThrottle and block the next try",
+    sprayLocked === NATIVE_PASSWORD_LOCKED_MESSAGE &&
+      sprayThrottle?.failedAttemptCount === NATIVE_PASSWORD_MAX_ATTEMPTS &&
+      sprayCorrectAfterLock.ok === false &&
+      sprayCorrectAfterLock.error === NATIVE_PASSWORD_LOCKED_MESSAGE,
   );
 
   const memberSignIn = await signInNativeField(prisma, {
