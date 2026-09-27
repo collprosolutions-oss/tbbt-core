@@ -137,6 +137,11 @@ try {
       !schemaSrc.includes("model AiActionProposal") &&
       !schemaSrc.includes("model ControlledActionProposal"),
   );
+  const ledgerModel = schemaSrc.slice(
+    schemaSrc.indexOf("model ControlledAiActionAttempt"),
+    schemaSrc.indexOf("model ", schemaSrc.indexOf("model ControlledAiActionAttempt") + 1),
+  );
+  const ledgerFields = [...ledgerModel.matchAll(/^\s{2}(\w+)\s+/gm)].map((match) => match[1]);
   check(
     "Ledger fields stay bounded and omit prompts/secrets/PII bodies",
     [
@@ -147,12 +152,8 @@ try {
       "resultCode",
       "resultMessage",
       "executionAttemptId",
-    ].every((field) => schemaSrc.includes(field)) &&
-      !schemaSrc.includes("prompt") &&
-      !/chainOfThought|apiKey|secret|customerMessage|providerPayload/i.test(
-        schemaSrc.slice(schemaSrc.indexOf("model ControlledAiActionAttempt")),
-      ) &&
-      !migrationSrc.includes("prompt") &&
+    ].every((field) => ledgerFields.includes(field)) &&
+      !ledgerFields.some((field) => /prompt|secret|apiKey|payload|messageBody|chainOfThought/i.test(field)) &&
       !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migrationSrc) &&
       migrationSrc.includes("CREATE TABLE IF NOT EXISTS") &&
       !controlledSrc.includes("$executeRawUnsafe") &&

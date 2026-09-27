@@ -381,7 +381,7 @@ function confirmationFromExistingAttempt(
     confirmed: true,
     executionAttemptId,
     executionResult: {
-      status: attempt.result === "REPLAYED" ? "REPLAYED" : "SUCCEEDED",
+      status: "REPLAYED",
       recordId: attempt.targetRecordId,
       recordType:
         attempt.targetRecordType === "BsosRecommendationState"
