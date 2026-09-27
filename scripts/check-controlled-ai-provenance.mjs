@@ -35,6 +35,10 @@ const {
   recommendationEvidenceKey,
   upsertRecommendationState,
 } = await import("@/lib/bsos-actions");
+const {
+  existingAttemptMatchesWrite,
+  recordControlledAiAttempt,
+} = await import("@/lib/chief-of-staff/controlled-actions");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -215,6 +219,21 @@ try {
       confirmSrc.indexOf("const already = await alreadyAppliedResult") <
         confirmSrc.indexOf("await invokeCanonicalOperation(tx, access, entry, live)"),
   );
+  const recordAttemptSrc = controlledSrc.slice(
+    controlledSrc.indexOf("export async function recordControlledAiAttempt"),
+    controlledSrc.indexOf("async function recoverExistingAttemptAfterTransaction"),
+  );
+  check(
+    "Unique-conflict recovery does not treat any existing row as a match",
+    existingAttemptMatchesWrite({ result: "EXECUTED" }, { result: "REPLAYED" }) &&
+      existingAttemptMatchesWrite({ result: "FAILED" }, { result: "FAILED" }) &&
+      !existingAttemptMatchesWrite({ result: "FAILED" }, { result: "EXECUTED" }) &&
+      !existingAttemptMatchesWrite({ result: "DENIED" }, { result: "EXECUTED" }) &&
+      !existingAttemptMatchesWrite({ result: "FAILED" }, { result: "DENIED" }) &&
+      recordAttemptSrc.includes("existingAttemptMatchesWrite(existing, input)") &&
+      recordAttemptSrc.includes("already finished with a different result") &&
+      !recordAttemptSrc.includes("if (existing) return existing"),
+  );
   check(
     "Ledger unique race is recovered outside the failed transaction",
     confirmSrc.includes("recoverExistingAttemptAfterTransaction(db, access") &&
@@ -377,17 +396,23 @@ try {
   });
   const beforeIdentityProofs = await followUpDomain();
   const failedAttemptId = randomUUID();
-  const failedMessage = "Seeded durable failure for same-identity retry.";
-  await seedAttempt({
-    businessId: businessA.id,
-    actionKey: "DISMISS_RECOMMENDATION",
-    result: "FAILED",
-    recommendationKey: "follow-up-sent-estimates",
-    membershipId: ownerMem.id,
-    userId: ownerUser.id,
-    resultCode: "DOMAIN_ERROR",
-    resultMessage: failedMessage,
-    executionAttemptId: failedAttemptId,
+  let recordedFailedConfirm = false;
+  try {
+    await confirmControlledAction(prisma, ownerA, {
+      proposal: { ...dismissProposalForIdentity, fingerprint: "stale-before-correction" },
+      executionAttemptId: failedAttemptId,
+      confirm: "confirm",
+    });
+  } catch (error) {
+    recordedFailedConfirm = error instanceof Error && /stale/i.test(error.message);
+  }
+  const originalFailedRow = await prisma.controlledAiActionAttempt.findFirst({
+    where: {
+      businessId: businessA.id,
+      executionAttemptId: failedAttemptId,
+      actionKey: "DISMISS_RECOMMENDATION",
+      recommendationKey: "follow-up-sent-estimates",
+    },
   });
   let failedRetryClosed = false;
   try {
@@ -397,17 +422,7 @@ try {
       confirm: "confirm",
     });
   } catch (error) {
-    failedRetryClosed = error instanceof Error && error.message === failedMessage;
-  }
-  let staleFailedClosed = false;
-  try {
-    await confirmControlledAction(prisma, ownerA, {
-      proposal: { ...dismissProposalForIdentity, fingerprint: "tampered-fingerprint" },
-      executionAttemptId: failedAttemptId,
-      confirm: "confirm",
-    });
-  } catch (error) {
-    staleFailedClosed = error instanceof Error && /stale/i.test(error.message);
+    failedRetryClosed = error instanceof Error && error.message === originalFailedRow?.resultMessage;
   }
   const failedRow = await prisma.controlledAiActionAttempt.findFirst({
     where: {
@@ -419,28 +434,79 @@ try {
   });
   const afterFailedRetry = await followUpDomain();
   check(
-    "Seeded FAILED retry fails closed without domain mutation",
-    failedRetryClosed &&
-      staleFailedClosed &&
-      failedRow?.result === "FAILED" &&
-      failedRow.resultMessage === failedMessage &&
+    "FAILED attempt stays immutable after the business condition is corrected",
+    recordedFailedConfirm &&
+      failedRetryClosed &&
+      originalFailedRow?.result === "FAILED" &&
+      failedRow?.id === originalFailedRow.id &&
+      failedRow.result === "FAILED" &&
+      failedRow.resultMessage === originalFailedRow.resultMessage &&
+      failedRow.confirmedAt.getTime() === originalFailedRow.confirmedAt.getTime() &&
       afterFailedRetry.items === beforeIdentityProofs.items &&
       afterFailedRetry.states === beforeIdentityProofs.states &&
       afterFailedRetry.dismissed === beforeIdentityProofs.dismissed,
   );
 
+  let incompatibleConflictClosed = false;
+  try {
+    await recordControlledAiAttempt(prisma, ownerA, {
+      actionKey: "DISMISS_RECOMMENDATION",
+      result: "EXECUTED",
+      recommendationKey: "follow-up-sent-estimates",
+      targetRecordType: "BsosRecommendationState",
+      targetRecordId: "should-not-convert-failed",
+      resultCode: "SUCCEEDED",
+      resultMessage: "Should not convert FAILED to EXECUTED.",
+      executionAttemptId: failedAttemptId,
+    });
+  } catch (error) {
+    incompatibleConflictClosed = error instanceof Error && /different result/i.test(error.message);
+  }
+  const afterIncompatible = originalFailedRow
+    ? await prisma.controlledAiActionAttempt.findFirst({
+        where: { id: originalFailedRow.id },
+      })
+    : null;
+  const compatibleReuse = await recordControlledAiAttempt(prisma, ownerA, {
+    actionKey: "DISMISS_RECOMMENDATION",
+    result: "FAILED",
+    recommendationKey: "follow-up-sent-estimates",
+    targetRecordType: null,
+    targetRecordId: null,
+    resultCode: "STALE_PROPOSAL",
+    resultMessage: "A later failure write must not overwrite the original FAILED row.",
+    executionAttemptId: failedAttemptId,
+  });
+  check(
+    "Unique conflict fails closed when the existing row is semantically incompatible",
+    incompatibleConflictClosed &&
+      afterIncompatible?.result === "FAILED" &&
+      afterIncompatible.resultMessage === originalFailedRow.resultMessage &&
+      afterIncompatible.targetRecordId == null &&
+      compatibleReuse.id === originalFailedRow.id &&
+      compatibleReuse.result === "FAILED" &&
+      compatibleReuse.resultMessage === originalFailedRow.resultMessage,
+  );
+
   const deniedAttemptId = randomUUID();
-  const deniedMessage = "Seeded durable denial for same-identity retry.";
-  await seedAttempt({
-    businessId: businessA.id,
+  const deniedMessage = "Owner confirmation was denied for this attempt.";
+  const recordedDenied = await recordControlledAiAttempt(prisma, ownerA, {
     actionKey: "DISMISS_RECOMMENDATION",
     result: "DENIED",
     recommendationKey: "follow-up-sent-estimates",
-    membershipId: ownerMem.id,
-    userId: ownerUser.id,
+    targetRecordType: null,
+    targetRecordId: null,
     resultCode: "DENIED",
     resultMessage: deniedMessage,
     executionAttemptId: deniedAttemptId,
+  });
+  const originalDeniedRow = await prisma.controlledAiActionAttempt.findFirst({
+    where: {
+      businessId: businessA.id,
+      executionAttemptId: deniedAttemptId,
+      actionKey: "DISMISS_RECOMMENDATION",
+      recommendationKey: "follow-up-sent-estimates",
+    },
   });
   let deniedRetryClosed = false;
   try {
@@ -450,7 +516,7 @@ try {
       confirm: "confirm",
     });
   } catch (error) {
-    deniedRetryClosed = error instanceof Error && error.message === deniedMessage;
+    deniedRetryClosed = error instanceof Error && error.message === originalDeniedRow?.resultMessage;
   }
   const deniedRow = await prisma.controlledAiActionAttempt.findFirst({
     where: {
@@ -461,10 +527,30 @@ try {
     },
   });
   const afterDeniedRetry = await followUpDomain();
+  let deniedIncompatibleClosed = false;
+  try {
+    await recordControlledAiAttempt(prisma, ownerA, {
+      actionKey: "DISMISS_RECOMMENDATION",
+      result: "EXECUTED",
+      recommendationKey: "follow-up-sent-estimates",
+      targetRecordType: "BsosRecommendationState",
+      targetRecordId: "should-not-convert-denied",
+      resultCode: "SUCCEEDED",
+      resultMessage: "Should not convert DENIED to EXECUTED.",
+      executionAttemptId: deniedAttemptId,
+    });
+  } catch (error) {
+    deniedIncompatibleClosed = error instanceof Error && /different result/i.test(error.message);
+  }
   check(
-    "Seeded DENIED retry fails closed without domain mutation",
-    deniedRetryClosed &&
-      deniedRow?.result === "DENIED" &&
+    "DENIED attempt stays immutable after an authorized owner retries the same identity",
+    recordedDenied.id === originalDeniedRow?.id &&
+      recordedDenied.result === "DENIED" &&
+      deniedRetryClosed &&
+      deniedIncompatibleClosed &&
+      originalDeniedRow?.result === "DENIED" &&
+      deniedRow?.id === originalDeniedRow.id &&
+      deniedRow.result === "DENIED" &&
       deniedRow.resultMessage === deniedMessage &&
       afterDeniedRetry.items === beforeIdentityProofs.items &&
       afterDeniedRetry.states === beforeIdentityProofs.states,
@@ -589,7 +675,7 @@ try {
   });
   const afterFreshDismiss = await followUpDomain();
   check(
-    "New executionAttemptId can perform a legitimate fresh confirmation",
+    "New executionAttemptId after FAILED/DENIED identities can execute when otherwise valid",
     freshDismiss.executionResult.status === "SUCCEEDED" &&
       afterFreshDismiss.dismissed === 1 &&
       afterFreshDismiss.states === 1,

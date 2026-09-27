@@ -248,6 +248,13 @@ try {
         controlledSrc.indexOf("await invokeCanonicalOperation(tx, access, entry, live)"),
   );
   check(
+    "Ledger unique-conflict recovery fails closed on incompatible results",
+    controlledSrc.includes("function existingAttemptMatchesWrite(") &&
+      controlledSrc.includes("existingAttemptMatchesWrite(existing, input)") &&
+      controlledSrc.includes("already finished with a different result") &&
+      !controlledSrc.includes("if (existing) return existing"),
+  );
+  check(
     "Completed process maps are not an authoritative replay source",
     !controlledSrc.includes("executionAttempts.get(") &&
       controlledSrc.includes("inflightAttempts") &&

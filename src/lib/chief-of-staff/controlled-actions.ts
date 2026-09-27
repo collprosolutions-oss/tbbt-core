@@ -260,7 +260,7 @@ function boundedProvenanceText(value: string, max: number) {
   return value.trim().slice(0, max);
 }
 
-type ProvenanceWrite = {
+export type ProvenanceWrite = {
   actionKey: ControlledActionKey;
   result: ControlledAiAttemptResult;
   recommendationKey: string;
@@ -323,7 +323,18 @@ async function createControlledAiAttemptStrict(db: Db, access: BusinessAccess, i
   });
 }
 
-async function recordControlledAiAttempt(db: Db, access: BusinessAccess, input: ProvenanceWrite) {
+export function existingAttemptMatchesWrite(
+  existing: { result: string },
+  attempted: { result: ControlledAiAttemptResult },
+): boolean {
+  if (existing.result === attempted.result) return true;
+  return (
+    (existing.result === "EXECUTED" || existing.result === "REPLAYED") &&
+    (attempted.result === "EXECUTED" || attempted.result === "REPLAYED")
+  );
+}
+
+export async function recordControlledAiAttempt(db: Db, access: BusinessAccess, input: ProvenanceWrite) {
   try {
     return await createControlledAiAttemptStrict(db, access, input);
   } catch (error) {
@@ -333,7 +344,14 @@ async function recordControlledAiAttempt(db: Db, access: BusinessAccess, input: 
       input.actionKey,
       input.recommendationKey,
     ));
-    if (existing) return existing;
+    if (existing && existingAttemptMatchesWrite(existing, input)) {
+      return existing;
+    }
+    if (existing) {
+      throw new ControlledActionError(
+        "That confirmation attempt already finished with a different result. Retry with a new attempt.",
+      );
+    }
     throw error;
   }
 }
