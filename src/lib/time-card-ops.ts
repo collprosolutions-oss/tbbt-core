@@ -98,7 +98,7 @@ async function loadJobInBusiness(db: Db, businessId: string, jobId: string) {
  * Tenant/job-scoped row lock. Different jobs and tenants stay independent;
  * this never serializes the whole TimeEntry or Job table.
  */
-async function lockTenantOwnedJob(
+export async function lockTenantOwnedJob(
   db: Db,
   businessId: string,
   jobId: string,

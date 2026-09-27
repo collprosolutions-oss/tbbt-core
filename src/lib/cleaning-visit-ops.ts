@@ -30,6 +30,7 @@ import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   completeJobWithRunningTimeSafetyInTransaction,
   isTimeCardError,
+  lockTenantOwnedJob,
   timeCardErrorMessage,
 } from "@/lib/time-card-ops";
 import { parseRecurrenceCadence } from "@/lib/recurrence";
@@ -294,7 +295,12 @@ export async function setAssignedChecklistItem(
 export async function recordAssignedVisitOutcome(
   db: PrismaClient,
   actor: AssignedVisitActor,
-  input: { jobId: string; outcomeStatus: string },
+  input: {
+    jobId: string;
+    outcomeStatus: string;
+    /** Proof hook: runs after the authorize read and before the Job lock. */
+    afterInitialRead?: () => Promise<void>;
+  },
 ) {
   const outcome = parseRecordedVisitOutcome(input.outcomeStatus);
   if (!outcome) {
@@ -306,8 +312,24 @@ export async function recordAssignedVisitOutcome(
     throw new CleaningVisitError(START_BEFORE_COMPLETE_MESSAGE);
   }
 
+  if (input.afterInitialRead) {
+    await input.afterInitialRead();
+  }
+
   try {
     return await db.$transaction(async (tx) => {
+      const locked = await lockTenantOwnedJob(tx, actor.businessId, job.id);
+      if (!locked || locked.assignedMembershipId !== actor.membershipId) {
+        throw new CleaningVisitError(ASSIGNED_WORKER_ONLY_MESSAGE);
+      }
+      if (
+        outcome === "VISIT_COMPLETED" &&
+        locked.status !== "IN_PROGRESS" &&
+        locked.status !== "COMPLETED"
+      ) {
+        throw new CleaningVisitError(START_BEFORE_COMPLETE_MESSAGE);
+      }
+
       let visit = await tx.jobCrewVisit.findFirst({
         where: { jobId: job.id, businessId: actor.businessId },
       });
@@ -328,8 +350,8 @@ export async function recordAssignedVisitOutcome(
         },
       });
 
-      let jobStatus = job.status;
-      if (outcome === "VISIT_COMPLETED" && job.status === "IN_PROGRESS") {
+      let jobStatus = locked.status;
+      if (outcome === "VISIT_COMPLETED" && locked.status === "IN_PROGRESS") {
         const completed = await completeJobWithRunningTimeSafetyInTransaction(tx, {
           businessId: actor.businessId,
           jobId: job.id,

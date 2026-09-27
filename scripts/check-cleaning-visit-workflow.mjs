@@ -172,6 +172,9 @@ check(
     visitOutcomeLabel("RE_CLEAN_REQUESTED") === "Re-clean requested" &&
     visitOutcomeLabel("NONE") === "No visit outcome recorded",
 );
+const recordOutcomeSrc = read("src/lib/cleaning-visit-ops.ts").slice(
+  read("src/lib/cleaning-visit-ops.ts").indexOf("export async function recordAssignedVisitOutcome"),
+);
 check(
   "VISIT_COMPLETED writes the visit and Job complete in one transaction",
   read("src/lib/cleaning-visit-ops.ts").includes("$transaction") &&
@@ -179,6 +182,18 @@ check(
       "completeJobWithRunningTimeSafetyInTransaction",
     ) &&
     !read("src/lib/cleaning-visit-ops.ts").includes("completeJobWithRunningTimeSafety(db"),
+);
+check(
+  "Visit outcome locks the Job and rechecks assignment and status before writing",
+  recordOutcomeSrc.includes("lockTenantOwnedJob") &&
+    recordOutcomeSrc.includes("assignedMembershipId") &&
+    recordOutcomeSrc.includes("locked.status") &&
+    recordOutcomeSrc.indexOf("lockTenantOwnedJob") <
+      recordOutcomeSrc.indexOf("jobCrewVisit.update") &&
+    recordOutcomeSrc.indexOf("locked.assignedMembershipId") <
+      recordOutcomeSrc.indexOf("jobCrewVisit.update") &&
+    recordOutcomeSrc.indexOf("locked.status") <
+      recordOutcomeSrc.indexOf("jobCrewVisit.update"),
 );
 check(
   "Handyman jobs are not eligible; Cleaning recurrenceSupport is required",
@@ -565,6 +580,92 @@ try {
       visitAfterAtomicFail?.outcomeRecordedAt == null &&
       visitAfterAtomicFail?.outcomeRecordedByMembershipId == null &&
       jobAfterAtomicFail?.status === "IN_PROGRESS",
+  );
+
+  const jobRaceAssign = await createTradeJob(cleanA.id, "CLEANING", memWorkerA.id);
+  await setCleaningVisitCadence(prisma, ownerA, {
+    jobId: jobRaceAssign.id,
+    cadence: "WEEKLY",
+  });
+  await prisma.job.update({
+    where: { id: jobRaceAssign.id },
+    data: { status: "IN_PROGRESS" },
+  });
+  await expectThrow(
+    "Assignment change after the initial read refuses VISIT_COMPLETED",
+    () =>
+      recordAssignedVisitOutcome(
+        prisma,
+        { businessId: cleanA.id, membershipId: memWorkerA.id },
+        {
+          jobId: jobRaceAssign.id,
+          outcomeStatus: "VISIT_COMPLETED",
+          afterInitialRead: async () => {
+            await prisma.job.update({
+              where: { id: jobRaceAssign.id },
+              data: { assignedMembershipId: memOtherA.id },
+            });
+          },
+        },
+      ),
+    (error) => error instanceof Error && error.message === ASSIGNED_WORKER_ONLY_MESSAGE,
+  );
+  const visitAfterAssignRace = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: jobRaceAssign.id, businessId: cleanA.id },
+  });
+  const jobAfterAssignRace = await prisma.job.findFirst({
+    where: { id: jobRaceAssign.id, businessId: cleanA.id },
+  });
+  check(
+    "Reassigned Job after the initial read leaves no visit or Job write",
+    visitAfterAssignRace?.outcomeStatus === "NONE" &&
+      visitAfterAssignRace?.outcomeRecordedAt == null &&
+      visitAfterAssignRace?.outcomeRecordedByMembershipId == null &&
+      jobAfterAssignRace?.status === "IN_PROGRESS" &&
+      jobAfterAssignRace?.assignedMembershipId === memOtherA.id,
+  );
+
+  const jobRaceStatus = await createTradeJob(cleanA.id, "CLEANING", memWorkerA.id);
+  await setCleaningVisitCadence(prisma, ownerA, {
+    jobId: jobRaceStatus.id,
+    cadence: "WEEKLY",
+  });
+  await prisma.job.update({
+    where: { id: jobRaceStatus.id },
+    data: { status: "IN_PROGRESS" },
+  });
+  await expectThrow(
+    "Status change after the initial read refuses VISIT_COMPLETED",
+    () =>
+      recordAssignedVisitOutcome(
+        prisma,
+        { businessId: cleanA.id, membershipId: memWorkerA.id },
+        {
+          jobId: jobRaceStatus.id,
+          outcomeStatus: "VISIT_COMPLETED",
+          afterInitialRead: async () => {
+            await prisma.job.update({
+              where: { id: jobRaceStatus.id },
+              data: { status: "SCHEDULED" },
+            });
+          },
+        },
+      ),
+    (error) => error instanceof Error && error.message === START_BEFORE_COMPLETE_MESSAGE,
+  );
+  const visitAfterStatusRace = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: jobRaceStatus.id, businessId: cleanA.id },
+  });
+  const jobAfterStatusRace = await prisma.job.findFirst({
+    where: { id: jobRaceStatus.id, businessId: cleanA.id },
+  });
+  check(
+    "Status change after the initial read leaves no visit or Job write",
+    visitAfterStatusRace?.outcomeStatus === "NONE" &&
+      visitAfterStatusRace?.outcomeRecordedAt == null &&
+      visitAfterStatusRace?.outcomeRecordedByMembershipId == null &&
+      jobAfterStatusRace?.status === "SCHEDULED" &&
+      jobAfterStatusRace?.assignedMembershipId === memWorkerA.id,
   );
 
   const procedure = await createOperatingProcedure(prisma, ownerA, {
