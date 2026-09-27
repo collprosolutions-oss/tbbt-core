@@ -180,7 +180,7 @@ const pageSrc = readRepo("src/app/(app)/scenario-planner/page.tsx");
 const uiSrc = readRepo("src/components/owner-scenario-planner/workspace.tsx");
 const schemaSrc = readRepo("prisma/schema.prisma");
 const migrationSrc = readRepo(
-  "prisma/migrations/20260927240000_owner_scenario_assumption_set/migration.sql",
+  "prisma/migrations/20260928010000_owner_scenario_assumption_set/migration.sql",
 );
 const navSrc = readRepo("src/lib/nav.ts");
 const packageSrc = readRepo("package.json");

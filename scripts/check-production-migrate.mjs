@@ -1126,6 +1126,28 @@ check(
       localNames.indexOf("20260927230000_tenant_intake_snapshot"),
 );
 
+const ownerScenarioAssumptionSetMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260928010000_owner_scenario_assumption_set/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Owner scenario assumption-set migration is additive, valid Sept 28, and after intake snapshot",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(ownerScenarioAssumptionSetMigration) &&
+    ownerScenarioAssumptionSetMigration.includes('CREATE TABLE IF NOT EXISTS "OwnerScenarioAssumptionSet"') &&
+    ownerScenarioAssumptionSetMigration.includes('OwnerScenarioAssumptionSet_businessId_fkey') &&
+    ownerScenarioAssumptionSetMigration.includes('OwnerScenarioAssumptionSet_createdByMembershipId_fkey') &&
+    !/ALTER TABLE "(Business|Invoice|Payment|Expense|Job|ServiceCatalogItem)"/.test(
+      ownerScenarioAssumptionSetMigration,
+    ) &&
+    localNames.includes("20260928010000_owner_scenario_assumption_set") &&
+    !localNames.includes("20260927240000_owner_scenario_assumption_set") &&
+    localNames.indexOf("20260927230000_tenant_intake_snapshot") <
+      localNames.indexOf("20260928010000_owner_scenario_assumption_set"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",
