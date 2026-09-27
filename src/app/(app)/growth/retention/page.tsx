@@ -5,8 +5,10 @@ import { PageHeader } from "@/components/page-header";
 import { requireManagementPageAccess } from "@/lib/access";
 import {
   RETENTION_NO_CADENCE_MESSAGE,
+  RETENTION_OWNER_FOLLOW_UP_MESSAGE,
   RETENTION_READ_ONLY_MESSAGE,
   loadRetentionRecoveryCenter,
+  retentionFollowUpWriteAllowed,
 } from "@/lib/growth/retention";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog/codes";
 import { hasProductCapability } from "@/lib/product-entitlements";
@@ -54,14 +56,15 @@ export default async function RetentionRecoveryPage({
     role: access.workspace.role,
     customerId: params.customerId,
   });
+  const canRecordFollowUp = retentionFollowUpWriteAllowed(access.workspace.role);
 
   return (
     <PageContainer width="2xl">
       <PageHeader
         title="Customer retention"
-        description={`Evidence already on file for ${access.workspace.business.name}. ${RETENTION_READ_ONLY_MESSAGE} ${RETENTION_NO_CADENCE_MESSAGE}`}
+        description={`Evidence already on file for ${access.workspace.business.name}. ${RETENTION_READ_ONLY_MESSAGE} ${RETENTION_NO_CADENCE_MESSAGE}${canRecordFollowUp ? ` ${RETENTION_OWNER_FOLLOW_UP_MESSAGE}` : ""}`}
       />
-      <RetentionCenter workspace={workspace} />
+      <RetentionCenter workspace={workspace} canRecordFollowUp={canRecordFollowUp} />
     </PageContainer>
   );
 }
