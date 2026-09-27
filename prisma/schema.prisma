@@ -415,6 +415,9 @@ model Business {
   /// Drafts stay off public hire forms until published as TenantIntakeSnapshot.
   intakeConditionDrafts    IntakeConditionDraft[]
   tenantIntakeSnapshots    TenantIntakeSnapshot[]
+  /// Named OWNER assumption overlays for /scenario-planner. Knobs only —
+  /// never recorded facts, forecasts, invoices, payments, expenses, or prices.
+  ownerScenarioAssumptionSets OwnerScenarioAssumptionSet[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -482,6 +485,31 @@ model BusinessLocation {
 
   @@index([businessId])
   @@index([businessId, status])
+}
+
+/// Named OWNER assumption overlay for /scenario-planner.
+/// Stores knobs only. Never stores recorded facts, forecasts, invoices,
+/// payments, expenses, jobs, or catalog prices. Reopening applies these
+/// knobs to the current bounded recorded-fact sample. Comparing two rows
+/// uses one shared fact sample. businessId comes from access, not the browser.
+model OwnerScenarioAssumptionSet {
+  id                          String   @id @default(cuid())
+  businessId                  String
+  name                        String
+  workloadPercent             Decimal
+  materialCostPercent         Decimal
+  laborCostPercent            Decimal
+  pricePercent                Decimal
+  assumeUnpaidInvoicesCollect Boolean  @default(false)
+  createdByMembershipId       String?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy Membership? @relation("OwnerScenarioAssumptionSetCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, name])
+  @@index([businessId, updatedAt])
 }
 
 model Membership {
@@ -606,6 +634,7 @@ model Membership {
   createdExternalLeadImports      ExternalLeadImport[] @relation("ExternalLeadImportCreator")
   confirmedExternalLeadImports    ExternalLeadImport[] @relation("ExternalLeadImportConfirmer")
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
+  createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
 
   @@unique([userId, businessId])
   @@index([businessId])

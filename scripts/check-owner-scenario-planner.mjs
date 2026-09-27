@@ -31,33 +31,59 @@ const { ACCOUNTING_NOT_CONNECTED_MESSAGE, BANKING_NOT_CONNECTED_MESSAGE } = awai
 );
 const {
   ACCOUNTING_NOT_CLAIMED_MESSAGE,
+  ASSUMPTION_SET_KIND,
+  ASSUMPTION_SET_NOT_FOUND_MESSAGE,
   BANK_BALANCE_UNKNOWN_MESSAGE,
+  COMPARE_SAME_FACTS_MESSAGE,
+  FIX_ASSUMPTIONS_BEFORE_SAVE_MESSAGE,
+  FORECAST_DELTA_MESSAGE,
   FORECAST_KIND,
   FORECAST_NOT_FACT_MESSAGE,
   INCOMPLETE_LABOR_MARGIN_MESSAGE,
   LABOR_WAGE_NOT_BANK_CASH_MESSAGE,
+  MAX_ASSUMPTION_SET_NAME_LENGTH,
+  NAME_REQUIRED_MESSAGE,
   NO_AUTOMATIC_PRICE_CHANGE_MESSAGE,
   NO_TAX_CONCLUSION_MESSAGE,
   OVERHEAD_NOT_SCALED_MESSAGE,
   PLANNER_IDENTITY_PERCENT,
   PLANNER_READ_BOUND,
+  PLANNER_SET_READ_BOUND,
   READ_BOUND_MESSAGE,
   RECORDED_FACT_KIND,
+  SAVE_DOES_NOT_WRITE_BOOKS_MESSAGE,
+  SAVED_SET_NOT_FACT_MESSAGE,
   SCENARIO_PLANNER_PATH,
+  SET_READ_BOUND_MESSAGE,
   UNPAID_NOT_CASH_MESSAGE,
   assertCanReadOwnerScenarioPlanner,
+  assumptionsFromSavedSet,
+  buildOwnerScenarioComparison,
   buildOwnerScenarioPlan,
   canAccessOwnerScenarioPlanner,
   isolatePlannerSource,
+  isolateSameBusinessAssumptionSets,
   isolateSameBusinessExpenses,
   isolateSameBusinessInvoices,
   isolateSameBusinessPayments,
+  parseAssumptionSetName,
   parseOwnerScenarioAssumptions,
   parsePlannerFactorPercent,
+  scenarioPlannerHref,
+  toSavedOwnerScenarioAssumptionSet,
 } = await import("@/lib/owner-scenario-planner");
-const { loadOwnerScenarioPlan, loadOwnerScenarioPlannerSource } = await import(
-  "@/lib/owner-scenario-planner-data"
-);
+const {
+  listOwnerScenarioAssumptionSets,
+  loadOwnerScenarioAssumptionSet,
+  loadOwnerScenarioPlan,
+  loadOwnerScenarioPlannerSource,
+  loadOwnerScenarioPlannerWorkspace,
+} = await import("@/lib/owner-scenario-planner-data");
+const {
+  OwnerScenarioAssumptionSetError,
+  assertCanWriteOwnerScenarioPlanner,
+  saveOwnerScenarioAssumptionSet,
+} = await import("@/lib/owner-scenario-planner-ops");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -148,14 +174,22 @@ function identityAssumptions(overrides = {}) {
 
 const libSrc = readRepo("src/lib/owner-scenario-planner.ts");
 const dataSrc = readRepo("src/lib/owner-scenario-planner-data.ts");
+const opsSrc = readRepo("src/lib/owner-scenario-planner-ops.ts");
+const actionSrc = readRepo("src/app/actions/owner-scenario-planner.ts");
 const pageSrc = readRepo("src/app/(app)/scenario-planner/page.tsx");
 const uiSrc = readRepo("src/components/owner-scenario-planner/workspace.tsx");
+const schemaSrc = readRepo("prisma/schema.prisma");
+const migrationSrc = readRepo(
+  "prisma/migrations/20260928010000_owner_scenario_assumption_set/migration.sql",
+);
 const navSrc = readRepo("src/lib/nav.ts");
 const packageSrc = readRepo("package.json");
 const authSrc = readRepo("src/lib/authorization.ts");
-const allFeatureSrc = [libSrc, dataSrc, pageSrc, uiSrc].join("\n");
+const allFeatureSrc = [libSrc, dataSrc, opsSrc, actionSrc, pageSrc, uiSrc].join("\n");
 const mutationPattern =
   /prisma\.(create|update|delete|upsert|updateMany|deleteMany|createMany)|\$executeRaw|\$transaction/;
+const financialWritePattern =
+  /prisma\.(invoice|payment|expense|job|serviceCatalogItem|estimate|lineItem)\./;
 
 try {
   console.log("\nSTATIC — Isolation from shared files and honesty");
@@ -167,8 +201,19 @@ try {
   check("Authorization capability set was not expanded", !authSrc.includes("SCENARIO") && !authSrc.includes("PLANNER"));
   check("Library has no Prisma mutations", !/prisma\./.test(libSrc) && !/\$executeRaw/.test(libSrc));
   check("Data loader is read-only", dataSrc.includes("Read-only") && !mutationPattern.test(dataSrc));
-  check("Page has no writes", !mutationPattern.test(pageSrc) && pageSrc.includes("loadOwnerScenarioPlan"));
+  check("Page has no writes", !mutationPattern.test(pageSrc) && pageSrc.includes("loadOwnerScenarioPlannerWorkspace"));
   check("UI is a GET form, not a price write", uiSrc.includes('method="get"') && uiSrc.includes("does not") && uiSrc.includes("change prices"));
+  check("Save writes only assumption-set rows", /ownerScenarioAssumptionSet\.(create|update)/.test(opsSrc) && !financialWritePattern.test(opsSrc) && !financialWritePattern.test(actionSrc));
+  const setModel = schemaSrc.slice(
+    schemaSrc.indexOf("model OwnerScenarioAssumptionSet"),
+    schemaSrc.indexOf("model Membership"),
+  );
+  check("Assumption-set model stores knobs only", setModel.includes("workloadPercent") && setModel.includes("assumeUnpaidInvoicesCollect") && !/billedRevenue|collectedRevenue|projectedCashIn/.test(setModel));
+  check("Migration is additive and does not rewrite books", migrationSrc.includes('CREATE TABLE IF NOT EXISTS "OwnerScenarioAssumptionSet"') && !/DROP TABLE|DELETE FROM|TRUNCATE|UPDATE\s+"Invoice"|UPDATE\s+"Payment"|UPDATE\s+"Expense"|UPDATE\s+"Job"/i.test(migrationSrc));
+  check("Save action re-authorizes on the server", actionSrc.includes("requireBusinessAccess()") && actionSrc.includes("saveOwnerScenarioAssumptionSet"));
+  check("UI can save, reopen, and compare named sets", uiSrc.includes("Save assumption set") && uiSrc.includes("Reopen") && uiSrc.includes("Compare forecasts"));
+  check("Saved sets are labeled as knobs, not facts", /store owner knobs only/i.test(SAVED_SET_NOT_FACT_MESSAGE) && uiSrc.includes("SAVED_SET_NOT_FACT_MESSAGE"));
+  check("Compare copy keeps forecasts off recorded facts", /same recorded facts/i.test(COMPARE_SAME_FACTS_MESSAGE) && /forecast-only/i.test(FORECAST_DELTA_MESSAGE));
   check("Loader queries are bounded", dataSrc.includes("take: PLANNER_READ_BOUND") && PLANNER_READ_BOUND === 200);
   check("Banking stays Not Connected", /Not Connected/.test(BANKING_NOT_CONNECTED_MESSAGE) && /Not Connected/.test(BANK_BALANCE_UNKNOWN_MESSAGE));
   check("Accounting stays Not Connected", ACCOUNTING_NOT_CLAIMED_MESSAGE === ACCOUNTING_NOT_CONNECTED_MESSAGE);
@@ -190,6 +235,11 @@ try {
   check("Invalid knobs keep identity factors and report errors", invalid.workloadFactor === 1 && invalid.materialCostFactor === 1 && invalid.errors.length === 2);
   check("assumeUnpaid defaults off", identityAssumptions().assumeUnpaidInvoicesCollect === false);
   check("assumeUnpaid=1 is a forecast knob only", parseOwnerScenarioAssumptions({ assumeUnpaid: "1" }).assumeUnpaidInvoicesCollect === true);
+  check("Blank assumption-set name is rejected", parseAssumptionSetName("").error === NAME_REQUIRED_MESSAGE);
+  check("Too-long assumption-set name is rejected", parseAssumptionSetName("x".repeat(MAX_ASSUMPTION_SET_NAME_LENGTH + 1)).error.includes(String(MAX_ASSUMPTION_SET_NAME_LENGTH)));
+  check("Valid assumption-set name is trimmed", parseAssumptionSetName("  Busy summer  ").name === "Busy summer");
+  check("Reopen href uses the set id", scenarioPlannerHref({ set: "set-1" }) === "/scenario-planner?set=set-1");
+  check("Compare href uses two set ids", scenarioPlannerHref({ left: "a", right: "b" }) === "/scenario-planner?left=a&right=b");
 
   const normal = plannerSource({
     customers: [{ id: "c1", businessId: "biz-a", name: "Ada", createdAt: now }],
@@ -518,6 +568,49 @@ try {
       first.forecast.projectedCashOut === second.forecast.projectedCashOut,
   );
 
+  const savedBusy = toSavedOwnerScenarioAssumptionSet({
+    id: "set-busy",
+    businessId: "biz-a",
+    name: "Busy summer",
+    workloadPercent: 150,
+    materialCostPercent: 120,
+    laborCostPercent: 90,
+    pricePercent: 110,
+    assumeUnpaidInvoicesCollect: false,
+  });
+  const savedQuiet = toSavedOwnerScenarioAssumptionSet({
+    id: "set-quiet",
+    businessId: "biz-a",
+    name: "Quiet winter",
+    workloadPercent: 80,
+    materialCostPercent: 100,
+    laborCostPercent: 100,
+    pricePercent: 100,
+    assumeUnpaidInvoicesCollect: false,
+  });
+  const savedForeign = toSavedOwnerScenarioAssumptionSet({
+    id: "set-foreign",
+    businessId: "biz-b",
+    name: "Other tenant",
+    workloadPercent: 200,
+    materialCostPercent: 200,
+    laborCostPercent: 200,
+    pricePercent: 200,
+    assumeUnpaidInvoicesCollect: true,
+  });
+  check("Saved set kind is not a recorded fact", savedBusy.kind === ASSUMPTION_SET_KIND && savedBusy.kind !== RECORDED_FACT_KIND && savedBusy.kind !== FORECAST_KIND);
+  check("Reopened knobs match the saved percents", assumptionsFromSavedSet(savedBusy).workloadPercent === 150 && assumptionsFromSavedSet(savedBusy).pricePercent === 110);
+  const compared = buildOwnerScenarioComparison(normal, savedBusy, savedQuiet);
+  check("Compare uses the same recorded facts", compared?.sameRecordedFacts === true && compared.recorded.collectedRevenue === identity.recorded.collectedRevenue && compared.recorded.knownCashOut === identity.recorded.knownCashOut);
+  check("Compare left forecast matches the busy overlay", compared?.left.forecast.projectedBilledRevenue === varied.forecast.projectedBilledRevenue);
+  check("Compare right forecast is not the busy overlay", compared?.right.forecast.projectedBilledRevenue !== compared?.left.forecast.projectedBilledRevenue);
+  check("Compare deltas are forecast-only", compared?.deltas.kind === FORECAST_KIND && compared.deltas.message === FORECAST_DELTA_MESSAGE);
+  check("Compare billed delta is right minus left", compared?.deltas.billed === compared.right.forecast.projectedBilledRevenue - compared.left.forecast.projectedBilledRevenue);
+  check("Compare does not invent a bank balance", compared?.actualBankBalance === null && compared?.projectedBankBalance === null);
+  check("Compare does not write records or prices", compared?.writesRecords === false && compared?.changesPrices === false);
+  check("Foreign assumption set cannot enter a comparison", buildOwnerScenarioComparison(normal, savedBusy, savedForeign) === null);
+  check("Isolation drops foreign saved sets", isolateSameBusinessAssumptionSets([savedBusy, savedForeign], "biz-a").every((row) => row.businessId === "biz-a"));
+
   console.log("\nROLE — OWNER only");
   check("OWNER can access the planner", canAccessOwnerScenarioPlanner("OWNER") === true);
   check("ADMIN cannot access the planner", canAccessOwnerScenarioPlanner("ADMIN") === false);
@@ -548,6 +641,30 @@ try {
     ownerAllowed = false;
   }
   check("OWNER read is allowed", ownerAllowed);
+
+  let adminWriteBlocked = false;
+  try {
+    assertCanWriteOwnerScenarioPlanner(makeAccess("biz-a", "ADMIN", "mem-admin"));
+  } catch (error) {
+    adminWriteBlocked = error instanceof ForbiddenError;
+  }
+  check("ADMIN write fails closed", adminWriteBlocked);
+
+  let memberWriteBlocked = false;
+  try {
+    assertCanWriteOwnerScenarioPlanner(makeAccess("biz-a", "MEMBER", "mem-member"));
+  } catch (error) {
+    memberWriteBlocked = error instanceof ForbiddenError;
+  }
+  check("MEMBER write fails closed", memberWriteBlocked);
+
+  let ownerWriteAllowed = true;
+  try {
+    assertCanWriteOwnerScenarioPlanner(makeAccess("biz-a", "OWNER", "mem-owner"));
+  } catch {
+    ownerWriteAllowed = false;
+  }
+  check("OWNER write is allowed", ownerWriteAllowed);
 
   console.log("\nDB — Tenant isolation, authorization, and bounded reads");
   const businessA = await prisma.business.create({
@@ -766,6 +883,134 @@ try {
   check("Truncated plan keeps the bound message", truncatedPlan.readsTruncated === true && truncatedPlan.messages.bound === READ_BOUND_MESSAGE);
   const afterCount = await prisma.invoice.count({ where: { businessId: businessA.id } });
   check("Bounded read does not change stored invoice count", afterCount === beforeCount + PLANNER_READ_BOUND);
+
+  console.log("\nDB — Save, name, reopen, and compare against the same facts");
+  const invoicesBeforeSave = await prisma.invoice.count({ where: { businessId: businessA.id } });
+  const paymentsBeforeSave = await prisma.payment.count({ where: { businessId: businessA.id } });
+  const expensesBeforeSave = await prisma.expense.count({ where: { businessId: businessA.id } });
+  const jobsBeforeSave = await prisma.job.count({ where: { businessId: businessA.id } });
+
+  const storedBusy = await saveOwnerScenarioAssumptionSet(prisma, ownerA, {
+    name: "Busy summer",
+    workload: "150",
+    materials: "120",
+    labor: "90",
+    price: "110",
+  });
+  check("OWNER can save a named assumption set", storedBusy.created === true && storedBusy.set.name === "Busy summer" && storedBusy.set.kind === ASSUMPTION_SET_KIND);
+  check("Saved set keeps knobs, not forecasts", storedBusy.set.workloadPercent === 150 && storedBusy.set.pricePercent === 110 && !("projectedCashIn" in storedBusy.set));
+  check("Save reports that books were not written", storedBusy.message === SAVE_DOES_NOT_WRITE_BOOKS_MESSAGE);
+
+  const reopened = await loadOwnerScenarioAssumptionSet(prisma, ownerA, storedBusy.set.id);
+  check("OWNER can reopen the named set", reopened?.id === storedBusy.set.id && reopened?.workloadPercent === 150);
+
+  const workspaceReopen = await loadOwnerScenarioPlannerWorkspace(prisma, ownerA, { set: storedBusy.set.id });
+  const currentFacts = await loadOwnerScenarioPlan(prisma, ownerA, identityAssumptions());
+  check("Reopened workspace uses saved knobs on current facts", workspaceReopen.openedSet?.id === storedBusy.set.id && workspaceReopen.plan.assumptions.workloadPercent === 150 && workspaceReopen.plan.recorded.collectedRevenue === currentFacts.recorded.collectedRevenue && workspaceReopen.plan.recorded.kind === RECORDED_FACT_KIND);
+  check("Reopened forecast is labeled separately from recorded facts", workspaceReopen.plan.forecast.kind === FORECAST_KIND && workspaceReopen.plan.recorded.kind === RECORDED_FACT_KIND);
+
+  const renamed = await saveOwnerScenarioAssumptionSet(prisma, ownerA, {
+    name: "Busy summer",
+    workload: "160",
+    materials: "120",
+    labor: "90",
+    price: "110",
+  });
+  check("Saving the same name updates knobs in place", renamed.created === false && renamed.set.id === storedBusy.set.id && renamed.set.workloadPercent === 160);
+
+  const storedQuiet = await saveOwnerScenarioAssumptionSet(prisma, ownerA, {
+    name: "Quiet winter",
+    workload: "80",
+    materials: "100",
+    labor: "100",
+    price: "100",
+  });
+  const workspaceCompare = await loadOwnerScenarioPlannerWorkspace(prisma, ownerA, {
+    left: storedBusy.set.id,
+    right: storedQuiet.set.id,
+  });
+  check("Compare loads two named sets", workspaceCompare.comparison?.left.set.name === "Busy summer" && workspaceCompare.comparison?.right.set.name === "Quiet winter");
+  check("Compare recorded facts match the live recorded sample", workspaceCompare.comparison?.recorded.collectedRevenue === workspaceCompare.plan.recorded.collectedRevenue && workspaceCompare.comparison?.recorded.knownCashOut === workspaceCompare.plan.recorded.knownCashOut);
+  check("Compare forecasts differ while facts stay shared", workspaceCompare.comparison?.left.forecast.projectedBilledRevenue !== workspaceCompare.comparison?.right.forecast.projectedBilledRevenue && workspaceCompare.comparison?.sameRecordedFacts === true);
+  check("Compare deltas stay forecast-kind", workspaceCompare.comparison?.deltas.kind === FORECAST_KIND && workspaceCompare.comparison?.left.forecast.kind === FORECAST_KIND);
+
+  const listedA = await listOwnerScenarioAssumptionSets(prisma, ownerA);
+  check("Owner A lists only same-business named sets", listedA.sets.length === 2 && listedA.sets.every((row) => row.businessId === businessA.id));
+
+  const storedBeta = await saveOwnerScenarioAssumptionSet(prisma, ownerB, {
+    name: "Busy summer",
+    workload: "200",
+    materials: "200",
+    labor: "200",
+    price: "200",
+    assumeUnpaid: "1",
+  });
+  const listedB = await listOwnerScenarioAssumptionSets(prisma, ownerB);
+  check("Owner B cannot list tenant A assumption sets", listedB.sets.length === 1 && listedB.sets[0]?.id === storedBeta.set.id);
+  const leakedReopen = await loadOwnerScenarioAssumptionSet(prisma, ownerA, storedBeta.set.id);
+  check("Owner A cannot reopen tenant B assumption set", leakedReopen === null);
+  const leakedCompare = await loadOwnerScenarioPlannerWorkspace(prisma, ownerA, {
+    left: storedBusy.set.id,
+    right: storedBeta.set.id,
+  });
+  check("Owner A cannot compare against tenant B", leakedCompare.comparison === null && leakedCompare.comparisonError === ASSUMPTION_SET_NOT_FOUND_MESSAGE);
+
+  let adminSaveBlocked = false;
+  try {
+    await saveOwnerScenarioAssumptionSet(prisma, adminA, { name: "Admin set", workload: "110" });
+  } catch (error) {
+    adminSaveBlocked = error instanceof ForbiddenError || error?.name === "ForbiddenError";
+  }
+  check("ADMIN cannot save an assumption set", adminSaveBlocked);
+
+  let memberSaveBlocked = false;
+  try {
+    await saveOwnerScenarioAssumptionSet(prisma, memberA, { name: "Member set", workload: "110" });
+  } catch (error) {
+    memberSaveBlocked = error instanceof ForbiddenError || error?.name === "ForbiddenError";
+  }
+  check("MEMBER cannot save an assumption set", memberSaveBlocked);
+
+  let invalidSaveBlocked = false;
+  try {
+    await saveOwnerScenarioAssumptionSet(prisma, ownerA, { name: "Broken", workload: "999" });
+  } catch (error) {
+    invalidSaveBlocked = error instanceof OwnerScenarioAssumptionSetError && error.message === FIX_ASSUMPTIONS_BEFORE_SAVE_MESSAGE;
+  }
+  check("Invalid knobs cannot be saved", invalidSaveBlocked);
+
+  let unnamedSaveBlocked = false;
+  try {
+    await saveOwnerScenarioAssumptionSet(prisma, ownerA, { name: "   " });
+  } catch (error) {
+    unnamedSaveBlocked = error instanceof OwnerScenarioAssumptionSetError && error.message === NAME_REQUIRED_MESSAGE;
+  }
+  check("Unnamed assumption set cannot be saved", unnamedSaveBlocked);
+
+  check(
+    "Save did not write invoices, payments, expenses, or jobs",
+    (await prisma.invoice.count({ where: { businessId: businessA.id } })) === invoicesBeforeSave &&
+      (await prisma.payment.count({ where: { businessId: businessA.id } })) === paymentsBeforeSave &&
+      (await prisma.expense.count({ where: { businessId: businessA.id } })) === expensesBeforeSave &&
+      (await prisma.job.count({ where: { businessId: businessA.id } })) === jobsBeforeSave,
+  );
+
+  await prisma.ownerScenarioAssumptionSet.createMany({
+    data: Array.from({ length: PLANNER_SET_READ_BOUND }, (_, index) => ({
+      businessId: businessA.id,
+      name: `Bound set ${index + 1}`,
+      workloadPercent: new Prisma.Decimal(100),
+      materialCostPercent: new Prisma.Decimal(100),
+      laborCostPercent: new Prisma.Decimal(100),
+      pricePercent: new Prisma.Decimal(100),
+    })),
+  });
+  const boundedSets = await listOwnerScenarioAssumptionSets(prisma, ownerA);
+  check("Bounded assumption-set read stops at the planner set bound", boundedSets.sets.length === PLANNER_SET_READ_BOUND);
+  check("Hitting the set bound flags truncation", boundedSets.truncated === true);
+  const storedSetCount = await prisma.ownerScenarioAssumptionSet.count({ where: { businessId: businessA.id } });
+  check("Bounded set read does not change stored set count", storedSetCount === PLANNER_SET_READ_BOUND + 2);
+  check("Set bound message is explicit", /bounded sample/.test(SET_READ_BOUND_MESSAGE));
 
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"} — owner scenario planner checks`);
   process.exit(failures === 0 ? 0 : 1);
