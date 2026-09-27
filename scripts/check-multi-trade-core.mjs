@@ -526,12 +526,12 @@ try {
   check(
     "Historical schema still includes bedrooms after a later config-shaped change",
     historical.fields.some((field) => field.key === "bedrooms") &&
-      historical.version === 1 &&
+      historical.version === v1.version &&
       frozenBefore === request?.intakeSchemaJson,
   );
   check(
     "Current schema helper can change without rewriting the stored snapshot",
-    mutated.version === 99 && request?.intakeSchemaVersion === 1,
+    mutated.version === 99 && request?.intakeSchemaVersion === v1.version,
   );
 
   const handyCreated = await createPublicServiceRequest(prisma, {
