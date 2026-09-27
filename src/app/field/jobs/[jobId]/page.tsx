@@ -30,8 +30,10 @@ import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { prisma } from "@/lib/prisma";
 import { AssignedJobPickupCard } from "@/components/field/assigned-job-pickup-card";
+import { CleaningCrewChecklist } from "@/components/field/cleaning-crew-checklist";
 import { listAssignedJobPickupView } from "@/lib/materials/pickup";
 import { buildMaterialPickupVisibility } from "@/lib/owner-today";
+import { loadAssignedCleaningVisitView } from "@/lib/cleaning-visit-data";
 
 export const metadata: Metadata = {
   title: "Job",
@@ -164,6 +166,7 @@ export default async function FieldJobPage({
   const approvedScope = resolveApprovedWorkOrderScope(job);
   const hasApprovedScope = approvedScope.source !== "none";
   const pickupItems = await listAssignedJobPickupView(prisma, field, job.id);
+  const cleaningVisit = await loadAssignedCleaningVisitView(prisma, field, job.id);
   const materialPickup = buildMaterialPickupVisibility(
     {
       scheduledAt: job.scheduledAt,
@@ -299,6 +302,17 @@ export default async function FieldJobPage({
           </p>
         ) : null}
       </div>
+
+      {cleaningVisit ? (
+        <CleaningCrewChecklist
+          jobId={job.id}
+          cadenceLabel={cleaningVisit.cadenceLabel}
+          outcomeLabel={cleaningVisit.outcomeLabel}
+          procedureTitle={cleaningVisit.procedureTitle}
+          checklist={cleaningVisit.checklist}
+          hasCadence={cleaningVisit.hasCadence}
+        />
+      ) : null}
 
       <ApprovedScopeCard
         scope={approvedScope}

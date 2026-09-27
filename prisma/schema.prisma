@@ -382,6 +382,7 @@ model Business {
   protectionAcknowledgments BusinessProtectionAcknowledgment[]
   agreementCompletionClaims BusinessAgreementCompletionClaim[]
   esignBoundary            BusinessEsignBoundary?
+  crewVisits               JobCrewVisit[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -528,6 +529,7 @@ model Membership {
   createdAgreementVersions        BusinessAgreementVersion[] @relation("AgreementVersionCreator")
   protectionAuditLogs             BusinessProtectionAuditLog[] @relation("ProtectionAuditActor")
   protectionAcknowledgments       BusinessProtectionAcknowledgment[] @relation("ProtectionAcknowledgmentActor")
+  recordedCrewVisitOutcomes       JobCrewVisit[] @relation("JobCrewVisitOutcomeRecorder")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -1228,6 +1230,7 @@ model Job {
   workforceOutreachTasks  WorkforceOutreachTask[]
   materialPurchaseLists   MaterialPurchaseList[]
   materialPurchaseOrders  MaterialPurchaseOrder[]
+  crewVisit               JobCrewVisit?
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -3009,6 +3012,7 @@ model OperatingProcedure {
   catalogItem ServiceCatalogItem? @relation(fields: [serviceCatalogItemId], references: [id], onDelete: SetNull)
   knowledge   KnowledgeEntry?     @relation(fields: [knowledgeEntryId], references: [id], onDelete: SetNull)
   steps       OperatingProcedureStep[]
+  crewVisits  JobCrewVisit[]
 
   @@index([businessId])
   @@index([businessId, archived])
@@ -3999,4 +4003,35 @@ model BusinessEsignBoundary {
   updatedAt      DateTime @updatedAt
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}
+
+/// One practical Cleaning recurring-visit + crew-checklist field record
+/// bound to an existing Job. Cadence stays on Job recurrence columns.
+/// This is not a second job engine, CRM, billing, or invented quality stamp.
+model JobCrewVisit {
+  id        String @id @default(cuid())
+  businessId String
+  jobId      String @unique
+  /// Approved OperatingProcedure used as the crew checklist, if any.
+  /// Null means the Cleaning pack default checklist is in use.
+  procedureId String?
+  /// Snapshot of checklist items + worker checkmarks. JSON array.
+  checklistJson String @default("[]")
+  /// NONE | VISIT_COMPLETED | RE_CLEAN_REQUESTED
+  outcomeStatus String @default("NONE")
+  outcomeRecordedAt DateTime?
+  outcomeRecordedByMembershipId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job      Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  procedure OperatingProcedure? @relation(fields: [procedureId], references: [id], onDelete: SetNull)
+  outcomeRecordedBy Membership? @relation("JobCrewVisitOutcomeRecorder", fields: [outcomeRecordedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([businessId, outcomeStatus])
+  @@index([procedureId])
+  @@index([outcomeRecordedByMembershipId])
 }

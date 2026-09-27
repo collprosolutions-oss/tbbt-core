@@ -98,7 +98,7 @@ async function loadJobInBusiness(db: Db, businessId: string, jobId: string) {
  * Tenant/job-scoped row lock. Different jobs and tenants stay independent;
  * this never serializes the whole TimeEntry or Job table.
  */
-async function lockTenantOwnedJob(
+export async function lockTenantOwnedJob(
   db: Db,
   businessId: string,
   jobId: string,
@@ -1021,6 +1021,60 @@ export type CompleteJobWithRunningTimeSafetyResult =
   | { ok: false; error: string };
 
 /**
+ * Job completion writes for an already-open transaction. Callers that
+ * must commit or roll back adjacent records with the Job status change
+ * use this instead of opening a second transaction.
+ *
+ * Returns `{ ok: false }` for lifecycle refusals. TimeCardError from
+ * approved-week running time still throws so the surrounding transaction
+ * rolls back.
+ */
+export async function completeJobWithRunningTimeSafetyInTransaction(
+  tx: Db,
+  input: CloseRunningJobTimeForCompletionInput,
+): Promise<CompleteJobWithRunningTimeSafetyResult> {
+  const job = await lockTenantOwnedJob(tx, input.businessId, input.jobId);
+  if (!job) {
+    return { ok: false, error: "That job could not be completed." };
+  }
+
+  const lifecycle = evaluateCompleteJob(job.status);
+  if (!lifecycle.ok) {
+    return { ok: false, error: lifecycle.error };
+  }
+
+  const closed = await closeLockedJobRunningTime(tx, job, input);
+
+  if (lifecycle.nextStatus) {
+    const updated = await tx.job.updateMany({
+      where: {
+        id: job.id,
+        businessId: input.businessId,
+        status: job.status,
+      },
+      data: { status: lifecycle.nextStatus },
+    });
+    if (updated.count !== 1 && job.status !== "COMPLETED") {
+      const current = await tx.job.findFirst({
+        where: { id: job.id, businessId: input.businessId },
+        select: { status: true },
+      });
+      if (current?.status !== "COMPLETED") {
+        throw new TimeCardError("That job could not be completed.");
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    alreadyCompleted: lifecycle.nextStatus == null,
+    jobCompleted: true as const,
+    customerId: job.customerId,
+    closed,
+  };
+}
+
+/**
  * Canonical completion write: lock the tenant-owned Job, refuse when the
  * lifecycle does not allow COMPLETED, close matching RUNNING JOB time,
  * then persist COMPLETED in the same transaction. Owner invoice/send and
@@ -1031,47 +1085,9 @@ export async function completeJobWithRunningTimeSafety(
   input: CloseRunningJobTimeForCompletionInput,
 ): Promise<CompleteJobWithRunningTimeSafetyResult> {
   try {
-    return await db.$transaction(async (tx) => {
-      const job = await lockTenantOwnedJob(tx, input.businessId, input.jobId);
-      if (!job) {
-        return { ok: false, error: "That job could not be completed." };
-      }
-
-      const lifecycle = evaluateCompleteJob(job.status);
-      if (!lifecycle.ok) {
-        return { ok: false, error: lifecycle.error };
-      }
-
-      const closed = await closeLockedJobRunningTime(tx, job, input);
-
-      if (lifecycle.nextStatus) {
-        const updated = await tx.job.updateMany({
-          where: {
-            id: job.id,
-            businessId: input.businessId,
-            status: job.status,
-          },
-          data: { status: lifecycle.nextStatus },
-        });
-        if (updated.count !== 1 && job.status !== "COMPLETED") {
-          const current = await tx.job.findFirst({
-            where: { id: job.id, businessId: input.businessId },
-            select: { status: true },
-          });
-          if (current?.status !== "COMPLETED") {
-            throw new TimeCardError("That job could not be completed.");
-          }
-        }
-      }
-
-      return {
-        ok: true,
-        alreadyCompleted: lifecycle.nextStatus == null,
-        jobCompleted: true as const,
-        customerId: job.customerId,
-        closed,
-      };
-    });
+    return await db.$transaction((tx) =>
+      completeJobWithRunningTimeSafetyInTransaction(tx, input),
+    );
   } catch (error) {
     if (isTimeCardError(error) || error instanceof ForbiddenError) {
       return { ok: false, error: timeCardErrorMessage(error, MISSING_COMPLETION_ACTOR_ERROR) };

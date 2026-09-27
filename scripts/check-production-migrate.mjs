@@ -1061,6 +1061,20 @@ check(
     revenueIntegrityMigration.includes('p."invoiceId" IS NULL'),
 );
 
+const crewVisitMigration = readFileSync(
+  new URL("../prisma/migrations/20260927180000_job_crew_visit/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Cleaning visit workflow migration is additive and after Network's 20260927150000 slot",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(crewVisitMigration) &&
+    crewVisitMigration.includes('CREATE TABLE IF NOT EXISTS "JobCrewVisit"') &&
+    !/ALTER TABLE "(Job|Business|Membership)"/.test(crewVisitMigration) &&
+    localNames.includes("20260927180000_job_crew_visit") &&
+    localNames.indexOf("20260927120000_controlled_ai_action_attempt") <
+      localNames.indexOf("20260927180000_job_crew_visit"),
+);
+
 const fillInBenchMigration = readFileSync(
   new URL("../prisma/migrations/20260927010000_fill_in_bench_owner_fields/migration.sql", import.meta.url),
   "utf8",
