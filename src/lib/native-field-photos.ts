@@ -12,11 +12,15 @@ import type { PrismaClient } from "@prisma/client";
 import {
   abortAssignedFieldJobPhoto,
   authorizeAssignedFieldJobPhoto,
-  finalizeAssignedFieldJobPhoto,
   inspectFieldJobPhotoUpload,
+  persistReadyJobPhoto,
 } from "@/lib/business-storage/field-job-photos";
 import { isBusinessStorageConfigured } from "@/lib/business-storage/config";
 import { authorizePrivateStoredAssetDownload } from "@/lib/business-storage/private-serve";
+import {
+  abortManagedUpload,
+  finalizeManagedUpload,
+} from "@/lib/business-storage/service";
 import {
   StorageAccessError,
   StorageError,
@@ -24,8 +28,10 @@ import {
   type StorageProvider,
 } from "@/lib/business-storage/types";
 import {
+  assignmentStillHeld,
   NATIVE_JOB_NOT_AVAILABLE,
 } from "@/lib/native-field-ops";
+import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 import {
   loadNativeAssignedJob,
   nativeAssignedJobWhere,
@@ -244,20 +250,10 @@ async function assignedJobPhotoOccupancy(
   access: NativeFieldAccess,
   jobId: string,
 ) {
-  const where = { businessId: access.businessId, jobId };
-  const [photos, pending] = await Promise.all([
-    db.jobPhoto.count({ where }),
-    db.storedAsset.count({
-      where: {
-        businessId: access.businessId,
-        jobId,
-        category: "JOB_PHOTO",
-        status: "PENDING",
-        deletedAt: null,
-      },
-    }),
-  ]);
-  return { photos, pending, occupied: photos + pending };
+  const photos = await db.jobPhoto.count({
+    where: { businessId: access.businessId, jobId },
+  });
+  return { photos, occupied: photos };
 }
 
 function storageDeps(db: PrismaClient, storage?: NativePhotoStorageDeps) {
@@ -328,6 +324,10 @@ export async function finalizeNativeAssignedJobPhoto(
   jobId: string,
   input: { assetId: string; stage: NativeJobPhotoStage; caption?: string | null },
   storage?: NativePhotoStorageDeps,
+  options?: {
+    /** Proof hook: runs after the authorize read and before the Job lock. */
+    afterInitialRead?: () => Promise<void>;
+  },
 ): Promise<NativeFinalizeAssignedJobPhotoResult> {
   const configured = requireStorage(storage);
   if (configured) return configured;
@@ -335,37 +335,74 @@ export async function finalizeNativeAssignedJobPhoto(
   const assigned = await requireAssignedPhotoJob(db, access, jobId);
   if (!assigned.ok) return assigned;
 
-  const existing = await db.jobPhoto.findFirst({
-    where: {
-      businessId: access.businessId,
-      jobId: assigned.jobId,
-      storedAssetId: input.assetId,
-    },
-    select: { id: true },
-  });
-  if (!existing) {
-    const occupancy = await assignedJobPhotoOccupancy(db, access, assigned.jobId);
-    if (occupancy.photos >= NATIVE_JOB_PHOTO_LIMIT) {
-      await abortAssignedFieldJobPhoto(
-        storageDeps(db, storage),
-        { businessId: access.businessId, membershipId: access.membershipId },
-        { jobId: assigned.jobId, assetId: input.assetId },
-      ).catch(() => undefined);
-      return { ok: false, status: 409, error: nativeJobPhotoTooManyMessage() };
-    }
+  if (options?.afterInitialRead) {
+    await options.afterInitialRead();
+  }
+
+  const deps = storageDeps(db, storage);
+  let asset;
+  try {
+    asset = await finalizeManagedUpload(deps, access.businessId, input.assetId);
+  } catch (error) {
+    return photoError(error);
+  }
+  if (
+    asset.visibility !== "PRIVATE" ||
+    asset.category !== "JOB_PHOTO" ||
+    asset.jobId !== assigned.jobId
+  ) {
+    await abortManagedUpload(deps, access.businessId, input.assetId).catch(() => undefined);
+    return { ok: false, status: 400, error: "That photo is not a private field job photo." };
   }
 
   try {
-    await finalizeAssignedFieldJobPhoto(
-      storageDeps(db, storage),
-      { businessId: access.businessId, membershipId: access.membershipId },
-      {
-        jobId: assigned.jobId,
-        assetId: input.assetId,
-        stage: input.stage,
-        caption: input.caption,
-      },
-    );
+    const written = await db.$transaction(async (tx) => {
+      const locked = await lockTenantOwnedJob(tx, access.businessId, assigned.jobId);
+      if (!assignmentStillHeld(locked, access)) {
+        return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
+      }
+
+      const existing = await tx.jobPhoto.findFirst({
+        where: {
+          businessId: access.businessId,
+          jobId: locked.id,
+          storedAssetId: input.assetId,
+        },
+        select: { id: true },
+      });
+      if (!existing) {
+        const photos = await tx.jobPhoto.count({
+          where: { businessId: access.businessId, jobId: locked.id },
+        });
+        if (photos >= NATIVE_JOB_PHOTO_LIMIT) {
+          return { ok: false as const, status: 409, error: nativeJobPhotoTooManyMessage() };
+        }
+      }
+
+      await persistReadyJobPhoto(
+        tx,
+        access.businessId,
+        locked.id,
+        { id: asset.id },
+        input.stage,
+        input.caption,
+      );
+      return { ok: true as const };
+    });
+
+    if (!written.ok) {
+      const persisted = await db.jobPhoto.findFirst({
+        where: {
+          businessId: access.businessId,
+          storedAssetId: input.assetId,
+        },
+        select: { id: true },
+      });
+      if (!persisted) {
+        await abortManagedUpload(deps, access.businessId, input.assetId).catch(() => undefined);
+      }
+      return written;
+    }
   } catch (error) {
     return photoError(error);
   }

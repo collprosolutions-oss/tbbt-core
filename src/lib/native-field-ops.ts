@@ -69,7 +69,7 @@ export type NativeCompleteAssignedJobResult =
   | { ok: true; alreadyCompleted: boolean; job: NativeJobDetail }
   | { ok: false; status: number; error: string };
 
-function assignmentStillHeld<T extends { businessId: string; assignedMembershipId: string | null }>(
+export function assignmentStillHeld<T extends { businessId: string; assignedMembershipId: string | null }>(
   locked: T | null,
   access: NativeFieldAccess,
 ): locked is T & { assignedMembershipId: string } {

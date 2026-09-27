@@ -78,6 +78,7 @@ export {
   finalizeManagementJobPhoto,
   inspectFieldJobPhotoUpload,
   jobPhotoSrc,
+  persistReadyJobPhoto,
   putAssignedFieldJobPhotoFromBytes,
   putManagementJobPhotoFromBytes,
 } from "@/lib/business-storage/field-job-photos";

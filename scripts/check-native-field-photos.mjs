@@ -100,13 +100,22 @@ const docsSrc = readRepo("docs/NATIVE_FIELD.md");
 
 console.log("\nSTATIC — Reuse private storage, caps, and capture/review UI");
 check(
-  "Native photo writes reuse assigned field-job-photo authorize / finalize / abort",
+  "Native photo writes reuse assigned field-job-photo authorize / persist / abort",
   photoOpsSrc.includes("authorizeAssignedFieldJobPhoto") &&
-    photoOpsSrc.includes("finalizeAssignedFieldJobPhoto") &&
+    photoOpsSrc.includes("persistReadyJobPhoto") &&
     photoOpsSrc.includes("abortAssignedFieldJobPhoto") &&
+    photoOpsSrc.includes("finalizeManagedUpload") &&
     photoOpsSrc.includes("nativeAssignedJobWhere") &&
     photoOpsSrc.includes("inspectFieldJobPhotoUpload") &&
     photoLibSrc.includes("authorizePrivateStoredAssetDownload"),
+);
+check(
+  "Finalize locks the assigned Job, rechecks assignment, and recounts before persist",
+  photoOpsSrc.includes("lockTenantOwnedJob") &&
+    photoOpsSrc.includes("assignmentStillHeld") &&
+    photoOpsSrc.includes("afterInitialRead") &&
+    photoOpsSrc.includes("tx.jobPhoto.count") &&
+    photoOpsSrc.includes("NATIVE_JOB_PHOTO_LIMIT"),
 );
 check(
   "Native photo routes never accept a File body or Vercel Blob helper",
@@ -551,6 +560,193 @@ try {
       storage,
     );
   }
+
+  console.log("\nDB — Concurrent finalize cap and reassignment race");
+
+  async function authorizeAndStore(access, targetJobId, filename) {
+    const authorized = await authorizeNativeAssignedJobPhoto(
+      prisma,
+      access,
+      targetJobId,
+      { originalFilename: filename, mimeType: "image/jpeg", fileSizeBytes: jpeg.byteLength },
+      storage,
+    );
+    if (!authorized.ok) return authorized;
+    const pending = await prisma.storedAsset.findUniqueOrThrow({
+      where: { id: authorized.assetId },
+    });
+    const account = await prisma.businessStorageAccount.findUniqueOrThrow({
+      where: { id: pending.storageAccountId },
+    });
+    await provider.putObject({
+      bucket: account.bucketName,
+      key: pending.storageKey,
+      body: jpeg,
+      contentType: "image/jpeg",
+    });
+    return authorized;
+  }
+
+  const concurrentJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: memberMem.id,
+    },
+  });
+  for (let index = 0; index < NATIVE_JOB_PHOTO_LIMIT - 1; index += 1) {
+    await prisma.jobPhoto.create({
+      data: {
+        businessId: businessA.id,
+        jobId: concurrentJob.id,
+        stage: "DURING",
+        url: `https://example.blob.vercel-storage.com/race-filler-${index}.jpg`,
+      },
+    });
+  }
+  const concurrentA = await authorizeAndStore(
+    memberAccess.access,
+    concurrentJob.id,
+    "race-a.jpg",
+  );
+  const concurrentB = await authorizeAndStore(
+    memberAccess.access,
+    concurrentJob.id,
+    "race-b.jpg",
+  );
+  check(
+    "Two in-flight uploads can be authorized when 11 photos already exist",
+    concurrentA.ok === true && concurrentB.ok === true,
+  );
+  if (!concurrentA.ok || !concurrentB.ok) {
+    throw new Error("Expected both concurrent authorizes to succeed.");
+  }
+  const [raceFinalizeA, raceFinalizeB] = await Promise.all([
+    finalizeNativeAssignedJobPhoto(
+      prisma,
+      memberAccess.access,
+      concurrentJob.id,
+      { assetId: concurrentA.assetId, stage: "AFTER" },
+      storage,
+    ),
+    finalizeNativeAssignedJobPhoto(
+      prisma,
+      memberAccess.access,
+      concurrentJob.id,
+      { assetId: concurrentB.assetId, stage: "AFTER" },
+      storage,
+    ),
+  ]);
+  const concurrentCount = await prisma.jobPhoto.count({
+    where: { jobId: concurrentJob.id, businessId: businessA.id },
+  });
+  const concurrentSuccesses = [raceFinalizeA, raceFinalizeB].filter((row) => row.ok).length;
+  const concurrentRejected = [raceFinalizeA, raceFinalizeB].filter(
+    (row) => row.ok === false && row.status === 409,
+  );
+  check(
+    "Simultaneous finalizes cannot create more than 12 job photos",
+    concurrentCount === NATIVE_JOB_PHOTO_LIMIT &&
+      concurrentSuccesses === 1 &&
+      concurrentRejected.length === 1 &&
+      concurrentRejected[0].error === nativeJobPhotoTooManyMessage(),
+  );
+
+  const reassignJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: memberMem.id,
+    },
+  });
+  const reassignAuth = await authorizeAndStore(
+    memberAccess.access,
+    reassignJob.id,
+    "reassign.jpg",
+  );
+  check("Former worker can authorize before reassignment", reassignAuth.ok === true);
+  if (!reassignAuth.ok) {
+    throw new Error("Expected reassignment authorize to succeed.");
+  }
+  const photosBeforeReassign = await prisma.jobPhoto.count({
+    where: { jobId: reassignJob.id, businessId: businessA.id },
+  });
+  const reassignFinalize = await finalizeNativeAssignedJobPhoto(
+    prisma,
+    memberAccess.access,
+    reassignJob.id,
+    { assetId: reassignAuth.assetId, stage: "BEFORE" },
+    storage,
+    {
+      afterInitialRead: async () => {
+        await prisma.job.update({
+          where: { id: reassignJob.id },
+          data: { assignedMembershipId: otherMem.id },
+        });
+      },
+    },
+  );
+  const reassignAfter = await prisma.job.findFirst({
+    where: { id: reassignJob.id, businessId: businessA.id },
+    select: { assignedMembershipId: true },
+  });
+  const photosAfterReassign = await prisma.jobPhoto.count({
+    where: { jobId: reassignJob.id, businessId: businessA.id },
+  });
+  const reassignPhoto = await prisma.jobPhoto.findFirst({
+    where: { storedAssetId: reassignAuth.assetId, businessId: businessA.id },
+  });
+  check(
+    "Reassignment after the authorize read refuses finalize and creates no photo",
+    reassignFinalize.ok === false &&
+      reassignFinalize.status === 404 &&
+      reassignFinalize.error === NATIVE_JOB_NOT_AVAILABLE &&
+      reassignAfter?.assignedMembershipId === otherMem.id &&
+      photosAfterReassign === photosBeforeReassign &&
+      reassignPhoto == null,
+  );
+
+  const gapJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: memberMem.id,
+    },
+  });
+  const gapAuth = await authorizeAndStore(memberAccess.access, gapJob.id, "gap.jpg");
+  check("Former worker can authorize before a mid-flight reassignment", gapAuth.ok === true);
+  if (!gapAuth.ok) {
+    throw new Error("Expected gap authorize to succeed.");
+  }
+  await prisma.job.update({
+    where: { id: gapJob.id },
+    data: { assignedMembershipId: otherMem.id },
+  });
+  const gapFinalize = await finalizeNativeAssignedJobPhoto(
+    prisma,
+    memberAccess.access,
+    gapJob.id,
+    { assetId: gapAuth.assetId, stage: "BEFORE" },
+    storage,
+  );
+  const gapPhoto = await prisma.jobPhoto.findFirst({
+    where: { storedAssetId: gapAuth.assetId, businessId: businessA.id },
+  });
+  check(
+    "Reassignment between authorize and finalize creates no photo for the former worker",
+    gapFinalize.ok === false &&
+      gapFinalize.status === 404 &&
+      gapPhoto == null,
+  );
 
   console.log("\nDB — Caps, clear errors, and listing truncation");
 
