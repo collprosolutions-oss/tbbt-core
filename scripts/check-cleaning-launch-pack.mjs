@@ -26,8 +26,11 @@ const { ensurePrimaryBusinessTrade } = await import("@/lib/business-trades");
 const { createPublicServiceRequest } = await import("@/lib/public-intake");
 const { installStarterCatalogForTrade } = await import("@/lib/trade-catalog");
 const {
+  archivedIntakeSchema,
   currentIntakeSchema,
+  freezeIntakeSchema,
   parseIntakeAnswers,
+  resolveRequestIntakeSchema,
   validateIntakeAnswers,
 } = await import("@/lib/intake-schema");
 const { getTradeConfig, preferredCatalogCategoryOrder } = await import(
@@ -242,16 +245,110 @@ check(
     !read("src/lib/handyman-starter-catalog.ts").includes("CLEANING_STARTER"),
 );
 
-console.log("\nSTATIC — Intake stays on the existing schema");
+console.log("\nSTATIC — Versioned Cleaning intake: archived V1, current V2");
+const PRE_162_V1_FIELD_KEYS = [
+  "selectedWork",
+  "bedrooms",
+  "bathrooms",
+  "homeSize",
+  "frequency",
+  "addons",
+  "pets",
+  "petNotes",
+  "accessNotes",
+  "photos",
+  "notes",
+];
+const PRE_162_V1_ADDONS = [
+  "INSIDE_FRIDGE",
+  "INSIDE_OVEN",
+  "INTERIOR_WINDOWS",
+  "LAUNDRY",
+  "INSIDE_CABINETS",
+];
+const V2_ONLY_FIELDS = ["propertyType", "occupancy", "condition", "visitContext"];
+const V2_ONLY_ADDONS = [
+  "CABINET_FRONTS",
+  "BASEBOARDS",
+  "SHOWER_TUB",
+  "BLINDS",
+  "LINENS",
+];
+const archivedV1 = archivedIntakeSchema("cleaning.public", 1);
+const archivedV2 = archivedIntakeSchema("cleaning.public", 2);
 const cleaningIntake = currentIntakeSchema("CLEANING");
 const intakeKeys = cleaningIntake.fields.map((field) => field.key);
 const requiredKeys = cleaningIntake.fields
   .filter((field) => field.required && field.render === "trade")
   .map((field) => field.key);
+const v1AddonField = archivedV1?.fields.find((field) => field.key === "addons");
+const v1AddonValues = (v1AddonField?.options ?? []).map((option) => option.value);
+const v2AddonValues = (
+  cleaningIntake.fields.find((field) => field.key === "addons")?.options ?? []
+).map((option) => option.value);
+const resolvedArchivedV1 = resolveRequestIntakeSchema({
+  intakeSchemaKey: "cleaning.public",
+  intakeSchemaVersion: 1,
+  intakeSchemaJson: null,
+});
+const handyCurrent = currentIntakeSchema("HANDYMAN");
+const handyArchived = archivedIntakeSchema("handyman.public", 1);
+check(
+  "1. archivedIntakeSchema(cleaning.public, 1) returns the exact old V1 field set",
+  archivedV1?.key === "cleaning.public" &&
+    archivedV1?.version === 1 &&
+    archivedV1?.fields.map((field) => field.key).join(",") ===
+      PRE_162_V1_FIELD_KEYS.join(",") &&
+    v1AddonValues.join(",") === PRE_162_V1_ADDONS.join(","),
+);
+check(
+  "2. V1 does not contain #162 fields or new add-ons",
+  V2_ONLY_FIELDS.every((key) => !archivedV1?.fields.some((field) => field.key === key)) &&
+    V2_ONLY_ADDONS.every((value) => !v1AddonValues.includes(value)),
+);
+check(
+  "3. currentIntakeSchema(CLEANING) returns version 2",
+  cleaningIntake.key === "cleaning.public" &&
+    cleaningIntake.version === 2 &&
+    cleaningPack.intakeSchema.version === 2 &&
+    archivedV2?.version === 2 &&
+    requiredKeys.join(",") === "bedrooms,bathrooms,homeSize,frequency",
+);
+check(
+  "4. V2 contains the expanded Cleaning fields",
+  V2_ONLY_FIELDS.every((key) => intakeKeys.includes(key)) &&
+    V2_ONLY_ADDONS.every((value) => v2AddonValues.includes(value)) &&
+    PRE_162_V1_ADDONS.every((value) => v2AddonValues.includes(value)),
+);
+check(
+  "5. resolveRequestIntakeSchema with key/version 1 and no JSON resolves old V1, not V2",
+  resolvedArchivedV1.version === 1 &&
+    resolvedArchivedV1.fields.map((field) => field.key).join(",") ===
+      PRE_162_V1_FIELD_KEYS.join(",") &&
+    !resolvedArchivedV1.fields.some((field) => field.key === "propertyType"),
+);
+check(
+  "8. Handyman V1 remains unchanged",
+  handyCurrent.key === "handyman.public" &&
+    handyCurrent.version === 1 &&
+    handyArchived?.version === 1 &&
+    JSON.stringify(handyCurrent) === JSON.stringify(handyArchived) &&
+    handyCurrent.fields.map((field) => field.key).join(",") ===
+      "selectedWork,measurements,photos,notes,frequency",
+);
+const interiorWindows = starterServices.find((service) => service.name === "Interior Windows");
+check(
+  "Interior Windows description does not invent a window-count intake field",
+  Boolean(interiorWindows) &&
+    !/count .*collected at intake/i.test(interiorWindows?.description ?? "") &&
+    interiorWindows?.description.includes(
+      "Scope and access can be described in the request",
+    ),
+);
 check(
   "Cleaning intake reuses versioned cleaning.public fields",
   cleaningIntake.key === "cleaning.public" &&
-    cleaningIntake.version === 1 &&
+    cleaningIntake.version === 2 &&
     cleaningPack.intakeSchema.key === "cleaning.public" &&
     requiredKeys.join(",") === "bedrooms,bathrooms,homeSize,frequency",
 );
@@ -502,6 +599,72 @@ try {
       persisted.frequency === "WEEKLY" &&
       persisted.inventedColumn == null &&
       persistedKeys.every((key) => intakeKeys.includes(key)),
+  );
+  check(
+    "7. New Cleaning requests freeze/store V2",
+    request?.intakeSchemaVersion === 2 &&
+      JSON.parse(request?.intakeSchemaJson ?? "{}").version === 2 &&
+      JSON.parse(request?.intakeSchemaJson ?? "{}").fields.some(
+        (field) => field.key === "propertyType",
+      ),
+  );
+
+  const v1Customer = await prisma.customer.create({
+    data: {
+      businessId: cleanA.id,
+      name: "Historical V1 Customer",
+      email: "v1-clean@example.com",
+    },
+  });
+  const v1Answers = {
+    bedrooms: 2,
+    bathrooms: 1,
+    homeSize: "1000_1500",
+    frequency: "ONE_TIME",
+    addons: ["INTERIOR_WINDOWS"],
+    pets: "no",
+    accessNotes: "Front door",
+  };
+  const historicalV1Request = await prisma.serviceRequest.create({
+    data: {
+      businessId: cleanA.id,
+      customerId: v1Customer.id,
+      description: "Frozen pre-#162 Cleaning request",
+      tradeCode: "CLEANING",
+      intakeSchemaKey: "cleaning.public",
+      intakeSchemaVersion: 1,
+      intakeSchemaJson: freezeIntakeSchema(archivedV1),
+      intakeAnswersJson: JSON.stringify(v1Answers),
+    },
+  });
+  const resolvedFrozenV1 = resolveRequestIntakeSchema({
+    intakeSchemaKey: historicalV1Request.intakeSchemaKey,
+    intakeSchemaVersion: historicalV1Request.intakeSchemaVersion,
+    intakeSchemaJson: historicalV1Request.intakeSchemaJson,
+    tradeCode: historicalV1Request.tradeCode,
+  });
+  const resolvedFrozenV1WithoutJson = resolveRequestIntakeSchema({
+    intakeSchemaKey: historicalV1Request.intakeSchemaKey,
+    intakeSchemaVersion: historicalV1Request.intakeSchemaVersion,
+    intakeSchemaJson: null,
+    tradeCode: historicalV1Request.tradeCode,
+  });
+  const replayedV1 = validateIntakeAnswers(
+    resolvedFrozenV1,
+    parseIntakeAnswers(historicalV1Request.intakeAnswersJson),
+  );
+  check(
+    "6. A frozen V1 request remains interpretable exactly as recorded",
+    historicalV1Request.intakeSchemaVersion === 1 &&
+      resolvedFrozenV1.version === 1 &&
+      resolvedFrozenV1WithoutJson.version === 1 &&
+      !resolvedFrozenV1.fields.some((field) => V2_ONLY_FIELDS.includes(field.key)) &&
+      replayedV1.ok === true &&
+      replayedV1.ok &&
+      replayedV1.answers.bedrooms === 2 &&
+      replayedV1.answers.homeSize === "1000_1500" &&
+      replayedV1.answers.propertyType == null &&
+      historicalV1Request.intakeSchemaJson === freezeIntakeSchema(archivedV1),
   );
 
   const customer = await prisma.customer.create({

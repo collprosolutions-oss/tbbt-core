@@ -146,6 +146,109 @@ const CLEANING_PUBLIC_V1: IntakeSchema = {
       render: "trade",
     },
     {
+      key: "frequency",
+      type: "FREQUENCY",
+      label: "How often?",
+      required: true,
+      options: [
+        { value: "ONE_TIME", label: "One-time" },
+        { value: "WEEKLY", label: "Weekly" },
+        { value: "BIWEEKLY", label: "Every two weeks" },
+        { value: "MONTHLY", label: "Monthly" },
+      ],
+      render: "trade",
+    },
+    {
+      key: "addons",
+      type: "MULTI_CHOICE",
+      label: "Add-ons",
+      options: [
+        { value: "INSIDE_FRIDGE", label: "Inside fridge" },
+        { value: "INSIDE_OVEN", label: "Inside oven" },
+        { value: "INTERIOR_WINDOWS", label: "Interior windows" },
+        { value: "LAUNDRY", label: "Laundry" },
+        { value: "INSIDE_CABINETS", label: "Inside cabinets" },
+      ],
+      render: "trade",
+    },
+    {
+      key: "pets",
+      type: "YES_NO",
+      label: "Pets in the home?",
+      render: "trade",
+    },
+    {
+      key: "petNotes",
+      type: "TEXT",
+      label: "Pet notes",
+      visibleWhen: { field: "pets", value: "yes" },
+      render: "trade",
+    },
+    {
+      key: "accessNotes",
+      type: "NOTES",
+      label: "Access notes",
+      help: "Gate codes stay off ordinary emails. Share only what the team needs.",
+      render: "trade",
+    },
+    {
+      key: "photos",
+      type: "PHOTOS",
+      label: "Photos of the space",
+      render: "core",
+    },
+    {
+      key: "notes",
+      type: "NOTES",
+      label: "Other notes",
+      render: "core",
+    },
+  ],
+};
+
+const CLEANING_PUBLIC_V2: IntakeSchema = {
+  key: "cleaning.public",
+  version: 2,
+  tradeCode: "CLEANING",
+  title: "Cleaning service request",
+  fields: [
+    {
+      key: "selectedWork",
+      type: "MULTI_CHOICE",
+      label: "Requested cleaning",
+      render: "core",
+    },
+    {
+      key: "bedrooms",
+      type: "COUNTS",
+      label: "Bedrooms",
+      required: true,
+      help: "Approximate number of bedrooms to clean.",
+      render: "trade",
+    },
+    {
+      key: "bathrooms",
+      type: "COUNTS",
+      label: "Bathrooms",
+      required: true,
+      help: "Approximate number of bathrooms to clean.",
+      render: "trade",
+    },
+    {
+      key: "homeSize",
+      type: "CHOICE",
+      label: "Approximate home size",
+      required: true,
+      options: [
+        { value: "UNDER_1000", label: "Under 1,000 sq ft" },
+        { value: "1000_1500", label: "1,000–1,500 sq ft" },
+        { value: "1500_2000", label: "1,500–2,000 sq ft" },
+        { value: "2000_2500", label: "2,000–2,500 sq ft" },
+        { value: "OVER_2500", label: "Over 2,500 sq ft" },
+      ],
+      render: "trade",
+    },
+    {
       key: "propertyType",
       type: "CHOICE",
       label: "Property type",
@@ -258,11 +361,15 @@ const CLEANING_PUBLIC_V1: IntakeSchema = {
   ],
 };
 
-const ARCHIVED_SCHEMAS: IntakeSchema[] = [HANDYMAN_PUBLIC_V1, CLEANING_PUBLIC_V1];
+const ARCHIVED_SCHEMAS: IntakeSchema[] = [
+  HANDYMAN_PUBLIC_V1,
+  CLEANING_PUBLIC_V1,
+  CLEANING_PUBLIC_V2,
+];
 
 export function currentIntakeSchema(tradeCode: string): IntakeSchema {
   const code = isConfiguredTrade(tradeCode) ? tradeCode : DEFAULT_TRADE;
-  if (code === "CLEANING") return CLEANING_PUBLIC_V1;
+  if (code === "CLEANING") return CLEANING_PUBLIC_V2;
   return HANDYMAN_PUBLIC_V1;
 }
 

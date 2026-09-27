@@ -289,7 +289,7 @@ export const CLEANING_STARTER_SERVICES: CleaningStarterService[] = [
     pricingMode: "STARTING_AT",
     recurrenceEligible: true,
     description:
-      "Interior glass and sill wipe. Count and access notes are collected at intake. Exterior glass is not included. " +
+      "Interior glass and sill wipe. Scope and access can be described in the request. Exterior glass is not included. " +
       CLEANING_STARTER_PRICE_NOTE,
   },
   {
