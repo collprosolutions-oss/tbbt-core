@@ -230,6 +230,26 @@ try {
       recoverySrc.includes("attemptedAt ?? row.createdAt"),
   );
   check(
+    "Recorded inbound event count is an exact same-business receptionistEvent.count",
+    recoverySrc.includes("db.receptionistEvent.count({") &&
+      recoverySrc.includes('where: { businessId, kind: "INBOUND_CALL" }') &&
+      !recoverySrc.includes('eventRows.filter((row) => row.kind === "INBOUND_CALL")') &&
+      !recoverySrc.includes("recordedInboundEventCount: eventRows.filter"),
+  );
+  check(
+    "Event-row discovery stays a bounded scan and is not used as the inbound total",
+    recoverySrc.includes("take: RECEPTIONIST_RECOVERY_SCAN_LIMIT") &&
+      recoverySrc.includes("RECEPTIONIST_RECOVERY_SCAN_LIMIT = 80") &&
+      RECEPTIONIST_RECOVERY_SCAN_LIMIT === 80,
+  );
+  check(
+    "Empty-state wording is bounded-scan truth, not an exhaustive database claim",
+    uiSrc.includes("No attention items were found in the bounded recent recovery scan.") &&
+      !uiSrc.includes(
+        "No recorded missed calls, callbacks, inbound receptionist events, or escalations need attention.",
+      ),
+  );
+  check(
     "Existing receptionist tab can open the recovery route",
     workspaceSrc.includes('href="/communications/receptionist"'),
   );
@@ -808,6 +828,74 @@ try {
   check(
     "Overflow writes on tenant A never appear on tenant B",
     tenantBAfter.queue.length === 0 && tenantBAfter.recordedMissedCallCount === 0,
+  );
+
+  console.log("\nDB — Exact inbound event count is not the bounded scan length");
+  const inboundTenant = await seedBusiness("Inbound Count");
+  const inboundForeign = await seedBusiness("Inbound Foreign");
+  const inboundOverflow = RECEPTIONIST_RECOVERY_SCAN_LIMIT + 12;
+  await prisma.receptionistEvent.createMany({
+    data: Array.from({ length: inboundOverflow }, (_, index) => ({
+      businessId: inboundTenant.business.id,
+      kind: "INBOUND_CALL",
+      status: "SKIPPED_NOT_CONNECTED",
+      provider: "none",
+      providerConnected: false,
+      payload: { summary: `Inbound overflow ${index + 1}` },
+      idempotencyKey: `inbound-overflow-${index}-${randomUUID()}`,
+    })),
+  });
+  await prisma.receptionistEvent.createMany({
+    data: Array.from({ length: 4 }, (_, index) => ({
+      businessId: inboundTenant.business.id,
+      kind: "ESCALATION",
+      status: "ESCALATED",
+      provider: "none",
+      providerConnected: false,
+      payload: { summary: `Non-inbound ${index + 1}` },
+      idempotencyKey: `non-inbound-${index}-${randomUUID()}`,
+    })),
+  });
+  const foreignInbound = await prisma.receptionistEvent.create({
+    data: {
+      businessId: inboundForeign.business.id,
+      kind: "INBOUND_CALL",
+      status: "SKIPPED_NOT_CONNECTED",
+      provider: "none",
+      providerConnected: false,
+      payload: { summary: "Foreign inbound must not enter inbound count." },
+      idempotencyKey: `foreign-inbound-${randomUUID()}`,
+    },
+  });
+  const inboundCenter = await loadReceptionistRecoveryCenter(prisma, inboundTenant.access);
+  const inboundCenterForeign = await loadReceptionistRecoveryCenter(prisma, inboundForeign.access);
+  const exactInbound = await prisma.receptionistEvent.count({
+    where: { businessId: inboundTenant.business.id, kind: "INBOUND_CALL" },
+  });
+  const exactForeignInbound = await prisma.receptionistEvent.count({
+    where: { businessId: inboundForeign.business.id, kind: "INBOUND_CALL" },
+  });
+  check(
+    "More inbound events than the scan limit exist and recordedInboundEventCount is the exact same-business count",
+    inboundOverflow > RECEPTIONIST_RECOVERY_SCAN_LIMIT &&
+      exactInbound === inboundOverflow &&
+      inboundCenter.recordedInboundEventCount === exactInbound &&
+      inboundCenter.recordedInboundEventCount === inboundOverflow,
+  );
+  check(
+    "Foreign-tenant inbound events do not enter recordedInboundEventCount",
+    inboundCenter.recordedInboundEventCount === inboundOverflow &&
+      exactForeignInbound === 1 &&
+      inboundCenterForeign.recordedInboundEventCount === 1 &&
+      inboundCenterForeign.queue.some((row) => row.id === foreignInbound.id) &&
+      !inboundCenter.queue.some((row) => row.id === foreignInbound.id) &&
+      !JSON.stringify(inboundCenter).includes("Foreign inbound must not enter inbound count."),
+  );
+  check(
+    "Queue stays bounded when inbound events exceed the scan limit",
+    inboundCenter.queue.length === RECEPTIONIST_RECOVERY_QUEUE_LIMIT &&
+      inboundCenter.queueLimit === RECEPTIONIST_RECOVERY_QUEUE_LIMIT &&
+      inboundCenter.recordedInboundEventCount > RECEPTIONIST_RECOVERY_SCAN_LIMIT,
   );
 } catch (error) {
   console.error(error);

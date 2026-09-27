@@ -234,8 +234,14 @@ export async function loadReceptionistRecoveryCenter(
   const businessId = access.businessId;
   const readiness = getReceptionistReadiness();
 
-  const [phoneRows, eventRows, recordedMissedCallCount, recordedCallbackNeededCount, business] =
-    await Promise.all([
+  const [
+    phoneRows,
+    eventRows,
+    recordedMissedCallCount,
+    recordedCallbackNeededCount,
+    recordedInboundEventCount,
+    business,
+  ] = await Promise.all([
       db.phoneInteraction.findMany({
         where: { businessId },
         orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
@@ -277,6 +283,9 @@ export async function loadReceptionistRecoveryCenter(
           businessId,
           OR: [{ callbackNeeded: true }, { status: "CALLBACK_NEEDED" }],
         },
+      }),
+      db.receptionistEvent.count({
+        where: { businessId, kind: "INBOUND_CALL" },
       }),
       db.business.findFirst({
         where: { id: businessId },
@@ -519,14 +528,12 @@ export async function loadReceptionistRecoveryCenter(
     };
   });
 
-  const inboundEventCount = eventRows.filter((row) => row.kind === "INBOUND_CALL").length;
-
   return {
     queue,
     queueLimit: RECEPTIONIST_RECOVERY_QUEUE_LIMIT,
     recordedMissedCallCount,
     recordedCallbackNeededCount,
-    recordedInboundEventCount: inboundEventCount,
+    recordedInboundEventCount,
     unknownCallerCount: queue.filter((row) => !row.customerKnown).length,
     knownCustomerCount: queue.filter((row) => row.customerKnown).length,
     timeZone: resolveBusinessTimeZone(business),

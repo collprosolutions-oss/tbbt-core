@@ -54,7 +54,7 @@ export function ReceptionistRecoveryCenter({
           <CardTitle>Attention queue</CardTitle>
           <CardDescription>
             {source.queue.length === 0
-              ? "No recorded missed calls, callbacks, inbound receptionist events, or escalations need attention."
+              ? "No attention items were found in the bounded recent recovery scan."
               : `${source.queue.length} recorded item${source.queue.length === 1 ? "" : "s"} · ${source.knownCustomerCount} known · ${source.unknownCallerCount} unknown`}
           </CardDescription>
         </CardHeader>
