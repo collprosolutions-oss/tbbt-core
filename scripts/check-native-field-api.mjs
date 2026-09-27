@@ -877,6 +877,18 @@ try {
     customerName: "Blocked Complete Canary",
     status: "IN_PROGRESS",
   });
+  const endedTrial = new Date(Date.now() - 60_000);
+  await prisma.businessSaasSubscription.create({
+    data: {
+      businessId: blockedBusiness.id,
+      status: "canceled",
+      planCode: "FOUNDER",
+      legacyExempt: false,
+      trialStartedAt: new Date(endedTrial.getTime() - 14 * 24 * 60 * 60 * 1000),
+      trialEndsAt: endedTrial,
+      founderEligibilityEndedAt: endedTrial,
+    },
+  });
 
   const invoicesBefore = await prisma.invoice.count({
     where: { businessId: { in: [businessA.id, businessB.id, blockedBusiness.id] } },
