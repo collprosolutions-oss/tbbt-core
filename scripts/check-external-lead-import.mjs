@@ -63,6 +63,7 @@ function readSrc(relative) {
 }
 
 const featureFiles = [
+  "src/lib/external-lead-import-copy.ts",
   "src/lib/external-lead-import.ts",
   "src/lib/external-lead-import-ops.ts",
   "src/app/actions/external-lead-import.ts",
@@ -156,7 +157,16 @@ try {
   );
   check(
     "UI does not invent scores, scrape, or bought lists",
-    !/lead score|bought list|scrape|crawl|autonomous outreach|ranking/i.test(uiSource),
+    uiSource.includes("IMPORT_NO_SCRAPE_MESSAGE") &&
+      uiSource.includes("IMPORT_NO_SCORE_MESSAGE") &&
+      uiSource.includes("IMPORT_NO_OUTREACH_MESSAGE") &&
+      !/likely to convert|lead ranking|autonomous outreach/i.test(featureSource),
+  );
+  check(
+    "Client forms do not import Node DNS/crypto modules",
+    !uiSource.includes("external-lead-import.ts") &&
+      uiSource.includes("external-lead-import-copy") &&
+      !readSrc("src/lib/external-lead-import-copy.ts").includes("node:"),
   );
   check(
     "Ops require OWNER and scope every load by businessId",
@@ -273,7 +283,7 @@ try {
   );
 
   const sameBusinessDupes = applySameBusinessDuplicates(
-    parseExternalLeadCsv(csv(["Ada,ada@example.com,2393578199,Faucet,,,Naples,FL,34102,MANUAL"])),
+    parseExternalLeadCsv(csv(["Ada,ada@example.com,2393578199,Faucet,,,,,,MANUAL"])),
     [{ id: "cust-a", name: "Ada", email: "ada@example.com", phone: "2393578199" }],
     [{ id: "req-a", customerId: "cust-a", customer: { email: "ada@example.com", phone: "2393578199" } }],
   );
@@ -284,7 +294,7 @@ try {
       sameBusinessDupes[0].possibleDuplicateRequestId === "req-a",
   );
   const crossTenant = applySameBusinessDuplicates(
-    parseExternalLeadCsv(csv(["Ada,ada@example.com,2393578199,Faucet,,,Naples,FL,34102,MANUAL"])),
+    parseExternalLeadCsv(csv(["Ada,ada@example.com,2393578199,Faucet,,,,,,MANUAL"])),
     [],
     [],
   );

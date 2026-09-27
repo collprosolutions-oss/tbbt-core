@@ -14,7 +14,7 @@ import {
   IMPORT_NO_SCORE_MESSAGE,
   previewStatusLabel,
   sourceKindLabel,
-} from "@/lib/external-lead-import";
+} from "@/lib/external-lead-import-copy";
 
 const initialState: ExternalLeadImportActionState = {};
 

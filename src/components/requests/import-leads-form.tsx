@@ -12,7 +12,7 @@ import {
   IMPORT_NO_SCRAPE_MESSAGE,
   MAX_EXTERNAL_LEAD_IMPORT_BYTES,
   MAX_EXTERNAL_LEAD_IMPORT_ROWS,
-} from "@/lib/external-lead-import";
+} from "@/lib/external-lead-import-copy";
 
 const initialState: ExternalLeadImportActionState = {};
 
