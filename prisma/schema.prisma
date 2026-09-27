@@ -392,6 +392,7 @@ model Business {
   partnerVendorOpportunities PartnerVendorOpportunity[]
   externalLeadImports      ExternalLeadImport[]
   externalLeadImportRows   ExternalLeadImportRow[]
+  regulatoryIntelligenceNotes RegulatoryIntelligenceNote[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -4252,4 +4253,32 @@ model JobCrewVisit {
   @@index([businessId, outcomeStatus])
   @@index([procedureId])
   @@index([outcomeRecordedByMembershipId])
+}
+
+/// Tenant-scoped official-source regulatory note. Read-only application
+/// surface. recordedState is CURRENT | STALE | CONFLICT | UNKNOWN.
+/// A CURRENT note still never certifies a license or legal compliance.
+/// This table does not gate estimates or jobs and does not claim
+/// nationwide coverage.
+model RegulatoryIntelligenceNote {
+  id                  String   @id @default(cuid())
+  businessId          String
+  jurisdictionCode    String
+  jurisdictionLabel   String
+  tradeCode           String
+  officialSourceUrl   String
+  officialSourceTitle String
+  citation            String
+  retrievedAt         DateTime
+  effectiveOn         DateTime?
+  expiresOn           DateTime?
+  recordedState       String
+  summary             String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([businessId, jurisdictionCode, tradeCode])
 }
