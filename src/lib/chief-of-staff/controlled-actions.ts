@@ -1,11 +1,13 @@
 /**
- * Controlled AI Actions V1.
+ * Controlled AI Actions V1 plus durable provenance for confirmed attempts.
  *
  * TypeScript catalog → non-executable proposal → explicit OWNER
  * confirmation → re-read live records → fingerprint check →
- * existing canonical domain operation.
+ * existing canonical domain operation → ControlledAiActionAttempt.
  *
- * Not a second mutation engine. Not a schema-first proposal table.
+ * Preview/propose stays read-only. Generic BusinessActionItem and
+ * BsosRecommendationState rows stay origin = NOT_RECORDED unless a real
+ * ledger row for that confirmation exists. Not a second mutation engine.
  * Specialists, synthesis, and Coach ask never call these functions.
  */
 import { randomUUID } from "node:crypto";
@@ -141,9 +143,13 @@ export const CONTROLLED_ACTION_CATALOG: readonly ControlledActionCatalogEntry[] 
 ] as const;
 
 export const CONTROLLED_ACTION_PROPOSAL_VERSION = 1;
+export const CONTROLLED_AI_ATTEMPT_RESULTS = ["EXECUTED", "REPLAYED", "FAILED", "DENIED"] as const;
+export type ControlledAiAttemptResult = (typeof CONTROLLED_AI_ATTEMPT_RESULTS)[number];
 const MAX_PROPOSAL_JSON_CHARS = 8192;
 const MAX_TARGET_ID_CHARS = 200;
 const MAX_FINGERPRINT_CHARS = 2000;
+const MAX_PROVENANCE_MESSAGE_CHARS = 240;
+const MAX_PROVENANCE_CODE_CHARS = 80;
 
 export type ControlledActionProposal = {
   proposalVersion: typeof CONTROLLED_ACTION_PROPOSAL_VERSION;
@@ -244,6 +250,153 @@ function attemptKey(
   executionAttemptId: string,
 ) {
   return `${proposal.businessId}:${proposal.actionKey}:${proposal.targetEntityId}:${proposal.fingerprint}:${executionAttemptId}`;
+}
+
+function isUniqueConflict(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
+function boundedProvenanceText(value: string, max: number) {
+  return value.trim().slice(0, max);
+}
+
+type ProvenanceWrite = {
+  actionKey: ControlledActionKey;
+  result: ControlledAiAttemptResult;
+  recommendationKey: string;
+  targetRecordType: "BusinessActionItem" | "BsosRecommendationState" | null;
+  targetRecordId: string | null;
+  resultCode: string;
+  resultMessage: string;
+  executionAttemptId: string;
+  executedAt?: Date | null;
+};
+
+async function findControlledAiAttempt(db: Db, businessId: string, executionAttemptId: string) {
+  return db.controlledAiActionAttempt.findUnique({
+    where: {
+      businessId_executionAttemptId: {
+        businessId,
+        executionAttemptId,
+      },
+    },
+  });
+}
+
+async function recordControlledAiAttempt(db: Db, access: BusinessAccess, input: ProvenanceWrite) {
+  const executedAt =
+    input.executedAt === undefined
+      ? input.result === "EXECUTED" || input.result === "REPLAYED"
+        ? new Date()
+        : null
+      : input.executedAt;
+  try {
+    return await db.controlledAiActionAttempt.create({
+      data: {
+        businessId: access.businessId,
+        actionKey: input.actionKey,
+        result: input.result,
+        recommendationKey: input.recommendationKey,
+        targetEntityType: "RECOMMENDATION",
+        targetRecordType: input.targetRecordType,
+        targetRecordId: input.targetRecordId,
+        confirmedByMembershipId: access.workspace.membership.id,
+        confirmedByUserId: access.workspace.user.id,
+        resultCode: boundedProvenanceText(input.resultCode, MAX_PROVENANCE_CODE_CHARS),
+        resultMessage: boundedProvenanceText(input.resultMessage, MAX_PROVENANCE_MESSAGE_CHARS),
+        executionAttemptId: input.executionAttemptId,
+        executedAt,
+      },
+    });
+  } catch (error) {
+    if (!isUniqueConflict(error)) throw error;
+    const existing = await findControlledAiAttempt(db, access.businessId, input.executionAttemptId);
+    if (existing) return existing;
+    throw error;
+  }
+}
+
+async function recordSafeFailure(
+  db: Db,
+  access: BusinessAccess,
+  input: Omit<ProvenanceWrite, "result" | "targetRecordType" | "targetRecordId" | "executedAt"> & {
+    result?: "FAILED" | "DENIED";
+  },
+) {
+  try {
+    await recordControlledAiAttempt(db, access, {
+      ...input,
+      result: input.result ?? "FAILED",
+      targetRecordType: null,
+      targetRecordId: null,
+      executedAt: null,
+    });
+  } catch {
+    // Failure-path provenance must not hide the original confirmation error.
+  }
+}
+
+function classifyConfirmFailure(error: unknown): {
+  result: "FAILED" | "DENIED";
+  resultCode: string;
+  resultMessage: string;
+} {
+  const resultMessage = controlledActionErrorMessage(error, "That action could not be confirmed.");
+  if (error instanceof ForbiddenError || (error instanceof Error && error.name === "ForbiddenError")) {
+    return { result: "DENIED", resultCode: "DENIED", resultMessage };
+  }
+  if (
+    error instanceof ProductCapabilityRequiredError ||
+    (error instanceof Error && error.name === "ProductCapabilityRequiredError")
+  ) {
+    return { result: "DENIED", resultCode: "DENIED", resultMessage };
+  }
+  if (error instanceof ControlledActionError && error.message.includes("stale")) {
+    return { result: "FAILED", resultCode: "STALE_PROPOSAL", resultMessage };
+  }
+  if (error instanceof ControlledActionError && /not active/i.test(error.message)) {
+    return { result: "FAILED", resultCode: "NOT_ACTIVE", resultMessage };
+  }
+  if (error instanceof ControlledActionError && /no longer available/i.test(error.message)) {
+    return { result: "FAILED", resultCode: "MISSING_ACTION_ITEM", resultMessage };
+  }
+  return { result: "FAILED", resultCode: "DOMAIN_ERROR", resultMessage };
+}
+
+function confirmationFromExistingAttempt(
+  serverProposal: ControlledActionProposal,
+  attempt: {
+    result: string;
+    resultMessage: string;
+    targetRecordId: string | null;
+    targetRecordType: string | null;
+  },
+  executionAttemptId: string,
+): ControlledActionConfirmation {
+  if (attempt.result === "FAILED" || attempt.result === "DENIED") {
+    throw new ControlledActionError(attempt.resultMessage);
+  }
+  return {
+    ...serverProposal,
+    confirmed: true,
+    executionAttemptId,
+    executionResult: {
+      status: attempt.result === "REPLAYED" ? "REPLAYED" : "SUCCEEDED",
+      recordId: attempt.targetRecordId,
+      recordType:
+        attempt.targetRecordType === "BsosRecommendationState"
+          ? "BsosRecommendationState"
+          : "BusinessActionItem",
+      message: attempt.resultMessage,
+    },
+  };
+}
+
+async function withOwnedTransaction<T>(db: Db, run: (tx: Db) => Promise<T>): Promise<T> {
+  if ("$transaction" in db && typeof db.$transaction === "function") {
+    return db.$transaction((tx) => run(tx));
+  }
+  return run(db);
 }
 
 export type ControlledActionAuthTest = {
@@ -605,60 +758,106 @@ export async function confirmControlledAction(
   }
   await authorizeCatalogAccess(db, access, entry, input.test, { ownerOnly: true });
 
-  const live = await canonicalRecommendation(db, access.businessId, input.proposal.targetEntityId);
-  const serverProposal = serverProposalFromLive(access, entry, live);
-  if (serverProposal.fingerprint !== input.proposal.fingerprint) {
-    throw changedStateError();
-  }
-
-  const already = await alreadyAppliedResult(db, access, entry, live);
-  if (already) {
-    return {
-      ...serverProposal,
-      confirmed: true,
-      executionAttemptId: input.executionAttemptId,
-      executionResult: already,
-    };
-  }
-  if (!live.active) {
-    throw new ControlledActionError("That recommendation is not active from recorded facts.");
-  }
-
-  const key = attemptKey(serverProposal, input.executionAttemptId);
-  const pending = inflightAttempts.get(key);
-  if (pending) {
-    const first = await pending;
-    return {
-      ...serverProposal,
-      confirmed: true,
-      executionAttemptId: input.executionAttemptId,
-      executionResult: { ...first.executionResult, status: "REPLAYED" },
-    };
-  }
-
-  let resolveWork: (value: ControlledActionConfirmation) => void = () => undefined;
-  let rejectWork: (error: unknown) => void = () => undefined;
-  const work = new Promise<ControlledActionConfirmation>((resolve, reject) => {
-    resolveWork = resolve;
-    rejectWork = reject;
-  });
-  work.catch(() => undefined);
-  inflightAttempts.set(key, work);
-
+  let ownedRecommendationKey: string | null = null;
   try {
-    const result = await invokeCanonicalOperation(db, access, entry, live);
-    const confirmation: ControlledActionConfirmation = {
-      ...serverProposal,
-      confirmed: true,
-      executionAttemptId: input.executionAttemptId,
-      executionResult: result,
-    };
-    resolveWork(confirmation);
-    return confirmation;
+    const live = await canonicalRecommendation(db, access.businessId, input.proposal.targetEntityId);
+    const recommendationKey = live.recommendation.key;
+    ownedRecommendationKey = recommendationKey;
+    const serverProposal = serverProposalFromLive(access, entry, live);
+    if (serverProposal.fingerprint !== input.proposal.fingerprint) {
+      throw changedStateError();
+    }
+
+    const existingAttempt = await findControlledAiAttempt(db, access.businessId, input.executionAttemptId);
+    if (existingAttempt) {
+      return confirmationFromExistingAttempt(serverProposal, existingAttempt, input.executionAttemptId);
+    }
+
+    const already = await alreadyAppliedResult(db, access, entry, live);
+    if (already) {
+      await recordControlledAiAttempt(db, access, {
+        actionKey: entry.key,
+        result: "REPLAYED",
+        recommendationKey,
+        targetRecordType: already.recordType,
+        targetRecordId: already.recordId,
+        resultCode: "REPLAYED",
+        resultMessage: already.message,
+        executionAttemptId: input.executionAttemptId,
+      });
+      return {
+        ...serverProposal,
+        confirmed: true,
+        executionAttemptId: input.executionAttemptId,
+        executionResult: already,
+      };
+    }
+    if (!live.active) {
+      throw new ControlledActionError("That recommendation is not active from recorded facts.");
+    }
+
+    const key = attemptKey(serverProposal, input.executionAttemptId);
+    const pending = inflightAttempts.get(key);
+    if (pending) {
+      const first = await pending;
+      return {
+        ...serverProposal,
+        confirmed: true,
+        executionAttemptId: input.executionAttemptId,
+        executionResult: { ...first.executionResult, status: "REPLAYED" },
+      };
+    }
+
+    let resolveWork: (value: ControlledActionConfirmation) => void = () => undefined;
+    let rejectWork: (error: unknown) => void = () => undefined;
+    const work = new Promise<ControlledActionConfirmation>((resolve, reject) => {
+      resolveWork = resolve;
+      rejectWork = reject;
+    });
+    work.catch(() => undefined);
+    inflightAttempts.set(key, work);
+
+    try {
+      const result = await withOwnedTransaction(db, async (tx) => {
+        const execution = await invokeCanonicalOperation(tx, access, entry, live);
+        await recordControlledAiAttempt(tx, access, {
+          actionKey: entry.key,
+          result: execution.status === "REPLAYED" ? "REPLAYED" : "EXECUTED",
+          recommendationKey,
+          targetRecordType: execution.recordType,
+          targetRecordId: execution.recordId,
+          resultCode: execution.status,
+          resultMessage: execution.message,
+          executionAttemptId: input.executionAttemptId,
+        });
+        return execution;
+      });
+      const confirmation: ControlledActionConfirmation = {
+        ...serverProposal,
+        confirmed: true,
+        executionAttemptId: input.executionAttemptId,
+        executionResult: result,
+      };
+      resolveWork(confirmation);
+      return confirmation;
+    } catch (error) {
+      rejectWork(error);
+      throw error;
+    } finally {
+      inflightAttempts.delete(key);
+    }
   } catch (error) {
-    rejectWork(error);
+    if (ownedRecommendationKey) {
+      const classified = classifyConfirmFailure(error);
+      await recordSafeFailure(db, access, {
+        actionKey: entry.key,
+        result: classified.result,
+        recommendationKey: ownedRecommendationKey,
+        resultCode: classified.resultCode,
+        resultMessage: classified.resultMessage,
+        executionAttemptId: input.executionAttemptId,
+      });
+    }
     throw error;
-  } finally {
-    inflightAttempts.delete(key);
   }
 }

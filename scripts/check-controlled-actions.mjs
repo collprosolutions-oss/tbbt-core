@@ -218,8 +218,18 @@ try {
     APPROVAL_CLASSES.join(",") === "READ_EXPLAIN,DRAFT_PREPARE,OWNER_CONFIRMED_RECORD,DOMAIN_AUTHORIZED,EXTERNAL_ACTION",
   );
   check("Chief-of-Staff approval class remains READ_EXPLAIN", COS_APPROVAL_CLASS === "READ_EXPLAIN");
-  check("Proposal version is bounded and schema-free", CONTROLLED_ACTION_PROPOSAL_VERSION === 1 && !schemaSrc.includes("model AiAction"));
-  check("No Prisma migration was added for this layer", !controlledSrc.includes("prisma.schema") && !schemaSrc.includes("ControlledAction"));
+  check(
+    "Proposal version remains V1 and no AiActionProposal queue exists",
+    CONTROLLED_ACTION_PROPOSAL_VERSION === 1 &&
+      !schemaSrc.includes("AiActionProposal") &&
+      !schemaSrc.includes("model AiActionProposal"),
+  );
+  check(
+    "V1 still has no request-time schema writes; durable ledger is ControlledAiActionAttempt only",
+    !controlledSrc.includes("prisma.schema") &&
+      !schemaSrc.includes("model ControlledActionProposal") &&
+      schemaSrc.includes("model ControlledAiActionAttempt"),
+  );
   check(
     "Confirm authorizes before process-map, in-flight, or database replay",
     controlledSrc.indexOf("await authorizeCatalogAccess(db, access, entry, input.test, { ownerOnly: true })") <

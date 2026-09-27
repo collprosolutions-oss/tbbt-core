@@ -135,9 +135,10 @@ try {
     ].every((key) => isExcludedActionKey(key) && !executableControlledActionKeys().includes(key)),
   );
   check(
-    "No Prisma action-proposal model or migration was added",
-    !schemaSrc.includes("model ControlledAction") &&
-      !schemaSrc.includes("AiActionProposal") &&
+    "Action Center still has no proposal-queue model",
+    !schemaSrc.includes("AiActionProposal") &&
+      !schemaSrc.includes("model ControlledActionProposal") &&
+      schemaSrc.includes("model ControlledAiActionAttempt") &&
       !actionCenterSrc.includes("prisma.schema"),
   );
   check(

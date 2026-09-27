@@ -143,6 +143,7 @@ export async function confirmCoachActionAction(
     }
     revalidatePath("/business-health");
     revalidatePath("/actions");
+    revalidatePath("/actions/history");
     return {
       message: result.executionResult.message,
       text: result.summary,

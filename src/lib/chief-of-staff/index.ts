@@ -195,6 +195,7 @@ export {
   CONTROLLED_ACTION_CATALOG,
   CONTROLLED_ACTION_KEYS,
   CONTROLLED_ACTION_PROPOSAL_VERSION,
+  CONTROLLED_AI_ATTEMPT_RESULTS,
   EXCLUDED_ACTION_KEYS,
   canConfirmControlledActions,
   confirmControlledAction,
@@ -216,9 +217,11 @@ export type {
   ControlledActionExecutionResult,
   ControlledActionKey,
   ControlledActionProposal,
+  ControlledAiAttemptResult,
   ExcludedActionKey,
 } from "@/lib/chief-of-staff/controlled-actions";
 export {
+  ACTION_CENTER_HISTORY_PATH,
   ACTION_CENTER_ORIGIN_NOT_RECORDED,
   ACTION_CENTER_PATH,
   ACTION_CENTER_RECORD_KINDS,
@@ -241,6 +244,15 @@ export type {
   ControlledActionCenterDetail,
   OwnedActionTargetLink,
 } from "@/lib/chief-of-staff/action-center";
+export {
+  CONTROLLED_AI_HISTORY_LIMIT,
+  loadControlledAiActionAttempt,
+  loadControlledAiActionHistory,
+} from "@/lib/chief-of-staff/controlled-ai-provenance";
+export type {
+  ControlledAiActionHistory,
+  ControlledAiHistoryRow,
+} from "@/lib/chief-of-staff/controlled-ai-provenance";
 export {
   getOrchestrationWorkerCount,
   getSynthesisCallCount,

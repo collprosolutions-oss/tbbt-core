@@ -351,6 +351,7 @@ model Business {
   automationRules          AutomationRule[]
   automationRuns           AutomationRun[]
   recommendationStates     BsosRecommendationState[]
+  controlledAiActionAttempts ControlledAiActionAttempt[]
   laborBurdenSetting       BusinessLaborBurdenSetting?
   recurringExpensePatterns RecurringExpensePattern[]
   financeConnections       BusinessFinanceConnection[]
@@ -504,6 +505,7 @@ model Membership {
   aiInteractions                  AiInteraction[]         @relation("AiInteractionMembership")
   aiOrchestrationRuns             AiOrchestrationRun[]    @relation("AiOrchestrationMembership")
   recommendationStates            BsosRecommendationState[] @relation("BsosRecommendationStateActor")
+  confirmedControlledAiActionAttempts ControlledAiActionAttempt[] @relation("ControlledAiActionAttemptActor")
   websitePublishes                WebsitePublish[]          @relation("WebsitePublishAuthor")
   websiteGalleryItems             WebsiteGalleryItem[]      @relation("WebsiteGalleryCreator")
   createdGrowthActions            GrowthActionRequest[]     @relation("GrowthActionCreator")
@@ -3163,6 +3165,42 @@ model BsosRecommendationState {
 
   @@unique([businessId, recommendationKey])
   @@index([businessId])
+}
+
+/// Durable provenance for an explicitly confirmed Controlled AI Action.
+/// Written only after owner confirmation. Never inferred from existing
+/// BusinessActionItem / BsosRecommendationState rows. No prompts, secrets,
+/// customer message bodies, or provider payloads.
+model ControlledAiActionAttempt {
+  id                      String   @id @default(cuid())
+  businessId              String
+  /// CREATE_RECOMMENDATION_ACTION_ITEM | DISMISS_RECOMMENDATION | COMPLETE_RECOMMENDATION
+  actionKey               String
+  /// EXECUTED | REPLAYED | FAILED | DENIED
+  result                  String
+  recommendationKey       String?
+  /// RECOMMENDATION
+  targetEntityType        String
+  /// BusinessActionItem | BsosRecommendationState. Null when no domain row.
+  targetRecordType        String?
+  targetRecordId          String?
+  confirmedByMembershipId String
+  confirmedByUserId       String?
+  /// SUCCEEDED | REPLAYED | STALE_PROPOSAL | NOT_ACTIVE | MISSING_ACTION_ITEM | DOMAIN_ERROR
+  resultCode              String
+  resultMessage           String
+  executionAttemptId      String
+  confirmedAt             DateTime @default(now())
+  executedAt              DateTime?
+  createdAt               DateTime @default(now())
+
+  business    Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  confirmedBy Membership @relation("ControlledAiActionAttemptActor", fields: [confirmedByMembershipId], references: [id], onDelete: Restrict)
+
+  @@unique([businessId, executionAttemptId])
+  @@index([businessId, confirmedAt])
+  @@index([businessId, actionKey])
+  @@index([confirmedByMembershipId])
 }
 
 /// Immutable published public-website snapshot. Application code must
