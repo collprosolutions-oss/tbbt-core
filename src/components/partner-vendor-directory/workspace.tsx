@@ -121,11 +121,17 @@ export function PartnerVendorDirectoryWorkspace({ workspace }: { workspace: Dire
             </form>
             <p className="pt-3 text-xs text-muted-foreground">{workspace.limitsMessage}</p>
             <p className="pt-1 text-xs text-muted-foreground">{workspace.linkMessage}</p>
+            {workspace.overflow.opportunities || workspace.overflow.suppliers || workspace.overflow.referrals ? (
+              <p className="pt-1 text-xs text-muted-foreground">{workspace.overflowMessage}</p>
+            ) : null}
           </CardContent>
         </Card>
 
         <div className="grid gap-3 sm:grid-cols-4">
-          <SummaryTile label="Matching" value={workspace.counts.total} />
+          <SummaryTile
+            label={workspace.overflow.opportunities ? "Shown (capped)" : "Shown"}
+            value={workspace.counts.total}
+          />
           <SummaryTile label="Pending review" value={workspace.counts.pendingReview} />
           <SummaryTile label="Partners" value={workspace.counts.partners} />
           <SummaryTile label="Vendors" value={workspace.counts.vendors} />
@@ -138,6 +144,12 @@ export function PartnerVendorDirectoryWorkspace({ workspace }: { workspace: Dire
           />
         ) : (
           <div className="space-y-2">
+            {workspace.overflow.opportunities ? (
+              <p className="text-xs text-muted-foreground">
+                Showing {workspace.opportunities.length} matching opportunities, capped at{" "}
+                {workspace.readLimit}. More matching records may exist in this business.
+              </p>
+            ) : null}
             {workspace.opportunities.map((opportunity) => {
               const active = workspace.selected?.id === opportunity.id;
               return (

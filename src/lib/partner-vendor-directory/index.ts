@@ -1,5 +1,6 @@
 export {
   DIRECTORY_ROUTE,
+  DIRECTORY_READ_LIMIT,
   DIRECTORY_KINDS,
   DIRECTORY_KIND_LABELS,
   DIRECTORY_SOURCES,
@@ -7,6 +8,7 @@ export {
   DIRECTORY_REVIEW_STATUSES,
   DIRECTORY_REVIEW_LABELS,
   DIRECTORY_LIMITS_MESSAGE,
+  DIRECTORY_OVERFLOW_MESSAGE,
   DIRECTORY_SEARCH_MESSAGE,
   DIRECTORY_LINK_MESSAGE,
   FORBIDDEN_DIRECTORY_CLAIM_PATTERNS,
@@ -31,6 +33,8 @@ export {
   parseDirectoryReviewFilter,
   needsDirectoryReview,
   matchesDirectorySearch,
+  resolveDirectoryReadLimit,
+  boundDirectoryRows,
 } from "@/lib/partner-vendor-directory/search";
 
 export {
@@ -42,12 +46,16 @@ export {
   type DirectoryOpportunityInput,
 } from "@/lib/partner-vendor-directory/ops";
 
-export { loadPartnerVendorDirectory } from "@/lib/partner-vendor-directory/load";
+export {
+  loadPartnerVendorDirectory,
+  type LoadPartnerVendorDirectoryOptions,
+} from "@/lib/partner-vendor-directory/load";
 
 export type {
   DirectoryQuery,
   DirectoryLinkableSupplier,
   DirectoryLinkableReferral,
   DirectoryOpportunityView,
+  DirectoryOverflow,
   DirectoryWorkspace,
 } from "@/lib/partner-vendor-directory/types";

@@ -6,6 +6,12 @@
 
 export const DIRECTORY_ROUTE = "/partner-vendor-directory";
 
+/** Hard cap for opportunity, supplier, and referral directory reads. */
+export const DIRECTORY_READ_LIMIT = 50;
+
+export const DIRECTORY_OVERFLOW_MESSAGE =
+  "This list is capped. More matching records may exist in this business.";
+
 export const DIRECTORY_KINDS = ["PARTNER", "VENDOR"] as const;
 export type DirectoryKind = (typeof DIRECTORY_KINDS)[number];
 

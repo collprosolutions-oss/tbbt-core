@@ -72,6 +72,12 @@ export function PartnerVendorCreateForm({ workspace }: { workspace: DirectoryWor
               </option>
             ))}
           </select>
+          {workspace.overflow.suppliers ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Showing {workspace.linkableSuppliers.length} suppliers from this business, capped at{" "}
+              {workspace.readLimit}. More matching records may exist.
+            </p>
+          ) : null}
         </label>
       ) : null}
 
@@ -90,6 +96,12 @@ export function PartnerVendorCreateForm({ workspace }: { workspace: DirectoryWor
               </option>
             ))}
           </select>
+          {workspace.overflow.referrals ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Showing {workspace.linkableReferrals.length} referrals from this business, capped at{" "}
+              {workspace.readLimit}. More matching records may exist.
+            </p>
+          ) : null}
         </label>
       ) : null}
 

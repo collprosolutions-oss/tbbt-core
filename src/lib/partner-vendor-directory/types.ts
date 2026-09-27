@@ -52,12 +52,21 @@ export type DirectoryOpportunityView = {
   lastReviewedAt: Date | null;
 };
 
+export type DirectoryOverflow = {
+  opportunities: boolean;
+  suppliers: boolean;
+  referrals: boolean;
+};
+
 export type DirectoryWorkspace = {
   query: DirectoryQuery;
   opportunities: DirectoryOpportunityView[];
   selected: DirectoryOpportunityView | null;
   linkableSuppliers: DirectoryLinkableSupplier[];
   linkableReferrals: DirectoryLinkableReferral[];
+  readLimit: number;
+  overflow: DirectoryOverflow;
+  overflowMessage: string;
   counts: {
     total: number;
     pendingReview: number;

@@ -21,10 +21,13 @@ const { visibleAppNav } = await import("@/lib/nav");
 const {
   DIRECTORY_LIMITS_MESSAGE,
   DIRECTORY_LINK_MESSAGE,
+  DIRECTORY_OVERFLOW_MESSAGE,
+  DIRECTORY_READ_LIMIT,
   DIRECTORY_ROUTE,
   DIRECTORY_SEARCH_MESSAGE,
   FORBIDDEN_DIRECTORY_CLAIM_PATTERNS,
   PartnerVendorDirectoryError,
+  boundDirectoryRows,
   createPartnerVendorOpportunity,
   loadPartnerVendorDirectory,
   matchesDirectorySearch,
@@ -32,6 +35,7 @@ const {
   parseDirectoryKindFilter,
   partnerVendorDirectoryRoleAllowed,
   requirePartnerVendorDirectoryAccess,
+  resolveDirectoryReadLimit,
   reviewPartnerVendorOpportunity,
   updatePartnerVendorOpportunity,
 } = await import("@/lib/partner-vendor-directory");
@@ -115,6 +119,20 @@ try {
   );
   check("Search message stays tenant-scoped", /this workspace/.test(DIRECTORY_SEARCH_MESSAGE));
   check("Link message forbids foreign rows", /Foreign-business rows cannot be read or linked/.test(DIRECTORY_LINK_MESSAGE));
+  check(
+    "Overflow copy says more matching records may exist",
+    /capped/.test(DIRECTORY_OVERFLOW_MESSAGE) && /More matching records may exist/.test(DIRECTORY_OVERFLOW_MESSAGE),
+  );
+  check("Read limit is a positive cap", DIRECTORY_READ_LIMIT === 50);
+  check("Requested limit cannot exceed the hard cap", resolveDirectoryReadLimit(999) === DIRECTORY_READ_LIMIT);
+  check("Missing limit uses the hard cap", resolveDirectoryReadLimit() === DIRECTORY_READ_LIMIT);
+  check("boundDirectoryRows reports overflow", boundDirectoryRows(["a", "b", "c"], 2).overflow === true);
+  check("boundDirectoryRows keeps the cap", boundDirectoryRows(["a", "b", "c"], 2).items.join(",") === "a,b");
+
+  const loadSrc = readRepo("src/lib/partner-vendor-directory/load.ts");
+  check("Opportunity read uses take after a filtered where", /const where = opportunityWhere/.test(loadSrc) && /take/.test(loadSrc));
+  check("Supplier and referral reads are also taken", /prisma\.supplier\.findMany/.test(loadSrc) && /prisma\.referral\.findMany/.test(loadSrc));
+  check("Loader does not scan every row then filter in memory", !/matchesDirectorySearch\(/.test(loadSrc));
 
   const copyFiles = [
     "src/lib/partner-vendor-directory/ops.ts",
@@ -133,6 +151,12 @@ try {
     "Page and workspace surface the recorded limits",
     /DIRECTORY_LIMITS_MESSAGE/.test(readRepo("src/app/(app)/partner-vendor-directory/page.tsx")) &&
       /workspace\.limitsMessage/.test(readRepo("src/components/partner-vendor-directory/workspace.tsx")),
+  );
+  check(
+    "Workspace and create form show overflow when more records may exist",
+    /workspace\.overflow\.opportunities/.test(readRepo("src/components/partner-vendor-directory/workspace.tsx")) &&
+      /workspace\.overflow\.suppliers/.test(readRepo("src/components/partner-vendor-directory/create-form.tsx")) &&
+      /workspace\.overflow\.referrals/.test(readRepo("src/components/partner-vendor-directory/create-form.tsx")),
   );
 
   const navSrc = readRepo("src/lib/nav.ts");
@@ -404,10 +428,125 @@ try {
   const afterPoisonB = await loadPartnerVendorDirectory(prisma, ownerB, { q: "Poisoned" });
   check("Business B still cannot read the poisoned A row", afterPoisonB.opportunities.length === 0);
 
-  const leftover = await prisma.partnerVendorOpportunity.findMany({
+  const leftoverBeforeOverflow = await prisma.partnerVendorOpportunity.findMany({
     where: { businessId: businessB.id },
   });
-  check("No directory rows were written into business B", leftover.length === 0);
+  check("No directory rows were written into business B before overflow fixtures", leftoverBeforeOverflow.length === 0);
+
+  console.log("\nTEST — Bounded reads, overflow honesty, and tenant isolation");
+  const needle = await prisma.partnerVendorOpportunity.create({
+    data: {
+      businessId: businessA.id,
+      kind: "VENDOR",
+      name: "UniqueNeedle Vendor",
+      summary: "Must remain findable after newer noise fills the cap",
+      source: "MANUAL",
+      createdByMembershipId: ownerMem.id,
+      updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+    },
+  });
+  const noiseIds = [];
+  for (let index = 0; index < 3; index += 1) {
+    const row = await createPartnerVendorOpportunity(prisma, ownerA, {
+      kind: "VENDOR",
+      name: `Noise row ${index + 1}`,
+      summary: "Newer non-match that would hide the needle if search ran after the cap",
+      source: "MANUAL",
+    });
+    noiseIds.push(row.id);
+  }
+  const unfilteredCap = await loadPartnerVendorDirectory(prisma, ownerA, {}, { limit: 2 });
+  check("Unfiltered opportunity read is capped", unfilteredCap.opportunities.length === 2);
+  check("Unfiltered opportunity overflow is reported", unfilteredCap.overflow.opportunities === true);
+  check(
+    "Cap without search can omit an older matching row",
+    !unfilteredCap.opportunities.some((row) => row.id === needle.id),
+  );
+  check(
+    "Capped page still never includes business B",
+    unfilteredCap.opportunities.every((row) => !/Beta Secret/i.test(`${row.name} ${row.supplierName ?? ""}`)),
+  );
+
+  const searchedNeedle = await loadPartnerVendorDirectory(
+    prisma,
+    ownerA,
+    { q: "UniqueNeedle" },
+    { limit: 2 },
+  );
+  check("Search applies before the cap and finds the older needle", searchedNeedle.opportunities.some((row) => row.id === needle.id));
+  check("Needle search does not overflow when only one row matches", searchedNeedle.overflow.opportunities === false);
+  check("Needle search does not include the newer noise rows", searchedNeedle.opportunities.every((row) => !noiseIds.includes(row.id)));
+
+  await prisma.supplier.createMany({
+    data: [
+      { businessId: businessA.id, name: "Alpha Extra Supplier 1" },
+      { businessId: businessA.id, name: "Alpha Extra Supplier 2" },
+    ],
+  });
+  const extraCustomer1 = await prisma.customer.create({
+    data: { businessId: businessA.id, name: "Alpha Extra Customer 1" },
+  });
+  const extraCustomer2 = await prisma.customer.create({
+    data: { businessId: businessA.id, name: "Alpha Extra Customer 2" },
+  });
+  await prisma.referral.createMany({
+    data: [
+      { businessId: businessA.id, sourceCustomerId: extraCustomer1.id, notes: "Extra intro 1" },
+      { businessId: businessA.id, sourceCustomerId: extraCustomer2.id, notes: "Extra intro 2" },
+    ],
+  });
+  const linkCap = await loadPartnerVendorDirectory(prisma, ownerA, {}, { limit: 2 });
+  check("Supplier read is capped", linkCap.linkableSuppliers.length === 2);
+  check("Supplier overflow is reported", linkCap.overflow.suppliers === true);
+  check(
+    "Capped suppliers stay on business A",
+    linkCap.linkableSuppliers.every((row) => row.id !== supplierB.id && !/Beta Secret/i.test(row.name)),
+  );
+  check("Referral read is capped", linkCap.linkableReferrals.length === 2);
+  check("Referral overflow is reported", linkCap.overflow.referrals === true);
+  check(
+    "Capped referrals stay on business A",
+    linkCap.linkableReferrals.every((row) => row.id !== referralB.id && !/Beta Secret/i.test(row.label)),
+  );
+
+  for (let index = 0; index < 3; index += 1) {
+    await prisma.partnerVendorOpportunity.create({
+      data: {
+        businessId: businessB.id,
+        kind: "VENDOR",
+        name: `BetaSecretOverflow ${index + 1}`,
+        source: "MANUAL",
+        createdByMembershipId: betaMem.id,
+      },
+    });
+  }
+  const aSeesBOverflow = await loadPartnerVendorDirectory(
+    prisma,
+    ownerA,
+    { q: "BetaSecretOverflow" },
+    { limit: 2 },
+  );
+  check("Business A search cannot see B's overflowing rows", aSeesBOverflow.opportunities.length === 0);
+  check("Business A reports no overflow for a foreign-only search", aSeesBOverflow.overflow.opportunities === false);
+
+  const bOverflow = await loadPartnerVendorDirectory(
+    prisma,
+    ownerB,
+    { q: "BetaSecretOverflow" },
+    { limit: 2 },
+  );
+  check("Business B search is capped on its own matches", bOverflow.opportunities.length === 2);
+  check("Business B overflow is reported for its own matches", bOverflow.overflow.opportunities === true);
+  check(
+    "Business B overflow page still excludes business A",
+    bOverflow.opportunities.every((row) => /BetaSecretOverflow/.test(row.name)) &&
+      !bOverflow.opportunities.some((row) => row.id === needle.id || /UniqueNeedle|Alpha Lumber|Ada Homeowner/.test(row.name)),
+  );
+  check(
+    "Business B still cannot see A's suppliers or referrals while overflowing",
+    bOverflow.linkableSuppliers.every((row) => row.id !== supplierA.id) &&
+      bOverflow.linkableReferrals.every((row) => row.id !== referralA.id),
+  );
 } catch (error) {
   console.error(error);
   failures += 1;
