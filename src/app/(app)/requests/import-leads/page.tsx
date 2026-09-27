@@ -36,7 +36,7 @@ export default async function ImportLeadsPage() {
     <PageContainer width="narrow">
       <PageHeader
         title="Import leads"
-        description="Preview an owner-uploaded CSV, then confirm before any leads are created."
+        description="Preview an owner-uploaded CSV, correct or reject invalid rows, then confirm before any leads are created."
       >
         <Button asChild size="sm" variant="outline">
           <Link href="/requests">Back to requests</Link>

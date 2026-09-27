@@ -27,13 +27,19 @@ const {
   applySameBusinessDuplicates,
   decodeCsvBytes,
   evaluateImportRow,
+  ExternalLeadImportError,
   EXTERNAL_LEAD_IMPORT_ROUTE,
   FILE_TOO_LARGE_MESSAGE,
+  IMPORT_ALREADY_CONFIRMED_MESSAGE,
   IMPORT_CSV_REQUIRED_MESSAGE,
   IMPORT_NO_OUTREACH_MESSAGE,
   IMPORT_NO_SCORE_MESSAGE,
   IMPORT_NO_SCRAPE_MESSAGE,
   IMPORT_NOT_AVAILABLE_MESSAGE,
+  IMPORT_RESOLVE_INVALID_MESSAGE,
+  IMPORT_ROW_NOT_EDITABLE_MESSAGE,
+  IMPORT_ROW_NOT_REJECTABLE_MESSAGE,
+  IMPORT_ROW_REJECTED_TERMINAL_MESSAGE,
   importRowFingerprint,
   importRowSubmissionId,
   MAX_EXTERNAL_LEAD_IMPORT_BYTES,
@@ -43,16 +49,20 @@ const {
   OWNER_ONLY_IMPORT_MESSAGE,
   parseCsv,
   parseExternalLeadCsv,
+  ROW_REJECTED_BY_OWNER_MESSAGE,
   sanitizeImportText,
   sanitizeSourceFilename,
+  storedRowToParsed,
   TOO_MANY_ROWS_MESSAGE,
 } = await import("@/lib/external-lead-import");
 const importModule = await import("@/lib/external-lead-import");
 const opsModule = await import("@/lib/external-lead-import-ops");
 const {
   confirmExternalLeadImport,
+  correctExternalLeadImportRow,
   loadOwnedImport,
   previewCsvUpload,
+  rejectExternalLeadImportRow,
 } = opsModule;
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -69,6 +79,7 @@ const featureFiles = [
   "src/app/(app)/requests/import-leads/[importId]/page.tsx",
   "src/components/requests/import-leads-form.tsx",
   "src/components/requests/import-leads-preview.tsx",
+  "src/components/requests/import-leads-row-review.tsx",
 ];
 const featureSource = featureFiles.map(readSrc).join("\n");
 const uiSource = [
@@ -76,6 +87,7 @@ const uiSource = [
   "src/app/(app)/requests/import-leads/[importId]/page.tsx",
   "src/components/requests/import-leads-form.tsx",
   "src/components/requests/import-leads-preview.tsx",
+  "src/components/requests/import-leads-row-review.tsx",
 ]
   .map(readSrc)
   .join("\n");
@@ -190,6 +202,42 @@ try {
       !readSrc("src/lib/external-lead-import-ops.ts").includes("createOwnerLoggedLead") === false,
   );
   check(
+    "Owner can correct or reject staged invalid rows before confirm",
+    readSrc("src/lib/external-lead-import-ops.ts").includes("correctExternalLeadImportRow") &&
+      readSrc("src/lib/external-lead-import-ops.ts").includes("rejectExternalLeadImportRow") &&
+      readSrc("src/app/actions/external-lead-import.ts").includes("correctExternalLeadImportRow") &&
+      readSrc("src/app/actions/external-lead-import.ts").includes("rejectExternalLeadImportRow") &&
+      uiSource.includes("Save correction") &&
+      uiSource.includes("Reject this row") &&
+      IMPORT_RESOLVE_INVALID_MESSAGE.includes("Correct or reject") &&
+      IMPORT_ROW_REJECTED_TERMINAL_MESSAGE.includes("cannot be corrected") &&
+      readSrc("src/components/requests/import-leads-preview.tsx").includes(
+        "Rejection is final",
+      ) &&
+      !readSrc("src/components/requests/import-leads-preview.tsx").includes(
+        "correctExternalLeadImportRowAction",
+      ) &&
+      readSrc("src/lib/external-lead-import-ops.ts").includes(
+        "IMPORT_ROW_REJECTED_TERMINAL_MESSAGE",
+      ) &&
+      /previewStatus:\s*"INVALID"/.test(
+        readSrc("src/lib/external-lead-import-ops.ts").slice(
+          readSrc("src/lib/external-lead-import-ops.ts").indexOf("async function persistReviewedRow"),
+          readSrc("src/lib/external-lead-import-ops.ts").indexOf("export type ImportRowCorrectionInput"),
+        ),
+      ),
+  );
+  check(
+    "Correction and rejection do not create leads or send messages",
+    (readSrc("src/lib/external-lead-import-ops.ts").match(/createOwnerLoggedLead/g) || []).length === 2 &&
+      !/sendEmail|sendMail|sendSms|resend|appointment-mail|appointment-notify/i.test(
+        readSrc("src/lib/external-lead-import-ops.ts"),
+      ) &&
+      !/sendEmail|sendMail|sendSms|resend|appointment-mail|appointment-notify/i.test(
+        readSrc("src/app/actions/external-lead-import.ts"),
+      ),
+  );
+  check(
     "Submission ids stay within the intake token shape",
     /^[A-Za-z0-9_-]{8,80}$/.test(importRowSubmissionId("import123", "abc123def456")),
   );
@@ -262,6 +310,31 @@ try {
   check(
     "Other-business identities are not duplicates when omitted from the same-business set",
     crossTenant[0].previewStatus === "VALID",
+  );
+  const rejectedStored = storedRowToParsed({
+    rowNumber: 4,
+    name: "Skip",
+    email: "skip@example.com",
+    phone: "",
+    summary: "Skip",
+    notes: "",
+    streetAddress: "",
+    unit: "",
+    city: "",
+    region: "",
+    postalCode: "",
+    leadSource: "MANUAL",
+    previewStatus: "REJECTED",
+    invalidReason: ROW_REJECTED_BY_OWNER_MESSAGE,
+    rowFingerprint: "abc",
+  });
+  check(
+    "Rejected staged rows stay rejected when re-evaluated for duplicates",
+    applySameBusinessDuplicates(
+      [rejectedStored],
+      [{ id: "cust-skip", name: "Skip", email: "skip@example.com", phone: null }],
+      [],
+    )[0].previewStatus === "REJECTED",
   );
 
   const businessA = await prisma.business.create({
@@ -372,11 +445,45 @@ try {
     previewA.rows.find((row) => row.email === "ada@example.com")?.previewStatus === "VALID",
   );
 
+  try {
+    await confirmExternalLeadImport(prisma, ownerA, { importId: previewA.id });
+    check("Confirm is blocked while invalid rows remain", false);
+  } catch (error) {
+    check(
+      "Confirm is blocked while invalid rows remain",
+      error.message === IMPORT_RESOLVE_INVALID_MESSAGE,
+    );
+  }
+
+  const invalidA = previewA.rows.find((row) => row.previewStatus === "INVALID");
+  check("Mixed preview has one invalid row to resolve", Boolean(invalidA));
+  const rejectedA = await rejectExternalLeadImportRow(prisma, ownerA, {
+    importId: previewA.id,
+    rowId: invalidA.id,
+  });
+  check(
+    "Owner rejection clears the invalid count without creating a lead",
+    rejectedA.preview.invalidCount === 0 &&
+      rejectedA.preview.rejectedCount === 1 &&
+      rejectedA.preview.createdCount === 0 &&
+      rejectedA.preview.rows.find((row) => row.id === invalidA.id)?.previewStatus === "REJECTED",
+  );
+  const rejectedAgain = await rejectExternalLeadImportRow(prisma, ownerA, {
+    importId: previewA.id,
+    rowId: invalidA.id,
+  });
+  check("Retry reject of the same row is idempotent", rejectedAgain.reused === true);
+
   const previewAgain = await previewCsvUpload(prisma, ownerA, {
     filename: "owner-leads.csv",
     bytes: mixedCsv,
   });
   check("Retry of the same CSV reuses the same preview id", previewAgain.id === previewA.id);
+  check(
+    "Retry of the same CSV preserves the owner rejection",
+    previewAgain.rows.find((row) => row.rowNumber === invalidA.rowNumber)?.previewStatus ===
+      "REJECTED",
+  );
 
   try {
     await loadOwnedImport(prisma, ownerB, previewA.id);
@@ -450,6 +557,11 @@ try {
     (await prisma.serviceRequest.count({ where: { businessId: businessA.id } })) === requestsAfterA.length,
   );
 
+  const invalidB = previewB.rows.find((row) => row.previewStatus === "INVALID");
+  await rejectExternalLeadImportRow(prisma, ownerB, {
+    importId: previewB.id,
+    rowId: invalidB.id,
+  });
   const withDupes = await confirmExternalLeadImport(prisma, ownerB, {
     importId: previewB.id,
     includePossibleDuplicates: true,
@@ -458,8 +570,14 @@ try {
     "OWNER B may explicitly include same-business duplicates for B only",
     withDupes.createdRequestIds.length >= 1 &&
       withDupes.preview.rows
-        .filter((row) => row.previewStatus !== "INVALID")
-        .every((row) => row.createdRequestId),
+        .filter(
+          (row) =>
+            row.previewStatus === "VALID" || row.previewStatus === "POSSIBLE_DUPLICATE",
+        )
+        .every((row) => row.createdRequestId) &&
+      withDupes.preview.rows
+        .filter((row) => row.previewStatus === "REJECTED")
+        .every((row) => !row.createdRequestId),
   );
   check(
     "B confirm still creates no A rows",
@@ -473,6 +591,351 @@ try {
   check(
     "B created requests never attach A customers",
     bRequests.every((row) => !row.customerId || row.customer?.businessId === businessB.id),
+  );
+
+  console.log("\nREVIEW — correct invalid rows, reject, retry, no messages");
+  const reviewCsv = Buffer.from(
+    [
+      "name,email,phone,summary,source",
+      "Pat Ready,pat-ready@example.com,2393578210,Paint porch,MANUAL",
+      ",not-an-email,2395550211,Missing name,MANUAL",
+      "No Summary,no-summary@example.com,2395550212,,MANUAL",
+    ].join("\n"),
+  );
+  const reviewPreview = await previewCsvUpload(prisma, ownerA, {
+    filename: "review-leads.csv",
+    bytes: reviewCsv,
+  });
+  const missingName = reviewPreview.rows.find((row) => row.email === "not-an-email");
+  const missingSummary = reviewPreview.rows.find((row) => row.email === "no-summary@example.com");
+  check(
+    "Review preview stages one ready row and two invalid rows",
+    reviewPreview.validCount === 1 &&
+      reviewPreview.invalidCount === 2 &&
+      Boolean(missingName) &&
+      Boolean(missingSummary),
+  );
+
+  const stillInvalid = await correctExternalLeadImportRow(prisma, ownerA, {
+    importId: reviewPreview.id,
+    rowId: missingName.id,
+    name: "Pat Fixed",
+    email: "not-an-email",
+    phone: "2395550211",
+    summary: "Missing name",
+  });
+  check(
+    "First correction retry stays invalid when email is still bad",
+    stillInvalid.rows.find((row) => row.id === missingName.id)?.previewStatus === "INVALID" &&
+      stillInvalid.createdCount === 0,
+  );
+
+  const requestsBeforeReview = await prisma.serviceRequest.count({
+    where: { businessId: businessA.id },
+  });
+  const corrected = await correctExternalLeadImportRow(prisma, ownerA, {
+    importId: reviewPreview.id,
+    rowId: missingName.id,
+    name: "Pat Fixed",
+    email: "pat-fixed@example.com",
+    phone: "2395550211",
+    summary: "Repair stoop",
+    source: "GOOGLE",
+  });
+  const correctedRow = corrected.rows.find((row) => row.id === missingName.id);
+  check(
+    "Retry correction with valid fields marks the row ready",
+    correctedRow?.previewStatus === "VALID" &&
+      correctedRow.email === "pat-fixed@example.com" &&
+      correctedRow.leadSource === "GOOGLE" &&
+      corrected.invalidCount === 1 &&
+      corrected.validCount === 2,
+  );
+  check(
+    "Correction does not create a request before confirm",
+    (await prisma.serviceRequest.count({ where: { businessId: businessA.id } })) ===
+      requestsBeforeReview,
+  );
+
+  try {
+    await correctExternalLeadImportRow(prisma, ownerA, {
+      importId: reviewPreview.id,
+      rowId: correctedRow.id,
+      name: "Pat Fixed",
+      email: "pat-fixed@example.com",
+      summary: "Repair stoop",
+    });
+    check("Ready rows cannot be edited again", false);
+  } catch (error) {
+    check(
+      "Ready rows cannot be edited again",
+      error.message === IMPORT_ROW_NOT_EDITABLE_MESSAGE,
+    );
+  }
+
+  const rejectedReview = await rejectExternalLeadImportRow(prisma, ownerA, {
+    importId: reviewPreview.id,
+    rowId: missingSummary.id,
+  });
+  check(
+    "Owner can reject the remaining invalid row",
+    rejectedReview.preview.invalidCount === 0 &&
+      rejectedReview.preview.rejectedCount === 1 &&
+      rejectedReview.preview.rows.find((row) => row.id === missingSummary.id)?.invalidReason ===
+        ROW_REJECTED_BY_OWNER_MESSAGE,
+  );
+  try {
+    await correctExternalLeadImportRow(prisma, ownerA, {
+      importId: reviewPreview.id,
+      rowId: missingSummary.id,
+      name: "Unreject",
+      email: "no-summary@example.com",
+      summary: "Should stay rejected",
+    });
+    check("Direct correction of a rejected row is refused", false);
+  } catch (error) {
+    check(
+      "Direct correction of a rejected row is refused",
+      error.message === IMPORT_ROW_REJECTED_TERMINAL_MESSAGE,
+    );
+  }
+
+  try {
+    await rejectExternalLeadImportRow(prisma, ownerA, {
+      importId: reviewPreview.id,
+      rowId: correctedRow.id,
+    });
+    check("Ready rows cannot be rejected", false);
+  } catch (error) {
+    check("Ready rows cannot be rejected", error.message === IMPORT_ROW_NOT_REJECTABLE_MESSAGE);
+  }
+
+  try {
+    await correctExternalLeadImportRow(prisma, adminA, {
+      importId: reviewPreview.id,
+      rowId: missingSummary.id,
+      name: "Admin",
+      summary: "Nope",
+    });
+    check("ADMIN cannot correct", false);
+  } catch (error) {
+    check("ADMIN cannot correct", error instanceof ForbiddenError);
+  }
+  try {
+    await rejectExternalLeadImportRow(prisma, memberA, {
+      importId: reviewPreview.id,
+      rowId: missingSummary.id,
+    });
+    check("MEMBER cannot reject", false);
+  } catch (error) {
+    check("MEMBER cannot reject", error instanceof ForbiddenError);
+  }
+  try {
+    await correctExternalLeadImportRow(prisma, ownerB, {
+      importId: reviewPreview.id,
+      rowId: missingSummary.id,
+      name: "Cross",
+      summary: "Nope",
+    });
+    check("Business B cannot correct Business A staged row", false);
+  } catch (error) {
+    check(
+      "Business B cannot correct Business A staged row",
+      error.message === IMPORT_NOT_AVAILABLE_MESSAGE,
+    );
+  }
+
+  const dupeCorrectCsv = Buffer.from(
+    [
+      "name,email,phone,summary,source",
+      ",existing-ada@example.com,2395550100,Repeat later,MANUAL",
+    ].join("\n"),
+  );
+  const dupePreview = await previewCsvUpload(prisma, ownerA, {
+    filename: "dupe-correct.csv",
+    bytes: dupeCorrectCsv,
+  });
+  const dupeInvalid = dupePreview.rows[0];
+  const dupeCorrected = await correctExternalLeadImportRow(prisma, ownerA, {
+    importId: dupePreview.id,
+    rowId: dupeInvalid.id,
+    name: "Existing Ada",
+    email: "existing-ada@example.com",
+    phone: "2395550100",
+    summary: "Repeat later",
+  });
+  check(
+    "Corrected identity that matches a same-business customer is a possible duplicate",
+    dupeCorrected.rows[0].previewStatus === "POSSIBLE_DUPLICATE" &&
+      Boolean(dupeCorrected.rows[0].possibleDuplicateCustomerId) &&
+      dupeCorrected.createdCount === 0,
+  );
+
+  const reviewAgain = await previewCsvUpload(prisma, ownerA, {
+    filename: "review-leads.csv",
+    bytes: reviewCsv,
+  });
+  const rejectedAfterRetry = reviewAgain.rows.find(
+    (row) => row.rowNumber === missingSummary.rowNumber,
+  );
+  check("Retry of the review CSV reuses the same preview id", reviewAgain.id === reviewPreview.id);
+  check(
+    "Retry of the review CSV keeps the corrected and rejected rows",
+    reviewAgain.rows.find((row) => row.rowNumber === missingName.rowNumber)?.email ===
+      "pat-fixed@example.com" &&
+      reviewAgain.rows.find((row) => row.rowNumber === missingName.rowNumber)?.previewStatus ===
+        "VALID" &&
+      rejectedAfterRetry?.previewStatus === "REJECTED",
+  );
+  try {
+    await correctExternalLeadImportRow(prisma, ownerA, {
+      importId: reviewPreview.id,
+      rowId: rejectedAfterRetry.id,
+      name: "Unreject after retry",
+      email: "no-summary@example.com",
+      summary: "Should stay rejected",
+    });
+    check("CSV retry does not reopen a rejected row for correction", false);
+  } catch (error) {
+    check(
+      "CSV retry does not reopen a rejected row for correction",
+      error.message === IMPORT_ROW_REJECTED_TERMINAL_MESSAGE,
+    );
+  }
+
+  const confirmedReview = await confirmExternalLeadImport(prisma, ownerA, {
+    importId: reviewPreview.id,
+  });
+  const reviewRequests = await prisma.serviceRequest.findMany({
+    where: { businessId: businessA.id },
+    include: { customer: true },
+  });
+  const createdFixed = reviewRequests.find((row) => row.customer?.email === "pat-fixed@example.com");
+  const rejectedAfterConfirm = confirmedReview.preview.rows.find(
+    (row) => row.rowNumber === missingSummary.rowNumber,
+  );
+  check(
+    "Confirm after review creates only ready rows",
+    confirmedReview.createdRequestIds.length === 2 &&
+      confirmedReview.preview.rows
+        .filter((row) => row.previewStatus === "VALID")
+        .every((row) => row.createdRequestId),
+  );
+  check(
+    "Rejected row stays rejected and creates no lead after CSV retry and confirmation",
+    rejectedAfterConfirm?.previewStatus === "REJECTED" &&
+      !rejectedAfterConfirm.createdRequestId &&
+      !reviewRequests.some((row) => row.customer?.email === "no-summary@example.com"),
+  );
+  check("Corrected row keeps the owner-recorded source", createdFixed?.leadSource === "GOOGLE");
+
+  const confirmedReviewAgain = await confirmExternalLeadImport(prisma, ownerA, {
+    importId: reviewPreview.id,
+  });
+  check("Retry confirm after review is idempotent", confirmedReviewAgain.reused === true);
+  check(
+    "Retry confirm after review does not create more A requests",
+    (await prisma.serviceRequest.count({ where: { businessId: businessA.id } })) ===
+      reviewRequests.length,
+  );
+
+  try {
+    await correctExternalLeadImportRow(prisma, ownerA, {
+      importId: reviewPreview.id,
+      rowId: missingSummary.id,
+      name: "Too late",
+      summary: "Too late",
+    });
+    check("Confirmed preview cannot be corrected", false);
+  } catch (error) {
+    check(
+      "Confirmed preview cannot be corrected",
+      error.message === IMPORT_ALREADY_CONFIRMED_MESSAGE,
+    );
+  }
+
+  console.log("\nRACE — reject wins the INVALID write, correction fails, row stays REJECTED");
+  const raceCsv = Buffer.from(
+    [
+      "name,email,phone,summary,source",
+      ",race@example.com,2395550299,Missing name,MANUAL",
+    ].join("\n"),
+  );
+  const racePreview = await previewCsvUpload(prisma, ownerA, {
+    filename: "race-leads.csv",
+    bytes: raceCsv,
+  });
+  const raceRow = racePreview.rows[0];
+  check(
+    "Race preview starts with one invalid staged row",
+    racePreview.status === "PREVIEW" &&
+      raceRow?.previewStatus === "INVALID" &&
+      racePreview.invalidCount === 1,
+  );
+
+  let releaseCorrectionWrite;
+  const correctionWriteGate = new Promise((resolve) => {
+    releaseCorrectionWrite = resolve;
+  });
+  let notifyCorrectionReachedWrite;
+  const correctionReachedWrite = new Promise((resolve) => {
+    notifyCorrectionReachedWrite = resolve;
+  });
+  const racingDb = prisma.$extends({
+    query: {
+      externalLeadImportRow: {
+        async updateMany({ args, query }) {
+          if (args.data?.previewStatus === "REJECTED") {
+            return query(args);
+          }
+          notifyCorrectionReachedWrite();
+          await correctionWriteGate;
+          return query(args);
+        },
+      },
+    },
+  });
+
+  const correctionPromise = correctExternalLeadImportRow(racingDb, ownerA, {
+    importId: racePreview.id,
+    rowId: raceRow.id,
+    name: "Race Correct",
+    email: "race-correct@example.com",
+    phone: "2395550299",
+    summary: "Should lose the race",
+  });
+  await correctionReachedWrite;
+  const raceRejected = await rejectExternalLeadImportRow(prisma, ownerA, {
+    importId: racePreview.id,
+    rowId: raceRow.id,
+  });
+  check(
+    "Reject commits first while the correction write is held",
+    raceRejected.reused === false &&
+      raceRejected.preview.rows.find((row) => row.id === raceRow.id)?.previewStatus ===
+        "REJECTED",
+  );
+  releaseCorrectionWrite();
+  try {
+    await correctionPromise;
+    check("Concurrent correction loses once the row is no longer INVALID", false);
+  } catch (error) {
+    check(
+      "Concurrent correction loses once the row is no longer INVALID",
+      error instanceof ExternalLeadImportError &&
+        error.message === IMPORT_ROW_REJECTED_TERMINAL_MESSAGE,
+    );
+  }
+  const afterRace = await loadOwnedImport(prisma, ownerA, racePreview.id);
+  const afterRaceRow = afterRace.rows.find((row) => row.id === raceRow.id);
+  check(
+    "Rejected row stays rejected and creates no lead after the lost correction race",
+    afterRaceRow?.previewStatus === "REJECTED" &&
+      afterRaceRow.name !== "Race Correct" &&
+      afterRaceRow.email === "race@example.com" &&
+      afterRaceRow.createdRequestId == null &&
+      afterRace.createdCount === 0 &&
+      afterRace.rejectedCount === 1,
   );
 
   console.log("\nExternal lead import check complete.");

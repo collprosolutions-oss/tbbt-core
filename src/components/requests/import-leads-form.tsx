@@ -29,7 +29,7 @@ export function ImportLeadsForm() {
 
       <p className="text-sm text-muted-foreground">
         {IMPORT_NO_SCRAPE_MESSAGE} {IMPORT_NO_SCORE_MESSAGE} {IMPORT_NO_OUTREACH_MESSAGE}{" "}
-        Nothing is created until you review the preview and confirm.
+        Nothing is created until you review the preview, resolve invalid rows, and confirm.
       </p>
 
       <div className="space-y-2">

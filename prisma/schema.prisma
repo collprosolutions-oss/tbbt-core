@@ -4263,10 +4263,11 @@ model PartnerVendorOpportunity {
   @@index([referralId])
 }
 
-/// OWNER-reviewed external lead import. Preview is stored first; ServiceRequest
-/// rows are created only after explicit OWNER confirmation. Same-business
-/// duplicate flags are possible matches, not scores. This is not scraping,
-/// a bought list, or autonomous outreach.
+/// OWNER-reviewed external lead import. Preview is stored first; invalid
+/// staged rows can be corrected or rejected; ServiceRequest rows are created
+/// only after explicit OWNER confirmation. Same-business duplicate flags are
+/// possible matches, not scores. This is not scraping, a bought list,
+/// outreach, or message sending.
 model ExternalLeadImport {
   id                    String   @id @default(cuid())
   businessId            String
@@ -4300,14 +4301,16 @@ model ExternalLeadImport {
   @@index([confirmedByMembershipId])
 }
 
-/// One sanitized CSV row captured at preview time. Invalid and possible
-/// duplicate rows stay on the preview and are never auto-created.
+/// One sanitized CSV row captured at preview time. Invalid rows stay staged
+/// so the OWNER can correct or reject them before confirm. REJECTED is
+/// terminal for this slice. Possible duplicate and rejected rows are never
+/// auto-created.
 model ExternalLeadImportRow {
   id                    String   @id @default(cuid())
   businessId            String
   importId              String
   rowNumber             Int
-  /// VALID | INVALID | POSSIBLE_DUPLICATE
+  /// VALID | INVALID | POSSIBLE_DUPLICATE | REJECTED
   previewStatus         String
   invalidReason         String?
   rowFingerprint        String

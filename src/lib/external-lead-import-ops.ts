@@ -14,17 +14,26 @@ import {
   applySameBusinessDuplicates,
   countPreviewStatuses,
   decodeCsvBytes,
+  evaluateImportRow,
   EXTERNAL_LEAD_IMPORT_ROUTE,
   ExternalLeadImportError,
   FILE_TOO_LARGE_MESSAGE,
   hashCsvBytes,
+  IMPORT_ALREADY_CONFIRMED_MESSAGE,
   IMPORT_CONFIRM_REQUIRED_MESSAGE,
   IMPORT_NOT_AVAILABLE_MESSAGE,
+  IMPORT_RESOLVE_INVALID_MESSAGE,
+  IMPORT_ROW_NOT_EDITABLE_MESSAGE,
+  IMPORT_ROW_NOT_REJECTABLE_MESSAGE,
+  IMPORT_ROW_REJECTED_TERMINAL_MESSAGE,
   importRowSubmissionId,
   MAX_EXTERNAL_LEAD_IMPORT_BYTES,
   OWNER_ONLY_IMPORT_MESSAGE,
   parseExternalLeadCsv,
+  ROW_REJECTED_BY_OWNER_MESSAGE,
   sanitizeSourceFilename,
+  storedRowToParsed,
+  type CanonicalImportColumn,
   type ParsedImportRow,
   type SameBusinessIdentity,
   type SameBusinessRequest,
@@ -91,6 +100,7 @@ export type ExternalLeadImportPreview = {
   validCount: number;
   invalidCount: number;
   possibleDuplicateCount: number;
+  rejectedCount: number;
   createdCount: number;
   rows: StoredImportRow[];
 };
@@ -107,7 +117,18 @@ function membershipId(access: ExternalLeadImportAccess): string {
   return id;
 }
 
+function previewCountWrite(rows: Array<{ previewStatus: string }>) {
+  const counts = countPreviewStatuses(rows);
+  return {
+    rowCount: counts.rowCount,
+    validCount: counts.validCount,
+    invalidCount: counts.invalidCount,
+    possibleDuplicateCount: counts.possibleDuplicateCount,
+  };
+}
+
 function toPreview(record: StoredImport, rows: StoredImportRow[]): ExternalLeadImportPreview {
+  const counts = countPreviewStatuses(rows);
   return {
     id: record.id,
     businessId: record.businessId,
@@ -116,10 +137,11 @@ function toPreview(record: StoredImport, rows: StoredImportRow[]): ExternalLeadI
     contentSha256: record.contentSha256,
     capturedAt: record.capturedAt,
     status: record.status,
-    rowCount: record.rowCount,
-    validCount: record.validCount,
-    invalidCount: record.invalidCount,
-    possibleDuplicateCount: record.possibleDuplicateCount,
+    rowCount: counts.rowCount,
+    validCount: counts.validCount,
+    invalidCount: counts.invalidCount,
+    possibleDuplicateCount: counts.possibleDuplicateCount,
+    rejectedCount: counts.rejectedCount,
     createdCount: rows.filter((row) => row.createdRequestId).length,
     rows,
   };
@@ -200,7 +222,6 @@ async function persistPreview(
   const parsed = parseExternalLeadCsv(decodeCsvBytes(bytes));
   const identities = await loadSameBusinessIdentities(db, businessId);
   const flagged = applySameBusinessDuplicates(parsed, identities.customers, identities.requests);
-  const counts = countPreviewStatuses(flagged);
   const capturedAt = new Date();
 
   try {
@@ -212,7 +233,7 @@ async function persistPreview(
         contentSha256,
         capturedAt,
         status: "PREVIEW",
-        ...counts,
+        ...previewCountWrite(flagged),
         createdByMembershipId: membershipId(access),
         rows: {
           create: flagged.map((row) => rowWriteData(businessId, row)),
@@ -245,27 +266,8 @@ async function refreshPreviewDuplicates(
   rows: StoredImportRow[],
 ): Promise<ExternalLeadImportPreview> {
   const identities = await loadSameBusinessIdentities(db, access.businessId);
-  const parsed: ParsedImportRow[] = rows.map((row) => ({
-    rowNumber: row.rowNumber,
-    name: row.name,
-    email: row.email ?? "",
-    phone: row.phone ?? "",
-    summary: row.summary ?? "",
-    notes: row.notes ?? "",
-    streetAddress: row.streetAddress ?? "",
-    unit: row.unit ?? "",
-    city: row.city ?? "",
-    region: row.region ?? "",
-    postalCode: row.postalCode ?? "",
-    leadSource: (row.leadSource as ParsedImportRow["leadSource"]) ?? "MANUAL",
-    previewStatus: row.previewStatus === "INVALID" ? "INVALID" : "VALID",
-    invalidReason: row.invalidReason,
-    rowFingerprint: row.rowFingerprint,
-    possibleDuplicateCustomerId: null,
-    possibleDuplicateRequestId: null,
-  }));
+  const parsed = rows.map((row) => storedRowToParsed(row));
   const flagged = applySameBusinessDuplicates(parsed, identities.customers, identities.requests);
-  const counts = countPreviewStatuses(flagged);
   await db.externalLeadImportRow.deleteMany({
     where: { businessId: access.businessId, importId: existing.id },
   });
@@ -277,7 +279,7 @@ async function refreshPreviewDuplicates(
   });
   await db.externalLeadImport.update({
     where: { id: existing.id },
-    data: counts,
+    data: previewCountWrite(flagged),
   });
   return loadOwnedImport(db, access, existing.id);
 }
@@ -314,6 +316,180 @@ export async function loadOwnedImport(
   return toPreview(record, record.rows ?? []);
 }
 
+function requireMutablePreview(preview: ExternalLeadImportPreview) {
+  if (preview.status === "CONFIRMED") {
+    throw new ExternalLeadImportError(IMPORT_ALREADY_CONFIRMED_MESSAGE);
+  }
+  if (preview.status !== "PREVIEW") {
+    throw new ExternalLeadImportError(IMPORT_CONFIRM_REQUIRED_MESSAGE);
+  }
+}
+
+function findOwnedRow(
+  access: ExternalLeadImportAccess,
+  preview: ExternalLeadImportPreview,
+  rowId: string,
+): StoredImportRow {
+  const id = rowId.trim();
+  if (!id) {
+    throw new ExternalLeadImportError(IMPORT_NOT_AVAILABLE_MESSAGE);
+  }
+  const row = preview.rows.find((candidate) => candidate.id === id) ?? null;
+  if (!row || row.businessId !== access.businessId || row.importId !== preview.id) {
+    throw new ExternalLeadImportError(IMPORT_NOT_AVAILABLE_MESSAGE);
+  }
+  access.assertOwned(row);
+  return row;
+}
+
+async function persistReviewedRow(
+  db: Db,
+  access: ExternalLeadImportAccess,
+  preview: ExternalLeadImportPreview,
+  row: StoredImportRow,
+  parsed: ParsedImportRow,
+): Promise<{ preview: ExternalLeadImportPreview; wrote: boolean }> {
+  const updated = await db.externalLeadImportRow.updateMany({
+    where: {
+      id: row.id,
+      businessId: access.businessId,
+      importId: preview.id,
+      // Correction and rejection both require the row to still be INVALID
+      // at write time so a winning reject cannot be overwritten.
+      previewStatus: "INVALID",
+      createdRequestId: null,
+    },
+    data: {
+      previewStatus: parsed.previewStatus,
+      invalidReason: parsed.invalidReason,
+      rowFingerprint: parsed.rowFingerprint,
+      name: parsed.name,
+      email: parsed.email || null,
+      phone: parsed.phone || null,
+      summary: parsed.summary || null,
+      notes: parsed.notes || null,
+      streetAddress: parsed.streetAddress || null,
+      unit: parsed.unit || null,
+      city: parsed.city || null,
+      region: parsed.region || null,
+      postalCode: parsed.postalCode || null,
+      leadSource: parsed.leadSource,
+      possibleDuplicateCustomerId: parsed.possibleDuplicateCustomerId,
+      possibleDuplicateRequestId: parsed.possibleDuplicateRequestId,
+    },
+  });
+  if (updated.count !== 1) {
+    return { preview: await loadOwnedImport(db, access, preview.id), wrote: false };
+  }
+  const rows = await db.externalLeadImportRow.findMany({
+    where: { importId: preview.id, businessId: access.businessId },
+    orderBy: { rowNumber: "asc" },
+  });
+  await db.externalLeadImport.updateMany({
+    where: { id: preview.id, businessId: access.businessId },
+    data: previewCountWrite(rows),
+  });
+  return { preview: await loadOwnedImport(db, access, preview.id), wrote: true };
+}
+
+function currentReviewedRow(preview: ExternalLeadImportPreview, rowId: string) {
+  return preview.rows.find((candidate) => candidate.id === rowId) ?? null;
+}
+
+export type ImportRowCorrectionInput = {
+  importId: string;
+  rowId: string;
+} & Partial<Record<CanonicalImportColumn, string>>;
+
+export async function correctExternalLeadImportRow(
+  db: Db,
+  access: ExternalLeadImportAccess,
+  input: ImportRowCorrectionInput,
+): Promise<ExternalLeadImportPreview> {
+  requireOwner(access);
+  const preview = await loadOwnedImport(db, access, input.importId);
+  requireMutablePreview(preview);
+  const row = findOwnedRow(access, preview, input.rowId);
+  if (row.createdRequestId) {
+    throw new ExternalLeadImportError(IMPORT_ROW_NOT_EDITABLE_MESSAGE);
+  }
+  if (row.previewStatus === "REJECTED") {
+    throw new ExternalLeadImportError(IMPORT_ROW_REJECTED_TERMINAL_MESSAGE);
+  }
+  if (row.previewStatus !== "INVALID") {
+    throw new ExternalLeadImportError(IMPORT_ROW_NOT_EDITABLE_MESSAGE);
+  }
+
+  const parsed = evaluateImportRow(row.rowNumber, {
+    name: input.name ?? "",
+    email: input.email ?? "",
+    phone: input.phone ?? "",
+    summary: input.summary ?? "",
+    notes: input.notes ?? "",
+    street: input.street ?? "",
+    unit: input.unit ?? "",
+    city: input.city ?? "",
+    region: input.region ?? "",
+    postal: input.postal ?? "",
+    source: input.source ?? "",
+  });
+  const identities = await loadSameBusinessIdentities(db, access.businessId);
+  const [flagged] = applySameBusinessDuplicates(
+    [parsed],
+    identities.customers,
+    identities.requests,
+  );
+  const result = await persistReviewedRow(db, access, preview, row, flagged);
+  if (!result.wrote) {
+    const current = currentReviewedRow(result.preview, row.id);
+    if (current?.previewStatus === "REJECTED") {
+      throw new ExternalLeadImportError(IMPORT_ROW_REJECTED_TERMINAL_MESSAGE);
+    }
+    throw new ExternalLeadImportError(IMPORT_ROW_NOT_EDITABLE_MESSAGE);
+  }
+  return result.preview;
+}
+
+export type RejectImportRowResult = {
+  preview: ExternalLeadImportPreview;
+  reused: boolean;
+};
+
+export async function rejectExternalLeadImportRow(
+  db: Db,
+  access: ExternalLeadImportAccess,
+  input: { importId: string; rowId: string },
+): Promise<RejectImportRowResult> {
+  requireOwner(access);
+  const preview = await loadOwnedImport(db, access, input.importId);
+  requireMutablePreview(preview);
+  const row = findOwnedRow(access, preview, input.rowId);
+  if (row.createdRequestId) {
+    throw new ExternalLeadImportError(IMPORT_ROW_NOT_REJECTABLE_MESSAGE);
+  }
+  if (row.previewStatus === "REJECTED") {
+    return { preview, reused: true };
+  }
+  if (row.previewStatus !== "INVALID") {
+    throw new ExternalLeadImportError(IMPORT_ROW_NOT_REJECTABLE_MESSAGE);
+  }
+
+  const parsed = storedRowToParsed({
+    ...row,
+    previewStatus: "REJECTED",
+    invalidReason: ROW_REJECTED_BY_OWNER_MESSAGE,
+  });
+  const result = await persistReviewedRow(db, access, preview, row, parsed);
+  if (!result.wrote) {
+    const current = currentReviewedRow(result.preview, row.id);
+    if (current?.previewStatus === "REJECTED") {
+      return { preview: result.preview, reused: true };
+    }
+    throw new ExternalLeadImportError(IMPORT_ROW_NOT_REJECTABLE_MESSAGE);
+  }
+  return { preview: result.preview, reused: false };
+}
+
 export type ConfirmImportResult = {
   preview: ExternalLeadImportPreview;
   createdRequestIds: string[];
@@ -338,6 +514,9 @@ export async function confirmExternalLeadImport(
   }
   if (preview.status !== "PREVIEW" && preview.status !== "CONFIRMING") {
     throw new ExternalLeadImportError(IMPORT_CONFIRM_REQUIRED_MESSAGE);
+  }
+  if (preview.rows.some((row) => row.previewStatus === "INVALID")) {
+    throw new ExternalLeadImportError(IMPORT_RESOLVE_INVALID_MESSAGE);
   }
 
   await db.externalLeadImport.updateMany({

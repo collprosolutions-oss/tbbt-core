@@ -44,12 +44,17 @@ export {
   EXTERNAL_LEAD_IMPORT_SOURCE_KINDS,
   EXTERNAL_LEAD_IMPORT_STATUSES,
   FILE_TOO_LARGE_MESSAGE,
+  IMPORT_ALREADY_CONFIRMED_MESSAGE,
   IMPORT_CONFIRM_REQUIRED_MESSAGE,
   IMPORT_CSV_REQUIRED_MESSAGE,
   IMPORT_NO_OUTREACH_MESSAGE,
   IMPORT_NO_SCORE_MESSAGE,
   IMPORT_NO_SCRAPE_MESSAGE,
   IMPORT_NOT_AVAILABLE_MESSAGE,
+  IMPORT_RESOLVE_INVALID_MESSAGE,
+  IMPORT_ROW_NOT_EDITABLE_MESSAGE,
+  IMPORT_ROW_NOT_REJECTABLE_MESSAGE,
+  IMPORT_ROW_REJECTED_TERMINAL_MESSAGE,
   INVALID_CSV_MESSAGE,
   MAX_EXTERNAL_LEAD_IMPORT_BYTES,
   MAX_EXTERNAL_LEAD_IMPORT_FIELD,
@@ -58,6 +63,7 @@ export {
   MISSING_NAME_HEADER_MESSAGE,
   NOT_CSV_MESSAGE,
   OWNER_ONLY_IMPORT_MESSAGE,
+  ROW_REJECTED_BY_OWNER_MESSAGE,
   TOO_MANY_ROWS_MESSAGE,
   previewStatusLabel,
   sourceKindLabel,
@@ -389,13 +395,53 @@ export function evaluateImportRow(
   };
 }
 
+export function storedRowToParsed(row: {
+  rowNumber: number;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  summary: string | null;
+  notes: string | null;
+  streetAddress: string | null;
+  unit: string | null;
+  city: string | null;
+  region: string | null;
+  postalCode: string | null;
+  leadSource: string;
+  previewStatus: string;
+  invalidReason: string | null;
+  rowFingerprint: string;
+}): ParsedImportRow {
+  const rejected = row.previewStatus === "REJECTED";
+  const invalid = row.previewStatus === "INVALID";
+  return {
+    rowNumber: row.rowNumber,
+    name: row.name,
+    email: row.email ?? "",
+    phone: row.phone ?? "",
+    summary: row.summary ?? "",
+    notes: row.notes ?? "",
+    streetAddress: row.streetAddress ?? "",
+    unit: row.unit ?? "",
+    city: row.city ?? "",
+    region: row.region ?? "",
+    postalCode: row.postalCode ?? "",
+    leadSource: parseLeadSource(row.leadSource, OWNER_DEFAULT_LEAD_SOURCE) ?? OWNER_DEFAULT_LEAD_SOURCE,
+    previewStatus: rejected ? "REJECTED" : invalid ? "INVALID" : "VALID",
+    invalidReason: rejected || invalid ? row.invalidReason : null,
+    rowFingerprint: row.rowFingerprint,
+    possibleDuplicateCustomerId: null,
+    possibleDuplicateRequestId: null,
+  };
+}
+
 export function applySameBusinessDuplicates(
   rows: ParsedImportRow[],
   customers: SameBusinessIdentity[],
   requests: SameBusinessRequest[],
 ): ParsedImportRow[] {
   return rows.map((row) => {
-    if (row.previewStatus === "INVALID") return row;
+    if (row.previewStatus === "INVALID" || row.previewStatus === "REJECTED") return row;
     const match = findSameBusinessDuplicate(row, customers, requests);
     if (!match.customerId && !match.requestId) return row;
     return {
@@ -435,12 +481,13 @@ export function findSameBusinessDuplicate(
   return { customerId: customer.id, requestId: request?.id ?? null };
 }
 
-export function countPreviewStatuses(rows: ParsedImportRow[]) {
+export function countPreviewStatuses(rows: Array<{ previewStatus: string }>) {
   return {
     rowCount: rows.length,
     validCount: rows.filter((row) => row.previewStatus === "VALID").length,
     invalidCount: rows.filter((row) => row.previewStatus === "INVALID").length,
     possibleDuplicateCount: rows.filter((row) => row.previewStatus === "POSSIBLE_DUPLICATE")
       .length,
+    rejectedCount: rows.filter((row) => row.previewStatus === "REJECTED").length,
   };
 }
