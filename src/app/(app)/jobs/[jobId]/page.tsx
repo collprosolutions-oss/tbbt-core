@@ -12,6 +12,7 @@ import { CheckCircle2 } from "lucide-react";
 import { AdditionalWorkRequestList } from "@/components/jobs/additional-work-request-list";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
 import { AssignJobMemberForm } from "@/components/jobs/assign-job-member-form";
+import { CleaningVisitCadenceForm } from "@/components/jobs/cleaning-visit-cadence-form";
 import { ChangeOrderList } from "@/components/jobs/change-order-list";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { CreateChangeOrderForm } from "@/components/jobs/create-change-order-form";
@@ -92,6 +93,7 @@ import { prisma } from "@/lib/prisma";
 import { formatISODate } from "@/lib/schedule";
 import { PurchaseListCard } from "@/components/materials/purchase-list-card";
 import { loadPurchaseWorkspace } from "@/lib/materials/board";
+import { loadCleaningVisitView } from "@/lib/cleaning-visit-data";
 
 export const metadata: Metadata = {
   title: "Work Order",
@@ -348,6 +350,7 @@ export default async function JobPage({
     estimateId: job.estimateId,
     createIfMissing: true,
   });
+  const cleaningVisit = await loadCleaningVisitView(prisma, access, job.id);
 
   const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
     BEFORE: [],
@@ -820,6 +823,25 @@ export default async function JobPage({
           ) : null}
         </CardContent>
       </Card>
+
+      {cleaningVisit?.eligible ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Recurring visit</CardTitle>
+            <CardDescription>
+              Owner-set cadence on this Cleaning job. The assigned worker sees
+              the crew checklist. Recording a visit outcome does not create a
+              later job or message the customer.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CleaningVisitCadenceForm
+              visit={cleaningVisit}
+              canSetCadence={access.workspace.role === "OWNER"}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
 
       <ApprovedScopeCard scope={approvedScope} title="Original Approved Scope" />
 
