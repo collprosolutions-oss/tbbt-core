@@ -32,12 +32,14 @@ const {
   canSelectPhotoForMarketing,
   CREATOR_PACKAGE_LIMITS_MESSAGE,
   FLOW_VEO_DISCONNECTED_MESSAGE,
+  INVALID_STORYBOARD_MESSAGE,
   jobMarketingReadiness,
   marketingAiAssistAvailable,
   nextContentStatus,
   OWNER_STUDIO_APPROVAL_MESSAGE,
   PAID_ADS_DISCONNECTED_MESSAGE,
   parseMarketingArea,
+  parseRequiredStoryboard,
   parseShotList,
   parseStoryboard,
   PHOTO_PERMISSION_REVOKED_MESSAGE,
@@ -204,6 +206,8 @@ try {
   check("Owner approval message is exact", OWNER_STUDIO_APPROVAL_MESSAGE.includes("OWNER role"));
   check("Storyboard parser keeps headings", parseStoryboard('[{"heading":"Hook","visual":"Photo","narration":"Fact"}]')[0].heading === "Hook");
   check("Shot list parser keeps order", parseShotList('[{"order":2,"shot":"Hero","purpose":"Proof"}]')[0].order === 2);
+  check("Write-path storyboard rejects invalid JSON", parseRequiredStoryboard("{not-json") === null);
+  check("Write-path storyboard rejects a non-array", parseRequiredStoryboard("{}") === null);
   check("Unapproved package cannot export", canExportCreatorPackage({ status: "DRAFT", photos: [{ approved: true }] }) === false);
 
   const businessA = await prisma.business.create({
@@ -449,6 +453,108 @@ try {
   });
   check("ADMIN can edit a draft storyboard", edited.title === "Reno faucet story edited");
   check("Edited storyboard persists", parseStoryboard(edited.storyboardJson)[0].heading === "Hook");
+
+  const linksBeforeFailure = await prisma.marketingContentPhoto.findMany({
+    where: { contentId: studio.id, businessId: businessA.id },
+    orderBy: { id: "asc" },
+  });
+  check("Edited package still has the approved photo link", linksBeforeFailure.length === 1 && linksBeforeFailure[0].jobPhotoId === otherPhoto.id);
+
+  await expectError(
+    "Invalid storyboard is rejected before any write",
+    () =>
+      updateMarketingStudioPackage(prisma, adminA, {
+        contentId: studio.id,
+        title: "Should not persist",
+        storyboardJson: "{not-valid-json",
+        photoIds: [otherPhoto.id],
+      }),
+    (error) => error instanceof MarketingError && error.message === INVALID_STORYBOARD_MESSAGE,
+  );
+  const afterInvalidStoryboard = await prisma.marketingContent.findFirst({
+    where: { id: studio.id, businessId: businessA.id },
+  });
+  const linksAfterInvalidStoryboard = await prisma.marketingContentPhoto.findMany({
+    where: { contentId: studio.id, businessId: businessA.id },
+    orderBy: { id: "asc" },
+  });
+  check(
+    "Invalid storyboard leaves the original package intact",
+    afterInvalidStoryboard?.title === "Reno faucet story edited" &&
+      afterInvalidStoryboard?.storyboardJson === edited.storyboardJson &&
+      afterInvalidStoryboard?.body === edited.body,
+  );
+  check(
+    "Invalid storyboard leaves photo links intact",
+    linksAfterInvalidStoryboard.length === linksBeforeFailure.length &&
+      linksAfterInvalidStoryboard[0]?.id === linksBeforeFailure[0]?.id &&
+      linksAfterInvalidStoryboard[0]?.jobPhotoId === otherPhoto.id,
+  );
+
+  const failingPhotoDb = {
+    marketingContent: prisma.marketingContent,
+    jobPhoto: prisma.jobPhoto,
+    $transaction: (fn) =>
+      prisma.$transaction(async (tx) =>
+        fn({
+          marketingContentPhoto: {
+            deleteMany: (args) => tx.marketingContentPhoto.deleteMany(args),
+            createMany: async () => {
+              throw new Error("photo write failed");
+            },
+          },
+          marketingContent: tx.marketingContent,
+        }),
+      ),
+  };
+  await expectError(
+    "Failed photo write aborts the package update",
+    () =>
+      updateMarketingStudioPackage(failingPhotoDb, adminA, {
+        contentId: studio.id,
+        title: "Should not persist after photo failure",
+        storyboardJson: JSON.stringify([
+          { heading: "Changed", visual: "Should roll back", narration: "Should roll back" },
+        ]),
+        photoIds: [otherPhoto.id],
+      }),
+    (error) => error instanceof Error && /photo write failed/.test(error.message),
+  );
+  const afterFailedPhotoWrite = await prisma.marketingContent.findFirst({
+    where: { id: studio.id, businessId: businessA.id },
+  });
+  const linksAfterFailedPhotoWrite = await prisma.marketingContentPhoto.findMany({
+    where: { contentId: studio.id, businessId: businessA.id },
+    orderBy: { id: "asc" },
+  });
+  check(
+    "Failed photo write leaves the original package intact",
+    afterFailedPhotoWrite?.title === "Reno faucet story edited" &&
+      afterFailedPhotoWrite?.storyboardJson === edited.storyboardJson,
+  );
+  check(
+    "Failed photo write leaves photo links intact",
+    linksAfterFailedPhotoWrite.length === linksBeforeFailure.length &&
+      linksAfterFailedPhotoWrite[0]?.id === linksBeforeFailure[0]?.id &&
+      linksAfterFailedPhotoWrite[0]?.jobPhotoId === otherPhoto.id,
+  );
+
+  const updateFnSrc = studioOpsSrc.slice(
+    studioOpsSrc.indexOf("export async function updateMarketingStudioPackage"),
+    studioOpsSrc.indexOf("export async function advanceMarketingContentStatus"),
+  );
+  check(
+    "Studio update validates the storyboard before opening a write transaction",
+    updateFnSrc.includes("parseRequiredStoryboard") &&
+      updateFnSrc.indexOf("parseRequiredStoryboard") < updateFnSrc.indexOf("runInTransaction"),
+  );
+  check(
+    "Studio update replaces photos and content in one transaction",
+    updateFnSrc.includes("runInTransaction") &&
+      updateFnSrc.indexOf("deleteMany") > updateFnSrc.indexOf("runInTransaction") &&
+      updateFnSrc.indexOf("createMany") > updateFnSrc.indexOf("deleteMany") &&
+      updateFnSrc.indexOf("marketingContent.update") > updateFnSrc.indexOf("createMany"),
+  );
 
   const studioReady = await advanceMarketingContentStatus(prisma, adminA, { contentId: studio.id });
   check("ADMIN can send a package for OWNER review", studioReady.status === "READY_FOR_REVIEW");

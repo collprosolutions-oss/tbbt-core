@@ -169,6 +169,12 @@ export const PAID_ADS_DISCONNECTED_MESSAGE =
 export const CREATOR_PACKAGE_LIMITS_MESSAGE =
   "This creator package is a downloadable handoff. Flow/Veo generation, paid ads, and social publishing are not connected. TBBT will not post anything.";
 
+export const INVALID_STORYBOARD_MESSAGE =
+  "Enter a valid storyboard. Use a JSON array of beats with a heading, visual, or narration.";
+
+export const INVALID_SHOT_LIST_MESSAGE =
+  "Enter a valid shot list. Use a JSON array of shots with a shot name or purpose.";
+
 /** External AI is not connected. Template drafts still work. */
 export function marketingAiAssistAvailable(): boolean {
   return providerAssistAvailable();
@@ -295,6 +301,33 @@ export function serializeStoryboard(beats: StoryboardBeat[]): string {
 
 export function serializeShotList(items: ShotListItem[]): string {
   return JSON.stringify(parseShotList(JSON.stringify(items)));
+}
+
+function parseJsonArray(raw: string): unknown[] | null {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Write-path storyboard. Invalid JSON or a non-array fails closed. */
+export function parseRequiredStoryboard(raw: string): StoryboardBeat[] | null {
+  const items = parseJsonArray(raw);
+  if (!items) return null;
+  const beats = parseStoryboard(raw);
+  if (items.length > 0 && beats.length === 0) return null;
+  return beats;
+}
+
+/** Write-path shot list. Invalid JSON or a non-array fails closed. */
+export function parseRequiredShotList(raw: string): ShotListItem[] | null {
+  const items = parseJsonArray(raw);
+  if (!items) return null;
+  const shots = parseShotList(raw);
+  if (items.length > 0 && shots.length === 0) return null;
+  return shots;
 }
 
 export function studioPhotosEligible(

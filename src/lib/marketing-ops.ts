@@ -15,10 +15,14 @@ import {
   isMarketingChannel,
   isMarketingContentStatus,
   isMarketingContentType,
+  INVALID_SHOT_LIST_MESSAGE,
+  INVALID_STORYBOARD_MESSAGE,
   nextContentStatus,
   OWNER_STUDIO_APPROVAL_MESSAGE,
   parseHashtags,
   parseMarketingDate,
+  parseRequiredShotList,
+  parseRequiredStoryboard,
   parseShotList,
   parseStoryboard,
   PHOTO_PERMISSION_APPROVED,
@@ -31,6 +35,16 @@ import {
 } from "@/lib/marketing";
 
 type Db = PrismaClient | Prisma.TransactionClient;
+
+async function runInTransaction<T>(
+  db: Db,
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  if ("$transaction" in db) {
+    return db.$transaction(fn);
+  }
+  return fn(db);
+}
 
 export class MarketingError extends Error {
   constructor(message: string) {
@@ -296,47 +310,56 @@ export async function updateMarketingStudioPackage(
     throw new MarketingError("Enter a valid internal planning date.");
   }
 
-  let photos = null;
-  if (input.photoIds) {
-    photos = await loadOwnedPhotos(db, access, input.photoIds, content.jobId);
-    if (photos.length === 0) {
-      throw new MarketingError("Select a job photo that already has marketing permission.");
-    }
+  let storyboardJson = content.storyboardJson;
+  if (input.storyboardJson !== undefined) {
+    const beats = parseRequiredStoryboard(input.storyboardJson);
+    if (!beats) throw new MarketingError(INVALID_STORYBOARD_MESSAGE);
+    storyboardJson = serializeStoryboard(beats);
+  }
+  let shotListJson = content.shotListJson;
+  if (input.shotListJson !== undefined) {
+    const shots = parseRequiredShotList(input.shotListJson);
+    if (!shots) throw new MarketingError(INVALID_SHOT_LIST_MESSAGE);
+    shotListJson = serializeShotList(shots);
+  }
+  const hashtags =
+    input.hashtags !== undefined
+      ? formatHashtags(parseHashtags(input.hashtags))
+      : content.hashtags;
+
+  const photos = input.photoIds
+    ? await loadOwnedPhotos(db, access, input.photoIds, content.jobId)
+    : null;
+  if (input.photoIds && (!photos || photos.length === 0)) {
+    throw new MarketingError("Select a job photo that already has marketing permission.");
   }
 
-  if (photos) {
-    await db.marketingContentPhoto.deleteMany({
-      where: { contentId: content.id, ...access.scope },
+  return runInTransaction(db, async (tx) => {
+    if (photos) {
+      await tx.marketingContentPhoto.deleteMany({
+        where: { contentId: content.id, ...access.scope },
+      });
+      await tx.marketingContentPhoto.createMany({
+        data: photos.map((photo) => ({
+          businessId: access.businessId,
+          contentId: content.id,
+          jobPhotoId: photo.id,
+        })),
+      });
+    }
+    return tx.marketingContent.update({
+      where: { id: content.id },
+      data: {
+        title,
+        body,
+        channelIntent,
+        plannedFor,
+        storyboardJson,
+        shotListJson,
+        hashtags,
+      },
+      include: { photos: true },
     });
-    await db.marketingContentPhoto.createMany({
-      data: photos.map((photo) => ({
-        businessId: access.businessId,
-        contentId: content.id,
-        jobPhotoId: photo.id,
-      })),
-    });
-  }
-  return db.marketingContent.update({
-    where: { id: content.id },
-    data: {
-      title,
-      body,
-      channelIntent,
-      plannedFor,
-      storyboardJson:
-        input.storyboardJson !== undefined
-          ? serializeStoryboard(parseStoryboard(input.storyboardJson))
-          : content.storyboardJson,
-      shotListJson:
-        input.shotListJson !== undefined
-          ? serializeShotList(parseShotList(input.shotListJson))
-          : content.shotListJson,
-      hashtags:
-        input.hashtags !== undefined
-          ? formatHashtags(parseHashtags(input.hashtags))
-          : content.hashtags,
-    },
-    include: { photos: true },
   });
 }
 
