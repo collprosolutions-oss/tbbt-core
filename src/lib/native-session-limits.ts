@@ -75,7 +75,7 @@ export async function readCappedRequestText(
 
 export function parseNativeSessionJson(text: string):
   | { ok: true; payload: Record<string, unknown> }
-  | { ok: false; status: 400; error: string } {
+  | { ok: false; status: 400 | 413; error: string } {
   if (!text.trim()) {
     return { ok: false, status: 400, error: "Email and password are required." };
   }
