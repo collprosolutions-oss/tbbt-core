@@ -1,4 +1,5 @@
 import { FORBIDDEN_DAY_ROUTE_CLAIM_PATTERNS } from "@/lib/owner-day-route/constants";
+import { ownerDayRouteExclusionLine } from "@/lib/owner-day-route/maps";
 import type { OwnerDayRouteView } from "@/lib/owner-day-route/types";
 
 export function ownerDayRouteTextHasForbiddenClaim(text: string) {
@@ -10,6 +11,8 @@ export function ownerDayRouteViewText(view: OwnerDayRouteView) {
     view.readOnlyMessage,
     view.mapsDisclaimer,
     view.orderNote,
+    view.excludedHeading,
+    ...view.excludedStops.map(ownerDayRouteExclusionLine),
     ...view.stops.flatMap((stop) => [
       stop.customerName,
       stop.appointmentWindowLabel,

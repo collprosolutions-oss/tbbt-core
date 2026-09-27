@@ -11,9 +11,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  OWNER_DAY_ROUTE_EXCLUDED_HEADING,
+  OWNER_DAY_ROUTE_MAPS_LINK_LABEL,
   OWNER_DAY_ROUTE_NO_MAPPABLE_MESSAGE,
   OWNER_DAY_ROUTE_NO_STOPS_MESSAGE,
   OWNER_DAY_ROUTE_PATH,
+  ownerDayRouteExclusionLine,
   ownerDayRouteMapsTruncationNote,
   type OwnerDayRouteView,
 } from "@/lib/owner-day-route";
@@ -59,10 +62,10 @@ export function OwnerDayRouteView({
 
       <Card>
         <CardHeader>
-          <CardTitle>Maps handoff</CardTitle>
+          <CardTitle>Maps link</CardTitle>
           <CardDescription>
             {view.maps.href
-              ? `${view.maps.includedStopCount} complete stop${view.maps.includedStopCount === 1 ? "" : "s"} in scheduled order.`
+              ? `${view.maps.includedStopCount} eligible stop${view.maps.includedStopCount === 1 ? "" : "s"} in recorded appointment order.`
               : OWNER_DAY_ROUTE_NO_MAPPABLE_MESSAGE}
           </CardDescription>
         </CardHeader>
@@ -71,7 +74,7 @@ export function OwnerDayRouteView({
             <div className="flex flex-wrap gap-2">
               <Button asChild>
                 <a href={view.maps.href} target="_blank" rel="noreferrer noopener">
-                  Open in maps
+                  {OWNER_DAY_ROUTE_MAPS_LINK_LABEL}
                 </a>
               </Button>
               <CopyDirectionsLinkButton href={view.maps.href} label="Copy maps link" />
@@ -81,6 +84,21 @@ export function OwnerDayRouteView({
           )}
           {truncationNote ? (
             <p className="text-sm text-muted-foreground">{truncationNote}</p>
+          ) : null}
+          {view.excludedStops.length > 0 ? (
+            <div className="space-y-2">
+              <p className="text-sm font-medium">{OWNER_DAY_ROUTE_EXCLUDED_HEADING}</p>
+              <ul className="space-y-1">
+                {view.excludedStops.map((stop) => (
+                  <li
+                    key={stop.jobId}
+                    className="text-sm text-amber-800 dark:text-amber-300"
+                  >
+                    {ownerDayRouteExclusionLine(stop)}
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
         </CardContent>
       </Card>
