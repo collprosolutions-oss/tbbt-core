@@ -616,8 +616,6 @@ try {
     );
   }
 
-  console.log("\nDB — Concurrent finalize cap and reassignment race");
-
   async function storageAccounting(businessId) {
     const account = await prisma.businessStorageAccount.findUniqueOrThrow({
       where: { businessId },
@@ -751,6 +749,7 @@ try {
       afterForeignCleanup.reserved === beforeForeignCleanup.reserved,
   );
 
+  console.log("\nDB — Concurrent finalize cap and reassignment race");
   const beforeConcurrent = await storageAccounting(businessA.id);
 
   const concurrentJob = await prisma.job.create({
