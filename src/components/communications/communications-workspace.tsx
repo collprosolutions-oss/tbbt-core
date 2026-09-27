@@ -172,6 +172,14 @@ function ReceptionistPanel({ source }: { source: Source }) {
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <p>{readiness.voice.reason}</p>
+        <p>
+          <Link
+            href="/communications/receptionist"
+            className="text-primary underline-offset-4 hover:underline"
+          >
+            Open missed-call recovery center
+          </Link>
+        </p>
         <ul className="list-disc space-y-1 pl-5">
           <li>Voice connected: {readiness.voice.connected ? "yes" : "no"}</li>
           <li>Email connected: {readiness.email.connected ? "yes" : "no"}</li>

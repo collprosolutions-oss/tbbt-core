@@ -31,6 +31,7 @@ import {
 } from "@/lib/communications/consent";
 import { departmentSmsComposeRequiresAddon } from "@/lib/communications/sms-policy";
 import { loadCustomerCommunicationHistory } from "@/lib/communications/timeline";
+import { appendReceptionistRecoveryFacts } from "@/lib/communications/receptionist-recovery";
 import {
   EMAIL_NOT_CONFIGURED_REASON,
   SMS_ADDON_NOT_ENTITLED_REASON,
@@ -1118,6 +1119,10 @@ export function projectCommunicationsFacts(projection: CommunicationsProjection)
       projection.history.reusedCanonicalLoader ? "canonical" : "none",
     );
   }
+  appendReceptionistRecoveryFacts(facts, factKeys, {
+    phoneInteractions: projection.phoneInteractions,
+    factsCap: COMMUNICATIONS_CONTEXT_CAPS.facts,
+  });
   return { facts, factKeys };
 }
 

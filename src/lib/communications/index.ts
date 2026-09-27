@@ -53,6 +53,14 @@ export {
   recordInboundCallEvent,
 } from "@/lib/communications/receptionist";
 export {
+  OWNER_LOG_LEAD_HREF,
+  RECEPTIONIST_RECOVERY_FACT_KEYS,
+  RECEPTIONIST_RECOVERY_QUEUE_LIMIT,
+  RECEPTIONIST_RECOVERY_SCAN_LIMIT,
+  appendReceptionistRecoveryFacts,
+  loadReceptionistRecoveryCenter,
+} from "@/lib/communications/receptionist-recovery";
+export {
   isCommunicationAiAction,
   runCommunicationAssist,
 } from "@/lib/communications/ai";
