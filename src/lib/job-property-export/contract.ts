@@ -26,7 +26,8 @@ export type JobPropertyExportIntendedConsumer =
 export const JOB_PROPERTY_EXPORT_OMISSIONS = [
   "Access codes, key locations, pickup instructions, and other property-access secrets",
   "Customer name, email, and phone unless the OWNER expressly authorizes private customer data",
-  "Job photo URLs, captions, binaries, and storage credentials unless the OWNER expressly authorizes photos",
+  "Job photo URLs and captions unless the OWNER expressly authorizes photos",
+  "Photo binaries and storage credentials",
   "Invoices, payments, expenses, time cards, and other financial records",
   "Live synchronization with HQ Watchfolio or REIOS",
   "Shared-database writes or reads outside tbbt-core",

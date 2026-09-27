@@ -415,7 +415,7 @@ try {
     "Authorized photo packet still omits binaries and access secrets",
     !JSON.stringify(authorized).includes("Key under mat") &&
       !JSON.stringify(authorized).includes("storedAssetId") &&
-      authorized.omitted.some((item) => item.includes("Photo binaries")),
+      authorized.omitted.includes("Photo binaries and storage credentials"),
   );
 
   const serialized = serializeJobPropertyExport(redacted);
