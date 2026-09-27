@@ -6,6 +6,7 @@ import { requireManagementPageAccess } from "@/lib/access";
 import {
   NETWORK_NOT_IN_NAV_MESSAGE,
   NETWORK_PRIVACY_MESSAGE,
+  NETWORK_SCHEMA_UNAVAILABLE_MESSAGE,
 } from "@/lib/bsos-network";
 import { loadNetworkWorkspace } from "@/lib/bsos-network-data";
 import { prisma } from "@/lib/prisma";
@@ -30,13 +31,16 @@ export default async function BsosNetworkPage({
     <PageContainer>
       <PageHeader
         title="BSOS Network"
-        description={`${NETWORK_PRIVACY_MESSAGE} ${NETWORK_NOT_IN_NAV_MESSAGE}`}
+        description={`${NETWORK_PRIVACY_MESSAGE} ${NETWORK_NOT_IN_NAV_MESSAGE}${
+          workspace.available ? "" : ` ${NETWORK_SCHEMA_UNAVAILABLE_MESSAGE}`
+        }`}
       />
       <BsosNetworkWorkspace
         own={workspace.own}
         suggestions={workspace.suggestions}
         listings={workspace.listings}
-        canManage={access.workspace.role === "OWNER"}
+        canManage={workspace.available && access.workspace.role === "OWNER"}
+        unavailable={!workspace.available}
         tradeFilter={params.trade?.trim() ?? ""}
         serviceAreaFilter={params.serviceArea?.trim() ?? ""}
       />

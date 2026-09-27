@@ -14,12 +14,13 @@ import {
   parsePublicWebsite,
 } from "@/lib/business-contact";
 import {
+  NETWORK_SCHEMA_UNAVAILABLE_MESSAGE,
+  isMissingBsosNetworkTable,
   parseApprovedPublicName,
   parseBroadServiceArea,
   parseNetworkContactMethod,
   type NetworkContactMethod,
 } from "@/lib/bsos-network";
-import { ensureBsosNetworkSchema } from "@/lib/bsos-network-schema";
 import { isConfiguredTrade } from "@/lib/trades";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -49,6 +50,17 @@ export function requireNetworkRead(access: BusinessAccess) {
 
 export function requireNetworkOwner(access: BusinessAccess) {
   requireBusinessRole(access, "OWNER");
+}
+
+export async function withNetworkTable<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (isMissingBsosNetworkTable(error)) {
+      throw new BsosNetworkError(NETWORK_SCHEMA_UNAVAILABLE_MESSAGE);
+    }
+    throw error;
+  }
 }
 
 function parseChosenContactValue(method: NetworkContactMethod, value: string) {
@@ -89,70 +101,70 @@ export type OptInInput = {
 
 export async function optBusinessIntoNetwork(db: Db, access: BusinessAccess, input: OptInInput) {
   requireNetworkOwner(access);
-  await ensureBsosNetworkSchema(db);
+  return withNetworkTable(async () => {
+    const publicName = parseApprovedPublicName(input.publicName);
+    const tradeCode = await resolveListingTrade(db, access, input.tradeCode);
+    const serviceAreaLabel = parseBroadServiceArea(input.serviceAreaLabel);
+    const publicContactMethod = parseNetworkContactMethod(input.publicContactMethod);
+    const publicContactValue = parseChosenContactValue(publicContactMethod, input.publicContactValue);
+    const now = new Date();
 
-  const publicName = parseApprovedPublicName(input.publicName);
-  const tradeCode = await resolveListingTrade(db, access, input.tradeCode);
-  const serviceAreaLabel = parseBroadServiceArea(input.serviceAreaLabel);
-  const publicContactMethod = parseNetworkContactMethod(input.publicContactMethod);
-  const publicContactValue = parseChosenContactValue(publicContactMethod, input.publicContactValue);
-  const now = new Date();
-
-  const existing = await db.bsosNetworkParticipation.findFirst({
-    where: { businessId: access.businessId },
-    select: { id: true, optedIn: true, optedInAt: true },
-  });
-
-  const data = {
-    publicName,
-    tradeCode,
-    serviceAreaLabel,
-    publicContactMethod,
-    publicContactValue,
-    optedIn: true,
-    optedInAt: existing?.optedIn && existing.optedInAt ? existing.optedInAt : now,
-    optedOutAt: null,
-    updatedByMembershipId: access.workspace.membership.id,
-  };
-
-  if (existing) {
-    return db.bsosNetworkParticipation.update({
-      where: { id: existing.id },
-      data,
+    const existing = await db.bsosNetworkParticipation.findFirst({
+      where: { businessId: access.businessId },
+      select: { id: true, optedIn: true, optedInAt: true },
     });
-  }
 
-  return db.bsosNetworkParticipation.create({
-    data: {
-      businessId: access.businessId,
-      ...data,
-    },
+    const data = {
+      publicName,
+      tradeCode,
+      serviceAreaLabel,
+      publicContactMethod,
+      publicContactValue,
+      optedIn: true,
+      optedInAt: existing?.optedIn && existing.optedInAt ? existing.optedInAt : now,
+      optedOutAt: null,
+      updatedByMembershipId: access.workspace.membership.id,
+    };
+
+    if (existing) {
+      return db.bsosNetworkParticipation.update({
+        where: { id: existing.id },
+        data,
+      });
+    }
+
+    return db.bsosNetworkParticipation.create({
+      data: {
+        businessId: access.businessId,
+        ...data,
+      },
+    });
   });
 }
 
 export async function optBusinessOutOfNetwork(db: Db, access: BusinessAccess) {
   requireNetworkOwner(access);
-  await ensureBsosNetworkSchema(db);
-
-  const existing = await db.bsosNetworkParticipation.findFirst({
-    where: { businessId: access.businessId },
-    select: { id: true, optedIn: true },
-  });
-  if (!existing) {
-    return null;
-  }
-  if (!existing.optedIn) {
-    return db.bsosNetworkParticipation.findFirst({
-      where: { id: existing.id },
+  return withNetworkTable(async () => {
+    const existing = await db.bsosNetworkParticipation.findFirst({
+      where: { businessId: access.businessId },
+      select: { id: true, optedIn: true },
     });
-  }
+    if (!existing) {
+      return null;
+    }
+    if (!existing.optedIn) {
+      return db.bsosNetworkParticipation.findFirst({
+        where: { id: existing.id },
+      });
+    }
 
-  return db.bsosNetworkParticipation.update({
-    where: { id: existing.id },
-    data: {
-      optedIn: false,
-      optedOutAt: new Date(),
-      updatedByMembershipId: access.workspace.membership.id,
-    },
+    return db.bsosNetworkParticipation.update({
+      where: { id: existing.id },
+      data: {
+        optedIn: false,
+        optedOutAt: new Date(),
+        updatedByMembershipId: access.workspace.membership.id,
+      },
+    });
   });
 }

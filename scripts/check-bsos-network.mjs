@@ -7,7 +7,7 @@
 import { register } from "node:module";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
@@ -20,6 +20,7 @@ const {
   NETWORK_NO_MATCHING_MESSAGE,
   NETWORK_OWNER_ONLY_MESSAGE,
   NETWORK_PRIVACY_MESSAGE,
+  NETWORK_SCHEMA_UNAVAILABLE_MESSAGE,
   listingFieldNames,
   listingHasHiddenFields,
   publicListingFieldNames,
@@ -101,6 +102,37 @@ function readRepo(relPath) {
   return readFileSync(new URL(`../${relPath}`, import.meta.url), "utf8");
 }
 
+function installDdlProbe(client) {
+  const calls = [];
+  const names = ["$executeRawUnsafe", "$executeRaw"];
+  const originals = {};
+  for (const name of names) {
+    originals[name] = client[name].bind(client);
+    client[name] = (...args) => {
+      calls.push({ name, sql: String(args[0] ?? "") });
+      return originals[name](...args);
+    };
+  }
+  return {
+    calls,
+    restore() {
+      for (const name of names) {
+        client[name] = originals[name];
+      }
+    },
+  };
+}
+
+async function networkTableExists() {
+  const rows = await prisma.$queryRaw`
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name = 'BsosNetworkParticipation'
+  `;
+  return rows.length > 0;
+}
+
 const schema = readRepo("prisma/schema.prisma");
 const migration = readRepo("prisma/migrations/20260927150000_bsos_network_participation/migration.sql");
 const navSource = readRepo("src/lib/nav.ts");
@@ -134,6 +166,24 @@ try {
     "Workspace load does not run Network DDL",
     !workspaceLoader.includes("BsosNetworkParticipation") &&
       !workspaceLoader.includes("bsos-network"),
+  );
+  check(
+    "Request-time schema ensure helper is gone",
+    !existsSync(new URL("../src/lib/bsos-network-schema.ts", import.meta.url)),
+  );
+  const requestSources = [dataSource, opsSource, actionsSource, pageSource, workspaceSource].join("\n");
+  check(
+    "Network reads and writes do not create the table",
+    !requestSources.includes("ensureBsosNetworkSchema") &&
+      !requestSources.includes("$executeRaw") &&
+      !requestSources.includes("CREATE TABLE") &&
+      !requestSources.includes("CREATE INDEX"),
+  );
+  check(
+    "Page load uses the workspace loader without DDL",
+    pageSource.includes("loadNetworkWorkspace") &&
+      !pageSource.includes("$executeRaw") &&
+      !pageSource.includes("CREATE TABLE"),
   );
   check(
     "Slice does not add referrals or matching",
@@ -438,10 +488,22 @@ try {
   const ownAfter = await loadOwnNetworkParticipation(prisma, ownerA);
   check("OWNER sees their own approved listing after opt-in", ownAfter.optedIn === true && ownAfter.listing?.publicName === "Alpha Public");
 
-  const workspace = await loadNetworkWorkspace(prisma, ownerA);
+  const pageLoadProbe = installDdlProbe(prisma);
+  let workspace;
+  try {
+    workspace = await loadNetworkWorkspace(prisma, ownerA);
+  } finally {
+    pageLoadProbe.restore();
+  }
+  check(
+    "Page-load workspace read performs no DDL",
+    pageLoadProbe.calls.length === 0 &&
+      !pageLoadProbe.calls.some((call) => /CREATE|ALTER|DROP|TRUNCATE/i.test(call.sql)),
+  );
   check(
     "Workspace suggestions stay on the caller's own public identity",
-    workspace.suggestions.publicName === "Alpha Network" &&
+    workspace.available === true &&
+      workspace.suggestions.publicName === "Alpha Network" &&
       workspace.suggestions.contacts.some((item) => item.value === "private-owner@alpha.example") &&
       !JSON.stringify(workspace.listings).includes("Secret Beta Customer"),
   );
@@ -485,6 +547,55 @@ try {
     "MEMBER still cannot discover after others opted in",
     () => discoverPublicNetworkListings(prisma, memberA),
     (error) => error instanceof ForbiddenError,
+  );
+
+  console.log("\nTEST — Missing table fails closed without DDL");
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "BsosNetworkParticipation" CASCADE`);
+  check("Participation table is gone after drop", (await networkTableExists()) === false);
+
+  const missingProbe = installDdlProbe(prisma);
+  let missingWorkspace;
+  try {
+    missingWorkspace = await loadNetworkWorkspace(prisma, ownerA);
+  } finally {
+    missingProbe.restore();
+  }
+  check(
+    "Page load against a missing table performs no DDL",
+    missingProbe.calls.length === 0,
+  );
+  check(
+    "Missing table stays missing after page load",
+    (await networkTableExists()) === false,
+  );
+  check(
+    "Missing table fails closed: not listed and no discovery",
+    missingWorkspace.available === false &&
+      missingWorkspace.own.optedIn === false &&
+      missingWorkspace.own.listing === null &&
+      missingWorkspace.listings.length === 0,
+  );
+  check(
+    "Fail-closed copy names the migration, not a created table",
+    /migration is applied/.test(NETWORK_SCHEMA_UNAVAILABLE_MESSAGE) &&
+      /does not create that table/.test(NETWORK_SCHEMA_UNAVAILABLE_MESSAGE),
+  );
+  await expectError(
+    "OWNER opt-in fails closed when the table is missing",
+    () =>
+      optBusinessIntoNetwork(prisma, ownerA, {
+        publicName: "Should Not Persist",
+        tradeCode: "HANDYMAN",
+        serviceAreaLabel: "Reno, NV",
+        publicContactMethod: "EMAIL",
+        publicContactValue: "hello@alpha.example",
+      }),
+    (error) =>
+      error instanceof BsosNetworkError && error.message === NETWORK_SCHEMA_UNAVAILABLE_MESSAGE,
+  );
+  check(
+    "Opt-in does not create the missing table",
+    (await networkTableExists()) === false,
   );
 
   if (failures > 0) {

@@ -16,6 +16,7 @@ import {
   NETWORK_NO_MATCHING_MESSAGE,
   NETWORK_OWNER_ONLY_MESSAGE,
   NETWORK_PRIVACY_MESSAGE,
+  NETWORK_SCHEMA_UNAVAILABLE_MESSAGE,
   type PublicNetworkListing,
 } from "@/lib/bsos-network";
 import type { NetworkSuggestions, OwnNetworkParticipation } from "@/lib/bsos-network-data";
@@ -147,6 +148,7 @@ export function BsosNetworkWorkspace({
   suggestions,
   listings,
   canManage,
+  unavailable = false,
   tradeFilter,
   serviceAreaFilter,
 }: {
@@ -154,6 +156,7 @@ export function BsosNetworkWorkspace({
   suggestions: NetworkSuggestions;
   listings: PublicNetworkListing[];
   canManage: boolean;
+  unavailable?: boolean;
   tradeFilter: string;
   serviceAreaFilter: string;
 }) {
@@ -171,8 +174,13 @@ export function BsosNetworkWorkspace({
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">{NETWORK_PRIVACY_MESSAGE}</p>
           <p className="text-sm text-muted-foreground">{NETWORK_NO_MATCHING_MESSAGE}</p>
+          {unavailable ? (
+            <Alert>
+              <AlertDescription>{NETWORK_SCHEMA_UNAVAILABLE_MESSAGE}</AlertDescription>
+            </Alert>
+          ) : null}
           {own.listing ? <ListingCard listing={own.listing} /> : null}
-          {!canManage ? (
+          {unavailable ? null : !canManage ? (
             <p className="text-sm text-muted-foreground">{NETWORK_OWNER_ONLY_MESSAGE}</p>
           ) : own.optedIn ? (
             <OptOutForm key="opt-out" />

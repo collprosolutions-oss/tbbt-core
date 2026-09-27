@@ -12,13 +12,13 @@ import type { BusinessAccess } from "@/lib/access";
 import { listActiveTradeCodes } from "@/lib/business-trades";
 import {
   DISCOVERY_LIMIT,
+  NETWORK_SCHEMA_UNAVAILABLE_MESSAGE,
   PUBLIC_LISTING_SELECT,
   isNetworkContactMethod,
   toPublicListing,
   type PublicNetworkListing,
 } from "@/lib/bsos-network";
-import { requireNetworkRead } from "@/lib/bsos-network-ops";
-import { ensureBsosNetworkSchema } from "@/lib/bsos-network-schema";
+import { BsosNetworkError, requireNetworkRead, withNetworkTable } from "@/lib/bsos-network-ops";
 import { isConfiguredTrade, tradeLabel } from "@/lib/trades";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -44,6 +44,7 @@ export type NetworkWorkspace = {
   own: OwnNetworkParticipation;
   suggestions: NetworkSuggestions;
   listings: PublicNetworkListing[];
+  available: boolean;
 };
 
 function parseDiscoveryTrade(value: string | null | undefined) {
@@ -62,21 +63,21 @@ export async function loadOwnNetworkParticipation(
   access: BusinessAccess,
 ): Promise<OwnNetworkParticipation> {
   requireNetworkRead(access);
-  await ensureBsosNetworkSchema(db);
+  return withNetworkTable(async () => {
+    const row = await db.bsosNetworkParticipation.findFirst({
+      where: { businessId: access.businessId },
+      select: {
+        ...PUBLIC_LISTING_SELECT,
+        optedIn: true,
+      },
+    });
 
-  const row = await db.bsosNetworkParticipation.findFirst({
-    where: { businessId: access.businessId },
-    select: {
-      ...PUBLIC_LISTING_SELECT,
-      optedIn: true,
-    },
+    if (!row || !row.optedIn) {
+      return { optedIn: false, listing: null };
+    }
+
+    return { optedIn: true, listing: toPublicListing(row) };
   });
-
-  if (!row || !row.optedIn) {
-    return { optedIn: false, listing: null };
-  }
-
-  return { optedIn: true, listing: toPublicListing(row) };
 }
 
 export async function discoverPublicNetworkListings(
@@ -85,25 +86,25 @@ export async function discoverPublicNetworkListings(
   query: NetworkDiscoveryQuery = {},
 ): Promise<PublicNetworkListing[]> {
   requireNetworkRead(access);
-  await ensureBsosNetworkSchema(db);
+  return withNetworkTable(async () => {
+    const trade = parseDiscoveryTrade(query.trade);
+    const serviceArea = parseDiscoveryArea(query.serviceArea);
 
-  const trade = parseDiscoveryTrade(query.trade);
-  const serviceArea = parseDiscoveryArea(query.serviceArea);
+    const rows = await db.bsosNetworkParticipation.findMany({
+      where: {
+        optedIn: true,
+        ...(trade ? { tradeCode: trade } : {}),
+        ...(serviceArea
+          ? { serviceAreaLabel: { contains: serviceArea, mode: "insensitive" } }
+          : {}),
+      },
+      select: PUBLIC_LISTING_SELECT,
+      orderBy: { publicName: "asc" },
+      take: DISCOVERY_LIMIT,
+    });
 
-  const rows = await db.bsosNetworkParticipation.findMany({
-    where: {
-      optedIn: true,
-      ...(trade ? { tradeCode: trade } : {}),
-      ...(serviceArea
-        ? { serviceAreaLabel: { contains: serviceArea, mode: "insensitive" } }
-        : {}),
-    },
-    select: PUBLIC_LISTING_SELECT,
-    orderBy: { publicName: "asc" },
-    take: DISCOVERY_LIMIT,
+    return rows.map(toPublicListing);
   });
-
-  return rows.map(toPublicListing);
 }
 
 /**
@@ -116,16 +117,15 @@ export async function findPublicNetworkListing(
   listingId: string,
 ): Promise<PublicNetworkListing | null> {
   requireNetworkRead(access);
-  await ensureBsosNetworkSchema(db);
-
   const trimmed = listingId.trim();
   if (!trimmed) return null;
-
-  const row = await db.bsosNetworkParticipation.findFirst({
-    where: { id: trimmed, optedIn: true },
-    select: PUBLIC_LISTING_SELECT,
+  return withNetworkTable(async () => {
+    const row = await db.bsosNetworkParticipation.findFirst({
+      where: { id: trimmed, optedIn: true },
+      select: PUBLIC_LISTING_SELECT,
+    });
+    return row ? toPublicListing(row) : null;
   });
-  return row ? toPublicListing(row) : null;
 }
 
 export async function loadNetworkSuggestions(
@@ -170,12 +170,24 @@ export async function loadNetworkWorkspace(
   query: NetworkDiscoveryQuery = {},
 ): Promise<NetworkWorkspace> {
   requireNetworkRead(access);
-  const [own, suggestions, listings] = await Promise.all([
-    loadOwnNetworkParticipation(db, access),
-    loadNetworkSuggestions(db, access),
-    discoverPublicNetworkListings(db, access, query),
-  ]);
-  return { own, suggestions, listings };
+  const suggestions = await loadNetworkSuggestions(db, access);
+  try {
+    const [own, listings] = await Promise.all([
+      loadOwnNetworkParticipation(db, access),
+      discoverPublicNetworkListings(db, access, query),
+    ]);
+    return { own, suggestions, listings, available: true };
+  } catch (error) {
+    if (error instanceof BsosNetworkError && error.message === NETWORK_SCHEMA_UNAVAILABLE_MESSAGE) {
+      return {
+        own: { optedIn: false, listing: null },
+        suggestions,
+        listings: [],
+        available: false,
+      };
+    }
+    throw error;
+  }
 }
 
 export function suggestedContactMethod(suggestions: NetworkSuggestions) {

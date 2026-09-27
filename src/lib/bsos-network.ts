@@ -46,6 +46,20 @@ export const NETWORK_NO_MATCHING_MESSAGE =
 export const NETWORK_OWNER_ONLY_MESSAGE = "Only the owner can opt this business into the network.";
 export const NETWORK_NOT_IN_NAV_MESSAGE =
   "BSOS Network is not in the main navigation. Open /network to manage participation.";
+export const NETWORK_SCHEMA_UNAVAILABLE_MESSAGE =
+  "BSOS Network is unavailable until the participation migration is applied. Opening this page does not create that table.";
+
+export function isMissingBsosNetworkTable(error: unknown): boolean {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: string }).code)
+      : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    code === "P2021" ||
+    (/BsosNetworkParticipation/i.test(message) && /does not exist/i.test(message))
+  );
+}
 
 export function isNetworkContactMethod(value: string | null | undefined): value is NetworkContactMethod {
   return (NETWORK_CONTACT_METHODS as readonly string[]).includes(value ?? "");
