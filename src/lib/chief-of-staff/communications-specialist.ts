@@ -1121,7 +1121,6 @@ export function projectCommunicationsFacts(projection: CommunicationsProjection)
   }
   appendReceptionistRecoveryFacts(facts, factKeys, {
     phoneInteractions: projection.phoneInteractions,
-    messages: projection.messages,
     factsCap: COMMUNICATIONS_CONTEXT_CAPS.facts,
   });
   return { facts, factKeys };

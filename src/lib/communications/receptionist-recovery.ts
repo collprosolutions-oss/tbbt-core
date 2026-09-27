@@ -19,8 +19,6 @@ export const OWNER_LOG_LEAD_HREF = "/requests/log-lead";
 
 export const RECEPTIONIST_RECOVERY_FACT_KEYS = {
   missedCallCount: "communications-missed-call-count",
-  callerWithoutLaterCommunicationCount:
-    "communications-recorded-caller-without-later-communication-count",
 } as const;
 
 const PHONE_ATTENTION_KINDS = new Set(["MISSED_CALL"]);
@@ -111,6 +109,32 @@ type EventRow = {
   createdAt: Date;
 };
 
+type CommunicationRow = {
+  id: string;
+  customerId: string;
+  createdAt: Date;
+  attemptedAt: Date | null;
+  channel: string;
+  direction: string;
+  status: string;
+  purpose: string;
+  relatedType: string | null;
+  relatedId: string | null;
+};
+
+const COMMUNICATION_SELECT = {
+  id: true,
+  customerId: true,
+  createdAt: true,
+  attemptedAt: true,
+  channel: true,
+  direction: true,
+  status: true,
+  purpose: true,
+  relatedType: true,
+  relatedId: true,
+} as const;
+
 function phoneNeedsAttention(row: Pick<PhoneRow, "kind" | "status" | "callbackNeeded">) {
   return (
     PHONE_ATTENTION_KINDS.has(row.kind) ||
@@ -154,18 +178,40 @@ function communicationOccurredAt(row: { attemptedAt: Date | null; createdAt: Dat
   return row.attemptedAt ?? row.createdAt;
 }
 
+function preferLaterCommunication(left: CommunicationRow, right: CommunicationRow) {
+  const leftAt = communicationOccurredAt(left).getTime();
+  const rightAt = communicationOccurredAt(right).getTime();
+  if (rightAt !== leftAt) return rightAt > leftAt ? right : left;
+  return right.id > left.id ? right : left;
+}
+
+async function loadLatestCustomerCommunication(
+  db: Db,
+  businessId: string,
+  customerId: string,
+): Promise<CommunicationRow | null> {
+  const [withAttempt, withoutAttempt] = await Promise.all([
+    db.customerCommunication.findFirst({
+      where: { businessId, customerId, attemptedAt: { not: null } },
+      orderBy: [{ attemptedAt: "desc" }, { id: "desc" }],
+      select: COMMUNICATION_SELECT,
+    }),
+    db.customerCommunication.findFirst({
+      where: { businessId, customerId, attemptedAt: null },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: COMMUNICATION_SELECT,
+    }),
+  ]);
+  if (withAttempt && withoutAttempt) return preferLaterCommunication(withAttempt, withoutAttempt);
+  return withAttempt ?? withoutAttempt ?? null;
+}
+
 export function appendReceptionistRecoveryFacts(
   facts: Record<string, string>,
   factKeys: string[],
   input: {
     phoneInteractions: Array<{
       kind: string;
-      customerId: string | null;
-      occurredAt: string;
-    }>;
-    messages: Array<{
-      customerId: string;
-      occurredAt: string;
     }>;
     factsCap: number;
   },
@@ -178,17 +224,6 @@ export function appendReceptionistRecoveryFacts(
 
   const missedCallCount = input.phoneInteractions.filter((row) => row.kind === "MISSED_CALL").length;
   add(RECEPTIONIST_RECOVERY_FACT_KEYS.missedCallCount, String(missedCallCount));
-
-  const withoutLater = input.phoneInteractions.filter((row) => {
-    if (!row.customerId) return false;
-    return !input.messages.some(
-      (message) => message.customerId === row.customerId && message.occurredAt > row.occurredAt,
-    );
-  }).length;
-  add(
-    RECEPTIONIST_RECOVERY_FACT_KEYS.callerWithoutLaterCommunicationCount,
-    String(withoutLater),
-  );
 }
 
 export async function loadReceptionistRecoveryCenter(
@@ -249,36 +284,48 @@ export async function loadReceptionistRecoveryCenter(
       }),
     ]);
 
-  const attentionPhones = phoneRows.filter(phoneNeedsAttention);
+  const scannedPhoneById = new Map(phoneRows.map((row) => [row.id, row]));
   const eventsByPhoneId = new Map<string, EventRow[]>();
   const standaloneEvents: EventRow[] = [];
+  const attentionPhoneIds = new Set<string>();
+
+  for (const row of phoneRows) {
+    if (phoneNeedsAttention(row)) attentionPhoneIds.add(row.id);
+  }
+
   for (const event of eventRows) {
     if (!receptionistNeedsAttention(event)) continue;
     if (event.phoneInteractionId) {
-      const list = eventsByPhoneId.get(event.phoneInteractionId) ?? [];
-      list.push(event);
-      eventsByPhoneId.set(event.phoneInteractionId, list);
-      continue;
+      const scanned = scannedPhoneById.get(event.phoneInteractionId);
+      if (scanned) {
+        const list = eventsByPhoneId.get(scanned.id) ?? [];
+        list.push(event);
+        eventsByPhoneId.set(scanned.id, list);
+        attentionPhoneIds.add(scanned.id);
+        continue;
+      }
     }
     standaloneEvents.push(event);
   }
 
-  const customerIds = new Set<string>();
+  const attentionPhones = phoneRows.filter((row) => attentionPhoneIds.has(row.id));
+
+  const storedCustomerIds = new Set<string>();
   const requestIds = new Set<string>();
   const jobIds = new Set<string>();
   for (const row of attentionPhones) {
-    if (row.customerId) customerIds.add(row.customerId);
+    if (row.customerId) storedCustomerIds.add(row.customerId);
     if (row.requestId) requestIds.add(row.requestId);
     if (row.jobId) jobIds.add(row.jobId);
   }
   for (const event of standaloneEvents) {
-    if (event.customerId) customerIds.add(event.customerId);
+    if (event.customerId) storedCustomerIds.add(event.customerId);
   }
 
-  const [customers, requests, jobs, communications] = await Promise.all([
-    customerIds.size
+  const [customers, requests, jobs] = await Promise.all([
+    storedCustomerIds.size
       ? db.customer.findMany({
-          where: { businessId, id: { in: [...customerIds] } },
+          where: { businessId, id: { in: [...storedCustomerIds] } },
           select: { id: true, name: true },
         })
       : Promise.resolve([]),
@@ -294,35 +341,11 @@ export async function loadReceptionistRecoveryCenter(
           select: { id: true, status: true, customerId: true },
         })
       : Promise.resolve([]),
-    customerIds.size
-      ? db.customerCommunication.findMany({
-          where: { businessId, customerId: { in: [...customerIds] } },
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          select: {
-            id: true,
-            customerId: true,
-            createdAt: true,
-            attemptedAt: true,
-            channel: true,
-            direction: true,
-            status: true,
-            purpose: true,
-            relatedType: true,
-            relatedId: true,
-          },
-        })
-      : Promise.resolve([]),
   ]);
 
   const customerById = new Map(customers.map((row) => [row.id, row]));
   const requestById = new Map(requests.map((row) => [row.id, row]));
   const jobById = new Map(jobs.map((row) => [row.id, row]));
-  const lastCommunicationByCustomer = new Map<string, (typeof communications)[number]>();
-  for (const row of communications) {
-    if (!lastCommunicationByCustomer.has(row.customerId)) {
-      lastCommunicationByCustomer.set(row.customerId, row);
-    }
-  }
 
   function resolveCustomer(customerId: string | null): ReceptionistRecoveryCustomer | null {
     if (!customerId) return null;
@@ -333,12 +356,12 @@ export async function loadReceptionistRecoveryCenter(
 
   function resolveRequest(
     requestId: string | null,
-    customerId: string | null,
+    resolvedCustomerId: string | null,
   ): ReceptionistRecoveryRelated | null {
-    if (!requestId) return null;
+    if (!requestId || !resolvedCustomerId) return null;
     const owned = requestById.get(requestId);
     if (!owned) return null;
-    if (customerId && owned.customerId !== customerId) return null;
+    if (owned.customerId !== resolvedCustomerId) return null;
     return {
       id: owned.id,
       label: owned.summary ?? "Recorded request",
@@ -348,12 +371,12 @@ export async function loadReceptionistRecoveryCenter(
 
   function resolveJob(
     jobId: string | null,
-    customerId: string | null,
+    resolvedCustomerId: string | null,
   ): ReceptionistRecoveryRelated | null {
-    if (!jobId) return null;
+    if (!jobId || !resolvedCustomerId) return null;
     const owned = jobById.get(jobId);
     if (!owned) return null;
-    if (customerId && owned.customerId !== customerId) return null;
+    if (owned.customerId !== resolvedCustomerId) return null;
     return {
       id: owned.id,
       label: owned.status,
@@ -361,56 +384,22 @@ export async function loadReceptionistRecoveryCenter(
     };
   }
 
-  function lastCommunicationFor(
-    customerId: string | null,
-    phoneId: string | null,
-    occurredAt: Date,
-  ): {
-    lastCustomerCommunication: ReceptionistRecoveryLastCommunication | null;
-    laterCommunicationRecorded: boolean | null;
-  } {
-    if (!customerId || !customerById.has(customerId)) {
-      return { lastCustomerCommunication: null, laterCommunicationRecorded: null };
-    }
-    const last = lastCommunicationByCustomer.get(customerId);
-    if (!last) {
-      return { lastCustomerCommunication: null, laterCommunicationRecorded: false };
-    }
-    const lastAt = communicationOccurredAt(last);
-    const isThisCallRecord =
-      last.relatedType === "PHONE_INTERACTION" && Boolean(phoneId) && last.relatedId === phoneId;
-    return {
-      lastCustomerCommunication: {
-        occurredAt: lastAt.toISOString(),
-        channel: last.channel,
-        direction: last.direction,
-        status: last.status,
-        purpose: last.purpose,
-        isThisCallRecord,
-      },
-      laterCommunicationRecorded: !isThisCallRecord && lastAt > occurredAt,
-    };
-  }
-
   const merged: Array<{
     occurredAt: Date;
     id: string;
-    item: ReceptionistRecoveryQueueItem;
+    item: Omit<
+      ReceptionistRecoveryQueueItem,
+      "lastCustomerCommunication" | "laterCommunicationRecorded"
+    > & {
+      lastCustomerCommunication: ReceptionistRecoveryLastCommunication | null;
+      laterCommunicationRecorded: boolean | null;
+    };
   }> = [];
 
   for (const row of attentionPhones) {
     const customer = resolveCustomer(row.customerId);
     const linkedEvents = eventsByPhoneId.get(row.id) ?? [];
     const receptionist = linkedEvents[0] ?? null;
-    const { lastCustomerCommunication, laterCommunicationRecorded } = lastCommunicationFor(
-      customer?.id ?? null,
-      row.id,
-      row.occurredAt,
-    );
-    const attentionReasons = [
-      ...phoneAttentionReasons(row),
-      ...linkedEvents.flatMap(receptionistAttentionReasons),
-    ];
     merged.push({
       occurredAt: row.occurredAt,
       id: `phone:${row.id}`,
@@ -424,15 +413,18 @@ export async function loadReceptionistRecoveryCenter(
         callbackNeeded: row.callbackNeeded,
         callerLast4: row.callerLast4,
         summary: row.summary.trim() || null,
-        attentionReasons,
+        attentionReasons: [
+          ...phoneAttentionReasons(row),
+          ...linkedEvents.flatMap(receptionistAttentionReasons),
+        ],
         customer,
         customerKnown: Boolean(customer),
         request: resolveRequest(row.requestId, customer?.id ?? null),
         job: resolveJob(row.jobId, customer?.id ?? null),
         receptionistKind: receptionist?.kind ?? null,
         receptionistStatus: receptionist?.status ?? null,
-        lastCustomerCommunication,
-        laterCommunicationRecorded,
+        lastCustomerCommunication: null,
+        laterCommunicationRecorded: customer ? false : null,
         logLeadHref: customer ? null : OWNER_LOG_LEAD_HREF,
       },
     });
@@ -440,11 +432,6 @@ export async function loadReceptionistRecoveryCenter(
 
   for (const event of standaloneEvents) {
     const customer = resolveCustomer(event.customerId);
-    const { lastCustomerCommunication, laterCommunicationRecorded } = lastCommunicationFor(
-      customer?.id ?? null,
-      null,
-      event.createdAt,
-    );
     merged.push({
       occurredAt: event.createdAt,
       id: `event:${event.id}`,
@@ -465,8 +452,8 @@ export async function loadReceptionistRecoveryCenter(
         job: null,
         receptionistKind: event.kind,
         receptionistStatus: event.status,
-        lastCustomerCommunication,
-        laterCommunicationRecorded,
+        lastCustomerCommunication: null,
+        laterCommunicationRecorded: customer ? false : null,
         logLeadHref: customer ? null : OWNER_LOG_LEAD_HREF,
       },
     });
@@ -478,7 +465,60 @@ export async function loadReceptionistRecoveryCenter(
     return right.id.localeCompare(left.id);
   });
 
-  const queue = merged.slice(0, RECEPTIONIST_RECOVERY_QUEUE_LIMIT).map((row) => row.item);
+  const selected = merged.slice(0, RECEPTIONIST_RECOVERY_QUEUE_LIMIT);
+  const queueCustomerIds = [
+    ...new Set(
+      selected
+        .map((row) => row.item.customer?.id ?? null)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  const latestByCustomer = new Map<string, CommunicationRow | null>();
+  await Promise.all(
+    queueCustomerIds.map(async (customerId) => {
+      latestByCustomer.set(
+        customerId,
+        await loadLatestCustomerCommunication(db, businessId, customerId),
+      );
+    }),
+  );
+
+  const queue = selected.map((row) => {
+    const customerId = row.item.customer?.id ?? null;
+    if (!customerId) {
+      return {
+        ...row.item,
+        lastCustomerCommunication: null,
+        laterCommunicationRecorded: null,
+      };
+    }
+    const last = latestByCustomer.get(customerId) ?? null;
+    if (!last) {
+      return {
+        ...row.item,
+        lastCustomerCommunication: null,
+        laterCommunicationRecorded: false,
+      };
+    }
+    const lastAt = communicationOccurredAt(last);
+    const isThisCallRecord =
+      last.relatedType === "PHONE_INTERACTION" &&
+      row.item.source === "PHONE_INTERACTION" &&
+      last.relatedId === row.item.id;
+    return {
+      ...row.item,
+      lastCustomerCommunication: {
+        occurredAt: lastAt.toISOString(),
+        channel: last.channel,
+        direction: last.direction,
+        status: last.status,
+        purpose: last.purpose,
+        isThisCallRecord,
+      },
+      laterCommunicationRecorded: !isThisCallRecord && lastAt > row.occurredAt,
+    };
+  });
+
   const inboundEventCount = eventRows.filter((row) => row.kind === "INBOUND_CALL").length;
 
   return {

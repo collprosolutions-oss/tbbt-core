@@ -130,7 +130,7 @@ export function ReceptionistRecoveryCenter({
                       ? " · this call is the last recorded communication"
                       : item.laterCommunicationRecorded
                         ? " · a later communication is recorded"
-                        : " · no later communication is recorded"}
+                        : " · No later customer communication is recorded"}
                     {" · "}
                     {formatDateTime(
                       new Date(item.lastCustomerCommunication.occurredAt),
@@ -139,7 +139,7 @@ export function ReceptionistRecoveryCenter({
                   </p>
                 ) : item.customerKnown ? (
                   <p className="text-xs text-muted-foreground">
-                    No later customer communication is recorded after this item.
+                    No later customer communication is recorded.
                   </p>
                 ) : (
                   <p className="text-xs text-muted-foreground">

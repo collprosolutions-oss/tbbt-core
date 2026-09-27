@@ -46,6 +46,7 @@ const {
   OWNER_LOG_LEAD_HREF,
   RECEPTIONIST_RECOVERY_FACT_KEYS,
   RECEPTIONIST_RECOVERY_QUEUE_LIMIT,
+  RECEPTIONIST_RECOVERY_SCAN_LIMIT,
   appendReceptionistRecoveryFacts,
   loadReceptionistRecoveryCenter,
   recordMissedOrManualCall,
@@ -135,6 +136,7 @@ try {
   const timelineUiSrc = readRepo("src/components/communications/customer-communication-timeline.tsx");
   const specialistSrc = readRepo("src/lib/chief-of-staff/communications-specialist.ts");
   const plannerSrc = readRepo("src/lib/chief-of-staff/planner.ts");
+  const coachSrc = readRepo("src/lib/ai/coach.ts");
 
   console.log("\nSTATIC — Recovery center stays recorded-truth and receptionist-scoped");
   check(
@@ -198,10 +200,34 @@ try {
       RECEPTIONIST_RECOVERY_QUEUE_LIMIT === 40,
   );
   check(
-    "Communications specialist can cite recorded missed-call facts without writing",
+    "Communications specialist can cite bounded missed-call sample facts without writing",
     specialistSrc.includes("appendReceptionistRecoveryFacts") &&
       plannerSrc.includes("missed calls?") &&
-      !specialistSrc.includes("composeCustomerCommunication"),
+      !specialistSrc.includes("composeCustomerCommunication") &&
+      !recoverySrc.includes("communications-recorded-caller-without-later-communication-count") &&
+      !coachSrc.includes("communications-recorded-caller-without-later-communication-count") &&
+      coachSrc.includes("Missed calls in bounded Communications sample"),
+  );
+  check(
+    "Request/job links require a proven same-business customer",
+    recoverySrc.includes("if (!requestId || !resolvedCustomerId) return null") &&
+      recoverySrc.includes("if (!jobId || !resolvedCustomerId) return null") &&
+      recoverySrc.includes("owned.customerId !== resolvedCustomerId"),
+  );
+  check(
+    "Linked receptionist attention events attach only to scanned same-business phones",
+    recoverySrc.includes("scannedPhoneById.get(event.phoneInteractionId)") &&
+      recoverySrc.includes("attentionPhoneIds.add(scanned.id)") &&
+      recoverySrc.includes("standaloneEvents.push(event)"),
+  );
+  check(
+    "Communication history is bounded per final-queue customer and uses canonical timestamps",
+    !recoverySrc.includes("customerCommunication.findMany") &&
+      !recoverySrc.includes("$queryRawUnsafe") &&
+      recoverySrc.includes("customerCommunication.findFirst") &&
+      recoverySrc.includes("attemptedAt: { not: null }") &&
+      recoverySrc.includes("attemptedAt: null") &&
+      recoverySrc.includes("attemptedAt ?? row.createdAt"),
   );
   check(
     "Existing receptionist tab can open the recovery route",
@@ -289,6 +315,55 @@ try {
       projectToken: randomUUID(),
     },
   });
+  const sibling = await prisma.customer.create({
+    data: {
+      businessId: tenantA.business.id,
+      name: "Alpha Sibling",
+      phone: "5557778888",
+      email: "alpha-sibling@example.com",
+      smsConsentStatus: "UNKNOWN",
+    },
+  });
+  const siblingRequest = await prisma.serviceRequest.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: sibling.id,
+      summary: "Sibling request must stay hidden",
+    },
+  });
+  const siblingJob = await prisma.job.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: sibling.id,
+      status: "UNSCHEDULED",
+      projectToken: randomUUID(),
+    },
+  });
+  const unknownWithLocalLinks = await prisma.phoneInteraction.create({
+    data: {
+      businessId: tenantA.business.id,
+      kind: "MISSED_CALL",
+      status: "LOGGED",
+      direction: "INBOUND",
+      summary: "Unknown caller with local request/job ids.",
+      requestId: requestA.id,
+      jobId: jobA.id,
+      idempotencyKey: `unknown-links-${randomUUID()}`,
+    },
+  });
+  const siblingLinked = await prisma.phoneInteraction.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      kind: "MISSED_CALL",
+      status: "LOGGED",
+      direction: "INBOUND",
+      summary: "Known caller pointing at sibling request/job.",
+      requestId: siblingRequest.id,
+      jobId: siblingJob.id,
+      idempotencyKey: `sibling-links-${randomUUID()}`,
+    },
+  });
 
   console.log("\nDB — Known caller stays tenant-local; unknown stays unknown");
   const knownMissed = await recordMissedOrManualCall(prisma, tenantA.access, {
@@ -352,7 +427,126 @@ try {
       direction: "INBOUND",
       callerLast4: "2222",
       summary: "Forged foreign customer id must not leak.",
+      requestId: requestA.id,
+      jobId: jobA.id,
       idempotencyKey: `forged-${randomUUID()}`,
+    },
+  });
+  const loggedWithEscalation = await prisma.phoneInteraction.create({
+    data: {
+      businessId: tenantA.business.id,
+      kind: "MANUAL_PHONE",
+      status: "LOGGED",
+      direction: "INBOUND",
+      summary: "Ordinary logged phone that should stay visible via escalation.",
+      idempotencyKey: `logged-escalation-${randomUUID()}`,
+    },
+  });
+  const linkedEscalation = await prisma.receptionistEvent.create({
+    data: {
+      businessId: tenantA.business.id,
+      phoneInteractionId: loggedWithEscalation.id,
+      kind: "ESCALATION",
+      status: "ESCALATED",
+      provider: "none",
+      providerConnected: false,
+      payload: { summary: "Linked escalation on a normal logged phone." },
+      idempotencyKey: `linked-escalation-${randomUUID()}`,
+    },
+  });
+  const foreignPhoneOnB = await prisma.phoneInteraction.create({
+    data: {
+      businessId: tenantB.business.id,
+      kind: "MANUAL_PHONE",
+      status: "LOGGED",
+      direction: "INBOUND",
+      summary: "Beta phone must not leak through an Alpha event.",
+      idempotencyKey: `beta-phone-${randomUUID()}`,
+    },
+  });
+  const localEventForeignPhone = await prisma.receptionistEvent.create({
+    data: {
+      businessId: tenantA.business.id,
+      phoneInteractionId: foreignPhoneOnB.id,
+      kind: "ESCALATION",
+      status: "ESCALATED",
+      provider: "none",
+      providerConnected: false,
+      payload: { summary: "Local escalation pointing at a foreign phone id." },
+      idempotencyKey: `local-event-foreign-phone-${randomUUID()}`,
+    },
+  });
+  const canonCustomer = await prisma.customer.create({
+    data: {
+      businessId: tenantA.business.id,
+      name: "Alpha Canonical History",
+      phone: "5552223333",
+      email: "alpha-canon@example.com",
+      smsConsentStatus: "UNKNOWN",
+    },
+  });
+  const canonPhone = await prisma.phoneInteraction.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: canonCustomer.id,
+      kind: "MISSED_CALL",
+      status: "LOGGED",
+      direction: "INBOUND",
+      summary: "Canonical latest-communication proof call.",
+      occurredAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+      idempotencyKey: `canon-phone-${randomUUID()}`,
+    },
+  });
+  await prisma.customerCommunication.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: canonCustomer.id,
+      channel: "SMS",
+      direction: "OUTBOUND",
+      purpose: "GENERAL",
+      subject: "Newer createdAt but older canonical time",
+      idempotencyKey: `canon-old-${randomUUID()}`,
+      bodySnapshot: "Must not win latest.",
+      status: "SENT",
+      provider: "manual",
+      createdAt: new Date(),
+      attemptedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+    },
+  });
+  const canonLatest = await prisma.customerCommunication.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: canonCustomer.id,
+      channel: "EMAIL",
+      direction: "OUTBOUND",
+      purpose: "GENERAL",
+      subject: "Older createdAt but later canonical time",
+      idempotencyKey: `canon-latest-${randomUUID()}`,
+      bodySnapshot: "Must win latest.",
+      status: "SENT",
+      provider: "resend",
+      createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+      attemptedAt: null,
+    },
+  });
+  const noLaterCustomer = await prisma.customer.create({
+    data: {
+      businessId: tenantA.business.id,
+      name: "Alpha No Later",
+      phone: "5554445555",
+      smsConsentStatus: "UNKNOWN",
+    },
+  });
+  const noLaterPhone = await prisma.phoneInteraction.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: noLaterCustomer.id,
+      kind: "MISSED_CALL",
+      status: "LOGGED",
+      direction: "INBOUND",
+      summary: "Known caller with no customer communication rows.",
+      occurredAt: new Date(),
+      idempotencyKey: `no-later-${randomUUID()}`,
     },
   });
 
@@ -380,6 +574,13 @@ try {
   const manualItem = centerA.queue.find((row) => row.id === manualAnswered.phoneInteractionId);
   const inboundItem = centerA.queue.find((row) => row.id === inboundUnknown.event.id);
   const forgedItem = centerA.queue.find((row) => row.id === forgedForeign.id);
+  const unknownLinkedItem = centerA.queue.find((row) => row.id === unknownWithLocalLinks.id);
+  const siblingLinkedItem = centerA.queue.find((row) => row.id === siblingLinked.id);
+  const loggedEscalationItem = centerA.queue.find((row) => row.id === loggedWithEscalation.id);
+  const linkedEscalationStandalone = centerA.queue.filter((row) => row.id === linkedEscalation.id);
+  const foreignPhoneEventItem = centerA.queue.find((row) => row.id === localEventForeignPhone.id);
+  const canonItem = centerA.queue.find((row) => row.id === canonPhone.id);
+  const noLaterItem = centerA.queue.find((row) => row.id === noLaterPhone.id);
 
   check(
     "Known caller maps only to the same-business customer",
@@ -418,10 +619,61 @@ try {
       centerA.queue.every((row) => row.kind !== "ANSWERED"),
   );
   check(
-    "Related request/job appear only when they belong to the same business and customer",
+    "Known same-tenant customer + own request/job are exposed",
     knownItem?.request?.id === requestA.id &&
       knownItem.job?.id === jobA.id &&
       knownItem.request?.href === `/requests/${requestA.id}`,
+  );
+  check(
+    "Unknown caller + same-business requestId does not expose the request",
+    unknownLinkedItem?.customerKnown === false && unknownLinkedItem.request === null,
+  );
+  check(
+    "Unknown caller + same-business jobId does not expose the job",
+    unknownLinkedItem?.job === null,
+  );
+  check(
+    "Foreign/dirty customerId + local request/job does not expose them",
+    forgedItem?.customerKnown === false &&
+      forgedItem.request === null &&
+      forgedItem.job === null,
+  );
+  check(
+    "Known customer + sibling customer's request/job are not exposed",
+    siblingLinkedItem?.customerKnown === true &&
+      siblingLinkedItem.customer?.id === customerA.id &&
+      siblingLinkedItem.request === null &&
+      siblingLinkedItem.job === null,
+  );
+  check(
+    "Normal LOGGED phone with a linked ESCALATION event appears once",
+    loggedEscalationItem?.source === "PHONE_INTERACTION" &&
+      loggedEscalationItem.kind === "MANUAL_PHONE" &&
+      loggedEscalationItem.status === "LOGGED" &&
+      loggedEscalationItem.receptionistKind === "ESCALATION" &&
+      linkedEscalationStandalone.length === 0,
+  );
+  check(
+    "Foreign phoneInteractionId does not leak or drop the local receptionist event",
+    foreignPhoneEventItem?.source === "RECEPTIONIST_EVENT" &&
+      foreignPhoneEventItem.id === localEventForeignPhone.id &&
+      !JSON.stringify(centerA).includes("Beta phone must not leak") &&
+      !centerB.queue.some((row) => row.id === localEventForeignPhone.id),
+  );
+  check(
+    "Latest customer communication uses canonical attemptedAt ?? createdAt",
+    canonItem?.customerKnown === true &&
+      canonItem.lastCustomerCommunication?.channel === "EMAIL" &&
+      canonItem.lastCustomerCommunication?.occurredAt === canonLatest.createdAt.toISOString() &&
+      canonItem.laterCommunicationRecorded === true,
+  );
+  check(
+    "No later communication is stated only after the bounded per-customer lookup",
+    noLaterItem?.customerKnown === true &&
+      noLaterItem.lastCustomerCommunication === null &&
+      noLaterItem.laterCommunicationRecorded === false &&
+      unknownItem?.lastCustomerCommunication === null &&
+      unknownItem.laterCommunicationRecorded === null,
   );
   check(
     "Standalone inbound receptionist event stays in the recorded queue as unknown when unmatched",
@@ -493,38 +745,63 @@ try {
   const factKeys = [];
   appendReceptionistRecoveryFacts(facts, factKeys, {
     phoneInteractions: [
-      {
-        kind: "MISSED_CALL",
-        customerId: customerA.id,
-        occurredAt: "2026-09-01T12:00:00.000Z",
-      },
-      {
-        kind: "MISSED_CALL",
-        customerId: customerA.id,
-        occurredAt: "2026-09-01T14:00:00.000Z",
-      },
-      {
-        kind: "MISSED_CALL",
-        customerId: null,
-        occurredAt: "2026-09-01T13:00:00.000Z",
-      },
-    ],
-    messages: [
-      {
-        customerId: customerA.id,
-        occurredAt: "2026-09-01T12:30:00.000Z",
-      },
+      { kind: "MISSED_CALL" },
+      { kind: "MISSED_CALL" },
+      { kind: "MISSED_CALL" },
+      { kind: "MANUAL_PHONE" },
     ],
     factsCap: 24,
   });
   check(
-    "Specialist facts count missed calls from the bounded recorded set",
-    facts[RECEPTIONIST_RECOVERY_FACT_KEYS.missedCallCount] === "3",
+    "Specialist missed-call fact is the bounded sample count only",
+    facts[RECEPTIONIST_RECOVERY_FACT_KEYS.missedCallCount] === "3" &&
+      factKeys.includes(RECEPTIONIST_RECOVERY_FACT_KEYS.missedCallCount) &&
+      !Object.keys(facts).includes("communications-recorded-caller-without-later-communication-count"),
   );
+
+  const scanTenant = await seedBusiness("Scan Retention");
+  const oldPhone = await prisma.phoneInteraction.create({
+    data: {
+      businessId: scanTenant.business.id,
+      kind: "MANUAL_PHONE",
+      status: "LOGGED",
+      direction: "INBOUND",
+      summary: "Old logged phone outside the bounded scan.",
+      occurredAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      idempotencyKey: `old-outside-scan-${randomUUID()}`,
+    },
+  });
+  await prisma.phoneInteraction.createMany({
+    data: Array.from({ length: RECEPTIONIST_RECOVERY_SCAN_LIMIT }, (_, index) => ({
+      businessId: scanTenant.business.id,
+      kind: "MISSED_CALL",
+      status: "LOGGED",
+      direction: "INBOUND",
+      summary: `Recent scan filler ${index + 1}`,
+      occurredAt: new Date(Date.now() - index * 1000),
+      idempotencyKey: `scan-filler-${index}-${randomUUID()}`,
+    })),
+  });
+  const outsideScanEvent = await prisma.receptionistEvent.create({
+    data: {
+      businessId: scanTenant.business.id,
+      phoneInteractionId: oldPhone.id,
+      kind: "ESCALATION",
+      status: "ESCALATED",
+      provider: "none",
+      providerConnected: false,
+      payload: { summary: "Escalation linked to a phone outside the scan." },
+      idempotencyKey: `outside-scan-${randomUUID()}`,
+    },
+  });
+  const scanCenter = await loadReceptionistRecoveryCenter(prisma, scanTenant.access);
+  const outsideEventItem = scanCenter.queue.find((row) => row.id === outsideScanEvent.id);
   check(
-    "Specialist facts count known recorded callers without a later communication using timestamps",
-    facts[RECEPTIONIST_RECOVERY_FACT_KEYS.callerWithoutLaterCommunicationCount] === "1" &&
-      factKeys.includes(RECEPTIONIST_RECOVERY_FACT_KEYS.missedCallCount),
+    "Linked attention event to a phone outside the scan still appears standalone",
+    outsideEventItem?.source === "RECEPTIONIST_EVENT" &&
+      outsideEventItem.receptionistKind === "ESCALATION" &&
+      !scanCenter.queue.some((row) => row.id === oldPhone.id && row.source === "PHONE_INTERACTION") &&
+      scanCenter.queue.filter((row) => row.id === outsideScanEvent.id).length === 1,
   );
 
   const tenantBAfter = await loadReceptionistRecoveryCenter(prisma, tenantB.access);
