@@ -6,9 +6,10 @@
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
-import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import {
   buildCreatorPackagePreview,
+  buildMarketingReviewPacket,
   canSelectPhotoForMarketing,
   CREATOR_PACKAGE_NOT_APPROVED_MESSAGE,
   formatHashtags,
@@ -17,7 +18,9 @@ import {
   isMarketingContentType,
   INVALID_SHOT_LIST_MESSAGE,
   INVALID_STORYBOARD_MESSAGE,
+  marketingReviewPacketFilename,
   nextContentStatus,
+  OWNER_REVIEW_PACKET_MESSAGE,
   OWNER_STUDIO_APPROVAL_MESSAGE,
   parseHashtags,
   parseMarketingDate,
@@ -32,6 +35,7 @@ import {
   serializeStoryboard,
   studioPhotosEligible,
   type CreatorPackage,
+  type MarketingReviewPacket,
 } from "@/lib/marketing";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -464,6 +468,69 @@ export async function exportMarketingCreatorPackage(
   return {
     filename: `${slug || "creator-package"}-handoff.json`,
     package: creatorPackage,
+  };
+}
+
+const REVIEW_PACKET_CONTENT_SELECT = {
+  photos: {
+    include: {
+      jobPhoto: {
+        select: {
+          id: true,
+          url: true,
+          caption: true,
+          stage: true,
+          marketingPermissionStatus: true,
+        },
+      },
+    },
+  },
+  job: {
+    select: {
+      estimate: {
+        select: { lineItems: { select: { description: true } } },
+      },
+    },
+  },
+} as const;
+
+export async function downloadMarketingReviewPacket(
+  db: Db,
+  access: BusinessAccess,
+  input: { contentId: string },
+): Promise<{ filename: string; packet: MarketingReviewPacket }> {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+  if (access.workspace.role !== "OWNER") {
+    throw new MarketingError(OWNER_REVIEW_PACKET_MESSAGE);
+  }
+  requireBusinessRole(access, "OWNER");
+  const content = access.assertOwned(
+    await db.marketingContent.findFirst({
+      where: { id: input.contentId, ...access.scope },
+      include: REVIEW_PACKET_CONTENT_SELECT,
+    }),
+  );
+  const business = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: { name: true, publicServiceAreaLabel: true },
+  });
+  const packet = buildMarketingReviewPacket({
+    title: content.title,
+    status: content.status,
+    caption: content.body,
+    hashtags: content.hashtags,
+    storyboardJson: content.storyboardJson,
+    shotListJson: content.shotListJson,
+    photos: content.photos.map((row) => row.jobPhoto),
+    recordedFacts: {
+      businessName: business?.name ?? "Business",
+      workPerformed: content.job?.estimate?.lineItems[0]?.description ?? null,
+      city: business?.publicServiceAreaLabel ?? null,
+    },
+  });
+  return {
+    filename: marketingReviewPacketFilename(content.title, content.status),
+    packet,
   };
 }
 
