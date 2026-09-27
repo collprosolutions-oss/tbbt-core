@@ -186,11 +186,13 @@ check(
     !businessTrades.includes("ensureBusinessTrade"),
 );
 check(
-  "Configured trades include Handyman and Cleaning",
+  "Configured trades include Handyman, Cleaning, and Pressure Washing",
   trades.includes('"HANDYMAN"') &&
     trades.includes('"CLEANING"') &&
+    trades.includes('"PRESSURE_WASHING"') &&
     tradeConfig.includes("CLEANING_TRADE_CONFIG") &&
-    tradeConfig.includes("HANDYMAN_TRADE_CONFIG"),
+    tradeConfig.includes("HANDYMAN_TRADE_CONFIG") &&
+    tradeConfig.includes("PRESSURE_WASHING_TRADE_CONFIG"),
 );
 check(
   "Trade config owns pricing, intake, recurrence, catalog starter, and language",
@@ -330,8 +332,8 @@ check(
     addServiceSheet.includes("plan.label") &&
     !addServiceSheet.includes("Handyman starter catalog") &&
     servicesPage.includes("starterPlans") &&
-    servicesPage.includes("planCleaningStarterCatalogInstall") &&
-    servicesPage.includes("planStarterCatalogInstall"),
+    servicesPage.includes("planStarterCatalogInstallForTrade") &&
+    !servicesPage.includes("planCleaningStarterCatalogInstall"),
 );
 check(
   "createJobFromEstimate copies request recurrence instead of schema defaults",

@@ -40,6 +40,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { formatMoney } from "@/lib/format";
+import { getTradeConfig, listConfiguredTradeCodes } from "@/lib/trade-config";
 import {
   ACCOUNT_DELETION_UNAVAILABLE_MESSAGE,
   ACCOUNTING_EXPORT_MESSAGE,
@@ -345,10 +346,10 @@ function SectionBody(props: SettingsWorkspaceProps) {
             <h3 className="text-sm font-medium">Active trades</h3>
             <BusinessTradesForm
               trades={snapshot.business.activeTrades}
-              available={[
-                { code: "HANDYMAN", label: "Handyman" },
-                { code: "CLEANING", label: "Cleaning" },
-              ]}
+              available={listConfiguredTradeCodes().map((code) => ({
+                code,
+                label: getTradeConfig(code).label,
+              }))}
               canEdit={canEditConsequential}
             />
           </div>

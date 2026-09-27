@@ -13,6 +13,10 @@ import {
   cleaningStarterPricingMode,
 } from "@/lib/cleaning-starter-catalog";
 import {
+  planPressureWashingStarterCatalogInstall,
+  pressureWashingStarterPricingMode,
+} from "@/lib/pressure-washing-starter-catalog";
+import {
   definitionFromFormulaBinding,
   formulaBindingForTemplateKey,
 } from "@/lib/estimate-calculators/formula-registry";
@@ -46,6 +50,12 @@ export async function installStarterCatalogForTrade(
     return {
       ...(await installCleaningStarterRows(db, businessId)),
       tradeCode: "CLEANING" as const,
+    };
+  }
+  if (source === "PRESSURE_WASHING_STARTER") {
+    return {
+      ...(await installPressureWashingStarterRows(db, businessId)),
+      tradeCode: "PRESSURE_WASHING" as const,
     };
   }
   return { added: 0, skipped: 0, pending: 0, tradeCode };
@@ -98,6 +108,38 @@ async function installCleaningStarterRows(db: CatalogDb, businessId: string) {
         name: service.name,
         description: service.description,
         pricingMode: cleaningStarterPricingMode(service),
+        price:
+          service.startingPrice == null
+            ? null
+            : new Prisma.Decimal(service.startingPrice),
+        category: service.category,
+        active: true,
+        recurrenceEligible: Boolean(service.recurrenceEligible),
+        unitLabel: service.unitLabel ?? "",
+      },
+    });
+  }
+  return {
+    added: plan.add.length,
+    skipped: plan.skip.length,
+    pending: plan.pending.length,
+  };
+}
+
+async function installPressureWashingStarterRows(db: CatalogDb, businessId: string) {
+  const existing = await db.serviceCatalogItem.findMany({
+    where: { businessId, tradeCode: "PRESSURE_WASHING" },
+    select: { name: true },
+  });
+  const plan = planPressureWashingStarterCatalogInstall(existing.map((item) => item.name));
+  for (const service of plan.add) {
+    await db.serviceCatalogItem.create({
+      data: {
+        businessId,
+        tradeCode: "PRESSURE_WASHING",
+        name: service.name,
+        description: service.description,
+        pricingMode: pressureWashingStarterPricingMode(service),
         price:
           service.startingPrice == null
             ? null

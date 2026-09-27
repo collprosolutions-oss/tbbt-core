@@ -15,14 +15,13 @@ import { requireManagementPageAccess } from "@/lib/access";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatMoney } from "@/lib/format";
-import { planStarterCatalogInstall } from "@/lib/handyman-starter-catalog";
-import { planCleaningStarterCatalogInstall } from "@/lib/cleaning-starter-catalog";
 import { catalogScopeText } from "@/lib/estimate-line-scope";
 import { formatCatalogPriceLabel } from "@/lib/pricing-mode";
 import { prisma } from "@/lib/prisma";
 import { groupServiceCatalogItemsByCategory } from "@/lib/service-catalog-category";
 import { listActiveTradeCodes } from "@/lib/business-trades";
 import { getTradeConfig, preferredCatalogCategoryOrder } from "@/lib/trade-config";
+import { planStarterCatalogInstallForTrade } from "@/lib/trade-launch-pack";
 
 export const metadata: Metadata = {
   title: "Services",
@@ -55,27 +54,13 @@ export default async function ServicesPage({
   const preferredCategoryOrder = activeTradeCodes.flatMap((code) =>
     preferredCatalogCategoryOrder(code),
   );
-  const handymanNames = items
-    .filter((item) => (item.tradeCode ?? "HANDYMAN") === "HANDYMAN")
-    .map((item) => item.name);
-  const cleaningNames = items
-    .filter((item) => item.tradeCode === "CLEANING")
-    .map((item) => item.name);
   const starterPlans: TradeStarterCatalogPlan[] = activeTradeCodes
     .filter((code) => getTradeConfig(code).catalogStarterSource !== "NONE")
     .map((code) => {
-      const names =
-        code === "CLEANING"
-          ? cleaningNames
-          : code === "HANDYMAN"
-            ? handymanNames
-            : items
-                .filter((item) => (item.tradeCode ?? "HANDYMAN") === code)
-                .map((item) => item.name);
-      const plan =
-        code === "CLEANING"
-          ? planCleaningStarterCatalogInstall(names)
-          : planStarterCatalogInstall(names);
+      const names = items
+        .filter((item) => (item.tradeCode ?? "HANDYMAN") === code)
+        .map((item) => item.name);
+      const plan = planStarterCatalogInstallForTrade(code, names);
       return {
         code,
         label: `${getTradeConfig(code).label} starter catalog`,

@@ -18,6 +18,13 @@ import {
   planStarterCatalogInstall,
   type HandymanStarterService,
 } from "@/lib/handyman-starter-catalog";
+import {
+  PRESSURE_WASHING_CATALOG_CATEGORIES,
+  PRESSURE_WASHING_STARTER_SERVICES,
+  planPressureWashingStarterCatalogInstall,
+  pressureWashingStarterPricingMode,
+  type PressureWashingStarterService,
+} from "@/lib/pressure-washing-starter-catalog";
 import { currentIntakeSchema, type IntakeSchema } from "@/lib/intake-schema";
 import type { PricingMode } from "@/lib/pricing-mode";
 import {
@@ -46,9 +53,15 @@ export type TradeLaunchPack = {
 };
 
 export type StarterCatalogPlan = {
-  add: Array<CleaningStarterService | HandymanStarterService>;
-  skip: Array<CleaningStarterService | HandymanStarterService>;
-  pending: Array<CleaningStarterService | HandymanStarterService>;
+  add: Array<
+    CleaningStarterService | HandymanStarterService | PressureWashingStarterService
+  >;
+  skip: Array<
+    CleaningStarterService | HandymanStarterService | PressureWashingStarterService
+  >;
+  pending: Array<
+    CleaningStarterService | HandymanStarterService | PressureWashingStarterService
+  >;
 };
 
 export function getTradeLaunchPack(tradeCode: string): TradeLaunchPack {
@@ -78,6 +91,9 @@ export function planStarterCatalogInstallForTrade(
   if (source === "HANDYMAN_STARTER") {
     return planStarterCatalogInstall(existingNames);
   }
+  if (source === "PRESSURE_WASHING_STARTER") {
+    return planPressureWashingStarterCatalogInstall(existingNames);
+  }
   return { add: [], skip: [], pending: [] };
 }
 
@@ -99,8 +115,22 @@ export function handymanLaunchPackStarterServices() {
   return HANDYMAN_STARTER_SERVICES;
 }
 
+export function pressureWashingLaunchPackStarterServices() {
+  return PRESSURE_WASHING_STARTER_SERVICES;
+}
+
+export function pressureWashingLaunchPackCategories() {
+  return PRESSURE_WASHING_CATALOG_CATEGORIES;
+}
+
 export function cleaningStarterMode(service: CleaningStarterService): PricingMode {
   return cleaningStarterPricingMode(service);
+}
+
+export function pressureWashingStarterMode(
+  service: PressureWashingStarterService,
+): PricingMode {
+  return pressureWashingStarterPricingMode(service);
 }
 
 export function tradeLaunchPackOffersStarter(tradeCode: string) {

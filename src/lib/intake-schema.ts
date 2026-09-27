@@ -361,16 +361,125 @@ const CLEANING_PUBLIC_V2: IntakeSchema = {
   ],
 };
 
+const PRESSURE_WASHING_PUBLIC_V1: IntakeSchema = {
+  key: "pressure-washing.public",
+  version: 1,
+  tradeCode: "PRESSURE_WASHING",
+  title: "Pressure washing service request",
+  fields: [
+    {
+      key: "selectedWork",
+      type: "MULTI_CHOICE",
+      label: "Requested wash",
+      render: "core",
+    },
+    {
+      key: "propertyType",
+      type: "CHOICE",
+      label: "Property type",
+      required: true,
+      options: [
+        { value: "HOUSE", label: "House" },
+        { value: "TOWNHOUSE", label: "Townhouse" },
+        { value: "COMMERCIAL", label: "Commercial / storefront" },
+        { value: "OTHER", label: "Other" },
+      ],
+      render: "trade",
+    },
+    {
+      key: "stories",
+      type: "CHOICE",
+      label: "Stories",
+      options: [
+        { value: "ONE", label: "1 story" },
+        { value: "TWO", label: "2 stories" },
+        { value: "THREE_PLUS", label: "3 or more stories" },
+      ],
+      render: "trade",
+    },
+    {
+      key: "surfaces",
+      type: "MULTI_CHOICE",
+      label: "Surfaces to wash",
+      options: [
+        { value: "SIDING", label: "Siding / house exterior" },
+        { value: "CONCRETE", label: "Concrete / driveway" },
+        { value: "DECK", label: "Deck" },
+        { value: "FENCE", label: "Fence" },
+        { value: "ROOF", label: "Roof" },
+        { value: "GUTTERS", label: "Gutters" },
+      ],
+      render: "trade",
+    },
+    {
+      key: "waterAccess",
+      type: "YES_NO",
+      label: "On-site water access?",
+      render: "trade",
+    },
+    {
+      key: "stains",
+      type: "YES_NO",
+      label: "Oil or other stains to treat?",
+      render: "trade",
+    },
+    {
+      key: "stainNotes",
+      type: "TEXT",
+      label: "Stain notes",
+      visibleWhen: { field: "stains", value: "yes" },
+      render: "trade",
+    },
+    {
+      key: "frequency",
+      type: "FREQUENCY",
+      label: "How often?",
+      required: true,
+      options: [
+        { value: "ONE_TIME", label: "One-time" },
+        { value: "MONTHLY", label: "Monthly" },
+        { value: "CUSTOM", label: "Seasonal / as needed" },
+      ],
+      render: "trade",
+    },
+    {
+      key: "accessNotes",
+      type: "NOTES",
+      label: "Access notes",
+      help: "Gate codes stay off ordinary emails. Share only what the team needs.",
+      render: "trade",
+    },
+    {
+      key: "photos",
+      type: "PHOTOS",
+      label: "Photos of the surfaces",
+      render: "core",
+    },
+    {
+      key: "notes",
+      type: "NOTES",
+      label: "Other notes",
+      render: "core",
+    },
+  ],
+};
+
 const ARCHIVED_SCHEMAS: IntakeSchema[] = [
   HANDYMAN_PUBLIC_V1,
   CLEANING_PUBLIC_V1,
   CLEANING_PUBLIC_V2,
+  PRESSURE_WASHING_PUBLIC_V1,
 ];
+
+const CURRENT_INTAKE_BY_TRADE: Record<TradeCode, IntakeSchema> = {
+  HANDYMAN: HANDYMAN_PUBLIC_V1,
+  CLEANING: CLEANING_PUBLIC_V2,
+  PRESSURE_WASHING: PRESSURE_WASHING_PUBLIC_V1,
+};
 
 export function currentIntakeSchema(tradeCode: string): IntakeSchema {
   const code = isConfiguredTrade(tradeCode) ? tradeCode : DEFAULT_TRADE;
-  if (code === "CLEANING") return CLEANING_PUBLIC_V2;
-  return HANDYMAN_PUBLIC_V1;
+  return CURRENT_INTAKE_BY_TRADE[code];
 }
 
 export function archivedIntakeSchema(key: string, version: number): IntakeSchema | null {
