@@ -57,13 +57,38 @@ export const RETENTION_READ_ONLY_MESSAGE =
 export const RETENTION_OWNER_FOLLOW_UP_MESSAGE =
   "An owner can record or update a same-business follow-up task from a listed finding. This action does not send SMS or email.";
 
+export const RETENTION_OWNER_RESOLVE_FOLLOW_UP_MESSAGE =
+  "An owner can mark a recorded retention follow-up task done or cancelled. This action does not send SMS or email.";
+
 export const RETENTION_FOLLOW_UP_RECORDED_MESSAGE =
   "Follow-up task recorded. It has not been sent.";
 
 export const RETENTION_FOLLOW_UP_UPDATED_MESSAGE =
   "Follow-up task already on file was updated. It has not been sent.";
 
+export const RETENTION_FOLLOW_UP_DONE_MESSAGE =
+  "Follow-up task marked done. It has not been sent.";
+
+export const RETENTION_FOLLOW_UP_CANCELLED_MESSAGE =
+  "Follow-up task cancelled. It has not been sent.";
+
+export const RETENTION_FOLLOW_UP_STATUS_UNCHANGED_MESSAGE =
+  "Follow-up task already has that recorded status. It has not been sent.";
+
 export const RETENTION_FOLLOW_UP_OWNER_ONLY_MESSAGE = "Only the business owner can record this follow-up task.";
+
+export const RETENTION_FOLLOW_UP_UNKNOWN_TASK_MESSAGE = "That follow-up task is not in this business.";
+
+export const RETENTION_FOLLOW_UP_NOT_TASK_MESSAGE =
+  "Only a recorded retention follow-up task can be marked done or cancelled here.";
+
+export const RETENTION_FOLLOW_UP_UNKNOWN_STATUS_MESSAGE = "Choose Done or Cancelled.";
+
+export const RETENTION_FOLLOW_UP_SENT_NOT_DONE_MESSAGE =
+  "A sent follow-up cannot be marked done or cancelled here.";
+
+export const RETENTION_FOLLOW_UP_NOT_RESOLVABLE_MESSAGE =
+  "Only an open, done, or cancelled retention follow-up task can be updated here.";
 
 export const RETENTION_FOLLOW_UP_FOREIGN_CUSTOMER_MESSAGE = "That customer is not in this business.";
 
@@ -83,7 +108,7 @@ export const RETENTION_NO_CADENCE_MESSAGE =
 
 export const RETENTION_AGE_PREFIX = "Last completed job:";
 
-export const CUSTOMER_FOLLOW_UP_STATUSES = ["OPEN", "SENT", "FAILED", "CANCELLED"] as const;
+export const CUSTOMER_FOLLOW_UP_STATUSES = ["OPEN", "SENT", "FAILED", "CANCELLED", "DONE"] as const;
 export type CustomerFollowUpStatus = (typeof CUSTOMER_FOLLOW_UP_STATUSES)[number];
 
 export const CUSTOMER_FOLLOW_UP_STATUS_LABELS: Record<CustomerFollowUpStatus, string> = {
@@ -91,7 +116,11 @@ export const CUSTOMER_FOLLOW_UP_STATUS_LABELS: Record<CustomerFollowUpStatus, st
   SENT: "SENT",
   FAILED: "FAILED",
   CANCELLED: "CANCELLED",
+  DONE: "DONE",
 };
+
+export const RETENTION_FOLLOW_UP_RESOLVE_STATUSES = ["DONE", "CANCELLED"] as const;
+export type RetentionFollowUpResolveStatus = (typeof RETENTION_FOLLOW_UP_RESOLVE_STATUSES)[number];
 
 export const CUSTOMER_FOLLOW_UP_KINDS = ["JOB_COMPLETE", "REPEAT"] as const;
 

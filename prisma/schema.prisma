@@ -2873,7 +2873,8 @@ model CustomerFollowUp {
   jobId                 String?
   /// JOB_COMPLETE | REPEAT
   kind                  String
-  /// OPEN | SENT | FAILED | CANCELLED
+  /// OPEN | SENT | FAILED | CANCELLED | DONE
+  /// DONE is owner-completed retention work. It is never a send.
   status                String    @default("OPEN")
   /// COMMUNICATION | RETENTION_TASK
   /// RETENTION_TASK is owner-recorded work and is excluded from due scans.

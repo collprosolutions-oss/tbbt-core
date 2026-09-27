@@ -12,7 +12,7 @@ export function isCustomerFollowUpStatus(value: string): value is CustomerFollow
 
 /**
  * Present the recorded CustomerFollowUp.status only. SENT is never
- * rewritten to DELIVERED.
+ * rewritten to DELIVERED. DONE is never rewritten to SENT.
  */
 export function recordedFollowUpStatusLabel(status: string): string {
   if (isCustomerFollowUpStatus(status)) {

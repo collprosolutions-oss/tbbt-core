@@ -517,6 +517,7 @@ async function loadRecordedFollowUps(input: {
       jobId: true,
       kind: true,
       status: true,
+      origin: true,
       customer: { select: { id: true, name: true, businessId: true } },
       job: { select: { id: true, businessId: true } },
     },
@@ -559,6 +560,7 @@ async function loadRecordedFollowUps(input: {
         kind: row.kind,
         status: row.status,
         statusLabel: recordedFollowUpStatusLabel(row.status),
+        origin: row.origin,
         links,
       };
     });
