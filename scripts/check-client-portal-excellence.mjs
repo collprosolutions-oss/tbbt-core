@@ -17,9 +17,11 @@ const {
   customerFacingAdditionalWorkStatus,
   customerFacingInvoiceTruth,
   customerFacingPortalMessageStatus,
+  isPortalCustomerVisibleMessageChannel,
   isPortalCustomerVisibleMessageStatus,
   loadPortalAdditionalWorkRequests,
   loadPortalCustomerCommunications,
+  PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS,
   portalAppointmentConfirmationCopy,
   portalAppointmentWhenLabel,
   portalApprovedChangeOrderCount,
@@ -122,6 +124,29 @@ check(
     homeHelper.includes('if (status === "SENT") return "Sent"') &&
     commsCard.includes("Sent is") &&
     commsCard.includes("not the same as delivered"),
+);
+check(
+  "Portal messages are outbound EMAIL/SMS/PORTAL only",
+  homeHelper.includes('direction: "OUTBOUND"') &&
+    homeHelper.includes("PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS") &&
+    homeHelper.includes('"EMAIL"') &&
+    homeHelper.includes('"SMS"') &&
+    homeHelper.includes('"PORTAL"') &&
+    !homeHelper.includes('"MANUAL"') &&
+    !homeHelper.includes('"SYSTEM"') &&
+    !homeHelper.includes('"PHONE"') &&
+    commsCard.includes("Messages we have sent") &&
+    !commsCard.includes("sent or received") &&
+    !commsCard.includes("From you"),
+);
+check(
+  "Portal page contains no request-time DDL path",
+  !page.includes("ensureBusinessPublicContactSchema") &&
+    !page.includes("ALTER TABLE") &&
+    !page.includes("$executeRawUnsafe") &&
+    !page.includes("$executeRaw") &&
+    page.includes("BUSINESS_PUBLIC_CONTACT_SELECT") &&
+    page.includes("resolveBusinessPublicContact"),
 );
 check(
   "Appointment exact/window uses recorded arrivalWindowMinutes",
@@ -263,6 +288,16 @@ check(
     customerFacingPortalMessageStatus("FAILED") === null &&
     customerFacingPortalMessageStatus("DRAFT") === null &&
     !isPortalCustomerVisibleMessageStatus("QUEUED"),
+);
+check(
+  "EMAIL/SMS/PORTAL are the only customer-visible channels",
+  isPortalCustomerVisibleMessageChannel("EMAIL") &&
+    isPortalCustomerVisibleMessageChannel("SMS") &&
+    isPortalCustomerVisibleMessageChannel("PORTAL") &&
+    !isPortalCustomerVisibleMessageChannel("MANUAL") &&
+    !isPortalCustomerVisibleMessageChannel("SYSTEM") &&
+    !isPortalCustomerVisibleMessageChannel("PHONE") &&
+    PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS.join(",") === "EMAIL,SMS,PORTAL",
 );
 check(
   "Invoice SENT is Outstanding, not Paid",
@@ -454,7 +489,7 @@ async function seedMessage(input) {
       businessId: input.businessId,
       customerId: input.customerId,
       direction: input.direction ?? "OUTBOUND",
-      channel: "SMS",
+      channel: input.channel ?? "SMS",
       purpose: input.purpose ?? "JOB_UPDATE",
       relatedType: input.relatedType ?? "JOB",
       relatedId: input.relatedId,
@@ -498,11 +533,18 @@ try {
     withEstimate: true,
     status: "COMPLETED",
   });
+  const jobA2 = await seedJob(alpha, customerA, {
+    projectToken: randomUUID(),
+    withEstimate: true,
+    status: "IN_PROGRESS",
+    requestSummary: "Unrelated same-customer job",
+  });
 
   await seedMessage({
     businessId: alpha.id,
     customerId: customerA.id,
     relatedId: jobA.job.id,
+    channel: "SMS",
     body: "Alpha owned appointment reminder",
     status: "SENT",
     purpose: "APPOINTMENT_REMINDER",
@@ -511,9 +553,65 @@ try {
     businessId: alpha.id,
     customerId: customerA.id,
     relatedId: jobA.job.id,
+    channel: "SMS",
     body: "Alpha owned delivered invoice note",
     status: "DELIVERED",
     purpose: "INVOICE_READY",
+  });
+  await seedMessage({
+    businessId: alpha.id,
+    customerId: customerA.id,
+    relatedId: jobA.job.id,
+    channel: "EMAIL",
+    body: "Alpha owned email estimate ready",
+    status: "SENT",
+    purpose: "ESTIMATE_READY",
+  });
+  await seedMessage({
+    businessId: alpha.id,
+    customerId: customerA.id,
+    relatedId: jobA.job.id,
+    channel: "PORTAL",
+    body: "Alpha owned portal project update",
+    status: "SENT",
+    purpose: "JOB_UPDATE",
+  });
+  await seedMessage({
+    businessId: alpha.id,
+    customerId: customerA.id,
+    relatedId: jobA.job.id,
+    channel: "MANUAL",
+    body: "Alpha manual owner note must stay hidden",
+    status: "SENT",
+    purpose: "OWNER_FOLLOW_UP",
+  });
+  await seedMessage({
+    businessId: alpha.id,
+    customerId: customerA.id,
+    relatedId: jobA.job.id,
+    channel: "SYSTEM",
+    body: "Alpha system log must stay hidden",
+    status: "SENT",
+    purpose: "JOB_UPDATE",
+  });
+  await seedMessage({
+    businessId: alpha.id,
+    customerId: customerA.id,
+    relatedId: jobA.job.id,
+    channel: "PHONE",
+    body: "Alpha phone log must stay hidden",
+    status: "SENT",
+    purpose: "MANUAL_PHONE",
+  });
+  await seedMessage({
+    businessId: alpha.id,
+    customerId: customerA.id,
+    relatedId: jobA.job.id,
+    direction: "INBOUND",
+    channel: "EMAIL",
+    body: "Alpha inbound email must stay hidden",
+    status: "SENT",
+    purpose: "JOB_UPDATE",
   });
   await seedMessage({
     businessId: alpha.id,
@@ -525,8 +623,18 @@ try {
   });
   await seedMessage({
     businessId: alpha.id,
+    customerId: customerA.id,
+    relatedId: jobA2.job.id,
+    channel: "EMAIL",
+    body: "Unrelated same-customer leak body",
+    status: "SENT",
+    purpose: "JOB_UPDATE",
+  });
+  await seedMessage({
+    businessId: alpha.id,
     customerId: sibling.id,
     relatedId: jobSibling.job.id,
+    channel: "SMS",
     body: "Sibling secret leak body",
     status: "DELIVERED",
     purpose: "JOB_UPDATE",
@@ -535,6 +643,7 @@ try {
     businessId: beta.id,
     customerId: foreign.id,
     relatedId: jobForeign.job.id,
+    channel: "SMS",
     body: "Foreign secret leak body",
     status: "DELIVERED",
     purpose: "JOB_UPDATE",
@@ -601,16 +710,71 @@ try {
     prisma,
     randomUUID(),
   );
+  const otherJobMessages = await loadPortalCustomerCommunications(
+    prisma,
+    jobA2.job.projectToken,
+  );
   check(
-    "Owned token sees only this customer's SENT/DELIVERED project messages",
-    alphaMessages.length === 2 &&
+    "Owned token sees only this customer's outbound SENT/DELIVERED EMAIL/SMS/PORTAL messages",
+    alphaMessages.length === 4 &&
       alphaMessages.some((row) => row.body.includes("Alpha owned appointment reminder")) &&
       alphaMessages.some((row) => row.body.includes("Alpha owned delivered invoice note")) &&
+      alphaMessages.some((row) => row.body.includes("Alpha owned email estimate ready")) &&
+      alphaMessages.some((row) => row.body.includes("Alpha owned portal project update")) &&
+      alphaMessages.every((row) => row.direction === "OUTBOUND") &&
+      alphaMessages.every((row) => ["EMAIL", "SMS", "PORTAL"].includes(row.channel)) &&
       alphaMessages.every((row) => row.statusLabel === "Sent" || row.statusLabel === "Delivered"),
+  );
+  check(
+    "EMAIL + SENT matching Job renders",
+    alphaMessages.some(
+      (row) =>
+        row.channel === "EMAIL" &&
+        row.statusLabel === "Sent" &&
+        row.body.includes("Alpha owned email estimate ready"),
+    ),
+  );
+  check(
+    "SMS + DELIVERED matching Job renders",
+    alphaMessages.some(
+      (row) =>
+        row.channel === "SMS" &&
+        row.statusLabel === "Delivered" &&
+        row.body.includes("Alpha owned delivered invoice note"),
+    ),
+  );
+  check(
+    "PORTAL + SENT matching Job renders",
+    alphaMessages.some(
+      (row) =>
+        row.channel === "PORTAL" &&
+        row.statusLabel === "Sent" &&
+        row.body.includes("Alpha owned portal project update"),
+    ),
+  );
+  check(
+    "MANUAL + SENT matching Job does not render",
+    alphaMessages.every((row) => !row.body.includes("manual owner note must stay hidden")),
+  );
+  check(
+    "SYSTEM + SENT matching Job does not render",
+    alphaMessages.every((row) => !row.body.includes("system log must stay hidden")),
+  );
+  check(
+    "PHONE notes and inbound rows do not render",
+    alphaMessages.every((row) => !row.body.includes("phone log must stay hidden")) &&
+      alphaMessages.every((row) => !row.body.includes("inbound email must stay hidden")) &&
+      alphaMessages.every((row) => row.direction === "OUTBOUND"),
   );
   check(
     "DRAFT is not shown as a customer-visible message",
     alphaMessages.every((row) => !row.body.includes("draft should stay hidden")),
+  );
+  check(
+    "Unrelated same-customer message cannot leak into this project token",
+    alphaMessages.every((row) => !row.body.includes("Unrelated same-customer leak body")) &&
+      otherJobMessages.length === 1 &&
+      otherJobMessages[0].body.includes("Unrelated same-customer leak body"),
   );
   check(
     "Sibling customer cannot leak into Alpha's portal messages",
@@ -735,6 +899,21 @@ try {
         ownedBody.includes("Alpha owned appointment reminder") &&
           ownedBody.includes("Sent") &&
           ownedBody.includes("Alpha owned delivered invoice note"),
+      );
+      check(
+        "EMAIL/SMS/PORTAL customer-facing deliveries render",
+        ownedBody.includes("Alpha owned email estimate ready") &&
+          ownedBody.includes("Alpha owned delivered invoice note") &&
+          ownedBody.includes("Alpha owned portal project update"),
+      );
+      check(
+        "MANUAL/SYSTEM/PHONE/inbound/unrelated bodies stay hidden",
+        !ownedBody.includes("Alpha manual owner note must stay hidden") &&
+          !ownedBody.includes("Alpha system log must stay hidden") &&
+          !ownedBody.includes("Alpha phone log must stay hidden") &&
+          !ownedBody.includes("Alpha inbound email must stay hidden") &&
+          !ownedBody.includes("Unrelated same-customer leak body") &&
+          !ownedBody.includes("sent or received"),
       );
       check(
         "DRAFT communication is absent",

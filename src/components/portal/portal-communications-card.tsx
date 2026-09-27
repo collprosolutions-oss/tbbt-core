@@ -20,8 +20,8 @@ export function PortalCommunicationsCard({
       <CardHeader>
         <CardTitle>Messages</CardTitle>
         <CardDescription>
-          Messages we have already sent or received for this project. Sent is
-          not the same as delivered.
+          Messages we have sent for this project. Sent is not the same as
+          delivered.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
@@ -34,7 +34,6 @@ export function PortalCommunicationsCard({
             <div key={message.id} className="space-y-1 rounded-lg border p-3">
               <p className="font-medium">
                 {message.purposeLabel}
-                {message.direction === "INBOUND" ? " · From you" : ""}
                 {message.direction === "OUTBOUND" ? " · From us" : ""}
               </p>
               <p className="text-muted-foreground">

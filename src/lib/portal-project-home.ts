@@ -27,6 +27,15 @@ export const PORTAL_CUSTOMER_VISIBLE_MESSAGE_STATUSES = [
 export type PortalCustomerVisibleMessageStatus =
   (typeof PORTAL_CUSTOMER_VISIBLE_MESSAGE_STATUSES)[number];
 
+export const PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS = [
+  "EMAIL",
+  "SMS",
+  "PORTAL",
+] as const;
+
+export type PortalCustomerVisibleMessageChannel =
+  (typeof PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS)[number];
+
 export const PORTAL_FORBIDDEN_CUSTOMER_CLAIMS = [
   "Technician is on the way",
   "Your message was read",
@@ -38,6 +47,14 @@ export function isPortalCustomerVisibleMessageStatus(
   return (
     PORTAL_CUSTOMER_VISIBLE_MESSAGE_STATUSES as readonly string[]
   ).includes(status);
+}
+
+export function isPortalCustomerVisibleMessageChannel(
+  channel: string,
+): channel is PortalCustomerVisibleMessageChannel {
+  return (
+    PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS as readonly string[]
+  ).includes(channel);
 }
 
 /** SENT is never labeled Delivered. No read-receipt language exists here. */
@@ -284,6 +301,10 @@ const PORTAL_COMMUNICATION_SELECT = {
  * Resolves the Job from projectToken, then loads this customer + this
  * business + this job/estimate/invoice/request graph. Sibling customers
  * and foreign businesses cannot appear.
+ *
+ * SENT/DELIVERED alone is not enough: MANUAL/SYSTEM/PHONE (and inbound)
+ * rows can persist as SENT without being a customer-facing delivery.
+ * Portal bodies require outbound EMAIL, SMS, or PORTAL plus SENT/DELIVERED.
  */
 export async function loadPortalCustomerCommunications(
   db: PortalDb,
@@ -328,6 +349,8 @@ export async function loadPortalCustomerCommunications(
     where: {
       businessId: job.businessId,
       customerId: job.customerId,
+      direction: "OUTBOUND",
+      channel: { in: [...PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS] },
       status: { in: [...PORTAL_CUSTOMER_VISIBLE_MESSAGE_STATUSES] },
       OR: relatedOr,
     },
@@ -337,17 +360,15 @@ export async function loadPortalCustomerCommunications(
   });
 
   return rows.flatMap((row) => {
+    if (row.direction !== "OUTBOUND") return [];
+    if (!isPortalCustomerVisibleMessageChannel(row.channel)) return [];
     const statusLabel = customerFacingPortalMessageStatus(row.status);
     if (!statusLabel) return [];
-    const direction =
-      row.direction === "INBOUND" || row.direction === "OUTBOUND"
-        ? row.direction
-        : null;
     return [
       {
         id: row.id,
         occurredAt: row.attemptedAt ?? row.createdAt,
-        direction,
+        direction: "OUTBOUND",
         channel: row.channel,
         purposeLabel: customerFacingPortalMessagePurpose(row.purpose),
         body: row.bodySnapshot,

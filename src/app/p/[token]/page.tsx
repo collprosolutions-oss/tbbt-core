@@ -14,7 +14,6 @@ import { RequestAdditionalWorkForm } from "@/components/portal/request-additiona
 import { getBusinessLogoSrc } from "@/lib/business-branding";
 import {
   BUSINESS_PUBLIC_CONTACT_SELECT,
-  ensureBusinessPublicContactSchema,
   resolveBusinessPublicContact,
 } from "@/lib/business-contact";
 import {
@@ -114,7 +113,6 @@ export default async function CustomerProjectPortalPage({
   const { token } = await params;
   const query = await searchParams;
   await ensureAppointmentConfirmationSchema(prisma);
-  await ensureBusinessPublicContactSchema(prisma);
 
   const job = token
     ? await prisma.job.findUnique({
