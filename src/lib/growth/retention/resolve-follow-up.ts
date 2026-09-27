@@ -136,7 +136,8 @@ export async function resolveRetentionFollowUpTaskStatus(
   requireRetentionFollowUpWrite(access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_REVIEWS);
 
-  if (!isRetentionFollowUpResolveStatus(input.status)) {
+  const status = input.status;
+  if (!isRetentionFollowUpResolveStatus(status)) {
     throw new RetentionFollowUpError(RETENTION_FOLLOW_UP_UNKNOWN_STATUS_MESSAGE);
   }
 
@@ -165,13 +166,13 @@ export async function resolveRetentionFollowUpTaskStatus(
     }
     access.assertOwned(current);
     assertRetentionTaskResolvable(current);
-    if (current.status === input.status) {
+    if (current.status === status) {
       return { outcome: "UNCHANGED", followUp: recordedFollowUp(current) };
     }
 
     const updated = await tx.customerFollowUp.update({
       where: { id: current.id },
-      data: statusWriteData(input.status, current.cancelledAt),
+      data: statusWriteData(status, current.cancelledAt),
       select: followUpSelect,
     });
     return { outcome: "UPDATED", followUp: recordedFollowUp(updated) };
