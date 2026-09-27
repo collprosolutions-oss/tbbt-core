@@ -3,6 +3,7 @@ export {
   AUTOMATION_RUN_HISTORY_LIMIT,
   AUTOMATION_CENTER_DISCLAIMER,
   CONFIGURATION_RECORDED_LABEL,
+  NO_RECORDED_AUTOMATION_RULES_MESSAGE,
   UNSUPPORTED_AUTOMATION_RULE_LABEL,
 } from "@/lib/automations/types";
 export type {
@@ -18,7 +19,9 @@ export {
   SUPPORTED_AUTOMATION_RULES,
   automationPairKey,
   getSupportedAutomationDefinition,
+  getSupportedAutomationRule,
   isSupportedAutomationPair,
+  isSupportedAutomationRule,
   listSupportedAutomationPairKeys,
   listSupportedAutomationPairs,
 } from "@/lib/automations/registry";

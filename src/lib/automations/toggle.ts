@@ -1,6 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
-import { isSupportedAutomationPair } from "@/lib/automations/registry";
+import { isSupportedAutomationRule } from "@/lib/automations/registry";
 import { requireAutomationCenterAccess } from "@/lib/automations/access";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -34,12 +34,13 @@ export async function toggleOwnedAutomationRuleEnabled(
         businessId: true,
         eventType: true,
         purpose: true,
+        kind: true,
         enabled: true,
       },
     }),
   );
 
-  if (!isSupportedAutomationPair(rule.eventType, rule.purpose)) {
+  if (!isSupportedAutomationRule(rule)) {
     throw new Error(UNSUPPORTED_RULE_TOGGLE_ERROR);
   }
 

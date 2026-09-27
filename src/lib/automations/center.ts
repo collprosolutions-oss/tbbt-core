@@ -1,12 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { formatDateTime } from "@/lib/format";
-import { ensureDefaultAutomationRules } from "@/lib/automation/rules";
 import { projectSafeAutomationConfig } from "@/lib/automations/config";
-import {
-  getSupportedAutomationDefinition,
-  isSupportedAutomationPair,
-} from "@/lib/automations/registry";
+import { getSupportedAutomationRule } from "@/lib/automations/registry";
 import { requireAutomationCenterAccess } from "@/lib/automations/access";
 import {
   AUTOMATION_CENTER_DISCLAIMER,
@@ -81,8 +77,8 @@ export function projectAutomationRuleForOwner(
   timeZone?: string,
   extraConfig?: unknown,
 ): AutomationRuleProjection {
-  const supported = isSupportedAutomationPair(rule.eventType, rule.purpose);
-  const definition = getSupportedAutomationDefinition(rule.eventType, rule.purpose);
+  const definition = getSupportedAutomationRule(rule);
+  const supported = definition != null;
   const planted = extraConfig !== undefined ? extraConfig : rule.config;
   const config = projectSafeAutomationConfig(rule, planted);
 
@@ -152,7 +148,6 @@ export async function loadAutomationOwnerCenter(
   input?: { ruleId?: string | null },
 ): Promise<AutomationOwnerCenter> {
   requireAutomationCenterAccess(access);
-  await ensureDefaultAutomationRules(db, access.businessId);
 
   const rules = await db.automationRule.findMany({
     where: { businessId: access.businessId },

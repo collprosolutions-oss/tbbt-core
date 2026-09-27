@@ -164,6 +164,30 @@ export function isSupportedAutomationPair(eventType: string, purpose: string): b
   return SUPPORTED_PAIR_INDEX.has(automationPairKey(eventType, purpose));
 }
 
+/**
+ * A recorded rule is supported only when eventType, purpose, AND canonical
+ * kind match DEFAULT_AUTOMATION_RULES. Channel and delay are editable
+ * settings and are not part of identity.
+ */
+export function isSupportedAutomationRule(rule: {
+  eventType: string;
+  purpose: string;
+  kind: string;
+}): boolean {
+  const definition = getSupportedAutomationDefinition(rule.eventType, rule.purpose);
+  return Boolean(definition && definition.kind === rule.kind);
+}
+
+export function getSupportedAutomationRule(rule: {
+  eventType: string;
+  purpose: string;
+  kind: string;
+}): SupportedAutomationDefinition | null {
+  const definition = getSupportedAutomationDefinition(rule.eventType, rule.purpose);
+  if (!definition || definition.kind !== rule.kind) return null;
+  return definition;
+}
+
 export function listSupportedAutomationPairs(): readonly SupportedAutomationDefinition[] {
   return SUPPORTED_AUTOMATION_RULES;
 }

@@ -16,16 +16,18 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const { ForbiddenError, CAPABILITIES, roleHasCapability } = await import("@/lib/authorization");
 const { DEFAULT_AUTOMATION_RULES } = await import("@/lib/automation/types");
+const { ensureDefaultAutomationRules } = await import("@/lib/automation/rules");
 const {
   AUTOMATION_RUN_HISTORY_LIMIT,
   AUTOMATIONS_PATH,
   CONFIGURATION_RECORDED_LABEL,
+  NO_RECORDED_AUTOMATION_RULES_MESSAGE,
   PROCESSOR_ONLY_UNSEEDED_PURPOSES,
   UNSUPPORTED_AUTOMATION_RULE_LABEL,
   UNSUPPORTED_RULE_TOGGLE_ERROR,
   automationPairKey,
   canManageAutomationCenter,
-  isSupportedAutomationPair,
+  isSupportedAutomationRule,
   listSupportedAutomationPairKeys,
   listSupportedAutomationPairs,
   loadAutomationOwnerCenter,
@@ -191,10 +193,24 @@ try {
   );
   check(
     "Existing engine is reused, not copied",
-    centerSrc.includes('from "@/lib/automation/rules"') &&
-      registrySrc.includes("DEFAULT_AUTOMATION_RULES") &&
+    registrySrc.includes("DEFAULT_AUTOMATION_RULES") &&
       !centerSrc.includes("createMany") &&
+      !centerSrc.includes("ensureDefaultAutomationRules") &&
       !toggleSrc.includes("applyCommunicationRule"),
+  );
+  check(
+    "10/11. Page load does not initialize default rules",
+    !centerSrc.includes("ensureDefaultAutomationRules") &&
+      !pageSrc.includes("ensureDefaultAutomationRules") &&
+      !actionSrc.includes("ensureDefaultAutomationRules") &&
+      uiSrc.includes("NO_RECORDED_AUTOMATION_RULES_MESSAGE"),
+  );
+  check(
+    "Supported classification requires canonical kind",
+    registrySrc.includes("isSupportedAutomationRule") &&
+      registrySrc.includes("definition.kind === rule.kind") &&
+      toggleSrc.includes("isSupportedAutomationRule(rule)") &&
+      centerSrc.includes("getSupportedAutomationRule(rule)"),
   );
   check(
     "No request-time DDL in owner-center files",
@@ -238,10 +254,41 @@ try {
       supportedKeys.length === DEFAULT_AUTOMATION_RULES.length,
   );
   check(
-    "Processor-only JOB_UPDATE is not listed as supported",
+    "9. Processor-only JOB_UPDATE is not listed as supported",
     PROCESSOR_ONLY_UNSEEDED_PURPOSES.includes("JOB_UPDATE") &&
       !supportedKeys.some((key) => key.endsWith(":JOB_UPDATE")) &&
+      !isSupportedAutomationRule({
+        eventType: "APPOINTMENT_SCHEDULED",
+        purpose: "JOB_UPDATE",
+        kind: "COMMUNICATION",
+      }) &&
       processorSrc.includes('rule.purpose === "JOB_UPDATE"'),
+  );
+  check(
+    "1. Canonical eventType + purpose + kind is supported",
+    isSupportedAutomationRule({
+      eventType: "ESTIMATE_SENT",
+      purpose: "ESTIMATE_READY",
+      kind: "COMMUNICATION",
+    }) &&
+      isSupportedAutomationRule({
+        eventType: "JOB_COMPLETED",
+        purpose: "JOB_FOLLOW_UP",
+        kind: "ACTION_SUGGESTION",
+      }),
+  );
+  check(
+    "2. Correct pair with wrong kind is unsupported",
+    !isSupportedAutomationRule({
+      eventType: "ESTIMATE_SENT",
+      purpose: "ESTIMATE_READY",
+      kind: "ACTION_SUGGESTION",
+    }) &&
+      !isSupportedAutomationRule({
+        eventType: "JOB_COMPLETED",
+        purpose: "JOB_FOLLOW_UP",
+        kind: "COMMUNICATION",
+      }),
   );
   check(
     "Registry does not invent custom pairs",
@@ -298,12 +345,12 @@ try {
       !canManageAutomationCenter(accessMemberA),
   );
   await expectError(
-    "3. MEMBER cannot load office-wide automation management",
+    "12. MEMBER cannot load office-wide automation management",
     () => loadAutomationOwnerCenter(prisma, accessMemberA),
     (error) => error instanceof ForbiddenError,
   );
   await expectError(
-    "3. MEMBER cannot toggle rules",
+    "12. MEMBER cannot toggle rules",
     () =>
       toggleOwnedAutomationRuleEnabled(prisma, accessMemberA, {
         ruleId: "not-used",
@@ -312,15 +359,47 @@ try {
     (error) => error instanceof ForbiddenError,
   );
 
+  console.log("\nREAD-ONLY LOAD — zero recorded rules");
+  const emptyRuleCountBefore = await prisma.automationRule.count({ where: { businessId: businessA.id } });
+  const emptyRunCountBefore = await prisma.automationRun.count({ where: { businessId: businessA.id } });
+  const emptyCenter = await loadAutomationOwnerCenter(prisma, accessOwnerA);
+  const emptyRuleCountAfter = await prisma.automationRule.count({ where: { businessId: businessA.id } });
+  const emptyRunCountAfter = await prisma.automationRun.count({ where: { businessId: businessA.id } });
+  const emptyCenterAgain = await loadAutomationOwnerCenter(prisma, accessOwnerA);
+  const emptyRuleCountRepeat = await prisma.automationRule.count({ where: { businessId: businessA.id } });
+  const emptyRunCountRepeat = await prisma.automationRun.count({ where: { businessId: businessA.id } });
+  check(
+    "1. Business with zero AutomationRule rows loads an empty center",
+    emptyCenter.rules.length === 0 &&
+      emptyRuleCountBefore === 0 &&
+      NO_RECORDED_AUTOMATION_RULES_MESSAGE === "No automation rules are recorded for this business.",
+  );
+  check("10. Loading center creates zero AutomationRule rows", emptyRuleCountAfter === 0);
+  check("11. Loading center creates zero AutomationRun rows", emptyRunCountAfter === emptyRunCountBefore);
+  check(
+    "Repeated center loads remain read-only",
+    emptyCenterAgain.rules.length === 0 &&
+      emptyRuleCountRepeat === 0 &&
+      emptyRunCountRepeat === emptyRunCountBefore,
+  );
+
+  await ensureDefaultAutomationRules(prisma, businessA.id);
+  await ensureDefaultAutomationRules(prisma, businessB.id);
+
   const centerA = await loadAutomationOwnerCenter(prisma, accessOwnerA);
   const centerB = await loadAutomationOwnerCenter(prisma, accessOwnerB);
   const centerAdmin = await loadAutomationOwnerCenter(prisma, accessAdminA);
 
+  const seededRuleCount = await prisma.automationRule.count({ where: { businessId: businessA.id } });
+  const seededRunCount = await prisma.automationRun.count({ where: { businessId: businessA.id } });
+  await loadAutomationOwnerCenter(prisma, accessOwnerA);
   check(
-    "1. Owner A sees only own rules",
+    "5. Business with existing rules reads them normally",
     centerA.rules.length > 0 &&
       centerA.rules.every((rule) => !centerB.rules.some((other) => other.id === rule.id)) &&
-      centerA.businessId === businessA.id,
+      centerA.businessId === businessA.id &&
+      (await prisma.automationRule.count({ where: { businessId: businessA.id } })) === seededRuleCount &&
+      (await prisma.automationRun.count({ where: { businessId: businessA.id } })) === seededRunCount,
   );
   check(
     "2. ADMIN sees the same owned rule set as OWNER",
@@ -349,9 +428,57 @@ try {
       purpose: "ESTIMATE_READY",
     },
   });
-  check("Seeded supported rules exist for toggle proofs", Boolean(disabledSupported && enabledSupported && foreignSupported));
+  const reminderSupported = await prisma.automationRule.findFirst({
+    where: {
+      businessId: businessA.id,
+      eventType: "APPOINTMENT_SCHEDULED",
+      purpose: "APPOINTMENT_REMINDER",
+    },
+  });
+  check("Seeded supported rules exist for toggle proofs", Boolean(disabledSupported && enabledSupported && foreignSupported && reminderSupported));
   check("Seeded disabled supported rule starts disabled", disabledSupported?.enabled === false);
   check("Seeded enabled supported rule starts enabled", enabledSupported?.enabled === true);
+
+  const customizedChannel = await prisma.automationRule.update({
+    where: { id: disabledSupported.id },
+    data: { channel: "EMAIL" },
+  });
+  const customizedDelay = await prisma.automationRule.update({
+    where: { id: reminderSupported.id },
+    data: { delayMinutes: 180 },
+  });
+
+  const businessKind = await prisma.business.create({
+    data: { name: "Kind Center", slug: `kind-center-${randomUUID()}`, tradeCode: "HANDYMAN" },
+  });
+  const memKind = await prisma.membership.create({
+    data: { userId: ownerA.id, businessId: businessKind.id, role: "OWNER" },
+  });
+  const accessKind = makeAccess(businessKind.id, "OWNER", memKind.id, ownerA.id);
+  const wrongKindEstimate = await prisma.automationRule.create({
+    data: {
+      businessId: businessKind.id,
+      eventType: "ESTIMATE_SENT",
+      purpose: "ESTIMATE_READY",
+      kind: "ACTION_SUGGESTION",
+      channel: "SMS",
+      delayMinutes: 0,
+      templateKey: "estimate-ready",
+      enabled: false,
+    },
+  });
+  const wrongKindJob = await prisma.automationRule.create({
+    data: {
+      businessId: businessKind.id,
+      eventType: "JOB_COMPLETED",
+      purpose: "JOB_FOLLOW_UP",
+      kind: "COMMUNICATION",
+      channel: "NONE",
+      delayMinutes: 0,
+      templateKey: "job-follow-up-opportunity",
+      enabled: false,
+    },
+  });
 
   const plantedSecret = `planted-webhook-secret-${randomUUID()}`;
   const unknownRule = await prisma.automationRule.create({
@@ -450,7 +577,7 @@ try {
 
   console.log("\nTOGGLE — supported, unsupported, foreign, no execution");
   await expectError(
-    "4. Foreign rule cannot be toggled",
+    "13. Foreign rule cannot be toggled",
     () =>
       toggleOwnedAutomationRuleEnabled(prisma, accessOwnerA, {
         ruleId: foreignSupported.id,
@@ -461,7 +588,7 @@ try {
       error.message === "Record is not in the authorized business workspace.",
   );
   const foreignStill = await prisma.automationRule.findUnique({ where: { id: foreignSupported.id } });
-  check("4. Foreign rule stayed unchanged", foreignStill.enabled === false);
+  check("13. Foreign rule stayed unchanged", foreignStill.enabled === false);
 
   const enabled = await toggleOwnedAutomationRuleEnabled(prisma, accessOwnerA, {
     ruleId: disabledSupported.id,
@@ -483,7 +610,7 @@ try {
   check("9. Prior runs remain unchanged", JSON.stringify(afterToggleRuns) === JSON.stringify(beforeRuns));
 
   await expectError(
-    "10. Unknown trigger/action rule cannot be enabled from this UI",
+    "8. Unknown trigger/action rule cannot be enabled from this UI",
     () =>
       toggleOwnedAutomationRuleEnabled(prisma, accessOwnerA, {
         ruleId: unknownRule.id,
@@ -492,10 +619,51 @@ try {
     (error) => error instanceof Error && error.message === UNSUPPORTED_RULE_TOGGLE_ERROR,
   );
   const unknownStill = await prisma.automationRule.findUnique({ where: { id: unknownRule.id } });
-  check("10. Unknown rule stayed disabled", unknownStill.enabled === false);
+  check("8. Unknown rule stayed disabled", unknownStill.enabled === false);
 
   const afterUnknownToggleRuns = await prisma.automationRun.count();
   check("Unknown toggle still created no runs", afterUnknownToggleRuns === beforeRunCount);
+
+  const kindCenter = await loadAutomationOwnerCenter(prisma, accessKind);
+  const wrongEstimateProjection = kindCenter.rules.find((rule) => rule.id === wrongKindEstimate.id);
+  const wrongJobProjection = kindCenter.rules.find((rule) => rule.id === wrongKindJob.id);
+  check(
+    "2. Wrong-kind recorded rows are unsupported and not reinterpreted",
+    wrongEstimateProjection?.supported === false &&
+      wrongEstimateProjection.canToggle === false &&
+      wrongEstimateProjection.label === UNSUPPORTED_AUTOMATION_RULE_LABEL &&
+      !wrongEstimateProjection.sentence.startsWith("When ") &&
+      wrongJobProjection?.supported === false &&
+      wrongJobProjection.canToggle === false &&
+      wrongJobProjection.label === UNSUPPORTED_AUTOMATION_RULE_LABEL,
+  );
+  await expectError(
+    "3. Wrong-kind row cannot be enabled",
+    () =>
+      toggleOwnedAutomationRuleEnabled(prisma, accessKind, {
+        ruleId: wrongKindEstimate.id,
+        enabled: true,
+      }),
+    (error) => error instanceof Error && error.message === UNSUPPORTED_RULE_TOGGLE_ERROR,
+  );
+  const wrongKindStill = await prisma.automationRule.findUnique({ where: { id: wrongKindEstimate.id } });
+  check("4. Wrong-kind row remains unchanged after failed toggle", wrongKindStill.enabled === false && wrongKindStill.kind === "ACTION_SUGGESTION");
+
+  const customizedCenter = await loadAutomationOwnerCenter(prisma, accessOwnerA);
+  const customizedChannelProjection = customizedCenter.rules.find((rule) => rule.id === customizedChannel.id);
+  const customizedDelayProjection = customizedCenter.rules.find((rule) => rule.id === customizedDelay.id);
+  check(
+    "6. Customized channel does not make a canonical rule unsupported",
+    customizedChannelProjection?.supported === true &&
+      customizedChannelProjection.canToggle === true &&
+      customizedChannel.channel === "EMAIL",
+  );
+  check(
+    "7. Customized delay does not make a canonical rule unsupported",
+    customizedDelayProjection?.supported === true &&
+      customizedDelayProjection.canToggle === true &&
+      customizedDelay.delayMinutes === 180,
+  );
 
   console.log("\nPROJECTION — labels, secrets, last-run truth, isolation");
   const reloaded = await loadAutomationOwnerCenter(prisma, accessOwnerA, {
@@ -532,7 +700,7 @@ try {
       !JSON.stringify(reloaded).includes("foreign-run-must-not-leak"),
   );
   check(
-    "17. Run history is bounded",
+    "14. Run history is bounded",
     reloaded.selectedHistory.length === AUTOMATION_RUN_HISTORY_LIMIT &&
       AUTOMATION_RUN_HISTORY_LIMIT === 10 &&
       reloaded.selectedHistory[0].id === lastRun.id,
@@ -579,7 +747,7 @@ try {
     { webhookSecret: plantedSecret },
   );
   check(
-    "13/14. Planted secret is absent from config projection",
+    "15. Planted secret is absent from config projection",
     !projectionTextContains(secretProjection, plantedSecret) &&
       !projectionTextContains(secretRuleProjection, plantedSecret) &&
       !JSON.stringify(secretRuleProjection.config).includes(plantedSecret) &&
@@ -588,7 +756,7 @@ try {
   );
   check(
     "13. Supported config uses whitelist labels, not raw JSON",
-    supportedProjection.config.channelLabel === "Text message (SMS)" &&
+    supportedProjection.config.channelLabel === "Email" &&
       !JSON.stringify(supportedProjection.config).includes(plantedSecret) &&
       supportedProjection.config.summary !== "",
   );
@@ -605,8 +773,8 @@ try {
     existingActionStillProcesses && !existingActionSrc.includes("toggleOwnedAutomationRuleEnabled"),
   );
 
-  console.log("\n18. No schema / request-time DDL");
-  check("Owner-center libraries do not migrate", !ownerLibSrc.includes("db.push") && !ownerLibSrc.includes("migrate"));
+  console.log("\n16. No schema / request-time DDL");
+  check("16. Owner-center libraries do not migrate", !ownerLibSrc.includes("db.push") && !ownerLibSrc.includes("migrate"));
   check("AutomationRule model still uses eventType/purpose", schemaSrc.includes("eventType") && schemaSrc.includes("purpose"));
 } catch (error) {
   console.error(error);

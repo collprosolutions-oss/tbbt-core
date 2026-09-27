@@ -10,6 +10,9 @@ export const UNSUPPORTED_AUTOMATION_RULE_LABEL = "Unsupported / recorded rule";
 
 export const CONFIGURATION_RECORDED_LABEL = "Configuration recorded";
 
+export const NO_RECORDED_AUTOMATION_RULES_MESSAGE =
+  "No automation rules are recorded for this business.";
+
 export type AutomationPairKey = `${string}:${string}`;
 
 export type SupportedAutomationDefinition = {

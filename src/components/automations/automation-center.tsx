@@ -8,7 +8,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { AUTOMATIONS_PATH, type AutomationOwnerCenter, type AutomationRunProjection } from "@/lib/automations";
+import {
+  AUTOMATIONS_PATH,
+  NO_RECORDED_AUTOMATION_RULES_MESSAGE,
+  type AutomationOwnerCenter,
+  type AutomationRunProjection,
+} from "@/lib/automations";
 
 function enabledVariant(enabled: boolean) {
   return enabled ? ("success" as const) : ("outline" as const);
@@ -69,7 +74,7 @@ export function AutomationCenterView({ center }: { center: AutomationOwnerCenter
         <CardContent>
           {center.rules.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No automation rules are recorded for this business yet.
+              {NO_RECORDED_AUTOMATION_RULES_MESSAGE}
             </p>
           ) : (
             <ul className="space-y-3">
@@ -104,7 +109,7 @@ export function AutomationCenterView({ center }: { center: AutomationOwnerCenter
                   </div>
                   <p className="mt-2 text-xs text-muted-foreground">
                     Recorded trigger {rule.recordedTrigger}. Recorded action {rule.recordedAction}.
-                    Updated {rule.updatedAt}.
+                    Recorded kind {rule.kind}. Updated {rule.updatedAt}.
                   </p>
                   <p className="mt-1 text-sm">{rule.configSummary}</p>
                   {rule.lastRun ? (
