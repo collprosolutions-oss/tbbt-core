@@ -118,7 +118,8 @@
     "test:materials-suppliers": "node --experimental-strip-types scripts/check-materials-suppliers.mjs",
     "test:communications-department": "node --experimental-strip-types scripts/check-communications-department.mjs",
     "test:growth-department": "node --experimental-strip-types scripts/check-growth-department.mjs",
-    "test:business-protection": "node --experimental-strip-types scripts/check-business-protection.mjs"
+    "test:business-protection": "node --experimental-strip-types scripts/check-business-protection.mjs",
+    "test:business-timeline": "node --experimental-strip-types scripts/check-business-timeline.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",
