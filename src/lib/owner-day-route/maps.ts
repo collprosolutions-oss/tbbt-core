@@ -6,7 +6,7 @@ import type { OwnerDayRouteMapsHandoff } from "@/lib/owner-day-route/types";
 
 /**
  * External Google Maps directions URL from recorded addresses only.
- * No geocoding provider, no traffic, no ETA.
+ * Addresses stay as stored text. This does not call a mapping provider.
  */
 export function buildOwnerDayRouteMapsHref(addresses: readonly string[]): string | null {
   const queries = addresses.map((address) => address.trim()).filter(Boolean);

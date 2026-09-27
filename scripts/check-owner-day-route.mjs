@@ -69,12 +69,7 @@ const uiFiles = [
   "src/app/(app)/today/day-route/page.tsx",
   "src/components/today/owner-day-route.tsx",
 ];
-const displaySource = [
-  ...libFiles.filter((file) => !file.endsWith("constants.ts")),
-  ...uiFiles,
-]
-  .map(readSrc)
-  .join("\n");
+const displaySource = uiFiles.map(readSrc).join("\n");
 const allFeatureSource = [...libFiles, ...uiFiles].map(readSrc).join("\n");
 const loadSrc = readSrc("src/lib/owner-day-route/load.ts");
 const pageSrc = readSrc("src/app/(app)/today/day-route/page.tsx");
