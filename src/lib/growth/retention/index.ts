@@ -82,6 +82,12 @@ export {
   type RecordedRetentionFollowUp,
 } from "@/lib/growth/retention/record-follow-up";
 
+export {
+  CUSTOMER_FOLLOW_UP_ORIGINS,
+  isRetentionFollowUpTask,
+  customerFollowUpDueScanWhere,
+} from "@/lib/customer-follow-up-origin";
+
 export type {
   RetentionCandidate,
   RetentionFollowUpRow,

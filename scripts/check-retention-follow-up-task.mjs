@@ -27,6 +27,14 @@ const { ForbiddenError } = await import("@/lib/authorization");
 const { APP_NAV } = await import("@/lib/nav");
 const { businessScope, assertBusinessRecord } = await import("@/lib/access-scope");
 const {
+  ensureDefaultAutomationRules,
+  emitBusinessEvent,
+  processPendingAutomationRuns,
+  queueAutomationRunsForEvent,
+  scanScheduledBusinessEvents,
+} = await import("@/lib/automation");
+const { CUSTOMER_FOLLOW_UP_ORIGINS } = await import("@/lib/customer-follow-up-origin");
+const {
   RETENTION_FOLLOW_UP_FOREIGN_CUSTOMER_MESSAGE,
   RETENTION_FOLLOW_UP_FOREIGN_JOB_MESSAGE,
   RETENTION_FOLLOW_UP_JOB_CUSTOMER_MISMATCH_MESSAGE,
@@ -66,6 +74,9 @@ const actionSrc = readSrc("src/app/actions/retention.ts");
 const uiSrc = readSrc("src/components/growth/retention/retention-center.tsx");
 const loadSrc = readSrc("src/lib/growth/retention/load.ts");
 const navSrc = readSrc("src/lib/nav.ts");
+const scanSrc = readSrc("src/lib/automation/scan.ts");
+const processorSrc = readSrc("src/lib/automation/processor.ts");
+const emailSrc = readSrc("src/lib/automation/email.ts");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -91,6 +102,11 @@ if (push.status !== 0) {
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
+await prisma.$executeRawUnsafe(`
+  CREATE UNIQUE INDEX IF NOT EXISTS "CustomerFollowUp_retention_task_business_customer_job_key"
+  ON "CustomerFollowUp"("businessId", "customerId", "jobId")
+  WHERE "origin" = 'RETENTION_TASK' AND "jobId" IS NOT NULL
+`);
 
 let failures = 0;
 function check(label, condition) {
@@ -154,6 +170,20 @@ try {
     !/createCustomerFollowUp|sendCustomerFollowUp|attemptJobFollowUpSms|attemptRepeatFollowUpSms|attemptOwnedCustomerEmail|emitAndProcessBusinessEvent/.test(
       writeSrc,
     ) && !/sendCustomerFollowUp|attemptJobFollowUpSms|emitAndProcessBusinessEvent/.test(actionSrc),
+  );
+  check(
+    "Due scan excludes RETENTION_TASK origin",
+    scanSrc.includes("customerFollowUpDueScanWhere") &&
+      readSrc("src/lib/customer-follow-up-origin.ts").includes("RETENTION_TASK"),
+  );
+  check(
+    "Processor and email refuse to send retention tasks",
+    processorSrc.includes("isRetentionFollowUpTask") && emailSrc.includes("isRetentionFollowUpTask"),
+  );
+  check(
+    "Write path records RETENTION_TASK and does not reopen FAILED",
+    writeSrc.includes("CUSTOMER_FOLLOW_UP_ORIGINS.RETENTION_TASK") &&
+      !/status === "FAILED" \? "OPEN"/.test(writeSrc),
   );
   check(
     "UI has no send or message-body controls",
@@ -411,6 +441,7 @@ try {
     created.outcome === "CREATED" &&
       created.followUp.status === "OPEN" &&
       created.followUp.kind === "JOB_COMPLETE" &&
+      created.followUp.origin === CUSTOMER_FOLLOW_UP_ORIGINS.RETENTION_TASK &&
       created.followUp.businessId === businessA.id &&
       created.followUp.customerId === customer.id &&
       created.followUp.jobId === completedNoReview.id,
@@ -460,30 +491,46 @@ try {
       second.followUp.status === "OPEN",
   );
   check(
-    "No duplicate CustomerFollowUp for the same finding",
+    "No duplicate retention task for the same finding",
     (await prisma.customerFollowUp.count({
-      where: { businessId: businessA.id, customerId: customer.id, jobId: completedNoReview.id },
+      where: {
+        businessId: businessA.id,
+        customerId: customer.id,
+        jobId: completedNoReview.id,
+        origin: CUSTOMER_FOLLOW_UP_ORIGINS.RETENTION_TASK,
+      },
     })) === 1,
   );
 
-  const failedExisting = await prisma.customerFollowUp.update({
-    where: { id: created.followUp.id },
-    data: { status: "FAILED" },
+  const failedCommunication = await prisma.customerFollowUp.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      jobId: completedNoReview.id,
+      kind: "JOB_COMPLETE",
+      status: "FAILED",
+      origin: CUSTOMER_FOLLOW_UP_ORIGINS.COMMUNICATION,
+      lastEmailStatus: "FAILED",
+      lastSmsStatus: "FAILED",
+      createdByMembershipId: ownerMem.id,
+    },
   });
-  const reopened = await recordRetentionFollowUpTask(prisma, ownerA, {
+  const afterFailedCommunication = await recordRetentionFollowUpTask(prisma, ownerA, {
     customerId: customer.id,
     jobId: completedNoReview.id,
     group: "NO_REVIEW_REQUEST",
   });
+  const failedAgain = await prisma.customerFollowUp.findUniqueOrThrow({
+    where: { id: failedCommunication.id },
+  });
   check(
-    "FAILED row is updated back to OPEN without a duplicate",
-    failedExisting.status === "FAILED" &&
-      reopened.outcome === "UPDATED" &&
-      reopened.followUp.id === created.followUp.id &&
-      reopened.followUp.status === "OPEN" &&
-      (await prisma.customerFollowUp.count({
-        where: { businessId: businessA.id, customerId: customer.id, jobId: completedNoReview.id },
-      })) === 1,
+    "Existing FAILED communication follow-up is not reopened",
+    afterFailedCommunication.outcome === "UPDATED" &&
+      afterFailedCommunication.followUp.id === created.followUp.id &&
+      afterFailedCommunication.followUp.status === "OPEN" &&
+      failedAgain.status === "FAILED" &&
+      failedAgain.origin === CUSTOMER_FOLLOW_UP_ORIGINS.COMMUNICATION &&
+      failedAgain.lastEmailStatus === "FAILED",
   );
 
   await prisma.customerFollowUp.update({
@@ -496,14 +543,23 @@ try {
     group: "NO_REVIEW_REQUEST",
   });
   check(
-    "Existing SENT row is reused and not rewritten to a new send",
+    "Existing SENT retention task is reused and not rewritten to a new send",
     sentAgain.outcome === "UPDATED" &&
       sentAgain.followUp.id === created.followUp.id &&
       sentAgain.followUp.status === "SENT" &&
       (await prisma.customerFollowUp.count({
-        where: { businessId: businessA.id, customerId: customer.id, jobId: completedNoReview.id },
+        where: {
+          businessId: businessA.id,
+          customerId: customer.id,
+          jobId: completedNoReview.id,
+          origin: CUSTOMER_FOLLOW_UP_ORIGINS.RETENTION_TASK,
+        },
       })) === 1,
   );
+  await prisma.customerFollowUp.update({
+    where: { id: created.followUp.id },
+    data: { status: "OPEN", sentAt: null },
+  });
 
   console.log("\nTEST — stale finding and no-later-job kind");
   const pastCustomer = await prisma.customer.create({
@@ -568,6 +624,125 @@ try {
     (await prisma.customerFollowUp.count({
       where: { businessId: businessA.id, customerId: otherLocal.id, jobId: otherLocalJob.id },
     })) === 0,
+  );
+
+  console.log("\nTEST — enabled-rule scan and concurrent submissions");
+  const commOpen = await prisma.customerFollowUp.create({
+    data: {
+      businessId: businessA.id,
+      customerId: otherLocal.id,
+      jobId: otherLocalJob.id,
+      kind: "JOB_COMPLETE",
+      status: "OPEN",
+      origin: CUSTOMER_FOLLOW_UP_ORIGINS.COMMUNICATION,
+      createdByMembershipId: ownerMem.id,
+    },
+  });
+  await ensureDefaultAutomationRules(prisma, businessA.id);
+  const jobFollowRule = await prisma.automationRule.findFirst({
+    where: { businessId: businessA.id, eventType: "CUSTOMER_FOLLOW_UP_DUE", purpose: "JOB_FOLLOW_UP" },
+  });
+  const repeatFollowRule = await prisma.automationRule.findFirst({
+    where: { businessId: businessA.id, eventType: "CUSTOMER_FOLLOW_UP_DUE", purpose: "REPEAT_FOLLOW_UP" },
+  });
+  await prisma.automationRule.update({
+    where: { id: jobFollowRule.id },
+    data: { enabled: true, channel: "SMS", kind: "COMMUNICATION", delayMinutes: 0 },
+  });
+  await prisma.automationRule.update({
+    where: { id: repeatFollowRule.id },
+    data: { enabled: true, channel: "SMS", kind: "COMMUNICATION", delayMinutes: 0 },
+  });
+  const commBeforeScan = await prisma.customerCommunication.count({
+    where: { businessId: businessA.id },
+  });
+  await scanScheduledBusinessEvents(prisma, businessA.id);
+  const dueAfterScan = await prisma.businessEvent.findMany({
+    where: { businessId: businessA.id, type: "CUSTOMER_FOLLOW_UP_DUE" },
+    select: { subjectId: true },
+  });
+  check(
+    "Enabled-rule scan does not emit a due event for the retention task",
+    !dueAfterScan.some((row) => row.subjectId === created.followUp.id) &&
+      dueAfterScan.some((row) => row.subjectId === commOpen.id),
+  );
+  await processPendingAutomationRuns(prisma, businessA.id);
+  const retentionAfterScan = await prisma.customerFollowUp.findUniqueOrThrow({
+    where: { id: created.followUp.id },
+  });
+  check(
+    "Enabled-rule processing does not send or close the retention task",
+    retentionAfterScan.status === "OPEN" &&
+      retentionAfterScan.sentAt == null &&
+      retentionAfterScan.lastEmailStatus == null &&
+      retentionAfterScan.lastSmsStatus == null &&
+      (await prisma.customerCommunication.count({
+        where: { businessId: businessA.id, relatedType: "CUSTOMER_FOLLOW_UP", relatedId: created.followUp.id },
+      })) === 0,
+  );
+
+  const forcedDue = await emitBusinessEvent(prisma, {
+    businessId: businessA.id,
+    type: "CUSTOMER_FOLLOW_UP_DUE",
+    subjectType: "CUSTOMER_FOLLOW_UP",
+    subjectId: created.followUp.id,
+    payload: {
+      customerId: customer.id,
+      jobId: completedNoReview.id,
+      followUpId: created.followUp.id,
+      businessName: "Alpha Follow-up",
+    },
+    idempotencyKey: `CUSTOMER_FOLLOW_UP_DUE:${created.followUp.id}`,
+  });
+  await queueAutomationRunsForEvent(prisma, businessA.id, forcedDue.event);
+  await processPendingAutomationRuns(prisma, businessA.id);
+  const retentionAfterForced = await prisma.customerFollowUp.findUniqueOrThrow({
+    where: { id: created.followUp.id },
+  });
+  check(
+    "A forced due event still does not send a retention-task message",
+    retentionAfterForced.status === "OPEN" &&
+      retentionAfterForced.sentAt == null &&
+      (await prisma.customerCommunication.count({
+        where: { businessId: businessA.id, relatedType: "CUSTOMER_FOLLOW_UP", relatedId: created.followUp.id },
+      })) === 0 &&
+      (await prisma.customerCommunication.count({ where: { businessId: businessA.id } })) >= commBeforeScan,
+  );
+
+  const concurrentCustomer = await prisma.customer.create({
+    data: { businessId: businessA.id, name: "Concurrent Cam" },
+  });
+  const concurrentJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: concurrentCustomer.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+      createdAt: daysAgo(15, now),
+    },
+  });
+  const concurrentInput = {
+    customerId: concurrentCustomer.id,
+    jobId: concurrentJob.id,
+    group: "NO_REVIEW_REQUEST",
+  };
+  const concurrentResults = await Promise.all([
+    recordRetentionFollowUpTask(prisma, ownerA, concurrentInput),
+    recordRetentionFollowUpTask(prisma, ownerA, concurrentInput),
+    recordRetentionFollowUpTask(prisma, ownerA, concurrentInput),
+  ]);
+  const concurrentIds = new Set(concurrentResults.map((row) => row.followUp.id));
+  check(
+    "Simultaneous submissions for the same business/customer/job produce one task",
+    concurrentIds.size === 1 &&
+      (await prisma.customerFollowUp.count({
+        where: {
+          businessId: businessA.id,
+          customerId: concurrentCustomer.id,
+          jobId: concurrentJob.id,
+          origin: CUSTOMER_FOLLOW_UP_ORIGINS.RETENTION_TASK,
+        },
+      })) === 1,
   );
 
   const followCountBeforeLoad = await prisma.customerFollowUp.count({ where: { businessId: businessA.id } });

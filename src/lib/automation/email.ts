@@ -15,6 +15,7 @@ import {
   senderFrom,
 } from "@/lib/mail";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
+import { isRetentionFollowUpTask } from "@/lib/customer-follow-up-origin";
 import { tenantEstimateUrl, tenantInvoiceUrl, tenantProjectUrl } from "@/lib/tenant-app-url";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -301,9 +302,12 @@ export async function attemptAutomationEmail(
     }
     const followUp = await db.customerFollowUp.findFirst({
       where: { id: input.subjectId, businessId: input.businessId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, origin: true },
     });
     if (!followUp) return { status: "SKIPPED", failureReason: "Follow-up is not in this business." };
+    if (isRetentionFollowUpTask(followUp.origin)) {
+      return { status: "SKIPPED", failureReason: "Retention follow-up tasks are owner-recorded only and are not sent." };
+    }
     if (followUp.status === "SENT" || followUp.status === "CANCELLED") {
       return { status: "SKIPPED", failureReason: "Follow-up is already recorded as sent or closed." };
     }

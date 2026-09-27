@@ -1091,6 +1091,24 @@ check(
       localNames.indexOf("20260927010000_fill_in_bench_owner_fields"),
 );
 
+const retentionOriginMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260927210000_customer_follow_up_retention_origin/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Retention follow-up origin migration is additive and after native throttle",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(retentionOriginMigration) &&
+    retentionOriginMigration.includes('ADD COLUMN "origin"') &&
+    retentionOriginMigration.includes("RETENTION_TASK") &&
+    retentionOriginMigration.includes("CustomerFollowUp_retention_task_business_customer_job_key") &&
+    localNames.includes("20260927210000_customer_follow_up_retention_origin") &&
+    localNames.indexOf("20260927200000_native_sign_in_throttle") <
+      localNames.indexOf("20260927210000_customer_follow_up_retention_origin"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

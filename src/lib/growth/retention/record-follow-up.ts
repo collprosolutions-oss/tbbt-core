@@ -1,12 +1,17 @@
 /**
  * OWNER-explicit CustomerFollowUp write from a retention finding.
  *
- * Uses the existing CustomerFollowUp row. Does not send SMS or email,
- * emit a due event, infer customer intent, or write foreign-tenant rows.
+ * Uses the existing CustomerFollowUp row with origin RETENTION_TASK.
+ * Does not send SMS or email, emit a due event, infer customer intent,
+ * write foreign-tenant rows, or mutate communication follow-ups.
  */
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import {
+  CUSTOMER_FOLLOW_UP_ORIGINS,
+  retentionFollowUpLockKey,
+} from "@/lib/customer-follow-up-origin";
 import { requireRetentionFollowUpWrite } from "@/lib/growth/retention/access";
 import {
   RETENTION_FOLLOW_UP_FINDING_GROUPS,
@@ -26,6 +31,16 @@ import {
 } from "@/lib/growth/retention/queries";
 
 type RetentionDb = PrismaClient | Prisma.TransactionClient;
+
+const followUpSelect = {
+  id: true,
+  businessId: true,
+  customerId: true,
+  jobId: true,
+  kind: true,
+  status: true,
+  origin: true,
+} as const;
 
 export class RetentionFollowUpError extends Error {
   constructor(message: string) {
@@ -59,6 +74,7 @@ export type RecordedRetentionFollowUp = {
   jobId: string | null;
   kind: string;
   status: string;
+  origin: string;
 };
 
 export type RecordRetentionFollowUpTaskResult = {
@@ -103,6 +119,86 @@ async function assertFindingStillRecorded(
   if (later) {
     throw new RetentionFollowUpError(RETENTION_FOLLOW_UP_STALE_FINDING_MESSAGE);
   }
+}
+
+async function findOwnedRetentionTask(
+  db: RetentionDb,
+  input: { businessId: string; customerId: string; jobId: string },
+) {
+  return db.customerFollowUp.findFirst({
+    where: {
+      businessId: input.businessId,
+      customerId: input.customerId,
+      jobId: input.jobId,
+      origin: CUSTOMER_FOLLOW_UP_ORIGINS.RETENTION_TASK,
+    },
+    orderBy: { createdAt: "asc" },
+    select: followUpSelect,
+  });
+}
+
+async function writeRetentionFollowUpTask(
+  db: RetentionDb,
+  access: BusinessAccess,
+  input: {
+    customerId: string;
+    jobId: string;
+    kind: "JOB_COMPLETE" | "REPEAT";
+  },
+): Promise<RecordRetentionFollowUpTaskResult> {
+  const existing = await findOwnedRetentionTask(db, {
+    businessId: access.businessId,
+    customerId: input.customerId,
+    jobId: input.jobId,
+  });
+  if (existing) {
+    const updated = await db.customerFollowUp.update({
+      where: { id: existing.id },
+      data: { kind: existing.kind },
+      select: followUpSelect,
+    });
+    return { outcome: "UPDATED", followUp: updated };
+  }
+
+  try {
+    const created = await db.customerFollowUp.create({
+      data: {
+        businessId: access.businessId,
+        customerId: input.customerId,
+        jobId: input.jobId,
+        kind: input.kind,
+        status: "OPEN",
+        origin: CUSTOMER_FOLLOW_UP_ORIGINS.RETENTION_TASK,
+        createdByMembershipId: access.workspace.membership.id,
+      },
+      select: followUpSelect,
+    });
+    return { outcome: "CREATED", followUp: created };
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const raced = await findOwnedRetentionTask(db, {
+        businessId: access.businessId,
+        customerId: input.customerId,
+        jobId: input.jobId,
+      });
+      if (raced) return { outcome: "UPDATED", followUp: raced };
+    }
+    throw error;
+  }
+}
+
+async function withRetentionWriteLock<T>(
+  db: RetentionDb,
+  lockKey: string,
+  work: (tx: RetentionDb) => Promise<T>,
+): Promise<T> {
+  if ("$transaction" in db && typeof db.$transaction === "function") {
+    return db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+      return work(tx);
+    });
+  }
+  return work(db);
 }
 
 export async function recordRetentionFollowUpTask(
@@ -150,60 +246,18 @@ export async function recordRetentionFollowUpTask(
   await assertFindingStillRecorded(db, access.businessId, input.group, customer.id, job);
 
   const kind = retentionFollowUpKind(input.group);
-  const existing = await db.customerFollowUp.findFirst({
-    where: {
+  return withRetentionWriteLock(
+    db,
+    retentionFollowUpLockKey({
       businessId: access.businessId,
       customerId: customer.id,
       jobId: job.id,
-    },
-    orderBy: { createdAt: "asc" },
-    select: {
-      id: true,
-      businessId: true,
-      customerId: true,
-      jobId: true,
-      kind: true,
-      status: true,
-    },
-  });
-
-  if (existing) {
-    const nextStatus = existing.status === "FAILED" ? "OPEN" : existing.status;
-    const updated = await db.customerFollowUp.update({
-      where: { id: existing.id },
-      data: {
-        kind: existing.kind,
-        status: nextStatus,
-      },
-      select: {
-        id: true,
-        businessId: true,
-        customerId: true,
-        jobId: true,
-        kind: true,
-        status: true,
-      },
-    });
-    return { outcome: "UPDATED", followUp: updated };
-  }
-
-  const created = await db.customerFollowUp.create({
-    data: {
-      businessId: access.businessId,
-      customerId: customer.id,
-      jobId: job.id,
-      kind,
-      status: "OPEN",
-      createdByMembershipId: access.workspace.membership.id,
-    },
-    select: {
-      id: true,
-      businessId: true,
-      customerId: true,
-      jobId: true,
-      kind: true,
-      status: true,
-    },
-  });
-  return { outcome: "CREATED", followUp: created };
+    }),
+    (tx) =>
+      writeRetentionFollowUpTask(tx, access, {
+        customerId: customer.id,
+        jobId: job.id,
+        kind,
+      }),
+  );
 }

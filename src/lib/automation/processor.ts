@@ -19,6 +19,7 @@ import {
   attemptReviewRequestSms,
 } from "@/lib/customer-messaging/workflows";
 import { isAcceptedCustomerMessageStatus } from "@/lib/customer-messaging/types";
+import { isRetentionFollowUpTask } from "@/lib/customer-follow-up-origin";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -265,9 +266,12 @@ async function resolveSmsTarget(
     }
     const followUp = await db.customerFollowUp.findFirst({
       where: { id: followUpId, businessId },
-      select: { id: true, kind: true, status: true },
+      select: { id: true, kind: true, status: true, origin: true },
     });
     if (!followUp) return { skip: "Follow-up is not in this business." };
+    if (isRetentionFollowUpTask(followUp.origin)) {
+      return { skip: "Retention follow-up tasks are owner-recorded only and are not sent." };
+    }
     if (followUp.status === "SENT" || followUp.status === "CANCELLED") {
       return { skip: "Follow-up is already recorded as sent or closed. Duplicate send was not attempted." };
     }
@@ -459,9 +463,10 @@ async function recordWorkflowChannelResult(
   if (event.subjectType === "CUSTOMER_FOLLOW_UP" && (purpose === "JOB_FOLLOW_UP" || purpose === "REPEAT_FOLLOW_UP")) {
     const followUp = await db.customerFollowUp.findFirst({
       where: { id: event.subjectId, businessId },
-      select: { id: true, status: true, sentAt: true },
+      select: { id: true, status: true, sentAt: true, origin: true },
     });
     if (!followUp || followUp.status === "SENT" || followUp.status === "CANCELLED") return;
+    if (isRetentionFollowUpTask(followUp.origin)) return;
     if (accepted) {
       await db.customerFollowUp.update({
         where: { id: followUp.id },
