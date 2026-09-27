@@ -182,6 +182,8 @@ check(
     sessionRouteSrc.includes("readCappedRequestText") &&
     sessionRouteSrc.includes("parseNativeSessionJson") &&
     limitsSrc.includes("nativeSignInThrottle") &&
+    limitsSrc.includes('ON CONFLICT ("subjectHash", "purpose")') &&
+    limitsSrc.includes('"NativeSignInThrottle"."failedAttemptCount" + 1') &&
     !limitsSrc.includes("new Map") &&
     !limitsSrc.includes("globalThis") &&
     limitsSrc.includes("NATIVE_SESSION_MAX_BODY_BYTES"),
@@ -279,6 +281,9 @@ try {
   const sprayUser = await prisma.user.create({
     data: { name: "Sam Spray", email: "spray@native-field.example", passwordHash },
   });
+  const burstUser = await prisma.user.create({
+    data: { name: "Bea Burst", email: "burst@native-field.example", passwordHash },
+  });
   const betaMemberUser = await prisma.user.create({
     data: { name: "Bree Beta", email: "bree@beta-native-field.example", passwordHash },
   });
@@ -305,6 +310,9 @@ try {
   });
   await prisma.membership.create({
     data: { userId: sprayUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  await prisma.membership.create({
+    data: { userId: burstUser.id, businessId: businessA.id, role: "MEMBER" },
   });
   const betaMembership = await prisma.membership.create({
     data: { userId: betaMemberUser.id, businessId: businessB.id, role: "MEMBER" },
@@ -552,6 +560,34 @@ try {
       sprayThrottle?.failedAttemptCount === NATIVE_PASSWORD_MAX_ATTEMPTS &&
       sprayCorrectAfterLock.ok === false &&
       sprayCorrectAfterLock.error === NATIVE_PASSWORD_LOCKED_MESSAGE,
+  );
+
+  const burstResults = await Promise.all(
+    Array.from({ length: NATIVE_PASSWORD_MAX_ATTEMPTS }, () =>
+      signInNativeField(prisma, {
+        email: burstUser.email,
+        password: "wrong-password",
+      }),
+    ),
+  );
+  const burstThrottle = await prisma.nativeSignInThrottle.findUnique({
+    where: {
+      subjectHash_purpose: {
+        subjectHash: nativePasswordSubjectHash(burstUser.email),
+        purpose: "NATIVE_PASSWORD",
+      },
+    },
+  });
+  const burstNext = await signInNativeField(prisma, {
+    email: burstUser.email,
+    password,
+  });
+  check(
+    "Five simultaneous wrong passwords count as five failures and lock the next try",
+    burstResults.every((result) => result.ok === false) &&
+      burstThrottle?.failedAttemptCount === NATIVE_PASSWORD_MAX_ATTEMPTS &&
+      burstNext.ok === false &&
+      burstNext.error === NATIVE_PASSWORD_LOCKED_MESSAGE,
   );
 
   const memberSignIn = await signInNativeField(prisma, {

@@ -8,7 +8,12 @@
  *
  * Oversized JSON is rejected before parse. Body bytes are counted from the
  * request stream so a missing Content-Length cannot skip the cap.
+ *
+ * Password failures increment with a single INSERT … ON CONFLICT so five
+ * simultaneous wrong-password requests for a fresh email become five rows
+ * of count, not one.
  */
+import { randomUUID } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   TOTP_CHALLENGE_LOCKED_MESSAGE,
@@ -121,43 +126,49 @@ export async function recordNativePasswordFailure(db: Db, email: string) {
   const subjectHash = nativePasswordSubjectHash(email);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + NATIVE_PASSWORD_WINDOW_MINUTES * 60 * 1000);
-  const existing = await db.nativeSignInThrottle.findUnique({
-    where: {
-      subjectHash_purpose: { subjectHash, purpose: NATIVE_PASSWORD_PURPOSE },
-    },
-  });
 
-  if (!existing || existing.expiresAt <= now) {
-    const row = await db.nativeSignInThrottle.upsert({
-      where: {
-        subjectHash_purpose: { subjectHash, purpose: NATIVE_PASSWORD_PURPOSE },
-      },
-      create: {
-        subjectHash,
-        purpose: NATIVE_PASSWORD_PURPOSE,
-        failedAttemptCount: 1,
-        windowStartedAt: now,
-        expiresAt,
-      },
-      update: {
-        failedAttemptCount: 1,
-        windowStartedAt: now,
-        expiresAt,
-      },
-    });
-    return {
-      locked: row.failedAttemptCount >= NATIVE_PASSWORD_MAX_ATTEMPTS,
-      failedAttemptCount: row.failedAttemptCount,
-    };
-  }
+  const rows = await db.$queryRaw<Array<{ failedAttemptCount: number }>>`
+    INSERT INTO "NativeSignInThrottle" (
+      "id",
+      "subjectHash",
+      "purpose",
+      "failedAttemptCount",
+      "windowStartedAt",
+      "expiresAt",
+      "createdAt",
+      "updatedAt"
+    )
+    VALUES (
+      ${randomUUID()},
+      ${subjectHash},
+      ${NATIVE_PASSWORD_PURPOSE},
+      1,
+      ${now},
+      ${expiresAt},
+      ${now},
+      ${now}
+    )
+    ON CONFLICT ("subjectHash", "purpose") DO UPDATE SET
+      "failedAttemptCount" = CASE
+        WHEN "NativeSignInThrottle"."expiresAt" <= EXCLUDED."windowStartedAt" THEN 1
+        ELSE "NativeSignInThrottle"."failedAttemptCount" + 1
+      END,
+      "windowStartedAt" = CASE
+        WHEN "NativeSignInThrottle"."expiresAt" <= EXCLUDED."windowStartedAt" THEN EXCLUDED."windowStartedAt"
+        ELSE "NativeSignInThrottle"."windowStartedAt"
+      END,
+      "expiresAt" = CASE
+        WHEN "NativeSignInThrottle"."expiresAt" <= EXCLUDED."windowStartedAt" THEN EXCLUDED."expiresAt"
+        ELSE "NativeSignInThrottle"."expiresAt"
+      END,
+      "updatedAt" = EXCLUDED."updatedAt"
+    RETURNING "failedAttemptCount"
+  `;
 
-  const row = await db.nativeSignInThrottle.update({
-    where: { id: existing.id },
-    data: { failedAttemptCount: { increment: 1 } },
-  });
+  const failedAttemptCount = Number(rows[0]?.failedAttemptCount ?? 1);
   return {
-    locked: row.failedAttemptCount >= NATIVE_PASSWORD_MAX_ATTEMPTS,
-    failedAttemptCount: row.failedAttemptCount,
+    locked: failedAttemptCount >= NATIVE_PASSWORD_MAX_ATTEMPTS,
+    failedAttemptCount,
   };
 }
 
