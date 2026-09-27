@@ -19,6 +19,7 @@ import {
   type IntakeConditionPublishedView,
 } from "@/lib/intake-conditionals";
 import {
+  PUBLIC_INTAKE_REFRESH_FORM,
   buildTenantIntakeSnapshotPayload,
   parseTenantIntakeSnapshotPayload,
   publishedOverlayFromRow,
@@ -29,6 +30,38 @@ import {
 } from "@/lib/intake-snapshot";
 import { currentIntakeSchema } from "@/lib/intake-schema";
 import { isConfiguredTrade, tradeLabel, type TradeCode } from "@/lib/trades";
+
+export { PUBLIC_INTAKE_REFRESH_FORM };
+
+export type CurrentPublishedIntake =
+  | { status: "none" }
+  | { status: "ready"; overlay: PublishedIntakeOverlay }
+  | { status: "unavailable" };
+
+type PublicSnapshotDb = {
+  businessTrade?: {
+    findFirst?: (args: {
+      where: { businessId: string; tradeCode: string };
+      select: { publishedIntakeSnapshotId: true };
+    }) => Promise<{ publishedIntakeSnapshotId: string | null } | null>;
+  };
+  tenantIntakeSnapshot?: {
+    findFirst: (args: {
+      where: { id: string; businessId: string; tradeCode: string };
+      select: {
+        id: true;
+        versionNumber: true;
+        snapshotJson: true;
+        publishedAt: true;
+      };
+    }) => Promise<{
+      id: string;
+      versionNumber: number;
+      snapshotJson: string;
+      publishedAt: Date;
+    } | null>;
+  };
+};
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -189,89 +222,63 @@ export async function createTenantIntakeSnapshot(
   }
 }
 
+export async function readCurrentPublishedIntake(
+  db: PublicSnapshotDb,
+  businessId: string,
+  tradeCode: string,
+): Promise<CurrentPublishedIntake> {
+  if (!isConfiguredTrade(tradeCode) || !db.businessTrade?.findFirst) {
+    return { status: "unavailable" };
+  }
+  const membership = await db.businessTrade.findFirst({
+    where: { businessId, tradeCode },
+    select: { publishedIntakeSnapshotId: true },
+  });
+  if (!membership?.publishedIntakeSnapshotId) return { status: "none" };
+  if (!db.tenantIntakeSnapshot) return { status: "unavailable" };
+  const row = await db.tenantIntakeSnapshot.findFirst({
+    where: {
+      id: membership.publishedIntakeSnapshotId,
+      businessId,
+      tradeCode,
+    },
+    select: { id: true, versionNumber: true, snapshotJson: true, publishedAt: true },
+  });
+  if (!row) return { status: "unavailable" };
+  const overlay = publishedOverlayFromRow(row);
+  if (!overlay || overlay.document.tradeCode !== tradeCode) return { status: "unavailable" };
+  return { status: "ready", overlay };
+}
+
 export async function loadPublishedIntakeOverlay(
-  db: {
-    businessTrade?: {
-      findFirst?: (args: {
-        where: { businessId: string; tradeCode: string };
-        select: { publishedIntakeSnapshotId: true };
-      }) => Promise<{ publishedIntakeSnapshotId: string | null } | null>;
-    };
-    tenantIntakeSnapshot?: {
-      findFirst: (args: {
-        where: { id: string; businessId: string; tradeCode: string };
-        select: {
-          id: true;
-          versionNumber: true;
-          snapshotJson: true;
-          publishedAt: true;
-        };
-      }) => Promise<{
-        id: string;
-        versionNumber: number;
-        snapshotJson: string;
-        publishedAt: Date;
-      } | null>;
-    };
-  },
+  db: PublicSnapshotDb,
   businessId: string,
   tradeCode: string,
 ): Promise<PublishedIntakeOverlay | null> {
-  if (!isConfiguredTrade(tradeCode)) return null;
-  if (!db.businessTrade?.findFirst || !db.tenantIntakeSnapshot) return null;
-  try {
-    const membership = await db.businessTrade.findFirst({
-      where: { businessId, tradeCode },
-      select: { publishedIntakeSnapshotId: true },
-    });
-    if (!membership?.publishedIntakeSnapshotId) return null;
-    const row = await db.tenantIntakeSnapshot.findFirst({
-      where: {
-        id: membership.publishedIntakeSnapshotId,
-        businessId,
-        tradeCode,
-      },
-      select: { id: true, versionNumber: true, snapshotJson: true, publishedAt: true },
-    });
-    if (!row) return null;
-    return publishedOverlayFromRow(row);
-  } catch {
-    return null;
-  }
+  const current = await readCurrentPublishedIntake(db, businessId, tradeCode);
+  return current.status === "ready" ? current.overlay : null;
 }
-
-type PublicSnapshotDb = {
-  tenantIntakeSnapshot?: {
-    findFirst: (args: {
-      where: { id: string; businessId: string; tradeCode: string };
-      select: {
-        id: true;
-        versionNumber: true;
-        snapshotJson: true;
-        publishedAt: true;
-      };
-    }) => Promise<{
-      id: string;
-      versionNumber: number;
-      snapshotJson: string;
-      publishedAt: Date;
-    } | null>;
-  };
-};
 
 /**
  * Resolve the exact tenant snapshot a public form displayed.
  * Browser-supplied businessId is ignored — callers pass the slug-resolved
  * business and the server-resolved trade. A referenced id that is missing,
- * cross-tenant, wrong-trade, or invalid fails closed. Omitting an id does
- * not silently follow a newer current pointer.
+ * cross-tenant, wrong-trade, or invalid fails closed. Omitting an id while
+ * this business/trade has a published snapshot fails with a refresh-form
+ * response instead of saving against platform intake.
  */
 export async function resolveReferencedTenantIntakeSnapshot(
   db: PublicSnapshotDb,
   input: { businessId: string; tradeCode: string; snapshotId?: string | null },
-): Promise<{ ok: true; overlay: PublishedIntakeOverlay | null } | { ok: false }> {
+): Promise<
+  { ok: true; overlay: PublishedIntakeOverlay | null } | { ok: false; refresh?: boolean }
+> {
   const referenced = readReferencedTenantIntakeSnapshotId(input.snapshotId);
-  if (!referenced.provided) return { ok: true, overlay: null };
+  if (!referenced.provided) {
+    const current = await readCurrentPublishedIntake(db, input.businessId, input.tradeCode);
+    if (current.status === "none") return { ok: true, overlay: null };
+    return { ok: false, refresh: true };
+  }
   if (!referenced.snapshotId || !isConfiguredTrade(input.tradeCode)) return { ok: false };
   if (!db.tenantIntakeSnapshot) return { ok: false };
   const row = await db.tenantIntakeSnapshot.findFirst({
@@ -293,15 +300,15 @@ export async function loadPublishedIntakeOverlaysByTrade(
   db: Db,
   businessId: string,
   tradeCodes: string[],
-): Promise<Record<string, PublishedIntakeOverlay>> {
+): Promise<{ ok: true; overlays: Record<string, PublishedIntakeOverlay> } | { ok: false }> {
   const codes = [...new Set(tradeCodes.filter(isConfiguredTrade))];
-  if (codes.length === 0) return {};
+  if (codes.length === 0) return { ok: true, overlays: {} };
   const trades = await db.businessTrade.findMany({
     where: { businessId, tradeCode: { in: codes } },
     select: { tradeCode: true, publishedIntakeSnapshotId: true },
   });
   const wanted = trades.filter((row) => row.publishedIntakeSnapshotId);
-  if (wanted.length === 0) return {};
+  if (wanted.length === 0) return { ok: true, overlays: {} };
   const rows = await db.tenantIntakeSnapshot.findMany({
     where: {
       businessId,
@@ -321,11 +328,12 @@ export async function loadPublishedIntakeOverlaysByTrade(
     const row = trade.publishedIntakeSnapshotId
       ? byId.get(trade.publishedIntakeSnapshotId)
       : null;
-    if (!row || row.tradeCode !== trade.tradeCode) continue;
+    if (!row || row.tradeCode !== trade.tradeCode) return { ok: false };
     const overlay = publishedOverlayFromRow(row);
-    if (overlay) overlays[trade.tradeCode] = overlay;
+    if (!overlay) return { ok: false };
+    overlays[trade.tradeCode] = overlay;
   }
-  return overlays;
+  return { ok: true, overlays };
 }
 
 export function snapshotPayloadOrNull(snapshotJson: string) {

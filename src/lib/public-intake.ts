@@ -46,6 +46,7 @@ import {
   freezePublishedIntakeSchema,
   validatePublishedIntakeAnswers,
 } from "@/lib/intake-snapshot";
+import { PUBLIC_INTAKE_REFRESH_FORM } from "@/lib/intake-snapshot";
 import { resolveReferencedTenantIntakeSnapshot } from "@/lib/intake-snapshot-ops";
 import { parseWebsiteSnapshot, type PublishedWebsiteSnapshot } from "@/lib/website-engine/snapshot";
 import { snapshotIntakeSchemaForTrade } from "@/lib/website-engine/public";
@@ -124,8 +125,9 @@ export type PublicIntakeInput = {
   /**
    * Exact TenantIntakeSnapshot displayed when the public form loaded.
    * Server-resolved against the slug business and request trade. A missing
-   * or invalid reference fails closed. Omitted means the form showed the
-   * platform schema only — never silently follow a newer current pointer.
+   * or invalid reference fails closed. If this business/trade has a
+   * published snapshot, omitting the id fails with a refresh-form response
+   * instead of saving against platform intake.
    */
   tenantIntakeSnapshotId?: string | null;
 };
@@ -654,7 +656,10 @@ async function createPublicServiceRequestInner(
     snapshotId: input.tenantIntakeSnapshotId,
   });
   if (!referencedIntake.ok) {
-    return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
+    return {
+      ok: false,
+      error: referencedIntake.refresh ? PUBLIC_INTAKE_REFRESH_FORM : PUBLIC_INTAKE_GENERIC_ERROR,
+    };
   }
   const publishedIntake = referencedIntake.overlay;
   const platformSchema = publishedIntake

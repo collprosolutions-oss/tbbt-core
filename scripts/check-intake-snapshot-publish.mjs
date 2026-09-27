@@ -54,11 +54,14 @@ const {
 const {
   loadOwnedTenantIntakeSnapshot,
   loadPublishedIntakeOverlay,
+  loadPublishedIntakeOverlaysByTrade,
   resolveReferencedTenantIntakeSnapshot,
 } = await import("@/lib/intake-snapshot-ops");
-const { parseTenantIntakeSnapshotPayload, tenantIntakeSchemaKey } = await import(
-  "@/lib/intake-snapshot"
-);
+const {
+  PUBLIC_INTAKE_REFRESH_FORM,
+  parseTenantIntakeSnapshotPayload,
+  tenantIntakeSchemaKey,
+} = await import("@/lib/intake-snapshot");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -213,6 +216,7 @@ check(
   publicIntakeSrc.includes("resolveReferencedTenantIntakeSnapshot") &&
     publicIntakeSrc.includes("tenantIntakeSnapshotId") &&
     publicIntakeSrc.includes("publishedIntake.baseSchema") &&
+    publicIntakeSrc.includes("PUBLIC_INTAKE_REFRESH_FORM") &&
     !publicIntakeSrc.includes("loadPublishedIntakeOverlay") &&
     !publicIntakeSrc.includes("intakeConditionDraft") &&
     !publicIntakeSrc.includes("from \"@/lib/intake-conditionals\""),
@@ -241,6 +245,12 @@ check(
     read("src/components/public/request-flow.tsx").includes(
       'formData.set("tenantIntakeSnapshotId"',
     ),
+);
+check(
+  "Public page fails closed when the current snapshot pointer is unusable",
+  read("src/app/r/[slug]/page.tsx").includes("publishedIntake.ok") &&
+    read("src/app/r/[slug]/page.tsx").includes("PUBLIC_INTAKE_REFRESH_FORM") &&
+    read("src/lib/intake-snapshot-ops.ts").includes("return { ok: false }"),
 );
 check(
   "OWNER-only publish never takes client businessId",
@@ -800,7 +810,8 @@ try {
         firstPayload?.baseSchema.fields.filter((field) => V2_ONLY_FIELDS.includes(field.key)).length,
   );
 
-  const openFormAfterNewerPublish = await createPublicServiceRequest(prisma, {
+  const countBeforeOmit = await prisma.serviceRequest.count({ where: { businessId: cleanA.id } });
+  const omittedAfterPublish = await createPublicServiceRequest(prisma, {
     slug: cleanA.slug,
     name: "No Snapshot On Form",
     email: `nosnap-${randomUUID().slice(0, 8)}@example.com`,
@@ -822,20 +833,13 @@ try {
       addons: ["INSIDE_FRIDGE"],
     },
   });
-  const openFormRow = openFormAfterNewerPublish.ok
-    ? await prisma.serviceRequest.findUnique({
-        where: { id: openFormAfterNewerPublish.requestId },
-      })
-    : null;
+  const countAfterOmit = await prisma.serviceRequest.count({ where: { businessId: cleanA.id } });
   check(
-    "Omitting a snapshot id does not silently switch to the newer current publish",
-    openFormAfterNewerPublish.ok === true &&
-      openFormRow?.intakeSchemaKey === "cleaning.public" &&
-      openFormRow?.intakeSchemaVersion === 2 &&
-      openFormRow?.tenantIntakeSnapshotId == null &&
-      !JSON.parse(openFormRow?.intakeSchemaJson ?? "{}").fields.some(
-        (field) => field.key === "fridge_notes" || field.key === "oven_notes",
-      ),
+    "Omitting a snapshot id after a publish fails with a refresh-form response",
+    omittedAfterPublish.ok === false &&
+      "error" in omittedAfterPublish &&
+      omittedAfterPublish.error === PUBLIC_INTAKE_REFRESH_FORM &&
+      countAfterOmit === countBeforeOmit,
   );
 
   const missingSnapshot = await createPublicServiceRequest(prisma, {
@@ -939,6 +943,130 @@ try {
           description: { contains: "Other tenant snapshot" },
         },
       })) === 0,
+  );
+
+  const broken = await prisma.business.create({
+    data: {
+      name: "Broken Pointer Cleaning",
+      slug: `broken-snap-${randomUUID().slice(0, 8)}`,
+      tradeCode: "CLEANING",
+    },
+  });
+  await ensurePrimaryBusinessTrade(prisma, broken.id, "CLEANING");
+  const brokenCatalog = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: broken.id,
+      tradeCode: "CLEANING",
+      name: "Broken Clean",
+      pricingMode: "STARTING_AT",
+      active: true,
+    },
+  });
+  const brokenSnapshot = await prisma.tenantIntakeSnapshot.create({
+    data: {
+      businessId: broken.id,
+      tradeCode: "CLEANING",
+      versionNumber: 1,
+      status: "PUBLISHED",
+      schemaVersion: 1,
+      snapshotJson: "{not-valid",
+    },
+  });
+  await prisma.businessTrade.updateMany({
+    where: { businessId: broken.id, tradeCode: "CLEANING" },
+    data: { publishedIntakeSnapshotId: brokenSnapshot.id },
+  });
+  const pageLoadBroken = await loadPublishedIntakeOverlaysByTrade(prisma, broken.id, ["CLEANING"]);
+  const submitBrokenNoId = await createPublicServiceRequest(prisma, {
+    slug: broken.slug,
+    name: "Broken Pointer Customer",
+    email: `brk-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "5550001111",
+    address: "13 Main St",
+    streetAddress: "13 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Current pointer cannot be parsed",
+    catalogItemIds: [brokenCatalog.id],
+    includeOther: false,
+    otherDescription: "",
+    intakeAnswers: {
+      bedrooms: 2,
+      bathrooms: 1,
+      homeSize: "1000_1500",
+      frequency: "ONE_TIME",
+    },
+  });
+  const pageLoadHealthy = await loadPublishedIntakeOverlaysByTrade(prisma, cleanA.id, ["CLEANING"]);
+  const pageLoadPlainPointer = await loadPublishedIntakeOverlaysByTrade(prisma, handyB.id, [
+    "HANDYMAN",
+  ]);
+  check(
+    "Public page fails closed when the current snapshot pointer cannot be loaded or parsed",
+    pageLoadBroken.ok === false &&
+      submitBrokenNoId.ok === false &&
+      "error" in submitBrokenNoId &&
+      submitBrokenNoId.error === PUBLIC_INTAKE_REFRESH_FORM &&
+      pageLoadHealthy.ok === true &&
+      pageLoadHealthy.ok &&
+      pageLoadHealthy.overlays.CLEANING?.snapshotId === second.id &&
+      pageLoadPlainPointer.ok === true &&
+      pageLoadPlainPointer.ok &&
+      pageLoadPlainPointer.overlays.HANDYMAN == null &&
+      (await prisma.serviceRequest.count({ where: { businessId: broken.id } })) === 0,
+  );
+
+  const plain = await prisma.business.create({
+    data: {
+      name: "Plain Platform Cleaning",
+      slug: `plain-snap-${randomUUID().slice(0, 8)}`,
+      tradeCode: "CLEANING",
+    },
+  });
+  await ensurePrimaryBusinessTrade(prisma, plain.id, "CLEANING");
+  const plainCatalog = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: plain.id,
+      tradeCode: "CLEANING",
+      name: "Plain Clean",
+      pricingMode: "STARTING_AT",
+      active: true,
+    },
+  });
+  const plainCreated = await createPublicServiceRequest(prisma, {
+    slug: plain.slug,
+    name: "Plain Platform Customer",
+    email: `plain-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "5550002222",
+    address: "14 Main St",
+    streetAddress: "14 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Never published extras",
+    catalogItemIds: [plainCatalog.id],
+    includeOther: false,
+    otherDescription: "",
+    intakeAnswers: {
+      bedrooms: 2,
+      bathrooms: 1,
+      homeSize: "1000_1500",
+      frequency: "ONE_TIME",
+    },
+  });
+  const plainRow = plainCreated.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: plainCreated.requestId } })
+    : null;
+  check(
+    "Platform-only business with no published snapshot still submits without a snapshot id",
+    plainCreated.ok === true &&
+      plainRow?.intakeSchemaKey === "cleaning.public" &&
+      plainRow?.intakeSchemaVersion === 2 &&
+      plainRow?.tenantIntakeSnapshotId == null &&
+      !JSON.parse(plainRow?.intakeSchemaJson ?? "{}").fields.some(
+        (field) => field.key === "fridge_notes",
+      ),
   );
 
   const replayLiveV1 = resolveRequestIntakeSchema({

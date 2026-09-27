@@ -27,6 +27,7 @@ import {
   publicIntakeSchemaProjection,
 } from "@/lib/intake-schema";
 import { snapshotIntakeSchemasByTrade } from "@/lib/website-engine/public";
+import { PUBLIC_INTAKE_REFRESH_FORM } from "@/lib/intake-snapshot";
 import { loadPublishedIntakeOverlaysByTrade } from "@/lib/intake-snapshot-ops";
 import { snapshotPageMetadata } from "@/lib/website-engine/seo";
 import { publicOriginForSlug } from "@/lib/website-engine/hosts";
@@ -91,7 +92,7 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
     : Object.fromEntries(
         tradeCodes.map((code) => [code, publicIntakeSchemaProjection(currentIntakeSchema(code))]),
       );
-  const publishedIntakeByTrade = await loadPublishedIntakeOverlaysByTrade(
+  const publishedIntake = await loadPublishedIntakeOverlaysByTrade(
     prisma,
     site.business.id,
     tradeCodes,
@@ -156,23 +157,27 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
                   Next available: {nextAvailableLabel}
                 </p>
               ) : null}
-              <MultiServiceRequestFlow
-                slug={site.business.slug}
-                businessName={name}
-                items={site.items}
-                groups={site.groups}
-                initialSelected={initialSelected}
-                photosEnabled={isBusinessStorageConfigured()}
-                serviceArea={resolveBusinessServiceArea(site.business)}
-                intakeSchemasByTrade={intakeSchemasByTrade}
-                publishedIntakeByTrade={publishedIntakeByTrade}
-                activeTrades={
-                  site.business.activeTrades?.map((trade) => ({
-                    code: trade.code,
-                    label: trade.label,
-                  })) ?? []
-                }
-              />
+              {publishedIntake.ok ? (
+                <MultiServiceRequestFlow
+                  slug={site.business.slug}
+                  businessName={name}
+                  items={site.items}
+                  groups={site.groups}
+                  initialSelected={initialSelected}
+                  photosEnabled={isBusinessStorageConfigured()}
+                  serviceArea={resolveBusinessServiceArea(site.business)}
+                  intakeSchemasByTrade={intakeSchemasByTrade}
+                  publishedIntakeByTrade={publishedIntake.overlays}
+                  activeTrades={
+                    site.business.activeTrades?.map((trade) => ({
+                      code: trade.code,
+                      label: trade.label,
+                    })) ?? []
+                  }
+                />
+              ) : (
+                <p className="text-sm text-[var(--public-ink)]">{PUBLIC_INTAKE_REFRESH_FORM}</p>
+              )}
             </div>
           </div>
         </section>
