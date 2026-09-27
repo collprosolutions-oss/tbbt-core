@@ -99,6 +99,30 @@ function sourceKey(note: RegulatoryNoteInput): string {
   return `${note.officialSourceUrl.trim()}::${note.citation.trim()}`;
 }
 
+function hasExplicitRecordedConflict(notes: readonly RegulatoryNoteInput[]): boolean {
+  return notes.some((note) => note.recordedState === "CONFLICT");
+}
+
+/**
+ * A demonstrated disagreement is an incompatibility in recorded facts
+ * on the same official source, not merely a different URL or citation.
+ * Distinct sources that do not contradict stay UNKNOWN, never CONFLICT.
+ */
+export function notesHaveDemonstratedDisagreement(notes: readonly RegulatoryNoteInput[]): boolean {
+  if (notes.length < 2) return false;
+  const bySourceUrl = new Map<string, Set<string>>();
+  for (const note of notes) {
+    const url = note.officialSourceUrl.trim();
+    if (!url) continue;
+    const recorded = note.recordedState.trim();
+    if (recorded !== "CURRENT" && recorded !== "STALE") continue;
+    const seen = bySourceUrl.get(url) ?? new Set<string>();
+    seen.add(recorded);
+    bySourceUrl.set(url, seen);
+  }
+  return [...bySourceUrl.values()].some((states) => states.has("CURRENT") && states.has("STALE"));
+}
+
 export function resolveRegulatoryLookup(
   notes: readonly RegulatoryNoteInput[],
   now: Date = new Date(),
@@ -108,21 +132,30 @@ export function resolveRegulatoryLookup(
   }
 
   const classified = notes.map((note) => classifyRegulatoryNote(note, now));
-  const uniqueSources = new Set(notes.map(sourceKey));
-  if (uniqueSources.size > 1) {
+  if (hasExplicitRecordedConflict(notes) || classified.includes("CONFLICT")) {
+    return regulatoryDecision("CONFLICT", "A matching note is recorded as CONFLICT. Conflicting information never certifies a license.");
+  }
+  if (notesHaveDemonstratedDisagreement(notes)) {
     return regulatoryDecision(
       "CONFLICT",
-      "Matching notes cite different official sources or citations. Conflicting information never certifies a license.",
+      "The same official source is recorded as both CURRENT and STALE. Conflicting information never certifies a license.",
     );
-  }
-  if (classified.includes("CONFLICT")) {
-    return regulatoryDecision("CONFLICT", "A matching note is recorded as CONFLICT. Conflicting information never certifies a license.");
   }
   if (classified.includes("UNKNOWN")) {
     return regulatoryDecision("UNKNOWN", "A matching note is missing required fields or is recorded as UNKNOWN.");
   }
+  const uniqueSources = new Set(notes.map(sourceKey));
+  if (uniqueSources.size > 1) {
+    return regulatoryDecision(
+      "UNKNOWN",
+      "Matching notes cite more than one official source or citation. Agreement cannot be established, so the lookup stays UNKNOWN.",
+    );
+  }
   if (classified.includes("STALE") && classified.includes("CURRENT")) {
-    return regulatoryDecision("CONFLICT", "Matching notes disagree on freshness. Mixed stale and current notes never certify a license.");
+    return regulatoryDecision(
+      "UNKNOWN",
+      "Matching notes do not establish a single freshness result. Agreement cannot be established, so the lookup stays UNKNOWN.",
+    );
   }
   if (classified.every((state) => state === "STALE")) {
     return regulatoryDecision("STALE", "The matching official-source note is stale. Stale information never certifies a license.");

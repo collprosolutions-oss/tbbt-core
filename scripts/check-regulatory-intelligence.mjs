@@ -151,12 +151,41 @@ try {
   check("Stale lookup stays STALE", staleLookup.state === "STALE");
   check("Stale lookup never certifies", staleLookup.certifiesLicense === false && staleLookup.declaresLegalCompliance === false);
 
-  const conflictLookup = resolveRegulatoryLookup([
+  const recordedConflict = resolveRegulatoryLookup([
     catalog,
-    { ...catalog, officialSourceUrl: "https://example.com/not-official", citation: "Different citation" },
+    { ...catalog, recordedState: "CONFLICT" },
   ], now);
-  check("Disagreeing sources are CONFLICT", conflictLookup.state === "CONFLICT");
-  check("Conflict never certifies", conflictLookup.certifiesLicense === false);
+  check("Explicitly recorded CONFLICT stays CONFLICT", recordedConflict.state === "CONFLICT");
+  check("Recorded conflict never certifies", recordedConflict.certifiesLicense === false);
+
+  const distinctSourcesNoDisagreement = resolveRegulatoryLookup([
+    catalog,
+    {
+      ...catalog,
+      officialSourceUrl: LEE_COUNTY_ORDINANCE_23_09_URL,
+      officialSourceTitle: "Lee County Ordinance No. 23-09",
+      citation: "Lee County Ordinance No. 23-09, Lee County Construction License Ordinance.",
+    },
+  ], now);
+  check(
+    "Two distinct official sources that do not disagree are not CONFLICT",
+    distinctSourcesNoDisagreement.state !== "CONFLICT",
+  );
+  check(
+    "Two distinct official sources without established agreement stay UNKNOWN",
+    distinctSourcesNoDisagreement.state === "UNKNOWN" &&
+      distinctSourcesNoDisagreement.certifiesLicense === false &&
+      distinctSourcesNoDisagreement.declaresLegalCompliance === false,
+  );
+
+  const sameSourceRecordedDisagreement = resolveRegulatoryLookup([
+    catalog,
+    { ...catalog, recordedState: "STALE", retrievedAt: new Date("2025-01-01T00:00:00.000Z") },
+  ], now);
+  check(
+    "Same official source recorded CURRENT and STALE is a demonstrated CONFLICT",
+    sameSourceRecordedDisagreement.state === "CONFLICT",
+  );
 
   const currentLookup = resolveRegulatoryLookup([catalog], now);
   check("Current lookup is CURRENT", currentLookup.state === "CURRENT");
