@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import {
   JOB_PROPERTY_EXPORT_CONTRACT,
   JOB_PROPERTY_EXPORT_OMISSIONS,
+  jobPropertyExportPhotoTruncationMessage,
   type JobPropertyExportDocument,
 } from "@/lib/job-property-export";
 
@@ -39,6 +40,11 @@ export function JobPropertyExportPanel({
               ? `${document.photos.count} included by OWNER authorization`
               : `${document.photos.count} recorded, redacted`}
           </p>
+          {document.photos.truncated ? (
+            <p className="text-muted-foreground">
+              {jobPropertyExportPhotoTruncationMessage(document.photos.limit)}
+            </p>
+          ) : null}
         </CardContent>
       </Card>
 

@@ -1,11 +1,18 @@
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import type { ExportableCompletedJobProperty } from "@/lib/job-property-export";
+import {
+  jobPropertyExportPickerTruncationMessage,
+  type ExportableCompletedJobProperty,
+} from "@/lib/job-property-export";
 
 export function JobPropertyExportPicker({
   jobs,
+  truncated,
+  limit,
 }: {
   jobs: ExportableCompletedJobProperty[];
+  truncated: boolean;
+  limit: number;
 }) {
   if (jobs.length === 0) {
     return (
@@ -30,7 +37,10 @@ export function JobPropertyExportPicker({
           redacted unless you expressly authorize private customer data or photos.
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
+        {truncated ? (
+          <p className="text-sm text-muted-foreground">{jobPropertyExportPickerTruncationMessage(limit)}</p>
+        ) : null}
         <ul className="divide-y">
           {jobs.map((job) => (
             <li key={job.jobId} className="flex flex-wrap items-center justify-between gap-2 py-3 first:pt-0 last:pb-0">

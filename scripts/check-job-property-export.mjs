@@ -20,10 +20,15 @@ const { assertBusinessRecord, businessScope } = await import("@/lib/access-scope
 const {
   JOB_PROPERTY_EXPORT_CONTRACT,
   JOB_PROPERTY_EXPORT_INTENDED_CONSUMERS,
+  JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT,
+  JOB_PROPERTY_EXPORT_PICKER_LIMIT,
   JOB_PROPERTY_EXPORT_VERSION,
+  boundExportRead,
   buildCompletedJobPropertyExport,
   canExportCompletedJobProperty,
   jobPropertyExportFilename,
+  jobPropertyExportPhotoTruncationMessage,
+  jobPropertyExportPickerTruncationMessage,
   listExportableCompletedJobProperties,
   parseJobPropertyExport,
   serializeJobPropertyExport,
@@ -101,6 +106,8 @@ const buildSrc = readRepo("src/lib/job-property-export/build.ts");
 const parseSrc = readRepo("src/lib/job-property-export/parse.ts");
 const accessSrc = readRepo("src/lib/job-property-export/access.ts");
 const pickerPageSrc = readRepo("src/app/(app)/jobs/handoff-export/page.tsx");
+const pickerSrc = readRepo("src/components/jobs/job-property-export-picker.tsx");
+const panelSrc = readRepo("src/components/jobs/job-property-export-panel.tsx");
 const exportPageSrc = readRepo("src/app/(app)/jobs/[jobId]/handoff-export/page.tsx");
 const downloadSrc = readRepo("src/app/(app)/jobs/[jobId]/handoff-export/download/route.ts");
 const navSrc = readRepo("src/lib/nav.ts");
@@ -180,6 +187,26 @@ check(
 check(
   "Access helper is OWNER-only and does not invent ADMIN export",
   accessSrc.includes('return role === "OWNER"') && accessSrc.includes('requireBusinessRole(access, "OWNER")'),
+);
+check(
+  "Picker and photo reads are bounded and detect one extra row",
+  JOB_PROPERTY_EXPORT_PICKER_LIMIT === 40 &&
+    JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT === 40 &&
+    buildSrc.includes("take: JOB_PROPERTY_EXPORT_PICKER_LIMIT + 1") &&
+    buildSrc.includes("take: JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT + 1") &&
+    buildSrc.includes("boundExportRead"),
+);
+check(
+  "UI shows truncation for the picker and photo packet",
+  pickerSrc.includes("jobPropertyExportPickerTruncationMessage") &&
+    panelSrc.includes("jobPropertyExportPhotoTruncationMessage") &&
+    pickerPageSrc.includes("truncated={listed.truncated}"),
+);
+check(
+  "boundExportRead keeps the cap and marks overflow",
+  boundExportRead(["a", "b", "c"], 2).truncated === true &&
+    boundExportRead(["a", "b", "c"], 2).items.join(",") === "a,b" &&
+    boundExportRead(["a", "b"], 2).truncated === false,
 );
 
 try {
@@ -328,11 +355,13 @@ try {
   const listed = await listExportableCompletedJobProperties(prisma, ownerAccessA);
   check(
     "Picker lists only same-business completed jobs that have a same-business property",
-    listed.some((row) => row.jobId === completedA.id && row.propertyId === propertyA.id) &&
-      !listed.some((row) => row.jobId === completedB.id) &&
-      !listed.some((row) => row.jobId === inProgressA.id) &&
-      !listed.some((row) => row.jobId === completedNoProperty.id) &&
-      !listed.some((row) => row.jobId === plantedMismatch.id),
+    listed.jobs.some((row) => row.jobId === completedA.id && row.propertyId === propertyA.id) &&
+      !listed.jobs.some((row) => row.jobId === completedB.id) &&
+      !listed.jobs.some((row) => row.jobId === inProgressA.id) &&
+      !listed.jobs.some((row) => row.jobId === completedNoProperty.id) &&
+      !listed.jobs.some((row) => row.jobId === plantedMismatch.id) &&
+      listed.truncated === false &&
+      listed.limit === JOB_PROPERTY_EXPORT_PICKER_LIMIT,
   );
 
   await expectRejects(
@@ -366,6 +395,8 @@ try {
     "Default OWNER export redacts photos but records the count",
     redacted.photos.included === false &&
       redacted.photos.count === 1 &&
+      redacted.photos.truncated === false &&
+      redacted.photos.limit === JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT &&
       redacted.photos.items.length === 0 &&
       !JSON.stringify(redacted).includes(photoA.url) &&
       !JSON.stringify(redacted).includes("Finished lockset"),
@@ -407,6 +438,8 @@ try {
       authorized.customer.phone === "555-0100" &&
       authorized.photos.included === true &&
       authorized.photos.count === 1 &&
+      authorized.photos.truncated === false &&
+      authorized.photos.limit === JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT &&
       authorized.photos.items[0]?.id === photoA.id &&
       authorized.photos.items[0]?.url === photoA.url &&
       authorized.photos.items[0]?.caption === "Finished lockset",
@@ -531,6 +564,100 @@ try {
     "Parser rejects an unknown contract version",
     () => parseJobPropertyExport(wrongVersion),
     (error) => error?.code === "INVALID",
+  );
+
+  console.log("\nDB — picker and photo reads truncate past the cap");
+  const photoOverflowJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  const photoStages = ["BEFORE", "DURING", "AFTER"];
+  await prisma.jobPhoto.createMany({
+    data: Array.from({ length: JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT + 1 }, (_, index) => ({
+      businessId: businessA.id,
+      jobId: photoOverflowJob.id,
+      stage: photoStages[index % photoStages.length],
+      caption: `Overflow ${index}`,
+      url: `https://example.invalid/overflow-${index}.jpg`,
+    })),
+  });
+  const truncatedPhotos = await buildCompletedJobPropertyExport(prisma, ownerAccessA, {
+    jobId: photoOverflowJob.id,
+    includePrivateCustomer: false,
+    includePhotos: true,
+  });
+  const redactedTruncatedPhotos = await buildCompletedJobPropertyExport(prisma, ownerAccessA, {
+    jobId: photoOverflowJob.id,
+    includePrivateCustomer: false,
+    includePhotos: false,
+  });
+  check(
+    "Photo read stops at the cap when more photos exist",
+    truncatedPhotos.photos.truncated === true &&
+      truncatedPhotos.photos.limit === JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT &&
+      truncatedPhotos.photos.count === JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT &&
+      truncatedPhotos.photos.items.length === JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT &&
+      truncatedPhotos.photos.items.every((photo) => photo.url?.includes("/overflow-")) &&
+      jobPropertyExportPhotoTruncationMessage(JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT).includes(
+        String(JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT),
+      ),
+  );
+  check(
+    "Redacted overflow still reports the bounded count and truncation",
+    redactedTruncatedPhotos.photos.included === false &&
+      redactedTruncatedPhotos.photos.truncated === true &&
+      redactedTruncatedPhotos.photos.count === JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT &&
+      redactedTruncatedPhotos.photos.items.length === 0,
+  );
+  const truncatedPhotoRoundTrip = parseJobPropertyExport(
+    JSON.parse(serializeJobPropertyExport(truncatedPhotos)),
+  );
+  check(
+    "Truncated photo packet round-trips with the cap marked",
+    truncatedPhotoRoundTrip.photos.truncated === true &&
+      truncatedPhotoRoundTrip.photos.count === JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT &&
+      truncatedPhotoRoundTrip.photos.items.length === JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT,
+  );
+
+  const oldestOverflow = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+      createdAt: new Date("2019-01-01T00:00:00.000Z"),
+      updatedAt: new Date("2019-01-01T00:00:00.000Z"),
+    },
+  });
+  await prisma.job.createMany({
+    data: Array.from({ length: JOB_PROPERTY_EXPORT_PICKER_LIMIT - 1 }, (_, index) => ({
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+      createdAt: new Date(Date.UTC(2020, 0, 1 + index)),
+      updatedAt: new Date(Date.UTC(2020, 0, 1 + index)),
+    })),
+  });
+  const boundedPicker = await listExportableCompletedJobProperties(prisma, ownerAccessA);
+  check(
+    "Picker stops at the cap when more completed jobs exist",
+    boundedPicker.truncated === true &&
+      boundedPicker.limit === JOB_PROPERTY_EXPORT_PICKER_LIMIT &&
+      boundedPicker.jobs.length === JOB_PROPERTY_EXPORT_PICKER_LIMIT &&
+      boundedPicker.jobs.some((row) => row.jobId === completedA.id) &&
+      boundedPicker.jobs.some((row) => row.jobId === photoOverflowJob.id) &&
+      !boundedPicker.jobs.some((row) => row.jobId === oldestOverflow.id) &&
+      jobPropertyExportPickerTruncationMessage(JOB_PROPERTY_EXPORT_PICKER_LIMIT).includes(
+        String(JOB_PROPERTY_EXPORT_PICKER_LIMIT),
+      ),
   );
 } catch (error) {
   failures += 1;

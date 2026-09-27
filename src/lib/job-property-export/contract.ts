@@ -20,6 +20,9 @@ export const JOB_PROPERTY_EXPORT_INTENDED_CONSUMERS = [
   "reios",
 ] as const;
 
+export const JOB_PROPERTY_EXPORT_PICKER_LIMIT = 40;
+export const JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT = 40;
+
 export type JobPropertyExportIntendedConsumer =
   (typeof JOB_PROPERTY_EXPORT_INTENDED_CONSUMERS)[number];
 
@@ -28,6 +31,7 @@ export const JOB_PROPERTY_EXPORT_OMISSIONS = [
   "Customer name, email, and phone unless the OWNER expressly authorizes private customer data",
   "Job photo URLs and captions unless the OWNER expressly authorizes photos",
   "Photo binaries and storage credentials",
+  "Photo metadata beyond the bounded photo read",
   "Invoices, payments, expenses, time cards, and other financial records",
   "Live synchronization with HQ Watchfolio or REIOS",
   "Shared-database writes or reads outside tbbt-core",
@@ -120,6 +124,8 @@ export type JobPropertyExportPhoto = {
 export type JobPropertyExportPhotos = {
   included: boolean;
   count: number;
+  truncated: boolean;
+  limit: number;
   items: JobPropertyExportPhoto[];
 };
 
@@ -153,4 +159,12 @@ export function jobPropertyExportFilename(document: JobPropertyExportDocument): 
   const date = document.exportedAt.slice(0, 10) || "undated";
   const jobRef = document.job.id.slice(0, 8);
   return `tbbt-completed-job-property-v${document.version}-${jobRef}-${date}.json`;
+}
+
+export function jobPropertyExportPickerTruncationMessage(limit: number): string {
+  return `Showing the ${limit} most recently updated completed jobs. Additional completed jobs were not listed.`;
+}
+
+export function jobPropertyExportPhotoTruncationMessage(limit: number): string {
+  return `Photo read is truncated at ${limit}. Additional photos were not loaded.`;
 }

@@ -15,6 +15,8 @@ import {
 import {
   JOB_PROPERTY_EXPORT_CONTRACT,
   JOB_PROPERTY_EXPORT_OMISSIONS,
+  JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT,
+  JOB_PROPERTY_EXPORT_PICKER_LIMIT,
   JOB_PROPERTY_EXPORT_PRODUCT,
   JOB_PROPERTY_EXPORT_SYSTEM,
   JOB_PROPERTY_EXPORT_VERSION,
@@ -38,10 +40,28 @@ export type ExportableCompletedJobProperty = {
   updatedAt: Date;
 };
 
+export type ExportableCompletedJobPropertyList = {
+  jobs: ExportableCompletedJobProperty[];
+  truncated: boolean;
+  limit: number;
+};
+
+export function boundExportRead<T>(
+  rows: readonly T[],
+  limit: number,
+): { items: T[]; truncated: boolean; limit: number } {
+  const truncated = rows.length > limit;
+  return {
+    items: truncated ? rows.slice(0, limit) : [...rows],
+    truncated,
+    limit,
+  };
+}
+
 export async function listExportableCompletedJobProperties(
   prisma: PrismaClient,
   access: BusinessAccess,
-): Promise<ExportableCompletedJobProperty[]> {
+): Promise<ExportableCompletedJobPropertyList> {
   assertCanExportCompletedJobProperty(access);
   const businessId = access.businessId;
   const jobs = await prisma.job.findMany({
@@ -66,9 +86,10 @@ export async function listExportableCompletedJobProperties(
       },
     },
     orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
+    take: JOB_PROPERTY_EXPORT_PICKER_LIMIT + 1,
   });
 
-  return jobs.flatMap((job) => {
+  const sameBusiness = jobs.flatMap((job) => {
     if (job.businessId !== businessId || !job.propertyId || !job.property) return [];
     if (job.property.businessId !== businessId || job.property.id !== job.propertyId) return [];
     return [
@@ -82,6 +103,12 @@ export async function listExportableCompletedJobProperties(
       },
     ];
   });
+  const bounded = boundExportRead(sameBusiness, JOB_PROPERTY_EXPORT_PICKER_LIMIT);
+  return {
+    jobs: bounded.items,
+    truncated: bounded.truncated || jobs.length > JOB_PROPERTY_EXPORT_PICKER_LIMIT,
+    limit: JOB_PROPERTY_EXPORT_PICKER_LIMIT,
+  };
 }
 
 export async function buildCompletedJobPropertyExport(
@@ -167,6 +194,7 @@ export async function buildCompletedJobPropertyExport(
         url: true,
       },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT + 1,
     }),
   ]);
 
@@ -187,6 +215,7 @@ export async function buildCompletedJobPropertyExport(
   const sameBusinessPhotos = photos.filter(
     (photo) => photo.businessId === businessId && photo.jobId === job.id,
   );
+  const boundedPhotos = boundExportRead(sameBusinessPhotos, JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT);
 
   return {
     contract: JOB_PROPERTY_EXPORT_CONTRACT,
@@ -249,9 +278,11 @@ export async function buildCompletedJobPropertyExport(
     },
     photos: {
       included: includePhotos,
-      count: sameBusinessPhotos.length,
+      count: boundedPhotos.items.length,
+      truncated: boundedPhotos.truncated,
+      limit: boundedPhotos.limit,
       items: includePhotos
-        ? sameBusinessPhotos.map((photo) => ({
+        ? boundedPhotos.items.map((photo) => ({
             id: photo.id,
             stage: photo.stage,
             caption: photo.caption,

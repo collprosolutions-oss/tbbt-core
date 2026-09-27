@@ -20,7 +20,7 @@ export default async function JobPropertyExportPickerPage() {
     redirect("/access-restricted");
   }
 
-  const jobs = await listExportableCompletedJobProperties(prisma, access);
+  const listed = await listExportableCompletedJobProperties(prisma, access);
 
   return (
     <PageContainer>
@@ -28,7 +28,11 @@ export default async function JobPropertyExportPickerPage() {
         title="Completed job/property export"
         description="OWNER-authorized, versioned snapshot of one recorded completed job and its property. Possible future HQ Watchfolio or REIOS use only — no live sync and no shared database."
       />
-      <JobPropertyExportPicker jobs={jobs} />
+      <JobPropertyExportPicker
+        jobs={listed.jobs}
+        truncated={listed.truncated}
+        limit={listed.limit}
+      />
     </PageContainer>
   );
 }

@@ -3,6 +3,7 @@ import {
   JOB_PROPERTY_EXPORT_CONTRACT,
   JOB_PROPERTY_EXPORT_INTENDED_CONSUMERS,
   JOB_PROPERTY_EXPORT_OMISSIONS,
+  JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT,
   JOB_PROPERTY_EXPORT_PRODUCT,
   JOB_PROPERTY_EXPORT_SYSTEM,
   JOB_PROPERTY_EXPORT_VERSION,
@@ -213,6 +214,8 @@ function parsePhotos(input: unknown, includePhotos: boolean): JobPropertyExportD
     throw invalid("photos.included must match authorization.includePhotos");
   }
   const count = asNonNegativeInteger(value.count, "photos.count");
+  const truncated = asBoolean(value.truncated, "photos.truncated");
+  const limit = asExactNumber(value.limit, JOB_PROPERTY_EXPORT_PHOTO_READ_LIMIT, "photos.limit");
   if (!Array.isArray(value.items)) {
     throw invalid("photos.items must be an array");
   }
@@ -223,10 +226,13 @@ function parsePhotos(input: unknown, includePhotos: boolean): JobPropertyExportD
   if (included && items.length !== count) {
     throw invalid("photos.count must match photos.items length when photos are included");
   }
-  if (!included && count < 0) {
-    throw invalid("photos.count must be a non-negative integer");
+  if (count > limit) {
+    throw invalid("photos.count cannot exceed the photo read limit");
   }
-  return { included, count, items };
+  if (truncated && count !== limit) {
+    throw invalid("truncated photo reads must fill the photo read limit");
+  }
+  return { included, count, truncated, limit, items };
 }
 
 function parsePhoto(input: unknown, index: number, included: boolean): JobPropertyExportPhoto {
