@@ -169,6 +169,42 @@ try {
       libSrc.includes("gte: input.since"),
   );
   check(
+    "Multi-timestamp sources use a separate bounded stream per event time",
+    libSrc.includes('orderBy: [{ paidAt: "desc" }') &&
+      libSrc.includes('orderBy: [{ approvedAt: "desc" }') &&
+      libSrc.includes('orderBy: [{ startWithoutConfirmationAt: "desc" }') &&
+      libSrc.includes('orderBy: [{ reviewedAt: "desc" }') &&
+      libSrc.includes('orderBy: [{ resolvedAt: "desc" }') &&
+      libSrc.includes('orderBy: [{ completedAt: "desc" }') &&
+      libSrc.includes('orderBy: [{ ownerReviewedAt: "desc" }') &&
+      libSrc.includes('orderBy: [{ legalReviewAcknowledgedAt: "desc" }') &&
+      libSrc.includes('orderBy: [{ endedAt: "desc" }') &&
+      libSrc.includes('orderBy: [{ attemptedAt: "desc" }') &&
+      libSrc.includes('orderBy: [{ declinedAt: "desc" }') &&
+      libSrc.includes('orderBy: [{ cancelledAt: "desc" }') &&
+      !libSrc.includes("OR: [{ createdAt: { gte: input.since } }, { paidAt: { gte: input.since } }]") &&
+      !libSrc.includes("OR: [{ sentAt: { gte: input.since } }, { approvedAt: { gte: input.since } }]") &&
+      !libSrc.includes("OR: [{ createdAt: { gte: input.since } }, { startWithoutConfirmationAt: { gte: input.since } }]") &&
+      !libSrc.includes("OR: [{ createdAt: { gte: input.since } }, { reviewedAt: { gte: input.since } }]") &&
+      !libSrc.includes("OR: [{ createdAt: { gte: input.since } }, { resolvedAt: { gte: input.since } }]") &&
+      !libSrc.includes("OR: [{ startedAt: { gte: input.since } }, { endedAt: { gte: input.since } }]") &&
+      !libSrc.includes("OR: [{ attemptedAt: { gte: input.since } }, { createdAt: { gte: input.since } }]"),
+  );
+  check(
+    "Phone logs are suppressed only when their communication is already represented",
+    libSrc.includes("communicationId: true") &&
+      libSrc.includes("representedCommunicationIds.has(row.communicationId)"),
+  );
+  const findManyCount = (libSrc.match(/\.findMany\(/g) || []).length;
+  const sourceTakeCount = (libSrc.match(/take: input\.take/g) || []).length;
+  const filterTakeCount = (libSrc.match(/take: BUSINESS_TIMELINE_CUSTOMER_FILTER_LIMIT/g) || []).length;
+  const boundedIdLookups = (libSrc.match(/id: \{ in:/g) || []).length;
+  check(
+    "Every table read is bounded by take or an id-in lookup",
+    sourceTakeCount + filterTakeCount + boundedIdLookups === findManyCount &&
+      !libSrc.includes("findMany({\n      where: { businessId: input.businessId },\n    })"),
+  );
+  check(
     "Descriptions stay at recorded status and do not infer reads or AI origin",
     describeSrc.includes("status recorded as") &&
       !describeSrc.includes("customer read the") &&
@@ -757,6 +793,380 @@ try {
     lookback.items.every((item) => item.occurredAt >= lookback.since) &&
       lookback.items.some((item) => item.id === `invoice:${recentPaid.id}:paid`) &&
       !lookback.items.some((item) => item.occurredAt === "2026-04-01T12:00:00.000Z"),
+  );
+
+  console.log("\nDB — Recent event timestamps survive newer-created overflow");
+  const stampSince = new Date("2026-09-10T00:00:00.000Z");
+  const stampToday = new Date("2026-09-26T18:00:00.000Z");
+  const stampOld = new Date("2025-11-01T12:00:00.000Z");
+  const overflow = BUSINESS_TIMELINE_LIMIT + 1;
+
+  const oldPaidInvoice = await prisma.invoice.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      status: "PAID",
+      createdAt: stampOld,
+      paidAt: stampToday,
+    },
+  });
+  await prisma.invoice.createMany({
+    data: Array.from({ length: overflow }, (_, index) => ({
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      status: "DRAFT",
+      createdAt: new Date(stampSince.getTime() + (index + 1) * 60_000),
+    })),
+  });
+
+  const oldEstimate = await prisma.estimate.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      status: "APPROVED",
+      publicToken: randomUUID(),
+      createdAt: stampOld,
+    },
+  });
+  const oldEstimateVersion = await prisma.estimateVersion.create({
+    data: {
+      businessId: tenantA.business.id,
+      estimateId: oldEstimate.id,
+      versionNumber: 1,
+      total: 10,
+      laborMinimumWaived: false,
+      laborMinimumAdjustment: 0,
+      sentAt: stampOld,
+      approvedAt: stampToday,
+    },
+  });
+  const overflowEstimates = await prisma.estimate.createManyAndReturn({
+    data: Array.from({ length: overflow }, () => ({
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      status: "SENT",
+      publicToken: randomUUID(),
+      createdAt: new Date(stampSince.getTime() + 60_000),
+    })),
+  });
+  await prisma.estimateVersion.createMany({
+    data: overflowEstimates.map((estimate, index) => ({
+      businessId: tenantA.business.id,
+      estimateId: estimate.id,
+      versionNumber: 1,
+      total: 10,
+      laborMinimumWaived: false,
+      laborMinimumAdjustment: 0,
+      sentAt: new Date(stampSince.getTime() + (index + 1) * 60_000),
+    })),
+  });
+
+  const oldChangeOrder = await prisma.changeOrder.create({
+    data: {
+      businessId: tenantA.business.id,
+      jobId: jobA.id,
+      title: "Old railing later approved",
+      status: "APPROVED",
+      createdAt: stampOld,
+      sentAt: stampOld,
+      approvedAt: stampToday,
+    },
+  });
+  const oldChangeOrderSent = await prisma.changeOrder.create({
+    data: {
+      businessId: tenantA.business.id,
+      jobId: jobA.id,
+      title: "Old railing later sent",
+      status: "SENT",
+      createdAt: stampOld,
+      sentAt: stampToday,
+    },
+  });
+  await prisma.changeOrder.createMany({
+    data: Array.from({ length: overflow }, (_, index) => ({
+      businessId: tenantA.business.id,
+      jobId: jobA.id,
+      title: `Newer CO ${index}`,
+      status: "DRAFT",
+      createdAt: new Date(stampSince.getTime() + (index + 1) * 60_000),
+    })),
+  });
+
+  const oldStartJob = await prisma.job.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      createdAt: stampOld,
+      startWithoutConfirmationAt: stampToday,
+    },
+  });
+  await prisma.job.createMany({
+    data: Array.from({ length: overflow }, (_, index) => ({
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      projectToken: randomUUID(),
+      status: "SCHEDULED",
+      createdAt: new Date(stampSince.getTime() + (index + 1) * 60_000),
+    })),
+  });
+
+  const oldAdditionalWork = await prisma.additionalWorkRequest.create({
+    data: {
+      businessId: tenantA.business.id,
+      jobId: jobA.id,
+      description: "Old extra work later reviewed",
+      status: "DISMISSED",
+      createdAt: stampOld,
+      reviewedAt: stampToday,
+    },
+  });
+  await prisma.additionalWorkRequest.createMany({
+    data: Array.from({ length: overflow }, (_, index) => ({
+      businessId: tenantA.business.id,
+      jobId: jobA.id,
+      description: `Newer extra work ${index}`,
+      status: "OPEN",
+      createdAt: new Date(stampSince.getTime() + (index + 1) * 60_000),
+    })),
+  });
+
+  const oldProblem = await prisma.jobProblemReport.create({
+    data: {
+      businessId: tenantA.business.id,
+      jobId: jobA.id,
+      membershipId: tenantA.membership.id,
+      description: "Old problem later resolved",
+      status: "RESOLVED",
+      createdAt: stampOld,
+      resolvedAt: stampToday,
+    },
+  });
+  await prisma.jobProblemReport.createMany({
+    data: Array.from({ length: overflow }, (_, index) => ({
+      businessId: tenantA.business.id,
+      jobId: jobA.id,
+      membershipId: tenantA.membership.id,
+      description: `Newer problem ${index}`,
+      status: "OPEN",
+      createdAt: new Date(stampSince.getTime() + (index + 1) * 60_000),
+    })),
+  });
+
+  const oldAgreement = await prisma.businessAgreement.create({
+    data: {
+      businessId: tenantA.business.id,
+      agreementType: "NDA",
+      title: "Old NDA later completed",
+      createdByMembershipId: tenantA.membership.id,
+      createdAt: stampOld,
+      completedAt: stampToday,
+      ownerReviewedAt: stampToday,
+      legalReviewAcknowledgedAt: stampToday,
+    },
+  });
+  await prisma.businessAgreement.createMany({
+    data: Array.from({ length: overflow }, (_, index) => ({
+      businessId: tenantA.business.id,
+      agreementType: "NDA",
+      title: `Newer agreement ${index}`,
+      createdByMembershipId: tenantA.membership.id,
+      createdAt: new Date(stampSince.getTime() + (index + 1) * 60_000),
+    })),
+  });
+
+  const moneyStamp = await loadBusinessTimeline(prisma, tenantA.access, {
+    since: stampSince,
+    category: "money",
+    customerId: customerA.id,
+  });
+  const salesStamp = await loadBusinessTimeline(prisma, tenantA.access, {
+    since: stampSince,
+    category: "sales",
+    customerId: customerA.id,
+  });
+  const workStamp = await loadBusinessTimeline(prisma, tenantA.access, {
+    since: stampSince,
+    category: "work",
+    customerId: customerA.id,
+  });
+  const opsStamp = await loadBusinessTimeline(prisma, tenantA.access, {
+    since: stampSince,
+    category: "operations",
+  });
+
+  check(
+    "Old invoice paid today survives newer-created overflow",
+    moneyStamp.items.some((item) => item.id === `invoice:${oldPaidInvoice.id}:paid`),
+  );
+  check(
+    "Old estimate approved today survives newer sent/created overflow",
+    salesStamp.items.some((item) => item.id === `estimate-version:${oldEstimateVersion.id}:approved`),
+  );
+  check(
+    "Old change order approved today survives newer-created overflow",
+    salesStamp.items.some((item) => item.id === `change-order:${oldChangeOrder.id}:approved`),
+  );
+  check(
+    "Old change order sent today survives newer-created overflow",
+    salesStamp.items.some((item) => item.id === `change-order:${oldChangeOrderSent.id}:sent`),
+  );
+  check(
+    "Old job start-without-confirmation today survives newer-created overflow",
+    workStamp.items.some((item) => item.id === `job:${oldStartJob.id}:start-without-confirmation`),
+  );
+  check(
+    "Old additional work reviewed today survives newer-created overflow",
+    workStamp.items.some((item) => item.id === `additional-work:${oldAdditionalWork.id}:reviewed`),
+  );
+  check(
+    "Old problem report resolved today survives newer-created overflow",
+    workStamp.items.some((item) => item.id === `problem-report:${oldProblem.id}:resolved`),
+  );
+  check(
+    "Old agreement completed/reviewed/acknowledged today survives newer-created overflow",
+    opsStamp.items.some((item) => item.id === `agreement:${oldAgreement.id}:completed`) &&
+      opsStamp.items.some((item) => item.id === `agreement:${oldAgreement.id}:owner-reviewed`) &&
+      opsStamp.items.some((item) => item.id === `agreement:${oldAgreement.id}:legal-acknowledged`),
+  );
+  check(
+    "Recent-event overflow reads stay bounded",
+    moneyStamp.items.length <= BUSINESS_TIMELINE_LIMIT &&
+      salesStamp.items.length <= BUSINESS_TIMELINE_LIMIT &&
+      workStamp.items.length <= BUSINESS_TIMELINE_LIMIT &&
+      opsStamp.items.length <= BUSINESS_TIMELINE_LIMIT &&
+      moneyStamp.truncated &&
+      salesStamp.truncated &&
+      workStamp.truncated &&
+      opsStamp.truncated,
+  );
+
+  console.log("\nDB — PhoneInteraction dedupe against represented communications");
+  const commLinked = await prisma.customerCommunication.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      channel: "PHONE",
+      purpose: "MISSED_CALL",
+      status: "SENT",
+      provider: "test",
+      bodySnapshot: "Linked phone communication",
+      idempotencyKey: `linked-comm-${randomUUID()}`,
+      createdAt: stampToday,
+      attemptedAt: stampToday,
+    },
+  });
+  const phoneLinked = await prisma.phoneInteraction.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      communicationId: commLinked.id,
+      kind: "MISSED_CALL",
+      status: "LOGGED",
+      direction: "INBOUND",
+      summary: "Linked phone should be suppressed",
+      idempotencyKey: `linked-phone-${randomUUID()}`,
+      occurredAt: stampToday,
+    },
+  });
+  const phoneSolo = await prisma.phoneInteraction.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      kind: "MANUAL_PHONE",
+      status: "LOGGED",
+      direction: "OUTBOUND",
+      summary: "Standalone phone remains",
+      idempotencyKey: `solo-phone-${randomUUID()}`,
+      occurredAt: new Date(stampToday.getTime() + 60_000),
+    },
+  });
+  const commBWindow = await prisma.customerCommunication.create({
+    data: {
+      businessId: tenantB.business.id,
+      customerId: customerB.id,
+      channel: "PHONE",
+      purpose: "MISSED_CALL",
+      status: "SENT",
+      provider: "test",
+      bodySnapshot: "Tenant B linked communication",
+      idempotencyKey: `b-comm-${randomUUID()}`,
+      createdAt: stampToday,
+      attemptedAt: stampToday,
+    },
+  });
+  const phoneAPointsAtB = await prisma.phoneInteraction.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      communicationId: commBWindow.id,
+      kind: "INBOUND_CALL_EVENT",
+      status: "LOGGED",
+      direction: "INBOUND",
+      summary: "A phone pointing at B communication",
+      idempotencyKey: `a-points-b-${randomUUID()}`,
+      occurredAt: new Date(stampToday.getTime() + 120_000),
+    },
+  });
+  const phoneBPointsAtA = await prisma.phoneInteraction.create({
+    data: {
+      businessId: tenantB.business.id,
+      customerId: customerB.id,
+      communicationId: commLinked.id,
+      kind: "INBOUND_CALL_EVENT",
+      status: "LOGGED",
+      direction: "INBOUND",
+      summary: "B phone pointing at A communication",
+      idempotencyKey: `b-points-a-${randomUUID()}`,
+      occurredAt: new Date(stampToday.getTime() + 180_000),
+    },
+  });
+
+  const commsA = await loadBusinessTimeline(prisma, tenantA.access, {
+    since: stampSince,
+    category: "communications",
+    customerId: customerA.id,
+  });
+  const commsB = await loadBusinessTimeline(prisma, tenantB.access, {
+    since: stampSince,
+    category: "communications",
+    customerId: customerB.id,
+  });
+  check(
+    "Linked PhoneInteraction is not a second communication occurrence",
+    commsA.items.some((item) => item.id === `communication:${commLinked.id}`) &&
+      commsA.items.every((item) => item.id !== `phone:${phoneLinked.id}`),
+  );
+  check(
+    "Standalone PhoneInteraction still appears",
+    commsA.items.some((item) => item.id === `phone:${phoneSolo.id}`),
+  );
+  check(
+    "Foreign communicationId does not suppress the local phone log or leak the foreign communication",
+    commsA.items.some((item) => item.id === `phone:${phoneAPointsAtB.id}`) &&
+      commsA.items.every((item) => item.id !== `communication:${commBWindow.id}`) &&
+      commsA.items.every((item) => !item.description.includes("Tenant B linked")),
+  );
+  check(
+    "Foreign tenant phone pointing at a local communication does not appear or expose the local communication to that tenant",
+    commsB.items.some((item) => item.id === `phone:${phoneBPointsAtA.id}`) &&
+      commsB.items.every((item) => item.id !== `communication:${commLinked.id}`) &&
+      commsB.items.every((item) => item.id !== `phone:${phoneLinked.id}`) &&
+      commsB.items.every((item) => item.id !== `phone:${phoneSolo.id}`),
+  );
+  check(
+    "Existing customer filter, timezone, owned links, and final cap remain correct",
+    commsA.timeZone === "America/Los_Angeles" &&
+      commsA.customerId === customerA.id &&
+      commsA.items.every((item) => item.customerId === customerA.id) &&
+      commsA.items.length <= BUSINESS_TIMELINE_LIMIT &&
+      moneyStamp.items.find((item) => item.id === `invoice:${oldPaidInvoice.id}:paid`)
+        ?.relatedHref === `/invoices/${oldPaidInvoice.id}` &&
+      commsA.items.every((item, index) => {
+        if (index === 0) return true;
+        return item.occurredAt <= commsA.items[index - 1].occurredAt;
+      }),
   );
 } finally {
   await prisma.$disconnect();

@@ -154,6 +154,47 @@ export async function listBusinessTimelineCustomers(
   });
 }
 
+const CHANGE_ORDER_SELECT = {
+  id: true,
+  jobId: true,
+  title: true,
+  createdAt: true,
+  sentAt: true,
+  approvedAt: true,
+  declinedAt: true,
+  cancelledAt: true,
+  job: { select: { customerId: true } },
+} as const;
+
+function changeOrderDraft(
+  row: {
+    id: string;
+    jobId: string;
+    title: string;
+    job: { customerId: string | null };
+  },
+  moment: {
+    kind: "created" | "sent" | "approved" | "declined" | "cancelled";
+    at: Date;
+    eventType: string;
+    status: string;
+  },
+): BusinessTimelineDraft {
+  return draft({
+    id: `change-order:${row.id}:${moment.kind}`,
+    occurredAt: moment.at,
+    eventType: moment.eventType,
+    category: "sales",
+    description: describeChangeOrderEvent(moment.kind, row.title),
+    customerId: row.job.customerId,
+    relatedType: "CHANGE_ORDER",
+    relatedId: row.id,
+    relatedJobId: row.jobId,
+    relatedLabel: row.title,
+    sourceStatus: moment.status,
+  });
+}
+
 async function collectSalesDrafts(
   db: Db,
   input: {
@@ -164,7 +205,20 @@ async function collectSalesDrafts(
   },
 ): Promise<BusinessTimelineDraft[]> {
   const customerWhere = input.customerId ? { customerId: input.customerId } : {};
-  const [customers, requests, estimates, versions, changeOrders] = await Promise.all([
+  const estimateScope = { businessId: input.businessId, ...customerWhere };
+  const jobScope = { businessId: input.businessId, ...customerWhere };
+  const [
+    customers,
+    requests,
+    estimates,
+    sentVersions,
+    approvedVersions,
+    changeOrdersCreated,
+    changeOrdersSent,
+    changeOrdersApproved,
+    changeOrdersDeclined,
+    changeOrdersCancelled,
+  ] = await Promise.all([
     input.customerId
       ? db.customer.findMany({
           where: {
@@ -197,43 +251,81 @@ async function collectSalesDrafts(
     db.estimateVersion.findMany({
       where: {
         businessId: input.businessId,
-        OR: [{ sentAt: { gte: input.since } }, { approvedAt: { gte: input.since } }],
-        estimate: { businessId: input.businessId, ...customerWhere },
+        sentAt: { gte: input.since },
+        estimate: estimateScope,
       },
       select: {
         id: true,
         estimateId: true,
         sentAt: true,
+        estimate: { select: { customerId: true } },
+      },
+      orderBy: [{ sentAt: "desc" }, { id: "desc" }],
+      take: input.take,
+    }),
+    db.estimateVersion.findMany({
+      where: {
+        businessId: input.businessId,
+        approvedAt: { gte: input.since },
+        estimate: estimateScope,
+      },
+      select: {
+        id: true,
+        estimateId: true,
         approvedAt: true,
         estimate: { select: { customerId: true } },
       },
+      orderBy: [{ approvedAt: "desc" }, { id: "desc" }],
+      take: input.take,
+    }),
+    db.changeOrder.findMany({
+      where: {
+        businessId: input.businessId,
+        createdAt: { gte: input.since },
+        job: jobScope,
+      },
+      select: CHANGE_ORDER_SELECT,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: input.take,
+    }),
+    db.changeOrder.findMany({
+      where: {
+        businessId: input.businessId,
+        sentAt: { gte: input.since },
+        job: jobScope,
+      },
+      select: CHANGE_ORDER_SELECT,
       orderBy: [{ sentAt: "desc" }, { id: "desc" }],
       take: input.take,
     }),
     db.changeOrder.findMany({
       where: {
         businessId: input.businessId,
-        OR: [
-          { createdAt: { gte: input.since } },
-          { sentAt: { gte: input.since } },
-          { approvedAt: { gte: input.since } },
-          { declinedAt: { gte: input.since } },
-          { cancelledAt: { gte: input.since } },
-        ],
-        job: { businessId: input.businessId, ...customerWhere },
+        approvedAt: { gte: input.since },
+        job: jobScope,
       },
-      select: {
-        id: true,
-        jobId: true,
-        title: true,
-        createdAt: true,
-        sentAt: true,
-        approvedAt: true,
-        declinedAt: true,
-        cancelledAt: true,
-        job: { select: { customerId: true } },
+      select: CHANGE_ORDER_SELECT,
+      orderBy: [{ approvedAt: "desc" }, { id: "desc" }],
+      take: input.take,
+    }),
+    db.changeOrder.findMany({
+      where: {
+        businessId: input.businessId,
+        declinedAt: { gte: input.since },
+        job: jobScope,
       },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: CHANGE_ORDER_SELECT,
+      orderBy: [{ declinedAt: "desc" }, { id: "desc" }],
+      take: input.take,
+    }),
+    db.changeOrder.findMany({
+      where: {
+        businessId: input.businessId,
+        cancelledAt: { gte: input.since },
+        job: jobScope,
+      },
+      select: CHANGE_ORDER_SELECT,
+      orderBy: [{ cancelledAt: "desc" }, { id: "desc" }],
       take: input.take,
     }),
   ]);
@@ -290,74 +382,94 @@ async function collectSalesDrafts(
       }),
     );
   }
-  for (const row of versions) {
-    if (row.sentAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `estimate-version:${row.id}:sent`,
-          occurredAt: row.sentAt,
-          eventType: "ESTIMATE_SENT",
-          category: "sales",
-          description: describeEstimateSent(row.estimateId),
-          customerId: row.estimate.customerId,
-          relatedType: "ESTIMATE",
-          relatedId: row.estimateId,
-          relatedJobId: null,
-          relatedLabel: estimateTimelineNumber(row.estimateId),
-          sourceStatus: "SENT",
-        }),
-      );
-    }
-    if (row.approvedAt && row.approvedAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `estimate-version:${row.id}:approved`,
-          occurredAt: row.approvedAt,
-          eventType: "ESTIMATE_APPROVED",
-          category: "sales",
-          description: describeEstimateApproved(row.estimateId),
-          customerId: row.estimate.customerId,
-          relatedType: "ESTIMATE",
-          relatedId: row.estimateId,
-          relatedJobId: null,
-          relatedLabel: estimateTimelineNumber(row.estimateId),
-          sourceStatus: "APPROVED",
-        }),
-      );
-    }
+  for (const row of sentVersions) {
+    drafts.push(
+      draft({
+        id: `estimate-version:${row.id}:sent`,
+        occurredAt: row.sentAt,
+        eventType: "ESTIMATE_SENT",
+        category: "sales",
+        description: describeEstimateSent(row.estimateId),
+        customerId: row.estimate.customerId,
+        relatedType: "ESTIMATE",
+        relatedId: row.estimateId,
+        relatedJobId: null,
+        relatedLabel: estimateTimelineNumber(row.estimateId),
+        sourceStatus: "SENT",
+      }),
+    );
   }
-  for (const row of changeOrders) {
-    const customerId = row.job.customerId;
-    const moments: Array<{
-      kind: "created" | "sent" | "approved" | "declined" | "cancelled";
-      at: Date | null;
-      eventType: string;
-      status: string;
-    }> = [
-      { kind: "created", at: row.createdAt, eventType: "CHANGE_ORDER_RECORDED", status: "DRAFT" },
-      { kind: "sent", at: row.sentAt, eventType: "CHANGE_ORDER_SENT", status: "SENT" },
-      { kind: "approved", at: row.approvedAt, eventType: "CHANGE_ORDER_APPROVED", status: "APPROVED" },
-      { kind: "declined", at: row.declinedAt, eventType: "CHANGE_ORDER_DECLINED", status: "DECLINED" },
-      { kind: "cancelled", at: row.cancelledAt, eventType: "CHANGE_ORDER_CANCELLED", status: "CANCELLED" },
-    ];
-    for (const moment of moments) {
-      if (!moment.at || moment.at < input.since) continue;
-      drafts.push(
-        draft({
-          id: `change-order:${row.id}:${moment.kind}`,
-          occurredAt: moment.at,
-          eventType: moment.eventType,
-          category: "sales",
-          description: describeChangeOrderEvent(moment.kind, row.title),
-          customerId,
-          relatedType: "CHANGE_ORDER",
-          relatedId: row.id,
-          relatedJobId: row.jobId,
-          relatedLabel: row.title,
-          sourceStatus: moment.status,
-        }),
-      );
-    }
+  for (const row of approvedVersions) {
+    if (!row.approvedAt) continue;
+    drafts.push(
+      draft({
+        id: `estimate-version:${row.id}:approved`,
+        occurredAt: row.approvedAt,
+        eventType: "ESTIMATE_APPROVED",
+        category: "sales",
+        description: describeEstimateApproved(row.estimateId),
+        customerId: row.estimate.customerId,
+        relatedType: "ESTIMATE",
+        relatedId: row.estimateId,
+        relatedJobId: null,
+        relatedLabel: estimateTimelineNumber(row.estimateId),
+        sourceStatus: "APPROVED",
+      }),
+    );
+  }
+  for (const row of changeOrdersCreated) {
+    drafts.push(
+      changeOrderDraft(row, {
+        kind: "created",
+        at: row.createdAt,
+        eventType: "CHANGE_ORDER_RECORDED",
+        status: "DRAFT",
+      }),
+    );
+  }
+  for (const row of changeOrdersSent) {
+    if (!row.sentAt) continue;
+    drafts.push(
+      changeOrderDraft(row, {
+        kind: "sent",
+        at: row.sentAt,
+        eventType: "CHANGE_ORDER_SENT",
+        status: "SENT",
+      }),
+    );
+  }
+  for (const row of changeOrdersApproved) {
+    if (!row.approvedAt) continue;
+    drafts.push(
+      changeOrderDraft(row, {
+        kind: "approved",
+        at: row.approvedAt,
+        eventType: "CHANGE_ORDER_APPROVED",
+        status: "APPROVED",
+      }),
+    );
+  }
+  for (const row of changeOrdersDeclined) {
+    if (!row.declinedAt) continue;
+    drafts.push(
+      changeOrderDraft(row, {
+        kind: "declined",
+        at: row.declinedAt,
+        eventType: "CHANGE_ORDER_DECLINED",
+        status: "DECLINED",
+      }),
+    );
+  }
+  for (const row of changeOrdersCancelled) {
+    if (!row.cancelledAt) continue;
+    drafts.push(
+      changeOrderDraft(row, {
+        kind: "cancelled",
+        at: row.cancelledAt,
+        eventType: "CHANGE_ORDER_CANCELLED",
+        status: "CANCELLED",
+      }),
+    );
   }
   return drafts;
 }
@@ -373,24 +485,47 @@ async function collectWorkDrafts(
 ): Promise<BusinessTimelineDraft[]> {
   const customerWhere = input.customerId ? { customerId: input.customerId } : {};
   const jobScope = { businessId: input.businessId, ...customerWhere };
-  const [jobs, appointmentEvents, additionalWork, problems, timeEntries, jobEvents] =
-    await Promise.all([
+  const timeJobScope = input.customerId
+    ? { job: { businessId: input.businessId, customerId: input.customerId } }
+    : {};
+  const [
+    jobsCreated,
+    jobsStartedWithoutConfirmation,
+    appointmentEvents,
+    additionalWorkCreated,
+    additionalWorkReviewed,
+    problemsCreated,
+    problemsResolved,
+    timeEntriesStarted,
+    timeEntriesEnded,
+    jobEvents,
+  ] = await Promise.all([
       db.job.findMany({
         where: {
           businessId: input.businessId,
-          OR: [
-            { createdAt: { gte: input.since } },
-            { startWithoutConfirmationAt: { gte: input.since } },
-          ],
+          createdAt: { gte: input.since },
           ...customerWhere,
         },
         select: {
           id: true,
           customerId: true,
           createdAt: true,
-          startWithoutConfirmationAt: true,
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: input.take,
+      }),
+      db.job.findMany({
+        where: {
+          businessId: input.businessId,
+          startWithoutConfirmationAt: { gte: input.since },
+          ...customerWhere,
+        },
+        select: {
+          id: true,
+          customerId: true,
+          startWithoutConfirmationAt: true,
+        },
+        orderBy: [{ startWithoutConfirmationAt: "desc" }, { id: "desc" }],
         take: input.take,
       }),
       db.jobAppointmentEvent.findMany({
@@ -412,7 +547,7 @@ async function collectWorkDrafts(
       db.additionalWorkRequest.findMany({
         where: {
           businessId: input.businessId,
-          OR: [{ createdAt: { gte: input.since } }, { reviewedAt: { gte: input.since } }],
+          createdAt: { gte: input.since },
           job: jobScope,
         },
         select: {
@@ -420,7 +555,37 @@ async function collectWorkDrafts(
           jobId: true,
           status: true,
           createdAt: true,
+          job: { select: { customerId: true } },
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: input.take,
+      }),
+      db.additionalWorkRequest.findMany({
+        where: {
+          businessId: input.businessId,
+          reviewedAt: { gte: input.since },
+          job: jobScope,
+        },
+        select: {
+          id: true,
+          jobId: true,
+          status: true,
           reviewedAt: true,
+          job: { select: { customerId: true } },
+        },
+        orderBy: [{ reviewedAt: "desc" }, { id: "desc" }],
+        take: input.take,
+      }),
+      db.jobProblemReport.findMany({
+        where: {
+          businessId: input.businessId,
+          createdAt: { gte: input.since },
+          job: jobScope,
+        },
+        select: {
+          id: true,
+          jobId: true,
+          createdAt: true,
           job: { select: { customerId: true } },
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -429,36 +594,48 @@ async function collectWorkDrafts(
       db.jobProblemReport.findMany({
         where: {
           businessId: input.businessId,
-          OR: [{ createdAt: { gte: input.since } }, { resolvedAt: { gte: input.since } }],
+          resolvedAt: { gte: input.since },
           job: jobScope,
         },
         select: {
           id: true,
           jobId: true,
-          createdAt: true,
           resolvedAt: true,
           job: { select: { customerId: true } },
         },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        orderBy: [{ resolvedAt: "desc" }, { id: "desc" }],
         take: input.take,
       }),
       db.timeEntry.findMany({
         where: {
           businessId: input.businessId,
-          OR: [{ startedAt: { gte: input.since } }, { endedAt: { gte: input.since } }],
-          ...(input.customerId
-            ? { job: { businessId: input.businessId, customerId: input.customerId } }
-            : {}),
+          startedAt: { gte: input.since },
+          ...timeJobScope,
         },
         select: {
           id: true,
           jobId: true,
           activityType: true,
           startedAt: true,
-          endedAt: true,
           job: { select: { customerId: true } },
         },
         orderBy: [{ startedAt: "desc" }, { id: "desc" }],
+        take: input.take,
+      }),
+      db.timeEntry.findMany({
+        where: {
+          businessId: input.businessId,
+          endedAt: { gte: input.since },
+          ...timeJobScope,
+        },
+        select: {
+          id: true,
+          jobId: true,
+          activityType: true,
+          endedAt: true,
+          job: { select: { customerId: true } },
+        },
+        orderBy: [{ endedAt: "desc" }, { id: "desc" }],
         take: input.take,
       }),
       db.businessEvent.findMany({
@@ -480,41 +657,40 @@ async function collectWorkDrafts(
     ]);
 
   const drafts: BusinessTimelineDraft[] = [];
-  for (const row of jobs) {
-    if (row.createdAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `job:${row.id}:recorded`,
-          occurredAt: row.createdAt,
-          eventType: "JOB_RECORDED",
-          category: "work",
-          description: describeJobRecorded(row.id),
-          customerId: row.customerId,
-          relatedType: "JOB",
-          relatedId: row.id,
-          relatedJobId: row.id,
-          relatedLabel: jobTimelineReference(row.id),
-          sourceStatus: null,
-        }),
-      );
-    }
-    if (row.startWithoutConfirmationAt && row.startWithoutConfirmationAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `job:${row.id}:start-without-confirmation`,
-          occurredAt: row.startWithoutConfirmationAt,
-          eventType: "JOB_START_WITHOUT_CONFIRMATION",
-          category: "work",
-          description: describeJobStartWithoutConfirmation(row.id),
-          customerId: row.customerId,
-          relatedType: "JOB",
-          relatedId: row.id,
-          relatedJobId: row.id,
-          relatedLabel: jobTimelineReference(row.id),
-          sourceStatus: null,
-        }),
-      );
-    }
+  for (const row of jobsCreated) {
+    drafts.push(
+      draft({
+        id: `job:${row.id}:recorded`,
+        occurredAt: row.createdAt,
+        eventType: "JOB_RECORDED",
+        category: "work",
+        description: describeJobRecorded(row.id),
+        customerId: row.customerId,
+        relatedType: "JOB",
+        relatedId: row.id,
+        relatedJobId: row.id,
+        relatedLabel: jobTimelineReference(row.id),
+        sourceStatus: null,
+      }),
+    );
+  }
+  for (const row of jobsStartedWithoutConfirmation) {
+    if (!row.startWithoutConfirmationAt) continue;
+    drafts.push(
+      draft({
+        id: `job:${row.id}:start-without-confirmation`,
+        occurredAt: row.startWithoutConfirmationAt,
+        eventType: "JOB_START_WITHOUT_CONFIRMATION",
+        category: "work",
+        description: describeJobStartWithoutConfirmation(row.id),
+        customerId: row.customerId,
+        relatedType: "JOB",
+        relatedId: row.id,
+        relatedJobId: row.id,
+        relatedLabel: jobTimelineReference(row.id),
+        sourceStatus: null,
+      }),
+    );
   }
   for (const row of appointmentEvents) {
     const isNotification = row.eventType.startsWith("APPOINTMENT_NOTIFICATION");
@@ -534,113 +710,110 @@ async function collectWorkDrafts(
       }),
     );
   }
-  for (const row of additionalWork) {
-    if (row.createdAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `additional-work:${row.id}:recorded`,
-          occurredAt: row.createdAt,
-          eventType: "ADDITIONAL_WORK_RECORDED",
-          category: "work",
-          description: describeAdditionalWorkRecorded(),
-          customerId: row.job.customerId,
-          relatedType: "JOB",
-          relatedId: row.jobId,
-          relatedJobId: row.jobId,
-          relatedLabel: jobTimelineReference(row.jobId),
-          sourceStatus: row.status,
-        }),
-      );
-    }
-    if (row.reviewedAt && row.reviewedAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `additional-work:${row.id}:reviewed`,
-          occurredAt: row.reviewedAt,
-          eventType: "ADDITIONAL_WORK_REVIEWED",
-          category: "work",
-          description: describeAdditionalWorkReviewed(row.status),
-          customerId: row.job.customerId,
-          relatedType: "JOB",
-          relatedId: row.jobId,
-          relatedJobId: row.jobId,
-          relatedLabel: jobTimelineReference(row.jobId),
-          sourceStatus: row.status,
-        }),
-      );
-    }
+  for (const row of additionalWorkCreated) {
+    drafts.push(
+      draft({
+        id: `additional-work:${row.id}:recorded`,
+        occurredAt: row.createdAt,
+        eventType: "ADDITIONAL_WORK_RECORDED",
+        category: "work",
+        description: describeAdditionalWorkRecorded(),
+        customerId: row.job.customerId,
+        relatedType: "JOB",
+        relatedId: row.jobId,
+        relatedJobId: row.jobId,
+        relatedLabel: jobTimelineReference(row.jobId),
+        sourceStatus: row.status,
+      }),
+    );
   }
-  for (const row of problems) {
-    if (row.createdAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `problem-report:${row.id}:recorded`,
-          occurredAt: row.createdAt,
-          eventType: "PROBLEM_REPORT_RECORDED",
-          category: "work",
-          description: describeProblemReportRecorded(),
-          customerId: row.job.customerId,
-          relatedType: "JOB",
-          relatedId: row.jobId,
-          relatedJobId: row.jobId,
-          relatedLabel: jobTimelineReference(row.jobId),
-          sourceStatus: null,
-        }),
-      );
-    }
-    if (row.resolvedAt && row.resolvedAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `problem-report:${row.id}:resolved`,
-          occurredAt: row.resolvedAt,
-          eventType: "PROBLEM_REPORT_RESOLVED",
-          category: "work",
-          description: describeProblemReportResolved(),
-          customerId: row.job.customerId,
-          relatedType: "JOB",
-          relatedId: row.jobId,
-          relatedJobId: row.jobId,
-          relatedLabel: jobTimelineReference(row.jobId),
-          sourceStatus: "RESOLVED",
-        }),
-      );
-    }
+  for (const row of additionalWorkReviewed) {
+    if (!row.reviewedAt) continue;
+    drafts.push(
+      draft({
+        id: `additional-work:${row.id}:reviewed`,
+        occurredAt: row.reviewedAt,
+        eventType: "ADDITIONAL_WORK_REVIEWED",
+        category: "work",
+        description: describeAdditionalWorkReviewed(row.status),
+        customerId: row.job.customerId,
+        relatedType: "JOB",
+        relatedId: row.jobId,
+        relatedJobId: row.jobId,
+        relatedLabel: jobTimelineReference(row.jobId),
+        sourceStatus: row.status,
+      }),
+    );
   }
-  for (const row of timeEntries) {
-    if (row.startedAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `time-entry:${row.id}:started`,
-          occurredAt: row.startedAt,
-          eventType: "TIME_ENTRY_STARTED",
-          category: "work",
-          description: describeTimeEntryStarted(row.activityType),
-          customerId: row.job?.customerId ?? null,
-          relatedType: row.jobId ? "JOB" : "TIME_ENTRY",
-          relatedId: row.jobId ?? row.id,
-          relatedJobId: row.jobId,
-          relatedLabel: row.jobId ? jobTimelineReference(row.jobId) : "Time entry",
-          sourceStatus: null,
-        }),
-      );
-    }
-    if (row.endedAt && row.endedAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `time-entry:${row.id}:ended`,
-          occurredAt: row.endedAt,
-          eventType: "TIME_ENTRY_ENDED",
-          category: "work",
-          description: describeTimeEntryEnded(row.activityType),
-          customerId: row.job?.customerId ?? null,
-          relatedType: row.jobId ? "JOB" : "TIME_ENTRY",
-          relatedId: row.jobId ?? row.id,
-          relatedJobId: row.jobId,
-          relatedLabel: row.jobId ? jobTimelineReference(row.jobId) : "Time entry",
-          sourceStatus: null,
-        }),
-      );
-    }
+  for (const row of problemsCreated) {
+    drafts.push(
+      draft({
+        id: `problem-report:${row.id}:recorded`,
+        occurredAt: row.createdAt,
+        eventType: "PROBLEM_REPORT_RECORDED",
+        category: "work",
+        description: describeProblemReportRecorded(),
+        customerId: row.job.customerId,
+        relatedType: "JOB",
+        relatedId: row.jobId,
+        relatedJobId: row.jobId,
+        relatedLabel: jobTimelineReference(row.jobId),
+        sourceStatus: null,
+      }),
+    );
+  }
+  for (const row of problemsResolved) {
+    if (!row.resolvedAt) continue;
+    drafts.push(
+      draft({
+        id: `problem-report:${row.id}:resolved`,
+        occurredAt: row.resolvedAt,
+        eventType: "PROBLEM_REPORT_RESOLVED",
+        category: "work",
+        description: describeProblemReportResolved(),
+        customerId: row.job.customerId,
+        relatedType: "JOB",
+        relatedId: row.jobId,
+        relatedJobId: row.jobId,
+        relatedLabel: jobTimelineReference(row.jobId),
+        sourceStatus: "RESOLVED",
+      }),
+    );
+  }
+  for (const row of timeEntriesStarted) {
+    drafts.push(
+      draft({
+        id: `time-entry:${row.id}:started`,
+        occurredAt: row.startedAt,
+        eventType: "TIME_ENTRY_STARTED",
+        category: "work",
+        description: describeTimeEntryStarted(row.activityType),
+        customerId: row.job?.customerId ?? null,
+        relatedType: row.jobId ? "JOB" : "TIME_ENTRY",
+        relatedId: row.jobId ?? row.id,
+        relatedJobId: row.jobId,
+        relatedLabel: row.jobId ? jobTimelineReference(row.jobId) : "Time entry",
+        sourceStatus: null,
+      }),
+    );
+  }
+  for (const row of timeEntriesEnded) {
+    if (!row.endedAt) continue;
+    drafts.push(
+      draft({
+        id: `time-entry:${row.id}:ended`,
+        occurredAt: row.endedAt,
+        eventType: "TIME_ENTRY_ENDED",
+        category: "work",
+        description: describeTimeEntryEnded(row.activityType),
+        customerId: row.job?.customerId ?? null,
+        relatedType: row.jobId ? "JOB" : "TIME_ENTRY",
+        relatedId: row.jobId ?? row.id,
+        relatedJobId: row.jobId,
+        relatedLabel: row.jobId ? jobTimelineReference(row.jobId) : "Time entry",
+        sourceStatus: null,
+      }),
+    );
   }
 
   const jobEventIds = jobEvents
@@ -690,15 +863,25 @@ async function collectMoneyDrafts(
   },
 ): Promise<BusinessTimelineDraft[]> {
   const customerWhere = input.customerId ? { customerId: input.customerId } : {};
-  const [invoices, payments, invoiceEvents] = await Promise.all([
+  const [invoicesCreated, invoicesPaid, payments, invoiceEvents] = await Promise.all([
     db.invoice.findMany({
       where: {
         businessId: input.businessId,
-        OR: [{ createdAt: { gte: input.since } }, { paidAt: { gte: input.since } }],
+        createdAt: { gte: input.since },
         ...customerWhere,
       },
-      select: { id: true, customerId: true, createdAt: true, paidAt: true },
+      select: { id: true, customerId: true, createdAt: true },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: input.take,
+    }),
+    db.invoice.findMany({
+      where: {
+        businessId: input.businessId,
+        paidAt: { gte: input.since },
+        ...customerWhere,
+      },
+      select: { id: true, customerId: true, paidAt: true },
+      orderBy: [{ paidAt: "desc" }, { id: "desc" }],
       take: input.take,
     }),
     db.payment.findMany({
@@ -738,41 +921,40 @@ async function collectMoneyDrafts(
   ]);
 
   const drafts: BusinessTimelineDraft[] = [];
-  for (const row of invoices) {
-    if (row.createdAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `invoice:${row.id}:recorded`,
-          occurredAt: row.createdAt,
-          eventType: "INVOICE_RECORDED",
-          category: "money",
-          description: describeInvoiceRecorded(row.id),
-          customerId: row.customerId,
-          relatedType: "INVOICE",
-          relatedId: row.id,
-          relatedJobId: null,
-          relatedLabel: invoiceTimelineNumber(row.id),
-          sourceStatus: null,
-        }),
-      );
-    }
-    if (row.paidAt && row.paidAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `invoice:${row.id}:paid`,
-          occurredAt: row.paidAt,
-          eventType: "INVOICE_PAID",
-          category: "money",
-          description: describeInvoicePaid(row.id),
-          customerId: row.customerId,
-          relatedType: "INVOICE",
-          relatedId: row.id,
-          relatedJobId: null,
-          relatedLabel: invoiceTimelineNumber(row.id),
-          sourceStatus: "PAID",
-        }),
-      );
-    }
+  for (const row of invoicesCreated) {
+    drafts.push(
+      draft({
+        id: `invoice:${row.id}:recorded`,
+        occurredAt: row.createdAt,
+        eventType: "INVOICE_RECORDED",
+        category: "money",
+        description: describeInvoiceRecorded(row.id),
+        customerId: row.customerId,
+        relatedType: "INVOICE",
+        relatedId: row.id,
+        relatedJobId: null,
+        relatedLabel: invoiceTimelineNumber(row.id),
+        sourceStatus: null,
+      }),
+    );
+  }
+  for (const row of invoicesPaid) {
+    if (!row.paidAt) continue;
+    drafts.push(
+      draft({
+        id: `invoice:${row.id}:paid`,
+        occurredAt: row.paidAt,
+        eventType: "INVOICE_PAID",
+        category: "money",
+        description: describeInvoicePaid(row.id),
+        customerId: row.customerId,
+        relatedType: "INVOICE",
+        relatedId: row.id,
+        relatedJobId: null,
+        relatedLabel: invoiceTimelineNumber(row.id),
+        sourceStatus: "PAID",
+      }),
+    );
   }
   for (const row of payments) {
     drafts.push(
@@ -840,11 +1022,31 @@ async function collectCommunicationDrafts(
   },
 ): Promise<BusinessTimelineDraft[]> {
   const customerWhere = input.customerId ? { customerId: input.customerId } : {};
-  const [communications, phones, reviewRequests, followUps] = await Promise.all([
+  const [communicationsAttempted, communicationsCreated, phones, reviewRequests, followUps] =
+    await Promise.all([
     db.customerCommunication.findMany({
       where: {
         businessId: input.businessId,
-        OR: [{ attemptedAt: { gte: input.since } }, { createdAt: { gte: input.since } }],
+        attemptedAt: { gte: input.since },
+        ...customerWhere,
+      },
+      select: {
+        id: true,
+        customerId: true,
+        channel: true,
+        status: true,
+        relatedType: true,
+        relatedId: true,
+        createdAt: true,
+        attemptedAt: true,
+      },
+      orderBy: [{ attemptedAt: "desc" }, { id: "desc" }],
+      take: input.take,
+    }),
+    db.customerCommunication.findMany({
+      where: {
+        businessId: input.businessId,
+        createdAt: { gte: input.since },
         ...customerWhere,
       },
       select: {
@@ -874,6 +1076,7 @@ async function collectCommunicationDrafts(
         occurredAt: true,
         requestId: true,
         jobId: true,
+        communicationId: true,
       },
       orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
       take: input.take,
@@ -901,9 +1104,21 @@ async function collectCommunicationDrafts(
   ]);
 
   const drafts: BusinessTimelineDraft[] = [];
-  for (const row of communications) {
+  const representedCommunicationIds = new Set<string>();
+  const pushCommunication = (row: {
+    id: string;
+    customerId: string;
+    channel: string;
+    status: string;
+    relatedType: string | null;
+    relatedId: string | null;
+    createdAt: Date;
+    attemptedAt: Date | null;
+  }) => {
     const occurredAt = row.attemptedAt ?? row.createdAt;
-    if (occurredAt < input.since) continue;
+    if (occurredAt < input.since) return;
+    if (representedCommunicationIds.has(row.id)) return;
+    representedCommunicationIds.add(row.id);
     const relatedType = row.relatedType ?? "CUSTOMER";
     const relatedId = row.relatedId ?? row.customerId;
     drafts.push(
@@ -921,8 +1136,13 @@ async function collectCommunicationDrafts(
         sourceStatus: row.status,
       }),
     );
-  }
+  };
+  for (const row of communicationsAttempted) pushCommunication(row);
+  for (const row of communicationsCreated) pushCommunication(row);
   for (const row of phones) {
+    if (row.communicationId && representedCommunicationIds.has(row.communicationId)) {
+      continue;
+    }
     drafts.push(
       draft({
         id: `phone:${row.id}`,
@@ -989,7 +1209,15 @@ async function collectOperationsDrafts(
 ): Promise<BusinessTimelineDraft[]> {
   if (input.customerId) return [];
 
-  const [actionItems, recommendations, vaultRecords, agreements, acknowledgments] =
+  const AGREEMENT_SELECT = {
+    id: true,
+    title: true,
+    createdAt: true,
+    completedAt: true,
+    ownerReviewedAt: true,
+    legalReviewAcknowledgedAt: true,
+  } as const;
+  const [actionItems, recommendations, vaultRecords, agreementsCreated, agreementsCompleted, agreementsOwnerReviewed, agreementsLegalAcknowledged, acknowledgments] =
     await Promise.all([
       db.businessActionItem.findMany({
         where: { businessId: input.businessId, createdAt: { gte: input.since } },
@@ -1017,22 +1245,37 @@ async function collectOperationsDrafts(
       db.businessAgreement.findMany({
         where: {
           businessId: input.businessId,
-          OR: [
-            { createdAt: { gte: input.since } },
-            { completedAt: { gte: input.since } },
-            { ownerReviewedAt: { gte: input.since } },
-            { legalReviewAcknowledgedAt: { gte: input.since } },
-          ],
+          createdAt: { gte: input.since },
         },
-        select: {
-          id: true,
-          title: true,
-          createdAt: true,
-          completedAt: true,
-          ownerReviewedAt: true,
-          legalReviewAcknowledgedAt: true,
-        },
+        select: AGREEMENT_SELECT,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: input.take,
+      }),
+      db.businessAgreement.findMany({
+        where: {
+          businessId: input.businessId,
+          completedAt: { gte: input.since },
+        },
+        select: AGREEMENT_SELECT,
+        orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+        take: input.take,
+      }),
+      db.businessAgreement.findMany({
+        where: {
+          businessId: input.businessId,
+          ownerReviewedAt: { gte: input.since },
+        },
+        select: AGREEMENT_SELECT,
+        orderBy: [{ ownerReviewedAt: "desc" }, { id: "desc" }],
+        take: input.take,
+      }),
+      db.businessAgreement.findMany({
+        where: {
+          businessId: input.businessId,
+          legalReviewAcknowledgedAt: { gte: input.since },
+        },
+        select: AGREEMENT_SELECT,
+        orderBy: [{ legalReviewAcknowledgedAt: "desc" }, { id: "desc" }],
         take: input.take,
       }),
       db.businessProtectionAcknowledgment.findMany({
@@ -1113,75 +1356,76 @@ async function collectOperationsDrafts(
       }),
     );
   }
-  for (const row of agreements) {
-    if (row.createdAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `agreement:${row.id}:recorded`,
-          occurredAt: row.createdAt,
-          eventType: "AGREEMENT_RECORDED",
-          category: "operations",
-          description: describeAgreementRecorded(row.title),
-          customerId: null,
-          relatedType: "AGREEMENT",
-          relatedId: row.id,
-          relatedJobId: null,
-          relatedLabel: row.title,
-          sourceStatus: null,
-        }),
-      );
-    }
-    if (row.completedAt && row.completedAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `agreement:${row.id}:completed`,
-          occurredAt: row.completedAt,
-          eventType: "AGREEMENT_COMPLETED",
-          category: "operations",
-          description: describeAgreementCompleted(row.title),
-          customerId: null,
-          relatedType: "AGREEMENT",
-          relatedId: row.id,
-          relatedJobId: null,
-          relatedLabel: row.title,
-          sourceStatus: "COMPLETE",
-        }),
-      );
-    }
-    if (row.ownerReviewedAt && row.ownerReviewedAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `agreement:${row.id}:owner-reviewed`,
-          occurredAt: row.ownerReviewedAt,
-          eventType: "AGREEMENT_OWNER_REVIEWED",
-          category: "operations",
-          description: describeAgreementOwnerReviewed(row.title),
-          customerId: null,
-          relatedType: "AGREEMENT",
-          relatedId: row.id,
-          relatedJobId: null,
-          relatedLabel: row.title,
-          sourceStatus: null,
-        }),
-      );
-    }
-    if (row.legalReviewAcknowledgedAt && row.legalReviewAcknowledgedAt >= input.since) {
-      drafts.push(
-        draft({
-          id: `agreement:${row.id}:legal-acknowledged`,
-          occurredAt: row.legalReviewAcknowledgedAt,
-          eventType: "AGREEMENT_LEGAL_ACKNOWLEDGED",
-          category: "operations",
-          description: describeAgreementLegalAcknowledged(row.title),
-          customerId: null,
-          relatedType: "AGREEMENT",
-          relatedId: row.id,
-          relatedJobId: null,
-          relatedLabel: row.title,
-          sourceStatus: null,
-        }),
-      );
-    }
+  for (const row of agreementsCreated) {
+    drafts.push(
+      draft({
+        id: `agreement:${row.id}:recorded`,
+        occurredAt: row.createdAt,
+        eventType: "AGREEMENT_RECORDED",
+        category: "operations",
+        description: describeAgreementRecorded(row.title),
+        customerId: null,
+        relatedType: "AGREEMENT",
+        relatedId: row.id,
+        relatedJobId: null,
+        relatedLabel: row.title,
+        sourceStatus: null,
+      }),
+    );
+  }
+  for (const row of agreementsCompleted) {
+    if (!row.completedAt) continue;
+    drafts.push(
+      draft({
+        id: `agreement:${row.id}:completed`,
+        occurredAt: row.completedAt,
+        eventType: "AGREEMENT_COMPLETED",
+        category: "operations",
+        description: describeAgreementCompleted(row.title),
+        customerId: null,
+        relatedType: "AGREEMENT",
+        relatedId: row.id,
+        relatedJobId: null,
+        relatedLabel: row.title,
+        sourceStatus: "COMPLETE",
+      }),
+    );
+  }
+  for (const row of agreementsOwnerReviewed) {
+    if (!row.ownerReviewedAt) continue;
+    drafts.push(
+      draft({
+        id: `agreement:${row.id}:owner-reviewed`,
+        occurredAt: row.ownerReviewedAt,
+        eventType: "AGREEMENT_OWNER_REVIEWED",
+        category: "operations",
+        description: describeAgreementOwnerReviewed(row.title),
+        customerId: null,
+        relatedType: "AGREEMENT",
+        relatedId: row.id,
+        relatedJobId: null,
+        relatedLabel: row.title,
+        sourceStatus: null,
+      }),
+    );
+  }
+  for (const row of agreementsLegalAcknowledged) {
+    if (!row.legalReviewAcknowledgedAt) continue;
+    drafts.push(
+      draft({
+        id: `agreement:${row.id}:legal-acknowledged`,
+        occurredAt: row.legalReviewAcknowledgedAt,
+        eventType: "AGREEMENT_LEGAL_ACKNOWLEDGED",
+        category: "operations",
+        description: describeAgreementLegalAcknowledged(row.title),
+        customerId: null,
+        relatedType: "AGREEMENT",
+        relatedId: row.id,
+        relatedJobId: null,
+        relatedLabel: row.title,
+        sourceStatus: null,
+      }),
+    );
   }
   for (const row of acknowledgments) {
     drafts.push(
