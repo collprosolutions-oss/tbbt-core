@@ -133,8 +133,9 @@ check(
   cleaningPack.tradeCode === "CLEANING" &&
     cleaningPack.catalogStarterSource === "CLEANING_STARTER" &&
     cleaningPack.config.catalogStarterSource === "CLEANING_STARTER" &&
-    listTradeLaunchPacks().length === 2 &&
-    handyPack.catalogStarterSource === "HANDYMAN_STARTER",
+    listTradeLaunchPacks().length === 3 &&
+    handyPack.catalogStarterSource === "HANDYMAN_STARTER" &&
+    listTradeLaunchPacks().some((pack) => pack.tradeCode === "PRESSURE_WASHING"),
 );
 check(
   "Pack planner dispatches through existing Handyman / Cleaning planners",

@@ -6,7 +6,7 @@
  * display labels. Do not scatter `if (trade === "HANDYMAN")` through UI
  * or actions — use TradeConfiguration instead.
  */
-export const TRADE_CODES = ["HANDYMAN", "CLEANING"] as const;
+export const TRADE_CODES = ["HANDYMAN", "CLEANING", "PRESSURE_WASHING"] as const;
 
 export type TradeCode = (typeof TRADE_CODES)[number];
 
@@ -28,6 +28,11 @@ export const TRADES: Record<
     name: "Cleaning",
     status: "available",
     note: "Second Trade",
+  },
+  PRESSURE_WASHING: {
+    name: "Pressure Washing",
+    status: "available",
+    note: "Third Trade",
   },
 };
 

@@ -7,6 +7,7 @@
  */
 
 import { CLEANING_CATALOG_CATEGORIES } from "@/lib/cleaning-starter-catalog";
+import { PRESSURE_WASHING_CATALOG_CATEGORIES } from "@/lib/pressure-washing-starter-catalog";
 import { currentIntakeSchema, type IntakeSchema } from "@/lib/intake-schema";
 import {
   parsePricingMode,
@@ -23,6 +24,7 @@ import {
 export const CATALOG_STARTER_SOURCES = [
   "HANDYMAN_STARTER",
   "CLEANING_STARTER",
+  "PRESSURE_WASHING_STARTER",
   "NONE",
 ] as const;
 export type CatalogStarterSource = (typeof CATALOG_STARTER_SOURCES)[number];
@@ -149,9 +151,43 @@ export const CLEANING_TRADE_CONFIG: TradeConfiguration = {
   },
 };
 
+export const PRESSURE_WASHING_TRADE_CONFIG: TradeConfiguration = {
+  tradeCode: "PRESSURE_WASHING",
+  label: "Pressure Washing",
+  customerFacingLabel: "Pressure Washing",
+  allowedPricingModes: ["FIXED", "STARTING_AT", "VARIABLE", "CUSTOM_QUOTE"],
+  defaultPricingMode: "STARTING_AT",
+  publicPricingBehavior: "SHOW_STARTING_AT",
+  intakeSchema: currentIntakeSchema("PRESSURE_WASHING"),
+  measurementQuestions: false,
+  serviceTerminology: {
+    request: "pressure washing request",
+    job: "wash visit",
+    estimate: "quote",
+    catalog: "pressure washing services",
+    customer: "customer",
+  },
+  schedulingDefaults: {
+    defaultDurationMinutes: 180,
+    defaultServiceIntent: "ONE_TIME",
+    recurrenceSupported: true,
+  },
+  recurrenceSupport: true,
+  catalogStarterSource: "PRESSURE_WASHING_STARTER",
+  catalogCategories: PRESSURE_WASHING_CATALOG_CATEGORIES,
+  customerLanguage: {
+    requestTitle: "Request Pressure Washing",
+    requestDescription:
+      "Tell us about the property, surfaces to wash, and any stains or access notes.",
+    requestCta: "Request Pressure Washing",
+    emptyCatalogHint: "Describe the wash if you do not see the right service.",
+  },
+};
+
 const TRADE_CONFIGS: Record<TradeCode, TradeConfiguration> = {
   HANDYMAN: HANDYMAN_TRADE_CONFIG,
   CLEANING: CLEANING_TRADE_CONFIG,
+  PRESSURE_WASHING: PRESSURE_WASHING_TRADE_CONFIG,
 };
 
 export type TradeConfigOverrides = {

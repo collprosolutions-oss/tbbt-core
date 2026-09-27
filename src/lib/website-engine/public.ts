@@ -106,7 +106,7 @@ function snapshotToSite(snapshot: PublishedWebsiteSnapshot): PublicSitePayload {
     publicWebsite: snapshot.business.publicWebsite,
     publicServiceAreaLabel: snapshot.business.publicServiceAreaLabel,
     activeTrades: snapshot.trades.map((trade) => ({
-      code: trade.code as "HANDYMAN" | "CLEANING",
+      code: isConfiguredTrade(trade.code) ? trade.code : DEFAULT_TRADE,
       label: trade.customerFacingLabel,
       requestTitle: `Request ${trade.customerFacingLabel}`,
       requestDescription: `Request ${trade.customerFacingLabel.toLowerCase()} from ${snapshot.business.name}.`,

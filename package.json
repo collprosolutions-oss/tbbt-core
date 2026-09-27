@@ -113,6 +113,8 @@
     "test:business-protection-specialist": "node --experimental-strip-types scripts/check-business-protection-specialist.mjs",
     "test:automation": "node --experimental-strip-types scripts/check-automation.mjs",
     "test:multi-trade-core": "node --experimental-strip-types scripts/check-multi-trade-core.mjs",
+    "test:pressure-washing-launch-pack": "node --experimental-strip-types scripts/check-pressure-washing-launch-pack.mjs",
+    "test:cleaning-launch-pack": "node --experimental-strip-types scripts/check-cleaning-launch-pack.mjs",
     "test:plan-entitlements": "node --experimental-strip-types scripts/check-plan-entitlements.mjs",
     "test:website-engine": "node --experimental-strip-types scripts/check-website-engine.mjs",
     "test:workforce-capacity": "node --experimental-strip-types scripts/check-workforce-capacity.mjs",
