@@ -75,7 +75,7 @@ check(
     !staffingOps.includes("scheduledAt:") &&
     !staffingOps.includes("createWorkforceOutreachTask") &&
     !staffingAction.includes("assignJobMember") &&
-    staffingUi.includes("does not assign, contact, hire, or reschedule") &&
+    /does not assign, contact, hire, or\s+reschedule/.test(staffingUi) &&
     staffingAction.includes("No worker was assigned, contacted, hired, or rescheduled"),
 );
 check(
@@ -277,7 +277,7 @@ check("Assignment fact names the recorded worker", fact(poorRec, "assignment") =
 check(
   "Evidence key is derived from the same facts the owner sees",
   staffingReviewEvidenceKey(shortageRec) === recommendationEvidenceKey(shortageRec) &&
-    staffingReviewEvidenceKey(shortageRec).includes("electrical"),
+    /required-skills:Electrical/i.test(staffingReviewEvidenceKey(shortageRec)),
 );
 
 const afterAssign = snapshotFrom(
