@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AddTeamMemberForm } from "@/components/team/add-team-member-form";
 import { SetTeamMemberActiveForm } from "@/components/team/set-team-member-active-form";
 import { FillInBenchWorkspace } from "@/components/team/fill-in-bench-workspace";
+import { StaffingRecommendationsPanel } from "@/components/team/staffing-recommendations";
 import { WeeklyAvailabilityForm } from "@/components/team/weekly-availability-form";
 import { WorkforceProfileForm } from "@/components/team/workforce-profile-form";
 import { PageContainer } from "@/components/page-container";
@@ -23,6 +24,7 @@ import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { hasProductCapability } from "@/lib/product-entitlements";
 import { formatProgression, skillLabel } from "@/lib/workforce";
 import { loadWorkforceMembers } from "@/lib/workforce-data";
+import { loadOwnedStaffingReview } from "@/lib/workforce-staffing-ops";
 
 export const metadata: Metadata = {
   title: "Team",
@@ -56,12 +58,13 @@ export default async function TeamPage() {
     access.businessId,
     PRODUCT_CAPABILITIES.TEAM_MANAGEMENT,
   );
-  const [workforceMembers, bench] = canManageWorkforce
+  const [workforceMembers, bench, staffing] = canManageWorkforce
     ? await Promise.all([
         loadWorkforceMembers(prisma, access.businessId),
         loadOwnedFillInBench(prisma, access),
+        loadOwnedStaffingReview(prisma, access),
       ])
-    : [[], []];
+    : [[], [], { pending: [], accepted: [], history: [], canReview: false }];
 
   return (
     <PageContainer>
@@ -118,6 +121,15 @@ export default async function TeamPage() {
           ))}
         </CardContent>
       </Card>
+
+      {canManageWorkforce ? (
+        <StaffingRecommendationsPanel
+          pending={staffing.pending}
+          accepted={staffing.accepted}
+          history={staffing.history}
+          canReview={staffing.canReview}
+        />
+      ) : null}
 
       {canManageWorkforce ? (
       <Card>
