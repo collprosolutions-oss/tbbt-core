@@ -25,7 +25,7 @@ export default async function IntakeConditionalsPage({
     <PageContainer width="2xl">
       <PageHeader
         title="Intake condition drafts"
-        description="OWNER-only. Draft allowlisted extra questions and preview them. This does not change archived Cleaning public V1/V2, Handyman V1, frozen requests, or the live public hire form."
+        description="OWNER-only. Draft allowlisted extra questions, preview them, then review and publish an immutable tenant snapshot. Historical Cleaning V1/V2, Handyman V1, and existing requests stay exactly as recorded."
       />
       <IntakeConditionWorkspace workspace={workspace} />
     </PageContainer>

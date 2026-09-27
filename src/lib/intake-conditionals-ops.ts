@@ -3,7 +3,7 @@
  *
  * Tenant scope always comes from BusinessAccess. Browser-supplied
  * businessId is ignored. ADMIN/MEMBER cannot draft. Public hire forms
- * never read these rows.
+ * never read these draft rows — only published TenantIntakeSnapshot rows.
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
@@ -11,7 +11,8 @@ import type { BusinessAccess } from "@/lib/access";
 import { requireBusinessRole } from "@/lib/authorization";
 import { listActiveBusinessTrades } from "@/lib/business-trades";
 import {
-  INTAKE_CONDITION_PUBLISH_NEXT_REQUIREMENT,
+  INTAKE_CONDITION_PUBLISH_DESCRIPTION,
+  INTAKE_CONDITION_PUBLISH_REVIEW_REQUIRED,
   INTAKE_CONDITION_STATUS_DRAFT,
   IntakeConditionError,
   assertDraftOnlyStatus,
@@ -22,6 +23,10 @@ import {
   type IntakeConditionDocument,
   type IntakeConditionWorkspaceView,
 } from "@/lib/intake-conditionals";
+import {
+  createTenantIntakeSnapshot,
+  loadCurrentPublishedIntakeView,
+} from "@/lib/intake-snapshot-ops";
 import { currentIntakeSchema, publicIntakeSchemaProjection } from "@/lib/intake-schema";
 import { DEFAULT_TRADE, isConfiguredTrade, tradeLabel, type TradeCode } from "@/lib/trades";
 
@@ -81,7 +86,9 @@ export async function loadIntakeConditionWorkspace(
     },
     savedAt: row?.updatedAt.toISOString() ?? null,
     status: INTAKE_CONDITION_STATUS_DRAFT,
-    publishNextRequirement: INTAKE_CONDITION_PUBLISH_NEXT_REQUIREMENT,
+    published: await loadCurrentPublishedIntakeView(db, access, selected),
+    publishNextRequirement: INTAKE_CONDITION_PUBLISH_DESCRIPTION,
+    publishReviewRequired: INTAKE_CONDITION_PUBLISH_REVIEW_REQUIRED,
   };
 }
 
@@ -165,15 +172,24 @@ export async function loadOwnedIntakeConditionDraft(
 }
 
 export async function publishIntakeConditionDraft(
-  db: Db,
+  db: PrismaClient,
   access: BusinessAccess,
-  input: { tradeCode: string },
+  input: { tradeCode: string; reviewed?: boolean; idempotencyKey?: string | null },
 ) {
   const tradeCode = await requireOwnedTrade(db, access, input.tradeCode);
-  access.assertOwned(
+  const draft = access.assertOwned(
     await db.intakeConditionDraft.findFirst({
       where: { ...access.scope, tradeCode },
     }),
   );
-  throw new IntakeConditionError(INTAKE_CONDITION_PUBLISH_NEXT_REQUIREMENT);
+  const parsed = parseIntakeConditionDocument(draft.documentJson);
+  if (!parsed.ok) {
+    throw new IntakeConditionError(parsed.errors[0] ?? "That draft could not be published.");
+  }
+  return createTenantIntakeSnapshot(db, access, {
+    tradeCode,
+    document: parsed.document,
+    reviewed: input.reviewed === true,
+    idempotencyKey: input.idempotencyKey,
+  });
 }

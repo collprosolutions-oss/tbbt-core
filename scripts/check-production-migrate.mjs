@@ -1109,6 +1109,23 @@ check(
       localNames.indexOf("20260927210000_customer_follow_up_retention_origin"),
 );
 
+const tenantIntakeSnapshotMigration = readFileSync(
+  new URL("../prisma/migrations/20260927230000_tenant_intake_snapshot/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Tenant intake snapshot migration is additive and after the draft table",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(tenantIntakeSnapshotMigration) &&
+    tenantIntakeSnapshotMigration.includes('CREATE TABLE IF NOT EXISTS "TenantIntakeSnapshot"') &&
+    tenantIntakeSnapshotMigration.includes('ADD COLUMN IF NOT EXISTS "publishedIntakeSnapshotId"') &&
+    tenantIntakeSnapshotMigration.includes('ADD COLUMN IF NOT EXISTS "tenantIntakeSnapshotId"') &&
+    localNames.includes("20260927230000_tenant_intake_snapshot") &&
+    localNames.indexOf("20260927153000_intake_condition_draft") <
+      localNames.indexOf("20260927230000_tenant_intake_snapshot") &&
+    localNames.indexOf("20260927210000_customer_follow_up_retention_origin") <
+      localNames.indexOf("20260927230000_tenant_intake_snapshot"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

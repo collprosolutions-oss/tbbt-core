@@ -27,6 +27,8 @@ import {
   publicIntakeSchemaProjection,
 } from "@/lib/intake-schema";
 import { snapshotIntakeSchemasByTrade } from "@/lib/website-engine/public";
+import { PUBLIC_INTAKE_REFRESH_FORM } from "@/lib/intake-snapshot";
+import { loadPublishedIntakeOverlaysByTrade } from "@/lib/intake-snapshot-ops";
 import { snapshotPageMetadata } from "@/lib/website-engine/seo";
 import { publicOriginForSlug } from "@/lib/website-engine/hosts";
 import { publishedRequestAccent } from "@/lib/website-engine/copy";
@@ -83,13 +85,18 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
   const phone = publicPhone(site.business);
   const textHref = smsHref(phone);
   const nextAvailableLabel = await loadPublicNextAvailableLabel(prisma, site.business.id);
+  const tradeCodes =
+    site.business.activeTrades?.map((trade) => trade.code) ?? [site.business.tradeCode];
   const intakeSchemasByTrade = view.snapshot
     ? snapshotIntakeSchemasByTrade(view.snapshot)
     : Object.fromEntries(
-        (site.business.activeTrades?.map((trade) => trade.code) ?? [site.business.tradeCode]).map(
-          (code) => [code, publicIntakeSchemaProjection(currentIntakeSchema(code))],
-        ),
+        tradeCodes.map((code) => [code, publicIntakeSchemaProjection(currentIntakeSchema(code))]),
       );
+  const publishedIntake = await loadPublishedIntakeOverlaysByTrade(
+    prisma,
+    site.business.id,
+    tradeCodes,
+  );
 
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>
@@ -150,22 +157,27 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
                   Next available: {nextAvailableLabel}
                 </p>
               ) : null}
-              <MultiServiceRequestFlow
-                slug={site.business.slug}
-                businessName={name}
-                items={site.items}
-                groups={site.groups}
-                initialSelected={initialSelected}
-                photosEnabled={isBusinessStorageConfigured()}
-                serviceArea={resolveBusinessServiceArea(site.business)}
-                intakeSchemasByTrade={intakeSchemasByTrade}
-                activeTrades={
-                  site.business.activeTrades?.map((trade) => ({
-                    code: trade.code,
-                    label: trade.label,
-                  })) ?? []
-                }
-              />
+              {publishedIntake.ok ? (
+                <MultiServiceRequestFlow
+                  slug={site.business.slug}
+                  businessName={name}
+                  items={site.items}
+                  groups={site.groups}
+                  initialSelected={initialSelected}
+                  photosEnabled={isBusinessStorageConfigured()}
+                  serviceArea={resolveBusinessServiceArea(site.business)}
+                  intakeSchemasByTrade={intakeSchemasByTrade}
+                  publishedIntakeByTrade={publishedIntake.overlays}
+                  activeTrades={
+                    site.business.activeTrades?.map((trade) => ({
+                      code: trade.code,
+                      label: trade.label,
+                    })) ?? []
+                  }
+                />
+              ) : (
+                <p className="text-sm text-[var(--public-ink)]">{PUBLIC_INTAKE_REFRESH_FORM}</p>
+              )}
             </div>
           </div>
         </section>

@@ -2,9 +2,10 @@
  * Typed, allowlisted conditional questions for intake forms.
  *
  * OWNER drafts extra questions and show/hide/require rules against the
- * current platform schema. This slice is draft-only: public hire forms,
- * archived Cleaning public V1/V2, Handyman V1, and frozen ServiceRequest
- * snapshots keep using the existing intake engine unchanged.
+ * current platform schema. Drafts stay off public hire forms until OWNER
+ * reviews and publishes an immutable TenantIntakeSnapshot. Archived
+ * Cleaning public V1/V2, Handyman V1, and frozen ServiceRequest snapshots
+ * keep using the existing intake engine unchanged.
  *
  * No JavaScript expressions, eval, Function, or cross-tenant reads.
  */
@@ -23,6 +24,10 @@ import { DEFAULT_TRADE, isConfiguredTrade, tradeLabel, type TradeCode } from "@/
 
 export const INTAKE_CONDITION_DOCUMENT_VERSION = 1 as const;
 export const INTAKE_CONDITION_STATUS_DRAFT = "DRAFT" as const;
+export const INTAKE_CONDITION_STATUS_PUBLISHED = "PUBLISHED" as const;
+export type IntakeConditionStatus =
+  | typeof INTAKE_CONDITION_STATUS_DRAFT
+  | typeof INTAKE_CONDITION_STATUS_PUBLISHED;
 
 export const INTAKE_CONDITION_OPS = [
   "EQUALS",
@@ -69,8 +74,17 @@ export const INTAKE_CONDITION_ACTION_LABELS: Record<IntakeConditionAction, strin
   REQUIRE: "Require",
 };
 
-export const INTAKE_CONDITION_PUBLISH_NEXT_REQUIREMENT =
-  "Draft-only. Live public publishing needs a reviewed, versioned tenant intake snapshot that future public submissions freeze without changing archived Cleaning public V1/V2, Handyman V1, or historical ServiceRequest rows.";
+export const INTAKE_CONDITION_PUBLISH_DESCRIPTION =
+  "Drafts are not live. OWNER review + publish creates a new immutable tenant intake snapshot. New public requests freeze that version. Historical Cleaning V1/V2, Handyman V1, and existing requests keep resolving exactly as recorded.";
+
+export const INTAKE_CONDITION_PUBLISH_REVIEW_REQUIRED =
+  "Confirm you reviewed this draft before publishing a new immutable tenant intake snapshot.";
+
+export const INTAKE_CONDITION_DRAFT_STATUS_REQUIRED =
+  "Draft documents must stay DRAFT. Published snapshots are stored separately.";
+
+/** @deprecated Use INTAKE_CONDITION_PUBLISH_DESCRIPTION. Kept so older draft checks stay readable. */
+export const INTAKE_CONDITION_PUBLISH_NEXT_REQUIREMENT = INTAKE_CONDITION_PUBLISH_DESCRIPTION;
 
 export const MAX_INTAKE_DRAFT_QUESTIONS = 20;
 export const MAX_INTAKE_DRAFT_RULES = 40;
@@ -117,13 +131,20 @@ export type IntakeConditionRule = {
 
 export type IntakeConditionDocument = {
   version: typeof INTAKE_CONDITION_DOCUMENT_VERSION;
-  status: typeof INTAKE_CONDITION_STATUS_DRAFT;
+  status: IntakeConditionStatus;
   tradeCode: TradeCode;
   baseSchemaKey: string;
   baseSchemaVersion: number;
   questions: IntakeDraftQuestion[];
   rules: IntakeConditionRule[];
 };
+
+export type IntakeConditionPublishedView = {
+  snapshotId: string;
+  versionNumber: number;
+  publishedAt: string;
+  summary: string;
+} | null;
 
 export type IntakeConditionValidation =
   | { ok: true; document: IntakeConditionDocument }
@@ -136,7 +157,9 @@ export type IntakeConditionWorkspaceView = {
   document: IntakeConditionDocument;
   savedAt: string | null;
   status: typeof INTAKE_CONDITION_STATUS_DRAFT;
+  published: IntakeConditionPublishedView;
   publishNextRequirement: string;
+  publishReviewRequired: string;
 };
 
 export function isIntakeConditionOp(value: unknown): value is IntakeConditionOp {
@@ -220,7 +243,10 @@ function platformFieldMap(schema: IntakeSchema) {
   return new Map(platformFields(schema).map((field) => [field.key, field]));
 }
 
-export function parseIntakeConditionDocument(raw: unknown): IntakeConditionValidation {
+export function parseIntakeConditionDocument(
+  raw: unknown,
+  options: { allowPublished?: boolean } = {},
+): IntakeConditionValidation {
   const errors: string[] = [];
   const record = typeof raw === "string" ? safeJson(raw) : asRecord(raw);
   if (!record) {
@@ -229,8 +255,11 @@ export function parseIntakeConditionDocument(raw: unknown): IntakeConditionValid
   if (record.version !== INTAKE_CONDITION_DOCUMENT_VERSION) {
     errors.push("Only intake condition document version 1 is allowed.");
   }
-  if (record.status != null && record.status !== INTAKE_CONDITION_STATUS_DRAFT) {
-    errors.push(INTAKE_CONDITION_PUBLISH_NEXT_REQUIREMENT);
+  const allowedStatuses: IntakeConditionStatus[] = options.allowPublished
+    ? [INTAKE_CONDITION_STATUS_DRAFT, INTAKE_CONDITION_STATUS_PUBLISHED]
+    : [INTAKE_CONDITION_STATUS_DRAFT];
+  if (record.status != null && !allowedStatuses.includes(record.status as IntakeConditionStatus)) {
+    errors.push(INTAKE_CONDITION_DRAFT_STATUS_REQUIRED);
   }
   const tradeCode = isConfiguredTrade(String(record.tradeCode ?? ""))
     ? (record.tradeCode as TradeCode)
@@ -357,7 +386,10 @@ export function parseIntakeConditionDocument(raw: unknown): IntakeConditionValid
 
   const document: IntakeConditionDocument = {
     version: INTAKE_CONDITION_DOCUMENT_VERSION,
-    status: INTAKE_CONDITION_STATUS_DRAFT,
+    status:
+      record.status === INTAKE_CONDITION_STATUS_PUBLISHED && options.allowPublished
+        ? INTAKE_CONDITION_STATUS_PUBLISHED
+        : INTAKE_CONDITION_STATUS_DRAFT,
     tradeCode: tradeCode ?? DEFAULT_TRADE,
     baseSchemaKey: asTrimmed(record.baseSchemaKey, 80),
     baseSchemaVersion:
@@ -383,8 +415,9 @@ function safeJson(raw: string): Record<string, unknown> | null {
 export function validateIntakeConditionDocument(
   raw: unknown,
   schema: IntakeSchema,
+  options: { allowPublished?: boolean } = {},
 ): IntakeConditionValidation {
-  const parsed = parseIntakeConditionDocument(raw);
+  const parsed = parseIntakeConditionDocument(raw, options);
   if (!parsed.ok) return parsed;
   const errors: string[] = [];
   const document = parsed.document;
@@ -628,11 +661,28 @@ export function validatePreviewIntakeAnswers(
 export function serializeIntakeConditionDocument(document: IntakeConditionDocument) {
   return JSON.stringify({
     version: INTAKE_CONDITION_DOCUMENT_VERSION,
-    status: INTAKE_CONDITION_STATUS_DRAFT,
+    status:
+      document.status === INTAKE_CONDITION_STATUS_PUBLISHED
+        ? INTAKE_CONDITION_STATUS_PUBLISHED
+        : INTAKE_CONDITION_STATUS_DRAFT,
     tradeCode: document.tradeCode,
     baseSchemaKey: document.baseSchemaKey,
     baseSchemaVersion: document.baseSchemaVersion,
     questions: document.questions,
     rules: document.rules,
   });
+}
+
+export function extraQuestionsAsFields(
+  document: IntakeConditionDocument,
+): IntakeFieldDefinition[] {
+  return document.questions.map((question) => ({
+    key: question.key,
+    type: question.type,
+    label: question.label,
+    help: question.help,
+    required: question.required === true,
+    options: question.options,
+    render: "trade" as const,
+  }));
 }

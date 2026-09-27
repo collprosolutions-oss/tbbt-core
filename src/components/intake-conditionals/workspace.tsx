@@ -3,6 +3,7 @@
 import { useActionState, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  publishIntakeConditionDraftAction,
   saveIntakeConditionDraftAction,
   validateIntakeConditionDraftAction,
   type IntakeConditionActionState,
@@ -206,6 +207,16 @@ export function IntakeConditionWorkspace({ workspace }: { workspace: IntakeCondi
     validateIntakeConditionDraftAction,
     emptyAction,
   );
+  const [publishState, publishAction, publishPending] = useActionState(
+    publishIntakeConditionDraftAction,
+    emptyAction,
+  );
+  const [reviewed, setReviewed] = useState(false);
+  const [idempotencyKey] = useState(() =>
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `publish_${Date.now().toString(36)}`,
+  );
 
   const schema = useMemo(
     () => intakeSchemaFromPublicProjection(workspace.baseSchema),
@@ -278,8 +289,12 @@ export function IntakeConditionWorkspace({ workspace }: { workspace: IntakeCondi
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center gap-2">
-            <CardTitle>Draft-only intake conditions</CardTitle>
-            <Badge variant="warning">Draft only</Badge>
+            <CardTitle>Intake condition drafts</CardTitle>
+            <Badge variant={workspace.published ? "secondary" : "warning"}>
+              {workspace.published
+                ? `Published v${workspace.published.versionNumber}`
+                : "Draft only"}
+            </Badge>
           </div>
           <CardDescription>{workspace.publishNextRequirement}</CardDescription>
         </CardHeader>
@@ -581,8 +596,12 @@ export function IntakeConditionWorkspace({ workspace }: { workspace: IntakeCondi
 
           <Card>
             <CardHeader>
-              <CardTitle>Validate and save</CardTitle>
-              <CardDescription>Saving keeps this as a draft. There is no public publish action.</CardDescription>
+            <CardTitle>Validate, save, and publish</CardTitle>
+            <CardDescription>
+              Saving keeps this as a draft. Publishing creates a new immutable tenant snapshot.
+              New public requests freeze that version. Historical Cleaning V1/V2, Handyman V1, and
+              existing requests stay exactly as recorded.
+            </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex flex-wrap gap-2">
@@ -615,6 +634,39 @@ export function IntakeConditionWorkspace({ workspace }: { workspace: IntakeCondi
               {validateState.message ? <p className="text-sm text-muted-foreground">{validateState.message}</p> : null}
               {saveState.error ? <p className="text-sm text-destructive">{saveState.error}</p> : null}
               {saveState.message ? <p className="text-sm text-muted-foreground">{saveState.message}</p> : null}
+              {workspace.published ? (
+                <p className="text-sm text-muted-foreground">
+                  Current public snapshot: version {workspace.published.versionNumber}.{" "}
+                  {workspace.published.summary}
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No tenant intake snapshot is published. Public hire forms still use the platform
+                  schema only.
+                </p>
+              )}
+              <form action={publishAction} className="space-y-3 rounded-lg border border-border p-3">
+                <input type="hidden" name="tradeCode" value={workspace.selectedTrade} />
+                <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    name="reviewed"
+                    value="1"
+                    checked={reviewed}
+                    onChange={(event) => setReviewed(event.target.checked)}
+                    className="mt-1"
+                  />
+                  <span>{workspace.publishReviewRequired}</span>
+                </label>
+                <Button type="submit" disabled={publishPending || !reviewed}>
+                  {publishPending ? "Publishing…" : "Publish reviewed snapshot"}
+                </Button>
+                {publishState.error ? <p className="text-sm text-destructive">{publishState.error}</p> : null}
+                {publishState.message ? (
+                  <p className="text-sm text-muted-foreground">{publishState.message}</p>
+                ) : null}
+              </form>
             </CardContent>
           </Card>
         </div>

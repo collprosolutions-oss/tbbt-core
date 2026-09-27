@@ -5,7 +5,8 @@
  * allowlisted (no JS/eval), tenants cannot read each other, archived
  * Cleaning public V1/V2 and Handyman V1 stay frozen, historical
  * ServiceRequest snapshots stay frozen, and the live public intake
- * engine ignores drafts. Publishing is refused.
+ * engine ignores unpublished drafts. Publishing is covered by
+ * check-intake-snapshot-publish.mjs.
  *
  * Dedicated database: tbbt_intake_conditionals_test
  *
@@ -37,7 +38,7 @@ const {
   validateIntakeAnswers,
 } = await import("@/lib/intake-schema");
 const {
-  INTAKE_CONDITION_PUBLISH_NEXT_REQUIREMENT,
+  INTAKE_CONDITION_DRAFT_STATUS_REQUIRED,
   INTAKE_CONDITION_STATUS_DRAFT,
   IntakeConditionError,
   emptyIntakeConditionDocument,
@@ -175,8 +176,8 @@ const migration = read("prisma/migrations/20260927153000_intake_condition_draft/
 check(
   "Public intake engine does not import or apply condition drafts",
   !publicIntakeSrc.includes("intake-conditionals") &&
-    publicIntakeSrc.includes("currentIntakeSchema(requestTradeCode)") &&
-    !publicIntakeSrc.includes("intakeConditionDraft"),
+    !publicIntakeSrc.includes("intakeConditionDraft") &&
+    publicIntakeSrc.includes("resolveReferencedTenantIntakeSnapshot"),
 );
 check(
   "intake-schema.ts does not depend on the draft system",
@@ -209,11 +210,10 @@ check(
     !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migration),
 );
 check(
-  "Live publishing is labeled draft-only with a next requirement",
-  INTAKE_CONDITION_PUBLISH_NEXT_REQUIREMENT.includes("Draft-only") &&
-    INTAKE_CONDITION_PUBLISH_NEXT_REQUIREMENT.includes("reviewed, versioned tenant intake snapshot") &&
+  "Draft parse still rejects a PUBLISHED status on the draft document",
+  INTAKE_CONDITION_DRAFT_STATUS_REQUIRED.includes("must stay DRAFT") &&
     opsSrc.includes("publishIntakeConditionDraft") &&
-    actionSrc.includes("There is no public publish action"),
+    actionSrc.includes("publishIntakeConditionDraftAction"),
 );
 
 console.log("\nSTATIC — Allowlisted validation and preview evaluation");
@@ -344,9 +344,9 @@ const publishedRejected = parseIntakeConditionDocument({
   status: "PUBLISHED",
 });
 check(
-  "PUBLISHED status is rejected as draft-only",
+  "PUBLISHED status is rejected on draft parse",
   publishedRejected.ok === false &&
-    publishedRejected.errors.includes(INTAKE_CONDITION_PUBLISH_NEXT_REQUIREMENT),
+    publishedRejected.errors.includes(INTAKE_CONDITION_DRAFT_STATUS_REQUIRED),
 );
 
 const v1Pin = validateIntakeConditionDocument(
@@ -594,11 +594,11 @@ try {
   check("Saving for A does not create a row on B", otherDrafts.length === 0);
 
   await expectRejects(
-    "Live publishing is refused even for the owning OWNER",
+    "Unreviewed publishing is refused even for the owning OWNER",
     () => publishIntakeConditionDraft(prisma, ownerA, { tradeCode: "CLEANING" }),
     (error) =>
       error instanceof IntakeConditionError &&
-      error.message === INTAKE_CONDITION_PUBLISH_NEXT_REQUIREMENT,
+      error.message.includes("reviewed"),
   );
 
   const resolvedFrozenV1 = resolveRequestIntakeSchema({

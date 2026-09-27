@@ -147,6 +147,7 @@ async function submitServiceRequestInner(
     measurements: parseMeasurementFields(formData),
     intakeAnswers: parseIntakeAnswersField(formData),
     requestedTradeCode: readString(formData, "requestedTradeCode") || null,
+    tenantIntakeSnapshotId: readString(formData, "tenantIntakeSnapshotId") || null,
     submissionId: readString(formData, "submissionId") || null,
     smsOptIn: readString(formData, "smsOptIn") || formData.get("smsOptIn"),
     leadSource: readString(formData, "leadSource") || "WEBSITE",

@@ -55,7 +55,15 @@ import {
   type StructuredServiceAddress,
 } from "@/lib/service-address";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
-import type { IntakeAnswerMap, PublicIntakeSchemaProjection } from "@/lib/intake-schema";
+import {
+  publicIntakeSchemaProjection,
+  type IntakeAnswerMap,
+  type PublicIntakeSchemaProjection,
+} from "@/lib/intake-schema";
+import {
+  overlayPublishedIntakeProjection,
+  type PublishedIntakeOverlay,
+} from "@/lib/intake-snapshot";
 import { TradeIntakeFields } from "@/components/public/trade-intake-fields";
 import {
   CROSS_TRADE_REQUEST_MESSAGE,
@@ -136,6 +144,7 @@ export function MultiServiceRequestFlow({
   photosEnabled,
   serviceArea,
   intakeSchemasByTrade = {},
+  publishedIntakeByTrade = {},
   activeTrades = [],
 }: {
   slug: string;
@@ -146,6 +155,7 @@ export function MultiServiceRequestFlow({
   photosEnabled: boolean;
   serviceArea: BusinessServiceArea;
   intakeSchemasByTrade?: Record<string, PublicIntakeSchemaProjection>;
+  publishedIntakeByTrade?: Record<string, PublishedIntakeOverlay>;
   activeTrades?: Array<{ code: string; label: string }>;
 }) {
   void groups;
@@ -248,8 +258,16 @@ export function MultiServiceRequestFlow({
   const resolvedTrade =
     catalogTrade ||
     (needsCustomTradeChoice ? customTradeCode : activeTrades[0]?.code ?? "");
-  const intakeSchema = resolvedTrade
-    ? intakeSchemasByTrade[resolvedTrade] ?? null
+  const publishedIntake = resolvedTrade
+    ? publishedIntakeByTrade[resolvedTrade] ?? null
+    : null;
+  const platformIntakeSchema = publishedIntake
+    ? publicIntakeSchemaProjection(publishedIntake.baseSchema)
+    : resolvedTrade
+      ? intakeSchemasByTrade[resolvedTrade] ?? null
+      : null;
+  const intakeSchema = platformIntakeSchema
+    ? overlayPublishedIntakeProjection(platformIntakeSchema, publishedIntake, intakeAnswers)
     : null;
   const servicesHref = publicServicesPath(slug, selected);
   const chooseServicesHref = publicServicesPath(slug);
@@ -421,6 +439,9 @@ export function MultiServiceRequestFlow({
     }
     if (intakeSchema) {
       formData.set("intakeAnswers", JSON.stringify(intakeAnswers));
+    }
+    if (publishedIntake) {
+      formData.set("tenantIntakeSnapshotId", publishedIntake.snapshotId);
     }
     if (resolvedTrade) {
       formData.set("requestedTradeCode", resolvedTrade);

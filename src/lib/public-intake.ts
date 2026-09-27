@@ -41,8 +41,13 @@ import {
 import {
   currentIntakeSchema,
   freezeIntakeSchema,
-  validateIntakeAnswers,
 } from "@/lib/intake-schema";
+import {
+  freezePublishedIntakeSchema,
+  validatePublishedIntakeAnswers,
+} from "@/lib/intake-snapshot";
+import { PUBLIC_INTAKE_REFRESH_FORM } from "@/lib/intake-snapshot";
+import { resolveReferencedTenantIntakeSnapshot } from "@/lib/intake-snapshot-ops";
 import { parseWebsiteSnapshot, type PublishedWebsiteSnapshot } from "@/lib/website-engine/snapshot";
 import { snapshotIntakeSchemaForTrade } from "@/lib/website-engine/public";
 import {
@@ -117,6 +122,14 @@ export type PublicIntakeInput = {
    * trades; compatibility mode validates against ACTIVE BusinessTrade.
    */
   requestedTradeCode?: string | null;
+  /**
+   * Exact TenantIntakeSnapshot displayed when the public form loaded.
+   * Server-resolved against the slug business and request trade. A missing
+   * or invalid reference fails closed. If this business/trade has a
+   * published snapshot, omitting the id fails with a refresh-form response
+   * instead of saving against platform intake.
+   */
+  tenantIntakeSnapshotId?: string | null;
 };
 
 export type PublicIntakeDb = {
@@ -135,6 +148,26 @@ export type PublicIntakeDb = {
     findMany: (args: {
       where: { businessId: string; status: string };
     }) => Promise<Array<{ tradeCode: string; status: string; configOverridesJson?: string }>>;
+    findFirst?: (args: {
+      where: { businessId: string; tradeCode: string };
+      select: { publishedIntakeSnapshotId: true };
+    }) => Promise<{ publishedIntakeSnapshotId: string | null } | null>;
+  };
+  tenantIntakeSnapshot?: {
+    findFirst: (args: {
+      where: { id: string; businessId: string; tradeCode: string };
+      select: {
+        id: true;
+        versionNumber: true;
+        snapshotJson: true;
+        publishedAt: true;
+      };
+    }) => Promise<{
+      id: string;
+      versionNumber: number;
+      snapshotJson: string;
+      publishedAt: Date;
+    } | null>;
   };
   marketingCampaign: {
     findFirst: (args: {
@@ -272,6 +305,8 @@ export type PublicIntakeTx = {
         intakeSchemaVersion?: number | null;
         intakeSchemaJson?: string | null;
         intakeAnswersJson?: string | null;
+        tenantIntakeSnapshotId?: string | null;
+        tenantIntakeSnapshotVersion?: number | null;
         serviceIntent?: string;
         recurrenceCadence?: string;
       };
@@ -615,11 +650,31 @@ async function createPublicServiceRequestInner(
     return resolvedTrade;
   }
   const requestTradeCode = resolvedTrade.tradeCode;
-  const intakeSchema = publishedSnapshot
-    ? snapshotIntakeSchemaForTrade(publishedSnapshot, requestTradeCode)
-    : currentIntakeSchema(requestTradeCode);
-  const checkedAnswers = validateIntakeAnswers(intakeSchema, input.intakeAnswers ?? {});
+  const referencedIntake = await resolveReferencedTenantIntakeSnapshot(db, {
+    businessId: business.id,
+    tradeCode: requestTradeCode,
+    snapshotId: input.tenantIntakeSnapshotId,
+  });
+  if (!referencedIntake.ok) {
+    return {
+      ok: false,
+      error: referencedIntake.refresh ? PUBLIC_INTAKE_REFRESH_FORM : PUBLIC_INTAKE_GENERIC_ERROR,
+    };
+  }
+  const publishedIntake = referencedIntake.overlay;
+  const platformSchema = publishedIntake
+    ? publishedIntake.baseSchema
+    : publishedSnapshot
+      ? snapshotIntakeSchemaForTrade(publishedSnapshot, requestTradeCode)
+      : currentIntakeSchema(requestTradeCode);
+  const checkedAnswers = validatePublishedIntakeAnswers(
+    platformSchema,
+    publishedIntake,
+    input.intakeAnswers ?? {},
+  );
   if (!checkedAnswers.ok) return checkedAnswers;
+  const frozen = freezePublishedIntakeSchema(platformSchema, publishedIntake);
+  const intakeSchema = frozen.schema;
   const frequency =
     typeof checkedAnswers.answers.frequency === "string"
       ? checkedAnswers.answers.frequency
@@ -776,6 +831,8 @@ async function createPublicServiceRequestInner(
           intakeSchemaVersion: intakeSchema.version,
           intakeSchemaJson: freezeIntakeSchema(intakeSchema),
           intakeAnswersJson: JSON.stringify(checkedAnswers.answers),
+          tenantIntakeSnapshotId: publishedIntake?.snapshotId ?? null,
+          tenantIntakeSnapshotVersion: publishedIntake?.versionNumber ?? null,
           serviceIntent,
           recurrenceCadence,
         },
