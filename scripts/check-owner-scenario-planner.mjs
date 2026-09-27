@@ -890,23 +890,23 @@ try {
   const expensesBeforeSave = await prisma.expense.count({ where: { businessId: businessA.id } });
   const jobsBeforeSave = await prisma.job.count({ where: { businessId: businessA.id } });
 
-  const savedBusy = await saveOwnerScenarioAssumptionSet(prisma, ownerA, {
+  const storedBusy = await saveOwnerScenarioAssumptionSet(prisma, ownerA, {
     name: "Busy summer",
     workload: "150",
     materials: "120",
     labor: "90",
     price: "110",
   });
-  check("OWNER can save a named assumption set", savedBusy.created === true && savedBusy.set.name === "Busy summer" && savedBusy.set.kind === ASSUMPTION_SET_KIND);
-  check("Saved set keeps knobs, not forecasts", savedBusy.set.workloadPercent === 150 && savedBusy.set.pricePercent === 110 && !("projectedCashIn" in savedBusy.set));
-  check("Save reports that books were not written", savedBusy.message === SAVE_DOES_NOT_WRITE_BOOKS_MESSAGE);
+  check("OWNER can save a named assumption set", storedBusy.created === true && storedBusy.set.name === "Busy summer" && storedBusy.set.kind === ASSUMPTION_SET_KIND);
+  check("Saved set keeps knobs, not forecasts", storedBusy.set.workloadPercent === 150 && storedBusy.set.pricePercent === 110 && !("projectedCashIn" in storedBusy.set));
+  check("Save reports that books were not written", storedBusy.message === SAVE_DOES_NOT_WRITE_BOOKS_MESSAGE);
 
-  const reopened = await loadOwnerScenarioAssumptionSet(prisma, ownerA, savedBusy.set.id);
-  check("OWNER can reopen the named set", reopened?.id === savedBusy.set.id && reopened?.workloadPercent === 150);
+  const reopened = await loadOwnerScenarioAssumptionSet(prisma, ownerA, storedBusy.set.id);
+  check("OWNER can reopen the named set", reopened?.id === storedBusy.set.id && reopened?.workloadPercent === 150);
 
-  const workspaceReopen = await loadOwnerScenarioPlannerWorkspace(prisma, ownerA, { set: savedBusy.set.id });
+  const workspaceReopen = await loadOwnerScenarioPlannerWorkspace(prisma, ownerA, { set: storedBusy.set.id });
   const currentFacts = await loadOwnerScenarioPlan(prisma, ownerA, identityAssumptions());
-  check("Reopened workspace uses saved knobs on current facts", workspaceReopen.openedSet?.id === savedBusy.set.id && workspaceReopen.plan.assumptions.workloadPercent === 150 && workspaceReopen.plan.recorded.collectedRevenue === currentFacts.recorded.collectedRevenue && workspaceReopen.plan.recorded.kind === RECORDED_FACT_KIND);
+  check("Reopened workspace uses saved knobs on current facts", workspaceReopen.openedSet?.id === storedBusy.set.id && workspaceReopen.plan.assumptions.workloadPercent === 150 && workspaceReopen.plan.recorded.collectedRevenue === currentFacts.recorded.collectedRevenue && workspaceReopen.plan.recorded.kind === RECORDED_FACT_KIND);
   check("Reopened forecast is labeled separately from recorded facts", workspaceReopen.plan.forecast.kind === FORECAST_KIND && workspaceReopen.plan.recorded.kind === RECORDED_FACT_KIND);
 
   const renamed = await saveOwnerScenarioAssumptionSet(prisma, ownerA, {
@@ -916,9 +916,9 @@ try {
     labor: "90",
     price: "110",
   });
-  check("Saving the same name updates knobs in place", renamed.created === false && renamed.set.id === savedBusy.set.id && renamed.set.workloadPercent === 160);
+  check("Saving the same name updates knobs in place", renamed.created === false && renamed.set.id === storedBusy.set.id && renamed.set.workloadPercent === 160);
 
-  const savedQuiet = await saveOwnerScenarioAssumptionSet(prisma, ownerA, {
+  const storedQuiet = await saveOwnerScenarioAssumptionSet(prisma, ownerA, {
     name: "Quiet winter",
     workload: "80",
     materials: "100",
@@ -926,8 +926,8 @@ try {
     price: "100",
   });
   const workspaceCompare = await loadOwnerScenarioPlannerWorkspace(prisma, ownerA, {
-    left: savedBusy.set.id,
-    right: savedQuiet.set.id,
+    left: storedBusy.set.id,
+    right: storedQuiet.set.id,
   });
   check("Compare loads two named sets", workspaceCompare.comparison?.left.set.name === "Busy summer" && workspaceCompare.comparison?.right.set.name === "Quiet winter");
   check("Compare recorded facts match the live recorded sample", workspaceCompare.comparison?.recorded.collectedRevenue === workspaceCompare.plan.recorded.collectedRevenue && workspaceCompare.comparison?.recorded.knownCashOut === workspaceCompare.plan.recorded.knownCashOut);
@@ -937,7 +937,7 @@ try {
   const listedA = await listOwnerScenarioAssumptionSets(prisma, ownerA);
   check("Owner A lists only same-business named sets", listedA.sets.length === 2 && listedA.sets.every((row) => row.businessId === businessA.id));
 
-  const savedBeta = await saveOwnerScenarioAssumptionSet(prisma, ownerB, {
+  const storedBeta = await saveOwnerScenarioAssumptionSet(prisma, ownerB, {
     name: "Busy summer",
     workload: "200",
     materials: "200",
@@ -946,12 +946,12 @@ try {
     assumeUnpaid: "1",
   });
   const listedB = await listOwnerScenarioAssumptionSets(prisma, ownerB);
-  check("Owner B cannot list tenant A assumption sets", listedB.sets.length === 1 && listedB.sets[0]?.id === savedBeta.set.id);
-  const leakedReopen = await loadOwnerScenarioAssumptionSet(prisma, ownerA, savedBeta.set.id);
+  check("Owner B cannot list tenant A assumption sets", listedB.sets.length === 1 && listedB.sets[0]?.id === storedBeta.set.id);
+  const leakedReopen = await loadOwnerScenarioAssumptionSet(prisma, ownerA, storedBeta.set.id);
   check("Owner A cannot reopen tenant B assumption set", leakedReopen === null);
   const leakedCompare = await loadOwnerScenarioPlannerWorkspace(prisma, ownerA, {
-    left: savedBusy.set.id,
-    right: savedBeta.set.id,
+    left: storedBusy.set.id,
+    right: storedBeta.set.id,
   });
   check("Owner A cannot compare against tenant B", leakedCompare.comparison === null && leakedCompare.comparisonError === ASSUMPTION_SET_NOT_FOUND_MESSAGE);
 
