@@ -4,7 +4,7 @@
 -- Does not write Business.timezone, Stripe accounts, ServiceArea rows,
 -- or assign historical Jobs. Job.businessLocationId is nullable.
 -- Separate from Network (20260927150000_bsos_network_participation)
--- and from already-merged Cleaning migrations.
+-- and Cleaning visit workflow (20260927180000_job_crew_visit).
 
 CREATE TABLE IF NOT EXISTS "BusinessLocation" (
     "id" TEXT NOT NULL,

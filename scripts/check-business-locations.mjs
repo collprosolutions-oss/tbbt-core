@@ -11,7 +11,7 @@
 import { register } from "node:module";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
@@ -105,7 +105,7 @@ function readRepo(relPath) {
 }
 
 const schema = readRepo("prisma/schema.prisma");
-const migration = readRepo("prisma/migrations/20260927180000_add_business_location/migration.sql");
+const migration = readRepo("prisma/migrations/20260927190000_add_business_location/migration.sql");
 const navSource = readRepo("src/lib/nav.ts");
 const settingsSource = readRepo("src/lib/settings.ts");
 const settingsWorkspace = readRepo("src/components/settings/settings-workspace.tsx");
@@ -147,13 +147,23 @@ try {
       !/UPDATE\s+"ServiceArea"/i.test(migration) &&
       !/UPDATE\s+"BusinessPaymentAccount"/i.test(migration) &&
       !migration.includes("BsosNetworkParticipation") &&
-      migration.includes("20260927150000_bsos_network_participation"),
+      !migration.includes("JobCrewVisit") &&
+      migration.includes("20260927150000_bsos_network_participation") &&
+      migration.includes("20260927180000_job_crew_visit"),
   );
   check(
-    "Network and Cleaning keep their own migrations",
+    "Network and Cleaning keep their own migrations and relations",
     !migration.includes("BsosNetworkParticipation") &&
-      !migration.includes("CLEANING") &&
-      !schema.includes("model BsosNetworkParticipation"),
+      !migration.includes("JobCrewVisit") &&
+      schema.includes("model BsosNetworkParticipation") &&
+      schema.includes("model JobCrewVisit") &&
+      schema.includes("model BusinessLocation") &&
+      schema.includes("bsosNetworkParticipation BsosNetworkParticipation?") &&
+      schema.includes("locations                BusinessLocation[]") &&
+      schema.includes("crewVisits               JobCrewVisit[]") &&
+      existsSync(new URL("../prisma/migrations/20260927150000_bsos_network_participation/migration.sql", import.meta.url)) &&
+      existsSync(new URL("../prisma/migrations/20260927180000_job_crew_visit/migration.sql", import.meta.url)) &&
+      existsSync(new URL("../prisma/migrations/20260927190000_add_business_location/migration.sql", import.meta.url)),
   );
   check(
     "Locations are not in global APP_NAV",
@@ -182,7 +192,7 @@ try {
     BUSINESS_LOCATION_SCHEMA_SOURCE === "prisma-migrate" &&
       !schemaHelper.includes("$executeRaw") &&
       !schemaHelper.includes("ensureBusinessLocationSchema") &&
-      schemaHelper.includes("20260927180000_add_business_location"),
+      schemaHelper.includes("20260927190000_add_business_location"),
   );
   check(
     "Settings page load and location writes execute no DDL",
