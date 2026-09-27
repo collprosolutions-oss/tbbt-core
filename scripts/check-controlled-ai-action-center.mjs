@@ -202,7 +202,8 @@ try {
   check(
     "Board does not invent a persisted proposal queue",
     boardSrc.includes("No persisted proposal") &&
-      boardSrc.includes("Failed confirmations") &&
+      boardSrc.includes("kept separately in Controlled AI history") &&
+      !boardSrc.includes("Failed confirmations are not persisted as attempts.") &&
       pageSrc.includes("loadControlledActionCenter"),
   );
   check(

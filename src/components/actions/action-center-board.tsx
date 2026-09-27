@@ -186,8 +186,9 @@ export function ActionCenterBoard({
         <CardHeader>
           <CardTitle>Recorded owner-plan state</CardTitle>
           <CardDescription>
-            Existing recommendation states and owner action-plan items. Origin is not recorded
-            in Controlled Actions V1. Failed confirmations are not persisted as attempts.
+            Generic owner-plan state is shown here without inferred Controlled AI
+            origin. Confirmed Controlled AI attempt history, including recorded failure
+            or denial results, is kept separately in Controlled AI history.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">

@@ -289,41 +289,69 @@ async function findControlledAiAttempt(
   });
 }
 
-async function recordControlledAiAttempt(db: Db, access: BusinessAccess, input: ProvenanceWrite) {
+function attemptIdentity(
+  executionAttemptId: string,
+  actionKey: ControlledActionKey,
+  recommendationKey: string,
+) {
+  return { executionAttemptId, actionKey, recommendationKey };
+}
+
+async function createControlledAiAttemptStrict(db: Db, access: BusinessAccess, input: ProvenanceWrite) {
   const executedAt =
     input.executedAt === undefined
       ? input.result === "EXECUTED" || input.result === "REPLAYED"
         ? new Date()
         : null
       : input.executedAt;
+  return db.controlledAiActionAttempt.create({
+    data: {
+      businessId: access.businessId,
+      actionKey: input.actionKey,
+      result: input.result,
+      recommendationKey: input.recommendationKey,
+      targetEntityType: "RECOMMENDATION",
+      targetRecordType: input.targetRecordType,
+      targetRecordId: input.targetRecordId,
+      confirmedByMembershipId: access.workspace.membership.id,
+      confirmedByUserId: access.workspace.user.id,
+      resultCode: boundedProvenanceText(input.resultCode, MAX_PROVENANCE_CODE_CHARS),
+      resultMessage: boundedProvenanceText(input.resultMessage, MAX_PROVENANCE_MESSAGE_CHARS),
+      executionAttemptId: input.executionAttemptId,
+      executedAt,
+    },
+  });
+}
+
+async function recordControlledAiAttempt(db: Db, access: BusinessAccess, input: ProvenanceWrite) {
   try {
-    return await db.controlledAiActionAttempt.create({
-      data: {
-        businessId: access.businessId,
-        actionKey: input.actionKey,
-        result: input.result,
-        recommendationKey: input.recommendationKey,
-        targetEntityType: "RECOMMENDATION",
-        targetRecordType: input.targetRecordType,
-        targetRecordId: input.targetRecordId,
-        confirmedByMembershipId: access.workspace.membership.id,
-        confirmedByUserId: access.workspace.user.id,
-        resultCode: boundedProvenanceText(input.resultCode, MAX_PROVENANCE_CODE_CHARS),
-        resultMessage: boundedProvenanceText(input.resultMessage, MAX_PROVENANCE_MESSAGE_CHARS),
-        executionAttemptId: input.executionAttemptId,
-        executedAt,
-      },
-    });
+    return await createControlledAiAttemptStrict(db, access, input);
   } catch (error) {
     if (!isUniqueConflict(error)) throw error;
-    const existing = await findControlledAiAttempt(db, access.businessId, {
-      executionAttemptId: input.executionAttemptId,
-      actionKey: input.actionKey,
-      recommendationKey: input.recommendationKey,
-    });
+    const existing = await findControlledAiAttempt(db, access.businessId, attemptIdentity(
+      input.executionAttemptId,
+      input.actionKey,
+      input.recommendationKey,
+    ));
     if (existing) return existing;
     throw error;
   }
+}
+
+async function recoverExistingAttemptAfterTransaction(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    executionAttemptId: string;
+    actionKey: ControlledActionKey;
+    recommendationKey: string;
+  },
+) {
+  return findControlledAiAttempt(db, access.businessId, attemptIdentity(
+    input.executionAttemptId,
+    input.actionKey,
+    input.recommendationKey,
+  ));
 }
 
 async function recordSafeFailure(
@@ -778,16 +806,17 @@ export async function confirmControlledAction(
       throw changedStateError();
     }
 
+    const existingAttempt = await findControlledAiAttempt(db, access.businessId, attemptIdentity(
+      input.executionAttemptId,
+      entry.key,
+      recommendationKey,
+    ));
+    if (existingAttempt) {
+      return confirmationFromExistingAttempt(serverProposal, existingAttempt, input.executionAttemptId);
+    }
+
     const already = await alreadyAppliedResult(db, access, entry, live);
     if (already) {
-      const existingAttempt = await findControlledAiAttempt(db, access.businessId, {
-        executionAttemptId: input.executionAttemptId,
-        actionKey: entry.key,
-        recommendationKey,
-      });
-      if (existingAttempt) {
-        return confirmationFromExistingAttempt(serverProposal, existingAttempt, input.executionAttemptId);
-      }
       await recordControlledAiAttempt(db, access, {
         actionKey: entry.key,
         result: "REPLAYED",
@@ -833,7 +862,7 @@ export async function confirmControlledAction(
     try {
       const result = await withOwnedTransaction(db, async (tx) => {
         const execution = await invokeCanonicalOperation(tx, access, entry, live);
-        await recordControlledAiAttempt(tx, access, {
+        await createControlledAiAttemptStrict(tx, access, {
           actionKey: entry.key,
           result: execution.status === "REPLAYED" ? "REPLAYED" : "EXECUTED",
           recommendationKey,
@@ -854,6 +883,25 @@ export async function confirmControlledAction(
       resolveWork(confirmation);
       return confirmation;
     } catch (error) {
+      const raced = await recoverExistingAttemptAfterTransaction(db, access, {
+        executionAttemptId: input.executionAttemptId,
+        actionKey: entry.key,
+        recommendationKey,
+      });
+      if (raced) {
+        try {
+          const replayed = confirmationFromExistingAttempt(
+            serverProposal,
+            raced,
+            input.executionAttemptId,
+          );
+          resolveWork(replayed);
+          return replayed;
+        } catch (replayError) {
+          rejectWork(replayError);
+          throw replayError;
+        }
+      }
       rejectWork(error);
       throw error;
     } finally {

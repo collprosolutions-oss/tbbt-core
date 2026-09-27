@@ -239,6 +239,15 @@ try {
       !controlledSrc.includes("executionAttempts.get("),
   );
   check(
+    "Existing durable attempt is consulted after fingerprint and before domain mutation",
+    controlledSrc.indexOf("if (serverProposal.fingerprint !== input.proposal.fingerprint)") <
+      controlledSrc.indexOf("const existingAttempt = await findControlledAiAttempt") &&
+      controlledSrc.indexOf("const existingAttempt = await findControlledAiAttempt") <
+        controlledSrc.indexOf("const already = await alreadyAppliedResult") &&
+      controlledSrc.indexOf("const existingAttempt = await findControlledAiAttempt") <
+        controlledSrc.indexOf("await invokeCanonicalOperation(tx, access, entry, live)"),
+  );
+  check(
     "Completed process maps are not an authoritative replay source",
     !controlledSrc.includes("executionAttempts.get(") &&
       controlledSrc.includes("inflightAttempts") &&
@@ -779,19 +788,22 @@ try {
   });
   check("Deleting the owned action item leaves same-evidence actionItemId null", afterDeleteB?.actionItemId === null);
   let missingOwnedWithoutReset = false;
+  let sameIdentityAfterDeleteReplayed = false;
   try {
-    await confirmControlledAction(prisma, ownerA, {
+    const sameIdentityAfterDelete = await confirmControlledAction(prisma, ownerA, {
       proposal: proposalB,
       executionAttemptId: attemptId,
       confirm: "confirm",
     });
+    sameIdentityAfterDeleteReplayed = sameIdentityAfterDelete.executionResult.status === "REPLAYED";
   } catch (error) {
     missingOwnedWithoutReset =
       error instanceof Error && /no longer available|did not change anything/i.test(error.message);
   }
   check(
-    "Same-evidence CREATE with null actionItemId fails closed even when process maps remain",
-    missingOwnedWithoutReset &&
+    "Same-identity CREATE after deleted item replays durable EXECUTED and does not create a substitute",
+    sameIdentityAfterDeleteReplayed &&
+      !missingOwnedWithoutReset &&
       (await prisma.businessActionItem.count({
         where: { businessId: businessA.id, recommendationKey: "follow-up-sent-estimates" },
       })) === 0,
@@ -952,9 +964,9 @@ try {
     completeSameAttemptAfterOppositeRejected = error instanceof Error && /stale|changed/i.test(error.message);
   }
   check(
-    "COMPLETE same-attempt retry rejects after same-evidence state becomes DISMISSED",
-    completeSameAttemptAfterOppositeRejected &&
-      !completeSameAttemptAfterOppositeReplayed &&
+    "COMPLETE same-identity retry replays durable EXECUTED after state becomes DISMISSED",
+    completeSameAttemptAfterOppositeReplayed &&
+      !completeSameAttemptAfterOppositeRejected &&
       (await prisma.bsosRecommendationState.findFirst({
         where: { businessId: businessA.id, recommendationKey: "collect-unpaid-invoices" },
       }))?.status === "DISMISSED",
@@ -1110,9 +1122,9 @@ try {
     dismissSameAttemptAfterOppositeRejected = error instanceof Error && /stale|changed/i.test(error.message);
   }
   check(
-    "DISMISS same-attempt retry rejects after same-evidence state becomes COMPLETED",
-    dismissSameAttemptAfterOppositeRejected &&
-      !dismissSameAttemptAfterOppositeReplayed &&
+    "DISMISS same-identity retry replays durable EXECUTED after state becomes COMPLETED",
+    dismissSameAttemptAfterOppositeReplayed &&
+      !dismissSameAttemptAfterOppositeRejected &&
       (await prisma.bsosRecommendationState.findFirst({
         where: { businessId: businessA.id, recommendationKey: "collect-unpaid-invoices" },
       }))?.status === "COMPLETED",

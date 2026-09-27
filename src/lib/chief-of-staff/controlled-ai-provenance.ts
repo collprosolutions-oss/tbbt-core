@@ -103,6 +103,20 @@ async function historyTargetLink(
   return null;
 }
 
+function sameTenantActorName(
+  access: BusinessAccess,
+  confirmedBy: { businessId: string; user: { name: string } } | null,
+) {
+  if (!confirmedBy || confirmedBy.businessId !== access.businessId) return null;
+  const name = confirmedBy.user.name.trim();
+  return name || null;
+}
+
+const confirmedBySelect = {
+  businessId: true,
+  user: { select: { name: true } },
+} as const;
+
 function historyRow(
   row: {
     id: string;
@@ -113,8 +127,9 @@ function historyRow(
     recommendationKey: string | null;
     confirmedAt: Date;
     executedAt: Date | null;
-    confirmedBy: { user: { name: string } } | null;
+    confirmedBy: { businessId: string; user: { name: string } } | null;
   },
+  access: BusinessAccess,
   timeZone: string,
   target: OwnedActionTargetLink | null,
 ): ControlledAiHistoryRow {
@@ -132,7 +147,7 @@ function historyRow(
     confirmedAtLabel: formatDateTime(row.confirmedAt, timeZone),
     executedAt: row.executedAt ? row.executedAt.toISOString() : null,
     executedAtLabel: row.executedAt ? formatDateTime(row.executedAt, timeZone) : null,
-    confirmedByName: row.confirmedBy?.user.name?.trim() || null,
+    confirmedByName: sameTenantActorName(access, row.confirmedBy),
     targetHref: target?.href ?? null,
     targetLabel: target?.label ?? null,
   };
@@ -156,7 +171,7 @@ export async function loadControlledAiActionHistory(
       take: limit,
       include: {
         confirmedBy: {
-          select: { user: { select: { name: true } } },
+          select: confirmedBySelect,
         },
       },
     }),
@@ -165,7 +180,7 @@ export async function loadControlledAiActionHistory(
   const rows: ControlledAiHistoryRow[] = [];
   for (const attempt of attempts) {
     const target = await historyTargetLink(db, access, attempt);
-    rows.push(historyRow(attempt, timeZone, target));
+    rows.push(historyRow(attempt, access, timeZone, target));
   }
   return {
     timeZone,
@@ -191,7 +206,7 @@ export async function loadControlledAiActionAttempt(
       where: { id, businessId: access.businessId },
       include: {
         confirmedBy: {
-          select: { user: { select: { name: true } } },
+          select: confirmedBySelect,
         },
       },
     }),
@@ -199,5 +214,5 @@ export async function loadControlledAiActionAttempt(
   if (!attempt) return null;
   const timeZone = resolveBusinessTimeZone(business);
   const target = await historyTargetLink(db, access, attempt);
-  return historyRow(attempt, timeZone, target);
+  return historyRow(attempt, access, timeZone, target);
 }

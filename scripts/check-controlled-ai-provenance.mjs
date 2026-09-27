@@ -54,7 +54,7 @@ const push = spawnSync(
 if (push.status !== 0) process.exit(push.status ?? 1);
 
 const require = createRequire(import.meta.url);
-const { PrismaClient } = require("@prisma/client");
+const { Prisma, PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
 
 let failures = 0;
@@ -101,6 +101,26 @@ async function ledgerCount(businessId) {
 async function executedCount(businessId, actionKey) {
   return prisma.controlledAiActionAttempt.count({
     where: { businessId, actionKey, result: "EXECUTED" },
+  });
+}
+
+async function seedAttempt(input) {
+  return prisma.controlledAiActionAttempt.create({
+    data: {
+      businessId: input.businessId,
+      actionKey: input.actionKey,
+      result: input.result,
+      recommendationKey: input.recommendationKey,
+      targetEntityType: "RECOMMENDATION",
+      targetRecordType: input.targetRecordType ?? null,
+      targetRecordId: input.targetRecordId ?? null,
+      confirmedByMembershipId: input.membershipId,
+      confirmedByUserId: input.userId,
+      resultCode: input.resultCode,
+      resultMessage: input.resultMessage,
+      executionAttemptId: input.executionAttemptId,
+      executedAt: input.result === "EXECUTED" || input.result === "REPLAYED" ? new Date() : null,
+    },
   });
 }
 
@@ -177,13 +197,40 @@ try {
       !actionCenterSrc.includes("recordControlledAiAttempt") &&
       !provenanceSrc.includes(".create("),
   );
+  const confirmSrc = controlledSrc.slice(controlledSrc.indexOf("export async function confirmControlledAction"));
   check(
     "Success domain write and provenance share one Prisma transaction",
-    controlledSrc.includes("withOwnedTransaction") &&
-      controlledSrc.includes("await invokeCanonicalOperation(tx, access, entry, live)") &&
-      controlledSrc.includes("await recordControlledAiAttempt(tx, access, {") &&
-      controlledSrc.indexOf("await invokeCanonicalOperation(tx, access, entry, live)") <
-        controlledSrc.indexOf("await recordControlledAiAttempt(tx, access, {"),
+    confirmSrc.includes("withOwnedTransaction") &&
+      confirmSrc.includes("await invokeCanonicalOperation(tx, access, entry, live)") &&
+      confirmSrc.includes("await createControlledAiAttemptStrict(tx, access, {") &&
+      confirmSrc.indexOf("await invokeCanonicalOperation(tx, access, entry, live)") <
+        confirmSrc.indexOf("await createControlledAiAttemptStrict(tx, access, {"),
+  );
+  check(
+    "Existing attempt is consulted after fingerprint and before domain mutation",
+    confirmSrc.indexOf("if (serverProposal.fingerprint !== input.proposal.fingerprint)") <
+      confirmSrc.indexOf("const existingAttempt = await findControlledAiAttempt") &&
+      confirmSrc.indexOf("const existingAttempt = await findControlledAiAttempt") <
+        confirmSrc.indexOf("const already = await alreadyAppliedResult") &&
+      confirmSrc.indexOf("const already = await alreadyAppliedResult") <
+        confirmSrc.indexOf("await invokeCanonicalOperation(tx, access, entry, live)"),
+  );
+  check(
+    "Ledger unique race is recovered outside the failed transaction",
+    confirmSrc.includes("recoverExistingAttemptAfterTransaction(db, access") &&
+      confirmSrc.includes("createControlledAiAttemptStrict(tx") &&
+      !confirmSrc.includes("await recordControlledAiAttempt(tx"),
+  );
+  check(
+    "Actor name requires same-tenant Membership ownership",
+    provenanceSrc.includes("confirmedBy.businessId !== access.businessId") &&
+      provenanceSrc.includes("confirmedByName: sameTenantActorName") &&
+      !provenanceSrc.includes("confirmedByUserId"),
+  );
+  check(
+    "Action Center copy no longer says failures are unpersisted",
+    boardSrc.includes("kept separately in Controlled AI history") &&
+      !boardSrc.includes("Failed confirmations are not persisted as attempts."),
   );
   check(
     "No backfill inference from generic owner-plan rows",
@@ -306,6 +353,248 @@ try {
     (await ledgerCount(businessA.id)) === beforePreview,
   );
 
+  async function followUpDomain() {
+    return {
+      items: await prisma.businessActionItem.count({
+        where: { businessId: businessA.id, recommendationKey: "follow-up-sent-estimates" },
+      }),
+      states: await prisma.bsosRecommendationState.count({
+        where: { businessId: businessA.id, recommendationKey: "follow-up-sent-estimates" },
+      }),
+      dismissed: await prisma.bsosRecommendationState.count({
+        where: {
+          businessId: businessA.id,
+          recommendationKey: "follow-up-sent-estimates",
+          status: "DISMISSED",
+        },
+      }),
+    };
+  }
+
+  const dismissProposalForIdentity = await proposeControlledAction(prisma, ownerA, {
+    actionKey: "DISMISS_RECOMMENDATION",
+    targetEntityId: "follow-up-sent-estimates",
+  });
+  const beforeIdentityProofs = await followUpDomain();
+  const failedAttemptId = randomUUID();
+  const failedMessage = "Seeded durable failure for same-identity retry.";
+  await seedAttempt({
+    businessId: businessA.id,
+    actionKey: "DISMISS_RECOMMENDATION",
+    result: "FAILED",
+    recommendationKey: "follow-up-sent-estimates",
+    membershipId: ownerMem.id,
+    userId: ownerUser.id,
+    resultCode: "DOMAIN_ERROR",
+    resultMessage: failedMessage,
+    executionAttemptId: failedAttemptId,
+  });
+  let failedRetryClosed = false;
+  try {
+    await confirmControlledAction(prisma, ownerA, {
+      proposal: dismissProposalForIdentity,
+      executionAttemptId: failedAttemptId,
+      confirm: "confirm",
+    });
+  } catch (error) {
+    failedRetryClosed = error instanceof Error && error.message === failedMessage;
+  }
+  let staleFailedClosed = false;
+  try {
+    await confirmControlledAction(prisma, ownerA, {
+      proposal: { ...dismissProposalForIdentity, fingerprint: "tampered-fingerprint" },
+      executionAttemptId: failedAttemptId,
+      confirm: "confirm",
+    });
+  } catch (error) {
+    staleFailedClosed = error instanceof Error && /stale/i.test(error.message);
+  }
+  const failedRow = await prisma.controlledAiActionAttempt.findFirst({
+    where: {
+      businessId: businessA.id,
+      executionAttemptId: failedAttemptId,
+      actionKey: "DISMISS_RECOMMENDATION",
+      recommendationKey: "follow-up-sent-estimates",
+    },
+  });
+  const afterFailedRetry = await followUpDomain();
+  check(
+    "Seeded FAILED retry fails closed without domain mutation",
+    failedRetryClosed &&
+      staleFailedClosed &&
+      failedRow?.result === "FAILED" &&
+      failedRow.resultMessage === failedMessage &&
+      afterFailedRetry.items === beforeIdentityProofs.items &&
+      afterFailedRetry.states === beforeIdentityProofs.states &&
+      afterFailedRetry.dismissed === beforeIdentityProofs.dismissed,
+  );
+
+  const deniedAttemptId = randomUUID();
+  const deniedMessage = "Seeded durable denial for same-identity retry.";
+  await seedAttempt({
+    businessId: businessA.id,
+    actionKey: "DISMISS_RECOMMENDATION",
+    result: "DENIED",
+    recommendationKey: "follow-up-sent-estimates",
+    membershipId: ownerMem.id,
+    userId: ownerUser.id,
+    resultCode: "DENIED",
+    resultMessage: deniedMessage,
+    executionAttemptId: deniedAttemptId,
+  });
+  let deniedRetryClosed = false;
+  try {
+    await confirmControlledAction(prisma, ownerA, {
+      proposal: dismissProposalForIdentity,
+      executionAttemptId: deniedAttemptId,
+      confirm: "confirm",
+    });
+  } catch (error) {
+    deniedRetryClosed = error instanceof Error && error.message === deniedMessage;
+  }
+  const deniedRow = await prisma.controlledAiActionAttempt.findFirst({
+    where: {
+      businessId: businessA.id,
+      executionAttemptId: deniedAttemptId,
+      actionKey: "DISMISS_RECOMMENDATION",
+      recommendationKey: "follow-up-sent-estimates",
+    },
+  });
+  const afterDeniedRetry = await followUpDomain();
+  check(
+    "Seeded DENIED retry fails closed without domain mutation",
+    deniedRetryClosed &&
+      deniedRow?.result === "DENIED" &&
+      deniedRow.resultMessage === deniedMessage &&
+      afterDeniedRetry.items === beforeIdentityProofs.items &&
+      afterDeniedRetry.states === beforeIdentityProofs.states,
+  );
+
+  const executedSeedId = randomUUID();
+  await seedAttempt({
+    businessId: businessA.id,
+    actionKey: "DISMISS_RECOMMENDATION",
+    result: "EXECUTED",
+    recommendationKey: "follow-up-sent-estimates",
+    membershipId: ownerMem.id,
+    userId: ownerUser.id,
+    resultCode: "SUCCEEDED",
+    resultMessage: "Seeded durable EXECUTED for same-identity retry.",
+    executionAttemptId: executedSeedId,
+    targetRecordType: "BsosRecommendationState",
+  });
+  const executedSeedRetry = await confirmControlledAction(prisma, ownerA, {
+    proposal: dismissProposalForIdentity,
+    executionAttemptId: executedSeedId,
+    confirm: "confirm",
+  });
+  const afterExecutedSeed = await followUpDomain();
+  check(
+    "Existing EXECUTED attempt retry returns REPLAYED with no second domain write",
+    executedSeedRetry.executionResult.status === "REPLAYED" &&
+      afterExecutedSeed.items === beforeIdentityProofs.items &&
+      afterExecutedSeed.states === beforeIdentityProofs.states &&
+      afterExecutedSeed.dismissed === beforeIdentityProofs.dismissed,
+  );
+
+  const replayedSeedId = randomUUID();
+  await seedAttempt({
+    businessId: businessA.id,
+    actionKey: "DISMISS_RECOMMENDATION",
+    result: "REPLAYED",
+    recommendationKey: "follow-up-sent-estimates",
+    membershipId: ownerMem.id,
+    userId: ownerUser.id,
+    resultCode: "REPLAYED",
+    resultMessage: "Seeded durable REPLAYED for same-identity retry.",
+    executionAttemptId: replayedSeedId,
+    targetRecordType: "BsosRecommendationState",
+  });
+  const replayedSeedRetry = await confirmControlledAction(prisma, ownerA, {
+    proposal: dismissProposalForIdentity,
+    executionAttemptId: replayedSeedId,
+    confirm: "confirm",
+  });
+  const afterReplayedSeed = await followUpDomain();
+  check(
+    "Existing REPLAYED attempt retry returns REPLAYED with no second domain write",
+    replayedSeedRetry.executionResult.status === "REPLAYED" &&
+      afterReplayedSeed.items === beforeIdentityProofs.items &&
+      afterReplayedSeed.states === beforeIdentityProofs.states,
+  );
+
+  const raceAttemptId = randomUUID();
+  const racing = prisma.$extends({
+    query: {
+      controlledAiActionAttempt: {
+        async create({ args }) {
+          const data = args.data;
+          await prisma.controlledAiActionAttempt.create({
+            data: {
+              businessId: data.businessId,
+              actionKey: data.actionKey,
+              result: data.result,
+              recommendationKey: data.recommendationKey,
+              targetEntityType: data.targetEntityType,
+              targetRecordType: data.targetRecordType ?? null,
+              targetRecordId: data.targetRecordId ?? null,
+              confirmedByMembershipId: data.confirmedByMembershipId,
+              confirmedByUserId: data.confirmedByUserId ?? null,
+              resultCode: data.resultCode,
+              resultMessage: data.resultMessage,
+              executionAttemptId: data.executionAttemptId,
+              executedAt: data.executedAt ?? new Date(),
+            },
+          });
+          throw new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+            code: "P2002",
+            clientVersion: "6.19.3",
+            meta: {
+              modelName: "ControlledAiActionAttempt",
+              target: ["businessId", "executionAttemptId", "actionKey", "recommendationKey"],
+            },
+          });
+        },
+      },
+    },
+  });
+  const beforeRace = await followUpDomain();
+  const racedConfirm = await confirmControlledAction(racing, ownerA, {
+    proposal: dismissProposalForIdentity,
+    executionAttemptId: raceAttemptId,
+    confirm: "confirm",
+  });
+  const racedRows = await prisma.controlledAiActionAttempt.findMany({
+    where: {
+      businessId: businessA.id,
+      executionAttemptId: raceAttemptId,
+      actionKey: "DISMISS_RECOMMENDATION",
+      recommendationKey: "follow-up-sent-estimates",
+    },
+  });
+  const afterRace = await followUpDomain();
+  check(
+    "Ledger unique race does not create duplicate success or an unprovenanced domain write",
+    racedConfirm.executionResult.status === "REPLAYED" &&
+      racedRows.length === 1 &&
+      racedRows[0].result === "EXECUTED" &&
+      afterRace.items === beforeRace.items &&
+      afterRace.dismissed === beforeRace.dismissed,
+  );
+
+  const freshDismiss = await confirmControlledAction(prisma, ownerA, {
+    proposal: dismissProposalForIdentity,
+    executionAttemptId: randomUUID(),
+    confirm: "confirm",
+  });
+  const afterFreshDismiss = await followUpDomain();
+  check(
+    "New executionAttemptId can perform a legitimate fresh confirmation",
+    freshDismiss.executionResult.status === "SUCCEEDED" &&
+      afterFreshDismiss.dismissed === 1 &&
+      afterFreshDismiss.states === 1,
+  );
+
   const exploding = prisma.$extends({
     query: {
       controlledAiActionAttempt: {
@@ -385,24 +674,21 @@ try {
       afterDupExecuted === 1,
   );
 
-  const dismissProposal = await proposeControlledAction(prisma, ownerA, {
-    actionKey: "DISMISS_RECOMMENDATION",
-    targetEntityId: "follow-up-sent-estimates",
-  });
-  const dismissed = await confirmControlledAction(prisma, ownerA, {
-    proposal: dismissProposal,
-    executionAttemptId: randomUUID(),
-    confirm: "confirm",
-  });
-  const dismissRows = await prisma.controlledAiActionAttempt.findMany({
-    where: { businessId: businessA.id, actionKey: "DISMISS_RECOMMENDATION", result: "EXECUTED" },
+  const freshDismissRow = await prisma.controlledAiActionAttempt.findFirst({
+    where: {
+      businessId: businessA.id,
+      actionKey: "DISMISS_RECOMMENDATION",
+      result: "EXECUTED",
+      executionAttemptId: freshDismiss.executionAttemptId,
+      recommendationKey: "follow-up-sent-estimates",
+    },
   });
   check(
     "4. explicit confirmed DISMISS produces recorded provenance",
-    dismissed.executionResult.status === "SUCCEEDED" &&
-      dismissRows.length === 1 &&
-      dismissRows[0].recommendationKey === "follow-up-sent-estimates" &&
-      dismissRows[0].targetRecordType === "BsosRecommendationState",
+    freshDismiss.executionResult.status === "SUCCEEDED" &&
+      freshDismissRow?.recommendationKey === "follow-up-sent-estimates" &&
+      freshDismissRow.targetRecordType === "BsosRecommendationState" &&
+      freshDismissRow.targetRecordId === freshDismiss.executionResult.recordId,
   );
 
   const completeProposal = await proposeControlledAction(prisma, ownerA, {
@@ -520,6 +806,37 @@ try {
       historyB.attempts.length === 0 &&
       !historyB.attempts.some((row) => row.id === createRows[0].id) &&
       ownedRead?.id === createRows[0].id,
+  );
+  check(
+    "Same-business actor name renders",
+    ownedRead?.confirmedByName === "Olivia" &&
+      historyA.attempts.some((row) => row.id === createRows[0].id && row.confirmedByName === "Olivia"),
+  );
+
+  const dirtyAttempt = await seedAttempt({
+    businessId: businessA.id,
+    actionKey: "CREATE_RECOMMENDATION_ACTION_ITEM",
+    result: "EXECUTED",
+    recommendationKey: "collect-unpaid-invoices",
+    membershipId: betaMem.id,
+    userId: betaUser.id,
+    resultCode: "SUCCEEDED",
+    resultMessage: "Planted foreign actor on a local provenance row.",
+    executionAttemptId: randomUUID(),
+    targetRecordType: "BusinessActionItem",
+    targetRecordId: createdItems[0].id,
+  });
+  const dirtyHistory = await loadControlledAiActionHistory(prisma, ownerA);
+  const dirtyRow = dirtyHistory.attempts.find((row) => row.id === dirtyAttempt.id);
+  const dirtyJson = JSON.stringify(dirtyHistory);
+  const foreignDirtyRead = await loadControlledAiActionAttempt(prisma, ownerB, dirtyAttempt.id);
+  check(
+    "Planted foreign Membership does not reveal foreign actor name",
+    dirtyRow != null &&
+      dirtyRow.confirmedByName === null &&
+      !dirtyJson.includes("Bea") &&
+      dirtyHistory.attempts.some((row) => row.id === dirtyAttempt.id) &&
+      foreignDirtyRead === null,
   );
 
   let memberConfirmFailed = false;
