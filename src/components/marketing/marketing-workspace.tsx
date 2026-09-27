@@ -1,8 +1,11 @@
 import Link from "next/link";
 import { ContentStatusButton } from "@/components/marketing/content-status-button";
 import { CreateContentForm } from "@/components/marketing/create-content-form";
+import { ExportPackageButton } from "@/components/marketing/export-package-button";
 import { PhotoPermissionButton } from "@/components/marketing/photo-permission-button";
 import { PlannedDateForm } from "@/components/marketing/planned-date-form";
+import { StudioEditForm } from "@/components/marketing/studio-edit-form";
+import { StudioPackagePreview } from "@/components/marketing/studio-package-preview";
 import type { MarketingWorkspaceProps } from "@/components/marketing/types";
 import { EmptyState } from "@/components/empty-state";
 import { FounderRegion } from "@/components/founder-design/region";
@@ -16,8 +19,12 @@ import { createCampaignAction, saveBrandVoiceAction, setCampaignStatusAction } f
 import { ActionForm } from "@/components/action-form";
 import {
   CALENDAR_INTERNAL_MESSAGE,
+  canExportCreatorPackage,
   COMING_NEXT_MESSAGE,
+  CREATOR_PACKAGE_LIMITS_MESSAGE,
   MARKETING_AREA_LABELS,
+  parseShotList,
+  parseStoryboard,
   MARKETING_AREAS,
   MARKETING_CHANNEL_LABELS,
   MARKETING_CONTENT_TYPE_LABELS,
@@ -29,7 +36,7 @@ import {
 } from "@/lib/marketing";
 import { cn } from "@/lib/utils";
 
-export function MarketingWorkspace({ area, source }: MarketingWorkspaceProps) {
+export function MarketingWorkspace({ area, source, viewerRole }: MarketingWorkspaceProps) {
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,300px)]">
       <div className="min-w-0 space-y-4">
@@ -73,7 +80,7 @@ export function MarketingWorkspace({ area, source }: MarketingWorkspaceProps) {
           area === "website-seo" ||
           area === "performance" ||
           !isImplementedMarketingArea(area) ? (
-            <ContentBody area={area} source={source} />
+            <ContentBody area={area} source={source} viewerRole={viewerRole} />
           ) : null}
         </FounderRegion>
 
@@ -275,9 +282,11 @@ function JobOpportunityList({
 function ContentBody({
   area,
   source,
+  viewerRole,
 }: {
   area: MarketingArea;
   source: MarketingWorkspaceProps["source"];
+  viewerRole: MarketingWorkspaceProps["viewerRole"];
 }) {
   if (!isImplementedMarketingArea(area)) {
     return (
@@ -292,10 +301,10 @@ function ContentBody({
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Create content</CardTitle>
+          <CardTitle>Creator package</CardTitle>
           <CardDescription>
-            Manual draft only. No AI provider is required. Only marketing-approved photos can be attached.
-            Do not put customer contact details or private notes in the caption.
+            Select an approved job photo, edit the storyboard and shot list, then preview. OWNER approval
+            is required before export. {CREATOR_PACKAGE_LIMITS_MESSAGE}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -473,21 +482,45 @@ function ContentBody({
             </CardHeader>
             <CardContent className="space-y-3">
               <StatusBadge status={row.status} />
-              {row.body ? <p className="whitespace-pre-wrap text-sm">{row.body}</p> : <p className="text-sm text-muted-foreground">No caption entered.</p>}
-              {row.jobId ? (
+              <StudioPackagePreview
+                title={row.title}
+                caption={row.body}
+                hashtags={row.hashtags}
+                storyboard={parseStoryboard(row.storyboardJson)}
+                shotList={parseShotList(row.shotListJson)}
+                photos={row.photos}
+                businessName={source.brand.name}
+                workPerformed={source.opportunities.find((job) => job.jobId === row.jobId)?.workPerformed ?? null}
+                city={source.recordedActivity.city ?? null}
+              />
+              {row.status !== "APPROVED" ? (
+                <StudioEditForm
+                  contentId={row.id}
+                  title={row.title}
+                  body={row.body}
+                  hashtags={row.hashtags}
+                  storyboardJson={row.storyboardJson}
+                  shotListJson={row.shotListJson}
+                />
+              ) : null}
+              {row.exportedAt ? (
                 <p className="text-xs text-muted-foreground">
-                  Source job on file{row.jobCustomerName ? " (internal context only)" : ""}.
+                  Creator package exported {formatDate(row.exportedAt)}. Nothing was posted.
                 </p>
               ) : null}
-              {row.photos.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {row.photos.map((photo) => (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img key={photo.id} src={photo.url} alt="" className="h-20 w-20 rounded-md object-cover" />
-                  ))}
-                </div>
-              ) : null}
-              <ContentStatusButton contentId={row.id} status={row.status} />
+              <ContentStatusButton
+                contentId={row.id}
+                status={row.status}
+                canApprove={viewerRole === "OWNER"}
+                photosEligible={row.photos.length > 0 && row.photos.every((photo) => photo.approved)}
+              />
+              <ExportPackageButton
+                contentId={row.id}
+                canExport={canExportCreatorPackage({
+                  status: row.status,
+                  photos: row.photos,
+                })}
+              />
             </CardContent>
           </Card>
         ))

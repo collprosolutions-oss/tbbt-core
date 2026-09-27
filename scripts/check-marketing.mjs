@@ -28,19 +28,31 @@ const {
   PERFORMANCE_UNAVAILABLE_MESSAGE,
   LEAD_SOURCE_UNTRACKED_MESSAGE,
   CALENDAR_INTERNAL_MESSAGE,
+  canExportCreatorPackage,
   canSelectPhotoForMarketing,
+  CREATOR_PACKAGE_LIMITS_MESSAGE,
+  FLOW_VEO_DISCONNECTED_MESSAGE,
   jobMarketingReadiness,
   marketingAiAssistAvailable,
   nextContentStatus,
+  OWNER_STUDIO_APPROVAL_MESSAGE,
+  PAID_ADS_DISCONNECTED_MESSAGE,
   parseMarketingArea,
+  parseShotList,
+  parseStoryboard,
+  PHOTO_PERMISSION_REVOKED_MESSAGE,
 } = await import("@/lib/marketing");
-const { draftMarketingContent } = await import("@/lib/marketing-draft");
+const { draftMarketingContent, draftMarketingStudioPackage } = await import("@/lib/marketing-draft");
 const {
   createMarketingContent,
+  createMarketingStudioPackage,
+  exportMarketingCreatorPackage,
   grantJobPhotoMarketingPermission,
   MarketingError,
+  revokeJobPhotoMarketingPermission,
   setMarketingContentPlannedFor,
   advanceMarketingContentStatus,
+  updateMarketingStudioPackage,
 } = await import("@/lib/marketing-ops");
 const { loadMarketingSource } = await import("@/lib/marketing-data");
 const { FOUNDER_PAGE_KEYS, KPI_CARD_COUNTS } = await import("@/lib/founder-design");
@@ -52,10 +64,17 @@ if (!baseUrl) {
   process.exit(1);
 }
 
-const testDbName = "tbbt_marketing_test";
+const testDbName = "tbbt_marketing_studio_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
+
+const createDb = spawnSync("psql", [baseUrl, "-c", `CREATE DATABASE "${testDbName}"`], {
+  encoding: "utf8",
+});
+if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
+  console.warn(createDb.stderr || createDb.stdout);
+}
 
 const push = spawnSync(
   "npx",
@@ -148,6 +167,42 @@ try {
   check("Marketing nav is visible to ADMIN", visibleAppNav("ADMIN").some((item) => item.href === "/marketing"));
   check("Marketing nav is hidden from MEMBER", !visibleAppNav("MEMBER").some((item) => item.href === "/marketing"));
   check("MEMBER does not have MANAGE_MARKETING", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_MARKETING));
+  const studioDraft = draftMarketingStudioPackage(
+    {
+      contentType: "COMPLETED_JOB",
+      businessName: "CollPro",
+      workPerformed: "faucet repair",
+      city: "Reno",
+      photoStage: "AFTER",
+      photoCount: 1,
+    },
+    ["photo-1"],
+  );
+  check("Studio draft has three storyboard beats", studioDraft.storyboard.length === 3);
+  check("Studio draft has a shot list", studioDraft.shotList.length === 3 && studioDraft.shotList[0].photoId === "photo-1");
+  check("Studio draft hashtags come from recorded city and work", studioDraft.hashtags.includes("#Reno") && studioDraft.hashtags.includes("#faucetrepair"));
+  check("Studio draft does not claim Flow/Veo", studioDraft.flowVeoConnected === false);
+  check("Studio draft does not claim paid ads", studioDraft.paidAdsConnected === false);
+  check("Studio draft does not claim social publishing", studioDraft.socialPublishingConnected === false && studioDraft.publishable === false);
+  check("Creator package limits mention no posting", CREATOR_PACKAGE_LIMITS_MESSAGE.includes("will not post"));
+  check("Flow/Veo disclaimer is exact", FLOW_VEO_DISCONNECTED_MESSAGE.includes("not connected"));
+  check("Paid ads disclaimer is exact", PAID_ADS_DISCONNECTED_MESSAGE.includes("not connected"));
+  const studioFormSrc = readFileSync(new URL("../src/components/marketing/create-content-form.tsx", import.meta.url), "utf8");
+  const studioOpsSrc = readFileSync(new URL("../src/lib/marketing-ops.ts", import.meta.url), "utf8");
+  check(
+    "Studio form stays a handoff and does not claim Flow/Veo or posting",
+    studioFormSrc.includes("CREATOR_PACKAGE_LIMITS_MESSAGE") &&
+      !studioFormSrc.includes("Veo") &&
+      !studioFormSrc.includes("publish to"),
+  );
+  check(
+    "Revoke is allowed while a photo is attached",
+    !studioOpsSrc.includes("Remove this photo from marketing content before revoking permission."),
+  );
+  check("Owner approval message is exact", OWNER_STUDIO_APPROVAL_MESSAGE.includes("OWNER role"));
+  check("Storyboard parser keeps headings", parseStoryboard('[{"heading":"Hook","visual":"Photo","narration":"Fact"}]')[0].heading === "Hook");
+  check("Shot list parser keeps order", parseShotList('[{"order":2,"shot":"Hero","purpose":"Proof"}]')[0].order === 2);
+  check("Unapproved package cannot export", canExportCreatorPackage({ status: "DRAFT", photos: [{ approved: true }] }) === false);
 
   const businessA = await prisma.business.create({
     data: { name: "Alpha Marketing", slug: `alpha-mkt-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
@@ -348,6 +403,103 @@ try {
     () => grantJobPhotoMarketingPermission(prisma, ownerB, { photoId: otherPhoto.id }),
     (error) => error instanceof Error,
   );
+
+  console.log("\nTEST — Creator package workflow, OWNER approval, revoke, export");
+  await expectError(
+    "Studio package requires an approved photo",
+    () =>
+      createMarketingStudioPackage(prisma, ownerA, {
+        contentType: "COMPLETED_JOB",
+        title: "Missing photo",
+        jobId: job.id,
+      }),
+    (error) => error instanceof MarketingError && /photo/.test(error.message),
+  );
+
+  const studio = await createMarketingStudioPackage(prisma, adminA, {
+    contentType: "COMPLETED_JOB",
+    title: "Reno faucet story",
+    body: "CollPro completed faucet repair in Reno.",
+    jobId: job.id,
+    photoIds: [otherPhoto.id],
+    hashtags: "LocalHandyman Reno",
+    storyboardJson: JSON.stringify(studioDraft.storyboard),
+    shotListJson: JSON.stringify(studioDraft.shotList),
+  });
+  check("Studio package starts as DRAFT", studio.status === "DRAFT");
+  check("Studio package stores storyboard beats", parseStoryboard(studio.storyboardJson).length === 3);
+  check("Studio package stores shot list", parseShotList(studio.shotListJson).length === 3);
+  check("Studio package stores hashtags", studio.hashtags.includes("#LocalHandyman") && studio.hashtags.includes("#Reno"));
+
+  const edited = await updateMarketingStudioPackage(prisma, adminA, {
+    contentId: studio.id,
+    title: "Reno faucet story edited",
+    body: "Edited caption from recorded faucet repair.",
+    hashtags: "#LocalHandyman #RenoNV",
+    storyboardJson: JSON.stringify([
+      { heading: "Hook", visual: "Approved after photo", narration: "Recorded faucet repair only." },
+      { heading: "Proof", visual: "Hold the approved still", narration: "No invented results." },
+    ]),
+    shotListJson: JSON.stringify([
+      { order: 1, shot: "Hero still", purpose: "Approved after photo", photoId: otherPhoto.id },
+    ]),
+    photoIds: [otherPhoto.id],
+  });
+  check("ADMIN can edit a draft storyboard", edited.title === "Reno faucet story edited");
+  check("Edited storyboard persists", parseStoryboard(edited.storyboardJson)[0].heading === "Hook");
+
+  const studioReady = await advanceMarketingContentStatus(prisma, adminA, { contentId: studio.id });
+  check("ADMIN can send a package for OWNER review", studioReady.status === "READY_FOR_REVIEW");
+  await expectError(
+    "ADMIN cannot give OWNER approval",
+    () => advanceMarketingContentStatus(prisma, adminA, { contentId: studio.id }),
+    (error) => error instanceof MarketingError && error.message === OWNER_STUDIO_APPROVAL_MESSAGE,
+  );
+
+  await revokeJobPhotoMarketingPermission(prisma, ownerA, { photoId: otherPhoto.id });
+  await expectError(
+    "Revoked photo blocks OWNER approval",
+    () => advanceMarketingContentStatus(prisma, ownerA, { contentId: studio.id }),
+    (error) => error instanceof MarketingError && error.message === PHOTO_PERMISSION_REVOKED_MESSAGE,
+  );
+  await expectError(
+    "Revoked photo blocks export",
+    () => exportMarketingCreatorPackage(prisma, ownerA, { contentId: studio.id }),
+    (error) => error instanceof MarketingError,
+  );
+
+  await grantJobPhotoMarketingPermission(prisma, ownerA, { photoId: otherPhoto.id });
+  const studioApproved = await advanceMarketingContentStatus(prisma, ownerA, { contentId: studio.id });
+  check("OWNER can approve after permission is restored", studioApproved.status === "APPROVED");
+  check("OWNER approval records the owner reviewer", studioApproved.reviewedByMembershipId === ownerMem.id);
+
+  await expectError(
+    "Business B cannot export A's creator package",
+    () => exportMarketingCreatorPackage(prisma, ownerB, { contentId: studio.id }),
+    (error) => error instanceof Error,
+  );
+
+  const exported = await exportMarketingCreatorPackage(prisma, ownerA, { contentId: studio.id });
+  check("Export filename is a handoff JSON file", exported.filename.endsWith("-handoff.json"));
+  check("Exported package kind is TBBT_CREATOR_PACKAGE", exported.package.kind === "TBBT_CREATOR_PACKAGE");
+  check("Exported package is not published", exported.package.limits.published === false && exported.package.limits.posted === false);
+  check("Exported package does not claim Flow/Veo", exported.package.limits.flowVeoConnected === false);
+  check("Exported package does not claim paid ads", exported.package.limits.paidAdsConnected === false);
+  check("Exported package does not claim social publishing", exported.package.limits.socialPublishingConnected === false);
+  check("Exported package keeps the approved photo only", exported.package.photos.length === 1 && exported.package.photos[0].id === otherPhoto.id);
+  check("Exported package caption is the edited recorded-facts draft", exported.package.caption.includes("faucet repair"));
+
+  await revokeJobPhotoMarketingPermission(prisma, ownerA, { photoId: otherPhoto.id });
+  await expectError(
+    "Later revocation blocks another export",
+    () => exportMarketingCreatorPackage(prisma, ownerA, { contentId: studio.id }),
+    (error) => error instanceof MarketingError && error.message === PHOTO_PERMISSION_REVOKED_MESSAGE,
+  );
+
+  const afterRevoke = await loadMarketingSource(prisma, businessA.id);
+  const studioRow = afterRevoke.contents.find((row) => row.id === studio.id);
+  check("Loader marks the revoked photo as not approved", studioRow?.photos.every((photo) => photo.approved === false) === true);
+  check("Business B still cannot see A's studio package", (await loadMarketingSource(prisma, businessB.id)).contents.every((row) => row.id !== studio.id));
 
   console.log(
     failures === 0 ? "\nAll marketing checks passed." : `\n${failures} marketing check(s) failed.`,

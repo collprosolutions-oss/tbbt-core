@@ -105,6 +105,103 @@ export type WeeklyPlanItem = {
   channelIntent: string;
 };
 
+export type MarketingStudioFacts = MarketingDraftInput & {
+  photoStage?: string | null;
+  photoCaption?: string | null;
+};
+
+export type MarketingStudioDraft = {
+  mode: MarketingDraftMode;
+  title: string;
+  caption: string;
+  hashtags: string[];
+  storyboard: Array<{ heading: string; visual: string; narration: string }>;
+  shotList: Array<{ order: number; shot: string; purpose: string; photoId?: string }>;
+  message: string;
+  publishable: false;
+  flowVeoConnected: false;
+  paidAdsConnected: false;
+  socialPublishingConnected: false;
+};
+
+export function draftStudioHashtags(input: MarketingDraftInput): string[] {
+  const city = input.city?.trim().replace(/\s+/g, "") || "";
+  const work = (input.workPerformed || input.serviceName || "")
+    .trim()
+    .replace(/[^A-Za-z0-9]+/g, "");
+  return [
+    "#LocalHandyman",
+    city ? `#${city}` : "#HomeRepair",
+    work ? `#${work}` : "#CompletedJob",
+  ].slice(0, 3);
+}
+
+export function draftMarketingStudioPackage(
+  input: MarketingStudioFacts,
+  photoIds: string[] = [],
+): MarketingStudioDraft {
+  const draft = draftMarketingContent(input);
+  const work = input.workPerformed?.trim() || input.serviceName?.trim() || "completed work";
+  const city = input.city?.trim() || null;
+  const business = input.businessName.trim() || "this business";
+  const stage = input.photoStage?.trim() || "job photo";
+  const firstPhotoId = photoIds[0];
+
+  return {
+    mode: "TEMPLATE",
+    title: draft.title,
+    caption: draft.body,
+    hashtags: draftStudioHashtags(input),
+    storyboard: [
+      {
+        heading: "Hook",
+        visual: `${stage} of recorded ${work}${city ? ` in ${city}` : ""}`,
+        narration: `${business} completed ${work}. Use only facts on the job record.`,
+      },
+      {
+        heading: "Proof",
+        visual: input.photoCaption?.trim()
+          ? `Approved ${stage}: ${input.photoCaption.trim()}`
+          : `Hold on the approved ${stage}. Do not invent a before/after that is not on file.`,
+        narration: "Show the approved job photo. Do not add customer names, phones, or addresses.",
+      },
+      {
+        heading: "Close",
+        visual: city ? `${business} end card for ${city}` : `${business} end card`,
+        narration: city
+          ? `Ask about ${work} in ${city}. This is a draft, not a published post.`
+          : `Ask about ${work}. This is a draft, not a published post.`,
+      },
+    ],
+    shotList: [
+      {
+        order: 1,
+        shot: "Hero still",
+        purpose: `Approved ${stage} from the completed job`,
+        ...(firstPhotoId ? { photoId: firstPhotoId } : {}),
+      },
+      {
+        order: 2,
+        shot: "Detail still",
+        purpose: "Same approved photo, tighter crop. Do not substitute a private photo.",
+        ...(firstPhotoId ? { photoId: firstPhotoId } : {}),
+      },
+      {
+        order: 3,
+        shot: "End card",
+        purpose: city
+          ? `Business name and recorded service area (${city}) only`
+          : "Business name only. Do not invent a service area.",
+      },
+    ],
+    message: MARKETING_AI_DISCONNECTED_MESSAGE,
+    publishable: false,
+    flowVeoConnected: false,
+    paidAdsConnected: false,
+    socialPublishingConnected: false,
+  };
+}
+
 export function weeklyContentPlan(
   contents: Array<{
     id: string;

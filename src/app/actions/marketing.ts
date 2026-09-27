@@ -18,11 +18,13 @@ import {
 import { loadMarketingSource } from "@/lib/marketing-data";
 import {
   advanceMarketingContentStatus,
-  createMarketingContent,
+  createMarketingStudioPackage,
+  exportMarketingCreatorPackage,
   grantJobPhotoMarketingPermission,
   marketingErrorMessage,
   revokeJobPhotoMarketingPermission,
   setMarketingContentPlannedFor,
+  updateMarketingStudioPackage,
 } from "@/lib/marketing-ops";
 import { prisma } from "@/lib/prisma";
 
@@ -38,6 +40,13 @@ export type MarketingAiActionState = {
   mode?: "AI" | "TEMPLATE";
   task?: string;
   inProgress?: boolean;
+};
+
+export type MarketingExportState = {
+  error?: string;
+  message?: string;
+  filename?: string;
+  packageJson?: string;
 };
 
 function readString(formData: FormData, key: string) {
@@ -87,19 +96,69 @@ export async function createMarketingContentAction(
 ): Promise<MarketingActionState> {
   try {
     const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
-    await createMarketingContent(prisma, access, {
-      contentType: readString(formData, "contentType"),
+    await createMarketingStudioPackage(prisma, access, {
+      contentType: readString(formData, "contentType") || "COMPLETED_JOB",
       title: readString(formData, "title"),
       body: readString(formData, "body"),
       channelIntent: readString(formData, "channelIntent"),
       jobId: readString(formData, "jobId") || undefined,
       photoIds: formData.getAll("photoIds").filter((value): value is string => typeof value === "string"),
       plannedFor: readString(formData, "plannedFor") || undefined,
+      storyboardJson: readString(formData, "storyboardJson") || "[]",
+      shotListJson: readString(formData, "shotListJson") || "[]",
+      hashtags: readString(formData, "hashtags"),
     });
     revalidateMarketing();
-    return { message: "Content draft saved." };
+    return { message: "Creator package draft saved. It has not been published." };
   } catch (error) {
-    return { error: marketingErrorMessage(error, "That content draft could not be saved.") };
+    return { error: marketingErrorMessage(error, "That creator package draft could not be saved.") };
+  }
+}
+
+export async function updateMarketingStudioAction(
+  _prev: MarketingActionState,
+  formData: FormData,
+): Promise<MarketingActionState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    const photoIds = formData
+      .getAll("photoIds")
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+    await updateMarketingStudioPackage(prisma, access, {
+      contentId: readString(formData, "contentId"),
+      title: readString(formData, "title"),
+      body: readString(formData, "body"),
+      channelIntent: readString(formData, "channelIntent") || undefined,
+      plannedFor: readString(formData, "plannedFor") || undefined,
+      storyboardJson: readString(formData, "storyboardJson") || "[]",
+      shotListJson: readString(formData, "shotListJson") || "[]",
+      hashtags: readString(formData, "hashtags"),
+      photoIds: photoIds.length > 0 ? photoIds : undefined,
+    });
+    revalidateMarketing();
+    return { message: "Creator package draft updated. It has not been published." };
+  } catch (error) {
+    return { error: marketingErrorMessage(error, "That creator package could not be updated.") };
+  }
+}
+
+export async function exportMarketingCreatorPackageAction(
+  _prev: MarketingExportState,
+  formData: FormData,
+): Promise<MarketingExportState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    const exported = await exportMarketingCreatorPackage(prisma, access, {
+      contentId: readString(formData, "contentId"),
+    });
+    revalidateMarketing();
+    return {
+      message: "Creator package exported as a handoff file. Nothing was posted.",
+      filename: exported.filename,
+      packageJson: JSON.stringify(exported.package, null, 2),
+    };
+  } catch (error) {
+    return { error: marketingErrorMessage(error, "That creator package could not be exported.") };
   }
 }
 
