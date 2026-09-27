@@ -478,17 +478,9 @@ const REVIEW_PACKET_CONTENT_SELECT = {
         select: {
           id: true,
           url: true,
-          caption: true,
           stage: true,
           marketingPermissionStatus: true,
         },
-      },
-    },
-  },
-  job: {
-    select: {
-      estimate: {
-        select: { lineItems: { select: { description: true } } },
       },
     },
   },
@@ -510,10 +502,6 @@ export async function downloadMarketingReviewPacket(
       include: REVIEW_PACKET_CONTENT_SELECT,
     }),
   );
-  const business = await db.business.findFirst({
-    where: { id: access.businessId },
-    select: { name: true, publicServiceAreaLabel: true },
-  });
   const packet = buildMarketingReviewPacket({
     title: content.title,
     status: content.status,
@@ -522,11 +510,6 @@ export async function downloadMarketingReviewPacket(
     storyboardJson: content.storyboardJson,
     shotListJson: content.shotListJson,
     photos: content.photos.map((row) => row.jobPhoto),
-    recordedFacts: {
-      businessName: business?.name ?? "Business",
-      workPerformed: content.job?.estimate?.lineItems[0]?.description ?? null,
-      city: business?.publicServiceAreaLabel ?? null,
-    },
   });
   return {
     filename: marketingReviewPacketFilename(content.title, content.status),

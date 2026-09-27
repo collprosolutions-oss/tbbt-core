@@ -164,7 +164,7 @@ export const OWNER_REVIEW_PACKET_MESSAGE =
   "Downloading a review packet requires the OWNER role. TBBT will not post this packet.";
 
 export const REVIEW_PACKET_LIMITS_MESSAGE =
-  "This review packet is an internal download of approved text, storyboard, shot list, and permitted photo references. Drafts are labeled. Private customer data and unapproved media are excluded. TBBT will not publish or post anything.";
+  "This review packet includes only stored package text, storyboard, shot list, and permission-checked photo references. Estimate line items, customer records, unapproved media, and job-photo captions are omitted. Stored package text, storyboard, and shot list are included as written and are not scanned for private details. TBBT will not publish or post anything.";
 
 export const REVIEW_PACKET_DRAFT_TEXT_LABEL = "Draft text — not approved";
 export const REVIEW_PACKET_APPROVED_TEXT_LABEL = "Approved text";
@@ -392,14 +392,19 @@ export type ReviewPacketPhoto = {
   id: string;
   url: string;
   stage: string;
-  caption: string | null;
   marketingPermissionStatus?: string;
   approved?: boolean;
 };
 
+export type ReviewPacketPhotoReference = {
+  id: string;
+  url: string;
+  stage: string;
+};
+
 export function permittedReviewPacketPhotos(
   photos: readonly ReviewPacketPhoto[],
-): Array<{ id: string; url: string; stage: string; caption: string | null }> {
+): ReviewPacketPhotoReference[] {
   return photos
     .filter(
       (photo) =>
@@ -409,7 +414,6 @@ export function permittedReviewPacketPhotos(
       id: photo.id,
       url: photo.url,
       stage: photo.stage,
-      caption: photo.caption ?? null,
     }));
 }
 
@@ -429,8 +433,10 @@ export type MarketingReviewPacketLimits = {
   published: false;
   posted: false;
   socialPublishingConnected: false;
-  includesPrivateCustomerData: false;
+  includesEstimateLineItems: false;
+  includesCustomerRecords: false;
   includesUnapprovedMedia: false;
+  includesPhotoCaptions: false;
   message: string;
 };
 
@@ -439,8 +445,10 @@ export function marketingReviewPacketLimits(): MarketingReviewPacketLimits {
     published: false,
     posted: false,
     socialPublishingConnected: false,
-    includesPrivateCustomerData: false,
+    includesEstimateLineItems: false,
+    includesCustomerRecords: false,
     includesUnapprovedMedia: false,
+    includesPhotoCaptions: false,
     message: REVIEW_PACKET_LIMITS_MESSAGE,
   };
 }
@@ -460,16 +468,12 @@ export type MarketingReviewPacket = {
   };
   storyboard: StoryboardBeat[];
   shotList: ShotListItem[];
-  photoReferences: Array<{ id: string; url: string; stage: string; caption: string | null }>;
-  recordedFacts: {
-    businessName: string;
-    workPerformed: string | null;
-    city: string | null;
-    photoCount: number;
-  };
+  photoReferences: ReviewPacketPhotoReference[];
   omitted: {
-    privateCustomerData: true;
+    estimateLineItems: true;
+    customerRecords: true;
     unapprovedMedia: true;
+    photoCaptions: true;
   };
   limits: MarketingReviewPacketLimits;
 };
@@ -482,11 +486,6 @@ export function buildMarketingReviewPacket(input: {
   storyboardJson: string;
   shotListJson: string;
   photos: readonly ReviewPacketPhoto[];
-  recordedFacts: {
-    businessName: string;
-    workPerformed?: string | null;
-    city?: string | null;
-  };
 }): MarketingReviewPacket {
   const status = isMarketingContentStatus(input.status) ? input.status : "DRAFT";
   const draft = isMarketingReviewPacketDraft(status);
@@ -508,17 +507,37 @@ export function buildMarketingReviewPacket(input: {
     storyboard: parseStoryboard(input.storyboardJson),
     shotList: sanitizeReviewPacketShotList(parseShotList(input.shotListJson), permittedIds),
     photoReferences,
-    recordedFacts: {
-      businessName: input.recordedFacts.businessName,
-      workPerformed: input.recordedFacts.workPerformed ?? null,
-      city: input.recordedFacts.city ?? null,
-      photoCount: photoReferences.length,
-    },
     omitted: {
-      privateCustomerData: true,
+      estimateLineItems: true,
+      customerRecords: true,
       unapprovedMedia: true,
+      photoCaptions: true,
     },
     limits: marketingReviewPacketLimits(),
+  };
+}
+
+export type MarketingReviewPacketDownloadState = {
+  packetJson?: string;
+  filename?: string;
+  downloadNonce?: string;
+};
+
+export function nextReviewPacketDownload(
+  previousNonce: string | null,
+  state: MarketingReviewPacketDownloadState,
+): { shouldDownload: true; nonce: string; packetJson: string; filename: string } | { shouldDownload: false; nonce: string | null } {
+  if (!state.packetJson || !state.filename || !state.downloadNonce) {
+    return { shouldDownload: false, nonce: previousNonce };
+  }
+  if (state.downloadNonce === previousNonce) {
+    return { shouldDownload: false, nonce: previousNonce };
+  }
+  return {
+    shouldDownload: true,
+    nonce: state.downloadNonce,
+    packetJson: state.packetJson,
+    filename: state.filename,
   };
 }
 

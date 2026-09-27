@@ -55,6 +55,7 @@ export type MarketingReviewPacketState = {
   message?: string;
   filename?: string;
   packetJson?: string;
+  downloadNonce?: string;
 };
 
 function readString(formData: FormData, key: string) {
@@ -185,6 +186,7 @@ export async function downloadMarketingReviewPacketAction(
         : "Review packet downloaded. Nothing was posted.",
       filename: downloaded.filename,
       packetJson: JSON.stringify(downloaded.packet, null, 2),
+      downloadNonce: crypto.randomUUID(),
     };
   } catch (error) {
     return { error: marketingErrorMessage(error, "That review packet could not be downloaded.") };

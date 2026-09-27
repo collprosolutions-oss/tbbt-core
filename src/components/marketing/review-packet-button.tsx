@@ -1,11 +1,12 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useRef } from "react";
 import {
   downloadMarketingReviewPacketAction,
   type MarketingReviewPacketState,
 } from "@/app/actions/marketing";
 import { Button } from "@/components/ui/button";
+import { nextReviewPacketDownload } from "@/lib/marketing";
 
 const initial: MarketingReviewPacketState = {};
 
@@ -19,17 +20,20 @@ export function ReviewPacketButton({
   draft: boolean;
 }) {
   const [state, formAction, pending] = useActionState(downloadMarketingReviewPacketAction, initial);
+  const lastNonceRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!state.packetJson || !state.filename) return;
-    const blob = new Blob([state.packetJson], { type: "application/json" });
+    const next = nextReviewPacketDownload(lastNonceRef.current, state);
+    if (!next.shouldDownload) return;
+    lastNonceRef.current = next.nonce;
+    const blob = new Blob([next.packetJson], { type: "application/json" });
     const href = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = href;
-    link.download = state.filename;
+    link.download = next.filename;
     link.click();
     URL.revokeObjectURL(href);
-  }, [state.packetJson, state.filename]);
+  }, [state]);
 
   if (!canDownload) return null;
 

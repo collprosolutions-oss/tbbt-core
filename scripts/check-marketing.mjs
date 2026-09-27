@@ -41,6 +41,7 @@ const {
   marketingReviewPacketFilename,
   marketingReviewPacketTextLabel,
   nextContentStatus,
+  nextReviewPacketDownload,
   OWNER_REVIEW_PACKET_MESSAGE,
   OWNER_STUDIO_APPROVAL_MESSAGE,
   PAID_ADS_DISCONNECTED_MESSAGE,
@@ -243,18 +244,15 @@ try {
         id: "approved-1",
         url: "https://example.test/approved.jpg",
         stage: "AFTER",
-        caption: "Permitted after",
         marketingPermissionStatus: "APPROVED",
       },
       {
         id: "private-1",
         url: "https://example.test/private.jpg",
         stage: "BEFORE",
-        caption: "Secret before",
         marketingPermissionStatus: "PRIVATE",
       },
     ],
-    recordedFacts: { businessName: "CollPro", workPerformed: "faucet repair", city: "Reno" },
   });
   check("Review packet kind is TBBT_MARKETING_REVIEW_PACKET", reviewPacketPreview.kind === "TBBT_MARKETING_REVIEW_PACKET");
   check("Draft review packet is marked draft", reviewPacketPreview.draft === true && reviewPacketPreview.draftLabel === REVIEW_PACKET_DRAFT_PACKAGE_LABEL);
@@ -263,20 +261,54 @@ try {
   check("Review packet keeps the storyboard", reviewPacketPreview.storyboard[0]?.heading === "Hook");
   check("Review packet keeps the shot list", reviewPacketPreview.shotList.length === 2);
   check("Review packet keeps only the permitted photo", reviewPacketPreview.photoReferences.length === 1 && reviewPacketPreview.photoReferences[0].id === "approved-1");
+  check("Review packet photo references omit captions", reviewPacketPreview.photoReferences.every((photo) => !("caption" in photo)));
+  check("Review packet has no recordedFacts or estimate text", !("recordedFacts" in reviewPacketPreview) && !JSON.stringify(reviewPacketPreview).includes("workPerformed"));
   check("Review packet drops unapproved shot-list photo ids", reviewPacketPreview.shotList[1].photoId === undefined);
   check("Review packet keeps permitted shot-list photo ids", reviewPacketPreview.shotList[0].photoId === "approved-1");
-  check("Review packet omits private customer data and unapproved media", reviewPacketPreview.omitted.privateCustomerData === true && reviewPacketPreview.omitted.unapprovedMedia === true);
+  check(
+    "Review packet omitted claim is limited to records the builder actually excludes",
+    reviewPacketPreview.omitted.estimateLineItems === true &&
+      reviewPacketPreview.omitted.customerRecords === true &&
+      reviewPacketPreview.omitted.unapprovedMedia === true &&
+      reviewPacketPreview.omitted.photoCaptions === true &&
+      !("privateCustomerData" in reviewPacketPreview.omitted),
+  );
   check(
     "Review packet does not publish or post",
     reviewPacketPreview.limits.published === false &&
       reviewPacketPreview.limits.posted === false &&
       reviewPacketPreview.limits.socialPublishingConnected === false &&
-      reviewPacketPreview.limits.includesPrivateCustomerData === false &&
-      reviewPacketPreview.limits.includesUnapprovedMedia === false,
+      reviewPacketPreview.limits.includesEstimateLineItems === false &&
+      reviewPacketPreview.limits.includesCustomerRecords === false &&
+      reviewPacketPreview.limits.includesUnapprovedMedia === false &&
+      reviewPacketPreview.limits.includesPhotoCaptions === false &&
+      !("includesPrivateCustomerData" in reviewPacketPreview.limits),
   );
-  check("Review packet limits mention no posting", REVIEW_PACKET_LIMITS_MESSAGE.includes("will not publish or post"));
+  check("Review packet limits mention omitted records without scanning package text", REVIEW_PACKET_LIMITS_MESSAGE.includes("are not scanned for private details") && REVIEW_PACKET_LIMITS_MESSAGE.includes("will not publish or post"));
   check("Draft review packet filename is labeled draft", marketingReviewPacketFilename("Reno faucet review", "DRAFT") === "reno-faucet-review-review-packet-draft.json");
   check("Approved review packet filename is not labeled draft", marketingReviewPacketFilename("Reno faucet review", "APPROVED") === "reno-faucet-review-review-packet.json");
+  const firstDownload = nextReviewPacketDownload(null, {
+    packetJson: JSON.stringify(reviewPacketPreview),
+    filename: "reno-faucet-review-review-packet-draft.json",
+    downloadNonce: "download-1",
+  });
+  const secondDownload = nextReviewPacketDownload(firstDownload.shouldDownload ? firstDownload.nonce : null, {
+    packetJson: JSON.stringify(reviewPacketPreview),
+    filename: "reno-faucet-review-review-packet-draft.json",
+    downloadNonce: "download-2",
+  });
+  const repeatSameNonce = nextReviewPacketDownload(secondDownload.shouldDownload ? secondDownload.nonce : null, {
+    packetJson: JSON.stringify(reviewPacketPreview),
+    filename: "reno-faucet-review-review-packet-draft.json",
+    downloadNonce: "download-2",
+  });
+  check(
+    "Two Download clicks with the same packet JSON start two downloads",
+    firstDownload.shouldDownload === true &&
+      secondDownload.shouldDownload === true &&
+      firstDownload.nonce !== secondDownload.nonce,
+  );
+  check("A repeated nonce does not start a third download", repeatSameNonce.shouldDownload === false);
   const reviewButtonSrc = readFileSync(new URL("../src/components/marketing/review-packet-button.tsx", import.meta.url), "utf8");
   const workspaceSrc = readFileSync(new URL("../src/components/marketing/marketing-workspace.tsx", import.meta.url), "utf8");
   const reviewActionSrc = readFileSync(new URL("../src/app/actions/marketing.ts", import.meta.url), "utf8");
@@ -288,6 +320,8 @@ try {
   check(
     "Review packet download stays a handoff and does not post",
     reviewButtonSrc.includes("Download draft review packet") &&
+      reviewButtonSrc.includes("nextReviewPacketDownload") &&
+      reviewActionSrc.includes("downloadNonce") &&
       reviewActionSrc.includes("Nothing was posted.") &&
       !reviewActionSrc.includes("publish to") &&
       !reviewButtonSrc.includes("publish"),
@@ -345,10 +379,31 @@ try {
   const betaCustomer = await prisma.customer.create({
     data: { businessId: businessB.id, name: "Beta Secret" },
   });
+  const SENSITIVE_ESTIMATE_TEXT = "GATE-CODE-9981 hide-a-key under the gnome";
+  const SENSITIVE_PHOTO_CAPTION = "Ada Homeowner cell 555-0100 at 14 Secret Court";
+  const estimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      publicToken: randomUUID(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: estimate.id,
+      description: SENSITIVE_ESTIMATE_TEXT,
+      quantity: 1,
+      unitPrice: 80,
+      total: 80,
+      type: "LABOR",
+    },
+  });
   const job = await prisma.job.create({
     data: {
       businessId: businessA.id,
       customerId: customer.id,
+      estimateId: estimate.id,
       status: "COMPLETED",
       projectToken: randomUUID(),
     },
@@ -385,7 +440,7 @@ try {
       jobId: job.id,
       stage: "AFTER",
       url: "https://example.test/after.jpg",
-      caption: "After",
+      caption: SENSITIVE_PHOTO_CAPTION,
     },
   });
   await prisma.jobPhoto.create({
@@ -545,8 +600,13 @@ try {
   check("Draft review packet includes the storyboard", draftPacket.packet.storyboard.length === 3);
   check("Draft review packet includes the shot list", draftPacket.packet.shotList.length === 3);
   check("Draft review packet includes only the permitted photo", draftPacket.packet.photoReferences.length === 1 && draftPacket.packet.photoReferences[0].id === otherPhoto.id);
-  check("Draft review packet excludes the private photo URL", !JSON.stringify(draftPacket.packet).includes("private.jpg"));
-  check("Draft review packet excludes customer names", !JSON.stringify(draftPacket.packet).includes("Ada Homeowner") && !JSON.stringify(draftPacket.packet).includes("Beta Secret"));
+  const draftPacketJson = JSON.stringify(draftPacket.packet);
+  check("Draft review packet excludes the private photo URL", !draftPacketJson.includes("private.jpg"));
+  check("Draft review packet excludes customer names", !draftPacketJson.includes("Ada Homeowner") && !draftPacketJson.includes("Beta Secret"));
+  check("Draft review packet excludes sensitive estimate line-item text", !draftPacketJson.includes(SENSITIVE_ESTIMATE_TEXT));
+  check("Draft review packet excludes job-photo captions", !draftPacketJson.includes(SENSITIVE_PHOTO_CAPTION) && !draftPacketJson.includes("14 Secret Court"));
+  check("Draft review packet photo references have no caption field", draftPacket.packet.photoReferences.every((photo) => !("caption" in photo)));
+  check("Draft review packet has no recordedFacts", !("recordedFacts" in draftPacket.packet));
   check(
     "Draft review packet does not publish or post",
     draftPacket.packet.limits.published === false &&
@@ -688,11 +748,16 @@ try {
       reviewFnSrc.includes("OWNER_REVIEW_PACKET_MESSAGE"),
   );
   check(
-    "Review packet query stays tenant-scoped and never loads a customer",
+    "Review packet query stays tenant-scoped and never loads a customer, estimate, or photo caption",
     reviewFnSrc.includes("...access.scope") &&
       reviewFnSrc.includes("access.assertOwned") &&
       !reviewFnSrc.includes("customer") &&
-      !reviewFnSrc.includes("jobCustomerName"),
+      !reviewFnSrc.includes("jobCustomerName") &&
+      !reviewFnSrc.includes("estimate") &&
+      !reviewFnSrc.includes("lineItems") &&
+      !reviewFnSrc.includes("recordedFacts") &&
+      !reviewFnSrc.includes("caption: true") &&
+      !reviewFnSrc.includes("business.findFirst"),
   );
   check(
     "Review packet download does not write export or publish fields",
@@ -747,6 +812,11 @@ try {
   check("Approved review packet includes permitted photo references", approvedPacket.packet.photoReferences.length === 1 && approvedPacket.packet.photoReferences[0].id === otherPhoto.id);
   check("Approved review packet includes storyboard and shot list", approvedPacket.packet.storyboard[0]?.heading === "Hook" && approvedPacket.packet.shotList[0]?.shot === "Hero still");
   check("Approved review packet still does not publish", approvedPacket.packet.limits.published === false && approvedPacket.packet.limits.posted === false);
+  check(
+    "Approved review packet still excludes estimate text and photo captions",
+    !JSON.stringify(approvedPacket.packet).includes(SENSITIVE_ESTIMATE_TEXT) &&
+      !JSON.stringify(approvedPacket.packet).includes(SENSITIVE_PHOTO_CAPTION),
+  );
 
   const exported = await exportMarketingCreatorPackage(prisma, ownerA, { contentId: studio.id });
   check("Export filename is a handoff JSON file", exported.filename.endsWith("-handoff.json"));
