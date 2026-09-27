@@ -411,6 +411,9 @@ model Business {
   externalLeadImports      ExternalLeadImport[]
   externalLeadImportRows   ExternalLeadImportRow[]
   regulatoryIntelligenceNotes RegulatoryIntelligenceNote[]
+  /// OWNER-authored extra intake questions + allowlisted visibility rules.
+  /// Draft-only in this slice: never applied to public hire forms.
+  intakeConditionDrafts    IntakeConditionDraft[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -972,6 +975,30 @@ model ServiceRequest {
   @@index([businessId, tradeCode])
   @@index([campaignId])
   @@index([matchedServiceAreaId])
+}
+
+/// OWNER draft of extra intake questions and allowlisted show/hide/require
+/// rules. Never applied to public hire forms in this slice. Historical
+/// ServiceRequest snapshots and archived platform schemas are never
+/// rewritten from these rows. PUBLISHED is rejected by application code.
+model IntakeConditionDraft {
+  id                    String   @id @default(cuid())
+  businessId            String
+  /// HANDYMAN | CLEANING. Must be an ACTIVE BusinessTrade for this tenant.
+  tradeCode             String
+  baseSchemaKey         String
+  baseSchemaVersion     Int
+  /// Always DRAFT in this slice. Application code rejects any other status.
+  status                String   @default("DRAFT")
+  documentJson          String
+  updatedByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, tradeCode])
+  @@index([businessId])
 }
 
 /// One requested task on a public intake ServiceRequest. A customer can
