@@ -38,7 +38,16 @@ export async function loadJobProfitabilityCloseout(
       scheduledDurationMinutes: true,
       customer: { select: { name: true } },
       approvedEstimateVersion: {
-        select: { id: true, total: true, versionNumber: true, approvedAt: true },
+        select: {
+          id: true,
+          total: true,
+          versionNumber: true,
+          approvedAt: true,
+          lineItems: {
+            select: { type: true, quantity: true, total: true, description: true },
+            take: CLOSEOUT_READ_BOUND,
+          },
+        },
       },
     },
   });
@@ -48,7 +57,6 @@ export async function loadJobProfitabilityCloseout(
   const estimateId = job.estimateId;
   const [
     estimates,
-    approvedVersions,
     liveLines,
     invoices,
     payments,
@@ -69,19 +77,6 @@ export async function loadJobProfitabilityCloseout(
             createdAt: true,
             customerId: true,
             serviceRequestId: true,
-          },
-          take: CLOSEOUT_READ_BOUND,
-        })
-      : Promise.resolve([]),
-    estimateId
-      ? prisma.estimateVersion.findMany({
-          where: { estimateId, businessId, approvedAt: { not: null } },
-          select: {
-            estimateId: true,
-            lineItems: {
-              select: { type: true, quantity: true, total: true, description: true },
-              take: CLOSEOUT_READ_BOUND,
-            },
           },
           take: CLOSEOUT_READ_BOUND,
         })
@@ -206,22 +201,24 @@ export async function loadJobProfitabilityCloseout(
     total: number;
     description?: string | null;
     fromApprovedVersion: boolean;
+    estimateVersionId?: string | null;
   };
 
-  const approvedLineByEstimate = new Map<string, JobCloseoutInputLines[]>();
-  for (const version of approvedVersions) {
-    approvedLineByEstimate.set(
-      version.estimateId,
-      version.lineItems.map((line) => ({
-        estimateId: version.estimateId,
-        type: line.type,
-        quantity: asNumber(line.quantity),
-        total: asNumber(line.total),
-        description: line.description,
-        fromApprovedVersion: true,
-      })),
-    );
-  }
+  // Canonical Actual-vs-Estimate baseline is the Job's exact approved
+  // EstimateVersion. Do not scan every historical approvedAt version.
+  const pinnedVersion = job.approvedEstimateVersion;
+  const approvedVersionLines: JobCloseoutInputLines[] =
+    pinnedVersion && estimateId
+      ? pinnedVersion.lineItems.map((line) => ({
+          estimateId,
+          type: line.type,
+          quantity: asNumber(line.quantity),
+          total: asNumber(line.total),
+          description: line.description,
+          fromApprovedVersion: true,
+          estimateVersionId: pinnedVersion.id,
+        }))
+      : [];
 
   const liveMapped: JobCloseoutInputLines[] = liveLines
     .filter((line) => line.estimateId)
@@ -234,10 +231,7 @@ export async function loadJobProfitabilityCloseout(
       fromApprovedVersion: false,
     }));
 
-  const estimateLines = [
-    ...[...approvedLineByEstimate.values()].flat(),
-    ...liveMapped.filter((line) => !approvedLineByEstimate.has(line.estimateId)),
-  ];
+  const estimateLines = pinnedVersion ? approvedVersionLines : liveMapped;
 
   const materialItems: CloseoutMaterialItem[] = purchaseLists.flatMap((list) =>
     list.items.map((item) => ({
@@ -281,6 +275,7 @@ export async function loadJobProfitabilityCloseout(
       estimateId: job.estimateId,
       createdAt: job.createdAt,
       scheduledDurationMinutes: job.scheduledDurationMinutes,
+      approvedEstimateVersionId: job.approvedEstimateVersion?.id ?? null,
       approvedEstimateVersionTotal: job.approvedEstimateVersion
         ? asNumber(job.approvedEstimateVersion.total)
         : null,

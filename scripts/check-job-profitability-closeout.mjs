@@ -109,6 +109,7 @@ function closeoutInput(overrides = {}) {
       estimateId: "est-1",
       createdAt: now,
       scheduledDurationMinutes: 120,
+      approvedEstimateVersionId: "ver-1",
       approvedEstimateVersionTotal: 1000,
       approvedEstimateVersionNumber: 1,
     },
@@ -124,9 +125,9 @@ function closeoutInput(overrides = {}) {
       },
     ],
     estimateLines: [
-      { estimateId: "est-1", type: "LABOR", quantity: 1, total: 600, fromApprovedVersion: true },
-      { estimateId: "est-1", type: "MATERIAL", quantity: 1, total: 300, fromApprovedVersion: true },
-      { estimateId: "est-1", type: "OTHER", quantity: 1, total: 100, fromApprovedVersion: true },
+      { estimateId: "est-1", type: "LABOR", quantity: 1, total: 600, fromApprovedVersion: true, estimateVersionId: "ver-1" },
+      { estimateId: "est-1", type: "MATERIAL", quantity: 1, total: 300, fromApprovedVersion: true, estimateVersionId: "ver-1" },
+      { estimateId: "est-1", type: "OTHER", quantity: 1, total: 100, fromApprovedVersion: true, estimateVersionId: "ver-1" },
     ],
     invoices: [
       {
@@ -287,9 +288,9 @@ try {
         { id: "est-sent", businessId: "biz-a", status: "SENT", total: 4000, createdAt: now, customerId: "c1", serviceRequestId: null },
       ],
       estimateLines: [
-        { estimateId: "est-1", type: "LABOR", quantity: 1, total: 600, fromApprovedVersion: true },
-        { estimateId: "est-1", type: "MATERIAL", quantity: 1, total: 300, fromApprovedVersion: true },
-        { estimateId: "est-1", type: "OTHER", quantity: 1, total: 100, fromApprovedVersion: true },
+        { estimateId: "est-1", type: "LABOR", quantity: 1, total: 600, fromApprovedVersion: true, estimateVersionId: "ver-1" },
+        { estimateId: "est-1", type: "MATERIAL", quantity: 1, total: 300, fromApprovedVersion: true, estimateVersionId: "ver-1" },
+        { estimateId: "est-1", type: "OTHER", quantity: 1, total: 100, fromApprovedVersion: true, estimateVersionId: "ver-1" },
         ...dirtyDraftLines,
         { estimateId: "est-sent", type: "LABOR", quantity: 1, total: 4000, fromApprovedVersion: false },
       ],
@@ -327,6 +328,7 @@ try {
         estimateId: "est-draft",
         createdAt: now,
         scheduledDurationMinutes: null,
+        approvedEstimateVersionId: null,
         approvedEstimateVersionTotal: null,
         approvedEstimateVersionNumber: null,
       },
@@ -337,6 +339,58 @@ try {
     }),
   );
   check("2. DRAFT estimate is not approved truth", draftOnly?.sold.approvedEstimateTotal === null && draftOnly?.coverage.estimate === "Partial");
+
+  console.log("\nSTATIC — Job approvedEstimateVersion pin");
+  check("Loader reads job.approvedEstimateVersion lineItems", dataSrc.includes("approvedEstimateVersion") && dataSrc.includes("pinnedVersion"));
+  check("Loader does not query every approvedAt version", !dataSrc.includes("approvedAt: { not: null }") && !dataSrc.includes("estimateVersion.findMany"));
+  const versionOneLines = [
+    { estimateId: "est-1", type: "LABOR", quantity: 1, total: 600, fromApprovedVersion: true, estimateVersionId: "ver-1" },
+    { estimateId: "est-1", type: "MATERIAL", quantity: 1, total: 300, fromApprovedVersion: true, estimateVersionId: "ver-1" },
+    { estimateId: "est-1", type: "OTHER", quantity: 1, total: 100, fromApprovedVersion: true, estimateVersionId: "ver-1" },
+  ];
+  const versionTwoLines = [
+    { estimateId: "est-1", type: "LABOR", quantity: 1, total: 1600, fromApprovedVersion: true, estimateVersionId: "ver-2" },
+    { estimateId: "est-1", type: "MATERIAL", quantity: 1, total: 1300, fromApprovedVersion: true, estimateVersionId: "ver-2" },
+    { estimateId: "est-1", type: "OTHER", quantity: 1, total: 1100, fromApprovedVersion: true, estimateVersionId: "ver-2" },
+  ];
+  const v2First = isolateApprovedEstimateLines(
+    [...versionTwoLines, ...versionOneLines, ...dirtyDraftLines],
+    { id: "est-1", businessId: "biz-a", status: "APPROVED", total: 1000, createdAt: now, customerId: "c1", serviceRequestId: null },
+    "ver-1",
+  );
+  const v1First = isolateApprovedEstimateLines(
+    [...versionOneLines, ...versionTwoLines, ...dirtyDraftLines],
+    { id: "est-1", businessId: "biz-a", status: "APPROVED", total: 1000, createdAt: now, customerId: "c1", serviceRequestId: null },
+    "ver-1",
+  );
+  check("1/2. Version 1 and Version 2 both exist as approved-shaped rows", versionOneLines.length === 3 && versionTwoLines.length === 3);
+  check("3/4. Pin to Version 1 keeps $600/$300/$100", v2First.length === 3 && v2First.every((line) => line.estimateVersionId === "ver-1") && v2First.reduce((sum, line) => sum + line.total, 0) === 1000);
+  check("5. Query ordering cannot change the pinned Version 1 result", JSON.stringify(v1First.map((line) => line.total).sort()) === JSON.stringify(v2First.map((line) => line.total).sort()));
+  check("6. DRAFT/SENT live lines never replace the pinned snapshot", v2First.every((line) => line.fromApprovedVersion && line.total !== 9999));
+  const pinnedCloseout = buildJobProfitabilityCloseout(
+    closeoutInput({
+      job: {
+        ...closeoutInput().job,
+        approvedEstimateVersionId: "ver-1",
+        approvedEstimateVersionTotal: 1000,
+        approvedEstimateVersionNumber: 1,
+      },
+      estimateLines: [...versionTwoLines, ...versionOneLines, ...dirtyDraftLines],
+    }),
+  );
+  check("4. Closeout sold totals use Version 1 only", pinnedCloseout?.sold.approvedEstimateTotal === 1000 && pinnedCloseout?.sold.estimatedLaborLineTotal === 600 && pinnedCloseout?.sold.estimatedMaterialLineTotal === 300 && pinnedCloseout?.sold.estimatedOtherLineTotal === 100);
+  const reversePinned = buildJobProfitabilityCloseout(
+    closeoutInput({
+      job: {
+        ...closeoutInput().job,
+        approvedEstimateVersionId: "ver-1",
+        approvedEstimateVersionTotal: 1000,
+        approvedEstimateVersionNumber: 1,
+      },
+      estimateLines: [...versionOneLines, ...versionTwoLines, ...dirtyDraftLines],
+    }),
+  );
+  check("5. Reverse line order still uses Version 1", reversePinned?.sold.estimatedLaborLineTotal === 600 && reversePinned?.sold.estimatedMaterialLineTotal === 300);
 
   console.log("\nSTATIC — Same-job billing and foreign isolation");
   const billed = buildJobProfitabilityCloseout(
@@ -483,7 +537,7 @@ try {
 
   const noMaterials = buildJobProfitabilityCloseout(
     closeoutInput({
-      estimateLines: [{ estimateId: "est-1", type: "LABOR", quantity: 1, total: 1000, fromApprovedVersion: true }],
+      estimateLines: [{ estimateId: "est-1", type: "LABOR", quantity: 1, total: 1000, fromApprovedVersion: true, estimateVersionId: "ver-1" }],
       expenses: [],
       materialItems: [],
     }),
@@ -527,6 +581,7 @@ try {
         estimateId: "est-1",
         createdAt: now,
         scheduledDurationMinutes: 120,
+        approvedEstimateVersionId: "ver-1",
         approvedEstimateVersionTotal: 1000,
         approvedEstimateVersionNumber: 1,
       },
@@ -616,9 +671,27 @@ try {
       },
     },
   });
+  const versionTwo = await prisma.estimateVersion.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: estimateA.id,
+      versionNumber: 2,
+      total: new Prisma.Decimal(4000),
+      laborMinimumWaived: false,
+      laborMinimumAdjustment: 0,
+      approvedAt: new Date(now.getTime() + 60_000),
+      lineItems: {
+        create: [
+          { businessId: businessA.id, description: "Later approved labor", quantity: 1, unitPrice: 1600, total: 1600, type: "LABOR" },
+          { businessId: businessA.id, description: "Later approved material", quantity: 1, unitPrice: 1300, total: 1300, type: "MATERIAL" },
+          { businessId: businessA.id, description: "Later approved other", quantity: 1, unitPrice: 1100, total: 1100, type: "OTHER" },
+        ],
+      },
+    },
+  });
   await prisma.estimate.update({
     where: { id: estimateA.id },
-    data: { approvedVersionId: versionA.id },
+    data: { approvedVersionId: versionTwo.id, total: new Prisma.Decimal(4000) },
   });
 
   const jobA = await prisma.job.create({
@@ -805,7 +878,15 @@ try {
   };
 
   const loaded = await loadJobProfitabilityCloseout(prisma, ownerA, jobA.id);
+  const laterApproved = await prisma.estimateVersion.findMany({
+    where: { estimateId: estimateA.id, approvedAt: { not: null } },
+    orderBy: { versionNumber: "desc" },
+  });
+  check("DB pin 1. Estimate has approved Version 1", versionA.versionNumber === 1 && versionA.approvedAt != null);
+  check("DB pin 2. Later Version 2 also has approvedAt", versionTwo.versionNumber === 2 && versionTwo.approvedAt != null && laterApproved.length === 2);
+  check("DB pin 3. Job.approvedEstimateVersion points to Version 1", jobA.approvedEstimateVersionId === versionA.id);
   check("DB 1. Approved version total is used, not live 9999 lines", loaded?.sold.approvedEstimateTotal === 1000 && loaded?.sold.estimatedLaborLineTotal === 600);
+  check("DB pin 4. Closeout uses Version 1 totals/lines only, not Version 2 $4000", loaded?.sold.approvedEstimateTotal === 1000 && loaded?.sold.estimatedLaborLineTotal === 600 && loaded?.sold.estimatedMaterialLineTotal === 300 && loaded?.sold.estimatedOtherLineTotal === 100);
   check("DB 2. Live DRAFT-shaped lines are not approved truth", loaded?.sold.estimatedMaterialLineTotal === 300 && loaded?.sold.estimatedOtherLineTotal === 100);
   check("DB 3. Same-job invoice total is 1000", loaded?.billing.invoiceTotal === 1000);
   check("DB 4. Same-job payments are 1000", loaded?.billing.recordedPayments === 1000);

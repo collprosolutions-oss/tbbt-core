@@ -106,6 +106,10 @@ export type CloseoutEstimate = {
   serviceRequestId: string | null;
 };
 
+export type CloseoutEstimateLine = FinancialEstimateLine & {
+  estimateVersionId?: string | null;
+};
+
 export type JobCloseoutJob = {
   id: string;
   businessId: string;
@@ -115,6 +119,7 @@ export type JobCloseoutJob = {
   estimateId: string | null;
   createdAt: Date;
   scheduledDurationMinutes: number | null;
+  approvedEstimateVersionId: string | null;
   approvedEstimateVersionTotal: number | null;
   approvedEstimateVersionNumber: number | null;
 };
@@ -125,7 +130,7 @@ export type JobCloseoutInput = {
   timeZone: string;
   job: JobCloseoutJob | null;
   estimates: readonly CloseoutEstimate[];
-  estimateLines: readonly FinancialEstimateLine[];
+  estimateLines: readonly CloseoutEstimateLine[];
   invoices: readonly ReportInvoice[];
   payments: readonly FinancialPayment[];
   timeEntries: readonly CloseoutTimeEntry[];
@@ -289,15 +294,24 @@ export function isolateApprovedEstimate(
 }
 
 export function isolateApprovedEstimateLines(
-  lines: readonly FinancialEstimateLine[],
+  lines: readonly CloseoutEstimateLine[],
   estimate: CloseoutEstimate | null,
-): FinancialEstimateLine[] {
+  approvedEstimateVersionId?: string | null,
+): CloseoutEstimateLine[] {
   if (!estimate) return [];
+  if (approvedEstimateVersionId) {
+    return lines.filter(
+      (line) =>
+        line.estimateId === estimate.id &&
+        line.fromApprovedVersion &&
+        line.estimateVersionId === approvedEstimateVersionId,
+    );
+  }
   const approved = lines.filter(
     (line) => line.estimateId === estimate.id && line.fromApprovedVersion,
   );
   if (approved.length > 0) return approved;
-  return lines.filter((line) => line.estimateId === estimate.id);
+  return lines.filter((line) => line.estimateId === estimate.id && !line.fromApprovedVersion);
 }
 
 function estimatedOtherLineTotal(lines: readonly FinancialEstimateLine[]): number | null {
@@ -468,7 +482,11 @@ export function buildJobProfitabilityCloseout(
 
   const estimates = input.estimates.filter((estimate) => estimate.businessId === input.businessId);
   const approvedEstimate = isolateApprovedEstimate(estimates, input.businessId, job.estimateId);
-  const approvedLines = isolateApprovedEstimateLines(input.estimateLines, approvedEstimate);
+  const approvedLines = isolateApprovedEstimateLines(
+    input.estimateLines,
+    approvedEstimate,
+    job.approvedEstimateVersionId,
+  );
   const invoices = isolateSameBusinessJobInvoices(input.invoices, input.businessId, job.id);
   const payments = isolateSameBusinessJobPayments(
     input.payments,
@@ -534,7 +552,7 @@ export function buildJobProfitabilityCloseout(
           {
             id: approvedEstimate.id,
             status: approvedEstimate.status,
-            total: approvedEstimate.total,
+            total: job.approvedEstimateVersionTotal ?? approvedEstimate.total,
             createdAt: approvedEstimate.createdAt,
             customerId: approvedEstimate.customerId,
             serviceRequestId: approvedEstimate.serviceRequestId,
