@@ -621,7 +621,9 @@ try {
   const unknownStill = await prisma.automationRule.findUnique({ where: { id: unknownRule.id } });
   check("8. Unknown rule stayed disabled", unknownStill.enabled === false);
 
-  const afterUnknownToggleRuns = await prisma.automationRun.count();
+  const afterUnknownToggleRuns = await prisma.automationRun.count({
+    where: { businessId: { in: [businessA.id, businessB.id] } },
+  });
   check("Unknown toggle still created no runs", afterUnknownToggleRuns === beforeRunCount);
 
   const kindCenter = await loadAutomationOwnerCenter(prisma, accessKind);
