@@ -128,7 +128,8 @@
     "test:business-timeline": "node --experimental-strip-types scripts/check-business-timeline.mjs",
     "test:cleaning-visit-workflow": "node --experimental-strip-types scripts/check-cleaning-visit-workflow.mjs",
     "test:business-locations": "node --experimental-strip-types scripts/check-business-locations.mjs",
-    "test:partner-vendor-directory": "node --experimental-strip-types scripts/check-partner-vendor-directory.mjs"
+    "test:partner-vendor-directory": "node --experimental-strip-types scripts/check-partner-vendor-directory.mjs",
+    "test:external-lead-import": "node --experimental-strip-types scripts/check-external-lead-import.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",
