@@ -348,12 +348,16 @@ async function persistReviewedRow(
   preview: ExternalLeadImportPreview,
   row: StoredImportRow,
   parsed: ParsedImportRow,
-): Promise<ExternalLeadImportPreview> {
+): Promise<{ preview: ExternalLeadImportPreview; wrote: boolean }> {
   const updated = await db.externalLeadImportRow.updateMany({
     where: {
       id: row.id,
       businessId: access.businessId,
       importId: preview.id,
+      // Correction and rejection both require the row to still be INVALID
+      // at write time so a winning reject cannot be overwritten.
+      previewStatus: "INVALID",
+      createdRequestId: null,
     },
     data: {
       previewStatus: parsed.previewStatus,
@@ -375,7 +379,7 @@ async function persistReviewedRow(
     },
   });
   if (updated.count !== 1) {
-    throw new ExternalLeadImportError(IMPORT_NOT_AVAILABLE_MESSAGE);
+    return { preview: await loadOwnedImport(db, access, preview.id), wrote: false };
   }
   const rows = await db.externalLeadImportRow.findMany({
     where: { importId: preview.id, businessId: access.businessId },
@@ -385,7 +389,11 @@ async function persistReviewedRow(
     where: { id: preview.id, businessId: access.businessId },
     data: previewCountWrite(rows),
   });
-  return loadOwnedImport(db, access, preview.id);
+  return { preview: await loadOwnedImport(db, access, preview.id), wrote: true };
+}
+
+function currentReviewedRow(preview: ExternalLeadImportPreview, rowId: string) {
+  return preview.rows.find((candidate) => candidate.id === rowId) ?? null;
 }
 
 export type ImportRowCorrectionInput = {
@@ -431,7 +439,15 @@ export async function correctExternalLeadImportRow(
     identities.customers,
     identities.requests,
   );
-  return persistReviewedRow(db, access, preview, row, flagged);
+  const result = await persistReviewedRow(db, access, preview, row, flagged);
+  if (!result.wrote) {
+    const current = currentReviewedRow(result.preview, row.id);
+    if (current?.previewStatus === "REJECTED") {
+      throw new ExternalLeadImportError(IMPORT_ROW_REJECTED_TERMINAL_MESSAGE);
+    }
+    throw new ExternalLeadImportError(IMPORT_ROW_NOT_EDITABLE_MESSAGE);
+  }
+  return result.preview;
 }
 
 export type RejectImportRowResult = {
@@ -463,10 +479,15 @@ export async function rejectExternalLeadImportRow(
     previewStatus: "REJECTED",
     invalidReason: ROW_REJECTED_BY_OWNER_MESSAGE,
   });
-  return {
-    preview: await persistReviewedRow(db, access, preview, row, parsed),
-    reused: false,
-  };
+  const result = await persistReviewedRow(db, access, preview, row, parsed);
+  if (!result.wrote) {
+    const current = currentReviewedRow(result.preview, row.id);
+    if (current?.previewStatus === "REJECTED") {
+      return { preview: result.preview, reused: true };
+    }
+    throw new ExternalLeadImportError(IMPORT_ROW_NOT_REJECTABLE_MESSAGE);
+  }
+  return { preview: result.preview, reused: false };
 }
 
 export type ConfirmImportResult = {

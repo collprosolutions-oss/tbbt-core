@@ -27,6 +27,7 @@ const {
   applySameBusinessDuplicates,
   decodeCsvBytes,
   evaluateImportRow,
+  ExternalLeadImportError,
   EXTERNAL_LEAD_IMPORT_ROUTE,
   FILE_TOO_LARGE_MESSAGE,
   IMPORT_ALREADY_CONFIRMED_MESSAGE,
@@ -218,6 +219,12 @@ try {
       ) &&
       readSrc("src/lib/external-lead-import-ops.ts").includes(
         "IMPORT_ROW_REJECTED_TERMINAL_MESSAGE",
+      ) &&
+      /previewStatus:\s*"INVALID"/.test(
+        readSrc("src/lib/external-lead-import-ops.ts").slice(
+          readSrc("src/lib/external-lead-import-ops.ts").indexOf("async function persistReviewedRow"),
+          readSrc("src/lib/external-lead-import-ops.ts").indexOf("export type ImportRowCorrectionInput"),
+        ),
       ),
   );
   check(
@@ -846,6 +853,90 @@ try {
       error.message === IMPORT_ALREADY_CONFIRMED_MESSAGE,
     );
   }
+
+  console.log("\nRACE — reject wins the INVALID write, correction fails, row stays REJECTED");
+  const raceCsv = Buffer.from(
+    [
+      "name,email,phone,summary,source",
+      ",race@example.com,2395550299,Missing name,MANUAL",
+    ].join("\n"),
+  );
+  const racePreview = await previewCsvUpload(prisma, ownerA, {
+    filename: "race-leads.csv",
+    bytes: raceCsv,
+  });
+  const raceRow = racePreview.rows[0];
+  check(
+    "Race preview starts with one invalid staged row",
+    racePreview.status === "PREVIEW" &&
+      raceRow?.previewStatus === "INVALID" &&
+      racePreview.invalidCount === 1,
+  );
+
+  let releaseCorrectionWrite;
+  const correctionWriteGate = new Promise((resolve) => {
+    releaseCorrectionWrite = resolve;
+  });
+  let notifyCorrectionReachedWrite;
+  const correctionReachedWrite = new Promise((resolve) => {
+    notifyCorrectionReachedWrite = resolve;
+  });
+  const racingDb = prisma.$extends({
+    query: {
+      externalLeadImportRow: {
+        async updateMany({ args, query }) {
+          if (args.data?.previewStatus === "REJECTED") {
+            return query(args);
+          }
+          notifyCorrectionReachedWrite();
+          await correctionWriteGate;
+          return query(args);
+        },
+      },
+    },
+  });
+
+  const correctionPromise = correctExternalLeadImportRow(racingDb, ownerA, {
+    importId: racePreview.id,
+    rowId: raceRow.id,
+    name: "Race Correct",
+    email: "race-correct@example.com",
+    phone: "2395550299",
+    summary: "Should lose the race",
+  });
+  await correctionReachedWrite;
+  const raceRejected = await rejectExternalLeadImportRow(prisma, ownerA, {
+    importId: racePreview.id,
+    rowId: raceRow.id,
+  });
+  check(
+    "Reject commits first while the correction write is held",
+    raceRejected.reused === false &&
+      raceRejected.preview.rows.find((row) => row.id === raceRow.id)?.previewStatus ===
+        "REJECTED",
+  );
+  releaseCorrectionWrite();
+  try {
+    await correctionPromise;
+    check("Concurrent correction loses once the row is no longer INVALID", false);
+  } catch (error) {
+    check(
+      "Concurrent correction loses once the row is no longer INVALID",
+      error instanceof ExternalLeadImportError &&
+        error.message === IMPORT_ROW_REJECTED_TERMINAL_MESSAGE,
+    );
+  }
+  const afterRace = await loadOwnedImport(prisma, ownerA, racePreview.id);
+  const afterRaceRow = afterRace.rows.find((row) => row.id === raceRow.id);
+  check(
+    "Rejected row stays rejected and creates no lead after the lost correction race",
+    afterRaceRow?.previewStatus === "REJECTED" &&
+      afterRaceRow.name !== "Race Correct" &&
+      afterRaceRow.email === "race@example.com" &&
+      afterRaceRow.createdRequestId == null &&
+      afterRace.createdCount === 0 &&
+      afterRace.rejectedCount === 1,
+  );
 
   console.log("\nExternal lead import check complete.");
 } catch (error) {
