@@ -30,6 +30,8 @@ import { DEFAULT_TRADE, isConfiguredTrade, type TradeCode } from "@/lib/trades";
 export const TENANT_INTAKE_SNAPSHOT_SCHEMA_VERSION = 1 as const;
 export const TENANT_INTAKE_SNAPSHOT_STATUS_PUBLISHED = "PUBLISHED" as const;
 export const MAX_TENANT_INTAKE_SNAPSHOT_CHARS = 96_000;
+/** Newest-first bound for OWNER history on /intake-conditionals. */
+export const TENANT_INTAKE_SNAPSHOT_HISTORY_LIMIT = 20;
 export const PUBLIC_INTAKE_REFRESH_FORM =
   "This request form has been updated. Refresh the page and try again.";
 

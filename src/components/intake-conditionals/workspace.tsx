@@ -4,6 +4,7 @@ import { useActionState, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   publishIntakeConditionDraftAction,
+  restoreIntakeConditionSnapshotAction,
   saveIntakeConditionDraftAction,
   validateIntakeConditionDraftAction,
   type IntakeConditionActionState,
@@ -211,6 +212,10 @@ export function IntakeConditionWorkspace({ workspace }: { workspace: IntakeCondi
     publishIntakeConditionDraftAction,
     emptyAction,
   );
+  const [restoreState, restoreAction, restorePending] = useActionState(
+    restoreIntakeConditionSnapshotAction,
+    emptyAction,
+  );
   const [reviewed, setReviewed] = useState(false);
   const [idempotencyKey] = useState(() =>
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -321,6 +326,57 @@ export function IntakeConditionWorkspace({ workspace }: { workspace: IntakeCondi
             Base schema {workspace.baseSchema.key} v{workspace.baseSchema.version}
             {workspace.savedAt ? ` · last saved ${new Date(workspace.savedAt).toLocaleString()}` : " · not saved yet"}
           </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Published version history</CardTitle>
+          <CardDescription>{workspace.restoreDescription}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {workspace.history.versions.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No published versions yet for this business and trade.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {workspace.history.versions.map((version) => (
+                <li key={version.snapshotId} className="rounded-lg border border-border/70 p-3 text-sm">
+                  <p>
+                    Version {version.versionNumber}
+                    {version.isCurrent ? " · current public pointer" : ""}
+                  </p>
+                  <p className="text-muted-foreground">
+                    {new Date(version.publishedAt).toLocaleString()} · {version.summary}
+                  </p>
+                  {!version.isCurrent ? (
+                    <form action={restoreAction} className="mt-3 space-y-2">
+                      <input type="hidden" name="tradeCode" value={workspace.selectedTrade} />
+                      <input type="hidden" name="snapshotId" value={version.snapshotId} />
+                      <label className="flex items-start gap-2 text-sm">
+                        <input type="checkbox" name="confirmed" value="1" className="mt-1" />
+                        <span>{workspace.restoreConfirmRequired}</span>
+                      </label>
+                      <Button type="submit" size="sm" variant="outline" disabled={restorePending}>
+                        {restorePending ? "Restoring…" : "Restore this version as current"}
+                      </Button>
+                    </form>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+          {workspace.history.versions.length > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              Showing the newest {workspace.history.historyLimit} published versions for this
+              trade.
+            </p>
+          ) : null}
+          {restoreState.error ? <p className="text-sm text-destructive">{restoreState.error}</p> : null}
+          {restoreState.message ? (
+            <p className="text-sm text-muted-foreground">{restoreState.message}</p>
+          ) : null}
         </CardContent>
       </Card>
 

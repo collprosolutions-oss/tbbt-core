@@ -25,7 +25,7 @@ export default async function IntakeConditionalsPage({
     <PageContainer width="2xl">
       <PageHeader
         title="Intake condition drafts"
-        description="OWNER-only. Draft allowlisted extra questions, preview them, then review and publish an immutable tenant snapshot. Historical Cleaning V1/V2, Handyman V1, and existing requests stay exactly as recorded."
+        description="OWNER-only. Draft allowlisted extra questions, preview them, then review and publish an immutable tenant snapshot. Restore an older published version as the current pointer without editing snapshot rows. Historical Cleaning V1/V2, Handyman V1, and existing requests stay exactly as recorded."
       />
       <IntakeConditionWorkspace workspace={workspace} />
     </PageContainer>

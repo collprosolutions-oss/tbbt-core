@@ -1,9 +1,10 @@
 "use server";
 
 /**
- * OWNER actions for intake-condition drafts and reviewed publishes.
- * Tenant scope comes from requireOperatingBusinessAccess() — never from
- * a client businessId. Public hire forms read published snapshots only.
+ * OWNER actions for intake-condition drafts, reviewed publishes, and
+ * pointer-only restores. Tenant scope comes from
+ * requireOperatingBusinessAccess() — never from a client businessId.
+ * Public hire forms read published snapshots only.
  */
 import { revalidatePath } from "next/cache";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
@@ -13,6 +14,7 @@ import {
 } from "@/lib/intake-conditionals";
 import {
   publishIntakeConditionDraft,
+  restoreIntakeConditionSnapshot,
   saveIntakeConditionDraft,
   validateOwnedIntakeConditionDraft,
 } from "@/lib/intake-conditionals-ops";
@@ -86,5 +88,28 @@ export async function publishIntakeConditionDraftAction(
     };
   } catch (error) {
     return { error: intakeConditionErrorMessage(error, "That draft could not be published.") };
+  }
+}
+
+export async function restoreIntakeConditionSnapshotAction(
+  _prev: IntakeConditionActionState,
+  formData: FormData,
+): Promise<IntakeConditionActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const confirmed = readString(formData, "confirmed");
+    const restored = await restoreIntakeConditionSnapshot(prisma, access, {
+      tradeCode: readString(formData, "tradeCode"),
+      snapshotId: readString(formData, "snapshotId"),
+      confirmed: confirmed === "1" || confirmed === "on" || confirmed === "true",
+    });
+    revalidatePath("/intake-conditionals");
+    return {
+      message: `Restored tenant intake snapshot version ${restored.versionNumber} as the current public pointer. Snapshot rows and historical requests stay unchanged.`,
+    };
+  } catch (error) {
+    return {
+      error: intakeConditionErrorMessage(error, "That published version could not be restored."),
+    };
   }
 }
