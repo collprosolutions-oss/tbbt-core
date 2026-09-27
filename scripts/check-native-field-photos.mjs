@@ -97,6 +97,7 @@ const jobScreenSrc = readRepo("apps/native/src/screens/JobScreen.tsx");
 const photosUiSrc = readRepo("apps/native/src/screens/JobPhotosSection.tsx");
 const photoRulesSrc = readRepo("apps/native/src/photo-rules.ts");
 const docsSrc = readRepo("docs/NATIVE_FIELD.md");
+const serviceSrc = readRepo("src/lib/business-storage/service.ts");
 
 console.log("\nSTATIC — Reuse private storage, caps, and capture/review UI");
 check(
@@ -116,6 +117,13 @@ check(
     photoOpsSrc.includes("afterInitialRead") &&
     photoOpsSrc.includes("tx.jobPhoto.count") &&
     photoOpsSrc.includes("NATIVE_JOB_PHOTO_LIMIT"),
+);
+check(
+  "Refused finalize discards the READY asset and uncharges storage",
+    photoOpsSrc.includes("discardReadyManagedUpload") &&
+    photoOpsSrc.includes("releaseUnpersistedFinalizedPhoto") &&
+    serviceSrc.includes("export async function discardReadyManagedUpload") &&
+    serviceSrc.includes("storageUsedBytes: { decrement: existing.fileSizeBytes }"),
 );
 check(
   "Native photo routes never accept a File body or Vercel Blob helper",
@@ -474,6 +482,43 @@ try {
       !JSON.stringify(finalized.job).includes("hidden-customer@native-photos.example"),
   );
 
+  const readyAsset = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: authorized.assetId },
+  });
+  const accountAfterSuccess = await prisma.businessStorageAccount.findUniqueOrThrow({
+    where: { businessId: businessA.id },
+  });
+  check(
+    "Successful finalize keeps a READY asset and charges storage",
+    readyAsset.status === "READY" &&
+      Number(accountAfterSuccess.storageUsedBytes) === readyAsset.fileSizeBytes &&
+      Number(accountAfterSuccess.storageReservedBytes) === 0,
+  );
+
+  const duplicateFinalize = await finalizeNativeAssignedJobPhoto(
+    prisma,
+    memberAccess.access,
+    assignedJob.id,
+    { assetId: authorized.assetId, stage: "BEFORE", caption: "Valve before repair" },
+    storage,
+  );
+  const photosAfterDuplicate = await prisma.jobPhoto.count({
+    where: { jobId: assignedJob.id, businessId: businessA.id },
+  });
+  const accountAfterDuplicate = await prisma.businessStorageAccount.findUniqueOrThrow({
+    where: { businessId: businessA.id },
+  });
+  check(
+    "Duplicate finalize is a successful no-op and does not double-charge storage",
+    duplicateFinalize.ok === true &&
+      photosAfterDuplicate === 1 &&
+      (await prisma.storedAsset.findUniqueOrThrow({ where: { id: authorized.assetId } }))
+        .status === "READY" &&
+      Number(accountAfterDuplicate.storageUsedBytes) ===
+        Number(accountAfterSuccess.storageUsedBytes) &&
+      Number(accountAfterDuplicate.storageReservedBytes) === 0,
+  );
+
   const preview = await previewNativeAssignedJobPhoto(
     prisma,
     memberAccess.access,
@@ -563,6 +608,16 @@ try {
 
   console.log("\nDB — Concurrent finalize cap and reassignment race");
 
+  async function storageAccounting(businessId) {
+    const account = await prisma.businessStorageAccount.findUniqueOrThrow({
+      where: { businessId },
+    });
+    return {
+      used: Number(account.storageUsedBytes),
+      reserved: Number(account.storageReservedBytes),
+    };
+  }
+
   async function authorizeAndStore(access, targetJobId, filename) {
     const authorized = await authorizeNativeAssignedJobPhoto(
       prisma,
@@ -647,12 +702,39 @@ try {
   const concurrentRejected = [raceFinalizeA, raceFinalizeB].filter(
     (row) => row.ok === false && row.status === 409,
   );
+  const winningAssetId = raceFinalizeA.ok ? concurrentA.assetId : concurrentB.assetId;
+  const losingAssetId = raceFinalizeA.ok ? concurrentB.assetId : concurrentA.assetId;
+  const winningAsset = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: winningAssetId },
+  });
+  const losingAsset = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: losingAssetId },
+  });
+  const losingPhoto = await prisma.jobPhoto.findFirst({
+    where: { storedAssetId: losingAssetId, businessId: businessA.id },
+  });
+  const afterRace = await storageAccounting(businessA.id);
+  const readyUsed = (
+    await prisma.storedAsset.aggregate({
+      where: { businessId: businessA.id, status: "READY" },
+      _sum: { fileSizeBytes: true },
+    })
+  )._sum.fileSizeBytes ?? 0;
   check(
     "Simultaneous finalizes cannot create more than 12 job photos",
     concurrentCount === NATIVE_JOB_PHOTO_LIMIT &&
       concurrentSuccesses === 1 &&
       concurrentRejected.length === 1 &&
       concurrentRejected[0].error === nativeJobPhotoTooManyMessage(),
+  );
+  check(
+    "Race loser is not READY and its bytes are not charged",
+    losingAsset.status === "FAILED" &&
+      losingPhoto == null &&
+      winningAsset.status === "READY" &&
+      afterRace.used === Number(readyUsed) &&
+      afterRace.reserved === 0 &&
+      afterRace.used === Number(accountAfterSuccess.storageUsedBytes) + winningAsset.fileSizeBytes,
   );
 
   const reassignJob = await prisma.job.create({
@@ -665,6 +747,7 @@ try {
       assignedMembershipId: memberMem.id,
     },
   });
+  const beforeReassign = await storageAccounting(businessA.id);
   const reassignAuth = await authorizeAndStore(
     memberAccess.access,
     reassignJob.id,
@@ -702,6 +785,16 @@ try {
   const reassignPhoto = await prisma.jobPhoto.findFirst({
     where: { storedAssetId: reassignAuth.assetId, businessId: businessA.id },
   });
+  const reassignAsset = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: reassignAuth.assetId },
+  });
+  const afterReassign = await storageAccounting(businessA.id);
+  const readyUsedAfterReassign = (
+    await prisma.storedAsset.aggregate({
+      where: { businessId: businessA.id, status: "READY" },
+      _sum: { fileSizeBytes: true },
+    })
+  )._sum.fileSizeBytes ?? 0;
   check(
     "Reassignment after the authorize read refuses finalize and creates no photo",
     reassignFinalize.ok === false &&
@@ -710,6 +803,13 @@ try {
       reassignAfter?.assignedMembershipId === otherMem.id &&
       photosAfterReassign === photosBeforeReassign &&
       reassignPhoto == null,
+  );
+  check(
+    "Locked assignment refusal leaves no READY orphan or charged storage",
+    reassignAsset.status === "FAILED" &&
+      afterReassign.used === beforeReassign.used &&
+      afterReassign.reserved === beforeReassign.reserved &&
+      afterReassign.used === Number(readyUsedAfterReassign),
   );
 
   const gapJob = await prisma.job.create({

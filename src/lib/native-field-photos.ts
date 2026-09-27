@@ -18,7 +18,7 @@ import {
 import { isBusinessStorageConfigured } from "@/lib/business-storage/config";
 import { authorizePrivateStoredAssetDownload } from "@/lib/business-storage/private-serve";
 import {
-  abortManagedUpload,
+  discardReadyManagedUpload,
   finalizeManagedUpload,
 } from "@/lib/business-storage/service";
 import {
@@ -265,6 +265,20 @@ function storageDeps(db: PrismaClient, storage?: NativePhotoStorageDeps) {
   };
 }
 
+async function releaseUnpersistedFinalizedPhoto(
+  db: PrismaClient,
+  deps: ReturnType<typeof storageDeps>,
+  businessId: string,
+  assetId: string,
+) {
+  const persisted = await db.jobPhoto.findFirst({
+    where: { businessId, storedAssetId: assetId },
+    select: { id: true },
+  });
+  if (persisted) return;
+  await discardReadyManagedUpload(deps, businessId, assetId).catch(() => undefined);
+}
+
 function requireStorage(storage?: NativePhotoStorageDeps): NativeAssignedJobPhotoFailure | null {
   if (storage?.provider || isBusinessStorageConfigured()) {
     return null;
@@ -351,7 +365,7 @@ export async function finalizeNativeAssignedJobPhoto(
     asset.category !== "JOB_PHOTO" ||
     asset.jobId !== assigned.jobId
   ) {
-    await abortManagedUpload(deps, access.businessId, input.assetId).catch(() => undefined);
+    await releaseUnpersistedFinalizedPhoto(db, deps, access.businessId, input.assetId);
     return { ok: false, status: 400, error: "That photo is not a private field job photo." };
   }
 
@@ -391,16 +405,7 @@ export async function finalizeNativeAssignedJobPhoto(
     });
 
     if (!written.ok) {
-      const persisted = await db.jobPhoto.findFirst({
-        where: {
-          businessId: access.businessId,
-          storedAssetId: input.assetId,
-        },
-        select: { id: true },
-      });
-      if (!persisted) {
-        await abortManagedUpload(deps, access.businessId, input.assetId).catch(() => undefined);
-      }
+      await releaseUnpersistedFinalizedPhoto(db, deps, access.businessId, input.assetId);
       return written;
     }
   } catch (error) {

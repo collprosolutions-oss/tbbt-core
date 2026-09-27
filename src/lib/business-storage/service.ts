@@ -341,6 +341,51 @@ export async function abortManagedUpload(
   return current;
 }
 
+/**
+ * Releases a READY asset that never became a domain attachment.
+ * Abort stays PENDING-only so a successful finalize cannot be undone
+ * from the abort route. This path uncharges usedBytes after a refused
+ * persist (cap or assignment recheck).
+ */
+export async function discardReadyManagedUpload(
+  deps: StorageServiceDeps,
+  businessId: string,
+  assetId: string,
+) {
+  const existing = await deps.db.storedAsset.findFirst({
+    where: { id: assetId, businessId },
+    include: { storageAccount: true },
+  });
+  if (!existing) throw new StorageAccessError();
+  const now = deps.now?.() ?? new Date();
+  const claimed = await deps.db.$transaction(async (tx) => {
+    const updated = await tx.storedAsset.updateMany({
+      where: { id: existing.id, businessId, status: "READY" },
+      data: { status: "FAILED", deletedAt: now, publicPath: null },
+    });
+    if (updated.count !== 1) return false;
+    if (existing.fileSizeBytes > 0) {
+      await tx.businessStorageAccount.update({
+        where: { id: existing.storageAccountId },
+        data: { storageUsedBytes: { decrement: existing.fileSizeBytes } },
+      });
+    }
+    return true;
+  });
+  if (claimed) {
+    await bestEffortCleanupOwnedObject(deps, businessId, {
+      bucket: existing.storageAccount.bucketName,
+      storageKey: existing.storageKey,
+    });
+  }
+  const current = await deps.db.storedAsset.findFirst({
+    where: { id: assetId, businessId },
+    include: { storageAccount: true },
+  });
+  if (!current) throw new StorageAccessError();
+  return current;
+}
+
 export async function abortBusinessUpload(
   deps: StorageServiceDeps,
   access: BusinessAccess,
