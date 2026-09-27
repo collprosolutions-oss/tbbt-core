@@ -26,6 +26,9 @@ export const LOCATION_ADDITIVE_MESSAGE =
 export const LOCATION_EMPTY_MESSAGE =
   "No business locations yet. Existing jobs stay unassigned. Timezone, Stripe, and service areas stay on the business.";
 
+export const LOCATION_UNAVAILABLE_MESSAGE =
+  "Business locations are unavailable on this environment until the location migration is applied. Opening Settings does not create the table.";
+
 export type RecordedBusinessLocation = {
   id: string;
   businessId: string;

@@ -7,18 +7,29 @@ import {
 import { ActionForm } from "@/components/action-form";
 import { Button } from "@/components/ui/button";
 import { requireManagementPageAccess } from "@/lib/access";
-import { listBusinessLocations } from "@/lib/business-location-ops";
+import { loadBusinessLocationDirectory } from "@/lib/business-location-ops";
 import {
   formatLocationAddress,
   LOCATION_ADDITIVE_MESSAGE,
   LOCATION_EMPTY_MESSAGE,
   LOCATION_OWNER_ONLY_MESSAGE,
+  LOCATION_UNAVAILABLE_MESSAGE,
 } from "@/lib/business-locations";
 import { prisma } from "@/lib/prisma";
 
 export async function BusinessLocationsPanel({ canManage }: { canManage: boolean }) {
   const access = await requireManagementPageAccess();
-  const locations = await listBusinessLocations(prisma, access);
+  const directory = await loadBusinessLocationDirectory(prisma, access);
+  const locations = directory.locations;
+
+  if (!directory.available) {
+    return (
+      <div className="space-y-3 border-t pt-4">
+        <h3 className="text-sm font-medium">Business locations</h3>
+        <p className="text-sm text-muted-foreground">{LOCATION_UNAVAILABLE_MESSAGE}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3 border-t pt-4">

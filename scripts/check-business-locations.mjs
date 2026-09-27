@@ -24,13 +24,18 @@ const {
   LOCATION_EMPTY_MESSAGE,
   LOCATION_FIELD_SCOPED_MESSAGE,
   LOCATION_OWNER_ONLY_MESSAGE,
+  LOCATION_UNAVAILABLE_MESSAGE,
   formatLocationAddress,
   parseLocationName,
 } = await import("@/lib/business-locations");
+const { BUSINESS_LOCATION_SCHEMA_SOURCE } = await import("@/lib/business-location-schema");
 const {
   BusinessLocationError,
+  BusinessLocationUnavailableError,
   createBusinessLocation,
   listBusinessLocations,
+  loadBusinessLocationDirectory,
+  missingBusinessLocationSchema,
   requireLocationOwner,
   requireLocationRead,
   setBusinessLocationStatus,
@@ -105,10 +110,19 @@ const navSource = readRepo("src/lib/nav.ts");
 const settingsSource = readRepo("src/lib/settings.ts");
 const settingsWorkspace = readRepo("src/components/settings/settings-workspace.tsx");
 const opsSource = readRepo("src/lib/business-location-ops.ts");
+const schemaHelper = readRepo("src/lib/business-location-schema.ts");
+const panelSource = readRepo("src/components/settings/business-locations-panel.tsx");
 const actionsSource = readRepo("src/app/actions/business-locations.ts");
 const jobActions = readRepo("src/app/actions/job.ts");
 const workspaceLoader = readRepo("src/lib/workspace.ts");
 const authorizationSource = readRepo("src/lib/authorization.ts");
+const settingsPage = readRepo("src/app/(app)/settings/page.tsx");
+
+function hasRequestTimeDdl(source) {
+  return /\$executeRawUnsafe|\$executeRaw\b|CREATE TABLE IF NOT EXISTS|ADD COLUMN IF NOT EXISTS/.test(
+    source,
+  );
+}
 
 try {
   console.log("\nSTATIC — Additive location foundation");
@@ -163,6 +177,32 @@ try {
     !workspaceLoader.includes("BusinessLocation") &&
       !workspaceLoader.includes("business-location"),
   );
+  check(
+    "Location schema is migrate-only",
+    BUSINESS_LOCATION_SCHEMA_SOURCE === "prisma-migrate" &&
+      !schemaHelper.includes("$executeRaw") &&
+      !schemaHelper.includes("ensureBusinessLocationSchema") &&
+      schemaHelper.includes("20260927180000_add_business_location"),
+  );
+  check(
+    "Settings page load and location writes execute no DDL",
+    ![opsSource, panelSource, actionsSource, settingsPage, settingsWorkspace].some(
+      hasRequestTimeDdl,
+    ) &&
+      !opsSource.includes("ensureBusinessLocationSchema") &&
+      panelSource.includes("loadBusinessLocationDirectory") &&
+      panelSource.includes("LOCATION_UNAVAILABLE_MESSAGE"),
+  );
+  check(
+    "Missing-table detector is fail-closed",
+    missingBusinessLocationSchema({ code: "P2021", message: "The table `BusinessLocation` does not exist in the current database." }) &&
+      missingBusinessLocationSchema({
+        code: "P2022",
+        message: "The column `Job.businessLocationId` does not exist in the current database.",
+      }) &&
+      !missingBusinessLocationSchema({ code: "P2002", message: "Unique constraint failed" }),
+  );
+  check("Unavailable copy does not create schema", /does not create the table/.test(LOCATION_UNAVAILABLE_MESSAGE));
   check(
     "Location writes do not touch timezone, Stripe, service areas, or jobs",
     !opsSource.includes("business.update") &&
@@ -321,6 +361,25 @@ try {
   );
   const listedBefore = await listBusinessLocations(prisma, ownerA);
   check("OWNER list is empty for an existing business", listedBefore.length === 0);
+
+  const ddlCalls = [];
+  const originalExecuteUnsafe = prisma.$executeRawUnsafe.bind(prisma);
+  const originalExecute = prisma.$executeRaw.bind(prisma);
+  prisma.$executeRawUnsafe = async (...args) => {
+    ddlCalls.push(String(args[0] ?? ""));
+    return originalExecuteUnsafe(...args);
+  };
+  prisma.$executeRaw = async (...args) => {
+    ddlCalls.push(String(args[0] ?? ""));
+    return originalExecute(...args);
+  };
+  const pageLoad = await loadBusinessLocationDirectory(prisma, ownerA);
+  check(
+    "Settings page load issues no raw DDL",
+    pageLoad.available === true &&
+      pageLoad.locations.length === 0 &&
+      ddlCalls.length === 0,
+  );
 
   console.log("\nTEST — Authorization");
   await expectError(
@@ -535,6 +594,50 @@ try {
     audits.length >= 1 &&
       audits.every((row) => row.businessId === businessA.id) &&
       !audits.some((row) => row.businessId === businessB.id),
+  );
+
+  console.log("\nTEST — Preview missing table is unavailable, not created");
+  ddlCalls.length = 0;
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "BusinessLocation" CASCADE`);
+  const afterDrop = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::int AS n FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = 'BusinessLocation'`,
+  );
+  check("Dropped location table to simulate Preview skip-migrate", afterDrop[0]?.n === 0);
+
+  const previewLoad = await loadBusinessLocationDirectory(prisma, ownerA);
+  check(
+    "Page load shows unavailable and does not recreate the table",
+    previewLoad.available === false &&
+      previewLoad.locations.length === 0 &&
+      !ddlCalls.some((sql) => /CREATE TABLE|ALTER TABLE|CREATE INDEX/i.test(sql)),
+  );
+  const stillMissing = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::int AS n FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = 'BusinessLocation'`,
+  );
+  check("Location table is still absent after page load", stillMissing[0]?.n === 0);
+
+  await expectError(
+    "MEMBER is still denied when the table is absent",
+    () => listBusinessLocations(prisma, memberA),
+    (error) => error instanceof ForbiddenError,
+  );
+  await expectError(
+    "OWNER write does not create the missing table",
+    () => createBusinessLocation(prisma, ownerA, { name: "Preview shop" }),
+    (error) =>
+      error instanceof BusinessLocationUnavailableError &&
+      error.message === LOCATION_UNAVAILABLE_MESSAGE,
+  );
+  const stillMissingAfterWrite = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::int AS n FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = 'BusinessLocation'`,
+  );
+  check(
+    "OWNER write left the missing table absent",
+    stillMissingAfterWrite[0]?.n === 0 &&
+      !ddlCalls.some((sql) => /CREATE TABLE|ALTER TABLE|CREATE INDEX/i.test(sql)),
   );
 
   if (failures > 0) {

@@ -3,13 +3,17 @@
  * Tenant scope always comes from BusinessAccess. MEMBER never reads or
  * writes the office directory. Creating a location writes only a
  * BusinessLocation row — never timezone, Stripe, service areas, or jobs.
+ *
+ * Schema comes only from Prisma migrate. Reads and writes never run DDL.
+ * If Preview skipped migrate and the table is absent, the directory is
+ * unavailable instead of creating schema.
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { ForbiddenError, requireBusinessRole } from "@/lib/authorization";
-import { ensureBusinessLocationSchema } from "@/lib/business-location-schema";
 import {
+  LOCATION_UNAVAILABLE_MESSAGE,
   parseLocationAddressInput,
   parseLocationName,
   toRecordedBusinessLocation,
@@ -26,9 +30,43 @@ export class BusinessLocationError extends Error {
   }
 }
 
+export class BusinessLocationUnavailableError extends BusinessLocationError {
+  constructor(message = LOCATION_UNAVAILABLE_MESSAGE) {
+    super(message);
+    this.name = "BusinessLocationUnavailableError";
+  }
+}
+
+export function missingBusinessLocationSchema(error: unknown) {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: string }).code)
+      : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    code === "P2021" ||
+    code === "P2022" ||
+    /BusinessLocation|businessLocationId|does not exist/i.test(message)
+  );
+}
+
+function throwIfLocationSchemaMissing(error: unknown): never {
+  if (missingBusinessLocationSchema(error)) {
+    throw new BusinessLocationUnavailableError();
+  }
+  throw error;
+}
+
 export function businessLocationErrorMessage(error: unknown, fallback: string) {
-  if (error instanceof BusinessLocationError || error instanceof ForbiddenError) {
+  if (
+    error instanceof BusinessLocationError ||
+    error instanceof BusinessLocationUnavailableError ||
+    error instanceof ForbiddenError
+  ) {
     return error.message;
+  }
+  if (missingBusinessLocationSchema(error)) {
+    return LOCATION_UNAVAILABLE_MESSAGE;
   }
   if (error instanceof Error && /location|address|characters or fewer/i.test(error.message)) {
     return error.message;
@@ -46,14 +84,36 @@ export function requireLocationOwner(access: BusinessAccess) {
   requireBusinessRole(access, "OWNER");
 }
 
+export type BusinessLocationDirectory = {
+  available: boolean;
+  locations: RecordedBusinessLocation[];
+};
+
 export async function listBusinessLocations(db: Db, access: BusinessAccess) {
   requireLocationRead(access);
-  await ensureBusinessLocationSchema(db);
-  const rows = await db.businessLocation.findMany({
-    where: { businessId: access.businessId },
-    orderBy: [{ status: "asc" }, { name: "asc" }],
-  });
-  return rows.map(toRecordedBusinessLocation);
+  try {
+    const rows = await db.businessLocation.findMany({
+      where: { businessId: access.businessId },
+      orderBy: [{ status: "asc" }, { name: "asc" }],
+    });
+    return rows.map(toRecordedBusinessLocation);
+  } catch (error) {
+    throwIfLocationSchemaMissing(error);
+  }
+}
+
+export async function loadBusinessLocationDirectory(
+  db: Db,
+  access: BusinessAccess,
+): Promise<BusinessLocationDirectory> {
+  try {
+    return { available: true, locations: await listBusinessLocations(db, access) };
+  } catch (error) {
+    if (error instanceof BusinessLocationUnavailableError || missingBusinessLocationSchema(error)) {
+      return { available: false, locations: [] };
+    }
+    throw error;
+  }
 }
 
 type LocationWriteInput = {
@@ -85,28 +145,31 @@ export async function createBusinessLocation(
   input: LocationWriteInput,
 ): Promise<RecordedBusinessLocation> {
   requireLocationOwner(access);
-  await ensureBusinessLocationSchema(db);
   const data = parseLocationWrite(input);
 
-  return db.$transaction(async (tx) => {
-    const created = await tx.businessLocation.create({
-      data: {
-        ...data,
+  try {
+    return await db.$transaction(async (tx) => {
+      const created = await tx.businessLocation.create({
+        data: {
+          ...data,
+          businessId: access.businessId,
+          status: "ACTIVE",
+          createdByMembershipId: access.workspace.membership.id,
+        },
+      });
+      await writeSettingsAuditLog(tx, {
         businessId: access.businessId,
-        status: "ACTIVE",
-        createdByMembershipId: access.workspace.membership.id,
-      },
+        changedByMembershipId: access.workspace.membership.id,
+        settingArea: "locations",
+        settingKey: "businessLocation.create",
+        previousValue: null,
+        newValue: { id: created.id, name: created.name },
+      });
+      return toRecordedBusinessLocation(created);
     });
-    await writeSettingsAuditLog(tx, {
-      businessId: access.businessId,
-      changedByMembershipId: access.workspace.membership.id,
-      settingArea: "locations",
-      settingKey: "businessLocation.create",
-      previousValue: null,
-      newValue: { id: created.id, name: created.name },
-    });
-    return toRecordedBusinessLocation(created);
-  });
+  } catch (error) {
+    throwIfLocationSchemaMissing(error);
+  }
 }
 
 export async function updateBusinessLocation(
@@ -115,29 +178,37 @@ export async function updateBusinessLocation(
   input: LocationWriteInput & { locationId: string },
 ): Promise<RecordedBusinessLocation> {
   requireLocationOwner(access);
-  await ensureBusinessLocationSchema(db);
-  const existing = access.assertOwned(
-    await db.businessLocation.findFirst({
-      where: { id: input.locationId, ...access.scope },
-    }),
-  );
+  let existing: { id: string; businessId: string; name: string };
+  try {
+    existing = access.assertOwned(
+      await db.businessLocation.findFirst({
+        where: { id: input.locationId, ...access.scope },
+      }),
+    );
+  } catch (error) {
+    throwIfLocationSchemaMissing(error);
+  }
   const data = parseLocationWrite(input);
 
-  return db.$transaction(async (tx) => {
-    const updated = await tx.businessLocation.update({
-      where: { id: existing.id },
-      data,
+  try {
+    return await db.$transaction(async (tx) => {
+      const updated = await tx.businessLocation.update({
+        where: { id: existing.id },
+        data,
+      });
+      await writeSettingsAuditLog(tx, {
+        businessId: access.businessId,
+        changedByMembershipId: access.workspace.membership.id,
+        settingArea: "locations",
+        settingKey: "businessLocation.update",
+        previousValue: { id: existing.id, name: existing.name },
+        newValue: { id: updated.id, name: updated.name },
+      });
+      return toRecordedBusinessLocation(updated);
     });
-    await writeSettingsAuditLog(tx, {
-      businessId: access.businessId,
-      changedByMembershipId: access.workspace.membership.id,
-      settingArea: "locations",
-      settingKey: "businessLocation.update",
-      previousValue: { id: existing.id, name: existing.name },
-      newValue: { id: updated.id, name: updated.name },
-    });
-    return toRecordedBusinessLocation(updated);
-  });
+  } catch (error) {
+    throwIfLocationSchemaMissing(error);
+  }
 }
 
 export async function setBusinessLocationStatus(
@@ -146,26 +217,34 @@ export async function setBusinessLocationStatus(
   input: { locationId: string; status: "ACTIVE" | "ARCHIVED" },
 ): Promise<RecordedBusinessLocation> {
   requireLocationOwner(access);
-  await ensureBusinessLocationSchema(db);
-  const existing = access.assertOwned(
-    await db.businessLocation.findFirst({
-      where: { id: input.locationId, ...access.scope },
-    }),
-  );
+  let existing: { id: string; businessId: string; status: string };
+  try {
+    existing = access.assertOwned(
+      await db.businessLocation.findFirst({
+        where: { id: input.locationId, ...access.scope },
+      }),
+    );
+  } catch (error) {
+    throwIfLocationSchemaMissing(error);
+  }
 
-  return db.$transaction(async (tx) => {
-    const updated = await tx.businessLocation.update({
-      where: { id: existing.id },
-      data: { status: input.status },
+  try {
+    return await db.$transaction(async (tx) => {
+      const updated = await tx.businessLocation.update({
+        where: { id: existing.id },
+        data: { status: input.status },
+      });
+      await writeSettingsAuditLog(tx, {
+        businessId: access.businessId,
+        changedByMembershipId: access.workspace.membership.id,
+        settingArea: "locations",
+        settingKey: "businessLocation.status",
+        previousValue: { id: existing.id, status: existing.status },
+        newValue: { id: updated.id, status: updated.status },
+      });
+      return toRecordedBusinessLocation(updated);
     });
-    await writeSettingsAuditLog(tx, {
-      businessId: access.businessId,
-      changedByMembershipId: access.workspace.membership.id,
-      settingArea: "locations",
-      settingKey: "businessLocation.status",
-      previousValue: { id: existing.id, status: existing.status },
-      newValue: { id: updated.id, status: updated.status },
-    });
-    return toRecordedBusinessLocation(updated);
-  });
+  } catch (error) {
+    throwIfLocationSchemaMissing(error);
+  }
 }
