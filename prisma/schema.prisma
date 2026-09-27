@@ -383,6 +383,9 @@ model Business {
   agreementCompletionClaims BusinessAgreementCompletionClaim[]
   esignBoundary            BusinessEsignBoundary?
   crewVisits               JobCrewVisit[]
+  /// Explicit OWNER opt-in row for the BSOS Network. Absence means
+  /// default-off — never infer participation from public contact or jobs.
+  bsosNetworkParticipation BsosNetworkParticipation?
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -530,6 +533,7 @@ model Membership {
   protectionAuditLogs             BusinessProtectionAuditLog[] @relation("ProtectionAuditActor")
   protectionAcknowledgments       BusinessProtectionAcknowledgment[] @relation("ProtectionAcknowledgmentActor")
   recordedCrewVisitOutcomes       JobCrewVisit[] @relation("JobCrewVisitOutcomeRecorder")
+  bsosNetworkUpdates              BsosNetworkParticipation[] @relation("BsosNetworkParticipationActor")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -3990,6 +3994,38 @@ model BusinessProtectionAcknowledgment {
   membership Membership @relation("ProtectionAcknowledgmentActor", fields: [membershipId], references: [id], onDelete: Restrict)
 
   @@index([businessId, kind])
+}
+
+/// Explicit OWNER participation in the BSOS Network.
+/// Default-off: no row, or optedIn=false, is not discoverable.
+/// Discovery never returns this row unless optedIn is true, and then only
+/// the approved public listing fields. Customers, jobs, finances, private
+/// contacts, and inferred non-participation are never disclosed.
+model BsosNetworkParticipation {
+  id                    String    @id @default(cuid())
+  businessId            String    @unique
+  /// False until OWNER explicitly opts in. Opt-out sets this back to false.
+  optedIn               Boolean   @default(false)
+  optedInAt             DateTime?
+  optedOutAt            DateTime?
+  /// OWNER-approved public listing name. Not inferred from private records.
+  publicName            String    @default("")
+  /// Configured trade shown on the listing (HANDYMAN | CLEANING).
+  tradeCode             String    @default("HANDYMAN")
+  /// Broad service area only (for example "Reno, NV"). Never a customer address.
+  serviceAreaLabel      String    @default("")
+  /// PHONE | EMAIL | WEBSITE — the one contact method the OWNER chose to publish.
+  publicContactMethod   String    @default("EMAIL")
+  publicContactValue    String    @default("")
+  updatedByMembershipId String
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  updatedBy Membership @relation("BsosNetworkParticipationActor", fields: [updatedByMembershipId], references: [id], onDelete: Restrict)
+
+  @@index([optedIn])
+  @@index([optedIn, tradeCode])
 }
 
 /// Provider-neutral e-sign boundary. No live provider is wired in this PR.
