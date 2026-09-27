@@ -237,6 +237,10 @@ export async function loadMarketingSource(
       jobCustomerName: content.job?.customer?.name ?? null,
       createdAt: content.createdAt,
       updatedAt: content.updatedAt,
+      storyboardJson: content.storyboardJson,
+      shotListJson: content.shotListJson,
+      hashtags: content.hashtags,
+      exportedAt: content.exportedAt,
       photos: content.photos.map((row) => ({
         id: row.jobPhoto.id,
         url: row.jobPhoto.url,

@@ -151,6 +151,30 @@ export const SOCIAL_MANUAL_COPY_MESSAGE =
 export const COMING_NEXT_MESSAGE =
   "Coming next. This area is reserved for a later Marketing step and is not fabricating data.";
 
+export const OWNER_STUDIO_APPROVAL_MESSAGE =
+  "Approving a creator package requires the OWNER role. ADMIN may draft, edit, and send it for review.";
+
+export const PHOTO_PERMISSION_REVOKED_MESSAGE =
+  "A selected job photo no longer has marketing permission. Approval and export are blocked until only approved photos remain.";
+
+export const CREATOR_PACKAGE_NOT_APPROVED_MESSAGE =
+  "Export a creator package only after OWNER approval. TBBT will not post this package.";
+
+export const FLOW_VEO_DISCONNECTED_MESSAGE =
+  "Flow and Veo generation are not connected. This studio drafts a storyboard and shot list from recorded job facts only.";
+
+export const PAID_ADS_DISCONNECTED_MESSAGE =
+  "Paid ads are not connected. A creator package is an internal handoff file, not an ad campaign.";
+
+export const CREATOR_PACKAGE_LIMITS_MESSAGE =
+  "This creator package is a downloadable handoff. Flow/Veo generation, paid ads, and social publishing are not connected. TBBT will not post anything.";
+
+export const INVALID_STORYBOARD_MESSAGE =
+  "Enter a valid storyboard. Use a JSON array of beats with a heading, visual, or narration.";
+
+export const INVALID_SHOT_LIST_MESSAGE =
+  "Enter a valid shot list. Use a JSON array of shots with a shot name or purpose.";
+
 /** External AI is not connected. Template drafts still work. */
 export function marketingAiAssistAvailable(): boolean {
   return providerAssistAvailable();
@@ -180,6 +204,235 @@ export function canSelectPhotoForMarketing(photo: {
   marketingPermissionStatus: string;
 }): boolean {
   return isMarketingApprovedPhoto(photo.marketingPermissionStatus);
+}
+
+export type StoryboardBeat = {
+  heading: string;
+  visual: string;
+  narration: string;
+};
+
+export type ShotListItem = {
+  order: number;
+  shot: string;
+  purpose: string;
+  photoId?: string;
+};
+
+export function parseHashtags(raw: string | null | undefined): string[] {
+  if (!raw?.trim()) return [];
+  return [
+    ...new Set(
+      raw
+        .split(/[\s,]+/)
+        .map((tag) => tag.trim())
+        .filter(Boolean)
+        .map((tag) => (tag.startsWith("#") ? tag : `#${tag}`)),
+    ),
+  ].slice(0, 8);
+}
+
+export function formatHashtags(tags: string[]): string {
+  return parseHashtags(tags.join(" ")).join(" ");
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export function parseStoryboard(raw: string | null | undefined): StoryboardBeat[] {
+  if (!raw?.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((row) => {
+        const record = asRecord(row);
+        if (!record) return null;
+        const heading = typeof record.heading === "string" ? record.heading.trim() : "";
+        const visual = typeof record.visual === "string" ? record.visual.trim() : "";
+        const narration = typeof record.narration === "string" ? record.narration.trim() : "";
+        if (!heading && !visual && !narration) return null;
+        return { heading: heading || "Beat", visual, narration };
+      })
+      .filter((row): row is StoryboardBeat => Boolean(row))
+      .slice(0, 8);
+  } catch {
+    return [];
+  }
+}
+
+export function parseShotList(raw: string | null | undefined): ShotListItem[] {
+  if (!raw?.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((row, index) => {
+        const record = asRecord(row);
+        if (!record) return null;
+        const shot = typeof record.shot === "string" ? record.shot.trim() : "";
+        const purpose = typeof record.purpose === "string" ? record.purpose.trim() : "";
+        const photoId = typeof record.photoId === "string" ? record.photoId.trim() : "";
+        const order =
+          typeof record.order === "number" && Number.isFinite(record.order)
+            ? record.order
+            : index + 1;
+        if (!shot && !purpose) return null;
+        return {
+          order,
+          shot: shot || `Shot ${order}`,
+          purpose,
+          ...(photoId ? { photoId } : {}),
+        };
+      })
+      .filter((row): row is ShotListItem => Boolean(row))
+      .slice(0, 12);
+  } catch {
+    return [];
+  }
+}
+
+export function serializeStoryboard(beats: StoryboardBeat[]): string {
+  return JSON.stringify(parseStoryboard(JSON.stringify(beats)));
+}
+
+export function serializeShotList(items: ShotListItem[]): string {
+  return JSON.stringify(parseShotList(JSON.stringify(items)));
+}
+
+function parseJsonArray(raw: string): unknown[] | null {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Write-path storyboard. Invalid JSON or a non-array fails closed. */
+export function parseRequiredStoryboard(raw: string): StoryboardBeat[] | null {
+  const items = parseJsonArray(raw);
+  if (!items) return null;
+  const beats = parseStoryboard(raw);
+  if (items.length > 0 && beats.length === 0) return null;
+  return beats;
+}
+
+/** Write-path shot list. Invalid JSON or a non-array fails closed. */
+export function parseRequiredShotList(raw: string): ShotListItem[] | null {
+  const items = parseJsonArray(raw);
+  if (!items) return null;
+  const shots = parseShotList(raw);
+  if (items.length > 0 && shots.length === 0) return null;
+  return shots;
+}
+
+export function studioPhotosEligible(
+  photos: Array<{ marketingPermissionStatus?: string; approved?: boolean }>,
+): boolean {
+  if (photos.length === 0) return false;
+  return photos.every((photo) =>
+    photo.approved === true || isMarketingApprovedPhoto(photo.marketingPermissionStatus),
+  );
+}
+
+export function canApproveStudioPackage(input: {
+  status: string;
+  role: string;
+  photos: Array<{ marketingPermissionStatus?: string; approved?: boolean }>;
+}): boolean {
+  return (
+    input.status === "READY_FOR_REVIEW" &&
+    input.role === "OWNER" &&
+    studioPhotosEligible(input.photos)
+  );
+}
+
+export function canExportCreatorPackage(input: {
+  status: string;
+  photos: Array<{ marketingPermissionStatus?: string; approved?: boolean }>;
+}): boolean {
+  return input.status === "APPROVED" && studioPhotosEligible(input.photos);
+}
+
+export type CreatorPackageLimits = {
+  published: false;
+  posted: false;
+  flowVeoConnected: false;
+  paidAdsConnected: false;
+  socialPublishingConnected: false;
+  message: string;
+};
+
+export function creatorPackageLimits(): CreatorPackageLimits {
+  return {
+    published: false,
+    posted: false,
+    flowVeoConnected: false,
+    paidAdsConnected: false,
+    socialPublishingConnected: false,
+    message: CREATOR_PACKAGE_LIMITS_MESSAGE,
+  };
+}
+
+export type CreatorPackage = {
+  kind: "TBBT_CREATOR_PACKAGE";
+  version: 1;
+  title: string;
+  caption: string;
+  hashtags: string[];
+  storyboard: StoryboardBeat[];
+  shotList: ShotListItem[];
+  photos: Array<{ id: string; url: string; stage: string; caption: string | null }>;
+  recordedFacts: {
+    businessName: string;
+    workPerformed: string | null;
+    city: string | null;
+    photoCount: number;
+  };
+  limits: CreatorPackageLimits;
+};
+
+export function buildCreatorPackagePreview(input: {
+  title: string;
+  caption: string;
+  hashtags: string;
+  storyboardJson: string;
+  shotListJson: string;
+  photos: Array<{ id: string; url: string; stage: string; caption?: string | null }>;
+  recordedFacts: {
+    businessName: string;
+    workPerformed?: string | null;
+    city?: string | null;
+  };
+}): CreatorPackage {
+  const hashtags = parseHashtags(input.hashtags);
+  const photos = input.photos.map((photo) => ({
+    id: photo.id,
+    url: photo.url,
+    stage: photo.stage,
+    caption: photo.caption ?? null,
+  }));
+  return {
+    kind: "TBBT_CREATOR_PACKAGE",
+    version: 1,
+    title: input.title.trim(),
+    caption: input.caption.trim(),
+    hashtags,
+    storyboard: parseStoryboard(input.storyboardJson),
+    shotList: parseShotList(input.shotListJson),
+    photos,
+    recordedFacts: {
+      businessName: input.recordedFacts.businessName,
+      workPerformed: input.recordedFacts.workPerformed ?? null,
+      city: input.recordedFacts.city ?? null,
+      photoCount: photos.length,
+    },
+    limits: creatorPackageLimits(),
+  };
 }
 
 export type MarketingReadiness = "ready" | "needs_permission" | "no_photos";

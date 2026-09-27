@@ -517,6 +517,7 @@ model Membership {
   marketingPhotoGrants   JobPhoto[]         @relation("JobPhotoMarketingGrant")
   createdMarketingContent MarketingContent[] @relation("MarketingContentCreator")
   reviewedMarketingContent MarketingContent[] @relation("MarketingContentReviewer")
+  exportedMarketingContent MarketingContent[] @relation("MarketingContentExporter")
   createdReviewRequests   ReviewRequest[]    @relation("ReviewRequestCreator")
   recordedReviews         Review[]           @relation("ReviewRecorder")
   createdReviewResponses  ReviewResponse[]   @relation("ReviewResponseCreator")
@@ -2107,6 +2108,15 @@ model MarketingContent {
   reviewId               String?
   campaignId             String?
   catalogItemId          String?
+  /// Editable storyboard beats as JSON. Internal planning only.
+  storyboardJson         String    @default("[]")
+  /// Editable shot list as JSON. Internal planning only.
+  shotListJson           String    @default("[]")
+  /// Caption hashtags drafted from recorded facts. Not a publish action.
+  hashtags               String    @default("")
+  /// Set when an OWNER/ADMIN exports a creator package. Never a publish.
+  exportedAt             DateTime?
+  exportedByMembershipId String?
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
@@ -2115,6 +2125,7 @@ model MarketingContent {
   job       Job?                     @relation(fields: [jobId], references: [id], onDelete: SetNull)
   createdBy Membership               @relation("MarketingContentCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
   reviewedBy Membership?             @relation("MarketingContentReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+  exportedBy Membership?             @relation("MarketingContentExporter", fields: [exportedByMembershipId], references: [id], onDelete: SetNull)
   review    Review?                  @relation(fields: [reviewId], references: [id], onDelete: SetNull)
   photos    MarketingContentPhoto[]
 

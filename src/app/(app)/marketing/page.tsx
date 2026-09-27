@@ -99,7 +99,7 @@ export default async function MarketingPage({
           </KpiCardsLayout>
         </FounderRegion>
 
-        <MarketingWorkspace area={area} source={source} />
+        <MarketingWorkspace area={area} source={source} viewerRole={access.workspace.role} />
       </FounderDesignRoot>
     </PageContainer>
   );

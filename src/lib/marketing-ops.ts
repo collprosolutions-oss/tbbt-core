@@ -8,17 +8,43 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
+  buildCreatorPackagePreview,
   canSelectPhotoForMarketing,
+  CREATOR_PACKAGE_NOT_APPROVED_MESSAGE,
+  formatHashtags,
   isMarketingChannel,
   isMarketingContentStatus,
   isMarketingContentType,
+  INVALID_SHOT_LIST_MESSAGE,
+  INVALID_STORYBOARD_MESSAGE,
   nextContentStatus,
+  OWNER_STUDIO_APPROVAL_MESSAGE,
+  parseHashtags,
   parseMarketingDate,
+  parseRequiredShotList,
+  parseRequiredStoryboard,
+  parseShotList,
+  parseStoryboard,
   PHOTO_PERMISSION_APPROVED,
   PHOTO_PERMISSION_PRIVATE,
+  PHOTO_PERMISSION_REVOKED_MESSAGE,
+  serializeShotList,
+  serializeStoryboard,
+  studioPhotosEligible,
+  type CreatorPackage,
 } from "@/lib/marketing";
 
 type Db = PrismaClient | Prisma.TransactionClient;
+
+async function runInTransaction<T>(
+  db: Db,
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  if ("$transaction" in db) {
+    return db.$transaction(fn);
+  }
+  return fn(db);
+}
 
 export class MarketingError extends Error {
   constructor(message: string) {
@@ -43,7 +69,75 @@ export type CreateMarketingContentInput = {
   plannedFor?: string;
   campaignId?: string;
   catalogItemId?: string;
+  storyboardJson?: string;
+  shotListJson?: string;
+  hashtags?: string;
+  requireApprovedPhoto?: boolean;
 };
+
+export type UpdateMarketingStudioInput = {
+  contentId: string;
+  title?: string;
+  body?: string;
+  storyboardJson?: string;
+  shotListJson?: string;
+  hashtags?: string;
+  photoIds?: string[];
+  plannedFor?: string;
+  channelIntent?: string;
+};
+
+async function loadOwnedPhotos(
+  db: Db,
+  access: BusinessAccess,
+  photoIds: string[],
+  jobId: string | null,
+) {
+  const uniqueIds = [...new Set(photoIds.filter(Boolean))];
+  const photos = uniqueIds.length
+    ? await db.jobPhoto.findMany({
+        where: { id: { in: uniqueIds }, ...access.scope },
+      })
+    : [];
+  if (photos.length !== uniqueIds.length) {
+    throw new MarketingError("One of those photos is not in this business.");
+  }
+  for (const photo of photos) {
+    if (!canSelectPhotoForMarketing(photo)) {
+      throw new MarketingError("Private job photos cannot be used in marketing content.");
+    }
+    if (jobId && photo.jobId !== jobId) {
+      throw new MarketingError("Selected photos must belong to the source job.");
+    }
+  }
+  return photos;
+}
+
+async function assertAttachedPhotosStillApproved(
+  db: Db,
+  access: BusinessAccess,
+  contentId: string,
+) {
+  const attached = await db.marketingContentPhoto.findMany({
+    where: { contentId, ...access.scope },
+    include: {
+      jobPhoto: {
+        select: {
+          id: true,
+          url: true,
+          caption: true,
+          stage: true,
+          businessId: true,
+          marketingPermissionStatus: true,
+        },
+      },
+    },
+  });
+  if (attached.length === 0 || !studioPhotosEligible(attached.map((row) => row.jobPhoto))) {
+    throw new MarketingError(PHOTO_PERMISSION_REVOKED_MESSAGE);
+  }
+  return attached;
+}
 
 export async function grantJobPhotoMarketingPermission(
   db: Db,
@@ -77,12 +171,6 @@ export async function revokeJobPhotoMarketingPermission(
       where: { id: input.photoId, ...access.scope },
     }),
   );
-  const attached = await db.marketingContentPhoto.count({
-    where: { jobPhotoId: photo.id, ...access.scope },
-  });
-  if (attached > 0) {
-    throw new MarketingError("Remove this photo from marketing content before revoking permission.");
-  }
   return db.jobPhoto.update({
     where: { id: photo.id },
     data: {
@@ -124,22 +212,9 @@ export async function createMarketingContent(
     jobId = job.id;
   }
 
-  const photoIds = [...new Set((input.photoIds ?? []).filter(Boolean))];
-  const photos = photoIds.length
-    ? await db.jobPhoto.findMany({
-        where: { id: { in: photoIds }, ...access.scope },
-      })
-    : [];
-  if (photos.length !== photoIds.length) {
-    throw new MarketingError("One of those photos is not in this business.");
-  }
-  for (const photo of photos) {
-    if (!canSelectPhotoForMarketing(photo)) {
-      throw new MarketingError("Private job photos cannot be used in marketing content.");
-    }
-    if (jobId && photo.jobId !== jobId) {
-      throw new MarketingError("Selected photos must belong to the source job.");
-    }
+  const photos = await loadOwnedPhotos(db, access, input.photoIds ?? [], jobId);
+  if (input.requireApprovedPhoto && photos.length === 0) {
+    throw new MarketingError("Select a job photo that already has marketing permission.");
   }
 
   const plannedFor = input.plannedFor ? parseMarketingDate(input.plannedFor) : null;
@@ -176,6 +251,9 @@ export async function createMarketingContent(
       channelIntent,
       status: "DRAFT",
       plannedFor,
+      storyboardJson: serializeStoryboard(parseStoryboard(input.storyboardJson ?? "[]")),
+      shotListJson: serializeShotList(parseShotList(input.shotListJson ?? "[]")),
+      hashtags: formatHashtags(parseHashtags(input.hashtags ?? "")),
       createdByMembershipId: access.workspace.membership.id,
       photos: {
         create: photos.map((photo) => ({
@@ -185,6 +263,103 @@ export async function createMarketingContent(
       },
     },
     include: { photos: true },
+  });
+}
+
+export async function createMarketingStudioPackage(
+  db: Db,
+  access: BusinessAccess,
+  input: CreateMarketingContentInput,
+) {
+  return createMarketingContent(db, access, {
+    ...input,
+    contentType: input.contentType || "COMPLETED_JOB",
+    requireApprovedPhoto: true,
+  });
+}
+
+export async function updateMarketingStudioPackage(
+  db: Db,
+  access: BusinessAccess,
+  input: UpdateMarketingStudioInput,
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+  const content = access.assertOwned(
+    await db.marketingContent.findFirst({
+      where: { id: input.contentId, ...access.scope },
+    }),
+  );
+  if (content.status === "APPROVED") {
+    throw new MarketingError("Approved creator packages are locked. Start a new draft to change the storyboard.");
+  }
+
+  const title = input.title !== undefined ? input.title.trim() : content.title;
+  if (!title) throw new MarketingError("Enter an internal title.");
+  const body = input.body !== undefined ? input.body.trim() : content.body;
+  const channelIntent = input.channelIntent?.trim() || content.channelIntent;
+  if (!isMarketingChannel(channelIntent)) {
+    throw new MarketingError("Choose a channel intent.");
+  }
+  const plannedFor =
+    input.plannedFor !== undefined
+      ? input.plannedFor
+        ? parseMarketingDate(input.plannedFor)
+        : null
+      : content.plannedFor;
+  if (input.plannedFor && !plannedFor) {
+    throw new MarketingError("Enter a valid internal planning date.");
+  }
+
+  let storyboardJson = content.storyboardJson;
+  if (input.storyboardJson !== undefined) {
+    const beats = parseRequiredStoryboard(input.storyboardJson);
+    if (!beats) throw new MarketingError(INVALID_STORYBOARD_MESSAGE);
+    storyboardJson = serializeStoryboard(beats);
+  }
+  let shotListJson = content.shotListJson;
+  if (input.shotListJson !== undefined) {
+    const shots = parseRequiredShotList(input.shotListJson);
+    if (!shots) throw new MarketingError(INVALID_SHOT_LIST_MESSAGE);
+    shotListJson = serializeShotList(shots);
+  }
+  const hashtags =
+    input.hashtags !== undefined
+      ? formatHashtags(parseHashtags(input.hashtags))
+      : content.hashtags;
+
+  const photos = input.photoIds
+    ? await loadOwnedPhotos(db, access, input.photoIds, content.jobId)
+    : null;
+  if (input.photoIds && (!photos || photos.length === 0)) {
+    throw new MarketingError("Select a job photo that already has marketing permission.");
+  }
+
+  return runInTransaction(db, async (tx) => {
+    if (photos) {
+      await tx.marketingContentPhoto.deleteMany({
+        where: { contentId: content.id, ...access.scope },
+      });
+      await tx.marketingContentPhoto.createMany({
+        data: photos.map((photo) => ({
+          businessId: access.businessId,
+          contentId: content.id,
+          jobPhotoId: photo.id,
+        })),
+      });
+    }
+    return tx.marketingContent.update({
+      where: { id: content.id },
+      data: {
+        title,
+        body,
+        channelIntent,
+        plannedFor,
+        storyboardJson,
+        shotListJson,
+        hashtags,
+      },
+      include: { photos: true },
+    });
   });
 }
 
@@ -206,6 +381,10 @@ export async function advanceMarketingContentStatus(
   if (!isMarketingContentStatus(next)) {
     throw new MarketingError("Invalid content status.");
   }
+  if (next === "APPROVED" && access.workspace.role !== "OWNER") {
+    throw new MarketingError(OWNER_STUDIO_APPROVAL_MESSAGE);
+  }
+  await assertAttachedPhotosStillApproved(db, access, content.id);
   return db.marketingContent.update({
     where: { id: content.id },
     data: {
@@ -214,6 +393,78 @@ export async function advanceMarketingContentStatus(
       reviewedAt: next === "APPROVED" ? new Date() : content.reviewedAt,
     },
   });
+}
+
+export async function exportMarketingCreatorPackage(
+  db: Db,
+  access: BusinessAccess,
+  input: { contentId: string },
+): Promise<{ filename: string; package: CreatorPackage }> {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+  const content = access.assertOwned(
+    await db.marketingContent.findFirst({
+      where: { id: input.contentId, ...access.scope },
+      include: {
+        photos: {
+          include: {
+            jobPhoto: {
+              select: {
+                id: true,
+                url: true,
+                caption: true,
+                stage: true,
+                marketingPermissionStatus: true,
+              },
+            },
+          },
+        },
+        job: {
+          select: {
+            estimate: {
+              select: { lineItems: { select: { description: true } } },
+            },
+          },
+        },
+      },
+    }),
+  );
+  if (content.status !== "APPROVED") {
+    throw new MarketingError(CREATOR_PACKAGE_NOT_APPROVED_MESSAGE);
+  }
+  const attached = await assertAttachedPhotosStillApproved(db, access, content.id);
+  const business = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: { name: true, publicServiceAreaLabel: true },
+  });
+  const creatorPackage = buildCreatorPackagePreview({
+    title: content.title,
+    caption: content.body,
+    hashtags: content.hashtags,
+    storyboardJson: content.storyboardJson,
+    shotListJson: content.shotListJson,
+    photos: attached.map((row) => row.jobPhoto),
+    recordedFacts: {
+      businessName: business?.name ?? "Business",
+      workPerformed: content.job?.estimate?.lineItems[0]?.description ?? null,
+      city: business?.publicServiceAreaLabel ?? null,
+    },
+  });
+  await db.marketingContent.update({
+    where: { id: content.id },
+    data: {
+      exportedAt: new Date(),
+      exportedByMembershipId: access.workspace.membership.id,
+    },
+  });
+  const slug = content.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40);
+  return {
+    filename: `${slug || "creator-package"}-handoff.json`,
+    package: creatorPackage,
+  };
 }
 
 export async function setMarketingContentPlannedFor(
