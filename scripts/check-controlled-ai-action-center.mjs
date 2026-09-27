@@ -223,7 +223,7 @@ try {
       !boardSrc.includes(">Recorded results<") &&
       !boardSrc.includes("No recorded Controlled AI Action results yet") &&
       boardSrc.includes("Recommendation status/evidence history") &&
-      !boardSrc.includes("AI attempt history") &&
+      boardSrc.includes("kept separately in Controlled AI history") &&
       !boardSrc.includes("controlled-action audit"),
   );
   check(
