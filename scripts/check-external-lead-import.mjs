@@ -552,8 +552,14 @@ try {
     "OWNER B may explicitly include same-business duplicates for B only",
     withDupes.createdRequestIds.length >= 1 &&
       withDupes.preview.rows
-        .filter((row) => row.previewStatus !== "INVALID")
-        .every((row) => row.createdRequestId),
+        .filter(
+          (row) =>
+            row.previewStatus === "VALID" || row.previewStatus === "POSSIBLE_DUPLICATE",
+        )
+        .every((row) => row.createdRequestId) &&
+      withDupes.preview.rows
+        .filter((row) => row.previewStatus === "REJECTED")
+        .every((row) => !row.createdRequestId),
   );
   check(
     "B confirm still creates no A rows",
