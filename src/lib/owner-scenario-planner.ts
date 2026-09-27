@@ -39,9 +39,12 @@ import { roundMoney } from "@/lib/time-cards";
 
 export const SCENARIO_PLANNER_PATH = "/scenario-planner";
 export const PLANNER_READ_BOUND = 200;
+export const PLANNER_SET_READ_BOUND = 40;
 export const PLANNER_FACTOR_PERCENT_MIN = 0;
 export const PLANNER_FACTOR_PERCENT_MAX = 500;
 export const PLANNER_IDENTITY_PERCENT = 100;
+export const MAX_ASSUMPTION_SET_NAME_LENGTH = 80;
+export const ASSUMPTION_SET_KIND = "assumption-set" as const;
 
 export const FORECAST_KIND = "forecast" as const;
 export const RECORDED_FACT_KIND = "recorded-fact" as const;
@@ -74,6 +77,35 @@ export const INCOMPLETE_LABOR_MARGIN_MESSAGE =
 
 export const READ_BOUND_MESSAGE =
   "Nested reads hit the planner bound, so this view is a bounded sample, not a complete ledger.";
+
+export const SET_READ_BOUND_MESSAGE =
+  "Saved assumption-set reads hit the planner bound, so this list is a bounded sample.";
+
+export const SAVED_SET_NOT_FACT_MESSAGE =
+  "Saved assumption sets store owner knobs only. They are not recorded results.";
+
+export const SAVE_DOES_NOT_WRITE_BOOKS_MESSAGE =
+  "Saving a named assumption set does not write invoices, payments, expenses, jobs, or prices.";
+
+export const COMPARE_SAME_FACTS_MESSAGE =
+  "Both forecasts use the same recorded facts. Differences are forecast-only.";
+
+export const FORECAST_DELTA_MESSAGE =
+  "These differences are forecast-only. They are not recorded results.";
+
+export const ASSUMPTION_SET_NOT_FOUND_MESSAGE =
+  "That named assumption set is not in this workspace.";
+
+export const COMPARE_NEEDS_TWO_SETS_MESSAGE =
+  "Compare needs two named assumption sets from this workspace.";
+
+export const FIX_ASSUMPTIONS_BEFORE_SAVE_MESSAGE =
+  "Fix assumption percents before saving a named set.";
+
+export const NAME_REQUIRED_MESSAGE = "Name the assumption set before saving.";
+
+export const ASSUMPTION_SET_UNAVAILABLE_MESSAGE =
+  "Named assumption sets are unavailable on this environment until the planner migration is applied. Live forecasts still use recorded facts.";
 
 export type PlannerTimeEntry = ReportTimeEntry & { businessId: string };
 
@@ -110,6 +142,18 @@ export type OwnerScenarioAssumptions = {
   laborCostPercent: number;
   pricePercent: number;
   errors: string[];
+};
+
+export type SavedOwnerScenarioAssumptionSet = {
+  id: string;
+  businessId: string;
+  name: string;
+  kind: typeof ASSUMPTION_SET_KIND;
+  workloadPercent: number;
+  materialCostPercent: number;
+  laborCostPercent: number;
+  pricePercent: number;
+  assumeUnpaidInvoicesCollect: boolean;
 };
 
 export type OwnerScenarioMoneyFact = {
@@ -202,6 +246,57 @@ export type OwnerScenarioPlan = {
   };
 };
 
+export type OwnerScenarioForecastDelta = {
+  kind: typeof FORECAST_KIND;
+  message: typeof FORECAST_DELTA_MESSAGE;
+  billed: number;
+  cashIn: number;
+  cashOut: number;
+  knownNet: number;
+  marginPct: number | null;
+};
+
+export type OwnerScenarioComparedSide = {
+  set: SavedOwnerScenarioAssumptionSet;
+  assumptions: OwnerScenarioAssumptions;
+  forecast: OwnerScenarioPlan["forecast"];
+  projections: OwnerScenarioPlan["projections"];
+};
+
+export type OwnerScenarioComparison = {
+  businessId: string;
+  writesRecords: false;
+  changesPrices: false;
+  taxConclusion: null;
+  actualBankBalance: null;
+  projectedBankBalance: null;
+  recorded: OwnerScenarioPlan["recorded"];
+  facts: OwnerScenarioPlan["facts"];
+  left: OwnerScenarioComparedSide;
+  right: OwnerScenarioComparedSide;
+  deltas: OwnerScenarioForecastDelta;
+  sameRecordedFacts: true;
+  messages: {
+    forecast: typeof FORECAST_NOT_FACT_MESSAGE;
+    compare: typeof COMPARE_SAME_FACTS_MESSAGE;
+    delta: typeof FORECAST_DELTA_MESSAGE;
+    saved: typeof SAVED_SET_NOT_FACT_MESSAGE;
+    unpaid: typeof UNPAID_NOT_CASH_MESSAGE;
+    bank: typeof BANK_BALANCE_UNKNOWN_MESSAGE;
+  };
+};
+
+export type OwnerScenarioPlannerQuery = {
+  workload?: string | null;
+  materials?: string | null;
+  labor?: string | null;
+  price?: string | null;
+  assumeUnpaid?: string | null;
+  set?: string | null;
+  left?: string | null;
+  right?: string | null;
+};
+
 export function canAccessOwnerScenarioPlanner(role: BusinessAccess["workspace"]["role"]): boolean {
   return role === "OWNER" && canAccessManagementConsole(role);
 }
@@ -264,6 +359,100 @@ export function parseOwnerScenarioAssumptions(input: {
     pricePercent: safePrice,
     errors,
   };
+}
+
+export function parseAssumptionSetName(raw: string | null | undefined): {
+  name: string | null;
+  error: string | null;
+} {
+  const name = (raw ?? "").trim().replace(/\s+/g, " ");
+  if (!name) return { name: null, error: NAME_REQUIRED_MESSAGE };
+  if (name.length > MAX_ASSUMPTION_SET_NAME_LENGTH) {
+    return {
+      name: null,
+      error: `Assumption set name must be ${MAX_ASSUMPTION_SET_NAME_LENGTH} characters or fewer.`,
+    };
+  }
+  return { name, error: null };
+}
+
+export function hasPlannerKnobParams(input: OwnerScenarioPlannerQuery): boolean {
+  return [input.workload, input.materials, input.labor, input.price, input.assumeUnpaid].some(
+    (value) => value != null && String(value).trim() !== "",
+  );
+}
+
+export function trimPlannerId(raw: string | null | undefined): string | null {
+  const value = (raw ?? "").trim();
+  return value ? value : null;
+}
+
+function asStoredPercent(value: { toString(): string } | number): number {
+  const amount = typeof value === "number" ? value : Number(value.toString());
+  return Number.isFinite(amount) ? roundMoney(amount) : PLANNER_IDENTITY_PERCENT;
+}
+
+export function toSavedOwnerScenarioAssumptionSet(row: {
+  id: string;
+  businessId: string;
+  name: string;
+  workloadPercent: { toString(): string } | number;
+  materialCostPercent: { toString(): string } | number;
+  laborCostPercent: { toString(): string } | number;
+  pricePercent: { toString(): string } | number;
+  assumeUnpaidInvoicesCollect: boolean;
+}): SavedOwnerScenarioAssumptionSet {
+  return {
+    id: row.id,
+    businessId: row.businessId,
+    name: row.name,
+    kind: ASSUMPTION_SET_KIND,
+    workloadPercent: asStoredPercent(row.workloadPercent),
+    materialCostPercent: asStoredPercent(row.materialCostPercent),
+    laborCostPercent: asStoredPercent(row.laborCostPercent),
+    pricePercent: asStoredPercent(row.pricePercent),
+    assumeUnpaidInvoicesCollect: Boolean(row.assumeUnpaidInvoicesCollect),
+  };
+}
+
+export function assumptionsFromSavedSet(
+  set: SavedOwnerScenarioAssumptionSet,
+): OwnerScenarioAssumptions {
+  return parseOwnerScenarioAssumptions({
+    workload: String(set.workloadPercent),
+    materials: String(set.materialCostPercent),
+    labor: String(set.laborCostPercent),
+    price: String(set.pricePercent),
+    assumeUnpaid: set.assumeUnpaidInvoicesCollect ? "1" : "0",
+  });
+}
+
+export function scenarioPlannerHref(input: {
+  set?: string | null;
+  left?: string | null;
+  right?: string | null;
+  assumptions?: OwnerScenarioAssumptions | null;
+}): string {
+  const params = new URLSearchParams();
+  if (input.set) params.set("set", input.set);
+  if (input.left) params.set("left", input.left);
+  if (input.right) params.set("right", input.right);
+  if (input.assumptions) {
+    params.set("workload", String(input.assumptions.workloadPercent));
+    params.set("materials", String(input.assumptions.materialCostPercent));
+    params.set("labor", String(input.assumptions.laborCostPercent));
+    params.set("price", String(input.assumptions.pricePercent));
+    if (input.assumptions.assumeUnpaidInvoicesCollect) params.set("assumeUnpaid", "1");
+  }
+  const query = params.toString();
+  return query ? `${SCENARIO_PLANNER_PATH}?${query}` : SCENARIO_PLANNER_PATH;
+}
+
+export function isolateSameBusinessAssumptionSets<T extends { businessId: string }>(
+  rows: readonly T[],
+  businessId: string,
+): T[] {
+  return rows.filter((row) => row.businessId === businessId);
 }
 
 export function isolateSameBusinessJobs<T extends { businessId: string }>(
@@ -581,6 +770,75 @@ export function buildOwnerScenarioPlan(
       overhead: OVERHEAD_NOT_SCALED_MESSAGE,
       incompleteLabor: INCOMPLETE_LABOR_MARGIN_MESSAGE,
       bound: readsTruncated ? READ_BOUND_MESSAGE : null,
+    },
+  };
+}
+
+function forecastDelta(
+  left: OwnerScenarioPlan["forecast"],
+  right: OwnerScenarioPlan["forecast"],
+): OwnerScenarioForecastDelta {
+  const leftMargin = left.projectedMarginPct;
+  const rightMargin = right.projectedMarginPct;
+  return {
+    kind: FORECAST_KIND,
+    message: FORECAST_DELTA_MESSAGE,
+    billed: roundMoney(right.projectedBilledRevenue - left.projectedBilledRevenue),
+    cashIn: roundMoney(right.projectedCashIn - left.projectedCashIn),
+    cashOut: roundMoney(right.projectedCashOut - left.projectedCashOut),
+    knownNet: roundMoney(right.projectedKnownNet - left.projectedKnownNet),
+    marginPct:
+      leftMargin == null || rightMargin == null ? null : roundMoney(rightMargin - leftMargin),
+  };
+}
+
+export function buildOwnerScenarioComparison(
+  source: PlannerRecordSource,
+  leftSet: SavedOwnerScenarioAssumptionSet,
+  rightSet: SavedOwnerScenarioAssumptionSet,
+  options?: { readsTruncated?: boolean },
+): OwnerScenarioComparison | null {
+  const isolated = isolatePlannerSource(source);
+  const ownedSets = isolateSameBusinessAssumptionSets([leftSet, rightSet], isolated.businessId);
+  if (ownedSets.length !== 2 || ownedSets[0]?.id !== leftSet.id || ownedSets[1]?.id !== rightSet.id) {
+    return null;
+  }
+
+  const leftAssumptions = assumptionsFromSavedSet(leftSet);
+  const rightAssumptions = assumptionsFromSavedSet(rightSet);
+  const leftPlan = buildOwnerScenarioPlan(isolated, leftAssumptions, options);
+  const rightPlan = buildOwnerScenarioPlan(isolated, rightAssumptions, options);
+
+  return {
+    businessId: isolated.businessId,
+    writesRecords: false,
+    changesPrices: false,
+    taxConclusion: null,
+    actualBankBalance: null,
+    projectedBankBalance: null,
+    recorded: leftPlan.recorded,
+    facts: leftPlan.facts,
+    left: {
+      set: leftSet,
+      assumptions: leftAssumptions,
+      forecast: leftPlan.forecast,
+      projections: leftPlan.projections,
+    },
+    right: {
+      set: rightSet,
+      assumptions: rightAssumptions,
+      forecast: rightPlan.forecast,
+      projections: rightPlan.projections,
+    },
+    deltas: forecastDelta(leftPlan.forecast, rightPlan.forecast),
+    sameRecordedFacts: true,
+    messages: {
+      forecast: FORECAST_NOT_FACT_MESSAGE,
+      compare: COMPARE_SAME_FACTS_MESSAGE,
+      delta: FORECAST_DELTA_MESSAGE,
+      saved: SAVED_SET_NOT_FACT_MESSAGE,
+      unpaid: UNPAID_NOT_CASH_MESSAGE,
+      bank: BANK_BALANCE_UNKNOWN_MESSAGE,
     },
   };
 }

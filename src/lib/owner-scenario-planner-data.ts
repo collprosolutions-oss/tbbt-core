@@ -1,20 +1,56 @@
 /**
  * Bounded, tenant-scoped loader for the OWNER scenario planner.
  * businessId must come from requireManagementPageAccess().
- * Read-only: no invoice, payment, expense, time, or price writes.
+ * Read-only: no invoice, payment, expense, time, price, or assumption-set writes.
  */
 import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { ACTIVE_EXPENSE_WHERE } from "@/lib/expenses";
 import { asNumber, asNumberOrNull } from "@/lib/reports";
 import {
+  ASSUMPTION_SET_NOT_FOUND_MESSAGE,
+  COMPARE_NEEDS_TWO_SETS_MESSAGE,
   PLANNER_READ_BOUND,
+  PLANNER_SET_READ_BOUND,
   assertCanReadOwnerScenarioPlanner,
+  assumptionsFromSavedSet,
+  buildOwnerScenarioComparison,
   buildOwnerScenarioPlan,
+  hasPlannerKnobParams,
+  isolateSameBusinessAssumptionSets,
+  parseOwnerScenarioAssumptions,
+  toSavedOwnerScenarioAssumptionSet,
+  trimPlannerId,
   type OwnerScenarioAssumptions,
+  type OwnerScenarioComparison,
   type OwnerScenarioPlan,
+  type OwnerScenarioPlannerQuery,
   type PlannerRecordSource,
+  type SavedOwnerScenarioAssumptionSet,
 } from "@/lib/owner-scenario-planner";
+
+export type OwnerScenarioPlannerWorkspaceData = {
+  plan: OwnerScenarioPlan;
+  savedSets: SavedOwnerScenarioAssumptionSet[];
+  setsTruncated: boolean;
+  setsAvailable: boolean;
+  openedSet: SavedOwnerScenarioAssumptionSet | null;
+  comparison: OwnerScenarioComparison | null;
+  comparisonError: string | null;
+};
+
+function missingAssumptionSetSchema(error: unknown) {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: string }).code)
+      : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    code === "P2021" ||
+    code === "P2022" ||
+    /OwnerScenarioAssumptionSet|ownerScenarioAssumptionSet|does not exist/i.test(message)
+  );
+}
 
 function hitBound(count: number): boolean {
   return count >= PLANNER_READ_BOUND;
@@ -208,4 +244,104 @@ export async function loadOwnerScenarioPlan(
 ): Promise<OwnerScenarioPlan> {
   const { source, readsTruncated } = await loadOwnerScenarioPlannerSource(prisma, access);
   return buildOwnerScenarioPlan(source, assumptions, { readsTruncated });
+}
+
+export async function listOwnerScenarioAssumptionSets(
+  prisma: PrismaClient,
+  access: BusinessAccess,
+): Promise<{ sets: SavedOwnerScenarioAssumptionSet[]; truncated: boolean; available: boolean }> {
+  assertCanReadOwnerScenarioPlanner(access);
+  try {
+    const rows = await prisma.ownerScenarioAssumptionSet.findMany({
+      where: { businessId: access.businessId },
+      take: PLANNER_SET_READ_BOUND,
+      orderBy: { updatedAt: "desc" },
+    });
+    const isolated = isolateSameBusinessAssumptionSets(rows, access.businessId).map(
+      toSavedOwnerScenarioAssumptionSet,
+    );
+    return {
+      sets: isolated,
+      truncated: rows.length >= PLANNER_SET_READ_BOUND,
+      available: true,
+    };
+  } catch (error) {
+    if (missingAssumptionSetSchema(error)) {
+      return { sets: [], truncated: false, available: false };
+    }
+    throw error;
+  }
+}
+
+export async function loadOwnerScenarioAssumptionSet(
+  prisma: PrismaClient,
+  access: BusinessAccess,
+  setId: string,
+): Promise<SavedOwnerScenarioAssumptionSet | null> {
+  assertCanReadOwnerScenarioPlanner(access);
+  const id = trimPlannerId(setId);
+  if (!id) return null;
+  try {
+    const row = await prisma.ownerScenarioAssumptionSet.findFirst({
+      where: { id, businessId: access.businessId },
+    });
+    if (!row || row.businessId !== access.businessId) return null;
+    return toSavedOwnerScenarioAssumptionSet(row);
+  } catch (error) {
+    if (missingAssumptionSetSchema(error)) return null;
+    throw error;
+  }
+}
+
+export async function loadOwnerScenarioPlannerWorkspace(
+  prisma: PrismaClient,
+  access: BusinessAccess,
+  query: OwnerScenarioPlannerQuery,
+): Promise<OwnerScenarioPlannerWorkspaceData> {
+  assertCanReadOwnerScenarioPlanner(access);
+  const [{ source, readsTruncated }, listed] = await Promise.all([
+    loadOwnerScenarioPlannerSource(prisma, access),
+    listOwnerScenarioAssumptionSets(prisma, access),
+  ]);
+
+  const setId = trimPlannerId(query.set);
+  const leftId = trimPlannerId(query.left);
+  const rightId = trimPlannerId(query.right);
+  const openedSet = setId ? await loadOwnerScenarioAssumptionSet(prisma, access, setId) : null;
+
+  let assumptions = parseOwnerScenarioAssumptions(query);
+  if (openedSet && !hasPlannerKnobParams(query)) {
+    assumptions = assumptionsFromSavedSet(openedSet);
+  }
+
+  const plan = buildOwnerScenarioPlan(source, assumptions, { readsTruncated });
+
+  let comparison: OwnerScenarioComparison | null = null;
+  let comparisonError: string | null = null;
+  if (leftId || rightId) {
+    if (!leftId || !rightId) {
+      comparisonError = COMPARE_NEEDS_TWO_SETS_MESSAGE;
+    } else {
+      const [leftSet, rightSet] = await Promise.all([
+        loadOwnerScenarioAssumptionSet(prisma, access, leftId),
+        loadOwnerScenarioAssumptionSet(prisma, access, rightId),
+      ]);
+      if (!leftSet || !rightSet) {
+        comparisonError = ASSUMPTION_SET_NOT_FOUND_MESSAGE;
+      } else {
+        comparison = buildOwnerScenarioComparison(source, leftSet, rightSet, { readsTruncated });
+        if (!comparison) comparisonError = ASSUMPTION_SET_NOT_FOUND_MESSAGE;
+      }
+    }
+  }
+
+  return {
+    plan,
+    savedSets: listed.sets,
+    setsTruncated: listed.truncated,
+    setsAvailable: listed.available,
+    openedSet,
+    comparison,
+    comparisonError,
+  };
 }
