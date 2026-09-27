@@ -390,6 +390,8 @@ model Business {
   /// Stripe account, service area, or tenant boundary.
   locations                BusinessLocation[]
   partnerVendorOpportunities PartnerVendorOpportunity[]
+  externalLeadImports      ExternalLeadImport[]
+  externalLeadImportRows   ExternalLeadImportRow[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -573,6 +575,8 @@ model Membership {
   bsosNetworkUpdates              BsosNetworkParticipation[] @relation("BsosNetworkParticipationActor")
   createdPartnerVendorOpportunities PartnerVendorOpportunity[] @relation("PartnerVendorOpportunityCreator")
   reviewedPartnerVendorOpportunities PartnerVendorOpportunity[] @relation("PartnerVendorOpportunityReviewer")
+  createdExternalLeadImports      ExternalLeadImport[] @relation("ExternalLeadImportCreator")
+  confirmedExternalLeadImports    ExternalLeadImport[] @relation("ExternalLeadImportConfirmer")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -4130,6 +4134,80 @@ model PartnerVendorOpportunity {
   @@index([businessId, source])
   @@index([supplierId])
   @@index([referralId])
+}
+
+/// OWNER-reviewed external lead import. Preview is stored first; ServiceRequest
+/// rows are created only after explicit OWNER confirmation. Same-business
+/// duplicate flags are possible matches, not scores. This is not scraping,
+/// a bought list, or autonomous outreach.
+model ExternalLeadImport {
+  id                    String   @id @default(cuid())
+  businessId            String
+  /// CSV_UPLOAD | SOURCE_URL
+  sourceKind            String
+  /// Sanitized filename or owner-supplied URL. Display only.
+  sourceLabel           String
+  /// SHA-256 of the exact CSV bytes used for this preview.
+  contentSha256         String
+  capturedAt            DateTime
+  /// PREVIEW | CONFIRMING | CONFIRMED
+  status                String   @default("PREVIEW")
+  rowCount              Int
+  validCount            Int
+  invalidCount          Int
+  possibleDuplicateCount Int
+  createdByMembershipId String
+  confirmedAt           DateTime?
+  confirmedByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business    Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy   Membership @relation("ExternalLeadImportCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  confirmedBy Membership? @relation("ExternalLeadImportConfirmer", fields: [confirmedByMembershipId], references: [id], onDelete: SetNull)
+  rows        ExternalLeadImportRow[]
+
+  @@unique([businessId, contentSha256])
+  @@index([businessId])
+  @@index([createdByMembershipId])
+  @@index([confirmedByMembershipId])
+}
+
+/// One sanitized CSV row captured at preview time. Invalid and possible
+/// duplicate rows stay on the preview and are never auto-created.
+model ExternalLeadImportRow {
+  id                    String   @id @default(cuid())
+  businessId            String
+  importId              String
+  rowNumber             Int
+  /// VALID | INVALID | POSSIBLE_DUPLICATE
+  previewStatus         String
+  invalidReason         String?
+  rowFingerprint        String
+  name                  String
+  email                 String?
+  phone                 String?
+  summary               String?
+  notes                 String?
+  streetAddress         String?
+  unit                  String?
+  city                  String?
+  region                String?
+  postalCode            String?
+  /// Recorded LeadSource from the row when valid; otherwise MANUAL.
+  leadSource            String
+  possibleDuplicateCustomerId String?
+  possibleDuplicateRequestId  String?
+  createdRequestId      String?
+  createdAt             DateTime @default(now())
+
+  business Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  import   ExternalLeadImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@unique([importId, rowNumber])
+  @@index([businessId])
+  @@index([importId])
+  @@index([rowFingerprint])
 }
 
 /// Provider-neutral e-sign boundary. No live provider is wired in this PR.
