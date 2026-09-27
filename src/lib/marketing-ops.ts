@@ -304,41 +304,39 @@ export async function updateMarketingStudioPackage(
     }
   }
 
-  return db.$transaction(async (tx) => {
-    if (photos) {
-      await tx.marketingContentPhoto.deleteMany({
-        where: { contentId: content.id, ...access.scope },
-      });
-      await tx.marketingContentPhoto.createMany({
-        data: photos.map((photo) => ({
-          businessId: access.businessId,
-          contentId: content.id,
-          jobPhotoId: photo.id,
-        })),
-      });
-    }
-    return tx.marketingContent.update({
-      where: { id: content.id },
-      data: {
-        title,
-        body,
-        channelIntent,
-        plannedFor,
-        storyboardJson:
-          input.storyboardJson !== undefined
-            ? serializeStoryboard(parseStoryboard(input.storyboardJson))
-            : content.storyboardJson,
-        shotListJson:
-          input.shotListJson !== undefined
-            ? serializeShotList(parseShotList(input.shotListJson))
-            : content.shotListJson,
-        hashtags:
-          input.hashtags !== undefined
-            ? formatHashtags(parseHashtags(input.hashtags))
-            : content.hashtags,
-      },
-      include: { photos: true },
+  if (photos) {
+    await db.marketingContentPhoto.deleteMany({
+      where: { contentId: content.id, ...access.scope },
     });
+    await db.marketingContentPhoto.createMany({
+      data: photos.map((photo) => ({
+        businessId: access.businessId,
+        contentId: content.id,
+        jobPhotoId: photo.id,
+      })),
+    });
+  }
+  return db.marketingContent.update({
+    where: { id: content.id },
+    data: {
+      title,
+      body,
+      channelIntent,
+      plannedFor,
+      storyboardJson:
+        input.storyboardJson !== undefined
+          ? serializeStoryboard(parseStoryboard(input.storyboardJson))
+          : content.storyboardJson,
+      shotListJson:
+        input.shotListJson !== undefined
+          ? serializeShotList(parseShotList(input.shotListJson))
+          : content.shotListJson,
+      hashtags:
+        input.hashtags !== undefined
+          ? formatHashtags(parseHashtags(input.hashtags))
+          : content.hashtags,
+    },
+    include: { photos: true },
   });
 }
 

@@ -69,7 +69,9 @@ const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 
-const createDb = spawnSync("psql", [baseUrl, "-c", `CREATE DATABASE "${testDbName}"`], {
+const adminUrl = new URL(baseUrl);
+adminUrl.search = "";
+const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
   encoding: "utf8",
 });
 if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
