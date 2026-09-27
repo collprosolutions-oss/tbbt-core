@@ -1,6 +1,6 @@
 /**
  * Native field API — session boundary + assigned-job / Today isolation
- * + the one assigned-worker Complete job write.
+ * + assigned-worker Start job and Complete job writes.
  *
  * Imports the REAL production helpers from src/lib/native-session.ts,
  * src/lib/native-field.ts, and src/lib/native-field-ops.ts. Those
@@ -46,12 +46,17 @@ const {
   loadNativeToday,
   nativeAssignedJobWhere,
   nativeCompleteAction,
+  nativeStartAction,
   nativeTodayTruncatedNotice,
 } = await import("@/lib/native-field");
 const {
   completeNativeAssignedJob,
+  startNativeAssignedJob,
   NATIVE_JOB_NOT_AVAILABLE,
 } = await import("@/lib/native-field-ops");
+const { CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT } = await import(
+  "@/lib/appointment-confirmation"
+);
 const {
   readBearerToken,
   resolveNativeFieldAccess,
@@ -179,7 +184,9 @@ const sessionRouteSrc = readRepo("src/app/api/native/v1/session/route.ts");
 const todayRouteSrc = readRepo("src/app/api/native/v1/today/route.ts");
 const jobRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/route.ts");
 const completeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/complete/route.ts");
+const startRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/start/route.ts");
 const completeOpsSrc = readRepo("src/lib/native-field-ops.ts");
+const timeCardOpsSrc = readRepo("src/lib/time-card-ops.ts");
 const limitsSrc = readRepo("src/lib/native-session-limits.ts");
 check(
   "Native routes authenticate with Bearer helpers, not cookies()",
@@ -187,10 +194,12 @@ check(
     todayRouteSrc.includes("readBearerToken") &&
     jobRouteSrc.includes("readBearerToken") &&
     completeRouteSrc.includes("readBearerToken") &&
+    startRouteSrc.includes("readBearerToken") &&
     !sessionRouteSrc.includes("cookies(") &&
     !todayRouteSrc.includes("cookies(") &&
     !jobRouteSrc.includes("cookies(") &&
     !completeRouteSrc.includes("cookies(") &&
+    !startRouteSrc.includes("cookies(") &&
     !completeOpsSrc.includes("cookies("),
 );
 check(
@@ -205,6 +214,18 @@ check(
     !completeOpsSrc.includes("completeJobAndSendInvoice"),
 );
 check(
+  "Start job reuses assigned-job scope and the canonical status + time-card write",
+  completeOpsSrc.includes("startNativeAssignedJob") &&
+    completeOpsSrc.includes("startJobWithRunningTimeSafetyInTransaction") &&
+    completeOpsSrc.includes("evaluateStartJob") &&
+    completeOpsSrc.includes("startJobRequiresCustomerConfirmation") &&
+    timeCardOpsSrc.includes("startJobWithRunningTimeSafetyInTransaction") &&
+    timeCardOpsSrc.includes("evaluateStartJob") &&
+    timeCardOpsSrc.includes("JOB_START_TIME_STARTED_REASON") &&
+    startRouteSrc.includes("startNativeAssignedJob") &&
+    !completeOpsSrc.includes("completeJobAndSendInvoice"),
+);
+check(
   "nativeCompleteAction follows evaluateCompleteJob",
   nativeCompleteAction("IN_PROGRESS").available === true &&
     nativeCompleteAction("IN_PROGRESS").reason === null &&
@@ -212,6 +233,40 @@ check(
     nativeCompleteAction("COMPLETED").reason === null &&
     nativeCompleteAction("SCHEDULED").available === false &&
     nativeCompleteAction("SCHEDULED").reason === "Start the job before completing it.",
+);
+const confirmedStartJob = {
+  scheduledAt: new Date(),
+  scheduledDurationMinutes: 60,
+  appointmentConfirmationStatus: "CONFIRMED",
+  appointmentProposalId: 1,
+  appointmentConfirmedForProposalId: 1,
+  appointmentConfirmationSource: "PORTAL",
+  propertyAccessMethod: "CUSTOMER_PRESENT",
+  propertyAccessInstructions: null,
+  propertyAccessContactName: null,
+  propertyAccessContactInfo: null,
+  propertyAccessPickupLocation: null,
+  propertyAccessNote: null,
+};
+check(
+  "nativeStartAction follows evaluateStartJob and the Field confirmation gate",
+  nativeStartAction("SCHEDULED", confirmedStartJob).available === true &&
+    nativeStartAction("SCHEDULED", confirmedStartJob).reason === null &&
+    nativeStartAction("IN_PROGRESS", confirmedStartJob).available === false &&
+    nativeStartAction("IN_PROGRESS", confirmedStartJob).reason === null &&
+    nativeStartAction("COMPLETED", confirmedStartJob).available === false &&
+    nativeStartAction("COMPLETED", confirmedStartJob).reason ===
+      "A completed job cannot be started." &&
+    nativeStartAction("SCHEDULED", {
+      ...confirmedStartJob,
+      appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+      appointmentConfirmedForProposalId: null,
+    }).available === false &&
+    nativeStartAction("SCHEDULED", {
+      ...confirmedStartJob,
+      appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+      appointmentConfirmedForProposalId: null,
+    }).reason === CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
 );
 check(
   "Native session POST caps JSON and uses a durable throttle, not process memory",
@@ -260,7 +315,11 @@ check(
     nativeAppSrc.includes("/api/native/v1/today") &&
     nativeAppSrc.includes("/api/native/v1/jobs/") &&
     nativeAppSrc.includes("/complete") &&
+    nativeAppSrc.includes("/start") &&
     nativeAppSrc.includes("Complete job") &&
+    nativeAppSrc.includes("Start job") &&
+    nativeAppSrc.includes("runningTime") &&
+    nativeAppSrc.includes("loadNativeJob") &&
     nativeAppSrc.includes("truncatedNotice") &&
     nativeAppSrc.includes("payload.truncated"),
 );
@@ -783,6 +842,13 @@ try {
     detail?.completeAction.available === false &&
       detail?.completeAction.reason === "Start the job before completing it.",
   );
+  check(
+    "Scheduled assigned job advertises Start job and idle running time",
+    detail?.startAction.available === true &&
+      detail?.startAction.reason === null &&
+      detail?.runningTime.running === false &&
+      detail?.runningTime.startedAt === null,
+  );
 
   console.log("\nCOMPLETE — assigned-worker write, isolation, duplicates, rollback");
   await prisma.businessSaasSubscription.create({
@@ -1229,6 +1295,407 @@ try {
       invoicesAfter === invoicesBefore,
   );
 
+  console.log("\nSTART — assigned-worker write, isolation, races, duplicates, rollback");
+  function confirmedJobFields() {
+    return {
+      scheduledAt: new Date(),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      appointmentConfirmationStatus: "CONFIRMED",
+      appointmentConfirmedForProposalId: 1,
+      appointmentConfirmationSource: "PORTAL",
+      propertyAccessMethod: "CUSTOMER_PRESENT",
+    };
+  }
+
+  async function createStartJob(input) {
+    const customer =
+      input.customerId
+        ? { id: input.customerId }
+        : await prisma.customer.create({
+            data: {
+              businessId: input.businessId,
+              name: input.customerName,
+              phone: "555-0102",
+            },
+          });
+    return prisma.job.create({
+      data: {
+        businessId: input.businessId,
+        customerId: customer.id,
+        assignedMembershipId: input.assignedMembershipId,
+        projectToken: randomUUID(),
+        status: input.status ?? "SCHEDULED",
+        ...confirmedJobFields(),
+        ...(input.confirmation === "unconfirmed"
+          ? {
+              appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+              appointmentConfirmedForProposalId: null,
+              appointmentConfirmationSource: null,
+            }
+          : {}),
+      },
+    });
+  }
+
+  const startJob = await createStartJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+  });
+  const otherStartJob = await createStartJob({
+    businessId: businessA.id,
+    assignedMembershipId: otherMembership.id,
+    customerName: "Other Start Canary",
+  });
+  const betaStartJob = await createStartJob({
+    businessId: businessB.id,
+    assignedMembershipId: betaMembership.id,
+    customerName: "Beta Start Canary",
+  });
+  const unassignedStartJob = unassignedJob;
+  const raceStartJob = await createStartJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+  });
+  const rollbackStartJob = await createStartJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+  });
+  const duplicateStartJob = await createStartJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+  });
+  const unconfirmedStartJob = await createStartJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+    confirmation: "unconfirmed",
+  });
+  const completedStartJob = await createStartJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+    status: "COMPLETED",
+  });
+  const blockedStartJob = await createStartJob({
+    businessId: blockedBusiness.id,
+    assignedMembershipId: blockedMembership.id,
+    customerName: "Blocked Start Canary",
+  });
+
+  const unauthorizedStart = await startNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    otherStartJob.id,
+  );
+  const unassignedStart = await startNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    unassignedStartJob.id,
+  );
+  const crossTenantStart = await startNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    betaStartJob.id,
+  );
+  check(
+    "Assigned worker cannot start another member's job",
+    unauthorizedStart.ok === false &&
+      unauthorizedStart.status === 404 &&
+      unauthorizedStart.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Assigned worker cannot start an unassigned job",
+    unassignedStart.ok === false && unassignedStart.status === 404,
+  );
+  check(
+    "Assigned worker cannot start a cross-tenant job",
+    crossTenantStart.ok === false &&
+      crossTenantStart.status === 404 &&
+      crossTenantStart.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+
+  const stolenStart = await startNativeAssignedJob(
+    prisma,
+    otherAccess.access,
+    startJob.id,
+  );
+  const startJobAfterSteal = await prisma.job.findFirst({
+    where: { id: startJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  const stolenStartTime = await prisma.timeEntry.count({
+    where: { jobId: startJob.id, businessId: businessA.id },
+  });
+  check(
+    "Other MEMBER cannot start a job assigned to someone else",
+    stolenStart.ok === false &&
+      stolenStart.status === 404 &&
+      startJobAfterSteal?.status === "SCHEDULED" &&
+      startJobAfterSteal?.assignedMembershipId === memberMembership.id &&
+      stolenStartTime === 0,
+  );
+
+  const betaStealStart = await startNativeAssignedJob(
+    prisma,
+    betaAccess.access,
+    startJob.id,
+  );
+  const alphaAfterBetaStartSteal = await prisma.job.findFirst({
+    where: { id: startJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const betaAfterAlphaStartAttempt = await prisma.job.findFirst({
+    where: { id: betaStartJob.id, businessId: businessB.id },
+    select: { status: true },
+  });
+  const betaStartTime = await prisma.timeEntry.count({
+    where: { jobId: { in: [startJob.id, betaStartJob.id] } },
+  });
+  check(
+    "Cross-tenant start leaves both jobs and time unchanged",
+    betaStealStart.ok === false &&
+      betaStealStart.status === 404 &&
+      alphaAfterBetaStartSteal?.status === "SCHEDULED" &&
+      betaAfterAlphaStartAttempt?.status === "SCHEDULED" &&
+      betaStartTime === 0,
+  );
+
+  const completedStart = await startNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    completedStartJob.id,
+  );
+  check(
+    "Status safeguard refuses Start job on a completed job",
+    completedStart.ok === false &&
+      completedStart.status === 409 &&
+      completedStart.error === "A completed job cannot be started.",
+  );
+
+  const unconfirmedStart = await startNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    unconfirmedStartJob.id,
+  );
+  const unconfirmedAfter = await prisma.job.findFirst({
+    where: { id: unconfirmedStartJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  check(
+    "Unconfirmed appointment refuses Start job",
+    unconfirmedStart.ok === false &&
+      unconfirmedStart.status === 409 &&
+      unconfirmedStart.error === CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT &&
+      unconfirmedAfter?.status === "SCHEDULED",
+  );
+
+  const blockedStart = await startNativeAssignedJob(
+    prisma,
+    blockedAccess.access,
+    blockedStartJob.id,
+  );
+  const blockedStartAfter = await prisma.job.findFirst({
+    where: { id: blockedStartJob.id, businessId: blockedBusiness.id },
+    select: { status: true },
+  });
+  check(
+    "Start job requires an operating SaaS entitlement",
+    blockedStart.ok === false &&
+      blockedStart.status === 403 &&
+      blockedStart.error === SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE &&
+      blockedStartAfter?.status === "SCHEDULED",
+  );
+
+  const raceStartEventsBefore = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: "JOB_STARTED",
+      subjectId: raceStartJob.id,
+    },
+  });
+  const raceStart = await startNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    raceStartJob.id,
+    {
+      afterInitialRead: async () => {
+        await prisma.job.update({
+          where: { id: raceStartJob.id },
+          data: { assignedMembershipId: otherMembership.id },
+        });
+      },
+    },
+  );
+  const raceStartJobAfter = await prisma.job.findFirst({
+    where: { id: raceStartJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  const raceStartTimeAfter = await prisma.timeEntry.count({
+    where: { jobId: raceStartJob.id, businessId: businessA.id },
+  });
+  const raceStartEventsAfter = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: "JOB_STARTED",
+      subjectId: raceStartJob.id,
+    },
+  });
+  check(
+    "Assignment change after the initial read refuses Start job",
+    raceStart.ok === false &&
+      raceStart.status === 404 &&
+      raceStart.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Reassigned Job after the initial read leaves Job, time, and start event unchanged",
+    raceStartJobAfter?.status === "SCHEDULED" &&
+      raceStartJobAfter?.assignedMembershipId === otherMembership.id &&
+      raceStartTimeAfter === 0 &&
+      raceStartEventsAfter === raceStartEventsBefore &&
+      raceStartEventsAfter === 0,
+  );
+
+  const rollbackStart = await startNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    rollbackStartJob.id,
+  );
+  const rollbackStartJobAfter = await prisma.job.findFirst({
+    where: { id: rollbackStartJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const rollbackStartTimeAfter = await prisma.timeEntry.count({
+    where: { jobId: rollbackStartJob.id, businessId: businessA.id },
+  });
+  check(
+    "Approved timesheet week refuses Start job clock-in",
+    rollbackStart.ok === false &&
+      rollbackStart.status === 409 &&
+      /approved/i.test(rollbackStart.error ?? ""),
+  );
+  check(
+    "Failed Start job rolls back Job status and creates no time",
+    rollbackStartJobAfter?.status === "SCHEDULED" && rollbackStartTimeAfter === 0,
+  );
+
+  await prisma.timesheetWeek.deleteMany({
+    where: {
+      businessId: businessA.id,
+      membershipId: memberMembership.id,
+      status: "APPROVED",
+    },
+  });
+
+  const firstStart = await startNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    startJob.id,
+  );
+  const reloadedStart = await loadNativeAssignedJob(prisma, memberAccess.access, startJob.id);
+  const startJobPersisted = await prisma.job.findFirst({
+    where: { id: startJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const startTimePersisted = await prisma.timeEntry.findFirst({
+    where: {
+      jobId: startJob.id,
+      businessId: businessA.id,
+      membershipId: memberMembership.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      endedAt: null,
+    },
+    select: { id: true, startedAt: true },
+  });
+  check(
+    "Assigned worker can start their own confirmed job",
+    firstStart.ok === true &&
+      firstStart.alreadyStarted === false &&
+      firstStart.alreadyRunningTime === false &&
+      firstStart.job.status === "IN_PROGRESS" &&
+      firstStart.job.startAction.available === false &&
+      firstStart.job.completeAction.available === true &&
+      firstStart.job.runningTime.running === true &&
+      firstStart.job.runningTime.activityType === "JOB" &&
+      startJobPersisted?.status === "IN_PROGRESS" &&
+      Boolean(startTimePersisted),
+  );
+  check(
+    "Reload after Start job shows IN_PROGRESS and running time",
+    reloadedStart?.status === "IN_PROGRESS" &&
+      reloadedStart?.runningTime.running === true &&
+      reloadedStart?.runningTime.activityType === "JOB" &&
+      reloadedStart?.runningTime.startedAt === startTimePersisted?.startedAt.toISOString() &&
+      reloadedStart?.completeAction.available === true &&
+      reloadedStart?.startAction.available === false,
+  );
+
+  const repeatStart = await startNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    startJob.id,
+  );
+  const repeatStartTimeCount = await prisma.timeEntry.count({
+    where: {
+      jobId: startJob.id,
+      businessId: businessA.id,
+      activityType: "JOB",
+    },
+  });
+  check(
+    "Duplicate Start job on an already-started job is a successful no-op",
+    repeatStart.ok === true &&
+      repeatStart.alreadyStarted === true &&
+      repeatStart.alreadyRunningTime === true &&
+      repeatStart.job.status === "IN_PROGRESS" &&
+      repeatStart.job.runningTime.running === true &&
+      repeatStartTimeCount === 1,
+  );
+
+  const [startDupA, startDupB] = await Promise.all([
+    startNativeAssignedJob(prisma, memberAccess.access, duplicateStartJob.id),
+    startNativeAssignedJob(prisma, memberAccess.access, duplicateStartJob.id),
+  ]);
+  const duplicateStartAfter = await prisma.job.findFirst({
+    where: { id: duplicateStartJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const duplicateStartTimeCount = await prisma.timeEntry.count({
+    where: {
+      jobId: duplicateStartJob.id,
+      businessId: businessA.id,
+      activityType: "JOB",
+      status: "RUNNING",
+    },
+  });
+  check(
+    "Concurrent Start job requests both succeed and leave one IN_PROGRESS job with one running time",
+    startDupA.ok === true &&
+      startDupB.ok === true &&
+      [startDupA.alreadyStarted, startDupB.alreadyStarted].filter(Boolean).length <= 1 &&
+      duplicateStartAfter?.status === "IN_PROGRESS" &&
+      duplicateStartTimeCount === 1,
+  );
+
+  const otherStartAfterWrites = await prisma.job.findFirst({
+    where: { id: otherStartJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const betaStartAfterWrites = await prisma.job.findFirst({
+    where: { id: betaStartJob.id, businessId: businessB.id },
+    select: { status: true },
+  });
+  check(
+    "Start job writes stay on the assigned job",
+    otherStartAfterWrites?.status === "SCHEDULED" &&
+      betaStartAfterWrites?.status === "SCHEDULED",
+  );
+
   const revoked = await revokeNativeSession(prisma, memberSignIn.token);
   const afterRevoke = await resolveNativeFieldAccess(prisma, { token: memberSignIn.token });
   check("Sign-out revokes the hashed session", revoked === true);
@@ -1264,7 +1731,7 @@ try {
     throw new Error(`Native field check failed (${failures} case(s)).`);
   }
   console.log(
-    "\nNative field API check passed: Bearer session, assigned-job isolation, and Complete job safeguards held.",
+    "\nNative field API check passed: Bearer session, assigned-job isolation, Start job, and Complete job safeguards held.",
   );
 } finally {
   await prisma.$disconnect();
