@@ -41,6 +41,107 @@ function ListingCard({ listing }: { listing: PublicNetworkListing }) {
   );
 }
 
+function OptInForm({ suggestions }: { suggestions: NetworkSuggestions }) {
+  const [state, action, pending] = useActionState(optIntoBsosNetworkAction, initialState);
+  const defaultMethod = suggestions.contacts[0]?.method ?? "EMAIL";
+  const defaultValue =
+    suggestions.contacts.find((item) => item.method === defaultMethod)?.value ??
+    suggestions.contacts[0]?.value ??
+    "";
+
+  return (
+    <form action={action} className="space-y-3">
+      {state.error ? (
+        <Alert variant="destructive">
+          <AlertDescription>{state.error}</AlertDescription>
+        </Alert>
+      ) : null}
+      {state.message ? (
+        <Alert>
+          <AlertDescription>{state.message}</AlertDescription>
+        </Alert>
+      ) : null}
+      <div className="space-y-1">
+        <Label htmlFor="publicName">Public business name</Label>
+        <Input
+          id="publicName"
+          name="publicName"
+          required
+          defaultValue={suggestions.publicName}
+          maxLength={120}
+        />
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="tradeCode">Trade</Label>
+        <select
+          id="tradeCode"
+          name="tradeCode"
+          className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+          defaultValue={suggestions.trades[0]?.code ?? "HANDYMAN"}
+        >
+          {suggestions.trades.map((trade) => (
+            <option key={trade.code} value={trade.code}>
+              {trade.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="serviceAreaLabel">Broad service area</Label>
+        <Input
+          id="serviceAreaLabel"
+          name="serviceAreaLabel"
+          required
+          defaultValue={suggestions.serviceArea}
+          maxLength={120}
+          placeholder="Reno, NV"
+        />
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="publicContactMethod">Public contact method</Label>
+        <select
+          id="publicContactMethod"
+          name="publicContactMethod"
+          className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+          defaultValue={defaultMethod}
+        >
+          <option value="PHONE">Phone</option>
+          <option value="EMAIL">Email</option>
+          <option value="WEBSITE">Website</option>
+        </select>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="publicContactValue">Public contact value</Label>
+        <Input id="publicContactValue" name="publicContactValue" required defaultValue={defaultValue} />
+      </div>
+      <Button type="submit" size="sm" disabled={pending}>
+        {pending ? "Listing…" : "Opt in"}
+      </Button>
+    </form>
+  );
+}
+
+function OptOutForm() {
+  const [state, action, pending] = useActionState(optOutOfBsosNetworkAction, initialState);
+  return (
+    <form action={action} className="space-y-3">
+      {state.error ? (
+        <Alert variant="destructive">
+          <AlertDescription>{state.error}</AlertDescription>
+        </Alert>
+      ) : null}
+      {state.message ? (
+        <Alert>
+          <AlertDescription>{state.message}</AlertDescription>
+        </Alert>
+      ) : null}
+      <Button type="submit" variant="outline" size="sm" disabled={pending}>
+        {pending ? "Leaving…" : "Opt out"}
+      </Button>
+    </form>
+  );
+}
+
 export function BsosNetworkWorkspace({
   own,
   suggestions,
@@ -56,14 +157,6 @@ export function BsosNetworkWorkspace({
   tradeFilter: string;
   serviceAreaFilter: string;
 }) {
-  const [optInState, optInAction, optInPending] = useActionState(optIntoBsosNetworkAction, initialState);
-  const [optOutState, optOutAction, optOutPending] = useActionState(optOutOfBsosNetworkAction, initialState);
-  const defaultMethod = suggestions.contacts[0]?.method ?? "EMAIL";
-  const defaultValue =
-    suggestions.contacts.find((item) => item.method === defaultMethod)?.value ??
-    suggestions.contacts[0]?.value ??
-    "";
-
   return (
     <div className="space-y-6">
       <Card>
@@ -82,95 +175,9 @@ export function BsosNetworkWorkspace({
           {!canManage ? (
             <p className="text-sm text-muted-foreground">{NETWORK_OWNER_ONLY_MESSAGE}</p>
           ) : own.optedIn ? (
-            <form action={optOutAction} className="space-y-3">
-              {optOutState.error ? (
-                <Alert variant="destructive">
-                  <AlertDescription>{optOutState.error}</AlertDescription>
-                </Alert>
-              ) : null}
-              {optOutState.message ? (
-                <Alert>
-                  <AlertDescription>{optOutState.message}</AlertDescription>
-                </Alert>
-              ) : null}
-              <Button type="submit" variant="outline" size="sm" disabled={optOutPending}>
-                {optOutPending ? "Leaving…" : "Opt out"}
-              </Button>
-            </form>
+            <OptOutForm key="opt-out" />
           ) : (
-            <form action={optInAction} className="space-y-3">
-              {optInState.error ? (
-                <Alert variant="destructive">
-                  <AlertDescription>{optInState.error}</AlertDescription>
-                </Alert>
-              ) : null}
-              {optInState.message ? (
-                <Alert>
-                  <AlertDescription>{optInState.message}</AlertDescription>
-                </Alert>
-              ) : null}
-              <div className="space-y-1">
-                <Label htmlFor="publicName">Public business name</Label>
-                <Input
-                  id="publicName"
-                  name="publicName"
-                  required
-                  defaultValue={suggestions.publicName}
-                  maxLength={120}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="tradeCode">Trade</Label>
-                <select
-                  id="tradeCode"
-                  name="tradeCode"
-                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-                  defaultValue={suggestions.trades[0]?.code ?? "HANDYMAN"}
-                >
-                  {suggestions.trades.map((trade) => (
-                    <option key={trade.code} value={trade.code}>
-                      {trade.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="serviceAreaLabel">Broad service area</Label>
-                <Input
-                  id="serviceAreaLabel"
-                  name="serviceAreaLabel"
-                  required
-                  defaultValue={suggestions.serviceArea}
-                  maxLength={120}
-                  placeholder="Reno, NV"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="publicContactMethod">Public contact method</Label>
-                <select
-                  id="publicContactMethod"
-                  name="publicContactMethod"
-                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-                  defaultValue={defaultMethod}
-                >
-                  <option value="PHONE">Phone</option>
-                  <option value="EMAIL">Email</option>
-                  <option value="WEBSITE">Website</option>
-                </select>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="publicContactValue">Public contact value</Label>
-                <Input
-                  id="publicContactValue"
-                  name="publicContactValue"
-                  required
-                  defaultValue={defaultValue}
-                />
-              </div>
-              <Button type="submit" size="sm" disabled={optInPending}>
-                {optInPending ? "Listing…" : "Opt in"}
-              </Button>
-            </form>
+            <OptInForm key="opt-in" suggestions={suggestions} />
           )}
         </CardContent>
       </Card>

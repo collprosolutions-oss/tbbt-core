@@ -109,6 +109,7 @@ const opsSource = readRepo("src/lib/bsos-network-ops.ts");
 const workspaceLoader = readRepo("src/lib/workspace.ts");
 const actionsSource = readRepo("src/app/actions/bsos-network.ts");
 const pageSource = readRepo("src/app/(app)/network/page.tsx");
+const workspaceSource = readRepo("src/components/bsos-network/network-workspace.tsx");
 
 try {
   console.log("\nSTATIC — Default-off Network slice");
@@ -150,6 +151,10 @@ try {
   check("OWNER-only copy is present", /Only the owner/.test(NETWORK_OWNER_ONLY_MESSAGE));
   check("Discovery is bounded", DISCOVERY_LIMIT === 50);
   check("Network page lives at /network", pageSource.includes("BSOS Network"));
+  check(
+    "Opt-in and opt-out forms remount so success copy cannot leak across states",
+    workspaceSource.includes('key="opt-out"') && workspaceSource.includes('key="opt-in"'),
+  );
 
   const sampleListing = toPublicListing({
     id: "listing-1",
@@ -182,6 +187,8 @@ try {
       !dataSource.includes("include: { customer") &&
       !dataSource.includes("include: { job"),
   );
+
+  await prisma.bsosNetworkParticipation.deleteMany();
 
   const suffix = randomUUID().slice(0, 8);
   const businessA = await prisma.business.create({
