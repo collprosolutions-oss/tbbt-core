@@ -4,12 +4,17 @@ import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { recordRetentionFollowUpTaskAction } from "@/app/actions/retention";
+import {
+  recordRetentionFollowUpTaskAction,
+  resolveRetentionFollowUpTaskStatusAction,
+} from "@/app/actions/retention";
 import { formatDate } from "@/lib/format";
 import {
   RETENTION_FOLLOW_UP_FINDING_GROUPS,
   RETENTION_GROUP_TITLES,
   RETENTION_OWNER_FOLLOW_UP_MESSAGE,
+  RETENTION_OWNER_RESOLVE_FOLLOW_UP_MESSAGE,
+  isRetentionFollowUpTask,
   type RetentionCandidate,
   type RetentionFollowUpFindingGroup,
   type RetentionFollowUpRow,
@@ -20,9 +25,11 @@ import {
 export function RetentionCenter({
   workspace,
   canRecordFollowUp = false,
+  canResolveFollowUp = false,
 }: {
   workspace: RetentionWorkspace;
   canRecordFollowUp?: boolean;
+  canResolveFollowUp?: boolean;
 }) {
   return (
     <div className="space-y-6">
@@ -55,7 +62,7 @@ export function RetentionCenter({
         empty="No past customers with a completed job and no later same-business Job in this window."
         canRecordFollowUp={canRecordFollowUp}
       />
-      <FollowUpGroup rows={workspace.groups.recordedFollowUp} />
+      <FollowUpGroup rows={workspace.groups.recordedFollowUp} canResolveFollowUp={canResolveFollowUp} />
       <CandidateGroup
         title={RETENTION_GROUP_TITLES.NO_REFERRAL_REQUEST}
         description={workspace.groups.noReferralRequest[0]?.fact}
@@ -159,7 +166,13 @@ function RetentionFollowUpForm({ row }: { row: RetentionCandidate }) {
   );
 }
 
-function FollowUpGroup({ rows }: { rows: RetentionFollowUpRow[] }) {
+function FollowUpGroup({
+  rows,
+  canResolveFollowUp,
+}: {
+  rows: RetentionFollowUpRow[];
+  canResolveFollowUp: boolean;
+}) {
   return (
     <Card>
       <CardHeader>
@@ -183,10 +196,39 @@ function FollowUpGroup({ rows }: { rows: RetentionFollowUpRow[] }) {
               Kind: {row.kind}. Recorded status: {row.statusLabel}.
             </p>
             <LinkRow links={row.links} />
+            {canResolveFollowUp &&
+            isRetentionFollowUpTask(row.origin) &&
+            (row.status === "OPEN" || row.status === "DONE" || row.status === "CANCELLED") ? (
+              <RetentionFollowUpResolveForm row={row} />
+            ) : null}
           </article>
         ))}
       </CardContent>
     </Card>
+  );
+}
+
+function RetentionFollowUpResolveForm({ row }: { row: RetentionFollowUpRow }) {
+  return (
+    <div className="mt-3 space-y-2">
+      <p className="text-xs text-muted-foreground">{RETENTION_OWNER_RESOLVE_FOLLOW_UP_MESSAGE}</p>
+      <div className="flex flex-wrap gap-2">
+        <ActionForm action={resolveRetentionFollowUpTaskStatusAction}>
+          <input type="hidden" name="followUpId" value={row.followUpId} />
+          <input type="hidden" name="status" value="DONE" />
+          <Button type="submit" size="sm">
+            Mark done
+          </Button>
+        </ActionForm>
+        <ActionForm action={resolveRetentionFollowUpTaskStatusAction}>
+          <input type="hidden" name="followUpId" value={row.followUpId} />
+          <input type="hidden" name="status" value="CANCELLED" />
+          <Button type="submit" size="sm" variant="outline">
+            Cancel
+          </Button>
+        </ActionForm>
+      </div>
+    </div>
   );
 }
 

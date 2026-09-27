@@ -38,6 +38,7 @@ export type RetentionFollowUpRow = {
   kind: string;
   status: string;
   statusLabel: string;
+  origin: string;
   links: RetentionLink[];
 };
 

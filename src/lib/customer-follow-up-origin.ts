@@ -35,3 +35,7 @@ export function retentionFollowUpLockKey(input: {
 }) {
   return `${RETENTION_FOLLOW_UP_LOCK_PREFIX}:${input.businessId}:${input.customerId}:${input.jobId}`;
 }
+
+export function retentionFollowUpStatusLockKey(followUpId: string) {
+  return `${RETENTION_FOLLOW_UP_LOCK_PREFIX}-status:${followUpId}`;
+}
