@@ -191,7 +191,7 @@ export async function createTenantIntakeSnapshot(
 export async function loadPublishedIntakeOverlay(
   db: {
     businessTrade?: {
-      findFirst: (args: {
+      findFirst?: (args: {
         where: { businessId: string; tradeCode: string };
         select: { publishedIntakeSnapshotId: true };
       }) => Promise<{ publishedIntakeSnapshotId: string | null } | null>;
