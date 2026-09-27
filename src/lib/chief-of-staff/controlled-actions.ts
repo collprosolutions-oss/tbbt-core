@@ -272,12 +272,18 @@ type ProvenanceWrite = {
   executedAt?: Date | null;
 };
 
-async function findControlledAiAttempt(db: Db, businessId: string, executionAttemptId: string) {
+async function findControlledAiAttempt(
+  db: Db,
+  businessId: string,
+  input: { executionAttemptId: string; actionKey: ControlledActionKey; recommendationKey: string },
+) {
   return db.controlledAiActionAttempt.findUnique({
     where: {
-      businessId_executionAttemptId: {
+      businessId_executionAttemptId_actionKey_recommendationKey: {
         businessId,
-        executionAttemptId,
+        executionAttemptId: input.executionAttemptId,
+        actionKey: input.actionKey,
+        recommendationKey: input.recommendationKey,
       },
     },
   });
@@ -310,7 +316,11 @@ async function recordControlledAiAttempt(db: Db, access: BusinessAccess, input: 
     });
   } catch (error) {
     if (!isUniqueConflict(error)) throw error;
-    const existing = await findControlledAiAttempt(db, access.businessId, input.executionAttemptId);
+    const existing = await findControlledAiAttempt(db, access.businessId, {
+      executionAttemptId: input.executionAttemptId,
+      actionKey: input.actionKey,
+      recommendationKey: input.recommendationKey,
+    });
     if (existing) return existing;
     throw error;
   }
@@ -768,13 +778,16 @@ export async function confirmControlledAction(
       throw changedStateError();
     }
 
-    const existingAttempt = await findControlledAiAttempt(db, access.businessId, input.executionAttemptId);
-    if (existingAttempt) {
-      return confirmationFromExistingAttempt(serverProposal, existingAttempt, input.executionAttemptId);
-    }
-
     const already = await alreadyAppliedResult(db, access, entry, live);
     if (already) {
+      const existingAttempt = await findControlledAiAttempt(db, access.businessId, {
+        executionAttemptId: input.executionAttemptId,
+        actionKey: entry.key,
+        recommendationKey,
+      });
+      if (existingAttempt) {
+        return confirmationFromExistingAttempt(serverProposal, existingAttempt, input.executionAttemptId);
+      }
       await recordControlledAiAttempt(db, access, {
         actionKey: entry.key,
         result: "REPLAYED",

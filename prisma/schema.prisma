@@ -3178,7 +3178,7 @@ model ControlledAiActionAttempt {
   actionKey               String
   /// EXECUTED | REPLAYED | FAILED | DENIED
   result                  String
-  recommendationKey       String?
+  recommendationKey       String
   /// RECOMMENDATION
   targetEntityType        String
   /// BusinessActionItem | BsosRecommendationState. Null when no domain row.
@@ -3197,7 +3197,7 @@ model ControlledAiActionAttempt {
   business    Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
   confirmedBy Membership @relation("ControlledAiActionAttemptActor", fields: [confirmedByMembershipId], references: [id], onDelete: Restrict)
 
-  @@unique([businessId, executionAttemptId])
+  @@unique([businessId, executionAttemptId, actionKey, recommendationKey])
   @@index([businessId, confirmedAt])
   @@index([businessId, actionKey])
   @@index([confirmedByMembershipId])

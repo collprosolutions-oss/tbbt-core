@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS "ControlledAiActionAttempt" (
     "businessId" TEXT NOT NULL,
     "actionKey" TEXT NOT NULL,
     "result" TEXT NOT NULL,
-    "recommendationKey" TEXT,
+    "recommendationKey" TEXT NOT NULL,
     "targetEntityType" TEXT NOT NULL,
     "targetRecordType" TEXT,
     "targetRecordId" TEXT,
@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS "ControlledAiActionAttempt" (
     CONSTRAINT "ControlledAiActionAttempt_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "ControlledAiActionAttempt_businessId_executionAttemptId_key"
-  ON "ControlledAiActionAttempt"("businessId", "executionAttemptId");
+CREATE UNIQUE INDEX IF NOT EXISTS "ControlledAiActionAttempt_businessId_executionAttemptId_actionKey_recommendationKey_key"
+  ON "ControlledAiActionAttempt"("businessId", "executionAttemptId", "actionKey", "recommendationKey");
 CREATE INDEX IF NOT EXISTS "ControlledAiActionAttempt_businessId_confirmedAt_idx"
   ON "ControlledAiActionAttempt"("businessId", "confirmedAt");
 CREATE INDEX IF NOT EXISTS "ControlledAiActionAttempt_businessId_actionKey_idx"
