@@ -27,6 +27,19 @@ export type NativeJobCompleteAction = {
   reason: string | null;
 };
 
+export type NativeJobStartAction = {
+  available: boolean;
+  reason: string | null;
+};
+
+export type NativeJobRunningTime = {
+  running: boolean;
+  activityType: string | null;
+  activityLabel: string | null;
+  startedAt: string | null;
+  startedAtLabel: string | null;
+};
+
 export type NativeJobDetail = NativeJobSummary & {
   customerPhone: string | null;
   callHref: string | null;
@@ -38,7 +51,9 @@ export type NativeJobDetail = NativeJobSummary & {
     versionNumber: number | null;
     items: Array<{ description: string; quantity: string; type: string }>;
   };
+  startAction: NativeJobStartAction;
   completeAction: NativeJobCompleteAction;
+  runningTime: NativeJobRunningTime;
 };
 
 export type NativeTodayPayload = {

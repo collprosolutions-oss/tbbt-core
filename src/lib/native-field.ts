@@ -10,21 +10,25 @@
  *
  * Lookup uses the same compound scope as `assignedJobWhere()` in
  * src/lib/field-access.ts: businessId + assignedMembershipId in one
- * query. There is no fetch-then-compare step. The one assigned-worker
- * write lives in `src/lib/native-field-ops.ts`.
+ * query. There is no fetch-then-compare step. Assigned-worker writes
+ * live in `src/lib/native-field-ops.ts`.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   appointmentConfirmationLabel,
+  CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
   effectiveAppointmentConfirmationStatus,
+  startJobRequiresCustomerConfirmation,
+  type AppointmentJobFields,
 } from "@/lib/appointment-confirmation";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { directionsUrl, telHref } from "@/lib/directions";
 import { FIELD_JOB_SELECT, groupFieldJobs, type FieldJob } from "@/lib/field-jobs";
 import { formatAddress, formatDateTime } from "@/lib/format";
-import { evaluateCompleteJob } from "@/lib/job-lifecycle";
+import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import { ownerAccessSummaryLines } from "@/lib/property-access";
 import { startOfDay } from "@/lib/schedule";
+import { TIME_ACTIVITY_LABELS, isTimeActivityType } from "@/lib/time-cards";
 import type { NativeFieldAccess, NativeViewer, NativeWorkspace } from "@/lib/native-session";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -104,6 +108,19 @@ export type NativeJobCompleteAction = {
   reason: string | null;
 };
 
+export type NativeJobStartAction = {
+  available: boolean;
+  reason: string | null;
+};
+
+export type NativeJobRunningTime = {
+  running: boolean;
+  activityType: string | null;
+  activityLabel: string | null;
+  startedAt: string | null;
+  startedAtLabel: string | null;
+};
+
 export type NativeJobDetail = NativeJobSummary & {
   customerPhone: string | null;
   callHref: string | null;
@@ -115,7 +132,9 @@ export type NativeJobDetail = NativeJobSummary & {
     versionNumber: number | null;
     items: Array<{ description: string; quantity: string; type: string }>;
   };
+  startAction: NativeJobStartAction;
   completeAction: NativeJobCompleteAction;
+  runningTime: NativeJobRunningTime;
 };
 
 export function nativeCompleteAction(status: string): NativeJobCompleteAction {
@@ -127,6 +146,64 @@ export function nativeCompleteAction(status: string): NativeJobCompleteAction {
     return { available: false, reason: null };
   }
   return { available: true, reason: null };
+}
+
+export function nativeStartAction(
+  status: string,
+  job: AppointmentJobFields,
+): NativeJobStartAction {
+  const lifecycle = evaluateStartJob(status);
+  if (!lifecycle.ok) {
+    return { available: false, reason: lifecycle.error };
+  }
+  if (lifecycle.nextStatus === null) {
+    return { available: false, reason: null };
+  }
+  if (startJobRequiresCustomerConfirmation(job)) {
+    return { available: false, reason: CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT };
+  }
+  return { available: true, reason: null };
+}
+
+export function idleNativeJobRunningTime(): NativeJobRunningTime {
+  return {
+    running: false,
+    activityType: null,
+    activityLabel: null,
+    startedAt: null,
+    startedAtLabel: null,
+  };
+}
+
+export async function loadNativeJobRunningTime(
+  db: Db,
+  field: Pick<NativeFieldAccess, "businessId" | "membershipId">,
+  jobId: string,
+  timeZone: string,
+): Promise<NativeJobRunningTime> {
+  const running = await db.timeEntry.findFirst({
+    where: {
+      businessId: field.businessId,
+      membershipId: field.membershipId,
+      jobId,
+      activityType: "JOB",
+      status: "RUNNING",
+      endedAt: null,
+    },
+    select: { startedAt: true, activityType: true },
+    orderBy: { startedAt: "desc" },
+  });
+  if (!running) {
+    return idleNativeJobRunningTime();
+  }
+  const activityType = isTimeActivityType(running.activityType) ? running.activityType : "JOB";
+  return {
+    running: true,
+    activityType,
+    activityLabel: TIME_ACTIVITY_LABELS[activityType],
+    startedAt: running.startedAt.toISOString(),
+    startedAtLabel: formatDateTime(running.startedAt, timeZone),
+  };
 }
 
 export type NativeAssignedJobPage = {
@@ -270,7 +347,9 @@ export async function loadNativeAssignedJob(
     confirmationLabel,
     accessLines: ownerAccessSummaryLines(job),
     scope: fieldSafeScope(job),
+    startAction: nativeStartAction(job.status, job),
     completeAction: nativeCompleteAction(job.status),
+    runningTime: await loadNativeJobRunningTime(db, access, job.id, timeZone),
   };
 }
 

@@ -1,6 +1,6 @@
 # TBBT Field (native)
 
-True React Native / Expo shell for the assigned-job **Today** read flow and one explicit **Complete job** action.
+True React Native / Expo shell for the assigned-job **Today** read flow and explicit **Start job** / **Complete job** actions.
 
 This app does **not** embed the TBBT website in a WebView. It talks to the Bearer field API in `src/app/api/native/v1`.
 
@@ -19,4 +19,4 @@ A MEMBER sees only jobs assigned to them. An OWNER/ADMIN using this app also see
 
 ## Limits
 
-Today + job detail, plus Complete job for the assigned worker's own job. No start/photos/time clock, no website wrapper, no bundled credentials, no store submission in this slice.
+Today + job detail, plus Start job and Complete job for the assigned worker's own job. No photos, standalone time clock, website wrapper, bundled credentials, or store submission in this slice.

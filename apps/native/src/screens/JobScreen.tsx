@@ -8,7 +8,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { completeNativeJob, isApiError, loadNativeJob } from "../api";
+import { completeNativeJob, isApiError, loadNativeJob, startNativeJob } from "../api";
 import type { NativeJobDetail } from "../types";
 
 export function JobScreen({
@@ -40,17 +40,45 @@ export function JobScreen({
     };
   }, [jobId, token]);
 
+  async function reloadAssignedJob(fallback: NativeJobDetail | null) {
+    const reloaded = await loadNativeJob(token, jobId);
+    if (isApiError(reloaded)) {
+      if (fallback) {
+        setJob(fallback);
+        return;
+      }
+      setActionError(reloaded.error);
+      return;
+    }
+    setJob(reloaded.job);
+  }
+
+  async function startAssignedJob() {
+    if (pending) return;
+    setPending(true);
+    setActionError(null);
+    const result = await startNativeJob(token, jobId);
+    if (isApiError(result)) {
+      setPending(false);
+      setActionError(result.error);
+      return;
+    }
+    await reloadAssignedJob(result.job);
+    setPending(false);
+  }
+
   async function completeAssignedJob() {
     if (pending) return;
     setPending(true);
     setActionError(null);
     const result = await completeNativeJob(token, jobId);
-    setPending(false);
     if (isApiError(result)) {
+      setPending(false);
       setActionError(result.error);
       return;
     }
-    setJob(result.job);
+    await reloadAssignedJob(result.job);
+    setPending(false);
   }
 
   return (
@@ -66,6 +94,13 @@ export function JobScreen({
           <Text style={styles.meta}>{job.whenLabel ?? "Unscheduled"}</Text>
           <Text style={styles.meta}>{job.confirmationLabel}</Text>
           <Text style={styles.status}>{job.status.replaceAll("_", " ")}</Text>
+          <Text style={styles.body}>
+            {job.runningTime.running
+              ? `Time running · ${job.runningTime.activityLabel ?? "Job"} · Since ${
+                  job.runningTime.startedAtLabel ?? "now"
+                }`
+              : "No running job time"}
+          </Text>
           {job.address ? <Text style={styles.body}>{job.address}</Text> : null}
           {job.customerPhone ? <Text style={styles.body}>{job.customerPhone}</Text> : null}
           <View style={styles.actions}>
@@ -80,6 +115,21 @@ export function JobScreen({
               </Pressable>
             ) : null}
           </View>
+          {job.startAction.available ? (
+            <Pressable
+              disabled={pending}
+              onPress={() => {
+                void startAssignedJob();
+              }}
+              style={[styles.primaryAction, pending ? styles.primaryActionDisabled : null]}
+            >
+              <Text style={styles.primaryActionLabel}>
+                {pending ? "Starting…" : "Start job"}
+              </Text>
+            </Pressable>
+          ) : job.startAction.reason ? (
+            <Text style={styles.notice}>{job.startAction.reason}</Text>
+          ) : null}
           {job.completeAction.available ? (
             <Pressable
               disabled={pending}
@@ -94,7 +144,7 @@ export function JobScreen({
             </Pressable>
           ) : job.status === "COMPLETED" ? (
             <Text style={styles.body}>This job is complete.</Text>
-          ) : job.completeAction.reason ? (
+          ) : job.completeAction.reason && !job.startAction.available && !job.startAction.reason ? (
             <Text style={styles.notice}>{job.completeAction.reason}</Text>
           ) : null}
           {actionError ? <Text style={styles.error}>{actionError}</Text> : null}

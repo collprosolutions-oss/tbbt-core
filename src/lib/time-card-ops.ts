@@ -11,7 +11,7 @@ import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, ForbiddenError, requireBusinessCapability } from "@/lib/authorization";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireOperatingProductCapability } from "@/lib/product-entitlements";
-import { evaluateCompleteJob } from "@/lib/job-lifecycle";
+import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import {
   approvalSnapshot,
   canApproveWeek,
@@ -42,12 +42,17 @@ export class TimeCardError extends Error {
 /** Audit reason written when completion closes a RUNNING JOB TimeEntry. */
 export const JOB_COMPLETION_TIME_CLOSED_REASON = "Closed because the job was completed.";
 
+/** Audit reason written when Start job opens RUNNING JOB TimeEntry. */
+export const JOB_START_TIME_STARTED_REASON = "Started because the job was started.";
+
 const COMPLETED_JOB_CLOCK_IN_ERROR = "This job is completed. Job time cannot be started.";
 const APPROVED_WEEK_COMPLETION_ERROR =
   "This job cannot be completed while approved job time is still running. Reopen the timesheet week first.";
 const MISSING_COMPLETION_ACTOR_ERROR = "That job could not be completed.";
+const MISSING_START_ACTOR_ERROR = "That job could not be started.";
 const COMPLETION_CLOCK_ORDER_ERROR =
   "Job time cannot be closed because the completion time is not after the clock-in start.";
+const AUTOMATIC_CLOCK_TRANSITION_REASON = "Closed automatically when a new activity started.";
 
 type TenantJobRow = {
   id: string;
@@ -296,7 +301,7 @@ export async function clockInTime(
         timeEntryId: closed.id,
         actorMembershipId,
         action: "UPDATE",
-        reason: "Closed automatically when a new activity started.",
+        reason: AUTOMATIC_CLOCK_TRANSITION_REASON,
         previous,
         next: toAuditSnapshot(closed),
       });
@@ -1091,6 +1096,222 @@ export async function completeJobWithRunningTimeSafety(
   } catch (error) {
     if (isTimeCardError(error) || error instanceof ForbiddenError) {
       return { ok: false, error: timeCardErrorMessage(error, MISSING_COMPLETION_ACTOR_ERROR) };
+    }
+    throw error;
+  }
+}
+
+export type StartJobWithRunningTimeInput = {
+  businessId: string;
+  jobId: string;
+  /** Trusted server-derived membership that is writing the clock-in. */
+  actorMembershipId?: string | null;
+  startedAt?: Date;
+};
+
+export type StartedJobTimeEntry = {
+  id: string;
+  membershipId: string;
+  activityType: string;
+  startedAt: Date;
+};
+
+export type StartJobWithRunningTimeSafetyResult =
+  | {
+      ok: true;
+      alreadyStarted: boolean;
+      alreadyRunningTime: boolean;
+      jobStarted: true;
+      customerId: string | null;
+      timeEntry: StartedJobTimeEntry;
+    }
+  | { ok: false; error: string };
+
+async function ensureRunningAssignedJobTimeInTransaction(
+  db: Db,
+  input: {
+    businessId: string;
+    jobId: string;
+    membershipId: string;
+    actorMembershipId: string;
+    startedAt: Date;
+  },
+): Promise<{ created: boolean; entry: StartedJobTimeEntry }> {
+  await loadMembershipInBusiness(db, input.businessId, input.membershipId);
+  await assertWeekEditable(db, input.businessId, input.membershipId, input.startedAt);
+
+  const existing = await db.timeEntry.findFirst({
+    where: {
+      businessId: input.businessId,
+      membershipId: input.membershipId,
+      jobId: input.jobId,
+      activityType: "JOB",
+      status: "RUNNING",
+      endedAt: null,
+    },
+    orderBy: { startedAt: "desc" },
+  });
+  if (existing) {
+    return {
+      created: false,
+      entry: {
+        id: existing.id,
+        membershipId: existing.membershipId,
+        activityType: existing.activityType,
+        startedAt: existing.startedAt,
+      },
+    };
+  }
+
+  const running = await db.timeEntry.findMany({
+    where: {
+      businessId: input.businessId,
+      membershipId: input.membershipId,
+      status: "RUNNING",
+      endedAt: null,
+    },
+  });
+
+  for (const current of running) {
+    const previous = toAuditSnapshot(current);
+    const closed = await db.timeEntry.update({
+      where: { id: current.id },
+      data: { endedAt: input.startedAt, status: "READY" },
+    });
+    await writeAdjustment(db, {
+      businessId: input.businessId,
+      timeEntryId: closed.id,
+      actorMembershipId: input.actorMembershipId,
+      action: "UPDATE",
+      reason: AUTOMATIC_CLOCK_TRANSITION_REASON,
+      previous,
+      next: toAuditSnapshot(closed),
+    });
+  }
+
+  const overlaps = await overlappingEntries(
+    db,
+    input.businessId,
+    input.membershipId,
+    input.startedAt,
+    null,
+  );
+  if (overlaps.length > 0) {
+    throw new TimeCardError("That clock-in overlaps existing time.");
+  }
+
+  const created = await db.timeEntry.create({
+    data: {
+      businessId: input.businessId,
+      membershipId: input.membershipId,
+      jobId: input.jobId,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: input.startedAt,
+      endedAt: null,
+      note: null,
+      source: "CLOCK",
+    },
+  });
+  await writeAdjustment(db, {
+    businessId: input.businessId,
+    timeEntryId: created.id,
+    actorMembershipId: input.actorMembershipId,
+    action: "CREATE",
+    reason: JOB_START_TIME_STARTED_REASON,
+    previous: null,
+    next: toAuditSnapshot(created),
+  });
+  return {
+    created: true,
+    entry: {
+      id: created.id,
+      membershipId: created.membershipId,
+      activityType: created.activityType,
+      startedAt: created.startedAt,
+    },
+  };
+}
+
+/**
+ * Job start writes for an already-open transaction. Callers that must
+ * commit or roll back adjacent records with the Job status change use
+ * this instead of opening a second transaction.
+ *
+ * Returns `{ ok: false }` for lifecycle refusals. TimeCardError from an
+ * approved week or overlapping time still throws so the surrounding
+ * transaction rolls back and Job.status stays unchanged.
+ */
+export async function startJobWithRunningTimeSafetyInTransaction(
+  tx: Db,
+  input: StartJobWithRunningTimeInput,
+): Promise<StartJobWithRunningTimeSafetyResult> {
+  const job = await lockTenantOwnedJob(tx, input.businessId, input.jobId);
+  if (!job) {
+    return { ok: false, error: MISSING_START_ACTOR_ERROR };
+  }
+
+  const lifecycle = evaluateStartJob(job.status);
+  if (!lifecycle.ok) {
+    return { ok: false, error: lifecycle.error };
+  }
+  if (!input.actorMembershipId) {
+    throw new TimeCardError(MISSING_START_ACTOR_ERROR);
+  }
+
+  const time = await ensureRunningAssignedJobTimeInTransaction(tx, {
+    businessId: job.businessId,
+    jobId: job.id,
+    membershipId: input.actorMembershipId,
+    actorMembershipId: input.actorMembershipId,
+    startedAt: input.startedAt ?? new Date(),
+  });
+
+  if (lifecycle.nextStatus) {
+    const updated = await tx.job.updateMany({
+      where: {
+        id: job.id,
+        businessId: input.businessId,
+        status: job.status,
+      },
+      data: { status: lifecycle.nextStatus },
+    });
+    if (updated.count !== 1 && job.status !== "IN_PROGRESS") {
+      const current = await tx.job.findFirst({
+        where: { id: job.id, businessId: input.businessId },
+        select: { status: true },
+      });
+      if (current?.status !== "IN_PROGRESS") {
+        throw new TimeCardError(MISSING_START_ACTOR_ERROR);
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    alreadyStarted: lifecycle.nextStatus == null,
+    alreadyRunningTime: !time.created,
+    jobStarted: true as const,
+    customerId: job.customerId,
+    timeEntry: time.entry,
+  };
+}
+
+/**
+ * Canonical start write: lock the tenant-owned Job, refuse when the
+ * lifecycle does not allow IN_PROGRESS, open matching RUNNING JOB time
+ * if none is already running, then persist IN_PROGRESS in the same
+ * transaction. Field event emission stays in the native/Field callers.
+ */
+export async function startJobWithRunningTimeSafety(
+  db: PrismaClient,
+  input: StartJobWithRunningTimeInput,
+): Promise<StartJobWithRunningTimeSafetyResult> {
+  try {
+    return await db.$transaction((tx) => startJobWithRunningTimeSafetyInTransaction(tx, input));
+  } catch (error) {
+    if (isTimeCardError(error) || error instanceof ForbiddenError) {
+      return { ok: false, error: timeCardErrorMessage(error, MISSING_START_ACTOR_ERROR) };
     }
     throw error;
   }
