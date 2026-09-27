@@ -20,8 +20,8 @@ export function PortalCommunicationsCard({
       <CardHeader>
         <CardTitle>Messages</CardTitle>
         <CardDescription>
-          Messages we have sent for this project. Sent is not the same as
-          delivered.
+          Messages we have sent for this project. Sent is
+          not the same as delivered.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
