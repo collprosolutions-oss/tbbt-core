@@ -159,10 +159,6 @@ export function describeRecommendationRecorded(recommendationKey: string): strin
   return `Recommendation state "${recommendationKey}" was recorded.`;
 }
 
-export function describeRecommendationHistoryStatus(status: string): string {
-  return `Recommendation status recorded as ${status}.`;
-}
-
 export function describeVaultRecorded(title: string): string {
   const label = title.trim() || "Vault record";
   return `Business Vault record "${label}" was recorded.`;

@@ -51,6 +51,7 @@ export const BUSINESS_TIMELINE_EXCLUSIONS = [
   "DELIVERED does not mean the customer read the message.",
   "BusinessActionItem DONE / DISMISSED has no doneAt / dismissedAt — status alone is not an event.",
   "BsosRecommendationState current status + updatedAt is not a status-change event.",
+  "Recommendation status history stored inside JSON is not projected as Business Timeline events in V1 because it does not have a separately bounded queryable event stream.",
   "Generic BSOS / recommendation state is never labeled AI-originated.",
   "BusinessProtectionAuditLog and SettingsAuditLog are audit logs, not timeline sources.",
   "ReceptionistEvent is not included — receptionist queue is a separate surface.",

@@ -28,7 +28,6 @@ import {
   describeProblemReportRecorded,
   describeProblemReportResolved,
   describeProtectionAcknowledged,
-  describeRecommendationHistoryStatus,
   describeRecommendationRecorded,
   describeRecordedCommunication,
   describeRequestRecorded,
@@ -109,22 +108,6 @@ function includesCategory(
 
 function draft(input: BusinessTimelineDraft): BusinessTimelineDraft {
   return input;
-}
-
-function recommendationHistoryEntries(value: unknown): Array<{ at: Date; status: string }> {
-  if (!Array.isArray(value)) return [];
-  const entries: Array<{ at: Date; status: string }> = [];
-  for (const item of value) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const record = item as { at?: unknown; status?: unknown };
-    const atValue = typeof record.at === "string" ? record.at : null;
-    const status = typeof record.status === "string" ? record.status : null;
-    if (!atValue || !status) continue;
-    const at = new Date(atValue);
-    if (Number.isNaN(at.getTime())) continue;
-    entries.push({ at, status });
-  }
-  return entries;
 }
 
 async function loadOwnedCustomers(
@@ -1230,7 +1213,6 @@ async function collectOperationsDrafts(
         select: {
           id: true,
           recommendationKey: true,
-          history: true,
           createdAt: true,
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -1320,24 +1302,6 @@ async function collectOperationsDrafts(
         sourceStatus: null,
       }),
     );
-    for (const entry of recommendationHistoryEntries(row.history)) {
-      if (entry.at < input.since) continue;
-      drafts.push(
-        draft({
-          id: `recommendation:${row.id}:history:${entry.at.toISOString()}:${entry.status}`,
-          occurredAt: entry.at,
-          eventType: "RECOMMENDATION_STATUS_RECORDED",
-          category: "operations",
-          description: describeRecommendationHistoryStatus(entry.status),
-          customerId: null,
-          relatedType: "RECOMMENDATION",
-          relatedId: row.id,
-          relatedJobId: null,
-          relatedLabel: row.recommendationKey,
-          sourceStatus: entry.status,
-        }),
-      );
-    }
   }
   for (const row of vaultRecords) {
     drafts.push(
