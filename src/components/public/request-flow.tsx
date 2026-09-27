@@ -56,6 +56,10 @@ import {
 } from "@/lib/service-address";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
 import type { IntakeAnswerMap, PublicIntakeSchemaProjection } from "@/lib/intake-schema";
+import {
+  overlayPublishedIntakeProjection,
+  type PublishedIntakeOverlay,
+} from "@/lib/intake-snapshot";
 import { TradeIntakeFields } from "@/components/public/trade-intake-fields";
 import {
   CROSS_TRADE_REQUEST_MESSAGE,
@@ -136,6 +140,7 @@ export function MultiServiceRequestFlow({
   photosEnabled,
   serviceArea,
   intakeSchemasByTrade = {},
+  publishedIntakeByTrade = {},
   activeTrades = [],
 }: {
   slug: string;
@@ -146,6 +151,7 @@ export function MultiServiceRequestFlow({
   photosEnabled: boolean;
   serviceArea: BusinessServiceArea;
   intakeSchemasByTrade?: Record<string, PublicIntakeSchemaProjection>;
+  publishedIntakeByTrade?: Record<string, PublishedIntakeOverlay>;
   activeTrades?: Array<{ code: string; label: string }>;
 }) {
   void groups;
@@ -248,8 +254,14 @@ export function MultiServiceRequestFlow({
   const resolvedTrade =
     catalogTrade ||
     (needsCustomTradeChoice ? customTradeCode : activeTrades[0]?.code ?? "");
-  const intakeSchema = resolvedTrade
+  const platformIntakeSchema = resolvedTrade
     ? intakeSchemasByTrade[resolvedTrade] ?? null
+    : null;
+  const publishedIntake = resolvedTrade
+    ? publishedIntakeByTrade[resolvedTrade] ?? null
+    : null;
+  const intakeSchema = platformIntakeSchema
+    ? overlayPublishedIntakeProjection(platformIntakeSchema, publishedIntake, intakeAnswers)
     : null;
   const servicesHref = publicServicesPath(slug, selected);
   const chooseServicesHref = publicServicesPath(slug);

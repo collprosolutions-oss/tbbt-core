@@ -69,6 +69,7 @@
     "test:production-migrate": "node scripts/check-production-migrate.mjs",
     "test:request-intake": "node --experimental-strip-types scripts/check-request-intake.mjs",
     "test:intake-conditionals": "node --experimental-strip-types scripts/check-intake-conditionals.mjs",
+    "test:intake-snapshot-publish": "node --experimental-strip-types scripts/check-intake-snapshot-publish.mjs",
     "test:request-company-notify": "node --experimental-strip-types scripts/check-request-company-notify.mjs",
     "test:work-area-intake": "node --experimental-strip-types scripts/check-work-area-intake.mjs",
     "test:intake-quote-handoff": "node --experimental-strip-types scripts/check-intake-quote-handoff.mjs",

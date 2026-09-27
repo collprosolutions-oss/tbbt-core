@@ -41,8 +41,12 @@ import {
 import {
   currentIntakeSchema,
   freezeIntakeSchema,
-  validateIntakeAnswers,
 } from "@/lib/intake-schema";
+import {
+  freezePublishedIntakeSchema,
+  validatePublishedIntakeAnswers,
+} from "@/lib/intake-snapshot";
+import { loadPublishedIntakeOverlay } from "@/lib/intake-snapshot-ops";
 import { parseWebsiteSnapshot, type PublishedWebsiteSnapshot } from "@/lib/website-engine/snapshot";
 import { snapshotIntakeSchemaForTrade } from "@/lib/website-engine/public";
 import {
@@ -135,6 +139,26 @@ export type PublicIntakeDb = {
     findMany: (args: {
       where: { businessId: string; status: string };
     }) => Promise<Array<{ tradeCode: string; status: string; configOverridesJson?: string }>>;
+    findFirst?: (args: {
+      where: { businessId: string; tradeCode: string };
+      select: { publishedIntakeSnapshotId: true };
+    }) => Promise<{ publishedIntakeSnapshotId: string | null } | null>;
+  };
+  tenantIntakeSnapshot?: {
+    findFirst: (args: {
+      where: { id: string; businessId: string; tradeCode: string };
+      select: {
+        id: true;
+        versionNumber: true;
+        snapshotJson: true;
+        publishedAt: true;
+      };
+    }) => Promise<{
+      id: string;
+      versionNumber: number;
+      snapshotJson: string;
+      publishedAt: Date;
+    } | null>;
   };
   marketingCampaign: {
     findFirst: (args: {
@@ -272,6 +296,8 @@ export type PublicIntakeTx = {
         intakeSchemaVersion?: number | null;
         intakeSchemaJson?: string | null;
         intakeAnswersJson?: string | null;
+        tenantIntakeSnapshotId?: string | null;
+        tenantIntakeSnapshotVersion?: number | null;
         serviceIntent?: string;
         recurrenceCadence?: string;
       };
@@ -615,11 +641,18 @@ async function createPublicServiceRequestInner(
     return resolvedTrade;
   }
   const requestTradeCode = resolvedTrade.tradeCode;
-  const intakeSchema = publishedSnapshot
+  const platformSchema = publishedSnapshot
     ? snapshotIntakeSchemaForTrade(publishedSnapshot, requestTradeCode)
     : currentIntakeSchema(requestTradeCode);
-  const checkedAnswers = validateIntakeAnswers(intakeSchema, input.intakeAnswers ?? {});
+  const publishedIntake = await loadPublishedIntakeOverlay(db, business.id, requestTradeCode);
+  const checkedAnswers = validatePublishedIntakeAnswers(
+    platformSchema,
+    publishedIntake,
+    input.intakeAnswers ?? {},
+  );
   if (!checkedAnswers.ok) return checkedAnswers;
+  const frozen = freezePublishedIntakeSchema(platformSchema, publishedIntake);
+  const intakeSchema = frozen.schema;
   const frequency =
     typeof checkedAnswers.answers.frequency === "string"
       ? checkedAnswers.answers.frequency
@@ -776,6 +809,8 @@ async function createPublicServiceRequestInner(
           intakeSchemaVersion: intakeSchema.version,
           intakeSchemaJson: freezeIntakeSchema(intakeSchema),
           intakeAnswersJson: JSON.stringify(checkedAnswers.answers),
+          tenantIntakeSnapshotId: publishedIntake?.snapshotId ?? null,
+          tenantIntakeSnapshotVersion: publishedIntake?.versionNumber ?? null,
           serviceIntent,
           recurrenceCadence,
         },

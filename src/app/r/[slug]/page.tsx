@@ -27,6 +27,7 @@ import {
   publicIntakeSchemaProjection,
 } from "@/lib/intake-schema";
 import { snapshotIntakeSchemasByTrade } from "@/lib/website-engine/public";
+import { loadPublishedIntakeOverlaysByTrade } from "@/lib/intake-snapshot-ops";
 import { snapshotPageMetadata } from "@/lib/website-engine/seo";
 import { publicOriginForSlug } from "@/lib/website-engine/hosts";
 import { publishedRequestAccent } from "@/lib/website-engine/copy";
@@ -83,13 +84,18 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
   const phone = publicPhone(site.business);
   const textHref = smsHref(phone);
   const nextAvailableLabel = await loadPublicNextAvailableLabel(prisma, site.business.id);
+  const tradeCodes =
+    site.business.activeTrades?.map((trade) => trade.code) ?? [site.business.tradeCode];
   const intakeSchemasByTrade = view.snapshot
     ? snapshotIntakeSchemasByTrade(view.snapshot)
     : Object.fromEntries(
-        (site.business.activeTrades?.map((trade) => trade.code) ?? [site.business.tradeCode]).map(
-          (code) => [code, publicIntakeSchemaProjection(currentIntakeSchema(code))],
-        ),
+        tradeCodes.map((code) => [code, publicIntakeSchemaProjection(currentIntakeSchema(code))]),
       );
+  const publishedIntakeByTrade = await loadPublishedIntakeOverlaysByTrade(
+    prisma,
+    site.business.id,
+    tradeCodes,
+  );
 
   return (
     <PublicSiteShell business={site.business} groups={site.groups}>
@@ -159,6 +165,7 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
                 photosEnabled={isBusinessStorageConfigured()}
                 serviceArea={resolveBusinessServiceArea(site.business)}
                 intakeSchemasByTrade={intakeSchemasByTrade}
+                publishedIntakeByTrade={publishedIntakeByTrade}
                 activeTrades={
                   site.business.activeTrades?.map((trade) => ({
                     code: trade.code,

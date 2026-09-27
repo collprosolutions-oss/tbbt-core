@@ -412,8 +412,9 @@ model Business {
   externalLeadImportRows   ExternalLeadImportRow[]
   regulatoryIntelligenceNotes RegulatoryIntelligenceNote[]
   /// OWNER-authored extra intake questions + allowlisted visibility rules.
-  /// Draft-only in this slice: never applied to public hire forms.
+  /// Drafts stay off public hire forms until published as TenantIntakeSnapshot.
   intakeConditionDrafts    IntakeConditionDraft[]
+  tenantIntakeSnapshots    TenantIntakeSnapshot[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -435,12 +436,17 @@ model BusinessTrade {
   /// activated or when overrides were saved. Historical ServiceRequest
   /// rows store their own snapshot and are never reinterpreted from here.
   intakeSchemaVersion Int @default(1)
+  /// Current published tenant intake snapshot for this trade. Null means
+  /// public hire forms still use the platform schema only. Must only point
+  /// at a TenantIntakeSnapshot owned by THIS business and trade.
+  publishedIntakeSnapshotId String? @unique
   activatedAt   DateTime  @default(now())
   deactivatedAt DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  publishedIntakeSnapshot TenantIntakeSnapshot? @relation("CurrentPublishedIntake", fields: [publishedIntakeSnapshotId], references: [id], onDelete: SetNull)
 
   @@unique([businessId, tradeCode])
   @@index([businessId])
@@ -599,6 +605,7 @@ model Membership {
   reviewedPartnerVendorOpportunities PartnerVendorOpportunity[] @relation("PartnerVendorOpportunityReviewer")
   createdExternalLeadImports      ExternalLeadImport[] @relation("ExternalLeadImportCreator")
   confirmedExternalLeadImports    ExternalLeadImport[] @relation("ExternalLeadImportConfirmer")
+  publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -946,6 +953,11 @@ model ServiceRequest {
   /// Structured answers for the frozen schema. Legacy rows may be null
   /// when answers only live in description / measurements.
   intakeAnswersJson String?
+  /// Tenant intake snapshot frozen at submit, if any. Null on historical
+  /// platform-only requests (Cleaning V1/V2, Handyman V1). Stored as an
+  /// id/version, not a live FK, so later publishes cannot rewrite history.
+  tenantIntakeSnapshotId String?
+  tenantIntakeSnapshotVersion Int?
   /// ONE_TIME | RECURRING. Existing Handyman requests stay ONE_TIME.
   serviceIntent String @default("ONE_TIME")
   /// WEEKLY | BIWEEKLY | MONTHLY | CUSTOM. Empty when one-time.
@@ -975,12 +987,14 @@ model ServiceRequest {
   @@index([businessId, tradeCode])
   @@index([campaignId])
   @@index([matchedServiceAreaId])
+  @@index([businessId, tenantIntakeSnapshotId])
 }
 
 /// OWNER draft of extra intake questions and allowlisted show/hide/require
-/// rules. Never applied to public hire forms in this slice. Historical
-/// ServiceRequest snapshots and archived platform schemas are never
-/// rewritten from these rows. PUBLISHED is rejected by application code.
+/// rules. Drafts are never applied to public hire forms. OWNER review
+/// publishes a copy into TenantIntakeSnapshot. Historical ServiceRequest
+/// snapshots and archived platform schemas are never rewritten from these
+/// rows. Draft.status stays DRAFT.
 model IntakeConditionDraft {
   id                    String   @id @default(cuid())
   businessId            String
@@ -999,6 +1013,39 @@ model IntakeConditionDraft {
 
   @@unique([businessId, tradeCode])
   @@index([businessId])
+}
+
+/// Immutable OWNER-reviewed tenant intake snapshot. Application code
+/// never updates snapshotJson / schemaVersion / versionNumber after insert.
+/// The current pointer is BusinessTrade.publishedIntakeSnapshotId.
+/// New public requests freeze this version. Historical ServiceRequest
+/// rows and archived Cleaning V1/V2 / Handyman V1 stay exactly as recorded.
+model TenantIntakeSnapshot {
+  id                      String   @id @default(cuid())
+  businessId              String
+  /// HANDYMAN | CLEANING | PRESSURE_WASHING. Must match an ACTIVE BusinessTrade.
+  tradeCode               String
+  versionNumber           Int
+  /// Always PUBLISHED. Historical rows stay PUBLISHED after a later version
+  /// becomes current.
+  status                  String   @default("PUBLISHED")
+  schemaVersion           Int      @default(1)
+  snapshotJson            String
+  summary                 String   @default("")
+  publishedAt             DateTime @default(now())
+  publishedByMembershipId String?
+  idempotencyKey          String?
+  createdAt               DateTime @default(now())
+
+  business         Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  publishedBy      Membership?     @relation("TenantIntakeSnapshotAuthor", fields: [publishedByMembershipId], references: [id], onDelete: SetNull)
+  currentForTrades BusinessTrade[] @relation("CurrentPublishedIntake")
+
+  @@unique([businessId, tradeCode, versionNumber])
+  @@unique([businessId, tradeCode, idempotencyKey])
+  @@index([businessId])
+  @@index([businessId, tradeCode])
+  @@index([publishedByMembershipId])
 }
 
 /// One requested task on a public intake ServiceRequest. A customer can
