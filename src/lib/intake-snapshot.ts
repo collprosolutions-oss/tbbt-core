@@ -53,6 +53,8 @@ export type PublishedIntakeOverlay = {
   publishedAt: string | null;
   composedKey: string;
   document: IntakeConditionDocument;
+  /** Frozen platform schema recorded at publish time. Never live current. */
+  baseSchema: IntakeSchema;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -196,6 +198,7 @@ export function publishedOverlayFromRow(row: {
           : null,
     composedKey: payload.composedSchema.key,
     document: payload.document,
+    baseSchema: payload.baseSchema,
   };
 }
 
@@ -231,7 +234,7 @@ export function validatePublishedIntakeAnswers(
   answers: IntakeAnswerMap,
 ) {
   if (!overlay) return validateIntakeAnswers(platform, answers);
-  return validatePreviewIntakeAnswers(platform, overlay.document, answers);
+  return validatePreviewIntakeAnswers(overlay.baseSchema, overlay.document, answers);
 }
 
 export function freezePublishedIntakeSchema(
@@ -239,8 +242,26 @@ export function freezePublishedIntakeSchema(
   overlay: PublishedIntakeOverlay | null,
 ) {
   if (!overlay) return { schema: platform, json: freezeIntakeSchema(platform) };
-  const schema = composePublishedIntakeSchema(platform, overlay.document, overlay.versionNumber);
+  const schema = composePublishedIntakeSchema(
+    overlay.baseSchema,
+    overlay.document,
+    overlay.versionNumber,
+  );
   return { schema, json: freezeIntakeSchema(schema) };
+}
+
+export function readReferencedTenantIntakeSnapshotId(value: unknown): {
+  provided: boolean;
+  snapshotId: string | null;
+} {
+  if (value == null) return { provided: false, snapshotId: null };
+  if (typeof value !== "string") return { provided: true, snapshotId: null };
+  const snapshotId = value.trim();
+  if (!snapshotId) return { provided: false, snapshotId: null };
+  if (snapshotId.length > 128 || !/^[a-zA-Z0-9_-]+$/.test(snapshotId)) {
+    return { provided: true, snapshotId: null };
+  }
+  return { provided: true, snapshotId };
 }
 
 export function summarizeTenantIntakeSnapshot(payload: TenantIntakeSnapshotPayload) {

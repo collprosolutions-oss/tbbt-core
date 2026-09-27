@@ -177,7 +177,7 @@ check(
   "Public intake engine does not import or apply condition drafts",
   !publicIntakeSrc.includes("intake-conditionals") &&
     !publicIntakeSrc.includes("intakeConditionDraft") &&
-    publicIntakeSrc.includes("loadPublishedIntakeOverlay"),
+    publicIntakeSrc.includes("resolveReferencedTenantIntakeSnapshot"),
 );
 check(
   "intake-schema.ts does not depend on the draft system",

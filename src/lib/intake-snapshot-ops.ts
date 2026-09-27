@@ -22,6 +22,7 @@ import {
   buildTenantIntakeSnapshotPayload,
   parseTenantIntakeSnapshotPayload,
   publishedOverlayFromRow,
+  readReferencedTenantIntakeSnapshotId,
   serializeTenantIntakeSnapshotPayload,
   summarizeTenantIntakeSnapshot,
   type PublishedIntakeOverlay,
@@ -237,6 +238,55 @@ export async function loadPublishedIntakeOverlay(
   } catch {
     return null;
   }
+}
+
+type PublicSnapshotDb = {
+  tenantIntakeSnapshot?: {
+    findFirst: (args: {
+      where: { id: string; businessId: string; tradeCode: string };
+      select: {
+        id: true;
+        versionNumber: true;
+        snapshotJson: true;
+        publishedAt: true;
+      };
+    }) => Promise<{
+      id: string;
+      versionNumber: number;
+      snapshotJson: string;
+      publishedAt: Date;
+    } | null>;
+  };
+};
+
+/**
+ * Resolve the exact tenant snapshot a public form displayed.
+ * Browser-supplied businessId is ignored — callers pass the slug-resolved
+ * business and the server-resolved trade. A referenced id that is missing,
+ * cross-tenant, wrong-trade, or invalid fails closed. Omitting an id does
+ * not silently follow a newer current pointer.
+ */
+export async function resolveReferencedTenantIntakeSnapshot(
+  db: PublicSnapshotDb,
+  input: { businessId: string; tradeCode: string; snapshotId?: string | null },
+): Promise<{ ok: true; overlay: PublishedIntakeOverlay | null } | { ok: false }> {
+  const referenced = readReferencedTenantIntakeSnapshotId(input.snapshotId);
+  if (!referenced.provided) return { ok: true, overlay: null };
+  if (!referenced.snapshotId || !isConfiguredTrade(input.tradeCode)) return { ok: false };
+  if (!db.tenantIntakeSnapshot) return { ok: false };
+  const row = await db.tenantIntakeSnapshot.findFirst({
+    where: {
+      id: referenced.snapshotId,
+      businessId: input.businessId,
+      tradeCode: input.tradeCode,
+    },
+    select: { id: true, versionNumber: true, snapshotJson: true, publishedAt: true },
+  });
+  if (!row) return { ok: false };
+  const overlay = publishedOverlayFromRow(row);
+  if (!overlay || overlay.document.tradeCode !== input.tradeCode) return { ok: false };
+  if (overlay.baseSchema.tradeCode !== input.tradeCode) return { ok: false };
+  return { ok: true, overlay };
 }
 
 export async function loadPublishedIntakeOverlaysByTrade(

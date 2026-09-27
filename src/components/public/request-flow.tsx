@@ -55,7 +55,11 @@ import {
   type StructuredServiceAddress,
 } from "@/lib/service-address";
 import type { PublicCatalogGroup, PublicCatalogItem } from "@/lib/public-site";
-import type { IntakeAnswerMap, PublicIntakeSchemaProjection } from "@/lib/intake-schema";
+import {
+  publicIntakeSchemaProjection,
+  type IntakeAnswerMap,
+  type PublicIntakeSchemaProjection,
+} from "@/lib/intake-schema";
 import {
   overlayPublishedIntakeProjection,
   type PublishedIntakeOverlay,
@@ -254,12 +258,14 @@ export function MultiServiceRequestFlow({
   const resolvedTrade =
     catalogTrade ||
     (needsCustomTradeChoice ? customTradeCode : activeTrades[0]?.code ?? "");
-  const platformIntakeSchema = resolvedTrade
-    ? intakeSchemasByTrade[resolvedTrade] ?? null
-    : null;
   const publishedIntake = resolvedTrade
     ? publishedIntakeByTrade[resolvedTrade] ?? null
     : null;
+  const platformIntakeSchema = publishedIntake
+    ? publicIntakeSchemaProjection(publishedIntake.baseSchema)
+    : resolvedTrade
+      ? intakeSchemasByTrade[resolvedTrade] ?? null
+      : null;
   const intakeSchema = platformIntakeSchema
     ? overlayPublishedIntakeProjection(platformIntakeSchema, publishedIntake, intakeAnswers)
     : null;
@@ -433,6 +439,9 @@ export function MultiServiceRequestFlow({
     }
     if (intakeSchema) {
       formData.set("intakeAnswers", JSON.stringify(intakeAnswers));
+    }
+    if (publishedIntake) {
+      formData.set("tenantIntakeSnapshotId", publishedIntake.snapshotId);
     }
     if (resolvedTrade) {
       formData.set("requestedTradeCode", resolvedTrade);

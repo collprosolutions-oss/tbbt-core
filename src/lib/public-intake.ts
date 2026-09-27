@@ -46,7 +46,7 @@ import {
   freezePublishedIntakeSchema,
   validatePublishedIntakeAnswers,
 } from "@/lib/intake-snapshot";
-import { loadPublishedIntakeOverlay } from "@/lib/intake-snapshot-ops";
+import { resolveReferencedTenantIntakeSnapshot } from "@/lib/intake-snapshot-ops";
 import { parseWebsiteSnapshot, type PublishedWebsiteSnapshot } from "@/lib/website-engine/snapshot";
 import { snapshotIntakeSchemaForTrade } from "@/lib/website-engine/public";
 import {
@@ -121,6 +121,13 @@ export type PublicIntakeInput = {
    * trades; compatibility mode validates against ACTIVE BusinessTrade.
    */
   requestedTradeCode?: string | null;
+  /**
+   * Exact TenantIntakeSnapshot displayed when the public form loaded.
+   * Server-resolved against the slug business and request trade. A missing
+   * or invalid reference fails closed. Omitted means the form showed the
+   * platform schema only — never silently follow a newer current pointer.
+   */
+  tenantIntakeSnapshotId?: string | null;
 };
 
 export type PublicIntakeDb = {
@@ -641,10 +648,20 @@ async function createPublicServiceRequestInner(
     return resolvedTrade;
   }
   const requestTradeCode = resolvedTrade.tradeCode;
-  const platformSchema = publishedSnapshot
-    ? snapshotIntakeSchemaForTrade(publishedSnapshot, requestTradeCode)
-    : currentIntakeSchema(requestTradeCode);
-  const publishedIntake = await loadPublishedIntakeOverlay(db, business.id, requestTradeCode);
+  const referencedIntake = await resolveReferencedTenantIntakeSnapshot(db, {
+    businessId: business.id,
+    tradeCode: requestTradeCode,
+    snapshotId: input.tenantIntakeSnapshotId,
+  });
+  if (!referencedIntake.ok) {
+    return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
+  }
+  const publishedIntake = referencedIntake.overlay;
+  const platformSchema = publishedIntake
+    ? publishedIntake.baseSchema
+    : publishedSnapshot
+      ? snapshotIntakeSchemaForTrade(publishedSnapshot, requestTradeCode)
+      : currentIntakeSchema(requestTradeCode);
   const checkedAnswers = validatePublishedIntakeAnswers(
     platformSchema,
     publishedIntake,

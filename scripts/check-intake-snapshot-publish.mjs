@@ -2,8 +2,9 @@
  * OWNER-reviewed publishing of intake-condition drafts as immutable,
  * versioned tenant intake snapshots.
  *
- * Proves validation, tenant isolation, authorization, publishing, and
- * historical replay. New public requests freeze the published version.
+ * Proves validation, tenant isolation, authorization, publishing,
+ * historical replay, and the public-form version race: submit freezes
+ * the exact snapshot the form loaded, even after a newer publish.
  * Cleaning public V1/V2, Handyman V1, and existing ServiceRequest rows
  * keep resolving exactly as recorded.
  *
@@ -53,6 +54,7 @@ const {
 const {
   loadOwnedTenantIntakeSnapshot,
   loadPublishedIntakeOverlay,
+  resolveReferencedTenantIntakeSnapshot,
 } = await import("@/lib/intake-snapshot-ops");
 const { parseTenantIntakeSnapshotPayload, tenantIntakeSchemaKey } = await import(
   "@/lib/intake-snapshot"
@@ -208,8 +210,10 @@ const snapshotOpsSrc = read("src/lib/intake-snapshot-ops.ts");
 const migration = read("prisma/migrations/20260927230000_tenant_intake_snapshot/migration.sql");
 check(
   "Public intake applies published snapshots and never reads draft rows",
-  publicIntakeSrc.includes("loadPublishedIntakeOverlay") &&
+  publicIntakeSrc.includes("resolveReferencedTenantIntakeSnapshot") &&
     publicIntakeSrc.includes("tenantIntakeSnapshotId") &&
+    publicIntakeSrc.includes("publishedIntake.baseSchema") &&
+    !publicIntakeSrc.includes("loadPublishedIntakeOverlay") &&
     !publicIntakeSrc.includes("intakeConditionDraft") &&
     !publicIntakeSrc.includes("from \"@/lib/intake-conditionals\""),
 );
@@ -230,6 +234,13 @@ check(
 check(
   "No eval, Function, or raw SQL in the dedicated files",
   featureFiles.every((file) => !DANGEROUS.test(read(file))),
+);
+check(
+  "Public submit forwards the displayed snapshot id from the loaded form",
+  read("src/app/actions/intake.ts").includes("tenantIntakeSnapshotId") &&
+    read("src/components/public/request-flow.tsx").includes(
+      'formData.set("tenantIntakeSnapshotId"',
+    ),
 );
 check(
   "OWNER-only publish never takes client businessId",
@@ -534,6 +545,7 @@ try {
     catalogItemIds: [catalog.id],
     includeOther: false,
     otherDescription: "",
+    tenantIntakeSnapshotId: first.id,
     intakeAnswers: {
       bedrooms: 3,
       bathrooms: 2,
@@ -563,6 +575,7 @@ try {
     catalogItemIds: [catalog.id],
     includeOther: false,
     otherDescription: "",
+    tenantIntakeSnapshotId: first.id,
     intakeAnswers: {
       bedrooms: 3,
       bathrooms: 2,
@@ -603,6 +616,7 @@ try {
     catalogItemIds: [catalog.id],
     includeOther: false,
     otherDescription: "",
+    tenantIntakeSnapshotId: first.id,
     intakeAnswers: {
       bedrooms: 2,
       bathrooms: 1,
@@ -715,6 +729,7 @@ try {
     catalogItemIds: [catalog.id],
     includeOther: false,
     otherDescription: "",
+    tenantIntakeSnapshotId: second.id,
     intakeAnswers: {
       bedrooms: 3,
       bathrooms: 2,
@@ -734,6 +749,196 @@ try {
       v2Row?.tenantIntakeSnapshotVersion === 2 &&
       v2Row?.intakeSchemaVersion === 2 &&
       parseIntakeAnswers(v2Row?.intakeAnswersJson).oven_notes === "Heavy soil",
+  );
+
+  const v1AfterV2 = await createPublicServiceRequest(prisma, {
+    slug: cleanA.slug,
+    name: "Stale V1 Form",
+    email: `v1after-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "5551116666",
+    address: "7 Main St",
+    streetAddress: "7 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Opened on V1, submitted after V2",
+    catalogItemIds: [catalog.id],
+    includeOther: false,
+    otherDescription: "",
+    tenantIntakeSnapshotId: first.id,
+    intakeAnswers: {
+      bedrooms: 3,
+      bathrooms: 2,
+      homeSize: "1500_2000",
+      frequency: "WEEKLY",
+      addons: ["INSIDE_FRIDGE"],
+      fridge_notes: "Still the V1 fridge question",
+      oven_notes: "Must not be required or frozen from V2",
+    },
+  });
+  const v1AfterV2Row = v1AfterV2.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: v1AfterV2.requestId } })
+    : null;
+  const v1AfterV2Schema = v1AfterV2Row
+    ? JSON.parse(v1AfterV2Row.intakeSchemaJson ?? "{}")
+    : { fields: [] };
+  const v1AfterV2Answers = parseIntakeAnswers(v1AfterV2Row?.intakeAnswersJson);
+  check(
+    "V1 form submitted after V2 is published still validates and freezes V1",
+    v1AfterV2.ok === true &&
+      v1AfterV2Row?.tenantIntakeSnapshotId === first.id &&
+      v1AfterV2Row?.tenantIntakeSnapshotVersion === 1 &&
+      v1AfterV2Row?.intakeSchemaVersion === 1 &&
+      v1AfterV2Schema.version === 1 &&
+      v1AfterV2Schema.fields.some((field) => field.key === "fridge_notes") &&
+      !v1AfterV2Schema.fields.some((field) => field.key === "oven_notes") &&
+      v1AfterV2Answers.fridge_notes === "Still the V1 fridge question" &&
+      v1AfterV2Answers.oven_notes == null &&
+      v1AfterV2Schema.fields
+        .filter((field) => V2_ONLY_FIELDS.includes(field.key))
+        .map((field) => field.key).length ===
+        firstPayload?.baseSchema.fields.filter((field) => V2_ONLY_FIELDS.includes(field.key)).length,
+  );
+
+  const openFormAfterNewerPublish = await createPublicServiceRequest(prisma, {
+    slug: cleanA.slug,
+    name: "No Snapshot On Form",
+    email: `nosnap-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "5551117777",
+    address: "8 Main St",
+    streetAddress: "8 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Form loaded before extras existed",
+    catalogItemIds: [catalog.id],
+    includeOther: false,
+    otherDescription: "",
+    intakeAnswers: {
+      bedrooms: 2,
+      bathrooms: 1,
+      homeSize: "1000_1500",
+      frequency: "ONE_TIME",
+      addons: ["INSIDE_FRIDGE"],
+    },
+  });
+  const openFormRow = openFormAfterNewerPublish.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: openFormAfterNewerPublish.requestId },
+      })
+    : null;
+  check(
+    "Omitting a snapshot id does not silently switch to the newer current publish",
+    openFormAfterNewerPublish.ok === true &&
+      openFormRow?.intakeSchemaKey === "cleaning.public" &&
+      openFormRow?.intakeSchemaVersion === 2 &&
+      openFormRow?.tenantIntakeSnapshotId == null &&
+      !JSON.parse(openFormRow?.intakeSchemaJson ?? "{}").fields.some(
+        (field) => field.key === "fridge_notes" || field.key === "oven_notes",
+      ),
+  );
+
+  const missingSnapshot = await createPublicServiceRequest(prisma, {
+    slug: cleanA.slug,
+    name: "Missing Snapshot",
+    email: `miss-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "5551118888",
+    address: "10 Main St",
+    streetAddress: "10 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Referenced snapshot is gone",
+    catalogItemIds: [catalog.id],
+    includeOther: false,
+    otherDescription: "",
+    tenantIntakeSnapshotId: `missing_${randomUUID().replaceAll("-", "")}`,
+    intakeAnswers: {
+      bedrooms: 2,
+      bathrooms: 1,
+      homeSize: "1000_1500",
+      frequency: "ONE_TIME",
+    },
+  });
+  const crossTenant = await createPublicServiceRequest(prisma, {
+    slug: handyB.slug,
+    name: "Cross Tenant Snapshot",
+    email: `cross-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "5553335555",
+    address: "11 Oak St",
+    streetAddress: "11 Oak St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Other tenant snapshot",
+    catalogItemIds: [handyCatalog.id],
+    includeOther: false,
+    otherDescription: "",
+    tenantIntakeSnapshotId: first.id,
+    intakeAnswers: { frequency: "ONE_TIME" },
+  });
+  const corrupt = await prisma.tenantIntakeSnapshot.create({
+    data: {
+      businessId: cleanA.id,
+      tradeCode: "CLEANING",
+      versionNumber: 99,
+      status: "PUBLISHED",
+      schemaVersion: 1,
+      snapshotJson: "{not-valid",
+    },
+  });
+  const invalidSnapshot = await createPublicServiceRequest(prisma, {
+    slug: cleanA.slug,
+    name: "Invalid Snapshot",
+    email: `inv-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "5551119999",
+    address: "12 Main St",
+    streetAddress: "12 Main St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Corrupt snapshot payload",
+    catalogItemIds: [catalog.id],
+    includeOther: false,
+    otherDescription: "",
+    tenantIntakeSnapshotId: corrupt.id,
+    intakeAnswers: {
+      bedrooms: 2,
+      bathrooms: 1,
+      homeSize: "1000_1500",
+      frequency: "ONE_TIME",
+    },
+  });
+  const resolvedMissing = await resolveReferencedTenantIntakeSnapshot(prisma, {
+    businessId: cleanA.id,
+    tradeCode: "CLEANING",
+    snapshotId: `missing_${randomUUID().replaceAll("-", "")}`,
+  });
+  const resolvedCorrupt = await resolveReferencedTenantIntakeSnapshot(prisma, {
+    businessId: cleanA.id,
+    tradeCode: "CLEANING",
+    snapshotId: corrupt.id,
+  });
+  const resolvedCross = await resolveReferencedTenantIntakeSnapshot(prisma, {
+    businessId: handyB.id,
+    tradeCode: "HANDYMAN",
+    snapshotId: first.id,
+  });
+  check(
+    "Unavailable or invalid referenced snapshots fail closed",
+    missingSnapshot.ok === false &&
+      crossTenant.ok === false &&
+      invalidSnapshot.ok === false &&
+      resolvedMissing.ok === false &&
+      resolvedCorrupt.ok === false &&
+      resolvedCross.ok === false &&
+      (await prisma.serviceRequest.count({
+        where: {
+          businessId: { in: [cleanA.id, handyB.id] },
+          tenantIntakeSnapshotId: { in: [corrupt.id, first.id] },
+          description: { contains: "Other tenant snapshot" },
+        },
+      })) === 0,
   );
 
   const replayLiveV1 = resolveRequestIntakeSchema({
