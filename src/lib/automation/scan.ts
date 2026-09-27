@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
+import { customerFollowUpDueScanWhere } from "@/lib/customer-follow-up-origin";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -104,7 +105,7 @@ export async function scanScheduledBusinessEvents(db: Db, businessId: string) {
   }
 
   const followUps = await db.customerFollowUp.findMany({
-    where: { businessId, status: "OPEN" },
+    where: customerFollowUpDueScanWhere(businessId),
     select: { id: true, customerId: true, jobId: true },
   });
   for (const row of followUps) {

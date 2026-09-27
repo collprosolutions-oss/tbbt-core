@@ -132,7 +132,8 @@
     "test:partner-vendor-directory": "node --experimental-strip-types scripts/check-partner-vendor-directory.mjs",
     "test:external-lead-import": "node --experimental-strip-types scripts/check-external-lead-import.mjs",
     "test:native-field": "node --experimental-strip-types scripts/check-native-field-api.mjs",
-    "test:regulatory-intelligence": "node --experimental-strip-types scripts/check-regulatory-intelligence.mjs"
+    "test:regulatory-intelligence": "node --experimental-strip-types scripts/check-regulatory-intelligence.mjs",
+    "test:retention-follow-up-task": "node --experimental-strip-types scripts/check-retention-follow-up-task.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",

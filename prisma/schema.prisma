@@ -2828,6 +2828,9 @@ model CustomerFollowUp {
   kind                  String
   /// OPEN | SENT | FAILED | CANCELLED
   status                String    @default("OPEN")
+  /// COMMUNICATION | RETENTION_TASK
+  /// RETENTION_TASK is owner-recorded work and is excluded from due scans.
+  origin                String    @default("COMMUNICATION")
   notes                 String    @default("")
   cancelledAt           DateTime?
   sentAt                DateTime?
@@ -2844,6 +2847,7 @@ model CustomerFollowUp {
 
   @@index([businessId])
   @@index([businessId, kind, status])
+  @@index([businessId, origin, status])
   @@index([customerId])
   @@index([jobId])
   @@index([createdByMembershipId])

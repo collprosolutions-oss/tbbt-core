@@ -25,3 +25,18 @@ export function requireRetentionCenterAccess(access: RetentionAccess): void {
 export function retentionCenterRoleAllowed(role: MembershipRole): boolean {
   return canAccessManagementConsole(role);
 }
+
+/**
+ * Explicit follow-up writes are OWNER only. ADMIN may view the center.
+ * Missing role fails closed.
+ */
+export function requireRetentionFollowUpWrite(access: RetentionAccess): void {
+  const role = roleFromAccess(access);
+  if (role !== "OWNER") {
+    throw new ForbiddenError();
+  }
+}
+
+export function retentionFollowUpWriteAllowed(role: MembershipRole): boolean {
+  return role === "OWNER";
+}

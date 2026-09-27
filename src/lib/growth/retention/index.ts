@@ -3,12 +3,23 @@ export {
   RETENTION_ROUTE,
   RETENTION_GROUPS,
   RETENTION_GROUP_TITLES,
+  RETENTION_FOLLOW_UP_FINDING_GROUPS,
   NO_REVIEW_REQUEST_FACT,
   NO_LATER_JOB_FACT,
   RECORDED_FOLLOW_UP_FACT,
   NO_REFERRAL_REQUEST_FACT,
   INCOMPLETE_JOURNEY_FACT,
   RETENTION_READ_ONLY_MESSAGE,
+  RETENTION_OWNER_FOLLOW_UP_MESSAGE,
+  RETENTION_FOLLOW_UP_RECORDED_MESSAGE,
+  RETENTION_FOLLOW_UP_UPDATED_MESSAGE,
+  RETENTION_FOLLOW_UP_OWNER_ONLY_MESSAGE,
+  RETENTION_FOLLOW_UP_FOREIGN_CUSTOMER_MESSAGE,
+  RETENTION_FOLLOW_UP_FOREIGN_JOB_MESSAGE,
+  RETENTION_FOLLOW_UP_JOB_CUSTOMER_MISMATCH_MESSAGE,
+  RETENTION_FOLLOW_UP_JOB_NOT_COMPLETED_MESSAGE,
+  RETENTION_FOLLOW_UP_UNKNOWN_FINDING_MESSAGE,
+  RETENTION_FOLLOW_UP_STALE_FINDING_MESSAGE,
   RETENTION_NO_CADENCE_MESSAGE,
   RETENTION_AGE_PREFIX,
   CUSTOMER_FOLLOW_UP_STATUSES,
@@ -17,6 +28,7 @@ export {
   FORBIDDEN_RETENTION_CLAIM_PATTERNS,
   FORBIDDEN_CADENCE_PATTERNS,
   type RetentionGroup,
+  type RetentionFollowUpFindingGroup,
   type CustomerFollowUpStatus,
 } from "@/lib/growth/retention/constants";
 
@@ -27,7 +39,9 @@ export {
 
 export {
   requireRetentionCenterAccess,
+  requireRetentionFollowUpWrite,
   retentionCenterRoleAllowed,
+  retentionFollowUpWriteAllowed,
   type RetentionAccess,
 } from "@/lib/growth/retention/access";
 
@@ -57,6 +71,22 @@ export {
   retentionTextHasInventedCadence,
   followUpStatusIsDeliveredRewrite,
 } from "@/lib/growth/retention/wording";
+
+export {
+  recordRetentionFollowUpTask,
+  retentionFollowUpErrorMessage,
+  isRetentionFollowUpFindingGroup,
+  RetentionFollowUpError,
+  type RecordRetentionFollowUpTaskInput,
+  type RecordRetentionFollowUpTaskResult,
+  type RecordedRetentionFollowUp,
+} from "@/lib/growth/retention/record-follow-up";
+
+export {
+  CUSTOMER_FOLLOW_UP_ORIGINS,
+  isRetentionFollowUpTask,
+  customerFollowUpDueScanWhere,
+} from "@/lib/customer-follow-up-origin";
 
 export type {
   RetentionCandidate,

@@ -1,17 +1,29 @@
 import Link from "next/link";
+import { ActionForm } from "@/components/action-form";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { recordRetentionFollowUpTaskAction } from "@/app/actions/retention";
 import { formatDate } from "@/lib/format";
 import {
+  RETENTION_FOLLOW_UP_FINDING_GROUPS,
   RETENTION_GROUP_TITLES,
+  RETENTION_OWNER_FOLLOW_UP_MESSAGE,
   type RetentionCandidate,
+  type RetentionFollowUpFindingGroup,
   type RetentionFollowUpRow,
   type RetentionJourneyRow,
   type RetentionWorkspace,
 } from "@/lib/growth/retention";
 
-export function RetentionCenter({ workspace }: { workspace: RetentionWorkspace }) {
+export function RetentionCenter({
+  workspace,
+  canRecordFollowUp = false,
+}: {
+  workspace: RetentionWorkspace;
+  canRecordFollowUp?: boolean;
+}) {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -33,6 +45,7 @@ export function RetentionCenter({ workspace }: { workspace: RetentionWorkspace }
         rows={workspace.groups.noReviewRequest}
         timeZone={workspace.timeZone}
         empty="No completed jobs without a same-business ReviewRequest in this window."
+        canRecordFollowUp={canRecordFollowUp}
       />
       <CandidateGroup
         title={RETENTION_GROUP_TITLES.NO_LATER_JOB}
@@ -40,6 +53,7 @@ export function RetentionCenter({ workspace }: { workspace: RetentionWorkspace }
         rows={workspace.groups.noLaterJob}
         timeZone={workspace.timeZone}
         empty="No past customers with a completed job and no later same-business Job in this window."
+        canRecordFollowUp={canRecordFollowUp}
       />
       <FollowUpGroup rows={workspace.groups.recordedFollowUp} />
       <CandidateGroup
@@ -48,6 +62,7 @@ export function RetentionCenter({ workspace }: { workspace: RetentionWorkspace }
         rows={workspace.groups.noReferralRequest}
         timeZone={workspace.timeZone}
         empty="No completed jobs without a same-business ReferralRequest in this window."
+        canRecordFollowUp={canRecordFollowUp}
       />
       <JourneyGroup rows={workspace.groups.incompleteJourney} />
     </div>
@@ -69,12 +84,14 @@ function CandidateGroup({
   rows,
   timeZone,
   empty,
+  canRecordFollowUp,
 }: {
   title: string;
   description?: string;
   rows: RetentionCandidate[];
   timeZone: string;
   empty: string;
+  canRecordFollowUp: boolean;
 }) {
   return (
     <Card>
@@ -113,10 +130,32 @@ function CandidateGroup({
               </div>
             </dl>
             <LinkRow links={row.links} />
+            {canRecordFollowUp ? <RetentionFollowUpForm row={row} /> : null}
           </article>
         ))}
       </CardContent>
     </Card>
+  );
+}
+
+function isFollowUpFindingGroup(
+  group: RetentionCandidate["group"],
+): group is RetentionFollowUpFindingGroup {
+  return (RETENTION_FOLLOW_UP_FINDING_GROUPS as readonly string[]).includes(group);
+}
+
+function RetentionFollowUpForm({ row }: { row: RetentionCandidate }) {
+  if (!isFollowUpFindingGroup(row.group)) return null;
+  return (
+    <ActionForm action={recordRetentionFollowUpTaskAction} className="mt-3 space-y-2">
+      <input type="hidden" name="customerId" value={row.customerId} />
+      <input type="hidden" name="jobId" value={row.lastCompletedJobId} />
+      <input type="hidden" name="group" value={row.group} />
+      <p className="text-xs text-muted-foreground">{RETENTION_OWNER_FOLLOW_UP_MESSAGE}</p>
+      <Button type="submit" size="sm">
+        Record follow-up task
+      </Button>
+    </ActionForm>
   );
 }
 
