@@ -196,7 +196,10 @@ check(
 check(
   "Complete job reuses assigned-job scope and the canonical time-safe write",
   completeOpsSrc.includes("nativeAssignedJobWhere") &&
-    completeOpsSrc.includes("completeJobWithRunningTimeSafety") &&
+    completeOpsSrc.includes("lockTenantOwnedJob") &&
+    completeOpsSrc.includes("completeJobWithRunningTimeSafetyInTransaction") &&
+    completeOpsSrc.includes("assignedMembershipId") &&
+    completeOpsSrc.includes("afterInitialRead") &&
     completeOpsSrc.includes("requireSaasOperatingEntitlement") &&
     completeRouteSrc.includes("completeNativeAssignedJob") &&
     !completeOpsSrc.includes("completeJobAndSendInvoice"),
@@ -852,6 +855,12 @@ try {
     customerId: customerA.id,
     status: "IN_PROGRESS",
   });
+  const raceJob = await createScopedJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+    status: "IN_PROGRESS",
+  });
 
   const blockedBusiness = await prisma.business.create({
     data: {
@@ -1038,6 +1047,70 @@ try {
       blockedComplete.status === 403 &&
       blockedComplete.error === SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE &&
       blockedAfter?.status === "IN_PROGRESS",
+  );
+
+  const raceStartedAt = new Date(Date.now() - 90_000);
+  await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memberMembership.id,
+      jobId: raceJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: raceStartedAt,
+      source: "CLOCK",
+    },
+  });
+  const raceEventsBefore = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: "JOB_COMPLETED",
+      subjectId: raceJob.id,
+    },
+  });
+  const raceComplete = await completeNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    raceJob.id,
+    {
+      afterInitialRead: async () => {
+        await prisma.job.update({
+          where: { id: raceJob.id },
+          data: { assignedMembershipId: otherMembership.id },
+        });
+      },
+    },
+  );
+  const raceJobAfter = await prisma.job.findFirst({
+    where: { id: raceJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  const raceTimeAfter = await prisma.timeEntry.findFirst({
+    where: { jobId: raceJob.id, businessId: businessA.id },
+    select: { status: true, endedAt: true, membershipId: true },
+  });
+  const raceEventsAfter = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: "JOB_COMPLETED",
+      subjectId: raceJob.id,
+    },
+  });
+  check(
+    "Assignment change after the initial read refuses Complete job",
+    raceComplete.ok === false &&
+      raceComplete.status === 404 &&
+      raceComplete.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Reassigned Job after the initial read leaves Job, running time, and completion event unchanged",
+    raceJobAfter?.status === "IN_PROGRESS" &&
+      raceJobAfter?.assignedMembershipId === otherMembership.id &&
+      raceTimeAfter?.status === "RUNNING" &&
+      raceTimeAfter?.endedAt === null &&
+      raceTimeAfter?.membershipId === memberMembership.id &&
+      raceEventsAfter === raceEventsBefore &&
+      raceEventsAfter === 0,
   );
 
   const rollbackStartedAt = new Date(Date.now() - 60_000);

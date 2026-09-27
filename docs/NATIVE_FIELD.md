@@ -30,7 +30,7 @@ Returned job data is operational only: status, schedule, customer name/phone, ad
 
 MEMBER access stays field-scoped. OWNER/ADMIN using this API also only see and complete jobs assigned to themselves.
 
-The one assigned-worker write is **Complete job**. `POST /api/native/v1/jobs/:jobId/complete` reuses `completeJobWithRunningTimeSafety` — the same status and running-time transaction Field `completeAssignedJob` and Cleaning `VISIT_COMPLETED` already use. It does not send an invoice. Already-completed jobs are a successful no-op. A job that is not `IN_PROGRESS`, not assigned to the caller, or in another business is refused. If approved timesheet time is still running, the transaction rolls back and the Job stays `IN_PROGRESS`.
+The one assigned-worker write is **Complete job**. `POST /api/native/v1/jobs/:jobId/complete` locks the assigned Job, rechecks `businessId`, `assignedMembershipId`, and status on that locked row (same assignment-change protection as Cleaning `VISIT_COMPLETED`), then reuses `completeJobWithRunningTimeSafetyInTransaction`. It does not send an invoice. Already-completed jobs are a successful no-op. A job that is not `IN_PROGRESS`, not assigned to the caller, or in another business is refused. If the assignment changes after the authorize read, the former worker is refused and no Job, time, or completion-event write happens. If approved timesheet time is still running, the transaction rolls back and the Job stays `IN_PROGRESS`.
 
 ## What this slice does not do
 

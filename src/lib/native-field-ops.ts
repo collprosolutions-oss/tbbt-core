@@ -6,13 +6,15 @@
  *
  * Authorization is the same compound clause as Field Home and native
  * reads (`nativeAssignedJobWhere`: businessId + assignedMembershipId).
- * The status and running-time write is the existing canonical helper
- * used by Field `completeAssignedJob` and Cleaning
- * `recordAssignedVisitOutcome` (`completeJobWithRunningTimeSafety`).
- * This is not a second lifecycle and does not send invoices.
+ * After that authorize read, the write locks the Job and rechecks
+ * businessId, assignedMembershipId, and status — the same assignment-
+ * change protection Cleaning `recordAssignedVisitOutcome` uses — then
+ * reuses `completeJobWithRunningTimeSafetyInTransaction`. This is not
+ * a second lifecycle and does not send invoices.
  */
 import type { PrismaClient } from "@prisma/client";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
+import { evaluateCompleteJob } from "@/lib/job-lifecycle";
 import {
   loadNativeAssignedJob,
   nativeAssignedJobWhere,
@@ -24,7 +26,12 @@ import {
   saasOperatingErrorMessage,
   SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE,
 } from "@/lib/saas-billing/entitlement";
-import { completeJobWithRunningTimeSafety } from "@/lib/time-card-ops";
+import {
+  completeJobWithRunningTimeSafetyInTransaction,
+  isTimeCardError,
+  lockTenantOwnedJob,
+  timeCardErrorMessage,
+} from "@/lib/time-card-ops";
 
 export const NATIVE_JOB_NOT_AVAILABLE = "That job is not available.";
 
@@ -36,6 +43,10 @@ export async function completeNativeAssignedJob(
   db: PrismaClient,
   access: NativeFieldAccess,
   jobId: string,
+  options?: {
+    /** Proof hook: runs after the authorize read and before the Job lock. */
+    afterInitialRead?: () => Promise<void>;
+  },
 ): Promise<NativeCompleteAssignedJobResult> {
   const assigned = await db.job.findFirst({
     where: nativeAssignedJobWhere(jobId, access),
@@ -58,22 +69,63 @@ export async function completeNativeAssignedJob(
     };
   }
 
-  const result = await completeJobWithRunningTimeSafety(db, {
-    businessId: assigned.businessId,
-    jobId: assigned.id,
-    actorMembershipId: access.membershipId,
-  });
-  if (!result.ok) {
-    return { ok: false, status: 409, error: result.error };
+  if (options?.afterInitialRead) {
+    await options.afterInitialRead();
   }
 
-  if (!result.alreadyCompleted) {
+  let completed: Extract<
+    Awaited<ReturnType<typeof completeJobWithRunningTimeSafetyInTransaction>>,
+    { ok: true }
+  >;
+  try {
+    const written = await db.$transaction(async (tx) => {
+      const locked = await lockTenantOwnedJob(tx, access.businessId, assigned.id);
+      if (
+        !locked ||
+        locked.businessId !== access.businessId ||
+        locked.assignedMembershipId !== access.membershipId
+      ) {
+        return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
+      }
+
+      const lifecycle = evaluateCompleteJob(locked.status);
+      if (!lifecycle.ok) {
+        return { ok: false as const, status: 409, error: lifecycle.error };
+      }
+
+      const result = await completeJobWithRunningTimeSafetyInTransaction(tx, {
+        businessId: locked.businessId,
+        jobId: locked.id,
+        actorMembershipId: access.membershipId,
+      });
+      if (!result.ok) {
+        return { ok: false as const, status: 409, error: result.error };
+      }
+      return { ok: true as const, result };
+    });
+
+    if (!written.ok) {
+      return written;
+    }
+    completed = written.result;
+  } catch (error) {
+    if (isTimeCardError(error)) {
+      return {
+        ok: false,
+        status: 409,
+        error: timeCardErrorMessage(error, NATIVE_JOB_NOT_AVAILABLE),
+      };
+    }
+    throw error;
+  }
+
+  if (!completed.alreadyCompleted) {
     await emitAndProcessBusinessEvent(db, {
       businessId: assigned.businessId,
       type: "JOB_COMPLETED",
       subjectType: "JOB",
       subjectId: assigned.id,
-      payload: { customerId: result.customerId ?? assigned.customerId },
+      payload: { customerId: completed.customerId ?? assigned.customerId },
       idempotencyKey: `JOB_COMPLETED:${assigned.id}`,
     });
   }
@@ -82,5 +134,5 @@ export async function completeNativeAssignedJob(
   if (!job) {
     return { ok: false, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
   }
-  return { ok: true, alreadyCompleted: result.alreadyCompleted, job };
+  return { ok: true, alreadyCompleted: completed.alreadyCompleted, job };
 }
