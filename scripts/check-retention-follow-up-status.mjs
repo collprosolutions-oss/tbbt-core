@@ -188,6 +188,10 @@ try {
       !/lastEmailStatus|lastSmsStatus/.test(resolveSrc),
   );
   check(
+    "DONE write always clears cancelledAt",
+    /status:\s*"DONE"[\s\S]*cancelledAt:\s*null/.test(resolveSrc),
+  );
+  check(
     "Resolve path does not call send or communication helpers",
     !/createCustomerFollowUp|sendCustomerFollowUp|markCustomerFollowUpSentManually|cancelCustomerFollowUp|attemptJobFollowUpSms|attemptRepeatFollowUpSms|attemptOwnedCustomerEmail|emitAndProcessBusinessEvent|emitBusinessEvent/.test(
       resolveSrc,
@@ -618,6 +622,87 @@ try {
         row.status === "CANCELLED" &&
         row.statusLabel === "CANCELLED",
     ),
+  );
+
+  console.log("\nTEST — Cancelled to Done clears cancelledAt");
+  const reopenCustomer = await prisma.customer.create({
+    data: { businessId: businessA.id, name: "Dana Reopen" },
+  });
+  const reopenJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: reopenCustomer.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+      createdAt: daysAgo(14, now),
+    },
+  });
+  const reopenCreated = await recordRetentionFollowUpTask(prisma, ownerA, {
+    customerId: reopenCustomer.id,
+    jobId: reopenJob.id,
+    group: "NO_REVIEW_REQUEST",
+  });
+  const reopenCancelled = await resolveRetentionFollowUpTaskStatus(prisma, ownerA, {
+    followUpId: reopenCreated.followUp.id,
+    status: "CANCELLED",
+  });
+  const reopenCancelledRow = await prisma.customerFollowUp.findUniqueOrThrow({
+    where: { id: reopenCreated.followUp.id },
+  });
+  check(
+    "Fixture starts CANCELLED with cancelledAt set",
+    reopenCancelled.followUp.status === "CANCELLED" &&
+      reopenCancelledRow.cancelledAt != null &&
+      reopenCancelledRow.sentAt == null,
+  );
+  const commsBeforeReopen = await prisma.customerCommunication.count({
+    where: { businessId: businessA.id },
+  });
+  const dueBeforeReopen = await prisma.businessEvent.count({
+    where: { businessId: businessA.id, type: "CUSTOMER_FOLLOW_UP_DUE" },
+  });
+  const reopenedDone = await resolveRetentionFollowUpTaskStatus(prisma, ownerA, {
+    followUpId: reopenCreated.followUp.id,
+    status: "DONE",
+  });
+  const reopenedRow = await prisma.customerFollowUp.findUniqueOrThrow({
+    where: { id: reopenCreated.followUp.id },
+  });
+  check(
+    "Cancelled to Done writes DONE without retaining cancelledAt or SENT",
+    reopenedDone.outcome === "UPDATED" &&
+      reopenedDone.followUp.id === reopenCreated.followUp.id &&
+      reopenedDone.followUp.status === "DONE" &&
+      reopenedDone.followUp.status !== "SENT" &&
+      reopenedRow.status === "DONE" &&
+      reopenedRow.cancelledAt == null &&
+      reopenedRow.sentAt == null &&
+      reopenedRow.lastEmailStatus == null &&
+      reopenedRow.lastSmsStatus == null,
+  );
+  const reopenReload = await loadRetentionRecoveryCenter(prisma, {
+    businessId: businessA.id,
+    role: "OWNER",
+    customerId: reopenCustomer.id,
+    now,
+  });
+  check(
+    "Reload after Cancelled to Done shows DONE with no cancelled leftover",
+    reopenReload.groups.recordedFollowUp.some(
+      (row) =>
+        row.followUpId === reopenCreated.followUp.id &&
+        row.status === "DONE" &&
+        row.statusLabel === "DONE" &&
+        row.statusLabel !== "SENT",
+    ) && reopenedRow.cancelledAt == null,
+  );
+  check(
+    "Cancelled to Done did not send a message or emit a due event",
+    (await prisma.customerCommunication.count({ where: { businessId: businessA.id } })) ===
+      commsBeforeReopen &&
+      (await prisma.businessEvent.count({
+        where: { businessId: businessA.id, type: "CUSTOMER_FOLLOW_UP_DUE" },
+      })) === dueBeforeReopen,
   );
 
   const communicationAfter = await prisma.customerFollowUp.findUniqueOrThrow({

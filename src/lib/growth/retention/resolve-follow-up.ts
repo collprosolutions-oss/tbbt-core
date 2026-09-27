@@ -2,8 +2,9 @@
  * OWNER-explicit status write for a recorded RETENTION_TASK follow-up.
  *
  * Done is a recorded work status. It is never SENT, never a send, and
- * never emits CUSTOMER_FOLLOW_UP_DUE. COMMUNICATION follow-ups and
- * automation send paths are not used.
+ * never emits CUSTOMER_FOLLOW_UP_DUE. A DONE row cannot retain
+ * cancelledAt. COMMUNICATION follow-ups and automation send paths are
+ * not used.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
@@ -125,7 +126,7 @@ function statusWriteData(status: RetentionFollowUpResolveStatus, cancelledAt: Da
       cancelledAt: cancelledAt ?? new Date(),
     };
   }
-  return { status: "DONE" as const };
+  return { status: "DONE" as const, cancelledAt: null };
 }
 
 export async function resolveRetentionFollowUpTaskStatus(
