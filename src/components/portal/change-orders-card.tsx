@@ -39,7 +39,7 @@ export function ChangeOrdersCard({
   changeOrders: PortalChangeOrder[];
 }) {
   return (
-    <Card>
+    <Card id="change-orders">
       <CardHeader>
         <CardTitle>Change Orders / Additional Work</CardTitle>
         <CardDescription>

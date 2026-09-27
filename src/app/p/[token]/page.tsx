@@ -5,10 +5,17 @@ import { PortalAppointmentActions } from "@/components/portal/portal-appointment
 import { PayInvoiceButton } from "@/components/portal/pay-invoice-button";
 import { PortalMaterialDepositCard } from "@/components/portal/portal-material-deposit-card";
 import { ProjectPortalHeader } from "@/components/portal/project-portal-header";
+import { ProjectHomeSummary } from "@/components/portal/project-home-summary";
+import { PortalAdditionalWorkHistory } from "@/components/portal/portal-additional-work-history";
+import { PortalCommunicationsCard } from "@/components/portal/portal-communications-card";
 import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { RequestAdditionalWorkForm } from "@/components/portal/request-additional-work-form";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
+import {
+  BUSINESS_PUBLIC_CONTACT_SELECT,
+  resolveBusinessPublicContact,
+} from "@/lib/business-contact";
 import {
   Card,
   CardContent,
@@ -56,6 +63,19 @@ import {
   accessFormValuesFromJob,
   ownerAccessSummaryLines,
 } from "@/lib/property-access";
+import {
+  customerFacingInvoiceTruth,
+  loadPortalAdditionalWorkRequests,
+  loadPortalCustomerCommunications,
+  portalAppointmentConfirmationCopy,
+  portalAppointmentWhenLabel,
+  portalApprovedChangeOrderCount,
+  portalJobStatusLabel,
+  portalPendingChangeOrderCount,
+  portalRequestSummary,
+  resolvePortalNextAction,
+} from "@/lib/portal-project-home";
+import { isPublicEstimateDocumentVisible } from "@/lib/estimate-document";
 
 export const metadata: Metadata = {
   title: "Your Project",
@@ -70,7 +90,7 @@ const LINE_ITEM_SELECT = {
 } as const;
 
 /**
- * Customer Project Portal.
+ * Customer Project Portal / Project Home.
  *
  * SECURITY: this page is looked up by `token` alone -- Job.projectToken, an
  * unguessable unique value (see prisma/schema.prisma). It never accepts a
@@ -99,9 +119,11 @@ export default async function CustomerProjectPortalPage({
         where: { projectToken: token },
         select: {
           id: true,
+          customerId: true,
           status: true,
           scheduledAt: true,
           scheduledDurationMinutes: true,
+          arrivalWindowMinutes: true,
           appointmentConfirmationStatus: true,
           appointmentProposalId: true,
           appointmentConfirmedForProposalId: true,
@@ -113,7 +135,16 @@ export default async function CustomerProjectPortalPage({
           propertyAccessPickupLocation: true,
           propertyAccessNote: true,
           appointmentChangeRequestNote: true,
-          business: { select: { id: true, name: true, slug: true, tradeCode: true, timezone: true } },
+          business: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              tradeCode: true,
+              timezone: true,
+              ...BUSINESS_PUBLIC_CONTACT_SELECT,
+            },
+          },
           customer: { select: { name: true } },
           property: {
             select: {
@@ -129,6 +160,23 @@ export default async function CustomerProjectPortalPage({
             select: {
               id: true,
               total: true,
+              status: true,
+              publicToken: true,
+              serviceRequest: {
+                select: {
+                  summary: true,
+                  description: true,
+                  serviceCatalogItem: { select: { name: true } },
+                  items: {
+                    orderBy: { sortOrder: "asc" },
+                    select: {
+                      quantity: true,
+                      customDescription: true,
+                      serviceCatalogItem: { select: { name: true } },
+                    },
+                  },
+                },
+              },
               lineItems: {
                 orderBy: { createdAt: "asc" },
                 select: LINE_ITEM_SELECT,
@@ -301,7 +349,100 @@ export default async function CustomerProjectPortalPage({
     : null;
   const appointmentStatus = effectiveAppointmentConfirmationStatus(job);
   const appointmentConfirmed = isCurrentAppointmentConfirmed(job);
+  const appointmentConfirmation = portalAppointmentConfirmationCopy(job);
   const timeZone = resolveBusinessTimeZone(job.business);
+  const appointmentWhen = portalAppointmentWhenLabel(
+    job.scheduledAt,
+    job.arrivalWindowMinutes,
+    timeZone,
+  );
+  const publicContact = resolveBusinessPublicContact(job.business);
+  const additionalWorkRequests = await loadPortalAdditionalWorkRequests(
+    prisma,
+    token,
+  );
+  const portalMessages = await loadPortalCustomerCommunications(prisma, token);
+  const currentRequest = portalRequestSummary(job.estimate?.serviceRequest ?? null);
+  const estimatePublicToken =
+    job.estimate?.publicToken &&
+    job.estimate.status &&
+    isPublicEstimateDocumentVisible(job.estimate.status)
+      ? job.estimate.publicToken
+      : null;
+  const invoiceTruth = customerFacingInvoiceTruth(invoice?.status);
+  const pendingChangeOrders = portalPendingChangeOrderCount(job.changeOrders);
+  const approvedChangeOrders = portalApprovedChangeOrderCount(job.changeOrders);
+  const nextAction = resolvePortalNextAction({
+    projectToken: token,
+    estimatePublicToken,
+    estimateStatus: job.estimate?.status ?? null,
+    appointmentScheduled: Boolean(job.scheduledAt),
+    appointmentConfirmed,
+    appointmentStatus,
+    pendingChangeOrderCount: pendingChangeOrders,
+    showPayInvoice,
+    showPayDeposit,
+    invoiceStatus: invoice?.status ?? null,
+  });
+  const homeFacts = [
+    {
+      label: "Customer",
+      value: job.customer?.name?.trim() || "Customer",
+    },
+    {
+      label: "Property",
+      value: serviceAddress?.replace(/\n/g, ", ") || "Not recorded",
+    },
+    {
+      label: "Current request",
+      value: currentRequest?.summary || "Recorded with your approved estimate",
+    },
+    {
+      label: "Estimate",
+      value:
+        job.estimate && isPublicEstimateDocumentVisible(job.estimate.status)
+          ? job.estimate.status === "SENT"
+            ? "Ready for your review"
+            : "Approved"
+          : "Approved with this project",
+      href: estimatePublicToken ? `/e/${estimatePublicToken}` : undefined,
+    },
+    {
+      label: "Job status",
+      value: portalJobStatusLabel(job.status),
+    },
+    {
+      label: "Appointment",
+      value: job.scheduledAt
+        ? `${appointmentWhen.label} · ${appointmentConfirmation.label}`
+        : "Not scheduled",
+      href: job.scheduledAt ? "#appointment" : undefined,
+    },
+    {
+      label: "Approved Change Orders",
+      value:
+        approvedChangeOrders === 0
+          ? "None yet"
+          : `${approvedChangeOrders} approved`,
+      href: "#change-orders",
+    },
+    {
+      label: "Invoice",
+      value: invoiceTruth.label,
+      href:
+        invoice?.status === "SENT" || invoice?.status === "PAID"
+          ? `#invoice`
+          : undefined,
+    },
+    {
+      label: "Additional work",
+      value:
+        additionalWorkRequests.length === 0
+          ? "None submitted"
+          : `${additionalWorkRequests.length} request${additionalWorkRequests.length === 1 ? "" : "s"}`,
+      href: "#additional-work",
+    },
+  ];
 
   return (
     <main className="min-h-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -313,9 +454,19 @@ export default async function CustomerProjectPortalPage({
           address={serviceAddress}
         />
 
+        <ProjectHomeSummary
+          facts={homeFacts}
+          nextAction={nextAction}
+          contact={{
+            businessName: job.business.name,
+            phone: publicContact.phone,
+            email: publicContact.email,
+          }}
+        />
+
         <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,45fr)_minmax(0,55fr)]">
           <div className="space-y-6">
-          <Card>
+          <Card id="project-status">
             <CardHeader>
               <CardTitle>Project Status</CardTitle>
               <CardDescription>
@@ -335,13 +486,16 @@ export default async function CustomerProjectPortalPage({
               <CardHeader>
                 <CardTitle>Appointment</CardTitle>
                 <CardDescription>
-                  {formatDateTime(job.scheduledAt, timeZone)}
+                  {appointmentWhen.label}
                   {job.scheduledDurationMinutes
                     ? ` · ${job.scheduledDurationMinutes} minutes`
                     : ""}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
+                <p className="text-muted-foreground">
+                  {formatDateTime(job.scheduledAt, timeZone)}
+                </p>
                 {appointmentStatus === "DIFFERENT_TIME_REQUESTED" ? (
                   <div className="space-y-2">
                     <p className="font-medium">Change requested</p>
@@ -382,6 +536,7 @@ export default async function CustomerProjectPortalPage({
             />
 
             {depositSummary ? (
+              <div id="deposit">
               <PortalMaterialDepositCard
                 token={token}
                 requiredLabel={formatMoney(depositSummary.requiredDeposit)}
@@ -392,6 +547,7 @@ export default async function CustomerProjectPortalPage({
                 remaining={depositSummary.depositStatus === "partial"}
                 checkout={query.checkout}
               />
+              </div>
             ) : null}
 
             {currentApprovedProjectTotal !== null ? (
@@ -415,7 +571,7 @@ export default async function CustomerProjectPortalPage({
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
           <ChangeOrdersCard projectToken={token} changeOrders={job.changeOrders} />
 
-          <Card>
+          <Card id="additional-work">
             <CardHeader>
               <CardTitle>Additional Work</CardTitle>
               <CardDescription>
@@ -425,6 +581,10 @@ export default async function CustomerProjectPortalPage({
               </CardDescription>
             </CardHeader>
             <CardContent>
+              <PortalAdditionalWorkHistory
+                requests={additionalWorkRequests}
+                timeZone={timeZone}
+              />
               <RequestAdditionalWorkForm
                 projectToken={token}
                 groups={await loadPortalAdditionalWorkCatalog(job.business)}
@@ -432,7 +592,7 @@ export default async function CustomerProjectPortalPage({
             </CardContent>
           </Card>
 
-          <Card className="md:col-span-2 xl:col-span-1">
+          <Card id="invoice" className="md:col-span-2 xl:col-span-1">
             <CardHeader>
               <CardTitle>Invoice</CardTitle>
             </CardHeader>
@@ -519,6 +679,8 @@ export default async function CustomerProjectPortalPage({
             </CardContent>
           </Card>
         </div>
+
+        <PortalCommunicationsCard messages={portalMessages} timeZone={timeZone} />
 
         <p className="text-center text-xs text-muted-foreground">
           Questions about this project? Contact {job.business.name}.

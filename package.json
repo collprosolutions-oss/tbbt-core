@@ -62,6 +62,7 @@
     "test:tbbt-marketing": "node --experimental-strip-types scripts/check-tbbt-marketing.mjs",
     "test:service-address": "node --experimental-strip-types scripts/check-service-address.mjs",
     "test:project-portal-layout": "node scripts/check-project-portal-layout.mjs",
+    "test:client-portal-excellence": "node --experimental-strip-types scripts/check-client-portal-excellence.mjs",
     "test:customer-estimate-layout": "node scripts/check-customer-estimate-layout.mjs",
     "test:production-migrate": "node scripts/check-production-migrate.mjs",
     "test:request-intake": "node --experimental-strip-types scripts/check-request-intake.mjs",
