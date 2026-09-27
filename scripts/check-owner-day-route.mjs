@@ -27,10 +27,12 @@ const { ForbiddenError, canAccessManagementConsole } = await import("@/lib/autho
 const { APP_NAV } = await import("@/lib/nav");
 const {
   FORBIDDEN_DAY_ROUTE_CLAIM_PATTERNS,
+  OWNER_DAY_ROUTE_EXCLUDED_HEADING,
   OWNER_DAY_ROUTE_FOREIGN_PROPERTY_LABEL,
   OWNER_DAY_ROUTE_INCOMPLETE_LABEL,
   OWNER_DAY_ROUTE_JOBS_TAKE,
   OWNER_DAY_ROUTE_MAPS_DISCLAIMER,
+  OWNER_DAY_ROUTE_MAPS_LINK_LABEL,
   OWNER_DAY_ROUTE_MAPS_STOP_LIMIT,
   OWNER_DAY_ROUTE_MUTATIONS_ON_LOAD,
   OWNER_DAY_ROUTE_NO_PROPERTY_LABEL,
@@ -41,7 +43,9 @@ const {
   completeStructuredRouteAddress,
   extractOwnerDayRouteMapsAddresses,
   loadOwnerDayRoute,
+  ownerDayRouteExclusionLine,
   ownerDayRouteMapsContainsAddress,
+  ownerDayRouteMapsFollowsAppointmentOrder,
   ownerDayRouteRoleAllowed,
   ownerDayRouteTextHasForbiddenClaim,
   ownerDayRouteViewText,
@@ -199,7 +203,23 @@ try {
     "Read-only and maps limits are stated",
     /does not change any schedule/.test(OWNER_DAY_ROUTE_READ_ONLY_MESSAGE) &&
       /does not rearrange stops for travel time/.test(OWNER_DAY_ROUTE_MAPS_DISCLAIMER) &&
+      /One maps link is available for the owner to open/.test(OWNER_DAY_ROUTE_MAPS_DISCLAIMER) &&
       OWNER_DAY_ROUTE_MAPS_STOP_LIMIT === 11,
+  );
+  check(
+    "Owner opens one maps href; stops do not get their own maps links",
+    displaySource.includes("view.maps.href") &&
+      displaySource.includes("OWNER_DAY_ROUTE_MAPS_LINK_LABEL") &&
+      OWNER_DAY_ROUTE_MAPS_LINK_LABEL === "Open in maps" &&
+      !displaySource.includes("stop.mapsQuery") &&
+      !displaySource.includes("directionsHref") &&
+      !displaySource.includes("/maps/search"),
+  );
+  check(
+    "Maps card lists excluded stops with reasons",
+    displaySource.includes("OWNER_DAY_ROUTE_EXCLUDED_HEADING") &&
+      displaySource.includes("view.excludedStops") &&
+      displaySource.includes("ownerDayRouteExclusionLine"),
   );
   check(
     "Street-only addresses are not treated as complete structured stops",
@@ -320,11 +340,23 @@ try {
   );
   const unitAddresses = extractOwnerDayRouteMapsAddresses(unitView.maps.href);
   check(
-    "Maps handoff contains only complete same-business addresses",
+    "Maps link contains only complete same-business addresses in appointment order",
     unitView.maps.href?.startsWith("https://www.google.com/maps/dir/?") === true &&
-      unitAddresses.some((address) => address.includes("10 Early St")) &&
-      unitAddresses.some((address) => address.includes("200 Late Ave")) &&
+      ownerDayRouteMapsFollowsAppointmentOrder(unitView.maps.href, unitView.stops) &&
+      unitAddresses[0]?.includes("10 Early St") === true &&
+      unitAddresses[1]?.includes("200 Late Ave") === true &&
+      unitAddresses.length === 2 &&
       !unitAddresses.some((address) => address.includes("Foreign Secret") || address.includes("12 Partial")),
+  );
+  check(
+    "Incomplete and foreign-property stops are named in the exclusion list",
+    unitView.excludedHeading === OWNER_DAY_ROUTE_EXCLUDED_HEADING &&
+      unitView.excludedStops.some(
+        (stop) =>
+          stop.jobId === "job-incomplete" &&
+          ownerDayRouteExclusionLine(stop).includes("Incomplete") &&
+          ownerDayRouteViewText(unitView).includes(ownerDayRouteExclusionLine(stop)),
+      ),
   );
   check(
     "Foreign and incomplete address text never enter the route link",
@@ -348,6 +380,41 @@ try {
   check(
     "Single complete stop still produces a working maps destination link",
     buildOwnerDayRouteMapsHref(["10 Early St, Austin, TX 78701"])?.includes("destination=") === true,
+  );
+
+  const truncatedView = buildOwnerDayRouteView(
+    Array.from({ length: 12 }, (_, index) =>
+      jobRecord({
+        id: `job-t${index}`,
+        scheduledAt: new Date(morning.getTime() + index * 60_000),
+        customer: { name: `Trunc ${index + 1}` },
+        property: {
+          id: `prop-t${index}`,
+          businessId: "biz-a",
+          addressLine1: `${100 + index} Trunc St`,
+          city: "Austin",
+          region: "TX",
+          postalCode: "78701",
+        },
+      }),
+    ),
+    { businessId: "biz-a", range, timeZone: NY },
+  );
+  const truncatedAddresses = extractOwnerDayRouteMapsAddresses(truncatedView.maps.href);
+  check(
+    "Maps link keeps the first 11 complete stops in appointment order",
+    truncatedView.maps.truncated === true &&
+      truncatedView.maps.includedStopCount === 11 &&
+      truncatedView.maps.omittedCompleteStopCount === 1 &&
+      ownerDayRouteMapsFollowsAppointmentOrder(truncatedView.maps.href, truncatedView.stops) &&
+      truncatedAddresses[0]?.includes("100 Trunc St") === true &&
+      truncatedAddresses[10]?.includes("110 Trunc St") === true &&
+      truncatedAddresses.length === 11,
+  );
+  check(
+    "Twelfth complete stop stays off the maps link",
+    !ownerDayRouteMapsContainsAddress(truncatedView.maps.href, "111 Trunc St") &&
+      !truncatedAddresses.some((address) => address.includes("111 Trunc St")),
   );
 
   const businessA = await prisma.business.create({
@@ -579,11 +646,25 @@ try {
   );
   const loadedAddresses = extractOwnerDayRouteMapsAddresses(view.maps.href);
   check(
-    "Maps link includes only the two complete local addresses",
+    "Maps link includes only the two complete local addresses in appointment order",
     view.maps.includedStopCount === 2 &&
-      loadedAddresses.some((address) => address.includes("10 Maple St")) &&
-      loadedAddresses.some((address) => address.includes("500 Oak Blvd")) &&
+      ownerDayRouteMapsFollowsAppointmentOrder(view.maps.href, view.stops) &&
+      loadedAddresses[0]?.includes("10 Maple St") === true &&
+      loadedAddresses[1]?.includes("500 Oak Blvd") === true &&
       loadedAddresses.length === 2,
+  );
+  check(
+    "Loaded exclusions name the incomplete and foreign-property stops",
+    view.excludedStops.some(
+      (stop) =>
+        stop.jobId === incompleteJob.id &&
+        ownerDayRouteExclusionLine(stop).includes(OWNER_DAY_ROUTE_INCOMPLETE_LABEL),
+    ) &&
+      view.excludedStops.some(
+        (stop) =>
+          stop.jobId === leakedPropertyJob.id &&
+          ownerDayRouteExclusionLine(stop).includes(OWNER_DAY_ROUTE_FOREIGN_PROPERTY_LABEL),
+      ),
   );
   check(
     "No foreign job or address enters the route link",

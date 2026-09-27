@@ -12,6 +12,8 @@ export {
   OWNER_DAY_ROUTE_NO_STOPS_MESSAGE,
   OWNER_DAY_ROUTE_NO_MAPPABLE_MESSAGE,
   OWNER_DAY_ROUTE_MAPS_TRUNCATED_NOTE,
+  OWNER_DAY_ROUTE_MAPS_LINK_LABEL,
+  OWNER_DAY_ROUTE_EXCLUDED_HEADING,
   FORBIDDEN_DAY_ROUTE_CLAIM_PATTERNS,
 } from "@/lib/owner-day-route/constants";
 
@@ -30,6 +32,9 @@ export {
   buildOwnerDayRouteMapsHref,
   buildOwnerDayRouteMapsHandoff,
   extractOwnerDayRouteMapsAddresses,
+  eligibleOwnerDayRouteMapsQueries,
+  ownerDayRouteExclusionLine,
+  ownerDayRouteMapsFollowsAppointmentOrder,
   ownerDayRouteMapsTruncationNote,
 } from "@/lib/owner-day-route/maps";
 

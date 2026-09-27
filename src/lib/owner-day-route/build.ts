@@ -1,5 +1,6 @@
 import { formatAddress } from "@/lib/format";
 import {
+  OWNER_DAY_ROUTE_EXCLUDED_HEADING,
   OWNER_DAY_ROUTE_FOREIGN_PROPERTY_LABEL,
   OWNER_DAY_ROUTE_INCOMPLETE_LABEL,
   OWNER_DAY_ROUTE_JOBS_TAKE,
@@ -10,7 +11,10 @@ import {
   OWNER_DAY_ROUTE_READ_ONLY_MESSAGE,
 } from "@/lib/owner-day-route/constants";
 import { completeStructuredRouteAddress, sameBusinessJob } from "@/lib/owner-day-route/address";
-import { buildOwnerDayRouteMapsHandoff } from "@/lib/owner-day-route/maps";
+import {
+  buildOwnerDayRouteMapsHandoff,
+  eligibleOwnerDayRouteMapsQueries,
+} from "@/lib/owner-day-route/maps";
 import type {
   OwnerDayRouteExclusionReason,
   OwnerDayRouteJobRecord,
@@ -100,9 +104,7 @@ export function buildOwnerDayRouteView(
 
   const includedStops = stops.filter((stop) => stop.includedInMaps);
   const excludedStops = stops.filter((stop) => !stop.includedInMaps);
-  const maps = buildOwnerDayRouteMapsHandoff(
-    includedStops.map((stop) => stop.mapsQuery).filter((address): address is string => Boolean(address)),
-  );
+  const maps = buildOwnerDayRouteMapsHandoff(eligibleOwnerDayRouteMapsQueries(stops));
 
   return {
     businessId: options.businessId,
@@ -119,6 +121,7 @@ export function buildOwnerDayRouteView(
     readOnlyMessage: OWNER_DAY_ROUTE_READ_ONLY_MESSAGE,
     mapsDisclaimer: OWNER_DAY_ROUTE_MAPS_DISCLAIMER,
     orderNote: OWNER_DAY_ROUTE_ORDER_NOTE,
+    excludedHeading: OWNER_DAY_ROUTE_EXCLUDED_HEADING,
   };
 }
 

@@ -2,7 +2,31 @@ import {
   OWNER_DAY_ROUTE_MAPS_STOP_LIMIT,
   OWNER_DAY_ROUTE_MAPS_TRUNCATED_NOTE,
 } from "@/lib/owner-day-route/constants";
-import type { OwnerDayRouteMapsHandoff } from "@/lib/owner-day-route/types";
+import type { OwnerDayRouteMapsHandoff, OwnerDayRouteStop } from "@/lib/owner-day-route/types";
+
+/** Eligible maps queries stay in recorded appointment order. */
+export function eligibleOwnerDayRouteMapsQueries(stops: readonly OwnerDayRouteStop[]) {
+  return stops
+    .filter((stop) => stop.includedInMaps)
+    .map((stop) => stop.mapsQuery)
+    .filter((address): address is string => Boolean(address));
+}
+
+export function ownerDayRouteExclusionLine(stop: OwnerDayRouteStop) {
+  return `Stop ${stop.sequence} · ${stop.customerName} — ${stop.exclusionLabel ?? "Excluded from the maps route"}`;
+}
+
+export function ownerDayRouteMapsFollowsAppointmentOrder(
+  href: string | null,
+  stops: readonly OwnerDayRouteStop[],
+) {
+  const expected = eligibleOwnerDayRouteMapsQueries(stops).slice(0, OWNER_DAY_ROUTE_MAPS_STOP_LIMIT);
+  const actual = extractOwnerDayRouteMapsAddresses(href);
+  return (
+    expected.length === actual.length &&
+    expected.every((address, index) => actual[index] === address)
+  );
+}
 
 /**
  * External Google Maps directions URL from recorded addresses only.

@@ -68,6 +68,7 @@ export type OwnerDayRouteView = {
   readOnlyMessage: string;
   mapsDisclaimer: string;
   orderNote: string;
+  excludedHeading: string;
 };
 
 export type OwnerDayRouteScheduleSnapshot = {
