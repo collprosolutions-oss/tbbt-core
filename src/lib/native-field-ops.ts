@@ -2,7 +2,8 @@
  * Native assigned-job mutations.
  *
  * Reads stay in `src/lib/native-field.ts`. Assigned-worker writes are
- * Start job and Complete job on the caller's own assigned Job.
+ * Start job, Complete job, and assigned job photos on the caller's own
+ * assigned Job. Photo storage lives in `src/lib/native-field-photos.ts`.
  *
  * Authorization is the same compound clause as Field Home and native
  * reads (`nativeAssignedJobWhere`: businessId + assignedMembershipId).
@@ -68,7 +69,7 @@ export type NativeCompleteAssignedJobResult =
   | { ok: true; alreadyCompleted: boolean; job: NativeJobDetail }
   | { ok: false; status: number; error: string };
 
-function assignmentStillHeld<T extends { businessId: string; assignedMembershipId: string | null }>(
+export function assignmentStillHeld<T extends { businessId: string; assignedMembershipId: string | null }>(
   locked: T | null,
   access: NativeFieldAccess,
 ): locked is T & { assignedMembershipId: string } {

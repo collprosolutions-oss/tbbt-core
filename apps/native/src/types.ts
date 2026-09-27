@@ -40,6 +40,35 @@ export type NativeJobRunningTime = {
   startedAtLabel: string | null;
 };
 
+export type NativeJobPhotoStage = "BEFORE" | "DURING" | "AFTER";
+
+export type NativeJobPhoto = {
+  id: string;
+  stage: NativeJobPhotoStage;
+  caption: string | null;
+  createdAt: string;
+  previewUrl: string | null;
+  previewExpiresInSeconds: number | null;
+};
+
+export type NativeJobPhotoUploadAction = {
+  available: boolean;
+  reason: string | null;
+  remaining: number;
+  limit: number;
+  count: number;
+};
+
+export type NativeJobPhotos = {
+  items: NativeJobPhoto[];
+  count: number;
+  limit: number;
+  remaining: number;
+  truncated: boolean;
+  truncatedNotice: string | null;
+  upload: NativeJobPhotoUploadAction;
+};
+
 export type NativeJobDetail = NativeJobSummary & {
   customerPhone: string | null;
   callHref: string | null;
@@ -54,6 +83,15 @@ export type NativeJobDetail = NativeJobSummary & {
   startAction: NativeJobStartAction;
   completeAction: NativeJobCompleteAction;
   runningTime: NativeJobRunningTime;
+  photos: NativeJobPhotos;
+};
+
+export type NativeJobPhotoAuthorizePayload = {
+  assetId: string;
+  uploadUrl: string;
+  uploadHeaders: Record<string, string>;
+  uploadMethod: "PUT";
+  expiresInSeconds: number;
 };
 
 export type NativeTodayPayload = {

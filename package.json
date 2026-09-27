@@ -134,6 +134,7 @@
     "test:partner-vendor-directory": "node --experimental-strip-types scripts/check-partner-vendor-directory.mjs",
     "test:external-lead-import": "node --experimental-strip-types scripts/check-external-lead-import.mjs",
     "test:native-field": "node --experimental-strip-types scripts/check-native-field-api.mjs",
+    "test:native-field-photos": "node --experimental-strip-types scripts/check-native-field-photos.mjs",
     "test:regulatory-intelligence": "node --experimental-strip-types scripts/check-regulatory-intelligence.mjs",
     "test:retention-follow-up-task": "node --experimental-strip-types scripts/check-retention-follow-up-task.mjs",
     "test:retention-follow-up-status": "node --experimental-strip-types scripts/check-retention-follow-up-status.mjs"

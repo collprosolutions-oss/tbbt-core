@@ -19,4 +19,4 @@ A MEMBER sees only jobs assigned to them. An OWNER/ADMIN using this app also see
 
 ## Limits
 
-Today + job detail, plus Start job and Complete job for the assigned worker's own job. No photos, standalone time clock, website wrapper, bundled credentials, or store submission in this slice.
+Today + job detail, plus Start job, Complete job, and assigned-job photo capture/review for the assigned worker's own job. No standalone time clock, website wrapper, bundled credentials, or store submission in this slice. Photos reuse private R2 job-photo storage and stay assignment-scoped.

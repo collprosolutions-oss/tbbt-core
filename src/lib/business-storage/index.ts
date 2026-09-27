@@ -33,6 +33,7 @@ export {
   abortBusinessUpload,
   abortManagedUpload,
   assertOwnedStoredAsset,
+  discardReadyManagedUpload,
   authorizeBusinessUpload,
   authorizeManagedUpload,
   createPrivateDownloadUrl,
@@ -70,6 +71,7 @@ export type {
 } from "@/lib/business-storage/types";
 export {
   FIELD_JOB_PHOTO_MAX_BYTES,
+  FIELD_JOB_PHOTO_PURPOSE,
   abortAssignedFieldJobPhoto,
   abortManagementJobPhoto,
   authorizeAssignedFieldJobPhoto,
@@ -78,6 +80,7 @@ export {
   finalizeManagementJobPhoto,
   inspectFieldJobPhotoUpload,
   jobPhotoSrc,
+  persistReadyJobPhoto,
   putAssignedFieldJobPhotoFromBytes,
   putManagementJobPhotoFromBytes,
 } from "@/lib/business-storage/field-job-photos";

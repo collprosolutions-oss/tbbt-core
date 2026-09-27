@@ -341,6 +341,67 @@ export async function abortManagedUpload(
   return current;
 }
 
+export type DiscardReadyManagedUploadMatch = {
+  jobId: string;
+  category: StoredAssetCategory;
+  purpose: string;
+  visibility: StoredAssetVisibility;
+};
+
+/**
+ * Releases a READY asset that never became a domain attachment.
+ * Abort stays PENDING-only so a successful finalize cannot be undone
+ * from the abort route. The claim is limited to the matching private
+ * field job photo (business, job, category, purpose, visibility).
+ */
+export async function discardReadyManagedUpload(
+  deps: StorageServiceDeps,
+  businessId: string,
+  assetId: string,
+  match: DiscardReadyManagedUploadMatch,
+) {
+  const existing = await deps.db.storedAsset.findFirst({
+    where: { id: assetId, businessId },
+    include: { storageAccount: true },
+  });
+  if (!existing) throw new StorageAccessError();
+  const now = deps.now?.() ?? new Date();
+  const claimed = await deps.db.$transaction(async (tx) => {
+    const updated = await tx.storedAsset.updateMany({
+      where: {
+        id: existing.id,
+        businessId,
+        status: "READY",
+        jobId: match.jobId,
+        category: match.category,
+        purpose: match.purpose,
+        visibility: match.visibility,
+      },
+      data: { status: "FAILED", deletedAt: now, publicPath: null },
+    });
+    if (updated.count !== 1) return false;
+    if (existing.fileSizeBytes > 0) {
+      await tx.businessStorageAccount.update({
+        where: { id: existing.storageAccountId },
+        data: { storageUsedBytes: { decrement: existing.fileSizeBytes } },
+      });
+    }
+    return true;
+  });
+  if (claimed) {
+    await bestEffortCleanupOwnedObject(deps, businessId, {
+      bucket: existing.storageAccount.bucketName,
+      storageKey: existing.storageKey,
+    });
+  }
+  const current = await deps.db.storedAsset.findFirst({
+    where: { id: assetId, businessId },
+    include: { storageAccount: true },
+  });
+  if (!current) throw new StorageAccessError();
+  return current;
+}
+
 export async function abortBusinessUpload(
   deps: StorageServiceDeps,
   access: BusinessAccess,

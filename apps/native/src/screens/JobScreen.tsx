@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { completeNativeJob, isApiError, loadNativeJob, startNativeJob } from "../api";
 import type { NativeJobDetail } from "../types";
+import { JobPhotosSection } from "./JobPhotosSection";
 
 export function JobScreen({
   token,
@@ -164,6 +165,14 @@ export function JobScreen({
               </Text>
             ))
           )}
+          {job.photos ? (
+            <JobPhotosSection
+              jobId={job.id}
+              onJobUpdated={setJob}
+              photos={job.photos}
+              token={token}
+            />
+          ) : null}
         </View>
       ) : null}
     </ScrollView>
