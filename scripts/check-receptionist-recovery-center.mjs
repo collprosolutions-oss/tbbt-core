@@ -250,6 +250,21 @@ try {
       ),
   );
   check(
+    "Standalone receptionist direction is INBOUND only for INBOUND_CALL and UNKNOWN otherwise",
+    recoverySrc.includes("function standaloneReceptionistDirection") &&
+      recoverySrc.includes('if (kind === "INBOUND_CALL") return "INBOUND"') &&
+      recoverySrc.includes('return "UNKNOWN"') &&
+      recoverySrc.includes("standaloneReceptionistDirection(event.kind)") &&
+      !recoverySrc.includes('direction: "INBOUND"'),
+  );
+  check(
+    "UNKNOWN direction is presented as Direction not recorded, not as a provider status",
+    uiSrc.includes("function directionLabel") &&
+      uiSrc.includes('if (direction === "UNKNOWN") return "Direction not recorded"') &&
+      uiSrc.includes("directionLabel(item.direction)") &&
+      !uiSrc.includes("{item.direction}"),
+  );
+  check(
     "Existing receptionist tab can open the recovery route",
     workspaceSrc.includes('href="/communications/receptionist"'),
   );
@@ -699,6 +714,7 @@ try {
     "Standalone inbound receptionist event stays in the recorded queue as unknown when unmatched",
     inboundItem?.source === "RECEPTIONIST_EVENT" &&
       inboundItem.customerKnown === false &&
+      inboundItem.direction === "INBOUND" &&
       inboundItem.status === "SKIPPED_NOT_CONNECTED" &&
       inboundItem.logLeadHref === OWNER_LOG_LEAD_HREF,
   );
@@ -896,6 +912,118 @@ try {
     inboundCenter.queue.length === RECEPTIONIST_RECOVERY_QUEUE_LIMIT &&
       inboundCenter.queueLimit === RECEPTIONIST_RECOVERY_QUEUE_LIMIT &&
       inboundCenter.recordedInboundEventCount > RECEPTIONIST_RECOVERY_SCAN_LIMIT,
+  );
+
+  console.log("\nDB — Standalone receptionist direction is recorded, not inferred");
+  const directionTenant = await seedBusiness("Direction Truth");
+  const standaloneInbound = await prisma.receptionistEvent.create({
+    data: {
+      businessId: directionTenant.business.id,
+      kind: "INBOUND_CALL",
+      status: "SKIPPED_NOT_CONNECTED",
+      provider: "none",
+      providerConnected: false,
+      payload: { summary: "Standalone inbound call.", direction: "OUTBOUND" },
+      idempotencyKey: `dir-inbound-${randomUUID()}`,
+    },
+  });
+  const standaloneEscalation = await prisma.receptionistEvent.create({
+    data: {
+      businessId: directionTenant.business.id,
+      kind: "ESCALATION",
+      status: "ESCALATED",
+      provider: "none",
+      providerConnected: false,
+      payload: { summary: "Standalone escalation.", direction: "INBOUND" },
+      idempotencyKey: `dir-standalone-esc-${randomUUID()}`,
+    },
+  });
+  const outboundPhone = await prisma.phoneInteraction.create({
+    data: {
+      businessId: directionTenant.business.id,
+      kind: "MANUAL_PHONE",
+      status: "LOGGED",
+      direction: "OUTBOUND",
+      summary: "Recorded outbound phone with linked escalation.",
+      idempotencyKey: `dir-outbound-phone-${randomUUID()}`,
+    },
+  });
+  await prisma.receptionistEvent.create({
+    data: {
+      businessId: directionTenant.business.id,
+      phoneInteractionId: outboundPhone.id,
+      kind: "ESCALATION",
+      status: "ESCALATED",
+      provider: "none",
+      providerConnected: false,
+      payload: { summary: "Linked escalation on outbound phone.", direction: "INBOUND" },
+      idempotencyKey: `dir-outbound-esc-${randomUUID()}`,
+    },
+  });
+  const inboundPhone = await prisma.phoneInteraction.create({
+    data: {
+      businessId: directionTenant.business.id,
+      kind: "MANUAL_PHONE",
+      status: "LOGGED",
+      direction: "INBOUND",
+      summary: "Recorded inbound phone with linked escalation.",
+      idempotencyKey: `dir-inbound-phone-${randomUUID()}`,
+    },
+  });
+  await prisma.receptionistEvent.create({
+    data: {
+      businessId: directionTenant.business.id,
+      phoneInteractionId: inboundPhone.id,
+      kind: "ESCALATION",
+      status: "ESCALATED",
+      provider: "none",
+      providerConnected: false,
+      payload: { summary: "Linked escalation on inbound phone.", direction: "OUTBOUND" },
+      idempotencyKey: `dir-inbound-esc-${randomUUID()}`,
+    },
+  });
+  const directionCenter = await loadReceptionistRecoveryCenter(prisma, directionTenant.access);
+  const standaloneInboundItem = directionCenter.queue.find((row) => row.id === standaloneInbound.id);
+  const standaloneEscalationItem = directionCenter.queue.find((row) => row.id === standaloneEscalation.id);
+  const outboundLinkedItem = directionCenter.queue.find((row) => row.id === outboundPhone.id);
+  const inboundLinkedItem = directionCenter.queue.find((row) => row.id === inboundPhone.id);
+  check(
+    "Standalone INBOUND_CALL renders direction INBOUND",
+    standaloneInboundItem?.source === "RECEPTIONIST_EVENT" &&
+      standaloneInboundItem.kind === "INBOUND_CALL" &&
+      standaloneInboundItem.direction === "INBOUND",
+  );
+  check(
+    "Standalone ESCALATION without a phone does not render INBOUND",
+    standaloneEscalationItem?.source === "RECEPTIONIST_EVENT" &&
+      standaloneEscalationItem.kind === "ESCALATION" &&
+      standaloneEscalationItem.direction !== "INBOUND",
+  );
+  check(
+    "Standalone ESCALATION says direction not recorded / UNKNOWN",
+    standaloneEscalationItem?.direction === "UNKNOWN" &&
+      uiSrc.includes("Direction not recorded"),
+  );
+  check(
+    "Linked ESCALATION on an OUTBOUND PhoneInteraction preserves OUTBOUND",
+    outboundLinkedItem?.source === "PHONE_INTERACTION" &&
+      outboundLinkedItem.receptionistKind === "ESCALATION" &&
+      outboundLinkedItem.direction === "OUTBOUND",
+  );
+  check(
+    "Linked ESCALATION on an INBOUND PhoneInteraction preserves INBOUND",
+    inboundLinkedItem?.source === "PHONE_INTERACTION" &&
+      inboundLinkedItem.receptionistKind === "ESCALATION" &&
+      inboundLinkedItem.direction === "INBOUND",
+  );
+  check(
+    "Direction is not inferred from receptionist payload",
+    standaloneInboundItem?.direction === "INBOUND" &&
+      standaloneEscalationItem?.direction === "UNKNOWN" &&
+      outboundLinkedItem?.direction === "OUTBOUND" &&
+      inboundLinkedItem?.direction === "INBOUND" &&
+      !recoverySrc.includes("payload.direction") &&
+      !recoverySrc.includes('payload["direction"]'),
   );
 } catch (error) {
   console.error(error);

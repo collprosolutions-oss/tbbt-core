@@ -174,6 +174,11 @@ function receptionistSummary(payload: Prisma.JsonValue | null) {
   return typeof summary === "string" && summary.trim() ? summary.trim() : null;
 }
 
+function standaloneReceptionistDirection(kind: string) {
+  if (kind === "INBOUND_CALL") return "INBOUND";
+  return "UNKNOWN";
+}
+
 function communicationOccurredAt(row: { attemptedAt: Date | null; createdAt: Date }) {
   return row.attemptedAt ?? row.createdAt;
 }
@@ -448,7 +453,7 @@ export async function loadReceptionistRecoveryCenter(
         id: event.id,
         source: "RECEPTIONIST_EVENT",
         occurredAt: event.createdAt.toISOString(),
-        direction: "INBOUND",
+        direction: standaloneReceptionistDirection(event.kind),
         kind: event.kind,
         status: event.status,
         callbackNeeded: false,

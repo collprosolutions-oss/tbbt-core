@@ -9,6 +9,11 @@ function kindLabel(kind: string) {
   return kind.replaceAll("_", " ");
 }
 
+function directionLabel(direction: string) {
+  if (direction === "UNKNOWN") return "Direction not recorded";
+  return direction;
+}
+
 export function ReceptionistRecoveryCenter({
   source,
 }: {
@@ -73,7 +78,7 @@ export function ReceptionistRecoveryCenter({
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusBadge status={item.status} />
                   <span className="font-medium">{kindLabel(item.kind)}</span>
-                  <span className="text-muted-foreground">{item.direction}</span>
+                  <span className="text-muted-foreground">{directionLabel(item.direction)}</span>
                   {item.callbackNeeded ? <StatusBadge status="CALLBACK_NEEDED" /> : null}
                 </div>
                 <p>
