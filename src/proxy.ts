@@ -5,6 +5,7 @@ import { navigationRedirectUrl } from "@/lib/navigation-origin";
 import { isCustomerMessagingWebhookPath } from "@/lib/customer-messaging/config";
 import { collproRenoLegacyHireRedirectPath } from "@/lib/public-site";
 import { isPublicWebsitePath } from "@/lib/public-website-paths";
+import { isNativeFieldApiPath } from "@/lib/native-field-api-path";
 import { isStripeWebhookPath } from "@/lib/stripe-webhook-path";
 import { tbbtApexWwwRedirectLocation } from "@/lib/tbbt-marketing-host";
 import {
@@ -61,6 +62,12 @@ export function proxy(request: NextRequest) {
 
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
 
+  // Native field API uses Authorization: Bearer, not the web session cookie.
+  // The route still returns 401 without a valid hashed Session token.
+  if (isNativeFieldApiPath(pathname)) {
+    return NextResponse.next();
+  }
+
   // `/` is always the public website. A signed-in owner still reaches
   // /dashboard by going there directly; the session must not hijack Home.
   if (isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname) || isCustomerMessagingWebhookPath(pathname)) {
@@ -96,6 +103,6 @@ export const config = {
     // "brand" is public/brand -- static TBBT/business logo assets (see
     // src/lib/business-branding.ts) that must load unauthenticated, same
     // as the other static files already excluded here.
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/|api/stripe/webhook|api/customer-messaging/webhook).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/|api/stripe/webhook|api/customer-messaging/webhook|api/native/).*)",
   ],
 };

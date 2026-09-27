@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "TBBT Field",
+    "slug": "tbbt-field",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "tbbt-field",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.tbbt.field"
+    },
+    "android": {
+      "package": "com.tbbt.field"
+    }
+  }
+}
