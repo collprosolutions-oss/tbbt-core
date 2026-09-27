@@ -438,9 +438,12 @@ try {
       createdItems.length === 1 &&
       first.executionResult.message.includes("did not execute the work"),
   );
+  const succeededConfirm = [first, concurrent].find((row) => row.executionResult.status === "SUCCEEDED");
+  const replayedConfirm = [first, concurrent].find((row) => row.executionResult.status === "REPLAYED");
   check(
     "Immediate canonical confirm result is the returned execution message",
-    first.executionResult.message === "Action added to the owner plan. TBBT did not execute the work.",
+    succeededConfirm?.executionResult.message === "Action added to the owner plan. TBBT did not execute the work." &&
+      replayedConfirm?.executionResult.message === "Action already on the owner plan. TBBT did not execute the work.",
   );
   check(
     "Duplicate/concurrent execution preserves V1 idempotency",
