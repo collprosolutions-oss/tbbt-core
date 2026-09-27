@@ -138,12 +138,24 @@ export function ImportLeadsPreview({
           <p className="text-sm text-muted-foreground">None.</p>
         ) : (
           rejectedRows.map((row) => (
-            <ImportLeadRowReview
+            <article
               key={row.id}
-              importId={importId}
-              row={row}
-              confirmed={confirmed}
-            />
+              className="space-y-1 rounded-lg border border-border/70 p-4 text-sm"
+            >
+              <h3 className="font-semibold">
+                Row {row.rowNumber} · {previewStatusLabel(row.previewStatus)}
+              </h3>
+              <p className="text-muted-foreground">
+                {row.invalidReason || previewStatusLabel(row.previewStatus)}
+              </p>
+              <p>
+                {[row.name, row.email, row.phone, row.summary].filter(Boolean).join(" · ") ||
+                  "No captured fields."}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Rejection is final for this preview. This row will not create a lead.
+              </p>
+            </article>
           ))
         )}
       </section>

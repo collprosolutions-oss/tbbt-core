@@ -41,7 +41,10 @@ export const IMPORT_ALREADY_CONFIRMED_MESSAGE =
   "This preview was already confirmed.";
 
 export const IMPORT_ROW_NOT_EDITABLE_MESSAGE =
-  "Only invalid or rejected preview rows can be corrected.";
+  "Only invalid preview rows can be corrected.";
+
+export const IMPORT_ROW_REJECTED_TERMINAL_MESSAGE =
+  "Rejected rows cannot be corrected.";
 
 export const IMPORT_ROW_NOT_REJECTABLE_MESSAGE =
   "Only invalid preview rows can be rejected.";

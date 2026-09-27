@@ -4273,8 +4273,9 @@ model ExternalLeadImport {
 }
 
 /// One sanitized CSV row captured at preview time. Invalid rows stay staged
-/// so the OWNER can correct or reject them before confirm. Possible
-/// duplicate and rejected rows are never auto-created.
+/// so the OWNER can correct or reject them before confirm. REJECTED is
+/// terminal for this slice. Possible duplicate and rejected rows are never
+/// auto-created.
 model ExternalLeadImportRow {
   id                    String   @id @default(cuid())
   businessId            String

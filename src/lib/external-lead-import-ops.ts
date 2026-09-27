@@ -25,6 +25,7 @@ import {
   IMPORT_RESOLVE_INVALID_MESSAGE,
   IMPORT_ROW_NOT_EDITABLE_MESSAGE,
   IMPORT_ROW_NOT_REJECTABLE_MESSAGE,
+  IMPORT_ROW_REJECTED_TERMINAL_MESSAGE,
   importRowSubmissionId,
   MAX_EXTERNAL_LEAD_IMPORT_BYTES,
   OWNER_ONLY_IMPORT_MESSAGE,
@@ -404,7 +405,10 @@ export async function correctExternalLeadImportRow(
   if (row.createdRequestId) {
     throw new ExternalLeadImportError(IMPORT_ROW_NOT_EDITABLE_MESSAGE);
   }
-  if (row.previewStatus !== "INVALID" && row.previewStatus !== "REJECTED") {
+  if (row.previewStatus === "REJECTED") {
+    throw new ExternalLeadImportError(IMPORT_ROW_REJECTED_TERMINAL_MESSAGE);
+  }
+  if (row.previewStatus !== "INVALID") {
     throw new ExternalLeadImportError(IMPORT_ROW_NOT_EDITABLE_MESSAGE);
   }
 

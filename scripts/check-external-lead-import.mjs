@@ -38,6 +38,7 @@ const {
   IMPORT_RESOLVE_INVALID_MESSAGE,
   IMPORT_ROW_NOT_EDITABLE_MESSAGE,
   IMPORT_ROW_NOT_REJECTABLE_MESSAGE,
+  IMPORT_ROW_REJECTED_TERMINAL_MESSAGE,
   importRowFingerprint,
   importRowSubmissionId,
   MAX_EXTERNAL_LEAD_IMPORT_BYTES,
@@ -207,7 +208,17 @@ try {
       readSrc("src/app/actions/external-lead-import.ts").includes("rejectExternalLeadImportRow") &&
       uiSource.includes("Save correction") &&
       uiSource.includes("Reject this row") &&
-      IMPORT_RESOLVE_INVALID_MESSAGE.includes("Correct or reject"),
+      IMPORT_RESOLVE_INVALID_MESSAGE.includes("Correct or reject") &&
+      IMPORT_ROW_REJECTED_TERMINAL_MESSAGE.includes("cannot be corrected") &&
+      readSrc("src/components/requests/import-leads-preview.tsx").includes(
+        "Rejection is final",
+      ) &&
+      !readSrc("src/components/requests/import-leads-preview.tsx").includes(
+        "correctExternalLeadImportRowAction",
+      ) &&
+      readSrc("src/lib/external-lead-import-ops.ts").includes(
+        "IMPORT_ROW_REJECTED_TERMINAL_MESSAGE",
+      ),
   );
   check(
     "Correction and rejection do not create leads or send messages",
@@ -666,6 +677,21 @@ try {
       rejectedReview.preview.rows.find((row) => row.id === missingSummary.id)?.invalidReason ===
         ROW_REJECTED_BY_OWNER_MESSAGE,
   );
+  try {
+    await correctExternalLeadImportRow(prisma, ownerA, {
+      importId: reviewPreview.id,
+      rowId: missingSummary.id,
+      name: "Unreject",
+      email: "no-summary@example.com",
+      summary: "Should stay rejected",
+    });
+    check("Direct correction of a rejected row is refused", false);
+  } catch (error) {
+    check(
+      "Direct correction of a rejected row is refused",
+      error.message === IMPORT_ROW_REJECTED_TERMINAL_MESSAGE,
+    );
+  }
 
   try {
     await rejectExternalLeadImportRow(prisma, ownerA, {
@@ -742,6 +768,9 @@ try {
     filename: "review-leads.csv",
     bytes: reviewCsv,
   });
+  const rejectedAfterRetry = reviewAgain.rows.find(
+    (row) => row.rowNumber === missingSummary.rowNumber,
+  );
   check("Retry of the review CSV reuses the same preview id", reviewAgain.id === reviewPreview.id);
   check(
     "Retry of the review CSV keeps the corrected and rejected rows",
@@ -749,9 +778,23 @@ try {
       "pat-fixed@example.com" &&
       reviewAgain.rows.find((row) => row.rowNumber === missingName.rowNumber)?.previewStatus ===
         "VALID" &&
-      reviewAgain.rows.find((row) => row.rowNumber === missingSummary.rowNumber)?.previewStatus ===
-        "REJECTED",
+      rejectedAfterRetry?.previewStatus === "REJECTED",
   );
+  try {
+    await correctExternalLeadImportRow(prisma, ownerA, {
+      importId: reviewPreview.id,
+      rowId: rejectedAfterRetry.id,
+      name: "Unreject after retry",
+      email: "no-summary@example.com",
+      summary: "Should stay rejected",
+    });
+    check("CSV retry does not reopen a rejected row for correction", false);
+  } catch (error) {
+    check(
+      "CSV retry does not reopen a rejected row for correction",
+      error.message === IMPORT_ROW_REJECTED_TERMINAL_MESSAGE,
+    );
+  }
 
   const confirmedReview = await confirmExternalLeadImport(prisma, ownerA, {
     importId: reviewPreview.id,
@@ -761,20 +804,23 @@ try {
     include: { customer: true },
   });
   const createdFixed = reviewRequests.find((row) => row.customer?.email === "pat-fixed@example.com");
+  const rejectedAfterConfirm = confirmedReview.preview.rows.find(
+    (row) => row.rowNumber === missingSummary.rowNumber,
+  );
   check(
     "Confirm after review creates only ready rows",
     confirmedReview.createdRequestIds.length === 2 &&
       confirmedReview.preview.rows
         .filter((row) => row.previewStatus === "VALID")
-        .every((row) => row.createdRequestId) &&
-      !confirmedReview.preview.rows.find((row) => row.previewStatus === "REJECTED")
-        ?.createdRequestId,
+        .every((row) => row.createdRequestId),
+  );
+  check(
+    "Rejected row stays rejected and creates no lead after CSV retry and confirmation",
+    rejectedAfterConfirm?.previewStatus === "REJECTED" &&
+      !rejectedAfterConfirm.createdRequestId &&
+      !reviewRequests.some((row) => row.customer?.email === "no-summary@example.com"),
   );
   check("Corrected row keeps the owner-recorded source", createdFixed?.leadSource === "GOOGLE");
-  check(
-    "Rejected review row never becomes a customer or request",
-    !reviewRequests.some((row) => row.customer?.email === "no-summary@example.com"),
-  );
 
   const confirmedReviewAgain = await confirmExternalLeadImport(prisma, ownerA, {
     importId: reviewPreview.id,

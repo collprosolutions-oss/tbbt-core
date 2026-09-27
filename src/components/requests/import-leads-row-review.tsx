@@ -99,6 +99,10 @@ export function ImportLeadRowReview({
         <p className="text-sm text-muted-foreground">
           This preview was already confirmed. Staged corrections are closed.
         </p>
+      ) : row.previewStatus !== "INVALID" ? (
+        <p className="text-sm text-muted-foreground">
+          Rejection is final for this preview. This row will not create a lead.
+        </p>
       ) : (
         <>
           <form action={correctAction} className="space-y-3">
