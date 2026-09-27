@@ -661,6 +661,18 @@ try {
       assignedMembershipId: blockedMem.id,
     },
   });
+  const endedTrial = new Date(Date.now() - 60_000);
+  await prisma.businessSaasSubscription.create({
+    data: {
+      businessId: blockedBusiness.id,
+      status: "canceled",
+      planCode: "FOUNDER",
+      legacyExempt: false,
+      trialStartedAt: new Date(endedTrial.getTime() - 14 * 24 * 60 * 60 * 1000),
+      trialEndsAt: endedTrial,
+      founderEligibilityEndedAt: endedTrial,
+    },
+  });
   const blockedSignIn = await signInNativeField(prisma, {
     email: blockedUser.email,
     password,
@@ -689,8 +701,17 @@ try {
     }
   }
 
-  const bAssets = await prisma.storedAsset.findMany({ where: { businessId: businessB.id } });
-  check("Business B stays empty when A uploads a native job photo", bAssets.length === 0);
+  const bPhotos = await prisma.jobPhoto.count({ where: { businessId: businessB.id } });
+  const bReady = await prisma.storedAsset.count({
+    where: { businessId: businessB.id, status: "READY" },
+  });
+  const bOnAlphaJob = await prisma.storedAsset.count({
+    where: { businessId: businessB.id, jobId: assignedJob.id },
+  });
+  check(
+    "Business B has no ready photo and no asset on Business A's job",
+    bPhotos === 0 && bReady === 0 && bOnAlphaJob === 0,
+  );
 } finally {
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
