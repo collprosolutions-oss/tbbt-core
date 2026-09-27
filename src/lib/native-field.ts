@@ -10,7 +10,8 @@
  *
  * Lookup uses the same compound scope as `assignedJobWhere()` in
  * src/lib/field-access.ts: businessId + assignedMembershipId in one
- * query. There is no fetch-then-compare step.
+ * query. There is no fetch-then-compare step. The one assigned-worker
+ * write lives in `src/lib/native-field-ops.ts`.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -21,6 +22,7 @@ import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { directionsUrl, telHref } from "@/lib/directions";
 import { FIELD_JOB_SELECT, groupFieldJobs, type FieldJob } from "@/lib/field-jobs";
 import { formatAddress, formatDateTime } from "@/lib/format";
+import { evaluateCompleteJob } from "@/lib/job-lifecycle";
 import { ownerAccessSummaryLines } from "@/lib/property-access";
 import { startOfDay } from "@/lib/schedule";
 import type { NativeFieldAccess, NativeViewer, NativeWorkspace } from "@/lib/native-session";
@@ -97,6 +99,11 @@ export type NativeJobSummary = {
   address: string | null;
 };
 
+export type NativeJobCompleteAction = {
+  available: boolean;
+  reason: string | null;
+};
+
 export type NativeJobDetail = NativeJobSummary & {
   customerPhone: string | null;
   callHref: string | null;
@@ -108,7 +115,19 @@ export type NativeJobDetail = NativeJobSummary & {
     versionNumber: number | null;
     items: Array<{ description: string; quantity: string; type: string }>;
   };
+  completeAction: NativeJobCompleteAction;
 };
+
+export function nativeCompleteAction(status: string): NativeJobCompleteAction {
+  const lifecycle = evaluateCompleteJob(status);
+  if (!lifecycle.ok) {
+    return { available: false, reason: lifecycle.error };
+  }
+  if (lifecycle.nextStatus === null) {
+    return { available: false, reason: null };
+  }
+  return { available: true, reason: null };
+}
 
 export type NativeAssignedJobPage = {
   jobs: FieldJob[];
@@ -251,6 +270,7 @@ export async function loadNativeAssignedJob(
     confirmationLabel,
     accessLines: ownerAccessSummaryLines(job),
     scope: fieldSafeScope(job),
+    completeAction: nativeCompleteAction(job.status),
   };
 }
 

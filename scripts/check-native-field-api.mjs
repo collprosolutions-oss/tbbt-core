@@ -1,9 +1,11 @@
 /**
- * Native field API — session boundary + assigned-job / Today isolation.
+ * Native field API — session boundary + assigned-job / Today isolation
+ * + the one assigned-worker Complete job write.
  *
- * Imports the REAL production helpers from src/lib/native-session.ts and
- * src/lib/native-field.ts. Those modules take a Prisma client and do not
- * use next/headers cookies, so they can run in this script.
+ * Imports the REAL production helpers from src/lib/native-session.ts,
+ * src/lib/native-field.ts, and src/lib/native-field-ops.ts. Those
+ * modules take a Prisma client and do not use next/headers cookies, so
+ * they can run in this script.
  *
  * Uses a disposable sibling Postgres database
  * (`tbbt_native_field_test`), matching the existing isolation harness.
@@ -43,14 +45,23 @@ const {
   loadNativeAssignedJob,
   loadNativeToday,
   nativeAssignedJobWhere,
+  nativeCompleteAction,
   nativeTodayTruncatedNotice,
 } = await import("@/lib/native-field");
+const {
+  completeNativeAssignedJob,
+  NATIVE_JOB_NOT_AVAILABLE,
+} = await import("@/lib/native-field-ops");
 const {
   readBearerToken,
   resolveNativeFieldAccess,
   revokeNativeSession,
   signInNativeField,
 } = await import("@/lib/native-session");
+const { SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE } = await import(
+  "@/lib/saas-billing/messages"
+);
+const { weekRange } = await import("@/lib/time-cards");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -167,15 +178,40 @@ check(
 const sessionRouteSrc = readRepo("src/app/api/native/v1/session/route.ts");
 const todayRouteSrc = readRepo("src/app/api/native/v1/today/route.ts");
 const jobRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/route.ts");
+const completeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/complete/route.ts");
+const completeOpsSrc = readRepo("src/lib/native-field-ops.ts");
 const limitsSrc = readRepo("src/lib/native-session-limits.ts");
 check(
   "Native routes authenticate with Bearer helpers, not cookies()",
   sessionRouteSrc.includes("readBearerToken") &&
     todayRouteSrc.includes("readBearerToken") &&
     jobRouteSrc.includes("readBearerToken") &&
+    completeRouteSrc.includes("readBearerToken") &&
     !sessionRouteSrc.includes("cookies(") &&
     !todayRouteSrc.includes("cookies(") &&
-    !jobRouteSrc.includes("cookies("),
+    !jobRouteSrc.includes("cookies(") &&
+    !completeRouteSrc.includes("cookies(") &&
+    !completeOpsSrc.includes("cookies("),
+);
+check(
+  "Complete job reuses assigned-job scope and the canonical time-safe write",
+  completeOpsSrc.includes("nativeAssignedJobWhere") &&
+    completeOpsSrc.includes("lockTenantOwnedJob") &&
+    completeOpsSrc.includes("completeJobWithRunningTimeSafetyInTransaction") &&
+    completeOpsSrc.includes("assignedMembershipId") &&
+    completeOpsSrc.includes("afterInitialRead") &&
+    completeOpsSrc.includes("requireSaasOperatingEntitlement") &&
+    completeRouteSrc.includes("completeNativeAssignedJob") &&
+    !completeOpsSrc.includes("completeJobAndSendInvoice"),
+);
+check(
+  "nativeCompleteAction follows evaluateCompleteJob",
+  nativeCompleteAction("IN_PROGRESS").available === true &&
+    nativeCompleteAction("IN_PROGRESS").reason === null &&
+    nativeCompleteAction("COMPLETED").available === false &&
+    nativeCompleteAction("COMPLETED").reason === null &&
+    nativeCompleteAction("SCHEDULED").available === false &&
+    nativeCompleteAction("SCHEDULED").reason === "Start the job before completing it.",
 );
 check(
   "Native session POST caps JSON and uses a durable throttle, not process memory",
@@ -222,6 +258,9 @@ check(
     nativeAppSrc.includes("Bearer") &&
     nativeAppSrc.includes("SecureStore") &&
     nativeAppSrc.includes("/api/native/v1/today") &&
+    nativeAppSrc.includes("/api/native/v1/jobs/") &&
+    nativeAppSrc.includes("/complete") &&
+    nativeAppSrc.includes("Complete job") &&
     nativeAppSrc.includes("truncatedNotice") &&
     nativeAppSrc.includes("payload.truncated"),
 );
@@ -739,6 +778,456 @@ try {
   check("Other member's job is not available", otherDetail === null);
   check("Unassigned job is not available", unassignedDetail === null);
   check("Cross-tenant job is not available", betaDetail === null);
+  check(
+    "Scheduled assigned job advertises Complete job as unavailable until started",
+    detail?.completeAction.available === false &&
+      detail?.completeAction.reason === "Start the job before completing it.",
+  );
+
+  console.log("\nCOMPLETE — assigned-worker write, isolation, duplicates, rollback");
+  await prisma.businessSaasSubscription.create({
+    data: {
+      businessId: businessA.id,
+      status: "active",
+      planCode: "FOUNDER",
+      legacyExempt: true,
+    },
+  });
+  await prisma.businessSaasSubscription.create({
+    data: {
+      businessId: businessB.id,
+      status: "active",
+      planCode: "FOUNDER",
+      legacyExempt: true,
+    },
+  });
+
+  async function createScopedJob(input) {
+    const customer =
+      input.customerId
+        ? { id: input.customerId }
+        : await prisma.customer.create({
+            data: {
+              businessId: input.businessId,
+              name: input.customerName,
+              phone: "555-0101",
+            },
+          });
+    return prisma.job.create({
+      data: {
+        businessId: input.businessId,
+        customerId: customer.id,
+        assignedMembershipId: input.assignedMembershipId,
+        projectToken: randomUUID(),
+        status: input.status,
+        scheduledAt: new Date(),
+      },
+    });
+  }
+
+  const inProgressJob = await createScopedJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+    status: "IN_PROGRESS",
+  });
+  const otherInProgress = await createScopedJob({
+    businessId: businessA.id,
+    assignedMembershipId: otherMembership.id,
+    customerName: "Other In Progress Canary",
+    status: "IN_PROGRESS",
+  });
+  const betaInProgress = await createScopedJob({
+    businessId: businessB.id,
+    assignedMembershipId: betaMembership.id,
+    customerName: "Beta In Progress Canary",
+    status: "IN_PROGRESS",
+  });
+  const duplicateJob = await createScopedJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+    status: "IN_PROGRESS",
+  });
+  const rollbackJob = await createScopedJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+    status: "IN_PROGRESS",
+  });
+  const raceJob = await createScopedJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+    status: "IN_PROGRESS",
+  });
+
+  const blockedBusiness = await prisma.business.create({
+    data: {
+      name: "Blocked Native Field",
+      slug: "blocked-native-field",
+      tradeCode: "HANDYMAN",
+      ...completedOnboarding,
+    },
+  });
+  const blockedUser = await prisma.user.create({
+    data: {
+      name: "No Sub Member",
+      email: "nosub@blocked-native-field.example",
+      passwordHash,
+    },
+  });
+  const blockedMembership = await prisma.membership.create({
+    data: { userId: blockedUser.id, businessId: blockedBusiness.id, role: "MEMBER" },
+  });
+  const blockedJob = await createScopedJob({
+    businessId: blockedBusiness.id,
+    assignedMembershipId: blockedMembership.id,
+    customerName: "Blocked Complete Canary",
+    status: "IN_PROGRESS",
+  });
+  const endedTrial = new Date(Date.now() - 60_000);
+  await prisma.businessSaasSubscription.create({
+    data: {
+      businessId: blockedBusiness.id,
+      status: "canceled",
+      planCode: "FOUNDER",
+      legacyExempt: false,
+      trialStartedAt: new Date(endedTrial.getTime() - 14 * 24 * 60 * 60 * 1000),
+      trialEndsAt: endedTrial,
+      founderEligibilityEndedAt: endedTrial,
+    },
+  });
+
+  const invoicesBefore = await prisma.invoice.count({
+    where: { businessId: { in: [businessA.id, businessB.id, blockedBusiness.id] } },
+  });
+
+  const unauthorizedComplete = await completeNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    otherInProgress.id,
+  );
+  const unassignedComplete = await completeNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    unassignedJob.id,
+  );
+  const crossTenantComplete = await completeNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    betaInProgress.id,
+  );
+  check(
+    "Assigned worker cannot complete another member's job",
+    unauthorizedComplete.ok === false &&
+      unauthorizedComplete.status === 404 &&
+      unauthorizedComplete.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Assigned worker cannot complete an unassigned job",
+    unassignedComplete.ok === false && unassignedComplete.status === 404,
+  );
+  check(
+    "Assigned worker cannot complete a cross-tenant job",
+    crossTenantComplete.ok === false &&
+      crossTenantComplete.status === 404 &&
+      crossTenantComplete.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+
+  const otherSignIn = await signInNativeField(prisma, {
+    email: otherMemberUser.email,
+    password,
+    userAgent: "TBBTFieldTest/1.0",
+  });
+  check("Other MEMBER can sign in for isolation proof", otherSignIn.ok === true);
+  if (!otherSignIn.ok) {
+    throw new Error("Other MEMBER sign-in failed; cannot continue complete isolation proof.");
+  }
+  const otherAccess = await resolveNativeFieldAccess(prisma, { token: otherSignIn.token });
+  check("Other MEMBER bearer resolves", otherAccess.ok === true);
+  if (!otherAccess.ok) {
+    throw new Error("Other MEMBER bearer resolve failed.");
+  }
+  const stolenComplete = await completeNativeAssignedJob(
+    prisma,
+    otherAccess.access,
+    inProgressJob.id,
+  );
+  const otherJobAfterSteal = await prisma.job.findFirst({
+    where: { id: inProgressJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  check(
+    "Other MEMBER cannot complete a job assigned to someone else",
+    stolenComplete.ok === false &&
+      stolenComplete.status === 404 &&
+      otherJobAfterSteal?.status === "IN_PROGRESS" &&
+      otherJobAfterSteal?.assignedMembershipId === memberMembership.id,
+  );
+
+  const betaSignIn = await signInNativeField(prisma, {
+    email: betaMemberUser.email,
+    password,
+    userAgent: "TBBTFieldTest/1.0",
+  });
+  check("Beta MEMBER can sign in for tenant isolation", betaSignIn.ok === true);
+  if (!betaSignIn.ok) {
+    throw new Error("Beta MEMBER sign-in failed.");
+  }
+  const betaAccess = await resolveNativeFieldAccess(prisma, { token: betaSignIn.token });
+  check("Beta MEMBER bearer resolves", betaAccess.ok === true);
+  if (!betaAccess.ok) {
+    throw new Error("Beta MEMBER bearer resolve failed.");
+  }
+  const betaSteal = await completeNativeAssignedJob(
+    prisma,
+    betaAccess.access,
+    inProgressJob.id,
+  );
+  const alphaAfterBetaSteal = await prisma.job.findFirst({
+    where: { id: inProgressJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const betaAfterAlphaAttempt = await prisma.job.findFirst({
+    where: { id: betaInProgress.id, businessId: businessB.id },
+    select: { status: true },
+  });
+  check(
+    "Cross-tenant complete leaves both jobs unchanged",
+    betaSteal.ok === false &&
+      betaSteal.status === 404 &&
+      alphaAfterBetaSteal?.status === "IN_PROGRESS" &&
+      betaAfterAlphaAttempt?.status === "IN_PROGRESS",
+  );
+
+  const scheduledComplete = await completeNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    assignedJob.id,
+  );
+  const scheduledAfter = await prisma.job.findFirst({
+    where: { id: assignedJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  check(
+    "Status safeguard refuses Complete job before the job is started",
+    scheduledComplete.ok === false &&
+      scheduledComplete.status === 409 &&
+      scheduledComplete.error === "Start the job before completing it." &&
+      scheduledAfter?.status === "SCHEDULED",
+  );
+
+  const blockedSignIn = await signInNativeField(prisma, {
+    email: blockedUser.email,
+    password,
+    userAgent: "TBBTFieldTest/1.0",
+  });
+  check("Blocked-subscription MEMBER can sign in", blockedSignIn.ok === true);
+  if (!blockedSignIn.ok) {
+    throw new Error("Blocked MEMBER sign-in failed.");
+  }
+  const blockedAccess = await resolveNativeFieldAccess(prisma, { token: blockedSignIn.token });
+  check("Blocked-subscription bearer resolves", blockedAccess.ok === true);
+  if (!blockedAccess.ok) {
+    throw new Error("Blocked MEMBER bearer resolve failed.");
+  }
+  const blockedComplete = await completeNativeAssignedJob(
+    prisma,
+    blockedAccess.access,
+    blockedJob.id,
+  );
+  const blockedAfter = await prisma.job.findFirst({
+    where: { id: blockedJob.id, businessId: blockedBusiness.id },
+    select: { status: true },
+  });
+  check(
+    "Complete job requires an operating SaaS entitlement",
+    blockedComplete.ok === false &&
+      blockedComplete.status === 403 &&
+      blockedComplete.error === SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE &&
+      blockedAfter?.status === "IN_PROGRESS",
+  );
+
+  const raceStartedAt = new Date(Date.now() - 90_000);
+  await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memberMembership.id,
+      jobId: raceJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: raceStartedAt,
+      source: "CLOCK",
+    },
+  });
+  const raceEventsBefore = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: "JOB_COMPLETED",
+      subjectId: raceJob.id,
+    },
+  });
+  const raceComplete = await completeNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    raceJob.id,
+    {
+      afterInitialRead: async () => {
+        await prisma.job.update({
+          where: { id: raceJob.id },
+          data: { assignedMembershipId: otherMembership.id },
+        });
+      },
+    },
+  );
+  const raceJobAfter = await prisma.job.findFirst({
+    where: { id: raceJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  const raceTimeAfter = await prisma.timeEntry.findFirst({
+    where: { jobId: raceJob.id, businessId: businessA.id },
+    select: { status: true, endedAt: true, membershipId: true },
+  });
+  const raceEventsAfter = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: "JOB_COMPLETED",
+      subjectId: raceJob.id,
+    },
+  });
+  check(
+    "Assignment change after the initial read refuses Complete job",
+    raceComplete.ok === false &&
+      raceComplete.status === 404 &&
+      raceComplete.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Reassigned Job after the initial read leaves Job, running time, and completion event unchanged",
+    raceJobAfter?.status === "IN_PROGRESS" &&
+      raceJobAfter?.assignedMembershipId === otherMembership.id &&
+      raceTimeAfter?.status === "RUNNING" &&
+      raceTimeAfter?.endedAt === null &&
+      raceTimeAfter?.membershipId === memberMembership.id &&
+      raceEventsAfter === raceEventsBefore &&
+      raceEventsAfter === 0,
+  );
+
+  const rollbackStartedAt = new Date(Date.now() - 60_000);
+  await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memberMembership.id,
+      jobId: rollbackJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: rollbackStartedAt,
+      source: "CLOCK",
+    },
+  });
+  await prisma.timesheetWeek.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memberMembership.id,
+      weekStartedAt: weekRange(rollbackStartedAt).start,
+      status: "APPROVED",
+      approvedAt: new Date(),
+      approvedByMembershipId: ownerMembership.id,
+    },
+  });
+  const rollbackComplete = await completeNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    rollbackJob.id,
+  );
+  const rollbackJobAfter = await prisma.job.findFirst({
+    where: { id: rollbackJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const rollbackTimeAfter = await prisma.timeEntry.findFirst({
+    where: { jobId: rollbackJob.id, businessId: businessA.id },
+    select: { status: true, endedAt: true },
+  });
+  check(
+    "Approved-week running Job time refuses Complete job",
+    rollbackComplete.ok === false &&
+      rollbackComplete.status === 409 &&
+      /approved job time is still running/i.test(rollbackComplete.error ?? ""),
+  );
+  check(
+    "Failed Complete job rolls back Job status and leaves time running",
+    rollbackJobAfter?.status === "IN_PROGRESS" &&
+      rollbackTimeAfter?.status === "RUNNING" &&
+      rollbackTimeAfter?.endedAt === null,
+  );
+
+  const firstComplete = await completeNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    inProgressJob.id,
+  );
+  const inProgressAfter = await prisma.job.findFirst({
+    where: { id: inProgressJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  check(
+    "Assigned worker can complete their own IN_PROGRESS job",
+    firstComplete.ok === true &&
+      firstComplete.alreadyCompleted === false &&
+      firstComplete.job.status === "COMPLETED" &&
+      firstComplete.job.completeAction.available === false &&
+      inProgressAfter?.status === "COMPLETED",
+  );
+
+  const repeatComplete = await completeNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    inProgressJob.id,
+  );
+  const repeatAfter = await prisma.job.findFirst({
+    where: { id: inProgressJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  check(
+    "Duplicate Complete job on an already-completed job is a successful no-op",
+    repeatComplete.ok === true &&
+      repeatComplete.alreadyCompleted === true &&
+      repeatAfter?.status === "COMPLETED",
+  );
+
+  const [dupA, dupB] = await Promise.all([
+    completeNativeAssignedJob(prisma, memberAccess.access, duplicateJob.id),
+    completeNativeAssignedJob(prisma, memberAccess.access, duplicateJob.id),
+  ]);
+  const duplicateAfter = await prisma.job.findFirst({
+    where: { id: duplicateJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  check(
+    "Concurrent Complete job requests both succeed and leave the Job completed once",
+    dupA.ok === true &&
+      dupB.ok === true &&
+      [dupA.alreadyCompleted, dupB.alreadyCompleted].filter(Boolean).length <= 1 &&
+      duplicateAfter?.status === "COMPLETED",
+  );
+
+  const otherAfterWrites = await prisma.job.findFirst({
+    where: { id: otherInProgress.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const betaAfterWrites = await prisma.job.findFirst({
+    where: { id: betaInProgress.id, businessId: businessB.id },
+    select: { status: true },
+  });
+  const invoicesAfter = await prisma.invoice.count({
+    where: { businessId: { in: [businessA.id, businessB.id, blockedBusiness.id] } },
+  });
+  check(
+    "Complete job writes stay on the assigned job and never send an invoice",
+    otherAfterWrites?.status === "IN_PROGRESS" &&
+      betaAfterWrites?.status === "IN_PROGRESS" &&
+      invoicesAfter === invoicesBefore,
+  );
 
   const revoked = await revokeNativeSession(prisma, memberSignIn.token);
   const afterRevoke = await resolveNativeFieldAccess(prisma, { token: memberSignIn.token });
@@ -774,7 +1263,9 @@ try {
   if (failures > 0) {
     throw new Error(`Native field check failed (${failures} case(s)).`);
   }
-  console.log("\nNative field API check passed: Bearer session + assigned-job isolation held.");
+  console.log(
+    "\nNative field API check passed: Bearer session, assigned-job isolation, and Complete job safeguards held.",
+  );
 } finally {
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });

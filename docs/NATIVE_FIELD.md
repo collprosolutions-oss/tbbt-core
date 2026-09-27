@@ -22,17 +22,19 @@ The edge proxy lets `/api/native/` through without a cookie so Bearer auth can r
 
 ## Field scope
 
-`GET /api/native/v1/today` and `GET /api/native/v1/jobs/:jobId` use the same assignment clause as Field Home: `businessId` + `assignedMembershipId` in one query.
+`GET /api/native/v1/today`, `GET /api/native/v1/jobs/:jobId`, and `POST /api/native/v1/jobs/:jobId/complete` use the same assignment clause as Field Home: `businessId` + `assignedMembershipId` in one query.
 
 Today is also **capped**. `listNativeAssignedJobs()` takes at most `NATIVE_TODAY_JOB_LIMIT` assigned jobs (currently 20), ordered by `scheduledAt` then `id`. If more assigned jobs exist, the payload sets `truncated: true` and `truncatedNotice`. The extra assigned rows are not returned. Cross-tenant and other workers' jobs are never part of that page. Job detail by id is unchanged: one assigned job, or 404.
 
-Returned job data is operational only: status, schedule, customer name/phone, address, access lines, and approved-scope descriptions/quantities. It does **not** return invoices, estimate totals, unit prices, wages, customer emails, portal tokens, other members' jobs, or owner Today / management records.
+Returned job data is operational only: status, schedule, customer name/phone, address, access lines, approved-scope descriptions/quantities, and whether **Complete job** is available. It does **not** return invoices, estimate totals, unit prices, wages, customer emails, portal tokens, other members' jobs, or owner Today / management records.
 
-MEMBER access stays field-scoped. OWNER/ADMIN using this API also only see jobs assigned to themselves.
+MEMBER access stays field-scoped. OWNER/ADMIN using this API also only see and complete jobs assigned to themselves.
+
+The one assigned-worker write is **Complete job**. `POST /api/native/v1/jobs/:jobId/complete` locks the assigned Job, rechecks `businessId`, `assignedMembershipId`, and status on that locked row (same assignment-change protection as Cleaning `VISIT_COMPLETED`), then reuses `completeJobWithRunningTimeSafetyInTransaction`. It does not send an invoice. Already-completed jobs are a successful no-op. A job that is not `IN_PROGRESS`, not assigned to the caller, or in another business is refused. If the assignment changes after the authorize read, the former worker is refused and no Job, time, or completion-event write happens. If approved timesheet time is still running, the transaction rolls back and the Job stays `IN_PROGRESS`.
 
 ## What this slice does not do
 
-- Start/complete jobs, photos, time clock, or any field mutation
+- Start job, photos, time clock, cleaning checklist toggles, or other field mutations
 - Owner/admin Today, Reports, invoices, or management console
 - App Store / Play distribution, device attestation, or compiled iOS/Android binaries
 - Website UI changes

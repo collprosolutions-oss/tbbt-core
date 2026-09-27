@@ -109,6 +109,28 @@ export async function loadNativeJob(
   return body as unknown as { job: NativeJobDetail };
 }
 
+export async function completeNativeJob(
+  token: string,
+  jobId: string,
+): Promise<{ job: NativeJobDetail; alreadyCompleted: boolean } | NativeApiError> {
+  const response = await fetch(
+    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/complete`),
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    },
+  );
+  const body = await parseJson(response);
+  if (!response.ok) {
+    return { error: typeof body.error === "string" ? body.error : "That job could not be completed." };
+  }
+  return body as unknown as { job: NativeJobDetail; alreadyCompleted: boolean };
+}
+
 export function isApiError(value: unknown): value is NativeApiError {
   return Boolean(value && typeof value === "object" && "error" in value && typeof (value as NativeApiError).error === "string");
 }
