@@ -71,6 +71,7 @@ export type {
 } from "@/lib/business-storage/types";
 export {
   FIELD_JOB_PHOTO_MAX_BYTES,
+  FIELD_JOB_PHOTO_PURPOSE,
   abortAssignedFieldJobPhoto,
   abortManagementJobPhoto,
   authorizeAssignedFieldJobPhoto,

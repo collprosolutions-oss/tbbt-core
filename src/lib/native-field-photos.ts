@@ -12,6 +12,7 @@ import type { PrismaClient } from "@prisma/client";
 import {
   abortAssignedFieldJobPhoto,
   authorizeAssignedFieldJobPhoto,
+  FIELD_JOB_PHOTO_PURPOSE,
   inspectFieldJobPhotoUpload,
   persistReadyJobPhoto,
 } from "@/lib/business-storage/field-job-photos";
@@ -269,6 +270,7 @@ async function releaseUnpersistedFinalizedPhoto(
   db: PrismaClient,
   deps: ReturnType<typeof storageDeps>,
   businessId: string,
+  jobId: string,
   assetId: string,
 ) {
   const persisted = await db.jobPhoto.findFirst({
@@ -276,7 +278,12 @@ async function releaseUnpersistedFinalizedPhoto(
     select: { id: true },
   });
   if (persisted) return;
-  await discardReadyManagedUpload(deps, businessId, assetId).catch(() => undefined);
+  await discardReadyManagedUpload(deps, businessId, assetId, {
+    jobId,
+    category: "JOB_PHOTO",
+    purpose: FIELD_JOB_PHOTO_PURPOSE,
+    visibility: "PRIVATE",
+  }).catch(() => undefined);
 }
 
 function requireStorage(storage?: NativePhotoStorageDeps): NativeAssignedJobPhotoFailure | null {
@@ -363,9 +370,9 @@ export async function finalizeNativeAssignedJobPhoto(
   if (
     asset.visibility !== "PRIVATE" ||
     asset.category !== "JOB_PHOTO" ||
+    asset.purpose !== FIELD_JOB_PHOTO_PURPOSE ||
     asset.jobId !== assigned.jobId
   ) {
-    await releaseUnpersistedFinalizedPhoto(db, deps, access.businessId, input.assetId);
     return { ok: false, status: 400, error: "That photo is not a private field job photo." };
   }
 
@@ -405,7 +412,13 @@ export async function finalizeNativeAssignedJobPhoto(
     });
 
     if (!written.ok) {
-      await releaseUnpersistedFinalizedPhoto(db, deps, access.businessId, input.assetId);
+      await releaseUnpersistedFinalizedPhoto(
+        db,
+        deps,
+        access.businessId,
+        assigned.jobId,
+        input.assetId,
+      );
       return written;
     }
   } catch (error) {

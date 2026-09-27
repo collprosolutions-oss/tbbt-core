@@ -341,16 +341,24 @@ export async function abortManagedUpload(
   return current;
 }
 
+export type DiscardReadyManagedUploadMatch = {
+  jobId: string;
+  category: StoredAssetCategory;
+  purpose: string;
+  visibility: StoredAssetVisibility;
+};
+
 /**
  * Releases a READY asset that never became a domain attachment.
  * Abort stays PENDING-only so a successful finalize cannot be undone
- * from the abort route. This path uncharges usedBytes after a refused
- * persist (cap or assignment recheck).
+ * from the abort route. The claim is limited to the matching private
+ * field job photo (business, job, category, purpose, visibility).
  */
 export async function discardReadyManagedUpload(
   deps: StorageServiceDeps,
   businessId: string,
   assetId: string,
+  match: DiscardReadyManagedUploadMatch,
 ) {
   const existing = await deps.db.storedAsset.findFirst({
     where: { id: assetId, businessId },
@@ -360,7 +368,15 @@ export async function discardReadyManagedUpload(
   const now = deps.now?.() ?? new Date();
   const claimed = await deps.db.$transaction(async (tx) => {
     const updated = await tx.storedAsset.updateMany({
-      where: { id: existing.id, businessId, status: "READY" },
+      where: {
+        id: existing.id,
+        businessId,
+        status: "READY",
+        jobId: match.jobId,
+        category: match.category,
+        purpose: match.purpose,
+        visibility: match.visibility,
+      },
       data: { status: "FAILED", deletedAt: now, publicPath: null },
     });
     if (updated.count !== 1) return false;

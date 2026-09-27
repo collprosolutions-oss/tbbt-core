@@ -18,6 +18,10 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const { hashPassword } = await import("@/lib/auth-crypto");
 const { MemoryStorageProvider } = await import("@/lib/business-storage/index");
+const {
+  authorizeManagedUpload,
+  finalizeManagedUpload,
+} = await import("@/lib/business-storage/service");
 const { FIELD_JOB_PHOTO_MAX_BYTES } = await import(
   "@/lib/business-storage/field-job-photos"
 );
@@ -119,10 +123,16 @@ check(
     photoOpsSrc.includes("NATIVE_JOB_PHOTO_LIMIT"),
 );
 check(
-  "Refused finalize discards the READY asset and uncharges storage",
-    photoOpsSrc.includes("discardReadyManagedUpload") &&
+  "Refused finalize discards only this job's unattached private field-job-photo",
+  photoOpsSrc.includes("discardReadyManagedUpload") &&
     photoOpsSrc.includes("releaseUnpersistedFinalizedPhoto") &&
+    photoOpsSrc.includes("FIELD_JOB_PHOTO_PURPOSE") &&
+    photoOpsSrc.includes('purpose !== FIELD_JOB_PHOTO_PURPOSE') &&
+    (photoOpsSrc.split("releaseUnpersistedFinalizedPhoto").length - 1) === 2 &&
     serviceSrc.includes("export async function discardReadyManagedUpload") &&
+    serviceSrc.includes("jobId: match.jobId") &&
+    serviceSrc.includes("category: match.category") &&
+    serviceSrc.includes("purpose: match.purpose") &&
     serviceSrc.includes("storageUsedBytes: { decrement: existing.fileSizeBytes }"),
 );
 check(
@@ -642,6 +652,107 @@ try {
     return authorized;
   }
 
+  console.log("\nDB — Cleanup cannot touch another job or category READY asset");
+
+  const otherJobStored = await authorizeAndStore(
+    otherAccess.access,
+    otherJob.id,
+    "other-ready.jpg",
+  );
+  check("Other worker can store a READY photo on their own job", otherJobStored.ok === true);
+  if (!otherJobStored.ok) {
+    throw new Error("Expected other-job authorize to succeed.");
+  }
+  const otherJobFinalized = await finalizeNativeAssignedJobPhoto(
+    prisma,
+    otherAccess.access,
+    otherJob.id,
+    { assetId: otherJobStored.assetId, stage: "BEFORE" },
+    storage,
+  );
+  check("Other worker can finalize a photo on their own job", otherJobFinalized.ok === true);
+  if (!otherJobFinalized.ok) {
+    throw new Error("Expected other-job finalize to succeed.");
+  }
+
+  const foreignDeps = {
+    db: prisma,
+    provider,
+    bucketName: storage.bucketName,
+    defaultLimitBytes: storage.defaultLimitBytes,
+  };
+  const otherCategoryAuth = await authorizeManagedUpload(foreignDeps, businessA.id, {
+    category: "DOCUMENT",
+    purpose: "invoice-packet",
+    originalFilename: "packet.pdf",
+    mimeType: "application/pdf",
+    fileSizeBytes: jpeg.byteLength,
+    visibility: "PRIVATE",
+  });
+  await provider.putObject({
+    bucket: otherCategoryAuth.account.bucketName,
+    key: otherCategoryAuth.asset.storageKey,
+    body: jpeg,
+    contentType: "application/pdf",
+  });
+  const otherCategoryReady = await finalizeManagedUpload(
+    foreignDeps,
+    businessA.id,
+    otherCategoryAuth.asset.id,
+  );
+  check(
+    "Another-category READY asset is charged before the steal attempt",
+    otherCategoryReady.status === "READY" &&
+      otherCategoryReady.category === "DOCUMENT" &&
+      otherCategoryReady.jobId == null,
+  );
+
+  const beforeForeignCleanup = await storageAccounting(businessA.id);
+  const stealOtherJob = await finalizeNativeAssignedJobPhoto(
+    prisma,
+    memberAccess.access,
+    assignedJob.id,
+    { assetId: otherJobStored.assetId, stage: "AFTER" },
+    storage,
+  );
+  const stealOtherCategory = await finalizeNativeAssignedJobPhoto(
+    prisma,
+    memberAccess.access,
+    assignedJob.id,
+    { assetId: otherCategoryReady.id, stage: "AFTER" },
+    storage,
+  );
+  const afterForeignCleanup = await storageAccounting(businessA.id);
+  const otherJobAssetAfter = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: otherJobStored.assetId },
+  });
+  const otherCategoryAfter = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: otherCategoryReady.id },
+  });
+  const otherJobPhotoAfter = await prisma.jobPhoto.findFirst({
+    where: { storedAssetId: otherJobStored.assetId, businessId: businessA.id },
+  });
+  check(
+    "Another job's READY asset ID cannot be deleted or uncharged",
+    stealOtherJob.ok === false &&
+      stealOtherJob.status === 400 &&
+      otherJobAssetAfter.status === "READY" &&
+      otherJobPhotoAfter != null &&
+      afterForeignCleanup.used === beforeForeignCleanup.used &&
+      afterForeignCleanup.reserved === beforeForeignCleanup.reserved,
+  );
+  check(
+    "Another category's READY asset ID cannot be deleted or uncharged",
+    stealOtherCategory.ok === false &&
+      stealOtherCategory.status === 400 &&
+      otherCategoryAfter.status === "READY" &&
+      otherCategoryAfter.category === "DOCUMENT" &&
+      afterForeignCleanup.used === beforeForeignCleanup.used &&
+      afterForeignCleanup.reserved === beforeForeignCleanup.reserved,
+  );
+
+  const beforeConcurrent = await storageAccounting(businessA.id);
+
   const concurrentJob = await prisma.job.create({
     data: {
       businessId: businessA.id,
@@ -734,7 +845,7 @@ try {
       winningAsset.status === "READY" &&
       afterRace.used === Number(readyUsed) &&
       afterRace.reserved === 0 &&
-      afterRace.used === Number(accountAfterSuccess.storageUsedBytes) + winningAsset.fileSizeBytes,
+      afterRace.used === beforeConcurrent.used + winningAsset.fileSizeBytes,
   );
 
   const reassignJob = await prisma.job.create({

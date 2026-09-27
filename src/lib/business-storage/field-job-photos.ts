@@ -21,6 +21,7 @@ import {
 } from "@/lib/business-storage/types";
 
 export const FIELD_JOB_PHOTO_MAX_BYTES = REQUEST_PHOTO_MAX_BYTES;
+export const FIELD_JOB_PHOTO_PURPOSE = "field-job-photo";
 
 export {
   inspectRequestPhotoUpload as inspectFieldJobPhotoUpload,
@@ -91,7 +92,7 @@ export async function authorizeAssignedFieldJobPhoto(
 
   return authorizeManagedUpload(deps, field.businessId, {
     category: "JOB_PHOTO",
-    purpose: "field-job-photo",
+    purpose: FIELD_JOB_PHOTO_PURPOSE,
     originalFilename: inspection.fileName,
     mimeType: inspection.mimeType,
     fileSizeBytes: inspection.fileSizeBytes,
