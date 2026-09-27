@@ -21,6 +21,7 @@ export const EXTERNAL_LEAD_IMPORT_ROW_STATUSES = [
   "VALID",
   "INVALID",
   "POSSIBLE_DUPLICATE",
+  "REJECTED",
 ] as const;
 export type ExternalLeadImportRowStatus =
   (typeof EXTERNAL_LEAD_IMPORT_ROW_STATUSES)[number];
@@ -32,6 +33,21 @@ export const IMPORT_NOT_AVAILABLE_MESSAGE = "That import is not available.";
 
 export const IMPORT_CONFIRM_REQUIRED_MESSAGE =
   "Leads are created only after the owner confirms this preview.";
+
+export const IMPORT_RESOLVE_INVALID_MESSAGE =
+  "Correct or reject every invalid row before creating leads.";
+
+export const IMPORT_ALREADY_CONFIRMED_MESSAGE =
+  "This preview was already confirmed.";
+
+export const IMPORT_ROW_NOT_EDITABLE_MESSAGE =
+  "Only invalid or rejected preview rows can be corrected.";
+
+export const IMPORT_ROW_NOT_REJECTABLE_MESSAGE =
+  "Only invalid preview rows can be rejected.";
+
+export const ROW_REJECTED_BY_OWNER_MESSAGE =
+  "Rejected by owner. This row will not create a lead.";
 
 export const IMPORT_NO_SCRAPE_MESSAGE =
   "TBBT does not scrape directories, crawl websites, fetch source URLs, or buy lead lists. Upload a CSV you already have.";
@@ -61,5 +77,6 @@ export function sourceKindLabel(_kind: string): string {
 export function previewStatusLabel(status: string): string {
   if (status === "INVALID") return "Invalid";
   if (status === "POSSIBLE_DUPLICATE") return "Possible same-business duplicate";
+  if (status === "REJECTED") return "Rejected by owner";
   return "Ready";
 }

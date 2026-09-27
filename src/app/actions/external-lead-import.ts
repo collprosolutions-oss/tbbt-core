@@ -15,7 +15,9 @@ import {
 } from "@/lib/external-lead-import";
 import {
   confirmExternalLeadImport,
+  correctExternalLeadImportRow,
   previewCsvUpload,
+  rejectExternalLeadImportRow,
 } from "@/lib/external-lead-import-ops";
 import { prisma } from "@/lib/prisma";
 
@@ -75,6 +77,67 @@ export async function previewExternalLeadImport(
     }
     if (hasFile && file.size > MAX_EXTERNAL_LEAD_IMPORT_BYTES) {
       return { error: FILE_TOO_LARGE_MESSAGE };
+    }
+    throw error;
+  }
+}
+
+export async function correctExternalLeadImportRowAction(
+  _prev: ExternalLeadImportActionState,
+  formData: FormData,
+): Promise<ExternalLeadImportActionState> {
+  const operating = await requireOwnerImportAccess();
+  if (!operating.ok) return { error: operating.error };
+
+  try {
+    const preview = await correctExternalLeadImportRow(prisma, operating.access, {
+      importId: readString(formData, "importId"),
+      rowId: readString(formData, "rowId"),
+      name: readString(formData, "name"),
+      email: readString(formData, "email"),
+      phone: readString(formData, "phone"),
+      summary: readString(formData, "summary"),
+      notes: readString(formData, "notes"),
+      street: readString(formData, "street"),
+      unit: readString(formData, "unit"),
+      city: readString(formData, "city"),
+      region: readString(formData, "region"),
+      postal: readString(formData, "postal"),
+      source: readString(formData, "source"),
+    });
+    revalidatePath(`${EXTERNAL_LEAD_IMPORT_ROUTE}/${preview.id}`);
+    return {};
+  } catch (error) {
+    if (error instanceof ExternalLeadImportError) {
+      return { error: error.message };
+    }
+    if (error instanceof ForbiddenError) {
+      return { error: OWNER_ONLY_IMPORT_MESSAGE };
+    }
+    throw error;
+  }
+}
+
+export async function rejectExternalLeadImportRowAction(
+  _prev: ExternalLeadImportActionState,
+  formData: FormData,
+): Promise<ExternalLeadImportActionState> {
+  const operating = await requireOwnerImportAccess();
+  if (!operating.ok) return { error: operating.error };
+
+  try {
+    const result = await rejectExternalLeadImportRow(prisma, operating.access, {
+      importId: readString(formData, "importId"),
+      rowId: readString(formData, "rowId"),
+    });
+    revalidatePath(`${EXTERNAL_LEAD_IMPORT_ROUTE}/${result.preview.id}`);
+    return {};
+  } catch (error) {
+    if (error instanceof ExternalLeadImportError) {
+      return { error: error.message };
+    }
+    if (error instanceof ForbiddenError) {
+      return { error: OWNER_ONLY_IMPORT_MESSAGE };
     }
     throw error;
   }

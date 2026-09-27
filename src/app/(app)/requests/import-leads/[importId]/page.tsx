@@ -56,7 +56,7 @@ export default async function ImportLeadPreviewPage({
     <PageContainer>
       <PageHeader
         title="Import lead preview"
-        description="Review source, capture date, invalid rows, and possible same-business duplicates before creating leads."
+        description="Review source, capture date, invalid rows, and possible same-business duplicates. Correct or reject invalid rows before creating leads."
       >
         <Button asChild size="sm" variant="outline">
           <Link href={EXTERNAL_LEAD_IMPORT_ROUTE}>New preview</Link>
@@ -71,6 +71,7 @@ export default async function ImportLeadPreviewPage({
         validCount={preview.validCount}
         invalidCount={preview.invalidCount}
         possibleDuplicateCount={preview.possibleDuplicateCount}
+        rejectedCount={preview.rejectedCount}
         createdCount={preview.createdCount}
         rows={preview.rows.map((row) => ({
           id: row.id,
@@ -81,6 +82,13 @@ export default async function ImportLeadPreviewPage({
           email: row.email,
           phone: row.phone,
           summary: row.summary,
+          notes: row.notes,
+          streetAddress: row.streetAddress,
+          unit: row.unit,
+          city: row.city,
+          region: row.region,
+          postalCode: row.postalCode,
+          leadSource: row.leadSource,
           possibleDuplicateCustomerId: row.possibleDuplicateCustomerId,
           possibleDuplicateRequestId: row.possibleDuplicateRequestId,
           createdRequestId: row.createdRequestId,

@@ -6,27 +6,24 @@ import {
   confirmExternalLeadImportAction,
   type ExternalLeadImportActionState,
 } from "@/app/actions/external-lead-import";
+import {
+  ImportLeadRowReview,
+  type ImportLeadReviewRow,
+} from "@/components/requests/import-leads-row-review";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   IMPORT_CONFIRM_REQUIRED_MESSAGE,
   IMPORT_NO_OUTREACH_MESSAGE,
   IMPORT_NO_SCORE_MESSAGE,
+  IMPORT_RESOLVE_INVALID_MESSAGE,
   previewStatusLabel,
   sourceKindLabel,
 } from "@/lib/external-lead-import-copy";
 
 const initialState: ExternalLeadImportActionState = {};
 
-export type ImportLeadPreviewRow = {
-  id: string;
-  rowNumber: number;
-  previewStatus: string;
-  invalidReason: string | null;
-  name: string;
-  email: string | null;
-  phone: string | null;
-  summary: string | null;
+export type ImportLeadPreviewRow = ImportLeadReviewRow & {
   possibleDuplicateCustomerId: string | null;
   possibleDuplicateRequestId: string | null;
   createdRequestId: string | null;
@@ -41,6 +38,7 @@ export function ImportLeadsPreview({
   validCount,
   invalidCount,
   possibleDuplicateCount,
+  rejectedCount,
   createdCount,
   rows,
 }: {
@@ -52,6 +50,7 @@ export function ImportLeadsPreview({
   validCount: number;
   invalidCount: number;
   possibleDuplicateCount: number;
+  rejectedCount: number;
   createdCount: number;
   rows: ImportLeadPreviewRow[];
 }) {
@@ -61,8 +60,10 @@ export function ImportLeadsPreview({
   );
   const confirmed = status === "CONFIRMED";
   const invalidRows = rows.filter((row) => row.previewStatus === "INVALID");
+  const rejectedRows = rows.filter((row) => row.previewStatus === "REJECTED");
   const duplicateRows = rows.filter((row) => row.previewStatus === "POSSIBLE_DUPLICATE");
   const validRows = rows.filter((row) => row.previewStatus === "VALID");
+  const confirmableCount = validCount + possibleDuplicateCount;
 
   return (
     <div className="space-y-6">
@@ -96,6 +97,10 @@ export function ImportLeadsPreview({
           <dd className="font-medium">{possibleDuplicateCount}</dd>
         </div>
         <div>
+          <dt className="text-muted-foreground">Rejected</dt>
+          <dd className="font-medium">{rejectedCount}</dd>
+        </div>
+        <div>
           <dt className="text-muted-foreground">Created requests</dt>
           <dd className="font-medium">{createdCount}</dd>
         </div>
@@ -103,12 +108,45 @@ export function ImportLeadsPreview({
 
       <p className="text-sm text-muted-foreground">
         {IMPORT_NO_SCORE_MESSAGE} {IMPORT_NO_OUTREACH_MESSAGE}{" "}
-        {confirmed ? "This preview was already confirmed." : IMPORT_CONFIRM_REQUIRED_MESSAGE}
+        {confirmed
+          ? "This preview was already confirmed."
+          : invalidCount > 0
+            ? IMPORT_RESOLVE_INVALID_MESSAGE
+            : IMPORT_CONFIRM_REQUIRED_MESSAGE}
       </p>
 
       <PreviewTable title="Ready rows" rows={validRows} />
-      <PreviewTable title="Invalid rows" rows={invalidRows} />
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold">Invalid rows</h2>
+        {invalidRows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">None.</p>
+        ) : (
+          invalidRows.map((row) => (
+            <ImportLeadRowReview
+              key={row.id}
+              importId={importId}
+              row={row}
+              confirmed={confirmed}
+            />
+          ))
+        )}
+      </section>
       <PreviewTable title="Possible same-business duplicates" rows={duplicateRows} />
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold">Rejected rows</h2>
+        {rejectedRows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">None.</p>
+        ) : (
+          rejectedRows.map((row) => (
+            <ImportLeadRowReview
+              key={row.id}
+              importId={importId}
+              row={row}
+              confirmed={confirmed}
+            />
+          ))
+        )}
+      </section>
 
       {confirmed ? (
         <div className="flex flex-wrap gap-2">
@@ -122,11 +160,14 @@ export function ImportLeadsPreview({
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" name="includePossibleDuplicates" value="yes" />
             <span>
-              Also create the possible same-business duplicates listed above. Invalid rows
-              are never created.
+              Also create the possible same-business duplicates listed above. Rejected
+              rows are never created.
             </span>
           </label>
-          <Button type="submit" disabled={pending || validCount + possibleDuplicateCount === 0}>
+          <Button
+            type="submit"
+            disabled={pending || invalidCount > 0 || confirmableCount === 0}
+          >
             {pending ? "Creating leads…" : "Confirm and create leads"}
           </Button>
         </form>
