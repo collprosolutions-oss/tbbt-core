@@ -26,7 +26,7 @@ export default async function RegulatoryIntelligencePage({
     <PageContainer width="default">
       <PageHeader
         title="Regulatory Intelligence"
-        description="Read-only official-source notes for one researched jurisdiction and trade. This page is not in global navigation, does not certify licenses, and does not gate estimates or jobs."
+        description="Read-only official-source notes for one researched jurisdiction and trade. This page is not a license or compliance determination, is not in global navigation, does not certify licenses, and does not gate estimates or jobs."
       />
       <RegulatoryIntelligenceWorkspace source={source} />
     </PageContainer>

@@ -25,12 +25,15 @@ export const LEE_COUNTY_HANDYMAN_CITATION =
   "Florida DBPR, Construction Industry FAQs (https://www2.myfloridalicense.com/construction-industry/faqs/).";
 
 export const LEE_COUNTY_HANDYMAN_SUMMARY =
-  "Lee County Contractor Licensing administers contractor eligibility in the county and registers state contractor licenses for permitting. " +
-  "Ordinance 23-09 applies to contractors performing work in unincorporated Lee County. Section Three states that if the Florida Building Code governs a scope of work and state law requires a license, a State construction license is required, and state law prevails on conflict. " +
-  "Section Five lists local license categories that no longer require a local license as of the ordinance effective date, including Finish Carpentry, Painting, Flooring, and Fence Erection; those scopes are not thereby certified as exempt for any specific job. " +
-  "Florida Statutes § 489.103(9) exempts casual, minor, or inconsequential work under a $2,500 aggregate contract price from Part I, except when the work is part of a larger operation or the person advertises as a contractor. " +
-  "DBPR's official FAQ says to check the local building department and that work requiring a permit typically is not casual, minor, or inconsequential. " +
-  "Whether any named business, advertisement, or job is licensed or exempt remains UNKNOWN.";
+  "Lee County Contractor Licensing oversees contractor eligibility and compliance within the county by verifying contractor licenses, insurance, and authorized signer information, and manages contractor registration for permitting. " +
+  "Ordinance 23-09 Section Three: this ordinance applies to contractors performing work or contracting to perform work within unincorporated Lee County. " +
+  "Regarding Section Five, if the Florida Building Code governs a scope of work and state law requires a license for that scope of work, a construction license issued by the State is required. In the event of a conflict between this ordinance and state law, Section Three says state law prevails. " +
+  "Section Five lists Lee County local license categories for which a local license is no longer required as of the ordinance effective date, including Finish Carpentry Contractor, Painting Contractor, Flooring, and Fence Erection Contractor. That list is not a determination that any specific job, person, or business is exempt, licensed, or compliant. " +
+  "Florida Statutes § 489.103 states that this part does not apply to the listed exemptions. Subsection (9) covers any work or operation of a casual, minor, or inconsequential nature in which the aggregate contract price for labor, materials, and all other items is less than $2,500. " +
+  "That exemption does not apply if the construction, repair, remodeling, or improvement is a part of a larger or major operation, whether undertaken by the same or a different contractor, or in which a division of the operation is made in contracts of amounts less than $2,500 for the purpose of evading this part or otherwise. " +
+  "It also does not apply to a person who advertises that he or she is a contractor or otherwise represents that he or she is qualified to engage in contracting. " +
+  "The Florida DBPR Construction Industry FAQ is not the statute. The FAQ says that as of July 1, 2020, handyman jobs where the total construction costs are below $2,500 are exempt from State licensure requirements when the jobs are of a casual, minor, or inconsequential nature; to check with the building department whether the jobs so qualify and whether there are any local licensing requirements; and that typically, work requiring a permit is not of a casual, minor, or inconsequential nature. " +
+  "Whether any named business, advertisement, or job is licensed, exempt, or legally compliant remains UNKNOWN.";
 
 export function leeCountyHandymanCatalogNote(): RegulatoryNoteInput {
   return {

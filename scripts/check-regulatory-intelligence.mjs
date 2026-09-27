@@ -173,6 +173,42 @@ try {
   check("Catalog citation retains DBPR FAQ URL", LEE_COUNTY_HANDYMAN_CITATION.includes(FLORIDA_DBPR_CONSTRUCTION_FAQ_URL));
   check("Catalog jurisdiction is US-FL-LEE", catalog.jurisdictionCode === LEE_COUNTY_HANDYMAN_JURISDICTION_CODE);
   check("Catalog trade is HANDYMAN", catalog.tradeCode === LEE_COUNTY_HANDYMAN_TRADE_CODE);
+  check(
+    "Ordinance geographic scope uses official unincorporated contracting language",
+    catalog.summary.includes("performing work or contracting to perform work within unincorporated Lee County"),
+  );
+  check(
+    "Statute § 489.103(9) uses less than $2,500 aggregate contract price wording",
+    catalog.summary.includes("aggregate contract price for labor, materials, and all other items is less than $2,500") &&
+      !catalog.summary.includes("under a $2,500 aggregate contract price"),
+  );
+  check(
+    "Statute § 489.103(9) keeps the larger-or-major and advertising exceptions",
+    catalog.summary.includes("larger or major operation") &&
+      catalog.summary.includes("otherwise represents that he or she is qualified to engage in contracting"),
+  );
+  check(
+    "DCD page wording oversees eligibility and compliance rather than administering a license",
+    catalog.summary.includes("oversees contractor eligibility and compliance within the county"),
+  );
+  check(
+    "DBPR FAQ is labeled as not the statute",
+    catalog.summary.includes("The Florida DBPR Construction Industry FAQ is not the statute"),
+  );
+  const pageSource = readRepo("src/app/(app)/regulatory-intelligence/page.tsx");
+  const workspaceSource = readRepo("src/components/regulatory-intelligence/workspace.tsx");
+  check(
+    "Page stays a GET lookup, not a write form",
+    workspaceSource.includes('method="get"') &&
+      !workspaceSource.includes('method="post"') &&
+      !pageSource.includes("createRegulatory") &&
+      !pageSource.includes("use server"),
+  );
+  check(
+    "Page copy refuses license or compliance determination",
+    pageSource.includes("not a license or compliance determination") &&
+      workspaceSource.includes("Certifies license: no. Declares legal compliance: no."),
+  );
 
   check("OWNER can access management console", canAccessManagementConsole("OWNER") === true);
   check("ADMIN can access management console", canAccessManagementConsole("ADMIN") === true);
