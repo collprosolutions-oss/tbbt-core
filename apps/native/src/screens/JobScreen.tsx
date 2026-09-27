@@ -8,7 +8,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { isApiError, loadNativeJob } from "../api";
+import { completeNativeJob, isApiError, loadNativeJob } from "../api";
 import type { NativeJobDetail } from "../types";
 
 export function JobScreen({
@@ -22,6 +22,8 @@ export function JobScreen({
 }) {
   const [job, setJob] = useState<NativeJobDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,6 +39,19 @@ export function JobScreen({
       cancelled = true;
     };
   }, [jobId, token]);
+
+  async function completeAssignedJob() {
+    if (pending) return;
+    setPending(true);
+    setActionError(null);
+    const result = await completeNativeJob(token, jobId);
+    setPending(false);
+    if (isApiError(result)) {
+      setActionError(result.error);
+      return;
+    }
+    setJob(result.job);
+  }
 
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
@@ -65,6 +80,24 @@ export function JobScreen({
               </Pressable>
             ) : null}
           </View>
+          {job.completeAction.available ? (
+            <Pressable
+              disabled={pending}
+              onPress={() => {
+                void completeAssignedJob();
+              }}
+              style={[styles.primaryAction, pending ? styles.primaryActionDisabled : null]}
+            >
+              <Text style={styles.primaryActionLabel}>
+                {pending ? "Completing…" : "Complete job"}
+              </Text>
+            </Pressable>
+          ) : job.status === "COMPLETED" ? (
+            <Text style={styles.body}>This job is complete.</Text>
+          ) : job.completeAction.reason ? (
+            <Text style={styles.notice}>{job.completeAction.reason}</Text>
+          ) : null}
+          {actionError ? <Text style={styles.error}>{actionError}</Text> : null}
           <Text style={styles.groupTitle}>Access</Text>
           {job.accessLines.map((line) => (
             <Text key={line} style={styles.body}>
@@ -139,6 +172,27 @@ const styles = StyleSheet.create({
   actionLabel: {
     color: "#f9fafb",
     fontWeight: "600",
+  },
+  primaryAction: {
+    backgroundColor: "#166534",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    alignItems: "center",
+    marginTop: 4,
+  },
+  primaryActionDisabled: {
+    opacity: 0.6,
+  },
+  primaryActionLabel: {
+    color: "#f9fafb",
+    fontWeight: "700",
+    fontSize: 16,
+  },
+  notice: {
+    color: "#fbbf24",
+    fontSize: 15,
+    lineHeight: 22,
   },
   groupTitle: {
     color: "#9ca3af",

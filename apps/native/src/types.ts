@@ -22,6 +22,11 @@ export type NativeJobSummary = {
   address: string | null;
 };
 
+export type NativeJobCompleteAction = {
+  available: boolean;
+  reason: string | null;
+};
+
 export type NativeJobDetail = NativeJobSummary & {
   customerPhone: string | null;
   callHref: string | null;
@@ -33,6 +38,7 @@ export type NativeJobDetail = NativeJobSummary & {
     versionNumber: number | null;
     items: Array<{ description: string; quantity: string; type: string }>;
   };
+  completeAction: NativeJobCompleteAction;
 };
 
 export type NativeTodayPayload = {
