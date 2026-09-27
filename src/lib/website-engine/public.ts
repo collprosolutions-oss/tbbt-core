@@ -24,7 +24,7 @@ import {
   type IntakeFieldType,
   type PublicIntakeSchemaProjection,
 } from "@/lib/intake-schema";
-import { DEFAULT_TRADE, isConfiguredTrade } from "@/lib/trades";
+import { DEFAULT_TRADE, isConfiguredTrade, tradeLabel } from "@/lib/trades";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -202,7 +202,7 @@ export function publicServiceFromView(view: PublicWebsiteView, serviceSlug: stri
     slug: serviceSlug,
     name: item.name,
     tradeCode: item.tradeCode,
-    tradeLabel: item.tradeCode === "CLEANING" ? "Cleaning" : "Handyman",
+    tradeLabel: tradeLabel(item.tradeCode),
     category: item.category,
     description: item.description ?? "",
     pricingMode: item.pricingMode,

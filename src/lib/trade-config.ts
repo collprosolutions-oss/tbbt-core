@@ -6,6 +6,7 @@
  * trades under one identity; each trade keeps its own configuration.
  */
 
+import { CLEANING_CATALOG_CATEGORIES } from "@/lib/cleaning-starter-catalog";
 import { currentIntakeSchema, type IntakeSchema } from "@/lib/intake-schema";
 import {
   parsePricingMode,
@@ -138,16 +139,11 @@ export const CLEANING_TRADE_CONFIG: TradeConfiguration = {
   },
   recurrenceSupport: true,
   catalogStarterSource: "CLEANING_STARTER",
-  catalogCategories: [
-    "Standard Cleaning",
-    "Deep Cleaning",
-    "Move-In / Move-Out",
-    "Add-Ons",
-    "Custom Cleaning",
-  ],
+  catalogCategories: CLEANING_CATALOG_CATEGORIES,
   customerLanguage: {
     requestTitle: "Request Cleaning",
-    requestDescription: "Tell us about the home and how often you would like it cleaned.",
+    requestDescription:
+      "Tell us about the home, how often you would like it cleaned, and any add-ons you want included.",
     requestCta: "Request Cleaning",
     emptyCatalogHint: "Describe the cleaning if you do not see the right service.",
   },

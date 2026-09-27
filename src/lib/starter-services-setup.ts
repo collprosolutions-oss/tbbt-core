@@ -3,8 +3,8 @@
  *
  * After identity setup, a new OWNER can install that trade's starter
  * catalog or skip. Completion is an explicit timestamp + choice, never
- * inferred from catalog item count. Today only Handyman has a starter
- * catalog; another trade can register later without a fake picker.
+ * inferred from catalog item count. Handyman and Cleaning both register
+ * starter catalogs through TradeConfiguration; this is not a fake picker.
  *
  * Preview shares Production and skips migrate. Columns are added with a
  * one-shot backfill of businesses that already existed when the columns
