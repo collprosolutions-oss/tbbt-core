@@ -57,6 +57,7 @@ const { loadAssignedCleaningVisitView, loadCleaningVisitView } = await import(
 const { createOperatingProcedure, setOperatingProcedureApproval } = await import(
   "@/lib/operating-procedures-ops"
 );
+const { weekRange } = await import("@/lib/time-cards");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -170,6 +171,14 @@ check(
     parseRecordedVisitOutcome("VISIT_COMPLETED") === "VISIT_COMPLETED" &&
     visitOutcomeLabel("RE_CLEAN_REQUESTED") === "Re-clean requested" &&
     visitOutcomeLabel("NONE") === "No visit outcome recorded",
+);
+check(
+  "VISIT_COMPLETED writes the visit and Job complete in one transaction",
+  read("src/lib/cleaning-visit-ops.ts").includes("$transaction") &&
+    read("src/lib/cleaning-visit-ops.ts").includes(
+      "completeJobWithRunningTimeSafetyInTransaction",
+    ) &&
+    !read("src/lib/cleaning-visit-ops.ts").includes("completeJobWithRunningTimeSafety(db"),
 );
 check(
   "Handyman jobs are not eligible; Cleaning recurrenceSupport is required",
@@ -499,6 +508,63 @@ try {
       jobAfterComplete?.status === "COMPLETED" &&
       jobsAfterComplete === jobsBeforeCadence &&
       jobAfterComplete.recurrenceCadence === "WEEKLY",
+  );
+
+  const jobAtomic = await createTradeJob(cleanA.id, "CLEANING", memWorkerA.id);
+  await setCleaningVisitCadence(prisma, ownerA, {
+    jobId: jobAtomic.id,
+    cadence: "WEEKLY",
+  });
+  await prisma.job.update({
+    where: { id: jobAtomic.id },
+    data: { status: "IN_PROGRESS" },
+  });
+  const atomicStartedAt = new Date();
+  await prisma.timeEntry.create({
+    data: {
+      businessId: cleanA.id,
+      membershipId: memWorkerA.id,
+      jobId: jobAtomic.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: atomicStartedAt,
+      source: "CLOCK",
+    },
+  });
+  await prisma.timesheetWeek.create({
+    data: {
+      businessId: cleanA.id,
+      membershipId: memWorkerA.id,
+      weekStartedAt: weekRange(atomicStartedAt).start,
+      status: "APPROVED",
+      approvedAt: new Date(),
+      approvedByMembershipId: memOwnerA.id,
+    },
+  });
+  await expectThrow(
+    "Approved-week running Job time refuses VISIT_COMPLETED",
+    () =>
+      recordAssignedVisitOutcome(
+        prisma,
+        { businessId: cleanA.id, membershipId: memWorkerA.id },
+        { jobId: jobAtomic.id, outcomeStatus: "VISIT_COMPLETED" },
+      ),
+    (error) =>
+      error instanceof Error &&
+      /approved job time is still running/i.test(error.message),
+  );
+  const visitAfterAtomicFail = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: jobAtomic.id, businessId: cleanA.id },
+  });
+  const jobAfterAtomicFail = await prisma.job.findFirst({
+    where: { id: jobAtomic.id, businessId: cleanA.id },
+  });
+  check(
+    "Failed Job completion leaves neither the visit nor the Job completed",
+    visitAfterAtomicFail?.outcomeStatus === "NONE" &&
+      visitAfterAtomicFail?.outcomeRecordedAt == null &&
+      visitAfterAtomicFail?.outcomeRecordedByMembershipId == null &&
+      jobAfterAtomicFail?.status === "IN_PROGRESS",
   );
 
   const procedure = await createOperatingProcedure(prisma, ownerA, {

@@ -27,7 +27,11 @@ import {
   type CrewChecklistItem,
 } from "@/lib/cleaning-visit-workflow";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
-import { completeJobWithRunningTimeSafety } from "@/lib/time-card-ops";
+import {
+  completeJobWithRunningTimeSafetyInTransaction,
+  isTimeCardError,
+  timeCardErrorMessage,
+} from "@/lib/time-card-ops";
 import { parseRecurrenceCadence } from "@/lib/recurrence";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -297,44 +301,56 @@ export async function recordAssignedVisitOutcome(
     throw new CleaningVisitError("Choose visit completed or requested re-clean.");
   }
   const job = await requireAssignedCleaningJob(db, actor, input.jobId);
-  let visit = await db.jobCrewVisit.findFirst({
-    where: { jobId: job.id, businessId: actor.businessId },
-  });
-  if (!visit) {
-    visit = await upsertVisitRecord(db, {
-      businessId: actor.businessId,
-      jobId: job.id,
-      checklist: packCrewChecklist(),
-    });
-  }
 
   if (outcome === "VISIT_COMPLETED" && job.status !== "IN_PROGRESS" && job.status !== "COMPLETED") {
     throw new CleaningVisitError(START_BEFORE_COMPLETE_MESSAGE);
   }
 
-  const recorded = await db.jobCrewVisit.update({
-    where: { id: visit.id },
-    data: {
-      outcomeStatus: outcome,
-      outcomeRecordedAt: new Date(),
-      outcomeRecordedByMembershipId: actor.membershipId,
-    },
-  });
+  try {
+    return await db.$transaction(async (tx) => {
+      let visit = await tx.jobCrewVisit.findFirst({
+        where: { jobId: job.id, businessId: actor.businessId },
+      });
+      if (!visit) {
+        visit = await upsertVisitRecord(tx, {
+          businessId: actor.businessId,
+          jobId: job.id,
+          checklist: packCrewChecklist(),
+        });
+      }
 
-  let jobStatus = job.status;
-  if (outcome === "VISIT_COMPLETED" && job.status === "IN_PROGRESS") {
-    const completed = await completeJobWithRunningTimeSafety(db, {
-      businessId: actor.businessId,
-      jobId: job.id,
-      actorMembershipId: actor.membershipId,
+      const recorded = await tx.jobCrewVisit.update({
+        where: { id: visit.id },
+        data: {
+          outcomeStatus: outcome,
+          outcomeRecordedAt: new Date(),
+          outcomeRecordedByMembershipId: actor.membershipId,
+        },
+      });
+
+      let jobStatus = job.status;
+      if (outcome === "VISIT_COMPLETED" && job.status === "IN_PROGRESS") {
+        const completed = await completeJobWithRunningTimeSafetyInTransaction(tx, {
+          businessId: actor.businessId,
+          jobId: job.id,
+          actorMembershipId: actor.membershipId,
+        });
+        if (!completed.ok) {
+          throw new CleaningVisitError(completed.error);
+        }
+        jobStatus = "COMPLETED";
+      }
+
+      return { visit: recorded, jobStatus };
     });
-    if (!completed.ok) {
-      throw new CleaningVisitError(completed.error);
+  } catch (error) {
+    if (isTimeCardError(error)) {
+      throw new CleaningVisitError(
+        timeCardErrorMessage(error, "That visit outcome could not be recorded."),
+      );
     }
-    jobStatus = "COMPLETED";
+    throw error;
   }
-
-  return { visit: recorded, jobStatus };
 }
 
 export async function countBusinessJobs(db: Db, businessId: string) {
