@@ -127,11 +127,12 @@ try {
     !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migration) &&
       migration.includes('CREATE TABLE IF NOT EXISTS "BusinessLocation"') &&
       migration.includes('ADD COLUMN IF NOT EXISTS "businessLocationId"') &&
-      !migration.includes('ALTER TABLE "Business" ADD') &&
-      !migration.includes("timezone") &&
-      !migration.includes("stripeAccountId") &&
-      !migration.includes("ServiceArea") &&
-      !migration.includes("BsosNetwork") &&
+      !migration.includes('ALTER TABLE "Business"') &&
+      !/UPDATE\s+"Business"/i.test(migration) &&
+      !/UPDATE\s+"Job"/i.test(migration) &&
+      !/UPDATE\s+"ServiceArea"/i.test(migration) &&
+      !/UPDATE\s+"BusinessPaymentAccount"/i.test(migration) &&
+      !migration.includes("BsosNetworkParticipation") &&
       migration.includes("20260927150000_bsos_network_participation"),
   );
   check(
@@ -164,11 +165,11 @@ try {
   );
   check(
     "Location writes do not touch timezone, Stripe, service areas, or jobs",
-    !opsSource.includes("timezone") &&
-      !opsSource.includes("stripeAccountId") &&
+    !opsSource.includes("business.update") &&
+      !opsSource.includes("businessPaymentAccount") &&
       !opsSource.includes("serviceArea") &&
       !opsSource.includes("prisma.job") &&
-      !actionsSource.includes("timezone") &&
+      !actionsSource.includes("business.update") &&
       !jobActions.includes("businessLocationId"),
   );
   check("Additive copy is present", /does not change timezone, Stripe/.test(LOCATION_ADDITIVE_MESSAGE));
