@@ -386,6 +386,9 @@ model Business {
   /// Explicit OWNER opt-in row for the BSOS Network. Absence means
   /// default-off — never infer participation from public contact or jobs.
   bsosNetworkParticipation BsosNetworkParticipation?
+  /// Optional office / shop locations. Empty after migrate. Not a timezone,
+  /// Stripe account, service area, or tenant boundary.
+  locations                BusinessLocation[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -417,6 +420,37 @@ model BusinessTrade {
   @@unique([businessId, tradeCode])
   @@index([businessId])
   @@index([tradeCode])
+}
+
+/// Optional office / shop location for one Business.
+/// Additive only. Existing businesses have zero rows after migrate.
+/// Creating a location never writes Business.timezone, Stripe accounts,
+/// ServiceArea rows, or a different businessId. Historical Jobs stay
+/// unassigned (Job.businessLocationId remains null).
+/// OWNER manages. Office roles (OWNER/ADMIN) may read. MEMBER stays
+/// field-scoped and cannot list or mutate locations.
+model BusinessLocation {
+  id                    String   @id @default(cuid())
+  businessId            String
+  name                  String
+  addressLine1          String   @default("")
+  addressLine2          String   @default("")
+  city                  String   @default("")
+  region                String   @default("")
+  postalCode            String   @default("")
+  notes                 String   @default("")
+  /// ACTIVE | ARCHIVED
+  status                String   @default("ACTIVE")
+  createdByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business  Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy Membership?  @relation("BusinessLocationCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  jobs      Job[]
+
+  @@index([businessId])
+  @@index([businessId, status])
 }
 
 model Membership {
@@ -503,6 +537,7 @@ model Membership {
   createdBusinessActionItems      BusinessActionItem[]    @relation("BusinessActionItemCreator")
   createdCampaigns                MarketingCampaign[]     @relation("MarketingCampaignCreator")
   createdServiceAreas             ServiceArea[]           @relation("ServiceAreaCreator")
+  createdBusinessLocations        BusinessLocation[]      @relation("BusinessLocationCreator")
   createdReferralRequests         ReferralRequest[]       @relation("ReferralRequestCreator")
   createdCustomerFollowUps        CustomerFollowUp[]      @relation("CustomerFollowUpCreator")
   aiConversations                 AiConversation[]        @relation("AiConversationMembership")
@@ -1108,6 +1143,11 @@ model Job {
   businessId                String
   customerId                String?
   propertyId                String?
+  /// Optional office location this Job is associated with. Null is the
+  /// historical and default state — existing Jobs and new Jobs created
+  /// without an explicit assignment stay unassigned. Application code
+  /// must never infer a location from timezone, Stripe, or service area.
+  businessLocationId        String?
   estimateId                String?
   /// The immutable EstimateVersion this Work Order was created from -- the
   /// exact scope/price a customer actually approved, independent of any
@@ -1204,6 +1244,7 @@ model Job {
   campaign                MarketingCampaign?      @relation("JobCampaign", fields: [campaignId], references: [id], onDelete: SetNull)
   customer                Customer?               @relation(fields: [customerId], references: [id], onDelete: SetNull)
   property                Property?               @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  businessLocation        BusinessLocation?       @relation(fields: [businessLocationId], references: [id], onDelete: SetNull)
   estimate                Estimate?               @relation(fields: [estimateId], references: [id], onDelete: SetNull)
   approvedEstimateVersion EstimateVersion?        @relation("JobApprovedEstimateVersion", fields: [approvedEstimateVersionId], references: [id], onDelete: SetNull)
   assignedMembership      Membership?             @relation("JobAssignment", fields: [assignedMembershipId], references: [id], onDelete: SetNull)
@@ -1238,6 +1279,7 @@ model Job {
 
   @@index([businessId])
   @@index([assignedMembershipId])
+  @@index([businessLocationId])
   @@index([recurrenceSourceJobId])
   @@index([appointmentConfirmedByMembershipId])
   @@index([startWithoutConfirmationByMembershipId])

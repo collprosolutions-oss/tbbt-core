@@ -7,6 +7,7 @@ import { BusinessTimeZoneForm } from "@/components/settings/business-timezone-fo
 import { BusinessTradesForm } from "@/components/settings/business-trades-form";
 import { BusinessPublicContactForm } from "@/components/settings/business-public-contact-form";
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
+import { BusinessLocationsPanel } from "@/components/settings/business-locations-panel";
 import { ServiceAreaSettings } from "@/components/settings/service-area-settings";
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
 import { WebsitePublishPanel } from "@/components/settings/website-publish-panel";
@@ -386,7 +387,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
               canEdit={canEditConsequential}
             />
           </div>
-          <DeferredField label="Business address" detail="Not stored on the Business record yet." />
+          <BusinessLocationsPanel canManage={canEditConsequential} />
         </SectionCard>
       </div>
     );
