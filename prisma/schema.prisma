@@ -389,6 +389,7 @@ model Business {
   /// Optional office / shop locations. Empty after migrate. Not a timezone,
   /// Stripe account, service area, or tenant boundary.
   locations                BusinessLocation[]
+  partnerVendorOpportunities PartnerVendorOpportunity[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -569,6 +570,8 @@ model Membership {
   protectionAcknowledgments       BusinessProtectionAcknowledgment[] @relation("ProtectionAcknowledgmentActor")
   recordedCrewVisitOutcomes       JobCrewVisit[] @relation("JobCrewVisitOutcomeRecorder")
   bsosNetworkUpdates              BsosNetworkParticipation[] @relation("BsosNetworkParticipationActor")
+  createdPartnerVendorOpportunities PartnerVendorOpportunity[] @relation("PartnerVendorOpportunityCreator")
+  reviewedPartnerVendorOpportunities PartnerVendorOpportunity[] @relation("PartnerVendorOpportunityReviewer")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -2746,6 +2749,7 @@ model Referral {
   referredCustomer Customer?        @relation("ReferralReferredCustomer", fields: [referredCustomerId], references: [id], onDelete: SetNull)
   referralRequest  ReferralRequest? @relation(fields: [referralRequestId], references: [id], onDelete: SetNull)
   campaign         MarketingCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  partnerVendorOpportunities PartnerVendorOpportunity[]
 
   @@index([businessId])
   @@index([sourceCustomerId])
@@ -3493,6 +3497,7 @@ model Supplier {
   priceHistory      MaterialPriceHistory[]
   purchaseListItems MaterialPurchaseListItem[]
   purchaseOrders    MaterialPurchaseOrder[]
+  partnerVendorOpportunities PartnerVendorOpportunity[]
 
   @@index([businessId])
   @@index([businessId, active])
@@ -4068,6 +4073,52 @@ model BsosNetworkParticipation {
 
   @@index([optedIn])
   @@index([optedIn, tradeCode])
+}
+
+/// Private owner-managed partner / vendor opportunity for one business.
+/// Reuses existing same-tenant Supplier or Referral rows when linked.
+/// This is not an external marketplace, live supplier inventory,
+/// affiliate payout ledger, or BSOS Network membership record.
+///
+/// kind: PARTNER | VENDOR
+/// source: MANUAL | SUPPLIER | REFERRAL
+/// reviewStatus: PENDING_REVIEW | REVIEWED | REJECTED
+model PartnerVendorOpportunity {
+  id                         String    @id @default(cuid())
+  businessId                 String
+  kind                       String
+  name                       String
+  summary                    String    @default("")
+  notes                      String    @default("")
+  contactName                String?
+  contactEmail               String?
+  contactPhone               String?
+  website                    String?
+  category                   String?
+  locationDescription        String?
+  source                     String
+  reviewStatus               String    @default("PENDING_REVIEW")
+  supplierId                 String?
+  referralId                 String?
+  createdByMembershipId      String
+  lastReviewedAt             DateTime?
+  lastReviewedByMembershipId String?
+  reviewNotes                String?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  supplier   Supplier?   @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  referral   Referral?   @relation(fields: [referralId], references: [id], onDelete: SetNull)
+  createdBy  Membership  @relation("PartnerVendorOpportunityCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  reviewedBy Membership? @relation("PartnerVendorOpportunityReviewer", fields: [lastReviewedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([businessId, kind])
+  @@index([businessId, reviewStatus])
+  @@index([businessId, source])
+  @@index([supplierId])
+  @@index([referralId])
 }
 
 /// Provider-neutral e-sign boundary. No live provider is wired in this PR.
