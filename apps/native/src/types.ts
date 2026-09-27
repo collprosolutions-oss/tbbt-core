@@ -42,6 +42,9 @@ export type NativeTodayPayload = {
   today: NativeJobSummary[];
   upcoming: NativeJobSummary[];
   completed: NativeJobSummary[];
+  truncated: boolean;
+  limit: number;
+  truncatedNotice: string | null;
 };
 
 export type NativeSessionPayload = {

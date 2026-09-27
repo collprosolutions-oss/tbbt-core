@@ -23,10 +23,13 @@ const { isNativeFieldApiPath, NATIVE_FIELD_API_PREFIX } = await import(
   "@/lib/native-field-api-path"
 );
 const {
+  NATIVE_TODAY_JOB_LIMIT,
   buildNativeTodayPayload,
+  listNativeAssignedJobs,
   loadNativeAssignedJob,
   loadNativeToday,
   nativeAssignedJobWhere,
+  nativeTodayTruncatedNotice,
 } = await import("@/lib/native-field");
 const {
   readBearerToken,
@@ -146,6 +149,13 @@ check(
     !nativeFieldSrc.includes("hourlyWage") &&
     nativeFieldSrc.includes("assignedMembershipId: field.membershipId"),
 );
+check(
+  "Today list is hard-capped in listNativeAssignedJobs (take limit+1, then slice)",
+  nativeFieldSrc.includes("NATIVE_TODAY_JOB_LIMIT") &&
+    nativeFieldSrc.includes("take: NATIVE_TODAY_JOB_LIMIT + 1") &&
+    nativeFieldSrc.includes("rows.slice(0, NATIVE_TODAY_JOB_LIMIT)") &&
+    NATIVE_TODAY_JOB_LIMIT > 0,
+);
 
 const nativeAppSrc = [
   readRepo("apps/native/App.tsx"),
@@ -161,7 +171,9 @@ check(
     !nativeAppSrc.includes("passwordHash") &&
     nativeAppSrc.includes("Bearer") &&
     nativeAppSrc.includes("SecureStore") &&
-    nativeAppSrc.includes("/api/native/v1/today"),
+    nativeAppSrc.includes("/api/native/v1/today") &&
+    nativeAppSrc.includes("truncatedNotice") &&
+    nativeAppSrc.includes("payload.truncated"),
 );
 
 try {
@@ -356,6 +368,47 @@ try {
     },
   });
 
+  const assignedBase = assignedJob.scheduledAt ?? new Date();
+  const overflowAssigned = [];
+  for (let i = 1; i <= NATIVE_TODAY_JOB_LIMIT + 2; i += 1) {
+    const name = `Overflow Assigned Canary ${String(i).padStart(2, "0")}`;
+    const customer = await prisma.customer.create({
+      data: { businessId: businessA.id, name, phone: "555-0100" },
+    });
+    const job = await prisma.job.create({
+      data: {
+        businessId: businessA.id,
+        customerId: customer.id,
+        assignedMembershipId: memberMembership.id,
+        projectToken: randomUUID(),
+        status: "SCHEDULED",
+        scheduledAt: new Date(assignedBase.getTime() + i * 60 * 60 * 1000),
+      },
+    });
+    overflowAssigned.push({ i, id: job.id, name });
+  }
+  const keptOverflow = overflowAssigned.filter((row) => row.i < NATIVE_TODAY_JOB_LIMIT);
+  const droppedOverflow = overflowAssigned.filter((row) => row.i >= NATIVE_TODAY_JOB_LIMIT);
+
+  const extraBetaJobs = [];
+  for (let i = 1; i <= 3; i += 1) {
+    const name = `Beta Job Canary ${i}`;
+    const customer = await prisma.customer.create({
+      data: { businessId: businessB.id, name, phone: "555-0177" },
+    });
+    const job = await prisma.job.create({
+      data: {
+        businessId: businessB.id,
+        customerId: customer.id,
+        assignedMembershipId: betaMembership.id,
+        projectToken: randomUUID(),
+        status: "SCHEDULED",
+        scheduledAt: new Date(assignedBase.getTime() + i * 60 * 60 * 1000),
+      },
+    });
+    extraBetaJobs.push({ id: job.id, name });
+  }
+
   console.log("\nAUTH — native sign-in issues a hashed Session, not a copied password");
   const badPassword = await signInNativeField(prisma, {
     email: memberUser.email,
@@ -426,14 +479,46 @@ try {
     stolenWorkspace.ok === false && stolenWorkspace.status === 403,
   );
 
-  console.log("\nTODAY — assigned-job isolation, no owner records");
+  console.log("\nTODAY — assigned-job isolation, cap, and no owner records");
+  const listed = await listNativeAssignedJobs(prisma, memberAccess.access);
+  check(
+    `listNativeAssignedJobs returns at most ${NATIVE_TODAY_JOB_LIMIT} assigned jobs`,
+    listed.jobs.length === NATIVE_TODAY_JOB_LIMIT &&
+      listed.limit === NATIVE_TODAY_JOB_LIMIT &&
+      listed.truncated === true,
+  );
+  check(
+    `MEMBER has more assigned jobs than the cap (${NATIVE_TODAY_JOB_LIMIT + 3} > ${NATIVE_TODAY_JOB_LIMIT})`,
+    overflowAssigned.length === NATIVE_TODAY_JOB_LIMIT + 2,
+  );
+
   const today = await loadNativeToday(prisma, memberAccess.access);
   const todayJson = jsonBlob(today);
   const todayIds = [...today.today, ...today.upcoming, ...today.completed].map((job) => job.id);
-  check("Today includes the MEMBER's assigned job", todayIds.includes(assignedJob.id));
+  check("Today includes the MEMBER's earliest assigned job", todayIds.includes(assignedJob.id));
+  check(
+    "Today includes assigned overflow jobs that fit under the cap",
+    keptOverflow.every((row) => todayIds.includes(row.id)),
+  );
+  check(
+    "Today omits assigned overflow jobs beyond the cap",
+    droppedOverflow.every((row) => !todayIds.includes(row.id)) &&
+      droppedOverflow.every((row) => !todayJson.includes(row.name)),
+  );
+  check(
+    "Today returned count equals the cap and advertises truncation",
+    todayIds.length === NATIVE_TODAY_JOB_LIMIT &&
+      today.truncated === true &&
+      today.limit === NATIVE_TODAY_JOB_LIMIT &&
+      today.truncatedNotice === nativeTodayTruncatedNotice(NATIVE_TODAY_JOB_LIMIT),
+  );
   check("Today hides the other MEMBER's job", !todayIds.includes(otherJob.id));
   check("Today hides the unassigned job", !todayIds.includes(unassignedJob.id));
   check("Today hides the other business's job", !todayIds.includes(betaJob.id));
+  check(
+    "Today hides additional cross-tenant assigned jobs",
+    extraBetaJobs.every((row) => !todayIds.includes(row.id) && !todayJson.includes(row.name)),
+  );
   check(
     "Today JSON does not leak owner/financial canaries",
     !containsAny(todayJson, [
@@ -464,6 +549,8 @@ try {
       check(
         "OWNER Today is assignment-scoped (empty here) and does not list every job",
         ownerIds.length === 0 &&
+          ownerToday.truncated === false &&
+          ownerToday.truncatedNotice === null &&
           !ownerIds.includes(assignedJob.id) &&
           !ownerIds.includes(otherJob.id),
       );
@@ -529,6 +616,7 @@ try {
     },
   );
   check("Frozen Today grouping places the assigned job in Today", grouped.today.some((job) => job.id === assignedJob.id));
+  check("Frozen Today grouping is not truncated when under the cap", grouped.truncated === false && grouped.truncatedNotice === null);
 
   if (failures > 0) {
     throw new Error(`Native field check failed (${failures} case(s)).`);

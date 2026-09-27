@@ -34,6 +34,13 @@ export const NATIVE_ASSIGNED_JOB_WHERE = {
 
 export const NATIVE_FIELD_JOB_LIST_SELECT = FIELD_JOB_SELECT;
 
+/** Hard cap on the native Today list. Detail stays one assigned job by id. */
+export const NATIVE_TODAY_JOB_LIMIT = 20;
+
+export function nativeTodayTruncatedNotice(limit = NATIVE_TODAY_JOB_LIMIT) {
+  return `Showing the first ${limit} assigned jobs. More are assigned; this list is capped.`;
+}
+
 const NATIVE_FIELD_JOB_DETAIL_SELECT = {
   id: true,
   status: true,
@@ -103,6 +110,12 @@ export type NativeJobDetail = NativeJobSummary & {
   };
 };
 
+export type NativeAssignedJobPage = {
+  jobs: FieldJob[];
+  truncated: boolean;
+  limit: number;
+};
+
 export type NativeTodayPayload = {
   viewer: NativeViewer;
   workspace: NativeWorkspace;
@@ -110,6 +123,9 @@ export type NativeTodayPayload = {
   today: NativeJobSummary[];
   upcoming: NativeJobSummary[];
   completed: NativeJobSummary[];
+  truncated: boolean;
+  limit: number;
+  truncatedNotice: string | null;
 };
 
 export function nativeAssignedJobWhere(
@@ -138,15 +154,23 @@ export function toNativeJobSummary(job: FieldJob, timeZone: string): NativeJobSu
 export async function listNativeAssignedJobs(
   db: Db,
   field: Pick<NativeFieldAccess, "businessId" | "membershipId">,
-) {
-  return db.job.findMany({
+): Promise<NativeAssignedJobPage> {
+  const rows = await db.job.findMany({
     where: {
       businessId: field.businessId,
       assignedMembershipId: field.membershipId,
     },
     select: NATIVE_FIELD_JOB_LIST_SELECT,
-    orderBy: { scheduledAt: "asc" },
+    orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+    take: NATIVE_TODAY_JOB_LIMIT + 1,
   });
+  const truncated = rows.length > NATIVE_TODAY_JOB_LIMIT;
+  const jobs = truncated ? rows.slice(0, NATIVE_TODAY_JOB_LIMIT) : rows;
+  return {
+    jobs,
+    truncated,
+    limit: NATIVE_TODAY_JOB_LIMIT,
+  };
 }
 
 export function buildNativeTodayPayload(
@@ -155,10 +179,14 @@ export function buildNativeTodayPayload(
     access: NativeFieldAccess;
     now?: Date;
     timeZone?: string;
+    truncated?: boolean;
+    limit?: number;
   },
 ): NativeTodayPayload {
   const timeZone = input.timeZone ?? resolveBusinessTimeZone(null);
   const groups = groupFieldJobs(jobs, startOfDay(input.now ?? new Date(), timeZone), timeZone);
+  const truncated = Boolean(input.truncated);
+  const limit = input.limit ?? NATIVE_TODAY_JOB_LIMIT;
   return {
     viewer: input.access.viewer,
     workspace: input.access.workspace,
@@ -166,6 +194,9 @@ export function buildNativeTodayPayload(
     today: groups.today.map((job) => toNativeJobSummary(job, timeZone)),
     upcoming: groups.upcoming.map((job) => toNativeJobSummary(job, timeZone)),
     completed: groups.completed.map((job) => toNativeJobSummary(job, timeZone)),
+    truncated,
+    limit,
+    truncatedNotice: truncated ? nativeTodayTruncatedNotice(limit) : null,
   };
 }
 
@@ -180,8 +211,14 @@ export async function loadNativeToday(
       select: { timezone: true },
     }),
   );
-  const jobs = await listNativeAssignedJobs(db, access);
-  return buildNativeTodayPayload(jobs, { access, now: options?.now, timeZone });
+  const page = await listNativeAssignedJobs(db, access);
+  return buildNativeTodayPayload(page.jobs, {
+    access,
+    now: options?.now,
+    timeZone,
+    truncated: page.truncated,
+    limit: page.limit,
+  });
 }
 
 export async function loadNativeAssignedJob(

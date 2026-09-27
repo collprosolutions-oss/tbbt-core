@@ -22,6 +22,8 @@ The edge proxy lets `/api/native/` through without a cookie so Bearer auth can r
 
 `GET /api/native/v1/today` and `GET /api/native/v1/jobs/:jobId` use the same assignment clause as Field Home: `businessId` + `assignedMembershipId` in one query.
 
+Today is also **capped**. `listNativeAssignedJobs()` takes at most `NATIVE_TODAY_JOB_LIMIT` assigned jobs (currently 20), ordered by `scheduledAt` then `id`. If more assigned jobs exist, the payload sets `truncated: true` and `truncatedNotice`. The extra assigned rows are not returned. Cross-tenant and other workers' jobs are never part of that page. Job detail by id is unchanged: one assigned job, or 404.
+
 Returned job data is operational only: status, schedule, customer name/phone, address, access lines, and approved-scope descriptions/quantities. It does **not** return invoices, estimate totals, unit prices, wages, customer emails, portal tokens, other members' jobs, or owner Today / management records.
 
 MEMBER access stays field-scoped. OWNER/ADMIN using this API also only see jobs assigned to themselves.

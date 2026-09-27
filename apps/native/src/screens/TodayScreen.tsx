@@ -100,6 +100,9 @@ export function TodayScreen({
       <Text style={styles.copy}>
         Only jobs assigned to you, {viewer.name}. Other workers and owner records stay hidden.
       </Text>
+      {payload?.truncated ? (
+        <Text style={styles.truncated}>{payload.truncatedNotice ?? "This list is capped."}</Text>
+      ) : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {!payload && !error ? <ActivityIndicator color="#86efac" /> : null}
       {payload ? (
@@ -149,6 +152,11 @@ const styles = StyleSheet.create({
   },
   error: {
     color: "#fca5a5",
+  },
+  truncated: {
+    color: "#fde68a",
+    fontSize: 14,
+    lineHeight: 20,
   },
   group: {
     gap: 8,
