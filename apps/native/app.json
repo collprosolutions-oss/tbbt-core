@@ -12,6 +12,16 @@
     },
     "android": {
       "package": "com.tbbt.field"
-    }
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow TBBT Field to attach job photos.",
+          "cameraPermission": "Allow TBBT Field to take job photos.",
+          "microphonePermission": false
+        }
+      ]
+    ]
   }
 }

@@ -1,6 +1,8 @@
 import { nativeApiUrl } from "./config";
 import type {
   NativeJobDetail,
+  NativeJobPhotoAuthorizePayload,
+  NativeJobPhotoStage,
   NativeSessionPayload,
   NativeTodayPayload,
   NativeViewer,
@@ -158,6 +160,67 @@ export async function completeNativeJob(
     return { error: typeof body.error === "string" ? body.error : "That job could not be completed." };
   }
   return body as unknown as { job: NativeJobDetail; alreadyCompleted: boolean };
+}
+
+export async function authorizeNativeJobPhoto(
+  token: string,
+  jobId: string,
+  input: { originalFilename: string; mimeType: string; fileSizeBytes: number },
+): Promise<NativeJobPhotoAuthorizePayload | NativeApiError> {
+  const response = await fetch(
+    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/photos/authorize`),
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  const body = await parseJson(response);
+  if (!response.ok) {
+    return { error: typeof body.error === "string" ? body.error : "That photo could not be uploaded. Try again." };
+  }
+  return body as unknown as NativeJobPhotoAuthorizePayload;
+}
+
+export async function finalizeNativeJobPhoto(
+  token: string,
+  jobId: string,
+  input: { assetId: string; stage: NativeJobPhotoStage; caption?: string },
+): Promise<{ job: NativeJobDetail } | NativeApiError> {
+  const response = await fetch(
+    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/photos/finalize`),
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  const body = await parseJson(response);
+  if (!response.ok) {
+    return { error: typeof body.error === "string" ? body.error : "That photo could not be uploaded. Try again." };
+  }
+  return body as unknown as { job: NativeJobDetail };
+}
+
+export async function abortNativeJobPhoto(
+  token: string,
+  jobId: string,
+  assetId: string,
+) {
+  await fetch(nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/photos/abort`), {
+    method: "POST",
+    headers: {
+      ...authHeaders(token),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ assetId }),
+  }).catch(() => undefined);
 }
 
 export function isApiError(value: unknown): value is NativeApiError {

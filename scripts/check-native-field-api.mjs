@@ -185,6 +185,10 @@ const todayRouteSrc = readRepo("src/app/api/native/v1/today/route.ts");
 const jobRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/route.ts");
 const completeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/complete/route.ts");
 const startRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/start/route.ts");
+const photoAuthorizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/authorize/route.ts");
+const photoFinalizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/finalize/route.ts");
+const photoAbortRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/abort/route.ts");
+const photoPreviewRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/[photoId]/route.ts");
 const completeOpsSrc = readRepo("src/lib/native-field-ops.ts");
 const timeCardOpsSrc = readRepo("src/lib/time-card-ops.ts");
 const limitsSrc = readRepo("src/lib/native-session-limits.ts");
@@ -195,11 +199,19 @@ check(
     jobRouteSrc.includes("readBearerToken") &&
     completeRouteSrc.includes("readBearerToken") &&
     startRouteSrc.includes("readBearerToken") &&
+    photoAuthorizeRouteSrc.includes("readBearerToken") &&
+    photoFinalizeRouteSrc.includes("readBearerToken") &&
+    photoAbortRouteSrc.includes("readBearerToken") &&
+    photoPreviewRouteSrc.includes("readBearerToken") &&
     !sessionRouteSrc.includes("cookies(") &&
     !todayRouteSrc.includes("cookies(") &&
     !jobRouteSrc.includes("cookies(") &&
     !completeRouteSrc.includes("cookies(") &&
     !startRouteSrc.includes("cookies(") &&
+    !photoAuthorizeRouteSrc.includes("cookies(") &&
+    !photoFinalizeRouteSrc.includes("cookies(") &&
+    !photoAbortRouteSrc.includes("cookies(") &&
+    !photoPreviewRouteSrc.includes("cookies(") &&
     !completeOpsSrc.includes("cookies("),
 );
 check(
@@ -305,6 +317,7 @@ const nativeAppSrc = [
   readRepo("apps/native/src/screens/SignInScreen.tsx"),
   readRepo("apps/native/src/screens/TodayScreen.tsx"),
   readRepo("apps/native/src/screens/JobScreen.tsx"),
+  readRepo("apps/native/src/screens/JobPhotosSection.tsx"),
 ].join("\n");
 check(
   "Native app is not a WebView wrapper and does not embed credentials",
@@ -321,7 +334,11 @@ check(
     nativeAppSrc.includes("runningTime") &&
     nativeAppSrc.includes("loadNativeJob") &&
     nativeAppSrc.includes("truncatedNotice") &&
-    nativeAppSrc.includes("payload.truncated"),
+    nativeAppSrc.includes("payload.truncated") &&
+    nativeAppSrc.includes("/photos/authorize") &&
+    nativeAppSrc.includes("Take photo") &&
+    nativeAppSrc.includes("Review photo") &&
+    nativeAppSrc.includes("Upload photo"),
 );
 
 try {

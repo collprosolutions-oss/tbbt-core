@@ -102,6 +102,7 @@ npm run test:plan-entitlements
 npm run test:materials-suppliers
 npm run test:communications-department
 npm run test:native-field
+npm run test:native-field-photos
 npx tsc --noEmit
 npm run build
 ```

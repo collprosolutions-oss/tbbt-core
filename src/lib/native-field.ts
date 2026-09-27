@@ -11,7 +11,7 @@
  * Lookup uses the same compound scope as `assignedJobWhere()` in
  * src/lib/field-access.ts: businessId + assignedMembershipId in one
  * query. There is no fetch-then-compare step. Assigned-worker writes
- * live in `src/lib/native-field-ops.ts`.
+ * live in `src/lib/native-field-ops.ts` and `src/lib/native-field-photos.ts`.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -29,6 +29,8 @@ import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import { ownerAccessSummaryLines } from "@/lib/property-access";
 import { startOfDay } from "@/lib/schedule";
 import { TIME_ACTIVITY_LABELS, isTimeActivityType } from "@/lib/time-cards";
+import { authorizePrivateStoredAssetDownload } from "@/lib/business-storage/private-serve";
+import type { StorageProvider } from "@/lib/business-storage/types";
 import type { NativeFieldAccess, NativeViewer, NativeWorkspace } from "@/lib/native-session";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -43,8 +45,19 @@ export const NATIVE_FIELD_JOB_LIST_SELECT = FIELD_JOB_SELECT;
 /** Hard cap on the native Today list. Detail stays one assigned job by id. */
 export const NATIVE_TODAY_JOB_LIMIT = 20;
 
+/** Hard cap on assigned-job photos shown and uploaded from native. */
+export const NATIVE_JOB_PHOTO_LIMIT = 12;
+
 export function nativeTodayTruncatedNotice(limit = NATIVE_TODAY_JOB_LIMIT) {
   return `Showing the first ${limit} assigned jobs. More are assigned; this list is capped.`;
+}
+
+export function nativeJobPhotoTruncatedNotice(limit = NATIVE_JOB_PHOTO_LIMIT) {
+  return `Showing the first ${limit} photos. More are on this job; this list is capped.`;
+}
+
+export function nativeJobPhotoTooManyMessage(limit = NATIVE_JOB_PHOTO_LIMIT) {
+  return `This job already has ${limit} photos, the field capture limit.`;
 }
 
 const NATIVE_FIELD_JOB_DETAIL_SELECT = {
@@ -121,6 +134,35 @@ export type NativeJobRunningTime = {
   startedAtLabel: string | null;
 };
 
+export type NativeJobPhotoStage = "BEFORE" | "DURING" | "AFTER";
+
+export type NativeJobPhoto = {
+  id: string;
+  stage: NativeJobPhotoStage;
+  caption: string | null;
+  createdAt: string;
+  previewUrl: string | null;
+  previewExpiresInSeconds: number | null;
+};
+
+export type NativeJobPhotoUploadAction = {
+  available: boolean;
+  reason: string | null;
+  remaining: number;
+  limit: number;
+  count: number;
+};
+
+export type NativeJobPhotos = {
+  items: NativeJobPhoto[];
+  count: number;
+  limit: number;
+  remaining: number;
+  truncated: boolean;
+  truncatedNotice: string | null;
+  upload: NativeJobPhotoUploadAction;
+};
+
 export type NativeJobDetail = NativeJobSummary & {
   customerPhone: string | null;
   callHref: string | null;
@@ -135,7 +177,44 @@ export type NativeJobDetail = NativeJobSummary & {
   startAction: NativeJobStartAction;
   completeAction: NativeJobCompleteAction;
   runningTime: NativeJobRunningTime;
+  photos: NativeJobPhotos;
 };
+
+export type NativeJobLoadOptions = {
+  storage?: { provider?: StorageProvider };
+};
+
+export function emptyNativeJobPhotos(): NativeJobPhotos {
+  return {
+    items: [],
+    count: 0,
+    limit: NATIVE_JOB_PHOTO_LIMIT,
+    remaining: NATIVE_JOB_PHOTO_LIMIT,
+    truncated: false,
+    truncatedNotice: null,
+    upload: nativeJobPhotoUploadAction(0),
+  };
+}
+
+export function nativeJobPhotoUploadAction(count: number): NativeJobPhotoUploadAction {
+  const remaining = Math.max(0, NATIVE_JOB_PHOTO_LIMIT - count);
+  if (remaining === 0) {
+    return {
+      available: false,
+      reason: nativeJobPhotoTooManyMessage(),
+      remaining,
+      limit: NATIVE_JOB_PHOTO_LIMIT,
+      count,
+    };
+  }
+  return {
+    available: true,
+    reason: null,
+    remaining,
+    limit: NATIVE_JOB_PHOTO_LIMIT,
+    count,
+  };
+}
 
 export function nativeCompleteAction(status: string): NativeJobCompleteAction {
   const lifecycle = evaluateCompleteJob(status);
@@ -321,6 +400,7 @@ export async function loadNativeAssignedJob(
   db: Db,
   access: NativeFieldAccess,
   jobId: string,
+  options?: NativeJobLoadOptions,
 ): Promise<NativeJobDetail | null> {
   const job = await db.job.findFirst({
     where: nativeAssignedJobWhere(jobId, access),
@@ -350,6 +430,111 @@ export async function loadNativeAssignedJob(
     startAction: nativeStartAction(job.status, job),
     completeAction: nativeCompleteAction(job.status),
     runningTime: await loadNativeJobRunningTime(db, access, job.id, timeZone),
+    photos: await loadNativeAssignedJobPhotos(db, access, job.id, options),
+  };
+}
+
+export async function loadNativeAssignedJobPhotos(
+  db: Db,
+  access: NativeFieldAccess,
+  jobId: string,
+  options?: NativeJobLoadOptions,
+): Promise<NativeJobPhotos> {
+  const assigned = await db.job.findFirst({
+    where: nativeAssignedJobWhere(jobId, access),
+    select: { id: true },
+  });
+  if (!assigned) {
+    return emptyNativeJobPhotos();
+  }
+
+  const where = { businessId: access.businessId, jobId: assigned.id };
+  const [count, rows] = await Promise.all([
+    db.jobPhoto.count({ where }),
+    db.jobPhoto.findMany({
+      where,
+      select: {
+        id: true,
+        stage: true,
+        caption: true,
+        createdAt: true,
+        url: true,
+        storedAssetId: true,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: NATIVE_JOB_PHOTO_LIMIT + 1,
+    }),
+  ]);
+  const truncated = rows.length > NATIVE_JOB_PHOTO_LIMIT;
+  const listed = truncated ? rows.slice(0, NATIVE_JOB_PHOTO_LIMIT) : rows;
+  const items: NativeJobPhoto[] = [];
+  for (const row of listed) {
+    items.push(await toNativeJobPhoto(db, access, row, options));
+  }
+  return {
+    items,
+    count,
+    limit: NATIVE_JOB_PHOTO_LIMIT,
+    remaining: Math.max(0, NATIVE_JOB_PHOTO_LIMIT - count),
+    truncated,
+    truncatedNotice: truncated ? nativeJobPhotoTruncatedNotice() : null,
+    upload: nativeJobPhotoUploadAction(count),
+  };
+}
+
+async function toNativeJobPhoto(
+  db: Db,
+  access: NativeFieldAccess,
+  row: {
+    id: string;
+    stage: NativeJobPhotoStage;
+    caption: string | null;
+    createdAt: Date;
+    url: string;
+    storedAssetId: string | null;
+  },
+  options?: NativeJobLoadOptions,
+): Promise<NativeJobPhoto> {
+  if (row.storedAssetId) {
+    const download = await authorizePrivateStoredAssetDownload(
+      db,
+      row.storedAssetId,
+      access.businessId,
+      {
+        provider: options?.storage?.provider,
+        viewer: {
+          role: access.workspace.role,
+          membershipId: access.membershipId,
+        },
+      },
+    );
+    if (download.ok) {
+      return {
+        id: row.id,
+        stage: row.stage,
+        caption: row.caption,
+        createdAt: row.createdAt.toISOString(),
+        previewUrl: download.url,
+        previewExpiresInSeconds: download.expiresInSeconds,
+      };
+    }
+    return {
+      id: row.id,
+      stage: row.stage,
+      caption: row.caption,
+      createdAt: row.createdAt.toISOString(),
+      previewUrl: null,
+      previewExpiresInSeconds: null,
+    };
+  }
+
+  return {
+    id: row.id,
+    stage: row.stage,
+    caption: row.caption,
+    createdAt: row.createdAt.toISOString(),
+    previewUrl: row.url.startsWith("https://") || row.url.startsWith("http://") ? row.url : null,
+    previewExpiresInSeconds: null,
   };
 }
 
