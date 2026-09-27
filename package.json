@@ -130,6 +130,7 @@
     "test:business-locations": "node --experimental-strip-types scripts/check-business-locations.mjs",
     "test:partner-vendor-directory": "node --experimental-strip-types scripts/check-partner-vendor-directory.mjs",
     "test:external-lead-import": "node --experimental-strip-types scripts/check-external-lead-import.mjs",
+    "test:native-field": "node --experimental-strip-types scripts/check-native-field-api.mjs",
     "test:regulatory-intelligence": "node --experimental-strip-types scripts/check-regulatory-intelligence.mjs"
   },
   "dependencies": {

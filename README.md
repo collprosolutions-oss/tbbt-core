@@ -65,7 +65,8 @@ Do **not** set `TBBT_PAYMENTS_ADAPTER=fake` or `TBBT_SAAS_BILLING_ADAPTER=fake` 
 - A user can only see a workspace through `Membership`.
 - Server code must query with `businessScope(workspace.business.id)` from `src/lib/access.ts`.
 - Session cookie proves the user; workspace cookie selects a membership the user already has.
-- OWNER / ADMIN use the management console. MEMBER is field-scoped.
+- Native field clients use a Bearer token on the same hashed `Session` row, not the website cookie and not a copied password.
+- OWNER / ADMIN use the management console. MEMBER is field-scoped, including `/api/native/v1` Today/job reads.
 - Settings → Go-live / Health is a read-only production capability board. It does not connect providers or produce a single ready score.
 
 ```bash
@@ -100,9 +101,12 @@ npm run test:production-certification
 npm run test:plan-entitlements
 npm run test:materials-suppliers
 npm run test:communications-department
+npm run test:native-field
 npx tsc --noEmit
 npm run build
 ```
+
+The isolated native field app lives in `apps/native`. It is not a WebView of the website. See `docs/NATIVE_FIELD.md`.
 
 Production migrate policy (no database):
 
