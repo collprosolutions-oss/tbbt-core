@@ -1,11 +1,12 @@
 /**
  * Owner Action Center — read projection over Controlled AI Actions V1.
  *
- * V1 does not persist a proposal/attempt/origin table. Live propose/confirm
- * uses the current allowlist. Persisted BusinessActionItem and
- * BsosRecommendationState rows are useful owner-plan truth, but they do
- * not record whether a Controlled AI Action produced them. This module
- * never infers a historical ControlledActionKey from generic BSOS state.
+ * Live propose/confirm uses the current allowlist. Persisted
+ * BusinessActionItem and BsosRecommendationState rows are useful
+ * owner-plan truth, but they do not record whether a Controlled AI Action
+ * produced them. This module never infers a historical ControlledActionKey
+ * from generic BSOS state. Durable provenance lives on
+ * ControlledAiActionAttempt and is loaded separately.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
@@ -23,6 +24,7 @@ import { formatDateTime } from "@/lib/format";
 type Db = PrismaClient | Prisma.TransactionClient;
 
 export const ACTION_CENTER_PATH = "/actions";
+export const ACTION_CENTER_HISTORY_PATH = "/actions/history";
 export const ACTION_CENTER_ORIGIN_NOT_RECORDED = "NOT_RECORDED" as const;
 export type ActionCenterRecordedOrigin = typeof ACTION_CENTER_ORIGIN_NOT_RECORDED;
 export const ACTION_CENTER_RECORD_KINDS = ["ACTION_ITEM", "RECOMMENDATION_STATE"] as const;

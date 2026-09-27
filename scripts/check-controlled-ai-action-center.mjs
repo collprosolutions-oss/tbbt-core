@@ -135,9 +135,10 @@ try {
     ].every((key) => isExcludedActionKey(key) && !executableControlledActionKeys().includes(key)),
   );
   check(
-    "No Prisma action-proposal model or migration was added",
-    !schemaSrc.includes("model ControlledAction") &&
-      !schemaSrc.includes("AiActionProposal") &&
+    "Action Center still has no proposal-queue model",
+    !schemaSrc.includes("AiActionProposal") &&
+      !schemaSrc.includes("model ControlledActionProposal") &&
+      schemaSrc.includes("model ControlledAiActionAttempt") &&
       !actionCenterSrc.includes("prisma.schema"),
   );
   check(
@@ -201,7 +202,8 @@ try {
   check(
     "Board does not invent a persisted proposal queue",
     boardSrc.includes("No persisted proposal") &&
-      boardSrc.includes("Failed confirmations") &&
+      boardSrc.includes("kept separately in Controlled AI history") &&
+      !boardSrc.includes("Failed confirmations are not persisted as attempts.") &&
       pageSrc.includes("loadControlledActionCenter"),
   );
   check(
@@ -221,7 +223,7 @@ try {
       !boardSrc.includes(">Recorded results<") &&
       !boardSrc.includes("No recorded Controlled AI Action results yet") &&
       boardSrc.includes("Recommendation status/evidence history") &&
-      !boardSrc.includes("AI attempt history") &&
+      boardSrc.includes("kept separately in Controlled AI history") &&
       !boardSrc.includes("controlled-action audit"),
   );
   check(
@@ -436,9 +438,12 @@ try {
       createdItems.length === 1 &&
       first.executionResult.message.includes("did not execute the work"),
   );
+  const succeededConfirm = [first, concurrent].find((row) => row.executionResult.status === "SUCCEEDED");
+  const replayedConfirm = [first, concurrent].find((row) => row.executionResult.status === "REPLAYED");
   check(
     "Immediate canonical confirm result is the returned execution message",
-    first.executionResult.message === "Action added to the owner plan. TBBT did not execute the work.",
+    succeededConfirm?.executionResult.message === "Action added to the owner plan. TBBT did not execute the work." &&
+      replayedConfirm?.executionResult.message === "Action already on the owner plan. TBBT did not execute the work.",
   );
   check(
     "Duplicate/concurrent execution preserves V1 idempotency",
