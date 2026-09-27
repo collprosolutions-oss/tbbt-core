@@ -116,18 +116,24 @@ try {
   check("Search message stays tenant-scoped", /this workspace/.test(DIRECTORY_SEARCH_MESSAGE));
   check("Link message forbids foreign rows", /Foreign-business rows cannot be read or linked/.test(DIRECTORY_LINK_MESSAGE));
 
-  const moduleFiles = [
-    "src/lib/partner-vendor-directory/constants.ts",
+  const copyFiles = [
     "src/lib/partner-vendor-directory/ops.ts",
     "src/lib/partner-vendor-directory/load.ts",
     "src/app/(app)/partner-vendor-directory/page.tsx",
     "src/components/partner-vendor-directory/workspace.tsx",
+    "src/components/partner-vendor-directory/create-form.tsx",
+    "src/components/partner-vendor-directory/review-form.tsx",
     "src/app/actions/partner-vendor-directory.ts",
   ];
-  const moduleText = moduleFiles.map((path) => readRepo(path)).join("\n");
+  const moduleText = copyFiles.map((path) => readRepo(path)).join("\n");
   for (const pattern of FORBIDDEN_DIRECTORY_CLAIM_PATTERNS) {
-    check(`Module copy does not claim ${pattern}`, !pattern.test(moduleText));
+    check(`User-facing copy does not claim ${pattern}`, !pattern.test(moduleText));
   }
+  check(
+    "Page and workspace surface the recorded limits",
+    /DIRECTORY_LIMITS_MESSAGE/.test(readRepo("src/app/(app)/partner-vendor-directory/page.tsx")) &&
+      /workspace\.limitsMessage/.test(readRepo("src/components/partner-vendor-directory/workspace.tsx")),
+  );
 
   const navSrc = readRepo("src/lib/nav.ts");
   check("Global nav does not list the directory", !navSrc.includes(DIRECTORY_ROUTE));
