@@ -126,7 +126,8 @@
     "test:growth-department": "node --experimental-strip-types scripts/check-growth-department.mjs",
     "test:business-protection": "node --experimental-strip-types scripts/check-business-protection.mjs",
     "test:business-timeline": "node --experimental-strip-types scripts/check-business-timeline.mjs",
-    "test:cleaning-visit-workflow": "node --experimental-strip-types scripts/check-cleaning-visit-workflow.mjs"
+    "test:cleaning-visit-workflow": "node --experimental-strip-types scripts/check-cleaning-visit-workflow.mjs",
+    "test:business-locations": "node --experimental-strip-types scripts/check-business-locations.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",
