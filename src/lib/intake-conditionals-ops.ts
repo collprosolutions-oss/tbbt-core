@@ -2,8 +2,9 @@
  * OWNER persistence for intake-condition drafts.
  *
  * Tenant scope always comes from BusinessAccess. Browser-supplied
- * businessId is ignored. ADMIN/MEMBER cannot draft. Public hire forms
- * never read these draft rows — only published TenantIntakeSnapshot rows.
+ * businessId is ignored. ADMIN/MEMBER cannot draft or restore. Public
+ * hire forms never read these draft rows — only published
+ * TenantIntakeSnapshot rows. Restore moves the current pointer only.
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
@@ -13,6 +14,8 @@ import { listActiveBusinessTrades } from "@/lib/business-trades";
 import {
   INTAKE_CONDITION_PUBLISH_DESCRIPTION,
   INTAKE_CONDITION_PUBLISH_REVIEW_REQUIRED,
+  INTAKE_CONDITION_RESTORE_CONFIRM_REQUIRED,
+  INTAKE_CONDITION_RESTORE_DESCRIPTION,
   INTAKE_CONDITION_STATUS_DRAFT,
   IntakeConditionError,
   assertDraftOnlyStatus,
@@ -25,7 +28,9 @@ import {
 } from "@/lib/intake-conditionals";
 import {
   createTenantIntakeSnapshot,
+  listOwnedTenantIntakeSnapshotHistory,
   loadCurrentPublishedIntakeView,
+  restoreOwnedTenantIntakeSnapshot,
 } from "@/lib/intake-snapshot-ops";
 import { currentIntakeSchema, publicIntakeSchemaProjection } from "@/lib/intake-schema";
 import { DEFAULT_TRADE, isConfiguredTrade, tradeLabel, type TradeCode } from "@/lib/trades";
@@ -87,8 +92,11 @@ export async function loadIntakeConditionWorkspace(
     savedAt: row?.updatedAt.toISOString() ?? null,
     status: INTAKE_CONDITION_STATUS_DRAFT,
     published: await loadCurrentPublishedIntakeView(db, access, selected),
+    history: await listOwnedTenantIntakeSnapshotHistory(db, access, selected),
     publishNextRequirement: INTAKE_CONDITION_PUBLISH_DESCRIPTION,
     publishReviewRequired: INTAKE_CONDITION_PUBLISH_REVIEW_REQUIRED,
+    restoreDescription: INTAKE_CONDITION_RESTORE_DESCRIPTION,
+    restoreConfirmRequired: INTAKE_CONDITION_RESTORE_CONFIRM_REQUIRED,
   };
 }
 
@@ -191,5 +199,18 @@ export async function publishIntakeConditionDraft(
     document: parsed.document,
     reviewed: input.reviewed === true,
     idempotencyKey: input.idempotencyKey,
+  });
+}
+
+export async function restoreIntakeConditionSnapshot(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: { snapshotId: string; tradeCode: string; confirmed?: boolean },
+) {
+  await requireOwnedTrade(db, access, input.tradeCode);
+  return restoreOwnedTenantIntakeSnapshot(db, access, {
+    snapshotId: input.snapshotId,
+    tradeCode: input.tradeCode,
+    confirmed: input.confirmed === true,
   });
 }

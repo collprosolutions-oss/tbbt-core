@@ -2,8 +2,10 @@
  * OWNER persistence for immutable tenant intake snapshots.
  *
  * Tenant scope always comes from BusinessAccess. Browser-supplied
- * businessId is ignored. ADMIN/MEMBER cannot publish. Public hire forms
- * read only the current BusinessTrade pointer, never drafts.
+ * businessId is ignored. ADMIN/MEMBER cannot publish or restore. Public
+ * hire forms read only the current BusinessTrade pointer, never drafts.
+ * Restore moves that pointer to an older immutable snapshot and never
+ * updates snapshot rows or historical ServiceRequest records.
  */
 
 import { Prisma, type PrismaClient } from "@prisma/client";
@@ -12,14 +14,17 @@ import { requireBusinessRole } from "@/lib/authorization";
 import { listActiveBusinessTrades } from "@/lib/business-trades";
 import {
   INTAKE_CONDITION_PUBLISH_REVIEW_REQUIRED,
+  INTAKE_CONDITION_RESTORE_CONFIRM_REQUIRED,
   IntakeConditionError,
   parseIntakeConditionDocument,
   validateIntakeConditionDocument,
   type IntakeConditionDocument,
   type IntakeConditionPublishedView,
+  type IntakeConditionSnapshotHistoryView,
 } from "@/lib/intake-conditionals";
 import {
   PUBLIC_INTAKE_REFRESH_FORM,
+  TENANT_INTAKE_SNAPSHOT_HISTORY_LIMIT,
   buildTenantIntakeSnapshotPayload,
   parseTenantIntakeSnapshotPayload,
   publishedOverlayFromRow,
@@ -129,6 +134,89 @@ export async function loadOwnedTenantIntakeSnapshot(
       },
     }),
   );
+}
+
+export async function listOwnedTenantIntakeSnapshotHistory(
+  db: Db,
+  access: BusinessAccess,
+  tradeCode: string,
+): Promise<IntakeConditionSnapshotHistoryView> {
+  const code = await requireOwnedTrade(db, access, tradeCode);
+  const membership = await db.businessTrade.findFirst({
+    where: { ...access.scope, tradeCode: code },
+    select: { publishedIntakeSnapshotId: true },
+  });
+  const currentSnapshotId = membership?.publishedIntakeSnapshotId ?? null;
+  const rows = await db.tenantIntakeSnapshot.findMany({
+    where: { ...access.scope, tradeCode: code },
+    orderBy: { versionNumber: "desc" },
+    take: TENANT_INTAKE_SNAPSHOT_HISTORY_LIMIT,
+    select: {
+      id: true,
+      versionNumber: true,
+      publishedAt: true,
+      summary: true,
+    },
+  });
+  return {
+    currentSnapshotId,
+    historyLimit: TENANT_INTAKE_SNAPSHOT_HISTORY_LIMIT,
+    versions: rows.map((row) => ({
+      snapshotId: row.id,
+      versionNumber: row.versionNumber,
+      publishedAt: row.publishedAt.toISOString(),
+      summary: row.summary,
+      isCurrent: row.id === currentSnapshotId,
+    })),
+  };
+}
+
+/**
+ * Move BusinessTrade.publishedIntakeSnapshotId to an older owned snapshot.
+ * Never updates TenantIntakeSnapshot rows. Historical ServiceRequest rows
+ * keep the version they froze. Public forms still submit the snapshot id
+ * they displayed.
+ */
+export async function restoreOwnedTenantIntakeSnapshot(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: { snapshotId: string; tradeCode: string; confirmed: boolean },
+) {
+  const tradeCode = await requireOwnedTrade(db, access, input.tradeCode);
+  if (input.confirmed !== true) {
+    throw new IntakeConditionError(INTAKE_CONDITION_RESTORE_CONFIRM_REQUIRED);
+  }
+  const snapshotId = input.snapshotId.trim();
+  if (!snapshotId || snapshotId.length > 128 || !/^[a-zA-Z0-9_-]+$/.test(snapshotId)) {
+    throw new IntakeConditionError("Choose a published version to restore.");
+  }
+
+  return db.$transaction(async (tx) => {
+    const row = access.assertOwned(
+      await tx.tenantIntakeSnapshot.findFirst({
+        where: { id: snapshotId, ...access.scope },
+      }),
+    );
+    if (row.tradeCode !== tradeCode) {
+      throw new IntakeConditionError("That published version belongs to a different trade.");
+    }
+    const payload = parseTenantIntakeSnapshotPayload(row.snapshotJson);
+    if (
+      !payload ||
+      payload.tradeCode !== tradeCode ||
+      payload.versionNumber !== row.versionNumber
+    ) {
+      throw new IntakeConditionError("That published version cannot be restored.");
+    }
+    const pointed = await tx.businessTrade.updateMany({
+      where: { businessId: access.businessId, tradeCode },
+      data: { publishedIntakeSnapshotId: row.id },
+    });
+    if (pointed.count !== 1) {
+      throw new IntakeConditionError("Could not update the current published intake snapshot.");
+    }
+    return row;
+  });
 }
 
 export async function createTenantIntakeSnapshot(
