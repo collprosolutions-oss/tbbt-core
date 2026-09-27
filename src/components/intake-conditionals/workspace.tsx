@@ -320,7 +320,7 @@ export function IntakeConditionWorkspace({ workspace }: { workspace: IntakeCondi
             </CardHeader>
             <CardContent className="space-y-4">
               {document.questions.map((question, index) => (
-                <div key={`${question.key}-${index}`} className="space-y-3 rounded-lg border border-border/70 p-3">
+                <div key={`question-${index}`} className="space-y-3 rounded-lg border border-border/70 p-3">
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="space-y-1">
                       <Label>Key</Label>
