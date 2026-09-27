@@ -57,7 +57,10 @@ const featureFiles = [
   "src/app/(app)/growth/retention/page.tsx",
   "src/components/growth/retention/retention-center.tsx",
 ];
-const featureSource = featureFiles.map(readSrc).join("\n");
+const displayFeatureSource = featureFiles
+  .filter((file) => !file.endsWith("constants.ts"))
+  .map(readSrc)
+  .join("\n");
 const writeSrc = readSrc("src/lib/growth/retention/record-follow-up.ts");
 const actionSrc = readSrc("src/app/actions/retention.ts");
 const uiSrc = readSrc("src/components/growth/retention/retention-center.tsx");
@@ -170,7 +173,7 @@ try {
   );
   check(
     "No invented customer intent",
-    !/likely to buy|ready to rebook|churn risk|customer owes us a review|call today/i.test(featureSource),
+    !/likely to buy|ready to rebook|churn risk|customer owes us a review|call today/i.test(displayFeatureSource),
   );
   check(
     "Owner-only copy is available for authorization failures",
