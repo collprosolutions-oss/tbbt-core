@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { FillInBenchWorkspace } from "@/components/team/fill-in-bench-workspace";
+import { StaffingRecommendationsPanel } from "@/components/team/staffing-recommendations";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { requireManagementPageAccess } from "@/lib/access";
@@ -9,6 +10,7 @@ import { prisma } from "@/lib/prisma";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { hasProductCapability } from "@/lib/product-entitlements";
 import { loadWorkforceMembers } from "@/lib/workforce-data";
+import { loadOwnedStaffingReview } from "@/lib/workforce-staffing-ops";
 
 export const metadata: Metadata = {
   title: "Fill-In Bench",
@@ -21,12 +23,13 @@ export default async function FillInBenchPage() {
     access.businessId,
     PRODUCT_CAPABILITIES.TEAM_MANAGEMENT,
   );
-  const [bench, members] = canManageWorkforce
+  const [bench, members, staffing] = canManageWorkforce
     ? await Promise.all([
         loadOwnedFillInBench(prisma, access),
         loadWorkforceMembers(prisma, access.businessId),
+        loadOwnedStaffingReview(prisma, access),
       ])
-    : [[], []];
+    : [[], [], { pending: [], accepted: [], history: [], canReview: false }];
 
   return (
     <PageContainer>
@@ -44,13 +47,21 @@ export default async function FillInBenchPage() {
         }
       />
       {canManageWorkforce ? (
-        <FillInBenchWorkspace
-          bench={bench}
-          teamMembers={members.map((member) => ({
-            membershipId: member.membershipId,
-            name: member.name,
-          }))}
-        />
+        <>
+          <StaffingRecommendationsPanel
+            pending={staffing.pending}
+            accepted={staffing.accepted}
+            history={staffing.history}
+            canReview={staffing.canReview}
+          />
+          <FillInBenchWorkspace
+            bench={bench}
+            teamMembers={members.map((member) => ({
+              membershipId: member.membershipId,
+              name: member.name,
+            }))}
+          />
+        </>
       ) : (
         <p className="text-sm text-muted-foreground">
           Team management is not on this plan, so the Fill-In Bench stays hidden.

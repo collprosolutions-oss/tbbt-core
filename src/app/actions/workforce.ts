@@ -21,6 +21,11 @@ import {
   upsertFillInBenchWorkerOp,
   WorkforceError,
 } from "@/lib/workforce-ops";
+import {
+  reviewStaffingRecommendationOp,
+  staffingReviewErrorMessage,
+} from "@/lib/workforce-staffing-ops";
+import { STAFFING_REVIEW_DECISIONS, type StaffingReviewDecision } from "@/lib/workforce-staffing";
 import { prisma } from "@/lib/prisma";
 
 export type WorkforceActionState = {
@@ -244,5 +249,38 @@ export async function createWorkforceOutreachTask(
   } catch (error) {
     if (error instanceof WorkforceError) return { error: error.message };
     throw error;
+  }
+}
+
+export async function reviewStaffingRecommendation(
+  _prev: WorkforceActionState,
+  formData: FormData,
+): Promise<WorkforceActionState> {
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.TEAM_MANAGEMENT);
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
+
+  const decisionRaw = readString(formData, "decision");
+  const decision = (STAFFING_REVIEW_DECISIONS as readonly string[]).includes(decisionRaw)
+    ? (decisionRaw as StaffingReviewDecision)
+    : null;
+  if (!decision) return { error: "Choose accept or dismiss." };
+
+  try {
+    const result = await reviewStaffingRecommendationOp(prisma, access, {
+      recommendationKey: readString(formData, "recommendationKey"),
+      evidenceKey: readString(formData, "evidenceKey"),
+      decision,
+    });
+    revalidateWorkforce();
+    return {
+      message:
+        result.decision === "ACCEPT"
+          ? "Owner accepted this staffing recommendation as an action-plan item. No worker was assigned, contacted, hired, or rescheduled."
+          : "Staffing recommendation dismissed. It will stay in history until facts change. No worker was assigned or contacted.",
+    };
+  } catch (error) {
+    if (error instanceof WorkforceError) return { error: error.message };
+    return { error: staffingReviewErrorMessage(error, "That staffing recommendation could not be reviewed.") };
   }
 }

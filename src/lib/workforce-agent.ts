@@ -248,6 +248,12 @@ export function suggestBenchForShortage(input: {
     });
 }
 
+export {
+  buildStaffingReviewRecommendations,
+  findLiveStaffingRecommendation,
+  staffingReviewEvidenceKey,
+} from "@/lib/workforce-staffing";
+
 export function assigneeSuggestionsForJob(input: {
   start: Date | null;
   durationMinutes: number | null;
