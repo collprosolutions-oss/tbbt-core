@@ -595,7 +595,6 @@ try {
   const handyJob = await createCleaningJob(handyC.id, { tradeCode: "HANDYMAN" });
 
   const invoicesBefore = await countBusinessInvoices(prisma, cleanA.id);
-  const jobsBefore = await countBusinessJobs(prisma, cleanA.id);
 
   console.log("\nLIVE — authorization, isolation, date boundaries, idempotency");
 
