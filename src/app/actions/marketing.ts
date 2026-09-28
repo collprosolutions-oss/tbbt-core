@@ -19,6 +19,7 @@ import { loadMarketingSource } from "@/lib/marketing-data";
 import {
   advanceMarketingContentStatus,
   createMarketingStudioPackage,
+  downloadMarketingReviewPacket,
   exportMarketingCreatorPackage,
   grantJobPhotoMarketingPermission,
   marketingErrorMessage,
@@ -47,6 +48,14 @@ export type MarketingExportState = {
   message?: string;
   filename?: string;
   packageJson?: string;
+};
+
+export type MarketingReviewPacketState = {
+  error?: string;
+  message?: string;
+  filename?: string;
+  packetJson?: string;
+  downloadNonce?: string;
 };
 
 function readString(formData: FormData, key: string) {
@@ -159,6 +168,28 @@ export async function exportMarketingCreatorPackageAction(
     };
   } catch (error) {
     return { error: marketingErrorMessage(error, "That creator package could not be exported.") };
+  }
+}
+
+export async function downloadMarketingReviewPacketAction(
+  _prev: MarketingReviewPacketState,
+  formData: FormData,
+): Promise<MarketingReviewPacketState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    const downloaded = await downloadMarketingReviewPacket(prisma, access, {
+      contentId: readString(formData, "contentId"),
+    });
+    return {
+      message: downloaded.packet.draft
+        ? "Draft review packet downloaded. Text is not approved. Nothing was posted."
+        : "Review packet downloaded. Nothing was posted.",
+      filename: downloaded.filename,
+      packetJson: JSON.stringify(downloaded.packet, null, 2),
+      downloadNonce: crypto.randomUUID(),
+    };
+  } catch (error) {
+    return { error: marketingErrorMessage(error, "That review packet could not be downloaded.") };
   }
 }
 

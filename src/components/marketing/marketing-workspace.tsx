@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ContentStatusButton } from "@/components/marketing/content-status-button";
 import { CreateContentForm } from "@/components/marketing/create-content-form";
 import { ExportPackageButton } from "@/components/marketing/export-package-button";
+import { ReviewPacketButton } from "@/components/marketing/review-packet-button";
 import { PhotoPermissionButton } from "@/components/marketing/photo-permission-button";
 import { PlannedDateForm } from "@/components/marketing/planned-date-form";
 import { StudioEditForm } from "@/components/marketing/studio-edit-form";
@@ -19,6 +20,7 @@ import { createCampaignAction, saveBrandVoiceAction, setCampaignStatusAction } f
 import { ActionForm } from "@/components/action-form";
 import {
   CALENDAR_INTERNAL_MESSAGE,
+  canDownloadMarketingReviewPacket,
   canExportCreatorPackage,
   COMING_NEXT_MESSAGE,
   CREATOR_PACKAGE_LIMITS_MESSAGE,
@@ -513,6 +515,11 @@ function ContentBody({
                 status={row.status}
                 canApprove={viewerRole === "OWNER"}
                 photosEligible={row.photos.length > 0 && row.photos.every((photo) => photo.approved)}
+              />
+              <ReviewPacketButton
+                contentId={row.id}
+                canDownload={canDownloadMarketingReviewPacket({ role: viewerRole })}
+                draft={row.status !== "APPROVED"}
               />
               <ExportPackageButton
                 contentId={row.id}

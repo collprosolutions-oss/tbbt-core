@@ -160,6 +160,18 @@ export const PHOTO_PERMISSION_REVOKED_MESSAGE =
 export const CREATOR_PACKAGE_NOT_APPROVED_MESSAGE =
   "Export a creator package only after OWNER approval. TBBT will not post this package.";
 
+export const OWNER_REVIEW_PACKET_MESSAGE =
+  "Downloading a review packet requires the OWNER role. TBBT will not post this packet.";
+
+export const REVIEW_PACKET_LIMITS_MESSAGE =
+  "This review packet includes only stored package text, storyboard, shot list, and permission-checked photo references. Estimate line items, customer records, unapproved media, and job-photo captions are omitted. Stored package text, storyboard, and shot list are included as written and are not scanned for private details. TBBT will not publish or post anything.";
+
+export const REVIEW_PACKET_DRAFT_TEXT_LABEL = "Draft text — not approved";
+export const REVIEW_PACKET_APPROVED_TEXT_LABEL = "Approved text";
+export const REVIEW_PACKET_DRAFT_PACKAGE_LABEL = "DRAFT — not approved";
+export const REVIEW_PACKET_READY_PACKAGE_LABEL = "Ready for review — not approved";
+export const REVIEW_PACKET_APPROVED_PACKAGE_LABEL = "Approved";
+
 export const FLOW_VEO_DISCONNECTED_MESSAGE =
   "Flow and Veo generation are not connected. This studio drafts a storyboard and shot list from recorded job facts only.";
 
@@ -356,6 +368,187 @@ export function canExportCreatorPackage(input: {
   photos: Array<{ marketingPermissionStatus?: string; approved?: boolean }>;
 }): boolean {
   return input.status === "APPROVED" && studioPhotosEligible(input.photos);
+}
+
+export function canDownloadMarketingReviewPacket(input: { role: string }): boolean {
+  return input.role === "OWNER";
+}
+
+export function isMarketingReviewPacketDraft(status: string): boolean {
+  return status !== "APPROVED";
+}
+
+export function marketingReviewPacketDraftLabel(status: string): string {
+  if (status === "APPROVED") return REVIEW_PACKET_APPROVED_PACKAGE_LABEL;
+  if (status === "READY_FOR_REVIEW") return REVIEW_PACKET_READY_PACKAGE_LABEL;
+  return REVIEW_PACKET_DRAFT_PACKAGE_LABEL;
+}
+
+export function marketingReviewPacketTextLabel(status: string): string {
+  return status === "APPROVED" ? REVIEW_PACKET_APPROVED_TEXT_LABEL : REVIEW_PACKET_DRAFT_TEXT_LABEL;
+}
+
+export type ReviewPacketPhoto = {
+  id: string;
+  url: string;
+  stage: string;
+  marketingPermissionStatus?: string;
+  approved?: boolean;
+};
+
+export type ReviewPacketPhotoReference = {
+  id: string;
+  url: string;
+  stage: string;
+};
+
+export function permittedReviewPacketPhotos(
+  photos: readonly ReviewPacketPhoto[],
+): ReviewPacketPhotoReference[] {
+  return photos
+    .filter(
+      (photo) =>
+        photo.approved === true || isMarketingApprovedPhoto(photo.marketingPermissionStatus),
+    )
+    .map((photo) => ({
+      id: photo.id,
+      url: photo.url,
+      stage: photo.stage,
+    }));
+}
+
+export function sanitizeReviewPacketShotList(
+  shots: readonly ShotListItem[],
+  permittedPhotoIds: ReadonlySet<string>,
+): ShotListItem[] {
+  return shots.map((shot) => {
+    if (shot.photoId && !permittedPhotoIds.has(shot.photoId)) {
+      return { order: shot.order, shot: shot.shot, purpose: shot.purpose };
+    }
+    return { ...shot };
+  });
+}
+
+export type MarketingReviewPacketLimits = {
+  published: false;
+  posted: false;
+  socialPublishingConnected: false;
+  includesEstimateLineItems: false;
+  includesCustomerRecords: false;
+  includesUnapprovedMedia: false;
+  includesPhotoCaptions: false;
+  message: string;
+};
+
+export function marketingReviewPacketLimits(): MarketingReviewPacketLimits {
+  return {
+    published: false,
+    posted: false,
+    socialPublishingConnected: false,
+    includesEstimateLineItems: false,
+    includesCustomerRecords: false,
+    includesUnapprovedMedia: false,
+    includesPhotoCaptions: false,
+    message: REVIEW_PACKET_LIMITS_MESSAGE,
+  };
+}
+
+export type MarketingReviewPacket = {
+  kind: "TBBT_MARKETING_REVIEW_PACKET";
+  version: 1;
+  title: string;
+  status: MarketingContentStatus;
+  draft: boolean;
+  draftLabel: string;
+  approvedText: {
+    label: string;
+    draft: boolean;
+    caption: string;
+    hashtags: string[];
+  };
+  storyboard: StoryboardBeat[];
+  shotList: ShotListItem[];
+  photoReferences: ReviewPacketPhotoReference[];
+  omitted: {
+    estimateLineItems: true;
+    customerRecords: true;
+    unapprovedMedia: true;
+    photoCaptions: true;
+  };
+  limits: MarketingReviewPacketLimits;
+};
+
+export function buildMarketingReviewPacket(input: {
+  title: string;
+  status: string;
+  caption: string;
+  hashtags: string;
+  storyboardJson: string;
+  shotListJson: string;
+  photos: readonly ReviewPacketPhoto[];
+}): MarketingReviewPacket {
+  const status = isMarketingContentStatus(input.status) ? input.status : "DRAFT";
+  const draft = isMarketingReviewPacketDraft(status);
+  const photoReferences = permittedReviewPacketPhotos(input.photos);
+  const permittedIds = new Set(photoReferences.map((photo) => photo.id));
+  return {
+    kind: "TBBT_MARKETING_REVIEW_PACKET",
+    version: 1,
+    title: input.title.trim(),
+    status,
+    draft,
+    draftLabel: marketingReviewPacketDraftLabel(status),
+    approvedText: {
+      label: marketingReviewPacketTextLabel(status),
+      draft,
+      caption: input.caption.trim(),
+      hashtags: parseHashtags(input.hashtags),
+    },
+    storyboard: parseStoryboard(input.storyboardJson),
+    shotList: sanitizeReviewPacketShotList(parseShotList(input.shotListJson), permittedIds),
+    photoReferences,
+    omitted: {
+      estimateLineItems: true,
+      customerRecords: true,
+      unapprovedMedia: true,
+      photoCaptions: true,
+    },
+    limits: marketingReviewPacketLimits(),
+  };
+}
+
+export type MarketingReviewPacketDownloadState = {
+  packetJson?: string;
+  filename?: string;
+  downloadNonce?: string;
+};
+
+export function nextReviewPacketDownload(
+  previousNonce: string | null,
+  state: MarketingReviewPacketDownloadState,
+): { shouldDownload: true; nonce: string; packetJson: string; filename: string } | { shouldDownload: false; nonce: string | null } {
+  if (!state.packetJson || !state.filename || !state.downloadNonce) {
+    return { shouldDownload: false, nonce: previousNonce };
+  }
+  if (state.downloadNonce === previousNonce) {
+    return { shouldDownload: false, nonce: previousNonce };
+  }
+  return {
+    shouldDownload: true,
+    nonce: state.downloadNonce,
+    packetJson: state.packetJson,
+    filename: state.filename,
+  };
+}
+
+export function marketingReviewPacketFilename(title: string, status: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40);
+  const draftTag = isMarketingReviewPacketDraft(status) ? "-draft" : "";
+  return `${slug || "creator-package"}-review-packet${draftTag}.json`;
 }
 
 export type CreatorPackageLimits = {

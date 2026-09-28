@@ -28,6 +28,8 @@ const {
   PERFORMANCE_UNAVAILABLE_MESSAGE,
   LEAD_SOURCE_UNTRACKED_MESSAGE,
   CALENDAR_INTERNAL_MESSAGE,
+  buildMarketingReviewPacket,
+  canDownloadMarketingReviewPacket,
   canExportCreatorPackage,
   canSelectPhotoForMarketing,
   CREATOR_PACKAGE_LIMITS_MESSAGE,
@@ -35,7 +37,12 @@ const {
   INVALID_STORYBOARD_MESSAGE,
   jobMarketingReadiness,
   marketingAiAssistAvailable,
+  marketingReviewPacketDraftLabel,
+  marketingReviewPacketFilename,
+  marketingReviewPacketTextLabel,
   nextContentStatus,
+  nextReviewPacketDownload,
+  OWNER_REVIEW_PACKET_MESSAGE,
   OWNER_STUDIO_APPROVAL_MESSAGE,
   PAID_ADS_DISCONNECTED_MESSAGE,
   parseMarketingArea,
@@ -43,11 +50,16 @@ const {
   parseShotList,
   parseStoryboard,
   PHOTO_PERMISSION_REVOKED_MESSAGE,
+  REVIEW_PACKET_APPROVED_TEXT_LABEL,
+  REVIEW_PACKET_DRAFT_PACKAGE_LABEL,
+  REVIEW_PACKET_DRAFT_TEXT_LABEL,
+  REVIEW_PACKET_LIMITS_MESSAGE,
 } = await import("@/lib/marketing");
 const { draftMarketingContent, draftMarketingStudioPackage } = await import("@/lib/marketing-draft");
 const {
   createMarketingContent,
   createMarketingStudioPackage,
+  downloadMarketingReviewPacket,
   exportMarketingCreatorPackage,
   grantJobPhotoMarketingPermission,
   MarketingError,
@@ -209,6 +221,111 @@ try {
   check("Write-path storyboard rejects invalid JSON", parseRequiredStoryboard("{not-json") === null);
   check("Write-path storyboard rejects a non-array", parseRequiredStoryboard("{}") === null);
   check("Unapproved package cannot export", canExportCreatorPackage({ status: "DRAFT", photos: [{ approved: true }] }) === false);
+  check("OWNER can download a review packet", canDownloadMarketingReviewPacket({ role: "OWNER" }) === true);
+  check("ADMIN cannot download a review packet", canDownloadMarketingReviewPacket({ role: "ADMIN" }) === false);
+  check("MEMBER cannot download a review packet", canDownloadMarketingReviewPacket({ role: "MEMBER" }) === false);
+  check("Draft package label is explicit", marketingReviewPacketDraftLabel("DRAFT") === REVIEW_PACKET_DRAFT_PACKAGE_LABEL);
+  check("Ready-for-review package is still labeled not approved", marketingReviewPacketDraftLabel("READY_FOR_REVIEW").includes("not approved"));
+  check("Approved package label is Approved", marketingReviewPacketDraftLabel("APPROVED") === "Approved");
+  check("Draft text is labeled not approved", marketingReviewPacketTextLabel("DRAFT") === REVIEW_PACKET_DRAFT_TEXT_LABEL);
+  check("Approved text label is exact", marketingReviewPacketTextLabel("APPROVED") === REVIEW_PACKET_APPROVED_TEXT_LABEL);
+  const reviewPacketPreview = buildMarketingReviewPacket({
+    title: "Reno faucet review",
+    status: "DRAFT",
+    caption: "Recorded faucet repair only.",
+    hashtags: "Reno faucetrepair",
+    storyboardJson: JSON.stringify([{ heading: "Hook", visual: "After still", narration: "Fact" }]),
+    shotListJson: JSON.stringify([
+      { order: 1, shot: "Hero", purpose: "Proof", photoId: "approved-1" },
+      { order: 2, shot: "Private still", purpose: "Must drop", photoId: "private-1" },
+    ]),
+    photos: [
+      {
+        id: "approved-1",
+        url: "https://example.test/approved.jpg",
+        stage: "AFTER",
+        marketingPermissionStatus: "APPROVED",
+      },
+      {
+        id: "private-1",
+        url: "https://example.test/private.jpg",
+        stage: "BEFORE",
+        marketingPermissionStatus: "PRIVATE",
+      },
+    ],
+  });
+  check("Review packet kind is TBBT_MARKETING_REVIEW_PACKET", reviewPacketPreview.kind === "TBBT_MARKETING_REVIEW_PACKET");
+  check("Draft review packet is marked draft", reviewPacketPreview.draft === true && reviewPacketPreview.draftLabel === REVIEW_PACKET_DRAFT_PACKAGE_LABEL);
+  check("Draft review packet labels the text as not approved", reviewPacketPreview.approvedText.draft === true && reviewPacketPreview.approvedText.label === REVIEW_PACKET_DRAFT_TEXT_LABEL);
+  check("Review packet keeps approved text", reviewPacketPreview.approvedText.caption.includes("faucet repair"));
+  check("Review packet keeps the storyboard", reviewPacketPreview.storyboard[0]?.heading === "Hook");
+  check("Review packet keeps the shot list", reviewPacketPreview.shotList.length === 2);
+  check("Review packet keeps only the permitted photo", reviewPacketPreview.photoReferences.length === 1 && reviewPacketPreview.photoReferences[0].id === "approved-1");
+  check("Review packet photo references omit captions", reviewPacketPreview.photoReferences.every((photo) => !("caption" in photo)));
+  check("Review packet has no recordedFacts or estimate text", !("recordedFacts" in reviewPacketPreview) && !JSON.stringify(reviewPacketPreview).includes("workPerformed"));
+  check("Review packet drops unapproved shot-list photo ids", reviewPacketPreview.shotList[1].photoId === undefined);
+  check("Review packet keeps permitted shot-list photo ids", reviewPacketPreview.shotList[0].photoId === "approved-1");
+  check(
+    "Review packet omitted claim is limited to records the builder actually excludes",
+    reviewPacketPreview.omitted.estimateLineItems === true &&
+      reviewPacketPreview.omitted.customerRecords === true &&
+      reviewPacketPreview.omitted.unapprovedMedia === true &&
+      reviewPacketPreview.omitted.photoCaptions === true &&
+      !("privateCustomerData" in reviewPacketPreview.omitted),
+  );
+  check(
+    "Review packet does not publish or post",
+    reviewPacketPreview.limits.published === false &&
+      reviewPacketPreview.limits.posted === false &&
+      reviewPacketPreview.limits.socialPublishingConnected === false &&
+      reviewPacketPreview.limits.includesEstimateLineItems === false &&
+      reviewPacketPreview.limits.includesCustomerRecords === false &&
+      reviewPacketPreview.limits.includesUnapprovedMedia === false &&
+      reviewPacketPreview.limits.includesPhotoCaptions === false &&
+      !("includesPrivateCustomerData" in reviewPacketPreview.limits),
+  );
+  check("Review packet limits mention omitted records without scanning package text", REVIEW_PACKET_LIMITS_MESSAGE.includes("are not scanned for private details") && REVIEW_PACKET_LIMITS_MESSAGE.includes("will not publish or post"));
+  check("Draft review packet filename is labeled draft", marketingReviewPacketFilename("Reno faucet review", "DRAFT") === "reno-faucet-review-review-packet-draft.json");
+  check("Approved review packet filename is not labeled draft", marketingReviewPacketFilename("Reno faucet review", "APPROVED") === "reno-faucet-review-review-packet.json");
+  const firstDownload = nextReviewPacketDownload(null, {
+    packetJson: JSON.stringify(reviewPacketPreview),
+    filename: "reno-faucet-review-review-packet-draft.json",
+    downloadNonce: "download-1",
+  });
+  const secondDownload = nextReviewPacketDownload(firstDownload.shouldDownload ? firstDownload.nonce : null, {
+    packetJson: JSON.stringify(reviewPacketPreview),
+    filename: "reno-faucet-review-review-packet-draft.json",
+    downloadNonce: "download-2",
+  });
+  const repeatSameNonce = nextReviewPacketDownload(secondDownload.shouldDownload ? secondDownload.nonce : null, {
+    packetJson: JSON.stringify(reviewPacketPreview),
+    filename: "reno-faucet-review-review-packet-draft.json",
+    downloadNonce: "download-2",
+  });
+  check(
+    "Two Download clicks with the same packet JSON start two downloads",
+    firstDownload.shouldDownload === true &&
+      secondDownload.shouldDownload === true &&
+      firstDownload.nonce !== secondDownload.nonce,
+  );
+  check("A repeated nonce does not start a third download", repeatSameNonce.shouldDownload === false);
+  const reviewButtonSrc = readFileSync(new URL("../src/components/marketing/review-packet-button.tsx", import.meta.url), "utf8");
+  const workspaceSrc = readFileSync(new URL("../src/components/marketing/marketing-workspace.tsx", import.meta.url), "utf8");
+  const reviewActionSrc = readFileSync(new URL("../src/app/actions/marketing.ts", import.meta.url), "utf8");
+  check(
+    "OWNER review packet button is gated on the workspace",
+    workspaceSrc.includes("ReviewPacketButton") &&
+      workspaceSrc.includes("canDownloadMarketingReviewPacket({ role: viewerRole })"),
+  );
+  check(
+    "Review packet download stays a handoff and does not post",
+    reviewButtonSrc.includes("Download draft review packet") &&
+      reviewButtonSrc.includes("nextReviewPacketDownload") &&
+      reviewActionSrc.includes("downloadNonce") &&
+      reviewActionSrc.includes("Nothing was posted.") &&
+      !reviewActionSrc.includes("publish to") &&
+      !reviewButtonSrc.includes("publish"),
+  );
 
   const businessA = await prisma.business.create({
     data: { name: "Alpha Marketing", slug: `alpha-mkt-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
@@ -262,10 +379,31 @@ try {
   const betaCustomer = await prisma.customer.create({
     data: { businessId: businessB.id, name: "Beta Secret" },
   });
+  const SENSITIVE_ESTIMATE_TEXT = "GATE-CODE-9981 hide-a-key under the gnome";
+  const SENSITIVE_PHOTO_CAPTION = "Ada Homeowner cell 555-0100 at 14 Secret Court";
+  const estimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      publicToken: randomUUID(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: businessA.id,
+      estimateId: estimate.id,
+      description: SENSITIVE_ESTIMATE_TEXT,
+      quantity: 1,
+      unitPrice: 80,
+      total: 80,
+      type: "LABOR",
+    },
+  });
   const job = await prisma.job.create({
     data: {
       businessId: businessA.id,
       customerId: customer.id,
+      estimateId: estimate.id,
       status: "COMPLETED",
       projectToken: randomUUID(),
     },
@@ -302,7 +440,7 @@ try {
       jobId: job.id,
       stage: "AFTER",
       url: "https://example.test/after.jpg",
-      caption: "After",
+      caption: SENSITIVE_PHOTO_CAPTION,
     },
   });
   await prisma.jobPhoto.create({
@@ -437,6 +575,50 @@ try {
   check("Studio package stores shot list", parseShotList(studio.shotListJson).length === 3);
   check("Studio package stores hashtags", studio.hashtags.includes("#LocalHandyman") && studio.hashtags.includes("#Reno"));
 
+  await expectError(
+    "ADMIN cannot download a review packet",
+    () => downloadMarketingReviewPacket(prisma, adminA, { contentId: studio.id }),
+    (error) => error instanceof MarketingError && error.message === OWNER_REVIEW_PACKET_MESSAGE,
+  );
+  await expectError(
+    "MEMBER cannot download a review packet",
+    () => downloadMarketingReviewPacket(prisma, memberA, { contentId: studio.id }),
+    (error) => error instanceof ForbiddenError,
+  );
+  await expectError(
+    "Business B cannot download A's review packet",
+    () => downloadMarketingReviewPacket(prisma, ownerB, { contentId: studio.id }),
+    (error) => error instanceof Error,
+  );
+
+  const draftPacket = await downloadMarketingReviewPacket(prisma, ownerA, { contentId: studio.id });
+  check("Draft review packet filename is labeled draft", draftPacket.filename.endsWith("-review-packet-draft.json"));
+  check("Draft review packet kind is TBBT_MARKETING_REVIEW_PACKET", draftPacket.packet.kind === "TBBT_MARKETING_REVIEW_PACKET");
+  check("Draft review packet is labeled draft", draftPacket.packet.draft === true && draftPacket.packet.draftLabel === REVIEW_PACKET_DRAFT_PACKAGE_LABEL);
+  check("Draft review packet labels text as not approved", draftPacket.packet.approvedText.label === REVIEW_PACKET_DRAFT_TEXT_LABEL);
+  check("Draft review packet includes the drafted caption", draftPacket.packet.approvedText.caption.includes("faucet repair"));
+  check("Draft review packet includes the storyboard", draftPacket.packet.storyboard.length === 3);
+  check("Draft review packet includes the shot list", draftPacket.packet.shotList.length === 3);
+  check("Draft review packet includes only the permitted photo", draftPacket.packet.photoReferences.length === 1 && draftPacket.packet.photoReferences[0].id === otherPhoto.id);
+  const draftPacketJson = JSON.stringify(draftPacket.packet);
+  check("Draft review packet excludes the private photo URL", !draftPacketJson.includes("private.jpg"));
+  check("Draft review packet excludes customer names", !draftPacketJson.includes("Ada Homeowner") && !draftPacketJson.includes("Beta Secret"));
+  check("Draft review packet excludes sensitive estimate line-item text", !draftPacketJson.includes(SENSITIVE_ESTIMATE_TEXT));
+  check("Draft review packet excludes job-photo captions", !draftPacketJson.includes(SENSITIVE_PHOTO_CAPTION) && !draftPacketJson.includes("14 Secret Court"));
+  check("Draft review packet photo references have no caption field", draftPacket.packet.photoReferences.every((photo) => !("caption" in photo)));
+  check("Draft review packet has no recordedFacts", !("recordedFacts" in draftPacket.packet));
+  check(
+    "Draft review packet does not publish or post",
+    draftPacket.packet.limits.published === false &&
+      draftPacket.packet.limits.posted === false &&
+      draftPacket.packet.limits.message.includes("will not publish or post"),
+  );
+  const draftAfterDownload = await prisma.marketingContent.findFirst({
+    where: { id: studio.id, businessId: businessA.id },
+  });
+  check("Review packet download does not mark the package exported", draftAfterDownload?.exportedAt === null);
+  check("Review packet download leaves the package as DRAFT", draftAfterDownload?.status === "DRAFT");
+
   const edited = await updateMarketingStudioPackage(prisma, adminA, {
     contentId: studio.id,
     title: "Reno faucet story edited",
@@ -555,6 +737,34 @@ try {
       updateFnSrc.indexOf("createMany") > updateFnSrc.indexOf("deleteMany") &&
       updateFnSrc.indexOf("marketingContent.update") > updateFnSrc.indexOf("createMany"),
   );
+  const reviewFnSrc = studioOpsSrc.slice(
+    studioOpsSrc.indexOf("const REVIEW_PACKET_CONTENT_SELECT"),
+    studioOpsSrc.indexOf("export async function setMarketingContentPlannedFor"),
+  );
+  check(
+    "Review packet download is OWNER-gated after the marketing capability check",
+    reviewFnSrc.includes("requireBusinessCapability") &&
+      reviewFnSrc.includes('requireBusinessRole(access, "OWNER")') &&
+      reviewFnSrc.includes("OWNER_REVIEW_PACKET_MESSAGE"),
+  );
+  check(
+    "Review packet query stays tenant-scoped and never loads a customer, estimate, or photo caption",
+    reviewFnSrc.includes("...access.scope") &&
+      reviewFnSrc.includes("access.assertOwned") &&
+      !reviewFnSrc.includes("customer") &&
+      !reviewFnSrc.includes("jobCustomerName") &&
+      !reviewFnSrc.includes("estimate") &&
+      !reviewFnSrc.includes("lineItems") &&
+      !reviewFnSrc.includes("recordedFacts") &&
+      !reviewFnSrc.includes("caption: true") &&
+      !reviewFnSrc.includes("business.findFirst"),
+  );
+  check(
+    "Review packet download does not write export or publish fields",
+    !reviewFnSrc.includes("exportedAt") &&
+      !reviewFnSrc.includes("PUBLISHED") &&
+      !reviewFnSrc.includes("marketingContent.update"),
+  );
 
   const studioReady = await advanceMarketingContentStatus(prisma, adminA, { contentId: studio.id });
   check("ADMIN can send a package for OWNER review", studioReady.status === "READY_FOR_REVIEW");
@@ -576,6 +786,14 @@ try {
     (error) => error instanceof MarketingError,
   );
 
+  const revokedPacket = await downloadMarketingReviewPacket(prisma, ownerA, { contentId: studio.id });
+  check("Revoked photo still allows an OWNER review packet", revokedPacket.packet.kind === "TBBT_MARKETING_REVIEW_PACKET");
+  check("Revoked photo is excluded from the review packet", revokedPacket.packet.photoReferences.length === 0);
+  check("Revoked photo id is stripped from the review shot list", revokedPacket.packet.shotList.every((shot) => !shot.photoId));
+  check("Unapproved media stay omitted after revoke", revokedPacket.packet.omitted.unapprovedMedia === true);
+  check("Ready-for-review packet is still labeled not approved", revokedPacket.packet.draft === true && revokedPacket.packet.draftLabel.includes("not approved"));
+  check("Review packet keeps approved-text, storyboard, and shot list after revoke", revokedPacket.packet.approvedText.caption.includes("faucet repair") && revokedPacket.packet.storyboard.length === 2 && revokedPacket.packet.shotList.length === 1);
+
   await grantJobPhotoMarketingPermission(prisma, ownerA, { photoId: otherPhoto.id });
   const studioApproved = await advanceMarketingContentStatus(prisma, ownerA, { contentId: studio.id });
   check("OWNER can approve after permission is restored", studioApproved.status === "APPROVED");
@@ -585,6 +803,19 @@ try {
     "Business B cannot export A's creator package",
     () => exportMarketingCreatorPackage(prisma, ownerB, { contentId: studio.id }),
     (error) => error instanceof Error,
+  );
+
+  const approvedPacket = await downloadMarketingReviewPacket(prisma, ownerA, { contentId: studio.id });
+  check("Approved review packet filename is not labeled draft", approvedPacket.filename.endsWith("-review-packet.json") && !approvedPacket.filename.includes("-draft"));
+  check("Approved review packet is not a draft", approvedPacket.packet.draft === false && approvedPacket.packet.draftLabel === "Approved");
+  check("Approved review packet labels the text as approved", approvedPacket.packet.approvedText.label === REVIEW_PACKET_APPROVED_TEXT_LABEL && approvedPacket.packet.approvedText.draft === false);
+  check("Approved review packet includes permitted photo references", approvedPacket.packet.photoReferences.length === 1 && approvedPacket.packet.photoReferences[0].id === otherPhoto.id);
+  check("Approved review packet includes storyboard and shot list", approvedPacket.packet.storyboard[0]?.heading === "Hook" && approvedPacket.packet.shotList[0]?.shot === "Hero still");
+  check("Approved review packet still does not publish", approvedPacket.packet.limits.published === false && approvedPacket.packet.limits.posted === false);
+  check(
+    "Approved review packet still excludes estimate text and photo captions",
+    !JSON.stringify(approvedPacket.packet).includes(SENSITIVE_ESTIMATE_TEXT) &&
+      !JSON.stringify(approvedPacket.packet).includes(SENSITIVE_PHOTO_CAPTION),
   );
 
   const exported = await exportMarketingCreatorPackage(prisma, ownerA, { contentId: studio.id });
@@ -603,6 +834,10 @@ try {
     () => exportMarketingCreatorPackage(prisma, ownerA, { contentId: studio.id }),
     (error) => error instanceof MarketingError && error.message === PHOTO_PERMISSION_REVOKED_MESSAGE,
   );
+
+  const laterRevokedPacket = await downloadMarketingReviewPacket(prisma, ownerA, { contentId: studio.id });
+  check("Later revocation still allows a review packet", laterRevokedPacket.packet.photoReferences.length === 0);
+  check("Later revocation does not leak the private photo URL", !JSON.stringify(laterRevokedPacket.packet).includes(otherPhoto.url));
 
   const afterRevoke = await loadMarketingSource(prisma, businessA.id);
   const studioRow = afterRevoke.contents.find((row) => row.id === studio.id);
