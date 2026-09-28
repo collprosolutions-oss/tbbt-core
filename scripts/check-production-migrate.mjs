@@ -1331,7 +1331,13 @@ check(
   studioWeeklyReminderOps.includes("deliverOwnerStudioWeeklyReminderSms") &&
     studioWeeklyReminderOps.includes("smsSendClaimedAt") &&
     !studioWeeklyReminderOps.includes("publicPhone") &&
-    !/withReminderLock\([\s\S]*sendOwnerSms/.test(studioWeeklyReminderOps),
+    !studioWeeklyReminderOps
+      .slice(
+        studioWeeklyReminderOps.indexOf("async function claimOwnerStudioReminderSmsIfDestinationUnchanged"),
+        studioWeeklyReminderOps.indexOf("async function deliverOwnerStudioWeeklyReminderSms"),
+      )
+      .includes("sendOwnerSms") &&
+    studioWeeklyReminderOps.includes("const sent = await sendOwnerSms"),
 );
 
 const materialsSchema = readFileSync(

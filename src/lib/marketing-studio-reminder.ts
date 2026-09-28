@@ -119,6 +119,11 @@ export type StudioWeeklyReminderDeps = {
   beforeSerialize?: () => Promise<void>;
   /** Test hook. Runs after the reminder row is committed, before send. */
   beforeOwnerSmsSend?: () => Promise<void>;
+  /**
+   * Test hook. Runs after this run selected a destination and before the
+   * locked revalidate+claim. Destination updates that commit here win.
+   */
+  beforeOwnerSmsClaim?: () => Promise<void>;
   /** Test hook. Throws after provider acceptance to simulate a failed status write. */
   afterProviderAccepted?: () => Promise<void>;
 };
@@ -287,23 +292,75 @@ async function loadReminderRow(db: Db, reminder: StudioWeeklyReminderRecord) {
   return row ? asReminder(row) : reminder;
 }
 
-async function claimOwnerStudioReminderSms(db: Db, reminder: StudioWeeklyReminderRecord) {
-  const updated = await db.marketingStudioWeeklyReminder.updateMany({
-    where: {
-      id: reminder.id,
-      businessId: reminder.businessId,
-      smsSendClaimedAt: null,
-    },
-    data: { smsSendClaimedAt: new Date() },
+type OwnerSmsClaimOutcome =
+  | "claimed"
+  | "already_claimed"
+  | "destination_changed"
+  | "opted_out"
+  | "stopped"
+  | "blocked";
+
+/**
+ * Revalidate the selected E.164 destination and claim in the same
+ * per-business advisory transaction that destination updates take.
+ * A destination change that commits first cannot be claimed for the
+ * old number; a claim that commits first is visible to later updates.
+ */
+async function claimOwnerStudioReminderSmsIfDestinationUnchanged(
+  db: Db,
+  reminder: StudioWeeklyReminderRecord,
+  selectedTo: string,
+): Promise<OwnerSmsClaimOutcome> {
+  return withReminderLock(db, reminder.businessId, async (tx) => {
+    const row = await tx.marketingStudioWeeklyReminder.findFirst({
+      where: { id: reminder.id, businessId: reminder.businessId },
+      select: { smsSendClaimedAt: true },
+    });
+    if (!row || row.smsSendClaimedAt) return "already_claimed";
+
+    const settings = await tx.businessSettings.findUnique({
+      where: { businessId: reminder.businessId },
+      select: {
+        studioWeeklyReviewReminderOptedIn: true,
+        studioWeeklyReminderOwnerSmsTo: true,
+        studioWeeklyReminderOwnerSmsOptedIn: true,
+        studioWeeklyReminderOwnerSmsStopAt: true,
+        studioWeeklyReminderOwnerSmsBlockedAt: true,
+      },
+    });
+    if (
+      settings?.studioWeeklyReviewReminderOptedIn !== true ||
+      settings.studioWeeklyReminderOwnerSmsOptedIn !== true
+    ) {
+      return "opted_out";
+    }
+    if (settings.studioWeeklyReminderOwnerSmsStopAt) return "stopped";
+    if (settings.studioWeeklyReminderOwnerSmsBlockedAt) return "blocked";
+
+    const currentTo = resolveOwnerStudioReminderSmsTo({
+      ownerSmsTo: settings.studioWeeklyReminderOwnerSmsTo,
+    });
+    if (!currentTo || currentTo !== selectedTo) return "destination_changed";
+
+    const updated = await tx.marketingStudioWeeklyReminder.updateMany({
+      where: {
+        id: reminder.id,
+        businessId: reminder.businessId,
+        smsSendClaimedAt: null,
+      },
+      data: { smsSendClaimedAt: new Date() },
+    });
+    return updated.count === 1 ? "claimed" : "already_claimed";
   });
-  return updated.count === 1;
 }
 
 /**
  * Optional OWNER SMS after the reminder row is committed. Never called
  * inside a transaction that can roll back MarketingStudioWeeklyReminder.
- * Rechecks opt-out at the send boundary. Claims the send before the
- * provider so a failed later status write cannot cause a second send.
+ * Rechecks opt-out and the selected E.164 destination at the send
+ * boundary, under the same per-business advisory lock as destination
+ * updates. Claims the send before the provider so a failed later
+ * status write cannot cause a second send.
  */
 async function deliverOwnerStudioWeeklyReminderSms(
   db: Db,
@@ -407,21 +464,13 @@ async function deliverOwnerStudioWeeklyReminderSms(
     return { ...result, reminder };
   }
 
-  const stillIn = await db.businessSettings.findUnique({
-    where: { businessId: existing.businessId },
-    select: {
-      studioWeeklyReviewReminderOptedIn: true,
-      studioWeeklyReminderOwnerSmsOptedIn: true,
-      studioWeeklyReminderOwnerSmsStopAt: true,
-      studioWeeklyReminderOwnerSmsBlockedAt: true,
-    },
-  });
-  if (
-    stillIn?.studioWeeklyReviewReminderOptedIn !== true ||
-    stillIn.studioWeeklyReminderOwnerSmsOptedIn !== true ||
-    stillIn.studioWeeklyReminderOwnerSmsStopAt ||
-    stillIn.studioWeeklyReminderOwnerSmsBlockedAt
-  ) {
+  if (deps?.beforeOwnerSmsClaim) await deps.beforeOwnerSmsClaim();
+
+  const claim = await claimOwnerStudioReminderSmsIfDestinationUnchanged(db, existing, toDigits);
+  if (claim === "destination_changed") {
+    return { ...result, reminder: await loadReminderRow(db, existing) };
+  }
+  if (claim === "opted_out") {
     const reminder = await recordReminderSms(
       db,
       existing,
@@ -430,9 +479,25 @@ async function deliverOwnerStudioWeeklyReminderSms(
     );
     return { ...result, reminder };
   }
-
-  const claimed = await claimOwnerStudioReminderSms(db, existing);
-  if (!claimed) {
+  if (claim === "stopped") {
+    const reminder = await recordReminderSms(
+      db,
+      existing,
+      STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT,
+      STUDIO_WEEKLY_REMINDER_SMS_STOPPED,
+    );
+    return { ...result, reminder };
+  }
+  if (claim === "blocked") {
+    const reminder = await recordReminderSms(
+      db,
+      existing,
+      STUDIO_WEEKLY_REMINDER_SMS_STATUS_BLOCKED,
+      STUDIO_WEEKLY_REMINDER_SMS_BLOCKED,
+    );
+    return { ...result, reminder };
+  }
+  if (claim !== "claimed") {
     return { ...result, reminder: await loadReminderRow(db, existing) };
   }
 

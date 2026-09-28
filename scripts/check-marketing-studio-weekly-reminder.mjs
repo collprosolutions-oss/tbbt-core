@@ -338,8 +338,17 @@ try {
       reminderOpsSrc.includes("sendOwnerSms") &&
       reminderOpsSrc.includes("deliverOwnerStudioWeeklyReminderSms") &&
       reminderOpsSrc.includes("smsSendClaimedAt") &&
+      reminderOpsSrc.includes("claimOwnerStudioReminderSmsIfDestinationUnchanged") &&
+      reminderOpsSrc.includes("beforeOwnerSmsClaim") &&
+      reminderOpsSrc.includes("currentTo !== selectedTo") &&
       reminderOpsSrc.includes("STUDIO_WEEKLY_REMINDER_CHANNEL") &&
-      !/withReminderLock\([\s\S]*sendOwnerSms/.test(reminderOpsSrc) &&
+      !reminderOpsSrc
+        .slice(
+          reminderOpsSrc.indexOf("async function claimOwnerStudioReminderSmsIfDestinationUnchanged"),
+          reminderOpsSrc.indexOf("async function deliverOwnerStudioWeeklyReminderSms"),
+        )
+        .includes("sendOwnerSms") &&
+      reminderOpsSrc.includes("const sent = await sendOwnerSms") &&
       ownerSmsSrc.includes("Never reads Customer") &&
       !ownerSmsSrc.includes("attemptCustomerSms") &&
       !ownerSmsSrc.includes("customer.phone") &&
@@ -1031,6 +1040,88 @@ try {
       retryAfterFailedWrite.reminder?.smsSendClaimedAt != null &&
       claimSms.sent.length === 1,
   );
+
+  console.log("\nTEST — Destination change that commits first does not send the old number");
+  const oldOwnerDest = ownerDest;
+  const newOwnerDest = "+15551234002";
+  await writeOwnerSmsDestination(businessB.id, oldOwnerDest, true);
+  await prisma.business.update({
+    where: { id: businessB.id },
+    data: { operationalSmsNumber: tenantFrom },
+  });
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  const destChangeSms = createFakeCustomerMessagingProvider();
+  let releaseDestClaim;
+  const destClaimGate = new Promise((resolve) => {
+    releaseDestClaim = resolve;
+  });
+  let notifyDestClaimReached;
+  const destClaimReached = new Promise((resolve) => {
+    notifyDestClaimReached = resolve;
+  });
+  const destChangeFirst = dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: destChangeSms,
+    async beforeOwnerSmsClaim() {
+      notifyDestClaimReached();
+      await destClaimGate;
+    },
+  });
+  await destClaimReached;
+  await setStudioWeeklyReminderOwnerSms(
+    prisma,
+    ownerB,
+    { destination: newOwnerDest, optedIn: true },
+    pacificMonday10,
+  );
+  releaseDestClaim();
+  const destChangeResult = await destChangeFirst;
+  const destChangeRow = await prisma.marketingStudioWeeklyReminder.findFirst({
+    where: { businessId: businessB.id, weekKey: destChangeResult.reminder?.weekKey },
+  });
+  check(
+    "A destination change that commits before revalidate+claim sends nothing to the old number",
+    destChangeResult.created === true &&
+      destChangeSms.sent.length === 0 &&
+      destChangeSms.sent.every((row) => row.to !== oldOwnerDest) &&
+      destChangeRow?.smsSendClaimedAt == null &&
+      destChangeRow?.id === destChangeResult.reminder?.id,
+  );
+
+  console.log("\nTEST — Claim first then destination change keeps the once-per-week claim");
+  await writeOwnerSmsDestination(businessB.id, oldOwnerDest, true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  const claimFirstSms = createFakeCustomerMessagingProvider();
+  const claimedFirst = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimFirstSms,
+  });
+  await setStudioWeeklyReminderOwnerSms(
+    prisma,
+    ownerB,
+    { destination: newOwnerDest, optedIn: true },
+    pacificMonday10,
+  );
+  const afterClaimChange = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimFirstSms,
+  });
+  const claimedFirstRow = await prisma.marketingStudioWeeklyReminder.findFirst({
+    where: { businessId: businessB.id, weekKey: claimedFirst.reminder?.weekKey },
+  });
+  check(
+    "A later destination change does not unclaim or send a second SMS",
+    claimedFirst.created === true &&
+      claimedFirst.reminder?.smsSendClaimedAt != null &&
+      claimFirstSms.sent.length === 1 &&
+      claimFirstSms.sent[0]?.to === oldOwnerDest &&
+      afterClaimChange.created === false &&
+      afterClaimChange.reason === "already_recorded" &&
+      afterClaimChange.reminder?.id === claimedFirst.reminder.id &&
+      claimedFirstRow?.smsSendClaimedAt != null &&
+      claimFirstSms.sent.length === 1,
+  );
+  await writeOwnerSmsDestination(businessB.id, oldOwnerDest, true);
 
   const adminDeniedSms = await setStudioWeeklyReminderOwnerSms(
     prisma,
