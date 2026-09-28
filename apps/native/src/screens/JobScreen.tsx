@@ -8,8 +8,14 @@ import {
   Text,
   View,
 } from "react-native";
-import { completeNativeJob, isApiError, loadNativeJob, startNativeJob } from "../api";
-import type { NativeJobDetail } from "../types";
+import {
+  completeNativeJob,
+  isApiError,
+  loadNativeJob,
+  recordNativeJobVisit,
+  startNativeJob,
+} from "../api";
+import type { NativeJobDetail, NativeVisitOutcomeStatus } from "../types";
 import { JobPhotosSection } from "./JobPhotosSection";
 
 export function JobScreen({
@@ -25,6 +31,9 @@ export function JobScreen({
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [pendingOutcome, setPendingOutcome] = useState<NativeVisitOutcomeStatus | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +89,23 @@ export function JobScreen({
     }
     await reloadAssignedJob(result.job);
     setPending(false);
+  }
+
+  async function recordVisitOutcome(outcomeStatus: NativeVisitOutcomeStatus) {
+    if (pending) return;
+    setPending(true);
+    setPendingOutcome(outcomeStatus);
+    setActionError(null);
+    const result = await recordNativeJobVisit(token, jobId, outcomeStatus);
+    if (isApiError(result)) {
+      setPending(false);
+      setPendingOutcome(null);
+      setActionError(result.error);
+      return;
+    }
+    await reloadAssignedJob(result.job);
+    setPending(false);
+    setPendingOutcome(null);
   }
 
   return (
@@ -147,6 +173,46 @@ export function JobScreen({
             <Text style={styles.body}>This job is complete.</Text>
           ) : job.completeAction.reason && !job.startAction.available && !job.startAction.reason ? (
             <Text style={styles.notice}>{job.completeAction.reason}</Text>
+          ) : null}
+          {job.visit ? (
+            <View style={styles.visit}>
+              <Text style={styles.groupTitle}>Visit outcome</Text>
+              <Text style={styles.body}>
+                {job.visit.cadenceLabel !== "One-time"
+                  ? `${job.visit.cadenceLabel} visit. ${job.visit.outcomeLabel}`
+                  : job.visit.outcomeLabel}
+              </Text>
+              {job.visit.recordCompleted.available ? (
+                <Pressable
+                  disabled={pending}
+                  onPress={() => {
+                    void recordVisitOutcome("VISIT_COMPLETED");
+                  }}
+                  style={[styles.primaryAction, pending ? styles.primaryActionDisabled : null]}
+                >
+                  <Text style={styles.primaryActionLabel}>
+                    {pendingOutcome === "VISIT_COMPLETED"
+                      ? "Recording…"
+                      : "Record visit completed"}
+                  </Text>
+                </Pressable>
+              ) : job.visit.recordCompleted.reason ? (
+                <Text style={styles.notice}>{job.visit.recordCompleted.reason}</Text>
+              ) : null}
+              {job.visit.recordReclean.available ? (
+                <Pressable
+                  disabled={pending}
+                  onPress={() => {
+                    void recordVisitOutcome("RE_CLEAN_REQUESTED");
+                  }}
+                  style={[styles.secondaryAction, pending ? styles.primaryActionDisabled : null]}
+                >
+                  <Text style={styles.primaryActionLabel}>
+                    {pendingOutcome === "RE_CLEAN_REQUESTED" ? "Recording…" : "Request re-clean"}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
           ) : null}
           {actionError ? <Text style={styles.error}>{actionError}</Text> : null}
           <Text style={styles.groupTitle}>Access</Text>
@@ -234,6 +300,18 @@ const styles = StyleSheet.create({
   },
   primaryAction: {
     backgroundColor: "#166534",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    alignItems: "center",
+    marginTop: 4,
+  },
+  visit: {
+    gap: 8,
+    marginTop: 4,
+  },
+  secondaryAction: {
+    backgroundColor: "#1f2937",
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 14,

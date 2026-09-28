@@ -11,7 +11,8 @@
  * Lookup uses the same compound scope as `assignedJobWhere()` in
  * src/lib/field-access.ts: businessId + assignedMembershipId in one
  * query. There is no fetch-then-compare step. Assigned-worker writes
- * live in `src/lib/native-field-ops.ts` and `src/lib/native-field-photos.ts`.
+ * live in `src/lib/native-field-ops.ts`, `src/lib/native-field-photos.ts`,
+ * and `src/lib/native-field-visits.ts`.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -25,6 +26,8 @@ import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { directionsUrl, telHref } from "@/lib/directions";
 import { FIELD_JOB_SELECT, groupFieldJobs, type FieldJob } from "@/lib/field-jobs";
 import { formatAddress, formatDateTime } from "@/lib/format";
+import { loadAssignedCleaningVisitView } from "@/lib/cleaning-visit-data";
+import { START_BEFORE_COMPLETE_MESSAGE } from "@/lib/cleaning-visit-workflow";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import { ownerAccessSummaryLines } from "@/lib/property-access";
 import { startOfDay } from "@/lib/schedule";
@@ -153,6 +156,20 @@ export type NativeJobPhotoUploadAction = {
   count: number;
 };
 
+export type NativeJobVisitAction = {
+  available: boolean;
+  reason: string | null;
+};
+
+export type NativeJobVisit = {
+  eligible: true;
+  outcomeStatus: string;
+  outcomeLabel: string;
+  cadenceLabel: string;
+  recordCompleted: NativeJobVisitAction;
+  recordReclean: NativeJobVisitAction;
+};
+
 export type NativeJobPhotos = {
   items: NativeJobPhoto[];
   count: number;
@@ -178,6 +195,7 @@ export type NativeJobDetail = NativeJobSummary & {
   completeAction: NativeJobCompleteAction;
   runningTime: NativeJobRunningTime;
   photos: NativeJobPhotos;
+  visit: NativeJobVisit | null;
 };
 
 export type NativeJobLoadOptions = {
@@ -225,6 +243,34 @@ export function nativeCompleteAction(status: string): NativeJobCompleteAction {
     return { available: false, reason: null };
   }
   return { available: true, reason: null };
+}
+
+export function nativeVisitCompletedAction(status: string): NativeJobVisitAction {
+  if (status === "IN_PROGRESS" || status === "COMPLETED") {
+    return { available: true, reason: null };
+  }
+  return { available: false, reason: START_BEFORE_COMPLETE_MESSAGE };
+}
+
+export function nativeVisitRecleanAction(): NativeJobVisitAction {
+  return { available: true, reason: null };
+}
+
+export async function loadNativeAssignedJobVisit(
+  db: Db,
+  access: NativeFieldAccess,
+  job: { id: string; status: string },
+): Promise<NativeJobVisit | null> {
+  const view = await loadAssignedCleaningVisitView(db, access, job.id);
+  if (!view) return null;
+  return {
+    eligible: true,
+    outcomeStatus: view.outcomeStatus,
+    outcomeLabel: view.outcomeLabel,
+    cadenceLabel: view.cadenceLabel,
+    recordCompleted: nativeVisitCompletedAction(job.status),
+    recordReclean: nativeVisitRecleanAction(),
+  };
 }
 
 export function nativeStartAction(
@@ -431,6 +477,7 @@ export async function loadNativeAssignedJob(
     completeAction: nativeCompleteAction(job.status),
     runningTime: await loadNativeJobRunningTime(db, access, job.id, timeZone),
     photos: await loadNativeAssignedJobPhotos(db, access, job.id, options),
+    visit: await loadNativeAssignedJobVisit(db, access, job),
   };
 }
 
