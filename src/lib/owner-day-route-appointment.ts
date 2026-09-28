@@ -37,6 +37,9 @@ export const DAY_ROUTE_APPOINTMENT_MISSING_JOB_MESSAGE =
 export const DAY_ROUTE_APPOINTMENT_UNSCHEDULED_MESSAGE =
   "Only a recorded scheduled job can change its appointment from the day route.";
 
+export const DAY_ROUTE_APPOINTMENT_SCHEMA_UNAVAILABLE_MESSAGE =
+  "Appointment changes are unavailable because the appointment schema is missing.";
+
 export const DAY_ROUTE_APPOINTMENT_CHANGED_MESSAGE =
   "Appointment updated. Stops now follow the new recorded order. The customer was not messaged.";
 

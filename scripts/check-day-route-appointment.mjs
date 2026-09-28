@@ -46,12 +46,14 @@ const {
   DAY_ROUTE_APPOINTMENT_COMPLETED_MESSAGE,
   DAY_ROUTE_APPOINTMENT_FORM_NOTE,
   DAY_ROUTE_APPOINTMENT_OWNER_ONLY_MESSAGE,
+  DAY_ROUTE_APPOINTMENT_SCHEMA_UNAVAILABLE_MESSAGE,
   DAY_ROUTE_APPOINTMENT_STALE_MESSAGE,
   DAY_ROUTE_APPOINTMENT_UNSCHEDULED_MESSAGE,
 } = await import("@/lib/owner-day-route-appointment");
 const {
   changeOwnerDayRouteAppointment,
   dayRouteAppointmentErrorMessage,
+  missingDayRouteAppointmentSchema,
 } = await import("@/lib/owner-day-route-appointment-ops");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -185,6 +187,24 @@ check(
     opsSrc.includes("loadOccupiedJobs") &&
     opsSrc.includes("pickupDurationMinutes") &&
     actionSrc.includes("revalidatePath(OWNER_DAY_ROUTE_PATH)"),
+);
+check(
+  "Request path never creates appointment schema",
+  !opsSrc.includes("ensureAppointmentConfirmationSchema") &&
+    !opsSrc.includes("$executeRawUnsafe") &&
+    !opsSrc.includes("ALTER TABLE") &&
+    !opsSrc.includes("CREATE TABLE") &&
+    opsSrc.includes("missingDayRouteAppointmentSchema") &&
+    opsSrc.includes("DAY_ROUTE_APPOINTMENT_SCHEMA_UNAVAILABLE_MESSAGE") &&
+    missingDayRouteAppointmentSchema({ code: "P2022", message: "appointmentProposalId does not exist" }) === true,
+);
+const transactionSrc = opsSrc.slice(opsSrc.indexOf("$transaction"));
+check(
+  "Competing day-route changes serialize and recheck conflicts inside the transaction",
+  transactionSrc.includes("pg_advisory_xact_lock") &&
+    transactionSrc.includes("rejectIfScheduleBlocked") &&
+    transactionSrc.includes("lockTenantOwnedJob") &&
+    opsSrc.indexOf("pg_advisory_xact_lock") < opsSrc.lastIndexOf("rejectIfScheduleBlocked"),
 );
 check(
   "Conflicts and stale snapshots are rejected; no schedule-anyway override",
@@ -609,6 +629,70 @@ try {
     lateAfterConcurrent?.scheduledAt?.toISOString() === afternoon.toISOString(),
   );
 
+  console.log("\nTEST — two jobs racing into the same free slot");
+  const raceMorning = new Date("2026-09-29T13:00:00.000Z"); // 9:00 AM ET Tuesday
+  const raceAfternoon = new Date("2026-09-29T18:00:00.000Z"); // 2:00 PM ET Tuesday
+  const raceA = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "SCHEDULED",
+      scheduledAt: raceMorning,
+      scheduledDurationMinutes: 60,
+      projectToken: randomUUID(),
+    },
+  });
+  const raceB = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA2.id,
+      status: "SCHEDULED",
+      scheduledAt: raceAfternoon,
+      scheduledDurationMinutes: 60,
+      projectToken: randomUUID(),
+    },
+  });
+  const [raceFirst, raceSecond] = await Promise.allSettled([
+    changeOwnerDayRouteAppointment(prisma, ownerAccess, {
+      jobId: raceA.id,
+      date: "2026-09-29",
+      time: "11:00",
+      snapshot: scheduleSnapshotFromJob(raceA),
+    }),
+    changeOwnerDayRouteAppointment(prisma, ownerAccess, {
+      jobId: raceB.id,
+      date: "2026-09-29",
+      time: "11:00",
+      snapshot: scheduleSnapshotFromJob(raceB),
+    }),
+  ]);
+  const raceWins = [raceFirst, raceSecond].filter((result) => result.status === "fulfilled");
+  const raceLosses = [raceFirst, raceSecond].filter((result) => result.status === "rejected");
+  const raceAAfter = await prisma.job.findFirst({ where: { id: raceA.id } });
+  const raceBAfter = await prisma.job.findFirst({ where: { id: raceB.id } });
+  const raceSlotIso = "2026-09-29T15:00:00.000Z"; // 11:00 AM ET
+  const raceWinnerIsA = raceAAfter?.scheduledAt?.toISOString() === raceSlotIso;
+  const raceWinnerIsB = raceBAfter?.scheduledAt?.toISOString() === raceSlotIso;
+  check(
+    "Exactly one of two jobs wins the shared free slot",
+    raceWins.length === 1 &&
+      raceLosses.length === 1 &&
+      ((raceWinnerIsA && raceBAfter?.scheduledAt?.toISOString() === raceAfternoon.toISOString()) ||
+        (raceWinnerIsB && raceAAfter?.scheduledAt?.toISOString() === raceMorning.toISOString())),
+  );
+  check(
+    "The losing two-job racer is rejected as a conflict and left unchanged",
+    raceLosses[0]?.status === "rejected" &&
+      /overlap|conflict|buffer|pickup/i.test(
+        dayRouteAppointmentErrorMessage(raceLosses[0].reason, ""),
+      ) &&
+      (raceWinnerIsA
+        ? raceBAfter?.scheduledAt?.toISOString() === raceAfternoon.toISOString()
+        : raceAAfter?.scheduledAt?.toISOString() === raceMorning.toISOString()),
+  );
+
   console.log("\nTEST — business timezone on a second tenant");
   const laJob = await prisma.job.create({
     data: {
@@ -657,6 +741,44 @@ try {
       }),
     (error) =>
       dayRouteAppointmentErrorMessage(error, "") === DAY_ROUTE_APPOINTMENT_UNSCHEDULED_MESSAGE,
+  );
+
+  console.log("\nTEST — missing appointment schema fails closed");
+  const schemaJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date("2026-09-30T13:00:00.000Z"),
+      scheduledDurationMinutes: 60,
+      projectToken: randomUUID(),
+    },
+  });
+  const schemaSnapshot = scheduleSnapshotFromJob(schemaJob);
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "JobAppointmentEvent"`);
+  await expectThrow(
+    "Missing JobAppointmentEvent fails closed instead of creating the table",
+    () =>
+      changeOwnerDayRouteAppointment(prisma, ownerAccess, {
+        jobId: schemaJob.id,
+        date: "2026-09-30",
+        time: "11:00",
+        snapshot: schemaSnapshot,
+      }),
+    (error) =>
+      dayRouteAppointmentErrorMessage(error, "") ===
+      DAY_ROUTE_APPOINTMENT_SCHEMA_UNAVAILABLE_MESSAGE,
+  );
+  const schemaTables = await prisma.$queryRaw`
+    SELECT tablename FROM pg_tables WHERE tablename = 'JobAppointmentEvent'
+  `;
+  const schemaJobAfter = await prisma.job.findFirst({ where: { id: schemaJob.id } });
+  check(
+    "Fail-closed path does not create JobAppointmentEvent or move the job",
+    Array.isArray(schemaTables) &&
+      schemaTables.length === 0 &&
+      schemaJobAfter?.scheduledAt?.toISOString() === "2026-09-30T13:00:00.000Z",
   );
 
   if (failed > 0) {

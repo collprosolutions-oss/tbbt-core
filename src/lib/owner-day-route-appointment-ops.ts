@@ -12,10 +12,7 @@ import {
   isMaterialAppointmentChange,
   nextAppointmentProposalId,
 } from "@/lib/appointment-confirmation";
-import {
-  ensureAppointmentConfirmationSchema,
-  recordAppointmentEvent,
-} from "@/lib/appointment-data";
+import { recordAppointmentEvent } from "@/lib/appointment-data";
 import { ForbiddenError, requireBusinessRole } from "@/lib/authorization";
 import {
   evaluateProposedSchedule,
@@ -38,6 +35,7 @@ import {
   DAY_ROUTE_APPOINTMENT_INVALID_MESSAGE,
   DAY_ROUTE_APPOINTMENT_MISSING_JOB_MESSAGE,
   DAY_ROUTE_APPOINTMENT_OWNER_ONLY_MESSAGE,
+  DAY_ROUTE_APPOINTMENT_SCHEMA_UNAVAILABLE_MESSAGE,
   DAY_ROUTE_APPOINTMENT_STALE_MESSAGE,
   DAY_ROUTE_APPOINTMENT_UNSCHEDULED_MESSAGE,
   describeRejectedDayRouteAppointment,
@@ -70,11 +68,45 @@ export class DayRouteAppointmentError extends Error {
   }
 }
 
+const APPOINTMENT_SCHEMA_NAMES =
+  /appointmentProposalId|appointmentConfirmationStatus|JobAppointmentEvent|appointmentNotifiedAt|appointmentConfirmedAt/i;
+
+export function missingDayRouteAppointmentSchema(error: unknown) {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: string }).code)
+      : "";
+  const message =
+    error instanceof Error
+      ? error.message
+      : error && typeof error === "object" && "message" in error
+        ? String((error as { message?: unknown }).message ?? "")
+        : String(error);
+  if (code === "P2021" || code === "P2022") {
+    return APPOINTMENT_SCHEMA_NAMES.test(message) || /does not exist/i.test(message);
+  }
+  return APPOINTMENT_SCHEMA_NAMES.test(message) && /does not exist/i.test(message);
+}
+
 export function dayRouteAppointmentErrorMessage(error: unknown, fallback: string) {
   if (error instanceof DayRouteAppointmentError) return error.message;
   if (error instanceof ForbiddenError) return error.message;
   if (error instanceof Error && error.name === "ForbiddenError") return error.message;
+  if (missingDayRouteAppointmentSchema(error)) {
+    return DAY_ROUTE_APPOINTMENT_SCHEMA_UNAVAILABLE_MESSAGE;
+  }
   return fallback;
+}
+
+function dayRouteAppointmentLockKey(businessId: string) {
+  return `day-route-appointment:${businessId}`;
+}
+
+function throwIfAppointmentSchemaMissing(error: unknown): never {
+  if (missingDayRouteAppointmentSchema(error)) {
+    throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_SCHEMA_UNAVAILABLE_MESSAGE);
+  }
+  throw error;
 }
 
 export type ChangeOwnerDayRouteAppointmentInput = {
@@ -205,7 +237,6 @@ export async function changeOwnerDayRouteAppointment(
   input: ChangeOwnerDayRouteAppointmentInput,
 ): Promise<ChangedOwnerDayRouteAppointment> {
   assertOwner(access);
-  await ensureAppointmentConfirmationSchema(db);
 
   const jobId = input.jobId.trim();
   if (!jobId) {
@@ -213,132 +244,140 @@ export async function changeOwnerDayRouteAppointment(
   }
   const snapshot = readSnapshot({ ...input, jobId });
 
-  const job = access.assertOwned(
-    await db.job.findFirst({
-      where: { id: jobId, ...access.scope },
-      select: JOB_SELECT,
-    }),
-  );
-  if (!sameBusinessJob(job, access.businessId)) {
-    throw new Error("Record is not in the authorized business workspace.");
-  }
-  if (job.status === "COMPLETED") {
-    throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_COMPLETED_MESSAGE);
-  }
-  if (!job.scheduledAt) {
-    throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_UNSCHEDULED_MESSAGE);
-  }
-  assertCurrentSnapshot(job, snapshot);
-
-  const timeZone = await loadWorkforceTimeZone(db, access.businessId);
-  const start = parseScheduleStart(input.date, input.time, timeZone);
-  if (!start) {
-    throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_INVALID_MESSAGE);
-  }
-
-  const evaluation = await rejectIfScheduleBlocked({
-    db,
-    access,
-    job,
-    start,
-    timeZone,
-  });
-
-  const materialChange = isMaterialAppointmentChange(
-    job,
-    start,
-    evaluation.durationMinutes,
-  );
-  const proposalId = materialChange
-    ? nextAppointmentProposalId(job.appointmentProposalId)
-    : job.appointmentProposalId;
-  const position = appointmentPositionOnDay({
-    start,
-    jobId: job.id,
-    assignedMembershipId: job.assignedMembershipId,
-    jobs: evaluation.capacityJobs,
-    dateKey: (date) => formatISODateInTimeZone(date, timeZone),
-  });
-  const mode = appointmentModeForPosition(position, evaluation.policy);
-  const nextOccurrenceAt = recurrenceForecastActive(job)
-    ? computeNextOccurrenceAt(
-        start,
-        parseRecurrenceCadence(job.recurrenceCadence),
-        job.nextOccurrenceAt,
-        timeZone,
-      )
-    : job.nextOccurrenceAt;
-  const arrivalWindowMinutes =
-    mode === "WINDOW" ? evaluation.policy.defaultArrivalWindowMinutes : null;
-
-  const changed = await db.$transaction(async (tx) => {
-    const locked = await lockTenantOwnedJob(tx, access.businessId, job.id);
-    if (!locked) {
-      throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_STALE_MESSAGE);
+  try {
+    const job = access.assertOwned(
+      await db.job.findFirst({
+        where: { id: jobId, ...access.scope },
+        select: JOB_SELECT,
+      }),
+    );
+    if (!sameBusinessJob(job, access.businessId)) {
+      throw new Error("Record is not in the authorized business workspace.");
     }
-    const fresh = await tx.job.findFirst({
-      where: { id: job.id, businessId: access.businessId },
-      select: JOB_SELECT,
-    });
-    if (!fresh || !fresh.scheduledAt) {
-      throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_STALE_MESSAGE);
+    if (job.status === "COMPLETED") {
+      throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_COMPLETED_MESSAGE);
     }
-    assertCurrentSnapshot(fresh, snapshot);
+    if (!job.scheduledAt) {
+      throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_UNSCHEDULED_MESSAGE);
+    }
+    assertCurrentSnapshot(job, snapshot);
 
-    const updated = await tx.job.updateMany({
-      where: ownerDayRouteScheduleSnapshotWhere(access.businessId, snapshot),
-      data: {
-        scheduledAt: start,
-        scheduledDurationMinutes: evaluation.durationMinutes,
-        pickupDurationMinutes: evaluation.pickupDurationMinutes,
-        arrivalWindowMinutes,
-        nextOccurrenceAt,
-        ...(materialChange
-          ? {
-              appointmentProposalId: proposalId,
-              appointmentConfirmationStatus: "AWAITING_CUSTOMER",
-              appointmentConfirmedAt: null,
-              appointmentConfirmationSource: null,
-              appointmentConfirmedByMembershipId: null,
-              appointmentChangeRequestNote: null,
-              startWithoutConfirmationAt: null,
-              startWithoutConfirmationReason: null,
-              startWithoutConfirmationByMembershipId: null,
-              appointmentNotificationStatus: null,
-              appointmentNotificationError: null,
-              appointmentNotifiedAt: null,
-              appointmentNotifiedForProposalId: null,
-            }
-          : {}),
+    const timeZone = await loadWorkforceTimeZone(db, access.businessId);
+    const start = parseScheduleStart(input.date, input.time, timeZone);
+    if (!start) {
+      throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_INVALID_MESSAGE);
+    }
+
+    return await db.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`
+          SELECT pg_advisory_xact_lock(hashtext(${dayRouteAppointmentLockKey(access.businessId)}))
+        `;
+        const locked = await lockTenantOwnedJob(tx, access.businessId, job.id);
+        if (!locked) {
+          throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_STALE_MESSAGE);
+        }
+        const fresh = await tx.job.findFirst({
+          where: { id: job.id, businessId: access.businessId },
+          select: JOB_SELECT,
+        });
+        if (!fresh || !fresh.scheduledAt) {
+          throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_STALE_MESSAGE);
+        }
+        assertCurrentSnapshot(fresh, snapshot);
+
+        const evaluation = await rejectIfScheduleBlocked({
+          db: tx,
+          access,
+          job: fresh,
+          start,
+          timeZone,
+        });
+
+        const materialChange = isMaterialAppointmentChange(
+          fresh,
+          start,
+          evaluation.durationMinutes,
+        );
+        const proposalId = materialChange
+          ? nextAppointmentProposalId(fresh.appointmentProposalId)
+          : fresh.appointmentProposalId;
+        const position = appointmentPositionOnDay({
+          start,
+          jobId: fresh.id,
+          assignedMembershipId: fresh.assignedMembershipId,
+          jobs: evaluation.capacityJobs,
+          dateKey: (date) => formatISODateInTimeZone(date, timeZone),
+        });
+        const mode = appointmentModeForPosition(position, evaluation.policy);
+        const nextOccurrenceAt = recurrenceForecastActive(fresh)
+          ? computeNextOccurrenceAt(
+              start,
+              parseRecurrenceCadence(fresh.recurrenceCadence),
+              fresh.nextOccurrenceAt,
+              timeZone,
+            )
+          : fresh.nextOccurrenceAt;
+        const arrivalWindowMinutes =
+          mode === "WINDOW" ? evaluation.policy.defaultArrivalWindowMinutes : null;
+
+        const updated = await tx.job.updateMany({
+          where: ownerDayRouteScheduleSnapshotWhere(access.businessId, snapshot),
+          data: {
+            scheduledAt: start,
+            scheduledDurationMinutes: evaluation.durationMinutes,
+            pickupDurationMinutes: evaluation.pickupDurationMinutes,
+            arrivalWindowMinutes,
+            nextOccurrenceAt,
+            ...(materialChange
+              ? {
+                  appointmentProposalId: proposalId,
+                  appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+                  appointmentConfirmedAt: null,
+                  appointmentConfirmationSource: null,
+                  appointmentConfirmedByMembershipId: null,
+                  appointmentChangeRequestNote: null,
+                  startWithoutConfirmationAt: null,
+                  startWithoutConfirmationReason: null,
+                  startWithoutConfirmationByMembershipId: null,
+                  appointmentNotificationStatus: null,
+                  appointmentNotificationError: null,
+                  appointmentNotifiedAt: null,
+                  appointmentNotifiedForProposalId: null,
+                }
+              : {}),
+          },
+        });
+        if (updated.count !== 1) {
+          throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_STALE_MESSAGE);
+        }
+
+        if (materialChange) {
+          await recordAppointmentEvent(tx, {
+            businessId: access.businessId,
+            jobId: fresh.id,
+            eventType: "APPOINTMENT_RESCHEDULED",
+            appointmentProposalId: proposalId,
+            scheduledAt: start,
+            scheduledDurationMinutes: evaluation.durationMinutes,
+            actorKind: "OWNER",
+            actorMembershipId: access.workspace.membership.id,
+          });
+        }
+
+        return {
+          jobId: fresh.id,
+          businessId: access.businessId,
+          scheduledAt: start,
+          scheduledDurationMinutes: evaluation.durationMinutes,
+          previousScheduledAt: fresh.scheduledAt,
+          pickupDurationMinutes: evaluation.pickupDurationMinutes,
+          arrivalWindowMinutes,
+        };
       },
-    });
-    if (updated.count !== 1) {
-      throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_STALE_MESSAGE);
-    }
-
-    if (materialChange) {
-      await recordAppointmentEvent(tx, {
-        businessId: access.businessId,
-        jobId: job.id,
-        eventType: "APPOINTMENT_RESCHEDULED",
-        appointmentProposalId: proposalId,
-        scheduledAt: start,
-        scheduledDurationMinutes: evaluation.durationMinutes,
-        actorKind: "OWNER",
-        actorMembershipId: access.workspace.membership.id,
-      });
-    }
-
-    return {
-      jobId: job.id,
-      businessId: access.businessId,
-      scheduledAt: start,
-      scheduledDurationMinutes: evaluation.durationMinutes,
-      previousScheduledAt: fresh.scheduledAt,
-      pickupDurationMinutes: evaluation.pickupDurationMinutes,
-      arrivalWindowMinutes,
-    };
-  });
-
-  return changed;
+      { maxWait: 10_000, timeout: 20_000 },
+    );
+  } catch (error) {
+    throwIfAppointmentSchemaMissing(error);
+  }
 }
