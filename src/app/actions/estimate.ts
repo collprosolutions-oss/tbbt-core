@@ -28,6 +28,13 @@ import {
   updateDraftEstimateLineIncludedWork,
   updateDraftMaterialCustomerLine,
 } from "@/lib/estimate-line-ops";
+import {
+  applyEstimateLineTemplateInTx,
+  applyEstimateLineTemplateToDraft,
+  createDraftEstimateWithOptionalTemplate,
+  estimateLineTemplateErrorMessage,
+  saveEstimateLineTemplateFromDraft,
+} from "@/lib/estimate-line-template-ops";
 import { joinLineDescription } from "@/lib/estimate-line-scope";
 import {
   relocateCustomerMaterialsTotalAfterLineRemoval,
@@ -431,21 +438,27 @@ export async function createManualEstimate(
       return { error: property.error };
     }
 
-    const estimate = await prisma.estimate.create({
-      data: {
-        businessId: access.businessId,
+    let estimate;
+    try {
+      estimate = await createDraftEstimateWithOptionalTemplate(prisma, access, {
         customerId: customer.id,
         propertyId: property.id,
-        total: new Prisma.Decimal(0),
-        publicToken: randomUUID(),
+        templateId: readString(formData, "templateId") || null,
         leadSource: "MANUAL",
-      },
-    });
+      });
+    } catch (error) {
+      return {
+        error: estimateLineTemplateErrorMessage(
+          error,
+          "Could not create that estimate.",
+        ),
+      };
+    }
 
     revalidatePath("/estimates");
     revalidatePath("/customers");
     revalidatePath("/pipeline");
-    redirect(`/estimates/${estimate.id}`);
+    redirect(`/estimates/${estimate.estimateId}`);
   }
 
   const name = readString(formData, "name");
@@ -457,47 +470,66 @@ export async function createManualEstimate(
     return { error: "Customer name is required." };
   }
 
-  const estimate = await prisma.$transaction(async (tx) => {
-    const existing = await findReusableCustomer(
-      tx,
-      access.businessId,
-      email,
-      phone,
-    );
-    const customer = existing
-      ? access.assertOwned(existing)
-      : await tx.customer.create({
+  let estimate;
+  try {
+    estimate = await prisma.$transaction(async (tx) => {
+      const existing = await findReusableCustomer(
+        tx,
+        access.businessId,
+        email,
+        phone,
+      );
+      const customer = existing
+        ? access.assertOwned(existing)
+        : await tx.customer.create({
+            data: {
+              businessId: access.businessId,
+              name,
+              email: email || null,
+              phone: phone || null,
+            },
+          });
+
+      let propertyId: string | null = null;
+      if (address) {
+        const createdProperty = await tx.property.create({
           data: {
             businessId: access.businessId,
-            name,
-            email: email || null,
-            phone: phone || null,
+            customerId: customer.id,
+            addressLine1: address,
           },
         });
+        propertyId = createdProperty.id;
+      }
 
-    let propertyId: string | null = null;
-    if (address) {
-      const createdProperty = await tx.property.create({
+      const created = await tx.estimate.create({
         data: {
           businessId: access.businessId,
           customerId: customer.id,
-          addressLine1: address,
+          propertyId,
+          total: new Prisma.Decimal(0),
+          publicToken: randomUUID(),
+          leadSource: "MANUAL",
         },
       });
-      propertyId = createdProperty.id;
-    }
 
-    return tx.estimate.create({
-      data: {
-        businessId: access.businessId,
-        customerId: customer.id,
-        propertyId,
-        total: new Prisma.Decimal(0),
-        publicToken: randomUUID(),
-        leadSource: "MANUAL",
-      },
+      const templateId = readString(formData, "templateId");
+      if (templateId) {
+        await applyEstimateLineTemplateInTx(tx, access, {
+          templateId,
+          estimateId: created.id,
+        });
+      }
+      return created;
     });
-  });
+  } catch (error) {
+    return {
+      error: estimateLineTemplateErrorMessage(
+        error,
+        "Could not create that estimate.",
+      ),
+    };
+  }
 
   revalidatePath("/estimates");
   revalidatePath("/customers");
@@ -942,6 +974,53 @@ export async function overrideEstimateLinePrice(
   } catch (error) {
     return {
       error: estimateLineErrorMessage(error, "Could not override that price."),
+    };
+  }
+}
+
+export async function saveEstimateLineTemplate(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.ESTIMATES_INVOICES);
+    const result = await saveEstimateLineTemplateFromDraft(prisma, access, {
+      estimateId,
+      name: readString(formData, "name"),
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    revalidatePath("/estimates/new");
+    return { message: result.message };
+  } catch (error) {
+    return {
+      error: estimateLineTemplateErrorMessage(
+        error,
+        "Could not save that estimate template.",
+      ),
+    };
+  }
+}
+
+export async function applyEstimateLineTemplate(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.ESTIMATES_INVOICES);
+    const result = await applyEstimateLineTemplateToDraft(prisma, access, {
+      estimateId,
+      templateId: readString(formData, "templateId"),
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: result.message };
+  } catch (error) {
+    return {
+      error: estimateLineTemplateErrorMessage(
+        error,
+        "Could not apply that estimate template.",
+      ),
     };
   }
 }

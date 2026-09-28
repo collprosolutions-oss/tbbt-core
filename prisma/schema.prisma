@@ -418,6 +418,10 @@ model Business {
   /// Named OWNER assumption overlays for /scenario-planner. Knobs only —
   /// never recorded facts, forecasts, invoices, payments, expenses, or prices.
   ownerScenarioAssumptionSets OwnerScenarioAssumptionSet[]
+  /// OWNER-named reusable draft estimate line sets. Business-scoped
+  /// snapshots only — never public catalog prices or approved estimates.
+  estimateLineTemplates     EstimateLineTemplate[]
+  estimateLineTemplateLines EstimateLineTemplateLine[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -635,6 +639,7 @@ model Membership {
   confirmedExternalLeadImports    ExternalLeadImport[] @relation("ExternalLeadImportConfirmer")
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
   createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
+  createdEstimateLineTemplates EstimateLineTemplate[] @relation("EstimateLineTemplateCreator")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -1197,6 +1202,50 @@ model Estimate {
   @@index([businessId])
   @@index([propertyId])
   @@index([campaignId])
+}
+
+/// OWNER-named, business-scoped set of draft estimate line snapshots.
+/// Apply copies these onto a DRAFT estimate only. Application code must
+/// never write ServiceCatalogItem prices or mutate SENT/APPROVED estimates
+/// from this model. Not a public catalog and not an hourly rate list.
+model EstimateLineTemplate {
+  id                    String   @id @default(cuid())
+  businessId            String
+  name                  String
+  /// Case-folded unique key so "Bath refresh" and "bath refresh" collide
+  /// under concurrent same-business creates.
+  nameKey               String
+  createdByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business  Business                   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy Membership?                @relation("EstimateLineTemplateCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  lines     EstimateLineTemplateLine[]
+
+  @@unique([businessId, nameKey])
+  @@index([businessId, updatedAt])
+}
+
+/// Snapshot of one LABOR / MATERIAL / OTHER draft line stored on a
+/// business-scoped EstimateLineTemplate. Prices here are job-draft
+/// snapshots, never published catalog hourly rates.
+model EstimateLineTemplateLine {
+  id          String       @id @default(cuid())
+  businessId  String
+  templateId  String
+  sortOrder   Int
+  description String
+  quantity    Decimal
+  unitPrice   Decimal
+  type        LineItemType @default(LABOR)
+  createdAt   DateTime     @default(now())
+
+  business Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  template EstimateLineTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([templateId, sortOrder])
 }
 
 /// Immutable historical snapshot of an Estimate exactly as it was SENT to a
