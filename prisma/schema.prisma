@@ -1422,6 +1422,11 @@ model Job {
   /// one requested re-clean yields at most one corrective job. Distinct
   /// from nextBookingSourceJobId and recurrenceSourceJobId.
   correctiveCleanSourceJobId String? @unique
+  /// Idempotency key for one recurring occurrence: source job + civil date.
+  /// Unique so retries and concurrent materialize runs cannot duplicate jobs.
+  /// Distinct from nextBookingSourceJobId and correctiveCleanSourceJobId.
+  /// Job.recurrenceSourceJobId stays nonunique so later occurrences can share a source.
+  recurrenceOccurrenceKey String? @unique
   nextOccurrenceAt DateTime?
   /// ACTIVE | SKIPPED | CANCELLED. Empty when one-time.
   recurrenceStatus String @default("")

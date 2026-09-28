@@ -14,6 +14,7 @@ import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
 import { AssignJobMemberForm } from "@/components/jobs/assign-job-member-form";
 import { CleaningCorrectiveCleanForm } from "@/components/jobs/cleaning-corrective-clean-form";
 import { CleaningNextBookingForm } from "@/components/jobs/cleaning-next-booking-form";
+import { CleaningRecurringBookingForm } from "@/components/jobs/cleaning-recurring-booking-form";
 import { CleaningVisitCadenceForm } from "@/components/jobs/cleaning-visit-cadence-form";
 import { ChangeOrderList } from "@/components/jobs/change-order-list";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
@@ -97,6 +98,7 @@ import { PurchaseListCard } from "@/components/materials/purchase-list-card";
 import { loadPurchaseWorkspace } from "@/lib/materials/board";
 import { loadCleaningCorrectiveCleanReview } from "@/lib/cleaning-corrective-clean-data";
 import { loadCleaningNextBookingReview } from "@/lib/cleaning-next-booking-data";
+import { loadCleaningRecurringBookingReview } from "@/lib/cleaning-recurring-booking-data";
 import { loadCleaningVisitView } from "@/lib/cleaning-visit-data";
 
 export const metadata: Metadata = {
@@ -355,6 +357,11 @@ export default async function JobPage({
     createIfMissing: true,
   });
   const cleaningVisit = await loadCleaningVisitView(prisma, access, job.id);
+  const cleaningRecurringBooking = await loadCleaningRecurringBookingReview(
+    prisma,
+    access,
+    job.id,
+  );
   const cleaningCorrectiveClean = await loadCleaningCorrectiveCleanReview(
     prisma,
     access,
@@ -850,6 +857,26 @@ export default async function JobPage({
             <CleaningVisitCadenceForm
               visit={cleaningVisit}
               canSetCadence={access.workspace.role === "OWNER"}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {cleaningRecurringBooking?.eligible ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Recurring bookings</CardTitle>
+            <CardDescription>
+              Set an explicit Cleaning cadence and first date in the business
+              timezone, then stop the schedule when it should end. Recurring
+              occurrences are separate from a one-time next booking or
+              corrective clean. This does not invoice or message the customer.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CleaningRecurringBookingForm
+              review={cleaningRecurringBooking}
+              timeZone={timeZone}
             />
           </CardContent>
         </Card>

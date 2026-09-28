@@ -138,6 +138,7 @@
     "test:cleaning-next-booking": "node --experimental-strip-types scripts/check-cleaning-next-booking.mjs",
     "test:cleaning-repeat-visit": "node --experimental-strip-types scripts/check-cleaning-repeat-visit.mjs",
     "test:cleaning-corrective-clean": "node --experimental-strip-types scripts/check-cleaning-corrective-clean.mjs",
+    "test:cleaning-recurring-booking": "node --experimental-strip-types scripts/check-cleaning-recurring-booking.mjs",
     "test:business-locations": "node --experimental-strip-types scripts/check-business-locations.mjs",
     "test:partner-vendor-directory": "node --experimental-strip-types scripts/check-partner-vendor-directory.mjs",
     "test:external-lead-import": "node --experimental-strip-types scripts/check-external-lead-import.mjs",
