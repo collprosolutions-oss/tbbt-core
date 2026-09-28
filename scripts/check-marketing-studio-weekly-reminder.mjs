@@ -291,9 +291,9 @@ try {
   check(
     "Dedicated reminder tests use a fake provider and do not send a real SMS",
     reminderTestSrc.includes("createFakeCustomerMessagingProvider") &&
-      !reminderTestSrc.includes("TWILIO_ACCOUNT_SID=") &&
-      !reminderTestSrc.includes("TWILIO_AUTH_TOKEN=") &&
-      !reminderTestSrc.includes("api.twilio.com"),
+      reminderTestSrc.includes("messagingProvider: fakeSms") &&
+      !ownerSmsSrc.includes("twilio.com") &&
+      !reminderOpsSrc.includes("createTwilioCustomerMessagingProvider"),
   );
   check(
     "Owner studio reminder purpose cannot go through customer SMS",
