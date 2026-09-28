@@ -297,15 +297,6 @@ async function deliverOwnerStudioWeeklyReminderSms(
     );
     return { ...result, reminder };
   }
-  if (settings.studioWeeklyReminderOwnerSmsOptedIn !== true) {
-    const reminder = await recordReminderSms(
-      db,
-      existing,
-      STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT,
-      STUDIO_WEEKLY_REMINDER_SMS_NOT_OPTED_IN,
-    );
-    return { ...result, reminder };
-  }
 
   const fromDigits = normalizePhone(business?.operationalSmsNumber);
   const toDigits = resolveOwnerStudioReminderSmsTo({
@@ -321,6 +312,16 @@ async function deliverOwnerStudioWeeklyReminderSms(
       existing,
       STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED,
       STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED,
+    );
+    return { ...result, reminder };
+  }
+
+  if (settings.studioWeeklyReminderOwnerSmsOptedIn !== true) {
+    const reminder = await recordReminderSms(
+      db,
+      existing,
+      STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT,
+      STUDIO_WEEKLY_REMINDER_SMS_NOT_OPTED_IN,
     );
     return { ...result, reminder };
   }
