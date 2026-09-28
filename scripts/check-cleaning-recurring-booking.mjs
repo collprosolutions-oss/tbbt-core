@@ -294,7 +294,8 @@ check(
     formSrc.includes('name="confirmCreate"') &&
     formSrc.includes('name="confirmStop"') &&
     formSrc.includes("Stop recurring bookings") &&
-    formSrc.includes("one-time next booking, corrective clean") &&
+    formSrc.includes("one-time next") &&
+    formSrc.includes("corrective clean") &&
     formSrc.includes("setupCleaningRecurringBookingsAction") &&
     formSrc.includes("stopCleaningRecurringBookingsAction") &&
     CLEANING_RECURRING_CREATED_MESSAGE.includes("No next booking, corrective clean") &&

@@ -66,6 +66,7 @@ const SOURCE_JOB_SELECT = {
   id: true,
   businessId: true,
   status: true,
+  scheduledAt: true,
   customerId: true,
   propertyId: true,
   estimateId: true,
@@ -422,6 +423,7 @@ async function resultFromSource(
       where: { id: sourceJobId, businessId: access.businessId },
       select: {
         id: true,
+        businessId: true,
         recurrenceStatus: true,
         recurrenceCadence: true,
         nextOccurrenceAt: true,
