@@ -52,6 +52,7 @@ const {
   grantJobPhotoMarketingPermission,
   MarketingError,
   returnMarketingStudioPackage,
+  updateMarketingStudioPackage,
 } = await import("@/lib/marketing-ops");
 const { loadMarketingSource } = await import("@/lib/marketing-data");
 
@@ -69,7 +70,7 @@ const actionUiSrc = readSrc("src/components/marketing/studio-approval-actions.ts
 const workspaceSrc = readSrc("src/components/marketing/marketing-workspace.tsx");
 
 const approveFnSrc = opsSrc.slice(
-  opsSrc.indexOf("async function loadOwnedStudioPackageForReview"),
+  opsSrc.indexOf("function requireOwnerStudioApproval"),
   opsSrc.indexOf("export async function returnMarketingStudioPackage"),
 );
 const returnFnSrc = opsSrc.slice(
@@ -130,6 +131,31 @@ function makeAccess(businessId, role, membershipId) {
       return assertBusinessRecord(record, businessId);
     },
   };
+}
+
+function holdApproveClaim(db) {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let notifyReached;
+  const reached = new Promise((resolve) => {
+    notifyReached = resolve;
+  });
+  const racingDb = db.$extends({
+    query: {
+      marketingContent: {
+        async updateMany({ args, query }) {
+          if (args.data?.status === "APPROVED") {
+            notifyReached();
+            await gate;
+          }
+          return query(args);
+        },
+      },
+    },
+  });
+  return { racingDb, reached, release };
 }
 
 async function expectError(label, run, predicate) {
@@ -241,13 +267,32 @@ try {
       approveFnSrc.includes('status: "APPROVED"'),
   );
   check(
+    "Approve claims READY_FOR_REVIEW in a write transaction after a photo recheck",
+    approveFnSrc.includes("runInTransaction") &&
+      approveFnSrc.includes("assertAttachedPhotosStillApproved") &&
+      approveFnSrc.includes("updateMany") &&
+      approveFnSrc.includes("studioApprovalQueueWriteWhere") &&
+      approveFnSrc.includes("access.businessId") &&
+      approveFnSrc.includes("STUDIO_APPROVAL_QUEUE_STATUS") &&
+      approveFnSrc.includes("content.updatedAt") &&
+      approveFnSrc.indexOf("runInTransaction") <
+        approveFnSrc.indexOf("assertAttachedPhotosStillApproved") &&
+      approveFnSrc.indexOf("assertAttachedPhotosStillApproved") <
+        approveFnSrc.indexOf("updateMany"),
+  );
+  check(
     "Return is OWNER-gated and business-scoped",
-    returnFnSrc.includes("requireBusinessCapability") &&
-      returnFnSrc.includes('requireBusinessRole(access, "OWNER")') &&
+    returnFnSrc.includes("requireOwnerStudioApproval") &&
       returnFnSrc.includes("...access.scope") &&
       returnFnSrc.includes("access.assertOwned") &&
       returnFnSrc.includes("STUDIO_RETURN_FOR_CHANGES_MESSAGE") &&
       returnFnSrc.includes('status: "DRAFT"'),
+  );
+  check(
+    "Return claims READY_FOR_REVIEW at commit",
+    returnFnSrc.includes("updateMany") &&
+      returnFnSrc.includes("studioApprovalQueueWriteWhere") &&
+      returnFnSrc.includes("STUDIO_RETURN_NOT_READY_MESSAGE"),
   );
   check(
     "Approve and return do not publish, post, or send",
@@ -491,6 +536,77 @@ try {
     "Stored approved package is still not published",
     storedApproved?.status === "APPROVED" && storedApproved.exportedAt == null,
   );
+
+  console.log("\nTEST — Deterministic races: Return or edit wins before stale Approve");
+  async function createReadyPackage(title) {
+    const created = await createMarketingStudioPackage(prisma, adminA, {
+      contentType: "COMPLETED_JOB",
+      title,
+      body: "Recorded faucet repair only.",
+      jobId: job.id,
+      photoIds: [photo.id],
+    });
+    return advanceMarketingContentStatus(prisma, adminA, { contentId: created.id });
+  }
+
+  const returnRace = await createReadyPackage("Return wins before approve");
+  const returnHold = holdApproveClaim(prisma);
+  const staleReturnApprove = approveMarketingStudioPackage(returnHold.racingDb, ownerA, {
+    contentId: returnRace.id,
+  });
+  await returnHold.reached;
+  const returnWon = await returnMarketingStudioPackage(prisma, ownerA, { contentId: returnRace.id });
+  check("Return commits first while Approve is held", returnWon.status === "DRAFT");
+  returnHold.release();
+  await expectError(
+    "Stale Approve fails after Return wins",
+    () => staleReturnApprove,
+    (error) => error instanceof MarketingError && error.message === STUDIO_APPROVE_NOT_READY_MESSAGE,
+  );
+  const afterReturnRace = await prisma.marketingContent.findFirst({
+    where: { id: returnRace.id, businessId: businessA.id },
+  });
+  check(
+    "Stale Approve does not overwrite the returned DRAFT",
+    afterReturnRace?.status === "DRAFT" &&
+      afterReturnRace.title === "Return wins before approve" &&
+      afterReturnRace.reviewedByMembershipId == null &&
+      afterReturnRace.exportedAt == null,
+  );
+
+  const editRace = await createReadyPackage("Edit wins before approve");
+  const editHold = holdApproveClaim(prisma);
+  const staleEditApprove = approveMarketingStudioPackage(editHold.racingDb, ownerA, {
+    contentId: editRace.id,
+  });
+  await editHold.reached;
+  const edited = await updateMarketingStudioPackage(prisma, adminA, {
+    contentId: editRace.id,
+    title: "Newer edited title",
+    body: "Edited caption after approve started.",
+  });
+  check(
+    "Package edit commits first while Approve is held",
+    edited.status === "READY_FOR_REVIEW" && edited.title === "Newer edited title",
+  );
+  editHold.release();
+  await expectError(
+    "Stale Approve fails after a package edit wins",
+    () => staleEditApprove,
+    (error) => error instanceof MarketingError && error.message === STUDIO_APPROVE_NOT_READY_MESSAGE,
+  );
+  const afterEditRace = await prisma.marketingContent.findFirst({
+    where: { id: editRace.id, businessId: businessA.id },
+  });
+  check(
+    "Stale Approve does not overwrite the newer edited state",
+    afterEditRace?.status === "READY_FOR_REVIEW" &&
+      afterEditRace.title === "Newer edited title" &&
+      afterEditRace.body === "Edited caption after approve started." &&
+      afterEditRace.reviewedByMembershipId == null &&
+      afterEditRace.exportedAt == null,
+  );
+  await returnMarketingStudioPackage(prisma, ownerA, { contentId: editRace.id });
 
   console.log("\nTEST — Bounded queue and no auto-approve");
   const overflowTitles = Array.from({ length: 51 }, (_, index) => `Queue overflow ${String(index).padStart(2, "0")}`);
