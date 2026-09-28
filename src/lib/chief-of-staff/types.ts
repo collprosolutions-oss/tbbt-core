@@ -104,6 +104,8 @@ export type SpecialistResult = {
   findings: SpecialistFinding[];
   factKeys: string[];
   recommendationKeys: string[];
+  /** Request-local fact values. Not a module-level snapshot. */
+  facts?: Record<string, string>;
   limitation?: string;
   skipReason?: SpecialistSkipReason;
   failure?: SpecialistFailure;

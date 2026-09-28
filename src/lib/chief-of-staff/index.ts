@@ -71,6 +71,7 @@ export {
   GROWTH_RETENTION_CONTEXT_CAPS,
   GROWTH_RETENTION_FACT_KEYS,
   GROWTH_RETENTION_NOT_AUTHORIZED_LIMITATION,
+  RETENTION_CUSTOMER_FOLLOW_UPS_LINK_LABEL,
   findingsFromRetentionProjection,
   growthRetentionFactsFromProjection,
   hasGrowthViewAccess,
@@ -78,6 +79,7 @@ export {
   ownerLinksForRetentionCandidate,
   ownerLinksForRetentionFollowUp,
   projectRetentionFromWorkspace,
+  requestLocalGrowthFacts,
 } from "@/lib/chief-of-staff/growth-retention";
 export {
   getCommunicationsProjectionLoadCount,

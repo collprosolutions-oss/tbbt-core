@@ -25,13 +25,17 @@ const {
   GROWTH_RETENTION_CONTEXT_CAPS,
   GROWTH_RETENTION_FACT_KEYS,
   GROWTH_RETENTION_NOT_AUTHORIZED_LIMITATION,
+  RETENTION_CUSTOMER_FOLLOW_UPS_LINK_LABEL,
   getLastGrowthProjection,
   growthProjectionHasForbiddenFields,
   interpretGrowthSpecialist,
   loadCanonicalRecommendationCatalog,
   projectRetentionFromWorkspace,
+  requestLocalGrowthFacts,
   resetLastGrowthProjection,
+  runChiefOfStaffCoach,
   runGrowthSpecialist,
+  synthesizeCoachAnswer,
 } = await import("@/lib/chief-of-staff");
 const {
   DUE_OR_OVERDUE_FACT,
@@ -164,6 +168,16 @@ try {
       specialistSrc.includes("loadGrowthRetentionCenter") &&
       runSrc.includes("runGrowthSpecialist"),
   );
+  const synthesizeSrc = readSrc("src/lib/chief-of-staff/synthesize.ts");
+  check(
+    "Retention facts stay request-local on the specialist result",
+    specialistSrc.includes("facts,") &&
+      retentionSrc.includes("export function requestLocalGrowthFacts") &&
+      !specialistSrc.includes("lastGrowthProjection.retention") &&
+      !runSrc.includes("getLastGrowthProjection") &&
+      synthesizeSrc.includes("requestLocalGrowthFacts") &&
+      synthesizeSrc.includes("finding.ownerLinks && finding.ownerLinks.length > 0"),
+  );
   check(
     "Canonical same-business absence queries stay in the center module",
     querySrc.includes("export async function hasSameBusinessReviewRequestForJob") &&
@@ -199,7 +213,8 @@ try {
     retentionSrc.includes('ownerLink("CUSTOMER"') &&
       retentionSrc.includes('ownerLink("JOB"') &&
       retentionSrc.includes('"FOLLOW_UP_TASK"') &&
-      retentionSrc.includes("RETENTION_ROUTE") &&
+      retentionSrc.includes("RETENTION_CUSTOMER_FOLLOW_UPS_LINK_LABEL") &&
+      RETENTION_CUSTOMER_FOLLOW_UPS_LINK_LABEL === "Open this customer's recorded follow-ups" &&
       RETENTION_ROUTE === "/growth/retention",
   );
   check(
@@ -417,7 +432,7 @@ try {
       notes: "SECRET FOLLOW-UP BODY",
     },
   });
-  await prisma.customerFollowUp.create({
+  const betaFollowUp = await prisma.customerFollowUp.create({
     data: {
       businessId: businessB.id,
       customerId: betaCustomer.id,
@@ -487,19 +502,24 @@ try {
     question: "Show customer retention and repeat-business facts.",
     now,
   });
+  const ownerFacts = requestLocalGrowthFacts(ownerResult);
   const projection = getLastGrowthProjection();
-  const retention = projection?.retention;
+  const projected = projectRetentionFromWorkspace(center);
   check("OWNER Growth specialist is OK", ownerResult.status === "OK");
-  check("Retention projection reuses the center", Boolean(retention?.centerReused));
+  check("Retention facts are request-local on the specialist result", Boolean(ownerFacts));
+  check(
+    "Module-level Growth projection does not carry tenant retention",
+    projection != null && !("retention" in projection),
+  );
   check(
     "Specialist totals match the center exactly",
-    Boolean(retention) &&
-      retention.totals.noReviewRequest === center.totals.noReviewRequest &&
-      retention.totals.noLaterJob === center.totals.noLaterJob &&
-      retention.totals.dueOrOverdue === center.totals.dueOrOverdue &&
-      retention.totals.recordedFollowUp === center.totals.recordedFollowUp &&
-      retention.totals.noReferralRequest === center.totals.noReferralRequest &&
-      retention.totals.incompleteJourney === center.totals.incompleteJourney,
+    Boolean(ownerFacts) &&
+      ownerFacts[GROWTH_RETENTION_FACT_KEYS.noReviewRequest] === String(center.totals.noReviewRequest) &&
+      ownerFacts[GROWTH_RETENTION_FACT_KEYS.noLaterJob] === String(center.totals.noLaterJob) &&
+      ownerFacts[GROWTH_RETENTION_FACT_KEYS.dueOrOverdue] === String(center.totals.dueOrOverdue) &&
+      ownerFacts[GROWTH_RETENTION_FACT_KEYS.recordedFollowUp] === String(center.totals.recordedFollowUp) &&
+      ownerFacts[GROWTH_RETENTION_FACT_KEYS.noReferralRequest] === String(center.totals.noReferralRequest) &&
+      ownerFacts[GROWTH_RETENTION_FACT_KEYS.incompleteJourney] === String(center.totals.incompleteJourney),
   );
   check(
     "Fact keys carry the center totals",
@@ -520,7 +540,7 @@ try {
   check("No-referral finding uses the center fact", referralFinding?.summary.includes(NO_REFERRAL_REQUEST_FACT) === true);
   check(
     "SENT stay SENT and is not rewritten to DELIVERED",
-    retention.recordedFollowUp.every((row) => row.status !== "SENT" || row.statusLabel === "SENT") &&
+    projected.recordedFollowUp.every((row) => row.status !== "SENT" || row.statusLabel === "SENT") &&
       !JSON.stringify(ownerResult).includes("DELIVERED"),
   );
 
@@ -534,11 +554,12 @@ try {
     dueLinks.some((link) => link.recordType === "JOB" && link.id === followJob.id && link.href === `/jobs/${followJob.id}`),
   );
   check(
-    "OWNER is linked to the recorded follow-up task",
+    "OWNER follow-up link identifies the exact task and labels the customer-filtered center accurately",
     dueLinks.some(
       (link) =>
         link.recordType === "FOLLOW_UP_TASK" &&
         link.id === dueFollowUp.id &&
+        link.label === RETENTION_CUSTOMER_FOLLOW_UPS_LINK_LABEL &&
         link.href === `${RETENTION_ROUTE}?customerId=${encodeURIComponent(followCustomer.id)}`,
     ),
   );
@@ -557,14 +578,18 @@ try {
     question: "Show customer retention and repeat-business facts.",
     now,
   });
-  const adminRetention = getLastGrowthProjection()?.retention;
+  const adminFacts = requestLocalGrowthFacts(adminResult);
   check("ADMIN Growth specialist is OK, matching the Growth gate", adminResult.status === "OK");
   check(
     "ADMIN sees the same center totals as OWNER",
-    Boolean(adminRetention) &&
-      adminRetention.totals.noReviewRequest === center.totals.noReviewRequest &&
-      adminRetention.totals.dueOrOverdue === center.totals.dueOrOverdue &&
-      adminRetention.totals.noLaterJob === center.totals.noLaterJob,
+    Boolean(adminFacts) &&
+      adminFacts[GROWTH_RETENTION_FACT_KEYS.noReviewRequest] === String(center.totals.noReviewRequest) &&
+      adminFacts[GROWTH_RETENTION_FACT_KEYS.dueOrOverdue] === String(center.totals.dueOrOverdue) &&
+      adminFacts[GROWTH_RETENTION_FACT_KEYS.noLaterJob] === String(center.totals.noLaterJob),
+  );
+  check(
+    "ADMIN result does not write retention onto lastGrowthProjection",
+    getLastGrowthProjection() != null && !("retention" in (getLastGrowthProjection() ?? {})),
   );
   check("ADMIN still cannot write a retention follow-up", retentionFollowUpWriteAllowed(adminAccess.workspace.role) === false);
 
@@ -581,10 +606,10 @@ try {
       foreignLaterJob.customerId === pastCustomer.id &&
       (await hasSameBusinessReferralRequestForJob(prisma, businessA.id, pastOnlyJob.id)) === false,
   );
-  const serialized = JSON.stringify(retention);
-  check("Beta customer id is absent from the Alpha projection", !serialized.includes(betaCustomer.id));
+  const serialized = JSON.stringify(ownerResult);
+  check("Beta customer id is absent from the Alpha result", !serialized.includes(betaCustomer.id));
   check("Beta follow-up notes are absent", !serialized.includes("BETA SECRET TASK") && !serialized.includes("SECRET FOLLOW-UP BODY"));
-  check("Ada email and phone stay out of the projection", !serialized.includes("ada-secret@example.com") && !serialized.includes("555-0100"));
+  check("Ada email and phone stay out of the result", !serialized.includes("ada-secret@example.com") && !serialized.includes("555-0100"));
   check("Projection has no forbidden fields", !growthProjectionHasForbiddenFields(projection));
 
   resetLastGrowthProjection();
@@ -596,10 +621,16 @@ try {
     question: "Show customer retention facts.",
     now,
   });
-  const betaRetention = getLastGrowthProjection()?.retention;
-  check("Beta specialist stays on the Beta tenant", betaResult.status === "OK" && Boolean(betaRetention));
-  check("Beta projection includes the Beta follow-up", betaRetention.dueOrOverdue.some((row) => row.customerId === betaCustomer.id));
-  check("Beta projection omits Alpha follow-up", !JSON.stringify(betaRetention).includes(dueFollowUp.id));
+  check("Beta specialist stays on the Beta tenant", betaResult.status === "OK" && Boolean(requestLocalGrowthFacts(betaResult)));
+  check(
+    "Beta result includes the Beta follow-up",
+    betaResult.findings.some(
+      (row) =>
+        (row.entityIds ?? []).includes(betaFollowUp.id) ||
+        (row.ownerLinks ?? []).some((link) => link.id === betaFollowUp.id || link.id === betaCustomer.id),
+    ),
+  );
+  check("Beta result omits Alpha follow-up", !JSON.stringify(betaResult).includes(dueFollowUp.id));
 
   resetLastGrowthProjection();
   const foreignHint = await runGrowthSpecialist({
@@ -610,22 +641,22 @@ try {
     entityHints: { customerId: betaCustomer.id },
     now,
   });
-  const foreignRetention = getLastGrowthProjection()?.retention;
+  const foreignFacts = requestLocalGrowthFacts(foreignHint);
   check(
     "Foreign customer hint returns empty retention groups",
     foreignHint.status === "OK" &&
-      Boolean(foreignRetention) &&
-      foreignRetention.totals.noReviewRequest === 0 &&
-      foreignRetention.totals.dueOrOverdue === 0 &&
-      foreignRetention.noReviewRequest.length === 0,
+      Boolean(foreignFacts) &&
+      foreignFacts[GROWTH_RETENTION_FACT_KEYS.noReviewRequest] === "0" &&
+      foreignFacts[GROWTH_RETENTION_FACT_KEYS.dueOrOverdue] === "0" &&
+      !foreignHint.findings.some((row) => (row.ownerLinks ?? []).length > 0),
   );
 
   console.log("\nBOUNDS — specialist detail is capped while totals stay the center totals");
   check(
     "No-review detail is bounded to 4",
-    retention.noReviewRequest.length <= GROWTH_RETENTION_CONTEXT_CAPS.candidates &&
+    projected.noReviewRequest.length <= GROWTH_RETENTION_CONTEXT_CAPS.candidates &&
       center.totals.noReviewRequest > GROWTH_RETENTION_CONTEXT_CAPS.candidates &&
-      retention.totals.noReviewRequest === center.totals.noReviewRequest,
+      ownerFacts[GROWTH_RETENTION_FACT_KEYS.noReviewRequest] === String(center.totals.noReviewRequest),
   );
   check(
     "Entity ids and owner links stay bounded",
@@ -642,12 +673,112 @@ try {
   check("Specialist wording has no forbidden claims", retentionTextHasForbiddenClaim(ownerText) === false);
   check("Specialist wording has no invented cadence", retentionTextHasInventedCadence(ownerText) === false);
 
-  const projected = projectRetentionFromWorkspace(center);
   check(
-    "Direct projection helper matches the specialist retention slice",
-    projected.totals.noReviewRequest === retention.totals.noReviewRequest &&
-      projected.noReviewRequest.length === retention.noReviewRequest.length &&
-      projected.dueOrOverdue[0]?.followUpId === retention.dueOrOverdue[0]?.followUpId,
+    "Direct projection helper matches the request-local specialist facts",
+    projected.totals.noReviewRequest === Number(ownerFacts[GROWTH_RETENTION_FACT_KEYS.noReviewRequest]) &&
+      projected.dueOrOverdue.some((row) => row.followUpId === dueFollowUp.id) &&
+      (dueFinding?.entityIds ?? []).includes(dueFollowUp.id),
+  );
+
+  console.log("\nCONCURRENT — two businesses do not share retention facts or links");
+  const [concurrentA, concurrentB] = await Promise.all([
+    runGrowthSpecialist({
+      db: prisma,
+      access: ownerAccess,
+      catalog: catalogA,
+      question: "Show customer retention and repeat-business facts.",
+      now,
+    }),
+    runGrowthSpecialist({
+      db: prisma,
+      access: betaAccess,
+      catalog: betaCatalog,
+      question: "Show customer retention and repeat-business facts.",
+      now,
+    }),
+  ]);
+  const coachQuestion = "Show customer retention and repeat-business facts.";
+  const [answerA, answerB] = await Promise.all([
+    runChiefOfStaffCoach(prisma, ownerAccess, { question: coachQuestion, attemptId: randomUUID() }),
+    runChiefOfStaffCoach(prisma, betaAccess, { question: coachQuestion, attemptId: randomUUID() }),
+  ]);
+  const synA = synthesizeCoachAnswer({
+    question: coachQuestion,
+    catalog: catalogA,
+    specialistResults: [concurrentA],
+    conflicts: { items: [], uniqueRecommendationKeys: concurrentA.recommendationKeys },
+    coachContext: {
+      facts: catalogA.facts,
+      recommendations: catalogA.activeRecommendations,
+      metrics: [],
+      goals: [],
+      actionItems: [],
+    },
+  });
+  const synB = synthesizeCoachAnswer({
+    question: coachQuestion,
+    catalog: betaCatalog,
+    specialistResults: [concurrentB],
+    conflicts: { items: [], uniqueRecommendationKeys: concurrentB.recommendationKeys },
+    coachContext: {
+      facts: betaCatalog.facts,
+      recommendations: betaCatalog.activeRecommendations,
+      metrics: [],
+      goals: [],
+      actionItems: [],
+    },
+  });
+  const packA = JSON.stringify({
+    result: concurrentA,
+    synthesis: synA,
+    answer: answerA,
+  });
+  const packB = JSON.stringify({
+    result: concurrentB,
+    synthesis: synB,
+    answer: answerB,
+  });
+  check("Concurrent Alpha specialist stays OK", concurrentA.status === "OK");
+  check("Concurrent Beta specialist stays OK", concurrentB.status === "OK");
+  check(
+    "Concurrent Alpha answer omits Beta customer, task, and secret",
+    !packA.includes(betaCustomer.id) &&
+      !packA.includes(betaFollowUp.id) &&
+      !packA.includes("Beta Secret") &&
+      !packA.includes("BETA SECRET TASK") &&
+      !(answerA.text ?? "").includes("Beta Secret"),
+  );
+  check(
+    "Concurrent Beta answer omits Alpha customer, task, and secret",
+    !packB.includes(followCustomer.id) &&
+      !packB.includes(dueFollowUp.id) &&
+      !packB.includes("Followup Fay") &&
+      !packB.includes("SECRET FOLLOW-UP BODY") &&
+      !(answerB.text ?? "").includes("Followup Fay") &&
+      !(answerB.text ?? "").includes("Ada Homeowner"),
+  );
+  check(
+    "Concurrent Alpha keeps its own follow-up task id",
+    packA.includes(dueFollowUp.id) && packA.includes(followCustomer.id),
+  );
+  check(
+    "Concurrent Beta keeps its own follow-up task id",
+    packB.includes(betaFollowUp.id) && packB.includes(betaCustomer.id),
+  );
+  const concurrentFactsA = requestLocalGrowthFacts(concurrentA);
+  const concurrentFactsB = requestLocalGrowthFacts(concurrentB);
+  const findingsA = JSON.stringify(synA.payload.recordedFindings ?? []);
+  const findingsB = JSON.stringify(synB.payload.recordedFindings ?? []);
+  check(
+    "Concurrent synthesis growth facts stay on the requesting business",
+    concurrentFactsA?.[GROWTH_RETENTION_FACT_KEYS.noReviewRequest] ===
+      String(center.totals.noReviewRequest) &&
+      Number(concurrentFactsA?.[GROWTH_RETENTION_FACT_KEYS.noReviewRequest]) >
+        Number(concurrentFactsB?.[GROWTH_RETENTION_FACT_KEYS.noReviewRequest] ?? 0) &&
+      findingsA.includes(dueFollowUp.id) &&
+      !findingsA.includes(betaFollowUp.id) &&
+      findingsB.includes(betaFollowUp.id) &&
+      !findingsB.includes(dueFollowUp.id),
   );
 } catch (error) {
   console.error(error);

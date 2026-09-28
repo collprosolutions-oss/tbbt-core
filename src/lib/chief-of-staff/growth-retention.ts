@@ -8,7 +8,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, roleHasCapability, type Capability } from "@/lib/authorization";
-import type { SpecialistFinding } from "@/lib/chief-of-staff/types";
+import type { SpecialistFinding, SpecialistResult } from "@/lib/chief-of-staff/types";
 import {
   DUE_OR_OVERDUE_FACT,
   INCOMPLETE_JOURNEY_FACT,
@@ -52,6 +52,8 @@ export const GROWTH_RETENTION_FACT_KEYS = {
 
 export const GROWTH_RETENTION_NOT_AUTHORIZED_LIMITATION =
   "Growth and retention facts were not loaded because this role cannot view reports. Assigned field work is not whole-customer retention history. Missing Growth data is not treated as zero opportunities.";
+
+export const RETENTION_CUSTOMER_FOLLOW_UPS_LINK_LABEL = "Open this customer's recorded follow-ups";
 
 export type RetentionOwnerRecordType = "CUSTOMER" | "JOB" | "FOLLOW_UP_TASK";
 
@@ -165,7 +167,7 @@ export function ownerLinksForRetentionFollowUp(row: RetentionFollowUpRow): Reten
         "FOLLOW_UP_TASK",
         row.followUpId,
         `${RETENTION_ROUTE}?customerId=${encodeURIComponent(row.customerId)}`,
-        "Open follow-up task",
+        RETENTION_CUSTOMER_FOLLOW_UPS_LINK_LABEL,
       ),
     );
   }
@@ -251,6 +253,14 @@ export function projectRetentionFromWorkspace(workspace: RetentionWorkspace): Gr
       .map(projectJourney),
     centerReused: true,
   };
+}
+
+export function requestLocalGrowthFacts(
+  result: SpecialistResult | undefined,
+): Record<string, string> | undefined {
+  if (!result || result.specialistId !== "GROWTH" || result.status !== "OK") return undefined;
+  if (!result.facts || Object.keys(result.facts).length === 0) return undefined;
+  return result.facts;
 }
 
 export function growthRetentionFactsFromProjection(
@@ -408,7 +418,7 @@ export function attachRetentionFindings(
     entityIds: item.entityIds,
     ownerLinks: item.ownerLinks,
   }));
-  return [...baseFindings, ...extra];
+  return [...extra, ...baseFindings];
 }
 
 export function hasGrowthViewAccess(access: BusinessAccess, denyRoleCapabilities?: Capability[]) {

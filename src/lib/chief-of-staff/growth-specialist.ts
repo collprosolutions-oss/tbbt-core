@@ -24,7 +24,6 @@ import {
   hasGrowthViewAccess,
   loadGrowthRetentionCenter,
   projectRetentionFromWorkspace,
-  type GrowthRetentionProjection,
 } from "@/lib/chief-of-staff/growth-retention";
 import type {
   CosEntityHints,
@@ -186,7 +185,6 @@ export type GrowthProjection = {
     areas: Array<{ label: string; requestCount: number; contentOpportunity: boolean }>;
   };
   snapshotReused: true;
-  retention?: GrowthRetentionProjection;
 };
 
 let lastGrowthProjection: GrowthProjection | null = null;
@@ -562,12 +560,9 @@ export async function runGrowthSpecialist(input: GrowthSpecialistInput): Promise
     now: input.now,
   });
   const retention = projectRetentionFromWorkspace(workspace);
-  if (lastGrowthProjection) {
-    lastGrowthProjection.retention = retention;
-  }
-
+  const facts: Record<string, string> = {};
   const factKeys = [...base.factKeys];
-  appendRetentionFactKeys(factKeys, {}, retention, GROWTH_CONTEXT_CAPS.facts);
+  appendRetentionFactKeys(factKeys, facts, retention, GROWTH_CONTEXT_CAPS.facts);
   const findings = attachRetentionFindings(base.findings, factKeys, retention).slice(
     0,
     GROWTH_CONTEXT_CAPS.findings + GROWTH_RETENTION_CONTEXT_CAPS.findings,
@@ -577,5 +572,6 @@ export async function runGrowthSpecialist(input: GrowthSpecialistInput): Promise
     ...base,
     findings,
     factKeys,
+    facts,
   };
 }
