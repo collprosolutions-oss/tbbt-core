@@ -53,6 +53,13 @@ export {
 } from "@/lib/owner-day-route/load";
 
 export {
+  ownerDayRouteScheduleSnapshotsEqual,
+  parseOwnerDayRouteScheduleSnapshot,
+  serializeOwnerDayRouteScheduleSnapshot,
+  ownerDayRouteScheduleSnapshotWhere,
+} from "@/lib/owner-day-route/snapshot";
+
+export {
   ownerDayRouteTextHasForbiddenClaim,
   ownerDayRouteViewText,
 } from "@/lib/owner-day-route/wording";

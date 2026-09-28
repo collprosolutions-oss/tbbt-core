@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { CopyDirectionsLinkButton } from "@/components/today/copy-directions-link-button";
+import { OwnerDayRouteAppointmentForm } from "@/components/today/owner-day-route-appointment-form";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
+import { formatISODateInTimeZone, formatZonedTimeInput } from "@/lib/business-timezone";
 import {
   Card,
   CardContent,
@@ -29,10 +31,12 @@ export function OwnerDayRouteView({
   view,
   previousDateIso,
   nextDateIso,
+  canChangeAppointment = false,
 }: {
   view: OwnerDayRouteView;
   previousDateIso: string;
   nextDateIso: string;
+  canChangeAppointment?: boolean;
 }) {
   const truncationNote = ownerDayRouteMapsTruncationNote(view.maps);
 
@@ -163,6 +167,15 @@ export function OwnerDayRouteView({
                     <Link href={stop.jobHref}>Open job</Link>
                   </Button>
                 </div>
+                {canChangeAppointment ? (
+                  <OwnerDayRouteAppointmentForm
+                    jobId={stop.jobId}
+                    timeZone={view.timeZone}
+                    date={formatISODateInTimeZone(stop.scheduledAt, view.timeZone)}
+                    time={formatZonedTimeInput(stop.scheduledAt, view.timeZone)}
+                    snapshot={stop.scheduleSnapshot}
+                  />
+                ) : null}
               </article>
             ))}
           </CardContent>
