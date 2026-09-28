@@ -14,6 +14,7 @@ export const RETENTION_ROUTE = "/growth/retention";
 export const RETENTION_GROUPS = [
   "NO_REVIEW_REQUEST",
   "NO_LATER_JOB",
+  "DUE_OR_OVERDUE",
   "RECORDED_FOLLOW_UP",
   "NO_REFERRAL_REQUEST",
   "INCOMPLETE_JOURNEY",
@@ -24,6 +25,7 @@ export type RetentionGroup = (typeof RETENTION_GROUPS)[number];
 export const RETENTION_GROUP_TITLES: Record<RetentionGroup, string> = {
   NO_REVIEW_REQUEST: "Completed job — no review request recorded",
   NO_LATER_JOB: "Past customer with no later job recorded",
+  DUE_OR_OVERDUE: "Due or overdue follow-up tasks",
   RECORDED_FOLLOW_UP: "Recorded follow-up status",
   NO_REFERRAL_REQUEST: "Completed job — no referral request recorded",
   INCOMPLETE_JOURNEY: "Incomplete customer journey",
@@ -33,6 +35,9 @@ export const NO_REVIEW_REQUEST_FACT =
   "Recorded completed work exists and no same-business ReviewRequest is recorded for that completed job.";
 
 export const NO_LATER_JOB_FACT = "Past customer with no later job recorded";
+
+export const DUE_OR_OVERDUE_FACT =
+  "Open owner-recorded retention follow-up tasks whose due date is today or earlier in this business timezone. This is not a send queue.";
 
 export const RECORDED_FOLLOW_UP_FACT =
   "CustomerFollowUp status is the recorded row status. SENT is not delivery.";
@@ -57,6 +62,9 @@ export const RETENTION_READ_ONLY_MESSAGE =
 export const RETENTION_OWNER_FOLLOW_UP_MESSAGE =
   "An owner can record or update a same-business follow-up task from a listed finding. This action does not send SMS or email.";
 
+export const RETENTION_OWNER_DUE_DATE_MESSAGE =
+  "An owner can set an optional due date for a recorded retention follow-up task. The date is a business-timezone calendar day and does not send SMS or email.";
+
 export const RETENTION_OWNER_RESOLVE_FOLLOW_UP_MESSAGE =
   "An owner can mark a recorded retention follow-up task done or cancelled. This action does not send SMS or email.";
 
@@ -75,6 +83,17 @@ export const RETENTION_FOLLOW_UP_CANCELLED_MESSAGE =
 export const RETENTION_FOLLOW_UP_STATUS_UNCHANGED_MESSAGE =
   "Follow-up task already has that recorded status. It has not been sent.";
 
+export const RETENTION_FOLLOW_UP_DUE_UPDATED_MESSAGE =
+  "Follow-up due date updated. It has not been sent.";
+
+export const RETENTION_FOLLOW_UP_DUE_CLEARED_MESSAGE =
+  "Follow-up due date cleared. It has not been sent.";
+
+export const RETENTION_FOLLOW_UP_DUE_UNCHANGED_MESSAGE =
+  "Follow-up due date is already that recorded date. It has not been sent.";
+
+export const RETENTION_FOLLOW_UP_INVALID_DUE_DATE_MESSAGE = "Enter a valid due date.";
+
 export const RETENTION_FOLLOW_UP_OWNER_ONLY_MESSAGE = "Only the business owner can record this follow-up task.";
 
 export const RETENTION_FOLLOW_UP_UNKNOWN_TASK_MESSAGE = "That follow-up task is not in this business.";
@@ -89,6 +108,9 @@ export const RETENTION_FOLLOW_UP_SENT_NOT_DONE_MESSAGE =
 
 export const RETENTION_FOLLOW_UP_NOT_RESOLVABLE_MESSAGE =
   "Only an open, done, or cancelled retention follow-up task can be updated here.";
+
+export const RETENTION_FOLLOW_UP_DUE_NOT_EDITABLE_MESSAGE =
+  "Only an open, done, or cancelled retention follow-up task can have a due date updated here.";
 
 export const RETENTION_FOLLOW_UP_FOREIGN_CUSTOMER_MESSAGE = "That customer is not in this business.";
 
@@ -121,6 +143,18 @@ export const CUSTOMER_FOLLOW_UP_STATUS_LABELS: Record<CustomerFollowUpStatus, st
 
 export const RETENTION_FOLLOW_UP_RESOLVE_STATUSES = ["DONE", "CANCELLED"] as const;
 export type RetentionFollowUpResolveStatus = (typeof RETENTION_FOLLOW_UP_RESOLVE_STATUSES)[number];
+
+export const RETENTION_FOLLOW_UP_DUE_STATES = ["none", "overdue", "due_today", "upcoming"] as const;
+export type RetentionFollowUpDueState = (typeof RETENTION_FOLLOW_UP_DUE_STATES)[number];
+
+export const RETENTION_FOLLOW_UP_DUE_STATE_LABELS: Record<RetentionFollowUpDueState, string> = {
+  none: "No due date",
+  overdue: "Overdue",
+  due_today: "Due today",
+  upcoming: "Upcoming",
+};
+
+export const RETENTION_FOLLOW_UP_DUE_EDITABLE_STATUSES = ["OPEN", "DONE", "CANCELLED"] as const;
 
 export const CUSTOMER_FOLLOW_UP_KINDS = ["JOB_COMPLETE", "REPEAT"] as const;
 

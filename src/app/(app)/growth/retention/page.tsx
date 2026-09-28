@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { requireManagementPageAccess } from "@/lib/access";
 import {
   RETENTION_NO_CADENCE_MESSAGE,
+  RETENTION_OWNER_DUE_DATE_MESSAGE,
   RETENTION_OWNER_FOLLOW_UP_MESSAGE,
   RETENTION_OWNER_RESOLVE_FOLLOW_UP_MESSAGE,
   RETENTION_READ_ONLY_MESSAGE,
@@ -59,17 +60,19 @@ export default async function RetentionRecoveryPage({
   });
   const canRecordFollowUp = retentionFollowUpWriteAllowed(access.workspace.role);
   const canResolveFollowUp = canRecordFollowUp;
+  const canUpdateDueOn = canRecordFollowUp;
 
   return (
     <PageContainer width="2xl">
       <PageHeader
         title="Customer retention"
-        description={`Evidence already on file for ${access.workspace.business.name}. ${RETENTION_READ_ONLY_MESSAGE} ${RETENTION_NO_CADENCE_MESSAGE}${canRecordFollowUp ? ` ${RETENTION_OWNER_FOLLOW_UP_MESSAGE} ${RETENTION_OWNER_RESOLVE_FOLLOW_UP_MESSAGE}` : ""}`}
+        description={`Evidence already on file for ${access.workspace.business.name}. ${RETENTION_READ_ONLY_MESSAGE} ${RETENTION_NO_CADENCE_MESSAGE}${canRecordFollowUp ? ` ${RETENTION_OWNER_FOLLOW_UP_MESSAGE} ${RETENTION_OWNER_DUE_DATE_MESSAGE} ${RETENTION_OWNER_RESOLVE_FOLLOW_UP_MESSAGE}` : ""}`}
       />
       <RetentionCenter
         workspace={workspace}
         canRecordFollowUp={canRecordFollowUp}
         canResolveFollowUp={canResolveFollowUp}
+        canUpdateDueOn={canUpdateDueOn}
       />
     </PageContainer>
   );

@@ -6,11 +6,13 @@
  * list.” Page load is read-only.
  */
 import type { MembershipRole, Prisma, PrismaClient } from "@prisma/client";
-import { resolveBusinessTimeZone } from "@/lib/business-timezone";
+import { addZonedCalendarDays, resolveBusinessTimeZone, startOfZonedDay } from "@/lib/business-timezone";
 import { RECOVERY_QUEUE_LABELS } from "@/lib/growth";
 import { buildRecoveryQueue, type GrowthSource } from "@/lib/growth-engine";
 import { daysSinceInBusinessTimeZone, formatLastCompletedAge } from "@/lib/growth/retention/age";
+import { CUSTOMER_FOLLOW_UP_ORIGINS } from "@/lib/customer-follow-up-origin";
 import {
+  DUE_OR_OVERDUE_FACT,
   INCOMPLETE_JOURNEY_FACT,
   NO_LATER_JOB_FACT,
   NO_REFERRAL_REQUEST_FACT,
@@ -18,6 +20,11 @@ import {
   RECORDED_FOLLOW_UP_FACT,
   RETENTION_CANDIDATE_LIMIT,
 } from "@/lib/growth/retention/constants";
+import {
+  isRetentionFollowUpDueOrOverdue,
+  retentionFollowUpDueState,
+  retentionFollowUpDueStateLabel,
+} from "@/lib/growth/retention/due";
 import { requireRetentionCenterAccess } from "@/lib/growth/retention/access";
 import {
   pushLink,
@@ -56,6 +63,7 @@ function emptyWorkspace(businessId: string, timeZone: string): RetentionWorkspac
     groups: {
       noReviewRequest: [],
       noLaterJob: [],
+      dueOrOverdue: [],
       recordedFollowUp: [],
       noReferralRequest: [],
       incompleteJourney: [],
@@ -63,6 +71,7 @@ function emptyWorkspace(businessId: string, timeZone: string): RetentionWorkspac
     totals: {
       noReviewRequest: 0,
       noLaterJob: 0,
+      dueOrOverdue: 0,
       recordedFollowUp: 0,
       noReferralRequest: 0,
       incompleteJourney: 0,
@@ -497,11 +506,81 @@ async function loadNoReferralRequestCandidates(input: {
   });
 }
 
+function mapFollowUpRow(input: {
+  group: RetentionFollowUpRow["group"];
+  fact: string;
+  role: MembershipRole;
+  businessId: string;
+  now: Date;
+  timeZone: string;
+  row: {
+    id: string;
+    customerId: string;
+    jobId: string | null;
+    kind: string;
+    status: string;
+    origin: string;
+    dueOn: Date | null;
+    customer: { id: string; name: string; businessId: string };
+    job: { id: string; businessId: string } | null;
+  };
+}): RetentionFollowUpRow {
+  const links: RetentionFollowUpRow["links"] = [];
+  pushLink(
+    links,
+    sameTenantRecordHref(
+      "customer",
+      input.row.customer.id,
+      input.row.customer.businessId,
+      input.businessId,
+      input.role,
+    ),
+    "Open customer",
+  );
+  if (input.row.job && input.row.jobId) {
+    pushLink(
+      links,
+      sameTenantRecordHref(
+        "job",
+        input.row.job.id,
+        input.row.job.businessId,
+        input.businessId,
+        input.role,
+      ),
+      "Open job",
+    );
+  }
+  pushLink(
+    links,
+    sameTenantCommunicationsHref(input.row.customer.id, input.row.customer.businessId, input.businessId),
+    "Open communications",
+  );
+  const dueState = retentionFollowUpDueState(input.row.dueOn, input.now, input.timeZone);
+  return {
+    group: input.group,
+    fact: input.fact,
+    followUpId: input.row.id,
+    customerId: input.row.customerId,
+    customerName: input.row.customer.name,
+    jobId: input.row.jobId,
+    kind: input.row.kind,
+    status: input.row.status,
+    statusLabel: recordedFollowUpStatusLabel(input.row.status),
+    origin: input.row.origin,
+    dueOn: input.row.dueOn,
+    dueState,
+    dueStateLabel: retentionFollowUpDueStateLabel(dueState),
+    links,
+  };
+}
+
 async function loadRecordedFollowUps(input: {
   db: RetentionDb;
   businessId: string;
   role: MembershipRole;
   customerId: string | null;
+  now: Date;
+  timeZone: string;
 }): Promise<RetentionFollowUpRow[]> {
   const rows = await input.db.customerFollowUp.findMany({
     where: {
@@ -518,6 +597,7 @@ async function loadRecordedFollowUps(input: {
       kind: true,
       status: true,
       origin: true,
+      dueOn: true,
       customer: { select: { id: true, name: true, businessId: true } },
       job: { select: { id: true, businessId: true } },
     },
@@ -525,45 +605,66 @@ async function loadRecordedFollowUps(input: {
 
   return rows
     .filter((row) => row.customer.businessId === input.businessId)
-    .map((row) => {
-      const links: RetentionFollowUpRow["links"] = [];
-      pushLink(
-        links,
-        sameTenantRecordHref(
-          "customer",
-          row.customer.id,
-          row.customer.businessId,
-          input.businessId,
-          input.role,
-        ),
-        "Open customer",
-      );
-      if (row.job && row.jobId) {
-        pushLink(
-          links,
-          sameTenantRecordHref("job", row.job.id, row.job.businessId, input.businessId, input.role),
-          "Open job",
-        );
-      }
-      pushLink(
-        links,
-        sameTenantCommunicationsHref(row.customer.id, row.customer.businessId, input.businessId),
-        "Open communications",
-      );
-      return {
-        group: "RECORDED_FOLLOW_UP" as const,
+    .map((row) =>
+      mapFollowUpRow({
+        group: "RECORDED_FOLLOW_UP",
         fact: RECORDED_FOLLOW_UP_FACT,
-        followUpId: row.id,
-        customerId: row.customerId,
-        customerName: row.customer.name,
-        jobId: row.jobId,
-        kind: row.kind,
-        status: row.status,
-        statusLabel: recordedFollowUpStatusLabel(row.status),
-        origin: row.origin,
-        links,
-      };
-    });
+        role: input.role,
+        businessId: input.businessId,
+        now: input.now,
+        timeZone: input.timeZone,
+        row,
+      }),
+    );
+}
+
+async function loadDueOrOverdueFollowUps(input: {
+  db: RetentionDb;
+  businessId: string;
+  role: MembershipRole;
+  customerId: string | null;
+  now: Date;
+  timeZone: string;
+}): Promise<RetentionFollowUpRow[]> {
+  const tomorrowStart = addZonedCalendarDays(startOfZonedDay(input.now, input.timeZone), 1, input.timeZone);
+  const rows = await input.db.customerFollowUp.findMany({
+    where: {
+      businessId: input.businessId,
+      origin: CUSTOMER_FOLLOW_UP_ORIGINS.RETENTION_TASK,
+      status: "OPEN",
+      dueOn: { not: null, lt: tomorrowStart },
+      ...(input.customerId ? { customerId: input.customerId } : {}),
+    },
+    orderBy: [{ dueOn: "asc" }, { updatedAt: "desc" }],
+    take: RETENTION_CANDIDATE_LIMIT,
+    select: {
+      id: true,
+      businessId: true,
+      customerId: true,
+      jobId: true,
+      kind: true,
+      status: true,
+      origin: true,
+      dueOn: true,
+      customer: { select: { id: true, name: true, businessId: true } },
+      job: { select: { id: true, businessId: true } },
+    },
+  });
+
+  return rows
+    .filter((row) => row.customer.businessId === input.businessId)
+    .map((row) =>
+      mapFollowUpRow({
+        group: "DUE_OR_OVERDUE",
+        fact: DUE_OR_OVERDUE_FACT,
+        role: input.role,
+        businessId: input.businessId,
+        now: input.now,
+        timeZone: input.timeZone,
+        row,
+      }),
+    )
+    .filter((row) => isRetentionFollowUpDueOrOverdue(row.dueState));
 }
 
 async function loadIncompleteJourney(input: {
@@ -750,46 +851,62 @@ export async function loadRetentionRecoveryCenter(
     customerId = owned.id;
   }
 
-  const [noReviewRequest, noLaterJob, recordedFollowUp, noReferralRequest, incompleteJourney] =
-    await Promise.all([
-      loadNoReviewRequestCandidates({
-        db,
-        businessId: access.businessId,
-        role: access.role,
-        customerId,
-        now,
-        timeZone,
-      }),
-      loadNoLaterJobCandidates({
-        db,
-        businessId: access.businessId,
-        role: access.role,
-        customerId,
-        now,
-        timeZone,
-      }),
-      loadRecordedFollowUps({
-        db,
-        businessId: access.businessId,
-        role: access.role,
-        customerId,
-      }),
-      loadNoReferralRequestCandidates({
-        db,
-        businessId: access.businessId,
-        role: access.role,
-        customerId,
-        now,
-        timeZone,
-      }),
-      loadIncompleteJourney({
-        db,
-        businessId: access.businessId,
-        role: access.role,
-        customerId,
-        now,
-      }),
-    ]);
+  const [
+    noReviewRequest,
+    noLaterJob,
+    dueOrOverdue,
+    recordedFollowUp,
+    noReferralRequest,
+    incompleteJourney,
+  ] = await Promise.all([
+    loadNoReviewRequestCandidates({
+      db,
+      businessId: access.businessId,
+      role: access.role,
+      customerId,
+      now,
+      timeZone,
+    }),
+    loadNoLaterJobCandidates({
+      db,
+      businessId: access.businessId,
+      role: access.role,
+      customerId,
+      now,
+      timeZone,
+    }),
+    loadDueOrOverdueFollowUps({
+      db,
+      businessId: access.businessId,
+      role: access.role,
+      customerId,
+      now,
+      timeZone,
+    }),
+    loadRecordedFollowUps({
+      db,
+      businessId: access.businessId,
+      role: access.role,
+      customerId,
+      now,
+      timeZone,
+    }),
+    loadNoReferralRequestCandidates({
+      db,
+      businessId: access.businessId,
+      role: access.role,
+      customerId,
+      now,
+      timeZone,
+    }),
+    loadIncompleteJourney({
+      db,
+      businessId: access.businessId,
+      role: access.role,
+      customerId,
+      now,
+    }),
+  ]);
 
   return {
     businessId: access.businessId,
@@ -800,6 +917,7 @@ export async function loadRetentionRecoveryCenter(
     groups: {
       noReviewRequest,
       noLaterJob,
+      dueOrOverdue,
       recordedFollowUp,
       noReferralRequest,
       incompleteJourney,
@@ -807,6 +925,7 @@ export async function loadRetentionRecoveryCenter(
     totals: {
       noReviewRequest: noReviewRequest.length,
       noLaterJob: noLaterJob.length,
+      dueOrOverdue: dueOrOverdue.length,
       recordedFollowUp: recordedFollowUp.length,
       noReferralRequest: noReferralRequest.length,
       incompleteJourney: incompleteJourney.length,

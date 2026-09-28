@@ -7,11 +7,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import {
   recordRetentionFollowUpTaskAction,
   resolveRetentionFollowUpTaskStatusAction,
+  updateRetentionFollowUpDueOnAction,
 } from "@/app/actions/retention";
+import { Input } from "@/components/ui/input";
 import { formatDate } from "@/lib/format";
 import {
   RETENTION_FOLLOW_UP_FINDING_GROUPS,
   RETENTION_GROUP_TITLES,
+  RETENTION_OWNER_DUE_DATE_MESSAGE,
   RETENTION_OWNER_FOLLOW_UP_MESSAGE,
   RETENTION_OWNER_RESOLVE_FOLLOW_UP_MESSAGE,
   isRetentionFollowUpTask,
@@ -21,21 +24,25 @@ import {
   type RetentionJourneyRow,
   type RetentionWorkspace,
 } from "@/lib/growth/retention";
+import { formatISODate } from "@/lib/schedule";
 
 export function RetentionCenter({
   workspace,
   canRecordFollowUp = false,
   canResolveFollowUp = false,
+  canUpdateDueOn = false,
 }: {
   workspace: RetentionWorkspace;
   canRecordFollowUp?: boolean;
   canResolveFollowUp?: boolean;
+  canUpdateDueOn?: boolean;
 }) {
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <Kpi label={RETENTION_GROUP_TITLES.NO_REVIEW_REQUEST} value={workspace.totals.noReviewRequest} />
         <Kpi label={RETENTION_GROUP_TITLES.NO_LATER_JOB} value={workspace.totals.noLaterJob} />
+        <Kpi label={RETENTION_GROUP_TITLES.DUE_OR_OVERDUE} value={workspace.totals.dueOrOverdue} />
         <Kpi label={RETENTION_GROUP_TITLES.RECORDED_FOLLOW_UP} value={workspace.totals.recordedFollowUp} />
         <Kpi label={RETENTION_GROUP_TITLES.NO_REFERRAL_REQUEST} value={workspace.totals.noReferralRequest} />
         <Kpi label={RETENTION_GROUP_TITLES.INCOMPLETE_JOURNEY} value={workspace.totals.incompleteJourney} />
@@ -46,6 +53,12 @@ export function RetentionCenter({
         truncated list. Business timezone: {workspace.timeZone}.
       </p>
 
+      <DueFollowUpGroup
+        rows={workspace.groups.dueOrOverdue}
+        timeZone={workspace.timeZone}
+        canResolveFollowUp={canResolveFollowUp}
+        canUpdateDueOn={canUpdateDueOn}
+      />
       <CandidateGroup
         title={RETENTION_GROUP_TITLES.NO_REVIEW_REQUEST}
         description={workspace.groups.noReviewRequest[0]?.fact}
@@ -62,7 +75,12 @@ export function RetentionCenter({
         empty="No past customers with a completed job and no later same-business Job in this window."
         canRecordFollowUp={canRecordFollowUp}
       />
-      <FollowUpGroup rows={workspace.groups.recordedFollowUp} canResolveFollowUp={canResolveFollowUp} />
+      <FollowUpGroup
+        rows={workspace.groups.recordedFollowUp}
+        timeZone={workspace.timeZone}
+        canResolveFollowUp={canResolveFollowUp}
+        canUpdateDueOn={canUpdateDueOn}
+      />
       <CandidateGroup
         title={RETENTION_GROUP_TITLES.NO_REFERRAL_REQUEST}
         description={workspace.groups.noReferralRequest[0]?.fact}
@@ -159,6 +177,10 @@ function RetentionFollowUpForm({ row }: { row: RetentionCandidate }) {
       <input type="hidden" name="jobId" value={row.lastCompletedJobId} />
       <input type="hidden" name="group" value={row.group} />
       <p className="text-xs text-muted-foreground">{RETENTION_OWNER_FOLLOW_UP_MESSAGE}</p>
+      <label className="block space-y-1 text-xs text-muted-foreground">
+        <span>Due date (optional)</span>
+        <Input type="date" name="dueOn" className="w-40" />
+      </label>
       <Button type="submit" size="sm">
         Record follow-up task
       </Button>
@@ -166,12 +188,57 @@ function RetentionFollowUpForm({ row }: { row: RetentionCandidate }) {
   );
 }
 
-function FollowUpGroup({
+function DueFollowUpGroup({
   rows,
+  timeZone,
   canResolveFollowUp,
+  canUpdateDueOn,
 }: {
   rows: RetentionFollowUpRow[];
+  timeZone: string;
   canResolveFollowUp: boolean;
+  canUpdateDueOn: boolean;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{RETENTION_GROUP_TITLES.DUE_OR_OVERDUE}</CardTitle>
+        <CardDescription>
+          {rows[0]?.fact ??
+            "Open owner-recorded retention follow-up tasks whose due date is today or earlier in this business timezone. This is not a send queue."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {rows.length === 0 ? (
+          <EmptyState
+            title="None recorded"
+            description="No open retention follow-up tasks are due or overdue in this window."
+          />
+        ) : null}
+        {rows.map((row) => (
+          <FollowUpArticle
+            key={row.followUpId}
+            row={row}
+            timeZone={timeZone}
+            canResolveFollowUp={canResolveFollowUp}
+            canUpdateDueOn={canUpdateDueOn}
+          />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function FollowUpGroup({
+  rows,
+  timeZone,
+  canResolveFollowUp,
+  canUpdateDueOn,
+}: {
+  rows: RetentionFollowUpRow[];
+  timeZone: string;
+  canResolveFollowUp: boolean;
+  canUpdateDueOn: boolean;
 }) {
   return (
     <Card>
@@ -187,24 +254,78 @@ function FollowUpGroup({
           <EmptyState title="None recorded" description="No CustomerFollowUp rows are on file in this window." />
         ) : null}
         {rows.map((row) => (
-          <article key={row.followUpId} className="rounded-md border border-border/60 p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="font-medium">{row.customerName}</p>
-              <Badge variant="outline">{row.statusLabel}</Badge>
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Kind: {row.kind}. Recorded status: {row.statusLabel}.
-            </p>
-            <LinkRow links={row.links} />
-            {canResolveFollowUp &&
-            isRetentionFollowUpTask(row.origin) &&
-            (row.status === "OPEN" || row.status === "DONE" || row.status === "CANCELLED") ? (
-              <RetentionFollowUpResolveForm row={row} />
-            ) : null}
-          </article>
+          <FollowUpArticle
+            key={row.followUpId}
+            row={row}
+            timeZone={timeZone}
+            canResolveFollowUp={canResolveFollowUp}
+            canUpdateDueOn={canUpdateDueOn}
+          />
         ))}
       </CardContent>
     </Card>
+  );
+}
+
+function FollowUpArticle({
+  row,
+  timeZone,
+  canResolveFollowUp,
+  canUpdateDueOn,
+}: {
+  row: RetentionFollowUpRow;
+  timeZone: string;
+  canResolveFollowUp: boolean;
+  canUpdateDueOn: boolean;
+}) {
+  const retentionTask = isRetentionFollowUpTask(row.origin);
+  const resolvable = row.status === "OPEN" || row.status === "DONE" || row.status === "CANCELLED";
+  return (
+    <article className="rounded-md border border-border/60 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-medium">{row.customerName}</p>
+        <div className="flex flex-wrap gap-2">
+          {row.dueState !== "none" ? <Badge variant="outline">{row.dueStateLabel}</Badge> : null}
+          <Badge variant="outline">{row.statusLabel}</Badge>
+        </div>
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Kind: {row.kind}. Recorded status: {row.statusLabel}. Due date:{" "}
+        {row.dueOn ? formatDate(row.dueOn, timeZone) : "None recorded"}.
+      </p>
+      <LinkRow links={row.links} />
+      {canUpdateDueOn && retentionTask && resolvable ? (
+        <RetentionFollowUpDueForm row={row} timeZone={timeZone} />
+      ) : null}
+      {canResolveFollowUp && retentionTask && resolvable ? <RetentionFollowUpResolveForm row={row} /> : null}
+    </article>
+  );
+}
+
+function RetentionFollowUpDueForm({
+  row,
+  timeZone,
+}: {
+  row: RetentionFollowUpRow;
+  timeZone: string;
+}) {
+  return (
+    <ActionForm action={updateRetentionFollowUpDueOnAction} className="mt-3 space-y-2">
+      <input type="hidden" name="followUpId" value={row.followUpId} />
+      <p className="text-xs text-muted-foreground">{RETENTION_OWNER_DUE_DATE_MESSAGE}</p>
+      <label className="block space-y-1 text-xs text-muted-foreground">
+        <span>Due date</span>
+        <Input
+          type="date"
+          name="dueOn"
+          defaultValue={row.dueOn ? formatISODate(row.dueOn, timeZone) : ""}
+          className="w-40"
+        />
+      </label>
+      <Button type="submit" size="sm" variant="outline">
+        Save due date
+      </Button>
+    </ActionForm>
   );
 }
 

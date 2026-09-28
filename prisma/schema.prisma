@@ -2915,6 +2915,10 @@ model CustomerFollowUp {
   /// COMMUNICATION | RETENTION_TASK
   /// RETENTION_TASK is owner-recorded work and is excluded from due scans.
   origin                String    @default("COMMUNICATION")
+  /// Optional owner-set calendar day for RETENTION_TASK work. Stored as
+  /// the start of that day in the business timezone. Never used to emit
+  /// CUSTOMER_FOLLOW_UP_DUE or send a message.
+  dueOn                 DateTime?
   notes                 String    @default("")
   cancelledAt           DateTime?
   sentAt                DateTime?
@@ -2932,6 +2936,7 @@ model CustomerFollowUp {
   @@index([businessId])
   @@index([businessId, kind, status])
   @@index([businessId, origin, status])
+  @@index([businessId, origin, status, dueOn])
   @@index([customerId])
   @@index([jobId])
   @@index([createdByMembershipId])

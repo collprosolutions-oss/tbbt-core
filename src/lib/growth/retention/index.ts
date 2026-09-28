@@ -6,17 +6,24 @@ export {
   RETENTION_FOLLOW_UP_FINDING_GROUPS,
   NO_REVIEW_REQUEST_FACT,
   NO_LATER_JOB_FACT,
+  DUE_OR_OVERDUE_FACT,
   RECORDED_FOLLOW_UP_FACT,
   NO_REFERRAL_REQUEST_FACT,
   INCOMPLETE_JOURNEY_FACT,
   RETENTION_READ_ONLY_MESSAGE,
   RETENTION_OWNER_FOLLOW_UP_MESSAGE,
+  RETENTION_OWNER_DUE_DATE_MESSAGE,
   RETENTION_OWNER_RESOLVE_FOLLOW_UP_MESSAGE,
   RETENTION_FOLLOW_UP_RECORDED_MESSAGE,
   RETENTION_FOLLOW_UP_UPDATED_MESSAGE,
   RETENTION_FOLLOW_UP_DONE_MESSAGE,
   RETENTION_FOLLOW_UP_CANCELLED_MESSAGE,
   RETENTION_FOLLOW_UP_STATUS_UNCHANGED_MESSAGE,
+  RETENTION_FOLLOW_UP_DUE_UPDATED_MESSAGE,
+  RETENTION_FOLLOW_UP_DUE_CLEARED_MESSAGE,
+  RETENTION_FOLLOW_UP_DUE_UNCHANGED_MESSAGE,
+  RETENTION_FOLLOW_UP_INVALID_DUE_DATE_MESSAGE,
+  RETENTION_FOLLOW_UP_DUE_NOT_EDITABLE_MESSAGE,
   RETENTION_FOLLOW_UP_OWNER_ONLY_MESSAGE,
   RETENTION_FOLLOW_UP_UNKNOWN_TASK_MESSAGE,
   RETENTION_FOLLOW_UP_NOT_TASK_MESSAGE,
@@ -34,6 +41,9 @@ export {
   CUSTOMER_FOLLOW_UP_STATUSES,
   CUSTOMER_FOLLOW_UP_STATUS_LABELS,
   RETENTION_FOLLOW_UP_RESOLVE_STATUSES,
+  RETENTION_FOLLOW_UP_DUE_STATES,
+  RETENTION_FOLLOW_UP_DUE_STATE_LABELS,
+  RETENTION_FOLLOW_UP_DUE_EDITABLE_STATUSES,
   CUSTOMER_FOLLOW_UP_KINDS,
   FORBIDDEN_RETENTION_CLAIM_PATTERNS,
   FORBIDDEN_CADENCE_PATTERNS,
@@ -41,12 +51,21 @@ export {
   type RetentionFollowUpFindingGroup,
   type CustomerFollowUpStatus,
   type RetentionFollowUpResolveStatus,
+  type RetentionFollowUpDueState,
 } from "@/lib/growth/retention/constants";
 
 export {
   daysSinceInBusinessTimeZone,
   formatLastCompletedAge,
 } from "@/lib/growth/retention/age";
+
+export {
+  parseRetentionFollowUpDueOn,
+  retentionFollowUpDueState,
+  retentionFollowUpDueStateLabel,
+  isRetentionFollowUpDueOrOverdue,
+  dueOnInstantsEqual,
+} from "@/lib/growth/retention/due";
 
 export {
   requireRetentionCenterAccess,
@@ -99,6 +118,12 @@ export {
   type ResolveRetentionFollowUpTaskStatusInput,
   type ResolveRetentionFollowUpTaskStatusResult,
 } from "@/lib/growth/retention/resolve-follow-up";
+
+export {
+  updateRetentionFollowUpDueOn,
+  type UpdateRetentionFollowUpDueOnInput,
+  type UpdateRetentionFollowUpDueOnResult,
+} from "@/lib/growth/retention/update-due";
 
 export {
   CUSTOMER_FOLLOW_UP_ORIGINS,
