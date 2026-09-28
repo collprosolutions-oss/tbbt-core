@@ -203,7 +203,12 @@ try {
   check("New estimate form can apply a template to a new DRAFT", createFormSrc.includes('name="templateId"') && newPageSrc.includes("loadEstimateLineTemplateOptions"));
   check("UI tells the owner to review before sending", formSrc.includes("REVIEW_BEFORE_SEND_MESSAGE") && createFormSrc.includes("REVIEW_BEFORE_SEND_MESSAGE"));
   check("Ops never write catalog prices", !catalogWritePattern.test(opsSrc) && opsSrc.includes("never writes ServiceCatalogItem"));
-  check("Apply stays on DRAFT", opsSrc.includes('status: "DRAFT"') && opsSrc.includes(DRAFT_ONLY_APPLY_MESSAGE));
+  check(
+    "Apply stays on DRAFT",
+    opsSrc.includes('status: "DRAFT"') &&
+      opsSrc.includes("DRAFT_ONLY_APPLY_MESSAGE") &&
+      opsSrc.includes("REVIEW_BEFORE_SEND_MESSAGE"),
+  );
   check("Public hourly prices stay off templates", /do not publish hourly prices/i.test(NO_PUBLIC_HOURLY_PRICE_MESSAGE) && libSrc.includes("isHourlyUnitLabel"));
   check(
     "Public catalog labels drop hourly units",

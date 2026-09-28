@@ -323,7 +323,7 @@ export async function applyEstimateLineTemplateToDraft(
   const refreshed = access.assertOwned(
     await db.estimate.findFirst({
       where: { id: estimate.id, ...access.scope },
-      select: { id: true, status: true },
+      select: { id: true, businessId: true, status: true },
     }),
   );
   if (refreshed.status !== "DRAFT") {
