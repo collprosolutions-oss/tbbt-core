@@ -64,11 +64,20 @@ export type NativeJobVisitAction = {
   reason: string | null;
 };
 
+export type NativeJobChecklistItem = {
+  key: string;
+  title: string;
+  required: boolean;
+  checked: boolean;
+};
+
 export type NativeJobVisit = {
   eligible: true;
   outcomeStatus: string;
   outcomeLabel: string;
   cadenceLabel: string;
+  procedureTitle: string | null;
+  checklist: NativeJobChecklistItem[];
   recordCompleted: NativeJobVisitAction;
   recordReclean: NativeJobVisitAction;
 };

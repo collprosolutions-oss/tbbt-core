@@ -156,9 +156,7 @@ check(
     jobScreenSrc.includes("Record visit completed") &&
     jobScreenSrc.includes("Request re-clean") &&
     nativeApiSrc.includes("/visit") &&
-    nativeTypesSrc.includes("NativeJobVisit") &&
-    !jobScreenSrc.includes("itemKey") &&
-    !jobScreenSrc.includes("Mark done"),
+    nativeTypesSrc.includes("NativeJobVisit"),
 );
 check(
   "Docs describe assignment-scoped visit outcome and the dedicated visit check",
@@ -503,7 +501,7 @@ try {
       assignedDetail.visit.cadenceLabel === "Weekly" &&
       assignedDetail.visit.recordCompleted.available === true &&
       assignedDetail.visit.recordReclean.available === true &&
-      !JSON.stringify(assignedDetail).includes("kitchen"),
+      assignedDetail.visit.checklist.some((item) => item.key === "kitchen" && item.checked === false),
   );
   check(
     "Scheduled Cleaning job advertises start-before-complete for VISIT_COMPLETED",

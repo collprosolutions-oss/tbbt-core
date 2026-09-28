@@ -12,7 +12,7 @@
  * src/lib/field-access.ts: businessId + assignedMembershipId in one
  * query. There is no fetch-then-compare step. Assigned-worker writes
  * live in `src/lib/native-field-ops.ts`, `src/lib/native-field-photos.ts`,
- * and `src/lib/native-field-visits.ts`.
+ * `src/lib/native-field-visits.ts`, and `src/lib/native-field-checklist.ts`.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -161,11 +161,20 @@ export type NativeJobVisitAction = {
   reason: string | null;
 };
 
+export type NativeJobChecklistItem = {
+  key: string;
+  title: string;
+  required: boolean;
+  checked: boolean;
+};
+
 export type NativeJobVisit = {
   eligible: true;
   outcomeStatus: string;
   outcomeLabel: string;
   cadenceLabel: string;
+  procedureTitle: string | null;
+  checklist: NativeJobChecklistItem[];
   recordCompleted: NativeJobVisitAction;
   recordReclean: NativeJobVisitAction;
 };
@@ -268,6 +277,8 @@ export async function loadNativeAssignedJobVisit(
     outcomeStatus: view.outcomeStatus,
     outcomeLabel: view.outcomeLabel,
     cadenceLabel: view.cadenceLabel,
+    procedureTitle: view.procedureTitle,
+    checklist: view.checklist,
     recordCompleted: nativeVisitCompletedAction(job.status),
     recordReclean: nativeVisitRecleanAction(),
   };

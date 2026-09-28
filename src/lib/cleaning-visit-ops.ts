@@ -270,9 +270,15 @@ export async function attachCleaningCrewChecklist(
 }
 
 export async function setAssignedChecklistItem(
-  db: Db,
+  db: PrismaClient,
   actor: AssignedVisitActor,
-  input: { jobId: string; itemKey: string; checked: boolean },
+  input: {
+    jobId: string;
+    itemKey: string;
+    checked: boolean;
+    /** Proof hook: runs after the authorize read and before the Job lock. */
+    afterInitialRead?: () => Promise<void>;
+  },
 ) {
   const job = await requireAssignedCleaningJob(db, actor, input.jobId);
   const visit = await db.jobCrewVisit.findFirst({
@@ -285,10 +291,32 @@ export async function setAssignedChecklistItem(
   if (!items.some((item) => item.key === input.itemKey)) {
     throw new CleaningVisitError("That checklist item is not on this visit.");
   }
-  const next = toggleChecklistItem(items, input.itemKey, input.checked);
-  return db.jobCrewVisit.update({
-    where: { id: visit.id },
-    data: { checklistJson: serializeChecklist(next) },
+
+  if (input.afterInitialRead) {
+    await input.afterInitialRead();
+  }
+
+  return db.$transaction(async (tx) => {
+    const locked = await lockTenantOwnedJob(tx, actor.businessId, job.id);
+    if (!locked || locked.assignedMembershipId !== actor.membershipId) {
+      throw new CleaningVisitError(ASSIGNED_WORKER_ONLY_MESSAGE);
+    }
+
+    const lockedVisit = await tx.jobCrewVisit.findFirst({
+      where: { jobId: job.id, businessId: actor.businessId },
+    });
+    if (!lockedVisit) {
+      throw new CleaningVisitError("The owner has not set a visit cadence yet.");
+    }
+    const lockedItems = parseChecklistJson(lockedVisit.checklistJson);
+    if (!lockedItems.some((item) => item.key === input.itemKey)) {
+      throw new CleaningVisitError("That checklist item is not on this visit.");
+    }
+    const next = toggleChecklistItem(lockedItems, input.itemKey, input.checked);
+    return tx.jobCrewVisit.update({
+      where: { id: lockedVisit.id },
+      data: { checklistJson: serializeChecklist(next) },
+    });
   });
 }
 

@@ -1,24 +1,22 @@
 /**
- * Native assigned-job Cleaning visit outcome writes.
+ * Native assigned-job Cleaning checklist writes.
  *
  * Reads stay in `src/lib/native-field.ts`. This module does not invent a
- * second visit engine. After the assigned-job authorize read, it reuses
- * `recordAssignedVisitOutcome` — the same Job lock, assignment recheck,
- * atomic VISIT_COMPLETED + Job completion, and running-time rollback as
- * the Field web checklist. Checklist item writes live in
- * `src/lib/native-field-checklist.ts`. This module does not create
- * later jobs, send customer messages, or write invoices.
+ * second checklist engine. After the assigned-job authorize read, it
+ * reuses `setAssignedChecklistItem` — the same Job lock, assignment
+ * recheck, and `JobCrewVisit.checklistJson` write as the Field web
+ * checklist. It does not record visit outcomes, create later jobs,
+ * send customer messages, or write invoices.
  */
 import type { PrismaClient } from "@prisma/client";
 import {
   CleaningVisitError,
   cleaningVisitErrorMessage,
-  recordAssignedVisitOutcome,
+  setAssignedChecklistItem,
 } from "@/lib/cleaning-visit-ops";
 import {
   ASSIGNED_WORKER_ONLY_MESSAGE,
-  parseRecordedVisitOutcome,
-  type RecordedVisitOutcomeStatus,
+  parseChecklistJson,
 } from "@/lib/cleaning-visit-workflow";
 import {
   loadNativeAssignedJob,
@@ -34,12 +32,12 @@ import {
   SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE,
 } from "@/lib/saas-billing/entitlement";
 
-export const NATIVE_VISIT_JSON_MAX_BYTES = 4096;
-export const NATIVE_VISIT_CHOOSE_OUTCOME =
-  "Choose visit completed or requested re-clean.";
-const NATIVE_VISIT_OUTCOME_MAX_CHARS = 32;
+export const NATIVE_CHECKLIST_JSON_MAX_BYTES = 4096;
+export const NATIVE_CHECKLIST_CHOOSE_ITEM =
+  "That checklist item could not be updated.";
+const NATIVE_CHECKLIST_ITEM_KEY_MAX_CHARS = 128;
 
-export type NativeRecordAssignedVisitResult =
+export type NativeRecordAssignedChecklistResult =
   | {
       ok: true;
       alreadyRecorded: boolean;
@@ -47,40 +45,43 @@ export type NativeRecordAssignedVisitResult =
     }
   | { ok: false; status: number; error: string };
 
-export function parseNativeVisitOutcomeJson(text: string):
-  | { ok: true; outcomeStatus: RecordedVisitOutcomeStatus }
+export function parseNativeChecklistItemJson(text: string):
+  | { ok: true; itemKey: string; checked: boolean }
   | { ok: false; status: 400 | 413; error: string } {
   if (!text.trim()) {
-    return { ok: false, status: 400, error: NATIVE_VISIT_CHOOSE_OUTCOME };
+    return { ok: false, status: 400, error: NATIVE_CHECKLIST_CHOOSE_ITEM };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { ok: false, status: 400, error: NATIVE_VISIT_CHOOSE_OUTCOME };
+    return { ok: false, status: 400, error: NATIVE_CHECKLIST_CHOOSE_ITEM };
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { ok: false, status: 400, error: NATIVE_VISIT_CHOOSE_OUTCOME };
+    return { ok: false, status: 400, error: NATIVE_CHECKLIST_CHOOSE_ITEM };
   }
   const payload = parsed as Record<string, unknown>;
-  const raw = payload.outcomeStatus;
-  if (typeof raw === "string" && raw.length > NATIVE_VISIT_OUTCOME_MAX_CHARS) {
+  const rawKey = payload.itemKey;
+  if (typeof rawKey === "string" && rawKey.length > NATIVE_CHECKLIST_ITEM_KEY_MAX_CHARS) {
     return { ok: false, status: 413, error: NATIVE_SESSION_TOO_LARGE };
   }
-  const outcomeStatus = parseRecordedVisitOutcome(typeof raw === "string" ? raw : "");
-  if (!outcomeStatus) {
-    return { ok: false, status: 400, error: NATIVE_VISIT_CHOOSE_OUTCOME };
+  const itemKey = typeof rawKey === "string" ? rawKey.trim() : "";
+  if (!itemKey) {
+    return { ok: false, status: 400, error: NATIVE_CHECKLIST_CHOOSE_ITEM };
   }
-  return { ok: true, outcomeStatus };
+  if (typeof payload.checked !== "boolean") {
+    return { ok: false, status: 400, error: NATIVE_CHECKLIST_CHOOSE_ITEM };
+  }
+  return { ok: true, itemKey, checked: payload.checked };
 }
 
-function visitWriteFailure(error: unknown): Extract<
-  NativeRecordAssignedVisitResult,
+function checklistWriteFailure(error: unknown): Extract<
+  NativeRecordAssignedChecklistResult,
   { ok: false }
 > {
   const message = cleaningVisitErrorMessage(
     error,
-    "That visit outcome could not be recorded.",
+    "That checklist item could not be updated.",
   );
   if (message === ASSIGNED_WORKER_ONLY_MESSAGE) {
     return { ok: false, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
@@ -91,16 +92,16 @@ function visitWriteFailure(error: unknown): Extract<
   return { ok: false, status: 409, error: message };
 }
 
-export async function recordNativeAssignedVisitOutcome(
+export async function recordNativeAssignedChecklistItem(
   db: PrismaClient,
   access: NativeFieldAccess,
   jobId: string,
-  outcomeStatus: RecordedVisitOutcomeStatus,
+  input: { itemKey: string; checked: boolean },
   options?: {
     /** Proof hook: runs after the authorize read and before the Job lock. */
     afterInitialRead?: () => Promise<void>;
   },
-): Promise<NativeRecordAssignedVisitResult> {
+): Promise<NativeRecordAssignedChecklistResult> {
   const assigned = await db.job.findFirst({
     where: nativeAssignedJobWhere(jobId, access),
     select: { id: true },
@@ -124,22 +125,25 @@ export async function recordNativeAssignedVisitOutcome(
 
   const existing = await db.jobCrewVisit.findFirst({
     where: { jobId: assigned.id, businessId: access.businessId },
-    select: { outcomeStatus: true },
+    select: { checklistJson: true },
   });
-  const alreadyRecorded = existing?.outcomeStatus === outcomeStatus;
+  const alreadyRecorded = parseChecklistJson(existing?.checklistJson).some(
+    (item) => item.key === input.itemKey && item.checked === input.checked,
+  );
 
   try {
-    await recordAssignedVisitOutcome(
+    await setAssignedChecklistItem(
       db,
       { businessId: access.businessId, membershipId: access.membershipId },
       {
         jobId: assigned.id,
-        outcomeStatus,
+        itemKey: input.itemKey,
+        checked: input.checked,
         afterInitialRead: options?.afterInitialRead,
       },
     );
   } catch (error) {
-    return visitWriteFailure(error);
+    return checklistWriteFailure(error);
   }
 
   const job = await loadNativeAssignedJob(db, access, assigned.id);

@@ -2,10 +2,12 @@
  * Native assigned-job mutations.
  *
  * Reads stay in `src/lib/native-field.ts`. Assigned-worker writes are
- * Start job, Complete job, assigned job photos, and Cleaning visit
- * outcomes on the caller's own assigned Job. Photo storage lives in
- * `src/lib/native-field-photos.ts`. Visit outcomes live in
- * `src/lib/native-field-visits.ts` and reuse `recordAssignedVisitOutcome`.
+ * Start job, Complete job, assigned job photos, Cleaning visit
+ * outcomes, and Cleaning checklist progress on the caller's own
+ * assigned Job. Photo storage lives in `src/lib/native-field-photos.ts`.
+ * Visit outcomes live in `src/lib/native-field-visits.ts` and reuse
+ * `recordAssignedVisitOutcome`. Checklist writes live in
+ * `src/lib/native-field-checklist.ts` and reuse `setAssignedChecklistItem`.
  *
  * Authorization is the same compound clause as Field Home and native
  * reads (`nativeAssignedJobWhere`: businessId + assignedMembershipId).
