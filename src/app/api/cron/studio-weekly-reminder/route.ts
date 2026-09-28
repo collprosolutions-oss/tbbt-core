@@ -1,7 +1,7 @@
 /**
- * Hourly Vercel cron. Sends the OWNER weekly Marketing Studio reminder
- * only during each business's local Monday 09:00–17:00 window. Never
- * invoked from a page render. Requires CRON_SECRET.
+ * Once-daily Vercel cron (Hobby-compatible). Sends the OWNER weekly
+ * Marketing Studio reminder only when the business's local day is
+ * Monday. Never invoked from a page render. Requires CRON_SECRET.
  */
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";

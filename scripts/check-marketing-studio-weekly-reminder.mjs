@@ -480,7 +480,8 @@ try {
       cronRouteSrc.includes("runScheduledStudioWeeklyReminders") &&
       cronPathSrc.includes("/api/cron/studio-weekly-reminder") &&
       vercelSrc.includes("/api/cron/studio-weekly-reminder") &&
-      vercelSrc.includes("0 * * * *") &&
+      vercelSrc.includes("0 15 * * *") &&
+      !vercelSrc.includes("0 * * * *") &&
       proxySrc.includes("isStudioWeeklyReminderCronPath") &&
       proxySrc.includes("api/cron/"),
   );
@@ -495,13 +496,17 @@ try {
       reminderOpsSrc.includes("OWNER_SMS_BLOCKED_PROVIDER_CODE"),
   );
   check(
-    "Monday 09:00–17:00 local is the owner SMS send window",
+    "Owner SMS sends only on the business local Monday",
     isStudioWeeklyReminderSendWindow(
       zonedCivilToUtc(2026, 9, 28, 10, 0, 0, "America/New_York"),
       "America/New_York",
     ) === true &&
       isStudioWeeklyReminderSendWindow(
-        zonedCivilToUtc(2026, 9, 28, 7, 0, 0, "America/Los_Angeles"),
+        zonedCivilToUtc(2026, 9, 28, 2, 0, 0, "America/New_York"),
+        "America/New_York",
+      ) === true &&
+      isStudioWeeklyReminderSendWindow(
+        zonedCivilToUtc(2026, 9, 28, 2, 0, 0, "America/New_York"),
         "America/Los_Angeles",
       ) === false &&
       isStudioWeeklyReminderSendWindow(
@@ -563,6 +568,7 @@ try {
   const ownerB = makeAccess(businessB.id, "OWNER", betaMem.id);
 
   const weekInstant = zonedCivilToUtc(2026, 9, 28, 10, 0, 0, "America/New_York");
+  const mondayEtSundayPt = zonedCivilToUtc(2026, 9, 28, 2, 0, 0, "America/New_York");
   const pacificMonday10 = zonedCivilToUtc(2026, 9, 28, 10, 0, 0, "America/Los_Angeles");
   const nextWeekInstant = zonedCivilToUtc(2026, 10, 4, 10, 0, 0, "America/New_York");
 
@@ -1193,7 +1199,7 @@ try {
   });
   const scheduledB = scheduled.find((row) => row.businessId === businessB.id);
   check(
-    "Hourly schedule sends OWNER SMS without a Marketing page view",
+    "Daily schedule sends OWNER SMS without a Marketing page view",
     scheduledB?.created === true &&
       scheduledB.skipped == null &&
       scheduledB.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED &&
@@ -1207,18 +1213,18 @@ try {
     where: { businessId: { in: [businessA.id, businessB.id] }, weekKey: "2026-09-27" },
   });
   const tzSms = createFakeCustomerMessagingProvider();
-  const sameUtcWindow = await runScheduledStudioWeeklyReminders(prisma, weekInstant, {
+  const sameUtcWindow = await runScheduledStudioWeeklyReminders(prisma, mondayEtSundayPt, {
     smsPlatformConfigured: true,
     messagingProvider: tzSms,
   });
   const windowA = sameUtcWindow.find((row) => row.businessId === businessA.id);
   const windowB = sameUtcWindow.find((row) => row.businessId === businessB.id);
   check(
-    "Monday 10:00 Eastern is inside the send window",
+    "Monday 02:00 Eastern is a local Monday send day",
     windowA?.skipped == null && windowA?.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED,
   );
   check(
-    "The same UTC instant is 07:00 Pacific and is outside the send window",
+    "The same UTC instant is Sunday evening Pacific and is skipped",
     windowB?.skipped === "outside_send_window" &&
       tzSms.sent.length === 1 &&
       tzSms.sent[0]?.to === "+15551234001",
@@ -1229,7 +1235,7 @@ try {
   });
   const laterB = laterPacific.find((row) => row.businessId === businessB.id);
   check(
-    "Pacific Monday 10:00 later sends B once the local window opens",
+    "Pacific Monday later sends B once the local Monday begins",
     laterB?.skipped == null &&
       laterB?.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED &&
       tzSms.sent.length === 2 &&

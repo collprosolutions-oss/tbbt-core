@@ -10,7 +10,7 @@
  * import these helpers directly.
  */
 
-import { formatISODateInTimeZone, zonedDateParts, zonedWeekday } from "@/lib/business-timezone";
+import { formatISODateInTimeZone, zonedWeekday } from "@/lib/business-timezone";
 import { marketingAiAssistAvailable as providerAssistAvailable } from "@/lib/marketing-draft";
 import { parseScheduleDate, startOfDay, startOfWeek } from "@/lib/schedule";
 
@@ -209,8 +209,6 @@ export const STUDIO_WEEKLY_REMINDER_SMS_TIMED_OUT =
   "Owner SMS timed out waiting for the provider";
 export const OWNER_SMS_PROVIDER_TIMEOUT_MS = 8000;
 export const STUDIO_WEEKLY_REMINDER_SEND_WEEKDAY = 1;
-export const STUDIO_WEEKLY_REMINDER_SEND_HOUR_START = 9;
-export const STUDIO_WEEKLY_REMINDER_SEND_HOUR_END = 17;
 export const OWNER_SMS_BLOCKED_PROVIDER_CODE = "21610";
 export const STUDIO_WEEKLY_REMINDER_SMS_UNCONFIRMED =
   "Provider acceptance is not a delivery confirmation. TBBT has not run a live provider test on this path.";
@@ -535,13 +533,7 @@ export function maskOwnerSmsDestination(value: string | null | undefined): strin
 }
 
 export function isStudioWeeklyReminderSendWindow(now: Date, timeZone: string): boolean {
-  const weekday = zonedWeekday(now, timeZone);
-  const hour = zonedDateParts(now, timeZone).hour;
-  return (
-    weekday === STUDIO_WEEKLY_REMINDER_SEND_WEEKDAY &&
-    hour >= STUDIO_WEEKLY_REMINDER_SEND_HOUR_START &&
-    hour < STUDIO_WEEKLY_REMINDER_SEND_HOUR_END
-  );
+  return zonedWeekday(now, timeZone) === STUDIO_WEEKLY_REMINDER_SEND_WEEKDAY;
 }
 
 export function isOwnerSmsBlockedProviderCode(code: string | number | null | undefined): boolean {

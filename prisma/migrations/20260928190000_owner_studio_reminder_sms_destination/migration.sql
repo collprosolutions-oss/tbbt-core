@@ -2,8 +2,9 @@
 -- Marketing Studio reminder. Additive only. Preview shares Production
 -- and skips migrate, so every statement is IF NOT EXISTS.
 -- Business.publicPhone is never the destination.
--- Timestamp is 20260928180000 so it stays after
--- 20260928170000_service_request_repeat_visit_source (#206) and
+-- Timestamp is 20260928190000 so it stays after
+-- 20260928180000_job_recurrence_occurrence_key (#204),
+-- 20260928170000_service_request_repeat_visit_source (#206), and
 -- 20260928150000_marketing_studio_weekly_reminder (#201).
 
 ALTER TABLE "BusinessSettings"

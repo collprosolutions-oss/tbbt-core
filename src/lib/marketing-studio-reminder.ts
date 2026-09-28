@@ -8,8 +8,8 @@
  * number, only when those actually work. The public company phone is
  * never the destination. The provider is never called inside a transaction
  * that can roll back the reminder, and never during a Marketing page
- * load. Weekly owner SMS is sent only by the secret-protected scheduled
- * dispatcher during the local Monday send window. This module never
+ * load. Weekly owner SMS is sent only by the secret-protected daily
+ * dispatcher when the business local day is Monday. This module never
  * messages customers, auto-approves, publishes, or posts.
  *
  * Preview shares Production and skips migrate. Missing reminder table

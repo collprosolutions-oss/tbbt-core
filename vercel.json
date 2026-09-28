@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/studio-weekly-reminder",
-      "schedule": "0 * * * *"
+      "schedule": "0 15 * * *"
     }
   ]
 }
