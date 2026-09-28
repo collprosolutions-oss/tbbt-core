@@ -7,7 +7,6 @@
  */
 import { formatISODateInTimeZone, resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { parseScheduleStart } from "@/lib/job-schedule";
-import { oneTimeRecurrencePlan } from "@/lib/recurrence";
 import {
   cleaningVisitWorkflowEligible,
   resolveJobTradeCode,
@@ -63,12 +62,11 @@ export function resolveCleaningJobTradeCode(input: {
 }
 
 export function oneTimeNextBookingPlan(): NextBookingRecurrenceFields {
-  const plan = oneTimeRecurrencePlan();
   return {
     serviceIntent: "ONE_TIME",
     recurrenceCadence: "",
     recurrenceStatus: "",
-    nextOccurrenceAt: plan.nextOccurrenceAt,
+    nextOccurrenceAt: null,
   };
 }
 
@@ -87,7 +85,7 @@ export function parseOwnerNextBookingStart(input: {
   const date = input.date.trim();
   if (!date) return null;
   const time = (input.time ?? "").trim() || DEFAULT_NEXT_BOOKING_TIME;
-  return parseScheduleStart(date, time, timeZone);
+  return parseScheduleStart(date, time, input.timeZone);
 }
 
 export function nextBookingCivilDate(scheduledAt: Date, timeZone: string) {

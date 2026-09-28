@@ -94,8 +94,7 @@ export function CleaningNextBookingForm({
               className="mt-1"
             />
             <span>
-              I confirm this one next booking. It will not create a recurring
-              series, invoice, or customer message.
+              I confirm this one next booking. It will not create a recurring series, invoice, or customer message.
             </span>
           </label>
           <Button type="submit" size="sm" disabled={pending}>
