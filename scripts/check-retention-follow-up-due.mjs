@@ -41,7 +41,6 @@ const {
   RETENTION_CANDIDATE_LIMIT,
   RETENTION_FOLLOW_UP_INVALID_DUE_DATE_MESSAGE,
   RETENTION_FOLLOW_UP_OWNER_ONLY_MESSAGE,
-  RETENTION_GROUP_TITLES,
   RETENTION_OWNER_FOLLOW_UP_MESSAGE,
   RETENTION_ROUTE,
   loadRetentionRecoveryCenter,
@@ -229,7 +228,7 @@ try {
     uiSrc.includes('name="dueOn"') &&
       uiSrc.includes('type="date"') &&
       uiSrc.includes("DueOrOverdueGroup") &&
-      uiSrc.includes(RETENTION_GROUP_TITLES.DUE_OR_OVERDUE) &&
+      uiSrc.includes("RETENTION_GROUP_TITLES.DUE_OR_OVERDUE") &&
       !/Mark sent|Send via connected|requestText|messageBody|lastEmailStatus|lastSmsStatus/.test(uiSrc),
   );
   check(
