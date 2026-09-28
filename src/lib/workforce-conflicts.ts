@@ -84,7 +84,9 @@ export function detectScheduleConflicts(input: {
 }): ScheduleConflict[] {
   const zone = input.timeZone || DEFAULT_BUSINESS_TIMEZONE;
   const conflicts: ScheduleConflict[] = [];
-  const active = input.jobs.filter((job) => job.scheduledAt && job.status !== "COMPLETED");
+  const active = input.jobs.filter(
+    (job) => job.scheduledAt && job.status !== "COMPLETED" && job.status !== "CANCELLED",
+  );
   const members = new Map((input.members ?? []).map((member) => [member.membershipId, member]));
 
   for (let i = 0; i < active.length; i += 1) {

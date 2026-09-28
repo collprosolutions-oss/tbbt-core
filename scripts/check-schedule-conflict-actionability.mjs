@@ -124,7 +124,7 @@ check(
 check(
   "Occupied jobs used for overlap still come from the tenant-scoped loader",
   availabilityData.includes("businessId,") &&
-    availabilityData.includes('status: { not: "COMPLETED" }') &&
+    availabilityData.includes('notIn: ["COMPLETED", "CANCELLED"]') &&
     /loadOccupiedJobs\([\s\S]*where: \{[\s\S]*businessId/.test(availabilityData),
 );
 check(

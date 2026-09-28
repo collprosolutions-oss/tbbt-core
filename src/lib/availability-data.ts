@@ -123,7 +123,7 @@ export async function loadOccupiedJobs(
   const jobs = await db.job.findMany({
     where: {
       businessId,
-      status: { not: "COMPLETED" },
+      status: { notIn: ["COMPLETED", "CANCELLED"] },
       scheduledAt: { not: null },
       ...(excludeJobId ? { id: { not: excludeJobId } } : {}),
     },

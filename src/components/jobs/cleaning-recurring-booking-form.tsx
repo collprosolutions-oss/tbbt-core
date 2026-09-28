@@ -192,8 +192,9 @@ export function CleaningRecurringBookingForm({
               className="mt-1"
             />
             <span>
-              Stop this recurring schedule. No further bookings will be created.
-              Existing jobs are not deleted, invoiced, or messaged.
+              Stop this recurring schedule. Future unstarted bookings are
+              canceled. Started and completed work is left alone. Existing jobs
+              are not deleted, invoiced, or messaged.
             </span>
           </label>
           <Button type="submit" size="sm" variant="outline" disabled={stopPending}>

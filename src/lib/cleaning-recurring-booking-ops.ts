@@ -25,15 +25,19 @@ import {
   CLEANING_RECURRING_PROPERTY_REQUIRED_MESSAGE,
   CLEANING_RECURRING_RESUME_CONFIRM_REQUIRED_MESSAGE,
   CLEANING_RECURRING_SCOPE_REQUIRED_MESSAGE,
+  CLEANING_RECURRING_SLOT_BLOCKED_MESSAGE,
   CLEANING_RECURRING_STOP_CONFIRM_REQUIRED_MESSAGE,
   OWNER_MANAGES_RECURRING_BOOKINGS_MESSAGE,
   businessTimeZoneForRecurringBooking,
+  canCancelUnstartedRecurringOccurrence,
+  canReopenCancelledRecurringOccurrence,
   cleaningRecurringBookingEligible,
   firstCivilDateIsInPast,
   hasSelectedServiceScope,
   isActiveRecurringSeries,
   isCancelledRecurringSeries,
   isRecurringSeriesSource,
+  isUnstartedRecurringJobStatus,
   listUpcomingRecurringStarts,
   parseOwnerRecurringCadence,
   parseOwnerRecurringConfirmation,
@@ -43,8 +47,12 @@ import {
   recurringOccurrencePlan,
   resolveCleaningJobTradeCode,
 } from "@/lib/cleaning-recurring-booking";
+import { evaluateProposedSchedule, hasScheduleWarning } from "@/lib/availability";
+import { loadAvailabilitySettings, loadOccupiedJobs } from "@/lib/availability-data";
 import { computeNextOccurrenceAt, parseRecurrenceCadence } from "@/lib/recurrence";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
+import { loadCapacityJobs, loadSchedulingPolicy } from "@/lib/workforce-data";
+import { detectScheduleConflicts } from "@/lib/workforce-conflicts";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -62,6 +70,27 @@ export function cleaningRecurringBookingErrorMessage(error: unknown, fallback: s
   return fallback;
 }
 
+export function prismaUniqueConstraintTargets(error: unknown): string[] {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
+    return [];
+  }
+  const target = error.meta?.target;
+  if (Array.isArray(target)) {
+    return target.map((value) => String(value));
+  }
+  if (typeof target === "string" && target.trim()) {
+    return [target];
+  }
+  return [];
+}
+
+export function isRecurrenceOccurrenceKeyConflict(error: unknown): boolean {
+  return prismaUniqueConstraintTargets(error).some(
+    (value) =>
+      value === "recurrenceOccurrenceKey" || value.includes("recurrenceOccurrenceKey"),
+  );
+}
+
 const SOURCE_JOB_SELECT = {
   id: true,
   businessId: true,
@@ -72,6 +101,7 @@ const SOURCE_JOB_SELECT = {
   estimateId: true,
   approvedEstimateVersionId: true,
   scheduledDurationMinutes: true,
+  pickupDurationMinutes: true,
   leadSource: true,
   campaignId: true,
   businessLocationId: true,
@@ -120,6 +150,7 @@ export type SetupCleaningRecurringBookingsInput = {
 export type StopCleaningRecurringBookingsInput = {
   jobId: string;
   confirmStop: string | boolean;
+  now?: Date;
 };
 
 export type ResumeCleaningRecurringBookingsInput = {
@@ -290,6 +321,28 @@ async function withSeriesLock<T>(
   });
 }
 
+function seriesAnchorStart(input: {
+  existing: RecurringBookingOccurrence[];
+  fallbacks: Array<Date | null | undefined>;
+  timeZone: string;
+  now: Date;
+}) {
+  const todayCivil = recurringBookingCivilDate(input.now, input.timeZone);
+  const future = input.existing
+    .filter(
+      (row) =>
+        row.scheduledAt &&
+        recurringBookingCivilDate(row.scheduledAt, input.timeZone) >= todayCivil,
+    )
+    .sort((a, b) => (a.scheduledAt?.getTime() ?? 0) - (b.scheduledAt?.getTime() ?? 0));
+  return (
+    future[0]?.scheduledAt ??
+    input.existing.find((row) => row.scheduledAt)?.scheduledAt ??
+    input.fallbacks.find((value): value is Date => value instanceof Date) ??
+    null
+  );
+}
+
 function requireCopiedBindings(job: SourceJob, businessId: string) {
   const customer = sameBusinessCustomer(job, businessId);
   if (!customer) {
@@ -306,6 +359,84 @@ function requireCopiedBindings(job: SourceJob, businessId: string) {
   return { customer, property, scope };
 }
 
+async function assertProposedSlotsOpen(
+  db: Db,
+  input: {
+    businessId: string;
+    timeZone: string;
+    durationMinutes: number | null;
+    pickupDurationMinutes: number | null;
+    slots: Array<{ start: Date; excludeJobId?: string }>;
+  },
+) {
+  if (input.slots.length === 0) return;
+
+  const [settings, occupied, policy, capacityJobs] = await Promise.all([
+    loadAvailabilitySettings(db, input.businessId),
+    loadOccupiedJobs(db, input.businessId),
+    loadSchedulingPolicy(db, input.businessId),
+    loadCapacityJobs(db, input.businessId),
+  ]);
+
+  const extraOccupied: Array<{
+    id: string;
+    scheduledAt: Date;
+    scheduledDurationMinutes: number | null;
+  }> = [];
+  const extraCapacity: Array<{
+    id: string;
+    scheduledAt: Date;
+    scheduledDurationMinutes: number | null;
+    pickupDurationMinutes: number | null;
+    status: string;
+  }> = [];
+
+  for (const [index, slot] of input.slots.entries()) {
+    const proposedId = slot.excludeJobId ?? `proposed-recurring:${index}:${slot.start.toISOString()}`;
+    const evaluation = evaluateProposedSchedule({
+      start: slot.start,
+      durationMinutes: input.durationMinutes,
+      settings,
+      existing: occupied
+        .filter((job) => job.id !== slot.excludeJobId)
+        .concat(extraOccupied),
+      timeZone: input.timeZone,
+    });
+    const conflicts = detectScheduleConflicts({
+      jobs: capacityJobs
+        .filter((job) => job.id !== slot.excludeJobId)
+        .concat(extraCapacity),
+      settings,
+      policy,
+      timeZone: input.timeZone,
+      proposed: {
+        jobId: proposedId,
+        start: slot.start,
+        durationMinutes: input.durationMinutes,
+        pickupMinutes: input.pickupDurationMinutes ?? 0,
+      },
+    });
+    const blocking = conflicts.some(
+      (conflict) => conflict.severity === "ERROR" || conflict.severity === "WARNING",
+    );
+    if (hasScheduleWarning(evaluation) || blocking) {
+      throw new CleaningRecurringBookingError(CLEANING_RECURRING_SLOT_BLOCKED_MESSAGE);
+    }
+    extraOccupied.push({
+      id: proposedId,
+      scheduledAt: slot.start,
+      scheduledDurationMinutes: input.durationMinutes,
+    });
+    extraCapacity.push({
+      id: proposedId,
+      scheduledAt: slot.start,
+      scheduledDurationMinutes: input.durationMinutes,
+      pickupDurationMinutes: input.pickupDurationMinutes,
+      status: "SCHEDULED",
+    });
+  }
+}
+
 async function materializeUpcoming(
   tx: Prisma.TransactionClient,
   input: {
@@ -315,6 +446,7 @@ async function materializeUpcoming(
     cadence: ReturnType<typeof parseOwnerRecurringCadence>;
     timeZone: string;
     now: Date;
+    reopenCancelled?: boolean;
   },
 ) {
   if (!input.cadence) {
@@ -334,53 +466,87 @@ async function materializeUpcoming(
       .filter((row) => row.recurrenceOccurrenceKey)
       .map((row) => [row.recurrenceOccurrenceKey as string, row]),
   );
-  let createdCount = 0;
+  const toCreate: Array<{ scheduledAt: Date; key: string }> = [];
+  const toReopen: RecurringBookingOccurrence[] = [];
   for (const scheduledAt of starts) {
     const civilDate = recurringBookingCivilDate(scheduledAt, input.timeZone);
     const key = recurrenceOccurrenceKey(input.source.id, civilDate);
-    if (byKey.has(key)) continue;
-    try {
-      const created = await tx.job.create({
-        data: {
-          businessId: input.access.businessId,
-          customerId: bindings.customer.id,
-          propertyId: bindings.property.id,
-          estimateId: bindings.scope.estimateId,
-          approvedEstimateVersionId: bindings.scope.approvedEstimateVersionId,
-          projectToken: randomUUID(),
-          status: "SCHEDULED",
-          scheduledAt,
-          scheduledDurationMinutes: input.source.scheduledDurationMinutes,
-          leadSource: input.source.leadSource,
-          campaignId: input.source.campaignId,
-          businessLocationId: input.source.businessLocationId,
-          serviceIntent: plan.serviceIntent,
-          recurrenceCadence: plan.recurrenceCadence,
-          recurrenceStatus: plan.recurrenceStatus,
-          nextOccurrenceAt: null,
-          recurrenceSourceJobId: input.source.id,
-          nextBookingSourceJobId: null,
-          correctiveCleanSourceJobId: null,
-          recurrenceOccurrenceKey: key,
-          appointmentConfirmationStatus: "NONE",
-        },
-        select: OCCURRENCE_SELECT,
-      });
-      byKey.set(key, created);
-      createdCount += 1;
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-        const reused = await tx.job.findFirst({
-          where: { businessId: input.access.businessId, recurrenceOccurrenceKey: key },
-          select: OCCURRENCE_SELECT,
-        });
-        if (reused) {
-          byKey.set(key, reused);
-          continue;
-        }
-      }
-      throw error;
+    const already = byKey.get(key);
+    if (!already) {
+      toCreate.push({ scheduledAt, key });
+      continue;
     }
+    if (
+      input.reopenCancelled &&
+      canReopenCancelledRecurringOccurrence({
+        status: already.status,
+        scheduledAt: already.scheduledAt,
+        timeZone: input.timeZone,
+        now: input.now,
+      })
+    ) {
+      toReopen.push(already);
+    }
+  }
+
+  await assertProposedSlotsOpen(tx, {
+    businessId: input.access.businessId,
+    timeZone: input.timeZone,
+    durationMinutes: input.source.scheduledDurationMinutes,
+    pickupDurationMinutes: input.source.pickupDurationMinutes,
+    slots: [
+      ...toReopen.map((row) => ({
+        start: row.scheduledAt as Date,
+        excludeJobId: row.id,
+      })),
+      ...toCreate.map((row) => ({ start: row.scheduledAt })),
+    ],
+  });
+
+  let createdCount = 0;
+  for (const row of toReopen) {
+    const reopened = await tx.job.update({
+      where: { id: row.id },
+      data: {
+        status: "SCHEDULED",
+        recurrenceStatus: "ACTIVE",
+      },
+      select: OCCURRENCE_SELECT,
+    });
+    if (reopened.recurrenceOccurrenceKey) {
+      byKey.set(reopened.recurrenceOccurrenceKey, reopened);
+    }
+  }
+  for (const { scheduledAt, key } of toCreate) {
+    const created = await tx.job.create({
+      data: {
+        businessId: input.access.businessId,
+        customerId: bindings.customer.id,
+        propertyId: bindings.property.id,
+        estimateId: bindings.scope.estimateId,
+        approvedEstimateVersionId: bindings.scope.approvedEstimateVersionId,
+        projectToken: randomUUID(),
+        status: "SCHEDULED",
+        scheduledAt,
+        scheduledDurationMinutes: input.source.scheduledDurationMinutes,
+        pickupDurationMinutes: input.source.pickupDurationMinutes,
+        leadSource: input.source.leadSource,
+        campaignId: input.source.campaignId,
+        businessLocationId: input.source.businessLocationId,
+        serviceIntent: plan.serviceIntent,
+        recurrenceCadence: plan.recurrenceCadence,
+        recurrenceStatus: plan.recurrenceStatus,
+        nextOccurrenceAt: null,
+        recurrenceSourceJobId: input.source.id,
+        nextBookingSourceJobId: null,
+        correctiveCleanSourceJobId: null,
+        recurrenceOccurrenceKey: key,
+        appointmentConfirmationStatus: "NONE",
+      },
+      select: OCCURRENCE_SELECT,
+    });
+    byKey.set(key, created);
+    createdCount += 1;
   }
 
   const lastCreated = starts[starts.length - 1] ?? null;
@@ -511,7 +677,7 @@ export async function setupCleaningRecurringBookings(
       };
     });
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    if (isRecurrenceOccurrenceKeyConflict(error)) {
       return resultFromSource(db, access, source.id, {
         createdCount: 0,
         alreadyExists: true,
@@ -549,10 +715,12 @@ export async function fillCleaningRecurringBookings(
       }
       const cadence = parseOwnerRecurringCadence(fresh.recurrenceCadence);
       const existing = await findSeriesOccurrences(tx, access.businessId, fresh.id);
-      const firstAt =
-        existing.find((row) => row.scheduledAt)?.scheduledAt ??
-        fresh.nextOccurrenceAt ??
-        fresh.scheduledAt;
+      const firstAt = seriesAnchorStart({
+        existing,
+        fallbacks: [fresh.nextOccurrenceAt, fresh.scheduledAt],
+        timeZone,
+        now,
+      });
       if (!firstAt || !cadence) {
         throw new CleaningRecurringBookingError(CLEANING_RECURRING_CADENCE_REQUIRED_MESSAGE);
       }
@@ -575,7 +743,7 @@ export async function fillCleaningRecurringBookings(
       };
     });
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    if (isRecurrenceOccurrenceKeyConflict(error)) {
       return resultFromSource(db, access, source.id, {
         createdCount: 0,
         alreadyExists: true,
@@ -604,6 +772,9 @@ export async function stopCleaningRecurringBookings(
     throw new CleaningRecurringBookingError(CLEANING_RECURRING_NOT_ACTIVE_MESSAGE);
   }
 
+  const timeZone = businessTimeZoneForRecurringBooking(access.workspace.business);
+  const now = input.now ?? new Date();
+
   return withSeriesLock(db, access.businessId, source.id, async (tx) => {
     const fresh = access.assertOwned(await loadSourceJob(tx, access.businessId, source.id));
     assertCleaningSeriesSource(fresh);
@@ -621,14 +792,43 @@ export async function stopCleaningRecurringBookings(
         nextOccurrenceAt: null,
       },
     });
-    await tx.job.updateMany({
-      where: {
-        businessId: access.businessId,
-        recurrenceSourceJobId: fresh.id,
-        status: { in: ["SCHEDULED", "UNSCHEDULED"] },
-      },
-      data: { recurrenceStatus: "CANCELLED" },
-    });
+    const existing = await findSeriesOccurrences(tx, access.businessId, fresh.id);
+    const futureUnstarted = existing.filter((row) =>
+      canCancelUnstartedRecurringOccurrence({
+        status: row.status,
+        scheduledAt: row.scheduledAt,
+        timeZone,
+        now,
+      }),
+    );
+    const pastUnstarted = existing.filter(
+      (row) =>
+        isUnstartedRecurringJobStatus(row.status) &&
+        !canCancelUnstartedRecurringOccurrence({
+          status: row.status,
+          scheduledAt: row.scheduledAt,
+          timeZone,
+          now,
+        }),
+    );
+    if (futureUnstarted.length > 0) {
+      await tx.job.updateMany({
+        where: {
+          businessId: access.businessId,
+          id: { in: futureUnstarted.map((row) => row.id) },
+        },
+        data: { status: "CANCELLED", recurrenceStatus: "CANCELLED" },
+      });
+    }
+    if (pastUnstarted.length > 0) {
+      await tx.job.updateMany({
+        where: {
+          businessId: access.businessId,
+          id: { in: pastUnstarted.map((row) => row.id) },
+        },
+        data: { recurrenceStatus: "CANCELLED" },
+      });
+    }
     return resultFromSource(tx, access, fresh.id, {
       createdCount: 0,
       alreadyExists: false,
@@ -666,21 +866,15 @@ export async function resumeCleaningRecurringBookings(
     }
     const cadence = parseOwnerRecurringCadence(fresh.recurrenceCadence);
     const existing = await findSeriesOccurrences(tx, access.businessId, fresh.id);
-    const firstAt =
-      existing.find((row) => row.scheduledAt)?.scheduledAt ??
-      fresh.scheduledAt;
+    const firstAt = seriesAnchorStart({
+      existing,
+      fallbacks: [fresh.scheduledAt],
+      timeZone,
+      now,
+    });
     if (!firstAt || !cadence) {
       throw new CleaningRecurringBookingError(CLEANING_RECURRING_CADENCE_REQUIRED_MESSAGE);
     }
-    await tx.job.updateMany({
-      where: {
-        businessId: access.businessId,
-        recurrenceSourceJobId: fresh.id,
-        status: { in: ["SCHEDULED", "UNSCHEDULED"] },
-        recurrenceStatus: "CANCELLED",
-      },
-      data: { recurrenceStatus: "ACTIVE" },
-    });
     const materialized = await materializeUpcoming(tx, {
       access,
       source: { ...fresh, recurrenceStatus: "ACTIVE" },
@@ -688,6 +882,7 @@ export async function resumeCleaningRecurringBookings(
       cadence,
       timeZone,
       now,
+      reopenCancelled: true,
     });
     return {
       sourceJobId: fresh.id,

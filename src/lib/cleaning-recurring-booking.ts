@@ -51,7 +51,7 @@ export const CLEANING_RECURRING_CREATED_MESSAGE =
 export const CLEANING_RECURRING_ALREADY_EXISTS_MESSAGE =
   "This job already has a recurring Cleaning schedule.";
 export const CLEANING_RECURRING_STOPPED_MESSAGE =
-  "Recurring Cleaning schedule stopped. No further bookings will be created.";
+  "Recurring Cleaning schedule stopped. Future unstarted bookings are canceled. Started and completed work is unchanged.";
 export const CLEANING_RECURRING_RESUMED_MESSAGE =
   "Recurring Cleaning schedule resumed.";
 export const CLEANING_RECURRING_FILLED_MESSAGE =
@@ -60,6 +60,8 @@ export const CLEANING_RECURRING_NOT_ACTIVE_MESSAGE =
   "This recurring Cleaning schedule is not active.";
 export const CLEANING_RECURRING_NOT_STOPPED_MESSAGE =
   "This recurring Cleaning schedule is not stopped.";
+export const CLEANING_RECURRING_SLOT_BLOCKED_MESSAGE =
+  "A proposed recurring booking time is blocked by working hours, a buffer, pickup time, or another scheduled job. No bookings were created.";
 
 export const DEFAULT_RECURRING_BOOKING_TIME = "09:00";
 export const MAX_UPCOMING_RECURRING_BOOKINGS = 8;
@@ -218,5 +220,59 @@ export function firstCivilDateIsInPast(input: {
   return (
     formatISODateInTimeZone(input.firstAt, input.timeZone) <
     formatISODateInTimeZone(now, input.timeZone)
+  );
+}
+
+export function isUnstartedRecurringJobStatus(status: string | null | undefined) {
+  return status === "SCHEDULED" || status === "UNSCHEDULED";
+}
+
+export function isStartedOrCompletedJobStatus(status: string | null | undefined) {
+  return status === "IN_PROGRESS" || status === "COMPLETED";
+}
+
+export function recurringOccurrenceIsOnOrAfterToday(input: {
+  scheduledAt: Date | null | undefined;
+  timeZone: string;
+  now?: Date;
+}) {
+  if (!input.scheduledAt) return true;
+  const now = input.now ?? new Date();
+  return (
+    formatISODateInTimeZone(input.scheduledAt, input.timeZone) >=
+    formatISODateInTimeZone(now, input.timeZone)
+  );
+}
+
+export function canCancelUnstartedRecurringOccurrence(input: {
+  status: string | null | undefined;
+  scheduledAt?: Date | null;
+  timeZone: string;
+  now?: Date;
+}) {
+  return (
+    isUnstartedRecurringJobStatus(input.status) &&
+    recurringOccurrenceIsOnOrAfterToday({
+      scheduledAt: input.scheduledAt,
+      timeZone: input.timeZone,
+      now: input.now,
+    })
+  );
+}
+
+export function canReopenCancelledRecurringOccurrence(input: {
+  status: string | null | undefined;
+  scheduledAt?: Date | null;
+  timeZone: string;
+  now?: Date;
+}) {
+  return (
+    input.status === "CANCELLED" &&
+    Boolean(input.scheduledAt) &&
+    recurringOccurrenceIsOnOrAfterToday({
+      scheduledAt: input.scheduledAt,
+      timeZone: input.timeZone,
+      now: input.now,
+    })
   );
 }
