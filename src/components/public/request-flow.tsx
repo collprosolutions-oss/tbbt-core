@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { submitServiceRequest } from "@/app/actions/intake";
+import type { PublicIntakeSubmitResult } from "@/lib/public-request-submit";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -93,8 +94,8 @@ type PublicRequestDraft = {
   smsOptIn: boolean;
 };
 
-function requestDraftKey(slug: string) {
-  return `tbbt-public-request:${slug}`;
+function requestDraftKey(slug: string, namespace?: string) {
+  return `tbbt-public-request:${namespace || slug}`;
 }
 
 const STEPS: { id: Step; title: string; caption: string }[] = [
@@ -146,6 +147,12 @@ export function MultiServiceRequestFlow({
   intakeSchemasByTrade = {},
   publishedIntakeByTrade = {},
   activeTrades = [],
+  projectToken,
+  submitAction,
+  draftNamespace,
+  lockedTradeCode,
+  initialContact,
+  successCopy,
 }: {
   slug: string;
   businessName: string;
@@ -157,19 +164,42 @@ export function MultiServiceRequestFlow({
   intakeSchemasByTrade?: Record<string, PublicIntakeSchemaProjection>;
   publishedIntakeByTrade?: Record<string, PublishedIntakeOverlay>;
   activeTrades?: Array<{ code: string; label: string }>;
+  projectToken?: string;
+  submitAction?: (
+    slug: string,
+    formData: FormData,
+  ) => Promise<PublicIntakeSubmitResult>;
+  draftNamespace?: string;
+  lockedTradeCode?: string;
+  initialContact?: {
+    name?: string;
+    email?: string;
+    phone?: string;
+    streetAddress?: string;
+    unit?: string;
+    city?: string;
+    region?: string;
+    postalCode?: string;
+  };
+  successCopy?: {
+    title: string;
+    body: string;
+    href: string;
+    label: string;
+  };
 }) {
   void groups;
   const [step, setStep] = useState<Step>("details");
   const [selected] = useState<SelectedWorkState>(initialSelected);
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
+  const [name, setName] = useState(initialContact?.name ?? "");
+  const [email, setEmail] = useState(initialContact?.email ?? "");
+  const [phone, setPhone] = useState(initialContact?.phone ?? "");
   const [serviceAddress, setServiceAddress] = useState<StructuredServiceAddress>({
-    streetAddress: "",
-    unit: "",
-    city: "",
-    region: serviceArea.region ?? "",
-    postalCode: "",
+    streetAddress: initialContact?.streetAddress ?? "",
+    unit: initialContact?.unit ?? "",
+    city: initialContact?.city ?? "",
+    region: initialContact?.region || serviceArea.region || "",
+    postalCode: initialContact?.postalCode ?? "",
   });
   const [notes, setNotes] = useState("");
   const [preferredContact, setPreferredContact] = useState("text");
@@ -191,7 +221,7 @@ export function MultiServiceRequestFlow({
 
   useEffect(() => {
     try {
-      const raw = sessionStorage.getItem(requestDraftKey(slug));
+      const raw = sessionStorage.getItem(requestDraftKey(slug, draftNamespace));
       if (raw) {
         const draft = JSON.parse(raw) as PublicRequestDraft;
         if (draft.step === "details" || draft.step === "info" || draft.step === "review") {
@@ -217,7 +247,7 @@ export function MultiServiceRequestFlow({
       // Ignore a corrupted draft and keep the empty form.
     }
     setHydrated(true);
-  }, [serviceArea.region, slug]);
+  }, [draftNamespace, serviceArea.region, slug]);
 
   useEffect(() => {
     if (!hydrated || ok) return;
@@ -232,11 +262,11 @@ export function MultiServiceRequestFlow({
         preferredContact,
         smsOptIn,
       };
-      sessionStorage.setItem(requestDraftKey(slug), JSON.stringify(draft));
+      sessionStorage.setItem(requestDraftKey(slug, draftNamespace), JSON.stringify(draft));
     } catch {
       // Private mode can block sessionStorage. The in-memory form still works.
     }
-  }, [email, hydrated, name, notes, ok, phone, preferredContact, serviceAddress, slug, smsOptIn, step]);
+  }, [draftNamespace, email, hydrated, name, notes, ok, phone, preferredContact, serviceAddress, slug, smsOptIn, step]);
 
   const labels = useMemo(
     () => selectedWorkLabels(selected, items),
@@ -252,10 +282,12 @@ export function MultiServiceRequestFlow({
   const mixedTrade = selectedTradeCodes.length > 1;
   const catalogTrade = selectedTradeCodes.length === 1 ? selectedTradeCodes[0] : "";
   const needsCustomTradeChoice =
+    !lockedTradeCode &&
     selected.catalogIds.length === 0 &&
     (selected.includeOther || catalogEmpty) &&
     activeTrades.length > 1;
   const resolvedTrade =
+    lockedTradeCode ||
     catalogTrade ||
     (needsCustomTradeChoice ? customTradeCode : activeTrades[0]?.code ?? "");
   const publishedIntake = resolvedTrade
@@ -446,6 +478,9 @@ export function MultiServiceRequestFlow({
     if (resolvedTrade) {
       formData.set("requestedTradeCode", resolvedTrade);
     }
+    if (projectToken) {
+      formData.set("projectToken", projectToken);
+    }
     for (const photo of photos) {
       const authorized = await authorizePublicRequestPhotoUpload({
         slug,
@@ -509,14 +544,18 @@ export function MultiServiceRequestFlow({
     if (typeof window !== "undefined") {
       formData.set("landingPagePath", window.location.pathname);
     }
-    const result = await submitPublicIntakeForm(submitServiceRequest, slug, formData);
+    const result = await submitPublicIntakeForm(
+      submitAction ?? submitServiceRequest,
+      slug,
+      formData,
+    );
     if (!result.ok) {
       setError(result.error);
       return;
     }
     setOk(true);
     try {
-      sessionStorage.removeItem(requestDraftKey(slug));
+      sessionStorage.removeItem(requestDraftKey(slug, draftNamespace));
     } catch {
       // Ignore storage failures after a successful submit.
     }
@@ -534,14 +573,17 @@ export function MultiServiceRequestFlow({
           Submitted
         </p>
         <h2 className="mt-3 text-3xl font-extrabold tracking-tight">
-          Thank you. Your request was received.
+          {successCopy?.title ?? "Thank you. Your request was received."}
         </h2>
         <p className="mt-4 text-lg leading-8 text-muted-foreground">
-          Your request has been sent to {businessName}. Someone from the team
-          will review it before an estimate is created.
+          {successCopy?.body ??
+            `Your request has been sent to ${businessName}. Someone from the team will review it before an estimate is created.`}
         </p>
-        <Link href={`/hire/${slug}`} className="public-btn public-btn-primary mt-8">
-          Back to the website
+        <Link
+          href={successCopy?.href ?? `/hire/${slug}`}
+          className="public-btn public-btn-primary mt-8"
+        >
+          {successCopy?.label ?? "Back to the website"}
         </Link>
       </section>
     );

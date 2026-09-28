@@ -11,6 +11,8 @@ import { PortalCommunicationsCard } from "@/components/portal/portal-communicati
 import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { RequestAdditionalWorkForm } from "@/components/portal/request-additional-work-form";
+import { RequestAnotherVisitCard } from "@/components/portal/request-another-visit-card";
+import { loadCleaningRepeatVisitPublicView } from "@/lib/cleaning-repeat-visit-data";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
 import {
   BUSINESS_PUBLIC_CONTACT_SELECT,
@@ -361,6 +363,7 @@ export default async function CustomerProjectPortalPage({
     prisma,
     token,
   );
+  const repeatVisit = await loadCleaningRepeatVisitPublicView(prisma, token);
   const portalMessages = await loadPortalCustomerCommunications(prisma, token);
   const currentRequest = portalRequestSummary(job.estimate?.serviceRequest ?? null);
   const estimatePublicToken =
@@ -591,6 +594,13 @@ export default async function CustomerProjectPortalPage({
               />
             </CardContent>
           </Card>
+
+          {repeatVisit.status === "ready" ? (
+            <RequestAnotherVisitCard
+              projectToken={token}
+              alreadyRequested={repeatVisit.alreadyRequested}
+            />
+          ) : null}
 
           <Card id="invoice" className="md:col-span-2 xl:col-span-1">
             <CardHeader>
