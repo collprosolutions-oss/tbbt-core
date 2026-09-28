@@ -3,11 +3,14 @@
 -- statement is IF NOT EXISTS. No backfill. Existing businesses keep zero rows.
 -- Stores draft line snapshots only — never catalog prices, hourly public
 -- rates, SENT/APPROVED estimate mutations, invoices, or jobs.
+-- Timestamp is 20260928030000 so it does not collide with
+-- 20260928020000_job_next_booking_source_unique (#193).
 
 CREATE TABLE IF NOT EXISTS "EstimateLineTemplate" (
     "id" TEXT NOT NULL,
     "businessId" TEXT NOT NULL,
     "name" TEXT NOT NULL,
+    "nameKey" TEXT NOT NULL,
     "createdByMembershipId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -27,8 +30,8 @@ CREATE TABLE IF NOT EXISTS "EstimateLineTemplateLine" (
     CONSTRAINT "EstimateLineTemplateLine_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "EstimateLineTemplate_businessId_name_key"
-  ON "EstimateLineTemplate"("businessId", "name");
+CREATE UNIQUE INDEX IF NOT EXISTS "EstimateLineTemplate_businessId_nameKey_key"
+  ON "EstimateLineTemplate"("businessId", "nameKey");
 CREATE INDEX IF NOT EXISTS "EstimateLineTemplate_businessId_updatedAt_idx"
   ON "EstimateLineTemplate"("businessId", "updatedAt");
 CREATE INDEX IF NOT EXISTS "EstimateLineTemplateLine_businessId_idx"

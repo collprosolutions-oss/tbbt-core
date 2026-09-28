@@ -1168,6 +1168,30 @@ check(
       localNames.indexOf("20260928020000_job_next_booking_source_unique"),
 );
 
+const estimateLineTemplateMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260928030000_estimate_line_template/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Estimate line template migration is after next-booking unique and does not reuse 20260928020000",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(estimateLineTemplateMigration) &&
+    estimateLineTemplateMigration.includes('CREATE TABLE IF NOT EXISTS "EstimateLineTemplate"') &&
+    estimateLineTemplateMigration.includes('"nameKey" TEXT NOT NULL') &&
+    estimateLineTemplateMigration.includes("EstimateLineTemplate_businessId_nameKey_key") &&
+    !estimateLineTemplateMigration.includes("EstimateLineTemplate_businessId_name_key") &&
+    localNames.includes("20260928030000_estimate_line_template") &&
+    !localNames.includes("20260928020000_estimate_line_template") &&
+    localNames.includes("20260928020000_job_next_booking_source_unique") &&
+    localNames.includes("20260928120000_customer_follow_up_retention_due_on") &&
+    localNames.indexOf("20260928020000_job_next_booking_source_unique") <
+      localNames.indexOf("20260928030000_estimate_line_template") &&
+    localNames.indexOf("20260928030000_estimate_line_template") <
+      localNames.indexOf("20260928120000_customer_follow_up_retention_due_on"),
+);
+
 const retentionDueOnMigration = readFileSync(
   new URL("../prisma/migrations/20260928120000_customer_follow_up_retention_due_on/migration.sql", import.meta.url),
   "utf8",
@@ -1184,6 +1208,8 @@ check(
     localNames.indexOf("20260928010000_owner_scenario_assumption_set") <
       localNames.indexOf("20260928120000_customer_follow_up_retention_due_on") &&
     localNames.indexOf("20260928020000_job_next_booking_source_unique") <
+      localNames.indexOf("20260928120000_customer_follow_up_retention_due_on") &&
+    localNames.indexOf("20260928030000_estimate_line_template") <
       localNames.indexOf("20260928120000_customer_follow_up_retention_due_on"),
 );
 

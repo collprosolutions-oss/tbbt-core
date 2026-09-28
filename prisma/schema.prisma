@@ -1212,6 +1212,9 @@ model EstimateLineTemplate {
   id                    String   @id @default(cuid())
   businessId            String
   name                  String
+  /// Case-folded unique key so "Bath refresh" and "bath refresh" collide
+  /// under concurrent same-business creates.
+  nameKey               String
   createdByMembershipId String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -1220,7 +1223,7 @@ model EstimateLineTemplate {
   createdBy Membership?                @relation("EstimateLineTemplateCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
   lines     EstimateLineTemplateLine[]
 
-  @@unique([businessId, name])
+  @@unique([businessId, nameKey])
   @@index([businessId, updatedAt])
 }
 

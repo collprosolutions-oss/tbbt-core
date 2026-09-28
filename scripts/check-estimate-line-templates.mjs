@@ -50,10 +50,12 @@ const {
   collectTemplateLines,
   isolateSameBusinessTemplates,
   parseTemplateName,
+  templateNameKey,
 } = await import("@/lib/estimate-line-templates");
 const {
   EstimateLineTemplateError,
   applyEstimateLineTemplateToDraft,
+  createDraftEstimateWithOptionalTemplate,
   listEstimateLineTemplates,
   saveEstimateLineTemplateFromDraft,
 } = await import("@/lib/estimate-line-template-ops");
@@ -172,7 +174,7 @@ try {
   check("OWNER can access templates", canAccessEstimateLineTemplates("OWNER"));
 
   const schema = readRepo("prisma/schema.prisma");
-  const migration = readRepo("prisma/migrations/20260928020000_estimate_line_template/migration.sql");
+  const migration = readRepo("prisma/migrations/20260928030000_estimate_line_template/migration.sql");
   const libSrc = readRepo("src/lib/estimate-line-templates.ts");
   const opsSrc = readRepo("src/lib/estimate-line-template-ops.ts");
   const actionSrc = readRepo("src/app/actions/estimate.ts");
@@ -184,10 +186,15 @@ try {
   const catalogWritePattern =
     /serviceCatalogItem\.(create|update|updateMany|upsert|delete|deleteMany)/;
 
+  const templateModel = schema.slice(
+    schema.indexOf("model EstimateLineTemplate {"),
+    schema.indexOf("model EstimateLineTemplateLine {"),
+  );
   check(
-    "Schema keeps templates business-scoped with unique names",
-    schema.includes("model EstimateLineTemplate") &&
-      schema.includes("@@unique([businessId, name])") &&
+    "Schema keeps templates business-scoped with case-insensitive unique names",
+    templateModel.includes("nameKey") &&
+      templateModel.includes("@@unique([businessId, nameKey])") &&
+      !templateModel.includes("@@unique([businessId, name])") &&
       schema.includes("model EstimateLineTemplateLine"),
   );
   check(
@@ -204,10 +211,17 @@ try {
   check("UI tells the owner to review before sending", formSrc.includes("REVIEW_BEFORE_SEND_MESSAGE") && createFormSrc.includes("REVIEW_BEFORE_SEND_MESSAGE"));
   check("Ops never write catalog prices", !catalogWritePattern.test(opsSrc) && opsSrc.includes("never writes ServiceCatalogItem"));
   check(
-    "Apply stays on DRAFT",
+    "Apply stays on DRAFT and claims with the send updateMany lock",
     opsSrc.includes('status: "DRAFT"') &&
+      opsSrc.includes("updateMany") &&
       opsSrc.includes("DRAFT_ONLY_APPLY_MESSAGE") &&
       opsSrc.includes("REVIEW_BEFORE_SEND_MESSAGE"),
+  );
+  check(
+    "Create Estimate applies a template in the same transaction as the new draft",
+    actionSrc.includes("createDraftEstimateWithOptionalTemplate") &&
+      actionSrc.includes("applyEstimateLineTemplateInTx") &&
+      opsSrc.includes("createDraftEstimateWithOptionalTemplate"),
   );
   check("Public hourly prices stay off templates", /do not publish hourly prices/i.test(NO_PUBLIC_HOURLY_PRICE_MESSAGE) && libSrc.includes("isHourlyUnitLabel"));
   check(
@@ -218,6 +232,7 @@ try {
   check("Blank name is rejected", parseTemplateName("").error === NAME_REQUIRED_MESSAGE);
   check("Too-long name is rejected", parseTemplateName("x".repeat(MAX_TEMPLATE_NAME_LENGTH + 1)).error.includes(String(MAX_TEMPLATE_NAME_LENGTH)));
   check("Name is trimmed", parseTemplateName("  Bath refresh  ").name === "Bath refresh");
+  check("Name key folds letter casing", templateNameKey("Bath refresh") === "bath refresh");
   check("List bound is 40", TEMPLATE_LIST_BOUND === 40);
   check("Line bound is 20", MAX_TEMPLATE_LINES === 20);
 
@@ -345,6 +360,10 @@ try {
   check("OWNER can save a named template", saved.template.name === "Bath refresh" && saved.template.lineCount === 3);
   check("Save reports that catalog prices are unchanged", saved.message === NO_CATALOG_PRICE_WRITE_MESSAGE);
   check("Saved template stays in the source business", saved.template.businessId === businessA.id);
+  const savedRow = await prisma.estimateLineTemplate.findFirst({
+    where: { id: saved.template.id, businessId: businessA.id },
+  });
+  check("Saved nameKey is the lowercase unique key", savedRow?.nameKey === "bath refresh");
   check(
     "Saved lines are labor/material/other snapshots",
     saved.template.lines.map((line) => line.type).join(",") === "LABOR,MATERIAL,OTHER" &&
@@ -536,6 +555,162 @@ try {
     "Hourly labels are not a public catalog unit",
     isHourlyUnitLabel("hourly") && publicCatalogUnitAmount("VARIABLE", 0) == null,
   );
+
+  console.log("\nDEDICATED DB — Create Estimate does not leave an orphan draft");
+  const createCustomer = await prisma.customer.create({
+    data: {
+      businessId: businessA.id,
+      name: "Create Estimate Customer",
+    },
+  });
+  const estimateCountBefore = await prisma.estimate.count({
+    where: { businessId: businessA.id },
+  });
+  await expectError(
+    "Invalid template on Create Estimate does not commit a draft",
+    () =>
+      createDraftEstimateWithOptionalTemplate(prisma, ownerA, {
+        customerId: createCustomer.id,
+        templateId: "missing-template-id",
+        leadSource: "MANUAL",
+      }),
+    (error) =>
+      error instanceof EstimateLineTemplateError &&
+      error.message === TEMPLATE_NOT_FOUND_MESSAGE,
+  );
+  const estimateCountAfterInvalid = await prisma.estimate.count({
+    where: { businessId: businessA.id },
+  });
+  check(
+    "Estimate count is unchanged after an invalid template create",
+    estimateCountAfterInvalid === estimateCountBefore,
+  );
+  await expectError(
+    "Foreign-business template on Create Estimate does not commit a draft",
+    () =>
+      createDraftEstimateWithOptionalTemplate(prisma, ownerA, {
+        customerId: createCustomer.id,
+        templateId: savedB.template.id,
+        leadSource: "MANUAL",
+      }),
+    (error) =>
+      error instanceof EstimateLineTemplateError &&
+      error.message === TEMPLATE_NOT_FOUND_MESSAGE,
+  );
+  const estimateCountAfterForeign = await prisma.estimate.count({
+    where: { businessId: businessA.id },
+  });
+  check(
+    "Estimate count is unchanged after an unavailable template create",
+    estimateCountAfterForeign === estimateCountBefore,
+  );
+  const createdWithTemplate = await createDraftEstimateWithOptionalTemplate(prisma, ownerA, {
+    customerId: createCustomer.id,
+    templateId: saved.template.id,
+    leadSource: "MANUAL",
+  });
+  const createdDraft = await prisma.estimate.findFirst({
+    where: { id: createdWithTemplate.estimateId, businessId: businessA.id },
+    include: { lineItems: true },
+  });
+  check(
+    "Valid Create Estimate + template stays DRAFT with applied lines",
+    createdWithTemplate.appliedTemplate &&
+      createdDraft?.status === "DRAFT" &&
+      createdDraft.lineItems.length === 3,
+  );
+
+  console.log("\nDEDICATED DB — Send versus apply race");
+  const raceDraft = await createDraftWithLines(businessA.id, [
+    { type: "LABOR", description: "Pre-send labor", quantity: "1", unitPrice: "40" },
+  ]);
+  const [applyRace, sendRace] = await Promise.allSettled([
+    applyEstimateLineTemplateToDraft(prisma, ownerA, {
+      templateId: saved.template.id,
+      estimateId: raceDraft.id,
+    }),
+    simulateSend(raceDraft.id, businessA.id),
+  ]);
+  const raced = await prisma.estimate.findFirst({
+    where: { id: raceDraft.id, businessId: businessA.id },
+    include: {
+      lineItems: { orderBy: { createdAt: "asc" } },
+      versions: {
+        include: { lineItems: { orderBy: { createdAt: "asc" } } },
+        orderBy: { versionNumber: "asc" },
+      },
+    },
+  });
+  const lineSignature = (line) =>
+    [line.description, String(line.quantity), String(line.unitPrice), line.type].join("|");
+  const liveSignatures = (raced?.lineItems ?? []).map(lineSignature).sort().join("\n");
+  const snapshotSignatures = (raced?.versions[0]?.lineItems ?? [])
+    .map(lineSignature)
+    .sort()
+    .join("\n");
+  const liveHasTemplateLine = (raced?.lineItems ?? []).some((line) =>
+    line.description.includes("Install vanity"),
+  );
+  const sendWon = sendRace.status === "fulfilled" && sendRace.value.ok === true;
+  const applyWon = applyRace.status === "fulfilled";
+  if (sendWon) {
+    check("Raced estimate is SENT", raced?.status === "SENT");
+    check(
+      "SENT live lines match the version snapshot after send-versus-apply",
+      Boolean(raced?.versions[0]) && liveSignatures === snapshotSignatures,
+    );
+    if (!applyWon) {
+      check(
+        "Send-win leaves no template lines on the SENT estimate",
+        !liveHasTemplateLine &&
+          raced?.lineItems.length === 1 &&
+          raced.lineItems[0].description === "Pre-send labor",
+      );
+    } else {
+      check(
+        "Apply-then-send snapshots the template lines with the SENT version",
+        liveHasTemplateLine && snapshotSignatures.includes("Install vanity"),
+      );
+    }
+  } else {
+    check(
+      "Apply-win without send leaves a DRAFT with template lines",
+      raced?.status === "DRAFT" && liveHasTemplateLine && applyWon,
+    );
+  }
+  check(
+    "A SENT estimate never has template lines missing from its snapshot",
+    raced?.status !== "SENT" ||
+      !liveHasTemplateLine ||
+      snapshotSignatures.includes("Install vanity"),
+  );
+
+  console.log("\nDEDICATED DB — Concurrent case-insensitive duplicate names");
+  const [nameA, nameB] = await Promise.allSettled([
+    saveEstimateLineTemplateFromDraft(prisma, ownerA, {
+      estimateId: sourceDraft.id,
+      name: "Deck stain",
+    }),
+    saveEstimateLineTemplateFromDraft(prisma, ownerA, {
+      estimateId: sourceDraft.id,
+      name: "deck STAIN",
+    }),
+  ]);
+  const concurrentOk = [nameA, nameB].filter((result) => result.status === "fulfilled");
+  const concurrentDup = [nameA, nameB].filter(
+    (result) =>
+      result.status === "rejected" &&
+      result.reason instanceof EstimateLineTemplateError &&
+      result.reason.message === DUPLICATE_TEMPLATE_NAME_MESSAGE,
+  );
+  check(
+    "Exactly one concurrent same-business case-variant name succeeds",
+    concurrentOk.length === 1 && concurrentDup.length === 1,
+  );
+  const deckRows = await prisma.estimateLineTemplate.findMany({
+    where: { businessId: businessA.id, nameKey: "deck stain" },
+  });
+  check("Only one lowercase nameKey row exists for the concurrent creates", deckRows.length === 1);
 
   if (failures > 0) {
     console.error(`\n${failures} estimate-line-template check(s) failed.`);

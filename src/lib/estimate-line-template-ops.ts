@@ -4,7 +4,12 @@
  * EstimateLineTemplate / EstimateLineTemplateLine rows and DRAFT
  * LineItem snapshots. It never writes ServiceCatalogItem prices,
  * SENT/APPROVED estimates, invoices, payments, or jobs.
+ *
+ * Apply claims the estimate with the same updateMany-WHERE-DRAFT lock
+ * sendEstimate uses, then inserts lines. Create+apply share one
+ * transaction so an invalid template cannot leave a new draft behind.
  */
+import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { ForbiddenError } from "@/lib/authorization";
@@ -25,7 +30,9 @@ import {
   canAccessEstimateLineTemplates,
   collectTemplateLines,
   parseTemplateName,
+  templateNameKey,
   toSavedEstimateLineTemplate,
+  type EstimateLineTemplateSnapshotLine,
   type SavedEstimateLineTemplate,
 } from "@/lib/estimate-line-templates";
 
@@ -141,6 +148,131 @@ export async function loadEstimateLineTemplateOptions(
   }
 }
 
+async function loadOwnedTemplateLines(
+  db: Db,
+  access: BusinessAccess,
+  templateId: string,
+): Promise<EstimateLineTemplateSnapshotLine[]> {
+  const templateRow = await db.estimateLineTemplate.findFirst({
+    where: { id: templateId, ...access.scope },
+    include: {
+      lines: {
+        where: { businessId: access.businessId },
+        orderBy: { sortOrder: "asc" },
+      },
+    },
+  });
+  if (!templateRow) {
+    throw new EstimateLineTemplateError(TEMPLATE_NOT_FOUND_MESSAGE);
+  }
+  const template = access.assertOwned(templateRow);
+  if (template.businessId !== access.businessId) {
+    throw new ForbiddenError();
+  }
+
+  const collected = collectTemplateLines(template.lines);
+  if (collected.error) {
+    throw new EstimateLineTemplateError(collected.error);
+  }
+  return collected.lines;
+}
+
+/**
+ * Claim the estimate with the same updateMany-WHERE-status-DRAFT lock
+ * sendEstimate uses, then insert snapshot lines. A send that already
+ * flipped SENT wins the row; this write then matches zero rows and
+ * cannot leave template lines on a SENT estimate.
+ */
+async function applyCollectedTemplateLinesInTx(
+  tx: Prisma.TransactionClient,
+  access: BusinessAccess,
+  input: { estimateId: string; lines: EstimateLineTemplateSnapshotLine[] },
+) {
+  const claimed = await tx.estimate.updateMany({
+    where: {
+      id: input.estimateId,
+      businessId: access.businessId,
+      status: "DRAFT",
+    },
+    data: { updatedAt: new Date() },
+  });
+  if (claimed.count !== 1) {
+    throw new EstimateLineTemplateError(DRAFT_ONLY_APPLY_MESSAGE);
+  }
+
+  await tx.lineItem.createMany({
+    data: input.lines.map((line) => ({
+      businessId: access.businessId,
+      estimateId: input.estimateId,
+      description: line.description,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+      total: line.quantity.mul(line.unitPrice),
+      type: line.type,
+    })),
+  });
+  await persistDraftEstimateTotal(tx, input.estimateId, access.businessId);
+}
+
+export async function applyEstimateLineTemplateInTx(
+  tx: Prisma.TransactionClient,
+  access: BusinessAccess,
+  input: { templateId: string; estimateId: string },
+): Promise<{ addedLineCount: number }> {
+  await requireTemplateAccess(tx, access);
+  const lines = await loadOwnedTemplateLines(tx, access, input.templateId);
+  await applyCollectedTemplateLinesInTx(tx, access, {
+    estimateId: input.estimateId,
+    lines,
+  });
+  return { addedLineCount: lines.length };
+}
+
+export async function createDraftEstimateWithOptionalTemplate(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: {
+    customerId?: string | null;
+    propertyId?: string | null;
+    serviceRequestId?: string | null;
+    templateId?: string | null;
+    leadSource?: string | null;
+  },
+): Promise<{ estimateId: string; appliedTemplate: boolean; addedLineCount: number }> {
+  try {
+    return await db.$transaction(async (tx) => {
+      const estimate = await tx.estimate.create({
+        data: {
+          businessId: access.businessId,
+          customerId: input.customerId ?? undefined,
+          propertyId: input.propertyId ?? undefined,
+          serviceRequestId: input.serviceRequestId ?? undefined,
+          total: new Prisma.Decimal(0),
+          publicToken: randomUUID(),
+          leadSource: input.leadSource ?? "MANUAL",
+        },
+      });
+      if (!input.templateId) {
+        return { estimateId: estimate.id, appliedTemplate: false, addedLineCount: 0 };
+      }
+      const applied = await applyEstimateLineTemplateInTx(tx, access, {
+        templateId: input.templateId,
+        estimateId: estimate.id,
+      });
+      return {
+        estimateId: estimate.id,
+        appliedTemplate: true,
+        addedLineCount: applied.addedLineCount,
+      };
+    });
+  } catch (error) {
+    if (missingEstimateLineTemplateSchema(error)) {
+      throw new EstimateLineTemplateUnavailableError();
+    }
+    throw error;
+  }
+}
+
 export async function saveEstimateLineTemplateFromDraft(
   db: PrismaClient,
   access: BusinessAccess,
@@ -155,6 +287,7 @@ export async function saveEstimateLineTemplateFromDraft(
     throw new EstimateLineTemplateError(named.error ?? "Name the estimate template before saving.");
   }
   const templateName = named.name;
+  const nameKey = templateNameKey(templateName);
 
   const estimate = access.assertOwned(
     await db.estimate.findFirst({
@@ -188,7 +321,7 @@ export async function saveEstimateLineTemplateFromDraft(
   const duplicate = await db.estimateLineTemplate.findFirst({
     where: {
       businessId: access.businessId,
-      name: { equals: templateName, mode: "insensitive" },
+      nameKey,
     },
     select: { id: true, businessId: true },
   });
@@ -205,6 +338,7 @@ export async function saveEstimateLineTemplateFromDraft(
         data: {
           businessId: access.businessId,
           name: templateName,
+          nameKey,
           createdByMembershipId: access.workspace.membership.id,
         },
       });
@@ -265,27 +399,7 @@ export async function applyEstimateLineTemplateToDraft(
 }> {
   await requireTemplateAccess(db, access);
 
-  const templateRow = await db.estimateLineTemplate.findFirst({
-    where: { id: input.templateId, ...access.scope },
-    include: {
-      lines: {
-        where: { businessId: access.businessId },
-        orderBy: { sortOrder: "asc" },
-      },
-    },
-  });
-  if (!templateRow) {
-    throw new EstimateLineTemplateError(TEMPLATE_NOT_FOUND_MESSAGE);
-  }
-  const template = access.assertOwned(templateRow);
-  if (template.businessId !== access.businessId) {
-    throw new ForbiddenError();
-  }
-
-  const collected = collectTemplateLines(template.lines);
-  if (collected.error) {
-    throw new EstimateLineTemplateError(collected.error);
-  }
+  const lines = await loadOwnedTemplateLines(db, access, input.templateId);
 
   const estimate = access.assertOwned(
     await db.estimate.findFirst({
@@ -299,42 +413,24 @@ export async function applyEstimateLineTemplateToDraft(
     );
   }
 
-  await db.$transaction(async (tx) => {
-    const stillDraft = await tx.estimate.findFirst({
-      where: { id: estimate.id, businessId: access.businessId, status: "DRAFT" },
-      select: { id: true, status: true },
-    });
-    if (!stillDraft || stillDraft.status !== "DRAFT") {
-      throw new EstimateLineTemplateError(DRAFT_ONLY_APPLY_MESSAGE);
-    }
-    await tx.lineItem.createMany({
-      data: collected.lines.map((line) => ({
-        businessId: access.businessId,
+  try {
+    await db.$transaction(async (tx) => {
+      await applyCollectedTemplateLinesInTx(tx, access, {
         estimateId: estimate.id,
-        description: line.description,
-        quantity: line.quantity,
-        unitPrice: line.unitPrice,
-        total: line.quantity.mul(line.unitPrice),
-        type: line.type,
-      })),
+        lines,
+      });
     });
-    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
-  });
-
-  const refreshed = access.assertOwned(
-    await db.estimate.findFirst({
-      where: { id: estimate.id, ...access.scope },
-      select: { id: true, businessId: true, status: true },
-    }),
-  );
-  if (refreshed.status !== "DRAFT") {
-    throw new EstimateLineTemplateError(DRAFT_ONLY_APPLY_MESSAGE);
+  } catch (error) {
+    if (missingEstimateLineTemplateSchema(error)) {
+      throw new EstimateLineTemplateUnavailableError();
+    }
+    throw error;
   }
 
   return {
-    estimateId: refreshed.id,
+    estimateId: estimate.id,
     status: "DRAFT",
-    addedLineCount: collected.lines.length,
+    addedLineCount: lines.length,
     message: REVIEW_BEFORE_SEND_MESSAGE,
   };
 }

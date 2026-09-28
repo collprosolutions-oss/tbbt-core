@@ -106,6 +106,10 @@ export function parseTemplateName(raw: string | null | undefined): {
   return { name, error: null };
 }
 
+export function templateNameKey(name: string): string {
+  return name.toLowerCase();
+}
+
 export function isTemplateLineType(value: unknown): value is TemplateLineType {
   return (
     typeof value === "string" &&
