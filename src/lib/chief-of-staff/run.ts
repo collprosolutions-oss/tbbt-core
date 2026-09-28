@@ -37,8 +37,8 @@ import {
   setInjectedGrowthLoadFailure,
 } from "@/lib/chief-of-staff/growth-snapshot";
 import {
-  interpretGrowthSpecialist,
   resetLastGrowthProjection,
+  runGrowthSpecialist,
 } from "@/lib/chief-of-staff/growth-specialist";
 import {
   resetCommunicationsSpecialistCounters,
@@ -530,12 +530,15 @@ export async function runChiefOfStaffCoach(
         }
         if (specialistId === "GROWTH") {
           specialistResults.push(
-            interpretGrowthSpecialist(
+            await runGrowthSpecialist({
+              db,
+              access,
               catalog,
               question,
-              input.entityHints,
-              input.test?.denyProductCapabilities,
-            ),
+              entityHints: input.entityHints,
+              denyProductCapabilities: input.test?.denyProductCapabilities,
+              denyRoleCapabilities: input.test?.denyRoleCapabilities,
+            }),
           );
           continue;
         }

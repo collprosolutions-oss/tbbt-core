@@ -2,6 +2,15 @@ import type { BsosFacts, BsosRecommendation, RecordedFact } from "@/lib/bsos";
 import { AI_NOT_CONNECTED_MESSAGE, type CitedFact, type StructuredAiOutput } from "@/lib/ai/types";
 import { AGREEMENT_NOT_ENFORCEABLE_MESSAGE } from "@/lib/business-protection";
 import {
+  DUE_OR_OVERDUE_FACT,
+  INCOMPLETE_JOURNEY_FACT,
+  NO_LATER_JOB_FACT,
+  NO_REFERRAL_REQUEST_FACT,
+  NO_REVIEW_REQUEST_FACT,
+  RECORDED_FOLLOW_UP_FACT,
+  RETENTION_ROUTE,
+} from "@/lib/growth/retention/constants";
+import {
   isAttentionTodayQuestion,
   isJobBlockerQuestion,
   isNextWorkQuestion,
@@ -23,6 +32,8 @@ export type CoachContext = {
   knowledgeLaunchFacts?: Record<string, string>;
   /** Bounded Business Protection facts from the selected specialist only. */
   businessProtectionFacts?: Record<string, string>;
+  /** Bounded same-business retention facts from the selected Growth specialist only. */
+  growthFacts?: Record<string, string>;
 };
 
 export const COACH_FACT_KEYS = [
@@ -131,6 +142,12 @@ export const COACH_FACT_KEYS = [
   "protection-missing-date-example",
   "protection-owner-review-example",
   "protection-draft-example",
+  "retention-no-review-request",
+  "retention-no-later-job",
+  "retention-due-or-overdue",
+  "retention-recorded-follow-up",
+  "retention-no-referral-request",
+  "retention-incomplete-journey",
 ] as const;
 
 export type CoachFactKey = (typeof COACH_FACT_KEYS)[number];
@@ -295,6 +312,7 @@ function factList(context: CoachContext): CitedFact[] {
     ...communicationsFactEntries(context.communicationsFacts),
     ...knowledgeLaunchFactEntries(context.knowledgeLaunchFacts),
     ...businessProtectionFactEntries(context.businessProtectionFacts),
+    ...growthRetentionFactEntries(context.growthFacts),
   ];
 }
 
@@ -345,6 +363,42 @@ function communicationsFactEntries(facts?: Record<string, string>): CitedFact[] 
   if (!facts) return [];
   return Object.entries(facts).flatMap(([key, value]) => {
     const meta = COMMUNICATIONS_FACT_LABELS[key];
+    if (!meta) return [];
+    return [{ key, label: meta.label, value, href: meta.href } satisfies CitedFact];
+  });
+}
+
+const GROWTH_RETENTION_FACT_LABELS: Record<string, { label: string; href: string }> = {
+  "retention-no-review-request": {
+    label: "Completed jobs with no same-business review request",
+    href: RETENTION_ROUTE,
+  },
+  "retention-no-later-job": {
+    label: "Past customers with no later job recorded",
+    href: RETENTION_ROUTE,
+  },
+  "retention-due-or-overdue": {
+    label: "Due or overdue recorded follow-up tasks",
+    href: RETENTION_ROUTE,
+  },
+  "retention-recorded-follow-up": {
+    label: "Recorded follow-up status rows",
+    href: RETENTION_ROUTE,
+  },
+  "retention-no-referral-request": {
+    label: "Completed jobs with no same-business referral request",
+    href: RETENTION_ROUTE,
+  },
+  "retention-incomplete-journey": {
+    label: "Incomplete recorded customer journeys",
+    href: RETENTION_ROUTE,
+  },
+};
+
+function growthRetentionFactEntries(facts?: Record<string, string>): CitedFact[] {
+  if (!facts) return [];
+  return Object.entries(facts).flatMap(([key, value]) => {
+    const meta = GROWTH_RETENTION_FACT_LABELS[key];
     if (!meta) return [];
     return [{ key, label: meta.label, value, href: meta.href } satisfies CitedFact];
   });
@@ -587,7 +641,7 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
     keys = ["marketing-ready"];
     stance = "RECOMMENDATION";
     text = `${context.facts.completedJobsReadyForMarketing.count} completed job(s) have marketing-approved photos and no approved content yet. Drafts stay DRAFT until you approve them. Social accounts remain Not Connected unless a real provider is configured.`;
-  } else if (/recover|reactivat|growth/.test(q)) {
+  } else if (/recover|reactivat|growth|retention|repeat customer/.test(q)) {
     stance = "FACT";
     if (context.facts.growthRecoveryOpen == null && context.facts.growthReactivationEligible == null) {
       keys = [];
@@ -601,6 +655,32 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
       );
       const recoveryCount = context.facts.growthRecoveryOpen?.count;
       const reactivationCount = context.facts.growthReactivationEligible?.count;
+      const retention = context.growthFacts ?? {};
+      const retentionNotes = [
+        Number(retention["retention-no-review-request"] ?? 0) > 0
+          ? `${retention["retention-no-review-request"]} recorded completed job(s) match: ${NO_REVIEW_REQUEST_FACT}`
+          : "",
+        Number(retention["retention-no-later-job"] ?? 0) > 0
+          ? `${retention["retention-no-later-job"]} recorded past customer(s) match: ${NO_LATER_JOB_FACT}`
+          : "",
+        Number(retention["retention-due-or-overdue"] ?? 0) > 0
+          ? `${retention["retention-due-or-overdue"]} recorded follow-up task(s) match: ${DUE_OR_OVERDUE_FACT}`
+          : "",
+        Number(retention["retention-recorded-follow-up"] ?? 0) > 0
+          ? `${retention["retention-recorded-follow-up"]} recorded follow-up row(s) are on file. ${RECORDED_FOLLOW_UP_FACT}`
+          : "",
+        Number(retention["retention-no-referral-request"] ?? 0) > 0
+          ? `${retention["retention-no-referral-request"]} recorded completed job(s) match: ${NO_REFERRAL_REQUEST_FACT}`
+          : "",
+        Number(retention["retention-incomplete-journey"] ?? 0) > 0
+          ? `${retention["retention-incomplete-journey"]} recorded incomplete journey(s) match: ${INCOMPLETE_JOURNEY_FACT}`
+          : "",
+      ].filter(Boolean);
+      keys.push(
+        ...Object.keys(retention).filter(
+          (key) => Number(retention[key] ?? 0) > 0 && key in GROWTH_RETENTION_FACT_LABELS,
+        ),
+      );
       text =
         (recoveryCount == null
           ? ""
@@ -608,7 +688,8 @@ export function answerCoachFromFacts(question: string, context: CoachContext): {
         (reactivationCount == null
           ? ""
           : `${reactivationCount} customer(s) are eligible for reactivation. `) +
-        "These counts come from existing Business Health facts. The Coach does not create Growth actions.";
+        (retentionNotes.length > 0 ? `${retentionNotes.join(" ")} ` : "") +
+        "These counts come from existing Business Health facts and the same-business retention center. The Coach does not create Growth actions, invent a contact cadence, or send follow-up.";
     }
   } else if (/launch|knowledge|experience|learned|setup|sop|procedure|defer/.test(q)) {
     stance = "FACT";

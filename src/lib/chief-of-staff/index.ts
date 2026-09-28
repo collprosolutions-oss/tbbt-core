@@ -65,7 +65,22 @@ export {
   projectGrowthContext,
   projectGrowthFromSource,
   resetLastGrowthProjection,
+  runGrowthSpecialist,
 } from "@/lib/chief-of-staff/growth-specialist";
+export {
+  GROWTH_RETENTION_CONTEXT_CAPS,
+  GROWTH_RETENTION_FACT_KEYS,
+  GROWTH_RETENTION_NOT_AUTHORIZED_LIMITATION,
+  RETENTION_CUSTOMER_FOLLOW_UPS_LINK_LABEL,
+  findingsFromRetentionProjection,
+  growthRetentionFactsFromProjection,
+  hasGrowthViewAccess,
+  loadGrowthRetentionCenter,
+  ownerLinksForRetentionCandidate,
+  ownerLinksForRetentionFollowUp,
+  projectRetentionFromWorkspace,
+  requestLocalGrowthFacts,
+} from "@/lib/chief-of-staff/growth-retention";
 export {
   getCommunicationsProjectionLoadCount,
   getCommunicationsSpecialistInterpretationCount,

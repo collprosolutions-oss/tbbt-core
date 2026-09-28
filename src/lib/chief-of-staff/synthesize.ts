@@ -6,6 +6,7 @@ import { answerCoachFromFacts, COACH_FACT_KEYS, type CoachContext } from "@/lib/
 import { filterAuthorizedCitedFactKeys } from "@/lib/ai/service";
 import { sanitizeAiText } from "@/lib/ai/sanitize";
 import type { CitedFact, StructuredAiOutput } from "@/lib/ai/types";
+import { requestLocalGrowthFacts } from "@/lib/chief-of-staff/growth-retention";
 import type { CanonicalRecommendationCatalog } from "@/lib/chief-of-staff/recommendations";
 import type {
   ConflictResolution,
@@ -30,19 +31,30 @@ function oneVoice(text: string) {
 
 function boundedRecordedFindings(usable: SpecialistResult[]) {
   const seen = new Set<string>();
-  const items: Array<{ key: string; title: string; summary: string }> = [];
-  for (const row of usable) {
-    for (const finding of row.findings) {
-      const key = finding.key.trim();
-      const title = finding.title.trim();
-      const summary = finding.summary.trim();
-      if (!key || !title || !summary) continue;
-      if (seen.has(key) || seen.has(summary)) continue;
-      seen.add(key);
-      seen.add(summary);
-      items.push({ key, title, summary });
-      if (items.length >= OWNER_FINDING_CAP) return items;
-    }
+  const items: Array<{
+    key: string;
+    title: string;
+    summary: string;
+    ownerLinks?: Array<{ recordType: string; id: string; href: string; label: string }>;
+  }> = [];
+  const findings = usable.flatMap((row) => row.findings);
+  const linked = findings.filter((finding) => finding.ownerLinks && finding.ownerLinks.length > 0);
+  const rest = findings.filter((finding) => !finding.ownerLinks || finding.ownerLinks.length === 0);
+  for (const finding of [...linked, ...rest]) {
+    const key = finding.key.trim();
+    const title = finding.title.trim();
+    const summary = finding.summary.trim();
+    if (!key || !title || !summary) continue;
+    if (seen.has(key) || seen.has(summary)) continue;
+    seen.add(key);
+    seen.add(summary);
+    items.push({
+      key,
+      title,
+      summary,
+      ...(finding.ownerLinks && finding.ownerLinks.length > 0 ? { ownerLinks: finding.ownerLinks } : {}),
+    });
+    if (items.length >= OWNER_FINDING_CAP) return items;
   }
   return items;
 }
@@ -55,7 +67,13 @@ export function synthesizeCoachAnswer(input: {
   conflicts: ConflictResolution;
   plannerSkipped?: SkippedSpecialist[];
 }): CosSynthesis {
-  const grounded = answerCoachFromFacts(input.question, input.coachContext);
+  const coachContext = {
+    ...input.coachContext,
+    growthFacts: requestLocalGrowthFacts(
+      input.specialistResults.find((row) => row.specialistId === "GROWTH"),
+    ),
+  };
+  const grounded = answerCoachFromFacts(input.question, coachContext);
   const usable = input.specialistResults.filter((row) => row.status === "OK");
   const failed = input.specialistResults.filter((row) => row.status === "FAILED");
   const skipped = input.specialistResults.filter((row) => row.status === "SKIPPED");

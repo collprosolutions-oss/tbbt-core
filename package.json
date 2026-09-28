@@ -114,6 +114,7 @@
     "test:controlled-ai-actions": "node --experimental-strip-types scripts/check-controlled-actions.mjs",
     "test:financial-specialist": "node --experimental-strip-types scripts/check-financial-specialist.mjs",
     "test:growth-specialist": "node --experimental-strip-types scripts/check-growth-specialist.mjs",
+    "test:growth-specialist-retention": "node --experimental-strip-types scripts/check-growth-specialist-retention.mjs",
     "test:materials-specialist": "node --experimental-strip-types scripts/check-materials-specialist.mjs",
     "test:communications-specialist": "node --experimental-strip-types scripts/check-communications-specialist.mjs",
     "test:knowledge-launch-specialist": "node --experimental-strip-types scripts/check-knowledge-launch-specialist.mjs",
