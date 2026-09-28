@@ -30,7 +30,12 @@ function oneVoice(text: string) {
 
 function boundedRecordedFindings(usable: SpecialistResult[]) {
   const seen = new Set<string>();
-  const items: Array<{ key: string; title: string; summary: string }> = [];
+  const items: Array<{
+    key: string;
+    title: string;
+    summary: string;
+    ownerLinks?: Array<{ recordType: string; id: string; href: string; label: string }>;
+  }> = [];
   for (const row of usable) {
     for (const finding of row.findings) {
       const key = finding.key.trim();
@@ -40,7 +45,12 @@ function boundedRecordedFindings(usable: SpecialistResult[]) {
       if (seen.has(key) || seen.has(summary)) continue;
       seen.add(key);
       seen.add(summary);
-      items.push({ key, title, summary });
+      items.push({
+        key,
+        title,
+        summary,
+        ...(finding.ownerLinks && finding.ownerLinks.length > 0 ? { ownerLinks: finding.ownerLinks } : {}),
+      });
       if (items.length >= OWNER_FINDING_CAP) return items;
     }
   }

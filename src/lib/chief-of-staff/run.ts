@@ -37,9 +37,11 @@ import {
   setInjectedGrowthLoadFailure,
 } from "@/lib/chief-of-staff/growth-snapshot";
 import {
-  interpretGrowthSpecialist,
+  getLastGrowthProjection,
   resetLastGrowthProjection,
+  runGrowthSpecialist,
 } from "@/lib/chief-of-staff/growth-specialist";
+import { growthRetentionFactsFromProjection } from "@/lib/chief-of-staff/growth-retention";
 import {
   resetCommunicationsSpecialistCounters,
   setInjectedCommunicationsLoadFailure,
@@ -530,12 +532,15 @@ export async function runChiefOfStaffCoach(
         }
         if (specialistId === "GROWTH") {
           specialistResults.push(
-            interpretGrowthSpecialist(
+            await runGrowthSpecialist({
+              db,
+              access,
               catalog,
               question,
-              input.entityHints,
-              input.test?.denyProductCapabilities,
-            ),
+              entityHints: input.entityHints,
+              denyProductCapabilities: input.test?.denyProductCapabilities,
+              denyRoleCapabilities: input.test?.denyRoleCapabilities,
+            }),
           );
           continue;
         }
@@ -645,6 +650,7 @@ export async function runChiefOfStaffCoach(
     const communicationsProjection = getLastCommunicationsProjection();
     const knowledgeLaunchProjection = getLastKnowledgeLaunchProjection();
     const businessProtectionProjection = getLastBusinessProtectionProjection();
+    const growthProjection = getLastGrowthProjection();
     synthesis = synthesizeCoachAnswer({
       question,
       catalog,
@@ -669,6 +675,9 @@ export async function runChiefOfStaffCoach(
           : undefined,
         businessProtectionFacts: businessProtectionProjection
           ? projectBusinessProtectionFacts(businessProtectionProjection).facts
+          : undefined,
+        growthFacts: growthProjection?.retention
+          ? growthRetentionFactsFromProjection(growthProjection.retention)
           : undefined,
       },
     });

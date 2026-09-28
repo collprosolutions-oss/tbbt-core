@@ -82,7 +82,7 @@ export const SPECIALIST_REGISTRY: readonly SpecialistRegistryEntry[] = [
   {
     id: "GROWTH",
     purpose:
-      "Explain recorded lead/revenue funnel, recovery, reactivation, campaign/source performance, and existing Growth recommendations. Read/explain only. Not a second Growth engine.",
+      "Explain recorded lead/revenue funnel, recovery, reactivation, campaign/source performance, same-business retention facts, and existing Growth recommendations. Read/explain only. Not a second Growth engine.",
     enabled: true,
     requiredRoleCapability: CAPABILITIES.VIEW_REPORTS,
     requiredProductCapability: "MARKETING_TOOLS",
@@ -93,10 +93,14 @@ export const SPECIALIST_REGISTRY: readonly SpecialistRegistryEntry[] = [
       "send-communications",
       "create-growth-action",
       "create-campaign",
+      "create-follow-up",
       "modify-customers",
       "change-consent",
       "auto-reactivate",
       "auto-request-reviews",
+      "invent-churn-score",
+      "invent-buying-intent",
+      "invent-contact-cadence",
       "write-recommendations",
       "propose-ai-action",
       "authorize",

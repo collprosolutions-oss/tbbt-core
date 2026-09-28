@@ -2,15 +2,30 @@
  * Deep GROWTH specialist. Same specialist identity as the PR1 placeholder.
  *
  * Reuses the GrowthSource already loaded for the canonical catalog.
+ * When selected, also reuses the Retention Recovery Center loader for
+ * same-business bounded retention facts and OWNER record links.
  * Does not send messages, start campaigns, create GrowthActionRequest
- * rows, change consent, or write recommendations.
+ * rows, change consent, record follow-up tasks, or write recommendations.
  */
+import type { Prisma, PrismaClient } from "@prisma/client";
+import type { BusinessAccess } from "@/lib/access";
+import type { Capability } from "@/lib/authorization";
 import type { CanonicalRecommendationCatalog } from "@/lib/chief-of-staff/recommendations";
 import {
   EMPTY_GROWTH_SNAPSHOT,
   recordGrowthSpecialistInterpretation,
   type GrowthTurnSnapshot,
 } from "@/lib/chief-of-staff/growth-snapshot";
+import {
+  GROWTH_RETENTION_CONTEXT_CAPS,
+  GROWTH_RETENTION_NOT_AUTHORIZED_LIMITATION,
+  appendRetentionFactKeys,
+  attachRetentionFindings,
+  hasGrowthViewAccess,
+  loadGrowthRetentionCenter,
+  projectRetentionFromWorkspace,
+  type GrowthRetentionProjection,
+} from "@/lib/chief-of-staff/growth-retention";
 import type {
   CosEntityHints,
   SpecialistContext,
@@ -53,7 +68,7 @@ export const GROWTH_CONTEXT_CAPS = {
   sources: 5,
   localAreas: 4,
   entityIds: 4,
-  findings: 16,
+  findings: 24,
   facts: 24,
 } as const;
 
@@ -171,6 +186,7 @@ export type GrowthProjection = {
     areas: Array<{ label: string; requestCount: number; contentOpportunity: boolean }>;
   };
   snapshotReused: true;
+  retention?: GrowthRetentionProjection;
 };
 
 let lastGrowthProjection: GrowthProjection | null = null;
@@ -504,5 +520,62 @@ export function interpretGrowthSpecialist(
     findings,
     factKeys: context.factKeys,
     recommendationKeys: context.recommendationKeys,
+  };
+}
+
+type GrowthSpecialistInput = {
+  db: PrismaClient | Prisma.TransactionClient;
+  access: BusinessAccess;
+  catalog: CanonicalRecommendationCatalog;
+  question: string;
+  entityHints?: CosEntityHints;
+  denyProductCapabilities?: ProductCapabilityCode[];
+  denyRoleCapabilities?: Capability[];
+  now?: Date;
+};
+
+export async function runGrowthSpecialist(input: GrowthSpecialistInput): Promise<SpecialistResult> {
+  if (!hasGrowthViewAccess(input.access, input.denyRoleCapabilities)) {
+    lastGrowthProjection = null;
+    recordGrowthSpecialistInterpretation();
+    return {
+      specialistId: "GROWTH",
+      status: "SKIPPED",
+      skipReason: "NOT_AUTHORIZED",
+      findings: [],
+      factKeys: [],
+      recommendationKeys: [],
+      limitation: GROWTH_RETENTION_NOT_AUTHORIZED_LIMITATION,
+    };
+  }
+
+  const base = interpretGrowthSpecialist(
+    input.catalog,
+    input.question,
+    input.entityHints,
+    input.denyProductCapabilities,
+  );
+  if (base.status !== "OK") return base;
+
+  const workspace = await loadGrowthRetentionCenter(input.db, input.access, {
+    customerId: input.entityHints?.customerId,
+    now: input.now,
+  });
+  const retention = projectRetentionFromWorkspace(workspace);
+  if (lastGrowthProjection) {
+    lastGrowthProjection.retention = retention;
+  }
+
+  const factKeys = [...base.factKeys];
+  appendRetentionFactKeys(factKeys, {}, retention, GROWTH_CONTEXT_CAPS.facts);
+  const findings = attachRetentionFindings(base.findings, factKeys, retention).slice(
+    0,
+    GROWTH_CONTEXT_CAPS.findings + GROWTH_RETENTION_CONTEXT_CAPS.findings,
+  );
+
+  return {
+    ...base,
+    findings,
+    factKeys,
   };
 }
