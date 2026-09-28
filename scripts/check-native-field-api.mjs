@@ -185,6 +185,7 @@ const todayRouteSrc = readRepo("src/app/api/native/v1/today/route.ts");
 const jobRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/route.ts");
 const completeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/complete/route.ts");
 const startRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/start/route.ts");
+const visitRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/visit/route.ts");
 const photoAuthorizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/authorize/route.ts");
 const photoFinalizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/finalize/route.ts");
 const photoAbortRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/abort/route.ts");
@@ -199,6 +200,7 @@ check(
     jobRouteSrc.includes("readBearerToken") &&
     completeRouteSrc.includes("readBearerToken") &&
     startRouteSrc.includes("readBearerToken") &&
+    visitRouteSrc.includes("readBearerToken") &&
     photoAuthorizeRouteSrc.includes("readBearerToken") &&
     photoFinalizeRouteSrc.includes("readBearerToken") &&
     photoAbortRouteSrc.includes("readBearerToken") &&
@@ -208,6 +210,7 @@ check(
     !jobRouteSrc.includes("cookies(") &&
     !completeRouteSrc.includes("cookies(") &&
     !startRouteSrc.includes("cookies(") &&
+    !visitRouteSrc.includes("cookies(") &&
     !photoAuthorizeRouteSrc.includes("cookies(") &&
     !photoFinalizeRouteSrc.includes("cookies(") &&
     !photoAbortRouteSrc.includes("cookies(") &&
@@ -331,6 +334,8 @@ check(
     nativeAppSrc.includes("/start") &&
     nativeAppSrc.includes("Complete job") &&
     nativeAppSrc.includes("Start job") &&
+    nativeAppSrc.includes("Record visit completed") &&
+    nativeAppSrc.includes("/visit") &&
     nativeAppSrc.includes("runningTime") &&
     nativeAppSrc.includes("loadNativeJob") &&
     nativeAppSrc.includes("truncatedNotice") &&
@@ -865,6 +870,10 @@ try {
       detail?.startAction.reason === null &&
       detail?.runningTime.running === false &&
       detail?.runningTime.startedAt === null,
+  );
+  check(
+    "Handyman assigned job does not advertise a Cleaning visit outcome",
+    detail?.visit == null,
   );
 
   console.log("\nCOMPLETE — assigned-worker write, isolation, duplicates, rollback");

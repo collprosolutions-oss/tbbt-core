@@ -6,6 +6,7 @@ import type {
   NativeSessionPayload,
   NativeTodayPayload,
   NativeViewer,
+  NativeVisitOutcomeStatus,
   NativeWorkspace,
 } from "./types";
 
@@ -160,6 +161,31 @@ export async function completeNativeJob(
     return { error: typeof body.error === "string" ? body.error : "That job could not be completed." };
   }
   return body as unknown as { job: NativeJobDetail; alreadyCompleted: boolean };
+}
+
+export async function recordNativeJobVisit(
+  token: string,
+  jobId: string,
+  outcomeStatus: NativeVisitOutcomeStatus,
+): Promise<{ job: NativeJobDetail; alreadyRecorded: boolean } | NativeApiError> {
+  const response = await fetch(
+    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/visit`),
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ outcomeStatus }),
+    },
+  );
+  const body = await parseJson(response);
+  if (!response.ok) {
+    return {
+      error: typeof body.error === "string" ? body.error : "That visit outcome could not be recorded.",
+    };
+  }
+  return body as unknown as { job: NativeJobDetail; alreadyRecorded: boolean };
 }
 
 export async function authorizeNativeJobPhoto(

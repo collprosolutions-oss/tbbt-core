@@ -59,6 +59,22 @@ export type NativeJobPhotoUploadAction = {
   count: number;
 };
 
+export type NativeJobVisitAction = {
+  available: boolean;
+  reason: string | null;
+};
+
+export type NativeJobVisit = {
+  eligible: true;
+  outcomeStatus: string;
+  outcomeLabel: string;
+  cadenceLabel: string;
+  recordCompleted: NativeJobVisitAction;
+  recordReclean: NativeJobVisitAction;
+};
+
+export type NativeVisitOutcomeStatus = "VISIT_COMPLETED" | "RE_CLEAN_REQUESTED";
+
 export type NativeJobPhotos = {
   items: NativeJobPhoto[];
   count: number;
@@ -84,6 +100,7 @@ export type NativeJobDetail = NativeJobSummary & {
   completeAction: NativeJobCompleteAction;
   runningTime: NativeJobRunningTime;
   photos: NativeJobPhotos;
+  visit: NativeJobVisit | null;
 };
 
 export type NativeJobPhotoAuthorizePayload = {
