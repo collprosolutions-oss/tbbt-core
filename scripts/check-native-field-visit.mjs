@@ -323,6 +323,18 @@ try {
       legacyExempt: true,
     },
   });
+  const endedTrial = new Date(Date.now() - 60_000);
+  await prisma.businessSaasSubscription.create({
+    data: {
+      businessId: blockedBusiness.id,
+      status: "canceled",
+      planCode: "FOUNDER",
+      legacyExempt: false,
+      trialStartedAt: new Date(endedTrial.getTime() - 14 * 24 * 60 * 60 * 1000),
+      trialEndsAt: endedTrial,
+      founderEligibilityEndedAt: endedTrial,
+    },
+  });
 
   const ownerA = makeOwnerAccess(businessA.id, ownerMem.id, ownerUser.id);
 
