@@ -69,7 +69,7 @@ const actionUiSrc = readSrc("src/components/marketing/studio-approval-actions.ts
 const workspaceSrc = readSrc("src/components/marketing/marketing-workspace.tsx");
 
 const approveFnSrc = opsSrc.slice(
-  opsSrc.indexOf("export async function approveMarketingStudioPackage"),
+  opsSrc.indexOf("async function loadOwnedStudioPackageForReview"),
   opsSrc.indexOf("export async function returnMarketingStudioPackage"),
 );
 const returnFnSrc = opsSrc.slice(
@@ -285,8 +285,9 @@ try {
   );
   check(
     "Domain still uses the existing three studio statuses",
-    domainSrc.includes('"DRAFT", "READY_FOR_REVIEW", "APPROVED"') &&
-      !domainSrc.includes("PUBLISHED"),
+    domainSrc.includes('MARKETING_CONTENT_STATUSES = ["DRAFT", "READY_FOR_REVIEW", "APPROVED"]') &&
+      !domainSrc.includes('status: "PUBLISHED"') &&
+      domainSrc.includes("will not mark this PUBLISHED"),
   );
 
   const businessA = await prisma.business.create({
