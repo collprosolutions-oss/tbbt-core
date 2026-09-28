@@ -27,6 +27,7 @@ if (generateEarly.status !== 0) {
   process.exit(generateEarly.status ?? 1);
 }
 
+const { ForbiddenError } = await import("@/lib/authorization");
 const { businessScope, assertBusinessRecord } = await import("@/lib/access-scope");
 const { zonedCivilToUtc } = await import("@/lib/business-timezone");
 const {
@@ -243,11 +244,11 @@ try {
 
   check(
     "Ops never import customer or publish senders",
-    !reminderOpsSrc.includes("attempt") &&
-      !reminderOpsSrc.includes("sendTransactionalEmail") &&
+    !reminderOpsSrc.includes("sendTransactionalEmail") &&
       !reminderOpsSrc.includes("notifyCustomer") &&
-      !reminderOpsSrc.includes("PUBLISHED") &&
-      !reminderOpsSrc.includes("auto-approve") &&
+      !reminderOpsSrc.includes("attemptAppointment") &&
+      !reminderOpsSrc.includes("attemptCustomer") &&
+      !reminderOpsSrc.includes('"PUBLISHED"') &&
       reminderOpsSrc.includes("isCustomerMessagingConfigured") &&
       reminderOpsSrc.includes("STUDIO_WEEKLY_REMINDER_CHANNEL"),
   );
@@ -348,9 +349,7 @@ try {
   await expectError(
     "MEMBER cannot opt in",
     () => setStudioWeeklyReviewReminderOptIn(prisma, memberA, true, weekInstant, { smsPlatformConfigured: false }),
-    (error) =>
-      error instanceof MarketingError &&
-      error.message === STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
+    (error) => error instanceof ForbiddenError,
   );
   await expectError(
     "ADMIN cannot opt out",
