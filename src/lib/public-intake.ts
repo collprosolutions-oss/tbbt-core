@@ -20,6 +20,7 @@ import {
   appendIntakeIdentityReview,
   decideCustomerMatch,
   normalizeEmail,
+  normalizePhone,
   type CustomerIdentityRecord,
   type IntakeIdentityReview,
 } from "@/lib/customer-identity";
@@ -243,8 +244,20 @@ export type PublicIntakeTx = {
   customer: {
     findFirst: (args: {
       where: { id: string; businessId: string };
-      select: { id: true; name: true };
-    }) => Promise<{ id: string; name: string } | null>;
+      select: {
+        id: true;
+        name: true;
+        phone?: true;
+        smsConsentStatus?: true;
+        smsConsentUpdatedAt?: true;
+      };
+    }) => Promise<{
+      id: string;
+      name: string;
+      phone?: string | null;
+      smsConsentStatus?: string | null;
+      smsConsentUpdatedAt?: Date | null;
+    } | null>;
     findMany: (args: {
       where: { businessId: string };
       select: { id: true; name: true; email: true; phone: true };
@@ -824,12 +837,27 @@ async function createPublicServiceRequestInner(
       // submitted form disagrees. Conflicting identifiers create a new
       // customer and flag the request instead of merging anyone.
       // Explicit public SMS opt-in may grant consent without rewriting
-      // identity fields.
+      // identity fields. The existingCustomer path rechecks the stored
+      // phone inside this transaction and never grants from a different
+      // submitted number.
       if (reusedExistingCustomer && smsConsentGrant) {
-        await tx.customer.update({
-          where: { id: customer.id },
-          data: smsConsentGrant,
-        });
+        if (boundCustomerId) {
+          const stored = await tx.customer.findFirst({
+            where: { id: customer.id, businessId: business.id },
+            select: { phone: true },
+          });
+          if (stored && normalizePhone(stored.phone) === normalizePhone(phone)) {
+            await tx.customer.update({
+              where: { id: customer.id },
+              data: smsConsentGrant,
+            });
+          }
+        } else {
+          await tx.customer.update({
+            where: { id: customer.id },
+            data: smsConsentGrant,
+          });
+        }
       }
 
       let propertyId: string | null = null;

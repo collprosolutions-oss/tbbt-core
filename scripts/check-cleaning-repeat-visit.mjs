@@ -32,6 +32,7 @@ if (generateEarly.status !== 0) {
 
 const { businessScope, assertBusinessRecord } = await import("@/lib/access-scope");
 const { ensurePrimaryBusinessTrade } = await import("@/lib/business-trades");
+const { normalizePhone } = await import("@/lib/customer-identity");
 const { createPublicServiceRequest } = await import("@/lib/public-intake");
 const { PUBLIC_INTAKE_REFRESH_FORM } = await import("@/lib/intake-snapshot");
 const { INTAKE_CONDITION_STATUS_DRAFT } = await import("@/lib/intake-conditionals");
@@ -125,6 +126,7 @@ const portalSrc = read("src/app/p/[token]/page.tsx");
 const formSrc = read("src/components/public/request-flow.tsx");
 const cardSrc = read("src/components/portal/request-another-visit-card.tsx");
 const requestPageSrc = read("src/app/(app)/requests/[requestId]/page.tsx");
+const intakeSrc = read("src/lib/public-intake.ts");
 const schemaSrc = read("prisma/schema.prisma");
 const migrationSrc = read(
   "prisma/migrations/20260928170000_service_request_repeat_visit_source/migration.sql",
@@ -260,6 +262,13 @@ check(
 check(
   "Unavailable copy does not leak private job data",
   CLEANING_REPEAT_VISIT_UNAVAILABLE_MESSAGE === "This project link is not available.",
+);
+check(
+  "existingCustomer path rechecks normalized phones inside the transaction before SMS consent",
+  intakeSrc.includes("boundCustomerId") &&
+    intakeSrc.includes("normalizePhone(stored.phone) === normalizePhone(phone)") &&
+    intakeSrc.includes("select: { phone: true }") &&
+    !intakeSrc.includes("data: { phone"),
 );
 
 try {
@@ -424,6 +433,7 @@ try {
   const alphaTwo = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
   const alphaCatalogIsolation = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
   const alphaMissingSnap = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
+  const alphaSms = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
   const alphaNoCustomer = await createCleaningJob(cleanA.id, { includeCustomer: false });
   const beta = await createCleaningJob(cleanB.id, { catalogItemId: catalogB.id });
   const handy = await createCleaningJob(handyC.id, { tradeCode: "HANDYMAN" });
@@ -680,6 +690,59 @@ try {
         Boolean(missingSnap.error)),
   );
 
+  const consentFrozenAt = new Date("2026-01-15T12:00:00.000Z");
+  const storedSmsPhone = "5551110000";
+  const submittedSmsPhone = "5559998888";
+  await prisma.customer.update({
+    where: { id: alphaSms.customer.id },
+    data: {
+      phone: storedSmsPhone,
+      smsConsentStatus: "UNKNOWN",
+      smsConsentUpdatedAt: consentFrozenAt,
+    },
+  });
+  const smsMismatch = await createCleaningCustomerRepeatVisitRequest(prisma, {
+    token: alphaSms.job.projectToken,
+    slug: cleanA.slug,
+    name: alphaSms.customer.name,
+    email: alphaSms.customer.email,
+    phone: submittedSmsPhone,
+    address: "100 Pine St",
+    streetAddress: "100 Pine St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Different phone with SMS opt-in checked",
+    catalogItemIds: [catalogA.id],
+    includeOther: false,
+    otherDescription: "",
+    tenantIntakeSnapshotId: snapV1.id,
+    intakeAnswers: cleaningAnswers(),
+    submissionId: `rv-sms-${suffix}`,
+    smsOptIn: true,
+  });
+  const smsCustomer = await prisma.customer.findFirst({
+    where: { id: alphaSms.customer.id, businessId: cleanA.id },
+    select: { id: true, phone: true, smsConsentStatus: true, smsConsentUpdatedAt: true },
+  });
+  const smsRequest = smsMismatch.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: smsMismatch.requestId },
+        select: { id: true, customerId: true, status: true, repeatVisitSourceJobId: true },
+      })
+    : null;
+  check(
+    "Different submitted phone with SMS opt-in checked does not grant consent or rewrite the stored phone",
+    normalizePhone(storedSmsPhone) !== normalizePhone(submittedSmsPhone) &&
+      smsMismatch.ok === true &&
+      smsRequest?.status === "OPEN" &&
+      smsRequest?.customerId === alphaSms.customer.id &&
+      smsRequest?.repeatVisitSourceJobId === alphaSms.job.id &&
+      smsCustomer?.phone === storedSmsPhone &&
+      smsCustomer?.smsConsentStatus === "UNKNOWN" &&
+      smsCustomer?.smsConsentUpdatedAt?.toISOString() === consentFrozenAt.toISOString(),
+  );
+
   const boundCustomer = await prisma.serviceRequest.findMany({
     where: { businessId: cleanA.id, repeatVisitSourceJobId: { not: null } },
     select: { customerId: true, repeatVisitSourceJobId: true },
@@ -687,7 +750,7 @@ try {
   check(
     "Bound requests stay on the token customer and never create a second customer",
     boundCustomer.every((row) =>
-      [alpha.customer.id, alphaTwo.customer.id].includes(row.customerId),
+      [alpha.customer.id, alphaTwo.customer.id, alphaSms.customer.id].includes(row.customerId),
     ),
   );
 } catch (error) {
