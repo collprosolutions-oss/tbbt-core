@@ -2354,6 +2354,9 @@ model MarketingStudioWeeklyReminder {
   /// NOT_CONNECTED | CONNECTED_UNUSED | NOT_SENT | ACCEPTED | SENT | FAILED
   smsStatus     String
   smsLabel      String   @default("")
+  /// Committed before the provider is called. A later failed status
+  /// update cannot unclaim this; retries must not send again.
+  smsSendClaimedAt DateTime?
   createdAt     DateTime @default(now())
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -2660,9 +2663,17 @@ model BusinessSettings {
   /// OWNER opt-in for one weekly in-app reminder when studio packages
   /// await review. Default off. Absence of a settings row also means off.
   /// Optional OWNER SMS uses the communications provider only when that
-  /// provider and the dedicated tenant number actually work. Never sends
-  /// customer SMS/email or auto-approves/publishes/posts.
+  /// provider, the dedicated tenant From number, and an explicit OWNER
+  /// SMS destination opt-in actually work. Never uses Business.publicPhone.
+  /// Never sends customer SMS/email or auto-approves/publishes/posts.
   studioWeeklyReviewReminderOptedIn Boolean @default(false)
+  /// OWNER-controlled SMS destination for the weekly studio reminder.
+  /// Normalized digits. Null/blank means in-app only — no SMS.
+  /// Never Business.publicPhone and never a customer phone.
+  studioWeeklyReminderOwnerSmsTo String?
+  /// Separate opt-in for sending the weekly reminder to
+  /// studioWeeklyReminderOwnerSmsTo. Default off.
+  studioWeeklyReminderOwnerSmsOptedIn Boolean @default(false)
   reviewGoogleUrl String?
   reviewFacebookUrl String?
   reviewOtherUrl String?

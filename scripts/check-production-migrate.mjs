@@ -1302,6 +1302,32 @@ check(
     !studioWeeklyReminderOps.includes("ADD COLUMN"),
 );
 
+const ownerStudioSmsDestinationMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260928160000_owner_studio_reminder_sms_destination/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "OWNER studio reminder SMS destination migration is additive and after the weekly reminder",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(ownerStudioSmsDestinationMigration) &&
+    ownerStudioSmsDestinationMigration.includes('ADD COLUMN IF NOT EXISTS "studioWeeklyReminderOwnerSmsTo"') &&
+    ownerStudioSmsDestinationMigration.includes('ADD COLUMN IF NOT EXISTS "studioWeeklyReminderOwnerSmsOptedIn"') &&
+    ownerStudioSmsDestinationMigration.includes('ADD COLUMN IF NOT EXISTS "smsSendClaimedAt"') &&
+    ownerStudioSmsDestinationMigration.includes("20260928150000_marketing_studio_weekly_reminder") &&
+    localNames.includes("20260928160000_owner_studio_reminder_sms_destination") &&
+    localNames.indexOf("20260928150000_marketing_studio_weekly_reminder") <
+      localNames.indexOf("20260928160000_owner_studio_reminder_sms_destination"),
+);
+check(
+  "Owner weekly reminder SMS is not sent inside a rollbackable reminder transaction",
+  studioWeeklyReminderOps.includes("deliverOwnerStudioWeeklyReminderSms") &&
+    studioWeeklyReminderOps.includes("smsSendClaimedAt") &&
+    !studioWeeklyReminderOps.includes("publicPhone") &&
+    !/withReminderLock\([\s\S]*sendOwnerSms/.test(studioWeeklyReminderOps),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

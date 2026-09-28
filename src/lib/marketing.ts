@@ -197,6 +197,10 @@ export const STUDIO_WEEKLY_REMINDER_SMS_FAILED = "Owner SMS failed";
 export const STUDIO_WEEKLY_REMINDER_SMS_NOT_SENT = "Owner SMS not sent";
 export const STUDIO_WEEKLY_REMINDER_SMS_NO_DESTINATION =
   "Owner SMS destination is not on file";
+export const STUDIO_WEEKLY_REMINDER_SMS_NOT_OPTED_IN =
+  "Owner SMS is off for the OWNER destination";
+export const STUDIO_WEEKLY_REMINDER_SMS_OPTED_OUT =
+  "Owner SMS skipped because the OWNER opted out";
 export const STUDIO_WEEKLY_REMINDER_SMS_UNCONFIRMED =
   "Provider acceptance is not a delivery confirmation. TBBT has not run a live provider test on this path.";
 
@@ -207,16 +211,28 @@ export const STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE =
   "Turning weekly review reminders on or off requires the OWNER role.";
 
 export const STUDIO_WEEKLY_REMINDER_IN_APP_MESSAGE =
-  "This reminder stays in Marketing Studio for the OWNER. Optional owner SMS is attempted only when the communications provider and this business's dedicated number actually work. TBBT will not send customer SMS, auto-approve, publish, or post.";
+  "This reminder stays in Marketing Studio for the OWNER. Optional owner SMS uses only an OWNER-controlled destination the OWNER opted in, plus the communications provider and this business's dedicated number. The public company phone is never used. TBBT will not send customer SMS, auto-approve, publish, or post.";
 
 export const STUDIO_WEEKLY_REMINDER_OPTED_IN_MESSAGE =
-  "Weekly review reminders are on. You will get one in-app reminder each business week while packages await review. Owner SMS is attempted only when the provider and dedicated tenant number actually work.";
+  "Weekly review reminders are on. You will get one in-app reminder each business week while packages await review. Owner SMS is attempted only when an OWNER destination is opted in and the provider and dedicated tenant number actually work.";
 
 export const STUDIO_WEEKLY_REMINDER_OPTED_OUT_MESSAGE =
   "Weekly review reminders are off. TBBT will not create another reminder until an OWNER opts in again.";
 
 export const STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE =
   "Weekly review reminders are unavailable until this workspace's schema is migrated. TBBT will not invent a reminder or change the database from this page.";
+
+export const STUDIO_WEEKLY_REMINDER_OWNER_SMS_OPT_IN_MESSAGE =
+  "Optional OWNER SMS goes only to this OWNER-controlled number after a separate opt-in. The public company phone is never used.";
+
+export const STUDIO_WEEKLY_REMINDER_OWNER_SMS_SAVED_MESSAGE =
+  "OWNER SMS destination saved. TBBT will not use the public company phone.";
+
+export const STUDIO_WEEKLY_REMINDER_OWNER_SMS_INVALID_MESSAGE =
+  "Enter a usable OWNER SMS number before opting that number in.";
+
+export const STUDIO_WEEKLY_REMINDER_OWNER_SMS_OWNER_ONLY_MESSAGE =
+  "Setting the OWNER SMS destination requires the OWNER role.";
 
 export const PHOTO_PERMISSION_REVOKED_MESSAGE =
   "A selected job photo no longer has marketing permission. Approval and export are blocked until only approved photos remain.";
@@ -488,11 +504,9 @@ export function studioWeeklyReminderSmsBody(awaitingCount: number): string {
 }
 
 export function resolveOwnerStudioReminderSmsTo(input: {
-  publicPhone?: string | null;
-  override?: string | null;
+  ownerSmsTo?: string | null;
 }): string | null {
-  const raw = input.override !== undefined ? input.override : input.publicPhone;
-  const digits = normalizePhone(raw);
+  const digits = normalizePhone(input.ownerSmsTo);
   return isUsableNormalizedPhone(digits) ? digits : null;
 }
 

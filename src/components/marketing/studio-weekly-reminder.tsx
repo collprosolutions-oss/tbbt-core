@@ -2,15 +2,19 @@
 
 import { useActionState } from "react";
 import {
+  setStudioWeeklyReminderOwnerSmsAction,
   setStudioWeeklyReviewReminderOptInAction,
   type MarketingActionState,
 } from "@/app/actions/marketing";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   STUDIO_WEEKLY_REMINDER_IN_APP_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OPT_IN_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_OWNER_SMS_OPT_IN_MESSAGE,
   STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED,
   STUDIO_WEEKLY_REMINDER_SMS_UNCONFIRMED,
   STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
@@ -29,6 +33,10 @@ export function StudioWeeklyReminderControls({
 }) {
   const [state, action, pending] = useActionState(
     setStudioWeeklyReviewReminderOptInAction,
+    initial,
+  );
+  const [smsState, smsAction, smsPending] = useActionState(
+    setStudioWeeklyReminderOwnerSmsAction,
     initial,
   );
   const canManage = canManageStudioWeeklyReminder(viewerRole);
@@ -82,6 +90,36 @@ export function StudioWeeklyReminderControls({
       )}
       {state.error ? <p className="text-xs text-destructive">{state.error}</p> : null}
       {state.message ? <p className="text-xs text-muted-foreground">{state.message}</p> : null}
+
+      <p className="text-xs text-muted-foreground">{STUDIO_WEEKLY_REMINDER_OWNER_SMS_OPT_IN_MESSAGE}</p>
+      {canManage ? (
+        <form action={smsAction} className="space-y-2">
+          <div className="space-y-1">
+            <Label htmlFor="owner-studio-sms-to">OWNER SMS number</Label>
+            <Input
+              id="owner-studio-sms-to"
+              name="ownerSmsTo"
+              type="tel"
+              defaultValue={reminder.ownerSmsTo ?? ""}
+              placeholder="OWNER-only number"
+            />
+          </div>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              name="ownerSmsOptedIn"
+              value="true"
+              defaultChecked={reminder.ownerSmsOptedIn}
+            />
+            Send the weekly reminder to this OWNER number
+          </label>
+          <Button type="submit" size="sm" variant="outline" disabled={smsPending}>
+            {smsPending ? "Saving…" : "Save OWNER SMS destination"}
+          </Button>
+        </form>
+      ) : null}
+      {smsState.error ? <p className="text-xs text-destructive">{smsState.error}</p> : null}
+      {smsState.message ? <p className="text-xs text-muted-foreground">{smsState.message}</p> : null}
     </div>
   );
 }
