@@ -1,6 +1,10 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { customerFollowUpDueScanWhere } from "@/lib/customer-follow-up-origin";
+import {
+  dispatchStudioWeeklyReviewReminder,
+  missingStudioWeeklyReminderSchema,
+} from "@/lib/marketing-studio-reminder";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -117,5 +121,11 @@ export async function scanScheduledBusinessEvents(db: Db, businessId: string) {
       payload: { customerId: row.customerId, jobId: row.jobId, followUpId: row.id },
       idempotencyKey: `CUSTOMER_FOLLOW_UP_DUE:${row.id}`,
     });
+  }
+
+  try {
+    await dispatchStudioWeeklyReviewReminder(db, businessId);
+  } catch (error) {
+    if (!missingStudioWeeklyReminderSchema(error)) throw error;
   }
 }

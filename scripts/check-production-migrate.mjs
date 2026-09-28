@@ -1239,6 +1239,39 @@ check(
       localNames.indexOf("20260928145000_job_corrective_clean_source_unique"),
 );
 
+const studioWeeklyReminderMigration = readFileSync(
+  new URL("../prisma/migrations/20260928150000_marketing_studio_weekly_reminder/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Marketing Studio weekly reminder migration is additive and after retention dueOn",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(studioWeeklyReminderMigration) &&
+    studioWeeklyReminderMigration.includes('ADD COLUMN IF NOT EXISTS "studioWeeklyReviewReminderOptedIn"') &&
+    studioWeeklyReminderMigration.includes('CREATE TABLE IF NOT EXISTS "MarketingStudioWeeklyReminder"') &&
+    studioWeeklyReminderMigration.includes("MarketingStudioWeeklyReminder_businessId_weekKey_key") &&
+    studioWeeklyReminderMigration.includes("20260928120000_customer_follow_up_retention_due_on") &&
+    localNames.includes("20260928150000_marketing_studio_weekly_reminder") &&
+    !localNames.includes("20260928120000_marketing_studio_weekly_reminder") &&
+    localNames.indexOf("20260928120000_customer_follow_up_retention_due_on") <
+      localNames.indexOf("20260928150000_marketing_studio_weekly_reminder") &&
+    localNames.indexOf("20260928145000_job_corrective_clean_source_unique") <
+      localNames.indexOf("20260928150000_marketing_studio_weekly_reminder"),
+);
+
+const studioWeeklyReminderOps = readFileSync(
+  new URL("../src/lib/marketing-studio-reminder.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Marketing Studio weekly reminder fails closed without request-time DDL",
+  studioWeeklyReminderOps.includes("missingStudioWeeklyReminderSchema") &&
+    studioWeeklyReminderOps.includes("pg_advisory_xact_lock") &&
+    !studioWeeklyReminderOps.includes("$executeRawUnsafe") &&
+    !studioWeeklyReminderOps.includes("ALTER TABLE") &&
+    !studioWeeklyReminderOps.includes("CREATE TABLE") &&
+    !studioWeeklyReminderOps.includes("ADD COLUMN"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

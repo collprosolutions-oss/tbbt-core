@@ -12,6 +12,7 @@ import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import type { CuratedIconId } from "@/lib/founder-icons";
 import { parseMarketingArea } from "@/lib/marketing";
 import { loadMarketingSource } from "@/lib/marketing-data";
+import { dispatchStudioWeeklyReviewReminder } from "@/lib/marketing-studio-reminder";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -35,6 +36,7 @@ export default async function MarketingPage({
 
   const params = await searchParams;
   const area = parseMarketingArea(params.area);
+  await dispatchStudioWeeklyReviewReminder(prisma, access.businessId);
   const source = await loadMarketingSource(prisma, access.businessId);
 
   const kpis: Array<{

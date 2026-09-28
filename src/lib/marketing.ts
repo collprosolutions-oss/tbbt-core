@@ -10,8 +10,9 @@
  * import these helpers directly.
  */
 
+import { formatISODateInTimeZone } from "@/lib/business-timezone";
 import { marketingAiAssistAvailable as providerAssistAvailable } from "@/lib/marketing-draft";
-import { parseScheduleDate, startOfDay } from "@/lib/schedule";
+import { parseScheduleDate, startOfDay, startOfWeek } from "@/lib/schedule";
 
 export const MARKETING_AREAS = [
   "overview",
@@ -180,6 +181,29 @@ export const STUDIO_APPROVE_NOT_READY_MESSAGE =
 
 export const STUDIO_RETURN_NOT_READY_MESSAGE =
   "Only packages awaiting review can be returned for changes.";
+
+export const STUDIO_WEEKLY_REMINDER_CHANNEL = "IN_APP" as const;
+export const STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED = "SMS not connected";
+export const STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED = "NOT_CONNECTED" as const;
+export const STUDIO_WEEKLY_REMINDER_SMS_STATUS_CONNECTED_UNUSED = "CONNECTED_UNUSED" as const;
+
+export const STUDIO_WEEKLY_REMINDER_OPT_IN_MESSAGE =
+  "OWNER can opt into one weekly reminder when creator packages await review. TBBT will not auto-approve, publish, post, or send customer messages.";
+
+export const STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE =
+  "Turning weekly review reminders on or off requires the OWNER role.";
+
+export const STUDIO_WEEKLY_REMINDER_IN_APP_MESSAGE =
+  "This reminder stays in Marketing Studio for the OWNER. TBBT will not send customer SMS, auto-approve, publish, or post.";
+
+export const STUDIO_WEEKLY_REMINDER_OPTED_IN_MESSAGE =
+  "Weekly review reminders are on. You will get one in-app reminder each business week while packages await review.";
+
+export const STUDIO_WEEKLY_REMINDER_OPTED_OUT_MESSAGE =
+  "Weekly review reminders are off. TBBT will not create another reminder until an OWNER opts in again.";
+
+export const STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE =
+  "Weekly review reminders are unavailable until this workspace's schema is migrated. TBBT will not invent a reminder or change the database from this page.";
 
 export const PHOTO_PERMISSION_REVOKED_MESSAGE =
   "A selected job photo no longer has marketing permission. Approval and export are blocked until only approved photos remain.";
@@ -396,6 +420,54 @@ export function canReturnStudioPackage(input: { status: string; role: string }):
 
 export function canActOnStudioApprovalQueue(role: string): boolean {
   return role === "OWNER";
+}
+
+export function canManageStudioWeeklyReminder(role: string): boolean {
+  return role === "OWNER";
+}
+
+export function studioWeeklyReminderSmsConnected(input: {
+  platformConfigured: boolean;
+  dedicatedNumberAssigned: boolean;
+}): boolean {
+  return input.platformConfigured === true && input.dedicatedNumberAssigned === true;
+}
+
+export function studioWeeklyReminderDelivery(input: {
+  platformConfigured: boolean;
+  dedicatedNumberAssigned: boolean;
+}): {
+  channel: typeof STUDIO_WEEKLY_REMINDER_CHANNEL;
+  smsConnected: boolean;
+  smsStatus:
+    | typeof STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED
+    | typeof STUDIO_WEEKLY_REMINDER_SMS_STATUS_CONNECTED_UNUSED;
+  smsLabel: string | null;
+  customerMessageSent: false;
+  published: false;
+  posted: false;
+} {
+  const smsConnected = studioWeeklyReminderSmsConnected(input);
+  return {
+    channel: STUDIO_WEEKLY_REMINDER_CHANNEL,
+    smsConnected,
+    smsStatus: smsConnected
+      ? STUDIO_WEEKLY_REMINDER_SMS_STATUS_CONNECTED_UNUSED
+      : STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED,
+    smsLabel: smsConnected ? null : STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED,
+    customerMessageSent: false,
+    published: false,
+    posted: false,
+  };
+}
+
+export function studioWeeklyReminderWeekKey(now: Date, timeZone: string): string {
+  return formatISODateInTimeZone(startOfWeek(now, timeZone), timeZone);
+}
+
+export function studioWeeklyReminderCopy(awaitingCount: number): string {
+  const noun = awaitingCount === 1 ? "package awaits" : "packages await";
+  return `${awaitingCount} ${noun} OWNER review this week.`;
 }
 
 export function isStudioApprovalQueueStatus(status: string): boolean {

@@ -32,7 +32,9 @@ import {
 import {
   STUDIO_APPROVED_INTERNAL_MESSAGE,
   STUDIO_RETURNED_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
 } from "@/lib/marketing";
+import { setStudioWeeklyReviewReminderOptIn } from "@/lib/marketing-studio-reminder";
 import { prisma } from "@/lib/prisma";
 
 export type MarketingActionState = {
@@ -249,6 +251,24 @@ export async function returnMarketingStudioPackageAction(
     return { message: STUDIO_RETURNED_MESSAGE };
   } catch (error) {
     return { error: marketingErrorMessage(error, "That creator package could not be returned for changes.") };
+  }
+}
+
+export async function setStudioWeeklyReviewReminderOptInAction(
+  _prev: MarketingActionState,
+  formData: FormData,
+): Promise<MarketingActionState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    if (access.workspace.role !== "OWNER") {
+      return { error: STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE };
+    }
+    const optedIn = readString(formData, "optedIn") === "true";
+    const result = await setStudioWeeklyReviewReminderOptIn(prisma, access, optedIn);
+    revalidateMarketing();
+    return { message: result.message };
+  } catch (error) {
+    return { error: marketingErrorMessage(error, "That weekly reminder preference could not be saved.") };
   }
 }
 

@@ -20,6 +20,7 @@ import {
   WEEKLY_STUDIO_APPROVAL_QUEUE_MESSAGE,
   studioApprovalQueueMeta,
 } from "@/lib/marketing";
+import { loadStudioWeeklyReminderState } from "@/lib/marketing-studio-reminder";
 import { draftMarketingContent, weeklyContentPlan } from "@/lib/marketing-draft";
 import {
   campaignIdeasFromActivity,
@@ -54,12 +55,13 @@ function catalogIdForEstimate(
 export async function loadMarketingSource(
   prisma: PrismaClient,
   businessId: string,
+  now = new Date(),
 ) {
   const scope = { businessId } as const;
 
   const approvalQueueWhere = { ...scope, status: STUDIO_APPROVAL_QUEUE_STATUS } as const;
 
-  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices, approvalQueueRows, approvalQueueTotal] = await Promise.all([
+  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices, approvalQueueRows, approvalQueueTotal, weeklyReminder] = await Promise.all([
     prisma.business.findFirst({
       where: { id: businessId },
       select: {
@@ -197,6 +199,7 @@ export async function loadMarketingSource(
       },
     }),
     prisma.marketingContent.count({ where: approvalQueueWhere }),
+    loadStudioWeeklyReminderState(prisma, businessId, now),
   ]);
 
   const catalogName = (id: string | null) =>
@@ -287,6 +290,7 @@ export async function loadMarketingSource(
         approved: row.jobPhoto.marketingPermissionStatus === "APPROVED",
       })),
     })),
+    weeklyReminder,
     approvalQueue: {
       ...studioApprovalQueueMeta(approvalQueueTotal),
       message: WEEKLY_STUDIO_APPROVAL_QUEUE_MESSAGE,

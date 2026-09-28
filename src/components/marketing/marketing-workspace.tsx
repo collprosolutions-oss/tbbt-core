@@ -305,7 +305,13 @@ function ContentBody({
   }
 
   if (area === "approval-queue") {
-    return <StudioApprovalQueue queue={source.approvalQueue} viewerRole={viewerRole} />;
+    return (
+      <StudioApprovalQueue
+        queue={source.approvalQueue}
+        weeklyReminder={source.weeklyReminder}
+        viewerRole={viewerRole}
+      />
+    );
   }
 
   if (area === "create-content") {
@@ -462,7 +468,11 @@ function ContentBody({
   return (
     <div className="space-y-3">
       {area === "overview" ? (
-        <StudioApprovalQueue queue={source.approvalQueue} viewerRole={viewerRole} />
+        <StudioApprovalQueue
+          queue={source.approvalQueue}
+          weeklyReminder={source.weeklyReminder}
+          viewerRole={viewerRole}
+        />
       ) : null}
       {area === "social-posts" ? (
         <Card>

@@ -316,6 +316,7 @@ model Business {
   expenses                 Expense[]
   marketingContents        MarketingContent[]
   marketingContentPhotos   MarketingContentPhoto[]
+  marketingStudioWeeklyReminders MarketingStudioWeeklyReminder[]
   reviewRequests           ReviewRequest[]
   reviews                  Review[]
   reviewResponses          ReviewResponse[]
@@ -2326,6 +2327,28 @@ model MarketingContent {
   @@index([campaignId])
 }
 
+/// One OWNER-opted weekly in-app reminder that studio packages await
+/// review. Unique per business + timezone week. Never a customer
+/// message, auto-approve, publish, or post.
+model MarketingStudioWeeklyReminder {
+  id            String   @id @default(cuid())
+  businessId    String
+  /// Sunday-first week start (YYYY-MM-DD) in Business.timezone.
+  weekKey       String
+  awaitingCount Int
+  /// IN_APP only. Owner SMS is not a connected delivery path.
+  channel       String   @default("IN_APP")
+  /// NOT_CONNECTED | CONNECTED_UNUSED
+  smsStatus     String
+  smsLabel      String   @default("")
+  createdAt     DateTime @default(now())
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, weekKey])
+  @@index([businessId])
+}
+
 /// Selected marketing-approved JobPhoto on a content draft.
 /// The photo must already be APPROVED for marketing at attach time.
 model MarketingContentPhoto {
@@ -2621,6 +2644,10 @@ model BusinessSettings {
 
   marketingBrandVoice String?
   marketingIdentityNotes String?
+  /// OWNER opt-in for one weekly in-app reminder when studio packages
+  /// await review. Default off. Absence of a settings row also means off.
+  /// Never sends customer SMS/email or auto-approves/publishes/posts.
+  studioWeeklyReviewReminderOptedIn Boolean @default(false)
   reviewGoogleUrl String?
   reviewFacebookUrl String?
   reviewOtherUrl String?
