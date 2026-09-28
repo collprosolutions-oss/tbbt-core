@@ -202,8 +202,11 @@ const transactionSrc = opsSrc.slice(opsSrc.indexOf("$transaction"));
 check(
   "Competing day-route changes serialize and recheck conflicts inside the transaction",
   transactionSrc.includes("pg_advisory_xact_lock") &&
+    transactionSrc.includes("lockBusinessScheduleReservation") &&
     transactionSrc.includes("rejectIfScheduleBlocked") &&
     transactionSrc.includes("lockTenantOwnedJob") &&
+    opsSrc.indexOf("lockBusinessScheduleReservation") <
+      opsSrc.lastIndexOf("rejectIfScheduleBlocked") &&
     opsSrc.indexOf("pg_advisory_xact_lock") < opsSrc.lastIndexOf("rejectIfScheduleBlocked"),
 );
 check(

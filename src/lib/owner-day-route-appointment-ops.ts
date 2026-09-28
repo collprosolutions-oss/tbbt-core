@@ -46,6 +46,7 @@ import {
   parseRecurrenceCadence,
   recurrenceForecastActive,
 } from "@/lib/recurrence";
+import { lockBusinessScheduleReservation } from "@/lib/schedule-reservation";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 import {
   appointmentModeForPosition,
@@ -270,6 +271,7 @@ export async function changeOwnerDayRouteAppointment(
 
     return await db.$transaction(
       async (tx) => {
+        await lockBusinessScheduleReservation(tx, access.businessId);
         await tx.$executeRaw`
           SELECT pg_advisory_xact_lock(hashtext(${dayRouteAppointmentLockKey(access.businessId)}))
         `;

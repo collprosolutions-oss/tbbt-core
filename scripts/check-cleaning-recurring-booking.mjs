@@ -5,7 +5,8 @@
  *
  * Proves authorization, tenant isolation, timezone date boundaries,
  * stop/cancel canonical Job.status, resume eligibility, schedule
- * gates, unique-error recovery, and idempotency under retries.
+ * gates, unique-error recovery, concurrent slot reservation, and
+ * idempotency under retries.
  * Recurring occurrences stay distinct from one-time next bookings and
  * corrective cleans.
  *
@@ -85,6 +86,14 @@ const { createNextBookingFromCompletedCleaningJob } = await import(
 const { scheduleCorrectiveCleanFromReCleanRequestedJob } = await import(
   "@/lib/cleaning-corrective-clean-ops"
 );
+const { scheduleSnapshotFromJob } = await import("@/lib/owner-day-route/snapshot");
+const { DAY_ROUTE_APPOINTMENT_CONFLICT_MESSAGE } = await import(
+  "@/lib/owner-day-route-appointment"
+);
+const { changeOwnerDayRouteAppointment } = await import(
+  "@/lib/owner-day-route-appointment-ops"
+);
+const { businessScheduleReservationLockKey } = await import("@/lib/schedule-reservation");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -172,6 +181,8 @@ const actionSrc = read("src/app/actions/cleaning-recurring-booking.ts");
 const dataSrc = read("src/lib/cleaning-recurring-booking-data.ts");
 const formSrc = read("src/components/jobs/cleaning-recurring-booking-form.tsx");
 const pageSrc = read("src/app/(app)/jobs/[jobId]/page.tsx");
+const reservationSrc = read("src/lib/schedule-reservation.ts");
+const dayRouteOpsSrc = read("src/lib/owner-day-route-appointment-ops.ts");
 const schemaSrc = read("prisma/schema.prisma");
 const migrationSrc = read(
   "prisma/migrations/20260928180000_job_recurrence_occurrence_key/migration.sql",
@@ -320,6 +331,18 @@ check(
       timeZone: "America/Los_Angeles",
       now: frozenNow,
     }) === true,
+);
+check(
+  "Recurring series and day-route appointment changes share one tenant schedule lock",
+  reservationSrc.includes("schedule-reservation:") &&
+    reservationSrc.includes("pg_advisory_xact_lock") &&
+    businessScheduleReservationLockKey("biz") === "schedule-reservation:biz" &&
+    opsSrc.includes("lockBusinessScheduleReservation") &&
+    opsSrc.indexOf("await lockBusinessScheduleReservation") <
+      opsSrc.indexOf("await lockTenantOwnedJob") &&
+    dayRouteOpsSrc.includes("lockBusinessScheduleReservation") &&
+    dayRouteOpsSrc.indexOf("await lockBusinessScheduleReservation") <
+      dayRouteOpsSrc.indexOf("dayRouteAppointmentLockKey(access.businessId)"),
 );
 check(
   "Review loader is mutation-free and tenant-scoped",
@@ -565,6 +588,9 @@ try {
   const jobANoScope = await createCleaningJob(cleanA.id, { includeScope: false });
   const jobADistinct = await createCleaningJob(cleanA.id, { reCleanRequested: true });
   const jobAConcurrent = await createCleaningJob(cleanA.id);
+  const jobRaceA = await createCleaningJob(cleanA.id);
+  const jobRaceB = await createCleaningJob(cleanA.id);
+  const jobRaceC = await createCleaningJob(cleanA.id);
   const jobB = await createCleaningJob(cleanB.id);
   const handyJob = await createCleaningJob(handyC.id, { tradeCode: "HANDYMAN" });
 
@@ -871,6 +897,122 @@ try {
       overlapBlocker.status === "SCHEDULED" &&
       bufferBlocker.status === "SCHEDULED" &&
       pickupBlocker.status === "SCHEDULED",
+  );
+
+  const raceStart = parseScheduleStart("2026-10-06", "09:00", "America/Los_Angeles");
+  const [seriesLeft, seriesRight] = await Promise.allSettled([
+    setupCleaningRecurringBookings(prisma, ownerA, {
+      jobId: jobRaceA.id,
+      cadence: "WEEKLY",
+      date: "2026-10-06",
+      time: "09:00",
+      confirmCreate: "1",
+      now: frozenNow,
+    }),
+    setupCleaningRecurringBookings(prisma, ownerA, {
+      jobId: jobRaceB.id,
+      cadence: "WEEKLY",
+      date: "2026-10-06",
+      time: "09:00",
+      confirmCreate: "1",
+      now: frozenNow,
+    }),
+  ]);
+  const seriesWins = [seriesLeft, seriesRight].filter((row) => row.status === "fulfilled");
+  const seriesLosses = [seriesLeft, seriesRight].filter((row) => row.status === "rejected");
+  const raceACount = await prisma.job.count({
+    where: { businessId: cleanA.id, recurrenceSourceJobId: jobRaceA.id },
+  });
+  const raceBCount = await prisma.job.count({
+    where: { businessId: cleanA.id, recurrenceSourceJobId: jobRaceB.id },
+  });
+  const seriesSlotHolders = await prisma.job.findMany({
+    where: {
+      businessId: cleanA.id,
+      scheduledAt: raceStart,
+      status: { notIn: ["COMPLETED", "CANCELLED"] },
+    },
+    select: { id: true, recurrenceSourceJobId: true, status: true },
+  });
+  check(
+    "Concurrent series vs series: exactly one claims the slot and the loser is a handled conflict",
+    seriesWins.length === 1 &&
+      seriesLosses.length === 1 &&
+      seriesLosses[0].reason?.message === CLEANING_RECURRING_SLOT_BLOCKED_MESSAGE &&
+      ((raceACount === MAX_UPCOMING_RECURRING_BOOKINGS && raceBCount === 0) ||
+        (raceBCount === MAX_UPCOMING_RECURRING_BOOKINGS && raceACount === 0)) &&
+      seriesSlotHolders.length === 1 &&
+      (seriesSlotHolders[0].recurrenceSourceJobId === jobRaceA.id ||
+        seriesSlotHolders[0].recurrenceSourceJobId === jobRaceB.id),
+  );
+
+  const movable = await prisma.job.create({
+    data: {
+      businessId: cleanA.id,
+      customerId: jobRaceC.customerId,
+      propertyId: jobRaceC.propertyId,
+      projectToken: randomUUID(),
+      status: "SCHEDULED",
+      scheduledAt: parseScheduleStart("2026-10-08", "15:00", "America/Los_Angeles"),
+      scheduledDurationMinutes: 120,
+      pickupDurationMinutes: null,
+      arrivalWindowMinutes: null,
+      assignedMembershipId: null,
+      serviceIntent: "ONE_TIME",
+    },
+  });
+  const movableSnapshot = scheduleSnapshotFromJob(movable);
+  const [seriesVsRoute, routeVsSeries] = await Promise.allSettled([
+    setupCleaningRecurringBookings(prisma, ownerA, {
+      jobId: jobRaceC.id,
+      cadence: "WEEKLY",
+      date: "2026-10-09",
+      time: "15:00",
+      confirmCreate: "1",
+      now: frozenNow,
+    }),
+    changeOwnerDayRouteAppointment(prisma, ownerA, {
+      jobId: movable.id,
+      date: "2026-10-09",
+      time: "15:00",
+      snapshot: movableSnapshot,
+    }),
+  ]);
+  const routeRaceOutcomes = [seriesVsRoute, routeVsSeries];
+  const routeWins = routeRaceOutcomes.filter((row) => row.status === "fulfilled");
+  const routeLosses = routeRaceOutcomes.filter((row) => row.status === "rejected");
+  const raceCCount = await prisma.job.count({
+    where: { businessId: cleanA.id, recurrenceSourceJobId: jobRaceC.id },
+  });
+  const moved = await prisma.job.findFirst({
+    where: { id: movable.id, businessId: cleanA.id },
+    select: { id: true, scheduledAt: true, status: true },
+  });
+  const routeSlot = parseScheduleStart("2026-10-09", "15:00", "America/Los_Angeles");
+  const routeSlotHolders = await prisma.job.findMany({
+    where: {
+      businessId: cleanA.id,
+      scheduledAt: routeSlot,
+      status: { notIn: ["COMPLETED", "CANCELLED"] },
+    },
+    select: { id: true, recurrenceSourceJobId: true },
+  });
+  const routeLoserMessage = routeLosses[0]?.reason?.message ?? "";
+  check(
+    "Concurrent series vs day-route: exactly one claims the slot and the loser is a handled conflict",
+    routeWins.length === 1 &&
+      routeLosses.length === 1 &&
+      routeSlotHolders.length === 1 &&
+      (routeLoserMessage === CLEANING_RECURRING_SLOT_BLOCKED_MESSAGE ||
+        routeLoserMessage === DAY_ROUTE_APPOINTMENT_CONFLICT_MESSAGE ||
+        /overlap/i.test(routeLoserMessage)) &&
+      ((seriesVsRoute.status === "fulfilled" &&
+        raceCCount === MAX_UPCOMING_RECURRING_BOOKINGS &&
+        moved?.scheduledAt?.toISOString() === movable.scheduledAt.toISOString()) ||
+        (routeVsSeries.status === "fulfilled" &&
+          raceCCount === 0 &&
+          moved?.scheduledAt?.toISOString() === routeSlot.toISOString() &&
+          routeSlotHolders[0].id === movable.id)),
   );
 
   const jobsBeforeCreate = await countBusinessJobs(prisma, cleanA.id);

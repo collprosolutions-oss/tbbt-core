@@ -50,6 +50,7 @@ import {
 import { evaluateProposedSchedule, hasScheduleWarning } from "@/lib/availability";
 import { loadAvailabilitySettings, loadOccupiedJobs } from "@/lib/availability-data";
 import { computeNextOccurrenceAt, parseRecurrenceCadence } from "@/lib/recurrence";
+import { lockBusinessScheduleReservation } from "@/lib/schedule-reservation";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 import { loadCapacityJobs, loadSchedulingPolicy } from "@/lib/workforce-data";
 import { detectScheduleConflicts } from "@/lib/workforce-conflicts";
@@ -311,14 +312,18 @@ async function withSeriesLock<T>(
   work: (tx: Prisma.TransactionClient) => Promise<T>,
 ): Promise<T> {
   const lockKey = seriesLockKey(businessId, sourceJobId);
-  return db.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
-    const locked = await lockTenantOwnedJob(tx, businessId, sourceJobId);
-    if (!locked) {
-      throw new Error("Record is not in the authorized business workspace.");
-    }
-    return work(tx);
-  });
+  return db.$transaction(
+    async (tx) => {
+      await lockBusinessScheduleReservation(tx, businessId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+      const locked = await lockTenantOwnedJob(tx, businessId, sourceJobId);
+      if (!locked) {
+        throw new Error("Record is not in the authorized business workspace.");
+      }
+      return work(tx);
+    },
+    { maxWait: 10_000, timeout: 20_000 },
+  );
 }
 
 function seriesAnchorStart(input: {
