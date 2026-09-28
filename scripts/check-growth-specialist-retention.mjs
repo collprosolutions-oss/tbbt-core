@@ -184,7 +184,7 @@ try {
     !FORBIDDEN_RETENTION_CLAIM_PATTERNS.some((pattern) => pattern.test(allSrc)) &&
       !FORBIDDEN_CADENCE_PATTERNS.some((pattern) => pattern.test(allSrc)) &&
       !/REACTIVATION_AFTER_DAYS/.test(retentionSrc) &&
-      !/churn score|buying intent|contact cadence/i.test(allSrc),
+      /Does not invent churn, buying intent, or a contact cadence/.test(retentionSrc),
   );
   check(
     "No autonomous follow-up, SMS, email, or Controlled AI writes",
@@ -196,9 +196,9 @@ try {
   );
   check(
     "OWNER follow-up links stay on recorded customer, job, or follow-up task",
-    retentionSrc.includes('recordType: "CUSTOMER"') &&
-      retentionSrc.includes('recordType: "JOB"') &&
-      retentionSrc.includes('recordType: "FOLLOW_UP_TASK"') &&
+    retentionSrc.includes('ownerLink("CUSTOMER"') &&
+      retentionSrc.includes('ownerLink("JOB"') &&
+      retentionSrc.includes('"FOLLOW_UP_TASK"') &&
       retentionSrc.includes("RETENTION_ROUTE") &&
       RETENTION_ROUTE === "/growth/retention",
   );

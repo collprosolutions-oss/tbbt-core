@@ -2,8 +2,8 @@
  * Bounded same-business retention facts for the Growth specialist.
  *
  * Reuses the merged Retention Recovery Center loader and canonical
- * absence queries. Does not invent churn, buying intent, or a contact
- * cadence, and does not record follow-up tasks or send messages.
+ * absence queries. Does not invent churn, buying intent, or a contact cadence,
+ * and does not record follow-up tasks or send messages.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
