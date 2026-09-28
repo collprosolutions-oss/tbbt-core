@@ -158,8 +158,21 @@ export async function changeOwnerDayRouteAppointment(
     existing: others,
     timeZone,
   });
+  // Score the resulting calendar. The shared detector also walks current
+  // job times; leaving this job at its old window would keep a prior
+  // acknowledged overlap as a warning for every later free-slot move.
+  const jobsForProposed = capacityJobs.map((row) =>
+    row.id === job.id
+      ? {
+          ...row,
+          scheduledAt: start,
+          scheduledDurationMinutes: durationMinutes,
+          pickupDurationMinutes,
+        }
+      : row,
+  );
   const conflicts = detectScheduleConflicts({
-    jobs: capacityJobs,
+    jobs: jobsForProposed,
     settings,
     policy,
     members,

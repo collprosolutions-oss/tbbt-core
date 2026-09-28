@@ -199,8 +199,8 @@ try {
   const memberA = makeAccess(businessA.id, "MEMBER", memberMem.id);
   const ownerB = makeAccess(businessB.id, "OWNER", betaMem.id);
 
-  const day = zonedCivilToUtc(2026, 9, 28, 9, 0, 0, NY);
-  const later = zonedCivilToUtc(2026, 9, 28, 15, 0, 0, NY);
+  const day = zonedCivilToUtc(2026, 11, 2, 9, 0, 0, NY);
+  const later = zonedCivilToUtc(2026, 11, 2, 11, 0, 0, NY);
   const customerA = await prisma.customer.create({
     data: { businessId: businessA.id, name: "Ada Homeowner", phone: "2395550111" },
   });
@@ -278,7 +278,7 @@ try {
     () =>
       changeOwnerDayRouteAppointment(prisma, memberA, {
         jobId: earlyJob.id,
-        date: "2026-09-28",
+        date: "2026-11-02",
         time: "16:00",
         expectedScheduledAt: day.toISOString(),
       }),
@@ -289,7 +289,7 @@ try {
     () =>
       changeOwnerDayRouteAppointment(prisma, adminA, {
         jobId: earlyJob.id,
-        date: "2026-09-28",
+        date: "2026-11-02",
         time: "16:00",
         expectedScheduledAt: day.toISOString(),
       }),
@@ -298,7 +298,7 @@ try {
   );
   const deniedForeign = await changeOwnerDayRouteAppointment(prisma, ownerA, {
     jobId: foreignJob.id,
-    date: "2026-09-28",
+    date: "2026-11-02",
     time: "16:00",
     expectedScheduledAt: day.toISOString(),
   }).catch((error) => error);
@@ -315,8 +315,8 @@ try {
   console.log("\nTEST — OWNER change refreshes recorded order");
   const moved = await changeOwnerDayRouteAppointment(prisma, ownerA, {
     jobId: earlyJob.id,
-    date: "2026-09-28",
-    time: "16:00",
+    date: "2026-11-02",
+    time: "14:00",
     durationPreset: "60",
     pickupDurationMinutes: 30,
     expectedScheduledAt: day.toISOString(),
@@ -328,15 +328,15 @@ try {
   const afterMove = await loadOwnerDayRoute(prisma, {
     businessId: businessA.id,
     role: "OWNER",
-    date: "2026-09-28",
+    date: "2026-11-02",
     timeZone: NY,
   });
   check(
-    "Recorded-order route lists the later window first after the move",
+    "Recorded-order route lists the moved window first",
     afterMove.stops.map((stop) => stop.jobId).join(",") === `${lateJob.id},${earlyJob.id}`,
   );
   check(
-    "Moved stop keeps pickup minutes",
+    "Unmoved stop keeps pickup minutes",
     afterMove.stops.find((stop) => stop.jobId === earlyJob.id)?.pickupDurationMinutes === 30,
   );
   check(
@@ -345,15 +345,20 @@ try {
   );
 
   console.log("\nTEST — Conflict handling");
-  const overlap = await changeOwnerDayRouteAppointment(prisma, ownerA, {
-    jobId: lateJob.id,
-    date: "2026-09-28",
-    time: "16:00",
-    durationPreset: "60",
-    expectedScheduledAt: later.toISOString(),
+  const earlyAfterMove = await prisma.job.findFirst({
+    where: { id: earlyJob.id, businessId: businessA.id },
+    select: { scheduledAt: true },
   });
-  const lateStill = await prisma.job.findFirst({
-    where: { id: lateJob.id, businessId: businessA.id },
+  const overlap = await changeOwnerDayRouteAppointment(prisma, ownerA, {
+    jobId: earlyJob.id,
+    date: "2026-11-02",
+    time: "11:00",
+    durationPreset: "60",
+    pickupDurationMinutes: 30,
+    expectedScheduledAt: earlyAfterMove.scheduledAt.toISOString(),
+  });
+  const earlyStill = await prisma.job.findFirst({
+    where: { id: earlyJob.id, businessId: businessA.id },
     select: { scheduledAt: true },
   });
   check(
@@ -361,14 +366,15 @@ try {
     overlap.ok === false &&
       Boolean(overlap.warning) &&
       Boolean(overlap.conflictAck) &&
-      lateStill?.scheduledAt.getTime() === later.getTime(),
+      earlyStill?.scheduledAt.getTime() === earlyAfterMove.scheduledAt.getTime(),
   );
   const accepted = await changeOwnerDayRouteAppointment(prisma, ownerA, {
-    jobId: lateJob.id,
-    date: "2026-09-28",
-    time: "16:00",
+    jobId: earlyJob.id,
+    date: "2026-11-02",
+    time: "11:00",
     durationPreset: "60",
-    expectedScheduledAt: later.toISOString(),
+    pickupDurationMinutes: 30,
+    expectedScheduledAt: earlyAfterMove.scheduledAt.toISOString(),
     confirmOverlapAck: overlap.conflictAck,
   });
   check("Acknowledged conflict can be saved", accepted.ok === true);
@@ -380,16 +386,16 @@ try {
   });
   const first = await changeOwnerDayRouteAppointment(prisma, ownerA, {
     jobId: earlyJob.id,
-    date: "2026-09-28",
-    time: "11:00",
+    date: "2026-11-02",
+    time: "14:00",
     durationPreset: "60",
     pickupDurationMinutes: 30,
     expectedScheduledAt: current.scheduledAt.toISOString(),
   });
   const second = await changeOwnerDayRouteAppointment(prisma, ownerA, {
     jobId: earlyJob.id,
-    date: "2026-09-28",
-    time: "12:00",
+    date: "2026-11-02",
+    time: "15:00",
     durationPreset: "60",
     pickupDurationMinutes: 30,
     expectedScheduledAt: current.scheduledAt.toISOString(),
@@ -410,7 +416,7 @@ try {
 
   const betaTry = await changeOwnerDayRouteAppointment(prisma, ownerB, {
     jobId: earlyJob.id,
-    date: "2026-09-28",
+    date: "2026-11-02",
     time: "08:00",
     expectedScheduledAt: afterRace.scheduledAt.toISOString(),
   }).catch((error) => error);
