@@ -1354,8 +1354,10 @@ model Job {
   serviceIntent String @default("ONE_TIME")
   /// WEEKLY | BIWEEKLY | MONTHLY | CUSTOM. Empty when one-time.
   recurrenceCadence String @default("")
-  /// Parent / source job when this row is a later occurrence.
-  recurrenceSourceJobId String?
+  /// Parent / source job when this row is a later occurrence. For the
+  /// OWNER-created Cleaning next booking this is the completed source Job
+  /// and is unique — one next booking per source, not a recurring series.
+  recurrenceSourceJobId String? @unique
   nextOccurrenceAt DateTime?
   /// ACTIVE | SKIPPED | CANCELLED. Empty when one-time.
   recurrenceStatus String @default("")
@@ -1410,7 +1412,6 @@ model Job {
   @@index([businessId])
   @@index([assignedMembershipId])
   @@index([businessLocationId])
-  @@index([recurrenceSourceJobId])
   @@index([appointmentConfirmedByMembershipId])
   @@index([startWithoutConfirmationByMembershipId])
   @@index([campaignId])
