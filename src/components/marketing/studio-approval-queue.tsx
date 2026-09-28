@@ -1,4 +1,5 @@
 import { StudioApprovalActions } from "@/components/marketing/studio-approval-actions";
+import { StudioWeeklyReminderControls } from "@/components/marketing/studio-weekly-reminder";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,9 +18,11 @@ import type { MarketingSource } from "@/lib/marketing-data";
 
 export function StudioApprovalQueue({
   queue,
+  weeklyReminder,
   viewerRole,
 }: {
   queue: MarketingSource["approvalQueue"];
+  weeklyReminder: MarketingSource["weeklyReminder"];
   viewerRole: string;
 }) {
   return (
@@ -31,6 +34,7 @@ export function StudioApprovalQueue({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
+        <StudioWeeklyReminderControls reminder={weeklyReminder} viewerRole={viewerRole} />
         {queue.items.length === 0 ? (
           <EmptyState
             title="No packages awaiting review"
