@@ -12,6 +12,7 @@ import {
   STUDIO_WEEKLY_REMINDER_OPT_IN_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
   STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED,
+  STUDIO_WEEKLY_REMINDER_SMS_UNCONFIRMED,
   STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
   canManageStudioWeeklyReminder,
 } from "@/lib/marketing";
@@ -52,9 +53,7 @@ export function StudioWeeklyReminderControls({
           <p className="text-sm font-medium">Weekly review reminder</p>
           <p className="text-xs text-muted-foreground">{STUDIO_WEEKLY_REMINDER_OPT_IN_MESSAGE}</p>
         </div>
-        {smsLabel === STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED ? (
-          <Badge variant="outline">{STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED}</Badge>
-        ) : null}
+        {smsLabel ? <Badge variant="outline">{smsLabel}</Badge> : null}
       </div>
       {reminder.optedIn ? (
         <p className="text-sm">
@@ -64,6 +63,9 @@ export function StudioWeeklyReminderControls({
         <p className="text-sm">Weekly reminders are off.</p>
       )}
       <p className="text-xs text-muted-foreground">{STUDIO_WEEKLY_REMINDER_IN_APP_MESSAGE}</p>
+      {reminder.reminder?.smsStatus === "ACCEPTED" || reminder.reminder?.smsStatus === "SENT" ? (
+        <p className="text-xs text-muted-foreground">{STUDIO_WEEKLY_REMINDER_SMS_UNCONFIRMED}</p>
+      ) : null}
       {canManage ? (
         <form action={action}>
           <input type="hidden" name="optedIn" value={reminder.optedIn ? "false" : "true"} />

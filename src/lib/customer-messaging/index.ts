@@ -67,13 +67,17 @@ export {
   ensureCustomerMessagingSchema,
   resetCustomerMessagingSchemaEnsure,
 } from "@/lib/customer-messaging/schema";
+export { sendOwnerSms } from "@/lib/customer-messaging/owner-sms";
+export type { SendOwnerSmsInput } from "@/lib/customer-messaging/owner-sms";
 export {
   ACCEPTED_CUSTOMER_MESSAGE_STATUSES,
   CUSTOMER_MESSAGE_PURPOSES,
+  OWNER_MESSAGE_PURPOSES,
   CUSTOMER_MESSAGE_STATUSES,
   SMS_CONSENT_STATUSES,
   isAcceptedCustomerMessageStatus,
   isCustomerMessagePurpose,
+  isOwnerMessagePurpose,
 } from "@/lib/customer-messaging/types";
 export type {
   AttemptCustomerSmsInput,
@@ -82,6 +86,7 @@ export type {
   CustomerMessagePurpose,
   CustomerMessageStatus,
   CustomerMessagingProvider,
+  OwnerMessagePurpose,
 } from "@/lib/customer-messaging/types";
 export {
   appointmentConfirmationSmsBody,

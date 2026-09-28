@@ -1,10 +1,11 @@
 /**
  * OWNER weekly Marketing Studio review reminder.
  *
- * Consent is explicit and default-off. Delivery uses the existing
- * OWNER-only in-app approval queue path. SMS is labeled honestly when
- * it is not actually configured. This module never messages customers,
- * auto-approves, publishes, or posts.
+ * Consent is explicit and default-off. Delivery always creates one
+ * OWNER in-app reminder per business/week. Optional OWNER SMS uses the
+ * existing communications provider and this business's dedicated
+ * operational number only when both actually work. This module never
+ * messages customers, auto-approves, publishes, or posts.
  *
  * Preview shares Production and skips migrate. Missing reminder table
  * or column fails closed with an unavailable state. This file never
@@ -15,7 +16,11 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
+import { isUsableNormalizedPhone, normalizePhone } from "@/lib/customer-identity";
 import { isCustomerMessagingConfigured } from "@/lib/customer-messaging/config";
+import { sendOwnerSms } from "@/lib/customer-messaging/owner-sms";
+import { getCustomerMessagingProvider } from "@/lib/customer-messaging/provider";
+import type { CustomerMessagingProvider } from "@/lib/customer-messaging/types";
 import {
   STUDIO_APPROVAL_QUEUE_STATUS,
   STUDIO_WEEKLY_REMINDER_CHANNEL,
@@ -23,11 +28,20 @@ import {
   STUDIO_WEEKLY_REMINDER_OPTED_IN_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OPTED_OUT_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_SMS_NO_DESTINATION,
   STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED,
+  STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED,
+  STUDIO_WEEKLY_REMINDER_SMS_STATUS_FAILED,
+  STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED,
+  STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT,
+  STUDIO_WEEKLY_REMINDER_SMS_STATUS_SENT,
   STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
   canManageStudioWeeklyReminder,
+  resolveOwnerStudioReminderSmsTo,
   studioWeeklyReminderCopy,
   studioWeeklyReminderDelivery,
+  studioWeeklyReminderSmsBody,
+  studioWeeklyReminderSmsOutcomeLabel,
   studioWeeklyReminderWeekKey,
 } from "@/lib/marketing";
 import { MarketingError } from "@/lib/marketing-ops";
@@ -72,6 +86,10 @@ export type StudioWeeklyReminderState = {
 
 export type StudioWeeklyReminderDeps = {
   smsPlatformConfigured?: boolean;
+  /** Test hook. Fake or disconnected adapter only. Never a live send. */
+  messagingProvider?: CustomerMessagingProvider;
+  /** Test hook. Overrides Business.publicPhone as the OWNER destination. */
+  ownerSmsTo?: string | null;
   /** Test hook. Runs before the business reminder lock is taken. */
   beforeSerialize?: () => Promise<void>;
 };
@@ -178,6 +196,91 @@ export function resolveStudioWeeklyReminderDelivery(input?: {
     platformConfigured: input?.platformConfigured ?? isCustomerMessagingConfigured(),
     dedicatedNumberAssigned: input?.dedicatedNumberAssigned === true,
   });
+}
+
+function reminderMessagingProvider(deps?: StudioWeeklyReminderDeps) {
+  return deps?.messagingProvider ?? getCustomerMessagingProvider();
+}
+
+async function recordReminderSms(
+  db: Db,
+  reminder: StudioWeeklyReminderRecord,
+  smsStatus: string,
+  smsLabel: string,
+): Promise<StudioWeeklyReminderRecord> {
+  const updated = await db.marketingStudioWeeklyReminder.updateMany({
+    where: { id: reminder.id, businessId: reminder.businessId },
+    data: { smsStatus, smsLabel },
+  });
+  if (updated.count !== 1) return { ...reminder, smsStatus, smsLabel };
+  const row = await db.marketingStudioWeeklyReminder.findFirst({
+    where: { id: reminder.id, businessId: reminder.businessId },
+  });
+  return row ? asReminder(row) : { ...reminder, smsStatus, smsLabel };
+}
+
+async function applyOwnerStudioWeeklyReminderSms(
+  db: Db,
+  result: StudioWeeklyReminderDispatchResult,
+  deps?: StudioWeeklyReminderDeps,
+): Promise<StudioWeeklyReminderDispatchResult> {
+  if (!result.created || !result.reminder) return result;
+
+  const business = await db.business.findFirst({
+    where: { id: result.reminder.businessId },
+    select: { operationalSmsNumber: true, publicPhone: true },
+  });
+  const fromDigits = normalizePhone(business?.operationalSmsNumber);
+  const toDigits = resolveOwnerStudioReminderSmsTo({
+    publicPhone: business?.publicPhone,
+    override: deps?.ownerSmsTo,
+  });
+  const provider = reminderMessagingProvider(deps);
+  const platformConfigured = deps?.smsPlatformConfigured ?? isCustomerMessagingConfigured();
+  const smsConnected = result.delivery.smsConnected && platformConfigured === true;
+
+  if (!smsConnected || !provider.connected || !isUsableNormalizedPhone(fromDigits)) {
+    const reminder = await recordReminderSms(
+      db,
+      result.reminder,
+      STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED,
+      STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED,
+    );
+    return { ...result, reminder };
+  }
+
+  if (!toDigits) {
+    const reminder = await recordReminderSms(
+      db,
+      result.reminder,
+      STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT,
+      STUDIO_WEEKLY_REMINDER_SMS_NO_DESTINATION,
+    );
+    return { ...result, reminder };
+  }
+
+  const sent = await sendOwnerSms({
+    provider,
+    businessId: result.reminder.businessId,
+    communicationId: result.reminder.id,
+    from: fromDigits,
+    to: toDigits,
+    body: studioWeeklyReminderSmsBody(result.reminder.awaitingCount),
+    purpose: "STUDIO_WEEKLY_REMINDER",
+  });
+
+  const smsStatus = sent.ok
+    ? sent.status === "SENT"
+      ? STUDIO_WEEKLY_REMINDER_SMS_STATUS_SENT
+      : STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED
+    : sent.status === "FAILED"
+      ? STUDIO_WEEKLY_REMINDER_SMS_STATUS_FAILED
+      : STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT;
+  const smsLabel =
+    studioWeeklyReminderSmsOutcomeLabel(smsStatus, sent.ok ? null : sent.error) ??
+    STUDIO_WEEKLY_REMINDER_SMS_NOT_SENT;
+  const reminder = await recordReminderSms(db, result.reminder, smsStatus, smsLabel);
+  return { ...result, reminder };
 }
 
 function unavailableReminderState(
@@ -342,7 +445,7 @@ export async function setStudioWeeklyReviewReminderOptIn(
         return {
           optedIn,
           message: optedIn ? STUDIO_WEEKLY_REMINDER_OPTED_IN_MESSAGE : STUDIO_WEEKLY_REMINDER_OPTED_OUT_MESSAGE,
-          dispatch,
+          dispatch: dispatch ? await applyOwnerStudioWeeklyReminderSms(tx, dispatch, deps) : null,
         };
       },
       deps,
@@ -363,12 +466,25 @@ export async function dispatchStudioWeeklyReviewReminder(
   deps?: StudioWeeklyReminderDeps,
 ): Promise<StudioWeeklyReminderDispatchResult> {
   try {
-    return await withReminderLock(
+    const result = await withReminderLock(
       db,
       businessId,
       (tx) => dispatchAfterLock(tx, businessId, now, deps),
       deps,
     );
+    try {
+      return await applyOwnerStudioWeeklyReminderSms(db, result, deps);
+    } catch (error) {
+      if (missingStudioWeeklyReminderSchema(error)) {
+        return {
+          created: false,
+          reason: "schema_unavailable",
+          reminder: null,
+          delivery: result.delivery,
+        };
+      }
+      throw error;
+    }
   } catch (error) {
     if (missingStudioWeeklyReminderSchema(error)) {
       return {

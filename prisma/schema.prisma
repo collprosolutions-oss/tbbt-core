@@ -2340,17 +2340,18 @@ model MarketingContent {
 }
 
 /// One OWNER-opted weekly in-app reminder that studio packages await
-/// review. Unique per business + timezone week. Never a customer
-/// message, auto-approve, publish, or post.
+/// review. Unique per business + timezone week. Optional OWNER SMS is
+/// recorded on this same row. Never a customer message, auto-approve,
+/// publish, or post.
 model MarketingStudioWeeklyReminder {
   id            String   @id @default(cuid())
   businessId    String
   /// Sunday-first week start (YYYY-MM-DD) in Business.timezone.
   weekKey       String
   awaitingCount Int
-  /// IN_APP only. Owner SMS is not a connected delivery path.
+  /// IN_APP. Owner SMS is an optional extra delivery on this row.
   channel       String   @default("IN_APP")
-  /// NOT_CONNECTED | CONNECTED_UNUSED
+  /// NOT_CONNECTED | CONNECTED_UNUSED | NOT_SENT | ACCEPTED | SENT | FAILED
   smsStatus     String
   smsLabel      String   @default("")
   createdAt     DateTime @default(now())
@@ -2658,7 +2659,9 @@ model BusinessSettings {
   marketingIdentityNotes String?
   /// OWNER opt-in for one weekly in-app reminder when studio packages
   /// await review. Default off. Absence of a settings row also means off.
-  /// Never sends customer SMS/email or auto-approves/publishes/posts.
+  /// Optional OWNER SMS uses the communications provider only when that
+  /// provider and the dedicated tenant number actually work. Never sends
+  /// customer SMS/email or auto-approves/publishes/posts.
   studioWeeklyReviewReminderOptedIn Boolean @default(false)
   reviewGoogleUrl String?
   reviewFacebookUrl String?
