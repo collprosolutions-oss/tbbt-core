@@ -4,12 +4,13 @@
  * records, never checks customer consent, and never writes
  * CustomerCommunication.
  */
-import { isUsableNormalizedPhone, normalizePhone } from "@/lib/customer-identity";
+import { normalizePhone } from "@/lib/customer-identity";
 import type {
   CustomerMessageSendResult,
   CustomerMessagingProvider,
   OwnerMessagePurpose,
 } from "@/lib/customer-messaging/types";
+import { OWNER_SMS_PROVIDER_TIMEOUT_MS, parseOwnerSmsE164 } from "@/lib/marketing";
 
 export type SendOwnerSmsInput = {
   provider: CustomerMessagingProvider;
@@ -19,7 +20,33 @@ export type SendOwnerSmsInput = {
   to: string | null | undefined;
   body: string;
   purpose: OwnerMessagePurpose;
+  timeoutMs?: number;
 };
+
+class OwnerSmsTimeoutError extends Error {
+  constructor() {
+    super("The messaging provider timed out.");
+    this.name = "OwnerSmsTimeoutError";
+  }
+}
+
+function isUsableTenantFrom(digits: string) {
+  return digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+}
+
+async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new OwnerSmsTimeoutError()), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export async function sendOwnerSms(input: SendOwnerSmsInput): Promise<CustomerMessageSendResult> {
   if (!input.provider.connected) {
@@ -27,16 +54,16 @@ export async function sendOwnerSms(input: SendOwnerSmsInput): Promise<CustomerMe
   }
 
   const fromDigits = normalizePhone(input.from);
-  if (!isUsableNormalizedPhone(fromDigits)) {
+  if (!isUsableTenantFrom(fromDigits)) {
     return { ok: false, status: "NOT_SENT", error: "This business has no assigned SMS number." };
   }
 
-  const toDigits = normalizePhone(input.to);
-  if (!isUsableNormalizedPhone(toDigits)) {
+  const toE164 = parseOwnerSmsE164(input.to);
+  if (!toE164) {
     return { ok: false, status: "NOT_SENT", error: "Owner SMS destination is not on file." };
   }
 
-  if (fromDigits === toDigits) {
+  if (normalizePhone(fromDigits) === normalizePhone(toE164)) {
     return {
       ok: false,
       status: "NOT_SENT",
@@ -45,16 +72,22 @@ export async function sendOwnerSms(input: SendOwnerSmsInput): Promise<CustomerMe
   }
 
   try {
-    return await input.provider.send({
-      businessId: input.businessId,
-      communicationId: input.communicationId,
-      channel: "SMS",
-      to: toDigits,
-      from: fromDigits,
-      body: input.body,
-      purpose: input.purpose,
-    });
-  } catch {
+    return await withTimeout(
+      input.provider.send({
+        businessId: input.businessId,
+        communicationId: input.communicationId,
+        channel: "SMS",
+        to: toE164,
+        from: fromDigits,
+        body: input.body,
+        purpose: input.purpose,
+      }),
+      input.timeoutMs ?? OWNER_SMS_PROVIDER_TIMEOUT_MS,
+    );
+  } catch (error) {
+    if (error instanceof OwnerSmsTimeoutError || (error instanceof Error && error.name === "AbortError")) {
+      return { ok: false, status: "FAILED", error: "The messaging provider timed out." };
+    }
     return { ok: false, status: "FAILED", error: "The messaging provider failed." };
   }
 }

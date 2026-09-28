@@ -1304,21 +1304,25 @@ check(
 
 const ownerStudioSmsDestinationMigration = readFileSync(
   new URL(
-    "../prisma/migrations/20260928160000_owner_studio_reminder_sms_destination/migration.sql",
+    "../prisma/migrations/20260928180000_owner_studio_reminder_sms_destination/migration.sql",
     import.meta.url,
   ),
   "utf8",
 );
 check(
-  "OWNER studio reminder SMS destination migration is additive and after the weekly reminder",
+  "OWNER studio reminder SMS destination migration is additive and after #206",
   !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(ownerStudioSmsDestinationMigration) &&
     ownerStudioSmsDestinationMigration.includes('ADD COLUMN IF NOT EXISTS "studioWeeklyReminderOwnerSmsTo"') &&
     ownerStudioSmsDestinationMigration.includes('ADD COLUMN IF NOT EXISTS "studioWeeklyReminderOwnerSmsOptedIn"') &&
     ownerStudioSmsDestinationMigration.includes('ADD COLUMN IF NOT EXISTS "smsSendClaimedAt"') &&
     ownerStudioSmsDestinationMigration.includes("20260928150000_marketing_studio_weekly_reminder") &&
-    localNames.includes("20260928160000_owner_studio_reminder_sms_destination") &&
+    ownerStudioSmsDestinationMigration.includes("20260928170000_service_request_repeat_visit_source") &&
+    localNames.includes("20260928180000_owner_studio_reminder_sms_destination") &&
+    !localNames.includes("20260928160000_owner_studio_reminder_sms_destination") &&
     localNames.indexOf("20260928150000_marketing_studio_weekly_reminder") <
-      localNames.indexOf("20260928160000_owner_studio_reminder_sms_destination"),
+      localNames.indexOf("20260928180000_owner_studio_reminder_sms_destination") &&
+    localNames.indexOf("20260928170000_service_request_repeat_visit_source") <
+      localNames.indexOf("20260928180000_owner_studio_reminder_sms_destination"),
 );
 check(
   "Owner weekly reminder SMS is not sent inside a rollbackable reminder transaction",

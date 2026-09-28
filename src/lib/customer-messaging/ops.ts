@@ -24,6 +24,7 @@ import { DEFAULT_SETTINGS_PREFERENCES } from "@/lib/settings";
 import { getOrCreateCustomerThread } from "@/lib/communications/thread";
 import { consentContextSnapshot } from "@/lib/communications/consent";
 import { isUsableEmail } from "@/lib/mail";
+import { recordOwnerStudioReminderDeliveryBlock } from "@/lib/marketing-studio-reminder";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -429,7 +430,8 @@ export async function applyCustomerMessageDeliveryUpdate(
     },
   });
   if (!row) {
-    return { applied: false, reason: "not_found" };
+    const ownerBlock = await recordOwnerStudioReminderDeliveryBlock(db, update);
+    return ownerBlock ?? { applied: false, reason: "not_found" };
   }
   if (claimedBusinessId && claimedBusinessId !== row.businessId) {
     return { applied: false, reason: "tenant_mismatch" };

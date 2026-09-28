@@ -6,6 +6,7 @@ import { isCustomerMessagingWebhookPath } from "@/lib/customer-messaging/config"
 import { collproRenoLegacyHireRedirectPath } from "@/lib/public-site";
 import { isPublicWebsitePath } from "@/lib/public-website-paths";
 import { isNativeFieldApiPath } from "@/lib/native-field-api-path";
+import { isStudioWeeklyReminderCronPath } from "@/lib/studio-weekly-reminder-cron-path";
 import { isStripeWebhookPath } from "@/lib/stripe-webhook-path";
 import { tbbtApexWwwRedirectLocation } from "@/lib/tbbt-marketing-host";
 import {
@@ -64,7 +65,7 @@ export function proxy(request: NextRequest) {
 
   // Native field API uses Authorization: Bearer, not the web session cookie.
   // The route still returns 401 without a valid hashed Session token.
-  if (isNativeFieldApiPath(pathname)) {
+  if (isNativeFieldApiPath(pathname) || isStudioWeeklyReminderCronPath(pathname)) {
     return NextResponse.next();
   }
 
@@ -103,6 +104,6 @@ export const config = {
     // "brand" is public/brand -- static TBBT/business logo assets (see
     // src/lib/business-branding.ts) that must load unauthenticated, same
     // as the other static files already excluded here.
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/|api/stripe/webhook|api/customer-messaging/webhook|api/native/).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/|api/stripe/webhook|api/customer-messaging/webhook|api/cron/|api/native/).*)",
   ],
 };

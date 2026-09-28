@@ -20,7 +20,10 @@ import {
   WEEKLY_STUDIO_APPROVAL_QUEUE_MESSAGE,
   studioApprovalQueueMeta,
 } from "@/lib/marketing";
-import { loadStudioWeeklyReminderState } from "@/lib/marketing-studio-reminder";
+import {
+  loadStudioWeeklyReminderState,
+  presentStudioWeeklyReminderForViewer,
+} from "@/lib/marketing-studio-reminder";
 import { draftMarketingContent, weeklyContentPlan } from "@/lib/marketing-draft";
 import {
   campaignIdeasFromActivity,
@@ -56,6 +59,7 @@ export async function loadMarketingSource(
   prisma: PrismaClient,
   businessId: string,
   now = new Date(),
+  viewerRole?: string,
 ) {
   const scope = { businessId } as const;
 
@@ -290,7 +294,7 @@ export async function loadMarketingSource(
         approved: row.jobPhoto.marketingPermissionStatus === "APPROVED",
       })),
     })),
-    weeklyReminder,
+    weeklyReminder: presentStudioWeeklyReminderForViewer(weeklyReminder, viewerRole),
     approvalQueue: {
       ...studioApprovalQueueMeta(approvalQueueTotal),
       message: WEEKLY_STUDIO_APPROVAL_QUEUE_MESSAGE,

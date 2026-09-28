@@ -57,6 +57,48 @@ function receivingNumberDigits(value: string) {
   return normalizePhone(value);
 }
 
+async function applyOwnerStudioReminderInbound(
+  db: Db,
+  input: { businessId: string; fromDigits: string; optOutType: InboundSmsEvent["optOutType"] },
+): Promise<{ matched: boolean; applied: boolean; reason: string }> {
+  const settings = await db.businessSettings.findUnique({
+    where: { businessId: input.businessId },
+    select: {
+      studioWeeklyReminderOwnerSmsTo: true,
+      studioWeeklyReminderOwnerSmsOptedIn: true,
+      studioWeeklyReminderOwnerSmsStopAt: true,
+    },
+  });
+  const ownerDigits = normalizePhone(settings?.studioWeeklyReminderOwnerSmsTo);
+  if (!settings || !ownerDigits || ownerDigits !== input.fromDigits) {
+    return { matched: false, applied: false, reason: "not_owner_destination" };
+  }
+  if (input.optOutType === "HELP") {
+    return { matched: true, applied: false, reason: "owner_help_no_change" };
+  }
+  if (input.optOutType === "START") {
+    if (!settings.studioWeeklyReminderOwnerSmsStopAt) {
+      return { matched: true, applied: true, reason: "owner_start_not_applicable" };
+    }
+    await db.businessSettings.update({
+      where: { businessId: input.businessId },
+      data: { studioWeeklyReminderOwnerSmsStopAt: null },
+    });
+    return { matched: true, applied: true, reason: "owner_stop_cleared" };
+  }
+  if (settings.studioWeeklyReminderOwnerSmsStopAt) {
+    return { matched: true, applied: true, reason: "owner_stop_idempotent" };
+  }
+  await db.businessSettings.update({
+    where: { businessId: input.businessId },
+    data: {
+      studioWeeklyReminderOwnerSmsOptedIn: false,
+      studioWeeklyReminderOwnerSmsStopAt: new Date(),
+    },
+  });
+  return { matched: true, applied: true, reason: "owner_stopped" };
+}
+
 export async function applyInboundConsentEvent(
   db: Db,
   inbound: InboundSmsEvent,
@@ -103,6 +145,19 @@ export async function applyInboundConsentEvent(
   const fromDigits = normalizePhone(inbound.from);
   if (!isUsableNormalizedPhone(fromDigits)) {
     return { applied: false, reason: "unusable_from", businessId: business.id };
+  }
+
+  const ownerHandled = await applyOwnerStudioReminderInbound(db, {
+    businessId: business.id,
+    fromDigits,
+    optOutType: inbound.optOutType,
+  });
+  if (ownerHandled.matched) {
+    return {
+      applied: ownerHandled.applied,
+      reason: ownerHandled.reason,
+      businessId: business.id,
+    };
   }
 
   const candidates = await db.customer.findMany({

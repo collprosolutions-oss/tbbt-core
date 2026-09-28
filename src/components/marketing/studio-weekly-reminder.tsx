@@ -92,6 +92,19 @@ export function StudioWeeklyReminderControls({
       {state.message ? <p className="text-xs text-muted-foreground">{state.message}</p> : null}
 
       <p className="text-xs text-muted-foreground">{STUDIO_WEEKLY_REMINDER_OWNER_SMS_OPT_IN_MESSAGE}</p>
+      {reminder.ownerSmsStopped ? (
+        <p className="text-xs text-muted-foreground">
+          This OWNER number sent STOP. Weekly owner SMS stays off until START or a new number is saved.
+        </p>
+      ) : null}
+      {reminder.ownerSmsBlocked ? (
+        <p className="text-xs text-muted-foreground">
+          The provider blocked this OWNER number. Customer consent was not changed.
+        </p>
+      ) : null}
+      {!canManage && reminder.ownerSmsToMasked ? (
+        <p className="text-xs text-muted-foreground">OWNER SMS {reminder.ownerSmsToMasked}</p>
+      ) : null}
       {canManage ? (
         <form action={smsAction} className="space-y-2">
           <div className="space-y-1">
@@ -101,7 +114,7 @@ export function StudioWeeklyReminderControls({
               name="ownerSmsTo"
               type="tel"
               defaultValue={reminder.ownerSmsTo ?? ""}
-              placeholder="OWNER-only number"
+              placeholder="+15551234567"
             />
           </div>
           <label className="flex items-center gap-2 text-xs">

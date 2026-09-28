@@ -86,6 +86,7 @@ export type CustomerMessageSendResult =
       ok: false;
       status: "FAILED" | "NOT_SENT";
       error: string;
+      errorCode?: string;
       providerMetadata?: Record<string, unknown>;
     };
 
@@ -94,6 +95,7 @@ export type CustomerMessageDeliveryUpdate = {
   providerMessageId: string;
   status: "QUEUED" | "ACCEPTED" | "SENT" | "DELIVERED" | "FAILED";
   failureReason?: string;
+  errorCode?: string;
   claimedBusinessId?: string | null;
   providerEventId?: string;
   routingNumber?: string | null;

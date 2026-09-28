@@ -323,7 +323,7 @@ export async function generateMarketingAiAction(
     const task = readString(formData, "marketingAiTask");
     const attemptId = readString(formData, "attemptId");
     if (!isAiAttemptId(attemptId)) return { error: "Retry that request from the form." };
-    const source = await loadMarketingSource(prisma, access.businessId);
+    const source = await loadMarketingSource(prisma, access.businessId, new Date(), access.workspace.role);
     const actor = {
       businessId: access.businessId,
       membershipId: access.workspace.membership.id,
