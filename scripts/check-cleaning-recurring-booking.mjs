@@ -873,6 +873,7 @@ try {
       pickupBlocker.status === "SCHEDULED",
   );
 
+  const jobsBeforeCreate = await countBusinessJobs(prisma, cleanA.id);
   const created = await setupCleaningRecurringBookings(prisma, ownerA, {
     jobId: jobA.id,
     cadence: "WEEKLY",
@@ -917,7 +918,7 @@ try {
           row.recurrenceCadence === "WEEKLY" &&
           row.status === "SCHEDULED",
       ) &&
-      jobsAfterCreate === jobsBefore + MAX_UPCOMING_RECURRING_BOOKINGS,
+      jobsAfterCreate === jobsBeforeCreate + MAX_UPCOMING_RECURRING_BOOKINGS,
   );
   check(
     "Business-timezone first date is Los Angeles civil 2026-10-05, not the UTC day",
@@ -989,7 +990,7 @@ try {
       jobId: jobAConcurrent.id,
       cadence: "WEEKLY",
       date: "2026-10-05",
-      time: "11:00",
+      time: "12:00",
       confirmCreate: "1",
       now: frozenNow,
     }),
@@ -997,7 +998,7 @@ try {
       jobId: jobAConcurrent.id,
       cadence: "WEEKLY",
       date: "2026-10-05",
-      time: "11:00",
+      time: "12:00",
       confirmCreate: "1",
       now: frozenNow,
     }),
@@ -1266,7 +1267,7 @@ try {
     jobId: jobADistinct.id,
     cadence: "BIWEEKLY",
     date: "2026-10-26",
-    time: "14:00",
+    time: "15:00",
     confirmCreate: "1",
     now: frozenNow,
   });
