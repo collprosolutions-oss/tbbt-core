@@ -245,15 +245,15 @@ export type PublicIntakeTx = {
     findFirst: (args: {
       where: { id: string; businessId: string };
       select: {
-        id: true;
-        name: true;
+        id?: true;
+        name?: true;
         phone?: true;
         smsConsentStatus?: true;
         smsConsentUpdatedAt?: true;
       };
     }) => Promise<{
-      id: string;
-      name: string;
+      id?: string;
+      name?: string;
       phone?: string | null;
       smsConsentStatus?: string | null;
       smsConsentUpdatedAt?: Date | null;
@@ -790,7 +790,7 @@ async function createPublicServiceRequestInner(
           where: { id: boundCustomerId, businessId: business.id },
           select: { id: true, name: true },
         });
-        if (!bound) {
+        if (!bound?.id) {
           return Promise.reject(new Error("bound-customer"));
         }
         if (repeatVisitSourceJobId) {
