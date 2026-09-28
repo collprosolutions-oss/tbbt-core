@@ -1,4 +1,12 @@
 export {
+  changeOwnerDayRouteAppointment,
+  ownerDayRouteChangeErrorMessage,
+  OwnerDayRouteChangeError,
+  type OwnerDayRouteChangeInput,
+  type OwnerDayRouteChangeResult,
+} from "@/lib/owner-day-route/change-appointment";
+
+export {
   OWNER_DAY_ROUTE_PATH,
   OWNER_DAY_ROUTE_JOBS_TAKE,
   OWNER_DAY_ROUTE_MAPS_STOP_LIMIT,
@@ -14,6 +22,10 @@ export {
   OWNER_DAY_ROUTE_MAPS_TRUNCATED_NOTE,
   OWNER_DAY_ROUTE_MAPS_LINK_LABEL,
   OWNER_DAY_ROUTE_EXCLUDED_HEADING,
+  OWNER_DAY_ROUTE_CHANGE_OWNER_ONLY_MESSAGE,
+  OWNER_DAY_ROUTE_CHANGE_STALE_MESSAGE,
+  OWNER_DAY_ROUTE_CHANGE_NO_CUSTOMER_MESSAGE,
+  OWNER_DAY_ROUTE_CHANGE_COMPLETED_MESSAGE,
   FORBIDDEN_DAY_ROUTE_CLAIM_PATTERNS,
 } from "@/lib/owner-day-route/constants";
 

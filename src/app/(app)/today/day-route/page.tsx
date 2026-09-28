@@ -38,6 +38,7 @@ export default async function OwnerDayRoutePage({
         view={view}
         previousDateIso={previousDateIso}
         nextDateIso={nextDateIso}
+        viewerRole={access.workspace.role}
       />
     </PageContainer>
   );

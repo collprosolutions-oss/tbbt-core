@@ -25,6 +25,7 @@ import {
   buildMaterialPickupVisibility,
   ownerTodayTimeWindowLabel,
 } from "@/lib/owner-today";
+import { formatZonedTimeInput } from "@/lib/business-timezone";
 import { dayLabel, formatISODate, type DateRange } from "@/lib/schedule";
 
 function exclusionLabel(reason: OwnerDayRouteExclusionReason) {
@@ -64,6 +65,10 @@ export function buildOwnerDayRouteStop(
     customerName: job.customer?.name?.trim() || "Customer",
     status: job.status,
     scheduledAt: job.scheduledAt,
+    scheduledAtIso: job.scheduledAt.toISOString(),
+    startTimeValue: formatZonedTimeInput(job.scheduledAt, options.timeZone),
+    scheduledDurationMinutes: job.scheduledDurationMinutes,
+    pickupDurationMinutes: job.pickupDurationMinutes ?? null,
     appointmentWindowLabel: ownerTodayTimeWindowLabel(job, options.timeZone),
     materialPickup: buildMaterialPickupVisibility(job, options.timeZone),
     includedInMaps,

@@ -48,6 +48,7 @@
     "test:marketing": "node --experimental-strip-types scripts/check-marketing.mjs",
     "test:marketing-approval-queue": "node --experimental-strip-types scripts/check-marketing-approval-queue.mjs",
     "test:marketing-studio-weekly-reminder": "node --experimental-strip-types scripts/check-marketing-studio-weekly-reminder.mjs",
+    "test:day-route-appointment-change": "node --experimental-strip-types scripts/check-day-route-appointment-change.mjs",
     "test:reviews": "node --experimental-strip-types scripts/check-reviews.mjs",
     "test:pipeline": "node --experimental-strip-types scripts/check-pipeline.mjs",
     "test:knowledge": "node --experimental-strip-types scripts/check-knowledge.mjs",

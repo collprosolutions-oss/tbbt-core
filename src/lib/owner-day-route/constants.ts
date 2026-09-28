@@ -45,6 +45,21 @@ export const OWNER_DAY_ROUTE_NO_MAPPABLE_MESSAGE =
 export const OWNER_DAY_ROUTE_MAPS_TRUNCATED_NOTE =
   "The maps link includes the first 11 complete stops in appointment order. Remaining complete stops stay listed here.";
 
+export const OWNER_DAY_ROUTE_CHANGE_OWNER_ONLY_MESSAGE =
+  "Changing an appointment from the day-route page requires the OWNER role.";
+
+export const OWNER_DAY_ROUTE_CHANGE_STALE_MESSAGE =
+  "This appointment changed since the page was loaded. Refresh and try again.";
+
+export const OWNER_DAY_ROUTE_CHANGE_NO_CUSTOMER_MESSAGE =
+  "The recorded appointment order was updated. TBBT did not send an automatic customer message and did not optimize travel.";
+
+export const OWNER_DAY_ROUTE_CHANGE_COMPLETED_MESSAGE =
+  "A completed job cannot be rescheduled.";
+
+export const OWNER_DAY_ROUTE_CHANGE_INVALID_WINDOW_MESSAGE =
+  "Choose a valid date and start time.";
+
 export const FORBIDDEN_DAY_ROUTE_CLAIM_PATTERNS = [
   /\boptimized route\b/i,
   /\btraffic optimization\b/i,

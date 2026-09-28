@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { CopyDirectionsLinkButton } from "@/components/today/copy-directions-link-button";
+import { OwnerDayRouteRescheduleForm } from "@/components/today/owner-day-route-reschedule";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -29,10 +30,12 @@ export function OwnerDayRouteView({
   view,
   previousDateIso,
   nextDateIso,
+  viewerRole,
 }: {
   view: OwnerDayRouteView;
   previousDateIso: string;
   nextDateIso: string;
+  viewerRole: string;
 }) {
   const truncationNote = ownerDayRouteMapsTruncationNote(view.maps);
 
@@ -163,6 +166,7 @@ export function OwnerDayRouteView({
                     <Link href={stop.jobHref}>Open job</Link>
                   </Button>
                 </div>
+                <OwnerDayRouteRescheduleForm stop={stop} dateIso={view.dateIso} viewerRole={viewerRole} />
               </article>
             ))}
           </CardContent>

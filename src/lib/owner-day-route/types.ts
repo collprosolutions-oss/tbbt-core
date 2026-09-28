@@ -35,6 +35,10 @@ export type OwnerDayRouteStop = {
   customerName: string;
   status: string;
   scheduledAt: Date;
+  scheduledAtIso: string;
+  startTimeValue: string;
+  scheduledDurationMinutes: number | null;
+  pickupDurationMinutes: number | null;
   appointmentWindowLabel: string | null;
   materialPickup: MaterialPickupVisibility;
   includedInMaps: boolean;
