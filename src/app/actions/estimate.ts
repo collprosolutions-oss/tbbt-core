@@ -33,7 +33,10 @@ import {
   applyEstimateLineTemplateToDraft,
   createDraftEstimateWithOptionalTemplate,
   estimateLineTemplateErrorMessage,
+  renameEstimateLineTemplate,
+  replaceEstimateLineTemplateLinesFromDraft,
   saveEstimateLineTemplateFromDraft,
+  setEstimateLineTemplateArchived,
 } from "@/lib/estimate-line-template-ops";
 import { joinLineDescription } from "@/lib/estimate-line-scope";
 import {
@@ -1020,6 +1023,104 @@ export async function applyEstimateLineTemplate(
       error: estimateLineTemplateErrorMessage(
         error,
         "Could not apply that estimate template.",
+      ),
+    };
+  }
+}
+
+function revalidateEstimateTemplateSurfaces(estimateId?: string) {
+  if (estimateId) revalidatePath(`/estimates/${estimateId}`);
+  revalidatePath("/estimates/new");
+  revalidatePath("/settings");
+}
+
+export async function renameEstimateLineTemplateAction(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.ESTIMATES_INVOICES);
+    const result = await renameEstimateLineTemplate(prisma, access, {
+      templateId: readString(formData, "templateId"),
+      name: readString(formData, "name"),
+    });
+    revalidateEstimateTemplateSurfaces(estimateId || undefined);
+    return { message: result.message };
+  } catch (error) {
+    return {
+      error: estimateLineTemplateErrorMessage(
+        error,
+        "Could not rename that estimate template.",
+      ),
+    };
+  }
+}
+
+export async function replaceEstimateLineTemplateLinesAction(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.ESTIMATES_INVOICES);
+    const result = await replaceEstimateLineTemplateLinesFromDraft(prisma, access, {
+      templateId: readString(formData, "templateId"),
+      estimateId,
+    });
+    revalidateEstimateTemplateSurfaces(estimateId);
+    return { message: result.message };
+  } catch (error) {
+    return {
+      error: estimateLineTemplateErrorMessage(
+        error,
+        "Could not update that estimate template.",
+      ),
+    };
+  }
+}
+
+export async function archiveEstimateLineTemplateAction(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.ESTIMATES_INVOICES);
+    const result = await setEstimateLineTemplateArchived(prisma, access, {
+      templateId: readString(formData, "templateId"),
+      archived: true,
+    });
+    revalidateEstimateTemplateSurfaces(estimateId || undefined);
+    return { message: result.message };
+  } catch (error) {
+    return {
+      error: estimateLineTemplateErrorMessage(
+        error,
+        "Could not archive that estimate template.",
+      ),
+    };
+  }
+}
+
+export async function restoreEstimateLineTemplateAction(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  try {
+    const estimateId = readString(formData, "estimateId");
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.ESTIMATES_INVOICES);
+    const result = await setEstimateLineTemplateArchived(prisma, access, {
+      templateId: readString(formData, "templateId"),
+      archived: false,
+    });
+    revalidateEstimateTemplateSurfaces(estimateId || undefined);
+    return { message: result.message };
+  } catch (error) {
+    return {
+      error: estimateLineTemplateErrorMessage(
+        error,
+        "Could not restore that estimate template.",
       ),
     };
   }

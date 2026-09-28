@@ -3,7 +3,8 @@
  * labor/material/other draft lines and apply them to a DRAFT estimate.
  *
  * Proves isolation, authorization, duplicate names, draft-only apply,
- * no catalog-price writes, and no public hourly prices on a dedicated DB.
+ * OWNER edit/rename/archive (future applications only), no catalog-price
+ * writes, and no public hourly prices on a dedicated DB.
  *
  * Run with:
  *   node --experimental-strip-types scripts/check-estimate-line-templates.mjs
@@ -42,9 +43,15 @@ const {
   NO_CATALOG_PRICE_WRITE_MESSAGE,
   NO_PUBLIC_HOURLY_PRICE_MESSAGE,
   REVIEW_BEFORE_SEND_MESSAGE,
+  TEMPLATE_ARCHIVED_MESSAGE,
+  TEMPLATE_ARCHIVED_OK_MESSAGE,
+  TEMPLATE_FUTURE_ONLY_MESSAGE,
   TEMPLATE_LINE_BOUND_MESSAGE,
+  TEMPLATE_LINES_REPLACED_MESSAGE,
   TEMPLATE_LIST_BOUND,
   TEMPLATE_NOT_FOUND_MESSAGE,
+  TEMPLATE_RENAMED_MESSAGE,
+  TEMPLATE_RESTORED_MESSAGE,
   assertCanManageEstimateLineTemplates,
   canAccessEstimateLineTemplates,
   collectTemplateLines,
@@ -57,7 +64,11 @@ const {
   applyEstimateLineTemplateToDraft,
   createDraftEstimateWithOptionalTemplate,
   listEstimateLineTemplates,
+  loadEstimateLineTemplateOptions,
+  renameEstimateLineTemplate,
+  replaceEstimateLineTemplateLinesFromDraft,
   saveEstimateLineTemplateFromDraft,
+  setEstimateLineTemplateArchived,
 } = await import("@/lib/estimate-line-template-ops");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -186,6 +197,9 @@ try {
 
   const schema = readRepo("prisma/schema.prisma");
   const migration = readRepo("prisma/migrations/20260928030000_estimate_line_template/migration.sql");
+  const archiveMigration = readRepo(
+    "prisma/migrations/20260928200000_estimate_line_template_archive/migration.sql",
+  );
   const libSrc = readRepo("src/lib/estimate-line-templates.ts");
   const opsSrc = readRepo("src/lib/estimate-line-template-ops.ts");
   const actionSrc = readRepo("src/app/actions/estimate.ts");
@@ -193,6 +207,8 @@ try {
   const newPageSrc = readRepo("src/app/(app)/estimates/new/page.tsx");
   const formSrc = readRepo("src/components/estimates/estimate-line-template-forms.tsx");
   const createFormSrc = readRepo("src/components/estimates/create-manual-estimate-form.tsx");
+  const settingsSrc = readRepo("src/components/settings/settings-workspace.tsx");
+  const settingsPanelSrc = readRepo("src/components/settings/estimate-line-templates-panel.tsx");
   const packageSrc = readRepo("package.json");
   const catalogWritePattern =
     /serviceCatalogItem\.(create|update|updateMany|upsert|delete|deleteMany)/;
@@ -204,7 +220,9 @@ try {
   check(
     "Schema keeps templates business-scoped with case-insensitive unique names",
     templateModel.includes("nameKey") &&
+      templateModel.includes("archived") &&
       templateModel.includes("@@unique([businessId, nameKey])") &&
+      templateModel.includes("@@index([businessId, archived])") &&
       !templateModel.includes("@@unique([businessId, name])") &&
       schema.includes("model EstimateLineTemplateLine"),
   );
@@ -215,18 +233,55 @@ try {
         migration,
       ),
   );
+  check(
+    "Archive migration only adds archived and does not rewrite estimate lines",
+    archiveMigration.includes('ADD COLUMN IF NOT EXISTS "archived"') &&
+      !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"LineItem"|UPDATE\s+"Estimate"/i.test(
+        archiveMigration,
+      ),
+  );
   check("Dedicated test script is registered", packageSrc.includes("test:estimate-templates"));
   check("Save/apply actions re-authorize on the server", actionSrc.includes("saveEstimateLineTemplateFromDraft") && actionSrc.includes("applyEstimateLineTemplateToDraft"));
+  check(
+    "OWNER edit/rename/archive actions re-authorize on the server",
+    actionSrc.includes("renameEstimateLineTemplate") &&
+      actionSrc.includes("replaceEstimateLineTemplateLinesFromDraft") &&
+      actionSrc.includes("setEstimateLineTemplateArchived"),
+  );
   check("Draft builder exposes OWNER save/apply", pageSrc.includes("Save as named template") && pageSrc.includes("Apply named template"));
+  check(
+    "Draft builder and Settings expose OWNER edit/rename/archive",
+    pageSrc.includes("Manage saved templates") &&
+      formSrc.includes("Rename template") &&
+      formSrc.includes("Replace saved lines from this draft") &&
+      formSrc.includes("Archive") &&
+      settingsSrc.includes("EstimateLineTemplatesPanel") &&
+      settingsPanelSrc.includes("ManageEstimateLineTemplates"),
+  );
+  check(
+    "Template edits advertise future-only application",
+    libSrc.includes("TEMPLATE_FUTURE_ONLY_MESSAGE") &&
+      formSrc.includes("TEMPLATE_FUTURE_ONLY_MESSAGE") &&
+      /keep their recorded lines/i.test(TEMPLATE_FUTURE_ONLY_MESSAGE),
+  );
   check("New estimate form can apply a template to a new DRAFT", createFormSrc.includes('name="templateId"') && newPageSrc.includes("loadEstimateLineTemplateOptions"));
   check("UI tells the owner to review before sending", formSrc.includes("REVIEW_BEFORE_SEND_MESSAGE") && createFormSrc.includes("REVIEW_BEFORE_SEND_MESSAGE"));
   check("Ops never write catalog prices", !catalogWritePattern.test(opsSrc) && opsSrc.includes("never writes ServiceCatalogItem"));
+  check(
+    "Edit/rename/archive write only template rows",
+    opsSrc.includes("renameEstimateLineTemplate") &&
+      opsSrc.includes("replaceEstimateLineTemplateLinesFromDraft") &&
+      opsSrc.includes("setEstimateLineTemplateArchived") &&
+      opsSrc.includes("never rewrite LineItem") &&
+      !/lineItem\.(update|updateMany|delete|deleteMany)/.test(opsSrc),
+  );
   check(
     "Apply stays on DRAFT and claims with the send updateMany lock",
     opsSrc.includes('status: "DRAFT"') &&
       opsSrc.includes("updateMany") &&
       opsSrc.includes("DRAFT_ONLY_APPLY_MESSAGE") &&
-      opsSrc.includes("REVIEW_BEFORE_SEND_MESSAGE"),
+      opsSrc.includes("REVIEW_BEFORE_SEND_MESSAGE") &&
+      opsSrc.includes("TEMPLATE_ARCHIVED_MESSAGE"),
   );
   check(
     "Create Estimate applies a template in the same transaction as the new draft",
@@ -368,7 +423,7 @@ try {
     estimateId: sourceDraft.id,
     name: "  Bath refresh  ",
   });
-  check("OWNER can save a named template", saved.template.name === "Bath refresh" && saved.template.lineCount === 3);
+  check("OWNER can save a named template", saved.template.name === "Bath refresh" && saved.template.lineCount === 3 && saved.template.archived === false && saved.template.rewritesAppliedEstimates === false);
   check("Save reports that catalog prices are unchanged", saved.message === NO_CATALOG_PRICE_WRITE_MESSAGE);
   check("Saved template stays in the source business", saved.template.businessId === businessA.id);
   const savedRow = await prisma.estimateLineTemplate.findFirst({
@@ -722,6 +777,290 @@ try {
     where: { businessId: businessA.id, nameKey: "deck stain" },
   });
   check("Only one lowercase nameKey row exists for the concurrent creates", deckRows.length === 1);
+
+  console.log("\nDEDICATED DB — OWNER edit, rename, archive (future apply only)");
+  const appliedBeforeEdit = await prisma.estimate.findFirst({
+    where: { id: newDraft.id, businessId: businessA.id },
+    include: { lineItems: { orderBy: { createdAt: "asc" } } },
+  });
+  const appliedSignaturesBefore = (appliedBeforeEdit?.lineItems ?? [])
+    .map((line) => [line.description, String(line.quantity), String(line.unitPrice), line.type].join("|"))
+    .join("\n");
+  const createdBeforeEdit = await prisma.estimate.findFirst({
+    where: { id: createdWithTemplate.estimateId, businessId: businessA.id },
+    include: { lineItems: { orderBy: { createdAt: "asc" } } },
+  });
+  const createdSignaturesBefore = (createdBeforeEdit?.lineItems ?? [])
+    .map((line) => [line.description, String(line.quantity), String(line.unitPrice), line.type].join("|"))
+    .join("\n");
+
+  const editSource = await createDraftWithLines(businessA.id, [
+    { type: "LABOR", description: "Updated vanity labor", quantity: "2", unitPrice: "95" },
+    { type: "MATERIAL", description: "Updated vanity cabinet", quantity: "1", unitPrice: "110" },
+  ]);
+  const replaced = await replaceEstimateLineTemplateLinesFromDraft(prisma, ownerA, {
+    templateId: saved.template.id,
+    estimateId: editSource.id,
+  });
+  check(
+    "OWNER can replace saved template lines from a draft",
+    replaced.template.id === saved.template.id &&
+      replaced.template.lineCount === 2 &&
+      replaced.template.lines[0].description === "Updated vanity labor" &&
+      replaced.message === TEMPLATE_LINES_REPLACED_MESSAGE,
+  );
+
+  const appliedAfterEdit = await prisma.estimate.findFirst({
+    where: { id: newDraft.id, businessId: businessA.id },
+    include: { lineItems: { orderBy: { createdAt: "asc" } } },
+  });
+  const createdAfterEdit = await prisma.estimate.findFirst({
+    where: { id: createdWithTemplate.estimateId, businessId: businessA.id },
+    include: { lineItems: { orderBy: { createdAt: "asc" } } },
+  });
+  check(
+    "Already-applied draft keeps recorded lines after template edit",
+    appliedAfterEdit?.status === "DRAFT" &&
+      (appliedAfterEdit.lineItems ?? [])
+        .map((line) => [line.description, String(line.quantity), String(line.unitPrice), line.type].join("|"))
+        .join("\n") === appliedSignaturesBefore &&
+      appliedSignaturesBefore.includes("Install vanity"),
+  );
+  check(
+    "Create-Estimate draft keeps recorded lines after template edit",
+    createdAfterEdit?.status === "DRAFT" &&
+      (createdAfterEdit.lineItems ?? [])
+        .map((line) => [line.description, String(line.quantity), String(line.unitPrice), line.type].join("|"))
+        .join("\n") === createdSignaturesBefore,
+  );
+
+  const futureDraft = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const futureApplied = await applyEstimateLineTemplateToDraft(prisma, ownerA, {
+    templateId: saved.template.id,
+    estimateId: futureDraft.id,
+  });
+  const futureLines = await prisma.lineItem.findMany({
+    where: { estimateId: futureDraft.id, businessId: businessA.id },
+    orderBy: { createdAt: "asc" },
+  });
+  check(
+    "Future apply uses the edited snapshot",
+    futureApplied.addedLineCount === 2 &&
+      futureLines.length === 2 &&
+      futureLines.some((line) => line.description === "Updated vanity labor") &&
+      !futureLines.some((line) => line.description.includes("Install vanity")),
+  );
+
+  const renamed = await renameEstimateLineTemplate(prisma, ownerA, {
+    templateId: saved.template.id,
+    name: "  Bath refresh v2  ",
+  });
+  check(
+    "OWNER can rename a template",
+    renamed.template.name === "Bath refresh v2" &&
+      renamed.message === TEMPLATE_RENAMED_MESSAGE,
+  );
+  const renamedRow = await prisma.estimateLineTemplate.findFirst({
+    where: { id: saved.template.id, businessId: businessA.id },
+  });
+  check("Renamed nameKey is the lowercase unique key", renamedRow?.nameKey === "bath refresh v2");
+  check(
+    "Rename does not rewrite already-applied lines",
+    (await prisma.lineItem.findMany({
+      where: { estimateId: newDraft.id, businessId: businessA.id },
+    })).some((line) => line.description.includes("Install vanity")),
+  );
+
+  await expectError(
+    "Rename to another same-business name is rejected",
+    () =>
+      renameEstimateLineTemplate(prisma, ownerA, {
+        templateId: saved.template.id,
+        name: "deck stain",
+      }),
+    (error) =>
+      error instanceof EstimateLineTemplateError &&
+      error.message === DUPLICATE_TEMPLATE_NAME_MESSAGE,
+  );
+  const betaRename = await renameEstimateLineTemplate(prisma, ownerB, {
+    templateId: savedB.template.id,
+    name: "Bath refresh v2",
+  });
+  check(
+    "Another business can reuse the renamed name",
+    betaRename.template.businessId === businessB.id &&
+      betaRename.template.name === "Bath refresh v2",
+  );
+
+  await expectError(
+    "ADMIN cannot rename a template",
+    () =>
+      renameEstimateLineTemplate(prisma, adminA, {
+        templateId: saved.template.id,
+        name: "Admin rename",
+      }),
+    (error) => error instanceof ForbiddenError,
+  );
+  await expectError(
+    "MEMBER cannot replace template lines",
+    () =>
+      replaceEstimateLineTemplateLinesFromDraft(prisma, memberA, {
+        templateId: saved.template.id,
+        estimateId: editSource.id,
+      }),
+    (error) => error instanceof ForbiddenError,
+  );
+  await expectError(
+    "Owner A cannot rename Owner B's template",
+    () =>
+      renameEstimateLineTemplate(prisma, ownerA, {
+        templateId: savedB.template.id,
+        name: "Stolen name",
+      }),
+    (error) =>
+      error instanceof EstimateLineTemplateError &&
+      error.message === TEMPLATE_NOT_FOUND_MESSAGE,
+  );
+  await expectError(
+    "Cannot replace template lines from a SENT estimate",
+    () =>
+      replaceEstimateLineTemplateLinesFromDraft(prisma, ownerA, {
+        templateId: saved.template.id,
+        estimateId: sentSource.id,
+      }),
+    (error) =>
+      error instanceof EstimateLineTemplateError &&
+      error.message === DRAFT_ONLY_SAVE_MESSAGE,
+  );
+
+  const archived = await setEstimateLineTemplateArchived(prisma, ownerA, {
+    templateId: saved.template.id,
+    archived: true,
+  });
+  check(
+    "OWNER can archive a template",
+    archived.template.archived === true && archived.message === TEMPLATE_ARCHIVED_OK_MESSAGE,
+  );
+  const listedActive = await listEstimateLineTemplates(prisma, ownerA);
+  const listedAll = await listEstimateLineTemplates(prisma, ownerA, { includeArchived: true });
+  const applyOptions = await loadEstimateLineTemplateOptions(prisma, ownerA);
+  check(
+    "Archived templates are hidden from apply lists",
+    listedActive.templates.every((row) => row.id !== saved.template.id) &&
+      applyOptions.every((row) => row.id !== saved.template.id) &&
+      listedAll.templates.some((row) => row.id === saved.template.id && row.archived),
+  );
+  await expectError(
+    "Archived template cannot be applied to a draft",
+    () =>
+      applyEstimateLineTemplateToDraft(prisma, ownerA, {
+        templateId: saved.template.id,
+        estimateId: futureDraft.id,
+      }),
+    (error) =>
+      error instanceof EstimateLineTemplateError &&
+      error.message === TEMPLATE_ARCHIVED_MESSAGE,
+  );
+  const estimateCountBeforeArchivedCreate = await prisma.estimate.count({
+    where: { businessId: businessA.id },
+  });
+  await expectError(
+    "Archived template on Create Estimate does not commit a draft",
+    () =>
+      createDraftEstimateWithOptionalTemplate(prisma, ownerA, {
+        customerId: createCustomer.id,
+        templateId: saved.template.id,
+        leadSource: "MANUAL",
+      }),
+    (error) =>
+      error instanceof EstimateLineTemplateError &&
+      error.message === TEMPLATE_ARCHIVED_MESSAGE,
+  );
+  check(
+    "Estimate count is unchanged after archived-template create",
+    (await prisma.estimate.count({ where: { businessId: businessA.id } })) ===
+      estimateCountBeforeArchivedCreate,
+  );
+  const afterArchiveApplied = await prisma.estimate.findFirst({
+    where: { id: newDraft.id, businessId: businessA.id },
+    include: { lineItems: true },
+  });
+  check(
+    "Already-applied draft keeps recorded lines after archive",
+    afterArchiveApplied?.status === "DRAFT" &&
+      afterArchiveApplied.lineItems.length === 3 &&
+      afterArchiveApplied.lineItems.some((line) => line.description.includes("Install vanity")),
+  );
+  await expectError(
+    "Archived names still collide with new same-business saves",
+    () =>
+      saveEstimateLineTemplateFromDraft(prisma, ownerA, {
+        estimateId: sourceDraft.id,
+        name: "Bath refresh v2",
+      }),
+    (error) =>
+      error instanceof EstimateLineTemplateError &&
+      error.message === DUPLICATE_TEMPLATE_NAME_MESSAGE,
+  );
+
+  await expectError(
+    "ADMIN cannot archive a template",
+    () =>
+      setEstimateLineTemplateArchived(prisma, adminA, {
+        templateId: saved.template.id,
+        archived: true,
+      }),
+    (error) => error instanceof ForbiddenError,
+  );
+  await expectError(
+    "Owner A cannot archive Owner B's template",
+    () =>
+      setEstimateLineTemplateArchived(prisma, ownerA, {
+        templateId: savedB.template.id,
+        archived: true,
+      }),
+    (error) =>
+      error instanceof EstimateLineTemplateError &&
+      error.message === TEMPLATE_NOT_FOUND_MESSAGE,
+  );
+
+  const restored = await setEstimateLineTemplateArchived(prisma, ownerA, {
+    templateId: saved.template.id,
+    archived: false,
+  });
+  check(
+    "OWNER can restore an archived template",
+    restored.template.archived === false && restored.message === TEMPLATE_RESTORED_MESSAGE,
+  );
+  const restoreDraft = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const restoredApply = await applyEstimateLineTemplateToDraft(prisma, ownerA, {
+    templateId: saved.template.id,
+    estimateId: restoreDraft.id,
+  });
+  check(
+    "Restored template applies the edited snapshot to a new draft",
+    restoredApply.status === "DRAFT" && restoredApply.addedLineCount === 2,
+  );
+
+  const catalogAfterManage = await prisma.serviceCatalogItem.findFirst({
+    where: { id: catalog.id, businessId: businessA.id },
+  });
+  check(
+    "Catalog price is unchanged after edit/rename/archive",
+    catalogAfterManage?.price.toString() === catalogPriceBefore,
+  );
 
   if (failures > 0) {
     console.error(`\n${failures} estimate-line-template check(s) failed.`);

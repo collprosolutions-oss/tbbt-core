@@ -8,6 +8,7 @@ import { BusinessTradesForm } from "@/components/settings/business-trades-form";
 import { BusinessPublicContactForm } from "@/components/settings/business-public-contact-form";
 import { WebsitePhotosEditor } from "@/components/settings/website-photos-editor";
 import { BusinessLocationsPanel } from "@/components/settings/business-locations-panel";
+import { EstimateLineTemplatesPanel } from "@/components/settings/estimate-line-templates-panel";
 import { ServiceAreaSettings } from "@/components/settings/service-area-settings";
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
 import { WebsitePublishPanel } from "@/components/settings/website-publish-panel";
@@ -493,6 +494,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
           <Button asChild variant="outline">
             <Link href="/estimates">Open Estimates</Link>
           </Button>
+          <EstimateLineTemplatesPanel canManage={canEditConsequential} />
         </SectionCard>
         <SectionCard
           title="Payment methods"
