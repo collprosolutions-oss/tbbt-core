@@ -37,6 +37,13 @@ export type NativeJobStopTimeAction = {
   reason: string | null;
 };
 
+export type NativeJobActivityAction = {
+  available: boolean;
+  reason: string | null;
+};
+
+export type NativeFieldActivityType = "TRAVEL" | "MATERIAL_PICKUP";
+
 export type NativeJobRunningTime = {
   running: boolean;
   recorded: boolean;
@@ -119,6 +126,12 @@ export type NativeJobDetail = NativeJobSummary & {
   completeAction: NativeJobCompleteAction;
   stopTimeAction: NativeJobStopTimeAction;
   runningTime: NativeJobRunningTime;
+  travelTime: NativeJobRunningTime;
+  pickupTime: NativeJobRunningTime;
+  startTravelAction: NativeJobActivityAction;
+  stopTravelAction: NativeJobActivityAction;
+  startPickupAction: NativeJobActivityAction;
+  stopPickupAction: NativeJobActivityAction;
   photos: NativeJobPhotos;
   visit: NativeJobVisit | null;
 };

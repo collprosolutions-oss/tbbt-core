@@ -1,5 +1,6 @@
 import { nativeApiUrl } from "./config";
 import type {
+  NativeFieldActivityType,
   NativeJobDetail,
   NativeJobPhotoAuthorizePayload,
   NativeJobPhotoStage,
@@ -159,6 +160,65 @@ export async function stopNativeJobRunningTime(
   const body = await parseJson(response);
   if (!response.ok) {
     return { error: typeof body.error === "string" ? body.error : "That job time could not be stopped." };
+  }
+  return body as unknown as { job: NativeJobDetail; alreadyStopped: boolean };
+}
+
+export async function startNativeActivityTime(
+  token: string,
+  jobId: string,
+  activityType: NativeFieldActivityType,
+): Promise<
+  | { job: NativeJobDetail; alreadyStarted: boolean; alreadyRunningTime: boolean }
+  | NativeApiError
+> {
+  const response = await fetch(
+    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/start-activity`),
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ activityType }),
+    },
+  );
+  const body = await parseJson(response);
+  if (!response.ok) {
+    return {
+      error:
+        typeof body.error === "string" ? body.error : "That time could not be started.",
+    };
+  }
+  return body as unknown as {
+    job: NativeJobDetail;
+    alreadyStarted: boolean;
+    alreadyRunningTime: boolean;
+  };
+}
+
+export async function stopNativeActivityTime(
+  token: string,
+  jobId: string,
+  activityType: NativeFieldActivityType,
+): Promise<{ job: NativeJobDetail; alreadyStopped: boolean } | NativeApiError> {
+  const response = await fetch(
+    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/stop-activity`),
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ activityType }),
+    },
+  );
+  const body = await parseJson(response);
+  if (!response.ok) {
+    return {
+      error:
+        typeof body.error === "string" ? body.error : "That time could not be stopped.",
+    };
   }
   return body as unknown as { job: NativeJobDetail; alreadyStopped: boolean };
 }

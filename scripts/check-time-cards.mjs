@@ -54,6 +54,7 @@ const {
   JOB_COMPLETION_TIME_CLOSED_REASON,
   JOB_STOP_TIME_CLOSED_REASON,
   reopenTimesheetWeek,
+  startAssignedActivityTime,
   stopRunningAssignedJobTime,
   requestTimeCorrection,
   TimeCardError,
@@ -267,6 +268,18 @@ try {
     "clockInTime refuses JOB time on a persisted COMPLETED Job",
     timeCardOpsSrc.includes("COMPLETED_JOB_CLOCK_IN_ERROR") &&
       timeCardOpsSrc.includes('locked.status === "COMPLETED"'),
+  );
+  check(
+    "Clock-in transition checks every running entry's week before the automatic close",
+    timeCardOpsSrc.includes("assertRunningEntriesEditable") &&
+      /await assertRunningEntriesEditable[\s\S]*for \(const current of running\)/.test(
+        timeCardOpsSrc.slice(timeCardOpsSrc.indexOf("export async function clockInTime")),
+      ) &&
+      /await assertRunningEntriesEditable[\s\S]*for \(const current of running\)/.test(
+        timeCardOpsSrc.slice(
+          timeCardOpsSrc.indexOf("async function ensureRunningAssignedActivityTimeInTransaction"),
+        ),
+      ),
   );
   check(
     "Owner completion uses the shared time-safety helper and passes the actor membership",
@@ -1552,6 +1565,113 @@ try {
     (await prisma.timeEntryAdjustment.count({
       where: { timeEntryId: approvedStopClock.id, reason: JOB_STOP_TIME_CLOSED_REASON },
     })) === 0,
+  );
+
+  const priorWeekWorkerUser = await prisma.user.create({
+    data: {
+      name: "Prior Week Worker",
+      email: `prior-week-${randomUUID()}@example.com`,
+      passwordHash: "x",
+    },
+  });
+  const priorWeekMem = await prisma.membership.create({
+    data: { userId: priorWeekWorkerUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const priorWeekA = makeAccess(businessA.id, "MEMBER", priorWeekMem.id);
+  const transitionNow = new Date();
+  const currentWeekStart = weekRange(transitionNow).start;
+  const priorStartedAt = new Date(currentWeekStart.getTime() - 24 * 60 * 60 * 1000);
+  const priorWeekStart = weekRange(priorStartedAt).start;
+  const priorWeekJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "IN_PROGRESS",
+      projectToken: randomUUID(),
+      assignedMembershipId: priorWeekMem.id,
+    },
+  });
+  const currentWeekJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "SCHEDULED",
+      projectToken: randomUUID(),
+      assignedMembershipId: priorWeekMem.id,
+    },
+  });
+  const priorWeekRunning = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: priorWeekMem.id,
+      jobId: priorWeekJob.id,
+      activityType: "TRAVEL",
+      status: "RUNNING",
+      startedAt: priorStartedAt,
+      source: "CLOCK",
+    },
+  });
+  await prisma.timesheetWeek.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: priorWeekMem.id,
+      weekStartedAt: priorWeekStart,
+      status: "APPROVED",
+      approvedAt: new Date(),
+      approvedByMembershipId: ownerMem.id,
+    },
+  });
+  await prisma.timesheetWeek.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: priorWeekMem.id,
+      weekStartedAt: currentWeekStart,
+      status: "OPEN",
+    },
+  });
+  check(
+    "Approved prior week and open current week are distinct fixtures",
+    priorWeekStart.getTime() < currentWeekStart.getTime(),
+  );
+  await expectError(
+    "clockInTime refuses to close a running entry from an approved prior week",
+    () =>
+      clockInTime(prisma, priorWeekA, {
+        membershipId: priorWeekMem.id,
+        activityType: "MATERIAL_PICKUP",
+        startedAt: transitionNow,
+      }),
+    (error) => error instanceof TimeCardError && /approved/i.test(error.message),
+  );
+  const priorWeekActivityStart = await startAssignedActivityTime(prisma, {
+    businessId: businessA.id,
+    jobId: currentWeekJob.id,
+    activityType: "MATERIAL_PICKUP",
+    actorMembershipId: priorWeekMem.id,
+    startedAt: transitionNow,
+  });
+  const priorWeekRunningAfter = await prisma.timeEntry.findUnique({
+    where: { id: priorWeekRunning.id },
+  });
+  const currentWeekPickupAfter = await prisma.timeEntry.findFirst({
+    where: {
+      jobId: currentWeekJob.id,
+      membershipId: priorWeekMem.id,
+    },
+  });
+  check(
+    "startAssignedActivityTime refuses to close approved prior-week time in an open current week",
+    priorWeekActivityStart.ok === false && /approved/i.test(priorWeekActivityStart.error ?? ""),
+  );
+  check(
+    "Refused prior-week clock transition leaves the running entry and writes no new time",
+    priorWeekRunningAfter?.status === "RUNNING" &&
+      priorWeekRunningAfter?.endedAt == null &&
+      priorWeekRunningAfter?.startedAt.getTime() === priorStartedAt.getTime() &&
+      currentWeekPickupAfter == null &&
+      (await prisma.timeEntryAdjustment.count({ where: { timeEntryId: priorWeekRunning.id } })) === 0 &&
+      (await prisma.job.findUnique({ where: { id: priorWeekJob.id } })).status === "IN_PROGRESS" &&
+      (await prisma.job.findUnique({ where: { id: currentWeekJob.id } })).status === "SCHEDULED",
   );
 
   await clockOutTime(prisma, memberA, { membershipId: memberMem.id }).catch(() => null);

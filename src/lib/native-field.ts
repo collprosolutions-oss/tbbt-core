@@ -11,8 +11,9 @@
  * Lookup uses the same compound scope as `assignedJobWhere()` in
  * src/lib/field-access.ts: businessId + assignedMembershipId in one
  * query. There is no fetch-then-compare step. Assigned-worker writes
- * live in `src/lib/native-field-ops.ts`, `src/lib/native-field-photos.ts`,
- * `src/lib/native-field-visits.ts`, and `src/lib/native-field-checklist.ts`.
+ * live in `src/lib/native-field-ops.ts`, `src/lib/native-field-activity.ts`,
+ * `src/lib/native-field-photos.ts`, `src/lib/native-field-visits.ts`, and
+ * `src/lib/native-field-checklist.ts`.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -34,8 +35,11 @@ import { startOfDay } from "@/lib/schedule";
 import {
   TIME_ACTIVITY_LABELS,
   formatDurationClock,
+  isAssignedFieldActivityType,
   isTimeActivityType,
   sumHours,
+  type AssignedFieldActivityType,
+  type TimeActivityType,
 } from "@/lib/time-cards";
 import { authorizePrivateStoredAssetDownload } from "@/lib/business-storage/private-serve";
 import type { StorageProvider } from "@/lib/business-storage/types";
@@ -139,6 +143,11 @@ export type NativeJobStopTimeAction = {
   reason: string | null;
 };
 
+export type NativeJobActivityAction = {
+  available: boolean;
+  reason: string | null;
+};
+
 export type NativeJobRunningTime = {
   running: boolean;
   recorded: boolean;
@@ -219,6 +228,12 @@ export type NativeJobDetail = NativeJobSummary & {
   completeAction: NativeJobCompleteAction;
   stopTimeAction: NativeJobStopTimeAction;
   runningTime: NativeJobRunningTime;
+  travelTime: NativeJobRunningTime;
+  pickupTime: NativeJobRunningTime;
+  startTravelAction: NativeJobActivityAction;
+  stopTravelAction: NativeJobActivityAction;
+  startPickupAction: NativeJobActivityAction;
+  stopPickupAction: NativeJobActivityAction;
   photos: NativeJobPhotos;
   visit: NativeJobVisit | null;
 };
@@ -339,11 +354,26 @@ export function nativeStopTimeAction(running: boolean): NativeJobStopTimeAction 
   return { available: false, reason: null };
 }
 
-export async function loadNativeJobRunningTime(
+export function nativeActivityStartAction(running: boolean): NativeJobActivityAction {
+  if (running) {
+    return { available: false, reason: null };
+  }
+  return { available: true, reason: null };
+}
+
+export function nativeActivityStopAction(running: boolean): NativeJobActivityAction {
+  if (running) {
+    return { available: true, reason: null };
+  }
+  return { available: false, reason: null };
+}
+
+export async function loadNativeJobActivityTime(
   db: Db,
   field: Pick<NativeFieldAccess, "businessId" | "membershipId">,
   jobId: string,
   timeZone: string,
+  activityType: TimeActivityType,
 ): Promise<NativeJobRunningTime> {
   const [running, recordedRows] = await Promise.all([
     db.timeEntry.findFirst({
@@ -351,7 +381,7 @@ export async function loadNativeJobRunningTime(
         businessId: field.businessId,
         membershipId: field.membershipId,
         jobId,
-        activityType: "JOB",
+        activityType,
         status: "RUNNING",
         endedAt: null,
       },
@@ -363,7 +393,7 @@ export async function loadNativeJobRunningTime(
         businessId: field.businessId,
         membershipId: field.membershipId,
         jobId,
-        activityType: "JOB",
+        activityType,
         endedAt: { not: null },
       },
       select: { startedAt: true, endedAt: true, activityType: true },
@@ -371,12 +401,12 @@ export async function loadNativeJobRunningTime(
     }),
   ]);
   if (running) {
-    const activityType = isTimeActivityType(running.activityType) ? running.activityType : "JOB";
+    const resolvedType = isTimeActivityType(running.activityType) ? running.activityType : activityType;
     return {
       running: true,
       recorded: false,
-      activityType,
-      activityLabel: TIME_ACTIVITY_LABELS[activityType],
+      activityType: resolvedType,
+      activityLabel: TIME_ACTIVITY_LABELS[resolvedType],
       startedAt: running.startedAt.toISOString(),
       startedAtLabel: formatDateTime(running.startedAt, timeZone),
       endedAt: null,
@@ -388,11 +418,12 @@ export async function loadNativeJobRunningTime(
   const latest = recordedRows[0];
   if (latest?.endedAt) {
     const hours = sumHours(recordedRows);
+    const resolvedType = isTimeActivityType(latest.activityType) ? latest.activityType : activityType;
     return {
       running: false,
       recorded: true,
-      activityType: "JOB",
-      activityLabel: TIME_ACTIVITY_LABELS.JOB,
+      activityType: resolvedType,
+      activityLabel: TIME_ACTIVITY_LABELS[resolvedType],
       startedAt: latest.startedAt.toISOString(),
       startedAtLabel: formatDateTime(latest.startedAt, timeZone),
       endedAt: latest.endedAt.toISOString(),
@@ -402,6 +433,37 @@ export async function loadNativeJobRunningTime(
     };
   }
   return idleNativeJobRunningTime();
+}
+
+export async function loadNativeJobRunningTime(
+  db: Db,
+  field: Pick<NativeFieldAccess, "businessId" | "membershipId">,
+  jobId: string,
+  timeZone: string,
+): Promise<NativeJobRunningTime> {
+  return loadNativeJobActivityTime(db, field, jobId, timeZone, "JOB");
+}
+
+export async function loadNativeAssignedFieldActivityTimes(
+  db: Db,
+  field: Pick<NativeFieldAccess, "businessId" | "membershipId">,
+  jobId: string,
+  timeZone: string,
+): Promise<{
+  runningTime: NativeJobRunningTime;
+  travelTime: NativeJobRunningTime;
+  pickupTime: NativeJobRunningTime;
+}> {
+  const [runningTime, travelTime, pickupTime] = await Promise.all([
+    loadNativeJobActivityTime(db, field, jobId, timeZone, "JOB"),
+    loadNativeJobActivityTime(db, field, jobId, timeZone, "TRAVEL"),
+    loadNativeJobActivityTime(db, field, jobId, timeZone, "MATERIAL_PICKUP"),
+  ]);
+  return { runningTime, travelTime, pickupTime };
+}
+
+export function isNativeFieldActivityType(value: string): value is AssignedFieldActivityType {
+  return isAssignedFieldActivityType(value);
 }
 
 export type NativeAssignedJobPage = {
@@ -537,7 +599,12 @@ export async function loadNativeAssignedJob(
   const confirmationLabel = appointmentConfirmationLabel(
     effectiveAppointmentConfirmationStatus(job),
   );
-  const runningTime = await loadNativeJobRunningTime(db, access, job.id, timeZone);
+  const { runningTime, travelTime, pickupTime } = await loadNativeAssignedFieldActivityTimes(
+    db,
+    access,
+    job.id,
+    timeZone,
+  );
 
   return {
     ...toNativeJobSummary(job, timeZone),
@@ -551,6 +618,12 @@ export async function loadNativeAssignedJob(
     completeAction: nativeCompleteAction(job.status),
     stopTimeAction: nativeStopTimeAction(runningTime.running),
     runningTime,
+    travelTime,
+    pickupTime,
+    startTravelAction: nativeActivityStartAction(travelTime.running),
+    stopTravelAction: nativeActivityStopAction(travelTime.running),
+    startPickupAction: nativeActivityStartAction(pickupTime.running),
+    stopPickupAction: nativeActivityStopAction(pickupTime.running),
     photos: await loadNativeAssignedJobPhotos(db, access, job.id, options),
     visit: await loadNativeAssignedJobVisit(db, access, job),
   };
