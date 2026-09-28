@@ -86,6 +86,14 @@ export function isTimeActivityType(value: string): value is TimeActivityType {
   return (TIME_ACTIVITY_TYPES as readonly string[]).includes(value);
 }
 
+/** Field activities an assigned worker can start/stop without changing Job.status. */
+export const ASSIGNED_FIELD_ACTIVITY_TYPES = ["TRAVEL", "MATERIAL_PICKUP"] as const;
+export type AssignedFieldActivityType = (typeof ASSIGNED_FIELD_ACTIVITY_TYPES)[number];
+
+export function isAssignedFieldActivityType(value: string): value is AssignedFieldActivityType {
+  return (ASSIGNED_FIELD_ACTIVITY_TYPES as readonly string[]).includes(value);
+}
+
 export function isTimeEntryStatus(value: string): value is TimeEntryStatus {
   return (TIME_ENTRY_STATUSES as readonly string[]).includes(value);
 }

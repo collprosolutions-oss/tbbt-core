@@ -14,10 +14,12 @@ import {
   loadNativeJob,
   recordNativeJobChecklistItem,
   recordNativeJobVisit,
+  startNativeActivityTime,
   startNativeJob,
+  stopNativeActivityTime,
   stopNativeJobRunningTime,
 } from "../api";
-import type { NativeJobDetail, NativeVisitOutcomeStatus } from "../types";
+import type { NativeFieldActivityType, NativeJobDetail, NativeVisitOutcomeStatus } from "../types";
 import { JobPhotosSection } from "./JobPhotosSection";
 
 export function JobScreen({
@@ -33,7 +35,9 @@ export function JobScreen({
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [pendingAction, setPendingAction] = useState<"start" | "complete" | "stop" | null>(null);
+  const [pendingAction, setPendingAction] = useState<
+    "start" | "complete" | "stop" | "start-travel" | "stop-travel" | "start-pickup" | "stop-pickup" | null
+  >(null);
   const [pendingOutcome, setPendingOutcome] = useState<NativeVisitOutcomeStatus | null>(
     null,
   );
@@ -90,6 +94,40 @@ export function JobScreen({
     setPendingAction("stop");
     setActionError(null);
     const result = await stopNativeJobRunningTime(token, jobId);
+    if (isApiError(result)) {
+      setPending(false);
+      setPendingAction(null);
+      setActionError(result.error);
+      return;
+    }
+    await reloadAssignedJob(result.job);
+    setPending(false);
+    setPendingAction(null);
+  }
+
+  async function startAssignedActivity(activityType: NativeFieldActivityType) {
+    if (pending) return;
+    setPending(true);
+    setPendingAction(activityType === "TRAVEL" ? "start-travel" : "start-pickup");
+    setActionError(null);
+    const result = await startNativeActivityTime(token, jobId, activityType);
+    if (isApiError(result)) {
+      setPending(false);
+      setPendingAction(null);
+      setActionError(result.error);
+      return;
+    }
+    await reloadAssignedJob(result.job);
+    setPending(false);
+    setPendingAction(null);
+  }
+
+  async function stopAssignedActivity(activityType: NativeFieldActivityType) {
+    if (pending) return;
+    setPending(true);
+    setPendingAction(activityType === "TRAVEL" ? "stop-travel" : "stop-pickup");
+    setActionError(null);
+    const result = await stopNativeActivityTime(token, jobId, activityType);
     if (isApiError(result)) {
       setPending(false);
       setPendingAction(null);
@@ -180,6 +218,24 @@ export function JobScreen({
                   }`
                 : "No running job time"}
           </Text>
+          <Text style={styles.body}>
+            {job.travelTime?.running
+              ? `Travel running · Since ${job.travelTime.startedAtLabel ?? "now"}`
+              : job.travelTime?.recorded
+                ? `Recorded travel${
+                    job.travelTime.hoursLabel ? ` · ${job.travelTime.hoursLabel}` : ""
+                  }`
+                : "No travel time"}
+          </Text>
+          <Text style={styles.body}>
+            {job.pickupTime?.running
+              ? `Material pickup running · Since ${job.pickupTime.startedAtLabel ?? "now"}`
+              : job.pickupTime?.recorded
+                ? `Recorded material pickup${
+                    job.pickupTime.hoursLabel ? ` · ${job.pickupTime.hoursLabel}` : ""
+                  }`
+                : "No material pickup time"}
+          </Text>
           {job.address ? <Text style={styles.body}>{job.address}</Text> : null}
           {job.customerPhone ? <Text style={styles.body}>{job.customerPhone}</Text> : null}
           <View style={styles.actions}>
@@ -219,6 +275,58 @@ export function JobScreen({
             >
               <Text style={styles.primaryActionLabel}>
                 {pendingAction === "stop" ? "Stopping…" : "Stop job time"}
+              </Text>
+            </Pressable>
+          ) : null}
+          {job.startTravelAction?.available ? (
+            <Pressable
+              disabled={pending}
+              onPress={() => {
+                void startAssignedActivity("TRAVEL");
+              }}
+              style={[styles.secondaryAction, pending ? styles.primaryActionDisabled : null]}
+            >
+              <Text style={styles.primaryActionLabel}>
+                {pendingAction === "start-travel" ? "Starting…" : "Start travel"}
+              </Text>
+            </Pressable>
+          ) : null}
+          {job.stopTravelAction?.available ? (
+            <Pressable
+              disabled={pending}
+              onPress={() => {
+                void stopAssignedActivity("TRAVEL");
+              }}
+              style={[styles.secondaryAction, pending ? styles.primaryActionDisabled : null]}
+            >
+              <Text style={styles.primaryActionLabel}>
+                {pendingAction === "stop-travel" ? "Stopping…" : "Stop travel"}
+              </Text>
+            </Pressable>
+          ) : null}
+          {job.startPickupAction?.available ? (
+            <Pressable
+              disabled={pending}
+              onPress={() => {
+                void startAssignedActivity("MATERIAL_PICKUP");
+              }}
+              style={[styles.secondaryAction, pending ? styles.primaryActionDisabled : null]}
+            >
+              <Text style={styles.primaryActionLabel}>
+                {pendingAction === "start-pickup" ? "Starting…" : "Start material pickup"}
+              </Text>
+            </Pressable>
+          ) : null}
+          {job.stopPickupAction?.available ? (
+            <Pressable
+              disabled={pending}
+              onPress={() => {
+                void stopAssignedActivity("MATERIAL_PICKUP");
+              }}
+              style={[styles.secondaryAction, pending ? styles.primaryActionDisabled : null]}
+            >
+              <Text style={styles.primaryActionLabel}>
+                {pendingAction === "stop-pickup" ? "Stopping…" : "Stop material pickup"}
               </Text>
             </Pressable>
           ) : null}

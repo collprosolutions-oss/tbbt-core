@@ -105,6 +105,7 @@ npm run test:native-field
 npm run test:native-field-photos
 npm run test:native-field-visit
 npm run test:native-field-checklist
+npm run test:native-field-activity
 npx tsc --noEmit
 npm run build
 ```
