@@ -281,6 +281,17 @@ export type PublicIntakeTx = {
         smsConsentUpdatedAt?: Date | null;
       };
     }) => Promise<{ id: string }>;
+    updateMany: (args: {
+      where: {
+        id: string;
+        businessId: string;
+        phone?: string | null;
+      };
+      data: {
+        smsConsentStatus?: "GRANTED" | "UNKNOWN" | "REVOKED";
+        smsConsentUpdatedAt?: Date | null;
+      };
+    }) => Promise<{ count: number }>;
   };
   property: {
     findMany: (args: {
@@ -839,7 +850,8 @@ async function createPublicServiceRequestInner(
       // Explicit public SMS opt-in may grant consent without rewriting
       // identity fields. The existingCustomer path rechecks the stored
       // phone inside this transaction and never grants from a different
-      // submitted number.
+      // submitted number. The consent write is predicated on the exact
+      // phone just read, so a later owner edit matches zero rows.
       if (reusedExistingCustomer && smsConsentGrant) {
         if (boundCustomerId) {
           const stored = await tx.customer.findFirst({
@@ -847,8 +859,12 @@ async function createPublicServiceRequestInner(
             select: { phone: true },
           });
           if (stored && normalizePhone(stored.phone) === normalizePhone(phone)) {
-            await tx.customer.update({
-              where: { id: customer.id },
+            await tx.customer.updateMany({
+              where: {
+                id: customer.id,
+                businessId: business.id,
+                phone: stored.phone,
+              },
               data: smsConsentGrant,
             });
           }

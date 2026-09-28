@@ -33,6 +33,7 @@ if (generateEarly.status !== 0) {
 const { businessScope, assertBusinessRecord } = await import("@/lib/access-scope");
 const { ensurePrimaryBusinessTrade } = await import("@/lib/business-trades");
 const { normalizePhone } = await import("@/lib/customer-identity");
+const { smsConsentAfterOwnerPhoneEdit } = await import("@/lib/customer-messaging/opt-in");
 const { createPublicServiceRequest } = await import("@/lib/public-intake");
 const { PUBLIC_INTAKE_REFRESH_FORM } = await import("@/lib/intake-snapshot");
 const { INTAKE_CONDITION_STATUS_DRAFT } = await import("@/lib/intake-conditionals");
@@ -264,10 +265,12 @@ check(
   CLEANING_REPEAT_VISIT_UNAVAILABLE_MESSAGE === "This project link is not available.",
 );
 check(
-  "existingCustomer path rechecks normalized phones inside the transaction before SMS consent",
+  "existingCustomer path rechecks normalized phones and grants consent only on an atomic stored-phone write",
   intakeSrc.includes("boundCustomerId") &&
     intakeSrc.includes("normalizePhone(stored.phone) === normalizePhone(phone)") &&
     intakeSrc.includes("select: { phone: true }") &&
+    intakeSrc.includes("updateMany") &&
+    intakeSrc.includes("phone: stored.phone") &&
     !intakeSrc.includes("data: { phone"),
 );
 
@@ -434,6 +437,7 @@ try {
   const alphaCatalogIsolation = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
   const alphaMissingSnap = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
   const alphaSms = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
+  const alphaSmsRace = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
   const alphaNoCustomer = await createCleaningJob(cleanA.id, { includeCustomer: false });
   const beta = await createCleaningJob(cleanB.id, { catalogItemId: catalogB.id });
   const handy = await createCleaningJob(handyC.id, { tradeCode: "HANDYMAN" });
@@ -743,6 +747,109 @@ try {
       smsCustomer?.smsConsentUpdatedAt?.toISOString() === consentFrozenAt.toISOString(),
   );
 
+  const raceStoredPhone = "5551110000";
+  const raceOwnerPhone = "5552223333";
+  const raceConsentFrozenAt = new Date("2026-01-15T12:00:00.000Z");
+  await prisma.customer.update({
+    where: { id: alphaSmsRace.customer.id },
+    data: {
+      phone: raceStoredPhone,
+      smsConsentStatus: "UNKNOWN",
+      smsConsentUpdatedAt: raceConsentFrozenAt,
+    },
+  });
+  let releaseConsentWrite;
+  const consentWriteGate = new Promise((resolve) => {
+    releaseConsentWrite = resolve;
+  });
+  let notifyConsentReachedWrite;
+  const consentReachedWrite = new Promise((resolve) => {
+    notifyConsentReachedWrite = resolve;
+  });
+  let consentWriteCount = null;
+  const racingDb = prisma.$extends({
+    query: {
+      customer: {
+        async updateMany({ args, query }) {
+          if (args.data?.smsConsentStatus === "GRANTED") {
+            notifyConsentReachedWrite();
+            await consentWriteGate;
+            const updated = await query(args);
+            consentWriteCount = updated.count;
+            return updated;
+          }
+          return query(args);
+        },
+      },
+    },
+  });
+  const raceSubmit = createCleaningCustomerRepeatVisitRequest(racingDb, {
+    token: alphaSmsRace.job.projectToken,
+    slug: cleanA.slug,
+    name: alphaSmsRace.customer.name,
+    email: alphaSmsRace.customer.email,
+    phone: raceStoredPhone,
+    address: "100 Pine St",
+    streetAddress: "100 Pine St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Matching phone with SMS opt-in, owner edits first",
+    catalogItemIds: [catalogA.id],
+    includeOther: false,
+    otherDescription: "",
+    tenantIntakeSnapshotId: snapV1.id,
+    intakeAnswers: cleaningAnswers(),
+    submissionId: `rv-sms-race-${suffix}`,
+    smsOptIn: true,
+  });
+  await Promise.race([
+    consentReachedWrite,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("bound SMS consent write was never reached")), 8000);
+    }),
+  ]);
+  const ownerConsentReset = smsConsentAfterOwnerPhoneEdit(raceStoredPhone, raceOwnerPhone);
+  await prisma.customer.update({
+    where: { id: alphaSmsRace.customer.id },
+    data: {
+      phone: raceOwnerPhone,
+      ...(ownerConsentReset ?? {}),
+    },
+  });
+  const ownerAfterEdit = await prisma.customer.findFirst({
+    where: { id: alphaSmsRace.customer.id, businessId: cleanA.id },
+    select: { phone: true, smsConsentStatus: true, smsConsentUpdatedAt: true },
+  });
+  releaseConsentWrite();
+  const raceResult = await raceSubmit;
+  const raceCustomer = await prisma.customer.findFirst({
+    where: { id: alphaSmsRace.customer.id, businessId: cleanA.id },
+    select: { id: true, phone: true, smsConsentStatus: true, smsConsentUpdatedAt: true },
+  });
+  const raceRequest = raceResult.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: raceResult.requestId },
+        select: { id: true, customerId: true, status: true, repeatVisitSourceJobId: true },
+      })
+    : null;
+  check(
+    "Owner phone edit that commits first leaves the consent write matching zero rows and ungranted",
+    normalizePhone(raceStoredPhone) !== normalizePhone(raceOwnerPhone) &&
+      ownerAfterEdit?.phone === raceOwnerPhone &&
+      ownerAfterEdit?.smsConsentStatus === "UNKNOWN" &&
+      raceResult.ok === true &&
+      raceRequest?.status === "OPEN" &&
+      raceRequest?.customerId === alphaSmsRace.customer.id &&
+      raceRequest?.repeatVisitSourceJobId === alphaSmsRace.job.id &&
+      consentWriteCount === 0 &&
+      raceCustomer?.phone === raceOwnerPhone &&
+      raceCustomer?.smsConsentStatus === "UNKNOWN" &&
+      raceCustomer?.smsConsentUpdatedAt?.toISOString() ===
+        ownerAfterEdit?.smsConsentUpdatedAt?.toISOString() &&
+      raceCustomer?.smsConsentUpdatedAt?.toISOString() !== raceConsentFrozenAt.toISOString(),
+  );
+
   const boundCustomer = await prisma.serviceRequest.findMany({
     where: { businessId: cleanA.id, repeatVisitSourceJobId: { not: null } },
     select: { customerId: true, repeatVisitSourceJobId: true },
@@ -750,7 +857,12 @@ try {
   check(
     "Bound requests stay on the token customer and never create a second customer",
     boundCustomer.every((row) =>
-      [alpha.customer.id, alphaTwo.customer.id, alphaSms.customer.id].includes(row.customerId),
+      [
+        alpha.customer.id,
+        alphaTwo.customer.id,
+        alphaSms.customer.id,
+        alphaSmsRace.customer.id,
+      ].includes(row.customerId),
     ),
   );
 } catch (error) {
