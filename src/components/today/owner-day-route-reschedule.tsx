@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { durationPresetForMinutes } from "@/lib/job-schedule";
 import {
+  OWNER_DAY_ROUTE_CHANGE_COMPLETED_MESSAGE,
   OWNER_DAY_ROUTE_CHANGE_NO_CUSTOMER_MESSAGE,
   OWNER_DAY_ROUTE_CHANGE_OWNER_ONLY_MESSAGE,
   type OwnerDayRouteStop,
@@ -37,6 +38,11 @@ export function OwnerDayRouteRescheduleForm({
   if (!canChange) {
     return (
       <p className="mt-3 text-xs text-muted-foreground">{OWNER_DAY_ROUTE_CHANGE_OWNER_ONLY_MESSAGE}</p>
+    );
+  }
+  if (stop.status === "COMPLETED") {
+    return (
+      <p className="mt-3 text-xs text-muted-foreground">{OWNER_DAY_ROUTE_CHANGE_COMPLETED_MESSAGE}</p>
     );
   }
 

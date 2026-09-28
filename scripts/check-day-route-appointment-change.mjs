@@ -27,6 +27,7 @@ const { ForbiddenError } = await import("@/lib/authorization");
 const { businessScope, assertBusinessRecord } = await import("@/lib/access-scope");
 const { zonedCivilToUtc } = await import("@/lib/business-timezone");
 const {
+  OWNER_DAY_ROUTE_CHANGE_COMPLETED_MESSAGE,
   OWNER_DAY_ROUTE_CHANGE_NO_CUSTOMER_MESSAGE,
   OWNER_DAY_ROUTE_CHANGE_OWNER_ONLY_MESSAGE,
   OWNER_DAY_ROUTE_CHANGE_STALE_MESSAGE,
@@ -146,7 +147,8 @@ try {
     "UI does not claim traffic optimization",
     !ownerDayRouteTextHasForbiddenClaim(uiSrc) &&
       !ownerDayRouteTextHasForbiddenClaim(formSrc) &&
-      formSrc.includes("OWNER_DAY_ROUTE_CHANGE_NO_CUSTOMER_MESSAGE"),
+      formSrc.includes("OWNER_DAY_ROUTE_CHANGE_NO_CUSTOMER_MESSAGE") &&
+      formSrc.includes("OWNER_DAY_ROUTE_CHANGE_COMPLETED_MESSAGE"),
   );
   check(
     "Action revalidates the day-route path",
@@ -311,6 +313,29 @@ try {
     select: { scheduledAt: true },
   });
   check("Foreign job schedule is unchanged", foreignUnchanged?.scheduledAt.getTime() === day.getTime());
+
+  const completedJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "COMPLETED",
+      scheduledAt: zonedCivilToUtc(2026, 11, 3, 8, 0, 0, NY),
+      scheduledDurationMinutes: 60,
+      projectToken: randomUUID(),
+    },
+  });
+  const completedDenied = await changeOwnerDayRouteAppointment(prisma, ownerA, {
+    jobId: completedJob.id,
+    date: "2026-11-03",
+    time: "13:00",
+    expectedScheduledAt: completedJob.scheduledAt.toISOString(),
+  });
+  check(
+    "Completed job cannot be rescheduled from day-route",
+    completedDenied.ok === false &&
+      completedDenied.error === OWNER_DAY_ROUTE_CHANGE_COMPLETED_MESSAGE,
+  );
 
   console.log("\nTEST — OWNER change refreshes recorded order");
   const moved = await changeOwnerDayRouteAppointment(prisma, ownerA, {
