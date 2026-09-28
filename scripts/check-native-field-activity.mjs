@@ -200,6 +200,15 @@ check(
     nativeActivityStopAction(true).available === true &&
     nativeActivityStopAction(false).available === false,
 );
+check(
+  "Activity start checks every running entry's week before the automatic close",
+  timeCardOpsSrc.includes("assertRunningEntriesEditable") &&
+    /await assertRunningEntriesEditable[\s\S]*for \(const current of running\)/.test(
+      timeCardOpsSrc.slice(
+        timeCardOpsSrc.indexOf("async function ensureRunningAssignedActivityTimeInTransaction"),
+      ),
+    ),
+);
 
 const emptyJson = parseNativeActivityTypeJson("{}");
 const invalidJson = parseNativeActivityTypeJson('{"activityType":"JOB"}');
@@ -1015,6 +1024,119 @@ try {
     raceJobAfter?.status === "SCHEDULED" &&
       raceJobAfter?.assignedMembershipId === otherMem.id &&
       raceTimeAfter === 0,
+  );
+
+  const priorWeekUser = await prisma.user.create({
+    data: {
+      name: "Prior Week Worker",
+      email: `prior-${randomUUID()}@native-activity.example`,
+      passwordHash,
+    },
+  });
+  const priorWeekMem = await prisma.membership.create({
+    data: { userId: priorWeekUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const priorWeekSignIn = await signInNativeField(prisma, {
+    email: priorWeekUser.email,
+    password,
+  });
+  if (!priorWeekSignIn.ok) {
+    throw new Error("Prior-week activity fixture sign-in failed.");
+  }
+  const priorWeekAccess = await resolveNativeFieldAccess(prisma, {
+    token: priorWeekSignIn.token,
+  });
+  if (!priorWeekAccess.ok) {
+    throw new Error("Prior-week activity fixture access failed.");
+  }
+  const priorWeekJob = await createActivityJob({
+    businessId: businessA.id,
+    assignedMembershipId: priorWeekMem.id,
+    customerName: "Prior Week Travel Canary",
+    status: "IN_PROGRESS",
+  });
+  const currentWeekJob = await createActivityJob({
+    businessId: businessA.id,
+    assignedMembershipId: priorWeekMem.id,
+    customerName: "Open Current Week Canary",
+  });
+  const now = new Date();
+  const currentWeekStart = weekRange(now).start;
+  const priorStartedAt = new Date(currentWeekStart.getTime() - 24 * 60 * 60 * 1000);
+  const priorWeekStart = weekRange(priorStartedAt).start;
+  const priorWeekTime = await createRunningTime({
+    businessId: businessA.id,
+    membershipId: priorWeekMem.id,
+    jobId: priorWeekJob.id,
+    activityType: "TRAVEL",
+    startedAt: priorStartedAt,
+  });
+  await prisma.timesheetWeek.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: priorWeekMem.id,
+      weekStartedAt: priorWeekStart,
+      status: "APPROVED",
+      approvedAt: new Date(),
+      approvedByMembershipId: ownerMem.id,
+    },
+  });
+  await prisma.timesheetWeek.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: priorWeekMem.id,
+      weekStartedAt: currentWeekStart,
+      status: "OPEN",
+    },
+  });
+  const priorWeekStartTravel = await startNativeAssignedActivityTime(
+    prisma,
+    priorWeekAccess.access,
+    currentWeekJob.id,
+    "MATERIAL_PICKUP",
+  );
+  const priorWeekTimeAfter = await prisma.timeEntry.findFirst({
+    where: { id: priorWeekTime.id, businessId: businessA.id },
+    select: { status: true, endedAt: true, activityType: true, startedAt: true },
+  });
+  const currentWeekPickupAfter = await prisma.timeEntry.findFirst({
+    where: {
+      jobId: currentWeekJob.id,
+      businessId: businessA.id,
+      membershipId: priorWeekMem.id,
+    },
+  });
+  const priorWeekCloseAdjustments = await prisma.timeEntryAdjustment.count({
+    where: { timeEntryId: priorWeekTime.id },
+  });
+  const priorWeekJobAfter = await prisma.job.findFirst({
+    where: { id: priorWeekJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const currentWeekJobAfter = await prisma.job.findFirst({
+    where: { id: currentWeekJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  check(
+    "Approved prior week and open current week are distinct fixtures",
+    priorWeekStart.getTime() < currentWeekStart.getTime(),
+  );
+  check(
+    "Approved prior-week running time refuses Start pickup in an open current week",
+    priorWeekStartTravel.ok === false &&
+      priorWeekStartTravel.status === 409 &&
+      /approved/i.test(priorWeekStartTravel.error ?? "") &&
+      currentWeekPickupAfter == null,
+  );
+  check(
+    "Refused prior-week clock transition rolls back all time changes",
+    priorWeekTimeAfter?.status === "RUNNING" &&
+      priorWeekTimeAfter?.endedAt === null &&
+      priorWeekTimeAfter?.activityType === "TRAVEL" &&
+      priorWeekTimeAfter?.startedAt.getTime() === priorStartedAt.getTime() &&
+      priorWeekCloseAdjustments === 0 &&
+      priorWeekJobAfter?.status === "IN_PROGRESS" &&
+      currentWeekJobAfter?.status === "SCHEDULED",
   );
 
   const rollbackStartedAt = new Date(Date.now() - 60_000);

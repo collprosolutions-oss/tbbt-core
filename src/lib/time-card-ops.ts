@@ -206,6 +206,31 @@ async function assertWeekEditable(
   }
 }
 
+/**
+ * Clock-in transition must not close a RUNNING entry whose own week is
+ * approved, even when the new start falls in an open week.
+ */
+async function assertRunningEntriesEditable(
+  db: Db,
+  businessId: string,
+  membershipId: string,
+  running: readonly { startedAt: Date }[],
+  at: Date,
+  approvedWeekError?: string,
+) {
+  for (const current of running) {
+    try {
+      await assertWeekEditable(db, businessId, membershipId, current.startedAt);
+      await assertWeekEditable(db, businessId, membershipId, at);
+    } catch (error) {
+      if (isTimeCardError(error)) {
+        throw new TimeCardError(approvedWeekError ?? error.message);
+      }
+      throw error;
+    }
+  }
+}
+
 async function overlappingEntries(
   db: Db,
   businessId: string,
@@ -320,6 +345,13 @@ export async function clockInTime(
         endedAt: null,
       },
     });
+    await assertRunningEntriesEditable(
+      tx,
+      access.businessId,
+      workerMembershipId,
+      running,
+      startedAt,
+    );
 
     for (const current of running) {
       const previous = toAuditSnapshot(current);
@@ -1230,6 +1262,14 @@ async function ensureRunningAssignedActivityTimeInTransaction(
       endedAt: null,
     },
   });
+  await assertRunningEntriesEditable(
+    db,
+    input.businessId,
+    input.membershipId,
+    running,
+    input.startedAt,
+    input.approvedWeekError,
+  );
 
   for (const current of running) {
     const previous = toAuditSnapshot(current);
@@ -1577,7 +1617,8 @@ export async function startAssignedActivityTimeInTransaction(
  * tenant-owned Job, open matching RUNNING activity time if none is
  * already running, and leave Job.status unchanged. JOB time is only
  * closed when a different activity is already running (the defined
- * clock transition).
+ * clock transition). A running entry from an approved week refuses
+ * that close and rolls the transaction back.
  */
 export async function startAssignedActivityTime(
   db: PrismaClient,
