@@ -8,9 +8,12 @@
  * ServiceCatalogItem prices, SENT/APPROVED estimates, invoices,
  * payments, or jobs. This file never writes ServiceCatalogItem.
  *
- * Apply claims the estimate with the same updateMany-WHERE-DRAFT lock
- * sendEstimate uses, then inserts lines. Create+apply share one
- * transaction so an invalid template cannot leave a new draft behind.
+ * Apply claims the template with updateMany-WHERE-archived-false and the
+ * estimate with the same updateMany-WHERE-DRAFT lock sendEstimate uses,
+ * then inserts lines. If archive or send commits first, the later apply
+ * or edit-from-draft matches zero rows and cannot change template lines
+ * or leave a new draft. Create+apply share one transaction so an
+ * invalid or archived template cannot leave a new draft behind.
  * Archived templates stay out of apply pickers.
  */
 import { randomUUID } from "node:crypto";
@@ -81,6 +84,24 @@ export function missingEstimateLineTemplateSchema(error: unknown) {
     /EstimateLineTemplate|estimateLineTemplate|does not exist/i.test(message)
   );
 }
+
+/**
+ * Test-only barriers. Production never sets these.
+ * - beforeApplyClaims: archive-versus-apply meets after the later apply
+ *   has entered its write transaction and before it claims archived=false.
+ * - beforeEditClaims: send-versus-edit meets after edit entered its write
+ *   transaction and before it claims the source estimate as DRAFT.
+ */
+export const estimateLineTemplateTestHooks: {
+  beforeApplyClaims?: (input: {
+    templateId: string;
+    estimateId: string;
+  }) => Promise<void> | void;
+  beforeEditClaims?: (input: {
+    templateId: string;
+    estimateId: string;
+  }) => Promise<void> | void;
+} = {};
 
 export function estimateLineTemplateErrorMessage(error: unknown, fallback: string) {
   if (
@@ -302,12 +323,44 @@ async function applyCollectedTemplateLinesInTx(
   await persistDraftEstimateTotal(tx, input.estimateId, access.businessId);
 }
 
+async function claimActiveTemplateForApply(
+  tx: Prisma.TransactionClient,
+  access: BusinessAccess,
+  templateId: string,
+) {
+  const claimed = await tx.estimateLineTemplate.updateMany({
+    where: {
+      id: templateId,
+      businessId: access.businessId,
+      archived: false,
+    },
+    data: { updatedAt: new Date() },
+  });
+  if (claimed.count === 1) return;
+  const existing = await tx.estimateLineTemplate.findFirst({
+    where: { id: templateId, ...access.scope },
+    select: { id: true, businessId: true, archived: true },
+  });
+  if (!existing) {
+    throw new EstimateLineTemplateError(TEMPLATE_NOT_FOUND_MESSAGE);
+  }
+  if (existing.businessId !== access.businessId) {
+    throw new ForbiddenError();
+  }
+  throw new EstimateLineTemplateError(TEMPLATE_ARCHIVED_MESSAGE);
+}
+
 export async function applyEstimateLineTemplateInTx(
   tx: Prisma.TransactionClient,
   access: BusinessAccess,
   input: { templateId: string; estimateId: string },
 ): Promise<{ addedLineCount: number }> {
   await requireTemplateAccess(tx, access);
+  await estimateLineTemplateTestHooks.beforeApplyClaims?.({
+    templateId: input.templateId,
+    estimateId: input.estimateId,
+  });
+  await claimActiveTemplateForApply(tx, access, input.templateId);
   const lines = await loadOwnedTemplateLines(tx, access, input.templateId);
   await applyCollectedTemplateLinesInTx(tx, access, {
     estimateId: input.estimateId,
@@ -352,7 +405,7 @@ export async function createDraftEstimateWithOptionalTemplate(
         appliedTemplate: true,
         addedLineCount: applied.addedLineCount,
       };
-    });
+    }, { timeout: 15_000 });
   } catch (error) {
     if (missingEstimateLineTemplateSchema(error)) {
       throw new EstimateLineTemplateUnavailableError();
@@ -442,8 +495,6 @@ export async function applyEstimateLineTemplateToDraft(
 }> {
   await requireTemplateAccess(db, access);
 
-  const lines = await loadOwnedTemplateLines(db, access, input.templateId);
-
   const estimate = access.assertOwned(
     await db.estimate.findFirst({
       where: { id: input.estimateId, ...access.scope },
@@ -457,25 +508,24 @@ export async function applyEstimateLineTemplateToDraft(
   }
 
   try {
-    await db.$transaction(async (tx) => {
-      await applyCollectedTemplateLinesInTx(tx, access, {
+    const applied = await db.$transaction(async (tx) => {
+      return applyEstimateLineTemplateInTx(tx, access, {
+        templateId: input.templateId,
         estimateId: estimate.id,
-        lines,
       });
-    });
+    }, { timeout: 15_000 });
+    return {
+      estimateId: estimate.id,
+      status: "DRAFT",
+      addedLineCount: applied.addedLineCount,
+      message: REVIEW_BEFORE_SEND_MESSAGE,
+    };
   } catch (error) {
     if (missingEstimateLineTemplateSchema(error)) {
       throw new EstimateLineTemplateUnavailableError();
     }
     throw error;
   }
-
-  return {
-    estimateId: estimate.id,
-    status: "DRAFT",
-    addedLineCount: lines.length,
-    message: REVIEW_BEFORE_SEND_MESSAGE,
-  };
 }
 
 async function loadOwnedDraftTemplateSourceLines(
@@ -570,10 +620,29 @@ export async function replaceEstimateLineTemplateLinesFromDraft(
 ): Promise<{ template: SavedEstimateLineTemplate; message: string }> {
   await requireTemplateAccess(db, access);
   const existing = await loadOwnedTemplate(db, access, input.templateId);
-  const collected = await loadOwnedDraftTemplateSourceLines(db, access, input.estimateId);
 
   try {
     const updated = await db.$transaction(async (tx) => {
+      await estimateLineTemplateTestHooks.beforeEditClaims?.({
+        templateId: existing.id,
+        estimateId: input.estimateId,
+      });
+      const claimedEstimate = await tx.estimate.updateMany({
+        where: {
+          id: input.estimateId,
+          businessId: access.businessId,
+          status: "DRAFT",
+        },
+        data: { updatedAt: new Date() },
+      });
+      if (claimedEstimate.count !== 1) {
+        throw new EstimateLineTemplateError(DRAFT_ONLY_SAVE_MESSAGE);
+      }
+      const collected = await loadOwnedDraftTemplateSourceLines(
+        tx,
+        access,
+        input.estimateId,
+      );
       const claimed = await tx.estimateLineTemplate.updateMany({
         where: { id: existing.id, businessId: access.businessId },
         data: { updatedAt: new Date() },
@@ -604,7 +673,7 @@ export async function replaceEstimateLineTemplateLinesFromDraft(
           },
         },
       });
-    });
+    }, { timeout: 15_000 });
 
     return {
       template: toSavedEstimateLineTemplate(updated),

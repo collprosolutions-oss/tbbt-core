@@ -63,6 +63,7 @@ const {
   EstimateLineTemplateError,
   applyEstimateLineTemplateToDraft,
   createDraftEstimateWithOptionalTemplate,
+  estimateLineTemplateTestHooks,
   listEstimateLineTemplates,
   loadEstimateLineTemplateOptions,
   renameEstimateLineTemplate,
@@ -173,6 +174,51 @@ async function createDraftWithLines(businessId, lines) {
   return estimate;
 }
 
+function templateLineSignature(line) {
+  return [line.description, String(line.quantity), String(line.unitPrice), line.type].join("|");
+}
+
+async function snapshotTemplateLines(templateId, businessId) {
+  const lines = await prisma.estimateLineTemplateLine.findMany({
+    where: { templateId, businessId },
+    orderBy: { sortOrder: "asc" },
+  });
+  return lines.map(templateLineSignature).join("\n");
+}
+
+function createCommitBarrier() {
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  let arrived;
+  const waiting = new Promise((resolve) => {
+    arrived = resolve;
+  });
+  return {
+    wait: async () => {
+      arrived();
+      await held;
+    },
+    arrived: waiting,
+    release: () => release(),
+  };
+}
+
+async function withTimeout(promise, ms, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function simulateSend(estimateId, businessId) {
   return prisma.$transaction(async (tx) => {
     const updated = await tx.estimate.updateMany({
@@ -273,7 +319,11 @@ try {
       opsSrc.includes("replaceEstimateLineTemplateLinesFromDraft") &&
       opsSrc.includes("setEstimateLineTemplateArchived") &&
       opsSrc.includes("never rewrite LineItem") &&
-      !/lineItem\.(update|updateMany|delete|deleteMany)/.test(opsSrc),
+      !/lineItem\.(update|updateMany|delete|deleteMany)/.test(opsSrc) &&
+      opsSrc.indexOf("beforeEditClaims") <
+        opsSrc.indexOf("replaceEstimateLineTemplateLinesFromDraft") +
+          opsSrc.slice(opsSrc.indexOf("replaceEstimateLineTemplateLinesFromDraft")).indexOf("deleteMany") &&
+      opsSrc.includes('status: "DRAFT"'),
   );
   check(
     "Apply stays on DRAFT and claims with the send updateMany lock",
@@ -281,7 +331,12 @@ try {
       opsSrc.includes("updateMany") &&
       opsSrc.includes("DRAFT_ONLY_APPLY_MESSAGE") &&
       opsSrc.includes("REVIEW_BEFORE_SEND_MESSAGE") &&
-      opsSrc.includes("TEMPLATE_ARCHIVED_MESSAGE"),
+      opsSrc.includes("TEMPLATE_ARCHIVED_MESSAGE") &&
+      opsSrc.includes("archived: false") &&
+      opsSrc.includes("claimActiveTemplateForApply") &&
+      opsSrc.includes("beforeApplyClaims") &&
+      opsSrc.includes("beforeEditClaims") &&
+      opsSrc.includes("Production never sets these"),
   );
   check(
     "Create Estimate applies a template in the same transaction as the new draft",
@@ -1060,6 +1115,185 @@ try {
   check(
     "Catalog price is unchanged after edit/rename/archive",
     catalogAfterManage?.price.toString() === catalogPriceBefore,
+  );
+
+  console.log("\nDEDICATED DB — Archive versus apply commit order");
+  const archiveApplySource = await createDraftWithLines(businessA.id, [
+    { type: "LABOR", description: "Archive-race labor", quantity: "1", unitPrice: "70" },
+  ]);
+  const archiveApplyTemplate = await saveEstimateLineTemplateFromDraft(prisma, ownerA, {
+    estimateId: archiveApplySource.id,
+    name: "Archive versus apply",
+  });
+  const archiveApplyLinesBefore = await snapshotTemplateLines(
+    archiveApplyTemplate.template.id,
+    businessA.id,
+  );
+  const archiveApplyDraft = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      total: new Prisma.Decimal(0),
+      publicToken: randomUUID(),
+    },
+  });
+  const archiveApplyBarrier = createCommitBarrier();
+  estimateLineTemplateTestHooks.beforeApplyClaims = archiveApplyBarrier.wait;
+  const archiveWinner = new PrismaClient({ datasourceUrl: testUrl });
+  let archiveApplyResult;
+  try {
+    const applyHeld = applyEstimateLineTemplateToDraft(prisma, ownerA, {
+      templateId: archiveApplyTemplate.template.id,
+      estimateId: archiveApplyDraft.id,
+    });
+    await withTimeout(archiveApplyBarrier.arrived, 4000, "archive-versus-apply apply entered write");
+    await setEstimateLineTemplateArchived(archiveWinner, ownerA, {
+      templateId: archiveApplyTemplate.template.id,
+      archived: true,
+    });
+    archiveApplyBarrier.release();
+    archiveApplyResult = await Promise.allSettled([applyHeld]);
+  } finally {
+    estimateLineTemplateTestHooks.beforeApplyClaims = undefined;
+    await archiveWinner.$disconnect();
+  }
+  const archiveApplyError = archiveApplyResult[0];
+  const archiveApplyDraftAfter = await prisma.estimate.findFirst({
+    where: { id: archiveApplyDraft.id, businessId: businessA.id },
+    include: { lineItems: true },
+  });
+  const archiveApplyTemplateAfter = await prisma.estimateLineTemplate.findFirst({
+    where: { id: archiveApplyTemplate.template.id, businessId: businessA.id },
+  });
+  check(
+    "Archive-first apply fails without writing draft lines",
+    archiveApplyError.status === "rejected" &&
+      archiveApplyError.reason instanceof EstimateLineTemplateError &&
+      archiveApplyError.reason.message === TEMPLATE_ARCHIVED_MESSAGE &&
+      archiveApplyDraftAfter?.status === "DRAFT" &&
+      archiveApplyDraftAfter.lineItems.length === 0,
+  );
+  check(
+    "Archive-first apply leaves stored template lines unchanged",
+    archiveApplyTemplateAfter?.archived === true &&
+      (await snapshotTemplateLines(archiveApplyTemplate.template.id, businessA.id)) ===
+        archiveApplyLinesBefore,
+  );
+
+  const archiveCreateSource = await createDraftWithLines(businessA.id, [
+    { type: "LABOR", description: "Archive-create labor", quantity: "1", unitPrice: "65" },
+  ]);
+  const archiveCreateTemplate = await saveEstimateLineTemplateFromDraft(prisma, ownerA, {
+    estimateId: archiveCreateSource.id,
+    name: "Archive versus create apply",
+  });
+  const archiveCreateLinesBefore = await snapshotTemplateLines(
+    archiveCreateTemplate.template.id,
+    businessA.id,
+  );
+  const estimateCountBeforeArchiveCreate = await prisma.estimate.count({
+    where: { businessId: businessA.id },
+  });
+  const archiveCreateBarrier = createCommitBarrier();
+  estimateLineTemplateTestHooks.beforeApplyClaims = archiveCreateBarrier.wait;
+  const archiveCreateWinner = new PrismaClient({ datasourceUrl: testUrl });
+  let archiveCreateResult;
+  try {
+    const createHeld = createDraftEstimateWithOptionalTemplate(prisma, ownerA, {
+      customerId: createCustomer.id,
+      templateId: archiveCreateTemplate.template.id,
+      leadSource: "MANUAL",
+    });
+    await withTimeout(
+      archiveCreateBarrier.arrived,
+      4000,
+      "archive-versus-create apply entered write",
+    );
+    await setEstimateLineTemplateArchived(archiveCreateWinner, ownerA, {
+      templateId: archiveCreateTemplate.template.id,
+      archived: true,
+    });
+    archiveCreateBarrier.release();
+    archiveCreateResult = await Promise.allSettled([createHeld]);
+  } finally {
+    estimateLineTemplateTestHooks.beforeApplyClaims = undefined;
+    await archiveCreateWinner.$disconnect();
+  }
+  const archiveCreateError = archiveCreateResult[0];
+  check(
+    "Archive-first Create Estimate fails without leaving a draft",
+    archiveCreateError.status === "rejected" &&
+      archiveCreateError.reason instanceof EstimateLineTemplateError &&
+      archiveCreateError.reason.message === TEMPLATE_ARCHIVED_MESSAGE &&
+      (await prisma.estimate.count({ where: { businessId: businessA.id } })) ===
+        estimateCountBeforeArchiveCreate,
+  );
+  check(
+    "Archive-first Create Estimate leaves stored template lines unchanged",
+    (await snapshotTemplateLines(archiveCreateTemplate.template.id, businessA.id)) ===
+      archiveCreateLinesBefore,
+  );
+
+  console.log("\nDEDICATED DB — Send versus edit-from-draft commit order");
+  const sendEditTemplateSource = await createDraftWithLines(businessA.id, [
+    { type: "LABOR", description: "Edit-race original labor", quantity: "1", unitPrice: "55" },
+  ]);
+  const sendEditTemplate = await saveEstimateLineTemplateFromDraft(prisma, ownerA, {
+    estimateId: sendEditTemplateSource.id,
+    name: "Send versus edit",
+  });
+  const sendEditLinesBefore = await snapshotTemplateLines(
+    sendEditTemplate.template.id,
+    businessA.id,
+  );
+  const sendEditDraft = await createDraftWithLines(businessA.id, [
+    { type: "LABOR", description: "Edit-race replacement labor", quantity: "3", unitPrice: "88" },
+  ]);
+  const sendEditBarrier = createCommitBarrier();
+  estimateLineTemplateTestHooks.beforeEditClaims = sendEditBarrier.wait;
+  const sendWinner = new PrismaClient({ datasourceUrl: testUrl });
+  let sendEditResult;
+  try {
+    const editHeld = replaceEstimateLineTemplateLinesFromDraft(prisma, ownerA, {
+      templateId: sendEditTemplate.template.id,
+      estimateId: sendEditDraft.id,
+    });
+    await withTimeout(sendEditBarrier.arrived, 4000, "send-versus-edit entered write");
+    await sendWinner.$transaction(async (tx) => {
+      const updated = await tx.estimate.updateMany({
+        where: { id: sendEditDraft.id, businessId: businessA.id, status: "DRAFT" },
+        data: { status: "SENT" },
+      });
+      if (updated.count !== 1) throw new Error("Send-first race did not claim the draft");
+      await createEstimateVersionSnapshot(tx, {
+        estimateId: sendEditDraft.id,
+        businessId: businessA.id,
+      });
+    });
+    sendEditBarrier.release();
+    sendEditResult = await Promise.allSettled([editHeld]);
+  } finally {
+    estimateLineTemplateTestHooks.beforeEditClaims = undefined;
+    await sendWinner.$disconnect();
+  }
+  const sendEditError = sendEditResult[0];
+  const sendEditDraftAfter = await prisma.estimate.findFirst({
+    where: { id: sendEditDraft.id, businessId: businessA.id },
+    include: { lineItems: true },
+  });
+  check(
+    "Send-first edit-from-draft fails without changing template lines",
+    sendEditError.status === "rejected" &&
+      sendEditError.reason instanceof EstimateLineTemplateError &&
+      sendEditError.reason.message === DRAFT_ONLY_SAVE_MESSAGE &&
+      (await snapshotTemplateLines(sendEditTemplate.template.id, businessA.id)) ===
+        sendEditLinesBefore &&
+      sendEditLinesBefore.includes("Edit-race original labor"),
+  );
+  check(
+    "Send-first edit-from-draft leaves the SENT estimate on its recorded lines",
+    sendEditDraftAfter?.status === "SENT" &&
+      sendEditDraftAfter.lineItems.length === 1 &&
+      sendEditDraftAfter.lineItems[0].description === "Edit-race replacement labor",
   );
 
   if (failures > 0) {
